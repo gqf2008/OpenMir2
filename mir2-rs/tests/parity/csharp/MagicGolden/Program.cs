@@ -116,6 +116,7 @@ public static class Program
             if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
+            if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -782,8 +783,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         short doX = targetNull ? caster.CurrX : target.CurrX;
         short doY = targetNull ? caster.CurrY : target.CurrY;
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
-        var draws = rng.Draws.ToList();
-        RngSeam.Restore(original);
+        // **`Rng` = DoSpell + 排水的全部抽取**（种子的 seam 直到排水结束才还原）：
+        // 23 的 `RM_MAGSTRUCK` 是**即时**投递（`MagBigExplosion` 直接 `SendMsg`），它的
+        // `R(1000)`/MSD/STD 抽发生在排水的 `Operate` 里；若像旧口径那样在 DoSpell 后就还原，
+        // 这些抽会落到未播种的全局 RNG ⇒ 金标准不可复现、Rust 侧（施法段内同步结算）无法对齐。
+        // 既有 golden 不受影响（未重生成）。
 
         // 与火球同口径：排水抽空为止（上界 8），上界命中可见。
         // 等到**最长**的自延迟到期：治愈的 RM_MAGHEALING=800ms、共享尾 RM_MAGIC_LVEXP=1000ms、
@@ -905,6 +909,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        var draws = rng.Draws.ToList();
+        RngSeam.Restore(original);
         int hpAfter = target.WAbil.HP;
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)

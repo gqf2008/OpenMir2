@@ -14822,10 +14822,25 @@ fn handle_spell_cmd_with_magic(
                     // P3-B2 块：`RM_MAGIC_LVEXP` 入缓冲（既有口径；未改）。
                     None,
                 );
-                // `RM_MAGSTRUCK` 交付段（世界抽数 + 帧），全部入同一优先级缓冲。
-                let hitter_name_colors =
-                    drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
-                buf.flush(online, gates);
+                // **23/33/47 的两段出帧**（oracle 的跨 actor 排水序）：第一段 = 共享尾
+                // （638/640；`buf` 已由 `finish_spell_tail` 填入），**先 flush**；第二段 =
+                // `RM_MAGSTRUCK` 交付（53/31 入独立缓冲，按 (byte)ident 出队）。若两段同批
+                // flush，53(68) 会被排到 638(136) 前面——与 golden `[638, 53, 31]` 相反。
+                //
+                // **24 暂走旧合并 flush**：它的 31 同优先级 tie 序目前只有 Rust 侧单测钉着、
+                // 没有 oracle golden；等 24 自己的 golden 落地后再统一（卡 §30 登记）。
+                let hitter_name_colors = if req.magic_id == 24 {
+                    let h = drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
+                    buf.flush(online, gates);
+                    h
+                } else {
+                    buf.flush(online, gates);
+                    let mut struck = SpellFrameBuf::new();
+                    let h =
+                        drain_mag_struck_b2(world, online, displays, ground_sessions, &mut struck);
+                    struck.flush(online, gates);
+                    h
+                };
                 // 玩家受击 656：独立后置缓冲（主批 31 之后；卡 `openmir2-magstruck-order`）。
                 flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
             }
@@ -30731,6 +30746,9 @@ fn sim_loop(
         // **18 的状态变化观测有界**（卡 `openmir2-magic-parity` §26）：每 tick 清空一次；
         // 本观测面**只记录**，任何帧仍由各生产点的既有返回值出（此处清空不影响帧面）。
         world.clear_status_changes();
+        // **23 的受击观测同样有界**（卡 §30）：每 tick 清空；本观测面只记录，帧面仍由既有
+        // `drain_mag_struck_b2` 出。
+        world.clear_struck_log();
         let t = host_prof.begin();
         // 同拍帧序：642（攻击者武器磨损）先于怪物 ref 656（目标 BreakHolySeizeMode）。
         let _attack_weapon_wear = drain_attack_wear_then_monster_refs(
@@ -66110,6 +66128,14 @@ SendRefMsgRange=15
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
+        if magic_id == 23 {
+            // 23 的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与 RM 8103 的 p2）；登录序下目标
+            // `MaxHP=224`（C# golden 同源），HP 仍 100。
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.max_hp = 224;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.max_hp = 224;
+        }
         if magic_id == 29 {
             let thp = golden_fixture_u64(stem, label, "target_hp", 100) as u16;
             let e = rig.world.entities.get_mut(target).unwrap();
@@ -66139,6 +66165,11 @@ SendRefMsgRange=15
         // 18 隐身术的 `StatusChanged()` 观测（只记录面）：施法后取、随即清空（有界）。
         let status_changes = rig.world.status_changes().to_vec();
         rig.world.clear_status_changes();
+        // 23 爆裂火焰的 `RM_MAGSTRUCK` 观测（只记录面）：施法后取、随即清空（有界）。
+        // **即时**受击（23）落在施法段；延迟支的受击在交付段，另取一次（见 `struck_delivered`）。
+        let struck_cast = rig.world.struck_log().to_vec();
+        rig.world.clear_struck_log();
+
         // **28 的前提断言（卡 §25(b)）**：`SM_OPENHEALTH(1100)` 的字段来自被开血者的实时
         // HP/MaxHP；Rust 的实时真源是实体，登录后与 `WAbil` 同值。本 case 窗口内无 HP 变化
         // ⇒ 恒等必须成立。把前提钉死，防止「夹具对齐」掩盖产品读错对象。
@@ -66248,6 +66279,10 @@ SendRefMsgRange=15
             deliver_frames.append(&mut step_frames);
             all_outs.extend(outs);
         }
+        // 延迟支（2/11/45/13/44 的 `RM_DELAYMAGIC`）的受击发生在**交付段** ⇒ 再取一次；
+        // 只用于 `8090`（改名）的组装——8044/8103 由既有 `delay_magic` 块负责，避免重复。
+        let struck_delivered = rig.world.struck_log().to_vec();
+        rig.world.clear_struck_log();
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
         let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
@@ -66387,23 +66422,6 @@ SendRefMsgRange=15
                 }
             }
         }
-        // `RM_CHANGENAMECOLOR(8090)`（卡 `openmir2-magstruck-name-color`）：受击玩家把
-        // `RM_STRUCK_MAG` 回投给自己 ⇒ 攻击方 `SetPkFlag` ⇒ 由**攻击方** `RefNameColor` 发 656。
-        // 观测面 = 实际发出的 `SM_CHANGENAMECOLOR(656)` 帧（有才记条目）；收件人 = 攻击方的
-        // `hear_targets`（含攻击方自己，与 `SendRefMsg` 同集合）；prio = 8090 & 0xFF = 154。
-        if all_frames
-            .iter()
-            .any(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_CHANGENAMECOLOR)
-        {
-            for id in &in_range_caster {
-                if let Some(who) = who_of(*id) {
-                    rm_by_who
-                        .entry(who)
-                        .or_default()
-                        .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
-                }
-            }
-        }
         // `RM_CHARSTATUSCHANGED(10139)`（14/15/31 的 buff 施加）：来自 `BuffApplyEvent`
         // （`World::buff_apply_log` 观测面）。收件人 = 被施者 ±`SendRefMsgRange` 的玩家（含自己），
         // prio = 10139 & 0xFF = 155、late=false；p1 = 施加后的 `CharStatus`。
@@ -66463,6 +66481,52 @@ SendRefMsgRange=15
                     255,
                     true,
                 ));
+            }
+        }
+        // `RM_MAGSTRUCK(8044)` / `RM_HEALTHSPELLCHANGED(10052)` / `RM_STRUCK_MAG(8103)` /
+        // `RM_CHANGENAMECOLOR(8090)`（23 等**即时**受击链）：来源 = 内部观测面
+        // `World::struck_log`（**不由 SM 31 反推**，卡 §30）。收件人口径与既有 fireball 支同：
+        // 8044/10052 只给受击者；8103 给 `hear_targets(target)`（含目标自己）；8090 给
+        // `hear_targets(攻击方)`（`RefNameColor` 由攻击方广播）。
+        for ev in &struck_cast {
+            if let Some(who) = who_of(ev.target_id) {
+                let v = rm_by_who.entry(who).or_default();
+                v.push(fireball_rm(8044, 0, i64::from(ev.power), 0, 0, 108, false));
+                if ev.damage > 0 {
+                    v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+                }
+            }
+            let map_id = rig.world.entities.get(ev.target_id).map_or(0, |e| e.map_id);
+            let x = rig.world.entities.x(ev.target_id).unwrap_or(0);
+            let y = rig.world.entities.y(ev.target_id).unwrap_or(0);
+            for id in chat::hear_targets_at(&rig.world, ev.target_id, map_id, x, y, range) {
+                if let Some(who) = who_of(id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        8103,
+                        i64::from(ev.damage),
+                        i64::from(ev.hp_after),
+                        i64::from(ev.max_hp),
+                        i64::from(ev.caster_id),
+                        167,
+                        false,
+                    ));
+                }
+            }
+        }
+        // `RM_CHANGENAMECOLOR(8090)`（改名）：来源 = 内部事件 `hitter_name_color`
+        // （受击玩家 `SetPkFlag` 命中 ⇒ 攻击方 `RefNameColor`），**不由 SM 656 帧反推**；
+        // 收件人 = 攻击方 `hear_targets`（含攻击方自己）、prio=154。即时支取 `struck_cast`，
+        // 延迟支取 `struck_delivered`。
+        for ev in struck_cast.iter().chain(struck_delivered.iter()) {
+            if let Some(nc) = ev.hitter_name_color {
+                for id in chat::hear_targets(&rig.world, nc.target_id, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who
+                            .entry(who)
+                            .or_default()
+                            .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
+                    }
+                }
             }
         }
         // `RM_TRANSPARENT(8045)`：每个被施加的 proper friend 一条（p1=nHTime、prio=255、late）。
@@ -67624,6 +67688,95 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`23 爆裂火焰`**（`SKILL_FIREBOOM`，`MagicManager.cs:418-423` / helper `:1100-1117`）驱动。
+    /// golden `golden/magic/fireboom.json`（s1/s5/s13，无 AntiMagic 骰）。
+    ///
+    /// **`IsProtectTarget` 以 golden 实况为准**（不预设）：golden 显示 **target HP 100→85（伤害 15）**
+    /// ⇒ 本夹具下 `IsProtectTarget` 实为 true、伤害链成立；同时 `IsProperTarget` 自排除（`caster` 不被
+    /// 自己炸）。3×3（`FireBoomRage=1`）内只有 target；obs_in 只是**观察者**（收 31/656）。
+    ///
+    /// 帧（golden）：caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`。
+    /// RM：8044(target,p1=power=15,108)、10052(target,68)、8103(众人: w=damage=15/p1=hp_after/
+    /// p2=max_hp/p3=caster,167)、8090(攻击方 hearers,154)、10123(caster,255)。
+    /// 来源 = `World::struck_log` 内部观测面（**不由 SM 31 反推**）。
+    fn fireboom_assert(stem: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, 23, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 85, 7);
+        b1_golden_drain_assert("fireboom.json", label, 4);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let seq_of = |who: &str| -> Vec<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect()
+        };
+        assert_eq!(
+            seq_of("caster"),
+            vec![638, 640, 31, 656],
+            "[{stem}/{label}] caster 帧序"
+        );
+        assert_eq!(
+            seq_of("target"),
+            vec![17, 638, 53, 31, 656],
+            "[{stem}/{label}] target 帧序"
+        );
+        assert_eq!(
+            seq_of("obs_in"),
+            vec![17, 638, 31, 656],
+            "[{stem}/{label}] obs_in 帧序"
+        );
+        assert_eq!(
+            n("obs_out", "Sent", 31),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+        // HP 面（golden 实证有伤害链）。
+        assert_eq!(
+            c["TargetHpBefore"].as_i64(),
+            Some(100),
+            "[{stem}/{label}] HP 前"
+        );
+        assert_eq!(
+            c["TargetHp"].as_i64(),
+            Some(85),
+            "[{stem}/{label}] HP 后（伤害 15）"
+        );
+        // RM 面。
+        assert_eq!(n("target", "Rm", 8044), 1, "[{stem}/{label}] target 8044");
+        assert_eq!(n("target", "Rm", 10052), 1, "[{stem}/{label}] target 10052");
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(n(who, "Rm", 8103), 1, "[{stem}/{label}] {who} 8103");
+            assert_eq!(n(who, "Rm", 8090), 1, "[{stem}/{label}] {who} 8090");
+        }
+        assert_eq!(n("caster", "Rm", 10123), 1, "[{stem}/{label}] caster 10123");
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom_parity_s1() {
+        fireboom_assert("fireboom", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom_parity_s5() {
+        fireboom_assert("fireboom", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom_parity_s13() {
+        fireboom_assert("fireboom", "s13", 13, 3000);
     }
 
     /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。
@@ -73696,7 +73849,10 @@ SendRefMsgRange=15
             let p1_seq = sf_seq(&frames, 921);
             let i53 = p1_seq.iter().position(|x| *x == SM_53).unwrap();
             let i638 = p1_seq.iter().position(|x| *x == SM_638).unwrap();
-            assert!(i53 < i638, "受击玩家 53 先于 638；实得 {p1_seq:?}");
+            // **旧期望（53 先于 638）是"尾帧与受击帧同批 flush"时代的实现序**；oracle 的
+            // `Operate` 在**后续趟**才处理 `RM_MAGSTRUCK` ⇒ 638 先、53 后（23 的 golden
+            // `[638, 53, 31]` 钉住；卡 §30）。23|33|47 已按两段出帧。
+            assert!(i638 < i53, "638 先于受击段的 53；实得 {p1_seq:?}");
             // 31 的 Recog = 受击者；顺序 = oracle `MsgQueue`（每人一条）的 **.NET 8 四叉堆出队序**，
             // 不是入队序（卡 `openmir2-frame-drain-order-audit`）。观察者 912 的入队序 =
             // `638(136)` → 逐目标（M1/M2/P1/M3）`31(167)` + 命中怪的 `656(154)`；按四叉堆出队后
@@ -73707,7 +73863,11 @@ SendRefMsgRange=15
                 .filter(|(id, _)| *id == SM_31)
                 .map(|(_, r)| r)
                 .collect();
-            assert_eq!(struck, vec![p1, m2, m3, m1]);
+            // **tie 序随出帧模型变化**：23|33|47 改为两段出帧（尾 638 先 flush、受击帧入独立
+            // `SpellFrameBuf`）后，同优先级 31/656 的 4 叉堆成员集变了（旧期望 `[p1,m2,m3,m1]`
+            // 是「尾帧+受击帧同批」的堆解）。新期望 = 两段模型下的 `NetPriorityQueue` 出队序；
+            // **本支（多目标）无 oracle golden 钉 tie 序**，见卡 §30 的登记。
+            assert_eq!(struck, vec![p1, m3, m2, m1]);
         }
         // ② nDamage==0 变体：M3 MAC=0x0014 ⇒ 只有 R(1000)+MSD，无 31/656、无 R(300)。
         {

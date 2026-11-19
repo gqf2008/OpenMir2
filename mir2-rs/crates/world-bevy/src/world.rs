@@ -581,6 +581,25 @@ pub struct StatusChangeEvent {
     pub char_status: i32,
 }
 
+/// **卡 `openmir2-magic-parity`（23 爆裂火焰）**：一次 `RM_MAGSTRUCK` 交付的观测
+/// （**只记录、零行为**；宿主 `sim_loop` 每 tick 清空 ⇒ 有界；驱动取后清）。
+///
+/// RM 8044/8103 的对拍组装**只认这个内部事件**，**不许**由 SM 31 帧反推（卡 §30 纪律）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StruckEvent {
+    pub target_id: i32,
+    pub caster_id: i32,
+    /// 发出的 `nPower`（`PendingMagStruck.power`；`RM_MAGSTRUCK` 的 p1）。
+    pub power: i32,
+    /// `StruckDamage` 后的实际扣血（`RM_STRUCK_MAG` 的 p1；`nDamage > 0` 才非 0）。
+    pub damage: i32,
+    pub hp_after: u16,
+    pub max_hp: u16,
+    /// 受击玩家对攻击方 `SetPkFlag` 命中时的 `RefNameColor` 观察值（`RM_CHANGENAMECOLOR(8090)`
+    /// 的来源；`None` = 未命中）。**只记录**，帧面仍由宿主 `flush_hitter_name_colors` 出。
+    pub hitter_name_color: Option<crate::slave::NameColorDelivery>,
+}
+
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MagStruckOutcome {
@@ -1290,6 +1309,8 @@ pub struct SimState {
     pub buff_apply_log: Vec<BuffApplyEvent>,
     /// **18 隐身术的 `StatusChanged()` 观测**（只记录；`sim_loop` 每 tick 清空 ⇒ 有界）。
     pub pending_status_changes: Vec<StatusChangeEvent>,
+    /// **23 爆裂火焰的 `RM_MAGSTRUCK` 交付观测**（只记录；每 tick 清空 ⇒ 有界）。
+    pub struck_log: Vec<StruckEvent>,
     /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
     /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
     /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
@@ -1639,6 +1660,7 @@ impl SimState {
             pending_buff_applies: Vec::new(),
             buff_apply_log: Vec::new(),
             pending_status_changes: Vec::new(),
+            struck_log: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
             pending_refmessage_frames: Vec::new(),
@@ -5547,6 +5569,17 @@ impl World {
         self.sim.pending_status_changes.clear();
     }
 
+    /// 23 的 `RM_MAGSTRUCK` 交付观测（**只读**；宿主每 tick 用 [`World::clear_struck_log`] 清）。
+    #[must_use]
+    pub fn struck_log(&self) -> &[StruckEvent] {
+        &self.sim.struck_log
+    }
+
+    /// 清空受击观测（宿主每 tick 一次；对拍驱动取用后清一次）。**不改变任何行为**。
+    pub fn clear_struck_log(&mut self) {
+        self.sim.struck_log.clear();
+    }
+
     /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。
     ///
     /// 逐目标（入队序）：
@@ -5570,6 +5603,7 @@ impl World {
         msgs.sort_by_key(|m| m.order);
         let mut out = Vec::new();
         for msg in msgs {
+            let power = msg.power;
             let Some(mut t) = self.entities.spawn_cloned(msg.target_id) else {
                 continue;
             };
@@ -5590,6 +5624,15 @@ impl World {
                     .entities
                     .get(clone_id)
                     .map_or((t.hp, t.max_hp), |e| (e.hp, e.max_hp));
+                self.sim.struck_log.push(StruckEvent {
+                    target_id: clone_id,
+                    caster_id: msg.caster_id,
+                    power,
+                    damage: 0,
+                    hp_after,
+                    max_hp,
+                    hitter_name_color: None,
+                });
                 out.push(MagStruckOutcome {
                     target_id: clone_id,
                     caster_id: msg.caster_id,
@@ -5696,6 +5739,15 @@ impl World {
             let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
             // S4a：属性真值在组件里，必须整包写回（只写 `t.entity` 会丢 HP/MP）。
             self.entities.write_back(msg.target_id, t);
+            self.sim.struck_log.push(StruckEvent {
+                target_id: msg.target_id,
+                caster_id: msg.caster_id,
+                power,
+                damage,
+                hp_after,
+                max_hp,
+                hitter_name_color,
+            });
             out.push(MagStruckOutcome {
                 target_id: msg.target_id,
                 caster_id: msg.caster_id,
