@@ -1058,7 +1058,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         var cases = new[]
         {
             RunMagicCase(spec, "heal", 1, 1000, 50, false),
-            RunMagicCase(spec, "full", 5, 2000, 100, false),
+            RunMagicCase(spec, "full", 5, 2000, 224, false),
             RunMagicCase(spec, "self", 13, 3000, 50, true),
         };
         return EmitGolden(spec, cases);
