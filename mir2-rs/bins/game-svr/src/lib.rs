@@ -10779,7 +10779,10 @@ fn broadcast_charstatuschanged_except_self(
     status: i32,
     range: i32,
 ) {
-    for target_id in chat::hear_targets(world, actor_id, range) {
+    // **T-287 残余 #3**：`StatusChanged()` 的"其它玩家"支同走 `SendRefMsg` 的 500ms 缓存
+    // （每次调用 = 一次 `SendRefMsg`；自己那两份由调用方按发送序另发）。隐藏发送者时
+    // `targets` 只返回 `[self]`，被下面的 skip 丢掉 ⇒ 观察者零帧（与 oracle 退化自投一致）。
+    for target_id in ref_msg_cache::targets(world, actor_id, range) {
         if target_id == actor_id {
             continue;
         }
@@ -89271,6 +89274,110 @@ GMEXECUTE f
         assert_eq!(per.get(&903), Some(&1), "|Δ|=11 只收首份");
         assert_eq!(per.get(&904), Some(&1), "|Δ|=12 只收首份");
         assert_eq!(per.get(&905), None, "+13 零帧");
+    }
+
+    /// **T-287 残余 #3**（`broadcast_charstatuschanged_except_self`，657）：`StatusChanged()`
+    /// 的"其它玩家"支；同窗口两次事件 ⇒ `|Δ|=11/12` 只收首份、`+5` 收两份、`+13` 零帧、
+    /// 自己零帧（skip self）。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 第二份 +12 也收 ⇒ 红。
+    #[test]
+    fn broadcast_charstatuschanged_except_self_cache_window_second_event_hits_cache() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let first = refmsg_b2_count(&mut rx);
+        assert_eq!(first.get(&901), None, "skip self");
+        assert_eq!(first.get(&902), Some(&1), "首份：+5 收（±12 闭区间）");
+        assert_eq!(first.get(&903), Some(&1), "首份：|Δ|=11 在扫格内");
+        assert_eq!(first.get(&904), Some(&1), "首份：|Δ|=12 闭区间边界");
+        assert_eq!(first.get(&905), None, "首份：+13 零帧");
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let second = refmsg_b2_count(&mut rx);
+        assert_eq!(second.get(&901), None, "第二份：self 仍被 skip");
+        assert_eq!(second.get(&902), Some(&1), "第二份：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二份：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二份：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二份：+13 仍零帧");
+    }
+
+    /// **#3 隐藏 sender**：`targets` 只返回 `[self]`，被 skip ⇒ 观察者零帧
+    /// （oracle 退化为只 `SendMsg` 自己，本支无观察者帧）。
+    #[test]
+    fn broadcast_charstatuschanged_except_self_hidden_sender_has_no_observers() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12); // 预热
+        let warm = refmsg_b2_count(&mut rx);
+        assert_eq!(warm.get(&904), Some(&1), "预热：+12 收");
+        world.entities.flags_mut(actor).unwrap().fixed_hide_mode = true;
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(per.get(&902), None, "隐藏：+5 零帧");
+        assert_eq!(per.get(&903), None, "隐藏：+11 零帧");
+        assert_eq!(per.get(&904), None, "隐藏：旧快照 +12 不得复活");
+        assert_eq!(per.get(&905), None, "隐藏：+13 零帧");
+    }
+
+    /// **#3 的真实调用面（登录 657 补发）+ 同 tick 多事件**：同一 actor 两次
+    /// `drain_login_tail`（sim 时钟不推进）⇒ 第二次命中缓存：`|Δ|=11/12` 只收首份、
+    /// `+5` 两份、`+13` 零帧。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 第二事件 +12 也收 ⇒ 红。
+    #[test]
+    fn login_charstatus_two_events_same_tick_share_cache_window() {
+        let (mut world, id, mut online, gates, mut rx0, mut pending) = login_657_fixture();
+        for (i, (dx, sock)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let name = format!("o{i}");
+            world.open_session(&name);
+            let e = new_player_entity(name.clone(), 10 + dx, 10);
+            let oid = world.enter_map(&name, e, 0).expect("观察者进图");
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: name,
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: oid,
+                },
+            );
+        }
+        let take657 = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> HashMap<i32, usize> {
+            let mut per: HashMap<i32, usize> = HashMap::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                    .expect("657/654 body 至少 12B");
+                if cm.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED && socket != 901 {
+                    *per.entry(socket).or_default() += 1;
+                }
+            }
+            per
+        };
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let first = take657(&mut rx0);
+        assert_eq!(first.get(&902), Some(&1), "首事件：+5 收");
+        assert_eq!(first.get(&903), Some(&1), "首事件：|Δ|=11 收");
+        assert_eq!(first.get(&904), Some(&1), "首事件：|Δ|=12 收");
+        assert_eq!(first.get(&905), None, "首事件：+13 零帧");
+        // 同一 actor 的第二次 `StatusChanged` 事件（同 sim tick；`search_tick` 门仍满足）。
+        pending.insert(
+            "p".to_string(),
+            smframe::EnterWorldInputs {
+                actor_id: id,
+                changelight: Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT)),
+                char_status: Some((0, 0)),
+                ..Default::default()
+            },
+        );
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let second = take657(&mut rx0);
+        assert_eq!(second.get(&902), Some(&1), "第二事件：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二事件：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二事件：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二事件：+13 仍零帧");
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。

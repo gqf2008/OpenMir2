@@ -92,3 +92,9 @@
   `push_charstatuschanged_hidden_sender_only_self_each_event`（隐藏 ⇒ 只自己，旧快照 +12 不复活）、
   `drain_b3_two_transparent_events_share_cache_window`（真实调用面：同 tick 两条
   `RM_TRANSPARENT` 到点，第二条命中缓存）。
+- #3 `broadcast_charstatuschanged_except_self`：`StatusChanged()` 的"其它玩家"支改走
+  `ref_msg_cache::targets`（保留 skip self；隐藏 sender ⇒ `[self]` 被 skip ⇒ 观察者零帧）。
+  用例：`broadcast_charstatuschanged_except_self_cache_window_second_event_hits_cache`、
+  `broadcast_charstatuschanged_except_self_hidden_sender_has_no_observers`、
+  `login_charstatus_two_events_same_tick_share_cache_window`（真实调用面「登录 657 补发」，
+  同 tick 两事件共享缓存窗口）。
