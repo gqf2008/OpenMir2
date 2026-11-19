@@ -6,24 +6,127 @@
       "Label": "miss",
       "Seed": 1,
       "SpellReturn": true,
-      "Rm": [
+      "Receivers": [
         {
-          "ident": 10008,
-          "wParam": 1,
-          "p1": 101,
-          "p2": 100,
-          "p3": 1,
-          "msg": "",
-          "priority": 24
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "ddhkd?"
+            }
+          ]
         },
         {
-          "ident": 10120,
-          "wParam": 0,
-          "p1": 257,
-          "p2": 6553701,
-          "p3": 0,
-          "msg": "",
-          "priority": 136
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "ddhkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "ddhkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
         }
       ],
       "Rng": [
@@ -36,33 +139,137 @@
       "Label": "edge",
       "Seed": 5,
       "SpellReturn": true,
-      "Rm": [
+      "Receivers": [
         {
-          "ident": 10008,
-          "wParam": 1,
-          "p1": 101,
-          "p2": 100,
-          "p3": 1,
-          "msg": "",
-          "priority": 24
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8021,
+              "wParam": 15,
+              "p1": 6553701,
+              "p2": 2,
+              "p3": 2002,
+              "msg": "",
+              "late": true,
+              "delivery": 1088790490
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            }
+          ]
         },
         {
-          "ident": 10120,
-          "wParam": 0,
-          "p1": 257,
-          "p2": 6553701,
-          "p3": 1002,
-          "msg": "",
-          "priority": 136
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            }
+          ]
         },
         {
-          "ident": 8021,
-          "wParam": 15,
-          "p1": 6553701,
-          "p2": 2,
-          "p3": 1002,
-          "msg": "",
-          "priority": 255
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
         }
       ],
       "Rng": [
@@ -79,33 +286,137 @@
       "Label": "hit",
       "Seed": 13,
       "SpellReturn": true,
-      "Rm": [
+      "Receivers": [
         {
-          "ident": 10008,
-          "wParam": 1,
-          "p1": 101,
-          "p2": 100,
-          "p3": 1,
-          "msg": "",
-          "priority": 24
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 3002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8021,
+              "wParam": 15,
+              "p1": 6553701,
+              "p2": 2,
+              "p3": 3002,
+              "msg": "",
+              "late": true,
+              "delivery": 1088790521
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Bghad?"
+            }
+          ]
         },
         {
-          "ident": 10120,
-          "wParam": 0,
-          "p1": 257,
-          "p2": 6553701,
-          "p3": 1002,
-          "msg": "",
-          "priority": 136
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 3002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Bghad?"
+            }
+          ]
         },
         {
-          "ident": 8021,
-          "wParam": 15,
-          "p1": 6553701,
-          "p2": 2,
-          "p3": 1002,
-          "msg": "",
-          "priority": 255
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 3002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Bghad?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
         }
       ],
       "Rng": [

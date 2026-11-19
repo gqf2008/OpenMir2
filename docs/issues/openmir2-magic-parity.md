@@ -181,3 +181,31 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
 **未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
+
+## 12. C# 侧两颗负向牙已过（2026-11-19，编码层真实 SM 帧）
+
+装置改为**真实 SM 帧**：`RecordingPlayObject` 覆写 `PlayObject.Socket.cs:101` 的 **virtual**
+`SendSocket(CommandMessage,string)`，并用 `Operate(ProcessMessage)`（`PlayObject.Message.cs:768`）
+走生产编码路径处理各接收者队列 ⇒ 记录的是**过完自守卫之后真正要发出去的帧**。
+
+场景：施法者(100,100)、目标(101,100)、观察者-范围内(105,100)、观察者-范围外(140,100)。
+
+| 支 | caster SM | target SM | obs_in SM | obs_out |
+|---|---|---|---|---|
+| miss | `638`(SM_MAGICFIRE) | `17`(SM_SPELL)+`638` | `17`+`638` | 无 |
+| edge | `638` | `17`+`638` | `17`+`638` | 无 |
+| hit | `638` | `17`+`638` | `17`+`638` | 无 |
+
+- **牙①（负向）**：三支里施法者收到的 `SM_SPELL(17)` **恒为 0**（只有 `SM_MAGICFIRE 638`）⇒
+  `PlayObject.Message.cs:1456` 的自守卫被钉住。
+- **牙②（范围）**：范围内观察者与目标各收 2 帧，范围外观察者 **0 帧** ⇒ 范围判定被钉住，
+  不是"发了一份"。
+- 金标准：`mir2-rs/tests/parity/golden/magic/fireball.json`（含每个接收者的 RM 与 SM 账本）。
+
+**洁癖区补充（新增三条，均来自本步踩坑）**
+4. `PlayObject` 构造后 `FixedHideMode` 可能为 true ⇒ 装置必须显式置 `false`（否则 `SendRefMsg`
+   走"只发自己"分支，观察者永远收不到，且 `VisibleHumanList` 恒空）。
+5. `SystemShare.ActorMgr` 是**进程级**注册表且不会覆盖同 id ⇒ 同一进程跑多用例必须用**不同
+   ActorId**，否则后面的用例会发给前面用例的旧对象（表现为"后续用例全 0 帧"）。
+6. `SendRefMsg` 的 500ms 门（`BaseObject.Message.cs:395`）已确认：首次调用扫描并填充
+   `VisibleHumanList`，其后 500ms 内走缓存列表（`<11` 判距）。

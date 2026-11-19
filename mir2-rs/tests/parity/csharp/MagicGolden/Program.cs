@@ -243,9 +243,9 @@ public static class Program
         }
         var cases = new[]
         {
-            RunFireball("miss", seedMiss, antiMagic),
-            RunFireball("edge", seedEdge, antiMagic),
-            RunFireball("hit", seedHit, antiMagic),
+            RunFireball("miss", seedMiss, antiMagic, 1000),
+            RunFireball("edge", seedEdge, antiMagic, 2000),
+            RunFireball("hit", seedHit, antiMagic, 3000),
         };
         var outObj = new { magic_id = 1, anti_magic = antiMagic, cases };
         var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
@@ -258,7 +258,7 @@ public static class Program
             Console.Error.WriteLine("GOLDEN_WRITTEN " + outPath);
         }
         Console.Out.WriteLine(json);
-        Console.Error.WriteLine("FIREBALL_CASES " + string.Join(", ", cases.Select(c => c.Label + "=" + c.Rm.Count + "rm/" + c.Rng.Count + "rng")));
+        Console.Error.WriteLine("FIREBALL_CASES " + string.Join(", ", cases.Select(c => c.Label + "[rng=" + c.Rng.Count + "; " + string.Join(" ", c.Receivers.Select(r => r.Who + ":rm" + r.Rm.Count + "/sm" + r.Sent.Count)) + "]")));
         return 0;
     }
 
@@ -277,8 +277,8 @@ public static class Program
         return -1;
     }
 
-    /// <summary>用给定种子跑一次火球，返回账本（RM 消息 + RNG 抽取 + 关键状态）。</summary>
-    private static dynamic RunFireball(string label, int seed, int antiMagic)
+    /// <summary>用给定种子跑一次火球，返回账本（各接收者的 RM 与真实 SM 帧 + RNG + 关键状态）。</summary>
+    private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase)
     {
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
@@ -286,36 +286,29 @@ public static class Program
         {
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
-        var caster = new RecordingPlayObject
-        {
-            ChrName = "golden-caster",
-            ActorId = 1001,
-            CurrX = 100,
-            CurrY = 100,
-            SoftVersionDateEx = 20240101,
-            ClientTick = 5,
-        };
+        var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = 30;
         caster.WAbil.MC = 15;
-        var target = new M2Server.Player.PlayObject
-        {
-            ChrName = "golden-target",
-            ActorId = 1002,
-            CurrX = 101,
-            CurrY = 100,
-            SoftVersionDateEx = 20240101,
-            ClientTick = 5,
-            AntiMagic = (ushort)antiMagic,
-        };
+        var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)antiMagic };
         target.Abil.Level = 20;
         target.WAbil.MaxHP = 100;
         target.Abil.MaxHP = 100;
-        caster.Envir = env;
-        target.Envir = env;
-        SystemModule.SystemShare.ActorMgr.Add(caster);
-        SystemModule.SystemShare.ActorMgr.Add(target);
-        env.AddMapObject(caster.CurrX, caster.CurrY, SystemModule.Data.CellType.Play, caster.ActorId, caster);
-        env.AddMapObject(target.CurrX, target.CurrY, SystemModule.Data.CellType.Play, target.ActorId, target);
+        var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        foreach (var p in new[] { caster, target, obsIn, obsOut })
+        {
+            // 世界内正常玩家：不隐身（PlayObject 构造后 FixedHideMode 可能为 true，见卡面"洁癖区"）。
+            p.FixedHideMode = false;
+            p.ObMode = false;
+            p.Envir = env;
+            SystemModule.SystemShare.ActorMgr.Add(p);
+            bool added = env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
+            if (Environment.GetEnvironmentVariable("MAGICGOLDEN_DIAG") == "1")
+            {
+                var cell = env.GetCellInfo(p.CurrX, p.CurrY, out bool cellOk);
+                Console.Error.WriteLine("DIAG add=" + added + " who=" + p.ChrName + " cellOk=" + cellOk + " cellCount=" + cell.Count + " available=" + cell.IsAvailable + " match=" + env.CellMatch(p.CurrX, p.CurrY));
+            }
+        }
 
         var original = RngSeam.Capture();
         var rng = RngSeam.Install(seed);
@@ -327,15 +320,47 @@ public static class Program
             Magic = new OpenMir2.Data.MagicInfo { MagicId = 1, MagicName = "FireBall", Effect = 1, EffectType = 1 },
         };
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, target.CurrX, target.CurrY, target);
-        var msgs = caster.DrainMessages();
+        if (Environment.GetEnvironmentVariable("MAGICGOLDEN_DIAG") == "1")
+        {
+            Console.Error.WriteLine("DIAG visible=" + string.Join(",", caster.VisibleHumanList) + " envW=" + env.Width + " envH=" + env.Height
+                + " get1001=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 1) != null)
+                + " get1003=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 3) != null)
+                + " get1004=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 4) != null)
+                + " obmode=" + caster.ObMode + " fixedhide=" + caster.FixedHideMode + " ghost=" + caster.Ghost);
+        }
+        var draws = rng.Draws.ToList();
         RngSeam.Restore(original);
+
+        var receivers = new List<ReceiverResult>();
+        foreach (var (who, obj) in new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) })
+        {
+            var raw = obj.DrainRaw();
+            var rm = raw.Select(m => (object)new
+            {
+                ident = m.wIdent,
+                wParam = m.wParam,
+                p1 = m.nParam1,
+                p2 = m.nParam2,
+                p3 = m.nParam3,
+                msg = m.Buff ?? "",
+                late = m.LateDelivery,
+                delivery = m.DeliveryTime,
+            }).ToList();
+            int now = HUtil32.GetTickCount();
+            foreach (var m in raw)
+            {
+                if (!m.LateDelivery || m.DeliveryTime <= now) obj.OperatePublic(m);
+            }
+            receivers.Add(new ReceiverResult { Who = who, Rm = rm, Sent = obj.Sent.ToList() });
+        }
+
         return new FireballResult
         {
             Label = label,
             Seed = seed,
             SpellReturn = ok,
-            Rm = msgs,
-            Rng = rng.Draws.ToList(),
+            Receivers = receivers,
+            Rng = draws,
             TargetHp = target.WAbil.HP,
             CasterMp = caster.WAbil.MP,
         };
@@ -346,30 +371,61 @@ public static class Program
 }
 
 /// <summary>
-/// 只记录不发送的施法者：暴露 `ActorEntity.MsgQueue`（`protected readonly`，
-/// `src/M2Server/Actor/ActorEntity.cs:16`）并一次性抽干账本。
-/// **不改生产类**：全部逻辑在子类里。
+/// 只记录不发送的玩家对象：
+///  * `SendSocket(CommandMessage, string)` 在 `PlayObject.Socket.cs:101` 是 **virtual** —— 覆写它
+///    就拿到**真正要发出去的 SM 帧**（在 `PlayObject.Message.cs` 的 RM→SM 编码与自守卫之后）；
+///  * `Operate(ProcessMessage)` 在 `PlayObject.Message.cs:768` 是 protected override —— 暴露一个
+///    公共包装，用生产编码路径处理自己队列里的 RM 消息；
+///  * `MsgQueue`（`ActorEntity.cs:16`，protected）用于抽 RM 账本。
+/// **生产类零改动**。
 /// </summary>
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
-    public List<object> DrainMessages()
+    public List<object> Sent { get; } = new();
+
+    public override void SendSocket(OpenMir2.Packets.ClientPackets.CommandMessage defMsg, string sMsg)
     {
-        var list = new List<object>();
-        while (MsgQueue.TryDequeue(out var m, out var prio))
+        Sent.Add(new
         {
-            list.Add(new
-            {
-                ident = m.wIdent,
-                wParam = m.wParam,
-                p1 = m.nParam1,
-                p2 = m.nParam2,
-                p3 = m.nParam3,
-                msg = m.Buff,
-                priority = prio,
-            });
-        }
+            ident = defMsg.Ident,
+            param = defMsg.Param,
+            tag = defMsg.Tag,
+            series = defMsg.Series,
+            tail = sMsg ?? "",
+        });
+    }
+
+    public List<SystemModule.Data.SendMessage> DrainRaw()
+    {
+        var list = new List<SystemModule.Data.SendMessage>();
+        while (MsgQueue.TryDequeue(out var m, out _)) list.Add(m);
         return list;
     }
+
+    /// <summary>用生产编码路径处理一条 RM（`PlayObject.Message.cs:768` 的 Operate）。</summary>
+    public void OperatePublic(SystemModule.Data.SendMessage m)
+    {
+        var msg = new OpenMir2.Data.ProcessMessage
+        {
+            ActorId = m.ActorId,
+            wIdent = m.wIdent,
+            wParam = m.wParam,
+            nParam1 = m.nParam1,
+            nParam2 = m.nParam2,
+            nParam3 = m.nParam3,
+            LateDelivery = m.LateDelivery,
+            Msg = m.Buff ?? "",
+        };
+        Operate(msg);
+    }
+}
+
+/// <summary>单个接收者的账本：RM（进队）+ 真实 SM 帧（经生产编码后从 SendSocket 出来）。</summary>
+public sealed class ReceiverResult
+{
+    public string Who { get; set; }
+    public List<object> Rm { get; set; }
+    public List<object> Sent { get; set; }
 }
 
 /// <summary>火球单支结果（三支由 `--case fireball` 输出一份 JSON）。</summary>
@@ -378,7 +434,7 @@ public sealed class FireballResult
     public string Label { get; set; }
     public int Seed { get; set; }
     public bool SpellReturn { get; set; }
-    public List<object> Rm { get; set; }
+    public List<ReceiverResult> Receivers { get; set; }
     public List<long> Rng { get; set; }
     public int TargetHp { get; set; }
     public int CasterMp { get; set; }
