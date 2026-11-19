@@ -1227,13 +1227,22 @@
         "line": 557,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_hbfireball",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/hbfireball.json（C# oracle 生成；miss/edge/hit）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::hbfireball_parity_miss",
+          "tests::hbfireball_parity_edge",
+          "tests::hbfireball_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
