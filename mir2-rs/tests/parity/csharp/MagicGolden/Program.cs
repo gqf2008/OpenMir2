@@ -15,6 +15,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using OpenMir2;
 using OpenMir2.Packets.ServerPackets;
 
@@ -102,6 +103,11 @@ public static class Program
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
             if (name == "fireball") return FireballCase();
+            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" });
+            if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" });
+            if (name == "healing") return HealingBatch();
+            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
+            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -455,6 +461,283 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     return list;
 }
 
+    // ======================================================================
+    // 下一批 4 分支（11/45 雷电、2 治愈、13 火符、44 灭天火）：C# golden only
+    // ======================================================================
+    //
+    // 与火球同口径：golden 几何（caster 100,100 / target 101,100 / obs_in 105,100 /
+    // obs_out 140,100）、ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路记录
+    // （三处 SendSocket 重载全捕获）、排水「抽空为止」（上界 8，命中进产物）。
+    // 每 case 落 `Fixture`（魔法/施法者/目标输入），Rust 侧按它复现——不手抄数字。
+
+    /// <summary>一支魔法的夹具输入（C# 侧真源；同时写进产物）。</summary>
+    private sealed class MagicSpec
+    {
+        public string Key;
+        public int MagicId;
+        public string MagicName;
+        public int Effect = 1;
+        public int EffectType = 1;
+        public int UserMagicLevel = 1;
+        public int CasterLevel = 30;
+        public int CasterMc = 15;
+        public int CasterSc = 15;
+        public int TargetLevel = 20;
+        public int TargetMaxHp = 100;
+        public int AntiMagic = 3;
+        public bool ArmRingAmulet;
+    }
+
+    /// <summary>有 AntiMagic 骰的支（11/45/13/44）：scan 三 seed ⇒ miss/edge/hit。</summary>
+    private static int AntiMagicBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int seedMiss = FindSeedForFirstDraw(10, spec.AntiMagic - 1);
+        int seedEdge = FindSeedForFirstDraw(10, spec.AntiMagic);
+        int seedHit = FindSeedForFirstDraw(10, spec.AntiMagic + 2);
+        if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
+        {
+            Console.Error.WriteLine("SEED_SCAN_FAILED");
+            return 1;
+        }
+        var cases = new[]
+        {
+            RunMagicCase(spec, "miss", seedMiss, 1000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false),
+        };
+        return EmitGolden(spec, cases);
+    }
+
+    /// <summary>
+    /// 2 治愈：**没有 AntiMagic 骰**，三支按行为分支取（不是 miss/edge/hit）——
+    /// `heal`（目标受伤 ⇒ RM_MAGHELING）、`full`（目标满血 ⇒ 无 RM_MAGHELING）、
+    /// `self`（targetObject=null ⇒ 自疗，坐标取施法者）。seed 固定 1/5/13。
+    /// </summary>
+    private static int HealingBatch()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing" };
+        var cases = new[]
+        {
+            RunMagicCase(spec, "heal", 1, 1000, 50, false),
+            RunMagicCase(spec, "full", 5, 2000, 100, false),
+            RunMagicCase(spec, "self", 13, 3000, 50, true),
+        };
+        return EmitGolden(spec, cases);
+    }
+
+    private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
+    {
+        var outObj = new
+        {
+            magic_id = spec.MagicId,
+            anti_magic = spec.AntiMagic,
+            fixture_spec = new
+            {
+                magic_name = spec.MagicName,
+                effect = spec.Effect,
+                effect_type = spec.EffectType,
+                user_magic_level = spec.UserMagicLevel,
+                caster_level = spec.CasterLevel,
+                caster_mc = spec.CasterMc,
+                caster_sc = spec.CasterSc,
+                target_level = spec.TargetLevel,
+                target_max_hp = spec.TargetMaxHp,
+                arm_ring_amulet = spec.ArmRingAmulet,
+            },
+            cases,
+        };
+        var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
+        var argv = Environment.GetCommandLineArgs();
+        var outIdx = Array.IndexOf(argv, "--out");
+        if (outIdx > 0 && outIdx + 1 < argv.Length)
+        {
+            var outPath = argv[outIdx + 1];
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+            File.WriteAllText(outPath, json);
+            Console.Error.WriteLine("GOLDEN_WRITTEN " + outPath);
+        }
+        Console.Out.WriteLine(json);
+        Console.Error.WriteLine(spec.Key + "_CASES " + string.Join(", ", cases.Select(c => c.Label + "[rng=" + c.Rng.Count + ",passes=" + c.DrainPasses + ",cap=" + c.DrainPassesHitCap + "; " + string.Join(" ", c.Receivers.Select(r => r.Who + ":rm" + r.Rm.Count + "/sm" + r.Sent.Count)) + "]")));
+        return 0;
+    }
+
+    /// <summary>跑一支魔法（`DoSpell` 直调），返回账本。`targetNull=true` ⇒ 目标对象为 null（治愈 self 支）。</summary>
+    private static FireballResult RunMagicCase(
+        MagicSpec spec, string label, int seed, int idBase, int targetHp, bool targetNull)
+    {
+        string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
+        var env = new M2Server.Maps.Envirnoment();
+        if (!env.LoadMapData(Path.Combine(mapDir, "0.map")))
+        {
+            throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
+        }
+        var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        caster.Abil.Level = (byte)spec.CasterLevel;
+        caster.WAbil.MC = (ushort)spec.CasterMc;
+        caster.WAbil.SC = (ushort)spec.CasterSc;
+        var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)spec.AntiMagic };
+        target.Abil.Level = (byte)spec.TargetLevel;
+        target.WAbil.MaxHP = (ushort)spec.TargetMaxHp;
+        target.WAbil.HP = (ushort)targetHp;
+        target.Abil.MaxHP = (ushort)spec.TargetMaxHp;
+        var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        if (targetNull)
+        {
+            // 治愈 self 支：`DoSpell` 首句把 targetObject 置成 playObject，读取的是施法者 WAbil。
+            caster.WAbil.MaxHP = (ushort)spec.TargetMaxHp;
+            caster.WAbil.HP = (ushort)targetHp;
+        }
+        if (spec.ArmRingAmulet)
+        {
+            // `CheckAmulet`（`MagicBase.cs:47`）读 `SystemShare.ItemSystem` 的 StdMode/Shape：
+            // 离线进程给最小物品系统 + ArmRingl 护身符（Dura=600 ⇒ Round(600/100)=6 ≥ 1）。
+            SystemModule.SystemShare.ItemSystem = new M2Server.Items.GameItemSystem();
+            SystemModule.SystemShare.ItemSystem.AddItem(new OpenMir2.Data.StdItem
+            {
+                Name = "护身符",
+                StdMode = 25,
+                Shape = 5,
+            });
+            caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl] = new OpenMir2.Packets.ClientPackets.UserItem
+            {
+                MakeIndex = 1,
+                Index = 1,
+                Dura = 600,
+                DuraMax = 1000,
+            };
+        }
+        var recorder = new RecordingNetChannel();
+        M2Server.M2Share.NetChannel = recorder;
+        foreach (var p in new[] { caster, target, obsIn, obsOut })
+        {
+            p.GateIdx = p.ActorId;
+            p.FixedHideMode = false;
+            p.ObMode = false;
+            p.Envir = env;
+            SystemModule.SystemShare.ActorMgr.Add(p);
+            env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
+        }
+
+        var original = RngSeam.Capture();
+        var rng = RngSeam.Install(seed);
+        var um = new OpenMir2.Packets.ClientPackets.UserMagic
+        {
+            MagIdx = (ushort)spec.MagicId,
+            Level = (byte)spec.UserMagicLevel,
+            TranPoint = 0,
+            Magic = new OpenMir2.Data.MagicInfo
+            {
+                MagicId = (ushort)spec.MagicId,
+                MagicName = spec.MagicName,
+                Effect = (byte)spec.Effect,
+                EffectType = (byte)spec.EffectType,
+            },
+        };
+        short doX = targetNull ? caster.CurrX : target.CurrX;
+        short doY = targetNull ? caster.CurrY : target.CurrY;
+        bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
+        var draws = rng.Draws.ToList();
+        RngSeam.Restore(original);
+
+        // 与火球同口径：排水抽空为止（上界 8），上界命中可见。
+        // 等到**最长**的自延迟到期：治愈的 RM_MAGHEALING=800ms、共享尾 RM_MAGIC_LVEXP=1000ms、
+        // 44 的 RM_DELAYPUSHED=600ms ⇒ 1200ms（否则 `NotDue` 会带墙钟字段、两次跑不一致）。
+        const int MaxDrainPasses = 8;
+        int hpBefore = target.WAbil.HP;
+        Thread.Sleep(1200);
+        var pending = new List<object>();
+        var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
+        var rmAcc = new Dictionary<string, List<object>>();
+        foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
+        int drainPasses = 0;
+        bool drainPassesHitCap = false;
+        for (int pass = 0; pass < MaxDrainPasses; pass++)
+        {
+            bool drainedAny = false;
+            foreach (var (who, obj) in byWho)
+            {
+                var raw = obj.DrainRaw();
+                if (raw.Count > 0) drainedAny = true;
+                var rm = raw.Select(m => (object)new
+                {
+                    ident = m.Msg.wIdent,
+                    wParam = m.Msg.wParam,
+                    p1 = m.Msg.nParam1,
+                    p2 = m.Msg.nParam2,
+                    p3 = m.Msg.nParam3,
+                    msg = m.Msg.Buff ?? "",
+                    late = m.Msg.LateDelivery,
+                    delivery = m.Msg.DeliveryTime,
+                    priority = m.Prio,
+                }).ToList();
+                int now = HUtil32.GetTickCount();
+                foreach (var m in raw)
+                {
+                    if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
+                    else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
+                }
+                rmAcc[who].AddRange(rm);
+            }
+            drainPasses = pass + 1;
+            if (!drainedAny) break;
+            if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+        }
+        Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        int hpAfter = target.WAbil.HP;
+        var receivers = new List<ReceiverResult>();
+        foreach (var (who, obj) in byWho)
+        {
+            receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
+        }
+        return new FireballResult
+        {
+            Fixture = new
+            {
+                magic_id = spec.MagicId,
+                magic_name = spec.MagicName,
+                effect = spec.Effect,
+                effect_type = spec.EffectType,
+                user_magic_level = spec.UserMagicLevel,
+                caster_level = spec.CasterLevel,
+                caster_mc = spec.CasterMc,
+                caster_sc = spec.CasterSc,
+                target_level = spec.TargetLevel,
+                target_hp = targetHp,
+                target_max_hp = spec.TargetMaxHp,
+                anti_magic = spec.AntiMagic,
+                target_null = targetNull,
+                arm_ring_amulet = spec.ArmRingAmulet,
+                caster_xy = new[] { 100, 100 },
+                target_xy = new[] { 101, 100 },
+                obs_in_xy = new[] { 105, 100 },
+                obs_out_xy = new[] { 140, 100 },
+                sockets = new[] { 911, 912, 913, 914 },
+            },
+            Label = label,
+            Seed = seed,
+            DrainPasses = drainPasses,
+            DrainPassesHitCap = drainPassesHitCap,
+            SpellReturn = ok,
+            Receivers = receivers,
+            Rng = draws,
+            TargetHp = hpAfter,
+            TargetHpBefore = hpBefore,
+            NotDue = pending,
+            CasterMp = caster.WAbil.MP,
+        };
+    }
+
     private static readonly string[] Unused = Array.Empty<string>();
 
 }
@@ -540,6 +823,10 @@ public sealed class ReceiverResult
 /// <summary>火球单支结果（三支由 `--case fireball` 输出一份 JSON）。</summary>
 public sealed class FireballResult
 {
+    /// 该支的夹具输入（逐字段写进产物，Rust 侧直接读它复现，**禁止手抄**）。
+    /// `null` 时**不落盘**（保持火球既有 golden 的 schema 不变）。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object Fixture { get; set; }
     public string Label { get; set; }
     /// 实际排水趟数（`DrainRaw` 到空为止；正常 ≤4）。
     public int DrainPasses { get; set; }

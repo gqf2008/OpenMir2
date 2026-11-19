@@ -518,3 +518,22 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
   cargo test -p game-svr --lib tests::fireball_parity_hit  -- --exact --ignored --test-threads=1
   cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact real_rust_ledger_parity
   ```
+### 23. 下一批 golden（C# 侧；Rust 驱动未接）
+
+opc-07 派工：先做批序里下 4 支的 **C# golden**（`--case <name>`），Rust 驱动等
+`openmir2-magstruck-name-color` 修完、比较器全绿后再逐支接。共用口径与火球一致：
+golden 几何（caster(100,100)/target(101,100)/obs_in(105,100)/obs_out(140,100)，socket 911..914）、
+ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空为止」（上界 8；
+每 case 落 `DrainPasses`/`DrainPassesHitCap`）、等待覆盖最长自延迟（1200ms）后再排水。
+每 case 落 `Fixture`（魔法/施法者/目标输入），Rust 侧按它复现——**不手抄数字**。
+
+| 分支 | 产物 | 状态 |
+|---|---|---|
+| 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已产出（C#）**；Rust 未接 |
+| 2 治愈 | 未入库（产物在临时目录） | **停**：暴露表外 RM `8034 RM_MAGHEALING`，等裁定 |
+| 13 火符 | 未入库（同上） | **停**：暴露表外 RM `10125 RM_DURACHANGE` → SM 642，等裁定 |
+| 44 灭天火 | 未入库（同上） | **停**：暴露表外 RM `8043 RM_DELAYPUSHED` / `8092 RM_PUSH` → SM 9，等裁定 |
+
+雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；
+`DrainPasses` = miss 2 / edge 4 / hit 4，`hit_cap=False`；连跑两次除 `delivery` 外逐字节一致。
+新表外 RM 的处置（是否进 §11 映射表）见 opc-07 裁定；**未自行扩大 oracle 补全范围**。
