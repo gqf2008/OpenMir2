@@ -66175,6 +66175,16 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYPUSHED && m.actor_id == caster)
             .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
 
+        // **19 的 `RM_TRANSPARENT(8045)`**：交付前抓（每个被施加的 proper friend 各一条，
+        // prio 255、late；到点由该目标自己 `MagMakePrivateTransparent` ⇒ StatusChanged）。
+        let transparent_msgs: Vec<(i32, i32, u8)> = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_TRANSPARENT)
+            .map(|m| (m.actor_id, m.n_param1, m.priority))
+            .collect();
+
         // **治愈类 `RM_MAGHEALING(8034)`**：交付前抓全部（29 可能有多个 proper friend 各一条；
         // 2 治愈走自己的驱动，不受影响）。
         let maghealing_msgs: Vec<(i32, i32, u8)> = rig
@@ -66453,6 +66463,41 @@ SendRefMsgRange=15
                     255,
                     true,
                 ));
+            }
+        }
+        // `RM_TRANSPARENT(8045)`：每个被施加的 proper friend 一条（p1=nHTime、prio=255、late）。
+        for (actor, n_h_time, prio) in &transparent_msgs {
+            if let Some(who) = who_of(*actor) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    8045,
+                    0,
+                    i64::from(*n_h_time),
+                    0,
+                    0,
+                    i64::from(*prio),
+                    true,
+                ));
+            }
+        }
+        // `RM_CHARSTATUSCHANGED(10139)`（19 的到点 `StatusChanged()`）：来源 = 内部事件
+        // `SelfDelayOutcome.transparent`（**不由 SM 657 反推**）；收件人 = 被施加者 ±SendRefMsgRange（含自）。
+        for o in &all_outs {
+            if let Some(t) = o.transparent {
+                if t.status_changed {
+                    for id in chat::hear_targets(&rig.world, t.target_id, range) {
+                        if let Some(who) = who_of(id) {
+                            rm_by_who.entry(who).or_default().push(fireball_rm(
+                                10139,
+                                0,
+                                i64::from(t.status),
+                                0,
+                                0,
+                                155,
+                                false,
+                            ));
+                        }
+                    }
+                }
             }
         }
         // `RM_MAGHEALING(8034)`：每个「HP<MaxHP 的 proper friend」一条（p1=nPower、prio=255、late）。
@@ -67579,6 +67624,115 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。
+    /// golden `golden/magic/bigcloak.json`（三 seed s1/s5/s13，无 AntiMagic 骰）。
+    ///
+    /// 路径：3×3（点击 (101,100)）内的 proper friend（caster 与 target；obs_in 在 (105,100) 不在范围）
+    /// 各收一条 800ms `RM_TRANSPARENT(8045)`；到点由该目标自己 `MagMakePrivateTransparent` ⇒
+    /// `StatusChanged()` ⇒ 657 广播（含自）。1000ms 的训练尾 640 落在两个 657 **之后**。
+    ///
+    /// **顺序取舍（opc-07 2026-11-20 裁定；QA 复核后订正措辞）**：golden 与比较器**不记录
+    /// `Recog`**（`ParseFrames` 只取 `ident/param/tag/series/tail`）；两条 657 **仅 `Recog` 不同**
+    /// （`Recog` = 发起 `StatusChanged` 的 actor：`src/M2Server/Player/PlayObject.Message.cs:1845`、
+    /// `src/M2Server/Actor/BaseObject.Message.cs:149-154`）⇒ **按总监裁定不判先后**——这是**我们的
+    /// 取舍**（不扩比较面），**不是**「不可判」，也**不是**「对客户端无差异」。
+    /// 判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项相等 + RM 多重集。
+    /// **不是**「顺序相等」——是「不判」。
+    fn big_cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, 19, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 100, 2);
+        b1_golden_drain_assert("bigcloak.json", label, 3);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let seq_of = |who: &str| -> Vec<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect()
+        };
+        // caster = [638,642,657,657,640]（640 在两条 657 之后：1000ms > 800ms）。
+        assert_eq!(
+            seq_of("caster"),
+            vec![638, 642, 657, 657, 640],
+            "[{stem}/{label}] caster 帧序"
+        );
+        for who in ["target", "obs_in"] {
+            assert_eq!(
+                seq_of(who),
+                vec![17, 638, 657, 657],
+                "[{stem}/{label}] {who} 帧序"
+            );
+        }
+        // 657：每个 socket 恰 2 条、字段逐项 (0,0,0)（隐身位不进 CharStatus）。
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(n(who, "Sent", 657), 2, "[{stem}/{label}] {who} 的 657 条数");
+            let frames: Vec<&serde_json::Value> = c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["ident"] == 657)
+                .collect();
+            for f in frames {
+                assert_eq!(
+                    (f["param"].as_i64(), f["tag"].as_i64(), f["series"].as_i64()),
+                    (Some(0), Some(0), Some(0)),
+                    "[{stem}/{label}] {who} 的 657 字段"
+                );
+            }
+            assert_eq!(
+                n(who, "Rm", 10139),
+                2,
+                "[{stem}/{label}] {who} 的 RM 10139 条数"
+            );
+            assert_eq!(n(who, "Sent", 53), 0, "[{stem}/{label}] {who} 不得有 53");
+        }
+        // 8045：仅被施加者（caster、target）各 1 条；obs_in 0。
+        assert_eq!(n("caster", "Rm", 8045), 1, "[{stem}/{label}] caster 8045");
+        assert_eq!(n("target", "Rm", 8045), 1, "[{stem}/{label}] target 8045");
+        assert_eq!(n("obs_in", "Rm", 8045), 0, "[{stem}/{label}] obs_in 8045");
+        assert_eq!(n("caster", "Sent", 640), 1, "[{stem}/{label}] caster 640");
+        assert_eq!(
+            n("caster", "Rm", 10123),
+            1,
+            "[{stem}/{label}] caster RM 10123"
+        );
+        assert_eq!(
+            n("obs_out", "Sent", 17),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_cloak_parity_s1() {
+        big_cloak_assert("bigcloak", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_cloak_parity_s5() {
+        big_cloak_assert("bigcloak", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_cloak_parity_s13() {
+        big_cloak_assert("bigcloak", "s13", 13, 3000);
     }
 
     /// **`29 群体治愈术`**（`SKILL_BIGHEALLING`，`MagicManager.cs:443-449` / helper `:54-76`）驱动。

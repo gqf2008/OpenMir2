@@ -115,6 +115,7 @@ public static class Program
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
             if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
+            if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -497,6 +498,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int CasterHp;
         public int CasterMaxHp;
         /// <summary>
+        /// **步进排水**（`0` = 旧口径：单次 `Sleep(WaitMs)` 后一次排空）。&gt;0 时按该步长睡眠、
+        /// 只在**到期时刻**处理消息（未到期按原优先级放回队列）——等价真机每 tick 的 `Run()`
+        /// 到点处理。19 的 800ms `RM_TRANSPARENT`（→657）与 1000ms `RM_MAGIC_LVEXP`（→640）
+        /// 同在 prio 255 队列里：单次 `Sleep` 后按 4 叉堆序会把 640 排到 657 前面（记录面伪影），
+        /// 步进排水才与真机/Rust 分步交付同序。
+        /// </summary>
+        public int StepDrainMs;
+        /// <summary>
         /// 排水前的等待（ms）。必须 > 该支最长自延迟，否则到点消息只进 `NotDue`
         /// （`now/delivery` 是墙钟、不可比拼），到点产生的帧会缺失。
         /// 默认 1200 覆盖 8/13/44 的自延迟；28 的 `RM_DOOPENHEALTH` = 1500 ⇒ 1600（卡 §25(a)）。
@@ -783,43 +792,117 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // 否则 `MakeOpenHealth`/`SM_OPENHEALTH(1100)` 不会发生）。
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
-        Thread.Sleep(spec.WaitMs);
         var pending = new List<object>();
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
         int drainPasses = 0;
         bool drainPassesHitCap = false;
-        for (int pass = 0; pass < MaxDrainPasses; pass++)
+        if (spec.StepDrainMs > 0)
         {
-            bool drainedAny = false;
+            // **步进排水**（见 `MagicSpec.StepDrainMs` 说明）：每步只处理**已到期**的消息，
+            // 未到期的按原优先级放回队列；RM 账本按消息对象去重（同一消息跨步只记一次）。
+            void DrainOnce(bool[] operatedAny)
+            {
+                foreach (var (who, obj) in byWho)
+                {
+                    var raw = obj.DrainRaw();
+                    var later = new List<(SystemModule.Data.SendMessage Msg, byte Prio)>();
+                    foreach (var (m, prio) in raw)
+                    {
+                        int now = HUtil32.GetTickCount();
+                        if (!m.LateDelivery || m.DeliveryTime <= now)
+                        {
+                            // RM 账本 = 全部「成功入队并被处理」的消息（每条只记一次）。
+                            rmAcc[who].Add(new
+                            {
+                                ident = m.wIdent,
+                                wParam = m.wParam,
+                                p1 = m.nParam1,
+                                p2 = m.nParam2,
+                                p3 = m.nParam3,
+                                msg = m.Buff ?? "",
+                                late = m.LateDelivery,
+                                delivery = m.DeliveryTime,
+                                priority = prio,
+                            });
+                            obj.OperatePublic(m);
+                            operatedAny[0] = true;
+                        }
+                        else
+                        {
+                            later.Add((m, prio));
+                        }
+                    }
+                    foreach (var (m, prio) in later) obj.PushBack(m, prio);
+                }
+            }
+            int elapsed = 0;
+            while (elapsed < spec.WaitMs)
+            {
+                int step = Math.Min(spec.StepDrainMs, spec.WaitMs - elapsed);
+                Thread.Sleep(step);
+                elapsed += step;
+                int stepPasses = 0;
+                for (int pass = 0; pass < MaxDrainPasses; pass++)
+                {
+                    var operatedAny = new[] { false };
+                    DrainOnce(operatedAny);
+                    stepPasses = pass + 1;
+                    if (!operatedAny[0]) break;
+                    if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+                }
+                drainPasses = Math.Max(drainPasses, stepPasses);
+            }
+            // 兜底：窗口结束时仍未到期的消息记入 `NotDue`（不执行、不再入队）——正常情况下为空。
             foreach (var (who, obj) in byWho)
             {
-                var raw = obj.DrainRaw();
-                if (raw.Count > 0) drainedAny = true;
-                var rm = raw.Select(m => (object)new
+                foreach (var (m, prio) in obj.DrainRaw())
                 {
-                    ident = m.Msg.wIdent,
-                    wParam = m.Msg.wParam,
-                    p1 = m.Msg.nParam1,
-                    p2 = m.Msg.nParam2,
-                    p3 = m.Msg.nParam3,
-                    msg = m.Msg.Buff ?? "",
-                    late = m.Msg.LateDelivery,
-                    delivery = m.Msg.DeliveryTime,
-                    priority = m.Prio,
-                }).ToList();
-                int now = HUtil32.GetTickCount();
-                foreach (var m in raw)
-                {
-                    if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
-                    else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
+                    pending.Add(new
+                    {
+                        who,
+                        ident = m.wIdent,
+                        delivery = m.DeliveryTime,
+                        now = HUtil32.GetTickCount(),
+                    });
                 }
-                rmAcc[who].AddRange(rm);
             }
-            drainPasses = pass + 1;
-            if (!drainedAny) break;
-            if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+        }
+        else
+        {
+            Thread.Sleep(spec.WaitMs);
+            for (int pass = 0; pass < MaxDrainPasses; pass++)
+            {
+                bool drainedAny = false;
+                foreach (var (who, obj) in byWho)
+                {
+                    var raw = obj.DrainRaw();
+                    if (raw.Count > 0) drainedAny = true;
+                    var rm = raw.Select(m => (object)new
+                    {
+                        ident = m.Msg.wIdent,
+                        wParam = m.Msg.wParam,
+                        p1 = m.Msg.nParam1,
+                        p2 = m.Msg.nParam2,
+                        p3 = m.Msg.nParam3,
+                        msg = m.Msg.Buff ?? "",
+                        late = m.Msg.LateDelivery,
+                        delivery = m.Msg.DeliveryTime,
+                        priority = m.Prio,
+                    }).ToList();
+                    int now = HUtil32.GetTickCount();
+                    foreach (var m in raw)
+                    {
+                        if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
+                        else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
+                    }
+                    rmAcc[who].AddRange(rm);
+                }
+                drainPasses = pass + 1;
+                if (!drainedAny) break;
+                if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+            }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
         int hpAfter = target.WAbil.HP;
@@ -924,6 +1007,9 @@ public sealed class RecordingPlayObject : M2Server.Player.PlayObject
         while (MsgQueue.TryDequeue(out var m, out var prio)) list.Add((m, prio));
         return list;
     }
+
+    /// <summary>把**未到期**的消息按原优先级放回队列（步进排水用；`MsgQueue` 是 4 叉堆）。</summary>
+    public void PushBack(SystemModule.Data.SendMessage m, byte prio) => MsgQueue.Enqueue(m, prio);
 
     /// <summary>用生产编码路径处理一条 RM（`PlayObject.Message.cs:768` 的 Operate）。</summary>
     public void OperatePublic(SystemModule.Data.SendMessage m)

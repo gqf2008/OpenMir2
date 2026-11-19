@@ -189,6 +189,7 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 | `RM_MAGIC_LVEXP`（训练尾） | `src/M2Server/Player/PlayObject.Message.cs:1800-1801`（`SM_MAGIC_LVEXP`，p1/p2 + `LoWord/HiWord(nParam3)`） | `SM_MAGIC_LVEXP` 帧：字段逐项 |
 | `RM_MAGHEALING(8034)` wParam=0, p1=nPower, p2=0, p3=0, prio=255（`SendSelfDelayMsg`） | **服务端事件，不是客户端帧**：`src/M2Server/Player/PlayObject.Message.cs:1619-1629`（到点只累计 `IncHealing`/`PerHealing`，上限 300 的比较在 `:1620`；实际回血由后续 `Run` 的恢复周期另出 53） | 比较"是否登记延时治疗事件 + nPower + 目标"；**不产 SM 帧**（与 `RM_DELAYMAGIC` 同类） |
 | `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax, prio=141（`10125 & 0xFF`）、late=false | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642**。**队列序**：与 `RM_MAGICFIRE(10120, prio 136)` 同队、按 `(byte)ident` 出队 ⇒ **638 先、642 后**（火符修复卡按此把 642 纳入同批 `SpellFrameBuf`，仅 `UseAmulet` 路径） | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 + caster 的 638→642 顺序 |
+| `RM_TRANSPARENT(8045)` wParam=0, p1=`nHTime`, p2/p3=0, prio=255（`SendSelfDelayMsg`；**队列 = 该目标自己**，延时 800ms） | 产生者 `src/M2Server/Magic/MagicManager.cs:384-389`（19 支）/ helper `:1209-1228`（`SendSelfDelayMsg(RM_TRANSPARENT, 0, nHTime, 0, 0, "", 800)`）；到点处理 `src/M2Server/Actor/BaseObject.Base.cs:760-761` ⇒ `MagicManager.MagMakePrivateTransparent(this, (ushort)nParam1)` ⇒ `StatusChanged()` | **收件人 = 被施加者自己**（到点由它自己处理，不产 SM 帧）；比较 = RM 多重集（who=被施加者、p1=`nHTime`、priority=255、late）。到点后的 657 面见 `RM_CHARSTATUSCHANGED(10139)` 行 |
 | `RM_DELAYPUSHED(8043)` wParam=nDir, p1=坐标, p2=push, p3=目标 | **服务端事件**：`src/M2Server/Actor/BaseObject.Base.cs:733-739`（到点 `CharPushed`，逐格 `SendRefMsg(RM_PUSH)`）；`RM_PUSH(8092)` → `src/M2Server/Player/PlayObject.Message.cs:1525-1533`（`SM_BACKSTEP(9)`）。夹具前提：**`UserMagic.Level=3`**（`Random(Level)-1`，Level<3 时恒 ≤0 ⇒ 永不推挤；产生点在 `src/M2Server/Magic/MagicManager.cs:1048-1052`） | `SM_BACKSTEP(9)` 帧逐字段 + 逐格条数；其余 SM 不变 |
 | `RM_ABILITY(10051)` wParam=0, p1/p2/p3=0, prio=67（`10051 & 0xFF`） | `src/M2Server/Player/PlayObject.Message.cs:1732-1735`（→ `SM_ABILITY(52)`：`Gold`、`MakeWord(Job,99)`、`LoWord/HiWord(GameGold)`，尾 `EDCode.EncodeMessage(WAbil)`）。产生者：`RecalcAbilitys` 收尾（`src/M2Server/Actor/BaseObject.cs:2161`/`:2185`）与 buff 系统（`src/M2Server/ActorBuffSystem.cs:229`），均 `SendMsg(this)`；`src/M2Server/Player/PlayObject.cs:1385` 的 `SendPriorityMsg(..., High)` 亦给自己 | **收件人 = 该对象自己**；比较 = `SM_ABILITY(52)` 按序 + 尾字节；RM 列多重集 |
 | `RM_CHARSTATUSCHANGED(10139)` wParam=0, p1=`CharStatus`（int 位集，实测可为 `0x80000000`）, prio=155 | 产生者 `StatusChanged()`（`src/M2Server/Actor/BaseObject.cs:1514-1517`）走 `SendRefMsg`；handler → `src/M2Server/Player/PlayObject.Message.cs:1845`（`SM_CHARSTATUSCHANGED(657)`：`ActorId`、`LoWord/HiWord(nParam1)`、`this.HitSpeed`）；`src/M2Server/Player/PlayObject.cs:2876` 的 `SendUpdateMsg` 只给自己 | **收件人 = 产出者 ±`SendRefMsgRange` 的玩家（含自己）**；比较 = `SM 657` 严格序 + 字段；RM 列多重集 |
@@ -886,3 +887,39 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 **回归（同一 id `mp-1795121294-1416322`）**：39 支驱动全 rc=0、13 支比较器 0 红、9 颗比较器牙全过
 （`…/evidence/regression-runid.log`）。**注意**：§27 及更早的证据日志产生于本机制之前，命令行未带
 `MIR2_LEDGER_RUN_ID`；此后所有驱动/比较器运行一律按上面范本执行。
+
+### 29. 19 集体隐身术（`SKILL_BIGCLOAK`）接线记录（2026-11-20）
+
+- **oracle**：组门 `CheckAmulet(1,1)`（`:315-327`）→ `:384-389` → `MagMakeGroupTransparent`
+  （`:1209-1228`）：`GetMapBaseObjects(nX,nY,1,...)` 的 **3×3 有序枚举**，对
+  `IsProperFriend && StatusTimeArr[STATETRANSPARENT]==0` 的对象
+  `SendSelfDelayMsg(RM_TRANSPARENT, 0, nHTime, 0, 0, "", 800)`；到点由该对象
+  `MagMakePrivateTransparent` ⇒ `StatusChanged()` ⇒ 657 广播（含自）。
+- **夹具几何**：点击 (101,100) ⇒ 3×3 内 caster(100,100)+target(101,100) 两个 proper friend
+  各一条 8045；obs_in(105,100) 不在 3×3。RNG：`GetPower13(30)` 的 `Random(0)` 1 抽 +
+  训练尾 `Random(3)+1` ⇒ **2 抽**；到点 9 格怪循环零抽（无怪）。
+- **C# 装置新增「步进排水」**（`MagicSpec.StepDrainMs`，默认 0 = 旧口径；19 用 100ms）：
+  旧口径「单次 `Sleep(WaitMs)` 后一次排空」会按 4 叉堆序把 1000ms 的 640 排到 800ms 的 657
+  **前面**（记录面伪影）；步进排水只在**到期时刻**处理（未到期按原优先级放回队列），与真机
+  每 tick `Run()` 及 Rust 分步交付同序 ⇒ caster `[638,642,657,657,640]`。既有 golden 全部
+  未重生成、不受影响。
+- **顺序取舍（opc-07 2026-11-20 裁定；QA 复核后订正措辞）**：golden 与比较器**不记录 `Recog`**（`ParseFrames` 只取 `ident/param/tag/series/tail`）；19 的两条 657 **仅 `Recog` 不同**（`SendDefMessage(SM_CHARSTATUSCHANGED, processMsg.ActorId, …)`，`src/M2Server/Player/PlayObject.Message.cs:1845`；`ActorId = baseObject.ActorId`，`src/M2Server/Actor/BaseObject.Message.cs:149-154`）⇒ **按总监裁定不判先后**——这是**我们的取舍**（不扩比较面），**不是**「不可判」，也**不是**「对客户端无差异」。判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项
+  相等 + RM 多重集。**纪律：这是「不判」，不是「顺序相等」。**
+- **golden `golden/magic/bigcloak.json`**：`DrainPasses=3`、`hit_cap=false`、`NotDue=0`；
+  caster `[638,642,657,657,640]`、target/obs_in `[17,638,657,657]`；RM = 10008/10120（众人）
+  + 10125（caster,642,141）+ 8045（caster/target 各 1，p1=95，255）+ 10139（各 2，155）
+  + 10123（caster，255）。
+- **(c)(d)**：隐身位不进 `CharStatus`（657 全 0，§26 已钉）；`hear_targets` 只看
+  `ob_mode||fixed_hide_mode` ⇒ 隐身不影响后续 640；`StatusTimeArr` 置位后重复施加走「已隐身」
+  分支（单次 cast 不触发）；夹具无怪 ⇒ 怪循环零抽。
+- **牙（§16 快照 `E:/UserTemp/bigcloak-snap/`，world.rs `ef61320b…`、lib.rs `c737d13c…`）**：
+  A 不组装 8045 ⇒ driver `caster 8045` 0≠1 + 比较器红；B 不组装到点的 10139 ⇒ driver
+  `caster 的 RM 10139 条数` 0≠2 + 比较器红；C 产品早退门 `>0` 改 `>=0`（恒早退）⇒
+  caster 帧序 `[638,642,640]` ≠ `[638,642,657,657,640]`。三颗均 `cp` 还原、sha 相等。
+  **附加观察（run_id 防线实战）**：牙后只重跑 s1 时，比较器因 s5/s13 的侧车仍是上一 id 而红
+  （`[s5] 台账陈旧：run_id 不匹配`）——这正是 §28 机制要拦的空转；同 id 重跑三支后基线绿。
+  证据 `mir2-rs/target/magic-parity/evidence/tooth-bigcloak.log`。
+- **回归**：42 支驱动全 rc=0、14 支比较器 0 红、9 颗比较器牙全过（同一 run id，
+  `…/evidence/regression-bigcloak.log`）。
+- **清单**：MG-33（`:384` body）升 `verified`（magic **14/65**）；MG-26（`:321` 外层组标签）
+  保持 `implemented_unverified` 并补说明。
