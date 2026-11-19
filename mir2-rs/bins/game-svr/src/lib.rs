@@ -65600,7 +65600,7 @@ SendRefMsgRange=15
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
-    fn fireball_rig(id_base: i32, magic_id: u16, sc: u16) -> SpellFrameRig {
+    fn fireball_rig(id_base: i32, magic_id: u16, sc: u16, user_magic_level: u8) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -65659,6 +65659,18 @@ SendRefMsgRange=15
             e.vitals.max_hp = 100;
             e.progression.level = 20;
         }
+        // `UserMagic.Level`：44 的推挤 `Random(Level)-1` 需要 Level=3 才可能 >0（卡 §23）。
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = user_magic_level;
         rig
     }
 
@@ -65730,6 +65742,7 @@ SendRefMsgRange=15
         stem: &str,
         magic_id: u16,
         sc: u16,
+        user_magic_level: u8,
         label: &str,
         seed: i32,
         id_base: i32,
@@ -65755,7 +65768,7 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = fireball_rig(id_base, magic_id, sc);
+        let mut rig = fireball_rig(id_base, magic_id, sc, user_magic_level);
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
@@ -65765,15 +65778,6 @@ SendRefMsgRange=15
 
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
-        eprintln!(
-            "[dbg] clock={} delays={:?}",
-            rig.world.clock_ms,
-            rig.world
-                .self_delay_msgs
-                .iter()
-                .map(|m| (m.ident, m.actor_id, m.deliver_at_ms))
-                .collect::<Vec<_>>()
-        );
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
@@ -65786,6 +65790,15 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC && m.actor_id == caster)
             .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
 
+        // **推挤决策（46/44 的 `RM_DELAYPUSHED`）**：交付前从自延迟队列抓
+        // （wParam=nDir、nParam1=MakeLong、nParam2=push 格数、nParam3=target）。
+        let delay_pushed = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYPUSHED && m.actor_id == caster)
+            .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+
         // ---- 段②：推进世界时钟后交付；只推进/只交付，不跑 tick 循环 ----
         // 1500ms 覆盖各支的最长自延迟：1/5/11/45/44 的 RM_DELAYMAGIC=600、13 的 =1200、
         // RM_MAGIC_LVEXP=1000（构造时 `world.tick()` 已把时钟推到 200）。
@@ -65793,16 +65806,17 @@ SendRefMsgRange=15
         let outs = rig.world.deliver_self_delay_msgs();
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
         let delay_magic = outs.iter().find_map(|o| o.delay_magic);
-        eprintln!(
-            "[dbg] after clock={} outs={} delay_magic={:?}",
-            rig.world.clock_ms,
-            outs.len(),
-            delay_magic
-        );
         let rec = mir2_world_bevy::TickRecord {
             slave_self_deliveries: outs,
             ..Default::default()
         };
+        // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
+        // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
+        let push_events: Vec<(i32, u8, i32, i32)> = rec
+            .slave_self_deliveries
+            .iter()
+            .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y)))
+            .collect();
         drain_b4_self_deliveries(
             &rec,
             &mut rig.world,
@@ -65963,6 +65977,38 @@ SendRefMsgRange=15
                 }
             }
         }
+        // `RM_DELAYPUSHED(8043)`：施法者自延迟队列（late=true、prio = 255）。
+        if let Some((w, n1, n2, n3, prio)) = delay_pushed {
+            if let Some(who) = who_of(caster) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    8043,
+                    i64::from(w),
+                    i64::from(n1),
+                    i64::from(n2),
+                    i64::from(n3),
+                    i64::from(prio),
+                    true,
+                ));
+            }
+        }
+        // `RM_PUSH(8092)`：逐格、收件人 = 被推者**该格**的 `hear_targets`（含自）、prio=156、
+        // late=false。来源是推挤决策（见上），不是 SM 帧。
+        for (actor, dir, x, y) in push_events {
+            let map_id = rig.world.entities.get(actor).map_or(0, |e| e.map_id);
+            for id in chat::hear_targets_at(&rig.world, actor, map_id, x, y, range) {
+                if let Some(who) = who_of(id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        8092,
+                        i64::from(dir),
+                        i64::from(x),
+                        i64::from(y),
+                        0,
+                        156,
+                        false,
+                    ));
+                }
+            }
+        }
 
         // `RM_DURACHANGE(10125)`（护身符消耗，`UseAmulet`）：C# 入施法者队列，prio = 10125 & 0xFF = 141，
         // late=false；Rust 观测面 = 实际发出的 `SM_DURACHANGE(642)` 帧（SM 头 = Recog=Dura、
@@ -66086,7 +66132,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_miss() {
-        fireball_parity_drive("fireball", 1, 0, "miss", 1, 1000);
+        fireball_parity_drive("fireball", 1, 0, 1, "miss", 1, 1000);
         fireball_case_assert("fireball", "miss", 100, 1);
     }
 
@@ -66094,7 +66140,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_edge() {
-        fireball_parity_drive("fireball", 1, 0, "edge", 5, 2000);
+        fireball_parity_drive("fireball", 1, 0, 1, "edge", 5, 2000);
         fireball_case_assert("fireball", "edge", 85, 5);
     }
 
@@ -66102,7 +66148,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_hit() {
-        fireball_parity_drive("fireball", 1, 0, "hit", 13, 3000);
+        fireball_parity_drive("fireball", 1, 0, 1, "hit", 13, 3000);
         fireball_case_assert("fireball", "hit", 85, 5);
     }
 
@@ -66112,21 +66158,21 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_miss() {
-        fireball_parity_drive("fireball5", 5, 0, "miss", 1, 1000);
+        fireball_parity_drive("fireball5", 5, 0, 1, "miss", 1, 1000);
         fireball_case_assert("fireball5", "miss", 100, 1);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_edge() {
-        fireball_parity_drive("fireball5", 5, 0, "edge", 5, 2000);
+        fireball_parity_drive("fireball5", 5, 0, 1, "edge", 5, 2000);
         fireball_case_assert("fireball5", "edge", 85, 5);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_hit() {
-        fireball_parity_drive("fireball5", 5, 0, "hit", 13, 3000);
+        fireball_parity_drive("fireball5", 5, 0, 1, "hit", 13, 3000);
         fireball_case_assert("fireball5", "hit", 85, 5);
     }
 
@@ -66163,7 +66209,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_miss() {
-        fireball_parity_drive("lightning11", 11, 0, "miss", 1, 1000);
+        fireball_parity_drive("lightning11", 11, 0, 1, "miss", 1, 1000);
         fireball_case_assert("lightning11", "miss", 100, 1);
         b1_golden_drain_assert("lightning-11.json", "miss", 2);
     }
@@ -66171,7 +66217,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_edge() {
-        fireball_parity_drive("lightning11", 11, 0, "edge", 5, 2000);
+        fireball_parity_drive("lightning11", 11, 0, 1, "edge", 5, 2000);
         fireball_case_assert("lightning11", "edge", 85, 5);
         b1_golden_drain_assert("lightning-11.json", "edge", 4);
     }
@@ -66179,7 +66225,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_hit() {
-        fireball_parity_drive("lightning11", 11, 0, "hit", 13, 3000);
+        fireball_parity_drive("lightning11", 11, 0, 1, "hit", 13, 3000);
         fireball_case_assert("lightning11", "hit", 85, 5);
         b1_golden_drain_assert("lightning-11.json", "hit", 4);
     }
@@ -66187,7 +66233,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_miss() {
-        fireball_parity_drive("lightning45", 45, 0, "miss", 1, 1000);
+        fireball_parity_drive("lightning45", 45, 0, 1, "miss", 1, 1000);
         fireball_case_assert("lightning45", "miss", 100, 1);
         b1_golden_drain_assert("lightning-45.json", "miss", 2);
     }
@@ -66195,7 +66241,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_edge() {
-        fireball_parity_drive("lightning45", 45, 0, "edge", 5, 2000);
+        fireball_parity_drive("lightning45", 45, 0, 1, "edge", 5, 2000);
         fireball_case_assert("lightning45", "edge", 85, 5);
         b1_golden_drain_assert("lightning-45.json", "edge", 4);
     }
@@ -66203,7 +66249,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_hit() {
-        fireball_parity_drive("lightning45", 45, 0, "hit", 13, 3000);
+        fireball_parity_drive("lightning45", 45, 0, 1, "hit", 13, 3000);
         fireball_case_assert("lightning45", "hit", 85, 5);
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
@@ -66611,7 +66657,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_miss() {
-        fireball_parity_drive("firecharm", 13, 15, "miss", 1, 1000);
+        fireball_parity_drive("firecharm", 13, 15, 1, "miss", 1, 1000);
         fireball_case_assert("firecharm", "miss", 100, 1);
         b1_golden_drain_assert("firecharm.json", "miss", 2);
         firecharm_order_assert("miss");
@@ -66620,7 +66666,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_edge() {
-        fireball_parity_drive("firecharm", 13, 15, "edge", 5, 2000);
+        fireball_parity_drive("firecharm", 13, 15, 1, "edge", 5, 2000);
         fireball_case_assert("firecharm", "edge", 85, 5);
         b1_golden_drain_assert("firecharm.json", "edge", 4);
         firecharm_order_assert("edge");
@@ -66629,10 +66675,77 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_hit() {
-        fireball_parity_drive("firecharm", 13, 15, "hit", 13, 3000);
+        fireball_parity_drive("firecharm", 13, 15, 1, "hit", 13, 3000);
         fireball_case_assert("firecharm", "hit", 85, 5);
         b1_golden_drain_assert("firecharm.json", "hit", 4);
         firecharm_order_assert("hit");
+    }
+
+    /// `44 灭天火`（`SKILL_44` → `MagHbFireBall`）真实台账驱动。
+    /// 金标准 `golden/magic/hbfireball.json`；夹具 `user_magic_level=3`（推挤 `Random(Level)-1`
+    /// 才可能 >0）。推挤断言只看**决策面**（`RM_DELAYPUSHED`/`RM_PUSH` 与 `SM_BACKSTEP` 条数），
+    /// `RM_PUSH` 由 PushEvent 组装、不由 SM 帧反推。
+    fn hbfireball_case(label: &str) -> serde_json::Value {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("hbfireball_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v[0].clone()
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hbfireball_parity_miss() {
+        fireball_parity_drive("hbfireball", 44, 0, 3, "miss", 1, 1000);
+        fireball_case_assert("hbfireball", "miss", 100, 1);
+        b1_golden_drain_assert("hbfireball.json", "miss", 2);
+        let c = hbfireball_case("miss");
+        assert_eq!(healing_count(&c, "caster", "Rm", 8043), 0, "miss 无推挤");
+        assert_eq!(healing_count(&c, "caster", "Rm", 8092), 0);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hbfireball_parity_edge() {
+        fireball_parity_drive("hbfireball", 44, 0, 3, "edge", 5, 2000);
+        fireball_case_assert("hbfireball", "edge", 85, 7);
+        b1_golden_drain_assert("hbfireball.json", "edge", 4);
+        let c = hbfireball_case("edge");
+        // edge：推挤门过（Random(20)=18<25）但 `Random(3)=0 ⇒ push=-1` ⇒ 不推。
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 8043),
+            0,
+            "edge push=-1 不登记 DELAYPUSHED"
+        );
+        assert_eq!(healing_count(&c, "caster", "Rm", 8092), 0);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hbfireball_parity_hit() {
+        fireball_parity_drive("hbfireball", 44, 0, 3, "hit", 13, 3000);
+        fireball_case_assert("hbfireball", "hit", 85, 7);
+        b1_golden_drain_assert("hbfireball.json", "hit", 4);
+        let c = hbfireball_case("hit");
+        // hit：`Random(20)=18<25`、`Random(3)=2 ⇒ push=1` ⇒ 1 次 DELAYPUSHED、1 格 PUSH。
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 8043),
+            1,
+            "caster 恰 1 条 RM_DELAYPUSHED"
+        );
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                healing_count(&c, who, "Rm", 8092),
+                1,
+                "{who} 恰 1 条 RM_PUSH"
+            );
+            assert_eq!(
+                healing_count(&c, who, "Sent", 9),
+                1,
+                "{who} 恰 1 条 SM_BACKSTEP"
+            );
+        }
+        assert_eq!(healing_count(&c, "obs_out", "Sent", 9), 0);
     }
 
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
