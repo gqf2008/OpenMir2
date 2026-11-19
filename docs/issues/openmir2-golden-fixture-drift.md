@@ -133,9 +133,21 @@ legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dos
 3. `equipment == []` ⇒ `anti_magic == 1`；**`equipment` 非空 ⇒ fail-closed 红**（装备 MgAvoid 复算未实现）；
 4. `derived` 六键齐全；`max_hp/max_mp/dc/ac/mac` 用 `mir2-formula` 的
    `recalc_level_abilitys(job, level, default)` **复算比对**；`target_max_hp == derived.max_hp`；
-   `target_hp ≤ max_hp`；`derived.max_exp ≥ 0`（其来源 `Exps.conf` 不在仓内，且本域无条目消费
-   `MaxExp` ⇒ 仅存在性校验；将来有条目消费时再冻表复算）；
+   `target_hp ≤ max_hp`；**`derived.max_exp` = `GetLevelExp(level)` = 冻结表 `need_exps[level]`**
+   （见 8.3b；该字段**有消费点**——MG-28/29 的 52 帧尾封 `WAbil` 全量，含 `Exp/MaxExp`）；
 5. `legacy/` 目录：`golden/magic/legacy/**` 只作历史留档，`golden_file` 直接拒绝该前缀。
+
+### 8.3b 冻结 `NeedExps` 表（M51 产出，M52 读）
+
+- 文件：`mir2-rs/tests/parity/fixtures/exps-need-exps.json`
+- 字段：`{ "source": "E:/MirServer/M2GameSvr/Exps.conf", "sha256": "<64 hex>",
+  "mtime": "<取样时文件 mtime>", "need_exps": [NeedExps[0], NeedExps[1], …] }`
+  （`need_exps[level]` 即 `SystemShare.Config.NeedExps[level]`；`GetLevelExp` 直接下标取。）
+- **同源要求**：golden 生成器（`a2`）与比较器（本侧）读**同一份**文件；它是**冻结面**——
+  `Exps.conf` 变化必须显式更新该文件（source/sha256/mtime 同步）并重新生成相关 golden。
+- 当前部署取样：`Exps.conf` sha256 = `07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9`、
+  mtime = `2026-10-09 01:32:29 +0800`、`Level20=6000`（供 `a2` 核对；表中以 `Exps.conf` 实值为准）。
+- 比较器：缺文件 / `sha256` 非 64 hex / 缺 `source` / 缺 `need_exps` ⇒ **红**（fail-closed）。
 
 ### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
 
@@ -197,3 +209,13 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 
 **合成角色件（`AntiMagic=3`/`MaxHP=100`）**：按 §6 处置第 1 条降为**附加场景**，
 `rng_mode=cover_drain` 保留作 RNG 轴对照，但 `reachability=unverified`、**不作 verified 依据**。
+**并且在新契约下它们已不可再生**：`equipment=[]` 时 `anti_magic` 必须为 1（契约门强制），
+`AntiMagic=3` 需非空装备（复算未实现 ⇒ fail-closed）。因此合成件只能作为**历史留档冻结在
+`golden/magic/legacy/`**，不再进入任何生成/比较流程——**不要试图"重生成旧件"**。
+**旧件冻结后，任何人不得用新装置尝试重生成**：契约门（`equipment=[] ⇒ anti_magic==1`）会拒绝，
+重生成只会浪费时间，并可能引出"那就放宽门"的错误提案。
+
+**M52 交付自检（必须逐条给出原文）**：① 被合的树里存在
+`mir2-rs/tests/parity/fixtures/exps-need-exps.json`
+（`git cat-file -e <head>:mir2-rs/tests/parity/fixtures/exps-need-exps.json`，rc=0）；
+② 该文件的 `sha256` 与部署 `Exps.conf` 实值一致；③ 全 15 条在同一 `run_id` 下的实测结果。

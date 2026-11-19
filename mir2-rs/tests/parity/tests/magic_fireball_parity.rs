@@ -362,6 +362,52 @@ fn union_rng(case: &Value, label: &str) -> Result<Vec<i64>, String> {
     Ok(out)
 }
 
+/// **冻结的 `NeedExps` 表**（`Exps.conf` 的 `[Exp] LevelN` → `SystemShare.Config.NeedExps[N]`，
+/// `GetLevelExp` 直接下标取；卡 §8.3）。文件由 M51 生成、与 golden 生成器**同源**：
+/// `tests/parity/fixtures/exps-need-exps.json` = `{source, sha256, mtime, need_exps[]}`，
+/// `need_exps[level]` 即 `NeedExps[level]`。**缺文件/坏文件即红**（fail-closed）。
+fn need_exps_table() -> serde_json::Value {
+    let path = format!(
+        "{}/fixtures/exps-need-exps.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "冻结的 NeedExps 表缺失：{path}（{e}）——M51 应产出该件；缺它 `derived.max_exp` 无法机检"
+        )
+    });
+    let v: Value = serde_json::from_str(&text).expect("exps-need-exps.json 必须是合法 JSON");
+    let sha = v.get("sha256").and_then(Value::as_str).unwrap_or("");
+    assert!(
+        sha.len() == 64 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "exps-need-exps.json 的 `sha256` 必须是 64 位 hex（卡 §8.3）"
+    );
+    assert!(
+        v.get("source")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty()),
+        "exps-need-exps.json 缺 `source`（部署 Exps.conf 路径）"
+    );
+    assert!(
+        v.get("need_exps")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty()),
+        "exps-need-exps.json 缺 `need_exps` 数组"
+    );
+    v
+}
+
+/// `NeedExps[level]`（= `GetLevelExp(level)`）。
+fn need_exp_for(level: i64) -> Result<i64, String> {
+    let table = need_exps_table();
+    let arr = table.get("need_exps").and_then(Value::as_array).unwrap();
+    usize::try_from(level)
+        .ok()
+        .and_then(|i| arr.get(i))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("`need_exps` 未覆盖 level={level}（表长 {}）", arr.len()))
+}
+
 /// 金标准该支的 **`Fixture` 契约**（卡 `openmir2-golden-fixture-drift` §8.3/§8.7）：
 /// 必须同时满足 —— `rng_mode == "cover_drain"`、`reachability == "reachable"`、
 /// 且六类状态字段齐全（`login_order`/`anti_magic`/`target_level`/`target_hp`/`target_max_hp`）；
@@ -500,10 +546,14 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             got("max_hp")
         ));
     }
-    // `derived.max_exp` 的来源是 Exps.conf（不在仓内，且本域无条目消费 `MaxExp`）——
-    // 只校验存在与非负；若将来有条目消费该字段，需把 Exps 表冻进仓后再复算（登记 §8.3）。
-    if got("max_exp") < 0 {
-        return Err(format!("[{label}] `derived.max_exp` 为负（§8.3）"));
+    // `derived.max_exp` = `GetLevelExp(level)` = 冻结表的 `need_exps[level]`（卡 §8.3）。
+    // 该字段**有消费点**：MG-28/29 的 52 帧尾封 `WAbil` 全量（含 `Exp/MaxExp`），不可只查存在。
+    let want_exp = need_exp_for(level)?;
+    if got("max_exp") != want_exp {
+        return Err(format!(
+            "[{label}] `derived.max_exp` = {} 与冻结表 `need_exps[{level}]` = {want_exp} 不一致（§8.3）",
+            got("max_exp")
+        ));
     }
     Ok(())
 }
@@ -613,7 +663,10 @@ fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
         "target_max_hp": 224,
         "reachability": "reachable",
         "construction": { "job": 0, "level": 20, "equipment": [], "skills": [] },
-        "derived": { "max_hp": 224, "max_mp": 81, "dc": 0x0403, "ac": 0x0200, "mac": 0, "max_exp": 50 },
+        "derived": {
+            "max_hp": 224, "max_mp": 81, "dc": 0x0403, "ac": 0x0200, "mac": 0,
+            "max_exp": need_exp_for(20).unwrap_or_else(|m| panic!("{m}")),
+        },
     });
     if let Some(m) = mode {
         fixture["rng_mode"] = Value::from(m);
