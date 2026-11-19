@@ -3,10 +3,41 @@
   "anti_magic": 3,
   "cases": [
     {
+      "Fixture": {
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "anti_magic": 1,
+        "target_level": 20,
+        "target_hp": 224,
+        "target_max_hp": 224,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireBall"
+          ]
+        },
+        "scenario_note": "",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=0(seed 14)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bmiss\uFF09",
+        "rng_total_draws": 1,
+        "rng_recorded": 1
+      },
       "Label": "miss",
       "DrainPasses": 2,
       "DrainPassesHitCap": false,
-      "Seed": 1,
+      "Seed": 14,
       "SpellReturn": true,
       "Receivers": [
         {
@@ -138,15 +169,375 @@
         }
       ],
       "Rng": [
-        2
+        0
       ],
-      "TargetHp": 100,
-      "TargetHpBefore": 100,
+      "TargetHp": 224,
+      "TargetHpBefore": 224,
       "NotDue": [],
       "CasterMp": 0
     },
     {
+      "Fixture": {
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "anti_magic": 1,
+        "target_level": 20,
+        "target_hp": 224,
+        "target_max_hp": 224,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireBall"
+          ]
+        },
+        "scenario_note": "",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=1(seed 18)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bedge\uFF09",
+        "rng_total_draws": 8,
+        "rng_recorded": 8
+      },
       "Label": "edge",
+      "DrainPasses": 4,
+      "DrainPassesHitCap": false,
+      "Seed": 18,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8021,
+              "wParam": 15,
+              "p1": 6553701,
+              "p2": 2,
+              "p3": 2002,
+              "msg": "",
+              "late": true,
+              "delivery": 1119031506,
+              "priority": 255
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 209,
+              "p2": 224,
+              "p3": 2001,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            },
+            {
+              "ident": 31,
+              "param": 209,
+              "tag": 224,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 15,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 108
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10052,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 68
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 209,
+              "p2": 224,
+              "p3": 2001,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            },
+            {
+              "ident": 53,
+              "param": 209,
+              "tag": 0,
+              "series": 224,
+              "tail": ""
+            },
+            {
+              "ident": 31,
+              "param": 209,
+              "tag": 224,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 1,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 209,
+              "p2": 224,
+              "p3": 2001,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "tail": "1"
+            },
+            {
+              "ident": 638,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "tail": "Zghjd?"
+            },
+            {
+              "ident": 31,
+              "param": 209,
+              "tag": 224,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        1,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        4
+      ],
+      "TargetHp": 209,
+      "TargetHpBefore": 224,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "anti_magic": 1,
+        "target_level": 20,
+        "target_hp": 224,
+        "target_max_hp": 224,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireBall"
+          ]
+        },
+        "scenario_note": "",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=3(seed 5)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bhit\uFF09",
+        "rng_total_draws": 8,
+        "rng_recorded": 8
+      },
+      "Label": "hit",
       "DrainPasses": 4,
       "DrainPassesHitCap": false,
       "Seed": 5,
@@ -171,7 +562,7 @@
               "wParam": 0,
               "p1": 257,
               "p2": 6553701,
-              "p3": 2002,
+              "p3": 3002,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -182,18 +573,18 @@
               "wParam": 15,
               "p1": 6553701,
               "p2": 2,
-              "p3": 2002,
+              "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1093098818,
+              "delivery": 1119032303,
               "priority": 255
             },
             {
               "ident": 8103,
               "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 2001,
+              "p1": 209,
+              "p2": 224,
+              "p3": 3001,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -217,14 +608,14 @@
               "param": 101,
               "tag": 100,
               "series": 257,
-              "tail": "Zghjd?"
+              "tail": "Bghad?"
             },
             {
               "ident": 31,
-              "param": 85,
-              "tag": 100,
+              "param": 209,
+              "tag": 224,
               "series": 15,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
@@ -265,7 +656,7 @@
               "wParam": 0,
               "p1": 257,
               "p2": 6553701,
-              "p3": 2002,
+              "p3": 3002,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -285,9 +676,9 @@
             {
               "ident": 8103,
               "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 2001,
+              "p1": 209,
+              "p2": 224,
+              "p3": 3001,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -318,21 +709,21 @@
               "param": 101,
               "tag": 100,
               "series": 257,
-              "tail": "Zghjd?"
+              "tail": "Bghad?"
             },
             {
               "ident": 53,
-              "param": 85,
+              "param": 209,
               "tag": 0,
-              "series": 100,
+              "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
-              "param": 85,
-              "tag": 100,
+              "param": 209,
+              "tag": 224,
               "series": 15,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
@@ -362,7 +753,7 @@
               "wParam": 0,
               "p1": 257,
               "p2": 6553701,
-              "p3": 2002,
+              "p3": 3002,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -371,9 +762,9 @@
             {
               "ident": 8103,
               "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 2001,
+              "p1": 209,
+              "p2": 224,
+              "p3": 3001,
               "msg": "",
               "late": false,
               "delivery": 0,
@@ -404,14 +795,14 @@
               "param": 101,
               "tag": 100,
               "series": 257,
-              "tail": "Zghjd?"
+              "tail": "Bghad?"
             },
             {
               "ident": 31,
-              "param": 85,
-              "tag": 100,
+              "param": 209,
+              "tag": 224,
               "series": 15,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
@@ -433,305 +824,13 @@
         0,
         0,
         0,
-        4
-      ],
-      "TargetHp": 85,
-      "TargetHpBefore": 100,
-      "NotDue": [],
-      "CasterMp": 0
-    },
-    {
-      "Label": "hit",
-      "DrainPasses": 4,
-      "DrainPassesHitCap": false,
-      "Seed": 13,
-      "SpellReturn": true,
-      "Receivers": [
-        {
-          "Who": "caster",
-          "Rm": [
-            {
-              "ident": 10008,
-              "wParam": 1,
-              "p1": 101,
-              "p2": 100,
-              "p3": 1,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 24
-            },
-            {
-              "ident": 10120,
-              "wParam": 0,
-              "p1": 257,
-              "p2": 6553701,
-              "p3": 3002,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 136
-            },
-            {
-              "ident": 8021,
-              "wParam": 15,
-              "p1": 6553701,
-              "p2": 2,
-              "p3": 3002,
-              "msg": "",
-              "late": true,
-              "delivery": 1093099615,
-              "priority": 255
-            },
-            {
-              "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 3001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
-            }
-          ],
-          "Sent": [
-            {
-              "ident": 638,
-              "param": 101,
-              "tag": 100,
-              "series": 257,
-              "tail": "Bghad?"
-            },
-            {
-              "ident": 31,
-              "param": 85,
-              "tag": 100,
-              "series": 15,
-              "tail": "ddhkddhkddQKgdhcedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
-              "series": 0,
-              "tail": ""
-            }
-          ]
-        },
-        {
-          "Who": "target",
-          "Rm": [
-            {
-              "ident": 10008,
-              "wParam": 1,
-              "p1": 101,
-              "p2": 100,
-              "p3": 1,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 24
-            },
-            {
-              "ident": 8044,
-              "wParam": 0,
-              "p1": 15,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 108
-            },
-            {
-              "ident": 10120,
-              "wParam": 0,
-              "p1": 257,
-              "p2": 6553701,
-              "p3": 3002,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 136
-            },
-            {
-              "ident": 10052,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 68
-            },
-            {
-              "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 3001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
-            }
-          ],
-          "Sent": [
-            {
-              "ident": 17,
-              "param": 101,
-              "tag": 100,
-              "series": 1,
-              "tail": "1"
-            },
-            {
-              "ident": 638,
-              "param": 101,
-              "tag": 100,
-              "series": 257,
-              "tail": "Bghad?"
-            },
-            {
-              "ident": 53,
-              "param": 85,
-              "tag": 0,
-              "series": 100,
-              "tail": ""
-            },
-            {
-              "ident": 31,
-              "param": 85,
-              "tag": 100,
-              "series": 15,
-              "tail": "ddhkddhkddQKgdhcedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
-              "series": 0,
-              "tail": ""
-            }
-          ]
-        },
-        {
-          "Who": "obs_in",
-          "Rm": [
-            {
-              "ident": 10008,
-              "wParam": 1,
-              "p1": 101,
-              "p2": 100,
-              "p3": 1,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 24
-            },
-            {
-              "ident": 10120,
-              "wParam": 0,
-              "p1": 257,
-              "p2": 6553701,
-              "p3": 3002,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 136
-            },
-            {
-              "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
-              "p2": 100,
-              "p3": 3001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
-            }
-          ],
-          "Sent": [
-            {
-              "ident": 17,
-              "param": 101,
-              "tag": 100,
-              "series": 1,
-              "tail": "1"
-            },
-            {
-              "ident": 638,
-              "param": 101,
-              "tag": 100,
-              "series": 257,
-              "tail": "Bghad?"
-            },
-            {
-              "ident": 31,
-              "param": 85,
-              "tag": 100,
-              "series": 15,
-              "tail": "ddhkddhkddQKgdhcedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
-              "series": 0,
-              "tail": ""
-            }
-          ]
-        },
-        {
-          "Who": "obs_out",
-          "Rm": [],
-          "Sent": []
-        }
-      ],
-      "Rng": [
-        5,
+        4,
         0,
         0,
-        0,
-        0
+        9
       ],
-      "TargetHp": 85,
-      "TargetHpBefore": 100,
+      "TargetHp": 209,
+      "TargetHpBefore": 224,
       "NotDue": [],
       "CasterMp": 0
     }

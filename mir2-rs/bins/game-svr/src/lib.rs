@@ -66602,6 +66602,28 @@ SendRefMsgRange=15
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
+        // **登录序变体的状态来自 golden `Fixture`**（卡 `openmir2-golden-fixture-drift` §6/§7）：
+        // 有 `anti_magic` / `target_hp` / `target_max_hp` 就按 golden 设——旧件里这些值等于夹具
+        // 缺省（行为不变）；新登录序件里是 `AntiMagic=1` + 等级公式 `MaxHP`（可达场景）。
+        // **必须在魔号专属覆盖（23/29/33/47 的 224）之前**（那些支另行对齐）。
+        if let Some(a) = golden_fixture_opt(stem, label, "anti_magic") {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = u16::try_from(a).unwrap_or(0);
+        }
+        if let Some(m) = golden_fixture_opt(stem, label, "target_max_hp") {
+            let m = u16::try_from(m).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.max_hp = m;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.max_hp = m;
+        }
+        if let Some(h) = golden_fixture_opt(stem, label, "target_hp") {
+            let h = u16::try_from(h).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.hp = h;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.hp = h;
+        }
         if matches!(magic_id, 23 | 33 | 47) {
             // 23/33/47（`MagBigExplosion` 族）的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与
             // RM 8103 的 p2）；登录序下目标 `MaxHP=224`（C# golden 同源），HP 仍 100。
@@ -67210,21 +67232,34 @@ SendRefMsgRange=15
     }
 
     /// 火球类用例的共用断言（id=1 与 id=5 同构；只差 magic id 进 SM17 尾串与 RM_SPELL 的 p3）。
-    fn fireball_case_assert(stem: &str, label: &str, hp_after: i64, rng_len: usize) {
+    fn fireball_case_assert(stem: &str, label: &str) {
         let dir = magic_ledger_dir();
         let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
             .expect("台账必须已落盘");
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let case = &v[0];
-        assert_eq!(case["TargetHpBefore"], 100);
+        // **期望一律取自金标准**（不写死数字）：输入 HP = `Fixture.target_hp`，术后 HP = 金标准
+        // 顶层 `TargetHp`；抽数按统一判据 = 施法段 + 交付段（`Rng ++ DeliverRng`）。
+        let g = golden_case_for(stem, label);
+        let want_before = g["Fixture"]["target_hp"]
+            .as_i64()
+            .expect("金标准 Fixture.target_hp 必须是整数");
         assert_eq!(
-            case["TargetHp"], hp_after,
-            "[{stem}/{label}] 目标 HP 与金标准不符"
+            case["TargetHpBefore"].as_i64(),
+            Some(want_before),
+            "[{stem}/{label}] 施法前 HP 与金标准 Fixture.target_hp 不符"
         );
         assert_eq!(
-            case["Rng"].as_array().unwrap().len(),
-            rng_len,
-            "[{stem}/{label}] 施法段 RNG 抽数不符"
+            case["TargetHp"].as_i64(),
+            g["TargetHp"].as_i64(),
+            "[{stem}/{label}] 术后 HP 与金标准 TargetHp 不符"
+        );
+        let cast_len = case["Rng"].as_array().unwrap().len();
+        let deliver_len = case["DeliverRng"].as_array().map_or(0, |a| a.len());
+        assert_eq!(
+            cast_len + deliver_len,
+            g["Rng"].as_array().unwrap().len(),
+            "[{stem}/{label}] 施法段+交付段 RNG 抽数 != 金标准 Rng 抽数"
         );
         // 负向牙①：caster 不收 SM_SPELL(17)（`PlayObject.Message.cs:1455` 自守卫）。
         let caster = case["Receivers"]
@@ -67263,24 +67298,48 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_miss() {
-        fireball_parity_drive("fireball", 1, 0, 1, "miss", 1, 1000);
-        fireball_case_assert("fireball", "miss", 100, 1);
+        fireball_parity_drive(
+            "fireball",
+            1,
+            0,
+            1,
+            "miss",
+            golden_seed("fireball", "miss"),
+            1000,
+        );
+        fireball_case_assert("fireball", "miss");
     }
 
     /// §22 第 1 步：edge 支（seed=5）——首抽 == AntiMagic，与 hit 走同一支（原版语义）。
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_edge() {
-        fireball_parity_drive("fireball", 1, 0, 1, "edge", 5, 2000);
-        fireball_case_assert("fireball", "edge", 85, 5);
+        fireball_parity_drive(
+            "fireball",
+            1,
+            0,
+            1,
+            "edge",
+            golden_seed("fireball", "edge"),
+            2000,
+        );
+        fireball_case_assert("fireball", "edge");
     }
 
     /// §22 第 1 步：hit 支（seed=13）——首抽 > AntiMagic。
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_hit() {
-        fireball_parity_drive("fireball", 1, 0, 1, "hit", 13, 3000);
-        fireball_case_assert("fireball", "hit", 85, 5);
+        fireball_parity_drive(
+            "fireball",
+            1,
+            0,
+            1,
+            "hit",
+            golden_seed("fireball", "hit"),
+            3000,
+        );
+        fireball_case_assert("fireball", "hit");
     }
 
     /// **id=5（`SKILL_FIREBALL2`）**：与 id=1 共用 `1|5` 实现臂，金标准
@@ -67289,22 +67348,46 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_miss() {
-        fireball_parity_drive("fireball5", 5, 0, 1, "miss", 1, 1000);
-        fireball_case_assert("fireball5", "miss", 100, 1);
+        fireball_parity_drive(
+            "fireball5",
+            5,
+            0,
+            1,
+            "miss",
+            golden_seed("fireball5", "miss"),
+            1000,
+        );
+        fireball_case_assert("fireball5", "miss");
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_edge() {
-        fireball_parity_drive("fireball5", 5, 0, 1, "edge", 5, 2000);
-        fireball_case_assert("fireball5", "edge", 85, 5);
+        fireball_parity_drive(
+            "fireball5",
+            5,
+            0,
+            1,
+            "edge",
+            golden_seed("fireball5", "edge"),
+            2000,
+        );
+        fireball_case_assert("fireball5", "edge");
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_hit() {
-        fireball_parity_drive("fireball5", 5, 0, 1, "hit", 13, 3000);
-        fireball_case_assert("fireball5", "hit", 85, 5);
+        fireball_parity_drive(
+            "fireball5",
+            5,
+            0,
+            1,
+            "hit",
+            golden_seed("fireball5", "hit"),
+            3000,
+        );
+        fireball_case_assert("fireball5", "hit");
     }
 
     /// **金标准侧**的排水量断言：`DrainPasses` 与期望一致、**`DrainPassesHitCap` 必须为 false**
@@ -67340,48 +67423,96 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_miss() {
-        fireball_parity_drive("lightning11", 11, 0, 1, "miss", 1, 1000);
-        fireball_case_assert("lightning11", "miss", 100, 1);
+        fireball_parity_drive(
+            "lightning11",
+            11,
+            0,
+            1,
+            "miss",
+            golden_seed("lightning11", "miss"),
+            1000,
+        );
+        fireball_case_assert("lightning11", "miss");
         b1_golden_drain_assert("lightning-11.json", "miss", 2);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_edge() {
-        fireball_parity_drive("lightning11", 11, 0, 1, "edge", 5, 2000);
-        fireball_case_assert("lightning11", "edge", 85, 5);
+        fireball_parity_drive(
+            "lightning11",
+            11,
+            0,
+            1,
+            "edge",
+            golden_seed("lightning11", "edge"),
+            2000,
+        );
+        fireball_case_assert("lightning11", "edge");
         b1_golden_drain_assert("lightning-11.json", "edge", 4);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_hit() {
-        fireball_parity_drive("lightning11", 11, 0, 1, "hit", 13, 3000);
-        fireball_case_assert("lightning11", "hit", 85, 5);
+        fireball_parity_drive(
+            "lightning11",
+            11,
+            0,
+            1,
+            "hit",
+            golden_seed("lightning11", "hit"),
+            3000,
+        );
+        fireball_case_assert("lightning11", "hit");
         b1_golden_drain_assert("lightning-11.json", "hit", 4);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_miss() {
-        fireball_parity_drive("lightning45", 45, 0, 1, "miss", 1, 1000);
-        fireball_case_assert("lightning45", "miss", 100, 1);
+        fireball_parity_drive(
+            "lightning45",
+            45,
+            0,
+            1,
+            "miss",
+            golden_seed("lightning45", "miss"),
+            1000,
+        );
+        fireball_case_assert("lightning45", "miss");
         b1_golden_drain_assert("lightning-45.json", "miss", 2);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_edge() {
-        fireball_parity_drive("lightning45", 45, 0, 1, "edge", 5, 2000);
-        fireball_case_assert("lightning45", "edge", 85, 5);
+        fireball_parity_drive(
+            "lightning45",
+            45,
+            0,
+            1,
+            "edge",
+            golden_seed("lightning45", "edge"),
+            2000,
+        );
+        fireball_case_assert("lightning45", "edge");
         b1_golden_drain_assert("lightning-45.json", "edge", 4);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_hit() {
-        fireball_parity_drive("lightning45", 45, 0, 1, "hit", 13, 3000);
-        fireball_case_assert("lightning45", "hit", 85, 5);
+        fireball_parity_drive(
+            "lightning45",
+            45,
+            0,
+            1,
+            "hit",
+            golden_seed("lightning45", "hit"),
+            3000,
+        );
+        fireball_case_assert("lightning45", "hit");
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
 
@@ -67473,6 +67604,39 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
+        // **登录序件的状态按 golden `Fixture`**（与通用接缝同口径；有则覆盖 `healing_rig` 缺省）：
+        // 目标 HP / MaxHP、施法者 HP / MaxHP。旧件的这些值等于缺省，行为不变。
+        if let Some(v) = golden_fixture_opt("healing", label, "target_max_hp") {
+            let v = u16::try_from(v).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.max_hp = v;
+            if let Some(sg) = rig.ground_sessions.get_mut("target") {
+                sg.state.wabil.max_hp = v;
+            }
+        }
+        if let Some(v) = golden_fixture_opt("healing", label, "target_hp") {
+            let v = u16::try_from(v).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.hp = v;
+            if let Some(sg) = rig.ground_sessions.get_mut("target") {
+                sg.state.wabil.hp = v;
+            }
+        }
+        if let Some(v) = golden_fixture_opt("healing", label, "caster_hp") {
+            if let Ok(v) = u16::try_from(v) {
+                if v > 0 {
+                    let cmax = golden_fixture_opt("healing", label, "caster_max_hp").unwrap_or(100);
+                    let cmax = u16::try_from(cmax).unwrap_or(100);
+                    let ce = rig.world.entities.get_mut(caster).unwrap();
+                    ce.vitals.hp = v;
+                    ce.vitals.max_hp = cmax;
+                    if let Some(csg) = rig.ground_sessions.get_mut("caster") {
+                        csg.state.wabil.hp = v;
+                        csg.state.wabil.max_hp = cmax;
+                    }
+                }
+            }
+        }
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
         // ---- 段①：生产入口施法（`self` 支：target=0、点击格取施法者坐标）----
@@ -67672,32 +67836,28 @@ SendRefMsgRange=15
     fn healing_parity_heal() {
         healing_parity_drive("heal", 1, 1000, 50, 500, false);
         let c = healing_case("heal");
+        // 期望一律取自金标准（登录序重生成后 HP/MaxHP 与抽数都会变；不再写死条数）。
         assert_eq!(
-            c["Rng"].as_array().unwrap().len(),
-            5,
-            "heal：4 抽 + 训练尾 1 抽"
-        );
-        assert_eq!(c["TargetHpBefore"], 50);
-        assert_eq!(
-            c["TargetHp"], 50,
-            "heal：采集窗口内 HP 增量为 0（恢复按 Run 周期）"
+            c["TargetHpBefore"].as_i64(),
+            golden_case_for("healing", "heal")["Fixture"]["target_hp"].as_i64(),
+            "heal：施法前 HP 须等于 golden Fixture.target_hp"
         );
         assert_eq!(
-            healing_count(&c, "target", "Rm", 8034),
-            1,
-            "RM_MAGHEALING 入目标队列"
+            c["TargetHp"].as_i64(),
+            golden_case_for("healing", "heal")["TargetHp"].as_i64()
         );
-        assert_eq!(
-            healing_count(&c, "caster", "Rm", 10123),
-            1,
-            "训练尾 RM_MAGIC_LVEXP 仅施法者"
-        );
-        assert_eq!(
-            healing_count(&c, "caster", "Sent", 640),
-            1,
-            "SM_MAGIC_LVEXP 仅施法者"
-        );
-        assert_eq!(healing_count(&c, "target", "Sent", 640), 0);
+        for (who, list, ident) in [
+            ("target", "Rm", 8034),
+            ("caster", "Rm", 10123),
+            ("caster", "Sent", 640),
+            ("target", "Sent", 640),
+        ] {
+            assert_eq!(
+                healing_count(&c, who, list, ident),
+                golden_msg_count("healing", "heal", who, list, ident),
+                "heal：{who} {list} {ident} 条数须与 golden 一致"
+            );
+        }
         b1_golden_drain_assert("healing.json", "heal", 2);
     }
 
@@ -67707,20 +67867,28 @@ SendRefMsgRange=15
     fn healing_parity_full() {
         healing_parity_drive("full", 5, 2000, 100, 500, false);
         let c = healing_case("full");
-        assert_eq!(c["Rng"].as_array().unwrap().len(), 4, "full：恰 4 抽");
-        assert_eq!(c["TargetHpBefore"], 100);
-        assert_eq!(c["TargetHp"], 100);
+        // 期望一律取自金标准（登录序重生成后 HP/MaxHP 与抽数都会变；不再写死条数）。
         assert_eq!(
-            healing_count(&c, "target", "Rm", 8034),
-            0,
-            "满血不得入 RM_MAGHEALING"
+            c["TargetHpBefore"].as_i64(),
+            golden_case_for("healing", "full")["Fixture"]["target_hp"].as_i64(),
+            "full：施法前 HP 须等于 golden Fixture.target_hp"
         );
         assert_eq!(
-            healing_count(&c, "caster", "Rm", 10123),
-            0,
-            "无 8034 ⇒ 无训练尾"
+            c["TargetHp"].as_i64(),
+            golden_case_for("healing", "full")["TargetHp"].as_i64()
         );
-        assert_eq!(healing_count(&c, "caster", "Sent", 640), 0);
+        for (who, list, ident) in [
+            ("target", "Rm", 8034),
+            ("caster", "Rm", 10123),
+            ("caster", "Sent", 640),
+            ("target", "Sent", 640),
+        ] {
+            assert_eq!(
+                healing_count(&c, who, list, ident),
+                golden_msg_count("healing", "full", who, list, ident),
+                "full：{who} {list} {ident} 条数须与 golden 一致"
+            );
+        }
         b1_golden_drain_assert("healing.json", "full", 2);
     }
 
@@ -67730,16 +67898,26 @@ SendRefMsgRange=15
     fn healing_parity_self() {
         healing_parity_drive("self", 13, 3000, 50, 50, true);
         let c = healing_case("self");
-        assert_eq!(c["Rng"].as_array().unwrap().len(), 5);
-        assert_eq!(c["TargetHpBefore"], 50);
-        assert_eq!(c["TargetHp"], 50);
+        // 期望一律取自金标准（同 heal/full）。
         assert_eq!(
-            healing_count(&c, "caster", "Rm", 8034),
-            1,
-            "self：RM_MAGHEALING 入施法者队列"
+            c["TargetHpBefore"].as_i64(),
+            golden_case_for("healing", "self")["Fixture"]["target_hp"].as_i64()
         );
-        assert_eq!(healing_count(&c, "caster", "Rm", 10123), 1);
-        assert_eq!(healing_count(&c, "caster", "Sent", 640), 1);
+        assert_eq!(
+            c["TargetHp"].as_i64(),
+            golden_case_for("healing", "self")["TargetHp"].as_i64()
+        );
+        for (who, list, ident) in [
+            ("caster", "Rm", 8034),
+            ("caster", "Rm", 10123),
+            ("caster", "Sent", 640),
+        ] {
+            assert_eq!(
+                healing_count(&c, who, list, ident),
+                golden_msg_count("healing", "self", who, list, ident),
+                "self：{who} {list} {ident} 条数须与 golden 一致"
+            );
+        }
         // 尾帧坐标 = 施法者 (100,100)：`SM_MAGICFIRE` 的 param/tag。
         let fire = c["Receivers"]
             .as_array()
@@ -67789,8 +67967,16 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_miss() {
-        fireball_parity_drive("firecharm", 13, 15, 1, "miss", 1, 1000);
-        fireball_case_assert("firecharm", "miss", 100, 1);
+        fireball_parity_drive(
+            "firecharm",
+            13,
+            15,
+            1,
+            "miss",
+            golden_seed("firecharm", "miss"),
+            1000,
+        );
+        fireball_case_assert("firecharm", "miss");
         b1_golden_drain_assert("firecharm.json", "miss", 2);
         firecharm_order_assert("miss");
     }
@@ -67798,8 +67984,16 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_edge() {
-        fireball_parity_drive("firecharm", 13, 15, 1, "edge", 5, 2000);
-        fireball_case_assert("firecharm", "edge", 85, 5);
+        fireball_parity_drive(
+            "firecharm",
+            13,
+            15,
+            1,
+            "edge",
+            golden_seed("firecharm", "edge"),
+            2000,
+        );
+        fireball_case_assert("firecharm", "edge");
         b1_golden_drain_assert("firecharm.json", "edge", 4);
         firecharm_order_assert("edge");
     }
@@ -67807,8 +68001,16 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firecharm_parity_hit() {
-        fireball_parity_drive("firecharm", 13, 15, 1, "hit", 13, 3000);
-        fireball_case_assert("firecharm", "hit", 85, 5);
+        fireball_parity_drive(
+            "firecharm",
+            13,
+            15,
+            1,
+            "hit",
+            golden_seed("firecharm", "hit"),
+            3000,
+        );
+        fireball_case_assert("firecharm", "hit");
         b1_golden_drain_assert("firecharm.json", "hit", 4);
         firecharm_order_assert("hit");
     }
@@ -67828,56 +68030,93 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn hbfireball_parity_miss() {
-        fireball_parity_drive("hbfireball", 44, 0, 3, "miss", 1, 1000);
-        fireball_case_assert("hbfireball", "miss", 100, 1);
+        fireball_parity_drive(
+            "hbfireball",
+            44,
+            0,
+            3,
+            "miss",
+            golden_seed("hbfireball", "miss"),
+            1000,
+        );
+        fireball_case_assert("hbfireball", "miss");
         b1_golden_drain_assert("hbfireball.json", "miss", 2);
         let c = hbfireball_case("miss");
-        assert_eq!(healing_count(&c, "caster", "Rm", 8043), 0, "miss 无推挤");
-        assert_eq!(healing_count(&c, "caster", "Rm", 8092), 0);
+        // 推挤条数按 golden（期望不写死：seed/抽数变了，标签语义也随之变）。
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 8043),
+            golden_msg_count("hbfireball", "miss", "caster", "Rm", 8043),
+            "miss：caster RM_DELAYPUSHED 条数须与 golden 一致"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 8092),
+            golden_msg_count("hbfireball", "miss", "caster", "Rm", 8092)
+        );
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn hbfireball_parity_edge() {
-        fireball_parity_drive("hbfireball", 44, 0, 3, "edge", 5, 2000);
-        fireball_case_assert("hbfireball", "edge", 85, 7);
+        fireball_parity_drive(
+            "hbfireball",
+            44,
+            0,
+            3,
+            "edge",
+            golden_seed("hbfireball", "edge"),
+            2000,
+        );
+        fireball_case_assert("hbfireball", "edge");
         b1_golden_drain_assert("hbfireball.json", "edge", 4);
         let c = hbfireball_case("edge");
-        // edge：推挤门过（Random(20)=18<25）但 `Random(3)=0 ⇒ push=-1` ⇒ 不推。
+        // 推挤是否发生取决于 RNG 抽值 ⇒ 期望取 golden（登录序重生成后 edge 会推、hit 不推）。
         assert_eq!(
             healing_count(&c, "caster", "Rm", 8043),
-            0,
-            "edge push=-1 不登记 DELAYPUSHED"
+            golden_msg_count("hbfireball", "edge", "caster", "Rm", 8043),
+            "edge：caster RM_DELAYPUSHED 条数须与 golden 一致"
         );
-        assert_eq!(healing_count(&c, "caster", "Rm", 8092), 0);
+        for who in ["caster", "target", "obs_in", "obs_out"] {
+            assert_eq!(
+                healing_count(&c, who, "Rm", 8092),
+                golden_msg_count("hbfireball", "edge", who, "Rm", 8092),
+                "edge：{who} RM_PUSH 条数须与 golden 一致"
+            );
+        }
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn hbfireball_parity_hit() {
-        fireball_parity_drive("hbfireball", 44, 0, 3, "hit", 13, 3000);
-        fireball_case_assert("hbfireball", "hit", 85, 7);
+        fireball_parity_drive(
+            "hbfireball",
+            44,
+            0,
+            3,
+            "hit",
+            golden_seed("hbfireball", "hit"),
+            3000,
+        );
+        fireball_case_assert("hbfireball", "hit");
         b1_golden_drain_assert("hbfireball.json", "hit", 4);
         let c = hbfireball_case("hit");
-        // hit：`Random(20)=18<25`、`Random(3)=2 ⇒ push=1` ⇒ 1 次 DELAYPUSHED、1 格 PUSH。
+        // 同上：条数按 golden（登录序重生成后 hit 不推）。
         assert_eq!(
             healing_count(&c, "caster", "Rm", 8043),
-            1,
-            "caster 恰 1 条 RM_DELAYPUSHED"
+            golden_msg_count("hbfireball", "hit", "caster", "Rm", 8043),
+            "hit：caster RM_DELAYPUSHED 条数须与 golden 一致"
         );
-        for who in ["caster", "target", "obs_in"] {
+        for who in ["caster", "target", "obs_in", "obs_out"] {
             assert_eq!(
                 healing_count(&c, who, "Rm", 8092),
-                1,
-                "{who} 恰 1 条 RM_PUSH"
+                golden_msg_count("hbfireball", "hit", who, "Rm", 8092),
+                "hit：{who} RM_PUSH 条数须与 golden 一致"
             );
             assert_eq!(
                 healing_count(&c, who, "Sent", 9),
-                1,
-                "{who} 恰 1 条 SM_BACKSTEP"
+                golden_msg_count("hbfireball", "hit", who, "Sent", 9),
+                "hit：{who} SM_BACKSTEP 条数须与 golden 一致"
             );
         }
-        assert_eq!(healing_count(&c, "obs_out", "Sent", 9), 0);
     }
 
     /// `31 魔法盾`（`SKILL_SHIELD`）真实台账驱动。金标准 `golden/magic/shield.json`；
@@ -67892,7 +68131,7 @@ SendRefMsgRange=15
 
     fn shield_assert(label: &str, seed: i32, base: i32) {
         fireball_parity_drive("shield", 31, 0, 1, label, seed, base);
-        fireball_case_assert("shield", label, 100, 2);
+        fireball_case_assert("shield", label);
         b1_golden_drain_assert("shield.json", label, 2);
         let c = shield_case(label);
         // 施加事件：31 恒作用于施法者 ⇒ caster 的 `CharStatus` 变化广播给 ±range（含自己）。
@@ -67975,6 +68214,54 @@ SendRefMsgRange=15
         mir2_protocol::edcode::decode(tail.as_bytes())
     }
 
+    /// 金标准 `Fixture` 的某个整数字段（**不存在时返回 None**：有则按 golden、无则保持夹具缺省）。
+    fn golden_fixture_opt(stem: &str, label: &str, key: &str) -> Option<u64> {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)["Fixture"][key].as_u64()
+    }
+
+    /// 金标准该支某接收者某字段（`Rm`/`Sent`）里 `ident` 的条数——**期望只从 golden 来**。
+    fn golden_msg_count(stem: &str, label: &str, who: &str, field: &str, ident: i64) -> usize {
+        let c = golden_case_for(stem, label);
+        c["Receivers"]
+            .as_array()
+            .expect("金标准必须有 Receivers")
+            .iter()
+            .find(|r| r["Who"] == who)
+            .unwrap_or_else(|| panic!("金标准缺 {who} 接收者"))[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("金标准 {who}.{field} 必须是数组"))
+            .iter()
+            .filter(|m| m["ident"] == ident)
+            .count()
+    }
+
+    /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
+    fn golden_case_for(stem: &str, label: &str) -> serde_json::Value {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)
+    }
+
+    /// 金标准该支的 seed（**种子只从 golden 来**，不在驱动里写死）。
+    fn golden_seed(stem: &str, label: &str) -> i32 {
+        i32::try_from(
+            golden_case_for(stem, label)["Seed"]
+                .as_i64()
+                .expect("金标准 case 必须有整数 Seed"),
+        )
+        .expect("Seed 越界")
+    }
+
     /// 金标准 `Fixture` 的某个整数字段（缺省回落，兼容旧 golden）。
     fn golden_fixture_u64(stem: &str, label: &str, key: &str, default: u64) -> u64 {
         let file = match stem {
@@ -68031,7 +68318,7 @@ SendRefMsgRange=15
 
     fn defence_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, magic_id, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 100, 4);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
         let c = defence_case(stem, label);
         // 应用次数 = `MagMakeDefenceArea(...,3,...)` 的 7×7 = 49 次循环 × 中心格唯一 proper friend
@@ -68181,7 +68468,7 @@ SendRefMsgRange=15
     /// **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
     fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 33, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 85, 7);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert("snowwind.json", label, 4);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
@@ -68305,7 +68592,7 @@ SendRefMsgRange=15
     /// 来源 = `World::struck_log` 内部观测面（**不由 SM 31 反推**）。
     fn fireboom_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 23, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 85, 7);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert("fireboom.json", label, 4);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
@@ -68397,7 +68684,7 @@ SendRefMsgRange=15
     /// **不是**「顺序相等」——是「不判」。
     fn big_cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 19, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 100, 2);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert("bigcloak.json", label, 3);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
@@ -68507,33 +68794,27 @@ SendRefMsgRange=15
     fn big_healing_assert(
         stem: &str,
         label: &str,
-        seed: i32,
         base: i32,
-        hp_before: i64,
-        rng_len: usize,
         caster_frames: &[i64],
         heal_targets: &[&str],
     ) {
-        fireball_parity_drive(stem, 29, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 29, 15, 1, label, golden_seed(stem, label), base);
         let dir = magic_ledger_dir();
         let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
             .expect("台账必须已落盘");
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let c = &v[0];
+        // 期望取自金标准（§22：不写死随机抽值/条数）。
+        let g = golden_case_for(stem, label);
         assert_eq!(
             c["TargetHpBefore"].as_i64(),
-            Some(hp_before),
-            "[{stem}/{label}] 目标 HP 前"
+            g["Fixture"]["target_hp"].as_i64(),
+            "[{stem}/{label}] 目标 HP 前须等于 golden Fixture.target_hp"
         );
         assert_eq!(
             c["TargetHp"].as_i64(),
-            Some(hp_before),
-            "[{stem}/{label}] 窗口内不回血 ⇒ HP 不变"
-        );
-        assert_eq!(
-            c["Rng"].as_array().unwrap().len(),
-            rng_len,
-            "[{stem}/{label}] 施法段 RNG 抽数"
+            g["TargetHp"].as_i64(),
+            "[{stem}/{label}] 术后 HP 须等于 golden TargetHp（窗口内不回血）"
         );
         b1_golden_drain_assert("bighealing.json", label, 2);
         let cv = defence_case(stem, label);
@@ -68595,22 +68876,13 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn big_healing_parity_heal() {
-        big_healing_assert(
-            "bighealing",
-            "heal",
-            1,
-            1000,
-            50,
-            5,
-            &[638, 640],
-            &["target"],
-        );
+        big_healing_assert("bighealing", "heal", 1000, &[638, 640], &["target"]);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn big_healing_parity_full() {
-        big_healing_assert("bighealing", "full", 5, 2000, 224, 4, &[638], &[]);
+        big_healing_assert("bighealing", "full", 2000, &[638], &[]);
     }
 
     #[test]
@@ -68619,10 +68891,7 @@ SendRefMsgRange=15
         big_healing_assert(
             "bighealing",
             "both",
-            13,
             3000,
-            50,
-            5,
             &[638, 640],
             &["caster", "target"],
         );
@@ -68643,9 +68912,9 @@ SendRefMsgRange=15
     /// - 657 的 `(param, tag, series) == (0, 0, 0)`：oracle 的 `GetCharStatus()` **不含**
     ///   `STATETRANSPARENT`（隐身走 `HideMode/Transparent` 字段），RM 10139 的 p1 同为 0；
     /// - RM：caster 有 10125(642,141)/10139(155)/10123(慢 255)，众人有 10139。
-    fn cloak_assert(stem: &str, label: &str, seed: i32, base: i32, rng_len: usize) {
+    fn cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 18, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 100, rng_len);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert("cloak.json", label, 2);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
@@ -68733,19 +69002,19 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn cloak_parity_s1() {
-        cloak_assert("cloak", "s1", 1, 1000, 2);
+        cloak_assert("cloak", "s1", 1, 1000);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn cloak_parity_s5() {
-        cloak_assert("cloak", "s5", 5, 2000, 2);
+        cloak_assert("cloak", "s5", 5, 2000);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn cloak_parity_s13() {
-        cloak_assert("cloak", "s13", 13, 3000, 2);
+        cloak_assert("cloak", "s13", 13, 3000);
     }
 
     /// **`28 心灵启示`**（`SKILL_SHOWHP`，`MagicManager.cs:431-442`）驱动。
@@ -68756,9 +69025,9 @@ SendRefMsgRange=15
     /// 同样收（在 ±`SendRefMsgRange` 内）、caster 收 640 + RM 10123、RM 8040(目标 self-delay)/
     /// 10410(每收件人) 各到位；`SM 53` 预计 0 条（无 HP 变化）。门不过 ⇒ 以上全 0。
     /// 实体==WAbil 的前提断言在 [`fireball_parity_drive`] 内（卡 §25(b)）。
-    fn showhp_assert(stem: &str, label: &str, seed: i32, base: i32, pass: bool, rng_len: usize) {
+    fn showhp_assert(stem: &str, label: &str, seed: i32, base: i32, pass: bool) {
         fireball_parity_drive(stem, 28, 15, 1, label, seed, base);
-        fireball_case_assert(stem, label, 100, rng_len);
+        fireball_case_assert(stem, label);
         b1_golden_drain_assert("showhp.json", label, if pass { 3 } else { 2 });
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
@@ -68854,19 +69123,19 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn showhp_parity_miss() {
-        showhp_assert("showhp", "miss", 6, 1000, false, 1);
+        showhp_assert("showhp", "miss", 6, 1000, false);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn showhp_parity_edge() {
-        showhp_assert("showhp", "edge", 2, 2000, true, 3);
+        showhp_assert("showhp", "edge", 2, 2000, true);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn showhp_parity_hit() {
-        showhp_assert("showhp", "hit", 13, 3000, true, 3);
+        showhp_assert("showhp", "hit", 13, 3000, true);
     }
 
     #[test]

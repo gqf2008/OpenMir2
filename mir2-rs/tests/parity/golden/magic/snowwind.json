@@ -24,10 +24,35 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "SnowWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
         "target_null": false,
         "arm_ring_amulet": false,
         "wait_ms": 1200,
@@ -99,7 +124,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1114677812,
+              "delivery": 1119107437,
               "priority": 255
             },
             {
@@ -373,10 +398,35 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "SnowWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
         "target_null": false,
         "arm_ring_amulet": false,
         "wait_ms": 1200,
@@ -448,7 +498,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1114679078,
+              "delivery": 1119108703,
               "priority": 255
             },
             {
@@ -722,10 +772,35 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "SnowWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
         "target_null": false,
         "arm_ring_amulet": false,
         "wait_ms": 1200,
@@ -797,7 +872,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1114680375,
+              "delivery": 1119110015,
               "priority": 255
             },
             {

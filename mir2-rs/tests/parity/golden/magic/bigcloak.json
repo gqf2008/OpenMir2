@@ -24,15 +24,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "BigCloak"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 2,
+        "rng_recorded": 2,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
         "caster_hp": 0,
         "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -106,7 +135,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111860081,
+              "delivery": 1119096784,
               "priority": 255
             },
             {
@@ -139,7 +168,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1111860281,
+              "delivery": 1119096984,
               "priority": 255
             }
           ],
@@ -225,7 +254,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111860081,
+              "delivery": 1119096784,
               "priority": 255
             },
             {
@@ -375,15 +404,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "BigCloak"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 2,
+        "rng_recorded": 2,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
         "caster_hp": 0,
         "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -457,7 +515,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111861425,
+              "delivery": 1119098143,
               "priority": 255
             },
             {
@@ -490,7 +548,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1111861625,
+              "delivery": 1119098343,
               "priority": 255
             }
           ],
@@ -576,7 +634,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111861425,
+              "delivery": 1119098143,
               "priority": 255
             },
             {
@@ -726,15 +784,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "BigCloak"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 2,
+        "rng_recorded": 2,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
         "caster_hp": 0,
         "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -808,7 +895,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111862831,
+              "delivery": 1119099550,
               "priority": 255
             },
             {
@@ -841,7 +928,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1111863031,
+              "delivery": 1119099750,
               "priority": 255
             }
           ],
@@ -927,7 +1014,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1111862831,
+              "delivery": 1119099550,
               "priority": 255
             },
             {

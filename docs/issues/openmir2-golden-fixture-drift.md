@@ -71,3 +71,321 @@
 - **只改注释或判定词不算通过**；QA 独立重生成/只读核对后方可改状态。
 - `legacy_artifact` 件（`Fixture.rng_mode=freeze_at_dospell`）**不得**作为任何条目的 `verified` 依据。
 - 任何 `status` 变更单独一笔、走分支、经 QA 签署，禁止与代码/装置改动混提。
+
+## 8. 比较器收紧设计：`Rng` 全轴比较（M52；2026-11-20，opc-07 定）
+
+### 8.1 判据
+
+- **统一比较**：`golden.Rng == rust.Rng ++ rust.DeliverRng`（拼接；`RngSeqs` 连续性断言保留）。
+- **不按 seam 字段分两种比法**：所有 `verified` 条目的 golden 必须是 **`cover_drain`**
+  （`Fixture.rng_mode == "cover_drain"`）；`freeze_at_dospell` 旧件只作 **legacy artifact**、
+  **不进比较面**（比较器直接红，牙③）。
+- **缺列即红**：`Rng` 与 `DeliverRng` 任一列缺失都不允许默认空（牙④）——"不记 = 不比"被禁止。
+- **适用面**：全 **15 条**（不止那 6 条）；拼接顺序靠实测证、不靠推断；任一条红 ⇒ 报 opc-07，
+  不改判据迁就。
+
+### 8.2 四颗牙（合成夹具，不依赖真实台账）
+
+| 牙 | 变异 | 期望 |
+|---|---|---|
+| ① | 删 `DeliverRng` 一条 | 红（`Rng` 序列不等） |
+| ② | 改 `DeliverRng` 任一值 | 红（`Rng` 值不等） |
+| ③ | 旧口径 golden（`freeze_at_dospell` / 无 `rng_mode`） | 红并点名 `cover_drain` |
+| ④ | 整列 `DeliverRng` 消失 | 红并点名 `DeliverRng` 缺列 |
+| ⑤ | `Fixture` 缺 `reachability` / 非 `reachable` / 缺任一状态键 / 缺 `construction` / `derived` 与公式不一致 / 平铺 `target_max_hp` 与 `derived` 不一致 / 装备非空 / 缺 `rng_total_draws` / `len(Rng) ≠ rng_total_draws` | 各自红并点名缺键或字段 |
+
+外加**正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
+
+### 8.3 字段契约（交给 `a2`；双方向**不得各自造名字**）
+
+`MagicGolden/Program.cs` 由 **`a2` 独占**；Rust 侧只按下面的键名读。
+
+| 项 | 约定 |
+|---|---|
+| 键 | **`Fixture.rng_mode`**（每支 case 的 `Fixture` 内；顶层 `fixture_spec` 不需要） |
+| 取值 | `"cover_drain"` \| `"freeze_at_dospell"`（只此两个） |
+| 缺失 | **比较器直接红**（"金标准缺该支 rng_mode / 非 cover_drain"），**不得默认任何值** |
+| legacy artifact | 用 `rng_mode="freeze_at_dospell"` 表示；如需额外的人读标注可加 `Fixture.legacy_artifact=true`（比较器**不看**该键） |
+| 语义 | `cover_drain`：`Rng` 覆盖到排水结束，比较面 = `Rng ++ DeliverRng`；`freeze_at_dospell`：**不**进比较面（`verified` 条目禁止使用） |
+| 与 `login_order` 的关系 | 两者正交：`rng_mode` 只描述"抽数记录窗口"；`login_order` 描述角色状态来源。**M52 起**：6 条 + `MG-10` 的 verified 依据 = **`login_order=true`**（登录序）+ `cover_drain`（据此撤回早先"`login_order=false`"的中间口径） |
+
+**唯一 `Fixture` schema（M52 起，每支 case 必填；缺任一即红，不许默认兜底）**：
+
+```text
+rng_mode        : "cover_drain" | "freeze_at_dospell"
+login_order     : true | false
+reachability    : "reachable" | "unverified" | "unreachable"
+anti_magic      : int
+target_level    : int
+target_hp       : int
+target_max_hp   : int
+derived         : { max_hp, max_mp, dc, ac, mac, max_exp }   # 必须与构造路径按公式复算一致
+construction    : { job, level, equipment[], skills[] }      # §7 的可机检构造路径
+rng_total_draws : int                                        # 整个 case 的真实抽取总数（独立计数器）
+scenario_note   : string                                     # login_order=false 必填（人读）
+legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dospell 自动写（人读，比较器不看）
+```
+
+比较器的判定（`check_golden_contract`）：
+
+1. `rng_mode == "cover_drain"`；`reachability == "reachable"`；`login_order` 为 bool；
+   `anti_magic`/`target_level`/`target_hp`/`target_max_hp` 为 int；
+2. `construction.{job,level,equipment,skills}` 齐全，且 `construction.level == target_level`；
+3. `equipment == []` ⇒ `anti_magic == 1`；**`equipment` 非空 ⇒ fail-closed 红**（装备 MgAvoid 复算未实现）；
+4. `derived` 六键齐全；`max_hp/max_mp/dc/ac/mac` 用 `mir2-formula` 的
+   `recalc_level_abilitys(job, level, default)` **复算比对**；`target_max_hp == derived.max_hp`；
+   `target_hp ≤ max_hp`；**`derived.max_exp` = `GetLevelExp(level)` = 冻结表 `need_exps[level]`**
+   （见 8.3b；该字段**有消费点**——MG-28/29 的 52 帧尾封 `WAbil` 全量，含 `Exp/MaxExp`）；
+5. `legacy/` 目录：`golden/magic/legacy/**` 只作历史留档，`golden_file` 直接拒绝该前缀。
+6. **独立抽取计数器（§8.3c）**：`Fixture.rng_total_draws` 必填（int，缺即红）；`rng_mode=="cover_drain"`
+   时 **`len(golden["Rng"]) == rng_total_draws`**，不等即红并点名两值。作用：把"排水期无抽"从假设变成
+   被检查的事实（`fireball` 的 5 抽全在施法期、排水 handler 不调 RNG ⇒ 结构上合法），并防"手工截短
+   金标准 `Rng` 以对上 Rust"。生成器侧（a2，M52.1）另有 `rng_mode=cover_drain ⇒ Len(Rng)==rng_total_draws`
+   断言（不等 rc=2）。
+
+### 8.3b 冻结 `NeedExps` 表（M51 产出，M52 读）
+
+- 文件：`mir2-rs/tests/parity/fixtures/exps-need-exps.json`
+- 字段：`{ "source": "E:/MirServer/M2GameSvr/Exps.conf", "sha256": "<64 hex>",
+  "mtime": "<取样时文件 mtime>", "need_exps": [NeedExps[0], NeedExps[1], …] }`
+  （`need_exps[level]` 即 `SystemShare.Config.NeedExps[level]`；`GetLevelExp` 直接下标取。）
+- **同源要求**：golden 生成器（`a2`）与比较器（本侧）读**同一份**文件；它是**冻结面**——
+  `Exps.conf` 变化必须显式更新该文件（source/sha256/mtime 同步）并重新生成相关 golden。
+- 当前部署取样：`Exps.conf` sha256 = `07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9`、
+  mtime = `2026-10-09 01:32:29 +0800`、`Level20=6000`（供 `a2` 核对；表中以 `Exps.conf` 实值为准）。
+- 比较器：缺文件 / `sha256` 非 64 hex / 缺 `source` / 缺 `need_exps` ⇒ **红**（fail-closed）。
+
+### 8.3d `target_hp` 的语义 = **施法前**输入（2026-11-20 实读三条既有 golden）
+
+| 件 | `Fixture.target_hp` | `TargetHpBefore` | `TargetHp`（战后） | 31 帧 `param(HP_after)` / `series(damage)` | 结论 |
+|---|---|---|---|---|---|
+| `fireball`（旧 runner，无 `Fixture`） | — | 100 | 85（edge/hit） | 85 / 15 | 施法前=100，`param+damage` 复算一致 |
+| `hangmajinbub` | 100 | 100 | 100 | 无 31（14 无伤害） | `target_hp` = 战前 |
+| `lightning-11` | 100 | 100 | 85 | 85 / 15 | `target_hp` = 战前（复算一致） |
+
+⇒ 既有件的 `target_hp` 一律是**施法前**值。**比较器新增检查**（`check_golden_contract`）：
+对每个 `SM_STRUCK(31)` 帧校验 `param(HP_after) + series(damage) == Fixture.target_hp`，不等即红并点名
+"target_hp 必须是施法前输入"；无 31 帧（无伤害支）则只保留 `target_hp ≤ max_hp` 的结构检查。
+
+**已知反例（装置侧，交 a2）**：M52.1 样本 `fireball-login.json` 的 `target_hp=209`（= 224−15，**施法后**
+值）若当输入使用，会从 209 起手并使所有 HP 字段错位、极易伪装成真分歧 ⇒ 新件必须写 **224**。
+
+**另记**：`hangmajinbub`（及同类）`Fixture.target_max_hp=100` 与 52 尾里的 224 不一致 = 已知 stale
+元数据（§6 处置第 3 条），新件按登录派生值写。
+**装置侧根因（2026-11-20 复核，master `bc151fde6` 原文）**：`RunMagicCase` 的 `Fixture` 在**排水之后**
+构造——在 `mir2-rs/tests/parity/csharp/MagicGolden/Program.cs` 的符号 `RunMagicCase` 内：`DRAIN_PASSES`
+打印、`RngSeam.Restore`、`int hpAfter = target.WAbil.HP`、`Fixture.target_hp = (int)target.WAbil.HP`
+依次出现于排水循环**之后** ⇒ **当时（`bc151fde6`）对新生件记录的是术后值**（`a2` 重生成实测
+`target_hp=85`）。既有 15 件是旧世代产物（记术前值 100）——两者不矛盾。
+处置：M56 由 `a2` 修 `RunMagicCase` 取施法前值 + 自测；**M57（比较器收紧 + 重生成）必须排在 M56 之后**；
+M57 交付须写明「新生件 `target_hp` 由 M56 保证为术前输入，并由 31 帧断言机检」。
+比较器红字含机检可 grep 的固定串「疑似输入/输出混淆」，牙⑦ 断言该串在错误消息中。
+
+
+### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
+
+- `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`：
+  `union_rng` / `check_golden_cover_drain` / `pin_union_rng` / `verify_union` +
+  `union_rng_positive_control_green` + `tooth_union_*` 四颗；
+  `real_ledger_verify_labels` 在读取每份台账后走这三步（cover_drain 门 → 拼接 → `verify`）。
+- **`MagicGolden/Program.cs` 不在本分支改动**（a2 领地；它按 6.2b 输出 `Fixture.rng_mode`）。
+- **本分支不合并**：比较器收紧**必须与 6 条新 golden + `MG-10` 同一次合并落地**（M51；中间态
+  master 会红）。6 条重生成依赖 `a2` 的 `rng_seam`/`login_order` 参数（M50，批准后实施）。
+
+### 8.5 复跑脚本设计（槽位到手后执行；`run_id` 绑定）
+
+```sh
+export MIR2_LEDGER_RUN_ID="magic-plane-$(date +%s)-$$"
+for t in fireball_parity_miss fireball_parity_edge fireball_parity_hit          fireball5_parity_miss fireball5_parity_edge fireball5_parity_hit          lightning11_parity_miss lightning11_parity_edge lightning11_parity_hit          lightning45_parity_miss lightning45_parity_edge lightning45_parity_hit          healing_parity_heal healing_parity_full healing_parity_self          firecharm_parity_miss firecharm_parity_edge firecharm_parity_hit          hbfireball_parity_miss hbfireball_parity_edge hbfireball_parity_hit          shield_parity_s1 shield_parity_s5 shield_parity_s13          hangmajinbub_parity_s1 hangmajinbub_parity_s5 hangmajinbub_parity_s13          dejiwonho_parity_s1 dejiwonho_parity_s5 dejiwonho_parity_s13          showhp_parity_miss showhp_parity_edge showhp_parity_hit          cloak_parity_s1 cloak_parity_s5 cloak_parity_s13          big_healing_parity_heal big_healing_parity_full big_healing_parity_both          big_cloak_parity_s1 big_cloak_parity_s5 big_cloak_parity_s13          fireboom_parity_s1 fireboom_parity_s5 fireboom_parity_s13          snowwind_parity_s1 snowwind_parity_s5 snowwind_parity_s13; do
+  cargo test -p game-svr --lib -- --ignored --exact "tests::$t" --test-threads=1 || exit 1
+done
+cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity -- --ignored || exit 1
+```
+（每支独立进程 = rng_trace 进程级；任一步非零即停，不重试掩盖。）
+
+### 8.6 与已收口条目的兼容性
+
+- 23/33（即时受击）：受击抽在施法段内、已在 `Rng`；台账 `DeliverRng` 实测为空
+  ⇒ 统一判据下 `Rng ++ [] == Rng`，与现行 golden 一致。
+- 6 条延时受击：旧 golden 的 `Rng` 缺排水抽（`freeze_at_dospell`）⇒ 重生成后按拼接比较；
+  Rust 侧现台账的 `DeliverRng` 已有对应抽（`3b` 判 **18/18 MATCH(count+values)**）。
+
+**旧世代件的处置（`anti_magic=3` / 无契约键 / 未登录序）**：移入 `golden/magic/legacy/`，件内加
+`legacy_artifact=true` + `legacy_reason`。**这两个键只供人读**——比较器按**路径**拒绝（`golden_file()`
+对 `legacy/` 前缀硬断言失败），并不读取键；不要以为"读键能判定能否作依据"。移完核三条：
+① 顶层 `golden/magic/*.json` 的**每个 case** 的 `Fixture.anti_magic` 都必须为 1（注意：文件**顶层**
+`anti_magic` 仍是构造参数 3，**不作判据**；不要按字节串 `"anti_magic": 3` 判残留）；② `legacy/` 下 16 件齐全；
+③ 比较器/驱动的显式文件名清单仍指向 `golden/magic/<name>.json`（未被移动破坏）。
+
+### 8.7 M52 的登录序变体：状态契约 + 构造路径（装置已输出，§8.9 已实跑）
+
+**状态字段契约（`MagicGolden` 的 `Fixture`；a2 输出，Rust 只读）**：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `login_order` | bool | `true` = 走真实登录序（`RecalcLevelAbilitys(); RecalcAbilitys();`，无手设覆盖） |
+| `anti_magic` | int | 该 case 的**实际**目标 `AntiMagic`（登录序无装备 ⇒ `1`） |
+| `target_level` | int | 目标 `Abil.Level`（构造路径的 L） |
+| `target_hp` / `target_max_hp` | int | 该 case 的**实际** HP / `MaxHP`（登录序 ⇒ `MaxHP` = 等级公式值） |
+| `rng_mode` | string | `cover_drain` / `freeze_at_dospell`（见 8.3） |
+
+**构造路径（机检口径）**：登录序、无装备、无 `AddAbil` 加成时
+`AntiMagic = 1 + 0 = 1`；`MaxHP = 14 + round(((L / WarrHP) + WarrHPRate + L / 20) × L)`，
+部署 `LevelValueOfWarrHP=4`、`WarrHPRate=4.5`：
+
+| L | `MaxHP` | 说明 |
+|---|---|---|
+| 11 | 14 + round(7.8×11) = **100** | 与存量的 `MaxHP=100` 数值相同（但语义是 L11 登录值，不是手设） |
+| 20 | 14 + round(10.5×20) = **224** | 与 23/29/33 装置观测到的 224 一致 |
+
+**`construction.skills` 的语义（QA 条件③）**：它是**场景标签**——记录"本 case 演练的道术/法术名"
+（如 `FireBall`、`HbFireBall`），**不参与** `derived` 复算、也不计入 `AddAbil.AntiMagic`；
+复算只依赖 `job + level + equipment=[]`。当前契约对"装备/技能带来的 MgAvoid"是 **fail-closed**
+（`equipment` 非空即红；skills 不读作加成）；将来真需要技能加成时，必须扩展契约并在 `derived`
+里体现，**不得**把 skills 默默当加成用。
+
+**逐条机检**：比较器/交付里对每条 case 复算：`Fixture.anti_magic == 1`、
+`Fixture.target_max_hp == 14 + round(((L/4)+4.5+L/20)*L)`、`Fixture.rng_mode == "cover_drain"`、
+`Fixture.login_order == true`、`derived.{max_hp,max_mp,dc,ac,mac}` 与 `recalc_level_abilitys(job,level)`
+一致；任一不等 ⇒ 该条不能被当作可达证据（§7）。
+
+**Rust 接缝（已实现并实跑，§8.9）**：`fireball_parity_drive` 在建夹具后、魔号专属覆盖前，按
+`Fixture.anti_magic / target_hp / target_max_hp` 设目标实体与会话；`healing_parity_drive` 同法接入
+（`target_hp/max_hp/caster_hp/caster_max_hp`）。缺省（无该键）⇒ 保持夹具现状，兼容旧件。
+
+**合成角色件（`AntiMagic=3`/`MaxHP=100`）**：按 §6 处置第 1 条降为**附加场景**，
+`rng_mode=cover_drain` 保留作 RNG 轴对照，但 `reachability=unverified`、**不作 verified 依据**。
+**并且在新契约下它们已不可再生**：`equipment=[]` 时 `anti_magic` 必须为 1（契约门强制），
+`AntiMagic=3` 需非空装备（复算未实现 ⇒ fail-closed）。因此合成件只能作为**历史留档冻结在
+`golden/magic/legacy/`**，不再进入任何生成/比较流程——**不要试图"重生成旧件"**。
+**旧件冻结后，任何人不得用新装置尝试重生成**：契约门（`equipment=[] ⇒ anti_magic==1`）会拒绝，
+重生成只会浪费时间，并可能引出"那就放宽门"的错误提案。
+
+**含 `WAbil` 的帧（`SM_ABILITY(52)`）**：其尾 = `EDCode.EncodeMessage(WAbil)`（40B，`Exp`@24..28、
+`MaxExp`@28..32），比较器对 `tail` 做严格串比较 ⇒ 这两个字段**已在判定面内**；牙
+`tooth_wabil_exp_bytes_compared_red` 取真实 golden 的 52 尾翻转 `Exp`/`MaxExp` 字节证明必红。
+**M53（=旧 M52 顺延）报告须单列**：Exps 装置 bug 修复后若 `max_exp` 由 0 变为真实值，
+属**行为类差异**（帧内容变化），不得并入"元数据"；Rust 侧该字段若与 golden 不同 ⇒ **真分歧**，停下报。
+
+**M53 的 Rust 侧范围 = 7 条**：6 条（`lightning-11`/`lightning-45`/`fireball-5`/`firecharm`/`hbfireball`/`healing`）
+**加 `fireball`（`MG-10`）**。`fireball.json` 由独立 runner `FireballCase` 产出、当前**无 `Fixture`**；
+`a2` 改造该 runner 并在 M52 输出带契约键的新件后，本侧按同一套处理：
+`(Warrior, L, 无装备, 无技能) → anti_magic=1、target_max_hp=公式(L)`，逐条给构造路径。
+**勿按 a2 上一版迁移表（"fireball 迁移后 cover_drain"）准备**——该声明已撤回，`fireball` 归入
+"登录序主件 + 旧件留档"同一套处置。Rust 与新的登录序 golden 对不上 ⇒ **真分歧，停下报**。
+
+**M52 交付自检（必须逐条给出原文）**：① 被合的树里存在
+`mir2-rs/tests/parity/fixtures/exps-need-exps.json`
+（`git cat-file -e <head>:mir2-rs/tests/parity/fixtures/exps-need-exps.json`，rc=0）；
+② 该文件的 `sha256` 与部署 `Exps.conf` 实值一致；③ 全 15 条在同一 `run_id` 下的实测结果。
+
+### 8.8 `AntiMagic=1` 下的 miss/edge/hit 分支可达性（M53 必答项）
+
+**判据**：`DoSpell` 的首抽 `Random(10)` 与 `AntiMagic` 比较（`>=` ⇒ 命中；`<` ⇒ 未命中；`==` ⇒ 边界）。
+`AntiMagic=1` 时三支分别要求首抽 **0 / 1 / ≥2**。该首抽是 6 个 AntiMagic 魔号（1/5/11/13/44/45）与
+`fireball`（`FireballCase`，同为 `spec.AntiMagic`）的**第一个抽取**（护身符门与 `UseAmulet` 零抽）。
+
+**取数方法（可复核）**：用 .NET 兼容的 `Random(seed).Next(10)` 复刻（经典减法算法）扫描种子，
+并**用已入库 golden 记录的三个 `(seed, 首抽)` 校准**：`seed 1 → 2`、`seed 5 → 3`、`seed 13 → 5`
+（与 `fireball.json`/`anti_magic=3` 的 miss/edge/hit 一致，校准通过）。
+
+| 分支 | `Random(10)` 要求（AntiMagic=1） | 候选 seed | 该 seed 首抽 |
+|---|---|---|---|
+| miss | `< 1`（即 0） | **14** | 0 |
+| edge | `== 1` | **18** | 1 |
+| hit | `>= 2` | **1** | 2 |
+
+⇒ **三支在登录序场景下均可达**，不存在"某支不可达、覆盖率须收窄"的情形（`Random(10)=0/1` 的概率各 10%）。
+**最终以 M53 的实跑为准**：新种子由 `a2` 的生成器写入 golden `Fixture.seed`；本侧测试从
+`Fixture.seed` 读 **输入**，帧面**期望**只来自 golden 帧序列与比较器判据（绝不反向从 golden 构造期望）。
+
+
+### 8.9 实施记录（2026-11-20，比较器收紧 + 16 件重生成）
+
+**分支** `card/magic-rng-union`；**最终 run_id** `m59-final2-20261120T072058`（驱动 + 比较器同一 id）。
+
+**门禁原文**：`cargo check -p mir2-parity-tests -p game-svr --all-targets` rc=0（首行
+`Compiling game-svr v0.1.0`）；`cargo fmt --all -- --check` rc=0；`cargo clippy --workspace
+--all-targets -- -D warnings` rc=0；驱动 48/48 rc=0；比较器 16/16 ok；牙 17/17 ok。
+
+**重生成**：16 件（15 verified + `snowwind`）由装置 `--out` 直写入库路径，逐件 rc=0、`GOLDEN_WRITTEN`
+16 条。全件 `rng_mode=cover_drain`、`login_order=true`、`reachability=reachable`、逐 case
+`anti_magic=1`、`construction{job:"Warrior",level:20,equipment:[],skills:[魔号名]}`（见 §8.7 的
+skills 语义）、`derived` 六键、
+`target_max_hp=224`、`rng_total_draws==len(Rng)`、`seed_reason` 记首抽判定。
+旧世代 16 件移 `golden/magic/legacy/`（附 `README.md`：标注只供人读、比较器按路径拒绝）。
+
+**`fireball` 8 = 施法 5 + 排水 3（逐值）**
+
+| case | golden `Rng`（8） | rust 施法段（5） | rust 交付段（3） | 拼接 |
+|---|---|---|---|---|
+| edge（seed 18，首抽 1） | `[1,0,0,0,3,0,0,4]` | `[1,0,0,0,3]` | `[0,0,4]` | ✅ |
+| hit（seed 5，首抽 3） | `[3,0,0,0,4,0,0,9]` | `[3,0,0,0,4]` | `[0,0,9]` | ✅ |
+
+交付段 3 抽全部出自符号 `crates/world-bevy/src/combat.rs::struck_damage_durability`：`nDam = Random(10)`
+一次 + 每个已穿装备格 `Random(8)` 各一次（本夹具 2 格），合计 1+2 = 3；
+miss（首抽 0）1 抽、无交付段、`DeliverRng=[]`。
+
+**`snowwind` 224**：三支 `target_max_hp=224`、`derived.max_hp=224`；依据 = `SM 31` 头 `tag=224`、
+`RM 8103` `p2=224`；`snow_wind_range=1`、`server_conf_sha256=ce5e3ce9…`（旧值 100 为 §6 第 3 条 stale）。
+
+**`AntiMagic=1` 分支实测**（`seed_reason` ↔ `Rng[0]` ↔ 逐 case `anti_magic` 三者一致）：
+门控六件（`fireball`/`fireball-5`/`lightning-11`/`lightning-45`/`firecharm`/`hbfireball`）统一
+seed **14/18/5**、首抽 **0/1/3**、`anti_magic=1`；miss/edge/hit 三支均可达、均有 case 覆盖。
+
+### 8.9b 12 号 `full` 支的三代对照（发现并修复静默覆盖回归）
+
+| 世代 | `Fixture.target_hp` | `target_max_hp` | `Rng` | 8034 / 10123 / 640 |
+|---|---|---|---|---|
+| 旧（master 入库，`max=100`） | 100 | 100 | `[0,0,0,6]`（4） | 无 / 无 / 无 |
+| 本批首轮（登录序 `max=224`，装置仍传 100） | 100 | 224 | `[0,0,0,6,1]`（5） | 有 / 有 / 有（**分支丢失**） |
+| 修后（`golden-params-5` 后重生成） | **224** | 224 | `[0,0,0,6]`（4） | 无 / 无 / 无 |
+
+根因：`HealingBatch` 给 `full` 传字面量 100，登录序 MaxHP=224 后 `100 < 224` ⇒ 治疗真实发生，
+「目标满血不治疗」这条玩法分支**零覆盖**且现象与 `heal` 支同型。修法：输入 HP 由
+`FixtureContract.Recompute(job, level).MaxHp` 派生 + `EnsureFullHpBranch` 落盘前独立现算比对
+（不等 rc=2 不落盘）。
+
+### 8.9c 三处「分支未编译」遗留（未编译即从未咬过）
+
+1. **牙⑥引用未定义变量**：`tooth_wabil_exp_bytes_compared_red` 遍历 52 帧写 `rust.get(...)`/`rust.clone()`，
+   函数内只有 `s1` ⇒ 编译失败。改 `s1`，牙语义不变（翻 Exp/MaxExp 字节 ⇒ 必红在 `tail`）。
+2. **`RngSites` 未随拼接**：`pin_union_rng` 只拼 `Rng`，`RngSites` 仍是施法段 5 条 ⇒ `verify` 的
+   「RngSites 与 Rng 长度不等」误红。现把 `RngSites`+`DeliverRngSites` 一并拼接。
+3. **牙①②诊断串大小写**：`contains("Rng")` 对实际诊断 `RNG 行数不等` 恒不命中 ⇒ 牙必红且红错原因。
+   改为不区分大小写。
+
+### 8.9d 被改常量（`old → new`，理由一律为「golden 变了」）
+
+| 位置 | old | new |
+|---|---|---|
+| 门控六件驱动 seed（`fireball*`/`lightning*`/`firecharm`/`hbfireball` miss/edge/hit） | 1 / 5 / 13 字面量 | `golden_seed` ⇒ 14 / 18 / 5 |
+| `fireball_case_assert` 施法前 HP | `100` 字面量 | `Fixture.target_hp`（100 或 224） |
+| 同上 术后 HP | `85`/`100` 字面量 | 金标准 `TargetHp` |
+| 同上 抽数 | `1`/`5`/`7` 字面量 | `golden.Rng` 长度（本轮 1 / 8 / 10） |
+| `healing_parity_drive` 目标/施法者 HP·MaxHP | `healing_rig` 缺省 100 | golden `Fixture`（50/224、224/224…） |
+| `healing` heal/full/self 断言 | 5 / 4 / 5 抽、HP 50/100/50、8034/640 有无写死 | 全部取自 golden |
+| `hbfireball` edge/hit 推挤条数 | 8043 `0`/`1`、8092 `0`/`1`、SM9 `0`/`1` | `golden_msg_count` |
+| `big_healing_assert` | `seed/hp_before/rng_len` 三常量（5/4/5 抽、HP 50/224/50） | `golden_seed` + `Fixture.target_hp` + 金标准 `TargetHp` |
+
+**旧断言错在哪**：`hbfireball` 旧断言把具体随机抽值写进期望（`Random(20)=18`、`Random(3)=0/2`）——
+换 seed（edge 18 / hit 5）与 10 抽后推挤判定落到不同抽位，edge 推、hit 不推；`healing full` 旧断言
+写死「100 = MaxHP 即满血」——MaxHP=224 后前提不成立（§8.9b）；healing 抽数 4→5 是同一后果。
+
+### 8.9f 当前 verified 依据的边界（QA 条件④）：目标侧可达，施法者侧为合成输入
+
+- **已验证的面**：目标侧 = 登录序可达（`AntiMagic=1`、`MaxHP` 等级公式、`construction` 可复算、
+  比较器机检），加引擎行为等价（帧面/RM/RNG 全量对拍）。
+- **未验证的面（已知限制）**：**施法者侧仍是合成输入**——`CasterLevel=30`、`MC=15`、`SC=15` 由装置
+  直接给定，**不在** `construction`/`derived` 里、也无登录派生复算；且战士施放火球/雷电这类法术
+  本身不是生产可达组合。
+- ⇒ 本批 16 条的结论只到「**目标侧登录序可达 + 引擎等价**」；施法者侧可达性**另立卡**
+  `openmir2-caster-reachability`（opc-07），届时把 `caster` 的等级/属性纳入构造路径与复算。
+- 评分口径：条目状态维持 `verified`（依据已从合成目标换成生产可达目标），但**不得**据此宣称
+  "整条施法链生产可达"。
+
+### 8.9e 已知遗留与另案
+
+- `golden/magic/warr-*.json`（9 件 15 case）仍是 `anti_magic=3` 旧世代，属 warrskill 域、比较器不读，
+  另案处理，本批未动。
+- `legacy/` 16 件只作历史留档（比较器按路径拒绝）。
