@@ -639,20 +639,6 @@ mod tests {
         v.as_array().unwrap().iter().map(frame).collect()
     }
 
-    fn notice(v: &Value) -> QueuedNotice {
-        QueuedNotice {
-            ident: i32v(&v["ident"]),
-            w_param: i32v(&v["w_param"]),
-            n_param1: i32v(&v["n_param1"]),
-            n_param2: i32v(&v["n_param2"]),
-            n_param3: i32v(&v["n_param3"]),
-        }
-    }
-
-    fn notices(v: &Value) -> Vec<QueuedNotice> {
-        v.as_array().unwrap().iter().map(notice).collect()
-    }
-
     /// 构造一条与探针同口径的 `RecalcAbilitys` 输入：`Abil` = 用例的 `wabil_before`（探针里
     /// `po.Abil = wabilPre`）、无装备、`bag` = 当前背包 `Index` 列表、无 buff。
     /// 测试用**空解包表**（`M2Share.UnbindList` 空 = 未装载 / 无该 Shape）。
@@ -674,6 +660,97 @@ mod tests {
             }
         }
         UnbindList { map }
+    }
+
+    /// 防空转 Z1/Z3：`cases` 缺字段 / 非数组 / 为空 / < 已知例数 ⇒ `Err`（零用例不得判绿）。
+    fn cases_or_red(doc: &Value) -> Result<&Vec<Value>, String> {
+        let cases = doc
+            .get("cases")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "防空转：夹具缺 `cases` 数组".to_string())?;
+        if cases.len() < 12 {
+            return Err(format!("防空转：夹具用例数异常（{}）", cases.len()));
+        }
+        Ok(cases)
+    }
+
+    /// 通知七字段元组 `(priority, ident, wParam, p1, p2, p3, late)`（排序序列比较与负例牙共用）。
+    type NoticeTuple = (i32, i32, i32, i32, i32, i32, bool);
+    fn expect_notice_tuples(case: &Value) -> Vec<NoticeTuple> {
+        case["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                (
+                    i32v(&v["priority"]),
+                    i32v(&v["ident"]),
+                    i32v(&v["w_param"]),
+                    i32v(&v["n_param1"]),
+                    i32v(&v["n_param2"]),
+                    i32v(&v["n_param3"]),
+                    v["late"].as_u64().unwrap_or(0) != 0,
+                )
+            })
+            .collect()
+    }
+
+    /// 排序后多重集相等（重复条目计数）。
+    fn notices_equal(mut a: Vec<NoticeTuple>, mut b: Vec<NoticeTuple>) -> bool {
+        a.sort();
+        b.sort();
+        a == b
+    }
+
+    /// D1/D2：抽空未命中上界且 `MaxDrainPasses=8` 才算合格（`hit_cap=true` ⇒ false ⇒ 比较器红）。
+    fn drain_ok(hit_cap: bool, max_passes: u64) -> bool {
+        !hit_cap && max_passes == 8
+    }
+
+    fn success_case(doc: &Value) -> Value {
+        doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode31_unbind_success")
+            .expect("夹具必须含 eat_ok_stdmode31_unbind_success")
+            .clone()
+    }
+
+    /// Z1/Z3 牙：空 `cases` / 缺 `cases` ⇒ `cases_or_red` 红。
+    #[test]
+    fn vacuous_guard_empty_or_missing_cases_red() {
+        assert!(cases_or_red(&serde_json::json!({"cases": []})).is_err());
+        assert!(cases_or_red(&serde_json::json!({})).is_err());
+        assert!(cases_or_red(&fixture()).is_ok(), "真实夹具必须过防空转");
+    }
+
+    /// L2 牙①：把一条通知的 `priority` 改掉 ⇒ 排序序列不等（优先级进比较面）。
+    #[test]
+    fn tooth_notice_priority_changed_red() {
+        let case = success_case(&fixture());
+        let want = expect_notice_tuples(&case);
+        let mut got = want.clone();
+        got[0].0 += 1;
+        assert!(!notices_equal(got, want), "改 priority 必须红");
+    }
+
+    /// L2 牙②：重复条目必须计数（多一条全等 ⇒ 不等）。
+    #[test]
+    fn tooth_notice_duplicate_count_red() {
+        let case = success_case(&fixture());
+        let want = expect_notice_tuples(&case);
+        let mut got = want.clone();
+        got.push(want[0]);
+        assert!(!notices_equal(got, want), "重复条目未计数 ⇒ 假绿");
+    }
+
+    /// D2 牙：`hit_cap=true` ⇒ `drain_ok` false（比较器据此判红）；`max_passes!=8` 亦 false。
+    #[test]
+    fn tooth_drain_hit_cap_red() {
+        assert!(!drain_ok(true, 8), "命中上限必须不合格");
+        assert!(!drain_ok(false, 7), "上限不是 8 必须不合格");
+        assert!(drain_ok(false, 8));
     }
 
     fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
@@ -708,8 +785,7 @@ mod tests {
     fn matches_oracle_eat_fixture() {
         let doc = fixture();
         let cat = catalog(&doc);
-        let cases = doc["cases"].as_array().expect("cases 数组");
-        assert!(cases.len() >= 12, "夹具用例数异常：{}", cases.len());
+        let cases = cases_or_red(&doc).unwrap_or_else(|e| panic!("{e}"));
         // 夹具记录的解包表（Shape → 解包物名）；无该表 = 空表。
         let unbind = unbind_from(&doc);
         for case in cases {
@@ -763,10 +839,60 @@ mod tests {
                 frames(&expect["immediate_frames"]),
                 "{name}: 即时帧(含 SM_ADDITEM)与 oracle 不符"
             );
-            assert_eq!(
-                out.notices,
-                notices(&expect["notices"]),
-                "{name}: 延时通知与 oracle 不符"
+            // 通知：七字段 (ident,wParam,p1,p2,p3,priority,late) 按 (priority,ident,params,late) 排序后逐位比；
+            // items 线的通知都走 `SendMsg`（`SendUpdateMsg` 亦汇到它）⇒ priority=(byte)ident、late=false，
+            // Rust 据此派生；夹具记录 oracle 的入队键与 `LateDelivery`。`Vec` 相等即多重集（重复计数）。
+            let mut got: Vec<(i32, i32, i32, i32, i32, i32, bool)> = out
+                .notices
+                .iter()
+                .map(|n| {
+                    (
+                        n.ident & 0xFF,
+                        n.ident,
+                        n.w_param,
+                        n.n_param1,
+                        n.n_param2,
+                        n.n_param3,
+                        false,
+                    )
+                })
+                .collect();
+            let mut want: Vec<(i32, i32, i32, i32, i32, i32, bool)> = expect["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    (
+                        i32v(&v["priority"]),
+                        i32v(&v["ident"]),
+                        i32v(&v["w_param"]),
+                        i32v(&v["n_param1"]),
+                        i32v(&v["n_param2"]),
+                        i32v(&v["n_param3"]),
+                        v["late"].as_u64().unwrap_or(0) != 0,
+                    )
+                })
+                .collect();
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{name}: 延时通知(七字段排序序列)与 oracle 不符");
+            // 报告同 priority 内是否多 ident（供裁定是否需要单列同优先级内序）。
+            let mut by_prio: std::collections::BTreeMap<i32, std::collections::BTreeSet<i32>> =
+                std::collections::BTreeMap::new();
+            for (prio, ident, ..) in &got {
+                by_prio.entry(*prio).or_default().insert(*ident);
+            }
+            for (prio, idents) in &by_prio {
+                if idents.len() > 1 {
+                    eprintln!("[{name}] 同 priority={prio} 内多 ident: {idents:?}");
+                }
+            }
+            // D1/D2/D3：抽空未命中上界且 MaxDrainPasses=8；`hit_cap=true` ⇒ 必红（不得当完整账本）。
+            let hit_cap = expect["drain"]["hit_cap"].as_bool().unwrap_or(false);
+            let max_passes = expect["drain"]["max_passes"].as_u64().unwrap_or(0);
+            assert!(
+                drain_ok(hit_cap, max_passes),
+                "{name}: 抽空上限异常 hit_cap={hit_cap} max_passes={max_passes}"
             );
             // 解包新建物品：结构化逐字段（`make_index` 含 `Environment.TickCount` 墙钟 ⇒ 只核递增不核绝对值）。
             let exp_added = expect
@@ -784,12 +910,7 @@ mod tests {
                 assert_eq!(a.index, u16v(&e["index"]), "{name}: added.index");
                 assert_eq!(a.dura, u16v(&e["dura"]), "{name}: added.dura");
                 assert_eq!(a.dura_max, u16v(&e["dura_max"]), "{name}: added.dura_max");
-                let e_desc: Vec<u8> = e["desc"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|d| u8v(d))
-                    .collect();
+                let e_desc: Vec<u8> = e["desc"].as_array().unwrap().iter().map(u8v).collect();
                 assert_eq!(a.desc.to_vec(), e_desc, "{name}: added.desc");
                 assert!(a.make_index > last_mi, "{name}: added.make_index 必须递增");
                 last_mi = a.make_index;
@@ -1293,9 +1414,7 @@ mod tests {
             last_mi = a.make_index;
         }
         // 即时帧：解包产物逐件 SM_ADDITEM(200) 在前，再 SM_EAT_OK。
-        let mut frames_seq: Vec<u16> = std::iter::repeat(200u16)
-            .take(out.added_items.len())
-            .collect();
+        let mut frames_seq: Vec<u16> = std::iter::repeat_n(200u16, out.added_items.len()).collect();
         frames_seq.extend(out.immediate_frames.iter().map(|f| f.ident));
         let exp_seq: Vec<u16> = frames(&expect["immediate_frames"])
             .iter()

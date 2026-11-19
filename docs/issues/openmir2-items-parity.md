@@ -161,7 +161,19 @@
 
 ## 7. 待办与不能标 verified 的门槛
 
-- **IT-18**：成功路径夹具未产出前保持 `implemented_unverified`（现状）。
+- **IT-18**：成功路径夹具已产出（`eat_ok_stdmode31_unbind_success`）；但仍保持 `implemented_unverified`，
+  直到 ①oracle 等价性（见 §8）②L2/D 判定面 ③Z1–Z6 ④clippy 全部落地并过审——之后才转 `verified`。
 - **IT-07…17**：`missing`，均带 `deviation.id = T-17`（指向 `useitem.rs` 头部未做清单）；实现 + 对拍后才可改 `verified`。
 - **RNG `site` 允许清单**：首条抽数条目落地时必须给出**代码表 + 逐条理由**，清单外红；不得「能过就加」。
 - **分母 19 不动**：若认为分母错，先停手交证据给 `opc-07`。
+
+## 8. oracle 等价性（2026-11-20，`opc-07` 复核后修正）
+
+- **不用转写件冒充 oracle**：`eat-probe` 的物品表直接用**真身 `M2Server.Items.GameItemSystem`**
+  （`SystemShare.ItemSystem = new GameItemSystem()`），把模板按 id 稠密铺进 `StdItemList`
+  （位置 i = id i+1，空位放空名占位）。`GetStdItem` / `GetUpgradeStdItem` / `CopyToUserItemFromName`
+  全部走 oracle 同一份代码——不存在"位置+1 vs 字典键""同名取首个""空名/NRE"的转写偏差。
+  （此前用 `ProbeItemSystem` 转写 `CopyToUserItemFromName`，被 `opc-07` 判为"转写冒充 oracle"，已废弃。）
+- **行尾归一（卡面记录）**：`eat_vectors.json` 原 blob 为 CRLF；按 `mir2-rs/.gitattributes` 的
+  `*.json eol=lf` 归一为 LF。**语义改动仅**：+模板 `2017`、+用例 `eat_ok_stdmode31_unbind_success`、
+  各例新增 `added_items`（旧例为 `[]`）、新增 `unbind` 表与 `drain` 字段；其余为行尾归一。

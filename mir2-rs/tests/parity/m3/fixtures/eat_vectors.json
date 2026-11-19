@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "e6170aae2f9e521d91ebfe2f5d808ee2f41bc20842a4fe0af9b80245a4523066",
+  "oracle_assembly_sha256": "a7a39e53c3609170604d01fd1cf00824cc0d542626d076f289ee5a05e9543418",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -273,14 +273,18 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
           },
           {
             "ident": 10115,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -312,7 +316,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -398,14 +407,18 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
           },
           {
             "ident": 10115,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -437,7 +450,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -523,14 +541,18 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
           },
           {
             "ident": 10115,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -562,7 +584,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -648,7 +675,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -680,7 +709,12 @@
         "inc_spell": 0,
         "user_unlock_durg": true,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -766,7 +800,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -798,7 +834,12 @@
         "inc_spell": 11,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -884,7 +925,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -916,7 +959,12 @@
         "inc_spell": 4,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1046,14 +1094,18 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
           },
           {
             "ident": 10115,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -1130,7 +1182,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1238,14 +1295,18 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
           },
           {
             "ident": 10115,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -1300,7 +1361,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1433,7 +1499,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1566,7 +1637,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1699,7 +1775,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1785,7 +1866,9 @@
             "w_param": 0,
             "n_param1": 4660,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 69,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -1840,7 +1923,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -1973,7 +2061,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2059,7 +2152,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2091,7 +2186,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2177,7 +2277,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2209,7 +2311,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 20,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2295,21 +2402,27 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           },
           {
             "ident": 10139,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
           },
           {
             "ident": 8102,
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 166,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2341,7 +2454,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 1200,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2427,7 +2545,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2459,7 +2579,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 5000,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2545,7 +2670,9 @@
             "w_param": 0,
             "n_param1": 255,
             "n_param2": 56,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2600,7 +2727,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2686,7 +2818,9 @@
             "w_param": 0,
             "n_param1": 255,
             "n_param2": 56,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2741,7 +2875,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2827,7 +2966,9 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [],
@@ -2859,7 +3000,12 @@
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
-        "item_list": []
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -2992,7 +3138,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -4929,7 +5080,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     },
     {
@@ -5057,12 +5213,14 @@
             "w_param": 0,
             "n_param1": 0,
             "n_param2": 0,
-            "n_param3": 0
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
           }
         ],
         "added_items": [
           {
-            "make_index": 1095820501,
+            "make_index": 1097213594,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5084,7 +5242,7 @@
             ]
           },
           {
-            "make_index": 1095820502,
+            "make_index": 1097213595,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5106,7 +5264,7 @@
             ]
           },
           {
-            "make_index": 1095820503,
+            "make_index": 1097213596,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5128,7 +5286,7 @@
             ]
           },
           {
-            "make_index": 1095820504,
+            "make_index": 1097213597,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5150,7 +5308,7 @@
             ]
           },
           {
-            "make_index": 1095820505,
+            "make_index": 1097213598,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5172,7 +5330,7 @@
             ]
           },
           {
-            "make_index": 1095820506,
+            "make_index": 1097213599,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5224,7 +5382,7 @@
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1095820501,
+            "make_index": 1097213594,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5246,7 +5404,7 @@
             ]
           },
           {
-            "make_index": 1095820502,
+            "make_index": 1097213595,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5268,7 +5426,7 @@
             ]
           },
           {
-            "make_index": 1095820503,
+            "make_index": 1097213596,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5290,7 +5448,7 @@
             ]
           },
           {
-            "make_index": 1095820504,
+            "make_index": 1097213597,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5312,7 +5470,7 @@
             ]
           },
           {
-            "make_index": 1095820505,
+            "make_index": 1097213598,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5334,7 +5492,7 @@
             ]
           },
           {
-            "make_index": 1095820506,
+            "make_index": 1097213599,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5355,7 +5513,12 @@
               0
             ]
           }
-        ]
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
       }
     }
   ]
