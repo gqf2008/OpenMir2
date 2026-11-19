@@ -1,7 +1,8 @@
 # openmir2-deploy-deps-manifest
 
-> 状态：**已登记，未建卡**（本仓库 remote 无 `refs/collab/*`，walgit 看板不可用；按 AGENTS.md §7 过渡）。
-> 看板恢复后迁移为正式卡。tier 建议 **L**。
+> 状态：**实现完成（2026-11-19，分支 `card/deploy-deps-manifest`）**——生成器 + 两级检查器 +
+> 自测（10 例）已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
+> 过渡）。看板恢复后迁移为正式卡。tier 建议 **L**。
 
 ## 背景
 `STAMP_GATE` 的判据是「产物由本仓库某次提交构建」——戳里的 `head` 与源码同源。第三方 NuGet 包
@@ -43,3 +44,61 @@ rc=2（判不了）与 rc=1（判红）分开，不静默通过。
 2. 负例①：改第三方 dll 的版本号（换包）⇒ 版本一致性红；
 3. 负例②：同版本替换文件内容 ⇒ sha 红；
 4. 旧部署（当前 8 件 + 第三方）在**启用前**应给出「manifest 缺失」的明确提示，而不是静默绿。
+
+## 实现与证据（2026-11-19）
+
+### 范围落定（两句话）
+
+- **本期只做 NuGet**：部署目录（`m1-stack/runtime/{DBSrv,LoginSrv}`）里的第三方 DLL 都由 NuGet 还原；
+  权威输入 = `packages.lock.json`（`src/DBSrv`、`src/LoginSrv` 已启用 `RestorePackagesWithLockFile=true`
+  并入库）。
+- **Rust 依赖暂不在闸门内**，理由：Rust 件静态链接、部署目录里没有 Rust 第三方 DLL，其来源由
+  `build-rev`/侧车戳覆盖；`Cargo.lock` 的供应链核对属构建车道（另卡）。**不是忘记。**
+
+### 工具（`tools/deploy/deps_manifest.py`）
+
+```
+python -I -B tools/deploy/deps_manifest.py generate --project <csproj> --out <manifest.json>
+python -I -B tools/deploy/deps_manifest.py check    --project <csproj> --manifest <manifest.json>
+python -I -B tools/deploy/deps_manifest.py selftest
+```
+
+- **generate**：读 lock + csproj 声明 + 已还原包（默认 `~/.nuget/packages`，**只读，绝不改缓存**），
+  输出 `deps.manifest.json`（`manifest_version=1`；每包含
+  `name/type/requested/resolved/source/toolchain/content_hash/nupkg_sha512/files{rel:sha256}`）。
+  nupkg 的 SHA512 与缓存侧车 `.nupkg.sha512` 不一致 ⇒ 红（**不自动重下**）。
+- **check**：① 版本一致性（csproj `PackageReference` 范围**可满足** lock `resolved`；NuGet 范围语义，
+  非字符串比较；csproj↔lock 的 Direct 集合双向核对）；② 内容一致性（manifest 每包文件 sha256 与磁盘
+  逐项相等——缺/多/变各报 CODE；nupkg SHA512 一致）。
+- **fail-closed**：缺 lock / 缺 manifest / manifest 空或字段缺失 ⇒ 红（rc=1），绝不当"没有依赖"。
+- 退出码：0 绿；1 判红（逐条 `DEPS_RED <CODE> <detail>`）；2 用法/判不了。
+- **contentHash 口径**：lock 的 `contentHash` 是 NuGet 对**包内容**的规范化哈希，**不是** .nupkg 的
+  SHA512；manifest 里分开记录、分别核验（前者记录来源，后者比对缓存实物）。
+
+### 证据
+
+- 真实项目（本机还原缓存）：
+```
+generate src/DBSrv    → DEPS_WRITE …DBSrv.deps.manifest.json packages=45 files=1010
+check    src/DBSrv    → DEPS_GREEN packages=45 files=1010
+generate src/LoginSrv → DEPS_WRITE …LoginSrv.deps.manifest.json packages=48 files=1063
+check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
+```
+- 三颗牙（**离线合成夹具**，不动真实缓存；原文）：
+  - 牙①：`DEPS_RED RANGE_UNSATISFIED Alpha range=[1.0.0] resolved=9.9.9（resolved 9.9.9 != 1.0.0）`（rc=1）；
+  - 牙②：`DEPS_RED FILE_SHA_MISMATCH Alpha/1.0.0 lib/net8.0/Alpha.dll expected=239f59ed… actual=2a8a2779…`（rc=1）；
+  - 牙③：`DEPS_RED BAD_MANIFEST_VERSION manifest_version=None` + `DEPS_RED EMPTY_MANIFEST`；
+    `DEPS_RED MISSING_FIELD Alpha.nupkg_sha512`（均 rc=1）。
+  - 另两条 fail-closed：缺 manifest / 缺 lock ⇒ `MISSING_MANIFEST` / `MISSING_LOCK`（rc=1）。
+  - 汇总：`deps_manifest selftest: GREEN (10 cases)`。
+- 锁文件不破坏构建（干净 clone）：`git clone --local` 后在分支 head 上 `dotnet build`
+  DBSrv/LoginSrv/GameGate/LoginGate/SelGate **0 error**；`dotnet test TestProject1` →
+  **通过 40 / 失败 0 / 跳过 0**。
+- 工具门：登记 `deps_manifest` 后 **TOTAL 70 项：绿 69 / 红 0 / 需人工 1 / 跳过 0**；
+  `--inventory` 清点 **75 = 70 + 5 + 0**；NEED=`oid_gate`（本检出无 collab 条目）。
+
+### 与 botfleet 的边界（你出工具、它接）
+
+- 挂点由 botfleet 决定：建议构建车道（部署前）跑 `generate`，目标机（部署后/起栈前）跑 `check`。
+- 红格式示例：`DEPS_RED FILE_SHA_MISMATCH <pkg>/<ver> <file> expected=… actual=…`（rc=1）；
+  判不了（缺目录等）rc=2，不静默通过。两边都不改对方仓库。
