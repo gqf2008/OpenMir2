@@ -46,7 +46,7 @@
 
 ## 6. 可达性审计结论与处置（2026-11-20，四域 42 条 verified 逐条审计）
 
-> 证据：`docs/issues/qa-magic-audit-20261120.md`（magic 15 条）、`docs/issues/qa-reachability-audit-20261120.md`（四域汇总 + 整改台账 12 行 + 验收总则）、`docs/issues/qa-golden-fixture-drift-disposition-20261120.md`（处置文本）。
+> 证据（QA 过程记录**不入库**，以下为仓外实存路径）：`E:/UserFleet/qa/qa-magic-audit-20261120.md`（magic 15 条）、`E:/UserFleet/qa/qa-reachability-audit-20261120.md`（四域汇总 + 整改台账 12 行 + 验收总则）、`E:/UserFleet/qa/qa-golden-fixture-drift-disposition-20261120.md`（处置文本）、`E:/UserFleet/qa/qa-rng-total-checklist-20261120.md`（A1/A2/A3 + C/D/E 复核清单）。
 
 **汇总：可达 6 ｜ 未验 8 ｜ 部分不可达 2 ｜ 不适用 26。无"行为面本身不可达"的条目。**
 
