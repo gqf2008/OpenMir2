@@ -152,13 +152,15 @@
 - **窗口期不要跑产戳**：产戳模式会执行 `cargo --version` / `dotnet --version`，空载口径把
   cargo/dotnet 进程计为外部构建；`-Selftest` 因 `-NoToolchainProbe` 不派生子进程，可随时跑。
 - **校验需要 git 对象库**：`-Check` 用 `git cat-file -e` 核 head，`-RepoRoot` 必须指向包含该提交的
-  检出（worktree 共享对象库即可）；没有 git / 没有对象库的机器上 head 无法本机验证 ⇒ 判 rc=2
-  （判不了，不是绿）。第 2 步需决定「部署机的信任根」（例如在构建机校验后随包携带结果），本批不做。
+  检出（worktree 共享对象库即可）。**两种失败语义分开**：`RepoRoot` 不是 git 仓库（或 git 不在 PATH）
+  ⇒ rc=2（判不了，不是绿）；是仓库但对象库缺该提交 ⇒ 每件 `HEAD_NOT_FOUND`、rc=1（**红**，不是"判不了"）。
+  第 2 步需决定「部署机的信任根」（例如在构建机校验后随包携带结果），本批不做。
 - **旧戳兼容**：`rebuild-server.ps1` 产出的 `mir2-server.build.json` 没有 `mtime`/`head_source`/
   `toolchain_kind`；本工具的 `-Check` 已兼容（补充字段只做存在时校验），但第 2 步若要把它纳入
   同一清单，应同步补齐字段或明确豁免。
-- **短 head（7..40 位）的前缀匹配**：`-RequireHead` 与 R5 都按「戳 head 是内嵌 40-hex 的前缀」比较；
-  7 位前缀理论上可能碰撞，生产调用（起栈/冻结/三处对齐）一律给完整 40 位。
+- **短 head（7..40 位）的匹配方向有两条，别混**：`-RequireHead` 是
+  `stampHead.StartsWith($expectNorm)`（**期望 head 是戳 head 的前缀**）；R5 内嵌 rev 是
+  **戳 head 是二进制内嵌 40-hex 的前缀**。两者在 7 位前缀下都可能碰撞，生产调用一律给完整 40 位。
 - **PowerShell 变量名大小写不敏感**：参数 `$Head` 与内部哈希 `$heads` 是**同一变量**；冻结脚本曾因此
   不可用（`$uniq[0]` 退化为字符串首字符、报「戳 head 5 ≠ 期望 …」）。脚本中禁止使用与参数仅差大小写的变量名。
 - **PS 5.1 没有 `Import-PowerShellDataFile`**，dot-source `.psd1` 在 5.1 上也返回 null（均实测）；
@@ -197,6 +199,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-bi
 戳门对 **DBSrv（6 件）与 LoginSrv（3 件）两组**跑同一 `-Check`（含 `-OwnGlobs`），每组输出
 `STAMP_GATE OK <group> shadow`；`-GateOnly` 只跑该门、不 `Start-One`（复核/演示用，rc=0 打
 `GATE_ONLY_OK`）。psd1 之外的组件（GameSvr/LoginGate/SelGate/RunGate）不在这道 C# 戳门内，按设计跳过。
+**演示范围**：本卡的闸门正/反例在**夹具根**（`E:/UserTemp/d5-gate-root`，仅拷 6+3 自有件与戳）上真跑，
+**未在真实栈根演示**——真实栈根会触发 `Start-One` 起进程，属于另一类环境。
 
 **`-OwnGlobs` 覆盖检查（2026-11-20，卡 `openmir2-own-binary-without-stamp` R3）**：匹配 glob 的
 每个 `.dll/.exe` 必须已出现在 `-Names` 里，否则 `RED <file> UNLISTED_OWN_BINARY`；该检查**独立于
