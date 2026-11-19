@@ -229,3 +229,108 @@ fn quest_actions_comparator_rejects_degenerate_input() {
         assert!(!bad.is_empty(), "篡改 flag 后比较器仍报绿 ⇒ 假绿");
     }
 }
+
+// ---- QT-02 CHECK 条件对拍 ----
+
+/// 用真解析器 + 真引擎跑一条 `CHECK` 条件，返回「走的是 #SAY（真支）还是 #ELSESAY（假支）」。
+fn run_check(line: &str, flag: i32, status: i32) -> Result<bool, String> {
+    let text = format!("[@main]\n#IF\n{line}\n#SAY\nyes\n#ELSESAY\nno\n");
+    let fs = MemFs(vec![("root/npc_def/t.txt".to_string(), text)]);
+    let parsers = ScriptParsers::new();
+    let mut rename = |_min: i32, _max: i32| 0;
+    let out = match parsers.load_script_file(
+        &fs,
+        Path::new("root"),
+        "Npc_def",
+        "t",
+        false,
+        &mut rename,
+    ) {
+        Ok(Some(o)) => o,
+        Ok(None) => return Err("PREREQ 脚本缺失".to_string()),
+        Err(p) => return Err(format!("{p}")),
+    };
+    let def = NpcDef {
+        chr_name: "T".to_string(),
+        file_path: "Npc_def".to_string(),
+        script_name: None,
+        is_hide: false,
+        is_quest: false,
+        scripts: out.scripts,
+        loaded: true,
+        actor_id: 1,
+    };
+    let host = NpcHost {
+        envir_root: PathBuf::from("root"),
+        defs: vec![def],
+        failures: Vec::new(),
+        goto_count_limit: 40,
+    };
+    let mut rng1 = |_v: i32| 0;
+    let mut player = NpcPlayer::empty(&mut rng1);
+    if status != 0 {
+        player.quest_flag.set(flag, 1);
+    }
+    let says = host
+        .goto_label("T", &mut player, "@main", false)
+        .unwrap_or_default();
+    Ok(says.iter().any(|m| m.raw_msg.contains("yes")))
+}
+
+#[test]
+fn quest_check_conditions_match_oracle_ledger() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/parity/m3/quests/vectors/quest_check_ledger.tsv");
+    if !path.exists() {
+        panic!(
+            "PREREQ 缺金标准 {}（先跑 quest-parity-probe --checks）",
+            path.display()
+        );
+    }
+    let text = std::fs::read_to_string(&path).expect("读不到金标准");
+    let mut rows = 0usize;
+    let mut bad = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() != 5 {
+            bad.push(format!("列数 {} != 5: {line}", f.len()));
+            continue;
+        }
+        let case_id = f[0];
+        let status: i32 = f[2].parse().unwrap_or(0);
+        let expect_true = f[3] == "1";
+        // 最后一列是 `exc|line`：真正的脚本行在 `|` 之后
+        let script = match f[4].split_once('|') {
+            Some((_, s)) => s,
+            None => {
+                bad.push(format!("{case_id}: script 列格式错: {}", f[4]));
+                continue;
+            }
+        };
+        // flag 取自解析结果 `c{cmd}/n{flag},{value}/s[...]`，取不到就按 0
+        let flag: i32 = f[1]
+            .split_once("/n")
+            .and_then(|(_, rest)| rest.split_once(','))
+            .and_then(|(a, _)| a.parse().ok())
+            .unwrap_or(0);
+        match run_check(script, flag, status) {
+            Ok(got) => {
+                if got != expect_true {
+                    bad.push(format!(
+                        "{case_id}: Rust 走 {} != 金标准 {}（{script}, flag={flag}, status={status}）",
+                        if got { "真支" } else { "假支" },
+                        if expect_true { "真支" } else { "假支" }
+                    ));
+                }
+            }
+            Err(e) => bad.push(format!("{case_id}: 解析失败 {e}")),
+        }
+        rows += 1;
+    }
+    assert!(rows > 0, "EMPTY_LEDGER（0 条用例）");
+    assert!(bad.is_empty(), "CHECK 对拍不一致：{bad:#?}");
+}

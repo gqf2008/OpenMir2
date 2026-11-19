@@ -256,17 +256,31 @@
         "line": 4174,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "quest_check_conditions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_check_ledger.tsv",
+        "cases": [
+          "QT02-01",
+          "QT02-02",
+          "QT02-03",
+          "QT02-04",
+          "QT02-05",
+          "QT02-06",
+          "QT02-07",
+          "QT02-08",
+          "QT02-09",
+          "QT02-10",
+          "QT02-11",
+          "QT02-12"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl cond_check（crates/script/src/engine/conditions.rs 第 456 行）；底层位读有 oracle 向量（QX-01），判定本身无直接夹具；语料 12 个文件使用"
+      "notes": "对拍用例 quest_check_conditions_match_oracle_ledger：金标准由探针 --checks 用真解析器取 QuestConditionInfo 再走真 ConditionProcessingSys.Execute（取数口是预置位的真 PlayObject）。覆盖 flag 5/9 × status 0/1 × value 0/1、非数字 flag/值、越界 flag 1025、flag 0。行为牙：删掉 cond_check 的「标记为 0 而期望非 0 ⇒ 假」一支 ⇒ 4 例必红，复原后 sha 相等。",
+      "basis": "semantic"
     },
     {
       "id": "QT-03",

@@ -26,6 +26,7 @@ using M2Server.Npc;
 using M2Server.Player;
 using OpenMir2;
 using ScriptSystem;
+using ScriptSystem.Processings;
 using Serilog;
 using SystemModule;
 using SystemModule.Actors;
@@ -60,6 +61,7 @@ internal static class Program
         string fixturesDir = null;
         bool doGate = false;
         bool doActions = false;
+        bool doChecks = false;
         bool negativeControl = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -74,6 +76,10 @@ internal static class Program
             else if (args[i] == "--actions")
             {
                 doActions = true;
+            }
+            else if (args[i] == "--checks")
+            {
+                doChecks = true;
             }
             else if (args[i] == "--negative-control")
             {
@@ -103,6 +109,11 @@ internal static class Program
         if (doActions)
         {
             return RunActions(outDir);
+        }
+
+        if (doChecks)
+        {
+            return RunChecks(outDir);
         }
 
         var npc = new NormNpc();
@@ -337,6 +348,79 @@ internal static class Program
         return failed > 0 ? 1 : 0;
     }
 
+    /// QT-02 CHECK 条件对拍：真解析器取 `QuestConditionInfo`，再走真 `ConditionProcessingSys.Execute`。
+    /// 取数口用**真 `PlayObject`**（预置位后由它回答 `GetQuestFalgStatus`），避免替身语义偏差。
+    private static int RunChecks(string outDir)
+    {
+        var cases = new (string Id, string Line, int Flag, int Status)[]
+        {
+            ("QT02-01", "CHECK [5] 1", 5, 0),
+            ("QT02-02", "CHECK [5] 1", 5, 1),
+            ("QT02-03", "CHECK [5] 0", 5, 0),
+            ("QT02-04", "CHECK [5] 0", 5, 1),
+            ("QT02-05", "CHECK [9] 1", 9, 0),
+            ("QT02-06", "CHECK [9] 1", 9, 1),
+            ("QT02-07", "CHECK [9] 0", 9, 0),
+            ("QT02-08", "CHECK [9] 0", 9, 1),
+            ("QT02-09", "CHECK [abc] 1", 0, 0),
+            ("QT02-10", "CHECK [5] abc", 5, 0),
+            ("QT02-11", "CHECK [1025] 1", 1025, 1),
+            ("QT02-12", "CHECK [0] 1", 0, 1),
+        };
+        var rows = new List<string>
+        {
+            "# case_id\tparsed\tflag_status\tsuccess\tscript"
+        };
+        var parser = new ScriptParsers();
+        int failed = 0;
+        foreach ((string id, string line, int flag, int status) in cases)
+        {
+            string text = "[@main]\n#IF\n" + line + "\n#SAY\nyes\n#ELSESAY\nno\n";
+            string path = SystemShare.GetEnvirFilePath("CheckProbe", id + ".txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, text, new UTF8Encoding(false));
+
+            var npc = new NormNpc();
+            parser.LoadScriptFile(npc, "CheckProbe", id, false);
+            string parsed = "-";
+            string exc = "-";
+            bool success = true;
+            try
+            {
+                SayingRecord rec = npc.ScriptList[0].RecordList["@main"];
+                QuestConditionInfo cond = rec.ProcedureList[0].ConditionList[0];
+                parsed = string.Format(CultureInfo.InvariantCulture, "c{0}/n{1},{2}/s[{3}][{4}]",
+                    cond.CmdCode, cond.nParam1, cond.nParam2, cond.sParam1, cond.sParam2);
+
+                var po = new PlayObject();
+                if (status != 0)
+                {
+                    po.SetQuestFlagStatus(flag, 1);
+                }
+                var sys = new ConditionProcessingSys();
+                sys.Initialize();
+                var proxy = DispatchProxy.Create<IPlayerActor, PoReadProxy>();
+                ((PoReadProxy)proxy).Po = po;
+                bool ok = true;
+                sys.Execute(null, proxy, cond, ref ok);
+                success = ok;
+            }
+            catch (Exception ex)
+            {
+                exc = ex.GetType().Name;
+                failed++;
+            }
+            rows.Add(string.Join("\t", id, parsed, status.ToString(CultureInfo.InvariantCulture),
+                success ? "1" : "0", exc + "|" + line));
+        }
+
+        string ledgerPath = Path.Combine(outDir, "quest_check_ledger.tsv");
+        File.WriteAllText(ledgerPath, string.Join("\n", rows) + "\n", new UTF8Encoding(false));
+        Console.WriteLine("CHECKS cases={0} failed={1}", cases.Length, failed);
+        Console.WriteLine(ledgerPath);
+        return failed > 0 ? 1 : 0;
+    }
+
     /// 判定「这条脚本是否证明死分支」：返回非空即 FAIL。正反两条路径共用同一判据。
     private static List<string> Why(ScriptInfo si, int records, bool labelHit)
     {
@@ -470,6 +554,28 @@ internal class GatePlayerProxy : DispatchProxy
             // 必须返回 0，否则「全 10 组都要匹配」的判据会被无关组带偏。
             int flag = args.Length > 0 && args[0] is int f ? f : int.MinValue;
             return flag == Flag ? Status : 0;
+        }
+        Type rt = targetMethod.ReturnType;
+        if (rt == typeof(int)) return 0;
+        if (rt == typeof(byte)) return (byte)0;
+        if (rt == typeof(short)) return (short)0;
+        if (rt == typeof(bool)) return false;
+        if (rt == typeof(string)) return "";
+        if (rt.IsValueType) return Activator.CreateInstance(rt);
+        return null;
+    }
+}
+
+/// <summary>`GetQuestFalgStatus` 直接问真 `PlayObject`（其余方法返回类型零值）。</summary>
+internal class PoReadProxy : DispatchProxy
+{
+    public PlayObject Po;
+
+    protected override object Invoke(MethodInfo targetMethod, object[] args)
+    {
+        if (targetMethod.Name == "GetQuestFalgStatus" && args.Length >= 1 && args[0] is int flag)
+        {
+            return Po.GetQuestFalgStatus(flag);
         }
         Type rt = targetMethod.ReturnType;
         if (rt == typeof(int)) return 0;

@@ -263,3 +263,18 @@ Z5 / L1–L2b / L6 / I 组的「不适用」若 opc-07 不认可，以 opc-07 �
   （`…/mutation_restored.log`）。
 - **仍未做**：opc-07 要求的「坏行混在脚本集里时两侧最终可用 NPC/商家集合相同」这条**中止范围**等价证据，
   下一批补。
+
+### 10.5 QT-02 CHECK 条件对拍（2026-11-20）
+
+金标准 `mir2-rs/tests/parity/m3/quests/vectors/quest_check_ledger.tsv`（探针 `--checks`，12 case）：
+真解析器取 `QuestConditionInfo`（`CHECK` 的 `[...]` 剥壳走 `ScriptParsers` 的 `ConditionCode.CHECK` 特判），
+再走真 `ConditionProcessingSys.Execute`；取数口是**预置位的真 `PlayObject`**（不是替身）。
+Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-svr --test quests_parity`，
+3 passed / 0 failed，原文 `E:/UserFleet/qa/quests/qt01/rust_checks_test.log`）。
+行为牙：删掉 `cond_check` 的「标记为 0 而期望非 0 ⇒ 假」一支 ⇒ 4 例必红（QT02-01/05/09/11，
+`…/mutation_check.log`）；复原后 `sha256` 相等、复跑绿（`…/mutation_check_restored.log`）。
+
+### 10.6 未完成条目（不计入 QT-05..09 的 verified）
+
+- **中止范围等价**（opc-07 裁定为独立命题）：一组脚本里混入一条会触发解析器越界的坏行时，
+  **两侧最终可用的 NPC/商家集合必须相同**。当前**未做**，也未在任何条目的 `verified` 里声明覆盖。
