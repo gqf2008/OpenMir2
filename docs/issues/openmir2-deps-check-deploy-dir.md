@@ -72,7 +72,7 @@ WARN_EXTRA MySqlConnector.dll / OpenMir2.dll
       <StoragePluginFile Include="$(OutputPath)$(AssemblyName).dll" />
     </ItemGroup>
     <Copy SourceFiles="@(StoragePluginFile)"
-          DestinationFolder="$(MSBuildThisFileDirectory)src\DBSrvin\$(Configuration)\"
+          DestinationFolder="$(MSBuildThisFileDirectory)src\DBSrv\bin\$(Configuration)\"
           SkipUnchangedFiles="true"
           ContinueOnError="true" />
   </Target>
