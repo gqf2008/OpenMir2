@@ -664,6 +664,18 @@ mod tests {
         UnbindList::default()
     }
 
+    /// 夹具记录的解包表（`unbind`：`Shape 字符串 → 解包物名`）；缺失 = 空表
+    /// （oracle `M2Share.UnbindList` 未命中 ⇒ 空名 ⇒ `CopyToUserItemFromName` 恒 false ⇒ 0 件）。
+    fn unbind_from(doc: &Value) -> UnbindList {
+        let mut map = std::collections::BTreeMap::new();
+        if let Some(o) = doc.get("unbind").and_then(Value::as_object) {
+            for (k, v) in o {
+                map.insert(k.parse::<i32>().unwrap(), v.as_str().unwrap().to_string());
+            }
+        }
+        UnbindList { map }
+    }
+
     fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
         const BONUS: NakedAbility = NakedAbility {
             dc: 0,
@@ -698,6 +710,8 @@ mod tests {
         let cat = catalog(&doc);
         let cases = doc["cases"].as_array().expect("cases 数组");
         assert!(cases.len() >= 12, "夹具用例数异常：{}", cases.len());
+        // 夹具记录的解包表（Shape → 解包物名）；无该表 = 空表。
+        let unbind = unbind_from(&doc);
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let c = &case["ctx"];
@@ -705,7 +719,6 @@ mod tests {
             let abil = ability(&case["wabil_before"]);
             let bag: Vec<u16> = item_list.iter().map(|it| it.index).collect();
             let recalc = recalc_inputs_default(&abil, &bag);
-            let unbind = no_unbind();
             let ctx = UseItemContext {
                 catalog: &cat,
                 can_use_item: c["can_use_item"].as_bool().unwrap(),
@@ -731,16 +744,56 @@ mod tests {
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
 
+            // 即时帧 = 解包产物逐件 `SM_ADDITEM(200)`（`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`）
+            // 在前，再 `SM_EAT_OK/636`。Rust 把解包件放在 `added_items`，这里按同一顺序拼回帧序。
+            let mut rust_frames: Vec<Frame> = out
+                .added_items
+                .iter()
+                .map(|_| Frame {
+                    ident: 200,
+                    recog: i32v(&c["actor_id"]),
+                    param: 0,
+                    tag: 0,
+                    series: 1,
+                })
+                .collect();
+            rust_frames.extend(out.immediate_frames.iter().cloned());
             assert_eq!(
-                out.immediate_frames,
+                rust_frames,
                 frames(&expect["immediate_frames"]),
-                "{name}: 即时帧与 oracle 不符"
+                "{name}: 即时帧(含 SM_ADDITEM)与 oracle 不符"
             );
             assert_eq!(
                 out.notices,
                 notices(&expect["notices"]),
                 "{name}: 延时通知与 oracle 不符"
             );
+            // 解包新建物品：结构化逐字段（`make_index` 含 `Environment.TickCount` 墙钟 ⇒ 只核递增不核绝对值）。
+            let exp_added = expect
+                .get("added_items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(
+                out.added_items.len(),
+                exp_added.len(),
+                "{name}: added_items 条数与 oracle 不符"
+            );
+            let mut last_mi = i32::MIN;
+            for (a, e) in out.added_items.iter().zip(exp_added.iter()) {
+                assert_eq!(a.index, u16v(&e["index"]), "{name}: added.index");
+                assert_eq!(a.dura, u16v(&e["dura"]), "{name}: added.dura");
+                assert_eq!(a.dura_max, u16v(&e["dura_max"]), "{name}: added.dura_max");
+                let e_desc: Vec<u8> = e["desc"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|d| u8v(d))
+                    .collect();
+                assert_eq!(a.desc.to_vec(), e_desc, "{name}: added.desc");
+                assert!(a.make_index > last_mi, "{name}: added.make_index 必须递增");
+                last_mi = a.make_index;
+            }
             assert_eq!(
                 out.eaten,
                 expect["immediate_frames"]
@@ -750,11 +803,23 @@ mod tests {
                     .any(|f| u16v(&f["ident"]) == SM_EAT_OK),
                 "{name}: eaten ↔ SM_EAT_OK 存在性"
             );
+            // 背包终态：逐件比。解包追加的尾部件 `make_index` 是墙钟派生 ⇒ 只比 (index,dura,dura_max,desc)。
+            let exp_items = bag_items(&expect["item_list"]);
+            assert_eq!(item_list.len(), exp_items.len(), "{name}: ItemList 长度");
+            let k = out.added_items.len();
+            let split = item_list.len() - k;
             assert_eq!(
-                item_list,
-                bag_items(&expect["item_list"]),
-                "{name}: ItemList 与 oracle 不符"
+                &item_list[..split],
+                &exp_items[..split],
+                "{name}: ItemList 前段与 oracle 不符"
             );
+            for (a, e) in item_list[split..].iter().zip(exp_items[split..].iter()) {
+                assert_eq!(
+                    (a.index, a.dura, a.dura_max, a.desc),
+                    (e.index, e.dura, e.dura_max, e.desc),
+                    "{name}: 解包件字段与 oracle 不符（make_index 墙钟排除）"
+                );
+            }
             assert_eq!(
                 state.wabil,
                 ability(&expect["wabil"]),
@@ -1173,6 +1238,77 @@ mod tests {
             }]
         );
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+    }
+
+    /// **IT-18 对拍样板**：夹具 `eat_ok_stdmode31_unbind_success`（oracle 实测）逐字段复现——
+    /// 容量门通过 ⇒ 吃掉捆装包、按 `UnbindList[Shape]` 建 6 件、6 条 `SM_ADDITEM(200)` 在前再
+    /// `SM_EAT_OK`、`RM_WEIGHTCHANGED`、重量按解包后背包重算。`make_index` 墙钟派生 ⇒ 只核递增。
+    ///
+    /// 牙（改实现关键点必红）：①`for _ in 0..6` 改 `0..5` ⇒ 件数断言红；②`dura: tpl_unbind.dura_max`
+    /// 改 `0` ⇒ 字段断言红。
+    #[test]
+    fn unbind_stdmode31_success_matches_oracle_fixture() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode31_unbind_success")
+            .expect("夹具必须含 eat_ok_stdmode31_unbind_success（IT-18 成功路径）");
+        let unbind = unbind_from(&doc);
+        let mut state = UseItemActorState {
+            wabil: ability(&case["wabil_before"]),
+            inc_health: 0,
+            inc_spell: 0,
+            user_unlock_durg: false,
+            hunger_status: 0,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let ctx = UseItemContext {
+            catalog: &cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: i32v(&case["ctx"]["actor_id"]),
+            make_index: i32v(&case["request"]["make_index"]),
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let expect = &case["expect"];
+        assert!(out.eaten, "容量门通过 ⇒ 吃掉捆装包");
+        let exp_added = expect["added_items"].as_array().unwrap();
+        assert_eq!(out.added_items.len(), 6, "解包 6 件");
+        let mut last_mi = i32::MIN;
+        for (a, e) in out.added_items.iter().zip(exp_added.iter()) {
+            assert_eq!(a.index, u16v(&e["index"]), "解包件 index");
+            assert_eq!(a.dura, u16v(&e["dura"]), "解包件 dura = tpl.DuraMax");
+            assert_eq!(a.dura_max, u16v(&e["dura_max"]), "解包件 dura_max");
+            assert!(a.make_index > last_mi, "make_index 递增");
+            last_mi = a.make_index;
+        }
+        // 即时帧：解包产物逐件 SM_ADDITEM(200) 在前，再 SM_EAT_OK。
+        let mut frames_seq: Vec<u16> = std::iter::repeat(200u16)
+            .take(out.added_items.len())
+            .collect();
+        frames_seq.extend(out.immediate_frames.iter().map(|f| f.ident));
+        let exp_seq: Vec<u16> = frames(&expect["immediate_frames"])
+            .iter()
+            .map(|f| f.ident)
+            .collect();
+        assert_eq!(frames_seq, exp_seq, "SM_ADDITEM×6 必须排在 SM_EAT_OK 之前");
+        assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+        assert_eq!(
+            state.wabil.weight,
+            ability(&expect["wabil"]).weight,
+            "重量按解包后背包重算"
+        );
+        assert_eq!(item_list.len(), 6, "移除 1 件 + 生成 6 件");
     }
 
     /// **未命中 Shape ⇒ 空串、0 件**（`ClientUseItemsGetUnbindItemName` 返回 `string.Empty`，

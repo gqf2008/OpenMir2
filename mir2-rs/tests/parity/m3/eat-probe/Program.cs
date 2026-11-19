@@ -82,7 +82,34 @@ internal sealed class ProbeItemSystem : IItemSystem
     public void Clear() => throw new NotSupportedException();
     public int ItemCount => Items.Count;
     public ushort GetStdItemIdx(string itemName) => throw new NotSupportedException();
-    public bool CopyToUserItemFromName(string sItemName, ref UserItem item) => throw new NotSupportedException();
+    /// <summary>`GameItemSystem.CopyToUserItemFromName`（`src/M2Server/Items/GameItemSystem.cs`）的逐行等价物：
+    /// 空名 ⇒ false；按名（忽略大小写）命中 ⇒ `Index = 模板下标`、`MakeIndex = M2Share.GetItemNumber()`、
+    /// `Dura = DuraMax = 模板 DuraMax`。**`MakeIndex` 含 `Environment.TickCount`（墙钟）⇒ 不入比较面**
+    /// （见 `docs/issues/openmir2-items-parity.md` §3 墙钟排除清单）。</summary>
+    public bool CopyToUserItemFromName(string sItemName, ref UserItem item)
+    {
+        if (string.IsNullOrEmpty(sItemName))
+        {
+            return false;
+        }
+        foreach (var kv in Items)
+        {
+            if (!kv.Value.Name.Equals(sItemName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            if (item == null)
+            {
+                item = new UserItem();
+            }
+            item.Index = kv.Key;
+            item.MakeIndex = M2Share.GetItemNumber();
+            item.Dura = kv.Value.DuraMax;
+            item.DuraMax = kv.Value.DuraMax;
+            return true;
+        }
+        return false;
+    }
     public StdItem GetStdItem(string sItemName) => throw new NotSupportedException();
     public int GetStdItemWeight(int nItemIdx) => throw new NotSupportedException();
     public int GetUpgrade2(int x, int a) => throw new NotSupportedException();
@@ -350,6 +377,7 @@ internal static class Program
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
         var beforeList = po.ItemList.Select(ItemDto).ToArray();
+        var beforeMakeIndexes = new HashSet<int>(po.ItemList.Select(u => u.MakeIndex));
         // `Ability` 是引用类型：`po.WAbil` 与 `wabilPre` 是同一对象，handler 会原地改。
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
@@ -385,6 +413,11 @@ internal static class Program
                     .Select(f => new { ident = f.ident, recog = f.recog, param = f.param, tag = f.tag, series = f.series })
                     .ToList(),
                 notices = messages,
+                // IT-18：解包新建的物品（`ItemList` 中不在 `beforeList` 里的项，按生成序）。
+                // `make_index` 含 `Environment.TickCount`（墙钟）⇒ 比较器排除绝对值（见 items-parity §3）。
+                added_items = po.ItemList
+                    .Where(it => !beforeMakeIndexes.Contains(it.MakeIndex))
+                    .Select(ItemDto).ToArray(),
                 wabil = AbilityDto(po.WAbil),
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
@@ -441,7 +474,12 @@ internal static class Program
         table.Items[2014] = Tpl("food_clamp", 1, 0, 2, duraMax: 2000);       // StdMode 1：夹到 5000（不跨档）
         table.Items[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
         table.Items[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
+        table.Items[2017] = Tpl("unbind_item", 0, 0, 4, duraMax: 7);          // IT-18 解包产物（6 件）
         // 2009 故意不注册 ⇒ 模板缺失分支
+
+        // `M2Share.UnbindList`（`M2Share.cs:85`，默认 null）：`StdItem.Shape → 解包物名`。
+        // 只挂 Shape 1（2016 的 Shape）⇒ 成功解包出 6 件 2017；其余 Shape 未命中 ⇒ 空名 ⇒ 0 件。
+        M2Share.UnbindList = new Dictionary<int, string> { [1] = "unbind_item" };
 
         var cases = new List<object>();
 
@@ -525,6 +563,12 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
             unbindFullBag, 1, "unbind_full",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // IT-18 成功路径：背包仅 1 件解包件（2016，Shape=1/AniCount=0）⇒ 1+6-1=6 <= 46 ⇒
+        // Dispose+RemoveAt 后 `ClientUseItemsGetUnBindItems("unbind_item", 6)` 建 6 件 2017，
+        // 每件 `SendAddItem` ⇒ 6 条 SM_ADDITEM(200) 即时帧，再 SM_EAT_OK + RM_WEIGHTCHANGED。
+        cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
+            new List<Spec> { S(1, 2016) }, 1, "unbind_full",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in table.Items)
@@ -551,6 +595,7 @@ internal static class Program
             "src/M2Server/Actor/BaseObject.Message.cs",
             "src/M2Server/Player/PlayObject.Socket.cs",
             "src/Modules/SystemModule/Data/SendMessage.cs",
+            "src/M2Server/Items/GameItemSystem.cs",
             "src/OpenMir2/Grobal2.cs",
         };
         string sourceAnchor = SourceAnchorSha256(oracleSourceFiles);
@@ -584,15 +629,19 @@ internal static class Program
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级/StdMode 变换不在本片作用域）",
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
-                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0，只看 `SystemShare.FunctionNPC` 是否存在）与 AniCount==0 的容量不足分支已覆盖；StdMode 3/4 与 StdMode 31 的解包分支（`UnbindList`，容量足够时解包出 6 件）本片未实现，已登记（T-17）",
+                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 3/4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
+            unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
             templates = templateDtos,
             cases,
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
-        File.WriteAllText(outPath, JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+        // 落盘统一 LF：Windows 上 `JsonSerializer` 缩进为 CRLF，仓库约定 LF，
+        // 否则 `git diff --check` 会逐行判 trailing whitespace。
+        string json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n");
+        File.WriteAllText(outPath, json + "\n", new UTF8Encoding(false));
         Console.WriteLine($"WROTE {Path.GetFullPath(outPath)}");
         Console.WriteLine($"ORACLE_SOURCE_SHA256 {sourceAnchor}");
         Console.WriteLine($"TEMPLATES {templateDtos.Count} CASES {cases.Count}");
