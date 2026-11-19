@@ -312,6 +312,7 @@
 | T-277 | openmir2-t282-mount-server | 2026-11-04T13:08:35Z | 在用 |
 | T-278 | openmir2-t284-hero-rank-kinds | 2026-11-04T13:13:41Z | 在用 |
 | T-279 | openmir2-t283-wings-server | 2026-11-04T13:16:26Z | 在用 |
+<!-- 手写行：next_t.py 只取新号，无"为已有号补落地行"能力；勿视为可自动化 -->
 | T-284 | openmir2-botsrv-actor-pool-leak | 2026-11-19T23:55:00Z | 已落地 |
 | T-280 | openmir2-botsrv-action-probe-turn-coords | 2026-11-14T17:15:08Z | 在用 |
 | T-281 | openmir2-gateway-backpressure-frame-drop | 2026-11-14T19:22:28Z | 在用 |
