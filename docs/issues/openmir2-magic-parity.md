@@ -974,3 +974,37 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
      flush」的实现序，oracle 是后续趟处理受击）；② 同优先级 31 的 tie 序由 `NetPriorityQueue`
      两段模型的出队序给出（`[p1,m3,m2,m1]`），**不是** oracle 实证（本支多目标无 golden）。
 - **清单**：MG-37 升 `verified`（magic **15/65**）。
+
+## 21. M52 迁移清单（15 条逐条实测；应 QA 条件① 追加，2026-11-20）
+
+> 目的：M53 更换入库件前，把「每条 golden 的现状、迁移后形态、**实测**帧面变化、`MaxExp` 三态」逐条落盘。
+> 实测口径：用 M52 装置（`FixtureContract` 七道门 + `ExpConf.LoadConfig()` 修复）对 **15 条**逐条重生成到
+> 仓外 `E:/UserFleet/qa/warrskill/m52-migration/`，与入库件逐接收者逐字段比（排除 `delivery`/`now` 等墙钟）。
+> 变化归因只允许三种：**登录序重算 / `rng_mode` 口径 / Exps 修复**；不含者写「无」。
+
+| case | 现状（runner / 登录序 / Rng 口径） | 迁移后（M53） | 帧面变化（实测） | `MaxExp` 三态 | 变化归因 |
+| --- | --- | --- | --- | --- | --- |
+| fireball（MG-10，id=1） | `FireballCase` 独立 runner；无 `Fixture` 块；无登录序；`freeze_at_dospell` | **M52.1 改造 runner**（seam + login_order 参数）→ 登录序主件；旧件移 `golden/magic/legacy/` 标 `legacy_artifact` | **0 差异**（runner 未改造，重生成即原样；非「已对齐」） | 不涉及 | 无 |
+| fireboom | `BehaviorBatch`；target 登录序；`cover_drain` | 登录序主件（带契约字段） | **0 差异** | 不涉及 | 无 |
+| hangmajinbub（MG-28） | `BehaviorBatch`；target 登录序；`cover_drain` | 登录序主件；`Abil.MaxExp=GetLevelExp(Level)` | **0 差异** | **涉及且相等（50=50，非真值）**；整改后两侧同变 6000 | 无 |
+| dejiwonho（MG-29） | 同上 | 同上 | **0 差异** | **涉及且相等（50=50，非真值）**；同上 | 无 |
+| shield / cloak / bigcloak | `BehaviorBatch` | 登录序主件 | **0 差异** | 不涉及 | 无 |
+| bighealing（MG-40 的 caster 元组） | `BigHealingBatch` | caster L30 元组改公式 419（M53 整改） | **0 差异**（现行元组；整改后以重生成实测为准） | 不涉及 | 无 |
+| showhp | `ShowHpBatch` | 登录序主件 | **0 差异** | 不涉及 | 无 |
+| lightning-11 | `AntiMagicBatch`；target 登录序；`cover_drain` | 登录序主件（`anti_magic=1`、`max_hp`=公式值） | **变化**：3 子 case、18 处帧面差 | 不涉及 | **登录序**（唯一变量） |
+| lightning-45 | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| firecharm | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| hbfireball | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| fireball-5 | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| healing | `HealingBatch` | 登录序主件 | **变化**：3 处帧面差（1 子 case `Rng` 变） | 不涉及 | **登录序** |
+
+**结论与后续**
+- `MaxExp` 三态：仅 MG-28/29 为「涉及且相等（50=50，非真值）」，其余 12 条「不涉及」；**无「涉及但为 0」**。
+- **Exps 修复对 15 条帧面 0 影响**（实测：`hangmajinbub`/`dejiwonho`/`showhp`/`bighealing` 复跑 0 差异）；
+  真值 `Exps.conf Level20=6000`，整改后 MG-28/29 两侧同变 6000（**先落 `LoadConfig` 修复、再重生成**）。
+- 6 条变化的唯一变量是**登录序重算**（target 的 `AntiMagic`/`WAbil.MaxHP` 被消费）；`Rng` 口径在 master 已是
+  `cover_drain`（未切换）。
+- `cover_drain` 的**逐 case 真实性差分**（`case | cover Rng | freeze Rng | 判定依据`）作为 **M53 交接产物**：
+  在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
+  落到符号锚——缺依据即判非法声明。
+- 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
