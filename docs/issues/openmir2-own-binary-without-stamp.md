@@ -1,8 +1,8 @@
 # openmir2-own-binary-without-stamp
 
-> 状态：**2026-11-20：R1–R4 已落地；R5（`-Check` 内嵌 rev 一致性）已补。MongoDB 插件「戳=M9
-> 572a0b8a / 内嵌=M8 a5643481」已由 Leader 裁定按「重建」处置（选项 2），待 C# 构建窗口执行；
-> 在重建完成前该件如实判红、起栈门 fail-closed**（见 §7）。
+> 状态：**2026-11-20 已收口**：R1–R5 全部落地；C# 重建窗口完成——全 C# 栈在 M29
+> （`f5ae02c7…`）强制重编，九件二进制内嵌 rev 与戳 head 一致，部署副本已更新，新冻结集
+> `release-csharp-f5ae02c7` 生成并校验通过；旧 m9 冻结集保留并加注（见 §7.9）。
 > 来源：卡 `openmir2-deps-check-deploy-dir` 复审（opc-07，2026-11-19）。
 
 ## 现象
@@ -337,4 +337,23 @@ DBSrv 的戳组**不在** `w-rust-gate.ps1`（那个脚本只管 Rust 四件 exe
 2. **M8→M9 增量跳过证据链**：内嵌 rev `a5643481`（M8：AOI 增量切默认）与戳 head `572a0b8a`（M9：
    deps_manifest 构建口径）并存；MongoDB 件 mtime 18:31、其余五件 19:03；`src/DBSrv/bin/Release`
    副本内嵌同为 M8 ⇒ 不是"部署拷贝错"，而是**构建期就没重建**、事后按 M9 产戳。
+
+### 7.9 重建完成（2026-11-20，C# 窗口）
+
+- **强制重编**（`--no-incremental`，dotnet `9.0.313`）：`src/DBSrv/DBSrv.csproj`、
+  `src/LoginSrv/LoginSrv.csproj`、`src/Storeages/DBSvr.Storage.MySQL`、
+  `src/Storeages/DBSrv.Storage.MongoDB` 四个工程，**均 0 错误**；主检在 M29（`f5ae02c7…`）干净树。
+- **内嵌 `SourceRevisionId` 实测**（ASCII + UTF-16LE 双编码扫描）全部 =
+  `f5ae02c7e595002a982e44ebe1ab7eeffaf975f9`；注意 exe 只在 **UTF-16LE** 里带，dll 在 ASCII 里带，
+  工具两种编码都扫（缺一侧就会假红/假绿）。
+- **重产戳**：`-Head f5ae02c7… -HeadSource explicit -Force`；`src/DBSrv/bin/Release` 6 件、
+  `src/LoginSrv/bin/Release` 3 件。
+- **部署副本更新**（`Copy-Item` 保 mtime）：DBSrv 6 件 + 6 戳、LoginSrv 3 件 + 3 戳；
+  替换前备份 `E:/UserFleet/m1-stack/backup-20261120-023546/`（18 个文件的 sha256 已记录）。
+- **校验**：runtime 两组 `-Check -RequireAll -RequireHead f5ae02c7… -OwnGlobs …` ⇒
+  `GREEN 6 stamps verified` / `GREEN 3 stamps verified`；`assert_three_way_aligned -Group DBSrv`
+  与 `-Group LoginSrv` ⇒ 9 条 `THREE_WAY_OK`（`embedded=ok`）。
+- **新冻结集**：`E:/UserFleet/release-csharp-f5ae02c7`（9 binaries + 9 `.build.json`；
+  `SHA256SUMS.sha256` 18 条，`sha256sum -c` 全 `OK`）；旧 `release-csharp-m9-572a0b8a` 原样保留，
+  新增 `PROVENANCE.ADDENDUM-20261120.txt` 标注 MongoDB 件的内嵌/戳不一致与 supersede 关系。
 
