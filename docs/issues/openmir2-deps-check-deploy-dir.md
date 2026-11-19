@@ -174,17 +174,17 @@ RESULT: GREEN
 - 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
   实跑帧/JSON 产物为准。
-> 来源：QA 签署摘要 `docs/issues/qa-merged-cards-signoff-20261119.md`。
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`（QA 已放置）。
 
 ### 可独立重放的篡改（T1–T5；**都在副本 `qa-deps/deploy` 上做，不碰真实目录**）
 
 | 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
 |---|---|---|---|---|
-| T1 | 部署副本 `MemoryPack.Core.dll` | 翻末字节 | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=101f0cfbf844d0277b41cdff67bbb33f90e75dbe094387c321300e1434576bee actual=<翻字节方式以 QA 重放为准，前缀 8e137a6f…>` | 复原后全绿 |
+| T1 | 副本 `qa-deps/deploy/MemoryPack.Core.dll`（包 `MemoryPack.Core/1.10.0`，size 207872） | **只翻最后一个字节** `0x00 → 0xFF`（`b[-1] ^= 0xFF`） | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=101f0cfbf844d0277b41cdff67bbb33f90e75dbe094387c321300e1434576bee actual=8e137a6fe19278b52d95fe1c319d0adb48f50423c4b702b66040862e0cab9bea` | 复原后全绿 |
 | T2 | 部署副本 `Microsoft.Extensions.Logging.dll` | 删除 | `DEPS_RED MISSING_DEPLOYED Microsoft.Extensions.Logging/8.0.0` | 复原后全绿 |
 | T3 | 部署副本 | 新增 `Stray.Third.Party.dll` | `DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll` | 复原后全绿 |
-| T4a | 删 Logging.dll + manifest 副本加匹配例外 | 见左 | `DEPS_EXCEPTION …` + `DEPS_GREEN`（证明例外**只**压制 `MISSING_DEPLOYED`） | 复原后全绿 |
-| T4b | 恢复后翻字节 + 同一例外 | 见左 | `DEPS_EXCEPTION_UNUSED` + `DEPS_RED DEPLOYED_SHA_MISMATCH <pkg>/<ver> <file> expected=<原 sha256> actual=<翻字节后 sha256>`（证明**不**压制 sha） | 复原后全绿 |
+| T4a | 副本删 `Microsoft.Extensions.Logging.dll`；manifest 用副本 `qa-deps/dbsrv.exc.manifest.json`（`exceptions` 含 `{"pkg":"Microsoft.Extensions.Logging","version":"8.0.0"}`） | 见左 | `DEPS_EXCEPTION …` + `DEPS_GREEN packages=46 files=1030`（rc=0；证明例外**只**压制 `MISSING_DEPLOYED`） | 复原后全绿 |
+| T4b | 先 `cp` 原件回副本，再对 `qa-deps/deploy/Microsoft.Extensions.Logging.dll`（包 `Microsoft.Extensions.Logging/8.0.0`，size 50848）**只翻最后一个字节** `0x00 → 0xFF`；manifest 仍为 `qa-deps/dbsrv.exc.manifest.json` | 见左 | `DEPS_EXCEPTION_UNUSED` + `DEPS_RED DEPLOYED_SHA_MISMATCH Microsoft.Extensions.Logging/8.0.0 Microsoft.Extensions.Logging.dll expected=4330a5efe9d110afb7f8e567d5b43eee976e0f7f6802d13a211b65d747529179 actual=719a47903edabc4b715221b7bfc0c72ccf2a0347ce17e5170aaf7c42cc4a9637`（证明**不**压制 sha） | 复原后全绿 |
 | T5 | 部署目录 | 改成缺目录 / 空目录 | `MISSING_DEPLOY_DIR` / `EMPTY_DEPLOY_DIR` | 复原后全绿 |
 ### 统一整改（C4–C6）
 
