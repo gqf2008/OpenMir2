@@ -302,7 +302,7 @@ namespace GameGate.Services
                     }
                     break;
                 case Grobal2.GM_RECEIVE_OK:
-                    SendServerMsg(Grobal2.GM_RECEIVE_OK, 0, 0, 0, "", 0);
+                    SendServerMsg(Grobal2.GM_RECEIVE_OK, 0, 0, 0, "");
                     break;
                 case Grobal2.GM_DATA:
                     // 卡 openmir2-gate-packlen-validation：是否投递由**唯一判定点**决定；
@@ -368,8 +368,18 @@ namespace GameGate.Services
             }
         }
 
-        private void SendServerMsg(ushort command, ushort sessionId, int nSocket, ushort userIndex, string data, int nLen)
+        /// <summary>
+        /// 组一帧「引擎控制消息」（卡 `openmir2-gate-utf8-body-length`）。
+        ///
+        /// **长度一律取字节数**：`HUtil32.GetBytes` 是 GB2312 编码，非 ASCII 正文的字节数大于
+        /// 字符数。历史实现用 `data.Length`（字符数）开缓冲、当拷贝量、当 `PackLength` ⇒
+        /// 中文正文被截断且包头声明长度与实际不符（Rust 侧一直是 `ip_bytes.len()` 字节口径）。
+        ///
+        /// 纯函数（可单测）：返回完整线上帧 = 20B `ServerMessage` 头 + 正文字节。
+        /// </summary>
+        public static byte[] BuildServerFrame(ushort command, ushort sessionId, int nSocket, ushort userIndex, string data)
         {
+            byte[] strBuff = string.IsNullOrEmpty(data) ? Array.Empty<byte>() : HUtil32.GetBytes(data);
             ServerMessage serverMessage = new ServerMessage
             {
                 PacketCode = Grobal2.PacketCode,
@@ -377,21 +387,23 @@ namespace GameGate.Services
                 SessionId = sessionId,
                 Ident = command,
                 SessionIndex = userIndex,
-                PackLength = nLen
+                // 包头声明长度 = **正文字节数**（不是字符数）。
+                PackLength = strBuff.Length
             };
             byte[] sendBuffer = SerializerUtil.Serialize(serverMessage);
-            if (!string.IsNullOrEmpty(data))
+            if (strBuff.Length == 0)
             {
-                byte[] strBuff = HUtil32.GetBytes(data);
-                byte[] tempBuff = new byte[ServerMessage.PacketSize + data.Length];
-                MemoryCopy.BlockCopy(sendBuffer, 0, tempBuff, 0, sendBuffer.Length);
-                MemoryCopy.BlockCopy(strBuff, 0, tempBuff, sendBuffer.Length, data.Length);
-                Send(tempBuff);
+                return sendBuffer;
             }
-            else
-            {
-                Send(sendBuffer);
-            }
+            byte[] frame = new byte[ServerMessage.PacketSize + strBuff.Length];
+            MemoryCopy.BlockCopy(sendBuffer, 0, frame, 0, sendBuffer.Length);
+            MemoryCopy.BlockCopy(strBuff, 0, frame, sendBuffer.Length, strBuff.Length);
+            return frame;
+        }
+
+        private void SendServerMsg(ushort command, ushort sessionId, int nSocket, ushort userIndex, string data)
+        {
+            Send(BuildServerFrame(command, sessionId, nSocket, userIndex, data));
         }
 
         /// <summary>
@@ -399,7 +411,7 @@ namespace GameGate.Services
         /// </summary>
         public void UserEnter(ushort sessionId, int socketId, string data)
         {
-            SendServerMsg(Grobal2.GM_OPEN, sessionId, socketId, 0, data, data.Length);
+            SendServerMsg(Grobal2.GM_OPEN, sessionId, socketId, 0, data);
         }
 
         /// <summary>
@@ -407,7 +419,7 @@ namespace GameGate.Services
         /// </summary>
         public void UserLeave(int socketId)
         {
-            SendServerMsg(Grobal2.GM_CLOSE, 0, socketId, 0, "", 0);
+            SendServerMsg(Grobal2.GM_CLOSE, 0, socketId, 0, "");
         }
 
         /// <summary>
@@ -465,7 +477,7 @@ namespace GameGate.Services
             }
             if (GateReady)
             {
-                SendServerMsg(Grobal2.GM_CHECKCLIENT, 0, 0, 0, "", 0);
+                SendServerMsg(Grobal2.GM_CHECKCLIENT, 0, 0, 0, "");
                 CheckServerFailCount = 0;
                 return;
             }
