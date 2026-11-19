@@ -11,18 +11,16 @@
 
 use std::process::Command;
 
-/// 跑 git 并返回 trim 后的 stdout；失败/空输出 ⇒ `None`。
+/// 跑 git 并返回 trim 后的 stdout；**命令失败才返回 `None`**。
+///
+/// 空输出是合法结果（`git status --porcelain` 在干净树就是空）：把它折叠成 `None` 会让
+/// "干净" 与 "取不到" 不可区分——实测曾因此把 `dirty=0` 写成 `dirty=unknown`。
 fn git(args: &[&str]) -> Option<String> {
     let out = Command::new("git").args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// 40 位 hex 校验：git 对象名只接受完整 sha1；短号/脏串一律回落 `unknown`。
