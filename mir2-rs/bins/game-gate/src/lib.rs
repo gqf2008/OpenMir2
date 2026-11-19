@@ -1536,6 +1536,19 @@ async fn handle_server_message(ctx: &LinkCtx, msg: ServerMessage, body: &[u8]) {
     }
 }
 
+/// 上游帧体长度上界（卡 `openmir2-gate-packlen-validation`）。
+///
+/// C# oracle 不设上界（TouchSocket 按包头长度缓冲），但畸形头会尝试分配同等内存
+/// （`PackLength = i32::MIN` ⇒ 绝对值 2 GiB）。正常 GM_DATA 体远小于 1 MiB，这里取 1 MiB
+/// 作防御上界——只拒绝畸形帧，正常帧不受影响（有意对齐偏差，见卡面「同族扫描」）。
+pub const MAX_UPSTREAM_BODY: usize = 1 << 20;
+
+/// 上游帧体是否在防御上界内（`body_len` = `PackLength` 的绝对值）。
+#[must_use]
+pub fn upstream_body_allowed(len: usize) -> bool {
+    len <= MAX_UPSTREAM_BODY
+}
+
 /// 下行读循环：逐帧读 20B 头 + body；EOF / 关闭信号 / 读失败 ⇒ 判死并通知监督循环。
 async fn reader(
     mut rd: OwnedReadHalf,
@@ -1558,6 +1571,19 @@ async fn reader(
             continue;
         };
         let body_len = msg.body_len();
+        // 卡 `openmir2-gate-packlen-validation`：头部长度是不可信输入。C# 侧的等价校验是
+        // 「拷贝前 `packetLen <= data.Length`」；Rust 是流式 `read_exact`（构造上不越界），
+        // 但 `vec![0u8; body_len]` 对畸形头（`PackLength = i32::MIN` ⇒ 2 GiB）会尝试巨量分配。
+        // 超上界 ⇒ WRN + 断开链路（读循环退出 ⇒ 监督循环判死）。
+        if !upstream_body_allowed(body_len) {
+            glog!(
+                "WRN",
+                "引擎帧头 PackLength={} 超出上界 {} 字节，断开链路",
+                msg.pack_length,
+                MAX_UPSTREAM_BODY
+            );
+            break;
+        }
         let mut body = vec![0u8; body_len];
         if body_len > 0 {
             let read = tokio::select! {
@@ -2121,6 +2147,44 @@ mod tests {
     }
 
     use super::*;
+
+    /// 卡 `openmir2-gate-packlen-validation`：畸形/超大包头长度必须被拒（Rust 侧对齐）。
+    #[test]
+    fn upstream_body_bound_rejects_pathological_lengths() {
+        assert!(upstream_body_allowed(0));
+        assert!(upstream_body_allowed(MAX_UPSTREAM_BODY));
+        assert!(!upstream_body_allowed(MAX_UPSTREAM_BODY + 1));
+        let pathological = ServerMessage {
+            packet_code: 0,
+            socket: 0,
+            session_id: 0,
+            ident: 0,
+            session_index: 0,
+            pack_length: i32::MIN,
+        };
+        assert!(
+            !upstream_body_allowed(pathological.body_len()),
+            "PackLength=i32::MIN 的绝对值（2 GiB）必须被拒，不得进入 vec! 分配"
+        );
+        let normal = ServerMessage {
+            pack_length: -255,
+            ..pathological
+        };
+        assert!(upstream_body_allowed(normal.body_len()), "正常帧不得误伤");
+    }
+
+    /// 接线牙：上界校验必须在 body 分配之前（删掉校验 ⇒ 红）。
+    #[test]
+    fn reader_validates_upstream_body_before_allocating() {
+        let src = include_str!("lib.rs");
+        let check = src
+            .find("if !upstream_body_allowed(body_len)")
+            .expect("读循环缺上界校验");
+        let alloc = src
+            .find("let mut body = vec![0u8; body_len];")
+            .expect("缺 body 分配");
+        assert!(check < alloc, "上界校验必须在分配之前");
+    }
 
     fn deployed_speed() -> rules::SpeedRules {
         rules::SpeedRules {
