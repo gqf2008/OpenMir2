@@ -295,6 +295,15 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 
 > 变异 B 与 A 同法：`git checkout -- mir2-rs/bins/game-svr/src/lib.rs` 恢复后断言 sha 相等并复绿；
 > 构建按总监窗口约束，窗口内不新起构建。
+## 12.3 清单 schema v2（opc-07，2026-11-20；四域统一）
+
+- `schema_version = 2`；`basis` **顶层**、覆盖所有 verified（含 axis；本域 `basis=semantic`）；
+- verified 必须 `test` 非空 **且**（`cases` 或 `unit_tests` 非空）；
+- `counting_moment.head` = 计数时的 **master commit**（本域计数在分支内变更、未合入，head 记录测量时 master）；
+- `legacy_id` 仅对旧清单来源必填；本域无旧清单 ⇒ `legacy_note` 声明"本域不适用"；
+- 可选字段（`dead_paths`/`axes`/`todos` 等）在本文件 §12 集中声明；
+- 校验脚本（`E:\OPC	oolsalidate-parity-manifests.ps1`）出来后按 rc=0 自检。
+
 ## 13. 子批①（NP-03/04/05）设计与裁定记录（2026-11-20）
 
 ### 13.1 裁定
@@ -395,7 +404,8 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 
 **用例**：`engine_tests::var_cmp_conditions_follow_oracle_pass_by_value_defect` 覆盖两类——
 M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 0 vs 目标 5 的判别性断言）。
-**牙 G**：把 EQUAL 改成按真实值比较 ⇒ `EQUAL(P3,5)` 必红。
+**牙 G**：把 EQUAL 改成按真实值比较 ⇒ `EQUAL(P3,5)` 必红；
+原文 `E:/UserFleet/qa/npc-parity/engine-mutation-G-real-compare.txt`（恢复 sha 相等、复绿 `engine-green-final.txt`）。
 
 ## 14.1 NP-04 `#ACT` 用例的最终形态
 
