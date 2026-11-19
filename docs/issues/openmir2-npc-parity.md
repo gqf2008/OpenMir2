@@ -459,3 +459,12 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
 
 **NP-11**：本轮不升 verified；装置卡 `docs/issues/openmir2-npc-multiobserve-golden.md`。
 
+
+## 18. 看板读路径（观察，2026-11-20）
+
+- `wg collab board` 直读在本工作树会挂起；按 `docs/D1_PROTOCOL.md` 用
+  `python -I -B tools/orchestration/collab_read.py board` 读**投影**。
+- **投影不验签**（`collab_read` 只做折叠，`verified` 恒为 null）：**签名条目才是事实源**
+  （`refs/collab/inbox/<actor>/*`）；有争议时以签名条目为准，不得把投影当权威。
+- 本卡的 issue/status 条目：`oid 1230171b…` / `4885d55e…`（actor `openmir2-bd`，已推 walgit 并逐 oid 核对远端）。
+
