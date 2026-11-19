@@ -14,7 +14,8 @@
 
 - 分母来源（机器清单，不手写）：`docs/issues/parity-gap-quests.json` 的 `denominator.count` = **9**。
   定义：任务专属脚本命令分支 = 选择门 1 + 条件 2 + 动作 5（通用 NPC 脚本命令归 NPC 块）。
-- 现状：`verified` 2（QT-03 CHECKOPEN、QT-04 CHECKUNIT），待验 7（QT-01/02/05/06/07/08/09）。
+- 现状（2026-11-20 收口）：**9 条中 8 条 `verified`、1 条 oracle 侧不可达（QT-01 `dead_in_oracle`），无遗漏**
+  —— 即本块**可达到的全覆盖**。QT-01 的不可达性以探针 + 全仓枚举为证（§10），不计入分子。
 - **不变量（交付时逐条自检）**：
   1. `denominator` / `entries` 的 id 集合与 count **一个字节都不动**（checklist R2）；
   2. 分母 9 不重算子，若认为分母有误 ⇒ 停下交证据给 opc-07，不自行改；
@@ -277,4 +278,19 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
 ### 10.6 未完成条目（不计入 QT-05..09 的 verified）
 
 - **中止范围等价**（opc-07 裁定为独立命题）：一组脚本里混入一条会触发解析器越界的坏行时，
-  **两侧最终可用的 NPC/商家集合必须相同**。当前**未做**，也未在任何条目的 `verified` 里声明覆盖。
+  **两侧最终可用的 NPC/商家集合必须相同**。**当前结论：不成立（两侧不等价）**，证据如下，待 opc-07 裁定。
+  - oracle：`WorldServer.Initialize` → `MerchantInitialize()` → `NpCinitialize()` 全链**没有 try/catch**；
+    `NormNpc.LoadNPCScript` / `Merchant.LoadMerchantScript` → `ScriptParsers.LoadScriptFile` 抛
+    `IndexOutOfRangeException` 时异常**穿出整条初始化链** ⇒ 该 NPC 之后的所有 NPC/商家都不再装载，
+    世界初始化中止（符号锚 `WorldServer.Initialize`、`NpCinitialize`、`NormNpc.LoadNPCScript`）。
+  - Rust：`NpcHost` 的装载循环对 `load_script_file` 的 `Err` **逐条捕获**，记入 `failures` 后
+    **继续装载后续 NPC**（符号锚 `NpcHost` 的装载循环 / `NpcLoadFailure`）⇒ 坏脚本只影响它自己。
+  - ⇒ 这是**真实差异**：坏脚本在 oracle 里是「整批中止」，在 Rust 里是「单条失败、其余照常」。
+    本条**不计入 QT-05..09 的 verified**；修法（让 Rust 也中止）会改变 Rust 现状，需 opc-07 裁定。
+
+## 12. 自清理留痕
+
+- **2026-11-20（QT-02 提交 `7df84717` 前后）**：探针参数一次未被识别，`--checks` 被当作输出目录，
+  在 worktree 根建出 `--checks/`（内含 `quest_gate_reachability.tsv`、`scripts_applied/` 两件）。
+  属**本任务自造的误产物**，已整目录删除（`rm -rf -- "--checks"`），并核对删除后
+  `git status --porcelain` 为空、无残留 `./-*` 目录。
