@@ -537,7 +537,7 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 |---|---|---|
 | 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已接 Rust 驱动并升格**（MG-19 / MG-54，`basis=semantic`） |
 | 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
-| 13 火符 | `golden/magic/firecharm.json` | **已接驱动（红→产品修复→绿）**；MG-20/27 升格待裁定（清单有两条同 id 条目） |
+| 13 火符 | `golden/magic/firecharm.json` | **已接驱动（红→产品修复→绿）**；MG-27（`:328` body）升 `verified`；MG-20（`:315` 7 魔号共用组标签）按口径保持 `implemented_unverified` |
 | 44 灭天火 | `golden/magic/hbfireball.json` | **已产出（C#）**；Rust 未接 |
 
 雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；
