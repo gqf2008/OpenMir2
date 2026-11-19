@@ -459,6 +459,7 @@ pub use entity::{
 };
 // S3a：重叠推挤状态的真值已迁到 `world-bevy` 的组件；本 crate 透传，供宿主/测试按类型名使用。
 pub use components::DupState;
+// T-287（卡 `openmir2-visiblehumanlist-cache`）：`SendRefMsg` 的 500ms 缓存类型与常量。
 pub use guild::{
     check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildRunEvent,
     GuildSaveReason, GuildState, GuildWarEnded, GuildWarEvent, GuildWarOutcome, GuildWarRequest,
@@ -515,3 +516,4 @@ pub use world::{
     SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
     WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
 };
+pub use world::{RefMsgCacheEntry, REF_MSG_CACHED_RANGE, REF_MSG_CACHE_TTL_MS};

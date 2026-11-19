@@ -25,6 +25,9 @@
 // 合并进 lib 后，把 crate 自身绑成同名，使这些路径与 `crate::xxx` 等价。
 extern crate self as game_svr;
 
+/// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`；卡 `openmir2-visiblehumanlist-cache`）。
+mod ref_msg_cache;
+
 /// **NPC 多观察者 AOI 金标准**（卡 `openmir2-npc-multiobserve-golden`；测试专用：读入/校验/比较）。
 #[cfg(test)]
 mod aoi_golden;
@@ -16322,11 +16325,16 @@ fn broadcast_ref_msg_opt(
     include_self: bool,
     at: Option<(usize, i32, i32)>,
 ) {
+    // **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（oracle `BaseObject.Message.cs:395-466`；
+    // 偏差 `T-287`）。扫描面仍由 `chat::hear_targets*` 给（±range 闭区间），缓存两段由
+    // `ref_msg_cache` 收口：≥500ms 刷新全量；否则复用快照 + `|Δ|<11` 严格小于。
     let targets = match at {
-        Some((map_id, x, y)) => {
-            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range())
-        }
-        None => chat::hear_targets(world, actor_id, chat::send_ref_msg_range()),
+        Some((map_id, x, y)) => ref_msg_cache::targets_from_scan(
+            world,
+            actor_id,
+            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range()),
+        ),
+        None => ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()),
     };
     send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, include_self);
 }
@@ -17723,13 +17731,16 @@ fn drain_npc_merchant_hits(
 /// ② 把 `merchant_run` 的收件人格扫范围放开（或改成「全网关」）⇒ 远处观察者多收一条 ⇒ 红。
 fn drain_merchant_disappears(
     rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
     let mut sent = 0usize;
     for (target_id, recipients) in &rec.merchant_disappears {
         let body = downlink::disappear_frame(*target_id);
-        for actor_id in recipients {
+        // **T-287**：消失帧同样是 `SendRefMsg` ⇒ 同一份 500ms 缓存（世界侧给的收件人快照当扫描面）。
+        let recipients = ref_msg_cache::targets_from_scan(world, *target_id, recipients.clone());
+        for actor_id in &recipients {
             let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
                 // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
                 glog!(
@@ -19469,7 +19480,7 @@ fn drain_run_downlinks_with_magic(
     // `(byte)RM_DISAPPEAR(8061) = 125` ⇒ 晚于 `RM_HIT(20)`、早于登录尾帧 `RM_CHANGELIGHT(153)`。
     // 收件人是**发帧时刻**的快照（世界侧 `merchant_run` 格扫），本段只路由。
     let t = tick_profile::probe_begin(&prof);
-    let _merchant_disappears = drain_merchant_disappears(rec, online, gates);
+    let _merchant_disappears = drain_merchant_disappears(rec, world, online, gates);
     tick_profile::probe_end(&mut prof, "HostAoiMerchantLeave", t);
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
@@ -37236,7 +37247,7 @@ mod tests {
     /// 因此收件人必须由世界侧在**发帧时刻**快照（`:147` 与 `:148` 之间）。
     ///
     /// 牙（红检，实测）：① 删 `drain_run_downlinks_with_magic` 里的
-    /// `let _merchant_disappears = drain_merchant_disappears(rec, online, gates);`
+    /// `let _merchant_disappears = drain_merchant_disappears(rec, world, online, gates);`
     /// ⇒ ① 收不到帧 ⇒ 必红；② 把 `merchant_run` 的收件人格扫范围放开（`SEND_REF_MSG_RANGE`
     /// 改大或改成「全网关」）⇒ `q` 多收一条 ⇒ 必红。
     #[test]
@@ -37903,7 +37914,7 @@ mod tests {
         for want in [
             "let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);",
             "let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);",
-            "let _merchant_disappears = drain_merchant_disappears(rec, online, gates);",
+            "let _merchant_disappears = drain_merchant_disappears(rec, world, online, gates);",
         ] {
             let hits: Vec<usize> = lines
                 .iter()
@@ -88562,20 +88573,12 @@ GMEXECUTE f
             for case in &doc.cases {
                 let (actual, npc_id) = np11_run_aoi_case(case);
                 let _ = npc_id;
-                if name == "fresh_scan" {
-                    compared = crate::aoi_golden::compare(&case.observers, &actual)
-                        .unwrap_or_else(|e| panic!("fresh_scan 对拍红（{name}）：{e:#?}"));
-                } else {
-                    let errs = crate::aoi_golden::compare(&case.observers, &actual).expect_err(
-                        "cache_window 必须红：Rust 无 oracle 的 500ms VisibleHumanList 缓存\
-                         （偏差卡 openmir2-visiblehumanlist-cache）；若此断言失败说明缓存已实现，\
-                         请改卡/偏差登记后重判",
-                    );
-                    assert!(
-                        errs.iter().any(|e| e.contains("edge")),
-                        "cache_window 的红面必须是 edge（其余接收者应与 fresh_scan 相同）：{errs:#?}"
-                    );
-                }
+                // T-287 已实现：两例都必须绿（`fresh_scan` 覆盖缓存过期重扫，`cache_window`
+                // 覆盖 500ms 窗口内的 `<11` 二次过滤）。
+                let n = crate::aoi_golden::compare(&case.observers, &actual)
+                    .unwrap_or_else(|e| panic!("{name} 对拍红：{e:#?}"));
+                println!("{name}/{}: 对拍绿，比较 {n} 帧", case.name);
+                compared += n;
             }
         }
         assert!(compared > 0, "fresh_scan 必须比较到非零帧（防空转）");
@@ -88640,17 +88643,44 @@ GMEXECUTE f
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
         // 一条 TickRecord 承载 oracle 的四个发帧点（出现/转向 ×2、受击、消失）。
-        let recipients =
-            crate::chat::hear_targets(&world, npc_id, crate::chat::send_ref_msg_range());
-        let rec = mir2_world_bevy::TickRecord {
-            npc_turns: vec![(npc_id, 4), (npc_id, 6)],
-            npc_hits: vec![npc_id],
-            merchant_disappears: vec![(npc_id, recipients)],
-            ..Default::default()
-        };
-        drain_npc_merchant_turns(&rec, &world, &displays, &online, &gates);
-        drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates);
-        drain_merchant_disappears(&rec, &online, &gates);
+        // **卡 `openmir2-visiblehumanlist-cache`（T-287）**：`fresh_scan` 例模拟 oracle 的
+        // 「距上次 ≥500ms」⇒ 每次发帧前把 sim 时钟推进 500；`cache_window` 例保持同一时钟
+        // （同一窗口内连发 ⇒ 命中 500ms 缓存）。四类发帧点分别排水（保持 golden 的帧序）。
+        let fresh = case.name == "fresh_scan";
+        crate::ref_msg_cache::reset(&world);
+        for step in 0..4 {
+            if fresh {
+                world.clock_ms += crate::ref_msg_cache::REF_MSG_CACHE_TTL_MS;
+            }
+            let rec = match step {
+                0 => mir2_world_bevy::TickRecord {
+                    npc_turns: vec![(npc_id, 4)],
+                    ..Default::default()
+                },
+                1 => mir2_world_bevy::TickRecord {
+                    npc_turns: vec![(npc_id, 6)],
+                    ..Default::default()
+                },
+                2 => mir2_world_bevy::TickRecord {
+                    npc_hits: vec![npc_id],
+                    ..Default::default()
+                },
+                _ => {
+                    let recipients = crate::chat::hear_targets(
+                        &world,
+                        npc_id,
+                        crate::chat::send_ref_msg_range(),
+                    );
+                    mir2_world_bevy::TickRecord {
+                        merchant_disappears: vec![(npc_id, recipients)],
+                        ..Default::default()
+                    }
+                }
+            };
+            drain_npc_merchant_turns(&rec, &world, &displays, &online, &gates);
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates);
+            drain_merchant_disappears(&rec, &world, &online, &gates);
+        }
 
         let mut per_socket: HashMap<i32, Vec<Vec<u8>>> = HashMap::new();
         while let Ok(msg) = rx.try_recv() {

@@ -1,4 +1,4 @@
-# openmir2-visiblehumanlist-cache（产品缺口卡：`SendRefMsg` 的 500ms 缓存 + `<11` 二次过滤）
+# openmir2-visiblehumanlist-cache（产品缺口卡：`SendRefMsg` 的 500ms 缓存 + `<11` 二次过滤；2026-11-20 已实现）
 
 > 卡：`openmir2-visiblehumanlist-cache`（tier=L；由 NP-11 多观察者 AOI 对拍暴露）。
 > 来源：`openmir2-npc-multiobserve-golden` 的 `cache_window` 用例——oracle 在 500ms 窗口内
@@ -55,6 +55,22 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
 
 ## 5. 登记
 
-- 偏差号：`T-287`（`mir2-rs/tests/parity/whitelist.md`）；
-- NP-11 的 `verified` 覆盖声明**已排除**该子面（`notes` 写明"cache_window 未覆盖"）；
-- 移除条件：本卡实现并窗口验证后，把 T-287 标为已消解、NP-11 覆盖声明补回该子面。
+- 偏差号：`T-287`（`mir2-rs/tests/parity/whitelist.md`）——**2026-11-20 已消解**（见 §6）；
+- NP-11 的 `verified` 覆盖声明已把该子面补回（`notes` 写明两例双绿）。
+
+## 6. 实现记录（2026-11-20）
+
+- 落点：`mir2-rs/crates/world-bevy/src/world.rs` 的 `SimState.ref_msg_cache`（`Mutex<HashMap<actor_id, RefMsgCacheEntry>>`，
+  按**世界**持有，避免线程级全局态在测试/多世界间串味）+ `World::ref_msg_targets_from_scan` /
+  `World::reset_ref_msg_cache`；常量 `REF_MSG_CACHE_TTL_MS=500`、`REF_MSG_CACHED_RANGE=11`。
+- 宿主收口：`mir2-rs/bins/game-svr/src/ref_msg_cache.rs`（`targets` / `targets_from_scan` / `reset`）；
+  唯一调用点 `broadcast_ref_msg_opt`（**覆盖全部 `SendRefMsg` 路径**的 39 个调用点）与
+  `drain_merchant_disappears`（世界侧收件人快照当扫描面，同走缓存）。
+- 判定：`np11_aoi_matches_oracle_golden` 的 `cache_window` 由**必红绊线**改**必绿**；`fresh_scan` 保持绿——
+  两条同时成立（rig 在 `fresh_scan` 例每次发帧前把 sim 时钟推进 500，模拟 oracle 的 ≥500ms 重扫）。
+- 牙（§16：快照 `E:/UserTemp/vhlc-snap/` → 变异 → `cp` 还原核 sha → 复跑基线）：
+  ① 删 `<11` 二次过滤 ⇒ `cache_window` 红（`edge：帧数 金标准=2 实测=6`）；
+  ② 缓存永不过期（去掉 TTL 判据）⇒ `fresh_scan` 红（`edge：帧数 金标准=6 实测=2`）。
+- 自带单测：`ref_msg_cache_first_scan_then_strict_11_on_reuse`（首扫 ±12 闭区间含 +12；同窗口第二次只剩 <11）、
+  `ref_msg_cache_expires_after_500ms`（`>=500` 重扫恢复 +12 收件人）。
+- 覆盖声明同步：NP-11 的 `notes`/调查表从"cache_window 未覆盖（T-287）"改为"已覆盖"。

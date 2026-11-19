@@ -93,5 +93,6 @@
 
 - **覆盖**：`fresh_scan` 子面 —— 5 类观察者（self/near/edge/out/other_map）× 三帧面
   （`SM_TURN(10)`/`SM_FEATURECHANGED(41)`/`SM_HIT(14)`/`SM_DISAPPEAR(30)`）。
-- **未覆盖**：`cache_window`（500ms `VisibleHumanList` 缓存 + `<11` 二次过滤）——偏差 `T-287`，
-  缺口卡 `openmir2-visiblehumanlist-cache`。
+- **已覆盖（2026-11-20 补齐）**：`cache_window`（500ms `VisibleHumanList` 缓存 + `<11` 二次过滤）——
+  T-287 已由卡 `openmir2-visiblehumanlist-cache` 实现（`World::ref_msg_targets_from_scan`），
+  本用例由必红绊线改为必绿；两例（`fresh_scan` / `cache_window`）同时绿。
