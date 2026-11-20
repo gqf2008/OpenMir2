@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "f5a7999c3b6cbb91801a6944393c98557a1dfc57",
+    "head": "4a2cbc6cf2ea151819ec1c87b6e1d5e494ca5193",
     "time": "2026-11-20T13:03:01+08:00",
-    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。"
+    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。；M-IT09101113 = 换图簇升格（IT-09/10/11/13，物品 verified 17/19，2026-11-20）。"
   },
   "status_enum": [
     "verified",
@@ -291,7 +291,7 @@
         "line": 2233,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "eat_move::tests::it09_town_scroll_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
@@ -306,7 +306,9 @@
       },
       "cost": "S-M",
       "deviation": null,
-      "notes": "宿主拦截（eat_move::maybe_eat_move；零改 useitem.rs）：EatUseItems(1)→FIRE+BaseObjectMove(HomeMap,0,0)（PlayObject.Base.cs:2231-2236/2312-2327）。对拍：新探针 move-eat-probe（真 Envir/MapMgr 替身/ActorMgr + 固定种子 RNG 账本）产 move_eat_vectors.json；用例逐字段含尾比 635→800→622→633→634→801、终态 MapName/X/Y、ItemList/Weight、Rng 逐次。HomeMap 快照（SessionGround.home）由登录 final 记录值 + 3s GetStartPoint 同拍同源维护。仍 implemented_unverified：共用换图路径缺 766(SM_AREASTATE)/54(SM_MAPDESCRIPTION)，且 [名|文件] 覆盖时 SM_CHANGEMAP 尾应为文件主干（详见卡 §9.12 与 docs/issues/openmir2-map-change-cluster-gaps.md）。"
+      "notes": "宿主拦截（eat_move::maybe_eat_move；零改 useitem.rs）：EatUseItems(1)→FIRE+BaseObjectMove(HomeMap,0,0)（PlayObject.Base.cs:2231-2236/2312-2327）。对拍：新探针 move-eat-probe（真 Envir/MapMgr 替身/ActorMgr + 固定种子 RNG 账本）产 move_eat_vectors.json；用例逐字段含尾比 635→800→622→633→634→801、终态 MapName/X/Y、ItemList/Weight、Rng 逐次。HomeMap 快照（SessionGround.home）由登录 final 记录值 + 3s GetStartPoint 同拍同源维护。仍 implemented_unverified：共用换图路径缺 766(SM_AREASTATE)/54(SM_MAPDESCRIPTION)，且 [名|文件] 覆盖时 SM_CHANGEMAP 尾应为文件主干（详见卡 §9.12 与 docs/issues/openmir2-map-change-cluster-gaps.md）。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-10",
@@ -316,7 +318,7 @@
         "line": 2238,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "eat_move::tests::it10_random_scroll_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
@@ -332,7 +334,9 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape2 分支，与 IT-09 同一钩子）：未置位 ⇒ 吃 + 本图随机点；boNORANDOMMOVE 置位 ⇒ 只 636、不消耗/不移动/0 抽（golden rng_draw_count=0，记录器自证）。对拍：move_eat_vectors.json 两例 + 共用 run_move_parity（帧含尾/终态/背包/Weight/Rng/剔除集等式）；牙 M6（判读改反，两支分别红）/M7（目标图换 HomeMap）。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。"
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape2 分支，与 IT-09 同一钩子）：未置位 ⇒ 吃 + 本图随机点；boNORANDOMMOVE 置位 ⇒ 只 636、不消耗/不移动/0 抽（golden rng_draw_count=0，记录器自证）。对拍：move_eat_vectors.json 两例 + 共用 run_move_parity（帧含尾/终态/背包/Weight/Rng/剔除集等式）；牙 M6（判读改反，两支分别红）/M7（目标图换 HomeMap）。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-11",
@@ -342,7 +346,7 @@
         "line": 2246,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "eat_move::tests::it11_dungeon_escape_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
@@ -364,7 +368,9 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape3 分支）：吃时按当前 PkPoint/100 判 <2 ⇒ HomeMap 精确点、>=2 ⇒ Config.RedHome* 精确点；BaseObjectMove 的坐标门是 &&（缺一维即 MapRandomMove）。五例覆盖 home 精确/red 精确/red 另一组值/只缺一维/双零；牙 M8 判反（两支各红）、M9 互换（红名支落 home(5,6)）、M10 坐标门恒真、M11 &&→||。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。"
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape3 分支）：吃时按当前 PkPoint/100 判 <2 ⇒ HomeMap 精确点、>=2 ⇒ Config.RedHome* 精确点；BaseObjectMove 的坐标门是 &&（缺一维即 MapRandomMove）。五例覆盖 home 精确/red 精确/red 另一组值/只缺一维/双零；牙 M8 判反（两支各红）、M9 互换（红名支落 home(5,6)）、M10 坐标门恒真、M11 &&→||。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-12",
@@ -413,7 +419,7 @@
         "line": 2264,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "eat_move::tests::it13_guild_return_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
@@ -435,8 +441,9 @@
       },
       "cost": "M-L",
       "deviation": null,
-      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape5 臂，零改 useitem.rs）：五支按 oracle `PlayObject.Base.cs:2264-2286`——`MyGuild==null` ⇒ 不吃（636）；战区 ⇒ 红字「此处无法使用」不吃；非战区无城主会籍 ⇒ 红字「无效」但吃（635，位置不变）；有效城堡 ⇒ `BaseObjectMove(HomeMap, HomeX-4+Rand9, HomeY-4+Rand9)`（先 X 后 Y，2 抽），任一坐标为 0 ⇒ `MapRandomMove`（+2 抽）。Shape5 **不发 `RM_SPACEMOVE_FIRE`**（oracle case5 只调 BaseObjectMove）。**部署不可达（§18.1，scope=castle_move_branches_synthetic_unreachable）**：`Castle.MasterGuild` 在部署态恒 null （`UserCastle.LoadConfig` 用 `GuildMgr.FindGuild(OwnGuild)`，早于行会装载）⇒ 位移两支证据为 synthetic 构造，非生产路径；生产只会走「不吃」或「无效但吃」。探针 `guild-probe`（C# 半批 `card/items-it13` ®`39cc28577`）+ 五支 §35 负向自检。共用换图路径缺口（766/54 与 `[名|文件]`）见 docs/issues/openmir2-map-change-cluster-gaps.md，不在本卡重抄。",
-      "scope": "castle_move_branches_synthetic_unreachable"
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape5 臂，零改 useitem.rs）：五支按 oracle `PlayObject.Base.cs:2264-2286`——`MyGuild==null` ⇒ 不吃（636）；战区 ⇒ 红字「此处无法使用」不吃；非战区无城主会籍 ⇒ 红字「无效」但吃（635，位置不变）；有效城堡 ⇒ `BaseObjectMove(HomeMap, HomeX-4+Rand9, HomeY-4+Rand9)`（先 X 后 Y，2 抽），任一坐标为 0 ⇒ `MapRandomMove`（+2 抽）。Shape5 **不发 `RM_SPACEMOVE_FIRE`**（oracle case5 只调 BaseObjectMove）。**部署不可达（§18.1，scope=castle_move_branches_synthetic_unreachable）**：`Castle.MasterGuild` 在部署态恒 null （`UserCastle.LoadConfig` 用 `GuildMgr.FindGuild(OwnGuild)`，早于行会装载）⇒ 位移两支证据为 synthetic 构造，非生产路径；生产只会走「不吃」或「无效但吃」。探针 `guild-probe`（C# 半批 `card/items-it13` ®`39cc28577`）+ 五支 §35 负向自检。共用换图路径缺口（766/54 与 `[名|文件]`）见 docs/issues/openmir2-map-change-cluster-gaps.md，不在本卡重抄。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0；另 castle_move_branches_synthetic_unreachable：Shape5 位移两支（有效城堡 2 抽 / 零坐标 MapRandomMove）为 synthetic 构造（部署态 Castle.MasterGuild 恒 null ⇒ 生产不可达，只走『不吃』或『无效但吃』），不作生产路径已验证",
+      "basis": "semantic"
     },
     {
       "id": "IT-14",
