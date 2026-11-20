@@ -515,5 +515,6 @@ pub use world::{
     HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
     SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
     WeaponUpgradeOutcome, World, YedoEvent, YedoRuntime, TICK_INTERVAL_MS,
+    AttackSkillInput, HitModeEvent, SkillTrainEvent,
 };
 pub use world::{RefMsgCacheEntry, REF_MSG_CACHED_RANGE, REF_MSG_CACHE_TTL_MS};

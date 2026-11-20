@@ -30,7 +30,7 @@ use crate::buff::{
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
 };
 use crate::combat::{
-    attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
+    attack_dir_grouped_poison_ws_mode, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
 use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
@@ -204,6 +204,58 @@ pub struct YedoEvent {
     pub count: u8,
     /// 结算后的 `AttackSkillPointCount`。
     pub point_count: u8,
+}
+
+/// **攻击批 B（段 1）**：注入给世界的「技能训练 + 战斗态」运行态。
+///
+/// oracle 里这些都在 `PlayObject` 上（`MagicArr` + `Abil.Level` + `PowerHit`/`TwinHitSkill` +
+/// `HitPlus`/`HitDouble`）。本仓的写点分散：`MagicState.list`（权威）与 `skill_ability::SkillPassives`
+/// （`HitPlus` 等）。**同步时机** = 登录/学技能/`recalc_session_ability`（不是每条攻击），
+/// 世界在两次同步之间是这些值的**权威副本**（训练会就地修改它并回传事件）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AttackSkillInput {
+    /// `Abil.Level`（训练门的右操作数）。
+    pub abil_level: u8,
+    /// `PlayObject.FastTrain`。
+    pub fast_train: bool,
+    /// `MagicArr` 的有效条目（含残影），按 `MagicArr` 下标升序。
+    pub skills: Vec<crate::magic::SkillTrainState>,
+    /// `PlayObject.PowerHit`。
+    pub power_hit: bool,
+    /// `PlayObject.TwinHitSkill`。
+    pub twin_hit_skill: bool,
+    /// `PlayObject.HitPlus`（上次 `RecalcHitSpeed` 的存量）。
+    pub hit_plus: u8,
+    /// `PlayObject.HitDouble`。
+    pub hit_double: u8,
+}
+
+/// **攻击批 B（段 1）**：一次训练（`TrainSkill`+`CheckMagicLevelUp`）的结果，按发生序回传宿主。
+///
+/// 宿主据它更新 `MagicState.list`（权威）、重填 `magic.arr`（派生），并按 `levelup_msg`
+/// 发 `SM_MAGIC_LVEXP(640)`（段 2 接帧与延时）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkillTrainEvent {
+    pub actor_id: i32,
+    pub magic_id: u16,
+    /// 结算后的 `UserMagic.Level`（640 帧的 `Param`）。
+    pub level: u8,
+    /// 结算后的 `UserMagic.TranPoint`（640 帧的 `Tag`，Lo/Hi 两半）。
+    pub tran_point: i32,
+    pub level_up: bool,
+    /// oracle 是否发 640（升级走 `UpdateDelayMsg` 800ms，未升级走 `SendSelfDelayMsg` 3000ms）。
+    pub levelup_msg: bool,
+    pub see_heal_gauge: bool,
+}
+
+/// **攻击批 B（段 1）**：一次命中里 `GetAttackPowerHit` 的结算结果（`canHit` 与标志消费）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitModeEvent {
+    pub actor_id: i32,
+    pub mode: i16,
+    pub can_hit: bool,
+    pub power_hit_consumed: bool,
+    pub twin_hit_consumed: bool,
 }
 
 /// `EfftypeConst.EFFECTIVE_HIGHLEVEL`（`src/M2Server/Actor/ActorConst.cs:43`）——
@@ -1313,6 +1365,15 @@ pub struct SimState {
     /// 宿主每次 `tick_head` / 空挥之后排空。**不放进 `TickRecord`**：宿主与空挥支共用同一个
     /// 排水口，避免两套通道。
     pub(crate) pending_yedo: Vec<YedoEvent>,
+    /// **攻击批 B（段 1）**：每条攻击命令的 `wHitMode`（按 actor FIFO，与命令同序弹出）。
+    /// 宿主在 `attack_cmd` 前 [`World::push_hit_mode`]；空挥支不入队。
+    pub(crate) pending_hit_modes: std::collections::HashMap<i32, VecDeque<i16>>,
+    /// **攻击批 B（段 1）**：技能训练 + 战斗态的运行副本（宿主在同步点注入，见 [`AttackSkillInput`]）。
+    pub attack_skill_train: HashMap<i32, AttackSkillInput>,
+    /// 训练事件（[`SkillTrainEvent`]），宿主 [`World::drain_skill_train`]。
+    pub(crate) pending_skill_train: Vec<SkillTrainEvent>,
+    /// `GetAttackPowerHit` 结算事件（[`HitModeEvent`]），宿主 [`World::drain_hit_mode`]。
+    pub(crate) pending_hit_mode: Vec<HitModeEvent>,
     /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
     ///
     /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
@@ -1747,6 +1808,10 @@ impl SimState {
             pending_weapon_wears: Vec::new(),
             attack_skill: HashMap::new(),
             pending_yedo: Vec::new(),
+            pending_hit_modes: std::collections::HashMap::new(),
+            attack_skill_train: HashMap::new(),
+            pending_skill_train: Vec::new(),
+            pending_hit_mode: Vec::new(),
             health_fill_time: 300,
             spell_fill_time: 800,
             make_ghost_time: 3 * 60 * 1000,
@@ -8070,6 +8135,32 @@ impl World {
         std::mem::take(&mut self.sim.pending_yedo)
     }
 
+    /// **攻击批 B（段 1）**：同步「技能训练 + 战斗态」运行态（登录/学技能/重算后调，不是每击）。
+    pub fn set_attack_skill_train(&mut self, actor_id: i32, input: AttackSkillInput) {
+        self.sim.attack_skill_train.insert(actor_id, input);
+    }
+
+    /// **攻击批 B（段 1）**：登记一条攻击命令的 `wHitMode`（与 `attack_cmd` 同序）。
+    pub fn push_hit_mode(&mut self, actor_id: i32, mode: i16) {
+        self.sim
+            .pending_hit_modes
+            .entry(actor_id)
+            .or_default()
+            .push_back(mode);
+    }
+
+    /// **攻击批 B（段 1）**：排空训练事件（按发生序）。
+    #[must_use]
+    pub fn drain_skill_train(&mut self) -> Vec<SkillTrainEvent> {
+        std::mem::take(&mut self.sim.pending_skill_train)
+    }
+
+    /// **攻击批 B（段 1）**：排空 `GetAttackPowerHit` 事件（按发生序）。
+    #[must_use]
+    pub fn drain_hit_mode(&mut self) -> Vec<HitModeEvent> {
+        std::mem::take(&mut self.sim.pending_hit_mode)
+    }
+
     /// 脚本化击杀（入队）。
     pub fn kill(&mut self, target_id: i32) {
         self.enqueue(Command::Kill { target_id });
@@ -10334,6 +10425,28 @@ impl World {
         // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
         // [`World::attack_swing`]，**不**结算）。它不抽 RNG ⇒ 取数账本不变；但会改
         // `UseItems[Weapon]`（碎 / 强化）⇒ 攻击结算后必须写回实体（oracle 改的是同一对象）。
+        // **攻击批 B（段 1）**：本击的 `wHitMode`（宿主在 `attack_cmd` 前 push）与战斗态快照。
+        // `GetAttackPowerHit` 在 oracle 是 `AttackDir` 的第二句（`PlayObject.Attack.cs:73`），
+        // 早于 `_Attack`；这里把模式与标志一起带进结算函数。
+        let hit_mode = sim
+            .pending_hit_modes
+            .get_mut(&actor_id)
+            .and_then(std::collections::VecDeque::pop_front)
+            .unwrap_or(0);
+        let skill_input = sim.attack_skill_train.get(&actor_id).cloned();
+        let effect = skill_input.as_ref().map_or(
+            crate::combat::HitModeEffect {
+                mode: hit_mode,
+                ..Default::default()
+            },
+            |i| crate::combat::HitModeEffect {
+                mode: hit_mode,
+                power_hit: i.power_hit,
+                twin_hit_skill: i.twin_hit_skill,
+                hit_plus: i.hit_plus,
+                hit_double: i.hit_double,
+            },
+        );
         let weapon_outcome: Option<WeaponUpgradeOutcome> =
             if attacker.race == crate::entity::ACTOR_RACE_PLAY {
                 Self::check_weapon_upgrade_status_impl(
@@ -10397,7 +10510,7 @@ impl World {
             .get(&actor_id)
             .copied()
             .unwrap_or(0);
-        let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison_ws(
+        let (outcome, poisoned, weapon_wear, mode_result) = attack_dir_grouped_poison_ws_mode(
             Self::attack_rng_of(sim),
             &mut attacker,
             &mut target,
@@ -10406,7 +10519,24 @@ impl World {
             &attacker_group_members,
             poison,
             weapon_strong,
+            effect,
         );
+        // **攻击批 B（段 1）**：`GetAttackPowerHit` 的消费回传（宿主据此清零会话 `PowerHit`）。
+        if let Some(input) = sim.attack_skill_train.get_mut(&actor_id) {
+            if mode_result.power_hit_consumed {
+                input.power_hit = false;
+            }
+            if mode_result.twin_hit_consumed {
+                input.twin_hit_skill = false;
+            }
+        }
+        sim.pending_hit_mode.push(HitModeEvent {
+            actor_id,
+            mode: hit_mode,
+            can_hit: mode_result.can_hit,
+            power_hit_consumed: mode_result.power_hit_consumed,
+            twin_hit_consumed: mode_result.twin_hit_consumed,
+        });
         let now = sim.clock_ms;
         if let Some(mut e) = access.get_mut(target_id) {
             e.vitals.hp = target.hp;
@@ -10494,10 +10624,43 @@ impl World {
                 frames: wear.frames,
             });
         }
+        // **攻击批 B（段 1）**：`AttackSuccess` 末尾的 `TrainCurrentSkill(wHitMode)`
+        // （`PlayObject.Attack.cs:337`）——在 A 的攻杀尾巴**之前**跑（oracle：AttackSuccess 在
+        // `AttackDir` 内、尾巴在 `ClientHitXY` 末尾）⇒ 尾巴读到的 `Level` 是本击训练后的新值。
+        if let Some(input) = sim.attack_skill_train.get_mut(&actor_id) {
+            let events = crate::magic::train_current_skill(
+                hit_mode,
+                input.abil_level,
+                input.fast_train,
+                &mut sim.rng,
+                &mut input.skills,
+            );
+            for (magic_id, o) in events {
+                if let Some(st) = input.skills.iter().find(|s| s.magic_id == magic_id) {
+                    sim.pending_skill_train.push(SkillTrainEvent {
+                        actor_id,
+                        magic_id,
+                        level: st.level,
+                        tran_point: st.tran_point,
+                        level_up: o.level_up,
+                        levelup_msg: o.levelup_msg,
+                        see_heal_gauge: o.see_heal_gauge,
+                    });
+                }
+            }
+        }
         // **攻击批 A**：`AttackDir` 返回之后、`ClientHitXY` 收尾之前的攻杀计数块
         // （`PlayObject.Attack.cs:942-956`）。读点必须是本击**磨损后**的 `UseItems[Weapon].Dura`
         // ⇒ 放在上面两条 `use_items` 回写之后（`attacker` 副本此刻已是结算后的状态）。
         // 同一 tick 内连击：`attack_skill` 里的副本已按上一击写回，第二击读到的是第一击的结果。
+        // 训练后同步攻杀运行时里的 `Level`（oracle 同一对象：`MagicArr[SKILL_YEDO].Level`）。
+        if let Some(input) = sim.attack_skill_train.get(&actor_id) {
+            if let Some(st) = input.skills.iter().find(|s| s.magic_id == 7) {
+                if let Some(rt) = sim.attack_skill.get_mut(&actor_id) {
+                    rt.level = st.level;
+                }
+            }
+        }
         if let Some(ev) = Self::yedo_attack_tail_impl(
             &mut sim.attack_skill,
             &mut sim.rng,

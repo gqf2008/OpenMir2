@@ -540,6 +540,106 @@ pub fn check_skill_proficiency(
     out
 }
 
+/// **攻击批 B（段 1）**：`PlayObject.TrainCurrentSkill(int wHitMode)`
+/// （`src/M2Server/Player/PlayObject.Attack.cs:353-560`）的逐行等价物。
+///
+/// 它是 `AttackSuccess` 的**最后一句**（`PlayObject.Attack.cs:337`）⇒ **每次命中都跑**，与
+/// `CheckSkillProficiency`（`:200-213`）是同一套 `TrainSkill`/`CheckMagicLevelUp` 的**第二个入口**，
+/// 但**两条口径不同，不得统一**：
+/// 1. **门**：`Level < Magic.TrainLv && Magic.TrainLevel[Level] <= Abil.Level`
+///    （`CheckSkillProficiency` 是 `Level < 3`）；
+/// 2. **抽数**：只有 基本剑法（`:362`）/ 精神力（`:376`）/ 攻杀（模式 3，`:384`）三支抽
+///    `Random(3)+1`；其余模式支（4/5/7/8/9/10/12/13/20/21/22/23/24/61）一律常量 `1`。
+///
+/// 执行顺序（= RNG 顺序）：基本剑法 → 精神力 → 按 `wHitMode` 的那**一个** case。
+/// 每个过门的技能产出一条事件（`SkillTrainEvent` 的载荷），供宿主落状态与 `RM_MAGIC_LVEXP`。
+#[must_use]
+pub fn train_current_skill(
+    mode: i16,
+    abil_level: u8,
+    fast_train: bool,
+    rng: &mut impl RandomSource,
+    skills: &mut [SkillTrainState],
+) -> Vec<(u16, SkillProficiencyOutcome)> {
+    let mut out = Vec::new();
+    // ① 基本剑法（`PlayObject.Attack.cs:362-375`，无条件）
+    if let Some(st) = skills.iter_mut().find(|s| s.magic_id == 3) {
+        if gate_passes(st, abil_level) {
+            let pts = crate::magic_effect::spell_train_points(rng);
+            out.push((3, train_one(fast_train, pts, st)));
+        }
+    }
+    // ② 精神力战法（`:376-389`，无条件）
+    if let Some(st) = skills.iter_mut().find(|s| s.magic_id == 4) {
+        if gate_passes(st, abil_level) {
+            let pts = crate::magic_effect::spell_train_points(rng);
+            out.push((4, train_one(fast_train, pts, st)));
+        }
+    }
+    // ③ 按命中模式的那一个 case（`:384-560`）。攻杀（模式 3）抽 `Random(3)+1`，其余常量 1。
+    if let Some(&(_, id)) = TRAIN_MODE_IDS.iter().find(|(m, _)| *m == mode) {
+        if let Some(st) = skills.iter_mut().find(|s| s.magic_id == id) {
+            if gate_passes(st, abil_level) {
+                let pts = if mode == 3 {
+                    crate::magic_effect::spell_train_points(rng)
+                } else {
+                    1
+                };
+                out.push((id, train_one(fast_train, pts, st)));
+            }
+        }
+    }
+    out
+}
+
+/// `TrainCurrentSkill` 的门：`Level < Magic.TrainLv && Magic.TrainLevel[Level] <= Abil.Level`
+/// （`PlayObject.Attack.cs:362` 起的每条 `if`）。
+///
+/// `TrainLevel[Level]` 越界（`Level >= 4`）在 oracle 会抛 `IndexOutOfRange`；本仓按**不过门**处理
+/// （等级不可能 ≥ `TrainLv`=3 再往上升，`CheckMagicLevelUp` 的 `nLevel` 计算同样以 4 为界）。
+fn gate_passes(st: &SkillTrainState, abil_level: u8) -> bool {
+    st.level < st.train_lv
+        && st
+            .train_level
+            .get(usize::from(st.level))
+            .is_some_and(|&need| need <= abil_level)
+}
+
+/// 过门后的一次训练：`TrainSkill` → `CheckMagicLevelUp`（`PlayObject.Attack.cs` 各 case 内两行）。
+fn train_one(fast_train: bool, points: i32, st: &mut SkillTrainState) -> SkillProficiencyOutcome {
+    st.tran_point += train_skill(fast_train, points);
+    let up = check_magic_level_up(st);
+    SkillProficiencyOutcome {
+        trained: true,
+        level_up: up.result,
+        levelup_msg: up.levelup_msg || !up.result,
+        see_heal_gauge: up.see_heal_gauge,
+    }
+}
+
+/// `TrainCurrentSkill` 的 `switch (wHitMode)` 表（`PlayObject.Attack.cs:384-560`）：
+/// `(wHitMode, MagicArr 下标 = MagicId)`。
+///
+/// **表里是 oracle 的原样顺序与 id**，包括 `case 9 → 43`、`case 13 → 56`、`case 12 → 66` 这几处
+/// 与 `AttackSuccess` 的模式表**不一致**的写法（oracle 本身如此，照抄）。
+pub const TRAIN_MODE_IDS: &[(i16, u16)] = &[
+    (3, 7),    // 攻杀（`SKILL_YEDO`）
+    (4, 12),   // 刺杀（`SKILL_ERGUM`）
+    (5, 25),   // 半月（`SKILL_BANWOL`）
+    (7, 26),   // 烈火（`SKILL_FIRESWORD`）
+    (9, 43),
+    (13, 56),
+    (8, 40),
+    (10, 42),
+    (12, 66),
+    (61, 61),
+    (20, 101),
+    (21, 102),
+    (22, 103),
+    (23, 114),
+    (24, 113),
+];
+
 /// `MagicManager.DoSpell` 共享尾（`src/M2Server/Magic/MagicManager.cs:644-670`）的返回/副作用。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DoSpellTailOutcome {

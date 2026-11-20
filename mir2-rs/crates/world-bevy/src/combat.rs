@@ -939,6 +939,68 @@ pub fn struck_damage_multiplier(
 }
 
 /// `_Attack` 的一次结算结果（供对拍与断言）。
+/// **攻击批 B（段 1）**：`PlayObject.GetAttackPowerHit`（`src/M2Server/Player/PlayObject.Attack.cs:579-627`）
+/// 的运行态输入。
+///
+/// 一次攻击只挂一个模式；标志来自会话（`PowerHit`/`TwinHitSkill` 由本仓宿主注入，见
+/// `World::set_attack_skill_train`）。`hit_plus` 是**上次 Recalc 的存量**（`RecalcHitSpeed`
+/// 写），本函数**不**重算它。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitModeEffect {
+    pub mode: i16,
+    pub power_hit: bool,
+    pub twin_hit_skill: bool,
+    pub hit_plus: u8,
+    pub hit_double: u8,
+}
+
+/// [`apply_get_attack_power_hit`] 的副作用：哪个标志被消费（宿主据此清零会话态）、是否 `canHit`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitModeResult {
+    /// oracle 的 `canHit`（模式 3/7/9 命中消费时为真；`AttackSuccess` 用它决定攻杀熟练度抽）。
+    pub can_hit: bool,
+    pub power_hit_consumed: bool,
+    pub twin_hit_consumed: bool,
+}
+
+/// `PlayObject.GetAttackPowerHit(short wHitMode, int nPower, IActor targetObject, ref bool canHit)`
+/// 的**目标非空支**（`src/M2Server/Player/PlayObject.Attack.cs:584-601`）。
+///
+/// - 模式 3 + `PowerHit`：`PowerHit=false; nPower += HitPlus; canHit=true`（`:586-590`）；
+/// - 模式 9 + `TwinHitSkill`：`TwinHitSkill=false; nPower += Round(nPower/100*HitDouble*10); canHit=true`
+///   （`:597-601`）。
+///
+/// 模式 7（烈火）属段 4，此处**不**处理（保持与 oracle 未接时的同值语义）。
+///
+/// **目标为空支**（`attack_swing`）在 oracle 里只清标志、不加成（`:605-622`）；本仓空挥路径
+/// 不消费战斗态（见 `World::attack_swing` 的登记）。
+#[must_use]
+pub fn apply_get_attack_power_hit(
+    effect: HitModeEffect,
+    n_power: i32,
+    has_target: bool,
+) -> (i32, HitModeResult) {
+    let mut out = HitModeResult::default();
+    if !has_target {
+        return (n_power, out);
+    }
+    let mut power = n_power;
+    match effect.mode {
+        3 if effect.power_hit => {
+            out.power_hit_consumed = true;
+            power += i32::from(effect.hit_plus);
+            out.can_hit = true;
+        }
+        9 if effect.twin_hit_skill => {
+            out.twin_hit_consumed = true;
+            power += hutil::round(f64::from(power) / 100.0 * f64::from(effect.hit_double) * 10.0);
+            out.can_hit = true;
+        }
+        _ => {}
+    }
+    (power, out)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttackOutcome {
     /// 攻击方原始攻击力（`GetBaseAttackPoewr` 的结果）
@@ -1008,6 +1070,32 @@ pub fn attack_with_grouped(
     power_mode: AttackPowerMode,
     attacker_group_members: &[i32],
 ) -> AttackOutcome {
+    attack_with_grouped_mode(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        power_mode,
+        attacker_group_members,
+        HitModeEffect::default(),
+    )
+    .0
+}
+
+/// [`attack_with_grouped`] 的**带战斗态**版本（攻击批 B）：在攻击力抽出之后、`_Attack` 之前
+/// 插 `GetAttackPowerHit`（oracle `PlayObject.Attack.cs:73` 的求值位置），并回传 `canHit`。
+#[allow(clippy::too_many_arguments)]
+pub fn attack_with_grouped_mode(
+    rng: &mut impl RandomSource,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    power_mode: AttackPowerMode,
+    attacker_group_members: &[i32],
+    effect: HitModeEffect,
+) -> (AttackOutcome, HitModeResult) {
     let power = match power_mode {
         AttackPowerMode::Base => get_base_attack_power(rng, attacker.dc),
         AttackPowerMode::Player {
@@ -1026,6 +1114,9 @@ pub fn attack_with_grouped(
     };
     let mut n_power = power;
     let mut hit = false;
+    // `GetAttackPowerHit`（`PlayObject.Attack.cs:73`，在 `_Attack` **之前**）：模式 3/9 的加成与消费。
+    let (boosted, mode_result) = apply_get_attack_power_hit(effect, n_power, true);
+    n_power = boosted;
 
     // `_Attack`（`BaseObject.Attack.cs:37`）调**虚函数** `IsProperTarget`：怪物 = 基版
     // `IsAttackTarget`（`BaseObject.Base.cs:470-473`），玩家 = `PlayObject` override
@@ -1050,14 +1141,17 @@ pub fn attack_with_grouped(
     };
     // 注意：`_Attack` 里**没有** `LastHiter` 赋值（C# 原文如此）。命中者的登记走
     // `RM_STRUCK` 消息路径，由调用方在攻击结算之后调用 `Entity::set_last_hiter`。
-    AttackOutcome {
-        power,
-        hit,
-        damage,
-        struck_power,
-        killed,
-        target_hp_after: target.hp,
-    }
+    (
+        AttackOutcome {
+            power,
+            hit,
+            damage,
+            struck_power,
+            killed,
+            target_hp_after: target.hp,
+        },
+        mode_result,
+    )
 }
 
 /// `StruckDamage` + `DamageHealth` 的伤害落体（`attack_with_grouped` 与 MB-3 的
@@ -1261,9 +1355,37 @@ pub fn attack_dir_grouped_poison_ws(
     poison: Option<AttackPoisonState>,
     weapon_strong: u16,
 ) -> (AttackOutcome, bool, Option<WeaponWearOutcome>) {
+    let (outcome, poisoned, wear, _mode) = attack_dir_grouped_poison_ws_mode(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        attacker_group_members,
+        poison,
+        weapon_strong,
+        HitModeEffect::default(),
+    );
+    (outcome, poisoned, wear)
+}
+
+/// [`attack_dir_grouped_poison_ws`] 的**带战斗态**版本（攻击批 B 段 1）：把 `GetAttackPowerHit`
+/// 的加成/消费透传给 [`attack_with_grouped_mode`]，并把 `canHit` 一并回传。
+#[allow(clippy::too_many_arguments)]
+pub fn attack_dir_grouped_poison_ws_mode(
+    rng: &mut impl RandomSource,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    attacker_group_members: &[i32],
+    poison: Option<AttackPoisonState>,
+    weapon_strong: u16,
+    effect: HitModeEffect,
+) -> (AttackOutcome, bool, Option<WeaponWearOutcome>, HitModeResult) {
     let (mut poisoned, mut weapon_wear) = (false, None);
     let mode = AttackPowerMode::for_attacker(attacker);
-    let outcome = attack_with_grouped(
+    let (outcome, mode_result) = attack_with_grouped_mode(
         rng,
         attacker,
         target,
@@ -1271,6 +1393,7 @@ pub fn attack_dir_grouped_poison_ws(
         config,
         mode,
         attacker_group_members,
+        effect,
     );
     if matches!(mode, AttackPowerMode::Player { .. }) {
         // `if (!targetObject.UnParalysis && Paralysis && (Random(targetObject.AntiPoison +
@@ -1288,7 +1411,7 @@ pub fn attack_dir_grouped_poison_ws(
         weapon_wear =
             attack_success_weapon_wear_with_strong(rng, &mut attacker.use_items, weapon_strong);
     }
-    (outcome, poisoned, weapon_wear)
+    (outcome, poisoned, weapon_wear, mode_result)
 }
 
 /// [`attack_dir_grouped_poison_ws`] 的**薄包装**：`WeaponStrong` 缺省 0（与建模前逐取数/逐字节等价）。
