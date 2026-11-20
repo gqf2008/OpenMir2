@@ -1209,7 +1209,11 @@ mod tests {
                 (e, o) => panic!("{name}: Rust outcome {o:?} 与夹具期望(赢级 {e:?}) 不符"),
             }
             for i in 0..6 {
-                assert_eq!(st.level[i], i32v(&la["level"][i]), "{name}: 后态 level[{i}]");
+                assert_eq!(
+                    st.level[i],
+                    i32v(&la["level"][i]),
+                    "{name}: 后态 level[{i}]"
+                );
             }
             assert_eq!(st.no_win, i32v(&la["no_win"]), "{name}: 后态 no_win");
             assert_eq!(st.count, i32v(&la["count"]), "{name}: 后态 count");
