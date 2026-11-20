@@ -69877,13 +69877,10 @@ SendRefMsgRange=15
                 .wabil
                 .hp = h;
         }
-        let hit_point =
-            i32::try_from(golden_fixture_opt(stem, label, "caster_hit_point").unwrap_or(5))
-                .unwrap();
-        let dc = i32::try_from(golden_fixture_opt(stem, label, "caster_dc").unwrap_or(0)).unwrap();
+        let hit_point = i32::from(golden_fixture_required(stem, label, "caster_hit_point"));
+        let dc = i32::from(golden_fixture_required(stem, label, "caster_dc"));
         let attack_mode =
-            u8::try_from(golden_fixture_opt(stem, label, "caster_attack_mode").unwrap_or(0))
-                .unwrap();
+            u8::try_from(golden_fixture_required(stem, label, "caster_attack_mode")).unwrap();
         let caster = rig.caster;
         {
             let e = rig.world.entities.get_mut(caster).unwrap();
@@ -71787,8 +71784,7 @@ SendRefMsgRange=15
         if let Some(v) = golden_fixture_opt("healing", label, "caster_hp") {
             if let Ok(v) = u16::try_from(v) {
                 if v > 0 {
-                    let cmax = golden_fixture_opt("healing", label, "caster_max_hp").unwrap_or(100);
-                    let cmax = u16::try_from(cmax).unwrap_or(100);
+                    let cmax = golden_fixture_required("healing", label, "caster_max_hp");
                     let ce = rig.world.entities.get_mut(caster).unwrap();
                     ce.vitals.hp = v;
                     ce.vitals.max_hp = cmax;
@@ -72093,8 +72089,21 @@ SendRefMsgRange=15
             .find(|m| m["ident"] == 638)
             .unwrap()
             .clone();
-        assert_eq!(fire["param"], 100);
-        assert_eq!(fire["tag"], 100);
+        // 尾帧坐标取自 golden 的 ident=638 帧（不再硬编码 100）
+        let gfire = golden_case("healing.json", "self")["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["ident"] == 638)
+            .unwrap()
+            .clone();
+        assert_eq!(fire["param"], gfire["param"]);
+        assert_eq!(fire["tag"], gfire["tag"]);
         b1_golden_drain_assert("healing.json", "self", 2);
     }
 
@@ -72802,22 +72811,16 @@ SendRefMsgRange=15
         // MaxHP 224 / MaxMP 81 / DC 0x0403（`PlayObject.cs:5254-5317` 公式）。
         let rust_abil = sm_ability_wabil(&c, "target");
         let gold_abil = sm_ability_wabil(&golden_case(&format!("{stem}.json"), label), "target");
-        assert_eq!(rust_abil.len(), 40, "[{stem}/{label}] WAbil 解出必须 40B");
+        assert_eq!(rust_abil.len(), 40, "[{stem}/{label}] WAbil 解出必须 40B（oracle WAbil 40B 布局不变式；RUST 侧长度唯此断言）");
         assert_eq!(
             gold_abil.len(),
             40,
             "[{stem}/{label}] 金标准 WAbil 解出必须 40B"
         );
         let fld = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
-        assert_eq!(rust_abil[0], 20, "[{stem}/{label}] Level 必须是夹具值 20");
         assert_eq!(
             rust_abil[0], gold_abil[0],
             "[{stem}/{label}] Level 与金标准不一致"
-        );
-        assert_eq!(
-            fld(&rust_abil, 16),
-            224,
-            "[{stem}/{label}] MaxHP 必须是等级派生值"
         );
         assert_eq!(
             fld(&rust_abil, 16),
@@ -72826,18 +72829,8 @@ SendRefMsgRange=15
         );
         assert_eq!(
             fld(&rust_abil, 18),
-            81,
-            "[{stem}/{label}] MaxMP 必须是等级派生值"
-        );
-        assert_eq!(
-            fld(&rust_abil, 18),
             fld(&gold_abil, 18),
             "[{stem}/{label}] MaxMP 与金标准不一致"
-        );
-        assert_eq!(
-            fld(&rust_abil, 6),
-            0x0403,
-            "[{stem}/{label}] DC 必须是等级派生值"
         );
         assert_eq!(
             fld(&rust_abil, 6),
