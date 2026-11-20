@@ -128,3 +128,27 @@
 | `drain_aoi_disappear` | 消失帧走槽/批量路径，ident 未在函数体内出现。 |
 | `drain_merchant_disappears` | 同上（帧由下游组帧函数给）。 |
 | `drain_login_tail` | 登录尾帧走槽。 |
+
+## 3e. T-290 编译后要改的四条用例：新期望序与依据（先写、后编译）
+
+帧源与低字节（oracle 侧入队点）：
+
+| 帧 | RM ident → 低字节 | oracle 入队点 |
+|---|---|---|
+| 53 `SM_HEALTHSPELLCHANGED` | `RM_HEALTHSPELLCHANGED` 10052 → **68** | `BaseObject.IncHealthSpell` 尾 `HealthSpellChanged()` |
+| 44 `SM_WINEXP` | `RM_WINEXP` 8075 → **139** | `GetExp` 的 `SendMsg(RM_WINEXP, …)` |
+| 45 `SM_LEVELUP` | `RM_LEVELUP` → **150** | `HasLevelUp` 的 `SendMsg(RM_LEVELUP)`；**45 由该消息处理器直发** |
+| 52 `SM_ABILITY` | `RM_ABILITY` 10051 → **67** | 同上（`RM_LEVELUP` 处理器内直发） |
+| 752 `SM_SUBABILITY` | `RM_SUBABILITY` 10302 → **62** | 同上（`RM_LEVELUP` 处理器内直发） |
+| 657 `SM_CHARSTATUSCHANGED` | `RM_CHARSTATUSCHANGED` 10139 → **155** | `RecalcAbilitys()` 内 `SendUpdateMsg` |
+
+⇒ 链内序：**68 → 139 →（150 出队后其处理器直发 67、62）→ 155**，即 `53 → 44 → 45 → 52 → 752 → 657`。
+
+| 用例 | 旧期望 | **新期望** | 依据 |
+|---|---|---|---|
+| `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` | `[53,44,45,52,752]` | `[53,44,45,52,752,657]` | 657(155) 在 53/44/45/52/752 之后 |
+| `p31_levelup_reuses_kill_exp_chain_order` | `[53,44,45,52,752]` | `[53,44,45,52,752,657]` | 同上 |
+| `c5_recovery_then_levelup_emit_two_frames` | `[53,53,44,45,52,752]` | `[53,53,44,45,52,752,657]` | 首条 53 来自 `drain_recovery`（链前，68<155）、次条来自升级段；657 仍在链末 |
+| `tick_frame_order_puts_stamina_after_kill_exp_chain` | `[…,752,53(stamina)]` | `[…,752,657,53(stamina)]` | **这条编码的是偏差 T-296（方向 B）**：`drain_stamina` 在链后、其 53(68) 应排在 657(155) 之前，而本宿主排在其后；断言处必须点名 T-296 |
+
+**"旧期望为什么错"**：旧期望只覆盖了"链内被建模的帧"，**657 当时根本没发**（被 `pickwire` 丢弃）——所以不是"旧序对、新序错"，而是"旧期望本身缺一条帧"。这一点必须写进每条更新后的注释（第三次改既有帧序期望，按 opc-19 口径）。
