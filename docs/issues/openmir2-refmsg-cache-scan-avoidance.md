@@ -45,4 +45,7 @@
   另有 `cache_first_targets_at_hit_does_not_scan`。
 - **三条边角用例**：`cache_first_missing_sender_fresh_returns_empty_without_tick`（①，含 tick 不变 + 不扫描）、
   `cache_first_empty_visible_forces_rescan`（②空快照必须重扫）、`cache_first_hidden_sender_early_exit`（③不扫描/无条目）。
-- **验收**：复跑全部 C2 站点用例（批1–7 + #19/#20，全量 `--lib` 覆盖）；本卡牙见交付。
+- **验收（2026-11-20 证据回填）**：复跑全部 C2 站点用例（批1–7 + #19/#20），`cargo test -p game-svr --lib`
+  结果 **2060 passed / 0 failed / 55 ignored**；本卡 5 条 `cache_first_*` 用例与边角三条用例全 `ok`；
+  首扫扫描增量 **1** / 命中增量 **0**（用例断言实测，非人工观察）；牙 m46 / m46b / m47b / m47c / m48 /
+  m49 / m49b 均红并可还原，`m47`（缺失 sender 改 `None`）判**无效牙**——变异体下仍绿 ⇒ 与现行为等价。
