@@ -35038,7 +35038,14 @@ mod tests {
             ],
             "自见线序：52(67) 先、657(155) 后，且 657 共 1 条（队列空 ⇒ `:2876` 头去重）"
         );
-        assert_eq!(self_series, vec![7], "自见 Series = 源自己 hit_speed");
+        // **`card/recalc-mirror-gap` P5 起**：`boNeedRecalc` 的 recalc 后已把
+        // `HitSpeed = AddAbil.HitSpeed` 镜像进实体 ⇒ 自见 657 读到的是**重算后**的 0；
+        // 旧期望 `[7]` 编码的是"实体未镜像 ⇒ 读到重算前旧值"的缺陷行为。
+        assert_eq!(
+            self_series,
+            vec![0],
+            "自见 Series = 重算后的 HitSpeed（0），不是重算前实体旧值 7"
+        );
         for (socket, speed) in [(902i32, 20u16), (903, 21), (904, 22)] {
             assert_eq!(
                 obs.get(&socket),
@@ -35051,10 +35058,10 @@ mod tests {
 
     /// **657 `Series` 的区分性用例**（**不代表线上存在实体/会话不一致**）：
     /// 实体 `hit_speed=99` 是"旧值哨兵"，会话重算后 `hit_speed=0` ⇒ 657 自见 `Series` 必须读
-    /// **重算后**的值 0。当前实现读实体（该路径 recalc 后未把 `sg` 镜像回实体）⇒ 实发 99。
-    /// 已知缺口：`openmir2-recalc-entity-mirror-gap`（`43` 的卡）；本用例以 `#[ignore]` 登记，
-    /// 缺口修好、去掉 ignore 即应转绿。
-    #[ignore = "recalc-entity-mirror-gap: 实体未镜像 hit_speed（recalc 后待 apply_entity 接线），自见读实体旧值；见 openmir2-recalc-entity-mirror-gap"]
+    /// **重算后**的值 0。
+    /// **已由 `card/recalc-mirror-gap` P5 转绿**（原先 `#[ignore]` 登记的缺口 =
+    /// `boNeedRecalc` recalc 后未镜像 `hit_speed`；P5 在 recalc 后补镜像 ⇒ 本用例去掉 ignore 后通过，
+    /// 删掉该镜像行它就会重新红在 99）。
     #[test]
     fn buff_657_needrecalc_series_reads_post_recalc_value() {
         let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
