@@ -1292,4 +1292,14 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
 | `mon_blocked_master` | 1 只 L1（Master 自指） | 0 | `Master == null` 门挡 |
 | `mon_partial` | L1 + L200 | `mon0` 1 条、`mon1` 0 | 部分命中（证明非同全选/全否） |
 
+**判据**：四支比的是**收件人集合**（哪只怪收到几条 `RM_MAKEHOLYSEIZEMODE`），不是"帧数相等"；
+另断言**同一只怪同种 RM 恰 1 条**（不重复投递；装置侧 `mon{i}` 捕获时校验）。
+
+**harness substitution（必须知道）**：离线进程装了**空 `EventManager`**（只维护列表）。`MagMakeHolyCurtain`
+在选完对象后会对 6 个格子 `AddEvent(HolyCurtainEvent)`，`SystemShare.EventMgr == null` 时那里 NRE。
+**对象选择本身不读 `EventMgr`**：选择循环只读 `GetMapBaseObjects` 的 Actor 与
+`Race/Level/Master` 三个字段并写目标 RM 队列，AddEvent 发生在选择之后、且事件对象只被存进列表
+（无 Operate、无回写）⇒ 空实现不改变"谁被选中"。**但事件链（AddEvent→后续 Operate）不在本 golden
+的覆盖面**——v2 接手时不要把它读成"oracle 不产生事件"。
+
 **未做**：Rust 侧怪物夹具与 16 的驱动/比较器（下一支）；16 **不升格**（v1 不足以判效果面）。

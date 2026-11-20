@@ -1759,6 +1759,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 delivery = m.Msg.DeliveryTime,
                 priority = m.Prio,
             }).ToList();
+            // **不重复投递**：同一只怪同一种 RM 恰好 1 条（口径见卡 §36；v1 判据 = 收件人集合）。
+            var idents = rm.Select(o => o.GetType().GetProperty("ident").GetValue(o)).ToList();
+            if (idents.Count != idents.Distinct().Count())
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] mon{i} 收到重复 RM：{string.Join(",", idents)}（同种 RM 必须恰 1 条）");
+            }
             receivers.Add(new ReceiverResult { Who = "mon" + i, Rm = rm, Sent = new List<object>() });
         }
         return new FireballResult
