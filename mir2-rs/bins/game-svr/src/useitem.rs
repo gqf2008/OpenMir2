@@ -865,6 +865,109 @@ mod tests {
         assert!(cases_or_red(&fixture()).is_ok(), "真实夹具必须过防空转");
     }
 
+    /// **IT-16 彩票（StdMode3/Shape11）宿主级**：夹具 `lottery` 块的**抽值逐值对拍** + 行为面。
+    ///
+    /// 口径（卡 §9.11）：oracle 与 Rust 共用 legacy `System.Random` 定种子流 ⇒ 夹具按用例序记录
+    /// 每次 `Next(rate)` 的结果，Rust 同 seed 重放必须逐值相同。另核 oracle 记录的行为面：
+    /// 恒吃（635、无 636）、中奖 level+1 且 gold+该档奖金、未中/闸闭 no_win+500、通知按低字节升序。
+    #[test]
+    fn it16_lottery_fixture_rng_and_deltas() {
+        let doc = fixture();
+        let lot = &doc["lottery"];
+        assert_eq!(
+            lot["enabled"].as_bool(),
+            Some(true),
+            "提交的夹具必须是**播种**运行产物（MIR2_RNG_SEED/MIR2_RNG_LOG）"
+        );
+        let cases = lot["cases"].as_array().expect("lottery.cases 必须是数组");
+        assert_eq!(cases.len(), 12, "彩票用例数固定为 12（改动须同步本断言）");
+        let mut levels = [false; 6];
+        let mut lost = 0usize;
+        let mut gate_closed_checked = false;
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let rate = i32v(&c["config"]["applied"]["rate"]);
+            let want = i32v(&c["rng"][0]["result"]);
+            // 每个用例在 oracle 侧用**独立种子**（`seed + 序号`）重新播种 ⇒ Rust 同种子首抽必须逐值相同。
+            let case_seed = i32v(&c["rng"][0]["seed"]);
+            let mut rng = mir2_shared::rng::RandomNumber::with_seed(case_seed);
+            assert_eq!(
+                rng.random_below(rate),
+                want,
+                "{name}: Rust 同 seed 的 Next(rate) 必须与 oracle 逐值相同"
+            );
+            // 符号链：oracle 侧记录到的取数点必须是 `WinLottery` 的 `Random(rate)` 那一行。
+            if let Some(site) = c["rng"][0]["site"].as_str() {
+                assert_eq!(
+                    site, "PlayObject.cs:3813",
+                    "{name}: 抽值来源必须是 WinLottery 的 Random 行"
+                );
+            }
+            // 恒吃（`case 11: WinLottery(); result=true;`）：只有 635，绝不 636。
+            let frames: Vec<u16> = c["frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| u16v(&f["ident"]))
+                .collect();
+            assert!(frames.contains(&635), "{name}: Shape11 恒吃（缺 635）");
+            assert!(!frames.contains(&636), "{name}: Shape11 不得 636");
+            // 通知按 `(byte)ident` 升序（oracle 泵序）。
+            let prios: Vec<i64> = c["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["priority"].as_i64().unwrap())
+                .collect();
+            assert!(
+                prios.windows(2).all(|w| w[0] < w[1]),
+                "{name}: 通知必须按 (byte)ident 升序：{prios:?}"
+            );
+            // 行为面：中奖 ⇒ level +1、gold + 该档奖金；未中/闸闭 ⇒ no_win +500、gold 不变。
+            let lb = &c["lottery_before"];
+            let la = &c["lottery"];
+            let mut won_level = None;
+            for i in 0..6 {
+                let d = i32v(&la["level"][i]) - i32v(&lb["level"][i]);
+                assert!(d == 0 || d == 1, "{name}: 等级增量只允许 0/1（实得 {d}）");
+                if d == 1 {
+                    assert!(won_level.is_none(), "{name}: 单次只允许中一档");
+                    won_level = Some(i);
+                }
+            }
+            let d_no_win = i32v(&la["no_win"]) - i32v(&lb["no_win"]);
+            let d_gold = i32v(&c["gold"]) - i32v(&c["gold_before"]);
+            let golds: Vec<i32> = (0..6)
+                .map(|i| i32v(&c["config"]["applied"]["gold"][i]))
+                .collect();
+            match won_level {
+                Some(i) => {
+                    assert_eq!(
+                        d_gold, golds[i],
+                        "{name}: 中奖金币必须 = 该档 WinLotteryNGold"
+                    );
+                    assert_eq!(d_no_win, 0, "{name}: 中奖不加 NoWin");
+                    levels[i] = true;
+                }
+                None => {
+                    assert_eq!(d_gold, 0, "{name}: 未中/闸闭金币不变");
+                    assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
+                    lost += 1;
+                }
+            }
+            if name == "eat_ok_lottery_gate_closed" {
+                gate_closed_checked = true;
+                assert!(won_level.is_none(), "闸闭必须表现为未中（物品仍吃）");
+            }
+        }
+        assert!(
+            levels.iter().all(|x| *x),
+            "1..6 等奖必须各覆盖一例：{levels:?}"
+        );
+        assert!(lost >= 2, "未中与闸闭各至少一例");
+        assert!(gate_closed_checked, "缺少 eat_ok_lottery_gate_closed");
+    }
+
     /// L2 牙①：把一条通知的 `priority` 改掉 ⇒ 排序序列不等（优先级进比较面）。
     #[test]
     fn tooth_notice_priority_changed_red() {
