@@ -486,10 +486,13 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **17b 边界**：`RecalcAbilitys` 的 657 只按**同值**发（`GetCharStatus()` + 当前 `HitSpeed`）；技能被动与
 `WAbil` 重算不在本卡（探针记录值在无被动技能下与 oracle 相同）。
 
-**牙（每支单跑留原文）**：M1 `is_training` 恒 false ⇒ 已学例红；M2 job 恒 99 ⇒ 职业例红；
-M3 等级 -1 ⇒ 边界例红（证 `>=`）；M4 不追加 MagicList ⇒ 成功例红；M5 `sm_addmagic_with(0)`→`(1)`
-⇒ 成功例 210 尾红，而 `sm_addmagic` 的 AddItemSkill 回归**仍绿**（两条路径分离）；M6 删 `+LNG` 原始串帧
-⇒ 成功例帧序红。还原后 `sha256` 相等 + 基线七颗复绿（变异脚本对 `copy2` 的旧 mtime 做 `utime`）。
+**牙（每支单跑留原文）**：M1 `is_training` 恒 false ⇒ 已学例红；M2 把 `can_read_book` 的 job 实参
+换成 `magic.job`（职业门恒过）⇒ 职业例红；M3 等级 -1 ⇒ 边界例红（证 `>=`）；M4 不追加 MagicList ⇒
+成功例红；M5 `sm_addmagic_with(0)`→`(1)` ⇒ 成功例 210 尾红，而 `sm_addmagic` 的 AddItemSkill 回归**仍绿**
+（两条路径分离）；M6 删 `+LNG` 原始串帧 ⇒ 成功例帧序红。还原后 `sha256` 相等 + 基线七颗复绿
+（变异脚本对 `copy2` 的旧 mtime 做 `utime`）。**首试不咬留痕**：M2 第一次把「玩家 job」改 99 **不咬**
+（谓词是 `magic.job == 99 || magic.job == (byte)Job`，玩家 job=99 不改变判定）；换成上句的
+`magic.job` 实参后才咬住——`readbook.rs` 的测试注释同记这一行。
 
 **§33 补记（lane 偶发，回填 §9.13 的缺口）**：IT-10 牙脚本首跑时 9 项里 **2 项 MISMATCH（共 1 次）**，
 当时**全机 4 个 cargo 在场**；车道空后同一脚本复跑 **9/9 全绿**（无改动）。⇒ 基线/牙只在车道空

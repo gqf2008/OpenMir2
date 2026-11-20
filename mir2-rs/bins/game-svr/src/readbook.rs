@@ -308,6 +308,8 @@ mod tests {
     /// 本批选无被动技能，657 的 `CharStatus/HitSpeed` 与 oracle 同值（探针记 0/0）。
     ///
     /// 红检（四门+两尾）：删「已学」判 ⇒ 已学例变成功；`job` 判恒真 ⇒ 职业不符例成功；
+    /// （首试不咬留痕：把「玩家 job」改 99 **不咬**——谓词是 `magic.job == 99 || magic.job == (byte)Job`；
+    ///  把 `can_read_book` 的 job 实参换成 `magic.job` 才咬住。）
     /// 删 MagicList append ⇒ 成功例的帧/状态红；210 传 `sm_addmagic`（Level=1）⇒ 尾字节红。
     fn run_readbook_parity(only: Option<&str>) {
         let doc = fixture();

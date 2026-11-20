@@ -52,7 +52,7 @@
 
 ### 5.2 `MagicArr`（`PlayObject.cs:3684`）
 - 唯一写点；数组 `new UserMagic[50]`（`:1041`）⇒ **魔法 id 必须 < 50**（≥50 会在 `RecalcHitSpeed` 抛 `IndexOutOfRange`，实测 61）。**从不清空** ⇒ 删技能后留残影（`SendDelMagic` 只发帧）。
-- 下游：`GetAttackMagic`(`:5401`)、`GetHitMode` 模式 4/5/8/12（`Attack.cs:101-134`，`RM_LONGHIT/WIDEHIT/CRSHIT`）、`SkillAttackDamage`(`Attack.cs:142-192`)、熟练度/升级(`:241/249/360-378`)、登录自动开关(`PlayObject.cs:1425`)。
+- 下游：`GetAttackMagic`(`:5401`)、`GetHitMode` 模式 4/5/8/12（`src/M2Server/Player/PlayObject.Attack.cs:101-134`，`RM_LONGHIT/WIDEHIT/CRSHIT`）、`SkillAttackDamage`(`src/M2Server/Player/PlayObject.Attack.cs:142-192`)、熟练度/升级(`:241/249/360-378`)、登录自动开关(`PlayObject.cs:1425`)。
 
 ### 5.3 **ExtraAbil 在 oracle 里不会进入最终 `WAbil`**（重要）
 - `ExtraAbil[...]` 的**读点只有一处**：`PlayObject.RecalcAbilitys` 的 `:2818-2846` 块——它对 `WAbil.DC/MC/SC/MaxHP/MaxMP/HitSpeed` 做加/乘。
