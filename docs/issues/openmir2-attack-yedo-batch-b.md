@@ -192,6 +192,23 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 宿主只在**到点排水**处把 `RM_MAGIC_LVEXP` 变成 `sm_magic_lvexp(magic_id, level, tran_point)`
 发给该 actor 自己的 socket（既有 `drain_self_delay_msgs` 链路）。
 
+### 3bis.2c 段 2 的臂 × 牙映射（实测，2026-11-20）
+
+| 臂（独立 `#[test]`） | 验什么 |
+| --- | --- |
+| `magic_lvexp_queued_at_3000_when_not_leveled` | 未升级 ⇒ 恰一条、`DeliveryTime = now+3000`、载荷为调用后值 |
+| `magic_lvexp_queued_at_800_when_level_up` | 升级 ⇒ 恰一条、`now+800`（**没有** 3000 那条）、`Level=1` |
+| `magic_lvexp_update_replaces_previous_entry` | 同魔号两击都升级 ⇒ 只留一条、**按第二击重排**（断言 `> t1` 且 `>= t2_before+800`）、`Level=2` |
+
+| 牙 | 改坏点 | 咬哪条 |
+| --- | --- | --- |
+| T1 | 800↔3000 互换 | 前两条（第三条不受影响） |
+| T2 | 删「摘旧条」 | **只有**第三条 |
+| T3 | 有条就不入（条数对、时间戳停在第一击） | **只有**第三条的"重排"断言 |
+
+T3 是专门为"条数对但时间戳是旧的"这个半对情形设计的：它让替身留在队列里、时间戳仍是第一击 ⇒
+只有"按第二击重排"的断言能抓。
+
 ### 3bis.3 判据与牙（草案）
 
 | 判据 | 验法 |

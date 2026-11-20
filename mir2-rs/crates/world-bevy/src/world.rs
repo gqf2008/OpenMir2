@@ -19644,11 +19644,21 @@ mod weapon_durability_tests {
         let t1 = first[0].0;
         // 推进时间后第二击：`UpdateDelayMsg` 应把第一条摘掉、按新时刻重排。
         w.clock_ms += 100;
+        let t2_before = w.clock_ms;
         w.attack_cmd(p, mid);
         w.tick();
         let entries = lvexp_entries(&w);
         assert_eq!(entries.len(), 1, "替换语义：同 (ident, MagicId) 只留一条");
-        assert!(entries[0].0 > t1, "按第二击的 DeliveryTime 重排");
+        // **验"重排"而不只是"条数"**：留下的那条必须按**第二击**的时间排期
+        // （若留下的是第一击的旧条，时间会 == t1，下面两条断言都会红）。
+        assert!(entries[0].0 > t1, "不是第一击的旧时间戳");
+        assert!(
+            entries[0].0 >= t2_before + 800,
+            "按第二击时刻 + 800 重排（实得 {}，第二击前 clock={}，第一击 {}）",
+            entries[0].0,
+            t2_before,
+            t1
+        );
         assert_eq!(entries[0].1, 2, "第二击后 Level=2");
     }
 
