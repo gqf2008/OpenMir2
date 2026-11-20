@@ -443,6 +443,67 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **未覆盖缺口登记（不计入行为面 `verified`）**：`IncGold` 失败支在 oracle 侧**无夹具证据**——探针是假 `Envir`，oracle 失败支走 `DropGoldDown(nGold, true, 0, 0)`（`src/M2Server/Player/PlayObject.cs:3897`）→ `GetDropPosition`（`src/M2Server/Actor/BaseObject.cs:485`）触发 NRE，探针跑不了；该支仅由 Rust 宿主用例 `tests::it16_lottery_frame_order_gold_counters_and_always_eaten` ③ 覆盖（金币不变、无 653、等级照加、绿字照发）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
 
+### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（implemented_unverified）
+
+**归类**：`StdMode==3` 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2163`）→ `case 1`（`:2231-2236`）：
+`SendRefMsg(RM_SPACEMOVE_FIRE, …)` + `BaseObjectMove(HomeMap, 0, 0)` + `result=true`。
+`BaseObjectMove`（`:2312-2327`）：**空 `sMap` ⇒ `MapName`**（`string.IsNullOrEmpty`，`:2314-2317`）；
+`sX!=0 && sY!=0` ⇒ `SpaceMove`（精确点，落点可走则 0 抽），否则 `MapRandomMove`（两次抽
+`Random(W-nEgdey-1)`/`Random(H-nEgdey-1)`，`nEgdey` 只看**目标图**高）。搬运位置/换图簇/RNG 是**宿主行为**，
+纯函数 `use_item` 覆盖不到；且 `useitem.rs` 与 IT-16 车道共享写集 ⇒ 本组**零改 `useitem.rs`**。
+
+**实现（宿主拦截，一条钩子）**：`bins/game-svr/src/eat_move.rs`
+- `maybe_eat_move`：只接管「首件 `MakeIndex` 命中、模板 `StdMode==3 && Shape∈{1,2,3}`、非 `dead`、非
+  `no_drug`」；`dead`/`no_drug`/模板缺失一律回落 `use_item`（禁药红字仍由 `use_item` 出，不造第二份真相）。
+  出帧/动作序：`SM_EAT_OK(635)`（oracle 直发）→ `RM_SPACEMOVE_FIRE` 广播**移动前** ±12（含自己）的
+  `SM_SPACEMOVE_HIDE(800)` → `World::base_object_move_player` → 移除物品 + `RecalcBagWeight` →
+  `SM_WEIGHTCHANGED(622)`。633/634/801 由**共用**的 world tick `drain_map_change` 出（同一生产函数）。
+- `handle_eat_cmd`：在 `no_drug` 之后调一次本函数，返回 `true` 即 `return`。
+- **`HomeState`（`PlayObject.HomeMap/HomeX/HomeY` 会话快照）**：挂 `SessionGround.home`，**唯一两个写点**——
+  ① 登录 `session_ground_from_login`（取 `apply_get_start_point_on_login` **之后**的 final 记录值；
+  `red_home_*` = `red_home_of(enter_cfg)` 的 `SystemShare.Config.RedHome*` 快照）；② 3s 支
+  `apply_start_point_for_fired_players`（与 `saves[chr].record.data.home_*` **同一次迭代、同源**写回）。
+  oracle 节奏：登录（`PlayObject.cs:1199`）与每 3s `CheckDupObjTick`（`PlayObject.Message.cs:266`）各跑
+  一次 `GetStartPoint()`（`PlayObject.Base.cs:704-721`：`PvpLevel()>=2` ⇒ `Config.RedHome*`；否则按
+  **当前地图**命中 `StartPointList` 就覆盖）⇒ 本快照 **≤3s 陈旧，与 oracle 同节奏**。move 逻辑只读、不回写。
+
+**装置（三向可寻）**：
+- 探针：`mir2-rs/tests/parity/m3/move-eat-probe`（**独立于 `eat-probe`**，避免与 IT-16 的夹具重生成相撞）。
+  手法：合成真格式 `.map`（52B 头 + 12B/格）+ 真 `Envirnoment` + 最小 `IMapSystem`（只做 `FindMap`）+
+  真 `SystemShare.ActorMgr` + 真私有 `ClientUseItems`；`RandomNumber.random` 换固定种子录制包装
+  （**先建 `PlayObject`、后注入种子**：ctor 自身 5 抽不进账本）；排空 `MsgQueue` 并按出队序
+  pump `8062/10115/8097/8098/8100`。
+- golden：`mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json`。生成（仓库根）：
+  `dotnet run --project mir2-rs/tests/parity/m3/move-eat-probe -c Release -- mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json`
+- 夹具契约（golden `scenario_note` + `ctx.presentation` / `ctx.map_file_name` 同步记录）：三图 60x60 全可走；
+  **MapName == MapFileName 主干**（无 `[名|文件]` 覆盖）；地图 `Flag.DayLight=true`（`DayBright()=0`）；
+  实体 `Dir=4`（`BaseObject.cs:378` ctor）/`Light=0`/`Feature=0`/`Status=0`。
+
+**对拍面（用例 `it09_town_scroll_host_parity`，两例：home 随机 / 空 HomeMap 回落当前图）**：
+① 线上帧**逐字段含尾**：`635 → 800 → 622 → 633 → 634 → 801`（634 尾 = `EDCode(MapFileName)`；
+801 尾 = `EDCode(CharDesc)`；`Series=MakeWord(Dir,Light)`）② 终态 `MapName/X/Y`（实体+会话）
+③ `ItemList` 清空 + `WAbil.Weight` ④ `Rng` 逐次 + 「移动后不得多抽」⑤ **断言 golden `pumped` 的剔除集
+恰等于 `[766,54]`**（把豁免变成可验证的等式，不是隐性豁免）。
+
+**牙（五颗，全红-还原-复绿，sha 核验）**：M1 `StdMode` 门 3→4（hook 永不接管 ⇒ 636）；
+M2 Shape1 的 `HomeMap` 换当前图（例 1 终态图/落点变）；M3 删空 `HomeMap` 回落（例 2 不动）；
+M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tick 用例会话断言红）。
+
+**共用路径缺口（登记，**不是** IT-09 私有；影响所有走换图的卡）**：
+1. **766 `SM_AREASTATE` + 54 `SM_MAPDESCRIPTION`**：oracle `RM_CHANGEMAP` 处理器
+   （`PlayObject.Message.cs:1774-1779`）在 `SendDefMessage(SM_CHANGEMAP)` 后还调 `RefUserState()`
+   （`PlayObject.Base.cs:285` ⇒ `SM_AREASTATE(766)`）与 `SendMapDescription()`（`:887-895` ⇒
+   `SM_MAPDESCRIPTION(54)`）；宿主 `drain_map_change` 只出 633/634/801。**客户端影响**：每次换图后
+   区域状态（安全区/战斗区位）与地图描述/音乐不刷新。**本卡不实现**：修改共用换图路径影响面远超
+   IT-09，须另立卡（对拍面已用等式钉住它只能缺这两条）。
+2. **`[名|文件]` 覆盖时的 `SM_CHANGEMAP` 尾**：oracle 的 `Envir.MapFileName` 是 MapInfo 的**取图文件主干**
+   （`src/GameSrv/Maps/MapManager.cs:66-96`：`[名|文件]` 的 `|` 右半，`<...>`，缺省=逻辑名），宿主
+   `drain_map_change` 用 `MapRegistry::name_of`（**逻辑名**）。现网 `MapInfo.txt` 有 `[M100A|M100 …]`
+   形态 ⇒ 该图换图时尾会从 `M100` 变 `M100A`。本夹具无覆盖形态（逻辑名==主干）⇒ 本卡对拍面内**尾逐字节相等**；
+   复现方式：给 `move-eat-probe` 造一条 `map_name != map_file_name` 的注册表条目即可击穿（留给修复卡）。
+
+**状态**：`implemented_unverified`（对拍面全绿 + 五牙，但共用路径缺口 1/2 未清 ⇒ 不计 verified）。
+转 verified 条件：上述两条并入共用换图路径并进本组对拍面。
 ### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）
