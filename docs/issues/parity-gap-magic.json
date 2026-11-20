@@ -601,19 +601,26 @@
         "line": 318,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "holyshield_parity_mon_hit_two / holyshield_parity_mon_blocked_level / holyshield_parity_mon_blocked_master / holyshield_parity_mon_partial + real_rust_ledger_holyshield",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/holyshield.json（C# oracle 生成；契约三键齐）",
+        "cases": [
+          "mon_hit_two",
+          "mon_blocked_level",
+          "mon_blocked_master",
+          "mon_partial"
+        ],
         "unit_tests": [
           "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
         ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级 2026-11-20 接线并升格：四支覆盖命中/等级门负例/主人门负例/部分命中；帧面逐收件人 (ident,param,tag,series) 比；牙=去掉等级门 ⇒ 帧集合退化可见。",
+      "basis": "semantic",
+      "scope": ""
     },
     {
       "id": "MG-24",
@@ -1256,17 +1263,23 @@
         "line": 537,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "grouplightening_parity_s1 / _s5 / _s13 + real_rust_ledger_grouplightening",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/grouplightening.json（C# oracle 生成；契约三键齐）",
+        "cases": [
+          "s1",
+          "s5",
+          "s13"
+        ],
         "unit_tests": []
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级 2026-11-20 接线并升格：三 seed；牙=内联伤害 +1 ⇒ 帧面/比较器双红（复核者独立复跑 33 条不等）。",
+      "basis": "semantic",
+      "scope": "partial：target 含 53（`SM_HEALTHSPELLCHANGED`）——驱动内钉 `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ 我方发 oracle header-only 12B（不带 16B 客户端尾）⇒ 全帧比较成立；生产默认 client 布局带 16B 尾属 `openmir2-client-e2e-enter-gaps` 已登记偏差。其余帧（17/638/31/656）逐收件人逐帧已比。"
     },
     {
       "id": "MG-50",
@@ -1279,15 +1292,19 @@
       },
       "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "groupamyounsul_parity_s1 / _s5 / _s13 + real_rust_ledger_groupamyounsul（**仅接线覆盖**）",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json（**退化场景**：rng_total_draws=0、无 RM_POISON、TargetHp 100→100）",
+        "cases": [
+          "s1",
+          "s5",
+          "s13"
+        ],
         "unit_tests": []
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级 2026-11-20 接线完成但**不升格**：golden 为退化场景（`rng_total_draws=0`、无 `RM_POISON`、`TargetHp` 100→100）⇒ `cast_group_poison_spell` 的逐目标循环零次执行，只覆盖 17/638 施法帧面；四刀变异（毒伤系数/范围+5/移除 proper-target 门/强制 poison dice）**全绿**。需非退化 case 才能升格，见 `openmir2-groupamyounsul-nondegenerate-golden`。"
     },
     {
       "id": "MG-51",
