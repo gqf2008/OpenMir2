@@ -8140,6 +8140,32 @@ impl World {
         self.sim.attack_skill_train.insert(actor_id, input);
     }
 
+    /// **攻击批 B（段 1）**：冷启动注入（仅当该 actor 尚无副本）——世界在两次同步之间是权威
+    /// （训练会就地改它），宿主不得用旧快照覆盖。
+    pub fn init_attack_skill_train(&mut self, actor_id: i32, input: AttackSkillInput) {
+        self.sim.attack_skill_train.entry(actor_id).or_insert(input);
+    }
+
+    /// **攻击批 B（段 1）**：每条命中刷新战斗态（`PowerHit` 由 A 批 `+PWR` 置位、由本击消费清零）。
+    /// 技能表（`skills`）**不动**——那是世界的权威副本。
+    pub fn set_attack_flags(
+        &mut self,
+        actor_id: i32,
+        power_hit: bool,
+        twin_hit_skill: bool,
+        hit_plus: u8,
+        hit_double: u8,
+        abil_level: u8,
+    ) {
+        if let Some(i) = self.sim.attack_skill_train.get_mut(&actor_id) {
+            i.power_hit = power_hit;
+            i.twin_hit_skill = twin_hit_skill;
+            i.hit_plus = hit_plus;
+            i.hit_double = hit_double;
+            i.abil_level = abil_level;
+        }
+    }
+
     /// **攻击批 B（段 1）**：登记一条攻击命令的 `wHitMode`（与 `attack_cmd` 同序）。
     pub fn push_hit_mode(&mut self, actor_id: i32, mode: i16) {
         self.sim
@@ -10414,6 +10440,13 @@ impl World {
         actor_id: i32,
         target_id: i32,
     ) -> Option<AttackOutcome> {
+        // **攻击批 B（段 1）**：本击的 `wHitMode`（宿主在 `attack_cmd` 前 push）。**先弹**，任何
+        // 早退分支都不会把队列留残（下一击读到上一击的模式）。
+        let hit_mode = sim
+            .pending_hit_modes
+            .get_mut(&actor_id)
+            .and_then(std::collections::VecDeque::pop_front)
+            .unwrap_or(0);
         if access.get(actor_id).is_none() || access.get(target_id).is_none() {
             return None;
         }
@@ -10425,14 +10458,6 @@ impl World {
         // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
         // [`World::attack_swing`]，**不**结算）。它不抽 RNG ⇒ 取数账本不变；但会改
         // `UseItems[Weapon]`（碎 / 强化）⇒ 攻击结算后必须写回实体（oracle 改的是同一对象）。
-        // **攻击批 B（段 1）**：本击的 `wHitMode`（宿主在 `attack_cmd` 前 push）与战斗态快照。
-        // `GetAttackPowerHit` 在 oracle 是 `AttackDir` 的第二句（`PlayObject.Attack.cs:73`），
-        // 早于 `_Attack`；这里把模式与标志一起带进结算函数。
-        let hit_mode = sim
-            .pending_hit_modes
-            .get_mut(&actor_id)
-            .and_then(std::collections::VecDeque::pop_front)
-            .unwrap_or(0);
         let skill_input = sim.attack_skill_train.get(&actor_id).cloned();
         let effect = skill_input.as_ref().map_or(
             crate::combat::HitModeEffect {
@@ -19361,6 +19386,209 @@ mod weapon_durability_tests {
         fn next_double(&mut self) -> f64 {
             self.inner.next_double()
         }
+    }
+
+    // ---------- 攻击批 B（段 1）：训练抽数与 PowerHit 消费 ----------
+
+    fn st(id: u16, level: u8, tran: i32) -> crate::magic::SkillTrainState {
+        crate::magic::SkillTrainState {
+            magic_id: id,
+            level,
+            tran_point: tran,
+            train_lv: 3,
+            train_level: [1, 1, 1, 1],
+            max_train: [1000, 1000, 1000, 1000],
+        }
+    }
+
+    /// **B 段 1 用例①（抽数账本）**：`TrainCurrentSkill` 只有 基本剑法/精神力/攻杀（模式 3）三支抽
+    /// `Random(3)+1`；**其它模式支常量 1、一次都不抽**。
+    ///
+    /// 用「同一组技能、不同 `wHitMode`」对比抽数：模式 0 与模式 4（带刺痛技能）抽数**相等** ⇒
+    /// 常量支确实没抽（若写成 `Random(3)+1`，模式 4 会多 1 抽）。
+    ///
+    /// 红检：把模式支的常量 1 改成 `spell_train_points(rng)` ⇒ 模式 4 的抽数断言红。
+    #[test]
+    fn train_current_skill_draws_only_three_branches() {
+        let mut skills = vec![st(3, 0, 0), st(4, 0, 0), st(12, 0, 0), st(7, 0, 0)];
+        // 模式 0：基本剑法 + 精神力 = 2 抽。
+        let mut rng = CountingRng::new(11);
+        let ev = crate::magic::train_current_skill(0, 10, false, &mut rng, &mut skills);
+        assert_eq!(ev.len(), 2, "模式 0：两支无条件");
+        assert_eq!(rng.calls, 2, "模式 0 ⇒ 2 抽");
+        // 模式 4：多训练一件刺痛（常量 1），**不许多抽**。
+        let mut rng4 = CountingRng::new(11);
+        let mut s4 = vec![st(3, 0, 0), st(4, 0, 0), st(12, 0, 0)];
+        let ev4 = crate::magic::train_current_skill(4, 10, false, &mut rng4, &mut s4);
+        assert_eq!(ev4.len(), 3, "模式 4：三支（含刺痛）");
+        assert_eq!(
+            rng4.calls, 2,
+            "模式 4 的刺痛支是**常量 1**：抽数仍为 2（写成 Random(3)+1 会变 3）"
+        );
+        assert_eq!(s4[2].tran_point, 1, "常量 1：恰加 1 点");
+        // 模式 3：攻杀（有无条件两支 + 攻杀一支）⇒ 3 抽。
+        let mut rng3 = CountingRng::new(11);
+        let mut s3 = vec![st(3, 0, 0), st(4, 0, 0), st(7, 0, 0)];
+        let ev3 = crate::magic::train_current_skill(3, 10, false, &mut rng3, &mut s3);
+        assert_eq!(ev3.len(), 3);
+        assert_eq!(rng3.calls, 3, "模式 3 的攻杀支抽 Random(3)+1");
+        // 门不过 ⇒ 不抽（`TrainLevel[Level] <= Abil.Level` 的右操作数）。
+        let mut rng_gate = CountingRng::new(11);
+        let mut sg = vec![st(3, 0, 0), st(4, 0, 0)];
+        let evg = crate::magic::train_current_skill(0, 0, false, &mut rng_gate, &mut sg);
+        assert!(evg.is_empty(), "角色等级 0 < TrainLevel[0]=1 ⇒ 两支都不过门");
+        assert_eq!(rng_gate.calls, 0, "门不过不抽");
+    }
+
+    /// **B 段 1 用例②（升级）**：`max_train[0] == 0` 且 `tran_point==0` ⇒ 本击直接升级，
+    /// `level 0→1`、`level_up=true`、`levelup_msg=true`。
+    #[test]
+    fn train_current_skill_levels_up_when_max_train_hit() {
+        let mut skills = vec![crate::magic::SkillTrainState {
+            magic_id: 3,
+            level: 0,
+            tran_point: 0,
+            train_lv: 3,
+            train_level: [1, 1, 1, 1],
+            max_train: [0, 1000, 1000, 1000],
+        }];
+        let mut rng = CountingRng::new(3);
+        let ev = crate::magic::train_current_skill(0, 10, false, &mut rng, &mut skills);
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].1.level_up, "MaxTrain[0]=0 ⇒ 本击升级");
+        assert_eq!(skills[0].level, 1);
+    }
+
+    /// **B 段 1 用例③（`GetAttackPowerHit`）**：模式 3 + `PowerHit` ⇒ `+= HitPlus` + 消费 + `canHit`；
+    /// 其余模式/无标志/无目标 ⇒ 原样不动、不消费。
+    ///
+    /// 红检：删 `power += hit_plus` ⇒ 第一条断言红；删 `out.power_hit_consumed = true` ⇒ 消费断言红。
+    #[test]
+    fn get_attack_power_hit_mode3_adds_hit_plus_and_consumes() {
+        use crate::combat::{apply_get_attack_power_hit, HitModeEffect};
+        let on = HitModeEffect {
+            mode: 3,
+            power_hit: true,
+            hit_plus: 5,
+            ..Default::default()
+        };
+        let (p, r) = apply_get_attack_power_hit(on, 20, true);
+        assert_eq!(p, 25, "nPower += HitPlus");
+        assert!(r.can_hit && r.power_hit_consumed);
+        // 未 arm。
+        let off = HitModeEffect {
+            mode: 3,
+            power_hit: false,
+            hit_plus: 5,
+            ..Default::default()
+        };
+        let (p, r) = apply_get_attack_power_hit(off, 20, true);
+        assert_eq!(p, 20);
+        assert!(!r.can_hit && !r.power_hit_consumed);
+        // 别的模式不吃这个标志。
+        let other = HitModeEffect {
+            mode: 0,
+            power_hit: true,
+            hit_plus: 5,
+            ..Default::default()
+        };
+        let (p, r) = apply_get_attack_power_hit(other, 20, true);
+        assert_eq!(p, 20);
+        assert!(!r.can_hit && !r.power_hit_consumed);
+        // 目标为空支：只清标志、不加成（本仓 `attack_swing` 不消费，这里按 oracle 的空支语义断言不动）。
+        let (p, r) = apply_get_attack_power_hit(on, 20, false);
+        assert_eq!(p, 20, "无目标不加成");
+        assert!(!r.power_hit_consumed, "本仓空挥不消费战斗态（登记）");
+    }
+
+    /// **B 段 1 用例④（世界接线）**：模式 3 + 注入 `power_hit` ⇒ 本击多 `HitPlus` 伤害、
+    /// `HitModeEvent` 回传消费、世界副本清零（同 tick 第二击不再加成）。
+    ///
+    /// 红检：删 `attack_once_impl` 里的 `input.power_hit = false` ⇒ 第二次断言红。
+    #[test]
+    fn power_hit_consumed_once_across_two_attacks() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.set_weapon_durability_config(false, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        m.hp = YEDO_TEST_TARGET_HP;
+        m.max_hp = YEDO_TEST_TARGET_HP;
+        let mid = w.add_entity(m);
+        w.set_attack_skill_train(
+            p,
+            AttackSkillInput {
+                abil_level: 10,
+                power_hit: true,
+                hit_plus: 5,
+                ..Default::default()
+            },
+        );
+        w.push_hit_mode(p, 3);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let evs = w.drain_hit_mode();
+        assert_eq!(evs.len(), 1);
+        assert!(evs[0].power_hit_consumed && evs[0].can_hit, "第一击消费");
+        w.push_hit_mode(p, 3);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let evs = w.drain_hit_mode();
+        assert_eq!(evs.len(), 1);
+        assert!(!evs[0].power_hit_consumed, "第二击不再加成");
+    }
+
+    /// **B 段 1 用例⑤（等级时点）**：攻杀在本击升级后，A 的尾巴按**新** `Level` 重置（`7-L`）。
+    ///
+    /// 红检：删 `attack_once_impl` 里「训练后同步 `attack_skill[7].level`」那段 ⇒ 重置仍用旧等级 ⇒ 必红。
+    #[test]
+    fn yedo_reset_uses_level_after_training_in_same_hit() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.set_weapon_durability_config(false, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, [0u8; 14]);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        m.hp = YEDO_TEST_TARGET_HP;
+        m.max_hp = YEDO_TEST_TARGET_HP;
+        let mid = w.add_entity(m);
+        // 攻杀 count=1 ⇒ 本击归零；训练使 Level 2→3（MaxTrain[2]=0）⇒ 重置应为 7-3=4（旧实现是 7-2=5）。
+        w.set_attack_skill(
+            p,
+            YedoRuntime {
+                present: true,
+                level: 2,
+                count: 1,
+                point_count: 0,
+            },
+        );
+        w.set_attack_skill_train(
+            p,
+            AttackSkillInput {
+                abil_level: 10,
+                skills: vec![crate::magic::SkillTrainState {
+                    magic_id: 7,
+                    level: 2,
+                    tran_point: 0,
+                    train_lv: 3,
+                    train_level: [1, 1, 1, 1],
+                    max_train: [1000, 1000, 0, 1000],
+                }],
+                ..Default::default()
+            },
+        );
+        w.push_hit_mode(p, 3);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let train = w.drain_skill_train();
+        assert_eq!(train.len(), 1, "攻杀支训练（模式 3）");
+        assert!(train[0].level_up, "本击升级 2→3");
+        let ev = w.drain_yedo();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].count, 4, "重置为 7-3（训练后的等级）");
     }
 
     /// **攻击批 A 用例①（纯缝）**：`Count` 递减、`PointCount == Count` 那一击 arm、
