@@ -88,9 +88,12 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 0. **`apply_pending_level_up`（升级链）：不受 657 值影响（`89` 静态分析确认）**——自见帧的 `Series`
    取 `sg.hit_speed`（`recalc_session_ability` 内已赋值），**不读实体**；观察者读的是**各自**实体，
    本 actor 重算不改别人 ⇒ 只保留"实体未镜像"这一不变量缺口登记，**不列风险、不加 657 用例**。
-1. **`handle_eat_cmd`（观察者面，半对）**：吃物品触发 `RecalcAbilitys` 后**观察者**收到的 657
-   `Series` 走实体（旧值）；**自我面**走 `WireSession`（`sg`，已新）⇒ 同一事件两套值。
-   复现：吃使 `hit_speed` 变化的物品（如带 `atk_spd` 的武器切换类），一名观察者在 ±range 内。
+1. **`handle_eat_cmd`（吃物品）：本卡**原写"观察者面旧值"——**该表述已校正**：657 的 `Series`
+   是**收件人自己**的值（`PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），观察者收到的那条
+   取的是观察者自己的实体，**不因吃物品者重算而陈旧**。真实缺口只有两处：
+   ①吃物品者自己的实体 `hit_speed` 未镜像（**不变量缺口**，其自见 657 走 `pickwire::notice_frame` 的
+   会话值，值本身是对的）；②该实体陈旧后，后续任何"读实体"的 657（如 `drain_buff_downlink`）会对
+   该角色读出旧值。**故本处只做镜像、不列为 657 值风险。**
 3. **`drain_buff_downlink`（`#9` 路径）**：`boNeedRecalc` 重算后自见与观察者都经
    `push_charstatuschanged` 读实体 ⇒ 全部旧值。复现：buff 施加/到期使 `HitSpeed` 变化
    （`ExtraAbil[HITSPEEDUP]` 或装备变化） + 非 0 旧值。
@@ -120,3 +123,41 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 
 - 本卡：`open`（未实现）；仅扫描表与验收口径。
 - 不动任何清单 `status`、不改 golden/比较器。
+
+## 7. 实现计划（定位已核，`master 24d2de316`；**未动手，等令牌**）
+
+> 定位方式：`git show 24d2de316:mir2-rs/bins/game-svr/src/lib.rs` 上逐个函数读上下文；
+> 行号只作引用（代码块内），散文只用符号锚。
+
+### 7.1 五个改动点（按优先级）
+
+| # | 符号锚 | 现状 | 改动 | 对 657 **值**的影响 | 牙 |
+| --- | --- | --- | --- | --- | --- |
+| **P1** | `handle_spell_cmd_with_magic` · 14/15 支（`HANGMAJINBUB`/`DEJIWONHO`）的 `take_buff_applies` 循环 | 657（广播副本 + 自更新副本）在 `recalc_session_ability` **之前**出帧 ⇒ 读的是**重算前**实体；且本支无镜像 | 把「recalc + 52」整块**移到**循环体最前（oracle `DefenceUp` 先 `RecalcAbilitys()`），recalc 后立刻 `e.vitals.hit_speed = sg.hit_speed` | **有**（target 由 7 → 0） | 7 世代 golden 的比较器 `real_rust_ledger_hangmajinbub` / `dejiwonho`：删镜像 ⇒ 红 |
+| **P5** | `drain_buff_downlink`（`boNeedRecalc` 循环） | recalc 后直接发 52；657 自见取**实体**（未镜像 ⇒ 旧值） | recalc 之后、发帧之前加 `e.vitals.hit_speed = sg.hit_speed`（`*actor_id`） | **有** | 删镜像 ⇒ 该支自见 657 的 `Series` 断言红 |
+| **P2** | `apply_pending_level_up` | recalc 后只写 `level/max_exp`，无 `hit_speed` 镜像 | 同函数实体写块里补一行 | **无**（自见 657 走 `send_charstatuschanged_self_once_and_observers` 的**会话**入参） | 实体值断言：`e.vitals.hit_speed == sg.hit_speed`；删镜像 ⇒ 红 |
+| **P3/P4** | `handle_eat_cmd` 的两处 `recalc_session_ability` | 无镜像 | 各自 recalc 后补镜像 | **无**（自见 657 走 `pickwire::notice_frame` 的会话值；观察者读自己的实体） | 同上（实体值断言） |
+
+**P1 的次序**：`100 → 657×2 → 52` 的**入 `SpellFrameBuf` 次序不变**（只把 recalc 提前），
+优先级排序（52=67 < 657=155 < 100=252）出队结果因此逐字节不变；变的只有 657 的 `Series` 取值时点。
+
+**P1 不动的**：`ev.char_status` 仍取 buff 事件里的值（golden 的 `param/tag` 已绿，不在本次范围）。
+
+### 7.2 对 `c6` 六条比较器的**预先写死**的预期（先写下，避免事后解释）
+
+修完 **P1** 后（`c6` rebase 到含本修的 master）：
+- `shield`：**绿**——该支**不触发** recalc，实体本就是 7（`card/657-series-spellbuf` 已修来源）。
+- `uenhancer`（36）：**绿**——函数内已有 `e.vitals.hit_speed = sg.hit_speed`。
+- `hangmajinbub` / `dejiwonho`：**绿**——target 的 657 现在读重算后的 0（原先读 7）。
+- `bigcloak` / `cloak`：**绿**（`c6` 未报红，且不经本卡改动面）。
+
+⇒ **预期六条全绿。若 14/15 仍红，说明还有第二个来源**，届时按"别的来源"重新定位，不许把预期改写成"本来就会红"。
+候选（尚未验证）：同场景里另有 `drain_buff_downlink` 产的 657、或 `ev.char_status` 的取值时点。
+
+### 7.3 提交序（每步单独提交）
+
+1. **P1**（解锁 `c6` 的四条红）——单独提交，先跑 `hangmajinbub`/`dejiwonho`/`shield` 的单包比较器；
+2. **P5**——单独提交；
+3. **P2/P3/P4**（不变量补全）——可合为一次提交，但提交信息逐点列出。
+
+每步都要：`cargo test -p game-svr --lib` 全绿 + 该点自己的牙（删镜像 ⇒ 红）。
