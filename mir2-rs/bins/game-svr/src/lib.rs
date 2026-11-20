@@ -14483,15 +14483,17 @@ fn handle_spell_cmd_with_magic(
                         let mut buf = SpellFrameBuf::new();
                         let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
                         for ev in world.take_buff_applies() {
-                            let body =
-                                smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0);
-                            buf.push_broadcast_cached(
+                            // **series 修正（`card/657-series-spellbuf`）**：旧实现 `Series` 写死 0
+                            // 且用单 body 广播；oracle handler 取**收件人自己**出队时的 `HitSpeed`
+                            // （`src/M2Server/Player/PlayObject.Message.cs:1845-1847`）。
+                            // 本支 oracle 只调 `StatusChanged()`（**无 `SendUpdateMsg`**）⇒ 每人 1 条，
+                            // 故用 `push_charstatuschanged`（逐收件人），**不**用三动作 helper。
+                            push_charstatuschanged(
+                                &mut buf,
                                 world,
                                 online,
                                 ev.actor_id,
-                                true,
-                                (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
-                                &body,
+                                ev.char_status,
                             );
                         }
                         // `bo_train = true`：见 [`finish_spell_tail`] 的文档（`MagBubbleDefenceUp`
@@ -14648,18 +14650,21 @@ fn handle_spell_cmd_with_magic(
                                     (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8,
                                     body,
                                 );
-                                let body = smframe_ext::sm_charstatuschanged(
-                                    ev.actor_id,
-                                    ev.char_status,
-                                    0,
-                                );
-                                buf.push_broadcast_cached(
+                                // **series 修正（`card/657-series-spellbuf`）**：广播副本逐收件人
+                                // （每人自己 `hit_speed`），自更新副本用**自己**的 `hit_speed`。
+                                push_charstatuschanged(
+                                    &mut buf,
                                     world,
                                     online,
                                     ev.actor_id,
-                                    true,
-                                    (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
-                                    &body,
+                                    ev.char_status,
+                                );
+                                let self_hit_speed =
+                                    world.entities.get(ev.actor_id).map_or(0, |e| e.hit_speed);
+                                let body = smframe_ext::sm_charstatuschanged(
+                                    ev.actor_id,
+                                    ev.char_status,
+                                    self_hit_speed,
                                 );
                                 buf.push_actor(
                                     online,
@@ -71069,6 +71074,56 @@ SendRefMsgRange=15
                 "门关时 socket {socket} 不得有 SM 657"
             );
         }
+    }
+
+    /// **657 逐收件人 `Series` 的区分性哨兵（`card/657-series-spellbuf`，设计 3）**：
+    /// 施法者实体 `hit_speed=7`、目标实体 `hit_speed=0` —— **真实形态**（加速来源只挂在施法者身上）；
+    /// buff 施加路径只对**目标**做 `RecalcAbilitys` ⇒ 目标被写成 0，**施法者不被 recalc ⇒ 保持 7**。
+    /// 断言：施法者收到的 657 **恰 1 条**且 `Series == 7`；目标（观察者）**必须收到**且 `Series` 全 0。
+    /// （"必须收到"是刻意加的非空断言——只写 `all(|v| v == 0)` 在**空集**上会整体空过，
+    /// 见 `[[tooth-must-answer-empty-input]]` 的教训。）
+    /// 判别：旧实现（单 body、`Series` 恒 0）⇒ **施法者断言红**（0≠7）；新实现（逐收件人取实体）⇒ 绿。
+    /// 需开 `enable_buff_tick`（否则本路径根本不产 657，见 `shield_buff_tick_gate_off_emits_no_buff_frames`）。
+    #[test]
+    fn spell_657_series_is_per_recipient_entity_hit_speed() {
+        use mir2_protocol::frame::CommandMessage;
+        let mut rig = fireball_rig(1000, 31, 0, 1);
+        rig.world.enable_buff_tick();
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+        let obs_in = fireball_actor(&rig, "obs_in");
+        for (id, hs) in [(caster, 7u16), (target, 0u16), (obs_in, 0u16)] {
+            if let Some(e) = rig.world.entities.get_mut(id) {
+                e.vitals.hit_speed = hs;
+            }
+        }
+        rig.cast(31, (101, 100), target);
+        let (frames, _raws) = rig.drain();
+        let series_at = |socket: i32| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, b)| {
+                    *s == socket && sf_ident(b) == mir2_protocol::messages::SM_CHARSTATUSCHANGED
+                })
+                .map(|(_, b)| CommandMessage::from_bytes(b).unwrap().series)
+                .collect()
+        };
+        let caster_series = series_at(911);
+        assert_eq!(
+            caster_series,
+            vec![7u16],
+            "施法者收到的 657 必须恰 1 条且 Series = 自己实体 7（旧单 body 会得 0）"
+        );
+        let target_series = series_at(912);
+        assert!(
+            !target_series.is_empty(),
+            "目标（观察者）必须收到 657；实得空集（空集会令下面那条 all() 断言空过）"
+        );
+        assert!(
+            target_series.iter().all(|v| *v == 0),
+            "目标 657 的 Series 必须全 0（其自身实体 0）；实得 {target_series:?}"
+        );
     }
 
     /// 从比较面 JSON 的某收件人里取 `SM_ABILITY(52)` 尾并 EDCode 解码 = oracle `WAbil` 40B
