@@ -87,6 +87,13 @@
 「区间被观测」**：`0x0A05` 的区间抽确实发生了，但目标 MAC 把结果扣到 0/1。
 **即使记录端与消费端都补齐，MG-38 也只能算「部分」，不得写「已点亮」。**
 
+## 5.1 golden 行尾口径（CRLF，省得每个人重查）
+
+`mir2-rs/tests/parity/golden/magic/*.json` **一直是 CRLF**（核过 `HEAD~2/HEAD~1/HEAD` 三版的
+blob：fireball-5 / groupdeding / bigcloak 都是全 CRLF；工作树同）。因此重出 golden 后
+`git diff --check` 会把新增行报 trailing whitespace——**这是既有口径，不是缺陷**；
+改成 LF 会让整份文件全行变动、淹没语义 diff。**不要为了消这条提示去改行尾。**
+
 ## 6. 复现命令（只读）
 
 ```sh
