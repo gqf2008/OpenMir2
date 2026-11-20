@@ -10,5 +10,7 @@ assertion failed: eat_ok_shape9_repair_normal: 延时通知(七字段排序序�
 assertion failed: eat_fail_shape9_full: 即时帧(含 SM_ADDITEM)与 oracle 不符
   left: [635]  right: [636]
 # 还原后基线绿（useitem.rs == 快照 d96abfdc…；--lib 2035 passed / 0 failed / 55 ignored）。
-# 注：单改 `if n > 0`→`>= 0` 是 no-op（外层 w.dura_max>w.dura 通过时 missing>0 ⇒ n>0 恒真，n>0 为防御性死守卫）；
-#     故 M3b 同时翻转两层守卫才有牙。full/no-weapon 的"不吃"由外层守卫保证。
+# 注：`if n > 0` **照抄 oracle** `PlayObject.cs:1577-1580` 的 `if (nDura <= 0) return false;`（**不是死代码**）：
+#     `dec=1` 时 `DuraMax -= (DuraMax-Dura)/1 = Dura` ⇒ `n=0` ⇒ 该守卫可活（拒吃）。
+#     单改 `n>0`→`>=0` 对"外层已过滤"的用例是 no-op（外层 `w.dura_max>w.dura` 通过 ⇒ missing>0 ⇒ n>0 恒真）；
+#     故 M3b 同时翻转外层(`dura_max>dura`)与内层(`n>0`)两守卫才让"已满误吃"现形。full/no-weapon 的"不吃"另由 `if let Some(w)` 外层守卫保证。

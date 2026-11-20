@@ -74,7 +74,7 @@
 //!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
 //!   - IT-12 Shape4 祝福油 `WeaptonMakeLuck()`（`:2258`）——未实现，T-17；
 //!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
-//!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（`:2286`）——未实现，T-17；
+//!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（用户可见）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`；
 //!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（`:2292`）——未实现，T-17；
 //!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`；`Config.WinLotteryLevel1..6` 本仓已有该组字段）——未实现，T-17。
 //!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
