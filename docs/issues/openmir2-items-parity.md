@@ -306,6 +306,7 @@ A = `Outcome` 回 `exp_delta`，宿主落基础 + 同步（与宿主战斗版 `G
   升级前值 ⇒ `it08_levelup_host_parity` 的 `WAbil==Abil` 断言必红（§16 变异 A 证）。
 - **`53` 只在升级支出现，非升级支没有**（非升级 `IncHealthSpell` 不被触发）。
 - **`body_luck`**：非升级 `AddBodyLuck(DuraMax*0.002)`=0.2 由 `use_item` 落，升级再 `AddBodyLuck(100)` ⇒ 终值 100.2（golden）。
+- **修正留痕（2026-11-20）**：非升级支的通知线序修正为 **622→44**（键 = RM `(byte)wIdent`；见 §9.12「修正：Shape13 通知线序与 oracle 相反」）。IT-08 的 verified 结论不变（升级支顺序未动），status 不动。
 - 对拍测试 `tests::it08_levelup_host_parity`：过滤 idents `{53,44,45,52,752}` 按**线上序逐字段**比 `pumped`，逐字段比派生
   `max_hp/max_mp/hp/mp/dc`（golden `wabil`），并断言升级后 `WAbil==Abil`（exp/level/max_exp）。`NeedExps` 取夹具 `config.need_exps_head`
   （生产 `Exps.conf` 前缀，sha `07d7801c…` 已入夹具，`[6]==80` 守卫同源）。
@@ -683,6 +684,15 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 4. 探针**新建 `m3/oil-probe`**（不动 `eat-probe`：`3b` 正在用它签 IT-16 第二批）。
 
 **泵序（2026-11-20 实测修正，opc-19 三条要求）**：吃路径的通知排水改为 `NetPriorityQueue`（= .NET `PriorityQueue` 四叉最小堆的逐位复刻），入队序 = 发送序，出队即泵序。
+
+#### 修正：Shape13 通知线序与 oracle 相反（2026-11-20，发现既有偏差）
+
+- **旧行为**：Shape13 **非升级**支吃成功后，线上序为 `SM_WINEXP(44) → SM_WEIGHTCHANGED(622)`。
+- **oracle 依据**：`MsgQueue` = `PriorityQueue<SendMessage, byte>`，键 = `(byte)wIdent`（`src/M2Server/Actor/BaseObject.Message.cs:181`）；夹具 `eat_ok_stdmode3_shape13_exp_nonlevelup` 的记录序 `[(10115,131),(8075,139)]` ⇒ **622 先于 44**。
+- **影响面**：仅 Shape13 **非升级**支。升级支入队序本就是 `53(68)→622(131)→44(139)`（升序），`tests::it08_levelup_host_parity`（`lib.rs` 的「直发 635 先，泵出 53→622→44→45/52/752」逐帧断言）**不受影响、仍绿**。
+- **为什么此前没暴露**：比较器按**七字段多重集**比（§3），不含顺序；且没有任何用例断言非升级支的线序 ⇒ 偏差不可见。
+- **断言清单（§25 扫一遍，逐个点名）**：`eat_vectors.json` 两例（`..._nonlevelup` / `..._levelup`）记录的是 **oracle 序**，**未改动**；`tests::it08_levelup_host_parity` 未受影响；新增钉子 `tests::eat_notice_drain_matches_oracle_order_for_shape13`（入队 `[8075,10115]` ⇒ 出队 `[622,44]`）。
+- **作废的说法（原文）**：「现有路径不受影响：`use_item` 产出的通知本来就是低字节升序且互不相同」——**假的**：Shape13 入队序是 `139→131`（降序）。
 - **`(byte)ident` 升序在同优先级下不唯一**：同键 3 条入队 `[0,1,2]`、出队实测 **`[0,2,1]`**（sift 序）；`sort_by_key` 会给 `[0,1,2]` ⇒ **只能堆出队，不能排序**。
 - **一条既有偏差被顺带修正**：`use_item` 对 Shape13 先 push `RM_WINEXP`(8075→139)、公共尾再 push `RM_WEIGHTCHANGED`(10115→131)，旧实现按入队序发 ⇒ 线上 44 在 622 之前；oracle 夹具记录的是 `[(10115,131),(8075,139)]`（622 先）⇒ 新排水后与 oracle 一致。**此前"现有路径不受影响"的说法作废**（那是假设，已被本例推翻）。
 - **三条钉住用例**：`tests::net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion`（等键 `[0,2,1]`）、`tests::eat_notice_drain_matches_oracle_order_for_shape13`（622 先于 44）、`tests::it12_oil_frame_order_desc_and_always_eaten`（祝福油 `[635,752,52,622]` + `Desc[3]/[4]` 迁移 + 诅咒支上界）。
