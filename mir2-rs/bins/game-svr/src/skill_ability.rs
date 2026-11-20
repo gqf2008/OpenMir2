@@ -184,6 +184,21 @@ mod tests {
         );
     }
 
+    /// **跨 Recalc 的顺序例**：两次重算用**不同**技能 ⇒ `arr` 里应**同时**留两次的条目
+    /// （「只写不清」的直接后果，不是第二次覆盖第一次）。红检：在函数开头 `arr.fill(None)` 或
+    /// 每次只写当前项（先清再写）⇒ 本用例必红。
+    #[test]
+    fn magic_arr_keeps_entries_across_recalcs() {
+        let mut a = arr();
+        let _ = recalc_hit_speed_skills(&[m(SKILL_ONESWORD, 1)], &mut a);
+        let _ = recalc_hit_speed_skills(&[m(SKILL_ILKWANG, 1)], &mut a);
+        assert!(
+            a[usize::from(SKILL_ONESWORD)].is_some(),
+            "第一次的条目必须在（不清空）"
+        );
+        assert!(a[usize::from(SKILL_ILKWANG)].is_some(), "第二次的条目也在");
+    }
+
     /// **`MagIdx >= 50` 不崩、不写**（oracle 越界抛异常；本仓跳过并 WRN——登记的原样差异）。
     #[test]
     fn magic_arr_ignores_id_out_of_range() {

@@ -101,6 +101,15 @@
 - 基线（本批跑绿）：`it08_`(3) / `recalc_`(16) / `hit_mode_conditions`(1) / `it17a_`(6) / `sm_addmagic`(2)；
   `clippy -p game-svr --all-targets -D warnings` 绿。
 
+**已登记的 known deviation（有意不同，别当 bug 修）**：
+- **`MagIdx >= 50`**：oracle `MagicArr[userMagic.MagIdx]`（数组 50，`PlayObject.cs:1041/3684`）会抛
+  `IndexOutOfRangeException`（进程级崩溃）；本仓 `recalc_hit_speed_skills` **跳过该条目并 WRN**
+  （理由：不把内容数据的错误升级成进程崩溃）。保留用例 `magic_arr_ignores_id_out_of_range`
+  （断言越界条目不写、合法条目照算）——删掉「跳过」或改成写入都会红。
+- **本批 0 抽是结构性的**：`recalc_hit_speed_skills` **没有 `rng` 形参**，攻杀支只置 `AttackSkillCount`
+  不置 `AttackSkillPointCount`；只要 `MagicList` 不含攻杀剑法就没有任何抽数。**第二批加 `rng` 后
+  本句不再成立**（届时「带攻杀 ⇒ 每次 Recalc 恰 1 抽」要进账本与断言）。
+
 **后续批（未做）**：攻杀剑法的 `RandomByte(7-L)` 抽数（函数加 `rng` 形参 + 账本）、`MagicArr`
 消费接线（`GetHitMode` 模式 4/5/8/12、`SkillAttackDamage`）、`HitPlus/HitDouble` 的战斗态、`MagicArr`
 残影在删技能后的行为用例（结构层已覆盖"不清空"）。
