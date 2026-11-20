@@ -539,6 +539,279 @@ internal static class Program
         };
     }
 
+    /// <summary>IT-16 彩票用例的一份计划（配置覆盖 + 8 个进程级计数的初值 + 金币前值）。</summary>
+    private sealed class LotteryPlan
+    {
+        public string Name = "";
+        public int Rate;
+        public int[] Min = new int[6];
+        public int[] Max = new int[6];
+        public int[] Gold = new int[6];
+        public int InitCount;
+        public int InitNoWin;
+        public int[] InitLevel = new int[6];
+        public int GoldBefore;
+        public int HumanMaxGold = 10_000_000;
+    }
+
+    /// <summary>`SystemShare.Config` 的彩票 27 键快照（19 参数 + 8 计数）。</summary>
+    private static (int Rate, int[] Min, int[] Max, int[] Gold, int Count, int NoWin, int[] Level) SnapshotLotteryCfg()
+        => (SystemShare.Config.WinLotteryRate,
+            new[]
+            {
+                SystemShare.Config.WinLottery1Min, SystemShare.Config.WinLottery2Min,
+                SystemShare.Config.WinLottery3Min, SystemShare.Config.WinLottery4Min,
+                SystemShare.Config.WinLottery5Min, SystemShare.Config.WinLottery6Min,
+            },
+            new[]
+            {
+                SystemShare.Config.WinLottery1Max, SystemShare.Config.WinLottery2Max,
+                SystemShare.Config.WinLottery3Max, SystemShare.Config.WinLottery4Max,
+                SystemShare.Config.WinLottery5Max, SystemShare.Config.WinLottery6Max,
+            },
+            new[]
+            {
+                SystemShare.Config.WinLottery1Gold, SystemShare.Config.WinLottery2Gold,
+                SystemShare.Config.WinLottery3Gold, SystemShare.Config.WinLottery4Gold,
+                SystemShare.Config.WinLottery5Gold, SystemShare.Config.WinLottery6Gold,
+            },
+            SystemShare.Config.WinLotteryCount,
+            SystemShare.Config.NoWinLotteryCount,
+            new[]
+            {
+                SystemShare.Config.WinLotteryLevel1, SystemShare.Config.WinLotteryLevel2,
+                SystemShare.Config.WinLotteryLevel3, SystemShare.Config.WinLotteryLevel4,
+                SystemShare.Config.WinLotteryLevel5, SystemShare.Config.WinLotteryLevel6,
+            });
+
+    private static void ApplyLotteryCfg(int rate, int[] min, int[] max, int[] gold, int count, int noWin, int[] level)
+    {
+        SystemShare.Config.WinLotteryRate = rate;
+        SystemShare.Config.WinLottery1Min = min[0];
+        SystemShare.Config.WinLottery2Min = min[1];
+        SystemShare.Config.WinLottery3Min = min[2];
+        SystemShare.Config.WinLottery4Min = min[3];
+        SystemShare.Config.WinLottery5Min = min[4];
+        SystemShare.Config.WinLottery6Min = min[5];
+        SystemShare.Config.WinLottery1Max = max[0];
+        SystemShare.Config.WinLottery2Max = max[1];
+        SystemShare.Config.WinLottery3Max = max[2];
+        SystemShare.Config.WinLottery4Max = max[3];
+        SystemShare.Config.WinLottery5Max = max[4];
+        SystemShare.Config.WinLottery6Max = max[5];
+        SystemShare.Config.WinLottery1Gold = gold[0];
+        SystemShare.Config.WinLottery2Gold = gold[1];
+        SystemShare.Config.WinLottery3Gold = gold[2];
+        SystemShare.Config.WinLottery4Gold = gold[3];
+        SystemShare.Config.WinLottery5Gold = gold[4];
+        SystemShare.Config.WinLottery6Gold = gold[5];
+        SystemShare.Config.WinLotteryCount = count;
+        SystemShare.Config.NoWinLotteryCount = noWin;
+        SystemShare.Config.WinLotteryLevel1 = level[0];
+        SystemShare.Config.WinLotteryLevel2 = level[1];
+        SystemShare.Config.WinLotteryLevel3 = level[2];
+        SystemShare.Config.WinLotteryLevel4 = level[3];
+        SystemShare.Config.WinLotteryLevel5 = level[4];
+        SystemShare.Config.WinLotteryLevel6 = level[5];
+    }
+
+    private static object LotteryCfgDto((int Rate, int[] Min, int[] Max, int[] Gold, int Count, int NoWin, int[] Level) c)
+        => new
+        {
+            rate = c.Rate,
+            min = c.Min,
+            max = c.Max,
+            gold = c.Gold,
+            count = c.Count,
+            no_win = c.NoWin,
+            level = c.Level,
+        };
+
+    /// <summary>
+    /// 记录型随机源：临时安装进 `OpenMir2.RandomNumber.random`，逐个记录取数（含调用点）。
+    /// 用途 = **直接证明符号链**：oracle `WinLottery` 的 `M2Share.RandomNumber.Random(rate)`
+    /// 读的就是这个私有静态字段 ⇒ 本类收到的取数即该路径的真实抽值，且能证明「本次调用恰抽一次」。
+    /// </summary>
+    private sealed class ProbeRandom : Random
+    {
+        public readonly List<(int Value, string Site)> Draws = new();
+        public ProbeRandom(int seed) : base(seed) { }
+
+        public override int Next(int maxValue)
+        {
+            int v = base.Next(maxValue);
+            Draws.Add((v, FirstGameSite()));
+            return v;
+        }
+
+        public override int Next()
+        {
+            int v = base.Next();
+            Draws.Add((v, FirstGameSite()));
+            return v;
+        }
+
+        public override int Next(int minValue, int maxValue)
+        {
+            int v = base.Next(minValue, maxValue);
+            Draws.Add((v, FirstGameSite()));
+            return v;
+        }
+
+        public override double NextDouble()
+        {
+            double v = base.NextDouble();
+            Draws.Add((-1, FirstGameSite()));
+            return v;
+        }
+
+        /// <summary>第一个非探针源文件帧（`文件名:行`）；PDB 不可用 ⇒ null（不造假）。</summary>
+        private static string FirstGameSite()
+        {
+            try
+            {
+                var st = new System.Diagnostics.StackTrace(2, true);
+                for (int i = 0; i < st.FrameCount; i++)
+                {
+                    var f = st.GetFrame(i);
+                    var fn = f?.GetFileName();
+                    // 跳过探针自身与 `RandomNumber` 包装层，落到真正的游戏侧调用点（`WinLottery`）。
+                    var leaf = Path.GetFileName(fn ?? "");
+                    if (!string.IsNullOrEmpty(fn)
+                        && leaf != "Program.cs"
+                        && leaf != "RandomNumber.cs")
+                    {
+                        return leaf + ":" + f.GetFileLineNumber();
+                    }
+                }
+            }
+            catch
+            {
+                // 取不到调用点不影响抽值证据。
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// **IT-16 彩票宿主级用例**：建 PO → 把 `ProbeRandom(caseSeed)` 临时装进
+    /// `OpenMir2.RandomNumber.random`（证明符号链）→ 按预测抽值定档位、覆盖配置、复位 8 计数
+    /// → 调私有 `ClientUseItems` → 记录金/计数/帧/通知/抽值 → 还原配置与随机源。
+    /// 本次调用必须**恰抽一次且等于预测**，否则 rc=2 不落盘。
+    /// </summary>
+    private static object RunLotteryCase(GameItemSystem table, CaptureNetChannel net, string name,
+        int caseSeed, Func<int, LotteryPlan> makePlan)
+    {
+        var original = SnapshotLotteryCfg();
+        net.Frames.Clear();
+        var po = new PlayObject
+        {
+            Race = (byte)ActorRace.Play,
+            ActorId = 0x1234,
+            BoCanUseItem = true,
+            Death = false,
+            Envir = new Envirnoment(),
+            WAbil = ReachAbil(1, 10, 8),
+            ItemList = new List<UserItem>(),
+            MagicList = new List<UserMagic>(),
+            IncHealth = 0,
+            IncSpell = 0,
+            UserUnLockDurg = false,
+            Abil = new Ability { Level = 1 },
+            UserAccount = "probe",
+            LoginIpAddr = "127.0.0.1",
+            IsRobot = false,
+            OffLineFlag = false,
+        };
+        po.Abil = CloneAbility(po.WAbil);
+        po.ItemList.Add(ToUser(S(1, 2019)));
+        po.Envir.Flag.boNODRUG = false;
+        SystemShare.FunctionNPC = null;
+
+        int rate = SystemShare.Config.WinLotteryRate;
+        var predictedRng = new Random(caseSeed);
+        int predicted = predictedRng.Next(rate);
+        var p = makePlan(predicted);
+        if (p.Rate != rate)
+        {
+            throw new InvalidOperationException($"case {name}: plan.rate={p.Rate} != 当前配置 rate={rate}");
+        }
+
+        // `OpenMir2.RandomNumber.random`（私有静态）：装上可记录的实例，调完还原。
+        Assembly openMir2 = Assembly.Load("OpenMir2");
+        Type rnType = openMir2.GetType("OpenMir2.RandomNumber", throwOnError: true);
+        FieldInfo randomField = rnType.GetField("random", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingFieldException("OpenMir2.RandomNumber.random");
+        var inst = new ProbeRandom(caseSeed);
+        object prevRandom = randomField.GetValue(null);
+
+        po.Gold = p.GoldBefore;
+        ApplyLotteryCfg(p.Rate, p.Min, p.Max, p.Gold, p.InitCount, p.InitNoWin, p.InitLevel);
+        var before = SnapshotLotteryCfg();
+        int goldBefore = po.Gold;
+
+        var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException("PlayObject.ClientUseItems");
+        randomField.SetValue(null, inst);
+        try
+        {
+            mi.Invoke(po, new object[] { 1, "lottery_ticket" });
+        }
+        finally
+        {
+            randomField.SetValue(null, prevRandom);
+        }
+
+        var immediate = net.Frames.ToList();
+        var (messages, _, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
+        var after = SnapshotLotteryCfg();
+        int goldAfter = po.Gold;
+
+        if (inst.Draws.Count != 1 || inst.Draws[0].Value != predicted)
+        {
+            Console.Error.WriteLine(
+                $"LOTTERY_RNG_MISMATCH case={name} predicted={predicted} draws="
+                + string.Join(",", inst.Draws.Select(d => d.Value)));
+            Environment.Exit(2);
+        }
+
+        ApplyLotteryCfg(original.Rate, original.Min, original.Max, original.Gold,
+            original.Count, original.NoWin, original.Level);
+
+        return new
+        {
+            name,
+            host_lottery = true,
+            request = new { make_index = 1, name = "lottery_ticket" },
+            gold_before = goldBefore,
+            gold = goldAfter,
+            human_max_gold = p.HumanMaxGold,
+            lottery_before = LotteryCfgDto(before),
+            lottery = LotteryCfgDto(after),
+            config = new
+            {
+                original = LotteryCfgDto(original),
+                applied = LotteryCfgDto(before),
+            },
+            frames = immediate
+                .Select(f => new { ident = f.ident, recog = f.recog, param = f.param, tag = f.tag, series = f.series })
+                .ToList(),
+            notices = messages,
+            drained = new { passes = drainPasses, max_passes = MaxDrainPasses, hit_cap = drainHitCap },
+            rng = new[]
+            {
+                new
+                {
+                    seed = caseSeed,
+                    form = "Next(max)",
+                    arg = rate,
+                    result = predicted,
+                    site = inst.Draws[0].Site,
+                },
+            },
+        };
+    }
+
     private static StdItem Tpl(string name, byte stdMode, byte shape, byte weight, ushort ac = 0, ushort mac = 0, ushort duraMax = 0, byte aniCount = 0)
         => new StdItem
         {
@@ -644,6 +917,7 @@ internal static class Program
         templates[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
         templates[2017] = Tpl("unbind_item", 0, 0, 4, duraMax: 7);          // IT-18 解包产物（6 件）
         templates[2018] = Tpl("exp_book", 3, 13, 1, duraMax: 100);          // IT-08 StdMode3/Shape13 经验书（GetExp）
+        templates[2019] = Tpl("lottery_ticket", 3, 11, 1);                 // IT-16 StdMode3/Shape11 彩票（WinLottery）
         // 2009 故意不注册 ⇒ 模板缺失分支（稠密表该位置放空名占位 ⇒ `GetStdItem` 返回 null）
 
         // **用真身 `GameItemSystem`**：`GetStdItem`/`GetUpgradeStdItem`/`CopyToUserItemFromName`
@@ -785,6 +1059,117 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
 
+        // ── IT-16 彩票（StdMode3 / Shape11，宿主级）──────────────────────────────────────
+        // 只在 `MIR2_RNG_SEED` 给定时启用（钩子非必需：抽值由探针临时安装的 `ProbeRandom`
+        // 直接记录——那正是 `RandomNumber.random`，即 `WinLottery` 读的字段）。每例用
+        // `seed + 序号` 独立播种，保证抽值随例变化（常量冒充跑不过）。
+        string seedText = Environment.GetEnvironmentVariable("MIR2_RNG_SEED");
+        bool lotteryEnabled = int.TryParse(seedText, out int lotterySeed);
+        var lotteryCases = new List<object>();
+        if (lotteryEnabled)
+        {
+            var dep = SnapshotLotteryCfg();
+            int rate = dep.Rate;
+            int ord = 0;
+
+            int[] Six(int v) => new[] { v, v, v, v, v, v };
+            int[] Away(int d)
+            {
+                int a = (d + 1) % rate;
+                return Six(a);
+            }
+
+            LotteryPlan MakePlan(string nm, int[] min, int[] max, int count = 0, int noWin = 500,
+                int[] level = null, int goldBefore = 0)
+                => new LotteryPlan
+                {
+                    Name = nm,
+                    Rate = rate,
+                    Min = min,
+                    Max = max,
+                    Gold = dep.Gold,
+                    InitCount = count,
+                    InitNoWin = noWin,
+                    InitLevel = level ?? new int[6],
+                    GoldBefore = goldBefore,
+                    HumanMaxGold = SystemShare.Config.HumanMaxGold,
+                };
+
+            object Run(string nm, Func<int, LotteryPlan> mk)
+                => RunLotteryCase(table, net, nm, lotterySeed + ord++, mk);
+
+            // ① 部署档位（真实 min/max/gold）：抽值落哪档按实记录（不改判据）。
+            lotteryCases.Add(Run("eat_ok_lottery_win6_deploy_bands",
+                _ => MakePlan("eat_ok_lottery_win6_deploy_bands", dep.Min, dep.Max)));
+
+            // ② 6..2 等奖各一：目标档收成 [d,d]，其余档挪到 d+1。
+            for (int lv = 6; lv >= 2; lv--)
+            {
+                int idx = lv - 1;
+                string nm = $"eat_ok_lottery_win{lv}_steered";
+                lotteryCases.Add(Run(nm, d =>
+                {
+                    var min = Away(d);
+                    var max = Away(d);
+                    min[idx] = d;
+                    max[idx] = d;
+                    return MakePlan(nm, min, max);
+                }));
+            }
+
+            // ③ 1 等奖：**和式等值**（min[0] + max[0] == nRate）。
+            lotteryCases.Add(Run("eat_ok_lottery_win1_sum_equality", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[0] = d + 1;
+                max[0] = -1;
+                return MakePlan("eat_ok_lottery_win1_sum_equality", min, max);
+            }));
+
+            // ④ 未中（全部档挪开）。
+            lotteryCases.Add(Run("eat_ok_lottery_no_win", d => MakePlan("eat_ok_lottery_no_win", Away(d), Away(d))));
+
+            // ⑤ 闸取假（档命中但 0 < 0 为假 ⇒ 表现为未中、物品仍吃）。
+            lotteryCases.Add(Run("eat_ok_lottery_gate_closed", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = d;
+                return MakePlan("eat_ok_lottery_gate_closed", min, max, count: 0, noWin: 0);
+            }));
+
+            // ⑥ 边界：抽值 == min 端点；抽值 == max 端点。
+            lotteryCases.Add(Run("eat_ok_lottery_boundary_min", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = System.Math.Min(d + 1, rate - 1);
+                return MakePlan("eat_ok_lottery_boundary_min", min, max);
+            }));
+            lotteryCases.Add(Run("eat_ok_lottery_boundary_max", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = System.Math.Max(d - 1, 0);
+                max[5] = d;
+                return MakePlan("eat_ok_lottery_boundary_max", min, max);
+            }));
+
+            // ⑦ P2 稳健例：6 档覆盖全区间 ⇒ 必中 6（不依赖抽值）。
+            lotteryCases.Add(Run("eat_ok_lottery_forced_bucket_p2",
+                _ => MakePlan("eat_ok_lottery_forced_bucket_p2", Six(0), Six(rate - 1))));
+
+            // ⑧ `IncGold` 失败支**不进探针**：oracle 走 `DropGoldDown` → `GetDropPosition`，
+            //    需要真实 Envir/Map（探针是假 Envir ⇒ NRE）。由 Rust 宿主级用例 ③ 覆盖。
+        }
+        else
+        {
+            Console.Error.WriteLine("LOTTERY_DISABLED（未设置 MIR2_RNG_SEED）：彩票用例不生成");
+        }
+
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in templates)
         {
@@ -843,13 +1228,16 @@ internal static class Program
                 "src/M2Server/Actor/BaseObject.cs:700 (HealthSpellChanged)",
                 "src/M2Server/Actor/BaseObject.cs:1771 (WeightChanged) / :1356 (RecalcBagWeight)",
                 "src/M2Server/Player/PlayObject.Socket.cs:17 (SendDefMessage)",
+                "src/M2Server/Player/PlayObject.cs:3809 (WinLottery; IT-16)",
+                "src/M2Server/Player/PlayObject.cs:3813 (nRate = Random(WinLotteryRate))",
             },
             notes = new[]
             {
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级/StdMode 变换不在本片作用域）",
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
-                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 3/4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
+                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
+                "IT-16：彩票（StdMode3/Shape11）是**宿主级**（`PlayObject.WinLottery`）——本夹具把它的记录放在顶层 `lottery`，不混进 `cases`（既有 31 例键集不变）。抽值经 RNG 钩子固定：每个用例前复位 8 个进程级计数、按预测抽值覆盖档位，跑完还原；台账自检不一致 ⇒ rc=2 不落盘。",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
@@ -864,6 +1252,13 @@ internal static class Program
             },
             templates = templateDtos,
             cases,
+            // IT-16：彩票宿主级用例（独立于 `cases`，不改既有 31 例的键集）。
+            lottery = new
+            {
+                enabled = lotteryEnabled,
+                seed = lotteryEnabled ? (int?)lotterySeed : null,
+                cases = lotteryCases,
+            },
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);

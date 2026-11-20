@@ -97583,7 +97583,7 @@ fn ",
             &env,
         );
         // 635 直发先到；泵按 `(byte)ident` 升序：`SM_WEIGHTCHANGED(622←10115→131)`
-        // 恒随每次成功吃出现，先于 `SM_GOLDCHANGED(653←10136→248)`。sysmsg(252) 被缺口丢弃。
+        // 恒随每次成功吃出现，先于 `SM_GOLDCHANGED(653←10136→152)`。sysmsg(252) 被缺口丢弃。
         assert_eq!(
             ids,
             vec![SM_EAT_OK, 622, SM_GOLDCHANGED],

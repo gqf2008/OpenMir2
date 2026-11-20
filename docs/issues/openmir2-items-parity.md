@@ -388,7 +388,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **RNG 口径（P1，逐值对拍）**：`nRate = M2Share.RandomNumber.Random(Config.WinLotteryRate)`（`PlayObject.cs:3813`）。
 - **同一实例的符号链（可核，4 段）**：①`M2Share.RandomNumber = RandomNumber.GetInstance()`（`src/M2Server/M2Share.cs:194`）→ ②`OpenMir2.RandomNumber` 的**私有静态** `private static Random random`（`RandomNumber.cs`）→ ③`RandomNumber.Random(int)=random.Next(max)`→ ④魔法种子钩子 `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs` **文件头明写**：反射替换的正是这个 `RandomNumber.random`（换 `RecordingRandom(new Random(seed))`）。⇒ WinLottery 与魔法共用同一 RNG 实例。
 - **caveat（重要）**：P1 的"同种子同序列"**只在 legacy `.NET Random` 算法口径下成立**（钩子把 `random` 换成定种子 `new Random(seed)`=legacy `CompatSeedImpl`/Knuth 减法）。**生产无参 `new Random()` 在 .NET6+ 是 xoshiro、非同序列**。**oracle 原版运行在 legacy 上 ⇒ legacy 即我们该对的目标；Rust `crates/shared/src/rng.rs` 复刻的正是它。** 别以为"任意 .NET 版本都行"。
-- **P1 用例**：固定 `MIR2_RNG_SEED` ⇒ `nRate` 确定 ⇒ ①各级中奖各一（选使 `nRate` 落该段的 seed，`WinLottery{1..6}Min/Max` 区间有空档故可精细落点）；②未中（`nRate` 落空档）；③各 Min/Max 边界；④`Count<NoWinLotteryCount` **闸取假**（`nRate` 中奖但闸闭 ⇒ 表现为未中）。draws 逐值对拍（夹具 `rng` 台账 site+seq，Rust 同 seed 同 stream）。
+- **P1 用例（已落地）**：夹具顶层 `lottery.cases` 12 例，每例用 **`MIR2_RNG_SEED + 序号` 独立播种**（抽值随例变化，常量冒充跑不过）⇒ ①各级中奖各一（目标档收成 `[d,d]`、其余档挪到 `d+1`）；②未中（全档挪开）；③`min`/`max` 端点各一边界例；④`Count<NoWinLotteryCount` **闸取假**（档命中但 `0<0` ⇒ 表现为未中、物品仍吃）；⑤部署档位一例（不改判据、按实记录：实测 `nRate=21242` 落空档 ⇒ 未中）；⑥P2 强制桶（`6Min=0/6Max=rate-1` ⇒ 必中 6）。**抽值逐值对拍**：oracle 侧把 `ProbeRandom(caseSeed)` 临时装进 `OpenMir2.RandomNumber.random`（即 `WinLottery` 读的私有静态字段），记录到的取数点实测为 **`PlayObject.cs:3813`**（符号链直接证据）且「本次调用恰抽一次」；夹具记 `seed/form/arg/result/site`，Rust 侧 `RandomNumber::with_seed(seed).random_below(rate)` 必须逐值相同（`useitem::tests::it16_lottery_fixture_rng_and_deltas`）。
 - **⚠ 部署配置下 1 等奖为死代码**：1 级判据是 `WinLottery1Min + WinLottery1Max == nRate`（`PlayObject.cs:3859`，**和式等值**，不是区间），部署 `16180 + 16185 = 32365` ≥ `WinLotteryRate = 30000` ⇒ `nRate ∈ [0,30000)` **永远等不到**。⇒ **1 等奖用例必须覆盖 `WinLottery1Min/1Max`**（取 `5000/8000` ⇒ 和 `13000`；已核 `13000` 不落任一其它档 `[1,4999]/[14000,15999]/[16000,16149]/[16150,16169]/[16170,16179]`），并把它写进夹具 `config` 快照——**同时记原始值与覆盖值**（否则该用例不可复现，且后来人不知道它偏离了部署配置）。
 - **未中档的 seed 空间（越宽 P1 越稳）**：`nRate = 0`（`6Min=1` 故 0 不算 6 档）、`[5000,13999]`、`[16180,29999]` 三段全落"未中"。
 - **P2 稳健例一条**：配置强制桶（如 `6Min=0/6Max=Rate-1` 覆盖全区间 ⇒ 必中 6），断言只写行为/边界、不依赖抽值（兜底）。
@@ -404,11 +404,12 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **分层**：纯函数 `win_lottery(rng, &cfg, &mut state) -> WinLotteryOutcome` 出 outcome；宿主负责加锁、写金、发帧。
 
 **② RNG 钩子是新测量口径（非干扰须给证）**：IT-14/15 的 eat-probe 未用 `DOTNET_STARTUP_HOOKS`；IT-16 启用后要证**既有 31 例**不受影响（原写"28 例"是 IT-15 之前的数，作废）。
-- **"夹具逐字节相同"字面做不到**：`eat_ok_stdmode31_unbind_success` 的 6 个 `added_items[].make_index` = `GetItemNumber()` = `ItemNumber + HUtil32.GetTickCount()`（`src/Modules/SystemModule/SystemShare.cs:449-455`），任两次运行必不同。⇒ 用**归一化 + 原始 diff 双存档**：
-  1. `A1/A2` = 钩子关跑两次；`B1/B2` = 钩子开 + 两个不同 `MIR2_RNG_SEED`；
-  2. **归一化清单只允许 `added_items[*].make_index`**（理由：墙钟派生、非行为字段）；置哨兵后逐字节比，**原始 diff 同档保存，不隐藏**；
-  3. 判据顺序：`normalize(A1)==normalize(A2)`（噪声基线）→ `normalize(A1)==normalize(B1)`（钩子不改既有）→ **`B1` 与 `B2` 在 IT-16 新增 lottery 用例上必须不同**（nRate 随种子变）——这一条把"钩子没生效"与"钩子无影响"分开；
-  4. 钩子安装证明取 stdout 的 `[RngSeedHook] 已注入种子 seed=…`（钩子失败 exit 97），不接受"没报错所以装了"。
+- **"夹具逐字节相同"字面做不到**：解包产物 `make_index` = `GetItemNumber()` = `ItemNumber + HUtil32.GetTickCount()`（`src/Modules/SystemModule/SystemShare.cs:449-455`），任两次运行必不同；它同时出现在 `added_items` 与终态 `item_list`。⇒ **归一化 + 原始 diff 双存档**：
+  1. `A1/A2` = 无 `MIR2_RNG_SEED`（钩子关）跑两次；`B1/B2` = 钩子开 + 两个不同 `MIR2_RNG_SEED`；
+  2. **归一化清单（两项，均为墙钟派生、非行为）**：`added_items[*].make_index` 与 `expect.item_list[*].make_index`（**只掩新生成件**——按该例 `added_items` 的值集合匹配，既有件 `make_index=1` 保持可比）；**顶层 `lottery` 块单独比**（A 运行 `enabled=false`、`cases=[]`，B 运行有 12 例；它只存在于播种运行，不参与 A≈B 的逐字节面）。原始 diff 同档保存，不隐藏；
+  3. 判据与**实测结果**（2026-11-20，seed `20261120`/`20261121`）：`normalize(A1)==normalize(A2)` **0 处差异**（噪声基线）→ `normalize(A1)==normalize(B1)` **0 处**（钩子不改既有 31 例与元数据）→ `normalize(B1)==normalize(B2)` **0 处**（同上面的 31 例面）→ **`B1` 与 `B2` 的 12 例 lottery 抽值/种子 12/12 全不同**（把"钩子/播种没生效"与"无影响"分开）；
+  4. 钩子安装证明取 stdout 的 `[RngSeedHook] 已注入种子 seed=…`（钩子失败 exit 97）；探针侧另有「恰抽一次且等于预测」的自检（不一致 rc=2 不落盘）。
+- **说明**：lottery 的抽值与来源行由探针安装的 `ProbeRandom` 直接记录（见 P1 用例），**不依赖钩子台账**；钩子在这批的唯一职责是第 3 条的 A/B 非干扰面。
 - **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
 - **冲突处置**：任何非 `make_index` 差异 ⇒ **停下报 `opc-07`**，不得拿 grep 洗白。
 
@@ -426,14 +427,14 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 
 **恒吃单列断言**：`use_item` 的 `3 if tpl.shape == 11` 臂**仅** `eaten = true`（无 RNG、无金币、无全局计数）；断言"物品恒被吃"**与中/不中解耦**（最易写错处）。
 
-**牙（七类，全部只在变异体下红、还原后绿）**：
-1. 区间边界改一（`>=`/`<=` 换边或 `Min/Max` 对调）；
-2. 去 `IncGold`（或去 `GoldChanged`）；
-3. 把 `eaten` 与中奖绑定（应解耦：未中/闸闭时该牙必红）；
-4. 闸判定反转（`<` → `>=`）；
-5. **运行时改读 `cfg.init_*`**：构造 `init_no_win=12345`、`state.no_win=0`，断言结果只随 `state` 变；
-6. **`init_state()` 逐键映射**（漏映一个键必红）+ **1↔6 等奖键交换**（映射错位必红）；
-7. **帧序对调**（宿主两条 push 顺序对调 ⇒ 主断言红）。
+**牙（七类，2026-11-20 逐个实跑：8 个变异体全红、还原后 sha 与基线相同）**：
+1. 区间边界改一：`>=` → `>`（`boundary_is_inclusive_on_both_ends` 红）；
+2. 去 `IncGold`：`inc_gold(...)` 前置 `false &&`（宿主用例的金币/653 断言红）；
+3. 把 `eaten` 与中奖绑定：Shape11 臂 `eaten = true` → `false`（闸闭/未中例的 635 断言红）；
+4. 闸判定反转：`<` → `>=`（`gate_closed_stops_at_matched_band_and_counts_as_lost` 红）；
+5. **运行时改读 `cfg.init_*`**：`st.count < st.no_win` → `cfg.init_count < cfg.init_no_win`（`pure_decision_reads_state_not_cfg_init` 红）；
+6. **`init_state()` 逐键映射**：`count: self.init_count` → `count: 0`；以及 `level` 1↔6 交换（各红 `init_state_maps_all_eight_keys_without_shift`）；
+7. **帧序对调**：`win_notices` 里绿字放到 GoldChanged 之前（`notice_order_is_pump_priority_ascending` 红）。
 
 **状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 `opc-07` 加指 IT-16）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
