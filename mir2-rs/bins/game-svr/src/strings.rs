@@ -92,6 +92,26 @@ pub const DEFAULT_NOW_IS_FREE_PLAY_MODE: &str = "当前服务器运行于测试�
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
 pub const DEFAULT_REVIVAL_RECOVER_MSG: &str = "复活戒指生效，体力恢复.";
 
+/// oracle `MessageSettings.CanotUseDrugOnThisMap`（`MessageSettings.cs:91`；`StringConf.cs:103` 读键
+/// `CanotUseDrugOnThisMap`）——`EatItems` 的禁药守卫 `SysMsg(Red)` 文本。
+pub const DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP: &str = "此地图不允许使用任何药品!!!";
+/// oracle `MessageSettings.WeaponRepairSuccess`（`MessageSettings.cs:199`；`StringConf.cs:209` 读键）
+/// ——`RepairWeapon`/`SuperRepairWeapon` 的 `SysMsg(Green)` 文本（IT-14/IT-15）。
+pub const DEFAULT_WEAPON_REPAIR_SUCCESS: &str = "武器修复成功...";
+/// oracle `MessageSettings.WinLottery1Msg..=WinLottery6Msg`（`MessageSettings.cs:204-209`；
+/// `StringConf.cs:212-217` 逐键读），idx0 = `WinLottery1Msg`（一等奖）。
+pub const DEFAULT_WIN_LOTTERY_MSGS: [&str; 6] = [
+    "祝贺您，中了一等奖。",
+    "祝贺您，中了二等奖。",
+    "祝贺您，中了三等奖。",
+    "祝贺您，中了四等奖。",
+    "祝贺您，中了五等奖。",
+    "祝贺您，中了六等奖。",
+];
+/// oracle `MessageSettings.NotWinLotteryMsg`（`MessageSettings.cs:210`；`StringConf.cs:218` 读键）
+/// ——未中/闸闭的 `SysMsg(Red)` 文本（IT-16）。
+pub const DEFAULT_NOT_WIN_LOTTERY_MSG: &str = "等下次机会吧!!!";
+
 /// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StringConf {
@@ -107,6 +127,16 @@ pub struct StringConf {
     canot_pick_up_item: Option<String>,
     you_poisoned: Option<String>,
     revival_recover: Option<String>,
+    // 卡 `openmir2-runtime-sysmsg-text-frames`：带文本的 `SysMsg` 帧（禁药/修复油/彩票）。
+    canot_use_drug_on_this_map: Option<String>,
+    weapon_repair_success: Option<String>,
+    win_lottery_msg1: Option<String>,
+    win_lottery_msg2: Option<String>,
+    win_lottery_msg3: Option<String>,
+    win_lottery_msg4: Option<String>,
+    win_lottery_msg5: Option<String>,
+    win_lottery_msg6: Option<String>,
+    not_win_lottery_msg: Option<String>,
     // `[Guild]` 六键（`StringConf.cs:30-35`）。
     guild_notice: Option<String>,
     guild_war: Option<String>,
@@ -224,6 +254,53 @@ impl StringConf {
     #[must_use]
     pub fn you_poisoned(&self) -> &str {
         self.you_poisoned.as_deref().unwrap_or(DEFAULT_YOU_POISONED)
+    }
+
+    /// `[String] CanotUseDrugOnThisMap`（`StringConf.cs:103`；`MessageSettings.cs:91`）。
+    #[must_use]
+    pub fn canot_use_drug_on_this_map(&self) -> &str {
+        self.canot_use_drug_on_this_map
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP)
+    }
+
+    /// `[String] WeaponRepairSuccess`（`StringConf.cs:209`；`MessageSettings.cs:199`）。
+    #[must_use]
+    pub fn weapon_repair_success(&self) -> &str {
+        self.weapon_repair_success
+            .as_deref()
+            .unwrap_or(DEFAULT_WEAPON_REPAIR_SUCCESS)
+    }
+
+    /// `[String] WinLottery1Msg..=WinLottery6Msg`（`StringConf.cs:212-217`），idx0 = 一等奖。
+    /// 逐键缺省：缺哪个用哪个的源码默认（`MessageSettings.cs:204-209`）。
+    #[must_use]
+    pub fn win_lottery_msgs(&self) -> [&str; 6] {
+        let slots = [
+            &self.win_lottery_msg1,
+            &self.win_lottery_msg2,
+            &self.win_lottery_msg3,
+            &self.win_lottery_msg4,
+            &self.win_lottery_msg5,
+            &self.win_lottery_msg6,
+        ];
+        // 显式写成 `[&str; 6]`（不是从 `'static` 常量推出的 `[&'static str; 6]`）：
+        // 命中键时要把 `&self` 生命周期的值填进去。
+        let mut out: [&str; 6] = DEFAULT_WIN_LOTTERY_MSGS;
+        for (slot, default) in slots.iter().zip(out.iter_mut()) {
+            if let Some(v) = slot.as_deref() {
+                *default = v;
+            }
+        }
+        out
+    }
+
+    /// `[String] NotWinLotteryMsg`（`StringConf.cs:218`；`MessageSettings.cs:210`）。
+    #[must_use]
+    pub fn not_win_lottery_msg(&self) -> &str {
+        self.not_win_lottery_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_NOT_WIN_LOTTERY_MSG)
     }
 
     /// `[Guild] GuildNotice`（缺键回落 `GameSvrConf.cs:1850`）。
@@ -451,6 +528,15 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "CANOTPICKUPITEM") => &mut conf.canot_pick_up_item,
             (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
             (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
+            (Section::String, "CANOTUSEDRUGONTHISMAP") => &mut conf.canot_use_drug_on_this_map,
+            (Section::String, "WEAPONREPAIRSUCCESS") => &mut conf.weapon_repair_success,
+            (Section::String, "WINLOTTERY1MSG") => &mut conf.win_lottery_msg1,
+            (Section::String, "WINLOTTERY2MSG") => &mut conf.win_lottery_msg2,
+            (Section::String, "WINLOTTERY3MSG") => &mut conf.win_lottery_msg3,
+            (Section::String, "WINLOTTERY4MSG") => &mut conf.win_lottery_msg4,
+            (Section::String, "WINLOTTERY5MSG") => &mut conf.win_lottery_msg5,
+            (Section::String, "WINLOTTERY6MSG") => &mut conf.win_lottery_msg6,
+            (Section::String, "NOTWINLOTTERYMSG") => &mut conf.not_win_lottery_msg,
             (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
             (Section::String, "ATTACKMODEOFALL") => &mut conf.attack_mode_of_all,
             (Section::String, "ATTACKMODEOFPEACEFUL") => &mut conf.attack_mode_of_peaceful,
@@ -664,6 +750,82 @@ Other=1
             c.you_poisoned(),
             "测试值",
             "String.conf 走 ConfigFile.Load 的 UTF-32LE 分支（不是 StringList 的 UTF-16LE）"
+        );
+    }
+
+    /// 卡 `openmir2-runtime-sysmsg-text-frames`：`[String]` 的 `SysMsg` 文本键——
+    /// 键名逐字照 `StringConf.cs:103`（`CanotUseDrugOnThisMap`）/`:209`（`WeaponRepairSuccess`）/
+    /// `:212-217`（`WinLottery1Msg..6Msg`）/`:218`（`NotWinLotteryMsg`）；缺键 = `MessageSettings.cs`
+    /// 的源码默认（`:91` / `:199` / `:204-209` / `:210`）。
+    ///
+    /// 输入字节是 **Windows cp936 的实际编码**（由独立来源生成，不是本仓编码器自证）
+    /// ⇒ 同时校验 cp936 解码；末尾再断言 `gbk()` 编回的是**同一串字节**（卡 §3-3
+    /// 「编码路径只有一条」：配置层 decode 一次、出帧 encode 一次，无中转）。
+    #[test]
+    fn parses_sysmsg_text_keys_from_cp936_and_falls_back_per_key() {
+        let repair_gbk: &[u8] = b"\xce\xe4\xc6\xf7\xd0\xde\xb8\xb4\xb3\xc9\xb9\xa6...";
+        let drug_gbk: &[u8] =
+            b"\xb4\xcb\xb5\xd8\xcd\xbc\xb2\xbb\xd4\xca\xd0\xed\xca\xb9\xd3\xc3\xc8\xce\xba\xce\xd2\xa9\xc6\xb7!!!";
+        let win3_gbk: &[u8] =
+            b"\xd7\xa3\xba\xd8\xc4\xfa\xa3\xac\xd6\xd0\xc1\xcb\xc8\xfd\xb5\xc8\xbd\xb1\xa1\xa3";
+        let not_win_gbk: &[u8] = b"\xb5\xc8\xcf\xc2\xb4\xce\xbb\xfa\xbb\xe1\xb0\xc9!!!";
+
+        let mut bytes = b"[String]\nWeaponRepairSuccess=".to_vec();
+        bytes.extend_from_slice(repair_gbk);
+        bytes.extend_from_slice(b"\nCanotUseDrugOnThisMap=");
+        bytes.extend_from_slice(drug_gbk);
+        bytes.extend_from_slice(b"\nWinLottery3Msg=");
+        bytes.extend_from_slice(win3_gbk);
+        bytes.extend_from_slice(b"\nNotWinLotteryMsg=");
+        bytes.extend_from_slice(not_win_gbk);
+        bytes.push(b'\n');
+
+        let c = parse(&bytes);
+        assert_eq!(c.weapon_repair_success(), "武器修复成功...");
+        assert_eq!(
+            c.canot_use_drug_on_this_map(),
+            "此地图不允许使用任何药品!!!"
+        );
+        assert_eq!(c.not_win_lottery_msg(), "等下次机会吧!!!");
+        // 逐键缺省：只有 3 等奖给了值 ⇒ 其余 5 档各自回落默认（不是整组一起回）。
+        assert_eq!(
+            c.win_lottery_msgs(),
+            [
+                DEFAULT_WIN_LOTTERY_MSGS[0],
+                DEFAULT_WIN_LOTTERY_MSGS[1],
+                "祝贺您，中了三等奖。",
+                DEFAULT_WIN_LOTTERY_MSGS[3],
+                DEFAULT_WIN_LOTTERY_MSGS[4],
+                DEFAULT_WIN_LOTTERY_MSGS[5],
+            ]
+        );
+        // 编码路径只有一条：读进来的 cp936 字节，出帧时 `gbk()` 编回**同一串**。
+        assert_eq!(
+            crate::downlink::gbk(c.weapon_repair_success()),
+            repair_gbk,
+            "cp936 → String → cp936 往返逐字节相同"
+        );
+
+        // 缺键用例：全缺 ⇒ 全默认（等于 `MessageSettings` 源码默认值）。
+        let d = parse(b"[String]\n");
+        assert_eq!(d.weapon_repair_success(), "武器修复成功...");
+        assert_eq!(
+            d.canot_use_drug_on_this_map(),
+            "此地图不允许使用任何药品!!!"
+        );
+        assert_eq!(d.not_win_lottery_msg(), "等下次机会吧!!!");
+        assert_eq!(d.win_lottery_msgs(), DEFAULT_WIN_LOTTERY_MSGS);
+        assert_eq!(
+            d.win_lottery_msgs()[5],
+            "祝贺您，中了六等奖。",
+            "缺键默认与 `MessageSettings.cs:209` 逐字一致"
+        );
+        // **缺键路径也走同一串字节**：源码默认值（Rust 字面量）经 `gbk()` 编出的必须是
+        // oracle 会写上线缆的同一串 cp936（不是"字面量又转了一次"的另一种字节）。
+        assert_eq!(
+            crate::downlink::gbk(d.weapon_repair_success()),
+            repair_gbk,
+            "缺键默认值的 cp936 字节与部署值同串"
         );
     }
 }

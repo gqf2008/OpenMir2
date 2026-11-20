@@ -10484,6 +10484,9 @@ fn handle_eat_cmd(
     colors: &MsgColors,
     // IT-14：`[Setup] RepairItemDecDura`（修复油耐久上限衰减除数；配置值，不写死）。
     repair_item_dec_dura: i32,
+    // 卡 `openmir2-runtime-sysmsg-text-frames`：`String.conf [String]` 的 `MessageSettings`
+    // 文本（禁药/修复油/彩票）。`SysMsg` 的 `sMsg` 由此进 `QueuedNotice::text`。
+    strings: &game_svr::strings::StringConf,
     registry: Option<&mir2_envir::MapRegistry>,
     // `M2Share.UnbindList`（`M2Share.cs:85`）：StdMode 31 解包按 `StdItem.Shape` 查物品名。
     unbind_list: &game_svr::unbindlist::UnbindList,
@@ -10639,6 +10642,13 @@ fn handle_eat_cmd(
         use_items: &use_inst,
         bag: &bag,
     };
+    // `MessageSettings` 文本（`String.conf [String]`；缺键 = oracle 源码默认，见 `strings.rs`）。
+    let sysmsg = game_svr::useitem::SysMsgTexts {
+        canot_use_drug_on_this_map: strings.canot_use_drug_on_this_map(),
+        weapon_repair_success: strings.weapon_repair_success(),
+        win_lottery: strings.win_lottery_msgs(),
+        not_win_lottery: strings.not_win_lottery_msg(),
+    };
     let ctx = game_svr::useitem::UseItemContext {
         catalog,
         // `BoCanUseItem` 在 oracle 初生即 true（`PlayObject.cs:961`）；运行期置位未建模 ⇒ 恒 true（登记）。
@@ -10661,6 +10671,7 @@ fn handle_eat_cmd(
         green_msg_fcolor: u16::from(colors.green_f),
         green_msg_bcolor: u16::from(colors.green_b),
         repair_item_dec_dura,
+        sysmsg,
         recalc: Some(recalc),
     };
     let mut out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
@@ -10719,12 +10730,33 @@ fn handle_eat_cmd(
                 }
                 crate::winlottery::WinLotteryNotice::SysMsgRed => (colors.red_f, colors.red_b),
             };
+            // 文本（卡 `openmir2-runtime-sysmsg-text-frames`）：oracle `PlayObject.cs:3867-3903`
+            // 的 `SysMsg(MessageSettings.WinLottery{N}Msg, Green, Hint)` / `NotWinLotteryMsg`(Red)。
+            // `WinLottery{1..6}Msg` 的下标 = 档位 - 1（`WinLottery1Msg` = 一等奖）。
+            let text = match n {
+                crate::winlottery::WinLotteryNotice::GoldChanged => {
+                    game_svr::useitem::NoticeText::None
+                }
+                crate::winlottery::WinLotteryNotice::SysMsgGreen => {
+                    let level = match outcome {
+                        crate::winlottery::WinLotteryOutcome::Won { level, .. } => level,
+                        // 绿字只在 `Won` 支入队（`win_notices`）；此处防御性回落一等奖文案。
+                        crate::winlottery::WinLotteryOutcome::Lost => 1,
+                    };
+                    let idx = usize::from(level).saturating_sub(1).min(5);
+                    game_svr::useitem::NoticeText::Inline(sysmsg.win_lottery[idx].to_string())
+                }
+                crate::winlottery::WinLotteryNotice::SysMsgRed => {
+                    game_svr::useitem::NoticeText::Inline(sysmsg.not_win_lottery.to_string())
+                }
+            };
             out.notices.push(game_svr::useitem::QueuedNotice {
                 ident: n.ident(),
                 w_param: 0,
                 n_param1: i32::from(f),
                 n_param2: i32::from(b),
                 n_param3: 0,
+                text,
             });
         }
     }
@@ -28253,6 +28285,7 @@ fn sim_loop(
                             &mut world,
                             &colors,
                             enter_cfg.repair_item_dec_dura,
+                            &enter_cfg.string_conf,
                             registry.as_ref(),
                             &unbind_list,
                             &mut item_number,
@@ -53867,6 +53900,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -53998,6 +54032,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -54033,6 +54068,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -54188,6 +54224,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -54429,6 +54466,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -54561,6 +54599,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -55596,6 +55635,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -71384,6 +71424,7 @@ SendRefMsgRange=15
                 world,
                 &colors,
                 90,
+                &game_svr::strings::StringConf::defaults(),
                 None,
                 &unbind,
                 item_number,
@@ -71615,6 +71656,7 @@ SendRefMsgRange=15
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -93625,6 +93667,7 @@ GMEXECUTE f
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -94173,6 +94216,7 @@ GMEXECUTE f
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
@@ -97589,6 +97633,9 @@ fn ",
         use mir2_protocol::frame::CommandMessage;
         const SM_EAT_OK: u16 = 635;
         const SM_GOLDCHANGED: u16 = 653;
+        // `Messages.SM_SYSMESSAGE(100)`：卡 `openmir2-runtime-sysmsg-text-frames` 后**不再被丢弃**
+        // （旧断言把它记成"缺文本 ⇒ 不产帧"，本测试即该卡的 红→绿 证据）。
+        const SM_SYSMESSAGE: u16 = 100;
 
         fn forced_six() -> crate::config::WinLotteryCfg {
             let mut cfg = crate::config::WinLotteryCfg::default();
@@ -97612,7 +97659,7 @@ fn ",
             unbind: &game_svr::unbindlist::UnbindList,
             item_number: &mut i32,
             env: &ScriptGmEnv<'_>,
-        ) -> Vec<u16> {
+        ) -> (Vec<Vec<u8>>, Vec<u16>) {
             // 每相重放一张彩票（前一次已被吃掉）。
             sessions.get_mut("hero").unwrap().state.item_list = vec![game_svr::bag::BagItem {
                 make_index: 1,
@@ -97635,6 +97682,7 @@ fn ",
                 world,
                 colors,
                 90,
+                &game_svr::strings::StringConf::defaults(),
                 None,
                 unbind,
                 item_number,
@@ -97645,10 +97693,13 @@ fn ",
                 cfg,
                 human_max,
             );
-            drain_frames(rx)
+            // 同一次 `handle_eat_cmd` 的原始帧（含 `SM_SYSMESSAGE` 的文本尾）与 ident 序列。
+            let frames = drain_frames(rx);
+            let ids = frames
                 .iter()
                 .filter_map(|b| CommandMessage::from_bytes(b).map(|m| m.ident))
-                .collect()
+                .collect();
+            (frames, ids)
         }
 
         let mut catalog = game_svr::ability::StdItemCatalog::new();
@@ -97709,8 +97760,8 @@ fn ",
             host: ScriptGmHost::default(),
         };
 
-        // ① 中奖（必中 6 档，闸开 0 < 500）：线上帧序 = `SM_EAT_OK(635)` → `SM_GOLDCHANGED(653)`。
-        //    `SM_SYSMESSAGE` 因 `wire.sys_msg: None` 落 `notice_frame → None`（登记丢弃，见 WRN）。
+        // ① 中奖（必中 6 档，闸开 0 < 500）：线上帧序 = `SM_EAT_OK(635)` → `SM_GOLDCHANGED(653)`
+        //    → `SM_SYSMESSAGE(100)`（绿字，文本见卡 `openmir2-runtime-sysmsg-text-frames`）。
         let lottery = crate::winlottery::WinLotteryShared::new(
             crate::config::WinLotteryCfg {
                 init_count: 0,
@@ -97720,7 +97771,7 @@ fn ",
             }
             .init_state(),
         );
-        let ids = run_eat(
+        let (bodies, ids) = run_eat(
             forced_six(),
             10_000_000,
             &lottery,
@@ -97736,11 +97787,23 @@ fn ",
             &env,
         );
         // 635 直发先到；泵按 `(byte)ident` 升序：`SM_WEIGHTCHANGED(622←10115→131)`
-        // 恒随每次成功吃出现，先于 `SM_GOLDCHANGED(653←10136→152)`。sysmsg(252) 被缺口丢弃。
+        // 先于 `SM_GOLDCHANGED(653←10136→152)`，绿字 `RM_SYSMESSAGE(11004→252)` 最后出队。
         assert_eq!(
             ids,
-            vec![SM_EAT_OK, 622, SM_GOLDCHANGED],
-            "中奖：635 直发在前，622/653 泵出在后（金帧序）"
+            vec![SM_EAT_OK, 622, SM_GOLDCHANGED, SM_SYSMESSAGE],
+            "中奖：635 直发在前，622/653/绿字泵出在后（金帧序）"
+        );
+        // **文本进比较面**（卡 §4）：线上帧尾 = EDCode(GBK(`MessageSettings.WinLottery6Msg`))。
+        // 首次中奖恒为 6 等奖（`forced_six` 只放行档 6）⇒ 取 idx 5。
+        let sys_body = bodies
+            .iter()
+            .map(Vec::as_slice)
+            .find(|b| CommandMessage::from_bytes(b).is_some_and(|m| m.ident == SM_SYSMESSAGE))
+            .expect("中奖必发绿字");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&sys_body[12..]),
+            game_svr::downlink::gbk(crate::strings::DEFAULT_WIN_LOTTERY_MSGS[5]),
+            "中奖文本 = MessageSettings.WinLottery6Msg"
         );
         assert_eq!(sessions["hero"].state.gold, 500, "IncGold(500)");
         assert_eq!(
@@ -97764,7 +97827,7 @@ fn ",
             .init_state(),
         );
         sessions.get_mut("hero").unwrap().state.gold = 0;
-        let ids = run_eat(
+        let (bodies, ids) = run_eat(
             forced_six(),
             10_000_000,
             &closed,
@@ -97781,8 +97844,18 @@ fn ",
         );
         assert_eq!(
             ids,
-            vec![SM_EAT_OK, 622],
-            "闸闭：物品恒吃（635+622）但无 653；红字被文本缺口丢弃"
+            vec![SM_EAT_OK, 622, SM_SYSMESSAGE],
+            "闸闭：物品恒吃（635+622）但无 653；红字照发（252 最后出队）"
+        );
+        let sys_body = bodies
+            .iter()
+            .map(Vec::as_slice)
+            .find(|b| CommandMessage::from_bytes(b).is_some_and(|m| m.ident == SM_SYSMESSAGE))
+            .expect("闸闭必发红字");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&sys_body[12..]),
+            game_svr::downlink::gbk(crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG),
+            "红字文本 = MessageSettings.NotWinLotteryMsg"
         );
         assert_eq!(sessions["hero"].state.gold, 0, "闸闭不加钱");
         assert_eq!(
@@ -97807,7 +97880,7 @@ fn ",
             .init_state(),
         );
         sessions.get_mut("hero").unwrap().state.gold = 9_999_900;
-        let ids = run_eat(
+        let (_bodies, ids) = run_eat(
             forced_six(),
             10_000_000,
             &ok,
@@ -97822,7 +97895,11 @@ fn ",
             &mut item_number,
             &env,
         );
-        assert_eq!(ids, vec![SM_EAT_OK, 622], "IncGold 失败：无 653");
+        assert_eq!(
+            ids,
+            vec![SM_EAT_OK, 622, SM_SYSMESSAGE],
+            "IncGold 失败：无 653，但绿字照发（oracle bug 复制）"
+        );
         assert_eq!(
             sessions["hero"].state.gold, 9_999_900,
             "IncGold 失败不加钱（oracle 原样）"
@@ -97874,6 +97951,7 @@ fn ",
             &mut world,
             &colors,
             90,
+            &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
             &mut item_number,
