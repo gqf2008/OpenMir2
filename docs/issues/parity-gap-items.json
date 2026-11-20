@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "13c583366bca8c9a81c8ca330bc52fac3d323bc4",
-    "time": "2026-11-20T06:27:13+08:00",
-    "note": "M55=13c583366 合入 IT-08(Shape13 GetExp 升级支) 后 master items verified=9（QA PASS @ f7cbaf91b）；本计数点取代 card/items-followups（作废不合）"
+    "head": "8b738d9874146351397a94861b74898e29355a1a",
+    "time": "2026-11-20T00:00:00+08:00",
+    "note": "2026-11-20 计数点：verified=9（IT-01/02/03/04/05/06/08/18/19）、implemented_unverified=4（IT-12/14/15/16）、missing=6（IT-07/09/10/11/13/17）；分母 19 不动。B3 单侧补例（+6 例）+ IT-01/03/04 scope 标签在 card/items-b3，合入后本 head 随合并提交更新。"
   },
   "status_enum": [
     "verified",
@@ -370,25 +370,35 @@
         "line": 2258,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "wepmake_luck::tests::it12_oil_fixture_matches_pure_decision",
+        "test_file": "mir2-rs/bins/game-svr/src/wepmake_luck.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/oil_vectors.json",
+        "cases": [
+          "oil_curse_subtracts_luck",
+          "oil_curse_at_luck_zero_bumps_curse",
+          "oil_curse_desc4_at_ten_stays",
+          "oil_remove_curse",
+          "oil_point1_adds_luck",
+          "oil_point2_hit",
+          "oil_point2_miss_point3_hit",
+          "oil_both_tiers_miss",
+          "oil_desc3_at_point3_no_extra_draw",
+          "oil_nrand_zero_point3_dead",
+          "oil_fail_no_weapon",
+          "oil_fail_nodrug"
+        ],
+        "unit_tests": [
+          "wepmake_luck::tests::it12_oil_fail_cases_eat_and_frames",
+          "tests::it12_oil_frame_order_desc_and_always_eaten",
+          "wepmake_luck::tests::random_zero_matches_dotnet_value_and_stream",
+          "wepmake_luck::tests::curse_branch_at_luck_zero_raises_curse_count_capped_at_ten"
         ]
       },
-      "notes": "改武器幸运/诅咒"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape4 祝福油已实现（纯决策 wepmake_luck + 宿主抽取/Desc 回写/能力帧；oil-probe 12 例由 oracle 真身产出，ScriptedRandom 脚本化抽值，武器 Desc[14] 前后全量快照）。缺口：①运行期 SM_SYSMESSAGE 文本帧（WeaptonMakeLuck/WeaptonNotMakeLuck/TheWeaponIsCursed，见 openmir2-runtime-sysmsg-text-frames.md）；②RM_CHARSTATUSCHANGED(10139) 未映射（RecalcAbilitys 侧效应，见 openmir2-charstatuschanged-gap.md）。附：吃路径通知排水改为 NetPriorityQueue 时顺带修正 Shape13 线序（622→44，见卡 §9.12 修正小节）。status 于 2026-11-20 由 missing 更正为 implemented_unverified。"
     },
     {
       "id": "IT-13",

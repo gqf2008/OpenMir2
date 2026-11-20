@@ -26,8 +26,9 @@
 ## 3. Blast radius（可复跑，按 grep 出清单）
 
 ```
-# 宿主侧：凡调用 recalc 的生产路径都可能少这一帧
-grep -rn "recalc_session_ability(" mir2-rs/bins/game-svr/src/lib.rs | grep -v "^.*fn recalc_session_ability"
+# 宿主侧生产路径（**截至 `mod tests {` 之前**；原样 grep 会多出 13 处 mod tests 内的测试调用 ⇒ 29 行）
+N=$(grep -n "^mod tests {" mir2-rs/bins/game-svr/src/lib.rs | head -1 | cut -d: -f1)
+grep -rn "recalc_session_ability(" mir2-rs/bins/game-svr/src/lib.rs | awk -F: -v n="$N" '$1<n' | grep -v "fn recalc_session_ability" | wc -l   # 2026-11-20 = 16
 
 # oracle 侧：RecalcAbilitys 的调用点（决定哪些行为分支触发）
 grep -rn "RecalcAbilitys()" src/M2Server/Player/*.cs
