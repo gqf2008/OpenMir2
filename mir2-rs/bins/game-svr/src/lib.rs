@@ -11089,27 +11089,7 @@ fn broadcast_feature_changed_except(
     }
 }
 
-/// **卡 `openmir2-charstatuschanged-wiring` / `openmir2-tick-frame-priority-queue`**：
-/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐。
-///
-/// `status` 取**调用时刻**的 `GetCharStatus()`（`PlayObject.cs:2873` 的取值时点）。
-#[allow(clippy::too_many_arguments)]
-fn emit_charstatuschanged_self_and_observers(
-    world: &mir2_world_bevy::World,
-    online: &OnlineRegistry,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    actor_id: i32,
-    hit_speed: u16,
-    range: i32,
-    what: &str,
-) {
-    let status = world.get_char_status(actor_id);
-    send_charstatuschanged_self_and_observers(
-        world, online, gates, actor_id, status, hit_speed, range, what,
-    );
-}
-
-/// 同 [`emit_charstatuschanged_self_and_observers`]，但 `status` 由调用方给——
+/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐；`status` 由调用方给——
 /// **入队路径**在入队时取好、出队时不得重算（否则与 oracle 的取值时点不符）。
 #[allow(clippy::too_many_arguments)]
 fn send_charstatuschanged_self_and_observers(
@@ -56361,6 +56341,8 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **偏差 T-296（方向 B）**：stamina 的 53(68) 本应排在 657(155) 之前，本宿主排在之后（卡 §3d）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
             ],
             "升级链（53→44→45→52→752）之后才是体力点段（53）"
@@ -61509,6 +61491,7 @@ SendRefMsgRange=15
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
             assert_eq!(socket, 903);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
             bodies.push(body);
@@ -61522,6 +61505,7 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+            mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
             "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752)"
         );
@@ -61644,6 +61628,7 @@ SendRefMsgRange=15
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
             assert_eq!(socket, 901);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
@@ -61657,6 +61642,7 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
             "恢复 53 → 升级 53 → 44 → 45/52/752（两条 53，不是一条）"
         );
@@ -86151,6 +86137,107 @@ SendRefMsgRange=15
     /// oracle 出队序 `53 → 44 → 45 → 52 → 752`（P31 不另造帧序）。
     ///
     /// 牙：把 P31 奖励从 `exp_awards` 改走独立帧路径 / 不追加进 `exp_awards` ⇒ 本用例只剩 44
+    /// **卡 `openmir2-tick-frame-priority-queue`（T-290）**：战斗升级的 657 走"链内入队、链末出队"。
+    /// 断言：① 657 是链内最后一条（`…752 → 657`）；② `param/tag` = **具体值 2/0**（先把
+    /// `buff.char_status_ex` 造到 2）；③ 自己 1 条、+5 观察者 1 条；④ +13（±12 外）零帧。
+    /// 链前/链后残差见 T-295/T-296（本用例只证链内）。
+    #[test]
+    fn t290_levelup_chain_emits_657_at_chain_end_self_and_observers() {
+        use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut spawn = mir2_world_bevy::EntitySpawn::new(0, "t290".to_string(), 10, 10);
+        spawn.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let hero = world.add_entity(spawn);
+        {
+            let e = world.entities.get_mut(hero).expect("实体");
+            e.buff.char_status_ex = 2;
+            e.progression.level = 10;
+            e.progression.max_exp = 1_000;
+            e.progression.exp = 900;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "t290", 1, 0, 901, hero));
+        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.equip.abil.level = 10;
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 5;
+        sessions.insert("t290".into(), sg);
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        let mut st = mir2_world_bevy::AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 200,
+            ..Default::default()
+        };
+        let award = world.auto_get_exp(hero, &mut st, 1, false).expect("命中");
+        assert!(award.2, "必须进升级块（award={award:?}）");
+        rec.exp_awards.push(award);
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            true,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        let all: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
+        assert_eq!(
+            frames.last().map(|(_, b)| ident(b)),
+            Some(SM_CHARSTATUSCHANGED),
+            "657 必须是链内最后一条；实得 {all:?}"
+        );
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+                assert_eq!(
+                    (
+                        u16::from_le_bytes([b[6], b[7]]),
+                        u16::from_le_bytes([b[8], b[9]])
+                    ),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0"
+                );
+            }
+        }
+        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
+        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
+    }
+
     /// 或 0 帧，断言必红。
     #[test]
     fn p31_levelup_reuses_kill_exp_chain_order() {
@@ -86210,6 +86297,7 @@ SendRefMsgRange=15
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
+        // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
         assert_eq!(
             frames.iter().map(|f| f.ident).collect::<Vec<_>>(),
             vec![
@@ -86218,6 +86306,7 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
             "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752"
         );
