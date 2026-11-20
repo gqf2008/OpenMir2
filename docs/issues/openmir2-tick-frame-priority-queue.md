@@ -422,7 +422,7 @@ impl TickFrameQueue {
 | 4 | `handle_bag_cmd_with_magic` :5327 | `ClientTakeOn/TakeOffItems`（`Operate.cs:455/544`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
 | 5 | `handle_shop_cmd_inner`（升级武器）:7818 | `src/GameSrv/Npc/Merchant.cs:569-571`：`Index=0; RecalcAbilitys(); FeatureChanged(); SendMsg(RM_ABILITY)` | **2 / 1 / 1**（另有 41、52） | 无 |
 | 7 | spell 支 A（按魔法分） | ① `MagBubbleDefenceUp`（`CharacterObject.cs:96-114`）：`CharStatus=GetCharStatus(); if(nOldStatus!=CharStatus) StatusChanged();` ⇒ **条件发、无 SendUpdateMsg**；② `DefenceUp/MagDefenceUp`（`BaseObject.cs:2159-2186`）：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | ① 条件成立 **1 / 1 / 1**、不成立 **0/0/0**；② **2 / 1 / 1** | `shield.json` 1/1/1；`cloak.json` 1/1/1；`dejiwonho.json` 1/**2**/1；`bigcloak.json` **2/2/2**；`hangmajinbub.json` 49/98/49 |
-| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** | 无（buff 侧仅单测） |
+| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** ⇒ **2026-11-20 修正见 §14f：头去重模型下夹具场景两支都是 1** | 无（buff 侧仅单测） |
 | 11 | `apply_pending_gm_target_ops`（@删除技能）:22398 | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71` `mIPlayerActor.RecalcAbilitys()`（+`SendDelMagic` 直接帧 212） | **2 / 1 / 1** | 无（GM） |
 | 12 | 同上（第二分支）:22405 | 同上 | **2 / 1 / 1** | 无（GM） |
 | 13 | `drain_player_need_recheck_with_magic` :25072 | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if(boTakeItem){ SendDelItems; UseItems[i].Index=0; RecalcAbilitys(); }` | **2 / 1 / 1**（条件：该格确实被摘下） | 无 |
@@ -547,3 +547,169 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
 
 **全量三数（§51）**：`cargo test -p game-svr --lib` → `running 2226` / **2153 passed · 0 failed · 73 ignored**，rc=0。
 判据边界按 §14c/§47：只判逐 socket 计数与同 socket 参照帧位置；两条 657 相互先后、跨 socket 先后不判。
+
+## 14f. 657 自见条数是**队列状态**的函数：头去重模型与逐路径裁定（2026-11-20）
+
+**机制（只读核对，树 `walgit/master @ fd02c1b6d`）**：`SendUpdateMsg`（`src/M2Server/Actor/BaseObject.Message.cs:283-304`）
+在入队前只把**队首且同 `wIdent`** 的消息弹掉，再 `SendMsg(this, …)` 重新入队。`RecalcAbilitys` 在 `:2876`
+之前唯一入队是 `:2875 StatusChanged()` 的那条 657（扫过 `PlayObject.cs:2008-2876`，`:2884` 的另一 `SendRefMsg`
+在之后）。⇒
+- **`:2876` 时队列为空**（或只有 ≥155 的消息）⇒ 657 在队首 ⇒ 被自己弹掉再入队 ⇒ 自见净 **1**；
+- **队列里有 <155 的待办**（45=150/44=139/622=131/53=68…）⇒ 不去重 ⇒ 自见 **2**。
+
+**"自 2"不是规则，是队列状态的后果。** 6 份 magic golden 的条数是 **oracle 实测**（`mir2-rs/tests/parity/csharp/MagicGolden`
+反射替换 RNG、跑真实 `PlayObject`，golden 存每收件人真实 RM 队列 dump）：
+`shield` 1/1/1、`cloak` 1/1/1、`bigcloak` 2/2/2、`dejiwonho` 1/**2**/1、`hangmajinbub` 49/**98**/49、`uenhancer` **2**/1/1
+⇒ 这些是**权威值**，不得改。
+
+### 逐路径裁定（`opc-19` 2026-11-20 裁定：期望匹配**夹具场景**，不以另一条路径的可能值为准）
+| 路径 | `:2876` 时队首（依据） | 裁定 |
+|---|---|---|
+| 升级链 4 例（`c5_recovery`/`levelup_downlink`/`p31_levelup`/`tick_frame_order`） | `RM_WINEXP(139)` 先入队——`GetExp`（`PlayObject.Base.cs:149-169`）`:153` 先 `SendMsg(RM_WINEXP)`、`:162` 才 `HasLevelUp` | **2**（不变） |
+| `#9 boChg` | **无第二条**：`src/M2Server/ActorBuffSystem.cs:220-224` 只有 `CharStatus=GetCharStatus(); StatusChanged();`，**无 `SendUpdateMsg`** | **1**（master 原为 2 ⇒ 本批修正） |
+| `#9 boNeedRecalc` | `src/M2Server/ActorBuffSystem.cs:226-230` `RecalcAbilitys()`；夹具场景队列空 | **1**（master 原为 2 ⇒ 本批修正） |
+| `#1` GM `@Level0` | `HasLevelUp`（`PlayObject.cs:5242-5250`）在 `:2876` 前无入队；`RM_LEVELUP` 在其后 | **1**（夹具=空队列） |
+| `#2` GM `@改属性` | `src/Modules/GameCommand/Commands/SmakeItemCommand.cs:59-60`：改槽 → `RecalcAbilitys()`；`:2876` 前无入队 | **1** |
+| `#13` P21 `boTakeItem` | P21 在消息泵之后（`PlayObject.Message.cs:163-227`）；夹具无 P1/P2 事件 | **1** |
+| `#11/#12` DelSkill（**未接线**） | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:59-71`：先 `SendDelMagic`（直接帧）+ 两条 `SysMsg`（100=**252**）再 `RecalcAbilitys` ⇒ 252>155，657 仍是队首 | 接线按 **1** 设计 |
+| `readbook`（已有 golden） | 队列空 ⇒ 头去重 ⇒ 1；golden `readbook_vectors.json` 实测 `pump_idents [10115,10139,11004]` = 1 条 | **1**（Rust 正确） |
+| `CM_ADJUST_BONUS`（`lib.rs` 自队列） | 宿主用 `msgqueue::send_update_msg` 已实现同一头去重 | 1（与 oracle 同口径） |
+
+### 本批（`card/charstatus-657-b13`）据此修正
+- 新增原语 `send_charstatuschanged_self_once_and_observers`（自见 1 + 观察者逐收件人）；
+  `send_charstatuschanged_self_and_observers`（三动作 = 2 条）**只保留给队列非空的场景**（升级链）。
+- `#1`/`#2`/`#13`/`#9` 两支改为 1；对应期望回退（`level0` 五条→四条、`gm_smake` `[657,657,203,100]`→`[657,203,100]`、
+  `p21` 两例与 buff 三例同步）。
+- T-288 仍是"657 先于 203"的已登记偏差（条数 1，位置差位不变）。
+
+### `#13` 多物品的判据（2026-11-20 补）
+一次 Run 移出 **N 件**时：**观察者每件 1 条**（每次 `StatusChanged()` 各广播一次）；
+**自见恒 1 条**，载荷 = **最后一次** recalc 的 `(CharStatus, HitSpeed)`。
+为什么不是 N：`SendUpdateMsg`（`src/M2Server/Actor/BaseObject.Message.cs:283-304`）的 `TryPeek`
+**不前进**，循环把**队首连续的同 ident 657 全部弹掉**再入 1（退出条件是 `MsgQueue.Count <= i`）；
+队列空场景下每件 recalc 后队列恒剩 1 条 ⇒ N 件之后仍 1 条。
+用例：`p21_two_items_self_657_once_observers_twice`（自见/观察者**分开断言**），
+牙 = 把实现改回"每件一次自见" ⇒ **自见断言**必红。
+同一机制也适用于 `#9 boNeedRecalc`：`BUFF_PASSES_PER_TICK`（=4，`mir2-rs/crates/world-bevy/src/buff.rs`）+ `world.rs` 的
+`out.recalcs.extend(pass.recalcs)`（跨 pass 累积） ⇒ 同 actor 可被推多次；修法相同（广播按事件、自见在循环末每人一次）。
+
+### 片① 之后（`977d260a1` rebase）的 2 条来源与删除记录（2026-11-20）
+rebase 后"升级链 = 2 条"**由 `TickFrameQueue` 入队版产出**：`drain_kill_exp_chain_with_magic` 里
+`push_charstatuschanged_self_and_observers(&mut frame_q, …)` → `frame_q.flush(online, gates, "657(战斗升级)")`，
+它按 ①自广播副本/②观察者/③自更新 入**每个收件人各自的堆** ⇒ 自见 2 条（oracle 队首 `RM_WINEXP=139`
+⇒ 不去重）。**即发版**（入队后立刻 flush 的薄包装）在 rebase 后**无语义使用者**：两处 GM 调用点按
+头去重裁定已改用 once 版 ⇒ 删除（提交 `refactor(game-svr): 删即发版三动作 helper`）。
+**删薄包装 ≠ 删掉"2"**：2 条仍由队列版产出，且升级链四例
+（`c5_recovery_then_levelup_emit_two_frames` / `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` /
+`p31_levelup_reuses_kill_exp_chain_order` / `tick_frame_order_puts_stamina_after_kill_exp_chain`）实测绿。
+
+### 657 `Series` 的值断言（2026-11-20，响应 `43` 的 `recalc-entity-mirror-gap`）
+条数对 ≠ 值对：本卡补两类**区分性**用例（实体 `hit_speed=99` 哨兵、会话重算后 0；
+**这是构造态，不代表线上存在实体/会话不一致**，只为钉"读的是哪一侧"）。
+- `#1 @Level0`（`gm_level_emits_657_self_and_nearby_observers`）：自见 `Series = 0`（重算后），
+  不用实体哨兵 99 ⇒ **绿**。`apply_pending_level_up` 自见走 `sg.hit_speed`
+  （`recalc_session_ability` 内 `sg.hit_speed = recalc.hit_speed`）⇒ **不受 mirror-gap 影响**。
+- `#9 boNeedRecalc`（`buff_657_needrecalc_series_reads_post_recalc_value`）：同哨兵下
+  **实测红**——`assertion left == right failed: 自见 Series = 重算后的 HitSpeed（0），不是实体旧值 99`
+  / `left: [99]` / `right: [0]`（`lib.rs` 第 34769 行）。根因 = 该路径 `recalc_session_ability` 后**未把
+  `sg` 镜像回实体**，而自见取 `world.entities…hit_speed`；归 `43` 的
+  `openmir2-recalc-entity-mirror-gap`。本用例以
+  `#[ignore = "recalc-entity-mirror-gap: 实体未镜像 hit_speed（recalc 后待 apply_entity 接线），自见读实体旧值；见 openmir2-recalc-entity-mirror-gap"]`
+  登记（不红主套件，缺口修好去掉 ignore 即转绿）。
+
+### 硬约束与未覆盖面
+- **在逐路径判定前，任何新站点不得按"自 2"接线**；默认按"夹具队列空 ⇒ 1"，除非能指出 `:2876` 前确有的 <155 入队。
+- **"2 条情形"（recalc 前已有 622/638/53 待办）本批未覆盖**（夹具都是空队列）——这是**未覆盖**，不是"不成立"；
+  需要时另立卡造该场景（如 `uenhancer` 的 638 前置入队形态可复用）。
+- 登录批的两条 657（`smframe.rs` 两槽）**已核：oracle 实测 2 条**——2026-10-23 真机窗口两轮一致
+  （`1cca49d22` 的提交记录：C# 在 654 之后发 `657,657`，Recog=自己/Param=0/Tag=0/Series=0），
+  机制也吻合：`SendUpdateMsg` 去重时队首是 `RM_LOGON`（`10050 & 0xFF = 66`，`src/OpenMir2/Messages.cs:574`）
+  ⇒ `TryPeek` 不前进、657 不在队首 ⇒ **不去重 ⇒ 2 帧**。这同时是"队列非空 ⇒ 2"的**真实在生产例证**，
+  本批"未覆盖"指的是**我们自己没造**该场景的夹具，不是 oracle 没有该形态。
+
+## 15. 片① 交付记录（2026-11-20，`openmir2-10`）
+
+- 分支 `card/tick-frame-queue-slice1`，base master `bb160e2ad`（2026-11-20 第三次 rebase；
+  前序 base `f8c0b4b7d` / `126e57e41`，原 base `165c6edd1`），代码 head `db60e9f32`
+  （提交 `refactor(game-svr): 抽出 TickFrameQueue …`；纯 Rust，2 文件）。
+  本段是交付后的 docs-only 补充，不改代码。
+- 第二/三次 rebase 均无代码冲突；两次 `git range-diff` 都是 **`=`**（同一补丁）：
+  `126e57e41..751d0cfd5` vs `f8c0b4b7d..3640c6208`、`f8c0b4b7d..3640c6208` vs
+  `bb160e2ad..db60e9f32`。
+- rebase 冲突解决（§38 逐支比对）：master 的 657 三动作 helper 已改为「广播副本 + 观察者 +
+  **自更新副本**」（源自己 2 条）⇒ 入队版按 ①/②/③ 逐支合并：①③ 仍同 socket 同键 FIFO、
+  ② 走观察者入队；换装路径保持 master 的 **1 条**自通知口径（没有误用三动作 helper 的 2 条）。
+- 四个接线点全部落地：`castle.rs` 两处（252 / 165）、T-290 升级链 657、吃路径（53 + 通知 + 657）、
+  换装（752/52、657）。**既有断言 0 条改动**；新增 1 条牙
+  `per_recipient_heap_orders_subset_by_own_insertion`。
+
+### 15a. 与 §8d 草稿的两处实现偏离（`opc-19` 2026-11-20 认可，`2f` 复核）
+
+1. **收件人键 = `(gate_idx, socket)`，不是 §8d 草稿里的 `HashMap<i32 /*socket*/>`。**
+   `socket` 是**各网关进程内的句柄**（网关侧 `raw_socket_i32`），跨网关线号会重复；本文件的
+   墓碑本来就按 `(line, socket)` 键控，`route_to_gate` 也按 `gate_idx` 选线。只用 `socket`
+   会把两条连接并进同一条队（发给 A 的帧可能落到 B 的线）。**验证**：快照场景 `castle_fanout`
+   特意让 0 线与 1 线都有 `socket=901`，改造前后逐字节相同。
+2. **`flush` 的 `route_to_gate` 检查粒度：仍是「每收件人一次」，但时点从原发送循环内移到 `flush` 内。**
+   改造前是「每个收件人 `route_to_gate` 一次 → 该收件人整组帧直接 `send`」；改造后是「入队阶段不查，
+   `flush` 里逐收件人查一次 → 整组 `send`」。**粒度不变，时点是同一函数调用内的后移**。
+   若并发墓碑恰在这段之间落下，帧也到不了客户端：`downlink_slot`（网关连接任务里 `SendFrame` 的
+   落地检查）会再查一次墓碑，槽已死 ⇒ 丢弃。⇒ 这个挪动只影响「生产者侧是否早丢」，
+   不影响「客户端是否收到」，快照与全量用例均未出现差异。
+
+### 15b. 预期差异（单列，**不进** T-288/T-295/T-296）
+
+**机制**：oracle 里 657 的收件人在 `SendRefMsg` 发送时枚举、逐目标 `SendMsg`，消息进**每个 target
+自己的 `MsgQueue`**（每 `BaseObject` 一条 `PriorityQueue<SendMessage, byte>`）。所以**每个收件人的
+入队序 = 产生序**（本场景 A→B→C 的处理器顺序；三动作语义下源自己收**两条**：广播副本 + 自更新副本），
+出队序只由**他自己队列里有多少条同键元素**决定。改造前的实现是「一张全局 tuple 堆」：先把 A/B/C 三条
+657 入同一张堆，出队序 = 三条同键的四叉堆序 `[A,C,B]`，**再按收件人过滤**——这等于把「A 那条」
+（Y 根本不在 A 的收件人里）也算进了 Y 的位形。
+
+实测（`t290_chain`：A=1/B=2/C=3，X 全见、Y 只见 B/C；坐标 A(10,10)/B(10,32)/C(10,33)/
+X(10,22)/Y(10,44)，range 12；源自己两条）：
+
+| socket | 新实现入队序（= 产生序） | 新出队序 | 改造前出队序 |
+|---|---|---|---|
+| 901 (A 自己，2 条) | [1,1] | [1,1]（2 条同键 = FIFO） | [1,1] |
+| 904 (X，3 条) | [1,2,3] | [1,3,2]（3 条同键 = 四叉堆序 [0,2,1]） | [1,3,2]（同一张全局堆，逐位相同） |
+| 902 (B，3 条) | [2,2,3]（B 的两条自帧，再 C 的广播） | **[2,3,2]**（[0,2,1]） | [3,2,2]（全局 [A,C,B] 过滤） |
+| 903 (C，3 条) | [2,3,3]（B 的广播，再 C 的两条自帧） | **[2,3,3]**（[0,2,1]） | [3,3,2] |
+| 905 (Y，2 条) | [2,3] | **[2,3]**（FIFO） | [3,2] |
+
+每 socket 帧数不变（901/904 不变；902/903/905 换序）。**904 不翻**是结构决定的（它的队列恰好也是
+3 条、入队序也相同 ⇒ 同一置换）。牙 `per_recipient_heap_orders_subset_by_own_insertion`（rebase 后
+断 901=[a,a]、904=[1,3,2]、905=[2,3]）在改造前树实测红（Y：`left: Some([3, 2])` /
+`right: Some([2, 3])`），改造后绿；另在新树做变异（临时改回全局堆）也红（X：
+`left: Some([1, 2, 3])` / `right: Some([1, 3, 2])`）。
+
+### 15c. 门禁（rebase 后代码 head `db60e9f32`，作者侧）
+
+`cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`（0 error，rc=0）/
+`cargo test --workspace`（4388 passed / 0 failed / 159 ignored，161 suites）/ `-p game-svr --lib`
+（2156 / 0 / 73）/ `msgcodegen --check`（604 常量）/ 散文锚门（0/0/0 GREEN，`--base bb160e2ad`）/
+工具门全量（71/71）/ dispatch 守卫（31/31，+0/−0）——全部 rc=0。
+
+留痕：上一轮 clippy 曾红在 master `f8c0b4b7d` 自带的 `eat_move.rs` 文档续行
+（`doc_lazy_continuation`，不在本卡写集；加 `-A` 该 lint 后 rc=0 已反证）；master `bb160e2ad`
+修正后本 head clippy 全绿。
+
+### 15d. 「逐帧字节相同」的准确口径
+
+快照共 70 行 = 68 帧 + 2 条 `sent` 注记。**逐字节相同的只有这四个场景的 40 帧**：
+`castle_fanout` 12 帧、`castle_refshow` 15 帧、`eat_stdmode1` 7 帧、`bag_takeoff` 6 帧。
+`t290_chain` 28 帧中 20 帧相同、8 帧换序（§15b 的 902 三条 / 903 三条 / 905 两条 657）。
+**不得**把它写成「整体逐字节相同」。
+
+## 16. 片① 复跑装置（5 个场景，逐帧字节比）
+
+装置是**临时 test 模块**（未入交付），源码与两棵树的输出放在 `docs/evidence/tickframe-slice1/`：
+`tickframe_snapshot.rs`（装置）、`before.ndjson`（master `bb160e2ad`）、`after.ndjson`
+（代码 head `db60e9f32`）、
+`README.md`（逐步命令）。
+
+复跑：把 `tickframe_snapshot.rs` 复制到 `mir2-rs/bins/game-svr/src/`，在 `lib.rs` 的测试模块声明区加一行
+`#[cfg(test)] mod tickframe_snapshot;`，然后
+`cd mir2-rs && TICKFRAME_SNAPSHOT_OUT=<out>.ndjson cargo test -p game-svr --lib -- tickframe_slice1_snapshot`。
+判据：`castle_fanout` / `castle_refshow` / `eat_stdmode1` / `bag_takeoff` 与 `after.ndjson`
+逐字节相同；`t290_chain` 只允许 §15b 的三处顺序差异（每 socket 帧数相同）。

@@ -357,6 +357,21 @@ mod tests {
         path
     }
 
+    /// 夹具 `item_list` → `Vec<BagItem>`（move/guild 夹具记录完整 5 字段，含 `desc[14]`）。
+    fn golden_bag_items(v: &serde_json::Value) -> Vec<BagItem> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|it| BagItem {
+                make_index: it["make_index"].as_i64().unwrap() as i32,
+                index: it["index"].as_u64().unwrap() as u16,
+                dura: it["dura"].as_u64().unwrap() as u16,
+                dura_max: it["dura_max"].as_u64().unwrap() as u16,
+                desc: std::array::from_fn(|i| it["desc"][i].as_u64().unwrap() as u8),
+            })
+            .collect()
+    }
+
     fn registry_from(dir: &Path, maps: &[(&str, bool)]) -> mir2_envir::MapRegistry {
         for (name, _) in maps {
             write_walkable_map(dir, name, 60, 60);
@@ -793,23 +808,14 @@ mod tests {
             let sess = world.session("hero").expect("会话");
             assert_eq!(sess.map_id, want_map_id, "{}: 终态图（会话）", c["name"]);
 
-            // ③ ItemList / WAbil.Weight：吃掉 ⇒ 空；不吃（IT-10 禁随机支）⇒ 原件保留。
-            let golden_items = expect["item_list"].as_array().unwrap();
-            let items = &sessions["hero"].state.item_list;
+            // ③ ItemList / WAbil.Weight：**逐件整 `BagItem` 比**（这些路径无解包/无墙钟
+            // `make_index` 生成 ⇒ 不需要排除项；夹具记录完整 5 字段含 `desc`）。
+            let want_items = golden_bag_items(&expect["item_list"]);
             assert_eq!(
-                items.len(),
-                golden_items.len(),
-                "{}: 背包终态件数",
+                sessions["hero"].state.item_list, want_items,
+                "{}: 背包终态（逐件整 BagItem）",
                 c["name"]
             );
-            if let Some(want_item) = golden_items.first() {
-                assert_eq!(
-                    i64::from(items[0].make_index),
-                    want_item["make_index"].as_i64().unwrap(),
-                    "{}: 未吃时原件保留（make_index 不变）",
-                    c["name"]
-                );
-            }
             assert_eq!(
                 i64::from(sessions["hero"].state.wabil.weight),
                 expect["weight"].as_i64().unwrap()
@@ -1225,12 +1231,11 @@ mod tests {
             let sess = world.session("hero").expect("会话");
             assert_eq!(sess.map_id, want_map_id, "{name}: 终态图（会话）");
 
-            // 背包 / 重量。
-            let golden_items = expect["item_list"].as_array().unwrap();
+            // 背包 / 重量：**逐件整 `BagItem` 比**（无解包/无墙钟 `make_index`）。
             assert_eq!(
-                sessions["hero"].state.item_list.len(),
-                golden_items.len(),
-                "{name}: 背包终态件数"
+                sessions["hero"].state.item_list,
+                golden_bag_items(&expect["item_list"]),
+                "{name}: 背包终态（逐件整 BagItem）"
             );
             assert_eq!(
                 i64::from(sessions["hero"].state.wabil.weight),

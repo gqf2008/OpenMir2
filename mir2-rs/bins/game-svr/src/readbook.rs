@@ -558,7 +558,8 @@ mod tests {
                 c["name"]
             );
 
-            // ④ 背包/Weight（失败支保留原件）。
+            // ④ 背包/Weight（失败支保留原件）：逐件比 `(make_index,index,dura,dura_max)`。
+            // **夹具未记录 `desc`** ⇒ 该字段本卡不覆盖（见 openmir2-itemlist-element-compare）。
             let golden_items = expect["item_list"].as_array().unwrap();
             assert_eq!(
                 sg.state.item_list.len(),
@@ -566,6 +567,24 @@ mod tests {
                 "{}: 背包件数",
                 c["name"]
             );
+            for (got, want) in sg.state.item_list.iter().zip(golden_items.iter()) {
+                assert_eq!(
+                    (
+                        i64::from(got.make_index),
+                        i64::from(got.index),
+                        i64::from(got.dura),
+                        i64::from(got.dura_max),
+                    ),
+                    (
+                        want["make_index"].as_i64().unwrap(),
+                        want["index"].as_i64().unwrap(),
+                        want["dura"].as_i64().unwrap(),
+                        want["dura_max"].as_i64().unwrap(),
+                    ),
+                    "{}: 背包元素字段（夹具未记录 desc ⇒ 不覆盖）",
+                    c["name"]
+                );
+            }
             assert_eq!(
                 i64::from(sg.state.wabil.weight),
                 expect["weight"].as_i64().unwrap(),
