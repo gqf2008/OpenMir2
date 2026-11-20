@@ -1,4 +1,4 @@
-// 卡 openmir2-magic-parity：C# 侧魔法对拍金标准生成器（骨架）。
+﻿// 卡 openmir2-magic-parity：C# 侧魔法对拍金标准生成器（骨架）。
 //
 // 用法：
 //   dotnet run --project mir2-rs/tests/parity/csharp/MagicGolden -c Release -- --rng-selftest
@@ -168,6 +168,11 @@ public static class Program
             if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）。SCOPE：本支验的是『给定怪物之后的 adopt 行为』（MakeSlave 的 Master/IsSlave/levels/Recalc/半补/RefNameColor/SlaveList），不是造怪；造怪抽数因离线缺 MonsterInfo（掉落表 MonGetRandomItems、CoolEyeCode）不可复刻 ⇒ Rng 与下游训练面（640/RM10123 p3）不在对拍范围；golden 的 Rng 是替身不抽造怪时的数，不代表生产抽数" });
             if (name == "sinsu") return SinsuBatch(new MagicSpec { Key = "sinsu", MagicId = 30, MagicName = "SinSu", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "SINSU 神兽=race113；验 MakeSlave adopt + cap_hit 回召(RecallSlave 移 slave)；仅参数化 race/stub，不验龙名变体(数据缺口)" });
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
+            // 49/51/52/53/54：共享尾 B 类（case 体只有 `boTrain = true;`）——本批先做 49。
+            // 夹具前提：`UserMagicLevel<3`（训练门）、`TrainLv=3`（升级门非退化）、`MaxTrain[0]=1000`（不升级 ⇒ 1000ms 支）。
+            // `EffectType=2` 与 `Effect=1` 不同 ⇒ `MakeWord(EffectType, Effect)=0x0102`，
+            // 把「低字节=EffectType / 高字节=Effect」的打包变成**可判别**（两者都取 1 时换位不可见）。
+            if (name == "skill49") return SkillTailBatch(new MagicSpec { Key = "skill49", MagicId = 49, MagicName = "Skill49", EffectType = 2, UserMagicLevel = 0, MagicTrainLv = 3, MagicMaxTrain0 = 1000, SkillTail = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
@@ -1069,6 +1074,15 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public int[] PoisonStates;
         /// <summary>`construction.skills`（本批写魔号名）。</summary>
         public string[] Skills = Array.Empty<string>();
+        /// <summary>
+        /// **共享尾（49/51/52/53/54）批专用**：`MagicInfo.TrainLv` / `MaxTrain[0]` 的夹具值。
+        /// 缺省 0/0 = 既有行为（`CheckMagicLevelUp` 因 `TrainLv(0) > Level` 为假而不升级，
+        /// 与既有 golden 一致）。本批取 `TrainLv=3, MaxTrain[0]=1000` ⇒ 未升级 ⇒ 640 走 **1000ms** 支。
+        /// </summary>
+        public int MagicTrainLv;
+        public int MagicMaxTrain0;
+        /// <summary>为 true ⇒ `EmitGolden` 的 case 里落 `Train` 块（本批专用；缺省零变化）。</summary>
+        public bool SkillTail;
         /// <summary>`scenario_note`（`login_order=false` 必填）。</summary>
         public string ScenarioNote = "";
         /// <summary>`unreachable` 时的依据（门 4）。</summary>
@@ -1626,6 +1640,35 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         var c2 = RunMagicCase(spec, "cap_hit", 1, 2000, spec.TargetMaxHp, false);
         return EmitGolden(spec, new[] { c1, c2 });
     }
+    /// <summary>
+    /// 共享尾 B 类（49/51/52/53/54）三支 s1/s5/s13：case 体只有 `boTrain = true;`，
+    /// 观测面 = 638 + 1000ms 后的 640 + 训练面（Level/TranPoint/TrainLv/MaxTrain）。
+    /// 生成期断言（不满足即 rc=2、不落盘）：每支 `Rng.len()==1`（只有 `:663` 的 `Random(3)+1` 一抽）。
+    /// </summary>
+    private static int SkillTailBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var cases = new[]
+        {
+            RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
+        };
+        foreach (var c in cases)
+        {
+            if (c.Rng.Count != 1)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{c.Label}] 训练尾应恰 1 抽（Random(3)+1），实得 {c.Rng.Count}：{string.Join(",", c.Rng)}");
+            }
+        }
+        return EmitGolden(spec, cases);
+    }
+
     private static int SinsuBatch(MagicSpec spec)
     {
         if (!EnsureConfFiles(out _, out var missing))
@@ -1680,6 +1723,24 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         Console.Out.WriteLine(json);
         Console.Error.WriteLine(spec.Key + "_CASES " + string.Join(", ", cases.Select(c => c.Label + "[rng=" + c.Rng.Count + ",passes=" + c.DrainPasses + ",cap=" + c.DrainPassesHitCap + "; " + string.Join(" ", c.Receivers.Select(r => r.Who + ":rm" + r.Rm.Count + "/sm" + r.Sent.Count)) + "]")));
         return 0;
+    }
+
+    /// <summary>按 `MagicSpec` 构造 `MagicInfo`（`TrainLv`/`MaxTrain` 缺省 0 = 既有行为）。</summary>
+    private static OpenMir2.Data.MagicInfo BuildMagicInfo(MagicSpec spec)
+    {
+        var mi = new OpenMir2.Data.MagicInfo
+        {
+            MagicId = (ushort)spec.MagicId,
+            MagicName = spec.MagicName,
+            Effect = (byte)spec.Effect,
+            EffectType = (byte)spec.EffectType,
+        };
+        if (spec.MagicTrainLv != 0 || spec.MagicMaxTrain0 != 0)
+        {
+            mi.TrainLv = (byte)spec.MagicTrainLv;
+            mi.MaxTrain[0] = spec.MagicMaxTrain0;
+        }
+        return mi;
     }
 
     /// <summary>跑一支魔法（`DoSpell` 直调），返回账本。`targetNull=true` ⇒ 目标对象为 null（治愈 self 支）。</summary>
@@ -1911,19 +1972,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             MagIdx = (ushort)spec.MagicId,
             Level = (byte)spec.UserMagicLevel,
             TranPoint = 0,
-            Magic = new OpenMir2.Data.MagicInfo
-            {
-                MagicId = (ushort)spec.MagicId,
-                MagicName = spec.MagicName,
-                Effect = (byte)spec.Effect,
-                EffectType = (byte)spec.EffectType,
-            },
+            Magic = BuildMagicInfo(spec),
         };
         short doX = targetNull ? caster.CurrX : target.CurrX;
         short doY = targetNull ? caster.CurrY : target.CurrY;
         // 卡 mapmgr：SINSU cap_hit 回召依赖 RecallSlave→GetFrontPosition 用 caster.Dir；生产施法前 caster 面向施法目标，
         // 故对 EnableMaps 支把 caster 面向设成施法方向（faithful），使回召落点与 Rust(按施法方向)一致。
         if (spec.EnableMaps) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
+        int trainTpBefore = um.TranPoint;
+        int trainLevelBefore = um.Level;
+        // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
+        int trainNLevel = 0;
+        int trainMtUsed = 0;
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
         List<long> draws = new();
         if (spec.RngMode == "freeze_at_dospell")
@@ -2076,6 +2136,33 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 drainPasses = pass + 1;
                 if (!drainedAny) break;
                 if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+            }
+        }
+        if (spec.SkillTail)
+        {
+            // `CheckMagicLevelUp`（`PlayObject.cs:5200-5209`）用的下标是 `nLevel`（Level<4 且
+            // TrainLv>=Level 时 = Level，否则 0）——**不是恒 [0]**。前提必须按同一规则取项，
+            // 否则 `UserMagicLevel=1..3` 时断言会核到没用上的那一项（变成永真）。
+            int nLevel = (um.Level < 4 && um.Magic.TrainLv >= um.Level) ? (int)um.Level : 0;
+            int mtUsed = (um.Magic.MaxTrain != null && um.Magic.MaxTrain.Length > nLevel) ? um.Magic.MaxTrain[nLevel] : 0;
+            trainNLevel = nLevel;
+            trainMtUsed = mtUsed;
+            if (!(mtUsed > um.TranPoint))
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 夹具前提失败：MaxTrain[nLevel={nLevel}]={mtUsed} 必须 > TranPoint={um.TranPoint}"
+                    + "（否则 CheckMagicLevelUp 成功 ⇒ 640 走 800ms 升级支，不在本批 scope）");
+            }
+            if (!(um.Magic.TrainLv > um.Level))
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 夹具前提失败：TrainLv={um.Magic.TrainLv} 必须 > Level={um.Level}"
+                    + "（否则升级门因 TrainLv 而恒假，前提断言会变成永真）");
+            }
+            if (um.Level != trainLevelBefore)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 意外升级：Level {trainLevelBefore} -> {um.Level}（本批只做未升级 1000ms 支）");
             }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
@@ -2316,6 +2403,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
             CasterExtraAbil0 = casterExtra0,
+            Train = !spec.SkillTail
+                ? null
+                : (object)new
+                {
+                    level_before = trainLevelBefore,
+                    level_after = (int)um.Level,
+                    tran_point_before = trainTpBefore,
+                    tran_point_after = um.TranPoint,
+                    train_lv = (int)um.Magic.TrainLv,
+                    max_train0 = (um.Magic.MaxTrain != null && um.Magic.MaxTrain.Length > 0) ? um.Magic.MaxTrain[0] : 0,
+                    n_level = trainNLevel,
+                    max_train_at_level = trainMtUsed,
+                    train_level_at_level = (int)um.Magic.TrainLevel[um.Level],
+                },
             Skeleton = spec.MagicId != 17
                 ? null
                 : (object)new
@@ -2560,6 +2661,9 @@ public sealed class FireballResult
     /// <summary>30 SINSU 观测（仅该魔号；null 不落盘）：召唤 adopt + cap_hit 回召（pre-slave xy before/after + recall_moved）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object SinSu { get; set; }
+    /// <summary>共享尾（49/51/52/53/54）训练面（`SkillTail=true` 才落盘）：Level/TranPoint/TrainLv/MaxTrain[0]。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object Train { get; set; }
     /// <summary>三态计时器术后值（只有显式给了 `PoisonStates` 的支才有；`null` 时不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object StatusTimeArr { get; set; }
