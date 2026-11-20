@@ -344,3 +344,17 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 2. **新证据来源（非从 Rust 反推）**：重生成夹具 oracle 实测 `eat_ok_shape3_percent`（L4 max_hp=37/max_mp=25）`expect.wabil hp=12, mp=13`，即 `Round(1.85)=2`、`Round(2.5)=3`（远离零；银行家=2）。弱牙断言改为 `mp==13`（`2.5⇒+3`），能区分两种舍入。
 3. **这是"夹具状态改动"引出的测试同步，非产品逻辑改动**：`useitem::tests::shape3_percent_rounds_away_from_zero` 读夹具、旧值 55/46 是旧夹具产物；仅同步该测试的注释+两条断言。`git diff e1d89cd12...HEAD -- '*useitem.rs'` 只含该测试行，`use_item` 实现零改动。
 4. **门必须在 throwaway 对象上复算（"测量的动作改变被测对象"）**：`derived` 门最初在 **eat po 上**跑 `RecalcLevelAbilitys()+RecalcAbilitys()`——二者会 `SendMsg(RM_ABILITY)` / 改 `CharStatus`，**污染 eat po 队列**，令每例多出 `RM_CHARSTATUSCHANGED(10139)`。改到独立 throwaway po（`DeriveWarriorMaxHpMp`）复算后 10139 消失。**门/测量永远不得作用于被测对象。**
+
+### 9.9 IT-14 修复油 Shape9（`RepairWeapon`）— implemented_unverified
+
+**关键归类订正**：`EatUseItems(case9=RepairWeapon)` 由 **StdMode 3** 的 `default` 调用（`PlayObject.Base.cs` 的 `switch(stdItem.StdMode) case 3: ... default: EatUseItems(shape)`），**不是 StdMode0**；StdMode0 的 `default` 是 AC/MAC 入池。故修复油 = **StdMode3 / Shape9**（初版误放 StdMode0 臂，已被对拍抓出并订正）。
+
+**实现**（`use_item` 臂 `3 if tpl.shape == 9`，操作 `state.extra.weapon: Option<BagItem>`）：无武器 / `Index<=0` / `DuraMax<=Dura`(已满) ⇒ 不吃（`SM_EAT_FAIL`）；否则 `DuraMax -= (DuraMax-Dura)/RepairItemDecDura`、`nDura=min(5000, DuraMax-Dura)`、`nDura<=0` 不吃、否则 `Dura+=nDura`、发 `RM_DURACHANGE(10125)` + 绿色 `RM_SYSMESSAGE(11004)`（颜色参数），eaten。宿主把 `state.extra.weapon` 写回 `sg.use_items[SLOT_WEAPON]` 持久化。
+
+**配置链路（C）**：`[Setup] RepairItemDecDura`（缺省30/现网90）→ 探针读 `SystemShare.Config.RepairItemDecDura` 写入夹具 `ctx.repair_item_dec_dura` → 比较器 `i32v(&c[...])` 读回 → `use_item` 用它作除数。oracle 与 Rust 除同一配置值，判定路径无写死。
+
+**比较面（耐久必须进，req）**：夹具新增 `weapon_before`（顶层）+ `expect.weapon_after`；比较器 `state.extra.weapon = weapon_of(&case["weapon_before"])`，`use_item` 后 `assert_eq!(state.extra.weapon 的 index/dura/dura_max, weapon_after)`；另 `RM_DURACHANGE` 的 `n_param1=Dura/n_param2=DuraMax` 本就在 notices 多重集比对内。三支用例：`eat_ok_shape9_repair_normal`（5000/10000→9945/9945、`[635]`+`[10115,10125,11004]`）、`eat_fail_shape9_full`（10000/10000→636、不改）、`eat_fail_shape9_no_weapon`（null→636）。
+
+**A/B 说明（机械同步面）**：`handle_eat_cmd` 新参 `repair_item_dec_dura` 12 调用点（主 `enter_cfg.repair_item_dec_dura`；11 测试传 `90`——`ctx.repair_item_dec_dura` 在 `use_item` **仅 `9 =>` 臂一个读点**，非 Shape9 用例永不到达 ⇒ 占位值不参与判定）。`UseItemContext` 15 字面量；其中比较器 `matches_oracle_eat_fixture` 与 `nodrug_guard_does_not_consume` 两处**从夹具 `c` 取 green/dec**（配置进比较面），其余静态 `0/0/90`。Z5 豁免名单 +2（`eat_fail_shape9_full`、`eat_fail_shape9_no_weapon`，纯失败一层）。
+
+**运行期帧缺口（用户可见，非仅夹具）**：`SysMsg(WeaponRepairSuccess, Green)` → `SM_SYSMESSAGE` 文本帧，运行期宿主 `notice_frame` 用静态 `session.sys_msg` ⇒ 修复成功绿字**线上不发**（oracle 发）。同 StdMode1 food 口径，见 **`docs/issues/openmir2-runtime-sysmsg-text-frames.md`**。⇒ **IT-14 记 `implemented_unverified`，不计 verified**（待该卡实现文本帧后转 verified）。

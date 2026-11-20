@@ -144,10 +144,15 @@ internal static class Program
         public int hungerStatus = 0;
         /// <summary>`SystemShare.FunctionNPC != null`（`UseStdModeFunItem` 的唯一判据，`PlayObject.Base.cs:1072`）。</summary>
         public bool functionNpc = false;
+        /// <summary>IT-14：当前装备武器（`UseItems[ItemLocation.Weapon]`）；null=空手。修复油用。</summary>
+        public UserItem weapon = null;
     }
 
     private static UserItem ToUser(Spec s)
         => new UserItem { MakeIndex = s.MakeIndex, Index = s.Index, Dura = s.Dura, DuraMax = s.DuraMax };
+
+    private static object WeaponDto(UserItem w)
+        => w == null ? null : new { index = (int)w.Index, dura = (int)w.Dura, dura_max = (int)w.DuraMax };
 
     private static object ItemDto(UserItem u)
     {
@@ -373,6 +378,13 @@ internal static class Program
         po.Envir.Flag.boNODRUG = ctx.noDrug;
         SystemShare.FunctionNPC = ctx.functionNpc ? NpcProxy.CreateMerchant() : null;
 
+        // IT-14：装备武器（`UseItems[ItemLocation.Weapon=1]`）；修复油 RepairWeapon 操作它。
+        if (ctx.weapon != null)
+        {
+            if (po.UseItems == null) { po.UseItems = new UserItem[13]; }
+            po.UseItems[1] = ctx.weapon;
+        }
+
         // items 侧 derived 机检（对等 MagicGolden/FixtureContract.derived，rc=2）：按本 case 的 level 用**真身**
         // `RecalcLevelAbilitys()+RecalcAbilitys()` 复算 `WAbil.MaxHP/MaxMP`，须 == 向量声明；不等 ⇒ stderr +
         // `Environment.Exit(2)`，**不落盘**（此处在写盘之前、所有 case 构建阶段）。整段用完恢复 po.Abil/WAbil。
@@ -397,6 +409,9 @@ internal static class Program
         // `Ability` 是引用类型：`po.WAbil` 与 `wabilPre` 是同一对象，handler 会原地改。
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
+        // IT-14：武器耐久前值（`UseItems[Weapon]`）。
+        var weaponBeforeDto = (po.UseItems != null && po.UseItems.Length > 1 && po.UseItems[1] != null)
+            ? WeaponDto(po.UseItems[1]) : null;
         // IT-08：**基础 `PlayObject.Abil.Exp`**（`GetExp` 只改它，不改 `WAbil.Exp`）与 `BodyLuck`/`BodyLuckLevel` 前值。
         var abilExpBefore = po.Abil.Exp;
         var bodyLuckBefore = po.BodyLuck;
@@ -462,6 +477,9 @@ internal static class Program
             throw new InvalidOperationException("非 pump 用例出现 RM_LEVELUP 但未开 pump（升级帧会漏）");
         }
 
+        var weaponAfterDto = (po.UseItems != null && po.UseItems.Length > 1 && po.UseItems[1] != null)
+            ? WeaponDto(po.UseItems[1]) : null;
+
         return new
         {
             name,
@@ -474,9 +492,13 @@ internal static class Program
                 function_npc_present = ctx.functionNpc,
                 red_msg_fcolor = (int)SystemShare.Config.RedMsgFColor,
                 red_msg_bcolor = (int)SystemShare.Config.RedMsgBColor,
+                green_msg_fcolor = (int)SystemShare.Config.GreenMsgFColor,
+                green_msg_bcolor = (int)SystemShare.Config.GreenMsgBColor,
+                repair_item_dec_dura = SystemShare.Config.RepairItemDecDura,
             },
             request = new { make_index = requestMakeIndex, name = requestName },
             wabil_before = wabilBeforeDto,
+            weapon_before = weaponBeforeDto,
             inc_health_before = incHealthPre,
             inc_spell_before = incSpellPre,
             user_unlock_durg_before = userUnlockPre,
@@ -495,6 +517,7 @@ internal static class Program
                     .Where(it => !beforeMakeIndexes.Contains(it.MakeIndex))
                     .Select(ItemDto).ToArray(),
                 wabil = AbilityDto(po.WAbil),
+                weapon_after = weaponAfterDto,
                 // IT-08：基础 `Abil.Exp`（`GetExp` 落点）与 `BodyLuck`/`BodyLuckLevel` 后值（**追加字段**，旧键不变）。
                 abil_exp = po.Abil.Exp,
                 body_luck_before = bodyLuckBefore,
@@ -610,7 +633,8 @@ internal static class Program
         templates[2005] = Tpl("inc_pool", 0, 0, 5, ac: 15, mac: 7);        // default：进 IncHealth/IncSpell 池
         templates[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
         templates[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
-        templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);          // 称重
+        templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);
+        templates[2009] = Tpl("repair_oil", 3, 9, 5);          // 称重
         templates[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
         templates[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
         templates[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
@@ -647,6 +671,17 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_shape3_percent", new Ctx(),
             new List<Spec> { S(1, 2003) }, 1, "hp_mp_percent",
             ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape9_repair_normal",
+            new Ctx { weapon = new UserItem { Index = 200, Dura = 5000, DuraMax = 10000 } },
+            new List<Spec> { S(1, 2009) }, 1, "repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_fail_shape9_full",
+            new Ctx { weapon = new UserItem { Index = 200, Dura = 10000, DuraMax = 10000 } },
+            new List<Spec> { S(1, 2009) }, 1, "repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_fail_shape9_no_weapon", new Ctx(),
+            new List<Spec> { S(1, 2009) }, 1, "repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape2_unlock", new Ctx(),
             new List<Spec> { S(1, 2004) }, 1, "unlock",
             ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));

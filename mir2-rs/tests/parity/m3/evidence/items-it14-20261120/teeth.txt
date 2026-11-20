@@ -1,0 +1,16 @@
+# IT-14 修复油 teeth（§16）：每颗 ran=(0,1)=1测跑1失败；快照 E:/UserTemp/it14-useitem-snap.rs sha 还原相等。
+# M1 耐久值错（w.dura += n  →  ++1）：
+assertion failed: eat_ok_shape9_repair_normal: 武器耐久(weapon_after)与 oracle 不符
+  left: Some((200, 9946, 9945))  right: Some((200, 9945, 9945))
+# M2 去 RM_DURACHANGE 帧：
+assertion failed: eat_ok_shape9_repair_normal: 延时通知(七字段排序序列)与 oracle 不符
+  left:  [(131,10115,..),(252,11004,0,219,255,0,false)]
+  right: [(131,10115,..),(141,10125,1,9945,9945,0,false),(252,11004,0,219,255,0,false)]
+# M3b 翻转外层/内层守卫（w.dura_max>w.dura 与 n>0）⇒ 已满武器误吃：
+assertion failed: eat_fail_shape9_full: 即时帧(含 SM_ADDITEM)与 oracle 不符
+  left: [635]  right: [636]
+# 还原后基线绿（useitem.rs == 快照 d96abfdc…；--lib 2035 passed / 0 failed / 55 ignored）。
+# 注：`if n > 0` **照抄 oracle** `PlayObject.cs:1577-1580` 的 `if (nDura <= 0) return false;`（**不是死代码**）：
+#     `dec=1` 时 `DuraMax -= (DuraMax-Dura)/1 = Dura` ⇒ `n=0` ⇒ 该守卫可活（拒吃）。
+#     单改 `n>0`→`>=0` 对"外层已过滤"的用例是 no-op（外层 `w.dura_max>w.dura` 通过 ⇒ missing>0 ⇒ n>0 恒真）；
+#     故 M3b 同时翻转外层(`dura_max>dura`)与内层(`n>0`)两守卫才让"已满误吃"现形。full/no-weapon 的"不吃"另由 `if let Some(w)` 外层守卫保证。

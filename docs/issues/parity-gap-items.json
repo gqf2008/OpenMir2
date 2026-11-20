@@ -424,25 +424,21 @@
         "line": 2286,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "useitem::tests::matches_oracle_eat_fixture",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_shape9_repair_normal",
+          "eat_fail_shape9_full",
+          "eat_fail_shape9_no_weapon"
+        ],
         "unit_tests": []
       },
       "cost": "S",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
-        ]
-      },
-      "notes": "登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "deviation": null,
+      "notes": "修复油 Shape9 已在 use_item 实现（StdMode3 的 default→EatUseItems(9)→RepairWeapon：无武器/已满/低于阈值不吃；否则 DuraMax-=(DuraMax-Dura)/RepairItemDecDura、Dura+=min(5000,missing)、发 RM_DURACHANGE(10125) + 绿色 RM_SYSMESSAGE），oracle 对拍三支（正常/已满/无武器）+ 武器耐久 weapon_after 进比较面 + RepairItemDecDura 取自配置经夹具带入比较器。**运行期帧缺口（用户可见）**：SysMsg(WeaponRepairSuccess,Green) 的 SM_SYSMESSAGE 文本帧运行期不发（夹具层只比 RM 颜色、文本不比），同 StdMode1 food 口径，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md ⇒ 记 implemented_unverified，不计 verified。"
     },
     {
       "id": "IT-15",
