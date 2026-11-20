@@ -410,6 +410,9 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
   3. 判据与**实测结果**（2026-11-20，seed `20261120`/`20261121`）：`normalize(A1)==normalize(A2)` **0 处差异**（噪声基线）→ `normalize(A1)==normalize(B1)` **0 处**（钩子不改既有 31 例与元数据）→ `normalize(B1)==normalize(B2)` **0 处**（同上面的 31 例面）→ **`B1` 与 `B2` 的 12 例 lottery 抽值/种子 12/12 全不同**（把"钩子/播种没生效"与"无影响"分开）；
   4. 钩子安装证明取 stdout 的 `[RngSeedHook] 已注入种子 seed=…`（钩子失败 exit 97）；探针侧另有「恰抽一次且等于预测」的自检（不一致 rc=2 不落盘）。
 - **说明**：lottery 的抽值与来源行由探针安装的 `ProbeRandom` 直接记录（见 P1 用例），**不依赖钩子台账**；钩子在这批的唯一职责是第 3 条的 A/B 非干扰面。
+- **证据脚本（入仓、可复跑）**：`mir2-rs/tests/parity/m3/tools/it16_fixture_diff.py` —— 归一化（两项）+ 逐路径 diff，`--drop-lottery` 排除顶层 `lottery` 块。用法（仓库根）：
+  `python -I -B mir2-rs/tests/parity/m3/tools/it16_fixture_diff.py <A1.json> <B1.json> --drop-lottery`
+  退出码 0 ⇒ `diffs=0`（钩子不改既有 31 例）；1 ⇒ 有差异并逐条打印路径。
 - **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
 - **冲突处置**：任何非 `make_index` 差异 ⇒ **停下报 `opc-07`**，不得拿 grep 洗白。
 
@@ -427,7 +430,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 
 **恒吃单列断言**：`use_item` 的 `3 if tpl.shape == 11` 臂**仅** `eaten = true`（无 RNG、无金币、无全局计数）；断言"物品恒被吃"**与中/不中解耦**（最易写错处）。
 
-**牙（七类，2026-11-20 逐个实跑：8 个变异体全红、还原后 sha 与基线相同）**：
+**牙（七类，2026-11-20 逐个实跑：8 个变异体全红、还原后 sha 与基线相同）**。**牙必须打在被测行为路径上**：首轮曾把「帧序」牙打在 oracle 自洽用例上（红出 `[636]` vs `[635,622,653]`，说明打错目标），改打到宿主行为用例后才咬住 —— 过程留痕，别把「牙红了」当成功，先看红在哪条断言。
 1. 区间边界改一：`>=` → `>`（`boundary_is_inclusive_on_both_ends` 红）；
 2. 去 `IncGold`：`inc_gold(...)` 前置 `false &&`（宿主用例的金币/653 断言红）；
 3. 把 `eaten` 与中奖绑定：Shape11 臂 `eaten = true` → `false`（闸闭/未中例的 635 断言红）；
@@ -437,4 +440,5 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 7. **帧序对调**：`win_notices` 里绿字放到 GoldChanged 之前（`notice_order_is_pump_priority_ascending` 红）。
 
 **状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 `opc-07` 加指 IT-16）。
+- **未覆盖缺口登记（不计入行为面 `verified`）**：`IncGold` 失败支在 oracle 侧**无夹具证据**——探针是假 `Envir`，oracle 失败支走 `DropGoldDown(nGold, true, 0, 0)`（`src/M2Server/Player/PlayObject.cs:3897`）→ `GetDropPosition`（`src/M2Server/Actor/BaseObject.cs:485`）触发 NRE，探针跑不了；该支仅由 Rust 宿主用例 `tests::it16_lottery_frame_order_gold_counters_and_always_eaten` ③ 覆盖（金币不变、无 653、等级照加、绿字照发）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
