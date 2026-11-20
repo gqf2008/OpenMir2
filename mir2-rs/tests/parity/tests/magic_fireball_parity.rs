@@ -1575,9 +1575,9 @@ fn sent_filter(case: &Value, who: &str, keep: &[i64]) -> Vec<(i64, i64, i64, i64
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
 /// 造怪前帧 17/638/642（按 socket 多重集）；`stub_monster_race=113`（输入记录）。
-/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。MG-41 scope 须写「本 leaf 不比 Rng，原因：离线替身造怪 0 抽 vs Rust create_monster_oracle 真抽」。
+/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。**这是离线替身不忠实（造怪 0 抽）导致 RNG 流偏移，不是产品错**；MG-41 scope 须写「离线替身造怪 0 抽 ⇒ RNG 流偏移 ⇒ 本 leaf 不比 Rng」。
 ///
-/// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。这是 RNG-payload 差异，不是 drain 窗口没到。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
+/// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（离线替身 0 抽 ⇒ RNG 流偏移）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
 /// `cap_hit` 回召面待 `openmir2-golden-harness-mapmgr`。
 #[test]

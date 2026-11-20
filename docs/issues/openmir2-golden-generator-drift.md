@@ -19,3 +19,9 @@
 
 ## 4. 证据（本卡生成时）
 对 skeleton：结构 diff `ADDED ⊆ {schema}`、`CHANGED = {delivery}`、`SinSu/recall 相关 = 空`、`未归类 = 空`。
+
+## 5. 整类根因：离线替身「造怪 0 抽」⇒ RNG 流偏移（不止 SINSU）
+`OfflineWorldEngine.RegenMonsterByName` 造怪 **0 抽**，而 Rust `create_monster_oracle` 真抽（`bins/game-svr/src/mongen.rs:498/501` 等）⇒ **凡走 `RegenMonsterByName` 的叶子，RNG 流在两实现间偏移**，后果有二（同一根因）：
+- **`Rng` 长度/逐值不同源**（SINSU 实测 golden 6 抽 vs Rust 8 抽：前 5 同、Rust 多 3 造怪抽）⇒ 这类 leaf 不宜逐值比 Rng（是**替身不忠实**，非产品错）。
+- **帧面 RNG-payload 偏移**（例：SINSU 640 `SM_MAGIC_LVEXP` 的 `tag`=训练 `Random(3)+1`，golden=2 vs rust=3）⇒ 与 drain 窗口无关。
+⇒ 凡 `# act` 召唤/造怪类叶子，评审时先问"这个值是否来自造怪/train 抽"；是则从比较面排除并注明此根因。
