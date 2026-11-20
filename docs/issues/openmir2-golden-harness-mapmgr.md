@@ -47,3 +47,7 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
 - 不为了让断言变绿去改产品（`SpaceMove`/`RecallSlave`/`Maps`/`MagMake*` 等产品代码**不动**）。
 - 不顺手扩到其它叶子（AMYOUNSUL/EARTHFIRE 等）；本卡只解 SINSU `cap_hit` 的 `SpaceMove` 依赖；其它叶子另评估。
 - 不为了让既有 golden"看起来一致"而重生成整批；只动触达者（见 §5）。
+
+## 8. 证据依据与等价记号
+- **① ② 两颗牙的红原文基于 `24e009977`**（rebase 后同一提交，∈master；rebase 前为等价提交【原对象不在 master 历史】；三份 blob 逐字节同：`lib.rs 33cd1c16` / `sinsu 693ced66` / `comparator 2882d9d4`）；交付 head `8f7666ec2` 处 recall 断言**逐字节未变**（`8f7666ec2` 仅加 807 `who` 多重集断言，未动 recall/坐标断言）。
+- **负向名等价**：`10` 用 `神兽2`、`da` 用 `神兽0`——语义相同（`RecallSlave` 只认精确 `神兽`/`神兽1`，`{神兽,神兽1}` 之外皆空操作）。
