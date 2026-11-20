@@ -672,7 +672,7 @@ public static class Program
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
-        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 仅控 env.MapName/ServerIndex（SINSU）。
+        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 门控：env.MapName/ServerIndex + 预置 slave 的 RecordingMonster 构造 + caster.Dir（均 SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = 30;
@@ -1694,7 +1694,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
-        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 仅控 env.MapName/ServerIndex（SINSU）。
+        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 门控：env.MapName/ServerIndex + 预置 slave 的 RecordingMonster 构造 + caster.Dir（均 SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
         if (spec.EnableMaps) { env.MapName = "0"; env.ServerIndex = M2Server.M2Share.ServerIndex; }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
@@ -1879,8 +1879,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 string psName = (spec.PreSlaveName == "pre-slave") ? (spec.PreSlaveName + k) : spec.PreSlaveName;
                 if (spec.EnableMaps)
                 {
-                    // 卡 mapmgr(a)：用真实造怪路径同构初始化预置 slave（RecordingMonster + Abil/WAbil/Race/入图），
-                    // 而非裸 MonsterObject 手填——后者在排水 RM_SPACEMOVE_SHOW 的 GetFeature 处 NPE。仅 SINSU 走此支。
+                    // 卡 mapmgr(a)：预置 slave 用 RecordingMonster 镜像/同构 target 构造（harness 手填，非生产 RegenMonsterByName；
+                    // 比裸对象完整，避免排水 RM_SPACEMOVE_SHOW 的 GetFeature NPE）。仅 SINSU 走此支。
                     var ps = new RecordingMonster { ChrName = psName, ActorId = idBase + 50 + k, CurrX = 0, CurrY = 0 };
                     ps.Race = 113; ps.Abil.Level = 1;
                     ps.WAbil.HP = 17; ps.WAbil.MaxHP = 17; ps.WAbil.AC = 0;

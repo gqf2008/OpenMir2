@@ -1871,6 +1871,13 @@ fn real_rust_ledger_sinsu_cap_hit() {
         3,
         "[{label}] golden 807 应恰 3 条（SM_SPACEMOVE_SHOW2 回召帧）"
     );
+    for awho in ["caster", "target", "obs_in"] {
+        assert_eq!(
+            g807.iter().filter(|(w, ..)| w == awho).count(),
+            1,
+            "[{label}] golden 807 应在 {awho} 恰 1 条（防 N 条同收件人假绿）"
+        );
+    }
     for (who, recog, param, tag, series) in &g807 {
         assert_eq!(
             (*recog, *param, *tag, *series),
