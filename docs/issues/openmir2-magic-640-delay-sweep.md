@@ -1,6 +1,6 @@
 # 全库 640（`SM_MAGIC_LVEXP`）延迟出口收口（follow-up 卡）
 
-> 状态：**立项（未开工）**。本卡只登记与排期，不改产品代码。
+> 状态：**已全部收口（2026-11-21）**：#1–#4 `card/spell-tail-fix`；#5/#7/#8/#9 `c6` 的收敛/skill49 批；#6 `card/640-sweep-17-30-41`。
 > 来源：`openmir2-spell-tail-delay-audit` 修复批（`card/spell-tail-fix`）核查时发现
 > **全库共 9 处 640 出口**，其中本批只改了 4 处。
 
@@ -30,23 +30,23 @@ if (userMagic.Level < 3 && boTrain) {
 | 2 | 同（约 :14918） | 14/15 | 已修 | ✅ 同上 |
 | 3 | 同（约 :15753） | B1：1/5/11/13/44/45 | 已修（本支无 640 ⇒ 帧面不变） | ✅ 同上 |
 | 4 | 同（约 :15917） | B2：2/23/24/29/33/47 | 已修 | ✅ 同上 |
-| 5 | B5 门 `6 \| 48 \| 9 \| 10 \| 22 \| 36` 内的 inlined 尾（出口约 :15134 `send_self_frame`） | 8 / 37 / 21（`SKILL_FIREWIND` / `SKILL_ENERGYREPULSOR` / `SKILL_SPACEMOVE`） | **立即发** | ❌ 待收口 |
-| 6 | 召唤门 `SKILL_SKELLETON \| SKILL_SINSU \| SKILL_ANGEL` 内的 inlined 尾（出口约 :15285） | 17 / 30 / 41 | **立即发** | ❌ 待收口 |
-| 7 | `if req.magic_id == SKILL_TAMMING` 内的 inlined 尾（出口约 :15394） | 20 | **立即发** | ❌ 待收口 |
-| 8 | `if req.magic_id == SKILL_46` 内的 inlined 尾（出口约 :15504） | 46 | **立即发** | ❌ 待收口 |
+| 5 | B5 门 `6 \| 48 \| 9 \| 10 \| 22 \| 36` 内的 inlined 尾（出口约 :15134） | 8 / 37 / 21（`SKILL_FIREWIND` / `SKILL_ENERGYREPULSOR` / `SKILL_SPACEMOVE`） | 已修（`emit_magic_lvexp_delayed`） | ✅ c6 收敛批 |
+| 6 | 召唤门 `SKILL_SKELLETON \| SKILL_SINSU \| SKILL_ANGEL` 内的 inlined 尾（出口约 :15285） | 17 / 30 / 41 | **已修**：`emit_magic_lvexp_delayed`（1000/800 + 去重） | ✅ `card/640-sweep-17-30-41` |
+| 7 | `if req.magic_id == SKILL_TAMMING` 内的 inlined 尾（出口约 :15394） | 20 | 已修 | ✅ c6 收敛批 |
+| 8 | `if req.magic_id == SKILL_46` 内的 inlined 尾（出口约 :15504） | 46 | 已修 | ✅ c6 收敛批 |
 | 9 | P1 default arm（`spell_tail_bo_train`）inlined 尾（出口约 :17233） | A 类 55/57/58/59/66–80（`boTrain=false` ⇒ 无 640）；B 类 49/51/52/53/54 | **立即发**（B 类） | ❌ 由 `c6` 的 `skill49` 批处理 |
 
 > A 类零抽、无 640 ⇒ 本卡只涉 B 类（49/51/52/53/54）与 #5–#8。
 
-## 待收口四处的现有 golden 与"被掩盖的缺陷"
+## 各处现状与 golden（收口记录）
 
 ### #5 `8 | 37 | 21`
 
 - **golden**：无（`MagicGolden` 无对应 `--case`）。
-- **行为**：效果体取数后立即 `send_self_frame(640)`。`boTrain`：8/37 取效果体返回值、21 恒 true。
+- **行为（收口前）**：效果体取数后立即 `send_self_frame(640)`；现由 `emit_magic_lvexp_delayed` 自延迟。`boTrain`：8/37 取效果体返回值、21 恒 true。
 - **影响**：线上 640 会早 1000ms 到客户端（训练点提示与其它交付帧相对次序错）。
 
-### #6 `17 | 30 | 41`
+### #6 `17 | 30 | 41`（**已收口**，见下「#6 落地记录」）
 
 - **golden**：`golden/magic/skeleton.json`（17，`summon_ok`）、`golden/magic/sinsu.json`（30，`summon_ok`）；
   41 无 golden（数据缺口见卡 `openmir2-angel-summon-monster-missing`）。
@@ -61,7 +61,7 @@ if (userMagic.Level < 3 && boTrain) {
 ### #7 `20`（`SKILL_TAMMING`）/ #8 `46`（`SKILL_46`）
 
 - **golden**：均无。
-- **行为**：inlined 尾立即发 640。
+- **行为（收口前）**：inlined 尾立即发 640；现由 `emit_magic_lvexp_delayed` 自延迟。
 
 ## 收口做法（每处一致）
 
@@ -171,3 +171,32 @@ if (userMagic.Level < 3 && boTrain) {
   **正确形态是只收敛发射面**：`emit_magic_lvexp_delayed`（已用于 #5/#7/#8）；**#9/P1（49/51/52/53/54）
   与 #6 待迁**。把 `cast_*` 里的尾拆掉再统一到 `finish_spell_tail_with` 属**重构（会动 `slave.rs`）
   ⇒ 另立新卡**，不在本卡范围。
+
+
+## #6 落地记录（2026-11-21，`card/640-sweep-17-30-41`）
+
+**产品**：17/30/41 共享支的 `send_self_frame(640)` → `emit_magic_lvexp_delayed`（未升级 1000ms /
+升级 800ms + 同 `(ident, MagicId)` 去重），与 `8|37|21`/`20`/`46` 收敛后的同一口径。
+
+**判据（按 opc-19 裁决）**：
+- `sinsu`(30)：`keep` 不动（640 仍整帧不进多重集）+ **只判 `due_ms_rel` 的不对称断言**
+  （golden caster 恰 1 条 `due=1000`，Rust 同条数、due 相等；payload 不比——tag 因替身 0 抽错位）；
+  驱动补 1000ms 交付回路（100ms 步进、逐帧记 due）。
+- `skeleton`(17)：**按 D**——驱动补交付回路 + golden **新世代重出** + 640 入判据面。
+  **payload 可比性先实测**：`(recog,param,series,due)` 两侧一致；`tag`(=TranPoint) golden=2 /
+  Rust=1 ⇒ **`tag` 不入比较面**（其余逐值 + 多重集）。
+- 41：无 golden ⇒ 单测 `spell_cmd_angel_training_tail_is_self_delayed`（施法批 0 条 / 队列恰 1 /
+  +1000ms 交付恰 1）。
+
+**skeleton golden 结构 diff（世代跃迁，逐类）**：
+- **schema 键新增**：`Fixture.caster_actor_id`/`target_actor_id`/`hit_speed`、逐帧 `recog`/`due_ms_rel`；
+- **640 移入交付批**：`summon_ok/caster` 的 `due` = `[0,0,1000]`（旧世代无 due 键）；
+- **其它零变化**：`Rng`/`TargetHp`/`Skeleton` block/`DrainPasses` 全等，帧次序不变。
+⇒ 这是一次**世代跃迁**（旧件缺键 ⇒ 640 时序整段未判），不是行为回归。
+
+**红→绿→反向牙（原文）**：
+- 修前（产品仍立即发）：单测 `41 施法批不得有 640 … left: 1 right: 0`；
+  skeleton 比较器 `640 (recog,param,series,due) 不一致：Rust [(17,1,0,0)] vs golden [(17,1,0,1000)]`；
+  sinsu 比较器 `640 due_ms_rel：Rust=0 vs golden=1000`。
+- 修后：三条全绿（另 `sinsu_cap_hit` 的 640=0 两断也绿）。
+- 反向牙（回 `send_self_frame`）：上述三条**同点复红**；还原后无 MUTATION 残留。
