@@ -17220,11 +17220,34 @@ fn handle_spell_cmd_with_magic(
                         );
                         broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                     }
-                    // `:659-669` 训练尾帧 `RM_MAGIC_LVEXP`（本仓立即发，延迟面既有全局登记）。
+                    // `:659-669` 训练尾帧 `RM_MAGIC_LVEXP`：oracle 是**自延迟投递**，不是立即发——
+                    // 未升级 `MagicManager.cs:666 SendSelfDelayMsg(…, 1000)`；升级
+                    // `PlayObject.cs:5216 UpdateDelayMsg(…, 800)`（先删同 `(ident, MagicId)` 的待投递帧）。
+                    // MG-58/60/61/62/63 批把 B 类（49/51/52/53/54）的延迟面接上；A 类 `bo_train=false`
+                    // ⇒ 不进本块 ⇒ 零变化。（P1 设计件「`send_self_frame` 均立即发，延迟面属既有全局登记」
+                    // 的登记对 B 类自此作废。）
                     if tail.train.levelup_msg {
-                        let body =
-                            smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
-                        send_self_frame(online, gates, chr_name, body);
+                        if tail.train.level_up {
+                            world.update_self_delay_msg_full(
+                                actor_id,
+                                mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                                0,
+                                i32::from(req.magic_id),
+                                i32::from(train.level),
+                                train.tran_point,
+                                800,
+                            );
+                        } else {
+                            world.send_self_delay_msg_full(
+                                actor_id,
+                                mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                                0,
+                                i32::from(req.magic_id),
+                                i32::from(train.level),
+                                train.tran_point,
+                                1000,
+                            );
+                        }
                     }
                     let _ = tail.returned;
                 }
@@ -77869,7 +77892,48 @@ SendRefMsgRange=15
             let expected_points = expect_rng.random_below(3) + 1;
 
             rig.cast(magic_id, (12, 11), 0);
-            let (frames, _raws) = rig.drain();
+            // `RM_MAGIC_LVEXP` 是**自延迟投递**（未升级 `MagicManager.cs:666 SendSelfDelayMsg(…,1000)`）
+            // ⇒ 施法段**不得**出现 640；跨 1000ms 排水后才到（MG-58/60/61/62/63 批接上的延迟面）。
+            let (cast_frames, _raws) = rig.drain();
+            assert_eq!(
+                sf_count(&cast_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[魔号 {magic_id}] 640 不得立即发（oracle 是 SendSelfDelayMsg 1000ms）"
+            );
+            let mut frames = cast_frames;
+            let mut elapsed = 0u64;
+            while elapsed < 1000 {
+                rig.world.clock_ms += 100;
+                elapsed += 100;
+                let outs = rig.world.deliver_self_delay_msgs();
+                if outs.is_empty() {
+                    continue;
+                }
+                let rec = mir2_world_bevy::TickRecord {
+                    slave_self_deliveries: outs.clone(),
+                    ..Default::default()
+                };
+                drain_b4_self_deliveries(
+                    &rec,
+                    &mut rig.world,
+                    &rig.online,
+                    &mut rig.displays,
+                    &mut rig.ground_sessions,
+                    &rig.gates,
+                    0,
+                    0,
+                    b"",
+                );
+                drain_b3_self_deliveries(
+                    &rec,
+                    &rig.world,
+                    &rig.online,
+                    &mut rig.ground_sessions,
+                    &rig.gates,
+                );
+                let (mut step, _r2) = rig.drain();
+                frames.append(&mut step);
+            }
 
             assert_eq!(
                 draws_between(&before, &rig.world.rng),
