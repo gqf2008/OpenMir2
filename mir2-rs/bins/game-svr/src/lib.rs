@@ -10963,7 +10963,7 @@ fn handle_eat_cmd(
                 slot.desc[4] = res.desc4;
             }
             let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
-            let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+            let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
             // oracle 发送序：`RM_ABILITY` → `RM_SUBABILITY`（`:1546/1547`；诅咒支 `:1625/1626`），
             // 再 sysmsg（正常支绿字 `:1522/1528/1534/1540` 或 `:1552` 的未中绿字；诅咒支红字 `:1615/1622`）。
             out.notices.push(game_svr::useitem::QueuedNotice {
