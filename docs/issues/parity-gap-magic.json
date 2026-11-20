@@ -32,9 +32,9 @@
   ],
   "denominator": {
     "kind": "dispatch_branch",
-    "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格",
+    "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格；duplicate 条目（MG-30≡MG-23、MG-31≡MG-24）不计入分母",
     "entry": "CM_SPELL(3017) -> MagicManager.DoSpell -> case 分支",
-    "count": 65,
+    "count": 63,
     "commands": []
   },
   "migration_note": "由 E:/UserFleet/magic-parity.json（旧 schema）机械转写：implemented -> implemented_unverified（旧清单明示“帧级对拍 0/65、basis 全空” ⇒ verified=0，不升格）；missing 保持 2 条；cost 直译 小时级->S、天级->M，原始值保留在 notes。",
@@ -748,7 +748,7 @@
         "line": 366,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "duplicate",
       "evidence": {
         "test": null,
         "test_file": null,
@@ -758,7 +758,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。duplicate：与 MG-23 为同一叶子（MagicManager.cs`:318（外层 `case SKILL_HOLYSHIELD`）与 `:366（内层 `case MagicConst.SKILL_HOLYSHIELD`）；内层只能由同魔号外层进入，无字段可区分）",
+      "merged_into": "MG-23"
     },
     {
       "id": "MG-31",
@@ -769,7 +770,7 @@
         "line": 372,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "duplicate",
       "evidence": {
         "test": null,
         "test_file": null,
@@ -779,7 +780,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。duplicate：与 MG-24 为同一叶子（MagicManager.cs`:319（外层）与 `:372（内层）；内层只能由同魔号外层进入，无字段可区分）",
+      "merged_into": "MG-24"
     },
     {
       "id": "MG-32",
