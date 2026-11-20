@@ -292,6 +292,8 @@
 - **#20 `broadcast_feature_changed(_except)`**：同上走缓存；`skip` 保留为**循环内过滤**：
   `skip=None` ⇒ 含自己（隐藏 ⇒ 只自己）；`skip=Some(self)` ⇒ 零帧（调用方已有自见帧）。
 - 用例：`healthspellbroadcast_two_calls_share_cache_window` /
-  `healthspellbroadcast_hidden_sender_only_self` / `feature_changed_two_calls_share_cache_window` /
+  `healthspellbroadcast_hidden_sender_only_self`（隐藏在线 ⇒ 只自己）/
+  `healthspellbroadcast_hidden_sender_offline_has_no_frames`（隐藏离线 ⇒ 零帧）/
+  `feature_changed_two_calls_share_cache_window` /
   `feature_changed_skip_semantics` / `feature_changed_hidden_sender_respects_skip`。
 - 形态同 7c：**非施法驱动 ⇒ 首调用刷新、同窗第二次命中**。

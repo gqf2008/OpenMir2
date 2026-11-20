@@ -97270,6 +97270,28 @@ fn ",
         broadcast_feature_changed_except(&world, &online, &gates, actor, 1, 2, 12, Some(actor));
         assert!(take7c(&mut rx).is_empty(), "隐藏 + skip=Some(自己) ⇒ 零帧");
     }
+
+    /// **#19 隐藏源且不在 online**（怪物/NPC 源没有客户端）⇒ 退化自投无人可收 ⇒ **零帧**。
+    #[test]
+    fn healthspellbroadcast_hidden_sender_offline_has_no_frames() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "hidden_mon", 10, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.ob_mode = true;
+        let mon_id = world.add_entity(mon);
+        let mut online: OnlineRegistry = Vec::new();
+        let _ = add_657_observers(&mut world, &mut online);
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx0);
+        let body = game_svr::smframe::sm_healthspellchanged_frame(mon_id, 90, 0, 100);
+        broadcast_healthspellchanged(&world, &online, &gates, mon_id, &body, 12);
+        assert!(
+            take7c(&mut rx0).is_empty(),
+            "隐藏源不在 online ⇒ 退化自投无人可收 ⇒ 零帧"
+        );
+    }
 }
 
 #[cfg(test)]
