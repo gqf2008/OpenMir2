@@ -588,7 +588,7 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
   需要时另立卡造该场景（如 `uenhancer` 的 638 前置入队形态可复用）。
 - 登录批的两条 657（`smframe.rs` 两槽）**已核：oracle 实测 2 条**——2026-10-23 真机窗口两轮一致
   （`1cca49d22` 的提交记录：C# 在 654 之后发 `657,657`，Recog=自己/Param=0/Tag=0/Series=0），
-  机制也吻合：`SendUpdateMsg` 去重时队首是 `RM_LOGON`（`10050 & 0xFF = 66`，`Messages.cs:574`）
+  机制也吻合：`SendUpdateMsg` 去重时队首是 `RM_LOGON`（`10050 & 0xFF = 66`，`src/OpenMir2/Messages.cs:574`）
   ⇒ `TryPeek` 不前进、657 不在队首 ⇒ **不去重 ⇒ 2 帧**。这同时是"队列非空 ⇒ 2"的**真实在生产例证**，
   本批"未覆盖"指的是**我们自己没造**该场景的夹具，不是 oracle 没有该形态。
 
