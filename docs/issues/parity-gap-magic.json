@@ -74,6 +74,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -95,6 +96,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -116,6 +118,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -137,6 +140,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -158,6 +162,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -179,6 +184,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -200,6 +206,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -221,6 +228,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
@@ -242,6 +250,7 @@
         "cases": [],
         "unit_tests": []
       },
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
