@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "1285b0d94541923e51371620f778e932b379a4a1",
-    "time": "2026-11-20T12:23:51+08:00",
-    "note": "2026-11-20 重测于 1285b0d94（move 组 + 17a + ability-frames 均已合）：verified=12（IT-01/02/03/04/05/06/08/12/14/15/18/19）、implemented_unverified=6（IT-07/09/10/11/16/17）、missing=1（IT-13）；分母 19 不动。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。本卡（card/items-b3）另带 B3 单侧补例 6 例与 IT-12 文本接线；合入后本 head 随合并提交更新。"
+    "head": "c8e48dbdea487303a06667cf42b74fe17ab7d162",
+    "time": "2026-11-20T13:03:01+08:00",
+    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。"
   },
   "status_enum": [
     "verified",
@@ -413,25 +413,30 @@
         "line": 2264,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M-L",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it13_guild_return_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/guild_vectors.json",
+        "cases": [
+          "eat_fail_shape5_no_guild",
+          "eat_fail_shape5_in_war_area",
+          "eat_ok_shape5_invalid_castle_eaten",
+          "eat_ok_shape5_castle_home_exact",
+          "eat_ok_shape5_castle_home_zero_coord_random"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it13_no_guild_no_eat",
+          "eat_move::tests::it13_in_war_area_red_no_eat",
+          "eat_move::tests::it13_invalid_castle_eaten_red",
+          "eat_move::tests::it13_castle_home_exact",
+          "eat_move::tests::it13_castle_home_zero_coord_random"
         ]
       },
-      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "M-L",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape5 臂，零改 useitem.rs）：五支按 oracle `PlayObject.Base.cs:2264-2286`——`MyGuild==null` ⇒ 不吃（636）；战区 ⇒ 红字「此处无法使用」不吃；非战区无城主会籍 ⇒ 红字「无效」但吃（635，位置不变）；有效城堡 ⇒ `BaseObjectMove(HomeMap, HomeX-4+Rand9, HomeY-4+Rand9)`（先 X 后 Y，2 抽），任一坐标为 0 ⇒ `MapRandomMove`（+2 抽）。Shape5 **不发 `RM_SPACEMOVE_FIRE`**（oracle case5 只调 BaseObjectMove）。**部署不可达（§18.1，scope=castle_move_branches_synthetic_unreachable）**：`Castle.MasterGuild` 在部署态恒 null （`UserCastle.LoadConfig` 用 `GuildMgr.FindGuild(OwnGuild)`，早于行会装载）⇒ 位移两支证据为 synthetic 构造，非生产路径；生产只会走「不吃」或「无效但吃」。探针 `guild-probe`（C# 半批 `card/items-it13` ®`39cc28577`）+ 五支 §35 负向自检。共用换图路径缺口（766/54 与 `[名|文件]`）见 docs/issues/openmir2-map-change-cluster-gaps.md，不在本卡重抄。",
+      "scope": "castle_move_branches_synthetic_unreachable"
     },
     {
       "id": "IT-14",

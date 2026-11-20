@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>guild-probe</AssemblyName>
+    <RootNamespace>GuildProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    物品线 move 组（IT-09 回城卷 / IT-10 随机传送 / IT-11 地牢逃脱）的 oracle 真身向量生成器。
+
+    与 eat-probe 的分工（**刻意不复用/不改 eat-probe**：lane `openmir2-worker-43` 正在重生成它）：
+      - eat-probe：`use_item` 纯决策面（帧/通知/背包迁移），`Envir` 为空图；
+      - 本探针：`EatUseItems → BaseObjectMove` 的**位置搬运**面——真 `Envirnoment`（合成真格式 .map）、
+        真 `SystemShare.MapMgr` 替身（只做 FindMap 注册表）、真 `SystemShare.ActorMgr`、
+        真 `PlayObject.ClientUseItems`，记录：
+          * 即时帧（SM_EAT_OK=635 / SM_EAT_FAIL=636，`INetChannel.AddGateBuffer` 截获）；
+          * 延时通知（`MsgQueue` 按优先级出队，含 priority/late）；
+          * pump 后的玩家可见 SM 帧（`Operate` 驱动 RM_SPACEMOVE_FIRE=8062 → SM_SPACEMOVE_HIDE=800，
+            RM_WEIGHTCHANGED=10115 → SM_WEIGHTCHANGED=622）；
+          * 终态 `MapName/CurrX/CurrY`、`ItemList`、`WAbil.Weight`；
+          * `System.Random` 逐次账本（`RandomNumber.random` 私有静态字段替换为录制包装，固定种子）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起 socket、不起服务。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

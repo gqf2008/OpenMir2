@@ -10661,6 +10661,8 @@ fn handle_eat_cmd(
     human_max_gold: i32,
     // **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck`）。
     oil_cfg: crate::config::WeaponMakeLuckCfg,
+    // **IT-13**：`PlayObject.InGuildWarArea` 的每 actor 会话位（宿主 `castle_war_states`）。
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -10750,8 +10752,20 @@ fn handle_eat_cmd(
     // 主体在 [`eat_move::maybe_eat_move`]（`useitem.rs` 零改动）；它自己出帧/搬运/吃尾巴并写回会话，
     // 返回 `true` ⇒ 本函数不再走 `use_item`（否则那些 Shape 会落 `_ => {}` 的 636）。
     if eat_move::maybe_eat_move(
-        world, sg, actor_id, recog, chr_name, socket, online, gates, catalog, registry, dead,
+        world,
+        sg,
+        actor_id,
+        recog,
+        chr_name,
+        socket,
+        online,
+        gates,
+        catalog,
+        registry,
+        dead,
         no_drug,
+        castle_war_states,
+        colors,
     ) {
         return;
     }
@@ -28885,6 +28899,7 @@ fn sim_loop(
                             enter_cfg.win_lottery,
                             enter_cfg.shop.human_max_gold,
                             enter_cfg.weapon_make_luck,
+                            &castle_war_states,
                         );
                     } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                         // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -54810,6 +54825,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -54943,6 +54959,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 100,
@@ -54980,6 +54997,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 200,
@@ -55137,6 +55155,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
@@ -55383,6 +55402,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -55517,6 +55537,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -56556,6 +56577,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -73122,6 +73144,7 @@ SendRefMsgRange=15
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
         };
         let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
@@ -73355,6 +73378,7 @@ SendRefMsgRange=15
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -92643,6 +92667,7 @@ GMEXECUTE f
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let per = take7c(&mut rx0);
         for s in [901, 902, 903, 904] {
@@ -95775,6 +95800,7 @@ GMEXECUTE f
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx0);
         let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
@@ -96325,6 +96351,7 @@ GMEXECUTE f
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx1);
         let other_sys: Vec<&Vec<u8>> = frames
@@ -99968,6 +99995,7 @@ fn ",
                 cfg,
                 human_max,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
             // 同一次 `handle_eat_cmd` 的原始帧（含 `SM_SYSMESSAGE` 的文本尾）与 ident 序列。
             let frames = drain_frames(rx);
@@ -100238,6 +100266,7 @@ fn ",
             forced_six(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let ids: Vec<u16> = drain_frames(&mut rx0)
             .iter()
@@ -100473,6 +100502,7 @@ fn ",
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
             let mut ids = Vec::new();
             while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {

@@ -474,6 +474,7 @@ mod tests {
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
 
             // ① 帧：golden immediate ++ pumped 的 `payload` 逐字节（`recog` 按夹具身份归一；
