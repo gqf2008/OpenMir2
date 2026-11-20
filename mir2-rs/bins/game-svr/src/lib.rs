@@ -67224,6 +67224,9 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
+        // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
+        let monster_specs = golden_monsters(stem, label);
+        let monster_ids = place_monsters(&mut rig.world, &monster_specs);
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
@@ -67315,6 +67318,11 @@ SendRefMsgRange=15
                 ),
                 "[{label}] 28 前提：target 实体 HP/MaxHP 必须与登录派生后的 WAbil 同值"
             );
+        }
+        // v1：怪物侧投递面（仅当本支有怪物时执行；其它支零影响）。
+        let mut monster_deliveries: Vec<mir2_world_bevy::slave::SelfDelayOutcome> = Vec::new();
+        if !monster_ids.is_empty() {
+            monster_deliveries = rig.world.deliver_self_delay_msgs();
         }
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
@@ -67870,6 +67878,20 @@ SendRefMsgRange=15
             "NotDue": [],
             "CasterMp": caster_mp,
         }]);
+        if !monster_ids.is_empty() {
+            let rms: Vec<serde_json::Value> = monster_ids
+                .iter()
+                .map(|id| {
+                    let hits: Vec<serde_json::Value> = monster_deliveries
+                        .iter()
+                        .filter(|o| o.actor_id == *id && o.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                        .map(|o| serde_json::json!({ "ident": o.ident, "name_color": o.name_color.is_some() }))
+                        .collect();
+                    serde_json::json!({ "actor_id": id, "rms": hits })
+                })
+                .collect();
+            ledger[0]["Monsters"] = serde_json::Value::Array(rms);
+        }
         if status_input.is_some() {
             // 与 golden 同形（对象三键），比较器可逐值比。
             let as_obj = |v: [u16; 3]| {
@@ -68907,6 +68929,54 @@ SendRefMsgRange=15
             .iter()
             .filter(|m| m["ident"] == ident)
             .count()
+    }
+
+    /// 金标准 `Fixture.monsters`；不存在/为空返回空表（缺省 ⇒ 世界不放怪物 ⇒ 既有件零变化）。
+    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 8]> {
+        let v = golden_case_for(stem, label)["Fixture"]["monsters"].clone();
+        let Some(arr) = v.as_array() else {
+            return Vec::new();
+        };
+        arr.iter()
+            .map(|m| {
+                let g = |k: &str| m[k].as_i64().unwrap_or_else(|| panic!("monsters.{k} 必须是整数"));
+                [g("x"), g("y"), g("race"), g("level"), g("hp"), g("life_attrib"), g("master"), g("target_cret")]
+            })
+            .collect()
+    }
+
+    /// **世界放怪物（设施接缝，卡 §36）**：参数全部来自夹具，返回与列表同序的 actor id。
+    fn place_monsters(world: &mut mir2_world_bevy::World, monsters: &[[i64; 8]]) -> Vec<i32> {
+        let mut ids = Vec::with_capacity(monsters.len());
+        for m in monsters {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("golden-mon{}", ids.len()), m[0] as i32, m[1] as i32);
+            e.race = u8::try_from(m[2]).expect("race 越界");
+            e.level = u8::try_from(m[3]).expect("level 越界");
+            e.hp = u16::try_from(m[4]).expect("hp 越界");
+            e.max_hp = e.hp;
+            e.life_attrib = u8::try_from(m[5]).expect("life_attrib 越界");
+            e.ai.animal = true;
+            e.rush_mode = false;
+            e.admin_mode = false;
+            e.stone_mode = false;
+            e.master = None;
+            e.ai.target_creature = None;
+            let id = world.add_entity(e);
+            ids.push(id);
+        }
+        world.tick();
+        for (i, m) in monsters.iter().enumerate() {
+            let bind = |idx: i64| -> Option<i32> {
+                if idx == 0 { None } else { Some(ids[usize::try_from(idx).expect("序号") - 1]) }
+            };
+            if let (Some(master), Some(e)) = (bind(m[6]), world.entities.get_mut(ids[i])) {
+                e.slave.master = Some(master);
+            }
+            if let (Some(tc), Some(e)) = (bind(m[7]), world.entities.get_mut(ids[i])) {
+                e.ai.target_creature = Some(tc);
+            }
+        }
+        ids
     }
 
     /// 金标准 `Fixture.status_time_arr`（`{dechealth,damagearmor,stone}`）——不存在返回 `None`。
