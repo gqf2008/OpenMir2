@@ -1015,7 +1015,7 @@ mod tests {
             "提交的夹具必须是**播种**运行产物（MIR2_RNG_SEED/MIR2_RNG_LOG）"
         );
         let cases = lot["cases"].as_array().expect("lottery.cases 必须是数组");
-        assert_eq!(cases.len(), 12, "彩票用例数固定为 12（改动须同步本断言）");
+        assert_eq!(cases.len(), 15, "彩票用例数固定为 15（改动须同步本断言）");
         let mut levels = [false; 6];
         let mut lost = 0usize;
         let mut gate_closed_checked = false;
@@ -1075,20 +1075,23 @@ mod tests {
             let golds: Vec<i32> = (0..6)
                 .map(|i| i32v(&c["config"]["applied"]["gold"][i]))
                 .collect();
-            match won_level {
-                Some(i) => {
-                    assert_eq!(
-                        d_gold, golds[i],
-                        "{name}: 中奖金币必须 = 该档 WinLotteryNGold"
-                    );
-                    assert_eq!(d_no_win, 0, "{name}: 中奖不加 NoWin");
-                    levels[i] = true;
-                }
-                None => {
-                    assert_eq!(d_gold, 0, "{name}: 未中/闸闭金币不变");
-                    assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
-                    lost += 1;
-                }
+            // 中/未中按**金币增量**判（oracle `PlayObject.cs:3868 if (nGold > 0)`）；命中但该档
+            // `Gold == 0`、或闸闭，都走未中并 `NoWin += 500`，而等级仍在闸内 +1
+            // （`:3820 WinLotteryLevel6++` 与 gold 无关）——按等级增量判会误当 Won。
+            if let Some(i) = won_level {
+                levels[i] = true;
+            }
+            if d_gold > 0 {
+                let i = won_level.unwrap_or_else(|| panic!("{name}: 金币 +{d_gold} 但无命中档"));
+                assert_eq!(
+                    d_gold, golds[i],
+                    "{name}: 中奖金币必须 = 该档 WinLotteryNGold"
+                );
+                assert_eq!(d_no_win, 0, "{name}: 中奖不加 NoWin");
+            } else {
+                assert_eq!(d_gold, 0, "{name}: 未中/闸闭金币不变");
+                assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
+                lost += 1;
             }
             // 卡 `openmir2-runtime-sysmsg-text-frames`：彩票绿/红字必须带文本，且字节 =
             // oracle `EDCode.EncodeString(MessageSettings.WinLottery{N}Msg / NotWinLotteryMsg)`。
@@ -1113,8 +1116,14 @@ mod tests {
                 known.contains(&got),
                 "{name}: 彩票 SysMsg 文本不属于七条已知文案"
             );
-            if let Some(i) = won_level {
+            if d_gold > 0 {
+                let i = won_level.expect("中奖必有命中档");
                 assert_eq!(got, known[i], "{name}: 中奖档位与文案不符");
+            } else {
+                assert_eq!(
+                    got, known[6],
+                    "{name}: 未中/闸闭必须是 NotWinLotteryMsg（红字）"
+                );
             }
             if name == "eat_ok_lottery_gate_closed" {
                 gate_closed_checked = true;
@@ -1127,6 +1136,111 @@ mod tests {
         );
         assert!(lost >= 2, "未中与闸闭各至少一例");
         assert!(gate_closed_checked, "缺少 eat_ok_lottery_gate_closed");
+    }
+
+    /// **IT-16 逐例驱动 Rust `win_lottery`（非夹具自洽，§43）**：对 12 例各自 `applied_cfg`+`seed`+初态，
+    /// 断言 Rust 产出 `(命中档, gold, no_win 增量, 后态)` == 夹具 oracle 期望；并断言**恰抽一次**（draw-count==1）。
+    /// 注：draw-count 用**测试内包一层**（`Counting`）数 `random_below`——不改 `rng.rs`、不改抽值路径（纯旁路）。
+    #[test]
+    fn it16_lottery_percase_differential() {
+        use crate::config::WinLotteryCfg;
+        use crate::winlottery::{win_lottery, WinLotteryOutcome, WinLotteryState};
+        use mir2_shared::rng::{RandomNumber, RandomSource};
+
+        struct Counting<'a>(&'a mut RandomNumber, usize);
+        impl RandomSource for Counting<'_> {
+            fn random(&mut self) -> i32 {
+                self.0.random()
+            }
+            fn random_below(&mut self, v: i32) -> i32 {
+                self.1 += 1;
+                self.0.random_below(v)
+            }
+            fn random_range(&mut self, a: i32, b: i32) -> i32 {
+                self.0.random_range(a, b)
+            }
+            fn next_double(&mut self) -> f64 {
+                self.0.next_double()
+            }
+        }
+
+        let doc = fixture();
+        let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
+        assert_eq!(cases.len(), 15, "彩票例固定 15（含 QA 三类盲区例）");
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let ap = &c["config"]["applied"];
+            let cfg = WinLotteryCfg {
+                rate: i32v(&ap["rate"]),
+                min: std::array::from_fn(|i| i32v(&ap["min"][i])),
+                max: std::array::from_fn(|i| i32v(&ap["max"][i])),
+                gold: std::array::from_fn(|i| i32v(&ap["gold"][i])),
+                // init_* 不被 `win_lottery` 读（它单收 `st`）；取默认。
+                ..WinLotteryCfg::default()
+            };
+            let lb = &c["lottery_before"];
+            let mut st = WinLotteryState {
+                count: i32v(&lb["count"]),
+                no_win: i32v(&lb["no_win"]),
+                level: std::array::from_fn(|i| i32v(&lb["level"][i])),
+            };
+            let seed = i32v(&c["rng"][0]["seed"]);
+            let want_draw = i32v(&c["rng"][0]["result"]);
+            // ① 抽值：同 seed 首抽必须 == oracle。
+            let draw = RandomNumber::with_seed(seed).random_below(cfg.rate);
+            assert_eq!(draw, want_draw, "{name}: Rust 同 seed 首抽值 != oracle");
+            // ② 驱动 win_lottery（同 seed 新实例）+ 计抽数。
+            let mut inner = RandomNumber::with_seed(seed);
+            let mut cr = Counting(&mut inner, 0);
+            let out = win_lottery(&mut cr, &cfg, &mut st);
+            assert_eq!(cr.1, 1, "{name}: win_lottery 必须恰抽一次（实得 {}）", cr.1);
+            // 期望 from 夹具 lottery(后) - lottery_before(前)。
+            let la = &c["lottery"];
+            let hit_level = (0..6)
+                .find(|&i| i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1)
+                .map(|i| (i + 1) as u8);
+            let d_gold = i32v(&c["gold"]) - i32v(&c["gold_before"]);
+            let d_no_win = i32v(&la["no_win"]) - i32v(&lb["no_win"]);
+            let out_dbg = format!("{out:?}");
+            // **中/不中按金币增量判**（不是按命中档/等级增量）：oracle 以 `nGold > 0` 定 Won；
+            // 命中档但该档 `Gold == 0`（或闸闭）仍走 Lost（NoWin += 500、红字、无 SM_GOLDCHANGED），
+            // 等级增量照常 +1。按等级增量判会把「命中但 0 金」误当 Won（QA 盲区 ②）。
+            if d_gold > 0 {
+                match out {
+                    WinLotteryOutcome::Won { level, gold } => {
+                        assert_eq!(
+                            Some(level),
+                            hit_level,
+                            "{name}: Rust 命中档位 != 夹具等级增量档"
+                        );
+                        assert_eq!(gold, d_gold, "{name}: Rust 中奖金币 != oracle");
+                        assert_eq!(d_no_win, 0, "{name}: 中奖不应加 no_win");
+                    }
+                    other => panic!("{name}: 夹具金币 +{d_gold} 但 Rust outcome = {other:?}"),
+                }
+            } else {
+                match out {
+                    WinLotteryOutcome::Lost => {
+                        assert_eq!(d_gold, 0, "{name}: 未中金币应为 0");
+                        assert_eq!(d_no_win, 500, "{name}: 未中 no_win 应 +500");
+                    }
+                    other => panic!("{name}: 夹具金币 +0（未中）但 Rust outcome = {other:?}"),
+                }
+            }
+            for i in 0..6 {
+                assert_eq!(
+                    st.level[i],
+                    i32v(&la["level"][i]),
+                    "{name}: 后态 level[{i}]"
+                );
+            }
+            assert_eq!(st.no_win, i32v(&la["no_win"]), "{name}: 后态 no_win");
+            assert_eq!(st.count, i32v(&la["count"]), "{name}: 后态 count");
+            eprintln!(
+                "CASE {name}: 输入(seed={seed} rate={} bands_min={:?}) 期望(hit={:?} gold+{d_gold} no_win+{d_no_win}) 实测({out_dbg} draws={} 后态_no_win={} 后态_level={:?})",
+                cfg.rate, cfg.min, hit_level, cr.1, st.no_win, st.level
+            );
+        }
     }
 
     /// 夹具**不得**记录绝对路径（opc-19 2026-11-20 口径）：`config.exps_conf` 只许是
