@@ -1087,6 +1087,18 @@ fn real_rust_ledger_fireboom() {
     );
 }
 
+/// **`47`（`SKILL_47`，与 23 同 helper `MagBigExplosion(..., FireBoomRage)`）**真实台账 →
+/// 判定面（标签 s1/s5/s13；金标准 `golden/magic/fireboom47.json`）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::fireboom47_parity_*）生成真实台账"]
+fn real_rust_ledger_fireboom47() {
+    real_ledger_verify_labels(
+        "fireboom47",
+        &golden_file("fireboom47.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
 /// **`19 集体隐身术`（`SKILL_BIGCLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::big_cloak_parity_*）生成真实台账"]

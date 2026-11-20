@@ -68636,10 +68636,10 @@ SendRefMsgRange=15
     /// RM：8044(target,p1=power=15,108)、10052(target,68)、8103(众人: w=damage=15/p1=hp_after/
     /// p2=max_hp/p3=caster,167)、8090(攻击方 hearers,154)、10123(caster,255)。
     /// 来源 = `World::struck_log` 内部观测面（**不由 SM 31 反推**）。
-    fn fireboom_assert(stem: &str, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, 23, 15, 1, label, seed, base);
+    fn fireboom_assert(stem: &str, magic_id: u16, golden: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 15, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert("fireboom.json", label, 4);
+        b1_golden_drain_assert(golden, label, 4);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         let seq_of = |who: &str| -> Vec<i64> {
@@ -68675,16 +68675,17 @@ SendRefMsgRange=15
             0,
             "[{stem}/{label}] obs_out 不得有帧"
         );
-        // HP 面（golden 实证有伤害链）。
+        // HP 面（golden 实证有伤害链）——期望取自金标准（§22：不写死数值）。
+        let g = golden_case_for(stem, label);
         assert_eq!(
             c["TargetHpBefore"].as_i64(),
-            Some(100),
-            "[{stem}/{label}] HP 前"
+            g["Fixture"]["target_hp"].as_i64(),
+            "[{stem}/{label}] HP 前须等于 golden Fixture.target_hp"
         );
         assert_eq!(
             c["TargetHp"].as_i64(),
-            Some(85),
-            "[{stem}/{label}] HP 后（伤害 15）"
+            g["TargetHp"].as_i64(),
+            "[{stem}/{label}] 术后 HP 须等于 golden TargetHp"
         );
         // RM 面。
         assert_eq!(n("target", "Rm", 8044), 1, "[{stem}/{label}] target 8044");
@@ -68699,19 +68700,39 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireboom_parity_s1() {
-        fireboom_assert("fireboom", "s1", 1, 1000);
+        fireboom_assert("fireboom", 23, "fireboom.json", "s1", 1, 1000);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireboom_parity_s5() {
-        fireboom_assert("fireboom", "s5", 5, 2000);
+        fireboom_assert("fireboom", 23, "fireboom.json", "s5", 5, 2000);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireboom_parity_s13() {
-        fireboom_assert("fireboom", "s13", 13, 3000);
+        fireboom_assert("fireboom", 23, "fireboom.json", "s13", 13, 3000);
+    }
+
+    /// **`47`（`SKILL_47`，`MagicManager.cs` `case MagicConst.SKILL_47`）**：与 23 共用
+    /// `MagBigExplosion(..., FireBoomRage)`——只有魔号不同。金标准 `golden/magic/fireboom47.json`。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom47_parity_s1() {
+        fireboom_assert("fireboom47", 47, "fireboom47.json", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom47_parity_s5() {
+        fireboom_assert("fireboom47", 47, "fireboom47.json", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireboom47_parity_s13() {
+        fireboom_assert("fireboom47", 47, "fireboom47.json", "s13", 13, 3000);
     }
 
     /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。

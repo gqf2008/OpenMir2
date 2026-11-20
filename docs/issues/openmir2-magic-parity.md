@@ -1166,3 +1166,21 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **初版自证无牙（留痕，未入库）**：第一版把门槛复用构造用的 `fullHp` —— 「传什么就比什么」，门恒真；
   变异 `MaxHP-1` 仍 rc=0 并落盘。改为在门内**从 spec 等级现算** `derived.max_hp` 后才咬住。
   教训：自检的门槛必须独立于被检对象的来源，否则只是同义反复。
+
+### 32. 47（`SKILL_47`）接线记录（2026-11-20）
+
+- **oracle 分派**：`src/M2Server/Magic/MagicManager.cs` 的 `case MagicConst.SKILL_47` →
+  `MagBigExplosion(…, SystemShare.Config.FireBoomRage)`；与 23 `SKILL_FIREBOOM` **同 helper**，
+  仅魔号不同（`MagicConst.cs` `SKILL_47 = 47`）。Rust 侧早已共用实现（P3-B2 的 23/47 半径来源用例
+  已钉住 `47 ⇒ FireBoomRage`），本次补的是**装置 golden + 对拍面**。
+- **范围来源落进夹具**：部署 `Server.conf` 的 `FireBoomRage=1`（`Fixture.fire_boom_rage=1`、
+  `server_conf_sha256=ce5e3ce9…`）。
+- **实测（`golden/magic/fireboom47.json`，s1/s5/s13）**：`Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、
+  `DrainPasses` = 4；target **HP 100→85（damage 15）**；caster `[638,640,31,656]`、
+  target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`、obs_out 空；
+  RM：target 8044/10052、三收件人 8103/8090、caster 10123。
+- **契约**：`cover_drain` / `login_order=true` / `reachable` / 逐 case `anti_magic=1` /
+  `construction{Warrior L20, [], [FireBoom47]}` / `target_max_hp=224` / `rng_total_draws=7`。
+- **证据**：run_id `magic47-20261120T095010`；驱动 `fireboom47_parity_s1/s5/s13` 各 rc=0；
+  比较器 `real_rust_ledger_fireboom47` ok；fmt/clippy（两包）rc=0。
+- **MG-56 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **17/65**。

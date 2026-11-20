@@ -1387,17 +1387,26 @@
         "line": 595,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fireboom47",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireboom47.json（C# oracle 生成；FireBoomRage=1 来自部署 Server.conf）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireboom47_parity_s1",
+          "tests::fireboom47_parity_s5",
+          "tests::fireboom47_parity_s13"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。`case MagicConst.SKILL_47` → MagBigExplosion(FireBoomRage)，与 23 同 helper 仅魔号不同；golden Rng 7 抽、DrainPasses 4、HP 100→85；卡 §32。",
+      "basis": "semantic"
     },
     {
       "id": "MG-57",
