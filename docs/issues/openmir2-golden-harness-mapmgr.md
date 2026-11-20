@@ -10,10 +10,10 @@ M2Server.Actor.BaseObject.SpaceMove(String,Int16,Int16,Int32)  BaseObject.cs:110
 M2Server.Actor.BaseObject.RecallSlave(String)                 BaseObject.cs:1866
 M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:1302
 ```
-根因：`SpaceMove` 首句 `SystemShare.MapMgr.FindMap(sMap)` —— harness 只设了 `SystemShare.WorldEngine = new OfflineWorldEngine()`（`Program.cs:116-118`），**未设 `SystemShare.MapMgr`（类型 `IMapSystem`）** ⇒ null ⇒ NPE。
+根因：`SpaceMove` 首句 `SystemShare.MapMgr.FindMap(sMap)` —— harness 只设了 `SystemShare.WorldEngine = new OfflineWorldEngine()`（`Program.cs:675/:1697`），**未设 `SystemShare.MapMgr`（类型 `IMapSystem`）** ⇒ null ⇒ NPE。
 
 ## 2. 需要的最小替身
-- 实现 `IMapSystem`（`src/Modules/SystemModule/SubSystem/IMapSystem.cs`）的 `IEnvirnoment FindMap(string)`，**返回 harness 已 `LoadMapData` 的那个 `Envirnoment`**（仿 `OfflineWorldEngine` 的最小替身），在 `Program.cs:116-118` 处一并设 `SystemShare.MapMgr`。
+- 实现 `IMapSystem`（`src/Modules/SystemModule/SubSystem/IMapSystem.cs`）的 `IEnvirnoment FindMap(string)`，**返回 harness 已 `LoadMapData` 的那个 `Envirnoment`**（仿 `OfflineWorldEngine` 的最小替身），在 `Program.cs:675/:1697` 处一并设 `SystemShare.MapMgr`。
 - **注意级联**：`SpaceMove` 过 `FindMap` 后还会 `Envir.DeleteFromMap(未入图的 pre-slave)`、`SpaceMoveGetRandXY`（**抽 RNG**）、`AddMapObject`、`SendMsg/SendRefMsg`。⇒ 替身不仅要非 null，还要这些不 NPE，且**其 RNG 抽取要进账本与 Rust 对齐**。属**影响全 harness 的 ③ 级改动**（任何走 `SpaceMove` 的路径都会变）。
 
 ## 3. 叶子处置（cap_hit 已解）
@@ -40,7 +40,7 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
 - 替身上线后，SINSU `cap_hit` 的 `recall_moved` 从**当前「空集恒假」**变成**真断言**：预置 slave 存在 ⇒ `RecallSlave` 移它到面前 ⇒ `pre_slave_xy_before ≠ after`、`recall_moved=true`；负向（预置名不匹配 ⇒ 空操作）`recall_moved=false`（**空操作 vs 移动的分界**）。
 - **该红在哪里的牙**：
   - 牙① 删/短路 `RecallSlave` 调用（或恒不调）⇒ cap_hit 的 pre-slave 坐标 `before==after` ⇒ `recall_moved=true` 断言**红**；
-  - 牙②（边界）预置名改成不匹配（`神兽→神兽0`）⇒ 空操作 ⇒ 若断言硬要求 `recall_moved=true` 则红——界定「空操作」也即「名字精确匹配」这条 oracle 事实。
+  - 牙②（边界）预置名改成不匹配（非 `神兽`/`神兽1`，如 `神兽0`）⇒ 空操作 ⇒ 若断言硬要求 `recall_moved=true` 则红——界定「空操作」也即「名字精确匹配」这条 oracle 事实。
   - 附：`SpaceMoveGetRandXY` 抽 RNG ⇒ cap_hit 的 Rng 与 oracle 同源，**应纳入 cap_hit 的 Rng 逐值比较**（区别于 SINSU summon_ok 的 Rng 不可比）。
 
 ## 7. 不做的事
