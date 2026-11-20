@@ -74,5 +74,10 @@ buff_657_bochg_three_recipients_distinct_series:
 ## 5. 门禁
 
 - `cargo test -p game-svr --lib`：**2149 passed / 0 failed / 70 ignored**（rc=0；基线 2146 + 3 新牙）。
+- `cargo test --workspace`：**4374 passed / 0 failed / 155 ignored**（rc=0）。
+- `cargo clippy --workspace --all-targets -- -D warnings`：**rc=0**
+  （首跑曾红：新牙里 `get(&905).is_none()` 触发 `clippy::unnecessary-get-then-check`，已改 `!contains_key(&905)`。
+  **教训①**：交付里"待补"必须按"可能红"写，不能当成"还没碰的绿地"——`ae` 对 §5 的指摘即此。
+  **教训②**：`--all-targets` 的 lint 只跑 `--lib` 测试时**不一定暴露**，与 fmt 一起列入必跑项。）
 - `cargo fmt --all -- --check`：rc=0。
-- clippy `--workspace --all-targets` / `--workspace` / msgcodegen：待车道空补跑并回填。
+- `cargo run -p msgcodegen -- --check`：rc=0（604 条常量一致）。
