@@ -3,8 +3,8 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "da63bae28a7c44a61aad206da7251e441553b9d0",
-    "time": "2026-11-20T15:33:28+0800",
+    "head": "f9271087fa143d3c3a2d2e2e1fde041e37ade4c1",
+    "time": "2026-11-20T16:35:42+0800",
     "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。；M-IT09101113 = 换图簇升格（IT-09/10/11/13，物品 verified 17/19，2026-11-20）。；M-IT17 = IT-17 升格（物品 verified 18/19，2026-11-20）。"
   },
   "status_enum": [
