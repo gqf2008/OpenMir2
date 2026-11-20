@@ -22,7 +22,7 @@ use bevy_ecs::prelude::ResMut;
 use bevy_ecs::system::IntoSystem;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
-use mir2_shared::rng::RandomNumber;
+use mir2_shared::rng::{RandomNumber, RandomSource};
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
 use crate::buff::{
@@ -162,6 +162,50 @@ pub const ITEM_LOCATION_WEAPON: usize = 1;
 pub const ITEM_LOCATION_RIGHTHAND: usize = 2;
 /// `ItemAttr.WeaponUpgrade`（`src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs:11`）。
 pub const ITEM_ATTR_WEAPON_UPGRADE: usize = 10;
+
+/// **攻击批 A（`openmir2-attack-yedo-batch-a`）**：攻杀剑法（`SKILL_YEDO`）的**运行时计数**——
+/// oracle `PlayObject.AttackSkillCount` / `AttackSkillPointCount`（`PlayObject.cs:268-269`，均为
+/// `byte`）加技能等级。
+///
+/// **谁持有**：oracle 是同一个对象；本仓宿主侧是唯一持久方（会话 `MagicState.passives`，由
+/// `RecalcHitSpeed` 写，`PlayObject.cs:3703-3706`），每条攻击命令前用 [`World::set_attack_skill`]
+/// 注入、结算后由 [`YedoEvent`] 回传更新值。`present == false`（`MagicArr[SKILL_YEDO]` 为 `None`）
+/// ⇒ 整段不跑，与「没有攻杀技能的角色」的 oracle 结果一致。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct YedoRuntime {
+    /// `MagicArr[SKILL_YEDO] != null`。
+    pub present: bool,
+    /// `MagicArr[SKILL_YEDO].Level`（重置 `7-L` 用）。
+    pub level: u8,
+    /// `PlayObject.AttackSkillCount`。
+    pub count: u8,
+    /// `PlayObject.AttackSkillPointCount`。
+    pub point_count: u8,
+}
+
+/// **攻击批 A**：一记攻击结束时攻杀计数的结算结果（oracle `PlayObject.Attack.cs:942-956`）。
+///
+/// 一记最多产生**一个**事件；`armed` 与 `reset` 可同时为真（`PointCount == 0` 时，递减到 0 的
+/// 那一击既 arm 又归零——oracle 两个 `if` 都执行，`+PWR` 也在那一击发出）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct YedoEvent {
+    /// 攻击者。
+    pub actor_id: i32,
+    /// `AttackSkillPointCount == AttackSkillCount`（递减后）⇒ `PowerHit = true` +
+    /// `SendSocket("+PWR")`（`PlayObject.Attack.cs:944-948`）。
+    pub armed: bool,
+    /// `AttackSkillCount <= 0` ⇒ 重置 `7-L` 并**再抽一次** `RandomByte(7-L)`（`:949-953`）。
+    pub reset: bool,
+    /// 有攻杀但武器槽 `Dura == 0`（含没装备武器）⇒ **跳过**：oracle 此处 `UseItems[Weapon]` 为
+    /// `null` 会抛 NRE、被 `:963` 的 catch 吞掉；本仓登记偏差 = 跳过 + WRN，不照抄崩溃。
+    /// 为真时 `count/point_count` 是**未改动**的值。
+    pub skipped_no_weapon: bool,
+    /// 结算后的 `AttackSkillCount`。
+    pub count: u8,
+    /// 结算后的 `AttackSkillPointCount`。
+    pub point_count: u8,
+}
+
 /// `EfftypeConst.EFFECTIVE_HIGHLEVEL`（`src/M2Server/Actor/ActorConst.cs:43`）——
 /// `GetMyLight()` 的等级基线门（`PlayObject.cs:5404-5425`）。
 pub const EFFECTIVE_HIGHLEVEL: u8 = 50;
@@ -1262,6 +1306,13 @@ pub struct SimState {
     /// 本 tick `attack_once` 里 `AttackSuccess` 产生的武器磨损待抄事件（见
     /// [`TickRecord::weapon_wears`]）；tick 末尾转抄进记录。
     pub(crate) pending_weapon_wears: Vec<WeaponWearEvent>,
+    /// **攻击批 A**：攻杀剑法的可注入运行时（[`YedoRuntime`]）。宿主在每条攻击命令前
+    /// [`World::set_attack_skill`] 注入。**缺省空表 ⇒ 无攻杀 ⇒ 整段不跑**（既有 golden 逐字节不变）。
+    pub attack_skill: HashMap<i32, YedoRuntime>,
+    /// 本 tick 攻杀计数块产生的待抄事件（见 [`TickRecord`] 之外的 [`World::drain_yedo`]）；
+    /// 宿主每次 `tick_head` / 空挥之后排空。**不放进 `TickRecord`**：宿主与空挥支共用同一个
+    /// 排水口，避免两套通道。
+    pub(crate) pending_yedo: Vec<YedoEvent>,
     /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
     ///
     /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
@@ -1694,6 +1745,8 @@ impl SimState {
             lamp_tick_initialized: false,
             pending_weapon_breaks: Vec::new(),
             pending_weapon_wears: Vec::new(),
+            attack_skill: HashMap::new(),
+            pending_yedo: Vec::new(),
             health_fill_time: 300,
             spell_fill_time: 800,
             make_ghost_time: 3 * 60 * 1000,
@@ -7925,12 +7978,96 @@ impl World {
     /// （本片 .rs 侧归因，见 `M3RNG攻击路径三差归因报告-20261012.md`）。本 crate 不改 `bins/**`。
     #[must_use]
     pub fn attack_swing(&mut self, actor_id: i32) -> Option<i32> {
-        let (dc, mode) = {
+        let (dc, mode, weapon_dura) = {
             let attacker = self.entities.get(actor_id)?;
-            (attacker.dc, AttackPowerMode::for_attacker(&attacker))
+            (
+                attacker.dc,
+                AttackPowerMode::for_attacker(&attacker),
+                attacker.use_items[ITEM_LOCATION_WEAPON].dura,
+            )
         };
         let power = swing_power(self.attack_rng(), dc, mode);
+        // **攻击批 A**：`ClientHitXY` 末尾的攻杀计数块（`PlayObject.Attack.cs:942-956`）与
+        // 「有没有目标」**无关**——空挥支同样要递减 / arm / 归零。空挥**不磨损**武器
+        // （`AttackSuccess` 在 `targetObject == null` 时开头就 return，`:217-220`）⇒ 这里读到的
+        // `Dura` 就是本击的原值（有目标支的读点在磨损之后，见 [`Self::attack_once_impl`]）。
+        if let Some(ev) = Self::yedo_attack_tail_impl(
+            &mut self.sim.attack_skill,
+            &mut self.sim.rng,
+            actor_id,
+            weapon_dura,
+        ) {
+            self.sim.pending_yedo.push(ev);
+        }
         Some(power)
+    }
+
+    /// **攻击批 A**：攻杀计数块（`PlayObject.Attack.cs:942-956`）的唯一实现，两条攻击路径
+    /// （有目标 = [`Self::attack_once_impl`]，空挥 = [`Self::attack_swing`]）共用。
+    ///
+    /// `weapon_dura` **必须**是本击结束时的 `UseItems[Weapon].Dura`：oracle 的读点在
+    /// `AttackDir`（内部含 `AttackSuccess` 的 `DoDamageWeapon` 磨损，`:225-229`）**之后**
+    /// ⇒ 磨到 0 的那一击起就不再递减 / 抽数。
+    ///
+    /// 再抽用 `sim.rng`（**不是** `rng_attack`）：oracle 全局只有一个 `M2Share.RandomNumber`，
+    /// `RecalcHitSpeed` 的初抽（`PlayObject.cs:3706`）与这次再抽同流 ⇒ 本仓与 `RecalcHitSpeed`
+    /// 走同一条 `World.rng`。`rng_attack` 只在隔离开关打开时接管**攻击路径**取数（登记偏差）。
+    fn yedo_attack_tail_impl(
+        table: &mut HashMap<i32, YedoRuntime>,
+        rng: &mut impl RandomSource,
+        actor_id: i32,
+        weapon_dura: u16,
+    ) -> Option<YedoEvent> {
+        let mut st = *table.get(&actor_id)?;
+        if !st.present {
+            return None;
+        }
+        if weapon_dura == 0 {
+            return Some(YedoEvent {
+                actor_id,
+                armed: false,
+                reset: false,
+                skipped_no_weapon: true,
+                count: st.count,
+                point_count: st.point_count,
+            });
+        }
+        // `AttackSkillCount -= 1`（`byte` 上的复合赋值 = 回绕减）。
+        st.count = st.count.wrapping_sub(1);
+        let armed = st.point_count == st.count;
+        let mut reset = false;
+        if st.count == 0 {
+            // `Count = 7 - L`；`PointCount = RandomByte(Count)`（`RandomByte(v)` = `Random(v)`，
+            // `v == 0` 也推进采样——与 IT-17b 3b 同口径）。
+            st.count = 7u8.wrapping_sub(st.level);
+            st.point_count = rng.random_below(i32::from(st.count)) as u8;
+            reset = true;
+        }
+        table.insert(actor_id, st);
+        Some(YedoEvent {
+            actor_id,
+            armed,
+            reset,
+            skipped_no_weapon: false,
+            count: st.count,
+            point_count: st.point_count,
+        })
+    }
+
+    /// **攻击批 A**：注入攻击者的攻杀运行时（[`YedoRuntime`]）。
+    ///
+    /// 宿主必须在**每条**攻击命令之前调（有目标与空挥都算）：世界只在结算时读、结算后写回
+    /// 自己的副本（同一 tick 内连击时第二击读到第一击的结果，与 oracle 同一对象一致）。
+    pub fn set_attack_skill(&mut self, actor_id: i32, skill: YedoRuntime) {
+        self.sim.attack_skill.insert(actor_id, skill);
+    }
+
+    /// **攻击批 A**：排空攻杀结算事件（[`YedoEvent`]），按发生序。
+    ///
+    /// 宿主在两个位置各排一次：`handle_hit_cmd` 的空挥支之后，以及每 tick `tick_head` 之后。
+    #[must_use]
+    pub fn drain_yedo(&mut self) -> Vec<YedoEvent> {
+        std::mem::take(&mut self.sim.pending_yedo)
     }
 
     /// 脚本化击杀（入队）。
@@ -10356,6 +10493,18 @@ impl World {
                 actor_id,
                 frames: wear.frames,
             });
+        }
+        // **攻击批 A**：`AttackDir` 返回之后、`ClientHitXY` 收尾之前的攻杀计数块
+        // （`PlayObject.Attack.cs:942-956`）。读点必须是本击**磨损后**的 `UseItems[Weapon].Dura`
+        // ⇒ 放在上面两条 `use_items` 回写之后（`attacker` 副本此刻已是结算后的状态）。
+        // 同一 tick 内连击：`attack_skill` 里的副本已按上一击写回，第二击读到的是第一击的结果。
+        if let Some(ev) = Self::yedo_attack_tail_impl(
+            &mut sim.attack_skill,
+            &mut sim.rng,
+            actor_id,
+            attacker.use_items[ITEM_LOCATION_WEAPON].dura,
+        ) {
+            sim.pending_yedo.push(ev);
         }
         Some(outcome)
     }
@@ -19006,6 +19155,370 @@ mod weapon_durability_tests {
     fn attack_once(w: &mut World, p: i32, mid: i32) -> TickRecord {
         w.attack_cmd(p, mid);
         w.tick()
+    }
+
+    // ---------- 攻击批 A：攻杀剑法计数（`PlayObject.Attack.cs:942-956`） ----------
+    /// 用例靶怪的 HP：**远高于本批任何伤害上界的保险值**，只为保证「整段用例里目标不会被打死」。
+    ///
+    /// 估算：`player()` 夹具的 `dc = 0x0A_14`（`LoByte = 20`）⇒ `GetAttackPower` 的基础攻击力
+    /// 量级 ≈ 2×10¹；本批单只怪最多吃 5 击 ⇒ 伤害上界 ≪ 10³。取 6×10⁴（`u16` 的高量级）
+    /// 留了两个数量级余量，将来伤害系数上调也不会让这些用例以「目标被打死」的形式意外变红；
+    /// 若真出现那种红，先回到本注释核对上界再判是不是新回归。
+    const YEDO_TEST_TARGET_HP: u16 = 60_000;
+    use mir2_shared::rng::{RandomNumber, RandomSource};
+    use std::collections::HashMap;
+
+    /// 带计数的随机源：只数 `random_below`（第二抽 `RandomByte(7-L)` 走这一支），
+    /// 值委托同种子 `RandomNumber`，便于与独立重放逐次对照。
+    struct CountingRng {
+        inner: RandomNumber,
+        calls: usize,
+    }
+
+    impl CountingRng {
+        fn new(seed: i32) -> Self {
+            Self {
+                inner: RandomNumber::with_seed(seed),
+                calls: 0,
+            }
+        }
+    }
+
+    impl RandomSource for CountingRng {
+        fn random(&mut self) -> i32 {
+            self.inner.random()
+        }
+        fn random_below(&mut self, value: i32) -> i32 {
+            self.calls += 1;
+            self.inner.random_below(value)
+        }
+        fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+            self.inner.random_range(min_value, max_value)
+        }
+        fn next_double(&mut self) -> f64 {
+            self.inner.next_double()
+        }
+    }
+
+    /// **攻击批 A 用例①（纯缝）**：`Count` 递减、`PointCount == Count` 那一击 arm、
+    /// `<= 0` 那一击重置 `7-L` 并**恰抽 1 次** `RandomByte(7-L)`（抽值 = 同种子重放的第一次取数）。
+    ///
+    /// 红检：删掉抽数 ⇒ `calls == 0` 断言红；把抽数挪到递减之前 ⇒ 抽值重放断言红。
+    #[test]
+    fn yedo_tail_counts_down_arms_and_redraws_once() {
+        let mut table: HashMap<i32, YedoRuntime> = HashMap::new();
+        table.insert(
+            7,
+            YedoRuntime {
+                present: true,
+                level: 2,
+                count: 5,
+                point_count: 3,
+            },
+        );
+        let seed = 20_261_120;
+        let mut rng = CountingRng::new(seed);
+        let mut seq = Vec::new();
+        for _ in 0..5 {
+            let ev = World::yedo_attack_tail_impl(&mut table, &mut rng, 7, 100).expect("有攻杀");
+            seq.push((ev.count, ev.armed, ev.reset, ev.skipped_no_weapon));
+        }
+        assert_eq!(
+            seq,
+            vec![
+                (4, false, false, false),
+                (3, true, false, false),
+                (2, false, false, false),
+                (1, false, false, false),
+                (5, false, true, false),
+            ],
+            "5→4→3(arm)→2→1→0(重置回 7-L=5；PointCount=3 ≠ 0 ⇒ 归零那一击不再 arm)"
+        );
+        assert_eq!(rng.calls, 1, "只在归零那一击抽 1 次");
+        let mut replay = RandomNumber::with_seed(seed);
+        assert_eq!(
+            i32::from(table[&7].point_count),
+            replay.random_below(5),
+            "RandomByte(7-L)=Random(5)，抽值 = 同种子重放的第一项"
+        );
+    }
+
+    /// **攻击批 A 用例②（纯缝）**：无武器（`Dura == 0`）⇒ **跳过**：计数不变、**0 抽**，
+    /// 事件带 `skipped_no_weapon`（oracle 此处 `UseItems[Weapon]` 为 `null` ⇒ NRE 被 catch 吞掉；
+    /// 本仓登记偏差 = 跳过 + WRN）。`present == false` ⇒ 连事件都不产生。
+    #[test]
+    fn yedo_tail_skips_without_weapon_and_does_not_draw() {
+        let mut table: HashMap<i32, YedoRuntime> = HashMap::new();
+        table.insert(
+            7,
+            YedoRuntime {
+                present: true,
+                level: 1,
+                count: 4,
+                point_count: 2,
+            },
+        );
+        let mut rng = CountingRng::new(5);
+        let ev = World::yedo_attack_tail_impl(&mut table, &mut rng, 7, 0).expect("事件仍在");
+        assert!(ev.skipped_no_weapon, "Dura==0 ⇒ 跳过标记");
+        assert_eq!((ev.count, ev.point_count), (4, 2), "计数未改动");
+        assert_eq!(rng.calls, 0, "跳过支 0 抽");
+        assert_eq!(table[&7].count, 4, "表里的副本也没动");
+
+        let mut table2: HashMap<i32, YedoRuntime> = HashMap::new();
+        table2.insert(7, YedoRuntime::default());
+        assert!(
+            World::yedo_attack_tail_impl(&mut table2, &mut rng, 7, 100).is_none(),
+            "present=false ⇒ 无事件"
+        );
+        assert_eq!(rng.calls, 0);
+        // 表里没有该 actor ⇒ 同样无事件（怪物 AI / 无会话攻击走这条）。
+        assert!(World::yedo_attack_tail_impl(&mut table2, &mut rng, 8, 100).is_none());
+    }
+
+    /// **攻击批 A 用例③（整数账本）**：第二抽在攻击流里的**位置与次数**——两个同种子
+    /// （`World::new` 固定 42）的世界，唯一差别是 A 的那一击归零（抽 1 次）、B 无攻杀（0 抽）；
+    /// 此后 A 的取数序列必须等于 B **跳过 1 次取数**后的序列。
+    ///
+    /// 观测探针用**怪物**的 `attack_swing`：怪物走 `AttackPowerMode::Base`
+    /// （`get_base_attack_power` → `random_range(0, p+1)`，小范围 = **恰 1 次采样**），
+    /// 返回值随流变化。**不能用玩家探针**：`player()` 的 `dc = 0x0A_14`（`Lo=20 > Hi=10`）
+    /// 区间退化 ⇒ 返回值恒 20，那种观测是空输入（本用例初版就栽在这里，已被 `M1` 变异揭出）。
+    ///
+    /// 这条同时把「A 批该抽结构性为 0」钉住：将来谁在 `AttackSuccess` 里插 `Random(3)+1`，
+    /// A/B 的序列就会错位 ⇒ 本用例立刻红（0 与 1 的差别可见）。
+    ///
+    /// 红检：删掉第二抽（变异 `M1`）⇒ A 与 B 同位相等，`a[i] == b[i+1]` 断言红。
+    #[test]
+    fn yedo_redraw_consumes_exactly_one_draw_at_the_attack_position() {
+        fn setup(yedo: Option<YedoRuntime>) -> (World, i32, i32, i32) {
+            let mut w = World::new(16, 16);
+            w.clock_ms = 100_000;
+            w.set_weapon_durability_config(false, 7);
+            let p = player(&mut w, "hero", 10, 10);
+            w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+                slot(10, 5000, [0u8; 14]);
+            let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+            m.race = 80;
+            m.hp = YEDO_TEST_TARGET_HP;
+            m.max_hp = YEDO_TEST_TARGET_HP;
+            let mid = w.add_entity(m);
+            // 取数探针：怪物（Base 模式，每次挥砍恰 1 次采样）、非退化区间 `Lo=10, Hi=40`。
+            let mut probe = crate::EntitySpawn::new(0, "probe", 3, 3);
+            probe.race = 80;
+            probe.dc = 0x28_0A;
+            let probe_id = w.add_entity(probe);
+            if let Some(st) = yedo {
+                w.set_attack_skill(p, st);
+            }
+            (w, p, mid, probe_id)
+        }
+
+        // A：count=1 ⇒ 本击递减到 0 ⇒ 重置 + 抽 1 次 `Random(5)`。
+        let (mut wa, pa, ma, probe_a) = setup(Some(YedoRuntime {
+            present: true,
+            level: 2,
+            count: 1,
+            point_count: 0,
+        }));
+        // B：无攻杀。
+        let (mut wb, pb, mb, probe_b) = setup(None);
+
+        wa.attack_cmd(pa, ma);
+        wa.tick();
+        let evs = wa.drain_yedo();
+        assert_eq!(evs.len(), 1);
+        assert!(
+            evs[0].armed && evs[0].reset,
+            "PointCount==0 ⇒ 同击 arm+reset"
+        );
+        assert_eq!(evs[0].count, 5, "重置为 7-L = 5");
+        // A 玩家后续不再有攻杀（免得探针走攻杀尾），只测流位置。
+        wa.set_attack_skill(pa, YedoRuntime::default());
+
+        wb.attack_cmd(pb, mb);
+        wb.tick();
+        assert!(wb.drain_yedo().is_empty(), "B 无攻杀 ⇒ 0 事件");
+
+        let a: Vec<i32> = (0..3)
+            .map(|_| wa.attack_swing(probe_a).expect("探针挥砍"))
+            .collect();
+        let b: Vec<i32> = (0..4)
+            .map(|_| wb.attack_swing(probe_b).expect("探针挥砍"))
+            .collect();
+        assert_ne!(b[0], b[1], "前提：探针值随流变化（非恒值）");
+        assert_eq!(
+            a,
+            b[1..].to_vec(),
+            "A 的第二抽恰占 1 个取数位：A 的序列 = B 跳过 1 次后的序列（A={a:?} B={b:?}）"
+        );
+    }
+
+    /// **攻击批 A 用例④（有目标支）**：`attack_once` 之后 `drain_yedo` 拿到的是本击结果，
+    /// 且世界副本已写回（同一 tick 连击时第二击读到第一击的值）。
+    #[test]
+    fn yedo_attack_with_target_advances_and_arms() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.set_weapon_durability_config(false, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, [0u8; 14]);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        m.hp = YEDO_TEST_TARGET_HP;
+        m.max_hp = YEDO_TEST_TARGET_HP;
+        let mid = w.add_entity(m);
+        w.set_attack_skill(
+            p,
+            YedoRuntime {
+                present: true,
+                level: 0,
+                count: 3,
+                point_count: 2,
+            },
+        );
+        for hit in 1..=2 {
+            w.attack_cmd(p, mid);
+            w.tick();
+            let evs = w.drain_yedo();
+            assert_eq!(evs.len(), 1, "第 {hit} 击恰一个事件");
+            let ev = evs[0];
+            assert_eq!(
+                (ev.actor_id, ev.armed),
+                (p, hit == 1),
+                "第 1 击 3→2 == PointCount ⇒ arm"
+            );
+            assert_eq!(ev.count, 3 - hit as u8, "第 {hit} 击后 Count");
+            assert!(w.drain_yedo().is_empty(), "排水后为空（一次一事件）");
+        }
+    }
+
+    /// **攻击批 A 用例⑤（两支击次数列一致）**：空挥支（`attack_swing`，无目标）与有目标支
+    /// （`attack_cmd`+tick）在同一起点、同一击数下的 `(count, armed, reset)` 序列必须**逐项相等**
+    /// ——oracle 的计数块在 `ClientHitXY` 成功支末尾，与有没有目标无关。
+    ///
+    /// 红检：只在 `attack_once_impl` 里接尾巴（删掉 `attack_swing` 的那次调用）⇒ 空挥序列恒不动 ⇒ 必红。
+    #[test]
+    fn yedo_tail_runs_identically_for_swing_and_attack() {
+        let start = YedoRuntime {
+            present: true,
+            level: 1,
+            count: 4,
+            point_count: 2,
+        };
+        let mut w2 = World::new(16, 16);
+        w2.clock_ms = 100_000;
+        w2.set_weapon_durability_config(false, 7);
+        let p2 = player(&mut w2, "hero", 10, 10);
+        w2.entities.get_mut(p2).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, [0u8; 14]);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        m.hp = YEDO_TEST_TARGET_HP;
+        m.max_hp = YEDO_TEST_TARGET_HP;
+        let mid2 = w2.add_entity(m);
+
+        let mut w3 = World::new(16, 16);
+        w3.clock_ms = 100_000;
+        w3.set_weapon_durability_config(false, 7);
+        let p3 = player(&mut w3, "hero", 10, 10);
+        w3.entities.get_mut(p3).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, [0u8; 14]);
+
+        w2.set_attack_skill(p2, start);
+        w3.set_attack_skill(p3, start);
+        let mut atk_seq = Vec::new();
+        let mut sw_seq = Vec::new();
+        for _ in 0..5 {
+            w2.attack_cmd(p2, mid2);
+            w2.tick();
+            atk_seq.push(w2.drain_yedo()[0]);
+            let _ = w3.attack_swing(p3).expect("空挥");
+            sw_seq.push(w3.drain_yedo()[0]);
+        }
+        // 比较面 = `(count, reset)`：归零后 `point_count` 由**各自的流**抽出，两支的流不同
+        // （有目标支多 `SpeedPoint`/磨损取数）⇒ `armed` 在归零之后不可比，故不入 key。
+        // `armed` 在归零**之前**的判据（首击 4→3 不 arm、次击 3→2 == 2 arm）两支都必须成立。
+        let key = |e: &YedoEvent| (e.count, e.reset);
+        assert_eq!(
+            atk_seq.iter().map(key).collect::<Vec<_>>(),
+            sw_seq.iter().map(key).collect::<Vec<_>>(),
+            "有目标支与空挥支的击次数列（count/reset）必须逐项相等"
+        );
+        assert_eq!(
+            atk_seq.iter().map(|e| e.armed).collect::<Vec<_>>(),
+            vec![false, true, false, false, false],
+            "有目标支：4→3 不 arm、3→2 arm、之后不 arm（归零支的 arm 取决于本流抽值）"
+        );
+        assert_eq!(
+            sw_seq.iter().map(|e| e.armed).collect::<Vec<_>>(),
+            vec![false, true, false, false, false],
+            "空挥支同上（归零之前两支的 arm 判据一致）"
+        );
+    }
+
+    /// **攻击批 A 用例⑥（读点在磨损之后）**：先在同种子世界里**量出**本击的磨损量
+    /// （`Random(5)+2`），再用 `Dura == 磨损量` 跑一遍 ⇒ 本击**恰扣到 0**（oracle/Rust 对
+    /// `ushort` 都是回绕减：只有恰好扣到 0 才破零，扣穿是大正数、不破零）。
+    ///
+    /// 判据：那一击的计数块读到的必须是**磨损后**的 `Dura == 0` ⇒ `skipped_no_weapon` + 计数不变。
+    ///
+    /// 红检：把读点改成磨损**之前**的值（在 `attack_dir_grouped_poison_ws` 调用前缓存 dura）
+    /// ⇒ 那一击会照常递减 ⇒ 本用例必红。
+    #[test]
+    fn yedo_reads_weapon_durability_after_wear() {
+        fn hit_with_dura(dura: u16) -> (World, i32) {
+            let mut w = World::new(16, 16);
+            w.clock_ms = 100_000;
+            w.set_weapon_durability_config(false, 7);
+            let p = player(&mut w, "hero", 10, 10);
+            w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+                slot(10, dura, [0u8; 14]);
+            let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+            m.race = 80;
+            m.hp = YEDO_TEST_TARGET_HP;
+            m.max_hp = YEDO_TEST_TARGET_HP;
+            let mid = w.add_entity(m);
+            w.set_attack_skill(
+                p,
+                YedoRuntime {
+                    present: true,
+                    level: 1,
+                    count: 4,
+                    point_count: 2,
+                },
+            );
+            w.attack_cmd(p, mid);
+            w.tick();
+            (w, p)
+        }
+
+        // 第一趟：高耐久（远离回绕区）⇒ 磨损量 = 扣前的 Dura - 扣后的 Dura。
+        let (mut w_a, p_a) = hit_with_dura(100);
+        let _ = w_a.drain_yedo();
+        let after_a = w_a.entities.get(p_a).unwrap().use_items[ITEM_LOCATION_WEAPON].dura;
+        assert!(after_a < 100, "本击必须真的磨损（after={after_a}）");
+        let dmg = 100 - after_a;
+        assert!(
+            (2..=6).contains(&dmg),
+            "磨损量 = Random(5)+2 ∈ 2..=6，实得 {dmg}"
+        );
+
+        // 第二趟：耐久 = 磨损量 ⇒ 本击恰扣到 0 ⇒ 计数块读到 0 ⇒ 跳过。
+        let (mut w_b, p_b) = hit_with_dura(dmg);
+        assert_eq!(
+            w_b.entities.get(p_b).unwrap().use_items[ITEM_LOCATION_WEAPON].dura,
+            0,
+            "前提：本击恰扣到 0（破零支）"
+        );
+        let evs = w_b.drain_yedo();
+        assert_eq!(evs.len(), 1);
+        assert!(
+            evs[0].skipped_no_weapon,
+            "读点必须是磨损后：Dura==0 ⇒ 跳过（读磨损前会照常递减）"
+        );
+        assert_eq!(evs[0].count, 4, "计数保持注入值");
     }
 
     /// 判据 ②（升级成功支）：`Desc[10] = 13` 且 `Desc[0..2]` 和 < 上限 ⇒ `Desc[0] += 4`、

@@ -514,6 +514,6 @@ pub use world::{
     ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HideObserverKind,
     HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
     SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
-    WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
+    WeaponUpgradeOutcome, World, YedoEvent, YedoRuntime, TICK_INTERVAL_MS,
 };
 pub use world::{RefMsgCacheEntry, REF_MSG_CACHED_RANGE, REF_MSG_CACHE_TTL_MS};
