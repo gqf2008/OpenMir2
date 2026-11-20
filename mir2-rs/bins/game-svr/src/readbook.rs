@@ -52,6 +52,18 @@ pub struct MagicState {
     pub list: Vec<Option<MagicRcd>>,
     pub use_thrusting: bool,
     pub use_half_moon: bool,
+    /// `PlayObject.CrsHitkill`（`PlayObject.cs`；34 逐日剑法开关，`ClientSpellXY` case `:1218`）。
+    pub crs_hitkill: bool,
+    /// `PlayObject.FireHitSkill`（26 烈火剑法充能态，`ClientSpellXY` case `:1168`）。
+    pub fire_hit_skill: bool,
+    /// `PlayObject.LatestFireHitTick`（26 的 10s 限速戳；`AllowFireHitSkill` `PlayObject.Base.cs:653-664`）。
+    pub latest_fire_hit_tick: i64,
+    /// `PlayObject.TwinHitSkill`（38 狂风斩充能态，`AllowTwinHitSkill` `PlayObject.Base.cs:666-672`）。
+    pub twin_hit_skill: bool,
+    /// `PlayObject.LatestTwinHitTick`（38 的限速戳，同上）。
+    pub latest_twin_hit_tick: i64,
+    /// `PlayObject.DoMotaeboTick`（27 的 3s 限速戳，`ClientSpellXY` case `:1189`）。
+    pub do_motaebo_tick: i64,
     pub table: Option<Arc<game_svr::magics::MagicTable>>,
     /// `PlayObject.MagicArr`（`new UserMagic[50]`，`PlayObject.cs:1041`）：**只写不清**（`:3684`），
     /// 删技能后留残影（oracle 原样）。IT-17b 结构层填充；下游 `GetAttackMagic`/`GetHitMode` 读。
@@ -77,6 +89,12 @@ impl Default for MagicState {
             list: Vec::new(),
             use_thrusting: false,
             use_half_moon: false,
+            crs_hitkill: false,
+            fire_hit_skill: false,
+            latest_fire_hit_tick: 0,
+            twin_hit_skill: false,
+            latest_twin_hit_tick: 0,
+            do_motaebo_tick: 0,
             table: None,
             arr: vec![None; game_svr::skill_ability::MAGIC_ARR_LEN],
             passives: game_svr::skill_ability::SkillPassives::default(),

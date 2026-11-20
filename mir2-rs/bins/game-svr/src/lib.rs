@@ -131,6 +131,10 @@ pub mod trade;
 pub mod unbindlist;
 pub mod useitem;
 
+mod warrskill;
+#[cfg(test)]
+mod warrskill_parity_tests;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -14011,6 +14015,8 @@ fn handle_spell_cmd(
         snow_wind_range,
         elec_blizzard_range,
         None,
+        &MsgColors::default(),
+        &game_svr::strings::StringConf::defaults(),
     );
 }
 
@@ -14043,6 +14049,9 @@ fn handle_spell_cmd_with_magic(
     // **Lane B**：`AttPowerUp` 的 `RecalcAbilitys()`（`:5328`）也要跑 210/212 尾段；
     // `None` ⇒ 不审计（单测/未载入配置路径）。
     magic_cfg: Option<MagicCfg<'_>>,
+    // 卡 `openmir2-warrskill-entry`：6 个战士技 case 的 `SysMsg` 色词与 `[String]` 文案。
+    colors: &MsgColors,
+    strings: &game_svr::strings::StringConf,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -14085,6 +14094,40 @@ fn handle_spell_cmd_with_magic(
             "CM_SPELL：ChrName={chr_name} magic_id={} 被守卫拒绝 {reject:?}（oracle 回 RM_MOVEFAIL，编码器未接）",
             req.magic_id
         );
+        return;
+    }
+    // 卡 `openmir2-warrskill-entry` 要求 4：`ClientSpellXY` 的 **6 个战士技独立 `case`**
+    // （`PlayObject.Attack.cs:1120/1136/1168/1187/1218/1234`）——它们**不进 `default`、不调
+    // `DoSpell`**，各有自己的帧面（逐支见 `warrskill` 模块头）。3/4/7 不在此列，仍走下面的
+    // `default_arm && is_warr_skill` 639 块。
+    if let Some(arm) = warrskill::arm(req.magic_id) {
+        let magic_level = matched.as_ref().map_or(0, |m| m.level);
+        if let Some(sg) = ground_sessions.get_mut(chr_name) {
+            let _ = warrskill::run(
+                arm,
+                sg,
+                world,
+                online,
+                gates,
+                displays,
+                colors,
+                strings,
+                magic_level,
+                magic_table,
+                req.magic_id,
+                req.target_x,
+                chr_name,
+                now_ms(),
+            );
+        } else {
+            glog!(
+                "WRN",
+                "CM_SPELL：ChrName={chr_name} 无地面会话 ⇒ 战士技 case 无法执行（oracle 必有 PlayObject）"
+            );
+        }
+        // oracle：`ClientSpellXY` 对 6 个 case 臂恒 `result = true` ⇒ 调用方补
+        // `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`（`PlayObject.Message.cs:1339-1344`）。
+        send_good_tick(online, gates, chr_name);
         return;
     }
     // `switch (UserMagic.MagIdx)` 的 `default` 支首句
@@ -21810,6 +21853,24 @@ struct MsgColors {
     /// `@时间` 的 `SysMsg(_, MsgColor.Blue, Hint)` 色词。
     blue_f: u8,
     blue_b: u8,
+}
+
+impl Default for MsgColors {
+    /// oracle `[Setup]` 的缺省色词（与 `GameSvrConf` 缺省一致；测试/无配置路径用）。
+    fn default() -> Self {
+        Self {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        }
+    }
 }
 
 /// 账号级顶号的**即时部分**（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:226-284`）：
@@ -29719,6 +29780,8 @@ fn sim_loop(
                             enter_cfg.elec_blizzard_range,
                             // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
                             Some(magic_cfg_of(&enter_cfg)),
+                            &colors,
+                            &enter_cfg.string_conf,
                         );
                     } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
                         // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。

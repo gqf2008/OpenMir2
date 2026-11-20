@@ -39,6 +39,10 @@ pub const SKILL_ERGUM: u16 = 12;
 pub const SKILL_BANWOL: u16 = 25;
 /// `MagicConst.SKILL_CROSSMOON`（逐日剑法，`MagicConst.cs:159`）。
 pub const SKILL_CROSSMOON: u16 = 34;
+/// `MagicConst.SKILL_MOOTEBO`（野蛮冲撞，`MagicConst.cs:112`）。
+pub const SKILL_MOOTEBO: u16 = 27;
+/// `MagicConst.SKILL_TWINBLADE`（狂风斩，`MagicConst.cs:162`）。
+pub const SKILL_TWINBLADE: u16 = 38;
 /// `MagicArr = new UserMagic[50]`（`PlayObject.cs:1041`）。
 pub const MAGIC_ARR_LEN: usize = 50;
 /// `MessageSettings.DEFHIT`（`MessageSettings.cs:10`；`HitPlus = DEFHIT + Level`）。
