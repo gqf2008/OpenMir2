@@ -1390,17 +1390,32 @@ impl SelfDelayQueue {
             .flatten()
     }
 
-    /// oracle `UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的删除段：循环 `TryPeek`
-    /// 队首，**只有队首**匹配 `(wIdent, nParam1)` 才 `TryDequeue`；首个不匹配即停
-    /// （`i` 自增到 `Count` 后退出）。返回删除条数。
+    /// oracle `UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的删除段。
+    ///
+    /// **逐行语义（`3b` 实测指出本仓曾误实现为"摘光"）**：oracle 的循环是
+    /// `i = 0; while (true) { if (MsgQueue.Count <= i) break; if (Peek 匹配) Dequeue; i++; }`
+    /// ⇒ 每摘一条 `Count` 减一、而 `i` 照增 ⇒ **队首连续同键 N 条时只摘 `ceil(N/2)`，留
+    /// `floor(N/2)` 条陈旧条目**（`TryDequeue` 摘的是队首，`TryPeek` 看的也是队首）。
+    /// `N == 1` 与"摘光"同结果；`N >= 2` 分叉。
+    ///
+    /// 返回删除条数。
     pub fn remove_head_matching(&mut self, actor_id: i32, ident: u16, n_param1: i32) -> usize {
-        let mut removed = 0;
-        while let Some(head) = self.peek(actor_id) {
-            if head.ident != ident || head.n_param1 != n_param1 {
+        let mut removed = 0usize;
+        let mut i = 0usize;
+        loop {
+            // oracle 的 `MsgQueue` 是**每个对象自己的队列** ⇒ `Count` 取该 actor 的队列长度。
+            let count = self.queues.get(&actor_id).map_or(0, |q| q.len());
+            if count <= i {
                 break;
             }
-            self.dequeue(actor_id);
-            removed += 1;
+            let matches = self
+                .peek(actor_id)
+                .is_some_and(|h| h.ident == ident && h.n_param1 == n_param1);
+            if matches {
+                self.dequeue(actor_id);
+                removed += 1;
+            }
+            i += 1;
         }
         removed
     }

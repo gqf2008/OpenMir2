@@ -10683,7 +10683,9 @@ impl World {
         // **B 段 2**：`RM_MAGIC_LVEXP` 入队（`PlayObject.Attack.cs:209` 未升级 3000ms /
         // `PlayObject.cs:5216` 升级 800ms）。升级走 `UpdateDelayMsg` 的**替换**语义
         // （先摘同 `(ident, MagicId)` 的**队首**匹配项再入队，`BaseObject.Message.cs:257-278`；
-        // 本仓 `SelfDelayQueue::remove_head_matching` 已逐字复刻，别"修顺"）；未升级是普通入队。
+        // 本仓 `SelfDelayQueue::remove_head_matching` 按 oracle 的 `i` 循环复刻——**队首连续 N 条
+        // 同键时只摘 `ceil(N/2)`、留 `floor(N/2)` 条陈旧条**（`TryDequeue` 摘队首 + `Count<=i`
+        // 提前退出），别"修顺"成摘光）；未升级是普通入队。
         for (magic_id, level_up, level, tran_point) in pending_lvexp {
             let mid = i32::from(magic_id);
             let delay_ms = if level_up { 800 } else { 3000 };
@@ -19660,6 +19662,66 @@ mod weapon_durability_tests {
             t1
         );
         assert_eq!(entries[0].1, 2, "第二击后 Level=2");
+    }
+
+    /// **B 段 2 用例④（oracle 的 i 循环删除段，N=2）**：队首连续**两条**同键 640（两次未升级命中）
+    /// 后第三次升级 ⇒ oracle 只摘 `ceil(2/2)=1`，留 **1 条陈旧条**；陈旧条到点仍发**旧** `Level`。
+    ///
+    /// 这是 `3b` 指出的分叉点：本仓旧实现是"摘光" ⇒ 只会剩 1 条（缺一整帧 640）。
+    ///
+    /// 红检：把 `remove_head_matching` 改回"摘光" ⇒ 本用例的"恰 2 条、其中 1 条陈旧"必红。
+    #[test]
+    fn magic_lvexp_update_leaves_ceil_half_stale_entries() {
+        // 两击都不升级（`max_train[0]` 很大）⇒ 两条纯追加的 3000ms 640。
+        let (mut w, p, mid) = lvexp_world([1_000_000, 1_000_000, 1000, 1000]);
+        w.attack_cmd(p, mid);
+        w.tick();
+        w.clock_ms += 10;
+        w.attack_cmd(p, mid);
+        w.tick();
+        let before = lvexp_entries(&w);
+        assert_eq!(before.len(), 2, "两次未升级 ⇒ 两条（纯追加）");
+        // 第三击改成会升级的快照（`max_train[0]=1`，本击熟练点 ≥1）⇒ 走 `UpdateDelayMsg`。
+        let mut input = w.attack_skill_train.get(&p).unwrap().clone();
+        input.skills[0].max_train = [1, 1_000_000, 1000, 1000];
+        w.set_attack_skill_train(p, input);
+        w.clock_ms += 10;
+        w.attack_cmd(p, mid);
+        w.tick();
+        let after = lvexp_entries(&w);
+        assert_eq!(
+            after.len(),
+            2,
+            "oracle 的 i 循环只摘 ceil(2/2)=1 条 ⇒ 旧条剩 1 + 新条 1 = 2（旧实现摘光会只剩 1）"
+        );
+        let levels: Vec<i32> = after.iter().map(|e| e.1).collect();
+        assert!(levels.contains(&0), "留下的陈旧条仍是旧 Level=0");
+        assert!(levels.contains(&1), "新条是升级后的 Level=1");
+    }
+
+    /// **B 段 2 用例⑤（第二条路径：`update_self_delay_msg_full`，N=2）**：该 API 同时被
+    /// DoSpell 尾（`lib.rs` 的 36 号路径）复用 ⇒ 这里单独覆盖一次，避免"只搬一半"。
+    ///
+    /// 同键连续两条 ⇒ 调 `update_self_delay_msg_full` 后应剩 **2 条**（陈旧 1 + 新 1），
+    /// 而不是"摘光后仅新条 1 条"。
+    #[test]
+    fn update_self_delay_msg_full_keeps_ceil_half_when_n2() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 1_000;
+        let w2 = &mut w;
+        w2.send_self_delay_msg_full(7, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 1, 3000);
+        w2.send_self_delay_msg_full(7, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 2, 3000);
+        assert_eq!(lvexp_entries(w2).len(), 2, "前置：两条同键");
+        w2.update_self_delay_msg_full(7, crate::slave::RM_MAGIC_LVEXP, 0, 3, 1, 3, 800);
+        let after = lvexp_entries(w2);
+        assert_eq!(
+            after.len(),
+            2,
+            "oracle：摘 ceil(2/2)=1 条 + 入 1 条 = 2（摘光会只剩 1）"
+        );
+        // 摘的是**队首**（TranPoint=1）⇒ 留下的是第二条陈旧条（TranPoint=2）。
+        assert!(after.iter().any(|e| e.2 == 2), "陈旧条（TranPoint=2）仍在");
+        assert!(after.iter().any(|e| e.2 == 3), "新条（TranPoint=3）已入");
     }
 
     /// **B 段 1 用例③（`GetAttackPowerHit`）**：模式 3 + `PowerHit` ⇒ `+= HitPlus` + 消费 + `canHit`；
