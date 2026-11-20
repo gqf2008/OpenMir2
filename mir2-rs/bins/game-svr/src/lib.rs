@@ -25150,6 +25150,9 @@ fn drain_player_need_recheck_with_magic(
         let mut immediate: Vec<Vec<u8>> = Vec::new();
         let mut bo_take_item = false;
         let mut weight_changed = false;
+        // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支每次
+        // `RecalcAbilitys()` 产出的 657 先**收集**，统一在 622 之后发（见下方注释）。
+        let mut take_char_status: Vec<(i32, u16)> = Vec::new();
         for i in 0..game_svr::ability::USE_ITEMS_LEN {
             let Some(cell) = sg.use_items.get(i) else {
                 continue;
@@ -25262,6 +25265,10 @@ fn drain_player_need_recheck_with_magic(
                         .iter()
                         .map(game_svr::smframe::magic_event_frame),
                 );
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`PlayObject.Message.cs:430-433`
+                // 的 `RecalcAbilitys()`（`PlayObject.cs:2874-2876`）⇒ 两条自发 657 + 观察者各 1。
+                // 只**收集**不在此发：657(155) 必须晚于 `WeightChanged()` 的 622(131) 出队。
+                take_char_status.push((world.get_char_status(actor_id), sg.hit_speed));
             }
         }
         // 会话 → 实体（Index=0 / StdMode40 耐久）与存档同源。
@@ -25285,6 +25292,21 @@ fn drain_player_need_recheck_with_magic(
                     sg.state.wabil.hand_weight,
                 ),
             });
+        }
+        // **卡 `openmir2-charstatuschanged-wiring` #13**：657 在 622 **之后**发
+        // （oracle 队列序 622=131 < 657=155；放进 `immediate` 会排到 622 之前 = 错序）。
+        // 复用三动作 helper：观察者副本由它逐收件人重编码（`Series` = 收件人自己的 `HitSpeed`）。
+        for (status, hit_speed) in take_char_status {
+            send_charstatuschanged_self_and_observers(
+                world,
+                online,
+                gates,
+                actor_id,
+                status,
+                hit_speed,
+                chat::send_ref_msg_range(),
+                "657(P21 装备复检)",
+            );
         }
     }
 }
@@ -56229,9 +56251,158 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_ADDITEM,
                 mir2_protocol::messages::SM_DELITEM,
                 // `WeightChanged()`（`Need` 失败件入包后的重量重算）——与 201/202 同批。
-                mir2_protocol::messages::SM_WEIGHTCHANGED
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支的
+                // `RecalcAbilitys()`（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新）⇒ 622 之后两条 657
+                // （oracle 131 < 155）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ]
         );
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #13**：P21 的 `if (boTakeItem)` 支
+    /// （`PlayObject.Message.cs:430-433`：`SendDelItems; UseItems[i].Index=0; RecalcAbilitys()`）
+    /// 必须发 657。判据按 §47：只判逐 socket 计数 + 同 socket 有参照帧的位置。
+    ///
+    /// - **条件真**（`Need=6` ⇒ 默认无行会 ⇒ 移出）：自己流 `200 → 202 → 622 → 657 → 657`
+    ///   （657 必须在 `WeightChanged()` 的 622 **之后**：oracle 622(131) < 657(155)）；
+    ///   近邻观察者恰 1 条；±12 外 0 条。
+    /// - **条件假**（`Need=0` ⇒ 达标 ⇒ `if (boTakeItem)` 整支不执行）：零帧（无 201/202/622/657）、
+    ///   `Index` 保留，且**不重算**（`wabil.level` 哨兵 0 不得被 `RecalcAbilitys` 从 Equip 反推）。
+    ///
+    /// 红检（牙）：把 657 放回 `immediate` 向量 ⇒ 自流变 `…202 → 657 → 657 → 622`，顺序断言必红。
+    #[test]
+    fn p21_take_item_emits_two_self_657_after_weightchanged() {
+        use mir2_protocol::messages::{
+            SM_ADDITEM, SM_CHARSTATUSCHANGED, SM_DELITEM, SM_WEIGHTCHANGED,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+            .unwrap();
+        let near = world.add_entity(new_player_entity("near".to_string(), 15, 10));
+        let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero));
+        online_set(&mut online, entry("n", "near", 2, 0, 902, near));
+        online_set(&mut online, entry("f", "far", 3, 0, 905, far));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "guild-only".into(),
+                std_mode: 5,
+                // `Need=6`（行会成员）⇒ 默认 `ItemsNeedContext`（无行会）判 false ⇒ 移除支。
+                need: 6,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            501,
+            mir2_data::StdItem {
+                name: "ok".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 500,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        sessions.insert("hero".into(), sg);
+
+        // ── 条件真 ──
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        let self_seq: Vec<u16> = frames
+            .iter()
+            .filter(|(socket, _)| *socket == 901)
+            .map(|(_, b)| ident(b))
+            .collect();
+        assert_eq!(
+            self_seq,
+            vec![
+                SM_ADDITEM,
+                SM_DELITEM,
+                SM_WEIGHTCHANGED,
+                SM_CHARSTATUSCHANGED,
+                SM_CHARSTATUSCHANGED,
+            ],
+            "自己流必须是 200 → 202 → 622 → 657×2（657 在 622 之后，oracle 131 < 155）"
+        );
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(per.get(&901), Some(&2), "自己恰两条（广播副本 + 自更新）");
+        assert_eq!(per.get(&902), Some(&1), "近邻观察者恰 1 条");
+        assert_eq!(per.get(&905), None, "±12 外零帧");
+        assert_eq!(
+            sessions["hero"].use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "条件真必须真移出（Index=0）"
+        );
+
+        // ── 条件假（Need 达标）──
+        // `drain` 入口会先 `sync_use_items_from_entity_if_loaded`（实体为准）⇒ 实体与会话都要写。
+        {
+            let slot = mir2_world_bevy::entity::UseItemSlot {
+                make_index: 2,
+                index: 501,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            };
+            world.entities.get_mut(hero).unwrap().inventory.use_items
+                [game_svr::ability::SLOT_WEAPON] = slot;
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 2,
+                index: 501,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+            // 哨兵：若被 `RecalcAbilitys` 调用，`wabil.level` 会被 Equip 等级反推覆盖。
+            sg.equip.abil.level = 7;
+            sg.state.wabil.level = 0;
+        }
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        assert!(
+            rx0.try_recv().is_err(),
+            "条件假 ⇒ 零帧（不得有 201/202/622/657）"
+        );
+        let sg = &sessions["hero"];
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            501,
+            "条件假 ⇒ Index 保留"
+        );
+        assert_eq!(sg.state.wabil.level, 0, "条件假 ⇒ 不得调用 RecalcAbilitys");
     }
 
     /// **牙（`drain_player_game_gold`，P22）**：`bo_emergency_close` 支同样必须挡住。
@@ -85331,7 +85502,8 @@ SendRefMsgRange=15
     /// **PL-1 / P21 判据 1+2**：
     /// - Need=6、无行会 ⇒ 一次 Run 后该槽 `Index=0`、物品进背包、
     ///   `SM_ADDITEM`/`SM_DELITEM`/`SM_WEIGHTCHANGED` 各一帧、`RecalcAbilitys` 被调用
-    ///   （用另一个留下的 `Need=0` 物品的 AC 证明：等级不足**不**弹出，但属性进了重算）。
+    ///   （用另一个留下的 `Need=0` 物品的 AC 证明：等级不足**不**弹出，但属性进了重算）；
+    ///   657×2 另见卡 `openmir2-charstatuschanged-wiring` #13（`:2875` + `:2876`）。
     ///
     /// 红检：把 `check_items_need` 的 Need=6 支改成 true ⇒ 槽不清、帧数 0 ⇒ 必红；
     /// 把 P21 的 `recalc_needed` 分支删掉 ⇒ `entity.ac==7` 必红。
@@ -85373,8 +85545,13 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_ADDITEM,
                 mir2_protocol::messages::SM_DELITEM,
                 mir2_protocol::messages::SM_WEIGHTCHANGED,
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支的
+                // `RecalcAbilitys()`（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新）⇒ 622 之后两条 657
+                // （oracle 622=131 < 657=155）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "出帧序：SendAddItem → SendDelItems → WeightChanged"
+            "出帧序：SendAddItem → SendDelItems → WeightChanged → 657×2"
         );
         // RecalcAbilitys 跑过：留下的 Need=0 物品 AC=7 进了会话与实体。
         assert_eq!(sg.state.wabil.ac & 0xFF, 7, "会话重算命中 AC=7");

@@ -517,3 +517,33 @@ socket 汇到一条 mpsc 才产生顺序）。两条自帧字节完全相同 ⇒
 
 **判据边界**：以上全部只到**计数与同 socket 参照帧位置**（§14c/§47）；
 两条 657 的相互先后、跨 socket 先后一律不判。
+
+## 14e. `#13` `drain_player_need_recheck_with_magic`（P21）接线（2026-11-20）
+
+**oracle**：`PlayObject.Message.cs:430-433` 的 `if (boTakeItem) { … UseItems[i].Index=0; RecalcAbilitys(); }`
+⇒ `RecalcAbilitys`（`PlayObject.cs:2874-2876`）产 自 2（`:2875` 广播副本 + `:2876` 自更新）+ 观察者各 1；
+**条件不成立 ⇒ 0 条 657，且不得有 delitem / `Index=0` / recalc**。
+
+**发送位置（顺序）**：P21 已有 `immediate`（201/202/212，直发）与 `WeightChanged()` 的 **622**。
+oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，必须发在 622 **之后**。
+实现：循环内 `boTakeItem` 支只**收集** `(status, hit_speed)`，`immediate` 与 622 发完后按序调用
+`send_charstatuschanged_self_and_observers`（观察者副本逐收件人重编码，`Series` = 收件人自己 `HitSpeed`）。
+多项移出时每次 recalc 各产一对（与 oracle 逐项 `RecalcAbilitys()` 同形）。
+
+**用例** `p21_take_item_emits_two_self_657_after_weightchanged`（本批新增）：
+- 条件真：自己流 `200 → 202 → 622 → 657 → 657`；近邻 902 恰 1、±12 外 905 零；`Index=0`。
+- 条件假（`Need` 达标）：**零帧（无 201/202/622/657）**、`Index` 保留、`wabil.level` 哨兵 0 未被
+  `RecalcAbilitys` 从 Equip 反推（**负例是"条件接对了"的唯一证据**）。
+- 牙（顺序）：把 657 移回 `immediate` ⇒ 实测 `left [200, 202, 657, 657, 622] / right [200, 202, 622, 657, 657]` 红。
+  变异 diff：`E:\UserTemp\openmir2-89-mutations\b13-order-mutation.diff`；还原=反向 Edit；
+  还原后 `grep MUTATION`=0、复跑绿。**（疏漏：未在变异前预存 blob hash，"还原相等"缺 sha 证据；
+  用"反向 Edit 逐行还原 + 无 MUTATION 残留 + 复跑绿"替代，后续变异一律先存 hash。）**
+
+**既有期望更新（同一语义变化，逐条依据同上）**：
+| 用例 | 改前 | 改后 |
+|---|---|---|
+| `sc_gate_blocks_p21_need_recheck_after_soft_close`（反向牙） | `[201,202,622]` | `[201,202,622,657,657]` |
+| `p21_need6_item_moves_to_bag_need0_low_level_stays_and_recalc_runs` | `[200,202,622]` | `[200,202,622,657,657]` |
+
+**全量三数（§51）**：`cargo test -p game-svr --lib` → `running 2226` / **2153 passed · 0 failed · 73 ignored**，rc=0。
+判据边界按 §14c/§47：只判逐 socket 计数与同 socket 参照帧位置；两条 657 相互先后、跨 socket 先后不判。
