@@ -13881,7 +13881,8 @@ fn finish_spell_tail_with(
     mut buf: Option<&mut SpellFrameBuf>,
     // P3-B3：`Some(_)` ⇒ `RM_MAGIC_LVEXP` 按 oracle `CheckMagicLevelUp` 分两支：升级 ⇒
     // `UpdateDelayMsg(...,800)` + 去重（`PlayObject.cs:5216`），未升级 ⇒ `SendSelfDelayMsg(...,1000)`
-    // （`MagicManager.cs:666`）；`None` ⇒ 既有立即发行为（P1/P2 各块的登记口径不变）。
+    // （`MagicManager.cs:666`）；`None` ⇒ 立即发（本卡修复后仓内无 `None` 调用点；保留该支
+    // 供显式立即路径与回归牙）。
     lv_exp_delay_ms: Option<i64>,
 ) -> bool {
     let mut train = magic::SkillTrainState {
@@ -14704,8 +14705,10 @@ fn handle_spell_cmd_with_magic(
                             ty,
                             target_id.unwrap_or(0),
                             Some(&mut buf),
-                            // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                            None,
+                            // 共享尾 `MagicManager.cs:666`：`SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000)`
+                            // （未升级支）⇒ 640 落 **+1000ms 交付批**，不是施法批；升级支
+                            // `PlayObject.cs:5216` = `UpdateDelayMsg(...,800)`（由 helper 内部分支）。
+                            Some(1000),
                         );
                         buf.flush(online, gates);
                     }
@@ -14929,8 +14932,9 @@ fn handle_spell_cmd_with_magic(
                                 ty,
                                 target_id.unwrap_or(0),
                                 Some(&mut buf),
-                                // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                                None,
+                                // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                                // （升级支 800ms 由 helper 内部分支）。
+                                Some(1000),
                             );
                             buf.flush(online, gates);
                         } else {
@@ -15763,8 +15767,9 @@ fn handle_spell_cmd_with_magic(
                         ty,
                         outcome.target.unwrap_or(0),
                         spell_buf.as_mut(),
-                        // P3-B1/A-5 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                        None,
+                        // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                        // （升级支 800ms 由 helper 内部分支）。本支六魔号 golden 均无 640 ⇒ 帧面不变。
+                        Some(1000),
                     );
                     // 13 支：与 638 同批的 642 在这里按 `(byte)ident` 出队（638=136 先、642=141 后）。
                     if let Some(buf) = spell_buf.take() {
@@ -15926,8 +15931,9 @@ fn handle_spell_cmd_with_magic(
                     tail_ty,
                     tail_target,
                     Some(&mut buf),
-                    // P3-B2 块：`RM_MAGIC_LVEXP` 入缓冲（既有口径；未改）。
-                    None,
+                    // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                    // （升级支 800ms 由 helper 内部分支；`Some` 支不再入 `buf`）。
+                    Some(1000),
                 );
                 // **23/24/33/47 的两段出帧**（oracle 的跨 actor 排水序）：第一段 = 共享尾
                 // （638/640；`buf` 已由 `finish_spell_tail` 填入），**先 flush**；第二段 =
@@ -71375,8 +71381,9 @@ SendRefMsgRange=15
                 }
             }
         }
-        // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
-        // 由该帧反推 w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
+        // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主按 `Some(1000)` 把
+        // `SM_MAGIC_LVEXP(640)` 延迟到 +1000ms 交付批；由该帧反推
+        // w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
         if let Some((_, b, _)) = all_frames
             .iter()
             .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
@@ -72174,11 +72181,49 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_MAGHEALING)
             .map(|m| (m.actor_id, m.n_param1));
 
-        // ---- 段②：推进时钟（800ms 延时 + 余量）后交付；`RM_MAGHEALING` 到点只累计恢复量（无帧）----
-        rig.world.clock_ms += 1200;
-        let _outs = rig.world.deliver_self_delay_msgs();
+        // ---- 段②：按 100ms 步进推进时钟并在**到期时刻**交付（与通用火球驱动同口径）----
+        // `RM_MAGHEALING`(800ms) 到点只累计恢复量（无帧）；`RM_MAGIC_LVEXP`(1000ms) 到点出 640
+        // ——本卡起 640 走 `SendSelfDelayMsg(...,1000)`（`MagicManager.cs:666`），不再属施法批。
+        // 帧的 `due_ms_rel` = 交付所在步（施法批=0；与 C# `StepDrainMs=100` 的 golden 同口径）。
+        let wait_ms = golden_wait_ms("healing", label);
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0_i64)).collect();
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (step_frames, _raws2) = rig.drain();
+            for (s, b) in step_frames {
+                all_frames.push((s, b, elapsed as i64));
+            }
+        }
         let n2 = trace_line_count(&trace);
-        let (deliver_frames, _raws2) = rig.drain();
 
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let caster_mp = rig
@@ -72194,20 +72239,18 @@ SendRefMsgRange=15
             assert_eq!(b.0, a.0 + 1, "[healing/{label}] 两段之间 seq 必须连续");
         }
 
-        let mut all_frames = cast_frames;
-        all_frames.extend(deliver_frames);
-
         // ---- RM 组装（**治愈分支专用**，与伤害链不同）----
         //  - `RM_SPELL(10008)` / `RM_MAGICFIRE(10120)`：收件人 = hear_targets(caster)，参数取自 638 帧；
         //  - `RM_MAGHEALING(8034)`：目标自己的自延迟队列（p1=nPower），交付前从 `self_delay_msgs` 抓；
-        //  - `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者；Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
-        //    由该帧反推 (w=0, p1=MagicId(recog), p2=Level(param), p3=MakeLong(tag,series))，late=true。
+        //  - `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者；Rust 宿主按 `Some(1000)` 把
+        //    `SM_MAGIC_LVEXP(640)` 延迟到 +1000ms 交付批；由该帧反推
+        //    (w=0, p1=MagicId(recog), p2=Level(param), p3=MakeLong(tag,series))，late=true。
         let range = chat::send_ref_msg_range();
         let in_range_caster = chat::hear_targets(&rig.world, caster, range);
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
-            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
-            .map(|(_, b)| {
+            .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b, _)| {
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
                 (
                     i32::from(cm.param),
@@ -72264,9 +72307,9 @@ SendRefMsgRange=15
                 ));
             }
         }
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -72293,7 +72336,7 @@ SendRefMsgRange=15
             serde_json::json!({
                 "Who": who,
                 "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
-                "Sent": fireball_sent(&all_frames, *socket),
+                "Sent": fireball_sent_with_due(&all_frames, *socket),
             })
         })
         .collect::<Vec<_>>();
@@ -72406,7 +72449,7 @@ SendRefMsgRange=15
                 "full：{who} {list} {ident} 条数须与 golden 一致"
             );
         }
-        b1_golden_drain_assert("healing.json", "full", 2);
+        b1_golden_drain_assert("healing.json", "full", 1);
     }
 
     /// `self`：targetObject=null ⇒ 目标置为施法者、坐标取施法者；8034 入施法者队列、640 仅施法者。
@@ -72566,7 +72609,7 @@ SendRefMsgRange=15
             1000,
         );
         fireball_case_assert("hbfireball", "miss");
-        b1_golden_drain_assert("hbfireball.json", "miss", 2);
+        b1_golden_drain_assert("hbfireball.json", "miss", 1);
         let c = hbfireball_case("miss");
         // 推挤条数按 golden（期望不写死：seed/抽数变了，标签语义也随之变）。
         assert_eq!(
@@ -73685,7 +73728,7 @@ SendRefMsgRange=15
     fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 33, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert("snowwind.json", label, 4);
+        b1_golden_drain_assert("snowwind.json", label, 2);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         let seq_of = |who: &str| -> Vec<i64> {
@@ -73701,9 +73744,11 @@ SendRefMsgRange=15
                 .filter_map(|m| m["ident"].as_i64())
                 .collect()
         };
+        // **时间忠实序**（`StepDrainMs=100`）：31/656 在 600ms 交付批、640 在 1000ms
+        // ⇒ 640 在末位（旧 golden 的 `[638,640,31,656]` 是「一次排空」的 per-actor pass 伪影）。
         assert_eq!(
             seq_of("caster"),
-            vec![638, 640, 31, 656],
+            vec![638, 31, 656, 640],
             "[{stem}/{label}] caster 帧序"
         );
         assert_eq!(
@@ -73813,7 +73858,7 @@ SendRefMsgRange=15
     fn fireboom_assert(stem: &str, magic_id: u16, golden: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, magic_id, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert(golden, label, 4);
+        b1_golden_drain_assert(golden, label, 2);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         let seq_of = |who: &str| -> Vec<i64> {
@@ -73829,9 +73874,11 @@ SendRefMsgRange=15
                 .filter_map(|m| m["ident"].as_i64())
                 .collect()
         };
+        // **时间忠实序**（`StepDrainMs=100`）：31/656 在 600ms 交付批、640 在 1000ms
+        // ⇒ 640 在末位（旧 golden 的 `[638,640,31,656]` 是「一次排空」的 per-actor pass 伪影）。
         assert_eq!(
             seq_of("caster"),
-            vec![638, 640, 31, 656],
+            vec![638, 31, 656, 640],
             "[{stem}/{label}] caster 帧序"
         );
         assert_eq!(
@@ -74268,7 +74315,8 @@ SendRefMsgRange=15
             g["TargetHp"].as_i64(),
             "[{stem}/{label}] 术后 HP 须等于 golden TargetHp（窗口内不回血）"
         );
-        b1_golden_drain_assert("bighealing.json", label, 2);
+        // 640 移到 +1000ms 后 `full`（无 640、无延迟）只需 1 趟；heal/both = 2。
+        b1_golden_drain_assert("bighealing.json", label, if label == "full" { 1 } else { 2 });
         let cv = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&cv, who, field, ident);
         // caster 帧序：heal/both `[638,640]`、full `[638]`。

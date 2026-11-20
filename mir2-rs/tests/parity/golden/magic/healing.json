@@ -22,6 +22,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 2565,
         "rng_mode": "cover_drain",
@@ -79,6 +81,7 @@
           100
         ],
         "hit_speed": 0,
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -125,23 +128,27 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1151762078,
+              "delivery": 1176870562,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 640,
+              "recog": 2,
               "param": 1,
               "tag": 2,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -179,23 +186,27 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1151761878,
+              "delivery": 1176870362,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -229,16 +240,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -269,6 +284,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -326,6 +343,7 @@
           100
         ],
         "hit_speed": 0,
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -334,7 +352,7 @@
         ]
       },
       "Label": "full",
-      "DrainPasses": 2,
+      "DrainPasses": 1,
       "DrainPassesHitCap": false,
       "Seed": 5,
       "SpellReturn": true,
@@ -368,9 +386,11 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -404,16 +424,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -447,16 +471,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -486,6 +514,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 15,
         "caster_sc": 2565,
         "rng_mode": "cover_drain",
@@ -543,6 +573,7 @@
           100
         ],
         "hit_speed": 0,
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -582,17 +613,6 @@
               "priority": 136
             },
             {
-              "ident": 10123,
-              "wParam": 0,
-              "p1": 2,
-              "p2": 1,
-              "p3": 1,
-              "msg": "",
-              "late": true,
-              "delivery": 1151764703,
-              "priority": 255
-            },
-            {
               "ident": 8034,
               "wParam": 0,
               "p1": 20,
@@ -600,23 +620,38 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1151764503,
+              "delivery": 1176873143,
+              "priority": 255
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 2,
+              "p2": 1,
+              "p3": 1,
+              "msg": "",
+              "late": true,
+              "delivery": 1176873343,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 100,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Aghad?"
             },
             {
               "ident": 640,
+              "recog": 2,
               "param": 1,
               "tag": 1,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -650,16 +685,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 100,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 100,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Aghad?"
             }
           ]
@@ -693,16 +732,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 100,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "2"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 100,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Aghad?"
             }
           ]
