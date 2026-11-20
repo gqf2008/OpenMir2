@@ -178,6 +178,15 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 **门禁（rebase 到 `fb2869fa1` 后实跑）**：`cargo fmt --all -- --check` rc=0；
 `cargo test -p game-svr --lib` **2180 passed / 0 failed / 76 ignored**（rc=0）。
 
+**`ignored` 由 77 降到 76 —— 是"解除一条 ignore"，不是"少跑一条"**：少掉的正是
+`buff_657_needrecalc_series_reads_post_recalc_value`（`89` 立本缺口时加的 `#[ignore]` 哨兵）。
+它现在**作为普通用例参与 2180 里的计数**；同一批 `passed` 由 2168（P1 时）→ 2180 的增量里也包含它。
+
+**`[7] → [0]` 是 oracle 推出来的，不是"改到绿"**：夹具 `refmsg_657_fixture` 里 `src` 只有**实体**
+`hit_speed = 7`（`EntitySpawn` 字段），会话 `test_session_ground` 不带任何 `HITSPEED` 加成 ⇒
+`RecalcAbilitys()` 的 `HitSpeed = AddAbil.HitSpeed = 0`（`PlayObject.cs:2899`），而自见那条 657 在
+`:2876` 入队、出队时读 `this.HitSpeed` ⇒ **oracle 值必为 0**。旧期望 `[7]` 取的是重算**前**的实体残留值。
+
 ## 7.5 为什么 `M-a` 当时测不出"顺序"（写给后来者）
 
 `card/657-series-spellbuf` 之前做变异 `M-a`（顺序/镜像相关）时结果是"不红"，据此曾判定顺序不重要。
