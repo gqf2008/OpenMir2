@@ -27,11 +27,15 @@
 
 每颗都把**该处期望的 `dura` + 1**（`MUTATION` 标记，§31 还原后 sha 相等、`grep MUTATION`=0）：
 
-| 牙 | 变异点 | 红 | 同变异下仍绿（隔离证明） |
+| 牙 | 变异点（**具体调用点**） | 红 | 同变异下仍绿（隔离证明） |
 | --- | --- | --- | --- |
-| T1 readbook | 期望 `dura+1` | `it17a_*`：6 条里 **4 failed**（带件的 4 条门） | `it09_` 1 passed |
-| T2 eat_move 对拍器（IT-09/10/11） | `want_items[0].dura+1` | `it10_` **2 failed**（唯一保留件的例 `eat_fail_shape2_norandommap_no_eat`；it09/it11 的例均已吃空 ⇒ `first_mut` 不触发） | `it13_` 6 passed、`it17a` 6 passed |
-| T3 eat_move IT-13 对拍器 | `want_items[0].dura+1` | `it13_` **3 failed**（`eat_fail_shape5_no_guild` 等保留件的例） | `it09_` 1 passed、`it17a` 6 passed |
+| T1 readbook | `readbook.rs` 的 `run_readbook_parity` 内**该测试自己的**比较元组：`want["dura"]` 期望表达式 `+1` | `it17a_*`：6 条里 **4 failed**（带件的 4 条门） | `it09_` 1 passed |
+| T2 eat_move 对拍器（IT-09/10/11） | `eat_move.rs` 的 `run_move_parity` 内、`let mut want_items = golden_bag_items(...)` **之后的调用点**：`want_items.first_mut().unwrap().dura += 1`。**不是改共用助手 `golden_bag_items` 本身** | `it10_` **2 failed**（唯一保留件的例 `eat_fail_shape2_norandommap_no_eat`；it09/it11 的例均已吃空 ⇒ `first_mut` 不触发） | `it13_` 6 passed、`it17a` 6 passed |
+| T3 eat_move IT-13 对拍器 | `eat_move.rs` 的 **IT-13 对照器**内自身那一处 `golden_bag_items(...)` 调用点：`want_items.first_mut().unwrap().dura += 1` | `it13_` **3 failed**（`eat_fail_shape5_no_guild` 等保留件的例） | `it09_` 1 passed、`it17a` 6 passed |
+
+> **复现路径注意**：若直接改**共用助手** `golden_bag_items()` 本身（例如在里面给 `dura` 加 1），
+> `it10_` 与 `it13_` 会**同时红**——那是**预期结果**，不代表两者不独立。本表所说的"独立性"指
+> **改各自调用点时互不影响**（T2 的调用点只被 IT-09/10/11 的对拍器用；T3 的调用点只在 IT-13 对照器内）。
 
 ⇒ 三处**彼此独立**（无共享比较函数/状态），"一条用例钉住 A 支不代表 B 支"的反例在 T2 的 it10 上可见
 （同组内只有"有件"的例能咬）。
