@@ -7,7 +7,7 @@
   "counting_moment": {
     "head": "88058e3e5f9899649e12439cfa979b510bc98644",
     "time": "2026-11-20T21:19:00+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。"
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。；MG-41 升格（SKILL_SINSU/30，summon_ok，scope=partial），magic 域 verified 33→34（本域 65 条），2026-11-20；**合并提交 M 号 / counting_moment.head 由 opc-19 合并时回填**（本笔仅改条目与计数，head 待并合提交确定）。"
   },
   "status_enum": [
     "verified",
@@ -1083,17 +1083,21 @@
         "line": 450,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "sinsu_parity_summon_ok + real_rust_ledger_sinsu",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动 tests::sinsu_parity_summon_ok）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器 real_rust_ledger_sinsu）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/sinsu.json（magic_id=30；新 schema 含 recog/due_ms_rel）",
+        "cases": [
+          "summon_ok"
+        ],
         "unit_tests": []
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级 2026-11-20 升格（scope=partial）：数据+装置合并 master e5ca069ce（C# SinsuBatch + golden sinsu.json + Rust 驱动/比较器）；神兽 race=113（ELF_MONSTER）走 0.3 支，new_slaves 逐字段（神兽/1/hp20/max24/master=true）；三牙（stub_monster_race / 表名→slave_count_after / 发出名→new_slaves[0].name）见 docs/issues/openmir2-sinsu-mg41-evidence.md。驱动 `--exact --test-threads=1` 单跑（已登记 §57 合并门）。",
+      "basis": "semantic",
+      "scope": "partial：仅 summon_ok（正常召唤 adopt：race=113 / slave_count 0→1 / regen_calls=1 / new_slaves 逐字段 / 帧 17·638·642 含 recog·due_ms_rel）。**回召面 cap_hit 未覆盖——待 `openmir2-golden-harness-mapmgr`**（RecallSlave→SpaceMove→SystemShare.MapMgr null）。**不比 Rng**（离线替身 RegenMonsterByName 造怪 0 抽 ⇒ RNG 流偏移，与 create_monster_oracle 真抽不同源；640.tag 亦因而非判据）。"
     },
     {
       "id": "MG-42",
