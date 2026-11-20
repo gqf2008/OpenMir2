@@ -7,7 +7,7 @@
 
 | 堆 | 条目（id） | 入口 | 条数 | 装置复用前景 |
 |---|---|---|---|---|
-| **A. 组标签块（`CheckAmulet(1,1)` 组）** | MG-20/21/22/23/24/25/26/30/31 | `MagicManager.cs:315-321`（`case` 组，公用护身符门） | **9** | **最高价值**：这 9 条的魔号（13/14/15/16/17/18/19）里有 6 个已有 verified 条目（firecharm/hangmajinbub/dejiwonho/holyshield/cloak/bigcloak）⇒ **先用既有 golden + 既有比较器做"入口级"对拍**，只需把 evidence 指到同一用例（不需新装置），但要按"每条独立成结论"（§28）逐条写 |
+| **A. 组标签块（`CheckAmulet(1,1)` 组）** | MG-20/21/22/23/24/25/26/30/31 | `src/M2Server/Magic/MagicManager.cs:315-321`（`case` 组，公用护身符门） | **9** | **最高价值**：这 9 条的魔号（13/14/15/16/17/18/19）里有 6 个已有 verified 条目（firecharm/hangmajinbub/dejiwonho/holyshield/cloak/bigcloak）⇒ **先用既有 golden + 既有比较器做"入口级"对拍**，只需把 evidence 指到同一用例（不需新装置），但要按"每条独立成结论"（§28）逐条写 |
 | B. 战士/近战 inline | MG-01..09 | `:87-95` 各 case 内联 | 9 | 已有 `openmir2-warrskill-entry.md` 卡（DoSpell 直调陷阱）；**需要新 probe（ClientSpellXY 入口）** |
 | C. 推/撞类 | MG-16, MG-57 | `MagPushArround`（`:259`/`:601`） | 2 | 既有 `BehaviorBatch` 可尝试；RNG 2 抽（`Random(20)` 门 + `Random(2)` 步数） |
 | D. 穿透魔法 | MG-17, MG-18 | `MagPassThroughMagic` | 2 | 同 B 类需方向/弹道 probe |
