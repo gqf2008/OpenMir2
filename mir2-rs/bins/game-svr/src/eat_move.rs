@@ -134,7 +134,7 @@ pub(crate) fn maybe_eat_move(
     let Some(tpl) = catalog.get(sg.state.item_list[pos].index) else {
         return false;
     };
-    if tpl.std_mode != 3 || !matches!(tpl.shape, 1 | 2 | 3) {
+    if tpl.std_mode != 3 || !matches!(tpl.shape, 1..=3) {
         return false;
     }
 
@@ -463,6 +463,12 @@ mod tests {
                 None,
                 &game_svr::npc::NpcVars::default(),
                 None,
+                // IT-16 尾参（本组用例不走彩票支；传进程级缺省句柄/配置，抽数不发生）。
+                &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
             );
 
             // ① 生产换图簇：与 world tick 同一条路径（`drain_map_change`），展示表给 Light=0/Feature=0/
