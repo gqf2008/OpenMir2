@@ -13991,9 +13991,13 @@ fn finish_spell_tail_with(
     tail.train.see_heal_gauge
 }
 
-/// **共享尾训练帧 640 的唯一实现**（`MagicManager.cs:666` / `PlayObject.cs:5216`）：
+/// **共享尾训练帧 640 的延迟发射实现**（`MagicManager.cs:666` / `PlayObject.cs:5216`）：
 /// 未升级 ⇒ `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`；升级 ⇒ `UpdateDelayMsg(…, 800)`
-/// （先删同 `(ident, MagicId)` 的待投递帧）。四处 inlined 尾在行为修复完成后统一收敛到这里。
+/// （先删同 `(ident, MagicId)` 的待投递帧）。
+///
+/// **收敛进度（勿据旧注释以为它是唯一）**：#5/#7/#8 三处已收敛至此；
+/// **#9/P1（魔号 49/51/52/53/54 @ `:17292`/`:17302`）仍是 inlined 副本——行为已对、代码待迁**；
+/// **#6（17/30/41）仍为立即形态**，待行为修复后迁入（见 `openmir2-magic-640-delay-sweep`）。
 fn emit_magic_lvexp_delayed(
     world: &mut mir2_world_bevy::World,
     actor_id: i32,

@@ -164,5 +164,10 @@ if (userMagic.Level < 3 && boTrain) {
 - `finish_spell_tail_with` 里 `lv_exp_delay_ms == None` 的兜底分支（`:13975` 的 `send_self_frame`）
   现在**已无调用者**（本次机判：18 处 `finish_spell_tail(` 调用点尾参**全部** `Some(1000)`，
   `None` 为 0）⇒ 已成死兜底；建议四处收口后一并决定"保留作防御 / 删除"。
-- 四处 inlined 块与 `finish_spell_tail_with` 是**重复实现**，每多留一处就多一个漂移源；
-  建议收口时把四处收敛为 `finish_spell_tail_with(…, Some(1000))`，只保留一份实现。
+- 四处 inlined 块是**重复实现**，每多留一处就多一个漂移源。**但收敛目标不能是 `finish_spell_tail_with`**：
+  #5/#7/#8 三处的效果体已在 `slave.rs` 的 `cast_tamming_spell`/`cast_clone_spell` 内调用过 `do_spell_tail`
+  （`slave.rs:312/496/565`），而 `finish_spell_tail_with` 自身也调（`lib.rs:13899`），抽数在
+  `magic_effect.rs::spell_train_points`（`Random(3)+1`）⇒ 再调会**抽数翻倍 + 638 双发**。
+  **正确形态是只收敛发射面**：`emit_magic_lvexp_delayed`（已用于 #5/#7/#8）；**#9/P1（49/51/52/53/54）
+  与 #6 待迁**。把 `cast_*` 里的尾拆掉再统一到 `finish_spell_tail_with` 属**重构（会动 `slave.rs`）
+  ⇒ 另立新卡**，不在本卡范围。
