@@ -9,6 +9,8 @@
 //! | `SM_CLEAROBJECTS(633)` | `BaseObject.cs:1133` / `PlayObject.cs:3772` | [`map_change_frames`]（`SendMsg` ⇒ [`Route::SelfOnly`]） |
 //! | `SM_CHANGEMAP(634)` | `BaseObject.cs:1134` / `PlayObject.cs:3778` | [`map_change_frames`]（`SendMsg` ⇒ [`Route::SelfOnly`]） |
 //! | `SM_SPACEMOVE_SHOW(801)`/`SHOW2(807)` | `BaseObject.cs:1137/1141` | [`map_change_frames`]（`SendRefMsg` ⇒ [`Route::Ref`]） |
+//! | `SM_AREASTATE(766)` | `PlayObject.Message.cs:1774-1779` → `RefUserState`（`Base.cs:270-286`） | [`map_change_frames`]（`SendDefMessage` ⇒ [`Route::SelfOnly`]） |
+//! | `SM_MAPDESCRIPTION(54)` | `PlayObject.Message.cs:1774-1779` → `SendMapDescription`（`Base.cs:887-895`） | [`map_change_frames`]（`SendDefMessage` ⇒ [`Route::SelfOnly`]） |
 //! | `SM_CHANGELIGHT(654)` | `PlayObject.cs:2884` | [`changelight_frame`]（`SendRefMsg` ⇒ [`Route::Ref`]） |
 //! | `SM_PASSWORD(5009)` | `PlayObject.Base.cs:3207/3304` | [`password_frame`]（`SendMsg` ⇒ [`Route::SelfOnly`]） |
 
@@ -33,6 +35,16 @@ pub enum Route {
     ///
     /// 注：`SendRefMsg` 的观察者集合已在 `chat::hear_targets` 建模（`BaseObject.Message.cs:395-440`）。
     Ref,
+}
+
+/// 换图簇的 `Envir` 展示输入（oracle `RM_CHANGEMAP` 处理器的连带帧来源）。
+///
+/// `flag` = `Envirnoment.Flag`（766 的 `n8`、54 的 `nMusicid`）；`desc` = `Envir.MapDesc`
+/// （54 的文本尾原文，本层再 GBK+EDCode）。`None`（无注册表/无该图）⇒ 两条都不发。
+#[derive(Clone, Copy, Debug)]
+pub struct MapVisual<'a> {
+    pub flag: &'a mir2_envir::mapinfo::MapInfoFlag,
+    pub desc: &'a str,
 }
 
 /// 一条待下行帧：`GM_DATA` body（12B 头 + 尾）+ 路由类别。
@@ -61,8 +73,9 @@ pub fn map_change_frames(
     dir: u8,
     light: u8,
     char_desc: &[u8],
+    visual: Option<MapVisual<'_>>,
 ) -> Vec<Emitted> {
-    let mut out = Vec::with_capacity(3);
+    let mut out = Vec::with_capacity(5);
     out.push(Emitted {
         body: smframe::sm_clearobjects(),
         route: Route::SelfOnly,
@@ -77,6 +90,22 @@ pub fn map_change_frames(
         ),
         route: Route::SelfOnly,
     });
+    // oracle `PlayObject.Message.cs:1774-1779` 的 `RM_CHANGEMAP` 处理器在 `SendDefMessage(SM_CHANGEMAP)`
+    // 之后**同支连发**：`RefUserState()` ⇒ `SM_AREASTATE(766)`（`Base.cs:270-286`）、
+    // `SendMapDescription()` ⇒ `SM_MAPDESCRIPTION(54)`（`:887-895`）；两者都 `SendDefMessage`（只发自己）。
+    if let Some(v) = visual {
+        out.push(Emitted {
+            body: smframe::sm_areastate(crate::enter::area_state(v.flag)),
+            route: Route::SelfOnly,
+        });
+        out.push(Emitted {
+            body: smframe::sm_mapdescription(
+                crate::enter::music_id(v.flag),
+                &crate::enter::gbk(v.desc),
+            ),
+            route: Route::SelfOnly,
+        });
+    }
     if let Some(show2) = ev.space_move_show {
         let ident = if show2 {
             messages::SM_SPACEMOVE_SHOW2
@@ -142,7 +171,7 @@ mod tests {
             y: 618,
             space_move_show: None,
         };
-        let frames = map_change_frames(&ev, b"0", 12, 3, 7, &[0u8; 8]);
+        let frames = map_change_frames(&ev, b"0", 12, 3, 7, &[0u8; 8], None);
         assert_eq!(frames.len(), 2, "EnterAnotherMap：CLEAROBJECTS + CHANGEMAP");
         assert_eq!(frames[0].route, Route::SelfOnly);
         assert_eq!(frames[1].route, Route::SelfOnly);
@@ -177,7 +206,7 @@ mod tests {
             y: 9,
             space_move_show: Some(false),
         };
-        let f = map_change_frames(&base, b"0101", 0, 2, 5, &[0u8; 8]);
+        let f = map_change_frames(&base, b"0101", 0, 2, 5, &[0u8; 8], None);
         assert_eq!(f.len(), 3);
         assert_eq!(f[2].route, Route::Ref, "SHOW 是 SendRefMsg 广播");
         assert_eq!(u16_at(&f[2].body, 4), messages::SM_SPACEMOVE_SHOW);
@@ -196,9 +225,73 @@ mod tests {
             2,
             5,
             &[0u8; 8],
+            None,
         );
         assert_eq!(u16_at(&f2[2].body, 4), messages::SM_SPACEMOVE_SHOW2);
         assert_eq!(f2[2].route, Route::Ref);
+    }
+
+    /// **766/54 连带帧**：序在 634 与 801 之间、路由 SelfOnly、字段取自 `Envir.Flag/MapDesc`。
+    #[test]
+    fn map_change_appends_areastate_and_mapdescription() {
+        let ev = MapChange {
+            actor_id: 7,
+            map_id: 2,
+            x: 1,
+            y: 2,
+            space_move_show: Some(false),
+        };
+        let flag = mir2_envir::mapinfo::MapInfoFlag {
+            fight_zone: true,
+            safe_area: true,
+            music: true,
+            music_id: 42,
+            day_light: true,
+            ..Default::default()
+        };
+        let f = map_change_frames(
+            &ev,
+            b"m",
+            0,
+            4,
+            0,
+            &[0u8; 8],
+            Some(MapVisual {
+                flag: &flag,
+                desc: "副本",
+            }),
+        );
+        let ids: Vec<u16> = f.iter().map(|x| u16_at(&x.body, 4)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                messages::SM_CLEAROBJECTS,
+                messages::SM_CHANGEMAP,
+                messages::SM_AREASTATE,
+                messages::SM_MAPDESCRIPTION,
+                messages::SM_SPACEMOVE_SHOW
+            ],
+            "oracle 序：633 → 634 → 766 → 54 → 801"
+        );
+        // 766：Recog = FightZone|1 | SafeArea|2 = 3；无尾。
+        assert_eq!(
+            i32::from_le_bytes(f[2].body[0..4].try_into().unwrap()),
+            3,
+            "766 Recog = 标志位"
+        );
+        assert_eq!(f[2].route, Route::SelfOnly);
+        assert_eq!(f[2].body.len(), 12, "766 无尾");
+        // 54：Recog = nMusicid；尾 = EDCode(GBK(MapDesc))。
+        assert_eq!(
+            i32::from_le_bytes(f[3].body[0..4].try_into().unwrap()),
+            42,
+            "54 Recog = MusicId"
+        );
+        assert_eq!(
+            &f[3].body[12..],
+            mir2_protocol::edcode::encode(&crate::enter::gbk("副本")).as_slice()
+        );
+        assert_eq!(f[3].route, Route::SelfOnly);
     }
 
     /// `changelight_frame`：`SendDefMessage(SM_CHANGELIGHT, ActorId, Light, (u16)nClientKey, 0)`，

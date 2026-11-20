@@ -346,6 +346,16 @@ impl MapRegistry {
         self.loaded.get(map_id).map(|e| e.map_name.as_str())
     }
 
+    /// `map_id` → 取图**文件主干**（`MapInfoEntry.map_file_name`；`[逻辑名|文件主干]` 的右半）。
+    ///
+    /// oracle `Envirnoment.MapFileName`（`MapManager.cs:66-96` 的 `AddMapInfo`）= 该字段；
+    /// `SM_CHANGEMAP(634)` 的尾就是它（`BaseObject.cs:1134` 的 `SendMsg(..., MapFileName)`）。
+    /// 无 alias 时与 [`Self::name_of`] 同值；`加载成功` 的条目恒有。
+    #[must_use]
+    pub fn map_file_name_of(&self, map_id: usize) -> Option<&str> {
+        self.loaded.get(map_id).map(|e| e.map_file_name.as_str())
+    }
+
     /// `map_id` → `Envirnoment.Flag`（帧 766/54/46 的 `Envir.Flag` 输入）。
     #[must_use]
     pub fn flag_of(&self, map_id: usize) -> Option<&MapInfoFlag> {

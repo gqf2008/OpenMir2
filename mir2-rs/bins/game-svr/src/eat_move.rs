@@ -21,7 +21,7 @@
 //! `Random(Width-nEgdey-1)`/`Random(Height-nEgdey-1)`，`nEgdey` 只看**目标图**高）。
 //! `SpaceMove` 成功后 `SendMsg(RM_CLEAROBJECTS/RM_CHANGEMAP)` + `SendRefMsg(RM_SPACEMOVE_SHOW)`
 //! ——本模块落成 `World::base_object_move_player` 的 `MapChange`（宿主 world tick 的
-//! `drain_map_change` 出 633/634/801；不在本组对拍面，卡面登记）。
+//! `drain_map_change` 出 633/634/766/54/801；不在本组对拍面，卡面登记）。
 //!
 //! `PvpLevel()` = `(byte)(PkPoint / 100)`（`PlayObject.cs:4352`）⇒ [`mir2_world_bevy::World::pvp_level`]。
 //!
@@ -306,7 +306,7 @@ pub(crate) fn maybe_eat_move(
         crate::broadcast_ref_msg_with_self(world, online, gates, actor_id, &[hide]);
     }
     // ③ `BaseObjectMove`：落图/落点（跨图时记一条 `MapChange{space_move_show: Some(false)}`，
-    //    宿主 world tick 的 `drain_map_change` 出 633/634/801——不在本组对拍面）。
+    //    宿主 world tick 的 `drain_map_change` 出 633/634/766/54/801——不在本组对拍面）。
     let _ = world.base_object_move_player(chr_name, actor_id, target);
     // ④ 吃尾巴（`ClientUseItems` 的 `eatSuccess` 支）：移除本件 + `WeightChanged()`
     //    （`WAbil.Weight = RecalcBagWeight()` + `RM_WEIGHTCHANGED` ⇒ `SM_WEIGHTCHANGED(622)`）。
@@ -380,16 +380,148 @@ mod tests {
         mir2_envir::MapRegistry::from_entries(mir2_envir::MapLoader::new(dir, "", ""), entries)
     }
 
+    /// 带 **`[名|文件]` alias** 的注册表：`alias` 的逻辑名与文件主干（`stem`）不同。
+    fn registry_with_alias(dir: &Path) -> mir2_envir::MapRegistry {
+        write_walkable_map(dir, "plain", 60, 60);
+        write_walkable_map(dir, "stem", 60, 60);
+        let mk = |name: &str, file: &str, flag: mir2_envir::mapinfo::MapInfoFlag| {
+            mir2_envir::mapinfo::MapInfoEntry {
+                map_name: name.to_string(),
+                map_file_name: file.to_string(),
+                desc: "别名图".to_string(),
+                server_index: 0,
+                flag,
+            }
+        };
+        let entries = vec![
+            mk(
+                "plain",
+                "plain",
+                mir2_envir::mapinfo::MapInfoFlag {
+                    day_light: true,
+                    ..Default::default()
+                },
+            ),
+            mk(
+                "alias",
+                "stem",
+                mir2_envir::mapinfo::MapInfoFlag {
+                    safe_area: true,
+                    music: true,
+                    music_id: 7,
+                    day_light: true,
+                    ..Default::default()
+                },
+            ),
+        ];
+        mir2_envir::MapRegistry::from_entries(mir2_envir::MapLoader::new(dir, "", ""), entries)
+    }
+
+    /// **`[名|文件]` alias + 换图簇连带帧**：
+    /// - 634 尾 = **取图文件主干**（oracle `Envir.MapFileName`，`MapManager.cs:66-96`），不是逻辑名；
+    /// - 766/54（oracle `RM_CHANGEMAP` 处理器连带帧）序在 634 之后、只发自己（`SendDefMessage`）。
+    /// 两半都断：alias 图尾 = `stem`；无 alias 图尾 = 逻辑名（逐字节不变）。
+    #[test]
+    fn map_change_634_tail_uses_alias_file_stem() {
+        let dir = std::env::temp_dir().join(format!(
+            "mir2-alias-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        let reg = registry_with_alias(&dir);
+        assert_eq!(reg.name_of(1), Some("alias"));
+        assert_eq!(reg.map_file_name_of(1), Some("stem"));
+
+        let mut world = mir2_world_bevy::World::with_maps(crate::mapwire::sizes(&reg));
+        world.open_session("hero");
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let actor_id = world.enter_map("hero", e, 0).expect("进图");
+        let _ = world.sessions.drain_map_changes();
+        let mut displays = crate::downlink::DisplayTable::new();
+        displays.set(
+            actor_id,
+            crate::downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut online: crate::OnlineRegistry = Vec::new();
+        crate::online_set(
+            &mut online,
+            crate::OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id,
+            },
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel::<crate::SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<crate::SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+
+        // (a) 换进 alias 图（逻辑名 alias / 文件主干 stem）⇒ 634 尾 = EncodeString("stem")，
+        //     并出 766（safe_area ⇒ n8=2）与 54（music_id=7，尾 = MapDesc）。
+        world.switch_map("hero", 1, 7, 9).expect("换进 alias 图");
+        crate::drain_map_change(&mut world, &online, &gates, &displays, Some(&reg));
+        let mut frames: Vec<(u16, i32, Vec<u8>)> = Vec::new();
+        while let Ok(crate::SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let m = CommandMessage::from_bytes(&body).expect(">=12B");
+            frames.push((m.ident, m.recog, body[CommandMessage::SIZE..].to_vec()));
+        }
+        let ids: Vec<u16> = frames.iter().map(|f| f.0).collect();
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_CLEAROBJECTS,
+                mir2_protocol::messages::SM_CHANGEMAP,
+                mir2_protocol::messages::SM_AREASTATE,
+                mir2_protocol::messages::SM_MAPDESCRIPTION
+            ],
+            "EnterAnotherMap 支：633 → 634 → 766 → 54（无 801）"
+        );
+        assert_eq!(
+            frames[1].2,
+            mir2_protocol::edcode::encode(&crate::enter::gbk("stem")),
+            "634 尾必须是取图文件主干（不是逻辑名 alias）"
+        );
+        assert_eq!(frames[2].1, 2, "766 Recog = SafeArea|2");
+        assert_eq!(frames[3].1, 7, "54 Recog = MusicId");
+        assert_eq!(
+            frames[3].2,
+            mir2_protocol::edcode::encode(&crate::enter::gbk("别名图")),
+            "54 尾 = EDCode(GBK(MapDesc))"
+        );
+
+        // (b) 对照：换进无 alias 的图（逻辑名 plain == 文件主干）⇒ 634 尾 = "plain"。
+        world.switch_map("hero", 0, 5, 5).expect("换进 plain 图");
+        crate::drain_map_change(&mut world, &online, &gates, &displays, Some(&reg));
+        let mut frames: Vec<(u16, i32, Vec<u8>)> = Vec::new();
+        while let Ok(crate::SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let m = CommandMessage::from_bytes(&body).expect(">=12B");
+            frames.push((m.ident, m.recog, body[CommandMessage::SIZE..].to_vec()));
+        }
+        assert_eq!(
+            frames[1].2,
+            mir2_protocol::edcode::encode(&crate::enter::gbk("plain")),
+            "无 alias ⇒ 634 尾 == 逻辑名（逐字节不变）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn case_ctx(c: &serde_json::Value) -> &serde_json::Value {
         &c["ctx"]
     }
 
     /// **IT-09 宿主级对拍**（回城卷 Shape1 两支）：驱动 `handle_eat_cmd`，比
     /// ① **线上帧**（真实帧，不是标志位代理）：635 → 800 → 622 → 633 → 634 → 801，逐字段；
-    ///    633/634/801 由**生产共用**的 `drain_map_change`（world tick 的换图簇）产出——本用例在
-    ///    `handle_eat_cmd` 之后按生产次序驱动它，从而与 oracle 泵出的帧逐帧比。golden 里还有
-    ///    `766(SM_AREASTATE)`/`54(SM_MAPDESCRIPTION)`（oracle `RM_CHANGEMAP` 处理器的连带帧，
-    ///    本仓共用换图路径**未产出**，属既有缺口）——本用例**断言被剔除的就是这两条**，防静默漏。
+    ///    633/634/766/54/801 由**生产共用**的 `drain_map_change`（world tick 的换图簇）产出——本用例在
+    ///    `handle_eat_cmd` 之后按生产次序驱动它，从而与 oracle 泵出的帧逐帧比。`766(SM_AREASTATE)`/
+    ///    `54(SM_MAPDESCRIPTION)`（oracle `RM_CHANGEMAP` 处理器的连带帧）已由换图簇卡接线；
+    ///    本用例断言**剔除集为空**（防再次静默漏帧）。
     /// ② 终态 `MapName/X/Y`（实体 + 会话）③ `ItemList` 清空 + `WAbil.Weight`
     /// ④ `Rng` 逐次（同 seed 的 legacy `System.Random` 序列）。
     ///
@@ -398,8 +530,8 @@ mod tests {
     /// （`Feature=0/Status=0`）。801 的 `Series = MakeWord(Dir,Light)` 在夹具固定 `DayLight=true`
     /// （DayBright=0）、实体 `Dir=4`（`BaseObject.cs:378` ctor）、`Light=0` 下逐值成立——这三个前提
     /// 记在 golden 的 `scenario_note` 与 `ctx.presentation` 里。
-    /// **仍未覆盖的共用路径缺口**（卡面登记）：`[名|文件]` 覆盖时 oracle 发文件主干、宿主发逻辑名
-    /// （本夹具无此形态，故此处相等）；以及 766/54（见下）。
+    /// **`[名|文件]` 形态**：oracle 发**文件主干**；本夹具无 alias 形态（`map_file_name == map_name`），
+    /// 故 634 尾两者同值。alias 覆盖另由 `map_change_634_tail_uses_alias_file_stem` 证明。
     ///
     /// 红检：hook 返回值恒改 `false`（回 `_ => {}` ⇒ 636）⇒ 帧序必红；把 hook 里的
     /// `base_object_move_player` 换成不动（不出换图簇）⇒ 帧序/终态必红；HomeMap 空回落删掉 ⇒
@@ -423,8 +555,10 @@ mod tests {
             );
         }
         // 对拍面内/外的 ident 清单（golden 的 pumped 必须恰是这两集合之并）。
-        let modeled: [i64; 5] = [800, 622, 633, 634, 801];
-        let registered_gap: [i64; 2] = [766, 54];
+        // 766/54（oracle `RM_CHANGEMAP` 处理器的连带帧）已由换图簇卡接线 ⇒ 进比较面。
+        let modeled: [i64; 7] = [800, 622, 633, 634, 766, 54, 801];
+        // 已无登记缺口：剔除集必须是空集（保留变量名只为下方断言可读）。
+        let registered_gap: [i64; 0] = [];
 
         let mut catalog = StdItemCatalog::new();
         for (k, v) in doc["templates"].as_object().expect("templates") {
@@ -635,12 +769,12 @@ mod tests {
             };
             assert_eq!(
                 dropped, want_gap,
-                "{}: 被剔除的只许是登记缺口 766/54（oracle RM_CHANGEMAP 处理器的连带帧）",
+                "{}: 剔除集必须为空（766/54 已接线，不应再被剔除）",
                 c["name"]
             );
             assert_eq!(
                 got, want,
-                "{}: 线上帧严格序必须 635→800→622→633→634→801（逐字段）",
+                "{}: 线上帧严格序必须 635→800→622→633→634→766→54→801（逐字段）",
                 c["name"]
             );
 
@@ -821,8 +955,10 @@ mod tests {
         } else {
             assert_eq!(cases.len(), 5, "IT-13 用例数固定 5（夹具被改？）");
         }
-        let modeled: [i64; 5] = [800, 622, 633, 634, 801];
-        let registered_gap: [i64; 2] = [766, 54];
+        // 766/54（oracle `RM_CHANGEMAP` 处理器的连带帧）已由换图簇卡接线 ⇒ 进比较面。
+        let modeled: [i64; 7] = [800, 622, 633, 634, 766, 54, 801];
+        // 已无登记缺口：剔除集必须是空集（保留变量名只为下方断言可读）。
+        let registered_gap: [i64; 0] = [];
 
         let mut catalog = StdItemCatalog::new();
         for (k, v) in doc["templates"].as_object().expect("templates") {
@@ -1064,7 +1200,7 @@ mod tests {
             } else {
                 Vec::new()
             };
-            assert_eq!(dropped, want_gap, "{name}: 被剔除的只许是登记缺口 766/54");
+            assert_eq!(dropped, want_gap, "{name}: 剔除集必须为空（766/54 已接线）");
             if name == "eat_fail_shape5_in_war_area" {
                 want.push(sysmsg("此处无法使用"));
             }

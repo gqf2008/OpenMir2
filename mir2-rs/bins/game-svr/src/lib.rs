@@ -19227,9 +19227,11 @@ pub(crate) fn drain_map_change_at_time(
             );
             continue;
         };
-        // 地图文件名（`Envir.MapFileName`）：与进图 51 帧同源，取 `MapRegistry::name_of`。
+        // 地图文件名（`Envir.MapFileName` = `MapManager.cs:66-96` 的 `sMapFileName`）：
+        // **取图文件主干**（`[逻辑名|文件主干]` 的右半），不是逻辑名。只有 alias 图两者不同；
+        // 无 alias 时逐字节不变（`map_file_name == map_name`）。
         let map_file = registry
-            .and_then(|r| r.name_of(ev.map_id))
+            .and_then(|r| r.map_file_name_of(ev.map_id))
             .unwrap_or("")
             .as_bytes()
             .to_vec();
@@ -19266,8 +19268,25 @@ pub(crate) fn drain_map_change_at_time(
                 (0, 0, Vec::new())
             }
         };
-        let frames =
-            game_svr::sessionwire::map_change_frames(&ev, &map_file, day_bright, dir, light, &desc);
+        // 766/54 的输入（`Envir.Flag` / `Envir.MapDesc`）：与进图路径同源（`registry.flag_of/map_desc_of`）。
+        // 无注册表/无该图 ⇒ 两条连带帧不发并登记（不编造）。
+        let visual = match (
+            registry.and_then(|r| r.flag_of(ev.map_id)),
+            registry.and_then(|r| r.map_desc_of(ev.map_id)),
+        ) {
+            (Some(flag), Some(desc)) => Some(game_svr::sessionwire::MapVisual { flag, desc }),
+            _ => {
+                glog!(
+                    "WRN",
+                    "切图下行：map_id={} 缺 Envir.Flag/MapDesc ⇒ 不发 766/54（登记）",
+                    ev.map_id
+                );
+                None
+            }
+        };
+        let frames = game_svr::sessionwire::map_change_frames(
+            &ev, &map_file, day_bright, dir, light, &desc, visual,
+        );
         for f in frames {
             match f.route {
                 game_svr::sessionwire::Route::SelfOnly => {
@@ -88379,9 +88398,11 @@ mod tests {",
                 mir2_protocol::messages::SM_GOLDCHANGED,
                 mir2_protocol::messages::SM_CLEAROBJECTS,
                 mir2_protocol::messages::SM_CHANGEMAP,
+                mir2_protocol::messages::SM_AREASTATE,
+                mir2_protocol::messages::SM_MAPDESCRIPTION,
                 mir2_protocol::messages::SM_SPACEMOVE_SHOW,
             ],
-            "oracle 相对序：800 → 653 → 633 → 634 → 801"
+            "oracle 相对序：800 → 653 → 633 → 634 → 766 → 54 → 801"
         );
         // 相位：① 刷新 dec tick；`SpaceMove`/MoveToHome 不动 inc tick。
         assert_eq!(sessions["p22h"].p22.dec_game_gold_tick, 1001);
@@ -105133,9 +105154,11 @@ mod t279_dress_eff_tests {
             vec![
                 (901, messages::SM_CLEAROBJECTS),
                 (901, messages::SM_CHANGEMAP),
+                (901, messages::SM_AREASTATE),
+                (901, messages::SM_MAPDESCRIPTION),
                 (901, messages::SM_SPACEMOVE_SHOW),
             ],
-            "oracle 序：CLEAROBJECTS(633) → CHANGEMAP(634) → SPACEMOVE_SHOW(801)"
+            "oracle 序：CLEAROBJECTS(633) → CHANGEMAP(634) → AREASTATE(766) → MAPDESCRIPTION(54) → SPACEMOVE_SHOW(801)"
         );
 
         // ④ 落库面：存档记录取新图/新坐标（`build_save_record` 以世界会话+实体为准）。
