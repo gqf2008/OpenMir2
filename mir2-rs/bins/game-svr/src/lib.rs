@@ -12587,7 +12587,23 @@ impl SpellFrameBuf {
         priority: u8,
         body: &[u8],
     ) {
-        for target_id in chat::hear_targets(world, actor_id, chat::send_ref_msg_range()) {
+        let targets = chat::hear_targets(world, actor_id, chat::send_ref_msg_range());
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
+    }
+
+    /// **广播投递段（单一实现）**：收件人 id 已算好，逐收件人 `include_self` 过滤 +
+    /// `push_socket`（共享 body）。[`Self::push_broadcast`]（`chat::hear_targets`）与
+    /// [`Self::push_broadcast_cached`]（`ref_msg_cache::targets`）只差"收件人怎么来"。
+    fn deliver_broadcast_targets(
+        &mut self,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        targets: Vec<i32>,
+        include_self: bool,
+        priority: u8,
+        body: &[u8],
+    ) {
+        for target_id in targets {
             if !include_self && target_id == actor_id {
                 continue;
             }
@@ -12596,6 +12612,23 @@ impl SpellFrameBuf {
             };
             self.push_socket(t.socket, priority, body.to_vec());
         }
+    }
+
+    /// [`Self::push_broadcast`] 的**缓存版**（T-287 残余 #1，批 7 逐站点迁移专用）：
+    /// 投递段与 `push_broadcast` 逐字相同（`include_self` 过滤 / 逐收件人 `push_socket` /
+    /// 共享 body），只把收件人换成 `ref_msg_cache::targets`（500ms `VisibleHumanList` +
+    /// 命中时 `|Δ|<11`）。迁移完成后旧 `push_broadcast` 应无调用者。
+    fn push_broadcast_cached(
+        &mut self,
+        world: &mir2_world_bevy::World,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        include_self: bool,
+        priority: u8,
+        body: &[u8],
+    ) {
+        let targets = ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range());
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
     }
 
     /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
@@ -12793,7 +12826,9 @@ fn drain_mag_struck_b2(
                     smframe::sm_healthspellchanged_frame(o.target_id, o.hp_after, mp, max_hp);
                 buf.push_actor(online, o.target_id, P_HEALTH, body.clone());
                 if show_hp {
-                    buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
+                    // **T-287 残余 #1（7a）**：`HealthSpellChanged()` 的 ShowHp `SendRefMsg(53)`
+                    // 是本次受击链的**第一次** SendRefMsg ⇒ 首扫（含 Δ=±12 闭区间）。
+                    buf.push_broadcast_cached(world, online, o.target_id, true, P_HEALTH, &body);
                 }
             }
         } else if o.show_hp {
@@ -12808,7 +12843,8 @@ fn drain_mag_struck_b2(
             // 真机窗口若用非 12 配置，须以生效值复验 ±range 边界。
             let body =
                 smframe::sm_healthspellchanged_frame(o.target_id, o.hp_after, o.mp_after, o.max_hp);
-            buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
+            // **T-287 残余 #1（7a）**：怪 ShowHp 支的 `SendRefMsg(53)`（无 race 门），同上首扫。
+            buf.push_broadcast_cached(world, online, o.target_id, true, P_HEALTH, &body);
         }
         let Some(d) = displays.get(o.target_id) else {
             // 无展示表 ⇒ 造不出 `SM_STRUCK` 的 `Feature/Status`（保守跳过；怪物生产路径已登记）。
@@ -12825,13 +12861,19 @@ fn drain_mag_struck_b2(
             o.caster_id,
             true,
         );
-        buf.push_broadcast(world, online, o.target_id, true, P_STRUCKMAG, &body);
+        // **T-287 残余 #1（7a）**：`SendRefMsg(RM_STRUCK_MAG)`（`BaseObject.Base.cs` 的
+        // RM_MAGSTRUCK 支）是同 sender 的**第二次** SendRefMsg ⇒ 命中 500ms 缓存（`|Δ|<11`）。
+        buf.push_broadcast_cached(world, online, o.target_id, true, P_STRUCKMAG, &body);
         if let Some(nc) = o.hitter_name_color {
             hitter_name_colors.push(nc);
         }
         if o.name_color {
             let body = smframe::sm_changenamecolor(o.target_id, o.chr_color);
-            buf.push_broadcast(world, online, o.target_id, true, P_CHANGENAME, &body);
+            // **T-287 残余 #1（7a）**：`BreakHolySeizeMode → RefNameColor`（`AnimalObject.cs` /
+            // `BaseObject.cs`）的 `SendRefMsg(RM_CHANGENAMECOLOR)` 是**第三次** SendRefMsg ⇒ 命中缓存。
+            // 注意：此 656 的 sender 是**受击者**；攻击方 `SetPkFlag → RefNameColor` 的 656
+            // 是另一条（`hitter_name_color`，不在本函数 buf 里）。
+            buf.push_broadcast_cached(world, online, o.target_id, true, P_CHANGENAME, &body);
         }
     }
     hitter_name_colors
@@ -96187,6 +96229,198 @@ fn ",
                 assert_eq!(per.get(&(904, ident)), None, "次轮：|Δ|=12 被挡");
             }
         }
+    }
+
+    /// **T-287 残余 #1 / 7a**（`drain_mag_struck_b2`，跨帧族同窗口）：玩家受击一次 ⇒ oracle 顺序
+    /// `HealthSpellChanged()`(53) → `SendRefMsg(RM_STRUCK_MAG)`(31)（`BaseObject.Base.cs` 的
+    /// RM_MAGSTRUCK 支）。两者同 sender ⇒ 53 首扫、31 命中缓存：**|Δ|=11/12 只收 53**、
+    /// +5 两帧都收、+13 零帧。
+    ///
+    /// 牙：把 31 站点回退 `push_broadcast` ⇒ 次帧 Δ11/Δ12 也收 ⇒ 红。
+    #[test]
+    fn mag_struck_player_53_then_31_share_cache_window() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut victim_e = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
+        victim_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        victim_e.hp = 100;
+        victim_e.max_hp = 100;
+        let victim = world.add_entity(victim_e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: victim,
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(victim);
+        sg.show_hp = true; // ShowHp 读会话态
+        sessions.insert("victim".into(), sg);
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        world
+            .pending_mag_struck
+            .push(mir2_world_bevy::world::PendingMagStruck {
+                target_id: victim,
+                caster_id: 2,
+                power: 40,
+                mine: false,
+                order: 0,
+            });
+        let mut buf = SpellFrameBuf::new();
+        let _ = drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        buf.flush(&online, &gates);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let per = count_by_socket_ident(&frames);
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let struck = mir2_protocol::messages::SM_STRUCK;
+        assert_eq!(per.get(&(902, nc)), Some(&1), "+5：53 收");
+        assert_eq!(per.get(&(902, struck)), Some(&1), "+5：31 收");
+        assert_eq!(per.get(&(903, nc)), Some(&1), "|Δ|=11：53 收（首扫）");
+        assert_eq!(per.get(&(903, struck)), None, "|Δ|=11：31 被缓存挡掉");
+        assert_eq!(per.get(&(904, nc)), Some(&1), "|Δ|=12：53 收（首扫闭区间）");
+        assert_eq!(per.get(&(904, struck)), None, "|Δ|=12：31 被挡");
+        assert_eq!(per.get(&(905, nc)), None, "+13：53 零帧");
+        assert_eq!(per.get(&(905, struck)), None, "+13：31 零帧");
+    }
+
+    /// **T-287 残余 #1 / 7a**（怪受击三帧：53 → 31 → 656）：oracle 里 656 由受击怪自投
+    /// `RM_STRUCK` → `BreakHolySeizeMode()` → `RefNameColor()` 产生（`AnimalObject.cs`），
+    /// 是同一 sender 的**第三次** SendRefMsg ⇒ 再命中缓存。断言边界只收 53。
+    ///
+    /// 牙：把 656 站点回退 `push_broadcast` ⇒ Δ11/Δ12 也收 656 ⇒ 红。
+    #[test]
+    fn mag_struck_monster_53_31_656_share_cache_window() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut mon_e = mir2_world_bevy::EntitySpawn::new(0, "mon", 10, 10);
+        mon_e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon_e.hp = 100;
+        mon_e.max_hp = 100;
+        mon_e.show_hp = true;
+        let mon = world.add_entity(mon_e);
+        let mut online: OnlineRegistry = Vec::new();
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mon,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"mon".to_vec()),
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        world
+            .pending_mag_struck
+            .push(mir2_world_bevy::world::PendingMagStruck {
+                target_id: mon,
+                caster_id: 2,
+                power: 40,
+                mine: false,
+                order: 0,
+            });
+        let mut buf = SpellFrameBuf::new();
+        let _ = drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        buf.flush(&online, &gates);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let per = count_by_socket_ident(&frames);
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let struck = mir2_protocol::messages::SM_STRUCK;
+        let name = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        assert_eq!(per.get(&(902, nc)), Some(&1), "+5：53 收");
+        assert_eq!(per.get(&(902, struck)), Some(&1), "+5：31 收");
+        assert_eq!(per.get(&(902, name)), Some(&1), "+5：656 收");
+        assert_eq!(per.get(&(903, nc)), Some(&1), "|Δ|=11：53 收（首扫）");
+        assert_eq!(per.get(&(903, struck)), None, "|Δ|=11：31 被挡");
+        assert_eq!(per.get(&(903, name)), None, "|Δ|=11：656 被挡");
+        assert_eq!(per.get(&(904, nc)), Some(&1), "|Δ|=12：53 收");
+        assert_eq!(per.get(&(904, struck)), None, "|Δ|=12：31 被挡");
+        assert_eq!(per.get(&(904, name)), None, "|Δ|=12：656 被挡");
+        assert_eq!(per.get(&(905, nc)), None, "+13：零帧");
+    }
+
+    /// **7a 隐藏 sender 反向**：受击玩家 `ObMode` ⇒ 53/31 的 `targets` 都是 `[self]`
+    /// （oracle `SendRefMsg` 退化自投）⇒ 只有自己收，观察者零帧。
+    #[test]
+    fn mag_struck_hidden_player_only_self() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut victim_e = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
+        victim_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        victim_e.hp = 100;
+        victim_e.max_hp = 100;
+        victim_e.ob_mode = true;
+        let victim = world.add_entity(victim_e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: victim,
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(victim);
+        sg.show_hp = true;
+        sessions.insert("victim".into(), sg);
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        world
+            .pending_mag_struck
+            .push(mir2_world_bevy::world::PendingMagStruck {
+                target_id: victim,
+                caster_id: 2,
+                power: 40,
+                mine: false,
+                order: 0,
+            });
+        let mut buf = SpellFrameBuf::new();
+        let _ = drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        buf.flush(&online, &gates);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let per = count_by_socket_ident(&frames);
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        assert_eq!(
+            per.get(&(901, nc)),
+            Some(&2),
+            "隐藏：自己收（自见 + 退化自投各一份）"
+        );
+        assert_eq!(per.get(&(902, nc)), None, "隐藏：+5 零帧");
+        assert_eq!(per.get(&(903, nc)), None, "隐藏：Δ11 零帧");
+        assert_eq!(per.get(&(904, nc)), None, "隐藏：Δ12 零帧");
     }
 }
 
