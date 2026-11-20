@@ -200,3 +200,33 @@ if (userMagic.Level < 3 && boTrain) {
   sinsu 比较器 `640 due_ms_rel：Rust=0 vs golden=1000`。
 - 修后：三条全绿（另 `sinsu_cap_hit` 的 640=0 两断也绿）。
 - 反向牙（回 `send_self_frame`）：上述三条**同点复红**；还原后无 MUTATION 残留。
+
+## MG-18（10 疾光电影）：`(ushort)` 强度范围缺口（2026-11-21，实施中）
+
+> 与 640 无关，但同属"9/10 同形 vs 不对称"的事实，落在本卡备查。
+
+**oracle 的不对称（必须同样不对称地实现）**：
+- 9（`src/M2Server/Magic/MagicManager.cs:270`）：`GetAttackPower(GetPower+Lo(MC), Hi(MC)-Lo(MC)+1)` —— **无强转**；
+- 10（`:283`）：`GetAttackPower(GetPower+Lo(MC), **(ushort)(Hi(MC)-Lo(MC)+1)**)` —— **多一个 (ushort)**。
+
+⇒ `Hi < Lo` 时（本批夹具 `CasterMc=15` ⇒ Hi=0、Lo=15 ⇒ `-14`）：9 走钳制支；10 强转成 **65522**
+⇒ 巨大范围 ⇒ 抽到 30599 ⇒ `Round(pow*1.5)` ⇒ 一击致死。**这是 oracle 的真行为，不是 bug，
+也不应"统一 cast 一下更安全"**——统一会让 9 的红字/伤害面整体错位（见下面负向证明）。
+
+**实现**：`single_hit_power_mc(..., range_cast_ushort: bool)`；共享件**不认魔号**，只有
+`cast_pass_through_spell` 调用点按 `magic.magic_id == 10` 置真，其余三处调用点传 `false`。
+
+**证据（run_id `mg18b-20261121-073453`）**：skill10 s1/s5/s13 的 `Sent`（含 recog/due/tail）、
+`Rng`（cast+deliver）、`TargetHp` 与 golden **逐值相等**（s1 目标致死 100→0）；fire(9) 同 run 保持绿。
+
+**负向证明（证明参数真的只对 10 生效）**：把该参数**恒置真**（9 也走 ushort 支）⇒
+`[fire/s1] 术后 HP 与金标准 TargetHp 不符 left: Some(0) right: Some(85)`（9 也被打成致死），
+skill10 仍绿；恢复后源文件 sha 相等。
+
+**正常 MC 例（非负范围两侧同值）**：s5/s13 用 `CasterMcNoClamp = MakeWord(5,10)`（0x0A05，Hi=10>Lo=5，
+范围 6）⇒ 强转是恒等变换，两条 stem 的这三支都绿 ⇒ 修复没有扭曲正常路径。
+`s1` 的 `CasterMc=15` 负范围例**保留**：它是唯一能区分"有无 (ushort)"的输入，不是退化夹具。
+
+**已知残留（装置装配，不是产品）**：`skill10` 比较器仍红在**装配的 `RM_STRUCK_MAG(8103)`**——
+golden `wParam=23913` vs 台账 `154985`：同一受害者的第二条 8103 在驱动里用投递前的 `power`
+而非术后伤害；`Sent` 面三支逐帧相同。处置（修装配口径 / 有牙的 ident 例外）待定。
