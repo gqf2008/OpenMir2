@@ -8,7 +8,7 @@
 - oracle：`SysMsg(<文本>, Green, Hint)` → `SendMsg(RM_SYSMESSAGE, 0, GreenF, GreenB, 0, "<文本>")`（队列通知）。
 - 宿主：`QueuedNotice` 是**5 字段定长**（ident + 4 个数字参数），`notice_frame` 的 `RM_SYSMESSAGE` 走 `session.sys_msg`（**静态文本**）。
 - ⇒ 夹具层面：`notices` 只记 `ident + 颜色参数`，**不含文本** ⇒ **对拍能通过**；运行期层面：**这句话不会按 oracle 发**，玩家看不到。
-- 已确认同类：**StdMode1 食物** 的 `RM_SYSMESSAGE` / `RM_CHARSTATUSCHANGED`、**Shape9 修复油** 的 `WeaponRepairSuccess` 绿字。
+- 已确认同类：**StdMode1 食物** 的 `RM_SYSMESSAGE` / `RM_CHARSTATUSCHANGED`、**Shape9 修复油（IT-14）** 与 **Shape10 特修油（IT-15）** 共用的 `WeaponRepairSuccess` 绿字、**Shape11 彩票（IT-16）** 的 `WinLottery{N}Msg`（绿）与 `NotWinLotteryMsg`（红）。
 
 ## 2. 目标
 
