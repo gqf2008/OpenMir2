@@ -128,7 +128,7 @@ oracle 共享尾 `src/M2Server/Magic/MagicManager.cs` 的 `:659-669` 是**唯一
 | `spell_tail_p2_defence_amulet_consumed_and_tail_fires` | 施法批 911 有 640；序 `SPELL<FIRE<DURA<LVEXP` | 施法批 640=0（912 仍 0）；序 `SPELL<FIRE<DURA`；`deliver(1000)` 后 911 恰 1、912=0；载荷从交付帧取 |
 | `spell_tail_p2_amulet_rounding_and_delete_boundaries` | 门过支施法批 911 有 640 | 施法批 0；`deliver(1000)` 后 1（门不过支仍 0） |
 | `spell_tail_p2_shield_without_amulet_always_trains` | 门开 911 有 640；门关 0 | 门开施法批 0 + 交付 1；门关仍 0 |
-| `spell_p3b1_fireball_family_draw_order_and_frames` | 911 有 640 | 施法批 0；末尾 `deliver(1000)` 后 1（**放在取数/对照流断言之后**，避免交付抽数混进施法段窗口） |
+| `spell_p3b1_fireball_family_draw_order_and_frames` | 911 有 640 | 施法批 0；末尾 `deliver(1000)` 后 1（**放在取数/对照流断言之后**：`deliver(1000)` 会执行交付段抽数——如 `RM_DELAYMAGIC` 的 MSD `R(1000)`——放在前面会把交付抽数算进施法段窗口，实测由 6 抽变 7 抽，且对照流全等断言也会红） |
 | `spell_p3b1_lightening_family_draw_order_and_frames` | 同上 | 同上 |
 | `spell_p3b1_firecharm_amulet_gate_tail_and_asymmetry` | 自身序 `638<642<640`；911 有 640 | 施法批序 `638<642`、640=0；`deliver(1000)` 后 1 |
 | `spell_p3b1_hb_fireball_push_draws_follow_power` | 两支 911 各有 640 | 施法批各 0；交付各 1 |
