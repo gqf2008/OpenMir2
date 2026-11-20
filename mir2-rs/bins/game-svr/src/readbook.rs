@@ -55,8 +55,6 @@ pub struct MagicState {
     pub use_thrusting: bool,
     pub use_half_moon: bool,
     pub table: Option<Arc<game_svr::magics::MagicTable>>,
-    pub sys_thrusting_on: String,
-    pub sys_half_moon_on: String,
 }
 
 impl std::fmt::Debug for MagicState {
@@ -85,6 +83,7 @@ pub(crate) fn maybe_read_book(
     gates: &HashMap<u8, tokio::sync::mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn ItemCatalog,
     colors: &crate::MsgColors,
+    strings: &crate::strings::StringConf,
     dead: bool,
 ) -> bool {
     // `ClientUseItems`：`if (BoCanUseItem) { if (!Death) { … } }`（书不受 `boNODRUG`）。
@@ -113,16 +112,11 @@ pub(crate) fn maybe_read_book(
     let Some(magic) = table.find_by_name(&tpl.name) else {
         return false;
     };
-    // ② 已学（`IsTrainingSkill`）。
-    if crate::magicaudit::is_training_skill(&sg.magic.list, magic.magic_id) {
-        return false;
-    }
-    // ③ 职业：`magic.Job == 99 || magic.Job == (byte)Job`。
-    if magic.job != 99 && magic.job != sg.equip.job {
-        return false;
-    }
-    // ④ 等级：基础 `Abil.Level >= TrainLevel[0]`。
-    if i32::from(sg.equip.abil.level) < i32::from(magic.train_level[0]) {
+    // ②③④ 三门的**唯一实现**在 `world-bevy::magic::can_read_book`（`is_training_skill` 由
+    // `magicaudit::is_training_skill` 给出）——本模块不复制第二份判定（防两处口径漂移）。
+    let is_training = crate::magicaudit::is_training_skill(&sg.magic.list, magic.magic_id);
+    if !mir2_world_bevy::magic::can_read_book(magic, sg.equip.job, sg.equip.abil.level, is_training)
+    {
         return false;
     }
 
@@ -157,7 +151,7 @@ pub(crate) fn maybe_read_book(
                 payload: b"+LNG".to_vec(),
             });
         }
-        sys_msg = Some(sg.magic.sys_thrusting_on.clone());
+        sys_msg = Some(strings.thrusting_on().to_string());
     }
     if magic.magic_id == SKILL_BANWOL && !sg.magic.use_half_moon {
         sg.magic.use_half_moon = true;
@@ -167,7 +161,7 @@ pub(crate) fn maybe_read_book(
                 payload: b"+WID".to_vec(),
             });
         }
-        sys_msg = Some(sg.magic.sys_half_moon_on.clone());
+        sys_msg = Some(strings.half_moon_on().to_string());
     }
     // ③ `SM_EAT_OK(635)`（直发，先于队列消息）。
     if let Some(tx) = &tx {
@@ -315,8 +309,7 @@ mod tests {
     ///
     /// 红检（四门+两尾）：删「已学」判 ⇒ 已学例变成功；`job` 判恒真 ⇒ 职业不符例成功；
     /// 删 MagicList append ⇒ 成功例的帧/状态红；210 传 `sm_addmagic`（Level=1）⇒ 尾字节红。
-    #[test]
-    fn it17a_read_book_host_parity() {
+    fn run_readbook_parity(only: Option<&str>) {
         let doc = fixture();
         let magics: Vec<mir2_data::MagicInfo> = doc["magic_table"]
             .as_array()
@@ -340,8 +333,13 @@ mod tests {
             );
         }
 
-        let cases = doc["cases"].as_array().expect("cases").clone();
-        assert!(cases.len() >= 7, "至少 7 例（成功×2 + 四门 + 双失败）");
+        let mut cases = doc["cases"].as_array().expect("cases").clone();
+        if let Some(name) = only {
+            cases.retain(|c| c["name"].as_str() == Some(name));
+            assert_eq!(cases.len(), 1, "单例筛选 {name} 未命中");
+        } else {
+            assert!(cases.len() >= 8, "至少 8 例（成功×3 + 四门 + 双失败）");
+        }
         for c in &cases {
             let ctx = &c["ctx"];
             let expect = &c["expect"];
@@ -383,8 +381,6 @@ mod tests {
                 use_thrusting: false,
                 use_half_moon: false,
                 table: Some(std::sync::Arc::new(magic_table.clone())),
-                sys_thrusting_on: crate::strings::DEFAULT_THRUSTING_ON.to_string(),
-                sys_half_moon_on: crate::strings::DEFAULT_HALF_MOON_ON.to_string(),
             };
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".into(), sg);
@@ -431,6 +427,7 @@ mod tests {
                 &mut world,
                 &colors,
                 90,
+                &game_svr::strings::StringConf::default(),
                 None,
                 &unbind,
                 &mut item_number,
@@ -540,5 +537,41 @@ mod tests {
                 c["name"]
             );
         }
+    }
+
+    /// 全量（8 例）。
+    #[test]
+    fn it17a_read_book_host_parity() {
+        run_readbook_parity(None);
+    }
+
+    /// **成功支 + 原始串帧**（`+LNG`）：逐字节比 210/`+LNG`/635/622/657/100。
+    #[test]
+    fn it17a_success_ergum_raw_socket() {
+        run_readbook_parity(Some("eat_ok_book_ergum_learns_and_thrusting"));
+    }
+
+    /// **门②已学**：`MagicList` 已有 ⇒ 636、物品保留。
+    #[test]
+    fn it17a_gate_already_learned() {
+        run_readbook_parity(Some("eat_fail_book_already_learned"));
+    }
+
+    /// **门③职业不符**。
+    #[test]
+    fn it17a_gate_job_mismatch() {
+        run_readbook_parity(Some("eat_fail_book_job_mismatch"));
+    }
+
+    /// **门④等级边界**（`Abil.Level == TrainLevel[0]` ⇒ 可学，证明 `>=` 不是 `>`）。
+    #[test]
+    fn it17a_gate_level_boundary_equal() {
+        run_readbook_parity(Some("eat_ok_book_level_boundary_equal"));
+    }
+
+    /// **门①表里无名**。
+    #[test]
+    fn it17a_gate_magic_not_in_table() {
+        run_readbook_parity(Some("eat_fail_book_magic_not_in_table"));
     }
 }

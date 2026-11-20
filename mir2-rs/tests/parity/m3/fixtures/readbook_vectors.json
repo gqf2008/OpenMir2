@@ -137,7 +137,7 @@
       "desc": ""
     },
     {
-      "magic_id": 60,
+      "magic_id": 46,
       "name": "\u9AD8\u7EA7\u523A\u6740",
       "effect_type": 1,
       "effect": 8,
@@ -148,6 +148,34 @@
         30,
         31,
         32,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 49,
+      "name": "\u8FB9\u754C\u6280\u80FD",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        20,
+        21,
+        22,
         0
       ],
       "max_train": [
@@ -204,6 +232,13 @@
     {
       "index": 3006,
       "name": "\u9AD8\u7EA7\u523A\u6740",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3007,
+      "name": "\u8FB9\u754C\u6280\u80FD",
       "std_mode": 4,
       "shape": 0,
       "weight": 5
@@ -913,16 +948,14 @@
       }
     },
     {
-      "name": "eat_fail_book_already_learned_and_level_low",
+      "name": "eat_ok_book_level_boundary_equal",
       "ctx": {
-        "index": 3006,
-        "actor_id": 943006,
+        "index": 3007,
+        "actor_id": 943007,
         "level": 20,
         "job": 0,
-        "known": [
-          60
-        ],
-        "note": "\u95E8\u2461\u2462\u2463 \u540C\u65F6\u4E0D\u6EE1\u8DB3\uFF1A\u5DF2\u5B66(60) \u4E14 TL[0]=30\u003E20 \u21D2 636\uFF1B\u4E24\u6761\u5931\u8D25\u8DEF\u5F84\u5E27\u76F8\u540C \u21D2 \u987A\u5E8F\u4E0D\u53EF\u89C2\u6D4B\uFF08\u53EA\u8BC1\u5404\u81EA\u53EF\u8FBE\uFF09",
+        "known": [],
+        "note": "\u7B49\u7EA7\u95E8\u8FB9\u754C\uFF1AAbil.Level == TrainLevel[0] == 20 \u21D2 \u53EF\u5B66\uFF08\u0060\u003E=\u0060\uFF0C\u4E0D\u662F \u0060\u003E\u0060\uFF09",
         "seed": 20261120,
         "wabil_before": {
           "weight": 0,
@@ -930,7 +963,156 @@
           "hand_weight": 0
         },
         "magic": {
-          "magic_id": 60,
+          "magic_id": 49,
+          "name": "\u8FB9\u754C\u6280\u80FD",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            20,
+            21,
+            22,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3007,
+            "name": "\u8FB9\u754C\u6280\u80FD"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 210,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 1,
+            "payload": "00000000d2000000000001006464686b6464686b6464596b646459495b41474c4040644c5864685f6464686b6465606b6466686966647463696a68666c6468676454686964643c6b6564686b6464686b6467686b6464686b6464686b6464626b6464686b6464686b6464686b6464686b6464686b6464686b6464686b",
+            "len": 144
+          },
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007b02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "payload": "000000006e02000000004b8f",
+            "len": 32
+          },
+          {
+            "ident": 657,
+            "recog": 943007,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "9f630e009102000000000000",
+            "len": 32
+          }
+        ],
+        "pump_idents": [
+          10115,
+          10139
+        ],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 49,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [
+          {
+            "id": 49,
+            "level": 0
+          }
+        ],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_already_learned_and_level_low",
+      "ctx": {
+        "index": 3006,
+        "actor_id": 943006,
+        "level": 20,
+        "job": 0,
+        "known": [
+          46
+        ],
+        "note": "\u95E8\u2461\u2462\u2463 \u540C\u65F6\u4E0D\u6EE1\u8DB3\uFF1A\u5DF2\u5B66(46) \u4E14 TL[0]=30\u003E20 \u21D2 636\uFF1B\u4E24\u6761\u5931\u8D25\u8DEF\u5F84\u5E27\u76F8\u540C \u21D2 \u987A\u5E8F\u4E0D\u53EF\u89C2\u6D4B\uFF08\u53EA\u8BC1\u5404\u81EA\u53EF\u8FBE\uFF09",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 46,
           "name": "\u9AD8\u7EA7\u523A\u6740",
           "effect_type": 1,
           "effect": 8,
@@ -980,12 +1162,12 @@
         "pumped": [],
         "pump_idents": [],
         "magic_list_before": [
-          60
+          46
         ],
         "magic_arr_before": [],
         "magic_list": [
           {
-            "mag_idx": 60,
+            "mag_idx": 46,
             "level": 0,
             "key": 0,
             "train_point": 0

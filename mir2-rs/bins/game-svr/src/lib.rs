@@ -10586,7 +10586,7 @@ fn handle_eat_cmd(
     // 四门之一失败/非书 ⇒ 返回 false，交回 `use_item`（StdMode 4 无臂 ⇒ 636，与 oracle 失败支同帧）。
     // 书**不受 `boNODRUG`**（oracle `case 4` 直接 `ReadBook`），故只传 `dead`。
     if readbook::maybe_read_book(
-        world, sg, actor_id, recog, socket, online, gates, catalog, colors, dead,
+        world, sg, actor_id, recog, socket, online, gates, catalog, colors, strings, dead,
     ) {
         return;
     }
@@ -29911,14 +29911,6 @@ fn sim_loop(
                                                                 table: Some(std::sync::Arc::clone(
                                                                     &magic_table_arc,
                                                                 )),
-                                                                sys_thrusting_on: enter_cfg
-                                                                    .string_conf
-                                                                    .thrusting_on()
-                                                                    .to_string(),
-                                                                sys_half_moon_on: enter_cfg
-                                                                    .string_conf
-                                                                    .half_moon_on()
-                                                                    .to_string(),
                                                                 ..Default::default()
                                                             },
                                                             canot_pick_up_item: enter_cfg

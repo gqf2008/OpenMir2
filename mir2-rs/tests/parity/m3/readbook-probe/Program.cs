@@ -468,6 +468,7 @@ internal static class Program
         [3004] = "火球术",
         [3005] = "烈火剑法",
         [3006] = "高级刺杀",
+        [3007] = "边界技能",
     };
 
     private static string BookName(GameItemSystem table, ushort idx)
@@ -513,7 +514,9 @@ internal static class Program
             ["半月弯刀"] = MkMagic(25, "半月弯刀", 0, 15),
             ["火球术"] = MkMagic(1, "火球术", 1, 7),
             ["烈火剑法"] = MkMagic(26, "烈火剑法", 0, 40),
-            ["高级刺杀"] = MkMagic(60, "高级刺杀", 0, 30),
+            ["高级刺杀"] = MkMagic(46, "高级刺杀", 0, 30),
+            // 等级门边界：`Abil.Level(20) >= TrainLevel[0](20)` ⇒ **恰好可学**（`>=` 的边界牙）。
+            ["边界技能"] = MkMagic(49, "边界技能", 0, 20),
         };
         var engine = DispatchProxy.Create<IWorldEngine, StubProxy>();
         var sp = (StubProxy)(object)engine;
@@ -581,13 +584,20 @@ internal static class Program
                 Level = 20,
                 Note = "门④：烈火剑法 TL[0]=40 > 等级 20 ⇒ 636",
             }),
+            RunCase(table, net, "eat_ok_book_level_boundary_equal", new Ctx
+            {
+                Name = "eat_ok_book_level_boundary_equal",
+                Index = 3007,
+                Level = 20,
+                Note = "等级门边界：Abil.Level == TrainLevel[0] == 20 ⇒ 可学（`>=`，不是 `>`）",
+            }),
             RunCase(table, net, "eat_fail_book_already_learned_and_level_low", new Ctx
             {
                 Name = "eat_fail_book_already_learned_and_level_low",
                 Index = 3006,
                 Level = 20,
-                Known = new[] { 60 },
-                Note = "门②③④ 同时不满足：已学(60) 且 TL[0]=30>20 ⇒ 636；两条失败路径帧相同 ⇒ 顺序不可观测（只证各自可达）",
+                Known = new[] { 46 },
+                Note = "门②③④ 同时不满足：已学(46) 且 TL[0]=30>20 ⇒ 636；两条失败路径帧相同 ⇒ 顺序不可观测（只证各自可达）",
             }),
         };
 
