@@ -422,7 +422,7 @@ impl TickFrameQueue {
 | 4 | `handle_bag_cmd_with_magic` :5327 | `ClientTakeOn/TakeOffItems`（`Operate.cs:455/544`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
 | 5 | `handle_shop_cmd_inner`（升级武器）:7818 | `src/GameSrv/Npc/Merchant.cs:569-571`：`Index=0; RecalcAbilitys(); FeatureChanged(); SendMsg(RM_ABILITY)` | **2 / 1 / 1**（另有 41、52） | 无 |
 | 7 | spell 支 A（按魔法分） | ① `MagBubbleDefenceUp`（`CharacterObject.cs:96-114`）：`CharStatus=GetCharStatus(); if(nOldStatus!=CharStatus) StatusChanged();` ⇒ **条件发、无 SendUpdateMsg**；② `DefenceUp/MagDefenceUp`（`BaseObject.cs:2159-2186`）：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | ① 条件成立 **1 / 1 / 1**、不成立 **0/0/0**；② **2 / 1 / 1** | `shield.json` 1/1/1；`cloak.json` 1/1/1；`dejiwonho.json` 1/**2**/1；`bigcloak.json` **2/2/2**；`hangmajinbub.json` 49/98/49 |
-| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** | 无（buff 侧仅单测） |
+| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** ⇒ **2026-11-20 修正见 §14f：头去重模型下夹具场景两支都是 1** | 无（buff 侧仅单测） |
 | 11 | `apply_pending_gm_target_ops`（@删除技能）:22398 | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71` `mIPlayerActor.RecalcAbilitys()`（+`SendDelMagic` 直接帧 212） | **2 / 1 / 1** | 无（GM） |
 | 12 | 同上（第二分支）:22405 | 同上 | **2 / 1 / 1** | 无（GM） |
 | 13 | `drain_player_need_recheck_with_magic` :25072 | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if(boTakeItem){ SendDelItems; UseItems[i].Index=0; RecalcAbilitys(); }` | **2 / 1 / 1**（条件：该格确实被摘下） | 无 |
@@ -547,6 +547,46 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
 
 **全量三数（§51）**：`cargo test -p game-svr --lib` → `running 2226` / **2153 passed · 0 failed · 73 ignored**，rc=0。
 判据边界按 §14c/§47：只判逐 socket 计数与同 socket 参照帧位置；两条 657 相互先后、跨 socket 先后不判。
+
+## 14f. 657 自见条数是**队列状态**的函数：头去重模型与逐路径裁定（2026-11-20）
+
+**机制（只读核对，树 `walgit/master @ fd02c1b6d`）**：`SendUpdateMsg`（`src/M2Server/Actor/BaseObject.Message.cs:283-304`）
+在入队前只把**队首且同 `wIdent`** 的消息弹掉，再 `SendMsg(this, …)` 重新入队。`RecalcAbilitys` 在 `:2876`
+之前唯一入队是 `:2875 StatusChanged()` 的那条 657（扫过 `PlayObject.cs:2008-2876`，`:2884` 的另一 `SendRefMsg`
+在之后）。⇒
+- **`:2876` 时队列为空**（或只有 ≥155 的消息）⇒ 657 在队首 ⇒ 被自己弹掉再入队 ⇒ 自见净 **1**；
+- **队列里有 <155 的待办**（45=150/44=139/622=131/53=68…）⇒ 不去重 ⇒ 自见 **2**。
+
+**"自 2"不是规则，是队列状态的后果。** 6 份 magic golden 的条数是 **oracle 实测**（`mir2-rs/tests/parity/csharp/MagicGolden`
+反射替换 RNG、跑真实 `PlayObject`，golden 存每收件人真实 RM 队列 dump）：
+`shield` 1/1/1、`cloak` 1/1/1、`bigcloak` 2/2/2、`dejiwonho` 1/**2**/1、`hangmajinbub` 49/**98**/49、`uenhancer` **2**/1/1
+⇒ 这些是**权威值**，不得改。
+
+### 逐路径裁定（`opc-19` 2026-11-20 裁定：期望匹配**夹具场景**，不以另一条路径的可能值为准）
+| 路径 | `:2876` 时队首（依据） | 裁定 |
+|---|---|---|
+| 升级链 4 例（`c5_recovery`/`levelup_downlink`/`p31_levelup`/`tick_frame_order`） | `RM_WINEXP(139)` 先入队——`GetExp`（`PlayObject.Base.cs:149-169`）`:153` 先 `SendMsg(RM_WINEXP)`、`:162` 才 `HasLevelUp` | **2**（不变） |
+| `#9 boChg` | **无第二条**：`src/M2Server/ActorBuffSystem.cs:220-224` 只有 `CharStatus=GetCharStatus(); StatusChanged();`，**无 `SendUpdateMsg`** | **1**（master 原为 2 ⇒ 本批修正） |
+| `#9 boNeedRecalc` | `src/M2Server/ActorBuffSystem.cs:226-230` `RecalcAbilitys()`；夹具场景队列空 | **1**（master 原为 2 ⇒ 本批修正） |
+| `#1` GM `@Level0` | `HasLevelUp`（`PlayObject.cs:5242-5250`）在 `:2876` 前无入队；`RM_LEVELUP` 在其后 | **1**（夹具=空队列） |
+| `#2` GM `@改属性` | `src/Modules/GameCommand/Commands/SmakeItemCommand.cs:59-60`：改槽 → `RecalcAbilitys()`；`:2876` 前无入队 | **1** |
+| `#13` P21 `boTakeItem` | P21 在消息泵之后（`PlayObject.Message.cs:163-227`）；夹具无 P1/P2 事件 | **1** |
+| `#11/#12` DelSkill（**未接线**） | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:59-71`：先 `SendDelMagic`（直接帧）+ 两条 `SysMsg`（100=**252**）再 `RecalcAbilitys` ⇒ 252>155，657 仍是队首 | 接线按 **1** 设计 |
+| `readbook`（已有 golden） | 队列空 ⇒ 头去重 ⇒ 1；golden `readbook_vectors.json` 实测 `pump_idents [10115,10139,11004]` = 1 条 | **1**（Rust 正确） |
+| `CM_ADJUST_BONUS`（`lib.rs` 自队列） | 宿主用 `msgqueue::send_update_msg` 已实现同一头去重 | 1（与 oracle 同口径） |
+
+### 本批（`card/charstatus-657-b13`）据此修正
+- 新增原语 `send_charstatuschanged_self_once_and_observers`（自见 1 + 观察者逐收件人）；
+  `send_charstatuschanged_self_and_observers`（三动作 = 2 条）**只保留给队列非空的场景**（升级链）。
+- `#1`/`#2`/`#13`/`#9` 两支改为 1；对应期望回退（`level0` 五条→四条、`gm_smake` `[657,657,203,100]`→`[657,203,100]`、
+  `p21` 两例与 buff 三例同步）。
+- T-288 仍是"657 先于 203"的已登记偏差（条数 1，位置差位不变）。
+
+### 硬约束与未覆盖面
+- **在逐路径判定前，任何新站点不得按"自 2"接线**；默认按"夹具队列空 ⇒ 1"，除非能指出 `:2876` 前确有的 <155 入队。
+- **"2 条情形"（recalc 前已有 622/638/53 待办）本批未覆盖**（夹具都是空队列）——这是**未覆盖**，不是"不成立"；
+  需要时另立卡造该场景（如 `uenhancer` 的 638 前置入队形态可复用）。
+- 登录批的两条 657（`smframe.rs` 两槽）按同一把尺子**待核**（oracle 登录时队列是否为空）。
 
 ## 15. 片① 交付记录（2026-11-20，`openmir2-10`）
 
