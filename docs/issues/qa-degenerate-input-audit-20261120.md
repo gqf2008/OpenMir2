@@ -254,3 +254,20 @@ cargo test -p mir2-parity-tests --test magic_fireball_parity -- --exact --ignore
 驱动内部会 `set_var("MIR2_CLIENT_ABILITY_LAYOUT","0")`（`fireball_parity_drive` /
 `uenhancer_parity_drive` / `groupdeding_parity_drive` / `healing_parity_drive` 四处），
 外部**不需要**导出。
+
+### 9.4 已登记的盲区与修订（§57 门首跑发现）
+
+- **盲区（"对拍绿"的第二种形态）**：驱动在**写完台账之后**、由自身**硬编码断言**失败时，
+  比较器看不见——比较器比的是"Rust 台账 vs golden"，硬编码断言比的是"Rust 值 vs 字面量"，
+  **两套独立判据面**。所以合并门必须**同时**看驱动 rc 与比较器 rc，任一条红都不算绿。
+  （比较器对"台账缺失/陈旧"是敏感的：缺文件、缺 `run.json`、`run_id` 不符都会 panic，§28。）
+- **正确写法**：驱动断言一律取自 golden。`fireboom_assert` 的注释就是这条规矩：
+  「期望取自金标准（§22：不写死数值）」。
+- **本次修订（第三处过期硬编码）**：`snowwind_assert` 对 golden 的 `TargetHp` 断言常量
+  `Some(85)`（消息"实测伤害 15"），三支共用；0 世代三支伤害恒 15 所以一直绿，MC 区间点亮后
+  s5/s13 合法变为 94/90 ⇒ 该常量把**正确**输出判红，且它从未真正验过"Rust HP == golden"。
+  已改为取 golden（`TargetHpBefore` 取 `Fixture.target_hp`、`TargetHp` 取 golden `TargetHp`）。
+  前两处同类问题是 `cloak_assert` / `big_cloak_assert` 的 `(0,0,0)`。
+  **三处同一个病：拿当时的实现输出/当时的夹具值当常量写进断言。**
+- **扫描结论**：修复后全文件已无 `c["…"]` 与 `Some(<字面量>)` 的比对形态；其余 assert 的
+  HP 面要么取自 golden，要么是结构量（帧序 / RM/SM 条数）。
