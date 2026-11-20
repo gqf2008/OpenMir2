@@ -3,8 +3,9 @@
   "domain": "npc",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "9f38e5b716a7d26f58063bd16e03fa9a613c8f59",
-    "time": "2026-11-20T01:45:00+08:00"
+    "head": "8b738d9874146351397a94861b74898e29355a1a",
+    "time": "2026-11-20T10:44:09+08:00",
+    "note": "2026-11-20 重测于 8b738d987：verified = NP-01..NP-11（11/11）；旧 head 9f38e5b7 时为 1 verified（计数未重测）"
   },
   "status_enum": [
     "verified",
@@ -276,7 +277,7 @@
       "evidence": {
         "test": "np01_click_main_matches_oracle_golden",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
-        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json（等各 np0x golden 的 sm[] 面）",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json (click_main_ok)；同目录 np02_dialog_select.json (dlg_ask_ok)、np07_chain_break.json (chain_break)、np09_var_text.json (var_username)",
         "cases": [
           "click_main_ok",
           "dlg_ask_ok",
@@ -354,7 +355,7 @@
       "evidence": {
         "test": "np11_aoi_matches_oracle_golden",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
-        "fixture": "mir2-rs/tests/parity/golden/npc/aoi/fresh_scan.json",
+        "fixture": "mir2-rs/tests/parity/golden/npc/aoi/fresh_scan.json (fresh_scan)、mir2-rs/tests/parity/golden/npc/aoi/cache_window.json (cache_window)",
         "cases": [
           "fresh_scan",
           "cache_window"

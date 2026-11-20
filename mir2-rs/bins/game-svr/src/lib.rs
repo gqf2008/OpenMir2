@@ -89289,8 +89289,8 @@ GMEXECUTE f
             assert!(!arr.is_empty(), "{file} 零用例 ⇒ 红（防空转）");
             arr
         };
-        // NP-03 的 golden 已产，但 Rust 驱动器（商家装载链）等 ca 合入后再接；
-        // 这里只断言该 golden 非空（防空转），不把它塞进本比较器。
+        // NP-03 的 golden 由商家装载链驱动（`np03_rig()`）；`menu_main/menu_buy/menu_sell/menu_storage`
+        // 分支在本比较器里逐 case 断言（帧 ident 序 + 说词尾 + `ScriptCurrLable`），防空转断言保留。
         let np03 = read_cases("np03_merchant_menu.json");
         let np04 = read_cases("np04_main_selection.json");
         let np05 = read_cases("np05_extjmp.json");
