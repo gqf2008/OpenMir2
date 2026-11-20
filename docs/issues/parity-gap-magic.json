@@ -631,17 +631,24 @@
         "line": 319,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "skeleton_parity_summon_ok / skeleton_parity_cap_hit + real_rust_ledger_skeleton",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器，:1243）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/skeleton.json（magic_id=17；契约三键齐）",
+        "cases": [
+          "summon_ok",
+          "cap_hit"
+        ],
+        "unit_tests": [
+          "skeleton_cast_smoke"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级 2026-11-20 升格：接线早已存在（比较器 `magic_fireball_parity.rs:1243`、驱动 `skeleton_parity_*`、golden `skeleton.json`），此前只是未做升格动作；本日三重验证——作者三牙（`3b` PASS @ `82c8d36e8`）+ 本次实跑两驱动与比较器全绿。",
+      "basis": "semantic",
+      "scope": "partial：骨架路径在 `OfflineWorldEngine` 替身上运行（41 成员：1 真实 / 15 最小实值 / 25 抛 `NotImplementedException`，骨架路径未触达抛错项）；`summon_ok`（半补 + adopt + nMaxMob）与 `cap_hit`（等级上限门）两支逐帧对拍；三条变异牙（删半补 / `make_slave_gate` 恒真 / `slave_count` 写死）已证：红层分别在 block 标量与三断「实体数不增」「slave_count 不变」。"
     },
     {
       "id": "MG-25",
