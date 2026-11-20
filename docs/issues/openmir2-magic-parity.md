@@ -1207,3 +1207,32 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   四个比较器（lightflower/fireboom/snowwind/fireboom47）ok；`cargo test -p game-svr --lib`
   **2055 passed / 0 failed**；`fmt` rc=0；`clippy --workspace --all-targets -D warnings` rc=0。
 - **MG-38 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **18/65**。
+
+### 35. 已升格条目的对象类型覆盖口径（2026-11-20，普查）
+
+**方法（可复跑）**：在 `src/M2Server/Magic/MagicManager.cs` 里同时统计
+`ActorRace.Animal` / `ActorRace.Play` / `LifeAttrib`（undead） / `Master|IsSlave` 四类判据，
+并按"最近一个 `case MagicConst.X:` + 当前所在 `static` 函数"归属；再与 verified 清单对照。
+
+**结论**：**7 条已升格条目的 verified 只覆盖"玩家 target"路径**，其 oracle 中的对象类型分支未覆盖：
+
+| 条目 | 魔号 | 未覆盖分支（oracle 位置） |
+|---|---|---|
+| MG-11 | 5 `SKILL_FIREBALL2` | `Race >= ActorRace.Animal` |
+| MG-19 | 11 `SKILL_LIGHTENING` | `LifeAttrib == LA_UNDEAD` 与 `Race >= Animal` |
+| MG-27 | 13 `SKILL_FIRECHARM` | `Race >= Animal` |
+| MG-54 | 45 `SKILL_45` | `LifeAttrib == LA_UNDEAD` 与 `Race >= Animal` |
+| MG-53 | 44 `SKILL_44` | 共享 helper `MagHbFireBall` 的 `Race >= Animal` |
+| MG-38 | 24 `SKILL_LIGHTFLOWER` | 共享 helper `MagElecBlizzard` 的 `LifeAttrib != LA_UNDEAD` |
+| MG-32 | 18 `SKILL_CLOAK` | 共享 helper `MagMakePrivateTransparent` 的 `Race >= Animal && TargetCret == baseObject` |
+
+**其余 10 条已升格条目（魔号 1、2、14、15、19、28、29、31、33、47）的对象门只有
+`IsProperTarget` / `IsProperFriend` 一类**，对玩家目标已覆盖；`MagBigExplosion`（23/33/47）与
+`MagMakeGroupTransparent`（19）内无对象类型分支。
+
+**口径**：上述 7 条的 `verified` 结论**不得**外推到怪物/不死目标；怪物/不死目标的覆盖需等"动物/怪物夹具"
+落地后逐条补场景（另立卡）。本清单只做范围限定，**不改任何条目 status**。
+
+**范围外（未升格，登记供后续）**：`SKILL_AMYOUNSUL(6)`、`SKILL_GROUPLIGHTENING(42)`、`SKILL_GROUPAMYOUNSUL(48)`、
+`SKILL_GROUPDEDING(39)`、`SKILL_TAMMING`（`!Animal` 反门 + `MagTamming` 的 Master/undead/几率分支）、
+`MagTurnUndead`（`SuperMan || LifeAttrib != LA_UNDEAD`）、`MabMabe`（`Race == Play` 两支）——它们本来就未升格。

@@ -304,7 +304,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-12",
@@ -490,7 +490,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-20",
@@ -677,7 +677,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-28",
@@ -809,7 +809,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。"
+      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-33",
@@ -961,7 +961,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。",
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
       "basis": "semantic"
     },
     {
@@ -1334,7 +1334,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-54",
@@ -1364,7 +1364,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
     },
     {
       "id": "MG-55",
