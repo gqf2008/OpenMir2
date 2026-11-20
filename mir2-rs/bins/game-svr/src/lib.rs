@@ -69715,7 +69715,7 @@ SendRefMsgRange=15
 
     /// 39 的 rig：几何/魔表与 C# Golden 同（caster 100,100；target 101,100；obs_in 105,100；
     /// obs_out 140,100；魔表 `{39, effect=1, effect_type=1, train_lv=0}`）。
-    fn groupdeding_rig(id_base: i32) -> SpellFrameRig {
+    fn groupdeding_rig(id_base: i32, mc: u16, sc: u16) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -69749,8 +69749,8 @@ SendRefMsgRange=15
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
             sg.state.wabil.level = 30;
-            sg.state.wabil.mc = 15;
-            sg.state.wabil.sc = 15;
+            sg.state.wabil.mc = mc;
+            sg.state.wabil.sc = sc;
             sg.state.wabil.hp = 500;
             sg.state.wabil.max_hp = 500;
         }
@@ -69845,7 +69845,9 @@ SendRefMsgRange=15
         let run_id = ledger_run_id();
         let seed = golden_seed(stem, label);
 
-        let mut rig = groupdeding_rig(id_base);
+        let mc = golden_fixture_required(stem, label, "caster_mc");
+        let sc = golden_fixture_required(stem, label, "caster_sc");
+        let mut rig = groupdeding_rig(id_base, mc, sc);
         let target = fireball_actor(&rig, "target");
         if let Some(a) = golden_fixture_opt(stem, label, "anti_magic") {
             rig.world
@@ -70147,8 +70149,9 @@ SendRefMsgRange=15
     // ======================================================================
 
     /// 36 的 rig：与 C# Golden 同几何；caster 用**登录序 Abil**（level=30/max_exp=50，由
-    /// `recalc_session_ability` 派生），但 `WAbil.SC=15` 保留给 `nTime` 的 `Lo(SC)*10` 输入。
-    fn uenhancer_rig(id_base: i32) -> SpellFrameRig {
+    /// `recalc_session_ability` 派生）；`WAbil.MC/SC` 取自 golden `Fixture`（36 的记录值是 SC=15，
+    /// 保留给 `nTime` 的 `Lo(SC)*10` 输入）。
+    fn uenhancer_rig(id_base: i32, mc: u16, sc: u16) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -70181,12 +70184,12 @@ SendRefMsgRange=15
         }
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
-            // 登录序 Abil（RecalcLevelAbilitys 的输入），其余 ctor 缺省；SC 由夹具保持 15。
+            // 登录序 Abil（RecalcLevelAbilitys 的输入），其余 ctor 缺省；MC/SC 由 golden Fixture 传入。
             sg.equip.abil.level = 30;
             sg.equip.abil.max_exp = 50;
             sg.state.wabil.level = 30;
-            sg.state.wabil.mc = 15;
-            sg.state.wabil.sc = 15;
+            sg.state.wabil.mc = mc;
+            sg.state.wabil.sc = sc;
             // 卡 36 / B-hp：oracle `MagicGolden/Program.cs:1632-1636` 的 `targetNull` 分支把 caster
             // `WAbil.HP/MaxHP` 覆盖成 `targetHp/TargetMaxHp=100` ⇒ rig 起点须为 100（非 500）。
             // recalc 会把 MaxHP 重算为 Abil 派生值（419），HP 保留 100。
@@ -70254,7 +70257,9 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = uenhancer_rig(id_base);
+        let mc = golden_fixture_required(stem, label, "caster_mc");
+        let sc = golden_fixture_required(stem, label, "caster_sc");
+        let mut rig = uenhancer_rig(id_base, mc, sc);
         if let Some(h) = golden_fixture_opt(stem, label, "hit_speed") {
             let h = u16::try_from(h).unwrap_or(0);
             if h > 0 {
@@ -70444,7 +70449,13 @@ SendRefMsgRange=15
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
-    fn fireball_rig(id_base: i32, magic_id: u16, sc: u16, user_magic_level: u8) -> SpellFrameRig {
+    fn fireball_rig(
+        id_base: i32,
+        magic_id: u16,
+        mc: u16,
+        sc: u16,
+        user_magic_level: u8,
+    ) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -70479,7 +70490,7 @@ SendRefMsgRange=15
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
             sg.state.wabil.level = 30;
-            sg.state.wabil.mc = 15;
+            sg.state.wabil.mc = mc;
             sg.state.wabil.sc = sc;
             sg.state.wabil.mp = 0;
             sg.state.wabil.max_mp = 0;
@@ -70616,7 +70627,6 @@ SendRefMsgRange=15
     fn fireball_parity_drive(
         stem: &str,
         magic_id: u16,
-        sc: u16,
         user_magic_level: u8,
         label: &str,
         seed: i32,
@@ -70644,7 +70654,10 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = fireball_rig(id_base, magic_id, sc, user_magic_level);
+        // **输入一律从 golden 读**（缺键即红；硬编码 15 正是此前的假绿根源）。
+        let mc = golden_fixture_required(stem, label, "caster_mc");
+        let sc = golden_fixture_required(stem, label, "caster_sc");
+        let mut rig = fireball_rig(id_base, magic_id, mc, sc, user_magic_level);
         // **buff 生产链前提**（14/15/31 的 A-5 块）；其它魔号不受影响（A-5 块只认这三支）。
         if matches!(magic_id, 14 | 15 | 31) {
             rig.world.enable_buff_tick();
@@ -71433,7 +71446,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball",
             1,
-            0,
             1,
             "miss",
             golden_seed("fireball", "miss"),
@@ -71449,7 +71461,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball",
             1,
-            0,
             1,
             "edge",
             golden_seed("fireball", "edge"),
@@ -71465,7 +71476,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball",
             1,
-            0,
             1,
             "hit",
             golden_seed("fireball", "hit"),
@@ -71483,7 +71493,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball5",
             5,
-            0,
             1,
             "miss",
             golden_seed("fireball5", "miss"),
@@ -71498,7 +71507,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball5",
             5,
-            0,
             1,
             "edge",
             golden_seed("fireball5", "edge"),
@@ -71513,7 +71521,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "fireball5",
             5,
-            0,
             1,
             "hit",
             golden_seed("fireball5", "hit"),
@@ -71558,7 +71565,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning11",
             11,
-            0,
             1,
             "miss",
             golden_seed("lightning11", "miss"),
@@ -71574,7 +71580,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning11",
             11,
-            0,
             1,
             "edge",
             golden_seed("lightning11", "edge"),
@@ -71590,7 +71595,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning11",
             11,
-            0,
             1,
             "hit",
             golden_seed("lightning11", "hit"),
@@ -71606,7 +71610,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning45",
             45,
-            0,
             1,
             "miss",
             golden_seed("lightning45", "miss"),
@@ -71622,7 +71625,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning45",
             45,
-            0,
             1,
             "edge",
             golden_seed("lightning45", "edge"),
@@ -71638,7 +71640,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "lightning45",
             45,
-            0,
             1,
             "hit",
             golden_seed("lightning45", "hit"),
@@ -71648,8 +71649,14 @@ SendRefMsgRange=15
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
 
-    /// `2 治愈` 的夹具（与火球同几何/ActorId 段；**SC=15**、目标 HP 与施法者 HP 可配）。
-    fn healing_rig(id_base: i32, target_hp: u16, caster_hp: u16) -> SpellFrameRig {
+    /// `2 治愈` 的夹具（与火球同几何/ActorId 段；`MC/SC` 由 golden `Fixture` 传入、目标 HP 与施法者 HP 可配）。
+    fn healing_rig(
+        id_base: i32,
+        target_hp: u16,
+        caster_hp: u16,
+        mc: u16,
+        sc: u16,
+    ) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -71681,8 +71688,8 @@ SendRefMsgRange=15
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
             sg.state.wabil.level = 30;
-            sg.state.wabil.mc = 15;
-            sg.state.wabil.sc = 15;
+            sg.state.wabil.mc = mc;
+            sg.state.wabil.sc = sc;
             sg.state.wabil.mp = 0;
             sg.state.wabil.max_mp = 0;
             sg.state.wabil.hp = caster_hp;
@@ -71731,7 +71738,9 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = healing_rig(id_base, hp, caster_hp);
+        let mc = golden_fixture_required("healing", label, "caster_mc");
+        let sc = golden_fixture_required("healing", label, "caster_sc");
+        let mut rig = healing_rig(id_base, hp, caster_hp, mc, sc);
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
@@ -72102,7 +72111,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "firecharm",
             13,
-            15,
             1,
             "miss",
             golden_seed("firecharm", "miss"),
@@ -72119,7 +72127,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "firecharm",
             13,
-            15,
             1,
             "edge",
             golden_seed("firecharm", "edge"),
@@ -72136,7 +72143,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "firecharm",
             13,
-            15,
             1,
             "hit",
             golden_seed("firecharm", "hit"),
@@ -72165,7 +72171,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "hbfireball",
             44,
-            0,
             3,
             "miss",
             golden_seed("hbfireball", "miss"),
@@ -72192,7 +72197,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "hbfireball",
             44,
-            0,
             3,
             "edge",
             golden_seed("hbfireball", "edge"),
@@ -72222,7 +72226,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "hbfireball",
             44,
-            0,
             3,
             "hit",
             golden_seed("hbfireball", "hit"),
@@ -72262,7 +72265,7 @@ SendRefMsgRange=15
     }
 
     fn shield_assert(label: &str, seed: i32, base: i32) {
-        fireball_parity_drive("shield", 31, 0, 1, label, seed, base);
+        fireball_parity_drive("shield", 31, 1, label, seed, base);
         fireball_case_assert("shield", label);
         b1_golden_drain_assert("shield.json", label, 2);
         let c = shield_case(label);
@@ -72304,7 +72307,7 @@ SendRefMsgRange=15
     /// ⇒ 应用帧不出现（无 657、无施加事件）；开了才出现（上面三支）。
     #[test]
     fn shield_buff_tick_gate_off_emits_no_buff_frames() {
-        let mut rig = fireball_rig(1000, 31, 0, 1); // 注意：**不** enable_buff_tick
+        let mut rig = fireball_rig(1000, 31, 15, 0, 1); // 注意：**不** enable_buff_tick
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
         let target = fireball_actor(&rig, "target");
         rig.cast(31, (101, 100), target);
@@ -72433,6 +72436,26 @@ SendRefMsgRange=15
     }
 
     /// 金标准 `Fixture` 的某个整数字段（**不存在时返回 None**：有则按 golden、无则保持夹具缺省）。
+    /// **必填**的 `Fixture` 整数字段：缺键/越界 ⇒ 红。
+    /// 不许默认兜底——历史上 `wabil.mc = 15` 的硬编码让「golden 声称 15、实际用 0x0A05」的
+    /// 断链静默通过了整轮对拍（见卡输入可追溯性审计 2026-11-20）。
+    fn golden_fixture_required(stem: &str, label: &str, key: &str) -> u16 {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        let v = golden_case(&file, label)["Fixture"][key]
+            .as_u64()
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{stem}/{label}] 金标准 Fixture 缺 `{key}`（必须显式记录实际输入，不许默认兜底）"
+                )
+            });
+        u16::try_from(v).unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.{key}={v} 越界 u16"))
+    }
+
     fn golden_fixture_opt(stem: &str, label: &str, key: &str) -> Option<u64> {
         let file = match stem {
             "fireball5" => "fireball-5.json".to_string(),
@@ -72655,7 +72678,7 @@ SendRefMsgRange=15
     }
 
     fn defence_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, magic_id, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
         let c = defence_case(stem, label);
@@ -72805,7 +72828,7 @@ SendRefMsgRange=15
     /// **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
     /// **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
     fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, 33, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 33, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert("snowwind.json", label, 4);
         let c = defence_case(stem, label);
@@ -72929,7 +72952,7 @@ SendRefMsgRange=15
     /// p2=max_hp/p3=caster,167)、8090(攻击方 hearers,154)、10123(caster,255)。
     /// 来源 = `World::struck_log` 内部观测面（**不由 SM 31 反推**）。
     fn fireboom_assert(stem: &str, magic_id: u16, golden: &str, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, magic_id, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert(golden, label, 4);
         let c = defence_case(stem, label);
@@ -73054,7 +73077,6 @@ SendRefMsgRange=15
         fireball_parity_drive(
             "unamyounsul",
             40,
-            15,
             1,
             label,
             golden_seed("unamyounsul", label),
@@ -73103,7 +73125,7 @@ SendRefMsgRange=15
     /// 判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项相等 + RM 多重集。
     /// **不是**「顺序相等」——是「不判」。
     fn big_cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, 19, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 19, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert("bigcloak.json", label, 3);
         let c = defence_case(stem, label);
@@ -73218,7 +73240,7 @@ SendRefMsgRange=15
         caster_frames: &[i64],
         heal_targets: &[&str],
     ) {
-        fireball_parity_drive(stem, 29, 15, 1, label, golden_seed(stem, label), base);
+        fireball_parity_drive(stem, 29, 1, label, golden_seed(stem, label), base);
         let dir = magic_ledger_dir();
         let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
             .expect("台账必须已落盘");
@@ -73333,7 +73355,7 @@ SendRefMsgRange=15
     ///   `STATETRANSPARENT`（隐身走 `HideMode/Transparent` 字段），RM 10139 的 p1 同为 0；
     /// - RM：caster 有 10125(642,141)/10139(155)/10123(慢 255)，众人有 10139。
     fn cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {
-        fireball_parity_drive(stem, 18, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 18, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert("cloak.json", label, 2);
         let c = defence_case(stem, label);
@@ -73446,7 +73468,7 @@ SendRefMsgRange=15
     /// 10410(每收件人) 各到位；`SM 53` 预计 0 条（无 HP 变化）。门不过 ⇒ 以上全 0。
     /// 实体==WAbil 的前提断言在 [`fireball_parity_drive`] 内（卡 §25(b)）。
     fn showhp_assert(stem: &str, label: &str, seed: i32, base: i32, pass: bool) {
-        fireball_parity_drive(stem, 28, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 28, 1, label, seed, base);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert("showhp.json", label, if pass { 3 } else { 2 });
         let c = defence_case(stem, label);
