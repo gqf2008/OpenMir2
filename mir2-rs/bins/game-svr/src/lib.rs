@@ -69626,6 +69626,153 @@ SendRefMsgRange=15
         skeleton_parity_drive("cap_hit", 2000);
     }
 
+    /// 30 `SKILL_SINSU`（神兽）夹具 rig：镜像 skeleton，魔号 30。
+    fn sinsu_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            30,
+            &[(30, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 30,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+        }
+        rig
+    }
+
+    /// 30 `SKILL_SINSU` 真实台账驱动（**首批仅 `summon_ok`**；`cap_hit` 回召待 openmir2-golden-harness-mapmgr）。
+    ///
+    /// 神兽 race=113（ELF_MONSTER）→ `apply_slave_level_abilitys` 0.3 第一支；HP=stub 17 ⇒ max 24，半补 20。
+    /// **不比 `Rng`**（离线替身 `RegenMonsterByName` 不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源——
+    /// 与 skeleton 同因；`Rng` 面单列，未纳入本批对拍）。
+    fn sinsu_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "sinsu";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let mut rig = sinsu_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+
+        let entities_before = rig.world.entities.len();
+        let slave_before = rig.world.slave_count(caster);
+
+        let mon = mir2_data::MonsterInfo {
+            name: "神兽".into(),
+            race: 113,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        rig.cast_slave(30, (101, 100), target, vec![mon]);
+        let (frames, _raws) = rig.drain();
+
+        let entities_after = rig.world.entities.len();
+        let slave_after = rig.world.slave_count(caster);
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(usize::MAX);
+
+        let slave_ids: Vec<i32> = rig
+            .world
+            .entities
+            .get(caster)
+            .map(|c| c.slave_list.clone())
+            .unwrap_or_default();
+        let new_slaves: Vec<serde_json::Value> = slave_ids
+            .into_iter()
+            .filter_map(|id| rig.world.entities.get(id))
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.entity().name,
+                    "level": e.level,
+                    "hp": e.hp,
+                    "max_hp": e.max_hp,
+                    "master_is_caster": e.master == Some(caster),
+                })
+            })
+            .collect();
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": [],
+                "Sent": fireball_sent(&frames, socket),
+            }));
+        }
+
+        let sinsu = serde_json::json!({
+            "stub_wabil_hp": 17,
+            "stub_abil_max_hp": 17,
+            "stub_monster_race": 113,
+            "pre_slave_count": slave_before,
+            "slave_count_before": slave_before,
+            "slave_count_after": slave_after,
+            "regen_calls": regen,
+            "new_slaves": new_slaves,
+        });
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "SinSu": sinsu,
+            "world_entities_before": entities_before,
+            "world_entities_after": entities_after,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[sinsu {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
+            frames.len(),
+            ledger[0]["SinSu"]["new_slaves"].as_array().map_or(0, |a| a.len()),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn sinsu_parity_summon_ok() {
+        sinsu_parity_drive("summon_ok", 1000);
+    }
+
     // ======================================================================
     // 卡 `openmir2-magic-parity` §22：火球（1/5）**真实台账**驱动
     // ======================================================================
