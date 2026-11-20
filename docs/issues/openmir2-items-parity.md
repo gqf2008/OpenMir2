@@ -740,7 +740,7 @@ EAD
 - **657 的口径（2026-11-20 三次更正后的最终版，以代码为准）**：`SendUpdateMsg(wIdent, wParam, lParam1…, sMsg)`（`BaseObject.Message.cs:283`）转发到 `SendMsg(IActor, wIdent, wParam, nParam1, …)`（`:98`）；`SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)`（`PlayObject.cs:2876`）的落位是 **`wParam = 临时 HitSpeed`、`nParam1 = CharStatus`**；657 handler（`PlayObject.Message.cs:1845`）只读 `nParam1` 与 `this.HitSpeed` ⇒ **帧上 `Param/Tag = LoWord/HiWord(CharStatus)`、`Series = 出队时的落地 HitSpeed`，`wParam` 从未被读**。临时 HitSpeed 既不进帧、也不进最终字段 ⇒ **不做"帧 vs 字段"断言**（此前两种表述均作废）。
 - **`ExtraAbil` 的 `WAbil` 效果是死路**（e1 查实）：写入在 `PlayObject.cs:2818-2840`，随后 `:2890-2906` 的 `WAbil.* = Abil + AddAbil`（逐字节 `_MIN(255,和)`）**整体覆盖**，方法 `:2907` 结束；`GetAttackPower` 不读 `ExtraAbil`。⇒ **吃 Shape12 后 `WAbil` 必须不变**；可观测副作用只有：1–6 条蓝字、`RM_ABILITY` 泵出的 52（值仍是未加 buff 的 `WAbil`）、以及状态数组 `ExtraAbil/Flag/Times`。宿主已据此**移除** `apply_extra_abil` 调用，golden/比较器补 `WAbil` 前后不变断言。
 - **F1（线序真 bug，两轮修复）**：第一轮把吃路径排水改成 `NetPriorityQueue`，但 `emit_eat_notices` **排了两遍**（先 `notice_drain_order`、再把结果重排）⇒ 实际线序 = 堆置换的**复合**。**F1-D（2026-11-20，3b 复审）**：改为单遍排水、删 `notice_drain_order`、删 `use_item` 末尾的 `sort_by_key`（它改的是入队序，复刻不了同 ident 的 sift 序，还让"看起来排过序"掩盖真实入队序）。三种口径用本仓 `crates/world-bevy/src/msgqueue.rs` 单独 rustc 实算（入队 `[S×6,W,C,A]`）：单遍 `[A,W,C,S1,S5,S4,S3,S2,S0]`、两遍 `[A,W,C,S3,S4,S5,S1,S2,S0]`、入队/稳定排序 `[S0..S5]` —— 两两不同。**F1-T 用例** `it07_emit_eat_notices_production_order_is_heap_sift` 走**生产接线**（六条同 ident(11004) 用 Inline 文本区分），钉单遍 sift 序；变异「排水改回 vec 序」实测红在 `got == want`。
-- **能力帧依赖（2026-11-20，必须随合入再改一次）**：本卡用例当前钉 `sent == 8` —— `RM_ABILITY(10051)` 在本 base 的 `notice_frame` **无映射**，52 按 WRN 丢弃（oracle `PlayObject.Base.cs:2153-2158` 要发）。独立小分支 `card/ability-frames`（`ee419b901`：`RM_ABILITY→SM_ABILITY(52)`、`RM_SUBABILITY→SM_SUBABILITY(752)` + `WireSession` 三字段，搬自 IT-12 的 `adf83afda`）合入后，**必须**把该用例期望改回 **9 帧**（A 出 `SM_ABILITY`）并重跑全量；在该分支合入前，本卡帧面不得报"完整"。
+- **能力帧依赖（已合入：`card/ability-frames` `ee419b901` → master merge `790f740c1`）**：`RM_ABILITY→SM_ABILITY(52)`、`RM_SUBABILITY→SM_SUBABILITY(752)` 已接。**旧期望 `sent == 8` 错在哪**：它把"`RM_ABILITY(10051)` 无映射 ⇒ WRN 丢弃"写死；映射合入后 52 必须出帧 ⇒ **`sent == 9`**（`it07_emit_eat_notices_production_order_is_heap_sift` 已改并复绿）。**52 的位次依据**（不是"看起来合理"）：oracle `MsgQueue` 按 `(byte)wIdent` 出队——`RM_ABILITY(10051→67)` < `RM_WEIGHTCHANGED(10115→131)` < `RM_CHARSTATUSCHANGED(10139→155)` < `RM_SYSMESSAGE(11004→252)`；本用例入队 `[S×6, W, C, A]` 的单遍四叉堆序 = **`A, W, C, S1,S5,S4,S3,S2,S0`** ⇒ 线帧 ident = **`[52, 622, 657, 100×6]`**。
 - **F3（已改）**：`useitem` 里"同 ident 多帧在本接缝不可达"的枚举被 Shape12 打破，已标注失效并指向新的堆排水。
 
 **帧/泵序**：635/636 直发；每命中一条蓝 `RM_SYSMESSAGE`(11004→252)，`RecalcAbilitys` 后 `RM_ABILITY`(10051→67)，吃完另有 `RM_WEIGHTCHANGED`(10115→131)；`RecalcAbilitys` 尾部 10139(155)。**同优先级陷阱**：最多 6 条 11004 ⇒ 出队序是堆 sift 序，夹具记出队序；若实测等于入队序也如实写（不反推"泵稳定"）。
@@ -772,7 +772,7 @@ EAD
 
 **WAbil 不变的三方同源**：golden 的 `wabil_before` 是探针在 invoke **前**实采、`expect.wabil` 是 C# 在 invoke **后**实采（均 oracle 侧，非 Rust 回填）；比较器再用**同一份 golden** 断言 Rust `state.wabil` 不变 ⇒ 三方闭环。
 
-**状态**：`missing`（清单未动；等探针/比较器/牙齐了再改并先报 `opc-19`）。
+**状态**：`implemented_unverified`（2026-11-20，分支 `card/items-it07-a`，merge master `da63bae28` 后）：6 条用例全绿（`it07_*`，含 fixture 4 例比较器）、全量 `--lib 2234 / 2161 passed / 0 failed / 73 ignored`、`cargo check -p game-svr --lib` rc=0、fmt rc=0；`clippy --all-targets` 待窗口。清单未动，待 QA 签。
 
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
