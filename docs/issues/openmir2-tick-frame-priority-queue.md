@@ -167,3 +167,4 @@
 - `tools/hygiene/scenario_manifest_gate.py`：本地 collab refs 未 fetch 全时的 **RED 5 属 §23 假红**
   （fetch 后 refs 16045 ⇒ GREEN，RED 0 / BAD 0）——**不是 master 既有红**；
 - `validate-parity-manifests.ps1`（四域清单门）：**本批不含**，由 opc-19 报 GREEN。
+- **以后跑这个门用包装器** `E:\OPC\tools\scenario-gate.ps1`（先 fetch 全 collab refs 再跑，避免 §23 假红）。
