@@ -56352,6 +56352,9 @@ SendRefMsgRange=15
         );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；
+            // oracle 在升级链末发它（155）。另：本用例里 657 落在 stamina 的 53(68) **之前**，
+            // 那是本宿主"链末尾出队"近似造成的**偏差 T-296（方向 B）**，不是 oracle 序。
             assert_eq!(socket, 903);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }

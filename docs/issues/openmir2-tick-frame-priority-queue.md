@@ -152,3 +152,18 @@
 | `tick_frame_order_puts_stamina_after_kill_exp_chain` | `[…,752,53(stamina)]` | `[…,752,657,53(stamina)]` | **这条编码的是偏差 T-296（方向 B）**：`drain_stamina` 在链后、其 53(68) 应排在 657(155) 之前，而本宿主排在其后；断言处必须点名 T-296 |
 
 **"旧期望为什么错"**：旧期望只覆盖了"链内被建模的帧"，**657 当时根本没发**（被 `pickwire` 丢弃）——所以不是"旧序对、新序错"，而是"旧期望本身缺一条帧"。这一点必须写进每条更新后的注释（第三次改既有帧序期望，按 opc-19 口径）。
+
+## 7. T-290 交付的牙记录与门禁名口径（2026-11-20）
+
+**牙（均在交付 head 重放，还原后 sha MATCH、基线复绿）**
+
+- **v1（删 T-290 的入队）** ⇒ 专用用例红，原文：
+  `thread 'tests::t290_levelup_chain_emits_657_at_chain_end_self_and_observers' panicked at ...: 必须发 657`
+  / `test result: FAILED. 0 passed; 1 failed`；还原后 `test result: ok. 1 passed; 0 failed`。
+- **v2（把出队挪到 45/52/752 之前）** ⇒ 红，原文：
+  `657 必须排在 45/52/752 之后（帧序 [53, 44, 657, 45, 52, 752]）：45 的下标 3 应 < 657 的下标 2`。
+
+**门禁名口径（两个 manifest 门别混写）**
+- `tools/hygiene/scenario_manifest_gate.py`：本地 collab refs 未 fetch 全时的 **RED 5 属 §23 假红**
+  （fetch 后 refs 16045 ⇒ GREEN，RED 0 / BAD 0）——**不是 master 既有红**；
+- `validate-parity-manifests.ps1`（四域清单门）：**本批不含**，由 opc-19 报 GREEN。
