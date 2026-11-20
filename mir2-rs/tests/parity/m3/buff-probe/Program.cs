@@ -977,28 +977,28 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_shape9_repair_normal",
             new Ctx { weapon = new UserItem { Index = 200, Dura = 5000, DuraMax = 10000 } },
             new List<Spec> { S(1, 2009) }, 1, "repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_shape9_full",
             new Ctx { weapon = new UserItem { Index = 200, Dura = 10000, DuraMax = 10000 } },
             new List<Spec> { S(1, 2009) }, 1, "repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_shape9_no_weapon", new Ctx(),
             new List<Spec> { S(1, 2009) }, 1, "repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape10_repair_normal",
             new Ctx { weapon = new UserItem { Index = 200, Dura = 5000, DuraMax = 10000 } },
             new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape10_full_still_eaten",
             new Ctx { weapon = new UserItem { Index = 200, Dura = 10000, DuraMax = 10000 } },
             new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_shape10_no_weapon", new Ctx(),
             new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape2_unlock", new Ctx(),
             new List<Spec> { S(1, 2004) }, 1, "unlock",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape0_inc_pool", new Ctx(),
             new List<Spec> { S(1, 2005) }, 1, "inc_pool",
             ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
@@ -1007,31 +1007,31 @@ internal static class Program
             ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
         cases.Add(RunCase(table, net, "eat_ok_weight_from_remaining_bag", new Ctx(),
             new List<Spec> { S(7, 2008), S(1, 2001), S(8, 2007) }, 1, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_first_makeindex_wins", new Ctx(),
             new List<Spec> { S(1, 2001), S(1, 2003) }, 1, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_not_found", new Ctx(),
             new List<Spec> { S(1, 2001) }, 99, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_stdmode_other", new Ctx(),
             new List<Spec> { S(1, 2007) }, 1, "other_mode",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_template_missing", new Ctx(),
             new List<Spec> { S(1, 2009) }, 1, "missing",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_can_use_item_false", new Ctx { canUseItem = false },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_dead", new Ctx { dead = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_stdmode2_noop", new Ctx(),
             new List<Spec> { S(1, 2011) }, 1, "noop",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_no_recalc", new Ctx(),
             new List<Spec> { S(1, 2012) }, 1, "food_small",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // 跨档 ⇒ `RefMyStatus()` ⇒ `RecalcAbilitys()`。运行时 `Abil` 已是**登录时的等级派生值**
         //（`PlayObject.cs:1308` 先跑 `RecalcLevelAbilitys()`）⇒ 这里用 level=1 战士的 19/15；
         // 且 `HP/MP <= MaxHP/MaxMP`（oracle 登录路径的 Play 分类钳位保证），否则会触发
@@ -1041,22 +1041,22 @@ internal static class Program
             ReachAbil(level: 1, hp: 15, mp: 15), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_clamp", new Ctx { hungerStatus = 4950 },
             new List<Spec> { S(1, 2014) }, 1, "food_clamp",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_stdmode1", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // StdMode 31：`UseStdModeFunItem`（`PlayObject.Base.cs:1072`）= `SystemShare.FunctionNPC != null`。
         // 存在 ⇒ `GotoLable("@StdModeFunc" + AniCount)` 后返回 true ⇒ 吃 + SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_funitem", new Ctx { functionNpc = true },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // FunctionNPC 缺失 ⇒ `UseStdModeFunItem` 返回 false ⇒ 不吃。
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_no_functionnpc", new Ctx { functionNpc = false },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // StdMode 31 / AniCount==0：解包需 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）。
         // 背包 42 件 ⇒ 42+5=47 > 46 ⇒ 容量守卫失败（未到 `ClientUseItemsGetUnBindItems`）⇒ 不吃。
         var unbindFullBag = new List<Spec> { S(1, 2016) };
@@ -1066,13 +1066,13 @@ internal static class Program
         }
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
             unbindFullBag, 1, "unbind_full",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // IT-18 成功路径：背包仅 1 件解包件（2016，Shape=1/AniCount=0）⇒ 1+6-1=6 <= 46 ⇒
         // Dispose+RemoveAt 后 `ClientUseItemsGetUnBindItems("unbind_item", 6)` 建 6 件 2017，
         // 每件 `SendAddItem` ⇒ 6 条 SM_ADDITEM(200) 即时帧，再 SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
             new List<Spec> { S(1, 2016) }, 1, "unbind_full",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         // IT-08：StdMode3/Shape13 `GetExp(DuraMax=100)` **非升级支**（`MaxExp=10000` ⇒ `0+100<10000` 不升级）。
         // 观测新增 `abil_exp`/`body_luck*`（追加字段）；`WAbil.Exp` 保持陈旧（GetExp 只改 Abil）。
         var expBookAbil = ReachAbil(level: 1, hp: 10, mp: 8);
@@ -1201,16 +1201,16 @@ internal static class Program
         cases.Clear(); // buff-probe 只保留 IT-07 的 4 例（其余 31 例属 eat/IT-16，不混入）
         cases.Add(RunCase(table, net, "eat_ok_shape12_six_buffs", new Ctx(),
             new List<Spec> { S(1, 2030) }, 1, "buff_six",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape12_single_mac", new Ctx(),
             new List<Spec> { S(1, 2031) }, 1, "buff_one_mac",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_ok_shape12_combo_dc_sc", new Ctx(),
             new List<Spec> { S(1, 2032) }, 1, "buff_combo",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
         cases.Add(RunCase(table, net, "eat_fail_shape12_all_zero", new Ctx(),
             new List<Spec> { S(1, 2033) }, 1, "buff_none",
-            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, true));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false, true));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in templates)

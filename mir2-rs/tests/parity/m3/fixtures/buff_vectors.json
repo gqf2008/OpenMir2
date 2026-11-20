@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/buff-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "bba103a279768f37c9f85f84be12a18eaea98173c39a7626ce616f3b0d522379",
+  "oracle_assembly_sha256": "77d568e3ef6d0c89eb3496e9c3aa998c5fa6475614844ba51bf88a12c87881c5",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -307,7 +307,7 @@
         "make_index": 1,
         "name": "buff_six"
       },
-      "now_before": 1134060718,
+      "now_before": 1135503812,
       "extra_before": {
         "abil": [
           0,
@@ -412,12 +412,12 @@
             0
           ],
           "times": [
-            1134390718,
-            1134390718,
-            1134390718,
-            1134390718,
-            1134390718,
-            1134390718,
+            1135833812,
+            1135833812,
+            1135833812,
+            1135833812,
+            1135833812,
+            1135833812,
             0
           ]
         },
@@ -553,8 +553,23 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
-        "host_levelup": false,
-        "pumped": [],
+        "host_levelup": true,
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683
+          },
+          {
+            "ident": 657,
+            "recog": 4660,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -585,7 +600,7 @@
         "make_index": 1,
         "name": "buff_one_mac"
       },
-      "now_before": 1134060718,
+      "now_before": 1135503812,
       "extra_before": {
         "abil": [
           0,
@@ -695,7 +710,7 @@
             0,
             0,
             0,
-            1134060718,
+            1135503812,
             0
           ]
         },
@@ -781,8 +796,23 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
-        "host_levelup": false,
-        "pumped": [],
+        "host_levelup": true,
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683
+          },
+          {
+            "ident": 657,
+            "recog": 4660,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -813,7 +843,7 @@
         "make_index": 1,
         "name": "buff_combo"
       },
-      "now_before": 1134060718,
+      "now_before": 1135503812,
       "extra_before": {
         "abil": [
           0,
@@ -918,9 +948,9 @@
             0
           ],
           "times": [
-            1134060718,
+            1135503812,
             0,
-            1134060718,
+            1135503812,
             0,
             0,
             0,
@@ -1019,8 +1049,23 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
-        "host_levelup": false,
-        "pumped": [],
+        "host_levelup": true,
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683
+          },
+          {
+            "ident": 657,
+            "recog": 4660,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1051,7 +1096,7 @@
         "make_index": 1,
         "name": "buff_none"
       },
-      "now_before": 1134060718,
+      "now_before": 1135503812,
       "extra_before": {
         "abil": [
           0,
@@ -1206,7 +1251,7 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
-        "host_levelup": false,
+        "host_levelup": true,
         "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
