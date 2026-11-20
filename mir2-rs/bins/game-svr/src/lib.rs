@@ -70263,9 +70263,21 @@ SendRefMsgRange=15
         if let Some(h) = golden_fixture_opt(stem, label, "hit_speed") {
             let h = u16::try_from(h).unwrap_or(0);
             if h > 0 {
-                for who in ["caster", "target", "obs_in"] {
+                // 与 `fireball_parity_drive` 同款：657 的观察者副本读**接收者实体**的
+                // `hit_speed`（`push_charstatuschanged`），自更新支读会话 ⇒ 两份都写
+                // （= `apply_ability_to_entity` 在装置侧的对应）。
+                let target_id = fireball_actor(&rig, "target");
+                let obs_in = fireball_actor(&rig, "obs_in");
+                for (who, id) in [
+                    ("caster", rig.caster),
+                    ("target", target_id),
+                    ("obs_in", obs_in),
+                ] {
                     if let Some(sg) = rig.ground_sessions.get_mut(who) {
                         sg.hit_speed = h;
+                    }
+                    if let Some(e) = rig.world.entities.get_mut(id) {
+                        e.vitals.hit_speed = h;
                     }
                 }
             }
@@ -72350,7 +72362,7 @@ SendRefMsgRange=15
     #[test]
     fn spell_657_series_is_per_recipient_entity_hit_speed() {
         use mir2_protocol::frame::CommandMessage;
-        let mut rig = fireball_rig(1000, 31, 0, 1);
+        let mut rig = fireball_rig(1000, 31, 15, 0, 1); // 合并集成：补 mc=15（旧硬编码值）
         rig.world.enable_buff_tick();
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
         let caster = rig.caster;
@@ -72399,7 +72411,7 @@ SendRefMsgRange=15
     #[test]
     fn hangmajinbub_657_series_is_post_recalc() {
         use mir2_protocol::frame::CommandMessage;
-        let mut rig = fireball_rig(1000, 14, 15, 1);
+        let mut rig = fireball_rig(1000, 14, 15, 15, 1); // 合并集成：补 mc=15（旧硬编码值）
         rig.world.enable_buff_tick();
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
         let target = fireball_actor(&rig, "target");
