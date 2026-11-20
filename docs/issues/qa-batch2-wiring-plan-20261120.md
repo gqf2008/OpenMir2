@@ -101,3 +101,40 @@
    属另一分支（另立一例、另写 scope），本批不做。
 3. **`UserMagicLevel < 3` 是抽数门与帧门**：`=3`（或更大）时训练尾整段不跑——**既无 `Random(3)` 也无 640**。
 4. **恰 1 抽**：每支施法只应有 `:663` 的 `Random(3)+1` 一次；golden 生成后逐支断言 `Rng.len() == 1`。
+
+## 五、与计划的差异（2026-11-20，实施 MG-58 时发现）
+
+> 本节按 opc-19 2026-11-20 的要求补记：本批**并非全程「零装置改动」**——有一处产品面行为变更。
+
+### 5.1 B 类共享尾的 640 由「立即发」改为 oracle 的自延迟投递（产品面）
+
+- **改动**：`spell_tail_bo_train` 的 B 类（`Some(true)`）所走的共享尾块，训练帧 `RM_MAGIC_LVEXP`
+  原用 `send_self_frame` 立即出帧；改为 `World::send_self_delay_msg_full(…, 1000)`（未升级，
+  oracle `src/M2Server/Magic/MagicManager.cs:666`）与 `World::update_self_delay_msg_full(…, 800)`（升级，
+  oracle `src/M2Server/Player/PlayObject.cs:5216`，含同 `(ident, MagicId)` 去重）。
+- **依据**：oracle 全仓 22 个 `RM_MAGIC_LVEXP` 发射点零处立即发（`docs/issues/openmir2-spell-tail-delay-audit.md`）；
+  P1 设计件 §5.2-7 的「本仓 `send_self_frame` 均立即发、时序不建模」**对 B 类自此作废**。
+  **A 类（`Some(false)`）不受影响**：`bo_train=false` ⇒ `do_spell_tail` 不进训练块 ⇒ 该发射分支不可达。
+- **影响面枚举**（B 类全集 = `spell_tail_p1_id_set_is_strict` 钉住的 5 个魔号）：
+
+  | 魔号 | 现有 golden 里 caster 的 640 | 处理 |
+  | --- | --- | --- |
+  | 49 | 有（本批新件 `golden/magic/skill49.json`） | **已随改动重出**，`due_ms_rel=1000` |
+  | 51 / 52 / 53 / 54 | 无（37 份 golden 的 `magic_id` 集合里没有这四号） | 无需重出 |
+
+  - 其它 32 份带 640 的 golden 属于**别的发射路径**（`finish_spell_tail(…, Some(1000))`，以及
+    `da` 正在改的四处 `finish_spell_tail(…, None)`）；本批 diff **未碰任何 `finish_spell_tail` 调用点**。
+  - 既有 P1 用例里唯一断言「有 640」的是 `spell_tail_p1_no_effect_draws_once_and_levels_exp`，
+    已同步改为跨 1000ms 排水并先钉「施法段无 640」；其余 P1 用例断言「无 640 / 只有 639」，方向不变。
+
+### 5.2 三处夹具/判据补充（实施时定，opc-19 2026-11-20 认可）
+
+1. skill49 夹具取 `EffectType = 2`（`Effect` 仍 1）⇒ `MakeWord(EffectType, Effect) = 258`，把
+   「低字节 = EffectType」的打包变成**可判别**（两者都取 1 时字节换位不可见）。
+2. 驱动断言写在**台账落盘之后**：否则牙红时驱动不写台账，比较器只能报「陈旧/缺件」，拿不到语义红。
+3. 前提断言用 oracle 实际下标 `nLevel = (Level < 4 && TrainLv >= Level) ? Level : 0`（不是恒 `[0]`）；
+   skill49 取 `UserMagicLevel = 0`，使该断言核的就是 `CheckMagicLevelUp` 实际读的那一项。
+
+### 5.3 与 `da`（四处 `finish_spell_tail(…, None)`）的写集顺序
+
+同一文件、同一类行为 ⇒ **本批先合**；`da` 合到本批 head 后再 rebase 继续（opc-19 2026-11-20 定）。
