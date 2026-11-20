@@ -1932,13 +1932,14 @@ fn real_rust_ledger_snowwind() {
     );
 }
 
-/// **`49`（`SKILL_49`；共享尾 B 类，case 体只有 `boTrain = true;`）**真实台账 → 判定面（s1/s5/s13）。
+/// **共享尾 B 类（`SKILL_49`/`51`/`52`/`53`/`54`；case 体只有 `boTrain = true;`）**真实台账 → 判定面
+/// （s1/s5/s13）。五号同形，按 stem 参数化（`golden/magic/skill<id>.json` + `skill<id>_<label>.json`）。
 ///
 /// oracle 面（`src/M2Server/Magic/MagicManager.cs`）：`:159 RM_SPELL`（处理器自守卫 ⇒ 施法者
 /// **不收**自己的 `SM_SPELL(17)`）→ `:648 RM_MAGICFIRE`（含自己）→ `:659/:661` 门内
 /// **恰一次** `Random(3)+1`（`:663`）→ `:666 SendSelfDelayMsg(RM_MAGIC_LVEXP, …, **1000**)`。
 ///
-/// 本 leaf 除通用 `real_ledger_verify_labels`（帧/RNG/Rm/HP 面）外另钉：
+/// 除通用 `real_ledger_verify_labels`（帧/RNG/Rm/HP 面）外另钉：
 /// - 帧序/时延：caster = `[638@0]` + `640@1000ms` 且 **恰 0 条 17**（负向断言，钉自守卫）；
 ///   target/obs_in = `[17@0, 638@0]`；obs_out = 空。
 /// - `Train` 块逐字段两侧相等（`Level` 不变、`TranPoint` 恰加 `1..=3`）。
@@ -1948,8 +1949,35 @@ fn real_rust_ledger_snowwind() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::skill49_parity_*）生成真实台账"]
 fn real_rust_ledger_skill49() {
-    const STEM: &str = "skill49";
-    let golden = golden_file("skill49.json");
+    verify_skill_tail_ledger("skill49");
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill51_parity_*）生成真实台账"]
+fn real_rust_ledger_skill51() {
+    verify_skill_tail_ledger("skill51");
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill52_parity_*）生成真实台账"]
+fn real_rust_ledger_skill52() {
+    verify_skill_tail_ledger("skill52");
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill53_parity_*）生成真实台账"]
+fn real_rust_ledger_skill53() {
+    verify_skill_tail_ledger("skill53");
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill54_parity_*）生成真实台账"]
+fn real_rust_ledger_skill54() {
+    verify_skill_tail_ledger("skill54");
+}
+
+fn verify_skill_tail_ledger(stem: &str) {
+    let golden = golden_file(&format!("{stem}.json"));
     let dir = ledger_dir();
     let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
     assert!(
@@ -1983,7 +2011,7 @@ fn real_rust_ledger_skill49() {
             "[{label}] 金标准缺 `Train` 块（`SkillTail` 夹具必须落盘训练面）"
         );
         // ---- 台账侧（防空转：缺件/陈旧/标签不符一律红，不静默跳过）----
-        let path = dir.join(format!("{STEM}_{label}.json"));
+        let path = dir.join(format!("{stem}_{label}.json"));
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("防空转：缺真实台账 {}（{e}）", path.display()));
         let side = path.with_extension("run.json");
@@ -2080,7 +2108,7 @@ fn real_rust_ledger_skill49() {
         }
     }
     // 通用面：帧逐字段（含 recog/due_ms_rel/tail）+ `Rng == Rng ++ DeliverRng` + Rm 多重集 + HP。
-    real_ledger_verify_labels(STEM, &golden, &["s1", "s5", "s13"]);
+    real_ledger_verify_labels(stem, &golden, &["s1", "s5", "s13"]);
 }
 
 /// **`9 地狱火`（`SKILL_FIRE`）**真实台账 → 判定面（标签 s1/s5/s13）。

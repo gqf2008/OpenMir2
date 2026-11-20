@@ -73094,7 +73094,7 @@ SendRefMsgRange=15
     }
 
     /// 共享尾 B 类真实台账驱动（本批只做 **1000ms 未升级支**；`MaxTrain` 取小的 800ms 变体不在 scope）。
-    fn skill_tail_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32, id_base: i32) {
+    fn skill_tail_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let dir = magic_ledger_dir();
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
@@ -73118,6 +73118,10 @@ SendRefMsgRange=15
         let caster_mc = golden_fixture_required(stem, label, "caster_mc");
         let caster_sc = golden_fixture_required(stem, label, "caster_sc");
         let anti_magic = golden_fixture_required(stem, label, "anti_magic");
+        // ActorId 段也从 golden 读（`caster = id_base + 1`，`new_layout` 的约定）——写死基数
+        // 一旦与夹具漂移，`recog` 会整体对不上而看不出原因。
+        let caster_actor_id = golden_fixture_required(stem, label, "caster_actor_id");
+        let id_base = i32::from(caster_actor_id) - 1;
         let mut rig = skill_tail_rig(
             id_base,
             magic_id,
@@ -73338,19 +73342,91 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skill49_parity_s1() {
-        skill_tail_parity_drive("skill49", 49, "s1", golden_seed("skill49", "s1"), 1000);
+        skill_tail_parity_drive("skill49", 49, "s1", golden_seed("skill49", "s1"));
     }
 
     #[test]
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skill49_parity_s5() {
-        skill_tail_parity_drive("skill49", 49, "s5", golden_seed("skill49", "s5"), 2000);
+        skill_tail_parity_drive("skill49", 49, "s5", golden_seed("skill49", "s5"));
     }
 
     #[test]
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skill49_parity_s13() {
-        skill_tail_parity_drive("skill49", 49, "s13", golden_seed("skill49", "s13"), 3000);
+        skill_tail_parity_drive("skill49", 49, "s13", golden_seed("skill49", "s13"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill51_parity_s1() {
+        skill_tail_parity_drive("skill51", 51, "s1", golden_seed("skill51", "s1"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill51_parity_s5() {
+        skill_tail_parity_drive("skill51", 51, "s5", golden_seed("skill51", "s5"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill51_parity_s13() {
+        skill_tail_parity_drive("skill51", 51, "s13", golden_seed("skill51", "s13"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill52_parity_s1() {
+        skill_tail_parity_drive("skill52", 52, "s1", golden_seed("skill52", "s1"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill52_parity_s5() {
+        skill_tail_parity_drive("skill52", 52, "s5", golden_seed("skill52", "s5"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill52_parity_s13() {
+        skill_tail_parity_drive("skill52", 52, "s13", golden_seed("skill52", "s13"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill53_parity_s1() {
+        skill_tail_parity_drive("skill53", 53, "s1", golden_seed("skill53", "s1"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill53_parity_s5() {
+        skill_tail_parity_drive("skill53", 53, "s5", golden_seed("skill53", "s5"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill53_parity_s13() {
+        skill_tail_parity_drive("skill53", 53, "s13", golden_seed("skill53", "s13"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill54_parity_s1() {
+        skill_tail_parity_drive("skill54", 54, "s1", golden_seed("skill54", "s1"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill54_parity_s5() {
+        skill_tail_parity_drive("skill54", 54, "s5", golden_seed("skill54", "s5"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill54_parity_s13() {
+        skill_tail_parity_drive("skill54", 54, "s13", golden_seed("skill54", "s13"));
     }
 
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。

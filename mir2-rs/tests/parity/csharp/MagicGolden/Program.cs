@@ -172,7 +172,15 @@ public static class Program
             // 夹具前提：`UserMagicLevel<3`（训练门）、`TrainLv=3`（升级门非退化）、`MaxTrain[0]=1000`（不升级 ⇒ 1000ms 支）。
             // `EffectType=2` 与 `Effect=1` 不同 ⇒ `MakeWord(EffectType, Effect)=0x0102`，
             // 把「低字节=EffectType / 高字节=Effect」的打包变成**可判别**（两者都取 1 时换位不可见）。
-            if (name == "skill49") return SkillTailBatch(new MagicSpec { Key = "skill49", MagicId = 49, MagicName = "Skill49", EffectType = 2, UserMagicLevel = 0, MagicTrainLv = 3, MagicMaxTrain0 = 1000, SkillTail = true });
+            // 共享尾 B 类五号（MG-58/60/61/62/63）：`SkillTailBatch` 同形参数化。
+            // `EffectType=2`（Effect 仍 1）⇒ `MakeWord(EffectType, Effect)=0x0102`，把「低字节=EffectType」
+            // 的打包变成**可判别**（两者都取 1 时换位不可见）。
+            // `UserMagicLevel=0` ⇒ `nLevel=0`，前提断言核的就是 `CheckMagicLevelUp` 实际读的那一项。
+            if (name is "skill49" or "skill51" or "skill52" or "skill53" or "skill54")
+            {
+                int sid = int.Parse(name.Substring(5));
+                return SkillTailBatch(new MagicSpec { Key = name, MagicId = sid, MagicName = "Skill" + sid, EffectType = 2, UserMagicLevel = 0, MagicTrainLv = 3, MagicMaxTrain0 = 1000, SkillTail = true });
+            }
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
