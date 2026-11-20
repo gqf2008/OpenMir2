@@ -100768,6 +100768,8 @@ fn ",
             let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
             assert_eq!(cases.len(), 12, "彩票例固定 12");
             let mut seen_seeds = std::collections::BTreeSet::new();
+            let mut seen_applied = std::collections::BTreeSet::new();
+            let mut seen_inputs = std::collections::BTreeSet::new();
             let mut wins = 0usize;
             let mut losses = 0usize;
             for c in cases {
@@ -100791,6 +100793,25 @@ fn ",
                 assert!(
                     seen_seeds.insert(seed),
                     "{name}: seed {seed} 与前例重复（逐例复位才可分辨）"
+                );
+                // 「12 例是 12 件事」机检：`applied` 配置逐例互异（12/12），
+                // 且完整输入（applied + `lottery_before`）组合互异——防止将来改成
+                // 「同一个 cfg 跑 12 遍」仍逐例全绿。
+                assert!(
+                    seen_applied.insert((cfg.rate, cfg.min, cfg.max, cfg.gold)),
+                    "{name}: applied(rate/min/max/gold) 与前面某例重复"
+                );
+                assert!(
+                    seen_inputs.insert((
+                        cfg.rate,
+                        cfg.min,
+                        cfg.max,
+                        cfg.gold,
+                        init.count,
+                        init.no_win,
+                        init.level,
+                    )),
+                    "{name}: 完整输入(applied+lottery_before) 与前面某例重复"
                 );
                 // ⚠ 逐例复位共享 `world.rng`（本段最关键的防假绿点，先于该例任何抽值）。
                 world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
