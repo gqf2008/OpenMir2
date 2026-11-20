@@ -12180,10 +12180,17 @@ mod tests {
             );
             assert_eq!(list[0].as_ref().unwrap().mag_idx, 1);
         }
-        assert!(
-            collect(&mut rx0).is_empty(),
-            "Add 支（火球已在训练）不得出 210/212"
-        );
+        {
+            // **657（`card/657-del-skill`）**：`RecalcAbilitys()` 尾在 `Race==Play` 时无条件发 657
+            // （oracle `PlayObject.cs:2875-2876`）⇒ 本断言只约束 210/212，657 允许。
+            let frames = collect(&mut rx0);
+            assert!(
+                frames
+                    .iter()
+                    .all(|id| *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+                "Add 支（火球已在训练）不得出 210/212（657 允许；实得 {frames:?}）"
+            );
+        }
         assert!(
             world.entities.get(victim_id).unwrap().flame_ring,
             "实体粘滞位必须保持 true"
@@ -12213,7 +12220,17 @@ mod tests {
             world.entities.get(victim_id).unwrap().revival,
             "effect.revival=true 必须写回实体"
         );
-        assert!(collect(&mut rx0).is_empty(), "复活戒指不产生 210/212");
+        {
+            // **657（`card/657-del-skill`）**：`RecalcAbilitys()` 尾在 `Race==Play` 时无条件发 657
+            // （oracle `PlayObject.cs:2875-2876`）⇒ 本断言只约束 210/212，657 允许。
+            let frames = collect(&mut rx0);
+            assert!(
+                frames
+                    .iter()
+                    .all(|id| *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+                "复活戒指不产生 210/212（657 允许；实得 {frames:?}）"
+            );
+        }
 
         // ---- ③ 本次命中 FlameRing（实体粘滞位 false）必须 |= 落到实体 ----
         world
@@ -12247,7 +12264,17 @@ mod tests {
             world.entities.get(victim_id).unwrap().flame_ring,
             "recalc 本次命中 FlameRing 必须 |= 到实体"
         );
-        assert!(collect(&mut rx0).is_empty(), "火球已在训练 ⇒ 无 210/212");
+        {
+            // **657（`card/657-del-skill`）**：`RecalcAbilitys()` 尾在 `Race==Play` 时无条件发 657
+            // （oracle `PlayObject.cs:2875-2876`）⇒ 本断言只约束 210/212，657 允许。
+            let frames = collect(&mut rx0);
+            assert!(
+                frames
+                    .iter()
+                    .all(|id| *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+                "火球已在训练 ⇒ 无 210/212（657 允许；实得 {frames:?}）"
+            );
+        }
     }
 
     /// **N2 牙（review cb7519e2，返工）**：`@删除技能`「只删命中项」的**独立列表断言**。
