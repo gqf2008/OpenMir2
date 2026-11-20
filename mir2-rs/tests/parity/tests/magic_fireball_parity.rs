@@ -1099,6 +1099,18 @@ fn real_rust_ledger_fireboom47() {
     );
 }
 
+/// **`24`（`SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）**真实台账 →
+/// 判定面（标签 s1/s5/s13；金标准 `golden/magic/lightflower.json`，C# oracle 生成）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::lightflower_parity_*）生成真实台账"]
+fn real_rust_ledger_lightflower() {
+    real_ledger_verify_labels(
+        "lightflower",
+        &golden_file("lightflower.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
 /// **`19 集体隐身术`（`SKILL_BIGCLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::big_cloak_parity_*）生成真实台账"]

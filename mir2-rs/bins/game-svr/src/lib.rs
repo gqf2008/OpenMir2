@@ -14952,25 +14952,20 @@ fn handle_spell_cmd_with_magic(
                     // P3-B2 块：`RM_MAGIC_LVEXP` 入缓冲（既有口径；未改）。
                     None,
                 );
-                // **23/33/47 的两段出帧**（oracle 的跨 actor 排水序）：第一段 = 共享尾
+                // **23/24/33/47 的两段出帧**（oracle 的跨 actor 排水序）：第一段 = 共享尾
                 // （638/640；`buf` 已由 `finish_spell_tail` 填入），**先 flush**；第二段 =
                 // `RM_MAGSTRUCK` 交付（53/31 入独立缓冲，按 (byte)ident 出队）。若两段同批
-                // flush，53(68) 会被排到 638(136) 前面——与 golden `[638, 53, 31]` 相反。
+                // flush，53(68)/31(68) 会被排到 638(136)/640(255) 前面——与 golden 相反。
                 //
-                // **24 暂走旧合并 flush**：它的 31 同优先级 tie 序目前只有 Rust 侧单测钉着、
-                // 没有 oracle golden；等 24 自己的 golden 落地后再统一（卡 §30 登记）。
-                let hitter_name_colors = if req.magic_id == 24 {
-                    let h = drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
-                    buf.flush(online, gates);
-                    h
-                } else {
-                    buf.flush(online, gates);
-                    let mut struck = SpellFrameBuf::new();
-                    let h =
-                        drain_mag_struck_b2(world, online, displays, ground_sessions, &mut struck);
-                    struck.flush(online, gates);
-                    h
-                };
+                // **24 已并入两段出帧**（2026-11-20，卡 §33）：此前 24 走旧合并 flush 的
+                // 唯一理由是"tie 序只有 Rust 单测钉着、无 oracle golden"；`lightflower.json`
+                // 落地后 oracle 直接给出 `caster [638,640,31,656]`、`target [17,638,53,31,656]`
+                // ⇒ 旧序被证伪，按 oracle 统一（§25 第五款：golden 出现即改注释与分流）。
+                buf.flush(online, gates);
+                let mut struck = SpellFrameBuf::new();
+                let hitter_name_colors =
+                    drain_mag_struck_b2(world, online, displays, ground_sessions, &mut struck);
+                struck.flush(online, gates);
                 // 玩家受击 656：独立后置缓冲（主批 31 之后；卡 `openmir2-magstruck-order`）。
                 flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
             }
@@ -68735,6 +68730,26 @@ SendRefMsgRange=15
         fireboom_assert("fireboom47", 47, "fireboom47.json", "s13", 13, 3000);
     }
 
+    /// **`24`（`SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）**：复用
+    /// `fireboom_assert`（帧族/受击面同型）；HP/抽数期望取自 golden `lightflower.json`。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_parity_s1() {
+        fireboom_assert("lightflower", 24, "lightflower.json", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_parity_s5() {
+        fireboom_assert("lightflower", 24, "lightflower.json", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_parity_s13() {
+        fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
+    }
+
     /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。
     /// golden `golden/magic/bigcloak.json`（三 seed s1/s5/s13，无 AntiMagic 骰）。
     ///
@@ -74880,16 +74895,21 @@ SendRefMsgRange=15
             .unwrap();
         assert_eq!((cmd.param, cmd.tag), (12, 12), "共享尾用点击坐标");
         // 31 的**入队序** = 以施法者 (10,10) 为中心的 x→y：M2(8,8) → M1(11,11) → M3(12,8) → P1(12,12)。
-        // **出队序** = oracle `MsgQueue`（每人一条）的 .NET 8 四叉堆：施法者 911 的批次 =
-        // `638(136)` → 逐目标 `31(167)` + 命中怪 `656(154)` ⇒ 四条同优先级 31 出队
-        // **M3,M1,M2,P1**（不是入队序；卡 `openmir2-frame-drain-order-audit`，已用
-        // `NetPriorityQueue` 逐位复核）。
+        // **出队序** = oracle `MsgQueue`（每人一条）的 .NET 8 四叉堆（卡
+        // `openmir2-frame-drain-order-audit`）。**tie 序随出帧模型变化**：24 于 2026-11-20 并入
+        // 两段出帧（见 `handle_spell_cmd_with_magic` 的分流注释与卡 §33）后，同优先级 31 的
+        // 四叉堆成员集变了——旧期望 `[M3,M1,M2,P1]` 是「尾帧 + 受击帧同批 flush」的堆解。
+        // 新期望 = 两段模型下的 `NetPriorityQueue` 出队序（`[M3,M2,M1,P1]`）。
+        // **本支（多目标）无 oracle golden 钉 tie 序**：`lightflower.json` 只覆盖单目标
+        // （golden `caster [638,640,31,656]` / `target [17,638,53,31,656]`），不能裁定 4 条同优先级
+        // 的相对序；与 23 的多目标支同口径（卡 §30 登记）。
         let struck: Vec<i32> = b2_seq(&frames, 911)
             .into_iter()
             .filter(|(id, _)| *id == mir2_protocol::messages::SM_STRUCK)
             .map(|(_, r)| r)
             .collect();
-        assert_eq!(struck, vec![m3, m1, m2, p1]);
+        // 依据 = 两段出帧模型下的 `NetPriorityQueue` 出队序（非 oracle golden；见上）。
+        assert_eq!(struck, vec![m3, m2, m1, p1]);
     }
 
     /// **B2-33/47 半径来源**：33 读 `SnowWindRange`、47 读 `FireBoomRage`（二者缺省都是 1，

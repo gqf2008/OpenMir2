@@ -1184,3 +1184,23 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **证据**：run_id `magic47-20261120T095010`；驱动 `fireboom47_parity_s1/s5/s13` 各 rc=0；
   比较器 `real_rust_ledger_fireboom47` ok；fmt/clippy（两包）rc=0。
 - **MG-56 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **17/65**。
+
+### 33. 24（`SKILL_LIGHTFLOWER`）接线 + 两段出帧统一（2026-11-20）
+
+- **oracle 分派**：`src/M2Server/Magic/MagicManager.cs` 的 `case MagicConst.SKILL_LIGHTFLOWER` →
+  `MagElecBlizzard(playObject, power)`；helper 按 `SystemShare.Config.ElecBlizzardRange`（部署值 2）。
+- **golden**：`golden/magic/lightflower.json`（s1/s5/s13，C# oracle 生成）——`Rng` 各 7 抽
+  （`[0,0,0,7,1,0,3]` / `[0,0,0,6,1,0,1]` / `[0,0,0,3,0,0,7]`）、`DrainPasses=4`、HP `100→99`（damage 1）；
+  caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`、obs_out 空；
+  契约 `cover_drain`/`login_order`/`reachable`/`anti_magic=1`/`target_max_hp=224`/`rng_total_draws=7`。
+- **发现并修复分流差异**：24 原走"旧合并 flush"，Rust 出帧为 caster `[638,31,640,656]`、
+  target `[17,53,638,31,656]`——与 oracle golden 相反。golden 落地即证伪旧序 ⇒ 24 **并入两段出帧**
+  （与 23/33/47 同路径），产品 diff 只有该 `if` 分流与其注释。
+- **单测期望改动的出处**：`spell_p3b2_lightflower_center_self_and_undead_division` 的 31 tie 序
+  旧期望 `[M3,M1,M2,P1]` 属"尾帧+受击帧同批 flush"时代的堆解；改后期望 `[M3,M2,M1,P1]` **来自
+  两段模型下的 `NetPriorityQueue` 出队序**。**本支多目标 tie 序无 oracle golden 可裁定**
+  （golden 只覆盖单目标），与 23 的多目标支同口径（卡 §30 登记）；**不是**按 Rust 输出对齐。
+- **证据**：run_id `magic24-final-20261120T095906`——24 三支 + 23/33/47 九支驱动全 rc=0；
+  四个比较器（lightflower/fireboom/snowwind/fireboom47）ok；`cargo test -p game-svr --lib`
+  **2055 passed / 0 failed**；`fmt` rc=0；`clippy --workspace --all-targets -D warnings` rc=0。
+- **MG-38 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **18/65**。
