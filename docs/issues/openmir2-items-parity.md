@@ -551,8 +551,9 @@ EAD
 M2 Shape1 的 `HomeMap` 换当前图（例 1 终态图/落点变）；M3 删空 `HomeMap` 回落（例 2 不动）；
 M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tick 用例会话断言红）。
 
-**共用路径缺口（登记，**不是** IT-09 私有；影响所有走换图的卡；已独立立卡
-[`docs/issues/openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）**：
+**共用路径缺口（**已于 2026-11-20 由换图簇卡 `card/map-change-cluster` 清除**；见
+[`docs/issues/openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md) §5；本卡的
+`剔除集==[766,54]` 等式已按修复改为"剔除集为空"）**：
 1. **766 `SM_AREASTATE` + 54 `SM_MAPDESCRIPTION`**：oracle `RM_CHANGEMAP` 处理器
    （`PlayObject.Message.cs:1774-1779`）在 `SendDefMessage(SM_CHANGEMAP)` 后还调 `RefUserState()`
    （`PlayObject.Base.cs:285` ⇒ `SM_AREASTATE(766)`）与 `SendMapDescription()`（`:887-895` ⇒
@@ -602,7 +603,7 @@ if (!Envir.Flag.boNORANDOMMOVE)
 - 变异脚本注意：`shutil.copy2` 还原会带回旧 mtime ⇒ cargo 可能复用变异体二进制；脚本在还原后
   `os.utime` 强制刷新（本次实测：未刷时「还原后仍红」= 假红）。
 
-**状态**：`implemented_unverified`（同 §9.12：共用换图路径缺口 766/54 与 `[名|文件]`
+**状态**：`implemented_unverified`（共用换图路径缺口 766/54 与 `[名|文件]` 已于 2026-11-20 清除，见上；本卡待复评。同 §9.12：
 见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
 
 ### 9.14 IT-11 地牢逃脱 Shape3（`EatUseItems` move 组）— 宿主拦截 + 四向分支对拍（implemented_unverified）
@@ -645,7 +646,7 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 | M11 `&&` → `\|\|` | `it11_home_x_zero_y_nonzero_random` 红 | 落精确 (0,6) 且 0 抽（期望随机点 + 2 抽） |
 每次变异前 `touch` 强制重编；还原后 `sha256` 相等 + 基线六颗复绿。
 
-**状态**：`implemented_unverified`（同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
+**状态**：`implemented_unverified`（共用换图路径缺口已于 2026-11-20 清除，见上述卡；本卡待复评。同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
 见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
 
 **§33/§36 补记（2026-11-20，`card/items-move-09` 复审返工）**：
@@ -853,4 +854,4 @@ EAD
   ⇒ **该两支证据非生产路径**；生产只会走「不吃」或「无效但吃」。清单 `scope = castle_move_branches_synthetic_unreachable`。
 
 **状态**：`implemented_unverified`（行为面：5 例 oracle 夹具 + 比较器 + 五牙；**不升格**——位移两支是 synthetic 路径，
-且共用换图缺口 766/54 未清）。C# 半批与 Rust 半批同支 `card/items-it13`。
+共用换图缺口 766/54 已于 2026-11-20 清除（换图簇卡）；本卡仍因 synthetic 路径不升格）。C# 半批与 Rust 半批同支 `card/items-it13`。

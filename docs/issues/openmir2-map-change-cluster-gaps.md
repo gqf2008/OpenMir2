@@ -1,6 +1,7 @@
 # openmir2-map-change-cluster-gaps
 
-> 状态：**待认领（2026-11-20 立卡，来源 = IT-09 回城卷对拍时的实测/源码核对）**。
+> 状态：**已实现（2026-11-20，`card/map-change-cluster`；第二方待签）** —— 见 §5。
+> 立卡来源 = IT-09 回城卷对拍时的实测/源码核对。
 > 两条缺口都挂在**共用换图路径** `bins/game-svr/src/lib.rs` 的 `drain_map_change`
 > （及其帧构造 `bins/game-svr/src/sessionwire.rs` 的 `map_change_frames`）上——**不是**任何单条物品私有：
 > 走路换图、脚本 `MAPMOVE`、魔号 21/传送、IT-09/10/11/13 的吃物品传送，全都经过它。
@@ -70,3 +71,53 @@ IT-09 的用例把「golden `pumped` 里剔除的 ident 恰等于 `[766, 54]`」
 - 本卡**不改** `src/` 下 C# 参照实现；不动 `useitem.rs`/`eat_move.rs` 的吃物品语义。
 - 冻结客户端实际如何消费 `SM_CHANGEMAP` 尾**未实测**（见 §1 影响）；修复时以「与 oracle 逐字节一致」为准，
   不以猜测的客户端行为为准。
+
+## 5. 实现（2026-11-20，`card/map-change-cluster`）
+
+**状态**：两条缺口（A 634 尾、B 766/54）均已实现并通过本地门；第二方 QA 待签。
+
+### 5.1 改动
+1. `crates/envir/src/registry.rs`：新增 `MapRegistry::map_file_name_of(map_id)`（取 `MapInfoEntry.map_file_name`）。
+   **数据本就随 `loaded` 装载、只缺访问器**——"缺代码不缺数据"（`2d` 的离线数据源陷阱不适用）。
+2. `bins/game-svr/src/lib.rs::drain_map_change`：634 尾改用 `map_file_name_of`；按 `flag_of`/`map_desc_of`
+   组装 `sessionwire::MapVisual` 传进帧装配；缺输入 ⇒ `WRN` 并跳过 766/54（不编造）。
+3. `bins/game-svr/src/sessionwire.rs::map_change_frames`：新增 `MapVisual{flag,desc}` 参数；
+   在 634 之后、801 之前 push `SM_AREASTATE(766)`（`enter::area_state`）与 `SM_MAPDESCRIPTION(54)`
+   （`enter::music_id` + `enter::gbk(desc)`），路由 `SelfOnly`（oracle `SendDefMessage`）。
+4. **11029 `SM_SERVERCONFIG` 不在本卡**：probe 的 `SoftVersionDateEx=0` ⇒ golden 本无该帧、四张卡的
+   `pumped` 也不含；其尾是 `ClientConf` 配置面，需单独定比较面与 conf 透传（另开单）。
+
+**634 尾的输入类（重要）**：只对 **alias 图**（`[名|文件]`）变化；无 alias 时 `map_file_name == map_name`，
+**逐字节不变**（既有 golden 全部属这一类，夹具未改）。
+
+### 5.2 既有断言改写（逐处）
+| 处 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| `eat_move.rs` 两处对拍器（`run_move_parity` / IT-13） | `modeled=[800,622,633,634,801]`、`registered_gap=[766,54]`，剔除集须 `==[766,54]` | `modeled=[800,622,633,634,766,54,801]`、`registered_gap=[]`，剔除集须为空 | 766/54 已接线，golden 里的两条现在逐帧比 |
+| `lib.rs::t279_dress_eff_tests::npc_script_mapmove_bai_teleports_and_persists` | `[633,634,801]` | `[633,634,766,54,801]` | 脚本 MAPMOVE 走同一 drain，oracle 同处理器发连带帧 |
+| `lib.rs::p22_move_to_home_broadcast_order_and_tick_phase` | `[800,653,633,634,801]` | `[800,653,633,634,766,54,801]` | 同上（P22 `MoveToHome`） |
+| `lib.rs::drain_map_change_*` 两例 | 不变 | 不变 | 传 `registry=None` ⇒ 按设计不发 766/54（缺输入登记） |
+
+### 5.3 新增测试
+- `sessionwire::tests::map_change_appends_areastate_and_mapdescription`：序 633→634→766→54→801；
+  766 `Recog`=标志位、54 `Recog`=MusicId、尾=`EDCode(GBK(MapDesc))`、两帧 `SelfOnly`。
+- `eat_move::tests::map_change_634_tail_uses_alias_file_stem`：alias 图（逻辑名 `alias` / 文件主干 `stem`）
+  ⇒ 634 尾=`EDCode(GBK("stem"))`；**对照**无 alias 图 ⇒ 尾=逻辑名。
+
+### 5.4 牙（§31：还原后 sha 相等、`grep MUTATION`=0）
+- **T1 删 766** ⇒ 红：`sessionwire::map_change_appends…`（`[633,634,54,801]` vs `[…766,54,801]`）与 alias 例（`[633,634,54]` vs `[…766,54]`）。
+- **T2 删 54** ⇒ 红：同上两例（`[633,634,766,801]` / `[633,634,766]`）。
+- **T3 634 尾改回 `name_of`** ⇒ **alias 例红**（尾=`EDCode("alias")` vs 期望 `EDCode("stem")`）、**无 alias 的
+  `it09_town_scroll_host_parity` 仍绿**——"该红该绿"两半都有。
+
+### 5.5 本地结果
+- `cargo test -p game-svr --lib -- map_change` → `running 8`，**8 passed / 0 failed**；
+- `cargo test -p game-svr --lib -- eat_move` → `running 18`，**18 passed / 0 failed**；
+- 全量 `cargo test -p game-svr --lib` → `running 2227`，**2154 passed / 0 failed / 73 ignored**；`cargo fmt --all -- --check` rc=0。
+
+### 5.6 登记（本卡不改）：生产 drain 的时序差异
+`drain_map_change` 的生产调用点只有两处（`handle_move_cmd` 的 walk 臂与 turn 臂）。吃物品（IT-09/10/11/13）、
+魔号 21（`MagSaceMove`）、P22 `MoveToHome`、脚本 `MAPMOVE` 只 `base_object_move_player` 记一条 `MapChange`，
+**没有第三方 tick 级 drain** ⇒ 这些路径的换图簇（含 766/54）要等该玩家下一次 walk/turn 才 flush
+（测试里显式调 drain，故对拍面看不到该时序差）。**影响**：上述路径的帧**及时性**（不改变帧内容/顺序）；
+**另开单，不在本卡修**。
