@@ -929,6 +929,13 @@ internal static class Program
         templates[2004] = Tpl("unlock", 0, 2, 5);                          // Shape 2：解锁
         templates[2005] = Tpl("inc_pool", 0, 0, 5, ac: 15, mac: 7);        // default：进 IncHealth/IncSpell 池
         templates[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
+        // B3（2026-11-20 清点单第 5 条）：单侧语义模板。
+        templates[2020] = Tpl("hp_only_fixed", 0, 1, 5, ac: 30, mac: 10);    // Shape1：只 HP 封顶（L2 max 24）
+        templates[2021] = Tpl("mp_only_fixed", 0, 1, 5, ac: 10, mac: 30);    // Shape1：只 MP 封顶（L2 max 18）
+        templates[2022] = Tpl("hp_only_percent", 0, 3, 5, ac: 100, mac: 10); // Shape3：只 HP 截断（L4 37/25）
+        templates[2023] = Tpl("mp_only_percent", 0, 3, 5, ac: 10, mac: 100); // Shape3：只 MP 截断
+        templates[2024] = Tpl("ac_only_pool", 0, 0, 5, ac: 15, mac: 0);      // default：只 AC>0
+        templates[2025] = Tpl("mac_only_pool", 0, 0, 5, ac: 0, mac: 7);      // default：只 MAC>0
         templates[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
         templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);
         templates[2009] = Tpl("repair_oil", 3, 9, 5);
@@ -1082,6 +1089,27 @@ internal static class Program
         expUpAbil.Exp = 9990;
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
+
+        // ── B3（2026-11-20 清点单第 5 条）：单侧语义补例 ─────────────────────────────
+        // Shape1 固定量：只一侧到顶；Shape3 百分比：只一侧截断；default：AC/MAC 只一侧 >0。
+        cases.Add(RunCase(table, net, "eat_ok_shape1_clamp_hp_only", new Ctx(),
+            new List<Spec> { S(1, 2020) }, 1, "hp_only_fixed",
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape1_clamp_mp_only", new Ctx(),
+            new List<Spec> { S(1, 2021) }, 1, "mp_only_fixed",
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape3_percent_clamp_hp_only", new Ctx(),
+            new List<Spec> { S(1, 2022) }, 1, "hp_only_percent",
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape3_percent_clamp_mp_only", new Ctx(),
+            new List<Spec> { S(1, 2023) }, 1, "mp_only_percent",
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape0_ac_only", new Ctx(),
+            new List<Spec> { S(1, 2024) }, 1, "ac_only_pool",
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape0_mac_only", new Ctx(),
+            new List<Spec> { S(1, 2025) }, 1, "mac_only_pool",
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
 
         // ── IT-16 彩票（StdMode3 / Shape11，宿主级）──────────────────────────────────────
         // 只在 `MIR2_RNG_SEED` 给定时启用（钩子非必需：抽值由探针临时安装的 `ProbeRandom`

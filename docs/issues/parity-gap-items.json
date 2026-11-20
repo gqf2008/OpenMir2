@@ -85,6 +85,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -97,7 +98,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：原两例两侧同时到顶/同时不顶，只 HP 封顶而 MP 不封顶及其反向未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -132,6 +133,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -145,7 +147,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：单例，百分比下只一侧截断/另一侧不截断的边界未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -157,6 +159,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_ac_or_mac_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -169,7 +172,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ushort 回绕",
+      "notes": "ushort 回绕 未覆盖子空间（scope=single_ac_or_mac_uncovered）：原两例 AC>0 且 MAC>0、两侧 0；`if(AC>0)`/`if(MAC>0)` 单侧分支未覆盖（B3）。",
       "basis": "semantic"
     },
     {
