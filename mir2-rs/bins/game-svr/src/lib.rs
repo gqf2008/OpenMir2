@@ -2973,6 +2973,31 @@ fn apply_pending_level_up(
         let client_layout = game_svr::smframe::client_layout_enabled();
         send_levelup_frames(sg, entry, gates, client_layout);
     }
+    // **卡 `openmir2-charstatuschanged-wiring` #1**：oracle `HasLevelUp`
+    // （`PlayObject.cs:5242-5252`）内的 `RecalcAbilitys()` 无条件
+    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
+    // ⇒ 发送者自通知 + 观察者各一条 657。
+    // 线上序：`RM_LEVELUP` 低字节 < `RM_CHARSTATUSCHANGED(155)` ⇒ 657 排在 45/52/752 之后；
+    // `status` 取**重算之后**的当下值（`PlayObject.cs:2873` 的取值时点）。
+    let char_status = world.get_char_status(sg.actor_id);
+    let hit_speed = sg.hit_speed;
+    if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(sg.actor_id, char_status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "657(GM @Level)") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    }
+    broadcast_charstatuschanged_except_self(
+        world,
+        online,
+        gates,
+        sg.actor_id,
+        char_status,
+        chat::send_ref_msg_range(),
+    );
     true
 }
 
@@ -49511,13 +49536,14 @@ break
     ///
     /// 牙：① `-1 ⇒ 255`、`300 ⇒ 255`（`(byte)HUtil32._MIN(MAXUPLEVEL=255, n)` 的 unchecked 回绕，
     /// **不得先钳 0**）；② `0 ⇒ 0`、`7 ⇒ 7`；③ 成功路径恰发
-    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752)` 三条、顺序固定；
+    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752) → SM_CHARSTATUSCHANGED(657)` 四条、顺序固定
+    ///（657 来自 `HasLevelUp` 内 `RecalcAbilitys()`，见卡 `openmir2-charstatuschanged-wiring` #1）；
     /// ④ `wabil.level` / `max_exp` / 实体 `level`·`max_exp` 四处一致；
     /// ⑤ **只发给发起者**：第二个在线角色（socket 902）收不到任何帧
     ///（`GmRig::say` 对任何非 901 socket 直接 panic）；
     /// ⑥ 负例：**权限 0（现网生产值）** ⇒ 只回 1 条 `权限不够!!!`、会话与实体等级都不变。
     #[test]
-    fn level0_writes_level_and_emits_three_levelup_frames_to_self_only() {
+    fn level0_writes_level_and_emits_levelup_frames_plus_657_to_self_only() {
         for (arg, want) in [("-1", 255u8), ("300", 255), ("0", 0), ("7", 7)] {
             let mut rig = GmRig::new();
             // 第二个在线角色：只用于证明「不广播」（任何发给 902 的帧会让 `GmRig::say` panic）。
@@ -49527,7 +49553,11 @@ break
                 .iter()
                 .map(|b| u16::from_le_bytes([b[4], b[5]]))
                 .collect();
-            assert_eq!(idents, vec![45, 52, 752], "arg={arg}：恰 45→52→752 三条");
+            assert_eq!(
+                idents,
+                vec![45, 52, 752, 657],
+                "arg={arg}：恰 45→52→752→657 四条（657 = RecalcAbilitys 的 StatusChanged）"
+            );
             let sg = &rig.sessions["aaa"];
             assert_eq!(sg.state.wabil.level, want, "arg={arg} ⇒ level={want}");
             assert_eq!(
@@ -97196,6 +97226,98 @@ fn ",
             derived.allow_group_re_call,
             "EntityDerived 必须采集 allow_group_re_call（PlayerRecordData.allow_group_re_call 的存档源）"
         );
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #1**：GM 改等级 ⇒ oracle `HasLevelUp` 内的
+    /// `RecalcAbilitys()` 会发 657。直调 `apply_pending_level_up`（生产入口）并自带 socket 排空，
+    /// 断言四件事：
+    /// 1. **泵序**：`SM_LEVELUP(45)` 先于 657（`RM_LEVELUP` 低字节 < `RM_CHARSTATUSCHANGED` 的 155）；
+    /// 2. **status 取重算后的值**：先把实体的 `char_status_ex` 造到 `2`（`get_char_status` =
+    ///    `GetBuffStatus() | (CharStatusEx & 0xFFFF)`），657 的 `param/tag` 期望**具体值 `2 / 0`**
+    ///    （不是"与 `get_char_status()` 相等"的自证式断言；恒 0 的夹具下把取值改成常量 0 也能绿
+    ///    ⇒ 造非零值才有牙）；
+    /// 3. **自己 1 条、+5 观察者 1 条**；
+    /// 4. **+13 观察者 0 条**（±12 外，范围反例）。
+    ///
+    /// 每 socket 不重复由原语层 `charstatuschanged_self_and_broadcast_do_not_duplicate` 保证。
+    #[test]
+    fn gm_level_emits_657_self_and_nearby_observers() {
+        use mir2_protocol::messages::{SM_CHARSTATUSCHANGED, SM_LEVELUP};
+        let mut rig = GmRig::new();
+        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = rig.world.add_entity(e);
+            online_set(
+                &mut rig.online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体")
+            .buff
+            .char_status_ex = 2;
+        rig.sessions
+            .get_mut("aaa")
+            .expect("会话")
+            .gm
+            .pending_level_up = Some(60);
+        apply_pending_level_up(
+            &mut rig.sessions,
+            "aaa",
+            &rig.catalog,
+            &rig.need_exps,
+            &mut rig.world,
+            &rig.online,
+            &rig.gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rig.rx.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+
+        // 1) 泵序：45 的位置必须早于 657。
+        let i45 = frames
+            .iter()
+            .position(|(_, b)| ident(b) == SM_LEVELUP)
+            .expect("必须先发 SM_LEVELUP(45)");
+        let i657 = frames
+            .iter()
+            .position(|(_, b)| ident(b) == SM_CHARSTATUSCHANGED)
+            .expect("必须发 657");
+        assert!(
+            i45 < i657,
+            "线上序：RM_LEVELUP(45) 先于 657（实得 i45={i45}, i657={i657}）"
+        );
+
+        // 2/3/4) 逐 socket 计数 + status 具体值。
+        let mut per: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_default() += 1;
+                let param = u16::from_le_bytes([b[6], b[7]]);
+                let tag = u16::from_le_bytes([b[8], b[9]]);
+                assert_eq!(
+                    (param, tag),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0（重算后的当下值）"
+                );
+            }
+        }
+        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
+        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
     }
 
     /// **m1 · drain 步骤②（`apply_pending_level_up`）脚本桥独立牙**：
