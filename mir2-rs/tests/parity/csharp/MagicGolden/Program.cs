@@ -161,6 +161,7 @@ public static class Program
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
+            if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
@@ -931,6 +932,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// 卡 §39：置 `HAM_PEACE` ⇒ 只有 `Race >= Animal`（怪物）进伤害链，玩家 target 不取随机数。
         /// </summary>
         public int CasterAttackMode = -1;
+        /// <summary>
+        /// 卡 36：施法者也按**登录序**派生 `Abil`（只调 `RecalcLevelAbilitys()`，**不**调
+        /// `RecalcAbilitys()`）——让 `AttPowerUp→RecalcAbilitys` 的输入 `Abil` 等级自洽，
+        /// 同时不改夹具设的 `WAbil.SC`（`nTime` 的 `Lo(SC)*10` 输入）。缺省 false ⇒ 既有件零变化。
+        /// </summary>
+        public bool CasterLoginOrderAbil;
         /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
         public int CasterHp;
         public int CasterMaxHp;
@@ -1474,6 +1481,35 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return -1;
     }
 
+    /// <summary>
+    /// `--case uenhancer`：36 `SKILL_UENHANCER`（无极真气，`MagicManager.cs:610-630`）。
+    ///
+    /// 目标归一（`:612-617`）：`targetObject == null ⇒ target = self`（本批用 `targetNull=true`），
+    /// 效果 **`AttPowerUp` 落在施法者自己**：`ExtraAbil[0]/Times[0]` + `SysMsg` + `RecalcAbilitys`
+    /// + `SendMsg(RM_ABILITY)` —— 全部在 DoSpell 内**施法者侧同步**完成 ⇒ 可升 verified。
+    /// **scope**：只证 DoSpell 时刻的 `ExtraAbil[0]/Times[0]` 与帧；施法者 `Abil` 已按登录序对齐
+    /// （`CasterLoginOrderAbil`：只 `RecalcLevelAbilitys()`，保留 `WAbil.SC=15` 供 `nTime`）。
+    /// 门：`IsProperFriend(target)` → `CheckAmulet(1,1)`（`ArmRingAmulet=true`）。
+    /// </summary>
+    private static int UenhancerBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        spec.CasterLoginOrderAbil = true;
+        spec.CasterHp = 500;
+        spec.CasterMaxHp = 500;
+        var cases = new[]
+        {
+            RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, true),
+            RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, true),
+            RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, true),
+        };
+        return EmitGolden(spec, cases);
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -1529,6 +1565,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         if (spec.CasterHitPoint >= 0) caster.HitPoint = (byte)spec.CasterHitPoint;
         if (spec.CasterDC >= 0) caster.WAbil.DC = (ushort)spec.CasterDC;
         if (spec.CasterAttackMode >= 0) caster.AttatckMode = (OpenMir2.Enums.AttackMode)spec.CasterAttackMode;
+        // 卡 36：施法者 Abil 按等级派生（只 RecalcLevelAbilitys，不碰 WAbil）。
+        if (spec.CasterLoginOrderAbil) caster.RecalcLevelAbilitys();
         if (spec.CasterHp > 0)
         {
             // 29 的「多朋友」支：施法者自身也要 `HP < MaxHP` 才被 `MagBigHealing` 选中。
