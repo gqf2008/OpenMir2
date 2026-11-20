@@ -73962,6 +73962,31 @@ SendRefMsgRange=15
         fireball_case_assert("fire", label);
     }
 
+    /// **10 疾光电影**（MG-18）：与 9 同形，但 `steps = 8`、`undeadAttack = true`
+    /// （`MagicManager.cs:277-289`）⇒ 逐击 `Round(pow*1.5)` 复合。
+    fn skill10_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("skill10", 10, 1, label, seed, base);
+        fireball_case_assert("skill10", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s1() {
+        skill10_assert("s1", golden_seed("skill10", "s1"), 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s5() {
+        skill10_assert("s5", golden_seed("skill10", "s5"), 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s13() {
+        skill10_assert("s13", golden_seed("skill10", "s13"), 3000);
+    }
+
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fire_parity_s1() {
