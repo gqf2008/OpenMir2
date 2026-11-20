@@ -170,3 +170,23 @@
 - **#11 `apply_pending_gm_target_ops` / #12 `apply_pending_gm_guild_commands`：要真实调用面多副本**
   （经生产排水入口在 500ms 窗口内两次事件），函数级两次直调只能作为补充；若夹具存在硬障碍，
   明说并登记「真实调用面未覆盖」，不得默认降级。
+
+### 批 7（`push_broadcast`，按函数拆 7a/7b/7c；共 17 个调用点）
+> 拆分（opc-07 裁定）：7a `drain_mag_struck_b2`（4 点）→ 7b `finish_spell_tail_with` +
+> `handle_spell_cmd_with_magic`（9 点）→ 7c `push_name_color(_self)` + 1100 两处（4 点）。
+> 实现：新增 `SpellFrameBuf::push_broadcast_cached`（投递段与 `push_broadcast` 逐字相同，
+> 仅收件人走 `ref_msg_cache::targets`）；逐站点迁移，**旧 `push_broadcast` 在 7c 迁完后应无调用者**。
+
+#### 7a `drain_mag_struck_b2`（4 点）
+- **oracle 逐点锚与顺序**：`BaseObject.Base.cs` 的 `Operate(RM_MAGSTRUCK)` 支 =
+  `StruckDamage()` → `HealthSpellChanged()`（53；`ShowHp` 时 `SendRefMsg`，无 race 门）→
+  `SendRefMsg(RM_STRUCK_MAG)`（31）；随后自投 `RM_STRUCK` 由消息泵处理 →
+  `BreakHolySeizeMode()`（`AnimalObject.cs`）→ `RefNameColor()`（`BaseObject.cs`）→ 656。
+- **无「一次 SendRefMsg → 宿主多帧」共用判定点**：三次独立 SendRefMsg ⇒ 同 sender 下
+  ① 刷新（±12 闭区间）、②③ 命中（`|Δ|<11`）。
+- **两种 656 不混**：本函数 656 的 sender 是**受击者**（BreakHolySeizeMode→RefNameColor）；
+  `MagStruckOutcome.hitter_name_color` 的 656 是**攻击方**（`SetPkFlag→RefNameColor`），
+  **不在 7a**（由 `flush_hitter_name_colors` 另发）。
+- 用例（跨帧族同窗口）：`mag_struck_player_53_then_31_share_cache_window`（边界只收 53）、
+  `mag_struck_monster_53_31_656_share_cache_window`（边界只收 53，31/656 都被挡）、
+  `mag_struck_hidden_player_only_self`（隐藏 ⇒ 只自己）。
