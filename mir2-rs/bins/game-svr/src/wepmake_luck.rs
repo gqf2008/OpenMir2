@@ -500,7 +500,10 @@ mod tests {
                 red_msg_bcolor: 56,
                 green_msg_fcolor: 219,
                 green_msg_bcolor: 255,
+                blue_msg_fcolor: 251,
+                blue_msg_bcolor: 252,
                 repair_item_dec_dura: 90,
+                now_ms: 0,
                 sysmsg: crate::useitem::SysMsgTexts::default(),
                 recalc: None,
             };

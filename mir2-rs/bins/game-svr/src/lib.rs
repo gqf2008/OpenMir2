@@ -10603,13 +10603,58 @@ fn push_eat_notices(
 ) {
     for n in notices {
         match game_svr::pickwire::notice_frame(n, wire) {
-            Some(body) => q.push(gate_idx, socket, n.ident as u8, body),
+            Some(body) => {
+                q.push(gate_idx, socket, n.ident as u8, body.clone());
+                // oracle `RecalcAbilitys` 尾段对 657 发**两次**：`:2875 StatusChanged()` 的广播副本
+                // （`SendRefMsg` 含自己）先入队；`:2876 SendUpdateMsg` 再发前按**队首**同 ident 去重
+                // （pop），然后入队自更新副本。净 1 条，但 pop+push 会重排同优先级元素
+                // （Shape12 六条 252 蓝字的出队序由此定）。**观察者副本不走此路（`SendRefMsg` 无去重）。**
+                if n.ident == mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32 {
+                    // 队列里存的是 **SM 帧**（RM→SM 已映射）⇒ 去重按该帧的 SM ident 比对。
+                    if let Some(sm) =
+                        mir2_protocol::frame::CommandMessage::from_bytes(&body).map(|m| m.ident)
+                    {
+                        let _ = q.pop_head_if_ident(gate_idx, socket, sm);
+                    }
+                    q.push(gate_idx, socket, n.ident as u8, body);
+                }
+            }
             None => glog!(
                 "WRN",
                 "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
                 n.ident
             ),
         }
+    }
+}
+
+/// oracle `EatItems` 尾部才 `WeightChanged()`：把 `RM_WEIGHTCHANGED` 移到 case 内通知**之后**再入队。
+///
+/// **为什么必须移**：`PriorityQueue` 的同优先级出队序依赖**入队历史**（sift）；
+/// Shape12 的六条 `RM_SYSMESSAGE`(252) 的出队序由"657 之前是否已插入 622"决定——
+/// 生产里 `use_item` 先 push 622、宿主再 append 657/52 ⇒ 必须在这层按 oracle 发送序重排。
+fn eat_notices_weight_changed_last(notices: &mut Vec<game_svr::useitem::QueuedNotice>) {
+    if let Some(pos) = notices
+        .iter()
+        .position(|n| n.ident == game_svr::useitem::RM_WEIGHTCHANGED)
+    {
+        let w = notices.remove(pos);
+        notices.push(w);
+    }
+}
+
+/// Shape12 的 657 自通知（oracle `RecalcAbilitys` 尾段 `:2874-2876`）：
+/// `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)` 的落位是
+/// **`wParam = 临时 HitSpeed`（= 开局清零后的 `ExtraAbil[3]`，657 handler 不读）、
+/// `nParam1 = CharStatus`**（帧的 `Param/Tag` 取它的 Lo/HiWord）。
+fn shape12_status_notice(status: i32, hitspeed_temp: u16) -> game_svr::useitem::QueuedNotice {
+    game_svr::useitem::QueuedNotice {
+        ident: mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32,
+        w_param: i32::from(hitspeed_temp),
+        n_param1: status,
+        n_param2: 0,
+        n_param3: 0,
+        text: game_svr::useitem::NoticeText::None,
     }
 }
 
@@ -10800,6 +10845,16 @@ fn handle_eat_cmd(
     // **IT-16 彩票**：oracle 走到 `EatUseItems` case 11 的判据 = 本件模板
     // `StdMode==3 && Shape==11`（`PlayObject.Base.cs:2162-2163/2298`）。
     // 死亡/禁药/物品不存在时 `out.eaten` 为 false，后续不抽、不计数。
+    // **IT-07 卷轴 Shape12**：oracle `EatItems` 的 `case 12` 在**吃完后**做 `RecalcAbilitys + RM_ABILITY`；
+    // 纯 `use_item` 只落 `ExtraAbil/Flag/Times` 与蓝字通知。
+    let shape12_item = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == recog)
+        .and_then(|it| catalog.get(it.index))
+        .is_some_and(|t| t.std_mode == 3 && t.shape == 12);
+    // **IT-16 彩票**：判据 = 本件模板 `StdMode==3 && Shape==11`（模板查找在形状 12 之后复用同一写法）。
     let lottery_item = sg
         .state
         .item_list
@@ -10866,6 +10921,9 @@ fn handle_eat_cmd(
         green_msg_bcolor: u16::from(colors.green_b),
         repair_item_dec_dura,
         sysmsg,
+        blue_msg_fcolor: u16::from(colors.blue_f),
+        blue_msg_bcolor: u16::from(colors.blue_b),
+        now_ms: now_ms() as i32,
         recalc: Some(recalc),
     };
     let mut out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
@@ -11028,6 +11086,40 @@ fn handle_eat_cmd(
             // 不自行排序（牙：对调这两条发送序，线序必须不变）。
         }
     }
+    // **IT-07 卷轴 Shape12 宿主半**（oracle `Base.cs:2153-2158`）：写回实体 → `RecalcAbilitys` → `RM_ABILITY`。
+    // **657 口径（以 oracle 源码为准）**：`RecalcAbilitys` 的 HITSPEEDUP 块只写**临时** `HitSpeed`
+    // （`PlayObject.cs:2830-2832`），随后 `:2899 HitSpeed = AddAbil.HitSpeed` 覆盖；`:2876` 的
+    // `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)` 把临时值放进队列 **`wParam`**，
+    // 657 handler（`PlayObject.Message.cs:1845`）只读 `nParam1` 与出队时的落地 `HitSpeed`
+    // ⇒ **帧 `Param/Tag = LoWord/HiWord(CharStatus)`、`Series` = 落地 HitSpeed；临时值既不进帧也不进字段**。
+    // `ExtraAbil` 本身不折进 `WAbil`（oracle `:2899-2906` 无条件覆盖）——本块不调 `apply_extra_abil`。
+    // `RecalcAbilitys` 尾部另发 10139（自通知 + 观察者两条，见 openmir2-charstatuschanged-gap.md）。
+    if out.eaten && shape12_item {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            // `BuffState` 是这三组字段的可变组件（`EntityRef` 上的同名扁平字段是只读投影）。
+            e.buff.extra_abil = state.extra.extra_abil;
+            e.buff.extra_abil_flag = state.extra.extra_abil_flag;
+            e.buff.extra_abil_times = state.extra.extra_abil_times;
+        }
+        let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
+        // **657 自通知**（oracle `RecalcAbilitys` 尾段 `CharStatus=GetCharStatus(); StatusChanged();
+        // SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus,…)`，`:2874-2876`）：
+        // `nParam1 = CharStatus`（帧 Param/Tag 取它的 Lo/HiWord），`wParam = 临时 HitSpeed`
+        // （=开局清零后的 `ExtraAbil[3]`，handler 不读）；观察者面由下方 `broadcast_…` 依据本通知触发。
+        out.notices.push(shape12_status_notice(
+            world.get_char_status(actor_id),
+            state.extra.extra_abil[3],
+        ));
+        out.notices.push(game_svr::useitem::QueuedNotice {
+            ident: game_svr::useitem::RM_ABILITY,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        });
+    }
 
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
     // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
@@ -11077,6 +11169,8 @@ fn handle_eat_cmd(
         }
     }
 
+    // oracle `EatItems` 尾部才 `WeightChanged()`（详见 [`eat_notices_weight_changed_last`]）。
+    eat_notices_weight_changed_last(&mut out.notices);
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
         return;
     };
@@ -11295,6 +11389,24 @@ impl TickFrameQueue {
             self.order.push(key);
         }
         q.enqueue(body, priority);
+    }
+
+    /// 该收件人队列的队首 ident（无队列/空 ⇒ `None`）。供 `SendUpdateMsg` 头-only 去重用。
+    pub(crate) fn peek_ident(&self, gate_idx: i32, socket: i32) -> Option<u16> {
+        let body = self.queues.get(&(gate_idx, socket))?.peek()?;
+        mir2_protocol::frame::CommandMessage::from_bytes(body).map(|m| m.ident)
+    }
+
+    /// `SendUpdateMsg` 的头-only 去重（`BaseObject.Message.cs:283-303`）：
+    /// 若该收件人队列的**队首** ident == `ident`，弹出一条。不改变 [`Self::flush`] 的出队语义。
+    pub(crate) fn pop_head_if_ident(&mut self, gate_idx: i32, socket: i32, ident: u16) -> bool {
+        if self.peek_ident(gate_idx, socket) != Some(ident) {
+            return false;
+        }
+        self.queues
+            .get_mut(&(gate_idx, socket))
+            .and_then(game_svr::msgqueue::NetPriorityQueue::dequeue)
+            .is_some()
     }
 
     /// 逐收件人出队下发；返回**实际发出**的帧数（收件人不在线/网关线号找不到 ⇒ 丢弃不计）。
@@ -102552,6 +102664,283 @@ fn ",
             "诅咒支 + Desc[3]=0/Desc[4]=10：`MakeWeaponUnlock` 两支都不进 ⇒ **零 SysMsg**（oracle 夹具同）"
         );
         assert_eq!((d3, d4), (0, 10), "上界：Desc[4] 不加到 11");
+    }
+    /// **P2-2（`3b`）：ExtraAbil 死路的直接行为证据**——Shape12 后泵出的 `SM_ABILITY(52)` 尾
+    /// = **未加 buff** 的 `WAbil` 客户端编码；两次重算（ExtraAbil 有无）得到的 `WAbil` 相等。
+    /// 这是"ExtraAbil 只进状态数组、不进最终 WAbil"的可观测面（oracle `:2899-2906` 覆盖 `:2818-2846`）。
+    #[test]
+    fn it07_ability52_tail_is_unbuffed_wabil() {
+        use mir2_protocol::frame::CommandMessage;
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mk = || {
+            let mut sg = crate::tests::test_session_ground(42);
+            sg.equip.job = 0;
+            sg.equip.abil.level = 1;
+            sg.equip.abil.dc = 0x0101;
+            sg.equip.abil.max_hp = 100;
+            sg.equip.abil.max_mp = 50;
+            sg
+        };
+        // 两个同起点会话：一个无 buff、一个 ExtraAbil[DCUP]=5 ⇒ 重算后 WAbil 必须相等。
+        let mut sg_a = mk();
+        let _ = recalc_session_ability(&mut sg_a, &catalog, None, None, None);
+        let base = sg_a.state.wabil.clone();
+        let mut sg_b = mk();
+        let mut extra = [0u16; 7];
+        extra[0] = 5;
+        let _ = recalc_session_ability(&mut sg_b, &catalog, Some(&extra), None, None);
+        assert_eq!(
+            sg_b.state.wabil, base,
+            "ExtraAbil 不进 WAbil（有/无 buff 两次重算相等；oracle :2899-2906 覆盖 :2818-2846）"
+        );
+        // 52 尾 = 该（未加 buff 的）WAbil 的客户端编码。
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 42,
+            gold: 0,
+            game_gold: 0,
+            wabil: sg_b.state.wabil.clone(),
+            abil_exp: sg_b.equip.abil.exp,
+            sys_msg: None,
+            job: sg_b.equip.job,
+            ability_tail: ability_tail(&sg_b.state.wabil, mir2_client_ability_layout()),
+            sub_bytes: sg_b.sub.to_frame_bytes(),
+            hunger_status: sg_b.hunger_status,
+            hit_speed: sg_b.hit_speed,
+        };
+        let n = game_svr::useitem::QueuedNotice {
+            ident: game_svr::useitem::RM_ABILITY,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        };
+        let body = game_svr::pickwire::notice_frame(&n, &wire).expect("52 必须有映射");
+        let m = CommandMessage::from_bytes(&body).expect("SM 帧可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_ABILITY);
+        assert_eq!(
+            &body[CommandMessage::SIZE..],
+            mir2_protocol::edcode::encode(&record::encode_ability_client(&sg_b.state.wabil))
+                .as_slice(),
+            "52 尾 = 未加 buff 的 WAbil 客户端编码"
+        );
+        // 负例：把 ExtraAbil 折进 WAbil 后的编码必须**不等于**该尾（防"恒等"假绿）。
+        let mut buffed = base.clone();
+        game_svr::ability::apply_extra_abil(&mut buffed, &extra);
+        assert_ne!(
+            buffed, base,
+            "负例前提：apply_extra_abil 确实会改 WAbil（DCUP 加高字节）"
+        );
+        assert_ne!(
+            mir2_protocol::edcode::encode(&record::encode_ability_client(&buffed)),
+            body[CommandMessage::SIZE..].to_vec(),
+            "52 尾不是加 buff 后的值"
+        );
+    }
+    /// **F1-T 用例（IT-07；`emit_eat_notices` = `handle_eat_cmd` 唯一的吃路径排水点）**：
+    /// 入队序 = 生产真实序 `[SYSMESSAGE×6, WEIGHT(131), CHARSTATUSCHANGED(155), ABILITY(67)]`
+    /// （`use_item` 六条蓝字 + `WeightChanged`，宿主再 push 657 自通知与 `RM_ABILITY`）。
+    /// 期望线序 = **单遍** .NET 四叉堆出队序：`ABILITY → WEIGHT → 657 → 六条 SYSMESSAGE
+    /// 按 sift 序 `[S1,S5,S4,S3,S2,S0]`**。该排列由本仓 `crates/world-bevy/src/msgqueue.rs`
+    /// **单独 rustc 实算**（2026-11-20，三种口径两两不同：单遍 `[1,5,4,3,2,0]`、
+    /// 原"排水两遍"复合 `[3,4,5,1,2,0]`、入队/稳定排序 `[0,1,2,3,4,5]`）。
+    /// **牙**：排水改回 vec 序/排序序 ⇒ 六条按 `S0..S5` 发出 ⇒ 红；改回两遍 ⇒ `[3,4,5,1,2,0]` ⇒ 红。
+    /// 本用例走的是**生产接线**（`emit_eat_notices`），不是只测被它调用的某个 helper。
+    ///
+    /// **能力帧历史（已闭合）**：`card/ability-frames`（`ee419b901`，merge `790f740c1`）合入前，
+    /// `RM_ABILITY(10051)` 在 `notice_frame` **无映射** ⇒ 52 被丢弃、`sent == 8`；合入后 52 必须出帧
+    /// ⇒ **`sent == 9`**（oracle `RecalcAbilitys(); SendMsg(RM_ABILITY)`，`PlayObject.Base.cs:2153-2158`）。
+    /// **入队的 A 必须留在本用例输入里**——它参与堆的 sift。
+    /// **注意**：本用例的期望序是**本仓模型自算**（不经夹具），只证明"生产接线按堆出队"；
+    /// 与 oracle 夹具 `expect.notices` 的序比对见 `openmir2-it07-notice-order` 调查（`3b` P1）。
+    #[test]
+    fn it07_emit_eat_notices_production_order_is_heap_sift() {
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 0,
+            sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
+            hunger_status: 0,
+            hit_speed: 0,
+        };
+        // **期望来自夹具**（不是模型自算）：六条同 ident(11004) 只能靠**文本**区分，
+        // 夹具 `expect.notices` 记录的就是 oracle 的**出队序**。
+        let fx = {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/parity/m3/fixtures/buff_vectors.json"
+            );
+            let raw = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("buff_vectors 缺失/不可读：{path}（{e}）"));
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .unwrap_or_else(|e| panic!("{path} 非法 JSON：{e}"))
+        };
+        let case = fx["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_shape12_six_buffs")
+            .expect("six_buffs case");
+        let fx_texts: Vec<String> = case["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["ident"].as_i64() == Some(11004))
+            .map(|n| n["text"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(fx_texts.len(), 6, "六条蓝字文本");
+        // **入队序 = oracle 源码序**（`PlayObject.Base.cs:2101-2157`：DC→MC→SC→HIT→HP→MP）。
+        let order = ["攻击力", "魔法力", "精神力", "攻速", "体力值", "魔法值"];
+        let enq_texts: Vec<String> = order
+            .iter()
+            .map(|k| {
+                fx_texts
+                    .iter()
+                    .find(|t| t.contains(k))
+                    .unwrap_or_else(|| panic!("夹具文案缺 {k}"))
+                    .clone()
+            })
+            .collect();
+        let mut notices: Vec<_> = enq_texts
+            .iter()
+            .map(|t| game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 251,
+                n_param2: 252,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::Inline(t.clone()),
+            })
+            .collect();
+        let plain = |ident: i32| game_svr::useitem::QueuedNotice {
+            ident,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        };
+        // **宿主列表序**（`use_item` 先 push 622，宿主再 append 657/52）——然后由生产 helper 重排成
+        // oracle 发送序：六条蓝字 → 657 → 52 → **622 最后**（`EatItems` 尾部）。
+        notices.push(plain(game_svr::useitem::RM_WEIGHTCHANGED));
+        notices.push(plain(game_svr::useitem::RM_CHARSTATUSCHANGED));
+        notices.push(plain(game_svr::useitem::RM_ABILITY));
+        eat_notices_weight_changed_last(&mut notices);
+        // 期望线序：A(52,67) → W(622,131) → C(657,155) → 六条蓝字（**夹具出队序**）。
+        let mut want: Vec<Vec<u8>> = vec![
+            game_svr::pickwire::notice_frame(&notices[7], &wire).expect("52"),
+            game_svr::pickwire::notice_frame(&notices[8], &wire).expect("622"),
+            game_svr::pickwire::notice_frame(&notices[6], &wire).expect("657"),
+        ];
+        for t in &fx_texts {
+            let n = notices
+                .iter()
+                .find(|n| matches!(&n.text, game_svr::useitem::NoticeText::Inline(x) if x == t))
+                .unwrap_or_else(|| panic!("夹具文本无对应通知：{t}"));
+            want.push(game_svr::pickwire::notice_frame(n, &wire).expect("100"));
+        }
+        let uniq: std::collections::BTreeSet<&Vec<u8>> = want.iter().collect();
+        assert_eq!(
+            uniq.len(),
+            want.len(),
+            "六条蓝字文本互异 ⇒ 帧两两不同（否则顺序断言无牙）"
+        );
+        // 片① 新架构：`push_eat_notices` 入每收件人队列，`flush` 出队下发。
+        let mut tq = TickFrameQueue::new();
+        push_eat_notices(&mut tq, 0, 901, &notices, &wire);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let sent = tq.flush(&online, &gates, "it07 test");
+        drop(gates);
+        let got: Vec<Vec<u8>> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { body, .. } => Some(body),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent, 9,
+            "52(67) + 131 + 155 + 6×252（ability-frames 已合入）"
+        );
+        assert_eq!(
+            got, want,
+            "生产接线出队序 == 夹具 expect.notices（A→W→C→六条按文本；含 657 的 pop+push 语义）"
+        );
+    }
+    /// **`TickFrameQueue` 的最小去重 API**：`SendUpdateMsg` 头-only 去重只弹**队首同 ident**；
+    /// 队首不同/空队列 ⇒ `false`。`flush` 的出队语义不受影响（本用例只测这两个新方法）。
+    #[test]
+    fn tick_frame_queue_pop_head_if_ident_only_pops_matching_head() {
+        let mk = |ident: u16| {
+            mir2_protocol::frame::CommandMessage::make(i32::from(ident), 0, 0, 0, 0)
+                .to_bytes()
+                .to_vec()
+        };
+        let mut tq = TickFrameQueue::new();
+        tq.push(0, 901, 68, mk(53));
+        assert_eq!(tq.peek_ident(0, 901), Some(53));
+        assert!(!tq.pop_head_if_ident(0, 901, 99), "队首不同 ident ⇒ 不弹");
+        assert_eq!(tq.peek_ident(0, 901), Some(53), "未弹 ⇒ 队首不变");
+        assert!(tq.pop_head_if_ident(0, 901, 53), "队首同 ident ⇒ 弹");
+        assert_eq!(tq.peek_ident(0, 901), None, "弹空");
+        assert!(!tq.pop_head_if_ident(0, 901, 53), "空队列 ⇒ false");
+        assert_eq!(tq.peek_ident(1, 902), None, "无该收件人队列 ⇒ None");
+    }
+    /// **IT-07 657 断言（host 边界：通知构造 + 帧映射）**：Shape12 的 657 自通知
+    /// `nParam1=CharStatus`、`wParam=临时 HitSpeed`（不读）；帧 `Param/Tag = Lo/HiWord(CharStatus)`、
+    /// `Series = 落地 HitSpeed`（`wire.hit_speed`）。实测依据见 `buff_vectors.json`（param=0/tag=0/series=0）。
+    /// **边界**：本用例钉的是「通知构造 → `notice_frame` 映射」；`handle_eat_cmd` 的**单玩家观察者 0 条**
+    /// 由 master 的广播实现（`broadcast_charstatuschanged_except_self` 跳过自己）保证，
+    /// **观察者面归 `card/charstatuschanged` 的用例**，本卡不重复造。
+    #[test]
+    fn it07_shape12_657_notice_fields() {
+        use mir2_protocol::frame::CommandMessage;
+        let n = shape12_status_notice(0x1234, 7);
+        assert_eq!(
+            n.ident,
+            i32::from(mir2_protocol::messages::RM_CHARSTATUSCHANGED)
+        );
+        assert_eq!(n.n_param1, 0x1234, "nParam1 = CharStatus");
+        assert_eq!(n.w_param, 7, "wParam = 临时 HitSpeed（handler 不读）");
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 0,
+            sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
+            hunger_status: 0,
+            hit_speed: 0x0BCD,
+        };
+        let body = game_svr::pickwire::notice_frame(&n, &wire).expect("657 必须有映射");
+        let m = CommandMessage::from_bytes(&body).expect("SM 帧可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+        assert_eq!(m.recog, 7, "recog = ActorId");
+        assert_eq!(m.param, 0x1234, "Param = LoWord(CharStatus)");
+        assert_eq!(m.tag, 0, "Tag = HiWord(CharStatus)");
+        assert_eq!(m.series, 0x0BCD, "Series = 落地 HitSpeed（不是临时值）");
     }
 }
 

@@ -731,6 +731,58 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 **状态**：`verified` + **`scope=partial`**（2026-11-20，master `bb160e2ad`；17a 学习面全绿，17b 技能被动未建模——见 §9.16/独立卡）。
 **scope**：① `recaclc_skill_passives_17b_unmodeled`——657 的 `HitSpeed/CharStatus` 恒 0、17b 未建模；② `item_list_elements_uncompared`——`expect.item_list` **只比件数、元素字段（`make_index/index/dura/dura_max`）记录而不比**（follow-up 卡 `openmir2-itemlist-element-compare`）；③ 622 校验和本夹具仅 `weight=0`（字段本身在 IT-16 已点亮）。
 EAD
+
+### 9.16 IT-07 卷轴 Shape12（六属性 buff）— 第一批结构
+
+**归类**：**StdMode 3 / Shape 12**，`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`，**内联**，不走 `EatUseItems`）。六个**独立** `if`（可同时命中），各看模板一个字节：`LoByte(DC)`→DCUP、`LoByte(MC)`→MCUP、`LoByte(SC)`→SCUP、`HiByte(AC)`→HITSPEEDUP、`LoByte(AC)`→HPUP、`LoByte(MAC)`→MPUP。每命中：`ExtraAbil=max(旧,字节)`、`Flag=0`、`Times=max(旧, now + HiByte(DC)*60000 + HiByte(MAC)*1000)`。**无 RNG**；全不命中 ⇒ 不吃（636）。
+
+**照抄勿修（与 "sec." 同节，都是 oracle 原样）**
+- **657 的口径（2026-11-20 三次更正后的最终版，以代码为准）**：`SendUpdateMsg(wIdent, wParam, lParam1…, sMsg)`（`BaseObject.Message.cs:283`）转发到 `SendMsg(IActor, wIdent, wParam, nParam1, …)`（`:98`）；`SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)`（`PlayObject.cs:2876`）的落位是 **`wParam = 临时 HitSpeed`、`nParam1 = CharStatus`**；657 handler（`PlayObject.Message.cs:1845`）只读 `nParam1` 与 `this.HitSpeed` ⇒ **帧上 `Param/Tag = LoWord/HiWord(CharStatus)`、`Series = 出队时的落地 HitSpeed`，`wParam` 从未被读**。临时 HitSpeed 既不进帧、也不进最终字段 ⇒ **不做"帧 vs 字段"断言**（此前两种表述均作废）。
+- **`ExtraAbil` 的 `WAbil` 效果是死路**（e1 查实）：写入在 `PlayObject.cs:2818-2840`，随后 `:2890-2906` 的 `WAbil.* = Abil + AddAbil`（逐字节 `_MIN(255,和)`）**整体覆盖**，方法 `:2907` 结束；`GetAttackPower` 不读 `ExtraAbil`。⇒ **吃 Shape12 后 `WAbil` 必须不变**；可观测副作用只有：1–6 条蓝字、`RM_ABILITY` 泵出的 52（值仍是未加 buff 的 `WAbil`）、以及状态数组 `ExtraAbil/Flag/Times`。宿主已据此**移除** `apply_extra_abil` 调用，golden/比较器补 `WAbil` 前后不变断言。
+- **F1（线序真 bug，两轮修复）**：第一轮把吃路径排水改成 `NetPriorityQueue`，但 `emit_eat_notices` **排了两遍**（先 `notice_drain_order`、再把结果重排）⇒ 实际线序 = 堆置换的**复合**。**F1-D（2026-11-20，3b 复审）**：改为单遍排水、删 `notice_drain_order`、删 `use_item` 末尾的 `sort_by_key`（它改的是入队序，复刻不了同 ident 的 sift 序，还让"看起来排过序"掩盖真实入队序）。三种口径用本仓 `crates/world-bevy/src/msgqueue.rs` 单独 rustc 实算（入队 `[S×6,W,C,A]`）：单遍 `[A,W,C,S1,S5,S4,S3,S2,S0]`、两遍 `[A,W,C,S3,S4,S5,S1,S2,S0]`、入队/稳定排序 `[S0..S5]` —— 两两不同。**F1-T 用例** `it07_emit_eat_notices_production_order_is_heap_sift` 走**生产接线**（六条同 ident(11004) 用 Inline 文本区分），钉单遍 sift 序；变异「排水改回 vec 序」实测红在 `got == want`。
+- **能力帧依赖（已合入：`card/ability-frames` `ee419b901` → master merge `790f740c1`）**：`RM_ABILITY→SM_ABILITY(52)`、`RM_SUBABILITY→SM_SUBABILITY(752)` 已接。**旧期望 `sent == 8` 错在哪**：它把"`RM_ABILITY(10051)` 无映射 ⇒ WRN 丢弃"写死；映射合入后 52 必须出帧 ⇒ **`sent == 9`**（`it07_emit_eat_notices_production_order_is_heap_sift` 已改并复绿）。**52 的位次依据**（不是"看起来合理"）：oracle `MsgQueue` 按 `(byte)wIdent` 出队——`RM_ABILITY(10051→67)` < `RM_WEIGHTCHANGED(10115→131)` < `RM_CHARSTATUSCHANGED(10139→155)` < `RM_SYSMESSAGE(11004→252)`；本用例入队 `[S×6, W, C, A]` 的单遍四叉堆序 = **`A, W, C, S1,S5,S4,S3,S2,S0`** ⇒ 线帧 ident = **`[52, 622, 657, 100×6]`**。
+- **F3（已改）**：`useitem` 里"同 ident 多帧在本接缝不可达"的枚举被 Shape12 打破，已标注失效并指向新的堆排水。
+
+**帧/泵序**：635/636 直发；每命中一条蓝 `RM_SYSMESSAGE`(11004→252)，`RecalcAbilitys` 后 `RM_ABILITY`(10051→67)，吃完另有 `RM_WEIGHTCHANGED`(10115→131)；`RecalcAbilitys` 尾部 10139(155)。**同优先级陷阱**：最多 6 条 11004 ⇒ 出队序是堆 sift 序，夹具记出队序；若实测等于入队序也如实写（不反推"泵稳定"）。
+
+**10139 依赖**：吃路径上 10139 目前**两条都缺**（自通知 + 观察者，见 `docs/issues/openmir2-charstatuschanged-gap.md`，`2f` 在补）⇒ 本卡对 657 的期望是**两条**，并记"待 10139 落地后复评"，不算本卡缺陷。
+
+**第一批已落地（结构）**：`use_item` 的 `3 if tpl.shape == 12` 臂（六槽写入 + 蓝字通知 + `eaten`）；`UseItemContext` 增 `blue_msg_fcolor/bcolor`、`now_ms`；宿主写回实体 `BuffState` 的三个数组 → `RecalcAbilitys` → `RM_ABILITY`；三条纯用例（六命中/全零不吃/max 合并）+ 全量 `--lib 2078/0/65`、clippy rc=0。
+
+**第二批（探针/夹具/比较器/牙，2026-11-20）**
+- **探针**：`mir2-rs/tests/parity/m3/buff-probe`（由 eat-probe 改造；不动 eat/oil/guild/move 探针），产物 `mir2-rs/tests/parity/m3/fixtures/buff_vectors.json`，4 例：六命中 / 单命中（仅 MAC 低）/ 组合（DC+SC）/ 全零不吃。记录 `ExtraAbil[7]/Flag[7]/Times[7]` 前后、`now_before`、**通知文本**（硬编码字面量 + `"sec."`）。
+- **§29 出队序（实测 6 条同 ident）**：入队序 `DC,MC,SC,HITSPEED,HP,MP`；**出队序 = `DC,MP,HP,HITSPEED,SC,MC`**（sift 置换，**与入队序不同**）。Rust 的 notices 不带文本，故出队序在夹具侧按文本核（断言六条文本互异 + 含 `"sec."`）。
+- **时钟**：`now_ms` 注入 ⇒ Rust 精确断言 `times[k] == now + dur`；oracle 侧取 `times - now_before` 的窗口 `[dur, dur+100]`（墙钟取证窗口），**不核绝对 tick**。
+- **比较器**：`useitem::tests::it07_buff_fixture_matches_pure_decision`（逐例 ExtraAbil/Flag 精确、Times 时长、吃/不吃、蓝字条数）。
+- **牙（§31 五点，实跑）**：
+  | 变异 | 变异行 | 红在 | 还原 sha | 基线 |
+  | --- | --- | --- | --- | --- |
+  | T1 `>`→`>=` | `if val >= 0 {` | `it07_shape12_all_zero_not_eaten` + 夹具例 | 相等 | 绿 |
+  | T2 Times max→赋值 | `extra_abil_times[slot] = t;` | `it07_shape12_max_merge_keeps_larger_values` | 相等 | 绿 |
+- **门禁**：`--lib` 2080 passed / 0 failed / 65 ignored；clippy rc=0；fmt rc=0。
+
+**既有断言更正（IT-07 修复带出，单列；QA 逐条核 oracle）**
+> **同一根因，一个锚解释三处**：旧值都把 `ExtraAbil[0]` 加进 DC 高字节（写入点 `PlayObject.cs:2818-2820`），而 `RecalcAbilitys` 尾段 `:2900` 的 `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil)+Lo(Abil)), MIN(255,Hi+Hi))` **整体覆盖**它 ⇒ 三处的正确值都只能是 `Abil+AddAbil`。
+| 测试 | 旧值 → 新值 | 旧值错在哪（oracle 锚） |
+|---|---|---|
+| `tests::gm_del_skill_host_apply_emits_212_and_greens` | `0x0400` → **`0x0100`** | 旧值把 `ExtraAbil[0]=3` 加到 DC 高字节（写入点 `PlayObject.cs:2818-2820`）；尾段 `:2900` `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil)+Lo(Abil)), MIN(255,Hi+Hi))` 整体覆盖 ⇒ 只能 `Abil+AddAbil` |
+| `tests::spell_p3b5_36_uenhancer_frames_amulet_and_gates` | `0x0E05` → **`0x0A05`** | 同上：nPower(4) 经 ExtraAbil 进 DC 高字节，被 `:2900` 覆盖 |
+| `tests::upgrade_npc_submit_and_getback_full_chain` | `0x0601` → **`0x0101`** | 同上：`ExtraAbil[0]=5` 不进 WAbil；实体 `dc` 跟随同一重算结果 |
+三处均已加"旧值错在哪"的代码注释（含行号），不是"改到新实现能过"。
+
+**WAbil 不变的三方同源**：golden 的 `wabil_before` 是探针在 invoke **前**实采、`expect.wabil` 是 C# 在 invoke **后**实采（均 oracle 侧，非 Rust 回填）；比较器再用**同一份 golden** 断言 Rust `state.wabil` 不变 ⇒ 三方闭环。
+
+**657 入队语义修复（2026-11-20，`3b` P1 调查；`2086bbfd0`）**
+1. **oracle 原样**：`RecalcAbilitys` 尾段对 657 发**两次**——`:2875 StatusChanged()` 直发 `SendMsg`；`:2876 SendUpdateMsg` 再发前按**队首**同 ident 去重（pop），再入队。第二条 **count 不变**，但 pop+push 会**重排同优先级元素**（Shape12 的六条 `RM_SYSMESSAGE(252)` 出队序由此定：`[DC,MP,HP,HIT,SC,MC]`）。**这是 oracle 原样，不是我们发明的机制。**
+2. **我们的两处错**：①入队序 `[S×6, W, C, A]` 应为 `[S×6, C, A, W]`（`WeightChanged` 在 `EatItems` 尾部）；②657 只入队一次、未套 `SendUpdateMsg` 头去重。
+3. **为什么以前没发现**：`it07_emit_eat_notices_production_order_is_heap_sift` **用本仓模型自产期望、再自证** ⇒ 顺序断言从未与夹具 `expect.notices` 比过。**教训：期望必须来自 oracle 产物；"模型自算 + 自己通过"不算对拍。**
+- 修法：`emit_eat_notices` 对 657 走"入队→peek 队首同 ident→pop→再入队"；新增 `eat_notices_weight_changed_last`（622 移到 notices 末尾）；比较器改为**按夹具六条文本逐帧**比（删除自产期望）。
+- **牙**：删 657 去重 ⇒ `got==want` 红（蓝字序错）；不移 622 ⇒ `sent 10 vs 9`（C 不在队首 ⇒ 多一条 657）。两颗各钉一处改动。
+- **回归**：`it12_` 3/3、`it13_` 6/6、`it16_` 3/3（"优先级互异 ⇒ 帧序不变"由实跑证实）；全量 `--lib` **2235 / 2162 passed / 0 failed / 73 ignored**；fmt rc=0。
+- **登记**：`10052 (RM_HEALTHSPELLCHANGED)` 的同类 pop+push 去重**本笔未做**（吃路径内未见 10052；若将来接入须一并套同语义）。
+
+**状态**：`implemented_unverified`（2026-11-20，分支 `card/items-it07-a`，merge master `da63bae28` 后）：**7 条用例全绿**（`it07_*`，含 fixture 4 例比较器 + 夹具序对拍 + 52 值断言）、全量 `--lib 2235 / 2162 passed / 0 failed / 73 ignored`、`cargo check -p game-svr --lib` rc=0、fmt rc=0；`clippy --all-targets` 待窗口。清单未动，待 QA 签。
+
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
 **归类**：**StdMode 3 / Shape 4**。链路：`EatItems`（`PlayObject.Base.cs:2047`）→ `case 3`（`:2098`）→ `switch (stdItem.Shape)`（`:2099`）→ `default: EatUseItems(...)`（`:2162`）→ `case 4`（`:2259`）→ `WeaptonMakeLuck()`（`PlayObject.cs:1500`，原文拼写即 `Weapton`）。**有武器且 `Index > 0` 时恒吃**（函数恒 `return true`）；无武器 ⇒ 返回 false ⇒ **不吃**（636）。

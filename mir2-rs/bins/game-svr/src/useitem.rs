@@ -327,6 +327,11 @@ pub struct UseItemContext<'a> {
     /// `MessageSettings` 的文本（`SysMsg` 的 `sMsg`）：禁药红字与修复油绿字。
     /// 缺省 = oracle 源码默认（见 [`SysMsgTexts`]）。
     pub sysmsg: SysMsgTexts<'a>,
+    /// `[Setup] BlueMsgFColor/BlueMsgBColor`：Shape12 的蓝字 `SysMsg(_, Blue, Hint)`。
+    pub blue_msg_fcolor: u16,
+    pub blue_msg_bcolor: u16,
+    /// 宿主墙钟（`HUtil32.GetTickCount()`）：Shape12 的 `ExtraAbilTimes[k] = max(旧, now + 时长)`。
+    pub now_ms: i32,
     /// `RefMyStatus()` 里 `RecalcAbilitys()` 的观测输入（`PlayObject.cs:2008`）。StdMode 1 跨档才用到；
     /// `None` 时**不**复算 `WAbil`（只发 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）——见模块「未做清单」T-17。
     pub recalc: Option<RecalcInputs<'a>>,
@@ -674,6 +679,59 @@ pub fn use_item(
                             3 if tpl.shape == 11 => {
                                 eaten = true;
                             }
+                            // **IT-07** 卷轴 Shape12：`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`）。
+                            // 六个**独立** `if`（可同时命中），每个看模板的一个字节；**无 RNG**。
+                            // 全不命中 ⇒ `result=false` ⇒ 不吃（636）。文本照抄 oracle（含 MC 那条的 "sec."，见卡）。
+                            3 if tpl.shape == 12 => {
+                                let dur = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
+                                    * 60_000
+                                    + i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) * 1_000;
+                                let mut need = false;
+                                // 顺序 = oracle 的六个 if 顺序：DC低/MC低/SC低/AC高/AC低/MAC低。
+                                for (slot, val) in [
+                                    (0usize, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.dc))), // EABIL_DCUP
+                                    (1, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.mc))), // EABIL_MCUP
+                                    (2, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.sc))), // EABIL_SCUP
+                                    (3, u16::from(mir2_shared::hutil32::hi_byte_u16(tpl.ac))), // EABIL_HITSPEEDUP
+                                    (4, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.ac))), // EABIL_HPUP
+                                    (5, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.mac))), // EABIL_MPUP
+                                ] {
+                                    if val > 0 {
+                                        state.extra.extra_abil[slot] =
+                                            state.extra.extra_abil[slot].max(val);
+                                        state.extra.extra_abil_flag[slot] = 0;
+                                        let t = i64::from(ctx.now_ms.wrapping_add(dur));
+                                        state.extra.extra_abil_times[slot] =
+                                            state.extra.extra_abil_times[slot].max(t);
+                                        // 文本照抄 oracle（`PlayObject.Base.cs:2108-2147`，含 MC 那条 "sec."）。
+                                        let d =
+                                            i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
+                                                + i32::from(mir2_shared::hutil32::hi_byte_u16(
+                                                    tpl.mac,
+                                                )) / 60;
+                                        let sec =
+                                            i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac))
+                                                % 60;
+                                        let text = match slot {
+                                            0 => format!("攻击力瞬间提高{d}分{sec}秒。"),
+                                            1 => format!("魔法力瞬间提高{d}分{sec}sec."),
+                                            2 => format!("精神力瞬间提高{d}分{sec}秒。"),
+                                            3 => format!("攻速瞬间提高{d}分{sec}秒。"),
+                                            4 => format!("体力值瞬间提高{d}分{sec}秒。"),
+                                            _ => format!("魔法值瞬间提高{d}分{sec}秒。"),
+                                        };
+                                        notices.push(QueuedNotice::sysmsg_text(
+                                            ctx.blue_msg_fcolor,
+                                            ctx.blue_msg_bcolor,
+                                            &text,
+                                        ));
+                                        need = true;
+                                    }
+                                }
+                                if need {
+                                    eaten = true;
+                                }
+                            }
                             _ => {}
                         }
                         if eaten {
@@ -718,10 +776,17 @@ pub fn use_item(
     }
 
     // oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`（优先级 = `(byte)wIdent`）⇒ 消息泵按
-    // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
-    // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
+    // **优先级升序**下发。本函数返回的 `notices` 是**入队序**（生产调用顺序），**不是**出队序：
+    // 宿主的 `lib.rs::emit_eat_notices` 用 `NetPriorityQueue` **单遍**排水得到线序。
+    // **F1-D（2026-11-20，3b 复审）**：此处曾有 `sort_by_key(ident)` —— 它改的是**入队序**，
+    // 既复刻不了同 ident 的堆 sift 序，又让"看起来排过序"掩盖真实入队序 ⇒ 已删除。
     //
-    // **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据）：本函数
+    // **F3（2026-11-20 更正）**：`Shape12` 会产出**六条同 ident(11004)** ⇒ 本节原判「同 ident 多帧在
+    // 本接缝不可达」**已失效**；且这六条的堆 sift 出队序 ≠ 入队序（实测 `DC,MP,HP,HITSPEED,SC,MC`
+    // vs 入队 `DC,MC,SC,HITSPEED,HP,MP`）⇒ **排序不再是充分近似**；宿主的吃路径排水已改走
+    // `NetPriorityQueue`（见 `lib.rs::emit_eat_notices`）。下面这段枚举保留为历史依据。
+    //
+    // **历史枚举（2026-11-20 前）**：本函数
     // 的 `notices` 只在五条互斥分支里产生 ——
     //   ① 禁药 `RM_SYSMESSAGE`(252)（`no_drug` 且 StdMode 0..=3；`eaten=false`，与成功支互斥）；
     //   ② `RM_HEALTHSPELLCHANGED`(68)（StdMode 0 的 shape 1 固定量 / shape 3 百分比，两支**互斥**，
@@ -735,7 +800,6 @@ pub fn use_item(
     //   （StdMode 1 状态跳档）/ **`{131}`**（纯 `WeightChanged`：StdMode 2、StdMode 31 解包成功、
     //   以及 StdMode 0 的 shape 非 1/3 的 default 支）/ `{69}`（`can_use_item==false`）。
     // 新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
-    notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {
         eaten,
@@ -998,6 +1062,283 @@ mod tests {
         assert!(cases_or_red(&serde_json::json!({"cases": []})).is_err());
         assert!(cases_or_red(&serde_json::json!({})).is_err());
         assert!(cases_or_red(&fixture()).is_ok(), "真实夹具必须过防空转");
+    }
+
+    fn shape12_ctx<'a>(
+        cat: &'a StdItemCatalog,
+        unbind: &'a UnbindList,
+        now: i32,
+    ) -> UseItemContext<'a> {
+        UseItemContext {
+            catalog: cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: 1,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            green_msg_fcolor: 219,
+            green_msg_bcolor: 255,
+            repair_item_dec_dura: 90,
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: now,
+            sysmsg: SysMsgTexts::default(),
+            recalc: None,
+        }
+    }
+
+    fn shape12_run(
+        tpl: StdItem,
+        state0: UseItemActorState,
+        now: i32,
+    ) -> (UseItemOutcome, UseItemActorState) {
+        let mut cat = StdItemCatalog::new();
+        cat.insert(2300, tpl);
+        let unbind = UnbindList::default();
+        let ctx = shape12_ctx(&cat, &unbind, now);
+        let mut state = state0;
+        let mut list = vec![crate::bag::BagItem {
+            make_index: 1,
+            index: 2300,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut list, &mut item_number);
+        (out, state)
+    }
+
+    fn shape12_tpl(dc: u16, mc: u16, sc: u16, ac: u16, mac: u16) -> StdItem {
+        StdItem {
+            name: "buff_scroll".into(),
+            std_mode: 3,
+            shape: 12,
+            dc,
+            mc,
+            sc,
+            ac,
+            mac,
+            ..Default::default()
+        }
+    }
+
+    fn buff_fixture() -> serde_json::Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/buff_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("buff 夹具缺失/不可读：{path}（{e}）"));
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
+    }
+
+    /// **IT-07 比较器**：逐例核对 `ExtraAbil[7]/Flag[7]`（精确）、`Times`（时长 = `HiByte(DC)*60000 +
+    /// HiByte(MAC)*1000`，oracle 侧取 `times - now_before` 的**窗口**，不核绝对 tick）、吃/不吃、蓝字条数。
+    /// 六条同 ident 的**出队序**只在夹具侧可判（Rust 的 notices 不带文本）⇒ 本用例另断言夹具的六条文本互异，
+    /// 令"出队序"这一记录可核。
+    #[test]
+    fn it07_buff_fixture_matches_pure_decision() {
+        let doc = buff_fixture();
+        let cases = doc["cases"].as_array().expect("cases");
+        assert_eq!(cases.len(), 4, "用例数固定 4");
+        let templates = doc["templates"].as_object().unwrap();
+        let mut checked = 0;
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let tpl_id = c["request"]["name"].as_str().unwrap();
+            let t = templates
+                .values()
+                .find(|v| v["name"].as_str() == Some(tpl_id))
+                .unwrap_or_else(|| panic!("{name}: 模板 {tpl_id} 不在夹具 templates"));
+            let tpl = StdItem {
+                name: tpl_id.into(),
+                std_mode: t["std_mode"].as_u64().unwrap() as u8,
+                shape: t["shape"].as_u64().unwrap() as u8,
+                ac: t["ac"].as_u64().unwrap() as u16,
+                mac: t["mac"].as_u64().unwrap() as u16,
+                ..Default::default()
+            };
+            // 夹具的 templates DTO 不含 DC/MC/SC ⇒ 从预期反推不了；模板 id 按 `Tpl` 约定
+            // （2030 全六项 / 2032 仅 DC+SC）在探针里手工补过 ⇒ 这里按同一常量重建。
+            let tpl = match tpl_id {
+                "buff_six" => StdItem {
+                    dc: 0x0505,
+                    mc: 0x0007,
+                    sc: 0x0003,
+                    ..tpl
+                },
+                "buff_combo" => StdItem {
+                    dc: 0x0005,
+                    sc: 0x0004,
+                    ..tpl
+                },
+                _ => tpl,
+            };
+            let now = 1_000;
+            let (out, st) = shape12_run(tpl.clone(), UseItemActorState::default(), now);
+            // **e1/3b 结论**：ExtraAbil 的 WAbil 写入被 `RecalcAbilitys` 尾段整体覆盖 ⇒
+            // 吃 Shape12 后 **WAbil 必须不变**（夹具自证：oracle 的 before == after）。
+            assert_eq!(
+                c["wabil_before"], c["expect"]["wabil"],
+                "{name}: oracle 侧 WAbil 不得因 ExtraAbil 改变（覆盖于 :2900-2906）"
+            );
+            let wabil0 = st.wabil.clone();
+            let eat_ident = if out.eaten { 635 } else { 636 };
+            let frames: Vec<i64> = c["expect"]["immediate_frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["ident"].as_i64().unwrap())
+                .collect();
+            assert_eq!(frames, vec![eat_ident], "{name}: 吃/不吃");
+            assert_eq!(
+                st.wabil, wabil0,
+                "{name}: Rust 侧 WAbil 也必须不变（别把 buff 并进去）"
+            );
+            if !out.eaten {
+                assert!(out.notices.is_empty(), "{name}: 不吃 ⇒ 零通知");
+                checked += 1;
+                continue;
+            }
+            let ea = &c["expect"]["extra_after"];
+            let want_abil: Vec<u16> = ea["abil"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u16)
+                .collect();
+            let want_flag: Vec<u8> = ea["flag"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u8)
+                .collect();
+            assert_eq!(st.extra.extra_abil.to_vec(), want_abil, "{name}: ExtraAbil");
+            assert_eq!(
+                st.extra.extra_abil_flag.to_vec(),
+                want_flag,
+                "{name}: ExtraAbilFlag"
+            );
+            let now_before = c["now_before"].as_i64().unwrap();
+            let want_times = ea["times"].as_array().unwrap();
+            let dur = i64::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc)) * 60_000
+                + i64::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) * 1_000;
+            for (k, wt) in want_times.iter().enumerate() {
+                let wt = wt.as_i64().unwrap();
+                if wt == 0 {
+                    assert_eq!(st.extra.extra_abil_times[k], 0, "{name}: 槽 {k} 不应有计时");
+                    continue;
+                }
+                let oracle_dur = wt - now_before;
+                assert!(
+                    oracle_dur >= dur && oracle_dur <= dur + 100,
+                    "{name}: 槽 {k} oracle 时长 {oracle_dur} 应在 [{dur}, {dur}+100]（墙钟取证窗口）"
+                );
+                assert_eq!(
+                    st.extra.extra_abil_times[k],
+                    i64::from(now) + dur,
+                    "{name}: 槽 {k} 注入时钟下的精确时长"
+                );
+            }
+            let blue = out
+                .notices
+                .iter()
+                .filter(|n| n.ident == RM_SYSMESSAGE && n.n_param1 == 251)
+                .count();
+            let want_blue = c["expect"]["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| n["ident"].as_i64() == Some(11004))
+                .count();
+            assert_eq!(blue, want_blue, "{name}: 蓝字条数");
+            checked += 1;
+        }
+        assert_eq!(checked, 4);
+        // 六条同 ident 的**出队序**只能靠文本区分 ⇒ 断言夹具的六条文本互异（含 "sec." 原文）。
+        let six = cases
+            .iter()
+            .find(|c| c["name"] == "eat_ok_shape12_six_buffs")
+            .unwrap();
+        let texts: Vec<&str> = six["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["ident"].as_i64() == Some(11004))
+            .map(|n| n["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts.len(), 6, "六命中 ⇒ 六条蓝字");
+        let uniq: std::collections::BTreeSet<&&str> = texts.iter().collect();
+        assert_eq!(uniq.len(), 6, "六条文本必须互异（出队序才可核）：{texts:?}");
+        assert!(
+            texts.iter().any(|t| t.ends_with("sec.")),
+            "MC 那条以 \"sec.\" 结尾（oracle 原样）"
+        );
+    }
+
+    /// **IT-07**：六个独立 `if` 全命中 ⇒ 六槽写入、时长 = `HiByte(DC)*60000 + HiByte(MAC)*1000`、
+    /// 六条蓝字通知、吃。
+    #[test]
+    fn it07_shape12_six_buffs() {
+        let (out, st) = shape12_run(
+            shape12_tpl(0x0505, 0x0007, 0x0003, 0x0410, 0x1E02),
+            UseItemActorState::default(),
+            1_000,
+        );
+        assert!(out.eaten, "至少一项命中 ⇒ 吃");
+        assert_eq!(
+            st.extra.extra_abil,
+            [5, 7, 3, 4, 16, 2, 0],
+            "六槽：DC低/MC低/SC低/AC高/AC低/MAC低（第 7 槽不参与）"
+        );
+        assert_eq!(st.extra.extra_abil_flag, [0; 7]);
+        // dur = 5*60000 + 30*1000 = 330000
+        // 第 7 槽（PWRRATE）不参与 Shape12 ⇒ 保持 0。
+        assert_eq!(
+            st.extra.extra_abil_times,
+            [331_000, 331_000, 331_000, 331_000, 331_000, 331_000, 0]
+        );
+        let blue = out
+            .notices
+            .iter()
+            .filter(|n| n.ident == RM_SYSMESSAGE && n.n_param1 == 251 && n.n_param2 == 252)
+            .count();
+        assert_eq!(blue, 6, "六条蓝字（颜色取自 BlueMsgFColor/BColor）");
+    }
+
+    /// **IT-07**：六字节全 0 ⇒ `result=false` ⇒ 不吃（636），无通知、状态不变。
+    #[test]
+    fn it07_shape12_all_zero_not_eaten() {
+        let (out, st) = shape12_run(
+            shape12_tpl(0, 0, 0, 0, 0),
+            UseItemActorState::default(),
+            1_000,
+        );
+        assert!(!out.eaten, "六项全不命中 ⇒ 不吃");
+        assert!(out.notices.is_empty());
+        assert_eq!(st.extra, ItemsExtraState::default());
+    }
+
+    /// **IT-07**：`max` 合并——更大的旧值/更晚的旧时长**不被覆盖**。
+    #[test]
+    fn it07_shape12_max_merge_keeps_larger_values() {
+        let mut state0 = UseItemActorState::default();
+        state0.extra.extra_abil[0] = 9; // > LoByte(DC)=5
+        state0.extra.extra_abil_times[0] = 1_000 + 400_000; // > now+dur=331_000
+        state0.extra.extra_abil_flag[0] = 1;
+        let (out, st) = shape12_run(shape12_tpl(0x0505, 0, 0, 0, 0), state0, 1_000);
+        assert!(out.eaten);
+        assert_eq!(st.extra.extra_abil[0], 9, "取 max，不覆盖更大的旧值");
+        assert_eq!(
+            st.extra.extra_abil_times[0], 401_000,
+            "取 max，不缩短更晚的旧时长"
+        );
+        assert_eq!(st.extra.extra_abil_flag[0], 0, "命中即清 flag");
     }
 
     /// **IT-16 彩票（StdMode3/Shape11）宿主级**：夹具 `lottery` 块的**抽值逐值对拍** + 行为面。
@@ -1426,6 +1767,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1602,6 +1946,9 @@ mod tests {
                 green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
                 repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
                 sysmsg: SysMsgTexts::default(),
+                blue_msg_fcolor: 251,
+                blue_msg_bcolor: 252,
+                now_ms: 0,
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
@@ -1987,6 +2334,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2037,6 +2387,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2094,6 +2447,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2132,6 +2488,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -2184,6 +2543,9 @@ mod tests {
             green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
             repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -2255,6 +2617,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2336,6 +2701,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2427,6 +2795,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2495,6 +2866,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2588,6 +2962,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let pack = BagItem {
