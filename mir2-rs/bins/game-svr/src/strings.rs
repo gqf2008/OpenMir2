@@ -158,7 +158,7 @@ pub struct StringConf {
     win_lottery_msg5: Option<String>,
     win_lottery_msg6: Option<String>,
     not_win_lottery_msg: Option<String>,
-    // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案（三个生产者）。
+    // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案（四个生产者）。
     canot_use_item_msg: Option<String>,
     canot_drop_gold_msg: Option<String>,
     canot_drop_in_safe_zone_msg: Option<String>,
