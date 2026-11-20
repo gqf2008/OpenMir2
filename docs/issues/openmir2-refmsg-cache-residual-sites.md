@@ -217,8 +217,8 @@
 | `handle_spell_cmd_with_magic` 护盾（31）buff 支 | 657 | `BaseObject.StatusChanged()` | 17 之后 | 命中 |
 | 14/15 buff 支（`take_buff_applies` 循环） | 657 | `CharacterObject.cs:96-114` → `RecalcAbilitys/StatusChanged` | 17 之后 | 命中 |
 | 32 圣言术 `invalid_cast` 支 | 639 | `PlayObject.Base.cs` `:1525-1529`（吞 `InvalidCastException`） | 17 之后 | 命中 |
-| 42 群雷 638 | 638 | `MagicManager.cs:987`（循环前无条件） | 17 之后 | 命中 |
-| 42 群雷 716（icons 逐目标） | 716 | `MagicManager.cs:1012`（逐目标 `RM_10205`） | 638 之后、逐目标 | 命中（多次） |
+| 42 群雷 638 | 638 | `MagicManager.cs` 的 `MagGroupLightening`（循环前无条件 638） | 17 之后 | 命中 |
+| 42 群雷 716（icons 逐目标） | 716 | `MagicManager.cs` 的 `MagGroupLightening`（逐目标循环里的 `RM_10205`） | 638 之后、逐目标 | 命中（多次） |
 | 9/10/22/36 延迟 53 | 53 | `BaseObject.cs:700-709` `HealthSpellChanged` | 17 之后 | 命中 |
 | 36 无极真气 amulet 失败支 | 639 | `PlayObject.Base.cs:644-647`（`boSpellFail` 保持 true） | 17 之后 | 命中 |
 | 36 无极真气 `invalid_cast` 防御臂 | 639 | `PlayObject.Base.cs:1525-1529`（同上） | — | **当前入口不可达**（登记；行为牙不可用） |
