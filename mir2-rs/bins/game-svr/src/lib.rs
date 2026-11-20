@@ -98359,6 +98359,7 @@ fn ",
             n_param1: 0,
             n_param2: 0,
             n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
         };
         // 入队 = 修复前的真实序：use_item 的 [WEIGHT(131), SYSMESSAGE×6]，宿主再 append ABILITY(67)。
         let notices: Vec<_> = std::iter::once(mk(game_svr::useitem::RM_WEIGHTCHANGED))

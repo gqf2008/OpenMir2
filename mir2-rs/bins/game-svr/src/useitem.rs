@@ -1022,6 +1022,7 @@ mod tests {
             blue_msg_fcolor: 251,
             blue_msg_bcolor: 252,
             now_ms: now,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         }
     }
