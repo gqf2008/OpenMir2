@@ -21,6 +21,27 @@
 
 `apply_extra_abil` 函数本身保留（`ability::apply_extra_abil`（符号），现有单测仍测其算术；当前无生产调用者）。
 
+## 2.5 临时 `HitSpeed` 的可观测面（证据 + 一次已撤回的指令）
+
+**结论：`ExtraAbil[HITSPEEDUP]` 只进"队列载荷 `wParam`"，不进线缆帧 `Series`。**
+
+三层证据：
+1. **oracle 源码**：临时写 `HitSpeed = HitSpeed + ExtraAbil[HITSPEEDUP]`（`PlayObject.cs:2830-2833`）；
+   `:2876` `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)` 把**临时值放进消息 `wParam`**；
+   `:2899` `HitSpeed = AddAbil.HitSpeed` 覆盖落地字段；657 handler（`PlayObject.Message.cs:1845-1847`）
+   用 `processMsg.nParam1` + **出队时的 `this.HitSpeed`（=落地值）**，**不读 `wParam`**。
+2. **oracle 真身探针**（`card/items-it07` 的 `buff_vectors.json`，六命中例，`ExtraAbil[3]=4`）：
+   队列 `10139` 的 **`w_param=4`**，而 pumped 的 657 帧 **`series=0`**。
+3. **Rust**：`sg.hit_speed = recalc.hit_speed`（`recalc_session_ability` 内，紧随 `sg.state.wabil = recalc.wabil;`）
+   ——落地口径、不含 ExtraAbil；657 出帧一律取 `sg.hit_speed`。
+
+**另**：`apply_extra_abil` **从未写过 `hit_speed`**（只改 DC/MC/SC 高字节与 MaxHP/MaxMP；槽 3 在其函数文档里
+就登记为"本函数只回 `WAbil`"）⇒ 停用它**不会丢任何临时贡献**；旧实现下落地 `hit_speed` 也是最终值。
+
+**留痕（指令撤回）**：本节初版曾收到"657 的 `Series` 应带临时值"的指令（把队列载荷当成帧面），
+已据上面 1+2 撤回；**勿再按"帧带临时值"改代码**。载荷面的牙（`w_param == extra_abil[3]`）归
+`card/items-it07` / G2 模板，不在本卡。
+
 ## 3. 既有期望修正（逐条：改前 → 改后 + 依据行）
 
 | # | 测试 | 改前期望（错误行为） | 改后期望 | 依据 |
@@ -70,6 +91,10 @@ grep -rn "nPower|AttPowerUp" mir2-rs/bins/game-svr/src/lib.rs
   `upgrade_npc_submit_and_getback_full_chain` —— 三条正是本卡改期望的三处。
   ⇒ 这颗牙证明"再把 ExtraAbil 折进去会红"。
 - **还原**：`cp` 快照 + `touch`，`lib.rs` sha 与变异前一致（`4324796d…`），`MUTATION` 标记 0。
+- **新增牙**：`tests::extraabil_hitspeedup_stays_out_of_landed_hit_speed`——同一会话两次重算
+  （`extra=None` vs `[0,0,0,4,0,0,0]`），落地 `hit_speed` 与 657 `Series` 必须相同。
+  绿/红条件：旧实现绿、新实现绿；"把临时值塞进落地 `hit_speed`"（保留过头）必红。
+  载荷面（"删过头"）的牙归 it07/G2 模板，不在本卡。
 - **改后绿**：同一条命令 **2146 passed / 0 failed / 70 ignored（rc=0）**。
 - 其余门禁（fmt/clippy/`--workspace`/msgcodegen）待车道空后补跑，结果回填本节。
 

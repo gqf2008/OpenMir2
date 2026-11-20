@@ -55025,6 +55025,43 @@ SendRefMsgRange=15
         assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
     }
 
+    /// **ExtraAbil 修正牙（`qa-extraabil-adjudication-20261120` 的 `ae` 复核点）**：
+    /// oracle 里 `ExtraAbil[HITSPEEDUP]` 只进**临时** `HitSpeed`（`PlayObject.cs:2830-2833`），
+    /// 并随 `:2876` 的 `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, …)` 作为**队列载荷 wParam**
+    /// （657 handler `PlayObject.Message.cs:1845-1847` **不读** wParam）；落地字段在 `:2899`
+    /// 被 `AddAbil.HitSpeed` 覆盖 ⇒ **657 帧的 Series 不含它**。
+    ///
+    /// 本用例：同一会话跑两次重算（`extra=None` vs `[0,0,0,4,0,0,0]`），
+    /// 落地 `hit_speed` 与由它构造的 657 帧 `Series` 必须**相同**。
+    /// 变异红：①把 `extra_abil[3]` 加进 `sg.hit_speed`（"保留过头"）⇒ 第二次 4 ⇒ 红；
+    /// ②把 `extra_abil` 折进 `WAbil` 由 F2-R3 红（本用例只钉临时面）。
+    #[test]
+    fn extraabil_hitspeedup_stays_out_of_landed_hit_speed() {
+        use mir2_protocol::frame::CommandMessage;
+        let catalog = crate::ability::StdItemCatalog::new();
+        let run = |extra: Option<&[u16; 7]>| -> (u16, u16) {
+            let mut sg = test_session_ground(1);
+            sg.equip.job = 0;
+            sg.equip.bonus_tick_hit = 20;
+            sg.equip.bonus_tick_speed = 35;
+            let _ = recalc_session_ability(&mut sg, &catalog, extra, None, None);
+            let body = crate::smframe_ext::sm_charstatuschanged(sg.actor_id, 0, sg.hit_speed);
+            let m = CommandMessage::from_bytes(&body).expect("657 可解析");
+            (sg.hit_speed, m.series)
+        };
+        let (hs0, series0) = run(None);
+        let extra = [0u16, 0, 0, 4, 0, 0, 0];
+        let (hs1, series1) = run(Some(&extra));
+        assert_eq!(
+            hs1, hs0,
+            "落地 HitSpeed 不得含 ExtraAbil[HITSPEEDUP]（oracle :2899 覆盖 :2830-2833）"
+        );
+        assert_eq!(
+            series1, series0,
+            "657 的 Series 取落地 HitSpeed；临时贡献只在队列 wParam（handler 不读）"
+        );
+    }
+
     /// **IT-08 升级支宿主级对拍**：吃经验书(Exp=9990/MaxExp=10000/dura=100)⇒升级；宿主发的
     /// `SM_HEALTHSPELLCHANGED(53)/SM_WINEXP(44)/SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`
     /// 按 **oracle 线上优先级序** == golden `pumped`（逐字段）；升级后 **`wabil==abil`**（exp/level/max_exp），
@@ -81879,7 +81916,10 @@ SendRefMsgRange=15
             let after = &rig.ground_sessions["obs"].state.wabil;
             // **修正（2026-11-20）**：`AttPowerUp` 写的 `ExtraAbil[0]=nPower` 不折进 `WAbil`
             //（oracle `:2899-2906` 覆盖）⇒ DC 保持基础 `0x0A05`。
-            assert_eq!(after.dc, 0x0A05, "ExtraAbil 不进 WAbil（旧期望 0x0E05 编码了错误行为）");
+            assert_eq!(
+                after.dc, 0x0A05,
+                "ExtraAbil 不进 WAbil（旧期望 0x0E05 编码了错误行为）"
+            );
             assert_eq!(after.mc, rig.target_wabil_before.mc);
             assert_eq!(after.sc, rig.target_wabil_before.sc);
             assert_eq!(after.max_hp, rig.target_wabil_before.max_hp);
