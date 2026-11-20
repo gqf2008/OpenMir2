@@ -112,7 +112,10 @@
   原用 `send_self_frame` 立即出帧；改为 `World::send_self_delay_msg_full(…, 1000)`（未升级，
   oracle `src/M2Server/Magic/MagicManager.cs:666`）与 `World::update_self_delay_msg_full(…, 800)`（升级，
   oracle `src/M2Server/Player/PlayObject.cs:5216`，含同 `(ident, MagicId)` 去重）。
-- **依据**：oracle 全仓 22 个 `RM_MAGIC_LVEXP` 发射点零处立即发（`docs/issues/openmir2-spell-tail-delay-audit.md`）；
+- **依据**：oracle 全仓 22 个 `RM_MAGIC_LVEXP` 发射点零处立即发——收口卡
+  `docs/issues/openmir2-magic-640-delay-sweep.md`（9 处：四处 `finish_spell_tail(None)` + 四处 inlined
+  `8|37|21` / `17|30|41` / `20` / `46` + 本批 B 类；**该卡在 `da` 的分支上，内容待合**）；
+  早期的 `docs/issues/openmir2-spell-tail-delay-audit.md` 只覆盖那四处 `None`。
   P1 设计件 §5.2-7 的「本仓 `send_self_frame` 均立即发、时序不建模」**对 B 类自此作废**。
   **A 类（`Some(false)`）不受影响**：`bo_train=false` ⇒ `do_spell_tail` 不进训练块 ⇒ 该发射分支不可达。
 - **影响面枚举**（B 类全集 = `spell_tail_p1_id_set_is_strict` 钉住的 5 个魔号）：
@@ -120,10 +123,14 @@
   | 魔号 | 现有 golden 里 caster 的 640 | 处理 |
   | --- | --- | --- |
   | 49 | 有（本批新件 `golden/magic/skill49.json`） | **已随改动重出**，`due_ms_rel=1000` |
-  | 51 / 52 / 53 / 54 | 无（37 份 golden 的 `magic_id` 集合里没有这四号） | 无需重出 |
+  | 51 / 52 / 53 / 54 | 无（既有 36 份 golden 的 `magic_id` 集合里没有这四号） | 无需重出 |
 
-  - 其它 32 份带 640 的 golden 属于**别的发射路径**（`finish_spell_tail(…, Some(1000))`，以及
-    `da` 正在改的四处 `finish_spell_tail(…, None)`）；本批 diff **未碰任何 `finish_spell_tail` 调用点**。
+  - 其余 **19** 份带 caster 640 的 golden 属于**别的发射路径**（`finish_spell_tail(…, Some(1000))`，
+    以及 `da` 正在改的四处 `finish_spell_tail(…, None)`）：bigcloak / bighealing / cloak / dejiwonho /
+    fire / fireboom / fireboom47 / groupdeding / hangmajinbub / healing / holyshield / lightflower /
+    shield / showhp / sinsu / skeleton / snowwind / uenhancer / unamyounsul。
+    机判口径：`Sent` 里有 640 的 golden 共 24 份 = 上述 19 份 + 本批 5 份；**`NotDue` 里没有任何 640**
+    （即这些 640 都是真交付，不是排水窗口没到）。本批 diff **未碰任何 `finish_spell_tail` 调用点**。
   - 既有 P1 用例里唯一断言「有 640」的是 `spell_tail_p1_no_effect_draws_once_and_levels_exp`，
     已同步改为跨 1000ms 排水并先钉「施法段无 640」；其余 P1 用例断言「无 640 / 只有 639」，方向不变。
 
@@ -138,3 +145,16 @@
 ### 5.3 与 `da`（四处 `finish_spell_tail(…, None)`）的写集顺序
 
 同一文件、同一类行为 ⇒ **本批先合**；`da` 合到本批 head 后再 rebase 继续（opc-19 2026-11-20 定）。
+
+### 5.4 本批**已实现但无用例**的分支，以及一条判据完整度说明（登记）
+
+- **800ms 升级支**：产品里已实现 `update_self_delay_msg_full(…, 800)`（oracle `PlayObject.cs:5216`，
+  含同 `(ident, MagicId)` 去重），但本批五支夹具都令 `MaxTrain[nLevel] > TranPoint`（**不升级**）
+  ⇒ **该分支在本批没有任何用例**。需要时另立一例（`MaxTrain` 取小 + 跨 800ms 排水 + 载荷
+  `(Level+1, TranPoint-MaxTrain)` 断言），并另写 scope——不要让它变成「实现了但没人跑」。
+- **`n_level == level_after` 在 `Level=0` 处退化**：本批取 `UserMagicLevel=0` ⇒ `nLevel=0`，该断言恒真、
+  **不构成牙**；真正的判别力来自 `Train.tran_point_after ∈ 1..=3` 与 `max_train_at_level > tp`。
+  `Level ≥ 1` 的形态落在 800ms 支（同上，scope 外），届时该断言才有判别力。
+- **本批比较器没有 `keep` 过滤**：四个收件人比的是**完整** `(ident, due_ms_rel)` 序列 ⇒ 640 的
+  `due_ms_rel=1000` 是**被判的**（同提交里另有 `train` 面的 `tran_point` 判据）。对照：`sinsu` 因离线
+  替身造怪 0 抽导致 RNG 流偏移，对 640 做了 `keep` 过滤——本批不属于那类。

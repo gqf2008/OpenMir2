@@ -434,7 +434,10 @@ if default_arm
    两处帧内容/字段相同、仅延迟不同。
    **2026-11-20 更新（MG-58/60/61/62/63）**：B 类（49/51/52/53/54）的共享尾已改为真自延迟投递
    （未升级 1000ms / 升级 800ms + 去重），见 `docs/issues/qa-batch2-wiring-plan-20261120.md` §5.1；
-   **A 类与其余立即发站点仍是既有全局登记**（`docs/issues/openmir2-spell-tail-delay-audit.md`）。
+   **A 类与其余立即发站点仍是既有全局登记**——完整清单与收口见
+   `docs/issues/openmir2-magic-640-delay-sweep.md`（9 处：四处 `finish_spell_tail(None)`、四处 inlined
+   `8|37|21` / `17|30|41` / `20` / `46`、以及本批改掉的 B 类；该卡在 `da` 分支上，内容待合）；
+   早期的 `docs/issues/openmir2-spell-tail-delay-audit.md` **只列了那四处 `None`**，不是全量。
    若做帧序对拍，需把该帧视为「本 tick 末/延迟队列」，不能与紧邻帧做严格相邻断言。
 8. **13 个重复 `MagID`（48、66、71、88、89、90、91、92、93、94、96、97、98；108 行 / 95 个唯一值）**：
    `FindMagic` 首行胜；`spell_arm`/`finish_spell_tail` 只吃 `magic_id`，不受影响；但
