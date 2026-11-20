@@ -11,7 +11,9 @@
 //! （分片设计「同进程多 World」，`MIR2_SHARDS` 默认 1）⇒ 挂 `World` 会在 N>1 时变成
 //! 每片独立计数、偏离 oracle。⇒ 这组计数放在这里，经 [`WinLotteryShared`]
 //! （`Arc<Mutex<…>>`）在 `run_inner` 创建、贯穿 `sim_loop` / `handle_eat_cmd`，**不挂 World**。
-//! 它是设计件「World 间无共享可变状态」的**唯一显式例外**；RNG 仍走 `world.rng`。
+//! 它是设计件「World 间无共享可变状态」在**游戏状态层**的**唯一显式例外**；RNG 仍走 `world.rng`。
+//! （gate 层另有进程级共享 `TOMBSTONED_GATE_SOCKETS`，基础设施、非游戏状态，见
+//! `openmir2-world-keeps-dead-session`。）
 //! **不用进程 static**：并行单测会互相污染（static 只适合启动后只读的配置）。
 //!
 //! # 分层
@@ -129,7 +131,7 @@ impl WinLotteryNotice {
 }
 
 /// oracle `PlayObject.cs:3867-3903` 的通知入队序——**宿主必须按此顺序 push**，
-/// 因为消息泵按 `(byte)ident` 升序出队：`RM_GOLDCHANGED`(10136→248) 先于
+/// 因为消息泵按 `(byte)ident` 升序出队：`RM_GOLDCHANGED`(10136→152) 先于
 /// `RM_SYSMESSAGE`(11004→252)。
 ///
 /// **绿字在 `IncGold` 之前发**（oracle bug：先报喜、后加钱）⇒ `IncGold` 失败时
