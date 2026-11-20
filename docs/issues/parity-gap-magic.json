@@ -821,8 +821,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】",
-      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
+      "scope": ""
     },
     {
       "id": "MG-33",
@@ -852,8 +852,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**——golden/比较器不记录 `Recog`、两条仅 `Recog` 不同；这是**按总监裁定的取舍**（不扩比较面），**不是**「不可判」/「对客户端无差异」；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。",
-      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**——golden/比较器不记录 `Recog`、两条仅 `Recog` 不同；这是**按总监裁定的取舍**（不扩比较面），**不是**「不可判」/「对客户端无差异」；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
+      "scope": ""
     },
     {
       "id": "MG-34",
@@ -1113,8 +1113,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。",
-      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
+      "scope": ""
     },
     {
       "id": "MG-44",
@@ -1320,9 +1320,9 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）【scope（2026-11-20）：**施法者侧同步伤害**（`MagGroupDeDing` 在 DoSpell 内 `StruckDamage` 并排 200ms RM_DELAYMAGIC），**DoSpell 时刻可证**；判据 = RM 收件人集合 + 每只怪 HP before/after + 逐目标命中门抽值；SM_716 组内顺序未验（`sm716_order_unverified`，见 docs/issues/openmir2-sm716-tie-order.md）。】",
+      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）【scope（2026-11-20）：**施法者侧同步伤害**（`MagGroupDeDing` 在 DoSpell 内 `StruckDamage` 并排 200ms RM_DELAYMAGIC），**DoSpell 时刻可证**；判据 = RM 收件人集合 + 每只怪 HP before/after + 逐目标命中门抽值；SM_716 组内顺序未验（`sm716_order_unverified`，见 docs/issues/openmir2-sm716-tie-order.md）。】 2026-11-20：原\"需补靶\"登记撤销——`dc_range` 支 `caster_dc=MakeWord(20,30)=7700`、Rust 真读（取 `caster_dc` 后写 `e.vitals.dc`）⇒ 伤害面一直非退化；该登记来自按夹具缺省值判断、未看 spec 覆写与 golden 记录值。本条目 golden 的帧集合不含受布局开关影响的帧 ⇒ scope 为 full。",
       "basis": "semantic",
-      "scope": "partial：`dc_range` 一支 `caster_dc=MakeWord(20,30)=7700`（区间 10，Rust 侧真读）⇒ 伤害面**一直非退化**；原“需补靶”登记撤销——该登记来自按夹具缺省值判断、未看 spec 覆写与 golden 记录值。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": ""
     },
     {
       "id": "MG-52",
