@@ -380,3 +380,60 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **牙（三颗）**：T1 `Dura=DuraMax`→`+1`（weapon_after 不符）；T2 去 `RM_DURACHANGE` 推送（notices 缺 10125）；**T3 `3 if tpl.shape == 10`→`== 9`（串到修复油支）⇒ 必红**（防 shape 臂写错）。
 
 **状态**：`implemented_unverified`（运行期文本帧缺口，同 IT-14 口径，不计 verified）。
+
+### 9.11 IT-16 彩票 Shape11（`WinLottery`）— 开写口径（代码待窗口内写）
+
+**归类**：**StdMode3 / Shape11**，经 `default: EatUseItems(shape)` 的 **case 11**（`PlayObject.Base.cs:2298`）→ `WinLottery()`（`PlayObject.cs:3809`）。**物品恒被吃**（`case 11: WinLottery(); result=true;`）。
+
+**RNG 口径（P1，逐值对拍）**：`nRate = M2Share.RandomNumber.Random(Config.WinLotteryRate)`（`PlayObject.cs:3813`）。
+- **同一实例的符号链（可核，4 段）**：①`M2Share.RandomNumber = RandomNumber.GetInstance()`（`src/M2Server/M2Share.cs:194`）→ ②`OpenMir2.RandomNumber` 的**私有静态** `private static Random random`（`RandomNumber.cs`）→ ③`RandomNumber.Random(int)=random.Next(max)`→ ④魔法种子钩子 `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs` **文件头明写**：反射替换的正是这个 `RandomNumber.random`（换 `RecordingRandom(new Random(seed))`）。⇒ WinLottery 与魔法共用同一 RNG 实例。
+- **caveat（重要）**：P1 的"同种子同序列"**只在 legacy `.NET Random` 算法口径下成立**（钩子把 `random` 换成定种子 `new Random(seed)`=legacy `CompatSeedImpl`/Knuth 减法）。**生产无参 `new Random()` 在 .NET6+ 是 xoshiro、非同序列**。**oracle 原版运行在 legacy 上 ⇒ legacy 即我们该对的目标；Rust `crates/shared/src/rng.rs` 复刻的正是它。** 别以为"任意 .NET 版本都行"。
+- **P1 用例**：固定 `MIR2_RNG_SEED` ⇒ `nRate` 确定 ⇒ ①各级中奖各一（选使 `nRate` 落该段的 seed，`WinLottery{1..6}Min/Max` 区间有空档故可精细落点）；②未中（`nRate` 落空档）；③各 Min/Max 边界；④`Count<NoWinLotteryCount` **闸取假**（`nRate` 中奖但闸闭 ⇒ 表现为未中）。draws 逐值对拍（夹具 `rng` 台账 site+seq，Rust 同 seed 同 stream）。
+- **⚠ 部署配置下 1 等奖为死代码**：1 级判据是 `WinLottery1Min + WinLottery1Max == nRate`（`PlayObject.cs:3859`，**和式等值**，不是区间），部署 `16180 + 16185 = 32365` ≥ `WinLotteryRate = 30000` ⇒ `nRate ∈ [0,30000)` **永远等不到**。⇒ **1 等奖用例必须覆盖 `WinLottery1Min/1Max`**（取 `5000/8000` ⇒ 和 `13000`；已核 `13000` 不落任一其它档 `[1,4999]/[14000,15999]/[16000,16149]/[16150,16169]/[16170,16179]`），并把它写进夹具 `config` 快照——**同时记原始值与覆盖值**（否则该用例不可复现，且后来人不知道它偏离了部署配置）。
+- **未中档的 seed 空间（越宽 P1 越稳）**：`nRate = 0`（`6Min=1` 故 0 不算 6 档）、`[5000,13999]`、`[16180,29999]` 三段全落"未中"。
+- **P2 稳健例一条**：配置强制桶（如 `6Min=0/6Max=Rate-1` 覆盖全区间 ⇒ 必中 6），断言只写行为/边界、不依赖抽值（兜底）。
+
+**① 全局计数是进程级（必须复位）**：`WinLotteryCount/NoWinLotteryCount/WinLotteryLevel1..6` 在 `SystemShare.Config` **全局可变**，多 case 同进程**互相污染**。⇒ **探针每个 lottery case 前显式复位**（`WinLotteryCount=0`、`NoWinLotteryCount=初值`、`WinLotteryLevel1..6=0`）到**已知初值**再 `ClientUseItems`；**比较器断 delta 不断绝对值**：中奖 ⇒ `WinLotteryLevelN +1`、`gold += WinLotteryNGold`；未中/闸闭 ⇒ `NoWinLotteryCount +500`。Rust 宿主侧同口径 per-case 复位。（生产 `Server.conf` 两者=0 ⇒ `0<0` 闸初始**闭**；测"中奖"须把 `NoWinLotteryCount` 置>WinLotteryCount，如 500>0。）
+- **启动初值来自配置，不是 0**：`GameApp.InitializeSystem()` 的 ctor 清零（`src/GameSrv/GameApp.cs:77-84`）发生在 `StartingAsync → GameShare.LoadConfig()` **之前**；`src/Modules/SystemModule/Conf/ServerConf.cs:645-652` 随后从 `[Setup]` 读这 8 个键**覆盖**清零值 ⇒ **有效初值 = 配置值**（部署全 0）。⇒ 这 8 个键必须一并解析进 `WinLotteryCfg`（见「配置同源」），否则「配 `NoWinLotteryCount>0` 才能中奖」——IT-16 的核心场景——在 Rust 侧**永远起不来**。探针的 per-case 复位值也取自这份配置，不写死 0。
+- **默认配置下永不开奖**：`WinLotteryCount=NoWinLotteryCount=0 ⇒ 0<0` 为假 ⇒ **服务端默认状态永不中奖**——非 bug，是**玩法事实**：服主须配置开启，否则该物品在默认服里就是"花钱买空气"。别让后来者以为我们对拍漏了中奖分支。
+
+**架构决议（作用域与所有权，`opc-07` 2026-11-20 批准）**：
+- **`world` 是 per-World，不是进程单例**：今天进程只有 1 个 World（`lib.rs` 只 spawn 一条 `m2-sim` 线程，World 在 `sim_loop` 内建）；分片设计是「同进程多 World」（`docs/10k-shard-design-20261116.md` §0.1/§2.1、`docs/shard-runtime-20261116.md` §2「空片 = 永不接客的 World」、`shard.rs` `DEFAULT_SHARD_COUNT=1`）。oracle 这 8 个计数是**进程级静态** ⇒ 挂 `world` 会让 N>1 变成每区独立计数。
+- ⇒ **可变计数放进程级共享**：新模块 `bins/game-svr/src/winlottery.rs` 的 `WinLotteryState { count, no_win, level: [i32;6] }` + `WinLotteryShared(Arc<Mutex<WinLotteryState>>)`；在 `run_inner`（紧挨 `ids_online`/`world_start`）创建，`Arc::clone` 进 `m2-sim` 闭包 → `sim_loop` 参数 → `handle_eat_cmd` 参数。**不用进程 static**（并行单测互相污染；static 只适合启动后只读的配置，如 `chat::install_send_ref_msg_range`）。
+- **登记为「游戏状态层」的唯一显式例外**：设计件要求「World 间无共享可变状态」，而 oracle 该组计数本身就是进程全局 ⇒ 此处**显式共享**；RNG 仍走 `world.rng`（N>1 本就会被切开，与设计一致）。**不许**为"干净"改成 per-shard 语义。gate 层另有进程级共享 `TOMBSTONED_GATE_SOCKETS`（`OnceLock<Mutex<HashSet>>`，基础设施、非游戏状态；登记在 `openmir2-world-keeps-dead-session`）——故「唯一」限定在**游戏状态层**。
+- **分层**：纯函数 `win_lottery(rng, &cfg, &mut state) -> WinLotteryOutcome` 出 outcome；宿主负责加锁、写金、发帧。
+
+**② RNG 钩子是新测量口径（非干扰须给证）**：IT-14/15 的 eat-probe 未用 `DOTNET_STARTUP_HOOKS`；IT-16 启用后要证**既有 31 例**不受影响（原写"28 例"是 IT-15 之前的数，作废）。
+- **"夹具逐字节相同"字面做不到**：`eat_ok_stdmode31_unbind_success` 的 6 个 `added_items[].make_index` = `GetItemNumber()` = `ItemNumber + HUtil32.GetTickCount()`（`src/Modules/SystemModule/SystemShare.cs:449-455`），任两次运行必不同。⇒ 用**归一化 + 原始 diff 双存档**：
+  1. `A1/A2` = 钩子关跑两次；`B1/B2` = 钩子开 + 两个不同 `MIR2_RNG_SEED`；
+  2. **归一化清单只允许 `added_items[*].make_index`**（理由：墙钟派生、非行为字段）；置哨兵后逐字节比，**原始 diff 同档保存，不隐藏**；
+  3. 判据顺序：`normalize(A1)==normalize(A2)`（噪声基线）→ `normalize(A1)==normalize(B1)`（钩子不改既有）→ **`B1` 与 `B2` 在 IT-16 新增 lottery 用例上必须不同**（nRate 随种子变）——这一条把"钩子没生效"与"钩子无影响"分开；
+  4. 钩子安装证明取 stdout 的 `[RngSeedHook] 已注入种子 seed=…`（钩子失败 exit 97），不接受"没报错所以装了"。
+- **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
+- **冲突处置**：任何非 `make_index` 差异 ⇒ **停下报 `opc-07`**，不得拿 grep 洗白。
+
+**配置同源（27 键，不写死）**：部署 `Server.conf` 实际 **27** 个 `WinLottery*` = **19 参数 + 8 状态初值**（原卡面"25 键"作废）。
+- 19 参数：`WinLotteryRate` + `WinLottery{1..6}Min/Max` + `WinLottery{1..6}Gold`（部署：Rate=30000、6Min=1/6Max=4999…1Min=16180/1Max=16185、Gold 1000000…500；与 `GameSvrConf.cs` ctor 缺省逐键相同）。
+- 8 初值：`WinLotteryCount`/`NoWinLotteryCount`/`WinLotteryLevel1..6`（`src/Modules/SystemModule/Conf/ServerConf.cs:645-652`；部署全 0）。
+- 落点：`GateConfig` 新字段 `win_lottery: WinLotteryCfg`（`config.rs`，仿 `repair_item_dec_dura` 的 struct+parse+default）+ `EnterConfig` 字段 + `handle_eat_cmd` 按值传（全 i32 ⇒ `Copy`）。**同一结构**（`opc-07` 2026-11-20 批准）：oracle 就是同一批字段同一批读入，"配置即初值"是 oracle 事实。
+- 结构：`rate: i32` / `min|max|gold: [i32;6]`（idx0=1 等奖…idx5=6 等奖，映射只在解析处做一次）/ `init_count` / `init_no_win` / `init_level: [i32;6]`（`init_` 前缀标"只做启动初值"；唯一入口 `init_state()`）。
+
+**宿主 WinLottery**（`handle_eat_cmd`，shape11 `eaten` 后）：`world.rng.random_below(rate)` 抽 → 6 段匹配（判序 6→5→4→3→2→1，1 级为和式等值）+ `Count < NoWinLotteryCount` 闸 → 中：`WinLotteryLevelN++`、绿 SysMsg、`ground::inc_gold(gold, nGold, HumanMaxGold)` 成功才 `GoldChanged()`（`SM_GOLDCHANGED`），失败走 `DropGoldDown` bug-replica（**净金币不变且不发 `GoldChanged`**）；未中/闸闭：`NoWinLotteryCount += 500` + 红 SysMsg。
+- **oracle bug，为 parity 复制**：绿字 SysMsg 在 `IncGold` **之前**发出 ⇒ `IncGold` 失败也照样先报"中奖"（`PlayObject.cs:3873-3897`）。**照抄**；将来若要修正玩法，须单独开卡并接受与 oracle 偏离。
+- **帧序断言（不是注释）**：
+  - 主断言：宿主中奖用例捕获物化通知序列，断言 `ident as u8` **严格升序**（`RM_GOLDCHANGED` 10136→152 < `RM_SYSMESSAGE` 11004→252），写成**性质断言** `windows(2).all(|w| w[0] < w[1])`（不钉两元素字面量，将来加帧不用改测试）；比较器仍按 §3 七字段**多重集**比（夹具每条的 `priority` 是其旁证）。
+  - 次断言：捕获 `SimToGate::SendFrame`，断言 `idents == [SM_EAT_OK(635), SM_GOLDCHANGED(653)]`；`RM_SYSMESSAGE` 因 `wire.sys_msg: None` 落 `notice_frame → None` ⇒ **"登记丢弃"必须出现在证据里**（现有 WRN 行或计数字段），不能只靠"我们知道它会 None"。
+
+**恒吃单列断言**：`use_item` 的 `3 if tpl.shape == 11` 臂**仅** `eaten = true`（无 RNG、无金币、无全局计数）；断言"物品恒被吃"**与中/不中解耦**（最易写错处）。
+
+**牙（七类，全部只在变异体下红、还原后绿）**：
+1. 区间边界改一（`>=`/`<=` 换边或 `Min/Max` 对调）；
+2. 去 `IncGold`（或去 `GoldChanged`）；
+3. 把 `eaten` 与中奖绑定（应解耦：未中/闸闭时该牙必红）；
+4. 闸判定反转（`<` → `>=`）；
+5. **运行时改读 `cfg.init_*`**：构造 `init_no_win=12345`、`state.no_win=0`，断言结果只随 `state` 变；
+6. **`init_state()` 逐键映射**（漏映一个键必红）+ **1↔6 等奖键交换**（映射错位必红）；
+7. **帧序对调**（宿主两条 push 顺序对调 ⇒ 主断言红）。
+
+**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 `opc-07` 加指 IT-16）。
+- **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。

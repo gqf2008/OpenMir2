@@ -26,6 +26,51 @@ pub const DEFAULT_MASTER_SRV_PORT: i32 = 4900;
 /// `[Server] ServerNumber` 缺省（`GameSvrConf.cs:1250`）。
 pub const DEFAULT_SERVER_NUMBER: i32 = 0;
 
+/// **IT-16 彩票**的 `[Setup]` 27 键（19 参数 + 8 状态初值）。
+///
+/// oracle 把这两类东西放在同一个 `SystemShare.Config` 上、同一批 `ReadWriteInteger` 读入
+/// （`ServerConf.cs:645-652` + `GameSvrConf.cs:1669-1688`）⇒ 本仓同结构承载（卡 §9.11
+/// 「配置同源」）。
+///
+/// - **19 参数**（运行时只读）：`rate` / `min[6]` / `max[6]` / `gold[6]`；
+/// - **8 状态初值**（`init_` 前缀，只在启动时经 [`Self::init_state`] 落到
+///   [`crate::winlottery::WinLotteryState`]，**运行时不许读**）。
+///
+/// 索引口径：`min[0]`/`max[0]`/`gold[0]` = 一等奖 … `[5]` = 六等奖；映射只在解析处做一次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WinLotteryCfg {
+    /// `[Setup] WinLotteryRate`：`Random(rate)` 的上界（值域 `[0, rate)`）。
+    pub rate: i32,
+    /// `[Setup] WinLottery{1..6}Min`（idx0 = 一等奖）。
+    pub min: [i32; 6],
+    /// `[Setup] WinLottery{1..6}Max`（idx0 = 一等奖）。
+    /// 一等奖的判据是 **`min[0] + max[0] == nRate`**（和式等值），不是区间。
+    pub max: [i32; 6],
+    /// `[Setup] WinLottery{1..6}Gold`。
+    pub gold: [i32; 6],
+    /// `[Setup] WinLotteryCount`（oracle 全仓无运行期写点）。
+    pub init_count: i32,
+    /// `[Setup] NoWinLotteryCount`（每次未中 `+= 500`）。
+    pub init_no_win: i32,
+    /// `[Setup] WinLotteryLevel{1..6}`（idx0 = 一等奖）。
+    pub init_level: [i32; 6],
+}
+
+impl Default for WinLotteryCfg {
+    /// `GameSvrConf.cs:1669-1688` 构造器缺省（与部署 `Server.conf` 逐键相同）；8 个初值全 0。
+    fn default() -> Self {
+        Self {
+            rate: 30_000,
+            min: [16_180, 16_170, 16_150, 16_000, 14_000, 1],
+            max: [16_185, 16_179, 16_169, 16_149, 15_999, 4_999],
+            gold: [1_000_000, 200_000, 100_000, 10_000, 1_000, 500],
+            init_count: 0,
+            init_no_win: 0,
+            init_level: [0; 6],
+        }
+    }
+}
+
 /// 监听端点 + S1 需要的少量参数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateConfig {
@@ -281,6 +326,10 @@ pub struct GateConfig {
     /// `[Setup] RepairItemDecDura`（`ServerConf.cs:488`，缺省 `30`；现网 `90`）——普通修理掉持久除数
     /// （`Merchant.cs:1656`）。
     pub repair_item_dec_dura: i32,
+    /// **IT-16**：`[Setup]` 彩票 27 键（19 参数 + 8 状态初值）。`handle_eat_cmd`
+    /// （`WinLottery()`）读参数，`run_inner` 用 `init_state()` 建进程级
+    /// [`crate::winlottery::WinLotteryShared`]。
+    pub win_lottery: WinLotteryCfg,
     /// `[Setup] MakeDurg`（oracle `ServerConf.cs:244` 的 `ReadWriteInteger("Setup","MakeDurg",…)`，
     /// `GameSvrConf.cs:1450` 缺省 `100`）——合成/制药单价
     /// （`Merchant.cs:1010` 面板价、`Merchant.cs:1510/1518` 收费与扣金）。
@@ -525,6 +574,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut amy_ounsul_point: Option<i32> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
+    // **IT-16**：`[Setup]` 彩票 27 键先落槽位（槽位表见 [`win_lottery_key_slot`]），
+    // 文件尾再按 `WinLotteryCfg::default()` 覆盖已出现的键。
+    let mut win_lottery_raw: [Option<i32>; 27] = [None; 27];
     let mut make_durg_price: Option<i32> = None;
     let mut black_stone: Option<String> = None;
     let mut upgrade_weapon_price: Option<i32> = None;
@@ -590,6 +642,17 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         };
         // 键字典同样 `OrdinalIgnoreCase`（`ConfigFile.cs:301`，R3-2）：键名也归一到 ASCII 大写。
         let (k, v) = (k.trim().to_ascii_uppercase(), v.trim());
+        // **IT-16**：`[Setup]` 彩票 27 键（19 参数 + 8 状态初值；`ServerConf.cs:645-652`、
+        // `GameSvrConf.cs:1669-1688`）。放在共享大 match **之前**、用槽位表收取，理由同
+        // `ScriptGotoCountLimit`（给大 match 加 27 臂会让 rustfmt 把整段折成块）。
+        if section == "SETUP" {
+            if let Some(slot) = win_lottery_key_slot(&k) {
+                win_lottery_raw[slot] = Some(
+                    v.parse()
+                        .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                );
+            }
+        }
         // **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（`ServerConf.cs:320` 的
         // `ReadWriteInteger`；现网 `Server.conf` 写 `=10000`）在下面的 `"SETUP"` match **之前**
         // 单独处理——不并入那个 match（并入会让 rustfmt 因此重排整段，产生与本片无关的 diff）。
@@ -1281,6 +1344,25 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     if gate_port == 0 {
         bail!("GatePort 不能为 0");
     }
+    // **IT-16**：27 键 → `WinLotteryCfg`（缺键回落 ctor 缺省；见 [`WinLotteryCfg::default`]）。
+    let win_lottery = {
+        let base = WinLotteryCfg::default();
+        let mut cfg = base;
+        if let Some(v) = win_lottery_raw[0] {
+            cfg.rate = v;
+        }
+        cfg.min = six_from(&win_lottery_raw, 1, base.min);
+        cfg.max = six_from(&win_lottery_raw, 7, base.max);
+        cfg.gold = six_from(&win_lottery_raw, 13, base.gold);
+        cfg.init_level = six_from(&win_lottery_raw, 21, base.init_level);
+        if let Some(v) = win_lottery_raw[19] {
+            cfg.init_count = v;
+        }
+        if let Some(v) = win_lottery_raw[20] {
+            cfg.init_no_win = v;
+        }
+        cfg
+    };
     Ok(GateConfig {
         gate_addr,
         gate_port,
@@ -1383,6 +1465,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         amy_ounsul_point: amy_ounsul_point.unwrap_or(10),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
+        win_lottery,
         // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。
         make_durg_price: make_durg_price.unwrap_or(100),
         // oracle 缺省值（`GameSvrConf.cs:1310/1419-1432`；部署不同值见 `Server.conf`）。
@@ -1552,6 +1635,54 @@ impl GateConfig {
             in_free_pk: self.in_free_pk_area_name_color,
         }
     }
+}
+
+/// `[Setup]` 彩票键（已归一为 ASCII 大写）→ 27 槽位。
+///
+/// 槽位布局：`0`=Rate；`1..=6`=1..6 Min；`7..=12`=1..6 Max；`13..=18`=1..6 Gold；
+/// `19`=Count；`20`=NoWinCount；`21..=26`=Level1..6。
+fn win_lottery_key_slot(k: &str) -> Option<usize> {
+    Some(match k {
+        "WINLOTTERYRATE" => 0,
+        "WINLOTTERY1MIN" => 1,
+        "WINLOTTERY2MIN" => 2,
+        "WINLOTTERY3MIN" => 3,
+        "WINLOTTERY4MIN" => 4,
+        "WINLOTTERY5MIN" => 5,
+        "WINLOTTERY6MIN" => 6,
+        "WINLOTTERY1MAX" => 7,
+        "WINLOTTERY2MAX" => 8,
+        "WINLOTTERY3MAX" => 9,
+        "WINLOTTERY4MAX" => 10,
+        "WINLOTTERY5MAX" => 11,
+        "WINLOTTERY6MAX" => 12,
+        "WINLOTTERY1GOLD" => 13,
+        "WINLOTTERY2GOLD" => 14,
+        "WINLOTTERY3GOLD" => 15,
+        "WINLOTTERY4GOLD" => 16,
+        "WINLOTTERY5GOLD" => 17,
+        "WINLOTTERY6GOLD" => 18,
+        "WINLOTTERYCOUNT" => 19,
+        "NOWINLOTTERYCOUNT" => 20,
+        "WINLOTTERYLEVEL1" => 21,
+        "WINLOTTERYLEVEL2" => 22,
+        "WINLOTTERYLEVEL3" => 23,
+        "WINLOTTERYLEVEL4" => 24,
+        "WINLOTTERYLEVEL5" => 25,
+        "WINLOTTERYLEVEL6" => 26,
+        _ => return None,
+    })
+}
+
+/// 从槽位表取连续 6 项（idx0 = 一等奖），缺项保留 `default`。
+fn six_from(raw: &[Option<i32>; 27], base: usize, default: [i32; 6]) -> [i32; 6] {
+    let mut out = default;
+    for (i, slot) in out.iter_mut().enumerate() {
+        if let Some(v) = raw[base + i] {
+            *slot = v;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2760,5 +2891,114 @@ HungerSystem=garbage
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod win_lottery_config_tests {
+    use super::*;
+
+    fn write(dir: &Path, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join("Server.conf");
+        // `load()` 的 `[Server]` 必填项（与 `parses_deployed_shape` 同形）；本文件的用例只关心 `[Setup]`。
+        let full = format!(
+            "[Server]
+CheckBlock=12288
+GateAddr=127.0.0.1
+GatePort=5000
+             IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+{body}"
+        );
+        std::fs::write(&p, mir2_script::cp936::encode_gb2312_dotnet(&full)).unwrap();
+        p
+    }
+
+    /// 部署 `Server.conf` 的 27 键（值照现网件）全解析。
+    #[test]
+    fn parses_all_27_deployed_lottery_keys() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-lot-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Setup]\nWinLottery1Min=16180\nWinLottery1Max=16185\nWinLottery2Min=16170\n             WinLottery2Max=16179\nWinLottery3Min=16150\nWinLottery3Max=16169\n             WinLottery4Min=16000\nWinLottery4Max=16149\nWinLottery5Min=14000\n             WinLottery5Max=15999\nWinLottery6Min=1\nWinLottery6Max=4999\n             WinLotteryRate=30000\nWinLottery1Gold=1000000\nWinLottery2Gold=200000\n             WinLottery3Gold=100000\nWinLottery4Gold=10000\nWinLottery5Gold=1000\n             WinLottery6Gold=500\nWinLotteryCount=0\nNoWinLotteryCount=0\n             WinLotteryLevel1=0\nWinLotteryLevel2=0\nWinLotteryLevel3=0\n             WinLotteryLevel4=0\nWinLotteryLevel5=0\nWinLotteryLevel6=0\n",
+        );
+        let c = load(&p).unwrap().win_lottery;
+        assert_eq!(c.rate, 30_000);
+        assert_eq!(c.min, [16_180, 16_170, 16_150, 16_000, 14_000, 1]);
+        assert_eq!(c.max, [16_185, 16_179, 16_169, 16_149, 15_999, 4_999]);
+        assert_eq!(c.gold, [1_000_000, 200_000, 100_000, 10_000, 1_000, 500]);
+        assert_eq!((c.init_count, c.init_no_win), (0, 0));
+        assert_eq!(c.init_level, [0; 6]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 缺键回落 oracle ctor 缺省（`GameSvrConf.cs:1669-1688`）；键名大小写不敏感。
+    #[test]
+    fn missing_keys_use_ctor_defaults_and_keys_are_case_insensitive() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-lot2-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Setup]\nwinlotteryrate=12345\nnowinlotterycount=500\nWINLOTTERYLEVEL1=7\n",
+        );
+        let c = load(&p).unwrap().win_lottery;
+        assert_eq!(c.rate, 12_345, "小写键名也要命中");
+        assert_eq!(c.init_no_win, 500);
+        assert_eq!(c.init_level, [7, 0, 0, 0, 0, 0]);
+        // 其余 24 键缺 ⇒ ctor 缺省。
+        assert_eq!(c.min, WinLotteryCfg::default().min);
+        assert_eq!(c.max, WinLotteryCfg::default().max);
+        assert_eq!(c.gold, WinLotteryCfg::default().gold);
+        assert_eq!(c.init_count, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 槽位表逐键唯一且 27 个键全覆盖（漏一个键 ⇒ 该键解析静默失效）。
+    #[test]
+    fn key_slots_are_a_bijection_over_27_keys() {
+        let keys = [
+            "WINLOTTERYRATE",
+            "WINLOTTERY1MIN",
+            "WINLOTTERY2MIN",
+            "WINLOTTERY3MIN",
+            "WINLOTTERY4MIN",
+            "WINLOTTERY5MIN",
+            "WINLOTTERY6MIN",
+            "WINLOTTERY1MAX",
+            "WINLOTTERY2MAX",
+            "WINLOTTERY3MAX",
+            "WINLOTTERY4MAX",
+            "WINLOTTERY5MAX",
+            "WINLOTTERY6MAX",
+            "WINLOTTERY1GOLD",
+            "WINLOTTERY2GOLD",
+            "WINLOTTERY3GOLD",
+            "WINLOTTERY4GOLD",
+            "WINLOTTERY5GOLD",
+            "WINLOTTERY6GOLD",
+            "WINLOTTERYCOUNT",
+            "NOWINLOTTERYCOUNT",
+            "WINLOTTERYLEVEL1",
+            "WINLOTTERYLEVEL2",
+            "WINLOTTERYLEVEL3",
+            "WINLOTTERYLEVEL4",
+            "WINLOTTERYLEVEL5",
+            "WINLOTTERYLEVEL6",
+        ];
+        assert_eq!(keys.len(), 27);
+        let slots: Vec<usize> = keys
+            .iter()
+            .filter_map(|k| win_lottery_key_slot(k))
+            .collect();
+        assert_eq!(slots.len(), 27, "27 个键都必须有槽位");
+        let mut sorted = slots.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 27, "槽位不得重复");
+        assert_eq!(sorted.first(), Some(&0));
+        assert_eq!(sorted.last(), Some(&26));
+        assert_eq!(win_lottery_key_slot("WINLOTTERY7MIN"), None, "越界键不识别");
     }
 }
