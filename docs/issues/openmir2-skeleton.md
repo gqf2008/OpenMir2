@@ -1,6 +1,6 @@
 # openmir2-skeleton — 17 `SKILL_SKELLETON`（骷髅召唤）对拍卡
 
-**状态**：Rust 侧对拍面（驱动 + 专用比较器）已写，**待编译 + 绿跑回填证据**；未升格（manifest `MG-24` 仍 `implemented_unverified`，duplicate `MG-31`）。
+**状态**：对拍面（驱动 + 专用比较器）+ 变异牙 + 全量门全绿；**未升格**（manifest `MG-24` 仍 `implemented_unverified`，duplicate `MG-31`），待第二方复核。**最终 head `8d8f5f55f`（base master `977d260a1`）。**
 **golden**：`mir2-rs/tests/parity/golden/magic/skeleton.json`（两例 `summon_ok` / `cap_hit`），由 17 装置离线替身生成；本卡 `20/24` 版本（见 §2）。
 
 ## 1. oracle 事实（C# 参照实现）
@@ -37,7 +37,14 @@
 - 覆盖：`Skeleton` block 全字段、`new_slaves` 实值 20/24（level 1 / master_is_caster true）、帧 17/638/642 全等；`cap_hit` 三断（①实体数不增 5->5 ②`slave_count` 不变 1->1 且 `new_slaves` 空 ③`regen_calls=0`）各自独立成立。
 - ActorId 对齐：`id_base` 由 4000/5000 改 1000/2000（对齐 golden 的 `SM_638` 尾目标 ActorId 1002/2002）；此时全绿。
 - 桩态：`git status --porcelain` 空、`grep -rn MUTATION`=0。
-- 门：`cargo fmt --check` / `msgcodegen --check`（604 条）/ `docs_anchor --prose --base f8c0b4b7d` 均绿；`clippy --workspace --all-targets -D warnings` 与 `cargo test --workspace` 待窗口（workspace 级一次一条）。
+- **门禁（最终 head `8d8f5f55f` / base `977d260a1`；下列除 workspace 全量外均在 rebase 后 head 上跑）：**
+  - `cargo check -p game-svr --lib` = **rc 0**
+  - `cargo test -p game-svr --lib` = **`2156 passed; 0 failed; 76 ignored`**
+  - `cargo test --workspace` = **`4386 passed; 0 failed; 163 ignored`**（**基于 rebase 前 head `5fc120fb9`**）
+  - `cargo clippy --workspace --all-targets -- -D warnings` = **rc 0**（`Finished dev profile in 33.39s`）
+  - `cargo fmt --all -- --check` = rc 0；`msgcodegen --check` = 604 条；`docs_anchor --prose` = 绿
+- **差异说明甲（`--lib` 计数）**：master `977d260a1` 的 `--lib` = `2156·0·73`；本卡 = `2156·0·76` = **master 73 + 3 ignored**（`skeleton_cast_smoke` + `skeleton_parity_summon_ok` + `skeleton_parity_cap_hit` 三个 `#[ignore]`）。**passed 相等(2156)，无新增 passed。**
+- **差异说明乙（workspace 全量口径）**：`4386·0·163` 是 **rebase 前 head `5fc120fb9`（base `f8c0b4b7d`）** 的读数；rebase 后**未重跑全量**，只重跑 `--lib`（见甲）。两者差异同为那 3 个 `#[ignore]`，**无新增 passed**。
 - §31 变异牙见 §5b。
 
 ## 5b. 变异牙（§31）——红在哪一层（断言原文）
