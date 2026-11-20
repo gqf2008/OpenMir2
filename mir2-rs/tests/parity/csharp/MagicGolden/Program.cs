@@ -105,6 +105,12 @@ public static class Program
         {
             SystemModule.SystemShare.CastleMgr = new M2Server.Castle.CastleManager();
         }
+        // 16 的 `MagMakeHolyCurtain` 会 `SystemShare.EventMgr.AddEvent(...)`；离线进程给空事件表
+        // （`EventManager` 只维护列表，不启线程）。缺失时会 NullReference ⇒ 该支无法生成。
+        if (SystemModule.SystemShare.EventMgr == null)
+        {
+            SystemModule.SystemShare.EventMgr = new M2Server.Event.EventManager();
+        }
         try
         {
         if (args.Contains("--rng-selftest"))
@@ -150,6 +156,9 @@ public static class Program
             if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
+            // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
+            // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
+            if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
@@ -932,6 +941,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// <summary>`construction.equipment`（本批一律空：无装备登录序）。</summary>
         public string[] Equipment = Array.Empty<string>();
         /// <summary>
+        /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
+        /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
+        /// </summary>
+        public MonsterSpec[] Monsters = Array.Empty<MonsterSpec>();
+        /// <summary>
         /// **三态计时器输入**（`DECHEALTH/DAMAGEARMOR/STONE` 的初始值）。`null` = 本支不涉及状态分支；
         /// **走到状态分支的用例必须显式给**（不靠缺省 0 静默通过）。非零初值取 ≥2 且互不相同，
         /// 否则"置 1"前后同值、观测不到。
@@ -1261,6 +1275,34 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     }
 
     /// <summary>
+    /// `--case holyshield`：16 的对象选择四支（v1 被动怪物，卡见 openmir2-monster-actors-v2 与 §36）。
+    ///
+    /// 门（`MagMakeHolyCurtain`，`MagicManager.cs` 的 helper）：`Race >= Animal
+    /// &amp;&amp; Random(4) + (caster.Level - 1) > target.Level &amp;&amp; Master == null`。
+    /// caster.Level=30 ⇒ **level=1 必中、level=200 必不中**（不依赖 seed 抽值，选择结果确定）。
+    /// 四支：两怪全中 / 等级挡 / Master 挡（自指）/ 两怪部分中。
+    /// </summary>
+    private static int HolyShieldBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        MonsterSpec Mon(int x, int y, int level, int master = 0) =>
+            new MonsterSpec { X = x, Y = y, Race = 50, Level = level, Hp = 300, Master = master };
+        spec.Monsters = new[] { Mon(102, 100, 1), Mon(101, 101, 1) };
+        var c1 = RunMagicCase(spec, "mon_hit_two", 1, 1000, spec.TargetMaxHp, false);
+        spec.Monsters = new[] { Mon(102, 100, 200) };
+        var c2 = RunMagicCase(spec, "mon_blocked_level", 1, 2000, spec.TargetMaxHp, false);
+        spec.Monsters = new[] { Mon(102, 100, 1, master: 1) };
+        var c3 = RunMagicCase(spec, "mon_blocked_master", 1, 3000, spec.TargetMaxHp, false);
+        spec.Monsters = new[] { Mon(102, 100, 1), Mon(101, 101, 200) };
+        var c4 = RunMagicCase(spec, "mon_partial", 1, 4000, spec.TargetMaxHp, false);
+        return EmitGolden(spec, new[] { c1, c2, c3, c4 });
+    }
+
+    /// <summary>
     /// `--case unamyounsul`：40 的四支分支矩阵（卡 §34）。
     ///
     /// 门 = `Random(7) - (UserMagicLevel + 1) &lt; 0`（Level=1 ⇒ 首抽 &lt; 2 为开）；
@@ -1297,15 +1339,25 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return EmitGolden(spec, new[] { c1, c2, c3, c4 });
     }
 
-    /// <summary>把三态计时器输入挂到 `Fixture`（只在显式给了 `PoisonStates` 时出现，保持既有件零变化）。</summary>
-    private static object AttachStatusTimeArr(object fixture, object status)
+    /// <summary>
+    /// 把扩展输入挂到 `Fixture`（`status_time_arr` / `monsters`）：只为显式给出这些输入的支出现，
+    /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
+    /// </summary>
+    private static object AttachStatusTimeArr(object fixture, object status, object monsters = null)
     {
-        if (status == null)
+        if (status == null && monsters == null)
         {
             return fixture;
         }
         var node = JsonSerializer.SerializeToNode(fixture)!.AsObject();
-        node["status_time_arr"] = JsonSerializer.SerializeToNode(status);
+        if (status != null)
+        {
+            node["status_time_arr"] = JsonSerializer.SerializeToNode(status);
+        }
+        if (monsters != null)
+        {
+            node["monsters"] = JsonSerializer.SerializeToNode(monsters);
+        }
         return node;
     }
 
@@ -1449,6 +1501,50 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             p.Envir = env;
             SystemModule.SystemShare.ActorMgr.Add(p);
             env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
+        }
+        // **非玩家对象（v1 被动）**：进世界并参与所有对象类型门/筛选；**不 Operate**
+        // ⇒ 只记录"它们收到了哪些 RM"（对象选择面）。效果面由目标自己 Operate 时产生，属 v2。
+        var monsters = new List<RecordingMonster>();
+        foreach (var ms in spec.Monsters)
+        {
+            var mo = new RecordingMonster
+            {
+                ChrName = "golden-mon" + monsters.Count,
+                ActorId = idBase + 10 + monsters.Count,
+                CurrX = (short)ms.X,
+                CurrY = (short)ms.Y,
+            };
+            mo.Race = (byte)ms.Race;
+            mo.Abil.Level = (byte)ms.Level;
+            mo.WAbil.HP = (ushort)ms.Hp;
+            mo.WAbil.MaxHP = (ushort)ms.Hp;
+            mo.LifeAttrib = (byte)ms.LifeAttrib;
+            mo.FixedHideMode = false;
+            mo.ObMode = false;
+            mo.Envir = env;
+            SystemModule.SystemShare.ActorMgr.Add(mo);
+            env.AddMapObject(mo.CurrX, mo.CurrY, SystemModule.Data.CellType.Monster, mo.ActorId, mo);
+            monsters.Add(mo);
+        }
+        // `Master`/`TargetCret` 用**本列表的 1 基序号**解析（0 = 无）；越界即配置错误。
+        foreach (var (ms, i) in spec.Monsters.Select((v, i) => (v, i)))
+        {
+            if (ms.Master != 0)
+            {
+                if (ms.Master < 1 || ms.Master > monsters.Count)
+                {
+                    throw new FixtureContractViolation($"[{spec.Key}] MonsterSpec.Master={ms.Master} 超出 {monsters.Count} 只");
+                }
+                monsters[i].Master = monsters[ms.Master - 1];
+            }
+            if (ms.TargetCret != 0)
+            {
+                if (ms.TargetCret < 1 || ms.TargetCret > monsters.Count)
+                {
+                    throw new FixtureContractViolation($"[{spec.Key}] MonsterSpec.TargetCret={ms.TargetCret} 超出 {monsters.Count} 只");
+                }
+                monsters[i].TargetCret = monsters[ms.TargetCret - 1];
+            }
         }
 
         // —— 夹具契约（M51）：construction/derived 由 oracle 复算，七道门任一不过 ⇒ FixtureContractViolation（rc=2）。
@@ -1648,6 +1744,23 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         {
             receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
         }
+        // **v1 被动怪物**：只把它收到的 RM 记进台账（对象选择面）；不 Operate ⇒ `Sent` 恒空。
+        foreach (var (mo, i) in monsters.Select((v, i) => (v, i)))
+        {
+            var rm = mo.DrainRaw().Select(m => (object)new
+            {
+                ident = m.Msg.wIdent,
+                wParam = m.Msg.wParam,
+                p1 = m.Msg.nParam1,
+                p2 = m.Msg.nParam2,
+                p3 = m.Msg.nParam3,
+                msg = m.Msg.Buff ?? "",
+                late = m.Msg.LateDelivery,
+                delivery = m.Msg.DeliveryTime,
+                priority = m.Prio,
+            }).ToList();
+            receivers.Add(new ReceiverResult { Who = "mon" + i, Rm = rm, Sent = new List<object>() });
+        }
         return new FireballResult
         {
             Fixture = AttachStatusTimeArr(new
@@ -1715,7 +1828,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     dechealth = statusBefore[0],
                     damagearmor = statusBefore[1],
                     stone = statusBefore[2],
-                }),
+                },
+                spec.Monsters.Length == 0
+                ? null
+                : (object)spec.Monsters.Select(m => new
+                {
+                    x = m.X,
+                    y = m.Y,
+                    race = m.Race,
+                    level = m.Level,
+                    hp = m.Hp,
+                    life_attrib = m.LifeAttrib,
+                    master = m.Master,
+                    target_cret = m.TargetCret,
+                }).ToArray()),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -1736,6 +1862,23 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     stone = statusAfter[2],
                 },
         };
+    }
+
+    /// <summary>非玩家对象（动物/怪物）夹具输入。</summary>
+    private sealed class MonsterSpec
+    {
+        public int X;
+        public int Y;
+        /// <summary>`Race`（`ActorRace.Animal` 起的值即"动物/怪物"）。</summary>
+        public int Race = 50;
+        public int Level = 1;
+        public int Hp = 300;
+        /// <summary>`LifeAttrib`（`Grobal2.LA_UNDEAD` = 不死系）。</summary>
+        public int LifeAttrib;
+        /// <summary>`Master` 指向本列表第几只（**1 基**；`0` = 无主）。</summary>
+        public int Master;
+        /// <summary>`TargetCret` 指向本列表第几只（**1 基**；`0` = 无）。</summary>
+        public int TargetCret;
     }
 
     private static readonly string[] Unused = Array.Empty<string>();
@@ -1779,6 +1922,20 @@ public sealed class RecordingNetChannel : M2Server.Net.INetChannel
 ///  * `MsgQueue`（`ActorEntity.cs:16`，protected）用于抽 RM 账本。
 /// **生产类零改动**。
 /// </summary>
+/// <summary>
+/// **被动**怪物记录壳（v1）：只暴露 `DrainRaw` 让金标准记录"它收到了哪些 RM"；
+/// **不提供 `Operate`** —— 效果面（状态置位/伤害/诱捕）属 v2（卡 openmir2-monster-actors-v2）。
+/// </summary>
+public sealed class RecordingMonster : M2Server.Monster.MonsterObject
+{
+    public List<(SystemModule.Data.SendMessage Msg, byte Prio)> DrainRaw()
+    {
+        var list = new List<(SystemModule.Data.SendMessage, byte)>();
+        while (MsgQueue.TryDequeue(out var m, out var prio)) list.Add((m, prio));
+        return list;
+    }
+}
+
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
 

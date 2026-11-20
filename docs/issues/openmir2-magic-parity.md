@@ -1269,3 +1269,27 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 **范围外（未升格，登记供后续）**：`SKILL_AMYOUNSUL(6)`、`SKILL_GROUPLIGHTENING(42)`、`SKILL_GROUPAMYOUNSUL(48)`、
 `SKILL_GROUPDEDING(39)`、`SKILL_TAMMING`（`!Animal` 反门 + `MagTamming` 的 Master/undead/几率分支）、
 `MagTurnUndead`（`SuperMan || LifeAttrib != LA_UNDEAD`）、`MabMabe`（`Race == Play` 两支）——它们本来就未升格。
+
+### 36. 非玩家对象夹具 v1（被动怪物）+ 16 的对象选择面（2026-11-20）
+
+**范围声明（§26）**：v1 只判**对象选择/门判据**——哪些对象收到 `RM_MAKEHOLYSEIZEMODE(60005)`。
+v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空**；任何由目标处理的效果分支
+**不得**以 v1 升格，`scope = gate_only`。effect 面见卡 `openmir2-monster-actors-v2`。
+
+**装置扩展（schema v3，向后兼容）**
+- `MagicSpec.Monsters[]`：`(x,y,race,level,hp,life_attrib,master,target_cret)`；`master/target_cret`
+  是**本列表 1 基序号**（0 = 无）。默认空 ⇒ 既有件零变化。
+- golden `Fixture.monsters[]` 同形；每个怪物在 `Receivers` 里以 `mon{i}` 出现，只记其 RM、`Sent` 恒空。
+- 离线进程补 `SystemShare.EventMgr = new EventManager()`（16 的 `MagMakeHolyCurtain` 会 AddEvent；
+  缺失时 NullReference）。**既有件零变化已实测**：重跑 18 件装置输出，除既有墙钟 `delivery` 外
+  **0 差异**。
+
+**16 四支（`golden/magic/holyshield.json`，`--case holyshield`，ArmRingAmulet=true）**
+| case | 怪物 | 命中 | 说明 |
+|---|---|---|---|
+| `mon_hit_two` | 2 只 L1 | `mon0`/`mon1` 各 1 条 60005 | 全选 |
+| `mon_blocked_level` | 1 只 L200 | 0 | `Random(4)+(30-1) > 200` 不成立 |
+| `mon_blocked_master` | 1 只 L1（Master 自指） | 0 | `Master == null` 门挡 |
+| `mon_partial` | L1 + L200 | `mon0` 1 条、`mon1` 0 | 部分命中（证明非同全选/全否） |
+
+**未做**：Rust 侧怪物夹具与 16 的驱动/比较器（下一支）；16 **不升格**（v1 不足以判效果面）。
