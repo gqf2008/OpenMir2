@@ -68672,13 +68672,13 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skeleton_parity_summon_ok() {
-        skeleton_parity_drive("summon_ok", 4000);
+        skeleton_parity_drive("summon_ok", 1000);
     }
 
     #[test]
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skeleton_parity_cap_hit() {
-        skeleton_parity_drive("cap_hit", 5000);
+        skeleton_parity_drive("cap_hit", 2000);
     }
 
     // ======================================================================
