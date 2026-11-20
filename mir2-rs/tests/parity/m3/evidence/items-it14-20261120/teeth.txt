@@ -1,0 +1,14 @@
+# IT-14 修复油 teeth（§16）：每颗 ran=(0,1)=1测跑1失败；快照 E:/UserTemp/it14-useitem-snap.rs sha 还原相等。
+# M1 耐久值错（w.dura += n  →  ++1）：
+assertion failed: eat_ok_shape9_repair_normal: 武器耐久(weapon_after)与 oracle 不符
+  left: Some((200, 9946, 9945))  right: Some((200, 9945, 9945))
+# M2 去 RM_DURACHANGE 帧：
+assertion failed: eat_ok_shape9_repair_normal: 延时通知(七字段排序序列)与 oracle 不符
+  left:  [(131,10115,..),(252,11004,0,219,255,0,false)]
+  right: [(131,10115,..),(141,10125,1,9945,9945,0,false),(252,11004,0,219,255,0,false)]
+# M3b 翻转外层/内层守卫（w.dura_max>w.dura 与 n>0）⇒ 已满武器误吃：
+assertion failed: eat_fail_shape9_full: 即时帧(含 SM_ADDITEM)与 oracle 不符
+  left: [635]  right: [636]
+# 还原后基线绿（useitem.rs == 快照 d96abfdc…；--lib 2035 passed / 0 failed / 55 ignored）。
+# 注：单改 `if n > 0`→`>= 0` 是 no-op（外层 w.dura_max>w.dura 通过时 missing>0 ⇒ n>0 恒真，n>0 为防御性死守卫）；
+#     故 M3b 同时翻转两层守卫才有牙。full/no-weapon 的"不吃"由外层守卫保证。

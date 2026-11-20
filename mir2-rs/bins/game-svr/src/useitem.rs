@@ -355,7 +355,6 @@ pub fn use_item(
                     } else {
                         match tpl.std_mode {
                             0 => {
-                                let mut shape_eats = true;
                                 match tpl.shape {
                                     1 => {
                                         // 固定量：IncHealthSpell(AC, MAC)
@@ -387,36 +386,6 @@ pub fn use_item(
                                                 .push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
                                         }
                                     }
-                                    9 => {
-                                        // 修复油 `RepairWeapon()`（`PlayObject.cs:1561`）：修当前武器耐久。
-                                        // 失败（无武器/已满/nDura<=0）⇒ 不吃（shape_eats 保持 false）。
-                                        shape_eats = false;
-                                        if let Some(w) = state.extra.weapon.as_mut() {
-                                            if w.index > 0 && w.dura_max > w.dura {
-                                                let dec = ctx.repair_item_dec_dura.max(1) as u16;
-                                                w.dura_max -= (w.dura_max - w.dura) / dec;
-                                                let n = (w.dura_max - w.dura).min(5000);
-                                                if n > 0 {
-                                                    w.dura += n;
-                                                    notices.push(QueuedNotice {
-                                                        ident: RM_DURACHANGE,
-                                                        w_param: 1,
-                                                        n_param1: i32::from(w.dura),
-                                                        n_param2: i32::from(w.dura_max),
-                                                        n_param3: 0,
-                                                    });
-                                                    notices.push(QueuedNotice {
-                                                        ident: RM_SYSMESSAGE,
-                                                        w_param: 0,
-                                                        n_param1: i32::from(ctx.green_msg_fcolor),
-                                                        n_param2: i32::from(ctx.green_msg_bcolor),
-                                                        n_param3: 0,
-                                                    });
-                                                    shape_eats = true;
-                                                }
-                                            }
-                                        }
-                                    }
                                     _ => {
                                         // default：AC/MAC 各自 `> 0` 才叠加到 IncHealth/IncSpell（ushort 回绕）
                                         if tpl.ac > 0 {
@@ -428,7 +397,7 @@ pub fn use_item(
                                         }
                                     }
                                 }
-                                eaten = shape_eats;
+                                eaten = true;
                             }
                             // StdMode 1（`PlayObject.Base.cs:2085-2092`）：食物。
                             //   nOldStatus = GetMyStatus();
@@ -518,6 +487,34 @@ pub fn use_item(
                                 eaten = true;
                             }
                             // StdMode 4（书）与 StdMode 3 其余 Shape 未实现 ⇒ 已证差异，登记 T-17。
+                            3 if tpl.shape == 9 => {
+                                // 修复油 `RepairWeapon()`（`PlayObject.cs:1561`；StdMode3 的 `default: EatUseItems(shape)` 的 case 9）。
+                                if let Some(w) = state.extra.weapon.as_mut() {
+                                    if w.index > 0 && w.dura_max > w.dura {
+                                        let dec = ctx.repair_item_dec_dura.max(1) as u16;
+                                        w.dura_max -= (w.dura_max - w.dura) / dec;
+                                        let n = (w.dura_max - w.dura).min(5000);
+                                        if n > 0 {
+                                            w.dura += n;
+                                            notices.push(QueuedNotice {
+                                                ident: RM_DURACHANGE,
+                                                w_param: 1,
+                                                n_param1: i32::from(w.dura),
+                                                n_param2: i32::from(w.dura_max),
+                                                n_param3: 0,
+                                            });
+                                            notices.push(QueuedNotice {
+                                                ident: RM_SYSMESSAGE,
+                                                w_param: 0,
+                                                n_param1: i32::from(ctx.green_msg_fcolor),
+                                                n_param2: i32::from(ctx.green_msg_bcolor),
+                                                n_param3: 0,
+                                            });
+                                            eaten = true;
+                                        }
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         if eaten {
@@ -720,6 +717,19 @@ mod tests {
         v.as_array().unwrap().iter().map(bag_item).collect()
     }
 
+    fn weapon_of(v: &Value) -> Option<BagItem> {
+        if v.is_null() {
+            return None;
+        }
+        Some(BagItem {
+            make_index: 0,
+            index: u16v(&v["index"]),
+            dura: u16v(&v["dura"]),
+            dura_max: u16v(&v["dura_max"]),
+            desc: [0; 14],
+        })
+    }
+
     fn frame(v: &Value) -> Frame {
         Frame {
             ident: u16v(&v["ident"]),
@@ -907,6 +917,8 @@ mod tests {
     /// 故豁免两层要求（强判会误红）。夹具一变须同步更新本名单（`assert_eq!` 会咬）。
     const EXPECTED_ONE_LAYER: &[&str] = &[
         "eat_fail_not_found",
+        "eat_fail_shape9_full",
+        "eat_fail_shape9_no_weapon",
         "eat_fail_stdmode_other",
         "eat_fail_template_missing",
         "eat_fail_dead",
@@ -1161,6 +1173,8 @@ mod tests {
             state.extra.body_luck_level = case["expect"]["body_luck_level_before"]
                 .as_i64()
                 .unwrap_or(0) as i32;
+            // IT-14：武器耐久输入（`weapon_before`）→ 比较器据夹具喂状态。
+            state.extra.weapon = weapon_of(&case["weapon_before"]);
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
 
@@ -1191,6 +1205,20 @@ mod tests {
                     bll,
                     "{name}: BodyLuckLevel 终值与 oracle 不符"
                 );
+            }
+            // IT-14：武器耐久终值（weapon_after）与 oracle 逐字段比（读夹具，不写死）。
+            if let Some(wa) = expect.get("weapon_after") {
+                let got = state
+                    .extra
+                    .weapon
+                    .as_ref()
+                    .map(|w| (w.index, w.dura, w.dura_max));
+                let want = if wa.is_null() {
+                    None
+                } else {
+                    Some((u16v(&wa["index"]), u16v(&wa["dura"]), u16v(&wa["dura_max"])))
+                };
+                assert_eq!(got, want, "{name}: 武器耐久(weapon_after)与 oracle 不符");
             }
 
             // Z4：golden 有非零期望 ⇒ Rust 必须有非零锚；golden 全零（合法失败例）⇒ 不适用。
