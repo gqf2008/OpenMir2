@@ -12845,6 +12845,23 @@ fn handle_hit_cmd(
         // （`PlayObject.Attack.cs:225`）；攻击派发前按当前装备重算并灌入。
         set_actor_weapon_strong(world, sessions, catalog, actor_id);
         set_actor_poison_state(world, sessions, catalog, tid);
+        // **攻击批 B（段 1）**：技能训练快照（冷启动注入：世界在两次同步之间是权威副本，
+        // 训练会就地改它 ⇒ 宿主不得用旧快照覆盖）+ 本击战斗态。
+        if let Some(sg) = sessions.get(chr_name) {
+            let abil_level = world.entities.get(actor_id).map_or(0, |e| e.level);
+            world.init_attack_skill_train(actor_id, attack_skill_input(sg, abil_level));
+            world.set_attack_flags(
+                actor_id,
+                sg.magic.power_hit,
+                false,
+                sg.magic.passives.hit_plus,
+                sg.magic.passives.hit_double,
+                abil_level,
+            );
+        }
+        // **攻击批 B（段 1）**：本击的 `wHitMode` 与战斗态。模式**随命令入队**（与 `attack_cmd`
+        // 同序弹），不能放按键的注入表里——同一 tick 两击的 `ClientHitXY` 都在 tick 之前。
+        world.push_hit_mode(actor_id, mode);
         world.attack_cmd(actor_id, tid);
     } else {
         // oracle `PlayObject.AttackDir(targetObject = null)`（`PlayObject.Attack.cs:25`）：
@@ -12861,6 +12878,7 @@ fn handle_hit_cmd(
         // （oracle `ClientHitXY:942-956` 与目标无关）。空挥是同步结算 ⇒ 事件此刻已产生，
         // 立即排空；有目标支要等下一 `tick_head`（见 `sim_loop` 的排水点）。
         drain_yedo_events(world, online, sessions, gates);
+        drain_skill_train_events(world, online, sessions);
         glog!(
             "DBG",
             "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）"
@@ -12906,6 +12924,85 @@ fn handle_hit_cmd(
     // （`sim_loop`）在返回后落一行服务端权威状态 dump（`state_log::StateLog`）；被守卫拒的支
     // 返回 `false` ⇒ 不落行（与 oracle「没有攻击单元就没有首抽」一致）。
     true
+}
+
+/// **攻击批 B（段 1）**：从会话快照出「技能训练 + 战斗态」注入体。
+///
+/// 技能表取 `MagicState.arr`（= oracle `MagicArr`，含残影），训练字段取进程级 `MagicTable`
+/// 的 `MagicInfo`（`TrainLv`/`TrainLevel[4]`/`MaxTrain[4]`）。**没有 MagicInfo 的条目**（魔表缺行）
+/// 不进表——oracle 此时访问 `Magic.TrainLv` 会 NRE，本仓按"不训练"处理（登记）。
+fn attack_skill_input(sg: &SessionGround, abil_level: u8) -> mir2_world_bevy::AttackSkillInput {
+    let table = sg.magic.table.as_ref();
+    let skills = sg
+        .magic
+        .arr
+        .iter()
+        .flatten()
+        .filter_map(|m| {
+            let info = table?.get(m.mag_idx)?;
+            Some(mir2_world_bevy::magic::SkillTrainState {
+                magic_id: m.mag_idx,
+                level: m.level,
+                tran_point: m.tran_point,
+                train_lv: info.train_lv,
+                train_level: info.train_level,
+                max_train: info.max_train,
+            })
+        })
+        .collect();
+    mir2_world_bevy::AttackSkillInput {
+        abil_level,
+        // `PlayObject.FastTrain` 未装载（同 `lib.rs` 既有四处登记）。
+        fast_train: false,
+        skills,
+        power_hit: sg.magic.power_hit,
+        twin_hit_skill: false,
+        hit_plus: sg.magic.passives.hit_plus,
+        hit_double: sg.magic.passives.hit_double,
+    }
+}
+
+/// **攻击批 B（段 1）**：把训练事件落到会话（`list` 权威）并重填 `arr`（派生、只写不清），
+/// 再把 `GetAttackPowerHit` 的消费落到 `PowerHit`。
+///
+/// 640 帧（`levelup_msg`）属**段 2**，本函数**不发帧**（事件里的 `levelup_msg`/`level_up` 先保留，
+/// 段 2 接 `SM_MAGIC_LVEXP` 与 800/3000ms 延时）。
+fn drain_skill_train_events(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+) {
+    for ev in world.drain_skill_train() {
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&me.chr_name) else {
+            continue;
+        };
+        if let Some(m) = sg
+            .magic
+            .list
+            .iter_mut()
+            .flatten()
+            .find(|m| m.mag_idx == ev.magic_id)
+        {
+            m.level = ev.level;
+            m.tran_point = ev.tran_point;
+        }
+        // `arr` **只写不清**（清空会让 `present` 变假、动作帧回落到 `SM_HIT`）⇒ 从 `list` 重填。
+        game_svr::skill_ability::fill_magic_arr(&mut sg.magic.arr, &sg.magic.list);
+    }
+    for ev in world.drain_hit_mode() {
+        if !ev.power_hit_consumed {
+            continue;
+        }
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            continue;
+        };
+        if let Some(sg) = sessions.get_mut(&me.chr_name) {
+            sg.magic.power_hit = false;
+        }
+    }
 }
 
 /// **攻击批 A**：把世界排出的攻杀结算事件（[`mir2_world_bevy::YedoEvent`]）落到会话态与线上。
@@ -31720,6 +31817,7 @@ fn sim_loop(
         // 在这里排水。`SendSocket("+PWR")` 是直发短包（不经 MsgQueue）⇒ 紧跟 `tick_head` 发最接近
         // oracle 的时序。
         drain_yedo_events(&mut world, &online, &mut ground_sessions, &gates);
+        drain_skill_train_events(&mut world, &online, &mut ground_sessions);
         // **18 的状态变化观测有界**（卡 `openmir2-magic-parity` §26）：每 tick 清空一次；
         // 本观测面**只记录**，任何帧仍由各生产点的既有返回值出（此处清空不影响帧面）。
         world.clear_status_changes();
