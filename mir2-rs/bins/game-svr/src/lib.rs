@@ -10844,6 +10844,19 @@ fn handle_eat_cmd(
         }
         let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
         let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        // **657 自通知**（oracle `RecalcAbilitys` 尾段 `CharStatus=GetCharStatus(); StatusChanged();
+        // SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus,…)`，`:2874-2876`）：
+        // `nParam1 = CharStatus`（帧 Param/Tag 取它的 Lo/HiWord），`wParam = 临时 HitSpeed`
+        // （=开局清零后的 `ExtraAbil[3]`，handler 不读）；观察者面由下方 `broadcast_…` 依据本通知触发。
+        let status = world.get_char_status(actor_id);
+        out.notices.push(game_svr::useitem::QueuedNotice {
+            ident: mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32,
+            w_param: i32::from(state.extra.extra_abil[3]),
+            n_param1: status,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        });
         out.notices.push(game_svr::useitem::QueuedNotice {
             ident: game_svr::useitem::RM_ABILITY,
             w_param: 0,

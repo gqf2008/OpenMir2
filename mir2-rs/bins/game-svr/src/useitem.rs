@@ -649,9 +649,14 @@ pub fn use_item(
                                         state.extra.extra_abil_times[slot] =
                                             state.extra.extra_abil_times[slot].max(t);
                                         // 文本照抄 oracle（`PlayObject.Base.cs:2108-2147`，含 MC 那条 "sec."）。
-                                        let d = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
-                                            + i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) / 60;
-                                        let sec = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) % 60;
+                                        let d =
+                                            i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
+                                                + i32::from(mir2_shared::hutil32::hi_byte_u16(
+                                                    tpl.mac,
+                                                )) / 60;
+                                        let sec =
+                                            i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac))
+                                                % 60;
                                         let text = match slot {
                                             0 => format!("攻击力瞬间提高{d}分{sec}秒。"),
                                             1 => format!("魔法力瞬间提高{d}分{sec}sec."),
