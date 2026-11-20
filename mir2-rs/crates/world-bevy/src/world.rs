@@ -30,8 +30,8 @@ use crate::buff::{
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
 };
 use crate::combat::{
-    attack_dir_grouped_poison_ws_mode, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
-    AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
+    attack_dir_grouped_poison_ws_mode, generate_drops, get_exp_raw, swing_power, win_exp,
+    AttackOutcome, AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
 use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
@@ -19436,7 +19436,10 @@ mod weapon_durability_tests {
         let mut rng_gate = CountingRng::new(11);
         let mut sg = vec![st(3, 0, 0), st(4, 0, 0)];
         let evg = crate::magic::train_current_skill(0, 0, false, &mut rng_gate, &mut sg);
-        assert!(evg.is_empty(), "角色等级 0 < TrainLevel[0]=1 ⇒ 两支都不过门");
+        assert!(
+            evg.is_empty(),
+            "角色等级 0 < TrainLevel[0]=1 ⇒ 两支都不过门"
+        );
         assert_eq!(rng_gate.calls, 0, "门不过不抽");
     }
 

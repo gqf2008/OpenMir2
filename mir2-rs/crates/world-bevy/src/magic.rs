@@ -623,10 +623,10 @@ fn train_one(fast_train: bool, points: i32, st: &mut SkillTrainState) -> SkillPr
 /// **表里是 oracle 的原样顺序与 id**，包括 `case 9 → 43`、`case 13 → 56`、`case 12 → 66` 这几处
 /// 与 `AttackSuccess` 的模式表**不一致**的写法（oracle 本身如此，照抄）。
 pub const TRAIN_MODE_IDS: &[(i16, u16)] = &[
-    (3, 7),    // 攻杀（`SKILL_YEDO`）
-    (4, 12),   // 刺杀（`SKILL_ERGUM`）
-    (5, 25),   // 半月（`SKILL_BANWOL`）
-    (7, 26),   // 烈火（`SKILL_FIRESWORD`）
+    (3, 7),  // 攻杀（`SKILL_YEDO`）
+    (4, 12), // 刺杀（`SKILL_ERGUM`）
+    (5, 25), // 半月（`SKILL_BANWOL`）
+    (7, 26), // 烈火（`SKILL_FIRESWORD`）
     (9, 43),
     (13, 56),
     (8, 40),

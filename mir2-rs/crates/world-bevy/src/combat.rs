@@ -1382,7 +1382,12 @@ pub fn attack_dir_grouped_poison_ws_mode(
     poison: Option<AttackPoisonState>,
     weapon_strong: u16,
     effect: HitModeEffect,
-) -> (AttackOutcome, bool, Option<WeaponWearOutcome>, HitModeResult) {
+) -> (
+    AttackOutcome,
+    bool,
+    Option<WeaponWearOutcome>,
+    HitModeResult,
+) {
     let (mut poisoned, mut weapon_wear) = (false, None);
     let mode = AttackPowerMode::for_attacker(attacker);
     let (outcome, mode_result) = attack_with_grouped_mode(
