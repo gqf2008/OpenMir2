@@ -16,12 +16,16 @@
 - **泵序键**：`(byte)wIdent = 10139 & 0xFF = 155` ⇒ 吃路径上
   `RM_SUBABILITY(62) < RM_ABILITY(67) < RM_WEIGHTCHANGED(131) < RM_CHARSTATUSCHANGED(155) < RM_SYSMESSAGE(252)`。
 
-## 2. 宿主丢弃点
+## 2. 宿主丢弃点（2026-11-20 更正：吃路径缺**两条**）
 
-- `game_svr::pickwire::notice_frame` **没有 `RM_CHARSTATUSCHANGED` 臂** ⇒ 返回 `None`；
-- `handle_eat_cmd` 的排水（`emit_eat_notices` 的 `None` 支）记
+- **自通知**：`game_svr::pickwire::notice_frame` **没有 `RM_CHARSTATUSCHANGED` 臂** ⇒ 返回 `None`；
+  `handle_eat_cmd` 的排水（`emit_eat_notices` 的 `None` 支）记
   `WRN CM_EAT：通知 ident=10139 未接 SM_* 映射（登记…）` 并**丢弃**。
-- 注意：**657 的广播面已建模**（`mir2-rs/bins/game-svr/src/gate_criticality.rs` 的 657 行注释：`SM_CHARSTATUSCHANGED` 的收件人/去重口径）。本缺口只针对**发送者自己的那条自通知**（`RecalcAbilitys` → `SendRefMsg` 的 self 分支）；补映射时必须先核 self 与广播是否重复下发。
+- **观察者广播**：`broadcast_charstatuschanged_except_self` 虽已建模，但**只被装备/升级等路径调用**，
+  **吃路径根本没有调用它**（`2f` 实现时实测）⇒ 吃路径上**自通知与观察者面两条都缺**。
+- 结论更正（原文「657 的广播面已建模，缺的是发送者自己的自通知」**作废**）：机制建模了，但**吃路径没接线**；
+  缺口是**两条**不是一条。
+- `2f` 已在吃路径补上观察者面（约 30 行 + 用例），并按「三 fixture 不相交」（只自通知 / 只广播 / 都开）验证。
 
 ## 3. Blast radius（可复跑，按 grep 出清单）
 
@@ -47,8 +51,9 @@ grep -rn "RM_CHARSTATUSCHANGED" mir2-rs/bins/game-svr/src/
 
 ## 4. 补齐后哪些卡可复评
 
-- IT-12：把 10139 纳入 `pumped`/`notices` 对比（当前探针已记录，比较器按缺口排除）。
-- 其余命中的卡：按 §3 的 greps 清单逐个复核「通知表」是否漏这一条。
+- IT-12 / IT-16 / IT-07（以及所有经 `recalc_session_ability` 的吃路径）：657 期望是**两条**（自己一份 + 观察者一份），
+  不是一条；当前探针已把 10139 记入 `notices`，比较器按缺口排除，补完后纳入。
+- 其余命中的卡：按 §3 的 greps 清单逐个复核「通知表」是否漏这一（两）条。
 
 ## 5. 修复要点（不在本卡范围，供接卡人）
 
