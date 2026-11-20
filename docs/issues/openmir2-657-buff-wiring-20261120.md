@@ -52,6 +52,18 @@
 3. `buff_657_needrecalc_after_ability_and_per_recipient`：自见线序 `[52, 657, 657]` + 观察者逐人
    `Series`。
 
+**证据分工（防误读）**：既有 `drain_buff_downlink_emits_charstatuschanged_and_healthspellchanged`
+的收件人是自己且 `hit_speed` 未设（=0）⇒ 它**只守"自见 2 条 + CharStatus 字段"**，单 body 与逐收件人
+产出相同，**不能**用它证明逐收件人；逐收件人由下面两颗新牙（夹具非 0）验证。
+
+**M1 的红必须红在 `Series` 值（实测原文）**：
+```
+buff_657_bochg_series_is_per_recipient_hit_speed:
+  assertion `left == right` failed: 自见 Series = 源自己 hit_speed   left: 0  right: 7
+buff_657_bochg_three_recipients_distinct_series:
+  三个收件人各自 Series 必须是对应自己的 3/7/9；实得 [0, 0, 0]
+```
+（M2 的红才是帧数（自见 1 vs 2）、M3 的红才是缺帧（`[52]` vs `[52,657,657]`）——它们是**故意**验那两件事。）
 **变异实跑**（还原后 `lib.rs` 无 `MUTATION` 标记）：
 | 变异 | 结果 |
 | --- | --- |
