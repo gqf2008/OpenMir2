@@ -420,7 +420,7 @@ mod tests {
     /// **`[名|文件]` alias + 换图簇连带帧**：
     /// - 634 尾 = **取图文件主干**（oracle `Envir.MapFileName`，`MapManager.cs:66-96`），不是逻辑名；
     /// - 766/54（oracle `RM_CHANGEMAP` 处理器连带帧）序在 634 之后、只发自己（`SendDefMessage`）。
-    /// 两半都断：alias 图尾 = `stem`；无 alias 图尾 = 逻辑名（逐字节不变）。
+    /// - 两半都断：alias 图尾 = `stem`；无 alias 图尾 = 逻辑名（逐字节不变）。
     #[test]
     fn map_change_634_tail_uses_alias_file_stem() {
         let dir = std::env::temp_dir().join(format!(
