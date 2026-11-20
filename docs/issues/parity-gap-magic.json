@@ -943,17 +943,26 @@
         "line": 424,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_lightflower",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightflower.json（C# oracle 生成；ElecBlizzardRange=2 来自部署 Server.conf）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::lightflower_parity_s1",
+          "tests::lightflower_parity_s5",
+          "tests::lightflower_parity_s13"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。",
+      "basis": "semantic"
     },
     {
       "id": "MG-39",
