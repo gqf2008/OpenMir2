@@ -13991,6 +13991,40 @@ fn finish_spell_tail_with(
     tail.train.see_heal_gauge
 }
 
+/// **共享尾训练帧 640 的唯一实现**（`MagicManager.cs:666` / `PlayObject.cs:5216`）：
+/// 未升级 ⇒ `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`；升级 ⇒ `UpdateDelayMsg(…, 800)`
+/// （先删同 `(ident, MagicId)` 的待投递帧）。四处 inlined 尾在行为修复完成后统一收敛到这里。
+fn emit_magic_lvexp_delayed(
+    world: &mut mir2_world_bevy::World,
+    actor_id: i32,
+    magic_id: u16,
+    level: u8,
+    tran_point: i32,
+    level_up: bool,
+) {
+    if level_up {
+        world.update_self_delay_msg_full(
+            actor_id,
+            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+            0,
+            i32::from(magic_id),
+            i32::from(level),
+            tran_point,
+            800,
+        );
+    } else {
+        world.send_self_delay_msg_full(
+            actor_id,
+            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+            0,
+            i32::from(magic_id),
+            i32::from(level),
+            tran_point,
+            1000,
+        );
+    }
+}
+
 /// **P3-B3**：13..=19 共享组的护身符门 + 消耗（`MagicManager.cs:322-325` / `MagicBase.cs:47-127`）。
 ///
 /// 返回 `true` = `CheckAmulet` 通过（`boSpellFail` 已被 `:391` 清 false）；`false` = 门不过
@@ -15131,27 +15165,14 @@ fn handle_spell_cmd_with_magic(
                 // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`：oracle 是 `SendSelfDelayMsg(…, 1000)`
                 // （升级支 `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
                 if tail.train.levelup_msg {
-                    if tail.train.level_up {
-                        world.update_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            800,
-                        );
-                    } else {
-                        world.send_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            1000,
-                        );
-                    }
+                    emit_magic_lvexp_delayed(
+                        world,
+                        actor_id,
+                        req.magic_id,
+                        train.level,
+                        train.tran_point,
+                        tail.train.level_up,
+                    );
                 }
                 let _ = tail.returned;
             }
@@ -15411,27 +15432,14 @@ fn handle_spell_cmd_with_magic(
                 // 熟练度尾帧（`:659-669`）：oracle 是 `SendSelfDelayMsg(…, 1000)`（升级支
                 // `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
                 if outcome.train.levelup_msg {
-                    if outcome.train.level_up {
-                        world.update_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            800,
-                        );
-                    } else {
-                        world.send_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            1000,
-                        );
-                    }
+                    emit_magic_lvexp_delayed(
+                        world,
+                        actor_id,
+                        req.magic_id,
+                        train.level,
+                        train.tran_point,
+                        outcome.train.level_up,
+                    );
                 }
                 // 帧面未接（登记）：`RM_MAKEHOLYSEIZEMODE`（`:712/797`）无编码器；
                 // 狂暴态/时长（`OpenCrazyMode`）本骨架无字段。状态落尾已由 `cast_tamming_spell` 完成。
@@ -15541,27 +15549,14 @@ fn handle_spell_cmd_with_magic(
                 // 熟练度尾帧（`:659-669`）：oracle 是 `SendSelfDelayMsg(…, 1000)`（升级支
                 // `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
                 if outcome.train.levelup_msg {
-                    if outcome.train.level_up {
-                        world.update_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            800,
-                        );
-                    } else {
-                        world.send_self_delay_msg_full(
-                            actor_id,
-                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
-                            0,
-                            i32::from(req.magic_id),
-                            i32::from(train.level),
-                            train.tran_point,
-                            1000,
-                        );
-                    }
+                    emit_magic_lvexp_delayed(
+                        world,
+                        actor_id,
+                        req.magic_id,
+                        train.level,
+                        train.tran_point,
+                        outcome.train.level_up,
+                    );
                 }
                 // **不接 639（逐项核过，不是遗漏）**：oracle `case SKILL_46`
                 // （`MagicManager.cs:589-592`）**没有** `boSpellFail` 站点（全仓五处
