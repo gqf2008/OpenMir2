@@ -67,14 +67,11 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
 - 宿主收口（**实际范围**）：`mir2-rs/bins/game-svr/src/ref_msg_cache.rs`（`targets` / `targets_from_scan` / `reset`）；
   接入点 = `broadcast_ref_msg_opt`（`broadcast_ref_msg` 的 38 处表达式 + `broadcast_ref_msg_with_self` /
   `..._with_self_at` 的内部转调）与 `drain_merchant_disappears`（世界侧收件人快照当扫描面）。
-  **明确残余**：另有 7 处按 `chat::hear_targets` 直算收件人的广播点**未经缓存**（C2 批 1 已消解
-  RM_HEAR 两处、批 2 已消解 53 族三处、批 3 已消解 657 两处、批 4 已消解走位扇出、批 5 已消解
-  RM_USERNAME 四处 `castle.rs::refresh_show_name_in_area`/`guild_cmd.rs::ref_show_name`/
-  `guild_official.rs::handle_select`/`war_events_to_frames` — 批 3–5 在本分支待审；余下为
-  `push_broadcast` 的 53/638/656/31/1103/640、`drain_slave_mutiny_downlink`、
-  `drain_combat_downlink`×2、`drain_weapon_durability`、
-  `apply_pending_gm_target_ops`/`apply_pending_gm_guild_commands`）
-  ⇒ 逐条见残余卡 **`docs/issues/openmir2-refmsg-cache-residual-sites.md`**（C2 单列）。
+  **明确残余**：原 19 处直算收件人的广播点**已由 C2 批 1–7 全部接入缓存**
+  （批1 RM_HEAR×2、批2 53×3、批3 657×2、批4 走位候选、批5 RM_USERNAME×4、批6 #8/#9×2/#10/#11/#12、
+  批7 `push_broadcast` 17 点）；**残余普查另发现 #19 `broadcast_healthspellchanged`（53 手写循环）**
+  与 **#20 `broadcast_feature_changed(_except)`（41）**——**已登记、未实现**；旧 `push_broadcast`
+  已删除（全仓 0 引用）。逐条见残余卡 **`docs/issues/openmir2-refmsg-cache-residual-sites.md`**（C2 单列）。
 - 判定：`np11_aoi_matches_oracle_golden` 的 `cache_window` 由**必红绊线**改**必绿**；`fresh_scan` 保持绿——
   两条同时成立（rig 在 `fresh_scan` 例每次发帧前把 sim 时钟推进 500，模拟 oracle 的 ≥500ms 重扫）。
 - 牙（§16：快照 `E:/UserTemp/vhlc-snap/` → 变异 → `cp` 还原核 sha → 复跑基线）：
