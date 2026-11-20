@@ -5,8 +5,8 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "ef47f6a00f56aa7161014bc61f5a29fdacc7b401",
-    "time": "2026-11-20T12:35:23+0800",
+    "head": "da63bae28a7c44a61aad206da7251e441553b9d0",
+    "time": "2026-11-20T15:33:28+0800",
     "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。"
   },
   "status_enum": [
