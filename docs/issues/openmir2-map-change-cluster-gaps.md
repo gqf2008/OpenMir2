@@ -121,3 +121,23 @@ IT-09 的用例把「golden `pumped` 里剔除的 ident 恰等于 `[766, 54]`」
 **没有第三方 tick 级 drain** ⇒ 这些路径的换图簇（含 766/54）要等该玩家下一次 walk/turn 才 flush
 （测试里显式调 drain，故对拍面看不到该时序差）。**影响**：上述路径的帧**及时性**（不改变帧内容/顺序）；
 **另开单，不在本卡修**。
+
+### 5.7 字段点亮审计（2026-11-20；四张卡 scope 的输入）
+对 `move_eat_vectors.json`（9 例）与 `guild_vectors.json`（5 例）的**全部 `pumped` 帧**逐字段统计：
+
+| 帧 | 夹具取值集合 | 判读（§50 补注二三分类） |
+| --- | --- | --- |
+| 633 | recog/param/tag/series 全 0、尾空 | **结构性不可变**（header-only） |
+| 634 | recog/param/tag/尾 多变；`series` 恒 0 | `series`=DayBright，夹具地图 `DayLight=true` ⇒ 0 是**夹具取值**；三桶仅单位测试覆盖 |
+| 766 | `recog` 恒 0；param/tag/series 恒 0；尾空 | `param/tag/series` 是 **oracle 常量 0**（`PlayObject.Base.cs:285` 的 `SendDefMessage(...,0,0,0)`）；**未点亮**：`recog`(n8) 位组合 |
+| 54 | `recog` 恒 -1；param/tag/series 恒 0；尾恒空 | `param/tag/series` 是 **oracle 常量 0**（`:887-895`）；**未点亮**：`recog`(nMusicid)≠-1、非空 `MapDesc` |
+| 801 | recog/param/tag 多变；`series` 恒 4 | `series=MakeWord(Dir,Light)`，夹具 `Dir=4/Light=0` ⇒ **夹具取值**；两半字节仅单位测试覆盖 |
+
+**未点亮维度（证据强度：单位测试，非夹具对拍）**：
+- 766 `Recog`(n8) 位组合——夹具恒 0；`sessionwire::tests::map_change_appends_areastate_and_mapdescription` 用 **n8=3**（FightZone|1 | SafeArea|2）；
+- 54 `Recog`(nMusicid)≠-1——夹具恒 -1；同测试用 **42**；
+- 54 非空 `MapDesc`——夹具尾恒空；同测试用 **"副本"**；
+- 634 `series`(DayBright) 三桶——夹具恒 0；`eat_move::tests::map_change_634_day_bright_buckets` 用 **0/1/2**；
+- 801 `Series` 的 Dir/Light 两半字节——夹具恒 4；`sessionwire::tests::map_change_space_move_appends_show_with_ref_route` 用 **Dir=2 / Light=5**。
+
+**强度说明**：以上仅单位测试覆盖，**夹具对拍未覆盖**，不要当作夹具已验。
