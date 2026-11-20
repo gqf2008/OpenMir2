@@ -1,4 +1,4 @@
-﻿// 卡 openmir2-magic-parity：C# 侧魔法对拍金标准生成器（骨架）。
+// 卡 openmir2-magic-parity：C# 侧魔法对拍金标准生成器（骨架）。
 //
 // 用法：
 //   dotnet run --project mir2-rs/tests/parity/csharp/MagicGolden -c Release -- --rng-selftest

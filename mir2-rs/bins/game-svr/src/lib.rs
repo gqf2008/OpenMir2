@@ -72087,7 +72087,18 @@ SendRefMsgRange=15
                     g_frames.len(),
                     r_frames.len()
                 );
-                if g_frames.iter().all(|f| f.get("due_ms_rel").is_some()) {
+                // **全有或全无**（与 `recog` 同款）：一批 640 里若**部分**帧带 `due_ms_rel`，
+                // 直接 panic 点名——否则"部分带"会让 due 比较整体静默跳过（§7 的同一类坑）。
+                let with_due = g_frames
+                    .iter()
+                    .filter(|f| f.get("due_ms_rel").is_some())
+                    .count();
+                assert!(
+                    with_due == 0 || with_due == g_frames.len(),
+                    "[{stem}/{label}] golden 的 640 帧 due_ms_rel 混合：{with_due}/{} 帧带（必须全有或全无）",
+                    g_frames.len()
+                );
+                if with_due == g_frames.len() {
                     let dues = |fs: &[&serde_json::Value]| -> Vec<i64> {
                         fs.iter()
                             .map(|f| f["due_ms_rel"].as_i64().unwrap_or(i64::MIN))

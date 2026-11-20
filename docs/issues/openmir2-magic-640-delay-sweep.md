@@ -207,7 +207,8 @@ if (userMagic.Level < 3 && boTrain) {
 
 **oracle 的不对称（必须同样不对称地实现）**：
 - 9（`src/M2Server/Magic/MagicManager.cs:270`）：`GetAttackPower(GetPower+Lo(MC), Hi(MC)-Lo(MC)+1)` —— **无强转**；
-- 10（`:283`）：`GetAttackPower(GetPower+Lo(MC), **(ushort)(Hi(MC)-Lo(MC)+1)**)` —— **多一个 (ushort)**。
+- 10（`:282`）：`GetAttackPower(GetPower+Lo(MC), **(ushort)(Hi(MC)-Lo(MC)+1)**)` —— **多一个 (ushort)**。
+  （`:283` 是紧随的 `MagPassThroughMagic(..., true)`，不是强转那一行。）
 
 ⇒ `Hi < Lo` 时（本批夹具 `CasterMc=15` ⇒ Hi=0、Lo=15 ⇒ `-14`）：9 走钳制支；10 强转成 **65522**
 ⇒ 巨大范围 ⇒ 抽到 30599 ⇒ `Round(pow*1.5)` ⇒ 一击致死。**这是 oracle 的真行为，不是 bug，
@@ -230,3 +231,9 @@ skill10 仍绿；恢复后源文件 sha 相等。
 **已知残留（装置装配，不是产品）**：`skill10` 比较器仍红在**装配的 `RM_STRUCK_MAG(8103)`**——
 golden `wParam=23913` vs 台账 `154985`：同一受害者的第二条 8103 在驱动里用投递前的 `power`
 而非术后伤害；`Sent` 面三支逐帧相同。处置（修装配口径 / 有牙的 ident 例外）待定。
+
+**次序口径（skill10）**：`skill10` 的 golden 带 `frame_order_scope = multi_victim_same_tick`，比较器因此把
+该接收者的 `Sent` 改为多重集比较（只放宽**次序**，`due_ms_rel` 仍判）。这与
+`docs/issues/openmir2-b4-multivictim-strike-order.md` **同源**（产品批量 flush vs oracle 逐 actor
+`Run()`）；产品卡修复后须删该标记并恢复严格按序。白名单已从 `fire` 扩到 `fire`/`skill10`，扩的时候
+按同一理由登记。

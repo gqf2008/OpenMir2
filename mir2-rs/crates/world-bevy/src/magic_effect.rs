@@ -132,7 +132,7 @@ pub fn anti_magic_roll(rng: &mut impl RandomSource, anti_magic: i32) -> bool {
 /// `SKILL_LIGHTENING(11)`（`:294`）、`SKILL_45(45)`（`:568`）。
 ///
 /// **`range_cast_ushort`（仅 `SKILL_SHOOTLIGHTEN(10)`）**：oracle 对 10 的功率范围多一个
-/// `(ushort)` 强转（`MagicManager.cs:283`），对 9 **没有**（`:270`）。这是 **oracle 的不对称**，
+/// `(ushort)` 强转（`MagicManager.cs:282`），对 9 **没有**（`:270`）。这是 **oracle 的不对称**，
 /// 本仓按同样的不对称实现：只有调用方（`cast_pass_through_spell`）按 `magic.magic_id == 10`
 /// 置真；本函数**不认魔号**（共享件不反向依赖魔号）。`Hi < Lo` 时 `Hi-Lo+1` 为负 ⇒ 强转后
 /// 变成 `65522` 量级的巨大范围（oracle 真行为）。
