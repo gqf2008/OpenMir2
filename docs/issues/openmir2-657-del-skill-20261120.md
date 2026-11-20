@@ -32,6 +32,21 @@
 | 同用例 `All` 支 | `collect().is_empty()` | 只允许 657（902 恰 2 条） | `DelSkillCommand.cs` 循环后无条件 `RecalcAbilitys()` |
 | `gmcmd::tests::x2b_del_skill_recalc_writes_back_flame_ring_and_revival` 三处 | `collect().is_empty()`（"不得出 210/212"） | 只允许 657（不得出 210/212 的原意保留） | 同上 |
 
+## 3.5 自见条数修正：2 → **1**（2026-11-20，`89` 清算 + 本卡独立复核）
+
+**推理（两会话独立同得）**：`SendUpdateMsg`（`BaseObject.Message.cs:283-304`）做**队首同 ident** 去重：
+peek 队首，同 `wIdent` 就弹出再入队。删技能支在 `:2875` 入队那一刻，队列里只有循环里 `SysMsg` 的
+`RM_SYSMESSAGE`(252)；657 的优先级 `(byte)RM_CHARSTATUSCHANGED = 155 < 252` ⇒ **657 成新队首**
+⇒ `:2876` 的 `SendUpdateMsg` 把它弹掉再入 ⇒ **自见净 1 条**、观察者各 1 条。
+
+**旧期望 2 的来历与为何错**：本卡初版（以及 `#9` 修复）依据的是"凡经 `RecalcAbilitys` 就 2 条"
+（自见广播副本 + 自更新副本），当时没有检查 `:2876` 时刻的**队列状态**；`89` 指出该结论只在
+"队列里有 <155 的待办（如商店路径的 41/52/622）"时成立。删技能路径的队首恰是 657 ⇒ 应为 1。
+⇒ **已按 1 改实现（单自见帧 + `broadcast_charstatuschanged_except_self`）与四类期望**。
+
+**`gmcmd::x2b_del_skill_recalc_writes_back_flame_ring_and_revival` 三处断言**：已核，**只判"全为 657"、
+不判数量** ⇒ 不受 2→1 影响，未改。
+
 ## 4. 两臂用例 + 两颗方向不同的牙
 
 - 臂 1（有 saves ⇒ `(Some(tsg), Some(magic))`）：`gm_del_skill_host_apply_emits_212_and_greens`，
@@ -43,8 +58,8 @@
 **牙（实跑原文）**：
 | 变异 | 结果 |
 | --- | --- |
-| T1 删 657 发射 | `cs(902): left [] right [65531, 65531]`（逐 socket 计数红） |
-| T2 把 657 移到绿字之后 | s902 `left [212,100,657,657]` vs `right [212,657,657,100]`（顺序红） |
+| T1 删 657 发射 | `left [212, 100]` vs `right [212, 657, 100]`；无 saves 臂 `left []` vs `right [65531]`（计数红） |
+| T2 把 657 移到绿字之后 | s902 `left [212,100,657]` vs `right [212,657,100]`（顺序红） |
 
 还原后 `lib.rs` sha 与基线一致、`MUTATION` 标记 0。
 

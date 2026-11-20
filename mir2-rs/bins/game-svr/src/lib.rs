@@ -22863,21 +22863,37 @@ fn apply_pending_gm_target_ops(
             // **657（2026-11-20，`card/657-del-skill`，`#11/#12`）**：oracle `DelSkillCommand.cs:71`
             // 的 `RecalcAbilitys()` 在 `Race == Play` 时无条件 `StatusChanged()` +
             // `SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`（`src/M2Server/Player/PlayObject.cs:2875-2876`）
-            // ⇒ **自见 2 条 + 观察者各 1 条**，`Series` 取**收件人自己**的 `HitSpeed`。
+            // ⇒ 入队后 `:2876` 的 `SendUpdateMsg` 做**队首同 ident** 去重（`BaseObject.Message.cs:283-304`）：
+            // 本路径此刻队列里只有绿字 `RM_SYSMESSAGE`(252)，657 优先级 155 < 252 ⇒ **657 成队首** ⇒
+            // 被弹掉再入队 ⇒ **自见净 1 条**、观察者各 1 条。`Series` 取**收件人自己**的 `HitSpeed`
+            //（§44：以「会话 `sg.hit_speed`」为权威，无会话回落实体缓存）。
             // 位置：审计直发帧（210/212）之后、绿字（`RM_SYSMESSAGE`=252）之前（657 优先级 155）。
             // **逐收件人出 body**——不要用 `broadcast_ref_msg_with_self`（单 body ⇒ `Series` 固定）。
             if let Some(tid) = tid {
                 let status = world.get_char_status(tid);
-                let hit_speed = world.entities.get(tid).map_or(0, |e| e.hit_speed);
-                send_charstatuschanged_self_and_observers(
+                let hit_speed = sessions.get(&canon).map_or_else(
+                    || world.entities.get(tid).map_or(0, |e| e.hit_speed),
+                    |s| s.hit_speed,
+                );
+                if let Some(entry) = online.iter().find(|e| e.actor_id == tid) {
+                    if let Some(tx) =
+                        route_to_gate(gates, entry.gate_idx, entry.socket, "GM 删技能 657 自见")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: entry.socket,
+                            body: game_svr::smframe_ext::sm_charstatuschanged(
+                                tid, status, hit_speed,
+                            ),
+                        });
+                    }
+                }
+                broadcast_charstatuschanged_except_self(
                     world,
                     online,
                     gates,
                     tid,
                     status,
-                    hit_speed,
                     send_ref_range,
-                    "GM 删技能 657",
                 );
             }
             // F1-R3：两条绿字最后发（oracle MsgQueue 排水晚于当前 GM 槽的 RecalcAbilitys）。
@@ -50356,10 +50372,9 @@ break
             vec![
                 mir2_protocol::messages::SM_DELMAGIC,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
-                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "目标 socket 序 212 → 657×2 → 100（657=155 在绿字 252 之前）；实得 {frames:?}"
+            "目标 socket 序 212 → 657×1 → 100（155 成队首被 SendUpdateMsg 去重）；实得 {frames:?}"
         );
         let del: Vec<&(i32, u16, i32, String, u16)> = frames
             .iter()
@@ -50394,8 +50409,8 @@ break
         let c902 = cs657(902);
         assert_eq!(
             c902.len(),
-            2,
-            "目标自见 657 = 2 条（StatusChanged + SendUpdateMsg）"
+            1,
+            "目标自见 657 = 1 条（155 成队首 ⇒ SendUpdateMsg 去重弹掉再入）"
         );
         // 自见副本的 `Series` = **重算后的落地 `sg.hit_speed`**（oracle handler 读 `this.HitSpeed`），
         // 不是插入前实体上的旧值。
@@ -50478,7 +50493,10 @@ break
             .iter()
             .filter(|(s, id, ..)| *s == 902 && *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED)
             .count();
-        assert_eq!(all657, 2, "All 支的 RecalcAbilitys 仍产生自见 2 条 657");
+        assert_eq!(
+            all657, 1,
+            "All 支的 RecalcAbilitys 自见净 1 条 657（队首去重）"
+        );
         // ---- 审计案例：job=WARRIOR，按 Desc("回春术") 删 mag2；审计按 MagicName("火球术")
         //      删 mag1 并出第二条 212 —— 目标 socket 序 212(2) → 212(1) → 100 ----
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
@@ -50515,10 +50533,9 @@ break
                 mir2_protocol::messages::SM_DELMAGIC,
                 mir2_protocol::messages::SM_DELMAGIC,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
-                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "帧序：212(命令) → 212(审计) → 657×2(RecalcAbilitys 尾) → 100(目标绿，队尾)；实得 {frames:?}"
+            "帧序：212(命令) → 212(审计) → 657×1 → 100(目标绿，队尾)；实得 {frames:?}"
         );
         let dels: Vec<(i32, i32)> = frames
             .iter()
@@ -50693,7 +50710,7 @@ break
         };
         let want_self = sessions["victim"].hit_speed;
         assert_ne!(want_self, 0, "要求非 0 落地 HitSpeed（防退化区间）");
-        assert_eq!(cs(902), vec![want_self, want_self], "目标自见 2 条");
+        assert_eq!(cs(902), vec![want_self], "目标自见净 1 条（队首去重）");
         assert_eq!(cs(901), vec![7], "观察者 hero 1 条，Series = 自己");
         assert_eq!(cs(903), vec![9], "观察者 obs 1 条，Series = 自己");
         assert!(cs(904).is_empty(), "超 range 零 657");
