@@ -164,6 +164,8 @@ public static class Program
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
+            // `SKILL_SKELLETON(17)`：MakeSlave → WorldEngine 替身；两支 = 正常召唤 / 数量上限。
+            if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）" });
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
@@ -975,6 +977,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// <summary>`construction.equipment`（本批一律空：无装备登录序）。</summary>
         public string[] Equipment = Array.Empty<string>();
         /// <summary>
+        /// <summary>
+        /// **预置 slave 数量**（17 数量上限支）：施法前向 caster `SlaveList` 塞这么多占位召唤物，
+        /// 使 `SlaveList.Count >= nMaxMob` ⇒ `MakeSlave` 必返 null。
+        /// </summary>
+        public int PreSlaveCount;
         /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
         /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
         /// </summary>
@@ -1529,6 +1536,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return EmitGolden(spec, cases);
     }
 
+    /// <summary>`--case skeleton`：17 两支（正常召唤 / 数量上限），MasterRoyaltyTick 墙钟不记不比（§36）。</summary>
+    private static int SkeletonBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        spec.PreSlaveCount = 0;
+        var c1 = RunMagicCase(spec, "summon_ok", 1, 1000, spec.TargetMaxHp, false);
+        spec.PreSlaveCount = Math.Max(1, SystemModule.SystemShare.Config.SkeletonCount);
+        var c2 = RunMagicCase(spec, "cap_hit", 1, 2000, spec.TargetMaxHp, false);
+        return EmitGolden(spec, new[] { c1, c2 });
+    }
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -1732,6 +1753,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         var contract = BuildContractInput(spec, target);
         FixtureContract.Validate(contract);
 
+        // **17 夹具：预置 slave + 施法前快照**（cap 支靠预置触发；regen 计数证明是否真生成实体）。
+        if (spec.PreSlaveCount > 0)
+        {
+            caster.SlaveList ??= new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>();
+            for (int k = 0; k < spec.PreSlaveCount; k++)
+            {
+                caster.SlaveList.Add(new M2Server.Monster.MonsterObject { ChrName = "pre-slave" + k, ActorId = idBase + 50 + k });
+            }
+        }
+        int slaveCountBefore = caster.SlaveList?.Count ?? 0;
+        int regenBefore = OfflineWorldEngine.RegenCalls;
         var original = RngSeam.Capture();
         var rng = RngSeam.Install(seed);
         var um = new OpenMir2.Packets.ClientPackets.UserMagic
@@ -2115,6 +2147,27 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
             CasterExtraAbil0 = casterExtra0,
+            Skeleton = spec.MagicId != 17
+                ? null
+                : (object)new
+                {
+                    pre_slave_count = spec.PreSlaveCount,
+                    slave_count_before = slaveCountBefore,
+                    slave_count_after = caster.SlaveList?.Count ?? 0,
+                    regen_calls = OfflineWorldEngine.RegenCalls - regenBefore,
+                    // MasterRoyaltyTick 是墙钟派生 → 不记录不比较（§36）
+                    new_slaves = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                        .Skip(slaveCountBefore)
+                        .Select(x => (object)new
+                        {
+                            name = x.ChrName,
+                            level = (int)x.Abil.Level,
+                            hp = (int)x.WAbil.HP,
+                            max_hp = (int)x.WAbil.MaxHP,
+                            master_is_caster = ReferenceEquals(x.Master, caster),
+                        })
+                        .ToList(),
+                },
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -2283,6 +2336,9 @@ public sealed class FireballResult
     /// <summary>卡 36：`AttPowerUp` 写入的 `ExtraAbil[0]`（= `nPower`）；仅 `uenhancer` 落盘。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? CasterExtraAbil0 { get; set; }
+    /// <summary>17 SKELLETON 观测（仅该魔号；null 不落盘）：预置数/前后 slave 数/regen 次数/新增实体。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object Skeleton { get; set; }
     /// <summary>三态计时器术后值（只有显式给了 `PoisonStates` 的支才有；`null` 时不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object StatusTimeArr { get; set; }

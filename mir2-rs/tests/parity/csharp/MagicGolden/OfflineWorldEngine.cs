@@ -27,8 +27,13 @@ namespace MagicGolden
         /// **唯一真实现**：返回一个可用的 `MonsterObject`（`MakeSlave` 会强转为 `MonsterObject`）。
         /// 只设置定位/身份；`Abil.Level` 与 `WAbil.HP/MaxHP` 由 `MakeSlave` 之后写入。
         /// </summary>
+        /// <summary>调用计数：cap 支断言"未生成实体"的观测面（0 次 ⇒ 没有新实体）。</summary>
+        public static int RegenCalls;
+
         public IActor RegenMonsterByName(string sMap, short nX, short nY, string sMonName)
         {
+            RegenCalls++;
+
             var mon = new M2Server.Monster.MonsterObject
             {
                 ChrName = sMonName,
