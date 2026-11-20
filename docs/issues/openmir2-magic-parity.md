@@ -1281,7 +1281,8 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
   是**本列表 1 基序号**（0 = 无）。默认空 ⇒ 既有件零变化。
 - golden `Fixture.monsters[]` 同形；每个怪物在 `Receivers` 里以 `mon{i}` 出现，只记其 RM、`Sent` 恒空。
 - 离线进程补 `SystemShare.EventMgr = new EventManager()`（16 的 `MagMakeHolyCurtain` 会 AddEvent；
-  缺失时 NullReference）。**既有件零变化已实测**：重跑 18 件装置输出，除既有墙钟 `delivery` 外
+  缺失时 NullReference）。**既有件零变化已实测**：重跑装置输出，**16 件零差异**（除既有墙钟 `delivery`）；
+  `lightflower` 分派缺失与 `firecharm` 不可复现两件按 §37 / `openmir2-firecharm-nondeterminism` 记
   **0 差异**。
 
 **16 四支（`golden/magic/holyshield.json`，`--case holyshield`，ArmRingAmulet=true）**
