@@ -107,7 +107,7 @@ grep -rn "nPower|AttPowerUp" mir2-rs/bins/game-svr/src/lib.rs
   - `cargo test --workspace`：**4372 / 0 / 155**（rc=0）
   - `cargo clippy --workspace --all-targets -- -D warnings`：**rc=0**（0 车道时独占跑）
   - `cargo fmt --all -- --check`：**rc=0**
-  - `msgcodegen -- --check`：rebase 前 rc=0（604 条一致）；rebase 后待车道空补跑一次（未改动常量面）。
+  - `msgcodegen -- --check`：**已在 rebase 后的 tip `f55334f72` 复跑 rc=0（604 条一致）**——作者 `43` 于 13:39 闭合，`ae` 于 13:47 独立复跑同样 rc=0（非作者数）。原文：`msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。`
 
 ## 7. 禁区自证
 
