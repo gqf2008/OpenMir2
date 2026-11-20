@@ -159,6 +159,19 @@ if (MagicArr[SKILL_YEDO] != null && UseItems[ItemLocation.Weapon].Dura > 0) {
    时两侧取数次序本就不一致（既有偏差，A 未扩大，也未修复）。
 5. **`PowerHit` 只置不消费**：A 批写 `MagicState.power_hit`，读点在 B。
 
+### 6.1 登记面自交代（为什么这 5 条**不是漏登记**）
+
+`mir2-rs/tests/parity/whitelist.md` 的规则是「允许的差异必须登记；没登记 = 不过」。本节逐条给出
+**处置**，让下一位读者不必推测这 5 条的去向（本批**不新增** `T-*` 编号，也不必先取号）。
+
+| # | 偏差 | 处置 | 依据 |
+| --- | --- | --- | --- |
+| 1 | 有攻杀但无武器时 oracle 在 `PlayObject.Attack.cs:943` 解引用 `null` 抛 NRE，被 `:963` 的 `catch` 吞掉 | **行为等价，不进白名单** | 崩溃被同一函数的 `catch` 吞掉后，攻击照常完成、**计数块同样丢弃**（`AttackSkillCount` 不递减、不 arm、不再抽、不发 `+PWR`）——与本仓「跳过 + WRN + 会话计数」在**所有可观测面上相同**（帧/线上包/取数）。差异只在 oracle 多一条 `LogService.Error` 日志行，且本仓反而有 WRN。日志不属对拍面。用例 `yedo_no_weapon_skips_and_counts_warn` 把「计数未变 + 0 抽 + 无 `+PWR`」钉住。 |
+| 2 | 第二抽用 `World.rng` 而非 `rng_attack` | **隔离面偏差，不进白名单（默认关，不构成对拍差异）** | `MIR2_RNG_SEED` 的攻击隔离是**测试设施**：`SimState::isolate_attack` 缺省 `false`（`World::new` 置 false，只有 `attack_isolation_seed_from_env` 设了才开）。缺省路径下两条流是同一条 `World.rng`，与 oracle「全局只有一个 `M2Share.RandomNumber`」一致 ⇒ 对拍面（默认配置）零差异。若将来把隔离纳入**真机对拍**，届时按 `T-*` 流程取号登记（属设施口径变化，不是本批行为变化）。 |
+| 3 | 重置用**本击注入时**的 `MagicArr[SKILL_YEDO].Level`（oracle 可能已在本击内被 `TrainSkill` 提升） | **归 B 批** | `CheckSkillProficiency`（`PlayObject.Attack.cs:200-213`）→`TrainSkill`（`PlayObject.cs:4393`）/`CheckMagicLevelUp`（`:5198`）本批未移植；没有升级 ⇒ 等级在同一击内不会变 ⇒ **当前等价**。B 批落地训练时必须同时处理「本击内升级后重置用新等级」，已写进 §3 的 B 开批硬前置。 |
+| 4 | 空挥（同步结算）与有目标支（入队到下一 tick）在同 tick 内的取数次序 | **既有偏差，本批未扩大** | `attack_swing` 同步、`attack_cmd` 入队的拆法早于本批（`openmir2-m3-attack-magic-wiring` 第一片既有），oracle 是两次击各自完整结算。本批只**沿用**该次序（尾巴挂在两条既有路径上），没有新增或放大任何跨击次序差。修它属攻击路径的整体重排，需单独开卡。 |
+| 5 | `MagicState.power_hit` 本批**只置不消费** | **归 B 批** | 消费点（`GetHitMode` 模式 3 → `RM_SPELL2`、`GetAttackPowerHit` 的 `nPower += HitPlus` 与清零、`canHit` ⇒ `Random(3)+1`）全部在 B 批范围（见 §0 表与 §3）。A 批只置位 ⇒ 在没有 B 之前，该字段不产生任何可观测差异（无读者）。 |
+
 ## 7. 边界
 
 - 不改 `src/` C# 参照；不动 `useitem`/`readbook` 的既有帧序；不实现 B/C 的任何消费。
