@@ -1,35 +1,40 @@
 # GM 删技能的 657 接线（`#11/#12`，2026-11-20）
 
-> base `master = c0cafb4ee`；分支 `card/657-del-skill`。对应计划单 `qa-657-wiring-plan` 的直发组第二批。
+> base `master = 2f46a4d94`（2026-11-20 rebase）；分支 `card/657-del-skill`。对应计划单 `qa-657-wiring-plan` 的直发组第二批。
 
 ## 1. 实现
 
 `apply_pending_gm_target_ops` 的删技能支（`del_skill`）在**审计直发帧（210/212）之后、绿字（252）之前**
 补 657：
 
-- `send_charstatuschanged_self_and_observers`（自广播副本 + 广播他人 + 自更新副本，逐收件人按
-  `world.entities.get(target).hit_speed` 重编码）+ 不手工追加（helper 已含两自见副本）；
+- **自见恰 1 条**：单自见帧（`Series` = 目标**实体**的 `hit_speed`，重算后已由
+  `apply_ability_to_entity` 镜像）+ `broadcast_charstatuschanged_except_self`（观察者逐收件人取**各自实体**）；
 - **不用 `broadcast_ref_msg_with_self`**（`bodies: &[Vec<u8>]` 单 body ⇒ `Series` 固定）。
+- `Series` 源**统一到实体**（oracle `this.HitSpeed`；与 `43` 的 spellbuf 口径一致）。
 
 位置依据：oracle `DelSkillCommand.cs` 循环后**无条件** `RecalcAbilitys()`；其尾段在 `Race==Play` 时
 `StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`（`src/M2Server/Player/PlayObject.cs:2875-2876`）
-⇒ 自见 2 条 + 观察者各 1 条；657 入队优先级 155，在 `RM_SYSMESSAGE`(252) 之前。
+⇒ 自见**净 1 条**（`SendUpdateMsg` 队首去重，见 §3.5）+ 观察者各 1 条；657 入队优先级 155，
+在 `RM_SYSMESSAGE`(252) 之前。
 
 ## 2. 两处 oracle 事实纠正（会被写进合并信息）
 
 1. **`All` 支也执行 `RecalcAbilitys()`**（oracle 循环后无条件调用）⇒ **`All` 也出 657**。
-   原断言"All 支不发帧不发字"改为"**只允许 657（自见 2 条），不发 212/绿字**"。
-2. **自见 657 的 `Series` 取"重算后的落地 `hit_speed`"**（`apply_ability_to_entity` 之后），
-   **不是**插入前实体上的旧值。本用例给目标配 StdMode 5 武器（`mac=0x0500`）使落地值非 0
-   （实际为回绕值 65531，非 0 即非退化），**两臂都断言 `!= 0` 防退化区间**。
+   原断言"All 支不发帧不发字"改为"**只允许 657（自见净 1 条），不发 212/绿字**"。
+2. **自见 657 的 `Series` 取**实体**的 `hit_speed`**（= 重算落地值，`apply_ability_to_entity` 之后镜像），
+   **不是**插入前实体上的旧值、也不是会话投影。两臂都断言三件：`assert_ne!(hs, 0)`（守"镜像丢了 ⇒
+   实体回落 0"）+ `assert_eq!(hs, 65531)` + 帧 == 实体。`65531` 来历：武器 `mac=0x0500` ⇒ `hi_byte=5`
+   ⇒ `real_attack_speed(5) = -5` ⇒ `AddAbil.HitSpeed` 按 `u16` 回绕。**限定：该值未经 oracle 侧实测
+   对照**（oracle 同为 `ushort`、预期同样回绕；若日后发现 oracle 用别的宽度/符号，断言要跟着改）。
+   预置实体 5 与观察者 7/9/11 都不等于 65531 ⇒ "预置被覆盖/读错侧"均可区分。
 
 ## 3. 既有期望的改动（逐处）
 
 | 用例 | 改前 | 改后 | 依据 |
 | --- | --- | --- | --- |
-| `gm_del_skill_host_apply_emits_212_and_greens` 主案例（s902） | `[212, 100]` | `[212, 657, 657, 100]` | `PlayObject.cs:2875-2876` |
-| 同用例第二子案例（s902） | `[212, 212, 100]` | `[212, 212, 657, 657, 100]` | 同上 |
-| 同用例 `All` 支 | `collect().is_empty()` | 只允许 657（902 恰 2 条） | `DelSkillCommand.cs` 循环后无条件 `RecalcAbilitys()` |
+| `gm_del_skill_host_apply_emits_212_and_greens` 主案例（s902） | `[212, 100]` | `[212, 657, 100]`（净 1，§3.5） | `PlayObject.cs:2875-2876` |
+| 同用例第二子案例（s902） | `[212, 212, 100]` | `[212, 212, 657, 100]`（净 1） | 同上 |
+| 同用例 `All` 支 | `collect().is_empty()` | 只允许 657（902 恰 1 条） | `DelSkillCommand.cs` 循环后无条件 `RecalcAbilitys()` |
 | `gmcmd::tests::x2b_del_skill_recalc_writes_back_flame_ring_and_revival` 三处 | `collect().is_empty()`（"不得出 210/212"） | 只允许 657（不得出 210/212 的原意保留） | 同上 |
 
 ## 3.5 自见条数修正：2 → **1**（2026-11-20，`89` 清算 + 本卡独立复核）
@@ -50,10 +55,10 @@ peek 队首，同 `wIdent` 就弹出再入队。删技能支在 `:2875` 入队�
 ## 4. 两臂用例 + 两颗方向不同的牙
 
 - 臂 1（有 saves ⇒ `(Some(tsg), Some(magic))`）：`gm_del_skill_host_apply_emits_212_and_greens`，
-  逐 socket 断言：目标 902 自见 2 条（`Series == 落地 hit_speed`）、观察者 901/903 各 1 条（各自 7/9）、
-  超 range 904 零帧；同 socket 内 657 在 212/210 之后、100 之前。
+  逐 socket 断言：目标 902 自见 **1 条**（`Series == 实体 hit_speed`；`assert_ne!(…,0)` + `== 65531`）、
+  观察者 901/903 各 1 条（各自 7/9）、超 range 904 零帧；同 socket 内 657 在 212/210 之后、100 之前。
 - 臂 2（无 saves ⇒ `(Some(tsg), None)`）：`gm_del_skill_without_saves_arm_emits_657`——只出 657
-  （自见 2 + 观察者各 1），**无 212/绿字**。
+  （自见净 1 + 观察者各 1），**无 212/绿字**；`Series` 同样断言实体值（`assert_ne!(…,0)` + `== 65531`）。
 
 **牙（实跑原文）**：
 | 变异 | 结果 |

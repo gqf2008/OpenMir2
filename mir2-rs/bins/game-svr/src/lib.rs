@@ -22865,16 +22865,15 @@ fn apply_pending_gm_target_ops(
             // `SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`（`src/M2Server/Player/PlayObject.cs:2875-2876`）
             // ⇒ 入队后 `:2876` 的 `SendUpdateMsg` 做**队首同 ident** 去重（`BaseObject.Message.cs:283-304`）：
             // 本路径此刻队列里只有绿字 `RM_SYSMESSAGE`(252)，657 优先级 155 < 252 ⇒ **657 成队首** ⇒
-            // 被弹掉再入队 ⇒ **自见净 1 条**、观察者各 1 条。`Series` 取**收件人自己**的 `HitSpeed`
-            //（§44：以「会话 `sg.hit_speed`」为权威，无会话回落实体缓存）。
+            // 被弹掉再入队 ⇒ **自见净 1 条**、观察者各 1 条。`Series` 取**收件人自己**的 `HitSpeed`，
+            // 统一口径 = **实体**（oracle `PlayObject.Message.cs:1846` 的 `this.HitSpeed`；本路径上游
+            // `apply_ability_to_entity(..., tsg.hit_speed)` 已把重算后的值镜像进实体）。
             // 位置：审计直发帧（210/212）之后、绿字（`RM_SYSMESSAGE`=252）之前（657 优先级 155）。
             // **逐收件人出 body**——不要用 `broadcast_ref_msg_with_self`（单 body ⇒ `Series` 固定）。
             if let Some(tid) = tid {
                 let status = world.get_char_status(tid);
-                let hit_speed = sessions.get(&canon).map_or_else(
-                    || world.entities.get(tid).map_or(0, |e| e.hit_speed),
-                    |s| s.hit_speed,
-                );
+                // `Series` 源 = **实体**（重算后已镜像，见上方注释）。
+                let hit_speed = world.entities.get(tid).map_or(0, |e| e.hit_speed);
                 if let Some(entry) = online.iter().find(|e| e.actor_id == tid) {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, entry.socket, "GM 删技能 657 自见")
@@ -50414,11 +50413,18 @@ break
         );
         // 自见副本的 `Series` = **重算后的落地 `sg.hit_speed`**（oracle handler 读 `this.HitSpeed`），
         // 不是插入前实体上的旧值。
-        let want_self = sessions["victim"].hit_speed;
+        // `Series` 源 = **实体**（oracle `this.HitSpeed`；本路径上游 `apply_ability_to_entity`
+        // 已把重算后的值镜像进实体）。
+        let want_self = world.entities.get(victim_id).map_or(0, |e| e.hit_speed);
         assert_ne!(want_self, 0, "本用例要求非 0 落地 HitSpeed（防退化区间）");
+        // **65531 = -5 的 `u16` 回绕结果**：武器 `mac=0x0500` ⇒ `hi_byte=5` ⇒
+        // `real_attack_speed(5) = -5` ⇒ `AddAbil.HitSpeed` 逐次 `u16` 回绕。oracle 的
+        // `AddAbil.HitSpeed` 同为 `ushort`，预期同样回绕，但**本值未经 oracle 侧实测对照**——
+        // 若日后发现 oracle 用的是别的宽度/符号，本断言要跟着改。
+        assert_eq!(want_self, 65531, "落地 HitSpeed = -5 的 u16 回绕");
         assert!(
             c902.iter().all(|s| *s == want_self),
-            "自见 Series = 落地 hit_speed({want_self})；实得 {c902:?}"
+            "自见 Series = 实体落地 hit_speed({want_self})；实得 {c902:?}"
         );
         assert_eq!(
             cs657(901),
@@ -50481,7 +50487,7 @@ break
             "All ⇒ 全部删除"
         );
         // `All` 支：**不发** 212/绿字（`DelSkillCommand.cs:49-52`），但 :71 的 `RecalcAbilitys()`
-        // **照样执行** ⇒ 有 657（自见 2 条，oracle `PlayObject.cs:2875-2876`）。
+        // **照样执行** ⇒ 有 657（自见**净 1 条**：队首去重，`BaseObject.Message.cs:283-304`）。
         let all_frames = collect(&mut rx0);
         assert!(
             all_frames
@@ -50708,8 +50714,11 @@ break
                 .map(|(_, _, series)| *series)
                 .collect()
         };
-        let want_self = sessions["victim"].hit_speed;
+        // `Series` 源 = **实体**（同上：重算后已镜像；oracle `this.HitSpeed`）。
+        let want_self = world.entities.get(victim_id).map_or(0, |e| e.hit_speed);
         assert_ne!(want_self, 0, "要求非 0 落地 HitSpeed（防退化区间）");
+        // 65531 的来历与"未经 oracle 实测对照"的限定同第一臂。
+        assert_eq!(want_self, 65531, "落地 HitSpeed = -5 的 u16 回绕");
         assert_eq!(cs(902), vec![want_self], "目标自见净 1 条（队首去重）");
         assert_eq!(cs(901), vec![7], "观察者 hero 1 条，Series = 自己");
         assert_eq!(cs(903), vec![9], "观察者 obs 1 条，Series = 自己");
