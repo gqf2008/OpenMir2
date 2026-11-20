@@ -1370,9 +1370,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
     /// </summary>
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
-        int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null)
+        int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null)
     {
-        if (status == null && monsters == null && casterHitPoint == null && casterDc == null && casterAttackMode == null)
+        if (status == null && monsters == null && casterHitPoint == null && casterDc == null
+            && casterAttackMode == null && casterSc == null)
         {
             return fixture;
         }
@@ -1389,6 +1390,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         if (casterHitPoint.HasValue) node["caster_hit_point"] = casterHitPoint.Value;
         if (casterDc.HasValue) node["caster_dc"] = casterDc.Value;
         if (casterAttackMode.HasValue) node["caster_attack_mode"] = casterAttackMode.Value;
+        // 卡 36：`nTime = GetAttackPower(GetPower13(60)+Lo(SC)*10, Hi(SC)-Lo(SC)+1)` 的**输入**必须可复算。
+        if (casterSc.HasValue)
+        {
+            node["caster_sc_raw"] = casterSc.Value;
+            node["caster_sc_lo"] = casterSc.Value & 0xFF;
+            node["caster_sc_hi"] = (casterSc.Value >> 8) & 0xFF;
+        }
         return node;
     }
 
@@ -1876,6 +1884,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             ? BuildSeedReason(draws[0], seed, branchExpect)
             : null;
         int hpAfter = target.WAbil.HP;
+        // 卡 36：`AttPowerUp` 同步写 `ExtraAbil[0]`（目标=self ⇒ 施法者）⇒ 直接观测，非自证。
+        int? casterExtra0 = spec.CasterLoginOrderAbil ? (int)caster.ExtraAbil[0] : (int?)null;
         // 卡 §39：怪物 HP 后值（施法段同步 `StruckDamage` 的结果观测；不喂回驱动输入）。
         var monHpAfter = monsters.Select(m => (int)m.WAbil.HP).ToArray();
         // **三态计时器的术后值必须由"门结果 + 术前值"独立推出**（不拿实现输出自证）：
@@ -2078,7 +2088,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 }).ToArray(),
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
-                spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null),
+                spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
+                spec.CasterLoginOrderAbil ? (int?)spec.CasterSc : null),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -2090,6 +2101,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             TargetHpBefore = hpBefore,
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
+            CasterExtraAbil0 = casterExtra0,
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -2255,6 +2267,9 @@ public sealed class FireballResult
     public int TargetHpBefore { get; set; }
     public List<object> NotDue { get; set; }
     public int CasterMp { get; set; }
+    /// <summary>卡 36：`AttPowerUp` 写入的 `ExtraAbil[0]`（= `nPower`）；仅 `uenhancer` 落盘。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? CasterExtraAbil0 { get; set; }
     /// <summary>三态计时器术后值（只有显式给了 `PoisonStates` 的支才有；`null` 时不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object StatusTimeArr { get; set; }
