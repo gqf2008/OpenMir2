@@ -76,10 +76,10 @@
 //!   - IT-09 Shape1 回城卷（`:2162→2163`、`:2233`）——未实现，T-17；
 //!   - IT-10 Shape2 随机传送（`:2238`，受 `boNORANDOMMOVE`）——未实现，T-17；
 //!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
-//!   - IT-12 Shape4 祝福油 `WeaptonMakeLuck()`（`:2258`）——未实现，T-17；
 //!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
 //!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；绿字文本已进队列（`NoticeText::Inline(WeaponRepairSuccess)`，卡 `openmir2-runtime-sysmsg-text-frames`）；
 //!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case10，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 10` 臂；见卡 §9.10；**无"已满"守卫 ⇒ 已满仍吃**）；绿字文本同 IT-14；
+//!   - **IT-12 Shape4 祝福油 `WeaptonMakeLuck()`**（`:2259`）——**已实现**（本模块只判「有武器 ⇒ 吃」；抽取/`Desc[3]/[4]`/能力帧在宿主 `handle_eat_cmd`，见 `wepmake_luck`）；绿字/红字文本已进队列（`NoticeText::Inline`，卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`）——**已实现**（本模块只置 `eaten=true`；抽取/6 段闸/金币/进程级计数在宿主 `handle_eat_cmd`，见 `winlottery` 模块头与卡 §9.11）；绿字/红字文本由宿主入队（`WinLotteryNMsg`/`NotWinLotteryMsg`，卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
 //! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
@@ -120,6 +120,10 @@ pub const RM_SYSMESSAGE: i32 = 11004;
 /// `RM_GOLDCHANGED`（`src/OpenMir2/Messages.cs`）：`GoldChanged()` 入队的那条；
 /// IT-16 彩票中奖的 `SM_GOLDCHANGED(653)` 经此出帧。
 pub const RM_GOLDCHANGED: i32 = mir2_protocol::messages::RM_GOLDCHANGED as i32;
+/// `RM_ABILITY`（`PlayObject.cs:1546/1625`）：`RecalcAbilitys()` 之后补发的能力刷新。
+pub const RM_ABILITY: i32 = mir2_protocol::messages::RM_ABILITY as i32;
+/// `RM_SUBABILITY`（`PlayObject.cs:1547/1626`）。
+pub const RM_SUBABILITY: i32 = mir2_protocol::messages::RM_SUBABILITY as i32;
 /// `RM_DURACHANGE`（`Messages.cs` 10125；修复油 `RepairWeapon` 的 `SendMsg(RM_DURACHANGE,1,Dura,DuraMax,0)`）。
 pub const RM_DURACHANGE: i32 = 10125;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
@@ -645,6 +649,14 @@ pub fn use_item(
                                         ));
                                         eaten = true;
                                     }
+                                }
+                            }
+                            // **IT-12** Shape4 祝福油：`WeaptonMakeLuck()`（`PlayObject.Base.cs:2259`）。
+                            // 无武器 / `Index <= 0` ⇒ 不吃；否则**恒吃**（函数恒 `return true`）。
+                            // 抽取 / `Desc[3..5]` 变更 / 能力帧在宿主 `handle_eat_cmd`（见 `wepmake_luck`）。
+                            3 if tpl.shape == 4 => {
+                                if state.extra.weapon.as_ref().is_some_and(|w| w.index > 0) {
+                                    eaten = true;
                                 }
                             }
                             // **IT-16** `Shape 11` 彩票：`EatUseItems` case 11（`PlayObject.Base.cs:2298`）

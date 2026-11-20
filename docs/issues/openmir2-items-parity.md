@@ -659,3 +659,33 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
 
 **状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
+### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— 开写口径
+
+**归类**：**StdMode 3 / Shape 4**。链路：`EatItems`（`PlayObject.Base.cs:2047`）→ `case 3`（`:2098`）→ `switch (stdItem.Shape)`（`:2099`）→ `default: EatUseItems(...)`（`:2162`）→ `case 4`（`:2259`）→ `WeaptonMakeLuck()`（`PlayObject.cs:1500`，原文拼写即 `Weapton`）。**有武器且 `Index > 0` 时恒吃**（函数恒 `return true`）；无武器 ⇒ 返回 false ⇒ **不吃**（636）。
+
+**门**：`Envir.Flag.boNODRUG`（`src/M2Server/Player/PlayObject.Base.cs:2049-2053`，红字、不吃）；武器缺失（`PlayObject.cs:1502-1505`，不吃）。无等级/职业门。
+
+**RNG（抽数随 `Desc` 变，必须逐值对拍）**：先抽 `Random(WeaponMakeUnLuckRate)`（`:1512`）==1 ⇒ **诅咒支**、不再抽；否则：
+`Desc[4]>0` ⇒ 消诅咒（不抽）｜`Desc[3]<point1` ⇒ +1（不抽）｜`Desc[3]<point2` ⇒ 抽 `Random(nRand+point2_rate)`｜`Desc[3]<point3` ⇒ 抽 `Random(nRand*point3_rate)`（**上一条抽了没中时这一条还会再抽**）。`nRand = |HiByte(StdItem.DC) − LoByte(StdItem.DC)| / 5`（`:1509-1511`，整数除法）。抽数：诅咒支 1；`Desc4=0 且 Desc3∈[1,2]` 最多 3；`Desc3∈[3,6]` 最多 2；`Desc3≥7` 恰 1。
+
+**帧（ident + 低字节泵序）**：直发 `SM_EAT_OK(635)`/`SM_EAT_FAIL(636)`；泵出 `RM_SUBABILITY`(10302→**62**，SM_SUBABILITY 752) < `RM_ABILITY`(10051→**67**，SM_ABILITY 52) < `RM_WEIGHTCHANGED`(10115→131) < `RM_SYSMESSAGE`(11004→252)。**oracle 先 `SendMsg(RM_ABILITY)` 后 `RM_SUBABILITY`（`:1546/1547`），但线序 752 在 52 之前**——宿主必须**显式按低字节排序**，不能靠发送序。通知：正常支绿字 `WeaptonMakeLuck`/`WeaptonNotMakeLuck`；诅咒支红字 `TheWeaponIsCursed`；`RM_ABILITY`/`RM_SUBABILITY` 两支都发（`Race==Play`）。
+
+**状态量**：武器 `Desc[3]`（幸运）±1、`Desc[4]`（诅咒计数，上限 10）±1；`RecalcAbilitys()`。**无全局计数器**（与 IT-16 不同，无进程级共享状态）。
+
+**配置（6 键，不写死）**：`WeaponMakeUnLuckRate=20`、`Point1=1`、`Point2=3`、`Point3=7`、`Point2Rate=6`、`Point3Rate=40`（`Server.conf:843-848`；`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1879-1884` ctor 缺省同值；`src/Modules/SystemModule/Conf/ServerConf.cs:622-627`）。
+
+**可观测面（章程 §26）**：核心效果在**状态**（`Desc[3]/Desc[4]`），帧面只有「绿/红字 + 两条能力帧 + 635/636」。⇒ 探针必须记 `weapon_before/after.desc[14]`；宿主从实体 `UseItemSlot.Desc[14]` 读写（已有），不新造存储。
+
+**opc-19 2026-11-20 追加的四条**：
+1. **`Random(0)` 跨语言**：.NET 实测 seed=1 ⇒ `Next(0)=0, Next(100)=11,46, Next(30000)=23148`；seed=20261120 ⇒ `0,63,32,11637`。Rust `RandomNumber` 必须返回同值**且后续序列相同**（含「消耗一次抽样」）。分歧就停下报，**不许** `if bound==0 { return 0 }` 抹平。
+2. **泵序牙**：变异体对调 `RM_ABILITY`/`RM_SUBABILITY` 的**发送序**，线序**必须不变**（因按 `(byte)ident` 排序）；若红 ⇒ 线序断言其实是「跟随发送序」的假断言。
+3. **`Desc[4]==10`** 单列一例且必须走**诅咒支**（`Desc[4]++` 上界不越界）——与 `Desc[4]--` 支方向相反。
+4. 探针**新建 `m3/oil-probe`**（不动 `eat-probe`：`3b` 正在用它签 IT-16 第二批）。
+
+**泵序（2026-11-20 实测修正，opc-19 三条要求）**：吃路径的通知排水改为 `NetPriorityQueue`（= .NET `PriorityQueue` 四叉最小堆的逐位复刻），入队序 = 发送序，出队即泵序。
+- **`(byte)ident` 升序在同优先级下不唯一**：同键 3 条入队 `[0,1,2]`、出队实测 **`[0,2,1]`**（sift 序）；`sort_by_key` 会给 `[0,1,2]` ⇒ **只能堆出队，不能排序**。
+- **一条既有偏差被顺带修正**：`use_item` 对 Shape13 先 push `RM_WINEXP`(8075→139)、公共尾再 push `RM_WEIGHTCHANGED`(10115→131)，旧实现按入队序发 ⇒ 线上 44 在 622 之前；oracle 夹具记录的是 `[(10115,131),(8075,139)]`（622 先）⇒ 新排水后与 oracle 一致。**此前"现有路径不受影响"的说法作废**（那是假设，已被本例推翻）。
+- **三条钉住用例**：`tests::net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion`（等键 `[0,2,1]`）、`tests::eat_notice_drain_matches_oracle_order_for_shape13`（622 先于 44）、`tests::it12_oil_frame_order_desc_and_always_eaten`（祝福油 `[635,752,52,622]` + `Desc[3]/[4]` 迁移 + 诅咒支上界）。
+- **牙**：对调宿主里 `RM_ABILITY`/`RM_SUBABILITY` 的**发送序**，线序必须不变（由堆决定，不由 push 序决定）。
+
+**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
