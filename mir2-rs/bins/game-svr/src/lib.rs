@@ -4739,6 +4739,14 @@ fn handle_ground_cmd(
         wabil: sg.state.wabil.clone(),
         abil_exp: sg.equip.abil.exp,
         sys_msg: sg.sys_msg.clone(),
+        // `SM_ABILITY(52)` / `SM_SUBABILITY(752)` 的取值来源（后来者复算口径）：
+        //   Job      ← `PlayObject.Job`（本会话 `sg.equip.job`）；
+        //   52 尾    ← `EncodeMessage(WAbil)` 的原文（`ability_tail(&sg.state.wabil, …)`，
+        //              布局由 `MIR2_CLIENT_ABILITY_LAYOUT` 选 58B/40B，见 `ability_tail` 用例）；
+        //   752 四段 ← `SubAbility::to_frame_bytes()`（`PlayObject.Message.cs:1935`）。
+        job: sg.equip.job,
+        ability_tail: ability_tail(&sg.state.wabil, mir2_client_ability_layout()),
+        sub_bytes: sg.sub.to_frame_bytes(),
         hunger_status: sg.hunger_status,
         hit_speed: sg.hit_speed,
     };
@@ -10892,6 +10900,14 @@ fn handle_eat_cmd(
         // `SM_WINEXP.Recog` 取**基础** `Abil.Exp`（exp_delta 已在上面落到 `sg.equip.abil.exp`；WAbil 陈旧）。
         abil_exp: sg.equip.abil.exp,
         sys_msg: None,
+        // `SM_ABILITY(52)` / `SM_SUBABILITY(752)` 的取值来源（后来者复算口径）：
+        //   Job      ← `PlayObject.Job`（本会话 `sg.equip.job`）；
+        //   52 尾    ← `EncodeMessage(WAbil)` 的原文（`ability_tail(&sg.state.wabil, …)`，
+        //              布局由 `MIR2_CLIENT_ABILITY_LAYOUT` 选 58B/40B，见 `ability_tail` 用例）；
+        //   752 四段 ← `SubAbility::to_frame_bytes()`（`PlayObject.Message.cs:1935`）。
+        job: sg.equip.job,
+        ability_tail: ability_tail(&sg.state.wabil, mir2_client_ability_layout()),
+        sub_bytes: sg.sub.to_frame_bytes(),
         hunger_status: sg.hunger_status,
         // `SM_CHARSTATUSCHANGED(657)` 的 `Series` 取**收件人自己**的 `HitSpeed`；本队列是
         // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
@@ -90925,6 +90941,9 @@ GMEXECUTE f
             wabil: game_svr::ability::Ability::default(),
             abil_exp: 0,
             sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
             hunger_status: 0,
             hit_speed: 7,
         };

@@ -131,6 +131,10 @@ pub const RM_WEIGHTCHANGED: i32 = 10115;
 pub const RM_CHARSTATUSCHANGED: i32 = 10139;
 /// `RM_MYSTATUS`（`src/OpenMir2/Messages.cs:700`）——`RefMyStatus()` 在 `RecalcAbilitys()` 之后发（`PlayObject.Base.cs:288-292`）。
 pub const RM_MYSTATUS: i32 = 8102;
+/// `RM_ABILITY`（`PlayObject.cs:1546/1625`）：`RecalcAbilitys()` 之后补发的能力刷新。
+pub const RM_ABILITY: i32 = mir2_protocol::messages::RM_ABILITY as i32;
+/// `RM_SUBABILITY`（`PlayObject.cs:1547/1626`）。
+pub const RM_SUBABILITY: i32 = mir2_protocol::messages::RM_SUBABILITY as i32;
 /// `RM_WINEXP`（`src/OpenMir2/Messages.cs` 8075）——`GetExp` 的 `SendMsg(RM_WINEXP, 0, dwExp, 0, 0)`。
 pub const RM_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
 /// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
