@@ -16598,6 +16598,16 @@ fn handle_spell_cmd_with_magic(
                                         );
                                     }
                                 }
+                                // 卡 36：oracle `RecalcAbilitys()`（`PlayObject.cs:2874-2876`）的 657 ——
+                                // `:2875 StatusChanged()` 广播（self+target+obs_in）+ `:2876 SendUpdateMsg` 自更新（self）；
+                                // 复用现有 `SpellFrameBuf`（prio 155），不新增发射函数、不改共享件；落点由 RM 号算：
+                                // 52(3)<638(136)<642(141)<**657(155)**<100(252)<640(255)。
+                                let status = world.entities.get(out.target).map_or(0, |e| e.char_status);
+                                push_charstatuschanged(&mut buf, world, online, out.target, status);
+                                if let Some(e) = world.entities.get(out.target) {
+                                    let body = smframe_ext::sm_charstatuschanged(out.target, status, e.hit_speed);
+                                    buf.push_actor(online, out.target, (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8, body);
+                                }
                                 // `:612-617`：`targetObject == null` 时 `nTargetX/nTargetY` 被改写成
                                 // 施法者的 `CurrX/CurrY`（与 click 坐标无关）⇒ 共享尾 638 用归一后的
                                 // 坐标；`SM_SPELL(17)` 已在更早处按 click 发出，不受影响。
