@@ -43,6 +43,12 @@
    - `:362-375` 基本剑法（`SKILL_ONESWORD`）、`:376-389` 精神力（`SKILL_ILKWANG`）——**无条件各查一次**；
    - 之后按 `wHitMode` 的 case（3 攻杀 / 4 刺杀 / 5 半月 / 12 红半月 / 7 烈火 / 8 逐日 / 9 狂风斩 …）各一条。
 
+**刻意保留的 oracle 不一致（不是笔误）**：`TrainCurrentSkill` 的 `switch` 里 `case 9 → MagicArr[43]`、
+`case 13 → MagicArr[56]`、`case 12 → MagicArr[66]`（`PlayObject.Attack.cs:432/444/480`），与
+`AttackSuccess` 的模式表（`case 12 → SKILL_REDBANWOL(56)`、`case 9 → SKILL_TWINBLADE(38)`）**对不上**。
+这是 oracle 自己的写法 ⇒ 本仓 `magic::TRAIN_MODE_IDS` **照抄，禁止"顺手统一"**；将来有人把
+`12→66` 改成 `12→56` 会让模式 12 训练到错误的技能上（帧与存档都会偏）。
+
 **时点（审阅点名要的）**：训练与升级都是**攻击时刻同步发生**的（`AttackSuccess` 在 `AttackDir` 内、
 `AttackDir` 在 `ClientHitXY` 内），**不是** drain 时刻。延迟的只有**帧**：升级走 `UpdateDelayMsg(…, 800)`，
 未升级走 `SendSelfDelayMsg(…, 3000)`。`UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的语义是
@@ -141,6 +147,49 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 3. **站点级**（可选）：`MIR2_RNG_LOG` trace 的 `site` 列可直接看抽数落在哪个 `file:line`。
 
 **前提断言（§43）**：每种验法都要先证明观测值随被测变量变化（探针值非常量、抽值序列非退化）。
+
+## 3bis. 段 2：`SM_MAGIC_LVEXP(640)` 与 800/3000ms 延时（交付前先在卡上钉死）
+
+### 3bis.1 oracle 锚
+
+| 符号 | 定义位置 | 语义 |
+| --- | --- | --- |
+| `RM_MAGIC_LVEXP` | `src/OpenMir2/Messages.cs:585`（= 10123） | 内部消息 |
+| `SM_MAGIC_LVEXP` | `src/OpenMir2/Messages.cs:302`（= **640**） | 线上帧 |
+| 投递处理 | `PlayObject.Message.cs:1800-1801` | `SendDefMessage(SM_MAGIC_LVEXP, nParam1=MagicId, nParam2=Level, LoWord(nParam3)=TranPoint 低半, HiWord(nParam3)=高半)` ⇒ **只发给施法者自己** |
+| `SendSelfDelayMsg` | `BaseObject.Message.cs:188-206` | `DeliveryTime = GetTickCount() + dwDelay`、`LateDelivery=true`、优先级 `MessagePriority.Lowest`；`Ghost` 时**不入队** |
+| `UpdateDelayMsg` | `BaseObject.Message.cs:257-278` | **先摘旧条再入队**：遍历队列，`wIdent` 与 `nParam1` 同时相等的条目 `TryDequeue` + `Dispose`，然后走 `SendStruckDelayMsg(ActorId, …)` 重新入队（同一优先级） |
+| 延时量 | `PlayObject.Attack.cs:209`（未升级 **3000**）、`PlayObject.cs:5216`（升级 **800**）；DoSpell 面 `src/M2Server/Magic/MagicManager.cs:666`（**1000**） | 三个数不能混 |
+
+**正难点 = `UpdateDelayMsg` 的"摘旧条再入队"**：它不是"再发一条"，而是**替换**——同一魔号在队列里
+只留最新一条，且新条按**新的** `DeliveryTime`。⇒ 同一击内"先 `SendSelfDelayMsg(3000)` 再
+`UpdateDelayMsg(800)`"不会产生两帧；连续两击都未升级时，第二击会把第一击的 3000ms 条**摘掉重排**。
+
+### 3bis.2 本仓可复用面（先查再写）
+
+- `crates/world-bevy/src/slave` 已有 **`update_self_delay_msg_full`**（`UpdateDelayMsg` 的等价物，P3-B3
+  落地，注释点名 `BaseObject.Message.cs:257-278`）与 **`SelfDelayQueue::remove_head_matching`**（"删除段"）。
+  **注意 oracle 的删除只在队首匹配时才摘**（循环里 `TryPeek` 第 i 条但 `TryDequeue` 摘的是队首）——
+  这条已被本仓逐字复刻，段 2 直接复用，别"修顺"。
+- `bins/game-svr/src/smframe` 已有 **`sm_magic_lvexp`** 编码器（`SM_MAGIC_LVEXP(640)` 的 `Recv/Param/Tag` 三字段）。
+- 宿主 `drain_self_delay_msgs` 已有 `RM_MAGIC_LVEXP` 到点排水（`lib.rs` 的"到点 ⇒ 640，仅该 actor
+  自己的 socket"）。
+
+⇒ 段 2 的工作是**接线**而不是重写：把段 1 的 `SkillTrainEvent.levelup_msg` 变成
+「升级走 `UpdateDelayMsg(..., 800)` / 未升级走 `SendSelfDelayMsg(..., 3000)`」两条入队，并让到点排水发 640。
+
+### 3bis.3 判据与牙（草案）
+
+| 判据 | 验法 |
+| --- | --- |
+| 未升级 ⇒ 3000ms 后一条 640 | 宿主级用例：攻击 → tick → 推进时钟 2999 无帧、3000 有帧；`Param=Level`、`Tag=TranPoint` 按 Lo/Hi 拆 |
+| 升级 ⇒ 800ms 一条 640 | 同上，阈值换 800；且 800 之前**没有** 3000 那条（升级支不进 `SendSelfDelayMsg`） |
+| **替换语义** | 同一魔号连续两击都未升级：只留**一条** 640，`DeliveryTime` 按第二次重排（推进到第一击+3000 时**不**出帧，第二击+3000 才出） |
+| 只发给施法者 | 第二个玩家的 gate 通道上**零** 640；旁观者看不到 |
+| `Ghost` 不入队 | 施法者 `Ghost=true` 时队列零增长 |
+
+牙（草案）：删 `UpdateDelayMsg` 的"摘旧"循环 ⇒ 替换语义用例红（出两帧）；把 800/3000 互换 ⇒
+两条时序用例红；把 640 改成广播 ⇒ "只发给施法者"用例红。
 
 ## 4. 判据与用例草案
 
