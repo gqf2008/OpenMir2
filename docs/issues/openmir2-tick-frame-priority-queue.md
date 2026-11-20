@@ -405,3 +405,34 @@ impl TickFrameQueue {
 §11b（`FrameSink` 三条实现缺什么）、§10b（seam 候选签名）；全部以 `165c6edd1` 为准。
 
 **不要重复的活**：36（`uenhancer`）的 4 条帧已由 `da` 实测并落地；`#7` 的"条件发"已证为 oracle 原样，别再翻。
+
+## 14. 12 站点 oracle 调用序列 → 期望 657 条数（2026-11-20，只读；坐标系 = `165c6edd1`）
+
+**共同事实（依据，不作外推公式）**：`PlayObject.RecalcAbilitys()` 在 `if (Race==ActorRace.Play)` 块内
+`:2874 CharStatus=GetCharStatus(); :2875 StatusChanged(); :2876 SendUpdateMsg(RM_CHARSTATUSCHANGED,HitSpeed,CharStatus,0,0,"")`。
+⇒ **凡是"只调一次 `RecalcAbilitys()`、无其它 657 产出点"的站点，期望 = 自 2 / 目标 1 / 观察 1**
+（`uenhancer`(36) 实测 2/1/1 即此形态的直接印证）。
+**不经 `RecalcAbilitys()` 的路径不适用**（见 §12b 反例：shield 1/1/1 条件发、bigcloak 2/2/2 两次广播等）。
+
+| # | 站点（`lib.rs`@`165c6edd1`） | oracle 调用序列（行号） | 期望 657（自/目标/观察） | golden |
+|---|---|---|---|---|
+| 1 | `apply_pending_level_up` :2967 | `ChangeLevelCommand` → `HasLevelUp`（`PlayObject.cs:5242-5252`）= `RecalcLevelAbilitys(); RecalcAbilitys(); SendMsg(RM_LEVELUP)` | **2 / 1 / 1** | 无（GM 路径） |
+| 2 | `apply_gm_use_item_write` :3202 | `src/Modules/GameCommand/Commands/SmakeItemCommand.cs:60` `RecalcAbilitys()`（+`SendUpdateItem`） | **2 / 1 / 1** | 无 |
+| 3 | `handle_inbound_cmd`(CM_ADJUST_BONUS) :4173 | `ClientAdjustBonus`（`src/M2Server/Player/PlayObject.Base.cs:1173`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+| 4 | `handle_bag_cmd_with_magic` :5327 | `ClientTakeOn/TakeOffItems`（`Operate.cs:455/544`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+| 5 | `handle_shop_cmd_inner`（升级武器）:7818 | `src/GameSrv/Npc/Merchant.cs:569-571`：`Index=0; RecalcAbilitys(); FeatureChanged(); SendMsg(RM_ABILITY)` | **2 / 1 / 1**（另有 41、52） | 无 |
+| 7 | spell 支 A（按魔法分） | ① `MagBubbleDefenceUp`（`CharacterObject.cs:96-114`）：`CharStatus=GetCharStatus(); if(nOldStatus!=CharStatus) StatusChanged();` ⇒ **条件发、无 SendUpdateMsg**；② `DefenceUp/MagDefenceUp`（`BaseObject.cs:2159-2186`）：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | ① 条件成立 **1 / 1 / 1**、不成立 **0/0/0**；② **2 / 1 / 1** | `shield.json` 1/1/1；`cloak.json` 1/1/1；`dejiwonho.json` 1/**2**/1；`bigcloak.json` **2/2/2**；`hangmajinbub.json` 49/98/49 |
+| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** | 无（buff 侧仅单测） |
+| 11 | `apply_pending_gm_target_ops`（@删除技能）:22398 | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71` `mIPlayerActor.RecalcAbilitys()`（+`SendDelMagic` 直接帧 212） | **2 / 1 / 1** | 无（GM） |
+| 12 | 同上（第二分支）:22405 | 同上 | **2 / 1 / 1** | 无（GM） |
+| 13 | `drain_player_need_recheck_with_magic` :25072 | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if(boTakeItem){ SendDelItems; UseItems[i].Index=0; RecalcAbilitys(); }` | **2 / 1 / 1**（条件：该格确实被摘下） | 无 |
+| 14 | `drain_player_hunger` :25359 | `RefMyStatus()`（`src/M2Server/Player/PlayObject.Base.cs:288-292`）= `RecalcAbilitys(); SendMsg(RM_MYSTATUS)` | **2 / 1 / 1**（+708） | 无 |
+| 15 | `drain_player_revival_with_magic` :25947 | `PlayObject.cs:5371-5378`：耐久归零 ⇒ `SendDelItems; Index=0; RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+
+**反例（保留在表里，防止归纳）**：`shield` 1/1/1（条件 `StatusChanged`、无 `SendUpdateMsg`）、
+`cloak` 1/1/1、`bigcloak` 2/2/2（两次广播）、`dejiwonho` 1/**2**/1（目标多一条）、
+`hangmajinbub` 49/98/49（逐格×2）、`uenhancer` 2/1/1（RecalcAbilitys 标准形态）。
+
+**对已接 5 处的含义**：#1/#2/#3/#4 若现状是"广播 1（含自）+ 自更新 1" ⇒ 已符合；
+若只有"1 条自己 + 广播一次" ⇒ **缺 `SendUpdateMsg` 那条**，需在接线批次里补。
+`#7` 的 ① 形态（条件发、无自更新）**现状即正确**，不得按 ② 补第二条。
