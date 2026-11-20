@@ -42,6 +42,10 @@ pub const DEFAULT_CANOT_PICK_UP_ITEM: &str = "在一定时间以内无法捡起�
 /// 经 `StringConf.cs:76`（`GameShare.cs:91`）读入后覆盖本默认 ⇒ 线上体字节
 /// `c4fad6d0b6bec1cb212121`（`SM_SYSMESSAGE(100)`，魔号 6/48 与 50-D2 的 STY 帧）。
 pub const DEFAULT_YOU_POISONED: &str = "中毒了!!!";
+/// oracle `MessageSettings.ThrustingOn`（`MessageSettings.cs:48`）——`[String] ThrustingOn` 缺键默认。
+pub const DEFAULT_THRUSTING_ON: &str = "启用刺杀剑法";
+/// oracle `MessageSettings.HalfMoonOn`（`MessageSettings.cs:50`）——`[String] HalfMoonOn` 缺键默认。
+pub const DEFAULT_HALF_MOON_ON: &str = "开启半月弯刀";
 /// `[String] GuildMsgPreFix`（`GameSvrConf.cs:1843`，缺省 `〖行会〗`）——`ShowPreFixMsg` 为真时
 /// 行会消息（104）的前缀（`GuildInfo.cs:435-438`，**无空格**拼接）。
 pub const DEFAULT_GUILD_MSG_PREFIX: &str = "〖行会〗";
@@ -126,6 +130,10 @@ pub struct StringConf {
     no_master_name: Option<String>,
     canot_pick_up_item: Option<String>,
     you_poisoned: Option<String>,
+    /// `[String] ThrustingOn`（`MessageSettings.ThrustingOn`，`ThrustingOnOff(true)` 的绿字）。
+    thrusting_on: Option<String>,
+    /// `[String] HalfMoonOn`（`MessageSettings.HalfMoonOn`，`HalfMoonOnOff(true)` 的绿字）。
+    half_moon_on: Option<String>,
     revival_recover: Option<String>,
     // 卡 `openmir2-runtime-sysmsg-text-frames`：带文本的 `SysMsg` 帧（禁药/修复油/彩票）。
     canot_use_drug_on_this_map: Option<String>,
@@ -301,6 +309,18 @@ impl StringConf {
         self.not_win_lottery_msg
             .as_deref()
             .unwrap_or(DEFAULT_NOT_WIN_LOTTERY_MSG)
+    }
+
+    /// `[String] ThrustingOn`（`ThrustingOnOff(true)` 的绿字，IT-17a 学习刺杀剑术）。
+    #[must_use]
+    pub fn thrusting_on(&self) -> &str {
+        self.thrusting_on.as_deref().unwrap_or(DEFAULT_THRUSTING_ON)
+    }
+
+    /// `[String] HalfMoonOn`（`HalfMoonOnOff(true)` 的绿字，IT-17a 学习半月弯刀）。
+    #[must_use]
+    pub fn half_moon_on(&self) -> &str {
+        self.half_moon_on.as_deref().unwrap_or(DEFAULT_HALF_MOON_ON)
     }
 
     /// `[Guild] GuildNotice`（缺键回落 `GameSvrConf.cs:1850`）。
@@ -527,6 +547,8 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "NOMASTERNAME") => &mut conf.no_master_name,
             (Section::String, "CANOTPICKUPITEM") => &mut conf.canot_pick_up_item,
             (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
+            (Section::String, "THRUSTINGON") => &mut conf.thrusting_on,
+            (Section::String, "HALFMOONON") => &mut conf.half_moon_on,
             (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
             (Section::String, "CANOTUSEDRUGONTHISMAP") => &mut conf.canot_use_drug_on_this_map,
             (Section::String, "WEAPONREPAIRSUCCESS") => &mut conf.weapon_repair_success,

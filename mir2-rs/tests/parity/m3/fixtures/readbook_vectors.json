@@ -1,0 +1,1201 @@
+{
+  "generator": "mir2-rs/tests/parity/m3/readbook-probe",
+  "oracle_source_sha256": "6c08a1bf982a4fc34290655f5c2d4a7047637ef7c4aa092ea4a49c49b7cd8576",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.Operate.cs",
+    "src/M2Server/Player/PlayObject.Base.cs",
+    "src/M2Server/Player/PlayObject.Attack.cs",
+    "src/M2Server/Player/PlayObject.cs",
+    "src/M2Server/Player/PlayObject.Message.cs",
+    "src/M2Server/Actor/BaseObject.Message.cs"
+  ],
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems) / :632-654 (case 4 \u4E66)",
+    "src/M2Server/Player/PlayObject.Base.cs:2171-2200 (ReadBook: \u6309\u7269\u54C1\u540D FindMagic \u002B \u56DB\u9053\u95E8)",
+    "src/M2Server/Player/PlayObject.Attack.cs:340-351 (IsTrainingSkill = MagicList \u5DF2\u6709 MagIdx)",
+    "src/M2Server/Player/PlayObject.Base.cs:2205-2216 (SendAddMagic: SM_ADDMAGIC 0/0/0/1 \u002B EDCode(ClientMagic))",
+    "src/M2Server/Player/PlayObject.cs:3681-3684 (RecalcAbilitys \u7528 MagicList \u586B MagicArr)",
+    "src/M2Server/Player/PlayObject.cs:~2874 (CharStatus/StatusChanged/SendUpdateMsg RM_CHARSTATUSCHANGED)",
+    "src/M2Server/Player/PlayObject.Socket.cs:48-71 (SendSocket(string): ServerMessage \u5934 \u002B \u660E\u6587, PackLength \u53D6\u8D1F)"
+  ],
+  "notes": [
+    "\u5E27\u9762 payload = gate buffer \u53BB\u6389 20B ServerMessage \u5934\u540E\u7684\u5B8C\u6574 hex\uFF1B\u666E\u901A SM \u5E27\u7684 12B command \u5934\u4E5F\u5728\u5176\u4E2D\uFF0C\u0060\u002BLNG\u0060/\u0060\u002BWID\u0060 \u662F\u660E\u6587\u539F\u59CB\u4E32\u5E27\uFF08ident \u89E3\u6790\u4E3A -1\uFF09\u3002",
+    "MagicInfo \u9010\u5B57\u6BB5\u8BB0\u5728 ctx.magic\uFF08ClientMagic.Def \u7684\u6765\u6E90\uFF09\uFF1BRust \u4FA7\u5FC5\u987B\u7528\u540C\u4E00\u7EC4\u503C\u3002",
+    "RecalcAbilitys \u7684**\u6280\u80FD\u88AB\u52A8**\uFF08HitPoint/SpeedPoint/DC\uFF09\u4E0D\u5728\u672C\u5361\u8303\u56F4\uFF08IT-17b\uFF09\uFF1B\u672C\u6279\u9009\u65E0\u88AB\u52A8\u7684\u6280\u80FD\uFF0CCharStatus/HitSpeed \u8BB0\u5728 expect \u4F46\u4E0D\u4F5C\u4E3A 17a \u7684\u4E3B\u5224\u636E\u3002"
+  ],
+  "magic_table": [
+    {
+      "magic_id": 12,
+      "name": "\u523A\u6740\u5251\u672F",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        10,
+        11,
+        12,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 25,
+      "name": "\u534A\u6708\u5F2F\u5200",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        15,
+        16,
+        17,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 1,
+      "name": "\u706B\u7403\u672F",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        7,
+        8,
+        9,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 1,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 26,
+      "name": "\u70C8\u706B\u5251\u6CD5",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        40,
+        41,
+        42,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 46,
+      "name": "\u9AD8\u7EA7\u523A\u6740",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        30,
+        31,
+        32,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    },
+    {
+      "magic_id": 49,
+      "name": "\u8FB9\u754C\u6280\u80FD",
+      "effect_type": 1,
+      "effect": 8,
+      "spell": 10,
+      "power": 10,
+      "max_power": 10,
+      "train_level": [
+        20,
+        21,
+        22,
+        0
+      ],
+      "max_train": [
+        100,
+        200,
+        300,
+        0
+      ],
+      "train_lv": 3,
+      "job": 0,
+      "delay_time": 0,
+      "def_spell": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "desc": ""
+    }
+  ],
+  "templates": [
+    {
+      "index": 3001,
+      "name": "\u523A\u6740\u5251\u672F",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3002,
+      "name": "\u534A\u6708\u5F2F\u5200",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3003,
+      "name": "\u4E0D\u5B58\u5728\u6280\u80FD",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3004,
+      "name": "\u706B\u7403\u672F",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3005,
+      "name": "\u70C8\u706B\u5251\u6CD5",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3006,
+      "name": "\u9AD8\u7EA7\u523A\u6740",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    },
+    {
+      "index": 3007,
+      "name": "\u8FB9\u754C\u6280\u80FD",
+      "std_mode": 4,
+      "shape": 0,
+      "weight": 5
+    }
+  ],
+  "cases": [
+    {
+      "name": "eat_ok_book_ergum_learns_and_thrusting",
+      "ctx": {
+        "index": 3001,
+        "actor_id": 943001,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u523A\u6740\u5251\u672F(id12, Job0, TrainLevel[0]=10)\uFF1A\u5B66\u4E60\u6210\u529F \u21D2 SM_ADDMAGIC \u002B \u0060\u002BLNG\u0060 \u539F\u59CB\u4E32\u5E27 \u002B 635",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 12,
+          "name": "\u523A\u6740\u5251\u672F",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            10,
+            11,
+            12,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3001,
+            "name": "\u523A\u6740\u5251\u672F"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 210,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 1,
+            "payload": "00000000d2000000000001006464686b6464686b64645c6b646454495455593d413f624f516468676464686b6465606b6466686966646263676468606c6468676454686964643c6b6564686b6464686b6467686b6464686b6464686b6464626b6464686b6464686b6464686b6464686b6464686b6464686b6464686b",
+            "len": 144
+          },
+          {
+            "ident": -1,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "2b4c4e47",
+            "len": 24
+          },
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007b02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          },
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 219,
+            "n_param2": 255,
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "payload": "000000006e02000000004b8f",
+            "len": 32
+          },
+          {
+            "ident": 657,
+            "recog": 943001,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "99630e009102000000000000",
+            "len": 32
+          },
+          {
+            "ident": 100,
+            "recog": 943001,
+            "param": 65499,
+            "tag": 0,
+            "series": 1,
+            "payload": "99630e006400dbff0000010056507b5657405c5a55414d433f43404a",
+            "len": 48
+          }
+        ],
+        "pump_idents": [
+          10115,
+          10139,
+          11004
+        ],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 12,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [
+          {
+            "id": 12,
+            "level": 0
+          }
+        ],
+        "use_thrusting": true,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_book_banwol_learns_and_halfmoon",
+      "ctx": {
+        "index": 3002,
+        "actor_id": 943002,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u534A\u6708\u5F2F\u5200(id25, Job0, TL[0]=15)\uFF1A\u6210\u529F \u21D2 SM_ADDMAGIC \u002B \u0060\u002BWID\u0060 \u002B 635",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 25,
+          "name": "\u534A\u6708\u5F2F\u5200",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            15,
+            16,
+            17,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3002,
+            "name": "\u534A\u6708\u5F2F\u5200"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 210,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 1,
+            "payload": "00000000d2000000000001006464686b6464686b6464716b646458494f586a52554c553e426468676464686b6465606b6466686966645f636869686b6c6468676454686964643c6b6564686b6464686b6467686b6464686b6464686b6464626b6464686b6464686b6464686b6464686b6464686b6464686b6464686b",
+            "len": 144
+          },
+          {
+            "ident": -1,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "2b574944",
+            "len": 24
+          },
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007b02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          },
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 219,
+            "n_param2": 255,
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "payload": "000000006e02000000004b8f",
+            "len": 32
+          },
+          {
+            "ident": 657,
+            "recog": 943002,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "9a630e009102000000000000",
+            "len": 32
+          },
+          {
+            "ident": 100,
+            "recog": 943002,
+            "param": 65499,
+            "tag": 0,
+            "series": 1,
+            "payload": "9a630e006400dbff00000100433e664d5040435758565d574c415646",
+            "len": 48
+          }
+        ],
+        "pump_idents": [
+          10115,
+          10139,
+          11004
+        ],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 25,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [
+          {
+            "id": 25,
+            "level": 0
+          }
+        ],
+        "use_thrusting": false,
+        "use_half_moon": true,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_magic_not_in_table",
+      "ctx": {
+        "index": 3003,
+        "actor_id": 943003,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u95E8\u2460\uFF1A\u9B54\u6CD5\u8868\u91CC\u6CA1\u6709\u8BE5\u7269\u54C1\u540D \u21D2 636\u3001\u7269\u54C1\u4FDD\u7559",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": null,
+        "templates": [
+          {
+            "index": 3003,
+            "name": "\u4E0D\u5B58\u5728\u6280\u80FD"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007c02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [],
+        "magic_arr": [],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3003,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_already_learned",
+      "ctx": {
+        "index": 3001,
+        "actor_id": 943001,
+        "level": 20,
+        "job": 0,
+        "known": [
+          12
+        ],
+        "note": "\u95E8\u2461\uFF1AMagicList \u5DF2\u6709 MagIdx=12\uFF08\u0060IsTrainingSkill\u0060\uFF09\u21D2 636",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 12,
+          "name": "\u523A\u6740\u5251\u672F",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            10,
+            11,
+            12,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3001,
+            "name": "\u523A\u6740\u5251\u672F"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007c02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "magic_list_before": [
+          12
+        ],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 12,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3001,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_job_mismatch",
+      "ctx": {
+        "index": 3004,
+        "actor_id": 943004,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u95E8\u2462\uFF1A\u706B\u7403\u672F Job=1\uFF08\u6CD5\u5E08\uFF09\uFF0C\u73A9\u5BB6\u6218\u58EB \u21D2 636",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 1,
+          "name": "\u706B\u7403\u672F",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            7,
+            8,
+            9,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 1,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3004,
+            "name": "\u706B\u7403\u672F"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007c02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [],
+        "magic_arr": [],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3004,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_level_too_low",
+      "ctx": {
+        "index": 3005,
+        "actor_id": 943005,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u95E8\u2463\uFF1A\u70C8\u706B\u5251\u6CD5 TL[0]=40 \u003E \u7B49\u7EA7 20 \u21D2 636",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 26,
+          "name": "\u70C8\u706B\u5251\u6CD5",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            40,
+            41,
+            42,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3005,
+            "name": "\u70C8\u706B\u5251\u6CD5"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007c02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [],
+        "magic_arr": [],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3005,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_book_level_boundary_equal",
+      "ctx": {
+        "index": 3007,
+        "actor_id": 943007,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "\u7B49\u7EA7\u95E8\u8FB9\u754C\uFF1AAbil.Level == TrainLevel[0] == 20 \u21D2 \u53EF\u5B66\uFF08\u0060\u003E=\u0060\uFF0C\u4E0D\u662F \u0060\u003E\u0060\uFF09",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 49,
+          "name": "\u8FB9\u754C\u6280\u80FD",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            20,
+            21,
+            22,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3007,
+            "name": "\u8FB9\u754C\u6280\u80FD"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 210,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 1,
+            "payload": "00000000d2000000000001006464686b6464686b6464596b646459495b41474c4040644c5864685f6464686b6465606b6466686966647463696a68666c6468676454686964643c6b6564686b6464686b6467686b6464686b6464686b6464626b6464686b6464686b6464686b6464686b6464686b6464686b6464686b",
+            "len": 144
+          },
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007b02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "payload": "000000006e02000000004b8f",
+            "len": 32
+          },
+          {
+            "ident": 657,
+            "recog": 943007,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "9f630e009102000000000000",
+            "len": 32
+          }
+        ],
+        "pump_idents": [
+          10115,
+          10139
+        ],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 49,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [
+          {
+            "id": 49,
+            "level": 0
+          }
+        ],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_book_already_learned_and_level_low",
+      "ctx": {
+        "index": 3006,
+        "actor_id": 943006,
+        "level": 20,
+        "job": 0,
+        "known": [
+          46
+        ],
+        "note": "\u95E8\u2461\u2462\u2463 \u540C\u65F6\u4E0D\u6EE1\u8DB3\uFF1A\u5DF2\u5B66(46) \u4E14 TL[0]=30\u003E20 \u21D2 636\uFF1B\u4E24\u6761\u5931\u8D25\u8DEF\u5F84\u5E27\u76F8\u540C \u21D2 \u987A\u5E8F\u4E0D\u53EF\u89C2\u6D4B\uFF08\u53EA\u8BC1\u5404\u81EA\u53EF\u8FBE\uFF09",
+        "seed": 20261120,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "magic": {
+          "magic_id": 46,
+          "name": "\u9AD8\u7EA7\u523A\u6740",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            30,
+            31,
+            32,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3006,
+            "name": "\u9AD8\u7EA7\u523A\u6740"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007c02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "magic_list_before": [
+          46
+        ],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 46,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [],
+        "use_thrusting": false,
+        "use_half_moon": false,
+        "char_status": 0,
+        "hit_speed": 0,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3006,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 0,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    }
+  ]
+}
