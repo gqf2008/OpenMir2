@@ -3136,14 +3136,17 @@ fn apply_pending_gm_mountride(
 /// （调用点 = `CM_SAY` 支；**脚本路与既有 `@1/@2/@3` 一致，未接**，见 T-217 登记）。
 ///
 /// 返回 `None` = 本条命令没有佩戴位差量（或模板缺失 ⇒ oracle `SendUpdateItem` 也不发帧）。
+#[allow(clippy::too_many_arguments)]
 fn apply_pending_gm_use_item(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     let sg = sessions.get_mut(chr_name)?;
-    apply_pending_gm_use_item_in(sg, world, catalog)
+    apply_pending_gm_use_item_in(sg, world, catalog, online, gates)
 }
 
 /// [`apply_pending_gm_use_item`] 的**单会话**版本：脚本接缝处已持有 `&mut SessionGround`
@@ -3152,18 +3155,23 @@ fn apply_pending_gm_use_item_in(
     sg: &mut SessionGround,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     let w = sg.gm.pending_use_item.take()?;
-    apply_gm_use_item_write(sg, w, world, catalog)
+    apply_gm_use_item_write(sg, w, world, catalog, online, gates)
 }
 
 /// 佩戴位写本身（[`gmcmd::GmUseItemWrite`]）：脚本接缝里 GM 会话态被**临时移出**到
 /// `gm_sess`（`std::mem::take(&mut sg.gm)`）⇒ pending 不在 `sg.gm` 上，调用方取出写后传进来。
+#[allow(clippy::too_many_arguments)]
 fn apply_gm_use_item_write(
     sg: &mut SessionGround,
     w: gmcmd::GmUseItemWrite,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     if w.slot >= sg.use_items.len() {
         return None;
@@ -3226,6 +3234,8 @@ fn collect_gm_use_item_pending(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Vec<(i32, Vec<u8>)> {
     let mut names: Vec<String> = sessions
         .iter()
@@ -3239,7 +3249,7 @@ fn collect_gm_use_item_pending(
             continue;
         };
         let actor = sg.actor_id;
-        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
             out.push((actor, body));
         }
     }
@@ -3747,7 +3757,7 @@ fn run_party_goto_label(
     // 会话 pending（脚本跑完已归位到 `ground_sessions`）⇒ 在脚本帧排水**之前**落地
     // （oracle `SendUpdateItem` 立即、`SysMsg` 入队后排水 ⇒ 203 先于蓝字 100）。
     if let Some(sg) = ground_sessions.get_mut(chr_name) {
-        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM") {
                 let _ = tx.send(SimToGate::SendFrame { socket, body });
             }
@@ -6416,7 +6426,7 @@ fn handle_click_npc_cmd(
         // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
         // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
         // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-        if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates) {
             if let Some(tx) =
                 route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
             {
@@ -7516,7 +7526,9 @@ fn handle_shop_cmd_inner(
             // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
             // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
             // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-            if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+            if let Some(body) =
+                apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+            {
                 if let Some(tx) =
                     route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                 {
@@ -7602,7 +7614,9 @@ fn handle_shop_cmd_inner(
                 // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
                 // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
                 // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-                if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+                if let Some(body) =
+                    apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+                {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                     {
@@ -7908,9 +7922,9 @@ fn handle_shop_cmd_inner(
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
-                            if let Some(body) =
-                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
-                            {
+                            if let Some(body) = apply_pending_gm_use_item_in(
+                                &mut *sg, world, catalog, online, gates,
+                            ) {
                                 if let Some(tx) = route_to_gate(
                                     gates,
                                     entry.gate_idx,
@@ -8013,9 +8027,9 @@ fn handle_shop_cmd_inner(
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
-                            if let Some(body) =
-                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
-                            {
+                            if let Some(body) = apply_pending_gm_use_item_in(
+                                &mut *sg, world, catalog, online, gates,
+                            ) {
                                 if let Some(tx) = route_to_gate(
                                     gates,
                                     entry.gate_idx,
@@ -8207,7 +8221,9 @@ fn handle_shop_cmd_inner(
                 // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
                 // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
                 // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-                if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+                if let Some(body) =
+                    apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+                {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                     {
@@ -9354,7 +9370,7 @@ fn run_std_mode_func_script(
     // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写装进
     // 会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、`SysMsg` 入队
     // 后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-    if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+    if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates) {
         if let Some(tx) = route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM") {
             let _ = tx.send(SimToGate::SendFrame { socket, body });
         }
@@ -23061,9 +23077,14 @@ fn drain_script_gm_pendings(
         gates,
     );
     // ③ `@改属性` 的佩戴位写 + 203。
-    if let Some(body) =
-        apply_pending_gm_use_item(ground_sessions, chr_name, world, &enter_cfg.catalog)
-    {
+    if let Some(body) = apply_pending_gm_use_item(
+        ground_sessions,
+        chr_name,
+        world,
+        &enter_cfg.catalog,
+        online,
+        gates,
+    ) {
         if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 改属性 SM_UPDATEITEM")
@@ -28233,6 +28254,8 @@ fn sim_loop(
                             &chr_name,
                             &mut world,
                             &enter_cfg.catalog,
+                            &online,
+                            &gates,
                         ) {
                             if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
                                 if let Some(tx) = route_to_gate(
@@ -30600,6 +30623,8 @@ fn sim_loop(
                                                                         sg,
                                                                         &mut world,
                                                                         &enter_cfg.catalog,
+                                                                        &online,
+                                                                        &gates,
                                                                     )
                                                                 }
                                                                 None => None,
@@ -30918,9 +30943,13 @@ fn sim_loop(
         // **卡 `openmir2-gm-impl-smake`**：`@改属性` 佩戴位写的**每 tick 兜底**。四个脚本接缝
         // 已在脚本帧排水前各落一次；这里保证任何残留 pending 不会拖到玩家下次聊天（复审
         // blocking 的残留面），并在 `world.tick()` 之前下发 203。
-        for (actor_id, body) in
-            collect_gm_use_item_pending(&mut ground_sessions, &mut world, &enter_cfg.catalog)
-        {
+        for (actor_id, body) in collect_gm_use_item_pending(
+            &mut ground_sessions,
+            &mut world,
+            &enter_cfg.catalog,
+            &online,
+            &gates,
+        ) {
             if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
                 if let Some(tx) =
                     route_to_gate(&gates, e.gate_idx, e.socket, "GM 改属性 SM_UPDATEITEM")
@@ -48453,9 +48482,14 @@ break
             );
             // 卡 `openmir2-gm-impl-smake`（复审 important-2）：`SM_UPDATEITEM(203)` 先发
             // （oracle `SendDefMessage` 立即），GM 的蓝字 `SM_SYSMESSAGE(100)` 后发。
-            if let Some(body) =
-                apply_pending_gm_use_item(&mut self.sessions, "aaa", &mut self.world, &self.catalog)
-            {
+            if let Some(body) = apply_pending_gm_use_item(
+                &mut self.sessions,
+                "aaa",
+                &mut self.world,
+                &self.catalog,
+                &self.online,
+                &self.gates,
+            ) {
                 if let Some(tx) = self.gates.get(&0) {
                     let _ = tx.send(SimToGate::SendFrame { socket: 901, body });
                 }
@@ -49938,8 +49972,12 @@ break
             desc,
         });
         sessions.insert("hero".into(), sg);
-        let body = apply_pending_gm_use_item(&mut sessions, "hero", &mut world, &catalog)
-            .expect("命中 ⇒ 必须有 SM_UPDATEITEM 帧体");
+        let online: OnlineRegistry = Vec::new();
+        let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        let body =
+            apply_pending_gm_use_item(&mut sessions, "hero", &mut world, &catalog, &online, &gates)
+                .expect("命中 ⇒ 必须有 SM_UPDATEITEM 帧体");
         // 会话侧写。
         let it = sessions["hero"].use_items[1]
             .as_ref()
@@ -49997,10 +50035,13 @@ break
         assert_eq!(
             idents,
             vec![
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_UPDATEITEM,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "203 必须先于蓝字 100（oracle `SendDefMessage` 立即、`SysMsg` 入队后排水）"
+            "657（RecalcAbilitys 的 StatusChanged）→ 203 → 蓝字 100。
+             **登记（帧内序）**：oracle 线上序是 203（直接帧）先、657（队列）后；本宿主在 recalc 内
+             先发 657 ⇒ 差一帧。本路径仅 GM 可达（现网 `Permission` 恒 0），卡 `openmir2-charstatuschanged-wiring` #2 已登记。"
         );
         // 落账：会话 + 实体同源（Desc[2]=7、Desc[9] 0→1）。
         let it = rig.sessions["aaa"].use_items[3]
@@ -50013,7 +50054,7 @@ break
             "实体佩戴位同源写"
         );
         // 蓝字回执逐字节（UTF-8 文本 + GBK 线上字节）。
-        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[1][12..]));
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[2][12..]));
         assert_eq!(text, "5-42 100/200 0/0/7/0/0/0/0/0/0/1/0/0/0/0");
         assert_eq!(
             crate::downlink::gbk(&text),
@@ -97312,6 +97353,86 @@ fn ",
                     (param, tag),
                     (2, 0),
                     "657 的 Lo/Hi(CharStatus) 期望 2/0（重算后的当下值）"
+                );
+            }
+        }
+        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
+        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #2**：GM 佩戴位写
+    /// （oracle `SmakeItemCommand` 的 `RecalcAbilitys()`）同样发 657 ⇒ 自己 1 + ±12 观察者各 1、
+    /// 范围外 0；`status` 用**具体值 2/0**（先把 `buff.char_status_ex` 造到 2）。
+    #[test]
+    fn gm_use_item_write_emits_657_self_and_observers() {
+        use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let mut rig = GmRig::new();
+        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = rig.world.add_entity(e);
+            online_set(
+                &mut rig.online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体")
+            .buff
+            .char_status_ex = 2;
+        rig.catalog.insert(
+            5,
+            mir2_data::StdItem {
+                name: "x".into(),
+                ..Default::default()
+            },
+        );
+        rig.sessions
+            .get_mut("aaa")
+            .expect("会话")
+            .gm
+            .pending_use_item = Some(gmcmd::GmUseItemWrite {
+            slot: 1,
+            index: 5,
+            make_index: 7,
+            dura: 10,
+            dura_max: 20,
+            desc: [0; 14],
+        });
+        apply_pending_gm_use_item(
+            &mut rig.sessions,
+            "aaa",
+            &mut rig.world,
+            &rig.catalog,
+            &rig.online,
+            &rig.gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rig.rx.try_recv() {
+            frames.push((socket, body));
+        }
+        let mut per: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+        for (socket, b) in &frames {
+            if u16::from_le_bytes([b[4], b[5]]) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+                assert_eq!(
+                    (
+                        u16::from_le_bytes([b[6], b[7]]),
+                        u16::from_le_bytes([b[8], b[9]])
+                    ),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0"
                 );
             }
         }
