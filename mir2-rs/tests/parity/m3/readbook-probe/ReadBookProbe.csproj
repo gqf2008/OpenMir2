@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>readbook-probe</AssemblyName>
+    <RootNamespace>ReadBookProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    IT-17a（ReadBook 读书）oracle 真身向量生成器。**独立于 eat-probe / move-eat-probe**。
+    反射调私有 `ClientUseItems`（`PlayObject.Operate.cs:601`）→ StdMode 4 的 `ReadBook`
+    （`PlayObject.Base.cs:2171-2200`）与 case 4 尾段（`:632-654`）。
+    记录：即时帧（`INetChannel.AddGateBuffer`，**含 `+LNG`/`+WID` 原始串帧**的完整 payload hex）、
+    延时通知（`MsgQueue` 出队序 + priority）、pump 后的 SM 帧、状态（MagicList / MagicArr /
+    UseThrusting / UseHalfMoon / CharStatus / HitSpeed / ItemList / WAbil.Weight）、RNG 记录器计数。
+    只读：不连库、不写现网文件、不起服务。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

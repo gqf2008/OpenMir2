@@ -1,0 +1,544 @@
+//! **IT-17a**：`ReadBook`（StdMode 4 技能书）的宿主拦截。
+//!
+//! # oracle 锚（`src/M2Server/Player/PlayObject.Base.cs`）
+//!
+//! `ClientUseItems` 的 `case 4:`（`PlayObject.Operate.cs:632-654`）→ `ReadBook(stdItem)`
+//! （`PlayObject.Base.cs:2171-2200`）：
+//! 1. `SystemShare.WorldEngine.FindMagic(stdItem.Name)` —— **按物品名**查魔法表（`WorldServer.cs:1559-1571`，
+//!    忽略大小写、装表序首匹配）；
+//! 2. `!IsTrainingSkill(magic.MagicId)`（`PlayObject.Attack.cs:340-351`：`MagicList` 已有该 `MagIdx` ⇒ 不学）；
+//! 3. `magic.Job == 99 || magic.Job == (byte)Job`；
+//! 4. `Abil.Level >= magic.TrainLevel[0]`（**基础 `Abil.Level`**）。
+//!
+//! 全过 ⇒ `MagicList.Add(UserMagic{ MagIdx, **Key=0, Level=0, TranPoint=0** })` → `RecalcAbilitys()` →
+//! `SendAddMagic`（`MakeMessage(SM_ADDMAGIC,0,0,0,1)` + `EDCode(ClientMagic{Key,Level,CurTrain,Def})`）。
+//! 尾段（`Operate.cs:633-653`）：`Dispose/RemoveAt`；`MagicArr[SKILL_ERGUM(12)]!=null && !UseThrusting`
+//! ⇒ `ThrustingOnOff(true)`（`UseThrusting=true` + `SysMsg(ThrustingOn, Green)`）+ `SendSocket("+LNG")`；
+//! `SKILL_BANWOL(25)` 同型 `+WID`；`WeightChanged()`（RM_WEIGHTCHANGED）→ `SM_EAT_OK(635)`。
+//!
+//! `RecalcAbilitys` 的尾（`PlayObject.cs:~2874`）把 `CharStatus/HitSpeed` 经
+//! `RM_CHARSTATUSCHANGED` 入队；`MagicArr` 由 `MagicList` 填（`:3681-3684`）⇒ 尾段的
+//! `MagicArr[id] != null` 等价于「`MagicList` 含该 id」（本模块如此判定）。
+//!
+//! **17a 的范围**：`RecalcAbilitys` 的**技能被动**（`HitPoint/SpeedPoint/DC` 与 `WAbil` 重算）
+//! 未建模（IT-17b）。本模块按 oracle 的**同值**发 `RM_CHARSTATUSCHANGED`（`GetCharStatus()`
+//! 与当前 `HitSpeed`）——对**无被动技能**与 oracle 逐字节相同；有被动技能时 `17b` 才补齐。
+//!
+//! # 帧序（线上）
+//!
+//! 即时：`SM_ADDMAGIC(210)` → `+LNG`/`+WID`（**原始串帧**，`SendSocket(string)`）→ `SM_EAT_OK(635)`；
+//! 随后按队列优先级：`RM_WEIGHTCHANGED(10115→622)` → `RM_CHARSTATUSCHANGED(10139→657)` →
+//! `RM_SYSMESSAGE(11004→100)`。
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::ability::ItemCatalog;
+use crate::record::MagicRcd;
+use crate::{OnlineRegistry, SessionGround, SimToGate};
+
+/// `SKILL_ERGUM`（刺杀剑术，`MagicConst.cs:52`）。
+pub const SKILL_ERGUM: u16 = 12;
+/// `SKILL_BANWOL`（半月弯刀，`MagicConst.cs:104`）。
+pub const SKILL_BANWOL: u16 = 25;
+
+/// `PlayObject.MagicList` + `MagicArr` 的等价快照 + 战士技开关 + 魔法表/文案快照。
+///
+/// **写点**：`list` 只由两处写——① 登录 `session_ground_from_login`（`magicaudit::filter_for_logon`
+/// 对 `record.data.magic` 的过滤结果，与 oracle `GetHumData` 同口径）；② 本模块学成时追加一件。
+/// 持久化由 `build_save_record` 从本快照回写记录（`pad_for_save`）。
+/// `use_thrusting`/`use_half_moon` 对应 `PlayObject.cs:168-169`；`table` 是进程级 `M2Share.MagicList`
+/// 查表面的 `Arc` 快照（登录时取一次）；两个 sys 文案来自 `[String] ThrustingOn/HalfMoonOn`。
+#[derive(Clone, Default)]
+pub struct MagicState {
+    pub list: Vec<Option<MagicRcd>>,
+    pub use_thrusting: bool,
+    pub use_half_moon: bool,
+    pub table: Option<Arc<game_svr::magics::MagicTable>>,
+    pub sys_thrusting_on: String,
+    pub sys_half_moon_on: String,
+}
+
+impl std::fmt::Debug for MagicState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MagicState")
+            .field("list", &self.list)
+            .field("use_thrusting", &self.use_thrusting)
+            .field("use_half_moon", &self.use_half_moon)
+            .field("has_table", &self.table.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// 书籍（`StdMode 4`）的宿主拦截。返回 `true` = 已接管（调用方 `return`）；`false` = 未命中/四门之一
+/// 失败 ⇒ 交回 `use_item`（其 StdMode 4 无臂 ⇒ 落 `SM_EAT_FAIL(636)`，与 oracle 失败支同帧）。
+///
+/// **`boNODRUG` 不适用于书**（oracle 的 `EatItems` 只覆盖 StdMode 0..=3；`case 4` 直接 `ReadBook`）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn maybe_read_book(
+    world: &mut mir2_world_bevy::World,
+    sg: &mut SessionGround,
+    actor_id: i32,
+    make_index: i32,
+    socket: i32,
+    online: &OnlineRegistry,
+    gates: &HashMap<u8, tokio::sync::mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn ItemCatalog,
+    colors: &crate::MsgColors,
+    dead: bool,
+) -> bool {
+    // `ClientUseItems`：`if (BoCanUseItem) { if (!Death) { … } }`（书不受 `boNODRUG`）。
+    if dead {
+        return false;
+    }
+    let Some(pos) = sg
+        .state
+        .item_list
+        .iter()
+        .position(|it| it.make_index == make_index)
+    else {
+        return false;
+    };
+    let Some(tpl) = catalog.get(sg.state.item_list[pos].index) else {
+        return false;
+    };
+    if tpl.std_mode != 4 {
+        return false;
+    }
+    let Some(table) = sg.magic.table.as_deref() else {
+        // 未装配魔法表 ⇒ 无法判定「表里有没有」——按失败回落（不伪造）。
+        return false;
+    };
+    // ① `FindMagic(stdItem.Name)`：缺表项 ⇒ 失败（回落 use_item ⇒ 636）。
+    let Some(magic) = table.find_by_name(&tpl.name) else {
+        return false;
+    };
+    // ② 已学（`IsTrainingSkill`）。
+    if crate::magicaudit::is_training_skill(&sg.magic.list, magic.magic_id) {
+        return false;
+    }
+    // ③ 职业：`magic.Job == 99 || magic.Job == (byte)Job`。
+    if magic.job != 99 && magic.job != sg.equip.job {
+        return false;
+    }
+    // ④ 等级：基础 `Abil.Level >= TrainLevel[0]`。
+    if i32::from(sg.equip.abil.level) < i32::from(magic.train_level[0]) {
+        return false;
+    }
+
+    let gate_idx = online
+        .iter()
+        .find(|e| e.actor_id == actor_id)
+        .map_or(0, |e| e.gate_idx);
+    let tx = crate::route_to_gate(gates, gate_idx, socket, "读书回帧");
+
+    // `MagicList.Add(UserMagic{ Level=0, Key=0, TranPoint=0 })`；`MagicArr` 由它派生（见模块头）。
+    sg.magic.list.push(Some(MagicRcd {
+        mag_idx: magic.magic_id,
+        level: 0,
+        magic_key: 0,
+        tran_point: 0,
+    }));
+
+    // ① `SM_ADDMAGIC(210)`：`ReadBook` 的 `UserMagic.Level = 0`（**不是** `AddItemSkill` 的 1）。
+    if let Some(tx) = &tx {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: crate::smframe::sm_addmagic_with(0, magic),
+        });
+    }
+    // ② 战士技开关：只在学到 12/25 且当前关着时触发（`MagicArr[id]!=null && !Use*`）。
+    let mut sys_msg: Option<String> = None;
+    if magic.magic_id == SKILL_ERGUM && !sg.magic.use_thrusting {
+        sg.magic.use_thrusting = true;
+        if let Some(tx) = &tx {
+            let _ = tx.send(SimToGate::SendRaw {
+                socket,
+                payload: b"+LNG".to_vec(),
+            });
+        }
+        sys_msg = Some(sg.magic.sys_thrusting_on.clone());
+    }
+    if magic.magic_id == SKILL_BANWOL && !sg.magic.use_half_moon {
+        sg.magic.use_half_moon = true;
+        if let Some(tx) = &tx {
+            let _ = tx.send(SimToGate::SendRaw {
+                socket,
+                payload: b"+WID".to_vec(),
+            });
+        }
+        sys_msg = Some(sg.magic.sys_half_moon_on.clone());
+    }
+    // ③ `SM_EAT_OK(635)`（直发，先于队列消息）。
+    if let Some(tx) = &tx {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: crate::smframe::gm_data_body(
+                crate::smframe::command_header(0, crate::useitem::SM_EAT_OK, 0, 0, 0),
+                &[],
+            ),
+        });
+    }
+    // ④ 吃尾巴：移除本件 + `WeightChanged()`（`RM_WEIGHTCHANGED` ⇒ 622）。
+    sg.state.item_list.remove(pos);
+    sg.state.wabil.weight = crate::ground::recalc_bag_weight(catalog, &sg.state.item_list);
+    if let Some(tx) = &tx {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: crate::smframe::sm_weightchanged(
+                sg.state.wabil.weight,
+                sg.state.wabil.wear_weight,
+                sg.state.wabil.hand_weight,
+            ),
+        });
+    }
+    // ⑤ `RecalcAbilitys` 的 `RM_CHARSTATUSCHANGED`（657）：与本字段快照同值。
+    if let Some(tx) = &tx {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: crate::smframe_ext::sm_charstatuschanged(
+                actor_id,
+                world.get_char_status(actor_id),
+                sg.hit_speed,
+            ),
+        });
+    }
+    // ⑥ `ThrustingOnOff/HalfMoonOnOff` 的绿字（`RM_SYSMESSAGE` ⇒ 100）。
+    if let (Some(tx), Some(text)) = (&tx, sys_msg.as_deref()) {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: crate::smframe::sm_sysmessage(
+                actor_id,
+                u16::from(colors.green_f),
+                u16::from(colors.green_b),
+                &crate::enter::gbk(text),
+            ),
+        });
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ability::StdItemCatalog;
+    use crate::bag::BagItem;
+    use crate::handle_eat_cmd;
+    use crate::{online_set, MsgColors, OnlineEntry, SessionGround};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
+
+    fn fixture() -> Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/readbook_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("oracle 向量夹具缺失/不可读：{path}（{e}）—— 不许静默跳过"));
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    fn magic_from(v: &Value) -> mir2_data::MagicInfo {
+        let tl = v["train_level"].as_array().unwrap();
+        let mt = v["max_train"].as_array().unwrap();
+        let mut train_level = [0u8; 4];
+        let mut max_train = [0i32; 4];
+        for i in 0..4 {
+            train_level[i] = tl.get(i).map_or(0, |x| x.as_u64().unwrap() as u8);
+            max_train[i] = mt.get(i).map_or(0, |x| x.as_i64().unwrap() as i32);
+        }
+        mir2_data::MagicInfo {
+            magic_id: v["magic_id"].as_u64().unwrap() as u16,
+            magic_name: v["name"].as_str().unwrap().to_string(),
+            effect_type: v["effect_type"].as_u64().unwrap() as u8,
+            effect: v["effect"].as_u64().unwrap() as u8,
+            spell: v["spell"].as_u64().unwrap() as u16,
+            power: v["power"].as_u64().unwrap() as u16,
+            max_power: v["max_power"].as_u64().unwrap() as u16,
+            job: v["job"].as_u64().unwrap() as u8,
+            train_level,
+            max_train,
+            train_lv: v["train_lv"].as_u64().unwrap() as u8,
+            delay_time: v["delay_time"].as_i64().unwrap() as i32,
+            def_spell: v["def_spell"].as_u64().unwrap() as u8,
+            def_power: v["def_power"].as_u64().unwrap() as u8,
+            def_max_power: v["def_max_power"].as_u64().unwrap() as u8,
+            desc: v["desc"].as_str().unwrap_or("").to_string(),
+        }
+    }
+
+    /// 一帧的可比形态：`Cmd` = 12B 命令头 + 尾（`recog` 按夹具身份归一），`Raw` = 原始串帧 payload。
+    #[derive(Debug, PartialEq, Eq)]
+    enum Frame {
+        Cmd(i32, u16, u16, u16, u16, String),
+        Raw(String),
+    }
+
+    fn frame_from_bytes(b: &[u8], remap: Option<(i32, i32)>) -> Frame {
+        if b.len() < 12 {
+            return Frame::Raw(hex(b));
+        }
+        let raw_recog = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let recog = match remap {
+            Some((from, to)) if raw_recog == from => to,
+            _ => raw_recog,
+        };
+        Frame::Cmd(
+            recog,
+            u16::from_le_bytes([b[4], b[5]]),
+            u16::from_le_bytes([b[6], b[7]]),
+            u16::from_le_bytes([b[8], b[9]]),
+            u16::from_le_bytes([b[10], b[11]]),
+            hex(&b[12..]),
+        )
+    }
+
+    fn frame_from_hex(s: &str, remap: Option<(i32, i32)>) -> Frame {
+        let bytes: Vec<u8> = (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("hex"))
+            .collect();
+        frame_from_bytes(&bytes, remap)
+    }
+
+    /// **IT-17a 宿主级对拍**：驱动 `handle_eat_cmd`，比
+    /// ① 线上帧**逐字节**（`payload` hex：SM 帧的 12B 头 + 尾；`+LNG`/`+WID` 原始串帧同面）
+    /// ② `MagicList` 终态（mag_idx/level/key/tran_point，保序）③ 两战士技开关 ④ 背包/Weight
+    /// ⑤ 失败四门（各自只落 636、物品保留、MagicList 不变）。
+    ///
+    /// **17a 边界**：`RecalcAbilitys` 的技能被动（HitPoint/SpeedPoint/DC/WAbil）未建模（IT-17b）；
+    /// 本批选无被动技能，657 的 `CharStatus/HitSpeed` 与 oracle 同值（探针记 0/0）。
+    ///
+    /// 红检（四门+两尾）：删「已学」判 ⇒ 已学例变成功；`job` 判恒真 ⇒ 职业不符例成功；
+    /// 删 MagicList append ⇒ 成功例的帧/状态红；210 传 `sm_addmagic`（Level=1）⇒ 尾字节红。
+    #[test]
+    fn it17a_read_book_host_parity() {
+        let doc = fixture();
+        let magics: Vec<mir2_data::MagicInfo> = doc["magic_table"]
+            .as_array()
+            .expect("magic_table")
+            .iter()
+            .map(magic_from)
+            .collect();
+        let magic_table = game_svr::magics::MagicTable::new(magics);
+        let mut catalog = StdItemCatalog::new();
+        for t in doc["templates"].as_array().expect("templates") {
+            catalog.insert(
+                t["index"].as_u64().unwrap() as u16,
+                mir2_data::StdItem {
+                    name: t["name"].as_str().unwrap().to_string(),
+                    std_mode: t["std_mode"].as_u64().unwrap() as u8,
+                    shape: t["shape"].as_u64().unwrap() as u8,
+                    weight: t["weight"].as_u64().unwrap() as u8,
+                    dura_max: 20,
+                    ..Default::default()
+                },
+            );
+        }
+
+        let cases = doc["cases"].as_array().expect("cases").clone();
+        assert!(cases.len() >= 7, "至少 7 例（成功×2 + 四门 + 双失败）");
+        for c in &cases {
+            let ctx = &c["ctx"];
+            let expect = &c["expect"];
+            let index = ctx["index"].as_u64().unwrap() as u16;
+            let mut world = mir2_world_bevy::World::new(32, 32);
+            world.open_session("hero");
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let actor_id = world.enter_map("hero", e, 0).expect("进图");
+
+            let mut sg = crate::tests::test_session_ground(actor_id);
+            sg.equip.job = ctx["job"].as_u64().unwrap() as u8;
+            sg.equip.abil.level = ctx["level"].as_u64().unwrap() as u8;
+            sg.state.item_list = vec![BagItem {
+                make_index: 1,
+                index,
+                dura: 10,
+                dura_max: 20,
+                desc: [0; 14],
+            }];
+            // `SM_WEIGHTCHANGED(622)` 的三字段前值（`WeightChanged` 只改 Weight）。
+            sg.state.wabil.weight = ctx["wabil_before"]["weight"].as_u64().unwrap() as u16;
+            sg.state.wabil.wear_weight = ctx["wabil_before"]["wear_weight"].as_u64().unwrap() as u8;
+            sg.state.wabil.hand_weight = ctx["wabil_before"]["hand_weight"].as_u64().unwrap() as u8;
+            sg.magic = MagicState {
+                list: ctx["known"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| {
+                        Some(MagicRcd {
+                            mag_idx: v.as_u64().unwrap() as u16,
+                            level: 0,
+                            magic_key: 0,
+                            tran_point: 0,
+                        })
+                    })
+                    .collect(),
+                use_thrusting: false,
+                use_half_moon: false,
+                table: Some(std::sync::Arc::new(magic_table.clone())),
+                sys_thrusting_on: crate::strings::DEFAULT_THRUSTING_ON.to_string(),
+                sys_half_moon_on: crate::strings::DEFAULT_HALF_MOON_ON.to_string(),
+            };
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".into(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id,
+                },
+            );
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            let colors = MsgColors {
+                red_f: 255,
+                red_b: 56,
+                hear_f: 0,
+                hear_b: 255,
+                whisper_f: 0,
+                whisper_b: 0,
+                green_f: 0xDB,
+                green_b: 0xFF,
+                blue_f: 0xFF,
+                blue_b: 0xFC,
+            };
+            let unbind = game_svr::unbindlist::UnbindList::default();
+            let mut item_number = 0;
+            handle_eat_cmd(
+                1,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &gates,
+                &catalog,
+                &mut world,
+                &colors,
+                90,
+                None,
+                &unbind,
+                &mut item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                None,
+                &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
+            );
+
+            // ① 帧：golden immediate ++ pumped 的 `payload` 逐字节（`recog` 按夹具身份归一；
+            //    原始串帧按 payload 字节比）。`+LNG`/`+WID` 是 `Raw`，不解析成命令头。
+            let golden_actor = ctx["actor_id"].as_i64().unwrap() as i32;
+            let remap = Some((golden_actor, actor_id));
+            let mut want: Vec<Frame> = Vec::new();
+            for f in expect["immediate_frames"].as_array().unwrap() {
+                want.push(frame_from_hex(f["payload"].as_str().unwrap(), remap));
+            }
+            for f in expect["pumped"].as_array().unwrap() {
+                want.push(frame_from_hex(f["payload"].as_str().unwrap(), remap));
+            }
+            let mut got: Vec<Frame> = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => got.push(frame_from_bytes(&body, None)),
+                    SimToGate::SendRaw { payload, .. } => {
+                        got.push(frame_from_bytes(&payload, None))
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(got, want, "{}: 帧逐字节（含原始串帧）", c["name"]);
+
+            // ⑤ 0 抽由**记录器**自证（ReadBook 路径无 `Random`）。
+            assert_eq!(
+                expect["rng_draw_count"].as_i64().unwrap(),
+                0,
+                "{}: ReadBook 路径记录器抽数必须为 0",
+                c["name"]
+            );
+            assert!(
+                expect["rng"].as_array().unwrap().is_empty(),
+                "{}: 抽数为 0 ⇒ 逐次账本为空",
+                c["name"]
+            );
+
+            // ② MagicList 终态。
+            let sg = &sessions["hero"];
+            let got_list: Vec<(i64, i64, i64, i64)> = sg
+                .magic
+                .list
+                .iter()
+                .flatten()
+                .map(|m| {
+                    (
+                        i64::from(m.mag_idx),
+                        i64::from(m.level),
+                        i64::from(m.magic_key),
+                        i64::from(m.tran_point),
+                    )
+                })
+                .collect();
+            let want_list: Vec<(i64, i64, i64, i64)> = expect["magic_list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| {
+                    (
+                        m["mag_idx"].as_i64().unwrap(),
+                        m["level"].as_i64().unwrap(),
+                        m["key"].as_i64().unwrap(),
+                        m["train_point"].as_i64().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(got_list, want_list, "{}: MagicList 终态", c["name"]);
+
+            // ③ 战士技开关。
+            assert_eq!(
+                sg.magic.use_thrusting,
+                expect["use_thrusting"].as_bool().unwrap(),
+                "{}: UseThrusting",
+                c["name"]
+            );
+            assert_eq!(
+                sg.magic.use_half_moon,
+                expect["use_half_moon"].as_bool().unwrap(),
+                "{}: UseHalfMoon",
+                c["name"]
+            );
+
+            // ④ 背包/Weight（失败支保留原件）。
+            let golden_items = expect["item_list"].as_array().unwrap();
+            assert_eq!(
+                sg.state.item_list.len(),
+                golden_items.len(),
+                "{}: 背包件数",
+                c["name"]
+            );
+            assert_eq!(
+                i64::from(sg.state.wabil.weight),
+                expect["weight"].as_i64().unwrap(),
+                "{}: Weight",
+                c["name"]
+            );
+        }
+    }
+}

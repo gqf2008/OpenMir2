@@ -477,8 +477,17 @@ pub fn sm_delmagic(mag_idx: u16) -> Vec<u8> {
 /// （`PlayObject.cs:3919-3926`）。
 #[must_use]
 pub fn sm_addmagic(def: &mir2_data::MagicInfo) -> Vec<u8> {
+    // **`AddItemSkill` 口径（`PlayObject.cs:3919-3926`）：Level=1**。该包装不得改语义，
+    // 见 `sm_addmagic_wrapper_keeps_additemskill_level` 回归。
+    sm_addmagic_with(1, def)
+}
+
+/// [`sm_addmagic`] 的**参数化**版本（`ReadBook` 的 `UserMagic.Level = 0`，`PlayObject.Base.cs:2186-2192`；
+/// `AddItemSkill` 是 `Level = 1`）。`Key`/`CurTrain` 两栏 oracle 在这两条路径上都是 0。
+#[must_use]
+pub fn sm_addmagic_with(level: u8, def: &mir2_data::MagicInfo) -> Vec<u8> {
     let header = command_header(0, messages::SM_ADDMAGIC, 0, 0, 1);
-    let tail = edcode::encode(&crate::itemwire::encode_client_magic(0, 1, 0, def));
+    let tail = edcode::encode(&crate::itemwire::encode_client_magic(0, level, 0, def));
     gm_data_body(header, &tail)
 }
 
@@ -4292,6 +4301,35 @@ mod tests {
         let client_magic = crate::itemwire::encode_client_magic(0, 1, 0, &def);
         assert_eq!(client_magic.len(), 84, "1+1+2+4 + MagicInfo 76");
         assert_eq!(body[12..], mir2_protocol::edcode::encode(&client_magic));
+    }
+
+    /// **IT-17a 回归**：`sm_addmagic` 包装仍是 `AddItemSkill` 口径（`Level=1`）——参数化不得
+    /// 顺手改掉既有路径；`sm_addmagic_with(0, …)` 才产出 `ReadBook` 的 `Level=0`。
+    ///
+    /// 红检：把包装改成 `sm_addmagic_with(0, …)` ⇒ 第一条必红（`encode_client_magic(0,1,…)` 不等）。
+    #[test]
+    fn sm_addmagic_wrapper_keeps_additemskill_level() {
+        let def = mir2_data::MagicInfo {
+            magic_id: 1,
+            magic_name: "火球术".into(),
+            ..Default::default()
+        };
+        let wrapper = sm_addmagic(&def);
+        assert_eq!(
+            wrapper[12..],
+            mir2_protocol::edcode::encode(&crate::itemwire::encode_client_magic(0, 1, 0, &def)),
+            "既有 AddItemSkill 路径必须仍是 Level=1"
+        );
+        let readbook = sm_addmagic_with(0, &def);
+        assert_eq!(
+            readbook[12..],
+            mir2_protocol::edcode::encode(&crate::itemwire::encode_client_magic(0, 0, 0, &def)),
+            "ReadBook 路径 Level=0"
+        );
+        assert_ne!(
+            wrapper, readbook,
+            "两条路径的尾必须可区分（Level 字节不同）"
+        );
     }
 
     /// **Lane B**：入图帧序 —— 658 → `magic_journal`（212/210）→ 队列出队（51 …）。

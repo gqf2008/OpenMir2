@@ -65,6 +65,7 @@ mod magicaudit;
 mod magicwire;
 mod mapwire;
 mod notice;
+mod readbook;
 mod record;
 mod seed;
 #[cfg(test)]
@@ -10581,6 +10582,14 @@ fn handle_eat_cmd(
         .get(actor_id)
         .and_then(|a| registry.and_then(|r| r.flag_of(a.map_id)))
         .is_some_and(|f| f.bo_nodrug);
+    // **IT-17a 的宿主钩子**（`ReadBook`，StdMode 4）：主体在 [`readbook::maybe_read_book`]；
+    // 四门之一失败/非书 ⇒ 返回 false，交回 `use_item`（StdMode 4 无臂 ⇒ 636，与 oracle 失败支同帧）。
+    // 书**不受 `boNODRUG`**（oracle `case 4` 直接 `ReadBook`），故只传 `dead`。
+    if readbook::maybe_read_book(
+        world, sg, actor_id, recog, socket, online, gates, catalog, colors, dead,
+    ) {
+        return;
+    }
     let mut state = game_svr::useitem::UseItemActorState {
         wabil: sg.state.wabil.clone(),
         inc_health: sg.recovery.inc_health,
@@ -11501,6 +11510,11 @@ fn build_save_record(
     registry: Option<&mir2_envir::MapRegistry>,
 ) -> record::PlayerRecord {
     let mut rec = saved.record.clone();
+    // **IT-17a**：`PlayObject.MagicList`（会话快照）回写记录（oracle `MakeSaveRcd` 写 MagicList）。
+    // 只在魔法态已装配（`table` 有）时写——未装配的测试夹具保持记录原值，不隐性清空。
+    if sg.magic.table.is_some() {
+        rec.data.magic = Some(crate::magicaudit::pad_for_save(sg.magic.list.clone()));
+    }
     // oracle `MakeSaveRcd`（`:1243`）写的是 `playObject.MapName`（**当前**逻辑图名，不是进图时的）。
     // 换图/传送接线前 `enter_map` == 当前图；这里优先用会话的 `map_id` 反查注册表
     //（`MapRegistry::name_of`），拿不到注册表/会话时回落到 `enter_map`。
@@ -21285,6 +21299,10 @@ struct SessionGround {
     user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`CM_EAT` 的 `StdMode 1`：`+= DuraMax/10`，上限 5000）。
     hunger_status: i32,
+    /// `PlayObject.MagicList`（过滤后）+ `MagicArr` 派生 + 两战士技开关 + 魔法表/文案快照
+    /// （`readbook::MagicState`；IT-17a）。写点：登录 [`session_ground_from_login`] + 读书学成
+    /// （`readbook::maybe_read_book`）；持久化由 [`build_save_record`] 回写。
+    magic: readbook::MagicState,
     /// `PlayObject.DecHpTick`（`PlayObject.cs:783`；**ctor 不赋值** ⇒ 0）——P25 的 `DECHP` 门基准。
     dec_hp_tick: i64,
     /// `PlayObject.IncHpTick`（`PlayObject.cs:784`；ctor 不赋值 ⇒ 0）——P25 的 `INCHP` 门基准。
@@ -25937,6 +25955,8 @@ struct SessionGroundInputs<'a> {
     actor_id: i32,
     /// `[Setup] ServerIndex`（`EnterConfig.server_index`）。
     server_index: u8,
+    /// `PlayObject.MagicList` 等魔法态快照（调用点装配；见 `readbook::MagicState`）。
+    magic: readbook::MagicState,
     /// `String.conf` 的 `CanotPickUpItem`（GBK 原文，`SM_SYSMESSAGE`）。
     canot_pick_up_item: &'a str,
     /// 构造时刻（oracle 各 ctor 的 `GetTickCount()`）。
@@ -26064,6 +26084,7 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
         user_unlock_durg: false,
         hunger_status: d.hunger_status,
+        magic: i.magic,
         // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
         //（进图后第一次 Run 立即过门）。
         dec_hp_tick: 0,
@@ -26451,6 +26472,9 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **IT-17a**：`M2Share.MagicList` 查表面的**进程级** `Arc` 快照（每个会话只 clone Arc，
+    // 不复制整表）；登录装配 `readbook::MagicState` 时用。
+    let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
     // **P2-3a**：把「片 0 拥有哪些图」交给 World（全局下标保序 + 1×1 stub + 单点 fail-closed）。
     // `MIR2_SHARDS=1` 时布局全拥有 ⇒ 所有权检查恒过、零行为变化。
     world.set_map_ownership(&shard_runtime.layout().host_ownership());
@@ -29879,6 +29903,24 @@ fn sim_loop(
                                                             soft_version_date,
                                                             actor_id: id,
                                                             server_index: enter_cfg.server_index,
+                                                            magic: readbook::MagicState {
+                                                                list: magicaudit::filter_for_logon(
+                                                                    d.magic.clone().unwrap_or_default(),
+                                                                    &magic_table_arc,
+                                                                ),
+                                                                table: Some(std::sync::Arc::clone(
+                                                                    &magic_table_arc,
+                                                                )),
+                                                                sys_thrusting_on: enter_cfg
+                                                                    .string_conf
+                                                                    .thrusting_on()
+                                                                    .to_string(),
+                                                                sys_half_moon_on: enter_cfg
+                                                                    .string_conf
+                                                                    .half_moon_on()
+                                                                    .to_string(),
+                                                                ..Default::default()
+                                                            },
                                                             canot_pick_up_item: enter_cfg
                                                                 .string_conf
                                                                 .canot_pick_up_item(),
@@ -40720,6 +40762,7 @@ mod tests {
     /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
+            magic: readbook::MagicState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: Vec::new(),
@@ -43585,6 +43628,7 @@ break
         use_items[game_svr::ability::SLOT_NECKLACE] = Some(necklace);
         use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
         let sg = SessionGround {
+            magic: readbook::MagicState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: vec![weapon],
@@ -46526,6 +46570,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -46731,6 +46776,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -46924,6 +46970,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -47079,6 +47126,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -47268,6 +47316,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -54350,6 +54399,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -55507,6 +55557,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -56772,6 +56823,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: list,
@@ -61241,6 +61293,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61430,6 +61483,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61572,6 +61626,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                magic: readbook::MagicState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -87749,6 +87804,7 @@ GMEXECUTE f
             soft_version_date: 0,
             actor_id,
             server_index: rec.data.server_index,
+            magic: readbook::MagicState::default(),
             canot_pick_up_item: "",
             now: 1_000,
         })
@@ -87785,6 +87841,7 @@ GMEXECUTE f
             soft_version_date: 0,
             actor_id: 1,
             server_index: data.server_index,
+            magic: readbook::MagicState::default(),
             canot_pick_up_item: "",
             now: 1_000,
         })
