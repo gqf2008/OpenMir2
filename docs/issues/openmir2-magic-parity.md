@@ -1208,6 +1208,37 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   **2055 passed / 0 failed**；`fmt` rc=0；`clippy --workspace --all-targets -D warnings` rc=0。
 - **MG-38 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **18/65**。
 
+### 34. 40（`SKILL_UNAMYOUNSUL`）接线 + 夹具契约扩展（P3-B3 状态族，2026-11-20）
+
+- **oracle 分派**：`src/M2Server/Magic/MagicManager.cs` 的 `case MagicConst.SKILL_UNAMYOUNSUL`：
+  `IsProperFriend` → `Random(7) - (UserMagicLevel + 1) < 0` 门 → 对目标三态计时器
+  `StatusTimeArr[DECHEALTH/DAMAGEARMOR/STONE]` **逐项 `!= 0 ⇒ 置 1`**（不是清 0），并 `boTrain`。
+- **为什么必须扩夹具**：旧夹具 target 三态全 0 ⇒ 门就算过也"什么都不做"，帧面只剩 `17/638`
+  ⇒ 按旧模板升格等于只证空转路径。**断言只到 `DoSpell` 时刻**——真正"解毒"生效在 `Run` 的
+  计时器处理，那是另一条跑 tick 的案子，不在本支范围。
+- **契约扩展（schema v2，向后兼容）**：
+  - 输入 `MagicSpec.PoisonStates[3]`（**走到状态分支的用例必须显式写**，不靠缺省 0）；
+    golden `Fixture.status_time_arr = {dechealth,damagearmor,stone}`（仅该字段被显式给出时出现，
+    既有件**零变化**——已重跑 17 件装置输出核对：除既有墙钟 `delivery` 外无任何差异）。
+  - 输出 case `StatusTimeArr = {dechealth,damagearmor,stone}`（术后值）。
+  - 台账同形两键 `StatusTimeArrBefore/After`；比较器三处逐值比（golden Fixture ↔ 台账 Before、
+    golden case ↔ 台账 After）。
+- **四支分支矩阵**（非零初值 5/6/7 互不相同 ⇒ "置 1"前后可辨）：
+  | case | 术前 | 门 | 术后（oracle 侧独立推导） |
+  |---|---|---|---|
+  | `gate_open_all`（seed 14，首抽 0） | `[5,6,7]` | 开 | `[1,1,1]` |
+  | `gate_closed_all`（seed 11，首抽 3） | `[5,6,7]` | 关 | `[5,6,7]` |
+  | `gate_open_zero`（seed 14） | `[0,0,0]` | 开 | `[0,0,0]` |
+  | `gate_open_mixed`（seed 14） | `[5,0,7]` | 开 | `[1,0,1]` |
+  术后值在**装置与驱动两侧各自**由"门结果 + 术前值"独立推导并断言（不拿实现输出自证）；
+  混合支只有"仅非零项置 1"的实现才能通过。
+- **负对照**：① 把门当恒开（`if false && …`）⇒ `gate_closed_all` 红（before `[5,6,7]`、after
+  `[1,1,1]`）；② 改成无条件三项全置 1 ⇒ `gate_open_mixed` 红（期望 `[1,0,1]`）、`gate_open_zero`
+  红（期望 `[0,0,0]`）；两处变异均 cp 快照还原、`sha256` 相等后基线复跑绿。
+- **证据**：run_id `magic40-final-20261120T101556`——四支驱动 rc=0、比较器
+  `real_rust_ledger_unamyounsul` ok；`cargo test -p game-svr --lib` 2055 passed/0 failed；
+  fmt rc=0；`clippy --workspace --all-targets -D warnings` rc=0。
+- **MG-46 升格**：`status=verified`、`basis=semantic` ⇒ magic 域 **19/65**（边界见上：只证 DoSpell 时刻）。
 ### 35. 已升格条目的对象类型覆盖口径（2026-11-20，普查）
 
 **方法（可复跑）**：在 `src/M2Server/Magic/MagicManager.cs` 里同时统计

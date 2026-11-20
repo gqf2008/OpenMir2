@@ -66803,6 +66803,16 @@ SendRefMsgRange=15
                 csg.state.wabil.max_hp = cmax;
             }
         }
+        // **三态计时器输入**（状态族，卡 §34）：golden `Fixture.status_time_arr` 存在时按值写入。
+        // 与 `anti_magic/target_hp` 同一接缝（魔号专属覆盖之前），纯状态赋值、不入队。
+        let status_input = golden_status_time_arr(stem, label);
+        if let Some(v) = status_input {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.buff.status_time[mir2_world_bevy::entity::POISON_DECHEALTH] = v[0];
+            e.buff.status_time[mir2_world_bevy::entity::POISON_DAMAGEARMOR] = v[1];
+            e.buff.status_time[mir2_world_bevy::entity::POISON_STONE] = v[2];
+        }
+        let status_before = status_time_of(&rig.world, target);
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
         // ---- 段①：生产入口施法 ----
@@ -67351,7 +67361,28 @@ SendRefMsgRange=15
         })
         .collect::<Vec<_>>();
 
-        let ledger = serde_json::json!([{
+        // **三态术后值由"门结果 + 术前值"独立推出**（与装置侧同一条规则；不拿实现输出自证）：
+        // 门开 ⇒ 非零项置 1、零项不动；门关 ⇒ 一律不动。门骰 = 施法段首抽。
+        let status_after = status_time_of(&rig.world, target);
+        if status_input.is_some() {
+            let gate_open = cast_rng
+                .first()
+                .map(|(_, r, _)| *r - (i64::from(user_magic_level) + 1) < 0)
+                .unwrap_or(false);
+            let mut want = status_before;
+            for i in 0..3 {
+                want[i] = if gate_open && status_before[i] != 0 {
+                    1
+                } else {
+                    status_before[i]
+                };
+            }
+            assert_eq!(
+                status_after, want,
+                "[{stem}/{label}] status_time_arr 术后值不可由门结果推导：before={status_before:?} after={status_after:?} gate_open={gate_open}（期望 {want:?}）"
+            );
+        }
+        let mut ledger = serde_json::json!([{
             "Label": label,
             "Seed": seed,
             "SpellReturn": true,
@@ -67366,6 +67397,18 @@ SendRefMsgRange=15
             "NotDue": [],
             "CasterMp": caster_mp,
         }]);
+        if status_input.is_some() {
+            // 与 golden 同形（对象三键），比较器可逐值比。
+            let as_obj = |v: [u16; 3]| {
+                serde_json::json!({
+                    "dechealth": v[0],
+                    "damagearmor": v[1],
+                    "stone": v[2],
+                })
+            };
+            ledger[0]["StatusTimeArrBefore"] = as_obj(status_before);
+            ledger[0]["StatusTimeArrAfter"] = as_obj(status_after);
+        }
 
         let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
@@ -68393,6 +68436,33 @@ SendRefMsgRange=15
             .count()
     }
 
+    /// 金标准 `Fixture.status_time_arr`（`{dechealth,damagearmor,stone}`）——不存在返回 `None`。
+    fn golden_status_time_arr(stem: &str, label: &str) -> Option<[u16; 3]> {
+        let fx = golden_case_for(stem, label)["Fixture"]["status_time_arr"].clone();
+        if fx.is_null() {
+            return None;
+        }
+        let g = |k: &str| -> u16 {
+            u16::try_from(
+                fx[k]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("status_time_arr.{k} 必须是整数")),
+            )
+            .expect("status_time_arr 越界")
+        };
+        Some([g("dechealth"), g("damagearmor"), g("stone")])
+    }
+
+    /// 三态计时器当前值（实体侧；与 oracle `StatusTimeArr[DECHEALTH/DAMAGEARMOR/STONE]` 同序）。
+    fn status_time_of(world: &mir2_world_bevy::World, actor: i32) -> [u16; 3] {
+        let e = world.entities.get(actor).expect("actor 必须存在");
+        [
+            e.status_time[mir2_world_bevy::entity::POISON_DECHEALTH],
+            e.status_time[mir2_world_bevy::entity::POISON_DAMAGEARMOR],
+            e.status_time[mir2_world_bevy::entity::POISON_STONE],
+        ]
+    }
+
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
     fn golden_case_for(stem: &str, label: &str) -> serde_json::Value {
         let file = match stem {
@@ -68859,6 +68929,47 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightflower_parity_s13() {
         fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
+    }
+
+    /// **`40`（`SKILL_UNAMYOUNSUL`）**：四支分支矩阵（门开+全非零 / 门关+全非零 / 门开+全零 /
+    /// 门开+混合）。三态计时器输入取 golden `Fixture.status_time_arr`，术后值在驱动内按
+    /// "门结果 + 术前值"独立推导并断言（与装置侧同一规则）。
+    fn unamyounsul_assert(label: &str, base: i32) {
+        fireball_parity_drive(
+            "unamyounsul",
+            40,
+            15,
+            1,
+            label,
+            golden_seed("unamyounsul", label),
+            base,
+        );
+        fireball_case_assert("unamyounsul", label);
+        b1_golden_drain_assert("unamyounsul.json", label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn unamyounsul_parity_gate_open_all() {
+        unamyounsul_assert("gate_open_all", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn unamyounsul_parity_gate_closed_all() {
+        unamyounsul_assert("gate_closed_all", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn unamyounsul_parity_gate_open_zero() {
+        unamyounsul_assert("gate_open_zero", 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn unamyounsul_parity_gate_open_mixed() {
+        unamyounsul_assert("gate_open_mixed", 4000);
     }
 
     /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。
