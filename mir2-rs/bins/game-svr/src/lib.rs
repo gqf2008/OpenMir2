@@ -72186,8 +72186,10 @@ SendRefMsgRange=15
         // ——本卡起 640 走 `SendSelfDelayMsg(...,1000)`（`MagicManager.cs:666`），不再属施法批。
         // 帧的 `due_ms_rel` = 交付所在步（施法批=0；与 C# `StepDrainMs=100` 的 golden 同口径）。
         let wait_ms = golden_wait_ms("healing", label);
-        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
-            cast_frames.into_iter().map(|(s, b)| (s, b, 0_i64)).collect();
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
+            .into_iter()
+            .map(|(s, b)| (s, b, 0_i64))
+            .collect();
         let mut elapsed: u64 = 0;
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
@@ -74316,7 +74318,11 @@ SendRefMsgRange=15
             "[{stem}/{label}] 术后 HP 须等于 golden TargetHp（窗口内不回血）"
         );
         // 640 移到 +1000ms 后 `full`（无 640、无延迟）只需 1 趟；heal/both = 2。
-        b1_golden_drain_assert("bighealing.json", label, if label == "full" { 1 } else { 2 });
+        b1_golden_drain_assert(
+            "bighealing.json",
+            label,
+            if label == "full" { 1 } else { 2 },
+        );
         let cv = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&cv, who, field, ident);
         // caster 帧序：heal/both `[638,640]`、full `[638]`。
