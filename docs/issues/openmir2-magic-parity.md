@@ -1342,5 +1342,22 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
 但 `Random(SpeedPoint)` 均匀分布 ⇒ "必 miss"不天然确定，需按 seed 扫描把 miss 落在目标怪身上。
 ⇒ 装置要补 `MagicSpec.CasterHitPoint` 与 `MonsterSpec.SpeedPoint` 两个输入，并为每支选 seed（`seed_reason` 记"第 i 只怪抽值 x ≥/< HitPoint"）。
 
+**四支定稿（甲方案，opc-19 2026-11-20 确认）**
+| case | caster `HitPoint` | 怪物（**顺序显式固定**） | 证明什么 |
+|---|---|---|---|
+| `all_miss_hp0` | 0 | M1(S=0)、M2(S=1) | 门恒真 ⇒ 全场 miss（不需要扫 seed） |
+| `hit_ac_split` | 5 | M1(S=0,AC低)、M2(S=0,AC高) | 必中（`SpeedPoint=0` ⇒ `Random(0)=0 < HitPoint` 恒真）+ 护甲衰减 |
+| `miss_by_draw` | 5 | M1(S=0) 命中、M2(S=10) 经 seed 选到 `Random(10)>=5` | 门按抽值分支（区别于恒真组） |
+| `dead_excluded` | 5 | M1(S=0, `Death=true`) | 走 `:950` 早退 |
+
+**两条附加约束**
+1. `hit_ac_split` 的两只怪**除 AC 外参数完全相同**（`SpeedPoint/Level/max_hp/Death` 全同），参数并排放进
+   golden，让读者一眼看出"只差 AC"；否则 HP 减量差无法归因。
+2. **`Random(0)` 也消耗抽样状态**（IT-12 跨语言对拍已确认）⇒ `M1(S=0)` 那次抽占序列位置；
+   `hit_ac_split` / `miss_by_draw` 要**按顺序记每只怪的抽值（含 `Random(0)` 那次）**，
+   `seed_reason` 能解释"M1 抽了 0、M2 的抽值是序列里第几个"；**怪物顺序改动 ⇒ 重扫 seed**（已入 golden）。
+
+**(乙) 的否决理由（opc-19 原话）**：不是"时间不划算"，而是"唯一能升 verified 的那支，恰恰不能少分支"。
+
 **scope 依据**：39 可升 `verified`，依据是"**伤害由施法者侧同步 `StruckDamage` 计算**"（`:967`），
 不是"HP 变了"——HP 只是该计算的结果观测。
