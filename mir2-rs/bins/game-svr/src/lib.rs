@@ -96464,6 +96464,17 @@ fn ",
             gates,
             mut rx0,
         ) = spell7b_fixture(22, 12, 10);
+        // rig 的 MagicInfo 缺省 Spell=0 ⇒ `GetSpellPoint`=0 ⇒ 不扣 MP、不发 53；
+        // 这里显式给 22 一个消耗，才走到 MP 包装层的 `HealthSpellChanged`（53）。
+        let _ = magic_table;
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 22,
+            effect: 3,
+            effect_type: 4,
+            spell: 30,
+            train_lv: 3,
+            ..Default::default()
+        }]);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
         let mut sg = spell_session_ground(caster);
@@ -96522,29 +96533,22 @@ fn ",
             mut world,
             caster,
             target,
-            mut online,
+            online,
             mut saves,
             magic_table,
             mut displays,
             gates,
             mut rx0,
         ) = spell7b_fixture(42, 12, 10);
-        // 两个偏离点击点的合法目标 ⇒ 产生 716 icons。
+        // 两个偏离点击点的**怪**：群雷用 `GetMapBaseObjects` 扫**地图格子**
+        // ⇒ 必须真正落图（`open_session` + `enter_map`），否则 icons=0；
+        // 默认 HAM_PEACE 下怪物是 proper 目标（玩家不是）。
         for (i, (x, y)) in [(11, 11), (13, 11)].into_iter().enumerate() {
-            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("x{i}"), x, y);
-            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-            let id = world.add_entity(e);
-            online_set(
-                &mut online,
-                OnlineEntry {
-                    account: format!("ux{i}"),
-                    chr_name: format!("x{i}"),
-                    session_id: 10 + i as i32,
-                    gate_idx: 0,
-                    socket: 921 + i as i32,
-                    actor_id: id,
-                },
-            );
+            let name = format!("x{i}");
+            world.open_session(&name);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.clone(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+            let _ = world.enter_map(&name, e, 0);
         }
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
@@ -96654,21 +96658,108 @@ fn ",
         let (
             mut world,
             caster,
-            _target,
-            online,
+            target,
+            mut online,
             mut saves,
-            magic_table,
+            _rig_table,
             mut displays,
             gates,
             mut rx0,
         ) = spell7b_fixture(15, 12, 12);
+        // 657（14/15 buff 支）的 **sender 是 buff 目标**（`ev.actor_id`）。要检出"命中"，
+        // 必须先让**目标**自己发过一条 `SendRefMsg`（这里让目标施放 31 护盾 ⇒ 目标侧
+        // `RM_SPELL(17)` 刷新目标自己的缓存），再让施法者施放 15；此时目标发出的 657
+        // 才走"命中"（`|Δ|<11`），边界只收目标自己的 17。
+        let magic_table = magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 15,
+                effect: 3,
+                effect_type: 4,
+                spell: 10,
+                train_lv: 3,
+                ..Default::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 31,
+                effect: 3,
+                effect_type: 4,
+                spell: 10,
+                train_lv: 3,
+                ..Default::default()
+            },
+        ]);
+        // 目标侧 |Δ|=11/12/+13 的边界观察者（相对目标 (12,12)）。
+        for (i, (x, y)) in [(23, 12), (24, 12), (25, 12)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("b{i}"), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("ub{i}"),
+                    chr_name: format!("b{i}"),
+                    session_id: 30 + i as i32,
+                    gate_idx: 0,
+                    socket: 933 + i as i32,
+                    actor_id: id,
+                },
+            );
+        }
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
         ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
         ground_sessions.get_mut("caster").unwrap().state.wabil.mp = 100;
+        let mut tgt_sg = spell_session_ground(target);
+        tgt_sg.state.wabil.mp = 100;
+        tgt_sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("target".into(), tgt_sg);
         let catalog = a5_amulet_catalog();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let status = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        // 目标也要有"会 31"的存档记录（守卫 `NoMagic` 否则拒绝施放）。
+        let mut trec = stage6_record();
+        trec.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 31,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "target".into(),
+            SavedHuman {
+                account: "ut".into(),
+                record: trec,
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        // 预热：目标自己施放 31 ⇒ 目标侧 17 刷新目标缓存。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            31,
+            0,
+            0,
+            "target",
+            912,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let _ = spell7b_counts(&mut rx0); // 预热帧丢弃（含目标 17 与可能的目标 657）
+                                          // 施法者施放 15（带护身符）⇒ buff 目标收到的 657 由**目标**发出 ⇒ 命中缓存。
         handle_spell_cmd(
             game_svr::feature::make_long(12, 12),
             15,
@@ -96693,10 +96784,9 @@ fn ",
             2,
         );
         let per = spell7b_counts(&mut rx0);
-        let status = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
-        assert_eq!(per.get(&(903, status)), None, "|Δ|=11：657 被缓存挡");
-        assert_eq!(per.get(&(904, status)), None, "|Δ|=12：657 被缓存挡");
-        assert_eq!(per.get(&(905, status)), None, "+13：零帧");
+        assert_eq!(per.get(&(933, status)), None, "目标侧 |Δ|=11：657 被缓存挡");
+        assert_eq!(per.get(&(934, status)), None, "目标侧 |Δ|=12：657 被缓存挡");
+        assert_eq!(per.get(&(935, status)), None, "目标侧 +13：零帧");
     }
 
     /// **7b 无极真气（36）护身符失败支的 639**：无护身符 ⇒ amulet_ok=false ⇒ 恰一条 639
@@ -96823,6 +96913,15 @@ fn ",
             gates,
             mut rx0,
         ) = spell7b_fixture(22, 12, 10);
+        let _ = magic_table;
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 22,
+            effect: 3,
+            effect_type: 4,
+            spell: 30,
+            train_lv: 3,
+            ..Default::default()
+        }]);
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
         let mut sg = spell_session_ground(caster);
@@ -96890,10 +96989,19 @@ fn ",
             gates,
             mut rx0,
         ) = spell7b_fixture(32, 12, 10);
-        // 点击点放一只怪：非 PLAY ⇒ invalid_cast；proper-target 判定通过。
-        let mut mon_e = mir2_world_bevy::EntitySpawn::new(0, "undead", 12, 10);
-        mon_e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
-        let mon = world.add_entity(mon_e);
+        // `CretInNearXy` 命中要求目标**已落图**（`add_entity` 的实体不在格表里）⇒ 新造一个
+        // 落图玩家作为圣言术目标；`invalid_cast` 只在目标为 PLAY 时成立，而默认 HAM_PEACE
+        // 打不到玩家 ⇒ 把施法者切到 HAM_ALL 让其 proper。
+        world.entities.flags_mut(caster).unwrap().attack_mode =
+            mir2_world_bevy::combat::ATTACK_MODE_HAM_ALL;
+        world.open_session("t32");
+        let mut tgt_e = mir2_world_bevy::EntitySpawn::new(0, "t32", 12, 10);
+        tgt_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let t32 = world.enter_map("t32", tgt_e, 0).expect("目标进图");
+        // `cast_turn_undead_spell` 在 `invalid_cast` 之前先判 `SuperMan || LifeAttrib != LA_UNDEAD`
+        // ⇒ 目标必须是"不死属性"的玩家。
+        world.entities.get_mut(t32).unwrap().progression.life_attrib =
+            mir2_world_bevy::magic_effect::LA_UNDEAD;
         let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
         let mut sg = spell_session_ground(caster);
@@ -96906,7 +97014,7 @@ fn ",
         handle_spell_cmd(
             game_svr::feature::make_long(12, 10),
             32,
-            u16::try_from(mon).unwrap_or(0),
+            u16::try_from(t32).unwrap_or(0),
             0,
             "caster",
             911,
