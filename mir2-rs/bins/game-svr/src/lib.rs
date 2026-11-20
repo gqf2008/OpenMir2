@@ -14813,6 +14813,33 @@ fn handle_spell_cmd_with_magic(
                                     }
                                     mir2_world_bevy::world::BuffApplyKind::MagicShield => continue,
                                 };
+                                // **镜像缺口 P1（`card/recalc-mirror-gap`）**：oracle
+                                // `DefenceUp`/`MagDefenceUp` 先 `RecalcAbilitys()`，657 在
+                                // `StatusChanged()`/`SendUpdateMsg` 时读 `this.HitSpeed` = **重算后**值
+                                // ⇒ recalc 必须**先于**出帧；且 `HitSpeed = AddAbil.HitSpeed` 要落实体
+                                // （`card/657-series-spellbuf` 起 657 的 `Series` 以实体为源）。
+                                // 入 buf 的次序仍是 100 → 657×2 → 52（优先级 52=67 < 657=155 < 100=252），
+                                // 出队结果不变，变的只有 `Series` 的取值时点。
+                                if let Some(entry) =
+                                    online.iter().find(|e| e.actor_id == ev.actor_id)
+                                {
+                                    let name = entry.chr_name.clone();
+                                    if let Some(sg) = ground_sessions.get_mut(&name) {
+                                        let extra =
+                                            world.entities.get(sg.actor_id).map(|e| e.extra_abil);
+                                        let _ = recalc_session_ability(
+                                            sg,
+                                            catalog,
+                                            extra.as_ref(),
+                                            None,
+                                            Some(&mut world.rng),
+                                        );
+                                        let hit_speed = sg.hit_speed;
+                                        if let Some(e) = world.entities.get_mut(ev.actor_id) {
+                                            e.vitals.hit_speed = hit_speed;
+                                        }
+                                    }
+                                }
                                 let body = smframe::sm_sysmessage(
                                     ev.actor_id,
                                     219,
@@ -14847,20 +14874,12 @@ fn handle_spell_cmd_with_magic(
                                     (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
                                     body,
                                 );
+                                // 52 留在 657 之后入 buf（次序与改造前一致）；数值取**重算后**的 `wabil`。
                                 if let Some(entry) =
                                     online.iter().find(|e| e.actor_id == ev.actor_id)
                                 {
                                     let name = entry.chr_name.clone();
-                                    if let Some(sg) = ground_sessions.get_mut(&name) {
-                                        let extra =
-                                            world.entities.get(sg.actor_id).map(|e| e.extra_abil);
-                                        let _ = recalc_session_ability(
-                                            sg,
-                                            catalog,
-                                            extra.as_ref(),
-                                            None,
-                                            Some(&mut world.rng),
-                                        );
+                                    if let Some(sg) = ground_sessions.get(&name) {
                                         let body = smframe::sm_ability(
                                             sg.state.gold,
                                             sg.equip.job,
@@ -72101,6 +72120,42 @@ SendRefMsgRange=15
         assert!(
             target_series.iter().all(|v| *v == 0),
             "目标 657 的 Series 必须全 0（其自身实体 0）；实得 {target_series:?}"
+        );
+    }
+
+    /// **镜像缺口 P1 的判别牙（`card/recalc-mirror-gap`）**：14/15 支的 657 必须在
+    /// `recalc_session_ability` **之后**出帧，且 `HitSpeed = AddAbil.HitSpeed` 已落实体。
+    ///
+    /// 布置：目标实体 `hit_speed = 7`（**区分态**：重算会把它写成 0），施放 14（`SKILL_HANGMAJINBUB`
+    /// ⇒ `MagDefenceUp`）命中目标。断言：目标自己的 657（广播副本 + 自更新副本）`Series` **全为 0**。
+    /// 判别：把 recalc 移回 657 之后、或删掉实体镜像 ⇒ 实得 7 ⇒ 红。
+    /// **7 是人造区分值，不代表线上存在这种状态**（真实形态是"重算前的值 ≠ 重算后的值"）。
+    #[test]
+    fn hangmajinbub_657_series_is_post_recalc() {
+        use mir2_protocol::frame::CommandMessage;
+        let mut rig = fireball_rig(1000, 14, 15, 1);
+        rig.world.enable_buff_tick();
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
+        let target = fireball_actor(&rig, "target");
+        if let Some(e) = rig.world.entities.get_mut(target) {
+            e.vitals.hit_speed = 7;
+        }
+        rig.cast(14, (101, 100), target);
+        let (frames, _raws) = rig.drain();
+        let target_series: Vec<u16> = frames
+            .iter()
+            .filter(|(s, b)| {
+                *s == 912 && sf_ident(b) == mir2_protocol::messages::SM_CHARSTATUSCHANGED
+            })
+            .map(|(_, b)| CommandMessage::from_bytes(b).unwrap().series)
+            .collect();
+        assert!(
+            !target_series.is_empty(),
+            "目标必须收到 657（广播副本 + 自更新副本）；实得空集"
+        );
+        assert!(
+            target_series.iter().all(|v| *v == 0),
+            "657 的 Series 必须取**重算后**的 HitSpeed（0），不是重算前的实体值 7；实得 {target_series:?}"
         );
     }
 
