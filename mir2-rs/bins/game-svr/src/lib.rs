@@ -14992,6 +14992,8 @@ fn handle_spell_cmd_with_magic(
                 let outcome = game_svr::slave::cast_slave_spell(
                     world, &input, &mut train, reg, table, displays,
                 );
+                // 卡 17：只读观测（对应 golden `regen_calls`），不参与行为。
+                world.slave_cast_regen_calls.push(outcome.regen_calls);
                 // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
                 if let Some(rcd) = saves
                     .get_mut(chr_name)
@@ -68373,6 +68375,83 @@ SendRefMsgRange=15
             );
         }
 
+        /// 召唤（17/30/41）施法接缝（卡 17）：与 [`Self::cast`] 同口径，但用 `monsters` 构造
+        /// `MonsterTable`（Rust 怪物表）。golden 的 `stub_monster_race`/`stub_monster_hp`/new_slaves
+        /// 的 name/level 由驱动传入（`race=100` WhiteSkeleton ⇒ `apply_slave_level_abilitys` 抬
+        /// `max_hp` ⇒ 半补触发）。
+        fn cast_slave(
+            &mut self,
+            magic_id: u16,
+            click: (i32, i32),
+            target_actor_id: i32,
+            monsters: Vec<mir2_data::MonsterInfo>,
+        ) {
+            let mut catalog = game_svr::ability::StdItemCatalog::new();
+            catalog.insert(
+                1,
+                mir2_data::StdItem {
+                    name: "护身符".into(),
+                    std_mode: 25,
+                    shape: 5,
+                    ..mir2_data::StdItem::default()
+                },
+            );
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(monsters);
+            // 召唤 spawner 需 MapRegistry 能 `name_of(map_id)`（`MonsterTableSpawner::spawn`）；
+            // 写一张临时 0.map（200×200 全 0）供 `from_entries` 载入 name↔id（可行走性仍用 World 图）。
+            let base = std::env::temp_dir().join(format!("magic17-map-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(base.join("Map"));
+            let (mw, mh) = (200_i16, 200_i16);
+            let mut map_bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+            map_bytes[0..2].copy_from_slice(&mw.to_le_bytes());
+            map_bytes[2..4].copy_from_slice(&mh.to_le_bytes());
+            map_bytes.resize(
+                mir2_envir::HEADER_BYTES
+                    + usize::try_from(mw).unwrap()
+                        * usize::try_from(mh).unwrap()
+                        * mir2_envir::CELL_BYTES,
+                0,
+            );
+            let _ = std::fs::write(base.join("Map").join("0.map"), &map_bytes);
+            let registry = mir2_envir::MapRegistry::from_entries(
+                mir2_envir::MapLoader::new(base.clone(), "Map", "Envir"),
+                vec![mir2_envir::MapInfoEntry {
+                    map_name: "map".to_string(),
+                    map_file_name: "0".to_string(),
+                    desc: String::new(),
+                    server_index: 0,
+                    flag: mir2_envir::MapInfoFlag::default(),
+                }],
+            );
+            handle_spell_cmd(
+                game_svr::feature::make_long(
+                    u16::try_from(click.0).unwrap_or(0),
+                    u16::try_from(click.1).unwrap_or(0),
+                ),
+                magic_id,
+                u16::try_from(target_actor_id).unwrap_or(0),
+                0,
+                "caster",
+                911,
+                &self.online,
+                &mut self.world,
+                &mut self.saves,
+                &mut self.ground_sessions,
+                &catalog,
+                &self.magic_table,
+                &pet_cfg,
+                8,
+                Some(&registry),
+                &table,
+                &mut self.displays,
+                &self.gates,
+                self.fire_boom_rage,
+                self.snow_wind_range,
+                self.elec_blizzard_range,
+            );
+        }
+
         /// 取空 gate 通道：`(SM_* 帧体, `SendRaw` 短包/`+GD` ack)`。
         fn drain(&mut self) -> (Vec<SfFrame>, Vec<SfFrame>) {
             let mut frames = Vec::new();
@@ -68386,6 +68465,255 @@ SendRefMsgRange=15
             }
             (frames, raws)
         }
+    }
+
+    #[test]
+    #[ignore = "烟测：验证 cast_slave 接缝 + spawn 计数（race 100 WhiteSkeleton）"]
+    fn skeleton_cast_smoke() {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            0,
+            100,
+            100,
+            17,
+            &[(17, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        let before = rig.world.slave_count(rig.caster);
+        let mon = mir2_data::MonsterInfo {
+            name: "变异骷髅".into(),
+            race: 100,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        rig.cast_slave(17, (101, 100), target, vec![mon]);
+        let (frames, _) = rig.drain();
+        let after = rig.world.slave_count(rig.caster);
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(999);
+        let sid = rig
+            .world
+            .entities
+            .get(rig.caster)
+            .and_then(|c| c.slave_list.last().copied());
+        let (shp, smax, slevel) = sid
+            .and_then(|id| rig.world.entities.get(id))
+            .map_or((0, 0, 0), |e| (e.hp, e.max_hp, e.level));
+        eprintln!("SMOKE before={before} after={after} regen={regen} frames={} slave_hp={shp}/{smax} level={slevel}", frames.len());
+        assert_eq!(regen, 1, "MonsterTableSpawner.spawn 应被调用 1 次");
+        assert_eq!(after, before + 1, "应新增 1 个奴隶");
+    }
+
+    /// 某支召唤夹具（卡 17）：与 golden `skeleton.json` 的 fixture_spec 同几何
+    /// （caster 100,100 / target 101,100 / obs_in 105,100 / obs_out 140,100；socket 911..914）。
+    fn skeleton_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            17,
+            &[(17, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+        }
+        rig
+    }
+
+    /// 17 `SKILL_SKELLETON` 真实台账驱动（两例 summon_ok / cap_hit）。
+    ///
+    /// **对拍范围（卡 17 SCOPE）**：验「**给定怪物之后**的 adopt 行为」——`regen_calls`、
+    /// `slave_count_before/after`、`new_slaves{name,level,hp,max_hp,master_is_caster}`、造怪前帧
+    /// 17/638/642。**不比** `Rng`（离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、
+    /// `640`/`10123-p3`（训练尾，随造怪抽数不同）。
+    fn skeleton_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "skeleton";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let mut rig = skeleton_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+
+        // cap_hit：golden `pre_slave_count=1` ⇒ 预置 1 个已存在奴隶，令 `MakeSlave` 的
+        // `SlaveList.Count < nMaxMob` 门失败（regen 0 / 不新增实体 / slave_list 不变）。
+        // 直接造实体、不走施法 ⇒ 不污染帧与 RNG。预置 id = id_base+50，比对时排除。
+        let preslave_id = id_base + 50;
+        if label == "cap_hit" {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "preslave".to_string(), 100, 100);
+            e.id = preslave_id;
+            e.race = 100;
+            let sid = rig.world.add_entity(e);
+            {
+                let m = rig.world.entities.get_mut(sid).unwrap();
+                m.slave.master = Some(caster);
+                m.slave.is_slave = true;
+            }
+            rig.world
+                .entities
+                .get_mut(caster)
+                .unwrap()
+                .slave
+                .slave_list
+                .push(sid);
+        }
+
+        let entities_before = rig.world.entities.len();
+        let slave_before = rig.world.slave_count(caster);
+
+        // 怪物表按 golden stub：race=100（WhiteSkeleton 真身）、HP=stub_wabil_hp=17；
+        // MaxHP 由 `apply_slave_level_abilitys` 抬到 24 ⇒ 半补触发 20。
+        let mon = mir2_data::MonsterInfo {
+            name: "变异骷髅".into(),
+            race: 100,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        rig.cast_slave(17, (101, 100), target, vec![mon]);
+        let (frames, _raws) = rig.drain();
+
+        let entities_after = rig.world.entities.len();
+        let slave_after = rig.world.slave_count(caster);
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(usize::MAX);
+
+        // 新增奴隶（排除 cap_hit 预置的 id）。
+        let slave_ids: Vec<i32> = rig
+            .world
+            .entities
+            .get(caster)
+            .map(|c| c.slave_list.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| *id != preslave_id)
+            .collect();
+        let new_slaves: Vec<serde_json::Value> = slave_ids
+            .into_iter()
+            .filter_map(|id| rig.world.entities.get(id))
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.entity().name,
+                    "level": e.level,
+                    "hp": e.hp,
+                    "max_hp": e.max_hp,
+                    "master_is_caster": e.master == Some(caster),
+                })
+            })
+            .collect();
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": [],
+                "Sent": fireball_sent(&frames, socket),
+            }));
+        }
+
+        let skel = serde_json::json!({
+            "stub_wabil_hp": 17,
+            "stub_abil_max_hp": 17,
+            "stub_monster_race": 100,
+            "pre_slave_count": slave_before,
+            "slave_count_before": slave_before,
+            "slave_count_after": slave_after,
+            "regen_calls": regen,
+            "new_slaves": new_slaves,
+        });
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Skeleton": skel,
+            "world_entities_before": entities_before,
+            "world_entities_after": entities_after,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[skeleton {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
+            frames.len(),
+            ledger[0]["Skeleton"]["new_slaves"].as_array().map_or(0, |a| a.len()),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skeleton_parity_summon_ok() {
+        skeleton_parity_drive("summon_ok", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skeleton_parity_cap_hit() {
+        skeleton_parity_drive("cap_hit", 2000);
     }
 
     // ======================================================================
