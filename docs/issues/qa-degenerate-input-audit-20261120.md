@@ -111,3 +111,63 @@ python -c "import json; d=json.load(open('golden/magic/fireball-5.json',encoding
    缺字段**报错**，不得默认 15。
 3. 实跑：改消费端前跑一次同类比较器（预期红，证明比较面真在看伤害值）；改完再跑（预期绿）。
    若改完仍红，按「实现与 oracle 的真实差异」上报。
+
+## 8. 世代切换（657 `series`）与剩余 4 条红的产品侧定位（2026-11-20，opc-19 裁定）
+
+### 8.1 两代 golden 不可混比
+
+- **0 世代**（master，`3886e297b`）：golden 无 `hit_speed` 键，657 `series` 恒 0。
+- **7 世代**（本分支，承接 `b3844fd22`）：`MagicSpec.HitSpeed` 旋钮 + 6 份 golden 重出，
+  657 `series` 出现 7/0 的逐接收者分布。
+- 拿 7 世代的装置/Rust 配 0 世代的 golden（或反之）会产出**假差异**——不是任何一侧的缺陷。
+
+### 8.2 装置侧（本卡完成）
+
+- `fireball_parity_drive` 的 `hit_speed` 注入从"只写会话"改为**会话 + 实体**
+  （`sg.hit_speed` + `vitals.hit_speed`；`EntityRef.hit_speed` 是后者的视图）。
+  写实体那段是 `apply_ability_to_entity` 在装置侧的对应；只写会话会让观察者副本恒 0。
+- `cloak_assert` / `big_cloak_assert` 的两处 657 断言原本写死 `(0,0,0)`（期望取自被测实现
+  自身输出、注释谎称"与 golden 同源"），已改为**从 golden 读对应接收者的三元组再比**。
+- 结果：`cloak(18)` / `bigcloak(19)` 比较器 rc=0（三人 657 series 均为 7）；
+  牙：去掉"写实体"那半 ⇒ cloak 必红（9 条，golden=7 rust=0），恢复后回绿。
+
+### 8.3 剩余 4 条红 = **产品侧**缺陷（夹具/装置无责）
+
+观测（同一 run_id，`MIR2_CLIENT_ABILITY_LAYOUT` 未导出；括号内为 golden 期望）：
+
+| 条目 | stem | caster | target | obs_in | 比较器 |
+|---|---|---|---|---|---|
+| MG-28 | hangmajinbub(14) | **0 (7)** | 0 (0) | **0 (7)** | rc=101 |
+| MG-29 | dejiwonho(15) | **0 (7)** | 0 (0) | **0 (7)** | rc=101 |
+| MG-43 | shield(31) | **0 (7)** | **0 (7)** | **0 (7)** | rc=101 |
+| MG-59 | uenhancer(36) | 0 (0) | **0 (7)** | **0 (7)** | rc=101 |
+
+**定位（符号锚；`bins/game-svr/**` 属卫生门 HIGH_CHURN，禁写行号锚）**：
+
+- 宿主 buff-apply 段（`take_buff_applies` 的循环）用
+  `sm_charstatuschanged(ev.actor_id, ev.char_status, 0)` —— series **写死 0**，且**一条 body
+  广播给所有接收者**。这是 MG-28/29/43 的直接原因。
+- oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的 `case Messages.RM_CHARSTATUSCHANGED`）：
+  `SendDefMessage(SM_CHARSTATUSCHANGED, ActorId, LoWord(nParam1), HiWord(nParam1), this.HitSpeed)`
+  ⇒ **657 的 series = 处理这条 RM 的每个接收者自己的 `this.HitSpeed`**（不是发送者的、也不是常数）。
+- 因此 golden 的形状完全自洽：shield 三人应 7；14/15 的 caster/obs_in 保持 7、**target 因自身
+  `RecalcAbilitys` 的 `HitSpeed = AddAbil.HitSpeed`（`RecalcHitSpeed` 无被动 ⇒ 0）被重算回 0**；
+  36 的 caster 被重算成 0、旁观者保持 7。
+- `uenhancer` 的 657 走 ability 同步路径：`recalc_session_ability` 先把 `sg.hit_speed` 置 0，
+  再按单 body 发 —— 与上一条同根：**要按接收者取 `HitSpeed` 逐人生成 body**。
+
+**影响面**：MG-28 / MG-29 / MG-43 / MG-59 的 657 `series` 仍不可判绿；MG-32 / MG-33
+（cloak / bigcloak）在装置侧修好后已绿。
+
+### 8.4 合并顺序依赖（必须写明）
+
+世代替换不是孤立改动：**先由产品侧卡修好"buff-apply 路径 657 series 逐接收者取值"，
+再合本卡（7 世代）**；否则 master 上 MG-28/29/43/59 四条比较器会立刻红。
+本卡分支冻结在 `20376762e`，不合并。
+
+### 8.5 `recalc_hit_speed` 的准确表述（原样）
+
+> `world-bevy` 的 `recalc_hit_speed` 与 wg 本体无生产调用点（只剩 re-export 与测试）；
+> 宿主持有另一份等价实现 `skill_ability::recalc_hit_speed_skills`。
+
+**不要**写成"死代码"——这会导致下一任误删。
