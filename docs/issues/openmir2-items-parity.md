@@ -199,6 +199,14 @@
   `*.json eol=lf` 归一为 LF。**语义改动仅**：+模板 `2017`、+用例 `eat_ok_stdmode31_unbind_success`、
   各例新增 `added_items`（旧例为 `[]`）、新增 `unbind` 表与 `drain` 字段；其余为行尾归一。
 
+## 8.1 夹具源锚 `oracle_source_sha256` 的计算口径（C1，2026-11-20）
+
+- 夹具里声明的 `oracle_source_sha256` **按 git blob（LF）** 计算：逐文件 `utf8(rel+"
+") + blob 字节 + "
+"` 后 sha256（与探针 `SourceAnchorSha256` 的算法逐字节一致，只是取 blob 而非工作树）。
+- **为什么必须写明**：Windows 上 `core.autocrlf=true` 时工作树是 CRLF、blob 是 LF ⇒ 同一 commit 会算出两个值（工作树 `c8a18e59…` vs blob `51a289e2…`）。夹具声明的是 **blob 值**。
+- **自证工具（已登记进工具门）**：`python -I -B tools/parity/oracle_source_sha.py --fixture mir2-rs/tests/parity/m3/fixtures/eat_vectors.json` ⇒ `MATCH` / rc=0；`--selftest` 覆盖顺序敏感、工作树 CRLF 不敏感、夹具 round-trip。
+
 ## 9. items harness 状态扩展（`opc-07` 2026-11-20 路线1）+ 交付表
 
 > **显著事实（第 2 次「实现归类」修正）**：`use_item` 是**纯决策函数**——只产出 `immediate_frames`/`notices`/
@@ -712,3 +720,20 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
   | T4 去点3 抽 | `} else if i32::from(d3) < cfg.point3 {` | 同上 | `oil_point2_miss_point3_hit: 消耗抽数必须与 oracle 相同（script=[0, 0, 1]）` | 相等 | 绿 |
   | 泵序对调 | `RM_ABILITY`/`RM_SUBABILITY` 两条 push 互换 | 同上 | **不红**（线序由堆决定，这正是要证的） | 相等 | 绿 |
 - **过程留痕（教训）**：变异还原用 `shutil.copy2` 会**保留 mtime** ⇒ cargo 不重编 ⇒ 首轮全量 `2083 passed / 4 failed` 是**陈旧二进制的假红**；`touch` 源码后复跑 `2087 passed / 0 failed / 61 ignored`。后续变异脚本还原后必须 `touch` 或 `cargo clean -p game-svr`。**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
+
+### 9.13 条目补记（A4：卡面此前无小节的 5 条）+ B3 单侧缺口清单
+
+> 2026-11-20 清点（`a2`）：下列条目在卡面 grep=0（无小节），此处各补一段「能站住」的说明。
+> 来源均为清单 `docs/issues/parity-gap-items.json` 的 `behavior`/`anchor`/`evidence` 与夹具实况。
+
+- **IT-02 解锁药（Shape2）**：`UserUnLockDurg = true`，**无即时帧**；夹具 `eat_ok_shape2_unlock` 覆盖状态位与背包 -1（比较器含 `user_unlock_durg`）。
+- **IT-04 入池（Shape default）**：`IncHealth += AC` / `IncSpell += MAC`（`ushort` 回绕）；两例 `eat_ok_shape0_inc_pool`（AC=15/MAC=7）、`eat_ok_shape0_inc_zero`（两侧 0）。
+- **IT-05 食物（StdMode1）**：`HungerStatus += DuraMax/10`，上限 5000；跨档触发 `RefMyStatus → RecalcAbilitys`（尾段登记 T-17，`useitem.rs` 头部未做清单）。三例覆盖不跨档 / 跨档 / 夹取。
+- **IT-06 StdMode2**：无任何效果、只吃掉；一例 `eat_ok_stdmode2_noop`（635 + 背包 -1）。
+- **IT-19 解包（StdMode31 / AniCount!=0）**：脚本 `@StdModeFunc{AniCount}` 派发（`PlayObject.Operate.cs:668`）；两例覆盖 FunctionNPC 在场/缺失；脚本副作用在 `lib.rs` 的 `@StdModeFunc*` 接缝，本条目只判「吃/不吃」。
+
+**B3 单侧缺口（待补用例，按 `a2` 清单；本次只登记、不改夹具——`eat-probe` 正被 IT-16 签署占用）**：
+- **IT-01（Shape1 clamp）**：两例都是「两侧同时到顶 / 同时不顶」，**只 HP 顶而 MP 不顶（及反向）未覆盖**。
+- **IT-03（Shape3 百分比）**：单例，同上**单侧截断/不截断**未覆盖。
+- **IT-04（default 入池）**：两例是「AC>0 且 MAC>0」与「两侧 0」，**`if(AC>0)`/`if(MAC>0)` 的单侧分支未覆盖**。
+> 补法：每条各加 1–2 例（HP 顶/MP 不顶、AC>0/MAC=0 及反向），重生成 `eat_vectors.json` 后逐例对拍；**须在 IT-16 签署结束、`eat-probe` 解冻后进行**，并同步 `counting_moment`。
