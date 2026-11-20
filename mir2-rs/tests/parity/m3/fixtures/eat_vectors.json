@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "63d2f37c6ce563974df7ff407b30a97e61e0e337a5d0353ce708d23bc040a4a4",
+  "oracle_assembly_sha256": "a5459bd6587a1a14dfe5894cdde218f7ab773413068bf9caf5507c212972a006",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -225,7 +225,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -367,7 +370,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -509,7 +515,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -651,7 +660,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -784,7 +796,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -917,7 +932,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -1050,7 +1068,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -1281,7 +1302,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -1468,7 +1492,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 99,
@@ -1614,7 +1641,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -1760,7 +1790,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -1906,7 +1939,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2062,7 +2098,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2208,7 +2247,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2341,7 +2383,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2474,7 +2519,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2625,7 +2673,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2758,7 +2809,10 @@
         "no_drug": true,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -2914,7 +2968,10 @@
         "no_drug": true,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -3070,7 +3127,10 @@
         "no_drug": false,
         "function_npc_present": true,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -3203,7 +3263,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -3349,7 +3412,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -5299,7 +5365,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -5423,7 +5492,7 @@
         ],
         "added_items": [
           {
-            "make_index": 1108928359,
+            "make_index": 1124040178,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5445,7 +5514,7 @@
             ]
           },
           {
-            "make_index": 1108928360,
+            "make_index": 1124040179,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5467,7 +5536,7 @@
             ]
           },
           {
-            "make_index": 1108928361,
+            "make_index": 1124040180,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5489,7 +5558,7 @@
             ]
           },
           {
-            "make_index": 1108928362,
+            "make_index": 1124040181,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5511,7 +5580,7 @@
             ]
           },
           {
-            "make_index": 1108928379,
+            "make_index": 1124040182,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5533,7 +5602,7 @@
             ]
           },
           {
-            "make_index": 1108928380,
+            "make_index": 1124040183,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5592,7 +5661,7 @@
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1108928359,
+            "make_index": 1124040178,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5614,7 +5683,7 @@
             ]
           },
           {
-            "make_index": 1108928360,
+            "make_index": 1124040179,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5636,7 +5705,7 @@
             ]
           },
           {
-            "make_index": 1108928361,
+            "make_index": 1124040180,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5658,7 +5727,7 @@
             ]
           },
           {
-            "make_index": 1108928362,
+            "make_index": 1124040181,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5680,7 +5749,7 @@
             ]
           },
           {
-            "make_index": 1108928379,
+            "make_index": 1124040182,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5702,7 +5771,7 @@
             ]
           },
           {
-            "make_index": 1108928380,
+            "make_index": 1124040183,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5740,7 +5809,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,
@@ -5882,7 +5954,10 @@
         "no_drug": false,
         "function_npc_present": false,
         "red_msg_fcolor": 255,
-        "red_msg_bcolor": 56
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
       },
       "request": {
         "make_index": 1,

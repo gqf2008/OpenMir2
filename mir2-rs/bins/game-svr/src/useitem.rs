@@ -113,6 +113,8 @@ pub const SM_EAT_FAIL: u16 = 636;
 pub const RM_MENU_OK: i32 = 10309;
 /// `RM_SYSMESSAGE`（`src/OpenMir2/Messages.cs:646`）。
 pub const RM_SYSMESSAGE: i32 = 11004;
+/// `RM_DURACHANGE`（`Messages.cs` 10125；修复油 `RepairWeapon` 的 `SendMsg(RM_DURACHANGE,1,Dura,DuraMax,0)`）。
+pub const RM_DURACHANGE: i32 = 10125;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
 pub const RM_HEALTHSPELLCHANGED: i32 = 10052;
 /// `RM_WEIGHTCHANGED`（`src/OpenMir2/Messages.cs:579`）。
@@ -202,6 +204,12 @@ pub struct UseItemContext<'a> {
     pub red_msg_fcolor: u16,
     /// `Config.RedMsgBColor`（禁药 `SysMsg(Red)` 的背景色）。
     pub red_msg_bcolor: u16,
+    /// `Config.GreenMsgFColor`（修复油 `SysMsg(Green)` 前景色，IT-14）。
+    pub green_msg_fcolor: u16,
+    /// `Config.GreenMsgBColor`（修复油 `SysMsg(Green)` 背景色，IT-14）。
+    pub green_msg_bcolor: u16,
+    /// `Config.RepairItemDecDura`（修复油耐久上限衰减除数，IT-14；普通修复 `DuraMax -= missing/dec`）。
+    pub repair_item_dec_dura: i32,
     /// `RefMyStatus()` 里 `RecalcAbilitys()` 的观测输入（`PlayObject.cs:2008`）。StdMode 1 跨档才用到；
     /// `None` 时**不**复算 `WAbil`（只发 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）——见模块「未做清单」T-17。
     pub recalc: Option<RecalcInputs<'a>>,
@@ -347,6 +355,7 @@ pub fn use_item(
                     } else {
                         match tpl.std_mode {
                             0 => {
+                                let mut shape_eats = true;
                                 match tpl.shape {
                                     1 => {
                                         // 固定量：IncHealthSpell(AC, MAC)
@@ -378,6 +387,36 @@ pub fn use_item(
                                                 .push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
                                         }
                                     }
+                                    9 => {
+                                        // 修复油 `RepairWeapon()`（`PlayObject.cs:1561`）：修当前武器耐久。
+                                        // 失败（无武器/已满/nDura<=0）⇒ 不吃（shape_eats 保持 false）。
+                                        shape_eats = false;
+                                        if let Some(w) = state.extra.weapon.as_mut() {
+                                            if w.index > 0 && w.dura_max > w.dura {
+                                                let dec = ctx.repair_item_dec_dura.max(1) as u16;
+                                                w.dura_max -= (w.dura_max - w.dura) / dec;
+                                                let n = (w.dura_max - w.dura).min(5000);
+                                                if n > 0 {
+                                                    w.dura += n;
+                                                    notices.push(QueuedNotice {
+                                                        ident: RM_DURACHANGE,
+                                                        w_param: 1,
+                                                        n_param1: i32::from(w.dura),
+                                                        n_param2: i32::from(w.dura_max),
+                                                        n_param3: 0,
+                                                    });
+                                                    notices.push(QueuedNotice {
+                                                        ident: RM_SYSMESSAGE,
+                                                        w_param: 0,
+                                                        n_param1: i32::from(ctx.green_msg_fcolor),
+                                                        n_param2: i32::from(ctx.green_msg_bcolor),
+                                                        n_param3: 0,
+                                                    });
+                                                    shape_eats = true;
+                                                }
+                                            }
+                                        }
+                                    }
                                     _ => {
                                         // default：AC/MAC 各自 `> 0` 才叠加到 IncHealth/IncSpell（ushort 回绕）
                                         if tpl.ac > 0 {
@@ -389,7 +428,7 @@ pub fn use_item(
                                         }
                                     }
                                 }
-                                eaten = true;
+                                eaten = shape_eats;
                             }
                             // StdMode 1（`PlayObject.Base.cs:2085-2092`）：食物。
                             //   nOldStatus = GetMyStatus();
@@ -928,6 +967,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1100,6 +1142,9 @@ mod tests {
                 unbind: &unbind,
                 red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
                 red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
+                green_msg_fcolor: u16v(&c["green_msg_fcolor"]),
+                green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
+                repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
@@ -1393,6 +1438,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1439,6 +1487,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1492,6 +1543,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1526,6 +1580,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -1574,6 +1631,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
             red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
+            green_msg_fcolor: u16v(&c["green_msg_fcolor"]),
+            green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
+            repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -1635,6 +1695,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1712,6 +1775,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1799,6 +1865,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1863,6 +1932,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1952,6 +2024,9 @@ mod tests {
             unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            green_msg_fcolor: 0,
+            green_msg_bcolor: 0,
+            repair_item_dec_dura: 90,
             recalc: None,
         };
         let pack = BagItem {

@@ -1696,6 +1696,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 shard_runtime,
                 registry,
                 EnterConfig {
+                    repair_item_dec_dura: cfg.repair_item_dec_dura,
                     home_start_points: home_fallback.start_points.clone(),
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
@@ -10472,6 +10473,8 @@ fn handle_eat_cmd(
     // `@StdModeFunc<N>` 脚本要抽 `world.rng`、并把脚本副作用写回世界/实体 ⇒ 需要 `&mut`。
     world: &mut mir2_world_bevy::World,
     colors: &MsgColors,
+    // IT-14：`[Setup] RepairItemDecDura`（修复油耐久上限衰减除数；配置值，不写死）。
+    repair_item_dec_dura: i32,
     registry: Option<&mir2_envir::MapRegistry>,
     // `M2Share.UnbindList`（`M2Share.cs:85`）：StdMode 31 解包按 `StdItem.Shape` 查物品名。
     unbind_list: &game_svr::unbindlist::UnbindList,
@@ -10629,6 +10632,9 @@ fn handle_eat_cmd(
         unbind: unbind_list,
         red_msg_fcolor: u16::from(colors.red_f),
         red_msg_bcolor: u16::from(colors.red_b),
+        green_msg_fcolor: u16::from(colors.green_f),
+        green_msg_bcolor: u16::from(colors.green_b),
+        repair_item_dec_dura,
         recalc: Some(recalc),
     };
     let out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
@@ -10654,6 +10660,8 @@ fn handle_eat_cmd(
     // items 扩展（状态扩展 slice 1）：`BodyLuck`/`BodyLuckLevel` 往返。`use_item` 暂不改它们 ⇒ 现为恒等；
     // IT-08（`GetExp` 的 `AddBodyLuck`）起生效。
     sg.equip.body_luck = state.extra.body_luck;
+    // IT-14：修复油改武器耐久 ⇒ 写回 `UseItems[Weapon]` 持久化（oracle 单份 UseItems 就地改）。
+    sg.use_items[game_svr::ability::SLOT_WEAPON] = state.extra.weapon.clone();
     sg.equip.body_luck_level = state.extra.body_luck_level;
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
     // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
@@ -23403,6 +23411,8 @@ struct NewbieItems {
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
+    /// IT-14 修复油：`[Setup] RepairItemDecDura`（缺省30/现网90，`config.rs`）。
+    repair_item_dec_dura: i32,
     /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
     castle_name_colors: mir2_world_bevy::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
@@ -23624,6 +23634,7 @@ impl EnterConfig {
     fn for_test(string_conf: crate::strings::StringConf) -> Self {
         Self {
             game_conf: None,
+            repair_item_dec_dura: 90,
             castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
             red_die_home: mir2_world_bevy::castle::RedDieHome::default(),
             // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
@@ -28164,6 +28175,7 @@ fn sim_loop(
                             &enter_cfg.catalog,
                             &mut world,
                             &colors,
+                            enter_cfg.repair_item_dec_dura,
                             registry.as_ref(),
                             &unbind_list,
                             &mut item_number,
@@ -53773,6 +53785,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -53898,6 +53911,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -53927,6 +53941,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -54076,6 +54091,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -54311,6 +54327,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -54437,6 +54454,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -55466,6 +55484,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -71096,6 +71115,7 @@ SendRefMsgRange=15
                 &catalog,
                 world,
                 &colors,
+                90,
                 None,
                 &unbind,
                 item_number,
@@ -71321,6 +71341,7 @@ SendRefMsgRange=15
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -93319,6 +93340,7 @@ GMEXECUTE f
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
@@ -93861,6 +93883,7 @@ GMEXECUTE f
             &catalog,
             &mut world,
             &colors,
+            90,
             None,
             &unbind,
             &mut item_number,
