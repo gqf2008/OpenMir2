@@ -50039,7 +50039,7 @@ break
                 mir2_protocol::messages::SM_UPDATEITEM,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "657（RecalcAbilitys 的 StatusChanged）→ 203 → 蓝字 100。
+            "657（RecalcAbilitys 的 StatusChanged）→ 203 → 蓝字 100（帧内序偏差 **T-288**，见白名单）。
              **登记（帧内序）**：oracle 线上序是 203（直接帧）先、657（队列）后；本宿主在 recalc 内
              先发 657 ⇒ 差一帧。本路径仅 GM 可达（现网 `Permission` 恒 0），卡 `openmir2-charstatuschanged-wiring` #2 已登记。"
         );

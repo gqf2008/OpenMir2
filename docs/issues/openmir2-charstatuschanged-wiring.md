@@ -74,3 +74,18 @@
 | A | 4 | （待填） | | |
 | B | 4 | （待填） | | |
 | C | 2+#8 | （待填） | | |
+
+## 8. 已知偏差
+
+### T-288：GM 改属性路径的帧内序（657 先于 203）
+
+- **事实**：oracle 线上序是 `SM_UPDATEITEM(203)`（`SendDefMessage` **直发**）先、
+  `RM_CHARSTATUSCHANGED → 657`（**入队**）后；本宿主在 `apply_gm_use_item_write` 的
+  `recalc_session_ability` 之后**直发** 657 ⇒ 657 先、203 后（差一帧）。
+- **根因（一句话）**：203 是直发、657 走队列，直发先到；要完全对齐只能把 657 也改成入队——
+  那属 **pump 模型改造（§29 域）**，不在本批。
+- **可及性**：本路径仅 GM 可达（`SmakeItemCommand` 需 `Permission`，现网 `PlayObject.Permission` 恒 0）
+  ⇒ 生产不可达；客户端对 657（状态位）与 203（物品栏刷新）无顺序依赖。
+- **留痕**：白名单 `mir2-rs/tests/parity/whitelist.md` 的 **T-288**；用例
+  `gm_smake_frame_order_is_updateitem_then_sysmsg` 的期望按本偏差更新，断言消息点名 T-288。
+- **纪律**：帧序对齐优先于"测试好看"；接受登记、**不接受静默**。
