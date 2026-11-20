@@ -168,3 +168,93 @@
   （fetch 后 refs 16045 ⇒ GREEN，RED 0 / BAD 0）——**不是 master 既有红**；
 - `validate-parity-manifests.ps1`（四域清单门）：**本批不含**，由 opc-19 报 GREEN。
 - **以后跑这个门用包装器** `E:\OPC\tools\scenario-gate.ps1`（先 fetch 全 collab refs 再跑，避免 §23 假红）。
+
+## 8. 已批准的范围与切片（2026-11-20，opc-19）
+
+**顺序：① → ② → ③**（③ 里的"统一出口"是面最大的一步，必须最后、单独评审）
+
+- **片①（今晚）**：抽 `TickFrameQueue`（每收件人一条 `NetPriorityQueue`，出队即 `route_to_gate`），
+  把三处"各自发明局部队列"的现状收敛：`castle.rs` 两处、T-290 升级链、吃/换装路径；
+  预计动 ≤6 条既有断言。
+- **片②**：其余 tick 高频路径入队（44/152/131/52/252 类）。
+  **开批前置**："明确不需要入队"的 7 条（635/636/200/203/610/611/27/30/32）**逐条给
+  `file:line` + "为什么是直发"的 oracle 依据**——不得"看着像直发"就归类。
+- **片③**：拆成两片——**③a 边缘路径**（可早做）、**③b 统一出口**（禁止生产路径再直接
+  `tx.send`；碰所有发帧点，单独评审）。
+
+### 8b. `ref_msg_cache` 交互（硬约束 + 断言）
+
+- **规则**：657/41/656 走 `SendRefMsg` 的 500ms 缓存，**缓存命中判定必须留在产生点**
+  （`ref_msg_cache::targets` 的调用处），**不得挪进出队时**——否则收件人集合会随出队时机变化。
+- **断言**：改造后同一场景下，657/41/656 的**收件人集合与改造前逐人相等**（每人收/不收 + 帧数），
+  以"改造前快照"为基线机判，不靠人看。
+
+### 8c. 验收（四条，opc-19 已认）
+
+1. **静态计数**：生产路径里 `route_to_gate(`/`SimToGate::SendFrame {` 只允许出现在统一出口函数内；
+   计数从 N 降到**白名单长度**（白名单每条附 oracle `SendDefMessage` 依据）。
+2. **行为**：T-295/T-296 的 18 个残差点各一条"同 tick 两帧"用例，机器比帧序。
+3. **回归**：81 处帧序断言逐条重算 + 附"旧为什么错"。
+4. **双栈对拍**（R 级）：同场景 C#/Rust 逐帧比。
+
+## 8d. 片① 实施规格（供接手者机械执行）
+
+**新 helper（`bins/game-svr/src/lib.rs`，紧邻 `broadcast_charstatuschanged_except_self`）**
+
+```rust
+/// 卡 `openmir2-tick-frame-priority-queue` 片①：**每条收件人一条** `NetPriorityQueue` 的
+/// 路径级排序装置（范例来源 = `castle.rs` 两处 + T-290 升级链）。
+/// 语义：`push(socket, priority, body)` 只入队；`flush(socket, gate_idx)` 按 `(byte)ident`
+/// 出队并 `route_to_gate` 逐条下发。**不做跨路径/全 tick 归并**（那属片③b）。
+pub(crate) struct TickFrameQueue { /* HashMap<i32 /*socket*/, NetPriorityQueue<(u8, Vec<u8>)>> */ }
+impl TickFrameQueue {
+    pub fn new() -> Self;
+    pub fn push(&mut self, socket: i32, priority: u8, body: Vec<u8>);
+    pub fn flush(&mut self, online: &OnlineRegistry,
+                 gates: &HashMap<u8, UnboundedSender<SimToGate>>, what: &str);
+}
+```
+
+**四条接线点（本片范围）**
+1. `castle.rs` 两处（`RM_USERNAME` 165 段）：把"自建队列 → 出队 → 逐条 send"替换为
+   `TickFrameQueue::push/flush`（行为应逐字节不变 ⇒ 既有断言不动）。
+2. T-290 升级链（`drain_kill_exp_chain_with_magic`）：把局部 `NetPriorityQueue` 换成
+   `TickFrameQueue`（`push` 时带 body，`flush` 在链末）。
+3. 吃路径 `handle_eat_cmd` 的 53/657：现状是"通知泵顺序立即发"，改为入队后统一 flush
+   （**注意**：吃路径的多帧跨 socket，需按 socket 分桶）。
+4. 换装 `handle_bag_cmd_with_magic` 的 52/62/155：同上。
+
+**预计断言的变更（≤6 条）**：`tick_frame_order_puts_stamina_after_kill_exp_chain`、
+`p31_…`、`c5_…`、`levelup_downlink_…`（若 flush 点不变则**不动**）、吃/换装各一条。
+**判据**：改造前后**逐帧字节**相同（除已登记的 T-288/T-295/T-296 外不得有新差异）。
+
+## 9. 判据修正与"不需要入队"复核结果（2026-11-20，`a2` 独立复核）
+
+### 9a. 判据：产出点优先，低字节为辅
+
+**队列类不能只按"已知低字节集合"判**——例如 `169/125/37/146/149` 不在最初那 11 个里，
+但它们的产出点在 `PlayObject.Message.cs` 的 **`case Messages.RM_*`** 里 ⇒ **就是经 `MsgQueue`**。
+
+⇒ 分类判据改为：
+1. **主判据**：该帧的**产出点**是否在 `case Messages.RM_*`（或任何 `SendMsg`/`SendUpdateMsg`/`SendRefMsg` 入队点）；
+2. **辅助**：`(byte)RM_*` 低字节（用于定序，不用于分类）。
+
+### 9b. 我先前判"不需要入队"的 7 类：复核结果
+
+| 类 | 我的判断 | 复核 | 依据 |
+|---|---|---|---|
+| 635/636 `SM_EAT_OK/FAIL` | 不需要 | **对** | `ClientUseItems` 命令体内 `SendDefMessage` 直发 |
+| 200 `SM_ADDITEM`、203 `SM_UPDATEITEM` | 不需要 | **条件成立** | 帧本身 `SendSocket` 直发，但**调用点有落在 RM 处理器里的**（如 `PlayObject.Message.cs:416`）⇒ **时序继承调用方**，不能无条件归"无需入队" |
+| 610/611 `SM_ITEMSHOW/HIDE` | 不需要 | **错** | 产自 `case Messages.RM_*`（`PlayObject.Message.cs:1745/1748` 一带）⇒ 经队列 |
+| 27 `SM_ALIVE` | 不需要 | **错** | `case Messages.RM_ALIVE`（`:1885`）⇒ 经队列 |
+| 30 `SM_DISAPPEAR` | 不需要 | **错** | `case Messages.RM_DISAPPEAR`（`:1652`）⇒ 经队列（低字节 **125**） |
+| 32 `SM_DEATH` | 不需要 | **错** | `case Messages.RM_DEATH`（`:1644`）⇒ 经队列（低字节 **37**） |
+
+对应低字节（`a2` 实测）：610→**146**、611→**149**、27→**169**、30→**125**、32→**37**。
+
+⇒ **片②的范围要按本表扩张**：610/611/27/30/32 五类从"不需要"移入"必须入队"。
+
+### 9c. 清点口径统一
+
+"待定点"的数目此前有三种口径（TSV 行 **175** / 源码站点 **124** / 卡面 **136**，互不一致）。
+**以后统一按"源码站点行"计数**，并在报告里注明用的是哪一种口径。
