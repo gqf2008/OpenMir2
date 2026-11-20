@@ -2974,6 +2974,9 @@ fn apply_pending_level_up(
     if let Some(e) = world.entities.get_mut(sg.actor_id) {
         e.progression.level = level;
         e.progression.max_exp = max_exp;
+        // **镜像缺口 P2（`card/recalc-mirror-gap`）**：oracle 只有一份对象，`HitSpeed = AddAbil.HitSpeed`
+        // 直接写回它；本宿主实体是那份对象的投影 ⇒ 重算后同值镜像（不变量；本路径 657 自见取会话值）。
+        e.vitals.hit_speed = sg.hit_speed;
     }
     if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
         let client_layout = game_svr::smframe::client_layout_enabled();
@@ -11038,6 +11041,12 @@ fn handle_eat_cmd(
             }
             let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
             let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
+            // **镜像缺口 P3（`card/recalc-mirror-gap`）**：`HitSpeed = AddAbil.HitSpeed` 落实体
+            // （不变量；本支 657 自见走 `pickwire::notice_frame` 的会话值）。
+            let hit_speed = sg.hit_speed;
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.vitals.hit_speed = hit_speed;
+            }
             // oracle 发送序：`RM_ABILITY` → `RM_SUBABILITY`（`:1546/1547`；诅咒支 `:1625/1626`），
             // 再 sysmsg（正常支绿字 `:1522/1528/1534/1540` 或 `:1552` 的未中绿字；诅咒支红字 `:1615/1622`）。
             out.notices.push(game_svr::useitem::QueuedNotice {
@@ -11141,6 +11150,11 @@ fn handle_eat_cmd(
         sg.equip.abil = game_svr::ability::level_ability_base(&sg.equip.abil, sg.equip.job);
         let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
         let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
+        // **镜像缺口 P4（`card/recalc-mirror-gap`）**：同 P3（不变量）。
+        let hit_speed = sg.hit_speed;
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.vitals.hit_speed = hit_speed;
+        }
         let _ = game_svr::recover::inc_health_spell(&mut sg.state.wabil, 2000, 2000);
         crate::add_body_luck(
             &mut sg.equip.body_luck,
@@ -19246,6 +19260,15 @@ fn drain_buff_downlink(
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
         let _ =
             recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
+        // **镜像缺口 P5（`card/recalc-mirror-gap`）**：oracle `HitSpeed = AddAbil.HitSpeed`
+        // 写回**唯一那份**对象；本宿主 657 的 `Series` 以实体为源（`card/657-series-spellbuf`）
+        // ⇒ recalc 后必须镜像，否则自见那条 657 取到重算前的旧实体值。
+        {
+            let hit_speed = sg.hit_speed;
+            if let Some(e) = world.entities.get_mut(*actor_id) {
+                e.vitals.hit_speed = hit_speed;
+            }
+        }
         let body = game_svr::smframe::sm_ability(
             sg.state.gold,
             sg.equip.job,
@@ -34798,6 +34821,72 @@ mod tests {
     /// 观察者 +5/+11/+12 各 `20/21/22`、+13 超 range。
     /// 红检：退回 `broadcast_ref_msg_with_self(&[body])` 单 body（`Series` 固定 0）⇒ 观察者断言全红；
     /// 删第二自见副本 ⇒ 自见条数红。
+    /// **镜像缺口 P5 的判别牙（`card/recalc-mirror-gap`）**：`drain_buff_downlink` 的
+    /// `boNeedRecalc` 支在 recalc 之后必须把 `HitSpeed = AddAbil.HitSpeed` 镜像进实体，
+    /// 否则自见那条 657 读到的实体值是**重算前**的。
+    ///
+    /// 布置：实体 `hit_speed = 7`（**区分态**，重算把它写成 0），`rec.buff_recalcs = [hero]`。
+    /// 断言：hero 自见 657 的 `Series` = 0。删镜像 ⇒ 实得 7 ⇒ 红。
+    #[test]
+    fn buff_recalc_657_series_is_post_recalc() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10));
+        world.entities.get_mut(hero).unwrap().vitals.hit_speed = 7;
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_recalcs.push(hero);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &catalog,
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut series: Vec<u16> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                if let Some(c) = CommandMessage::from_bytes(&body) {
+                    if c.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED {
+                        series.push(c.series);
+                    }
+                }
+            }
+        }
+        assert!(
+            !series.is_empty(),
+            "boNeedRecalc 支必须产自见 657；实得空集（空集会令下面那条断言空过）"
+        );
+        assert!(
+            series.iter().all(|v| *v == 0),
+            "自见 657 的 Series 必须取**重算后**的 HitSpeed（0）；实得 {series:?}"
+        );
+    }
+
     #[test]
     fn buff_657_bochg_series_is_per_recipient_hit_speed() {
         let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
@@ -56142,6 +56231,142 @@ SendRefMsgRange=15
             "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
         );
         assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
+    }
+
+    /// **镜像缺口 P3/P4 的不变量牙（`card/recalc-mirror-gap`）**：`handle_eat_cmd` 的两处
+    /// `recalc_session_ability`（① 经验书升级支 `leveled`；② 祝福油支 `oil_item`）之后，
+    /// 必须把 `HitSpeed = AddAbil.HitSpeed` 镜像进实体。
+    ///
+    /// 布置：实体 `hit_speed = 7`（**区分态**，重算写 0）。断言：两处食毕后实体 `hit_speed`
+    /// == 会话 `hit_speed`。删镜像 ⇒ 实体留在 7 ⇒ 红（同时也证明该支确实走到了 recalc）。
+    #[test]
+    fn eat_recalc_mirrors_hit_speed_into_entity() {
+        use std::collections::HashMap;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            311,
+            mir2_data::StdItem {
+                name: "经验书".into(),
+                std_mode: 3,
+                shape: 13,
+                weight: 1,
+                dura_max: 200,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            312,
+            mir2_data::StdItem {
+                name: "祝福油".into(),
+                std_mode: 3,
+                shape: 4,
+                weight: 1,
+                dura_max: 1,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            313,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                shape: 0,
+                weight: 1,
+                dura_max: 4000,
+                ..Default::default()
+            },
+        );
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        for (item_index, phase) in [(311u16, "经验书升级支"), (312u16, "祝福油支")] {
+            let mut world = mir2_world_bevy::World::new(32, 32);
+            let mut spawn = mir2_world_bevy::EntitySpawn::new(7, "hero", 10, 10);
+            spawn.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let hero = world.add_entity(spawn);
+            world.entities.get_mut(hero).unwrap().vitals.hit_speed = 7;
+            let mut sg = test_session_ground(7);
+            // 让经验书必升一级（`leveled` 支：`exp >= max_exp` 且本次确经 `GetExp`）。
+            sg.equip.abil.max_exp = 0;
+            sg.state.item_list = vec![game_svr::bag::BagItem {
+                make_index: 1,
+                index: item_index,
+                dura: 0,
+                dura_max: 200,
+                desc: [0; 14],
+            }];
+            // 祝福油要求"有武器才吃"（`use_item` 的判据）。
+            sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 2,
+                index: 313,
+                dura: 4000,
+                dura_max: 4000,
+                desc: [0; 14],
+            });
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".into(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let mut item_number = 0;
+            handle_eat_cmd(
+                1,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &gates,
+                &catalog,
+                &mut world,
+                &colors,
+                90,
+                &game_svr::strings::StringConf::defaults(),
+                None,
+                &unbind,
+                &mut item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                None,
+                &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
+            );
+            let sg = &sessions["hero"];
+            assert_eq!(
+                world.entities.get(hero).unwrap().hit_speed,
+                sg.hit_speed,
+                "{phase}：recalc 后必须把 hit_speed 镜像进实体（删镜像 ⇒ 实体留在 7）"
+            );
+        }
     }
 
     /// **ExtraAbil 修正牙（`qa-extraabil-adjudication-20261120` 的 `ae` 复核点）**：
@@ -100176,6 +100401,14 @@ fn ",
             &mut rig.world,
             &rig.online,
             &rig.gates,
+        );
+        // **镜像缺口 P2 的判别牙（`card/recalc-mirror-gap`）**：`RecalcAbilitys` 的
+        // `HitSpeed = AddAbil.HitSpeed` 必须落到实体（不变量；本路径 657 自见读会话值，
+        // 故只钉实体侧）。构造态实体 99 ⇒ 镜像后应等于会话值（0）。
+        assert_eq!(
+            rig.world.entities.get(rig.actor).expect("实体").hit_speed,
+            rig.sessions["aaa"].hit_speed,
+            "apply_pending_level_up 重算后必须把 hit_speed 镜像进实体（删镜像 ⇒ 实体留在 99）"
         );
 
         let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
