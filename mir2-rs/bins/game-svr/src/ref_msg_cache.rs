@@ -40,6 +40,10 @@ pub fn targets(world: &World, sender_id: i32, range: i32) -> Vec<i32> {
     if let Some(self_only) = hidden_sender_only(world, sender_id) {
         return self_only;
     }
+    // **cache-first（M53）**：命中即按旧快照过滤返回，**不扫描**；未命中才扫描并刷新。
+    if let Some(cached) = world.ref_msg_targets_cached(sender_id) {
+        return cached;
+    }
     let scanned = crate::chat::hear_targets(world, sender_id, range);
     world.ref_msg_targets_from_scan(sender_id, scanned)
 }
@@ -57,6 +61,10 @@ pub fn targets_at(
 ) -> Vec<i32> {
     if let Some(self_only) = hidden_sender_only(world, sender_id) {
         return self_only;
+    }
+    // **cache-first（M53）**：同 [`targets`]；命中不扫描（显式坐标只用于刷新路径的扫描面）。
+    if let Some(cached) = world.ref_msg_targets_cached(sender_id) {
+        return cached;
     }
     let scanned = crate::chat::hear_targets_at(world, sender_id, map_id, x, y, range);
     world.ref_msg_targets_from_scan(sender_id, scanned)
@@ -185,5 +193,87 @@ mod tests {
             vec![ids[0], ids[1]],
             "解除后 <500ms 复用预热快照（+0/+5；+12 被 |Δ|<11 挡）"
         );
+    }
+
+    /// **M53 边角②+可观测**：命中分支只看 `now-tick<TTL && visible 非空`，且**命中路径不扫描**
+    /// （`ref_msg_scan_total` 增量 = 0）；首扫路径增量 = 1。
+    #[test]
+    fn cache_first_hit_does_not_scan() {
+        let (mut w, sender, ids) = world_with_sender_and_players();
+        let before = w.ref_msg_scan_total();
+        let first = targets(&w, sender, 12);
+        assert_eq!(first, vec![ids[0], ids[1], ids[2]], "首扫");
+        assert_eq!(w.ref_msg_scan_total() - before, 1, "首扫路径恰好扫描 1 次");
+        w.clock_ms += 100;
+        let since_hit = w.ref_msg_scan_total();
+        let second = targets(&w, sender, 12);
+        assert_eq!(second, vec![ids[0], ids[1]], "命中：旧快照 + |Δ|<11");
+        assert_eq!(
+            w.ref_msg_scan_total() - since_hit,
+            0,
+            "命中路径必须**不扫描**（M53 可观测证据）"
+        );
+    }
+
+    /// **M53 边角①**：sender 不存在且缓存新鲜 ⇒ 返回空，且**不推进 tick**（也不扫描）。
+    #[test]
+    fn cache_first_missing_sender_fresh_returns_empty_without_tick() {
+        let (mut w, sender, _ids) = world_with_sender_and_players();
+        let _ = targets(&w, sender, 12);
+        let tick_before = w.ref_msg_cache_tick(sender).expect("已刷新");
+        w.entities.remove(sender);
+        let scans_before = w.ref_msg_scan_total();
+        assert!(targets(&w, sender, 12).is_empty(), "sender 缺失 ⇒ 空");
+        assert_eq!(
+            w.ref_msg_cache_tick(sender),
+            Some(tick_before),
+            "命中分支不推进 tick"
+        );
+        assert_eq!(w.ref_msg_scan_total() - scans_before, 0, "也不扫描");
+    }
+
+    /// **M53 边角②（visible 为空必须刷新）**：首扫无收件人 ⇒ `visible` 空；随后加入玩家，
+    /// 同窗口内再调用**必须重新扫格**（而不是把「空快照」当命中返回空）。
+    #[test]
+    fn cache_first_empty_visible_forces_rescan() {
+        let mut w = World::with_maps(vec![(64, 64)]);
+        let mut src = EntitySpawn::new(0, "src".to_string(), 10, 10);
+        src.race = mir2_world_bevy::ACTOR_RACE_NPC;
+        let sender = w.add_entity(src);
+        assert!(targets(&w, sender, 12).is_empty(), "无玩家 ⇒ 空");
+        let mut p = EntitySpawn::new(0, "p".to_string(), 15, 10);
+        p.race = ACTOR_RACE_PLAY;
+        let pid = w.add_entity(p);
+        assert_eq!(
+            targets(&w, sender, 12),
+            vec![pid],
+            "visible 为空必须重扫（不能把空快照当命中）"
+        );
+    }
+
+    /// **M53 边角③**：隐藏 sender 早退——不扫描、不刷新（无缓存条目）、只返回自己。
+    #[test]
+    fn cache_first_hidden_sender_early_exit() {
+        let (mut w, sender, _ids) = world_with_sender_and_players();
+        w.entities.flags_mut(sender).unwrap().ob_mode = true;
+        let scans = w.ref_msg_scan_total();
+        assert_eq!(targets(&w, sender, 12), vec![sender], "隐藏 ⇒ 只自己");
+        assert_eq!(w.ref_msg_scan_total() - scans, 0, "早退不扫描");
+        assert_eq!(w.ref_msg_cache_tick(sender), None, "早退不刷新缓存");
+    }
+
+    /// **M53**：显式坐标入口 `targets_at` 同样 cache-first（命中不扫描）。
+    #[test]
+    fn cache_first_targets_at_hit_does_not_scan() {
+        let (mut w, sender, ids) = world_with_sender_and_players();
+        let _ = targets_at(&w, sender, 0, 10, 10, 12);
+        w.clock_ms += 100;
+        let scans = w.ref_msg_scan_total();
+        assert_eq!(
+            targets_at(&w, sender, 0, 10, 10, 12),
+            vec![ids[0], ids[1]],
+            "命中：旧快照 + |Δ|<11"
+        );
+        assert_eq!(w.ref_msg_scan_total() - scans, 0, "命中不扫描");
     }
 }
