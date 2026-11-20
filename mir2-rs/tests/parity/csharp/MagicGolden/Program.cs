@@ -938,6 +938,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// 同时不改夹具设的 `WAbil.SC`（`nTime` 的 `Lo(SC)*10` 输入）。缺省 false ⇒ 既有件零变化。
         /// </summary>
         public bool CasterLoginOrderAbil;
+        /// <summary>卡 36：施法者 `CharStatusEx`（非 0 夹具使 `GetCharStatus()` 可证伪；缺省 0 ⇒ 既有件零变化）。</summary>
+        public int CasterCharStatusEx;
         /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
         public int CasterHp;
         public int CasterMaxHp;
@@ -1370,10 +1372,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
     /// </summary>
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
-        int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null)
+        int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
+        int? casterCharStatusEx = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
-            && casterAttackMode == null && casterSc == null)
+            && casterAttackMode == null && casterSc == null && casterCharStatusEx == null)
         {
             return fixture;
         }
@@ -1397,6 +1400,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             node["caster_sc_lo"] = casterSc.Value & 0xFF;
             node["caster_sc_hi"] = (casterSc.Value >> 8) & 0xFF;
         }
+        if (casterCharStatusEx.HasValue) node["caster_char_status_ex"] = casterCharStatusEx.Value;
         return node;
     }
 
@@ -1507,6 +1511,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             return 2;
         }
         spec.CasterLoginOrderAbil = true;
+        spec.CasterCharStatusEx = 2; // 非 0 夹具：GetCharStatus()=2，使 ④ 读取点可证伪
         spec.CasterHp = 500;
         spec.CasterMaxHp = 500;
         var cases = new[]
@@ -1575,6 +1580,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         if (spec.CasterAttackMode >= 0) caster.AttatckMode = (OpenMir2.Enums.AttackMode)spec.CasterAttackMode;
         // 卡 36：施法者 Abil 按等级派生（只 RecalcLevelAbilitys，不碰 WAbil）。
         if (spec.CasterLoginOrderAbil) caster.RecalcLevelAbilitys();
+        if (spec.CasterCharStatusEx != 0) caster.CharStatusEx = spec.CasterCharStatusEx;
         if (spec.CasterHp > 0)
         {
             // 29 的「多朋友」支：施法者自身也要 `HP < MaxHP` 才被 `MagBigHealing` 选中。
@@ -2089,7 +2095,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
                 spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
-                spec.CasterLoginOrderAbil ? (int?)spec.CasterSc : null),
+                spec.CasterLoginOrderAbil ? (int?)spec.CasterSc : null,
+                spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,

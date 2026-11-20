@@ -16602,7 +16602,9 @@ fn handle_spell_cmd_with_magic(
                                 // `:2875 StatusChanged()` 广播（self+target+obs_in）+ `:2876 SendUpdateMsg` 自更新（self）；
                                 // 复用现有 `SpellFrameBuf`（prio 155），不新增发射函数、不改共享件；落点由 RM 号算：
                                 // 52(3)<638(136)<642(141)<**657(155)**<100(252)<640(255)。
-                                let status = world.entities.get(out.target).map_or(0, |e| e.char_status);
+                                // (③) 同 prio155 两条时：广播先、自更新后（源行序 `PlayObject.cs:2875`→`:2876`；堆对同 prio 按入队序）。
+                                // (④) 读 oracle 同源的 `GetCharStatus()`（buff 位集|CharStatusEx），非实体缓存 `char_status`（陈旧）。
+                                let status = world.get_char_status(out.target);
                                 push_charstatuschanged(&mut buf, world, online, out.target, status);
                                 if let Some(e) = world.entities.get(out.target) {
                                     let body = smframe_ext::sm_charstatuschanged(out.target, status, e.hit_speed);
@@ -68261,6 +68263,8 @@ SendRefMsgRange=15
             e.player_run.power_rate = 100;
             e.vitals.hp = 500;
             e.vitals.max_hp = 500;
+            // 卡 36：非 0 夹具（CharStatusEx=2）⇒ `GetCharStatus()=2`，使 ④ 读取点可证伪（读陈旧 char_status 会得 0≠2）。
+            e.buff.char_status_ex = 2;
         }
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
@@ -68339,7 +68343,7 @@ SendRefMsgRange=15
         let (cast_frames, _raws) = rig.drain();
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let extra0 = i64::from(rig.world.entities.get(caster).unwrap().extra_abil[0]);
-        let char_status = i64::from(rig.world.entities.get(caster).unwrap().char_status);
+        let char_status = i64::from(rig.world.get_char_status(caster)); // ④ 同源 GetCharStatus（非陈旧 entity.char_status）
 
         // ---- 段②：交付（训练尾 640 @1000ms）----
         let wait_ms = golden_wait_ms(stem, label);

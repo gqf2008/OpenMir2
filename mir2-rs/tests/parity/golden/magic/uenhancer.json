@@ -86,7 +86,8 @@
         ],
         "caster_sc_raw": 15,
         "caster_sc_lo": 15,
-        "caster_sc_hi": 0
+        "caster_sc_hi": 0,
+        "caster_char_status_ex": 2
       },
       "Label": "s1",
       "DrainPasses": 2,
@@ -144,7 +145,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -155,7 +156,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -182,7 +183,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1138220265,
+              "delivery": 1142504921,
               "priority": 255
             }
           ],
@@ -210,14 +211,14 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -266,7 +267,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -292,7 +293,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -327,7 +328,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -353,7 +354,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -451,7 +452,8 @@
         ],
         "caster_sc_raw": 15,
         "caster_sc_lo": 15,
-        "caster_sc_hi": 0
+        "caster_sc_hi": 0,
+        "caster_char_status_ex": 2
       },
       "Label": "s5",
       "DrainPasses": 2,
@@ -509,7 +511,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -520,7 +522,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -547,7 +549,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1138221609,
+              "delivery": 1142506234,
               "priority": 255
             }
           ],
@@ -575,14 +577,14 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -631,7 +633,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -657,7 +659,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -692,7 +694,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -718,7 +720,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -816,7 +818,8 @@
         ],
         "caster_sc_raw": 15,
         "caster_sc_lo": 15,
-        "caster_sc_hi": 0
+        "caster_sc_hi": 0,
+        "caster_char_status_ex": 2
       },
       "Label": "s13",
       "DrainPasses": 2,
@@ -874,7 +877,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -885,7 +888,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -912,7 +915,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1138222921,
+              "delivery": 1142507546,
               "priority": 255
             }
           ],
@@ -940,14 +943,14 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -996,7 +999,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -1022,7 +1025,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
@@ -1057,7 +1060,7 @@
             {
               "ident": 10139,
               "wParam": 0,
-              "p1": 0,
+              "p1": 2,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -1083,7 +1086,7 @@
             },
             {
               "ident": 657,
-              "param": 0,
+              "param": 2,
               "tag": 0,
               "series": 0,
               "tail": ""
