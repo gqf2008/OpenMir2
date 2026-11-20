@@ -671,6 +671,8 @@ public static class Program
         {
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
+        // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
+        SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = 30;
         caster.WAbil.MC = (ushort)mc;
@@ -1052,6 +1054,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public int PreSlaveCount;
         /// <summary>预置 slave 的 `ChrName`；缺省 `pre-slave`+索引保持 17 既有；SINSU 设为精确 `神兽`使 `RecallSlave` 能命中。</summary>
         public string PreSlaveName = "pre-slave";
+        /// <summary>临时：为 SINSU 设 MapMgr 可用（env.MapName + ServerIndex），供 RecallSlave→SpaceMove；缺省 false ⇒ 其它 golden 零变化。</summary>
+        public bool EnableMaps;
         /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
         /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
         /// </summary>
@@ -1629,15 +1633,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             return 2;
         }
         // SINSU 神兽 = race 113（ELF_MONSTER）⇒ apply_slave_level_abilitys 第一支(0.3)。
+        spec.EnableMaps = true; // cap_hit 回召需 SpaceMove：给 env 一个 MapName/ServerIndex
         Environment.SetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE", "113");
         // 预置 slave 用精确名 `神兽`（RecallSlave 只认 ChrName==Config.Dragon|Dragon1）。
         spec.PreSlaveName = SystemModule.SystemShare.Config.Dragon;
         spec.PreSlaveCount = 0;
         var c1 = RunMagicCase(spec, "summon_ok", 1, 1000, spec.TargetMaxHp, false);
-        // cap_hit(回召) 离线不可跑：RecallSlave→SpaceMove→SystemShare.MapMgr 为 null ⇒ NPE。
-        // 首批只出 summon_ok；回召面挂 openmir2-golden-harness-mapmgr（地图注册）。
+        // cap_hit：预置 slave（精确名 神兽，使 RecallSlave 命中）令 MakeSlave 门失败 ⇒ RecallSlave 移它。
+        spec.PreSlaveCount = Math.Max(1, SystemModule.SystemShare.Config.DragonCount);
+        var c2 = RunMagicCase(spec, "cap_hit", 1, 2000, spec.TargetMaxHp, false);
         Environment.SetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE", null);
-        return EmitGolden(spec, new[] { c1 });
+        return EmitGolden(spec, new[] { c1, c2 });
     }
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
@@ -1686,6 +1692,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         {
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
+        // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
+        SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
+        if (spec.EnableMaps) { env.MapName = "0"; env.ServerIndex = M2Server.M2Share.ServerIndex; }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = (byte)spec.CasterLevel;
         bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");
@@ -1866,9 +1875,26 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             {
                 // exact-name（SINSU 神兽）才能被 RecallSlave 命中（它只认 ChrName==Config.Dragon|Dragon1）。
                 string psName = (spec.PreSlaveName == "pre-slave") ? (spec.PreSlaveName + k) : spec.PreSlaveName;
-                var ps = new M2Server.Monster.MonsterObject { ChrName = psName, ActorId = idBase + 50 + k };
-                ps.CurrX = 0; ps.CurrY = 0; ps.Envir = caster.Envir; // 供 RecallSlave.SpaceMove；xy 从 (0,0) 移动即可观测
-                caster.SlaveList.Add(ps);
+                if (spec.EnableMaps)
+                {
+                    // 卡 mapmgr(a)：用真实造怪路径同构初始化预置 slave（RecordingMonster + Abil/WAbil/Race/入图），
+                    // 而非裸 MonsterObject 手填——后者在排水 RM_SPACEMOVE_SHOW 的 GetFeature 处 NPE。仅 SINSU 走此支。
+                    var ps = new RecordingMonster { ChrName = psName, ActorId = idBase + 50 + k, CurrX = 0, CurrY = 0 };
+                    ps.Race = 113; ps.Abil.Level = 1;
+                    ps.WAbil.HP = 17; ps.WAbil.MaxHP = 17; ps.WAbil.AC = 0;
+                    ps.LifeAttrib = 0; ps.SpeedPoint = 0; ps.AntiMagic = 0;
+                    ps.Death = false; ps.FixedHideMode = false; ps.ObMode = false;
+                    ps.Envir = env;
+                    SystemModule.SystemShare.ActorMgr.Add(ps);
+                    env.AddMapObject(ps.CurrX, ps.CurrY, SystemModule.Data.CellType.Monster, ps.ActorId, ps);
+                    caster.SlaveList.Add(ps);
+                }
+                else
+                {
+                    var ps = new M2Server.Monster.MonsterObject { ChrName = psName, ActorId = idBase + 50 + k };
+                    ps.CurrX = 0; ps.CurrY = 0; ps.Envir = caster.Envir; // 旧路径（skeleton/fire 等零变化）
+                    caster.SlaveList.Add(ps);
+                }
             }
         }
         var preSlaveXyBefore = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
