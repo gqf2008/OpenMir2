@@ -72904,15 +72904,19 @@ SendRefMsgRange=15
             0,
             "[{stem}/{label}] obs_out 不得有帧"
         );
+        // **期望一律取自 golden**（§22：不写死数值）。s5/s13 的伤害随 MC 区间分叉后，
+        // 旧的常量 85 会把**正确**的输出判红；而且它从未真正验过"Rust HP == golden"。
+        // 同族教训：cloak/big_cloak 的 `(0,0,0)` 也是这类过期硬编码。
+        let g = golden_case_for(stem, label);
         assert_eq!(
             c["TargetHpBefore"].as_i64(),
-            Some(100),
-            "[{stem}/{label}] HP 前"
+            g["Fixture"]["target_hp"].as_i64(),
+            "[{stem}/{label}] HP 前须等于 golden Fixture.target_hp"
         );
         assert_eq!(
             c["TargetHp"].as_i64(),
-            Some(85),
-            "[{stem}/{label}] HP 后（实测伤害 15）"
+            g["TargetHp"].as_i64(),
+            "[{stem}/{label}] 术后 HP 须等于 golden TargetHp"
         );
         assert_eq!(n("target", "Rm", 8044), 1, "[{stem}/{label}] target 8044");
         assert_eq!(n("target", "Rm", 10052), 1, "[{stem}/{label}] target 10052");
