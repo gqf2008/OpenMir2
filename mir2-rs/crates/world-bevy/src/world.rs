@@ -10652,6 +10652,9 @@ impl World {
         // **攻击批 B（段 1）**：`AttackSuccess` 末尾的 `TrainCurrentSkill(wHitMode)`
         // （`PlayObject.Attack.cs:337`）——在 A 的攻杀尾巴**之前**跑（oracle：AttackSuccess 在
         // `AttackDir` 内、尾巴在 `ClientHitXY` 末尾）⇒ 尾巴读到的 `Level` 是本击训练后的新值。
+        // **B 段 2**：`RM_MAGIC_LVEXP` 的入队目标（训练循环里先收集，出循环后入队——
+        // 入队要 `&mut sim`，与 `attack_skill_train` 的可变借用同域会冲突）。
+        let mut pending_lvexp: Vec<(u16, bool, u8, i32)> = Vec::new();
         if let Some(input) = sim.attack_skill_train.get_mut(&actor_id) {
             let events = crate::magic::train_current_skill(
                 hit_mode,
@@ -10671,8 +10674,37 @@ impl World {
                         levelup_msg: o.levelup_msg,
                         see_heal_gauge: o.see_heal_gauge,
                     });
+                    if o.levelup_msg {
+                        pending_lvexp.push((magic_id, o.level_up, st.level, st.tran_point));
+                    }
                 }
             }
+        }
+        // **B 段 2**：`RM_MAGIC_LVEXP` 入队（`PlayObject.Attack.cs:209` 未升级 3000ms /
+        // `PlayObject.cs:5216` 升级 800ms）。升级走 `UpdateDelayMsg` 的**替换**语义
+        // （先摘同 `(ident, MagicId)` 的**队首**匹配项再入队，`BaseObject.Message.cs:257-278`；
+        // 本仓 `SelfDelayQueue::remove_head_matching` 已逐字复刻，别"修顺"）；未升级是普通入队。
+        for (magic_id, level_up, level, tran_point) in pending_lvexp {
+            let mid = i32::from(magic_id);
+            let delay_ms = if level_up { 800 } else { 3000 };
+            if level_up {
+                sim.self_delay_msgs.remove_head_matching(
+                    actor_id,
+                    crate::slave::RM_MAGIC_LVEXP,
+                    mid,
+                );
+            }
+            crate::slave::send_self_delay_msg_full_impl(
+                access,
+                sim,
+                actor_id,
+                crate::slave::RM_MAGIC_LVEXP,
+                0,
+                mid,
+                i32::from(level),
+                tran_point,
+                delay_ms,
+            );
         }
         // **攻击批 A**：`AttackDir` 返回之后、`ClientHitXY` 收尾之前的攻杀计数块
         // （`PlayObject.Attack.cs:942-956`）。读点必须是本击**磨损后**的 `UseItems[Weapon].Dura`
@@ -19509,6 +19541,115 @@ mod weapon_durability_tests {
         assert!(up.result, "tran_point == max_train ⇒ 升级（`<=` 边界）");
         assert_eq!(edge.level, 1);
         assert_eq!(edge.tran_point, 0, "扣掉 MaxTrain[0]=5");
+    }
+
+    // ---------- B 段 2：`RM_MAGIC_LVEXP` 的入队与时延 ----------
+
+    fn lvexp_world(max_train: [i32; 4]) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.set_weapon_durability_config(false, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, [0u8; 14]);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        m.hp = YEDO_TEST_TARGET_HP;
+        m.max_hp = YEDO_TEST_TARGET_HP;
+        let mid = w.add_entity(m);
+        w.set_attack_skill_train(
+            p,
+            AttackSkillInput {
+                abil_level: 10,
+                skills: vec![crate::magic::SkillTrainState {
+                    magic_id: 3,
+                    level: 0,
+                    tran_point: 0,
+                    train_lv: 3,
+                    train_level: [1, 1, 1, 1],
+                    max_train,
+                }],
+                ..Default::default()
+            },
+        );
+        (w, p, mid)
+    }
+
+    fn lvexp_entries(w: &World) -> Vec<(i64, i32, i32)> {
+        w.sim
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == crate::slave::RM_MAGIC_LVEXP)
+            .map(|m| (m.deliver_at_ms, m.n_param2, m.n_param3))
+            .collect()
+    }
+
+    /// **B 段 2 用例①（未升级 ⇒ 3000ms）**：本击 `level_up == false` ⇒ 恰一条 640，
+    /// `DeliveryTime = now + 3000`，载荷 `(Level, TranPoint)` 是**调用后**的值。
+    ///
+    /// 红检：把 3000 改成 800 ⇒ 本用例必红（与时延臂独立）。
+    #[test]
+    fn magic_lvexp_queued_at_3000_when_not_leveled() {
+        let (mut w, p, mid) = lvexp_world([1_000_000, 1000, 1000, 1000]);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let entries = lvexp_entries(&w);
+        assert_eq!(entries.len(), 1, "未升级 ⇒ 恰一条");
+        assert_eq!(
+            entries[0].0,
+            w.clock_ms + 3000,
+            "未升级走 SendSelfDelayMsg(…,3000)"
+        );
+        assert!(entries[0].2 > 0, "TranPoint 是加过熟练点之后的值");
+        assert_eq!(entries[0].1, 0, "Level 未变");
+    }
+
+    /// **B 段 2 用例②（升级 ⇒ 800ms，且没有 3000 那条）**：`max_train[0]=0` ⇒ 本击升级，
+    /// 恰一条 640、`DeliveryTime = now + 800`；`Level=1`、`TranPoint` 已扣掉 `MaxTrain[0]`。
+    ///
+    /// 红检：800↔3000 互换 ⇒ 本用例与用例①同时红（两臂分开报红）。
+    #[test]
+    fn magic_lvexp_queued_at_800_when_level_up() {
+        let (mut w, p, mid) = lvexp_world([0, 1000, 1000, 1000]);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let entries = lvexp_entries(&w);
+        assert_eq!(entries.len(), 1, "升级 ⇒ 恰一条（不走 3000 那支）");
+        assert_eq!(
+            entries[0].0,
+            w.clock_ms + 800,
+            "升级走 UpdateDelayMsg(…,800)"
+        );
+        assert_eq!(entries[0].1, 1, "Level 已升到 1");
+        // `TrainSkill` 先加 `Random(3)+1`，再扣 `MaxTrain[0]=0` ⇒ 载荷里是 1..=3。
+        assert!(
+            (1..=3).contains(&entries[0].2),
+            "TranPoint = 本击加的熟练点（RealSkill 先加后扣），实得 {}",
+            entries[0].2
+        );
+    }
+
+    /// **B 段 2 用例③（`UpdateDelayMsg` 替换语义）**：同魔号连续两击都升级 ⇒ 队列里**只有一条** 640，
+    /// `DeliveryTime` 按**第二击**重排（第一击那条被摘掉）。
+    ///
+    /// 红检：删 `remove_head_matching` 调用 ⇒ 队列里出现两条 ⇒ 本用例必红。
+    #[test]
+    fn magic_lvexp_update_replaces_previous_entry() {
+        // `max_train[0]=0`、`max_train[1]=0` ⇒ 第一击 0→1、第二击 1→2，两次都升级。
+        let (mut w, p, mid) = lvexp_world([0, 0, 1000, 1000]);
+        w.attack_cmd(p, mid);
+        w.tick();
+        let first = lvexp_entries(&w);
+        assert_eq!(first.len(), 1, "第一击入队一条");
+        let t1 = first[0].0;
+        // 推进时间后第二击：`UpdateDelayMsg` 应把第一条摘掉、按新时刻重排。
+        w.clock_ms += 100;
+        w.attack_cmd(p, mid);
+        w.tick();
+        let entries = lvexp_entries(&w);
+        assert_eq!(entries.len(), 1, "替换语义：同 (ident, MagicId) 只留一条");
+        assert!(entries[0].0 > t1, "按第二击的 DeliveryTime 重排");
+        assert_eq!(entries[0].1, 2, "第二击后 Level=2");
     }
 
     /// **B 段 1 用例③（`GetAttackPowerHit`）**：模式 3 + `PowerHit` ⇒ `+= HitPlus` + 消费 + `canHit`；
