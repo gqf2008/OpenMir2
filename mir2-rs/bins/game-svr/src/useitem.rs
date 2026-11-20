@@ -1129,6 +1129,97 @@ mod tests {
         assert!(gate_closed_checked, "缺少 eat_ok_lottery_gate_closed");
     }
 
+    /// **IT-16 逐例驱动 Rust `win_lottery`（非夹具自洽，§43）**：对 12 例各自 `applied_cfg`+`seed`+初态，
+    /// 断言 Rust 产出 `(命中档, gold, no_win 增量, 后态)` == 夹具 oracle 期望；并断言**恰抽一次**（draw-count==1）。
+    /// 注：draw-count 用**测试内包一层**（`Counting`）数 `random_below`——不改 `rng.rs`、不改抽值路径（纯旁路）。
+    #[test]
+    fn it16_lottery_percase_differential() {
+        use crate::config::WinLotteryCfg;
+        use crate::winlottery::{win_lottery, WinLotteryOutcome, WinLotteryState};
+        use mir2_shared::rng::{RandomNumber, RandomSource};
+
+        struct Counting<'a>(&'a mut RandomNumber, usize);
+        impl RandomSource for Counting<'_> {
+            fn random(&mut self) -> i32 {
+                self.0.random()
+            }
+            fn random_below(&mut self, v: i32) -> i32 {
+                self.1 += 1;
+                self.0.random_below(v)
+            }
+            fn random_range(&mut self, a: i32, b: i32) -> i32 {
+                self.0.random_range(a, b)
+            }
+            fn next_double(&mut self) -> f64 {
+                self.0.next_double()
+            }
+        }
+
+        let doc = fixture();
+        let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
+        assert_eq!(cases.len(), 12, "彩票例固定 12");
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let ap = &c["config"]["applied"];
+            let cfg = WinLotteryCfg {
+                rate: i32v(&ap["rate"]),
+                min: std::array::from_fn(|i| i32v(&ap["min"][i])),
+                max: std::array::from_fn(|i| i32v(&ap["max"][i])),
+                gold: std::array::from_fn(|i| i32v(&ap["gold"][i])),
+                // init_* 不被 `win_lottery` 读（它单收 `st`）；取默认。
+                ..WinLotteryCfg::default()
+            };
+            let lb = &c["lottery_before"];
+            let mut st = WinLotteryState {
+                count: i32v(&lb["count"]),
+                no_win: i32v(&lb["no_win"]),
+                level: std::array::from_fn(|i| i32v(&lb["level"][i])),
+            };
+            let seed = i32v(&c["rng"][0]["seed"]);
+            let want_draw = i32v(&c["rng"][0]["result"]);
+            // ① 抽值：同 seed 首抽必须 == oracle。
+            let draw = RandomNumber::with_seed(seed).random_below(cfg.rate);
+            assert_eq!(draw, want_draw, "{name}: Rust 同 seed 首抽值 != oracle");
+            // ② 驱动 win_lottery（同 seed 新实例）+ 计抽数。
+            let mut inner = RandomNumber::with_seed(seed);
+            let mut cr = Counting(&mut inner, 0);
+            let out = win_lottery(&mut cr, &cfg, &mut st);
+            assert_eq!(cr.1, 1, "{name}: win_lottery 必须恰抽一次（实得 {}）", cr.1);
+            // 期望 from 夹具 lottery(后) - lottery_before(前)。
+            let la = &c["lottery"];
+            let mut exp_level = None;
+            for i in 0..6 {
+                if i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1 {
+                    exp_level = Some((i + 1) as u8);
+                }
+            }
+            let d_gold = i32v(&c["gold"]) - i32v(&c["gold_before"]);
+            let d_no_win = i32v(&la["no_win"]) - i32v(&lb["no_win"]);
+            let out_dbg = format!("{out:?}");
+            match (exp_level, out) {
+                (Some(lv), WinLotteryOutcome::Won { level, gold }) => {
+                    assert_eq!(level, lv, "{name}: Rust 命中档位 != oracle");
+                    assert_eq!(gold, d_gold, "{name}: Rust 中奖金币 != oracle");
+                    assert_eq!(d_no_win, 0, "{name}: 中奖不应加 no_win");
+                }
+                (None, WinLotteryOutcome::Lost) => {
+                    assert_eq!(d_gold, 0, "{name}: 未中金币应为 0");
+                    assert_eq!(d_no_win, 500, "{name}: 未中 no_win 应 +500");
+                }
+                (e, o) => panic!("{name}: Rust outcome {o:?} 与夹具期望(赢级 {e:?}) 不符"),
+            }
+            for i in 0..6 {
+                assert_eq!(st.level[i], i32v(&la["level"][i]), "{name}: 后态 level[{i}]");
+            }
+            assert_eq!(st.no_win, i32v(&la["no_win"]), "{name}: 后态 no_win");
+            assert_eq!(st.count, i32v(&la["count"]), "{name}: 后态 count");
+            eprintln!(
+                "CASE {name}: 输入(seed={seed} rate={} bands_min={:?}) 期望(hit={:?} gold+{d_gold} no_win+{d_no_win}) 实测({out_dbg} draws={} 后态_no_win={} 后态_level={:?})",
+                cfg.rate, cfg.min, exp_level, cr.1, st.no_win, st.level
+            );
+        }
+    }
+
     /// 夹具**不得**记录绝对路径（opc-19 2026-11-20 口径）：`config.exps_conf` 只许是
     /// basename，配置身份由 `exps_conf_sha256` 承担——绝对路径是"某台机器某 worktree"的产物，
     /// 换机重生成会把 `E:\…\items-parity\…` 变成 `E:\…\npc-parity\…`，进仓即不可复现。
