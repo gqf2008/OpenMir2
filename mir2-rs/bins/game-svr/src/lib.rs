@@ -69664,11 +69664,11 @@ SendRefMsgRange=15
         rig
     }
 
-    /// 30 `SKILL_SINSU` 真实台账驱动（**首批仅 `summon_ok`**；`cap_hit` 回召待 openmir2-golden-harness-mapmgr）。
+    /// 30 `SKILL_SINSU` 真实台账驱动（**两例 `summon_ok` + `cap_hit`**；cap_hit 回召面已由 mapmgr 替身解锁）。
     ///
     /// 神兽 race=113（ELF_MONSTER）→ `apply_slave_level_abilitys` 0.3 第一支；HP=stub 17 ⇒ max 24，半补 20。
-    /// **不比 `Rng`**（离线替身 `RegenMonsterByName` 不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源——
-    /// 与 skeleton 同因；`Rng` 面单列，未纳入本批对拍）。
+    /// `Rng`：**summon_ok 不比**（离线替身 `RegenMonsterByName` 造怪 0 抽 vs Rust `create_monster_oracle` 真抽不同源）；
+    /// **cap_hit 逐值比**（门 fail 无造怪抽 + 落点确定无 RandXY 抽 ⇒ 两侧同源都 0 抽）。
     fn sinsu_parity_drive(label: &str, id_base: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let stem = "sinsu";
@@ -69691,6 +69691,31 @@ SendRefMsgRange=15
         let target = fireball_actor(&rig, "target");
 
         let entities_before = rig.world.entities.len();
+        // cap_hit：预置 slave（精确名 神兽/race113/(0,0)，经 EntitySpawn 真实入世界，非只塞表）供 RecallSlave 移动。
+        let preslave_id = id_base + 50;
+        if label == "cap_hit" {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "神兽".to_string(), 0, 0);
+            e.id = preslave_id;
+            e.race = 113;
+            e.level = 1;
+            e.hp = 17;
+            e.max_hp = 17;
+            let sid = rig.world.add_entity(e);
+            {
+                let m = rig.world.entities.get_mut(sid).unwrap();
+                m.slave.master = Some(caster);
+                m.slave.is_slave = true;
+            }
+            rig.world
+                .entities
+                .get_mut(caster)
+                .unwrap()
+                .slave
+                .slave_list
+                .push(sid);
+            // 朝向不在此强制：实际由 `handle_spell_cmd` 的 default 支 `Dir=GetNextDirection(cur→click)=DIR_RIGHT`
+            // 决定（本 case click=(101,100) ⇒ 回召落点 (101,100)）；此处 ai.dir=4 是死赋值（default 支覆盖），已删。
+        }
         let slave_before = rig.world.slave_count(caster);
 
         let mon = mir2_data::MonsterInfo {
@@ -69714,13 +69739,24 @@ SendRefMsgRange=15
             .last()
             .copied()
             .unwrap_or(usize::MAX);
+        // 回召观测：预置 slave before(0,0)/after；before≠after ⇒ recall_moved。
+        let pre_after_xy = rig
+            .world
+            .entities
+            .get(preslave_id)
+            .map(|e| (i64::from(e.x), i64::from(e.y)));
+        let (px_before, py_before) = (0i64, 0i64);
+        let recall_moved = pre_after_xy.is_some_and(|(ax, ay)| ax != px_before || ay != py_before);
 
         let slave_ids: Vec<i32> = rig
             .world
             .entities
             .get(caster)
             .map(|c| c.slave_list.clone())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| *id != preslave_id)
+            .collect::<Vec<i32>>();
         let new_slaves: Vec<serde_json::Value> = slave_ids
             .into_iter()
             .filter_map(|id| rig.world.entities.get(id))
@@ -69758,6 +69794,11 @@ SendRefMsgRange=15
             "slave_count_after": slave_after,
             "regen_calls": regen,
             "new_slaves": new_slaves,
+            "pre_slave_xy_before": if label == "cap_hit" { serde_json::json!([{"name":"神兽","x":px_before,"y":py_before}]) } else { serde_json::json!([]) },
+            "pre_slave_xy_after": match pre_after_xy { Some((ax, ay)) => serde_json::json!([{"name":"神兽","x":ax,"y":ay}]), None => serde_json::json!([]) },
+            "recall_moved": recall_moved,
+            "caster_x": i64::from(rig.world.entities.get(caster).map_or(0, |e| e.x)),
+            "caster_y": i64::from(rig.world.entities.get(caster).map_or(0, |e| e.y)),
         });
 
         let ledger = serde_json::json!([{
@@ -69785,6 +69826,12 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn sinsu_parity_summon_ok() {
         sinsu_parity_drive("summon_ok", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn sinsu_parity_cap_hit() {
+        sinsu_parity_drive("cap_hit", 2000);
     }
 
     // ======================================================================

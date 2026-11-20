@@ -1604,18 +1604,42 @@ fn sent_filter_sinsu(
     out
 }
 
-/// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（首批仅 `summon_ok`；卡 MG-41）。
+/// 取某 case 某 ident 的全部帧 `(who,recog,param,tag,series)`（用于 807 回召帧的不对称断言）。
+fn frames_by_ident(case: &Value, ident: i64) -> Vec<(String, i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    if let Some(recv) = case["Receivers"].as_array() {
+        for r in recv {
+            let who = r["Who"].as_str().unwrap_or("").to_string();
+            if let Some(sent) = r["Sent"].as_array() {
+                for s in sent {
+                    if s["ident"].as_i64() == Some(ident) {
+                        out.push((
+                            who.clone(),
+                            s["recog"].as_i64().unwrap_or(i64::MIN),
+                            s["param"].as_i64().unwrap_or(i64::MIN),
+                            s["tag"].as_i64().unwrap_or(i64::MIN),
+                            s["series"].as_i64().unwrap_or(i64::MIN),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（两例 `summon_ok` + `cap_hit`；卡 MG-41）。
 ///
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
-/// 造怪前帧 17/638/642（按 socket 多重集）；`stub_monster_race=113`（输入记录）。
+/// 帧：17/638=施法帧、642=`SM_DURACHANGE`(护身符耐久)、807=回召帧(未建模、cap_hit 显式登记)；本函数比 17/638/642 的 socket 多重集；`stub_monster_race=113`（输入记录）。
 /// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。**这是离线替身不忠实（造怪 0 抽）导致 RNG 流偏移，不是产品错**；MG-41 scope 须写「离线替身造怪 0 抽 ⇒ RNG 流偏移 ⇒ 本 leaf 不比 Rng」。
 ///
 /// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（离线替身 0 抽 ⇒ RNG 流偏移）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
 /// `due_ms_rel`：本 leaf 被比较帧（17/638/642）恒为 0（三帧均属**施法批** elapsed=0，驱动无交付回路）——**结构恒定、非伪造**；与两个 stub 键不同：若引入交付批，due 会随 elapsed 变化（stub 17 则永不）。
 ///
-/// `cap_hit` 回召面待 `openmir2-golden-harness-mapmgr`。
+/// `cap_hit` 回召面见 `real_rust_ledger_sinsu_cap_hit`（mapmgr 替身已解锁）。
 #[test]
 #[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_summon_ok) 生成台账"]
 fn real_rust_ledger_sinsu() {
@@ -1722,6 +1746,152 @@ fn real_rust_ledger_sinsu() {
         assert_eq!(
             r_sent, g_sent,
             "[{label}] {who} 的 17/638/642 帧不一致（含 recog/due_ms_rel）：Rust {r_sent:?} vs golden {g_sent:?}"
+        );
+    }
+    eprintln!("[sinsu {label}] PASS");
+}
+
+/// **`30 SINSU` cap_hit 回召面**（卡 openmir2-golden-harness-mapmgr）：`RecallSlave→SpaceMove` 让预置 slave 移到施法者面前。
+/// 断言：`regen_calls=0`＋`slave_count` 不变＋`new_slaves` 空（门 Rejected）；`recall_moved=true`（与 golden 一致）；
+/// **坐标落到施法者面前格**（`GetFrontPosition` 语义，落点由 caster 坐标派生 `(caster_x+1, caster_y)`——caster 面向施法目标(东)）；
+/// `before=(0,0) != after`；`pre_slave_xy_before/after` 与 golden 逐项一致；帧 17/638/642（含 recog/due）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_cap_hit) 生成台账"]
+fn real_rust_ledger_sinsu_cap_hit() {
+    let dir = ledger_dir();
+    let golden = golden_file("sinsu.json");
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(!want.is_empty(), "未设置 MIR2_LEDGER_RUN_ID");
+    let label = "cap_hit";
+    let path = dir.join("sinsu_cap_hit.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "防空转：缺 {}（{e}）先跑 tests::sinsu_parity_cap_hit",
+            path.display()
+        )
+    });
+    let side = path.with_extension("run.json");
+    let side_v: Value = serde_json::from_str(
+        &std::fs::read_to_string(&side).unwrap_or_else(|e| panic!("缺 run.json（{e}）")),
+    )
+    .expect("json");
+    assert_eq!(
+        side_v.get("run_id").and_then(Value::as_str),
+        Some(want.as_str()),
+        "[{label}] run_id 不符"
+    );
+    let v: Value = serde_json::from_str(&text).expect("台账 json");
+    let arr = v.as_array().expect("[case]");
+    assert_eq!(arr.len(), 1);
+    let rust = &arr[0];
+    assert_eq!(rust.get("Label").and_then(Value::as_str), Some(label));
+    let gcase = golden["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["Label"] == label)
+        .unwrap_or_else(|| panic!("金标准缺 {label}"));
+    let gs = &gcase["SinSu"];
+    let rs = &rust["SinSu"];
+    for key in [
+        "slave_count_before",
+        "slave_count_after",
+        "regen_calls",
+        "pre_slave_count",
+        "stub_monster_race",
+    ] {
+        assert_eq!(rs.get(key), gs.get(key), "[{label}] SinSu.{key} 不等");
+    }
+    // 门 Rejected：regen 0、slave 不变、无新实体。
+    assert_eq!(
+        rs["regen_calls"].as_u64(),
+        Some(0),
+        "[{label}] regen_calls 应 0"
+    );
+    assert_eq!(
+        rs["slave_count_before"], rs["slave_count_after"],
+        "[{label}] slave_count 应不变"
+    );
+    assert_eq!(
+        rs["new_slaves"].as_array().map_or(usize::MAX, Vec::len),
+        0,
+        "[{label}] new_slaves 应空"
+    );
+    // recall_moved 真断言（且与 golden 一致）。
+    assert_eq!(
+        rs["recall_moved"].as_bool(),
+        Some(true),
+        "[{label}] recall_moved 应 true（回召确实移动）"
+    );
+    assert_eq!(
+        rs["recall_moved"], gs["recall_moved"],
+        "[{label}] recall_moved 与 golden 不一致"
+    );
+    // 坐标断言：after = 施法者面前（caster 面向施法目标=东 ⇒ (caster_x+1, caster_y)，**由 caster 坐标派生**不抄常数）。
+    let cx = rs["caster_x"].as_i64().expect("caster_x");
+    let cy = rs["caster_y"].as_i64().expect("caster_y");
+    let after = &rs["pre_slave_xy_after"].as_array().expect("after arr")[0];
+    let (ax, ay) = (after["x"].as_i64().unwrap(), after["y"].as_i64().unwrap());
+    let before = &rs["pre_slave_xy_before"].as_array().expect("before arr")[0];
+    let (bx, by) = (before["x"].as_i64().unwrap(), before["y"].as_i64().unwrap());
+    assert_eq!(
+        (ax, ay),
+        (cx + 1, cy),
+        "[{label}] 回召落点应由 caster 坐标派生为面前(东) ({}, {})，实得 ({ax}, {ay})",
+        cx + 1,
+        cy
+    );
+    assert_ne!(
+        (bx, by),
+        (ax, ay),
+        "[{label}] before 应 ≠ after（否则=空集恒假）"
+    );
+    assert_eq!(
+        rs["pre_slave_xy_before"], gs["pre_slave_xy_before"],
+        "[{label}] before 与 golden 不一致"
+    );
+    assert_eq!(
+        rs["pre_slave_xy_after"], gs["pre_slave_xy_after"],
+        "[{label}] after 与 golden 不一致"
+    );
+    // Rng：cap_hit 两侧**同源都 0 抽**（门 fail 无造怪抽 + 落点确定无 RandXY 抽）⇒ **逐值比（与 golden 相等）**。
+    // 注意这与 summon_ok 的「不比 Rng」是**两条不同口径**：那条是"离线替身造怪 0 抽 vs Rust create_monster_oracle 真抽**不同源**所以不比"；
+    // 本条是"两侧**同源 0 抽**所以比"。断"==golden"而非"应为空"：任一侧将来多抽一即红。
+    assert_eq!(
+        rust["Rng"], gcase["Rng"],
+        "[{label}] Rng 与 golden 不等（cap_hit 两侧同源 0 抽，逐值比）"
+    );
+
+    // 807 = SM_SPACEMOVE_SHOW2 回召帧（**未建模，显式登记不对称断言，不入 keep 多重集**）。
+    // 缺口登记：crates/world-bevy/src/space_move.rs:89「SHOW2 出帧未建模」/ 卡 openmir2-golden-harness-mapmgr。
+    let g807 = frames_by_ident(gcase, 807);
+    let r807 = frames_by_ident(rust, 807);
+    assert_eq!(
+        g807.len(),
+        3,
+        "[{label}] golden 807 应恰 3 条（SM_SPACEMOVE_SHOW2 回召帧）"
+    );
+    for (who, recog, param, tag, series) in &g807 {
+        assert_eq!(
+            (*recog, *param, *tag, *series),
+            (2050, 101, 100, 4),
+            "[{label}] golden 807 ({who}) 字段应为 (recog=2050,param=101,tag=100,series=4)"
+        );
+    }
+    assert_eq!(
+        r807.len(),
+        0,
+        "[{label}] Rust 807 应 0 条（未建模缺口；一旦建模此断言红，须改正常比较并更新口径）"
+    );
+    // 坐标断言方向：本 case 施法方向 = DIR_RIGHT（cast click=(101,100) → GetNextDirection=东 ⇒ 落点 (cx+1,cy)）；
+    // 若 fixture 的 click 改变方向，`(cx+1, cy)` 须改为由 click 派生（勿静默错）。
+    // 帧 17/638/642（含 recog/due_ms_rel）。
+    let keep: &[i64] = &[17, 638, 642];
+    for who in ["caster", "target", "obs_in", "obs_out"] {
+        assert_eq!(
+            sent_filter_sinsu(gcase, who, keep),
+            sent_filter_sinsu(rust, who, keep),
+            "[{label}] {who} 帧不一致"
         );
     }
     eprintln!("[sinsu {label}] PASS");
