@@ -71717,7 +71717,10 @@ SendRefMsgRange=15
                 if let Some(who) = who_of(id) {
                     rm_by_who.entry(who).or_default().push(fireball_rm(
                         8103,
-                        i64::from(*power),
+                        // `RM_STRUCK_MAG` 的 wParam = **`(ushort)` 回绕后的伤害**（与出 31 帧同一
+                        // 转换 [`wire_damage`]）。MG-18 实测 obs_in 的 power=154985 ⇒ 23913
+                        // （`& 0xFFFF`，与 golden 逐值相等）；目标 45921 不受影响。
+                        i64::from(wire_damage(*power)),
                         i64::from(hp_after),
                         i64::from(max_hp),
                         i64::from(*caster_ref),
