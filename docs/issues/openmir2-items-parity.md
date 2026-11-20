@@ -772,7 +772,16 @@ EAD
 
 **WAbil 不变的三方同源**：golden 的 `wabil_before` 是探针在 invoke **前**实采、`expect.wabil` 是 C# 在 invoke **后**实采（均 oracle 侧，非 Rust 回填）；比较器再用**同一份 golden** 断言 Rust `state.wabil` 不变 ⇒ 三方闭环。
 
-**状态**：`implemented_unverified`（2026-11-20，分支 `card/items-it07-a`，merge master `da63bae28` 后）：6 条用例全绿（`it07_*`，含 fixture 4 例比较器）、全量 `--lib 2234 / 2161 passed / 0 failed / 73 ignored`、`cargo check -p game-svr --lib` rc=0、fmt rc=0；`clippy --all-targets` 待窗口。清单未动，待 QA 签。
+**657 入队语义修复（2026-11-20，`3b` P1 调查；`2086bbfd0`）**
+1. **oracle 原样**：`RecalcAbilitys` 尾段对 657 发**两次**——`:2875 StatusChanged()` 直发 `SendMsg`；`:2876 SendUpdateMsg` 再发前按**队首**同 ident 去重（pop），再入队。第二条 **count 不变**，但 pop+push 会**重排同优先级元素**（Shape12 的六条 `RM_SYSMESSAGE(252)` 出队序由此定：`[DC,MP,HP,HIT,SC,MC]`）。**这是 oracle 原样，不是我们发明的机制。**
+2. **我们的两处错**：①入队序 `[S×6, W, C, A]` 应为 `[S×6, C, A, W]`（`WeightChanged` 在 `EatItems` 尾部）；②657 只入队一次、未套 `SendUpdateMsg` 头去重。
+3. **为什么以前没发现**：`it07_emit_eat_notices_production_order_is_heap_sift` **用本仓模型自产期望、再自证** ⇒ 顺序断言从未与夹具 `expect.notices` 比过。**教训：期望必须来自 oracle 产物；"模型自算 + 自己通过"不算对拍。**
+- 修法：`emit_eat_notices` 对 657 走"入队→peek 队首同 ident→pop→再入队"；新增 `eat_notices_weight_changed_last`（622 移到 notices 末尾）；比较器改为**按夹具六条文本逐帧**比（删除自产期望）。
+- **牙**：删 657 去重 ⇒ `got==want` 红（蓝字序错）；不移 622 ⇒ `sent 10 vs 9`（C 不在队首 ⇒ 多一条 657）。两颗各钉一处改动。
+- **回归**：`it12_` 3/3、`it13_` 6/6、`it16_` 3/3（"优先级互异 ⇒ 帧序不变"由实跑证实）；全量 `--lib` **2235 / 2162 passed / 0 failed / 73 ignored**；fmt rc=0。
+- **登记**：`10052 (RM_HEALTHSPELLCHANGED)` 的同类 pop+push 去重**本笔未做**（吃路径内未见 10052；若将来接入须一并套同语义）。
+
+**状态**：`implemented_unverified`（2026-11-20，分支 `card/items-it07-a`，merge master `da63bae28` 后）：**7 条用例全绿**（`it07_*`，含 fixture 4 例比较器 + 夹具序对拍 + 52 值断言）、全量 `--lib 2235 / 2162 passed / 0 failed / 73 ignored`、`cargo check -p game-svr --lib` rc=0、fmt rc=0；`clippy --all-targets` 待窗口。清单未动，待 QA 签。
 
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
