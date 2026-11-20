@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "c8e48dbdea487303a06667cf42b74fe17ab7d162",
+    "head": "f5a7999c3b6cbb91801a6944393c98557a1dfc57",
     "time": "2026-11-20T13:03:01+08:00",
-    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。"
+    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。"
   },
   "status_enum": [
     "verified",
@@ -496,7 +496,7 @@
         "line": 2298,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::it16_lottery_fixture_rng_and_deltas",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -513,7 +513,10 @@
           "eat_ok_lottery_gate_closed",
           "eat_ok_lottery_boundary_min",
           "eat_ok_lottery_boundary_max",
-          "eat_ok_lottery_forced_bucket_p2"
+          "eat_ok_lottery_forced_bucket_p2",
+          "eat_ok_lottery_gate_closed_nonzero",
+          "eat_ok_lottery_hit_zero_gold",
+          "eat_ok_lottery_overlap_chain_first_stop"
         ],
         "unit_tests": [
           "winlottery::tests::level1_is_sum_equality_not_range",
@@ -524,12 +527,15 @@
           "winlottery::tests::pure_decision_reads_state_not_cfg_init",
           "winlottery::tests::boundary_is_inclusive_on_both_ends",
           "winlottery::tests::notice_order_is_pump_priority_ascending",
-          "tests::it16_lottery_frame_order_gold_counters_and_always_eaten"
+          "tests::it16_lottery_frame_order_gold_counters_and_always_eaten",
+          "winlottery::tests::level_accumulates_across_calls"
         ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "Shape11 彩票已在宿主实现（WinLotteryState 进程级计数 + 纯函数 win_lottery + 宿主帧序），配置 27 键（19 参数 + 8 状态初值）经 GateConfig/EnterConfig 下传；eat-probe 的顶层 lottery 块 12 例由 oracle 真身产出，抽值经 ProbeRandom 装 RandomNumber.random 记录来源行 PlayObject.cs:3813，Rust 同 seed 逐值重放。缺口：①运行期 `SM_SYSMESSAGE` 文本帧（WinLotteryNMsg/NotWinLotteryMsg，见 openmir2-runtime-sysmsg-text-frames.md）；②`IncGold` 失败支为**已证的 oracle 死路**（非缺口）：`DropGoldDown` 的 MapItem 不设 `ItemId`（`Actor/BaseObject.cs:740-748`），`AddItemToMap` 首条守卫 `ItemId == 0 ⇒ return false`（`Maps/Envirnoment.cs:88-93`），全仓唯一 `ItemId` 赋值被注释（`Data/MapItem.cs:41`）⇒ 净效果＝金币不变＋不发 `RM_GOLDCHANGED`＋不发 `RM_ITEMSHOW`＋绿字照发；Rust 实现与该净效果一致并有用例。runtime 加固例另卡（反射 `Initialize` 即可，结果与地图内容无关）。另见 follow-up 卡 openmir2-lottery-ticket-gm-realtime.md（@LotteryTicket 实时值）。"
+      "notes": "卡 docs/issues/openmir2-items-parity.md §9.11。口径收窄：三例中真正新增覆盖只有 hit_zero_gold（⑦与既有 gate_closed、⑪与既有 forced_bucket_p2 判别力重叠，保留作直读回归、不构成新增覆盖）。判据三处由等级增量改为金币增量（oracle PlayObject.cs:3868）。期望来自 oracle 探针实出（ORACLE_SOURCE_SHA256 51a289e2…）。QA 3b 签署 @ 6c95e8b14。",
+      "basis": "semantic",
+      "scope": "partial: 15 例夹具对拍 + 跨调用累积单测。未覆盖 9 项：①human_max_gold 封顶/IncGold 失败支（仅宿主用例③，且已证死路）②同档跨调用累积（由单测 level_accumulates_across_calls 覆盖、非夹具对拍）③时序/NoWin 增长序列（仅单次快照）④部署配置下1等奖不可达（仅和式覆盖）⑤配置解析面(27键/部署String.conf文案)⑥GM显示/实时查询面⑦观察者/多人面(彩票为自通知)⑧攻击隔离随机流 world.rng_attack 关系⑨队列上界 drain.hit_cap"
     },
     {
       "id": "IT-17",
