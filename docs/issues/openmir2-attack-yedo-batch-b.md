@@ -284,14 +284,14 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 | `cargo fmt --all -- --check` | — | — | **0** |
 | `cargo clippy -p mir2-world-bevy --all-targets -- -D warnings` | — | — | **0** |
 | `cargo clippy -p game-svr --all-targets -- -D warnings` | — | — | **0** |
-| `cargo test -p mir2-world-bevy`（全量） | 889（lib） | **889 / 0 / 0** | **0** |
+| `cargo test -p mir2-world-bevy`（全量） | 891（lib） | **891 / 0 / 0** | **0** |
 | `cargo test -p game-svr --lib` | 2220 | **2147 / 0 / 73** | **0** |
 
 `--lib` 三数与 master `707bc99b9` 的基线（`2220 / 2147 / 0 / 73`）**逐数相同** ⇒ 本批在 game-svr 下
 新增 0 条、删除 0 条（`git diff 707bc99b9 HEAD -- mir2-rs/bins/game-svr/src | grep -c '^+.*#\[test\]'` = 0）。
 
 **5 条用例**（world crate，全绿）：`train_current_skill_draws_only_three_branches` /
-`train_current_skill_levels_up_when_max_train_hit`（三臂：升级 / 反向臂 / 边界臂）/
+`train_current_skill_levels_up_when_max_train_hit`（正向）/ `train_current_skill_no_level_up_when_max_train_large`（**反向臂，独立 test**）/ `check_magic_level_up_boundary_is_inclusive`（**边界臂，独立 test**）/
 `get_attack_power_hit_mode3_adds_hit_plus_and_consumes` / `power_hit_consumed_once_across_two_attacks` /
 `yedo_reset_uses_level_after_training_in_same_hit`。
 
@@ -305,9 +305,13 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 | M3 | 删 `power += hit_plus` | `get_attack_power_hit_mode3_adds_hit_plus_and_consumes` | 咬住 |
 | M4 | 删 `input.power_hit = false` | `power_hit_consumed_once_across_two_attacks` | 咬住 |
 | M5 | 删「训练后同步 `attack_skill[7].level`」 | `yedo_reset_uses_level_after_training_in_same_hit` | 咬住 |
-| M7 | 删 `state.level += 1` | `train_current_skill_levels_up_when_max_train_hit` | 咬住 |
-| M8 | `max_train[..] <= tran_point` → `<` | 同上（**边界臂**） | 咬住 |
-| M9 | 同一行 → `>=` | 同上（**反向臂**） | 咬住 |
+| M7 | 删 `state.level += 1` | 正向 + **边界** + `yedo_reset_uses_level_after_training_in_same_hit`（反向 test 仍绿，正确） | 咬住 |
+| M8 | `max_train[..] <= tran_point` → `<` | **只有** `check_magic_level_up_boundary_is_inclusive` 红 | 咬住 |
+| M9 | 同一行 → `>=` | 正向 + **反向**（`train_current_skill_no_level_up_when_max_train_large`）+ 抽数用例 + yedo_reset | 咬住 |
+
+**三臂必须各占独立 `#[test]`**（`ae` 指出，已改）：写在同一 test 里时，任何让正向臂先挂的变异
+（如 `<=`→`>=`）会**挡住反向臂**，使它没有观测面——实测 M8 只红边界 test、M9 才让反向 test 红，
+证明三臂各自承重。
 
 M1/M2/M6 是**三颗牙各改不同代码、都收敛到同一条断言**（模式支抽数 / 门的比较符 / 无条件支的抽数），
 不是三条独立用例；M7/M8/M9 同理收敛到升级用例的三条臂。每颗 `restored_sha_ok=True`；

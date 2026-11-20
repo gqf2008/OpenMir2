@@ -19465,9 +19465,16 @@ mod weapon_durability_tests {
         assert_eq!(ev.len(), 1);
         assert!(ev[0].1.level_up, "MaxTrain[0]=0 ⇒ 本击升级");
         assert_eq!(skills[0].level, 1);
+    }
 
-        // 反向臂：`max_train[0]` 远大于本击熟练点 ⇒ **不升级**。
-        // （`<=` 改 `>=` 的变异在这一臂变红。）
+    /// **B 段 1 用例②b（反向臂，独立 test）**：`max_train[0]` 远大于本击熟练点 ⇒ **不升级**。
+    ///
+    /// **必须独立成 test**（`ae` 指出）：与正向臂写在同一个 `#[test]` 里时，任何让正向臂先挂的
+    /// 变异（例如 `<=`→`>=`）都会**挡住这一臂**，使它永远没有观测面。
+    ///
+    /// 红检：`max_train[nLevel] <= tran_point` 改 `>=` ⇒ 本 test 必红（正向/边界 test 不受它影响）。
+    #[test]
+    fn train_current_skill_no_level_up_when_max_train_large() {
         let mut big = vec![crate::magic::SkillTrainState {
             magic_id: 3,
             level: 0,
@@ -19483,9 +19490,13 @@ mod weapon_durability_tests {
             "max_train=1e6 远大于本击熟练点 ⇒ 不升级"
         );
         assert_eq!(big[0].level, 0, "等级不动");
+    }
 
-        // 边界臂：`tran_point == max_train` ⇒ 升级（oracle 是 `<=`）。
-        // （`<=` 改 `<` 的变异在这一臂变红。）
+    /// **B 段 1 用例②c（边界臂，独立 test）**：`tran_point == max_train` ⇒ 升级（oracle 是 `<=`）。
+    ///
+    /// 红检：`max_train[nLevel] <= tran_point` 改 `<` ⇒ 本 test 必红（正向/反向 test 不受它影响）。
+    #[test]
+    fn check_magic_level_up_boundary_is_inclusive() {
         let mut edge = crate::magic::SkillTrainState {
             magic_id: 3,
             level: 0,
