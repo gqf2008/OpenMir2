@@ -69745,7 +69745,7 @@ SendRefMsgRange=15
             receivers.push(serde_json::json!({
                 "Who": who,
                 "Rm": [],
-                "Sent": sinsu_sent(&frames, socket),
+                "Sent": sinsu_sent(&frames.iter().map(|(s, b)| (*s, b.clone(), 0_i64)).collect::<Vec<_>>(), socket),
             }));
         }
 
@@ -70764,18 +70764,11 @@ SendRefMsgRange=15
             .collect()
     }
 
-    /// SINSU 用帧序列化：与 `fireball_parity_drive` 同口径——`(socket, body, due)` 交给
-    /// [`fireball_sent_with_due`]（含 `recog` + `due_ms_rel`），**不自己往 JSON 里写字面 0**。
-    ///
-    /// 本支**只 drain 施法批**（驱动无交付回路、未推进时钟）⇒ 该批 `due = elapsed = 0` 是**结构使然**，
-    /// 非伪造；将来若加交付批，按 `fireball_parity_drive` 取 `elapsed` 作 due（同一 helper）。
-    fn sinsu_sent(frames: &[SfFrame], socket: i32) -> Vec<serde_json::Value> {
-        let cast_batch_due: i64 = 0; // 施法批 elapsed=0（本驱动无交付回路）
-        let with_due: Vec<(i32, Vec<u8>, i64)> = frames
-            .iter()
-            .map(|(s, b)| (*s, b.clone(), cast_batch_due))
-            .collect();
-        fireball_sent_with_due(&with_due, socket)
+    /// SINSU 用帧序列化：**thin wrapper of** [`fireball_sent_with_due`]——`due` 由**调用点按批给定**。
+    /// 本支只 drain 施法批 ⇒ 调用点构造 `(s, b, 0)`。**内部不含任何批次常量**：将来加交付批 ⇒ 调用点按
+    /// `elapsed` 填 due；640 若要进 keep ⇒ 作者须显式决定其属哪批。
+    fn sinsu_sent(frames: &[(i32, Vec<u8>, i64)], socket: i32) -> Vec<serde_json::Value> {
+        fireball_sent_with_due(frames, socket)
     }
 
     /// 同 [`fireball_sent`]，但带 **`due_ms_rel`**（相对施法时刻的毫秒；交付段 = 步进 elapsed）。
