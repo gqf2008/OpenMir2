@@ -678,7 +678,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。14=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格，`MagDefenceUp` 无条件 AddBuff ⇒ target 52×49/100×49/657×98；golden 于 2026-11-20 按登录序（RecalcLevelAbilitys→RecalcAbilitys）重生成，只有 target SM 52 尾变化（见卡 §24）。"
+      "notes": "旧清单 cost=天级。14=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格，`MagDefenceUp` 无条件 AddBuff ⇒ target 52×49/100×49/657×98；golden 于 2026-11-20 按登录序（RecalcLevelAbilitys→RecalcAbilitys）重生成，只有 target SM 52 尾变化（见卡 §24）。",
+      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
     },
     {
       "id": "MG-29",
@@ -708,7 +709,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。15=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格；`DefenceUp` 已有 buff ⇒ TryUpdate 早退（BaseObject.cs:2137-2147）⇒ 只有首组 52/100/657×2；golden 同批重生成（见卡 §24）。"
+      "notes": "旧清单 cost=天级。15=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格；`DefenceUp` 已有 buff ⇒ TryUpdate 早退（BaseObject.cs:2137-2147）⇒ 只有首组 52/100/657×2；golden 同批重生成（见卡 §24）。",
+      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
     },
     {
       "id": "MG-30",
@@ -1059,7 +1061,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。"
+      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。",
+      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
     },
     {
       "id": "MG-44",
