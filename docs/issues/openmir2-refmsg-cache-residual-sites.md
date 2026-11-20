@@ -190,3 +190,27 @@
 - 用例（跨帧族同窗口）：`mag_struck_player_53_then_31_share_cache_window`（边界只收 53）、
   `mag_struck_monster_53_31_656_share_cache_window`（边界只收 53，31/656 都被挡）、
   `mag_struck_hidden_player_only_self`（隐藏 ⇒ 只自己）。
+
+#### 7b `finish_spell_tail_with` + `handle_spell_cmd_with_magic`（9 点）
+- **关键事实**：每次施法在 `DoSpell` 的 `:159` 先发 `RM_SPELL(17)`（`broadcast_ref_msg`，已接缓存）
+  ⇒ 7b 的 53/638/639/657/716 都是**同一 sender 的后续 SendRefMsg**，一律**命中缓存**
+  （`|Δ|<11`）：12 格边界只收 17，不收这些帧。**无共用判定点**（每帧独立 SendRefMsg）。
+- 逐点表：
+
+| 站点（符号） | 帧 | oracle 锚 | 同次施法次序 | 期望 |
+|---|---|---|---|---|
+| `finish_spell_tail_with` 的 `tail.magic_fire` 支 | 638 | `MagicManager.cs` `:648-658`（`boSpellFire ⇒ SendRefMsg(RM_MAGICFIRE)`） | 17 之后 | 命中 |
+| `handle_spell_cmd_with_magic` 护盾（31）buff 支 | 657 | `BaseObject.StatusChanged()` | 17 之后 | 命中 |
+| 14/15 buff 支（`take_buff_applies` 循环） | 657 | `CharacterObject.cs:96-114` → `RecalcAbilitys/StatusChanged` | 17 之后 | 命中 |
+| 32 圣言术 `invalid_cast` 支 | 639 | `PlayObject.Base.cs` `:1525-1529`（吞 `InvalidCastException`） | 17 之后 | 命中 |
+| 42 群雷 638 | 638 | `MagicManager.cs:987`（循环前无条件） | 17 之后 | 命中 |
+| 42 群雷 716（icons 逐目标） | 716 | `MagicManager.cs:1012`（逐目标 `RM_10205`） | 638 之后、逐目标 | 命中（多次） |
+| 9/10/22/36 延迟 53 | 53 | `BaseObject.cs:700-709` `HealthSpellChanged` | 17 之后 | 命中 |
+| 36 无极真气 amulet 失败支 | 639 | `PlayObject.Base.cs:644-647`（`boSpellFail` 保持 true） | 17 之后 | 命中 |
+| 36 无极真气 `invalid_cast` 防御臂 | 639 | `PlayObject.Base.cs:1525-1529`（同上） | — | **当前入口不可达**（登记；行为牙不可用） |
+- 用例：`spell_shared_tail_53_and_638_hit_cache_after_spell_frame`（53/638）、
+  `spell_group_lightening_638_and_716_hit_cache`（638+716 多次）、
+  `spell_shield_657_hits_cache_on_each_cast`（657）、`spell_defence_area_657_hits_cache`（657）、
+  `spell36_amulet_fail_639_hits_cache`（639）、
+  `spell_broadcast_cache_decides_by_call_order_not_queue_priority`（**调用序 ≠ 出队优先级序**：
+  先调 657（155）后调 638（136），线上 638 在前，但缓存按调用序 ⇒ 657 收、638 挡）。
