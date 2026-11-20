@@ -1,0 +1,94 @@
+// 卡 openmir2-magic-parity §6 / 卡 openmir2-mg24-slave-design：
+// 离线 harness 的最小 IWorldEngine 替身——只为 17/41/42 的 `MakeSlave` 服务。
+//
+// **只有 `RegenMonsterByName` 是真实现**；其余 40 条声明一律 `NotImplementedException`，
+// 目的不是"能用"，而是"**一旦某任务路径用了未实现的成员，立刻炸**"（比静默返回 null 安全）。
+// 若将来发现某成员被间接调用（如 `ActorMgr`/地图相关），把它从 throw 改成"最小真值"并在卡里点名。
+//
+// 配置不在此处读取：`Skeleton*/Dragon*/Angel` 由 `SystemShare.Config`（部署 `Server.conf`）提供，
+// 调用方 `MakeSlave` 传入的 `sMonName` 即最终名字。
+using SystemModule;
+using SystemModule.Actors;
+using SystemModule.Data;
+using SystemModule.Enums;
+using SystemModule.Maps;
+using SystemModule.SubSystem;
+using OpenMir2.Data;
+using OpenMir2.Packets.ClientPackets;
+
+namespace MagicGolden
+{
+    public sealed class OfflineWorldEngine : IWorldEngine
+    {
+        private static System.NotImplementedException Unused(string name) =>
+            new System.NotImplementedException("offline harness: unused IWorldEngine member " + name);
+
+        /// <summary>
+        /// **唯一真实现**：返回一个可用的 `MonsterObject`（`MakeSlave` 会强转为 `MonsterObject`）。
+        /// 只设置定位/身份；`Abil.Level` 与 `WAbil.HP/MaxHP` 由 `MakeSlave` 之后写入。
+        /// </summary>
+        public IActor RegenMonsterByName(string sMap, short nX, short nY, string sMonName)
+        {
+            var mon = new M2Server.Monster.MonsterObject
+            {
+                ChrName = sMonName,
+                CurrX = nX,
+                CurrY = nY,
+            };
+            return mon;
+        }
+
+        // —— 以下为"读得到就返回最小真值"的只读成员（常被外围代码顺手调用）——
+        public IPlayerActor GetPlayObject(string chrName) => null;
+        public System.Collections.Generic.IEnumerable<IPlayerActor> GetPlayObjects() =>
+            System.Array.Empty<IPlayerActor>();
+        public int MonsterCount => 0;
+        public int MagicCount => 0;
+        public int OfflinePlayCount => 0;
+        public int MonGenCount => 0;
+        public int PlayObjectCount => 0;
+        public int OnlinePlayObject => 0;
+        public int GetMapOfRangeHumanCount(IEnvirnoment envir, int nX, int nY, int nRange) => 0;
+        public int GetMapHuman(string mapName) => 0;
+        public int GetMonstersZenTime(int time) => time;
+        public IMerchant FindMerchant(int npcId) => null;
+        public INormNpc FindNpc(int npcId) => null;
+        public MagicInfo FindMagic(int nMagIdx) => null;
+        public MagicInfo FindMagic(string sMagicName) => null;
+        public bool FindOtherServerUser(string mapName, ref int srvIdx) => false;
+        public int GetPlayExpireTime(string account) => 0;
+
+        // —— 其余：一律炸（用到即暴露）——
+        public void Initialize() => throw Unused(nameof(Initialize));
+        public void InitializationMonsterThread() => throw Unused(nameof(InitializationMonsterThread));
+        public void InitializeMonster() => throw Unused(nameof(InitializeMonster));
+        public void ProcessUserMessage(IPlayerActor playObject, CommandMessage defMsg, string buff) => throw Unused(nameof(ProcessUserMessage));
+        public void CryCry(short wIdent, IEnvirnoment pMap, int nX, int nY, int nWide, byte btFColor, byte btBColor, string sMsg) => throw Unused(nameof(CryCry));
+        public void GetMapRageHuman(IEnvirnoment envir, int nRageX, int nRageY, int nRage, ref System.Collections.Generic.IList<IPlayerActor> list, bool botPlay = false) => throw Unused(nameof(GetMapRageHuman));
+        public void SendBroadCastMsg(string sMsg, MsgType msgType) => throw Unused(nameof(SendBroadCastMsg));
+        public void SendBroadCastMsgExt(string sMsg, MsgType msgType) => throw Unused(nameof(SendBroadCastMsgExt));
+        public System.Collections.Generic.IList<IMerchant> MerchantList { get; set; } = new System.Collections.Generic.List<IMerchant>();
+        public void AddMerchant(IMerchant merchant) => throw Unused(nameof(AddMerchant));
+        public void AddQuestNpc(INormNpc normNpc) => throw Unused(nameof(AddQuestNpc));
+        public System.Collections.Generic.IList<AdminInfo> AdminList { get; set; } = new System.Collections.Generic.List<AdminInfo>();
+        public void SetPlayExpireTime(string account, int expiredTime) => throw Unused(nameof(SetPlayExpireTime));
+        public void AccountExpired(string account) => throw Unused(nameof(AccountExpired));
+        public void SendServerGroupMsg(int nCode, int nServerIdx, string sMsg) => throw Unused(nameof(SendServerGroupMsg));
+        public int GetMapMonster(IEnvirnoment envir, System.Collections.Generic.IList<IActor> list) => throw Unused(nameof(GetMapMonster));
+        public void AddMonGenList(MonGenInfo monGenInfo) => throw Unused(nameof(AddMonGenList));
+        public bool CheckMonGenInfoThreadMap(int threadId) => throw Unused(nameof(CheckMonGenInfoThreadMap));
+        public void AddMonGenInfoThreadMap(int threadId, MonGenInfo monGenInfo) => throw Unused(nameof(AddMonGenInfoThreadMap));
+        public void CreateMonGenInfoThreadMap(int threadId, System.Collections.Generic.IList<MonGenInfo> monGenInfo) => throw Unused(nameof(CreateMonGenInfoThreadMap));
+        public void ClearMonsterList() => throw Unused(nameof(ClearMonsterList));
+        public void AddMonsterList(MonsterInfo monsterInfo) => throw Unused(nameof(AddMonsterList));
+        public void SwitchMagicList() => throw Unused(nameof(SwitchMagicList));
+        public void AddMagicList(MagicInfo magicInfo) => throw Unused(nameof(AddMagicList));
+        public void Run() => throw Unused(nameof(Run));
+        public void ProcessNpcs() => throw Unused(nameof(ProcessNpcs));
+        public void ProcessMerchants() => throw Unused(nameof(ProcessMerchants));
+        public void ProcessHumans() => throw Unused(nameof(ProcessHumans));
+        public void AddUserOpenInfo(UserOpenInfo UserOpenInfo) => throw Unused(nameof(AddUserOpenInfo));
+        public void OpenDoor(IEnvirnoment envir, int nX, int nY) => throw Unused(nameof(OpenDoor));
+        public void CloseDoor(IEnvirnoment envir, MapDoor door) => throw Unused(nameof(CloseDoor));
+    }
+}

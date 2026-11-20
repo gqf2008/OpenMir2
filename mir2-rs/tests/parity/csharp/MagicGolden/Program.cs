@@ -111,6 +111,12 @@ public static class Program
         {
             SystemModule.SystemShare.EventMgr = new M2Server.Event.EventManager();
         }
+        // 17/41/42 的 `MakeSlave` 需要 `WorldEngine.RegenMonsterByName`；离线进程从未初始化它 ⇒
+        // 装上最小替身（仅该方法真实现，其余 throw；见 OfflineWorldEngine.cs 与卡 §6）。
+        if (SystemModule.SystemShare.WorldEngine == null)
+        {
+            SystemModule.SystemShare.WorldEngine = new OfflineWorldEngine();
+        }
         try
         {
         if (args.Contains("--rng-selftest"))
