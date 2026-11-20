@@ -80,8 +80,17 @@
   - 变化面（机检）：640 的 `due_ms_rel=1000` 且 caster 序变为 `[638,31,656,640]`（31/656=600ms 在 640 之前）；新增 `due_ms_rel`/`recog`/actor-id 键；`DrainPasses` 随排水模型变（shield/14/15=2、hbfireball miss=1、四支 AoE=2、healing/bighealing 的 full=1 其余=2）；`Rng`/`TargetHp` **不变**；其余差异为墙钟 `delivery`。
 - **装置口径**：施法批改为**排到空**（与步进循环同语义）。单趟会把 `LateDelivery=false` 的即时链（受害者 `RM_MAGSTRUCK`→`RM_STRUCK` 扇出）推到 100ms 步 ⇒ 非 640 帧 `due=100`，与 Rust 同拍出帧（`due=0`）不一致；排到空后施法拍统一 `due=0`。
 - **驱动**：healing 专用驱动改为 100ms 步进排水并记录 `due_ms_rel`（此前单步 +1200ms、`Sent` 不带 due）；补 `drain_b3_self_deliveries` 让延迟 640 有帧。
-- **牙**：SHIELD 站点回 `None` ⇒ 比较器红 3 条（`[s1/caster] Sent[2].due_ms_rel 不等：golden=1000 rust=0`，s5/s13 同）；B2（24）站点回 `None` ⇒ 驱动红（`[lightflower/s1] caster 帧序 left=[638,640,31,656] right=[638,31,656,640]`）+ 比较器 51 条。还原后 `git status` 0 行、无 MUTATION 残留。
-- **回归**：`fire` / `bigcloak`（既有 StepDrainMs 支）驱动+比较器重跑仍绿。
+- **牙（逐站点，含「红在哪测」）**：
+
+| 站点 | 受影响 golden | 判别力（回 `None` 后红在哪/原文） |
+| --- | --- | --- |
+| ① 31 | `shield` | 比较器 3 条：`[s1/s5/s13 caster] Sent[2].due_ms_rel 不等：golden=1000 rust=0` |
+| ② 14/15 | `hangmajinbub`、`dejiwonho` | 比较器各 3 条：`[s1/s5/s13 caster] Sent[51]`（hangmajinbub）/ `Sent[3]`（dejiwonho）`due_ms_rel 不等：golden=1000 rust=0`；另 `spell_tail_p2_*` 三条单测覆盖（施法批 0 / 交付 1） |
+| ③ B1：1/5/11/13/44/45 | 该六支 golden **均不含 640**（44 夹具 `UserMagicLevel=3` ⇒ `Level<3` 不成立；其余 `boTrain` 不成立）⇒ **无 golden 可红** | 无 golden 侧红（帧面不变）；行为由 `spell_tail_p2_*` / `spell_p3b1_*` 单测覆盖。**不造假红** |
+| ④ B2：2/23/24/29/33/47 | `lightflower`（其余五支同站点） | 驱动 3 条：`[lightflower/sN] caster 帧序 left=[638,640,31,656] right=[638,31,656,640]`；比较器 51 条（首条 `Sent[1].ident golden=31 rust=640`） |
+
+  还原后 `git status` 0 行、无 MUTATION 残留。
+- **回归**：`fire` / `bigcloak`（既有 StepDrainMs 支）驱动+比较器重跑仍绿。跨 stem 隔离核的 `fire`/`sinsu` 重出与提交版**幂等一致**；`bigcloak`/`skeleton` 为旧世代缺 `due_ms_rel`/actor-id 键（重出会多键），**未重出、未提交**，差异与任何批无关。
 - **未动**：`spell_tail_bo_train`（49/51/52/53/54，另一批）。
 
 ## 已知限制（写进 scope，勿当「已验」）

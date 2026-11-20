@@ -87753,9 +87753,11 @@ SendRefMsgRange=15
             // **本卡起 640（`RM_MAGIC_LVEXP`, Lowest=255）在 +1000ms 与 `RM_DELAYMAGIC`
             // （同优先级）共用四叉堆**：泵在堆根未到点时「重入队 + 结束本次泵」，.NET 堆不稳定
             // ⇒ 到点后可能还要再泵几次才轮到 `RM_DELAYMAGIC`（生产每 tick 都泵）。
-            // 按生产节奏补泵（有界 16 次），断言落地点与有界性。
+            // 按生产节奏补泵：上界与测试辅助同一推导（起点队列长度 q ⇒ q 次泵内每条消息都轮到
+            // 过队根 ⇒ 到期项必已投递或只剩泵门拦截项），即 q + 1，另设 64 上限。
+            let bound = (rig.world.self_delay_msgs.len() + 1).min(64);
             let mut f = Vec::new();
-            for _ in 0..16 {
+            for _ in 0..bound {
                 f.extend(rig.deliver(1));
                 if b4_count(&f, 911, SM_31) >= 1 {
                     break;
