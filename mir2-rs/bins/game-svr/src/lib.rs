@@ -16616,8 +16616,18 @@ fn handle_spell_cmd_with_magic(
                                 let status = world.get_char_status(out.target);
                                 push_charstatuschanged(&mut buf, world, online, out.target, status);
                                 if let Some(e) = world.entities.get(out.target) {
-                                    let body = smframe_ext::sm_charstatuschanged(out.target, status, e.hit_speed);
-                                    buf.push_actor(online, out.target, (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8, body);
+                                    let body = smframe_ext::sm_charstatuschanged(
+                                        out.target,
+                                        status,
+                                        e.hit_speed,
+                                    );
+                                    buf.push_actor(
+                                        online,
+                                        out.target,
+                                        (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF)
+                                            as u8,
+                                        body,
+                                    );
                                 }
                                 // `:612-617`：`targetObject == null` 时 `nTargetX/nTargetY` 被改写成
                                 // 施法者的 `CurrX/CurrY`（与 click 坐标无关）⇒ 共享尾 638 用归一后的
@@ -68319,7 +68329,14 @@ SendRefMsgRange=15
                 rig.displays.set(e.actor_id, d);
             }
         }
-        rig.saves.get_mut("caster").unwrap().record.data.magic.as_mut().unwrap()[0]
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
             .as_mut()
             .unwrap()
             .level = 1;
@@ -68344,7 +68361,11 @@ SendRefMsgRange=15
         );
         let _ = std::fs::remove_file(&trace);
         mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
-        assert_eq!(trace_header_seed(&trace), seed, "trace 头部 seed 必须与本支一致");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
 
         let mut rig = uenhancer_rig(id_base);
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
@@ -68425,7 +68446,15 @@ SendRefMsgRange=15
             let Some(who) = who_of(*id) else { continue };
             let v = rm_by_who.entry(who).or_default();
             // `:159 RM_SPELL(Effect, tx, ty, MagicId)`。
-            v.push(fireball_rm(10008, 1, i64::from(tx), i64::from(ty), 36, 24, false));
+            v.push(fireball_rm(
+                10008,
+                1,
+                i64::from(tx),
+                i64::from(ty),
+                36,
+                24,
+                false,
+            ));
             // `:648-658 RM_MAGICFIRE`：p3 = 归一后的 targetActorId（self=caster）。
             v.push(fireball_rm(
                 10120,
@@ -68490,8 +68519,7 @@ SendRefMsgRange=15
             "CasterExtraAbil0": extra0,
         }]);
         let out = dir.join(format!("{stem}_{label}.json"));
-        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap())
-            .expect("台账必须可写");
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[uenhancer {label}] seed={seed} cast_rng={:?} deliver_rng={:?} extra0={extra0} char_status={char_status} tran={tran} amulet={amulet:?}",
