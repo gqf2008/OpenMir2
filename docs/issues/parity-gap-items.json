@@ -231,11 +231,11 @@
         "line": 2101,
         "line_end": 2157
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "useitem::tests::it07_buff_fixture_matches_pure_decision",
-        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "fixture": "mir2-rs/tests/parity/m3/fixtures/buff_vectors.json",
+        "test": "it07_emit_eat_notices_production_order_is_heap_sift",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（宿主对拍）；mir2-rs/bins/game-svr/src/useitem.rs（纯决策）",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/buff_vectors.json（buff-probe 由 oracle 真身产出）",
         "cases": [
           "eat_ok_shape12_six_buffs",
           "eat_ok_shape12_single_mac",
@@ -243,17 +243,19 @@
           "eat_fail_shape12_all_zero"
         ],
         "unit_tests": [
-          "useitem::tests::it07_shape12_six_buffs",
-          "useitem::tests::it07_shape12_all_zero_not_eaten",
-          "useitem::tests::it07_shape12_max_merge_keeps_larger_values",
-          "tests::it07_emit_eat_notices_production_order_is_heap_sift",
-          "tests::it07_shape12_657_notice_fields"
+          "useitem::tests::it07_buff_fixture_matches_pure_decision",
+          "tests::it07_shape12_six_buffs",
+          "tests::it07_shape12_all_zero_not_eaten",
+          "tests::it07_shape12_max_merge_keeps_larger_values",
+          "tests::it07_shape12_657_notice_fields",
+          "tests::it07_ability52_tail_is_unbuffed_wabil"
         ]
       },
       "cost": "M",
       "deviation": null,
       "notes": "Shape12 六属性 buff：纯决策六槽写入/时长/蓝字 + 宿主写回 BuffState → RecalcAbilitys → RM_ABILITY/657；buff-probe 4 例由 oracle 真身产出（ExtraAbil/Flag/Times 前后、now_before、通知文本含 \"sec.\"）。实现与夹具在 card/items-it07（该分支合入后本状态生效）。缺口：①单/组合支的行为面只由夹具比较器覆盖（纯函数单测对六槽只在 max/不命中处取值）；②`ExtraAbil` 的 WAbil 效果在 oracle 是死写（`PlayObject.cs:2818-2840` 被 `:2890-2906` 整体覆盖）⇒ `WAbil` 必须不变。",
-      "scope": "single_and_combo_paths_only_in_fixture"
+      "scope": "partial：①通知线序按夹具 `expect.notices` 六条文本逐帧比，含 657 的 `SendUpdateMsg` 头去重与 `RM_WEIGHTCHANGED` 移到 EatItems 尾部；②`52` 帧体 = 吃前 `WAbil`（ExtraAbil 死路的直接行为证据）；③`WAbil` 吃前吃后相等；④`ExtraAbil/Flag/Times` 状态。**未覆盖/登记**：`10052 (RM_HEALTHSPELLCHANGED)` 的同类 pop+push 去重未做（吃路径内未见，若将来接入须同套）；夹具的 `pumped`/`drain` 字段仅留档、不作判据。",
+      "basis": "semantic"
     },
     {
       "id": "IT-08",
