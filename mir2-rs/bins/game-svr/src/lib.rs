@@ -34312,7 +34312,7 @@ mod tests {
                 "socket {socket} 的 Series = 该收件人自己的 hit_speed"
             );
         }
-        assert!(per.get(&905).is_none(), "+13 超 SendRefMsgRange ⇒ 零帧");
+        assert!(!per.contains_key(&905), "+13 超 SendRefMsgRange ⇒ 零帧");
     }
 
     /// **657 牙 ②（opc-19 追加）：三个收件人三个**不同** HitSpeed（3/7/9）——防"两人里恰好一个 0"的巧合。
