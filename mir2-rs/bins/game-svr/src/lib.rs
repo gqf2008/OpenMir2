@@ -34725,6 +34725,54 @@ mod tests {
         assert!(!obs.contains_key(&905), "+13 超 range");
     }
 
+    /// **657 `Series` 的区分性用例**（**不代表线上存在实体/会话不一致**）：
+    /// 实体 `hit_speed=99` 是"旧值哨兵"，会话重算后 `hit_speed=0` ⇒ 657 自见 `Series` 必须读
+    /// **重算后**的值 0。当前实现读实体（该路径 recalc 后未把 `sg` 镜像回实体）⇒ 实发 99。
+    /// 已知缺口：`openmir2-recalc-entity-mirror-gap`（`43` 的卡）；本用例以 `#[ignore]` 登记，
+    /// 缺口修好、去掉 ignore 即应转绿。
+    #[ignore = "recalc-entity-mirror-gap: 自见读实体旧值，见 openmir2-recalc-entity-mirror-gap"]
+    #[test]
+    fn buff_657_needrecalc_series_reads_post_recalc_value() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = test_session_ground(actor);
+        sg.hit_speed = 0;
+        ground_sessions.insert("src".into(), sg);
+        // 哨兵：实体残留"旧值" 99；重算后的正确值应为会话的 0。
+        world.entities.get_mut(actor).unwrap().vitals.hit_speed = 99;
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_recalcs.push(actor);
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut self_series = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if socket == 901 {
+                if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                    if m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED {
+                        self_series.push(m.series);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            self_series,
+            vec![0],
+            "自见 Series = 重算后的 HitSpeed（0），不是实体旧值 99"
+        );
+    }
+
     /// **A3 负例（同卡）**：① `StateTick==10` 的预告文案（`魔法防御力10秒后恢复正常。`）
     /// 只发 100、**不发 52**（`StateTick==10` 不置 `boNeedRecalc`）；② 空 `rec` ⇒ 零帧
     /// （「触发放宽」变异——每 tick 都发——在此红）。
@@ -99197,6 +99245,10 @@ fn ",
             .expect("实体")
             .buff
             .char_status_ex = 2;
+        // **Series 区分性构造态**（同族于 `43` 的 `recalc-entity-mirror-gap`）：实体 `hit_speed=99`
+        // 是"旧值哨兵"；`RecalcAbilitys` 后会话 `hit_speed` 应为 0 ⇒ 657 的 `Series` 必须读
+        // **重算后**的值。本路径自见用 `sg.hit_speed`（`recalc_session_ability` 内赋值），不读实体。
+        rig.world.entities.get_mut(rig.actor).expect("实体").vitals.hit_speed = 99;
         rig.sessions
             .get_mut("aaa")
             .expect("会话")
@@ -99256,6 +99308,17 @@ fn ",
         assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
         assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
         assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
+        // **Series 断言**：657 的 `Series` = 各自**重算后**的 `HitSpeed`（夹具均为 0），
+        // 不是实体内残留的旧值 99（entity 哨兵）——钉"读的是哪一侧"。
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                assert_eq!(
+                    u16::from_le_bytes([b[10], b[11]]),
+                    0,
+                    "socket {socket} 的 657 Series 必须是重算后的 HitSpeed（0），不是实体旧值 99"
+                );
+            }
+        }
         // 顺序面不可观测（自帧与观察者各 1、字节相同、跨 socket 序非线上面）⇒ 只验逐 socket 计数。
     }
 

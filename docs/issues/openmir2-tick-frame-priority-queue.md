@@ -593,6 +593,30 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
 同一机制也适用于 `#9 boNeedRecalc`：`BUFF_PASSES_PER_TICK`（=4，`mir2-rs/crates/world-bevy/src/buff.rs`）+ `world.rs` 的
 `out.recalcs.extend(pass.recalcs)`（跨 pass 累积） ⇒ 同 actor 可被推多次；修法相同（广播按事件、自见在循环末每人一次）。
 
+### 片① 之后（`977d260a1` rebase）的 2 条来源与删除记录（2026-11-20）
+rebase 后"升级链 = 2 条"**由 `TickFrameQueue` 入队版产出**：`drain_kill_exp_chain_with_magic` 里
+`push_charstatuschanged_self_and_observers(&mut frame_q, …)` → `frame_q.flush(online, gates, "657(战斗升级)")`，
+它按 ①自广播副本/②观察者/③自更新 入**每个收件人各自的堆** ⇒ 自见 2 条（oracle 队首 `RM_WINEXP=139`
+⇒ 不去重）。**即发版**（入队后立刻 flush 的薄包装）在 rebase 后**无语义使用者**：两处 GM 调用点按
+头去重裁定已改用 once 版 ⇒ 删除（提交 `refactor(game-svr): 删即发版三动作 helper`）。
+**删薄包装 ≠ 删掉"2"**：2 条仍由队列版产出，且升级链四例
+（`c5_recovery_then_levelup_emit_two_frames` / `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` /
+`p31_levelup_reuses_kill_exp_chain_order` / `tick_frame_order_puts_stamina_after_kill_exp_chain`）实测绿。
+
+### 657 `Series` 的值断言（2026-11-20，响应 `43` 的 `recalc-entity-mirror-gap`）
+条数对 ≠ 值对：本卡补两类**区分性**用例（实体 `hit_speed=99` 哨兵、会话重算后 0；
+**这是构造态，不代表线上存在实体/会话不一致**，只为钉"读的是哪一侧"）。
+- `#1 @Level0`（`gm_level_emits_657_self_and_nearby_observers`）：自见 `Series = 0`（重算后），
+  不用实体哨兵 99 ⇒ **绿**。`apply_pending_level_up` 自见走 `sg.hit_speed`
+  （`recalc_session_ability` 内 `sg.hit_speed = recalc.hit_speed`）⇒ **不受 mirror-gap 影响**。
+- `#9 boNeedRecalc`（`buff_657_needrecalc_series_reads_post_recalc_value`）：同哨兵下
+  **实测红**——`assertion left == right failed: 自见 Series = 重算后的 HitSpeed（0），不是实体旧值 99`
+  / `left: [99]` / `right: [0]`（`lib.rs` 第 34769 行）。根因 = 该路径 `recalc_session_ability` 后**未把
+  `sg` 镜像回实体**，而自见取 `world.entities…hit_speed`；归 `43` 的
+  `openmir2-recalc-entity-mirror-gap`。本用例以
+  `#[ignore = "recalc-entity-mirror-gap: 自见读实体旧值，见 openmir2-recalc-entity-mirror-gap"]`
+  登记（不红主套件，缺口修好去掉 ignore 即转绿）。
+
 ### 硬约束与未覆盖面
 - **在逐路径判定前，任何新站点不得按"自 2"接线**；默认按"夹具队列空 ⇒ 1"，除非能指出 `:2876` 前确有的 <155 入队。
 - **"2 条情形"（recalc 前已有 622/638/53 待办）本批未覆盖**（夹具都是空队列）——这是**未覆盖**，不是"不成立"；
