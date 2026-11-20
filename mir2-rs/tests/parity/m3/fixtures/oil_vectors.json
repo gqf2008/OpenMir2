@@ -1,0 +1,2055 @@
+{
+  "generator": "mir2-rs/tests/parity/m3/oil-probe",
+  "oracle_assembly": "M2Server.dll",
+  "oracle_assembly_sha256": "ee2cc2fb2ff3ced13c484c115c530f9574271699835d1176c4f0c302e28897d4",
+  "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
+  "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.Operate.cs",
+    "src/M2Server/Player/PlayObject.Base.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/Actor/BaseObject.Message.cs",
+    "src/M2Server/Player/PlayObject.Socket.cs",
+    "src/Modules/SystemModule/Data/SendMessage.cs",
+    "src/M2Server/Items/GameItemSystem.cs",
+    "src/OpenMir2/Grobal2.cs"
+  ],
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Message.cs:826 (CM_EAT -\u003E ClientUseItems)",
+    "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems)",
+    "src/M2Server/Player/PlayObject.Base.cs:2047 (EatItems; StdMode 0/1/2)",
+    "src/M2Server/Player/PlayObject.Base.cs:1072 (UseStdModeFunItem; StdMode 31 AniCount!=0)",
+    "src/OpenMir2/Grobal2.cs:62 (MaxBagItem = 46; StdMode 31 AniCount==0 \u5BB9\u91CF\u5B88\u536B)",
+    "src/M2Server/Player/PlayObject.Base.cs:288 (RefMyStatus = RecalcAbilitys \u002B RM_MYSTATUS)",
+    "src/M2Server/Player/PlayObject.Base.cs:1183 (GetMyStatus = min(HungerStatus/1000, 4))",
+    "src/M2Server/Actor/BaseObject.cs:952 (IncHealthSpell)",
+    "src/M2Server/Actor/BaseObject.cs:700 (HealthSpellChanged)",
+    "src/M2Server/Actor/BaseObject.cs:1771 (WeightChanged) / :1356 (RecalcBagWeight)",
+    "src/M2Server/Player/PlayObject.Socket.cs:17 (SendDefMessage)"
+  ],
+  "notes": [
+    "\u6709\u6548\u7269\u54C1 = \u6A21\u677F\uFF08\u63A2\u9488 GetUpgradeStdItem \u662F\u6052\u7B49\u62F7\u8D1D\uFF1BDesc \u5347\u7EA7/StdMode \u53D8\u6362\u4E0D\u5728\u672C\u7247\u4F5C\u7528\u57DF\uFF09",
+    "\u5373\u65F6\u5E27 = SendDefMessage/SendSocket \u76F4\u63A5\u5199 gate buffer\uFF08SM_EAT_OK=635 / SM_EAT_FAIL=636\uFF09",
+    "\u5EF6\u65F6\u901A\u77E5 = SendMsg \u5165 MsgQueue\uFF08PriorityQueue\uFF0C\u4F18\u5148\u7EA7 = (byte)wIdent\uFF09\uFF0C\u63A2\u9488\u6309\u51FA\u961F\u5E8F\u8BFB\uFF1B\u771F\u5B9E\u534F\u8BAE\u4E0A\u5B83\u665A\u4E8E\u5373\u65F6\u5E27\u7531\u6D88\u606F\u6CF5\u4E0B\u53D1",
+    "StdMode 2\uFF08\u65E0\u6548\u679C\uFF09\u5DF2\u8986\u76D6\uFF1BStdMode 31 \u7684 \u0060UseStdModeFunItem\u0060\uFF08AniCount!=0\uFF09\u3001AniCount==0 \u7684\u5BB9\u91CF\u4E0D\u8DB3\u5206\u652F\u3001\u4EE5\u53CA AniCount==0 \u7684\u89E3\u5305\u6210\u529F\uFF08\u0060UnbindList[Shape]\u0060 \u547D\u4E2D \u21D2 6 \u4EF6 \u0060CopyToUserItemFromName\u0060 \u002B 6 \u6761 SM_ADDITEM\uFF09\u5747\u5DF2\u8986\u76D6\uFF1BStdMode 3/4 \u4ECD\u5728 T-17\u3002\u89E3\u5305\u4EA7\u7269 \u0060make_index\u0060 \u542B Environment.TickCount\uFF08\u5899\u949F\uFF09\u21D2 \u6BD4\u8F83\u5668\u6392\u9664\u7EDD\u5BF9\u503C\u3002",
+    "Envir.Flag.boNODRUG \u5206\u652F\uFF08\u5730\u56FE\u7981\u836F\uFF09\u5DF2\u8986\u76D6\uFF1ASysMsg(Red) \u5165 MsgQueue\uFF08RM_SYSMESSAGE=11004\uFF0C\u989C\u8272\u53D6\u81EA Config.RedMsgFColor/RedMsgBColor\uFF09\uFF0C\u7269\u54C1\u4E0D\u6D88\u8017\u3001\u80CC\u5305\u4E0D\u52A8\u3001\u843D SM_EAT_FAIL"
+  ],
+  "unbind": {},
+  "config": {
+    "exps_conf": "Exps.conf",
+    "exps_conf_sha256": "07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9",
+    "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+    "need_exps_head": [
+      0,
+      10,
+      15,
+      20,
+      30,
+      50,
+      80,
+      100
+    ],
+    "need_exps_6": 80
+  },
+  "templates": {
+    "2300": {
+      "name": "bless_oil",
+      "std_mode": 3,
+      "shape": 4,
+      "weight": 1,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2301": {
+      "name": "sword_dc_140a",
+      "std_mode": 5,
+      "shape": 0,
+      "weight": 5,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2302": {
+      "name": "sword_dc_zero",
+      "std_mode": 5,
+      "shape": 0,
+      "weight": 5,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    }
+  },
+  "cases": [
+    {
+      "name": "oil_curse_subtracts_luck",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        1
+      ],
+      "draws": [
+        1
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 255,
+          "n_param2": 56,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "545255455456445456535946435b47525a4c6956573d4b43"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_curse_at_luck_zero_bumps_curse",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          5,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        1
+      ],
+      "draws": [
+        1
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 255,
+          "n_param2": 56,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "545255455456445456535946435b47525a4c6956573d4b43"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_curse_desc4_at_ten_stays",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          10,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          10,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        1
+      ],
+      "draws": [
+        1
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_remove_curse",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0
+      ],
+      "draws": [
+        0
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "564c664e53415347405b784f5a58635a55573e695e5e3c"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_point1_adds_luck",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0
+      ],
+      "draws": [
+        0
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "564c664e53415347405b784f5a58635a55573e695e5e3c"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_point2_hit",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0,
+        1
+      ],
+      "draws": [
+        0,
+        1
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "564c664e53415347405b784f5a58635a55573e695e5e3c"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_point2_miss_point3_hit",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0,
+        0,
+        1
+      ],
+      "draws": [
+        0,
+        0,
+        1
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "564c664e53415347405b784f5a58635a55573e695e5e3c"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_both_tiers_miss",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0,
+        0,
+        0
+      ],
+      "draws": [
+        0,
+        0,
+        0
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "565a784c3f5d49675d3f"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_desc3_at_point3_no_extra_draw",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          7,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          7,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0
+      ],
+      "draws": [
+        0
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "565a784c3f5d49675d3f"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_nrand_zero_point3_dead",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 2302
+      },
+      "weapon_before": {
+        "index": 2302,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2302,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [],
+      "script": [
+        0,
+        0,
+        0
+      ],
+      "draws": [
+        0,
+        0,
+        0
+      ],
+      "frames": [
+        {
+          "ident": 635,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 10302,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 62,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10051,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 67,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10115,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 131,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 10139,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "priority": 155,
+          "late": 0,
+          "text": null
+        },
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 219,
+          "n_param2": 255,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "565a784c3f5d49675d3f"
+        }
+      ],
+      "pumped": [
+        {
+          "ident": 752,
+          "recog": 1,
+          "param": 3845,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 52,
+          "recog": 0,
+          "param": 25344,
+          "tag": 0,
+          "series": 0
+        },
+        {
+          "ident": 622,
+          "recog": 0,
+          "param": 0,
+          "tag": 5,
+          "series": 36686
+        }
+      ],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_fail_no_weapon",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": false,
+        "dead": false,
+        "weapon_index": 0
+      },
+      "weapon_before": null,
+      "weapon_after": null,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "script": [],
+      "draws": [],
+      "frames": [
+        {
+          "ident": 636,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [],
+      "pumped": [],
+      "drained": {
+        "passes": 0,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    },
+    {
+      "name": "oil_fail_nodrug",
+      "request": {
+        "make_index": 1,
+        "name": "bless_oil"
+      },
+      "ctx": {
+        "can_use_item": true,
+        "no_drug": true,
+        "dead": false,
+        "weapon_index": 2301
+      },
+      "weapon_before": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "weapon_after": {
+        "index": 2301,
+        "dura": 1000,
+        "dura_max": 5000,
+        "desc": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "item_list_after": [
+        {
+          "make_index": 1,
+          "index": 2300,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "script": [],
+      "draws": [],
+      "frames": [
+        {
+          "ident": 636,
+          "recog": 0,
+          "param": 0,
+          "tag": 0,
+          "series": 0
+        }
+      ],
+      "notices": [
+        {
+          "ident": 11004,
+          "w_param": 0,
+          "n_param1": 255,
+          "n_param2": 56,
+          "n_param3": 0,
+          "priority": 252,
+          "late": 0,
+          "text": "4057554558554c404243745956583d5356417b5157545e5942567a503d5657425d5d496b"
+        }
+      ],
+      "pumped": [],
+      "drained": {
+        "passes": 1,
+        "max_passes": 8,
+        "hit_cap": false
+      }
+    }
+  ]
+}

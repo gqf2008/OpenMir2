@@ -37,6 +37,7 @@ mod cert;
 mod clock;
 mod config;
 mod dbclient;
+mod eat_move;
 mod enter;
 mod gamegold;
 mod gate_backpressure;
@@ -70,12 +71,14 @@ mod record;
 mod seed;
 #[cfg(test)]
 mod simmonsterai_bench;
+mod skill_ability;
 mod state_log;
 mod storage;
 mod strings;
 mod telemetry;
 mod tick_profile;
 mod users;
+mod wepmake_luck;
 mod winlottery;
 
 // 编码层（无 I/O、无全局状态）：进程级集成测试直接引用 `game_svr::*`（见 `tests/relay.rs`）。
@@ -1706,6 +1709,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 EnterConfig {
                     repair_item_dec_dura: cfg.repair_item_dec_dura,
                     win_lottery: cfg.win_lottery,
+                    weapon_make_luck: cfg.weapon_make_luck,
                     home_start_points: home_fallback.start_points.clone(),
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
@@ -2960,7 +2964,7 @@ fn apply_pending_level_up(
     let max_exp = sg.equip.abil.max_exp;
     // `RecalcLevelAbilitys()` + `RecalcAbilitys()`：本仓 `recalc_abilitys_with_prior` 内部
     // 先跑等级派生（`level_ability_base`）再叠装备/加成，与 oracle 同序。
-    recalc_session_ability(sg, catalog, None, None);
+    recalc_session_ability(sg, catalog, None, None, Some(&mut world.rng));
     // 实体侧：`level` 已由 `GmEntityState::apply` 写入；`max_exp` 这里补（oracle 是同一个
     // `PlayObject`，战斗经验读 `Abil.MaxExp`）。
     if let Some(e) = world.entities.get_mut(sg.actor_id) {
@@ -2971,6 +2975,24 @@ fn apply_pending_level_up(
         let client_layout = game_svr::smframe::client_layout_enabled();
         send_levelup_frames(sg, entry, gates, client_layout);
     }
+    // **卡 `openmir2-charstatuschanged-wiring` #1**：oracle `HasLevelUp`
+    // （`PlayObject.cs:5242-5252`）内的 `RecalcAbilitys()` 无条件
+    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
+    // ⇒ 自己**两条**（广播副本 + 自更新副本）+ 观察者各一条 657。
+    // 线上序：`RM_LEVELUP` 低字节 < `RM_CHARSTATUSCHANGED(155)` ⇒ 657 排在 45/52/752 之后；
+    // `status` 取**重算之后**的当下值（`PlayObject.cs:2873` 的取值时点）。
+    let char_status = world.get_char_status(sg.actor_id);
+    let hit_speed = sg.hit_speed;
+    send_charstatuschanged_self_and_observers(
+        world,
+        online,
+        gates,
+        sg.actor_id,
+        char_status,
+        hit_speed,
+        chat::send_ref_msg_range(),
+        "657(GM @Level)",
+    );
     true
 }
 
@@ -3109,14 +3131,17 @@ fn apply_pending_gm_mountride(
 /// （调用点 = `CM_SAY` 支；**脚本路与既有 `@1/@2/@3` 一致，未接**，见 T-217 登记）。
 ///
 /// 返回 `None` = 本条命令没有佩戴位差量（或模板缺失 ⇒ oracle `SendUpdateItem` 也不发帧）。
+#[allow(clippy::too_many_arguments)]
 fn apply_pending_gm_use_item(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     let sg = sessions.get_mut(chr_name)?;
-    apply_pending_gm_use_item_in(sg, world, catalog)
+    apply_pending_gm_use_item_in(sg, world, catalog, online, gates)
 }
 
 /// [`apply_pending_gm_use_item`] 的**单会话**版本：脚本接缝处已持有 `&mut SessionGround`
@@ -3125,18 +3150,23 @@ fn apply_pending_gm_use_item_in(
     sg: &mut SessionGround,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     let w = sg.gm.pending_use_item.take()?;
-    apply_gm_use_item_write(sg, w, world, catalog)
+    apply_gm_use_item_write(sg, w, world, catalog, online, gates)
 }
 
 /// 佩戴位写本身（[`gmcmd::GmUseItemWrite`]）：脚本接缝里 GM 会话态被**临时移出**到
 /// `gm_sess`（`std::mem::take(&mut sg.gm)`）⇒ pending 不在 `sg.gm` 上，调用方取出写后传进来。
+#[allow(clippy::too_many_arguments)]
 fn apply_gm_use_item_write(
     sg: &mut SessionGround,
     w: gmcmd::GmUseItemWrite,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Option<Vec<u8>> {
     if w.slot >= sg.use_items.len() {
         return None;
@@ -3162,7 +3192,24 @@ fn apply_gm_use_item_write(
         }
     }
     // `:60` `RecalcAbilitys()`（同一份生产实现）。
-    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
+    // **卡 `openmir2-charstatuschanged-wiring` #2**：oracle `SmakeItemCommand`
+    // （`src/Modules/GameCommand/Commands/SmakeItemCommand.cs:60`）内的
+    // `PlayerActor.RecalcAbilitys()` 无条件发 657（自 2：广播副本 + 自更新副本 + 观察者）。
+    // 发在**做重算的这个函数里**，不交给调用方决定；返回值形状不变。帧内序偏差登记 **T-288**
+    // （657 先于调用方发出的 203；本路径仅 GM 可达、现网权限恒 0）。
+    let char_status = world.get_char_status(actor);
+    let hit_speed = sg.hit_speed;
+    send_charstatuschanged_self_and_observers(
+        world,
+        online,
+        gates,
+        actor,
+        char_status,
+        hit_speed,
+        chat::send_ref_msg_range(),
+        "657(GM 改属性)",
+    );
     // `:61` `SendUpdateItem`：模板缺失 ⇒ oracle 不发帧（`if (stdItem != null)`）。
     let tpl = catalog.get(w.index)?;
     let (owned, _) = game_svr::bag::upgrade_std_item(tpl, &w.desc);
@@ -3199,6 +3246,8 @@ fn collect_gm_use_item_pending(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> Vec<(i32, Vec<u8>)> {
     let mut names: Vec<String> = sessions
         .iter()
@@ -3212,7 +3261,7 @@ fn collect_gm_use_item_pending(
             continue;
         };
         let actor = sg.actor_id;
-        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
             out.push((actor, body));
         }
     }
@@ -3720,7 +3769,7 @@ fn run_party_goto_label(
     // 会话 pending（脚本跑完已归位到 `ground_sessions`）⇒ 在脚本帧排水**之前**落地
     // （oracle `SendUpdateItem` 立即、`SysMsg` 入队后排水 ⇒ 203 先于蓝字 100）。
     if let Some(sg) = ground_sessions.get_mut(chr_name) {
-        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM") {
                 let _ = tx.send(SimToGate::SendFrame { socket, body });
             }
@@ -3983,6 +4032,8 @@ struct InboundFramesCtx<'a> {
     red: (u8, u8),
     /// `Config.SendRefMsgRange`（`StatusChanged()` 的 `SendRefMsg` 近邻半径，缺省 12）。
     ref_msg_range: i32,
+    /// 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案来源（第 4 个生产者 `CM_DROPGOLD`）。
+    msg: &'a game_svr::useitem::SysMsgTexts<'a>,
 }
 
 /// R1 入站派发余 10 条（Task C / 片 76）的接线臂。
@@ -4105,7 +4156,13 @@ fn handle_inbound_cmd(
             // 210/212 尾段传 `magic = None`：本支不改装备 ⇒ `FlameRing/RecoveryRing` 命中集不变、
             // `Add/DelItemSkill` 幂等 ⇒ 无可观测事件（与 T-95 ⑨ 同口径，登记）。
             let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-            let effect = recalc_session_ability(sg, frames_ctx.catalog, extra_abil.as_ref(), None);
+            let effect = recalc_session_ability(
+                sg,
+                frames_ctx.catalog,
+                extra_abil.as_ref(),
+                None,
+                Some(&mut world.rng),
+            );
             // `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`（RecalcAbilitys 尾段）。
             let status = world.get_char_status(actor_id);
             if let Some(mut e) = world.entities.get_mut(actor_id) {
@@ -4268,12 +4325,29 @@ fn handle_inbound_cmd(
                 inbound::DropGoldOutcome::NotPositive | inbound::DropGoldOutcome::NotEnoughGold => {
                 }
                 inbound::DropGoldOutcome::Rejected(reason, f) => {
+                    // 卡 `openmir2-menu-ok-text`（第 4 个生产者）：`DefFrame` 刻意"无尾"（几十个构造点），
+                    // 按 opc-19 口径在**发送点补文本**，不扩类型。文案按拒绝原因取
+                    // `String.conf` 的同名键（`Operate.cs:226/231/236`）。
+                    let text = match reason {
+                        inbound::DropGoldReject::SafeZone => {
+                            frames_ctx.msg.canot_drop_in_safe_zone_msg
+                        }
+                        inbound::DropGoldReject::BelowCanDropGold => {
+                            frames_ctx.msg.canot_drop_gold_msg
+                        }
+                        inbound::DropGoldReject::CannotDropItem => {
+                            frames_ctx.msg.canot_drop_item_msg
+                        }
+                    };
                     glog!(
                         "INF",
-                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 拒绝 {reason:?}（SM_MENU_OK 文案未建模，登记）",
+                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 拒绝 {reason:?}（带尾文案）",
                         cmd.recog
                     );
-                    emit_def_frames(gates, gate_idx, socket, &[f], "CM_DROPGOLD/拒绝");
+                    let body = game_svr::smframe::sm_menu_ok(f.recog, &enter::gbk(text));
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_DROPGOLD/拒绝") {
+                        let _ = tx.send(SimToGate::SendFrame { socket, body });
+                    }
                 }
                 inbound::DropGoldOutcome::Dropped { gold, frame } => {
                     // BUG-REPLICA 2：净金币不变 ⇒ 不改会话态。
@@ -4588,6 +4662,8 @@ fn handle_ground_cmd(
     colors: &MsgColors,
     catalog: &dyn game_svr::ability::ItemCatalog,
     registry: Option<&mir2_envir::MapRegistry>,
+    // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案来源（丢弃守卫三条）。
+    strings: &game_svr::strings::StringConf,
 ) {
     // 找会话（`online` 给出该角色当前的网关线号；`sessions` 给出地面交互态）。
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
@@ -4697,6 +4773,7 @@ fn handle_ground_cmd(
             // `IsCanDrop` 在无 PK/摆摊等状态下恒真；未建模的状态（摆摊/交易）登记。
             is_can_drop: true,
             no_throw_item: flag.as_ref().is_some_and(|f| f.no_throw_item),
+            sysmsg: game_svr::useitem::SysMsgTexts::from_conf(strings),
             control_drop_item: cfg.control_drop_item,
             can_drop_price: cfg.can_drop_price,
             drop_item_rage: cfg.drop_item_rage,
@@ -4716,6 +4793,14 @@ fn handle_ground_cmd(
         wabil: sg.state.wabil.clone(),
         abil_exp: sg.equip.abil.exp,
         sys_msg: sg.sys_msg.clone(),
+        // `SM_ABILITY(52)` / `SM_SUBABILITY(752)` 的取值来源（后来者复算口径）：
+        //   Job      ← `PlayObject.Job`（本会话 `sg.equip.job`）；
+        //   52 尾    ← `EncodeMessage(WAbil)` 的原文（`ability_tail(&sg.state.wabil, …)`，
+        //              布局由 `MIR2_CLIENT_ABILITY_LAYOUT` 选 58B/40B，见 `ability_tail` 用例）；
+        //   752 四段 ← `SubAbility::to_frame_bytes()`（`PlayObject.Message.cs:1935`）。
+        job: sg.equip.job,
+        ability_tail: ability_tail(&sg.state.wabil, mir2_client_ability_layout()),
+        sub_bytes: sg.sub.to_frame_bytes(),
         hunger_status: sg.hunger_status,
         hit_speed: sg.hit_speed,
     };
@@ -5225,7 +5310,13 @@ fn handle_bag_cmd_with_magic(
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
         // oracle `Operate.cs:458/538`：`RecalcAbilitys()` 里的 `SendAddMagic/SendDelMagic`
         // 是**直接帧**，排在 `SM_TAKEON_OK/TAKEOFF_OK` 之前（`:459-461` 的 52/752 才是队列消息）。
-        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic);
+        let effect = recalc_session_ability(
+            sg,
+            catalog,
+            extra_abil.as_ref(),
+            magic,
+            Some(&mut world.rng),
+        );
         magic_events = effect.magic_events;
         // oracle `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`——必须在
         // `StatusChanged()` 之前取本次重算后的状态。657 的 Param/Tag 与后续帧尾的
@@ -6347,7 +6438,7 @@ fn handle_click_npc_cmd(
         // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
         // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
         // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-        if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+        if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates) {
             if let Some(tx) =
                 route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
             {
@@ -7447,7 +7538,9 @@ fn handle_shop_cmd_inner(
             // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
             // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
             // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-            if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+            if let Some(body) =
+                apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+            {
                 if let Some(tx) =
                     route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                 {
@@ -7533,7 +7626,9 @@ fn handle_shop_cmd_inner(
                 // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
                 // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
                 // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-                if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+                if let Some(body) =
+                    apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+                {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                     {
@@ -7706,8 +7801,13 @@ fn handle_shop_cmd_inner(
                                 // **复验 F2 附带（T-95⑨ 登记）**：`RecalcAbilitys` 尾段的
                                 // FlameRing/RecoveryRing `Del/AddItemSkill`（210/212 事件）未接——
                                 // 本 handler 无 `SavedHuman`/`MagicCfg` 输入；`WAbil/SubAbility` 语义等价。
-                                let effect =
-                                    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                                let effect = recalc_session_ability(
+                                    sg,
+                                    catalog,
+                                    extra_abil.as_ref(),
+                                    None,
+                                    Some(&mut world.rng),
+                                );
                                 // **复验 F1**：`RecalcAbilitys` 的产物（`WAbil`/`SubAbility`/`HitSpeed`）
                                 // 同帧落实体（与换装路径 `sync_use_items_to_entity` 同口径）。
                                 if let Some(mut e) = world.entities.get_mut(sg.actor_id) {
@@ -7834,9 +7934,9 @@ fn handle_shop_cmd_inner(
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
-                            if let Some(body) =
-                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
-                            {
+                            if let Some(body) = apply_pending_gm_use_item_in(
+                                &mut *sg, world, catalog, online, gates,
+                            ) {
                                 if let Some(tx) = route_to_gate(
                                     gates,
                                     entry.gate_idx,
@@ -7939,9 +8039,9 @@ fn handle_shop_cmd_inner(
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
-                            if let Some(body) =
-                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
-                            {
+                            if let Some(body) = apply_pending_gm_use_item_in(
+                                &mut *sg, world, catalog, online, gates,
+                            ) {
                                 if let Some(tx) = route_to_gate(
                                     gates,
                                     entry.gate_idx,
@@ -8133,7 +8233,9 @@ fn handle_shop_cmd_inner(
                 // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写
                 // 装进会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、
                 // `SysMsg` 入队后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-                if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+                if let Some(body) =
+                    apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates)
+                {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
                     {
@@ -9280,7 +9382,7 @@ fn run_std_mode_func_script(
     // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写装进
     // 会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、`SysMsg` 入队
     // 后排水 ⇒ 203 先于蓝字 100，复审 important-2）。
-    if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog) {
+    if let Some(body) = apply_pending_gm_use_item_in(&mut *sg, world, catalog, online, gates) {
         if let Some(tx) = route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM") {
             let _ = tx.send(SimToGate::SendFrame { socket, body });
         }
@@ -10459,21 +10561,20 @@ fn drain_login_script_batch(
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
 /// ⇒ 纯函数在 `useitem::use_item`（m3bag 交付，逐字段对 oracle `eat_vectors.json`）；本函数只负责
-// 把吃路径的通知按 oracle 泵序送到网关（NetPriorityQueue = .NET 四叉最小堆逐位复刻）。
-// F1（2026-11-20）：use_item 末尾的 sort_by_key 只对它自己产出的通知成立；宿主随后 append
-// RM_ABILITY，且 Shape12 会产出六条同 ident(11004)——稳定排序无法复刻堆的 sift 序；
-// 排水必须走堆，不能按 vec 序、也不能只排序。
+/// 把吃路径的通知按 **oracle 泵序**送到网关。
+///
+/// 泵序 = oracle `MsgQueue` 的**出队序**（`PriorityQueue<SendMessage, byte>`，优先级按
+/// `(byte)wIdent`），由 [`game_svr::msgqueue::NetPriorityQueue`]（.NET 四叉最小堆的逐位复刻）
+/// 给出。**这不是排序**：同优先级下按插入与 sift 历史出队（实测 3 条同键 `[0,2,1]`），任何
+/// `sort_by_key` 近似都会在同一优先级上偏离 oracle。
+///
+/// `None`（未建模 ident，如 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）记 WRN、不静默。
 fn emit_eat_notices(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
     notices: &[game_svr::useitem::QueuedNotice],
     wire: &game_svr::pickwire::WireSession,
 ) -> usize {
-    // **F1-D（2026-11-20，3b 复审）**：原实现先 `notice_drain_order(...)` 排一遍、再把结果重排
-    // 第二遍 ⇒ 实际线序 = 堆置换的**复合**。本仓 `crates/world-bevy/src/msgqueue.rs` 单独 rustc
-    // 实算（入队 `[S×6,W,C,A]`）：单遍 `[A,W,C,S1,S5,S4,S3,S2,S0]`、两遍
-    // `[A,W,C,S3,S4,S5,S1,S2,S0]`、入队/稳定排序 `[S0..S5]` —— 三种互不相同。
-    // 排水只许**一遍**（单遍 sift 序才是 oracle 的 `MsgQueue.TryDequeue` 序）。
     let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
         game_svr::msgqueue::NetPriorityQueue::new();
     for n in notices {
@@ -10488,7 +10589,7 @@ fn emit_eat_notices(
             }
             None => glog!(
                 "WRN",
-                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：RM_ABILITY(52) 待 card/ability-frames 合入；StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS 与 657 缺口）",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
                 n.ident
             ),
         }
@@ -10520,7 +10621,9 @@ fn shape12_status_notice(status: i32, hitspeed_temp: u16) -> game_svr::useitem::
 /// **两路下行**（口径见 `useitem` 模块头）：
 /// - **立即帧** `SendDefMessage(SM_EAT_OK/FAIL)` ⇒ header-only，直接下发（恒 1 条）；
 /// - **延时通知** `SendMsg(RM_*)` 入 `MsgQueue`，由消息泵翻成 `SM_*`（`PlayObject.Message.cs:1736-1960`）；
-///   本宿主在同一批按 `QueuedNotice` 出队序下发（`useitem::use_item` 已按 `(byte)wIdent` 排序）。
+///   本宿主用 `emit_eat_notices` 里的 `NetPriorityQueue` 复刻泵序（**不是排序**：同优先级按堆的
+///   sift 序出队；见该函数文档与卡 §9.12）。
+#[allow(clippy::too_many_arguments)]
 fn handle_eat_cmd(
     recog: i32,
     _param: u16,
@@ -10558,6 +10661,10 @@ fn handle_eat_cmd(
     lottery_cfg: crate::config::WinLotteryCfg,
     // `Config.HumanMaxGold`（`PlayObject.IncGold` 的上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
+    // **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck`）。
+    oil_cfg: crate::config::WeaponMakeLuckCfg,
+    // **IT-13**：`PlayObject.InGuildWarArea` 的每 actor 会话位（宿主 `castle_war_states`）。
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -10643,6 +10750,27 @@ fn handle_eat_cmd(
     ) {
         return;
     }
+    // **IT-09/10/11 的宿主钩子**（`EatUseItems` move 组：回城卷/随机传送/地牢逃脱）：
+    // 主体在 [`eat_move::maybe_eat_move`]（`useitem.rs` 零改动）；它自己出帧/搬运/吃尾巴并写回会话，
+    // 返回 `true` ⇒ 本函数不再走 `use_item`（否则那些 Shape 会落 `_ => {}` 的 636）。
+    if eat_move::maybe_eat_move(
+        world,
+        sg,
+        actor_id,
+        recog,
+        chr_name,
+        socket,
+        online,
+        gates,
+        catalog,
+        registry,
+        dead,
+        no_drug,
+        castle_war_states,
+        colors,
+    ) {
+        return;
+    }
     let mut state = game_svr::useitem::UseItemActorState {
         wabil: sg.state.wabil.clone(),
         inc_health: sg.recovery.inc_health,
@@ -10689,6 +10817,15 @@ fn handle_eat_cmd(
         .find(|it| it.make_index == recog)
         .and_then(|it| catalog.get(it.index))
         .is_some_and(|t| t.std_mode == 3 && t.shape == 11);
+    // **IT-12 祝福油**：oracle 走到 `EatUseItems` 的 `case 4` 的判据 = 模板 `StdMode==3 && Shape==4`
+    // （`PlayObject.Base.cs:2259`）。无武器时 `use_item` 已判不吃 ⇒ 这里再确认一次模板。
+    let oil_item = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == recog)
+        .and_then(|it| catalog.get(it.index))
+        .is_some_and(|t| t.std_mode == 3 && t.shape == 4);
     // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。
     let mut item_list = std::mem::take(&mut sg.state.item_list);
     // `RefMyStatus()` ⇒ `RecalcAbilitys()` 的观测输入（StdMode 1 跨档才用到；与 `handle_bag_cmd` 同源）。
@@ -10715,12 +10852,7 @@ fn handle_eat_cmd(
         bag: &bag,
     };
     // `MessageSettings` 文本（`String.conf [String]`；缺键 = oracle 源码默认，见 `strings.rs`）。
-    let sysmsg = game_svr::useitem::SysMsgTexts {
-        canot_use_drug_on_this_map: strings.canot_use_drug_on_this_map(),
-        weapon_repair_success: strings.weapon_repair_success(),
-        win_lottery: strings.win_lottery_msgs(),
-        not_win_lottery: strings.not_win_lottery_msg(),
-    };
+    let sysmsg = game_svr::useitem::SysMsgTexts::from_conf(strings);
     let ctx = game_svr::useitem::UseItemContext {
         catalog,
         // `BoCanUseItem` 在 oracle 初生即 true（`PlayObject.cs:961`）；运行期置位未建模 ⇒ 恒 true（登记）。
@@ -10836,11 +10968,86 @@ fn handle_eat_cmd(
         }
     }
 
+    // **IT-12 祝福油 `WeaptonMakeLuck()`**（`PlayObject.cs:1500`）：抽取 / 武器 `Desc[3..5]` /
+    // `RecalcAbilitys` / 能力帧都在宿主（纯 `use_item` 只判「有武器 ⇒ 吃」，见 `wepmake_luck`）。
+    if out.eaten && oil_item {
+        if let Some(w) = sg
+            .use_items
+            .get(game_svr::ability::SLOT_WEAPON)
+            .cloned()
+            .flatten()
+        {
+            let n_rand = catalog
+                .get(w.index)
+                .map_or(0, |t| crate::wepmake_luck::luck_rand_from_dc(t.dc));
+            let res = crate::wepmake_luck::weapton_make_luck(
+                &mut world.rng,
+                &oil_cfg,
+                n_rand,
+                w.desc[3],
+                w.desc[4],
+            );
+            if let Some(Some(slot)) = sg.use_items.get_mut(game_svr::ability::SLOT_WEAPON) {
+                slot.desc[3] = res.desc3;
+                slot.desc[4] = res.desc4;
+            }
+            let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
+            let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
+            // oracle 发送序：`RM_ABILITY` → `RM_SUBABILITY`（`:1546/1547`；诅咒支 `:1625/1626`），
+            // 再 sysmsg（正常支绿字 `:1522/1528/1534/1540` 或 `:1552` 的未中绿字；诅咒支红字 `:1615/1622`）。
+            out.notices.push(game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_ABILITY,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            });
+            out.notices.push(game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_SUBABILITY,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            });
+            let (f, b) = if res.outcome == crate::wepmake_luck::LuckOutcome::Cursed {
+                (colors.red_f, colors.red_b)
+            } else {
+                (colors.green_f, colors.green_b)
+            };
+            // **文本按结果入队**（卡 `openmir2-runtime-sysmsg-text-frames`）：oracle 的三条 `SysMsg` 文案
+            // `WeaptonMakeLuck` / `WeaptonNotMakeLuck` / `TheWeaponIsCursed`（`PlayObject.cs:1522-1622`）。
+            // **诅咒支的静默形态**：`MakeWeaponUnlock` 只在 `Desc[3]>0`（减幸运）或 `Desc[4]<10`（加诅咒）
+            // 时发红字（`PlayObject.cs:1607-1621`）；`Desc[3]==0 && Desc[4]>=10` 什么都不发
+            //（`oil_curse_desc4_at_ten_stays` 的 oracle 夹具 `notices` 里确实没有 11004）。
+            let cursed_noop = res.outcome == crate::wepmake_luck::LuckOutcome::Cursed
+                && res.desc3 == w.desc[3]
+                && res.desc4 == w.desc[4];
+            if !cursed_noop {
+                let text = match res.outcome {
+                    crate::wepmake_luck::LuckOutcome::Cursed => sysmsg.the_weapon_is_cursed,
+                    crate::wepmake_luck::LuckOutcome::Made => sysmsg.weapton_make_luck,
+                    crate::wepmake_luck::LuckOutcome::NotMade => sysmsg.weapton_not_make_luck,
+                };
+                out.notices
+                    .push(game_svr::useitem::QueuedNotice::sysmsg_text(
+                        u16::from(f),
+                        u16::from(b),
+                        text,
+                    ));
+            }
+            // 线序由**全局 `NetPriorityQueue`** 决定（见下方排水）；本块只按 oracle 的**发送序**入队，
+            // 不自行排序（牙：对调这两条发送序，线序必须不变）。
+        }
+    }
     // **IT-07 卷轴 Shape12 宿主半**（oracle `Base.cs:2153-2158`）：写回实体 → `RecalcAbilitys` → `RM_ABILITY`。
-    // **照抄 oracle 的不对称，勿修**：`RecalcAbilitys` 的 HITSPEEDUP 块只写临时字段 `HitSpeed`
-    // （`PlayObject.cs:2830-2832`），尾段 `HitSpeed = AddAbil.HitSpeed`（`:2899`）再覆盖它；而 657 的载荷
-    // 在覆盖**之前**取用（`:2874-2876`）⇒ **657.Tag 含 buff、落地字段不含**。别"修"成两边都含。
-    // （`apply_extra_abil` 本就不含槽 3，与此一致。）
+    // **657 口径（以 oracle 源码为准）**：`RecalcAbilitys` 的 HITSPEEDUP 块只写**临时** `HitSpeed`
+    // （`PlayObject.cs:2830-2832`），随后 `:2899 HitSpeed = AddAbil.HitSpeed` 覆盖；`:2876` 的
+    // `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)` 把临时值放进队列 **`wParam`**，
+    // 657 handler（`PlayObject.Message.cs:1845`）只读 `nParam1` 与出队时的落地 `HitSpeed`
+    // ⇒ **帧 `Param/Tag = LoWord/HiWord(CharStatus)`、`Series` = 落地 HitSpeed；临时值既不进帧也不进字段**。
+    // `ExtraAbil` 本身不折进 `WAbil`（oracle `:2899-2906` 无条件覆盖）——本块不调 `apply_extra_abil`。
     // `RecalcAbilitys` 尾部另发 10139（自通知 + 观察者两条，见 openmir2-charstatuschanged-gap.md）。
     if out.eaten && shape12_item {
         if let Some(e) = world.entities.get_mut(actor_id) {
@@ -10850,7 +11057,7 @@ fn handle_eat_cmd(
             e.buff.extra_abil_times = state.extra.extra_abil_times;
         }
         let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
-        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
         // **657 自通知**（oracle `RecalcAbilitys` 尾段 `CharStatus=GetCharStatus(); StatusChanged();
         // SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus,…)`，`:2874-2876`）：
         // `nParam1 = CharStatus`（帧 Param/Tag 取它的 Lo/HiWord），`wParam = 临时 HitSpeed`
@@ -10888,7 +11095,7 @@ fn handle_eat_cmd(
         );
         sg.equip.abil = game_svr::ability::level_ability_base(&sg.equip.abil, sg.equip.job);
         let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
-        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
         let _ = game_svr::recover::inc_health_spell(&mut sg.state.wabil, 2000, 2000);
         crate::add_body_luck(
             &mut sg.equip.body_luck,
@@ -10972,11 +11179,20 @@ fn handle_eat_cmd(
         // `SM_WINEXP.Recog` 取**基础** `Abil.Exp`（exp_delta 已在上面落到 `sg.equip.abil.exp`；WAbil 陈旧）。
         abil_exp: sg.equip.abil.exp,
         sys_msg: None,
+        // `SM_ABILITY(52)` / `SM_SUBABILITY(752)` 的取值来源（后来者复算口径）：
+        //   Job      ← `PlayObject.Job`（本会话 `sg.equip.job`）；
+        //   52 尾    ← `EncodeMessage(WAbil)` 的原文（`ability_tail(&sg.state.wabil, …)`，
+        //              布局由 `MIR2_CLIENT_ABILITY_LAYOUT` 选 58B/40B，见 `ability_tail` 用例）；
+        //   752 四段 ← `SubAbility::to_frame_bytes()`（`PlayObject.Message.cs:1935`）。
+        job: sg.equip.job,
+        ability_tail: ability_tail(&sg.state.wabil, mir2_client_ability_layout()),
+        sub_bytes: sg.sub.to_frame_bytes(),
         hunger_status: sg.hunger_status,
         // `SM_CHARSTATUSCHANGED(657)` 的 `Series` 取**收件人自己**的 `HitSpeed`；本队列是
         // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
         hit_speed: sg.hit_speed,
     };
+    // 泵序由全局 `NetPriorityQueue` 决定（见 [`emit_eat_notices`]），单遍排水。
     sent += emit_eat_notices(tx, socket, &out.notices, &wire);
     // **卡 `openmir2-charstatuschanged-657-wired`（观察者副本）**：oracle 的
     // `SendRefMsg(RM_CHARSTATUSCHANGED)` 对**可见玩家**也入队一份 657；上面的
@@ -11071,11 +11287,59 @@ fn broadcast_feature_changed_except(
     }
 }
 
+/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐；`status` 由调用方给——
+/// **入队路径**在入队时取好、出队时不得重算（否则与 oracle 的取值时点不符）。
+///
+/// **三动作定序**（oracle `PlayObject.cs:2874-2876`）：`:2875 StatusChanged()` 的
+/// `SendRefMsg(RM_CHARSTATUSCHANGED)` 收件人含自己 ⇒ 先发自己的**广播副本**；随后广播他人；
+/// `:2876 SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")` ⇒ 最后发自己的
+/// **自更新副本**。两条自帧同 prio 155，入队序 = 广播副本先、自更新副本后。
+///
+/// **已登记的近似**：oracle 里 self 那份随 `SendRefMsg` 的坐标扫描（`BaseObject.Message.cs:395-447`）
+/// 在自己的格子被发出，位置由坐标决定；这里把 self 副本统一提到广播循环之前。**跨 socket 的
+/// 先后不是线上可观测面**（每 socket 各有 `MsgQueue`），self 两条帧字节也完全相同 ⇒ 差异不可判。
+#[allow(clippy::too_many_arguments)]
+fn send_charstatuschanged_self_and_observers(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    status: i32,
+    hit_speed: u16,
+    range: i32,
+    what: &str,
+) {
+    let entry = online.iter().find(|e| e.actor_id == actor_id);
+    // ① 自己的**广播副本**（`:2875`，收件人含源）。
+    if let Some(e) = entry {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+        }
+    }
+    // ② 广播他人（同一次 `SendRefMsg` 的其它收件人；隐藏发送者时 `targets` 只回 `[self]` 被跳过）。
+    broadcast_charstatuschanged_except_self(world, online, gates, actor_id, status, range);
+    // ③ 自己的**自更新副本**（`:2876` `SendUpdateMsg`，仅自己）。
+    if let Some(e) = entry {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+        }
+    }
+}
+
 /// `StatusChanged()`（`BaseObject.cs:1514` 的 `SendRefMsg(RM_CHARSTATUSCHANGED)`）的宿主等价物，
 /// 用于武器升级 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的**近邻**支：
 /// 给 ±`range` 格内**其它**玩家各一条 `SM_CHARSTATUSCHANGED(657)`。
 ///
-/// 自己那两条（`SendRefMsg` 回环 + `SendUpdateMsg`）由调用方按发送序放进 `out`，本函数跳过自己。
+/// 自己那两帧（`SendRefMsg` 收件人含自己的**广播副本** + `SendUpdateMsg` 的**自更新副本**）
+/// 由 [`send_charstatuschanged_self_and_observers`] 在本函数**前后**各发一条，本函数跳过自己。
 /// 每条的 `Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；
 /// `Recog/Param/Tag` 是**发送者**的 `ActorId` 与 `CharStatus` 的 Lo/Hi。
 fn broadcast_charstatuschanged_except_self(
@@ -12330,6 +12594,8 @@ fn recalc_session_ability(
     // **P3-B5**：`PlayObject.ExtraAbil[7]`（`AttPowerUp` 写槽 0）。`None` ⇒ 全 0（既有行为不变）。
     extra_abil: Option<&[u16; 7]>,
     magic: Option<MagicRecalc<'_>>,
+    // **IT-17b 3b**：`world.rng`（攻杀 `RandomByte(7-L)` 与其它取数同一流）。`None` = 3b-1 过渡态。
+    rng: Option<&mut dyn mir2_shared::rng::RandomSource>,
 ) -> RecalcEffect {
     let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
     let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
@@ -12353,16 +12619,22 @@ fn recalc_session_ability(
         use_items: &use_inst,
         bag: &bag,
     };
+    // **IT-17b**：`RecalcHitSpeed` 的技能循环（`PlayObject.cs:3681-3712`）——填 `MagicArr`（不清空）
+    // 并把 `HitPoint` 增量带进 752。
+    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr, rng);
     // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
-    let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
+    let recalc =
+        game_svr::ability::recalc_abilitys_with_prior_and_skills(catalog, &inputs, &sg.sub, skill);
+    sg.magic.passives = skill;
     sg.state.wabil = recalc.wabil;
     sg.sub = recalc.sub;
     // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`。
     sg.hit_speed = recalc.hit_speed;
-    // **F5（2026-11-20 更正）**：`ExtraAbil` 的 `WAbil` 写入（`PlayObject.cs:2818-2840`）会被
-    // `RecalcAbilitys` 尾段 `WAbil = Abil + AddAbil`（`:2890-2905`，逐字段含 `_MIN(255, …)`）
-    // **整体覆盖** ⇒ 吃到的 buff **不进最终 `WAbil`**、`SM_ABILITY(52)` 尾块也看不到它。
-    // 因此这里**不再**调用 `apply_extra_abil`；唯一存活的效果是 657 的 `Param`（临时 HitSpeed）。
+    // **ExtraAbil 修正（`qa-extraabil-adjudication-20261120`，2026-11-20）**：
+    // oracle `RecalcAbilitys()` 里把 `ExtraAbil` 折进 `WAbil`/`HitSpeed` 的段（`PlayObject.cs:2818-2846`）
+    // 随后被**同方法体、无 early return** 的 `:2899-2906`（`WAbil = Abil + AddAbil`、`HitSpeed = AddAbil.HitSpeed`）
+    // **无条件整体覆盖** ⇒ 对最终值**永远没有影响**。此处曾在其后调用 `apply_extra_abil`（顺序与 oracle 相反，
+    // 叠加**留存**）⇒ 已停用。`ExtraAbil` 状态本身保留（存档 `WorldServer.Switch.cs:139-144` 与机器人 AI 读它）。
     let _ = extra_abil;
     // **PL-1 / P32**：本次重算是否命中复活戒指（`Shape==114`）。oracle 只置 true、从不重置
     // ⇒ 调用方按 `entity.revival |= 返回值` 落账（粘滞锁存）。
@@ -12559,6 +12831,33 @@ fn handle_hit_cmd(
         return false;
     };
     let dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
+    // **攻击批 A**：注入攻杀运行时（`AttackSkillCount/PointCount` 的唯一持久方是会话，
+    // `RecalcHitSpeed` 写）。无会话 / `MagicArr[SKILL_YEDO]` 为空 ⇒ `present=false` ⇒ 世界侧
+    // 整段不跑（与「没有攻杀技能的角色」的 oracle 结果一致）。
+    {
+        use game_svr::skill_ability::SKILL_YEDO;
+        let yedo =
+            sessions
+                .get(chr_name)
+                .map_or_else(mir2_world_bevy::YedoRuntime::default, |sg| {
+                    mir2_world_bevy::YedoRuntime {
+                        present: sg
+                            .magic
+                            .arr
+                            .get(usize::from(SKILL_YEDO))
+                            .is_some_and(Option::is_some),
+                        level: sg
+                            .magic
+                            .arr
+                            .get(usize::from(SKILL_YEDO))
+                            .and_then(Option::as_ref)
+                            .map_or(0, |m| m.level),
+                        count: sg.magic.passives.attack_skill_count,
+                        point_count: sg.magic.passives.attack_skill_point_count,
+                    }
+                });
+        world.set_attack_skill(actor_id, yedo);
+    }
     // ⚠ 取目标用的是**状态化朝向**（对象当前 `Dir`），**不是**本帧消息 dir：oracle
     // `PlayObject.Attack.cs:26` 的 `attackTarget = targetObject ?? GetPoseCreate()` 发生在
     // `BaseObject.Attack.cs:12` 的 `Dir = nDir` **之前**；`nDir` 只影响此后的动作帧
@@ -12609,6 +12908,23 @@ fn handle_hit_cmd(
         // （`PlayObject.Attack.cs:225`）；攻击派发前按当前装备重算并灌入。
         set_actor_weapon_strong(world, sessions, catalog, actor_id);
         set_actor_poison_state(world, sessions, catalog, tid);
+        // **攻击批 B（段 1）**：技能训练快照（冷启动注入：世界在两次同步之间是权威副本，
+        // 训练会就地改它 ⇒ 宿主不得用旧快照覆盖）+ 本击战斗态。
+        if let Some(sg) = sessions.get(chr_name) {
+            let abil_level = world.entities.get(actor_id).map_or(0, |e| e.level);
+            world.init_attack_skill_train(actor_id, attack_skill_input(sg, abil_level));
+            world.set_attack_flags(
+                actor_id,
+                sg.magic.power_hit,
+                false,
+                sg.magic.passives.hit_plus,
+                sg.magic.passives.hit_double,
+                abil_level,
+            );
+        }
+        // **攻击批 B（段 1）**：本击的 `wHitMode` 与战斗态。模式**随命令入队**（与 `attack_cmd`
+        // 同序弹），不能放按键的注入表里——同一 tick 两击的 `ClientHitXY` 都在 tick 之前。
+        world.push_hit_mode(actor_id, mode);
         world.attack_cmd(actor_id, tid);
     } else {
         // oracle `PlayObject.AttackDir(targetObject = null)`（`PlayObject.Attack.cs:25`）：
@@ -12621,6 +12937,11 @@ fn handle_hit_cmd(
         // 接线到 m3cs 的 `World::attack_swing`（`crates/world-bevy/src/world.rs:199`，owner 20:10 裁决）：
         // 缺这一段 ⇒ 真机「有攻击命令、无目标」的 84 击取数整段缺失（C# 120 段 vs Rust 36 段）。
         let _ = world.attack_swing(actor_id);
+        // **攻击批 A**：空挥支（`_Attack(null)`）的攻杀计数块与有目标支**同一条尾巴**
+        // （oracle `ClientHitXY:942-956` 与目标无关）。空挥是同步结算 ⇒ 事件此刻已产生，
+        // 立即排空；有目标支要等下一 `tick_head`（见 `sim_loop` 的排水点）。
+        drain_yedo_events(world, online, sessions, gates);
+        drain_skill_train_events(world, online, sessions);
         glog!(
             "DBG",
             "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）"
@@ -12636,10 +12957,14 @@ fn handle_hit_cmd(
     }
     // 动作帧：`SendAttackMsg(GetHitMode, Dir, CurrX, CurrY)` → `SendRefMsg` ⇒ 附近观察者（排除自己）。
     if let Some(d) = displays.get(actor_id) {
-        let sm = game_svr::attackwire::action_sm_ident(
-            mode,
-            game_svr::attackwire::HitSkillState::default(),
-        );
+        // **IT-17b**：`GetHitMode` 的技能态由会话 `MagicArr` 派生（本批只接 12/25/34 三条件；
+        // `PowerHit/FireHitSkill` 战斗态不在本批，恒 false）。
+        let skill_state = sessions
+            .get(chr_name)
+            .map_or_else(game_svr::attackwire::HitSkillState::default, |sg| {
+                game_svr::skill_ability::hit_skill_state(&sg.magic.arr)
+            });
+        let sm = game_svr::attackwire::action_sm_ident(mode, skill_state);
         let body = game_svr::smframe::sm_action_hit(
             sm,
             actor_id,
@@ -12662,6 +12987,143 @@ fn handle_hit_cmd(
     // （`sim_loop`）在返回后落一行服务端权威状态 dump（`state_log::StateLog`）；被守卫拒的支
     // 返回 `false` ⇒ 不落行（与 oracle「没有攻击单元就没有首抽」一致）。
     true
+}
+
+/// **攻击批 B（段 1）**：从会话快照出「技能训练 + 战斗态」注入体。
+///
+/// 技能表取 `MagicState.arr`（= oracle `MagicArr`，含残影），训练字段取进程级 `MagicTable`
+/// 的 `MagicInfo`（`TrainLv`/`TrainLevel[4]`/`MaxTrain[4]`）。**没有 MagicInfo 的条目**（魔表缺行）
+/// 不进表——oracle 此时访问 `Magic.TrainLv` 会 NRE，本仓按"不训练"处理（登记）。
+fn attack_skill_input(sg: &SessionGround, abil_level: u8) -> mir2_world_bevy::AttackSkillInput {
+    let table = sg.magic.table.as_ref();
+    let skills = sg
+        .magic
+        .arr
+        .iter()
+        .flatten()
+        .filter_map(|m| {
+            let info = table?.get(m.mag_idx)?;
+            Some(mir2_world_bevy::magic::SkillTrainState {
+                magic_id: m.mag_idx,
+                level: m.level,
+                tran_point: m.tran_point,
+                train_lv: info.train_lv,
+                train_level: info.train_level,
+                max_train: info.max_train,
+            })
+        })
+        .collect();
+    mir2_world_bevy::AttackSkillInput {
+        abil_level,
+        // `PlayObject.FastTrain` 未装载（同 `lib.rs` 既有四处登记）。
+        fast_train: false,
+        skills,
+        power_hit: sg.magic.power_hit,
+        twin_hit_skill: false,
+        hit_plus: sg.magic.passives.hit_plus,
+        hit_double: sg.magic.passives.hit_double,
+    }
+}
+
+/// **攻击批 B（段 1）**：把训练事件落到会话（`list` 权威）并重填 `arr`（派生、只写不清），
+/// 再把 `GetAttackPowerHit` 的消费落到 `PowerHit`。
+///
+/// 640 帧（`levelup_msg`）属**段 2**，本函数**不发帧**（事件里的 `levelup_msg`/`level_up` 先保留，
+/// 段 2 接 `SM_MAGIC_LVEXP` 与 800/3000ms 延时）。
+fn drain_skill_train_events(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+) {
+    for ev in world.drain_skill_train() {
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&me.chr_name) else {
+            continue;
+        };
+        if let Some(m) = sg
+            .magic
+            .list
+            .iter_mut()
+            .flatten()
+            .find(|m| m.mag_idx == ev.magic_id)
+        {
+            m.level = ev.level;
+            m.tran_point = ev.tran_point;
+        }
+        // `arr` **只写不清**（清空会让 `present` 变假、动作帧回落到 `SM_HIT`）⇒ 从 `list` 重填。
+        game_svr::skill_ability::fill_magic_arr(&mut sg.magic.arr, &sg.magic.list);
+    }
+    for ev in world.drain_hit_mode() {
+        if !ev.power_hit_consumed {
+            continue;
+        }
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            continue;
+        };
+        if let Some(sg) = sessions.get_mut(&me.chr_name) {
+            sg.magic.power_hit = false;
+        }
+    }
+}
+
+/// **攻击批 A**：把世界排出的攻杀结算事件（[`mir2_world_bevy::YedoEvent`]）落到会话态与线上。
+///
+/// 逐条照 oracle（`PlayObject.Attack.cs:942-956`）：
+/// - 普通结算 ⇒ 回写 `AttackSkillCount/PointCount`（会话 `MagicState.passives` 是唯一副本，
+///   下一击注入与存档都读它）；
+/// - `armed` ⇒ `PowerHit = true` + `SendSocket("+PWR")`（`SimToGate::SendRaw`：与 IT-17a 的
+///   `+LNG/+WID` 同一条 `SendSocket` 短包通道）；
+/// - `skipped_no_weapon` ⇒ oracle 在 `UseItems[Weapon] == null` 时抛 NRE、被 `:963` 的 catch
+///   吞掉（攻击照常完成、只丢计数块）；本仓跳过 + WRN，并把跳过次数记进会话
+///   （`MagicState.yedo_no_weapon_warns`，可判据）。
+///
+/// 口径：`armed` 与 `reset` 同击成立时**先写回再 arm**（两个值互不影响），`+PWR` 照发。
+fn drain_yedo_events(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for ev in world.drain_yedo() {
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            glog!(
+                "WRN",
+                "攻杀计数：actor_id={} 不在在线登记表 ⇒ 事件丢弃",
+                ev.actor_id
+            );
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&me.chr_name) else {
+            glog!(
+                "WRN",
+                "攻杀计数：ChrName={} 无会话态 ⇒ 事件丢弃",
+                me.chr_name
+            );
+            continue;
+        };
+        if ev.skipped_no_weapon {
+            sg.magic.yedo_no_weapon_warns = sg.magic.yedo_no_weapon_warns.saturating_add(1);
+            glog!(
+                "WRN",
+                "攻杀剑法：actor_id={} 武器 Dura==0（oracle 此处 UseItems[Weapon] 为 null ⇒ NRE 被 catch 吞掉）；本仓跳过计数与第二抽（登记偏差）",
+                ev.actor_id
+            );
+            continue;
+        }
+        sg.magic.passives.attack_skill_count = ev.count;
+        sg.magic.passives.attack_skill_point_count = ev.point_count;
+        if ev.armed {
+            sg.magic.power_hit = true;
+            if let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "+PWR") {
+                let _ = tx.send(SimToGate::SendRaw {
+                    socket: me.socket,
+                    payload: b"+PWR".to_vec(),
+                });
+            }
+        }
+    }
 }
 
 /// `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）在 `CM_SPELL`
@@ -14142,6 +14604,7 @@ fn handle_spell_cmd_with_magic(
                                             catalog,
                                             extra.as_ref(),
                                             None,
+                                            Some(&mut world.rng),
                                         );
                                         let body = smframe::sm_ability(
                                             sg.state.gold,
@@ -15547,7 +16010,7 @@ fn handle_spell_cmd_with_magic(
     // MP 包装层的 53（6/48 延后）、版本门都已在本函数更早处完成。
     if default_arm
         && !magic::is_warr_skill(i32::from(req.magic_id))
-        && matches!(req.magic_id, 6 | 42 | 48 | 50)
+        && matches!(req.magic_id, 6 | 39 | 42 | 48 | 50)
     {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy` snap（与 8/21/37、B1/B2/B3 同口径）。
@@ -15895,6 +16358,45 @@ fn handle_spell_cmd_with_magic(
                             Some(1000),
                         );
                     }
+                    // ---- 39 群体攻击（`MagicManager.cs:549-553` + helper `:942-978`）----
+                    39 => {
+                        let out = world.cast_group_melee_spell(actor_id, magic_level, tx, ty);
+                        // `:974` 的 `RM_10205` ⇒ `SM_716`（p3 = 1），**每个未跳过对象**一条
+                        // （含非 proper 的玩家 target），广播含自己、优先级 `10205 & 0xFF = 221`。
+                        for (x, y) in &out.icons_716 {
+                            let body = smframe_ext::sm_716(actor_id, *x, *y, 1);
+                            buf.push_broadcast_cached(
+                                world,
+                                online,
+                                actor_id,
+                                true,
+                                (mir2_protocol::messages::RM_10205 & 0xFF) as u8,
+                                &body,
+                            );
+                        }
+                        // 共享尾：`boSpellFire` 恒 true ⇒ `RM_MAGICFIRE`(638)；`boTrain` ⇒ 640。
+                        // `StruckDamage` 与 `RM_DELAYMAGIC` 已在 world 侧；目标侧 RM_MAGSTRUCK 由
+                        // 200ms 投递入 `pending_mag_struck`（被动怪只记 RM、不 Operate）。
+                        finish_spell_tail(
+                            world,
+                            online,
+                            gates,
+                            saves,
+                            chr_name,
+                            actor_id,
+                            magic,
+                            req.magic_id,
+                            magic_level,
+                            tran_point,
+                            out.bo_train,
+                            caster_abil_level,
+                            tx,
+                            ty,
+                            base_target.unwrap_or(0),
+                            Some(&mut buf),
+                            Some(1000),
+                        );
+                    }
                     // ---- 42 群体雷电术（`MagicManager.cs:537-542` + `:981-1018`）----
                     _ => {
                         let Some(target_id) = base_target else {
@@ -16226,6 +16728,7 @@ fn handle_spell_cmd_with_magic(
                                             catalog,
                                             extra.as_ref(),
                                             magic,
+                                            Some(&mut world.rng),
                                         );
                                         let RecalcEffect {
                                             revival,
@@ -16263,6 +16766,28 @@ fn handle_spell_cmd_with_magic(
                                             body,
                                         );
                                     }
+                                }
+                                // 卡 36：oracle `RecalcAbilitys()`（`PlayObject.cs:2874-2876`）的 657 ——
+                                // `:2875 StatusChanged()` 广播（self+target+obs_in）+ `:2876 SendUpdateMsg` 自更新（self）；
+                                // 复用现有 `SpellFrameBuf`（prio 155），不新增发射函数、不改共享件；落点由 RM 号算：
+                                // 52(3)<638(136)<642(141)<**657(155)**<100(252)<640(255)。
+                                // (③) 同 prio155 两条时：广播先、自更新后（源行序 `PlayObject.cs:2875`→`:2876`；堆对同 prio 按入队序）。
+                                // (④) 读 oracle 同源的 `GetCharStatus()`（buff 位集|CharStatusEx），非实体缓存 `char_status`（陈旧）。
+                                let status = world.get_char_status(out.target);
+                                push_charstatuschanged(&mut buf, world, online, out.target, status);
+                                if let Some(e) = world.entities.get(out.target) {
+                                    let body = smframe_ext::sm_charstatuschanged(
+                                        out.target,
+                                        status,
+                                        e.hit_speed,
+                                    );
+                                    buf.push_actor(
+                                        online,
+                                        out.target,
+                                        (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF)
+                                            as u8,
+                                        body,
+                                    );
                                 }
                                 // `:612-617`：`targetObject == null` 时 `nTargetX/nTargetY` 被改写成
                                 // 施法者的 `CurrX/CurrY`（与 click 坐标无关）⇒ 共享尾 638 用归一后的
@@ -18414,7 +18939,9 @@ fn drain_skeleton_downlink(
 #[allow(clippy::too_many_arguments)]
 fn drain_buff_downlink(
     rec: &mir2_world_bevy::TickRecord,
-    world: &mir2_world_bevy::World,
+    // **IT-17b 3b**：ReCalc 的攻杀 `RandomByte(7-L)` 要 `world.rng` ⇒ `&World` 升为 `&mut World`
+    //（内部只读用途的借用自动降为 `&`）。
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -18438,7 +18965,8 @@ fn drain_buff_downlink(
             continue;
         };
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
-        let _ = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+        let _ =
+            recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
         let body = game_svr::smframe::sm_ability(
             sg.state.gold,
             sg.equip.job,
@@ -18452,14 +18980,48 @@ fn drain_buff_downlink(
                 body,
             });
         }
+        // **`boNeedRecalc` 的 657（2026-11-20，`card/657-buff`）**：oracle `RecalcAbilitys()` 尾段
+        // （`src/M2Server/Player/PlayObject.cs:2851-2876`）在 `Race == Play` 时**无条件**
+        // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
+        // ⇒ 自见 2 条 + 观察者各 1 条；帧 `Series` 取**收件人自己**的 `HitSpeed`。
+        // 入队 657(155) 晚于 52(67) ⇒ 线上 **52 先、657 后**（本宿主 52 是直发，657 排其后）。
+        let status = world.get_char_status(*actor_id);
+        let self_hit_speed = world.entities.get(*actor_id).map_or(0, |e| e.hit_speed);
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            *actor_id,
+            status,
+            self_hit_speed,
+            range,
+            "buff 重算 657",
+        );
+        // 自见第二副本由 helper 第 ③ 动作发出（三动作版），不再手工追加。
     }
     for (actor_id, status) in &rec.buff_status_changes {
         if let Some(mut d) = displays.get(*actor_id).cloned() {
             d.status = *status;
             displays.set(*actor_id, d);
         }
-        let body = game_svr::smframe_ext::sm_charstatuschanged(*actor_id, *status, 0);
-        broadcast_ref_msg_with_self(world, online, gates, *actor_id, &[body]);
+        // **657 修正（2026-11-20，`card/657-buff`）**：oracle handler 的 `Series` 取**收件人自己**
+        // 出队时的 `HitSpeed`（`src/M2Server/Player/PlayObject.Message.cs:1845-1847`）。旧实现用
+        // `broadcast_ref_msg_with_self(.., &[body])` 发**单 body**（`Series` 还固定成 0）⇒ 每个收件人都错。
+        // **不要复用 `broadcast_ref_msg_with_self`**：签名是 `bodies: &[Vec<u8>]`，同一份 body 发给所有收件人。
+        // 逐收件人路径 = `send_charstatuschanged_self_and_observers`（自见 1 + 观察者各 1，每人取自己的 hit_speed）。
+        let self_hit_speed = world.entities.get(*actor_id).map_or(0, |e| e.hit_speed);
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            *actor_id,
+            *status,
+            self_hit_speed,
+            range,
+            "buff 657 自发",
+        );
+        // 自见第二副本（`SendUpdateMsg`）由 helper 的第 ③ 动作发出（master `:2876` 三动作版），
+        // 这里**不再**手工追加，否则自见会变成 3 条。
     }
     // **递减段 `SysMsg`（同卡）**：`SysMsg(msg, MsgColor.Green, MsgType.Hint)`（非 Notice 支）⇒
     // `SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, msg)`
@@ -18686,6 +19248,28 @@ fn drain_map_change(
     displays: &downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
 ) {
+    // `Envir.DayBright()` 的 `Bright` 桶来自**真实本地小时**；生产入口只此一处。
+    // 需要注入的测试走 [`drain_map_change_at_time`]（章程 §36：读真实时钟的产品分支必须可注入）。
+    drain_map_change_at_time(
+        world,
+        online,
+        gates,
+        displays,
+        registry,
+        enter::game_time_now(),
+    );
+}
+
+/// [`drain_map_change`] 的**时间注入**版：`game_time` = `Bright` 的桶（1 / 3 / 其它），
+/// 由 [`enter::day_bright`] 映射成 `SM_CHANGEMAP(634)` 的 `Series`（`DayBright()`）。
+pub(crate) fn drain_map_change_at_time(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    game_time: u8,
+) {
     let changes = world.sessions.drain_map_changes();
     for mut ev in changes {
         // **P2-3a**：目标图不归本 World（stub/跨片）⇒ 不发 TransMap 簇（防御性；
@@ -18706,15 +19290,17 @@ fn drain_map_change(
             );
             continue;
         };
-        // 地图文件名（`Envir.MapFileName`）：与进图 51 帧同源，取 `MapRegistry::name_of`。
+        // 地图文件名（`Envir.MapFileName` = `MapManager.cs:66-96` 的 `sMapFileName`）：
+        // **取图文件主干**（`[逻辑名|文件主干]` 的右半），不是逻辑名。只有 alias 图两者不同；
+        // 无 alias 时逐字节不变（`map_file_name == map_name`）。
         let map_file = registry
-            .and_then(|r| r.name_of(ev.map_id))
+            .and_then(|r| r.map_file_name_of(ev.map_id))
             .unwrap_or("")
             .as_bytes()
             .to_vec();
         // `DayBright()`：新图的 flag + 世界时钟（缺则 0，并记 WRN 不静默）。
         let day_bright = match registry.and_then(|r| r.flag_of(ev.map_id)) {
-            Some(f) => enter::day_bright(f, Some(enter::game_time_now())).unwrap_or(0),
+            Some(f) => enter::day_bright(f, Some(game_time)).unwrap_or(0),
             None => {
                 glog!(
                     "WRN",
@@ -18745,8 +19331,25 @@ fn drain_map_change(
                 (0, 0, Vec::new())
             }
         };
-        let frames =
-            game_svr::sessionwire::map_change_frames(&ev, &map_file, day_bright, dir, light, &desc);
+        // 766/54 的输入（`Envir.Flag` / `Envir.MapDesc`）：与进图路径同源（`registry.flag_of/map_desc_of`）。
+        // 无注册表/无该图 ⇒ 两条连带帧不发并登记（不编造）。
+        let visual = match (
+            registry.and_then(|r| r.flag_of(ev.map_id)),
+            registry.and_then(|r| r.map_desc_of(ev.map_id)),
+        ) {
+            (Some(flag), Some(desc)) => Some(game_svr::sessionwire::MapVisual { flag, desc }),
+            _ => {
+                glog!(
+                    "WRN",
+                    "切图下行：map_id={} 缺 Envir.Flag/MapDesc ⇒ 不发 766/54（登记）",
+                    ev.map_id
+                );
+                None
+            }
+        };
+        let frames = game_svr::sessionwire::map_change_frames(
+            &ev, &map_file, day_bright, dir, light, &desc, visual,
+        );
         for f in frames {
             match f.route {
                 game_svr::sessionwire::Route::SelfOnly => {
@@ -19026,6 +19629,9 @@ fn drain_levelup_healthspell_with_magic(
     // **Lane B**：升级时 oracle `HasLevelUp` 也跑 `RecalcAbilitys()`（`PlayObject.cs:5245-5246`）
     // ⇒ 210/212 尾段照跑；`None` = 单测/无记录。
     mut magic: Option<MagicSource<'_>>,
+    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：657 **只入队**（优先级 155），
+    // 由升级链末尾统一出队——帧序必须是 `53(68) → 44(139) → 45/52/752 → 657(155)`。
+    charstatus_queue: &mut crate::msgqueue::NetPriorityQueue<(i32, i32, u16)>,
 ) {
     for (winner, _amount, leveled, level) in &rec.exp_awards {
         if !*leveled {
@@ -19053,7 +19659,24 @@ fn drain_levelup_healthspell_with_magic(
         let magic_recalc = magic
             .as_mut()
             .and_then(|src| src.recalc_for(&entry.chr_name, flame_ring_in));
-        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+        let effect = recalc_session_ability(
+            sg,
+            catalog,
+            extra_abil.as_ref(),
+            magic_recalc,
+            Some(&mut world.rng),
+        );
+        // T-290：oracle `HasLevelUp` 内的 `RecalcAbilitys()` 发 657；本宿主**入队**（155），
+        // 由 `drain_kill_exp_chain_with_magic` 在链末尾出队 ⇒ 排在 53/44/45/52/752 之后。
+        // `status` 在此刻取（`PlayObject.cs:2873` 的时点），出队时不重算。
+        charstatus_queue.enqueue(
+            (
+                sg.actor_id,
+                world.get_char_status(sg.actor_id),
+                sg.hit_speed,
+            ),
+            (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
+        );
         let RecalcEffect {
             revival,
             flame_ring,
@@ -19231,12 +19854,37 @@ fn drain_kill_exp_chain_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
 ) {
+    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：链内 657 **入队**、链末尾出队
+    //（范例 = `castle.rs` 的"路径末尾局部排序装置"，不是全 tick 泵）。
+    let mut charstatus_queue: crate::msgqueue::NetPriorityQueue<(i32, i32, u16)> =
+        crate::msgqueue::NetPriorityQueue::new();
     // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
     drain_levelup_healthspell_with_magic(
-        rec, world, online, sessions, gates, catalog, range, magic,
+        rec,
+        world,
+        online,
+        sessions,
+        gates,
+        catalog,
+        range,
+        magic,
+        &mut charstatus_queue,
     );
     drain_combat_downlink(rec, world, displays, online, sessions, gates);
     drain_levelup_downlink(rec, online, sessions, gates, client_layout);
+    // 链末尾按 `(byte)ident` 出队：657(155) 排在 53(68)/44(139)/45(150)/52(67)/752(62) 之后。
+    while let Some((actor_id, status, hit_speed)) = charstatus_queue.dequeue() {
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            actor_id,
+            status,
+            hit_speed,
+            range,
+            "657(战斗升级)",
+        );
+    }
 }
 
 /// 每 tick 的**周期恢复状态段**（oracle `PlayObject.Run` 的 `:70-141`，P1；见
@@ -21414,6 +22062,12 @@ struct SessionGround {
     /// （`readbook::MagicState`；IT-17a）。写点：登录 [`session_ground_from_login`] + 读书学成
     /// （`readbook::maybe_read_book`）；持久化由 [`build_save_record`] 回写。
     magic: readbook::MagicState,
+    /// `PlayObject.HomeMap/HomeX/HomeY` + `SystemShare.Config.RedHome*` 的会话快照
+    /// （`eat_move::HomeState`；IT-09/10/11 只读）。**唯一两个写点**：登录
+    /// [`session_ground_from_login`]（取 `apply_get_start_point_on_login` **之后**的 final 记录值）
+    /// 与 3s 支 [`apply_start_point_for_fired_players`]（与 `saves[chr].record.data.home_*`
+    /// **同拍、同源**写回）。语义/边界见 `eat_move::HomeState` 的文档（≤3s 陈旧，与 oracle 同节奏）。
+    home: eat_move::HomeState,
     /// `PlayObject.DecHpTick`（`PlayObject.cs:783`；**ctor 不赋值** ⇒ 0）——P25 的 `DECHP` 门基准。
     dec_hp_tick: i64,
     /// `PlayObject.IncHpTick`（`PlayObject.cs:784`；ctor 不赋值 ⇒ 0）——P25 的 `INCHP` 门基准。
@@ -21972,8 +22626,9 @@ fn apply_pending_gm_target_ops(
             }
             // 末尾 RecalcAbilitys（恒调用，oracle `:71`；F4-R2：魔法审计接真——
             // 按 FlameRing/RecoveryRing 调 Add/DelItemSkill，210/212 帧经 SendSocket **立即**）。
-            // F2-R3：输入与其它 9 处重算点对齐——extra_abil 取目标实体活跃值（AttPowerUp 等
-            // 加成不被抹），flame_ring_in 取实体粘滞位；重算后 apply_ability_to_entity +
+            // F2-R3（修正）：输入与其它 9 处重算点对齐——extra_abil 仍按目标实体活跃值传入
+            //（状态面照传；**不折进 WAbil**，oracle `:2899-2906` 覆盖 `:2818-2846`），
+            // flame_ring_in 取实体粘滞位；重算后 apply_ability_to_entity +
             // `e.flame_ring |= effect.flame_ring` / `e.revival |= effect.revival` 落账。
             let tid = find_id(world, &name);
             let extra_abil = tid
@@ -21994,12 +22649,14 @@ fn apply_pending_gm_target_ops(
                         catalog,
                         extra_abil.as_ref(),
                         Some(magic),
+                        Some(&mut world.rng),
                     )),
                     (Some(tsg), None) => Some(recalc_session_ability(
                         tsg,
                         catalog,
                         extra_abil.as_ref(),
                         None,
+                        Some(&mut world.rng),
                     )),
                     _ => None,
                 }
@@ -22971,9 +23628,14 @@ fn drain_script_gm_pendings(
         gates,
     );
     // ③ `@改属性` 的佩戴位写 + 203。
-    if let Some(body) =
-        apply_pending_gm_use_item(ground_sessions, chr_name, world, &enter_cfg.catalog)
-    {
+    if let Some(body) = apply_pending_gm_use_item(
+        ground_sessions,
+        chr_name,
+        world,
+        &enter_cfg.catalog,
+        online,
+        gates,
+    ) {
         if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 改属性 SM_UPDATEITEM")
@@ -23648,6 +24310,8 @@ struct EnterConfig {
     /// **IT-16**：`[Setup]` 彩票 27 键（`Config.WinLottery*`）。`handle_eat_cmd` 的
     /// `WinLottery()` 读 19 个参数；8 个初值已在 `run_inner` 建共享计数时消费。
     win_lottery: crate::config::WinLotteryCfg,
+    /// **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck` 的闸与两档概率）。
+    weapon_make_luck: crate::config::WeaponMakeLuckCfg,
     /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
     castle_name_colors: mir2_world_bevy::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
@@ -23871,6 +24535,7 @@ impl EnterConfig {
             game_conf: None,
             repair_item_dec_dura: 90,
             win_lottery: crate::config::WinLotteryCfg::default(),
+            weapon_make_luck: crate::config::WeaponMakeLuckCfg::default(),
             castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
             red_die_home: mir2_world_bevy::castle::RedDieHome::default(),
             // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
@@ -24567,6 +25232,9 @@ fn drain_player_need_recheck_with_magic(
         let mut immediate: Vec<Vec<u8>> = Vec::new();
         let mut bo_take_item = false;
         let mut weight_changed = false;
+        // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支每次
+        // `RecalcAbilitys()` 产出的 657 先**收集**，统一在 622 之后发（见下方注释）。
+        let mut take_char_status: Vec<(i32, u16)> = Vec::new();
         for i in 0..game_svr::ability::USE_ITEMS_LEN {
             let Some(cell) = sg.use_items.get(i) else {
                 continue;
@@ -24653,7 +25321,13 @@ fn drain_player_need_recheck_with_magic(
                 let magic_recalc = magic
                     .as_mut()
                     .and_then(|src| src.recalc_for(&name, flame_ring_in));
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    magic_recalc,
+                    Some(&mut world.rng),
+                );
                 let RecalcEffect {
                     revival,
                     flame_ring,
@@ -24673,6 +25347,10 @@ fn drain_player_need_recheck_with_magic(
                         .iter()
                         .map(game_svr::smframe::magic_event_frame),
                 );
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`PlayObject.Message.cs:430-433`
+                // 的 `RecalcAbilitys()`（`PlayObject.cs:2874-2876`）⇒ 两条自发 657 + 观察者各 1。
+                // 只**收集**不在此发：657(155) 必须晚于 `WeightChanged()` 的 622(131) 出队。
+                take_char_status.push((world.get_char_status(actor_id), sg.hit_speed));
             }
         }
         // 会话 → 实体（Index=0 / StdMode40 耐久）与存档同源。
@@ -24696,6 +25374,21 @@ fn drain_player_need_recheck_with_magic(
                     sg.state.wabil.hand_weight,
                 ),
             });
+        }
+        // **卡 `openmir2-charstatuschanged-wiring` #13**：657 在 622 **之后**发
+        // （oracle 队列序 622=131 < 657=155；放进 `immediate` 会排到 622 之前 = 错序）。
+        // 复用三动作 helper：观察者副本由它逐收件人重编码（`Series` = 收件人自己的 `HitSpeed`）。
+        for (status, hit_speed) in take_char_status {
+            send_charstatuschanged_self_and_observers(
+                world,
+                online,
+                gates,
+                actor_id,
+                status,
+                hit_speed,
+                chat::send_ref_msg_range(),
+                "657(P21 装备复检)",
+            );
         }
     }
 }
@@ -24934,7 +25627,13 @@ fn drain_player_hunger(
                 sg.state.wabil.hp = hp_now;
                 sg.state.wabil.mp = mp_now;
                 let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    None,
+                    Some(&mut world.rng),
+                );
                 if let Some(mut e) = world.entities.get_mut(actor_id) {
                     apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if effect.revival {
@@ -25516,7 +26215,13 @@ fn drain_player_revival_with_magic(
                 let magic_recalc = magic
                     .as_mut()
                     .and_then(|src| src.recalc_for(&name, flame_ring_in));
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    magic_recalc,
+                    Some(&mut world.rng),
+                );
                 let RecalcEffect {
                     revival,
                     flame_ring,
@@ -25634,6 +26339,7 @@ fn tick_world_with_specials(
 fn apply_get_start_point_after_tick(
     world: &mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
     enter_cfg: &EnterConfig,
@@ -25663,6 +26369,7 @@ fn apply_get_start_point_after_tick(
         now,
         &players,
         saves,
+        sessions,
         &enter_cfg.home_start_points,
         red_home_map,
         red_home_x,
@@ -25672,12 +26379,17 @@ fn apply_get_start_point_after_tick(
 
 /// **端到端核心**（3s 支的「串起来」那段，纯数据进/纯数据出，供单测直接喂数组）：
 /// 对每个 `(chr_name, check_dup_obj_tick, 当前地图名)`，**只有 tick == now** 的玩家才
-/// 用 [`apply_get_start_point_to_record`] 覆盖 `saves[chr].record.data.home_*`。
+/// 用 [`apply_get_start_point_to_record`] 覆盖 `saves[chr].record.data.home_*`，并在**同一次迭代**里
+/// 把同一份结果写回会话快照 `sessions[chr].home`（`PlayObject.HomeMap/HomeX/HomeY` 的宿主镜像）。
+/// 两处写**同拍、同源**（同一 `apply_get_start_point_to_record` 的返回值读出）——不存在
+/// 「record 已更新、会话还是旧值」的中间窗口。
 /// 返回实际写入的玩家数（0 = 本 tick 无人命中/无匹配）。
+#[allow(clippy::too_many_arguments)]
 fn apply_start_point_for_fired_players(
     now: i64,
     players: &[(String, i64, String)],
     saves: &mut std::collections::HashMap<String, SavedHuman>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     start_points: &[mir2_envir::startpoint::StartPoint],
     red_home_map: &str,
     red_home_x: i16,
@@ -25700,6 +26412,12 @@ fn apply_start_point_for_fired_players(
             red_home_y,
         ) {
             applied += 1;
+            // 同拍、同源写回会话快照（只写 `home_*`；`red_home_*` 是登录时抄的不可变配置，不在此写）。
+            if let Some(sg) = sessions.get_mut(chr_name) {
+                sg.home.home_map = saved.record.data.home_map.clone().unwrap_or_default();
+                sg.home.home_x = saved.record.data.home_x;
+                sg.home.home_y = saved.record.data.home_y;
+            }
         }
     }
     applied
@@ -26068,6 +26786,9 @@ struct SessionGroundInputs<'a> {
     server_index: u8,
     /// `PlayObject.MagicList` 等魔法态快照（调用点装配；见 `readbook::MagicState`）。
     magic: readbook::MagicState,
+    /// `SystemShare.Config.RedHomeMap/RedHomeX/RedHomeY`（`red_home_of(enter_cfg)`；
+    /// 会话 `eat_move::HomeState` 的 `red_home_*` 来源，生产不可变）。
+    red_home: (&'a str, i16, i16),
     /// `String.conf` 的 `CanotPickUpItem`（GBK 原文，`SM_SYSMESSAGE`）。
     canot_pick_up_item: &'a str,
     /// 构造时刻（oracle 各 ctor 的 `GetTickCount()`）。
@@ -26196,6 +26917,17 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         user_unlock_durg: false,
         hunger_status: d.hunger_status,
         magic: i.magic,
+        // `PlayObject.HomeMap/HomeX/HomeY`（`GetHumData` 装入 + 登录 `GetStartPoint()` 覆盖后的 final 值；
+        // 调用点的 `d` = `apply_get_start_point_on_login` 之后取的 `full.as_ref().data`）。
+        // `RedHome*` 是 `SystemShare.Config` 的只读快照（生产不可变）。
+        home: eat_move::HomeState {
+            home_map: d.home_map.clone().unwrap_or_default(),
+            home_x: d.home_x,
+            home_y: d.home_y,
+            red_home_map: i.red_home.0.to_string(),
+            red_home_x: i.red_home.1,
+            red_home_y: i.red_home.2,
+        },
         // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
         //（进图后第一次 Run 立即过门）。
         dec_hp_tick: 0,
@@ -26242,6 +26974,10 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         sg.gm.horse_type = mount_id;
         sg.gm.on_horse = true;
     }
+    // **IT-17b**：登录装配只**补填 `MagicArr`**（`PlayObject.cs:3684`，只写不清）；技能被动
+    // 已在调用点用 `world.rng` 算好并随 `SessionGroundInputs.magic.passives` 传入——
+    // **不能在这里重算**（否则攻杀的 `RandomByte(7-L)` 会在登录时二次抽数）。
+    skill_ability::fill_magic_arr(&mut sg.magic.arr, &sg.magic.list);
     sg
 }
 
@@ -28094,6 +28830,8 @@ fn sim_loop(
                             &chr_name,
                             &mut world,
                             &enter_cfg.catalog,
+                            &online,
+                            &gates,
                         ) {
                             if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
                                 if let Some(tx) = route_to_gate(
@@ -28287,6 +29025,7 @@ fn sim_loop(
                             &colors,
                             &enter_cfg.catalog,
                             registry.as_ref(),
+                            &enter_cfg.string_conf,
                         );
                     } else if matches!(
                         cmd.ident,
@@ -28430,6 +29169,8 @@ fn sim_loop(
                             &win_lottery,
                             enter_cfg.win_lottery,
                             enter_cfg.shop.human_max_gold,
+                            enter_cfg.weapon_make_luck,
+                            &castle_war_states,
                         );
                     } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                         // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -28922,6 +29663,9 @@ fn sim_loop(
                                 client_layout: mir2_client_ability_layout(),
                                 red: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
                                 ref_msg_range: enter_cfg.ref_msg_range,
+                                msg: &game_svr::useitem::SysMsgTexts::from_conf(
+                                    &enter_cfg.string_conf,
+                                ),
                             },
                         );
                     }
@@ -29949,7 +30693,22 @@ fn sim_loop(
                                                 // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
-                                                    let out = enter::recalc_for_session(a, d.job);
+                                                    // **IT-17b**：登录的 `RecalcHitSpeed` 技能循环增量
+                                                    // （`PlayObject.cs:3681-3712`；本批无攻杀 ⇒ 0 抽）。
+                                                    let login_magic_list = magicaudit::filter_for_logon(
+                                                        d.magic.clone().unwrap_or_default(),
+                                                        &magic_table_arc,
+                                                    );
+                                                    let login_skill = skill_ability::recalc_hit_speed_skills(
+                                                        &login_magic_list,
+                                                        &mut vec![None; skill_ability::MAGIC_ARR_LEN],
+                                                        Some(&mut world.rng),
+                                                    );
+                                                    let out = enter::recalc_for_session_with_skills(
+                                                        a,
+                                                        d.job,
+                                                        login_skill,
+                                                    );
                                                     // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
                                                     // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
                                                     // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
@@ -30015,15 +30774,14 @@ fn sim_loop(
                                                             actor_id: id,
                                                             server_index: enter_cfg.server_index,
                                                             magic: readbook::MagicState {
-                                                                list: magicaudit::filter_for_logon(
-                                                                    d.magic.clone().unwrap_or_default(),
-                                                                    &magic_table_arc,
-                                                                ),
+                                                                list: login_magic_list.clone(),
                                                                 table: Some(std::sync::Arc::clone(
                                                                     &magic_table_arc,
                                                                 )),
+                                                                passives: login_skill,
                                                                 ..Default::default()
                                                             },
+                                                            red_home: red_home_of(&enter_cfg),
                                                             canot_pick_up_item: enter_cfg
                                                                 .string_conf
                                                                 .canot_pick_up_item(),
@@ -30443,6 +31201,8 @@ fn sim_loop(
                                                                         sg,
                                                                         &mut world,
                                                                         &enter_cfg.catalog,
+                                                                        &online,
+                                                                        &gates,
                                                                     )
                                                                 }
                                                                 None => None,
@@ -30761,9 +31521,13 @@ fn sim_loop(
         // **卡 `openmir2-gm-impl-smake`**：`@改属性` 佩戴位写的**每 tick 兜底**。四个脚本接缝
         // 已在脚本帧排水前各落一次；这里保证任何残留 pending 不会拖到玩家下次聊天（复审
         // blocking 的残留面），并在 `world.tick()` 之前下发 203。
-        for (actor_id, body) in
-            collect_gm_use_item_pending(&mut ground_sessions, &mut world, &enter_cfg.catalog)
-        {
+        for (actor_id, body) in collect_gm_use_item_pending(
+            &mut ground_sessions,
+            &mut world,
+            &enter_cfg.catalog,
+            &online,
+            &gates,
+        ) {
             if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
                 if let Some(tx) =
                     route_to_gate(&gates, e.gate_idx, e.socket, "GM 改属性 SM_UPDATEITEM")
@@ -31153,6 +31917,11 @@ fn sim_loop(
             &enter_cfg.pet_cfg,
         );
         host_prof.end("HostWorldHead", t);
+        // **攻击批 A**：命令 FIFO 里攻击结算的攻杀计数块（`AttackDir` 之后，`PlayObject.Attack.cs:942-956`）
+        // 在这里排水。`SendSocket("+PWR")` 是直发短包（不经 MsgQueue）⇒ 紧跟 `tick_head` 发最接近
+        // oracle 的时序。
+        drain_yedo_events(&mut world, &online, &mut ground_sessions, &gates);
+        drain_skill_train_events(&mut world, &online, &mut ground_sessions);
         // **18 的状态变化观测有界**（卡 `openmir2-magic-parity` §26）：每 tick 清空一次；
         // 本观测面**只记录**，任何帧仍由各生产点的既有返回值出（此处清空不影响帧面）。
         world.clear_status_changes();
@@ -31174,6 +31943,7 @@ fn sim_loop(
         apply_get_start_point_after_tick(
             &world,
             &mut saves,
+            &mut ground_sessions,
             &online,
             registry.as_ref(),
             &enter_cfg,
@@ -31387,7 +32157,7 @@ fn sim_loop(
         // 毒伤帧（`SM_HEALTHSPELLCHANGED(53)`）。同属「本 tick 帧面」，紧随动作下行。
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33491,7 +34261,7 @@ mod tests {
 
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33518,8 +34288,8 @@ mod tests {
             .collect();
         assert_eq!(
             cs.len(),
-            1,
-            "恰一条 SM_CHARSTATUSCHANGED(657)；实得 {msgs:?}"
+            2,
+            "自见 2 条 657（oracle `StatusChanged()` 回环 + `SendUpdateMsg` 去重不命中，`src/M2Server/Player/PlayObject.cs:2851-2876`）；实得 {msgs:?}"
         );
         assert_eq!(cs[0].recog, hero, "Recog = ActorId");
         assert_eq!(
@@ -33592,7 +34362,7 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33618,9 +34388,12 @@ mod tests {
             vec![
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE,
             ],
-            "线序必须 52 → 657 → 100（队列优先级 67 < 155 < 252）；实得 {idents:?}"
+            "线序 52 → 657×4 → 100（67 < 155 < 252）；4 条 = recalcs 支 2 + status_changes 支 2；实得 {idents:?}"
         );
 
         // 52 = 当前 WAbil 的整帧（重算数值不变；映射 gold/job/game_gold/tail）。
@@ -33637,7 +34410,15 @@ mod tests {
         );
 
         // 100 逐字节：Recog=自己、Param=MakeWord(绿F,绿B)、Series=1、尾=EncodeString(文案)。
-        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[2]).unwrap();
+        // （按 ident 定位，不钉下标——657 的条数会随重算/状态支组合变化。）
+        let sm_idx = frames
+            .iter()
+            .position(|b| {
+                mir2_protocol::frame::CommandMessage::from_bytes(b)
+                    .is_some_and(|m| m.ident == mir2_protocol::messages::SM_SYSMESSAGE)
+            })
+            .expect("必须有 SM_SYSMESSAGE(100)");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[sm_idx]).unwrap();
         assert_eq!(cm.ident, mir2_protocol::messages::SM_SYSMESSAGE);
         assert_eq!(cm.recog, hero, "Recog = 自己的 ActorId");
         assert_eq!(
@@ -33646,12 +34427,182 @@ mod tests {
             "Param = MakeWord(GreenF=0xDB, GreenB=0xFF)"
         );
         assert_eq!(cm.series, 1, "Series = 1");
-        let tail = mir2_protocol::edcode::decode(&frames[2][12..]);
+        let tail = mir2_protocol::edcode::decode(&frames[sm_idx][12..]);
         assert_eq!(
             String::from_utf8_lossy(&tail),
             "防御力回复正常.",
             "文案按 oracle `:191`（Hint 支不拼前缀）"
         );
+    }
+
+    /// **657 牙 ①（`boChg` 修复）：自见 2 条 + 观察者逐收件人 `Series`**。
+    ///
+    /// oracle handler 的 `Series` 取**收件人自己**出队时的 `HitSpeed`
+    /// （`src/M2Server/Player/PlayObject.Message.cs:1845-1847`）；夹具：源 `hit_speed=7`，
+    /// 观察者 +5/+11/+12 各 `20/21/22`、+13 超 range。
+    /// 红检：退回 `broadcast_ref_msg_with_self(&[body])` 单 body（`Series` 固定 0）⇒ 观察者断言全红；
+    /// 删第二自见副本 ⇒ 自见条数红。
+    #[test]
+    fn buff_657_bochg_series_is_per_recipient_hit_speed() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let status: i32 = 0x8000_0002u32 as i32;
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_status_changes.push((actor, status));
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut per: std::collections::HashMap<i32, Vec<mir2_protocol::frame::CommandMessage>> =
+            std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                if m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED {
+                    per.entry(socket).or_default().push(m);
+                }
+            }
+        }
+        let self_frames = per.get(&901).expect("自见必须有 657");
+        assert_eq!(
+            self_frames.len(),
+            2,
+            "自见 2 条（StatusChanged + SendUpdateMsg）"
+        );
+        for m in self_frames {
+            assert_eq!(m.recog, actor, "Recog = 源 ActorId");
+            assert_eq!(m.series, 7, "自见 Series = 源自己 hit_speed");
+        }
+        for (socket, speed) in [(902i32, 20u16), (903, 21), (904, 22)] {
+            let f = per
+                .get(&socket)
+                .unwrap_or_else(|| panic!("socket {socket} 必须收到 657"));
+            assert_eq!(f.len(), 1, "socket {socket} 恰 1 条（观察者副本）");
+            assert_eq!(
+                f[0].series, speed,
+                "socket {socket} 的 Series = 该收件人自己的 hit_speed"
+            );
+        }
+        assert!(!per.contains_key(&905), "+13 超 SendRefMsgRange ⇒ 零帧");
+    }
+
+    /// **657 牙 ②（opc-19 追加）：三个收件人三个**不同** HitSpeed（3/7/9）——防"两人里恰好一个 0"的巧合。
+    #[test]
+    fn buff_657_bochg_three_recipients_distinct_series() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        // 把 +5/+11/+12 三个观察者改成 3/7/9（全非 0 且互异）。
+        let obs: Vec<i32> = online
+            .iter()
+            .filter(|e| e.actor_id != actor)
+            .map(|e| e.actor_id)
+            .collect();
+        for (i, id) in obs.iter().take(3).enumerate() {
+            let v = [3u16, 7, 9][i];
+            if let Some(e) = world.entities.get_mut(*id) {
+                e.vitals.hit_speed = v;
+            }
+        }
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_status_changes.push((actor, 0x8000_0002u32 as i32));
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut series: std::collections::HashMap<i32, u16> = std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                if m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED && socket != 901 {
+                    series.insert(socket, m.series);
+                }
+            }
+        }
+        assert_eq!(series.len(), 3, "+5/+11/+12 三人各一条（+13 超 range）");
+        let vals: Vec<u16> = series.values().copied().collect();
+        assert!(
+            vals.contains(&3) && vals.contains(&7) && vals.contains(&9),
+            "三个收件人各自 Series 必须是对应自己的 3/7/9；实得 {vals:?}"
+        );
+    }
+
+    /// **657 牙 ③（`boNeedRecalc` 接线）**：`RecalcAbilitys` 尾的 657 必须 **52 之后**发，
+    /// 自见 2 条、观察者各 1 条且逐收件人 `Series`。
+    #[test]
+    fn buff_657_needrecalc_after_ability_and_per_recipient() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("src".into(), test_session_ground(actor));
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_recalcs.push(actor);
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut self_idents: Vec<u16> = Vec::new();
+        let mut self_series: Vec<u16> = Vec::new();
+        let mut obs: std::collections::HashMap<i32, u16> = std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                match (socket, m.ident) {
+                    (901, id) if id == mir2_protocol::messages::SM_ABILITY => self_idents.push(id),
+                    (901, id) if id == mir2_protocol::messages::SM_CHARSTATUSCHANGED => {
+                        self_idents.push(id);
+                        self_series.push(m.series);
+                    }
+                    (_, id) if id == mir2_protocol::messages::SM_CHARSTATUSCHANGED => {
+                        obs.insert(socket, m.series);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            self_idents,
+            vec![
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "自见线序：52(67) 先、657(155) 后，且 657 共 2 条"
+        );
+        assert_eq!(self_series, vec![7, 7], "自见 Series = 源自己 hit_speed");
+        for (socket, speed) in [(902i32, 20u16), (903, 21), (904, 22)] {
+            assert_eq!(
+                obs.get(&socket),
+                Some(&speed),
+                "socket {socket} 的 657 Series = 该收件人自己的 hit_speed"
+            );
+        }
+        assert!(!obs.contains_key(&905), "+13 超 range");
     }
 
     /// **A3 负例（同卡）**：① `StateTick==10` 的预告文案（`魔法防御力10秒后恢复正常。`）
@@ -33690,7 +34641,7 @@ mod tests {
         ));
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33720,7 +34671,7 @@ mod tests {
         let rec = mir2_world_bevy::TickRecord::default();
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33947,7 +34898,7 @@ mod tests {
         rec.buff_health_changes.push((mon_id, 30, 5));
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut sessions,
@@ -40866,6 +41817,7 @@ mod tests {
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
             magic: readbook::MagicState::default(),
+            home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: Vec::new(),
@@ -40925,6 +41877,13 @@ mod tests {
         }
     }
 
+    /// 测试用的 `SysMsgTexts` 静态实例（`InboundFramesCtx` 借它，不能借临时值）。
+    fn default_sysmsg_texts() -> &'static game_svr::useitem::SysMsgTexts<'static> {
+        static CELL: std::sync::OnceLock<game_svr::useitem::SysMsgTexts<'static>> =
+            std::sync::OnceLock::new();
+        CELL.get_or_init(game_svr::useitem::SysMsgTexts::default)
+    }
+
     /// [`handle_inbound_cmd`] 的「重算 + 出帧面」输入（测试用：给定物品目录 + oracle 布局 + 红 253/0）。
     fn test_frames_ctx<'a>(
         catalog: &'a dyn game_svr::ability::ItemCatalog,
@@ -40934,6 +41893,7 @@ mod tests {
             client_layout: false,
             red: (253, 0),
             ref_msg_range: 12,
+            msg: default_sysmsg_texts(),
         }
     }
 
@@ -43732,6 +44692,7 @@ break
         use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
         let sg = SessionGround {
             magic: readbook::MagicState::default(),
+            home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: vec![weapon],
@@ -44009,6 +44970,234 @@ break
         );
         let rec = build_save_record(&saved, "atk", &world, &sessions["atk"], None);
         assert_eq!(rec.data.dir, 2, "F1：命中后立刻存档 ⇒ Dir = 尝试方向（右）");
+    }
+
+    /// **攻击批 A 用例⑦（宿主排水 · 正常支）**：`drain_yedo_events` 把世界的攻杀事件落到
+    /// 会话态（`MagicState.passives` + `power_hit`）并在 arm 时发 `SendSocket("+PWR")`
+    /// （`SimToGate::SendRaw`）。oracle：`PlayObject.Attack.cs:942-956`。
+    ///
+    /// 击次：count=2/point=0 ⇒ 第 1 击 2→1（不 arm）、第 2 击 1→0（arm + 重置 7-L=6 + 抽 1 次）。
+    ///
+    /// 红检：删掉 `drain_yedo_events` 里的回写 ⇒ 两条 passives 断言红；删掉 `armed` 支 ⇒ `+PWR` 断言红。
+    #[test]
+    fn yedo_drain_writes_back_and_sends_pwr() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.open_session("atk");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let attacker = world.enter_map("atk", ent, 0).expect("进世界");
+        world
+            .entities
+            .get_mut(attacker)
+            .unwrap()
+            .inventory
+            .use_items[mir2_world_bevy::world::ITEM_LOCATION_WEAPON] =
+            mir2_world_bevy::entity::UseItemSlot {
+                make_index: 1,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
+        world.entities.get_mut(attacker).unwrap().ai.dir = 4;
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        sg.magic.arr[usize::from(game_svr::skill_ability::SKILL_YEDO)] = Some(record::MagicRcd {
+            mag_idx: game_svr::skill_ability::SKILL_YEDO,
+            level: 1,
+            magic_key: 0,
+            tran_point: 0,
+        });
+        sg.magic.passives.attack_skill_count = 2;
+        sg.magic.passives.attack_skill_point_count = 0;
+        sessions.insert("atk".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 11);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.hp = 500;
+        mon.max_hp = 500;
+        world.add_entity(mon);
+
+        let hit = |world: &mut mir2_world_bevy::World,
+                   displays: &mut downlink::DisplayTable,
+                   sessions: &mut HashMap<String, SessionGround>| {
+            assert!(handle_hit_cmd(
+                CM_HIT,
+                game_svr::feature::make_long(10, 10),
+                4,
+                "atk",
+                901,
+                &online,
+                world,
+                displays,
+                sessions,
+                &gates,
+                &catalog,
+            ));
+            world.tick();
+            drain_yedo_events(world, &online, sessions, &gates);
+        };
+
+        // 第 1 击：2→1，不 arm ⇒ 无 `+PWR`。
+        hit(&mut world, &mut displays, &mut sessions);
+        assert_eq!(sessions["atk"].magic.passives.attack_skill_count, 1, "2→1");
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_point_count, 0,
+            "未归零 ⇒ 不抽"
+        );
+        assert!(!sessions["atk"].magic.power_hit, "未 arm");
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 0, "第 1 击不发 +PWR");
+
+        // 第 2 击：1→0 ⇒ arm（PointCount==0）+ 重置 7-1=6 + 抽 1 次。
+        hit(&mut world, &mut displays, &mut sessions);
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_count, 6,
+            "归零 ⇒ 重置为 7-L"
+        );
+        assert!(
+            sessions["atk"].magic.passives.attack_skill_point_count < 6,
+            "重置抽 RandomByte(6)"
+        );
+        assert!(sessions["atk"].magic.power_hit, "第 2 击 arm");
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 1, "arm 那一击恰发一次 +PWR");
+    }
+
+    /// **攻击批 A 用例⑧（宿主排水 · 无武器支）**：有攻杀但 `Dura == 0` ⇒ oracle 在
+    /// `PlayObject.Attack.cs:943` 解引用 `null` 抛 NRE、被 `:963` catch 吞掉；本仓**跳过 + WRN**。
+    /// 断言三件：①会话的跳过计数 +1（与 WRN 同分支自增，可判据「报告了」）；②计数未变；
+    /// ③没有 `+PWR`。
+    ///
+    /// 红检：把 `skipped_no_weapon` 支改回「照常递减」⇒ 计数断言红；删掉计数自增 ⇒ ①红。
+    #[test]
+    fn yedo_no_weapon_skips_and_counts_warn() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.open_session("atk");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let attacker = world.enter_map("atk", ent, 0).expect("进世界");
+        world.entities.get_mut(attacker).unwrap().ai.dir = 4;
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        sg.magic.arr[usize::from(game_svr::skill_ability::SKILL_YEDO)] = Some(record::MagicRcd {
+            mag_idx: game_svr::skill_ability::SKILL_YEDO,
+            level: 1,
+            magic_key: 0,
+            tran_point: 0,
+        });
+        sg.magic.passives.attack_skill_count = 2;
+        sg.magic.passives.attack_skill_point_count = 0;
+        sessions.insert("atk".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 11);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.hp = 500;
+        mon.max_hp = 500;
+        world.add_entity(mon);
+        // 不装武器：`use_items[Weapon].dura == 0`。
+        assert_eq!(
+            world.entities.get(attacker).unwrap().use_items
+                [mir2_world_bevy::world::ITEM_LOCATION_WEAPON]
+                .dura,
+            0,
+            "前提：无武器"
+        );
+
+        assert!(handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(10, 10),
+            4,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+            &catalog,
+        ));
+        world.tick();
+        drain_yedo_events(&mut world, &online, &mut sessions, &gates);
+
+        assert_eq!(
+            sessions["atk"].magic.yedo_no_weapon_warns, 1,
+            "跳过 + WRN 同分支计数 +1"
+        );
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_count, 2,
+            "无武器 ⇒ 计数未变（不照抄 oracle 的 NRE 行为，也不误递减）"
+        );
+        assert!(!sessions["atk"].magic.power_hit);
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 0, "跳过支不发 +PWR");
     }
 
     /// **F1（`openmir2-persist-f1f2-fix`）· `CM_SPELL` default 支**：
@@ -46674,6 +47863,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -46788,6 +47978,7 @@ break
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -46817,6 +48008,7 @@ break
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { body, socket }) => {
@@ -46880,6 +48072,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -47074,6 +48267,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -47230,6 +48424,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -47420,6 +48615,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -48278,9 +49474,14 @@ break
             );
             // 卡 `openmir2-gm-impl-smake`（复审 important-2）：`SM_UPDATEITEM(203)` 先发
             // （oracle `SendDefMessage` 立即），GM 的蓝字 `SM_SYSMESSAGE(100)` 后发。
-            if let Some(body) =
-                apply_pending_gm_use_item(&mut self.sessions, "aaa", &mut self.world, &self.catalog)
-            {
+            if let Some(body) = apply_pending_gm_use_item(
+                &mut self.sessions,
+                "aaa",
+                &mut self.world,
+                &self.catalog,
+                &self.online,
+                &self.gates,
+            ) {
                 if let Some(tx) = self.gates.get(&0) {
                     let _ = tx.send(SimToGate::SendFrame { socket: 901, body });
                 }
@@ -48721,7 +49922,8 @@ break
         );
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
         // F2-R3 牙敏感点：目标带生效中的 ExtraAbil[0]（AttPowerUp DC 高字节 +3）——
-        // 重算必须传 `Some(&e.extra_abil)`，否则 GM 删技能把加成抹掉（wabil.dc 丢失 0x0300）。
+        // 重算仍按实体活跃值传 `Some(&e.extra_abil)`（状态面照传）；但**不得**折进 `WAbil`
+        //（oracle `:2899-2906` 覆盖 `:2818-2846`，见 F2-R3 的修正）。
         world.entities.get_mut(victim_id).unwrap().buff.extra_abil[0] = 3;
         // F3-R3：**desc ≠ magic_name**——命令按 Desc 匹配（oracle :60），审计按 MagicName 查找
         // （`magicaudit::delete_name_skill` 用 magic_name）。把命令查找改成 magic_name ⇒ 本用例红。
@@ -48820,14 +50022,13 @@ break
         let list = saves["victim"].record.data.magic.as_ref().unwrap();
         assert_eq!(list.len(), 1, "只删命中项（按 Desc）");
         assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
-        // **既有断言更正（2026-11-20，opc-19 要求按最高规格）**：
-        // 旧期望 0x0400 = 0x0100 + `ExtraAbil[0]=3` 加到 DC 高字节（写入点 `PlayObject.cs:2818-2820`）。
-        // 但 `RecalcAbilitys` 尾段 `:2900` 重算 `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil.DC)+Lo(Abil.DC)),
-        // MIN(255,Hi(AddAbil.DC)+Hi(Abil.DC)))` ⇒ **ExtraAbil 的写入被整体覆盖**，DC 只能来自 Abil+AddAbil
-        // = 0x0100。旧值含 ExtraAbil ⇒ 错。
+        // **F2-R3（2026-11-20 修正：旧期望编码了错误行为）**：`ExtraAbil[0]=3` **不得**进 `WAbil`——
+        // oracle `RecalcAbilitys` 的折算段（`PlayObject.cs:2818-2846`）必被 `:2899-2906` 的
+        // `WAbil.DC = MakeWord(MIN(255,Lo(Add)+Lo(Abil)), MIN(255,Hi+Hi))` 整体覆盖 ⇒ 只能 `0x0100`。
+        // 旧期望 `0x0400`（Hi 1+3）是把"被覆盖值"当成最终值的被测错误。
         assert_eq!(
             sessions["victim"].state.wabil.dc, 0x0100,
-            "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
+            "ExtraAbil 不进 WAbil（oracle :2899-2906 覆盖 :2818-2846）"
         );
         assert!(
             !world.entities.get(victim_id).unwrap().flame_ring,
@@ -49364,13 +50565,15 @@ break
     ///
     /// 牙：① `-1 ⇒ 255`、`300 ⇒ 255`（`(byte)HUtil32._MIN(MAXUPLEVEL=255, n)` 的 unchecked 回绕，
     /// **不得先钳 0**）；② `0 ⇒ 0`、`7 ⇒ 7`；③ 成功路径恰发
-    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752)` 三条、顺序固定；
+    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752) → SM_CHARSTATUSCHANGED(657) ×2` 五条、顺序固定
+    ///（657 来自 `HasLevelUp` 内 `RecalcAbilitys()`：`PlayObject.cs:2875` 广播副本 + `:2876` 自更新副本，
+    /// 见卡 `openmir2-charstatuschanged-wiring` #1 的三动作 helper）；
     /// ④ `wabil.level` / `max_exp` / 实体 `level`·`max_exp` 四处一致；
     /// ⑤ **只发给发起者**：第二个在线角色（socket 902）收不到任何帧
     ///（`GmRig::say` 对任何非 901 socket 直接 panic）；
     /// ⑥ 负例：**权限 0（现网生产值）** ⇒ 只回 1 条 `权限不够!!!`、会话与实体等级都不变。
     #[test]
-    fn level0_writes_level_and_emits_three_levelup_frames_to_self_only() {
+    fn level0_writes_level_and_emits_levelup_frames_plus_657_to_self_only() {
         for (arg, want) in [("-1", 255u8), ("300", 255), ("0", 0), ("7", 7)] {
             let mut rig = GmRig::new();
             // 第二个在线角色：只用于证明「不广播」（任何发给 902 的帧会让 `GmRig::say` panic）。
@@ -49380,7 +50583,11 @@ break
                 .iter()
                 .map(|b| u16::from_le_bytes([b[4], b[5]]))
                 .collect();
-            assert_eq!(idents, vec![45, 52, 752], "arg={arg}：恰 45→52→752 三条");
+            assert_eq!(
+                idents,
+                vec![45, 52, 752, 657, 657],
+                "arg={arg}：恰 45→52→752→657→657 五条（657 ×2 = RecalcAbilitys 的广播副本 + 自更新副本）"
+            );
             let sg = &rig.sessions["aaa"];
             assert_eq!(sg.state.wabil.level, want, "arg={arg} ⇒ level={want}");
             assert_eq!(
@@ -49761,8 +50968,12 @@ break
             desc,
         });
         sessions.insert("hero".into(), sg);
-        let body = apply_pending_gm_use_item(&mut sessions, "hero", &mut world, &catalog)
-            .expect("命中 ⇒ 必须有 SM_UPDATEITEM 帧体");
+        let online: OnlineRegistry = Vec::new();
+        let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        let body =
+            apply_pending_gm_use_item(&mut sessions, "hero", &mut world, &catalog, &online, &gates)
+                .expect("命中 ⇒ 必须有 SM_UPDATEITEM 帧体");
         // 会话侧写。
         let it = sessions["hero"].use_items[1]
             .as_ref()
@@ -49817,13 +51028,22 @@ break
         }
         let frames = rig.say_gm("@改属性 3 2 7");
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b.as_slice()).0).collect();
+        // **已登记偏差 T-288**（卡 `docs/issues/openmir2-charstatuschanged-wiring.md` §T-288；
+        // 白名单 `mir2-rs/tests/parity/whitelist.md` 的 T-288）：oracle 线上序是 **203 → 657×2**
+        // （203 = `SendUpdateItem` 的直接帧，`PlayObject.Base.cs:1668-1686`；657×2 = 优先级 155 的
+        // 队列项，`BaseObject.Message.cs:94/:181`），本宿主在 recalc 内先发 657×2 ⇒ 差位。
+        // **本断言记录现状，不是 oracle 一致**；要"修"成 203 在前，必须同时撤 T-288 登记。
         assert_eq!(
             idents,
             vec![
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_UPDATEITEM,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "203 必须先于蓝字 100（oracle `SendDefMessage` 立即、`SysMsg` 入队后排水）"
+            "657×2（RecalcAbilitys：广播副本 + 自更新副本）→ 203 → 蓝字 100（帧内序偏差 **T-288**，见白名单）。
+             **登记（帧内序）**：oracle 线上序是 203（直接帧）先、657×2（队列）后；本宿主在 recalc 内
+             先发 657 ⇒ 差帧。本路径仅 GM 可达（现网 `Permission` 恒 0），卡 `openmir2-charstatuschanged-wiring` #2 已登记。"
         );
         // 落账：会话 + 实体同源（Desc[2]=7、Desc[9] 0→1）。
         let it = rig.sessions["aaa"].use_items[3]
@@ -49836,7 +51056,7 @@ break
             "实体佩戴位同源写"
         );
         // 蓝字回执逐字节（UTF-8 文本 + GBK 线上字节）。
-        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[1][12..]));
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[3][12..]));
         assert_eq!(text, "5-42 100/200 0/0/7/0/0/0/0/0/0/1/0/0/0/0");
         assert_eq!(
             crate::downlink::gbk(&text),
@@ -54067,6 +55287,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -54199,6 +55421,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 100,
@@ -54235,6 +55459,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 200,
@@ -54246,12 +55472,49 @@ SendRefMsgRange=15
         );
         // ③ 真实同步点（登录/升级/换装都走 recalc_session_ability；非自造函数）。
         let mut sg = sessions.remove("hero").unwrap();
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(
             sg.state.wabil.exp, sg.equip.abil.exp,
             "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
         );
         assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
+    }
+
+    /// **ExtraAbil 修正牙（`qa-extraabil-adjudication-20261120` 的 `ae` 复核点）**：
+    /// oracle 里 `ExtraAbil[HITSPEEDUP]` 只进**临时** `HitSpeed`（`PlayObject.cs:2830-2833`），
+    /// 并随 `:2876` 的 `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, …)` 作为**队列载荷 wParam**
+    /// （657 handler `PlayObject.Message.cs:1845-1847` **不读** wParam）；落地字段在 `:2899`
+    /// 被 `AddAbil.HitSpeed` 覆盖 ⇒ **657 帧的 Series 不含它**。
+    ///
+    /// 本用例：同一会话跑两次重算（`extra=None` vs `[0,0,0,4,0,0,0]`），
+    /// 落地 `hit_speed` 与由它构造的 657 帧 `Series` 必须**相同**。
+    /// 变异红：①把 `extra_abil[3]` 加进 `sg.hit_speed`（"保留过头"）⇒ 第二次 4 ⇒ 红；
+    /// ②把 `extra_abil` 折进 `WAbil` 由 F2-R3 红（本用例只钉临时面）。
+    #[test]
+    fn extraabil_hitspeedup_stays_out_of_landed_hit_speed() {
+        use mir2_protocol::frame::CommandMessage;
+        let catalog = crate::ability::StdItemCatalog::new();
+        let run = |extra: Option<&[u16; 7]>| -> (u16, u16) {
+            let mut sg = test_session_ground(1);
+            sg.equip.job = 0;
+            sg.equip.bonus_tick_hit = 20;
+            sg.equip.bonus_tick_speed = 35;
+            let _ = recalc_session_ability(&mut sg, &catalog, extra, None, None);
+            let body = crate::smframe_ext::sm_charstatuschanged(sg.actor_id, 0, sg.hit_speed);
+            let m = CommandMessage::from_bytes(&body).expect("657 可解析");
+            (sg.hit_speed, m.series)
+        };
+        let (hs0, series0) = run(None);
+        let extra = [0u16, 0, 0, 4, 0, 0, 0];
+        let (hs1, series1) = run(Some(&extra));
+        assert_eq!(
+            hs1, hs0,
+            "落地 HitSpeed 不得含 ExtraAbil[HITSPEEDUP]（oracle :2899 覆盖 :2830-2833）"
+        );
+        assert_eq!(
+            series1, series0,
+            "657 的 Series 取落地 HitSpeed；临时贡献只在队列 wParam（handler 不读）"
+        );
     }
 
     /// **IT-08 升级支宿主级对拍**：吃经验书(Exp=9990/MaxExp=10000/dura=100)⇒升级；宿主发的
@@ -54391,6 +55654,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
@@ -54506,6 +55771,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -54635,6 +55901,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -54768,6 +56036,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -55063,9 +56333,158 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_ADDITEM,
                 mir2_protocol::messages::SM_DELITEM,
                 // `WeightChanged()`（`Need` 失败件入包后的重量重算）——与 201/202 同批。
-                mir2_protocol::messages::SM_WEIGHTCHANGED
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支的
+                // `RecalcAbilitys()`（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新）⇒ 622 之后两条 657
+                // （oracle 131 < 155）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ]
         );
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #13**：P21 的 `if (boTakeItem)` 支
+    /// （`PlayObject.Message.cs:430-433`：`SendDelItems; UseItems[i].Index=0; RecalcAbilitys()`）
+    /// 必须发 657。判据按 §47：只判逐 socket 计数 + 同 socket 有参照帧的位置。
+    ///
+    /// - **条件真**（`Need=6` ⇒ 默认无行会 ⇒ 移出）：自己流 `200 → 202 → 622 → 657 → 657`
+    ///   （657 必须在 `WeightChanged()` 的 622 **之后**：oracle 622(131) < 657(155)）；
+    ///   近邻观察者恰 1 条；±12 外 0 条。
+    /// - **条件假**（`Need=0` ⇒ 达标 ⇒ `if (boTakeItem)` 整支不执行）：零帧（无 201/202/622/657）、
+    ///   `Index` 保留，且**不重算**（`wabil.level` 哨兵 0 不得被 `RecalcAbilitys` 从 Equip 反推）。
+    ///
+    /// 红检（牙）：把 657 放回 `immediate` 向量 ⇒ 自流变 `…202 → 657 → 657 → 622`，顺序断言必红。
+    #[test]
+    fn p21_take_item_emits_two_self_657_after_weightchanged() {
+        use mir2_protocol::messages::{
+            SM_ADDITEM, SM_CHARSTATUSCHANGED, SM_DELITEM, SM_WEIGHTCHANGED,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+            .unwrap();
+        let near = world.add_entity(new_player_entity("near".to_string(), 15, 10));
+        let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero));
+        online_set(&mut online, entry("n", "near", 2, 0, 902, near));
+        online_set(&mut online, entry("f", "far", 3, 0, 905, far));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "guild-only".into(),
+                std_mode: 5,
+                // `Need=6`（行会成员）⇒ 默认 `ItemsNeedContext`（无行会）判 false ⇒ 移除支。
+                need: 6,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            501,
+            mir2_data::StdItem {
+                name: "ok".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 500,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        sessions.insert("hero".into(), sg);
+
+        // ── 条件真 ──
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        let self_seq: Vec<u16> = frames
+            .iter()
+            .filter(|(socket, _)| *socket == 901)
+            .map(|(_, b)| ident(b))
+            .collect();
+        assert_eq!(
+            self_seq,
+            vec![
+                SM_ADDITEM,
+                SM_DELITEM,
+                SM_WEIGHTCHANGED,
+                SM_CHARSTATUSCHANGED,
+                SM_CHARSTATUSCHANGED,
+            ],
+            "自己流必须是 200 → 202 → 622 → 657×2（657 在 622 之后，oracle 131 < 155）"
+        );
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(per.get(&901), Some(&2), "自己恰两条（广播副本 + 自更新）");
+        assert_eq!(per.get(&902), Some(&1), "近邻观察者恰 1 条");
+        assert_eq!(per.get(&905), None, "±12 外零帧");
+        assert_eq!(
+            sessions["hero"].use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "条件真必须真移出（Index=0）"
+        );
+
+        // ── 条件假（Need 达标）──
+        // `drain` 入口会先 `sync_use_items_from_entity_if_loaded`（实体为准）⇒ 实体与会话都要写。
+        {
+            let slot = mir2_world_bevy::entity::UseItemSlot {
+                make_index: 2,
+                index: 501,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            };
+            world.entities.get_mut(hero).unwrap().inventory.use_items
+                [game_svr::ability::SLOT_WEAPON] = slot;
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 2,
+                index: 501,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+            // 哨兵：若被 `RecalcAbilitys` 调用，`wabil.level` 会被 Equip 等级反推覆盖。
+            sg.equip.abil.level = 7;
+            sg.state.wabil.level = 0;
+        }
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        assert!(
+            rx0.try_recv().is_err(),
+            "条件假 ⇒ 零帧（不得有 201/202/622/657）"
+        );
+        let sg = &sessions["hero"];
+        assert_eq!(
+            sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            501,
+            "条件假 ⇒ Index 保留"
+        );
+        assert_eq!(sg.state.wabil.level, 0, "条件假 ⇒ 不得调用 RecalcAbilitys");
     }
 
     /// **牙（`drain_player_game_gold`，P22）**：`bo_emergency_close` 支同样必须挡住。
@@ -55664,6 +57083,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -55805,6 +57225,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -56044,6 +57466,9 @@ SendRefMsgRange=15
         );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；
+            // oracle 在升级链末发它（155）。另：本用例里 657 落在 stamina 的 53(68) **之前**，
+            // 那是本宿主"链末尾出队"近似造成的**偏差 T-296（方向 B）**，不是 oracle 序。
             assert_eq!(socket, 903);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
@@ -56056,6 +57481,10 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
+                // **偏差 T-296（方向 B）**：stamina 的 53(68) 本应排在 657(155) 之前，本宿主排在之后（卡 §3d）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
             ],
             "升级链（53→44→45→52→752）之后才是体力点段（53）"
@@ -56413,7 +57842,7 @@ SendRefMsgRange=15
         let mut sg = test_session_ground(1);
         sg.state.item_list = bag_items_from(rec.bag_items.as_deref());
         assert_eq!(sg.state.item_list.len(), 4, "会话列表 = 记录非空件");
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(
             sg.state.wabil.weight, 10,
             "装备/卸下重算读同一份会话 item_list ⇒ 仍是四件的重量"
@@ -56905,7 +58334,7 @@ SendRefMsgRange=15
         sg.equip.abil.max_exp = 10;
         sg.equip.abil.exp = 3;
         sg.state.wabil.max_exp = 10;
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(sg.state.wabil.max_exp, 10, "重算保留登录 MaxExp");
         assert_eq!(sg.state.wabil.exp, 3, "重算保留 Exp");
     }
@@ -56930,6 +58359,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: list,
@@ -57721,6 +59151,211 @@ SendRefMsgRange=15
     ///
     /// 红检：把无目标支的 `world.attack_swing(actor_id)` 删掉（改回「只记日志」）⇒ 世界 RNG 停在
     /// 原位、下面的逐采样状态比对必红。
+    /// **IT-17b 正向例**：学到刺杀(12)/半月(25)/逐日(34) 后，`CM_LONGHIT/CM_WIDEHIT/CM_CRSHIT`
+    /// 的动作帧分别是 `SM_LONGHIT/SM_WIDEHIT/SM_CRSHIT`（`PlayObject.Attack.cs:101-134` 的
+    /// `case 4/5/8`：`MagicArr[id] != null`）。
+    ///
+    /// 红检：删 `hit_skill_state` 接线（回 `HitSkillState::default()`）⇒ 三条 `assert` 全红。
+    #[test]
+    fn it17b_hit_mode_skill_conditions_positive() {
+        use mir2_protocol::messages::{
+            CM_CRSHIT, CM_LONGHIT, CM_WIDEHIT, SM_CRSHIT, SM_LONGHIT, SM_WIDEHIT,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        for id in [
+            game_svr::skill_ability::SKILL_ERGUM,
+            game_svr::skill_ability::SKILL_BANWOL,
+            game_svr::skill_ability::SKILL_CROSSMOON,
+        ] {
+            sg.magic.arr[usize::from(id)] = Some(record::MagicRcd {
+                mag_idx: id,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            });
+        }
+        sessions.insert("atk".into(), sg);
+
+        for (cmd, want) in [
+            (CM_LONGHIT, SM_LONGHIT),
+            (CM_WIDEHIT, SM_WIDEHIT),
+            (CM_CRSHIT, SM_CRSHIT),
+        ] {
+            while rx0.try_recv().is_ok() {}
+            let _ = handle_hit_cmd(
+                cmd,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &game_svr::ability::StdItemCatalog::new(),
+            );
+            let mut idents = Vec::new();
+            while let Ok(m) = rx0.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    if socket == 902 {
+                        let cm =
+                            mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                        idents.push(cm.ident);
+                    }
+                }
+            }
+            assert!(
+                idents.contains(&want),
+                "cmd={cmd} ⇒ 期望含 SM={want}，实得 {idents:?}"
+            );
+        }
+    }
+
+    /// **IT-17b 反向例**：**未学** 12/25/34 时同三条命令仍回落 `SM_HIT`（`GetHitMode` 的
+    /// 条件不满足 ⇒ 保留初值 `RM_HIT`，`attackwire::rm_action_ident` 的 `_` 支）。
+    ///
+    /// 红检：把条件写成恒真（例如 `hit_skill_state` 恒置 true）⇒ 三条断言全红。
+    #[test]
+    fn it17b_hit_mode_skill_conditions_negative() {
+        use mir2_protocol::messages::{
+            CM_CRSHIT, CM_LONGHIT, CM_WIDEHIT, SM_CRSHIT, SM_HIT, SM_LONGHIT, SM_WIDEHIT,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("atk".into(), test_session_ground(attacker)); // `magic.arr` 全空
+
+        for cmd in [CM_LONGHIT, CM_WIDEHIT, CM_CRSHIT] {
+            while rx0.try_recv().is_ok() {}
+            let _ = handle_hit_cmd(
+                cmd,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &game_svr::ability::StdItemCatalog::new(),
+            );
+            let mut idents = Vec::new();
+            while let Ok(m) = rx0.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    if socket == 902 {
+                        let cm =
+                            mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                        idents.push(cm.ident);
+                    }
+                }
+            }
+            assert!(
+                idents.contains(&SM_HIT)
+                    && !idents.contains(&SM_LONGHIT)
+                    && !idents.contains(&SM_WIDEHIT)
+                    && !idents.contains(&SM_CRSHIT),
+                "cmd={cmd} 未学技能 ⇒ 只能是 SM_HIT，实得 {idents:?}"
+            );
+        }
+    }
+
     #[test]
     fn hit_cmd_without_target_still_draws_attack_power() {
         use mir2_protocol::messages::CM_HIT;
@@ -59136,9 +60771,10 @@ SendRefMsgRange=15
             // ③b 走一遍**真实出帧面**（世界 tick → `drain_buff_downlink`）⇒ 线上不得出现 657。
             //     阳性对照见 `spell_cmd_a5_defence_area_buff_frame_reaches_wire_in_range`。
             world.tick();
+            let tick_rec = world.last_tick.clone();
             drain_buff_downlink(
-                &world.last_tick,
-                &world,
+                &tick_rec,
+                &mut world,
                 &mut displays,
                 &online,
                 &mut ground_sessions,
@@ -59557,9 +61193,10 @@ SendRefMsgRange=15
         for _ in 0..400 {
             world.clock_ms += mir2_world_bevy::BUFF_STATE_TICK_GATE_MS;
             world.tick();
+            let tick_rec = world.last_tick.clone();
             drain_buff_downlink(
-                &world.last_tick,
-                &world,
+                &tick_rec,
+                &mut world,
                 &mut displays,
                 &online,
                 &mut ground_sessions,
@@ -60996,6 +62633,7 @@ SendRefMsgRange=15
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
             assert_eq!(socket, 903);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
             bodies.push(body);
@@ -61009,8 +62647,12 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875 StatusChanged()` 的 `SendRefMsg`（收件人含自己）
+                // + `:2876 SendUpdateMsg`（仅自己）⇒ 链末连续两条（第三条无用户可见差异，判据只到计数）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752)"
+            "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752) → 657×2"
         );
         let lv = &frames[2];
         assert_eq!((lv.recog, lv.param, lv.tag, lv.series), (500, 11, 0, 0));
@@ -61131,6 +62773,7 @@ SendRefMsgRange=15
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
             assert_eq!(socket, 901);
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
@@ -61144,8 +62787,11 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "恢复 53 → 升级 53 → 44 → 45/52/752（两条 53，不是一条）"
+            "恢复 53 → 升级 53 → 44 → 45/52/752 → 657×2（两条 53，不是一条）"
         );
         assert_eq!(frames[0].param, 15, "恢复帧载荷 = 升级前 HP（10+5）");
         let max_hp = sessions["hero"].state.wabil.max_hp;
@@ -61400,6 +63046,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61514,6 +63161,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -61543,6 +63191,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { body, socket }) => {
@@ -61590,6 +63239,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61733,6 +63383,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -61872,6 +63523,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert_eq!(
             sessions.get("hero").unwrap().state.item_list[0].dura,
@@ -61898,6 +63550,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert_eq!(
             sessions.get("hero").unwrap().state.item_list[0].dura,
@@ -62137,6 +63790,7 @@ SendRefMsgRange=15
                 colors,
                 catalog,
                 None,
+                &game_svr::strings::StringConf::defaults(),
             );
             let mut frames = Vec::new();
             while let Ok(m) = rx.try_recv() {
@@ -65849,7 +67503,7 @@ SendRefMsgRange=15
                 dura_max: 20,
                 desc: [0u8; 14],
             }];
-            let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+            let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
             if let Some(mut e) = world.entities.get_mut(actor) {
                 apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
             }
@@ -66741,6 +68395,730 @@ SendRefMsgRange=15
         cols[2].parse().expect("INJECT_OK 的 seed 必须是 int")
     }
 
+    // ======================================================================
+    // 卡 `openmir2-magic-parity` §39：39 `SKILL_GROUPDEDING` 真实台账驱动
+    // ======================================================================
+
+    /// 39 的 rig：几何/魔表与 C# Golden 同（caster 100,100；target 101,100；obs_in 105,100；
+    /// obs_out 140,100；魔表 `{39, effect=1, effect_type=1, train_lv=0}`）。
+    fn groupdeding_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            39,
+            &[(39, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        // 魔表行 = C# `new MagicInfo { MagicId=39, Effect=1, EffectType=1 }`（其余缺省 0，
+        // 尤其 `train_lv=0` ⇒ 训练尾不触发 `CheckMagicLevelUp` 升级支）。
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 39,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+            sg.state.wabil.hp = 500;
+            sg.state.wabil.max_hp = 500;
+        }
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        {
+            let mut tsg = spell_session_ground(target);
+            tsg.equip.abil.level = 20;
+            tsg.equip.abil.max_exp = 50;
+            tsg.state.wabil.level = 20;
+            tsg.state.wabil.hp = 100;
+            tsg.state.wabil.max_hp = 100;
+            rig.ground_sessions.insert("target".into(), tsg);
+        }
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 1;
+        rig
+    }
+
+    /// 逐目标命中门抽值走查（与装置侧 C# 同一算法）：`mon{idx} -> (gate_idx, gate_val, hit)`。
+    ///
+    /// 抽序（HAM_PEACE ⇒ 只有非死怪进伤害链）：每只 `GetAttackPower`（2 抽）+ 命中门
+    /// `Random(SpeedPoint)`（1 抽）+ 命中则护甲（1–2 抽）；最后若有任一非死怪则共享尾
+    /// 训练 `Random(3)+1`（1 抽）。走查必须恰好耗尽 `draws`（夹具假设被破坏即红）。
+    fn gdd_gate_ledger(
+        specs: &[[i64; 11]],
+        hit_point: i32,
+        draws: &[i64],
+        label: &str,
+    ) -> std::collections::HashMap<usize, (i32, i64, bool)> {
+        let mut out = std::collections::HashMap::new();
+        let mut order: Vec<usize> = (0..specs.len()).filter(|i| specs[*i][9] == 0).collect();
+        order.sort_by_key(|i| (specs[*i][0], specs[*i][1]));
+        let mut di = 0usize;
+        for idx in order {
+            let ac = specs[idx][10];
+            di += 2;
+            assert!(di < draws.len(), "[{label}] mon{idx} 命中门越界");
+            let gate_idx = di;
+            let gate = draws[di];
+            di += 1;
+            let hit = gate < i64::from(hit_point);
+            if hit {
+                let lo = ac & 0xFF;
+                assert!(di < draws.len(), "[{label}] mon{idx} 护甲骰越界");
+                let r = draws[di];
+                di += 1;
+                if lo + r > 0 {
+                    di += 1;
+                }
+            }
+            out.insert(idx, (i32::try_from(gate_idx).unwrap(), gate, hit));
+        }
+        if specs.iter().any(|m| m[9] == 0) {
+            di += 1; // 共享尾训练抽 `Random(3)+1`
+        }
+        assert_eq!(
+            di,
+            draws.len(),
+            "[{label}] 逐目标抽值走查未耗尽：consumed={di} recorded={}",
+            draws.len()
+        );
+        out
+    }
+
+    fn groupdeding_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "groupdeding";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+
+        let mut rig = groupdeding_rig(id_base);
+        let target = fireball_actor(&rig, "target");
+        if let Some(a) = golden_fixture_opt(stem, label, "anti_magic") {
+            rig.world
+                .entities
+                .get_mut(target)
+                .unwrap()
+                .vitals
+                .anti_magic = u16::try_from(a).unwrap_or(0);
+        }
+        if let Some(m) = golden_fixture_opt(stem, label, "target_max_hp") {
+            let m = u16::try_from(m).unwrap_or(0);
+            rig.world.entities.get_mut(target).unwrap().vitals.max_hp = m;
+            rig.ground_sessions
+                .get_mut("target")
+                .unwrap()
+                .state
+                .wabil
+                .max_hp = m;
+        }
+        if let Some(h) = golden_fixture_opt(stem, label, "target_hp") {
+            let h = u16::try_from(h).unwrap_or(0);
+            rig.world.entities.get_mut(target).unwrap().vitals.hp = h;
+            rig.ground_sessions
+                .get_mut("target")
+                .unwrap()
+                .state
+                .wabil
+                .hp = h;
+        }
+        let hit_point =
+            i32::try_from(golden_fixture_opt(stem, label, "caster_hit_point").unwrap_or(5))
+                .unwrap();
+        let dc = i32::try_from(golden_fixture_opt(stem, label, "caster_dc").unwrap_or(0)).unwrap();
+        let attack_mode =
+            u8::try_from(golden_fixture_opt(stem, label, "caster_attack_mode").unwrap_or(0))
+                .unwrap();
+        let caster = rig.caster;
+        {
+            let e = rig.world.entities.get_mut(caster).unwrap();
+            e.vitals.hit_point = u8::try_from(hit_point).unwrap();
+            e.vitals.dc = dc;
+            e.flags.attack_mode = attack_mode;
+        }
+        let specs = golden_monsters(stem, label);
+        let monster_ids = place_monsters(&mut rig.world, &specs, id_base + 10);
+        assert_eq!(monster_ids.len(), specs.len());
+        let mon_hp_before: Vec<u16> = monster_ids
+            .iter()
+            .map(|id| rig.world.entities.get(*id).unwrap().hp)
+            .collect();
+
+        // **种子/台账安装必须在放怪之后**（C# `RngSeam.Install` 在 DoSpell 前、怪物创建后；
+        // `place_monsters` 的 `world.tick()` 不得污染播种后的序列）。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请以 --exact 单跑本用例"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+
+        let n0 = trace_line_count(&trace);
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：生产入口施法 ----
+        rig.cast(39, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mon_hp_after: Vec<u16> = monster_ids
+            .iter()
+            .map(|id| rig.world.entities.get(*id).unwrap().hp)
+            .collect();
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+
+        // 交付前抓 caster 的自延迟载荷（RM_DELAYMAGIC / RM_MAGIC_LVEXP）。
+        let mut delay_msgs: Vec<(i32, i32, i32, i32, u8)> = Vec::new();
+        let mut lv_exp: Option<(i32, i32, i32)> = None;
+        for m in rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == caster)
+        {
+            if m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC {
+                delay_msgs.push((m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+            } else if m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP {
+                lv_exp = Some((m.n_param1, m.n_param2, m.n_param3));
+            }
+        }
+
+        // ---- 段②：按 due 时刻分步推进世界时钟并交付（不调 drain_b4：怪物 RM_MAGSTRUCK
+        // 只记 RM、不 Operate；B3 只出 640 等自延迟帧）。----
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut struck_rm: Vec<(i32, i32)> = Vec::new();
+        let mut elapsed = 0u64;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            for s in std::mem::take(&mut rig.world.pending_mag_struck) {
+                struck_rm.push((s.target_id, s.power));
+            }
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut sf, _r2) = rig.drain();
+            deliver_frames.append(&mut sf);
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 列（弱比较面）----
+        let range = chat::send_ref_msg_range();
+        let in_range = chat::hear_targets(&rig.world, caster, range);
+        let map_id = rig.world.entities.get(caster).map_or(0, |e| e.map_id);
+        let processed_coords: Vec<(i32, i32)> = rig
+            .world
+            .mag_objects_in_range(map_id, 101, 100, 1)
+            .into_iter()
+            .filter(|id| *id != caster)
+            .filter_map(|id| rig.world.entities.get(id).map(|e| (e.x, e.y)))
+            .collect();
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        let magic_p2 = game_svr::feature::make_long(101, 100);
+        for id in &in_range {
+            let Some(who) = who_of(*id) else { continue };
+            let v = rm_by_who.entry(who).or_default();
+            v.push(fireball_rm(10008, 1, 101, 100, 39, 24, false));
+            v.push(fireball_rm(
+                10120,
+                0,
+                257,
+                i64::from(magic_p2),
+                i64::from(target),
+                136,
+                false,
+            ));
+            for (x, y) in &processed_coords {
+                v.push(fireball_rm(
+                    10205,
+                    0,
+                    i64::from(*x),
+                    i64::from(*y),
+                    1,
+                    221,
+                    false,
+                ));
+            }
+        }
+        let caster_rm = rm_by_who.entry("caster".into()).or_default();
+        for (w, p1, p2, p3, prio) in &delay_msgs {
+            caster_rm.push(fireball_rm(
+                8021,
+                i64::from(*w),
+                i64::from(*p1),
+                i64::from(*p2),
+                i64::from(*p3),
+                i64::from(*prio),
+                true,
+            ));
+        }
+        if let Some((magic_id, level, tran)) = lv_exp {
+            caster_rm.push(fireball_rm(
+                10123,
+                0,
+                i64::from(magic_id),
+                i64::from(level),
+                i64::from(tran),
+                255,
+                true,
+            ));
+        }
+
+        // ---- 接收者 ----
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, socket),
+            }));
+        }
+        let cast_values: Vec<i64> = cast_rng.iter().map(|(_, r, _)| *r).collect();
+        let gate = gdd_gate_ledger(&specs, hit_point, &cast_values, label);
+        for (i, id) in monster_ids.iter().enumerate() {
+            let rm: Vec<serde_json::Value> = struck_rm
+                .iter()
+                .filter(|(tid, _)| tid == id)
+                .map(|(_, power)| fireball_rm(8044, 0, i64::from(*power), 0, 0, 108, false))
+                .collect();
+            let mut mon = serde_json::json!({
+                "Who": format!("mon{i}"),
+                "Rm": rm,
+                "Sent": Vec::<serde_json::Value>::new(),
+                "HpBefore": i64::from(mon_hp_before[i]),
+                "HpAfter": i64::from(mon_hp_after[i]),
+            });
+            if let Some((gi, gv, gh)) = gate.get(&i) {
+                mon["GateIndex"] = serde_json::json!(gi);
+                mon["GateDraw"] = serde_json::json!(gv);
+                mon["GateHit"] = serde_json::json!(gh);
+            }
+            receivers.push(mon);
+        }
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": 0,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[groupdeding {label}] seed={seed} cast_rng={:?} deliver_rng={:?} mon_hp={:?}->{:?}",
+            cast_values,
+            deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            mon_hp_before,
+            mon_hp_after
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_all_miss_hp0() {
+        groupdeding_parity_drive("all_miss_hp0", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_hit_ac_split() {
+        groupdeding_parity_drive("hit_ac_split", 2000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_miss_by_draw() {
+        groupdeding_parity_drive("miss_by_draw", 3000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_dead_excluded() {
+        groupdeding_parity_drive("dead_excluded", 4000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_dc_range() {
+        groupdeding_parity_drive("dc_range", 5000);
+    }
+
+    // ======================================================================
+    // 卡 openmir2-uenhancer：36 `SKILL_UENHANCER` 真实台账驱动
+    // ======================================================================
+
+    /// 36 的 rig：与 C# Golden 同几何；caster 用**登录序 Abil**（level=30/max_exp=50，由
+    /// `recalc_session_ability` 派生），但 `WAbil.SC=15` 保留给 `nTime` 的 `Lo(SC)*10` 输入。
+    fn uenhancer_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            36,
+            &[(36, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 36,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+            // 卡 36：非 0 夹具（CharStatusEx=2）⇒ `GetCharStatus()=2`，使 ④ 读取点可证伪（读陈旧 char_status 会得 0≠2）。
+            e.buff.char_status_ex = 2;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            // 登录序 Abil（RecalcLevelAbilitys 的输入），其余 ctor 缺省；SC 由夹具保持 15。
+            sg.equip.abil.level = 30;
+            sg.equip.abil.max_exp = 50;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+            // 卡 36 / B-hp：oracle `MagicGolden/Program.cs:1632-1636` 的 `targetNull` 分支把 caster
+            // `WAbil.HP/MaxHP` 覆盖成 `targetHp/TargetMaxHp=100` ⇒ rig 起点须为 100（非 500）。
+            // recalc 会把 MaxHP 重算为 Abil 派生值（419），HP 保留 100。
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+        }
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        {
+            let mut tsg = spell_session_ground(target);
+            tsg.equip.abil.level = 20;
+            tsg.equip.abil.max_exp = 50;
+            tsg.state.wabil.level = 20;
+            tsg.state.wabil.hp = 100;
+            tsg.state.wabil.max_hp = 100;
+            rig.ground_sessions.insert("target".into(), tsg);
+        }
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 1;
+        rig
+    }
+
+    /// 36 真实台账驱动（三支 s1/s5/s13，`targetNull ⇒ self`）。
+    ///
+    /// RM 组装全部来自**实现态**（非 golden）：`char_status` 读实体、护身符新耐久读施法者会话
+    /// `use_items[5]`、`tran_point` 读存档 magic[0]、绿字颜色读 `world.b5_cfg`。
+    fn uenhancer_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "uenhancer";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请以 --exact 单跑本用例"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+
+        let mut rig = uenhancer_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n0 = trace_line_count(&trace);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：施法（target 不传 ⇒ oracle 归一为 self）----
+        rig.cast(36, (100, 100), 0);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+        let extra0 = i64::from(rig.world.entities.get(caster).unwrap().extra_abil[0]);
+        let char_status = i64::from(rig.world.get_char_status(caster)); // ④ 同源 GetCharStatus（非陈旧 entity.char_status）
+
+        // ---- 段②：交付（训练尾 640 @1000ms）----
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut elapsed = 0u64;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut sf, _r2) = rig.drain();
+            deliver_frames.append(&mut sf);
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 组装（来源=实现态）----
+        let range = chat::send_ref_msg_range();
+        let in_range = chat::hear_targets(&rig.world, caster, range);
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        let (tx, ty) = (100i32, 100i32);
+        let magicfire_p2 = game_svr::feature::make_long(tx as u16, ty as u16);
+        let amulet = rig
+            .ground_sessions
+            .get("caster")
+            .and_then(|sg| sg.use_items.get(game_svr::ability::SLOT_ARMRING_L))
+            .and_then(|x| x.as_ref())
+            .map(|it| (it.dura, it.dura_max));
+        let tran = rig
+            .saves
+            .get("caster")
+            .and_then(|s| s.record.data.magic.as_ref())
+            .and_then(|m| m.first())
+            .and_then(|x| x.as_ref())
+            .map_or(0, |r| r.tran_point);
+        let gf = i64::from(rig.world.b5_cfg.green_msg_f_color);
+        let gb = i64::from(rig.world.b5_cfg.green_msg_b_color);
+
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        for id in &in_range {
+            let Some(who) = who_of(*id) else { continue };
+            let v = rm_by_who.entry(who).or_default();
+            // `:159 RM_SPELL(Effect, tx, ty, MagicId)`。
+            v.push(fireball_rm(
+                10008,
+                1,
+                i64::from(tx),
+                i64::from(ty),
+                36,
+                24,
+                false,
+            ));
+            // `:648-658 RM_MAGICFIRE`：p3 = 归一后的 targetActorId（self=caster）。
+            v.push(fireball_rm(
+                10120,
+                0,
+                257,
+                i64::from(magicfire_p2),
+                i64::from(caster),
+                136,
+                false,
+            ));
+            // `StatusChanged()` 广播（p1 = 施法者 CharStatus）。
+            v.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+        }
+        let cv = rm_by_who.entry("caster".into()).or_default();
+        // 自更新第二条 10139 + `SendMsg(RM_ABILITY)`(10051) + SysMsg(11004)。
+        cv.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+        cv.push(fireball_rm(10051, 0, 0, 0, 0, 67, false));
+        // `UseAmulet` 的 RM_DURACHANGE(10125)：wParam=槽位(ArmRingl=5)、p1=新耐久、p2=DuraMax。
+        if let Some((dura, dura_max)) = amulet {
+            cv.push(fireball_rm(
+                10125,
+                i64::from(game_svr::ability::SLOT_ARMRING_L as u16),
+                i64::from(dura),
+                i64::from(dura_max),
+                0,
+                141,
+                false,
+            ));
+        }
+        cv.push(fireball_rm(11004, 0, gf, gb, 0, 252, false));
+        // 训练尾 RM_MAGIC_LVEXP(10123)：p1=MagicId、p2=Level、p3=TranPoint。
+        cv.push(fireball_rm(10123, 0, 36, 1, i64::from(tran), 255, true));
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, socket),
+            }));
+        }
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": 0,
+            "CasterExtraAbil0": extra0,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[uenhancer {label}] seed={seed} cast_rng={:?} deliver_rng={:?} extra0={extra0} char_status={char_status} tran={tran} amulet={amulet:?}",
+            cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s1() {
+        uenhancer_parity_drive("s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s5() {
+        uenhancer_parity_drive("s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s13() {
+        uenhancer_parity_drive("s13", 3000);
+    }
+
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
     fn fireball_rig(id_base: i32, magic_id: u16, sc: u16, user_magic_level: u8) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
@@ -66952,6 +69330,9 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
+        // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
+        let monster_specs = golden_monsters(stem, label);
+        let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
@@ -67043,6 +69424,11 @@ SendRefMsgRange=15
                 ),
                 "[{label}] 28 前提：target 实体 HP/MaxHP 必须与登录派生后的 WAbil 同值"
             );
+        }
+        // v1：怪物侧投递面（仅当本支有怪物时执行；其它支零影响）。
+        let mut monster_deliveries: Vec<mir2_world_bevy::slave::SelfDelayOutcome> = Vec::new();
+        if !monster_ids.is_empty() {
+            monster_deliveries = rig.world.deliver_self_delay_msgs();
         }
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
@@ -67598,6 +69984,20 @@ SendRefMsgRange=15
             "NotDue": [],
             "CasterMp": caster_mp,
         }]);
+        if !monster_ids.is_empty() {
+            let rms: Vec<serde_json::Value> = monster_ids
+                .iter()
+                .map(|id| {
+                    let hits: Vec<serde_json::Value> = monster_deliveries
+                        .iter()
+                        .filter(|o| o.actor_id == *id && o.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                        .map(|o| serde_json::json!({ "ident": o.ident, "name_color": o.name_color.is_some() }))
+                        .collect();
+                    serde_json::json!({ "actor_id": id, "rms": hits })
+                })
+                .collect();
+            ledger[0]["Monsters"] = serde_json::Value::Array(rms);
+        }
         if status_input.is_some() {
             // 与 golden 同形（对象三键），比较器可逐值比。
             let as_obj = |v: [u16; 3]| {
@@ -68635,6 +71035,99 @@ SendRefMsgRange=15
             .iter()
             .filter(|m| m["ident"] == ident)
             .count()
+    }
+
+    /// 金标准 `Fixture.monsters`；不存在/为空返回空表（缺省 ⇒ 世界不放怪物 ⇒ 既有件零变化）。
+    ///
+    /// 字段序：`[x, y, race, level, hp, life_attrib, master, target_cret, speed_point, death, ac]`。
+    /// 后三项（卡 §39）对旧 golden 缺省 `15/0/0`（= `BaseObject` ctor 缺省 / 无死 / 无护甲）⇒ 旧件零变化。
+    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 11]> {
+        let v = golden_case_for(stem, label)["Fixture"]["monsters"].clone();
+        let Some(arr) = v.as_array() else {
+            return Vec::new();
+        };
+        arr.iter()
+            .map(|m| {
+                let g = |k: &str| {
+                    m[k].as_i64()
+                        .unwrap_or_else(|| panic!("monsters.{k} 必须是整数"))
+                };
+                let opt = |k: &str, d: i64| m[k].as_i64().unwrap_or(d);
+                // death 在 golden 里是 JSON bool（as_i64() 返回 None ⇒ 默认 0 会把
+                // 死怪当活怪；§39 dead_excluded 曾因此空过）。
+                let death = match &m["death"] {
+                    serde_json::Value::Bool(b) => i64::from(*b),
+                    other => other.as_i64().unwrap_or(0),
+                };
+                [
+                    g("x"),
+                    g("y"),
+                    g("race"),
+                    g("level"),
+                    g("hp"),
+                    g("life_attrib"),
+                    g("master"),
+                    g("target_cret"),
+                    opt("speed_point", 15),
+                    death,
+                    opt("ac", 0),
+                ]
+            })
+            .collect()
+    }
+
+    /// **世界放怪物（设施接缝，卡 §36）**：参数全部来自夹具，返回与列表同序的 actor id。
+    fn place_monsters(
+        world: &mut mir2_world_bevy::World,
+        monsters: &[[i64; 11]],
+        first_id: i32,
+    ) -> Vec<i32> {
+        let mut ids = Vec::with_capacity(monsters.len());
+        for m in monsters {
+            let mut e = mir2_world_bevy::EntitySpawn::new(
+                0,
+                format!("golden-mon{}", ids.len()),
+                m[0] as i32,
+                m[1] as i32,
+            );
+            // 卡 §39：C# 装置给怪物的 ActorId = `idBase + 10 + i`（`& 0xFF` 后的 ActorId 会进
+            // RM_MAGICFIRE/RM_DELAYMAGIC 载荷）。自动分配会从 `max+1` 起，与 golden 不等。
+            e.id = first_id + i32::try_from(ids.len()).expect("怪物序号越界");
+            e.race = u8::try_from(m[2]).expect("race 越界");
+            e.level = u8::try_from(m[3]).expect("level 越界");
+            e.hp = u16::try_from(m[4]).expect("hp 越界");
+            e.max_hp = e.hp;
+            e.life_attrib = u8::try_from(m[5]).expect("life_attrib 越界");
+            // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `AC` / 收集期 `Death` 过滤。
+            e.speed_point = u8::try_from(m[8]).expect("speed_point 越界");
+            e.death = m[9] != 0;
+            e.ac = i32::try_from(m[10]).expect("ac 越界");
+            e.ai.animal = true;
+            e.rush_mode = false;
+            e.admin_mode = false;
+            e.stone_mode = false;
+            e.master = None;
+            e.ai.target_creature = None;
+            let id = world.add_entity(e);
+            ids.push(id);
+        }
+        world.tick();
+        for (i, m) in monsters.iter().enumerate() {
+            let bind = |idx: i64| -> Option<i32> {
+                if idx == 0 {
+                    None
+                } else {
+                    Some(ids[usize::try_from(idx).expect("序号") - 1])
+                }
+            };
+            if let (Some(master), Some(e)) = (bind(m[6]), world.entities.get_mut(ids[i])) {
+                e.slave.master = Some(master);
+            }
+            if let (Some(tc), Some(e)) = (bind(m[7]), world.entities.get_mut(ids[i])) {
+                e.ai.target_creature = Some(tc);
+            }
+        }
+        ids
     }
 
     /// 金标准 `Fixture.status_time_arr`（`{dechealth,damagearmor,stone}`）——不存在返回 `None`。
@@ -71597,6 +74090,8 @@ SendRefMsgRange=15
                 ),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
         };
         let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
@@ -71829,6 +74324,8 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -76528,7 +79025,7 @@ SendRefMsgRange=15
         // 收件人 A（施法者自己）：+3。
         let mut cg = rig.ground_sessions.remove("caster").unwrap();
         cg.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7101));
-        recalc_session_ability(&mut cg, &catalog, None, None);
+        recalc_session_ability(&mut cg, &catalog, None, None, None);
         assert_eq!(
             cg.hit_speed, 3,
             "StdMode 5 + Hi(MAC)=13 ⇒ RealAttackSpeed=3"
@@ -76545,7 +79042,7 @@ SendRefMsgRange=15
         // 收件人 B（观察者）：+5。
         let mut og = spell_session_ground(rig.observer);
         og.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7102));
-        recalc_session_ability(&mut og, &catalog, None, None);
+        recalc_session_ability(&mut og, &catalog, None, None, None);
         assert_eq!(
             og.hit_speed, 5,
             "StdMode 5 + Hi(MAC)=15 ⇒ RealAttackSpeed=5"
@@ -79666,7 +82163,7 @@ SendRefMsgRange=15
             tsg.show_hp = false;
             tsg.state.gold = 1234;
             tsg.game_gold = 7;
-            recalc_session_ability(&mut tsg, &catalog, None, None);
+            recalc_session_ability(&mut tsg, &catalog, None, None, None);
             assert_eq!(
                 tsg.state.wabil.dc, 0x0A05,
                 "B5Rig 自检：目标全量重算必须产出 dc=0x0A05（合同 §3.4）"
@@ -80265,6 +82762,7 @@ SendRefMsgRange=15
         const SM_639: u16 = mir2_protocol::messages::SM_MAGICFIRE_FAIL;
         const SM_640: u16 = mir2_protocol::messages::SM_MAGIC_LVEXP;
         const SM_642: u16 = mir2_protocol::messages::SM_DURACHANGE;
+        const SM_657: u16 = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
 
         // ---- F36-A：独立玩家目标 ----
         {
@@ -80282,15 +82780,18 @@ SendRefMsgRange=15
             assert_eq!(rig.tran_point(), 2);
             assert_eq!(rig.tran_level(), 2);
             assert_eq!(rig.mp(), 979, "GetSpellPoint(36)=21 ⇒ MP 1000→979");
+            // **657 来自 target 的 `RecalcAbilitys()`（`da` 卡 36 接线，`47064136e`）**：
+            // `PlayObject.cs:2875 StatusChanged()` 的 `SendRefMsg` 收件人 = ±`SendRefMsgRange` 含 target 自己，
+            // ⇒ **caster 收 1 条（广播副本）**；两条自帧（`:2875` 副本 + `:2876` 自更新）都落在 **target（912）**。
             assert_eq!(
                 sf_seq(&frames, 911),
-                vec![SM_53, SM_638, SM_642],
-                "caster 出队序 17 → 53 → 638 → 642"
+                vec![SM_53, SM_638, SM_642, SM_657],
+                "caster 出队序 17 → 53 → 638 → 642 → 657(target 广播副本)"
             );
             assert_eq!(
                 sf_seq(&frames, 912),
-                vec![SM_17, SM_52, SM_638, SM_100],
-                "target 出队序 17 → 52 → 638 → 100"
+                vec![SM_17, SM_52, SM_638, SM_657, SM_657, SM_100],
+                "target 出队序 17 → 52 → 638 → 657×2（广播副本 + 自更新）→ 100"
             );
             let dura = b5_cmd(sf_first(&frames, 911, SM_642));
             assert_eq!((dura.recog, dura.param, dura.tag), (500, 5, 1000));
@@ -80319,10 +82820,12 @@ SendRefMsgRange=15
                 "52 尾 = 重算后的整个 WAbil（58B 客户端布局）"
             );
             let after = &rig.ground_sessions["obs"].state.wabil;
-            // **既有断言更正（2026-11-20）**：旧期望 0x0E05 = 0x0A05 + nPower(4) 经 `ExtraAbil[0]`
-            // 加进 DC 高字节（写入点 `PlayObject.cs:2818-2820`）；但尾段 `:2900` 的
-            // `WAbil.DC = Abil+AddAbil`（逐字节 `_MIN(255,…)`）覆盖它 ⇒ 只能 0x0A05。
-            assert_eq!(after.dc, 0x0A05, "DC 高字节 10（ExtraAbil 不进 WAbil）");
+            // **修正（2026-11-20）**：`AttPowerUp` 写的 `ExtraAbil[0]=nPower` 不折进 `WAbil`
+            //（oracle `:2899-2906` 覆盖）⇒ DC 保持基础 `0x0A05`。
+            assert_eq!(
+                after.dc, 0x0A05,
+                "ExtraAbil 不进 WAbil（旧期望 0x0E05 编码了错误行为）"
+            );
             assert_eq!(after.mc, rig.target_wabil_before.mc);
             assert_eq!(after.sc, rig.target_wabil_before.sc);
             assert_eq!(after.max_hp, rig.target_wabil_before.max_hp);
@@ -80418,8 +82921,8 @@ SendRefMsgRange=15
             );
             assert_eq!(
                 sf_seq(&frames, 911),
-                vec![SM_52, SM_53, SM_638, SM_642, SM_100],
-                "自施法单队列出队序（52=67 先于 53=68）"
+                vec![SM_52, SM_53, SM_638, SM_642, SM_657, SM_657, SM_100],
+                "自施法单队列出队序（52=67 先于 53=68；657×2 = 自己 RecalcAbilitys 的广播副本 + 自更新）"
             );
             let frames = rig.deliver(1000);
             assert_eq!(sf_count(&frames, 911, SM_640), 1);
@@ -83081,7 +85584,8 @@ SendRefMsgRange=15
     /// **PL-1 / P21 判据 1+2**：
     /// - Need=6、无行会 ⇒ 一次 Run 后该槽 `Index=0`、物品进背包、
     ///   `SM_ADDITEM`/`SM_DELITEM`/`SM_WEIGHTCHANGED` 各一帧、`RecalcAbilitys` 被调用
-    ///   （用另一个留下的 `Need=0` 物品的 AC 证明：等级不足**不**弹出，但属性进了重算）。
+    ///   （用另一个留下的 `Need=0` 物品的 AC 证明：等级不足**不**弹出，但属性进了重算）；
+    ///   657×2 另见卡 `openmir2-charstatuschanged-wiring` #13（`:2875` + `:2876`）。
     ///
     /// 红检：把 `check_items_need` 的 Need=6 支改成 true ⇒ 槽不清、帧数 0 ⇒ 必红；
     /// 把 P21 的 `recalc_needed` 分支删掉 ⇒ `entity.ac==7` 必红。
@@ -83123,8 +85627,13 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_ADDITEM,
                 mir2_protocol::messages::SM_DELITEM,
                 mir2_protocol::messages::SM_WEIGHTCHANGED,
+                // **卡 `openmir2-charstatuschanged-wiring` #13**：`boTakeItem` 支的
+                // `RecalcAbilitys()`（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新）⇒ 622 之后两条 657
+                // （oracle 622=131 < 657=155）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "出帧序：SendAddItem → SendDelItems → WeightChanged"
+            "出帧序：SendAddItem → SendDelItems → WeightChanged → 657×2"
         );
         // RecalcAbilitys 跑过：留下的 Need=0 物品 AC=7 进了会话与实体。
         assert_eq!(sg.state.wabil.ac & 0xFF, 7, "会话重算命中 AC=7");
@@ -84803,6 +87312,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert!(eff.magic_events.is_empty());
         assert!(eff.flame_ring && eff.recovery_ring);
@@ -84822,6 +87332,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: flame,
             }),
+            None,
         );
         assert_eq!(
             eff.magic_events,
@@ -84844,6 +87355,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: flame,
             }),
+            None,
         );
         assert!(eff.magic_events.is_empty());
         assert_eq!(saved.record.data.magic, Some(vec![magic(1)]));
@@ -84858,6 +87370,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert_eq!(
             eff.magic_events,
@@ -84882,6 +87395,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert!(!eff.flame_ring, "Dura==0 不置 FlameRing");
     }
@@ -84936,6 +87450,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert_eq!(eff.magic_events, vec![smframe::MagicEvent::Add { def }]);
         assert_eq!(
@@ -85079,6 +87594,139 @@ SendRefMsgRange=15
     /// oracle 出队序 `53 → 44 → 45 → 52 → 752`（P31 不另造帧序）。
     ///
     /// 牙：把 P31 奖励从 `exp_awards` 改走独立帧路径 / 不追加进 `exp_awards` ⇒ 本用例只剩 44
+    /// **卡 `openmir2-tick-frame-priority-queue`（T-290）**：战斗升级的 657 走"链内入队、链末出队"。
+    /// 断言：① 自己流末尾是**连续两条** 657（`…752 → 657 → 657`，`:2875` 广播副本 + `:2876`
+    /// 自更新副本）；② `param/tag` = **具体值 2/0**（先把 `buff.char_status_ex` 造到 2）；
+    /// ③ 自己 2 条、两侧 ±5 观察者各 1 条；④ +13（±12 外）零帧。
+    /// 链前/链后残差见 T-295/T-296（本用例只证链内）。
+    #[test]
+    fn t290_levelup_chain_emits_657_at_chain_end_self_and_observers() {
+        use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut spawn = mir2_world_bevy::EntitySpawn::new(0, "t290".to_string(), 10, 10);
+        spawn.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let hero = world.add_entity(spawn);
+        {
+            let e = world.entities.get_mut(hero).expect("实体");
+            e.buff.char_status_ex = 2;
+            e.progression.level = 10;
+            e.progression.max_exp = 1_000;
+            e.progression.exp = 900;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "t290", 1, 0, 901, hero));
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.equip.abil.level = 10;
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 5;
+        sessions.insert("t290".into(), sg);
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        let mut st = mir2_world_bevy::AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 200,
+            ..Default::default()
+        };
+        let award = world.auto_get_exp(hero, &mut st, 1, false).expect("命中");
+        assert!(award.2, "必须进升级块（award={award:?}）");
+        rec.exp_awards.push(award);
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            true,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        // 只看**自己**（socket 901）那条流：观察者副本（902）也含 657，混在一起会把
+        // "最后一条"判错（观察者的 657 排在自通知之后）。
+        let all: Vec<u16> = frames
+            .iter()
+            .filter(|(socket, _)| *socket == 901)
+            .map(|(_, b)| ident(b))
+            .collect();
+        // **不用"最后一条"这种相对说法**：给出 657 与 45/52/752 的**下标关系**——
+        // 将来链里再加帧时，"最后一条"可能自动成立而掩盖错序。
+        let pos = |want: u16| all.iter().position(|&x| x == want);
+        let i657 = pos(SM_CHARSTATUSCHANGED).expect("必须发 657");
+        for lower in [
+            mir2_protocol::messages::SM_LEVELUP,
+            mir2_protocol::messages::SM_ABILITY,
+            mir2_protocol::messages::SM_SUBABILITY,
+        ] {
+            let i = pos(lower).expect("链内必须发 45/52/752");
+            assert!(
+                i < i657,
+                "657 必须排在 45/52/752 之后（帧序 {all:?}）：{lower} 的下标 {i} 应 < 657 的下标 {i657}"
+            );
+        }
+        assert_eq!(
+            i657 + 2,
+            all.len(),
+            "自己流的末尾必须是**连续两条** 657（`:2875` 广播副本 + `:2876` 自更新副本，帧序 {all:?}）"
+        );
+        assert_eq!(
+            all[i657 + 1],
+            SM_CHARSTATUSCHANGED,
+            "两条自帧必须相邻且在链尾（帧序 {all:?}）"
+        );
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+                assert_eq!(
+                    (
+                        u16::from_le_bytes([b[6], b[7]]),
+                        u16::from_le_bytes([b[8], b[9]])
+                    ),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0"
+                );
+            }
+        }
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
+    }
+
     /// 或 0 帧，断言必红。
     #[test]
     fn p31_levelup_reuses_kill_exp_chain_order() {
@@ -85138,6 +87786,7 @@ SendRefMsgRange=15
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
             frames.push(CommandMessage::from_bytes(&body).expect("12B"));
         }
+        // **旧期望为何更新**：旧期望**缺一条帧**——657 当时被 `pickwire` 丢弃、根本没发；oracle 一直在链末发它（155 排在 68/139/150 之后，卡 `openmir2-tick-frame-priority-queue` §3e）。
         assert_eq!(
             frames.iter().map(|f| f.ident).collect::<Vec<_>>(),
             vec![
@@ -85146,8 +87795,11 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752"
+            "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752 → 657×2"
         );
         assert_eq!(frames[2].param, 11, "SM_LEVELUP 新等级");
         assert_eq!(frames[1].param, 200, "SM_WINEXP 增量 = point");
@@ -85986,9 +88638,11 @@ mod tests {",
                 mir2_protocol::messages::SM_GOLDCHANGED,
                 mir2_protocol::messages::SM_CLEAROBJECTS,
                 mir2_protocol::messages::SM_CHANGEMAP,
+                mir2_protocol::messages::SM_AREASTATE,
+                mir2_protocol::messages::SM_MAPDESCRIPTION,
                 mir2_protocol::messages::SM_SPACEMOVE_SHOW,
             ],
-            "oracle 相对序：800 → 653 → 633 → 634 → 801"
+            "oracle 相对序：800 → 653 → 633 → 634 → 766 → 54 → 801"
         );
         // 相位：① 刷新 dec tick；`SpaceMove`/MoveToHome 不动 inc tick。
         assert_eq!(sessions["p22h"].p22.dec_game_gold_tick, 1001);
@@ -86152,10 +88806,19 @@ mod tests {",
     ///
     /// 两个玩家：A 的 `check_dup_obj_tick == now`、B 的差 1。断言 A 被覆盖成 StartPoint 命中值、
     /// B **一字不变**；起始值显式设为 `0/289/618` 并断言非全 0（否则分不出「没动」与「写成 0」）。
+    ///
+    /// **IT-09/11 追加**（`opc-19` 2026-11-20 的「两份真相防漂移」验收）：同一次调用必须把**同一份**
+    /// `GetStartPoint` 结果写进 **record 与会话快照**（`SessionGround.home`），且只有命中本 tick 的
+    /// 玩家被写；再补一颗「不命中 ⇒ 两侧都不动」的负例（`now` 不匹配任何人）。
     #[test]
     fn apply_start_point_for_fired_players_writes_only_the_fired_player() {
-        let sp = mir2_envir::startpoint::parse_start_points("0 289 618\n3 330 330\n");
+        let sp = mir2_envir::startpoint::parse_start_points(
+            "0 289 618
+3 330 330
+",
+        );
         let mut saves = std::collections::HashMap::new();
+        let mut sessions = std::collections::HashMap::new();
         for (chr, account) in [("A", "a"), ("B", "b")] {
             let mut rec = record::PlayerRecord::default();
             rec.data.home_map = Some("0".to_string());
@@ -86175,13 +88838,26 @@ mod tests {",
                     derived: None,
                 },
             );
+            let mut sg = test_session_ground(1);
+            sg.home.home_map = "0".to_string();
+            sg.home.home_x = 289;
+            sg.home.home_y = 618;
+            sessions.insert(chr.to_string(), sg);
         }
         let players = vec![
             ("A".to_string(), 5000i64, "3".to_string()),
             ("B".to_string(), 4999i64, "3".to_string()),
         ];
-        let applied =
-            apply_start_point_for_fired_players(5000, &players, &mut saves, &sp, "9", 845, 674);
+        let applied = apply_start_point_for_fired_players(
+            5000,
+            &players,
+            &mut saves,
+            &mut sessions,
+            &sp,
+            "9",
+            845,
+            674,
+        );
         assert_eq!(applied, 1, "只有 A 命中本 tick");
         let a = &saves.get("A").expect("A 在").record.data;
         assert_eq!(
@@ -86189,11 +88865,46 @@ mod tests {",
             (Some("3".to_string()), 330, 330),
             "A 必须被 StartPoint(3) 覆盖"
         );
+        // 同拍、同源：会话快照 == 记录值（不是两遍/两个来源）。
+        let sa = &sessions.get("A").expect("A 会话").home;
+        assert_eq!(
+            (sa.home_map.as_str(), sa.home_x, sa.home_y),
+            ("3", 330, 330),
+            "A 的会话 home 快照必须与 record 同拍写入"
+        );
         let b = &saves.get("B").expect("B 在").record.data;
         assert_eq!(
             (b.home_map.clone(), b.home_x, b.home_y),
             (Some("0".to_string()), 289, 618),
             "未命中的 B 一字不变"
+        );
+        let sb = &sessions.get("B").expect("B 会话").home;
+        assert_eq!(
+            (sb.home_map.as_str(), sb.home_x, sb.home_y),
+            ("0", 289, 618),
+            "未命中的 B 会话也不动"
+        );
+        // 负例：本 tick 无人命中 ⇒ 两侧都不动（防「无条件写」把 B 也写坏）。
+        let applied = apply_start_point_for_fired_players(
+            5001,
+            &players,
+            &mut saves,
+            &mut sessions,
+            &sp,
+            "9",
+            845,
+            674,
+        );
+        assert_eq!(applied, 0, "now=5001 无人命中");
+        let sa = &sessions.get("A").expect("A 会话").home;
+        assert_eq!(
+            (sa.home_map.as_str(), sa.home_x, sa.home_y),
+            ("3", 330, 330)
+        );
+        let sb = &sessions.get("B").expect("B 会话").home;
+        assert_eq!(
+            (sb.home_map.as_str(), sb.home_x, sb.home_y),
+            ("0", 289, 618)
         );
     }
 
@@ -86592,7 +89303,7 @@ mod tests {",
     ///    `657×2` = `StatusChanged()` 回环 + `SendUpdateMsg`（`PlayObject.cs:2874-2876`），
     ///    近邻另收 `41 → 657`；状态：gold 20000→10000、`UseItems[1]` 仍 `Some` 且 `index=0`
     ///    （make/desc 保留）、背包清空；**world 实体武器槽同帧 index=0，drain 后会话仍 0**（复验 F1）；
-    ///    **`ExtraAbil[0]=5` ⇒ WAbil.dc=0x0601**（复验 F2）；
+    ///    **`ExtraAbil[0]=5` ⇒ WAbil.dc 仍 0x0101**（F2 修正：ExtraAbil 不进 WAbil，oracle `:2899-2906`）；
     /// ③ 取回到期：`SM_ADDITEM(200)` 一条；**`ItemList` 长度不变**（`AddItemToBag` 被注释的
     ///    BUG-REPLICA），尾含 `desc[10]` 与耐久分支后的 `DuraMax`。
     ///
@@ -86787,7 +89498,8 @@ mod tests {",
                 .use_items,
             &sessions["hero"].use_items,
         );
-        // **复验 F2**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；+5 后 WAbil.dc 应 0x0601。
+        // **复验 F2（修正）**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；但重算后
+        // `WAbil.dc` **不得**含这 +5（oracle `:2899-2906` 覆盖），仍为 0x0101。
         world
             .entities
             .get_mut(hero)
@@ -86976,18 +89688,16 @@ mod tests {",
             0,
             "F1：world 实体武器槽 index == 0"
         );
-        // **既有断言更正（2026-11-20）**：旧期望 0x0601 = 0x0101 + `ExtraAbil[0]=5` 进 DC 高字节
-        // （写入点 `PlayObject.cs:2818-2820`）；尾段 `:2900` 的 `WAbil.DC = Abil+AddAbil`
-        // （逐字节 `_MIN(255,…)`）覆盖它 ⇒ 只能 0x0101。旧值含 ExtraAbil ⇒ 错。
+        // **复验 F2（修正）**：`ExtraAbil[0]=5` 存在但**不进** WAbil（Hi 1、Lo 1 ⇒ 0x0101）。
         assert_eq!(
             sg_after.state.wabil.dc, 0x0101,
-            "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
+            "F2：ExtraAbil 不进 WAbil（oracle :2899-2906）"
         );
         // **复验 F1**：`apply_ability_to_entity` 同帧落 `dc`（战斗侧读 `Entity.dc`）。
         assert_eq!(
             world.entities.get(hero).expect("hero 实体在").dc,
             0x0101,
-            "实体 dc 跟随重算；ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
+            "F1：实体 dc 跟随重算（不含 ExtraAbil）"
         );
         // **顺序即语义**：`RecalcAbilitys`（`Merchant.cs:570`）在 `AddValue`（`:572`）之前 ⇒
         // 52 帧的 `WAbil.Weight` 含材料重量（2×黑铁 weight1 + 项链 weight2 = 4；武器已摘 ⇒ 0）。
@@ -87916,6 +90626,7 @@ GMEXECUTE f
             actor_id,
             server_index: rec.data.server_index,
             magic: readbook::MagicState::default(),
+            red_home: ("3", 845, 674),
             canot_pick_up_item: "",
             now: 1_000,
         })
@@ -87953,6 +90664,7 @@ GMEXECUTE f
             actor_id: 1,
             server_index: data.server_index,
             magic: readbook::MagicState::default(),
+            red_home: ("3", 845, 674),
             canot_pick_up_item: "",
             now: 1_000,
         })
@@ -90754,6 +93466,9 @@ GMEXECUTE f
             wabil: game_svr::ability::Ability::default(),
             abil_exp: 0,
             sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
             hunger_status: 0,
             hit_speed: 7,
         };
@@ -90929,6 +93644,8 @@ GMEXECUTE f
             &lottery,
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let per = take7c(&mut rx0);
         for s in [901, 902, 903, 904] {
@@ -94060,6 +96777,8 @@ GMEXECUTE f
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx0);
         let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
@@ -94609,6 +97328,8 @@ GMEXECUTE f
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx1);
         let other_sys: Vec<&Vec<u8>> = frames
@@ -95354,6 +98075,12 @@ fn ",
         assert_eq!(
             u16::from_le_bytes([frames[0][4], frames[0][5]]),
             mir2_protocol::messages::SM_MENU_OK
+        );
+        // 卡 `openmir2-menu-ok-text`（第 4 个生产者）：拒绝帧**带尾**，文案 = `CanotDropGoldMsg`。
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0][12..]),
+            game_svr::downlink::gbk(crate::strings::DEFAULT_CANOT_DROP_GOLD_MSG),
+            "CM_DROPGOLD 拒绝文案 = MessageSettings.CanotDropGoldMsg"
         );
         assert_eq!(sessions["hero"].state.gold, 1_000);
         assert_eq!(rng_probe(&mut world.rng, 8), rng_probe(&mut probe, 8));
@@ -96214,6 +98941,202 @@ fn ",
             derived.allow_group_re_call,
             "EntityDerived 必须采集 allow_group_re_call（PlayerRecordData.allow_group_re_call 的存档源）"
         );
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #1**：GM 改等级 ⇒ oracle `HasLevelUp` 内的
+    /// `RecalcAbilitys()` 会发 657。直调 `apply_pending_level_up`（生产入口）并自带 socket 排空，
+    /// 断言四件事：
+    /// 1. **泵序**：`SM_LEVELUP(45)` 先于 657（`RM_LEVELUP` 低字节 < `RM_CHARSTATUSCHANGED` 的 155）；
+    /// 2. **status 取重算后的值**：先把实体的 `char_status_ex` 造到 `2`（`get_char_status` =
+    ///    `GetBuffStatus() | (CharStatusEx & 0xFFFF)`），657 的 `param/tag` 期望**具体值 `2 / 0`**
+    ///    （不是"与 `get_char_status()` 相等"的自证式断言；恒 0 的夹具下把取值改成常量 0 也能绿
+    ///    ⇒ 造非零值才有牙）；
+    /// 3. **自己 2 条**（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新副本）、**两侧观察者各 1 条**
+    ///    （x-5 / x+5：`SendRefMsg` 的枚举序是 `BaseObject.Message.cs:395-447` 的 x-major 整格扫描，
+    ///    self 位于扫描序中间 ⇒ 夹具两侧各放一个，任何"依赖扫描序"的断言都会露馅）；
+    /// 4. **+13 观察者 0 条**（±12 外，范围反例）。
+    ///
+    /// **顺序面不可观测**：两条自帧字节相同，跨 socket 先后不是线上可观测面（每 socket 各有
+    /// `MsgQueue`，装置把它们汇到一条 mpsc 只是测试面）；oracle 里 self 那份在 `SendRefMsg`
+    /// 扫描到 `(CurrX,CurrY)` 格时才发（`BaseObject.Message.cs:395-447`），本 helper 的
+    /// "自广播副本 → 广播他人 → 自自更新副本"是对扫描序的近似 ⇒ 不写跨 socket 顺序断言。
+    ///
+    /// 每 socket 不重复由原语层 `charstatuschanged_self_and_broadcast_do_not_duplicate` 保证。
+    #[test]
+    fn gm_level_emits_657_self_and_nearby_observers() {
+        use mir2_protocol::messages::{SM_CHARSTATUSCHANGED, SM_LEVELUP};
+        let mut rig = GmRig::new();
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = rig.world.add_entity(e);
+            online_set(
+                &mut rig.online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体")
+            .buff
+            .char_status_ex = 2;
+        rig.sessions
+            .get_mut("aaa")
+            .expect("会话")
+            .gm
+            .pending_level_up = Some(60);
+        apply_pending_level_up(
+            &mut rig.sessions,
+            "aaa",
+            &rig.catalog,
+            &rig.need_exps,
+            &mut rig.world,
+            &rig.online,
+            &rig.gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rig.rx.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+
+        // 1) 泵序：45 的位置必须早于 657。
+        let i45 = frames
+            .iter()
+            .position(|(_, b)| ident(b) == SM_LEVELUP)
+            .expect("必须先发 SM_LEVELUP(45)");
+        let i657 = frames
+            .iter()
+            .position(|(_, b)| ident(b) == SM_CHARSTATUSCHANGED)
+            .expect("必须发 657");
+        assert!(
+            i45 < i657,
+            "线上序：RM_LEVELUP(45) 先于 657（实得 i45={i45}, i657={i657}）"
+        );
+
+        // 2/3/4) 逐 socket 计数 + status 具体值。
+        let mut per: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+        for (socket, b) in &frames {
+            if ident(b) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_default() += 1;
+                let param = u16::from_le_bytes([b[6], b[7]]);
+                let tag = u16::from_le_bytes([b[8], b[9]]);
+                assert_eq!(
+                    (param, tag),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0（重算后的当下值）"
+                );
+            }
+        }
+        // oracle `PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本 ⇒ 自己**两条**。
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
+        // 两条自帧**字节完全相同** ⇒ "哪条是广播副本"不可判；跨 socket 的先后也不是线上可观测面
+        // （每 socket 各有 `MsgQueue`，这里有顺序只因装置把所有 socket 汇到一条 mpsc）⇒ 顺序面
+        // 记"不可观测"，本用例只验**逐 socket 计数**（卡 §14b：§26 只接不发的防线是计数）。
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #2**：GM 佩戴位写
+    /// （oracle `SmakeItemCommand` 的 `RecalcAbilitys()`）同样发 657 ⇒ 自己 2（广播副本 + 自更新副本）、
+    /// 两侧 ±5 观察者各 1、范围外 0；`status` 用**具体值 2/0**（先把 `buff.char_status_ex` 造到 2）。
+    /// 顺序面不可观测（两条自帧字节相同、跨 socket 序非线上面）⇒ 只验逐 socket 计数。
+    #[test]
+    fn gm_use_item_write_emits_657_self_and_observers() {
+        use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let mut rig = GmRig::new();
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = rig.world.add_entity(e);
+            online_set(
+                &mut rig.online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体")
+            .buff
+            .char_status_ex = 2;
+        rig.catalog.insert(
+            5,
+            mir2_data::StdItem {
+                name: "x".into(),
+                ..Default::default()
+            },
+        );
+        rig.sessions
+            .get_mut("aaa")
+            .expect("会话")
+            .gm
+            .pending_use_item = Some(gmcmd::GmUseItemWrite {
+            slot: 1,
+            index: 5,
+            make_index: 7,
+            dura: 10,
+            dura_max: 20,
+            desc: [0; 14],
+        });
+        apply_pending_gm_use_item(
+            &mut rig.sessions,
+            "aaa",
+            &mut rig.world,
+            &rig.catalog,
+            &rig.online,
+            &rig.gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rig.rx.try_recv() {
+            frames.push((socket, body));
+        }
+        let mut per: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+        for (socket, b) in &frames {
+            if u16::from_le_bytes([b[4], b[5]]) == SM_CHARSTATUSCHANGED {
+                *per.entry(*socket).or_insert(0) += 1;
+                assert_eq!(
+                    (
+                        u16::from_le_bytes([b[6], b[7]]),
+                        u16::from_le_bytes([b[8], b[9]])
+                    ),
+                    (2, 0),
+                    "657 的 Lo/Hi(CharStatus) 期望 2/0"
+                );
+            }
+        }
+        // oracle `SmakeItemCommand.cs:60` 的 `RecalcAbilitys()` → `PlayObject.cs:2875` 广播副本（含自己）
+        // + `:2876` 自更新副本 ⇒ 自己**两条**；顺序面不可观测（两条字节相同、跨 socket 序非线上面）。
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
     }
 
     /// **m1 · drain 步骤②（`apply_pending_level_up`）脚本桥独立牙**：
@@ -98073,6 +100996,8 @@ fn ",
                 lottery,
                 cfg,
                 human_max,
+                crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
             // 同一次 `handle_eat_cmd` 的原始帧（含 `SM_SYSMESSAGE` 的文本尾）与 ident 序列。
             let frames = drain_frames(rx);
@@ -98342,6 +101267,8 @@ fn ",
             &untouched,
             forced_six(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+            &std::collections::HashMap::new(),
         );
         let ids: Vec<u16> = drain_frames(&mut rx0)
             .iter()
@@ -98362,6 +101289,536 @@ fn ",
             "非彩票物品不得动彩票计数"
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
+
+        // ⑤ **第二半：逐 12 例（各自 `applied` 配置 + 各自 seed + 各自 `lottery_before` 初态）**。
+        //    逐例对夹具：线序 / 直发帧字段 / `SM_SYSMESSAGE` 的**具体那条**文本字节 / 后态。
+        //    ⚠ **每例必须 `world.rng = with_seed(case_seed)` 复位**：12 例共用同一个 `world`，
+        //    上一例的 rng 消耗会污染下一例的抽值——不复位是这一批最容易出假绿的地方。
+        {
+            fn fixture_doc() -> serde_json::Value {
+                let path = concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../tests/parity/m3/fixtures/eat_vectors.json"
+                );
+                let raw = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("oracle 夹具缺失/不可读：{path}（{e}）"));
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 非法 JSON：{e}"))
+            }
+            fn i32v(v: &serde_json::Value) -> i32 {
+                v.as_i64().unwrap_or_else(|| panic!("非整数：{v}")) as i32
+            }
+            fn hex_to_bytes(hex: &str) -> Vec<u8> {
+                assert!(hex.len().is_multiple_of(2), "hex 长度须为偶数：{hex}");
+                (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+                    .collect()
+            }
+            /// 首个不同字节 `(下标, 实测, 期望)`：牙红时报告能指到**哪个字节**。
+            fn first_diff(got: &[u8], want: &[u8]) -> Option<(usize, u8, u8)> {
+                (0..got.len().min(want.len()))
+                    .find(|&i| got[i] != want[i])
+                    .map(|i| (i, got[i], want[i]))
+                    .or_else(|| {
+                        (got.len() != want.len()).then(|| {
+                            (
+                                got.len().min(want.len()),
+                                *got.get(got.len().min(want.len())).unwrap_or(&0xFF),
+                                *want.get(got.len().min(want.len())).unwrap_or(&0xFF),
+                            )
+                        })
+                    })
+            }
+            /// 夹具通知记录面 `RM_*` → 线上 `SM_*` ident（`notice_frame` 的映射结果）。
+            fn wire_ident(rm: i32) -> u16 {
+                match rm {
+                    10115 => 622, // RM_WEIGHTCHANGED → SM_WEIGHTCHANGED
+                    10136 => 653, // RM_GOLDCHANGED   → SM_GOLDCHANGED
+                    11004 => 100, // RM_SYSMESSAGE    → SM_SYSMESSAGE
+                    other => panic!("未登记的 RM ident {other}"),
+                }
+            }
+
+            let doc = fixture_doc();
+            let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
+            assert_eq!(cases.len(), 15, "彩票例固定 15（含 QA 三类盲区例）");
+            let mut seen_seeds = std::collections::BTreeSet::new();
+            let mut seen_applied = std::collections::BTreeSet::new();
+            let mut seen_inputs = std::collections::BTreeSet::new();
+            let mut wins = 0usize;
+            let mut losses = 0usize;
+            for c in cases {
+                let name = c["name"].as_str().expect("case name");
+                let ap = &c["config"]["applied"];
+                let cfg = crate::config::WinLotteryCfg {
+                    rate: i32v(&ap["rate"]),
+                    min: std::array::from_fn(|i| i32v(&ap["min"][i])),
+                    max: std::array::from_fn(|i| i32v(&ap["max"][i])),
+                    gold: std::array::from_fn(|i| i32v(&ap["gold"][i])),
+                    // `init_*` 不被 `win_lottery` 读（初态由 `WinLotteryShared` 自带）。
+                    ..crate::config::WinLotteryCfg::default()
+                };
+                let lb = &c["lottery_before"];
+                let init = crate::winlottery::WinLotteryState {
+                    count: i32v(&lb["count"]),
+                    no_win: i32v(&lb["no_win"]),
+                    level: std::array::from_fn(|i| i32v(&lb["level"][i])),
+                };
+                let seed = i32v(&c["rng"][0]["seed"]);
+                assert!(
+                    seen_seeds.insert(seed),
+                    "{name}: seed {seed} 与前例重复（逐例复位才可分辨）"
+                );
+                // 「12 例是 12 件事」机检：`applied` 配置逐例互异（12/12），
+                // 且完整输入（applied + `lottery_before`）组合互异——防止将来改成
+                // 「同一个 cfg 跑 12 遍」仍逐例全绿。
+                assert!(
+                    seen_applied.insert((cfg.rate, cfg.min, cfg.max, cfg.gold)),
+                    "{name}: applied(rate/min/max/gold) 与前面某例重复"
+                );
+                assert!(
+                    seen_inputs.insert((
+                        cfg.rate,
+                        cfg.min,
+                        cfg.max,
+                        cfg.gold,
+                        init.count,
+                        init.no_win,
+                        init.level,
+                    )),
+                    "{name}: 完整输入(applied+lottery_before) 与前面某例重复"
+                );
+                // ⚠ 逐例复位共享 `world.rng`（本段最关键的防假绿点，先于该例任何抽值）。
+                world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let lottery = crate::winlottery::WinLotteryShared::new(init);
+                sessions.get_mut("hero").unwrap().state.gold = i32v(&c["gold_before"]);
+                let (bodies, ids) = run_eat(
+                    cfg,
+                    i32v(&c["human_max_gold"]),
+                    &lottery,
+                    &mut sessions,
+                    &mut world,
+                    &mut rx0,
+                    &online,
+                    &gates,
+                    &catalog,
+                    &colors,
+                    &unbind,
+                    &mut item_number,
+                    &env,
+                );
+                let frames_fx = c["frames"].as_array().expect("frames");
+                let notices_fx = c["notices"].as_array().expect("notices");
+                // 期望线序 = 直发帧 ++ 泵出通知（RM→SM，泵序由 `NetPriorityQueue` 决定）。
+                let mut want_ids: Vec<u16> = frames_fx
+                    .iter()
+                    .map(|f| f["ident"].as_u64().expect("ident") as u16)
+                    .collect();
+                want_ids.extend(notices_fx.iter().map(|n| wire_ident(i32v(&n["ident"]))));
+                assert_eq!(ids, want_ids, "{name}: 线序/ident 序列 != 夹具");
+                // 直发帧：逐字段 == 夹具记录（header-only，12B）。
+                for (k, f) in frames_fx.iter().enumerate() {
+                    let body = &bodies[k];
+                    assert_eq!(
+                        body.len(),
+                        mir2_protocol::frame::CommandMessage::SIZE,
+                        "{name}: 直发帧 {k} 必须 header-only"
+                    );
+                    let got = CommandMessage::from_bytes(body).expect("帧头");
+                    assert_eq!(
+                        (
+                            got.ident,
+                            got.recog,
+                            i32::from(got.param),
+                            i32::from(got.tag),
+                            i32::from(got.series),
+                        ),
+                        (
+                            f["ident"].as_u64().expect("ident") as u16,
+                            i32v(&f["recog"]),
+                            i32v(&f["param"]),
+                            i32v(&f["tag"]),
+                            i32v(&f["series"]),
+                        ),
+                        "{name}: 直发帧 {k} 字段 != 夹具"
+                    );
+                }
+                // 泵出通知：逐条比（文本帧比**该条**的字节，不是「属于七条之一」）。
+                for (k, n) in notices_fx.iter().enumerate() {
+                    let body = &bodies[frames_fx.len() + k];
+                    let got = CommandMessage::from_bytes(body).expect("帧头");
+                    let rm = i32v(&n["ident"]);
+                    assert_eq!(got.ident, wire_ident(rm), "{name}: 通知 {k} ident");
+                    match rm {
+                        10115 => {
+                            // 夹具记的是 **RM 通知**字段（无 SM 载荷）；`SM_WEIGHTCHANGED` 的
+                            // Weight/Wear/Hand 由会话 `WAbil` 现算 ⇒ 不在夹具记录面内，
+                            // 本臂只由上面的 ident/序断言覆盖。
+                            let _ = &got;
+                        }
+                        10136 => {
+                            // `sm_goldchanged(session.gold, game_gold)`：Recog = IncGold 后的会话金币。
+                            assert_eq!(
+                                got.recog,
+                                i32v(&c["gold"]),
+                                "{name}: 653 Recog != 夹具该例会后金币"
+                            );
+                            assert_eq!((got.param, got.tag), (0, 0), "{name}: game_gold 应为 0");
+                        }
+                        11004 => {
+                            let text = n["text"]
+                                .as_str()
+                                .unwrap_or_else(|| panic!("{name}: 文本帧缺 text"));
+                            let want_text = hex_to_bytes(text);
+                            let got_text = &body[mir2_protocol::frame::CommandMessage::SIZE..];
+                            assert_eq!(
+                                got_text,
+                                want_text.as_slice(),
+                                "{name}: SM_SYSMESSAGE 文本字节 != 夹具该条（EDCode(GBK)）；首个差异(下标,实测,期望)={:?}",
+                                first_diff(got_text, &want_text)
+                            );
+                            assert_eq!(
+                                got.param,
+                                game_svr::smframe::make_word16(
+                                    u16::try_from(i32v(&n["n_param1"]) & 0xFFFF).unwrap(),
+                                    u16::try_from(i32v(&n["n_param2"]) & 0xFFFF).unwrap(),
+                                ),
+                                "{name}: 文本帧前景/背景色 != 夹具"
+                            );
+                            assert_eq!(got.series, 1, "{name}: SM_SYSMESSAGE series 恒 1");
+                            // 夹具文本必须就是**该例结算（中/未中）那条文案**的编码：用常量
+                            // 独立重算（不经被测实现）交叉核对。中/未中按**金币增量**判（oracle
+                            // `nGold > 0`）——命中档但 Gold=0 / 闸闭都发未中文案，等级仍 +1。
+                            let won = i32v(&c["gold"]) > i32v(&c["gold_before"]);
+                            let hit: Vec<usize> = (0..6)
+                                .filter(|&i| {
+                                    i32v(&c["lottery"]["level"][i]) - i32v(&lb["level"][i]) == 1
+                                })
+                                .collect();
+                            let want_msg = if won {
+                                match hit.as_slice() {
+                                    [i] => crate::strings::DEFAULT_WIN_LOTTERY_MSGS[*i],
+                                    _ => panic!("{name}: 中奖但夹具命中档不唯一 {hit:?}"),
+                                }
+                            } else {
+                                crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG
+                            };
+                            assert_eq!(
+                                hex_to_bytes(text),
+                                mir2_protocol::edcode::encode(&game_svr::downlink::gbk(want_msg)),
+                                "{name}: 夹具文本 != 该档文案（常量独立重算）"
+                            );
+                        }
+                        other => panic!("{name}: 通知 {k} 未覆盖的 RM ident {other}"),
+                    }
+                }
+                // 后态：金币 + 进程级计数逐字段 == 夹具。
+                assert_eq!(
+                    sessions["hero"].state.gold,
+                    i32v(&c["gold"]),
+                    "{name}: 会后金币"
+                );
+                let snap = lottery.snapshot();
+                let la = &c["lottery"];
+                assert_eq!(snap.count, i32v(&la["count"]), "{name}: count");
+                assert_eq!(snap.no_win, i32v(&la["no_win"]), "{name}: no_win");
+                for i in 0..6 {
+                    assert_eq!(snap.level[i], i32v(&la["level"][i]), "{name}: level[{i}]");
+                }
+                let hit: Vec<usize> = (0..6)
+                    .filter(|&i| i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1)
+                    .collect();
+                // 「命中但该档 Gold==0」是**合法状态**：金币不变、判未中，但等级仍 +1
+                // （`PlayObject.cs:3820` 在闸内、与 gold 无关）——显式断言，不只靠夹具整块相等。
+                if i32v(&c["gold"]) == i32v(&c["gold_before"]) && !hit.is_empty() {
+                    let i = hit[0];
+                    assert_eq!(
+                        snap.level[i],
+                        i32v(&lb["level"][i]) + 1,
+                        "{name}: 命中但 0 金时等级仍应 +1"
+                    );
+                }
+                // 中/未中按金币增量（oracle `nGold > 0`），不是按等级增量。
+                if i32v(&c["gold"]) > i32v(&c["gold_before"]) {
+                    wins += 1;
+                } else {
+                    losses += 1;
+                }
+                eprintln!(
+                    "CASE12 {name}: seed={seed} rate={} gold {}→{} no_win {}→{} hit={hit:?} ids={ids:?} text={:?}",
+                    cfg.rate,
+                    i32v(&c["gold_before"]),
+                    i32v(&c["gold"]),
+                    i32v(&lb["no_win"]),
+                    i32v(&la["no_win"]),
+                    notices_fx
+                        .iter()
+                        .find(|n| i32v(&n["ident"]) == 11004)
+                        .map(|n| n["text"].as_str().unwrap_or("")),
+                );
+            }
+            // 元断言：12 例必须同时覆盖中奖与未中——否则「恒 Lost」实现也能逐例全绿。
+            assert!(
+                wins >= 1 && losses >= 1,
+                "12 例须同时覆盖中奖与未中（wins={wins} losses={losses}）"
+            );
+        }
+    }
+    /// **泵序不是排序**：`NetPriorityQueue`（.NET 四叉最小堆逐位复刻）在同一优先级下按
+    /// 插入与 sift 历史出队——3 条同键实测 `[0,2,1]`，`sort_by_key` 会给 `[0,1,2]`。
+    #[test]
+    fn net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion() {
+        let mut q: game_svr::msgqueue::NetPriorityQueue<usize> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for i in 0..3usize {
+            q.enqueue(i, 67);
+        }
+        let order: Vec<usize> = std::iter::from_fn(|| q.dequeue()).collect();
+        assert_eq!(
+            order,
+            vec![0, 2, 1],
+            "同优先级出队序 = 四叉堆 sift 序，不是入队序"
+        );
+    }
+
+    /// **吃路径线序 = oracle 记录序**（不是入队序）：`use_item` 对 Shape13 先 push
+    /// `RM_WINEXP`(8075→139) 再在公共尾 push `RM_WEIGHTCHANGED`(10115→131)，
+    /// 入队序是降的；排水后必须**升**（622 在 44 之前），与夹具
+    /// `eat_ok_stdmode3_shape13_exp_nonlevelup` 的记录序 `[(10115,131),(8075,139)]` 相同。
+    #[test]
+    fn eat_notice_drain_matches_oracle_order_for_shape13() {
+        use mir2_protocol::frame::CommandMessage;
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 100,
+            sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
+            hunger_status: 0,
+            hit_speed: 0,
+        };
+        let notices = vec![
+            game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_WINEXP,
+                w_param: 0,
+                n_param1: 100,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            },
+            game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_WEIGHTCHANGED,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            },
+        ];
+        let sent = emit_eat_notices(&tx, 901, &notices, &wire);
+        drop(tx);
+        let idents: Vec<u16> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { body, .. } => {
+                    CommandMessage::from_bytes(&body).map(|c| c.ident)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, 2);
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                mir2_protocol::messages::SM_WINEXP
+            ],
+            "泵序：622(131) 先于 44(139)（入队序相反）"
+        );
+    }
+
+    /// **IT-12 祝福油宿主级**：帧序 `[635, 752, 52, 622]`、`Desc[3]/[4]` 迁移、恒吃。
+    /// 抽值用 `world.rng` 播种（首抽 `Random(20)` 定分支），种子由本用例现找 ⇒ 确定性。
+    #[test]
+    fn it12_oil_frame_order_desc_and_always_eaten() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        fn seed_with_first_below(bound: i32, want: i32) -> i32 {
+            for s in 0..200_000 {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(s);
+                if r.random_below(bound) == want {
+                    return s;
+                }
+            }
+            panic!("找不到首抽 == {want} 的种子");
+        }
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            2200,
+            mir2_data::StdItem {
+                name: "祝福油".into(),
+                std_mode: 3,
+                shape: 4,
+                ..Default::default()
+            },
+        );
+        // 武器模板：DC = 0x140A ⇒ |20-10|/5 = 2（点3 支的 bound = 2*40 = 80）。
+        catalog.insert(
+            2201,
+            mir2_data::StdItem {
+                name: "测试剑".into(),
+                std_mode: 5,
+                dc: 0x140A,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 5, 5);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(actor);
+        sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 9,
+            index: 2201,
+            dura: 1000,
+            dura_max: 5000,
+            desc: [0; 14],
+        });
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let gmcfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &gmcfg,
+            pwd_sessions: &pwd,
+            host: ScriptGmHost::default(),
+        };
+        let lottery = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg::default().init_state(),
+        );
+
+        let mut eat = |seed: i32, desc3: u8, desc4: u8| -> (Vec<u16>, u8, u8) {
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let sg = sessions.get_mut("hero").unwrap();
+            let w = sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_mut()
+                .unwrap();
+            w.desc[3] = desc3;
+            w.desc[4] = desc4;
+            sg.state.item_list = vec![game_svr::bag::BagItem {
+                make_index: 1,
+                index: 2200,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            }];
+            handle_eat_cmd(
+                1,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &gates,
+                &catalog,
+                &mut world,
+                &colors,
+                90,
+                // master 的 `strings` 形参（`SysMsgTexts` 来源）；本用例不核文本，默认文案即可。
+                &game_svr::strings::StringConf::default(),
+                None,
+                &unbind,
+                &mut item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                Some(&env),
+                &lottery,
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
+            );
+            let mut ids = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+                if let Some(m) = CommandMessage::from_bytes(&body) {
+                    ids.push(m.ident);
+                }
+            }
+            let w = sessions.get("hero").unwrap().use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap();
+            (ids, w.desc[3], w.desc[4])
+        };
+
+        // ① 正常支（首抽 != 1，desc3=0 < point1 ⇒ 不抽第二下）：751 在 52 之前、622 最后。
+        let normal_seed = seed_with_first_below(20, 0);
+        let (ids, d3, d4) = eat(normal_seed, 0, 0);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622, 100],
+            "线序：635 直发；泵 752(62) → 52(67) → 622(131) → SM_SYSMESSAGE(100，带文本 `WeaptonMakeLuck`)"
+        );
+        assert_eq!((d3, d4), (1, 0), "点1 支：Desc[3] 0→1、Desc[4] 不动");
+
+        // ② 诅咒支（首抽 == 1）：Desc[3] 3→2；仍是 635 + 两条能力帧。
+        let curse_seed = seed_with_first_below(20, 1);
+        let (ids, d3, _) = eat(curse_seed, 3, 0);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622, 100],
+            "诅咒支：Desc[3] 3→2 ⇒ 红字 SM_SYSMESSAGE(100) `TheWeaponIsCursed`（oracle `PlayObject.cs:1612-1617`）"
+        );
+        assert_eq!(d3, 2, "诅咒支：Desc[3] 3→2");
+
+        // ③ 诅咒支 + Desc[4]=10 上界：Desc[3]=0 ⇒ Desc[4] 停在 10（不越界），仍吃。
+        let (ids, d3, d4) = eat(curse_seed, 0, 10);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622],
+            "诅咒支 + Desc[3]=0/Desc[4]=10：`MakeWeaponUnlock` 两支都不进 ⇒ **零 SysMsg**（oracle 夹具同）"
+        );
+        assert_eq!((d3, d4), (0, 10), "上界：Desc[4] 不加到 11");
     }
     /// **F1-T 用例（IT-07；`emit_eat_notices` = `handle_eat_cmd` 唯一的吃路径排水点）**：
     /// 入队序 = 生产真实序 `[SYSMESSAGE×6, WEIGHT(131), CHARSTATUSCHANGED(155), ABILITY(67)]`
@@ -98388,6 +101845,9 @@ fn ",
             wabil: game_svr::ability::Ability::default(),
             abil_exp: 0,
             sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
             hunger_status: 0,
             hit_speed: 0,
         };
@@ -98413,8 +101873,9 @@ fn ",
         notices.push(plain(game_svr::useitem::RM_WEIGHTCHANGED));
         notices.push(plain(game_svr::useitem::RM_CHARSTATUSCHANGED));
         notices.push(plain(game_svr::useitem::RM_ABILITY));
-        // 期望线序（入队下标）：A(8) 先出队但**无映射被丢弃** → WEIGHT(6) → 657(7) → 蓝字 [1,5,4,3,2,0]。
-        let want_idx = [6usize, 7, 1, 5, 4, 3, 2, 0];
+        // 期望线序（入队下标）：A(8) 先出队（`RM_ABILITY→SM_ABILITY(52)` 已随
+        // `card/ability-frames` 合入）→ WEIGHT(6) → 657(7) → 蓝字 [1,5,4,3,2,0]。
+        let want_idx = [8usize, 6, 7, 1, 5, 4, 3, 2, 0];
         let want: Vec<Vec<u8>> = want_idx
             .iter()
             .map(|&i| game_svr::pickwire::notice_frame(&notices[i], &wire).expect("全部有映射"))
@@ -98433,7 +101894,10 @@ fn ",
                 _ => None,
             })
             .collect();
-        assert_eq!(sent, 8, "131 + 155 + 6×252（67 无映射 ⇒ 丢弃，见上方缺口说明）");
+        assert_eq!(
+            sent, 9,
+            "52(67) + 131 + 155 + 6×252（ability-frames 已合入）"
+        );
         assert_eq!(
             got, want,
             "生产接线出队序 = 单遍四叉堆 sift 序（同 ident 六条 [1,5,4,3,2,0]）"
@@ -98462,6 +101926,9 @@ fn ",
             wabil: game_svr::ability::Ability::default(),
             abil_exp: 0,
             sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
             hunger_status: 0,
             hit_speed: 0x0BCD,
         };
@@ -102047,9 +105514,11 @@ mod t279_dress_eff_tests {
             vec![
                 (901, messages::SM_CLEAROBJECTS),
                 (901, messages::SM_CHANGEMAP),
+                (901, messages::SM_AREASTATE),
+                (901, messages::SM_MAPDESCRIPTION),
                 (901, messages::SM_SPACEMOVE_SHOW),
             ],
-            "oracle 序：CLEAROBJECTS(633) → CHANGEMAP(634) → SPACEMOVE_SHOW(801)"
+            "oracle 序：CLEAROBJECTS(633) → CHANGEMAP(634) → AREASTATE(766) → MAPDESCRIPTION(54) → SPACEMOVE_SHOW(801)"
         );
 
         // ④ 落库面：存档记录取新图/新坐标（`build_save_record` 以世界会话+实体为准）。

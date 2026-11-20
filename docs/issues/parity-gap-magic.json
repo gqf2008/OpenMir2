@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "e779b8875b299776ca8a56e8c50ac118ba56ce5a",
-    "time": "2026-11-20T06:40:00+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。"
+    "head": "ef47f6a00f56aa7161014bc61f5a29fdacc7b401",
+    "time": "2026-11-20T12:35:23+0800",
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。"
   },
   "status_enum": [
     "verified",
@@ -32,9 +32,9 @@
   ],
   "denominator": {
     "kind": "dispatch_branch",
-    "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格",
+    "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格；duplicate 条目（MG-30≡MG-23、MG-31≡MG-24）不计入分母",
     "entry": "CM_SPELL(3017) -> MagicManager.DoSpell -> case 分支",
-    "count": 65,
+    "count": 58,
     "commands": []
   },
   "migration_note": "由 E:/UserFleet/magic-parity.json（旧 schema）机械转写：implemented -> implemented_unverified（旧清单明示“帧级对拍 0/65、basis 全空” ⇒ verified=0，不升格）；missing 保持 2 条；cost 直译 小时级->S、天级->M，原始值保留在 notes。",
@@ -274,7 +274,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-11",
@@ -304,7 +305,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-12",
@@ -359,7 +361,7 @@
     },
     {
       "id": "MG-14",
-      "legacy_id": "Shape=1",
+      "legacy_id": "Shape=1@DoSpell",
       "behavior": "Shape=1",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -376,11 +378,11 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支）"
     },
     {
       "id": "MG-15",
-      "legacy_id": "Shape=2",
+      "legacy_id": "Shape=2@DoSpell",
       "behavior": "Shape=2",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -397,7 +399,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上）"
     },
     {
       "id": "MG-16",
@@ -490,7 +492,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-20",
@@ -501,17 +504,12 @@
         "line": 315,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
+      "status": "duplicate",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格"
+      "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格。duplicate：与 MG-27 为同一叶子（src/M2Server/Magic/MagicManager.cs:315（外层 `case SKILL_FIRECHARM`）与 :328（内层同魔号 `case`）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-27"
     },
     {
       "id": "MG-21",
@@ -522,19 +520,12 @@
         "line": 316,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_cmd_a5_defence_area_buffs_target_in_range"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-28 为同一叶子（同文件 :316（外层）与 :352（内层，HANGMAJINBUB）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-28"
     },
     {
       "id": "MG-22",
@@ -545,19 +536,12 @@
         "line": 317,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_cmd_a5_defence_area_buffs_target_in_range"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-29 为同一叶子（同文件 :317（外层）与 :359（内层，DEJIWONHO）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-29"
     },
     {
       "id": "MG-23",
@@ -612,19 +596,12 @@
         "line": 320,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层组标签（`:320`，共享 13..19 护身符组），18 的执行链由内层 MG-32 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层组标签（`:320`，共享 13..19 护身符组），18 的执行链由内层 MG-32 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-32 为同一叶子（同文件 :320（外层）与 :378（内层，CLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-32"
     },
     {
       "id": "MG-26",
@@ -635,19 +612,12 @@
         "line": 321,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层组标签（`:321`，共享 13..19 护身符组），19 的执行链由内层 MG-33 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层组标签（`:321`，共享 13..19 护身符组），19 的执行链由内层 MG-33 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-33 为同一叶子（同文件 :321（外层）与 :384（内层，BIGCLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-33"
     },
     {
       "id": "MG-27",
@@ -677,7 +647,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】"
+      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-28",
@@ -748,17 +719,12 @@
         "line": 366,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。duplicate：与 MG-23 为同一叶子（MagicManager.cs`:318（外层 `case SKILL_HOLYSHIELD`）与 `:366（内层 `case MagicConst.SKILL_HOLYSHIELD`）；内层只能由同魔号外层进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "merged_into": "MG-23",
+      "pre_duplicate_status": "implemented_unverified"
     },
     {
       "id": "MG-31",
@@ -769,17 +735,12 @@
         "line": 372,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。duplicate：与 MG-24 为同一叶子（MagicManager.cs`:319（外层）与 `:372（内层）；内层只能由同魔号外层进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
+      "merged_into": "MG-24",
+      "pre_duplicate_status": "implemented_unverified"
     },
     {
       "id": "MG-32",
@@ -932,7 +893,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。"
+      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-38",
@@ -962,7 +924,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 1（lightflower））= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-39",
@@ -1147,7 +1110,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-46",
@@ -1279,22 +1243,30 @@
         "line": 549,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_groupdeding",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupdeding.json（C# oracle 生成；五支）",
+        "cases": [
+          "all_miss_hp0",
+          "hit_ac_split",
+          "miss_by_draw",
+          "dead_excluded",
+          "dc_range"
+        ],
+        "unit_tests": [
+          "tests::groupdeding_parity_all_miss_hp0",
+          "tests::groupdeding_parity_hit_ac_split",
+          "tests::groupdeding_parity_miss_by_draw",
+          "tests::groupdeding_parity_dead_excluded",
+          "tests::groupdeding_parity_dc_range"
+        ]
       },
       "cost": "M",
-      "deviation": {
-        "id": "T-286",
-        "file": "mir2-rs/tests/parity/whitelist.md",
-        "section": "技能块缺口转正（T-286）",
-        "lines": null
-      },
-      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）"
+      "deviation": null,
+      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）【scope（2026-11-20）：**施法者侧同步伤害**（`MagGroupDeDing` 在 DoSpell 内 `StruckDamage` 并排 200ms RM_DELAYMAGIC），**DoSpell 时刻可证**；判据 = RM 收件人集合 + 每只怪 HP before/after + 逐目标命中门抽值；SM_716 组内顺序未验（`sm716_order_unverified`，见 docs/issues/openmir2-sm716-tie-order.md）。】",
+      "basis": "semantic"
     },
     {
       "id": "MG-52",
@@ -1345,7 +1317,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-54",
@@ -1375,7 +1348,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-55",
@@ -1426,7 +1400,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case MagicConst.SKILL_47` → MagBigExplosion(FireBoomRage)，与 23 同 helper 仅魔号不同；golden Rng 7 抽、DrainPasses 4、HP 100→85；卡 §32。",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-57",
@@ -1479,17 +1454,28 @@
         "line": 610,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_uenhancer",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/uenhancer.json（C# MagicGolden 生成；QA ae 独立复跑）",
+        "cases": [
+          "s1(seed/夹具 case 1)",
+          "s5",
+          "s13"
+        ],
+        "unit_tests": [
+          "tests::uenhancer_parity_s1",
+          "tests::uenhancer_parity_s5",
+          "tests::uenhancer_parity_s13",
+          "real_rust_ledger_uenhancer"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；卡 docs/issues/openmir2-uenhancer.md。657 四条逐 socket 2/1/1（param=2）。可证伪对照：改回 entity.char_status ⇒ 12 处 golden=2 rust=0。牙执行 head=09882d3d9，rebase 未改接线（逐字相同）。未覆盖面见卡 §未覆盖面。",
+      "basis": "semantic",
+      "scope": "partial: self-target DoSpell-moment only; 未覆盖 U-1 非自身 proper-friend 目标 / U-2 CheckAmulet 失败→639 / U-3 DoSpell 后 buff 加成与超时"
     },
     {
       "id": "MG-60",
@@ -1577,7 +1563,7 @@
     },
     {
       "id": "MG-64",
-      "legacy_id": "Shape=1",
+      "legacy_id": "Shape=1@MagGroupAmyounsul",
       "behavior": "Shape=1",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -1585,20 +1571,20 @@
         "line_end": null
       },
       "status": "implemented_unverified",
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@MagGroupAmyounsul`，依据 :919（`MagGroupAmyounsul` 内，群体 48）",
       "evidence": {
         "test": null,
         "test_file": null,
         "fixture": null,
         "cases": [],
         "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      }
     },
     {
       "id": "MG-65",
-      "legacy_id": "Shape=2",
+      "legacy_id": "Shape=2@MagGroupAmyounsul",
       "behavior": "Shape=2",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -1606,16 +1592,16 @@
         "line_end": null
       },
       "status": "implemented_unverified",
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@MagGroupAmyounsul`，依据 :923（同上）",
       "evidence": {
         "test": null,
         "test_file": null,
         "fixture": null,
         "cases": [],
         "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      }
     }
   ]
 }

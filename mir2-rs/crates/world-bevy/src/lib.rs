@@ -509,11 +509,11 @@ pub use special_monster::{
     RM_MAGSTRUCK, RM_MAGSTRUCK_MINE, RM_SPELL, RM_STRUCK, RM_ZEN_BEE, ZEN_BEE_DELAY_MS,
 };
 pub use world::{
-    ownership_table_miss_first_map_id, ownership_table_misses, AutoGetExpState,
+    ownership_table_miss_first_map_id, ownership_table_misses, AttackSkillInput, AutoGetExpState,
     BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot, ExtraAbilEventKind,
-    ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HideObserverKind,
+    ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HideObserverKind, HitModeEvent,
     HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
-    SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
-    WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
+    SkillTrainEvent, SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome,
+    WeaponUpgradeEvent, WeaponUpgradeOutcome, World, YedoEvent, YedoRuntime, TICK_INTERVAL_MS,
 };
 pub use world::{RefMsgCacheEntry, REF_MSG_CACHED_RANGE, REF_MSG_CACHE_TTL_MS};

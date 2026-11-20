@@ -37,10 +37,8 @@ use crate::ability::ItemCatalog;
 use crate::record::MagicRcd;
 use crate::{OnlineRegistry, SessionGround, SimToGate};
 
-/// `SKILL_ERGUM`（刺杀剑术，`MagicConst.cs:52`）。
-pub const SKILL_ERGUM: u16 = 12;
-/// `SKILL_BANWOL`（半月弯刀，`MagicConst.cs:104`）。
-pub const SKILL_BANWOL: u16 = 25;
+/// 技能 id 的唯一源在 [`crate::skill_ability`]（避免两处常量漂移）。
+pub use crate::skill_ability::{SKILL_BANWOL, SKILL_ERGUM};
 
 /// `PlayObject.MagicList` + `MagicArr` 的等价快照 + 战士技开关 + 魔法表/文案快照。
 ///
@@ -49,12 +47,43 @@ pub const SKILL_BANWOL: u16 = 25;
 /// 持久化由 `build_save_record` 从本快照回写记录（`pad_for_save`）。
 /// `use_thrusting`/`use_half_moon` 对应 `PlayObject.cs:168-169`；`table` 是进程级 `M2Share.MagicList`
 /// 查表面的 `Arc` 快照（登录时取一次）；两个 sys 文案来自 `[String] ThrustingOn/HalfMoonOn`。
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MagicState {
     pub list: Vec<Option<MagicRcd>>,
     pub use_thrusting: bool,
     pub use_half_moon: bool,
     pub table: Option<Arc<game_svr::magics::MagicTable>>,
+    /// `PlayObject.MagicArr`（`new UserMagic[50]`，`PlayObject.cs:1041`）：**只写不清**（`:3684`），
+    /// 删技能后留残影（oracle 原样）。IT-17b 结构层填充；下游 `GetAttackMagic`/`GetHitMode` 读。
+    pub arr: Vec<Option<MagicRcd>>,
+    /// 最近一次 `RecalcHitSpeed` 的技能被动（IT-17b）：`HitPoint/HitPlus/HitDouble/AttackSkillCount`。
+    pub passives: game_svr::skill_ability::SkillPassives,
+    /// `PlayObject.PowerHit`（`PlayObject.cs:177`；攻杀剑法 arm 标志）。**攻击批 A** 只负责置位
+    /// （`drain_yedo_events` 在 `armed` 时写 `true`）；消费（模式 3 的 `nPower += HitPlus` +
+    /// 清零 + `SM_POWERHIT` 帧）在批 B —— 在那之前本字段只进不出，不参与任何判定。
+    pub power_hit: bool,
+    /// **攻击批 A（登记偏差的观测计数）**：有攻杀但武器 `Dura == 0` 而被跳过的次数。
+    ///
+    /// oracle 在那种状态下 `UseItems[Weapon]` 为 `null` ⇒ `PlayObject.Attack.cs:943` 解引用抛
+    /// NRE、被 `:963` 的 `catch` 吞掉（攻击照常完成，只丢计数块）。本仓**跳过 + WRN**，并在
+    /// **WRN 的同一分支**自增本计数 ⇒ 测试可以断言「跳过了且报告了」，而不是「静默跳过」或
+    /// 「根本没跑到」（WRN 文本走 stdout，无捕获缝）。不参与任何游戏判定。
+    pub yedo_no_weapon_warns: u32,
+}
+
+impl Default for MagicState {
+    fn default() -> Self {
+        Self {
+            list: Vec::new(),
+            use_thrusting: false,
+            use_half_moon: false,
+            table: None,
+            arr: vec![None; game_svr::skill_ability::MAGIC_ARR_LEN],
+            passives: game_svr::skill_ability::SkillPassives::default(),
+            power_hit: false,
+            yedo_no_weapon_warns: 0,
+        }
+    }
 }
 
 impl std::fmt::Debug for MagicState {
@@ -64,6 +93,8 @@ impl std::fmt::Debug for MagicState {
             .field("use_thrusting", &self.use_thrusting)
             .field("use_half_moon", &self.use_half_moon)
             .field("has_table", &self.table.is_some())
+            .field("arr_len", &self.arr.iter().filter(|x| x.is_some()).count())
+            .field("passives", &self.passives)
             .finish_non_exhaustive()
     }
 }
@@ -383,6 +414,7 @@ mod tests {
                 use_thrusting: false,
                 use_half_moon: false,
                 table: Some(std::sync::Arc::new(magic_table.clone())),
+                ..MagicState::default()
             };
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".into(), sg);
@@ -441,6 +473,8 @@ mod tests {
                 ),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
 
             // ① 帧：golden immediate ++ pumped 的 `payload` 逐字节（`recog` 按夹具身份归一；

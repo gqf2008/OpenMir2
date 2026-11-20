@@ -929,6 +929,13 @@ internal static class Program
         templates[2004] = Tpl("unlock", 0, 2, 5);                          // Shape 2：解锁
         templates[2005] = Tpl("inc_pool", 0, 0, 5, ac: 15, mac: 7);        // default：进 IncHealth/IncSpell 池
         templates[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
+        // B3（2026-11-20 清点单第 5 条）：单侧语义模板。
+        templates[2020] = Tpl("hp_only_fixed", 0, 1, 5, ac: 30, mac: 10);    // Shape1：只 HP 封顶（L2 max 24）
+        templates[2021] = Tpl("mp_only_fixed", 0, 1, 5, ac: 10, mac: 30);    // Shape1：只 MP 封顶（L2 max 18）
+        templates[2022] = Tpl("hp_only_percent", 0, 3, 5, ac: 100, mac: 10); // Shape3：只 HP 截断（L4 37/25）
+        templates[2023] = Tpl("mp_only_percent", 0, 3, 5, ac: 10, mac: 100); // Shape3：只 MP 截断
+        templates[2024] = Tpl("ac_only_pool", 0, 0, 5, ac: 15, mac: 0);      // default：只 AC>0
+        templates[2025] = Tpl("mac_only_pool", 0, 0, 5, ac: 0, mac: 7);      // default：只 MAC>0
         templates[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
         templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);
         templates[2009] = Tpl("repair_oil", 3, 9, 5);
@@ -1083,6 +1090,27 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
 
+        // ── B3（2026-11-20 清点单第 5 条）：单侧语义补例 ─────────────────────────────
+        // Shape1 固定量：只一侧到顶；Shape3 百分比：只一侧截断；default：AC/MAC 只一侧 >0。
+        cases.Add(RunCase(table, net, "eat_ok_shape1_clamp_hp_only", new Ctx(),
+            new List<Spec> { S(1, 2020) }, 1, "hp_only_fixed",
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape1_clamp_mp_only", new Ctx(),
+            new List<Spec> { S(1, 2021) }, 1, "mp_only_fixed",
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape3_percent_clamp_hp_only", new Ctx(),
+            new List<Spec> { S(1, 2022) }, 1, "hp_only_percent",
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape3_percent_clamp_mp_only", new Ctx(),
+            new List<Spec> { S(1, 2023) }, 1, "mp_only_percent",
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape0_ac_only", new Ctx(),
+            new List<Spec> { S(1, 2024) }, 1, "ac_only_pool",
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape0_mac_only", new Ctx(),
+            new List<Spec> { S(1, 2025) }, 1, "mac_only_pool",
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
+
         // ── IT-16 彩票（StdMode3 / Shape11，宿主级）──────────────────────────────────────
         // 只在 `MIR2_RNG_SEED` 给定时启用（钩子非必需：抽值由探针临时安装的 `ProbeRandom`
         // 直接记录——那正是 `RandomNumber.random`，即 `WinLottery` 读的字段）。每例用
@@ -1104,14 +1132,14 @@ internal static class Program
             }
 
             LotteryPlan MakePlan(string nm, int[] min, int[] max, int count = 0, int noWin = 500,
-                int[] level = null, int goldBefore = 0)
+                int[] level = null, int goldBefore = 0, int[] gold = null)
                 => new LotteryPlan
                 {
                     Name = nm,
                     Rate = rate,
                     Min = min,
                     Max = max,
-                    Gold = dep.Gold,
+                    Gold = gold ?? dep.Gold,
                     InitCount = count,
                     InitNoWin = noWin,
                     InitLevel = level ?? new int[6],
@@ -1186,8 +1214,51 @@ internal static class Program
             lotteryCases.Add(Run("eat_ok_lottery_forced_bucket_p2",
                 _ => MakePlan("eat_ok_lottery_forced_bucket_p2", Six(0), Six(rate - 1))));
 
-            // ⑧ `IncGold` 失败支**不进探针**：oracle 走 `DropGoldDown` → `GetDropPosition`，
-            //    需要真实 Envir/Map（探针是假 Envir ⇒ NRE）。由 Rust 宿主级用例 ③ 覆盖。
+            // ⑨ 闸闭的非零形态：`Count == NoWinLotteryCount == 500`（`0<0` 之外的另一条假路径）。
+            //    错实现把闸写成 `<=` ⇒ 本例会中奖 ⇒ 红。
+            //    5 档用**宽区间**（d-1..d+1）而非 `[d,d]`：既保证命中，又让 `applied` 与
+            //    既有 `win5_steered`/`gate_closed` 的 `[d,d]` 不同——Rust 用例有
+            //    「applied 互异」机检（`seen_applied`），输出去重不是靠放宽断言。
+            lotteryCases.Add(Run("eat_ok_lottery_gate_closed_nonzero", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[4] = System.Math.Max(d - 1, 0);
+                max[4] = System.Math.Min(d + 1, rate - 1);
+                return MakePlan("eat_ok_lottery_gate_closed_nonzero", min, max, count: 500, noWin: 500);
+            }));
+
+            // ⑩ 命中档但该档 `Gold == 0`：oracle 以 `nGold > 0` 判中奖 ⇒ 本例判**未中**
+            //    （NoWin += 500，红字、无 SM_GOLDCHANGED），等级仍 +1。
+            //    错实现把「命中档」直接当 Won ⇒ 本例会绿/发绿字 ⇒ 红。
+            lotteryCases.Add(Run("eat_ok_lottery_hit_zero_gold", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = d;
+                var gold = (int[])dep.Gold.Clone();
+                gold[5] = 0;
+                return MakePlan("eat_ok_lottery_hit_zero_gold", min, max, gold: gold);
+            }));
+
+            // ⑪ 档位重叠：6 档与 5 档同时包含抽值。oracle 6→5→…→1 链**首即停** ⇒ 只中 6 档。
+            //    错实现反向（1→6）或「取最后一档」⇒ 本例会中 5 档 ⇒ 红。
+            lotteryCases.Add(Run("eat_ok_lottery_overlap_chain_first_stop", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = d; // 6 档命中
+                min[4] = d;
+                max[4] = d; // 5 档也命中（链首即停应取 6 档）
+                return MakePlan("eat_ok_lottery_overlap_chain_first_stop", min, max);
+            }));
+
+            // ⑧ `IncGold` 失败支**不进探针**（已证死路，见卡 §9.11）：oracle 走 `DropGoldDown` → `GetDropPosition`，
+            //    NRE 只来自 `CellArray` 为空（反射 `Envirnoment.Initialize(8,8)` 即可绕过），并非"必须真实地图"；
+            //    且失败支净效果与地图内容无关（`MapItem.ItemId` 恒 0 ⇒ `AddItemToMap` 首条守卫直接 false），
+            //    净效果 = 金币不变 + 无 `RM_ITEMSHOW` + 绿字照发。由 Rust 宿主级用例 ③ 覆盖。
         }
         else
         {
@@ -1261,7 +1332,7 @@ internal static class Program
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
                 "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
-                "IT-16：彩票（StdMode3/Shape11）是**宿主级**（`PlayObject.WinLottery`）——本夹具把它的记录放在顶层 `lottery`，不混进 `cases`（既有 31 例键集不变）。抽值经 RNG 钩子固定：每个用例前复位 8 个进程级计数、按预测抽值覆盖档位，跑完还原；台账自检不一致 ⇒ rc=2 不落盘。",
+                "IT-16：彩票（StdMode3/Shape11）是**宿主级**（`PlayObject.WinLottery`）——本夹具把它的记录放在顶层 `lottery`，不混进 `cases`（既有 37 例键集不变）。抽值经 RNG 钩子固定：每个用例前复位 8 个进程级计数、按预测抽值覆盖档位，跑完还原；台账自检不一致 ⇒ rc=2 不落盘。",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),

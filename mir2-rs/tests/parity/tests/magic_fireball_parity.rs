@@ -114,7 +114,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
         }
 
         // 4) HP 一级断言
-        for k in ["TargetHpBefore", "TargetHp"] {
+        for k in ["TargetHpBefore", "TargetHp", "CasterExtraAbil0"] {
             if num(gc, k) != num(rc, k) {
                 errs.push(format!(
                     "[{label}] {k} 不等：golden={} rust={}",
@@ -144,6 +144,28 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     text(rr, "Who")
                 ));
                 continue;
+            }
+
+            // 卡 §39：怪物接收者的 HP 前/后与逐目标命中门抽值（任一侧有即比；两侧都无 ⇒ 跳过）。
+            for k in ["HpBefore", "HpAfter", "GateIndex", "GateDraw", "GateHit"] {
+                match (gr.get(k), rr.get(k)) {
+                    (None, None) => {}
+                    (Some(_), Some(_)) => {
+                        if num(gr, k) != num(rr, k) {
+                            errs.push(format!(
+                                "[{label}/{who}] {k} 不等：golden={} rust={}",
+                                num(gr, k),
+                                num(rr, k)
+                            ));
+                        }
+                    }
+                    (Some(_), None) => {
+                        errs.push(format!("[{label}/{who}] 台账缺 {k}（golden 有）"))
+                    }
+                    (None, Some(_)) => {
+                        errs.push(format!("[{label}/{who}] golden 缺 {k}（台账有）"))
+                    }
+                }
             }
 
             // 2) 负向牙①：caster 不得收 SM_SPELL(17)
@@ -658,6 +680,46 @@ fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
     Ok(c)
 }
 
+/// 卡 §39：把每支每接收者 `Sent` 里 `ident` 相同的帧按 `(param,tag,series,tail)` 排序。
+/// 只用于**等优先级广播帧的 tie 序**（§29：泵序是 4 叉堆 artifact，不是语义序）。
+fn sort_sm_ident(v: &mut Value, ident: i64) {
+    let Some(cases) = v.get_mut("cases").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for c in cases {
+        let Some(recv) = c.get_mut("Receivers").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for r in recv {
+            let Some(sent) = r.get_mut("Sent").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let idxs: Vec<usize> = sent
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.get("ident").and_then(Value::as_i64) == Some(ident))
+                .map(|(i, _)| i)
+                .collect();
+            let mut items: Vec<Value> = idxs.iter().map(|i| sent[*i].clone()).collect();
+            let key = |v: &Value| -> (i64, i64, i64, String) {
+                (
+                    v.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN),
+                    v.get("tag").and_then(Value::as_i64).unwrap_or(i64::MIN),
+                    v.get("series").and_then(Value::as_i64).unwrap_or(i64::MIN),
+                    v.get("tail")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            };
+            items.sort_by_key(key);
+            for (pos, i) in idxs.iter().enumerate() {
+                sent[*i] = items[pos].clone();
+            }
+        }
+    }
+}
+
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
@@ -708,7 +770,20 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
         cases.push(pinned);
     }
     let rust = serde_json::json!({"magic_id": magic_id, "cases": cases});
-    if let Err(errs) = verify(golden, &rust) {
+    // 卡 §39：SM_716 是等优先级广播（RM_10205，prio 221）⇒ 同一接收者的先后是 4 叉堆出队序
+    // artifact（§29），不是语义序；宿主把 RM_SPELL 直发、不进 SpellFrameBuf，无法复现「带 17 时
+    // 221 组的 tie 序」。仅 groupdeding 对 SM_716 组做多重集比较（逐帧字段仍严格）；其余 SM 与
+    // 其他魔号仍严格按序。
+    let result = if stem == "groupdeding" {
+        let mut g = golden.clone();
+        let mut r = rust.clone();
+        sort_sm_ident(&mut g, 716);
+        sort_sm_ident(&mut r, 716);
+        verify(&g, &r)
+    } else {
+        verify(golden, &rust)
+    };
+    if let Err(errs) = result {
         panic!(
             "真实台账与金标准不等（{} 条）：\n{}",
             errs.len(),
@@ -1063,6 +1138,37 @@ fn tooth_union_missing_deliver_column_red() {
 
 fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
+}
+
+/// **`36`（`SKILL_UENHANCER`）**真实台账 → 判定面（三支 s1/s5/s13，卡 openmir2-uenhancer）。
+///
+/// scope：只证 DoSpell 时刻 `ExtraAbil[0]/Times[0]`（`CasterExtraAbil0`）与帧；施法者 `Abil`
+/// 已按登录序对齐。SM 严格序 + RM 多重集 + `CasterExtraAbil0`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::uenhancer_parity_*）生成真实台账"]
+fn real_rust_ledger_uenhancer() {
+    real_ledger_verify_labels(
+        "uenhancer",
+        &golden_file("uenhancer.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+/// **`39`（`SKILL_GROUPDEDING`）**真实台账 → 判定面（五支，卡 §39）。
+#[test]
+#[ignore = "需先跑 game-svr 五支驱动（tests::groupdeding_parity_*）生成真实台账"]
+fn real_rust_ledger_groupdeding() {
+    real_ledger_verify_labels(
+        "groupdeding",
+        &golden_file("groupdeding.json"),
+        &[
+            "all_miss_hp0",
+            "hit_ac_split",
+            "miss_by_draw",
+            "dead_excluded",
+            "dc_range",
+        ],
+    );
 }
 
 /// **`33 冰咆哮`（`SKILL_SNOWWIND`）**真实台账 → 判定面（标签 s1/s5/s13）。

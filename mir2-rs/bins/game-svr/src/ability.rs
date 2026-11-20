@@ -81,6 +81,7 @@
 //!   `ApplyItemParameters` 的 `StdMode 5/6`（`PlayObject.cs:4424-4426`）与 `24/26`（`:4563-4566`）
 //!   两支里按 `SpecialPwr ∈ 1..=10` **赋值**（不是累加）⇒ 见 [`AddAbility::weapon_strong`]。
 
+use crate::skill_ability::SkillPassives;
 use std::collections::HashMap;
 
 use mir2_data::StdItem;
@@ -613,6 +614,19 @@ pub fn recalc_abilitys_with_prior(
     inputs: &RecalcInputs<'_>,
     prior: &SubAbility,
 ) -> RecalcOutput {
+    recalc_abilitys_with_prior_and_skills(catalog, inputs, prior, SkillPassives::default())
+}
+
+/// [`recalc_abilitys_with_prior`] 的**技能被动**版：`skill` = `RecalcHitSpeed` 的技能循环增量
+/// （`PlayObject.cs:3681-3712`；IT-17b）。oracle 把技能增量加进 `HitPoint` 后，尾部再叠
+/// `AddAbil.HIT`（`PlayObject.cs:2891`）⇒ 本函数在 `hit_base` 上加 `skill.hit_point` 再叠 `add.hit`。
+#[must_use]
+pub fn recalc_abilitys_with_prior_and_skills(
+    catalog: &dyn ItemCatalog,
+    inputs: &RecalcInputs<'_>,
+    prior: &SubAbility,
+    skill: SkillPassives,
+) -> RecalcOutput {
     let mut add = AddAbility::default();
 
     // 登录/升级时 oracle 先跑 `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`（`PlayObject.cs:1308`）。
@@ -709,7 +723,9 @@ pub fn recalc_abilitys_with_prior(
     };
     let sub = SubAbility {
         anti_magic: 1u16.wrapping_add(add.anti_magic),
-        hit_point: hit_base.wrapping_add(add.hit as u8),
+        hit_point: hit_base
+            .wrapping_add(skill.hit_point)
+            .wrapping_add(add.hit as u8),
         speed_point: speed_base.wrapping_add(add.speed as u8),
         anti_poison: add.anti_poison as u8,
         // 这三项 oracle 不重置（`PlayObject.cs:2893-2895` 是 `+=`）⇒ 在 `prior` 上累加（T-18）。
@@ -762,9 +778,14 @@ pub fn recalc_abilitys_with_prior(
 /// - `EABIL_HPUP(4)/MPUP(5)` ⇒ `MaxHP/MaxMP` 的 `ushort` 回绕加；
 /// - `EABIL_PWRRATE(6)` ⇒ DC/MC/SC 的逐字节 `(byte * rate) / 100`。
 ///
-/// **位置语义**：oracle 在 `RecalcAbilitys()` 的尾部、`Race == Play` 的附加段之前；
-/// 本仓的单一实现 [`recalc_abilitys_with_prior`] 不持有 `ExtraAbil`（它在 `PlayObject` 上），
-/// 由宿主在调用后立即应用（`recalc_session_ability`）。
+/// **⚠ 不得在生产路径调用（裁定 `qa-extraabil-adjudication-20261120`，2026-11-20）**：
+/// oracle 的这段折算（`PlayObject.cs:2818-2846`）随后被**同方法体、无 early return** 的
+/// `:2899-2906`（`WAbil = Abil + AddAbil`、`HitSpeed = AddAbil.HitSpeed`）**整体覆盖**
+/// ⇒ 对最终 `WAbil`/`HitSpeed` **永远没有影响**。本仓曾由 `recalc_session_ability` 在
+/// 最终值之后调用它（顺序与 oracle 相反、叠加**留存**），已停用。
+/// 保留本函数仅为对照历史与算术单测；`ExtraAbil` 状态本身仍保留（存档 / 机器人 AI 读）。
+/// 修正卡：`docs/issues/openmir2-extraabil-wabil-fix-20261120.md`。
+#[allow(dead_code)]
 pub fn apply_extra_abil(wabil: &mut Ability, extra: &[u16; 7]) {
     if extra[0] > 0 {
         wabil.dc = make_word_u16(

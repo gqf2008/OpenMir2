@@ -1,7 +1,7 @@
 {
-  "_comment": "S 线（oracle 维护）与 B 线共用的脚本派发回归门禁的期望值。改语料必须同步改这里，否则门禁判红（防误改/防悄悄放宽）。",
+  "_comment": "S 线（oracle 维护）与 B 线共用的脚本派发回归门禁的期望值。改语料必须同步改这里，否则门禁判红（防误改/防悄悄放宽）。corpus_sha256 按 CRLF→LF 归一化后的字节计算（与检出无关；旧值 c0d8b695 按 CRLF 工作树字节算，LF 检出下假红）。",
   "corpus": "dispatch-regression-120.tsv",
-  "corpus_sha256": "c0d8b695bbdf3139b3b9b35a1966fa8c9b469fb92a4d35fac080e9f122d77c0d",
+  "corpus_sha256": "e65f3b294e9c3c4c3d65e5df1685754560f3492593558d4eee1d66d93c1038d1",
   "corpus_lines": 120,
   "rules": {
     "legacy_cmd_code": "GetFields 字段序号 - 1（S3 之前的 C# 口径；协调者已裁定 Rust 侧同批翻转，翻转后两侧都不再用）",

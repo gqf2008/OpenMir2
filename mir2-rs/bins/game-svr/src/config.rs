@@ -71,6 +71,37 @@ impl Default for WinLotteryCfg {
     }
 }
 
+/// **IT-12 祝福油**的 `[Setup]` 6 键（`ServerConf.cs:622-627`；ctor 缺省与部署同值）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeaponMakeLuckCfg {
+    /// `[Setup] WeaponMakeUnLuckRate`（部署 20）：首抽 `Random(rate) == 1` ⇒ 诅咒支。
+    pub un_luck_rate: i32,
+    /// `[Setup] WeaponMakeLuckPoint1`（部署 1）：`Desc[3] < point1` ⇒ 直接 +1 幸运（不抽）。
+    pub point1: i32,
+    /// `[Setup] WeaponMakeLuckPoint2`（部署 3）。
+    pub point2: i32,
+    /// `[Setup] WeaponMakeLuckPoint3`（部署 7）。
+    pub point3: i32,
+    /// `[Setup] WeaponMakeLuckPoint2Rate`（部署 6）：`Random(nRand + point2_rate) == 1`。
+    pub point2_rate: i32,
+    /// `[Setup] WeaponMakeLuckPoint3Rate`（部署 40）：`Random(nRand * point3_rate) == 1`。
+    pub point3_rate: i32,
+}
+
+impl Default for WeaponMakeLuckCfg {
+    /// `GameSvrConf.cs:1879-1884` 构造器缺省（与部署 `Server.conf:843-848` 逐键相同）。
+    fn default() -> Self {
+        Self {
+            un_luck_rate: 20,
+            point1: 1,
+            point2: 3,
+            point3: 7,
+            point2_rate: 6,
+            point3_rate: 40,
+        }
+    }
+}
+
 /// 监听端点 + S1 需要的少量参数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateConfig {
@@ -330,6 +361,8 @@ pub struct GateConfig {
     /// （`WinLottery()`）读参数，`run_inner` 用 `init_state()` 建进程级
     /// [`crate::winlottery::WinLotteryShared`]。
     pub win_lottery: WinLotteryCfg,
+    /// **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck` 的闸与两档概率）。
+    pub weapon_make_luck: WeaponMakeLuckCfg,
     /// `[Setup] MakeDurg`（oracle `ServerConf.cs:244` 的 `ReadWriteInteger("Setup","MakeDurg",…)`，
     /// `GameSvrConf.cs:1450` 缺省 `100`）——合成/制药单价
     /// （`Merchant.cs:1010` 面板价、`Merchant.cs:1510/1518` 收费与扣金）。
@@ -577,6 +610,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     // **IT-16**：`[Setup]` 彩票 27 键先落槽位（槽位表见 [`win_lottery_key_slot`]），
     // 文件尾再按 `WinLotteryCfg::default()` 覆盖已出现的键。
     let mut win_lottery_raw: [Option<i32>; 27] = [None; 27];
+    // **IT-12**：`[Setup]` 祝福油 6 键。
+    let mut weapon_make_un_luck_rate: Option<i32> = None;
+    let mut weapon_make_luck_point1: Option<i32> = None;
+    let mut weapon_make_luck_point2: Option<i32> = None;
+    let mut weapon_make_luck_point3: Option<i32> = None;
+    let mut weapon_make_luck_point2_rate: Option<i32> = None;
+    let mut weapon_make_luck_point3_rate: Option<i32> = None;
     let mut make_durg_price: Option<i32> = None;
     let mut black_stone: Option<String> = None;
     let mut upgrade_weapon_price: Option<i32> = None;
@@ -651,6 +691,49 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     v.parse()
                         .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
                 );
+            }
+        }
+        // **IT-12**：`[Setup]` 祝福油 6 键（`ServerConf.cs:622-627`）。放在共享大 match 之前，
+        // 理由同上（给大 match 加臂会让 rustfmt 重排整段）。
+        if section == "SETUP" {
+            match k.as_str() {
+                "WEAPONMAKEUNLUCKRATE" => {
+                    weapon_make_un_luck_rate = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WEAPONMAKELUCKPOINT1" => {
+                    weapon_make_luck_point1 = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WEAPONMAKELUCKPOINT2" => {
+                    weapon_make_luck_point2 = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WEAPONMAKELUCKPOINT3" => {
+                    weapon_make_luck_point3 = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WEAPONMAKELUCKPOINT2RATE" => {
+                    weapon_make_luck_point2_rate = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WEAPONMAKELUCKPOINT3RATE" => {
+                    weapon_make_luck_point3_rate = Some(
+                        v.parse()
+                            .with_context(|| format!("{k} 不是合法整数：{v:?}"))?,
+                    );
+                }
+                _ => {}
             }
         }
         // **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（`ServerConf.cs:320` 的
@@ -1363,6 +1446,15 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         }
         cfg
     };
+    // **IT-12**：6 键 → `WeaponMakeLuckCfg`（缺键回落 ctor 缺省）。
+    let weapon_make_luck = WeaponMakeLuckCfg {
+        un_luck_rate: weapon_make_un_luck_rate.unwrap_or(20),
+        point1: weapon_make_luck_point1.unwrap_or(1),
+        point2: weapon_make_luck_point2.unwrap_or(3),
+        point3: weapon_make_luck_point3.unwrap_or(7),
+        point2_rate: weapon_make_luck_point2_rate.unwrap_or(6),
+        point3_rate: weapon_make_luck_point3_rate.unwrap_or(40),
+    };
     Ok(GateConfig {
         gate_addr,
         gate_port,
@@ -1466,6 +1558,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         win_lottery,
+        weapon_make_luck,
         // oracle 缺省值（`GameSvrConf.cs:1450`）：`[Setup]` 里没写不算错。
         make_durg_price: make_durg_price.unwrap_or(100),
         // oracle 缺省值（`GameSvrConf.cs:1310/1419-1432`；部署不同值见 `Server.conf`）。
@@ -3000,5 +3093,62 @@ DBPort=6000
         assert_eq!(sorted.first(), Some(&0));
         assert_eq!(sorted.last(), Some(&26));
         assert_eq!(win_lottery_key_slot("WINLOTTERY7MIN"), None, "越界键不识别");
+    }
+}
+
+#[cfg(test)]
+mod weapon_make_luck_config_tests {
+    use super::*;
+
+    fn write(dir: &Path, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join("Server.conf");
+        let full = format!(
+            "[Server]\nCheckBlock=12288\nGateAddr=127.0.0.1\nGatePort=5000\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n{body}"
+        );
+        std::fs::write(&p, mir2_script::cp936::encode_gb2312_dotnet(&full)).unwrap();
+        p
+    }
+
+    /// 部署 `Server.conf:843-848` 的 6 键全解析。
+    #[test]
+    fn parses_all_six_deployed_oil_keys() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-oil-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Setup]\nWeaponMakeUnLuckRate=20\nWeaponMakeLuckPoint1=1\nWeaponMakeLuckPoint2=3\n\
+             WeaponMakeLuckPoint3=7\nWeaponMakeLuckPoint2Rate=6\nWeaponMakeLuckPoint3Rate=40\n",
+        );
+        let c = load(&p).unwrap().weapon_make_luck;
+        assert_eq!(
+            c,
+            WeaponMakeLuckCfg {
+                un_luck_rate: 20,
+                point1: 1,
+                point2: 3,
+                point3: 7,
+                point2_rate: 6,
+                point3_rate: 40,
+            }
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 缺键回落 ctor 缺省；键名大小写不敏感。
+    #[test]
+    fn missing_oil_keys_use_ctor_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-oil2-{}", std::process::id()));
+        let p = write(&dir, "[Setup]\nweaponmakeunluckrate=7\n");
+        let c = load(&p).unwrap().weapon_make_luck;
+        assert_eq!(c.un_luck_rate, 7);
+        assert_eq!(
+            c,
+            WeaponMakeLuckCfg {
+                un_luck_rate: 7,
+                ..WeaponMakeLuckCfg::default()
+            }
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

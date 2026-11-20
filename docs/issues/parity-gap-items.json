@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "13c583366bca8c9a81c8ca330bc52fac3d323bc4",
-    "time": "2026-11-20T06:27:13+08:00",
-    "note": "M55=13c583366 合入 IT-08(Shape13 GetExp 升级支) 后 master items verified=9（QA PASS @ f7cbaf91b）；本计数点取代 card/items-followups（作废不合）"
+    "head": "98d25244f366227e21082df29df6b826bc9f3fb1",
+    "time": "2026-11-20T13:03:01+08:00",
+    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。；M-IT09101113 = 换图簇升格（IT-09/10/11/13，物品 verified 17/19，2026-11-20）。；M-IT17 = IT-17 升格（物品 verified 18/19，2026-11-20）。"
   },
   "status_enum": [
     "verified",
@@ -85,6 +85,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -97,7 +98,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：原两例两侧同时到顶/同时不顶，只 HP 封顶而 MP 不封顶及其反向未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -132,6 +133,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -145,7 +147,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：单例，百分比下只一侧截断/另一侧不截断的边界未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -157,6 +159,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_ac_or_mac_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -169,7 +172,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ushort 回绕",
+      "notes": "ushort 回绕 未覆盖子空间（scope=single_ac_or_mac_uncovered）：原两例 AC>0 且 MAC>0、两侧 0；`if(AC>0)`/`if(MAC>0)` 单侧分支未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -228,25 +231,29 @@
         "line": 2101,
         "line_end": 2157
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::it07_buff_fixture_matches_pure_decision",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/buff_vectors.json",
+        "cases": [
+          "eat_ok_shape12_six_buffs",
+          "eat_ok_shape12_single_mac",
+          "eat_ok_shape12_combo_dc_sc",
+          "eat_fail_shape12_all_zero"
+        ],
+        "unit_tests": [
+          "useitem::tests::it07_shape12_six_buffs",
+          "useitem::tests::it07_shape12_all_zero_not_eaten",
+          "useitem::tests::it07_shape12_max_merge_keeps_larger_values",
+          "tests::it07_emit_eat_notices_production_order_is_heap_sift",
+          "tests::it07_shape12_657_notice_fields"
         ]
       },
-      "notes": "oracle 成功吃掉 / Rust 落 SM_EAT_FAIL"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape12 六属性 buff：纯决策六槽写入/时长/蓝字 + 宿主写回 BuffState → RecalcAbilitys → RM_ABILITY/657；buff-probe 4 例由 oracle 真身产出（ExtraAbil/Flag/Times 前后、now_before、通知文本含 \"sec.\"）。实现与夹具在 card/items-it07（该分支合入后本状态生效）。缺口：①单/组合支的行为面只由夹具比较器覆盖（纯函数单测对六槽只在 max/不命中处取值）；②`ExtraAbil` 的 WAbil 效果在 oracle 是死写（`PlayObject.cs:2818-2840` 被 `:2890-2906` 整体覆盖）⇒ `WAbil` 必须不变。",
+      "scope": "single_and_combo_paths_only_in_fixture"
     },
     {
       "id": "IT-08",
@@ -284,25 +291,24 @@
         "line": 2233,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "S-M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it09_town_scroll_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json",
+        "cases": [
+          "eat_ok_shape1_town_scroll_home_random",
+          "eat_ok_shape1_town_scroll_empty_home_falls_back_to_current_map"
+        ],
+        "unit_tests": [
+          "tests::apply_start_point_for_fired_players_writes_only_the_fired_player"
         ]
       },
-      "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "S-M",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move；零改 useitem.rs）：EatUseItems(1)→FIRE+BaseObjectMove(HomeMap,0,0)（PlayObject.Base.cs:2231-2236/2312-2327）。对拍：新探针 move-eat-probe（真 Envir/MapMgr 替身/ActorMgr + 固定种子 RNG 账本）产 move_eat_vectors.json；用例逐字段含尾比 635→800→622→633→634→801、终态 MapName/X/Y、ItemList/Weight、Rng 逐次。HomeMap 快照（SessionGround.home）由登录 final 记录值 + 3s GetStartPoint 同拍同源维护。仍 implemented_unverified：共用换图路径缺 766(SM_AREASTATE)/54(SM_MAPDESCRIPTION)，且 [名|文件] 覆盖时 SM_CHANGEMAP 尾应为文件主干（详见卡 §9.12 与 docs/issues/openmir2-map-change-cluster-gaps.md）。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-10",
@@ -312,25 +318,25 @@
         "line": 2238,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it10_random_scroll_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json",
+        "cases": [
+          "eat_ok_shape2_random_scroll_current_map",
+          "eat_fail_shape2_norandommap_no_eat"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it10_random_branch_moves",
+          "eat_move::tests::it10_norandom_branch_no_eat"
         ]
       },
-      "notes": "地图 flag 门；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "S",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape2 分支，与 IT-09 同一钩子）：未置位 ⇒ 吃 + 本图随机点；boNORANDOMMOVE 置位 ⇒ 只 636、不消耗/不移动/0 抽（golden rng_draw_count=0，记录器自证）。对拍：move_eat_vectors.json 两例 + 共用 run_move_parity（帧含尾/终态/背包/Weight/Rng/剔除集等式）；牙 M6（判读改反，两支分别红）/M7（目标图换 HomeMap）。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-11",
@@ -340,25 +346,31 @@
         "line": 2246,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it11_dungeon_escape_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json",
+        "cases": [
+          "eat_ok_shape3_dungeon_home_exact",
+          "eat_ok_shape3_dungeon_red_home_exact",
+          "eat_ok_shape3_dungeon_red_home_alt_values",
+          "eat_ok_shape3_home_x_zero_y_nonzero_random",
+          "eat_ok_shape3_dungeon_home_coords_zero_random"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it11_home_branch_exact",
+          "eat_move::tests::it11_red_home_branch_exact",
+          "eat_move::tests::it11_red_home_alt_values",
+          "eat_move::tests::it11_home_x_zero_y_nonzero_random",
+          "eat_move::tests::it11_home_zero_coords_random"
         ]
       },
-      "notes": "Config.RedHome*；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "M",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape3 分支）：吃时按当前 PkPoint/100 判 <2 ⇒ HomeMap 精确点、>=2 ⇒ Config.RedHome* 精确点；BaseObjectMove 的坐标门是 &&（缺一维即 MapRandomMove）。五例覆盖 home 精确/red 精确/red 另一组值/只缺一维/双零；牙 M8 判反（两支各红）、M9 互换（红名支落 home(5,6)）、M10 坐标门恒真、M11 &&→||。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "basis": "semantic",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0"
     },
     {
       "id": "IT-12",
@@ -368,25 +380,36 @@
         "line": 2258,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "wepmake_luck::tests::it12_oil_fixture_matches_pure_decision",
+        "test_file": "mir2-rs/bins/game-svr/src/wepmake_luck.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/oil_vectors.json",
+        "cases": [
+          "oil_curse_subtracts_luck",
+          "oil_curse_at_luck_zero_bumps_curse",
+          "oil_curse_desc4_at_ten_stays",
+          "oil_remove_curse",
+          "oil_point1_adds_luck",
+          "oil_point2_hit",
+          "oil_point2_miss_point3_hit",
+          "oil_both_tiers_miss",
+          "oil_desc3_at_point3_no_extra_draw",
+          "oil_nrand_zero_point3_dead",
+          "oil_fail_no_weapon",
+          "oil_fail_nodrug"
+        ],
+        "unit_tests": [
+          "wepmake_luck::tests::it12_oil_fail_cases_eat_and_frames",
+          "tests::it12_oil_frame_order_desc_and_always_eaten",
+          "wepmake_luck::tests::random_zero_matches_dotnet_value_and_stream",
+          "wepmake_luck::tests::curse_branch_at_luck_zero_raises_curse_count_capped_at_ten"
         ]
       },
-      "notes": "改武器幸运/诅咒"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape4 祝福油：纯决策 `wepmake_luck` + 宿主抽取/Desc 回写/能力帧；oil-probe 12 例由 oracle 真身产出（ScriptedRandom 脚本化抽值，武器 Desc[14] 前后全量快照）。**2026-11-20 升格 verified（card/items-b3）**：① `SM_SYSMESSAGE` 文本接线完成——三条文案 `WeaptonMakeLuck`/`WeaptonNotMakeLuck`/`TheWeaponIsCursed` 经 `String.conf` → `SysMsgTexts` → `NoticeText::Inline`，oil-probe 已记录 `text` hex，比较器按 outcome 逐例比字节；② 诅咒支静默形态按 oracle（`MakeWeaponUnlock` 在 `Desc[3]==0 && Desc[4]>=10` 时不发红字，夹具同）；③ `RM_CHARSTATUSCHANGED(10139)` 已在 master 映射（ability-frames/charstatuschanged 两卡）。吃路径排水改 `NetPriorityQueue`（同 IT-07 的 F1 口径）。",
+      "basis": "semantic"
     },
     {
       "id": "IT-13",
@@ -396,25 +419,31 @@
         "line": 2264,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M-L",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it13_guild_return_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/guild_vectors.json",
+        "cases": [
+          "eat_fail_shape5_no_guild",
+          "eat_fail_shape5_in_war_area",
+          "eat_ok_shape5_invalid_castle_eaten",
+          "eat_ok_shape5_castle_home_exact",
+          "eat_ok_shape5_castle_home_zero_coord_random"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it13_no_guild_no_eat",
+          "eat_move::tests::it13_in_war_area_red_no_eat",
+          "eat_move::tests::it13_invalid_castle_eaten_red",
+          "eat_move::tests::it13_castle_home_exact",
+          "eat_move::tests::it13_castle_home_zero_coord_random"
         ]
       },
-      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "M-L",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape5 臂，零改 useitem.rs）：五支按 oracle `PlayObject.Base.cs:2264-2286`——`MyGuild==null` ⇒ 不吃（636）；战区 ⇒ 红字「此处无法使用」不吃；非战区无城主会籍 ⇒ 红字「无效」但吃（635，位置不变）；有效城堡 ⇒ `BaseObjectMove(HomeMap, HomeX-4+Rand9, HomeY-4+Rand9)`（先 X 后 Y，2 抽），任一坐标为 0 ⇒ `MapRandomMove`（+2 抽）。Shape5 **不发 `RM_SPACEMOVE_FIRE`**（oracle case5 只调 BaseObjectMove）。**部署不可达（§18.1，scope=castle_move_branches_synthetic_unreachable）**：`Castle.MasterGuild` 在部署态恒 null （`UserCastle.LoadConfig` 用 `GuildMgr.FindGuild(OwnGuild)`，早于行会装载）⇒ 位移两支证据为 synthetic 构造，非生产路径；生产只会走「不吃」或「无效但吃」。探针 `guild-probe`（C# 半批 `card/items-it13` ®`39cc28577`）+ 五支 §35 负向自检。共用换图路径缺口（766/54 与 `[名|文件]`）见 docs/issues/openmir2-map-change-cluster-gaps.md，不在本卡重抄。；2026-11-20 升格 verified：换图簇 766/54 + 634 alias 尾接线后复评（QA ae @ 021d2b35c；代码见 master f8c0b4b7d）",
+      "scope": "换图簇帧 633/634/766/54/801 的存在与线上序已进夹具逐帧比（剔除集为空、766/54 不再被剔）；但 766 的 Recog(n8)、54 的 Recog(nMusicid)+非空 MapDesc 尾、634 的 series(DayBright)、801 的 series(Dir/Light) 仅由 sessionwire 单位测试覆盖、非夹具对拍（夹具里 766 recog=0 / 54 recog=-1 / 尾空，属常量/占位），强度低于帧面逐帧比；766/54 的 param/tag/series 为 oracle 常量 0；另 castle_move_branches_synthetic_unreachable：Shape5 位移两支（有效城堡 2 抽 / 零坐标 MapRandomMove）为 synthetic 构造（部署态 Castle.MasterGuild 恒 null ⇒ 生产不可达，只走『不吃』或『无效但吃』），不作生产路径已验证",
+      "basis": "semantic"
     },
     {
       "id": "IT-14",
@@ -424,7 +453,7 @@
         "line": 2286,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -438,7 +467,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "修复油 Shape9 已在 use_item 实现（StdMode3 的 default→EatUseItems(9)→RepairWeapon：无武器/已满/低于阈值不吃；否则 DuraMax-=(DuraMax-Dura)/RepairItemDecDura、Dura+=min(5000,missing)、发 RM_DURACHANGE(10125) + 绿色 RM_SYSMESSAGE），oracle 对拍三支（正常/已满/无武器）+ 武器耐久 weapon_after 进比较面 + RepairItemDecDura 取自配置经夹具带入比较器。**运行期帧缺口（用户可见）**：SysMsg(WeaponRepairSuccess,Green) 的 SM_SYSMESSAGE 文本帧运行期不发（夹具层只比 RM 颜色、文本不比），同 StdMode1 food 口径，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md ⇒ 记 implemented_unverified，不计 verified。"
+      "notes": "修复油 Shape9 已在 use_item 实现（StdMode3 的 default→EatUseItems(9)→RepairWeapon：无武器/已满/低于阈值不吃；否则 DuraMax-=(DuraMax-Dura)/RepairItemDecDura、Dura+=min(5000,missing)、发 RM_DURACHANGE(10125) + 绿色 RM_SYSMESSAGE），oracle 对拍三支（正常/已满/无武器）+ 武器耐久 weapon_after 进比较面 + RepairItemDecDura 取自配置经夹具带入比较器。**状态升格（2026-11-20，card/items-b3）**：运行期 `SM_SYSMESSAGE` 文本帧已补齐：`String.conf` 键 `WeaponRepairSuccess` 经 `SysMsgTexts` 进队列（`NoticeText::Inline`），oracle 夹具记 `text`（hex = `EDCode.EncodeString(Buff)`），Rust 比较器逐字节核（卡 `openmir2-runtime-sysmsg-text-frames`）。夹具 `eat_vectors.json` 三例的 11004 `text` 非空且与 Rust 文案字节一致 ⇒ 计入 `verified`。",
+      "basis": "semantic"
     },
     {
       "id": "IT-15",
@@ -448,7 +478,7 @@
         "line": 2292,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -462,7 +492,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "特修油 Shape10 已在 use_item 实现（StdMode3 的 default→EatUseItems(10)→SuperRepairWeapon：无武器/Index<=0 不吃；否则 Dura=DuraMax、发 RM_DURACHANGE(10125)+绿色 RM_SYSMESSAGE；**无\"已满\"守卫⇒已满仍吃**；**无 RepairItemDecDura**）。oracle 对拍三支（正常/已满仍吃/无武器）+ weapon_after 进比较面。**运行期帧缺口（用户可见）**：SysMsg 复用 MessageSettings.WeaponRepairSuccess（与 IT-14 同文案）的 SM_SYSMESSAGE 文本帧运行期不发，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md（同时指 IT-14/IT-15）⇒ 记 implemented_unverified，不计 verified。"
+      "notes": "特修油 Shape10 已在 use_item 实现（StdMode3 的 default→EatUseItems(10)→SuperRepairWeapon：无武器/Index<=0 不吃；否则 Dura=DuraMax、发 RM_DURACHANGE(10125)+绿色 RM_SYSMESSAGE；**无\"已满\"守卫⇒已满仍吃**；**无 RepairItemDecDura**）。oracle 对拍三支（正常/已满仍吃/无武器）+ weapon_after 进比较面。**状态升格（2026-11-20，card/items-b3）**：运行期 `SM_SYSMESSAGE` 文本帧已补齐：`String.conf` 键 `WeaponRepairSuccess` 经 `SysMsgTexts` 进队列（`NoticeText::Inline`），oracle 夹具记 `text`（hex = `EDCode.EncodeString(Buff)`），Rust 比较器逐字节核（卡 `openmir2-runtime-sysmsg-text-frames`）。夹具 `eat_vectors.json` 三例的 11004 `text` 非空且与 Rust 文案字节一致 ⇒ 计入 `verified`。",
+      "basis": "semantic"
     },
     {
       "id": "IT-16",
@@ -472,25 +503,46 @@
         "line": 2298,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::it16_lottery_fixture_rng_and_deltas",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_lottery_win6_deploy_bands",
+          "eat_ok_lottery_win6_steered",
+          "eat_ok_lottery_win5_steered",
+          "eat_ok_lottery_win4_steered",
+          "eat_ok_lottery_win3_steered",
+          "eat_ok_lottery_win2_steered",
+          "eat_ok_lottery_win1_sum_equality",
+          "eat_ok_lottery_no_win",
+          "eat_ok_lottery_gate_closed",
+          "eat_ok_lottery_boundary_min",
+          "eat_ok_lottery_boundary_max",
+          "eat_ok_lottery_forced_bucket_p2",
+          "eat_ok_lottery_gate_closed_nonzero",
+          "eat_ok_lottery_hit_zero_gold",
+          "eat_ok_lottery_overlap_chain_first_stop"
+        ],
+        "unit_tests": [
+          "winlottery::tests::level1_is_sum_equality_not_range",
+          "winlottery::tests::bands_are_checked_six_first_then_down",
+          "winlottery::tests::gate_closed_stops_at_matched_band_and_counts_as_lost",
+          "winlottery::tests::zero_gold_band_is_lost_not_won",
+          "winlottery::tests::init_state_maps_all_eight_keys_without_shift",
+          "winlottery::tests::pure_decision_reads_state_not_cfg_init",
+          "winlottery::tests::boundary_is_inclusive_on_both_ends",
+          "winlottery::tests::notice_order_is_pump_priority_ascending",
+          "tests::it16_lottery_frame_order_gold_counters_and_always_eaten",
+          "winlottery::tests::level_accumulates_across_calls"
         ]
       },
-      "notes": "Config.WinLotteryLevel1..6（Rust 已有配置字段）；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "cost": "M",
+      "deviation": null,
+      "notes": "卡 docs/issues/openmir2-items-parity.md §9.11。口径收窄：三例中真正新增覆盖只有 hit_zero_gold（⑦与既有 gate_closed、⑪与既有 forced_bucket_p2 判别力重叠，保留作直读回归、不构成新增覆盖）。判据三处由等级增量改为金币增量（oracle PlayObject.cs:3868）。期望来自 oracle 探针实出（ORACLE_SOURCE_SHA256 51a289e2…）。QA 3b 签署 @ 6c95e8b14。",
+      "basis": "semantic",
+      "scope": "partial: 15 例夹具对拍 + 跨调用累积单测。未覆盖 9 项：①human_max_gold 封顶/IncGold 失败支（仅宿主用例③，且已证死路）②同档跨调用累积（由单测 level_accumulates_across_calls 覆盖、非夹具对拍）③时序/NoWin 增长序列（仅单次快照）④部署配置下1等奖不可达（仅和式覆盖）⑤配置解析面(27键/部署String.conf文案)⑥GM显示/实时查询面⑦观察者/多人面(彩票为自通知)⑧攻击隔离随机流 world.rng_attack 关系⑨队列上界 drain.hit_cap"
     },
     {
       "id": "IT-17",
@@ -500,7 +552,7 @@
         "line": 2171,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "readbook::tests::it17a_read_book_host_parity",
         "test_file": "mir2-rs/bins/game-svr/src/readbook.rs",
@@ -526,7 +578,9 @@
       },
       "cost": "S-M",
       "deviation": null,
-      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：RecalcAbilitys 的技能被动（HitPoint/SpeedPoint/DC、MagicArr 战斗效果）属能力层缺口（IT-17b，另立卡）；657 本卡按同值发。"
+      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：17a 学习面全绿；能力层 **IT-17b 已合入 master**（`card/items-skillpassive-17b`：RecalcAbilitys 技能被动结构 + `HitSkillState` 由会话 `MagicArr` 派生 + 正反两条攻击帧用例；merge `9ab1e4eec`，QA PASS @ `d3ab106e3`），**17b-3b 攻杀 RNG 也已合入**（`RandomByte(7-L)` 抽数接线：`Option` 签名 + `world.rng` + 三用例；merge `cdedad03c`，QA PASS @ `a95e25c5a`）；但 17b 的证据不并入 IT-17 的 evidence 面 ⇒ 本域仍不计 verified。657 本卡按同值发。 【IT-17b 结构层偏差】MagIdx>=50 时 oracle MagicArr 越界抛 IndexOutOfRangeException，本仓选择跳过并 WRN（不把内容数据错误升级成崩溃）；用例 magic_arr_ignores_id_out_of_range 钉住。17a 批 0 抽是结构性（无 rng 形参、不含攻杀）；攻杀 RNG 已由 17b-3b 接线（见上）。；2026-11-20 升格 verified(partial)：QA ae 第二方复核 @ bb160e2ad；旁证：成功例每例恰 1 条 657，与 89 的队列空⇒净1 判定吻合",
+      "basis": "semantic",
+      "scope": "verified, scope=partial：读书四门(书表/已学/职业/等级) + 成功支 MagicList 终态&保序 + 帧逐字节 + 读路径 0 抽(记录器自证) 已对拍；未覆盖：①expect.item_list 只比件数、元素字段(make_index/index/dura/dura_max)记录而不比（另卡 openmir2-itemlist-element-compare.md）②657 的 HitSpeed/CharStatus 夹具恒 0（oracle 是真实变量 PlayObject.cs:2876/:4419）——该两字段未点亮，仅以 0/0 对拍；另 622 校验和本夹具仅 weight=0（字段在 IT-16 已点亮）"
     },
     {
       "id": "IT-18",

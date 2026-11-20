@@ -609,7 +609,7 @@ pub(crate) fn handle_select(
     // 装进会话 pending（`run_merchant_goto` 已归位到 `sg.gm`）⇒ 在脚本帧入队/排水
     // **之前**落地并**直发** `SM_UPDATEITEM(203)`（oracle `SendUpdateItem` 走
     // `SendDefMessage`，早于 `MsgQueue` 里的蓝字 100；复审 important-2）。
-    if let Some(body) = crate::apply_pending_gm_use_item_in(sg, world, catalog) {
+    if let Some(body) = crate::apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
         if let Some(tx) = crate::route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
         {
             let _ = tx.send(SimToGate::SendFrame { socket, body });
@@ -821,7 +821,7 @@ pub(crate) fn handle_select(
         // 装进会话 pending（`run_merchant_goto` 已归位到 `sg.gm`）⇒ 在脚本帧入队/排水
         // **之前**落地并**直发** `SM_UPDATEITEM(203)`（oracle `SendUpdateItem` 走
         // `SendDefMessage`，早于 `MsgQueue` 里的蓝字 100；复审 important-2）。
-        if let Some(body) = crate::apply_pending_gm_use_item_in(sg, world, catalog) {
+        if let Some(body) = crate::apply_pending_gm_use_item_in(sg, world, catalog, online, gates) {
             if let Some(tx) =
                 crate::route_to_gate(gates, gate_idx, socket, "GM 改属性 SM_UPDATEITEM")
             {

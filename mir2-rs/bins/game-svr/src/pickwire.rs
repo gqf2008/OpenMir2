@@ -42,7 +42,8 @@ use crate::ground::{
 use crate::npc::SendMsg;
 use crate::smframe;
 use crate::useitem::{
-    my_status, NoticeText, QueuedNotice, RM_CHARSTATUSCHANGED, RM_HEALTHSPELLCHANGED, RM_MYSTATUS,
+    my_status, NoticeText, QueuedNotice, RM_ABILITY, RM_CHARSTATUSCHANGED, RM_HEALTHSPELLCHANGED,
+    RM_MYSTATUS, RM_SUBABILITY,
 };
 use mir2_world_bevy::{FloorItemKind, FloorItemView};
 
@@ -63,6 +64,13 @@ pub struct WireSession {
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文。**只服务 `NoticeText::SessionPickup`**
     /// （取件一条）；其余通知自带文本，缺文本时不产帧——不做全域回退。
     pub sys_msg: Option<Vec<u8>>,
+    /// `PlayObject.Job`（`SM_ABILITY` 的 `MakeWord((byte)Job, 99)`，`PlayObject.Message.cs:1733`）。
+    pub job: u8,
+    /// `Ability` 的客户端尾（`SM_ABILITY` 的 EDCode 尾；同 `crate::send_levelup_frames` 的
+    /// `ability_tail(&sg.state.wabil, client_layout)`）。
+    pub ability_tail: Vec<u8>,
+    /// `SubAbility::to_frame_bytes()`（`SM_SUBABILITY` 四参数来源，`PlayObject.Message.cs:1935`）。
+    pub sub_bytes: [u16; 7],
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`）——`RM_MYSTATUS` 的 `GetMyStatus()`
     /// （`PlayObject.Base.cs:1183`）读它（**制药/食药片 WB**：`CM_EAT` StdMode 1 的跨档出帧）。
     pub hunger_status: i32,
@@ -139,7 +147,42 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
                 )
             })
         }
-        RM_MENU_OK => Some(smframe::sm_menu_ok(n.n_param1, &[])),
+        RM_MENU_OK => {
+            // 卡 `openmir2-menu-ok-text`：oracle `PlayObject.Message.cs:1952-1954` 的
+            // `SendDefMessage(SM_MENU_OK, nParam1, 0,0,0, Msg)` ⇒ 尾 = `EDCode.EncodeString(Msg)`。
+            // 四个生产者的文案不同（`CanotUseItemMsg` / `CanotDropInSafeZoneMsg` /
+            // `CanotDropGoldMsg` / `CanotDropItemMsg`），由入队方或发送点以 `Inline` 给出。
+            let tail = match &n.text {
+                NoticeText::Inline(t) => crate::enter::gbk(t),
+                NoticeText::None | NoticeText::SessionPickup => Vec::new(),
+            };
+            Some(smframe::sm_menu_ok(n.n_param1, &tail))
+        }
+        // `RM_ABILITY`(10051) ⇒ `SM_ABILITY(52)`（`PlayObject.Message.cs:1732-1733`）：
+        // `MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`。
+        // **低字节 67**：泵序上晚于 `RM_SUBABILITY`(10302→62)。
+        RM_ABILITY => Some(smframe::sm_ability(
+            session.gold,
+            session.job,
+            session.game_gold,
+            &session.ability_tail,
+        )),
+        // `RM_SUBABILITY`(10302) ⇒ `SM_SUBABILITY(752)`（`PlayObject.Message.cs:1934-1935`）：
+        // `SendDefMessage(SM_SUBABILITY, MakeLong(MakeWord(AntiMagic,0),0),
+        //  MakeWord(HitPoint,SpeedPoint), MakeWord(AntiPoison,PoisonRecover),
+        //  MakeWord(HealthRecover,SpellRecover))`。**低字节 62**：线上先于 SM_ABILITY。
+        RM_SUBABILITY => {
+            let b = session.sub_bytes;
+            Some(smframe::sm_subability(
+                b[0],
+                u8::try_from(b[1]).unwrap_or(0),
+                u8::try_from(b[2]).unwrap_or(0),
+                u8::try_from(b[3]).unwrap_or(0),
+                u8::try_from(b[4]).unwrap_or(0),
+                u8::try_from(b[5]).unwrap_or(0),
+                u8::try_from(b[6]).unwrap_or(0),
+            ))
+        }
         // `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`：`PlayObject.Message.cs:1666-1669` 的
         // `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)`。`Recog` 取**基础** `Abil.Exp`
         //（`session.abil_exp`），**不是** `WAbil.Exp`（非升级 `GetExp` 后 WAbil 陈旧）。IT-08 经此出帧。
@@ -502,11 +545,58 @@ mod tests {
             wabil: wire_ability(),
             abil_exp: 0,
             sys_msg: sys_msg.map(<[u8]>::to_vec),
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
             hunger_status: 0,
             hit_speed: 0,
         }
     }
 
+    /// **`RM_ABILITY`→`SM_ABILITY(52)` / `RM_SUBABILITY`→`SM_SUBABILITY(752)` 映射**
+    /// （oracle `PlayObject.Message.cs:1732-1735` / `:1934-1935`；卡 `openmir2-items-parity` §9.16 的 52 缺口）。
+    /// 逐字段机判（头 + 尾字节），并钉住"尾 = `Encode(WAbil 原文)`、不再二次编码"。
+    #[test]
+    fn notice_ability_and_subability_map_field_by_field() {
+        let plain = |ident: i32| QueuedNotice {
+            ident,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: NoticeText::None,
+        };
+        let mut s = session(7, 12_345, 0x0002_0001, None);
+        s.job = 3;
+        s.ability_tail = vec![0x41, 0x42];
+        let body = notice_frame(&plain(RM_ABILITY), &s).expect("RM_ABILITY 必须映射");
+        let m = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("SM_ABILITY 可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_ABILITY);
+        assert_eq!(m.recog, 12_345, "Recog = Gold");
+        assert_eq!(m.param, 0x6303, "Param = MakeWord(Job=3, 99)");
+        assert_eq!(m.tag, 0x0001, "Tag = LoWord(GameGold)");
+        assert_eq!(m.series, 0x0002, "Series = HiWord(GameGold)");
+        assert_eq!(
+            &body[mir2_protocol::frame::CommandMessage::SIZE..],
+            &edcode::encode(&[0x41, 0x42])[..],
+            "尾 = EDCode(WAbil 原文)，不二次编码"
+        );
+
+        s.sub_bytes = [0x1234, 1, 2, 3, 4, 5, 6];
+        let body = notice_frame(&plain(RM_SUBABILITY), &s).expect("RM_SUBABILITY 必须映射");
+        let m =
+            mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("SM_SUBABILITY 可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_SUBABILITY);
+        assert_eq!(m.recog, 0x1234, "Recog = AntiMagic 完整 16 位");
+        assert_eq!(m.param, 0x0201, "MakeWord(HitPoint, SpeedPoint)");
+        assert_eq!(m.tag, 0x0403, "MakeWord(AntiPoison, PoisonRecover)");
+        assert_eq!(m.series, 0x0605, "MakeWord(HealthRecover, SpellRecover)");
+        assert_eq!(
+            body.len(),
+            mir2_protocol::frame::CommandMessage::SIZE,
+            "无尾"
+        );
+    }
     /// **IT-08 同源错位牙**：`notice_frame` 的 `RM_WINEXP` 必须用**基础** `Abil.Exp`（`abil_exp`）当
     /// `SM_WINEXP.Recog`，**不是** `WAbil.Exp`（非升级 `GetExp` 后 WAbil 陈旧）。WAbil.exp=0、base=100 ⇒ Recog 必须 100。
     /// 反向牙：把该分支改成读 `session.wabil.exp` ⇒ Recog=0 ⇒ 本用例红。
@@ -836,6 +926,62 @@ mod tests {
             vec![622, 657, 100],
             "泵序 = (byte)RM ident 升序：131 < 155 < 252"
         );
+    }
+
+    /// **卡 `openmir2-menu-ok-text`**：`RM_MENU_OK` 的帧体 = 12B 头 ++ `EDCode.GBK(文案)`。
+    /// 三个生产者文案不同，这里用 `use_item` 那条（`CanotUseItemMsg`）钉编码路径；
+    /// `None` ⇒ 空尾（保持 header-only 的旧行为）。
+    #[test]
+    fn menu_ok_frame_carries_text_tail() {
+        let s = session(4660, 0, 0, None);
+        let body = notice_frame(
+            &QueuedNotice {
+                ident: RM_MENU_OK,
+                w_param: 0,
+                n_param1: 4660,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::Inline(crate::strings::DEFAULT_CANOT_USE_ITEM_MSG.to_string()),
+            },
+            &s,
+        )
+        .expect("RM_MENU_OK 必须产帧");
+        let mut want = header(4660, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        want.extend_from_slice(&edcode::encode(&crate::enter::gbk(
+            crate::strings::DEFAULT_CANOT_USE_ITEM_MSG,
+        )));
+        assert_eq!(body, want, "整帧 = 头 ++ EDCode(GBK(文案))");
+
+        // **独立 oracle 抓帧**（不现算）：`oracle_tail` = 由 oracle
+        // `EDCode.EncodeString(GBK("当前无法进行此操作!!!"))` 得到、并经 QA 独立复算验证的
+        // **冻结字节**（等价值，不是夹具拷贝；`SM_MENU_OK = 767` 见
+        // `crates/protocol/src/messages.rs:354`）。
+        // 现算的 `want` 与被测 `body` 共用 `edcode::encode`/`enter::gbk` ⇒ 原语错了会一起错；
+        // 这条硬编码抓帧才能咬住"编码错"。
+        let oracle_tail: &[u8] = b"AAgW@VnXC<MEPXxS@WZEY[WR]]Ik";
+        let mut oracle_frame = header(4660, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        oracle_frame.extend_from_slice(oracle_tail);
+        assert_eq!(
+            body, oracle_frame,
+            "整帧 == oracle 抓帧（硬编码 hex，不现算）"
+        );
+
+        // 无文本 ⇒ 空尾（与旧行为一致）。
+        let bare = notice_frame(
+            &QueuedNotice {
+                ident: RM_MENU_OK,
+                w_param: 0,
+                n_param1: 1,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::None,
+            },
+            &s,
+        )
+        .expect("无文本也产帧（空尾）");
+        let mut want_bare = header(1, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        want_bare.extend_from_slice(&edcode::encode(&[]));
+        assert_eq!(bare, want_bare, "无文本 ⇒ header-only");
     }
 
     /// **负例（卡 §4「回退按通知种类收窄」）**：通知**无文本**（`NoticeText::None`）时，

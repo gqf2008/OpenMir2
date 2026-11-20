@@ -52,6 +52,10 @@ REGISTRY = [
     # 判等域复用 compare_runs 的规则语义（rules.json + global masks），不是 raw bytes；
     # 自测用仓库 npc_click run1 fixture（PASS m=1）、五类反例 + w1c 真实 FAIL，离线、<1s。
     ("rng_stream_shape", ["tools/conformance/rng_stream_shape.py", "selftest"], False),
+    # 卡 `openmir2-charstatuschanged-gap`/IT-12 C1（opc-19 清点单第 7 条）：夹具声明的
+    # `oracle_source_sha256` 按 **git blob（LF）** 复算——Windows 工作树 CRLF 与 blob 会算出两个值；
+    # selftest 含顺序敏感 / 工作树 CRLF 不敏感 / 夹具 round-trip 三类断言。
+    ("oracle_source_sha", ["tools/parity/oracle_source_sha.py", "--selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
