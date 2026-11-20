@@ -75,6 +75,7 @@ mod strings;
 mod telemetry;
 mod tick_profile;
 mod users;
+mod winlottery;
 
 // 编码层（无 I/O、无全局状态）：进程级集成测试直接引用 `game_svr::*`（见 `tests/relay.rs`）。
 // 仍留在同一 lib 里，是因为 bin 侧改为薄包装（`main.rs` 只有 `process::exit(game_svr::run())`）。
@@ -1684,6 +1685,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // NPC 装载中止 ⇒ Aborted（网关拒连 + sim 拒入世界）。
     let world_start = std::sync::Arc::new(WorldStartGate::new());
     let sim_world_start = std::sync::Arc::clone(&world_start);
+    // **IT-16**：彩票计数是 oracle 的**进程级**可变静态（`SystemShare.Config`）。
+    // 本仓 `World` 是 per-World（分片「同进程多 World」）⇒ 不能挂 `world`；
+    // 用进程级句柄贯穿 sim 线程（与 `ids_online`/`world_start` 同层）。
+    // 初值 = `[Setup]` 的 8 个状态键（`WinLotteryCfg::init_state`，卡 §9.11）。
+    let win_lottery = crate::winlottery::WinLotteryShared::new(cfg.win_lottery.init_state());
+    let sim_win_lottery = win_lottery.clone();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1697,6 +1704,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 registry,
                 EnterConfig {
                     repair_item_dec_dura: cfg.repair_item_dec_dura,
+                    win_lottery: cfg.win_lottery,
                     home_start_points: home_fallback.start_points.clone(),
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
@@ -1890,6 +1898,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 cfg.payment_mode,
                 planes,
                 sim_world_start,
+                sim_win_lottery,
             )
         })
         .context("起 sim 线程失败")?;
@@ -10485,6 +10494,13 @@ fn handle_eat_cmd(
     npc_vars: &game_svr::npc::NpcVars,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
+
+    // **IT-16 彩票**：进程级计数句柄（`WinLotteryCount`/`NoWinLotteryCount`/`WinLotteryLevel*`）。
+    lottery: &crate::winlottery::WinLotteryShared,
+    // **IT-16**：`[Setup]` 的 19 个彩票参数（`Rate`/`1..6 Min/Max`/`1..6 Gold`）。
+    lottery_cfg: crate::config::WinLotteryCfg,
+    // `Config.HumanMaxGold`（`PlayObject.IncGold` 的上限，`PlayObject.Base.cs:168`）。
+    human_max_gold: i32,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -10588,6 +10604,16 @@ fn handle_eat_cmd(
             }
         },
     };
+    // **IT-16 彩票**：oracle 走到 `EatUseItems` case 11 的判据 = 本件模板
+    // `StdMode==3 && Shape==11`（`PlayObject.Base.cs:2162-2163/2298`）。
+    // 死亡/禁药/物品不存在时 `out.eaten` 为 false，后续不抽、不计数。
+    let lottery_item = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == recog)
+        .and_then(|it| catalog.get(it.index))
+        .is_some_and(|t| t.std_mode == 3 && t.shape == 11);
     // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。
     let mut item_list = std::mem::take(&mut sg.state.item_list);
     // `RefMyStatus()` ⇒ `RecalcAbilitys()` 的观测输入（StdMode 1 跨档才用到；与 `handle_bag_cmd` 同源）。
@@ -10637,7 +10663,7 @@ fn handle_eat_cmd(
         repair_item_dec_dura,
         recalc: Some(recalc),
     };
-    let out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
+    let mut out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
     glog!(
         "INF",
         "CM_EAT 结果：ChrName={chr_name} make_index={recog} eaten={} immediate={} notices={}",
@@ -10663,6 +10689,46 @@ fn handle_eat_cmd(
     // IT-14：修复油改武器耐久 ⇒ 写回 `UseItems[Weapon]` 持久化（oracle 单份 UseItems 就地改）。
     sg.use_items[game_svr::ability::SLOT_WEAPON] = state.extra.weapon.clone();
     sg.equip.body_luck_level = state.extra.body_luck_level;
+    // **IT-16 彩票 `WinLottery()`**（`PlayObject.cs:3809`）：宿主级——`use_item` 只保证
+    // shape11 **恒吃**，抽取/6 段闸/金币/计数都在这里（卡 §9.11「宿主 WinLottery」）。
+    // 触发条件 = 模板 StdMode3/Shape11 **且** `out.eaten`（死亡/禁药/物品不存在 ⇒ oracle
+    // 不进 `EatUseItems`，不抽不计数）。
+    if out.eaten && lottery_item {
+        let outcome =
+            lottery.with(|st| crate::winlottery::win_lottery(&mut world.rng, &lottery_cfg, st));
+        // oracle `PlayObject.cs:3873-3900`：**绿字先发**（`nGold > 0` 即报喜），再 `IncGold`。
+        // `IncGold` 失败（`Gold + nGold > HumanMaxGold`）也照样先报——**oracle bug，
+        // 为 parity 复制**（卡 §9.11）；失败支不发 `SM_GOLDCHANGED`、金币不变
+        //（`DropGoldDown` bug-replica，净不变）。
+        let inc_ok = match outcome {
+            crate::winlottery::WinLotteryOutcome::Won { gold, .. } => {
+                let ok = game_svr::ground::inc_gold(sg.state.gold, gold, human_max_gold);
+                if ok {
+                    sg.state.gold = sg.state.gold.wrapping_add(gold);
+                }
+                ok
+            }
+            crate::winlottery::WinLotteryOutcome::Lost => false,
+        };
+        // 通知按 oracle 泵序入队（`(byte)ident` 升序）：见 `win_notices`。
+        for n in crate::winlottery::win_notices(outcome, inc_ok) {
+            let (f, b) = match n {
+                crate::winlottery::WinLotteryNotice::GoldChanged => (0, 0),
+                crate::winlottery::WinLotteryNotice::SysMsgGreen => {
+                    (colors.green_f, colors.green_b)
+                }
+                crate::winlottery::WinLotteryNotice::SysMsgRed => (colors.red_f, colors.red_b),
+            };
+            out.notices.push(game_svr::useitem::QueuedNotice {
+                ident: n.ident(),
+                w_param: 0,
+                n_param1: i32::from(f),
+                n_param2: i32::from(b),
+                n_param3: 0,
+            });
+        }
+    }
+
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
     // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
     // `add_body_luck`。升级块内 `HasLevelUp→RecalcAbilitys` ⇒ **WAbil 追上 Abil**（与非升级的"陈旧"相反）。
@@ -10690,6 +10756,7 @@ fn handle_eat_cmd(
             100.0,
         );
     }
+
     // **药品写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`，review 94159ca7d1 F1）：
     // oracle 的 `IncHealthSpell`（`BaseObject.cs:952-975`）写唯一一份 `WAbil`——本段覆盖的写点
     // 来自 `useitem.rs:306`（StdMode 0 Shape 1 固定量）、`:329`（Shape 3 百分比）、
@@ -23422,6 +23489,9 @@ struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     /// IT-14 修复油：`[Setup] RepairItemDecDura`（缺省30/现网90，`config.rs`）。
     repair_item_dec_dura: i32,
+    /// **IT-16**：`[Setup]` 彩票 27 键（`Config.WinLottery*`）。`handle_eat_cmd` 的
+    /// `WinLottery()` 读 19 个参数；8 个初值已在 `run_inner` 建共享计数时消费。
+    win_lottery: crate::config::WinLotteryCfg,
     /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
     castle_name_colors: mir2_world_bevy::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
@@ -23644,6 +23714,7 @@ impl EnterConfig {
         Self {
             game_conf: None,
             repair_item_dec_dura: 90,
+            win_lottery: crate::config::WinLotteryCfg::default(),
             castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
             red_die_home: mir2_world_bevy::castle::RedDieHome::default(),
             // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
@@ -26347,6 +26418,8 @@ fn sim_loop(
     planes: Option<planes::PlanesLink>,
     // 世界准入闸（`M2Share.StartReady` 的最小建模；见 [`WorldStartGate`]）。
     world_start: std::sync::Arc<WorldStartGate>,
+    // **IT-16**：进程级彩票计数（oracle `SystemShare.Config` 进程静态的等价物）。
+    win_lottery: crate::winlottery::WinLotteryShared,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -28191,6 +28264,9 @@ fn sim_loop(
                             npc_host.as_ref(),
                             &npc_vars_base,
                             Some(&script_gm),
+                            &win_lottery,
+                            enter_cfg.win_lottery,
+                            enter_cfg.shop.human_max_gold,
                         );
                     } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                         // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -53802,6 +53878,11 @@ SendRefMsgRange=15
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             Some(&env),
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -53928,6 +54009,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 100,
@@ -53958,6 +54044,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 200,
@@ -54108,6 +54199,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
@@ -54345,6 +54441,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -54472,6 +54573,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -55502,6 +55608,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -71132,6 +71243,11 @@ SendRefMsgRange=15
                 None,
                 &game_svr::npc::NpcVars::default(),
                 Some(&env),
+                &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
             );
         };
         let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
@@ -71358,6 +71474,11 @@ SendRefMsgRange=15
             None,
             &game_svr::npc::NpcVars::default(),
             Some(&env),
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -93357,6 +93478,11 @@ GMEXECUTE f
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let frames = sendmsg_drain(&mut rx0);
         let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
@@ -93900,6 +94026,11 @@ GMEXECUTE f
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             None,
+            &crate::winlottery::WinLotteryShared::new(
+                crate::config::WinLotteryCfg::default().init_state(),
+            ),
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
         );
         let frames = sendmsg_drain(&mut rx1);
         let other_sys: Vec<&Vec<u8>> = frames
@@ -97292,6 +97423,333 @@ fn ",
             take7c(&mut rx0).is_empty(),
             "隐藏源不在 online ⇒ 退化自投无人可收 ⇒ 零帧"
         );
+    }
+    /// **IT-16 彩票（StdMode3 / Shape11）宿主级**：线上帧序、金币、进程级计数、恒吃解耦。
+    ///
+    /// oracle `PlayObject.cs:3809-3905`：抽一次 → 6 段（1 等奖为**和式等值**）+ 闸 →
+    /// 中：绿字 + `IncGold`（成功才 `SM_GOLDCHANGED`）；未中/闸闭：`NoWin += 500` + 红字。
+    /// **物品恒被吃**（`case 11: WinLottery(); result=true;`），与中/不中**解耦**。
+    ///
+    /// 抽值不依赖：6 档被配成 `[0, rate-1]`（覆盖全区间 ⇒ 必中 6）。
+    #[test]
+    fn it16_lottery_frame_order_gold_counters_and_always_eaten() {
+        use mir2_protocol::frame::CommandMessage;
+        const SM_EAT_OK: u16 = 635;
+        const SM_GOLDCHANGED: u16 = 653;
+
+        fn forced_six() -> crate::config::WinLotteryCfg {
+            let mut cfg = crate::config::WinLotteryCfg::default();
+            cfg.min[5] = 0;
+            cfg.max[5] = cfg.rate - 1;
+            cfg
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn run_eat(
+            cfg: crate::config::WinLotteryCfg,
+            human_max: i32,
+            lottery: &crate::winlottery::WinLotteryShared,
+            sessions: &mut HashMap<String, SessionGround>,
+            world: &mut mir2_world_bevy::World,
+            rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+            online: &OnlineRegistry,
+            gates: &HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+            catalog: &game_svr::ability::StdItemCatalog,
+            colors: &MsgColors,
+            unbind: &game_svr::unbindlist::UnbindList,
+            item_number: &mut i32,
+            env: &ScriptGmEnv<'_>,
+        ) -> Vec<u16> {
+            // 每相重放一张彩票（前一次已被吃掉）。
+            sessions.get_mut("hero").unwrap().state.item_list = vec![game_svr::bag::BagItem {
+                make_index: 1,
+                index: 2100,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            }];
+            handle_eat_cmd(
+                1,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                online,
+                sessions,
+                gates,
+                catalog,
+                world,
+                colors,
+                90,
+                None,
+                unbind,
+                item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                Some(env),
+                lottery,
+                cfg,
+                human_max,
+            );
+            drain_frames(rx)
+                .iter()
+                .filter_map(|b| CommandMessage::from_bytes(b).map(|m| m.ident))
+                .collect()
+        }
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            2100,
+            mir2_data::StdItem {
+                name: "彩票".into(),
+                std_mode: 3,
+                shape: 11,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 5, 5);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let gmcfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &gmcfg,
+            pwd_sessions: &pwd,
+            host: ScriptGmHost::default(),
+        };
+
+        // ① 中奖（必中 6 档，闸开 0 < 500）：线上帧序 = `SM_EAT_OK(635)` → `SM_GOLDCHANGED(653)`。
+        //    `SM_SYSMESSAGE` 因 `wire.sys_msg: None` 落 `notice_frame → None`（登记丢弃，见 WRN）。
+        let lottery = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg {
+                init_count: 0,
+                init_no_win: 500,
+                init_level: [0; 6],
+                ..forced_six()
+            }
+            .init_state(),
+        );
+        let ids = run_eat(
+            forced_six(),
+            10_000_000,
+            &lottery,
+            &mut sessions,
+            &mut world,
+            &mut rx0,
+            &online,
+            &gates,
+            &catalog,
+            &colors,
+            &unbind,
+            &mut item_number,
+            &env,
+        );
+        // 635 直发先到；泵按 `(byte)ident` 升序：`SM_WEIGHTCHANGED(622←10115→131)`
+        // 恒随每次成功吃出现，先于 `SM_GOLDCHANGED(653←10136→248)`。sysmsg(252) 被缺口丢弃。
+        assert_eq!(
+            ids,
+            vec![SM_EAT_OK, 622, SM_GOLDCHANGED],
+            "中奖：635 直发在前，622/653 泵出在后（金帧序）"
+        );
+        assert_eq!(sessions["hero"].state.gold, 500, "IncGold(500)");
+        assert_eq!(
+            lottery.snapshot(),
+            crate::winlottery::WinLotteryState {
+                count: 0,
+                no_win: 500,
+                level: [0, 0, 0, 0, 0, 1]
+            },
+            "6 等奖 +1；`WinLotteryCount` 无写点；未中计数不动"
+        );
+
+        // ② 闸闭（0 < 0 取假）：**物品仍被吃**（635 在），只是表现为未中（NoWin += 500）。
+        let closed = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg {
+                init_count: 0,
+                init_no_win: 0,
+                init_level: [0; 6],
+                ..forced_six()
+            }
+            .init_state(),
+        );
+        sessions.get_mut("hero").unwrap().state.gold = 0;
+        let ids = run_eat(
+            forced_six(),
+            10_000_000,
+            &closed,
+            &mut sessions,
+            &mut world,
+            &mut rx0,
+            &online,
+            &gates,
+            &catalog,
+            &colors,
+            &unbind,
+            &mut item_number,
+            &env,
+        );
+        assert_eq!(
+            ids,
+            vec![SM_EAT_OK, 622],
+            "闸闭：物品恒吃（635+622）但无 653；红字被文本缺口丢弃"
+        );
+        assert_eq!(sessions["hero"].state.gold, 0, "闸闭不加钱");
+        assert_eq!(
+            closed.snapshot(),
+            crate::winlottery::WinLotteryState {
+                count: 0,
+                no_win: 500,
+                level: [0; 6]
+            },
+            "闸闭 = 未中：NoWin += 500、等级不动"
+        );
+
+        // ③ `IncGold` 失败（超 `HumanMaxGold`）：**绿字照发**（oracle bug 复制）、
+        //    **不发** `SM_GOLDCHANGED`、金币不变、等级照加。
+        let ok = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg {
+                init_count: 0,
+                init_no_win: 500,
+                init_level: [0; 6],
+                ..forced_six()
+            }
+            .init_state(),
+        );
+        sessions.get_mut("hero").unwrap().state.gold = 9_999_900;
+        let ids = run_eat(
+            forced_six(),
+            10_000_000,
+            &ok,
+            &mut sessions,
+            &mut world,
+            &mut rx0,
+            &online,
+            &gates,
+            &catalog,
+            &colors,
+            &unbind,
+            &mut item_number,
+            &env,
+        );
+        assert_eq!(ids, vec![SM_EAT_OK, 622], "IncGold 失败：无 653");
+        assert_eq!(
+            sessions["hero"].state.gold, 9_999_900,
+            "IncGold 失败不加钱（oracle 原样）"
+        );
+        assert_eq!(
+            ok.snapshot().level,
+            [0, 0, 0, 0, 0, 1],
+            "等级递增在 IncGold 之前（oracle 原样）"
+        );
+
+        // ④ 非彩票物品不吃彩票路：Shape9 修复油（无武器）⇒ 只落 636，计数与金币不动。
+        let untouched = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg {
+                init_count: 0,
+                init_no_win: 500,
+                init_level: [0; 6],
+                ..forced_six()
+            }
+            .init_state(),
+        );
+        catalog.insert(
+            2101,
+            mir2_data::StdItem {
+                name: "修复油".into(),
+                std_mode: 3,
+                shape: 9,
+                ..Default::default()
+            },
+        );
+        sessions.get_mut("hero").unwrap().state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 1,
+            index: 2101,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let before_gold = sessions["hero"].state.gold;
+        handle_eat_cmd(
+            1,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            90,
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            Some(&env),
+            &untouched,
+            forced_six(),
+            10_000_000,
+        );
+        let ids: Vec<u16> = drain_frames(&mut rx0)
+            .iter()
+            .filter_map(|b| CommandMessage::from_bytes(b).map(|m| m.ident))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![636],
+            "非 Shape11：不吃彩票路（修复油无武器 ⇒ 636）"
+        );
+        assert_eq!(
+            untouched.snapshot(),
+            crate::winlottery::WinLotteryState {
+                count: 0,
+                no_win: 500,
+                level: [0; 6]
+            },
+            "非彩票物品不得动彩票计数"
+        );
+        assert_eq!(sessions["hero"].state.gold, before_gold);
     }
 }
 

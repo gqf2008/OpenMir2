@@ -77,7 +77,7 @@
 //!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
 //!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（用户可见）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`；
 //!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case10，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 10` 臂；见卡 §9.10；**无"已满"守卫 ⇒ 已满仍吃**）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（用户可见，同 IT-14）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`；
-//!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`；`Config.WinLotteryLevel1..6` 本仓已有该组字段）——未实现，T-17。
+//!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`）——**已实现**（本模块只置 `eaten=true`；抽取/6 段闸/金币/进程级计数在宿主 `handle_eat_cmd`，见 `winlottery` 模块头与卡 §9.11）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（`WinLotteryNMsg`/`NotWinLotteryMsg`）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`。
 //!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
 //! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
 //!   `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时移除本件并解包 6 件
@@ -114,6 +114,9 @@ pub const SM_EAT_FAIL: u16 = 636;
 pub const RM_MENU_OK: i32 = 10309;
 /// `RM_SYSMESSAGE`（`src/OpenMir2/Messages.cs:646`）。
 pub const RM_SYSMESSAGE: i32 = 11004;
+/// `RM_GOLDCHANGED`（`src/OpenMir2/Messages.cs`）：`GoldChanged()` 入队的那条；
+/// IT-16 彩票中奖的 `SM_GOLDCHANGED(653)` 经此出帧。
+pub const RM_GOLDCHANGED: i32 = mir2_protocol::messages::RM_GOLDCHANGED as i32;
 /// `RM_DURACHANGE`（`Messages.cs` 10125；修复油 `RepairWeapon` 的 `SendMsg(RM_DURACHANGE,1,Dura,DuraMax,0)`）。
 pub const RM_DURACHANGE: i32 = 10125;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
@@ -468,7 +471,7 @@ pub fn use_item(
                             // StdMode 3：oracle `EatItems` 的 case 3（`PlayObject.Base.cs:2099`，受 `boNODRUG` 门，已在上方）。
                             // **IT-08**：`Shape 13 → GetExp(DuraMax)`，本片实现**非升级支**（Exp+= / AddBodyLuck(dwExp*0.002) /
                             // RM_WINEXP）；**升级支**（`Exp>=MaxExp → GetLevelExp/RecalcLevelAbilitys/SM_LEVELUP/…`）**未实现**，登记 T-17。
-                            // IT-07（Shape12 ExtraAbil×6）与 default → EatUseItems（IT-09..16 move 组）亦未实现。
+                            // IT-07（Shape12 ExtraAbil×6）与 default → EatUseItems（IT-09/10/11/13 move 组等）亦未实现。
                             3 if tpl.shape == 13 => {
                                 // `GetExp`（`PlayObject.Base.cs:149-166`）非升级支：**不改 `WAbil.Exp`**
                                 //（oracle 后 WAbil 陈旧），经验增量经 `Outcome.exp_delta` 交宿主落基础 `sg.equip.abil.exp`。
@@ -539,6 +542,13 @@ pub fn use_item(
                                         eaten = true;
                                     }
                                 }
+                            }
+                            // **IT-16** `Shape 11` 彩票：`EatUseItems` case 11（`PlayObject.Base.cs:2298`）
+                            // → `WinLottery()`。**物品恒被吃**（`case 11: WinLottery(); result=true;`），
+                            // 与中/不中**解耦**；抽取/金币/进程级计数在宿主 `handle_eat_cmd`
+                            // （见 `winlottery` 模块头）。本臂只置 `eaten`。
+                            3 if tpl.shape == 11 => {
+                                eaten = true;
                             }
                             _ => {}
                         }
