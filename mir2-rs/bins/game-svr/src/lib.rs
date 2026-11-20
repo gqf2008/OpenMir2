@@ -3198,6 +3198,30 @@ fn apply_gm_use_item_write(
     }
     // `:60` `RecalcAbilitys()`（同一份生产实现）。
     recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
+    // **卡 `openmir2-charstatuschanged-wiring` #2**：oracle `SmakeItemCommand`
+    // （`src/Modules/GameCommand/Commands/SmakeItemCommand.cs:60`）内的
+    // `PlayerActor.RecalcAbilitys()` 无条件发 657（自 + 观察者）。发在**做重算的这个函数里**，
+    // 不交给调用方决定；返回值形状不变。帧内序偏差登记 **T-288**（657 先于调用方发出的 203；
+    // 本路径仅 GM 可达、现网权限恒 0）。
+    let char_status = world.get_char_status(actor);
+    let hit_speed = sg.hit_speed;
+    if let Some(entry) = online.iter().find(|e| e.actor_id == actor) {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor, char_status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "657(GM 改属性)") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    }
+    broadcast_charstatuschanged_except_self(
+        world,
+        online,
+        gates,
+        actor,
+        char_status,
+        chat::send_ref_msg_range(),
+    );
     // `:61` `SendUpdateItem`：模板缺失 ⇒ oracle 不发帧（`if (stdItem != null)`）。
     let tpl = catalog.get(w.index)?;
     let (owned, _) = game_svr::bag::upgrade_std_item(tpl, &w.desc);
@@ -19180,7 +19204,6 @@ fn drain_levelup_healthspell_with_magic(
             magic_recalc,
             Some(&mut world.rng),
         );
-        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
         // T-290：oracle `HasLevelUp` 内的 `RecalcAbilitys()` 发 657；本宿主**入队**（155），
         // 由 `drain_kill_exp_chain_with_magic` 在链末尾出队 ⇒ 排在 53/44/45/52/752 之后。
         // `status` 在此刻取（`PlayObject.cs:2873` 的时点），出队时不重算。
