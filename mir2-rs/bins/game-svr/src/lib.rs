@@ -18820,6 +18820,34 @@ fn drain_buff_downlink(
                 body,
             });
         }
+        // **`boNeedRecalc` 的 657（2026-11-20，`card/657-buff`）**：oracle `RecalcAbilitys()` 尾段
+        // （`src/M2Server/Player/PlayObject.cs:2851-2876`）在 `Race == Play` 时**无条件**
+        // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
+        // ⇒ 自见 2 条 + 观察者各 1 条；帧 `Series` 取**收件人自己**的 `HitSpeed`。
+        // 入队 657(155) 晚于 52(67) ⇒ 线上 **52 先、657 后**（本宿主 52 是直发，657 排其后）。
+        let status = world.get_char_status(*actor_id);
+        let self_hit_speed = world.entities.get(*actor_id).map_or(0, |e| e.hit_speed);
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            *actor_id,
+            status,
+            self_hit_speed,
+            range,
+            "buff 重算 657",
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 重算 657 自更新")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: game_svr::smframe_ext::sm_charstatuschanged(
+                    *actor_id,
+                    status,
+                    self_hit_speed,
+                ),
+            });
+        }
     }
     for (actor_id, status) in &rec.buff_status_changes {
         if let Some(mut d) = displays.get(*actor_id).cloned() {
@@ -34080,8 +34108,8 @@ mod tests {
             .collect();
         assert_eq!(
             cs.len(),
-            1,
-            "恰一条 SM_CHARSTATUSCHANGED(657)；实得 {msgs:?}"
+            2,
+            "自见 2 条 657（oracle `StatusChanged()` 回环 + `SendUpdateMsg` 去重不命中，`src/M2Server/Player/PlayObject.cs:2851-2876`）；实得 {msgs:?}"
         );
         assert_eq!(cs[0].recog, hero, "Recog = ActorId");
         assert_eq!(
@@ -34180,9 +34208,12 @@ mod tests {
             vec![
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE,
             ],
-            "线序必须 52 → 657 → 100（队列优先级 67 < 155 < 252）；实得 {idents:?}"
+            "线序 52 → 657×4 → 100（67 < 155 < 252）；4 条 = recalcs 支 2 + status_changes 支 2；实得 {idents:?}"
         );
 
         // 52 = 当前 WAbil 的整帧（重算数值不变；映射 gold/job/game_gold/tail）。
@@ -34199,7 +34230,15 @@ mod tests {
         );
 
         // 100 逐字节：Recog=自己、Param=MakeWord(绿F,绿B)、Series=1、尾=EncodeString(文案)。
-        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[2]).unwrap();
+        // （按 ident 定位，不钉下标——657 的条数会随重算/状态支组合变化。）
+        let sm_idx = frames
+            .iter()
+            .position(|b| {
+                mir2_protocol::frame::CommandMessage::from_bytes(b)
+                    .is_some_and(|m| m.ident == mir2_protocol::messages::SM_SYSMESSAGE)
+            })
+            .expect("必须有 SM_SYSMESSAGE(100)");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[sm_idx]).unwrap();
         assert_eq!(cm.ident, mir2_protocol::messages::SM_SYSMESSAGE);
         assert_eq!(cm.recog, hero, "Recog = 自己的 ActorId");
         assert_eq!(
@@ -34208,12 +34247,182 @@ mod tests {
             "Param = MakeWord(GreenF=0xDB, GreenB=0xFF)"
         );
         assert_eq!(cm.series, 1, "Series = 1");
-        let tail = mir2_protocol::edcode::decode(&frames[2][12..]);
+        let tail = mir2_protocol::edcode::decode(&frames[sm_idx][12..]);
         assert_eq!(
             String::from_utf8_lossy(&tail),
             "防御力回复正常.",
             "文案按 oracle `:191`（Hint 支不拼前缀）"
         );
+    }
+
+    /// **657 牙 ①（`boChg` 修复）：自见 2 条 + 观察者逐收件人 `Series`**。
+    ///
+    /// oracle handler 的 `Series` 取**收件人自己**出队时的 `HitSpeed`
+    /// （`src/M2Server/Player/PlayObject.Message.cs:1845-1847`）；夹具：源 `hit_speed=7`，
+    /// 观察者 +5/+11/+12 各 `20/21/22`、+13 超 range。
+    /// 红检：退回 `broadcast_ref_msg_with_self(&[body])` 单 body（`Series` 固定 0）⇒ 观察者断言全红；
+    /// 删第二自见副本 ⇒ 自见条数红。
+    #[test]
+    fn buff_657_bochg_series_is_per_recipient_hit_speed() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let status: i32 = 0x8000_0002u32 as i32;
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_status_changes.push((actor, status));
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut per: std::collections::HashMap<i32, Vec<mir2_protocol::frame::CommandMessage>> =
+            std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                if m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED {
+                    per.entry(socket).or_default().push(m);
+                }
+            }
+        }
+        let self_frames = per.get(&901).expect("自见必须有 657");
+        assert_eq!(
+            self_frames.len(),
+            2,
+            "自见 2 条（StatusChanged + SendUpdateMsg）"
+        );
+        for m in self_frames {
+            assert_eq!(m.recog, actor, "Recog = 源 ActorId");
+            assert_eq!(m.series, 7, "自见 Series = 源自己 hit_speed");
+        }
+        for (socket, speed) in [(902i32, 20u16), (903, 21), (904, 22)] {
+            let f = per
+                .get(&socket)
+                .unwrap_or_else(|| panic!("socket {socket} 必须收到 657"));
+            assert_eq!(f.len(), 1, "socket {socket} 恰 1 条（观察者副本）");
+            assert_eq!(
+                f[0].series, speed,
+                "socket {socket} 的 Series = 该收件人自己的 hit_speed"
+            );
+        }
+        assert!(per.get(&905).is_none(), "+13 超 SendRefMsgRange ⇒ 零帧");
+    }
+
+    /// **657 牙 ②（opc-19 追加）：三个收件人三个**不同** HitSpeed（3/7/9）——防"两人里恰好一个 0"的巧合。
+    #[test]
+    fn buff_657_bochg_three_recipients_distinct_series() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        // 把 +5/+11/+12 三个观察者改成 3/7/9（全非 0 且互异）。
+        let obs: Vec<i32> = online
+            .iter()
+            .filter(|e| e.actor_id != actor)
+            .map(|e| e.actor_id)
+            .collect();
+        for (i, id) in obs.iter().take(3).enumerate() {
+            let v = [3u16, 7, 9][i];
+            if let Some(e) = world.entities.get_mut(*id) {
+                e.vitals.hit_speed = v;
+            }
+        }
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_status_changes.push((actor, 0x8000_0002u32 as i32));
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut series: std::collections::HashMap<i32, u16> = std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                if m.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED && socket != 901 {
+                    series.insert(socket, m.series);
+                }
+            }
+        }
+        assert_eq!(series.len(), 3, "+5/+11/+12 三人各一条（+13 超 range）");
+        let vals: Vec<u16> = series.values().copied().collect();
+        assert!(
+            vals.contains(&3) && vals.contains(&7) && vals.contains(&9),
+            "三个收件人各自 Series 必须是对应自己的 3/7/9；实得 {vals:?}"
+        );
+    }
+
+    /// **657 牙 ③（`boNeedRecalc` 接线）**：`RecalcAbilitys` 尾的 657 必须 **52 之后**发，
+    /// 自见 2 条、观察者各 1 条且逐收件人 `Series`。
+    #[test]
+    fn buff_657_needrecalc_after_ability_and_per_recipient() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("src".into(), test_session_ground(actor));
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_recalcs.push(actor);
+        drain_buff_downlink(
+            &rec,
+            &mut world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut self_idents: Vec<u16> = Vec::new();
+        let mut self_series: Vec<u16> = Vec::new();
+        let mut obs: std::collections::HashMap<i32, u16> = std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(m) = mir2_protocol::frame::CommandMessage::from_bytes(&body) {
+                match (socket, m.ident) {
+                    (901, id) if id == mir2_protocol::messages::SM_ABILITY => self_idents.push(id),
+                    (901, id) if id == mir2_protocol::messages::SM_CHARSTATUSCHANGED => {
+                        self_idents.push(id);
+                        self_series.push(m.series);
+                    }
+                    (_, id) if id == mir2_protocol::messages::SM_CHARSTATUSCHANGED => {
+                        obs.insert(socket, m.series);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            self_idents,
+            vec![
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "自见线序：52(67) 先、657(155) 后，且 657 共 2 条"
+        );
+        assert_eq!(self_series, vec![7, 7], "自见 Series = 源自己 hit_speed");
+        for (socket, speed) in [(902i32, 20u16), (903, 21), (904, 22)] {
+            assert_eq!(
+                obs.get(&socket),
+                Some(&speed),
+                "socket {socket} 的 657 Series = 该收件人自己的 hit_speed"
+            );
+        }
+        assert!(!obs.contains_key(&905), "+13 超 range");
     }
 
     /// **A3 负例（同卡）**：① `StateTick==10` 的预告文案（`魔法防御力10秒后恢复正常。`）
