@@ -1111,6 +1111,47 @@ fn real_rust_ledger_lightflower() {
     );
 }
 
+/// **`40`（`SKILL_UNAMYOUNSUL`）**真实台账 → 判定面（四支分支矩阵，卡 §34）。
+///
+/// 除常规帧面/RM/RNG 比较外，**三态计时器前后值三处逐值比**：golden `Fixture.status_time_arr`
+/// ↔ 台账 `StatusTimeArrBefore`、golden case `StatusTimeArr` ↔ 台账 `StatusTimeArrAfter`
+/// （术后值由装置侧与驱动侧各自从"门结果 + 术前值"独立推导，不比实现）。
+#[test]
+#[ignore = "需先跑 game-svr 四支驱动（tests::unamyounsul_parity_*）生成真实台账"]
+fn real_rust_ledger_unamyounsul() {
+    let labels = [
+        "gate_open_all",
+        "gate_closed_all",
+        "gate_open_zero",
+        "gate_open_mixed",
+    ];
+    let golden = golden_file("unamyounsul.json");
+    real_ledger_verify_labels("unamyounsul", &golden, &labels);
+    let dir = ledger_dir();
+    for label in labels {
+        let g = golden["cases"]
+            .as_array()
+            .expect("golden.cases")
+            .iter()
+            .find(|c| c["Label"] == label)
+            .unwrap_or_else(|| panic!("golden 缺 {label} 支"))
+            .clone();
+        let path = dir.join(format!("unamyounsul_{label}.json"));
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("缺真实台账 {}（{e}）", path.display()));
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        let c = &v[0];
+        assert_eq!(
+            c["StatusTimeArrBefore"], g["Fixture"]["status_time_arr"],
+            "[{label}] 三态术前值必须等于 golden Fixture.status_time_arr"
+        );
+        assert_eq!(
+            c["StatusTimeArrAfter"], g["StatusTimeArr"],
+            "[{label}] 三态术后值必须等于 golden StatusTimeArr"
+        );
+    }
+}
+
 /// **`19 集体隐身术`（`SKILL_BIGCLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::big_cloak_parity_*）生成真实台账"]

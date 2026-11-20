@@ -677,7 +677,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】"
     },
     {
       "id": "MG-28",
@@ -1158,17 +1158,28 @@
         "line": 495,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_unamyounsul",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/unamyounsul.json（C# oracle 生成；四支分支矩阵，PoisonStates 显式输入）",
+        "cases": [
+          "gate_open_all(seed=14)",
+          "gate_closed_all(seed=11)",
+          "gate_open_zero(seed=14)",
+          "gate_open_mixed(seed=14)"
+        ],
+        "unit_tests": [
+          "tests::unamyounsul_parity_gate_open_all",
+          "tests::unamyounsul_parity_gate_closed_all",
+          "tests::unamyounsul_parity_gate_open_zero",
+          "tests::unamyounsul_parity_gate_open_mixed"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_UNAMYOUNSUL`：Random(7) 门 + 三态计时器非零项置 1；夹具契约扩展（PoisonStates 输入 / status_time_arr 前后输出，schema v2 向后兼容）；**断言只到 DoSpell 时刻**（清毒生效在 Run，另案）。卡 §34。",
+      "basis": "semantic"
     },
     {
       "id": "MG-47",

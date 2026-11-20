@@ -148,6 +148,8 @@ public static class Program
             if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
             if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" });
+            // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
+            if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
@@ -929,6 +931,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public OpenMir2.Enums.PlayerJob Job = OpenMir2.Enums.PlayerJob.Warrior;
         /// <summary>`construction.equipment`（本批一律空：无装备登录序）。</summary>
         public string[] Equipment = Array.Empty<string>();
+        /// <summary>
+        /// **三态计时器输入**（`DECHEALTH/DAMAGEARMOR/STONE` 的初始值）。`null` = 本支不涉及状态分支；
+        /// **走到状态分支的用例必须显式给**（不靠缺省 0 静默通过）。非零初值取 ≥2 且互不相同，
+        /// 否则"置 1"前后同值、观测不到。
+        /// </summary>
+        public int[] PoisonStates;
         /// <summary>`construction.skills`（本批写魔号名）。</summary>
         public string[] Skills = Array.Empty<string>();
         /// <summary>`scenario_note`（`login_order=false` 必填）。</summary>
@@ -1252,6 +1260,55 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return ok ? 0 : 1;
     }
 
+    /// <summary>
+    /// `--case unamyounsul`：40 的四支分支矩阵（卡 §34）。
+    ///
+    /// 门 = `Random(7) - (UserMagicLevel + 1) &lt; 0`（Level=1 ⇒ 首抽 &lt; 2 为开）；
+    /// 非零初值取 **5/6/7 互不相同**（"置 1"前后可辨）。四支：
+    /// **边界（§26）**：断言只到 DoSpell 时刻——`StatusTimeArr` 归 1 不等于"解毒生效"（清除发生在 Run）。
+    /// `gate_open_all`（开+全非零 ⇒ 全归 1）、`gate_closed_all`（关+全非零 ⇒ 不动）、
+    /// `gate_open_zero`（开+全零 ⇒ 不动）、`gate_open_mixed`（开+混合 ⇒ 仅非零项归 1）。
+    /// 术后值由 `RunMagicCase` 内按"门结果+术前值"独立推导并断言（不拿实现输出自证）。
+    /// </summary>
+    private static int UnamyounsulBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int seedOpen = FindSeedForFirstDraw(7, 0);
+        int seedClosed = FindSeedForFirstDraw(7, 3);
+        if (seedOpen < 0 || seedClosed < 0)
+        {
+            Console.Error.WriteLine("SEED_SCAN_FAILED");
+            return 1;
+        }
+        int[] nonzero = { 5, 6, 7 };
+        int[] zero = { 0, 0, 0 };
+        int[] mixed = { 5, 0, 7 };
+        spec.PoisonStates = nonzero;
+        var c1 = RunMagicCase(spec, "gate_open_all", seedOpen, 1000, spec.TargetMaxHp, false);
+        var c2 = RunMagicCase(spec, "gate_closed_all", seedClosed, 2000, spec.TargetMaxHp, false);
+        spec.PoisonStates = zero;
+        var c3 = RunMagicCase(spec, "gate_open_zero", seedOpen, 3000, spec.TargetMaxHp, false);
+        spec.PoisonStates = mixed;
+        var c4 = RunMagicCase(spec, "gate_open_mixed", seedOpen, 4000, spec.TargetMaxHp, false);
+        return EmitGolden(spec, new[] { c1, c2, c3, c4 });
+    }
+
+    /// <summary>把三态计时器输入挂到 `Fixture`（只在显式给了 `PoisonStates` 时出现，保持既有件零变化）。</summary>
+    private static object AttachStatusTimeArr(object fixture, object status)
+    {
+        if (status == null)
+        {
+            return fixture;
+        }
+        var node = JsonSerializer.SerializeToNode(fixture)!.AsObject();
+        node["status_time_arr"] = JsonSerializer.SerializeToNode(status);
+        return node;
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -1328,6 +1385,25 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // `WAbil.HP/MaxHP`（`PlayObject.Message.cs:2009-2011`），少了这一步 MaxHP 会是 ctor 的 0。
         target.RecalcAbilitys();
         target.DrainRaw();
+        // **三态计时器输入**（状态/辅助族，卡 §34）：只有显式给了 `PoisonStates` 的支才写；
+        // 写入是纯状态赋值（不入队、不产生帧），且在 RNG/DoSpell 之前 ⇒ 不影响既有支。
+        if (spec.PoisonStates != null)
+        {
+            if (spec.PoisonStates.Length != 3)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}] PoisonStates 必须是 3 元（DECHEALTH/DAMAGEARMOR/STONE）");
+            }
+            target.StatusTimeArr[OpenMir2.Consts.PoisonState.DECHEALTH] = (ushort)spec.PoisonStates[0];
+            target.StatusTimeArr[OpenMir2.Consts.PoisonState.DAMAGEARMOR] = (ushort)spec.PoisonStates[1];
+            target.StatusTimeArr[OpenMir2.Consts.PoisonState.STONE] = (ushort)spec.PoisonStates[2];
+        }
+        int[] statusBefore = new[]
+        {
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.DECHEALTH],
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.DAMAGEARMOR],
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.STONE],
+        };
         // **驱动输入（输入/输出语义）**：这四个值在「target 构造完成、RNG/DoSpell 之前」捕获并写入
         // `Fixture`——`2d` 的驱动用它们设 target 初始状态。术后状态（如受击后的 HP）只留在结果顶层
         // `TargetHp`，**不得**回写成 `Fixture` 输入（否则驱动会从术后值起手）。
@@ -1543,6 +1619,30 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             ? BuildSeedReason(draws[0], seed, branchExpect)
             : null;
         int hpAfter = target.WAbil.HP;
+        // **三态计时器的术后值必须由"门结果 + 术前值"独立推出**（不拿实现输出自证）：
+        // 门开 ⇒ 非零项置 1、零项不动；门关 ⇒ 一律不动。首抽即门骰（本支此前零抽）。
+        int[] statusAfter = new[]
+        {
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.DECHEALTH],
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.DAMAGEARMOR],
+            (int)target.StatusTimeArr[OpenMir2.Consts.PoisonState.STONE],
+        };
+        if (spec.PoisonStates != null)
+        {
+            bool gateOpen = draws.Count > 0 && draws[0] - (spec.UserMagicLevel + 1) < 0;
+            int[] expectAfter = new int[3];
+            for (int i = 0; i < 3; i++)
+            {
+                expectAfter[i] = gateOpen && statusBefore[i] != 0 ? 1 : statusBefore[i];
+            }
+            if (!statusAfter.SequenceEqual(expectAfter))
+            {
+                throw new FixtureContractViolation(
+                    $"[runmagic/{spec.Key}/{label}] status_time_arr 术后值不可由门结果推导："
+                    + $"before=[{string.Join(",", statusBefore)}] after=[{string.Join(",", statusAfter)}] "
+                    + $"gate_open={gateOpen}（期望 after=[{string.Join(",", expectAfter)}]）");
+            }
+        }
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)
         {
@@ -1550,7 +1650,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         }
         return new FireballResult
         {
-            Fixture = new
+            Fixture = AttachStatusTimeArr(new
             {
                 magic_id = spec.MagicId,
                 magic_name = spec.MagicName,
@@ -1608,7 +1708,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
                 sockets = new[] { 911, 912, 913, 914 },
-            },
+            }, spec.PoisonStates == null
+                ? null
+                : (object)new
+                {
+                    dechealth = statusBefore[0],
+                    damagearmor = statusBefore[1],
+                    stone = statusBefore[2],
+                }),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -1620,6 +1727,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             TargetHpBefore = hpBefore,
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
+            StatusTimeArr = spec.PoisonStates == null
+                ? null
+                : (object)new
+                {
+                    dechealth = statusAfter[0],
+                    damagearmor = statusAfter[1],
+                    stone = statusAfter[2],
+                },
         };
     }
 
@@ -1728,4 +1843,7 @@ public sealed class FireballResult
     public int TargetHpBefore { get; set; }
     public List<object> NotDue { get; set; }
     public int CasterMp { get; set; }
+    /// <summary>三态计时器术后值（只有显式给了 `PoisonStates` 的支才有；`null` 时不落盘）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object StatusTimeArr { get; set; }
 }

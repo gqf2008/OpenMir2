@@ -6242,6 +6242,9 @@ impl World {
 
     /// **P3-B3**：40 `SKILL_UNAMYOUNSUL`（常量名解毒术；部署行「十方斩」= `MagicManager.cs:495-523`）。
     ///
+    /// **边界（§26）**：本函数只把计时器值置 1（DoSpell 时刻）；真正"解毒生效/清除"发生在 `Run`
+    /// 的计时器处理 —— 对拍断言只到 DoSpell 时刻，不得外推为"毒被清掉"。
+    ///
     /// `IsProperFriend` 失败 ⇒ 零抽。`R(7) - (Level+1) < 0` 过门后：三个计时器
     /// `DECHEALTH/DAMAGEARMOR/STONE` 各自 `!= 0 ⇒ 置 1` 并 `boTrain = true`（**不是清 0**）。
     #[must_use]
