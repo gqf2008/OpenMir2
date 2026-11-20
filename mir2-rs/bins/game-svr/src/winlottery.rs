@@ -323,6 +323,43 @@ mod tests {
         assert_eq!(st.no_win, 1_000);
     }
 
+    /// **跨调用累积**：同一 `WinLotteryShared`（进程级实例，`run_inner` 创建、跨 `handle_eat_cmd`
+    /// 存活）连续两次命中同一档，`level[5]` 必须 1 → 2、两次都 `Won`、`no_win` 不变。
+    ///
+    /// 依据：oracle `PlayObject.cs:3813-3875` 的六档链内 **`:3820 WinLotteryLevel6++` 每次调用都执行**
+    /// （与 gold/IncGold 无关）——这是"第二次命中 ⇒ level=2"的代码事实。
+    /// **证据强度**：oracle 源码直读，**非夹具对拍**（eat-probe 每例只调一次 `ClientUseItems`）。
+    /// §43 三问：观测值 `level[5]` 随"调用次数"变化（第 1 次=1、第 2 次=2），两侧均可观测，非退化区间。
+    #[test]
+    fn level_accumulates_across_calls() {
+        let mut c = deploy_cfg();
+        c.max[5] = 20_000; // 6 档覆盖 15000（同 `bands_are_checked_six_first_then_down`）
+        let shared = WinLotteryShared::new(open_state());
+        let out1 = shared.with(|st| win_lottery(&mut FixedRng(15_000), &c, st));
+        assert_eq!(
+            out1,
+            WinLotteryOutcome::Won {
+                level: 6,
+                gold: 500
+            },
+            "第一次命中 6 档：gold=该档奖金"
+        );
+        assert_eq!(shared.snapshot().level[5], 1, "第一次命中后 level[5]=1");
+        let out2 = shared.with(|st| win_lottery(&mut FixedRng(15_000), &c, st));
+        assert_eq!(
+            out2,
+            WinLotteryOutcome::Won {
+                level: 6,
+                gold: 500
+            },
+            "第二次仍命中同档：gold 仍按该档加"
+        );
+        let st = shared.snapshot();
+        assert_eq!(st.level[5], 2, "第二次命中后 level[5]=2（跨调用累积）");
+        assert_eq!(st.no_win, 500, "中奖不加 no_win");
+        assert_eq!(st.count, 0, "count 无写点");
+    }
+
     #[test]
     fn init_state_maps_all_eight_keys_without_shift() {
         // 逐键映射牙：8 个键取互不相同的值；任何漏映/错位（尤其 1↔6 等奖交换）都会改变数组。
