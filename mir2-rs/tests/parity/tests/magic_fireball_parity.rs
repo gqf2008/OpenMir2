@@ -721,6 +721,34 @@ fn sort_sm_ident(v: &mut Value, ident: i64) {
 }
 
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
+    real_ledger_verify_labels_opts(stem, golden, labels, false)
+}
+
+/// 删掉 `Receivers` 里 `Sent` 为**空数组**的收件人。
+///
+/// 台账只登记**有帧**的收件人；金标准对"零帧对象"（如 `holyshield` 的两只怪 `mon0/mon1`）
+/// 留一条空 `Sent`。两侧都删空表再 `verify`，否则接收者数必然不等——**不是**放宽判据：
+/// 空表没有任何帧可比，非空表的字段仍逐帧严格比较。
+fn strip_empty_receivers(v: &mut Value) {
+    if let Some(cases) = v.get_mut("cases").and_then(Value::as_array_mut) {
+        for c in cases {
+            if let Some(rec) = c.get_mut("Receivers").and_then(Value::as_array_mut) {
+                rec.retain(|r| {
+                    r.get("Sent")
+                        .and_then(Value::as_array)
+                        .is_some_and(|a| !a.is_empty())
+                });
+            }
+        }
+    }
+}
+
+fn real_ledger_verify_labels_opts(
+    stem: &str,
+    golden: &Value,
+    labels: &[&str],
+    drop_empty_receivers: bool,
+) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
@@ -774,14 +802,18 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     // artifact（§29），不是语义序；宿主把 RM_SPELL 直发、不进 SpellFrameBuf，无法复现「带 17 时
     // 221 组的 tie 序」。仅 groupdeding 对 SM_716 组做多重集比较（逐帧字段仍严格）；其余 SM 与
     // 其他魔号仍严格按序。
+    let mut g = golden.clone();
+    let mut r = rust;
+    if drop_empty_receivers {
+        strip_empty_receivers(&mut g);
+        strip_empty_receivers(&mut r);
+    }
     let result = if stem == "groupdeding" {
-        let mut g = golden.clone();
-        let mut r = rust.clone();
         sort_sm_ident(&mut g, 716);
         sort_sm_ident(&mut r, 716);
         verify(&g, &r)
     } else {
-        verify(golden, &rust)
+        verify(&g, &r)
     };
     if let Err(errs) = result {
         panic!(
@@ -1150,6 +1182,50 @@ fn real_rust_ledger_uenhancer() {
     real_ledger_verify_labels(
         "uenhancer",
         &golden_file("uenhancer.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+/// **`MG-23 holyshield(16)`** 真实台账 → 判定面。四支：两条门禁负例 + 部分命中 + 全命中
+/// （帧集合退化必须与金标准逐条一致）。驱动：`tests::holyshield_parity_*`（§16c 需各自独立进程）。
+#[test]
+#[ignore = "需先跑 game-svr 四支驱动（tests::holyshield_parity_*）生成真实台账"]
+fn real_rust_ledger_holyshield() {
+    // 该 stem 的金标准含**零帧收件人**（`mon0`/`mon1`）；台账只登记有帧的收件人 ⇒
+    // 两侧都删空表再比（见 `strip_empty_receivers`；非空帧仍逐帧严格比较）。
+    real_ledger_verify_labels_opts(
+        "holyshield",
+        &golden_file("holyshield.json"),
+        &[
+            "mon_hit_two",
+            "mon_blocked_level",
+            "mon_blocked_master",
+            "mon_partial",
+        ],
+        true,
+    );
+}
+
+/// **`MG-49 grouplightening(42)`** 真实台账 → 判定面（三 seed）。target 侧含
+/// **53 = `SM_HEALTHSPELLCHANGED`**：驱动内钉 `MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ 发的是 oracle
+/// header-only 12B（不带 16B 客户端尾）⇒ 全帧比较在这里是对的（生产 client 布局带尾，已登记偏差）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::grouplightening_parity_s*）生成真实台账"]
+fn real_rust_ledger_grouplightening() {
+    real_ledger_verify_labels(
+        "grouplightening",
+        &golden_file("grouplightening.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+/// **`MG-50 groupamyounsul(48)`** 真实台账 → 判定面（三 seed，逐目标护身符 + 毒伤）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::groupamyounsul_parity_s*）生成真实台账"]
+fn real_rust_ledger_groupamyounsul() {
+    real_ledger_verify_labels(
+        "groupamyounsul",
+        &golden_file("groupamyounsul.json"),
         &["s1", "s5", "s13"],
     );
 }

@@ -73152,6 +73152,149 @@ SendRefMsgRange=15
         unamyounsul_assert("gate_open_mixed", 4000);
     }
 
+    /// **逐收件人帧序列 == 金标准**（`MG-23/49/50` 接线用）。
+    ///
+    /// 比 `(ident, param, tag, series)` 的**有序序列**、逐 `Who`：帧集合退化（门禁负例/部分命中）
+    /// 会直接反映成"某收件人少几条"，比"总帧数"有区分力。`tail` 不在本断言内——那是比较器
+    /// `real_ledger_verify_labels` 的职责（本断言跑在驱动侧、不依赖比较器进程）。
+    fn per_receiver_frame_seq_matches_golden(stem: &str, label: &str) {
+        let c = defence_case(stem, label);
+        let g = golden_case_for(stem, label);
+        let seq = |v: &serde_json::Value| -> std::collections::BTreeMap<String, Vec<(i64, i64, i64, i64)>> {
+            v["Receivers"]
+                .as_array()
+                .expect("Receivers 必须是数组")
+                .iter()
+                .map(|r| {
+                    let who = r["Who"].as_str().expect("Who 必须是字符串").to_string();
+                    let frames = r["Sent"]
+                        .as_array()
+                        .expect("Sent 必须是数组")
+                        .iter()
+                        .map(|m| {
+                            (
+                                m["ident"].as_i64().unwrap_or(-1),
+                                m["param"].as_i64().unwrap_or(-1),
+                                m["tag"].as_i64().unwrap_or(-1),
+                                m["series"].as_i64().unwrap_or(-1),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    (who, frames)
+                })
+                .collect()
+        };
+        // 台账只登记**有帧**的收件人；金标准对"零帧"的收件人也留一条空 `Sent`
+        // （如 `holyshield` 的 `mon0`/`mon1`）⇒ 两侧都丢掉空表再比，空表本身不比。
+        let drop_empty = |m: std::collections::BTreeMap<String, Vec<(i64, i64, i64, i64)>>| {
+            m.into_iter()
+                .filter(|(_, v)| !v.is_empty())
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let got = drop_empty(seq(&c));
+        let want = drop_empty(seq(&g));
+        assert_eq!(
+            got, want,
+            "[{stem}/{label}] 逐收件人 (ident,param,tag,series) 序列必须与金标准一致（帧集合退化必须可见）"
+        );
+    }
+
+    /// **`MG-23 holyshield(16)`**（`SKILL_HOLYSHIELD`，捆魔咒）：四支——`mon_hit_two`（两只全中）、
+    /// `mon_blocked_level`（等级门不过）、`mon_blocked_master`（主人门不过）、`mon_partial`（部分命中）。
+    /// **四个标签逐一断言完整帧集合**：三条负例的价值就在"帧集合退化"，不能只挑 `mon_hit_two`。
+    fn holyshield_assert(label: &str, base: i32) {
+        fireball_parity_drive(
+            "holyshield",
+            16,
+            1,
+            label,
+            golden_seed("holyshield", label),
+            base,
+        );
+        per_receiver_frame_seq_matches_golden("holyshield", label);
+        fireball_case_assert("holyshield", label);
+        b1_golden_drain_assert("holyshield.json", label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn holyshield_parity_mon_hit_two() {
+        holyshield_assert("mon_hit_two", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn holyshield_parity_mon_blocked_level() {
+        holyshield_assert("mon_blocked_level", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn holyshield_parity_mon_blocked_master() {
+        holyshield_assert("mon_blocked_master", 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn holyshield_parity_mon_partial() {
+        holyshield_assert("mon_partial", 4000);
+    }
+
+    /// **`MG-49 grouplightening(42)`**（`MagGroupLightening`）：三 seed。
+    /// target 侧含 **53 = `SM_HEALTHSPELLCHANGED`**：驱动内钉 `MIR2_CLIENT_ABILITY_LAYOUT=0`
+    /// ⇒ 发的是 **oracle header-only 12B**（不带 16B 客户端尾）⇒ 全帧比较在这里是对的；
+    /// 生产默认 client 布局才带尾，那是已登记的偏差，不在本接线内。
+    fn group_lightening_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("grouplightening", 42, 1, label, seed, base);
+        per_receiver_frame_seq_matches_golden("grouplightening", label);
+        fireball_case_assert("grouplightening", label);
+        b1_golden_drain_assert("grouplightening.json", label, 4);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn grouplightening_parity_s1() {
+        group_lightening_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn grouplightening_parity_s5() {
+        group_lightening_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn grouplightening_parity_s13() {
+        group_lightening_assert("s13", 13, 3000);
+    }
+
+    /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
+    fn group_amyounsul_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
+        per_receiver_frame_seq_matches_golden("groupamyounsul", label);
+        fireball_case_assert("groupamyounsul", label);
+        b1_golden_drain_assert("groupamyounsul.json", label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul_parity_s1() {
+        group_amyounsul_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul_parity_s5() {
+        group_amyounsul_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul_parity_s13() {
+        group_amyounsul_assert("s13", 13, 3000);
+    }
+
     /// **`19 集体隐身术`**（`SKILL_BIGCLOAK`，body `MagicManager.cs:384-389` / helper `:1209-1228`）驱动。
     /// golden `golden/magic/bigcloak.json`（三 seed s1/s5/s13，无 AntiMagic 骰）。
     ///
