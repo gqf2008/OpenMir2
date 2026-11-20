@@ -55,6 +55,9 @@ pub struct SkillPassives {
     pub hit_double: u8,
     /// `PlayObject.AttackSkillCount`（攻杀支置 `7-L`）。
     pub attack_skill_count: u8,
+    /// `PlayObject.AttackSkillPointCount`（攻杀支 `RandomByte(7-L)` 的抽值；`rng=None` 的
+    /// 过渡态保持 0——见 `recalc_hit_speed_skills` 的文档）。
+    pub attack_skill_point_count: u8,
 }
 
 /// `HUtil32.Round`（`(int)Math.Round(r, AwayFromZero)`）：Rust `f64::round` 同为半数远离零。
@@ -62,17 +65,14 @@ fn round_away(r: f64) -> i32 {
     r.round() as i32
 }
 
-/// `PlayObject.RecalcHitSpeed` 的**技能循环**（`:3681-3712`）：填 `MagicArr`（**不清空**）并返回技能被动。
+/// `RecalcHitSpeed` 的 `MagicArr` 填充段（`PlayObject.cs:3684`）：**只写不清**；
+/// `mag_idx >= 50` 的条目**跳过**（oracle 越界崩溃；本仓登记不崩）。
 ///
-/// `arr` 长度必须是 [`MAGIC_ARR_LEN`]；`mag_idx >= 50` 的条目**跳过**（oracle 越界崩溃；本仓登记不崩）。
-pub fn recalc_hit_speed_skills(
-    magics: &[Option<MagicRcd>],
-    arr: &mut [Option<MagicRcd>],
-) -> SkillPassives {
-    let mut out = SkillPassives::default();
+/// 与 [`recalc_hit_speed_skills`] 拆开是为了登录装配：登录的被动在 `recalc_for_session` 前算
+/// （需要 `world.rng`），会话构造时只**补填** `MagicArr`，**不能**重算被动（否则攻杀会二次抽数）。
+pub fn fill_magic_arr(arr: &mut [Option<MagicRcd>], magics: &[Option<MagicRcd>]) {
     for m in magics.iter().flatten() {
         match arr.get_mut(usize::from(m.mag_idx)) {
-            // `MagicArr[userMagic.MagIdx] = userMagic;`（`PlayObject.cs:3684`）——**只写不清**。
             Some(slot) => *slot = Some(m.clone()),
             None => crate::glog!(
                 "WRN",
@@ -80,6 +80,23 @@ pub fn recalc_hit_speed_skills(
                 m.mag_idx
             ),
         }
+    }
+}
+
+/// `PlayObject.RecalcHitSpeed` 的**技能循环**（`:3681-3712`）：填 `MagicArr`（**不清空**）并返回技能被动。
+///
+/// `rng` = `world.rng`（与其它取数同一流）。**攻杀支每次调用恰抽 1 次** `RandomByte(7-L)`
+/// （`PlayObject.cs:3706`；`Level=0` 也抽——见 `case SKILL_YEDO` 的门位）。`None` = **3b-1 过渡态**
+/// （签名/透传先落、抽数后接）：此时 `attack_skill_point_count` 保持 0，调用方**不得**在生产路径传 None。
+pub fn recalc_hit_speed_skills(
+    magics: &[Option<MagicRcd>],
+    arr: &mut [Option<MagicRcd>],
+    rng: Option<&mut dyn mir2_shared::rng::RandomSource>,
+) -> SkillPassives {
+    fill_magic_arr(arr, magics);
+    let mut rng = rng;
+    let mut out = SkillPassives::default();
+    for m in magics.iter().flatten() {
         let level = i32::from(m.level);
         match m.mag_idx {
             SKILL_ONESWORD => {
@@ -105,6 +122,12 @@ pub fn recalc_hit_speed_skills(
                 }
                 out.hit_plus = DEF_HIT.saturating_add(level as u8);
                 out.attack_skill_count = 7u8.wrapping_sub(level as u8);
+                // `AttackSkillPointCount = RandomByte(AttackSkillCount)`（`PlayObject.cs:3706`）：
+                // 在 Level 门外 ⇒ **L=0 也抽**；`RandomByte(v)` = `random.Next(v)`（v=0 也会推进采样）。
+                if let Some(r) = rng.as_deref_mut() {
+                    out.attack_skill_point_count =
+                        r.random_below(i32::from(out.attack_skill_count)) as u8;
+                }
             }
             SKILL_FIRESWORD => {
                 out.hit_double = 4u8.wrapping_add((level * 4) as u8);
@@ -139,6 +162,117 @@ pub fn hit_skill_state(arr: &[Option<MagicRcd>]) -> game_svr::attackwire::HitSki
 mod tests {
     use super::*;
 
+    /// **IT-17b 3b**：带计数的随机源（只数 `random_below` 调用——攻杀 `RandomByte` 走这一支），
+    /// 值用同种子 `RandomNumber` 委托，便于与独立重放流逐次对照。
+    struct CountingRng {
+        inner: mir2_shared::rng::RandomNumber,
+        below_calls: usize,
+        values: Vec<i32>,
+    }
+
+    impl CountingRng {
+        fn new(seed: i32) -> Self {
+            Self {
+                inner: mir2_shared::rng::RandomNumber::with_seed(seed),
+                below_calls: 0,
+                values: Vec::new(),
+            }
+        }
+    }
+
+    impl mir2_shared::rng::RandomSource for CountingRng {
+        fn random(&mut self) -> i32 {
+            self.inner.random()
+        }
+        fn random_below(&mut self, value: i32) -> i32 {
+            self.below_calls += 1;
+            let v = self.inner.random_below(value);
+            self.values.push(v);
+            v
+        }
+        fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+            self.inner.random_range(min_value, max_value)
+        }
+        fn next_double(&mut self) -> f64 {
+            self.inner.next_double()
+        }
+    }
+
+    fn yedo(level: u8) -> Option<MagicRcd> {
+        Some(MagicRcd {
+            mag_idx: SKILL_YEDO,
+            level,
+            magic_key: 0,
+            tran_point: 0,
+        })
+    }
+
+    /// **3b 用例①**：带攻杀（L=2，`7-L=5`）**每次 Recalc 恰抽 1 次**；两次 Recalc ⇒ 记录器 2 抽，
+    /// 值与同种子独立重放逐次相等，且 `attack_skill_point_count` = 第二次抽值。
+    ///
+    /// 红检：删 `if let Some(r) = rng…` 抽（或把 `rng` 恒 None）⇒ 记录器 0 抽、断言红。
+    #[test]
+    fn yedo_recalc_draws_once_per_recalc() {
+        let mut sg = crate::tests::test_session_ground(1);
+        sg.equip.job = 0;
+        sg.magic.list = vec![yedo(2)];
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let seed = 20261120;
+        let mut rng = CountingRng::new(seed);
+        for _ in 0..2 {
+            let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, Some(&mut rng));
+        }
+        assert_eq!(rng.below_calls, 2, "两次 Recalc ⇒ 恰 2 抽（每次 1 次）");
+        let mut replay = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let v1 = replay.random_below(5);
+        let v2 = replay.random_below(5);
+        assert_eq!(rng.values, vec![v1, v2], "逐次值与同种子重放相等");
+        assert_eq!(
+            i32::from(sg.magic.passives.attack_skill_point_count),
+            v2,
+            "AttackSkillPointCount = 第二次抽值"
+        );
+        assert_eq!(sg.magic.passives.attack_skill_count, 5, "Count = 7-L");
+    }
+
+    /// **3b 用例②**：攻杀 L=0 **仍抽 1 次**（`RandomByte(7-L)` 在 `Level>0` 门外）。
+    ///
+    /// 红检：把抽数塞回 `if level > 0` 门内 ⇒ 记录器 0 抽、断言红。
+    #[test]
+    fn yedo_level_zero_still_draws_once() {
+        let mut sg = crate::tests::test_session_ground(1);
+        sg.equip.job = 0;
+        sg.magic.list = vec![yedo(0)];
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = CountingRng::new(7);
+        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, Some(&mut rng));
+        assert_eq!(rng.below_calls, 1, "L=0 也抽 1 次");
+        assert_eq!(sg.magic.passives.attack_skill_count, 7);
+        assert_eq!(
+            i32::from(sg.magic.passives.attack_skill_point_count),
+            rng.values[0]
+        );
+    }
+
+    /// **3b 用例③**：不含攻杀 ⇒ 记录器 **0 抽**（0 抽由记录器自证，不靠"没看到数"）。
+    ///
+    /// 红检：把抽数挪到技能循环外（无条件抽）⇒ 本用例红。
+    #[test]
+    fn no_yedo_draws_zero() {
+        let mut sg = crate::tests::test_session_ground(1);
+        sg.equip.job = 0;
+        sg.magic.list = vec![
+            m(SKILL_ONESWORD, 3),
+            m(SKILL_ILKWANG, 3),
+            m(SKILL_FIRESWORD, 2),
+        ];
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = CountingRng::new(9);
+        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, Some(&mut rng));
+        assert_eq!(rng.below_calls, 0, "无攻杀 ⇒ 0 抽");
+        assert_eq!(sg.magic.passives.hit_point, 9 + 8);
+    }
+
     fn m(id: u16, level: u8) -> Option<MagicRcd> {
         Some(MagicRcd {
             mag_idx: id,
@@ -165,6 +299,7 @@ mod tests {
                 m(SKILL_FIRESWORD, 2),
             ],
             &mut a,
+            None,
         );
         // 3*3=9（基本）+ Round(8/3*3)=8（精神）+ 2（攻杀）= 19。
         assert_eq!(p.hit_point, 19, "HitPoint = 9 + 8 + 2");
@@ -195,6 +330,7 @@ mod tests {
                 m(SKILL_FIRESWORD, 0),
             ],
             &mut a,
+            None,
         );
         assert_eq!(p.hit_point, 0, "三支的 HitPoint 增量都在 Level 门内");
         assert_eq!(p.hit_plus, DEF_HIT, "攻杀 HitPlus 在门外：DEFHIT + 0");
@@ -208,9 +344,9 @@ mod tests {
     #[test]
     fn magic_arr_is_never_cleared() {
         let mut a = arr();
-        let _ = recalc_hit_speed_skills(&[m(SKILL_ONESWORD, 1)], &mut a);
+        let _ = recalc_hit_speed_skills(&[m(SKILL_ONESWORD, 1)], &mut a, None);
         assert!(a[usize::from(SKILL_ONESWORD)].is_some());
-        let p = recalc_hit_speed_skills(&[], &mut a);
+        let p = recalc_hit_speed_skills(&[], &mut a, None);
         assert_eq!(p, SkillPassives::default(), "空表不加被动");
         assert!(
             a[usize::from(SKILL_ONESWORD)].is_some(),
@@ -237,8 +373,8 @@ mod tests {
     #[test]
     fn magic_arr_keeps_entries_across_recalcs() {
         let mut a = arr();
-        let _ = recalc_hit_speed_skills(&[m(SKILL_ONESWORD, 1)], &mut a);
-        let _ = recalc_hit_speed_skills(&[m(SKILL_ILKWANG, 1)], &mut a);
+        let _ = recalc_hit_speed_skills(&[m(SKILL_ONESWORD, 1)], &mut a, None);
+        let _ = recalc_hit_speed_skills(&[m(SKILL_ILKWANG, 1)], &mut a, None);
         assert!(
             a[usize::from(SKILL_ONESWORD)].is_some(),
             "第一次的条目必须在（不清空）"
@@ -250,7 +386,7 @@ mod tests {
     #[test]
     fn magic_arr_ignores_id_out_of_range() {
         let mut a = arr();
-        let p = recalc_hit_speed_skills(&[m(50, 1), m(SKILL_ONESWORD, 1)], &mut a);
+        let p = recalc_hit_speed_skills(&[m(50, 1), m(SKILL_ONESWORD, 1)], &mut a, None);
         assert_eq!(p.hit_point, 3, "越界条目不参与；合法条目照算");
         assert!(a.iter().all(|x| x.as_ref().map(|v| v.mag_idx) != Some(50)));
         assert!(a[usize::from(SKILL_ONESWORD)].is_some());
@@ -267,7 +403,7 @@ mod tests {
         let mut sg = crate::tests::test_session_ground(1);
         sg.equip.job = 0;
         let catalog = game_svr::ability::StdItemCatalog::new();
-        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, None);
         let h0 = sg.sub.hit_point;
         let s0 = sg.sub.speed_point;
         // 学基本剑法 L3 ⇒ HitPoint +9（`PlayObject.cs:3687-3692`）。
@@ -277,7 +413,7 @@ mod tests {
             magic_key: 0,
             tran_point: 0,
         })];
-        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(sg.magic.passives.hit_point, 9, "技能被动 3L=9");
         assert_eq!(
             sg.sub.hit_point,
@@ -315,7 +451,7 @@ mod tests {
         );
         // 删技能（MagicList 清空）后再重算：被动归零，但 MagicArr 留残影（oracle 从不清空）。
         sg.magic.list.clear();
-        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(sg.magic.passives.hit_point, 0);
         assert_eq!(sg.sub.hit_point, h0);
         assert!(
@@ -329,7 +465,7 @@ mod tests {
     fn spirit_round_is_away_from_zero() {
         for (level, want) in [(1u8, 3u8), (2, 5), (3, 8)] {
             let mut a = arr();
-            let p = recalc_hit_speed_skills(&[m(SKILL_ILKWANG, level)], &mut a);
+            let p = recalc_hit_speed_skills(&[m(SKILL_ILKWANG, level)], &mut a, None);
             assert_eq!(p.hit_point, want, "精神力 L{level}");
         }
     }
