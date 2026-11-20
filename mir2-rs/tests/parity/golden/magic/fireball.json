@@ -4,6 +4,8 @@
   "cases": [
     {
       "Fixture": {
+        "caster_mc": 15,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -178,6 +180,8 @@
     },
     {
       "Fixture": {
+        "caster_mc": 15,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -247,7 +251,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1149821943,
+              "delivery": 1150703412,
               "priority": 255
             },
             {
@@ -507,6 +511,8 @@
     },
     {
       "Fixture": {
+        "caster_mc": 2565,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -576,7 +582,7 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1149822771,
+              "delivery": 1150704225,
               "priority": 255
             },
             {

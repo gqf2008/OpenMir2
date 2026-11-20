@@ -368,7 +368,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1149842981,
+              "delivery": 1150720793,
               "priority": 255
             },
             {
@@ -641,7 +641,7 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
-        "caster_mc": 15,
+        "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
         "login_order": true,
@@ -755,7 +755,7 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1149844309,
+              "delivery": 1150722106,
               "priority": 255
             },
             {

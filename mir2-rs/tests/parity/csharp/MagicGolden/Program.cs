@@ -823,6 +823,8 @@ public static class Program
         {
             Fixture = new
             {
+                caster_mc = (int)caster.WAbil.MC,
+                caster_sc = (int)caster.WAbil.SC,
                 rng_mode = rngMode,
                 login_order = loginOrder,
                 reachability = contract.Reachability,
@@ -2072,8 +2074,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 effect_type = spec.EffectType,
                 user_magic_level = spec.UserMagicLevel,
                 caster_level = spec.CasterLevel,
-                caster_mc = spec.CasterMc,
-                caster_sc = spec.CasterSc,
+                caster_mc = (int)caster.WAbil.MC,
+                caster_sc = (int)caster.WAbil.SC,
                 rng_mode = spec.RngMode,
                 login_order = spec.LoginOrder,
                 reachability = spec.Reachability,
@@ -2150,7 +2152,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
                 spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
-                spec.CasterLoginOrderAbil ? (int?)spec.CasterSc : null,
+                spec.CasterLoginOrderAbil ? (int?)caster.WAbil.SC : null,
                 spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null),
             Label = label,
             Seed = seed,

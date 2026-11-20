@@ -125,7 +125,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1149863281,
+              "delivery": 1150736281,
               "priority": 255
             },
             {
@@ -397,7 +397,7 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
-        "caster_mc": 15,
+        "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
         "login_order": true,
@@ -500,7 +500,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1149864562,
+              "delivery": 1150737578,
               "priority": 255
             },
             {
@@ -772,7 +772,7 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
-        "caster_mc": 15,
+        "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
         "login_order": true,
@@ -875,7 +875,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1149865875,
+              "delivery": 1150738906,
               "priority": 255
             },
             {
