@@ -81,3 +81,50 @@
 
 - 不在本卡之前再新增"按阶段/按结束点"的近似（T-288–T-294 维持登记，不各自发明新序）；
 - 不改 oracle 侧语义、不改客户端冻结契约。
+
+## 3d. T-290 的 scope 与两侧残差（登记 T-295 / T-296）
+
+**T-290 只证这一件事**：升级链**内部**的帧序（`53 → 44 → 45/52/752 → 657`）与"657 在链末"。
+**不得**读成"657 全局已对齐"——链前/链后各有残差，见下（登记，不修、不挪出队点）。
+
+方向记法：**A** = 该路径的帧在 657 **之前**发出 ⇒ 657 被排到它**后面**（应当在其前）；
+**B** = 该路径的帧在 657 **之后**发出 ⇒ 657 被排到它**前面**（应当在其后）。
+
+### T-295 链前 >155（方向 A：657 被排到它们之后）
+
+| drain | 帧 → RM 低字节 | 方向 |
+|---|---|---|
+| `drain_line_notice` | SM_SYSMESSAGE → 11004 = **252** | A |
+| `drain_player_run_rates` | SM_SYSMESSAGE **252**、SM_MYSTATUS → 8102 = **166**（**边界敏感**） | A |
+| `drain_run_state_expiries` | SM_SYSMESSAGE **252** | A |
+| `drain_death_use_item_drops` | SM_SYSMESSAGE **252** | A |
+| `drain_skeleton_downlink` | SM_SYSMESSAGE **252** | A |
+| `drain_buff_downlink` | SM_SYSMESSAGE **252** | A |
+| `drain_b4_with_enter_cfg` | SM_SYSMESSAGE **252** | A |
+| `drain_b5_self_deliveries` | SM_SYSMESSAGE **252** | A |
+| `drain_pk_flag_downlink` | SM_CLOSEHEALTH → 10411 = **171**、SM_OPENHEALTH → 10410 = **170**（**边界敏感**） | A |
+
+**边界敏感**：166/170/171 与 155 只差 11–16；一旦有人调整 `RM_*` ident 表，这三组要重新核。
+
+### T-296 链后 <155（方向 B：657 被排到它们之前）
+
+| drain | 帧 → RM 低字节 | 方向 |
+|---|---|---|
+| `drain_npc_merchant_turns` | SM_DISAPPEAR → 8061 = **125** | B |
+| `drain_npc_merchant_hits` | SM_DISAPPEAR **125** | B |
+| `drain_aoi_downlink` | SM_HIDEEVENT → 10333 = **93** | B |
+| `drain_aoi_events` | SM_HIDEEVENT **93** / SM_SHOWEVENT **94** | B |
+| `drain_monster_walk_downlink` | RM_WALK = **18** | B |
+| `drain_stamina` | SM_HEALTHSPELLCHANGED → 10052 = **68** | B |
+
+（"9 处"的另外 3 处即下节"待核"里的链后三项——**未计入本表**。）
+
+### 待核（5，未计入上面的 9 + 9）
+
+| 点 | 缺什么信息 |
+|---|---|
+| `drain_player_hunger` | 帧走 healthspell **槽**（不可机读）；oracle `RefMyStatus` 的 708 → 8102 = 166 只在文档层面成立。**故从"链前 10"移出** ⇒ 链前实为 **9**。 |
+| `drain_kicks` | SM_OUTOFCONNECTION 疑为 `SendDefMessage` 直发（无 RM 侧）；需按 oracle 核它是否入队。 |
+| `drain_aoi_disappear` | 消失帧走槽/批量路径，ident 未在函数体内出现。 |
+| `drain_merchant_disappears` | 同上（帧由下游组帧函数给）。 |
+| `drain_login_tail` | 登录尾帧走槽。 |
