@@ -72,10 +72,14 @@
       的 sha256 = `ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2`；该文件一改，golden
       生成当场红，而不是静默重基线。现有 `ServerConfSha256()` 已会算，缺的只是常量 + 断言。
       注：`E:/UserFleet` 两份部署副本是另一份文件（sha `f18068c6…`，其余键不同），本批六个键值一致。
+      **语义边界**：本包钉的 sha 是**生成源（`MAGICGOLDEN_CONF_DIR` 缺省 `E:\MirServer\M2GameSvr`）整文件身份**，
+      用于「文件一改、golden 生成当场红」；它**不**用于证明所有部署副本同值（`E:/UserFleet` 两份 sha 不同、
+      六键相同）。跨部署的一致性由 §3.3 第 2 条的**逐键字面值断言**承担。
+      **不要绕过断言**：若将来把 `MAGICGOLDEN_CONF_DIR` 指向花名册副本，应**更新常量**，不得加 `--force` 旁路。
    2) **比较器断言绝对值**：对 golden 的 `server_conf` 逐键断言
       `mag_turn_undead_level == 44`、`mab_mabe_hit_rand_rate == 100`、`mab_mabe_hit_min_lv_limit == 10`、
       `mab_mabe_hit_success_rate == 21`、`mab_mabe_hit_mabe_time_rate == 20`、`amy_ounsul_point == 15`
-      —— **不是"两侧相等"**。
+      —— **不是"两侧相等"**。这是 magic 侧的唯一依赖（**不读文件**），保证 golden 仍是可移植的冻结件。
 
 **不要做全局装载**（不要在 `EnsureConfFiles` 后无条件 `LoadConfig()`）：那会一次性改变所有 stem 的
 Config 面，必须全量重生成 + 全量对拍才能证明无漂移；**分支级装载**最小、可逐批验收。
@@ -102,17 +106,26 @@ Config 面，必须全量重生成 + 全量对拍才能证明无漂移；**分�
 - **写集（实现批）**：`MagicGolden/ServerConfFixture.cs`（新）、`MagicGolden/Program.cs`（两分支接入；
   **与施毒批协调**，建议先合施毒批再动）、`golden/magic/turnundead*.json`、`golden/magic/mabmabe*.json`、
   `bins/game-svr/src/lib.rs`（驱动 helper + 两处 fixture 应用）、`tests/parity/tests/magic_fireball_parity.rs`
-  （比较器接入）。**不碰 `src/**` oracle 代码。**
+  （比较器接入）；**另加独立对拍照**：`bins/game-svr/tests/serverconf_parse_parity.rs`（新）+
+  `tests/parity/csharp/ServerConfProbe/`（新的小 C# 探针，只输出各键解析值）。**不碰 `src/**` oracle 代码。**
 
 ## 6. 验收与牙（建议，实现批落）
 
 1. **装载失败红**：临时改名/删 `Server.conf`（夹具根）⇒ `FixtureContractViolation`，golden 不生成（rc 非 0）；
 2. **键 ≤0 红**：把 `MagTurnUndeadLevel` 以 0 注入 ⇒ 同上（不许吃缺省）；
-3. **阈值区分牙**：目标 `Level=43 / 44 / 45` 三档（门外 `:842`/`:847` 两道随机门由 golden 脚本钉死）；
-   断言 **43 与 44 的即死结果不同**、**44 与 45 同侧**。依据：`Level < MagTurnUndeadLevel` 是**严格小于**，
-   部署 44 ⇒ 43 过门、44 与 45 都不过门。**"必死"本身不可断言**（门外还有两道随机门）。
+3. **阈值区分牙**：目标 `Level=43 / 44 / 45` 三档。**门序**（实测）：
+   `:842 Random(2)+(caster.Level-1) > target.Level` → `:844` 等级门 → `:846` → 
+   `:847 Random(100) < (magicLevel<<3)-magicLevel+15+level` → 即死。
+   ⇒ **门外只有 `:842`；`:847` 在等级门之后（进了才抽）**。两处随机都由 golden 脚本钉死，但**钉的位置不同**
+   （`:842` 是前置、`:847` 是有条件下游）。断言 **43 与 44 的即死结果不同**、**44 与 45 同侧**；
+   依据严格小于：部署 44 ⇒ 43 过门、44 与 45 都不过门。**"必死"本身不可断言**（`:842` 前置随机 + `:847`
+   下游随机各挡一次）。
 4. **变异牙（真正的牙）**：把 Rust `mag_turn_undead_level` 从 golden 的 **44 改成 50** ⇒
    **44 与 45 两档必红、43 不红**（50 下 `44<50` 与 `45<50` 都成立、结果翻转；43 在两值下都过门，翻不了）。
    只盯 43 档抓不到 50。
 5. **绝对值断言**：比较器对 `server_conf` 逐键断言 §3.3 第 2 条的六个字面值（不是"两侧相等"）。
 6. **回归**：既有 31 份 magic golden 的 stem 全部不重新生成、不加 ServerConf 装载（git status 证）。
+7. **独立的 config 解析对拍照（`3b` 方案）**：Rust 生产解析器（`bins/game-svr/src/config.rs` 的 `Server.conf`
+   解析）与 C# `ServerConf.LoadConfig` 对**同一份文件**逐键相等；缺键时两侧回落值也相等（C# 回落 ctor 缺省、
+   Rust 回落 `unwrap_or`）。**独立验收项**：不进 magic 驱动、不作为 golden 生成前提——否则所有 golden 都依赖
+   外部 conf 路径存在，冻结件不再可移植。
