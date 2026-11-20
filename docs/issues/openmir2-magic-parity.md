@@ -1269,3 +1269,145 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 **范围外（未升格，登记供后续）**：`SKILL_AMYOUNSUL(6)`、`SKILL_GROUPLIGHTENING(42)`、`SKILL_GROUPAMYOUNSUL(48)`、
 `SKILL_GROUPDEDING(39)`、`SKILL_TAMMING`（`!Animal` 反门 + `MagTamming` 的 Master/undead/几率分支）、
 `MagTurnUndead`（`SuperMan || LifeAttrib != LA_UNDEAD`）、`MabMabe`（`Race == Play` 两支）——它们本来就未升格。
+
+### 36. 非玩家对象夹具 v1（被动怪物）+ 16 的对象选择面（2026-11-20）
+
+**范围声明（§26）**：v1 只判**对象选择/门判据**——哪些对象收到 `RM_MAKEHOLYSEIZEMODE(60005)`。
+v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空**；任何由目标处理的效果分支
+**不得**以 v1 升格，`scope = gate_only`。effect 面见卡 `openmir2-monster-actors-v2`。
+
+**装置扩展（schema v3，向后兼容）**
+- `MagicSpec.Monsters[]`：`(x,y,race,level,hp,life_attrib,master,target_cret)`；`master/target_cret`
+  是**本列表 1 基序号**（0 = 无）。默认空 ⇒ 既有件零变化。
+- golden `Fixture.monsters[]` 同形；每个怪物在 `Receivers` 里以 `mon{i}` 出现，只记其 RM、`Sent` 恒空。
+- 离线进程补 `SystemShare.EventMgr = new EventManager()`（16 的 `MagMakeHolyCurtain` 会 AddEvent；
+  缺失时 NullReference）。**既有件零变化已实测**：重跑装置输出，**16 件零差异**（除既有墙钟 `delivery`）；
+  `lightflower` 分派缺失与 `firecharm` 不可复现两件按 §37 / `openmir2-firecharm-nondeterminism` 记
+  **0 差异**。
+
+**16 四支（`golden/magic/holyshield.json`，`--case holyshield`，ArmRingAmulet=true）**
+| case | 怪物 | 命中 | 说明 |
+|---|---|---|---|
+| `mon_hit_two` | 2 只 L1 | `mon0`/`mon1` 各 1 条 60005 | 全选 |
+| `mon_blocked_level` | 1 只 L200 | 0 | `Random(4)+(30-1) > 200` 不成立 |
+| `mon_blocked_master` | 1 只 L1（Master 自指） | 0 | `Master == null` 门挡 |
+| `mon_partial` | L1 + L200 | `mon0` 1 条、`mon1` 0 | 部分命中（证明非同全选/全否） |
+
+**判据**：四支比的是**收件人集合**（哪只怪收到几条 `RM_MAKEHOLYSEIZEMODE`），不是"帧数相等"；
+另断言**同一只怪同种 RM 恰 1 条**（不重复投递；装置侧 `mon{i}` 捕获时校验）。
+
+**harness substitution（必须知道）**：离线进程装了**空 `EventManager`**（只维护列表）。`MagMakeHolyCurtain`
+在选完对象后会对 6 个格子 `AddEvent(HolyCurtainEvent)`，`SystemShare.EventMgr == null` 时那里 NRE。
+**对象选择本身不读 `EventMgr`**：选择循环只读 `GetMapBaseObjects` 的 Actor 与
+`Race/Level/Master` 三个字段并写目标 RM 队列，AddEvent 发生在选择之后、且事件对象只被存进列表
+（无 Operate、无回写）⇒ 空实现不改变"谁被选中"。**但事件链（AddEvent→后续 Operate）不在本 golden
+的覆盖面**——v2 接手时不要把它读成"oracle 不产生事件"。
+
+**未做**：Rust 侧怪物夹具与 16 的驱动/比较器（下一支）；16 **不升格**（v1 不足以判效果面）。
+
+### 39. `SKILL_GROUPDEDING`(39) 门序更正与夹具设计（2026-11-20）
+
+**此前读法作废（留痕）**：本文档上一轮曾写"`MagGroupDeDing` 只打 `Race>=Animal`、玩家目标空转"。
+读完整 helper 后确认**该读法错误**：`Race>=Animal` 只决定 `result`（⇒ `boTrain`），**不参与伤害**。
+玩家目标那次 `HP 100→100` 的真正原因是**命中门**（`Random(SpeedPoint) >= HitPoint ⇒ nPower=0`）
+或护甲衰减到 0。保留这条更正而不是静默替换，是因为两套夹具会长得完全不同（"必须放动物" vs "必须让命中门过"）。
+
+**正确门序（`src/M2Server/Magic/MagicManager.cs` 的 `MagGroupDeDing`，逐条带行号）**
+1. 跳过 `Death || Ghost || self`（`:950`）；
+2. `IsProperTarget(baseObject)`（`:954`）；
+3. `nPower = GetAttackPower(LoByte(DC), HiByte(DC)-LoByte(DC))`（`:956`）；
+4. **命中门**：`Random(baseObject.SpeedPoint) >= playObject.HitPoint ⇒ nPower = 0`（`:957`；
+   `SpeedPoint=0` 时 `Random(0)=0`，若 `HitPoint=0` 则 `0>=0` 恒真 ⇒ **必 miss**）；
+5. `nPower>0` ⇒ `GetHitStruckDamage`（护甲衰减，`:963` 起）；
+6. `StruckDamage(nPower)`（`:967`）+ 施法者 200ms `RM_DELAYMAGIC(nPower, …, 1, target)`（`:968`）；
+7. `Race >= Animal` **仅**置 `result=true`（`:970-972`）；
+8. 对每个对象（含被跳过者）发 `RM_10205`（`:974`）；**泵序低字节 = `10205 & 0xFF = 221`**。
+
+**夹具设计（`GroupDeDingBatch`，待实现）**
+- **全额怪**：命中门必过（`HitPoint>0` 且该目标 `SpeedPoint` 抽到小值/为 0 但 HitPoint 使门不成立）+ 低 AC；
+- **衰减怪**：高 AC ⇒ `GetHitStruckDamage` 生效；与全额怪对照证明"同公式、伤害随属性变"；
+- **不该被命中 ×2（分别断言不同分支）**：① `SpeedPoint=0` ⇒ 命中门判 miss（走 4→nPower=0）；② `Death=true`
+  ⇒ 走 1 早退。**若两者帧面相同（都无 31/都只 10205），必须在卡里写明"这两支在帧面不可区分，
+  区分依据 = 是否进入 `IsProperTarget`/是否产生 200ms `RM_DELAYMAGIC`"**，不许用"都没掉血"充当两条断言；
+- **逐目标抽数**：命中门是 `Random(target.SpeedPoint)` ⇒ 每只目标抽数随其 `SpeedPoint` 变；case 里逐目标
+  记抽数并给总数，两只怪 `SpeedPoint` 不同时总抽数也应不同（"抽数随参数变"的正例）；
+- **HP before/after 双值**入 case，与 `mon{i}` 收件人集合并列。
+
+**"空转 golden"的处置（本交付定）：选 ①**——`GroupDeDingBatch` 落地后**替换**同名
+`golden/magic/groupdeding.json`，旧件删除并在本卡记"旧件作废，原因 = 空转（玩家目标、命中门恒 miss）"；
+**不保留**同名旧件（避免后来者分不清哪份是证据；若将来要留痕，用带 `.superseded` 后缀并标"非证据"）。
+
+**实现中的硬点（待解，先记）**：命中门要"确定命中"与"确定 miss"两支都稳定，需要
+`HitPoint > 0`（否则 `Random(0)=0 >= 0` 恒 miss、无人能被击中）且要控制每只怪的 `SpeedPoint` 与 seed；
+但 `Random(SpeedPoint)` 均匀分布 ⇒ "必 miss"不天然确定，需按 seed 扫描把 miss 落在目标怪身上。
+⇒ 装置要补 `MagicSpec.CasterHitPoint` 与 `MonsterSpec.SpeedPoint` 两个输入，并为每支选 seed（`seed_reason` 记"第 i 只怪抽值 x ≥/< HitPoint"）。
+
+**四支定稿（甲方案，opc-19 2026-11-20 确认）**
+| case | caster `HitPoint` | 怪物（**顺序显式固定**） | 证明什么 |
+|---|---|---|---|
+| `all_miss_hp0` | 0 | M1(S=0)、M2(S=1) | 门恒真 ⇒ 全场 miss（不需要扫 seed） |
+| `hit_ac_split` | 5 | M1(S=0,AC低)、M2(S=0,AC高) | 必中（`SpeedPoint=0` ⇒ `Random(0)=0 < HitPoint` 恒真）+ 护甲衰减 |
+| `miss_by_draw` | 5 | M1(S=0) 命中、M2(S=10) 经 seed 选到 `Random(10)>=5` | 门按抽值分支（区别于恒真组） |
+| `dead_excluded` | 5 | M1(S=0, `Death=true`) | 走 `:950` 早退 |
+
+**两条附加约束**
+1. `hit_ac_split` 的两只怪**除 AC 外参数完全相同**（`SpeedPoint/Level/max_hp/Death` 全同），参数并排放进
+   golden，让读者一眼看出"只差 AC"；否则 HP 减量差无法归因。
+2. **`Random(0)` 也消耗抽样状态**（IT-12 跨语言对拍已确认）⇒ `M1(S=0)` 那次抽占序列位置；
+   `hit_ac_split` / `miss_by_draw` 要**按顺序记每只怪的抽值（含 `Random(0)` 那次）**，
+   `seed_reason` 能解释"M1 抽了 0、M2 的抽值是序列里第几个"；**怪物顺序改动 ⇒ 重扫 seed**（已入 golden）。
+
+**(乙) 的否决理由（opc-19 原话）**：不是"时间不划算"，而是"唯一能升 verified 的那支，恰恰不能少分支"。
+
+**scope 依据**：39 可升 `verified`，依据是"**伤害由施法者侧同步 `StruckDamage` 计算**"（`:967`），
+不是"HP 变了"——HP 只是该计算的结果观测。
+
+### 39b. `GroupDeDingBatch` 落地：夹具裁决、五支与 golden 替换（2026-11-20，magic-3）
+
+**空转旧件作废**：`golden/magic/groupdeding.json` 旧件（三支 s1/s5/s13、玩家目标、`DC=0`、
+命中门恒 miss、`HP 100→100`）已由本节五支**替换**（同名覆盖）。原因 = 空转（玩家目标 +
+`GetAttackPower` 在 `DC=0` 时 `nPower=0`）；不保留同名旧件。
+
+**卡面未列的两个必要夹具输入（opc-19 2026-11-20 批准）**
+
+1. `MagicSpec.CasterDC`（落 golden `Fixture.caster_dc`）：
+   - 四支统一 `HUtil32.MakeWord(20,20)` ⇒ `Hi-Lo=0` ⇒ `GetAttackPower` 区间抽为 `Random(1)`、
+     `nPower` 恒 20（伤害常数）。**代价：本批四支不覆盖 `GetAttackPower` 的区间抽。**
+   - 为此另加第五支 `dc_range`：`MakeWord(20,30)`（区间 10）⇒ `Random(11)` 进伤害
+     （seed 7 抽到 4 ⇒ `nPower=24`、HP 300→276），覆盖区间抽。
+2. `MagicSpec.CasterAttackMode = HAM_PEACE`（落 golden `Fixture.caster_attack_mode`）：
+   - oracle ctor 默认 `HAM_ALL`；`PlayObject.IsAttackTarget` 的 `HAM_ALL` 对 `Race=Play(0< NPC=10)`
+     返回 true ⇒ 玩家 target 也进伤害链、也抽 `Random(15)`，逐只抽值序列会被玩家打断。
+   - `HAM_PEACE` 只放 `Race>=Animal` ⇒ 只有怪物进伤害链，抽值序列与卡面「怪物顺序固定」一致。
+   - **这是夹具输入、不是 oracle 行为；本批不覆盖 `HAM_ALL` 语义**（玩家 target 仍收
+     `RM_10205`/`SM_716`，其 HP 不变）。
+
+**五支（怪物顺序 = `GetMapBaseObjects` 收集序 x↑y↑；`CasterDC` 除 `dc_range` 外均 `MakeWord(20,20)`）**
+
+| case | seed | caster HitPoint | 怪物 | 期望（golden 实测） |
+|---|---|---|---|---|
+| `all_miss_hp0` | 0 | 0 | M1(101,101,S=0)、M2(102,100,S=1) | 门恒真全 miss；HP 300/300；RNG 7 |
+| `hit_ac_split` | 5 | 5 | M1(101,101,S=0,AC=0)、M2(102,100,S=0,AC=MakeWord(5,5)) | M1 HP 300→280、M2 300→287；RNG 12（含 2 次交付 `Random(1)`） |
+| `miss_by_draw` | 2 | 5 | M1(S=0)、M2(S=10) | M1 中（280）、M2 `Random(10)=8>=5` miss（300）；RNG 9 |
+| `dead_excluded` | 5 | 5 | M1(101,101,S=0,Death=true) | 死怪收集期被过滤；零抽；M1 无 RM；RNG 0 |
+| `dc_range` | 7 | 5 | M1(S=0,AC=0) | `Random(11)=4` ⇒ nPower=24 ⇒ HP 300→276；RNG 6 |
+
+**`hit_ac_split` 的 AC-only 约束（卡面约束①）**：两只怪除 `ac` 外 `x/y/race/level/hp/life_attrib/
+master/target_cret/speed_point/death` 全同（golden `Fixture.monsters` 并排可查）。x/y 不同仅为
+放置/收集序。
+
+**逐目标抽值与 `Random(0)`（卡面约束②）**：golden `mon{i}` 记 `GateIndex`/`GateDraw`/`GateHit`
+（命中门 `Random(SpeedPoint)` 在 `Rng` 中的序号与抽值）；`Random(0)` 也占位（M1 的 gate 抽为 0）。
+装置侧走查**恰好耗尽** `Rng`：怪物段（每只 2 抽攻击 + 1 抽门 + 命中时 1–2 抽护甲）+ 共享尾训练
+`Random(3)+1`（有非死怪时 1 抽）+ 交付段每命中怪 1 抽（`GetMagStruckDamage` 的 `Random(1)`，MAC=0）。
+不耗尽 ⇒ `FixtureContractViolation`（rc=2）。
+
+**`dead_excluded` 口径更正（opc-19 批准）**：死怪不是走 `:950` 的 continue，而是在
+`GetMapBaseObjects`（`BaseObject.cs` 收集期 `!baseObject.Death && !baseObject.Ghost`）就被过滤，
+**根本没进 objectList**。对外判据（无 `RM_10205` / 无 `RM_MAGSTRUCK` / HP 不变）一致，但
+**变异牙必须打收集过滤**（Rust `World::mag_objects_in_range_impl` 的 `!e.death && !e.ghost`），
+打 `:950` 无效。（§21 补注「变异要打到目标分支」的又一实例。）
+
+**附：`ArmRingAmulet` 对 39 无效**：39 不在 `src/M2Server/Magic/MagicManager.cs:315` 的护身符组（该组为
+13/14/15/16/17/18/19）；39 是 `:549` 的独立 case，无 `CheckAmulet`。装置保留 `ArmRingAmulet=true`
+只装护身符物品，不触发消耗/门。
