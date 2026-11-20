@@ -1,0 +1,467 @@
+{
+  "generator": "mir2-rs/tests/parity/m3/move-eat-probe",
+  "oracle_source_sha256": "ff1b10da0a43684a1fb802b9f5804c2eb542baa40e4bb6ee9a8dec26fdc9604a",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.Base.cs",
+    "src/M2Server/Player/PlayObject.Operate.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/Actor/BaseObject.Message.cs",
+    "src/M2Server/Player/PlayObject.Message.cs"
+  ],
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Base.cs:2163 (EatItems StdMode3 default -\u003E EatUseItems)",
+    "src/M2Server/Player/PlayObject.Base.cs:2228 (EatUseItems case1/2/3)",
+    "src/M2Server/Player/PlayObject.Base.cs:2312 (BaseObjectMove: sX/sY \u4EFB\u4E00\u4E3A 0 -\u003E MapRandomMove)",
+    "src/M2Server/Actor/BaseObject.cs:1104 (SpaceMove: RM_CLEAROBJECTS/CHANGEMAP/SPACEMOVE_SHOW \u002B SpaceMoveGetRandXY)",
+    "src/M2Server/Actor/BaseObject.cs:1214 (MapRandomMove: Random(Width-nEgdey-1)/Random(Height-nEgdey-1))",
+    "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems: WeightChanged \u002B SM_EAT_OK/FAIL)",
+    "src/M2Server/Actor/BaseObject.Message.cs:383 (SendRefMsg \u00B1SendRefMsgRange\uFF0C\u542B\u81EA\u5DF1)",
+    "src/M2Server/Player/PlayObject.Message.cs:1955 (RM_SPACEMOVE_FIRE -\u003E SM_SPACEMOVE_HIDE=800)",
+    "src/M2Server/Player/PlayObject.Message.cs:1759 (RM_WEIGHTCHANGED -\u003E SM_WEIGHTCHANGED=622)"
+  ],
+  "notes": [
+    "home/red_home \u662F PlayObject.HomeMap/HomeX/HomeY \u4E0E Config.RedHome* \u7684**\u5B57\u6BB5\u503C**\uFF1B\u771F\u5B9E\u94FE\u8DEF\u91CC home \u6765\u81EA login \u002B 3s CheckDupObjTick \u7684 GetStartPoint()\uFF08\u6309\u5F53\u524D\u5730\u56FE\u67E5 StartPointList\uFF0CPvpLevel\u003E=2 \u8D70 RedHome\uFF09\uFF0C\u4E0D\u662F [Setup] \u5E38\u91CF\u3002",
+    "\u79CD\u5B50\u5728 new PlayObject()\uFF08\u81EA\u8EAB 5 \u62BD\uFF09\u4E4B\u540E\u6CE8\u5165 \u21D2 \u8D26\u672C\u53EA\u542B\u672C\u6B21 ClientUseItems \u7684\u62BD\u6570\uFF1B\u4E24\u4FA7\u540C seed \u7684 legacy System.Random \u5E8F\u5217\u9010\u6B21\u5BF9\u9F50\u3002",
+    "pumped \u53EA\u542B SM_SPACEMOVE_HIDE(800)/SM_WEIGHTCHANGED(622)\uFF1A633/634/801 \u6362\u56FE\u7C07\u7531 Rust \u5BBF\u4E3B world tick \u7684 drain_map_change \u51FA\uFF0C\u4E0D\u5728\u672C\u5BF9\u62CD\u9762\uFF08\u5361\u9762\u767B\u8BB0\uFF09\u3002",
+    "MapRandomMove \u7684\u4E24\u62BD\u53C2\u6570\u6309**\u76EE\u6807\u56FE**\u5BBD\u9AD8\uFF08nEgdey\uFF1AH\u003C150 \u4E14 \u003E=30 \u21D2 20 \u21D2 Random(60-20-1)=Next(39)\uFF09\u3002",
+    "\u843D\u70B9\u53EF\u8D70 \u21D2 SpaceMoveGetRandXY 0 \u62BD\uFF1B\u672C\u6279\u5939\u5177\u5168\u53EF\u8D70\uFF0860x60 \u5168\u96F6\u683C\uFF09\u3002"
+  ],
+  "scenario_note": "\u5939\u5177\u5951\u7EA6\uFF1A\u4E09\u56FE 60x60 \u5168\u53EF\u8D70\uFF1BMapName == MapFileName \u4E3B\u5E72\uFF08\u65E0 [\u540D|\u6587\u4EF6] \u8986\u76D6\uFF09\uFF1B\u5730\u56FE Flag.DayLight=true\uFF08DayBright=0\uFF09\uFF1B\u5B9E\u4F53 Dir=4 / Light=0 / Feature=0 / Status=0\u3002\u6539\u52A8\u4EFB\u4E00\u524D\u63D0\u90FD\u8981\u540C\u65F6\u6539 golden \u7684 ctx\uFF08presentation/map_file_name/map_sizes\uFF09\u3002",
+  "map_geometry": {
+    "width": 60,
+    "height": 60,
+    "walkable": "all"
+  },
+  "templates": {
+    "3001": {
+      "name": "town_scroll",
+      "std_mode": 3,
+      "shape": 1,
+      "weight": 5
+    },
+    "3002": {
+      "name": "random_scroll",
+      "std_mode": 3,
+      "shape": 2,
+      "weight": 5
+    },
+    "3003": {
+      "name": "dungeon_scroll",
+      "std_mode": 3,
+      "shape": 3,
+      "weight": 5
+    }
+  },
+  "cases": [
+    {
+      "name": "eat_ok_shape1_town_scroll_home_random",
+      "ctx": {
+        "make_index": 1,
+        "index": 3001,
+        "actor_id": 933001,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 0,
+          "y": 0
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "norandom": false,
+        "seed": 20261120,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 47,
+            "n_param2": 44,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933001,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933001,
+            "param": 47,
+            "tag": 44,
+            "series": 0,
+            "tail": "6c6f3d706d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933001,
+            "param": 47,
+            "tag": 44,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "home_map",
+          "envir": "home_map",
+          "x": 47,
+          "y": 44
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [
+          {
+            "seq": 1,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 27,
+            "site": "max"
+          },
+          {
+            "seq": 2,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 24,
+            "site": "max"
+          }
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape1_town_scroll_empty_home_falls_back_to_current_map",
+      "ctx": {
+        "make_index": 1,
+        "index": 3001,
+        "actor_id": 933001,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "",
+          "x": 0,
+          "y": 0
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "norandom": false,
+        "seed": 20261121,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 28,
+            "n_param2": 56,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933001,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933001,
+            "param": 28,
+            "tag": 56,
+            "series": 0,
+            "tail": "6d6f566c6d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933001,
+            "param": 28,
+            "tag": 56,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "move_map",
+          "envir": "move_map",
+          "x": 28,
+          "y": 56
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [
+          {
+            "seq": 1,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 8,
+            "site": "max"
+          },
+          {
+            "seq": 2,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 36,
+            "site": "max"
+          }
+        ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    }
+  ]
+}
