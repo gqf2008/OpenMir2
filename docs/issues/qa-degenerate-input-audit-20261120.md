@@ -131,39 +131,45 @@ python -c "import json; d=json.load(open('golden/magic/fireball-5.json',encoding
 - 结果：`cloak(18)` / `bigcloak(19)` 比较器 rc=0（三人 657 series 均为 7）；
   牙：去掉"写实体"那半 ⇒ cloak 必红（9 条，golden=7 rust=0），恢复后回绿。
 
-### 8.3 剩余 4 条红 = **产品侧**缺陷（夹具/装置无责）
+### 8.3 657 `series` 的两段历史与最终状态（含第三处常量 0 的登记）
 
-观测（同一 run_id，`MIR2_CLIENT_ABILITY_LAYOUT` 未导出；括号内为 golden 期望）：
+**A. rebase 前（基 `dc5a82b20`）的观测**：4 条红（MG-28/29/43/59）。当时树上两个
+`take_buff_applies` 循环把 series 写死 0（单行的
+`smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0)` 及其多行形态）。
+**那是旧树状态，不是 master 现状**：`ce86a026f` 已把这两处改成 `push_charstatuschanged`
+（逐收件人取接收者实体）。**不要把旧树观测写成 master 缺陷。**
 
-| 条目 | stem | caster | target | obs_in | 比较器 |
-|---|---|---|---|---|---|
-| MG-28 | hangmajinbub(14) | **0 (7)** | 0 (0) | **0 (7)** | rc=101 |
-| MG-29 | dejiwonho(15) | **0 (7)** | 0 (0) | **0 (7)** | rc=101 |
-| MG-43 | shield(31) | **0 (7)** | **0 (7)** | **0 (7)** | rc=101 |
-| MG-59 | uenhancer(36) | 0 (0) | **0 (7)** | **0 (7)** | rc=101 |
+**B. rebase 后（master `784453241`，含 `ce86a026f` 与镜像修复 `064a861d1`）**：六条比较器
+**全部 rc=0**。每接收者 657 `series`（golden = rust）：
 
-**定位（符号锚；`bins/game-svr/**` 属卫生门 HIGH_CHURN，禁写行号锚）**：
+| stem | caster | target | obs_in | 比较器 |
+|---|---|---|---|---|
+| cloak(18) | 7 = 7 | 7 = 7 | 7 = 7 | rc=0 |
+| bigcloak(19) | 7 = 7 | 7 = 7 | 7 = 7 | rc=0 |
+| shield(31) | 7 = 7 | 7 = 7 | 7 = 7 | rc=0 |
+| uenhancer(36) | 0 = 0 | 7 = 7 | 7 = 7 | rc=0 |
+| hangmajinbub(14) | 7 = 7 | 0 = 0 | 7 = 7 | rc=0 |
+| dejiwonho(15) | 7 = 7 | 0 = 0 | 7 = 7 | rc=0 |
 
-- 宿主 buff-apply 段（`take_buff_applies` 的循环）用
-  `sm_charstatuschanged(ev.actor_id, ev.char_status, 0)` —— series **写死 0**，且**一条 body
-  广播给所有接收者**。这是 MG-28/29/43 的直接原因。
-- oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的 `case Messages.RM_CHARSTATUSCHANGED`）：
-  `SendDefMessage(SM_CHARSTATUSCHANGED, ActorId, LoWord(nParam1), HiWord(nParam1), this.HitSpeed)`
-  ⇒ **657 的 series = 处理这条 RM 的每个接收者自己的 `this.HitSpeed`**（不是发送者的、也不是常数）。
-- 因此 golden 的形状完全自洽：shield 三人应 7；14/15 的 caster/obs_in 保持 7、**target 因自身
-  `RecalcAbilitys` 的 `HitSpeed = AddAbil.HitSpeed`（`RecalcHitSpeed` 无被动 ⇒ 0）被重算回 0**；
-  36 的 caster 被重算成 0、旁观者保持 7。
-- `uenhancer` 的 657 走 ability 同步路径：`recalc_session_ability` 先把 `sg.hit_speed` 置 0，
-  再按单 body 发 —— 与上一条同根：**要按接收者取 `HitSpeed` 逐人生成 body**。
+oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的
+`case Messages.RM_CHARSTATUSCHANGED`）：`SendDefMessage(..., this.HitSpeed)`
+⇒ **657 的 series = 每个接收者自己的 `HitSpeed`**。表中 7/0 分布与
+"被 `RecalcAbilitys` 重算的实体归 0、旁观者保持 7"逐格吻合。
 
-**影响面**：MG-28 / MG-29 / MG-43 / MG-59 的 657 `series` 仍不可判绿；MG-32 / MG-33
-（cloak / bigcloak）在装置侧修好后已绿。
+**C. 第三处常量 0（登记，未验证）**：递减段 `rec.buff_status_changes` 处仍有
+`sm_charstatuschanged(*actor_id, *status, 0)`（常量 0）。**本批夹具不触发该路径，未验证**——
+登记在此，不要让第三处悄悄存在。
 
-### 8.4 合并顺序依赖（必须写明）
+**D. 合并集成项（本卡 rebase 时补的两处，行为不变）**：
+- master 新增的两个非 parity 单测仍按旧 4 参调 `fireball_rig` ⇒ 补 `mc=15`（旧硬编码值）；
+- `uenhancer_parity_drive` 的 hit_speed 注入原先只写会话 ⇒ 改为**会话 + 实体**双写
+  （与 `fireball_parity_drive` 同款；观察者副本读实体）。
 
-世代替换不是孤立改动：**先由产品侧卡修好"buff-apply 路径 657 series 逐接收者取值"，
-再合本卡（7 世代）**；否则 master 上 MG-28/29/43/59 四条比较器会立刻红。
-本卡分支冻结在 `20376762e`，不合并。
+### 8.4 合并顺序依赖
+
+世代替换的依赖是「**先 `ce86a026f`（657 逐收件人）与镜像修复 `064a861d1`，后本卡**」。
+该前置**已满足**（本分支 rebase 基 = `784453241`，两者都在）。合并时只需保证目标分支
+不回退到 `ce86a026f` 之前。
 
 ### 8.5 `recalc_hit_speed` 的准确表述（原样）
 
