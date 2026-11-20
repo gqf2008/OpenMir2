@@ -1097,7 +1097,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级 2026-11-20 升格（scope=partial）：数据+装置合并 master e5ca069ce（C# SinsuBatch + golden sinsu.json + Rust 驱动/比较器）；神兽 race=113（ELF_MONSTER）走 0.3 支，new_slaves 逐字段（神兽/1/hp20/max24/master=true）；三牙（stub_monster_race / 表名→slave_count_after / 发出名→new_slaves[0].name）见 docs/issues/openmir2-sinsu-mg41-evidence.md。驱动 `--exact --test-threads=1` 单跑（已登记 §57 合并门）。",
       "basis": "semantic",
-      "scope": "partial：两例 summon_ok + cap_hit。summon_ok（adopt：race=113 / slave_count 0→1 / regen_calls=1 / new_slaves 逐字段 / 帧 17·638·642 含 recog·due_ms_rel）；**cap_hit 回召面已覆盖**：`recall_moved` + 落点由 caster 坐标派生（施法方向 `DIR_RIGHT` ⇒ `after=(caster_x+1, caster_y)`，`before(0,0)≠after`）+ `Rng` 两侧同源 0 抽**逐值比** + `807`(SM_SPACEMOVE_SHOW2) 帧**未建模属已登记缺口**（`crates/world-bevy/src/space_move.rs:89`；不对称断言 golden 恰 3 / Rust 恰 0，建模后红）。仍保留的限制：`summon_ok` **不比 `Rng`**（离线替身造怪 0 抽 vs `create_monster_oracle` 真抽不同源）；`807` 仅登记未建模（非逐帧比）。"
+      "scope": "partial：两例 summon_ok + cap_hit。summon_ok（adopt：race=113 / slave_count 0→1 / regen_calls=1 / new_slaves 逐字段 / 帧 17·638·642 含 recog·due_ms_rel）；**cap_hit 回召面已覆盖**：门 `Rejected` 三断（`regen_calls=0` / `slave_count` 不变 / `new_slaves` 空）+ 帧 17·638·642（含 recog·due_ms_rel）+ `recall_moved` + 落点由 caster 坐标派生（施法方向 `DIR_RIGHT` ⇒ `after=(caster_x+1, caster_y)`，`before(0,0)≠after`）+ `Rng` 两侧同源 0 抽**逐值比** + `807`(SM_SPACEMOVE_SHOW2) 帧**未建模属已登记缺口**（`crates/world-bevy/src/space_move.rs:89`；不对称断言 golden 恰 3 / Rust 恰 0，建模后红）。仍保留的限制：`summon_ok` **不比 `Rng`**（离线替身造怪 0 抽 vs `create_monster_oracle` 真抽不同源）；`807` 仅登记未建模（非逐帧比）。"
     },
     {
       "id": "MG-42",
