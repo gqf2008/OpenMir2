@@ -37,7 +37,22 @@
 - 覆盖：`Skeleton` block 全字段、`new_slaves` 实值 20/24（level 1 / master_is_caster true）、帧 17/638/642 全等；`cap_hit` 三断（①实体数不增 5->5 ②`slave_count` 不变 1->1 且 `new_slaves` 空 ③`regen_calls=0`）各自独立成立。
 - ActorId 对齐：`id_base` 由 4000/5000 改 1000/2000（对齐 golden 的 `SM_638` 尾目标 ActorId 1002/2002）；此时全绿。
 - 桩态：`git status --porcelain` 空、`grep -rn MUTATION`=0。
-- **待办（窗口）**：全量门 `fmt` / `clippy --workspace` / `cargo test --workspace` / `msgcodegen --check` 尚未跑（车道受限，逐批收口时补跑）；§31 变异牙未做。
+- 门：`cargo fmt --check` / `msgcodegen --check`（604 条）/ `docs_anchor --prose --base f8c0b4b7d` 均绿；`clippy --workspace --all-targets -D warnings` 与 `cargo test --workspace` 待窗口（workspace 级一次一条）。
+- §31 变异牙见 §5b。
+
+## 5b. 变异牙（§31）——红在哪一层（断言原文）
+牙执行于 **code head `dac86eb0b`**（base `f8c0b4b7d`）；每颗 `BUILD_RC=0 / CMP_RC=101 / RESTORE=EQUAL / MUT=0`。三断已前移到 block 标量之前 ⇒ ②③ 变异先红在语义层，不回落到 block 标量。
+
+| 牙 | 变异点 | 红在哪一层 | 断言原文 | left / right |
+| --- | --- | --- | --- | --- |
+| ① 删半补（实现） | `crates/world-bevy/src/slave.rs` `make_slave_adopt`：删 `if mon.vitals.hp < mon.vitals.max_hp { … }` | block 标量 `new_slaves[].hp`（三断放行后才落此层 ⇒ 重排正确之证） | `[summon_ok] new_slaves[0].hp 不等` | `17` / `20` |
+| ② gate 恒真（实现） | `slave.rs` `summon_slave`：`let gate_ok = make_slave_gate(...)` → `let gate_ok = true;` | 三断「实体数不增」 | `[cap_hit 断①/实体数不增] 施法前后实体数变化：before=Some(5) after=Some(6)` | `6` / `5` |
+| ③ `slave_count_before` 写死 0（**断言自检牙，非实现**） | `bins/game-svr/src/lib.rs` 驱动：`let slave_before = rig.world.slave_count(caster)` → `0usize` | 三断「slave_count 不变」 | `[cap_hit 断②/slave_list 不变] slave_count 变化：before=0 after=1` | `1` / `0` |
+
+- 牙②驱动实测 `[skeleton cap_hit] seed=1 entities 5->6 slave 1->2 regen=1 frames=7 new=1`。
+- ②③ 均红在三断、未回落到 block 标量 ⇒ **三断判据本身成立**（非实现问题）。
+- ③ 仅自检「`slave_count` 比较能咬」，**不与 ①② 合并计为「实现被验证」**。
+- 还原后 `git status --porcelain` 空、`grep -rn MUTATION`=0。
 
 ## 6. 未覆盖面
 - **神兽（30）/ 精灵（41）** 的召唤面：`summon_slave` 已含 `Recalled`/`Blocked` 分支，但本卡只验 17。
