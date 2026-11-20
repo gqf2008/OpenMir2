@@ -1214,8 +1214,10 @@ internal static class Program
             lotteryCases.Add(Run("eat_ok_lottery_forced_bucket_p2",
                 _ => MakePlan("eat_ok_lottery_forced_bucket_p2", Six(0), Six(rate - 1))));
 
-            // ⑧ `IncGold` 失败支**不进探针**：oracle 走 `DropGoldDown` → `GetDropPosition`，
-            //    需要真实 Envir/Map（探针是假 Envir ⇒ NRE）。由 Rust 宿主级用例 ③ 覆盖。
+            // ⑧ `IncGold` 失败支**不进探针**（已证死路，见卡 §9.11）：oracle 走 `DropGoldDown` → `GetDropPosition`，
+            //    NRE 只来自 `CellArray` 为空（反射 `Envirnoment.Initialize(8,8)` 即可绕过），并非"必须真实地图"；
+            //    且失败支净效果与地图内容无关（`MapItem.ItemId` 恒 0 ⇒ `AddItemToMap` 首条守卫直接 false），
+            //    净效果 = 金币不变 + 无 `RM_ITEMSHOW` + 绿字照发。由 Rust 宿主级用例 ③ 覆盖。
         }
         else
         {

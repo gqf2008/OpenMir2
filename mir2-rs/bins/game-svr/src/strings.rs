@@ -102,6 +102,15 @@ pub const DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP: &str = "此地图不允许使用�
 /// oracle `MessageSettings.WeaponRepairSuccess`（`MessageSettings.cs:199`；`StringConf.cs:209` 读键）
 /// ——`RepairWeapon`/`SuperRepairWeapon` 的 `SysMsg(Green)` 文本（IT-14/IT-15）。
 pub const DEFAULT_WEAPON_REPAIR_SUCCESS: &str = "武器修复成功...";
+/// oracle `MessageSettings.WeaptonMakeLuck`（`MessageSettings.cs:211`；`StringConf.cs:219` 读键
+/// `WeaptonMakeLuck`）——祝福油「加幸运/消诅咒成功」的 `SysMsg(Green)` 文本（IT-12）。
+pub const DEFAULT_WEAPTON_MAKE_LUCK: &str = "武器被加幸运了...";
+/// oracle `MessageSettings.WeaptonNotMakeLuck`（`MessageSettings.cs:212`；`StringConf.cs:220`）
+/// ——祝福油未中（`SysMsg(Green)`，IT-12）。
+pub const DEFAULT_WEAPTON_NOT_MAKE_LUCK: &str = "无效!!!";
+/// oracle `MessageSettings.TheWeaponIsCursed`（`MessageSettings.cs:213`；`StringConf.cs:221`）
+/// ——祝福油诅咒支（`SysMsg(Red)`，IT-12）。
+pub const DEFAULT_THE_WEAPON_IS_CURSED: &str = "您的武器被诅咒了。";
 /// oracle `MessageSettings.WinLottery1Msg..=WinLottery6Msg`（`MessageSettings.cs:204-209`；
 /// `StringConf.cs:212-217` 逐键读），idx0 = `WinLottery1Msg`（一等奖）。
 pub const DEFAULT_WIN_LOTTERY_MSGS: [&str; 6] = [
@@ -158,6 +167,10 @@ pub struct StringConf {
     win_lottery_msg5: Option<String>,
     win_lottery_msg6: Option<String>,
     not_win_lottery_msg: Option<String>,
+    // 卡 `openmir2-runtime-sysmsg-text-frames`（续）：祝福油三条（IT-12）。
+    weapton_make_luck: Option<String>,
+    weapton_not_make_luck: Option<String>,
+    the_weapon_is_cursed: Option<String>,
     // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案（四个生产者）。
     canot_use_item_msg: Option<String>,
     canot_drop_gold_msg: Option<String>,
@@ -296,6 +309,30 @@ impl StringConf {
         self.weapon_repair_success
             .as_deref()
             .unwrap_or(DEFAULT_WEAPON_REPAIR_SUCCESS)
+    }
+
+    /// `[String] WeaptonMakeLuck`（`StringConf.cs:219`；`MessageSettings.cs:211`）。
+    #[must_use]
+    pub fn weapton_make_luck(&self) -> &str {
+        self.weapton_make_luck
+            .as_deref()
+            .unwrap_or(DEFAULT_WEAPTON_MAKE_LUCK)
+    }
+
+    /// `[String] WeaptonNotMakeLuck`（`StringConf.cs:220`；`MessageSettings.cs:212`）。
+    #[must_use]
+    pub fn weapton_not_make_luck(&self) -> &str {
+        self.weapton_not_make_luck
+            .as_deref()
+            .unwrap_or(DEFAULT_WEAPTON_NOT_MAKE_LUCK)
+    }
+
+    /// `[String] TheWeaponIsCursed`（`StringConf.cs:221`；`MessageSettings.cs:213`）。
+    #[must_use]
+    pub fn the_weapon_is_cursed(&self) -> &str {
+        self.the_weapon_is_cursed
+            .as_deref()
+            .unwrap_or(DEFAULT_THE_WEAPON_IS_CURSED)
     }
 
     /// `[String] WinLottery1Msg..=WinLottery6Msg`（`StringConf.cs:212-217`），idx0 = 一等奖。
@@ -609,6 +646,9 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "WINLOTTERY5MSG") => &mut conf.win_lottery_msg5,
             (Section::String, "WINLOTTERY6MSG") => &mut conf.win_lottery_msg6,
             (Section::String, "NOTWINLOTTERYMSG") => &mut conf.not_win_lottery_msg,
+            (Section::String, "WEAPTONMAKELUCK") => &mut conf.weapton_make_luck,
+            (Section::String, "WEAPTONNOTMAKELUCK") => &mut conf.weapton_not_make_luck,
+            (Section::String, "THEWEAPONISCURSED") => &mut conf.the_weapon_is_cursed,
             (Section::String, "CANOTUSEITEMMSG") => &mut conf.canot_use_item_msg,
             (Section::String, "CANOTDROPGOLDMSG") => &mut conf.canot_drop_gold_msg,
             (Section::String, "CANOTDROPINSAFEZONEMSG") => &mut conf.canot_drop_in_safe_zone_msg,

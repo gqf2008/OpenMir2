@@ -314,6 +314,13 @@ mod tests {
         serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
     }
 
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
     /// **IT-12 祝福油：纯决策与 oracle 逐例对拍**（`Desc[3]/[4]` 迁移 + 抽数）。
     ///
     /// 夹具由 `m3/oil-probe` 用**真身** `PlayObject.ClientUseItems` 产出；抽值由探针把
@@ -365,6 +372,41 @@ mod tests {
                 script.len(),
                 "{name}: 消耗抽数必须与 oracle 相同（script={script:?}）"
             );
+            // **SysMsg 文本**（卡 `openmir2-runtime-sysmsg-text-frames`）：oracle 记录
+            // `EDCode.EncodeString(Buff)` 的原始字节 hex；Rust 按 outcome 取同一条文案再编码，逐字节相同。
+            let sysmsgs: Vec<&serde_json::Value> = c["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| n["ident"].as_i64() == Some(11004))
+                .collect();
+            // oracle `MakeWeaponUnlock`（`PlayObject.cs:1607-1621`）：`Desc[3]==0 && Desc[4]>=10` 时
+            // **静默**（不发红字）；其余分支各一条。期望条数按此规则算，不是写死 1。
+            let want_sysmsg = match res.outcome {
+                LuckOutcome::Cursed => d3b > 0 || d4b < 10,
+                LuckOutcome::Made | LuckOutcome::NotMade => true,
+            };
+            assert_eq!(
+                sysmsgs.len(),
+                usize::from(want_sysmsg),
+                "{name}: SysMsg 条数（outcome={:?}）",
+                res.outcome
+            );
+            if want_sysmsg {
+                let got = hex_to_bytes(sysmsgs[0]["text"].as_str().unwrap_or(""));
+                let texts = crate::useitem::SysMsgTexts::default();
+                let want_text = match res.outcome {
+                    LuckOutcome::Cursed => texts.the_weapon_is_cursed,
+                    LuckOutcome::Made => texts.weapton_make_luck,
+                    LuckOutcome::NotMade => texts.weapton_not_make_luck,
+                };
+                let want = mir2_protocol::edcode::encode(&crate::downlink::gbk(want_text));
+                assert_eq!(
+                    got, want,
+                    "{name}: SysMsg 文本字节必须与 oracle 相同（outcome={:?}）",
+                    res.outcome
+                );
+            }
             if name == "oil_curse_desc4_at_ten_stays" {
                 saw_curse_at_ten = true;
                 assert_eq!(
@@ -459,6 +501,7 @@ mod tests {
                 green_msg_fcolor: 219,
                 green_msg_bcolor: 255,
                 repair_item_dec_dura: 90,
+                sysmsg: crate::useitem::SysMsgTexts::default(),
                 recalc: None,
             };
             let mut item_number = 0;

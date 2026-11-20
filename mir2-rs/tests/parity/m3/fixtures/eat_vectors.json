@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "3015f017e2a5beb93c1b9d194cf7487256921d3e908262f628fc29314d9140a7",
+  "oracle_assembly_sha256": "ee2cc2fb2ff3ced13c484c115c530f9574271699835d1176c4f0c302e28897d4",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -114,6 +114,66 @@
       "weight": 5,
       "ac": 0,
       "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2020": {
+      "name": "hp_only_fixed",
+      "std_mode": 0,
+      "shape": 1,
+      "weight": 5,
+      "ac": 30,
+      "mac": 10,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2021": {
+      "name": "mp_only_fixed",
+      "std_mode": 0,
+      "shape": 1,
+      "weight": 5,
+      "ac": 10,
+      "mac": 30,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2022": {
+      "name": "hp_only_percent",
+      "std_mode": 0,
+      "shape": 3,
+      "weight": 5,
+      "ac": 100,
+      "mac": 10,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2023": {
+      "name": "mp_only_percent",
+      "std_mode": 0,
+      "shape": 3,
+      "weight": 5,
+      "ac": 10,
+      "mac": 100,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2024": {
+      "name": "ac_only_pool",
+      "std_mode": 0,
+      "shape": 0,
+      "weight": 5,
+      "ac": 15,
+      "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2025": {
+      "name": "mac_only_pool",
+      "std_mode": 0,
+      "shape": 0,
+      "weight": 5,
+      "ac": 0,
+      "mac": 7,
       "dura_max": 0,
       "ani_count": 0
     },
@@ -6556,7 +6616,7 @@
         ],
         "added_items": [
           {
-            "make_index": 1133207293,
+            "make_index": 1138757312,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6578,7 +6638,7 @@
             ]
           },
           {
-            "make_index": 1133207294,
+            "make_index": 1138757328,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6600,7 +6660,7 @@
             ]
           },
           {
-            "make_index": 1133207295,
+            "make_index": 1138757329,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6622,7 +6682,7 @@
             ]
           },
           {
-            "make_index": 1133207296,
+            "make_index": 1138757330,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6644,7 +6704,7 @@
             ]
           },
           {
-            "make_index": 1133207297,
+            "make_index": 1138757331,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6666,7 +6726,7 @@
             ]
           },
           {
-            "make_index": 1133207298,
+            "make_index": 1138757332,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6726,7 +6786,7 @@
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1133207293,
+            "make_index": 1138757312,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6748,7 +6808,7 @@
             ]
           },
           {
-            "make_index": 1133207294,
+            "make_index": 1138757328,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6770,7 +6830,7 @@
             ]
           },
           {
-            "make_index": 1133207295,
+            "make_index": 1138757329,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6792,7 +6852,7 @@
             ]
           },
           {
-            "make_index": 1133207296,
+            "make_index": 1138757330,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6814,7 +6874,7 @@
             ]
           },
           {
-            "make_index": 1133207297,
+            "make_index": 1138757331,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6836,7 +6896,7 @@
             ]
           },
           {
-            "make_index": 1133207298,
+            "make_index": 1138757332,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -7236,6 +7296,880 @@
         ],
         "inc_health": 0,
         "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape1_clamp_hp_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_only_fixed"
+      },
+      "wabil_before": {
+        "level": 2,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 2,
+        "mp": 2,
+        "max_hp": 24,
+        "max_mp": 18,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 51,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": null,
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2020,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0,
+            "text": null
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 2,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 24,
+          "mp": 12,
+          "max_hp": 24,
+          "max_mp": 18,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 51,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape1_clamp_mp_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "mp_only_fixed"
+      },
+      "wabil_before": {
+        "level": 2,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 2,
+        "mp": 2,
+        "max_hp": 24,
+        "max_mp": 18,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 51,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": null,
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2021,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0,
+            "text": null
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 2,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 12,
+          "mp": 18,
+          "max_hp": 24,
+          "max_mp": 18,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 51,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_percent_clamp_hp_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_only_percent"
+      },
+      "wabil_before": {
+        "level": 4,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 10,
+        "max_hp": 37,
+        "max_mp": 25,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 55,
+        "wear_weight": 0,
+        "max_wear_weight": 16,
+        "hand_weight": 0,
+        "max_hand_weight": 13
+      },
+      "weapon_before": null,
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2022,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0,
+            "text": null
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 4,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 37,
+          "mp": 13,
+          "max_hp": 37,
+          "max_mp": 25,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 55,
+          "wear_weight": 0,
+          "max_wear_weight": 16,
+          "hand_weight": 0,
+          "max_hand_weight": 13
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_percent_clamp_mp_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "mp_only_percent"
+      },
+      "wabil_before": {
+        "level": 4,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 10,
+        "max_hp": 37,
+        "max_mp": 25,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 55,
+        "wear_weight": 0,
+        "max_wear_weight": 16,
+        "hand_weight": 0,
+        "max_hand_weight": 13
+      },
+      "weapon_before": null,
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2023,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0,
+            "text": null
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 4,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 14,
+          "mp": 25,
+          "max_hp": 37,
+          "max_mp": 25,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 55,
+          "wear_weight": 0,
+          "max_wear_weight": 16,
+          "hand_weight": 0,
+          "max_hand_weight": 13
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape0_ac_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "ac_only_pool"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 8,
+        "max_hp": 19,
+        "max_mp": 15,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": null,
+      "inc_health_before": 3,
+      "inc_spell_before": 4,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2024,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 10,
+          "mp": 8,
+          "max_hp": 19,
+          "max_mp": 15,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 18,
+        "inc_spell": 4,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape0_mac_only",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "mac_only_pool"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 8,
+        "max_hp": 19,
+        "max_mp": 15,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": null,
+      "inc_health_before": 3,
+      "inc_spell_before": 4,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2025,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0,
+            "text": null
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 10,
+          "mp": 8,
+          "max_hp": 19,
+          "max_mp": 15,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 3,
+        "inc_spell": 11,
         "user_unlock_durg": false,
         "hunger_status": 0,
         "item_list": [],

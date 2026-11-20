@@ -10890,6 +10890,7 @@ fn handle_eat_cmd(
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
             });
             out.notices.push(game_svr::useitem::QueuedNotice {
                 ident: game_svr::useitem::RM_SUBABILITY,
@@ -10897,19 +10898,34 @@ fn handle_eat_cmd(
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
             });
             let (f, b) = if res.outcome == crate::wepmake_luck::LuckOutcome::Cursed {
                 (colors.red_f, colors.red_b)
             } else {
                 (colors.green_f, colors.green_b)
             };
-            out.notices.push(game_svr::useitem::QueuedNotice {
-                ident: game_svr::useitem::RM_SYSMESSAGE,
-                w_param: 0,
-                n_param1: i32::from(f),
-                n_param2: i32::from(b),
-                n_param3: 0,
-            });
+            // **文本按结果入队**（卡 `openmir2-runtime-sysmsg-text-frames`）：oracle 的三条 `SysMsg` 文案
+            // `WeaptonMakeLuck` / `WeaptonNotMakeLuck` / `TheWeaponIsCursed`（`PlayObject.cs:1522-1622`）。
+            // **诅咒支的静默形态**：`MakeWeaponUnlock` 只在 `Desc[3]>0`（减幸运）或 `Desc[4]<10`（加诅咒）
+            // 时发红字（`PlayObject.cs:1607-1621`）；`Desc[3]==0 && Desc[4]>=10` 什么都不发
+            //（`oil_curse_desc4_at_ten_stays` 的 oracle 夹具 `notices` 里确实没有 11004）。
+            let cursed_noop = res.outcome == crate::wepmake_luck::LuckOutcome::Cursed
+                && res.desc3 == w.desc[3]
+                && res.desc4 == w.desc[4];
+            if !cursed_noop {
+                let text = match res.outcome {
+                    crate::wepmake_luck::LuckOutcome::Cursed => sysmsg.the_weapon_is_cursed,
+                    crate::wepmake_luck::LuckOutcome::Made => sysmsg.weapton_make_luck,
+                    crate::wepmake_luck::LuckOutcome::NotMade => sysmsg.weapton_not_make_luck,
+                };
+                out.notices
+                    .push(game_svr::useitem::QueuedNotice::sysmsg_text(
+                        u16::from(f),
+                        u16::from(b),
+                        text,
+                    ));
+            }
             // 线序由**全局 `NetPriorityQueue`** 决定（见下方排水）；本块只按 oracle 的**发送序**入队，
             // 不自行排序（牙：对调这两条发送序，线序必须不变）。
         }
@@ -91366,6 +91382,7 @@ GMEXECUTE f
             &lottery,
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let per = take7c(&mut rx0);
         for s in [901, 902, 903, 904] {
@@ -98846,6 +98863,7 @@ fn ",
             ability_tail: Vec::new(),
             sub_bytes: [0; 7],
             hunger_status: 0,
+            hit_speed: 0,
         };
         let notices = vec![
             game_svr::useitem::QueuedNotice {
@@ -98854,6 +98872,7 @@ fn ",
                 n_param1: 100,
                 n_param2: 0,
                 n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
             },
             game_svr::useitem::QueuedNotice {
                 ident: game_svr::useitem::RM_WEIGHTCHANGED,
@@ -98861,6 +98880,7 @@ fn ",
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
             },
         ];
         let sent = emit_eat_notices(&tx, 901, &notices, &wire);
@@ -99009,6 +99029,8 @@ fn ",
                 &mut world,
                 &colors,
                 90,
+                // master 的 `strings` 形参（`SysMsgTexts` 来源）；本用例不核文本，默认文案即可。
+                &game_svr::strings::StringConf::default(),
                 None,
                 &unbind,
                 &mut item_number,
@@ -99037,20 +99059,28 @@ fn ",
         let (ids, d3, d4) = eat(normal_seed, 0, 0);
         assert_eq!(
             ids,
-            vec![635, 752, 52, 622],
-            "线序：635 直发；泵 752(62) → 52(67) → 622(131)；sysmsg 文本缺口丢弃"
+            vec![635, 752, 52, 622, 100],
+            "线序：635 直发；泵 752(62) → 52(67) → 622(131) → SM_SYSMESSAGE(100，带文本 `WeaptonMakeLuck`)"
         );
         assert_eq!((d3, d4), (1, 0), "点1 支：Desc[3] 0→1、Desc[4] 不动");
 
         // ② 诅咒支（首抽 == 1）：Desc[3] 3→2；仍是 635 + 两条能力帧。
         let curse_seed = seed_with_first_below(20, 1);
         let (ids, d3, _) = eat(curse_seed, 3, 0);
-        assert_eq!(ids, vec![635, 752, 52, 622]);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622, 100],
+            "诅咒支：Desc[3] 3→2 ⇒ 红字 SM_SYSMESSAGE(100) `TheWeaponIsCursed`（oracle `PlayObject.cs:1612-1617`）"
+        );
         assert_eq!(d3, 2, "诅咒支：Desc[3] 3→2");
 
         // ③ 诅咒支 + Desc[4]=10 上界：Desc[3]=0 ⇒ Desc[4] 停在 10（不越界），仍吃。
         let (ids, d3, d4) = eat(curse_seed, 0, 10);
-        assert_eq!(ids, vec![635, 752, 52, 622]);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622],
+            "诅咒支 + Desc[3]=0/Desc[4]=10：`MakeWeaponUnlock` 两支都不进 ⇒ **零 SysMsg**（oracle 夹具同）"
+        );
         assert_eq!((d3, d4), (0, 10), "上界：Desc[4] 不加到 11");
     }
 }

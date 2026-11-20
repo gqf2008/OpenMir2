@@ -354,7 +354,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 3. **这是"夹具状态改动"引出的测试同步，非产品逻辑改动**：`useitem::tests::shape3_percent_rounds_away_from_zero` 读夹具、旧值 55/46 是旧夹具产物；仅同步该测试的注释+两条断言。`git diff e1d89cd12...HEAD -- '*useitem.rs'` 只含该测试行，`use_item` 实现零改动。
 4. **门必须在 throwaway 对象上复算（"测量的动作改变被测对象"）**：`derived` 门最初在 **eat po 上**跑 `RecalcLevelAbilitys()+RecalcAbilitys()`——二者会 `SendMsg(RM_ABILITY)` / 改 `CharStatus`，**污染 eat po 队列**，令每例多出 `RM_CHARSTATUSCHANGED(10139)`。改到独立 throwaway po（`DeriveWarriorMaxHpMp`）复算后 10139 消失。**门/测量永远不得作用于被测对象。**
 
-### 9.9 IT-14 修复油 Shape9（`RepairWeapon`）— implemented_unverified
+### 9.9 IT-14 修复油 Shape9（`RepairWeapon`）— verified（2026-11-20 升格）
 
 **关键归类订正**：`EatUseItems(case9=RepairWeapon)` 由 **StdMode 3** 的 `default` 调用（`PlayObject.Base.cs` 的 `switch(stdItem.StdMode) case 3: ... default: EatUseItems(shape)`），**不是 StdMode0**；StdMode0 的 `default` 是 AC/MAC 入池。故修复油 = **StdMode3 / Shape9**（初版误放 StdMode0 臂，已被对拍抓出并订正）。
 
@@ -366,9 +366,11 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 
 **A/B 说明（机械同步面）**：`handle_eat_cmd` 新参 `repair_item_dec_dura` 12 调用点（主 `enter_cfg.repair_item_dec_dura`；11 测试传 `90`——`ctx.repair_item_dec_dura` 在 `use_item` **仅 `9 =>` 臂一个读点**，非 Shape9 用例永不到达 ⇒ 占位值不参与判定）。`UseItemContext` 15 字面量；其中比较器 `matches_oracle_eat_fixture` 与 `nodrug_guard_does_not_consume` 两处**从夹具 `c` 取 green/dec**（配置进比较面），其余静态 `0/0/90`。Z5 豁免名单 +2（`eat_fail_shape9_full`、`eat_fail_shape9_no_weapon`，纯失败一层）。
 
-**运行期帧缺口（用户可见，非仅夹具）**：`SysMsg(WeaponRepairSuccess, Green)` → `SM_SYSMESSAGE` 文本帧，运行期宿主 `notice_frame` 用静态 `session.sys_msg` ⇒ 修复成功绿字**线上不发**（oracle 发）。同 StdMode1 food 口径，见 **`docs/issues/openmir2-runtime-sysmsg-text-frames.md`**。⇒ **IT-14 记 `implemented_unverified`，不计 verified**（待该卡实现文本帧后转 verified）。
+**运行期帧缺口（用户可见，非仅夹具）**：`SysMsg(WeaponRepairSuccess, Green)` → `SM_SYSMESSAGE` 文本帧，运行期宿主 `notice_frame` 用静态 `session.sys_msg` ⇒ 修复成功绿字**线上不发**（oracle 发）。同 StdMode1 food 口径，见 **`docs/issues/openmir2-runtime-sysmsg-text-frames.md`**。⇒ **2026-11-20 已补齐**：`String.conf` 键 `WeaponRepairSuccess` 经 `SysMsgTexts` → `NoticeText::Inline` 入队，
+`notice_frame` 用 `EDCode.EncodeString(文案)` 出尾；oracle 夹具 `eat_ok_shape9_repair_normal` 的 11004 `text`（hex `564c…5e5c`）
+由比较器逐字节核 ⇒ **IT-14 升格 `verified`（card/items-b3）**。
 
-### 9.10 IT-15 特修油 Shape10（`SuperRepairWeapon`）— implemented_unverified
+### 9.10 IT-15 特修油 Shape10（`SuperRepairWeapon`）— verified（2026-11-20 升格）
 
 **归类**：与 IT-14 同一条 **StdMode3** 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2162-2163`），只是 `EatUseItems` 的 **case 10**（`:2292`）→ `SuperRepairWeapon()`（`PlayObject.cs:1589`）。**非 StdMode0**。
 
@@ -388,9 +390,10 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 
 **牙（三颗）**：T1 `Dura=DuraMax`→`+1`（weapon_after 不符）；T2 去 `RM_DURACHANGE` 推送（notices 缺 10125）；**T3 `3 if tpl.shape == 10`→`== 9`（串到修复油支）⇒ 必红**（防 shape 臂写错）。
 
-**状态**：`implemented_unverified`（运行期文本帧缺口，同 IT-14 口径，不计 verified）。
+**状态**：`verified`（2026-11-20，card/items-b3）。同一 `WeaponRepairSuccess` 文本链路（IT-14）；夹具三例的
+11004 `text` 非空且与 Rust 编码逐字节一致（`eat_ok_shape10_repair_normal` / `_full_still_eaten` 两例核文本）。
 
-### 9.11 IT-16 彩票 Shape11（`WinLottery`）— 开写口径（代码待窗口内写）
+### 9.11 IT-16 彩票 Shape11（`WinLottery`）— implemented_unverified（失败支为已证死路）
 
 **归类**：**StdMode3 / Shape11**，经 `default: EatUseItems(shape)` 的 **case 11**（`PlayObject.Base.cs:2298`）→ `WinLottery()`（`PlayObject.cs:3809`）。**物品恒被吃**（`case 11: WinLottery(); result=true;`）。
 
@@ -425,13 +428,18 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
 - **冲突处置**：任何非 `make_index` 差异 ⇒ **停下报 `opc-07`**，不得拿 grep 洗白。
 
+- **夹具重出（2026-11-20，card/items-b3，master 的 eat-probe）**：以 `MIR2_RNG_SEED=20261120` 重出后
+  `cases=37`（31 既有 + B3 六例）、`lottery.cases=12`；与合入前逐路径比只剩 **8 处** —— 六例新增 case/template、
+  `cases.len 31→37`、`oracle_assembly_sha256`（构建产物 hash，仅溯源）。**31 例除墙钟 `make_index` 外逐字节不变**；
+  `oracle_source_sha.py --fixture …` ⇒ **MATCH**（`51a289e2…`）。
+
 **配置同源（27 键，不写死）**：部署 `Server.conf` 实际 **27** 个 `WinLottery*` = **19 参数 + 8 状态初值**（原卡面"25 键"作废）。
 - 19 参数：`WinLotteryRate` + `WinLottery{1..6}Min/Max` + `WinLottery{1..6}Gold`（部署：Rate=30000、6Min=1/6Max=4999…1Min=16180/1Max=16185、Gold 1000000…500；与 `GameSvrConf.cs` ctor 缺省逐键相同）。
 - 8 初值：`WinLotteryCount`/`NoWinLotteryCount`/`WinLotteryLevel1..6`（`src/Modules/SystemModule/Conf/ServerConf.cs:645-652`；部署全 0）。
 - 落点：`GateConfig` 新字段 `win_lottery: WinLotteryCfg`（`config.rs`，仿 `repair_item_dec_dura` 的 struct+parse+default）+ `EnterConfig` 字段 + `handle_eat_cmd` 按值传（全 i32 ⇒ `Copy`）。**同一结构**（`opc-07` 2026-11-20 批准）：oracle 就是同一批字段同一批读入，"配置即初值"是 oracle 事实。
 - 结构：`rate: i32` / `min|max|gold: [i32;6]`（idx0=1 等奖…idx5=6 等奖，映射只在解析处做一次）/ `init_count` / `init_no_win` / `init_level: [i32;6]`（`init_` 前缀标"只做启动初值"；唯一入口 `init_state()`）。
 
-**宿主 WinLottery**（`handle_eat_cmd`，shape11 `eaten` 后）：`world.rng.random_below(rate)` 抽 → 6 段匹配（判序 6→5→4→3→2→1，1 级为和式等值）+ `Count < NoWinLotteryCount` 闸 → 中：`WinLotteryLevelN++`、绿 SysMsg、`ground::inc_gold(gold, nGold, HumanMaxGold)` 成功才 `GoldChanged()`（`SM_GOLDCHANGED`），失败走 `DropGoldDown` bug-replica（**净金币不变且不发 `GoldChanged`**）；未中/闸闭：`NoWinLotteryCount += 500` + 红 SysMsg。
+**宿主 WinLottery**（`handle_eat_cmd`，shape11 `eaten` 后）：`world.rng.random_below(rate)` 抽 → 6 段匹配（判序 6→5→4→3→2→1，1 级为和式等值）+ `Count < NoWinLotteryCount` 闸 → 中：`WinLotteryLevelN++`、绿 SysMsg、`ground::inc_gold(gold, nGold, HumanMaxGold)` 成功才 `GoldChanged()`（`SM_GOLDCHANGED`），失败走 `DropGoldDown` bug-replica（**净金币不变且不发 `GoldChanged`**；死路已证：`ItemId` 恒 0 ⇒ `AddItemToMap` 守卫直接 false）；未中/闸闭：`NoWinLotteryCount += 500` + 红 SysMsg。
 - **oracle bug，为 parity 复制**：绿字 SysMsg 在 `IncGold` **之前**发出 ⇒ `IncGold` 失败也照样先报"中奖"（`PlayObject.cs:3873-3897`）。**照抄**；将来若要修正玩法，须单独开卡并接受与 oracle 偏离。
 - **帧序断言（不是注释）**：
   - 主断言：宿主中奖用例捕获物化通知序列，断言 `ident as u8` **严格升序**（`RM_GOLDCHANGED` 10136→152 < `RM_SYSMESSAGE` 11004→252），写成**性质断言** `windows(2).all(|w| w[0] < w[1])`（不钉两元素字面量，将来加帧不用改测试）；比较器仍按 §3 七字段**多重集**比（夹具每条的 `priority` 是其旁证）。
@@ -449,7 +457,12 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 7. **帧序对调**：`win_notices` 里绿字放到 GoldChanged 之前（`notice_order_is_pump_priority_ascending` 红）。
 
 **状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 `opc-07` 加指 IT-16）。
-- **未覆盖缺口登记（不计入行为面 `verified`）**：`IncGold` 失败支在 oracle 侧**无夹具证据**——探针是假 `Envir`，oracle 失败支走 `DropGoldDown(nGold, true, 0, 0)`（`src/M2Server/Player/PlayObject.cs:3897`）→ `GetDropPosition`（`src/M2Server/Actor/BaseObject.cs:485`）触发 NRE，探针跑不了；该支仅由 Rust 宿主用例 `tests::it16_lottery_frame_order_gold_counters_and_always_eaten` ③ 覆盖（金币不变、无 653、等级照加、绿字照发）。
+- **已证死路（2026-11-20 修正，替代原「无 oracle 证据」口径；opc-19 裁定）**：`IncGold` 失败支**可达**（`Gold + nGold > HumanMaxGold`，`src/M2Server/Player/PlayObject.Base.cs:165-172`），但它的「掉堆 + `RM_ITEMSHOW`」效果在 oracle 里**结构性不可能发生**：
+  1. `DropGoldDown` 构造的 `MapItem` 不设 `ItemId`（`src/M2Server/Actor/BaseObject.cs:740-748`）；
+  2. `Envir.AddItemToMap` 首条守卫 `if (mapItem.ItemId == 0) return false;`（`src/M2Server/Maps/Envirnoment.cs:88-93`）；
+  3. 全仓 `MapItem.ItemId` 唯一赋值点被注释掉（`src/Modules/SystemModule/Data/MapItem.cs:41`）⇒ 本地构造的 `MapItem` 恒 `ItemId=0`。
+  ⇒ 失败支净效果 = **金币不变 + 不发 `RM_GOLDCHANGED` + 不发 `RM_ITEMSHOW` + 绿字照发**（绿字在 `IncGold` 之前，`PlayObject.cs:3873-3894`）。同一守卫也是 `ScatterGolds`（`BaseObject.cs:1728-1736`）与 `ClientDropGold`（`PlayObject.Operate.cs:242-249`）在 false 时回滚金币的根因 —— 一处根因解释三处行为。Rust 实现与该净效果一致并有用例（`lib.rs` 宿主 `inc_gold` 门 + `winlottery.rs` 单测 ③）；**本支不再计为缺口**，且后来者**不应再去实现掉落**。
+- **原「探针跑不了」的说法要更正**：NRE 只来自 `CellArray` 为空（`src/M2Server/Maps/Envirnoment.cs:322-333` 的 `return ref CellArray[0]`；`CellArray` 私有 :36、由私有 `Initialize(w,h)` :1036 分配），反射调 `Initialize(8,8)` 即可；且失败支结果**与地图内容无关**（守卫在碰 cell 之前就 `return false`）。runtime 加固例另开小卡（不阻塞）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
 
 ### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（implemented_unverified）
@@ -668,7 +681,7 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
 
 **状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
-### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— 开写口径
+### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
 **归类**：**StdMode 3 / Shape 4**。链路：`EatItems`（`PlayObject.Base.cs:2047`）→ `case 3`（`:2098`）→ `switch (stdItem.Shape)`（`:2099`）→ `default: EatUseItems(...)`（`:2162`）→ `case 4`（`:2259`）→ `WeaptonMakeLuck()`（`PlayObject.cs:1500`，原文拼写即 `Weapton`）。**有武器且 `Index > 0` 时恒吃**（函数恒 `return true`）；无武器 ⇒ 返回 false ⇒ **不吃**（636）。
 
@@ -709,7 +722,7 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 **第二批（探针/夹具/比较器/牙，2026-11-20）**
 - **探针**：新建 `mir2-rs/tests/parity/m3/oil-probe`（不动 `eat-probe`），产物 `mir2-rs/tests/parity/m3/fixtures/oil_vectors.json`（12 例）。`weapon_before/after` 记**整套 `desc[14]`**（后续 shape 可复用同一 schema）；抽值用 `ScriptedRandom` 装进 `OpenMir2.RandomNumber.random`（= `WeaptonMakeLuck` 读的字段）；pump `RM_ABILITY`/`RM_SUBABILITY`/`RM_WEIGHTCHANGED` ⇒ 每例 `pumped=[752,52,622]`、直发 `[635]`。
 - **Oracle 实测要点**：`oil_curse_desc4_at_ten_stays` 在 oracle 里**一条 sysmsg 都没有**（`Desc[3]=0` 且 `Desc[4]=10` ⇒ `MakeWeaponUnlock` 两支都不进）——这是"上界不越界"的最强证据；失败支 `oil_fail_no_weapon` = 636 + 零通知、`oil_fail_nodrug` = 636 + 恰一条红字。
-- **新增缺口（登记，不静默）**：所有"吃掉"例的 oracle 通知都含 `RM_CHARSTATUSCHANGED(10139)`（`RecalcAbilitys()` 的侧效应）；Rust 宿主**未建模 10139**（`notice_frame` 无映射、按 WRN 丢弃）——与 sysmsg 文本缺口并列，**不计入行为面 verified**。单独立卡：`docs/issues/openmir2-charstatuschanged-gap.md`（含产生点/丢弃点/blast radius grep/补齐后复评清单）。**泵序键：`10139 & 0xFF = 155`** ⇒ 排 `622(131)` 之后、`252` 之前（`62 < 67 < 131 < 155 < 252`）。
+- **新增缺口（登记，不静默；2026-11-20 已闭合，原口径保留作废留痕）**：所有"吃掉"例的 oracle 通知都含 `RM_CHARSTATUSCHANGED(10139)`（`RecalcAbilitys()` 的侧效应）；[作废]Rust 宿主未建模 10139（`notice_frame` 无映射、按 WRN 丢弃）——**已由 `card/charstatuschanged` 在 master 映射（657 臂）**，见 `docs/issues/openmir2-charstatuschanged-gap.md`（产生点/丢弃点/blast radius grep/复评清单）。**泵序键：`10139 & 0xFF = 155`** ⇒ 排 `622(131)` 之后、`252` 之前（`62 < 67 < 131 < 155 < 252`）。
 - **比较器**：`wepmake_luck::tests::it12_oil_fixture_matches_pure_decision`（逐例 Desc[3]/[4] 迁移 + 消耗抽数）、`it12_oil_fail_cases_eat_and_frames`（636/通知/纯路径不吃）。
 - **牙（2026-11-20 按章程 §31 五点重述；变异还原后 `touch`，见下方 mtime 教训）**：
   | 变异 | 变异行（原文） | 已重编 | 红在预期断言 | 还原 sha | 基线 |
@@ -718,6 +731,16 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
   | T2 点1 比较 | `} else if i32::from(d3) <= cfg.point1 {` | 同上 | `oil_point2_hit: 消耗抽数必须与 oracle 相同（script=[0, 1]）` | 相等 | 绿 |
   | T3 Desc[4] 上界 | `} else if desc4 < 11 {` | 同上 | `it12_oil_fixture_matches_pure_decision` + 宿主帧序例 | 相等 | 绿 |
   | T4 去点3 抽 | `} else if i32::from(d3) < cfg.point3 {` | 同上 | `oil_point2_miss_point3_hit: 消耗抽数必须与 oracle 相同（script=[0, 0, 1]）` | 相等 | 绿 |
+
+**升格（2026-11-20，card/items-b3）**：两条缺口都已闭合——
+1. **`SysMsg` 文本**：`String.conf` 三键 `WeaptonMakeLuck`/`WeaptonNotMakeLuck`/`TheWeaponIsCursed` → `SysMsgTexts` → `NoticeText::Inline`；
+   oil-probe 的 `Drain` 增 `text = TextHex(...)`（口径同 eat-probe：`EDCode.EncodeString(Buff)` 原始字节 hex），12 例重出后
+   每例 11004 都带 `text`；比较器按 `res.outcome` 取同一条文案再编码，**逐字节相等**。
+2. **`RM_CHARSTATUSCHANGED(10139)`**：已由 `card/charstatuschanged` 在 master 映射（`pickwire::notice_frame` 的 657 臂）。
+- 顺带两条口径：`oil_curve_desc4_at_ten_stays`（`Desc[3]==0 && Desc[4]>=10`）oracle **零 sysmsg** ⇒ 宿主按
+  `cursed_noop`（诅咒支且 `Desc` 未变）**不入队**红字，比较器按同一规则算期望条数；`oil_vectors.json` 的
+  `config.exps_conf` 由绝对路径改回**文件名**（进仓可复现，`oracle_source_sha.py` MATCH）。
+- **状态**：`verified`（12 例 oracle 夹具 + 比较器 + 四牙）。
   | 泵序对调 | `RM_ABILITY`/`RM_SUBABILITY` 两条 push 互换 | 同上 | **不红**（线序由堆决定，这正是要证的） | 相等 | 绿 |
 - **过程留痕（教训）**：变异还原用 `shutil.copy2` 会**保留 mtime** ⇒ cargo 不重编 ⇒ 首轮全量 `2083 passed / 4 failed` 是**陈旧二进制的假红**；`touch` 源码后复跑 `2087 passed / 0 failed / 61 ignored`。后续变异脚本还原后必须 `touch` 或 `cargo clean -p game-svr`。**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
 

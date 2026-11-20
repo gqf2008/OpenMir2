@@ -361,11 +361,26 @@ internal static class Program
                         n_param3 = (int)mt.GetField("nParam3").GetValue(m),
                         priority = prio,
                         late = ((bool)mt.GetField("LateDelivery").GetValue(m)) ? 1 : 0,
+                        text = TextHex(mt, m),
                     });
                 }
                 return (int)countProp.GetValue(pq) > 0;
             });
         return (list, raw, passes, hitCap);
+    }
+
+    /// <summary>延时通知的文本段，口径同 eat-probe（`EDCode.EncodeString(Buff)` 的原始字节 hex；
+    /// 空 Buff ⇒ null）。oracle 的 `SysMsg` 文本由 `SendMessage.Buff` 携带。</summary>
+    private static string TextHex(Type mt, object m)
+    {
+        var buffField = mt.GetField("Buff") ?? throw new MissingFieldException(mt.Name, "Buff");
+        string buff = (string)buffField.GetValue(m) ?? string.Empty;
+        if (buff.Length == 0)
+        {
+            return null;
+        }
+        byte[] encoded = HUtil32.GetBytes(EDCode.EncodeString(buff));
+        return Convert.ToHexString(encoded).ToLowerInvariant();
     }
 
     private static object RunCase(GameItemSystem table, CaptureNetChannel net, string name,
@@ -903,7 +918,8 @@ internal static class Program
             // IT-08 升级支：配置文件身份钉进 golden（路径 + sha256；配置一变换 ⇒ 该 golden 失效）。
             config = new
             {
-                exps_conf = Path.Combine(AppContext.BaseDirectory, "Exps.conf"),
+                // 口径同 eat-probe：**只记文件名**（绝对路径进仓即不可复现；配置身份 = 文件名 + sha256）。
+                exps_conf = "Exps.conf",
                 exps_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Exps.conf")),
                 server_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Server.conf")),
                 need_exps_head = SystemShare.Config.NeedExps.Take(8).ToArray(),
