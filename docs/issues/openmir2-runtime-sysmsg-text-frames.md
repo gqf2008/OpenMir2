@@ -58,6 +58,13 @@
 
 ## 8. 登记缺口（不在本卡）
 
-- `RM_MENU_OK` 的尾文案 `MessageSettings.CanotUseItemMsg`（`use_item` / drop 守卫 / 脚本三处
-  同 ident）——夹具照实记录，比较器以**集合白名单 `{RM_MENU_OK}`** 钉住：未建模，但不静默。
+- ~~`RM_MENU_OK` 的尾文案~~ **已补（2026-11-20，`card/charstatuschanged` 的前一批）**：
+  `use_item`（`CanotUseItemMsg`）与 `ground::drop_item` 两条守卫（`CanotDropInSafeZoneMsg` /
+  `CanotDropItemMsg`）已带文本入队，`notice_frame` 的 `RM_MENU_OK` 臂接尾；脚本路径本就有尾
+  （`script_frame` 读 `SendMsg.msg`）。比较器的白名单已**收紧为「未比较的带文本 ident 必须为空」**。
+  `inbound::client_drop_gold` 的 `DefFrame` 刻意"无尾"⇒ **在发送点补尾**（不扩类型）：按
+  `DropGoldReject` 取 `CanotDropInSafeZoneMsg` / `CanotDropGoldMsg` / `CanotDropItemMsg`。
+  **覆盖口径**：ground 路径（`CM_DROPITEM` 两条守卫）的尾文案目前只有**专用用例**
+  （`menu_ok_carries_drop_guard_messages`）覆盖，**未进 `ground_vectors.json`**（该夹具只比七字段，
+  `strip_text` 归一）；补 `text` 字段另开一笔（夹具 schema 变更单独成批）。
 - `move_eat_vectors.json`（e1 车道的 `move-eat-probe`）需同步 `notices[].text` schema。
