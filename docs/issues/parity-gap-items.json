@@ -500,25 +500,33 @@
         "line": 2171,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "S-M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          14,
-          14
+        "test": "readbook::tests::it17a_read_book_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/readbook.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/readbook_vectors.json",
+        "cases": [
+          "eat_ok_book_ergum_learns_and_thrusting",
+          "eat_ok_book_banwol_learns_and_halfmoon",
+          "eat_ok_book_level_boundary_equal",
+          "eat_fail_book_magic_not_in_table",
+          "eat_fail_book_already_learned",
+          "eat_fail_book_job_mismatch",
+          "eat_fail_book_level_too_low",
+          "eat_fail_book_already_learned_and_level_low"
+        ],
+        "unit_tests": [
+          "readbook::tests::it17a_success_ergum_raw_socket",
+          "readbook::tests::it17a_gate_magic_not_in_table",
+          "readbook::tests::it17a_gate_already_learned",
+          "readbook::tests::it17a_gate_job_mismatch",
+          "readbook::tests::it17a_gate_level_boundary_equal",
+          "smframe::tests::sm_addmagic_wrapper_keeps_additemskill_level"
         ]
       },
-      "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item；magic_list 未 wire（IT-17 接 SavedHuman.record.data.magic 前保持 missing；实现未 wire 时 implemented_unverified）"
+      "cost": "S-M",
+      "deviation": null,
+      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：RecalcAbilitys 的技能被动（HitPoint/SpeedPoint/DC、MagicArr 战斗效果）属能力层缺口（IT-17b，另立卡）；657 本卡按同值发。"
     },
     {
       "id": "IT-18",

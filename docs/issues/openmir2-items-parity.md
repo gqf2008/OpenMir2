@@ -442,3 +442,58 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 `opc-07` 加指 IT-16）。
 - **未覆盖缺口登记（不计入行为面 `verified`）**：`IncGold` 失败支在 oracle 侧**无夹具证据**——探针是假 `Envir`，oracle 失败支走 `DropGoldDown(nGold, true, 0, 0)`（`src/M2Server/Player/PlayObject.cs:3897`）→ `GetDropPosition`（`src/M2Server/Actor/BaseObject.cs:485`）触发 NRE，探针跑不了；该支仅由 Rust 宿主用例 `tests::it16_lottery_frame_order_gold_counters_and_always_eaten` ③ 覆盖（金币不变、无 653、等级照加、绿字照发）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
+
+### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
+
+**为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）
+是一条物品行为的完整边界；而 `RecalcAbilitys` 的**技能被动**（`HitPoint/SpeedPoint/DC`、`MagicArr` 由
+`MagicList` 填充后的战斗效果）是**能力层缺口**（`attackwire` 头注释：`MagicArr` 恒空）——并入会让本卡
+一半判据不属于它。**17b 单独立卡**（[`openmir2-recalc-skill-passives-17b.md`](openmir2-recalc-skill-passives-17b.md)），本卡只认学习面。
+
+**oracle 锚**：`ClientUseItems` 的 `case 4:`（`PlayObject.Operate.cs:632-654`）→ `ReadBook`
+（`PlayObject.Base.cs:2171-2200`）：① `FindMagic(stdItem.Name)`（按**物品名**、忽略大小写、装表序首匹配）
+② `!IsTrainingSkill`（`MagicList` 已有 `MagIdx`）③ `magic.Job == 99 || == (byte)Job` ④
+`Abil.Level >= TrainLevel[0]`。三门 ②③④ 的**唯一实现**复用 `world-bevy::magic::can_read_book`
+（本模块不复制第二份判定）。成功 ⇒ `MagicList.Add(UserMagic{Level=0,Key=0,TranPoint=0})` →
+`RecalcAbilitys` → `SendAddMagic`（`SM_ADDMAGIC 0/0/0/1` + `EDCode(ClientMagic)`）→ case 4 尾段：
+`SKILL_ERGUM(12)`/`SKILL_BANWOL(25)` 的 `UseThrusting/UseHalfMoon` 开关 + `SendSocket("+LNG"/"+WID")`
+（**原始串帧**）+ 绿字 `SysMsg` → `WeightChanged()` → `SM_EAT_OK(635)`。**ReadBook 路径 0 抽**。
+
+**实现**：
+- `bins/game-svr/src/readbook.rs`：`MagicState`（`MagicList` 快照 + 两开关 + `Arc<MagicTable>`）+
+  `maybe_read_book`（非书/失败 ⇒ 返回 false，交回 `use_item` ⇒ StdMode4 无臂落 636，与 oracle 失败支同帧；
+  书**不受 `boNODRUG`**，只受 `dead`）。帧序：`210 → (+LNG/+WID) → 635 → 622 → 657 → 100`。
+- `SessionGround.magic`：写点 = 登录（`magicaudit::filter_for_logon` + 进程级 `Arc` 魔法表 + 无文案）
+  + 学成追加；`build_save_record` 以 `magicaudit::pad_for_save` 回写记录（学到即落库，重登不丢）。
+- `smframe`：`sm_addmagic_with(level, def)` 参数化；`sm_addmagic` 包装保持 `AddItemSkill` 的 `Level=1`
+  并有回归 `sm_addmagic_wrapper_keeps_additemskill_level`（读本的 `Level=0` 走 `_with(0, …)`）。
+- `strings.rs`：`[String] ThrustingOn/HalfMoonOn`（缺键回落 `MessageSettings.cs:48/50` 的默认文案）；
+  `handle_eat_cmd` 已从 master 带入 `&StringConf` 参数，本模块直接用，不再造会话文案快照。
+
+**装置**：`mir2-rs/tests/parity/m3/readbook-probe`（**独立目录**，不动 eat/oil/move 探针）→
+`mir2-rs/tests/parity/m3/fixtures/readbook_vectors.json`。`IWorldEngine` 用 `DispatchProxy` 只实现
+`FindMagic(string|int)`；`RecordingRandom` 固定种子记录（本卡 0 抽自证）；帧记 **payload 全 hex**
+（`ServerMessage` 20B 头之后：SM 帧 = 12B 命令头 + 尾；`+LNG`/`+WID` = 明文原始串帧）；golden 逐字段
+记 `MagicInfo`（`ClientMagic.Def` 的来源）+ `MagicList/MagicArr/两开关/背包/Weight`。
+生成（仓库根）：
+`dotnet run --project mir2-rs/tests/parity/m3/readbook-probe -c Release -- mir2-rs/tests/parity/m3/fixtures/readbook_vectors.json`
+
+**对拍（8 例；`it17a_read_book_host_parity` + 五颗单跑）**：
+成功×3（刺杀 `+LNG` / 半月 `+WID` / 等级边界 20==20 可学）、门①表无名、门②已学、门③职业不符、
+门④等级不足、门②+③同时不满足（两条失败路径帧相同 ⇒ **顺序不可观测**，只证各自可达）。
+比较面：帧 `payload` **逐字节**（`Recog` 按夹具 ActorId 归一）、`MagicList` 终态（保序）、两开关、
+背包件数、`Weight`、`rng_draw_count==0`。
+**17b 边界**：`RecalcAbilitys` 的 657 只按**同值**发（`GetCharStatus()` + 当前 `HitSpeed`）；技能被动与
+`WAbil` 重算不在本卡（探针记录值在无被动技能下与 oracle 相同）。
+
+**牙（每支单跑留原文）**：M1 `is_training` 恒 false ⇒ 已学例红；M2 job 恒 99 ⇒ 职业例红；
+M3 等级 -1 ⇒ 边界例红（证 `>=`）；M4 不追加 MagicList ⇒ 成功例红；M5 `sm_addmagic_with(0)`→`(1)`
+⇒ 成功例 210 尾红，而 `sm_addmagic` 的 AddItemSkill 回归**仍绿**（两条路径分离）；M6 删 `+LNG` 原始串帧
+⇒ 成功例帧序红。还原后 `sha256` 相等 + 基线七颗复绿（变异脚本对 `copy2` 的旧 mtime 做 `utime`）。
+
+**§33 补记（lane 偶发，回填 §9.13 的缺口）**：IT-10 牙脚本首跑时 9 项里 **2 项 MISMATCH（共 1 次）**，
+当时**全机 4 个 cargo 在场**；车道空后同一脚本复跑 **9/9 全绿**（无改动）。⇒ 基线/牙只在车道空
+（≤1 条在编、free ≥5G）时跑；报告偶发必须给「次数/总数」。该补记应在 `card/items-move-09` 签署完成后
+以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
+
+**状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
