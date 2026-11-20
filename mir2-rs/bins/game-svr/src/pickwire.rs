@@ -41,7 +41,9 @@ use crate::ground::{
 };
 use crate::npc::SendMsg;
 use crate::smframe;
-use crate::useitem::{my_status, NoticeText, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
+use crate::useitem::{
+    my_status, NoticeText, QueuedNotice, RM_CHARSTATUSCHANGED, RM_HEALTHSPELLCHANGED, RM_MYSTATUS,
+};
 use mir2_world_bevy::{FloorItemKind, FloorItemView};
 
 /// 接线层在一次 pickup/drop 处理里需要读到的**会话态**（oracle `PlayObject` 上的当下值）。
@@ -64,6 +66,11 @@ pub struct WireSession {
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`）——`RM_MYSTATUS` 的 `GetMyStatus()`
     /// （`PlayObject.Base.cs:1183`）读它（**制药/食药片 WB**：`CM_EAT` StdMode 1 的跨档出帧）。
     pub hunger_status: i32,
+    /// `PlayObject.HitSpeed`（`PlayObject.cs:2899`，由 `RecalcAbilitys` 写）。
+    /// `SM_CHARSTATUSCHANGED(657)` 的 `Series` 取**收件人自己**的该值
+    /// （`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；本结构是"该会话自己"的，
+    /// 故 `RM_CHARSTATUSCHANGED` 的自通知用它。
+    pub hit_speed: u16,
 }
 
 /// 把一条立即帧（[`Frame`]）翻成 `SM_*` body；未知 ident ⇒ `None`（调用方记 WRN）。
@@ -143,6 +150,23 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
         RM_MYSTATUS => Some(crate::smframe_ext::sm_mystatus(my_status(
             session.hunger_status,
         ))),
+        // `RM_CHARSTATUSCHANGED`（10139）⇒ `SM_CHARSTATUSCHANGED(657)`。
+        //
+        // 产生点两处（同 ident）：`RecalcAbilitys()` 尾部的 `SendRefMsg(RM_CHARSTATUSCHANGED, 0,
+        // CharStatus, 0, 0, "")`（`BaseObject.cs:1516`）与去重变体 `SendUpdateMsg(...)`
+        // （`PlayObject.cs:2876`）。出队口径 `PlayObject.Message.cs:1845-1847`：
+        // `SendDefMessage(SM_CHARSTATUSCHANGED, processMsg.ActorId, LoWord(nParam1), HiWord(nParam1),
+        // this.HitSpeed)`。
+        //
+        // 本接缝只承担**发送者自己的那一份**（`this` = 接收者 = 发送者 ⇒ `Series` 取本会话的
+        // `hit_speed`）；观察者那份由广播路径（`push_charstatuschanged` /
+        // `broadcast_charstatuschanged_except_self`）负责，二者**互斥不重叠**——广播函数
+        // 显式 `skip` 自己，见 `charstatuschanged_self_and_broadcast_do_not_duplicate`。
+        RM_CHARSTATUSCHANGED => Some(crate::smframe_ext::sm_charstatuschanged(
+            session.actor_id,
+            n.n_param1,
+            session.hit_speed,
+        )),
         _ => None,
     }
 }
@@ -479,6 +503,7 @@ mod tests {
             abil_exp: 0,
             sys_msg: sys_msg.map(<[u8]>::to_vec),
             hunger_status: 0,
+            hit_speed: 0,
         }
     }
 
@@ -733,6 +758,84 @@ mod tests {
         )
         .unwrap();
         assert_eq!(low, header(0, 708, 0, 0, 0));
+    }
+
+    /// **卡 `openmir2-charstatuschanged-gap`**：`RM_CHARSTATUSCHANGED(10139)` 的出队口径
+    /// （`PlayObject.Message.cs:1845-1847`）：`Recog = processMsg.ActorId`、
+    /// `Param/Tag = LoWord/HiWord(nParam1)`、`Series = 收件人自己的 HitSpeed`。
+    /// 本条是**发送者自己那份**自通知 ⇒ `Series` 取本会话的 `hit_speed`。
+    #[test]
+    fn charstatuschanged_maps_to_sm_657_with_recipient_hit_speed() {
+        let mut s = session(0x7C30_3998, 0, 0, None);
+        s.hit_speed = 0x1234;
+        let body = notice_frame(
+            &QueuedNotice {
+                ident: RM_CHARSTATUSCHANGED,
+                w_param: 0,
+                n_param1: 0x0002_0001,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::None,
+            },
+            &s,
+        )
+        .expect("10139 必须映射（此前被丢弃）");
+        assert_eq!(body, header(0x7C30_3998, 657, 0x0001, 0x0002, 0x1234));
+        assert_eq!(
+            body,
+            crate::smframe_ext::sm_charstatuschanged(0x7C30_3998, 0x0002_0001, 0x1234)
+        );
+    }
+
+    /// **泵序（三条同批）**：`RM_WEIGHTCHANGED(10115→131) < RM_CHARSTATUSCHANGED(10139→155)
+    /// < RM_SYSMESSAGE(11004→252)`。
+    ///
+    /// ⚠️ **口径**：真实泵是**堆出队**（`NetPriorityQueue`，章程 §29），**不是排序**。
+    /// 本条用例用 `sort_by_key(|n| n.ident as u8)` 近似，**仅因三条的低字节互不相同
+    /// （131/155/252）**——等键（同 `(byte)ident`）时必须用真实的 `NetPriorityQueue`，
+    /// 不得照抄本写法当通用做法。
+    #[test]
+    fn charstatuschanged_orders_between_weightchanged_and_sysmessage() {
+        let s = session(7, 0, 0, Some(&b"txt"[..]));
+        let mut notices = [
+            QueuedNotice {
+                ident: RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::Inline("x".to_string()),
+            },
+            QueuedNotice {
+                ident: RM_CHARSTATUSCHANGED,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::None,
+            },
+            QueuedNotice {
+                ident: RM_WEIGHTCHANGED,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::None,
+            },
+        ];
+        notices.sort_by_key(|n| n.ident as u8);
+        let idents: Vec<u16> = notices
+            .iter()
+            .map(|n| {
+                let body = notice_frame(n, &s).expect("三条都必须有 SM_* 映射");
+                u16::from_le_bytes([body[4], body[5]])
+            })
+            .collect();
+        assert_eq!(
+            idents,
+            vec![622, 657, 100],
+            "泵序 = (byte)RM ident 升序：131 < 155 < 252"
+        );
     }
 
     /// **负例（卡 §4「回退按通知种类收窄」）**：通知**无文本**（`NoticeText::None`）时，
