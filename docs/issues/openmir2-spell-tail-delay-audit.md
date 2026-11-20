@@ -107,3 +107,41 @@ oracle 共享尾 `src/M2Server/Magic/MagicManager.cs` 的 `:659-669` 是**唯一
 | 9 | P1 default arm（`spell_tail_bo_train`）inlined 尾（约 17233） | A 类 55/57/58/59/66–80（零抽无 640）/ B 类 49/51/52/53/54 | **仍立即发**（B 类另一批在改） | ❌ 未改 |
 
 > 行号会随合并漂移；按门条件/函数名定位。5–8 建议单开一张 follow-up 卡收口（A 类零抽不受影响）。
+
+## 跨 stem 影响核（装置「施法批排到空」的隔离证据）
+
+该改动只在 `spec.StepDrainMs > 0` 分支生效（非步进支根本走不到），但仍做了**同装置双版本对照**：
+用现行装置（排到空）与临时回退成单趟的装置，各重生成 `fire`（步进支既有）、`bigcloak`（步进支既有）、
+`sinsu`、`skeleton`（非步进支对照），逐字段（除墙钟 `delivery`）比较：**四者全部完全一致**。
+⇒ 该改动对未受本批影响的 stem **零语义变化**；差异只出现在 t=0 存在「即时消息链」的 4 支 AoE
+（23/24/33/47）上。
+
+> 注：`sinsu`/`skeleton` 的旧 golden 是更早世代（skeleton 无 `due_ms_rel` 键）；把它们按现行装置重生成
+> 会多出 due 键（`640=1000`），那是**世代漂移**、不是本改动造成——两版装置之间零差异。
+
+## 单测连带改动（9 条，均为非 ignore）
+
+`lib.rs` 四处改 `Some(1000)` 后，9 个单测仍断言「640 在施法批」；按 oracle 改判据：
+
+| 用例 | 旧期望 | 新期望 |
+| --- | --- | --- |
+| `spell_tail_p2_defence_amulet_consumed_and_tail_fires` | 施法批 911 有 640；序 `SPELL<FIRE<DURA<LVEXP` | 施法批 640=0（912 仍 0）；序 `SPELL<FIRE<DURA`；`deliver(1000)` 后 911 恰 1、912=0；载荷从交付帧取 |
+| `spell_tail_p2_amulet_rounding_and_delete_boundaries` | 门过支施法批 911 有 640 | 施法批 0；`deliver(1000)` 后 1（门不过支仍 0） |
+| `spell_tail_p2_shield_without_amulet_always_trains` | 门开 911 有 640；门关 0 | 门开施法批 0 + 交付 1；门关仍 0 |
+| `spell_p3b1_fireball_family_draw_order_and_frames` | 911 有 640 | 施法批 0；末尾 `deliver(1000)` 后 1（**放在取数/对照流断言之后**，避免交付抽数混进施法段窗口） |
+| `spell_p3b1_lightening_family_draw_order_and_frames` | 同上 | 同上 |
+| `spell_p3b1_firecharm_amulet_gate_tail_and_asymmetry` | 自身序 `638<642<640`；911 有 640 | 施法批序 `638<642`、640=0；`deliver(1000)` 后 1 |
+| `spell_p3b1_hb_fireball_push_draws_follow_power` | 两支 911 各有 640 | 施法批各 0；交付各 1 |
+| `spell_p3b1_training_gate_differs_by_exactly_one_draw` | 门开 911 有 640；门关 0 | 门开施法批 0 + 交付 1；门关仍 0 |
+| `six_ids_enqueue_delay_magic_and_deliver_only_at_due_time` | 到点后 31 落地（单次 `deliver(1)`） | 到点后**有界补泵**直到 31 落地（见下条堆语义） |
+
+测试辅助 `SpellFrameRig::deliver` / `P2Rig::deliver` 同步新增。
+
+## 装置/驱动限制：.NET 四叉堆不稳定与补泵上界
+
+oracle 每 tick 泵一次；.NET `PriorityQueue`（4 叉）**不稳定**：队根若是未到点项，「出队 + 以
+`Lowest` 重入队」只结束本次泵（该项移到堆尾）。同优先级（`Lowest=255`）的
+`RM_MAGIC_LVEXP`(1000ms) 与 `RM_DELAYMAGIC`(600/1200ms) 同堆时会互相挡路 ⇒ 单次泵可能一条都不投。
+
+**上界依据（非试数）**：设本轮起点队列长度 q，则 q 次泵内每条消息都轮到过队根 ⇒ 所有到期项必已
+投递或只剩「泵门」拦截项；因此测试辅助取上界 **q + 1**（另设 64 上限防御），队列清空即停。
