@@ -78,6 +78,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -291,6 +292,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -337,7 +339,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1119040662,
+              "delivery": 1149831490,
               "priority": 255
             },
             {
@@ -659,6 +661,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -699,19 +702,19 @@
             },
             {
               "ident": 8021,
-              "wParam": 15,
+              "wParam": 9,
               "p1": 6553701,
               "p2": 2,
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1119041959,
+              "delivery": 1149832803,
               "priority": 255
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -741,9 +744,9 @@
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -772,7 +775,7 @@
             {
               "ident": 8044,
               "wParam": 0,
-              "p1": 15,
+              "p1": 9,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -804,8 +807,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -842,16 +845,16 @@
             },
             {
               "ident": 53,
-              "param": 85,
+              "param": 91,
               "tag": 0,
               "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -890,8 +893,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -928,9 +931,9 @@
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -952,13 +955,13 @@
         3,
         0,
         0,
-        0,
+        4,
         4,
         0,
         0,
         9
       ],
-      "TargetHp": 85,
+      "TargetHp": 91,
       "TargetHpBefore": 100,
       "NotDue": [],
       "CasterMp": 0

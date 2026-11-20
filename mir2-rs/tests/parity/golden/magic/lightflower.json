@@ -78,6 +78,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -124,7 +125,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1129663859,
+              "delivery": 1149868921,
               "priority": 255
             },
             {
@@ -425,8 +426,8 @@
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
-        "rng_total_draws": 7,
-        "rng_recorded": 7,
+        "rng_total_draws": 6,
+        "rng_recorded": 6,
         "target_null": false,
         "arm_ring_amulet": false,
         "wait_ms": 1200,
@@ -452,6 +453,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -460,7 +462,7 @@
         ]
       },
       "Label": "s5",
-      "DrainPasses": 4,
+      "DrainPasses": 2,
       "DrainPassesHitCap": false,
       "Seed": 5,
       "SpellReturn": true,
@@ -498,30 +500,8 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1129665156,
+              "delivery": 1149870250,
               "priority": 255
-            },
-            {
-              "ident": 8103,
-              "wParam": 1,
-              "p1": 99,
-              "p2": 224,
-              "p3": 2001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
             }
           ],
           "Sent": [
@@ -536,20 +516,6 @@
               "ident": 640,
               "param": 1,
               "tag": 2,
-              "series": 0,
-              "tail": ""
-            },
-            {
-              "ident": 31,
-              "param": 99,
-              "tag": 224,
-              "series": 1,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
               "series": 0,
               "tail": ""
             }
@@ -572,7 +538,7 @@
             {
               "ident": 8044,
               "wParam": 0,
-              "p1": 1,
+              "p1": 0,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -590,39 +556,6 @@
               "late": false,
               "delivery": 0,
               "priority": 136
-            },
-            {
-              "ident": 10052,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 68
-            },
-            {
-              "ident": 8103,
-              "wParam": 1,
-              "p1": 99,
-              "p2": 224,
-              "p3": 2001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
             }
           ],
           "Sent": [
@@ -639,27 +572,6 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
-            },
-            {
-              "ident": 53,
-              "param": 99,
-              "tag": 0,
-              "series": 224,
-              "tail": ""
-            },
-            {
-              "ident": 31,
-              "param": 99,
-              "tag": 224,
-              "series": 1,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
-              "series": 0,
-              "tail": ""
             }
           ]
         },
@@ -687,28 +599,6 @@
               "late": false,
               "delivery": 0,
               "priority": 136
-            },
-            {
-              "ident": 8103,
-              "wParam": 1,
-              "p1": 99,
-              "p2": 224,
-              "p3": 2001,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 167
-            },
-            {
-              "ident": 8090,
-              "wParam": 0,
-              "p1": 0,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 154
             }
           ],
           "Sent": [
@@ -725,20 +615,6 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
-            },
-            {
-              "ident": 31,
-              "param": 99,
-              "tag": 224,
-              "series": 1,
-              "tail": "ddhkddhkddy[gdhgedhkd?"
-            },
-            {
-              "ident": 656,
-              "param": 47,
-              "tag": 0,
-              "series": 0,
-              "tail": ""
             }
           ]
         },
@@ -751,13 +627,12 @@
       "Rng": [
         0,
         0,
-        0,
+        1,
         6,
         1,
-        0,
-        1
+        0
       ],
-      "TargetHp": 99,
+      "TargetHp": 100,
       "TargetHpBefore": 100,
       "NotDue": [],
       "CasterMp": 0
@@ -826,6 +701,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -872,7 +748,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1129666453,
+              "delivery": 1149871609,
               "priority": 255
             },
             {
@@ -1125,7 +1001,7 @@
       "Rng": [
         0,
         0,
-        0,
+        5,
         3,
         0,
         0,
