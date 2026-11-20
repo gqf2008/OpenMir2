@@ -64,3 +64,27 @@
 
 ## 结论
 四处**全部**为 oracle **延期 1000ms**、Rust **立即发** ⇒ **四处均为缺陷**（非"oracle 也立即"）。四者皆走共享尾 `MagicManager.cs:659-669`（非 `Attack.cs` 3000ms 支）。修复须"产品+golden(StepDrainMs)同步"，单改产品会判红。
+
+## 范围更正（2026-11-20，动工前核对）
+
+上面「逐处审计结论」按 **oracle case** 记站点，但 Rust 侧调用点是**共享尾**，实际覆盖面比单魔号大；动工时逐处核对了 `lib.rs` 的门：
+
+- **站点③ = B1 共享尾**（门 `matches!(req.magic_id, 1 | 5 | 11 | 13 | 44 | 45)`）：覆盖 1/5/11/13/44/45 六魔号。**零行为变化**——这六支 golden 都没有 640（44 夹具 `UserMagicLevel=3` ⇒ `Level<3` 不成立；其余 `boTrain` 不成立），改它只多 `due_ms_rel` 键。
+- **站点④ = B2 共享尾**（门 `matches!(req.magic_id, 2 | 23 | 24 | 29 | 33 | 47)`）：覆盖 2/23/24/29/33/47 六魔号。oracle 六 case 均 `boTrain = true; break;` 落共享尾（`:204-224` / `:418-423` / `:424-430` / `:443-449` / `:489-494` / `:595-600`）。**不能只给 24 加延期**——同一行调用点；按魔号分叉会把「oracle 只对 24 延期」写进代码，与原文矛盾。
+- 站点①②仍是单臂（31；14/15 的护身符门内）。
+
+## 修复落地（2026-11-20）
+
+- **产品**：4 处 `finish_spell_tail(..., None)` → `Some(1000)`（1000/800 两支由 helper 内部分支）。
+- **golden 重出 10 份**（`StepDrainMs=100` 时间忠实排水）：shield、hangmajinbub、dejiwonho、hbfireball、lightflower、fireboom、fireboom47、snowwind、healing、bighealing。
+  - 变化面（机检）：640 的 `due_ms_rel=1000` 且 caster 序变为 `[638,31,656,640]`（31/656=600ms 在 640 之前）；新增 `due_ms_rel`/`recog`/actor-id 键；`DrainPasses` 随排水模型变（shield/14/15=2、hbfireball miss=1、四支 AoE=2、healing/bighealing 的 full=1 其余=2）；`Rng`/`TargetHp` **不变**；其余差异为墙钟 `delivery`。
+- **装置口径**：施法批改为**排到空**（与步进循环同语义）。单趟会把 `LateDelivery=false` 的即时链（受害者 `RM_MAGSTRUCK`→`RM_STRUCK` 扇出）推到 100ms 步 ⇒ 非 640 帧 `due=100`，与 Rust 同拍出帧（`due=0`）不一致；排到空后施法拍统一 `due=0`。
+- **驱动**：healing 专用驱动改为 100ms 步进排水并记录 `due_ms_rel`（此前单步 +1200ms、`Sent` 不带 due）；补 `drain_b3_self_deliveries` 让延迟 640 有帧。
+- **牙**：SHIELD 站点回 `None` ⇒ 比较器红 3 条（`[s1/caster] Sent[2].due_ms_rel 不等：golden=1000 rust=0`，s5/s13 同）；B2（24）站点回 `None` ⇒ 驱动红（`[lightflower/s1] caster 帧序 left=[638,640,31,656] right=[638,31,656,640]`）+ 比较器 51 条。还原后 `git status` 0 行、无 MUTATION 残留。
+- **回归**：`fire` / `bigcloak`（既有 StepDrainMs 支）驱动+比较器重跑仍绿。
+- **未动**：`spell_tail_bo_train`（49/51/52/53/54，另一批）。
+
+## 已知限制（写进 scope，勿当「已验」）
+
+- `Rm` 比较键 = `(ident, wParam, p1, p2, p3, priority, late)`，**不含 due** ⇒ `RM_MAGHEALING`(800ms)/`RM_MAGIC_LVEXP`(1000ms) 的**延期本身不判**，只判「发没发、载荷对不对」。延期/批次由 `Sent` 侧 `due_ms_rel` 判。
+- `RM_MAGICHEALING` 已建模（`slave.rs` 常量、`drain_mag_healing_delivery`、驱动捕获、`Rm` 记账），oracle `Operate` 只累加 `IncHealing` 不发帧 ⇒ golden 记在 `Rm`，无 807 式不对称缺口。
