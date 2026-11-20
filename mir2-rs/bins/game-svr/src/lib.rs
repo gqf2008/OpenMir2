@@ -70,6 +70,7 @@ mod record;
 mod seed;
 #[cfg(test)]
 mod simmonsterai_bench;
+mod skill_ability;
 mod state_log;
 mod storage;
 mod strings;
@@ -12269,8 +12270,13 @@ fn recalc_session_ability(
         use_items: &use_inst,
         bag: &bag,
     };
+    // **IT-17b**：`RecalcHitSpeed` 的技能循环（`PlayObject.cs:3681-3712`）——填 `MagicArr`（不清空）
+    // 并把 `HitPoint` 增量带进 752（本批不含攻杀 ⇒ 结构性 0 抽）。
+    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr);
     // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
-    let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
+    let recalc =
+        game_svr::ability::recalc_abilitys_with_prior_and_skills(catalog, &inputs, &sg.sub, skill);
+    sg.magic.passives = skill;
     sg.state.wabil = recalc.wabil;
     sg.sub = recalc.sub;
     // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`。
@@ -26155,6 +26161,10 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         sg.gm.horse_type = mount_id;
         sg.gm.on_horse = true;
     }
+    // **IT-17b**：登录 `RecalcHitSpeed` 的技能循环——填 `MagicArr`（**只写不清**）并把技能被动
+    // 存进会话（与 `out.sub`/752 同一份计算；纯函数、本批无 RNG）。
+    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr);
+    sg.magic.passives = skill;
     sg
 }
 
@@ -29862,7 +29872,21 @@ fn sim_loop(
                                                 // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
-                                                    let out = enter::recalc_for_session(a, d.job);
+                                                    // **IT-17b**：登录的 `RecalcHitSpeed` 技能循环增量
+                                                    // （`PlayObject.cs:3681-3712`；本批无攻杀 ⇒ 0 抽）。
+                                                    let login_magic_list = magicaudit::filter_for_logon(
+                                                        d.magic.clone().unwrap_or_default(),
+                                                        &magic_table_arc,
+                                                    );
+                                                    let login_skill = skill_ability::recalc_hit_speed_skills(
+                                                        &login_magic_list,
+                                                        &mut vec![None; skill_ability::MAGIC_ARR_LEN],
+                                                    );
+                                                    let out = enter::recalc_for_session_with_skills(
+                                                        a,
+                                                        d.job,
+                                                        login_skill,
+                                                    );
                                                     // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
                                                     // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
                                                     // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
@@ -29928,10 +29952,7 @@ fn sim_loop(
                                                             actor_id: id,
                                                             server_index: enter_cfg.server_index,
                                                             magic: readbook::MagicState {
-                                                                list: magicaudit::filter_for_logon(
-                                                                    d.magic.clone().unwrap_or_default(),
-                                                                    &magic_table_arc,
-                                                                ),
+                                                                list: login_magic_list.clone(),
                                                                 table: Some(std::sync::Arc::clone(
                                                                     &magic_table_arc,
                                                                 )),

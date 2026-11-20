@@ -162,9 +162,20 @@ pub struct FeatureInputs {
 /// （如 `CM_PICKUP`/`CM_DROPITEM` 的 `GroundState.wabil`）共用本函数。
 #[must_use]
 pub fn recalc_for_session(a: &AbilityInputs<'_>, job: u8) -> ability::RecalcOutput {
+    recalc_for_session_with_skills(a, job, game_svr::skill_ability::SkillPassives::default())
+}
+
+/// [`recalc_for_session`] 的**技能被动**版（IT-17b）：`skill` = `RecalcHitSpeed` 的技能循环增量
+/// （登录时由记录的 `magic` 列表算出；`752` 的 `Tag=MakeWord(HitPoint,SpeedPoint)` 因此带上技能）。
+#[must_use]
+pub fn recalc_for_session_with_skills(
+    a: &AbilityInputs<'_>,
+    job: u8,
+    skill: game_svr::skill_ability::SkillPassives,
+) -> ability::RecalcOutput {
     let use_items = to_instances(a.use_items);
     let bag = bag_indices(a.bag_items);
-    ability::recalc_abilitys(
+    ability::recalc_abilitys_with_prior_and_skills(
         a.catalog,
         &RecalcInputs {
             job,
@@ -178,6 +189,8 @@ pub fn recalc_for_session(a: &AbilityInputs<'_>, job: u8) -> ability::RecalcOutp
             use_items: &use_items,
             bag: &bag,
         },
+        &ability::SubAbility::first_call(),
+        skill,
     )
 }
 

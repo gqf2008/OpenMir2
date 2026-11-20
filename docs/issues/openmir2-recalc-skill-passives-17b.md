@@ -72,3 +72,35 @@
   `--lib hit_mode_conditions_fall_back_to_rm_hit`（attackwire）、`--lib it17a_`（学技能入口）、`--lib sm_addmagic`。
 - 只要角色带攻杀剑法，**每次 Recalc 抽 1 次**（`:3706`）⇒ 夹具固定 `MIR2_RNG_SEED` 并把该抽记进账本，或选无攻杀的角色做纯被动用例。
 - 动 `MagicArr` 派生时，再加 `attackwire` 的模式用例（`MagicArr` 条件直接决定 `RM_LONGHIT/WIDEHIT/CRSHIT`）。
+
+## 6. 第一批（结构层）落地 — 2026-11-20
+
+**范围**：`RecalcHitSpeed` 的技能被动 + `MagicArr` 填充 + 752 帧面；**不含**攻杀剑法的 RNG 抽数（留后续批）
+与战斗消费（`GetHitMode`/`SkillAttackDamage`）。
+
+**实现（`bins/game-svr/src/skill_ability.rs`）**：
+- `SkillPassives{ hit_point, hit_plus, hit_double, attack_skill_count }` 与
+  `recalc_hit_speed_skills(magics, arr: &mut [Option<MagicRcd>])`：四条技能公式（基本剑法 3L / 精神力
+  `Round(8/3L)` / 攻杀 `L`+`HitPlus=5+L`+`Count=7-L` / 烈火 `4+4L`）、`MagicArr` **只写不清**、
+  `MagIdx>=50` **跳过并 WRN**（oracle 越界崩溃；登记的原样差异）。
+- `ability::recalc_abilitys_with_prior_and_skills(…, skill)`：`HitPoint = hit_base + skill.hit_point + AddAbil.HIT`
+  （顺序同 oracle：技能 → 装备）；`enter::recalc_for_session_with_skills` 给登录用。
+- `SessionGround.magic` 增 `arr: Vec<Option<MagicRcd>>(50)` + `passives`；写点：登录
+  `session_ground_from_login`（由记录 `magic` 过滤结果算）+ 每次 `recalc_session_ability`。**只写不清**。
+- **752 字段名订正（重要）**：oracle `PlayObject.Message.cs:1675` 的实参是
+  `MakeMessage(SM_SUBABILITY, /*Recog*/MakeLong(MakeWord(AntiMagic,0),0), /*Param*/MakeWord(HitPoint,SpeedPoint), /*Tag*/MakeWord(AntiPoison,PoisonRecover))`
+  ⇒ 线上 **`Param` = HitPoint(lo)/SpeedPoint(hi)**；`Tag` 是 AntiPoison/PoisonRecover（此前口述的
+  "Tag=MakeWord(HitPoint,SpeedPoint)" 是 oracle 形参名，不是线缆字段名）。
+
+**测试/牙**（`cargo test -p game-svr --lib skill_ability`，6 颗）：
+- 公式四条 + Level 门 + Round 半数 + `MagicArr` 不清空 + `MagIdx>=50` 忽略；
+- 会话级：`recalc_session_ability` 把技能被动带进 `sub.hit_point` 与 **752 `Param`**；删技能后
+  `MagicArr` 仍非空；
+- 牙：M1 `9/3→8/3`（公式红，left 18/right 19）；M2 函数开头 `arr.fill(None)`（不清空断言红）；
+  M3 `recalc_session_ability` 回 `with_prior`（752 无技能：left 5/right 14）。还原 sha 相等 + 基线复绿。
+- 基线（本批跑绿）：`it08_`(3) / `recalc_`(16) / `hit_mode_conditions`(1) / `it17a_`(6) / `sm_addmagic`(2)；
+  `clippy -p game-svr --all-targets -D warnings` 绿。
+
+**后续批（未做）**：攻杀剑法的 `RandomByte(7-L)` 抽数（函数加 `rng` 形参 + 账本）、`MagicArr`
+消费接线（`GetHitMode` 模式 4/5/8/12、`SkillAttackDamage`）、`HitPlus/HitDouble` 的战斗态、`MagicArr`
+残影在删技能后的行为用例（结构层已覆盖"不清空"）。
