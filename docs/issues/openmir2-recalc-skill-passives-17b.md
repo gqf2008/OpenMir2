@@ -110,9 +110,27 @@
   不置 `AttackSkillPointCount`；只要 `MagicList` 不含攻杀剑法就没有任何抽数。**第二批加 `rng` 后
   本句不再成立**（届时「带攻杀 ⇒ 每次 Recalc 恰 1 抽」要进账本与断言）。
 
-**后续批（未做）**：攻杀剑法的 `RandomByte(7-L)` 抽数（函数加 `rng` 形参 + 账本）、
-`SkillAttackDamage` 的次级伤害（模式 4/5/8/12 的 `nSecPwr`）、`HitPlus/HitDouble` 的战斗态、
-`PowerHit/FireHitSkill`（攻杀/烈火的**战斗态**，`GetHitMode` 模式 3/7）。
+**后续批（未做）**：
+- **攻杀的 RNG 两处**：① `RecalcHitSpeed` 的 `PlayObject.cs:3706`（每次 Recalc 恰 1 次，**Level=0 也抽**）；
+  ② **攻击时第二抽** `PlayObject.Attack.cs:943-952`——有攻杀且武器 `Dura>0` 时每击 `AttackSkillCount -= 1`，
+  归零则 `Count = 7-L` 并 `AttackSkillPointCount = RandomByte(7-L)`（**再抽 1 次**）同时
+  `PowerHit = true; SendSocket("+PWR")`。**别以为 RNG 只有 Recalc 一处**。
+- `SkillAttackDamage` 的次级伤害（模式 4/5/8/12 的 `nSecPwr`）；
+- `HitPlus/HitDouble` 的战斗态；`PowerHit/FireHitSkill`（`GetHitMode` 模式 3/7）——与上面的 `+PWR` 同批。
+
+## 7.1 3a 返工（Level 门位置纠正）— 2026-11-20
+
+**偏差**：oracle `PlayObject.cs:3699-3707` 的 `case SKILL_YEDO` 里**只有 `HitPoint += L` 在
+`if (Level > 0)` 内**；`HitPlus = DEFHIT + L`、`AttackSkillCount = 7 - L`（以及 `RandomByte(7-L)`）
+在门**外**（`:3704-3706`）⇒ Level=0 也置 `HitPlus=5`/`Count=7`/抽 1 次。第一批把四件事整体放进
+门内，且单测 `level_zero_skills_add_nothing_but_fire_sword` 把错期望（`hit_plus==0/Count==0`）钉住了。
+
+**修法**：`HitPlus/AttackSkillCount` 移出门（`HitPoint` 保留门内）；单测期望改为
+`HitPoint=0 / HitPlus=DEFHIT / Count=7 / HitDouble=4`，注释写明"旧期望错在哪"。
+**牙**：把两者再塞回门内 ⇒ 该用例红（还原 sha 相等后复绿）。
+**快照 diff（3a 后）**：`E:/UserTemp/it17b3a-run.txt`（`2100 passed / 0 failed / 65 ignored`）对基线
+⇒ green→red = **空**；new = 第二批三条（`hit_skill_state_reads_magic_arr_only` + 两条 hit_mode）；
+missing = 无。
 
 ## 7. 第二批（`GetHitMode` 的 `MagicArr` 三条件接线）— 2026-11-20
 

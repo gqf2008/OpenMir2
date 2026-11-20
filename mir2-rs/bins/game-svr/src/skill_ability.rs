@@ -97,11 +97,14 @@ pub fn recalc_hit_speed_skills(
                 }
             }
             SKILL_YEDO => {
+                // oracle `PlayObject.cs:3699-3707`：**只有 `HitPoint += L` 在 `if (Level > 0)` 内**；
+                // `HitPlus = DEFHIT + L`、`AttackSkillCount = 7 - L`（以及 `RandomByte(7-L)`，3b 接）
+                // 在门**外** —— Level=0 也会置/抽。
                 if level > 0 {
                     out.hit_point = out.hit_point.wrapping_add(level as u8);
-                    out.hit_plus = DEF_HIT.saturating_add(level as u8);
-                    out.attack_skill_count = 7u8.wrapping_sub(level as u8);
                 }
+                out.hit_plus = DEF_HIT.saturating_add(level as u8);
+                out.attack_skill_count = 7u8.wrapping_sub(level as u8);
             }
             SKILL_FIRESWORD => {
                 out.hit_double = 4u8.wrapping_add((level * 4) as u8);
@@ -174,8 +177,13 @@ mod tests {
         }
     }
 
-    /// Level==0 的技能**不加** HitPoint（基本/精神/攻杀三支的 `if (Level > 0)` 门）；
-    /// 烈火支**没有** Level 门（`HitDouble = 4 + 0`）。
+    /// Level==0 时：基本/精神力/攻杀**都不加 HitPoint**（三支的 `if (Level > 0)` 门）；
+    /// 烈火支无 Level 门（`HitDouble = 4+0`）。
+    ///
+    /// **旧期望错在哪**（IT-17b 3a 返工）：本用例 v1 断言 L=0 的攻杀 `hit_plus==0 && count==0`，
+    /// 把 oracle `PlayObject.cs:3704-3705` **门外的** `HitPlus=DEFHIT+L`/`AttackSkillCount=7-L`
+    /// 也当成了门内 ⇒ 用一个错期望钉住了错实现。oracle 只有 `HitPoint += L`（`:3700-3703`）在门内；
+    /// L=0 攻杀仍是 `HitPlus=5`、`Count=7`（且 3b 起还会抽 1 次 `RandomByte(7)`）。
     #[test]
     fn level_zero_skills_add_nothing_but_fire_sword() {
         let mut a = arr();
@@ -188,9 +196,9 @@ mod tests {
             ],
             &mut a,
         );
-        assert_eq!(p.hit_point, 0);
-        assert_eq!(p.hit_plus, 0);
-        assert_eq!(p.attack_skill_count, 0);
+        assert_eq!(p.hit_point, 0, "三支的 HitPoint 增量都在 Level 门内");
+        assert_eq!(p.hit_plus, DEF_HIT, "攻杀 HitPlus 在门外：DEFHIT + 0");
+        assert_eq!(p.attack_skill_count, 7, "攻杀 Count 在门外：7 - 0");
         assert_eq!(p.hit_double, 4, "烈火支无 Level 门 ⇒ 4+0");
     }
 
