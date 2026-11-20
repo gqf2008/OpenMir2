@@ -1066,7 +1066,8 @@ pub fn load_sabuk_config(
 // | `RefreshShowName` | `StartWallconquestWar` 的 `GetMapRageHuman(PalaceEnvir,HomeX,HomeY,100)` + `RefShowName()`（`UserCastle.cs:564-575`、`BaseObject.Base.cs:1174-1177`） | 皇宫 100 格内玩家逐个 `SendRefMsg(RM_USERNAME)`（[`refresh_show_name_in_area`]） |
 // | `Structure(Ref*)` | `CastleDoor.Open/Close` 的 `SendRefMsg(RM_DIGUP/RM_DIGDOWN)`（`CastleDoor.cs:44-76`） | 重新入队成 [`mir2_world_bevy::monai::MonsterRefMsg`]，与门/墙 `Run` 共用同一条排水（[`queue_structure_ref_msg`]） |
 //
-// 排水序的口径与既有各排水点一致：**每个收件人一条** `NetPriorityQueue`，优先级 = `(byte)wIdent`；
+// 排水序的口径与既有各排水点一致：**每个收件人一条**队列（`TickFrameQueue` 内的 `NetPriorityQueue`），
+// 优先级 = `(byte)wIdent`；
 // 跨源（同一玩家队列里同时有城堡广播与其它系统帧）的合并不建模（登记，见卡报告）。
 
 /// `WorldServer.SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）的宿主扇出。
@@ -1097,38 +1098,27 @@ pub(crate) fn fan_out_sysmessage_to_all(
         return 0;
     }
     let priority = (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8;
-    let mut sent = 0usize;
+    // 卡 `openmir2-tick-frame-priority-queue` 片①：每收件人一条队列由 `TickFrameQueue` 承载
+    // （oracle 每个 `PlayObject` 一条 `MsgQueue`；键 = `(byte)RM_SYSMESSAGE` = 252），
+    // 入队序 = `texts` 序，出队 = 四叉堆序（同键不保序）。
+    let mut frames = crate::TickFrameQueue::new();
     for e in online {
         // `PlayObjectList` 只含**在世界里**且 `!Ghost` 的玩家。
         match world.entities.get(e.actor_id) {
             Some(ent) if !ent.ghost => {}
             _ => continue,
         }
-        let Some(tx) = crate::route_to_gate(gates, e.gate_idx, e.socket, "城堡系统广播")
-        else {
-            continue;
-        };
-        // oracle：每个 `PlayObject` 一条 `MsgQueue`。
-        let mut queue: crate::msgqueue::NetPriorityQueue<usize> =
-            crate::msgqueue::NetPriorityQueue::new();
-        for i in 0..texts.len() {
-            queue.enqueue(i, priority);
-        }
-        while let Some(i) = queue.dequeue() {
+        for text in texts {
             let body = crate::smframe::sm_sysmessage(
                 e.actor_id,
                 u16::from(f_color),
                 u16::from(b_color),
-                &crate::downlink::gbk(&texts[i]),
+                &crate::downlink::gbk(text),
             );
-            let _ = tx.send(crate::SimToGate::SendFrame {
-                socket: e.socket,
-                body,
-            });
-            sent += 1;
+            frames.push(e.gate_idx, e.socket, priority, body);
         }
     }
-    sent
+    frames.flush(online, gates, "城堡系统广播")
 }
 
 /// 玩家实体的行会名（`PlayObject.MyGuild?.GuildName`）：在线登记表 → 会话态缓存。
@@ -1158,7 +1148,8 @@ fn guild_name_of(
 /// 并被吞（`PlayObject.Message.cs` 的消息循环 catch）⇒ 本帧不投递，只记 WRN（登记：不建模
 /// 「该收件人本 tick 剩余消息一并中止」）。
 ///
-/// 排水序：逐收件人一条 `NetPriorityQueue`（优先级 = `RM_USERNAME & 0xFF` = 165），入队序 =
+/// 排水序：逐收件人一条队列（`TickFrameQueue` 内每条 `NetPriorityQueue`；优先级 =
+/// `RM_USERNAME & 0xFF` = 165），入队序 =
 /// 目标序 × 格扫序。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn refresh_show_name_in_area(
@@ -1238,30 +1229,18 @@ pub(crate) fn refresh_show_name_in_area(
             }
         }
     }
-    let mut sent = 0usize;
-    for (recipient, frames) in per_recipient {
+    // 卡 `openmir2-tick-frame-priority-queue` 片①：逐收件人一条队列由 `TickFrameQueue` 承载
+    // （键 = `(byte)RM_USERNAME` = 165），入队序 = 目标序 × 格扫序。
+    let mut frames = crate::TickFrameQueue::new();
+    for (recipient, bodies) in per_recipient {
         let Some(entry) = online.iter().find(|e| e.actor_id == recipient) else {
             continue;
         };
-        let Some(tx) =
-            crate::route_to_gate(gates, entry.gate_idx, entry.socket, "城堡 RefShowName")
-        else {
-            continue;
-        };
-        let mut queue: crate::msgqueue::NetPriorityQueue<usize> =
-            crate::msgqueue::NetPriorityQueue::new();
-        for i in 0..frames.len() {
-            queue.enqueue(i, priority);
-        }
-        while let Some(i) = queue.dequeue() {
-            let _ = tx.send(crate::SimToGate::SendFrame {
-                socket: entry.socket,
-                body: frames[i].clone(),
-            });
-            sent += 1;
+        for body in bodies {
+            frames.push(entry.gate_idx, entry.socket, priority, body);
         }
     }
-    sent
+    frames.flush(online, gates, "城堡 RefShowName")
 }
 
 /// 城堡结构单元（门 + 左/中/右墙）按坐标找绑定实体。

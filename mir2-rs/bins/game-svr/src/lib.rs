@@ -5418,10 +5418,16 @@ fn handle_bag_cmd_with_magic(
     //（run2 oracle seq31-35）。登录路径的 `52 → 752` 走 `SendPriorityMsg(High=0)`，
     // 是另一条队列形态，不能类推到本支。
     if out.recalc {
+        // 卡 `openmir2-tick-frame-priority-queue` 片①：52/752 入 `TickFrameQueue`
+        // （键 = `(byte)RM_ABILITY`(67) / `(byte)RM_SUBABILITY`(62)），本组立刻 flush——
+        // 后面的 41（132，经 `broadcast_feature_changed`）与 657（155）各自另有发送点。
         let sb = sg.sub.to_frame_bytes();
-        let _ = tx.send(SimToGate::SendFrame {
+        let mut frame_q = TickFrameQueue::new();
+        frame_q.push(
+            gate_idx,
             socket,
-            body: game_svr::smframe::sm_subability(
+            (mir2_protocol::messages::RM_SUBABILITY & 0xFF) as u8,
+            game_svr::smframe::sm_subability(
                 sb[0],
                 u8::try_from(sb[1]).unwrap_or(0),
                 u8::try_from(sb[2]).unwrap_or(0),
@@ -5430,16 +5436,19 @@ fn handle_bag_cmd_with_magic(
                 u8::try_from(sb[5]).unwrap_or(0),
                 u8::try_from(sb[6]).unwrap_or(0),
             ),
-        });
-        let _ = tx.send(SimToGate::SendFrame {
+        );
+        frame_q.push(
+            gate_idx,
             socket,
-            body: game_svr::smframe::sm_ability(
+            (mir2_protocol::messages::RM_ABILITY & 0xFF) as u8,
+            game_svr::smframe::sm_ability(
                 sg.state.gold,
                 sg.equip.job,
                 sg.game_gold,
                 &ability_tail(&sg.state.wabil, client_layout),
             ),
-        });
+        );
+        let _ = frame_q.flush(online, gates, "换装 752/52");
     }
     // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
     // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
@@ -5527,18 +5536,27 @@ fn handle_bag_cmd_with_magic(
     // - 队列优先级 155 排在 752(62)/52(67)/41(132) 之后 ⇒ 自己线上序
     //   `615 → 752 → 52 → 41 → 657`（run2 oracle seq31-35）。
     if let Some(status) = recalc_char_status {
-        let _ = tx.send(SimToGate::SendFrame {
-            socket,
-            body: game_svr::smframe_ext::sm_charstatuschanged(sg.actor_id, status, sg.hit_speed),
-        });
-        broadcast_charstatuschanged_except_self(
+        // 卡 `openmir2-tick-frame-priority-queue` 片①：自通知（**1 条**，与换装路径原直发同口径）
+        // + 观察者副本都进 `TickFrameQueue`（每收件人一条四叉堆），flush 后自己线上序仍是
+        // `615 → 752 → 52 → 41 → 657`。
+        let mut frame_q = TickFrameQueue::new();
+        if let Some(entry) = online.iter().find(|e| e.actor_id == sg.actor_id) {
+            frame_q.push(
+                entry.gate_idx,
+                entry.socket,
+                CHARSTATUS_PRIORITY,
+                game_svr::smframe_ext::sm_charstatuschanged(sg.actor_id, status, sg.hit_speed),
+            );
+        }
+        push_charstatuschanged_except_self(
+            &mut frame_q,
             world,
             online,
-            gates,
             sg.actor_id,
             status,
             ref_msg_range,
         );
+        let _ = frame_q.flush(online, gates, "换装 657");
     }
 }
 
@@ -10561,32 +10579,24 @@ fn drain_login_script_batch(
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
 /// ⇒ 纯函数在 `useitem::use_item`（m3bag 交付，逐字段对 oracle `eat_vectors.json`）；本函数只负责
-/// 把吃路径的通知按 **oracle 泵序**送到网关。
+/// 把吃路径的通知按 **oracle 泵序**入队（出队在调用方的 [`TickFrameQueue::flush`]）。
 ///
 /// 泵序 = oracle `MsgQueue` 的**出队序**（`PriorityQueue<SendMessage, byte>`，优先级按
-/// `(byte)wIdent`），由 [`game_svr::msgqueue::NetPriorityQueue`]（.NET 四叉最小堆的逐位复刻）
-/// 给出。**这不是排序**：同优先级下按插入与 sift 历史出队（实测 3 条同键 `[0,2,1]`），任何
-/// `sort_by_key` 近似都会在同一优先级上偏离 oracle。
+/// `(byte)wIdent`），由 [`TickFrameQueue`] 的**每收件人** `NetPriorityQueue`（.NET 四叉最小堆的
+/// 逐位复刻）给出。**这不是排序**：同优先级下按插入与 sift 历史出队（实测 3 条同键 `[0,2,1]`），
+/// 任何 `sort_by_key` 近似都会在同一优先级上偏离 oracle。
 ///
-/// `None`（未建模 ident，如 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）记 WRN、不静默。
-fn emit_eat_notices(
-    tx: &mpsc::UnboundedSender<SimToGate>,
+/// `None`（未建模 ident，如 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）记 WRN、不入队。
+fn push_eat_notices(
+    q: &mut TickFrameQueue,
+    gate_idx: i32,
     socket: i32,
     notices: &[game_svr::useitem::QueuedNotice],
     wire: &game_svr::pickwire::WireSession,
-) -> usize {
-    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
-        game_svr::msgqueue::NetPriorityQueue::new();
+) {
     for n in notices {
-        queue.enqueue(n, n.ident as u8);
-    }
-    let mut sent = 0usize;
-    while let Some(n) = queue.dequeue() {
         match game_svr::pickwire::notice_frame(n, wire) {
-            Some(body) => {
-                let _ = tx.send(SimToGate::SendFrame { socket, body });
-                sent += 1;
-            }
+            Some(body) => q.push(gate_idx, socket, n.ident as u8, body),
             None => glog!(
                 "WRN",
                 "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
@@ -10594,7 +10604,6 @@ fn emit_eat_notices(
             ),
         }
     }
-    sent
 }
 
 /// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
@@ -10605,7 +10614,7 @@ fn emit_eat_notices(
 /// **两路下行**（口径见 `useitem` 模块头）：
 /// - **立即帧** `SendDefMessage(SM_EAT_OK/FAIL)` ⇒ header-only，直接下发（恒 1 条）；
 /// - **延时通知** `SendMsg(RM_*)` 入 `MsgQueue`，由消息泵翻成 `SM_*`（`PlayObject.Message.cs:1736-1960`）；
-///   本宿主用 `emit_eat_notices` 里的 `NetPriorityQueue` 复刻泵序（**不是排序**：同优先级按堆的
+///   本宿主用 [`TickFrameQueue`]（每收件人一条四叉堆）复刻泵序（**不是排序**：同优先级按堆的
 ///   sift 序出队；见该函数文档与卡 §9.12）。
 #[allow(clippy::too_many_arguments)]
 fn handle_eat_cmd(
@@ -11095,17 +11104,23 @@ fn handle_eat_cmd(
     // **oracle 线上序**：`SM_EAT_OK(635)`/`SM_ADDITEM(200)` 是 `ClientUseItems` 内的**直发**（先到），
     // 而 `GetExp` 里的 `SendMsg(RM_*)` 进消息队列、随后才**泵出**；故 53 在直发帧**之后**。泵出内部按优先级
     // 字节排（53=68 最小 → 最前，其次 RM_WINEXP(44)=139，再 RM_LEVELUP 派生 45/52/752=150）。升级支才有 53。
+    // 卡 `openmir2-tick-frame-priority-queue` 片①：53 与下面的 `SendMsg(RM_*)` 通知同走
+    // `TickFrameQueue`（oracle `HealthSpellChanged()` 也是入该玩家自己的队列，键 68）；
+    // 出队序 = `(byte)ident` 升序，与改造前"53 直发在前 + 通知泵序"逐帧相同（吃/药路径
+    // 的通知最小键就是 68，见 `useitem` 的 notice 集合）。
+    let mut frame_q = TickFrameQueue::new();
     if leveled {
-        let _ = tx.send(SimToGate::SendFrame {
+        frame_q.push(
+            gate_idx,
             socket,
-            body: game_svr::smframe::sm_healthspellchanged(
+            (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8,
+            game_svr::smframe::sm_healthspellchanged(
                 actor_id,
                 sg.state.wabil.hp,
                 sg.state.wabil.mp,
                 sg.state.wabil.max_hp,
             ),
-        });
-        sent += 1;
+        );
     }
     // 延时通知（`SendMsg(RM_*)` ⇒ `SM_*`）。
     let wire = game_svr::pickwire::WireSession {
@@ -11129,8 +11144,8 @@ fn handle_eat_cmd(
         // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
         hit_speed: sg.hit_speed,
     };
-    // 泵序由全局 `NetPriorityQueue` 决定（见 [`emit_eat_notices`]），单遍排水。
-    sent += emit_eat_notices(tx, socket, &out.notices, &wire);
+    // 通知入同一 `TickFrameQueue`（键 = `(byte)ident`）；出队统一在观察者 657 也入队之后。
+    push_eat_notices(&mut frame_q, gate_idx, socket, &out.notices, &wire);
     // **卡 `openmir2-charstatuschanged-657-wired`（观察者副本）**：oracle 的
     // `SendRefMsg(RM_CHARSTATUSCHANGED)` 对**可见玩家**也入队一份 657；上面的
     // `notice_frame` 只投了**本会话**那一份 ⇒ 这里补观察者面。
@@ -11142,15 +11157,17 @@ fn handle_eat_cmd(
         .find(|n| n.ident == game_svr::useitem::RM_CHARSTATUSCHANGED)
         .map(|n| n.n_param1)
     {
-        broadcast_charstatuschanged_except_self(
+        push_charstatuschanged_except_self(
+            &mut frame_q,
             world,
             online,
-            gates,
             actor_id,
             status,
             chat::send_ref_msg_range(),
         );
     }
+    // 一次性 flush：逐收件人（首次入队序）× 每收件人自己的四叉堆出队。
+    sent += frame_q.flush(online, gates, "CM_EAT 通知泵");
     // IT-08 升级支：oracle `RM_LEVELUP` 处理器经泵出 `SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`，
     // 线上序在 44（`SM_WINEXP`）之后 ⇒ 放在 notice 排水之后；复用 `send_levelup_frames`（读 sg.state.wabil/gold/job/sub）。
     if leveled {
@@ -11224,7 +11241,95 @@ fn broadcast_feature_changed_except(
     }
 }
 
-/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐；`status` 由调用方给——
+/// 卡 `openmir2-tick-frame-priority-queue` 片①：**每个收件人一条** `NetPriorityQueue` 的
+/// 路径级排序装置（范例来源 = `castle.rs` 两处 + T-290 升级链）。
+///
+/// oracle 依据（契约，不是近似）：出站消息的收件人在**发送那一刻**枚举
+/// （`src/M2Server/Actor/BaseObject.Message.cs:383` 的 `SendRefMsg`：`:399-447` 全格扫 /
+/// `:453-474` 复用 `VisibleHumanList`，逐目标 `targetObject.SendMsg(this, …)` 于
+/// `:433`/`:440`/`:464`/`:470`），每个目标一条自己的队列
+/// （`src/M2Server/Actor/ActorEntity.cs:16` 的 `PriorityQueue<SendMessage, byte>`、`:21` 构造），
+/// 入队键 = `(byte)wIdent`（`Message.cs:181`）⇒ 收件人在产生点判定，
+/// **出队序由每个收件人自己的四叉堆给出**（同键不保序，见 qa-charter §29）。
+///
+/// 语义：`push` 只入队；`flush` 按**首次入队序**逐个收件人出队并逐条 `route_to_gate` 下发。
+/// **不做跨路径/全 tick 归并**（那属片③b）。
+///
+/// 收件人键 = `(gate_idx, socket)`：socket 号**跨网关线号会重复**（网关侧是各自进程的
+/// socket 句柄；本文件的墓碑也按 `(line, socket)` 键控，见 [`route_to_gate`]），
+/// 只用 socket 会把两条连接的队串在一起。
+pub(crate) struct TickFrameQueue {
+    /// 首次入队序（保跨收件人的发送序，与改造前逐收件人直发一致）。
+    order: Vec<(i32, i32)>,
+    queues: std::collections::HashMap<(i32, i32), crate::msgqueue::NetPriorityQueue<Vec<u8>>>,
+}
+
+impl Default for TickFrameQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TickFrameQueue {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            order: Vec::new(),
+            queues: std::collections::HashMap::new(),
+        }
+    }
+
+    /// 入队一帧。`priority` = oracle `MsgQueue` 的键 `(byte)wIdent`
+    /// （**不是** SM 帧号；见 qa-charter §29 补注）。
+    pub(crate) fn push(&mut self, gate_idx: i32, socket: i32, priority: u8, body: Vec<u8>) {
+        let key = (gate_idx, socket);
+        let q = self.queues.entry(key).or_default();
+        if q.is_empty() {
+            self.order.push(key);
+        }
+        q.enqueue(body, priority);
+    }
+
+    /// 逐收件人出队下发；返回**实际发出**的帧数（收件人不在线/网关线号找不到 ⇒ 丢弃不计）。
+    pub(crate) fn flush(
+        &mut self,
+        online: &OnlineRegistry,
+        gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        what: &str,
+    ) -> usize {
+        let mut sent = 0usize;
+        for (gate_idx, socket) in std::mem::take(&mut self.order) {
+            let Some(mut q) = self.queues.remove(&(gate_idx, socket)) else {
+                continue;
+            };
+            // 与改造前逐收件人直发同口径：收件人已不在线 ⇒ 整队丢弃（不静默）。
+            if !online
+                .iter()
+                .any(|e| e.gate_idx == gate_idx && e.socket == socket)
+            {
+                let dropped = q.len();
+                glog!(
+                    "WRN",
+                    "TickFrameQueue（{what}）：收件人 gate={gate_idx} socket={socket} 不在在线登记表 ⇒ 丢弃 {dropped} 帧"
+                );
+                continue;
+            }
+            let Some(tx) = route_to_gate(gates, gate_idx, socket, what) else {
+                continue;
+            };
+            while let Some(body) = q.dequeue() {
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+                sent += 1;
+            }
+        }
+        sent
+    }
+}
+
+/// `RM_CHARSTATUSCHANGED` 的队列键：`(byte)10139 = 155`。
+const CHARSTATUS_PRIORITY: u8 = (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
+
+/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次**入队**；`status` 由调用方给——
 /// **入队路径**在入队时取好、出队时不得重算（否则与 oracle 的取值时点不符）。
 ///
 /// **三动作定序**（oracle `PlayObject.cs:2874-2876`）：`:2875 StatusChanged()` 的
@@ -11235,6 +11340,43 @@ fn broadcast_feature_changed_except(
 /// **已登记的近似**：oracle 里 self 那份随 `SendRefMsg` 的坐标扫描（`BaseObject.Message.cs:395-447`）
 /// 在自己的格子被发出，位置由坐标决定；这里把 self 副本统一提到广播循环之前。**跨 socket 的
 /// 先后不是线上可观测面**（每 socket 各有 `MsgQueue`），self 两条帧字节也完全相同 ⇒ 差异不可判。
+///
+/// 片① 起改走 [`TickFrameQueue`]：①③ 两条同键同 socket ⇒ 该 socket 的队列按 FIFO 出
+/// `[广播副本, 自更新副本]`（与 master 的直发序一致）；观察者在 ② 期间入各自队列。
+fn push_charstatuschanged_self_and_observers(
+    q: &mut TickFrameQueue,
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    actor_id: i32,
+    status: i32,
+    hit_speed: u16,
+    range: i32,
+) {
+    let entry = online.iter().find(|e| e.actor_id == actor_id);
+    // ① 自己的**广播副本**（`:2875`，收件人含源）。
+    if let Some(e) = entry {
+        q.push(
+            e.gate_idx,
+            e.socket,
+            CHARSTATUS_PRIORITY,
+            game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed),
+        );
+    }
+    // ② 广播他人（同一次 `SendRefMsg` 的其它收件人；隐藏发送者时 `targets` 只回 `[self]` 被跳过）。
+    push_charstatuschanged_except_self(q, world, online, actor_id, status, range);
+    // ③ 自己的**自更新副本**（`:2876` `SendUpdateMsg`，仅自己）。
+    if let Some(e) = entry {
+        q.push(
+            e.gate_idx,
+            e.socket,
+            CHARSTATUS_PRIORITY,
+            game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed),
+        );
+    }
+}
+
+/// [`push_charstatuschanged_self_and_observers`] 的**即发**版：入队后立刻 flush
+/// （GM `@Level` / `SmakeItem` 两条路径在原发送点调用它，线序与直发一致）。
 #[allow(clippy::too_many_arguments)]
 fn send_charstatuschanged_self_and_observers(
     world: &mir2_world_bevy::World,
@@ -11246,29 +11388,11 @@ fn send_charstatuschanged_self_and_observers(
     range: i32,
     what: &str,
 ) {
-    let entry = online.iter().find(|e| e.actor_id == actor_id);
-    // ① 自己的**广播副本**（`:2875`，收件人含源）。
-    if let Some(e) = entry {
-        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: e.socket,
-                body,
-            });
-        }
-    }
-    // ② 广播他人（同一次 `SendRefMsg` 的其它收件人；隐藏发送者时 `targets` 只回 `[self]` 被跳过）。
-    broadcast_charstatuschanged_except_self(world, online, gates, actor_id, status, range);
-    // ③ 自己的**自更新副本**（`:2876` `SendUpdateMsg`，仅自己）。
-    if let Some(e) = entry {
-        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: e.socket,
-                body,
-            });
-        }
-    }
+    let mut q = TickFrameQueue::new();
+    push_charstatuschanged_self_and_observers(
+        &mut q, world, online, actor_id, status, hit_speed, range,
+    );
+    let _ = q.flush(online, gates, what);
 }
 
 /// `StatusChanged()`（`BaseObject.cs:1514` 的 `SendRefMsg(RM_CHARSTATUSCHANGED)`）的宿主等价物，
@@ -11287,6 +11411,21 @@ fn broadcast_charstatuschanged_except_self(
     status: i32,
     range: i32,
 ) {
+    let mut q = TickFrameQueue::new();
+    push_charstatuschanged_except_self(&mut q, world, online, actor_id, status, range);
+    let _ = q.flush(online, gates, "657 广播");
+}
+
+/// [`broadcast_charstatuschanged_except_self`] 的**入队版**：
+/// `ref_msg_cache::targets` 在**产生点**判定（卡 §8b 硬约束：不得挪进出队时）。
+fn push_charstatuschanged_except_self(
+    q: &mut TickFrameQueue,
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    actor_id: i32,
+    status: i32,
+    range: i32,
+) {
     // **T-287 残余 #3**：`StatusChanged()` 的"其它玩家"支同走 `SendRefMsg` 的 500ms 缓存
     // （每次调用 = 一次 `SendRefMsg`；自己那两份由调用方按发送序另发）。隐藏发送者时
     // `targets` 只返回 `[self]`，被下面的 skip 丢掉 ⇒ 观察者零帧（与 oracle 退化自投一致）。
@@ -11298,13 +11437,12 @@ fn broadcast_charstatuschanged_except_self(
             continue;
         };
         let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
-        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "657 广播") {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: t.socket,
-                body,
-            });
-        }
+        q.push(
+            t.gate_idx,
+            t.socket,
+            CHARSTATUS_PRIORITY,
+            game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed),
+        );
     }
 }
 
@@ -19566,9 +19704,11 @@ fn drain_levelup_healthspell_with_magic(
     // **Lane B**：升级时 oracle `HasLevelUp` 也跑 `RecalcAbilitys()`（`PlayObject.cs:5245-5246`）
     // ⇒ 210/212 尾段照跑；`None` = 单测/无记录。
     mut magic: Option<MagicSource<'_>>,
-    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：657 **只入队**（优先级 155），
-    // 由升级链末尾统一出队——帧序必须是 `53(68) → 44(139) → 45/52/752 → 657(155)`。
-    charstatus_queue: &mut crate::msgqueue::NetPriorityQueue<(i32, i32, u16)>,
+    // 卡 `openmir2-tick-frame-priority-queue` 片①：657 这里只**登记** `(actor, status, hit_speed)`
+    // （入队序），body 与收件人在链末构造——oracle 的收件人在 `SendRefMsg` 发送时枚举
+    // （`BaseObject.Message.cs:383` + `:453-474`），而 `RM_STRUCK`(20) 先于 `RM_LEVELUP`(150)，
+    // 首扫属受击那次 ⇒ 不能在 recalc 处前移 `ref_msg_cache::targets`。
+    charstatus_pending: &mut Vec<(i32, i32, u16)>,
 ) {
     for (winner, _amount, leveled, level) in &rec.exp_awards {
         if !*leveled {
@@ -19603,17 +19743,15 @@ fn drain_levelup_healthspell_with_magic(
             magic_recalc,
             Some(&mut world.rng),
         );
-        // T-290：oracle `HasLevelUp` 内的 `RecalcAbilitys()` 发 657；本宿主**入队**（155），
-        // 由 `drain_kill_exp_chain_with_magic` 在链末尾出队 ⇒ 排在 53/44/45/52/752 之后。
-        // `status` 在此刻取（`PlayObject.cs:2873` 的时点），出队时不重算。
-        charstatus_queue.enqueue(
-            (
-                sg.actor_id,
-                world.get_char_status(sg.actor_id),
-                sg.hit_speed,
-            ),
-            (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
-        );
+        // T-290：oracle `HasLevelUp` 内的 `RecalcAbilitys()` 发 657；本宿主**登记**，由
+        // `drain_kill_exp_chain_with_magic` 在链末构造 body 并逐 socket 出队
+        // ⇒ 排在 53/44/45/52/752 之后。`status` 在此刻取（`PlayObject.cs:2873` 的时点），
+        // 链末不重算（`ref_msg_cache::targets` 才在链末判定，见函数头）。
+        charstatus_pending.push((
+            sg.actor_id,
+            world.get_char_status(sg.actor_id),
+            sg.hit_speed,
+        ));
         let RecalcEffect {
             revival,
             flame_ring,
@@ -19791,10 +19929,10 @@ fn drain_kill_exp_chain_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
 ) {
-    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：链内 657 **入队**、链末尾出队
-    //（范例 = `castle.rs` 的"路径末尾局部排序装置"，不是全 tick 泵）。
-    let mut charstatus_queue: crate::msgqueue::NetPriorityQueue<(i32, i32, u16)> =
-        crate::msgqueue::NetPriorityQueue::new();
+    // 卡 `openmir2-tick-frame-priority-queue` 片①：链内 657 只登记 (actor,status,hit_speed)
+    // 的**入队序**；body 在链末按 oracle 的发送时点构造，帧序交给每个收件人自己的
+    // `TickFrameQueue`（`ActorEntity.cs:16`/`:21` 每连接一条队列），不是全 tick 泵。
+    let mut charstatus_pending: Vec<(i32, i32, u16)> = Vec::new();
     // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
     drain_levelup_healthspell_with_magic(
         rec,
@@ -19805,22 +19943,27 @@ fn drain_kill_exp_chain_with_magic(
         catalog,
         range,
         magic,
-        &mut charstatus_queue,
+        &mut charstatus_pending,
     );
     drain_combat_downlink(rec, world, displays, online, sessions, gates);
     drain_levelup_downlink(rec, online, sessions, gates, client_layout);
-    // 链末尾按 `(byte)ident` 出队：657(155) 排在 53(68)/44(139)/45(150)/52(67)/752(62) 之后。
-    while let Some((actor_id, status, hit_speed)) = charstatus_queue.dequeue() {
-        send_charstatuschanged_self_and_observers(
-            world,
-            online,
-            gates,
-            actor_id,
-            status,
-            hit_speed,
-            range,
-            "657(战斗升级)",
-        );
+    // 链末尾（= oracle `RM_LEVELUP` 处理器时点）构造 body：657(155) 排在
+    // 53(68)/44(139)/45(150)/52(67)/752(62) 之后；收件人在此刻按 `SendRefMsg` 枚举，
+    // 每个收件人各自入队/出队（同 tick 多人升级时子集顺序由各自的堆给出）。
+    if !charstatus_pending.is_empty() {
+        let mut frame_q = TickFrameQueue::new();
+        for (actor_id, status, hit_speed) in charstatus_pending {
+            push_charstatuschanged_self_and_observers(
+                &mut frame_q,
+                world,
+                online,
+                actor_id,
+                status,
+                hit_speed,
+                range,
+            );
+        }
+        let _ = frame_q.flush(online, gates, "657(战斗升级)");
     }
 }
 
@@ -101556,8 +101699,20 @@ fn ",
                 text: game_svr::useitem::NoticeText::None,
             },
         ];
-        let sent = emit_eat_notices(&tx, 901, &notices, &wire);
-        drop(tx);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "hero".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: 7,
+        }];
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut q = TickFrameQueue::new();
+        push_eat_notices(&mut q, 0, 901, &notices, &wire);
+        let sent = q.flush(&online, &gates, "eat order test");
         let idents: Vec<u16> = std::iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|m| match m {
                 SimToGate::SendFrame { body, .. } => {
@@ -107091,5 +107246,127 @@ mod aoi_shutdown_wiring {
         let shutdown = SRC.find("let _ = shutdown_done_tx.send(summary);");
         assert!(shutdown.is_some(), "关服分支标记缺失");
         assert!(i < shutdown.unwrap(), "终值行必须在关服收尾返回之前");
+    }
+}
+
+#[cfg(test)]
+mod tickframe_slice1_tests {
+    //! 卡 `openmir2-tick-frame-priority-queue` 片①：**每收件人一条队列**的排序牙。
+    //!
+    //! oracle：收件人在 `SendRefMsg` 发送时枚举（`src/M2Server/Actor/BaseObject.Message.cs:383` +
+    //! `:453-474`），每个 `PlayObject` 一条 `MsgQueue`
+    //! （`src/M2Server/Actor/ActorEntity.cs:16`/`:21`）⇒ 每个收件人的出队序只由他自己的入队序决定。
+    //! 旧实现用**一张全局 tuple 堆**出队后再按收件人过滤，会把全局的四叉堆排列套到子集上。
+    use super::*;
+    use crate::tests::test_session_ground;
+    use mir2_protocol::frame::CommandMessage;
+    use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+
+    fn spawn(world: &mut mir2_world_bevy::World, name: &str, x: i32, y: i32) -> i32 {
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        world.add_entity(e)
+    }
+
+    fn online_entry(name: &str, sid: i32, socket: i32, actor_id: i32) -> OnlineEntry {
+        OnlineEntry {
+            account: name.to_string(),
+            chr_name: name.to_string(),
+            session_id: sid,
+            gate_idx: 0,
+            socket,
+            actor_id,
+        }
+    }
+
+    /// 3 人同 tick 升级（A/B/C），观察者 X 覆盖三人、Y 只覆盖 B/C：
+    /// - X 的 657 序列 = 三条同键的四叉堆序 `[A, C, B]`（入队序 A,B,C）；
+    /// - Y 的 657 序列 = **他自己的**两条同键入队序 `[B, C]`。
+    ///
+    /// 牙：把帧序改回"全局 tuple 堆 + 按收件人过滤"⇒ Y 收到 `[C, B]`（全局 `[A, C, B]` 的子序列）
+    /// ⇒ 本用例红。
+    #[test]
+    fn per_recipient_heap_orders_subset_by_own_insertion() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        // 间距保证：A 与 B/C 互为 ±12 之外（A 不会收到 B/C 的 657）；
+        // X 覆盖三人；Y 只覆盖 B/C。
+        let a = spawn(&mut world, "a", 10, 10);
+        let b = spawn(&mut world, "b", 10, 32);
+        let c = spawn(&mut world, "c", 10, 33);
+        let x = spawn(&mut world, "x", 10, 22);
+        let y = spawn(&mut world, "y", 10, 44);
+        let mut online: OnlineRegistry = Vec::new();
+        for (i, (name, socket, id)) in [
+            ("a", 901, a),
+            ("b", 902, b),
+            ("c", 903, c),
+            ("x", 904, x),
+            ("y", 905, y),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            online.push(online_entry(name, i as i32 + 1, socket, id));
+        }
+        let mut sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        for (name, id) in [("a", a), ("b", b), ("c", c)] {
+            let mut sg = test_session_ground(id);
+            sg.equip.abil.level = 11;
+            sg.state.wabil.level = 11;
+            sg.state.wabil.hp = 10;
+            sg.state.wabil.mp = 5;
+            sessions.insert(name.to_string(), sg);
+            let e = world.entities.get_mut(id).expect("升级者实体");
+            e.progression.level = 11;
+            e.progression.max_exp = 1_000;
+            e.progression.exp = 1_000;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
+        }
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.exp_awards.push((a, 100, true, 11));
+        rec.exp_awards.push((b, 100, true, 11));
+        rec.exp_awards.push((c, 100, true, 11));
+        let displays = downlink::DisplayTable::new();
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            true,
+        );
+        let mut per: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == SM_CHARSTATUSCHANGED {
+                    per.entry(socket).or_default().push(cm.recog);
+                }
+            }
+        }
+        // A 收自己**两条**（master 的三动作语义：广播副本 + 自更新副本）。
+        assert_eq!(
+            per.get(&901),
+            Some(&vec![a, a]),
+            "A 收自己两条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(
+            per.get(&904),
+            Some(&vec![a, c, b]),
+            "X：三条同键按四叉堆出队（入队序 A,B,C）"
+        );
+        assert_eq!(
+            per.get(&905),
+            Some(&vec![b, c]),
+            "Y：只按他自己的入队序（B,C）出队；全局堆会给出 [C,B]"
+        );
     }
 }

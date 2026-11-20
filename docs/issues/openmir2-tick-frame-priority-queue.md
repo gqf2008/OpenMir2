@@ -547,3 +547,90 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
 
 **全量三数（§51）**：`cargo test -p game-svr --lib` → `running 2226` / **2153 passed · 0 failed · 73 ignored**，rc=0。
 判据边界按 §14c/§47：只判逐 socket 计数与同 socket 参照帧位置；两条 657 相互先后、跨 socket 先后不判。
+
+## 15. 片① 交付记录（2026-11-20，`openmir2-10`）
+
+- 分支 `card/tick-frame-queue-slice1`，base master `bb160e2ad`（2026-11-20 第三次 rebase；
+  前序 base `f8c0b4b7d` / `126e57e41`，原 base `165c6edd1`），代码 head `db60e9f32`
+  （提交 `refactor(game-svr): 抽出 TickFrameQueue …`；纯 Rust，2 文件）。
+  本段是交付后的 docs-only 补充，不改代码。
+- 第二/三次 rebase 均无代码冲突；两次 `git range-diff` 都是 **`=`**（同一补丁）：
+  `126e57e41..751d0cfd5` vs `f8c0b4b7d..3640c6208`、`f8c0b4b7d..3640c6208` vs
+  `bb160e2ad..db60e9f32`。
+- rebase 冲突解决（§38 逐支比对）：master 的 657 三动作 helper 已改为「广播副本 + 观察者 +
+  **自更新副本**」（源自己 2 条）⇒ 入队版按 ①/②/③ 逐支合并：①③ 仍同 socket 同键 FIFO、
+  ② 走观察者入队；换装路径保持 master 的 **1 条**自通知口径（没有误用三动作 helper 的 2 条）。
+- 四个接线点全部落地：`castle.rs` 两处（252 / 165）、T-290 升级链 657、吃路径（53 + 通知 + 657）、
+  换装（752/52、657）。**既有断言 0 条改动**；新增 1 条牙
+  `per_recipient_heap_orders_subset_by_own_insertion`。
+
+### 15a. 与 §8d 草稿的两处实现偏离（`opc-19` 2026-11-20 认可，`2f` 复核）
+
+1. **收件人键 = `(gate_idx, socket)`，不是 §8d 草稿里的 `HashMap<i32 /*socket*/>`。**
+   `socket` 是**各网关进程内的句柄**（网关侧 `raw_socket_i32`），跨网关线号会重复；本文件的
+   墓碑本来就按 `(line, socket)` 键控，`route_to_gate` 也按 `gate_idx` 选线。只用 `socket`
+   会把两条连接并进同一条队（发给 A 的帧可能落到 B 的线）。**验证**：快照场景 `castle_fanout`
+   特意让 0 线与 1 线都有 `socket=901`，改造前后逐字节相同。
+2. **`flush` 的 `route_to_gate` 检查粒度：仍是「每收件人一次」，但时点从原发送循环内移到 `flush` 内。**
+   改造前是「每个收件人 `route_to_gate` 一次 → 该收件人整组帧直接 `send`」；改造后是「入队阶段不查，
+   `flush` 里逐收件人查一次 → 整组 `send`」。**粒度不变，时点是同一函数调用内的后移**。
+   若并发墓碑恰在这段之间落下，帧也到不了客户端：`downlink_slot`（网关连接任务里 `SendFrame` 的
+   落地检查）会再查一次墓碑，槽已死 ⇒ 丢弃。⇒ 这个挪动只影响「生产者侧是否早丢」，
+   不影响「客户端是否收到」，快照与全量用例均未出现差异。
+
+### 15b. 预期差异（单列，**不进** T-288/T-295/T-296）
+
+**机制**：oracle 里 657 的收件人在 `SendRefMsg` 发送时枚举、逐目标 `SendMsg`，消息进**每个 target
+自己的 `MsgQueue`**（每 `BaseObject` 一条 `PriorityQueue<SendMessage, byte>`）。所以**每个收件人的
+入队序 = 产生序**（本场景 A→B→C 的处理器顺序；三动作语义下源自己收**两条**：广播副本 + 自更新副本），
+出队序只由**他自己队列里有多少条同键元素**决定。改造前的实现是「一张全局 tuple 堆」：先把 A/B/C 三条
+657 入同一张堆，出队序 = 三条同键的四叉堆序 `[A,C,B]`，**再按收件人过滤**——这等于把「A 那条」
+（Y 根本不在 A 的收件人里）也算进了 Y 的位形。
+
+实测（`t290_chain`：A=1/B=2/C=3，X 全见、Y 只见 B/C；坐标 A(10,10)/B(10,32)/C(10,33)/
+X(10,22)/Y(10,44)，range 12；源自己两条）：
+
+| socket | 新实现入队序（= 产生序） | 新出队序 | 改造前出队序 |
+|---|---|---|---|
+| 901 (A 自己，2 条) | [1,1] | [1,1]（2 条同键 = FIFO） | [1,1] |
+| 904 (X，3 条) | [1,2,3] | [1,3,2]（3 条同键 = 四叉堆序 [0,2,1]） | [1,3,2]（同一张全局堆，逐位相同） |
+| 902 (B，3 条) | [2,2,3]（B 的两条自帧，再 C 的广播） | **[2,3,2]**（[0,2,1]） | [3,2,2]（全局 [A,C,B] 过滤） |
+| 903 (C，3 条) | [2,3,3]（B 的广播，再 C 的两条自帧） | **[2,3,3]**（[0,2,1]） | [3,3,2] |
+| 905 (Y，2 条) | [2,3] | **[2,3]**（FIFO） | [3,2] |
+
+每 socket 帧数不变（901/904 不变；902/903/905 换序）。**904 不翻**是结构决定的（它的队列恰好也是
+3 条、入队序也相同 ⇒ 同一置换）。牙 `per_recipient_heap_orders_subset_by_own_insertion`（rebase 后
+断 901=[a,a]、904=[1,3,2]、905=[2,3]）在改造前树实测红（Y：`left: Some([3, 2])` /
+`right: Some([2, 3])`），改造后绿；另在新树做变异（临时改回全局堆）也红（X：
+`left: Some([1, 2, 3])` / `right: Some([1, 3, 2])`）。
+
+### 15c. 门禁（rebase 后代码 head `db60e9f32`，作者侧）
+
+`cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`（0 error，rc=0）/
+`cargo test --workspace`（4388 passed / 0 failed / 159 ignored，161 suites）/ `-p game-svr --lib`
+（2156 / 0 / 73）/ `msgcodegen --check`（604 常量）/ 散文锚门（0/0/0 GREEN，`--base bb160e2ad`）/
+工具门全量（71/71）/ dispatch 守卫（31/31，+0/−0）——全部 rc=0。
+
+留痕：上一轮 clippy 曾红在 master `f8c0b4b7d` 自带的 `eat_move.rs` 文档续行
+（`doc_lazy_continuation`，不在本卡写集；加 `-A` 该 lint 后 rc=0 已反证）；master `bb160e2ad`
+修正后本 head clippy 全绿。
+
+### 15d. 「逐帧字节相同」的准确口径
+
+快照共 70 行 = 68 帧 + 2 条 `sent` 注记。**逐字节相同的只有这四个场景的 40 帧**：
+`castle_fanout` 12 帧、`castle_refshow` 15 帧、`eat_stdmode1` 7 帧、`bag_takeoff` 6 帧。
+`t290_chain` 28 帧中 20 帧相同、8 帧换序（§15b 的 902 三条 / 903 三条 / 905 两条 657）。
+**不得**把它写成「整体逐字节相同」。
+
+## 16. 片① 复跑装置（5 个场景，逐帧字节比）
+
+装置是**临时 test 模块**（未入交付），源码与两棵树的输出放在 `docs/evidence/tickframe-slice1/`：
+`tickframe_snapshot.rs`（装置）、`before.ndjson`（master `bb160e2ad`）、`after.ndjson`
+（代码 head `db60e9f32`）、
+`README.md`（逐步命令）。
+
+复跑：把 `tickframe_snapshot.rs` 复制到 `mir2-rs/bins/game-svr/src/`，在 `lib.rs` 的测试模块声明区加一行
+`#[cfg(test)] mod tickframe_snapshot;`，然后
+`cd mir2-rs && TICKFRAME_SNAPSHOT_OUT=<out>.ndjson cargo test -p game-svr --lib -- tickframe_slice1_snapshot`。
+判据：`castle_fanout` / `castle_refshow` / `eat_stdmode1` / `bag_takeoff` 与 `after.ndjson`
+逐字节相同；`t290_chain` 只允许 §15b 的三处顺序差异（每 socket 帧数相同）。
