@@ -50,6 +50,10 @@ namespace MagicGolden
             {
                 stubHp = v;
             }
+            // **Race = 100（WhiteSkeleton，真身）**：`apply_slave_level_abilitys` 的 White/Elf 分支
+            // 会先抬高 `max_hp`（`chp = hp + round(hp*0.4)*slaveExpLevel`）再走半补 ⇒ 真实面是 hp≠max_hp。
+            // Race 默认（ActorRace.Animal=50）会落到非 White 分支，验的是替身而不是真身。
+            mon.Race = 100;
             mon.WAbil.HP = stubHp;
             mon.WAbil.MaxHP = stubHp;
             return mon;
