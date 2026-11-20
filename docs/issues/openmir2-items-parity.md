@@ -443,6 +443,165 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **未覆盖缺口登记（不计入行为面 `verified`）**：`IncGold` 失败支在 oracle 侧**无夹具证据**——探针是假 `Envir`，oracle 失败支走 `DropGoldDown(nGold, true, 0, 0)`（`src/M2Server/Player/PlayObject.cs:3897`）→ `GetDropPosition`（`src/M2Server/Actor/BaseObject.cs:485`）触发 NRE，探针跑不了；该支仅由 Rust 宿主用例 `tests::it16_lottery_frame_order_gold_counters_and_always_eaten` ③ 覆盖（金币不变、无 653、等级照加、绿字照发）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
 
+### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（implemented_unverified）
+
+**归类**：`StdMode==3` 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2163`）→ `case 1`（`:2231-2236`）：
+`SendRefMsg(RM_SPACEMOVE_FIRE, …)` + `BaseObjectMove(HomeMap, 0, 0)` + `result=true`。
+`BaseObjectMove`（`:2312-2327`）：**空 `sMap` ⇒ `MapName`**（`string.IsNullOrEmpty`，`:2314-2317`）；
+`sX!=0 && sY!=0` ⇒ `SpaceMove`（精确点，落点可走则 0 抽），否则 `MapRandomMove`（两次抽
+`Random(W-nEgdey-1)`/`Random(H-nEgdey-1)`，`nEgdey` 只看**目标图**高）。搬运位置/换图簇/RNG 是**宿主行为**，
+纯函数 `use_item` 覆盖不到；且 `useitem.rs` 与 IT-16 车道共享写集 ⇒ 本组**零改 `useitem.rs`**。
+
+**实现（宿主拦截，一条钩子）**：`bins/game-svr/src/eat_move.rs`
+- `maybe_eat_move`：只接管「首件 `MakeIndex` 命中、模板 `StdMode==3 && Shape∈{1,2,3}`、非 `dead`、非
+  `no_drug`」；`dead`/`no_drug`/模板缺失一律回落 `use_item`（禁药红字仍由 `use_item` 出，不造第二份真相）。
+  出帧/动作序：`SM_EAT_OK(635)`（oracle 直发）→ `RM_SPACEMOVE_FIRE` 广播**移动前** ±12（含自己）的
+  `SM_SPACEMOVE_HIDE(800)` → `World::base_object_move_player` → 移除物品 + `RecalcBagWeight` →
+  `SM_WEIGHTCHANGED(622)`。633/634/801 由**共用**的 world tick `drain_map_change` 出（同一生产函数）。
+- `handle_eat_cmd`：在 `no_drug` 之后调一次本函数，返回 `true` 即 `return`。
+- **`HomeState`（`PlayObject.HomeMap/HomeX/HomeY` 会话快照）**：挂 `SessionGround.home`，**唯一两个写点**——
+  ① 登录 `session_ground_from_login`（取 `apply_get_start_point_on_login` **之后**的 final 记录值；
+  `red_home_*` = `red_home_of(enter_cfg)` 的 `SystemShare.Config.RedHome*` 快照）；② 3s 支
+  `apply_start_point_for_fired_players`（与 `saves[chr].record.data.home_*` **同一次迭代、同源**写回）。
+  oracle 节奏：登录（`PlayObject.cs:1199`）与每 3s `CheckDupObjTick`（`PlayObject.Message.cs:266`）各跑
+  一次 `GetStartPoint()`（`PlayObject.Base.cs:704-721`：`PvpLevel()>=2` ⇒ `Config.RedHome*`；否则按
+  **当前地图**命中 `StartPointList` 就覆盖）⇒ 本快照 **≤3s 陈旧，与 oracle 同节奏**。move 逻辑只读、不回写。
+
+**装置（三向可寻）**：
+- 探针：`mir2-rs/tests/parity/m3/move-eat-probe`（**独立于 `eat-probe`**，避免与 IT-16 的夹具重生成相撞）。
+  手法：合成真格式 `.map`（52B 头 + 12B/格）+ 真 `Envirnoment` + 最小 `IMapSystem`（只做 `FindMap`）+
+  真 `SystemShare.ActorMgr` + 真私有 `ClientUseItems`；`RandomNumber.random` 换固定种子录制包装
+  （**先建 `PlayObject`、后注入种子**：ctor 自身 5 抽不进账本）；排空 `MsgQueue` 并按出队序
+  pump `8062/10115/8097/8098/8100`。
+- golden：`mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json`。生成（仓库根）：
+  `dotnet run --project mir2-rs/tests/parity/m3/move-eat-probe -c Release -- mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json`
+- 夹具契约（golden `scenario_note` + `ctx.presentation` / `ctx.map_file_name` 同步记录）：三图 60x60 全可走；
+  **MapName == MapFileName 主干**（无 `[名|文件]` 覆盖）；地图 `Flag.DayLight=true`（`DayBright()=0`）；
+  实体 `Dir=4`（`BaseObject.cs:378` ctor）/`Light=0`/`Feature=0`/`Status=0`。
+
+**对拍面（用例 `it09_town_scroll_host_parity`，两例：home 随机 / 空 HomeMap 回落当前图）**：
+① 线上帧**逐字段含尾**：`635 → 800 → 622 → 633 → 634 → 801`（634 尾 = `EDCode(MapFileName)`；
+801 尾 = `EDCode(CharDesc)`；`Series=MakeWord(Dir,Light)`）② 终态 `MapName/X/Y`（实体+会话）
+③ `ItemList` 清空 + `WAbil.Weight` ④ `Rng` 逐次 + 「移动后不得多抽」⑤ **断言 golden `pumped` 的剔除集
+恰等于 `[766,54]`**（把豁免变成可验证的等式，不是隐性豁免）。
+
+**牙（五颗，全红-还原-复绿，sha 核验）**：M1 `StdMode` 门 3→4（hook 永不接管 ⇒ 636）；
+M2 Shape1 的 `HomeMap` 换当前图（例 1 终态图/落点变）；M3 删空 `HomeMap` 回落（例 2 不动）；
+M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tick 用例会话断言红）。
+
+**共用路径缺口（登记，**不是** IT-09 私有；影响所有走换图的卡；已独立立卡
+[`docs/issues/openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）**：
+1. **766 `SM_AREASTATE` + 54 `SM_MAPDESCRIPTION`**：oracle `RM_CHANGEMAP` 处理器
+   （`PlayObject.Message.cs:1774-1779`）在 `SendDefMessage(SM_CHANGEMAP)` 后还调 `RefUserState()`
+   （`PlayObject.Base.cs:285` ⇒ `SM_AREASTATE(766)`）与 `SendMapDescription()`（`:887-895` ⇒
+   `SM_MAPDESCRIPTION(54)`）；宿主 `drain_map_change` 只出 633/634/801。**客户端影响**：每次换图后
+   区域状态（安全区/战斗区位）与地图描述/音乐不刷新。**本卡不实现**：修改共用换图路径影响面远超
+   IT-09，须另立卡（对拍面已用等式钉住它只能缺这两条）。
+2. **`[名|文件]` 覆盖时的 `SM_CHANGEMAP` 尾**：oracle 的 `Envir.MapFileName` 是 MapInfo 的**取图文件主干**
+   （`src/GameSrv/Maps/MapManager.cs:66-96`：`[名|文件]` 的 `|` 右半，`<...>`，缺省=逻辑名），宿主
+   `drain_map_change` 用 `MapRegistry::name_of`（**逻辑名**）。现网 `MapInfo.txt` 有 `[M100A|M100 …]`
+   形态 ⇒ 该图换图时尾会从 `M100` 变 `M100A`。本夹具无覆盖形态（逻辑名==主干）⇒ 本卡对拍面内**尾逐字节相等**；
+   复现方式：给 `move-eat-probe` 造一条 `map_name != map_file_name` 的注册表条目即可击穿（留给修复卡）。
+
+**状态**：`implemented_unverified`（对拍面全绿 + 五牙，但共用路径缺口 1/2 未清 ⇒ 不计 verified）。
+转 verified 条件：上述两条并入共用换图路径并进本组对拍面。
+
+### 9.13 IT-10 随机传送 Shape2（`EatUseItems` move 组）— 宿主拦截 + 两支对拍（implemented_unverified）
+
+**归类**：`EatUseItems` case 2（`PlayObject.Base.cs:2238-2246`）：
+```
+if (!Envir.Flag.boNORANDOMMOVE)
+{ SendRefMsg(RM_SPACEMOVE_FIRE); BaseObjectMove(MapName, 0, 0); result = true; }
+```
+即：**未置位** ⇒ 吃 + 本图随机点（两次抽）；**置位** ⇒ `result=false` ⇒ `ClientUseItems` 落
+`SM_EAT_FAIL(636)`，**不消耗、不移动、无 FIRE**。门读的是**当前** `Envir.Flag`（不是目标图）。
+
+**实现**：与 IT-09 同一个钩子（`eat_move::maybe_eat_move` 的 Shape2 分支，§9.12）；本笔补**行为面证据**：
+探针两例 + Rust 侧两支用例 + 分支配读/目标图两颗牙。实现无新增代码路径（分支已随钩子落地）。
+`boNORANDOMMOVE` 判定 = `registry.flag_of(entity.map_id).bo_norandommove`（当前图）。
+
+**对拍（`it10_random_scroll_host_parity` / 单跑 `it10_random_branch_moves` 与
+`it10_norandom_branch_no_eat`；共用 `run_move_parity` 比较面）**：
+- 未置位（`eat_ok_shape2_random_scroll_current_map`，seed 20261122）：`635 → 800 → 622 → 633 → 634 → 801`
+  逐字段含尾；终态 = `move_map` 随机点；物品消耗；Rng 恰 2 抽（记录器 `site=BaseObject.MapRandomMove`）。
+- **置位（`eat_fail_shape2_norandommap_no_eat`）**：`immediate=[636]`、`pumped=[]`、`rng=[]`、
+  `rng_draw_count=0`（**记录器自证 0 抽**，不是「没看到数」）、`item_list` 保留原件 1 件、`weight` 不变、
+  终态 = 当前坐标。
+- 编译期两次 `let mut world = …` 不再复用：**每个 case 独立注册表**（`boNORANDOMMOVE` 逐例），
+  临时目录按测试实例编号（并行 `#[test]` 不互删）。
+- `rng_draw_count` 是记录器自证计数（`RecordingRandom.Draws.Count`），用例先断言它 == 逐次账本长度，
+  再用「Rust 侧下一抽 == 同种子重放下一抽」独立证明 Rust 0 抽。
+
+**牙（分两次跑、分别留原文）**：
+- M6 `if norandom` → `if !norandom`：`it10_norandom_branch_no_eat` 红（期望 `[636]`、实得全套 move 帧）、
+  `it10_random_branch_moves` 红（期望全套、实得 `[636]`）——**先置位支后未置位支各一次**。
+- M7 Shape2 目标图 `cur_map` → `home_map`：`it10_random_branch_moves` 红（634 尾 `EDCode(map)` 由
+  `move_map` 变 `home_map`）。还原后三颗用例复绿（sha 相等）。
+- 变异脚本注意：`shutil.copy2` 还原会带回旧 mtime ⇒ cargo 可能复用变异体二进制；脚本在还原后
+  `os.utime` 强制刷新（本次实测：未刷时「还原后仍红」= 假红）。
+
+**状态**：`implemented_unverified`（同 §9.12：共用换图路径缺口 766/54 与 `[名|文件]`
+见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+
+### 9.14 IT-11 地牢逃脱 Shape3（`EatUseItems` move 组）— 宿主拦截 + 四向分支对拍（implemented_unverified）
+
+**归类**：`EatUseItems` case 3（`PlayObject.Base.cs:2248-2262`）：
+```
+SendRefMsg(RM_SPACEMOVE_FIRE, …);
+if (PvpLevel() < 2) BaseObjectMove(HomeMap, HomeX, HomeY);
+else                BaseObjectMove(SystemShare.Config.RedHomeMap, RedHomeX, RedHomeY);
+result = true;   // 恒吃（与 IT-10 的禁随机支相反）
+```
+`PvpLevel()` = `(byte)(PkPoint / 100)`（`PlayObject.cs:4352`）——**在吃的那一刻**按当前 `PkPoint` 判，
+不是登录时判。`BaseObjectMove` 的坐标门是 `if (sX != 0 && sY != 0)`（**`&&`**，`PlayObject.Base.cs:2318`）
+⇒ 精确点（可走则 0 抽）否则 `MapRandomMove`（两抽）。
+
+**实现**：与 IT-09 同一个钩子（`eat_move::maybe_eat_move` 的 Shape3 分支，§9.12）；`HomeMap/HomeX/HomeY`
+与 `Config.RedHome*` 都取自 `SessionGround.home`（`HomeState`）快照——home 由登录 + 3s `GetStartPoint`
+维护，red 是登录时 `red_home_of(enter_cfg)` 的只读 Config 快照。本笔补行为面证据，无新增代码路径。
+
+**对拍（5 例，`it11_dungeon_escape_host_parity`；单跑 `it11_home_branch_exact` /
+`it11_red_home_branch_exact` / `it11_red_home_alt_values` / `it11_home_x_zero_y_nonzero_random` /
+`it11_home_zero_coords_random`）**：
+| case | 输入 | 期望 |
+| --- | --- | --- |
+| `…home_exact` | pvp=0，home=(home_map,5,6) | 精确落 (5,6)，0 抽，吃 |
+| `…red_home_exact` | pvp=2，red=(red_map,20,30)，home=(5,6) | 精确落 (20,30)，0 抽，吃（**误用 home ⇒ 会落 (5,6)**） |
+| `…red_home_alt_values` | pvp=2，red=(red_map,**25,35**) | 精确落 (25,35)（证明读快照、非写死 20/30） |
+| `…home_x_zero_y_nonzero_random` | pvp=0，home=(**0**,6) | **随机点**（`&&` 语义：缺一维即随机；写成 `\|\|` 会落精确 (0,6) 且 0 抽） |
+| `…home_coords_zero_random` | pvp=0，home=(0,0) | 随机点（两抽） |
+
+两组的来源写进 golden `ctx.note`（alt 例）：home 是"登录时 pvp<2 捕获的字段快照"、red 是"登录时
+`Config.RedHome*` 快照"；并写明反例期望（误用 home ⇒ (5,6)）。
+
+**牙（§31 五点表；每支单跑留原文）**：
+| 变异 | 红在哪 | 预期落点/断言 |
+| --- | --- | --- |
+| M8 `if pvp >= 2` → `if pvp < 2` | `it11_red_home_branch_exact` 红、`it11_home_branch_exact` 红（分两次跑） | 红名支落 home(5,6)、home 支落 red(20,30) |
+| M9 home/red 目标互换 | `it11_red_home_branch_exact` / `…alt_values` 红 | pvp=2 支落 **home_map(5,6)**；红在帧断言（634 尾 `EDCode("home_map")`）与终态 |
+| M10 坐标门恒真（`if true`） | `it11_home_zero_coords_random` 红 | 落 (0,0) 且 0 抽（期望随机点 + 2 抽） |
+| M11 `&&` → `\|\|` | `it11_home_x_zero_y_nonzero_random` 红 | 落精确 (0,6) 且 0 抽（期望随机点 + 2 抽） |
+每次变异前 `touch` 强制重编；还原后 `sha256` 相等 + 基线六颗复绿。
+
+**状态**：`implemented_unverified`（同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
+见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+
+**§33/§36 补记（2026-11-20，`card/items-move-09` 复审返工）**：
+1. **lane 偶发（§33）**：IT-10 牙脚本首跑 9 项中 **2 项 MISMATCH（1 次）**，当时全机 **4 个 cargo** 在场；
+   车道空后同脚本复跑 **9/9** 全绿（无改动）⇒ 基线/牙只在车道空（≤1 条、free ≥5G）时跑，偶发按「次数/总数」报。
+2. **钟点依赖（§36）**：`ae` 11:00 跑 `cargo test --lib` = **2071 passed / 9 failed / 61 ignored**，9 红全在
+   `it09_town_scroll_host_parity` 的帧序列断言（`assert_eq!(got, want)`），**差异仅
+   `SM_CHANGEMAP(634).Series` 一个字段**（left 2 / right 0；其余帧逐字节相同）。
+   根因：产品 `drain_map_change` 的 `DayBright()` 取**真实本地小时**（`enter::game_time_now()`），
+   而夹具注册表的 `MapInfoFlag` 是 `default`（`day_light=false`）⇒ 只有 5–10/16–19/21 点映射到 0 才绿
+   （当时绿是钟点巧合）。**修法（三条都做）**：
+   - `eat_move.rs::registry_from` 的 `MapInfoFlag` 置 `day_light: true`（与探针夹具一致）；
+   - **非白天钟点复跑**：11:10 跑 `--lib eat_move` = **11 passed / 0 failed**（含 IT-09/10/11 全部）；
+   - **补注入时钟覆盖**：`drain_map_change` 拆出 `drain_map_change_at_time(..., game_time)` 注入缝，
+     新用例 `map_change_634_day_bright_buckets` 断言 634 的 `Series` 三桶
+     （`game_time 1→0 / 3→1 / 其它→2`，`DayLight⇒0`，`boDarkness⇒1`）；
+   - **负对照**：删除 `day_light: true` 行后在 11:10 跑 `it09` ⇒ 红（634 `Series` 2 vs 0，与 ae 现象一致），
+     还原 `sha256` 相等后复绿。⇒ 「避开依赖」不再无覆盖，「全绿」附了跑的时刻（11:10，非白天窗口）。
 ### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）

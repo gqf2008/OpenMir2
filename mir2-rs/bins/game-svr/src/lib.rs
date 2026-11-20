@@ -37,6 +37,7 @@ mod cert;
 mod clock;
 mod config;
 mod dbclient;
+mod eat_move;
 mod enter;
 mod gamegold;
 mod gate_backpressure;
@@ -10622,6 +10623,15 @@ fn handle_eat_cmd(
     ) {
         return;
     }
+    // **IT-09/10/11 的宿主钩子**（`EatUseItems` move 组：回城卷/随机传送/地牢逃脱）：
+    // 主体在 [`eat_move::maybe_eat_move`]（`useitem.rs` 零改动）；它自己出帧/搬运/吃尾巴并写回会话，
+    // 返回 `true` ⇒ 本函数不再走 `use_item`（否则那些 Shape 会落 `_ => {}` 的 636）。
+    if eat_move::maybe_eat_move(
+        world, sg, actor_id, recog, chr_name, socket, online, gates, catalog, registry, dead,
+        no_drug,
+    ) {
+        return;
+    }
     let mut state = game_svr::useitem::UseItemActorState {
         wabil: sg.state.wabil.clone(),
         inc_health: sg.recovery.inc_health,
@@ -18642,6 +18652,28 @@ fn drain_map_change(
     displays: &downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
 ) {
+    // `Envir.DayBright()` 的 `Bright` 桶来自**真实本地小时**；生产入口只此一处。
+    // 需要注入的测试走 [`drain_map_change_at_time`]（章程 §36：读真实时钟的产品分支必须可注入）。
+    drain_map_change_at_time(
+        world,
+        online,
+        gates,
+        displays,
+        registry,
+        enter::game_time_now(),
+    );
+}
+
+/// [`drain_map_change`] 的**时间注入**版：`game_time` = `Bright` 的桶（1 / 3 / 其它），
+/// 由 [`enter::day_bright`] 映射成 `SM_CHANGEMAP(634)` 的 `Series`（`DayBright()`）。
+pub(crate) fn drain_map_change_at_time(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    game_time: u8,
+) {
     let changes = world.sessions.drain_map_changes();
     for mut ev in changes {
         // **P2-3a**：目标图不归本 World（stub/跨片）⇒ 不发 TransMap 簇（防御性；
@@ -18670,7 +18702,7 @@ fn drain_map_change(
             .to_vec();
         // `DayBright()`：新图的 flag + 世界时钟（缺则 0，并记 WRN 不静默）。
         let day_bright = match registry.and_then(|r| r.flag_of(ev.map_id)) {
-            Some(f) => enter::day_bright(f, Some(enter::game_time_now())).unwrap_or(0),
+            Some(f) => enter::day_bright(f, Some(game_time)).unwrap_or(0),
             None => {
                 glog!(
                     "WRN",
@@ -21370,6 +21402,12 @@ struct SessionGround {
     /// （`readbook::MagicState`；IT-17a）。写点：登录 [`session_ground_from_login`] + 读书学成
     /// （`readbook::maybe_read_book`）；持久化由 [`build_save_record`] 回写。
     magic: readbook::MagicState,
+    /// `PlayObject.HomeMap/HomeX/HomeY` + `SystemShare.Config.RedHome*` 的会话快照
+    /// （`eat_move::HomeState`；IT-09/10/11 只读）。**唯一两个写点**：登录
+    /// [`session_ground_from_login`]（取 `apply_get_start_point_on_login` **之后**的 final 记录值）
+    /// 与 3s 支 [`apply_start_point_for_fired_players`]（与 `saves[chr].record.data.home_*`
+    /// **同拍、同源**写回）。语义/边界见 `eat_move::HomeState` 的文档（≤3s 陈旧，与 oracle 同节奏）。
+    home: eat_move::HomeState,
     /// `PlayObject.DecHpTick`（`PlayObject.cs:783`；**ctor 不赋值** ⇒ 0）——P25 的 `DECHP` 门基准。
     dec_hp_tick: i64,
     /// `PlayObject.IncHpTick`（`PlayObject.cs:784`；ctor 不赋值 ⇒ 0）——P25 的 `INCHP` 门基准。
@@ -25590,6 +25628,7 @@ fn tick_world_with_specials(
 fn apply_get_start_point_after_tick(
     world: &mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
     enter_cfg: &EnterConfig,
@@ -25619,6 +25658,7 @@ fn apply_get_start_point_after_tick(
         now,
         &players,
         saves,
+        sessions,
         &enter_cfg.home_start_points,
         red_home_map,
         red_home_x,
@@ -25628,12 +25668,17 @@ fn apply_get_start_point_after_tick(
 
 /// **端到端核心**（3s 支的「串起来」那段，纯数据进/纯数据出，供单测直接喂数组）：
 /// 对每个 `(chr_name, check_dup_obj_tick, 当前地图名)`，**只有 tick == now** 的玩家才
-/// 用 [`apply_get_start_point_to_record`] 覆盖 `saves[chr].record.data.home_*`。
+/// 用 [`apply_get_start_point_to_record`] 覆盖 `saves[chr].record.data.home_*`，并在**同一次迭代**里
+/// 把同一份结果写回会话快照 `sessions[chr].home`（`PlayObject.HomeMap/HomeX/HomeY` 的宿主镜像）。
+/// 两处写**同拍、同源**（同一 `apply_get_start_point_to_record` 的返回值读出）——不存在
+/// 「record 已更新、会话还是旧值」的中间窗口。
 /// 返回实际写入的玩家数（0 = 本 tick 无人命中/无匹配）。
+#[allow(clippy::too_many_arguments)]
 fn apply_start_point_for_fired_players(
     now: i64,
     players: &[(String, i64, String)],
     saves: &mut std::collections::HashMap<String, SavedHuman>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     start_points: &[mir2_envir::startpoint::StartPoint],
     red_home_map: &str,
     red_home_x: i16,
@@ -25656,6 +25701,12 @@ fn apply_start_point_for_fired_players(
             red_home_y,
         ) {
             applied += 1;
+            // 同拍、同源写回会话快照（只写 `home_*`；`red_home_*` 是登录时抄的不可变配置，不在此写）。
+            if let Some(sg) = sessions.get_mut(chr_name) {
+                sg.home.home_map = saved.record.data.home_map.clone().unwrap_or_default();
+                sg.home.home_x = saved.record.data.home_x;
+                sg.home.home_y = saved.record.data.home_y;
+            }
         }
     }
     applied
@@ -26024,6 +26075,9 @@ struct SessionGroundInputs<'a> {
     server_index: u8,
     /// `PlayObject.MagicList` 等魔法态快照（调用点装配；见 `readbook::MagicState`）。
     magic: readbook::MagicState,
+    /// `SystemShare.Config.RedHomeMap/RedHomeX/RedHomeY`（`red_home_of(enter_cfg)`；
+    /// 会话 `eat_move::HomeState` 的 `red_home_*` 来源，生产不可变）。
+    red_home: (&'a str, i16, i16),
     /// `String.conf` 的 `CanotPickUpItem`（GBK 原文，`SM_SYSMESSAGE`）。
     canot_pick_up_item: &'a str,
     /// 构造时刻（oracle 各 ctor 的 `GetTickCount()`）。
@@ -26152,6 +26206,17 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         user_unlock_durg: false,
         hunger_status: d.hunger_status,
         magic: i.magic,
+        // `PlayObject.HomeMap/HomeX/HomeY`（`GetHumData` 装入 + 登录 `GetStartPoint()` 覆盖后的 final 值；
+        // 调用点的 `d` = `apply_get_start_point_on_login` 之后取的 `full.as_ref().data`）。
+        // `RedHome*` 是 `SystemShare.Config` 的只读快照（生产不可变）。
+        home: eat_move::HomeState {
+            home_map: d.home_map.clone().unwrap_or_default(),
+            home_x: d.home_x,
+            home_y: d.home_y,
+            red_home_map: i.red_home.0.to_string(),
+            red_home_x: i.red_home.1,
+            red_home_y: i.red_home.2,
+        },
         // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
         //（进图后第一次 Run 立即过门）。
         dec_hp_tick: 0,
@@ -29999,6 +30064,7 @@ fn sim_loop(
                                                                 )),
                                                                 ..Default::default()
                                                             },
+                                                            red_home: red_home_of(&enter_cfg),
                                                             canot_pick_up_item: enter_cfg
                                                                 .string_conf
                                                                 .canot_pick_up_item(),
@@ -31149,6 +31215,7 @@ fn sim_loop(
         apply_get_start_point_after_tick(
             &world,
             &mut saves,
+            &mut ground_sessions,
             &online,
             registry.as_ref(),
             &enter_cfg,
@@ -40841,6 +40908,7 @@ mod tests {
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
             magic: readbook::MagicState::default(),
+            home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: Vec::new(),
@@ -43715,6 +43783,7 @@ break
         use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
         let sg = SessionGround {
             magic: readbook::MagicState::default(),
+            home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: vec![weapon],
@@ -46657,6 +46726,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -46865,6 +46935,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -47059,6 +47130,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -47215,6 +47287,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -47405,6 +47478,7 @@ break
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -54488,6 +54562,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -55646,6 +55721,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -56912,6 +56988,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: list,
@@ -61587,6 +61664,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61779,6 +61857,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
@@ -61922,6 +62001,7 @@ SendRefMsgRange=15
             "hero".into(),
             SessionGround {
                 magic: readbook::MagicState::default(),
+                home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
@@ -86341,10 +86421,19 @@ mod tests {",
     ///
     /// 两个玩家：A 的 `check_dup_obj_tick == now`、B 的差 1。断言 A 被覆盖成 StartPoint 命中值、
     /// B **一字不变**；起始值显式设为 `0/289/618` 并断言非全 0（否则分不出「没动」与「写成 0」）。
+    ///
+    /// **IT-09/11 追加**（`opc-19` 2026-11-20 的「两份真相防漂移」验收）：同一次调用必须把**同一份**
+    /// `GetStartPoint` 结果写进 **record 与会话快照**（`SessionGround.home`），且只有命中本 tick 的
+    /// 玩家被写；再补一颗「不命中 ⇒ 两侧都不动」的负例（`now` 不匹配任何人）。
     #[test]
     fn apply_start_point_for_fired_players_writes_only_the_fired_player() {
-        let sp = mir2_envir::startpoint::parse_start_points("0 289 618\n3 330 330\n");
+        let sp = mir2_envir::startpoint::parse_start_points(
+            "0 289 618
+3 330 330
+",
+        );
         let mut saves = std::collections::HashMap::new();
+        let mut sessions = std::collections::HashMap::new();
         for (chr, account) in [("A", "a"), ("B", "b")] {
             let mut rec = record::PlayerRecord::default();
             rec.data.home_map = Some("0".to_string());
@@ -86364,13 +86453,26 @@ mod tests {",
                     derived: None,
                 },
             );
+            let mut sg = test_session_ground(1);
+            sg.home.home_map = "0".to_string();
+            sg.home.home_x = 289;
+            sg.home.home_y = 618;
+            sessions.insert(chr.to_string(), sg);
         }
         let players = vec![
             ("A".to_string(), 5000i64, "3".to_string()),
             ("B".to_string(), 4999i64, "3".to_string()),
         ];
-        let applied =
-            apply_start_point_for_fired_players(5000, &players, &mut saves, &sp, "9", 845, 674);
+        let applied = apply_start_point_for_fired_players(
+            5000,
+            &players,
+            &mut saves,
+            &mut sessions,
+            &sp,
+            "9",
+            845,
+            674,
+        );
         assert_eq!(applied, 1, "只有 A 命中本 tick");
         let a = &saves.get("A").expect("A 在").record.data;
         assert_eq!(
@@ -86378,11 +86480,46 @@ mod tests {",
             (Some("3".to_string()), 330, 330),
             "A 必须被 StartPoint(3) 覆盖"
         );
+        // 同拍、同源：会话快照 == 记录值（不是两遍/两个来源）。
+        let sa = &sessions.get("A").expect("A 会话").home;
+        assert_eq!(
+            (sa.home_map.as_str(), sa.home_x, sa.home_y),
+            ("3", 330, 330),
+            "A 的会话 home 快照必须与 record 同拍写入"
+        );
         let b = &saves.get("B").expect("B 在").record.data;
         assert_eq!(
             (b.home_map.clone(), b.home_x, b.home_y),
             (Some("0".to_string()), 289, 618),
             "未命中的 B 一字不变"
+        );
+        let sb = &sessions.get("B").expect("B 会话").home;
+        assert_eq!(
+            (sb.home_map.as_str(), sb.home_x, sb.home_y),
+            ("0", 289, 618),
+            "未命中的 B 会话也不动"
+        );
+        // 负例：本 tick 无人命中 ⇒ 两侧都不动（防「无条件写」把 B 也写坏）。
+        let applied = apply_start_point_for_fired_players(
+            5001,
+            &players,
+            &mut saves,
+            &mut sessions,
+            &sp,
+            "9",
+            845,
+            674,
+        );
+        assert_eq!(applied, 0, "now=5001 无人命中");
+        let sa = &sessions.get("A").expect("A 会话").home;
+        assert_eq!(
+            (sa.home_map.as_str(), sa.home_x, sa.home_y),
+            ("3", 330, 330)
+        );
+        let sb = &sessions.get("B").expect("B 会话").home;
+        assert_eq!(
+            (sb.home_map.as_str(), sb.home_x, sb.home_y),
+            ("0", 289, 618)
         );
     }
 
@@ -88103,6 +88240,7 @@ GMEXECUTE f
             actor_id,
             server_index: rec.data.server_index,
             magic: readbook::MagicState::default(),
+            red_home: ("3", 845, 674),
             canot_pick_up_item: "",
             now: 1_000,
         })
@@ -88140,6 +88278,7 @@ GMEXECUTE f
             actor_id: 1,
             server_index: data.server_index,
             magic: readbook::MagicState::default(),
+            red_home: ("3", 845, 674),
             canot_pick_up_item: "",
             now: 1_000,
         })
