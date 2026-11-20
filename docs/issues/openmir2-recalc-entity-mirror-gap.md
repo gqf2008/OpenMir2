@@ -60,8 +60,10 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 ## 5. 与其它卡的边界
 
 - **与 `card/charstatus-657-b13`（`89`）重叠**：他正在改 `#1`/`#9`/`#13`/`level0`/`gm_smake` 等
-  的"657 条数 2→1"，并已被要求补 **series 断言**。本卡的两个风险点（`apply_pending_level_up`、
-  `drain_buff_downlink`）与他改的是**同一个函数/相邻代码**——**改前先对表**，避免两人改同一处。
+  的"657 条数 2→1"，并已被要求补 **series 断言**。**本卡唯一的 657 值风险点是
+  `drain_buff_downlink`（自见面）与 `handle_eat_cmd`（观察者面）**；`apply_pending_level_up`
+  **仅登记不变量缺口、不影响 657 值**（见 §3 第 0 条与扫描表第 1 行）。
+  与他改的**同一个函数/相邻代码**——**改前先对表**，避免两人改同一处。
   `handle_eat_cmd` 的观察者面归本卡；自我面 `WireSession` 归吃路径既有实现。
 - 与 `card/657-series-spellbuf`：后者修的是 `handle_spell_cmd_with_magic` 两处（第 8/9 行），
   已含镜像；**本卡不重复、也不与之捆绑合并**。
