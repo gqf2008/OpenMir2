@@ -1466,3 +1466,23 @@ run_id 侧车挡住）。**新条目交付时卡里必须写这三项：驱动�
   `Shape=1@DoSpell` / `Shape=1@MagGroupAmyounsul` 等，原值保留在 notes。
 - **对外口径**：分母 104→97 是**去重**（7 条同一叶子的重复行）造成的，**不是新增验证**；覆盖率因此
   从 51/102 变为 51/97（技能 20/58）。
+
+### 43. `tools/parity/rerun_magic_plane.sh` 实证（2026-11-20）
+
+**结论**：magic 20 条 ledger 用例的复跑链（驱动 `--ignored --exact` → 比较器 `--ignored` 同 run_id）已封成
+一条命令，**三步实证全绿**：
+
+1. **单条回归**（`MAGIC_PLANE_ONLY=firecharm`，脚本加固后）：
+   `RUN_ID=magic-plane-1795155518-1559627`；`DRIVERS=3`；比较器 `running 1 test` / `ok. 1 passed`；
+   `RUNID_SIDECARS 3 mismatch 0`；`PLANE_OK`；rc=0。
+2. **篡改 run_id 负对照**：改 `firecharm_miss.run.json` 的 `run_id` ⇒ 比较器
+   `FAILED. 0 passed; 1 failed`（cargo rc=101，输出明确指出 run_id 不匹配）；还原后同 id 复跑 `ok. 1 passed`。
+   判据口径（opc-19 裁定）：**非零退出且能指出 run_id 不匹配**，不要求严格 rc=1。
+3. **全量**（`lanes=0 / free=14829 MB` 起跑）：`RUN_ID=magic-plane-1795155576-1559922`；
+   `--list` 共 **63** 支（首 `tests::big_cloak_parity_s1`、末 `tests::unamyounsul_parity_gate_open_zero`）；
+   `DRIVERS=63`、63 支全部 `ok`；比较器 `20 passed; 0 failed`（17 filtered）；`RUNID_SIDECARS 63 mismatch 0`；
+   `PLANE_OK`；rc=0。
+
+**实证中脚本自身抓到一个 §48 级坑**：`--list` 每行形如 `tests::x: test`，首版 `awk {print $1}` 得到带尾冒号的
+`tests::x:` ⇒ 过滤不到用例 ⇒ **每支跑 0 个测试却 rc=0**（三支都"ok"），直到比较器报"台账陈旧 run_id 不匹配"
+才暴露。修法 `sub(/:$/, "", $1)`；原因已写进脚本头注释。
