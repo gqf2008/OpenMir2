@@ -272,41 +272,50 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 不改 657（`2f` 在飞）；不做 C；不改 `ClientHitXY` 的 `wHitMode` 分派与既有动作帧序（除 case 9 的
 条件化）；`FastTrain` 保持现状（未装载，登记）。
 
-## 9. 段 1 证据（2026-11-20，head `c32167548`，base `3df3b0202`）
+## 9. 段 1 证据（2026-11-20，head `af786371a`，base `707bc99b9`）
 
-**门禁**（每条单独跑、不串联；`CARGO_BUILD_JOBS=2`，起前现数）
+> **rebase 后的树 ≠ 被签的树**：本卡的证据全部在 `af786371a` 上重跑（master 已含 657 批 1 修复
+> `89` 与 fmt 修复 `d50c46fb0`）。此前 `d05b6234d`（base `3df3b0202`）上的读数只作历史。
+
+**门禁**（每条单独跑、不串联；`CARGO_BUILD_JOBS=2`；起前现数）
 
 | 命令 | ran | passed / failed / ignored | rc |
 | --- | --- | --- | --- |
-| `cargo fmt --all -- --check`（首跑红 → `cargo fmt --all` → 复绿） | — | — | 0 |
-| `cargo clippy -p mir2-world-bevy --all-targets -- -D warnings` | — | — | 0 |
-| `cargo clippy -p game-svr --all-targets -- -D warnings` | — | — | 0 |
-| `cargo test -p mir2-world-bevy`（全量） | 889（lib） | 889 / 0 / 0 | 0 |
-| `cargo test -p game-svr --lib` | 2216 | **2146 / 0 / 70** | 0 |
+| `cargo fmt --all -- --check` | — | — | **0** |
+| `cargo clippy -p mir2-world-bevy --all-targets -- -D warnings` | — | — | **0** |
+| `cargo clippy -p game-svr --all-targets -- -D warnings` | — | — | **0** |
+| `cargo test -p mir2-world-bevy`（全量） | 889（lib） | **889 / 0 / 0** | **0** |
+| `cargo test -p game-svr --lib` | 2220 | **2147 / 0 / 73** | **0** |
 
-**`--lib` 三数差异归因（相对"2140"）**：2140 是**本车道 A 批分支**上的读数（已含 A 的 2 条
-`yedo_*` 用例）。master `c8e48dbde → 165c6edd1` 区间里 `bins/game-svr/src` 只新增两类用例：
-A 批 2 条（`yedo_drain_writes_back_and_sends_pwr` / `yedo_no_weapon_skips_and_counts_warn`）与
-IT-13 的 6 条（`it13_*`）⇒ `2138 + 2 + 6 = 2146`。**本批（B 段 1）在 game-svr 下新增 0 条、
-删除 0 条**（`git diff 3df3b0202 HEAD -- mir2-rs/bins/game-svr/src | grep -c '^+.*#\[test\]'` = 0）。
+`--lib` 三数与 master `707bc99b9` 的基线（`2220 / 2147 / 0 / 73`）**逐数相同** ⇒ 本批在 game-svr 下
+新增 0 条、删除 0 条（`git diff 707bc99b9 HEAD -- mir2-rs/bins/game-svr/src | grep -c '^+.*#\[test\]'` = 0）。
 
 **5 条用例**（world crate，全绿）：`train_current_skill_draws_only_three_branches` /
-`train_current_skill_levels_up_when_max_train_hit` / `get_attack_power_hit_mode3_adds_hit_plus_and_consumes` /
-`power_hit_consumed_once_across_two_attacks` / `yedo_reset_uses_level_after_training_in_same_hit`。
+`train_current_skill_levels_up_when_max_train_hit`（三臂：升级 / 反向臂 / 边界臂）/
+`get_attack_power_hit_mode3_adds_hit_plus_and_consumes` / `power_hit_consumed_once_across_two_attacks` /
+`yedo_reset_uses_level_after_training_in_same_hit`。
 
-**6 颗牙（逐颗）**
+**9 颗牙**
 
-| # | 变异 | 应红用例 | 结果 |
+| # | 改坏点 | 应红用例 | 结果 |
 | --- | --- | --- | --- |
 | M1 | 模式支 `1` → `spell_train_points(rng)` | `train_current_skill_draws_only_three_branches` | 咬住 |
-| M2 | `gate_passes` 的 `need <= abil_level` → `<= abil_level+1` | 同上 | 咬住 |
+| M2 | 门 `need <= abil` → `<= abil+1` | 同上 | 咬住 |
+| M6 | 基本剑法支 `spell_train_points(rng)` → `1`（少一抽） | 同上 | 咬住 |
 | M3 | 删 `power += hit_plus` | `get_attack_power_hit_mode3_adds_hit_plus_and_consumes` | 咬住 |
 | M4 | 删 `input.power_hit = false` | `power_hit_consumed_once_across_two_attacks` | 咬住 |
 | M5 | 删「训练后同步 `attack_skill[7].level`」 | `yedo_reset_uses_level_after_training_in_same_hit` | 咬住 |
-| M6 | 基本剑法支 `spell_train_points(rng)` → `1`（少一抽） | `train_current_skill_draws_only_three_branches` | 咬住 |
+| M7 | 删 `state.level += 1` | `train_current_skill_levels_up_when_max_train_hit` | 咬住 |
+| M8 | `max_train[..] <= tran_point` → `<` | 同上（**边界臂**） | 咬住 |
+| M9 | 同一行 → `>=` | 同上（**反向臂**） | 咬住 |
 
-每颗后 `restored_sha_ok=True`；全部结束后 `grep -rn MUTATION` = 0、`git status` 空。
-脚本 `E:/UserTemp/teeth_b1.py`，日志 `E:/UserTemp/teeth-b1.log`。
+M1/M2/M6 是**三颗牙各改不同代码、都收敛到同一条断言**（模式支抽数 / 门的比较符 / 无条件支的抽数），
+不是三条独立用例；M7/M8/M9 同理收敛到升级用例的三条臂。每颗 `restored_sha_ok=True`；
+全部结束后 `grep -rn MUTATION` = 0、`git status` 空。脚本 `E:/UserTemp/teeth_b1.py`、`teeth_b1_m7.py`，
+日志 `E:/UserTemp/teeth-b1.log`。
 
-**未做（段 2 起）**：640 帧与 800/3000ms 延时（§3bis）、`TwinHitSkill`/case 9（段 3）、
-模式 7 `FireHitSkill`（段 4）。
+**§43 三问**：①观测值随 `max_train` 三档（0 / 1e6 / 相等）变化，两侧都有观测面；②每次变异输出
+`running 1 test` + `... FAILED`，M8/M9 的 panic 行号分别落在边界臂 边界臂的 `assert!(up.result, …)` 与反向臂
+反向臂的 `assert!(!ev_big[0].1.level_up, …)`；③旧单臂（`max_train=0`）是退化形态，已实测不咬，不再单独承担判据证据。
+
+**未做（段 2 起）**：640 帧与 800/3000ms 延时（§3bis）、`TwinHitSkill`/case 9（段 3）、模式 7（段 4）。
