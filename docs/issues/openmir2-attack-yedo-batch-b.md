@@ -223,12 +223,24 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 | 删 `Random(3)+1` 抽（三个调用点各一颗） | ① 的计数用例 |
 | `CheckSkillProficiency` 门从 `Level<3` 改成 `Level<=3` | ①门用例 |
 | `TrainSkill` 去掉 `FastTrain` ×3 | ①训练量用例 |
-| `CheckMagicLevelUp` 把 `nLevel` 恒 0 | ①升级用例 |
+| ~~`CheckMagicLevelUp` 把 `nLevel` 恒 0~~ **（原稿错误，见 §5.2）** | ~~①升级用例~~ |
 | 640 帧延迟 800↔3000 互换 | ①帧时序用例 |
 | `PowerHit` 消费不清零 | ②第二击用例 |
 | `nPower += HitPlus` 删掉 | ②伤害数值用例 |
 | `rm_action_ident` case 9 改回无条件 | ③帧用例 |
 | `TwinHitSkill` 超时删掉 | ③到期用例 |
+
+### 5.2 原稿那颗牙不咬——原因与改正（`ae` 指出 + 本批实测）
+
+草案里的「`CheckMagicLevelUp` 把 `nLevel` 恒 0 ⇒ ①升级用例红」**不成立**：
+- ①那条用例 `level = 0`，而 `nLevel = (Level<4 && TrainLv>=Level) ? Level : 0` ⇒ **本来就是 0**，改了没差别。
+- 补试的「`max_train[nLevel] <= tran_point` 改 `<`」**也不咬**：`TrainSkill` 会先加 `Random(3)+1 ≥ 1`，
+  所以比较实际是 `0 < 1`，仍成立。
+- ⇒ 根因是 **`max_train[0] = 0` 把边界比较整个退化**，该用例原本只证明"有熟练点就升级"。
+
+**改正（已落到用例）**：`train_current_skill_levels_up_when_max_train_hit` 变成**三臂**：
+①`max_train=0` ⇒ 升级；②**反向臂** `max_train=1e6` ⇒ 不升级（让 `<=`→`>=` 咬住）；
+③**边界臂** 直调 `check_magic_level_up`，`tran_point == max_train == 5` ⇒ 升级且扣到 0（让 `<=`→`<` 咬住）。
 
 ## 6. 决策点（需审阅裁定，未定不写码）
 

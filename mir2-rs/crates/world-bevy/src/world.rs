@@ -19443,8 +19443,13 @@ mod weapon_durability_tests {
         assert_eq!(rng_gate.calls, 0, "门不过不抽");
     }
 
-    /// **B 段 1 用例②（升级）**：`max_train[0] == 0` 且 `tran_point==0` ⇒ 本击直接升级，
-    /// `level 0→1`、`level_up=true`、`levelup_msg=true`。
+    /// **B 段 1 用例②（升级三臂）**：`max_train` 的**三档**都要能观测到差异——
+    /// ①`max_train[0]=0` ⇒ 本击升级；②`max_train[0]=1e6` ⇒ 不升级（反向臂）；
+    /// ③边界 `tran_point == max_train` ⇒ 升级（`CheckMagicLevelUp` 的 `<=` 语义，直调判据）。
+    ///
+    /// **为什么必须有三臂**（reviewer `ae` 指出 + 本批实测）：只有①时，前置的 `TrainSkill`
+    /// 会先加 `Random(3)+1 ≥ 1`，把 `0 <= 1` 变成恒真 ⇒ 「`<=` 改 `<`」「`<=` 改 `>=`」两种
+    /// 判据破坏**都咬不住**（本批 M7 第一版就栽在这里）。②让 `>=` 有东西咬，③让 `<` 有东西咬。
     #[test]
     fn train_current_skill_levels_up_when_max_train_hit() {
         let mut skills = vec![crate::magic::SkillTrainState {
@@ -19460,6 +19465,39 @@ mod weapon_durability_tests {
         assert_eq!(ev.len(), 1);
         assert!(ev[0].1.level_up, "MaxTrain[0]=0 ⇒ 本击升级");
         assert_eq!(skills[0].level, 1);
+
+        // 反向臂：`max_train[0]` 远大于本击熟练点 ⇒ **不升级**。
+        // （`<=` 改 `>=` 的变异在这一臂变红。）
+        let mut big = vec![crate::magic::SkillTrainState {
+            magic_id: 3,
+            level: 0,
+            tran_point: 0,
+            train_lv: 3,
+            train_level: [1, 1, 1, 1],
+            max_train: [1_000_000, 1000, 1000, 1000],
+        }];
+        let mut rng_big = CountingRng::new(3);
+        let ev_big = crate::magic::train_current_skill(0, 10, false, &mut rng_big, &mut big);
+        assert!(
+            !ev_big[0].1.level_up,
+            "max_train=1e6 远大于本击熟练点 ⇒ 不升级"
+        );
+        assert_eq!(big[0].level, 0, "等级不动");
+
+        // 边界臂：`tran_point == max_train` ⇒ 升级（oracle 是 `<=`）。
+        // （`<=` 改 `<` 的变异在这一臂变红。）
+        let mut edge = crate::magic::SkillTrainState {
+            magic_id: 3,
+            level: 0,
+            tran_point: 5,
+            train_lv: 3,
+            train_level: [1, 1, 1, 1],
+            max_train: [5, 1000, 1000, 1000],
+        };
+        let up = crate::magic::check_magic_level_up(&mut edge);
+        assert!(up.result, "tran_point == max_train ⇒ 升级（`<=` 边界）");
+        assert_eq!(edge.level, 1);
+        assert_eq!(edge.tran_point, 0, "扣掉 MaxTrain[0]=5");
     }
 
     /// **B 段 1 用例③（`GetAttackPowerHit`）**：模式 3 + `PowerHit` ⇒ `+= HitPlus` + 消费 + `canHit`；
