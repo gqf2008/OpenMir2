@@ -335,25 +335,29 @@
         "line": 2246,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it11_dungeon_escape_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json",
+        "cases": [
+          "eat_ok_shape3_dungeon_home_exact",
+          "eat_ok_shape3_dungeon_red_home_exact",
+          "eat_ok_shape3_dungeon_red_home_alt_values",
+          "eat_ok_shape3_home_x_zero_y_nonzero_random",
+          "eat_ok_shape3_dungeon_home_coords_zero_random"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it11_home_branch_exact",
+          "eat_move::tests::it11_red_home_branch_exact",
+          "eat_move::tests::it11_red_home_alt_values",
+          "eat_move::tests::it11_home_x_zero_y_nonzero_random",
+          "eat_move::tests::it11_home_zero_coords_random"
         ]
       },
-      "notes": "Config.RedHome*；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "M",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape3 分支）：吃时按当前 PkPoint/100 判 <2 ⇒ HomeMap 精确点、>=2 ⇒ Config.RedHome* 精确点；BaseObjectMove 的坐标门是 &&（缺一维即 MapRandomMove）。五例覆盖 home 精确/red 精确/red 另一组值/只缺一维/双零；牙 M8 判反（两支各红）、M9 互换（红名支落 home(5,6)）、M10 坐标门恒真、M11 &&→||。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。"
     },
     {
       "id": "IT-12",

@@ -542,6 +542,49 @@ if (!Envir.Flag.boNORANDOMMOVE)
 
 **状态**：`implemented_unverified`（同 §9.12：共用换图路径缺口 766/54 与 `[名|文件]`
 见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+
+### 9.14 IT-11 地牢逃脱 Shape3（`EatUseItems` move 组）— 宿主拦截 + 四向分支对拍（implemented_unverified）
+
+**归类**：`EatUseItems` case 3（`PlayObject.Base.cs:2248-2262`）：
+```
+SendRefMsg(RM_SPACEMOVE_FIRE, …);
+if (PvpLevel() < 2) BaseObjectMove(HomeMap, HomeX, HomeY);
+else                BaseObjectMove(SystemShare.Config.RedHomeMap, RedHomeX, RedHomeY);
+result = true;   // 恒吃（与 IT-10 的禁随机支相反）
+```
+`PvpLevel()` = `(byte)(PkPoint / 100)`（`PlayObject.cs:4352`）——**在吃的那一刻**按当前 `PkPoint` 判，
+不是登录时判。`BaseObjectMove` 的坐标门是 `if (sX != 0 && sY != 0)`（**`&&`**，`PlayObject.Base.cs:2318`）
+⇒ 精确点（可走则 0 抽）否则 `MapRandomMove`（两抽）。
+
+**实现**：与 IT-09 同一个钩子（`eat_move::maybe_eat_move` 的 Shape3 分支，§9.12）；`HomeMap/HomeX/HomeY`
+与 `Config.RedHome*` 都取自 `SessionGround.home`（`HomeState`）快照——home 由登录 + 3s `GetStartPoint`
+维护，red 是登录时 `red_home_of(enter_cfg)` 的只读 Config 快照。本笔补行为面证据，无新增代码路径。
+
+**对拍（5 例，`it11_dungeon_escape_host_parity`；单跑 `it11_home_branch_exact` /
+`it11_red_home_branch_exact` / `it11_red_home_alt_values` / `it11_home_x_zero_y_nonzero_random` /
+`it11_home_zero_coords_random`）**：
+| case | 输入 | 期望 |
+| --- | --- | --- |
+| `…home_exact` | pvp=0，home=(home_map,5,6) | 精确落 (5,6)，0 抽，吃 |
+| `…red_home_exact` | pvp=2，red=(red_map,20,30)，home=(5,6) | 精确落 (20,30)，0 抽，吃（**误用 home ⇒ 会落 (5,6)**） |
+| `…red_home_alt_values` | pvp=2，red=(red_map,**25,35**) | 精确落 (25,35)（证明读快照、非写死 20/30） |
+| `…home_x_zero_y_nonzero_random` | pvp=0，home=(**0**,6) | **随机点**（`&&` 语义：缺一维即随机；写成 `\|\|` 会落精确 (0,6) 且 0 抽） |
+| `…home_coords_zero_random` | pvp=0，home=(0,0) | 随机点（两抽） |
+
+两组的来源写进 golden `ctx.note`（alt 例）：home 是"登录时 pvp<2 捕获的字段快照"、red 是"登录时
+`Config.RedHome*` 快照"；并写明反例期望（误用 home ⇒ (5,6)）。
+
+**牙（§31 五点表；每支单跑留原文）**：
+| 变异 | 红在哪 | 预期落点/断言 |
+| --- | --- | --- |
+| M8 `if pvp >= 2` → `if pvp < 2` | `it11_red_home_branch_exact` 红、`it11_home_branch_exact` 红（分两次跑） | 红名支落 home(5,6)、home 支落 red(20,30) |
+| M9 home/red 目标互换 | `it11_red_home_branch_exact` / `…alt_values` 红 | pvp=2 支落 **home_map(5,6)**；红在帧断言（634 尾 `EDCode("home_map")`）与终态 |
+| M10 坐标门恒真（`if true`） | `it11_home_zero_coords_random` 红 | 落 (0,0) 且 0 抽（期望随机点 + 2 抽） |
+| M11 `&&` → `\|\|` | `it11_home_x_zero_y_nonzero_random` 红 | 落精确 (0,6) 且 0 抽（期望随机点 + 2 抽） |
+每次变异前 `touch` 强制重编；还原后 `sha256` 相等 + 基线六颗复绿。
+
+**状态**：`implemented_unverified`（同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
+见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
 ### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）
