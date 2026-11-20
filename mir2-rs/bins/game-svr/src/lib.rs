@@ -74900,15 +74900,16 @@ SendRefMsgRange=15
         // 两段出帧（见 `handle_spell_cmd_with_magic` 的分流注释与卡 §33）后，同优先级 31 的
         // 四叉堆成员集变了——旧期望 `[M3,M1,M2,P1]` 是「尾帧 + 受击帧同批 flush」的堆解。
         // 新期望 = 两段模型下的 `NetPriorityQueue` 出队序（`[M3,M2,M1,P1]`）。
-        // **本支（多目标）无 oracle golden 钉 tie 序**：`lightflower.json` 只覆盖单目标
-        // （golden `caster [638,640,31,656]` / `target [17,638,53,31,656]`），不能裁定 4 条同优先级
-        // 的相对序；与 23 的多目标支同口径（卡 §30 登记）。
+        // 本支多目标 tie 序无 oracle 锚（golden 仅单目标），期望取自两段模型下
+        // NetPriorityQueue 出队序，属 synthetic 预期；`lightflower.json` 不能裁定 4 条同优先级
+        // 31 的相对序，与 23 的多目标支同口径（卡 §30 登记）。**不得**把本支当作 24 的行为证据。
         let struck: Vec<i32> = b2_seq(&frames, 911)
             .into_iter()
             .filter(|(id, _)| *id == mir2_protocol::messages::SM_STRUCK)
             .map(|(_, r)| r)
             .collect();
-        // 依据 = 两段出帧模型下的 `NetPriorityQueue` 出队序（非 oracle golden；见上）。
+        // 依据（同上一句）：本支多目标 tie 序无 oracle 锚，期望取自两段模型下 NetPriorityQueue
+        // 出队序，属 synthetic 预期。
         assert_eq!(struck, vec![m3, m2, m1, p1]);
     }
 
