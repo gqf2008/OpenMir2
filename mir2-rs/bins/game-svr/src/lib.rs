@@ -56915,7 +56915,9 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
                 // **偏差 T-296（方向 B）**：stamina 的 53(68) 本应排在 657(155) 之前，本宿主排在之后（卡 §3d）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
             ],
@@ -62079,9 +62081,12 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
-            mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                // **657 两条**：`PlayObject.cs:2875 StatusChanged()` 的 `SendRefMsg`（收件人含自己）
+                // + `:2876 SendUpdateMsg`（仅自己）⇒ 链末连续两条（第三条无用户可见差异，判据只到计数）。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752)"
+            "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752) → 657×2"
         );
         let lv = &frames[2];
         assert_eq!((lv.recog, lv.param, lv.tag, lv.series), (500, 11, 0, 0));
@@ -62216,9 +62221,11 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "恢复 53 → 升级 53 → 44 → 45/52/752（两条 53，不是一条）"
+            "恢复 53 → 升级 53 → 44 → 45/52/752 → 657×2（两条 53，不是一条）"
         );
         assert_eq!(frames[0].param, 15, "恢复帧载荷 = 升级前 HP（10+5）");
         let max_hp = sessions["hero"].state.wabil.max_hp;
@@ -82189,6 +82196,7 @@ SendRefMsgRange=15
         const SM_639: u16 = mir2_protocol::messages::SM_MAGICFIRE_FAIL;
         const SM_640: u16 = mir2_protocol::messages::SM_MAGIC_LVEXP;
         const SM_642: u16 = mir2_protocol::messages::SM_DURACHANGE;
+        const SM_657: u16 = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
 
         // ---- F36-A：独立玩家目标 ----
         {
@@ -82206,15 +82214,18 @@ SendRefMsgRange=15
             assert_eq!(rig.tran_point(), 2);
             assert_eq!(rig.tran_level(), 2);
             assert_eq!(rig.mp(), 979, "GetSpellPoint(36)=21 ⇒ MP 1000→979");
+            // **657 来自 target 的 `RecalcAbilitys()`（`da` 卡 36 接线，`47064136e`）**：
+            // `PlayObject.cs:2875 StatusChanged()` 的 `SendRefMsg` 收件人 = ±`SendRefMsgRange` 含 target 自己，
+            // ⇒ **caster 收 1 条（广播副本）**；两条自帧（`:2875` 副本 + `:2876` 自更新）都落在 **target（912）**。
             assert_eq!(
                 sf_seq(&frames, 911),
-                vec![SM_53, SM_638, SM_642],
-                "caster 出队序 17 → 53 → 638 → 642"
+                vec![SM_53, SM_638, SM_642, SM_657],
+                "caster 出队序 17 → 53 → 638 → 642 → 657(target 广播副本)"
             );
             assert_eq!(
                 sf_seq(&frames, 912),
-                vec![SM_17, SM_52, SM_638, SM_100],
-                "target 出队序 17 → 52 → 638 → 100"
+                vec![SM_17, SM_52, SM_638, SM_657, SM_657, SM_100],
+                "target 出队序 17 → 52 → 638 → 657×2（广播副本 + 自更新）→ 100"
             );
             let dura = b5_cmd(sf_first(&frames, 911, SM_642));
             assert_eq!((dura.recog, dura.param, dura.tag), (500, 5, 1000));
@@ -82344,8 +82355,8 @@ SendRefMsgRange=15
             );
             assert_eq!(
                 sf_seq(&frames, 911),
-                vec![SM_52, SM_53, SM_638, SM_642, SM_100],
-                "自施法单队列出队序（52=67 先于 53=68）"
+                vec![SM_52, SM_53, SM_638, SM_642, SM_657, SM_657, SM_100],
+                "自施法单队列出队序（52=67 先于 53=68；657×2 = 自己 RecalcAbilitys 的广播副本 + 自更新）"
             );
             let frames = rig.deliver(1000);
             assert_eq!(sf_count(&frames, 911, SM_640), 1);
@@ -87212,9 +87223,11 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_LEVELUP,
                 mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                // **657 两条**：`PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本。
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752"
+            "P31 复用击杀经验链：53 → 44 → 45 → 52 → 752 → 657×2"
         );
         assert_eq!(frames[2].param, 11, "SM_LEVELUP 新等级");
         assert_eq!(frames[1].param, 200, "SM_WINEXP 增量 = point");
