@@ -27,7 +27,7 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
   - `FindMap(name)` ⇒ 返回 harness 已 `LoadMapData` 的那个 `Envirnoment`（按 `MapName` 匹配）；**name 不匹配 ⇒ 返回 null**（保持 oracle「找不到=null」语义，不静默给假图）。
   - **其余 9 成员一律抛 `NotImplementedException`**（触达即炸，比静默假值安全——同 `OfflineWorldEngine` 的 40-throw 约定）。
 - **明确不做**：不建图、不载 `MapInfo.txt`、不刷怪、不触发地图事件、不做城门/安全区。
-- **仍会 NPE 的边界（写死）**：`SpaceMove` 过 `FindMap` 后还会 `Envir.DeleteFromMap(未入图的 pre-slave)` / `SpaceMoveGetRandXY`（**抽 RNG**）/ `Envir.AddMapObject` / `SendMsg/SendRefMsg`。⇒ 替身只保证 `FindMap` 非 null；**对象未入图/落点非法/目标 Envir 内部态缺失仍可能 NPE 或行为偏差**。这些由**驱动侧**保证（预置 slave 设 `Envir=caster.Envir`、落点由已加载 MapGrid 可走）。**其它 `IMapSystem` 成员被触达 = 该叶子超出最小替身能力 ⇒ 抛错红（边界写死，不扩）**。
+- **实现后的边界（已落地验证）**：`SpaceMove` 过 `FindMap` 后还会 `DeleteFromMap/SpaceMoveGetRandXY/AddMapObject/SendMsg/SendRefMsg`。**曾在此 NPE**（`RM_SPACEMOVE_SHOW → baseObject.GetFeature`，`PlayObject.Message.cs:1975`，对裸 `MonsterObject`）；**已由「真实构造路径」消解**——预置 slave 改用 `RecordingMonster`（镜像 target 怪物构造 `Program.cs:1815-1840`：Race/Abil/WAbil/Envir/ActorMgr/AddMapObject），git 实测 `cap_hit` `recall_moved=true`（神兽 (0,0)→施法者面前）。**`RecordingMonster` 之外的其余 9 个 `IMapSystem` 成员仍触达即红（抛 NotImplementedException，边界不扩）**。另：C# 侧为 faithful 也把 caster 面向设成施法方向（`caster.Dir=GetNextDirection(caster→click)`），使回召落点与 Rust 一致。
 - **RNG**：`SpaceMoveGetRandXY` 真走 MapGrid 抽数 ⇒ 回召面的 Rng 与 oracle 同源（不再有「替身 0 抽」偏移）。
 
 ## 5. 影响面（设了 MapMgr 后哪些既有 golden 可能变）

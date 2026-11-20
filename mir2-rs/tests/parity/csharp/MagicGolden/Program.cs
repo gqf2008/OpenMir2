@@ -1919,6 +1919,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         };
         short doX = targetNull ? caster.CurrX : target.CurrX;
         short doY = targetNull ? caster.CurrY : target.CurrY;
+        // 卡 mapmgr：SINSU cap_hit 回召依赖 RecallSlave→GetFrontPosition 用 caster.Dir；生产施法前 caster 面向施法目标，
+        // 故对 EnableMaps 支把 caster 面向设成施法方向（faithful），使回召落点与 Rust(按施法方向)一致。
+        if (spec.EnableMaps) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
         List<long> draws = new();
         if (spec.RngMode == "freeze_at_dospell")

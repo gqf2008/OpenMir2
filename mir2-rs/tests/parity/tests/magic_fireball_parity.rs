@@ -1727,6 +1727,121 @@ fn real_rust_ledger_sinsu() {
     eprintln!("[sinsu {label}] PASS");
 }
 
+/// **`30 SINSU` cap_hit 回召面**（卡 openmir2-golden-harness-mapmgr）：`RecallSlave→SpaceMove` 让预置 slave 移到施法者面前。
+/// 断言：`regen_calls=0`＋`slave_count` 不变＋`new_slaves` 空（门 Rejected）；`recall_moved=true`（与 golden 一致）；
+/// **坐标落到施法者面前格**（`GetFrontPosition` 语义，落点由 caster 坐标派生 `(caster_x+1, caster_y)`——caster 面向施法目标(东)）；
+/// `before=(0,0) != after`；`pre_slave_xy_before/after` 与 golden 逐项一致；帧 17/638/642（含 recog/due）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_cap_hit) 生成台账"]
+fn real_rust_ledger_sinsu_cap_hit() {
+    let dir = ledger_dir();
+    let golden = golden_file("sinsu.json");
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(!want.is_empty(), "未设置 MIR2_LEDGER_RUN_ID");
+    let label = "cap_hit";
+    let path = dir.join("sinsu_cap_hit.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "防空转：缺 {}（{e}）先跑 tests::sinsu_parity_cap_hit",
+            path.display()
+        )
+    });
+    let side = path.with_extension("run.json");
+    let side_v: Value = serde_json::from_str(
+        &std::fs::read_to_string(&side).unwrap_or_else(|e| panic!("缺 run.json（{e}）")),
+    )
+    .expect("json");
+    assert_eq!(
+        side_v.get("run_id").and_then(Value::as_str),
+        Some(want.as_str()),
+        "[{label}] run_id 不符"
+    );
+    let v: Value = serde_json::from_str(&text).expect("台账 json");
+    let arr = v.as_array().expect("[case]");
+    assert_eq!(arr.len(), 1);
+    let rust = &arr[0];
+    assert_eq!(rust.get("Label").and_then(Value::as_str), Some(label));
+    let gcase = golden["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["Label"] == label)
+        .unwrap_or_else(|| panic!("金标准缺 {label}"));
+    let gs = &gcase["SinSu"];
+    let rs = &rust["SinSu"];
+    for key in [
+        "slave_count_before",
+        "slave_count_after",
+        "regen_calls",
+        "pre_slave_count",
+        "stub_monster_race",
+    ] {
+        assert_eq!(rs.get(key), gs.get(key), "[{label}] SinSu.{key} 不等");
+    }
+    // 门 Rejected：regen 0、slave 不变、无新实体。
+    assert_eq!(
+        rs["regen_calls"].as_u64(),
+        Some(0),
+        "[{label}] regen_calls 应 0"
+    );
+    assert_eq!(
+        rs["slave_count_before"], rs["slave_count_after"],
+        "[{label}] slave_count 应不变"
+    );
+    assert_eq!(
+        rs["new_slaves"].as_array().map_or(usize::MAX, Vec::len),
+        0,
+        "[{label}] new_slaves 应空"
+    );
+    // recall_moved 真断言（且与 golden 一致）。
+    assert_eq!(
+        rs["recall_moved"].as_bool(),
+        Some(true),
+        "[{label}] recall_moved 应 true（回召确实移动）"
+    );
+    assert_eq!(
+        rs["recall_moved"], gs["recall_moved"],
+        "[{label}] recall_moved 与 golden 不一致"
+    );
+    // 坐标断言：after = 施法者面前（caster 面向施法目标=东 ⇒ (caster_x+1, caster_y)，**由 caster 坐标派生**不抄常数）。
+    let cx = rs["caster_x"].as_i64().expect("caster_x");
+    let cy = rs["caster_y"].as_i64().expect("caster_y");
+    let after = &rs["pre_slave_xy_after"].as_array().expect("after arr")[0];
+    let (ax, ay) = (after["x"].as_i64().unwrap(), after["y"].as_i64().unwrap());
+    let before = &rs["pre_slave_xy_before"].as_array().expect("before arr")[0];
+    let (bx, by) = (before["x"].as_i64().unwrap(), before["y"].as_i64().unwrap());
+    assert_eq!(
+        (ax, ay),
+        (cx + 1, cy),
+        "[{label}] 回召落点应由 caster 坐标派生为面前(东) ({}, {})，实得 ({ax}, {ay})",
+        cx + 1,
+        cy
+    );
+    assert_ne!(
+        (bx, by),
+        (ax, ay),
+        "[{label}] before 应 ≠ after（否则=空集恒假）"
+    );
+    assert_eq!(
+        rs["pre_slave_xy_before"], gs["pre_slave_xy_before"],
+        "[{label}] before 与 golden 不一致"
+    );
+    assert_eq!(
+        rs["pre_slave_xy_after"], gs["pre_slave_xy_after"],
+        "[{label}] after 与 golden 不一致"
+    );
+    // 帧 17/638/642（含 recog/due_ms_rel）。
+    let keep: &[i64] = &[17, 638, 642];
+    for who in ["caster", "target", "obs_in", "obs_out"] {
+        assert_eq!(
+            sent_filter_sinsu(gcase, who, keep),
+            sent_filter_sinsu(rust, who, keep),
+            "[{label}] {who} 帧不一致"
+        );
+    }
+    eprintln!("[sinsu {label}] PASS");
+}
+
 /// **`39`（`SKILL_GROUPDEDING`）**真实台账 → 判定面（五支，卡 §39）。
 #[test]
 #[ignore = "需先跑 game-svr 五支驱动（tests::groupdeding_parity_*）生成真实台账"]
