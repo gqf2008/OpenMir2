@@ -72,6 +72,7 @@
 ```bash
 python - <<'PY'
 import json, glob, os
+full = none = partial = 0
 for f in sorted(glob.glob("mir2-rs/tests/parity/golden/magic/*.json")):
     g = json.load(open(f, encoding="utf-8"))
     n = t = 0; c640 = []
@@ -81,12 +82,27 @@ for f in sorted(glob.glob("mir2-rs/tests/parity/golden/magic/*.json")):
                 t += 1; n += ("due_ms_rel" in s)
                 if s.get("ident") == 640 and r.get("Who") == "caster":
                     c640.append((c.get("Label"), s.get("due_ms_rel", "<NO-KEY>")))
-    if c640 or n != t:
-        print(f"{os.path.basename(f)}: due {n}/{t}; caster640={c640}")
+    if t == 0:
+        continue
+    if n == t: full += 1
+    elif n == 0: none += 1
+    else: partial += 1
+    # **每份都打一行**（不按条件过滤）：否则「全带 due 但无 caster 640」的件不会出现，
+    # 读者就无法从输出反推 FULL 集合是否完整（见下面不变量）。
+    print(f"{os.path.basename(f)}: due {n}/{t}; caster640={c640}")
+print(f"SUMMARY total={full+none+partial} FULL={full} NONE={none} PARTIAL={partial}")
 PY
 ```
 
 判读：`due n/t` 中 `n < t` ⇒ 该份的时序面只比了一部分（或整列不比）；`<NO-KEY>` ⇒ 该帧的 due 未验。
+
+**不变量（读者可自检，不需要看别的文件）**：
+- 末行 `FULL=<k>` **必须等于**输出里 `n==t` 的行数；`NONE=` 等于 `n==0` 的行数；`PARTIAL=` 等于 `0<n<t` 的行数；
+- 三者之和必须等于 `total=`；`total=` 一般等于 `golden/magic/*.json` 的文件数——**若有零帧件会被 `t == 0` 跳过**（当前无零帧件，41 份全部计入），届时以 `total=` 与文件数的差额解释；
+- 也就是说：**FULL 集合可以从输出逐行反推**，不存在"漏打印因而数不到"的情形。
+  本条是 `3b` 对 §6 的 P3 修正：原脚本只在「有 caster 640 或 `n != t`」时打印，
+  若将来出现「全带 due 但无 caster 640」的件，它会静默不出现。
+- 实测（2026-11-20，41 份）：`SUMMARY total=41 FULL=7 NONE=34 PARTIAL=0`。
 
 ## 7. 挂账（都不是本批范围）
 
