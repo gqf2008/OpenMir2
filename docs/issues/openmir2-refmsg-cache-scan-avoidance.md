@@ -49,3 +49,8 @@
   结果 **2060 passed / 0 failed / 55 ignored**；本卡 5 条 `cache_first_*` 用例与边角三条用例全 `ok`；
   首扫扫描增量 **1** / 命中增量 **0**（用例断言实测，非人工观察）；牙 m46 / m46b / m47b / m47c / m48 /
   m49 / m49b 均红并可还原，`m47`（缺失 sender 改 `None`）判**无效牙**——变异体下仍绿 ⇒ 与现行为等价。
+- **放置理由（§4.2，2026-11-20 回填）**：缓存本体 `SimState.ref_msg_cache`、TTL 与 `|Δ|<11` 谓词、
+  `clock_ms` 都在 `World`；命中过滤要读 `entities`（`map_id`/`ghost`/坐标）并与
+  `ref_msg_targets_from_scan` **共用同一份谓词**——放宿主层就得暴露世界状态并复制一份对拍敏感谓词
+  （两份会漂）。宿主层只做转接；计数 `note_ref_msg_scan()` 必须接在 world 侧扫描入口
+  `chat::hear_targets_at` 上，否则就是旁路打点。同一段文字已写在 `world.rs` 该函数头上。

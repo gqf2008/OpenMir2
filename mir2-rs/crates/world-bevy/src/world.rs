@@ -19070,6 +19070,15 @@ impl World {
     /// 返回 `Some(list)` 时**不推进 tick、不刷新**。边角与 oracle 逐字一致：
     /// - **sender 不存在且缓存新鲜 ⇒ `Some(vec![])` 且不推进 tick**；
     /// - 命中判据只看 `now - tick < TTL` **且** `visible` 非空。
+    ///
+    /// **为什么放在 `World` 而不是宿主 `bins/game-svr/src/ref_msg_cache.rs`（§4.2）**：
+    /// 缓存本体 `SimState.ref_msg_cache`、TTL 常量与 `|Δ|<11` 的二次过滤谓词、`clock_ms`
+    /// 全在 `World` 里，命中过滤必须读 `entities`（`map_id`/`ghost`/坐标）并与
+    /// `ref_msg_targets_from_scan` **共用同一份谓词实现**——搬到宿主就得把这些状态暴露出去，
+    /// 并复制一份对拍敏感谓词（两份会漂）。宿主层只做**转接**（`hidden_sender_only` 的
+    /// ObMode 早退、`targets` / `targets_at` 选哪个扫描函数，都是「调用点知识」而非世界状态）。
+    /// 同理，可观测计数 `note_ref_msg_scan()` 必须接在 `World` 侧的扫描入口
+    /// `chat::hear_targets_at` 上，否则就是旁路打点（§19：行为不变 ≠ 真的没扫）。
     #[must_use]
     pub fn ref_msg_targets_cached(&self, sender_id: i32) -> Option<Vec<i32>> {
         let now = self.clock_ms;
