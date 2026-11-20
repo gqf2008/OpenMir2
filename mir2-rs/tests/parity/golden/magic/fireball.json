@@ -4,6 +4,8 @@
   "cases": [
     {
       "Fixture": {
+        "caster_mc": 15,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -178,6 +180,8 @@
     },
     {
       "Fixture": {
+        "caster_mc": 15,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -247,7 +251,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1119031506,
+              "delivery": 1150703412,
               "priority": 255
             },
             {
@@ -507,6 +511,8 @@
     },
     {
       "Fixture": {
+        "caster_mc": 2565,
+        "caster_sc": 0,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -570,19 +576,19 @@
             },
             {
               "ident": 8021,
-              "wParam": 15,
+              "wParam": 9,
               "p1": 6553701,
               "p2": 2,
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1119032303,
+              "delivery": 1150704225,
               "priority": 255
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 209,
+              "wParam": 9,
+              "p1": 215,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -612,9 +618,9 @@
             },
             {
               "ident": 31,
-              "param": 209,
+              "param": 215,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -643,7 +649,7 @@
             {
               "ident": 8044,
               "wParam": 0,
-              "p1": 15,
+              "p1": 9,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -675,8 +681,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 209,
+              "wParam": 9,
+              "p1": 215,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -713,16 +719,16 @@
             },
             {
               "ident": 53,
-              "param": 209,
+              "param": 215,
               "tag": 0,
               "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
-              "param": 209,
+              "param": 215,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -761,8 +767,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 209,
+              "wParam": 9,
+              "p1": 215,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -799,9 +805,9 @@
             },
             {
               "ident": 31,
-              "param": 209,
+              "param": 215,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -823,13 +829,13 @@
         3,
         0,
         0,
-        0,
+        4,
         4,
         0,
         0,
         9
       ],
-      "TargetHp": 209,
+      "TargetHp": 215,
       "TargetHpBefore": 224,
       "NotDue": [],
       "CasterMp": 0

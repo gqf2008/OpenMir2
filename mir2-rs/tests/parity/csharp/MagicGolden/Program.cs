@@ -142,24 +142,24 @@ public static class Program
             if (name == "fireball-selftest") return FireballSelfTest();
             if (name == "warrskill") return ClientSpellXYEntry.Run();
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
-            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" });
-            if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" });
+            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
             if (name == "healing") return HealingBatch();
-            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
-            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
-            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" });
-            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true });
-            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true });
-            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
+            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7 });
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
-            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true });
-            if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
-            if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
-            if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
+            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
+            if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
+            if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
-            if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" });
+            if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
-            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" });
+            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30) });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
@@ -169,10 +169,10 @@ public static class Program
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
-            if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true });
+            if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
-            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
+            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -523,7 +523,7 @@ public static class Program
         {
             RunFireball("miss", seedMiss, antiMagic, 1000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "miss", Threshold = effectiveAnti }),
             RunFireball("edge", seedEdge, antiMagic, 2000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "edge", Threshold = effectiveAnti }),
-            RunFireball("hit", seedHit, antiMagic, 3000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "hit", Threshold = effectiveAnti }),
+            RunFireball("hit", seedHit, antiMagic, 3000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "hit", Threshold = effectiveAnti }, mc: HUtil32.MakeWord(5, 10)),
         };
         var outObj = new { magic_id = 1, anti_magic = antiMagic, cases };
         var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
@@ -628,7 +628,7 @@ public static class Program
     }
 
     /// <summary>用给定种子跑一次火球，返回账本（各接收者的 RM 与真实 SM 帧 + RNG + 关键状态）。</summary>
-    private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase, bool loginOrder, string rngMode, bool probeDrainDraw = false, AntiMagicBranchExpect branchExpect = null)
+    private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase, bool loginOrder, string rngMode, bool probeDrainDraw = false, AntiMagicBranchExpect branchExpect = null, int mc = 15)
     {
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
@@ -638,7 +638,7 @@ public static class Program
         }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = 30;
-        caster.WAbil.MC = 15;
+        caster.WAbil.MC = (ushort)mc;
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)antiMagic };
         target.Abil.Level = 20;
         int actualMaxExp = 50;
@@ -823,6 +823,8 @@ public static class Program
         {
             Fixture = new
             {
+                caster_mc = (int)caster.WAbil.MC,
+                caster_sc = (int)caster.WAbil.SC,
                 rng_mode = rngMode,
                 login_order = loginOrder,
                 reachability = contract.Reachability,
@@ -948,6 +950,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public bool CasterLoginOrderAbil;
         /// <summary>卡 36：施法者 `CharStatusEx`（非 0 夹具使 `GetCharStatus()` 可证伪；缺省 0 ⇒ 既有件零变化）。</summary>
         public int CasterCharStatusEx;
+        /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
+        public int HitSpeed;
+        /// <summary>
+        /// **非退化 MC 变体**（伤害面点亮）：>0 时对"后两个 damage case"（`s5`/`s13`/`hit`）覆写
+        /// `caster.WAbil.MC`，其余 case 仍用 `CasterMc`（缺省 15 ⇒ `Hi<Lo` 钳制支对照）。
+        /// 取值建议 `MakeWord(5,10)`（Lo=5,Hi=10）⇒ 抽 `Random(6)`，伤害随 seed 分叉。
+        /// </summary>
+        public int CasterMcNoClamp;
+        /// <summary>
+        /// **非退化 SC 变体**（治疗/火魅/DefenceUp 面点亮）：&gt;0 时对 `s5`/`s13`/`hit` 覆写
+        /// `caster.WAbil.SC`，其余 case 仍用 `CasterSc`（缺省 15 ⇒ `Hi&lt;Lo` 钳制支对照）。
+        /// 与 MC 变体同一逐 case 机制；oracle 里用 SC 的支（13/2/29/14/15）才该设它。
+        /// </summary>
+        public int CasterScNoClamp;
         /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
         public int CasterHp;
         public int CasterMaxHp;
@@ -1027,6 +1043,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             CasterLevel = spec.CasterLevel,
             CasterMc = spec.CasterMc,
             CasterSc = spec.CasterSc,
+            CasterScNoClamp = spec.CasterScNoClamp,
             TargetLevel = spec.TargetLevel,
             TargetMaxHp = spec.TargetMaxHp,
             AntiMagic = spec.AntiMagic,
@@ -1121,7 +1138,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing" };
+        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing", CasterScNoClamp = HUtil32.MakeWord(5, 10) };
         // `full` = 目标**整血**（`DoSpell` 的门是 `targetObject.WAbil.HP < targetObject.WAbil.MaxHP`，
         // 见 `MagicConst.SKILL_HEALLING` 支）：输入 HP 必须**由等级派生**，不能写字面量——改 `TargetLevel` 时
         // 字面量会让「满血」静默变成「未满血」，治疗分支又悄悄回来（12 号 2026-11-20 的回归）。
@@ -1599,8 +1616,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = (byte)spec.CasterLevel;
-        caster.WAbil.MC = (ushort)spec.CasterMc;
-        caster.WAbil.SC = (ushort)spec.CasterSc;
+        bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");
+        // SC 变体的逐 case 标签：伤害/火魅/DefenceUp 的 `hit`/`s5`/`s13` + 治疗面的 `self`/`both`。
+        bool useScVariant = spec.CasterScNoClamp > 0
+            && (label == "s5" || label == "s13" || label == "hit" || label == "self" || label == "both" || label == "heal");
+        caster.WAbil.MC = (ushort)(useMcVariant ? spec.CasterMcNoClamp : spec.CasterMc);
+        caster.WAbil.SC = (ushort)(useScVariant ? spec.CasterScNoClamp : spec.CasterSc);
         // 卡 §39：命中门 / 攻击力 / 攻击模式的夹具输入（缺省 -1 ⇒ 既有件零变化）。
         if (spec.CasterHitPoint >= 0) caster.HitPoint = (byte)spec.CasterHitPoint;
         if (spec.CasterDC >= 0) caster.WAbil.DC = (ushort)spec.CasterDC;
@@ -1697,6 +1718,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             p.Envir = env;
             SystemModule.SystemShare.ActorMgr.Add(p);
             env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
+        }
+        if (spec.HitSpeed > 0)
+        {
+            foreach (var p in new[] { caster, target, obsIn })
+            {
+                p.HitSpeed = (ushort)spec.HitSpeed; // `CharacterObject.HitSpeed`（657 series 的来源）
+            }
         }
         // **非玩家对象（v1 被动）**：进世界并参与所有对象类型门/筛选；**不 Operate**
         // ⇒ 只记录"它们收到了哪些 RM"（对象选择面）。效果面由目标自己 Operate 时产生，属 v2。
@@ -2056,8 +2084,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 effect_type = spec.EffectType,
                 user_magic_level = spec.UserMagicLevel,
                 caster_level = spec.CasterLevel,
-                caster_mc = spec.CasterMc,
-                caster_sc = spec.CasterSc,
+                caster_mc = (int)caster.WAbil.MC,
+                caster_sc = (int)caster.WAbil.SC,
                 rng_mode = spec.RngMode,
                 login_order = spec.LoginOrder,
                 reachability = spec.Reachability,
@@ -2105,6 +2133,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
+                hit_speed = spec.HitSpeed,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null
                 ? null
@@ -2133,7 +2162,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
                 spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
-                spec.CasterLoginOrderAbil ? (int?)spec.CasterSc : null,
+                spec.CasterLoginOrderAbil ? (int?)caster.WAbil.SC : null,
                 spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null),
             Label = label,
             Seed = seed,

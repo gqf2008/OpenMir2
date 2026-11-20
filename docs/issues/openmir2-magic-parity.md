@@ -1486,3 +1486,32 @@ run_id 侧车挡住）。**新条目交付时卡里必须写这三项：驱动�
 **实证中脚本自身抓到一个 §48 级坑**：`--list` 每行形如 `tests::x: test`，首版 `awk {print $1}` 得到带尾冒号的
 `tests::x:` ⇒ 过滤不到用例 ⇒ **每支跑 0 个测试却 rc=0**（三支都"ok"），直到比较器报"台账陈旧 run_id 不匹配"
 才暴露。修法 `sub(/:$/, "", $1)`；原因已写进脚本头注释。
+
+### 44. 657 `series`/`tag`/`param` 面点亮（2026-11-20）
+
+**`series` 的来源**：657 的 `series` 取**出队时收件人自己的 `HitSpeed`**——即 `CharacterObject.HitSpeed`
+（`src/M2Server/Player/CharacterObject.cs`），**不是** `Abil/WAbil` 字段；Rust 宿主侧对应 `sg.hit_speed`
+（`sm_charstatuschanged` 调用面）。
+
+> **⚠️ 三者同名不同源**：`CharacterObject.HitSpeed`（oracle）/ `sg.hit_speed`（Rust ground session）/
+> `WAbil.HitSpeed` 不是同一个东西；**`series` 只认前两者所映射的一条链**。把 rig 写成 `wabil.hit_speed`
+> 会得到"看起来设了、其实没生效"的**假绿**——golden 的系列值仍是 0 而测试不红（若断言的只是"跑通"）。
+
+**装置旋钮**：`MagicSpec.HitSpeed`（>0 时对 caster/target/obs_in 三会话生效；Fixture 记 `hit_speed`），
+Rust 侧读同一字段（`fireball_parity_drive` / `uenhancer_parity_drive`）。
+
+**重出 6 份 golden 的 `(param,tag,series)` 取值集合（复核索引）**
+| 件 | 集合 | hit_speed |
+|---|---|---|
+| hangmajinbub | `{(0,32768,0),(0,32768,7)}` | 7 |
+| dejiwonho | `{(0,32768,0),(0,32768,7)}` | 7 |
+| shield | `{(0,32768,7)}` | 7 |
+| cloak | `{(0,0,7)}` | 7 |
+| bigcloak | `{(0,0,7)}` | 7 |
+| uenhancer | `{(2,0,7)}` | 7 |
+
+**为什么不再加 `CharStatusEx` 变体**：`tag` 已跨文件有差异（hangmajinbub/dejiwonho/shield=**32768**，
+cloak/bigcloak=**0**），`param` 也有（uenhancer=**2**，其余=**0**）——**跨文件差异已足以咬住"全局硬编码"**
+（Rust 若恒发 0，hangmajinbub 必红）。同文件内再加变体是锦上添花，不值一次额外的 case 数变更。
+
+**门**：6 份 golden 与 Rust 输入**同批落地**（不合"只合 golden"），避免 master 上出现"6 条 verified 比较器红"的窗口。
