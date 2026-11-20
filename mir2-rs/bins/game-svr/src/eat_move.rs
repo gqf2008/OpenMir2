@@ -472,6 +472,8 @@ mod tests {
                 &mut world,
                 &colors,
                 90,
+                // master 的 `strings` 形参（IT-17a 读本用）；本组不吃书，默认文案即可。
+                &game_svr::strings::StringConf::default(),
                 Some(&reg),
                 &unbind,
                 &mut item_number,
