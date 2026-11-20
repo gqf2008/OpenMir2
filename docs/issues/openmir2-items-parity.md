@@ -505,7 +505,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
 
 EAD
-### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（implemented_unverified）
+### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（verified）
 
 **归类**：`StdMode==3` 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2163`）→ `case 1`（`:2231-2236`）：
 `SendRefMsg(RM_SPACEMOVE_FIRE, …)` + `BaseObjectMove(HomeMap, 0, 0)` + `result=true`。
@@ -566,10 +566,10 @@ M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tic
    形态 ⇒ 该图换图时尾会从 `M100` 变 `M100A`。本夹具无覆盖形态（逻辑名==主干）⇒ 本卡对拍面内**尾逐字节相等**；
    复现方式：给 `move-eat-probe` 造一条 `map_name != map_file_name` 的注册表条目即可击穿（留给修复卡）。
 
-**状态**：`implemented_unverified`（对拍面全绿 + 五牙，但共用路径缺口 1/2 未清 ⇒ 不计 verified）。
-转 verified 条件：上述两条并入共用换图路径并进本组对拍面。
+**状态**：`verified`（2026-11-20，master `fd02c1b6d`；覆盖率 57/97、物品 17/19）。共用换图路径缺口 766/54 与 `[名|文件]` 已清（[换图簇卡](openmir2-map-change-cluster-gaps.md) §5）；766/54 现逐字段进比对、剔除集为空。
+**scope**：① 生产 `drain_map_change` 只在 walk/turn 触发 ⇒ 本卡换图帧的 flush 延迟属登记项（换图簇卡 §5.6）；② 换图簇字段点亮见 §5.7——`param/tag/series` 恒 0 是 **oracle 常量**；**未点亮维度**（766 n8、54 nMusicid≠-1/非空尾、634 DayBright、801 Dir/Light）**仅单位测试覆盖、非夹具对拍**。
 
-### 9.13 IT-10 随机传送 Shape2（`EatUseItems` move 组）— 宿主拦截 + 两支对拍（implemented_unverified）
+### 9.13 IT-10 随机传送 Shape2（`EatUseItems` move 组）— 宿主拦截 + 两支对拍（verified）
 
 **归类**：`EatUseItems` case 2（`PlayObject.Base.cs:2238-2246`）：
 ```
@@ -603,10 +603,10 @@ if (!Envir.Flag.boNORANDOMMOVE)
 - 变异脚本注意：`shutil.copy2` 还原会带回旧 mtime ⇒ cargo 可能复用变异体二进制；脚本在还原后
   `os.utime` 强制刷新（本次实测：未刷时「还原后仍红」= 假红）。
 
-**状态**：`implemented_unverified`（共用换图路径缺口 766/54 与 `[名|文件]` 已于 2026-11-20 清除，见上；本卡待复评。同 §9.12：
-见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+**状态**：`verified`（2026-11-20，master `fd02c1b6d`；共用缺口 766/54 与 `[名|文件]` 已清，766/54 逐字段进比对、剔除集为空）。
+**scope**：同 §9.12——生产 drain 的 flush 延迟（[换图簇卡](openmir2-map-change-cluster-gaps.md) §5.6）+ 字段点亮审计（§5.7：恒 0 为 oracle 常量；未点亮维度仅单位测试覆盖、非夹具对拍）。
 
-### 9.14 IT-11 地牢逃脱 Shape3（`EatUseItems` move 组）— 宿主拦截 + 四向分支对拍（implemented_unverified）
+### 9.14 IT-11 地牢逃脱 Shape3（`EatUseItems` move 组）— 宿主拦截 + 四向分支对拍（verified）
 
 **归类**：`EatUseItems` case 3（`PlayObject.Base.cs:2248-2262`）：
 ```
@@ -646,8 +646,8 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 | M11 `&&` → `\|\|` | `it11_home_x_zero_y_nonzero_random` 红 | 落精确 (0,6) 且 0 抽（期望随机点 + 2 抽） |
 每次变异前 `touch` 强制重编；还原后 `sha256` 相等 + 基线六颗复绿。
 
-**状态**：`implemented_unverified`（共用换图路径缺口已于 2026-11-20 清除，见上述卡；本卡待复评。同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
-见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+**状态**：`verified`（2026-11-20，master `fd02c1b6d`；共用缺口 766/54 与 `[名|文件]` 已清，766/54 逐字段进比对、剔除集为空）。
+**scope**：同 §9.12/§9.13——生产 drain 的 flush 延迟（[换图簇卡](openmir2-map-change-cluster-gaps.md) §5.6）+ 字段点亮审计（§5.7）。
 
 **§33/§36 补记（2026-11-20，`card/items-move-09` 复审返工）**：
 1. **lane 偶发（§33）**：IT-10 牙脚本首跑 9 项中 **2 项 MISMATCH（1 次）**，当时全机 **4 个 cargo** 在场；
@@ -853,5 +853,5 @@ EAD
 - **部署不可达（§18.1）**：位移两支靠 `castle.master_guild = Some(玩家行会)` 的 synthetic 构造（部署态 `MasterGuild` 恒 null）
   ⇒ **该两支证据非生产路径**；生产只会走「不吃」或「无效但吃」。清单 `scope = castle_move_branches_synthetic_unreachable`。
 
-**状态**：`implemented_unverified`（行为面：5 例 oracle 夹具 + 比较器 + 五牙；**不升格**——位移两支是 synthetic 路径，
-共用换图缺口 766/54 已于 2026-11-20 清除（换图簇卡）；本卡仍因 synthetic 路径不升格）。C# 半批与 Rust 半批同支 `card/items-it13`。
+**状态**：`verified` + **`scope=partial`**（2026-11-20，master `fd02c1b6d`）。共用换图缺口 766/54 已清（[换图簇卡](openmir2-map-change-cluster-gaps.md) §5）；**仍为 partial 的原因**：位移两支是 synthetic（部署态 `Castle.MasterGuild` 恒 null），不得当作生产路径已验证——生产只覆盖"不吃/无效但吃"支。
+**scope**：`castle_move_branches_synthetic_unreachable` + 生产 drain 的 flush 延迟（§5.6）+ 字段点亮审计（§5.7，同 §9.12 口径）。C# 半批与 Rust 半批同支 `card/items-it13`。
