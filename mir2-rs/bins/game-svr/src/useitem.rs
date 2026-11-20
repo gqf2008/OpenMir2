@@ -515,6 +515,30 @@ pub fn use_item(
                                     }
                                 }
                             }
+                            3 if tpl.shape == 10 => {
+                                // 特修油 `SuperRepairWeapon()`（`PlayObject.cs:1589`；StdMode3 的 `EatUseItems(shape)` case10）。
+                                // **无"已满"守卫**：已满武器也 `Dura=DuraMax`(不变)、仍吃、发 `RM_DURACHANGE`（与 Shape9 相反）。
+                                if let Some(w) = state.extra.weapon.as_mut() {
+                                    if w.index > 0 {
+                                        w.dura = w.dura_max;
+                                        notices.push(QueuedNotice {
+                                            ident: RM_DURACHANGE,
+                                            w_param: 1,
+                                            n_param1: i32::from(w.dura),
+                                            n_param2: i32::from(w.dura_max),
+                                            n_param3: 0,
+                                        });
+                                        notices.push(QueuedNotice {
+                                            ident: RM_SYSMESSAGE,
+                                            w_param: 0,
+                                            n_param1: i32::from(ctx.green_msg_fcolor),
+                                            n_param2: i32::from(ctx.green_msg_bcolor),
+                                            n_param3: 0,
+                                        });
+                                        eaten = true;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         if eaten {
@@ -919,6 +943,7 @@ mod tests {
         "eat_fail_not_found",
         "eat_fail_shape9_full",
         "eat_fail_shape9_no_weapon",
+        "eat_fail_shape10_no_weapon",
         "eat_fail_stdmode_other",
         "eat_fail_template_missing",
         "eat_fail_dead",

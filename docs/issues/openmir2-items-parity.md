@@ -358,3 +358,25 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **A/B 说明（机械同步面）**：`handle_eat_cmd` 新参 `repair_item_dec_dura` 12 调用点（主 `enter_cfg.repair_item_dec_dura`；11 测试传 `90`——`ctx.repair_item_dec_dura` 在 `use_item` **仅 `9 =>` 臂一个读点**，非 Shape9 用例永不到达 ⇒ 占位值不参与判定）。`UseItemContext` 15 字面量；其中比较器 `matches_oracle_eat_fixture` 与 `nodrug_guard_does_not_consume` 两处**从夹具 `c` 取 green/dec**（配置进比较面），其余静态 `0/0/90`。Z5 豁免名单 +2（`eat_fail_shape9_full`、`eat_fail_shape9_no_weapon`，纯失败一层）。
 
 **运行期帧缺口（用户可见，非仅夹具）**：`SysMsg(WeaponRepairSuccess, Green)` → `SM_SYSMESSAGE` 文本帧，运行期宿主 `notice_frame` 用静态 `session.sys_msg` ⇒ 修复成功绿字**线上不发**（oracle 发）。同 StdMode1 food 口径，见 **`docs/issues/openmir2-runtime-sysmsg-text-frames.md`**。⇒ **IT-14 记 `implemented_unverified`，不计 verified**（待该卡实现文本帧后转 verified）。
+
+### 9.10 IT-15 特修油 Shape10（`SuperRepairWeapon`）— implemented_unverified
+
+**归类**：与 IT-14 同一条 **StdMode3** 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2162-2163`），只是 `EatUseItems` 的 **case 10**（`:2292`）→ `SuperRepairWeapon()`（`PlayObject.cs:1589`）。**非 StdMode0**。
+
+**实现**（`use_item` 臂 `3 if tpl.shape == 10`，操作 `state.extra.weapon`）：`UseItems[Weapon]==null || Index<=0` ⇒ 不吃（636）；否则 `Dura=DuraMax`、发 `RM_DURACHANGE(10125)` + 绿色 `RM_SYSMESSAGE(11004)`、eaten。**无"已满"守卫**、**无 `RepairItemDecDura`**。宿主写回 `sg.use_items[SLOT_WEAPON]`（复用 IT-14 写回）。
+
+**"已满"语义两条相反（两行对照表，防误当 bug）**：
+| Shape | 油 | 已满(Dura==DuraMax) | 依据 |
+|---|---|---|---|
+| 9 | 修复油 `RepairWeapon` | **不吃**（`DuraMax<=Dura ⇒ false ⇒ 636`） | `PlayObject.cs:1567` |
+| 10 | 特修油 `SuperRepairWeapon` | **仍吃**（无已满守卫；`Dura=DuraMax` 不变、635 + `RM_DURACHANGE`） | `PlayObject.cs:1589` |
+
+**三例**：`eat_ok_shape10_repair_normal`（5000/10000→10000/10000、`[635]`+`[10115,10125,11004]`）、
+`eat_ok_shape10_full_still_eaten`（**10000/10000→10000/10000 不变、仍 635+`RM_DURACHANGE`**一—单独命名钉死反直觉行为）、
+`eat_fail_shape10_no_weapon`（null→636）。weapon `weapon_before/after` 进比较面（复用 IT-14 的 `weapon_of`+`weapon_after` 断言）。
+
+**sysmsg（复用）**：`SysMsg(MessageSettings.WeaponRepairSuccess, Green, Hint)`（`PlayObject.cs:1597`）——**与 IT-14 同一文案**（非单独"特修成功"）。⇒ IT-14/IT-15 **共用同一运行期 `SM_SYSMESSAGE` 文本帧缺口**，见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`（同时指两条）。
+
+**牙（三颗）**：T1 `Dura=DuraMax`→`+1`（weapon_after 不符）；T2 去 `RM_DURACHANGE` 推送（notices 缺 10125）；**T3 `3 if tpl.shape == 10`→`== 9`（串到修复油支）⇒ 必红**（防 shape 臂写错）。
+
+**状态**：`implemented_unverified`（运行期文本帧缺口，同 IT-14 口径，不计 verified）。

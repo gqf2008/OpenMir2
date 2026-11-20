@@ -634,7 +634,8 @@ internal static class Program
         templates[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
         templates[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
         templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);
-        templates[2009] = Tpl("repair_oil", 3, 9, 5);          // 称重
+        templates[2009] = Tpl("repair_oil", 3, 9, 5);
+        templates[2010] = Tpl("super_repair_oil", 3, 10, 5);          // 称重
         templates[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
         templates[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
         templates[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
@@ -681,6 +682,17 @@ internal static class Program
             ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_shape9_no_weapon", new Ctx(),
             new List<Spec> { S(1, 2009) }, 1, "repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape10_repair_normal",
+            new Ctx { weapon = new UserItem { Index = 200, Dura = 5000, DuraMax = 10000 } },
+            new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_shape10_full_still_eaten",
+            new Ctx { weapon = new UserItem { Index = 200, Dura = 10000, DuraMax = 10000 } },
+            new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_fail_shape10_no_weapon", new Ctx(),
+            new List<Spec> { S(1, 2010) }, 1, "super_repair_oil",
             ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape2_unlock", new Ctx(),
             new List<Spec> { S(1, 2004) }, 1, "unlock",
