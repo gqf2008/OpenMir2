@@ -173,6 +173,29 @@ public static class Program
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
+            // `BaseObject.cs:896-931`）。摆位理由（变异牙）：
+            //   · 施法者 (100,100) → 点击 (101,100) ⇒ 方向东，检查格 x=101..105；
+            //   · x=101 是玩家 target（AntiMagic=夹具值），x=102/103/104 放 3 只怪，
+            //     **AntiMagic = {1, 9, 1} 互异** ⇒ `Random(10) >= AntiMagic` 让"必中/必不中/随 seed"三态并存；
+            //   · 刀①：删骰门抽数 ⇒ Rng 计数/序列变；刀②：AntiMagic 恒 0 ⇒ 命中集合变（8044 条数）；
+            //     刀③：穿透步数 5→8 ⇒ 第 5 格之外的对象进入（本夹具在 x=106 放一只，便于该刀变红）。
+            //   · 禁止"空线"：没有怪时骰门零抽、RM 零条 ⇒ 退化数据，生成后自查会拦。
+            if (name == "fire") return BehaviorBatch(new MagicSpec
+            {
+                Key = "fire", MagicId = 9, MagicName = "Fire",
+                CasterMcNoClamp = HUtil32.MakeWord(5, 10),
+                // 场景里 obs_in(105,100) 落在穿透线上，与 target 同刻受击 ⇒ 帧序用多重集
+                // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。
+                FrameOrderScope = "multi_victim_same_tick",
+                Monsters = new[]
+                {
+                    new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                    new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 9 },
+                    new MonsterSpec { X = 104, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                    new MonsterSpec { X = 106, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                },
+            });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -668,6 +691,10 @@ public static class Program
         int targetHpInput = target.WAbil.HP;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **观察者是真实玩家**：初始化 HP/MaxHP=100（与 Rust rig 的 `new_player_entity` 默认同源）。
+        // 不初始化会让"旁观者自己受击/治疗"的帧（53/31）带 0/0，与实现侧不可比（MG-17 D1）。
+        obsIn.WAbil.HP = 100; obsIn.WAbil.MaxHP = 100;
+        obsOut.WAbil.HP = 100; obsOut.WAbil.MaxHP = 100;
         // **记录面补全（卡 openmir2-magic-parity A 口径）**：所有下行最终都汇到
         // `M2Share.NetChannel.AddGateBuffer(GateIdx, bytes)`——把静态通道换成只记录不发送的实现，
         // 就能同时捕获双参 virtual `SendSocket(msg, tail)`、私有单参 `SendSocket(msg)`
@@ -952,6 +979,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int CasterCharStatusEx;
         /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
         public int HitSpeed;
+        /// <summary>
+        /// **帧序比较口径标记**（写进 `Fixture.frame_order_scope`）：空 = 严格按序（默认）。
+        /// 目前唯一合法值 `multi_victim_same_tick`：多受害者同刻延迟受击时，产品是批量 flush、
+        /// oracle 是逐 actor `Run()`（见 `docs/issues/openmir2-b4-multivictim-strike-order.md`），
+        /// 比较器在该标记下把 `Sent` 改为**每接收者多重集**比较。**产品卡修复后必须删掉该标记。**
+        /// </summary>
+        public string FrameOrderScope = "";
+
         /// <summary>
         /// **非退化 MC 变体**（伤害面点亮）：>0 时对"后两个 damage case"（`s5`/`s13`/`hit`）覆写
         /// `caster.WAbil.MC`，其余 case 仍用 `CasterMc`（缺省 15 ⇒ `Hi<Lo` 钳制支对照）。
@@ -1683,6 +1718,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         CheckBranchThreshold("runmagic/" + spec.Key + "/" + label, inputAntiMagic, branchExpect);
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **观察者是真实玩家**：初始化 HP/MaxHP=100（与 Rust rig 的 `new_player_entity` 默认同源）。
+        // 不初始化会让"旁观者自己受击/治疗"的帧（53/31）带 0/0，与实现侧不可比（MG-17 D1）。
+        obsIn.WAbil.HP = 100; obsIn.WAbil.MaxHP = 100;
+        obsOut.WAbil.HP = 100; obsOut.WAbil.MaxHP = 100;
         if (targetNull)
         {
             // 治愈 self 支：`DoSpell` 首句把 targetObject 置成 playObject，读取的是施法者 WAbil。
@@ -1746,6 +1785,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `WAbil.AC` / 收集期 `Death` 过滤。
             mo.SpeedPoint = (byte)ms.SpeedPoint;
             mo.WAbil.AC = (ushort)ms.AC;
+            mo.AntiMagic = (ushort)ms.AntiMagic;
             mo.Death = ms.Death;
             mo.FixedHideMode = false;
             mo.ObMode = false;
@@ -2134,6 +2174,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
                 hit_speed = spec.HitSpeed,
+                frame_order_scope = string.IsNullOrEmpty(spec.FrameOrderScope) ? null : spec.FrameOrderScope,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null
                 ? null
@@ -2158,6 +2199,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     speed_point = m.SpeedPoint,
                     death = m.Death,
                     ac = m.AC,
+                    anti_magic = m.AntiMagic,
                 }).ToArray(),
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
@@ -2234,6 +2276,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public bool Death;
         /// <summary>`WAbil.AC` 原始字（Lo/Hi 字节，`HUtil32.MakeWord(lo,hi)`）；缺省 0 = 无护甲。卡 §39。</summary>
         public int AC;
+        /// <summary>
+        /// `AntiMagic`（穿透类 `MagPassThroughMagic` 的骰门 `Random(10) >= AntiMagic`）；
+        /// 缺省 0 = 必中。**MG-17/18 用互异值在同一个 case 里造出命中/未命中两支**，
+        /// 否则三条 seed 全落同一支、变异无从变红。
+        /// </summary>
+        public int AntiMagic;
     }
 
     private static readonly string[] Unused = Array.Empty<string>();

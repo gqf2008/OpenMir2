@@ -225,10 +225,49 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             }
 
             // 3b) SM：**严格顺序** + 逐字段 + 尾串（玩家可见的真实发送顺序）。
+            //
+            // **唯一例外（`frame_order_scope = "multi_victim_same_tick"`）**：多受害者同刻
+            // 延迟受击时，产品是批量 flush、oracle 是逐 actor `Run()`（可观测差异，见
+            // `docs/issues/openmir2-b4-multivictim-strike-order.md`）。该标记下本接收者的
+            // `Sent` 改为**多重集**比较（字段全比、只放宽顺序）。
+            // **撤销条件**：产品卡修复落地后，删掉该标记并恢复严格按序——标记缺失即严格。
             let sent_fields = ["ident", "param", "tag", "series"];
+            let multi_victim =
+                gc["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick");
             let ga = as_array(gr, "Sent").cloned().unwrap_or_default();
             let ra = as_array(rr, "Sent").cloned().unwrap_or_default();
-            if ga.len() != ra.len() {
+            if multi_victim {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, String) {
+                    (
+                        num(v, "ident"),
+                        num(v, "param"),
+                        num(v, "tag"),
+                        num(v, "series"),
+                        text(v, "tail").to_string(),
+                    )
+                };
+                let mut g_keys: Vec<_> = ga.iter().map(sent_key).collect();
+                let mut r_keys: Vec<_> = ra.iter().map(sent_key).collect();
+                g_keys.sort();
+                r_keys.sort();
+                if g_keys != r_keys {
+                    let mut missing = g_keys.clone();
+                    for k in &r_keys {
+                        if let Some(pos) = missing.iter().position(|x| x == k) {
+                            missing.remove(pos);
+                        }
+                    }
+                    let mut extra = r_keys.clone();
+                    for k in &g_keys {
+                        if let Some(pos) = extra.iter().position(|x| x == k) {
+                            extra.remove(pos);
+                        }
+                    }
+                    errs.push(format!(
+                        "[{label}/{who}] Sent 多重集不等（多受害者同刻口径）：golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
+                    ));
+                }
+            } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
                 let sent_key = |v: &Value| -> (i64, i64, i64, i64, String) {
                     (
@@ -751,6 +790,17 @@ fn real_ledger_verify_labels_opts(
 ) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
+    // **`frame_order_scope` 自检**：`multi_victim_same_tick` 只允许用于 `fire`（MG-17 穿透，
+    // 多受害者同刻延迟受击；可观测差异见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。
+    // 出现在别的 stem ⇒ 直接 panic，防止宽松口径静默扩散。
+    let scope_marked = golden["cases"].as_array().is_some_and(|cs| {
+        cs.iter()
+            .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
+    });
+    assert!(
+        !scope_marked || stem == "fire",
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire stem（MG-17）；当前 stem={stem}"
+    );
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
@@ -1420,6 +1470,16 @@ fn real_rust_ledger_snowwind() {
         &golden_file("snowwind.json"),
         &["s1", "s5", "s13"],
     );
+}
+
+/// **`9 地狱火`（`SKILL_FIRE`）**真实台账 → 判定面（标签 s1/s5/s13）。
+///
+/// 判定面：逐格穿透骰门 + `RM_MAGSTRUCK(8044)` 逐怪（怪物不 `Operate` ⇒ `Sent` 空、RM 为准）
+/// + 玩家 target 的术后 HP（600ms 延迟在该支 `WaitMs` 内交付）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::fire_parity_*）生成真实台账"]
+fn real_rust_ledger_fire() {
+    real_ledger_verify_labels("fire", &golden_file("fire.json"), &["s1", "s5", "s13"]);
 }
 
 /// **`23 爆裂火焰`（`SKILL_FIREBOOM`）**真实台账 → 判定面（标签 s1/s5/s13）。
