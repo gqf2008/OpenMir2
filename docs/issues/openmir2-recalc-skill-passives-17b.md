@@ -42,3 +42,33 @@
 
 - 不改 `src/` C# 参照实现；不动 readbook 的学习四门与帧序（17a 已对拍）。
 - 技能**熟练度/升级**（`RM_MAGIC_LVEXP`/`TrainSkill`）不属本卡，除非验收明确纳入。
+
+## 5. oracle 事实补录（2026-11-20，`opc-19` 派 read-only 核对）
+
+### 5.1 技能被动写哪些字段（`PlayObject.RecalcHitSpeed`，`PlayObject.cs:3659-3713`，由 `BaseObject.Abil.cs:54` 早于装备循环调用）
+- 职业底：战/法 `HitPoint = DEFHIT(5) + BonusAbil.Hit / BonusAbilof*.Hit`、`SpeedPoint = DEFSPEED(15) + BonusAbil.Speed / *`（`:3666-3675`）；**道士只赋 `SpeedPoint = 15 + Speed/30 + 3`，`HitPoint` 不赋值**（`:3676-3679`）⇒ 道士 `HitPoint` 跨 Recalc 累积（`BaseObject.Abil.cs:65` 与 `PlayObject.cs:2891` 各加一次 `AddAbil.HIT`，无重置）。
+- 技能项（`MagicList` 顺序，`:3681-3712`）：基本剑法 `HitPoint += Round(9/3*L)`；精神力 `+Round(8/3*L)`；攻杀 `+L`+`HitPlus = DEFHIT+L`+`AttackSkillCount = 7-L`+**`AttackSkillPointCount = RandomByte(7-L)`（每次 Recalc 抽 1 次 RNG）**；烈火 `HitDouble = 4+4L`。
+- 装备 `AddAbil.HIT/SPEED` 在**技能之后**叠加（`:2890-2891`，`(byte)` 截断）。
+
+### 5.2 `MagicArr`（`PlayObject.cs:3684`）
+- 唯一写点；数组 `new UserMagic[50]`（`:1041`）⇒ **魔法 id 必须 < 50**（≥50 会在 `RecalcHitSpeed` 抛 `IndexOutOfRange`，实测 61）。**从不清空** ⇒ 删技能后留残影（`SendDelMagic` 只发帧）。
+- 下游：`GetAttackMagic`(`:5401`)、`GetHitMode` 模式 4/5/8/12（`Attack.cs:101-134`，`RM_LONGHIT/WIDEHIT/CRSHIT`）、`SkillAttackDamage`(`Attack.cs:142-192`)、熟练度/升级(`:241/249/360-378`)、登录自动开关(`PlayObject.cs:1425`)。
+
+### 5.3 **ExtraAbil 在 oracle 里不会进入最终 `WAbil`**（重要）
+- `ExtraAbil[...]` 的**读点只有一处**：`PlayObject.RecalcAbilitys` 的 `:2818-2846` 块——它对 `WAbil.DC/MC/SC/MaxHP/MaxMP/HitSpeed` 做加/乘。
+- 但同函数**随后**在 `:2878 RecalcAdjusBonus()`、`:2890-2891 SpeedPoint/HitPoint += AddAbil`、`:2899 HitSpeed = AddAbil.HitSpeed`、`:2900-2906 WAbil.MaxHP/MP/AC/MAC/DC/MC/SC = Abil + AddAbil（逐字节 _MIN(255,和)）`——**把 ExtraAbil 块写下的值整体覆盖**（`HitSpeed` 也被覆盖）。
+- 全仓检索：`ExtraAbil[...]` 的其它出现仅为**写点**（`PlayObject.Base.cs:2105-2147` 吃 Shape12 时置 `_MAX`）与**到期清零**（`PlayObject.Message.cs:165-169`）；`BaseObject.Abil.cs:155` 是一行**注释掉的**同类读；`GetAttackPower`（`PlayObject.cs:2910-2950`）不读 `ExtraAbil`。⇒ **oracle 的 ExtraAbil 统计效果是死路**：不进 `WAbil`、不进 `SM_ABILITY(52)`、不进 657 的 `HitSpeed`、也不进 `GetAttackPower`。
+- 由此对 **IT-07** 的判据推论（已转 `43` 核实现）：吃 Shape12 后的正确判据是 **`WAbil` 不变**；唯一可观测副作用是那 1-6 条蓝色 `SysMsg`（`RM_SYSMESSAGE`）+ `RM_ABILITY` 排队泵出的 52（WAbil 仍为未加 buff 的值）+ 状态数组 `ExtraAbil/Flag/Times`（仅状态面）。若 IT-07 的实现把 buff 加进 `WAbil`，它**比 oracle 多做了一步**。
+- 同机制旁注：`RecalcAdjusBonus` 写在 `:2878` 的 `WAbil`/`MaxHP/MP` 变化也在 `:2900-2906` 被覆盖（BonusAbil 的 WAbil 面同样不持久；其消费在别处）。
+
+### 5.4 可观测面（§26）
+- `SM_ABILITY(52)` 尾 = `EDCode(EncodeMessage(WAbil))`（`PlayObject.Message.cs:1733-1734`）——**无 HitPoint/SpeedPoint**。
+- **`SM_SUBABILITY(752)`**：`Tag = MakeWord(HitPoint, SpeedPoint)`（`PlayObject.Message.cs:1675/1935`）⇒ 技能被动的唯一帧面；登录簇里也有一条 752。
+- `657` 只有 `HitSpeed`（不含 HitPoint/SpeedPoint）；`HitPlus/HitDouble/AttackSkillCount/AttackSkillPointCount` 无帧，仅状态面；模式/次级伤害走攻击帧（R 级）。
+
+### 5.5 开工前置基线
+- `--lib it07_` 在**IT-07 合入 master 之后**才有效（当前树零命中——IT-07 只在它的分支上）。在此之前用：
+  `cargo test -p game-svr --lib it08_`（Recalc↔657/WAbil）、`--lib recalc_`（含 `recalc_reports_*`/`bag_takeoff_recalc_uses_prior_subability`）、
+  `--lib hit_mode_conditions_fall_back_to_rm_hit`（attackwire）、`--lib it17a_`（学技能入口）、`--lib sm_addmagic`。
+- 只要角色带攻杀剑法，**每次 Recalc 抽 1 次**（`:3706`）⇒ 夹具固定 `MIR2_RNG_SEED` 并把该抽记进账本，或选无攻杀的角色做纯被动用例。
+- 动 `MagicArr` 派生时，再加 `attackwire` 的模式用例（`MagicArr` 条件直接决定 `RM_LONGHIT/WIDEHIT/CRSHIT`）。
