@@ -474,25 +474,40 @@
         "line": 2298,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::it16_lottery_fixture_rng_and_deltas",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_lottery_win6_deploy_bands",
+          "eat_ok_lottery_win6_steered",
+          "eat_ok_lottery_win5_steered",
+          "eat_ok_lottery_win4_steered",
+          "eat_ok_lottery_win3_steered",
+          "eat_ok_lottery_win2_steered",
+          "eat_ok_lottery_win1_sum_equality",
+          "eat_ok_lottery_no_win",
+          "eat_ok_lottery_gate_closed",
+          "eat_ok_lottery_boundary_min",
+          "eat_ok_lottery_boundary_max",
+          "eat_ok_lottery_forced_bucket_p2"
+        ],
+        "unit_tests": [
+          "winlottery::tests::level1_is_sum_equality_not_range",
+          "winlottery::tests::bands_are_checked_six_first_then_down",
+          "winlottery::tests::gate_closed_stops_at_matched_band_and_counts_as_lost",
+          "winlottery::tests::zero_gold_band_is_lost_not_won",
+          "winlottery::tests::init_state_maps_all_eight_keys_without_shift",
+          "winlottery::tests::pure_decision_reads_state_not_cfg_init",
+          "winlottery::tests::boundary_is_inclusive_on_both_ends",
+          "winlottery::tests::notice_order_is_pump_priority_ascending",
+          "tests::it16_lottery_frame_order_gold_counters_and_always_eaten"
         ]
       },
-      "notes": "Config.WinLotteryLevel1..6（Rust 已有配置字段）；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape11 彩票已在宿主实现（WinLotteryState 进程级计数 + 纯函数 win_lottery + 宿主帧序），配置 27 键（19 参数 + 8 状态初值）经 GateConfig/EnterConfig 下传；eat-probe 的顶层 lottery 块 12 例由 oracle 真身产出，抽值经 ProbeRandom 装 RandomNumber.random 记录来源行 PlayObject.cs:3813，Rust 同 seed 逐值重放。缺口：①运行期 SM_SYSMESSAGE 文本帧（WinLotteryNMsg/NotWinLotteryMsg，见 openmir2-runtime-sysmsg-text-frames.md）；②IncGold 失败支无 oracle 夹具证据（探针假 Envir ⇒ DropGoldDown→GetDropPosition NRE；仅 Rust 宿主用例覆盖，不計入 verified）。另见 follow-up 卡 openmir2-lottery-ticket-gm-realtime.md（@LotteryTicket 实时值）。status 于 2026-11-20 由 missing 更正为 implemented_unverified（清单与卡面矛盾，a2 清点发现）。"
     },
     {
       "id": "IT-17",

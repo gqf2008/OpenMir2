@@ -21,9 +21,7 @@
 - `game_svr::pickwire::notice_frame` **没有 `RM_CHARSTATUSCHANGED` 臂** ⇒ 返回 `None`；
 - `handle_eat_cmd` 的排水（`emit_eat_notices` 的 `None` 支）记
   `WRN CM_EAT：通知 ident=10139 未接 SM_* 映射（登记…）` 并**丢弃**。
-- 注意：**657 的广播面已建模**（`mir2-rs/bins/game-svr/src/gate_criticality.rs:48` 起：`
-  SM_CHARSTATUSCHANGED` 的收件人/去重口径）。本缺口只针对**发送者自己的那条自通知**
-  （`RecalcAbilitys` → `SendRefMsg` 的 self 分支）。补映射时必须先核 self 与广播是否重复下发。
+- 注意：**657 的广播面已建模**（`mir2-rs/bins/game-svr/src/gate_criticality.rs` 的 657 行注释：`SM_CHARSTATUSCHANGED` 的收件人/去重口径）。本缺口只针对**发送者自己的那条自通知**（`RecalcAbilitys` → `SendRefMsg` 的 self 分支）；补映射时必须先核 self 与广播是否重复下发。
 
 ## 3. Blast radius（可复跑，按 grep 出清单）
 

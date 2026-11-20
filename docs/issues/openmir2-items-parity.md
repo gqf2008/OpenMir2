@@ -160,7 +160,7 @@
 
 ## 5. 条目推进顺序与判据落点
 
-1. **IT-18（唯一 `implemented_unverified`）先做成「单条 verified 样板」**：
+1. **IT-18（当时唯一的 `implemented_unverified`；现已转 `verified`，见 §7）先做成「单条 verified 样板」**（历史小节，保留原文）：
    - 记录面补**解包成功**用例（6 件、`SM_ADDITEM(200)`×6 + `SM_EAT_OK`、`ItemList` +6、`WAbil.Weight` 更新）；
    - 判定面接 `added_items` + 严格序；
    - 至少一颗**行为牙**（改 `UnbindList` 查名/改容量门/改 6 件数 各能咬红，给原文与还原后复绿）。
@@ -174,17 +174,17 @@
 |---|---|---|---|
 | `tooth_notice_priority_changed_red` | 内存里的 `case.expect.notices` 克隆 | 翻转一条 `priority`（或 `late`） | L2 排序序列不等 |
 | `tooth_notice_duplicate_count_red` | 同上 | 复制一条全等通知（两处都加）/或删一条重复项 | L2 重复计数（多重集语义） |
-| `tooth_notice_same_priority_ident_swap_red` | 同上（构造同 priority、不同 ident 的两条） | 只互换两条的 `ident`（priority 不变） | L2 按 `(priority,ident,params)` 排序后逐位不等 |
-| `tooth_immediate_order_swap_red` | 内存里的 `expect.immediate_frames` 克隆（对有多帧的条目） | 交换两条 `SM_ADDITEM` / 把 `SM_EAT_OK` 提到前面 | L1 即时帧严格序 |
-| `tooth_state_field_changed_red` | 内存里的 `expect.wabil`/`item_list` 克隆 | 改一个 HP 或删一件物品 | L3/L4 状态量一级 / 对称差 |
+| `tooth_drain_hit_cap_red` | 内存台账的 `drain.hit_cap/max_passes` 克隆 | `hit_cap=true` 或 `max_passes!=8` | D1/D2 抽空完整性 |
+| `vacuous_guard_empty_or_missing_cases_red` | 构造 `{"cases":[]}` / `{}` | 去掉/清空 `cases` | Z1/Z3 防空转 |
+| `net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion` | `msgqueue::NetPriorityQueue` 直测 | 3 条同键入队 `[0,1,2]` | 出队必须是 `[0,2,1]`（sift 序，**不是排序**） |
 
 （每条「篡改⇒红、还原⇒绿」各给原文；与魔法线 §19c 同法，**不碰夹具文件本身**。）
+> **2026-11-20 更正（a2 清点）**：原表列的 `tooth_notice_same_priority_ident_swap_red`、`tooth_immediate_order_swap_red`、`tooth_state_field_changed_red` **在代码里不存在**——已改为上表三个真实存在的牙。其中"同 priority、不同 ident 互换"在**多重集**语义下本就不可咬（互换后多重集不变），故不再保留该牙名。
 
 ## 7. 待办与不能标 verified 的门槛
 
-- **IT-18**：成功路径夹具已产出（`eat_ok_stdmode31_unbind_success`）；但仍保持 `implemented_unverified`，
-  直到 ①oracle 等价性（见 §8）②L2/D 判定面 ③Z1–Z6 ④clippy 全部落地并过审——之后才转 `verified`。
-- **IT-07…17**：`missing`，均带 `deviation.id = T-17`（指向 `useitem.rs` 头部未做清单）；实现 + 对拍后才可改 `verified`。
+- **IT-18**：**已转 `verified`**（以清单 `docs/issues/parity-gap-items.json` 为准；①oracle 等价性 ②L2/D 判定面 ③Z1–Z6 ④clippy 均已落地并过审）。**原文「仍保持 implemented_unverified」于 2026-11-20 作废**（`a2` 清点发现卡面与清单相反）。
+- **状态快照（2026-11-20，以清单为准）**：`verified` = IT-01/02/03/04/05/06/08/18/19；`implemented_unverified` = IT-14/15/16；`missing` = IT-07/09/10/11/13/17 与 **IT-12（实现与行为面证据已在 `card/items-it12`，status 待 QA 签后再动）**。
 - **RNG `site` 允许清单**：首条抽数条目落地时必须给出**代码表 + 逐条理由**，清单外红；不得「能过就加」。
 - **分母 19 不动**：若认为分母错，先停手交证据给 `opc-07`。
 
