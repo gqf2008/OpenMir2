@@ -70255,6 +70255,16 @@ SendRefMsgRange=15
         );
 
         let mut rig = uenhancer_rig(id_base);
+        if let Some(h) = golden_fixture_opt(stem, label, "hit_speed") {
+            let h = u16::try_from(h).unwrap_or(0);
+            if h > 0 {
+                for who in ["caster", "target", "obs_in"] {
+                    if let Some(sg) = rig.ground_sessions.get_mut(who) {
+                        sg.hit_speed = h;
+                    }
+                }
+            }
+        }
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
@@ -70644,6 +70654,18 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
+        // **收件人 HitSpeed**（657 `series` 取 `sg.hit_speed`，见宿主 `sm_charstatuschanged` 调用面）：
+        // golden `Fixture.hit_speed` > 0 时对 caster/target/obs_in 三个会话生效；缺省 0 = 不动。
+        if let Some(h) = golden_fixture_opt(stem, label, "hit_speed") {
+            let h = u16::try_from(h).unwrap_or(0);
+            if h > 0 {
+                for who in ["caster", "target", "obs_in"] {
+                    if let Some(sg) = rig.ground_sessions.get_mut(who) {
+                        sg.hit_speed = h;
+                    }
+                }
+            }
+        }
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
