@@ -44,7 +44,7 @@
 
 ## 不做
 
-- 本卡**不实现**任何代码；不动 `MagicGolden`、不动 Rust 宿主。
+- 本卡**不实现**任何代码；不动 `MagicGolden`、不动 Rust 宿主。**（2026-11-20 更新：Rust 侧等价路径已落地，见 C 段；本条只描述 A 段当时的口径。）**
 - 不把 MG-01..09 的 `status` 改成任何"已验证/死路径"。
 
 ---
@@ -223,3 +223,86 @@
    **同标准**调用 `RecalcLevelAbilitys(); RecalcAbilitys();`，并把施法者 HP 置为公式 `MaxHP` ⇒
    本卡 golden 里 `SM_HEALTHSPELLCHANGED(53)` 的 `MaxHP` 不再是 0 的装置伪影。旧口径（caster 不重算）
    已在提交历史中留痕；「重算是否按 case 显式参数化」属 `openmir2-golden-fixture-drift`。
+
+## C 段：Rust 侧等价路径与比较器（2026-11-20，`openmir2-10`）
+
+- 分支 `card/warrskill-rust`，base `bb160e2ad`；实现提交 `feat(game-svr): 接 12/25/26/27/34/38 …`。
+- 文件：
+  - `mir2-rs/bins/game-svr/src/warrskill.rs`：6 个 case 臂（逐行对齐 `PlayObject.Attack.cs` 的行号）；
+  - `mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs`：9 条比较器（一魔号一条 `#[test]`）；
+  - `MagicState` 增 6 个状态字段（`crs_hitkill` / `fire_hit_skill` / `latest_fire_hit_tick` /
+    `twin_hit_skill` / `latest_twin_hit_tick` / `do_motaebo_tick`）；
+  - `StringConf` 增 7 个 `[String]` 键（ThrustingOff / HalfMoonOff / CrsHitOn / CrsHitOff /
+    FireSpiritsSummoned / FireSpiritsFail / MateDoTooweak），缺键回 `MessageSettings` 默认；
+  - `handle_spell_cmd_with_magic` 增 `colors` / `strings` 形参，并在公共前缀后分派 6 个 case
+    （3/4/7 仍走既有 `default_arm && is_warr_skill` 的 639 块）。这些 case 恒 `result = true`
+    ⇒ 照 oracle 调用方补 `+GD`。
+
+### C1. 判据（要求 5）
+
+- 同一魔号、同一输入：`ClientSpellXY` 入口 golden 与 Rust 等价路径**逐收件人逐帧**一致
+  （caster / target / obs_in / obs_out 各自的 `Sent` 序列）；
+- **不借 `DoSpell` 账本**：3/4/7 的 639 由宿主既有战士门块产生，12/25/26/27/34/38 由
+  `warrskill` 的 case 臂产生；
+- 比较器读 `warr-*.json`，**三键契约**（`rng_mode="cover_drain"` / `login_order=true` /
+  `reachability="reachable"`）缺键即红；
+- **`+GD/…` 不入比对**：它是 `CM_SPELL` 调用方的尾部（`PlayObject.Message.cs` 第 1339-1344 行），
+  golden 生成器同样排除（判据边界见 A 段）。
+
+### C2. 两种布局下的比较宽度（重要）
+
+| 布局 | 53 帧 | 比较器 |
+|---|---|---|
+| **oracle 布局**（`MIR2_CLIENT_ABILITY_LAYOUT=0`） | **12B header-only**（oracle `MakeMessage` 只填 5 个头字段，`PlayObject.Message.cs` 第 1737 行） | **全帧逐字节**（12B 头含 Recog + 尾），53 也比全帧 |
+| **客户端布局**（默认，生产） | 12B 头 + `EDCode(TCharDesc 12B)` = **16B 尾 ⇒ 28B**（`smframe.rs` 的 `sm_healthspellchanged_client`，第 325 行起；`edcode::encoded_len(12)` = 16） | 除 53 的 16B 尾外全帧比；53 只比头四字段 + 断言 body == 28B |
+
+- **实测**：`warr-26/charge` 的 53 实测 tail = `?ehkdzhiddKKedhk`（16 字符）⇒ 28B；golden 侧 12B。
+- **责任归属**：这 16B 是本仓为冻结客户端（`Grobal2.pas` 第 39 行 `HIGHHP = True`；真机"缺尾
+  HP 读成 0"）**有意多发的已登记 wire 偏差**，责任卡 `openmir2-client-e2e-enter-gaps`；
+  **不在本卡比较面内**，其正确性由责任卡的真机证据承担。
+- **env=0 复跑**（串行、进程级 env）：
+  `MIR2_CLIENT_ABILITY_LAYOUT=0 cargo test -p game-svr --lib -- warrskill_parity_tests`
+  ⇒ 9/9 通过（全帧比对，含 53）。
+
+### C3. 已登记偏差 / 未覆盖面
+
+1. **53 的 16B 尾**：见 C2（只影响含 53 的 MG-06/07/09）。
+2. **27 的 `DoMotaebo` 真支未建模**：golden 夹具 `nTargetX = 101` ⇒ `Dir = (byte)101` 非法 ⇒
+   前方格 = 自己脚下 ⇒ 只能走"假支"（RUSHKUNG + 红字 + 零 RNG）。真支（推挤 / `RM_RUSH` /
+   `SM_STRUCK` / 自伤 / 训练尾 `Random(3)+1`）与 3s 门**未覆盖**；合法方向变体排在
+   `MagicGolden/Program.cs` 释放（`c6` 之后）。走到真支条件时宿主发 WRN：
+   `CM_SPELL 27：前方格另有对象 ⇒ DoMotaebo 真支（推挤/伤害/训练尾）未建模（卡 openmir2-warrskill-entry，待补变体）`。
+
+### C4. 夹具退化盘点（哪些分支是刻意覆盖、哪些是碰巧）
+
+| 魔号 | 覆盖 | 退化？ | 未覆盖 |
+|---|---|---|---|
+| 3/4/7 | 单 case `invoke`：639 给 caster/target/obs_in，obs_out 0 | 否（战士门无第二分支；obs 坐标刻意验 ±12 面） | 守卫（IsCanSpell/Death/STONE，卡范围外） |
+| 12/25/34 | off2on / on2off 两 case（preset 选支） | 否 | `MagicArr == null`（不可达） |
+| 26 | charge / busy / nomp 三 case（preset + MP 旋钮，不依赖墙钟） | 否 | `nSpellPoint == 0` |
+| 27 | 单 case `coordinate_dir` | **是**（见 C3-2） | DoMotaebo 真支、3s 门、27 的 MP 不足支 |
+| 38 | go / nomp 两 case（MP 旋钮） | 否 | — |
+
+### C5. 变异证据（每支一颗牙；只红对应那条，其余 8 条绿；还原 `blob == HEAD:<path>`）
+
+| 变异 | 红 | 断言原文 |
+|---|---|---|
+| 12 翻开关 | `warr_12` | `+ULNG` vs `+LNG`（comparator 第 254 行） |
+| 25 翻开关 | `warr_25` | `+UWID` vs `+WID` |
+| 34 翻开关 | `warr_34` | `+UCRS` vs `+CRS` |
+| 26 翻 MP 阈值 | `warr_26` | 帧数 1 vs 3（got 只剩绿字 / want `+FIR/53/绿字`） |
+| 38 翻 MP 阈值 | `warr_38` | 帧数 1 vs 3 |
+| 27 翻 MP 阈值 | `warr_27` | 帧数 0 vs 3 |
+
+env=0 全帧牙：把 `damage_spell_and_53` 的 `recog` +1 ⇒ `warr_26/27/38` 红
+（`left: [2,0,0,0,…]` / `right: [1,0,0,0,…]`），其余 6 条绿 ⇒ 证明全帧比对真读头字节。
+
+### C6. 门禁
+
+`cargo fmt --check` / `cargo clippy -p game-svr --all-targets -- -D warnings`（0 error）/
+`cargo test -p game-svr --lib`（2164 passed / 0 failed / 73 ignored）——rc=0。
+
+### C7. 清单 scope（status 不动）
+
+MG-01..MG-09 的 `scope` 已按本节写（实现与比较器见上）；**`status` 保持
+`implemented_unverified`**，升格由 `opc-19` 在 QA 复签后统一做。

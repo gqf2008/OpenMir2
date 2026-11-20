@@ -46,6 +46,20 @@ pub const DEFAULT_YOU_POISONED: &str = "中毒了!!!";
 pub const DEFAULT_THRUSTING_ON: &str = "启用刺杀剑法";
 /// oracle `MessageSettings.HalfMoonOn`（`MessageSettings.cs:50`）——`[String] HalfMoonOn` 缺键默认。
 pub const DEFAULT_HALF_MOON_ON: &str = "开启半月弯刀";
+/// oracle `MessageSettings.ThrustingOff`（`MessageSettings.cs:49`）。
+pub const DEFAULT_THRUSTING_OFF: &str = "关闭刺杀剑法";
+/// oracle `MessageSettings.HalfMoonOff`（`MessageSettings.cs:51`）。
+pub const DEFAULT_HALF_MOON_OFF: &str = "关闭半月弯刀";
+/// oracle `MessageSettings.CrsHitOn`（`MessageSettings.cs:52`）。
+pub const DEFAULT_CRS_HIT_ON: &str = "开启光风斩";
+/// oracle `MessageSettings.CrsHitOff`（`MessageSettings.cs:53`）。
+pub const DEFAULT_CRS_HIT_OFF: &str = "关闭光风斩";
+/// oracle `MessageSettings.FireSpiritsSummoned`（`MessageSettings.cs:58`）。
+pub const DEFAULT_FIRE_SPIRITS_SUMMONED: &str = "召唤烈火精灵成功...";
+/// oracle `MessageSettings.FireSpiritsFail`（`MessageSettings.cs:59`）。
+pub const DEFAULT_FIRE_SPIRITS_FAIL: &str = "召唤烈火精灵失败";
+/// oracle `MessageSettings.MateDoTooweak`（`MessageSettings.cs:61`）。
+pub const DEFAULT_MATE_DO_TOOWEAK: &str = "冲撞力不够!!!";
 /// `[String] GuildMsgPreFix`（`GameSvrConf.cs:1843`，缺省 `〖行会〗`）——`ShowPreFixMsg` 为真时
 /// 行会消息（104）的前缀（`GuildInfo.cs:435-438`，**无空格**拼接）。
 pub const DEFAULT_GUILD_MSG_PREFIX: &str = "〖行会〗";
@@ -156,6 +170,14 @@ pub struct StringConf {
     thrusting_on: Option<String>,
     /// `[String] HalfMoonOn`（`MessageSettings.HalfMoonOn`，`HalfMoonOnOff(true)` 的绿字）。
     half_moon_on: Option<String>,
+    /// 卡 `openmir2-warrskill-entry`：`ClientSpellXY` 6 个战士技 case 的文案（`[String]` 同名键）。
+    thrusting_off: Option<String>,
+    half_moon_off: Option<String>,
+    crs_hit_on: Option<String>,
+    crs_hit_off: Option<String>,
+    fire_spirits_summoned: Option<String>,
+    fire_spirits_fail: Option<String>,
+    mate_do_tooweak: Option<String>,
     revival_recover: Option<String>,
     // 卡 `openmir2-runtime-sysmsg-text-frames`：带文本的 `SysMsg` 帧（禁药/修复油/彩票）。
     canot_use_drug_on_this_map: Option<String>,
@@ -376,6 +398,58 @@ impl StringConf {
     #[must_use]
     pub fn half_moon_on(&self) -> &str {
         self.half_moon_on.as_deref().unwrap_or(DEFAULT_HALF_MOON_ON)
+    }
+
+    /// `[String] ThrustingOff`（`ThrustingOnOff(false)` 的绿字）。
+    #[must_use]
+    pub fn thrusting_off(&self) -> &str {
+        self.thrusting_off
+            .as_deref()
+            .unwrap_or(DEFAULT_THRUSTING_OFF)
+    }
+
+    /// `[String] HalfMoonOff`。
+    #[must_use]
+    pub fn half_moon_off(&self) -> &str {
+        self.half_moon_off
+            .as_deref()
+            .unwrap_or(DEFAULT_HALF_MOON_OFF)
+    }
+
+    /// `[String] CrsHitOn`（34 逐日剑法开）。
+    #[must_use]
+    pub fn crs_hit_on(&self) -> &str {
+        self.crs_hit_on.as_deref().unwrap_or(DEFAULT_CRS_HIT_ON)
+    }
+
+    /// `[String] CrsHitOff`（34 逐日剑法关）。
+    #[must_use]
+    pub fn crs_hit_off(&self) -> &str {
+        self.crs_hit_off.as_deref().unwrap_or(DEFAULT_CRS_HIT_OFF)
+    }
+
+    /// `[String] FireSpiritsSummoned`（26 烈火剑法充能成功）。
+    #[must_use]
+    pub fn fire_spirits_summoned(&self) -> &str {
+        self.fire_spirits_summoned
+            .as_deref()
+            .unwrap_or(DEFAULT_FIRE_SPIRITS_SUMMONED)
+    }
+
+    /// `[String] FireSpiritsFail`（26 的 10s 门内失败）。
+    #[must_use]
+    pub fn fire_spirits_fail(&self) -> &str {
+        self.fire_spirits_fail
+            .as_deref()
+            .unwrap_or(DEFAULT_FIRE_SPIRITS_FAIL)
+    }
+
+    /// `[String] MateDoTooweak`（27 冲撞失败的红字）。
+    #[must_use]
+    pub fn mate_do_tooweak(&self) -> &str {
+        self.mate_do_tooweak
+            .as_deref()
+            .unwrap_or(DEFAULT_MATE_DO_TOOWEAK)
     }
 
     /// `[String] CanotUseItemMsg`（`StringConf.cs:154`；`MessageSettings.cs:129`）。
@@ -636,6 +710,13 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "YOUPOISONED") => &mut conf.you_poisoned,
             (Section::String, "THRUSTINGON") => &mut conf.thrusting_on,
             (Section::String, "HALFMOONON") => &mut conf.half_moon_on,
+            (Section::String, "THRUSTINGOFF") => &mut conf.thrusting_off,
+            (Section::String, "HALFMOONOFF") => &mut conf.half_moon_off,
+            (Section::String, "CRSHITON") => &mut conf.crs_hit_on,
+            (Section::String, "CRSHITOFF") => &mut conf.crs_hit_off,
+            (Section::String, "FIRESPIRITSSUMMONED") => &mut conf.fire_spirits_summoned,
+            (Section::String, "FIRESPIRITSFAIL") => &mut conf.fire_spirits_fail,
+            (Section::String, "MATEDOTOWEAK") => &mut conf.mate_do_tooweak,
             (Section::String, "REVIVALRECOVERMSG") => &mut conf.revival_recover,
             (Section::String, "CANOTUSEDRUGONTHISMAP") => &mut conf.canot_use_drug_on_this_map,
             (Section::String, "WEAPONREPAIRSUCCESS") => &mut conf.weapon_repair_success,
