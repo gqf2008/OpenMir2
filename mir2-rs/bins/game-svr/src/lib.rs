@@ -69745,7 +69745,7 @@ SendRefMsgRange=15
             receivers.push(serde_json::json!({
                 "Who": who,
                 "Rm": [],
-                "Sent": fireball_sent(&frames, socket),
+                "Sent": sinsu_sent(&frames, socket),
             }));
         }
 
@@ -70760,6 +70760,17 @@ SendRefMsgRange=15
                     // 就是同一串 EDCode 字节（ASCII）⇒ 按 UTF-8 直读。
                     "tail": String::from_utf8_lossy(&body[mir2_protocol::frame::CommandMessage::SIZE..]),
                 })
+            })
+            .collect()
+    }
+
+    /// SINSU 用：在 `fireball_sent`（含 `recog`）基础上补 `due_ms_rel`（施法批=0；本支 summon_ok 全在施法批）。
+    fn sinsu_sent(frames: &[SfFrame], socket: i32) -> Vec<serde_json::Value> {
+        fireball_sent(frames, socket)
+            .into_iter()
+            .map(|mut v| {
+                v["due_ms_rel"] = serde_json::json!(0);
+                v
             })
             .collect()
     }

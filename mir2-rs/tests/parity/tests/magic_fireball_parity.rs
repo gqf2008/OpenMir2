@@ -1570,6 +1570,40 @@ fn sent_filter(case: &Value, who: &str, keep: &[i64]) -> Vec<(i64, i64, i64, i64
     out
 }
 
+/// SINSU 用：`(ident,param,tag,series,recog,due_ms_rel,tail)` 多重集（含 golden 新键 `recog`/`due_ms_rel`；C# send 带 recog、施法批 due_ms_rel=0）。
+fn sent_filter_sinsu(
+    case: &Value,
+    who: &str,
+    keep: &[i64],
+) -> Vec<(i64, i64, i64, i64, i64, i64, String)> {
+    let Some(recv) = case["Receivers"].as_array() else {
+        return Vec::new();
+    };
+    let Some(r) = recv.iter().find(|r| r["Who"] == who) else {
+        return Vec::new();
+    };
+    let Some(sent) = r["Sent"].as_array() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(i64, i64, i64, i64, i64, i64, String)> = sent
+        .iter()
+        .filter(|s| keep.contains(&s["ident"].as_i64().unwrap_or(i64::MIN)))
+        .map(|s| {
+            (
+                s["ident"].as_i64().unwrap_or(i64::MIN),
+                s["param"].as_i64().unwrap_or(i64::MIN),
+                s["tag"].as_i64().unwrap_or(i64::MIN),
+                s["series"].as_i64().unwrap_or(i64::MIN),
+                s["recog"].as_i64().unwrap_or(i64::MIN),
+                s["due_ms_rel"].as_i64().unwrap_or(i64::MIN),
+                s["tail"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（首批仅 `summon_ok`；卡 MG-41）。
 ///
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
@@ -1634,8 +1668,7 @@ fn real_rust_ledger_sinsu() {
         "regen_calls",
         "pre_slave_count",
         "stub_monster_race",
-        "stub_wabil_hp",
-        "stub_abil_max_hp",
+        // stub_wabil_hp/stub_abil_max_hp 两侧恒 17（C# Program.cs:2317-2318 / Rust 同值）=> 恒真、非判据，不在此循环比；仅留 golden 作意图记录（drift 卡 §5）。
     ] {
         assert_eq!(rs.get(key), gs.get(key), "[{label}] SinSu.{key} 不等");
     }
@@ -1682,11 +1715,11 @@ fn real_rust_ledger_sinsu() {
     // 造怪前帧 17/638/642（按 socket 多重集）。
     let keep: &[i64] = &[17, 638, 642];
     for who in ["caster", "target", "obs_in", "obs_out"] {
-        let g_sent = sent_filter(gcase, who, keep);
-        let r_sent = sent_filter(rust, who, keep);
+        let g_sent = sent_filter_sinsu(gcase, who, keep);
+        let r_sent = sent_filter_sinsu(rust, who, keep);
         assert_eq!(
             r_sent, g_sent,
-            "[{label}] {who} 的 17/638/642 帧不一致：Rust {r_sent:?} vs golden {g_sent:?}"
+            "[{label}] {who} 的 17/638/642 帧不一致（含 recog/due_ms_rel）：Rust {r_sent:?} vs golden {g_sent:?}"
         );
     }
     eprintln!("[sinsu {label}] PASS");
