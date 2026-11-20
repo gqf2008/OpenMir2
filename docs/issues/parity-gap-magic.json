@@ -323,7 +323,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-11",
@@ -354,7 +354,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-12",
@@ -384,7 +384,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级",
+      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-13",
@@ -541,7 +542,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-20",
@@ -696,7 +697,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-28",
@@ -727,7 +728,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。14=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格，`MagDefenceUp` 无条件 AddBuff ⇒ target 52×49/100×49/657×98；golden 于 2026-11-20 按登录序（RecalcLevelAbilitys→RecalcAbilitys）重生成，只有 target SM 52 尾变化（见卡 §24）。",
-      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
+      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-29",
@@ -758,7 +759,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。15=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格；`DefenceUp` 已有 buff ⇒ TryUpdate 早退（BaseObject.cs:2137-2147）⇒ 只有首组 52/100/657×2；golden 同批重生成（见卡 §24）。",
-      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
+      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-30",
@@ -820,7 +821,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】",
+      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-33",
@@ -850,7 +852,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**——golden/比较器不记录 `Recog`、两条仅 `Recog` 不同；这是**按总监裁定的取舍**（不扩比较面），**不是**「不可判」/「对客户端无差异」；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。"
+      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**——golden/比较器不记录 `Recog`、两条仅 `Recog` 不同；这是**按总监裁定的取舍**（不扩比较面），**不是**「不可判」/「对客户端无差异」；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。",
+      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-34",
@@ -944,7 +947,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-38",
@@ -975,7 +978,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
       "basis": "semantic",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 1（lightflower））= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-39",
@@ -1035,7 +1038,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。3×3 有序枚举、只治 `HP<MaxHP` 的 proper friend（夹具 N=2：caster+target；`both` 支两条 8034）；**窗口内不回血、不产 53**（到点只累计 IncHealing）；**`AbilSeeHealGauge`(1103) 未覆盖**（Level=1 恒 false，显式排除）。卡 §27。"
+      "notes": "旧清单 cost=小时级。3×3 有序枚举、只治 `HP<MaxHP` 的 proper friend（夹具 N=2：caster+target；`both` 支两条 8034）；**窗口内不回血、不产 53**（到点只累计 IncHealing）；**`AbilSeeHealGauge`(1103) 未覆盖**（Level=1 恒 false，显式排除）。卡 §27。",
+      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-41",
@@ -1110,7 +1114,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。",
-      "scope": "partial：657 帧 `Series`(HitSpeed) 未点亮——现役夹具**未采集 `hit_speed` 输入**，六份 golden（本卡三份同）该帧 `series` 集合为 {0}；oracle 侧该值是可变变量（`PlayObject.cs:2024 HitSpeed=0` → `:2899 AddAbil.HitSpeed` → 出队取 `PlayObject.Message.cs:1845-1847` 的 `this.HitSpeed`），本夹具无加速装备/被动故恒 0。其余面（帧条数/文本/52/100）已验。收口条件：加 `hit_speed` 旋钮并出现非 0 ⇒ 该字段才算点亮。"
+      "scope": "partial：657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 三收件人 7/7/7，与 oracle 的“每接收者自己的 HitSpeed”一致）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-44",
@@ -1162,7 +1166,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
       "basis": "semantic",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-46",
@@ -1317,7 +1321,8 @@
       "cost": "M",
       "deviation": null,
       "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）【scope（2026-11-20）：**施法者侧同步伤害**（`MagGroupDeDing` 在 DoSpell 内 `StruckDamage` 并排 200ms RM_DELAYMAGIC），**DoSpell 时刻可证**；判据 = RM 收件人集合 + 每只怪 HP before/after + 逐目标命中门抽值；SM_716 组内顺序未验（`sm716_order_unverified`，见 docs/issues/openmir2-sm716-tie-order.md）。】",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "partial：`dc_range` 一支 `caster_dc=MakeWord(20,30)=7700`（区间 10，Rust 侧真读）⇒ 伤害面**一直非退化**；原“需补靶”登记撤销——该登记来自按夹具缺省值判断、未看 spec 覆写与 golden 记录值。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-52",
@@ -1369,7 +1374,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-54",
@@ -1400,7 +1405,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-55",
@@ -1452,7 +1457,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case MagicConst.SKILL_47` → MagBigExplosion(FireBoomRage)，与 23 同 helper 仅魔号不同；golden Rng 7 抽、DrainPasses 4、HP 100→85；卡 §32。",
       "basis": "semantic",
-      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-57",
@@ -1526,7 +1531,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级；卡 docs/issues/openmir2-uenhancer.md。657 四条逐 socket 2/1/1（param=2）。可证伪对照：改回 entity.char_status ⇒ 12 处 golden=2 rust=0。牙执行 head=09882d3d9，rebase 未改接线（逐字相同）。未覆盖面见卡 §未覆盖面。",
       "basis": "semantic",
-      "scope": "partial: self-target DoSpell-moment only; 未覆盖 U-1 非自身 proper-friend 目标 / U-2 CheckAmulet 失败→639 / U-3 DoSpell 后 buff 加成与超时"
+      "scope": "partial: self-target DoSpell-moment only; 未覆盖 U-1 非自身 proper-friend 目标 / U-2 CheckAmulet 失败→639 / U-3 DoSpell 后 buff 加成与超时。 另：657 `Series` **已点亮**（0/7/7：caster 被 recalc 归 0、旁观者保持 7）。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-60",
