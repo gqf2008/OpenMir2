@@ -16859,9 +16859,14 @@ fn handle_spell_cmd_with_magic(
                             out.end_y,
                             base_target.unwrap_or(0),
                             Some(&mut buf),
-                            // **640 立即出**（与 23/33/47 同款）。oracle 的 640 在施法段，
-                            // 若延迟 1000ms 会排到 600ms 的 31 之后（MG-17 D2 实测）。
-                            None,
+                            // **640 延迟 1000ms**（oracle `MagicManager.cs:666`
+                            // `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`；全仓 22 个
+                            // `RM_MAGIC_LVEXP` 发射点均为 1000/3000ms，零处立即发）。
+                            // golden 里"640 在 31 之前"是 C# 装置多 pass 排水的伪影
+                            // （pass1 只排 caster 的 640、pass2 才收 target 的 31 广播），
+                            // 且 golden 的 RM 里 `10123(prio 255)` 排在 `8103(prio 167)` 之前
+                            // 已反证记录是跨 pass 追加、不是优先级序。
+                            Some(1000),
                         );
                     }
                     // ---- 22 火墙（`MagicManager.cs:412-417` + `:1064-1098`）----

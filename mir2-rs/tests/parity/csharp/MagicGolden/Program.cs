@@ -188,6 +188,11 @@ public static class Program
                 // 场景里 obs_in(105,100) 落在穿透线上，与 target 同刻受击 ⇒ 帧序用多重集
                 // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。
                 FrameOrderScope = "multi_victim_same_tick",
+                // **时间忠实排水**：oracle 的 640 在 +1000ms、穿透受击 31 在 +600ms ⇒ 真实次序
+                // 31 在前、640 在后。默认口径"Sleep(WaitMs) 后一次排空"按固定 actor 序多 pass，
+                // 会把 caster 的 640 排在 pass1、target 的 31 广播排在 pass2（与时间序相反）；
+                // 步进排水按到期时刻处理，golden 才与生产逐 tick 交付同序。
+                StepDrainMs = 100,
                 Monsters = new[]
                 {
                     new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
