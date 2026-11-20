@@ -665,7 +665,7 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
      （`game_time 1→0 / 3→1 / 其它→2`，`DayLight⇒0`，`boDarkness⇒1`）；
    - **负对照**：删除 `day_light: true` 行后在 11:10 跑 `it09` ⇒ 红（634 `Series` 2 vs 0，与 ae 现象一致），
      还原 `sha256` 相等后复绿。⇒ 「避开依赖」不再无覆盖，「全绿」附了跑的时刻（11:10，非白天窗口）。
-### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
+### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（verified + scope=partial）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）
 是一条物品行为的完整边界；而 `RecalcAbilitys` 的**技能被动**（`HitPoint/SpeedPoint/DC`、`MagicArr` 由
@@ -708,6 +708,13 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 **17b 边界**：`RecalcAbilitys` 的 657 只按**同值**发（`GetCharStatus()` + 当前 `HitSpeed`）；技能被动与
 `WAbil` 重算不在本卡（探针记录值在无被动技能下与 oracle 相同）。
 
+**字段点亮审计（2026-11-20 复评；scope 依据）**：
+- **oracle 常量 / 结构性不可变**：210 `Series=1`（`PlayObject.Base.cs:2214` 的 `MakeMessage(SM_ADDMAGIC,0,0,0,1)`）；210 尾 `Level=0/TranPoint=0/Key=0`（`ReadBook` 的 `UserMagic` 构造固定）；100 `Series=1`（`PlayObject.Message.cs:1715/1718`）；635/636 header-only。
+- **记录而不比**：`expect.item_list` **只比件数**（`readbook::tests::run_readbook_parity` 的背包件数断言），元素字段（`make_index/index/dura/dura_max`）**记录而不比**——失败支"原件保留"只由件数 + `MagicList` 不变间接证明。**follow-up 卡**：[`openmir2-itemlist-element-compare.md`](openmir2-itemlist-element-compare.md)（与 IT-16 吃物品路径比较器**两处同改同验**）。
+- **夹具未点亮（oracle 可变、case 恰同值）**：657 的 `Series`(HitSpeed) 与 `Param/Tag`(CharStatus) 恒 0——oracle 是真实变量（`PlayObject.cs:2876` 的 `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)`；装备 MAC 加速改 HitSpeed 在 `:4419`），本夹具选无被动技能/无加速装备 ⇒ **17b 边界**；622 `Series`（重量校验和）因 `Weight=0` 恒定（该字段在 IT-16 夹具已点亮）。
+- **旁证**：成功例**每例恰 1 条 657**（3 成功例共 3 条），与 `89` 的"读书记忆路径队列空 ⇒ 净 1 条"判定一致。
+- 其他记录键：`magic_arr_before/after`（17b 未建模，仅记录）、`char_status/hit_speed`（经 657 帧 payload 逐字节间接比）、`magic_list_before`（= `ctx.known`）。
+
 **牙（每支单跑留原文）**：M1 `is_training` 恒 false ⇒ 已学例红；M2 把 `can_read_book` 的 job 实参
 换成 `magic.job`（职业门恒过）⇒ 职业例红；M3 等级 -1 ⇒ 边界例红（证 `>=`）；M4 不追加 MagicList ⇒
 成功例红；M5 `sm_addmagic_with(0)`→`(1)` ⇒ 成功例 210 尾红，而 `sm_addmagic` 的 AddItemSkill 回归**仍绿**
@@ -721,7 +728,8 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 （≤1 条在编、free ≥5G）时跑；报告偶发必须给「次数/总数」。该补记应在 `card/items-move-09` 签署完成后
 以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
 
-**状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
+**状态**：`verified` + **`scope=partial`**（2026-11-20，master `bb160e2ad`；17a 学习面全绿，17b 技能被动未建模——见 §9.16/独立卡）。
+**scope**：① `recaclc_skill_passives_17b_unmodeled`——657 的 `HitSpeed/CharStatus` 恒 0、17b 未建模；② `item_list_elements_uncompared`——`expect.item_list` **只比件数、元素字段（`make_index/index/dura/dura_max`）记录而不比**（follow-up 卡 `openmir2-itemlist-element-compare`）；③ 622 校验和本夹具仅 `weight=0`（字段本身在 IT-16 已点亮）。
 EAD
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
