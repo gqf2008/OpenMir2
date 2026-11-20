@@ -68375,6 +68375,83 @@ SendRefMsgRange=15
             );
         }
 
+        /// 召唤（17/30/41）施法接缝（卡 17）：与 [`Self::cast`] 同口径，但用 `monsters` 构造
+        /// `MonsterTable`（Rust 怪物表）。golden 的 `stub_monster_race`/`stub_monster_hp`/new_slaves
+        /// 的 name/level 由驱动传入（`race=100` WhiteSkeleton ⇒ `apply_slave_level_abilitys` 抬
+        /// `max_hp` ⇒ 半补触发）。
+        fn cast_slave(
+            &mut self,
+            magic_id: u16,
+            click: (i32, i32),
+            target_actor_id: i32,
+            monsters: Vec<mir2_data::MonsterInfo>,
+        ) {
+            let mut catalog = game_svr::ability::StdItemCatalog::new();
+            catalog.insert(
+                1,
+                mir2_data::StdItem {
+                    name: "护身符".into(),
+                    std_mode: 25,
+                    shape: 5,
+                    ..mir2_data::StdItem::default()
+                },
+            );
+            let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+            let table = game_svr::mongen::MonsterTable::new(monsters);
+            // 召唤 spawner 需 MapRegistry 能 `name_of(map_id)`（`MonsterTableSpawner::spawn`）；
+            // 写一张临时 0.map（200×200 全 0）供 `from_entries` 载入 name↔id（可行走性仍用 World 图）。
+            let base = std::env::temp_dir().join(format!("magic17-map-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(base.join("Map"));
+            let (mw, mh) = (200_i16, 200_i16);
+            let mut map_bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+            map_bytes[0..2].copy_from_slice(&mw.to_le_bytes());
+            map_bytes[2..4].copy_from_slice(&mh.to_le_bytes());
+            map_bytes.resize(
+                mir2_envir::HEADER_BYTES
+                    + usize::try_from(mw).unwrap()
+                        * usize::try_from(mh).unwrap()
+                        * mir2_envir::CELL_BYTES,
+                0,
+            );
+            let _ = std::fs::write(base.join("Map").join("0.map"), &map_bytes);
+            let registry = mir2_envir::MapRegistry::from_entries(
+                mir2_envir::MapLoader::new(base.clone(), "Map", "Envir"),
+                vec![mir2_envir::MapInfoEntry {
+                    map_name: "map".to_string(),
+                    map_file_name: "0".to_string(),
+                    desc: String::new(),
+                    server_index: 0,
+                    flag: mir2_envir::MapInfoFlag::default(),
+                }],
+            );
+            handle_spell_cmd(
+                game_svr::feature::make_long(
+                    u16::try_from(click.0).unwrap_or(0),
+                    u16::try_from(click.1).unwrap_or(0),
+                ),
+                magic_id,
+                u16::try_from(target_actor_id).unwrap_or(0),
+                0,
+                "caster",
+                911,
+                &self.online,
+                &mut self.world,
+                &mut self.saves,
+                &mut self.ground_sessions,
+                &catalog,
+                &self.magic_table,
+                &pet_cfg,
+                8,
+                Some(&registry),
+                &table,
+                &mut self.displays,
+                &self.gates,
+                self.fire_boom_rage,
+                self.snow_wind_range,
+                self.elec_blizzard_range,
+            );
+        }
+
         /// 取空 gate 通道：`(SM_* 帧体, `SendRaw` 短包/`+GD` ack)`。
         fn drain(&mut self) -> (Vec<SfFrame>, Vec<SfFrame>) {
             let mut frames = Vec::new();
@@ -68388,6 +68465,35 @@ SendRefMsgRange=15
             }
             (frames, raws)
         }
+    }
+
+    #[test]
+    #[ignore = "烟测：验证 cast_slave 接缝 + spawn 计数（race 100 WhiteSkeleton）"]
+    fn skeleton_cast_smoke() {
+        let mut rig = SpellFrameRig::new_layout(
+            200, 200, 0, 100, 100, 17, &[(17, 1)],
+            &[("target",101,100,false,912),("obs_in",105,100,false,913),("obs_out",140,100,false,914)],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17, effect: 1, effect_type: 1, ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500; e.vitals.max_hp = 500;
+        }
+        let target = rig.online.iter().find(|e| e.chr_name == "target").unwrap().actor_id;
+        let before = rig.world.slave_count(rig.caster);
+        let mon = mir2_data::MonsterInfo { name: "变异骷髅".into(), race: 100, level: 1, hp: 17, ..mir2_data::MonsterInfo::default() };
+        rig.cast_slave(17, (101, 100), target, vec![mon]);
+        let (frames, _) = rig.drain();
+        let after = rig.world.slave_count(rig.caster);
+        let regen = rig.world.slave_cast_regen_calls.last().copied().unwrap_or(999);
+        let sid = rig.world.entities.get(rig.caster).and_then(|c| c.slave_list.last().copied());
+        let (shp, smax, slevel) = sid.and_then(|id| rig.world.entities.get(id)).map_or((0,0,0), |e| (e.hp, e.max_hp, e.level));
+        eprintln!("SMOKE before={before} after={after} regen={regen} frames={} slave_hp={shp}/{smax} level={slevel}", frames.len());
+        assert_eq!(regen, 1, "MonsterTableSpawner.spawn 应被调用 1 次");
+        assert_eq!(after, before + 1, "应新增 1 个奴隶");
     }
 
     // ======================================================================
