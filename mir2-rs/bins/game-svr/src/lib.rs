@@ -4716,6 +4716,7 @@ fn handle_ground_cmd(
         abil_exp: sg.equip.abil.exp,
         sys_msg: sg.sys_msg.clone(),
         hunger_status: sg.hunger_status,
+        hit_speed: sg.hit_speed,
     };
     let bodies = game_svr::pickwire::outcome_frames(
         &immediate,
@@ -10865,6 +10866,9 @@ fn handle_eat_cmd(
         abil_exp: sg.equip.abil.exp,
         sys_msg: None,
         hunger_status: sg.hunger_status,
+        // `SM_CHARSTATUSCHANGED(657)` 的 `Series` 取**收件人自己**的 `HitSpeed`；本队列是
+        // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
+        hit_speed: sg.hit_speed,
     };
     for n in &out.notices {
         match game_svr::pickwire::notice_frame(n, &wire) {
@@ -10872,14 +10876,34 @@ fn handle_eat_cmd(
                 let _ = tx.send(SimToGate::SendFrame { socket, body });
                 sent += 1;
             }
-            // `RM_CHARSTATUSCHANGED(10139)`/`RM_MYSTATUS(8102)`（StdMode 1 食物）需要
-            // `HitSpeed`/`GetMyStatus()` 的运行期值，本宿主未建模 ⇒ 不编造（登记，不静默）。
+            // 目前 `use_item` 产生的通知已全部有 `SM_*` 映射（含 `RM_CHARSTATUSCHANGED`）；
+            // 该支保留为**不静默**的兜底：任何新增 ident 缺映射都记 WRN 而不是悄悄丢。
             None => glog!(
                 "WRN",
-                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记，未编造）",
                 n.ident
             ),
         }
+    }
+    // **卡 `openmir2-charstatuschanged-657-wired`（观察者副本）**：oracle 的
+    // `SendRefMsg(RM_CHARSTATUSCHANGED)` 对**可见玩家**也入队一份 657；上面的
+    // `notice_frame` 只投了**本会话**那一份 ⇒ 这里补观察者面。
+    // 触发条件 = 本批确实产生过 `RM_CHARSTATUSCHANGED`（一次 `SendRefMsg` = 一次广播）；
+    // 广播函数显式跳过自己（`target_id == actor_id`）⇒ 与自通知**收件人不相交**，不会重复。
+    if let Some(status) = out
+        .notices
+        .iter()
+        .find(|n| n.ident == game_svr::useitem::RM_CHARSTATUSCHANGED)
+        .map(|n| n.n_param1)
+    {
+        broadcast_charstatuschanged_except_self(
+            world,
+            online,
+            gates,
+            actor_id,
+            status,
+            chat::send_ref_msg_range(),
+        );
     }
     // IT-08 升级支：oracle `RM_LEVELUP` 处理器经泵出 `SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`，
     // 线上序在 44（`SM_WINEXP`）之后 ⇒ 放在 notice 排水之后；复用 `send_levelup_frames`（读 sg.state.wabil/gold/job/sub）。
@@ -90558,6 +90582,219 @@ GMEXECUTE f
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         (world, online, gates, rx0, actor)
+    }
+
+    /// **卡 `openmir2-charstatuschanged-gap`**：**自通知与广播互不重复**——同一对象不会收两条 657。
+    ///
+    /// 依据：① 自通知走 `pickwire::notice_frame`，由泵只投**本会话** socket；
+    /// ② 广播 `broadcast_charstatuschanged_except_self` 在循环里显式
+    /// `if target_id == actor_id { continue; }`。两者收件人集合按构造不相交。
+    ///
+    /// 三种配置各用**独立 fixture**（避免 500ms 缓存把第二轮的 ±12 过滤掉）：
+    /// 只自通知 / 只广播 / 两者都开。
+    #[test]
+    fn charstatuschanged_self_and_broadcast_do_not_duplicate() {
+        const IDENT: u16 = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let notice = game_svr::useitem::QueuedNotice {
+            ident: game_svr::useitem::RM_CHARSTATUSCHANGED,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        };
+        let wire_for = |actor: i32| game_svr::pickwire::WireSession {
+            actor_id: actor,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 0,
+            sys_msg: None,
+            hunger_status: 0,
+            hit_speed: 7,
+        };
+
+        // ① 只自通知
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let body =
+            game_svr::pickwire::notice_frame(&notice, &wire_for(actor)).expect("10139 已映射");
+        gates[&0]
+            .send(SimToGate::SendFrame { socket: 901, body })
+            .unwrap();
+        let per = take7c(&mut rx);
+        assert_eq!(per.get(&(901, IDENT)), Some(&1), "只自通知：自己恰好 1 条");
+        for s in [902, 903, 904, 905] {
+            assert_eq!(per.get(&(s, IDENT)), None, "只自通知：观察者 {s} 零帧");
+        }
+        drop((world, online, gates));
+
+        // ② 只广播
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 0, 12);
+        let per = take7c(&mut rx);
+        assert_eq!(
+            per.get(&(901, IDENT)),
+            None,
+            "只广播：自己零帧（循环里 skip）"
+        );
+        assert_eq!(per.get(&(902, IDENT)), Some(&1), "只广播：+5 收");
+        assert_eq!(
+            per.get(&(904, IDENT)),
+            Some(&1),
+            "只广播：+12 收（首扫闭区间）"
+        );
+        assert_eq!(per.get(&(905, IDENT)), None, "只广播：+13 在范围外");
+        drop((world, online, gates));
+
+        // ③ 两者都开 ⇒ 每个 socket 恰好 1 条（不许 2）
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let body =
+            game_svr::pickwire::notice_frame(&notice, &wire_for(actor)).expect("10139 已映射");
+        gates[&0]
+            .send(SimToGate::SendFrame { socket: 901, body })
+            .unwrap();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 0, 12);
+        let per = take7c(&mut rx);
+        for s in [901, 902, 903, 904] {
+            assert_eq!(
+                per.get(&(s, IDENT)),
+                Some(&1),
+                "两者都开：socket {s} 恰好 1 条"
+            );
+        }
+        assert_eq!(per.get(&(905, IDENT)), None, "两者都开：+13 零帧");
+    }
+
+    /// **卡 `openmir2-charstatuschanged-657-wired`（吃路径，新调用点单列一组）**：
+    /// StdMode 1 食物跨档（`HungerStatus` 0 → 1200）⇒ oracle `RecalcAbilitys` 的
+    /// `SendRefMsg(RM_CHARSTATUSCHANGED)`。宿主 `use_item` 推 `RM_CHARSTATUSCHANGED` 通知，
+    /// 泵发**自己**一份；本卡在 `handle_eat_cmd` 补**观察者**那份。
+    /// 断言：自己 1、±12 内观察者各 1、+13 零帧——**没有任何 socket 收到 2 条**。
+    #[test]
+    fn eat_path_charstatuschanged_hits_self_and_observers_exactly_once() {
+        const IDENT: u16 = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            3000,
+            mir2_data::StdItem {
+                name: "food_recalc".into(),
+                std_mode: 1,
+                shape: 0,
+                dura_max: 12000,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        // 观察者布局与 `refmsg_657_fixture` 相同：+5 / +11 / +12 / +13。
+        for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(actor));
+        sessions.get_mut("hero").unwrap().state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 1,
+            index: 3000,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let gmcfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &gmcfg,
+            pwd_sessions: &pwd,
+            host: ScriptGmHost::default(),
+        };
+        let lottery = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg::default().init_state(),
+        );
+        handle_eat_cmd(
+            1,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            90,
+            &game_svr::strings::StringConf::defaults(),
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            Some(&env),
+            &lottery,
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
+        );
+        let per = take7c(&mut rx0);
+        for s in [901, 902, 903, 904] {
+            assert_eq!(
+                per.get(&(s, IDENT)),
+                Some(&1),
+                "吃路径 657：socket {s} 恰好 1 条（自己=自通知，其余=观察者广播）"
+            );
+        }
+        assert_eq!(per.get(&(905, IDENT)), None, "吃路径 657：+13 零帧");
     }
 
     /// **T-287 残余 #2**（`push_charstatuschanged`，657）：每次调用 = 一次 `StatusChanged()`
