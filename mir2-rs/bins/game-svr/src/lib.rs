@@ -13034,7 +13034,7 @@ fn finish_spell_tail_with(
             target_actor_id,
         );
         match buf.as_mut() {
-            Some(buf) => buf.push_broadcast(
+            Some(buf) => buf.push_broadcast_cached(
                 world,
                 online,
                 actor_id,
@@ -13744,7 +13744,7 @@ fn handle_spell_cmd_with_magic(
                         for ev in world.take_buff_applies() {
                             let body =
                                 smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0);
-                            buf.push_broadcast(
+                            buf.push_broadcast_cached(
                                 world,
                                 online,
                                 ev.actor_id,
@@ -13912,7 +13912,7 @@ fn handle_spell_cmd_with_magic(
                                     ev.char_status,
                                     0,
                                 );
-                                buf.push_broadcast(
+                                buf.push_broadcast_cached(
                                     world,
                                     online,
                                     ev.actor_id,
@@ -15243,7 +15243,7 @@ fn handle_spell_cmd_with_magic(
                                 // `PlayObject.Base.cs:1525-1529` 吞掉 `InvalidCastException`
                                 // ⇒ `DoSpell` 返回 false ⇒ 639，**无共享尾**。
                                 let fail = smframe_ext::sm_magicfire_fail(actor_id);
-                                buf.push_broadcast(
+                                buf.push_broadcast_cached(
                                     world,
                                     online,
                                     actor_id,
@@ -15724,7 +15724,7 @@ fn handle_spell_cmd_with_magic(
                             magic.effect,
                             out.fire_target,
                         );
-                        buf.push_broadcast(
+                        buf.push_broadcast_cached(
                             world,
                             online,
                             actor_id,
@@ -15735,7 +15735,7 @@ fn handle_spell_cmd_with_magic(
                         // `:1010-1013` 的 `RM_10205` ⇒ `SM_716`（优先级 221，含自己）。
                         for (x, y) in &out.icons_716 {
                             let body = smframe_ext::sm_716(actor_id, *x, *y, 4);
-                            buf.push_broadcast(
+                            buf.push_broadcast_cached(
                                 world,
                                 online,
                                 actor_id,
@@ -15831,7 +15831,7 @@ fn handle_spell_cmd_with_magic(
                         (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8;
                     buf.push_actor(online, actor_id, P_HEALTH, body.clone());
                     if show_hp {
-                        buf.push_broadcast(world, online, actor_id, true, P_HEALTH, &body);
+                        buf.push_broadcast_cached(world, online, actor_id, true, P_HEALTH, &body);
                     }
                 }
                 match req.magic_id {
@@ -15948,7 +15948,7 @@ fn handle_spell_cmd_with_magic(
                             // `boSpellFail` 保持 true ⇒ `:644-647 return false` ⇒ 恰一条 639；
                             // 无 52/100/642/638/640（642 只在 `UseAmulet` 成功时产生）。
                             let fail = smframe_ext::sm_magicfire_fail(actor_id);
-                            buf.push_broadcast(
+                            buf.push_broadcast_cached(
                                 world,
                                 online,
                                 actor_id,
@@ -15969,7 +15969,7 @@ fn handle_spell_cmd_with_magic(
                                 // 防御臂（玩家入口不可达）：`(IPlayerActor)` 抛 `InvalidCastException`
                                 // 被包装层吞掉 ⇒ 639、无尾、无 52/100（护身符已消耗、抽数已发生）。
                                 let fail = smframe_ext::sm_magicfire_fail(actor_id);
-                                buf.push_broadcast(
+                                buf.push_broadcast_cached(
                                     world,
                                     online,
                                     actor_id,
@@ -96421,6 +96421,647 @@ fn ",
         assert_eq!(per.get(&(902, nc)), None, "隐藏：+5 零帧");
         assert_eq!(per.get(&(903, nc)), None, "隐藏：Δ11 零帧");
         assert_eq!(per.get(&(904, nc)), None, "隐藏：Δ12 零帧");
+    }
+
+    // ---- 批 7b：`push_broadcast` 迁移（handle_spell / finish tail） ----
+    //
+    // **关键事实（写进卡面）**：每次施法在 `DoSpell` 的 `:159` 先发 `RM_SPELL(17)`（走
+    // `broadcast_ref_msg`，已接缓存）⇒ 7b 的 53/638/639/657/716 全部是**同一 sender 的后续
+    // SendRefMsg**，一律**命中缓存**（`|Δ|<11`）：12 格边界只收 17，不收这些帧。
+
+    /// 施法夹具：a5 rig + 观察者 +5/+11/+12/+13（相对施法者 (10,10)，socket 902–905）。
+    #[allow(clippy::type_complexity)]
+    fn spell7b_fixture(
+        magic_id: u16,
+        target_x: i32,
+        target_y: i32,
+    ) -> (
+        mir2_world_bevy::World,
+        i32,
+        i32,
+        OnlineRegistry,
+        std::collections::HashMap<String, SavedHuman>,
+        magics::MagicTable,
+        downlink::DisplayTable,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let (mut world, caster, target, mut online, saves, magic_table, displays, gates, rx0) =
+            a5_spell_rig(magic_id, target_x, target_y);
+        let _ = add_657_observers(&mut world, &mut online);
+        (
+            world,
+            caster,
+            target,
+            online,
+            saves,
+            magic_table,
+            displays,
+            gates,
+            rx0,
+        )
+    }
+
+    /// 从通道取空帧，按 `(socket, ident)` 计数。
+    fn spell7b_counts(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> HashMap<(i32, u16), usize> {
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            frames.push((socket, body));
+        }
+        count_by_socket_ident(&frames)
+    }
+
+    /// **T-287 残余 #1 / 7b（9/10/22/36 共享尾）**：`RM_SPELL(17)` 先刷新缓存 ⇒ 53 与 638
+    /// 都命中（`|Δ|<11`）：12 格边界只收 17，+5 收 17/53/638。
+    /// 覆盖站点：53（P3-B5 延迟出帧）与 638（`finish_spell_tail_with`）。
+    #[test]
+    fn spell_shared_tail_53_and_638_hit_cache_after_spell_frame() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(22, 12, 10);
+        // rig 的 MagicInfo 缺省 Spell=0 ⇒ `GetSpellPoint`=0 ⇒ 不扣 MP、不发 53；
+        // 这里显式给 22 一个消耗，才走到 MP 包装层的 `HealthSpellChanged`（53）。
+        let _ = magic_table;
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 22,
+            effect: 3,
+            effect_type: 4,
+            spell: 30,
+            train_lv: 3,
+            ..Default::default()
+        }]);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.show_hp = true;
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            22,
+            u16::try_from(target).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let spell = mir2_protocol::messages::SM_SPELL;
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let fire = mir2_protocol::messages::SM_MAGICFIRE;
+        assert_eq!(per.get(&(902, spell)), Some(&1), "+5：17 收");
+        assert_eq!(
+            per.get(&(903, spell)),
+            Some(&1),
+            "|Δ|=11：17 收（本次施法刷新）"
+        );
+        assert_eq!(per.get(&(902, nc)), Some(&1), "+5：53 收（命中缓存）");
+        assert_eq!(per.get(&(902, fire)), Some(&1), "+5：638 收");
+        assert_eq!(per.get(&(903, nc)), None, "|Δ|=11：53 被缓存挡");
+        assert_eq!(per.get(&(903, fire)), None, "|Δ|=11：638 被缓存挡");
+        assert_eq!(per.get(&(905, spell)), None, "+13：零帧");
+    }
+
+    /// **7b 群攻（42）**：638 一次 + 716 逐目标 N 次，全部命中（17 已刷新）。
+    /// 覆盖站点：638（42 支）与 716（icons 循环）。
+    #[test]
+    fn spell_group_lightening_638_and_716_hit_cache() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(42, 12, 10);
+        // 两个偏离点击点的**怪**：群雷用 `GetMapBaseObjects` 扫**地图格子**
+        // ⇒ 必须真正落图（`open_session` + `enter_map`），否则 icons=0；
+        // 默认 HAM_PEACE 下怪物是 proper 目标（玩家不是）。
+        for (i, (x, y)) in [(11, 11), (13, 11)].into_iter().enumerate() {
+            let name = format!("x{i}");
+            world.open_session(&name);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.clone(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+            let _ = world.enter_map(&name, e, 0);
+        }
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            42,
+            u16::try_from(target).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let fire = mir2_protocol::messages::SM_MAGICFIRE;
+        let icon = 716u16;
+        assert_eq!(per.get(&(902, fire)), Some(&1), "+5：638 收");
+        assert_eq!(per.get(&(903, fire)), None, "|Δ|=11：638 被缓存挡");
+        let icons = per.get(&(902, icon)).copied().unwrap_or(0);
+        assert!(icons >= 1, "+5：716 至少一条（icons={icons}）");
+        assert_eq!(per.get(&(903, icon)), None, "|Δ|=11：716 被缓存挡");
+        assert_eq!(per.get(&(905, fire)), None, "+13：零帧");
+    }
+
+    /// **7b 护盾（31）的 657**：两次施法同窗 ⇒ 每次 657 都是命中缓存；
+    /// 覆盖站点：657（护盾 buff 支）。
+    #[test]
+    fn spell_shield_657_hits_cache_on_each_cast() {
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(31, 10, 10);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 300;
+        sg.state.wabil.max_mp = 300;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        for _ in 0..2 {
+            handle_spell_cmd(
+                game_svr::feature::make_long(10, 10),
+                31,
+                0,
+                0,
+                "caster",
+                911,
+                &online,
+                &mut world,
+                &mut saves,
+                &mut ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                &mut displays,
+                &gates,
+                1,
+                1,
+                2,
+            );
+            let per = spell7b_counts(&mut rx0);
+            let status = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+            if let Some(n) = per.get(&(902, status)) {
+                assert!(*n >= 1, "+5：657 收（每轮至少一条）");
+            }
+            assert_eq!(per.get(&(903, status)), None, "|Δ|=11：657 被缓存挡");
+            assert_eq!(per.get(&(904, status)), None, "|Δ|=12：657 被缓存挡");
+        }
+    }
+
+    /// **7b 14/15 的 657（buff 支）**：带护身符施放 15 ⇒ target 获 buff ⇒ 657 走缓存。
+    /// 覆盖站点：657（14/15 buff 支）。
+    #[test]
+    fn spell_defence_area_657_hits_cache() {
+        let (
+            mut world,
+            caster,
+            target,
+            mut online,
+            mut saves,
+            _rig_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(15, 12, 12);
+        // 657（14/15 buff 支）的 **sender 是 buff 目标**（`ev.actor_id`）。要检出"命中"，
+        // 必须先让**目标**自己发过一条 `SendRefMsg`（这里让目标施放 31 护盾 ⇒ 目标侧
+        // `RM_SPELL(17)` 刷新目标自己的缓存），再让施法者施放 15；此时目标发出的 657
+        // 才走"命中"（`|Δ|<11`），边界只收目标自己的 17。
+        let magic_table = magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 15,
+                effect: 3,
+                effect_type: 4,
+                spell: 10,
+                train_lv: 3,
+                ..Default::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 31,
+                effect: 3,
+                effect_type: 4,
+                spell: 10,
+                train_lv: 3,
+                ..Default::default()
+            },
+        ]);
+        // 目标侧 |Δ|=11/12/+13 的边界观察者（相对目标 (12,12)）。
+        for (i, (x, y)) in [(23, 12), (24, 12), (25, 12)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("b{i}"), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("ub{i}"),
+                    chr_name: format!("b{i}"),
+                    session_id: 30 + i as i32,
+                    gate_idx: 0,
+                    socket: 933 + i as i32,
+                    actor_id: id,
+                },
+            );
+        }
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), a5_session_with_amulet(caster, 600));
+        ground_sessions.get_mut("caster").unwrap().state.wabil.mp = 100;
+        let mut tgt_sg = spell_session_ground(target);
+        tgt_sg.state.wabil.mp = 100;
+        tgt_sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("target".into(), tgt_sg);
+        let catalog = a5_amulet_catalog();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let status = mir2_protocol::messages::SM_CHARSTATUSCHANGED;
+        // 目标也要有"会 31"的存档记录（守卫 `NoMagic` 否则拒绝施放）。
+        let mut trec = stage6_record();
+        trec.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 31,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "target".into(),
+            SavedHuman {
+                account: "ut".into(),
+                record: trec,
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        // 预热：目标自己施放 31 ⇒ 目标侧 17 刷新目标缓存。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            31,
+            0,
+            0,
+            "target",
+            912,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let _ = spell7b_counts(&mut rx0); // 预热帧丢弃（含目标 17 与可能的目标 657）
+                                          // 施法者施放 15（带护身符）⇒ buff 目标收到的 657 由**目标**发出 ⇒ 命中缓存。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 12),
+            15,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        assert_eq!(per.get(&(933, status)), None, "目标侧 |Δ|=11：657 被缓存挡");
+        assert_eq!(per.get(&(934, status)), None, "目标侧 |Δ|=12：657 被缓存挡");
+        assert_eq!(per.get(&(935, status)), None, "目标侧 +13：零帧");
+    }
+
+    /// **7b 无极真气（36）护身符失败支的 639**：无护身符 ⇒ amulet_ok=false ⇒ 恰一条 639
+    /// （`boSpellFail` 保持 true）；17 已刷新 ⇒ 639 命中缓存。覆盖站点：639（amulet 失败支）。
+    #[test]
+    fn spell36_amulet_fail_639_hits_cache() {
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(36, 10, 10);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 10),
+            36,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let fail = mir2_protocol::messages::SM_MAGICFIRE_FAIL;
+        assert_eq!(per.get(&(902, fail)), Some(&1), "+5：639 收");
+        assert_eq!(per.get(&(903, fail)), None, "|Δ|=11：639 被缓存挡");
+        assert_eq!(per.get(&(904, fail)), None, "|Δ|=12：639 被缓存挡");
+    }
+
+    /// **调用序 ≠ 出队优先级序**：先调 657（优先级 155）再调 638（136）；flush 后线上
+    /// **638 在前**，但缓存判定按**调用序**（657 刷新、638 命中）⇒ Δ11/Δ12 收 657、不收 638。
+    #[test]
+    fn spell_broadcast_cache_decides_by_call_order_not_queue_priority() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut buf = SpellFrameBuf::new();
+        let body_657 = game_svr::smframe::command_header(
+            actor,
+            mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            0,
+            0,
+            0,
+        );
+        let body_638 = game_svr::smframe::command_header(
+            actor,
+            mir2_protocol::messages::SM_MAGICFIRE,
+            0,
+            0,
+            0,
+        );
+        // 先 657（出队序在后），后 638（出队序在前）。
+        buf.push_broadcast_cached(&world, &online, actor, true, 155, &body_657);
+        buf.push_broadcast_cached(&world, &online, actor, true, 136, &body_638);
+        buf.flush(&online, &gates);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            frames.push((socket, body));
+        }
+        // 线上序（socket 902）：638(136) 在 657(155) 之前。
+        let order: Vec<u16> = frames
+            .iter()
+            .filter(|(s, _)| *s == 902)
+            .map(|(_, b)| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED
+            ],
+            "出队顺序按优先级（638 前、657 后）"
+        );
+        let per = count_by_socket_ident(&frames);
+        assert_eq!(
+            per.get(&(903, mir2_protocol::messages::SM_CHARSTATUSCHANGED)),
+            Some(&1),
+            "|Δ|=11：657（调用在前）刷新 ⇒ 收"
+        );
+        assert_eq!(
+            per.get(&(903, mir2_protocol::messages::SM_MAGICFIRE)),
+            None,
+            "|Δ|=11：638（调用在后）命中 ⇒ 不收（缓存判定按调用序，不随队列顺序漂）"
+        );
+    }
+
+    /// **7b 边界判据（opc-07 要求专钉）**：一次施法里 `RM_SPELL(17)` 是**唯一刷新**，
+    /// 12 格边界（|Δ|=11/12）**只收 17**、不收任何 7b 帧（此处取 53/638）；+13 零帧。
+    #[test]
+    fn spell_boundary_only_gets_spell_frame_17() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(22, 12, 10);
+        let _ = magic_table;
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 22,
+            effect: 3,
+            effect_type: 4,
+            spell: 30,
+            train_lv: 3,
+            ..Default::default()
+        }]);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.show_hp = true;
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            22,
+            u16::try_from(target).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let spell = mir2_protocol::messages::SM_SPELL;
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let fire = mir2_protocol::messages::SM_MAGICFIRE;
+        assert_eq!(per.get(&(903, spell)), Some(&1), "|Δ|=11：只收 17");
+        assert_eq!(
+            per.get(&(904, spell)),
+            Some(&1),
+            "|Δ|=12：只收 17（闭区间）"
+        );
+        assert_eq!(per.get(&(903, nc)), None, "|Δ|=11：不收 53");
+        assert_eq!(per.get(&(904, nc)), None, "|Δ|=12：不收 53");
+        assert_eq!(per.get(&(903, fire)), None, "|Δ|=11：不收 638");
+        assert_eq!(per.get(&(904, fire)), None, "|Δ|=12：不收 638");
+        assert_eq!(per.get(&(905, spell)), None, "+13：17 零帧");
+        assert_eq!(per.get(&(905, nc)), None, "+13：53 零帧");
+    }
+
+    /// **7b 32 圣言术 `invalid_cast` 支的 639**（分支归属：`SKILL_KILLUNDEAD` arm）：
+    /// 目标为**怪物**（非 PLAY）⇒ `cast_turn_undead_spell` 的 `invalid_cast=true` ⇒ 恰一条 639；
+    /// 17 已刷新 ⇒ 639 命中缓存（边界只收 17）。覆盖站点：639（32 invalid_cast）。
+    #[test]
+    fn spell32_turn_undead_invalid_cast_639_hits_cache() {
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(32, 12, 10);
+        // `CretInNearXy` 命中要求目标**已落图**（`add_entity` 的实体不在格表里）⇒ 新造一个
+        // 落图玩家作为圣言术目标；`invalid_cast` 只在目标为 PLAY 时成立，而默认 HAM_PEACE
+        // 打不到玩家 ⇒ 把施法者切到 HAM_ALL 让其 proper。
+        world.entities.flags_mut(caster).unwrap().attack_mode =
+            mir2_world_bevy::combat::ATTACK_MODE_HAM_ALL;
+        world.open_session("t32");
+        let mut tgt_e = mir2_world_bevy::EntitySpawn::new(0, "t32", 12, 10);
+        tgt_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let t32 = world.enter_map("t32", tgt_e, 0).expect("目标进图");
+        // `cast_turn_undead_spell` 在 `invalid_cast` 之前先判 `SuperMan || LifeAttrib != LA_UNDEAD`
+        // ⇒ 目标必须是"不死属性"的玩家。
+        world.entities.get_mut(t32).unwrap().progression.life_attrib =
+            mir2_world_bevy::magic_effect::LA_UNDEAD;
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            32,
+            u16::try_from(t32).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let fail = mir2_protocol::messages::SM_MAGICFIRE_FAIL;
+        assert_eq!(per.get(&(902, fail)), Some(&1), "+5：639 收");
+        assert_eq!(per.get(&(903, fail)), None, "|Δ|=11：639 被缓存挡");
+        assert_eq!(per.get(&(904, fail)), None, "|Δ|=12：639 被缓存挡");
     }
 }
 

@@ -46,6 +46,20 @@
 > 收件人走 `broadcast_ref_msg_opt`，已在 T-287 接入缓存；此处仅列作对照，不计入"残余 19 处"。
 > （残余计数 = #1–#18 共 18 行，其中 #9 含两处站点 ⇒ 19 处。）
 
+| # | 站点（file:符号） | 帧族 | 现状 | 修法 |
+| --- | --- | --- | --- | --- |
+| 19 | `lib.rs::broadcast_healthspellchanged`（**新登记，7b 期间发现**） | 53 族 | **手写 `online` 循环**（`ObMode/FixedHideMode` 早退 + 同图 ±range + `!Ghost`），既不调 `chat::hear_targets` 也不走 `ref_msg_cache` ⇒ 每次全额重算；oracle 的 `HealthSpellChanged → SendRefMsg(53)` 应过缓存。**不在原 17 点清单的原因**：原清单口径是「按 `chat::hear_targets` 直算收件人」，它是同形的手写循环未被清点。 | 与 7 系列同法接 `ref_msg_cache::targets`；注意其既有边界用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out` 现钉「dx=12 收」的**未缓存**口径，接入时须按 oracle 改期望并留痕；牙：同窗两次 `HealthSpellChanged` 的 12 格边界只收首帧、隐藏 sender ⇒ 只自己（既有 `broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy` 在接入时需按 oracle 重判）。 |
+| 20 | `lib.rs::broadcast_feature_changed` / `broadcast_feature_changed_except`（**新登记，残余普查补漏**） | `RM_FEATURECHANGED`→`SM_FEATURECHANGED(41)` | **手写 `online` 循环**（同图 ±range、`skip` 过滤），不走 `ref_msg_cache`；oracle `BaseObject.FeatureChanged()` 是 `SendRefMsg(RM_FEATURECHANGED)` ⇒ 应过缓存。**不在原 17 点清单的原因**：清单口径只收了 `chat::hear_targets` 直算点。 | 同 7 系列接 `ref_msg_cache::targets`（`skip` 语义保留为循环内过滤）；牙：同窗两次 `feature_changed` 的 12 格边界只收首帧。 |
+
+### 残余普查方法（可重跑；2026-11-20 定）
+1. 全枚举 `bins/game-svr/src/` 的收件人循环：`for … in online` / `for … in online.iter()` /
+   `world.entities.iter_ref()`（及 `sessions` 上的同类循环）；
+2. 逐个取**所在函数**，判断它是否「把某一帧按**空间收件人**（同图/±range/`!Ghost`）广播出去」；
+3. 回到 oracle 判机制：`SendRefMsg` ⇒ **旁路，应过 500ms 缓存**；`SendMsg` / `SendBroadCastMsg` /
+   自队列 / 状态写 ⇒ **不属**（写明依据）；
+4. 与已有清单（17 点 + #19/#20）比对：未登记 ⇒ 按上表格式补一行（符号锚 / 现状 / 修法 / 牙）。
+5. **不把「手写循环」一律当旁路**——判据是 oracle 机制，不是 Rust 写法。
+
 ## 3. 修法（统一）
 
 1. 每处把 `chat::hear_targets(world, id, range)` 换成 `crate::ref_msg_cache::targets(world, id, range)`；
@@ -190,3 +204,62 @@
 - 用例（跨帧族同窗口）：`mag_struck_player_53_then_31_share_cache_window`（边界只收 53）、
   `mag_struck_monster_53_31_656_share_cache_window`（边界只收 53，31/656 都被挡）、
   `mag_struck_hidden_player_only_self`（隐藏 ⇒ 只自己）。
+
+#### 7b `finish_spell_tail_with` + `handle_spell_cmd_with_magic`（9 点）
+- **关键事实**：每次施法在 `DoSpell` 的 `:159` 先发 `RM_SPELL(17)`（`broadcast_ref_msg`，已接缓存）
+  ⇒ 7b 的 53/638/639/657/716 都是**同一 sender 的后续 SendRefMsg**，一律**命中缓存**
+  （`|Δ|<11`）：12 格边界只收 17，不收这些帧。**无共用判定点**（每帧独立 SendRefMsg）。
+- 逐点表：
+
+| 站点（符号） | 帧 | oracle 锚 | 同次施法次序 | 期望 |
+|---|---|---|---|---|
+| `finish_spell_tail_with` 的 `tail.magic_fire` 支 | 638 | `MagicManager.cs` `:648-658`（`boSpellFire ⇒ SendRefMsg(RM_MAGICFIRE)`） | 17 之后 | 命中 |
+| `handle_spell_cmd_with_magic` 护盾（31）buff 支 | 657 | `BaseObject.StatusChanged()` | 17 之后 | 命中 |
+| 14/15 buff 支（`take_buff_applies` 循环） | 657 | `CharacterObject.cs:96-114` → `RecalcAbilitys/StatusChanged` | 17 之后 | 命中 |
+| 32 圣言术 `invalid_cast` 支 | 639 | `PlayObject.Base.cs` `:1525-1529`（吞 `InvalidCastException`） | 17 之后 | 命中 |
+| 42 群雷 638 | 638 | `MagicManager.cs` 的 `MagGroupLightening`（循环前无条件 638） | 17 之后 | 命中 |
+| 42 群雷 716（icons 逐目标） | 716 | `MagicManager.cs` 的 `MagGroupLightening`（逐目标循环里的 `RM_10205`） | 638 之后、逐目标 | 命中（多次） |
+| 9/10/22/36 延迟 53 | 53 | `BaseObject.cs:700-709` `HealthSpellChanged` | 17 之后 | 命中 |
+| 36 无极真气 amulet 失败支 | 639 | `PlayObject.Base.cs:644-647`（`boSpellFail` 保持 true） | 17 之后 | 命中 |
+| 36 无极真气 `invalid_cast` 防御臂 | 639 | `PlayObject.Base.cs:1525-1529`（同上） | — | **当前入口不可达**（登记；行为牙不可用） |
+- **判据形态（写死）**：**17 刷新、7b 全命中**——12 格边界只收 `SM_SPELL(17)`；专钉用例
+  `spell_boundary_only_gets_spell_frame_17`（|Δ|=11/12 收 17、不收 53/638；+13 零帧）。
+- **缺口登记（36 `invalid_cast` 防御臂）**：`handle_spell_cmd_with_magic` 的 36 无极真气
+  `out.invalid_cast` 支（`PlayObject.Base.cs:1525-1529` 语义镜像）**当前入口不可达**——
+  `cast_uenhancer_spell` 的 `invalid_cast = 目标 race != Play`，而上游 `is_proper_friend`
+  要求 PLAY 目标 ⇒ 该臂只有在「非玩家目标也满足 proper-friend」的语义出现时才可达（当前
+  无此模型）。**m36 记为「该站点无可用行为牙」，既不算通过也不算失败**；其余 8 点牙必须行为化。
+- **分支归属（逐点核过，2026-11-20）**：
+  - 13029 638（`finish_spell_tail_with` 的 `tail.magic_fire` 支）← 具体入口如 **22 火墙** arm
+    （`match req.magic_id` 的 `22 =>` 调 `finish_spell_tail`）；
+  - 13739 657 ← **31 护盾**（`SKILL_SHIELD` arm）；
+  - 13907 657 ← **14/15**（`SKILL_HANGMAJINBUB | SKILL_DEJIWONHO` arm）；
+  - 15238 639 ← **32 圣言术**（`SKILL_KILLUNDEAD` arm 的 `out.invalid_cast`）；
+  - 15719 638 / 15730 716 ← **42 群体雷电**（block `matches!(6|42|48|50)` 的 `_` arm）；
+  - 15826 53 ← **9/10/22/36 block**（`matches!(9|10|22|36)`，`deferred_health` 出帧，在 match 之前）；
+  - 15943/15964 639 ← **36 无极真气**（同 block 的 `36`/`_` 相关臂；15964 为不可达防御臂）。
+  对应用例：22→`spell_shared_tail_53_and_638...`、42→`spell_group_lightening...`、
+  31→`spell_shield_657...`、14/15→`spell_defence_area_657...`、32→`spell32_turn_undead_invalid_cast_639...`、
+  36→`spell36_amulet_fail_639...`；另有 `spell_boundary_only_gets_spell_frame_17`。
+- 用例：`spell_shared_tail_53_and_638_hit_cache_after_spell_frame`（53/638）、
+  `spell_group_lightening_638_and_716_hit_cache`（638+716 多次）、
+  `spell_shield_657_hits_cache_on_each_cast`（657）、`spell_defence_area_657_hits_cache`（657）、
+  `spell36_amulet_fail_639_hits_cache`（639）、
+  `spell_broadcast_cache_decides_by_call_order_not_queue_priority`（**调用序 ≠ 出队优先级序**：
+  先调 657（155）后调 638（136），线上 638 在前，但缓存按调用序 ⇒ 657 收、638 挡）。
+
+### 残余普查补漏表（2026-11-20，7b 期间；只登记不改）
+> 口径：**凡是自己算空间收件人并广播的循环都算旁路**，不管调不调 `chat::hear_targets`。
+
+| 符号 | 是否空间广播旁路 | 已登记 | 判据/处置 |
+| --- | --- | --- | --- |
+| `lib.rs::broadcast_healthspellchanged` | 是（53，手写 `online` 循环） | **#19（本批补登）** | oracle `HealthSpellChanged→SendRefMsg` |
+| `lib.rs::broadcast_feature_changed(_except)` | 是（41，手写循环 + `skip`） | **#20（本批补登）** | oracle `BaseObject.FeatureChanged()` = `SendRefMsg` |
+| `lib.rs::apply_pending_gm_mountride` | 空间循环，但帧 `SM_MOUNTRIDE(1118)` 是 **Rust 自造（D-15，oracle 骑马死）** | 不登记 | 非 oracle `SendRefMsg`，缓存语义不适用 |
+| `castle.rs::fan_out_sysmessage_to_all` / `lib.rs::fan_out_world_sysmessage` | 否（SysMsg 广播，`SendBroadCastMsg` 语义） | 不登记 | 非 `SendRefMsg` |
+| `lib.rs::broadcast_day_changing` | 否 | 不登记 | oracle 是 `SendMsg(RM_DAYCHANGING)` 自队列 |
+| `lib.rs::drain_line_notice` | 否 | 不登记 | 行公告（`SendMsg` 系） |
+| `apply_pending_gm_castle_commands`（StartContest） | 否 | 不登记 | 状态写循环（FightZoneDieCount=0），不出帧 |
+| `lib.rs::drain_buff_downlink` | 否 | 不登记 | 按 actor 单播，非空间广播 |
+| `lib.rs::drain_aoi_downlink` | 否 | 不登记 | 出现帧按观察者 `SendMsg`，非 `SendRefMsg` |
+| `drain_npc_merchant_turns/hits`、`drain_merchant_disappears`、`fan_out_npc_hear`、`handle_say_with_saves` | 是 | 已覆盖（C1/C3/批1） | — |
