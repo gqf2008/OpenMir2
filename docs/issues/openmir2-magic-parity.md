@@ -1411,3 +1411,16 @@ master/target_cret/speed_point/death` 全同（golden `Fixture.monsters` 并排�
 **附：`ArmRingAmulet` 对 39 无效**：39 不在 `src/M2Server/Magic/MagicManager.cs:315` 的护身符组（该组为
 13/14/15/16/17/18/19）；39 是 `:549` 的独立 case，无 `CheckAmulet`。装置保留 `ArmRingAmulet=true`
 只装护身符物品，不触发消耗/门。
+
+**scope 标注（opc-19 2026-11-20 裁定）**：`sm716_order_unverified` —— `groupdeding` 的
+**SM_716 组帧字段严格、组内顺序未验**。机理（主机把 `RM_SPELL` 直发、不进 `SpellFrameBuf` ⇒
+同级 221 组不是同一个四叉堆）与修复方向见 `docs/issues/openmir2-sm716-tie-order.md`；
+**不止影响 39**，所有带 `RM_SPELL` 且同级广播 ≥3 条的施法路径都受影响。
+
+**ActorId 接缝修正（非 oracle 行为）**：Rust `place_monsters` 的 `ActorId = idBase+10+i` 是
+**夹具设施**对齐（只影响 `RM_MAGICFIRE`/`RM_DELAYMAGIC` 的 p3），不是 oracle 语义。
+
+**新增 `#[ignore]` +5（测试三数 ignored 65→70 的解释）**：
+`groupdeding_parity_{all_miss_hp0,hit_ac_split,miss_by_draw,dead_excluded,dc_range}`
+—— 真实台账驱动，需 `--exact --test-threads=1` 单独进程（`rng_trace` 进程级 `OnceLock`），
+故标 `#[ignore]`；由 `cargo test -p game-svr --lib` 计入 ignored（2055 passed / 0 failed / 70 ignored）。
