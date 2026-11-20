@@ -4,7 +4,7 @@
 
 ## 一、5 条共享组：`scope = shares_effect_evidence_with_MG-xx`
 
-**共享的到底是什么**：同一魔号、同一 `case` 组（`MagicManager.cs:315-321`）、同一内层效果分派行、
+**共享的到底是什么**：同一魔号、同一 `case` 组（`src/M2Server/Magic/MagicManager.cs:315-321`）、同一内层效果分派行、
 同一 helper —— **不是**"与已验证条目相同"这种一句话。
 
 | 条目 | 魔号 | 内层分派 | 共享对象（effect evidence 引用） |
@@ -22,8 +22,9 @@
 | 组门随机数 | **0 抽**（`MagicBase.cs` 的 `CheckAmulet` 无 `Random` 调用） | 同（`magic::check_amulet` 无 RNG） | ✅ |
 | 效果分派 | 内层 `switch(MagicId)` 各一支 | `lib.rs` B3 分组匹配臂（14/15 一臂、16/18/19 一臂、13 单支） | 魔号→helper 一致（逐臂行号见 A 堆表） |
 
-**写 scope 的前提**：以上字段逐项相等成立时才可写 `scope = shares_effect_evidence_with_MG-xx`；
-任一不等（尤其将来抽数变化）⇒ 该条须自己效果对拍，不许引用。
+**写 scope 的前提（机检/触发条件，进各条 note）**：`IF 任一分派元组字段（CheckAmulet 参数 / 抽数 / helper 身份）不等
+THEN scope 作废，该条立即降级为自行效果对拍`；当前五条逐项相等，故可写
+`scope = shares_effect_evidence_with_MG-xx`。
 
 ## 二、`ExtraAbil` 负结论（17 上不咬）
 `grep -n "ExtraAbil" src/M2Server/Magic/MagicManager.cs` ⇒ **0 命中**；`MagMakeSlave`（`:1308-1335`）只读
@@ -43,7 +44,12 @@
 3. `slave_count`（= `slave_list` 长度）；
 4. 相关帧（该次施法后 caster/目标/新实体的 SM 序列，与既有 Receivers 同形，新实体用 `slave{i}` 键）。
 
-**分条计数（§28）**：一张 golden 里 `slave_list` 的逐项记录 + `slave_return_non_null` 是**该条目**的证据；
-四个条目（17/41/42/55）各自引用自己 golden 的对应 case，**不得**用同一份 `slave_list` 互相顶替。
+**分条计数（§28，机检形式）**：
+- golden 顶层必须带 `oracle_source_sha256`（生成器源码 sha）+ `driver_case`（本次跑的 `--case` 名）；
+- `slave_list` 的**每一项**带 `case` 字段（= 该 case 的 Label）；
+- 比较器 `slave_case_verify(stem, label)` **只取 `slave_list[?].case == label` 的项**，并按 `oracle_source_sha256`
+  与当前树比对；`case` 不匹配或 sha 不符 ⇒ 红。
+- 四条（17/41/42/55）各自的证据 = 自己 case 的那一份（文件 + case + 驱动名三元组），
+  **同一份 `slave_list` 不能被两条引用**——比较器按 `case` 过滤后天然不成立。
 
 **不做什么**：不跑 Operate、不改 v2 卡、不动 `Program.cs`（a2 独占，本卡只出契约）。
