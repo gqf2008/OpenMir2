@@ -131,7 +131,7 @@ use crate::ability::{Ability, ItemCatalog};
 use crate::bag::{
     add_item_to_bag_with_sink, item_display_name, BagItem, Frame, WeightSink, MAX_BAG_ITEM,
 };
-use crate::useitem::{NoticeText, QueuedNotice};
+use crate::useitem::{NoticeText, QueuedNotice, SysMsgTexts};
 use mir2_shared::rng::RandomNumber;
 
 /// `Messages.CM_PICKUP`（`src/OpenMir2/Messages.cs:46`）。
@@ -400,6 +400,25 @@ fn notice(ident: i32, w_param: i32, n_param1: i32, n_param2: i32, n_param3: i32)
     }
 }
 
+/// 带尾文案的 `SendMsg(..., msg)` 通知（`RM_MENU_OK` 等）。
+fn notice_text(
+    ident: i32,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    text: &str,
+) -> QueuedNotice {
+    QueuedNotice {
+        ident,
+        w_param,
+        n_param1,
+        n_param2,
+        n_param3,
+        text: NoticeText::Inline(text.to_string()),
+    }
+}
+
 /// 取件红字（`SendMsg(RM_SYSMESSAGE, 0, RedF, RedB, 0, CanotPickUpItem)`）。
 ///
 /// 文本 = oracle `MessageSettings.CanotPickUpItem`，本纯函数拿不到配置 ⇒ 标
@@ -607,6 +626,8 @@ pub struct DropContext<'a> {
     pub is_can_drop: bool,
     /// `Envir.Flag.NoThrowItem`。
     pub no_throw_item: bool,
+    /// `MessageSettings` 的丢弃拒绝文案（`RM_MENU_OK` 的尾）。
+    pub sysmsg: SysMsgTexts<'a>,
     /// `SystemShare.Config.ControlDropItem`。
     pub control_drop_item: bool,
     /// `SystemShare.Config.CanDropPrice`。
@@ -706,7 +727,14 @@ pub fn drop_item(
     let mut notices: Vec<QueuedNotice> = Vec::new();
 
     if ctx.in_safe_disable_drop && ctx.in_safe_zone {
-        notices.push(notice(RM_MENU_OK, 0, ctx.actor_id, 0, 0));
+        notices.push(notice_text(
+            RM_MENU_OK,
+            0,
+            ctx.actor_id,
+            0,
+            0,
+            ctx.sysmsg.canot_drop_in_safe_zone_msg,
+        ));
         return DropOutcome {
             success: false,
             immediate_frames: vec![fail_frame(ctx.make_index)],
@@ -714,7 +742,14 @@ pub fn drop_item(
         };
     }
     if !ctx.is_can_drop || ctx.no_throw_item {
-        notices.push(notice(RM_MENU_OK, 0, ctx.actor_id, 0, 0));
+        notices.push(notice_text(
+            RM_MENU_OK,
+            0,
+            ctx.actor_id,
+            0,
+            0,
+            ctx.sysmsg.canot_drop_item_msg,
+        ));
         return DropOutcome {
             success: false,
             immediate_frames: vec![fail_frame(ctx.make_index)],
@@ -853,6 +888,7 @@ pub fn drop_item_down_p21(
         is_can_drop: true,
         no_throw_item: false,
         control_drop_item: false,
+        sysmsg: SysMsgTexts::default(),
         can_drop_price: 0,
         drop_item_rage,
     };
@@ -906,6 +942,7 @@ pub fn drop_item_down_give(
         is_can_drop: true,
         no_throw_item: false,
         control_drop_item: false,
+        sysmsg: SysMsgTexts::default(),
         can_drop_price: 0,
         drop_item_rage: 3,
     };
@@ -1038,6 +1075,77 @@ mod tests {
         }
     }
 
+    /// **卡 `openmir2-menu-ok-text`**：丢弃守卫的 `RM_MENU_OK` **带尾文案**（逐字）：
+    /// 安全区 ⇒ `CanotDropInSafeZoneMsg`；`!IsCanDrop || NoThrowItem` ⇒ `CanotDropItemMsg`。
+    /// 牙：任一条退回 `NoticeText::None` ⇒ 本用例红。
+    #[test]
+    fn menu_ok_carries_drop_guard_messages() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "drop_fail_item_id_zero")
+            .expect("夹具必须含 drop_fail_item_id_zero")
+            .clone();
+        let c = &case["ctx"];
+        let build = |safe: bool, can_drop: bool| DropContext {
+            catalog: &cat,
+            actor_id: i32v(&c["actor_id"]),
+            curr_x: i32v(&c["curr_x"]),
+            curr_y: i32v(&c["curr_y"]),
+            now_tick: i32v(&case["now_tick"]),
+            deal_last_tick: i32v(&c["deal_last_tick"]),
+            make_index: 51,
+            in_safe_disable_drop: safe,
+            in_safe_zone: safe,
+            is_can_drop: can_drop,
+            no_throw_item: false,
+            control_drop_item: false,
+            sysmsg: SysMsgTexts::default(),
+            can_drop_price: 500,
+            drop_item_rage: 3,
+            item_name: "ring",
+        };
+        let state0 = || GroundState {
+            item_list: bag_items(&case["item_list_before"]),
+            gold: i32v(&case["gold_before"]),
+            wabil: ability(&case["wabil_before"]),
+        };
+
+        let mut map = build_map(&case);
+        let mut state = state0();
+        let out = drop_item(&build(true, true), &mut map, &mut state);
+        assert_eq!(out.notices.len(), 1, "安全区守卫只排一条 SysMsg");
+        assert_eq!(out.notices[0].ident, RM_MENU_OK);
+        assert_eq!(
+            out.notices[0].text,
+            NoticeText::Inline(crate::strings::DEFAULT_CANOT_DROP_IN_SAFE_ZONE_MSG.to_string()),
+            "安全区守卫文案"
+        );
+
+        let mut map = build_map(&case);
+        let mut state = state0();
+        let out = drop_item(&build(false, false), &mut map, &mut state);
+        assert_eq!(out.notices.len(), 1, "!IsCanDrop 守卫只排一条 SysMsg");
+        assert_eq!(
+            out.notices[0].text,
+            NoticeText::Inline(crate::strings::DEFAULT_CANOT_DROP_ITEM_MSG.to_string()),
+            "!IsCanDrop/NoThrowItem 守卫文案"
+        );
+    }
+
+    /// 归一 `text` 为 `None`（见 `matches_oracle_ground_fixture` 处的说明）。
+    fn strip_text(v: Vec<QueuedNotice>) -> Vec<QueuedNotice> {
+        v.into_iter()
+            .map(|mut n| {
+                n.text = NoticeText::None;
+                n
+            })
+            .collect()
+    }
+
     fn notices(v: &Value) -> Vec<QueuedNotice> {
         v.as_array().unwrap().iter().map(notice).collect()
     }
@@ -1135,6 +1243,7 @@ mod tests {
                         is_can_drop: c["is_can_drop"].as_bool().unwrap(),
                         no_throw_item: c["no_throw_item"].as_bool().unwrap(),
                         control_drop_item: c["control_drop_item"].as_bool().unwrap(),
+                        sysmsg: SysMsgTexts::default(),
                         can_drop_price: i32v(&c["can_drop_price"]),
                         drop_item_rage: u8v(&c["drop_item_rage"]),
                         item_name: case["request"]["name"].as_str().unwrap(),
@@ -1150,9 +1259,11 @@ mod tests {
                 frames(&expect["immediate_frames"]),
                 "{name}: 即时帧与 oracle 不符"
             );
+            // 卡 `openmir2-menu-ok-text`：`ground_vectors.json` 尚未记录尾文案 ⇒ 本处按
+            // **七字段**比（`text` 两侧归一为 `None`）；尾文案由 `menu_ok_*` 专用用例逐字钉住。
             assert_eq!(
-                got_notices,
-                notices(&expect["notices"]),
+                strip_text(got_notices),
+                strip_text(notices(&expect["notices"])),
                 "{name}: 延时通知（出队序）与 oracle 不符"
             );
             assert_eq!(
@@ -1213,6 +1324,7 @@ mod tests {
             is_can_drop: true,
             no_throw_item: false,
             control_drop_item: false,
+            sysmsg: SysMsgTexts::default(),
             can_drop_price: 500,
             drop_item_rage: 3,
             item_name: "ring",
@@ -1267,6 +1379,7 @@ mod tests {
                 is_can_drop: true,
                 no_throw_item: false,
                 control_drop_item: false,
+                sysmsg: SysMsgTexts::default(),
                 can_drop_price: 500,
                 drop_item_rage: 3,
                 item_name: case["request"]["name"].as_str().unwrap(),

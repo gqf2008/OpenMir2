@@ -187,14 +187,16 @@ impl QueuedNotice {
     }
 
     /// `PlayObject.Operate.cs:685`：`SendMsg(SystemShare.ManageNPC, RM_MENU_OK, 0, ActorId, 0, 0, msg)`。
-    const fn menu_ok(actor_id: i32) -> Self {
+    /// 带尾文案的 `RM_MENU_OK`（oracle `SendMsg(ManageNPC, RM_MENU_OK, 0, ActorId, 0, 0, msg)`
+    /// → `SM_MENU_OK` 的尾 = `EDCode.EncodeString(msg)`）。
+    fn menu_ok(actor_id: i32, text: &str) -> Self {
         Self {
             ident: RM_MENU_OK,
             w_param: 0,
             n_param1: actor_id,
             n_param2: 0,
             n_param3: 0,
-            text: NoticeText::None,
+            text: NoticeText::Inline(text.to_string()),
         }
     }
 
@@ -230,6 +232,33 @@ pub struct SysMsgTexts<'a> {
     pub win_lottery: [&'a str; 6],
     /// `MessageSettings.NotWinLotteryMsg`（`MessageSettings.cs:210`；键 `NotWinLotteryMsg`）。
     pub not_win_lottery: &'a str,
+    /// `MessageSettings.CanotDropGoldMsg`（`MessageSettings.cs:126`；键 `CanotDropGoldMsg`）
+    /// ——`ControlDropItem && nGold < CanDropGold` 守卫（`CM_DROPGOLD`）。
+    pub canot_drop_gold_msg: &'a str,
+    /// `MessageSettings.CanotUseItemMsg`（`MessageSettings.cs:129`；键 `CanotUseItemMsg`）
+    /// ——`RM_MENU_OK` 的尾文案（`ClientUseItems` 的 `BoCanUseItem` 守卫）。
+    pub canot_use_item_msg: &'a str,
+    /// `MessageSettings.CanotDropInSafeZoneMsg`（`MessageSettings.cs:127`；键 `CanotDropInSafeZoneMsg`）。
+    pub canot_drop_in_safe_zone_msg: &'a str,
+    /// `MessageSettings.CanotDropItemMsg`（`MessageSettings.cs:128`；键 `CanotDropItemMsg`）。
+    pub canot_drop_item_msg: &'a str,
+}
+
+impl<'a> SysMsgTexts<'a> {
+    /// 从 `String.conf [String]` 的装载结果一次性取齐（缺键 = 源码默认）。
+    #[must_use]
+    pub fn from_conf(c: &'a crate::strings::StringConf) -> Self {
+        Self {
+            canot_use_drug_on_this_map: c.canot_use_drug_on_this_map(),
+            weapon_repair_success: c.weapon_repair_success(),
+            win_lottery: c.win_lottery_msgs(),
+            not_win_lottery: c.not_win_lottery_msg(),
+            canot_drop_gold_msg: c.canot_drop_gold_msg(),
+            canot_use_item_msg: c.canot_use_item_msg(),
+            canot_drop_in_safe_zone_msg: c.canot_drop_in_safe_zone_msg(),
+            canot_drop_item_msg: c.canot_drop_item_msg(),
+        }
+    }
 }
 
 impl Default for SysMsgTexts<'_> {
@@ -239,6 +268,10 @@ impl Default for SysMsgTexts<'_> {
             weapon_repair_success: crate::strings::DEFAULT_WEAPON_REPAIR_SUCCESS,
             win_lottery: crate::strings::DEFAULT_WIN_LOTTERY_MSGS,
             not_win_lottery: crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG,
+            canot_use_item_msg: crate::strings::DEFAULT_CANOT_USE_ITEM_MSG,
+            canot_drop_in_safe_zone_msg: crate::strings::DEFAULT_CANOT_DROP_IN_SAFE_ZONE_MSG,
+            canot_drop_item_msg: crate::strings::DEFAULT_CANOT_DROP_ITEM_MSG,
+            canot_drop_gold_msg: crate::strings::DEFAULT_CANOT_DROP_GOLD_MSG,
         }
     }
 }
@@ -632,7 +665,10 @@ pub fn use_item(
             }
         }
     } else {
-        notices.push(QueuedNotice::menu_ok(ctx.actor_id));
+        notices.push(QueuedNotice::menu_ok(
+            ctx.actor_id,
+            ctx.sysmsg.canot_use_item_msg,
+        ));
     }
 
     let mut immediate_frames = Vec::new();
@@ -1575,7 +1611,7 @@ mod tests {
             let mut got_text: Vec<(i32, Vec<u8>)> = out
                 .notices
                 .iter()
-                .filter(|n| n.ident == RM_SYSMESSAGE)
+                .filter(|n| n.ident == RM_SYSMESSAGE || n.ident == RM_MENU_OK)
                 .map(|n| {
                     let bytes = match &n.text {
                         NoticeText::Inline(t) => {
@@ -1590,7 +1626,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|v| i32v(&v["ident"]) == RM_SYSMESSAGE)
+                .filter(|v| i32v(&v["ident"]) == RM_SYSMESSAGE || i32v(&v["ident"]) == RM_MENU_OK)
                 .map(|v| {
                     (
                         i32v(&v["ident"]),
@@ -1718,16 +1754,19 @@ mod tests {
             .unwrap()
             .iter()
             .flat_map(|c| c["expect"]["notices"].as_array().unwrap().iter())
-            .filter(|v| i32v(&v["ident"]) != RM_SYSMESSAGE)
+            .filter(|v| {
+                let ident = i32v(&v["ident"]);
+                ident != RM_SYSMESSAGE && ident != RM_MENU_OK
+            })
             .filter(|v| !hex_to_bytes(v["text"].as_str().unwrap_or("")).is_empty())
             .map(|v| i32v(&v["ident"]))
             .collect();
         gap.sort_unstable();
         gap.dedup();
-        assert_eq!(
-            gap,
-            vec![RM_MENU_OK],
-            "带文本的非 sysmsg ident 集合变化 ⇒ 需重新登记"
+        // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 已纳入逐字节比 ⇒ 未比较的带文本 ident 必须为空。
+        assert!(
+            gap.is_empty(),
+            "出现未被逐字节比较的带文本 ident：{gap:?} ⇒ 必须纳入文本比较，不得静默放过"
         );
         assert!(
             host_skipped >= 1,

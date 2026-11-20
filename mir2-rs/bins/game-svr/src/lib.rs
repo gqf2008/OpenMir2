@@ -3983,6 +3983,8 @@ struct InboundFramesCtx<'a> {
     red: (u8, u8),
     /// `Config.SendRefMsgRange`（`StatusChanged()` 的 `SendRefMsg` 近邻半径，缺省 12）。
     ref_msg_range: i32,
+    /// 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案来源（第 4 个生产者 `CM_DROPGOLD`）。
+    msg: &'a game_svr::useitem::SysMsgTexts<'a>,
 }
 
 /// R1 入站派发余 10 条（Task C / 片 76）的接线臂。
@@ -4268,12 +4270,29 @@ fn handle_inbound_cmd(
                 inbound::DropGoldOutcome::NotPositive | inbound::DropGoldOutcome::NotEnoughGold => {
                 }
                 inbound::DropGoldOutcome::Rejected(reason, f) => {
+                    // 卡 `openmir2-menu-ok-text`（第 4 个生产者）：`DefFrame` 刻意"无尾"（几十个构造点），
+                    // 按 opc-19 口径在**发送点补文本**，不扩类型。文案按拒绝原因取
+                    // `String.conf` 的同名键（`Operate.cs:226/231/236`）。
+                    let text = match reason {
+                        inbound::DropGoldReject::SafeZone => {
+                            frames_ctx.msg.canot_drop_in_safe_zone_msg
+                        }
+                        inbound::DropGoldReject::BelowCanDropGold => {
+                            frames_ctx.msg.canot_drop_gold_msg
+                        }
+                        inbound::DropGoldReject::CannotDropItem => {
+                            frames_ctx.msg.canot_drop_item_msg
+                        }
+                    };
                     glog!(
                         "INF",
-                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 拒绝 {reason:?}（SM_MENU_OK 文案未建模，登记）",
+                        "CM_DROPGOLD：ChrName={chr_name} nGold={} 拒绝 {reason:?}（带尾文案）",
                         cmd.recog
                     );
-                    emit_def_frames(gates, gate_idx, socket, &[f], "CM_DROPGOLD/拒绝");
+                    let body = game_svr::smframe::sm_menu_ok(f.recog, &enter::gbk(text));
+                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_DROPGOLD/拒绝") {
+                        let _ = tx.send(SimToGate::SendFrame { socket, body });
+                    }
                 }
                 inbound::DropGoldOutcome::Dropped { gold, frame } => {
                     // BUG-REPLICA 2：净金币不变 ⇒ 不改会话态。
@@ -4588,6 +4607,8 @@ fn handle_ground_cmd(
     colors: &MsgColors,
     catalog: &dyn game_svr::ability::ItemCatalog,
     registry: Option<&mir2_envir::MapRegistry>,
+    // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案来源（丢弃守卫三条）。
+    strings: &game_svr::strings::StringConf,
 ) {
     // 找会话（`online` 给出该角色当前的网关线号；`sessions` 给出地面交互态）。
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
@@ -4697,6 +4718,7 @@ fn handle_ground_cmd(
             // `IsCanDrop` 在无 PK/摆摊等状态下恒真；未建模的状态（摆摊/交易）登记。
             is_can_drop: true,
             no_throw_item: flag.as_ref().is_some_and(|f| f.no_throw_item),
+            sysmsg: game_svr::useitem::SysMsgTexts::from_conf(strings),
             control_drop_item: cfg.control_drop_item,
             can_drop_price: cfg.can_drop_price,
             drop_item_rage: cfg.drop_item_rage,
@@ -10653,12 +10675,7 @@ fn handle_eat_cmd(
         bag: &bag,
     };
     // `MessageSettings` 文本（`String.conf [String]`；缺键 = oracle 源码默认，见 `strings.rs`）。
-    let sysmsg = game_svr::useitem::SysMsgTexts {
-        canot_use_drug_on_this_map: strings.canot_use_drug_on_this_map(),
-        weapon_repair_success: strings.weapon_repair_success(),
-        win_lottery: strings.win_lottery_msgs(),
-        not_win_lottery: strings.not_win_lottery_msg(),
-    };
+    let sysmsg = game_svr::useitem::SysMsgTexts::from_conf(strings);
     let ctx = game_svr::useitem::UseItemContext {
         catalog,
         // `BoCanUseItem` 在 oracle 初生即 true（`PlayObject.cs:961`）；运行期置位未建模 ⇒ 恒 true（登记）。
@@ -28200,6 +28217,7 @@ fn sim_loop(
                             &colors,
                             &enter_cfg.catalog,
                             registry.as_ref(),
+                            &enter_cfg.string_conf,
                         );
                     } else if matches!(
                         cmd.ident,
@@ -28835,6 +28853,9 @@ fn sim_loop(
                                 client_layout: mir2_client_ability_layout(),
                                 red: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
                                 ref_msg_range: enter_cfg.ref_msg_range,
+                                msg: &game_svr::useitem::SysMsgTexts::from_conf(
+                                    &enter_cfg.string_conf,
+                                ),
                             },
                         );
                     }
@@ -40838,6 +40859,13 @@ mod tests {
         }
     }
 
+    /// 测试用的 `SysMsgTexts` 静态实例（`InboundFramesCtx` 借它，不能借临时值）。
+    fn default_sysmsg_texts() -> &'static game_svr::useitem::SysMsgTexts<'static> {
+        static CELL: std::sync::OnceLock<game_svr::useitem::SysMsgTexts<'static>> =
+            std::sync::OnceLock::new();
+        CELL.get_or_init(game_svr::useitem::SysMsgTexts::default)
+    }
+
     /// [`handle_inbound_cmd`] 的「重算 + 出帧面」输入（测试用：给定物品目录 + oracle 布局 + 红 253/0）。
     fn test_frames_ctx<'a>(
         catalog: &'a dyn game_svr::ability::ItemCatalog,
@@ -40847,6 +40875,7 @@ mod tests {
             client_layout: false,
             red: (253, 0),
             ref_msg_range: 12,
+            msg: default_sysmsg_texts(),
         }
     }
 
@@ -46701,6 +46730,7 @@ break
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -46730,6 +46760,7 @@ break
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { body, socket }) => {
@@ -61424,6 +61455,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -61453,6 +61485,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { body, socket }) => {
@@ -61782,6 +61815,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert_eq!(
             sessions.get("hero").unwrap().state.item_list[0].dura,
@@ -61808,6 +61842,7 @@ SendRefMsgRange=15
             &colors,
             &catalog,
             None,
+            &game_svr::strings::StringConf::defaults(),
         );
         assert_eq!(
             sessions.get("hero").unwrap().state.item_list[0].dura,
@@ -62047,6 +62082,7 @@ SendRefMsgRange=15
                 colors,
                 catalog,
                 None,
+                &game_svr::strings::StringConf::defaults(),
             );
             let mut frames = Vec::new();
             while let Ok(m) = rx.try_recv() {
@@ -95259,6 +95295,12 @@ fn ",
         assert_eq!(
             u16::from_le_bytes([frames[0][4], frames[0][5]]),
             mir2_protocol::messages::SM_MENU_OK
+        );
+        // 卡 `openmir2-menu-ok-text`（第 4 个生产者）：拒绝帧**带尾**，文案 = `CanotDropGoldMsg`。
+        assert_eq!(
+            mir2_protocol::edcode::decode(&frames[0][12..]),
+            game_svr::downlink::gbk(crate::strings::DEFAULT_CANOT_DROP_GOLD_MSG),
+            "CM_DROPGOLD 拒绝文案 = MessageSettings.CanotDropGoldMsg"
         );
         assert_eq!(sessions["hero"].state.gold, 1_000);
         assert_eq!(rng_probe(&mut world.rng, 8), rng_probe(&mut probe, 8));

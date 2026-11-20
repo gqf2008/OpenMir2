@@ -116,6 +116,19 @@ pub const DEFAULT_WIN_LOTTERY_MSGS: [&str; 6] = [
 /// ——未中/闸闭的 `SysMsg(Red)` 文本（IT-16）。
 pub const DEFAULT_NOT_WIN_LOTTERY_MSG: &str = "等下次机会吧!!!";
 
+/// oracle `MessageSettings.CanotUseItemMsg`（`MessageSettings.cs:129`；`StringConf.cs:154` 读键
+/// `CanotUseItemMsg`）——`ClientUseItems` 的 `BoCanUseItem` 守卫（`Operate.cs:685`）。
+pub const DEFAULT_CANOT_USE_ITEM_MSG: &str = "当前无法进行此操作!!!";
+/// oracle `MessageSettings.CanotDropGoldMsg`（`MessageSettings.cs:126`；`StringConf.cs:151` 读键）
+/// ——`ControlDropItem && nGold < CanDropGold` 守卫。
+pub const DEFAULT_CANOT_DROP_GOLD_MSG: &str = "太少的金币不允许扔在地上!!!";
+/// oracle `MessageSettings.CanotDropInSafeZoneMsg`（`MessageSettings.cs:127`；`StringConf.cs:152` 读键）
+/// ——`ClientDropItem/ClientDropGold` 的安全区守卫。
+pub const DEFAULT_CANOT_DROP_IN_SAFE_ZONE_MSG: &str = "安全区不允许扔东西在地上!!!";
+/// oracle `MessageSettings.CanotDropItemMsg`（`MessageSettings.cs:128`；`StringConf.cs:153` 读键）
+/// ——`!IsCanDrop || Envir.Flag.NoThrowItem` 守卫。
+pub const DEFAULT_CANOT_DROP_ITEM_MSG: &str = "当前无法进行此操作!!!";
+
 /// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StringConf {
@@ -145,6 +158,11 @@ pub struct StringConf {
     win_lottery_msg5: Option<String>,
     win_lottery_msg6: Option<String>,
     not_win_lottery_msg: Option<String>,
+    // 卡 `openmir2-menu-ok-text`：`RM_MENU_OK` 的尾文案（四个生产者）。
+    canot_use_item_msg: Option<String>,
+    canot_drop_gold_msg: Option<String>,
+    canot_drop_in_safe_zone_msg: Option<String>,
+    canot_drop_item_msg: Option<String>,
     // `[Guild]` 六键（`StringConf.cs:30-35`）。
     guild_notice: Option<String>,
     guild_war: Option<String>,
@@ -321,6 +339,38 @@ impl StringConf {
     #[must_use]
     pub fn half_moon_on(&self) -> &str {
         self.half_moon_on.as_deref().unwrap_or(DEFAULT_HALF_MOON_ON)
+    }
+
+    /// `[String] CanotUseItemMsg`（`StringConf.cs:154`；`MessageSettings.cs:129`）。
+    #[must_use]
+    pub fn canot_use_item_msg(&self) -> &str {
+        self.canot_use_item_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_USE_ITEM_MSG)
+    }
+
+    /// `[String] CanotDropGoldMsg`（`StringConf.cs:151`）。
+    #[must_use]
+    pub fn canot_drop_gold_msg(&self) -> &str {
+        self.canot_drop_gold_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_DROP_GOLD_MSG)
+    }
+
+    /// `[String] CanotDropInSafeZoneMsg`（`StringConf.cs:152`）。
+    #[must_use]
+    pub fn canot_drop_in_safe_zone_msg(&self) -> &str {
+        self.canot_drop_in_safe_zone_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_DROP_IN_SAFE_ZONE_MSG)
+    }
+
+    /// `[String] CanotDropItemMsg`（`StringConf.cs:153`）。
+    #[must_use]
+    pub fn canot_drop_item_msg(&self) -> &str {
+        self.canot_drop_item_msg
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_DROP_ITEM_MSG)
     }
 
     /// `[Guild] GuildNotice`（缺键回落 `GameSvrConf.cs:1850`）。
@@ -559,6 +609,10 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "WINLOTTERY5MSG") => &mut conf.win_lottery_msg5,
             (Section::String, "WINLOTTERY6MSG") => &mut conf.win_lottery_msg6,
             (Section::String, "NOTWINLOTTERYMSG") => &mut conf.not_win_lottery_msg,
+            (Section::String, "CANOTUSEITEMMSG") => &mut conf.canot_use_item_msg,
+            (Section::String, "CANOTDROPGOLDMSG") => &mut conf.canot_drop_gold_msg,
+            (Section::String, "CANOTDROPINSAFEZONEMSG") => &mut conf.canot_drop_in_safe_zone_msg,
+            (Section::String, "CANOTDROPITEMMSG") => &mut conf.canot_drop_item_msg,
             (Section::String, "GUILDMSGPREFIX") => &mut conf.guild_msg_prefix,
             (Section::String, "ATTACKMODEOFALL") => &mut conf.attack_mode_of_all,
             (Section::String, "ATTACKMODEOFPEACEFUL") => &mut conf.attack_mode_of_peaceful,

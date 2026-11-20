@@ -139,7 +139,17 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
                 )
             })
         }
-        RM_MENU_OK => Some(smframe::sm_menu_ok(n.n_param1, &[])),
+        RM_MENU_OK => {
+            // 卡 `openmir2-menu-ok-text`：oracle `PlayObject.Message.cs:1952-1954` 的
+            // `SendDefMessage(SM_MENU_OK, nParam1, 0,0,0, Msg)` ⇒ 尾 = `EDCode.EncodeString(Msg)`。
+            // 四个生产者的文案不同（`CanotUseItemMsg` / `CanotDropInSafeZoneMsg` /
+            // `CanotDropGoldMsg` / `CanotDropItemMsg`），由入队方或发送点以 `Inline` 给出。
+            let tail = match &n.text {
+                NoticeText::Inline(t) => crate::enter::gbk(t),
+                NoticeText::None | NoticeText::SessionPickup => Vec::new(),
+            };
+            Some(smframe::sm_menu_ok(n.n_param1, &tail))
+        }
         // `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`：`PlayObject.Message.cs:1666-1669` 的
         // `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)`。`Recog` 取**基础** `Abil.Exp`
         //（`session.abil_exp`），**不是** `WAbil.Exp`（非升级 `GetExp` 后 WAbil 陈旧）。IT-08 经此出帧。
@@ -836,6 +846,62 @@ mod tests {
             vec![622, 657, 100],
             "泵序 = (byte)RM ident 升序：131 < 155 < 252"
         );
+    }
+
+    /// **卡 `openmir2-menu-ok-text`**：`RM_MENU_OK` 的帧体 = 12B 头 ++ `EDCode.GBK(文案)`。
+    /// 三个生产者文案不同，这里用 `use_item` 那条（`CanotUseItemMsg`）钉编码路径；
+    /// `None` ⇒ 空尾（保持 header-only 的旧行为）。
+    #[test]
+    fn menu_ok_frame_carries_text_tail() {
+        let s = session(4660, 0, 0, None);
+        let body = notice_frame(
+            &QueuedNotice {
+                ident: RM_MENU_OK,
+                w_param: 0,
+                n_param1: 4660,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::Inline(crate::strings::DEFAULT_CANOT_USE_ITEM_MSG.to_string()),
+            },
+            &s,
+        )
+        .expect("RM_MENU_OK 必须产帧");
+        let mut want = header(4660, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        want.extend_from_slice(&edcode::encode(&crate::enter::gbk(
+            crate::strings::DEFAULT_CANOT_USE_ITEM_MSG,
+        )));
+        assert_eq!(body, want, "整帧 = 头 ++ EDCode(GBK(文案))");
+
+        // **独立 oracle 抓帧**（不现算）：`oracle_tail` = 由 oracle
+        // `EDCode.EncodeString(GBK("当前无法进行此操作!!!"))` 得到、并经 QA 独立复算验证的
+        // **冻结字节**（等价值，不是夹具拷贝；`SM_MENU_OK = 767` 见
+        // `crates/protocol/src/messages.rs:354`）。
+        // 现算的 `want` 与被测 `body` 共用 `edcode::encode`/`enter::gbk` ⇒ 原语错了会一起错；
+        // 这条硬编码抓帧才能咬住"编码错"。
+        let oracle_tail: &[u8] = b"AAgW@VnXC<MEPXxS@WZEY[WR]]Ik";
+        let mut oracle_frame = header(4660, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        oracle_frame.extend_from_slice(oracle_tail);
+        assert_eq!(
+            body, oracle_frame,
+            "整帧 == oracle 抓帧（硬编码 hex，不现算）"
+        );
+
+        // 无文本 ⇒ 空尾（与旧行为一致）。
+        let bare = notice_frame(
+            &QueuedNotice {
+                ident: RM_MENU_OK,
+                w_param: 0,
+                n_param1: 1,
+                n_param2: 0,
+                n_param3: 0,
+                text: NoticeText::None,
+            },
+            &s,
+        )
+        .expect("无文本也产帧（空尾）");
+        let mut want_bare = header(1, mir2_protocol::messages::SM_MENU_OK, 0, 0, 0);
+        want_bare.extend_from_slice(&edcode::encode(&[]));
+        assert_eq!(bare, want_bare, "无文本 ⇒ header-only");
     }
 
     /// **负例（卡 §4「回退按通知种类收窄」）**：通知**无文本**（`NoticeText::None`）时，
