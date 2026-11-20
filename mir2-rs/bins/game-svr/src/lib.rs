@@ -100715,6 +100715,242 @@ fn ",
             "非彩票物品不得动彩票计数"
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
+
+        // ⑤ **第二半：逐 12 例（各自 `applied` 配置 + 各自 seed + 各自 `lottery_before` 初态）**。
+        //    逐例对夹具：线序 / 直发帧字段 / `SM_SYSMESSAGE` 的**具体那条**文本字节 / 后态。
+        //    ⚠ **每例必须 `world.rng = with_seed(case_seed)` 复位**：12 例共用同一个 `world`，
+        //    上一例的 rng 消耗会污染下一例的抽值——不复位是这一批最容易出假绿的地方。
+        {
+            fn fixture_doc() -> serde_json::Value {
+                let path = concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../tests/parity/m3/fixtures/eat_vectors.json"
+                );
+                let raw = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("oracle 夹具缺失/不可读：{path}（{e}）"));
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 非法 JSON：{e}"))
+            }
+            fn i32v(v: &serde_json::Value) -> i32 {
+                v.as_i64().unwrap_or_else(|| panic!("非整数：{v}")) as i32
+            }
+            fn hex_to_bytes(hex: &str) -> Vec<u8> {
+                assert!(hex.len().is_multiple_of(2), "hex 长度须为偶数：{hex}");
+                (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+                    .collect()
+            }
+            /// 首个不同字节 `(下标, 实测, 期望)`：牙红时报告能指到**哪个字节**。
+            fn first_diff(got: &[u8], want: &[u8]) -> Option<(usize, u8, u8)> {
+                (0..got.len().min(want.len()))
+                    .find(|&i| got[i] != want[i])
+                    .map(|i| (i, got[i], want[i]))
+                    .or_else(|| {
+                        (got.len() != want.len()).then(|| {
+                            (
+                                got.len().min(want.len()),
+                                *got.get(got.len().min(want.len())).unwrap_or(&0xFF),
+                                *want.get(got.len().min(want.len())).unwrap_or(&0xFF),
+                            )
+                        })
+                    })
+            }
+            /// 夹具通知记录面 `RM_*` → 线上 `SM_*` ident（`notice_frame` 的映射结果）。
+            fn wire_ident(rm: i32) -> u16 {
+                match rm {
+                    10115 => 622, // RM_WEIGHTCHANGED → SM_WEIGHTCHANGED
+                    10136 => 653, // RM_GOLDCHANGED   → SM_GOLDCHANGED
+                    11004 => 100, // RM_SYSMESSAGE    → SM_SYSMESSAGE
+                    other => panic!("未登记的 RM ident {other}"),
+                }
+            }
+
+            let doc = fixture_doc();
+            let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
+            assert_eq!(cases.len(), 12, "彩票例固定 12");
+            let mut seen_seeds = std::collections::BTreeSet::new();
+            let mut wins = 0usize;
+            let mut losses = 0usize;
+            for c in cases {
+                let name = c["name"].as_str().expect("case name");
+                let ap = &c["config"]["applied"];
+                let cfg = crate::config::WinLotteryCfg {
+                    rate: i32v(&ap["rate"]),
+                    min: std::array::from_fn(|i| i32v(&ap["min"][i])),
+                    max: std::array::from_fn(|i| i32v(&ap["max"][i])),
+                    gold: std::array::from_fn(|i| i32v(&ap["gold"][i])),
+                    // `init_*` 不被 `win_lottery` 读（初态由 `WinLotteryShared` 自带）。
+                    ..crate::config::WinLotteryCfg::default()
+                };
+                let lb = &c["lottery_before"];
+                let init = crate::winlottery::WinLotteryState {
+                    count: i32v(&lb["count"]),
+                    no_win: i32v(&lb["no_win"]),
+                    level: std::array::from_fn(|i| i32v(&lb["level"][i])),
+                };
+                let seed = i32v(&c["rng"][0]["seed"]);
+                assert!(
+                    seen_seeds.insert(seed),
+                    "{name}: seed {seed} 与前例重复（逐例复位才可分辨）"
+                );
+                // ⚠ 逐例复位共享 `world.rng`（本段最关键的防假绿点，先于该例任何抽值）。
+                world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+                let lottery = crate::winlottery::WinLotteryShared::new(init);
+                sessions.get_mut("hero").unwrap().state.gold = i32v(&c["gold_before"]);
+                let (bodies, ids) = run_eat(
+                    cfg,
+                    i32v(&c["human_max_gold"]),
+                    &lottery,
+                    &mut sessions,
+                    &mut world,
+                    &mut rx0,
+                    &online,
+                    &gates,
+                    &catalog,
+                    &colors,
+                    &unbind,
+                    &mut item_number,
+                    &env,
+                );
+                let frames_fx = c["frames"].as_array().expect("frames");
+                let notices_fx = c["notices"].as_array().expect("notices");
+                // 期望线序 = 直发帧 ++ 泵出通知（RM→SM，泵序由 `NetPriorityQueue` 决定）。
+                let mut want_ids: Vec<u16> = frames_fx
+                    .iter()
+                    .map(|f| f["ident"].as_u64().expect("ident") as u16)
+                    .collect();
+                want_ids.extend(notices_fx.iter().map(|n| wire_ident(i32v(&n["ident"]))));
+                assert_eq!(ids, want_ids, "{name}: 线序/ident 序列 != 夹具");
+                // 直发帧：逐字段 == 夹具记录（header-only，12B）。
+                for (k, f) in frames_fx.iter().enumerate() {
+                    let body = &bodies[k];
+                    assert_eq!(
+                        body.len(),
+                        mir2_protocol::frame::CommandMessage::SIZE,
+                        "{name}: 直发帧 {k} 必须 header-only"
+                    );
+                    let got = CommandMessage::from_bytes(body).expect("帧头");
+                    assert_eq!(
+                        (
+                            got.ident,
+                            got.recog,
+                            i32::from(got.param),
+                            i32::from(got.tag),
+                            i32::from(got.series),
+                        ),
+                        (
+                            f["ident"].as_u64().expect("ident") as u16,
+                            i32v(&f["recog"]),
+                            i32v(&f["param"]),
+                            i32v(&f["tag"]),
+                            i32v(&f["series"]),
+                        ),
+                        "{name}: 直发帧 {k} 字段 != 夹具"
+                    );
+                }
+                // 泵出通知：逐条比（文本帧比**该条**的字节，不是「属于七条之一」）。
+                for (k, n) in notices_fx.iter().enumerate() {
+                    let body = &bodies[frames_fx.len() + k];
+                    let got = CommandMessage::from_bytes(body).expect("帧头");
+                    let rm = i32v(&n["ident"]);
+                    assert_eq!(got.ident, wire_ident(rm), "{name}: 通知 {k} ident");
+                    match rm {
+                        10115 => {
+                            // 夹具记的是 **RM 通知**字段（无 SM 载荷）；`SM_WEIGHTCHANGED` 的
+                            // Weight/Wear/Hand 由会话 `WAbil` 现算 ⇒ 不在夹具记录面内，
+                            // 本臂只由上面的 ident/序断言覆盖。
+                            let _ = &got;
+                        }
+                        10136 => {
+                            // `sm_goldchanged(session.gold, game_gold)`：Recog = IncGold 后的会话金币。
+                            assert_eq!(
+                                got.recog,
+                                i32v(&c["gold"]),
+                                "{name}: 653 Recog != 夹具该例会后金币"
+                            );
+                            assert_eq!((got.param, got.tag), (0, 0), "{name}: game_gold 应为 0");
+                        }
+                        11004 => {
+                            let text = n["text"]
+                                .as_str()
+                                .unwrap_or_else(|| panic!("{name}: 文本帧缺 text"));
+                            let want_text = hex_to_bytes(text);
+                            let got_text = &body[mir2_protocol::frame::CommandMessage::SIZE..];
+                            assert_eq!(
+                                got_text,
+                                want_text.as_slice(),
+                                "{name}: SM_SYSMESSAGE 文本字节 != 夹具该条（EDCode(GBK)）；首个差异(下标,实测,期望)={:?}",
+                                first_diff(got_text, &want_text)
+                            );
+                            assert_eq!(
+                                got.param,
+                                game_svr::smframe::make_word16(
+                                    u16::try_from(i32v(&n["n_param1"]) & 0xFFFF).unwrap(),
+                                    u16::try_from(i32v(&n["n_param2"]) & 0xFFFF).unwrap(),
+                                ),
+                                "{name}: 文本帧前景/背景色 != 夹具"
+                            );
+                            assert_eq!(got.series, 1, "{name}: SM_SYSMESSAGE series 恒 1");
+                            // 夹具文本必须就是**该例命中档（或未中）那条文案**的编码：
+                            // 用常量独立重算（不经被测实现）交叉核对。
+                            let hit: Vec<usize> = (0..6)
+                                .filter(|&i| {
+                                    i32v(&c["lottery"]["level"][i]) - i32v(&lb["level"][i]) == 1
+                                })
+                                .collect();
+                            let want_msg = match hit.as_slice() {
+                                [i] => crate::strings::DEFAULT_WIN_LOTTERY_MSGS[*i],
+                                [] => crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG,
+                                _ => panic!("{name}: 夹具命中档不唯一 {hit:?}"),
+                            };
+                            assert_eq!(
+                                hex_to_bytes(text),
+                                mir2_protocol::edcode::encode(&game_svr::downlink::gbk(want_msg)),
+                                "{name}: 夹具文本 != 该档文案（常量独立重算）"
+                            );
+                        }
+                        other => panic!("{name}: 通知 {k} 未覆盖的 RM ident {other}"),
+                    }
+                }
+                // 后态：金币 + 进程级计数逐字段 == 夹具。
+                assert_eq!(
+                    sessions["hero"].state.gold,
+                    i32v(&c["gold"]),
+                    "{name}: 会后金币"
+                );
+                let snap = lottery.snapshot();
+                let la = &c["lottery"];
+                assert_eq!(snap.count, i32v(&la["count"]), "{name}: count");
+                assert_eq!(snap.no_win, i32v(&la["no_win"]), "{name}: no_win");
+                for i in 0..6 {
+                    assert_eq!(snap.level[i], i32v(&la["level"][i]), "{name}: level[{i}]");
+                }
+                let hit: Vec<usize> = (0..6)
+                    .filter(|&i| i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1)
+                    .collect();
+                if hit.is_empty() {
+                    losses += 1;
+                } else {
+                    wins += 1;
+                }
+                eprintln!(
+                    "CASE12 {name}: seed={seed} rate={} gold {}→{} no_win {}→{} hit={hit:?} ids={ids:?} text={:?}",
+                    cfg.rate,
+                    i32v(&c["gold_before"]),
+                    i32v(&c["gold"]),
+                    i32v(&lb["no_win"]),
+                    i32v(&la["no_win"]),
+                    notices_fx
+                        .iter()
+                        .find(|n| i32v(&n["ident"]) == 11004)
+                        .map(|n| n["text"].as_str().unwrap_or("")),
+                );
+            }
+            // 元断言：12 例必须同时覆盖中奖与未中——否则「恒 Lost」实现也能逐例全绿。
+            assert!(
+                wins >= 1 && losses >= 1,
+                "12 例须同时覆盖中奖与未中（wins={wins} losses={losses}）"
+            );
+        }
     }
     /// **泵序不是排序**：`NetPriorityQueue`（.NET 四叉最小堆逐位复刻）在同一优先级下按
     /// 插入与 sift 历史出队——3 条同键实测 `[0,2,1]`，`sort_by_key` 会给 `[0,1,2]`。
