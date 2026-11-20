@@ -304,6 +304,169 @@ mod tests {
         assert_eq!(r.draws, 3);
     }
 
+    fn oil_fixture() -> serde_json::Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/oil_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("oil 夹具缺失/不可读：{path}（{e}）"));
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
+    }
+
+    /// **IT-12 祝福油：纯决策与 oracle 逐例对拍**（`Desc[3]/[4]` 迁移 + 抽数）。
+    ///
+    /// 夹具由 `m3/oil-probe` 用**真身** `PlayObject.ClientUseItems` 产出；抽值由探针把
+    /// `ScriptedRandom` 装进 `OpenMir2.RandomNumber.random` 脚本化 ⇒ 每例的 `script`
+    /// 就是 oracle 实际消耗的抽数序列。Rust 用同一序列喂 [`weapton_make_luck`]，
+    /// **Desc 迁移与消耗条数都必须相同**。
+    #[test]
+    fn it12_oil_fixture_matches_pure_decision() {
+        let doc = oil_fixture();
+        let cases = doc["cases"].as_array().expect("cases 必须是数组");
+        assert_eq!(cases.len(), 12, "用例数固定 12（改动须同步本断言）");
+        let cfg = WeaponMakeLuckCfg::default();
+        let mut checked = 0usize;
+        let mut saw_curse_at_ten = false;
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let wb = &c["weapon_before"];
+            let eaten = c["frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["ident"].as_u64() == Some(635));
+            if wb.is_null() || !eaten {
+                continue; // 无武器 / 禁药：不吃，不抽；由下一条用例断言
+            }
+            let d3b = wb["desc"][3].as_u64().unwrap() as u8;
+            let d4b = wb["desc"][4].as_u64().unwrap() as u8;
+            let wa = &c["weapon_after"];
+            let d3a = wa["desc"][3].as_u64().unwrap() as u8;
+            let d4a = wa["desc"][4].as_u64().unwrap() as u8;
+            let script: Vec<i32> = c["script"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let weapon_index = c["ctx"]["weapon_index"].as_i64().unwrap_or(0);
+            // 武器模板 DC：2301 = 0x140A ⇒ nRand=2；2302 = 0 ⇒ nRand=0。
+            let n_rand = if weapon_index == 2302 { 0 } else { 2 };
+            let mut r = Scripted::new(&script);
+            let res = weapton_make_luck(&mut r, &cfg, n_rand, d3b, d4b);
+            assert_eq!(
+                (res.desc3, res.desc4),
+                (d3a, d4a),
+                "{name}: Desc 迁移必须与 oracle 相同"
+            );
+            assert_eq!(
+                r.draws,
+                script.len(),
+                "{name}: 消耗抽数必须与 oracle 相同（script={script:?}）"
+            );
+            if name == "oil_curse_desc4_at_ten_stays" {
+                saw_curse_at_ten = true;
+                assert_eq!(
+                    res.outcome,
+                    LuckOutcome::Cursed,
+                    "Desc[4]=10 必须走诅咒支（不是 Desc[4]-- 支）"
+                );
+                assert_eq!((res.desc3, res.desc4), (0, 10), "上界不越界");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 10, "至少 10 例被核对（实得 {checked}）");
+        assert!(saw_curse_at_ten, "缺 Desc[4]=10 诅咒支用例");
+    }
+
+    /// **IT-12 失败支（`use_item` 纯路径）**：无武器 ⇒ 不吃；禁药 ⇒ 不吃且红字通知。
+    /// 同时核 oracle 夹具里这两例的线序（636、零能力帧、无武器零通知 / 禁药恰一条红字）。
+    #[test]
+    fn it12_oil_fail_cases_eat_and_frames() {
+        use crate::ability::StdItemCatalog;
+        use crate::useitem::{use_item, UseItemActorState, UseItemContext, UseItemOutcome};
+
+        let doc = oil_fixture();
+        for c in doc["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            if name != "oil_fail_no_weapon" && name != "oil_fail_nodrug" {
+                continue;
+            }
+            let ids: Vec<u64> = c["frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["ident"].as_u64().unwrap())
+                .collect();
+            assert_eq!(ids, vec![636], "{name}: 不吃 ⇒ 只发 SM_EAT_FAIL(636)");
+            assert!(
+                c["pumped"].as_array().unwrap().is_empty(),
+                "{name}: 不吃 ⇒ 无能力帧"
+            );
+            if name == "oil_fail_no_weapon" {
+                assert!(
+                    c["notices"].as_array().unwrap().is_empty(),
+                    "无武器：零通知"
+                );
+            } else {
+                let notices: Vec<u64> = c["notices"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| n["ident"].as_u64().unwrap())
+                    .collect();
+                assert_eq!(notices, vec![11004], "禁药：恰一条红字 RM_SYSMESSAGE");
+            }
+
+            // Rust 纯路径：同一失败条件下的 `use_item` 必须 `eaten == false`。
+            let mut catalog = StdItemCatalog::new();
+            catalog.insert(
+                2300,
+                mir2_data::StdItem {
+                    name: "bless_oil".into(),
+                    std_mode: 3,
+                    shape: 4,
+                    ..Default::default()
+                },
+            );
+            let mut state = UseItemActorState {
+                wabil: Default::default(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                extra: crate::useitem::ItemsExtraState::default(), // weapon = None
+            };
+            let mut list = vec![crate::bag::BagItem {
+                make_index: 1,
+                index: 2300,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            }];
+            let ctx = UseItemContext {
+                catalog: &catalog,
+                can_use_item: true,
+                dead: false,
+                actor_id: 1,
+                make_index: 1,
+                no_drug: name == "oil_fail_nodrug",
+                function_npc_present: false,
+                unbind: &crate::unbindlist::UnbindList::default(),
+                red_msg_fcolor: 255,
+                red_msg_bcolor: 56,
+                green_msg_fcolor: 219,
+                green_msg_bcolor: 255,
+                repair_item_dec_dura: 90,
+                recalc: None,
+            };
+            let mut item_number = 0;
+            let out: UseItemOutcome = use_item(&ctx, &mut state, &mut list, &mut item_number);
+            assert!(!out.eaten, "{name}: 同条件不得吃");
+        }
+    }
+
     /// **`Random(0)` 跨语言口径**（opc-19 点名）：.NET 实测（PowerShell `System.Random`）为
     /// seed=1 ⇒ `Next(0)=0, Next(100)=11, 46, Next(30000)=23148`；seed=20261120 ⇒
     /// `0, 63, 32, 11637`。Rust 必须**返回值与后续序列都相同**（含「消耗一次抽样」）。

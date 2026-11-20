@@ -698,4 +698,10 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 - **三条钉住用例**：`tests::net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion`（等键 `[0,2,1]`）、`tests::eat_notice_drain_matches_oracle_order_for_shape13`（622 先于 44）、`tests::it12_oil_frame_order_desc_and_always_eaten`（祝福油 `[635,752,52,622]` + `Desc[3]/[4]` 迁移 + 诅咒支上界）。
 - **牙**：对调宿主里 `RM_ABILITY`/`RM_SUBABILITY` 的**发送序**，线序必须不变（由堆决定，不由 push 序决定）。
 
-**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
+**第二批（探针/夹具/比较器/牙，2026-11-20）**
+- **探针**：新建 `mir2-rs/tests/parity/m3/oil-probe`（不动 `eat-probe`），产物 `mir2-rs/tests/parity/m3/fixtures/oil_vectors.json`（12 例）。`weapon_before/after` 记**整套 `desc[14]`**（后续 shape 可复用同一 schema）；抽值用 `ScriptedRandom` 装进 `OpenMir2.RandomNumber.random`（= `WeaptonMakeLuck` 读的字段）；pump `RM_ABILITY`/`RM_SUBABILITY`/`RM_WEIGHTCHANGED` ⇒ 每例 `pumped=[752,52,622]`、直发 `[635]`。
+- **Oracle 实测要点**：`oil_curse_desc4_at_ten_stays` 在 oracle 里**一条 sysmsg 都没有**（`Desc[3]=0` 且 `Desc[4]=10` ⇒ `MakeWeaponUnlock` 两支都不进）——这是"上界不越界"的最强证据；失败支 `oil_fail_no_weapon` = 636 + 零通知、`oil_fail_nodrug` = 636 + 恰一条红字。
+- **新增缺口（登记，不静默）**：所有"吃掉"例的 oracle 通知都含 `RM_CHARSTATUSCHANGED(10139)`（`RecalcAbilitys()` 的侧效应）；Rust 宿主**未建模 10139**（`notice_frame` 无映射、按 WRN 丢弃）——与 sysmsg 文本缺口并列，**不计入行为面 verified**。
+- **比较器**：`wepmake_luck::tests::it12_oil_fixture_matches_pure_decision`（逐例 Desc[3]/[4] 迁移 + 消耗抽数）、`it12_oil_fail_cases_eat_and_frames`（636/通知/纯路径不吃）。
+- **牙（实跑）**：T1 诅咒阈值 `==1`→`==2`；T2 点1 比较 `<`→`<=`；T3 `Desc[4] < 10`→`< 11`；T4 去掉点3 那次抽——四颗全红；泵序对调牙保持**绿**（线序由堆决定）。
+- **过程留痕（教训）**：变异还原用 `shutil.copy2` 会**保留 mtime** ⇒ cargo 不重编 ⇒ 首轮全量 `2083 passed / 4 failed` 是**陈旧二进制的假红**；`touch` 源码后复跑 `2087 passed / 0 failed / 61 ignored`。后续变异脚本还原后必须 `touch` 或 `cargo clean -p game-svr`。**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
