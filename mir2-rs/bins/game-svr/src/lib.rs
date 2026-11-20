@@ -10579,6 +10579,15 @@ fn emit_eat_notices(
         game_svr::msgqueue::NetPriorityQueue::new();
     for n in notices {
         queue.enqueue(n, n.ident as u8);
+        // oracle `RecalcAbilitys` 尾段对 657 发**两次**：`:2875 StatusChanged()` 直发（`SendMsg`）+
+        // `:2876 SendUpdateMsg`。后者入队前按**队首**同 ident 去重（pop），再 `SendMsg` 入队。
+        // **不是排序**：pop+push 会改变同优先级元素的 sift 历史（Shape12 六条 252 蓝字的出队序即由此定）。
+        if n.ident == mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32 {
+            while queue.peek().is_some_and(|head| head.ident == n.ident) {
+                let _ = queue.dequeue();
+            }
+            queue.enqueue(n, n.ident as u8);
+        }
     }
     let mut sent = 0usize;
     while let Some(n) = queue.dequeue() {
@@ -10595,6 +10604,21 @@ fn emit_eat_notices(
         }
     }
     sent
+}
+
+/// oracle `EatItems` 尾部才 `WeightChanged()`：把 `RM_WEIGHTCHANGED` 移到 case 内通知**之后**再入队。
+///
+/// **为什么必须移**：`PriorityQueue` 的同优先级出队序依赖**入队历史**（sift）；
+/// Shape12 的六条 `RM_SYSMESSAGE`(252) 的出队序由"657 之前是否已插入 622"决定——
+/// 生产里 `use_item` 先 push 622、宿主再 append 657/52 ⇒ 必须在这层按 oracle 发送序重排。
+fn eat_notices_weight_changed_last(notices: &mut Vec<game_svr::useitem::QueuedNotice>) {
+    if let Some(pos) = notices
+        .iter()
+        .position(|n| n.ident == game_svr::useitem::RM_WEIGHTCHANGED)
+    {
+        let w = notices.remove(pos);
+        notices.push(w);
+    }
 }
 
 /// Shape12 的 657 自通知（oracle `RecalcAbilitys` 尾段 `:2874-2876`）：
@@ -11124,6 +11148,8 @@ fn handle_eat_cmd(
         }
     }
 
+    // oracle `EatItems` 尾部才 `WeightChanged()`（详见 [`eat_notices_weight_changed_last`]）。
+    eat_notices_weight_changed_last(&mut out.notices);
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
         return;
     };
@@ -101924,15 +101950,53 @@ fn ",
             hunger_status: 0,
             hit_speed: 0,
         };
-        // 六条同 ident(11004) 必须**可区分**：Inline 文本各异 ⇒ 帧体两两不同 ⇒ 顺序可机判。
-        let mut notices: Vec<_> = (0..6)
-            .map(|i| game_svr::useitem::QueuedNotice {
+        // **期望来自夹具**（不是模型自算）：六条同 ident(11004) 只能靠**文本**区分，
+        // 夹具 `expect.notices` 记录的就是 oracle 的**出队序**。
+        let fx = {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/parity/m3/fixtures/buff_vectors.json"
+            );
+            let raw = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("buff_vectors 缺失/不可读：{path}（{e}）"));
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .unwrap_or_else(|e| panic!("{path} 非法 JSON：{e}"))
+        };
+        let case = fx["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_shape12_six_buffs")
+            .expect("six_buffs case");
+        let fx_texts: Vec<String> = case["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["ident"].as_i64() == Some(11004))
+            .map(|n| n["text"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(fx_texts.len(), 6, "六条蓝字文本");
+        // **入队序 = oracle 源码序**（`PlayObject.Base.cs:2101-2157`：DC→MC→SC→HIT→HP→MP）。
+        let order = ["攻击力", "魔法力", "精神力", "攻速", "体力值", "魔法值"];
+        let enq_texts: Vec<String> = order
+            .iter()
+            .map(|k| {
+                fx_texts
+                    .iter()
+                    .find(|t| t.contains(k))
+                    .unwrap_or_else(|| panic!("夹具文案缺 {k}"))
+                    .clone()
+            })
+            .collect();
+        let mut notices: Vec<_> = enq_texts
+            .iter()
+            .map(|t| game_svr::useitem::QueuedNotice {
                 ident: game_svr::useitem::RM_SYSMESSAGE,
                 w_param: 0,
                 n_param1: 251,
                 n_param2: 252,
                 n_param3: 0,
-                text: game_svr::useitem::NoticeText::Inline(format!("s{i}")),
+                text: game_svr::useitem::NoticeText::Inline(t.clone()),
             })
             .collect();
         let plain = |ident: i32| game_svr::useitem::QueuedNotice {
@@ -101943,16 +102007,25 @@ fn ",
             n_param3: 0,
             text: game_svr::useitem::NoticeText::None,
         };
+        // **宿主列表序**（`use_item` 先 push 622，宿主再 append 657/52）——然后由生产 helper 重排成
+        // oracle 发送序：六条蓝字 → 657 → 52 → **622 最后**（`EatItems` 尾部）。
         notices.push(plain(game_svr::useitem::RM_WEIGHTCHANGED));
         notices.push(plain(game_svr::useitem::RM_CHARSTATUSCHANGED));
         notices.push(plain(game_svr::useitem::RM_ABILITY));
-        // 期望线序（入队下标）：A(8) 先出队（`RM_ABILITY→SM_ABILITY(52)` 已随
-        // `card/ability-frames` 合入）→ WEIGHT(6) → 657(7) → 蓝字 [1,5,4,3,2,0]。
-        let want_idx = [8usize, 6, 7, 1, 5, 4, 3, 2, 0];
-        let want: Vec<Vec<u8>> = want_idx
-            .iter()
-            .map(|&i| game_svr::pickwire::notice_frame(&notices[i], &wire).expect("全部有映射"))
-            .collect();
+        eat_notices_weight_changed_last(&mut notices);
+        // 期望线序：A(52,67) → W(622,131) → C(657,155) → 六条蓝字（**夹具出队序**）。
+        let mut want: Vec<Vec<u8>> = vec![
+            game_svr::pickwire::notice_frame(&notices[7], &wire).expect("52"),
+            game_svr::pickwire::notice_frame(&notices[8], &wire).expect("622"),
+            game_svr::pickwire::notice_frame(&notices[6], &wire).expect("657"),
+        ];
+        for t in &fx_texts {
+            let n = notices
+                .iter()
+                .find(|n| matches!(&n.text, game_svr::useitem::NoticeText::Inline(x) if x == t))
+                .unwrap_or_else(|| panic!("夹具文本无对应通知：{t}"));
+            want.push(game_svr::pickwire::notice_frame(n, &wire).expect("100"));
+        }
         let uniq: std::collections::BTreeSet<&Vec<u8>> = want.iter().collect();
         assert_eq!(
             uniq.len(),
@@ -101973,7 +102046,7 @@ fn ",
         );
         assert_eq!(
             got, want,
-            "生产接线出队序 = 单遍四叉堆 sift 序（同 ident 六条 [1,5,4,3,2,0]）"
+            "生产接线出队序 == 夹具 expect.notices（A→W→C→六条按文本；含 657 的 pop+push 语义）"
         );
     }
     /// **IT-07 657 断言（host 边界：通知构造 + 帧映射）**：Shape12 的 657 自通知
