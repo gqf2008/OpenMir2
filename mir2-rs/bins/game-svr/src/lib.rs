@@ -61406,7 +61406,11 @@ SendRefMsgRange=15
                 0
             );
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1
             );
             assert_eq!(
@@ -78996,7 +79000,11 @@ SendRefMsgRange=15
             assert_eq!(level, 1, "max_train 拉高 ⇒ 不升级");
             // 训练尾 640：+1000ms 交付批恰 1 条（仅自己）。
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
                 "[{magic_id}] 到点（+1000ms）⇒ 恰 1 条 LVEXP（仅自己）"
             );
@@ -79058,7 +79066,11 @@ SendRefMsgRange=15
             // 训练尾 640：+1000ms 交付批恰 1 条（仅自己）；放在取数/对照流断言之后，
             // 避免交付段抽数混进施法段 RNG 窗口。
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
                 "[{magic_id}] 到点（+1000ms）恰 1 条 LVEXP"
             );
@@ -79119,7 +79131,11 @@ SendRefMsgRange=15
                 0
             );
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
                 "到点（+1000ms）⇒ 恰 1 条 LVEXP"
             );
@@ -79248,7 +79264,11 @@ SendRefMsgRange=15
                 0
             );
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1
             );
         }
@@ -79267,7 +79287,11 @@ SendRefMsgRange=15
                 0
             );
             assert_eq!(
-                sf_count(&rig.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
                 "race >= Animal ⇒ boTrain=true（不依赖推挤；+1000ms 交付批）"
             );
@@ -79300,7 +79324,11 @@ SendRefMsgRange=15
                 "[{magic_id}] 门开 ⇒ 施法批无 LVEXP（+1000ms 交付批）"
             );
             assert_eq!(
-                sf_count(&open.deliver(1000), 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                sf_count(
+                    &open.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
                 "[{magic_id}] 门开 ⇒ 到点（+1000ms）恰 1 条 LVEXP"
             );
