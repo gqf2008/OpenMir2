@@ -12,6 +12,10 @@
 
   红检：-SelfTestRed 用 --force-legacy（把现行口径当成旧位移评估，不碰源码）跑同一套判据，必须判红。
 
+  哈希口径：`corpus_sha256` 按 **CRLF→LF 归一化后**的字节算（与检出/换行风格无关）。
+  **勿**改回 `Get-FileHash` 直接按工作树字节算——同 commit 的语料在主检出是 CRLF、在 worktree 是 LF，
+  会得到两个不同的 sha（2026-11-20 实证 c0d8b695… vs e65f3b29…），同一门禁在不同检出下自相矛盾。
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/script-dispatch/run_dispatch_regression.ps1
 .EXAMPLE
@@ -36,6 +40,23 @@ $Expected = Join-Path $PSScriptRoot 'expected.json'
 $ProbeProj = Join-Path $RepoRoot 'tools\oracle\cond-crash-probe\CondCrashProbe.csproj'
 $ProbeExe = Join-Path $RepoRoot 'tools\oracle\cond-crash-probe\bin\Release\CondCrashProbe.exe'
 
+function Get-NormalizedSha256 {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  # 字节级把 CRLF 折成 LF（只删 LF 前的 0x0D），再算 SHA256。
+  # 不经过文本解码 ⇒ 不改变 BOM/编码；只依赖 .NET，PS 5.1 / 7 都可跑（Get-FileHash 在 5.1 不保证存在）。
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $norm = New-Object System.IO.MemoryStream
+  try {
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+      if ($bytes[$i] -eq 13 -and ($i + 1) -lt $bytes.Length -and $bytes[$i + 1] -eq 10) { continue }
+      $norm.WriteByte($bytes[$i])
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $digest = $sha.ComputeHash($norm.ToArray()) } finally { $sha.Dispose() }
+  } finally { $norm.Dispose() }
+  return (-join ($digest | ForEach-Object { $_.ToString('x2') }))
+}
+
 if (-not (Test-Path $Corpus)) { Write-Output "RED  语料不存在: $Corpus"; exit 1 }
 if (-not (Test-Path $Expected)) { Write-Output "RED  期望值文件不存在: $Expected"; exit 1 }
 $exp = Get-Content -LiteralPath $Expected -Raw | ConvertFrom-Json
@@ -44,7 +65,8 @@ Write-Output "== 脚本派发回归门禁（B-8 / T-4）"
 Write-Output "   语料: $Corpus"
 
 # 1) 语料哈希（防误改：改了语料就必须同步改 expected.json，并在提交说明里写清原因）
-$hash = (Get-FileHash -LiteralPath $Corpus -Algorithm SHA256).Hash.ToLower()
+#    口径 = CRLF→LF 归一化后的字节（与检出无关）；见文件头「哈希口径」。
+$hash = Get-NormalizedSha256 -Path $Corpus
 $hashOk = ($hash -eq $exp.corpus_sha256.ToLower())
 Write-Output ("{0}  corpus-sha256  ({1}，期望 {2})" -f $(if ($hashOk) { "PASS" } else { "FAIL" }), $hash.Substring(0, 16), $exp.corpus_sha256.Substring(0, 16))
 
