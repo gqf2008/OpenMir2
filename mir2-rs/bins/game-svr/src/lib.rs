@@ -15128,10 +15128,30 @@ fn handle_spell_cmd_with_magic(
                     );
                     broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                 }
-                // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`。
+                // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`：oracle 是 `SendSelfDelayMsg(…, 1000)`
+                // （升级支 `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
                 if tail.train.levelup_msg {
-                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
-                    send_self_frame(online, gates, chr_name, body);
+                    if tail.train.level_up {
+                        world.update_self_delay_msg_full(
+                            actor_id,
+                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                            0,
+                            i32::from(req.magic_id),
+                            i32::from(train.level),
+                            train.tran_point,
+                            800,
+                        );
+                    } else {
+                        world.send_self_delay_msg_full(
+                            actor_id,
+                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                            0,
+                            i32::from(req.magic_id),
+                            i32::from(train.level),
+                            train.tran_point,
+                            1000,
+                        );
+                    }
                 }
                 let _ = tail.returned;
             }
@@ -84615,6 +84635,167 @@ SendRefMsgRange=15
             sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
             0,
             "boTrain=false ⇒ 无训练尾"
+        );
+    }
+
+    /// **8 `SKILL_FIREWIND` 的训练尾 640 必须是「+1000ms 交付批」**（sweep 卡 #5；
+    /// 37 与 8 共用同一支效果体与同一出口，`spell_cmd_energyrepulsor_matches_firewind_byte_for_byte`
+    /// 已钉「逐字节同形」，故本测对 37 同样成立）。
+    ///
+    /// oracle：`case SKILL_FIREWIND` 是 `if (MagPushArround(...) > 0) boTrain = true;`，
+    /// 640 由共享尾 `MagicManager.cs:666 SendSelfDelayMsg(…, 1000)` 发出。
+    ///
+    /// 断言：① 施法段 `drain` 后 socket 911 **恰 0 条** 640；② 跨 1000ms 交付后**恰 1 条**。
+    /// 红检：把该处改回 `send_self_frame` ⇒ ① 立红。
+    #[test]
+    fn spell_tail_firewind_640_delivered_after_1000ms() {
+        use mir2_shared::rng::RandomNumber;
+        let (
+            mut world,
+            caster,
+            mut online,
+            mut saves,
+            _magic_table,
+            mut displays,
+            gates,
+            mut rx,
+            _dir,
+        ) = effect_rig(20, mir2_world_bevy::magic::SKILL_FIREWIND, None, "fw640");
+        // 开启训练尾（`train_level[Level]=0 <= Abil.Level`、`TrainLv=3 > Level`、`MaxTrain=1000` 不升级）
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: mir2_world_bevy::magic::SKILL_FIREWIND,
+            effect: 9,
+            effect_type: 4,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        // 目标：相邻（11,10）玩家；远点（20,20）也进 VisibleActors（被 |Δ|<=1 门挡掉）——
+        // 与既有 8 正例同夹具（`spell_cmd_firewind_enters_effect_draws_and_pushes`）。
+        let target = {
+            let mut e = new_player_entity("target".to_string(), 11, 10);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        let far = {
+            let mut e = new_player_entity("far".to_string(), 20, 20);
+            e.level = 15;
+            world.add_entity(e)
+        };
+        world.tick();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "target".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: target,
+            },
+        );
+        world
+            .entities
+            .map_binding_mut(caster)
+            .unwrap()
+            .visible_actors = vec![
+            mir2_world_bevy::entity::VisibleBaseObject {
+                target: far,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
+            },
+            mir2_world_bevy::entity::VisibleBaseObject {
+                target,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
+            },
+        ];
+        world.rng = RandomNumber::with_seed(1);
+
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        ground_sessions.insert("caster".into(), spell_session_ground(caster));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(11, 10),
+            mir2_world_bevy::magic::SKILL_FIREWIND,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let mut idents_911: Vec<u16> = Vec::new();
+        for (sock, ids) in effect_drain(&mut rx) {
+            if sock == 911 {
+                idents_911.extend(ids);
+            }
+        }
+        assert_eq!(
+            idents_911
+                .iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_MAGIC_LVEXP)
+                .count(),
+            0,
+            "[8] 施法段不得有 640（oracle 是 SendSelfDelayMsg(…, 1000)）；实得 {idents_911:?}"
+        );
+
+        let mut elapsed = 0u64;
+        while elapsed < 1000 {
+            world.clock_ms += 100;
+            elapsed += 100;
+            let outs = world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut world,
+                &online,
+                &mut displays,
+                &mut ground_sessions,
+                &gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(&rec, &world, &online, &mut ground_sessions, &gates);
+        }
+        for (sock, ids) in effect_drain(&mut rx) {
+            if sock == 911 {
+                idents_911.extend(ids);
+            }
+        }
+        assert_eq!(
+            idents_911
+                .iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_MAGIC_LVEXP)
+                .count(),
+            1,
+            "[8] 跨 1000ms 后应恰 1 条 640；实得 {idents_911:?}"
         );
     }
 
