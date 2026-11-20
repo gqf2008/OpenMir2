@@ -288,6 +288,9 @@ mod tests {
                 server_index: 0,
                 flag: mir2_envir::mapinfo::MapInfoFlag {
                     bo_norandommove: *norandom,
+                    // 与探针夹具一致：`DayLight=true` ⇒ `DayBright()=0`（634 的 Series 与真实小时解耦；
+                    // 时间三桶的覆盖见 `map_change_634_day_bright_buckets`，章程 §36）。
+                    day_light: true,
                     ..Default::default()
                 },
             })
@@ -696,5 +699,115 @@ mod tests {
             5,
             Some("eat_ok_shape3_dungeon_home_coords_zero_random"),
         );
+    }
+
+    fn registry_with_flag(
+        dir: &Path,
+        name: &str,
+        flag: mir2_envir::mapinfo::MapInfoFlag,
+    ) -> mir2_envir::MapRegistry {
+        write_walkable_map(dir, name, 60, 60);
+        let entries = vec![mir2_envir::mapinfo::MapInfoEntry {
+            map_name: name.to_string(),
+            map_file_name: name.to_string(),
+            desc: String::new(),
+            server_index: 0,
+            flag,
+        }];
+        mir2_envir::MapRegistry::from_entries(mir2_envir::MapLoader::new(dir, "", ""), entries)
+    }
+
+    /// **章程 §36**：`SM_CHANGEMAP(634)` 的 `Series = DayBright()` 由 `game_time` 桶映射
+    /// （`enter::day_bright`：`{1→0, 3→1, 其它→2}`；`DayLight` 恒 0；`boDarkness` 恒 1）。
+    /// 生产入口读真实小时，本用例走 `drain_map_change_at_time` **注入**时钟，覆盖被
+    /// 「夹具置 `DayLight=true`」避开的三个时间分支。
+    ///
+    /// 红检：把 `day_bright` 的 `1=>0 / 3=>1 / _=>2` 任一改错 ⇒ 对应用例红；删 `DayLight`/`boDarkness`
+    /// 短路 ⇒ 对应红。
+    #[test]
+    fn map_change_634_day_bright_buckets() {
+        use mir2_world_bevy::HomeMoveTarget;
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mir2-daybright-{}-{seq}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+
+        let default_flag = || mir2_envir::mapinfo::MapInfoFlag::default();
+        let cases: Vec<(mir2_envir::mapinfo::MapInfoFlag, u8, u16, &str)> = vec![
+            (default_flag(), 1, 0, "game_time=1 ⇒ DayBright=0"),
+            (default_flag(), 3, 1, "game_time=3 ⇒ DayBright=1"),
+            (default_flag(), 2, 2, "game_time=其它 ⇒ DayBright=2"),
+            (
+                mir2_envir::mapinfo::MapInfoFlag {
+                    day_light: true,
+                    ..Default::default()
+                },
+                2,
+                0,
+                "DayLight ⇒ 恒 0",
+            ),
+            (
+                mir2_envir::mapinfo::MapInfoFlag {
+                    bo_darkness: true,
+                    ..Default::default()
+                },
+                2,
+                1,
+                "boDarkness ⇒ 恒 1",
+            ),
+        ];
+        for (flag, bucket, want, label) in cases {
+            let reg = registry_with_flag(&dir, "move_map", flag);
+            let mut world = mir2_world_bevy::World::with_maps(crate::mapwire::sizes(&reg));
+            world.open_session("hero");
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let actor_id = world.enter_map("hero", e, 0).expect("进图");
+            // 记一条 `MapChange{space_move_show: Some(false)}`（同图移动也走 switch_map_space）。
+            let _ = world.base_object_move_player(
+                "hero",
+                actor_id,
+                Some(HomeMoveTarget::Fixed {
+                    map_id: 0,
+                    x: 6,
+                    y: 6,
+                }),
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id,
+                },
+            );
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            let displays = crate::downlink::DisplayTable::new();
+            crate::drain_map_change_at_time(
+                &mut world,
+                &online,
+                &gates,
+                &displays,
+                Some(&reg),
+                bucket,
+            );
+            let mut got: Option<u16> = None;
+            while let Ok(ev) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = ev {
+                    let m = CommandMessage::from_bytes(&body).expect(">=12B");
+                    if m.ident == 634 {
+                        got = Some(m.series);
+                    }
+                }
+            }
+            assert_eq!(got, Some(want), "{label}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

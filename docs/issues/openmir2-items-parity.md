@@ -585,6 +585,22 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 
 **状态**：`implemented_unverified`（同 §9.12/§9.13：共用换图路径缺口 766/54 与 `[名|文件]`
 见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
+
+**§33/§36 补记（2026-11-20，`card/items-move-09` 复审返工）**：
+1. **lane 偶发（§33）**：IT-10 牙脚本首跑 9 项中 **2 项 MISMATCH（1 次）**，当时全机 **4 个 cargo** 在场；
+   车道空后同脚本复跑 **9/9** 全绿（无改动）⇒ 基线/牙只在车道空（≤1 条、free ≥5G）时跑，偶发按「次数/总数」报。
+2. **钟点依赖（§36）**：`ae` 11:00 跑 `cargo test --lib` = **2071 passed / 9 failed / 61 ignored**，9 红全在
+   `eat_move.rs:552`，**差异仅 `SM_CHANGEMAP(634).Series` 一个字段**（left 2 / right 0；其余帧逐字节相同）。
+   根因：产品 `drain_map_change` 的 `DayBright()` 取**真实本地小时**（`enter::game_time_now()`），
+   而夹具注册表的 `MapInfoFlag` 是 `default`（`day_light=false`）⇒ 只有 5–10/16–19/21 点映射到 0 才绿
+   （当时绿是钟点巧合）。**修法（三条都做）**：
+   - `eat_move.rs::registry_from` 的 `MapInfoFlag` 置 `day_light: true`（与探针夹具一致）；
+   - **非白天钟点复跑**：11:10 跑 `--lib eat_move` = **11 passed / 0 failed**（含 IT-09/10/11 全部）；
+   - **补注入时钟覆盖**：`drain_map_change` 拆出 `drain_map_change_at_time(..., game_time)` 注入缝，
+     新用例 `map_change_634_day_bright_buckets` 断言 634 的 `Series` 三桶
+     （`game_time 1→0 / 3→1 / 其它→2`，`DayLight⇒0`，`boDarkness⇒1`）；
+   - **负对照**：删除 `day_light: true` 行后在 11:10 跑 `it09` ⇒ 红（634 `Series` 2 vs 0，与 ae 现象一致），
+     还原 `sha256` 相等后复绿。⇒ 「避开依赖」不再无覆盖，「全绿」附了跑的时刻（11:10，非白天窗口）。
 ### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）

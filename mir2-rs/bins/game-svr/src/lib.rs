@@ -18636,6 +18636,28 @@ fn drain_map_change(
     displays: &downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
 ) {
+    // `Envir.DayBright()` 的 `Bright` 桶来自**真实本地小时**；生产入口只此一处。
+    // 需要注入的测试走 [`drain_map_change_at_time`]（章程 §36：读真实时钟的产品分支必须可注入）。
+    drain_map_change_at_time(
+        world,
+        online,
+        gates,
+        displays,
+        registry,
+        enter::game_time_now(),
+    );
+}
+
+/// [`drain_map_change`] 的**时间注入**版：`game_time` = `Bright` 的桶（1 / 3 / 其它），
+/// 由 [`enter::day_bright`] 映射成 `SM_CHANGEMAP(634)` 的 `Series`（`DayBright()`）。
+pub(crate) fn drain_map_change_at_time(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    registry: Option<&mir2_envir::MapRegistry>,
+    game_time: u8,
+) {
     let changes = world.sessions.drain_map_changes();
     for mut ev in changes {
         // **P2-3a**：目标图不归本 World（stub/跨片）⇒ 不发 TransMap 簇（防御性；
@@ -18664,7 +18686,7 @@ fn drain_map_change(
             .to_vec();
         // `DayBright()`：新图的 flag + 世界时钟（缺则 0，并记 WRN 不静默）。
         let day_bright = match registry.and_then(|r| r.flag_of(ev.map_id)) {
-            Some(f) => enter::day_bright(f, Some(enter::game_time_now())).unwrap_or(0),
+            Some(f) => enter::day_bright(f, Some(game_time)).unwrap_or(0),
             None => {
                 glog!(
                     "WRN",
