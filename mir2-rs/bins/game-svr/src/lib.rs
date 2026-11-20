@@ -3828,10 +3828,10 @@ fn drain_party_death_events(
 ///
 /// # 登记（未 1:1，真机项）
 ///
-/// - oracle `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 缓存**（`BaseObject.Message.cs:395`）：缓存命中支
-///   （`:453-460`）按 `< 11` 的窄门重扫，重算支（`:399-402`）按 `SendRefMsgRange`=12 的 25×25 块；
-///   本实现每 tick 现算现发（同
-///   [`drain_combat_downlink`] 口径）—— 真机两侧同序列对拍时须对齐。
+/// - **500ms `VisibleHumanList` 缓存：已建模（T-287 残余 #8，2026-11-20）**——oracle 每只宝宝
+///   连续两次 `SendRefMsg`（`RefNameColor(); RefShowName();`）：656 首扫（`<= SendRefMsgRange` 闭区间）、
+///   42 命中缓存（`< 11`）。本实现**逐帧各判一次**缓存（见下 hits 构造），与
+///   [`drain_combat_downlink`] 同口径。
 /// - 帧先入观察者 `MsgQueue`，下一轮 `Run()` 才回 `SM_*`；本实现当 tick 直发（同既有下行族）。
 /// - `GetShowName()` 的 `Master != null ⇒ "(主人名)"` 后缀：本路径 `process_slave_mutiny` 已把
 ///   `Master` 置 `None` ⇒ 不可达；`NpcNameColor` 分支同理（叛变宝宝恒非 NPC）⇒ 传 0 且不消费。
@@ -10799,10 +10799,10 @@ fn handle_eat_cmd(
 /// （`PlayObject.Message.cs:1762-1764`：`recog = processMsg.ActorId`、`param/tag = LoWord/HiWord(feature)`、
 /// `series = GetFeatureEx()`）。
 ///
-/// **登记（未建模，不静默）**：oracle `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 重建缓存**
-/// （`BaseObject.Message.cs:395-397/455`）与 `ObMode/FixedHideMode` 的“只发自己”分支；
-/// 非玩家目标的 `WantRefMsg` 名单也不在
-/// 本实现内（本宿主只承载玩家）。这两项对所有 `RM_*` 广播同源，随具体 `SM_*` 再接。
+/// **已建模（#20，2026-11-20）**：oracle `SendRefMsg` 的 **500ms `VisibleHumanList` 重建缓存**
+/// （`BaseObject.Message.cs:395-397/455`）与 **`ObMode/FixedHideMode` 的“只发自己”分支**
+/// 均经 `ref_msg_cache::targets` 接入（隐藏 ⇒ `[self]`；`skip` 语义逐点保留）。
+/// **仍不建模（登记）**：非玩家目标的 `WantRefMsg` 名单（本宿主只承载玩家）。
 fn broadcast_feature_changed(
     world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
@@ -38104,7 +38104,8 @@ mod tests {
     /// （`BaseObject.Message.cs:383-473`）同口径——`RM_HIT` 只发给 `Race == Play`：
     /// 登记进在线表的非 Play actor 既不是 `RM_HIT` 收件人，也不会因自身受击而下发帧；
     /// NPC 只作发帧者、不作收件人。收件人残余见 whitelist D-13 / T-154 残余④
-    /// （500ms `VisibleHumanList` 缓存、非 Play 的 `WantRefMsg` 名单未建模）。
+    /// （**非 Play 的 `WantRefMsg` 名单**未建模；500ms `VisibleHumanList` 缓存已由 T-287 接入，
+    /// 见残余卡 C1/C2 批 7）。
     ///
     /// 链路：`World::npc_tick` → `mir2-rs/crates/world-bevy/src/npc.rs`（`guild_official_run_body`：
     /// `GuildOfficial.cs:39-53` 的 `Random(40)==0 ⇒ TurnTo(RandomByte(8))`，否则
