@@ -118,6 +118,10 @@ pub(crate) fn maybe_eat_move(
     registry: Option<&mir2_envir::MapRegistry>,
     dead: bool,
     no_drug: bool,
+    // **IT-13 行会回城**：`PlayObject.InGuildWarArea` 的每 actor 会话位（宿主 `castle_war_states`）。
+    castle_war_states: &HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    // 红字 `SM_SYSMESSAGE` 的颜色（`[Setup] RedMsgFColor/BColor`）。
+    colors: &crate::MsgColors,
 ) -> bool {
     // `ClientUseItems`：`if (BoCanUseItem) { if (!Death) { … } }`；`EatItems` 首判 `boNODRUG`。
     if dead || no_drug {
@@ -134,7 +138,7 @@ pub(crate) fn maybe_eat_move(
     let Some(tpl) = catalog.get(sg.state.item_list[pos].index) else {
         return false;
     };
-    if tpl.std_mode != 3 || !matches!(tpl.shape, 1..=3) {
+    if tpl.std_mode != 3 || !matches!(tpl.shape, 1..=3 | 5) {
         return false;
     }
 
@@ -179,6 +183,80 @@ pub(crate) fn maybe_eat_move(
             }
             (cur_map.clone(), 0, 0)
         }
+        // case5（IT-13 行会回城，`PlayObject.Base.cs:2264-2286`）：**不对称**——
+        // `MyGuild == null` ⇒ 整段不做（不吃）；战区 ⇒ 红字「此处无法使用」**不吃**（636）；
+        // 非战区但无 `MasterGuild == MyGuild` 的城 ⇒ 红字「无效」但**吃**（635，位置不变）；
+        // 有效城堡 ⇒ `BaseObjectMove(castle.HomeMap, GetHomeX(), GetHomeY())`（先 X 后 Y 各抽 `Random(9)`）。
+        5 => {
+            // `MyGuild == null` ⇒ `case 5` 整段不做、`result=false` ⇒ 交回 `use_item` 落 636。
+            let Some(guild) = world.actor_guild(actor_id) else {
+                return false;
+            };
+            let in_war = castle_war_states
+                .get(&actor_id)
+                .is_some_and(|s| s.in_guild_war_area);
+            if in_war {
+                // 不吃：直发 636 + 红字「此处无法使用」（`PlayObject.Base.cs:2283`）。
+                if let Some(tx) = &tx {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket,
+                        body: eat_frame(crate::useitem::SM_EAT_FAIL),
+                    });
+                    let body = crate::smframe::sm_sysmessage(
+                        actor_id,
+                        u16::from(colors.red_f),
+                        u16::from(colors.red_b),
+                        &crate::enter::gbk("此处无法使用"),
+                    );
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                }
+                return true;
+            }
+            // `CastleMgr.IsCastleMember(this)` = 首座 `IsMember(MyGuild)` 的城；而 `IsMember` 本身
+            // 就是 `IsMasterGuild(MyGuild)`（`UserCastle.cs:480-483`）⇒ 找到 ⇔ 有效。
+            let castle = world
+                .castles
+                .iter()
+                .find(|c| c.master_guild == Some(guild))
+                .map(|c| (c.home_map.clone(), c.home_x, c.home_y));
+            let Some((home_map, home_x, home_y)) = castle else {
+                // 红字「无效」但**吃**（`PlayObject.Base.cs:2276-2279`）：位置不变、0 抽；吃的尾巴照走。
+                if let Some(tx) = &tx {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket,
+                        body: eat_frame(crate::useitem::SM_EAT_OK),
+                    });
+                }
+                sg.state.item_list.remove(pos);
+                sg.state.wabil.weight =
+                    crate::ground::recalc_bag_weight(catalog, &sg.state.item_list);
+                if let Some(tx) = &tx {
+                    // 泵序：`RM_WEIGHTCHANGED(10115→131)` < `RM_SYSMESSAGE(11004→252)`。
+                    let body = crate::smframe::sm_weightchanged(
+                        sg.state.wabil.weight,
+                        sg.state.wabil.wear_weight,
+                        sg.state.wabil.hand_weight,
+                    );
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                    let body = crate::smframe::sm_sysmessage(
+                        actor_id,
+                        u16::from(colors.red_f),
+                        u16::from(colors.red_b),
+                        &crate::enter::gbk("无效"),
+                    );
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                }
+                return true;
+            };
+            // `GetHomeX/Y()` = `(short)(HomeX - 4 + Random(9))`，实参从左到右 ⇒ **先 X 后 Y**。
+            let dx = world.rng.random_below(9);
+            let dy = world.rng.random_below(9);
+            (
+                home_map,
+                i32::from(home_x) - 4 + dx,
+                i32::from(home_y) - 4 + dy,
+            )
+        }
         // case3：`PvpLevel()<2 ⇒ BaseObjectMove(HomeMap,HomeX,HomeY)`，否则 `Config.RedHome*`。
         _ => {
             if pvp >= 2 {
@@ -220,9 +298,13 @@ pub(crate) fn maybe_eat_move(
     }
     // ② `RM_SPACEMOVE_FIRE`（**移动前**位置 ±12、含自己）⇒ 各收件人 `SM_SPACEMOVE_HIDE(800)`。
     //    失败（图缺失/201 轮不可走）也照发：oracle 的 FIRE 先于 `SpaceMove` 的成功判定。
-    let hide =
-        crate::smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, actor_id);
-    crate::broadcast_ref_msg_with_self(world, online, gates, actor_id, &[hide]);
+    //    **IT-13 Shape5 例外**：oracle `case 5` 直接 `BaseObjectMove`，没有 `SendRefMsg(FIRE)`
+    //（FIRE 只由 case1/2/3 显式发）⇒ 夹具 `pumped` 无 800；此处按 shape 门控。
+    if tpl.shape != 5 {
+        let hide =
+            crate::smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, actor_id);
+        crate::broadcast_ref_msg_with_self(world, online, gates, actor_id, &[hide]);
+    }
     // ③ `BaseObjectMove`：落图/落点（跨图时记一条 `MapChange{space_move_show: Some(false)}`，
     //    宿主 world tick 的 `drain_map_change` 出 633/634/801——不在本组对拍面）。
     let _ = world.base_object_move_player(chr_name, actor_id, target);
@@ -487,6 +569,7 @@ mod tests {
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
 
             // ① 生产换图簇：与 world tick 同一条路径（`drain_map_change`），展示表给 Light=0/Feature=0/
@@ -702,6 +785,380 @@ mod tests {
             5,
             Some("eat_ok_shape3_dungeon_home_coords_zero_random"),
         );
+    }
+
+    fn guild_fixture() -> serde_json::Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/guild_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("guild 夹具缺失/不可读：{path}（{e}）"));
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
+    }
+
+    /// **IT-13 行会回城 Shape5** 宿主级对拍（五支，`guild_vectors.json`）。
+    ///
+    /// 判据面与 IT-09/10/11 同构（帧逐字段 / 终态 X-Y / 背包 / 重量 / RNG 逐次 + 无多抽），
+    /// 另加两条本组专有：
+    /// - **Shape5 不发 `RM_SPACEMOVE_FIRE`**（oracle `case 5` 只调 `BaseObjectMove`；夹具 `pumped` 无 800）；
+    /// - **红字 `SM_SYSMESSAGE(100)` 逐字节**：`in_war_area` ⇒「此处无法使用」、`invalid` ⇒「无效」，
+    ///   尾 = `EDCode(gbk(文案))`，且线序 635/636 → 622 → 100（`131 < 252`）。
+    ///
+    /// **部署不可达（§18.1）**：位移两支靠 `castle.master_guild = Some(玩家行会)` 的 synthetic 构造
+    /// （部署态 `MasterGuild` 恒 null）⇒ 该两支证据**非生产路径**，不作生产已验证。
+    ///
+    /// 红检（逐支）：①`if in_war` 改 `!in_war` ⇒ war/invalid 两支互换红；②`master_guild` 判据改
+    /// `!=` ⇒ 位移两支与 invalid 互换红；③去掉 `-4` ⇒ 终态 X/Y 红；④抽序对调（先 Y 后 X）
+    /// ⇒ 逐次 RNG 红；⑤删掉 `tpl.shape != 5` 的 FIRE 门 ⇒ 位移两支多一帧 800 红。
+    fn run_guild_parity(only: Option<&str>) {
+        let doc = guild_fixture();
+        let mut cases: Vec<&serde_json::Value> =
+            doc["cases"].as_array().expect("cases").iter().collect();
+        if let Some(name) = only {
+            cases.retain(|c| c["name"].as_str() == Some(name));
+            assert_eq!(cases.len(), 1, "单例筛选 {name} 未命中（夹具被改？）");
+        } else {
+            assert_eq!(cases.len(), 5, "IT-13 用例数固定 5（夹具被改？）");
+        }
+        let modeled: [i64; 5] = [800, 622, 633, 634, 801];
+        let registered_gap: [i64; 2] = [766, 54];
+
+        let mut catalog = StdItemCatalog::new();
+        for (k, v) in doc["templates"].as_object().expect("templates") {
+            catalog.insert(
+                k.parse::<u16>().unwrap(),
+                mir2_data::StdItem {
+                    name: v["name"].as_str().unwrap().to_string(),
+                    std_mode: v["std_mode"].as_u64().unwrap() as u8,
+                    shape: v["shape"].as_u64().unwrap() as u8,
+                    weight: v["weight"].as_u64().unwrap() as u8,
+                    dura_max: 20,
+                    ..Default::default()
+                },
+            );
+        }
+
+        static DIR_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("mir2-guild-host-{}-{seq}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        for c in cases {
+            let ctx = &c["ctx"];
+            let reg = registry_from(
+                &dir,
+                &[
+                    ("move_map", false),
+                    ("home_map", false),
+                    ("red_map", false),
+                    ("castle_home", false),
+                ],
+            );
+            assert_eq!(reg.map_names().len(), 4);
+            let expect = &c["expect"];
+            let cur_name = ctx["current"]["map"].as_str().unwrap();
+            let cur_map_id = reg.id_of(cur_name).expect("当前图在注册表");
+            let seed = ctx["seed"].as_i64().unwrap() as i32;
+            let make_index = ctx["make_index"].as_i64().unwrap() as i32;
+            let item_index = ctx["index"].as_u64().unwrap() as u16;
+
+            let mut world = mir2_world_bevy::World::with_maps(crate::mapwire::sizes(&reg));
+            world.open_session("hero");
+            let mut e = mir2_world_bevy::EntitySpawn::new(
+                0,
+                "hero",
+                ctx["current"]["x"].as_i64().unwrap() as i32,
+                ctx["current"]["y"].as_i64().unwrap() as i32,
+            );
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e.pk_point = ctx["pvp_level"].as_i64().unwrap_or(0) as i32 * 100;
+            let actor_id = world.enter_map("hero", e, cur_map_id).expect("进图");
+            if let Some(ai) = world.entities.ai_mut(actor_id) {
+                ai.dir = 4;
+            } else {
+                panic!("实体缺 ai 组件");
+            }
+            let _ = world.sessions.drain_map_changes();
+
+            // 行会/城堡：探针私有的 synthetic 构造（部署态 `MasterGuild` 恒 null）。
+            let guild = mir2_world_bevy::castle::GuildId(1);
+            if ctx["has_guild"].as_bool().unwrap_or(false) {
+                world.set_actor_guild(actor_id, guild);
+            }
+            let ch = &ctx["castle_home"];
+            let mut castle = mir2_world_bevy::castle::UserCastle::new(
+                "castle",
+                mir2_world_bevy::castle::CastleSiegeConfig::default(),
+            );
+            castle.home_map = ch["map"].as_str().unwrap().to_string();
+            castle.home_x = ch["x"].as_i64().unwrap() as i16;
+            castle.home_y = ch["y"].as_i64().unwrap() as i16;
+            if ctx["castle_member"].as_bool().unwrap_or(false) {
+                castle.master_guild = Some(guild);
+            }
+            world.castles.push(castle);
+            let mut war_states: HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
+                HashMap::new();
+            if ctx["in_war_area"].as_bool().unwrap_or(false) {
+                war_states.insert(actor_id, war_state_in_war());
+            }
+
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            let mut sg = crate::tests::test_session_ground(actor_id);
+            sg.state.item_list = vec![BagItem {
+                make_index,
+                index: item_index,
+                dura: 10,
+                dura_max: 20,
+                desc: [0; 14],
+            }];
+            sg.state.wabil.weight = ctx["wabil_before"]["weight"].as_i64().unwrap() as u16;
+            sg.state.wabil.wear_weight = ctx["wabil_before"]["wear_weight"].as_i64().unwrap() as u8;
+            sg.state.wabil.hand_weight = ctx["wabil_before"]["hand_weight"].as_i64().unwrap() as u8;
+            sg.home = HomeState {
+                home_map: ctx["home"]["map"].as_str().unwrap_or("").to_string(),
+                home_x: ctx["home"]["x"].as_i64().unwrap() as i16,
+                home_y: ctx["home"]["y"].as_i64().unwrap() as i16,
+                red_home_map: ctx["red_home"]["map"].as_str().unwrap_or("").to_string(),
+                red_home_x: ctx["red_home"]["x"].as_i64().unwrap() as i16,
+                red_home_y: ctx["red_home"]["y"].as_i64().unwrap() as i16,
+            };
+            sessions.insert("hero".into(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id,
+                },
+            );
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            let colors = MsgColors {
+                red_f: 255,
+                red_b: 56,
+                hear_f: 0,
+                hear_b: 255,
+                whisper_f: 0,
+                whisper_b: 0,
+                green_f: 0xDB,
+                green_b: 0xFF,
+                blue_f: 0xFF,
+                blue_b: 0xFC,
+            };
+            let unbind = game_svr::unbindlist::UnbindList::default();
+            let mut item_number = 0;
+            world.rng = RandomNumber::with_seed(seed);
+
+            handle_eat_cmd(
+                make_index,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &gates,
+                &catalog,
+                &mut world,
+                &colors,
+                90,
+                &game_svr::strings::StringConf::default(),
+                Some(&reg),
+                &unbind,
+                &mut item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                None,
+                &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
+                &war_states,
+            );
+
+            let mut displays = crate::downlink::DisplayTable::new();
+            displays.set(
+                actor_id,
+                crate::downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"hero".to_vec()),
+            );
+            crate::drain_map_change(&mut world, &online, &gates, &displays, Some(&reg));
+
+            let hex =
+                |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect::<String>() };
+            let mut got: Vec<(i64, i64, i64, i64, i64, String)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                let m = CommandMessage::from_bytes(&body).expect(">=12B");
+                got.push((
+                    m.ident as i64,
+                    m.recog as i64,
+                    m.param as i64,
+                    m.tag as i64,
+                    m.series as i64,
+                    hex(&body[CommandMessage::SIZE..]),
+                ));
+            }
+
+            // 期望 = immediate ++ pumped（modeled 内）+ 逐支的 SysMsg 帧（逐字节文本）。
+            let golden_actor = ctx["actor_id"].as_i64().unwrap();
+            let five = |f: &serde_json::Value| {
+                let recog = f["recog"].as_i64().unwrap();
+                (
+                    f["ident"].as_i64().unwrap(),
+                    if recog == golden_actor {
+                        i64::from(actor_id)
+                    } else {
+                        recog
+                    },
+                    f["param"].as_i64().unwrap(),
+                    f["tag"].as_i64().unwrap(),
+                    f["series"].as_i64().unwrap(),
+                    f["tail"].as_str().unwrap_or("").to_string(),
+                )
+            };
+            let name = c["name"].as_str().unwrap();
+            let sysmsg = |text: &str| -> (i64, i64, i64, i64, i64, String) {
+                let body =
+                    crate::smframe::sm_sysmessage(actor_id, 255, 56, &crate::enter::gbk(text));
+                let m = CommandMessage::from_bytes(&body).expect("SysMsg 可解析");
+                (
+                    m.ident as i64,
+                    m.recog as i64,
+                    m.param as i64,
+                    m.tag as i64,
+                    m.series as i64,
+                    hex(&body[CommandMessage::SIZE..]),
+                )
+            };
+            let mut want: Vec<(i64, i64, i64, i64, i64, String)> = Vec::new();
+            for f in expect["immediate_frames"].as_array().unwrap() {
+                want.push(five(f));
+            }
+            let mut dropped: Vec<i64> = Vec::new();
+            for f in expect["pumped"].as_array().unwrap() {
+                let (ident, ..) = five(f);
+                if modeled.contains(&ident) {
+                    want.push(five(f));
+                } else {
+                    dropped.push(ident);
+                }
+            }
+            // 只有**真的换图**的两支才会带 766/54（`RM_CHANGEMAP` 处理器的连带帧）；
+            // 不吃/无效/战区三支 `pumped` 为空或只有 622 ⇒ 剔除集必须为空。
+            let want_gap: Vec<i64> = if expect["pumped"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["ident"].as_i64() == Some(766))
+            {
+                registered_gap.to_vec()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(dropped, want_gap, "{name}: 被剔除的只许是登记缺口 766/54");
+            if name == "eat_fail_shape5_in_war_area" {
+                want.push(sysmsg("此处无法使用"));
+            }
+            if name == "eat_ok_shape5_invalid_castle_eaten" {
+                want.push(sysmsg("无效"));
+            }
+            assert_eq!(got, want, "{name}: 线上帧严格序（逐字段 + 红字文本尾）");
+
+            // 终态 X/Y（实体 + 会话）。
+            let final_map = expect["final"]["map"].as_str().unwrap();
+            let want_map_id = reg.id_of(final_map).expect("终态图在注册表");
+            let ent = world.entities.get(actor_id).expect("实体还在");
+            assert_eq!(
+                (ent.map_id, ent.x, ent.y),
+                (
+                    want_map_id,
+                    expect["final"]["x"].as_i64().unwrap() as i32,
+                    expect["final"]["y"].as_i64().unwrap() as i32
+                ),
+                "{name}: 终态 MapName/X/Y（实体）"
+            );
+            let sess = world.session("hero").expect("会话");
+            assert_eq!(sess.map_id, want_map_id, "{name}: 终态图（会话）");
+
+            // 背包 / 重量。
+            let golden_items = expect["item_list"].as_array().unwrap();
+            assert_eq!(
+                sessions["hero"].state.item_list.len(),
+                golden_items.len(),
+                "{name}: 背包终态件数"
+            );
+            assert_eq!(
+                i64::from(sessions["hero"].state.wabil.weight),
+                expect["weight"].as_i64().unwrap(),
+                "{name}: WAbil.Weight"
+            );
+
+            // RNG 逐次 + 无多抽。
+            let golden_draws = expect["rng"].as_array().unwrap();
+            assert_eq!(
+                expect["rng_draw_count"].as_i64().unwrap(),
+                golden_draws.len() as i64,
+                "{name}: 记录器计数与账本不一致（夹具坏了）"
+            );
+            let mut replay = RandomNumber::with_seed(seed);
+            for d in golden_draws {
+                let arg = d["arg"].as_i64().unwrap() as i32;
+                let value = d["value"].as_i64().unwrap() as i32;
+                assert_eq!(replay.random_below(arg), value, "{name}: 逐次取数");
+            }
+            assert_eq!(
+                world.rng.random_below(1000),
+                replay.random_below(1000),
+                "{name}: 移动后不得多抽（流位置对齐）"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn war_state_in_war() -> mir2_world_bevy::castle::CastleWarState {
+        let mut st = mir2_world_bevy::castle::CastleWarState::new(0);
+        st.in_guild_war_area = true;
+        st
+    }
+
+    /// **IT-13 五支总跑**。
+    #[test]
+    fn it13_guild_return_host_parity() {
+        run_guild_parity(None);
+    }
+
+    /// **IT-13 逐支单跑**（变异牙要「一支一支红」的原文）。
+    #[test]
+    fn it13_no_guild_no_eat() {
+        run_guild_parity(Some("eat_fail_shape5_no_guild"));
+    }
+
+    #[test]
+    fn it13_in_war_area_red_no_eat() {
+        run_guild_parity(Some("eat_fail_shape5_in_war_area"));
+    }
+
+    #[test]
+    fn it13_invalid_castle_eaten_red() {
+        run_guild_parity(Some("eat_ok_shape5_invalid_castle_eaten"));
+    }
+
+    #[test]
+    fn it13_castle_home_exact() {
+        run_guild_parity(Some("eat_ok_shape5_castle_home_exact"));
+    }
+
+    #[test]
+    fn it13_castle_home_zero_coord_random() {
+        run_guild_parity(Some("eat_ok_shape5_castle_home_zero_coord_random"));
     }
 
     fn registry_with_flag(

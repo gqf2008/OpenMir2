@@ -790,6 +790,28 @@ EAD
   `PROBE_SELFTEST_FAIL case=eat_ok_shape5_invalid_castle_eaten … 实得 im=[635,999]` ⇒ **rc=2**；
   同路径复跑前后夹具 sha 不变（`2cfcefc6…`）；换新输出路径 ⇒ rc=2 且**文件不存在**（不落盘）。
 
-**Rust 侧（待 move 合入）**：等 `card/items-move-09` 合入 master 后，从新 master rebase 再实现——复用 `eat_move::maybe_eat_move` 的位移机制，不另造。清单 status 与覆盖届时一并改并先报 `opc-19`。
+**Rust 侧（2026-11-20 落地，`eat_move::maybe_eat_move` 的 Shape5 臂；零改 `useitem.rs`）**
+- 五支按 oracle `PlayObject.Base.cs:2264-2286`：`MyGuild==null` ⇒ 不吃（636，交回 `use_item`）；战区 ⇒ 红字「此处无法使用」不吃；
+  非战区无城主会籍 ⇒ 红字「无效」但**吃**（635、位置不变、0 抽）；有效城堡 ⇒ `BaseObjectMove(HomeMap, HomeX-4+Rand9, HomeY-4+Rand9)`
+  （**先 X 后 Y**，2 抽），任一坐标为 0 ⇒ `MapRandomMove`（+2 抽）。
+- **Shape5 不发 `RM_SPACEMOVE_FIRE`**：oracle `case 5` 只调 `BaseObjectMove`（FIRE 只在 case1/2/3 显式发）⇒ 夹具 `pumped` 无 800；
+  本实现按 `tpl.shape != 5` 门控（变异 M5 删门 ⇒ 位移两支多 800 红）。
+- **宿主形参**：`handle_eat_cmd` / `maybe_eat_move` 各增 `castle_war_states: &HashMap<i32, CastleWarState>`
+  （`PlayObject.InGuildWarArea` 的每 actor 会话位；生产调用点传 sim_loop 的真表，测试传 `&war_states`/空表）。
+  红字颜色取 `MsgColors.red_f/red_b`（255/56）。
+- **对拍（`eat_move::tests::it13_*`，6 条：总跑 + 逐支单跑）**：帧逐字段（含 `SM_SYSMESSAGE(100)` 文本尾
+  `EDCode(gbk(文案))`）、终态 X/Y（实体+会话）、背包/重量、RNG 逐次重放 + 「无多抽」流位置等式；
+  与 IT-09/10/11 的 `run_move_parity` 同构。
+- **牙（五颗，逐个实跑；还原后 sha 与基线相同** `15b0b77a…`**）**：
+  | 变异 | 变异行 | 红在 |
+  | --- | --- | --- |
+  | M1 战区判反 | `if in_war {` → `if !in_war {` | 5/6 例红（war/invalid/castle×2/总跑） |
+  | M2 城主判反 | `master_guild == Some(guild)` → `!=` | 4 例红（invalid/castle×2/总跑） |
+  | M3 去 `-4` | `i32::from(home_x) - 4 + dx` → `+ dx` | 3 例红（castle×2/总跑） |
+  | M4 抽序对调 | 先 X 后 Y → 先 Y 后 X | 2 例红（零坐标支/总跑，终态 X/Y 与流位置） |
+  | M5 删 FIRE 门 | `if tpl.shape != 5 {` → `if true {` | 3 例红（多一帧 800） |
+- **部署不可达（§18.1）**：位移两支靠 `castle.master_guild = Some(玩家行会)` 的 synthetic 构造（部署态 `MasterGuild` 恒 null）
+  ⇒ **该两支证据非生产路径**；生产只会走「不吃」或「无效但吃」。清单 `scope = castle_move_branches_synthetic_unreachable`。
 
-**状态**：C# 半批已交；整体仍 `missing`（清单未动）。
+**状态**：`implemented_unverified`（行为面：5 例 oracle 夹具 + 比较器 + 五牙；**不升格**——位移两支是 synthetic 路径，
+且共用换图缺口 766/54 未清）。C# 半批与 Rust 半批同支 `card/items-it13`。
