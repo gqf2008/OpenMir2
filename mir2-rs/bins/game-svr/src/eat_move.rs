@@ -982,6 +982,7 @@ mod tests {
                 ),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
                 &war_states,
             );
 

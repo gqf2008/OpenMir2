@@ -100181,6 +100181,7 @@ fn ",
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
+                &std::collections::HashMap::new(),
             );
             let mut ids = Vec::new();
             while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
