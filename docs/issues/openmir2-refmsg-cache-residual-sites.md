@@ -48,8 +48,8 @@
 
 | # | 站点（file:符号） | 帧族 | 现状 | 修法 |
 | --- | --- | --- | --- | --- |
-| 19 | `lib.rs::broadcast_healthspellchanged`（**新登记，7b 期间发现**） | 53 族 | **手写 `online` 循环**（`ObMode/FixedHideMode` 早退 + 同图 ±range + `!Ghost`），既不调 `chat::hear_targets` 也不走 `ref_msg_cache` ⇒ 每次全额重算；oracle 的 `HealthSpellChanged → SendRefMsg(53)` 应过缓存。**不在原 17 点清单的原因**：原清单口径是「按 `chat::hear_targets` 直算收件人」，它是同形的手写循环未被清点。 | 与 7 系列同法接 `ref_msg_cache::targets`；注意其既有边界用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out` 现钉「dx=12 收」的**未缓存**口径，接入时须按 oracle 改期望并留痕；牙：同窗两次 `HealthSpellChanged` 的 12 格边界只收首帧、隐藏 sender ⇒ 只自己（既有 `broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy` 在接入时需按 oracle 重判）。 |
-| 20 | `lib.rs::broadcast_feature_changed` / `broadcast_feature_changed_except`（**新登记，残余普查补漏**） | `RM_FEATURECHANGED`→`SM_FEATURECHANGED(41)` | **手写 `online` 循环**（同图 ±range、`skip` 过滤），不走 `ref_msg_cache`；oracle `BaseObject.FeatureChanged()` 是 `SendRefMsg(RM_FEATURECHANGED)` ⇒ 应过缓存。**不在原 17 点清单的原因**：清单口径只收了 `chat::hear_targets` 直算点。 | 同 7 系列接 `ref_msg_cache::targets`（`skip` 语义保留为循环内过滤）；牙：同窗两次 `feature_changed` 的 12 格边界只收首帧。 |
+| 19 | `lib.rs::broadcast_healthspellchanged`（**新登记，7b 期间发现；2026-11-20 已接入**） | 53 族 | **手写 `online` 循环**（`ObMode/FixedHideMode` 早退 + 同图 ±range + `!Ghost`），既不调 `chat::hear_targets` 也不走 `ref_msg_cache` ⇒ 每次全额重算；oracle 的 `HealthSpellChanged → SendRefMsg(53)` 应过缓存。**不在原 17 点清单的原因**：原清单口径是「按 `chat::hear_targets` 直算收件人」，它是同形的手写循环未被清点。 | 与 7 系列同法接 `ref_msg_cache::targets`；注意其既有边界用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out` 现钉「dx=12 收」的**未缓存**口径，接入时须按 oracle 改期望并留痕；牙：同窗两次 `HealthSpellChanged` 的 12 格边界只收首帧、隐藏 sender ⇒ 只自己（既有 `broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy` 在接入时需按 oracle 重判）。 |
+| 20 | `lib.rs::broadcast_feature_changed` / `broadcast_feature_changed_except`（**新登记，残余普查补漏；2026-11-20 已接入**） | `RM_FEATURECHANGED`→`SM_FEATURECHANGED(41)` | **手写 `online` 循环**（同图 ±range、`skip` 过滤），不走 `ref_msg_cache`；oracle `BaseObject.FeatureChanged()` 是 `SendRefMsg(RM_FEATURECHANGED)` ⇒ 应过缓存。**不在原 17 点清单的原因**：清单口径只收了 `chat::hear_targets` 直算点。 | 同 7 系列接 `ref_msg_cache::targets`（`skip` 语义保留为循环内过滤）；牙：同窗两次 `feature_changed` 的 12 格边界只收首帧。 |
 
 ### 残余普查方法（可重跑；2026-11-20 定）
 1. 全枚举 `bins/game-svr/src/` 的收件人循环：`for … in online` / `for … in online.iter()` /
@@ -282,3 +282,18 @@
 | --- | --- | --- |
 | 7b（施法尾帧） | 施法前 `RM_SPELL(17)` 已刷新缓存 | 53/638/639/657/716 **全部命中**；12 格边界**只收 17** |
 | 7c（名色/血条） | 无预热 | **首调用刷新、同窗第二次命中**；隐藏按各点 `include_self` 语义 |
+
+### 残余 #19 / #20 实现（2026-11-20；证据待 lane）
+- **#19 `broadcast_healthspellchanged`**：收件人改走 `ref_msg_cache::targets(world, actor_id, range)`；
+  隐藏 sender 由 `targets` 早退返回 `[self]`（源在 online ⇒ 只自己；不在 ⇒ 零帧），与 oracle 退化自投一致。
+  既有用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out`（首次调用=刷新，
+  dx=12 仍收）与 `broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy`
+  （隐藏=只自己）**期望不变**。
+- **#20 `broadcast_feature_changed(_except)`**：同上走缓存；`skip` 保留为**循环内过滤**：
+  `skip=None` ⇒ 含自己（隐藏 ⇒ 只自己）；`skip=Some(self)` ⇒ 零帧（调用方已有自见帧）。
+- 用例：`healthspellbroadcast_two_calls_share_cache_window` /
+  `healthspellbroadcast_hidden_sender_only_self`（隐藏在线 ⇒ 只自己）/
+  `healthspellbroadcast_hidden_sender_offline_has_no_frames`（隐藏离线 ⇒ 零帧）/
+  `feature_changed_two_calls_share_cache_window` /
+  `feature_changed_skip_semantics` / `feature_changed_hidden_sender_respects_skip`。
+- 形态同 7c：**非施法驱动 ⇒ 首调用刷新、同窗第二次命中**。

@@ -69,9 +69,9 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
   `..._with_self_at` 的内部转调）与 `drain_merchant_disappears`（世界侧收件人快照当扫描面）。
   **明确残余**：原 19 处直算收件人的广播点**已由 C2 批 1–7 全部接入缓存**
   （批1 RM_HEAR×2、批2 53×3、批3 657×2、批4 走位候选、批5 RM_USERNAME×4、批6 #8/#9×2/#10/#11/#12、
-  批7 `push_broadcast` 17 点）；**残余普查另发现 #19 `broadcast_healthspellchanged`（53 手写循环）**
-  与 **#20 `broadcast_feature_changed(_except)`（41）**——**已登记、未实现**；旧 `push_broadcast`
-  已删除（全仓 0 引用）。逐条见残余卡 **`docs/issues/openmir2-refmsg-cache-residual-sites.md`**（C2 单列）。
+  批7 `push_broadcast` 17 点）；残余普查发现的 **#19 `broadcast_healthspellchanged`（53 手写循环）**
+  与 **#20 `broadcast_feature_changed(_except)`（41）** 亦于 **2026-11-20 接入缓存**（首刷次命中、
+  隐藏/skip 逐点保持）；旧 `push_broadcast` 已删除（全仓 0 引用）。逐条见残余卡 **`docs/issues/openmir2-refmsg-cache-residual-sites.md`**（C2 单列）。
 - 判定：`np11_aoi_matches_oracle_golden` 的 `cache_window` 由**必红绊线**改**必绿**；`fresh_scan` 保持绿——
   两条同时成立（rig 在 `fresh_scan` 例每次发帧前把 sim 时钟推进 500，模拟 oracle 的 ≥500ms 重扫）。
 - 牙（§16：快照 `E:/UserTemp/vhlc-snap/` → 变异 → `cp` 还原核 sha → 复跑基线）：
