@@ -114,7 +114,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
         }
 
         // 4) HP 一级断言
-        for k in ["TargetHpBefore", "TargetHp"] {
+        for k in ["TargetHpBefore", "TargetHp", "CasterExtraAbil0"] {
             if num(gc, k) != num(rc, k) {
                 errs.push(format!(
                     "[{label}] {k} 不等：golden={} rust={}",
@@ -1138,6 +1138,20 @@ fn tooth_union_missing_deliver_column_red() {
 
 fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
+}
+
+/// **`36`（`SKILL_UENHANCER`）**真实台账 → 判定面（三支 s1/s5/s13，卡 openmir2-uenhancer）。
+///
+/// scope：只证 DoSpell 时刻 `ExtraAbil[0]/Times[0]`（`CasterExtraAbil0`）与帧；施法者 `Abil`
+/// 已按登录序对齐。SM 严格序 + RM 多重集 + `CasterExtraAbil0`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::uenhancer_parity_*）生成真实台账"]
+fn real_rust_ledger_uenhancer() {
+    real_ledger_verify_labels(
+        "uenhancer",
+        &golden_file("uenhancer.json"),
+        &["s1", "s5", "s13"],
+    );
 }
 
 /// **`39`（`SKILL_GROUPDEDING`）**真实台账 → 判定面（五支，卡 §39）。

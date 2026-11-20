@@ -16598,6 +16598,18 @@ fn handle_spell_cmd_with_magic(
                                         );
                                     }
                                 }
+                                // 卡 36：oracle `RecalcAbilitys()`（`PlayObject.cs:2874-2876`）的 657 ——
+                                // `:2875 StatusChanged()` 广播（self+target+obs_in）+ `:2876 SendUpdateMsg` 自更新（self）；
+                                // 复用现有 `SpellFrameBuf`（prio 155），不新增发射函数、不改共享件；落点由 RM 号算：
+                                // 52(3)<638(136)<642(141)<**657(155)**<100(252)<640(255)。
+                                // (③) 同 prio155 两条时：广播先、自更新后（源行序 `PlayObject.cs:2875`→`:2876`；堆对同 prio 按入队序）。
+                                // (④) 读 oracle 同源的 `GetCharStatus()`（buff 位集|CharStatusEx），非实体缓存 `char_status`（陈旧）。
+                                let status = world.get_char_status(out.target);
+                                push_charstatuschanged(&mut buf, world, online, out.target, status);
+                                if let Some(e) = world.entities.get(out.target) {
+                                    let body = smframe_ext::sm_charstatuschanged(out.target, status, e.hit_speed);
+                                    buf.push_actor(online, out.target, (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8, body);
+                                }
                                 // `:612-617`：`targetObject == null` 时 `nTargetX/nTargetY` 被改写成
                                 // 施法者的 `CurrX/CurrY`（与 click 坐标无关）⇒ 共享尾 638 用归一后的
                                 // 坐标；`SM_SPELL(17)` 已在更早处按 click 发出，不受影响。
@@ -68215,6 +68227,279 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
     fn groupdeding_parity_dc_range() {
         groupdeding_parity_drive("dc_range", 5000);
+    }
+
+    // ======================================================================
+    // 卡 openmir2-uenhancer：36 `SKILL_UENHANCER` 真实台账驱动
+    // ======================================================================
+
+    /// 36 的 rig：与 C# Golden 同几何；caster 用**登录序 Abil**（level=30/max_exp=50，由
+    /// `recalc_session_ability` 派生），但 `WAbil.SC=15` 保留给 `nTime` 的 `Lo(SC)*10` 输入。
+    fn uenhancer_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            36,
+            &[(36, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 36,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+            // 卡 36：非 0 夹具（CharStatusEx=2）⇒ `GetCharStatus()=2`，使 ④ 读取点可证伪（读陈旧 char_status 会得 0≠2）。
+            e.buff.char_status_ex = 2;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            // 登录序 Abil（RecalcLevelAbilitys 的输入），其余 ctor 缺省；SC 由夹具保持 15。
+            sg.equip.abil.level = 30;
+            sg.equip.abil.max_exp = 50;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+            // 卡 36 / B-hp：oracle `MagicGolden/Program.cs:1632-1636` 的 `targetNull` 分支把 caster
+            // `WAbil.HP/MaxHP` 覆盖成 `targetHp/TargetMaxHp=100` ⇒ rig 起点须为 100（非 500）。
+            // recalc 会把 MaxHP 重算为 Abil 派生值（419），HP 保留 100。
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+        }
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        {
+            let mut tsg = spell_session_ground(target);
+            tsg.equip.abil.level = 20;
+            tsg.equip.abil.max_exp = 50;
+            tsg.state.wabil.level = 20;
+            tsg.state.wabil.hp = 100;
+            tsg.state.wabil.max_hp = 100;
+            rig.ground_sessions.insert("target".into(), tsg);
+        }
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        rig.saves.get_mut("caster").unwrap().record.data.magic.as_mut().unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 1;
+        rig
+    }
+
+    /// 36 真实台账驱动（三支 s1/s5/s13，`targetNull ⇒ self`）。
+    ///
+    /// RM 组装全部来自**实现态**（非 golden）：`char_status` 读实体、护身符新耐久读施法者会话
+    /// `use_items[5]`、`tran_point` 读存档 magic[0]、绿字颜色读 `world.b5_cfg`。
+    fn uenhancer_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "uenhancer";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请以 --exact 单跑本用例"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(trace_header_seed(&trace), seed, "trace 头部 seed 必须与本支一致");
+
+        let mut rig = uenhancer_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n0 = trace_line_count(&trace);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：施法（target 不传 ⇒ oracle 归一为 self）----
+        rig.cast(36, (100, 100), 0);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+        let extra0 = i64::from(rig.world.entities.get(caster).unwrap().extra_abil[0]);
+        let char_status = i64::from(rig.world.get_char_status(caster)); // ④ 同源 GetCharStatus（非陈旧 entity.char_status）
+
+        // ---- 段②：交付（训练尾 640 @1000ms）----
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut elapsed = 0u64;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut sf, _r2) = rig.drain();
+            deliver_frames.append(&mut sf);
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 组装（来源=实现态）----
+        let range = chat::send_ref_msg_range();
+        let in_range = chat::hear_targets(&rig.world, caster, range);
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        let (tx, ty) = (100i32, 100i32);
+        let magicfire_p2 = game_svr::feature::make_long(tx as u16, ty as u16);
+        let amulet = rig
+            .ground_sessions
+            .get("caster")
+            .and_then(|sg| sg.use_items.get(game_svr::ability::SLOT_ARMRING_L))
+            .and_then(|x| x.as_ref())
+            .map(|it| (it.dura, it.dura_max));
+        let tran = rig
+            .saves
+            .get("caster")
+            .and_then(|s| s.record.data.magic.as_ref())
+            .and_then(|m| m.first())
+            .and_then(|x| x.as_ref())
+            .map_or(0, |r| r.tran_point);
+        let gf = i64::from(rig.world.b5_cfg.green_msg_f_color);
+        let gb = i64::from(rig.world.b5_cfg.green_msg_b_color);
+
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        for id in &in_range {
+            let Some(who) = who_of(*id) else { continue };
+            let v = rm_by_who.entry(who).or_default();
+            // `:159 RM_SPELL(Effect, tx, ty, MagicId)`。
+            v.push(fireball_rm(10008, 1, i64::from(tx), i64::from(ty), 36, 24, false));
+            // `:648-658 RM_MAGICFIRE`：p3 = 归一后的 targetActorId（self=caster）。
+            v.push(fireball_rm(
+                10120,
+                0,
+                257,
+                i64::from(magicfire_p2),
+                i64::from(caster),
+                136,
+                false,
+            ));
+            // `StatusChanged()` 广播（p1 = 施法者 CharStatus）。
+            v.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+        }
+        let cv = rm_by_who.entry("caster".into()).or_default();
+        // 自更新第二条 10139 + `SendMsg(RM_ABILITY)`(10051) + SysMsg(11004)。
+        cv.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+        cv.push(fireball_rm(10051, 0, 0, 0, 0, 67, false));
+        // `UseAmulet` 的 RM_DURACHANGE(10125)：wParam=槽位(ArmRingl=5)、p1=新耐久、p2=DuraMax。
+        if let Some((dura, dura_max)) = amulet {
+            cv.push(fireball_rm(
+                10125,
+                i64::from(game_svr::ability::SLOT_ARMRING_L as u16),
+                i64::from(dura),
+                i64::from(dura_max),
+                0,
+                141,
+                false,
+            ));
+        }
+        cv.push(fireball_rm(11004, 0, gf, gb, 0, 252, false));
+        // 训练尾 RM_MAGIC_LVEXP(10123)：p1=MagicId、p2=Level、p3=TranPoint。
+        cv.push(fireball_rm(10123, 0, 36, 1, i64::from(tran), 255, true));
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, socket),
+            }));
+        }
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": 0,
+            "CasterExtraAbil0": extra0,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap())
+            .expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[uenhancer {label}] seed={seed} cast_rng={:?} deliver_rng={:?} extra0={extra0} char_status={char_status} tran={tran} amulet={amulet:?}",
+            cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s1() {
+        uenhancer_parity_drive("s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s5() {
+        uenhancer_parity_drive("s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_s13() {
+        uenhancer_parity_drive("s13", 3000);
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
