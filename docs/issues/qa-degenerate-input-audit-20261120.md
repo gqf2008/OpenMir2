@@ -156,9 +156,11 @@ oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的
 ⇒ **657 的 series = 每个接收者自己的 `HitSpeed`**。表中 7/0 分布与
 "被 `RecalcAbilitys` 重算的实体归 0、旁观者保持 7"逐格吻合。
 
-**C. 第三处常量 0（登记，未验证）**：递减段 `rec.buff_status_changes` 处仍有
-`sm_charstatuschanged(*actor_id, *status, 0)`（常量 0）。**本批夹具不触发该路径，未验证**——
-登记在此，不要让第三处悄悄存在。
+**C. 第三处（已修，未覆盖）**：递减段 `rec.buff_status_changes` 的"常量 0"已由
+`e96dbd9c8`（`fix(game-svr): buff boChg 的 657 改逐收件人 HitSpeed`，base `784453241` 的祖先）
+一并修掉——当前树上该循环按接收者取实体 `hit_speed` 并走
+`send_charstatuschanged_self_once_and_observers`；全文件**没有** `sm_charstatuschanged` 第三参
+为字面 0 的调用。**但本批夹具仍未覆盖该路径，未验证。**
 
 **D. 合并集成项（本卡 rebase 时补的两处，行为不变）**：
 - master 新增的两个非 parity 单测仍按旧 4 参调 `fireball_rig` ⇒ 补 `mc=15`（旧硬编码值）；
@@ -177,3 +179,78 @@ oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的
 > 宿主持有另一份等价实现 `skill_ability::recalc_hit_speed_skills`。
 
 **不要**写成"死代码"——这会导致下一任误删。
+
+## 9. 条目 → 状态表（清单 scope 的唯一依据，随仓入库）
+
+### 9.1 口径
+
+- **证据强度**：
+  - **【本轮绿】**：在 rebase 后的 head（`66964a281` 代码面）上实跑过该条比较器
+    （`real_rust_ledger_<stem>`，`--ignored --exact`），rc=0。
+  - **【链齐待跑】**：记录端（golden 写实际应用值）+ 消费端（Rust 从 golden 读）已齐，
+    且与 fireball5 走同一代码路径（变异 9→17→9 已证），但**本轮未逐条复跑该条比较器**。
+- **状态词**：`点亮` = 区间值进入**被比较字段**且比较器绿；`部分` = 区间抽发生但可观测面被压扁；
+  `不可观测` = 值不进任何被比较字段；`已控` = 夹具显式压成退化支作对照。
+- ⚠️ **合并门注意**：以下比较器全部 `#[ignore]`，`cargo test --workspace` / `--lib`
+  **不会跑它们**。必须在合并门里显式逐条跑（见 §9.3）。
+
+### 9.2 状态表
+
+| 条目 | 面 | 记录端（golden 实际值） | 比较面 | 状态 | 本轮比较器 |
+|---|---|---|---|---|---|
+| MG-10 fireball | 伤害/MC | hit `caster_mc=2565`，其余 15 | SM 31 series（15/9） | 点亮 | 链齐待跑 |
+| MG-11 fireball-5 | 伤害/MC | 同上 | SM 31 series | 点亮 | 本轮绿 |
+| MG-19 lightning-11 | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
+| MG-54 lightning-45 | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
+| MG-53 hbfireball | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
+| MG-37 fireboom | 伤害/MC | s5/s13 `=2565`，s1 15 | SM 31 series（15/6/10） | 点亮 | 链齐待跑 |
+| MG-56 fireboom47 | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
+| MG-45 snowwind | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
+| MG-27 firecharm | 伤害/SC | hit `caster_sc=2565`，edge 15 | SM 31 series（15/9） | 点亮 | 本轮绿 |
+| MG-38 lightflower | 伤害/MC | s5/s13 `mc=3850`(20..30)，s1 15 | SM 31 series（1/2/3，全 >0 且分叉） | 点亮（观测面 = series；`nPower/10` 使 10..15 压成 1，故取 20..30） | 本轮绿 |
+| MG-12 healing | 治疗/SC | heal/self `sc=2565` | TargetHp 不动；RM 8034 p1 = 15 / 20（随 seed） | 治疗量**可观测（RM p1）**；TargetHp **不可观测**（`RM_MAGHEALING` 只累计 `IncHealing`，加血在后续 tick） | 本轮绿 |
+| MG-40 bighealing | 治疗/SC | heal/both `sc=2565` | 同上（RM 8034 p1 15 / 20） | 同上 | 本轮绿 |
+| MG-28 hangmajinbub | DefenceUp 强度/SC | s5/s13 `sc=2565` | SM 100 tail（`…250秒`→`…151/154秒`）；657 series 7/0/7 | 点亮（观测面 = 100 的 tail，不是 HP） | 本轮绿 |
+| MG-29 dejiwonho | 同上 | 同上 | 同上（`防御力增加…秒`） | 同上 | 本轮绿 |
+| MG-51 groupdeding | 伤害/DC | 四支 `caster_dc=5140`、`dc_range=7700`(20..30) | SM/RM/RNG（dc_range 抽 Random(11)） | 点亮（一直非退化，无需补靶） | 链未动、本轮未跑（历史 verified） |
+| MG-32 cloak | 657 Series | `hit_speed=7` | SM 657 series 7/7/7 | 点亮 | 本轮绿 |
+| MG-33 bigcloak | 657 Series | 同上 | 7/7/7 | 点亮 | 本轮绿 |
+| MG-43 shield | 657 Series | 同上 | 7/7/7 | 点亮 | 本轮绿 |
+| MG-59 uenhancer | 657 Series | 同上 | 0/7/7（caster 被 recalc 归 0） | 点亮 | 本轮绿 |
+
+### 9.3 合并门要显式跑的 19 条比较器（驱动 → 比较器）
+
+命令均在 `mir2-rs/` 下；**同一 `MIR2_LEDGER_RUN_ID` 贯穿驱动与比较器**；驱动逐条独立进程。
+```
+export MIR2_LEDGER_RUN_ID="mg-<时间戳>"
+cargo test -q -p game-svr --lib -- --exact --ignored tests::<驱动> --test-threads=1
+cargo test -p mir2-parity-tests --test magic_fireball_parity -- --exact --ignored <比较器>
+```
+两个坑：`--exact` 名字打错 ⇒ **0 用例 rc=0（假绿）**，核 `1 passed`；`bigcloak` 驱动名是
+**`big_cloak_parity_*`**（下划线）。
+
+| stem | 驱动（逐个跑） | 比较器 |
+|---|---|---|
+| fireball | `fireball_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_parity` |
+| fireball5 | `fireball5_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_fireball5` |
+| lightning11 | `lightning11_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_lightning11` |
+| lightning45 | `lightning45_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_lightning45` |
+| hbfireball | `hbfireball_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_hbfireball` |
+| firecharm | `firecharm_parity_miss` / `_edge` / `_hit` | `real_rust_ledger_firecharm` |
+| fireboom | `fireboom_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_fireboom` |
+| fireboom47 | `fireboom47_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_fireboom47` |
+| snowwind | `snowwind_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_snowwind` |
+| lightflower | `lightflower_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_lightflower` |
+| healing | `healing_parity_heal` / `_full` / `_self` | `real_rust_ledger_healing` |
+| bighealing | `big_healing_parity_heal` / `_full` / `_both` | `real_rust_ledger_bighealing` |
+| hangmajinbub | `hangmajinbub_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_hangmajinbub` |
+| dejiwonho | `dejiwonho_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_dejiwonho` |
+| groupdeding | `groupdeding_parity_all_miss_hp0` / `_hit_ac_split` / `_miss_by_draw` / `_dead_excluded` / `_dc_range` | `real_rust_ledger_groupdeding` |
+| cloak | `cloak_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_cloak` |
+| bigcloak | `big_cloak_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_bigcloak` |
+| shield | `shield_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_shield` |
+| uenhancer | `uenhancer_parity_s1` / `_s5` / `_s13` | `real_rust_ledger_uenhancer` |
+
+驱动内部会 `set_var("MIR2_CLIENT_ABILITY_LAYOUT","0")`（`fireball_parity_drive` /
+`uenhancer_parity_drive` / `groupdeding_parity_drive` / `healing_parity_drive` 四处），
+外部**不需要**导出。
