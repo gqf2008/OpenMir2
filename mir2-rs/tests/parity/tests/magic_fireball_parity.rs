@@ -1613,6 +1613,8 @@ fn sent_filter_sinsu(
 ///
 /// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（离线替身 0 抽 ⇒ RNG 流偏移）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
+/// `due_ms_rel`：本 leaf 被比较帧（17/638/642）恒为 0（三帧均属**施法批** elapsed=0，驱动无交付回路）——**结构恒定、非伪造**；与两个 stub 键不同：若引入交付批，due 会随 elapsed 变化（stub 17 则永不）。
+///
 /// `cap_hit` 回召面待 `openmir2-golden-harness-mapmgr`。
 #[test]
 #[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_summon_ok) 生成台账"]
