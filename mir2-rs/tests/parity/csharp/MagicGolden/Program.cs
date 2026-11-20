@@ -2152,7 +2152,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 : (object)new
                 {
                     // 替身怪物 HP 常量（生产 MonsterInfo.hp 的占位；见 OfflineWorldEngine）。
-                    stub_monster_hp = 17,
+                    // 两个输入都显式设定、且可见（取代误导性的 stub_monster_hp）：
+                    stub_wabil_hp = 17,
+                    stub_abil_max_hp = 17,
                     stub_monster_race = 100,
                     pre_slave_count = spec.PreSlaveCount,
                     slave_count_before = slaveCountBefore,
