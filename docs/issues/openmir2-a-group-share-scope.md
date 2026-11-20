@@ -53,3 +53,23 @@ THEN scope 作废，该条立即降级为自行效果对拍`；当前五条逐�
   **同一份 `slave_list` 不能被两条引用**——比较器按 `case` 过滤后天然不成立。
 
 **不做什么**：不跑 Operate、不改 v2 卡、不动 `Program.cs`（a2 独占，本卡只出契约）。
+
+## 四、slave 记录面的 API 选型（两个候选 + 代价，2026-11-20）
+
+**背景事实**：Rust 侧**已有** `SlaveState.slave_list: Vec<i32>`（`crates/world-bevy/src/entity.rs` 的 `SlaveState.slave_list` 字段（符号锚）），
+`EntityRef` 可直接读（`e.slave_list`）；并且有 `slave_list_cleanup_impl`（`crates/world-bevy/src/world.rs`
+的 `SimSlaveCleanup` 段，含"按槽位序 + 表内倒序删除"与 `!e.ghost` 过滤）在同 tick 维护它——语义与
+oracle 的 `SlaveList`（`BaseObject.cs:141`，`MakeSlave` 内追加、死亡/叛变时清理）**同源**。
+
+| 候选 | 做法 | 代价 / 风险 |
+|---|---|---|
+| **A. 读既有 `slave_list` 镜像** | 施法后读 `entities.get(caster).slave_list`（id 列表）→ 再逐个 `get` 取 name/level/master | **顺序语义天然与 oracle 一致**（两次都在"追加序 + 清理后"上读）；风险：若将来有人不更新该镜像（新增召回路可忘写），读到的是**陈旧镜像**——但清理/追加路径已有测试钉住 |
+| **B. 遍历 `entities` 全表按 `master == Some(caster)` 过滤** | 全表扫描，收集 `master==caster` 的实体 | 无镜像陈旧风险；**但拿不到 oracle 的追加序**（全表序不是 SlaveList 序），且与 oracle 的"清理时机"（死亡/幽灵剔除）不同步——号数可能多出刚死未清理的实体 |
+
+**选型：A 为主、B 作交叉校验（牙）**。
+- 证据面用 A（与 oracle `SlaveList` 同源、同序）；
+- 每次用例额外断言 `A 的 id 集合 == B 的集合`——**B 不当证据，只当"镜像是否漏更新"的牙**；两者不等即红，
+  报"镜像陈旧或清理时机不同步"。这样既保住顺序语义，又不让镜像静默失真。
+
+**不选 A-alone 的理由**：镜像一旦漏更新，用例只会读到少/旧的 id，且**不会有任何红**（这正是"夹具自洽"）。
+**不选 B-alone 的理由**：顺序与清理时机都偏离 oracle，等于用一个更粗的代理替换真实语义。
