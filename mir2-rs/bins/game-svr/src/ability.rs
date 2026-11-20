@@ -778,9 +778,14 @@ pub fn recalc_abilitys_with_prior_and_skills(
 /// - `EABIL_HPUP(4)/MPUP(5)` ⇒ `MaxHP/MaxMP` 的 `ushort` 回绕加；
 /// - `EABIL_PWRRATE(6)` ⇒ DC/MC/SC 的逐字节 `(byte * rate) / 100`。
 ///
-/// **位置语义**：oracle 在 `RecalcAbilitys()` 的尾部、`Race == Play` 的附加段之前；
-/// 本仓的单一实现 [`recalc_abilitys_with_prior`] 不持有 `ExtraAbil`（它在 `PlayObject` 上），
-/// 由宿主在调用后立即应用（`recalc_session_ability`）。
+/// **⚠ 不得在生产路径调用（裁定 `qa-extraabil-adjudication-20261120`，2026-11-20）**：
+/// oracle 的这段折算（`PlayObject.cs:2818-2846`）随后被**同方法体、无 early return** 的
+/// `:2899-2906`（`WAbil = Abil + AddAbil`、`HitSpeed = AddAbil.HitSpeed`）**整体覆盖**
+/// ⇒ 对最终 `WAbil`/`HitSpeed` **永远没有影响**。本仓曾由 `recalc_session_ability` 在
+/// 最终值之后调用它（顺序与 oracle 相反、叠加**留存**），已停用。
+/// 保留本函数仅为对照历史与算术单测；`ExtraAbil` 状态本身仍保留（存档 / 机器人 AI 读）。
+/// 修正卡：`docs/issues/openmir2-extraabil-wabil-fix-20261120.md`。
+#[allow(dead_code)]
 pub fn apply_extra_abil(wabil: &mut Ability, extra: &[u16; 7]) {
     if extra[0] > 0 {
         wabil.dc = make_word_u16(
