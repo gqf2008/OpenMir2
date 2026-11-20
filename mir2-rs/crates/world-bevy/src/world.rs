@@ -19724,6 +19724,46 @@ mod weapon_durability_tests {
         assert!(after.iter().any(|e| e.2 == 3), "新条（TranPoint=3）已入");
     }
 
+    /// **B 段 2 用例⑥（两 actor：`Count` 必须取"该 actor 自己的队列"）**：A 队首 2 条同键 +
+    /// B 另有 2 条 ⇒ per-actor 的 i 循环摘 `ceil(2/2)=1` 条（A 留 1、B 全留 = 总 3）。
+    ///
+    /// 红检（`3b` 指出的隐藏缺陷）：把 `Count` 换成**全局队列长度和** ⇒ 循环多走一轮、
+    /// 第二次仍见队首匹配 ⇒ 把 A 摘光（总 2）⇒ 本用例必红。
+    #[test]
+    fn remove_head_matching_counts_per_actor_not_global() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 1_000;
+        let a = 7;
+        let b = 8;
+        // A：两条同键；B：两条同键（键与 A 相同，专门制造"全局计数更大"的情形）。
+        w.send_self_delay_msg_full(a, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 1, 3000);
+        w.send_self_delay_msg_full(a, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 2, 3000);
+        w.send_self_delay_msg_full(b, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 3, 3000);
+        w.send_self_delay_msg_full(b, crate::slave::RM_MAGIC_LVEXP, 0, 3, 0, 4, 3000);
+        let removed =
+            w.sim
+                .self_delay_msgs
+                .remove_head_matching(a, crate::slave::RM_MAGIC_LVEXP, 3);
+        assert_eq!(
+            removed, 1,
+            "per-actor N=2 ⇒ 摘 ceil(2/2)=1（全局计数会摘 2）"
+        );
+        let a_left = w
+            .sim
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == a)
+            .count();
+        let b_left = w
+            .sim
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == b)
+            .count();
+        assert_eq!(a_left, 1, "A 留 1 条陈旧条");
+        assert_eq!(b_left, 2, "B 完全不受影响");
+    }
+
     /// **B 段 1 用例③（`GetAttackPowerHit`）**：模式 3 + `PowerHit` ⇒ `+= HitPlus` + 消费 + `canHit`；
     /// 其余模式/无标志/无目标 ⇒ 原样不动、不消费。
     ///
