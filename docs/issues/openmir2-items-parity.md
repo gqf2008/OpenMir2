@@ -529,4 +529,14 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
   | T2 Times max→赋值 | `extra_abil_times[slot] = t;` | `it07_shape12_max_merge_keeps_larger_values` | 相等 | 绿 |
 - **门禁**：`--lib` 2080 passed / 0 failed / 65 ignored；clippy rc=0；fmt rc=0。
 
+**既有断言更正（IT-07 修复带出，单列；QA 逐条核 oracle）**
+| 测试 | 旧值 → 新值 | 旧值错在哪（oracle 锚） |
+|---|---|---|
+| `tests::gm_del_skill_host_apply_emits_212_and_greens` | `0x0400` → **`0x0100`** | 旧值把 `ExtraAbil[0]=3` 加到 DC 高字节（写入点 `PlayObject.cs:2818-2820`）；尾段 `:2900` `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil)+Lo(Abil)), MIN(255,Hi+Hi))` 整体覆盖 ⇒ 只能 `Abil+AddAbil` |
+| `tests::spell_p3b5_36_uenhancer_frames_amulet_and_gates` | `0x0E05` → **`0x0A05`** | 同上：nPower(4) 经 ExtraAbil 进 DC 高字节，被 `:2900` 覆盖 |
+| `tests::upgrade_npc_submit_and_getback_full_chain` | `0x0601` → **`0x0101`** | 同上：`ExtraAbil[0]=5` 不进 WAbil；实体 `dc` 跟随同一重算结果 |
+三处均已加"旧值错在哪"的代码注释（含行号），不是"改到新实现能过"。
+
+**WAbil 不变的三方同源**：golden 的 `wabil_before` 是探针在 invoke **前**实采、`expect.wabil` 是 C# 在 invoke **后**实采（均 oracle 侧，非 Rust 回填）；比较器再用**同一份 golden** 断言 Rust `state.wabil` 不变 ⇒ 三方闭环。
+
 **状态**：`missing`（清单未动；等探针/比较器/牙齐了再改并先报 `opc-19`）。

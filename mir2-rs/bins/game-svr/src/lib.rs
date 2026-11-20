@@ -48805,9 +48805,11 @@ break
         let list = saves["victim"].record.data.magic.as_ref().unwrap();
         assert_eq!(list.len(), 1, "只删命中项（按 Desc）");
         assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
-        // **2026-11-20 更正（e1/3b 查实）**：`ExtraAbil` 的 WAbil 写入被 `RecalcAbilitys` 尾段
-        // `WAbil = Abil + AddAbil`（`PlayObject.cs:2900-2906`）整体覆盖 ⇒ 加成**不进** wabil，
-        // DC 保持基础 0x0100。原期望 0x0400 编码了错误行为。
+        // **既有断言更正（2026-11-20，opc-19 要求按最高规格）**：
+        // 旧期望 0x0400 = 0x0100 + `ExtraAbil[0]=3` 加到 DC 高字节（写入点 `PlayObject.cs:2818-2820`）。
+        // 但 `RecalcAbilitys` 尾段 `:2900` 重算 `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil.DC)+Lo(Abil.DC)),
+        // MIN(255,Hi(AddAbil.DC)+Hi(Abil.DC)))` ⇒ **ExtraAbil 的写入被整体覆盖**，DC 只能来自 Abil+AddAbil
+        // = 0x0100。旧值含 ExtraAbil ⇒ 错。
         assert_eq!(
             sessions["victim"].state.wabil.dc, 0x0100,
             "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
@@ -80302,7 +80304,9 @@ SendRefMsgRange=15
                 "52 尾 = 重算后的整个 WAbil（58B 客户端布局）"
             );
             let after = &rig.ground_sessions["obs"].state.wabil;
-            // 2026-11-20 更正：nPower 经 ExtraAbil 进入的值被 RecalcAbilitys 尾段覆盖 ⇒ DC 保持 0x0A05。
+            // **既有断言更正（2026-11-20）**：旧期望 0x0E05 = 0x0A05 + nPower(4) 经 `ExtraAbil[0]`
+            // 加进 DC 高字节（写入点 `PlayObject.cs:2818-2820`）；但尾段 `:2900` 的
+            // `WAbil.DC = Abil+AddAbil`（逐字节 `_MIN(255,…)`）覆盖它 ⇒ 只能 0x0A05。
             assert_eq!(after.dc, 0x0A05, "DC 高字节 10（ExtraAbil 不进 WAbil）");
             assert_eq!(after.mc, rig.target_wabil_before.mc);
             assert_eq!(after.sc, rig.target_wabil_before.sc);
@@ -86957,9 +86961,9 @@ mod tests {",
             0,
             "F1：world 实体武器槽 index == 0"
         );
-        // **2026-11-20 更正（e1/3b 查实）**：`ExtraAbil` 的 WAbil 写入（`PlayObject.cs:2818-2840`）
-        // 被 `RecalcAbilitys` 尾段 `WAbil = Abil + AddAbil`（`:2900-2906`）整体覆盖 ⇒
-        // `ExtraAbil[0]=5` **不进 WAbil**，DC 保持 0x0101。原期望 0x0601 是错的。
+        // **既有断言更正（2026-11-20）**：旧期望 0x0601 = 0x0101 + `ExtraAbil[0]=5` 进 DC 高字节
+        // （写入点 `PlayObject.cs:2818-2820`）；尾段 `:2900` 的 `WAbil.DC = Abil+AddAbil`
+        // （逐字节 `_MIN(255,…)`）覆盖它 ⇒ 只能 0x0101。旧值含 ExtraAbil ⇒ 错。
         assert_eq!(
             sg_after.state.wabil.dc, 0x0101,
             "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
