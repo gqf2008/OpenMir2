@@ -718,8 +718,10 @@ pub fn use_item(
     }
 
     // oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`（优先级 = `(byte)wIdent`）⇒ 消息泵按
-    // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
-    // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
+    // **优先级升序**下发。本函数返回的 `notices` 是**入队序**（生产调用顺序），**不是**出队序：
+    // 宿主的 `lib.rs::emit_eat_notices` 用 `NetPriorityQueue` **单遍**排水得到线序。
+    // **F1-D（2026-11-20，3b 复审）**：此处曾有 `sort_by_key(ident)` —— 它改的是**入队序**，
+    // 既复刻不了同 ident 的堆 sift 序，又让"看起来排过序"掩盖真实入队序 ⇒ 已删除。
     //
     // **F3（2026-11-20 更正）**：`Shape12` 会产出**六条同 ident(11004)** ⇒ 本节原判「同 ident 多帧在
     // 本接缝不可达」**已失效**；且这六条的堆 sift 出队序 ≠ 入队序（实测 `DC,MP,HP,HITSPEED,SC,MC`
@@ -740,7 +742,6 @@ pub fn use_item(
     //   （StdMode 1 状态跳档）/ **`{131}`**（纯 `WeightChanged`：StdMode 2、StdMode 31 解包成功、
     //   以及 StdMode 0 的 shape 非 1/3 的 default 支）/ `{69}`（`can_use_item==false`）。
     // 新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
-    notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {
         eaten,

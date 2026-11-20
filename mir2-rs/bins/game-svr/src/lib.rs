@@ -10463,28 +10463,20 @@ fn drain_login_script_batch(
 // F1（2026-11-20）：use_item 末尾的 sort_by_key 只对它自己产出的通知成立；宿主随后 append
 // RM_ABILITY，且 Shape12 会产出六条同 ident(11004)——稳定排序无法复刻堆的 sift 序；
 // 排水必须走堆，不能按 vec 序、也不能只排序。
-/// 按 oracle 泵序返回通知的**出队序**（`NetPriorityQueue`；同 ident 按堆 sift 序）。
-fn notice_drain_order(
-    notices: &[game_svr::useitem::QueuedNotice],
-) -> Vec<&game_svr::useitem::QueuedNotice> {
-    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
-        game_svr::msgqueue::NetPriorityQueue::new();
-    for n in notices {
-        queue.enqueue(n, n.ident as u8);
-    }
-    std::iter::from_fn(|| queue.dequeue()).collect()
-}
-
 fn emit_eat_notices(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
     notices: &[game_svr::useitem::QueuedNotice],
     wire: &game_svr::pickwire::WireSession,
 ) -> usize {
-    let ordered = notice_drain_order(notices);
+    // **F1-D（2026-11-20，3b 复审）**：原实现先 `notice_drain_order(...)` 排一遍、再把结果重排
+    // 第二遍 ⇒ 实际线序 = 堆置换的**复合**。本仓 `crates/world-bevy/src/msgqueue.rs` 单独 rustc
+    // 实算（入队 `[S×6,W,C,A]`）：单遍 `[A,W,C,S1,S5,S4,S3,S2,S0]`、两遍
+    // `[A,W,C,S3,S4,S5,S1,S2,S0]`、入队/稳定排序 `[S0..S5]` —— 三种互不相同。
+    // 排水只许**一遍**（单遍 sift 序才是 oracle 的 `MsgQueue.TryDequeue` 序）。
     let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
         game_svr::msgqueue::NetPriorityQueue::new();
-    for n in ordered {
+    for n in notices {
         queue.enqueue(n, n.ident as u8);
     }
     let mut sent = 0usize;
@@ -10496,7 +10488,7 @@ fn emit_eat_notices(
             }
             None => glog!(
                 "WRN",
-                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS 与 657 缺口）",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：RM_ABILITY(52) 待 card/ability-frames 合入；StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS 与 657 缺口）",
                 n.ident
             ),
         }
@@ -98371,12 +98363,46 @@ fn ",
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
     }
-    /// **F1 用例（IT-07）**：Shape12 六命中的吃路径通知按**堆序**排水 ——
-    /// `[RM_ABILITY(67), RM_WEIGHTCHANGED(131), RM_CHARSTATUSCHANGED(155), RM_SYSMESSAGE(252)×6]`，
-    /// 而不是 `use_item` 的 vec 序/排序序（`[131, 252×6, 67]` 是修复前的实测错序）。
+    /// **F1-T 用例（IT-07；`emit_eat_notices` = `handle_eat_cmd` 唯一的吃路径排水点）**：
+    /// 入队序 = 生产真实序 `[SYSMESSAGE×6, WEIGHT(131), CHARSTATUSCHANGED(155), ABILITY(67)]`
+    /// （`use_item` 六条蓝字 + `WeightChanged`，宿主再 push 657 自通知与 `RM_ABILITY`）。
+    /// 期望线序 = **单遍** .NET 四叉堆出队序：`ABILITY → WEIGHT → 657 → 六条 SYSMESSAGE
+    /// 按 sift 序 `[S1,S5,S4,S3,S2,S0]`**。该排列由本仓 `crates/world-bevy/src/msgqueue.rs`
+    /// **单独 rustc 实算**（2026-11-20，三种口径两两不同：单遍 `[1,5,4,3,2,0]`、
+    /// 原"排水两遍"复合 `[3,4,5,1,2,0]`、入队/稳定排序 `[0,1,2,3,4,5]`）。
+    /// **牙**：排水改回 vec 序/排序序 ⇒ 六条按 `S0..S5` 发出 ⇒ 红；改回两遍 ⇒ `[3,4,5,1,2,0]` ⇒ 红。
+    /// 本用例走的是**生产接线**（`emit_eat_notices`），不是只测被它调用的某个 helper。
+    ///
+    /// **已知缺口（本 base 上，2026-11-20 实测）**：`RM_ABILITY(10051)` 在 `notice_frame` 里**没有**
+    /// 映射（`pickwire.rs` 的 match 无该臂）⇒ 52 不产帧、按 WRN 丢弃（`sent == 8` 而非 9）。
+    /// oracle 侧 `RecalcAbilitys(); SendMsg(RM_ABILITY)`（`PlayObject.Base.cs:2153-2158`）**要发 52**
+    /// ⇒ 这是 IT-07 的 parity 缺口，已上报 `opc-19`。**但入队的 A 仍必须留在本用例输入里**——
+    /// 它参与堆的 sift（去掉后六条顺序会变），否则测的就不是生产序。
     #[test]
-    fn it07_eat_notice_drain_order_matches_heap() {
-        let mk = |ident: i32| game_svr::useitem::QueuedNotice {
+    fn it07_emit_eat_notices_production_order_is_heap_sift() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 0,
+            sys_msg: None,
+            hunger_status: 0,
+            hit_speed: 0,
+        };
+        // 六条同 ident(11004) 必须**可区分**：Inline 文本各异 ⇒ 帧体两两不同 ⇒ 顺序可机判。
+        let mut notices: Vec<_> = (0..6)
+            .map(|i| game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 251,
+                n_param2: 252,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::Inline(format!("s{i}")),
+            })
+            .collect();
+        let plain = |ident: i32| game_svr::useitem::QueuedNotice {
             ident,
             w_param: 0,
             n_param1: 0,
@@ -98384,23 +98410,33 @@ fn ",
             n_param3: 0,
             text: game_svr::useitem::NoticeText::None,
         };
-        // 入队 = 修复前的真实序：use_item 的 [WEIGHT(131), SYSMESSAGE×6]，宿主再 append ABILITY(67)。
-        let notices: Vec<_> = std::iter::once(mk(game_svr::useitem::RM_WEIGHTCHANGED))
-            .chain((0..6).map(|_| mk(game_svr::useitem::RM_SYSMESSAGE)))
-            .chain(std::iter::once(mk(game_svr::useitem::RM_ABILITY)))
-            .collect();
-        let ordered: Vec<i32> = notice_drain_order(&notices)
+        notices.push(plain(game_svr::useitem::RM_WEIGHTCHANGED));
+        notices.push(plain(game_svr::useitem::RM_CHARSTATUSCHANGED));
+        notices.push(plain(game_svr::useitem::RM_ABILITY));
+        // 期望线序（入队下标）：A(8) 先出队但**无映射被丢弃** → WEIGHT(6) → 657(7) → 蓝字 [1,5,4,3,2,0]。
+        let want_idx = [6usize, 7, 1, 5, 4, 3, 2, 0];
+        let want: Vec<Vec<u8>> = want_idx
             .iter()
-            .map(|n| n.ident)
+            .map(|&i| game_svr::pickwire::notice_frame(&notices[i], &wire).expect("全部有映射"))
             .collect();
-        let mut want = vec![
-            game_svr::useitem::RM_ABILITY,
-            game_svr::useitem::RM_WEIGHTCHANGED,
-        ];
-        want.extend(std::iter::repeat_n(game_svr::useitem::RM_SYSMESSAGE, 6));
+        let uniq: std::collections::BTreeSet<&Vec<u8>> = want.iter().collect();
         assert_eq!(
-            ordered, want,
-            "出队序：ABILITY(67) → WEIGHT(131) → 六条 SYSMESSAGE(252)"
+            uniq.len(),
+            want.len(),
+            "六条蓝字文本互异 ⇒ 帧两两不同（否则顺序断言无牙）"
+        );
+        let sent = emit_eat_notices(&tx, 901, &notices, &wire);
+        drop(tx);
+        let got: Vec<Vec<u8>> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { body, .. } => Some(body),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, 8, "131 + 155 + 6×252（67 无映射 ⇒ 丢弃，见上方缺口说明）");
+        assert_eq!(
+            got, want,
+            "生产接线出队序 = 单遍四叉堆 sift 序（同 ident 六条 [1,5,4,3,2,0]）"
         );
     }
     /// **IT-07 657 断言（host 边界：通知构造 + 帧映射）**：Shape12 的 657 自通知
