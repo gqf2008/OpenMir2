@@ -72,7 +72,7 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-3.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "invoke"
+          "invoke(seed=1)"
         ],
         "unit_tests": [
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
@@ -99,7 +99,7 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-4.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "invoke"
+          "invoke(seed=1)"
         ],
         "unit_tests": [
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
@@ -126,7 +126,7 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-7.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "invoke"
+          "invoke(seed=1)"
         ],
         "unit_tests": [
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
@@ -153,8 +153,8 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-12.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "off2on",
-          "on2off"
+          "off2on(seed=1)",
+          "on2off(seed=1)"
         ],
         "unit_tests": []
       },
@@ -179,8 +179,8 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-25.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "off2on",
-          "on2off"
+          "off2on(seed=1)",
+          "on2off(seed=1)"
         ],
         "unit_tests": []
       },
@@ -205,9 +205,9 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-26.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "charge",
-          "busy",
-          "nomp"
+          "charge(seed=1)",
+          "busy(seed=1)",
+          "nomp(seed=1)"
         ],
         "unit_tests": []
       },
@@ -232,7 +232,7 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-27.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "coordinate_dir"
+          "coordinate_dir(seed=1)"
         ],
         "unit_tests": []
       },
@@ -257,8 +257,8 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-34.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "off2on",
-          "on2off"
+          "off2on(seed=1)",
+          "on2off(seed=1)"
         ],
         "unit_tests": []
       },
@@ -283,8 +283,8 @@
         "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/warr-38.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
         "cases": [
-          "go",
-          "nomp"
+          "go(seed=1)",
+          "nomp(seed=1)"
         ],
         "unit_tests": []
       },
