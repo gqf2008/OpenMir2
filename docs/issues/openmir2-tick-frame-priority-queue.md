@@ -258,3 +258,32 @@ impl TickFrameQueue {
 
 "待定点"的数目此前有三种口径（TSV 行 **175** / 源码站点 **124** / 卡面 **136**，互不一致）。
 **以后统一按"源码站点行"计数**，并在报告里注明用的是哪一种口径。
+
+## 10. `#7`（施法支 A）"条件发 657"的读穿结论（2026-11-20）
+
+**产生链**：`BuffApplyEvent.char_status` ← `world.get_char_status(actor_id)`（`crates/world-bevy/src/world.rs`
+的 `defence_up` / `mag_defence_up` / `magic_shield_on`）→ 宿主 `handle_spell_cmd_with_magic` 支 A
+（`smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0)` 经 `SpellFrameBuf` 广播）。**是同一个量**
+（`GetBuffStatus() | (CharStatusEx & 0xFFFF)`），不是局部判断。
+
+**"条件发"对应 oracle 的哪一段**——两类 buff 不同：
+- `DefenceUp`（`BaseObject.cs:2159-2162`）/ `MagDefenceUp`（`:2183-2186`）：**无条件**
+  `SysMsg` + `RecalcAbilitys()` + `SendMsg(RM_ABILITY)` ⇒ 两侧都无条件发；
+- `MagBubbleDefenceUp`（`src/M2Server/Player/CharacterObject.cs:96-114`）：
+  `CharStatus = GetCharStatus(); if (nOldStatus != CharStatus) StatusChanged();` ⇒ **oracle 自己就是条件发**。
+  本仓 `magic_shield_on` 的 `if new_status != old_status { push(ev) }` 与之逐字对应。
+
+⇒ **结论：`#7` 的"条件发"不是语义差异，是 oracle `MagBubbleDefenceUp` 的原样**；
+**不改为无条件**。（若 `SKILL_UENHANCER`(36) 实测缺 657，缺的不在 `#7` 这条链上——它走的是另一条路径。）
+
+## 10b. 四种 657 机制的收敛 seam（记录，不实现）
+
+| 站点 | 现机制 | 若收敛需要的上下文 |
+|---|---|---|
+| `#3` `CM_ADJUST_BONUS` | 直发 `tx.send` | `socket`/`gate_idx`（现成）、`status`、`hit_speed` |
+| `#4` 穿脱装备 | 直发 `tx.send` | 同上 |
+| `#6` 吃路径 | `pickwire::notice_frame`（队列记录 → 泵） | 已具备（`WireSession`） |
+| `#7` 施法支 A | `SpellFrameBuf::push_broadcast_cached` | 已具备（buf + ref_msg_cache） |
+
+统一 seam 的签名候选：`emit_charstatuschanged(world, online, gates, sink: &mut dyn FrameSink, actor, status, hit_speed, range)`
+——`FrameSink` 由三条路径各自实现（直发 / 队列 / 帧缓冲）。**本单不实现**，属收敛单。
