@@ -36,34 +36,34 @@
 
 ## 逐处审计结论（2026-11-20，只读）
 
-> 判据：共享尾 `MagicManager.cs:659-669` 的 `if (userMagic.Level<3 && boTrain) { … if(!CheckMagicLevelUp) SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000); }` ⇒ **640 延迟 1000ms**（未升级支）；升级支走 `UpdateDelayMsg(…,800)`（`PlayObject.cs:5216`）。**零处立即发**。`finish_spell_tail(..., None)` 的 `None` = **立即发**（`Some` 才按 1000/800 分支出帧）。
+> 判据：共享尾 `src/M2Server/Magic/MagicManager.cs:659-669` 的 `if (userMagic.Level<3 && boTrain) { … if(!CheckMagicLevelUp) SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000); }` ⇒ **640 延迟 1000ms**（未升级支）；升级支走 `UpdateDelayMsg(…,800)`（`PlayObject.cs:5216`）。**零处立即发**。`finish_spell_tail(..., None)` 的 `None` = **立即发**（`Some` 才按 1000/800 分支出帧）。
 
 ### 站点① `SKILL_SHIELD(31)` @ `bins/game-svr/.../lib.rs` `finish_spell_tail`（shield 支）
-- **oracle**：`MagicManager.cs:474-479` `case SKILL_SHIELD: if (MagBubbleDefenceUp(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。**是**共享尾（非 Attack.cs 3000 支）。
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:474-479` `case SKILL_SHIELD: if (MagBubbleDefenceUp(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。**是**共享尾（非 Attack.cs 3000 支）。
 - **Rust 现状**：该支 `finish_spell_tail(..., None)` = **立即发**。
 - **判定：缺陷**。640 应在施法后 **+1000ms** 交付批；Rust 在施法批即发 ⇒ 640 帧的**批次/相对 638/642 次序**错（golden 里 640 排在 31 之前即多 pass 伪影）。
 - **修法建议**：传 `Some(1000)`（走 oracle 1000/800 两分支）；**golden 须加 `StepDrainMs` 时间忠实排水重出**后重跑比较器（与 MG-17 同教训，勿只改产品）。
 
 ### 站点② `SKILL_HANGMAJINBUB(14)`/`SKILL_DEJIWONHO(15)` @ buff-apply 邻接 `finish_spell_tail`
-- **oracle**：`MagicManager.cs:352-366` `MagMakeDefenceArea(...)>0 ⇒ boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾，非 3000 支。
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:352-366` `MagMakeDefenceArea(...)>0 ⇒ boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾，非 3000 支。
 - **Rust 现状**：`finish_spell_tail(..., None)` = 立即发。
 - **判定：缺陷**（同上，14/15 两臂）；影响=640 批次/次序。
 - **修法建议**：`Some(1000)` + golden `StepDrainMs` 重出。
 
 ### 站点③ `SKILL_44(44)` @ `finish_spell_tail`
-- **oracle**：`MagicManager.cs:557-561` `case SKILL_44: if (MagHbFireBall(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾。
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:557-561` `case SKILL_44: if (MagHbFireBall(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾。
 - **Rust 现状**：`finish_spell_tail(..., None)` = 立即发。
 - **判定：缺陷**；影响=640 批次/次序。
 - **修法建议**：`Some(1000)` + golden `StepDrainMs` 重出。
 
 ### 站点④ `SKILL_LIGHTFLOWER(24)` @ `finish_spell_tail`
-- **oracle**：`MagicManager.cs:424-429` `case SKILL_LIGHTFLOWER: if (MagElecBlizzard(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾。
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:424-429` `case SKILL_LIGHTFLOWER: if (MagElecBlizzard(...)) boTrain=true; break;` ⇒ 落 **共享尾 659-669** ⇒ 640 延迟 **1000ms**。共享尾。
 - **Rust 现状**：`finish_spell_tail(..., None)` = 立即发。
 - **判定：缺陷**；影响=640 批次/次序。
 - **修法建议**：`Some(1000)` + golden `StepDrainMs` 重出。
 
 ## 结论
-四处**全部**为 oracle **延期 1000ms**、Rust **立即发** ⇒ **四处均为缺陷**（非"oracle 也立即"）。四者皆走共享尾 `MagicManager.cs:659-669`（非 `Attack.cs` 3000ms 支）。修复须"产品+golden(StepDrainMs)同步"，单改产品会判红。
+四处**全部**为 oracle **延期 1000ms**、Rust **立即发** ⇒ **四处均为缺陷**（非"oracle 也立即"）。四者皆走共享尾 `src/M2Server/Magic/MagicManager.cs:659-669`（非 `Attack.cs` 3000ms 支）。修复须"产品+golden(StepDrainMs)同步"，单改产品会判红。
 
 ## 范围更正（2026-11-20，动工前核对）
 
