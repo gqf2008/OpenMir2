@@ -514,10 +514,11 @@ public static class ClientSpellXYEntry
     /// 缓冲 = 20B `ServerMessage` 头 + 载荷：`PackLength >= 0` ⇒ 12B `CommandMessage` + tail；
     /// `PackLength < 0` ⇒ `SendSocket(string)` 动作短包（记 `ident=0`）。
     /// </summary>
-    private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers, int gateIdx)
+    private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due)> buffers, int gateIdx)
     {
         var list = new List<object>();
-        foreach (var (g, data) in buffers)
+        // `Due`（相对到期毫秒）本域不使用（warrskill golden 无 `due_ms_rel` 键，保持输出不变）。
+        foreach (var (g, data, _) in buffers)
         {
             if (g != gateIdx) continue;
             int packLength = BitConverter.ToInt32(data, 16);

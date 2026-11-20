@@ -16859,6 +16859,10 @@ fn handle_spell_cmd_with_magic(
                             out.end_y,
                             base_target.unwrap_or(0),
                             Some(&mut buf),
+                            // **640 延迟 1000ms**（oracle `MagicManager.cs:666`
+                            // `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`）。此前改 None 是错的：
+                            // golden 里 640 排在 31 之前是 **C# 装置多 pass 排水**的产物（pass1 只
+                            // 排 caster 的 640、pass2 才收 target 的 31 广播），不是"立即出"。
                             Some(1000),
                         );
                     }
@@ -69797,7 +69801,7 @@ SendRefMsgRange=15
     /// `Random(SpeedPoint)`（1 抽）+ 命中则护甲（1–2 抽）；最后若有任一非死怪则共享尾
     /// 训练 `Random(3)+1`（1 抽）。走查必须恰好耗尽 `draws`（夹具假设被破坏即红）。
     fn gdd_gate_ledger(
-        specs: &[[i64; 11]],
+        specs: &[[i64; 12]],
         hit_point: i32,
         draws: &[i64],
         label: &str,
@@ -70585,12 +70589,39 @@ SendRefMsgRange=15
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(body)
                     .unwrap_or_else(|| panic!("帧体长度不足 12 字节: {body:?}"));
                 serde_json::json!({
+                    // 头 4 字节 = `Recog`（受击者 ActorId 等）；新 golden 逐帧记录、旧件无该键。
+                    "recog": cm.recog,
                     "ident": cm.ident,
                     "param": cm.param,
                     "tag": cm.tag,
                     "series": cm.series,
                     // C# 侧 `tail` 是 `SendSocket(msg, sSendStr)` 的字符串本身；Rust 帧体的尾段
                     // 就是同一串 EDCode 字节（ASCII）⇒ 按 UTF-8 直读。
+                    "tail": String::from_utf8_lossy(&body[mir2_protocol::frame::CommandMessage::SIZE..]),
+                })
+            })
+            .collect()
+    }
+
+    /// 同 [`fireball_sent`]，但带 **`due_ms_rel`**（相对施法时刻的毫秒；交付段 = 步进 elapsed）。
+    /// 该字段进比较面（多受害者同刻口径的多重集 key），防止"顺序放宽"把时序差一起放过。
+    fn fireball_sent_with_due(
+        frames: &[(i32, Vec<u8>, i64)],
+        socket: i32,
+    ) -> Vec<serde_json::Value> {
+        frames
+            .iter()
+            .filter(|(s, _, _)| *s == socket)
+            .map(|(_, body, due)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(body)
+                    .unwrap_or_else(|| panic!("帧体长度不足 12 字节: {body:?}"));
+                serde_json::json!({
+                    "recog": cm.recog,
+                    "ident": cm.ident,
+                    "param": cm.param,
+                    "tag": cm.tag,
+                    "series": cm.series,
+                    "due_ms_rel": due,
                     "tail": String::from_utf8_lossy(&body[mir2_protocol::frame::CommandMessage::SIZE..]),
                 })
             })
@@ -70854,12 +70885,34 @@ SendRefMsgRange=15
         // 1100(170) 排到 640(255) 前面，与金标准相反。
         let wait_ms = golden_wait_ms(stem, label);
         let mut all_outs: Vec<mir2_world_bevy::slave::SelfDelayOutcome> = Vec::new();
-        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut deliver_frames: Vec<(i64, SfFrame)> = Vec::new();
+        // MG-17/18：穿透命中在**交付段**落 `pending_mag_struck`（`RM_MAGSTRUCK` 延迟 600ms）。
+        // 怪物不 `Operate` ⇒ 只记 RM（与 groupdeding 同一观测面）。
+        let mut struck_rm: Vec<(i32, i32)> = Vec::new();
+        // 延迟支玩家受害者 `(victim, caster, power)`：只来自 `pending_mag_struck`（8 参
+        // `SendStruckDelayMsg` 路径），**不含** `RM_DELAYMAGIC` 的受击（fireball 走那条，
+        // golden 不记 8044/10052/8103，混进来会多记）。
+        let mut delayed_player_struck: Vec<(i32, i32, i32)> = Vec::new();
         let mut elapsed: u64 = 0;
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
             elapsed += 100;
             let outs = rig.world.deliver_self_delay_msgs();
+            // **玩家受击必须留给 `drain_b4_self_deliveries`**（`deliver_mag_struck` 做
+            // 31 帧 + R(1000)/MSD 抽数）；**怪物受击只记 RM、不结算**——C# 装置的
+            // `RecordingMonster` 明确「不 Operate」（`RunMagicCase` 注释），让它结算会多抽。
+            let pending = std::mem::take(&mut rig.world.pending_mag_struck);
+            let mut for_b4 = Vec::new();
+            for st in pending {
+                if monster_ids.contains(&st.target_id) {
+                    struck_rm.push((st.target_id, st.power));
+                } else {
+                    // `SendStruckDelayMsg`(8 参) 的玩家受害者：用于台账的 8044/10052/8103 重建。
+                    delayed_player_struck.push((st.target_id, st.caster_id, st.power));
+                    for_b4.push(st);
+                }
+            }
+            rig.world.pending_mag_struck = for_b4;
             if outs.is_empty() {
                 continue;
             }
@@ -70887,8 +70940,10 @@ SendRefMsgRange=15
                 &mut rig.ground_sessions,
                 &rig.gates,
             );
-            let (mut step_frames, _raws2) = rig.drain();
-            deliver_frames.append(&mut step_frames);
+            let (step_frames, _raws2) = rig.drain();
+            for f in step_frames {
+                deliver_frames.push((elapsed as i64, f));
+            }
             all_outs.extend(outs);
         }
         // 延迟支（2/11/45/13/44 的 `RM_DELAYMAGIC`）的受击发生在**交付段** ⇒ 再取一次；
@@ -70929,8 +70984,11 @@ SendRefMsgRange=15
             assert_eq!(b.0, a.0 + 1, "[{label}] 两段之间 seq 必须连续");
         }
 
-        let mut all_frames = cast_frames;
-        all_frames.extend(deliver_frames);
+        // 帧的**相对到期时刻**（ms，相对施法）：施法段 = 0，交付段 = 该步的 `elapsed`。
+        // 与 C# golden 的 `due_ms_rel`（`DeliveryTime - castTick`；立即=0）同口径、可跨栈比较。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        all_frames.extend(deliver_frames.into_iter().map(|(due, (s, b))| (s, b, due)));
 
         // ---- RM 列组装（卡 §11 映射表；**弱比较面**：RM 是组装出来的，玩家可见证据是 SM）----
         //
@@ -70950,8 +71008,8 @@ SendRefMsgRange=15
         let in_range_target = chat::hear_targets(&rig.world, target, range);
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
-            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
-            .map(|(_, b)| {
+            .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b, _)| {
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
                 (
                     i32::from(cm.param),
@@ -70972,12 +71030,15 @@ SendRefMsgRange=15
         for id in &in_range_caster {
             if let Some(who) = who_of(*id) {
                 let v = rm_by_who.entry(who).or_default();
-                // `RM_SPELL`：wParam=Effect(1)、p1/p2=施法坐标、p3=MagicId；priority=(byte)ident。
+                // `RM_SPELL`：wParam=Effect(1)、p1/p2=**点击坐标**、p3=MagicId；priority=(byte)ident。
+                // oracle `MagicManager.cs:159` 在 **case 体之前**发 `RM_SPELL(…, nTargetX, nTargetY, …)`；
+                // 穿透 9/10 的 `nTargetX/Y` 是在 case 体内才被改写成终点的（`:269`）⇒ RM_SPELL 用点击点，
+                // 638 尾用终点。不能从 638 帧反推（本处曾直接取 `fire_x/fire_y` ⇒ 105）。
                 v.push(fireball_rm(
                     10008,
                     1,
-                    i64::from(fire_x),
-                    i64::from(fire_y),
+                    101,
+                    100,
                     i64::from(magic_id),
                     24,
                     false,
@@ -71078,9 +71139,9 @@ SendRefMsgRange=15
         }
         // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
         // 由该帧反推 w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -71119,6 +71180,49 @@ SendRefMsgRange=15
                         i64::from(ev.hp_after),
                         i64::from(ev.max_hp),
                         i64::from(ev.caster_id),
+                        167,
+                        false,
+                    ));
+                }
+            }
+        }
+        // **延迟支受击**（穿透 9/10 等 `SendStruckDelayMsg`，600ms）：golden 里 8044 的
+        // prio/late 与即时支不同——`SendStruckDelayMsg` 入队用 `Lowest`(255) + `LateDelivery=true`。
+        // 10052/8103 形状同即时支；**怪物不 `Operate` ⇒ 无 8103**（`who_of` 只覆盖玩家）。
+        // **只有穿透类（9/10）显式调 `SendStruckDelayMsg`**（`MagPassThroughMagic`；
+        // `cast_pass_through_spell`）⇒ oracle 的 RecordingPlayObject 在 `Rm` 里记下 8044/10052/8103。
+        // 火球/雷电的受击来自 `RM_DELAYMAGIC` 的**内部链**（`deliver_delay_magic_impl`），
+        // golden 的 `Rm` 不记这三条（实测 `fireball-5` 三支）。两者在 Rust 都落
+        // `pending_mag_struck`，靠 magic id 区分是唯一现成维度。
+        let record_delayed_struck = matches!(magic_id, 9 | 10);
+        for (victim, caster_ref, power) in delayed_player_struck
+            .iter()
+            .filter(|_| record_delayed_struck)
+        {
+            let Some(who) = who_of(*victim) else {
+                continue;
+            };
+            let v = rm_by_who.entry(who).or_default();
+            v.push(fireball_rm(8044, 0, i64::from(*power), 0, 0, 255, true));
+            let (hp_after, max_hp) = rig
+                .world
+                .entities
+                .get(*victim)
+                .map_or((0u16, 0u16), |e| (e.hp, e.max_hp));
+            if *power > 0 {
+                v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+            }
+            let map_id = rig.world.entities.get(*victim).map_or(0, |e| e.map_id);
+            let x = rig.world.entities.x(*victim).unwrap_or(0);
+            let y = rig.world.entities.y(*victim).unwrap_or(0);
+            for id in chat::hear_targets_at(&rig.world, *victim, map_id, x, y, range) {
+                if let Some(who) = who_of(id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        8103,
+                        i64::from(*power),
+                        i64::from(hp_after),
+                        i64::from(max_hp),
+                        i64::from(*caster_ref),
                         167,
                         false,
                     ));
@@ -71281,9 +71385,9 @@ SendRefMsgRange=15
         // `RM_DURACHANGE(10125)`（护身符消耗，`UseAmulet`）：C# 入施法者队列，prio = 10125 & 0xFF = 141，
         // late=false；Rust 观测面 = 实际发出的 `SM_DURACHANGE(642)` 帧（SM 头 = Recog=Dura、
         // Param=槽位、Tag/Series=DuraMax）⇒ 反推 RM 字段（wParam=槽位、p1=Dura、p2=MakeLong(tag,series)）。
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_DURACHANGE)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_DURACHANGE)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -71299,7 +71403,7 @@ SendRefMsgRange=15
             }
         }
 
-        let receivers = [
+        let mut receivers = [
             ("caster", 911),
             ("target", 912),
             ("obs_in", 913),
@@ -71310,10 +71414,27 @@ SendRefMsgRange=15
             serde_json::json!({
                 "Who": who,
                 "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
-                "Sent": fireball_sent(&all_frames, *socket),
+                "Sent": fireball_sent_with_due(&all_frames, *socket),
             })
         })
         .collect::<Vec<_>>();
+        // MG-17/18：非玩家接收者（与 C# `RunMagicCase` 的 `mon{i}` 同序、同形）。
+        // 怪物不 `Operate` ⇒ `Sent` 恒空、`HpBefore/HpAfter` 不落（C# 侧 `WhenWritingNull`）。
+        for (i, id) in monster_ids.iter().enumerate() {
+            let rm: Vec<serde_json::Value> = struck_rm
+                .iter()
+                .filter(|(tid, _)| tid == id)
+                // **延迟支**（`SendStruckDelayMsg`）的 8044：入队用 `Lowest`(255) + `LateDelivery=true`。
+                // 与 groupdeding 的**即时**支（108/false，那里走自己的驱动）不同；golden 实测
+                // `mon0/mon2 = 255/late=1`（fire s1/s5/s13 三支一致）。
+                .map(|(_, power)| fireball_rm(8044, 0, i64::from(*power), 0, 0, 255, true))
+                .collect();
+            receivers.push(serde_json::json!({
+                "Who": format!("mon{i}"),
+                "Rm": rm,
+                "Sent": Vec::<serde_json::Value>::new(),
+            }));
+        }
 
         // **三态术后值由"门结果 + 术前值"独立推出**（与装置侧同一条规则；不拿实现输出自证）：
         // 门开 ⇒ 非零项置 1、零项不动；门关 ⇒ 一律不动。门骰 = 施法段首抽。
@@ -71386,10 +71507,10 @@ SendRefMsgRange=15
              frames/socket: caster={} target={} obs_in={} obs_out={} → {}",
             cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
-            all_frames.iter().filter(|(s, _)| *s == 911).count(),
-            all_frames.iter().filter(|(s, _)| *s == 912).count(),
-            all_frames.iter().filter(|(s, _)| *s == 913).count(),
-            all_frames.iter().filter(|(s, _)| *s == 914).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 911).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 912).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 913).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 914).count(),
             out.display()
         );
     }
@@ -72516,7 +72637,7 @@ SendRefMsgRange=15
     ///
     /// 字段序：`[x, y, race, level, hp, life_attrib, master, target_cret, speed_point, death, ac]`。
     /// 后三项（卡 §39）对旧 golden 缺省 `15/0/0`（= `BaseObject` ctor 缺省 / 无死 / 无护甲）⇒ 旧件零变化。
-    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 11]> {
+    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 12]> {
         let v = golden_case_for(stem, label)["Fixture"]["monsters"].clone();
         let Some(arr) = v.as_array() else {
             return Vec::new();
@@ -72546,6 +72667,8 @@ SendRefMsgRange=15
                     opt("speed_point", 15),
                     death,
                     opt("ac", 0),
+                    // MG-17/18：穿透骰门 `Random(10) >= AntiMagic`；旧件无该键 ⇒ 0（必中）。
+                    opt("anti_magic", 0),
                 ]
             })
             .collect()
@@ -72554,7 +72677,7 @@ SendRefMsgRange=15
     /// **世界放怪物（设施接缝，卡 §36）**：参数全部来自夹具，返回与列表同序的 actor id。
     fn place_monsters(
         world: &mut mir2_world_bevy::World,
-        monsters: &[[i64; 11]],
+        monsters: &[[i64; 12]],
         first_id: i32,
     ) -> Vec<i32> {
         let mut ids = Vec::with_capacity(monsters.len());
@@ -72577,6 +72700,8 @@ SendRefMsgRange=15
             e.speed_point = u8::try_from(m[8]).expect("speed_point 越界");
             e.death = m[9] != 0;
             e.ac = i32::try_from(m[10]).expect("ac 越界");
+            // MG-17/18：穿透/骰门用 `AntiMagic`（`Random(10) >= AntiMagic`）。
+            e.anti_magic = u16::try_from(m[11]).expect("anti_magic 越界");
             e.ai.animal = true;
             e.rush_mode = false;
             e.admin_mode = false;
@@ -72858,6 +72983,33 @@ SendRefMsgRange=15
     ///
     /// **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
     /// **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
+    /// **`9 地狱火`**（`SKILL_FIRE`，`MagicManager.cs:265-274` ⇒ `MagPassThroughMagic(..., 5, false)`）。
+    /// 判定面：逐格穿透骰门（`Random(10) >= 怪物 AntiMagic`）、`RM_MAGSTRUCK(8044)` 逐怪、
+    /// 玩家 target 的术后 HP（600ms 延迟在 `WaitMs` 内）。怪物按 golden `Fixture.monsters` 摆位
+    /// （装置侧注释写明为何是 4 只、AntiMagic 互异——那是变异牙的布置理由）。
+    fn fire_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("fire", 9, 1, label, seed, base);
+        fireball_case_assert("fire", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fire_parity_s1() {
+        fire_assert("s1", golden_seed("fire", "s1"), 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fire_parity_s5() {
+        fire_assert("s5", golden_seed("fire", "s5"), 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fire_parity_s13() {
+        fire_assert("s13", golden_seed("fire", "s13"), 3000);
+    }
+
     fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 33, 1, label, seed, base);
         fireball_case_assert(stem, label);

@@ -173,6 +173,40 @@ public static class Program
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
+            // `BaseObject.cs:896-931`）。摆位理由（变异牙）：
+            //   · 施法者 (100,100) → 点击 (101,100) ⇒ 方向东，检查格 x=101..105；
+            //   · x=101 是玩家 target（AntiMagic=夹具值），x=102/103/104 放 3 只怪，
+            //     **AntiMagic = {1, 9, 1} 互异** ⇒ `Random(10) >= AntiMagic` 让"必中/必不中/随 seed"三态并存；
+            //   · 刀①：删骰门抽数 ⇒ Rng 计数/序列变；刀②：AntiMagic 恒 0 ⇒ 命中集合变（8044 条数）；
+            //     刀③：穿透步数 5→8 ⇒ 第 5 格之外的对象进入（本夹具在 x=106 放一只，便于该刀变红）。
+            //   · 禁止"空线"：没有怪时骰门零抽、RM 零条 ⇒ 退化数据，生成后自查会拦。
+            if (name == "fire") return BehaviorBatch(new MagicSpec
+            {
+                Key = "fire", MagicId = 9, MagicName = "Fire",
+                CasterMcNoClamp = HUtil32.MakeWord(5, 10),
+                // 场景里 obs_in(105,100) 落在穿透线上，与 target 同刻受击 ⇒ 帧序用多重集
+                // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。
+                FrameOrderScope = "multi_victim_same_tick",
+                // **`due_ms_rel` 的建模约定（写进 golden `scenario_note`）**：施法批（17/638）= 0
+                // 是**建模约定**——oracle 实际在下一个 `Run()` 处理（≈100ms），那是投递调度语义、
+                // 不是生成时刻语义；本字段**不作为行为判据**，只用于区分"施法批 vs 交付批"与
+                // 交付帧的先后（640=1000ms、31/53/656=600ms）。
+                ScenarioNote = "登录序（UserLogon→RecalcLevelAbilitys+RecalcAbilitys；target/caster 同标准，HP=公式 MaxHP）；"
+                    + "帧序用步进排水 StepDrainMs=100；due_ms_rel 施法批=0 是建模约定（oracle 实际在下一个 Run 处理，≈100ms），不作为行为判据",
+                // **时间忠实排水**：oracle 的 640 在 +1000ms、穿透受击 31 在 +600ms ⇒ 真实次序
+                // 31 在前、640 在后。默认口径是"Sleep(WaitMs) 后一次排空"，多 pass 的 per-actor
+                // 顺序会把 caster 的 640 排在 pass1、target 的 31 广播排在 pass2（与时间序相反）。
+                // 步进排水按到期时刻处理，golden 才与生产（逐 tick 交付）同序。
+                StepDrainMs = 100,
+                Monsters = new[]
+                {
+                    new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                    new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 9 },
+                    new MonsterSpec { X = 104, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                    new MonsterSpec { X = 106, Y = 100, Race = 50, Level = 1, Hp = 300, AntiMagic = 1 },
+                },
+            });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -668,6 +702,10 @@ public static class Program
         int targetHpInput = target.WAbil.HP;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **观察者是真实玩家**：初始化 HP/MaxHP=100（与 Rust rig 的 `new_player_entity` 默认同源）。
+        // 不初始化会让"旁观者自己受击/治疗"的帧（53/31）带 0/0，与实现侧不可比（MG-17 D1）。
+        obsIn.WAbil.HP = 100; obsIn.WAbil.MaxHP = 100;
+        obsOut.WAbil.HP = 100; obsOut.WAbil.MaxHP = 100;
         // **记录面补全（卡 openmir2-magic-parity A 口径）**：所有下行最终都汇到
         // `M2Share.NetChannel.AddGateBuffer(GateIdx, bytes)`——把静态通道换成只记录不发送的实现，
         // 就能同时捕获双参 virtual `SendSocket(msg, tail)`、私有单参 `SendSocket(msg)`
@@ -823,6 +861,9 @@ public static class Program
         {
             Fixture = new
             {
+                // recog 的归属对照：31 帧的 `recog` = 受击者 ActorId（`SM` 头 4 字节）。
+                caster_actor_id = caster.ActorId,
+                target_actor_id = target.ActorId,
                 caster_mc = (int)caster.WAbil.MC,
                 caster_sc = (int)caster.WAbil.SC,
                 rng_mode = rngMode,
@@ -876,20 +917,22 @@ public static class Program
 /// * `PackLength >= 0` ⇒ 载荷 = 12B `CommandMessage` + `tail`（GB2312 文本，EDCode 字符在 ASCII 区）；
 /// * `PackLength < 0` ⇒ `SendSocket(string)` 动作短包，载荷就是该字符串（记 `ident=0` 便于显形）。
 /// </summary>
-private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers, int gateIdx)
+private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due)> buffers, int gateIdx)
 {
     var list = new List<object>();
-    foreach (var (g, data) in buffers)
+    foreach (var (g, data, due) in buffers)
     {
         if (g != gateIdx) continue;
         int packLength = BitConverter.ToInt32(data, 16);
         if (packLength < 0)
         {
             string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
-            list.Add(new { ident = 0, param = 0, tag = 0, series = 0, tail = action });
+            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, due_ms_rel = due, tail = action });
             continue;
         }
         int off = ServerMessage.PacketSize;
+        // 头 4 字节 = `Recog`（`CommandMessage` 的 `recog`；此前 ParseFrames 跳过未记）。
+        int recog = BitConverter.ToInt32(data, off);
         ushort ident = BitConverter.ToUInt16(data, off + 4);
         ushort param = BitConverter.ToUInt16(data, off + 6);
         ushort tag = BitConverter.ToUInt16(data, off + 8);
@@ -897,7 +940,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         string tail = data.Length > off + 12
             ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
             : "";
-        list.Add(new { ident, param, tag, series, tail });
+        list.Add(new { ident, recog, param, tag, series, due_ms_rel = due, tail });
     }
     return list;
 }
@@ -952,6 +995,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int CasterCharStatusEx;
         /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
         public int HitSpeed;
+        /// <summary>
+        /// **帧序比较口径标记**（写进 `Fixture.frame_order_scope`）：空 = 严格按序（默认）。
+        /// 目前唯一合法值 `multi_victim_same_tick`：多受害者同刻延迟受击时，产品是批量 flush、
+        /// oracle 是逐 actor `Run()`（见 `docs/issues/openmir2-b4-multivictim-strike-order.md`），
+        /// 比较器在该标记下把 `Sent` 改为**每接收者多重集**比较。**产品卡修复后必须删掉该标记。**
+        /// </summary>
+        public string FrameOrderScope = "";
+
         /// <summary>
         /// **非退化 MC 变体**（伤害面点亮）：>0 时对"后两个 damage case"（`s5`/`s13`/`hit`）覆写
         /// `caster.WAbil.MC`，其余 case 仍用 `CasterMc`（缺省 15 ⇒ `Hi<Lo` 钳制支对照）。
@@ -1683,6 +1734,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         CheckBranchThreshold("runmagic/" + spec.Key + "/" + label, inputAntiMagic, branchExpect);
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **观察者是真实玩家**：初始化 HP/MaxHP=100（与 Rust rig 的 `new_player_entity` 默认同源）。
+        // 不初始化会让"旁观者自己受击/治疗"的帧（53/31）带 0/0，与实现侧不可比（MG-17 D1）。
+        obsIn.WAbil.HP = 100; obsIn.WAbil.MaxHP = 100;
+        obsOut.WAbil.HP = 100; obsOut.WAbil.MaxHP = 100;
         if (targetNull)
         {
             // 治愈 self 支：`DoSpell` 首句把 targetObject 置成 playObject，读取的是施法者 WAbil。
@@ -1746,6 +1801,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `WAbil.AC` / 收集期 `Death` 过滤。
             mo.SpeedPoint = (byte)ms.SpeedPoint;
             mo.WAbil.AC = (ushort)ms.AC;
+            mo.AntiMagic = (ushort)ms.AntiMagic;
             mo.Death = ms.Death;
             mo.FixedHideMode = false;
             mo.ObMode = false;
@@ -1834,13 +1890,15 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
+        // 帧 `due_ms_rel` 的基准：施法时刻（排水循环里 `DeliveryTime - castTick`）。
+        long castTick = HUtil32.GetTickCount();
         int drainPasses = 0;
         bool drainPassesHitCap = false;
         if (spec.StepDrainMs > 0)
         {
             // **步进排水**（见 `MagicSpec.StepDrainMs` 说明）：每步只处理**已到期**的消息，
             // 未到期的按原优先级放回队列；RM 账本按消息对象去重（同一消息跨步只记一次）。
-            void DrainOnce(bool[] operatedAny)
+            void DrainOnce(bool[] operatedAny, long stepMs)
             {
                 foreach (var (who, obj) in byWho)
                 {
@@ -1864,7 +1922,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                                 delivery = m.DeliveryTime,
                                 priority = prio,
                             });
+                            // 延迟消息 = 其到期时刻；**非延迟消息 = 当前步进时刻**（它在本次
+                            // Operate 里被处理，客户端可见时刻就是这一步），与 Rust 台账的
+                            // `due_ms_rel = elapsed` 同口径。
+                            RecordingNetChannel.CurrentDueMs =
+                                m.LateDelivery ? Math.Max(0, m.DeliveryTime - castTick) : stepMs;
                             obj.OperatePublic(m);
+                            RecordingNetChannel.CurrentDueMs = 0;
                             operatedAny[0] = true;
                         }
                         else
@@ -1874,6 +1938,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     }
                     foreach (var (m, prio) in later) obj.PushBack(m, prio);
                 }
+            }
+            // **施法批（t=0）**：与 Rust 台账"施法段 drain（elapsed=0）"同口径 ⇒ 帧 `due_ms_rel=0`。
+            // **这是建模约定、不是行为判据**：oracle 实际在下一个 `Run()` 处理（≈100ms），
+            // 那是投递调度语义；见 golden 的 `scenario_note` 与比较器 `due_ms_rel` 段注释。
+            {
+                var operatedAny = new[] { false };
+                DrainOnce(operatedAny, 0);
             }
             int elapsed = 0;
             while (elapsed < spec.WaitMs)
@@ -1885,7 +1956,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 for (int pass = 0; pass < MaxDrainPasses; pass++)
                 {
                     var operatedAny = new[] { false };
-                    DrainOnce(operatedAny);
+                    DrainOnce(operatedAny, elapsed);
                     stepPasses = pass + 1;
                     if (!operatedAny[0]) break;
                     if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
@@ -1932,7 +2003,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     int now = HUtil32.GetTickCount();
                     foreach (var m in raw)
                     {
-                        if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
+                        if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now)
+                        {
+                            RecordingNetChannel.CurrentDueMs =
+                                m.Msg.LateDelivery ? Math.Max(0, m.Msg.DeliveryTime - castTick) : 0;
+                            obj.OperatePublic(m.Msg);
+                            RecordingNetChannel.CurrentDueMs = 0;
+                        }
                         else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
                     }
                     rmAcc[who].AddRange(rm);
@@ -2084,6 +2161,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 effect_type = spec.EffectType,
                 user_magic_level = spec.UserMagicLevel,
                 caster_level = spec.CasterLevel,
+                caster_actor_id = caster.ActorId,
+                target_actor_id = target.ActorId,
                 caster_mc = (int)caster.WAbil.MC,
                 caster_sc = (int)caster.WAbil.SC,
                 rng_mode = spec.RngMode,
@@ -2134,6 +2213,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
                 hit_speed = spec.HitSpeed,
+                frame_order_scope = string.IsNullOrEmpty(spec.FrameOrderScope) ? null : spec.FrameOrderScope,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null
                 ? null
@@ -2158,6 +2238,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     speed_point = m.SpeedPoint,
                     death = m.Death,
                     ac = m.AC,
+                    anti_magic = m.AntiMagic,
                 }).ToArray(),
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
@@ -2234,6 +2315,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public bool Death;
         /// <summary>`WAbil.AC` 原始字（Lo/Hi 字节，`HUtil32.MakeWord(lo,hi)`）；缺省 0 = 无护甲。卡 §39。</summary>
         public int AC;
+        /// <summary>
+        /// `AntiMagic`（穿透类 `MagPassThroughMagic` 的骰门 `Random(10) >= AntiMagic`）；
+        /// 缺省 0 = 必中。**MG-17/18 用互异值在同一个 case 里造出命中/未命中两支**，
+        /// 否则三条 seed 全落同一支、变异无从变红。
+        /// </summary>
+        public int AntiMagic;
     }
 
     private static readonly string[] Unused = Array.Empty<string>();
@@ -2247,11 +2334,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
 /// </summary>
 public sealed class RecordingNetChannel : M2Server.Net.INetChannel
 {
-    public List<(int GateIdx, byte[] Data)> Buffers { get; } = new();
+    public List<(int GateIdx, byte[] Data, long Due)> Buffers { get; } = new();
 
-    public void AddGateBuffer(int gateIdx, byte[] senData) => Buffers.Add((gateIdx, senData));
+    /// <summary>
+    /// 当前正在处理的消息的**相对到期时刻**（ms，相对施法时刻；立即发送 = 0）。
+    /// 排水循环在 `OperatePublic` 前置（延迟消息 = `DeliveryTime - castTick`），帧捕获时随帧记录。
+    /// 与 Rust 台账的 `due_ms_rel` 同口径、可跨栈比较（**不得用墙钟绝对值**）。
+    /// </summary>
+    public static long CurrentDueMs;
 
-    public void AddGameGateQueue(int gateIdx, ServerMessage packet, byte[] data) => Buffers.Add((gateIdx, data));
+    public void AddGateBuffer(int gateIdx, byte[] senData) => Buffers.Add((gateIdx, senData, CurrentDueMs));
+
+    public void AddGameGateQueue(int gateIdx, ServerMessage packet, byte[] data) => Buffers.Add((gateIdx, data, CurrentDueMs));
 
     public void CloseAllGate() { }
     public void CloseUser(int gateIdx, int nSocket) { }

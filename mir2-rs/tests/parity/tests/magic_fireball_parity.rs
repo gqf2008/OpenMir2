@@ -225,17 +225,73 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             }
 
             // 3b) SM：**严格顺序** + 逐字段 + 尾串（玩家可见的真实发送顺序）。
-            let sent_fields = ["ident", "param", "tag", "series"];
+            //
+            // **唯一例外（`frame_order_scope = "multi_victim_same_tick"`）**：多受害者同刻
+            // 延迟受击时，产品是批量 flush、oracle 是逐 actor `Run()`（可观测差异，见
+            // `docs/issues/openmir2-b4-multivictim-strike-order.md`）。该标记下本接收者的
+            // `Sent` 改为**多重集**比较（字段全比、只放宽顺序）。
+            // **撤销条件**：产品卡修复落地后，删掉该标记并恢复严格按序——标记缺失即严格。
+            let multi_victim =
+                gc["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick");
             let ga = as_array(gr, "Sent").cloned().unwrap_or_default();
             let ra = as_array(rr, "Sent").cloned().unwrap_or_default();
-            if ga.len() != ra.len() {
-                // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, String) {
+            // 新件带 `recog` ⇒ 纳入逐帧严格比较；旧件无该键 ⇒ 不比较（全有或全无已断言）。
+            let mut sent_fields: Vec<&str> = vec!["ident", "param", "tag", "series"];
+            if ga.first().and_then(|f| f.get("recog")).is_some() {
+                sent_fields.push("recog");
+            }
+            // `due_ms_rel`（相对施法时刻的毫秒；**不是墙钟**）：进比较面 ⇒
+            // 多受害者同刻口径放宽的只是"同一 due 内的次序"，时序本身仍被判。
+            //
+            // **建模约定**：施法批（17/638）的 `due_ms_rel = 0` 是**装置口径**——oracle 实际
+            // 在下一个 `Run()` 处理（≈100ms），那是投递调度语义、不是生成时刻语义；
+            // 该字段**不作为行为判据**，只用于区分"施法批 vs 交付批"（0 vs 600/1000）。
+            if ga.first().and_then(|f| f.get("due_ms_rel")).is_some() {
+                sent_fields.push("due_ms_rel");
+            }
+            if multi_victim {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
+                        num(v, "recog"),
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
+                        num(v, "due_ms_rel"),
+                        text(v, "tail").to_string(),
+                    )
+                };
+                let mut g_keys: Vec<_> = ga.iter().map(sent_key).collect();
+                let mut r_keys: Vec<_> = ra.iter().map(sent_key).collect();
+                g_keys.sort();
+                r_keys.sort();
+                if g_keys != r_keys {
+                    let mut missing = g_keys.clone();
+                    for k in &r_keys {
+                        if let Some(pos) = missing.iter().position(|x| x == k) {
+                            missing.remove(pos);
+                        }
+                    }
+                    let mut extra = r_keys.clone();
+                    for k in &g_keys {
+                        if let Some(pos) = extra.iter().position(|x| x == k) {
+                            extra.remove(pos);
+                        }
+                    }
+                    errs.push(format!(
+                        "[{label}/{who}] Sent 多重集不等（多受害者同刻口径）：golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
+                    ));
+                }
+            } else if ga.len() != ra.len() {
+                // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
+                    (
+                        num(v, "ident"),
+                        num(v, "recog"),
+                        num(v, "param"),
+                        num(v, "tag"),
+                        num(v, "series"),
+                        num(v, "due_ms_rel"),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -261,7 +317,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 ));
             } else {
                 for (i, (g, r)) in ga.iter().zip(ra.iter()).enumerate() {
-                    for f in sent_fields {
+                    for &f in &sent_fields {
                         if num(g, f) != num(r, f) {
                             errs.push(format!(
                                 "[{label}/{who}] Sent[{i}].{f} 不等：golden={} rust={}",
@@ -640,6 +696,16 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             if f.get("ident").and_then(Value::as_i64) != Some(31) {
                 continue;
             }
+            // 新件带 `recog`（受击者 ActorId）⇒ 只对**关于 target 自己**的 31 施加契约；
+            // 旁观他人受击的 31（穿透/群体）不在这里判。旧件无 recog ⇒ 维持原口径。
+            if let (Some(tid), Some(rc)) = (
+                fixture.get("target_actor_id").and_then(Value::as_i64),
+                f.get("recog").and_then(Value::as_i64),
+            ) {
+                if rc != tid {
+                    continue;
+                }
+            }
             let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
             let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
             let pre = hp_after.saturating_add(dmg);
@@ -751,9 +817,53 @@ fn real_ledger_verify_labels_opts(
 ) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
+    // **`frame_order_scope` 自检**：`multi_victim_same_tick` 只允许用于 `fire`（MG-17 穿透，
+    // 多受害者同刻延迟受击；可观测差异见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。
+    // 出现在别的 stem ⇒ 直接 panic，防止宽松口径静默扩散。
+    let scope_marked = golden["cases"].as_array().is_some_and(|cs| {
+        cs.iter()
+            .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
+    });
+    assert!(
+        !scope_marked || stem == "fire",
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire stem（MG-17）；当前 stem={stem}"
+    );
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
+    // **`recog` 全有或全无**：同一份 golden 的所有 SM 帧要么全带 `recog`、要么全不带。
+    // 混合出现 ⇒ 直接 panic（否则比较器会"部分严格、部分宽松"而没人察觉）。
+    if let Some(cs) = golden.get("cases").and_then(Value::as_array) {
+        for c in cs {
+            let mut with = 0usize;
+            let mut without = 0usize;
+            for r in c
+                .get("Receivers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for f in r
+                    .get("Sent")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if f.get("recog").is_some() {
+                        with += 1;
+                    } else {
+                        without += 1;
+                    }
+                }
+            }
+            assert!(
+                !(with > 0 && without > 0),
+                "[{stem}] golden `recog` 混合：{} 帧带、{} 帧不带（必须全有或全无）",
+                with,
+                without
+            );
+        }
+    }
     let mut cases = Vec::new();
     for label in labels {
         let path = dir.join(format!("{stem}_{label}.json"));
@@ -1130,6 +1240,72 @@ fn tooth_union_deliver_value_changed_red() {
     );
 }
 
+/// **牙⑧（MG-17）：多受害者同刻口径下 `due_ms_rel` 必须进比较面**。
+///
+/// 合成三帧：**施法批 `due=0`**（638）+ **交付帧 `due=600`**（31/53）+ **交付帧 `due=1000`**（640）。
+/// 三颗子断言：
+/// ① 基准（golden == rust）⇒ 绿；
+/// ② 改**交付帧** 600→601（其余不动）⇒ 多重集不等 ⇒ 红；
+/// ③ 改**投递帧** 640 的 1000→600 ⇒ 红（证"施法批 vs 交付批 / 交付帧先后"仍在判）；
+/// ④ 改**施法帧** 0→100 ⇒ 红（证"施法批 = 0"的约定不是把 0 与交付混为一谈）。
+#[test]
+fn tooth_multi_victim_due_ms_rel_compared_red() {
+    let label = "s1";
+    let side = |cast_due: i64, tail_due: i64| {
+        serde_json::json!([{
+            "Who": "obs_in",
+            "Rm": [],
+            "Sent": [
+                { "ident": 638, "recog": 1001, "param": 105, "tag": 100, "series": 33,
+                  "due_ms_rel": cast_due, "tail": "" },
+                { "ident": 31, "recog": 1002, "param": 85, "tag": 224, "series": 15,
+                  "due_ms_rel": 600, "tail": "" },
+                { "ident": 640, "recog": 9, "param": 1, "tag": 0, "series": 0,
+                  "due_ms_rel": tail_due, "tail": "" },
+            ],
+        }])
+    };
+    let mk_golden = |cast_due: i64, tail_due: i64| {
+        let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+        g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+        g["cases"][0]["Receivers"] = side(cast_due, tail_due);
+        g
+    };
+    let mk_rust = |cast_due: i64, tail_due: i64| {
+        // 台账必须有 `DeliverRng` 列（空数组也算"记了"；缺列 ⇒ 牙④ 直接红）。
+        let mut r = synth_rust(
+            label,
+            serde_json::json!([1, 2]),
+            Some(serde_json::json!([])),
+        );
+        r["cases"][0]["Receivers"] = side(cast_due, tail_due);
+        r
+    };
+    let g = mk_golden(0, 1000);
+    let base = verify_union(&g, &mk_rust(0, 1000));
+    assert!(base.is_ok(), "基准（0/600/1000）必须绿：{base:?}");
+    // ② 交付帧 600→601
+    let mut r = mk_rust(0, 1000);
+    r["cases"][0]["Receivers"][0]["Sent"][1]["due_ms_rel"] = Value::from(601);
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "交付帧 600→601 必须红在多重集：{err:?}"
+    );
+    // ③ 640 的 1000→600（交付帧先后仍在判）
+    let err = verify_union(&g, &mk_rust(0, 600)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "640 的 due 1000→600 必须红：{err:?}"
+    );
+    // ④ 施法帧 0→100（施法批约定不是把 0 与交付混同）
+    let err = verify_union(&g, &mk_rust(100, 1000)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "施法帧 0→100 必须红：{err:?}"
+    );
+}
+
 /// **牙③**：旧口径（`freeze_at_dospell` / 无 `rng_mode`）的金标准 ⇒ 直接红。
 #[test]
 fn tooth_union_legacy_golden_red() {
@@ -1420,6 +1596,16 @@ fn real_rust_ledger_snowwind() {
         &golden_file("snowwind.json"),
         &["s1", "s5", "s13"],
     );
+}
+
+/// **`9 地狱火`（`SKILL_FIRE`）**真实台账 → 判定面（标签 s1/s5/s13）。
+///
+/// 判定面：逐格穿透骰门 + `RM_MAGSTRUCK(8044)` 逐怪（怪物不 `Operate` ⇒ `Sent` 空、RM 为准）
+/// + 玩家 target 的术后 HP（600ms 延迟在该支 `WaitMs` 内交付）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::fire_parity_*）生成真实台账"]
+fn real_rust_ledger_fire() {
+    real_ledger_verify_labels("fire", &golden_file("fire.json"), &["s1", "s5", "s13"]);
 }
 
 /// **`23 爆裂火焰`（`SKILL_FIREBOOM`）**真实台账 → 判定面（标签 s1/s5/s13）。
