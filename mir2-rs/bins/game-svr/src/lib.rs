@@ -11378,26 +11378,6 @@ fn push_charstatuschanged_self_and_observers(
     }
 }
 
-/// [`push_charstatuschanged_self_and_observers`] 的**即发**版：入队后立刻 flush
-/// （GM `@Level` / `SmakeItem` 两条路径在原发送点调用它，线序与直发一致）。
-#[allow(clippy::too_many_arguments)]
-fn send_charstatuschanged_self_and_observers(
-    world: &mir2_world_bevy::World,
-    online: &OnlineRegistry,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    actor_id: i32,
-    status: i32,
-    hit_speed: u16,
-    range: i32,
-    what: &str,
-) {
-    let mut q = TickFrameQueue::new();
-    push_charstatuschanged_self_and_observers(
-        &mut q, world, online, actor_id, status, hit_speed, range,
-    );
-    let _ = q.flush(online, gates, what);
-}
-
 /// `StatusChanged()` 的**净 1 条自见**形态（`SendUpdateMsg` 头去重后的等价）：自己 1 条 + 观察者各 1。
 ///
 /// **为何是 1**：`SendUpdateMsg`（`BaseObject.Message.cs:283-304`）入队前只把**队首且同 ident**
@@ -11409,7 +11389,7 @@ fn send_charstatuschanged_self_and_observers(
 /// （`PlayObject.Message.cs:430-433`，622 在其后）、buff `boChg`（`ActorBuffSystem.cs:220-224`
 /// 根本没有 `SendUpdateMsg`）与 `boNeedRecalc`（`ActorBuffSystem.cs:226-230`，夹具场景队列空）。
 /// **2 条的场景**（recalc 前已有 <155 待办，如升级链）走
-/// [`send_charstatuschanged_self_and_observers`]。
+/// [`push_charstatuschanged_self_and_observers`]（`TickFrameQueue` 入队版）。
 ///
 /// 观察者副本逐收件人重编码（`Series` = 收件人自己的 `HitSpeed`）。
 #[allow(clippy::too_many_arguments)]
@@ -11439,8 +11419,8 @@ fn send_charstatuschanged_self_once_and_observers(
 /// 用于武器升级 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的**近邻**支：
 /// 给 ±`range` 格内**其它**玩家各一条 `SM_CHARSTATUSCHANGED(657)`。
 ///
-/// 自己那两帧（`SendRefMsg` 收件人含自己的**广播副本** + `SendUpdateMsg` 的**自更新副本**）
-/// 由 [`send_charstatuschanged_self_and_observers`] 在本函数**前后**各发一条，本函数跳过自己。
+/// 自己那份（或两条）由调用方按站点口径另发（[`send_charstatuschanged_self_once_and_observers`]
+/// 净 1 条 / [`push_charstatuschanged_self_and_observers`] 2 条），本函数跳过自己。
 /// 每条的 `Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；
 /// `Recog/Param/Tag` 是**发送者**的 `ActorId` 与 `CharStatus` 的 Lo/Hi。
 fn broadcast_charstatuschanged_except_self(
