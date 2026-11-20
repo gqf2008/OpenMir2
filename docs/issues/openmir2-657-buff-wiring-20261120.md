@@ -71,10 +71,32 @@ buff_657_bochg_three_recipients_distinct_series:
 | M2 删第二自见副本 | `buff_657_bochg_series_*` 红（自见 1 vs 2） |
 | M3 短路 `boNeedRecalc` 的 657 段 | `buff_657_needrecalc_*` 红（`[52]` vs `[52,657,657]`） |
 
+## 4.5 合并树上 4 条红的根因与处置（rebase 到 `707bc99b9` 时）
+
+**现象**（opc-19 的合并门，`--lib`）：`2146 passed; 4 failed`，全为本批用例。
+
+**根因：不是期望过时，而是本批代码在 master 的三动作 helper 之上**又手工加了一份自见副本。
+master 的 `send_charstatuschanged_self_and_observers` 已升级为**三动作**
+（① 自广播副本 → ② 广播他人 → ③ 自更新副本，`src/M2Server/Player/PlayObject.cs:2875-2876` 口径），
+而本批最初基于 `cc62ee05e`（当时 helper 只有"自见 1 + 观察者"）⇒ 自见变成 **3** 条。
+
+**逐条实测（把手工副本加回后的原文）**：
+| 用例 | 实测 | 期望 |
+| --- | --- | --- |
+| `buff_657_bochg_series_is_per_recipient_hit_speed` | 自见 **3** | 2 |
+| `buff_657_needrecalc_after_ability_and_per_recipient` | 自见 **3** | 2（同因：recalcs 支也手工加了一份） |
+| `drain_buff_downlink_emits_charstatuschanged_and_healthspellchanged` | `3` | `2` |
+| `drain_buff_downlink_emits_ability_then_657_then_sysmsg` | `[52, 657×5, 100]` | `[52, 657×4, 100]` |
+
+**处置**：**不是统一 +1，也不是改期望**——期望本来就是 oracle 的 2 条（`:2875` 自广播 + `:2876` 自更新）。
+删除两处手工第二副本，复用 helper 的三动作；改后 6 条相关用例全绿，期望零改动。
+**教训（第三次"分支绿、合并后红"）**：分支 base 落后 master 时，**被调用的 helper 语义可能已变**；
+rebase 后必须重跑全量而不是只看 diff 是否冲突。
+
 ## 5. 门禁
 
-- `cargo test -p game-svr --lib`：**2149 passed / 0 failed / 70 ignored**（rc=0；基线 2146 + 3 新牙）。
-- `cargo test --workspace`：**4374 passed / 0 failed / 155 ignored**（rc=0）。
+- rebase 到 `707bc99b9` 后：`cargo test -p game-svr --lib`：**2150 passed / 0 failed / 73 ignored**（rc=0）。
+- `cargo test --workspace`：**4375 passed / 0 failed / 159 ignored**（rc=0）。
 - `cargo clippy --workspace --all-targets -- -D warnings`：**rc=0**
   （首跑曾红：新牙里 `get(&905).is_none()` 触发 `clippy::unnecessary-get-then-check`，已改 `!contains_key(&905)`。
   **教训①**：交付里"待补"必须按"可能红"写，不能当成"还没碰的绿地"——`ae` 对 §5 的指摘即此。

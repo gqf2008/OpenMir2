@@ -18837,17 +18837,7 @@ fn drain_buff_downlink(
             range,
             "buff 重算 657",
         );
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 重算 657 自更新")
-        {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body: game_svr::smframe_ext::sm_charstatuschanged(
-                    *actor_id,
-                    status,
-                    self_hit_speed,
-                ),
-            });
-        }
+        // 自见第二副本由 helper 第 ③ 动作发出（三动作版），不再手工追加。
     }
     for (actor_id, status) in &rec.buff_status_changes {
         if let Some(mut d) = displays.get(*actor_id).cloned() {
@@ -18870,20 +18860,8 @@ fn drain_buff_downlink(
             range,
             "buff 657 自发",
         );
-        // `SendUpdateMsg` 再追加一条**自见**副本（oracle 同 ident 去重不命中 ⇒ 自见共 2 条）。
-        if let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) {
-            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 657 自更新")
-            {
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: entry.socket,
-                    body: game_svr::smframe_ext::sm_charstatuschanged(
-                        *actor_id,
-                        *status,
-                        self_hit_speed,
-                    ),
-                });
-            }
-        }
+        // 自见第二副本（`SendUpdateMsg`）由 helper 的第 ③ 动作发出（master `:2876` 三动作版），
+        // 这里**不再**手工追加，否则自见会变成 3 条。
     }
     // **递减段 `SysMsg`（同卡）**：`SysMsg(msg, MsgColor.Green, MsgType.Hint)`（非 Notice 支）⇒
     // `SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, msg)`
