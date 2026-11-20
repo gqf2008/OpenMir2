@@ -101820,6 +101820,78 @@ fn ",
         );
         assert_eq!((d3, d4), (0, 10), "上界：Desc[4] 不加到 11");
     }
+    /// **P2-2（`3b`）：ExtraAbil 死路的直接行为证据**——Shape12 后泵出的 `SM_ABILITY(52)` 尾
+    /// = **未加 buff** 的 `WAbil` 客户端编码；两次重算（ExtraAbil 有无）得到的 `WAbil` 相等。
+    /// 这是"ExtraAbil 只进状态数组、不进最终 WAbil"的可观测面（oracle `:2899-2906` 覆盖 `:2818-2846`）。
+    #[test]
+    fn it07_ability52_tail_is_unbuffed_wabil() {
+        use mir2_protocol::frame::CommandMessage;
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mk = || {
+            let mut sg = crate::tests::test_session_ground(42);
+            sg.equip.job = 0;
+            sg.equip.abil.level = 1;
+            sg.equip.abil.dc = 0x0101;
+            sg.equip.abil.max_hp = 100;
+            sg.equip.abil.max_mp = 50;
+            sg
+        };
+        // 两个同起点会话：一个无 buff、一个 ExtraAbil[DCUP]=5 ⇒ 重算后 WAbil 必须相等。
+        let mut sg_a = mk();
+        let _ = recalc_session_ability(&mut sg_a, &catalog, None, None, None);
+        let base = sg_a.state.wabil.clone();
+        let mut sg_b = mk();
+        let mut extra = [0u16; 7];
+        extra[0] = 5;
+        let _ = recalc_session_ability(&mut sg_b, &catalog, Some(&extra), None, None);
+        assert_eq!(
+            sg_b.state.wabil, base,
+            "ExtraAbil 不进 WAbil（有/无 buff 两次重算相等；oracle :2899-2906 覆盖 :2818-2846）"
+        );
+        // 52 尾 = 该（未加 buff 的）WAbil 的客户端编码。
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 42,
+            gold: 0,
+            game_gold: 0,
+            wabil: sg_b.state.wabil.clone(),
+            abil_exp: sg_b.equip.abil.exp,
+            sys_msg: None,
+            job: sg_b.equip.job,
+            ability_tail: ability_tail(&sg_b.state.wabil, mir2_client_ability_layout()),
+            sub_bytes: sg_b.sub.to_frame_bytes(),
+            hunger_status: sg_b.hunger_status,
+            hit_speed: sg_b.hit_speed,
+        };
+        let n = game_svr::useitem::QueuedNotice {
+            ident: game_svr::useitem::RM_ABILITY,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        };
+        let body = game_svr::pickwire::notice_frame(&n, &wire).expect("52 必须有映射");
+        let m = CommandMessage::from_bytes(&body).expect("SM 帧可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_ABILITY);
+        assert_eq!(
+            &body[CommandMessage::SIZE..],
+            mir2_protocol::edcode::encode(&record::encode_ability_client(&sg_b.state.wabil))
+                .as_slice(),
+            "52 尾 = 未加 buff 的 WAbil 客户端编码"
+        );
+        // 负例：把 ExtraAbil 折进 WAbil 后的编码必须**不等于**该尾（防"恒等"假绿）。
+        let mut buffed = base.clone();
+        game_svr::ability::apply_extra_abil(&mut buffed, &extra);
+        assert_ne!(
+            buffed, base,
+            "负例前提：apply_extra_abil 确实会改 WAbil（DCUP 加高字节）"
+        );
+        assert_ne!(
+            mir2_protocol::edcode::encode(&record::encode_ability_client(&buffed)),
+            body[CommandMessage::SIZE..].to_vec(),
+            "52 尾不是加 buff 后的值"
+        );
+    }
     /// **F1-T 用例（IT-07；`emit_eat_notices` = `handle_eat_cmd` 唯一的吃路径排水点）**：
     /// 入队序 = 生产真实序 `[SYSMESSAGE×6, WEIGHT(131), CHARSTATUSCHANGED(155), ABILITY(67)]`
     /// （`use_item` 六条蓝字 + `WeightChanged`，宿主再 push 657 自通知与 `RM_ABILITY`）。
@@ -101830,11 +101902,12 @@ fn ",
     /// **牙**：排水改回 vec 序/排序序 ⇒ 六条按 `S0..S5` 发出 ⇒ 红；改回两遍 ⇒ `[3,4,5,1,2,0]` ⇒ 红。
     /// 本用例走的是**生产接线**（`emit_eat_notices`），不是只测被它调用的某个 helper。
     ///
-    /// **已知缺口（本 base 上，2026-11-20 实测）**：`RM_ABILITY(10051)` 在 `notice_frame` 里**没有**
-    /// 映射（`pickwire.rs` 的 match 无该臂）⇒ 52 不产帧、按 WRN 丢弃（`sent == 8` 而非 9）。
-    /// oracle 侧 `RecalcAbilitys(); SendMsg(RM_ABILITY)`（`PlayObject.Base.cs:2153-2158`）**要发 52**
-    /// ⇒ 这是 IT-07 的 parity 缺口，已上报 `opc-19`。**但入队的 A 仍必须留在本用例输入里**——
-    /// 它参与堆的 sift（去掉后六条顺序会变），否则测的就不是生产序。
+    /// **能力帧历史（已闭合）**：`card/ability-frames`（`ee419b901`，merge `790f740c1`）合入前，
+    /// `RM_ABILITY(10051)` 在 `notice_frame` **无映射** ⇒ 52 被丢弃、`sent == 8`；合入后 52 必须出帧
+    /// ⇒ **`sent == 9`**（oracle `RecalcAbilitys(); SendMsg(RM_ABILITY)`，`PlayObject.Base.cs:2153-2158`）。
+    /// **入队的 A 必须留在本用例输入里**——它参与堆的 sift。
+    /// **注意**：本用例的期望序是**本仓模型自算**（不经夹具），只证明"生产接线按堆出队"；
+    /// 与 oracle 夹具 `expect.notices` 的序比对见 `openmir2-it07-notice-order` 调查（`3b` P1）。
     #[test]
     fn it07_emit_eat_notices_production_order_is_heap_sift() {
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
