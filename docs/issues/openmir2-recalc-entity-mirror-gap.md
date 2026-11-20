@@ -121,7 +121,7 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 
 ## 6. 状态
 
-- 本卡：`open`（未实现）；仅扫描表与验收口径。
+- 本卡：**已实现，待复核合并**（§7.4 的实现记录）；扫描表与验收口径见 §2/§2bis/§3/§4。
 - 不动任何清单 `status`、不改 golden/比较器。
 
 ## 7. 实现计划（定位已核，`master 24d2de316`；**未动手，等令牌**）
@@ -161,3 +161,27 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 3. **P2/P3/P4**（不变量补全）——可合为一次提交，但提交信息逐点列出。
 
 每步都要：`cargo test -p game-svr --lib` 全绿 + 该点自己的牙（删镜像 ⇒ 红）。
+
+## 7.4 实现记录（本轮，已落分支）
+
+| 提交 | 内容 | 证据 |
+| --- | --- | --- |
+| `d07cc84a2` | **P1**：14/15 支 recalc 前移 + 镜像 | 牙 `hangmajinbub_657_series_is_post_recalc`；变异①删镜像 ⇒ `实得 [7 ×98]`、变异②recalc 移回 657 之后 ⇒ 仍有 2 条取到 7 |
+| `4f91d9f39` | **P2/P3/P4**：三处 recalc 后补镜像 | 扩 `gm_level_emits_657_self_and_nearby_observers`（删 P2 ⇒ 实体留 99）；新 `eat_recalc_mirrors_hit_speed_into_entity`（删 P3 ⇒ 红在「祝福油支」，删 P4 ⇒ 红在「经验书升级支」） |
+| `cf9a97809` | 期望变更 + 解除缺口用例 ignore | 见下 |
+
+**期望变更登记（旧的编码了缺陷行为）**：`buff_657_needrecalc_after_ability_and_per_recipient`
+的自见 657 `Series` 由 `[7]` 改为 `[0]`——P5 补镜像后它读到的是**重算后**的 `HitSpeed`；
+`7` 是重算前残留的实体旧值。同时解除 `buff_657_needrecalc_series_reads_post_recalc_value`
+的 `#[ignore]`（该用例正是 `card/charstatus-657-b13` 登记本缺口时写的哨兵，P5 后自然转绿）。
+
+**门禁（rebase 到 `fb2869fa1` 后实跑）**：`cargo fmt --all -- --check` rc=0；
+`cargo test -p game-svr --lib` **2180 passed / 0 failed / 76 ignored**（rc=0）。
+
+## 7.5 为什么 `M-a` 当时测不出"顺序"（写给后来者）
+
+`card/657-series-spellbuf` 之前做变异 `M-a`（顺序/镜像相关）时结果是"不红"，据此曾判定顺序不重要。
+**那个结论只在当时成立**：那时 657 的 `Series` 还写死 `0`（单 body 广播），出帧时刻读到什么值与顺序无关。
+`card/657-series-spellbuf` 把 `Series` 改成**读实体**之后，**顺序就变成可观测的**——
+P1 的变异②（把 recalc 移回 657 之后）实跑仍能红出 2 条 `7` 就是直接证据。
+⇒ **不要拿 `M-a` 的旧结论反驳新牙**；结论的有效性依赖于当时的取值口径。
