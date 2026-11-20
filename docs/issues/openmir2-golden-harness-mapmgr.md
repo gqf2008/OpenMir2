@@ -1,7 +1,7 @@
 # openmir2-golden-harness-mapmgr — 离线 harness 缺 MapMgr，阻塞走 SpaceMove 的召唤回召面
 
-**状态**：事实登记（只读查证）；**阻塞项**（SINSU cap_hit 等）。
-**查证 head**：master `2692d0a26`。
+**状态**：**设计（docs-only，未动代码）**；待 opc-19 审方案后放代码。
+**查证/设计 head**：master `8ff6c91fb`。
 
 ## 1. 现象（NPE 栈）
 `dotnet MagicGolden.dll --case sinsu`（含 cap_hit 回召支）抛 `System.NullReferenceException`：
@@ -20,3 +20,30 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
 - **SINSU(30) `cap_hit`/回召**（`RecallSlave→SpaceMove`）——MG-41 首批因此只做 `summon_ok`。
 - 潜在同类：`AMYOUNSUL(6)` / `EARTHFIRE(22)` 等若路径含 `SpaceMove`（需逐条核）。
 - 关联：**[[openmir2-golden-generator-drift]]**（golden schema/墙钟漂移）。
+
+## 4. 最小替身形态（细化）
+- **类型**：`SystemShare.MapMgr : IMapSystem`（`src/Modules/SystemModule/SubSystem/IMapSystem.cs`）。`IMapSystem` 10 成员：`Maps(get) / AddMapInfo / AddMapRoute / FindMap / GetDoorMapList / GetMapInfo / GetMapOfServerIndex / GetMineMaps / LoadMapDoor / MakeSafePkZone`。
+- **最小替身 `OfflineMapSystem : IMapSystem`**（仿 `OfflineWorldEngine`）：
+  - `FindMap(name)` ⇒ 返回 harness 已 `LoadMapData` 的那个 `Envirnoment`（按 `MapName` 匹配）；**name 不匹配 ⇒ 返回 null**（保持 oracle「找不到=null」语义，不静默给假图）。
+  - **其余 9 成员一律抛 `NotImplementedException`**（触达即炸，比静默假值安全——同 `OfflineWorldEngine` 的 40-throw 约定）。
+- **明确不做**：不建图、不载 `MapInfo.txt`、不刷怪、不触发地图事件、不做城门/安全区。
+- **仍会 NPE 的边界（写死）**：`SpaceMove` 过 `FindMap` 后还会 `Envir.DeleteFromMap(未入图的 pre-slave)` / `SpaceMoveGetRandXY`（**抽 RNG**）/ `Envir.AddMapObject` / `SendMsg/SendRefMsg`。⇒ 替身只保证 `FindMap` 非 null；**对象未入图/落点非法/目标 Envir 内部态缺失仍可能 NPE 或行为偏差**。这些由**驱动侧**保证（预置 slave 设 `Envir=caster.Envir`、落点由已加载 MapGrid 可走）。**其它 `IMapSystem` 成员被触达 = 该叶子超出最小替身能力 ⇒ 抛错红（边界写死，不扩）**。
+- **RNG**：`SpaceMoveGetRandXY` 真走 MapGrid 抽数 ⇒ 回召面的 Rng 与 oracle 同源（不再有「替身 0 抽」偏移）。
+
+## 5. 影响面（设了 MapMgr 后哪些既有 golden 可能变）
+- **直达 `SpaceMove`/`Move` 的效果（C# `MagicManager.cs`）**：SINSU(30) `RecallSlave`(:1302)、SPACEMOVE(21) `MagSaceMove`(:876→:407)、push：FIREWIND(8)(:260) / ENERGYREPULSOR(37)(:602) 经 `MagPushArround`(:24)。
+- **既有 golden 是否有重生成风险**：本仓现有 **36** 个 `golden/magic/*.json` **都在 MapMgr=null 下成功生成** ⇒ 它们运行期**未触达 `SpaceMove/FindMap`**（否则当场 NPE、出不了 golden）。⇒ **设 MapMgr 原则上不改变这 36 份既有 golden 的行为**（同场景同分支）。
+- **判定方法**：对每个既有 golden 的场景，grep 其魔号 effect 在该场景分支是否调用 `SpaceMove/FindMap`；只有触达者才有重生成风险。当前触达者 = 上面四类，其中 **SINSU cap_hit / SPACEMOVE 尚无 golden（正是要解锁的）**；push(8/37) 若 golden 走 push 分支需核（`Move` 是否经 `FindMap`）。
+- **结论**：**不是"全部既有 golden 都重生成风险"**。风险面 = 触达 `FindMap` 的叶子；既有 36 份（未触达）稳定。**建议**：替身上线后**只对触达者（SINSU cap_hit / SPACEMOVE）**生成/复跑，其余 36 份不动；若某既有 golden 重生成出 diff，则它之前是靠「未触达」避开的，按触发点单独审。
+
+## 6. 验收口径 + 牙
+- 替身上线后，SINSU `cap_hit` 的 `recall_moved` 从**当前「空集恒假」**变成**真断言**：预置 slave 存在 ⇒ `RecallSlave` 移它到面前 ⇒ `pre_slave_xy_before ≠ after`、`recall_moved=true`；负向（预置名不匹配 ⇒ 空操作）`recall_moved=false`（**空操作 vs 移动的分界**）。
+- **该红在哪里的牙**：
+  - 牙① 删/短路 `RecallSlave` 调用（或恒不调）⇒ cap_hit 的 pre-slave 坐标 `before==after` ⇒ `recall_moved=true` 断言**红**；
+  - 牙②（边界）预置名改成不匹配（`神兽→神兽0`）⇒ 空操作 ⇒ 若断言硬要求 `recall_moved=true` 则红——界定「空操作」也即「名字精确匹配」这条 oracle 事实。
+  - 附：`SpaceMoveGetRandXY` 抽 RNG ⇒ cap_hit 的 Rng 与 oracle 同源，**应纳入 cap_hit 的 Rng 逐值比较**（区别于 SINSU summon_ok 的 Rng 不可比）。
+
+## 7. 不做的事
+- 不为了让断言变绿去改产品（`SpaceMove`/`RecallSlave`/`Maps`/`MagMake*` 等产品代码**不动**）。
+- 不顺手扩到其它叶子（AMYOUNSUL/EARTHFIRE 等）；本卡只解 SINSU `cap_hit` 的 `SpaceMove` 依赖；其它叶子另评估。
+- 不为了让既有 golden"看起来一致"而重生成整批；只动触达者（见 §5）。
