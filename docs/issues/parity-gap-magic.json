@@ -558,6 +558,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格。duplicate：与 MG-27 为同一叶子（src/M2Server/Magic/MagicManager.cs:315（外层 `case SKILL_FIRECHARM`）与 :328（内层同魔号 `case`）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "37db620e7b241f29117748eec69ca2740ee3391c",
       "merged_into": "MG-27"
     },
     {
@@ -574,6 +575,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-28 为同一叶子（同文件 :316（外层）与 :352（内层，HANGMAJINBUB）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "37db620e7b241f29117748eec69ca2740ee3391c",
       "merged_into": "MG-28"
     },
     {
@@ -590,6 +592,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-29 为同一叶子（同文件 :317（外层）与 :359（内层，DEJIWONHO）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "37db620e7b241f29117748eec69ca2740ee3391c",
       "merged_into": "MG-29"
     },
     {
@@ -664,6 +667,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级；外层组标签（`:320`，共享 13..19 护身符组），18 的执行链由内层 MG-32 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-32 为同一叶子（同文件 :320（外层）与 :378（内层，CLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "37db620e7b241f29117748eec69ca2740ee3391c",
       "merged_into": "MG-32"
     },
     {
@@ -680,6 +684,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级；外层组标签（`:321`，共享 13..19 护身符组），19 的执行链由内层 MG-33 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-33 为同一叶子（同文件 :321（外层）与 :384（内层，BIGCLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "37db620e7b241f29117748eec69ca2740ee3391c",
       "merged_into": "MG-33"
     },
     {
@@ -789,7 +794,8 @@
       "deviation": null,
       "notes": "旧清单 cost=天级。duplicate：与 MG-23 为同一叶子（MagicManager.cs`:318（外层 `case SKILL_HOLYSHIELD`）与 `:366（内层 `case MagicConst.SKILL_HOLYSHIELD`）；内层只能由同魔号外层进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "merged_into": "MG-23",
-      "pre_duplicate_status": "implemented_unverified"
+      "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "5284e4c8e5a93897d99c394b76a2cb8449c5fb98"
     },
     {
       "id": "MG-31",
@@ -805,7 +811,8 @@
       "deviation": null,
       "notes": "旧清单 cost=天级。duplicate：与 MG-24 为同一叶子（MagicManager.cs`:319（外层）与 `:372（内层）；内层只能由同魔号外层进入，无字段可区分）。**另一条依据**：外层组门仅依赖 `CheckAmulet(1,1)+MagicId`，不看 `UseBase`/`Spell`/目标类型（依据 `src/M2Server/Magic/MagicManager.cs:315-326`）⇒ 报外层那一行无法表达任何区别于内层的可观测行为",
       "merged_into": "MG-24",
-      "pre_duplicate_status": "implemented_unverified"
+      "pre_duplicate_status": "implemented_unverified",
+      "pre_duplicate_status_source": "5284e4c8e5a93897d99c394b76a2cb8449c5fb98"
     },
     {
       "id": "MG-32",
