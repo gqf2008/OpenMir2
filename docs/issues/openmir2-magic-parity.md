@@ -1321,7 +1321,7 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
 5. `nPower>0` ⇒ `GetHitStruckDamage`（护甲衰减，`:963` 起）；
 6. `StruckDamage(nPower)`（`:967`）+ 施法者 200ms `RM_DELAYMAGIC(nPower, …, 1, target)`（`:968`）；
 7. `Race >= Animal` **仅**置 `result=true`（`:970-972`）；
-8. 对每个对象（含被跳过者）发 `RM_10205`（`:974`）。
+8. 对每个对象（含被跳过者）发 `RM_10205`（`:974`）；**泵序低字节 = `10205 & 0xFF = 221`**。
 
 **夹具设计（`GroupDeDingBatch`，待实现）**
 - **全额怪**：命中门必过（`HitPoint>0` 且该目标 `SpeedPoint` 抽到小值/为 0 但 HitPoint 使门不成立）+ 低 AC；
@@ -1332,6 +1332,15 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
 - **逐目标抽数**：命中门是 `Random(target.SpeedPoint)` ⇒ 每只目标抽数随其 `SpeedPoint` 变；case 里逐目标
   记抽数并给总数，两只怪 `SpeedPoint` 不同时总抽数也应不同（"抽数随参数变"的正例）；
 - **HP before/after 双值**入 case，与 `mon{i}` 收件人集合并列。
+
+**"空转 golden"的处置（本交付定）：选 ①**——`GroupDeDingBatch` 落地后**替换**同名
+`golden/magic/groupdeding.json`，旧件删除并在本卡记"旧件作废，原因 = 空转（玩家目标、命中门恒 miss）"；
+**不保留**同名旧件（避免后来者分不清哪份是证据；若将来要留痕，用带 `.superseded` 后缀并标"非证据"）。
+
+**实现中的硬点（待解，先记）**：命中门要"确定命中"与"确定 miss"两支都稳定，需要
+`HitPoint > 0`（否则 `Random(0)=0 >= 0` 恒 miss、无人能被击中）且要控制每只怪的 `SpeedPoint` 与 seed；
+但 `Random(SpeedPoint)` 均匀分布 ⇒ "必 miss"不天然确定，需按 seed 扫描把 miss 落在目标怪身上。
+⇒ 装置要补 `MagicSpec.CasterHitPoint` 与 `MonsterSpec.SpeedPoint` 两个输入，并为每支选 seed（`seed_reason` 记"第 i 只怪抽值 x ≥/< HitPoint"）。
 
 **scope 依据**：39 可升 `verified`，依据是"**伤害由施法者侧同步 `StruckDamage` 计算**"（`:967`），
 不是"HP 变了"——HP 只是该计算的结果观测。
