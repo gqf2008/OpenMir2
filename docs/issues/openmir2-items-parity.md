@@ -393,7 +393,9 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **状态**：`verified`（2026-11-20，card/items-b3）。同一 `WeaponRepairSuccess` 文本链路（IT-14）；夹具三例的
 11004 `text` 非空且与 Rust 编码逐字节一致（`eat_ok_shape10_repair_normal` / `_full_still_eaten` 两例核文本）。
 
-### 9.11 IT-16 彩票 Shape11（`WinLottery`）— implemented_unverified（失败支为已证死路）
+### 9.11 IT-16 彩票 Shape11（`WinLottery`）— verified（失败支为已证死路）
+
+**状态**：`verified`（2026-11-20，master `126e57e41`；覆盖率 **53/97**、物品 **13/19**）。第二方 QA `3b` 签署于 `6c95e8b14`；合并门三条（`check` + `fmt` + 全量 `2149 passed / 0 failed`）。**scope=partial，9 项未覆盖已进清单** `docs/issues/parity-gap-items.json`；第 0 条 =「同档跨调用累积由单测覆盖、**非夹具对拍**」。
 
 **归类**：**StdMode3 / Shape11**，经 `default: EatUseItems(shape)` 的 **case 11**（`PlayObject.Base.cs:2298`）→ `WinLottery()`（`PlayObject.cs:3809`）。**物品恒被吃**（`case 11: WinLottery(); result=true;`）。
 
@@ -447,6 +449,22 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
   **两个 hash 字段角色不同**：`oracle_source_sha256`（M2Server 源码锚，**校验用**）不变 `51a289e2…`；
   `oracle_assembly_sha256` 因构建非位级可复现而变（`ee2cc2fb→a3b9f1fc`），夹具注释已声明该字段
   **仅溯源、不参与校验**——不是锚漂了。
+  字面 numstat（`git diff --numstat 01cae2da2 700482fce` 原样）：`eat_vectors.json 628 0`（纯新增）；
+  同批 docs `20 5`、lib `26 10`、useitem `52 33`、Program.cs `44 3`（删除行是判据块替换）。
+- **判据改动逐处表（改前/改后/为什么；`git show fd64ddc1c`，行号为 rebase 后文件）**：
+
+| 处（hunk） | 改前 | 改后 | 为什么 |
+| --- | --- | --- | --- |
+| useitem.rs `@@ -1075,20 +1075,23`（`fixture_rng_and_deltas`） | `match won_level`：Some ⇒ `d_gold==golds[i]` 且 `d_no_win==0`；None ⇒ `d_gold==0` 且 `d_no_win==500`（按**等级增量**判中/未中） | `if d_gold > 0 {…} else {…}`（按**金币增量**判） | `hit_zero_gold` 命中 6 档但 `WinLottery6Gold=0`：oracle `PlayObject.cs:3868 if (nGold>0)` 判**未中**，等级仍 +1（`:3820` 在闸内、与 gold 无关）。旧判据把它归 Won，与夹具 `no_win+500` 冲突（**正确实现会被旧判据 panic**） |
+| useitem.rs `@@ -1113,8 +1116,14`（同测试文案选择） | `if let Some(i)=won_level { got==known[i] }` | 中奖（金币>0）比 `known[i]`，否则比 `known[6]`（`NotWinLotteryMsg`） | 命中但 0 金发的是红字，不是绿字档位文案 |
+| useitem.rs `@@ -1187,26 +1196,36`（`percase_differential`） | `match (exp_level, out)` | `if d_gold > 0 { match Won } else { match Lost }` | 同上 |
+| useitem.rs `@@ -1015,7` / `@@ -1157,7`、lib.rs `@@ -100766,7` | `cases.len()==12` | `==15` | 新增 3 例 |
+| useitem.rs `@@ -1219,7 +1238,7` | eprintln `exp_level` | `hit_level` | 纯日志变量名（无行为） |
+| lib.rs `@@ -100911,17 +100911,22` | 11004 文案按 `won_level` 选 | 按金币增量选 + 常量独立重算交叉核对 | 同上 |
+| lib.rs `@@ -100948,10 +100953,21` | wins/losses 按等级增量 | 按金币增量 + **命中但 0 金时后态 `level` 仍 +1** 显式断言 | 钉住「等级 +1 但未中」这个合法状态，防"等级也没涨"的错实现 |
+
+  **判据改动的正当性（三组牙）**：①新判据 + 实现变异（`if gold>0`→`if level>0`）⇒ 红 `夹具金币 +0（未中）但 Rust outcome = Won { level: 6, gold: 0 }`；②同变异 + 旧判据 ⇒ 红在 `中奖不应加 no_win（500 vs 0）`；③**正确实现 + 旧判据 ⇒ panic** `Rust outcome Lost 与夹具期望(赢级 Some(6)) 不符`——证明的不是"新判据更严"，而是**旧判据无法表达该例期望**。
+  **首次跑红在第三条测试**（`彩票用例数固定为 12`），不是我先发现用例数，是它先咬住——这说明既有断言在"用例数变化"这个维度上是**有牙的**；补 3 例时必须同步更新它，这次更新是"跟随已被咬住的断言扩用例"，**不是随手放宽**。
 - **跨调用累积（2026-11-20 复核补）**：`winlottery::tests::level_accumulates_across_calls`——同一
   `WinLotteryShared`（`run_inner` 创建、跨 `handle_eat_cmd` 存活）连续两次命中同档，断言
   `level[5]` 1→2、两次都 `Won`、`no_win` 不变。依据：oracle `PlayObject.cs:3813-3875` 六档链内
