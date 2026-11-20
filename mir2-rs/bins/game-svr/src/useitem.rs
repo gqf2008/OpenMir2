@@ -76,10 +76,10 @@
 //!   - IT-09 Shape1 回城卷（`:2162→2163`、`:2233`）——未实现，T-17；
 //!   - IT-10 Shape2 随机传送（`:2238`，受 `boNORANDOMMOVE`）——未实现，T-17；
 //!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
-//!   - IT-12 Shape4 祝福油 `WeaptonMakeLuck()`（`:2258`）——未实现，T-17；
 //!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
 //!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；绿字文本已进队列（`NoticeText::Inline(WeaponRepairSuccess)`，卡 `openmir2-runtime-sysmsg-text-frames`）；
 //!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case10，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 10` 臂；见卡 §9.10；**无"已满"守卫 ⇒ 已满仍吃**）；绿字文本同 IT-14；
+//!   - **IT-12 Shape4 祝福油 `WeaptonMakeLuck()`**（`:2259`）——**已实现**（本模块只判「有武器 ⇒ 吃」；抽取/`Desc[3]/[4]`/能力帧在宿主 `handle_eat_cmd`，见 `wepmake_luck`）；绿字/红字文本已进队列（`NoticeText::Inline`，卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`）——**已实现**（本模块只置 `eaten=true`；抽取/6 段闸/金币/进程级计数在宿主 `handle_eat_cmd`，见 `winlottery` 模块头与卡 §9.11）；绿字/红字文本由宿主入队（`WinLotteryNMsg`/`NotWinLotteryMsg`，卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
 //! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
@@ -120,6 +120,10 @@ pub const RM_SYSMESSAGE: i32 = 11004;
 /// `RM_GOLDCHANGED`（`src/OpenMir2/Messages.cs`）：`GoldChanged()` 入队的那条；
 /// IT-16 彩票中奖的 `SM_GOLDCHANGED(653)` 经此出帧。
 pub const RM_GOLDCHANGED: i32 = mir2_protocol::messages::RM_GOLDCHANGED as i32;
+/// `RM_ABILITY`（`PlayObject.cs:1546/1625`）：`RecalcAbilitys()` 之后补发的能力刷新。
+pub const RM_ABILITY: i32 = mir2_protocol::messages::RM_ABILITY as i32;
+/// `RM_SUBABILITY`（`PlayObject.cs:1547/1626`）。
+pub const RM_SUBABILITY: i32 = mir2_protocol::messages::RM_SUBABILITY as i32;
 /// `RM_DURACHANGE`（`Messages.cs` 10125；修复油 `RepairWeapon` 的 `SendMsg(RM_DURACHANGE,1,Dura,DuraMax,0)`）。
 pub const RM_DURACHANGE: i32 = 10125;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
@@ -131,10 +135,6 @@ pub const RM_WEIGHTCHANGED: i32 = 10115;
 pub const RM_CHARSTATUSCHANGED: i32 = 10139;
 /// `RM_MYSTATUS`（`src/OpenMir2/Messages.cs:700`）——`RefMyStatus()` 在 `RecalcAbilitys()` 之后发（`PlayObject.Base.cs:288-292`）。
 pub const RM_MYSTATUS: i32 = 8102;
-/// `RM_ABILITY`（`PlayObject.cs:1546/1625`）：`RecalcAbilitys()` 之后补发的能力刷新。
-pub const RM_ABILITY: i32 = mir2_protocol::messages::RM_ABILITY as i32;
-/// `RM_SUBABILITY`（`PlayObject.cs:1547/1626`）。
-pub const RM_SUBABILITY: i32 = mir2_protocol::messages::RM_SUBABILITY as i32;
 /// `RM_WINEXP`（`src/OpenMir2/Messages.cs` 8075）——`GetExp` 的 `SendMsg(RM_WINEXP, 0, dwExp, 0, 0)`。
 pub const RM_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
 /// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
@@ -208,7 +208,7 @@ impl QueuedNotice {
     /// `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, sMsg)`。
     ///
     /// `sMsg` 由调用点给出（`MessageSettings.CanotUseDrugOnThisMap`）；缺文本时不产帧。
-    fn sysmsg_text(fcolor: u16, bcolor: u16, text: &str) -> Self {
+    pub fn sysmsg_text(fcolor: u16, bcolor: u16, text: &str) -> Self {
         Self {
             ident: RM_SYSMESSAGE,
             w_param: 0,
@@ -236,6 +236,12 @@ pub struct SysMsgTexts<'a> {
     pub win_lottery: [&'a str; 6],
     /// `MessageSettings.NotWinLotteryMsg`（`MessageSettings.cs:210`；键 `NotWinLotteryMsg`）。
     pub not_win_lottery: &'a str,
+    /// `MessageSettings.WeaptonMakeLuck`（`MessageSettings.cs:211`）——祝福油加幸运（IT-12，绿字）。
+    pub weapton_make_luck: &'a str,
+    /// `MessageSettings.WeaptonNotMakeLuck`（`MessageSettings.cs:212`）——祝福油未中（绿字）。
+    pub weapton_not_make_luck: &'a str,
+    /// `MessageSettings.TheWeaponIsCursed`（`MessageSettings.cs:213`）——祝福油诅咒支（红字）。
+    pub the_weapon_is_cursed: &'a str,
     /// `MessageSettings.CanotDropGoldMsg`（`MessageSettings.cs:126`；键 `CanotDropGoldMsg`）
     /// ——`ControlDropItem && nGold < CanDropGold` 守卫（`CM_DROPGOLD`）。
     pub canot_drop_gold_msg: &'a str,
@@ -257,6 +263,9 @@ impl<'a> SysMsgTexts<'a> {
             weapon_repair_success: c.weapon_repair_success(),
             win_lottery: c.win_lottery_msgs(),
             not_win_lottery: c.not_win_lottery_msg(),
+            weapton_make_luck: c.weapton_make_luck(),
+            weapton_not_make_luck: c.weapton_not_make_luck(),
+            the_weapon_is_cursed: c.the_weapon_is_cursed(),
             canot_drop_gold_msg: c.canot_drop_gold_msg(),
             canot_use_item_msg: c.canot_use_item_msg(),
             canot_drop_in_safe_zone_msg: c.canot_drop_in_safe_zone_msg(),
@@ -272,6 +281,9 @@ impl Default for SysMsgTexts<'_> {
             weapon_repair_success: crate::strings::DEFAULT_WEAPON_REPAIR_SUCCESS,
             win_lottery: crate::strings::DEFAULT_WIN_LOTTERY_MSGS,
             not_win_lottery: crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG,
+            weapton_make_luck: crate::strings::DEFAULT_WEAPTON_MAKE_LUCK,
+            weapton_not_make_luck: crate::strings::DEFAULT_WEAPTON_NOT_MAKE_LUCK,
+            the_weapon_is_cursed: crate::strings::DEFAULT_THE_WEAPON_IS_CURSED,
             canot_use_item_msg: crate::strings::DEFAULT_CANOT_USE_ITEM_MSG,
             canot_drop_in_safe_zone_msg: crate::strings::DEFAULT_CANOT_DROP_IN_SAFE_ZONE_MSG,
             canot_drop_item_msg: crate::strings::DEFAULT_CANOT_DROP_ITEM_MSG,
@@ -645,6 +657,14 @@ pub fn use_item(
                                         ));
                                         eaten = true;
                                     }
+                                }
+                            }
+                            // **IT-12** Shape4 祝福油：`WeaptonMakeLuck()`（`PlayObject.Base.cs:2259`）。
+                            // 无武器 / `Index <= 0` ⇒ 不吃；否则**恒吃**（函数恒 `return true`）。
+                            // 抽取 / `Desc[3..5]` 变更 / 能力帧在宿主 `handle_eat_cmd`（见 `wepmake_luck`）。
+                            3 if tpl.shape == 4 => {
+                                if state.extra.weapon.as_ref().is_some_and(|w| w.index > 0) {
+                                    eaten = true;
                                 }
                             }
                             // **IT-16** `Shape 11` 彩票：`EatUseItems` case 11（`PlayObject.Base.cs:2298`）

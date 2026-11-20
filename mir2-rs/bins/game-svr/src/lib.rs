@@ -78,6 +78,7 @@ mod strings;
 mod telemetry;
 mod tick_profile;
 mod users;
+mod wepmake_luck;
 mod winlottery;
 
 // 编码层（无 I/O、无全局状态）：进程级集成测试直接引用 `game_svr::*`（见 `tests/relay.rs`）。
@@ -1708,6 +1709,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 EnterConfig {
                     repair_item_dec_dura: cfg.repair_item_dec_dura,
                     win_lottery: cfg.win_lottery,
+                    weapon_make_luck: cfg.weapon_make_luck,
                     home_start_points: home_fallback.start_points.clone(),
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
@@ -10573,6 +10575,42 @@ fn drain_login_script_batch(
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
 /// ⇒ 纯函数在 `useitem::use_item`（m3bag 交付，逐字段对 oracle `eat_vectors.json`）；本函数只负责
+/// 把吃路径的通知按 **oracle 泵序**送到网关。
+///
+/// 泵序 = oracle `MsgQueue` 的**出队序**（`PriorityQueue<SendMessage, byte>`，优先级按
+/// `(byte)wIdent`），由 [`game_svr::msgqueue::NetPriorityQueue`]（.NET 四叉最小堆的逐位复刻）
+/// 给出。**这不是排序**：同优先级下按插入与 sift 历史出队（实测 3 条同键 `[0,2,1]`），任何
+/// `sort_by_key` 近似都会在同一优先级上偏离 oracle。
+///
+/// `None`（未建模 ident，如 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）记 WRN、不静默。
+fn emit_eat_notices(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    notices: &[game_svr::useitem::QueuedNotice],
+    wire: &game_svr::pickwire::WireSession,
+) -> usize {
+    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for n in notices {
+        queue.enqueue(n, n.ident as u8);
+    }
+    let mut sent = 0usize;
+    while let Some(n) = queue.dequeue() {
+        match game_svr::pickwire::notice_frame(n, wire) {
+            Some(body) => {
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+                sent += 1;
+            }
+            None => glog!(
+                "WRN",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
+                n.ident
+            ),
+        }
+    }
+    sent
+}
+
 /// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
 ///
 /// **收包字段口径**（`WorldServer.cs:820` + `BaseObject.Message.cs:98`）：12B 头的 `Recog`(b0-3) = `nParam1`
@@ -10581,7 +10619,8 @@ fn drain_login_script_batch(
 /// **两路下行**（口径见 `useitem` 模块头）：
 /// - **立即帧** `SendDefMessage(SM_EAT_OK/FAIL)` ⇒ header-only，直接下发（恒 1 条）；
 /// - **延时通知** `SendMsg(RM_*)` 入 `MsgQueue`，由消息泵翻成 `SM_*`（`PlayObject.Message.cs:1736-1960`）；
-///   本宿主在同一批按 `QueuedNotice` 出队序下发（`useitem::use_item` 已按 `(byte)wIdent` 排序）。
+///   本宿主用 `emit_eat_notices` 里的 `NetPriorityQueue` 复刻泵序（**不是排序**：同优先级按堆的
+///   sift 序出队；见该函数文档与卡 §9.12）。
 #[allow(clippy::too_many_arguments)]
 fn handle_eat_cmd(
     recog: i32,
@@ -10620,6 +10659,8 @@ fn handle_eat_cmd(
     lottery_cfg: crate::config::WinLotteryCfg,
     // `Config.HumanMaxGold`（`PlayObject.IncGold` 的上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
+    // **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck`）。
+    oil_cfg: crate::config::WeaponMakeLuckCfg,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -10750,6 +10791,15 @@ fn handle_eat_cmd(
         .find(|it| it.make_index == recog)
         .and_then(|it| catalog.get(it.index))
         .is_some_and(|t| t.std_mode == 3 && t.shape == 11);
+    // **IT-12 祝福油**：oracle 走到 `EatUseItems` 的 `case 4` 的判据 = 模板 `StdMode==3 && Shape==4`
+    // （`PlayObject.Base.cs:2259`）。无武器时 `use_item` 已判不吃 ⇒ 这里再确认一次模板。
+    let oil_item = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == recog)
+        .and_then(|it| catalog.get(it.index))
+        .is_some_and(|t| t.std_mode == 3 && t.shape == 4);
     // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。
     let mut item_list = std::mem::take(&mut sg.state.item_list);
     // `RefMyStatus()` ⇒ `RecalcAbilitys()` 的观测输入（StdMode 1 跨档才用到；与 `handle_bag_cmd` 同源）。
@@ -10889,6 +10939,80 @@ fn handle_eat_cmd(
         }
     }
 
+    // **IT-12 祝福油 `WeaptonMakeLuck()`**（`PlayObject.cs:1500`）：抽取 / 武器 `Desc[3..5]` /
+    // `RecalcAbilitys` / 能力帧都在宿主（纯 `use_item` 只判「有武器 ⇒ 吃」，见 `wepmake_luck`）。
+    if out.eaten && oil_item {
+        if let Some(w) = sg
+            .use_items
+            .get(game_svr::ability::SLOT_WEAPON)
+            .cloned()
+            .flatten()
+        {
+            let n_rand = catalog
+                .get(w.index)
+                .map_or(0, |t| crate::wepmake_luck::luck_rand_from_dc(t.dc));
+            let res = crate::wepmake_luck::weapton_make_luck(
+                &mut world.rng,
+                &oil_cfg,
+                n_rand,
+                w.desc[3],
+                w.desc[4],
+            );
+            if let Some(Some(slot)) = sg.use_items.get_mut(game_svr::ability::SLOT_WEAPON) {
+                slot.desc[3] = res.desc3;
+                slot.desc[4] = res.desc4;
+            }
+            let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
+            let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+            // oracle 发送序：`RM_ABILITY` → `RM_SUBABILITY`（`:1546/1547`；诅咒支 `:1625/1626`），
+            // 再 sysmsg（正常支绿字 `:1522/1528/1534/1540` 或 `:1552` 的未中绿字；诅咒支红字 `:1615/1622`）。
+            out.notices.push(game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_ABILITY,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            });
+            out.notices.push(game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_SUBABILITY,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            });
+            let (f, b) = if res.outcome == crate::wepmake_luck::LuckOutcome::Cursed {
+                (colors.red_f, colors.red_b)
+            } else {
+                (colors.green_f, colors.green_b)
+            };
+            // **文本按结果入队**（卡 `openmir2-runtime-sysmsg-text-frames`）：oracle 的三条 `SysMsg` 文案
+            // `WeaptonMakeLuck` / `WeaptonNotMakeLuck` / `TheWeaponIsCursed`（`PlayObject.cs:1522-1622`）。
+            // **诅咒支的静默形态**：`MakeWeaponUnlock` 只在 `Desc[3]>0`（减幸运）或 `Desc[4]<10`（加诅咒）
+            // 时发红字（`PlayObject.cs:1607-1621`）；`Desc[3]==0 && Desc[4]>=10` 什么都不发
+            //（`oil_curse_desc4_at_ten_stays` 的 oracle 夹具 `notices` 里确实没有 11004）。
+            let cursed_noop = res.outcome == crate::wepmake_luck::LuckOutcome::Cursed
+                && res.desc3 == w.desc[3]
+                && res.desc4 == w.desc[4];
+            if !cursed_noop {
+                let text = match res.outcome {
+                    crate::wepmake_luck::LuckOutcome::Cursed => sysmsg.the_weapon_is_cursed,
+                    crate::wepmake_luck::LuckOutcome::Made => sysmsg.weapton_make_luck,
+                    crate::wepmake_luck::LuckOutcome::NotMade => sysmsg.weapton_not_make_luck,
+                };
+                out.notices
+                    .push(game_svr::useitem::QueuedNotice::sysmsg_text(
+                        u16::from(f),
+                        u16::from(b),
+                        text,
+                    ));
+            }
+            // 线序由**全局 `NetPriorityQueue`** 决定（见下方排水）；本块只按 oracle 的**发送序**入队，
+            // 不自行排序（牙：对调这两条发送序，线序必须不变）。
+        }
+    }
+
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
     // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
     // `add_body_luck`。升级块内 `HasLevelUp→RecalcAbilitys` ⇒ **WAbil 追上 Abil**（与非升级的"陈旧"相反）。
@@ -11005,21 +11129,8 @@ fn handle_eat_cmd(
         // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
         hit_speed: sg.hit_speed,
     };
-    for n in &out.notices {
-        match game_svr::pickwire::notice_frame(n, &wire) {
-            Some(body) => {
-                let _ = tx.send(SimToGate::SendFrame { socket, body });
-                sent += 1;
-            }
-            // 目前 `use_item` 产生的通知已全部有 `SM_*` 映射（含 `RM_CHARSTATUSCHANGED`）；
-            // 该支保留为**不静默**的兜底：任何新增 ident 缺映射都记 WRN 而不是悄悄丢。
-            None => glog!(
-                "WRN",
-                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记，未编造）",
-                n.ident
-            ),
-        }
-    }
+    // 泵序由全局 `NetPriorityQueue` 决定（见 [`emit_eat_notices`]），单遍排水。
+    sent += emit_eat_notices(tx, socket, &out.notices, &wire);
     // **卡 `openmir2-charstatuschanged-657-wired`（观察者副本）**：oracle 的
     // `SendRefMsg(RM_CHARSTATUSCHANGED)` 对**可见玩家**也入队一份 657；上面的
     // `notice_frame` 只投了**本会话**那一份 ⇒ 这里补观察者面。
@@ -23847,6 +23958,8 @@ struct EnterConfig {
     /// **IT-16**：`[Setup]` 彩票 27 键（`Config.WinLottery*`）。`handle_eat_cmd` 的
     /// `WinLottery()` 读 19 个参数；8 个初值已在 `run_inner` 建共享计数时消费。
     win_lottery: crate::config::WinLotteryCfg,
+    /// **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck` 的闸与两档概率）。
+    weapon_make_luck: crate::config::WeaponMakeLuckCfg,
     /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
     castle_name_colors: mir2_world_bevy::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
@@ -24070,6 +24183,7 @@ impl EnterConfig {
             game_conf: None,
             repair_item_dec_dura: 90,
             win_lottery: crate::config::WinLotteryCfg::default(),
+            weapon_make_luck: crate::config::WeaponMakeLuckCfg::default(),
             castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
             red_die_home: mir2_world_bevy::castle::RedDieHome::default(),
             // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
@@ -28681,6 +28795,7 @@ fn sim_loop(
                             &win_lottery,
                             enter_cfg.win_lottery,
                             enter_cfg.shop.human_max_gold,
+                            enter_cfg.weapon_make_luck,
                         );
                     } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                         // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -54373,6 +54488,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -54505,6 +54621,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 100,
@@ -54541,6 +54658,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 200,
@@ -54697,6 +54815,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
@@ -54942,6 +55061,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -55075,6 +55195,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -56113,6 +56234,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -72678,6 +72800,7 @@ SendRefMsgRange=15
                 ),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
             );
         };
         let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
@@ -72910,6 +73033,7 @@ SendRefMsgRange=15
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -92197,6 +92321,7 @@ GMEXECUTE f
             &lottery,
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let per = take7c(&mut rx0);
         for s in [901, 902, 903, 904] {
@@ -95328,6 +95453,7 @@ GMEXECUTE f
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let frames = sendmsg_drain(&mut rx0);
         let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
@@ -95877,6 +96003,7 @@ GMEXECUTE f
             ),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let frames = sendmsg_drain(&mut rx1);
         let other_sys: Vec<&Vec<u8>> = frames
@@ -99519,6 +99646,7 @@ fn ",
                 lottery,
                 cfg,
                 human_max,
+                crate::config::WeaponMakeLuckCfg::default(),
             );
             // 同一次 `handle_eat_cmd` 的原始帧（含 `SM_SYSMESSAGE` 的文本尾）与 ident 序列。
             let frames = drain_frames(rx);
@@ -99788,6 +99916,7 @@ fn ",
             &untouched,
             forced_six(),
             10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
         );
         let ids: Vec<u16> = drain_frames(&mut rx0)
             .iter()
@@ -99808,6 +99937,262 @@ fn ",
             "非彩票物品不得动彩票计数"
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
+    }
+    /// **泵序不是排序**：`NetPriorityQueue`（.NET 四叉最小堆逐位复刻）在同一优先级下按
+    /// 插入与 sift 历史出队——3 条同键实测 `[0,2,1]`，`sort_by_key` 会给 `[0,1,2]`。
+    #[test]
+    fn net_priority_queue_equal_keys_dequeue_is_sift_order_not_insertion() {
+        let mut q: game_svr::msgqueue::NetPriorityQueue<usize> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for i in 0..3usize {
+            q.enqueue(i, 67);
+        }
+        let order: Vec<usize> = std::iter::from_fn(|| q.dequeue()).collect();
+        assert_eq!(
+            order,
+            vec![0, 2, 1],
+            "同优先级出队序 = 四叉堆 sift 序，不是入队序"
+        );
+    }
+
+    /// **吃路径线序 = oracle 记录序**（不是入队序）：`use_item` 对 Shape13 先 push
+    /// `RM_WINEXP`(8075→139) 再在公共尾 push `RM_WEIGHTCHANGED`(10115→131)，
+    /// 入队序是降的；排水后必须**升**（622 在 44 之前），与夹具
+    /// `eat_ok_stdmode3_shape13_exp_nonlevelup` 的记录序 `[(10115,131),(8075,139)]` 相同。
+    #[test]
+    fn eat_notice_drain_matches_oracle_order_for_shape13() {
+        use mir2_protocol::frame::CommandMessage;
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 100,
+            sys_msg: None,
+            job: 0,
+            ability_tail: Vec::new(),
+            sub_bytes: [0; 7],
+            hunger_status: 0,
+            hit_speed: 0,
+        };
+        let notices = vec![
+            game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_WINEXP,
+                w_param: 0,
+                n_param1: 100,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            },
+            game_svr::useitem::QueuedNotice {
+                ident: game_svr::useitem::RM_WEIGHTCHANGED,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                text: game_svr::useitem::NoticeText::None,
+            },
+        ];
+        let sent = emit_eat_notices(&tx, 901, &notices, &wire);
+        drop(tx);
+        let idents: Vec<u16> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { body, .. } => {
+                    CommandMessage::from_bytes(&body).map(|c| c.ident)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, 2);
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                mir2_protocol::messages::SM_WINEXP
+            ],
+            "泵序：622(131) 先于 44(139)（入队序相反）"
+        );
+    }
+
+    /// **IT-12 祝福油宿主级**：帧序 `[635, 752, 52, 622]`、`Desc[3]/[4]` 迁移、恒吃。
+    /// 抽值用 `world.rng` 播种（首抽 `Random(20)` 定分支），种子由本用例现找 ⇒ 确定性。
+    #[test]
+    fn it12_oil_frame_order_desc_and_always_eaten() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        fn seed_with_first_below(bound: i32, want: i32) -> i32 {
+            for s in 0..200_000 {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(s);
+                if r.random_below(bound) == want {
+                    return s;
+                }
+            }
+            panic!("找不到首抽 == {want} 的种子");
+        }
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            2200,
+            mir2_data::StdItem {
+                name: "祝福油".into(),
+                std_mode: 3,
+                shape: 4,
+                ..Default::default()
+            },
+        );
+        // 武器模板：DC = 0x140A ⇒ |20-10|/5 = 2（点3 支的 bound = 2*40 = 80）。
+        catalog.insert(
+            2201,
+            mir2_data::StdItem {
+                name: "测试剑".into(),
+                std_mode: 5,
+                dc: 0x140A,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 5, 5);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(actor);
+        sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 9,
+            index: 2201,
+            dura: 1000,
+            dura_max: 5000,
+            desc: [0; 14],
+        });
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let gmcfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &gmcfg,
+            pwd_sessions: &pwd,
+            host: ScriptGmHost::default(),
+        };
+        let lottery = crate::winlottery::WinLotteryShared::new(
+            crate::config::WinLotteryCfg::default().init_state(),
+        );
+
+        let mut eat = |seed: i32, desc3: u8, desc4: u8| -> (Vec<u16>, u8, u8) {
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let sg = sessions.get_mut("hero").unwrap();
+            let w = sg.use_items[game_svr::ability::SLOT_WEAPON]
+                .as_mut()
+                .unwrap();
+            w.desc[3] = desc3;
+            w.desc[4] = desc4;
+            sg.state.item_list = vec![game_svr::bag::BagItem {
+                make_index: 1,
+                index: 2200,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            }];
+            handle_eat_cmd(
+                1,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                &mut sessions,
+                &gates,
+                &catalog,
+                &mut world,
+                &colors,
+                90,
+                // master 的 `strings` 形参（`SysMsgTexts` 来源）；本用例不核文本，默认文案即可。
+                &game_svr::strings::StringConf::default(),
+                None,
+                &unbind,
+                &mut item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                Some(&env),
+                &lottery,
+                crate::config::WinLotteryCfg::default(),
+                10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
+            );
+            let mut ids = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+                if let Some(m) = CommandMessage::from_bytes(&body) {
+                    ids.push(m.ident);
+                }
+            }
+            let w = sessions.get("hero").unwrap().use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap();
+            (ids, w.desc[3], w.desc[4])
+        };
+
+        // ① 正常支（首抽 != 1，desc3=0 < point1 ⇒ 不抽第二下）：751 在 52 之前、622 最后。
+        let normal_seed = seed_with_first_below(20, 0);
+        let (ids, d3, d4) = eat(normal_seed, 0, 0);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622, 100],
+            "线序：635 直发；泵 752(62) → 52(67) → 622(131) → SM_SYSMESSAGE(100，带文本 `WeaptonMakeLuck`)"
+        );
+        assert_eq!((d3, d4), (1, 0), "点1 支：Desc[3] 0→1、Desc[4] 不动");
+
+        // ② 诅咒支（首抽 == 1）：Desc[3] 3→2；仍是 635 + 两条能力帧。
+        let curse_seed = seed_with_first_below(20, 1);
+        let (ids, d3, _) = eat(curse_seed, 3, 0);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622, 100],
+            "诅咒支：Desc[3] 3→2 ⇒ 红字 SM_SYSMESSAGE(100) `TheWeaponIsCursed`（oracle `PlayObject.cs:1612-1617`）"
+        );
+        assert_eq!(d3, 2, "诅咒支：Desc[3] 3→2");
+
+        // ③ 诅咒支 + Desc[4]=10 上界：Desc[3]=0 ⇒ Desc[4] 停在 10（不越界），仍吃。
+        let (ids, d3, d4) = eat(curse_seed, 0, 10);
+        assert_eq!(
+            ids,
+            vec![635, 752, 52, 622],
+            "诅咒支 + Desc[3]=0/Desc[4]=10：`MakeWeaponUnlock` 两支都不进 ⇒ **零 SysMsg**（oracle 夹具同）"
+        );
+        assert_eq!((d3, d4), (0, 10), "上界：Desc[4] 不加到 11");
     }
 }
 

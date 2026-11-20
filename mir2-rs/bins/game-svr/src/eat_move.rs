@@ -486,6 +486,7 @@ mod tests {
                 ),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
+                crate::config::WeaponMakeLuckCfg::default(),
             );
 
             // ① 生产换图簇：与 world tick 同一条路径（`drain_map_change`），展示表给 Light=0/Feature=0/

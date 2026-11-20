@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "13c583366bca8c9a81c8ca330bc52fac3d323bc4",
-    "time": "2026-11-20T06:27:13+08:00",
-    "note": "M55=13c583366 合入 IT-08(Shape13 GetExp 升级支) 后 master items verified=9（QA PASS @ f7cbaf91b）；本计数点取代 card/items-followups（作废不合）"
+    "head": "1285b0d94541923e51371620f778e932b379a4a1",
+    "time": "2026-11-20T12:23:51+08:00",
+    "note": "2026-11-20 重测于 1285b0d94（move 组 + 17a + ability-frames 均已合）：verified=12（IT-01/02/03/04/05/06/08/12/14/15/18/19）、implemented_unverified=6（IT-07/09/10/11/16/17）、missing=1（IT-13）；分母 19 不动。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。本卡（card/items-b3）另带 B3 单侧补例 6 例与 IT-12 文本接线；合入后本 head 随合并提交更新。"
   },
   "status_enum": [
     "verified",
@@ -85,6 +85,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -97,7 +98,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：原两例两侧同时到顶/同时不顶，只 HP 封顶而 MP 不封顶及其反向未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -132,6 +133,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_side_clamp_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -145,7 +147,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：单例，百分比下只一侧截断/另一侧不截断的边界未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -157,6 +159,7 @@
         "line_end": null
       },
       "status": "verified",
+      "scope": "single_ac_or_mac_uncovered",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -169,7 +172,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ushort 回绕",
+      "notes": "ushort 回绕 未覆盖子空间（scope=single_ac_or_mac_uncovered）：原两例 AC>0 且 MAC>0、两侧 0；`if(AC>0)`/`if(MAC>0)` 单侧分支未覆盖（B3）。",
       "basis": "semantic"
     },
     {
@@ -228,25 +231,29 @@
         "line": 2101,
         "line_end": 2157
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::it07_buff_fixture_matches_pure_decision",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/buff_vectors.json",
+        "cases": [
+          "eat_ok_shape12_six_buffs",
+          "eat_ok_shape12_single_mac",
+          "eat_ok_shape12_combo_dc_sc",
+          "eat_fail_shape12_all_zero"
+        ],
+        "unit_tests": [
+          "useitem::tests::it07_shape12_six_buffs",
+          "useitem::tests::it07_shape12_all_zero_not_eaten",
+          "useitem::tests::it07_shape12_max_merge_keeps_larger_values",
+          "tests::it07_emit_eat_notices_production_order_is_heap_sift",
+          "tests::it07_shape12_657_notice_fields"
         ]
       },
-      "notes": "oracle 成功吃掉 / Rust 落 SM_EAT_FAIL"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape12 六属性 buff：纯决策六槽写入/时长/蓝字 + 宿主写回 BuffState → RecalcAbilitys → RM_ABILITY/657；buff-probe 4 例由 oracle 真身产出（ExtraAbil/Flag/Times 前后、now_before、通知文本含 \"sec.\"）。实现与夹具在 card/items-it07（该分支合入后本状态生效）。缺口：①单/组合支的行为面只由夹具比较器覆盖（纯函数单测对六槽只在 max/不命中处取值）；②`ExtraAbil` 的 WAbil 效果在 oracle 是死写（`PlayObject.cs:2818-2840` 被 `:2890-2906` 整体覆盖）⇒ `WAbil` 必须不变。",
+      "scope": "single_and_combo_paths_only_in_fixture"
     },
     {
       "id": "IT-08",
@@ -367,25 +374,36 @@
         "line": 2258,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "wepmake_luck::tests::it12_oil_fixture_matches_pure_decision",
+        "test_file": "mir2-rs/bins/game-svr/src/wepmake_luck.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/oil_vectors.json",
+        "cases": [
+          "oil_curse_subtracts_luck",
+          "oil_curse_at_luck_zero_bumps_curse",
+          "oil_curse_desc4_at_ten_stays",
+          "oil_remove_curse",
+          "oil_point1_adds_luck",
+          "oil_point2_hit",
+          "oil_point2_miss_point3_hit",
+          "oil_both_tiers_miss",
+          "oil_desc3_at_point3_no_extra_draw",
+          "oil_nrand_zero_point3_dead",
+          "oil_fail_no_weapon",
+          "oil_fail_nodrug"
+        ],
+        "unit_tests": [
+          "wepmake_luck::tests::it12_oil_fail_cases_eat_and_frames",
+          "tests::it12_oil_frame_order_desc_and_always_eaten",
+          "wepmake_luck::tests::random_zero_matches_dotnet_value_and_stream",
+          "wepmake_luck::tests::curse_branch_at_luck_zero_raises_curse_count_capped_at_ten"
         ]
       },
-      "notes": "改武器幸运/诅咒"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape4 祝福油：纯决策 `wepmake_luck` + 宿主抽取/Desc 回写/能力帧；oil-probe 12 例由 oracle 真身产出（ScriptedRandom 脚本化抽值，武器 Desc[14] 前后全量快照）。**2026-11-20 升格 verified（card/items-b3）**：① `SM_SYSMESSAGE` 文本接线完成——三条文案 `WeaptonMakeLuck`/`WeaptonNotMakeLuck`/`TheWeaponIsCursed` 经 `String.conf` → `SysMsgTexts` → `NoticeText::Inline`，oil-probe 已记录 `text` hex，比较器按 outcome 逐例比字节；② 诅咒支静默形态按 oracle（`MakeWeaponUnlock` 在 `Desc[3]==0 && Desc[4]>=10` 时不发红字，夹具同）；③ `RM_CHARSTATUSCHANGED(10139)` 已在 master 映射（ability-frames/charstatuschanged 两卡）。吃路径排水改 `NetPriorityQueue`（同 IT-07 的 F1 口径）。",
+      "basis": "semantic"
     },
     {
       "id": "IT-13",
@@ -423,7 +441,7 @@
         "line": 2286,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -437,7 +455,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "修复油 Shape9 已在 use_item 实现（StdMode3 的 default→EatUseItems(9)→RepairWeapon：无武器/已满/低于阈值不吃；否则 DuraMax-=(DuraMax-Dura)/RepairItemDecDura、Dura+=min(5000,missing)、发 RM_DURACHANGE(10125) + 绿色 RM_SYSMESSAGE），oracle 对拍三支（正常/已满/无武器）+ 武器耐久 weapon_after 进比较面 + RepairItemDecDura 取自配置经夹具带入比较器。**运行期帧缺口（用户可见）**：SysMsg(WeaponRepairSuccess,Green) 的 SM_SYSMESSAGE 文本帧运行期不发（夹具层只比 RM 颜色、文本不比），同 StdMode1 food 口径，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md ⇒ 记 implemented_unverified，不计 verified。"
+      "notes": "修复油 Shape9 已在 use_item 实现（StdMode3 的 default→EatUseItems(9)→RepairWeapon：无武器/已满/低于阈值不吃；否则 DuraMax-=(DuraMax-Dura)/RepairItemDecDura、Dura+=min(5000,missing)、发 RM_DURACHANGE(10125) + 绿色 RM_SYSMESSAGE），oracle 对拍三支（正常/已满/无武器）+ 武器耐久 weapon_after 进比较面 + RepairItemDecDura 取自配置经夹具带入比较器。**状态升格（2026-11-20，card/items-b3）**：运行期 `SM_SYSMESSAGE` 文本帧已补齐：`String.conf` 键 `WeaponRepairSuccess` 经 `SysMsgTexts` 进队列（`NoticeText::Inline`），oracle 夹具记 `text`（hex = `EDCode.EncodeString(Buff)`），Rust 比较器逐字节核（卡 `openmir2-runtime-sysmsg-text-frames`）。夹具 `eat_vectors.json` 三例的 11004 `text` 非空且与 Rust 文案字节一致 ⇒ 计入 `verified`。",
+      "basis": "semantic"
     },
     {
       "id": "IT-15",
@@ -447,7 +466,7 @@
         "line": 2292,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
@@ -461,7 +480,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "特修油 Shape10 已在 use_item 实现（StdMode3 的 default→EatUseItems(10)→SuperRepairWeapon：无武器/Index<=0 不吃；否则 Dura=DuraMax、发 RM_DURACHANGE(10125)+绿色 RM_SYSMESSAGE；**无\"已满\"守卫⇒已满仍吃**；**无 RepairItemDecDura**）。oracle 对拍三支（正常/已满仍吃/无武器）+ weapon_after 进比较面。**运行期帧缺口（用户可见）**：SysMsg 复用 MessageSettings.WeaponRepairSuccess（与 IT-14 同文案）的 SM_SYSMESSAGE 文本帧运行期不发，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md（同时指 IT-14/IT-15）⇒ 记 implemented_unverified，不计 verified。"
+      "notes": "特修油 Shape10 已在 use_item 实现（StdMode3 的 default→EatUseItems(10)→SuperRepairWeapon：无武器/Index<=0 不吃；否则 Dura=DuraMax、发 RM_DURACHANGE(10125)+绿色 RM_SYSMESSAGE；**无\"已满\"守卫⇒已满仍吃**；**无 RepairItemDecDura**）。oracle 对拍三支（正常/已满仍吃/无武器）+ weapon_after 进比较面。**状态升格（2026-11-20，card/items-b3）**：运行期 `SM_SYSMESSAGE` 文本帧已补齐：`String.conf` 键 `WeaponRepairSuccess` 经 `SysMsgTexts` 进队列（`NoticeText::Inline`），oracle 夹具记 `text`（hex = `EDCode.EncodeString(Buff)`），Rust 比较器逐字节核（卡 `openmir2-runtime-sysmsg-text-frames`）。夹具 `eat_vectors.json` 三例的 11004 `text` 非空且与 Rust 文案字节一致 ⇒ 计入 `verified`。",
+      "basis": "semantic"
     },
     {
       "id": "IT-16",
@@ -471,25 +491,40 @@
         "line": 2298,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "M",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::it16_lottery_fixture_rng_and_deltas",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_lottery_win6_deploy_bands",
+          "eat_ok_lottery_win6_steered",
+          "eat_ok_lottery_win5_steered",
+          "eat_ok_lottery_win4_steered",
+          "eat_ok_lottery_win3_steered",
+          "eat_ok_lottery_win2_steered",
+          "eat_ok_lottery_win1_sum_equality",
+          "eat_ok_lottery_no_win",
+          "eat_ok_lottery_gate_closed",
+          "eat_ok_lottery_boundary_min",
+          "eat_ok_lottery_boundary_max",
+          "eat_ok_lottery_forced_bucket_p2"
+        ],
+        "unit_tests": [
+          "winlottery::tests::level1_is_sum_equality_not_range",
+          "winlottery::tests::bands_are_checked_six_first_then_down",
+          "winlottery::tests::gate_closed_stops_at_matched_band_and_counts_as_lost",
+          "winlottery::tests::zero_gold_band_is_lost_not_won",
+          "winlottery::tests::init_state_maps_all_eight_keys_without_shift",
+          "winlottery::tests::pure_decision_reads_state_not_cfg_init",
+          "winlottery::tests::boundary_is_inclusive_on_both_ends",
+          "winlottery::tests::notice_order_is_pump_priority_ascending",
+          "tests::it16_lottery_frame_order_gold_counters_and_always_eaten"
         ]
       },
-      "notes": "Config.WinLotteryLevel1..6（Rust 已有配置字段）；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "cost": "M",
+      "deviation": null,
+      "notes": "Shape11 彩票已在宿主实现（WinLotteryState 进程级计数 + 纯函数 win_lottery + 宿主帧序），配置 27 键（19 参数 + 8 状态初值）经 GateConfig/EnterConfig 下传；eat-probe 的顶层 lottery 块 12 例由 oracle 真身产出，抽值经 ProbeRandom 装 RandomNumber.random 记录来源行 PlayObject.cs:3813，Rust 同 seed 逐值重放。缺口：①运行期 `SM_SYSMESSAGE` 文本帧（WinLotteryNMsg/NotWinLotteryMsg，见 openmir2-runtime-sysmsg-text-frames.md）；②`IncGold` 失败支为**已证的 oracle 死路**（非缺口）：`DropGoldDown` 的 MapItem 不设 `ItemId`（`Actor/BaseObject.cs:740-748`），`AddItemToMap` 首条守卫 `ItemId == 0 ⇒ return false`（`Maps/Envirnoment.cs:88-93`），全仓唯一 `ItemId` 赋值被注释（`Data/MapItem.cs:41`）⇒ 净效果＝金币不变＋不发 `RM_GOLDCHANGED`＋不发 `RM_ITEMSHOW`＋绿字照发；Rust 实现与该净效果一致并有用例。runtime 加固例另卡（反射 `Initialize` 即可，结果与地图内容无关）。另见 follow-up 卡 openmir2-lottery-ticket-gm-realtime.md（@LotteryTicket 实时值）。"
     },
     {
       "id": "IT-17",
@@ -525,7 +560,7 @@
       },
       "cost": "S-M",
       "deviation": null,
-      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：RecalcAbilitys 的技能被动（HitPoint/SpeedPoint/DC、MagicArr 战斗效果）属能力层缺口（IT-17b，另立卡）；657 本卡按同值发。 【IT-17b 结构层偏差】MagIdx>=50 时 oracle MagicArr 越界抛 IndexOutOfRangeException，本仓选择跳过并 WRN（不把内容数据错误升级成崩溃）；用例 magic_arr_ignores_id_out_of_range 钉住。本批 0 抽是结构性（无 rng 形参、不含攻杀）；攻杀 RNG 留第二批。"
+      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：17a 学习面全绿；能力层 **IT-17b 已合入 master**（`card/items-skillpassive-17b`：RecalcAbilitys 技能被动结构 + `HitSkillState` 由会话 `MagicArr` 派生 + 正反两条攻击帧用例；merge `9ab1e4eec`，QA PASS @ `d3ab106e3`），**17b-3b 攻杀 RNG 也已合入**（`RandomByte(7-L)` 抽数接线：`Option` 签名 + `world.rng` + 三用例；merge `cdedad03c`，QA PASS @ `a95e25c5a`）；但 17b 的证据不并入 IT-17 的 evidence 面 ⇒ 本域仍不计 verified。657 本卡按同值发。 【IT-17b 结构层偏差】MagIdx>=50 时 oracle MagicArr 越界抛 IndexOutOfRangeException，本仓选择跳过并 WRN（不把内容数据错误升级成崩溃）；用例 magic_arr_ignores_id_out_of_range 钉住。17a 批 0 抽是结构性（无 rng 形参、不含攻杀）；攻杀 RNG 已由 17b-3b 接线（见上）。"
     },
     {
       "id": "IT-18",
