@@ -22,9 +22,11 @@
 //!
 //! # 已知缺口（登记，不静默）
 //!
-//! 1. `RM_SYSMESSAGE` 的文本（oracle `SysMsg(MessageSettings.CanotPickUpItem, Red, Hint)`）由
-//!    `MessageSettings` 配置提供，`ground::pick_up` 的 `QueuedNotice` **不带文本** ⇒
-//!    本层用 [`WireSession::sys_msg`] 显式注入；缺该输入时**跳过**（不编造空文本）。
+//! 1. `RM_SYSMESSAGE` 的文本：取件一条（oracle `SysMsg(MessageSettings.CanotPickUpItem, Red, Hint)`）
+//!    在 `ground::pick_up` 的纯函数里拿不到配置 ⇒ 通知标记为 `NoticeText::SessionPickup`，
+//!    由本层用 [`WireSession::sys_msg`] 注入；缺该输入时**跳过**（不编造空文本）。
+//!    吃饭/修复油/彩票的通知自带 `NoticeText::Inline`（入队时由 `useitem` / `handle_eat_cmd`
+//!    放好文本，见卡 `openmir2-runtime-sysmsg-text-frames`），**不走**会话回退。
 //! 2. 装配地面物品时 `BagItem.dura/dura_max/desc` 不在 world 只读视图里
 //!    （`FloorItemMeta` 只记 `kind/index/count/item_id/of_base_object`）⇒ 取 `BagItem` 默认值。
 //!    要逐字节复原需扩 world 记账（下一片，需 owner 放行写分片）。
@@ -39,7 +41,7 @@ use crate::ground::{
 };
 use crate::npc::SendMsg;
 use crate::smframe;
-use crate::useitem::{my_status, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
+use crate::useitem::{my_status, NoticeText, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
 use mir2_world_bevy::{FloorItemKind, FloorItemView};
 
 /// 接线层在一次 pickup/drop 处理里需要读到的**会话态**（oracle `PlayObject` 上的当下值）。
@@ -56,7 +58,8 @@ pub struct WireSession {
     /// `BaseObject.Abil.Exp`（**基础**，`SM_WINEXP` 的 `Recog` 取它——oracle `GetExp` 只改 `Abil`，
     /// `WAbil.Exp` 在非升级后**陈旧**，不可用它当 `Recog`）。
     pub abil_exp: i32,
-    /// `MessageSettings.CanotPickUpItem` 的 GBK 原文；缺 ⇒ `RM_SYSMESSAGE` 不产出（缺口 1）。
+    /// `MessageSettings.CanotPickUpItem` 的 GBK 原文。**只服务 `NoticeText::SessionPickup`**
+    /// （取件一条）；其余通知自带文本，缺文本时不产帧——不做全域回退。
     pub sys_msg: Option<Vec<u8>>,
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`）——`RM_MYSTATUS` 的 `GetMyStatus()`
     /// （`PlayObject.Base.cs:1183`）读它（**制药/食药片 WB**：`CM_EAT` StdMode 1 的跨档出帧）。
@@ -104,15 +107,31 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
             session.wabil.max_hp,
         )),
         RM_GOLDCHANGED => Some(smframe::sm_goldchanged(session.gold, session.game_gold)),
-        RM_SYSMESSAGE => session.sys_msg.as_deref().map(|msg| {
-            smframe::sm_sysmessage(
-                session.actor_id,
-                // `MakeWord((ushort)nParam1, (ushort)nParam2)`：低 16 位（G-9）。
-                u16::try_from(n.n_param1 & 0xFFFF).unwrap_or(0),
-                u16::try_from(n.n_param2 & 0xFFFF).unwrap_or(0),
-                msg,
-            )
-        }),
+        RM_SYSMESSAGE => {
+            // 文本来源按**通知种类**收窄（卡 `openmir2-runtime-sysmsg-text-frames` §4）：
+            // ① `Inline`：调用点已知 `sMsg`（禁药/修复油/彩票）——`String.conf` 的 cp936
+            //    在此**唯一一次**编回字节，随后 `sm_sysmessage` 做 EDCode；
+            // ② `SessionPickup`：**只有取件**这条允许回退到会话静态文本
+            //    `WireSession::sys_msg`（`MessageSettings.CanotPickUpItem` 在
+            //    `ground::pick_up` 的纯函数里拿不到配置）；
+            // ③ `None`：不产帧。**不做全域回退**——否则会话里留着的取件文案会串到
+            //    吃饭/彩票帧上（负例见 `sysmessage_inline_text_never_uses_session_text`）。
+            use std::borrow::Cow;
+            let text: Option<Cow<'_, [u8]>> = match &n.text {
+                NoticeText::Inline(t) => Some(Cow::Owned(crate::enter::gbk(t))),
+                NoticeText::SessionPickup => session.sys_msg.as_deref().map(Cow::Borrowed),
+                NoticeText::None => None,
+            };
+            text.map(|msg| {
+                smframe::sm_sysmessage(
+                    session.actor_id,
+                    // `MakeWord((ushort)nParam1, (ushort)nParam2)`：低 16 位（G-9）。
+                    u16::try_from(n.n_param1 & 0xFFFF).unwrap_or(0),
+                    u16::try_from(n.n_param2 & 0xFFFF).unwrap_or(0),
+                    &msg,
+                )
+            })
+        }
         RM_MENU_OK => Some(smframe::sm_menu_ok(n.n_param1, &[])),
         // `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`：`PlayObject.Message.cs:1666-1669` 的
         // `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)`。`Recog` 取**基础** `Abil.Exp`
@@ -477,6 +496,7 @@ mod tests {
             n_param1: 50,
             n_param2: 0,
             n_param3: 0,
+            text: NoticeText::None,
         };
         let body = notice_frame(&n, &s).expect("SM_WINEXP");
         let recog = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
@@ -607,6 +627,7 @@ mod tests {
                 n_param1: 70001,
                 n_param2: 32,
                 n_param3: 33,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -620,6 +641,7 @@ mod tests {
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -634,6 +656,7 @@ mod tests {
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -649,6 +672,8 @@ mod tests {
                 n_param1: 0xFF,
                 n_param2: 0x00,
                 n_param3: 0,
+                // 取件通知：**唯一**允许用会话静态文本的种类（`MessageSettings.CanotPickUpItem`）。
+                text: NoticeText::SessionPickup,
             },
             &s,
         )
@@ -662,6 +687,7 @@ mod tests {
                 n_param1: 4660,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -685,6 +711,7 @@ mod tests {
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -700,6 +727,7 @@ mod tests {
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::None,
             },
             &s,
         )
@@ -707,21 +735,69 @@ mod tests {
         assert_eq!(low, header(0, 708, 0, 0, 0));
     }
 
-    /// 缺 `sys_msg` ⇒ `RM_SYSMESSAGE` 不产出（缺口 1，不编造空文本）。
+    /// **负例（卡 §4「回退按通知种类收窄」）**：通知**无文本**（`NoticeText::None`）时，
+    /// 即使会话里恰好留着取件静态文本（`sys_msg = Some(...)`），也**不产帧**——否则取件文案
+    /// 会串到吃饭/彩票帧上。同一条通知标成 `SessionPickup` 时才走会话回退（证明通道仍在）。
     #[test]
-    fn sysmessage_without_text_is_skipped() {
-        let s = session(1, 0, 0, None);
-        assert!(notice_frame(
+    fn sysmessage_without_text_is_skipped_even_with_session_text() {
+        let s = session(1, 0, 0, Some(&b"cannot-pick-up"[..]));
+        assert!(
+            notice_frame(
+                &QueuedNotice {
+                    ident: RM_SYSMESSAGE,
+                    w_param: 0,
+                    n_param1: 0,
+                    n_param2: 0,
+                    n_param3: 0,
+                    text: NoticeText::None,
+                },
+                &s
+            )
+            .is_none(),
+            "无文本通知不得借用会话静态文本"
+        );
+        let pickup = notice_frame(
             &QueuedNotice {
                 ident: RM_SYSMESSAGE,
                 w_param: 0,
                 n_param1: 0,
                 n_param2: 0,
                 n_param3: 0,
+                text: NoticeText::SessionPickup,
             },
-            &s
+            &s,
         )
-        .is_none());
+        .expect("取件通知回退会话文本");
+        let mut expect = header(1, 100, 0, 0, 1);
+        expect.extend_from_slice(&edcode::encode(b"cannot-pick-up"));
+        assert_eq!(pickup, expect);
+    }
+
+    /// **文本不串**（卡 §4 负例之二）：`Inline` 通知 + 会话里留着取件静态文本 ⇒ 帧尾必须是
+    /// `Inline` 的 GBK 字节、**不是**会话文本；同时钉住「整帧 = 头 ++ EDCode(gbk(文本))」
+    /// 这条唯一编码路径（卡 §3-3）。
+    #[test]
+    fn sysmessage_inline_text_never_uses_session_text() {
+        let s = session(9, 0, 0, Some(&b"CANOT-PICKUP"[..]));
+        let text = "武器修复成功...";
+        let body = notice_frame(
+            &QueuedNotice {
+                ident: RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 0xDB,
+                n_param2: 0xFF,
+                n_param3: 0,
+                text: NoticeText::Inline(text.to_string()),
+            },
+            &s,
+        )
+        .expect("Inline 文本必须产帧");
+        let mut expect = header(9, 100, 0xFFDB, 0, 1);
+        expect.extend_from_slice(&edcode::encode(&crate::enter::gbk(text)));
+        assert_eq!(body, expect, "整帧 = 头 ++ EDCode(gbk(Inline))");
+        let mut session_frame = header(9, 100, 0xFFDB, 0, 1);
+        session_frame.extend_from_slice(&edcode::encode(b"CANOT-PICKUP"));
+        assert_ne!(body, session_frame, "不得回落到会话文本");
     }
 
     /// 装配：只装目标图；金币 `item_id`/`count`/归属、物品模板名逐项对上 world 视图。

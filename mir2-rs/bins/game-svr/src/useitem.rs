@@ -43,7 +43,10 @@
 //!    - `IncHealthSpell` 尾部 `HealthSpellChanged()` ⇒ `RM_HEALTHSPELLCHANGED=10052`
 //!      （`BaseObject.cs:952`；`Race == Play` ⇒ `SendUpdateMsg`，`SendHp` 关闭时不再发 Ref）；
 //!    - 成功尾部 `WeightChanged()` ⇒ `RM_WEIGHTCHANGED=10115`（同时 `WAbil.Weight = RecalcBagWeight()`）；
-//!    - `BoCanUseItem == false` ⇒ `RM_MENU_OK=10309`（`nParam1 = ActorId`）。
+//!    - `BoCanUseItem == false` ⇒ `RM_MENU_OK=10309`（`nParam1 = ActorId`）；
+//!    - `SysMsg(sMsg, color, Hint)` ⇒ `RM_SYSMESSAGE=11004`，**带文本**（`NoticeText::Inline`；
+//!      禁药 `CanotUseDrugOnThisMap` 红字 / 修复油 `WeaponRepairSuccess` 绿字），
+//!      出帧走 `pickwire::notice_frame`（卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!
 //! ⚠️ 真实协议上「即时帧晚于通知、还是通知晚于即时帧」由消息泵决定；本接缝**不**合并两条流，
 //! 只各自保序（oracle 探针也是分开截获的，见 `tests/parity/m3/eat-probe`）。
@@ -75,9 +78,9 @@
 //!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
 //!   - IT-12 Shape4 祝福油 `WeaptonMakeLuck()`（`:2258`）——未实现，T-17；
 //!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
-//!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（用户可见）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`；
-//!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case10，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 10` 臂；见卡 §9.10；**无"已满"守卫 ⇒ 已满仍吃**）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（用户可见，同 IT-14）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`；
-//!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`）——**已实现**（本模块只置 `eaten=true`；抽取/6 段闸/金币/进程级计数在宿主 `handle_eat_cmd`，见 `winlottery` 模块头与卡 §9.11）；**运行期 `SM_SYSMESSAGE` 文本帧缺口（`WinLotteryNMsg`/`NotWinLotteryMsg`）**见 `docs/issues/openmir2-runtime-sysmsg-text-frames.md`。
+//!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case9，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 9` 臂；oracle 对拍见卡 §9.9）；绿字文本已进队列（`NoticeText::Inline(WeaponRepairSuccess)`，卡 `openmir2-runtime-sysmsg-text-frames`）；
+//!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（StdMode3 的 `default: EatUseItems(shape)` 的 case10，**非 StdMode0**）——**已实现**（`use_item` 的 `3 if tpl.shape == 10` 臂；见卡 §9.10；**无"已满"守卫 ⇒ 已满仍吃**）；绿字文本同 IT-14；
+//!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`）——**已实现**（本模块只置 `eaten=true`；抽取/6 段闸/金币/进程级计数在宿主 `handle_eat_cmd`，见 `winlottery` 模块头与卡 §9.11）；绿字/红字文本由宿主入队（`WinLotteryNMsg`/`NotWinLotteryMsg`，卡 `openmir2-runtime-sysmsg-text-frames`）。
 //!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
 //! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
 //!   `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时移除本件并解包 6 件
@@ -133,16 +136,41 @@ pub const RM_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
 /// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
 pub const HUNGER_STATUS_MAX: i32 = 5000;
 
+/// 通知携带的文本（oracle `SendMessage.Buff` = `SendMsg(..., sMsg)` 的 `sMsg`）。
+///
+/// 编码口径（卡 `openmir2-runtime-sysmsg-text-frames` §3-3「编码路径只有一条」）：
+/// 配置层 `strings.rs::parse` 把 `String.conf` 的 cp936 字节 decode 成 Rust `String`
+/// （与 oracle `ConfigFile` 用 `Encoding.GetEncoding("GB2312")` 读进 .NET string 同一道），
+/// `Inline` 原样保存该 `String`，**只在出帧那一刻**由 `pickwire::notice_frame` 调 `gbk()`
+/// 编回 cp936、再交 `smframe::sm_sysmessage` 做 EDCode——与 `PartyEvent::SysMessage` →
+/// `party::event_body` 同一条路径，不存在「UTF-8 存 → 中间转 GBK → 再 EDCode」的第二段转换。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeText {
+    /// 本通知不带文本（oracle `SendMsg(..., "")`）。
+    None,
+    /// 文本由**队列**携带：`SysMsg(sMsg, …)` 的调用点已知 `sMsg`（吃饭/修复油/彩票）。
+    Inline(String),
+    /// 文本由**宿主会话**注入：**仅取件**一条。oracle 的 `MessageSettings.CanotPickUpItem`
+    /// 在 `ground::pick_up` 这个纯函数里拿不到（配置在宿主），故由 `WireSession::sys_msg` 补。
+    ///
+    /// **回退必须按通知种类收窄**（卡 §4 要求）：只有本变体允许读会话静态文本；其余通知
+    /// 若走 `session.sys_msg` 回退，会把取件文案串到吃饭/彩票帧上（见 `pickwire` 的负例）。
+    SessionPickup,
+}
+
 /// `MsgQueue` 里的一条延时 `SendMessage`（`src/Modules/SystemModule/Data/SendMessage.cs`）。
 ///
-/// 只保留会进线缆头的五个字段（`ActorId`/`DeliveryTime`/`Buff` 属于投递层，不在本片判据）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 保留会进线缆头的五个字段 + `SendMsg` 的 `sMsg`（[`NoticeText`]）；
+/// `ActorId`/`DeliveryTime` 属于投递层，不在本片判据。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedNotice {
     pub ident: i32,
     pub w_param: i32,
     pub n_param1: i32,
     pub n_param2: i32,
     pub n_param3: i32,
+    /// `SendMsg` 的 `sMsg`（见 [`NoticeText`]）。
+    pub text: NoticeText,
 }
 
 impl QueuedNotice {
@@ -154,6 +182,7 @@ impl QueuedNotice {
             n_param1: 0,
             n_param2: 0,
             n_param3: 0,
+            text: NoticeText::None,
         }
     }
 
@@ -165,19 +194,51 @@ impl QueuedNotice {
             n_param1: actor_id,
             n_param2: 0,
             n_param3: 0,
+            text: NoticeText::None,
         }
     }
 
-    /// `BaseObject.SysMsg(CanotUseDrugOnThisMap, MsgColor.Red, MsgType.Hint)`
-    /// （`BaseObject.cs:1656`）：`SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, msg)`。
-    /// 文本本身（`MessageSettings.CanotUseDrugOnThisMap`）不在本接缝的观测面内。
-    const fn sysmsg(fcolor: u16, bcolor: u16) -> Self {
+    /// `BaseObject.SysMsg(sMsg, MsgColor.Red, MsgType.Hint)`（`BaseObject.cs:1656`）：
+    /// `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, sMsg)`。
+    ///
+    /// `sMsg` 由调用点给出（`MessageSettings.CanotUseDrugOnThisMap`）；缺文本时不产帧。
+    fn sysmsg_text(fcolor: u16, bcolor: u16, text: &str) -> Self {
         Self {
             ident: RM_SYSMESSAGE,
             w_param: 0,
             n_param1: fcolor as i32,
             n_param2: bcolor as i32,
             n_param3: 0,
+            text: NoticeText::Inline(text.to_string()),
+        }
+    }
+}
+
+/// `MessageSettings` 里本章节用到的文本（`String.conf [String]` 段；缺键回落 oracle 源码默认值）。
+///
+/// 单独成结构（而不是往 `UseItemContext` 里塞更多散字段）：键名与 `MessageSettings.cs`
+/// 逐字对应，缺键默认只在这里定义一次；`Default` = oracle 的源码默认值（部署值由
+/// `String.conf` 覆盖，见 `strings.rs::parse`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SysMsgTexts<'a> {
+    /// `MessageSettings.CanotUseDrugOnThisMap`（`MessageSettings.cs:91`；键 `CanotUseDrugOnThisMap`）。
+    pub canot_use_drug_on_this_map: &'a str,
+    /// `MessageSettings.WeaponRepairSuccess`（`MessageSettings.cs:199`；键 `WeaponRepairSuccess`）。
+    pub weapon_repair_success: &'a str,
+    /// `MessageSettings.WinLottery1Msg..=WinLottery6Msg`（`MessageSettings.cs:204-209`），
+    /// idx0 = 一等奖（`WinLottery1Msg`）。
+    pub win_lottery: [&'a str; 6],
+    /// `MessageSettings.NotWinLotteryMsg`（`MessageSettings.cs:210`；键 `NotWinLotteryMsg`）。
+    pub not_win_lottery: &'a str,
+}
+
+impl Default for SysMsgTexts<'_> {
+    fn default() -> Self {
+        Self {
+            canot_use_drug_on_this_map: crate::strings::DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP,
+            weapon_repair_success: crate::strings::DEFAULT_WEAPON_REPAIR_SUCCESS,
+            win_lottery: crate::strings::DEFAULT_WIN_LOTTERY_MSGS,
+            not_win_lottery: crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG,
         }
     }
 }
@@ -214,6 +275,9 @@ pub struct UseItemContext<'a> {
     pub green_msg_bcolor: u16,
     /// `Config.RepairItemDecDura`（修复油耐久上限衰减除数，IT-14；普通修复 `DuraMax -= missing/dec`）。
     pub repair_item_dec_dura: i32,
+    /// `MessageSettings` 的文本（`SysMsg` 的 `sMsg`）：禁药红字与修复油绿字。
+    /// 缺省 = oracle 源码默认（见 [`SysMsgTexts`]）。
+    pub sysmsg: SysMsgTexts<'a>,
     /// `RefMyStatus()` 里 `RecalcAbilitys()` 的观测输入（`PlayObject.cs:2008`）。StdMode 1 跨档才用到；
     /// `None` 时**不**复算 `WAbil`（只发 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）——见模块「未做清单」T-17。
     pub recalc: Option<RecalcInputs<'a>>,
@@ -355,7 +419,11 @@ pub fn use_item(
                     // 入 `MsgQueue` 并 `return false`。仅 StdMode 0/1/2/3 会进 `EatItems`
                     //（4/31 走 `ReadBook`/`UseStdModeFunItem`，不受 `boNODRUG` 约束）。
                     if matches!(tpl.std_mode, 0..=3) && ctx.no_drug {
-                        notices.push(QueuedNotice::sysmsg(ctx.red_msg_fcolor, ctx.red_msg_bcolor));
+                        notices.push(QueuedNotice::sysmsg_text(
+                            ctx.red_msg_fcolor,
+                            ctx.red_msg_bcolor,
+                            ctx.sysmsg.canot_use_drug_on_this_map,
+                        ));
                     } else {
                         match tpl.std_mode {
                             0 => {
@@ -487,6 +555,7 @@ pub fn use_item(
                                     n_param1: i32::from(tpl.dura_max),
                                     n_param2: 0,
                                     n_param3: 0,
+                                    text: NoticeText::None,
                                 });
                                 eaten = true;
                             }
@@ -506,14 +575,13 @@ pub fn use_item(
                                                 n_param1: i32::from(w.dura),
                                                 n_param2: i32::from(w.dura_max),
                                                 n_param3: 0,
+                                                text: NoticeText::None,
                                             });
-                                            notices.push(QueuedNotice {
-                                                ident: RM_SYSMESSAGE,
-                                                w_param: 0,
-                                                n_param1: i32::from(ctx.green_msg_fcolor),
-                                                n_param2: i32::from(ctx.green_msg_bcolor),
-                                                n_param3: 0,
-                                            });
+                                            notices.push(QueuedNotice::sysmsg_text(
+                                                ctx.green_msg_fcolor,
+                                                ctx.green_msg_bcolor,
+                                                ctx.sysmsg.weapon_repair_success,
+                                            ));
                                             eaten = true;
                                         }
                                     }
@@ -531,14 +599,13 @@ pub fn use_item(
                                             n_param1: i32::from(w.dura),
                                             n_param2: i32::from(w.dura_max),
                                             n_param3: 0,
+                                            text: NoticeText::None,
                                         });
-                                        notices.push(QueuedNotice {
-                                            ident: RM_SYSMESSAGE,
-                                            w_param: 0,
-                                            n_param1: i32::from(ctx.green_msg_fcolor),
-                                            n_param2: i32::from(ctx.green_msg_bcolor),
-                                            n_param3: 0,
-                                        });
+                                        notices.push(QueuedNotice::sysmsg_text(
+                                            ctx.green_msg_fcolor,
+                                            ctx.green_msg_bcolor,
+                                            ctx.sysmsg.weapon_repair_success,
+                                        ));
                                         eaten = true;
                                     }
                                 }
@@ -1121,6 +1188,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1296,6 +1364,7 @@ mod tests {
                 green_msg_fcolor: u16v(&c["green_msg_fcolor"]),
                 green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
                 repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
+                sysmsg: SysMsgTexts::default(),
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
@@ -1436,6 +1505,20 @@ mod tests {
             got.sort();
             want.sort();
             assert_eq!(got, want, "{name}: 延时通知(七字段排序序列)与 oracle 不符");
+            // 卡 `openmir2-runtime-sysmsg-text-frames`：`RM_SYSMESSAGE` 必须**带文本**（旧版为空 ⇒
+            // 运行期被 `notice_frame` 丢弃）。禁药支是红字、修复油支是绿字，据此选期望文本。
+            for n in out.notices.iter().filter(|n| n.ident == RM_SYSMESSAGE) {
+                let want_text = if n.n_param1 == i32::from(ctx.red_msg_fcolor) {
+                    ctx.sysmsg.canot_use_drug_on_this_map
+                } else {
+                    ctx.sysmsg.weapon_repair_success
+                };
+                assert_eq!(
+                    n.text,
+                    NoticeText::Inline(want_text.to_string()),
+                    "{name}: RM_SYSMESSAGE 文本"
+                );
+            }
             // 报告同 priority 内是否多 ident（供裁定是否需要单列同优先级内序）。
             let mut by_prio: std::collections::BTreeMap<i32, std::collections::BTreeSet<i32>> =
                 std::collections::BTreeMap::new();
@@ -1608,6 +1691,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut item_number = 0;
@@ -1657,6 +1741,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut item_number = 0;
@@ -1713,6 +1798,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut item_number = 0;
@@ -1750,6 +1836,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -1801,6 +1888,7 @@ mod tests {
             green_msg_fcolor: u16v(&c["green_msg_fcolor"]),
             green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
             repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -1821,6 +1909,12 @@ mod tests {
         assert_eq!(out.notices[0].ident, RM_SYSMESSAGE);
         assert_eq!(out.notices[0].n_param1, 255, "前景色 = RedMsgFColor");
         assert_eq!(out.notices[0].n_param2, 56, "背景色 = RedMsgBColor");
+        // 卡 `openmir2-runtime-sysmsg-text-frames`：红字必须**带文本**（缺省 = `MessageSettings.CanotUseDrugOnThisMap`）。
+        assert_eq!(
+            out.notices[0].text,
+            NoticeText::Inline(crate::strings::DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP.to_string()),
+            "禁药红字文本"
+        );
         assert_eq!(item_list, before, "禁药不许消耗物品");
     }
 
@@ -1865,6 +1959,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut item_number = 0;
@@ -1945,6 +2040,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2035,6 +2131,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut item_number = 0;
@@ -2102,6 +2199,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2194,6 +2292,7 @@ mod tests {
             green_msg_fcolor: 0,
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
+            sysmsg: SysMsgTexts::default(),
             recalc: None,
         };
         let pack = BagItem {

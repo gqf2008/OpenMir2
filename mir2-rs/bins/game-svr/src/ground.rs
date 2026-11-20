@@ -131,7 +131,7 @@ use crate::ability::{Ability, ItemCatalog};
 use crate::bag::{
     add_item_to_bag_with_sink, item_display_name, BagItem, Frame, WeightSink, MAX_BAG_ITEM,
 };
-use crate::useitem::QueuedNotice;
+use crate::useitem::{NoticeText, QueuedNotice};
 use mir2_shared::rng::RandomNumber;
 
 /// `Messages.CM_PICKUP`（`src/OpenMir2/Messages.cs:46`）。
@@ -396,6 +396,23 @@ fn notice(ident: i32, w_param: i32, n_param1: i32, n_param2: i32, n_param3: i32)
         n_param1,
         n_param2,
         n_param3,
+        text: NoticeText::None,
+    }
+}
+
+/// 取件红字（`SendMsg(RM_SYSMESSAGE, 0, RedF, RedB, 0, CanotPickUpItem)`）。
+///
+/// 文本 = oracle `MessageSettings.CanotPickUpItem`，本纯函数拿不到配置 ⇒ 标
+/// `NoticeText::SessionPickup`，由宿主 `WireSession::sys_msg` 注入（**只有这一种通知**
+/// 允许读会话静态文本，见 `pickwire::notice_frame`）。
+fn session_sysmsg(fcolor: i32, bcolor: i32) -> QueuedNotice {
+    QueuedNotice {
+        ident: RM_SYSMESSAGE,
+        w_param: 0,
+        n_param1: fcolor,
+        n_param2: bcolor,
+        n_param3: 0,
+        text: NoticeText::SessionPickup,
     }
 }
 
@@ -483,12 +500,9 @@ pub fn pick_up(
             ground.of_base_object,
         )
     {
-        notices.push(notice(
-            RM_SYSMESSAGE,
-            0,
+        notices.push(session_sysmsg(
             i32::from(ctx.red_msg_f_color),
             i32::from(ctx.red_msg_b_color),
-            0,
         ));
         return PickUpOutcome {
             immediate_frames,
@@ -1008,12 +1022,19 @@ mod tests {
     }
 
     fn notice(v: &Value) -> QueuedNotice {
+        let ident = i32v(&v["ident"]);
         QueuedNotice {
-            ident: i32v(&v["ident"]),
+            ident,
             w_param: i32v(&v["w_param"]),
             n_param1: i32v(&v["n_param1"]),
             n_param2: i32v(&v["n_param2"]),
             n_param3: i32v(&v["n_param3"]),
+            // 本模块只产一种带文本的通知：取件红字（文本由会话注入）。其余一律无文本。
+            text: if ident == RM_SYSMESSAGE {
+                NoticeText::SessionPickup
+            } else {
+                NoticeText::None
+            },
         }
     }
 
