@@ -15513,7 +15513,7 @@ fn handle_spell_cmd_with_magic(
     // MP 包装层的 53（6/48 延后）、版本门都已在本函数更早处完成。
     if default_arm
         && !magic::is_warr_skill(i32::from(req.magic_id))
-        && matches!(req.magic_id, 6 | 42 | 48 | 50)
+        && matches!(req.magic_id, 6 | 39 | 42 | 48 | 50)
     {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy` snap（与 8/21/37、B1/B2/B3 同口径）。
@@ -15857,6 +15857,45 @@ fn handle_spell_cmd_with_magic(
                             tx,
                             ty,
                             out.target.unwrap_or(0),
+                            Some(&mut buf),
+                            Some(1000),
+                        );
+                    }
+                    // ---- 39 群体攻击（`MagicManager.cs:549-553` + helper `:942-978`）----
+                    39 => {
+                        let out = world.cast_group_melee_spell(actor_id, magic_level, tx, ty);
+                        // `:974` 的 `RM_10205` ⇒ `SM_716`（p3 = 1），**每个未跳过对象**一条
+                        // （含非 proper 的玩家 target），广播含自己、优先级 `10205 & 0xFF = 221`。
+                        for (x, y) in &out.icons_716 {
+                            let body = smframe_ext::sm_716(actor_id, *x, *y, 1);
+                            buf.push_broadcast_cached(
+                                world,
+                                online,
+                                actor_id,
+                                true,
+                                (mir2_protocol::messages::RM_10205 & 0xFF) as u8,
+                                &body,
+                            );
+                        }
+                        // 共享尾：`boSpellFire` 恒 true ⇒ `RM_MAGICFIRE`(638)；`boTrain` ⇒ 640。
+                        // `StruckDamage` 与 `RM_DELAYMAGIC` 已在 world 侧；目标侧 RM_MAGSTRUCK 由
+                        // 200ms 投递入 `pending_mag_struck`（被动怪只记 RM、不 Operate）。
+                        finish_spell_tail(
+                            world,
+                            online,
+                            gates,
+                            saves,
+                            chr_name,
+                            actor_id,
+                            magic,
+                            req.magic_id,
+                            magic_level,
+                            tran_point,
+                            out.bo_train,
+                            caster_abil_level,
+                            tx,
+                            ty,
+                            base_target.unwrap_or(0),
                             Some(&mut buf),
                             Some(1000),
                         );
@@ -67013,6 +67052,439 @@ SendRefMsgRange=15
         cols[2].parse().expect("INJECT_OK 的 seed 必须是 int")
     }
 
+    // ======================================================================
+    // 卡 `openmir2-magic-parity` §39：39 `SKILL_GROUPDEDING` 真实台账驱动
+    // ======================================================================
+
+    /// 39 的 rig：几何/魔表与 C# Golden 同（caster 100,100；target 101,100；obs_in 105,100；
+    /// obs_out 140,100；魔表 `{39, effect=1, effect_type=1, train_lv=0}`）。
+    fn groupdeding_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            39,
+            &[(39, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        // 魔表行 = C# `new MagicInfo { MagicId=39, Effect=1, EffectType=1 }`（其余缺省 0，
+        // 尤其 `train_lv=0` ⇒ 训练尾不触发 `CheckMagicLevelUp` 升级支）。
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 39,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+            sg.state.wabil.hp = 500;
+            sg.state.wabil.max_hp = 500;
+        }
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        {
+            let mut tsg = spell_session_ground(target);
+            tsg.equip.abil.level = 20;
+            tsg.equip.abil.max_exp = 50;
+            tsg.state.wabil.level = 20;
+            tsg.state.wabil.hp = 100;
+            tsg.state.wabil.max_hp = 100;
+            rig.ground_sessions.insert("target".into(), tsg);
+        }
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        rig.saves
+            .get_mut("caster")
+            .unwrap()
+            .record
+            .data
+            .magic
+            .as_mut()
+            .unwrap()[0]
+            .as_mut()
+            .unwrap()
+            .level = 1;
+        rig
+    }
+
+    /// 逐目标命中门抽值走查（与装置侧 C# 同一算法）：`mon{idx} -> (gate_idx, gate_val, hit)`。
+    ///
+    /// 抽序（HAM_PEACE ⇒ 只有非死怪进伤害链）：每只 `GetAttackPower`（2 抽）+ 命中门
+    /// `Random(SpeedPoint)`（1 抽）+ 命中则护甲（1–2 抽）；最后若有任一非死怪则共享尾
+    /// 训练 `Random(3)+1`（1 抽）。走查必须恰好耗尽 `draws`（夹具假设被破坏即红）。
+    fn gdd_gate_ledger(
+        specs: &[[i64; 11]],
+        hit_point: i32,
+        draws: &[i64],
+        label: &str,
+    ) -> std::collections::HashMap<usize, (i32, i64, bool)> {
+        let mut out = std::collections::HashMap::new();
+        let mut order: Vec<usize> = (0..specs.len()).filter(|i| specs[*i][9] == 0).collect();
+        order.sort_by_key(|i| (specs[*i][0], specs[*i][1]));
+        let mut di = 0usize;
+        for idx in order {
+            let ac = specs[idx][10];
+            di += 2;
+            assert!(di < draws.len(), "[{label}] mon{idx} 命中门越界");
+            let gate_idx = di;
+            let gate = draws[di];
+            di += 1;
+            let hit = gate < i64::from(hit_point);
+            if hit {
+                let lo = ac & 0xFF;
+                assert!(di < draws.len(), "[{label}] mon{idx} 护甲骰越界");
+                let r = draws[di];
+                di += 1;
+                if lo + r > 0 {
+                    di += 1;
+                }
+            }
+            out.insert(idx, (i32::try_from(gate_idx).unwrap(), gate, hit));
+        }
+        if specs.iter().any(|m| m[9] == 0) {
+            di += 1; // 共享尾训练抽 `Random(3)+1`
+        }
+        assert_eq!(
+            di,
+            draws.len(),
+            "[{label}] 逐目标抽值走查未耗尽：consumed={di} recorded={}",
+            draws.len()
+        );
+        out
+    }
+
+    fn groupdeding_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "groupdeding";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+
+        let mut rig = groupdeding_rig(id_base);
+        let target = fireball_actor(&rig, "target");
+        if let Some(a) = golden_fixture_opt(stem, label, "anti_magic") {
+            rig.world
+                .entities
+                .get_mut(target)
+                .unwrap()
+                .vitals
+                .anti_magic = u16::try_from(a).unwrap_or(0);
+        }
+        if let Some(m) = golden_fixture_opt(stem, label, "target_max_hp") {
+            let m = u16::try_from(m).unwrap_or(0);
+            rig.world.entities.get_mut(target).unwrap().vitals.max_hp = m;
+            rig.ground_sessions
+                .get_mut("target")
+                .unwrap()
+                .state
+                .wabil
+                .max_hp = m;
+        }
+        if let Some(h) = golden_fixture_opt(stem, label, "target_hp") {
+            let h = u16::try_from(h).unwrap_or(0);
+            rig.world.entities.get_mut(target).unwrap().vitals.hp = h;
+            rig.ground_sessions
+                .get_mut("target")
+                .unwrap()
+                .state
+                .wabil
+                .hp = h;
+        }
+        let hit_point =
+            i32::try_from(golden_fixture_opt(stem, label, "caster_hit_point").unwrap_or(5))
+                .unwrap();
+        let dc = i32::try_from(golden_fixture_opt(stem, label, "caster_dc").unwrap_or(0)).unwrap();
+        let attack_mode =
+            u8::try_from(golden_fixture_opt(stem, label, "caster_attack_mode").unwrap_or(0))
+                .unwrap();
+        let caster = rig.caster;
+        {
+            let e = rig.world.entities.get_mut(caster).unwrap();
+            e.vitals.hit_point = u8::try_from(hit_point).unwrap();
+            e.vitals.dc = dc;
+            e.flags.attack_mode = attack_mode;
+        }
+        let specs = golden_monsters(stem, label);
+        let monster_ids = place_monsters(&mut rig.world, &specs, id_base + 10);
+        assert_eq!(monster_ids.len(), specs.len());
+        let mon_hp_before: Vec<u16> = monster_ids
+            .iter()
+            .map(|id| rig.world.entities.get(*id).unwrap().hp)
+            .collect();
+
+        // **种子/台账安装必须在放怪之后**（C# `RngSeam.Install` 在 DoSpell 前、怪物创建后；
+        // `place_monsters` 的 `world.tick()` 不得污染播种后的序列）。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请以 --exact 单跑本用例"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+
+        let n0 = trace_line_count(&trace);
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：生产入口施法 ----
+        rig.cast(39, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mon_hp_after: Vec<u16> = monster_ids
+            .iter()
+            .map(|id| rig.world.entities.get(*id).unwrap().hp)
+            .collect();
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+
+        // 交付前抓 caster 的自延迟载荷（RM_DELAYMAGIC / RM_MAGIC_LVEXP）。
+        let mut delay_msgs: Vec<(i32, i32, i32, i32, u8)> = Vec::new();
+        let mut lv_exp: Option<(i32, i32, i32)> = None;
+        for m in rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.actor_id == caster)
+        {
+            if m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC {
+                delay_msgs.push((m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+            } else if m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP {
+                lv_exp = Some((m.n_param1, m.n_param2, m.n_param3));
+            }
+        }
+
+        // ---- 段②：按 due 时刻分步推进世界时钟并交付（不调 drain_b4：怪物 RM_MAGSTRUCK
+        // 只记 RM、不 Operate；B3 只出 640 等自延迟帧）。----
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut struck_rm: Vec<(i32, i32)> = Vec::new();
+        let mut elapsed = 0u64;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            for s in std::mem::take(&mut rig.world.pending_mag_struck) {
+                struck_rm.push((s.target_id, s.power));
+            }
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut sf, _r2) = rig.drain();
+            deliver_frames.append(&mut sf);
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 列（弱比较面）----
+        let range = chat::send_ref_msg_range();
+        let in_range = chat::hear_targets(&rig.world, caster, range);
+        let map_id = rig.world.entities.get(caster).map_or(0, |e| e.map_id);
+        let processed_coords: Vec<(i32, i32)> = rig
+            .world
+            .mag_objects_in_range(map_id, 101, 100, 1)
+            .into_iter()
+            .filter(|id| *id != caster)
+            .filter_map(|id| rig.world.entities.get(id).map(|e| (e.x, e.y)))
+            .collect();
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        let magic_p2 = game_svr::feature::make_long(101, 100);
+        for id in &in_range {
+            let Some(who) = who_of(*id) else { continue };
+            let v = rm_by_who.entry(who).or_default();
+            v.push(fireball_rm(10008, 1, 101, 100, 39, 24, false));
+            v.push(fireball_rm(
+                10120,
+                0,
+                257,
+                i64::from(magic_p2),
+                i64::from(target),
+                136,
+                false,
+            ));
+            for (x, y) in &processed_coords {
+                v.push(fireball_rm(
+                    10205,
+                    0,
+                    i64::from(*x),
+                    i64::from(*y),
+                    1,
+                    221,
+                    false,
+                ));
+            }
+        }
+        let caster_rm = rm_by_who.entry("caster".into()).or_default();
+        for (w, p1, p2, p3, prio) in &delay_msgs {
+            caster_rm.push(fireball_rm(
+                8021,
+                i64::from(*w),
+                i64::from(*p1),
+                i64::from(*p2),
+                i64::from(*p3),
+                i64::from(*prio),
+                true,
+            ));
+        }
+        if let Some((magic_id, level, tran)) = lv_exp {
+            caster_rm.push(fireball_rm(
+                10123,
+                0,
+                i64::from(magic_id),
+                i64::from(level),
+                i64::from(tran),
+                255,
+                true,
+            ));
+        }
+
+        // ---- 接收者 ----
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, socket),
+            }));
+        }
+        let cast_values: Vec<i64> = cast_rng.iter().map(|(_, r, _)| *r).collect();
+        let gate = gdd_gate_ledger(&specs, hit_point, &cast_values, label);
+        for (i, id) in monster_ids.iter().enumerate() {
+            let rm: Vec<serde_json::Value> = struck_rm
+                .iter()
+                .filter(|(tid, _)| tid == id)
+                .map(|(_, power)| fireball_rm(8044, 0, i64::from(*power), 0, 0, 108, false))
+                .collect();
+            let mut mon = serde_json::json!({
+                "Who": format!("mon{i}"),
+                "Rm": rm,
+                "Sent": Vec::<serde_json::Value>::new(),
+                "HpBefore": i64::from(mon_hp_before[i]),
+                "HpAfter": i64::from(mon_hp_after[i]),
+            });
+            if let Some((gi, gv, gh)) = gate.get(&i) {
+                mon["GateIndex"] = serde_json::json!(gi);
+                mon["GateDraw"] = serde_json::json!(gv);
+                mon["GateHit"] = serde_json::json!(gh);
+            }
+            receivers.push(mon);
+        }
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": 0,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[groupdeding {label}] seed={seed} cast_rng={:?} deliver_rng={:?} mon_hp={:?}->{:?}",
+            cast_values,
+            deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            mon_hp_before,
+            mon_hp_after
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_all_miss_hp0() {
+        groupdeding_parity_drive("all_miss_hp0", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_hit_ac_split() {
+        groupdeding_parity_drive("hit_ac_split", 2000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_miss_by_draw() {
+        groupdeding_parity_drive("miss_by_draw", 3000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_dead_excluded() {
+        groupdeding_parity_drive("dead_excluded", 4000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn groupdeding_parity_dc_range() {
+        groupdeding_parity_drive("dc_range", 5000);
+    }
+
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
     fn fireball_rig(id_base: i32, magic_id: u16, sc: u16, user_magic_level: u8) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
@@ -67226,7 +67698,7 @@ SendRefMsgRange=15
         let target = fireball_actor(&rig, "target");
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
-        let monster_ids = place_monsters(&mut rig.world, &monster_specs);
+        let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
@@ -68932,29 +69404,70 @@ SendRefMsgRange=15
     }
 
     /// 金标准 `Fixture.monsters`；不存在/为空返回空表（缺省 ⇒ 世界不放怪物 ⇒ 既有件零变化）。
-    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 8]> {
+    ///
+    /// 字段序：`[x, y, race, level, hp, life_attrib, master, target_cret, speed_point, death, ac]`。
+    /// 后三项（卡 §39）对旧 golden 缺省 `15/0/0`（= `BaseObject` ctor 缺省 / 无死 / 无护甲）⇒ 旧件零变化。
+    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 11]> {
         let v = golden_case_for(stem, label)["Fixture"]["monsters"].clone();
         let Some(arr) = v.as_array() else {
             return Vec::new();
         };
         arr.iter()
             .map(|m| {
-                let g = |k: &str| m[k].as_i64().unwrap_or_else(|| panic!("monsters.{k} 必须是整数"));
-                [g("x"), g("y"), g("race"), g("level"), g("hp"), g("life_attrib"), g("master"), g("target_cret")]
+                let g = |k: &str| {
+                    m[k].as_i64()
+                        .unwrap_or_else(|| panic!("monsters.{k} 必须是整数"))
+                };
+                let opt = |k: &str, d: i64| m[k].as_i64().unwrap_or(d);
+                // death 在 golden 里是 JSON bool（as_i64() 返回 None ⇒ 默认 0 会把
+                // 死怪当活怪；§39 dead_excluded 曾因此空过）。
+                let death = match &m["death"] {
+                    serde_json::Value::Bool(b) => i64::from(*b),
+                    other => other.as_i64().unwrap_or(0),
+                };
+                [
+                    g("x"),
+                    g("y"),
+                    g("race"),
+                    g("level"),
+                    g("hp"),
+                    g("life_attrib"),
+                    g("master"),
+                    g("target_cret"),
+                    opt("speed_point", 15),
+                    death,
+                    opt("ac", 0),
+                ]
             })
             .collect()
     }
 
     /// **世界放怪物（设施接缝，卡 §36）**：参数全部来自夹具，返回与列表同序的 actor id。
-    fn place_monsters(world: &mut mir2_world_bevy::World, monsters: &[[i64; 8]]) -> Vec<i32> {
+    fn place_monsters(
+        world: &mut mir2_world_bevy::World,
+        monsters: &[[i64; 11]],
+        first_id: i32,
+    ) -> Vec<i32> {
         let mut ids = Vec::with_capacity(monsters.len());
         for m in monsters {
-            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("golden-mon{}", ids.len()), m[0] as i32, m[1] as i32);
+            let mut e = mir2_world_bevy::EntitySpawn::new(
+                0,
+                format!("golden-mon{}", ids.len()),
+                m[0] as i32,
+                m[1] as i32,
+            );
+            // 卡 §39：C# 装置给怪物的 ActorId = `idBase + 10 + i`（`& 0xFF` 后的 ActorId 会进
+            // RM_MAGICFIRE/RM_DELAYMAGIC 载荷）。自动分配会从 `max+1` 起，与 golden 不等。
+            e.id = first_id + i32::try_from(ids.len()).expect("怪物序号越界");
             e.race = u8::try_from(m[2]).expect("race 越界");
             e.level = u8::try_from(m[3]).expect("level 越界");
             e.hp = u16::try_from(m[4]).expect("hp 越界");
             e.max_hp = e.hp;
             e.life_attrib = u8::try_from(m[5]).expect("life_attrib 越界");
+            // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `AC` / 收集期 `Death` 过滤。
+            e.speed_point = u8::try_from(m[8]).expect("speed_point 越界");
+            e.death = m[9] != 0;
+            e.ac = i32::try_from(m[10]).expect("ac 越界");
             e.ai.animal = true;
             e.rush_mode = false;
             e.admin_mode = false;
@@ -68967,7 +69480,11 @@ SendRefMsgRange=15
         world.tick();
         for (i, m) in monsters.iter().enumerate() {
             let bind = |idx: i64| -> Option<i32> {
-                if idx == 0 { None } else { Some(ids[usize::try_from(idx).expect("序号") - 1]) }
+                if idx == 0 {
+                    None
+                } else {
+                    Some(ids[usize::try_from(idx).expect("序号") - 1])
+                }
             };
             if let (Some(master), Some(e)) = (bind(m[6]), world.entities.get_mut(ids[i])) {
                 e.slave.master = Some(master);

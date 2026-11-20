@@ -160,7 +160,7 @@ public static class Program
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
-            if (name == "groupdeding") return BehaviorBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
+            if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
@@ -916,6 +916,21 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int TargetMaxHp = 100;
         public int AntiMagic = 3;
         public bool ArmRingAmulet;
+        /// <summary>
+        /// 施法者 `HitPoint`（命中门 `Random(target.SpeedPoint) >= HitPoint`）；`-1` = 不设
+        /// （保持 `BaseObject` ctor 缺省 5）。卡 §39：`0` = 门恒真 ⇒ 全 miss；`5` = `Random(0)=0 < 5` 必中。
+        /// </summary>
+        public int CasterHitPoint = -1;
+        /// <summary>
+        /// 施法者 `WAbil.DC` 原始字（Lo/Hi 字节，`HUtil32.MakeWord(lo,hi)`）；`-1` = 不设（保持缺省 0）。
+        /// 卡 §39：`MagGroupDeDing` 的 `GetAttackPower(Lo(DC), Hi(DC)-Lo(DC))` 读它。
+        /// </summary>
+        public int CasterDC = -1;
+        /// <summary>
+        /// 施法者 `AttatckMode`（`OpenMir2.Enums.AttackMode`）；`-1` = 不设（保持 ctor 缺省 0 = `HAM_ALL`）。
+        /// 卡 §39：置 `HAM_PEACE` ⇒ 只有 `Race >= Animal`（怪物）进伤害链，玩家 target 不取随机数。
+        /// </summary>
+        public int CasterAttackMode = -1;
         /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
         public int CasterHp;
         public int CasterMaxHp;
@@ -1347,9 +1362,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     /// 把扩展输入挂到 `Fixture`（`status_time_arr` / `monsters`）：只为显式给出这些输入的支出现，
     /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
     /// </summary>
-    private static object AttachStatusTimeArr(object fixture, object status, object monsters = null)
+    private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
+        int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null)
     {
-        if (status == null && monsters == null)
+        if (status == null && monsters == null && casterHitPoint == null && casterDc == null && casterAttackMode == null)
         {
             return fixture;
         }
@@ -1362,7 +1378,100 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         {
             node["monsters"] = JsonSerializer.SerializeToNode(monsters);
         }
+        // 卡 §39：施法者夹具输入（仅在被显式给出时落盘；既有件零变化）。
+        if (casterHitPoint.HasValue) node["caster_hit_point"] = casterHitPoint.Value;
+        if (casterDc.HasValue) node["caster_dc"] = casterDc.Value;
+        if (casterAttackMode.HasValue) node["caster_attack_mode"] = casterAttackMode.Value;
         return node;
+    }
+
+    /// <summary>
+    /// `--case groupdeding`：39 `SKILL_GROUPDEDING`（`MagGroupDeDing`，`MagicManager.cs:942-978`）
+    /// 四支（卡 §39，甲方案，opc-19 2026-11-20 定稿）。
+    ///
+    /// 施法者夹具（三件必要输入，均落进 golden 的 `Fixture`）：
+    /// - `AttatckMode = HAM_PEACE`：只有 `Race >= Animal`（怪物）进伤害链；玩家 target 仍收
+    ///   `RM_10205`（该发送在 `IsProperTarget` 块之外）但不取任何随机数 ⇒ 抽值序列只由怪物构成，
+    ///   与卡面「怪物顺序显式固定、逐只记抽值」的口径一致。
+    /// - `WAbil.DC = MakeWord(20,20)`：`GetAttackPower(Lo, Hi-Lo)` 的随机区间为 0 ⇒ `nPower` 恒 = 20。
+    /// - `HitPoint` 逐支给（`0` = 命中门恒真 ⇒ 全 miss；`5` = `Random(0)=0 < 5` 必中）。
+    ///
+    /// **四支的 `CasterDC` 统一为 `MakeWord(20,20)`（区间=0 ⇒ `nPower` 恒 20、伤害常数）**：
+    /// 这是为隔离"命中门 / 护甲衰减"的简化，**代价是本批不覆盖 `GetAttackPower` 的区间抽**。
+    /// 为补这一覆盖，另加第五支 `dc_range`（`MakeWord(20,30)`，区间=10）单列，不塞进四支。
+    ///
+    /// 五支（怪物顺序显式固定 = `GetMapBaseObjects` 收集序：x 升序→y 升序）：
+    /// - `all_miss_hp0`：M1(101,101,S=0)、M2(102,100,S=1)，HitPoint=0 ⇒ 门恒真，全场 miss；
+    /// - `hit_ac_split`：M1(S=0,AC=0)、M2(S=0,AC=MakeWord(5,5))，**除 AC 外全同**；两者必中，
+    ///   M1 无衰减（damage=20），M2 经护甲衰减（damage=20-(5..9)）；
+    /// - `miss_by_draw`：M1(S=0) 必中、M2(S=10) 经 seed 选到 `Random(10) >= 5`（唯一扫 seed 的一支）；
+    /// - `dead_excluded`：单只 `Death=true` 的怪在 `GetMapBaseObjects` 收集期被过滤 ⇒ 零抽、无 RM；
+    /// - `dc_range`：M1(S=0,AC=0)，`CasterDC=MakeWord(20,30)` ⇒ `Random(11)` 进伤害（nPower=20..30）。
+    /// </summary>
+    private static int GroupDeDingBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        spec.CasterAttackMode = (int)OpenMir2.Enums.AttackMode.HAM_PEACE;
+        MonsterSpec Mon(int x, int y, int speed, int ac = 0, bool death = false) =>
+            new MonsterSpec { X = x, Y = y, Race = 50, Level = 1, Hp = 300, SpeedPoint = speed, AC = ac, Death = death };
+
+        int dcFlat = HUtil32.MakeWord(20, 20);   // 区间 0：伤害常数 20（隔离命中门/护甲）
+        int dcRange = HUtil32.MakeWord(20, 30);  // 区间 10：覆盖 GetAttackPower 的区间抽
+
+        var c1 = RunGroupDeDingArm(spec, "all_miss_hp0", 0, dcFlat, 1000, 0,
+            new[] { Mon(101, 101, 0), Mon(102, 100, 1) });
+
+        var c2 = RunGroupDeDingArm(spec, "hit_ac_split", 5, dcFlat, 2000, 5,
+            new[] { Mon(101, 101, 0, ac: 0), Mon(102, 100, 0, ac: HUtil32.MakeWord(5, 5)) });
+
+        int missSeed = FindDeDingMissByDrawSeed();
+        if (missSeed < 0)
+        {
+            Console.Error.WriteLine("SEED_SCAN_FAILED groupdeding/miss_by_draw");
+            return 2;
+        }
+        var c3 = RunGroupDeDingArm(spec, "miss_by_draw", 5, dcFlat, 3000, missSeed,
+            new[] { Mon(101, 101, 0), Mon(102, 100, 10) });
+
+        var c4 = RunGroupDeDingArm(spec, "dead_excluded", 5, dcFlat, 4000, 5,
+            new[] { Mon(101, 101, 0, death: true) });
+
+        var c5 = RunGroupDeDingArm(spec, "dc_range", 5, dcRange, 5000, 7,
+            new[] { Mon(101, 101, 0, ac: 0) });
+
+        return EmitGolden(spec, new[] { c1, c2, c3, c4, c5 });
+    }
+
+    private static FireballResult RunGroupDeDingArm(
+        MagicSpec spec, string label, int hitPoint, int casterDc, int idBase, int seed, MonsterSpec[] monsters)
+    {
+        spec.CasterHitPoint = hitPoint;
+        spec.CasterDC = casterDc;
+        spec.Monsters = monsters;
+        return RunMagicCase(spec, label, seed, idBase, spec.TargetMaxHp, false);
+    }
+
+    /// <summary>
+    /// `miss_by_draw` 的 seed：M2(S=10) 的命中门抽 **≥ 5**（`Random(10) >= HitPoint=5` ⇒ miss）。
+    /// 抽序（HAM_PEACE ⇒ 只有两只怪进伤害链）：M1 攻击 2 抽 + 命中门 `Random(0)` 1 抽 + 护甲
+    /// `Random(1)` 1 抽；M2 攻击 2 抽 + 命中门 `Random(10)` 1 抽。按 `LoggingRandom` 的逐次 `Next(n)`
+    /// 复现（`Random(0)` 也占位），与真跑同序即可复现筛选。
+    /// </summary>
+    private static int FindDeDingMissByDrawSeed()
+    {
+        for (int seed = 1; seed < 200000; seed++)
+        {
+            var r = new Random(seed);
+            r.Next(1); r.Next(10); r.Next(0); // M1 攻击 ×2 + 命中门 Random(0)
+            r.Next(1);                        // M1 护甲 Random(1)
+            r.Next(1); r.Next(10);            // M2 攻击 ×2
+            if (r.Next(10) >= 5) return seed; // M2 命中门
+        }
+        return -1;
     }
 
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
@@ -1416,6 +1525,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         caster.Abil.Level = (byte)spec.CasterLevel;
         caster.WAbil.MC = (ushort)spec.CasterMc;
         caster.WAbil.SC = (ushort)spec.CasterSc;
+        // 卡 §39：命中门 / 攻击力 / 攻击模式的夹具输入（缺省 -1 ⇒ 既有件零变化）。
+        if (spec.CasterHitPoint >= 0) caster.HitPoint = (byte)spec.CasterHitPoint;
+        if (spec.CasterDC >= 0) caster.WAbil.DC = (ushort)spec.CasterDC;
+        if (spec.CasterAttackMode >= 0) caster.AttatckMode = (OpenMir2.Enums.AttackMode)spec.CasterAttackMode;
         if (spec.CasterHp > 0)
         {
             // 29 的「多朋友」支：施法者自身也要 `HP < MaxHP` 才被 `MagBigHealing` 选中。
@@ -1523,6 +1636,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             mo.WAbil.HP = (ushort)ms.Hp;
             mo.WAbil.MaxHP = (ushort)ms.Hp;
             mo.LifeAttrib = (byte)ms.LifeAttrib;
+            // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `WAbil.AC` / 收集期 `Death` 过滤。
+            mo.SpeedPoint = (byte)ms.SpeedPoint;
+            mo.WAbil.AC = (ushort)ms.AC;
+            mo.Death = ms.Death;
             mo.FixedHideMode = false;
             mo.ObMode = false;
             mo.Envir = env;
@@ -1551,6 +1668,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             }
         }
 
+        // 卡 §39：怪物 HP 前值（施法/RNG 之前的纯观测，进台账；只对 `groupdeding` 落盘）。
+        var monHpBefore = monsters.Select(m => (int)m.WAbil.HP).ToArray();
         // —— 夹具契约（M51）：construction/derived 由 oracle 复算，七道门任一不过 ⇒ FixtureContractViolation（rc=2）。
         var contract = BuildContractInput(spec, target);
         FixtureContract.Validate(contract);
@@ -1719,6 +1838,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             ? BuildSeedReason(draws[0], seed, branchExpect)
             : null;
         int hpAfter = target.WAbil.HP;
+        // 卡 §39：怪物 HP 后值（施法段同步 `StruckDamage` 的结果观测；不喂回驱动输入）。
+        var monHpAfter = monsters.Select(m => (int)m.WAbil.HP).ToArray();
         // **三态计时器的术后值必须由"门结果 + 术前值"独立推出**（不拿实现输出自证）：
         // 门开 ⇒ 非零项置 1、零项不动；门关 ⇒ 一律不动。首抽即门骰（本支此前零抽）。
         int[] statusAfter = new[]
@@ -1748,6 +1869,52 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         {
             receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
         }
+        // **§39 逐目标抽值**（仅 `groupdeding`）：按 objectList 收集序走查 `draws`，记录每只怪的
+        // **命中门**抽值与序号（`Random(0)` 也占位）。死怪在收集期被过滤 ⇒ 无条目（`GateDraw=null`）。
+        // 走查同时是一条自洽牙：抽数必须恰好耗尽 `draws`，否则夹具假设（HAM_PEACE / DC 区间 0）已被破坏。
+        Dictionary<int, (int GateIdx, long GateVal, bool Hit)> monGate = null;
+        if (spec.Key == "groupdeding" && spec.CasterHitPoint >= 0)
+        {
+            monGate = new Dictionary<int, (int, long, bool)>();
+            int di = 0;
+            int hits = 0;
+            var order = spec.Monsters.Select((m, idx) => (m, idx))
+                .Where(t => !t.m.Death)
+                .OrderBy(t => t.m.X).ThenBy(t => t.m.Y);
+            foreach (var (m, idx) in order)
+            {
+                if (di + 2 >= draws.Count) throw new FixtureContractViolation($"[{spec.Key}/{label}] 抽值走查越界（mon{idx} 攻击段）");
+                di += 2; // PlayObject.GetAttackPower：Random(power+1)[区间0] + Luck 门 Random(10)
+                int gateIdx = di;
+                if (di >= draws.Count) throw new FixtureContractViolation($"[{spec.Key}/{label}] 抽值走查越界（mon{idx} 命中门）");
+                long gate = draws[gateIdx];
+                di += 1; // Random(SpeedPoint)
+                bool hit = gate < spec.CasterHitPoint;
+                if (hit)
+                {
+                    hits++;
+                    int acLo = m.AC & 0xFF, acHi = (m.AC >> 8) & 0xFF;
+                    if (di >= draws.Count) throw new FixtureContractViolation($"[{spec.Key}/{label}] 抽值走查越界（mon{idx} 护甲骰）");
+                    long r = draws[di]; // Random(|hi-lo|+1)
+                    di += 1;
+                    if (acLo + r > 0) di += 1; // Random(nRnd)
+                }
+                monGate[idx] = (gateIdx, gate, hit);
+            }
+            // 共享尾训练抽（`MagicManager.cs:659-666`）：`boTrain`（有任一非死怪 ⇒ 至少一只
+            // proper 动物）且 `Level<3`、`TrainLevel[Level] <= caster.Abil.Level`（默认 0<=30）
+            // ⇒ `TrainSkill(..., Random(3)+1)` 恰一次抽，效果体之后。
+            if (spec.Monsters.Any(m => !m.Death)) di += 1;
+            // 交付段（200ms RM_DELAYMAGIC ⇒ 目标侧 `GetMagStruckDamage`）：每次命中/可投递的
+            // RM_DELAYMAGIC 抽一次 `Random(|HiMac-LoMac|+1)`（MAC=0 ⇒ `Random(1)`）。
+            // 这些抽在 `draws` 的**尾部**（做法与 `Rng` 记 cast+drain 同源）；逐目标走查须计入。
+            di += hits;
+            if (di != draws.Count)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 逐目标抽值走查未耗尽：consumed={di} recorded={draws.Count}");
+            }
+        }
         // **v1 被动怪物**：只把它收到的 RM 记进台账（对象选择面）；不 Operate ⇒ `Sent` 恒空。
         foreach (var (mo, i) in monsters.Select((v, i) => (v, i)))
         {
@@ -1770,7 +1937,22 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 throw new FixtureContractViolation(
                     $"[{spec.Key}/{label}] mon{i} 收到重复 RM：{string.Join(",", idents)}（同种 RM 必须恰 1 条）");
             }
-            receivers.Add(new ReceiverResult { Who = "mon" + i, Rm = rm, Sent = new List<object>() });
+            int? gateIdxOut = null; long? gateValOut = null; bool? gateHitOut = null;
+            if (monGate != null && monGate.TryGetValue(i, out var gv))
+            {
+                gateIdxOut = gv.GateIdx; gateValOut = gv.GateVal; gateHitOut = gv.Hit;
+            }
+            receivers.Add(new ReceiverResult
+            {
+                Who = "mon" + i,
+                Rm = rm,
+                Sent = new List<object>(),
+                HpBefore = spec.Key == "groupdeding" ? monHpBefore[i] : (int?)null,
+                HpAfter = spec.Key == "groupdeding" ? monHpAfter[i] : (int?)null,
+                GateIndex = gateIdxOut,
+                GateDraw = gateValOut,
+                GateHit = gateHitOut,
+            });
         }
         return new FireballResult
         {
@@ -1852,7 +2034,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     life_attrib = m.LifeAttrib,
                     master = m.Master,
                     target_cret = m.TargetCret,
-                }).ToArray()),
+                    speed_point = m.SpeedPoint,
+                    death = m.Death,
+                    ac = m.AC,
+                }).ToArray(),
+                spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
+                spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
+                spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -1890,6 +2078,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int Master;
         /// <summary>`TargetCret` 指向本列表第几只（**1 基**；`0` = 无）。</summary>
         public int TargetCret;
+        /// <summary>`SpeedPoint`（命中门 `Random(SpeedPoint)`）；缺省 15 = `BaseObject` ctor 缺省。卡 §39。</summary>
+        public int SpeedPoint = 15;
+        /// <summary>死怪：`GetMapBaseObjects` 收集期即被过滤（不进 objectList）。卡 §39 `dead_excluded`。</summary>
+        public bool Death;
+        /// <summary>`WAbil.AC` 原始字（Lo/Hi 字节，`HUtil32.MakeWord(lo,hi)`）；缺省 0 = 无护甲。卡 §39。</summary>
+        public int AC;
     }
 
     private static readonly string[] Unused = Array.Empty<string>();
@@ -1989,6 +2183,18 @@ public sealed class ReceiverResult
     public string Who { get; set; }
     public List<object> Rm { get; set; }
     public List<object> Sent { get; set; }
+    /// <summary>卡 §39（仅 `groupdeding` 的 `mon{i}`）：怪物 HP 前/后值（施法段同步结算的观测）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? HpBefore { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? HpAfter { get; set; }
+    /// <summary>卡 §39：命中门 `Random(SpeedPoint)` 在 `Rng` 序列中的序号与抽值，及是否命中。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? GateIndex { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? GateDraw { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? GateHit { get; set; }
 }
 
 /// <summary>火球单支结果（三支由 `--case fireball` 输出一份 JSON）。</summary>

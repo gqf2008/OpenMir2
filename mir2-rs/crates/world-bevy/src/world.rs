@@ -721,6 +721,30 @@ pub struct GroupLighteningOutcome {
     pub icons_716: Vec<(i32, i32)>,
 }
 
+/// **卡 §39**：39 `MagGroupDeDing` 单个 proper 目标的结算（`:956-963`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupMeleeTarget {
+    pub target_id: i32,
+    /// 闪避前的 `nPower`（`GetAttackPower` 输出）。
+    pub power: i32,
+    /// 护甲减免后的伤害（`GetHitStruckDamage`；`<= 0` ⇒ 未 `StruckDamage`）。
+    pub damage: i32,
+    /// 施法后的 HP（同步 `StruckDamage` 的结果；未命中 ⇒ 等于施法前）。
+    pub hp_after: u16,
+}
+
+/// **卡 §39**：39 `MagGroupDeDing`（`MagicManager.cs:942-978`）的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupMeleeOutcome {
+    /// 任一目标 `Race >= ActorRace.Animal`（`:970-972`）⇒ `boTrain`。
+    pub bo_train: bool,
+    /// proper 目标的结算（`GetMapBaseObjects` 枚举序）。
+    pub targets: Vec<GroupMeleeTarget>,
+    /// `RM_10205` 的坐标：**每个未跳过对象**（含非 proper 对象；`:974` 在
+    /// `IsProperTarget` 块之外），枚举序。
+    pub icons_716: Vec<(i32, i32)>,
+}
+
 /// **P3-B3**：16 `MagMakeHolyCurtain` 的结果（`MagicManager.cs:1146-1207`）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HolyCurtainOutcome {
@@ -5259,6 +5283,83 @@ impl World {
             if t.x != target_x || t.y != target_y {
                 out.icons_716.push((t.x, t.y));
             }
+        }
+        out
+    }
+
+    /// `SKILL_GROUPDEDING(39)` 效果体（`MagicManager.MagGroupDeDing`，`:942-978`）。
+    ///
+    /// 逐字复刻循环体（取数顺序勿改；与 [`crate::combat::group_melee_damage`] 同源）：
+    /// 1. 枚举 `GetMapBaseObjects(envir, targetX, targetY, MAX(1, Level))`
+    ///    （[`Self::mag_objects_in_range`]，收集期已过滤 `Death/Ghost`）；
+    /// 2. `:950` 跳过 self（`Death/Ghost` 已在收集期过滤）；
+    /// 3. `:954 IsProperTarget`（玩家 `HAM_PEACE` ⇒ 只有 `Race >= Animal`）；
+    /// 4. `:956-963` 命中门 + 护甲（[`crate::combat::group_melee_damage`]）；
+    /// 5. `:967-968` `StruckDamage(nPower)` + caster 200ms `RM_DELAYMAGIC(nPower, MakeLong(x,y), 1, id)`；
+    /// 6. `:970-972 Race >= Animal ⇒ result = true`；
+    /// 7. `:974` 对每个**未跳过对象**排 `RM_10205(0, x, y, 1)`（含非 proper 对象）。
+    ///
+    /// **目标侧 `RM_MAGSTRUCK` 不在本函数**：200ms 后由 `deliver_self_delay_msgs` 的
+    /// `deliver_delay_magic_impl` 把玩家目标的受击入 `pending_mag_struck`；被动怪由宿主记为 RM、
+    /// 不 `Operate`（卡 §36 v1 口径）。`StruckDamage` 的倍率（`LastHiter`/状态）对全新被动怪恒为
+    /// 空/0 ⇒ 直接按 `damage` 扣 HP（与 oracle `DamageHealth` 在本夹具上的结果一致）。
+    pub fn cast_group_melee_spell(
+        &mut self,
+        caster_id: i32,
+        level: u8,
+        target_x: i32,
+        target_y: i32,
+    ) -> GroupMeleeOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return GroupMeleeOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let range = i32::from(level).max(1);
+        let group = self.attacker_group_members(&caster);
+        let mut out = GroupMeleeOutcome::default();
+        for tid in self.mag_objects_in_range(caster.map_id, target_x, target_y, range) {
+            // `:950`（`mag_objects_in_range` 已过滤 Death/Ghost；这里只跳 self）。
+            if tid == caster_id {
+                continue;
+            }
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            if crate::combat::is_proper_target_grouped_direct(&caster, &t, &group) {
+                let (power, damage_u16) =
+                    crate::combat::group_melee_damage(&mut self.rng, &caster, &t, atk);
+                let damage = i32::from(damage_u16);
+                if damage > 0 {
+                    // `:967 StruckDamage`。
+                    if let Some(v) = self.entities.vitals_mut(tid) {
+                        let hp = i32::from(v.hp) - damage;
+                        v.hp = u16::try_from(hp.max(0)).unwrap_or(0);
+                    }
+                    // `:968`（wParam = 护甲后伤害，nParam1 = MakeLong(x,y)，nParam2 = 1，200ms）。
+                    self.send_self_delay_msg_full(
+                        caster_id,
+                        crate::slave::RM_DELAYMAGIC,
+                        damage,
+                        mir2_shared::hutil::make_long_unsigned(t.x as u16, t.y as u16),
+                        1,
+                        tid,
+                        200,
+                    );
+                }
+                // `:970-972`
+                if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                    out.bo_train = true;
+                }
+                let hp_after = self.entities.get(tid).map_or(0, |e| e.hp);
+                out.targets.push(GroupMeleeTarget {
+                    target_id: tid,
+                    power,
+                    damage,
+                    hp_after,
+                });
+            }
+            // `:974`（在 `IsProperTarget` 块之外）。
+            out.icons_716.push((t.x, t.y));
         }
         out
     }
