@@ -58,6 +58,17 @@ pub struct MagicState {
     pub arr: Vec<Option<MagicRcd>>,
     /// 最近一次 `RecalcHitSpeed` 的技能被动（IT-17b）：`HitPoint/HitPlus/HitDouble/AttackSkillCount`。
     pub passives: game_svr::skill_ability::SkillPassives,
+    /// `PlayObject.PowerHit`（`PlayObject.cs:177`；攻杀剑法 arm 标志）。**攻击批 A** 只负责置位
+    /// （`drain_yedo_events` 在 `armed` 时写 `true`）；消费（模式 3 的 `nPower += HitPlus` +
+    /// 清零 + `SM_POWERHIT` 帧）在批 B —— 在那之前本字段只进不出，不参与任何判定。
+    pub power_hit: bool,
+    /// **攻击批 A（登记偏差的观测计数）**：有攻杀但武器 `Dura == 0` 而被跳过的次数。
+    ///
+    /// oracle 在那种状态下 `UseItems[Weapon]` 为 `null` ⇒ `PlayObject.Attack.cs:943` 解引用抛
+    /// NRE、被 `:963` 的 `catch` 吞掉（攻击照常完成，只丢计数块）。本仓**跳过 + WRN**，并在
+    /// **WRN 的同一分支**自增本计数 ⇒ 测试可以断言「跳过了且报告了」，而不是「静默跳过」或
+    /// 「根本没跑到」（WRN 文本走 stdout，无捕获缝）。不参与任何游戏判定。
+    pub yedo_no_weapon_warns: u32,
 }
 
 impl Default for MagicState {
@@ -69,6 +80,8 @@ impl Default for MagicState {
             table: None,
             arr: vec![None; game_svr::skill_ability::MAGIC_ARR_LEN],
             passives: game_svr::skill_ability::SkillPassives::default(),
+            power_hit: false,
+            yedo_no_weapon_warns: 0,
         }
     }
 }

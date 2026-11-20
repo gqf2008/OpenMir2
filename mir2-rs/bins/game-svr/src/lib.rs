@@ -12741,6 +12741,33 @@ fn handle_hit_cmd(
         return false;
     };
     let dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
+    // **攻击批 A**：注入攻杀运行时（`AttackSkillCount/PointCount` 的唯一持久方是会话，
+    // `RecalcHitSpeed` 写）。无会话 / `MagicArr[SKILL_YEDO]` 为空 ⇒ `present=false` ⇒ 世界侧
+    // 整段不跑（与「没有攻杀技能的角色」的 oracle 结果一致）。
+    {
+        use game_svr::skill_ability::SKILL_YEDO;
+        let yedo =
+            sessions
+                .get(chr_name)
+                .map_or_else(mir2_world_bevy::YedoRuntime::default, |sg| {
+                    mir2_world_bevy::YedoRuntime {
+                        present: sg
+                            .magic
+                            .arr
+                            .get(usize::from(SKILL_YEDO))
+                            .is_some_and(Option::is_some),
+                        level: sg
+                            .magic
+                            .arr
+                            .get(usize::from(SKILL_YEDO))
+                            .and_then(Option::as_ref)
+                            .map_or(0, |m| m.level),
+                        count: sg.magic.passives.attack_skill_count,
+                        point_count: sg.magic.passives.attack_skill_point_count,
+                    }
+                });
+        world.set_attack_skill(actor_id, yedo);
+    }
     // ⚠ 取目标用的是**状态化朝向**（对象当前 `Dir`），**不是**本帧消息 dir：oracle
     // `PlayObject.Attack.cs:26` 的 `attackTarget = targetObject ?? GetPoseCreate()` 发生在
     // `BaseObject.Attack.cs:12` 的 `Dir = nDir` **之前**；`nDir` 只影响此后的动作帧
@@ -12803,6 +12830,10 @@ fn handle_hit_cmd(
         // 接线到 m3cs 的 `World::attack_swing`（`crates/world-bevy/src/world.rs:199`，owner 20:10 裁决）：
         // 缺这一段 ⇒ 真机「有攻击命令、无目标」的 84 击取数整段缺失（C# 120 段 vs Rust 36 段）。
         let _ = world.attack_swing(actor_id);
+        // **攻击批 A**：空挥支（`_Attack(null)`）的攻杀计数块与有目标支**同一条尾巴**
+        // （oracle `ClientHitXY:942-956` 与目标无关）。空挥是同步结算 ⇒ 事件此刻已产生，
+        // 立即排空；有目标支要等下一 `tick_head`（见 `sim_loop` 的排水点）。
+        drain_yedo_events(world, online, sessions, gates);
         glog!(
             "DBG",
             "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）"
@@ -12848,6 +12879,64 @@ fn handle_hit_cmd(
     // （`sim_loop`）在返回后落一行服务端权威状态 dump（`state_log::StateLog`）；被守卫拒的支
     // 返回 `false` ⇒ 不落行（与 oracle「没有攻击单元就没有首抽」一致）。
     true
+}
+
+/// **攻击批 A**：把世界排出的攻杀结算事件（[`mir2_world_bevy::YedoEvent`]）落到会话态与线上。
+///
+/// 逐条照 oracle（`PlayObject.Attack.cs:942-956`）：
+/// - 普通结算 ⇒ 回写 `AttackSkillCount/PointCount`（会话 `MagicState.passives` 是唯一副本，
+///   下一击注入与存档都读它）；
+/// - `armed` ⇒ `PowerHit = true` + `SendSocket("+PWR")`（`SimToGate::SendRaw`：与 IT-17a 的
+///   `+LNG/+WID` 同一条 `SendSocket` 短包通道）；
+/// - `skipped_no_weapon` ⇒ oracle 在 `UseItems[Weapon] == null` 时抛 NRE、被 `:963` 的 catch
+///   吞掉（攻击照常完成、只丢计数块）；本仓跳过 + WRN，并把跳过次数记进会话
+///   （`MagicState.yedo_no_weapon_warns`，可判据）。
+///
+/// 口径：`armed` 与 `reset` 同击成立时**先写回再 arm**（两个值互不影响），`+PWR` 照发。
+fn drain_yedo_events(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for ev in world.drain_yedo() {
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            glog!(
+                "WRN",
+                "攻杀计数：actor_id={} 不在在线登记表 ⇒ 事件丢弃",
+                ev.actor_id
+            );
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&me.chr_name) else {
+            glog!(
+                "WRN",
+                "攻杀计数：ChrName={} 无会话态 ⇒ 事件丢弃",
+                me.chr_name
+            );
+            continue;
+        };
+        if ev.skipped_no_weapon {
+            sg.magic.yedo_no_weapon_warns = sg.magic.yedo_no_weapon_warns.saturating_add(1);
+            glog!(
+                "WRN",
+                "攻杀剑法：actor_id={} 武器 Dura==0（oracle 此处 UseItems[Weapon] 为 null ⇒ NRE 被 catch 吞掉）；本仓跳过计数与第二抽（登记偏差）",
+                ev.actor_id
+            );
+            continue;
+        }
+        sg.magic.passives.attack_skill_count = ev.count;
+        sg.magic.passives.attack_skill_point_count = ev.point_count;
+        if ev.armed {
+            sg.magic.power_hit = true;
+            if let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "+PWR") {
+                let _ = tx.send(SimToGate::SendRaw {
+                    socket: me.socket,
+                    payload: b"+PWR".to_vec(),
+                });
+            }
+        }
+    }
 }
 
 /// `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）在 `CM_SPELL`
@@ -31542,6 +31631,10 @@ fn sim_loop(
             &enter_cfg.pet_cfg,
         );
         host_prof.end("HostWorldHead", t);
+        // **攻击批 A**：命令 FIFO 里攻击结算的攻杀计数块（`AttackDir` 之后，`PlayObject.Attack.cs:942-956`）
+        // 在这里排水。`SendSocket("+PWR")` 是直发短包（不经 MsgQueue）⇒ 紧跟 `tick_head` 发最接近
+        // oracle 的时序。
+        drain_yedo_events(&mut world, &online, &mut ground_sessions, &gates);
         // **18 的状态变化观测有界**（卡 `openmir2-magic-parity` §26）：每 tick 清空一次；
         // 本观测面**只记录**，任何帧仍由各生产点的既有返回值出（此处清空不影响帧面）。
         world.clear_status_changes();
@@ -44409,6 +44502,234 @@ break
         );
         let rec = build_save_record(&saved, "atk", &world, &sessions["atk"], None);
         assert_eq!(rec.data.dir, 2, "F1：命中后立刻存档 ⇒ Dir = 尝试方向（右）");
+    }
+
+    /// **攻击批 A 用例⑦（宿主排水 · 正常支）**：`drain_yedo_events` 把世界的攻杀事件落到
+    /// 会话态（`MagicState.passives` + `power_hit`）并在 arm 时发 `SendSocket("+PWR")`
+    /// （`SimToGate::SendRaw`）。oracle：`PlayObject.Attack.cs:942-956`。
+    ///
+    /// 击次：count=2/point=0 ⇒ 第 1 击 2→1（不 arm）、第 2 击 1→0（arm + 重置 7-L=6 + 抽 1 次）。
+    ///
+    /// 红检：删掉 `drain_yedo_events` 里的回写 ⇒ 两条 passives 断言红；删掉 `armed` 支 ⇒ `+PWR` 断言红。
+    #[test]
+    fn yedo_drain_writes_back_and_sends_pwr() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.open_session("atk");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let attacker = world.enter_map("atk", ent, 0).expect("进世界");
+        world
+            .entities
+            .get_mut(attacker)
+            .unwrap()
+            .inventory
+            .use_items[mir2_world_bevy::world::ITEM_LOCATION_WEAPON] =
+            mir2_world_bevy::entity::UseItemSlot {
+                make_index: 1,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
+        world.entities.get_mut(attacker).unwrap().ai.dir = 4;
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        sg.magic.arr[usize::from(game_svr::skill_ability::SKILL_YEDO)] = Some(record::MagicRcd {
+            mag_idx: game_svr::skill_ability::SKILL_YEDO,
+            level: 1,
+            magic_key: 0,
+            tran_point: 0,
+        });
+        sg.magic.passives.attack_skill_count = 2;
+        sg.magic.passives.attack_skill_point_count = 0;
+        sessions.insert("atk".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 11);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.hp = 500;
+        mon.max_hp = 500;
+        world.add_entity(mon);
+
+        let hit = |world: &mut mir2_world_bevy::World,
+                   displays: &mut downlink::DisplayTable,
+                   sessions: &mut HashMap<String, SessionGround>| {
+            assert!(handle_hit_cmd(
+                CM_HIT,
+                game_svr::feature::make_long(10, 10),
+                4,
+                "atk",
+                901,
+                &online,
+                world,
+                displays,
+                sessions,
+                &gates,
+                &catalog,
+            ));
+            world.tick();
+            drain_yedo_events(world, &online, sessions, &gates);
+        };
+
+        // 第 1 击：2→1，不 arm ⇒ 无 `+PWR`。
+        hit(&mut world, &mut displays, &mut sessions);
+        assert_eq!(sessions["atk"].magic.passives.attack_skill_count, 1, "2→1");
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_point_count, 0,
+            "未归零 ⇒ 不抽"
+        );
+        assert!(!sessions["atk"].magic.power_hit, "未 arm");
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 0, "第 1 击不发 +PWR");
+
+        // 第 2 击：1→0 ⇒ arm（PointCount==0）+ 重置 7-1=6 + 抽 1 次。
+        hit(&mut world, &mut displays, &mut sessions);
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_count, 6,
+            "归零 ⇒ 重置为 7-L"
+        );
+        assert!(
+            sessions["atk"].magic.passives.attack_skill_point_count < 6,
+            "重置抽 RandomByte(6)"
+        );
+        assert!(sessions["atk"].magic.power_hit, "第 2 击 arm");
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 1, "arm 那一击恰发一次 +PWR");
+    }
+
+    /// **攻击批 A 用例⑧（宿主排水 · 无武器支）**：有攻杀但 `Dura == 0` ⇒ oracle 在
+    /// `PlayObject.Attack.cs:943` 解引用 `null` 抛 NRE、被 `:963` catch 吞掉；本仓**跳过 + WRN**。
+    /// 断言三件：①会话的跳过计数 +1（与 WRN 同分支自增，可判据「报告了」）；②计数未变；
+    /// ③没有 `+PWR`。
+    ///
+    /// 红检：把 `skipped_no_weapon` 支改回「照常递减」⇒ 计数断言红；删掉计数自增 ⇒ ①红。
+    #[test]
+    fn yedo_no_weapon_skips_and_counts_warn() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.open_session("atk");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let attacker = world.enter_map("atk", ent, 0).expect("进世界");
+        world.entities.get_mut(attacker).unwrap().ai.dir = 4;
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        sg.magic.arr[usize::from(game_svr::skill_ability::SKILL_YEDO)] = Some(record::MagicRcd {
+            mag_idx: game_svr::skill_ability::SKILL_YEDO,
+            level: 1,
+            magic_key: 0,
+            tran_point: 0,
+        });
+        sg.magic.passives.attack_skill_count = 2;
+        sg.magic.passives.attack_skill_point_count = 0;
+        sessions.insert("atk".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 11);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.hp = 500;
+        mon.max_hp = 500;
+        world.add_entity(mon);
+        // 不装武器：`use_items[Weapon].dura == 0`。
+        assert_eq!(
+            world.entities.get(attacker).unwrap().use_items
+                [mir2_world_bevy::world::ITEM_LOCATION_WEAPON]
+                .dura,
+            0,
+            "前提：无武器"
+        );
+
+        assert!(handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(10, 10),
+            4,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+            &catalog,
+        ));
+        world.tick();
+        drain_yedo_events(&mut world, &online, &mut sessions, &gates);
+
+        assert_eq!(
+            sessions["atk"].magic.yedo_no_weapon_warns, 1,
+            "跳过 + WRN 同分支计数 +1"
+        );
+        assert_eq!(
+            sessions["atk"].magic.passives.attack_skill_count, 2,
+            "无武器 ⇒ 计数未变（不照抄 oracle 的 NRE 行为，也不误递减）"
+        );
+        assert!(!sessions["atk"].magic.power_hit);
+        let mut pwr = 0;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendRaw { payload, .. } = ev {
+                if payload == b"+PWR" {
+                    pwr += 1;
+                }
+            }
+        }
+        assert_eq!(pwr, 0, "跳过支不发 +PWR");
     }
 
     /// **F1（`openmir2-persist-f1f2-fix`）· `CM_SPELL` default 支**：
