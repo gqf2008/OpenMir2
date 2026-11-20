@@ -33,6 +33,12 @@ pub const SKILL_ILKWANG: u16 = 4;
 pub const SKILL_YEDO: u16 = 7;
 /// `MagicConst.SKILL_FIRESWORD`（烈火剑法，`MagicConst.cs:108`）。
 pub const SKILL_FIRESWORD: u16 = 26;
+/// `MagicConst.SKILL_ERGUM`（刺杀剑术，`MagicConst.cs:52`）。
+pub const SKILL_ERGUM: u16 = 12;
+/// `MagicConst.SKILL_BANWOL`（半月弯刀，`MagicConst.cs:104`）。
+pub const SKILL_BANWOL: u16 = 25;
+/// `MagicConst.SKILL_CROSSMOON`（逐日剑法，`MagicConst.cs:159`）。
+pub const SKILL_CROSSMOON: u16 = 34;
 /// `MagicArr = new UserMagic[50]`（`PlayObject.cs:1041`）。
 pub const MAGIC_ARR_LEN: usize = 50;
 /// `MessageSettings.DEFHIT`（`MessageSettings.cs:10`；`HitPlus = DEFHIT + Level`）。
@@ -104,6 +110,26 @@ pub fn recalc_hit_speed_skills(
         }
     }
     out
+}
+
+/// `GetHitMode` 的**技能态**（`PlayObject.Attack.cs:78-120`）：本批只接 `MagicArr` 的
+/// `ergum/banwol/crossmoon` 三个条件（`arr[id].is_some()`）；`PowerHit/FireHitSkill`（攻杀/烈火的
+/// **战斗态**）**不在本批**，恒 `false`（另计，见卡 §6）。
+#[must_use]
+pub fn hit_skill_state(arr: &[Option<MagicRcd>]) -> game_svr::attackwire::HitSkillState {
+    game_svr::attackwire::HitSkillState {
+        power_hit: false,
+        fire_hit_skill: false,
+        ergum: arr
+            .get(usize::from(SKILL_ERGUM))
+            .is_some_and(Option::is_some),
+        banwol: arr
+            .get(usize::from(SKILL_BANWOL))
+            .is_some_and(Option::is_some),
+        crossmoon: arr
+            .get(usize::from(SKILL_CROSSMOON))
+            .is_some_and(Option::is_some),
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +208,19 @@ mod tests {
             a[usize::from(SKILL_ONESWORD)].is_some(),
             "删技能后 MagicArr 仍非空（残影，oracle 原样）"
         );
+    }
+
+    /// `hit_skill_state` 只认 `MagicArr` 三个条件（12/25/34），`PowerHit/FireHitSkill` 恒 false。
+    #[test]
+    fn hit_skill_state_reads_magic_arr_only() {
+        let mut a = arr();
+        a[usize::from(SKILL_ERGUM)] = m(SKILL_ERGUM, 1);
+        let st = hit_skill_state(&a);
+        assert!(st.ergum && !st.banwol && !st.crossmoon);
+        assert!(!st.power_hit && !st.fire_hit_skill, "战斗态不在本批");
+        let empty = arr();
+        let st = hit_skill_state(&empty);
+        assert!(!st.ergum && !st.banwol && !st.crossmoon);
     }
 
     /// **跨 Recalc 的顺序例**：两次重算用**不同**技能 ⇒ `arr` 里应**同时**留两次的条目

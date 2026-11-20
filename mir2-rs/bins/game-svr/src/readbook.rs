@@ -37,10 +37,8 @@ use crate::ability::ItemCatalog;
 use crate::record::MagicRcd;
 use crate::{OnlineRegistry, SessionGround, SimToGate};
 
-/// `SKILL_ERGUM`（刺杀剑术，`MagicConst.cs:52`）。
-pub const SKILL_ERGUM: u16 = 12;
-/// `SKILL_BANWOL`（半月弯刀，`MagicConst.cs:104`）。
-pub const SKILL_BANWOL: u16 = 25;
+/// 技能 id 的唯一源在 [`crate::skill_ability`]（避免两处常量漂移）。
+pub use crate::skill_ability::{SKILL_BANWOL, SKILL_ERGUM};
 
 /// `PlayObject.MagicList` + `MagicArr` 的等价快照 + 战士技开关 + 魔法表/文案快照。
 ///

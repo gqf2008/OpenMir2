@@ -12555,10 +12555,14 @@ fn handle_hit_cmd(
     }
     // 动作帧：`SendAttackMsg(GetHitMode, Dir, CurrX, CurrY)` → `SendRefMsg` ⇒ 附近观察者（排除自己）。
     if let Some(d) = displays.get(actor_id) {
-        let sm = game_svr::attackwire::action_sm_ident(
-            mode,
-            game_svr::attackwire::HitSkillState::default(),
-        );
+        // **IT-17b**：`GetHitMode` 的技能态由会话 `MagicArr` 派生（本批只接 12/25/34 三条件；
+        // `PowerHit/FireHitSkill` 战斗态不在本批，恒 false）。
+        let skill_state = sessions
+            .get(chr_name)
+            .map_or_else(game_svr::attackwire::HitSkillState::default, |sg| {
+                game_svr::skill_ability::hit_skill_state(&sg.magic.arr)
+            });
+        let sm = game_svr::attackwire::action_sm_ident(mode, skill_state);
         let body = game_svr::smframe::sm_action_hit(
             sm,
             actor_id,
@@ -57652,6 +57656,211 @@ SendRefMsgRange=15
     ///
     /// 红检：把无目标支的 `world.attack_swing(actor_id)` 删掉（改回「只记日志」）⇒ 世界 RNG 停在
     /// 原位、下面的逐采样状态比对必红。
+    /// **IT-17b 正向例**：学到刺杀(12)/半月(25)/逐日(34) 后，`CM_LONGHIT/CM_WIDEHIT/CM_CRSHIT`
+    /// 的动作帧分别是 `SM_LONGHIT/SM_WIDEHIT/SM_CRSHIT`（`PlayObject.Attack.cs:101-134` 的
+    /// `case 4/5/8`：`MagicArr[id] != null`）。
+    ///
+    /// 红检：删 `hit_skill_state` 接线（回 `HitSkillState::default()`）⇒ 三条 `assert` 全红。
+    #[test]
+    fn it17b_hit_mode_skill_conditions_positive() {
+        use mir2_protocol::messages::{
+            CM_CRSHIT, CM_LONGHIT, CM_WIDEHIT, SM_CRSHIT, SM_LONGHIT, SM_WIDEHIT,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(attacker);
+        for id in [
+            game_svr::skill_ability::SKILL_ERGUM,
+            game_svr::skill_ability::SKILL_BANWOL,
+            game_svr::skill_ability::SKILL_CROSSMOON,
+        ] {
+            sg.magic.arr[usize::from(id)] = Some(record::MagicRcd {
+                mag_idx: id,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            });
+        }
+        sessions.insert("atk".into(), sg);
+
+        for (cmd, want) in [
+            (CM_LONGHIT, SM_LONGHIT),
+            (CM_WIDEHIT, SM_WIDEHIT),
+            (CM_CRSHIT, SM_CRSHIT),
+        ] {
+            while rx0.try_recv().is_ok() {}
+            let _ = handle_hit_cmd(
+                cmd,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &game_svr::ability::StdItemCatalog::new(),
+            );
+            let mut idents = Vec::new();
+            while let Ok(m) = rx0.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    if socket == 902 {
+                        let cm =
+                            mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                        idents.push(cm.ident);
+                    }
+                }
+            }
+            assert!(
+                idents.contains(&want),
+                "cmd={cmd} ⇒ 期望含 SM={want}，实得 {idents:?}"
+            );
+        }
+    }
+
+    /// **IT-17b 反向例**：**未学** 12/25/34 时同三条命令仍回落 `SM_HIT`（`GetHitMode` 的
+    /// 条件不满足 ⇒ 保留初值 `RM_HIT`，`attackwire::rm_action_ident` 的 `_` 支）。
+    ///
+    /// 红检：把条件写成恒真（例如 `hit_skill_state` 恒置 true）⇒ 三条断言全红。
+    #[test]
+    fn it17b_hit_mode_skill_conditions_negative() {
+        use mir2_protocol::messages::{
+            CM_CRSHIT, CM_LONGHIT, CM_WIDEHIT, SM_CRSHIT, SM_HIT, SM_LONGHIT, SM_WIDEHIT,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("atk".into(), test_session_ground(attacker)); // `magic.arr` 全空
+
+        for cmd in [CM_LONGHIT, CM_WIDEHIT, CM_CRSHIT] {
+            while rx0.try_recv().is_ok() {}
+            let _ = handle_hit_cmd(
+                cmd,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+                &game_svr::ability::StdItemCatalog::new(),
+            );
+            let mut idents = Vec::new();
+            while let Ok(m) = rx0.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    if socket == 902 {
+                        let cm =
+                            mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                        idents.push(cm.ident);
+                    }
+                }
+            }
+            assert!(
+                idents.contains(&SM_HIT)
+                    && !idents.contains(&SM_LONGHIT)
+                    && !idents.contains(&SM_WIDEHIT)
+                    && !idents.contains(&SM_CRSHIT),
+                "cmd={cmd} 未学技能 ⇒ 只能是 SM_HIT，实得 {idents:?}"
+            );
+        }
+    }
+
     #[test]
     fn hit_cmd_without_target_still_draws_attack_power() {
         use mir2_protocol::messages::CM_HIT;
