@@ -54,4 +54,7 @@
 - `cargo test --workspace`：**4385 passed / 0 failed / 159 ignored**（rc=0）
 - `cargo run -p msgcodegen -- --check`：rc=0（604 条常量一致）
 - `cargo fmt --all -- --check`：rc=0
-- `cargo clippy --workspace --all-targets -- -D warnings`：待 0 车道独占（v4）
+- `cargo clippy --workspace --all-targets -- -D warnings`：**rc=0**
+  （首跑红 2 处，**均本卡引入**：新用例插入时落在 `gm_clear_copy_self_target_uses_live_table` 的
+  `#[test]` 与 `fn` 之间 ⇒ ① 新用例上出现重复 `#[test]`、② 该旧用例丢失 `#[test]` 变成
+  `never used`。已把属性/文档移回原位——**不是旧债**。）

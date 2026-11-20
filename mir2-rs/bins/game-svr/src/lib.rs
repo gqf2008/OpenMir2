@@ -50573,10 +50573,6 @@ break
         );
     }
 
-    /// **M1 牙（review b6a3962b）**：`@ClearCopyItem` 调用者==目标时按**活表**迭代——
-    /// oracle 内层删除正在遍历的同一张表（后续 i 读到移位后的元素）。
-    /// 夹具 `[A1(m1), A2(m2), A3(m1)]`：活表结果 `[A2, A3]`（2 件）；快照实现会给 `[A3]`（1 件）。
-    #[test]
     /// **657（`#12`）第二臂：目标有会话但**无 `saves` 记录**（`(Some(tsg), None)` 分支）。
     ///
     /// oracle `DelSkillCommand.cs:60-71`：`mIPlayerActor` 存在才继续；`MagicList` 在 **PlayObject** 上
@@ -50709,6 +50705,10 @@ break
         );
     }
 
+    /// **M1 牙（review b6a3962b）**：`@ClearCopyItem` 调用者==目标时按**活表**迭代——
+    /// oracle 内层删除正在遍历的同一张表（后续 i 读到移位后的元素）。
+    /// 夹具 `[A1(m1), A2(m2), A3(m1)]`：活表结果 `[A2, A3]`（2 件）；快照实现会给 `[A3]`（1 件）。
+    #[test]
     fn gm_clear_copy_self_target_uses_live_table() {
         use std::collections::HashMap;
         let mut world = mir2_world_bevy::World::new(32, 32);
