@@ -778,10 +778,10 @@ EAD
 3. **为什么以前没发现**：`it07_emit_eat_notices_production_order_is_heap_sift` **用本仓模型自产期望、再自证** ⇒ 顺序断言从未与夹具 `expect.notices` 比过。**教训：期望必须来自 oracle 产物；"模型自算 + 自己通过"不算对拍。**
 - 修法：`emit_eat_notices` 对 657 走"入队→peek 队首同 ident→pop→再入队"；新增 `eat_notices_weight_changed_last`（622 移到 notices 末尾）；比较器改为**按夹具六条文本逐帧**比（删除自产期望）。
 - **牙**：删 657 去重 ⇒ `got==want` 红（蓝字序错）；不移 622 ⇒ `sent 10 vs 9`（C 不在队首 ⇒ 多一条 657）。两颗各钉一处改动。
-- **回归**：`it12_` 3/3、`it13_` 6/6、`it16_` 3/3（"优先级互异 ⇒ 帧序不变"由实跑证实）；全量 `--lib` **2235 / 2162 passed / 0 failed / 73 ignored**；fmt rc=0。
+- **回归**：`it12_` 3/3、`it13_` 6/6、`it16_` 3/3（"优先级互异 ⇒ 帧序不变"由实跑证实）；**合并后 master `b15b0e954` 实测**全量 `--lib` **2175 passed / 0 failed / 77 ignored**；fmt rc=0。（分支时相对 `da63bae28` 的 2235 / 2162 / 77 为旧基线口径。）
 - **登记**：`10052 (RM_HEALTHSPELLCHANGED)` 的同类 pop+push 去重**本笔未做**（吃路径内未见 10052；若将来接入须一并套同语义）。
 
-**状态**：`implemented_unverified`（2026-11-20，分支 `card/items-it07-a`，merge master `da63bae28` 后）：**7 条用例全绿**（`it07_*`，含 fixture 4 例比较器 + 夹具序对拍 + 52 值断言）、全量 `--lib 2235 / 2162 passed / 0 failed / 73 ignored`、`cargo check -p game-svr --lib` rc=0、fmt rc=0；`clippy --all-targets` 待窗口。清单未动，待 QA 签。
+**状态**：`verified`（2026-11-20，合并 `b15b0e954`；物品 19/19、总覆盖率 68/97）。**8 条用例全绿**（7 条 `it07_*` + `tick_frame_queue_pop_head_if_ident_only_pops_matching_head`；含 fixture 4 例比较器 + 夹具序对拍 + 52 值断言）；**合并后全量 `--lib 2175 passed / 0 failed / 77 ignored`**、`cargo check -p game-svr --lib` rc=0、fmt rc=0、`clippy --all-targets` rc=0（合并方修掉一处 `duplicated attribute`：`#[allow(clippy::too_many_arguments)]` 在 doc 块上方与 fn 上方各一份，删 doc 上方那份，无语义变化）。
 
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
