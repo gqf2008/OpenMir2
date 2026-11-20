@@ -506,9 +506,10 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **归类**：**StdMode 3 / Shape 12**，`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`，**内联**，不走 `EatUseItems`）。六个**独立** `if`（可同时命中），各看模板一个字节：`LoByte(DC)`→DCUP、`LoByte(MC)`→MCUP、`LoByte(SC)`→SCUP、`HiByte(AC)`→HITSPEEDUP、`LoByte(AC)`→HPUP、`LoByte(MAC)`→MPUP。每命中：`ExtraAbil=max(旧,字节)`、`Flag=0`、`Times=max(旧, now + HiByte(DC)*60000 + HiByte(MAC)*1000)`。**无 RNG**；全不命中 ⇒ 不吃（636）。
 
 **照抄勿修（与 "sec." 同节，都是 oracle 原样）**
-- **HitSpeed 不对称**：**`RecalcAbilitys` 开头先 `HitSpeed = 0;`**（`src/M2Server/Player/PlayObject.cs:2024`）⇒ HITSPEEDUP 块 `HitSpeed += ExtraAbil[HITSPEEDUP]`（`:2830-2832`）⇒ **657 在 `:2874-2876` 取到的就是 `ExtraAbil[3]` 本身**；尾段 `:2899` 才被 `AddAbil.HitSpeed`（另经 `/2` 或 `(x-1)/2`、`min(15)`，`BaseObject.Abil.cs:55-63`）覆盖 ⇒ **657.Tag == `ExtraAbil[3]`、落地字段 == `AddAbil.HitSpeed`**，并非"字段+extra"，也不是双重计数。
-  - **别漏了开头那条 `HitSpeed = 0;`**——不写它，下一位读者会把 657 载荷误读成"字段 + extra"（本线已有人这么错过一次）。
-- **文本**：六条蓝字是硬编码，非 `MessageSettings`；其中 **MC 那条以 `"sec."` 结尾**，其余五条 `"秒。"`（`:2116` 原文）。golden 里要能看见原文。
+- **657 的口径（2026-11-20 三次更正后的最终版，以代码为准）**：`SendUpdateMsg(wIdent, wParam, lParam1…, sMsg)`（`BaseObject.Message.cs:283`）转发到 `SendMsg(IActor, wIdent, wParam, nParam1, …)`（`:98`）；`SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)`（`PlayObject.cs:2876`）的落位是 **`wParam = 临时 HitSpeed`、`nParam1 = CharStatus`**；657 handler（`PlayObject.Message.cs:1845`）只读 `nParam1` 与 `this.HitSpeed` ⇒ **帧上 `Param/Tag = LoWord/HiWord(CharStatus)`、`Series = 出队时的落地 HitSpeed`，`wParam` 从未被读**。临时 HitSpeed 既不进帧、也不进最终字段 ⇒ **不做"帧 vs 字段"断言**（此前两种表述均作废）。
+- **`ExtraAbil` 的 `WAbil` 效果是死路**（e1 查实）：写入在 `PlayObject.cs:2818-2840`，随后 `:2890-2906` 的 `WAbil.* = Abil + AddAbil`（逐字节 `_MIN(255,和)`）**整体覆盖**，方法 `:2907` 结束；`GetAttackPower` 不读 `ExtraAbil`。⇒ **吃 Shape12 后 `WAbil` 必须不变**；可观测副作用只有：1–6 条蓝字、`RM_ABILITY` 泵出的 52（值仍是未加 buff 的 `WAbil`）、以及状态数组 `ExtraAbil/Flag/Times`。宿主已据此**移除** `apply_extra_abil` 调用，golden/比较器补 `WAbil` 前后不变断言。
+- **F1（线序真 bug，已修）**：`use_item` 的 `sort_by_key` 只覆盖它自己的产出；宿主 append `RM_ABILITY` 后按 vec 序排水，实测 `[131, 252×6, 67]`。现改为 `emit_eat_notices` 走 `NetPriorityQueue`（`notice_drain_order` 可单测），出队 `[67,131,(155),252×6]`；用例 `it07_eat_notice_drain_order_matches_heap`。
+- **F3（已改）**：`useitem` 里"同 ident 多帧在本接缝不可达"的枚举被 Shape12 打破，已标注失效并指向新的堆排水。
 
 **帧/泵序**：635/636 直发；每命中一条蓝 `RM_SYSMESSAGE`(11004→252)，`RecalcAbilitys` 后 `RM_ABILITY`(10051→67)，吃完另有 `RM_WEIGHTCHANGED`(10115→131)；`RecalcAbilitys` 尾部 10139(155)。**同优先级陷阱**：最多 6 条 11004 ⇒ 出队序是堆 sift 序，夹具记出队序；若实测等于入队序也如实写（不反推"泵稳定"）。
 

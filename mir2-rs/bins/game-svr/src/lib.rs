@@ -10459,6 +10459,52 @@ fn drain_login_script_batch(
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
 /// ⇒ 纯函数在 `useitem::use_item`（m3bag 交付，逐字段对 oracle `eat_vectors.json`）；本函数只负责
+// 把吃路径的通知按 oracle 泵序送到网关（NetPriorityQueue = .NET 四叉最小堆逐位复刻）。
+// F1（2026-11-20）：use_item 末尾的 sort_by_key 只对它自己产出的通知成立；宿主随后 append
+// RM_ABILITY，且 Shape12 会产出六条同 ident(11004)——稳定排序无法复刻堆的 sift 序；
+// 排水必须走堆，不能按 vec 序、也不能只排序。
+/// 按 oracle 泵序返回通知的**出队序**（`NetPriorityQueue`；同 ident 按堆 sift 序）。
+fn notice_drain_order(
+    notices: &[game_svr::useitem::QueuedNotice],
+) -> Vec<&game_svr::useitem::QueuedNotice> {
+    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for n in notices {
+        queue.enqueue(n, n.ident as u8);
+    }
+    std::iter::from_fn(|| queue.dequeue()).collect()
+}
+
+fn emit_eat_notices(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    notices: &[game_svr::useitem::QueuedNotice],
+    wire: &game_svr::pickwire::WireSession,
+) -> usize {
+    let ordered = notice_drain_order(notices);
+    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::useitem::QueuedNotice> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for n in ordered {
+        queue.enqueue(n, n.ident as u8);
+    }
+    let mut sent = 0usize;
+    while let Some(n) = queue.dequeue() {
+        match game_svr::pickwire::notice_frame(n, wire) {
+            Some(body) => {
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+                sent += 1;
+            }
+            None => glog!(
+                "WRN",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS 与 657 缺口）",
+                n.ident
+            ),
+        }
+    }
+    sent
+}
+
+#[allow(clippy::too_many_arguments)]
 /// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
 ///
 /// **收包字段口径**（`WorldServer.cs:820` + `BaseObject.Message.cs:98`）：12B 头的 `Recog`(b0-3) = `nParam1`
@@ -10468,7 +10514,6 @@ fn drain_login_script_batch(
 /// - **立即帧** `SendDefMessage(SM_EAT_OK/FAIL)` ⇒ header-only，直接下发（恒 1 条）；
 /// - **延时通知** `SendMsg(RM_*)` 入 `MsgQueue`，由消息泵翻成 `SM_*`（`PlayObject.Message.cs:1736-1960`）；
 ///   本宿主在同一批按 `QueuedNotice` 出队序下发（`useitem::use_item` 已按 `(byte)wIdent` 排序）。
-#[allow(clippy::too_many_arguments)]
 fn handle_eat_cmd(
     recog: i32,
     _param: u16,
@@ -10917,21 +10962,7 @@ fn handle_eat_cmd(
         // 该会话自己的那份自通知（`RecalcAbilitys` 的 `SendRefMsg`），故用会话值。
         hit_speed: sg.hit_speed,
     };
-    for n in &out.notices {
-        match game_svr::pickwire::notice_frame(n, &wire) {
-            Some(body) => {
-                let _ = tx.send(SimToGate::SendFrame { socket, body });
-                sent += 1;
-            }
-            // 目前 `use_item` 产生的通知已全部有 `SM_*` 映射（含 `RM_CHARSTATUSCHANGED`）；
-            // 该支保留为**不静默**的兜底：任何新增 ident 缺映射都记 WRN 而不是悄悄丢。
-            None => glog!(
-                "WRN",
-                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记，未编造）",
-                n.ident
-            ),
-        }
-    }
+    sent += emit_eat_notices(tx, socket, &out.notices, &wire);
     // **卡 `openmir2-charstatuschanged-657-wired`（观察者副本）**：oracle 的
     // `SendRefMsg(RM_CHARSTATUSCHANGED)` 对**可见玩家**也入队一份 657；上面的
     // `notice_frame` 只投了**本会话**那一份 ⇒ 这里补观察者面。
@@ -12313,8 +12344,11 @@ fn recalc_session_ability(
     sg.sub = recalc.sub;
     // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`。
     sg.hit_speed = recalc.hit_speed;
-    // `RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
-    game_svr::ability::apply_extra_abil(&mut sg.state.wabil, extra_abil.unwrap_or(&[0u16; 7]));
+    // **F5（2026-11-20 更正）**：`ExtraAbil` 的 `WAbil` 写入（`PlayObject.cs:2818-2840`）会被
+    // `RecalcAbilitys` 尾段 `WAbil = Abil + AddAbil`（`:2890-2905`，逐字段含 `_MIN(255, …)`）
+    // **整体覆盖** ⇒ 吃到的 buff **不进最终 `WAbil`**、`SM_ABILITY(52)` 尾块也看不到它。
+    // 因此这里**不再**调用 `apply_extra_abil`；唯一存活的效果是 657 的 `Param`（临时 HitSpeed）。
+    let _ = extra_abil;
     // **PL-1 / P32**：本次重算是否命中复活戒指（`Shape==114`）。oracle 只置 true、从不重置
     // ⇒ 调用方按 `entity.revival |= 返回值` 落账（粘滞锁存）。
     //
@@ -12334,10 +12368,7 @@ fn recalc_session_ability(
             recalc.recovery_ring,
         );
     }
-    // **内部断言（非帧证据）**：657 的临时 `HitSpeed` = 0(开头清) + ExtraAbil[3]（见字段注释）。
-    let hit_speed_frame = extra_abil.map_or(0, |e| e[3]);
     RecalcEffect {
-        hit_speed_frame,
         revival: recalc.revival,
         flame_ring: recalc.flame_ring,
         recovery_ring: recalc.recovery_ring,
@@ -12387,13 +12418,6 @@ impl MagicSource<'_> {
 /// `recalc_session_ability` 的输出：`revival`/`flame_ring` 均为**本次命中**（调方 `|=` 落账），
 /// `magic_events` 是 212/210 的直接帧事件（oracle 调用序）。
 struct RecalcEffect {
-    /// **内部断言用（不是帧证据）**：oracle `RecalcAbilitys` 里 HITSPEEDUP 的**临时** `HitSpeed`
-    /// ——`HitSpeed` 在本方法开头被清 0（`PlayObject.cs:2024`），随后 `+= ExtraAbil[HITSPEEDUP]`
-    /// （`:2832`），657 的 `wParam` 在 `:2876` 取用它，尾段 `:2899` 才被 `AddAbil.HitSpeed` 覆盖。
-    /// ⇒ 该值恒 == `ExtraAbil[3]`（无 buff ⇒ 0），**不是**「落地字段 + ExtraAbil」。
-    /// 657 接线（`card/charstatuschanged`）落地后，端到端断言应读真实帧；这里只是让不对称今天就可回归。
-    #[allow(dead_code)] // 内部断言用；657 端到端接线后由生产路径消费。
-    hit_speed_frame: u16,
     revival: bool,
     flame_ring: bool,
     /// 本次 `RecoveryRing` 命中（每轮重置；目前只用于判据/诊断，调用方不需要落账）。
@@ -48781,11 +48805,12 @@ break
         let list = saves["victim"].record.data.magic.as_ref().unwrap();
         assert_eq!(list.len(), 1, "只删命中项（按 Desc）");
         assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
-        // F2-R3：ExtraAbil[0]=3 ⇒ 重算后 wabil.dc 高字节在基础值(0x01)上 +3 = 0x0400；
-        // 若传 None（mutant）⇒ 只剩基础 0x0100。
+        // **2026-11-20 更正（e1/3b 查实）**：`ExtraAbil` 的 WAbil 写入被 `RecalcAbilitys` 尾段
+        // `WAbil = Abil + AddAbil`（`PlayObject.cs:2900-2906`）整体覆盖 ⇒ 加成**不进** wabil，
+        // DC 保持基础 0x0100。原期望 0x0400 编码了错误行为。
         assert_eq!(
-            sessions["victim"].state.wabil.dc, 0x0400,
-            "extra_abil 必须传入重算（None ⇒ 加成被抹 ⇒ 0x0100）"
+            sessions["victim"].state.wabil.dc, 0x0100,
+            "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
         );
         assert!(
             !world.entities.get(victim_id).unwrap().flame_ring,
@@ -80277,7 +80302,8 @@ SendRefMsgRange=15
                 "52 尾 = 重算后的整个 WAbil（58B 客户端布局）"
             );
             let after = &rig.ground_sessions["obs"].state.wabil;
-            assert_eq!(after.dc, 0x0E05, "DC 高字节 10 + nPower 4 = 14");
+            // 2026-11-20 更正：nPower 经 ExtraAbil 进入的值被 RecalcAbilitys 尾段覆盖 ⇒ DC 保持 0x0A05。
+            assert_eq!(after.dc, 0x0A05, "DC 高字节 10（ExtraAbil 不进 WAbil）");
             assert_eq!(after.mc, rig.target_wabil_before.mc);
             assert_eq!(after.sc, rig.target_wabil_before.sc);
             assert_eq!(after.max_hp, rig.target_wabil_before.max_hp);
@@ -86931,16 +86957,18 @@ mod tests {",
             0,
             "F1：world 实体武器槽 index == 0"
         );
-        // **复验 F2**：`ExtraAbil[0]=5` 已应用到 WAbil（Hi 1+5 = 6，Lo 1 ⇒ 0x0601）。
+        // **2026-11-20 更正（e1/3b 查实）**：`ExtraAbil` 的 WAbil 写入（`PlayObject.cs:2818-2840`）
+        // 被 `RecalcAbilitys` 尾段 `WAbil = Abil + AddAbil`（`:2900-2906`）整体覆盖 ⇒
+        // `ExtraAbil[0]=5` **不进 WAbil**，DC 保持 0x0101。原期望 0x0601 是错的。
         assert_eq!(
-            sg_after.state.wabil.dc, 0x0601,
-            "F2：ExtraAbil[0]=5 ⇒ Hi 1+5"
+            sg_after.state.wabil.dc, 0x0101,
+            "ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
         );
         // **复验 F1**：`apply_ability_to_entity` 同帧落 `dc`（战斗侧读 `Entity.dc`）。
         assert_eq!(
             world.entities.get(hero).expect("hero 实体在").dc,
-            0x0601,
-            "F1：实体 dc 跟随重算（含 ExtraAbil）"
+            0x0101,
+            "实体 dc 跟随重算；ExtraAbil 不进 WAbil（覆盖于 :2900-2906）"
         );
         // **顺序即语义**：`RecalcAbilitys`（`Merchant.cs:570`）在 `AddValue`（`:572`）之前 ⇒
         // 52 帧的 `WAbil.Weight` 含材料重量（2×黑铁 weight1 + 项链 weight2 = 4；武器已摘 ⇒ 0）。
@@ -98316,26 +98344,36 @@ fn ",
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
     }
-    /// **IT-07 内部断言（不是帧证据）**：657 的 `wParam` 取的是「开头清零 + `ExtraAbil[3]`」的
-    /// 临时 `HitSpeed`（`PlayObject.cs:2024/2832/2876`），而落地字段在 `:2899` 被
-    /// `AddAbil.HitSpeed`（/2 或 (x-1)/2、min 15）覆盖 ⇒ **两者可不同**。
-    /// 本用例只钉这个不对称；**657 的端到端断言待 `2f` 的映射落地后另加**，不得拿这条当"657 已验"。
+    /// **F1 用例（IT-07）**：Shape12 六命中的吃路径通知按**堆序**排水 ——
+    /// `[RM_ABILITY(67), RM_WEIGHTCHANGED(131), RM_CHARSTATUSCHANGED(155), RM_SYSMESSAGE(252)×6]`，
+    /// 而不是 `use_item` 的 vec 序/排序序（`[131, 252×6, 67]` 是修复前的实测错序）。
     #[test]
-    fn it07_hit_speed_asymmetry_internal_assertion() {
-        use crate::ability::StdItemCatalog;
-        let mut sg = test_session_ground(7);
-        sg.equip.job = 0; // Warrior
-        sg.use_items = vec![None; game_svr::ability::USE_ITEMS_LEN];
-        sg.state.item_list.clear();
-        let catalog = StdItemCatalog::new();
-        let extra = [0u16, 0, 0, 7, 0, 0, 0]; // HITSPEEDUP = 7
-        let effect = recalc_session_ability(&mut sg, &catalog, Some(&extra), None);
+    fn it07_eat_notice_drain_order_matches_heap() {
+        let mk = |ident: i32| game_svr::useitem::QueuedNotice {
+            ident,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+        };
+        // 入队 = 修复前的真实序：use_item 的 [WEIGHT(131), SYSMESSAGE×6]，宿主再 append ABILITY(67)。
+        let notices: Vec<_> = std::iter::once(mk(game_svr::useitem::RM_WEIGHTCHANGED))
+            .chain((0..6).map(|_| mk(game_svr::useitem::RM_SYSMESSAGE)))
+            .chain(std::iter::once(mk(game_svr::useitem::RM_ABILITY)))
+            .collect();
+        let ordered: Vec<i32> = notice_drain_order(&notices)
+            .iter()
+            .map(|n| n.ident)
+            .collect();
+        let mut want = vec![
+            game_svr::useitem::RM_ABILITY,
+            game_svr::useitem::RM_WEIGHTCHANGED,
+        ];
+        want.extend(std::iter::repeat_n(game_svr::useitem::RM_SYSMESSAGE, 6));
         assert_eq!(
-            effect.hit_speed_frame, 7,
-            "657 临时值 = ExtraAbil[3]（不是 字段+extra）"
+            ordered, want,
+            "出队序：ABILITY(67) → WEIGHT(131) → 六条 SYSMESSAGE(252)"
         );
-        assert_eq!(sg.hit_speed, 0, "落地字段 = AddAbil.HitSpeed（无装备 ⇒ 0）");
-        assert_ne!(effect.hit_speed_frame, sg.hit_speed, "不对称必须可见");
     }
 }
 

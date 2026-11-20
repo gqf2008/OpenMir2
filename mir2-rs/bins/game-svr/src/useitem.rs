@@ -716,7 +716,12 @@ pub fn use_item(
     // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
     // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
     //
-    // **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据）：本函数
+    // **F3（2026-11-20 更正）**：`Shape12` 会产出**六条同 ident(11004)** ⇒ 本节原判「同 ident 多帧在
+    // 本接缝不可达」**已失效**；且这六条的堆 sift 出队序 ≠ 入队序（实测 `DC,MP,HP,HITSPEED,SC,MC`
+    // vs 入队 `DC,MC,SC,HITSPEED,HP,MP`）⇒ **排序不再是充分近似**；宿主的吃路径排水已改走
+    // `NetPriorityQueue`（见 `lib.rs::emit_eat_notices`）。下面这段枚举保留为历史依据。
+    //
+    // **历史枚举（2026-11-20 前）**：本函数
     // 的 `notices` 只在五条互斥分支里产生 ——
     //   ① 禁药 `RM_SYSMESSAGE`(252)（`no_drug` 且 StdMode 0..=3；`eaten=false`，与成功支互斥）；
     //   ② `RM_HEALTHSPELLCHANGED`(68)（StdMode 0 的 shape 1 固定量 / shape 3 百分比，两支**互斥**，
@@ -1111,6 +1116,13 @@ mod tests {
             };
             let now = 1_000;
             let (out, st) = shape12_run(tpl.clone(), UseItemActorState::default(), now);
+            // **e1/3b 结论**：ExtraAbil 的 WAbil 写入被 `RecalcAbilitys` 尾段整体覆盖 ⇒
+            // 吃 Shape12 后 **WAbil 必须不变**（夹具自证：oracle 的 before == after）。
+            assert_eq!(
+                c["wabil_before"], c["expect"]["wabil"],
+                "{name}: oracle 侧 WAbil 不得因 ExtraAbil 改变（覆盖于 :2900-2906）"
+            );
+            let wabil0 = st.wabil.clone();
             let eat_ident = if out.eaten { 635 } else { 636 };
             let frames: Vec<i64> = c["expect"]["immediate_frames"]
                 .as_array()
@@ -1119,6 +1131,10 @@ mod tests {
                 .map(|f| f["ident"].as_i64().unwrap())
                 .collect();
             assert_eq!(frames, vec![eat_ident], "{name}: 吃/不吃");
+            assert_eq!(
+                st.wabil, wabil0,
+                "{name}: Rust 侧 WAbil 也必须不变（别把 buff 并进去）"
+            );
             if !out.eaten {
                 assert!(out.notices.is_empty(), "{name}: 不吃 ⇒ 零通知");
                 checked += 1;
