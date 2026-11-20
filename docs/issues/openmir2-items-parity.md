@@ -447,6 +447,12 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
   **两个 hash 字段角色不同**：`oracle_source_sha256`（M2Server 源码锚，**校验用**）不变 `51a289e2…`；
   `oracle_assembly_sha256` 因构建非位级可复现而变（`ee2cc2fb→a3b9f1fc`），夹具注释已声明该字段
   **仅溯源、不参与校验**——不是锚漂了。
+- **跨调用累积（2026-11-20 复核补）**：`winlottery::tests::level_accumulates_across_calls`——同一
+  `WinLotteryShared`（`run_inner` 创建、跨 `handle_eat_cmd` 存活）连续两次命中同档，断言
+  `level[5]` 1→2、两次都 `Won`、`no_win` 不变。依据：oracle `PlayObject.cs:3813-3875` 六档链内
+  **`:3820 WinLotteryLevel6++` 每次调用都执行**（无条件，与 gold 无关）。
+  **证据强度：oracle 源码直读，非夹具对拍**——eat-probe 每例只调一次 `ClientUseItems`，产不出
+  "第二次调用"的 golden；不要把它等同于 15 例夹具对拍的强度。
 
 **配置同源（27 键，不写死）**：部署 `Server.conf` 实际 **27** 个 `WinLottery*` = **19 参数 + 8 状态初值**（原卡面"25 键"作废）。
 - 19 参数：`WinLotteryRate` + `WinLottery{1..6}Min/Max` + `WinLottery{1..6}Gold`（部署：Rate=30000、6Min=1/6Max=4999…1Min=16180/1Max=16185、Gold 1000000…500；与 `GameSvrConf.cs` ctor 缺省逐键相同）。
