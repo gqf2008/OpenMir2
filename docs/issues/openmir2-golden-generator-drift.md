@@ -25,3 +25,9 @@
 - **`Rng` 长度/逐值不同源**（SINSU 实测 golden 6 抽 vs Rust 8 抽：前 5 同、Rust 多 3 造怪抽）⇒ 这类 leaf 不宜逐值比 Rng（是**替身不忠实**，非产品错）。
 - **帧面 RNG-payload 偏移**（例：SINSU 640 `SM_MAGIC_LVEXP` 的 `tag`=训练 `Random(3)+1`，golden=2 vs rust=3）⇒ 与 drain 窗口无关。
 ⇒ 凡 `# act` 召唤/造怪类叶子，评审时先问"这个值是否来自造怪/train 抽"；是则从比较面排除并注明此根因。
+
+## 6. 共享替身变更：预置 slave 现在带 `CurrX/Y=0` + `Envir`
+`Program.cs` 的 `PreSlaveCount` 预置 slave 构造（`RunMagicCase`）现为每个占位 slave 设 `CurrX=CurrY=0` 与 `Envir=caster.Envir`（此前不设）。
+- **为什么**：`RecallSlave → SlaveList[i].SpaceMove(...)` 需目标对象 `Envir` 非空才能移动（SINSU `cap_hit` 回召面；见 `openmir2-golden-harness-mapmgr`）。
+- **当前为何无影响**：`PreSlaveName=="pre-slave"` 的既有用例名字构造不变、`golden` 未重出 ⇒ 现状零 diff。
+- **将来重生成注意**：若某用例的期望面涉及预存 slave 的坐标/`Envir`，重生成可能出 diff（预置 slave 从旧默认变为显式 `(0,0)`+env）；届时按「共享替身变更」归类，不是产品行为变化。
