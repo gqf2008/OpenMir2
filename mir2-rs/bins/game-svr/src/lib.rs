@@ -69664,11 +69664,11 @@ SendRefMsgRange=15
         rig
     }
 
-    /// 30 `SKILL_SINSU` 真实台账驱动（**首批仅 `summon_ok`**；`cap_hit` 回召待 openmir2-golden-harness-mapmgr）。
+    /// 30 `SKILL_SINSU` 真实台账驱动（**两例 `summon_ok` + `cap_hit`**；cap_hit 回召面已由 mapmgr 替身解锁）。
     ///
     /// 神兽 race=113（ELF_MONSTER）→ `apply_slave_level_abilitys` 0.3 第一支；HP=stub 17 ⇒ max 24，半补 20。
-    /// **不比 `Rng`**（离线替身 `RegenMonsterByName` 不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源——
-    /// 与 skeleton 同因；`Rng` 面单列，未纳入本批对拍）。
+    /// `Rng`：**summon_ok 不比**（离线替身 `RegenMonsterByName` 造怪 0 抽 vs Rust `create_monster_oracle` 真抽不同源）；
+    /// **cap_hit 逐值比**（门 fail 无造怪抽 + 落点确定无 RandXY 抽 ⇒ 两侧同源都 0 抽）。
     fn sinsu_parity_drive(label: &str, id_base: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let stem = "sinsu";
@@ -69713,8 +69713,8 @@ SendRefMsgRange=15
                 .slave
                 .slave_list
                 .push(sid);
-            // 对齐 C#：caster 面向 DIR_DOWN(4) ⇒ GetFrontPosition=(x,y+1)=(100,101)（与 golden 一致）。
-            rig.world.entities.get_mut(caster).unwrap().ai.dir = 4;
+            // 朝向不在此强制：实际由 `handle_spell_cmd` 的 default 支 `Dir=GetNextDirection(cur→click)=DIR_RIGHT`
+            // 决定（本 case click=(101,100) ⇒ 回召落点 (101,100)）；此处 ai.dir=4 是死赋值（default 支覆盖），已删。
         }
         let slave_before = rig.world.slave_count(caster);
 

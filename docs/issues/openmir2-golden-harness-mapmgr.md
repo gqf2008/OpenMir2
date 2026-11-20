@@ -1,7 +1,7 @@
 # openmir2-golden-harness-mapmgr — 离线 harness 缺 MapMgr，阻塞走 SpaceMove 的召唤回召面
 
-**状态**：**设计（docs-only，未动代码）**；待 opc-19 审方案后放代码。
-**查证/设计 head**：master `8ff6c91fb`。
+**状态**：**已实现并对拍**（`card/mapmgr-design`：OfflineMapSystem 替身 + SINSU cap_hit 回召面；两例 PASS、3 牙红、四门绿）。
+**查证/设计 head**：base master `8ff6c91fb`。
 
 ## 1. 现象（NPE 栈）
 `dotnet MagicGolden.dll --case sinsu`（含 cap_hit 回召支）抛 `System.NullReferenceException`：
@@ -16,8 +16,8 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
 - 实现 `IMapSystem`（`src/Modules/SystemModule/SubSystem/IMapSystem.cs`）的 `IEnvirnoment FindMap(string)`，**返回 harness 已 `LoadMapData` 的那个 `Envirnoment`**（仿 `OfflineWorldEngine` 的最小替身），在 `Program.cs:116-118` 处一并设 `SystemShare.MapMgr`。
 - **注意级联**：`SpaceMove` 过 `FindMap` 后还会 `Envir.DeleteFromMap(未入图的 pre-slave)`、`SpaceMoveGetRandXY`（**抽 RNG**）、`AddMapObject`、`SendMsg/SendRefMsg`。⇒ 替身不仅要非 null，还要这些不 NPE，且**其 RNG 抽取要进账本与 Rust 对齐**。属**影响全 harness 的 ③ 级改动**（任何走 `SpaceMove` 的路径都会变）。
 
-## 3. 被阻塞的叶子
-- **SINSU(30) `cap_hit`/回召**（`RecallSlave→SpaceMove`）——MG-41 首批因此只做 `summon_ok`。
+## 3. 叶子处置（cap_hit 已解）
+- **SINSU(30) `cap_hit`/回召**——**已解**（OfflineMapSystem 替身 + 预置 slave 经 `RecordingMonster` 镜像/同构 target 构造；cap_hit 两例对拍含 `recall_moved`/坐标/807 不对称登记）。
 - 潜在同类：`AMYOUNSUL(6)` / `EARTHFIRE(22)` 等若路径含 `SpaceMove`（需逐条核）。
 - 关联：**[[openmir2-golden-generator-drift]]**（golden schema/墙钟漂移）。
 
@@ -27,7 +27,7 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
   - `FindMap(name)` ⇒ 返回 harness 已 `LoadMapData` 的那个 `Envirnoment`（按 `MapName` 匹配）；**name 不匹配 ⇒ 返回 null**（保持 oracle「找不到=null」语义，不静默给假图）。
   - **其余 9 成员一律抛 `NotImplementedException`**（触达即炸，比静默假值安全——同 `OfflineWorldEngine` 的 40-throw 约定）。
 - **明确不做**：不建图、不载 `MapInfo.txt`、不刷怪、不触发地图事件、不做城门/安全区。
-- **实现后的边界（已落地验证）**：`SpaceMove` 过 `FindMap` 后还会 `DeleteFromMap/SpaceMoveGetRandXY/AddMapObject/SendMsg/SendRefMsg`。**曾在此 NPE**（`RM_SPACEMOVE_SHOW → baseObject.GetFeature`，`PlayObject.Message.cs:1975`，对裸 `MonsterObject`）；**已由「真实构造路径」消解**——预置 slave 改用 `RecordingMonster`（镜像 target 怪物构造 `Program.cs:1815-1840`：Race/Abil/WAbil/Envir/ActorMgr/AddMapObject），git 实测 `cap_hit` `recall_moved=true`（神兽 (0,0)→施法者面前）。**`RecordingMonster` 之外的其余 9 个 `IMapSystem` 成员仍触达即红（抛 NotImplementedException，边界不扩）**。另：C# 侧为 faithful 也把 caster 面向设成施法方向（`caster.Dir=GetNextDirection(caster→click)`），使回召落点与 Rust 一致。
+- **实现后的边界（已落地验证）**：`SpaceMove` 过 `FindMap` 后还会 `DeleteFromMap/SpaceMoveGetRandXY/AddMapObject/SendMsg/SendRefMsg`。**曾在此 NPE**（`RM_SPACEMOVE_SHOW → baseObject.GetFeature`，`PlayObject.Message.cs:1975`，对裸 `MonsterObject`）；**已由「镜像/同构 target 构造」消解**——预置 slave 改用 `RecordingMonster`，与 target 怪物夹具**同形**（`Program.cs:1815`/`:1882-1891`：均为 **harness 手填** Race/Abil/WAbil/Envir/ActorMgr/AddMapObject，**非生产 `RegenMonsterByName`**），git 实测 `cap_hit` `recall_moved=true`（神兽 (0,0)→施法者面前）。**`RecordingMonster` 之外的其余 9 个 `IMapSystem` 成员仍触达即红（抛 NotImplementedException，边界不扩）**。另：C# 侧为 faithful 也把 caster 面向设成施法方向（`caster.Dir=GetNextDirection(caster→click)`），使回召落点与 Rust 一致。
 - **RNG**：`SpaceMoveGetRandXY` 真走 MapGrid 抽数 ⇒ 回召面的 Rng 与 oracle 同源（不再有「替身 0 抽」偏移）。
 
 ## 5. 影响面（设了 MapMgr 后哪些既有 golden 可能变）

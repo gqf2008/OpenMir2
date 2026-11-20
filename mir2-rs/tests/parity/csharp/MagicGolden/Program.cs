@@ -672,6 +672,7 @@ public static class Program
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
+        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 仅控 env.MapName/ServerIndex（SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = 30;
@@ -1693,6 +1694,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
         }
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
+        // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 仅控 env.MapName/ServerIndex（SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
         if (spec.EnableMaps) { env.MapName = "0"; env.ServerIndex = M2Server.M2Share.ServerIndex; }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };

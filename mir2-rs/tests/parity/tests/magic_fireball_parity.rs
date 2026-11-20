@@ -1604,18 +1604,42 @@ fn sent_filter_sinsu(
     out
 }
 
-/// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（首批仅 `summon_ok`；卡 MG-41）。
+/// 取某 case 某 ident 的全部帧 `(who,recog,param,tag,series)`（用于 807 回召帧的不对称断言）。
+fn frames_by_ident(case: &Value, ident: i64) -> Vec<(String, i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    if let Some(recv) = case["Receivers"].as_array() {
+        for r in recv {
+            let who = r["Who"].as_str().unwrap_or("").to_string();
+            if let Some(sent) = r["Sent"].as_array() {
+                for s in sent {
+                    if s["ident"].as_i64() == Some(ident) {
+                        out.push((
+                            who.clone(),
+                            s["recog"].as_i64().unwrap_or(i64::MIN),
+                            s["param"].as_i64().unwrap_or(i64::MIN),
+                            s["tag"].as_i64().unwrap_or(i64::MIN),
+                            s["series"].as_i64().unwrap_or(i64::MIN),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（两例 `summon_ok` + `cap_hit`；卡 MG-41）。
 ///
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
-/// 造怪前帧 17/638/642（按 socket 多重集）；`stub_monster_race=113`（输入记录）。
+/// 帧：17/638=施法帧、642=`SM_DURACHANGE`(护身符耐久)、807=回召帧(未建模、cap_hit 显式登记)；本函数比 17/638/642 的 socket 多重集；`stub_monster_race=113`（输入记录）。
 /// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。**这是离线替身不忠实（造怪 0 抽）导致 RNG 流偏移，不是产品错**；MG-41 scope 须写「离线替身造怪 0 抽 ⇒ RNG 流偏移 ⇒ 本 leaf 不比 Rng」。
 ///
 /// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（离线替身 0 抽 ⇒ RNG 流偏移）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
 /// `due_ms_rel`：本 leaf 被比较帧（17/638/642）恒为 0（三帧均属**施法批** elapsed=0，驱动无交付回路）——**结构恒定、非伪造**；与两个 stub 键不同：若引入交付批，due 会随 elapsed 变化（stub 17 则永不）。
 ///
-/// `cap_hit` 回召面待 `openmir2-golden-harness-mapmgr`。
+/// `cap_hit` 回召面见 `real_rust_ledger_sinsu_cap_hit`（mapmgr 替身已解锁）。
 #[test]
 #[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_summon_ok) 生成台账"]
 fn real_rust_ledger_sinsu() {
@@ -1838,6 +1862,29 @@ fn real_rust_ledger_sinsu_cap_hit() {
         "[{label}] Rng 与 golden 不等（cap_hit 两侧同源 0 抽，逐值比）"
     );
 
+    // 807 = SM_SPACEMOVE_SHOW2 回召帧（**未建模，显式登记不对称断言，不入 keep 多重集**）。
+    // 缺口登记：crates/world-bevy/src/space_move.rs:89「SHOW2 出帧未建模」/ 卡 openmir2-golden-harness-mapmgr。
+    let g807 = frames_by_ident(gcase, 807);
+    let r807 = frames_by_ident(rust, 807);
+    assert_eq!(
+        g807.len(),
+        3,
+        "[{label}] golden 807 应恰 3 条（SM_SPACEMOVE_SHOW2 回召帧）"
+    );
+    for (who, recog, param, tag, series) in &g807 {
+        assert_eq!(
+            (*recog, *param, *tag, *series),
+            (2050, 101, 100, 4),
+            "[{label}] golden 807 ({who}) 字段应为 (recog=2050,param=101,tag=100,series=4)"
+        );
+    }
+    assert_eq!(
+        r807.len(),
+        0,
+        "[{label}] Rust 807 应 0 条（未建模缺口；一旦建模此断言红，须改正常比较并更新口径）"
+    );
+    // 坐标断言方向：本 case 施法方向 = DIR_RIGHT（cast click=(101,100) → GetNextDirection=东 ⇒ 落点 (cx+1,cy)）；
+    // 若 fixture 的 click 改变方向，`(cx+1, cy)` 须改为由 click 派生（勿静默错）。
     // 帧 17/638/642（含 recog/due_ms_rel）。
     let keep: &[i64] = &[17, 638, 642];
     for who in ["caster", "target", "obs_in", "obs_out"] {
