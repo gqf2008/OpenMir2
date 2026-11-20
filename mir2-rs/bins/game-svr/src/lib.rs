@@ -22860,6 +22860,26 @@ fn apply_pending_gm_target_ops(
                     }
                 }
             }
+            // **657（2026-11-20，`card/657-del-skill`，`#11/#12`）**：oracle `DelSkillCommand.cs:71`
+            // 的 `RecalcAbilitys()` 在 `Race == Play` 时无条件 `StatusChanged()` +
+            // `SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`（`src/M2Server/Player/PlayObject.cs:2875-2876`）
+            // ⇒ **自见 2 条 + 观察者各 1 条**，`Series` 取**收件人自己**的 `HitSpeed`。
+            // 位置：审计直发帧（210/212）之后、绿字（`RM_SYSMESSAGE`=252）之前（657 优先级 155）。
+            // **逐收件人出 body**——不要用 `broadcast_ref_msg_with_self`（单 body ⇒ `Series` 固定）。
+            if let Some(tid) = tid {
+                let status = world.get_char_status(tid);
+                let hit_speed = world.entities.get(tid).map_or(0, |e| e.hit_speed);
+                send_charstatuschanged_self_and_observers(
+                    world,
+                    online,
+                    gates,
+                    tid,
+                    status,
+                    hit_speed,
+                    send_ref_range,
+                    "GM 删技能 657",
+                );
+            }
             // F1-R3：两条绿字最后发（oracle MsgQueue 排水晚于当前 GM 槽的 RecalcAbilitys）。
             for (green_to, text) in pending_greens {
                 if let Some(e) = online
@@ -50132,6 +50152,10 @@ break
         let mut world = mir2_world_bevy::World::new(32, 32);
         let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
         let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
+        // **657（`#11`）**：victim 的两名观察者（hero@(10,10) 本来就在范围内）+ 一名超 range 玩家；
+        // 四人 `hit_speed` 互异（5/7/9/11），用于断言 `Series` 逐收件人取值。
+        let obs_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "obs", 12, 11));
+        let far_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "far", 24, 11));
         let mag = |mag_idx: u16| {
             Some(record::MagicRcd {
                 mag_idx,
@@ -50146,6 +50170,19 @@ break
         sessions.insert("hero".into(), hero_sg);
         let mut victim_sg = test_session_ground(victim_id);
         victim_sg.equip.job = 2; // TAOIST：审计保治愈术（主案例确定性）
+                                 // 让 `RecalcAbilitys` 产出**非 0** 的落地 HitSpeed（657 自见副本的 Series 取它；
+                                 // oracle handler 读 `this.HitSpeed` = 重算后的落地值，不是插入前的实体旧值）。
+        victim_sg.equip.bonus_tick_hit = 20;
+        victim_sg.equip.bonus_tick_speed = 35;
+        // 装备一把 StdMode 5 武器：`AddAbil.HitSpeed` 由物品 `MAC` 高字节派生（`apply_item_parameters`）
+        // ⇒ 重算后的**落地** `hit_speed` 非 0（防退化区间）。
+        victim_sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 77,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
         sessions.insert("victim".into(), victim_sg);
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
@@ -50162,6 +50199,9 @@ break
         // 重算仍按实体活跃值传 `Some(&e.extra_abil)`（状态面照传）；但**不得**折进 `WAbil`
         //（oracle `:2899-2906` 覆盖 `:2818-2846`，见 F2-R3 的修正）。
         world.entities.get_mut(victim_id).unwrap().buff.extra_abil[0] = 3;
+        for (id, hs) in [(victim_id, 5u16), (hero_id, 7), (obs_id, 9), (far_id, 11)] {
+            world.entities.get_mut(id).unwrap().vitals.hit_speed = hs;
+        }
         // F3-R3：**desc ≠ magic_name**——命令按 Desc 匹配（oracle :60），审计按 MagicName 查找
         // （`magicaudit::delete_name_skill` 用 magic_name）。把命令查找改成 magic_name ⇒ 本用例红。
         let magic_table = magics::MagicTable::new(vec![
@@ -50202,6 +50242,28 @@ break
                 actor_id: victim_id,
             },
         );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "o".into(),
+                chr_name: "obs".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: obs_id,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "f".into(),
+                chr_name: "far".into(),
+                session_id: 4,
+                gate_idx: 0,
+                socket: 904,
+                actor_id: far_id,
+            },
+        );
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -50218,9 +50280,19 @@ break
             blue_b: 0xFC,
         };
         let displays = downlink::DisplayTable::new();
-        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            77,
+            mir2_data::StdItem {
+                name: "提速剑".into(),
+                std_mode: 5,
+                mac: 0x0500,
+                dura_max: 1000,
+                ..mir2_data::StdItem::default()
+            },
+        );
         let collect =
-            |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, i32, String)> {
+            |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, i32, String, u16)> {
                 std::iter::from_fn(|| rx.try_recv().ok())
                     .filter_map(|m| match m {
                         SimToGate::SendFrame { socket, body } => Some((
@@ -50232,6 +50304,7 @@ break
                             } else {
                                 String::new()
                             },
+                            u16::from_le_bytes([body[10], body[11]]),
                         )),
                         _ => None,
                     })
@@ -50282,11 +50355,13 @@ break
             s902,
             vec![
                 mir2_protocol::messages::SM_DELMAGIC,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "目标 socket 序 212→100；实得 {frames:?}"
+            "目标 socket 序 212 → 657×2 → 100（657=155 在绿字 252 之前）；实得 {frames:?}"
         );
-        let del: Vec<&(i32, u16, i32, String)> = frames
+        let del: Vec<&(i32, u16, i32, String, u16)> = frames
             .iter()
             .filter(|(_, id, ..)| *id == mir2_protocol::messages::SM_DELMAGIC)
             .collect();
@@ -50294,17 +50369,69 @@ break
         assert_eq!(del[0].0, 902, "212 投目标");
         assert_eq!(del[0].2, 1, "212 Recog = MagIdx");
         assert!(
-            frames.iter().any(|(s, id, .., t)| *s == 902
+            frames.iter().any(|(s, id, _, t, _)| *s == 902
                 && *id == mir2_protocol::messages::SM_SYSMESSAGE
                 && t == "技能烈火球已删除。"),
             "目标绿字；实得 {frames:?}"
         );
         assert!(
-            frames.iter().any(|(s, id, .., t)| *s == 901
+            frames.iter().any(|(s, id, _, t, _)| *s == 901
                 && *id == mir2_protocol::messages::SM_SYSMESSAGE
                 && t == "victim的技能烈火球已删除。"),
             "调用者绿字；实得 {frames:?}"
         );
+        // **657（`#11`）逐 socket 计数 + `Series` 逐收件人**（§47：只断计数与同 socket 内序，
+        // 不断跨 socket、不断两条 self 的先后）。
+        let cs657 = |sock: i32| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, id, ..)| {
+                    *s == sock && *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED
+                })
+                .map(|(_, _, _, _, series)| *series)
+                .collect()
+        };
+        let c902 = cs657(902);
+        assert_eq!(
+            c902.len(),
+            2,
+            "目标自见 657 = 2 条（StatusChanged + SendUpdateMsg）"
+        );
+        // 自见副本的 `Series` = **重算后的落地 `sg.hit_speed`**（oracle handler 读 `this.HitSpeed`），
+        // 不是插入前实体上的旧值。
+        let want_self = sessions["victim"].hit_speed;
+        assert_ne!(want_self, 0, "本用例要求非 0 落地 HitSpeed（防退化区间）");
+        assert!(
+            c902.iter().all(|s| *s == want_self),
+            "自见 Series = 落地 hit_speed({want_self})；实得 {c902:?}"
+        );
+        assert_eq!(
+            cs657(901),
+            vec![7],
+            "调用者（观察者）恰 1 条，Series = 自己 7"
+        );
+        assert_eq!(cs657(903), vec![9], "观察者 obs 恰 1 条，Series = 自己 9");
+        assert!(cs657(904).is_empty(), "超 range（far）零 657");
+        // 同 socket 内：657 在 212/210 之后、绿字 100 之前。
+        let idx_of = |sock: i32, id: u16| -> Vec<usize> {
+            frames
+                .iter()
+                .enumerate()
+                .filter(|(_, (s, i, ..))| *s == sock && *i == id)
+                .map(|(k, _)| k)
+                .collect()
+        };
+        let i657 = idx_of(902, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+        let mut before: Vec<usize> = idx_of(902, mir2_protocol::messages::SM_DELMAGIC);
+        before.extend(idx_of(902, mir2_protocol::messages::SM_ADDMAGIC));
+        let i100 = idx_of(902, mir2_protocol::messages::SM_SYSMESSAGE);
+        if let (Some(a), Some(b)) = (i657.iter().min(), before.iter().max()) {
+            assert!(a > b, "657 必须在 212/210 之后");
+        }
+        if let (Some(a), Some(b)) = (i657.iter().max(), i100.iter().min()) {
+            assert!(a < b, "657 必须在绿字(100)之前");
+        }
+
         // ---- All 支：清空且不发帧不发字 ----
         while rx0.try_recv().is_ok() {}
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
@@ -50338,10 +50465,20 @@ break
                 .is_empty(),
             "All ⇒ 全部删除"
         );
+        // `All` 支：**不发** 212/绿字（`DelSkillCommand.cs:49-52`），但 :71 的 `RecalcAbilitys()`
+        // **照样执行** ⇒ 有 657（自见 2 条，oracle `PlayObject.cs:2875-2876`）。
+        let all_frames = collect(&mut rx0);
         assert!(
-            rx0.try_recv().is_err(),
-            "All 支不发帧不发字（oracle :49-52）"
+            all_frames
+                .iter()
+                .all(|(_, id, ..)| *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED),
+            "All 支只允许 657；实得 {all_frames:?}"
         );
+        let all657 = all_frames
+            .iter()
+            .filter(|(s, id, ..)| *s == 902 && *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED)
+            .count();
+        assert_eq!(all657, 2, "All 支的 RecalcAbilitys 仍产生自见 2 条 657");
         // ---- 审计案例：job=WARRIOR，按 Desc("回春术") 删 mag2；审计按 MagicName("火球术")
         //      删 mag1 并出第二条 212 —— 目标 socket 序 212(2) → 212(1) → 100 ----
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
@@ -50377,14 +50514,16 @@ break
             vec![
                 mir2_protocol::messages::SM_DELMAGIC,
                 mir2_protocol::messages::SM_DELMAGIC,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "帧序：212(命令) → 212(审计) → 100(目标绿，队尾)；实得 {frames:?}"
+            "帧序：212(命令) → 212(审计) → 657×2(RecalcAbilitys 尾) → 100(目标绿，队尾)；实得 {frames:?}"
         );
         let dels: Vec<(i32, i32)> = frames
             .iter()
             .filter(|(_, id, ..)| *id == mir2_protocol::messages::SM_DELMAGIC)
-            .map(|(s, _, recog, _)| (*s, *recog))
+            .map(|(s, _, recog, _, _)| (*s, *recog))
             .collect();
         assert_eq!(
             dels,
@@ -50427,7 +50566,7 @@ break
         );
         let frames = collect(&mut rx0);
         assert!(
-            frames.iter().any(|(s, id, .., t)| *s == 901
+            frames.iter().any(|(s, id, _, t, _)| *s == 901
                 && *id == mir2_protocol::messages::SM_SYSMESSAGE
                 && t == "VICTIM的技能烈火球已删除。"),
             "F4-R1：调用者绿字用原始参数拼写；实得 {frames:?}"
@@ -50438,6 +50577,138 @@ break
     /// oracle 内层删除正在遍历的同一张表（后续 i 读到移位后的元素）。
     /// 夹具 `[A1(m1), A2(m2), A3(m1)]`：活表结果 `[A2, A3]`（2 件）；快照实现会给 `[A3]`（1 件）。
     #[test]
+    /// **657（`#12`）第二臂：目标有会话但**无 `saves` 记录**（`(Some(tsg), None)` 分支）。
+    ///
+    /// oracle `DelSkillCommand.cs:60-71`：`mIPlayerActor` 存在才继续；`MagicList` 在 **PlayObject** 上
+    /// （本仓投影在 `saves`），无记录 ⇒ 循环无命中、无 212/绿字，但 `:71` 的 `RecalcAbilitys()`
+    /// **照样执行** ⇒ 只有 657（自见 2 + 观察者各 1，`Series` 逐收件人）。
+    /// 红检：把 657 只挂在"有 saves"的臂上 ⇒ 本例零 657；删 657 ⇒ 计数红。
+    #[test]
+    fn gm_del_skill_without_saves_arm_emits_657() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
+        let obs_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "obs", 12, 11));
+        let far_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "far", 24, 11));
+        for (id, hs) in [(hero_id, 7u16), (obs_id, 9), (far_id, 11)] {
+            world.entities.get_mut(id).unwrap().vitals.hit_speed = hs;
+        }
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        hero_sg.gm.pending_del_skill = Some(("victim".into(), "烈火球".into()));
+        sessions.insert("hero".into(), hero_sg);
+        let mut victim_sg = test_session_ground(victim_id);
+        victim_sg.equip.bonus_tick_hit = 20;
+        victim_sg.equip.bonus_tick_speed = 35;
+        victim_sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 77,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        sessions.insert("victim".into(), victim_sg);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new(); // **无 victim 记录** ⇒ 第二臂
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            77,
+            mir2_data::StdItem {
+                name: "提速剑".into(),
+                std_mode: 5,
+                mac: 0x0500,
+                dura_max: 1000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let magic_table = magics::MagicTable::new(vec![]);
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        for (name, sock, id, sid) in [
+            ("hero", 901i32, hero_id, 1),
+            ("victim", 902, victim_id, 2),
+            ("obs", 903, obs_id, 3),
+            ("far", 904, far_id, 4),
+        ] {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: name.into(),
+                    chr_name: name.into(),
+                    session_id: sid,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = downlink::DisplayTable::new();
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            MagicCfg {
+                table: &magic_table,
+                fire_ball_skill: "火球术",
+                heal_skill: "治愈术",
+            },
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        let frames: Vec<(i32, u16, u16)> = std::iter::from_fn(|| rx0.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { socket, body } => Some((
+                    socket,
+                    u16::from_le_bytes([body[4], body[5]]),
+                    u16::from_le_bytes([body[10], body[11]]),
+                )),
+                _ => None,
+            })
+            .collect();
+        let cs = |sock: i32| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, id, _)| {
+                    *s == sock && *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED
+                })
+                .map(|(_, _, series)| *series)
+                .collect()
+        };
+        let want_self = sessions["victim"].hit_speed;
+        assert_ne!(want_self, 0, "要求非 0 落地 HitSpeed（防退化区间）");
+        assert_eq!(cs(902), vec![want_self, want_self], "目标自见 2 条");
+        assert_eq!(cs(901), vec![7], "观察者 hero 1 条，Series = 自己");
+        assert_eq!(cs(903), vec![9], "观察者 obs 1 条，Series = 自己");
+        assert!(cs(904).is_empty(), "超 range 零 657");
+        assert!(
+            frames
+                .iter()
+                .all(|(_, id, _)| { *id == mir2_protocol::messages::SM_CHARSTATUSCHANGED }),
+            "第二臂无 212/绿字，只允许 657；实得 {frames:?}"
+        );
+    }
+
     fn gm_clear_copy_self_target_uses_live_table() {
         use std::collections::HashMap;
         let mut world = mir2_world_bevy::World::new(32, 32);
