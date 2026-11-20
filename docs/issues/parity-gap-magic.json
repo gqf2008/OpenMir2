@@ -66,18 +66,23 @@
         "line": 87,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "warr_3_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-3.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "invoke"
+        ],
+        "unit_tests": [
+          "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
+        ]
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-02",
@@ -88,18 +93,23 @@
         "line": 88,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "warr_4_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-4.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "invoke"
+        ],
+        "unit_tests": [
+          "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
+        ]
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-03",
@@ -110,18 +120,23 @@
         "line": 89,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "warr_7_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-7.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "invoke"
+        ],
+        "unit_tests": [
+          "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
+        ]
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-04",
@@ -132,18 +147,22 @@
         "line": 90,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_12_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-12.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "off2on",
+          "on2off"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-05",
@@ -154,18 +173,22 @@
         "line": 91,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_25_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-25.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "off2on",
+          "on2off"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-06",
@@ -176,18 +199,23 @@
         "line": 92,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_26_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-26.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "charge",
+          "busy",
+          "nomp"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-07",
@@ -198,18 +226,21 @@
         "line": 93,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_27_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-27.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "coordinate_dir"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-08",
@@ -220,18 +251,22 @@
         "line": 94,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_34_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-34.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "off2on",
+          "on2off"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-09",
@@ -242,18 +277,22 @@
         "line": 95,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "warr_38_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-38.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约）",
+        "cases": [
+          "go",
+          "nomp"
+        ],
         "unit_tests": []
       },
       "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）"
+      "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
+      "basis": "semantic"
     },
     {
       "id": "MG-10",
