@@ -263,3 +263,22 @@
 | `lib.rs::drain_buff_downlink` | 否 | 不登记 | 按 actor 单播，非空间广播 |
 | `lib.rs::drain_aoi_downlink` | 否 | 不登记 | 出现帧按观察者 `SendMsg`，非 `SendRefMsg` |
 | `drain_npc_merchant_turns/hits`、`drain_merchant_disappears`、`fan_out_npc_hear`、`handle_say_with_saves` | 是 | 已覆盖（C1/C3/批1） | — |
+
+#### 7c `push_name_color` / `push_name_color_self` / `drain_close_health_for` / `push_open_health`（4 点）
+- **形态（与 7b 相反）**：非施法驱动、**无 `RM_SPELL(17)` 预热** ⇒ 同一 sender 的
+  **首调用刷新**、同窗第二次调用才**命中**（`|Δ|<11`）。
+- oracle 锚：656 ← `BaseObject.RefNameColor()` → `SendRefMsg(RM_CHANGENAMECOLOR)`；
+  1100/1101 ← `BaseObject` 的 `SendRefMsg(RM_OPENHEALTH/RM_CLOSEHEALTH)`。
+- `include_self` 逐点：`push_name_color` = **false**（自己那份由调用方另发；隐藏 sender 时
+  `targets=[self]` 被 skip ⇒ **零帧**）；`push_name_color_self` = **true**（隐藏 ⇒ **只自己收**）；
+  `drain_close_health_for` / `push_open_health` = true（隐藏 ⇒ 只自己）。
+- 用例：`push_name_color_two_calls_share_cache_window`、`push_name_color_hidden_sender_has_no_frames`、
+  `push_name_color_self_two_calls_share_cache_window`、`push_name_color_self_hidden_sender_only_self`、
+  `close_health_two_events_share_cache_window`、`open_health_two_calls_share_cache_window`。
+
+**7b / 7c 口径对照（防误读）**
+
+| 批 | 形态 | 期望 |
+| --- | --- | --- |
+| 7b（施法尾帧） | 施法前 `RM_SPELL(17)` 已刷新缓存 | 53/638/639/657/716 **全部命中**；12 格边界**只收 17** |
+| 7c（名色/血条） | 无预热 | **首调用刷新、同窗第二次命中**；隐藏按各点 `include_self` 语义 |

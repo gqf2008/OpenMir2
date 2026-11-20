@@ -12577,23 +12577,9 @@ impl SpellFrameBuf {
         self.frames.push((socket, priority, body));
     }
 
-    /// `SendRefMsg` 收件人集合（±`SendRefMsgRange` 的 `Race==Play && !Ghost`）中在线者。
-    fn push_broadcast(
-        &mut self,
-        world: &mir2_world_bevy::World,
-        online: &OnlineRegistry,
-        actor_id: i32,
-        include_self: bool,
-        priority: u8,
-        body: &[u8],
-    ) {
-        let targets = chat::hear_targets(world, actor_id, chat::send_ref_msg_range());
-        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
-    }
-
     /// **广播投递段（单一实现）**：收件人 id 已算好，逐收件人 `include_self` 过滤 +
-    /// `push_socket`（共享 body）。[`Self::push_broadcast`]（`chat::hear_targets`）与
-    /// [`Self::push_broadcast_cached`]（`ref_msg_cache::targets`）只差"收件人怎么来"。
+    /// `push_socket`（共享 body）。唯一调用方是 [`Self::push_broadcast_cached`]
+    /// （收件人 = `ref_msg_cache::targets`）。
     fn deliver_broadcast_targets(
         &mut self,
         online: &OnlineRegistry,
@@ -12614,10 +12600,10 @@ impl SpellFrameBuf {
         }
     }
 
-    /// [`Self::push_broadcast`] 的**缓存版**（T-287 残余 #1，批 7 逐站点迁移专用）：
-    /// 投递段与 `push_broadcast` 逐字相同（`include_self` 过滤 / 逐收件人 `push_socket` /
-    /// 共享 body），只把收件人换成 `ref_msg_cache::targets`（500ms `VisibleHumanList` +
-    /// 命中时 `|Δ|<11`）。迁移完成后旧 `push_broadcast` 应无调用者。
+    /// `SendRefMsg` 的**缓存版收件人 + 投递**（T-287 残余 #1 收口）：收件人 =
+    /// `ref_msg_cache::targets`（500ms `VisibleHumanList` + 命中时 `|Δ|<11`），投递交给
+    /// [`Self::deliver_broadcast_targets`]。批 7c 完成后旧 `push_broadcast` 已删除
+    /// （全仓 0 引用，见删除提交的 grep 证据）。
     fn push_broadcast_cached(
         &mut self,
         world: &mir2_world_bevy::World,
@@ -19933,7 +19919,10 @@ fn push_name_color(
     color: u8,
 ) {
     let body = smframe::sm_changenamecolor(actor_id, color);
-    buf.push_broadcast(
+    // **T-287 残余 #1（7c）**：`RefNameColor()` 的 `SendRefMsg(RM_CHANGENAMECOLOR)` 同走缓存；
+    // 本入口 `include_self=false`（自己那份由调用方另发）——隐藏 sender 时 `targets=[self]`
+    // 会被 skip ⇒ 零帧（与 oracle 退化自投 + 调用方自见帧口径一致）。
+    buf.push_broadcast_cached(
         world,
         online,
         actor_id,
@@ -19955,7 +19944,9 @@ fn push_name_color_self(
     color: u8,
 ) {
     let body = smframe::sm_changenamecolor(actor_id, color);
-    buf.push_broadcast(
+    // **T-287 残余 #1（7c）**：同上，但本入口 **`include_self=true`**（656 处理器无自守卫）
+    // ⇒ 隐藏 sender 时 `targets=[self]` 保留 ⇒ 只自己收。
+    buf.push_broadcast_cached(
         world,
         online,
         actor_id,
@@ -20225,7 +20216,8 @@ fn drain_close_health_for(
     }
     let body = smframe_ext::sm_closehealth(actor_id);
     let mut buf = SpellFrameBuf::new();
-    buf.push_broadcast(
+    // **T-287 残余 #1（7c）**：`SendRefMsg(RM_CLOSEHEALTH)` 同走缓存（含自己）。
+    buf.push_broadcast_cached(
         world,
         online,
         actor_id,
@@ -20248,7 +20240,8 @@ fn push_open_health(
     max_hp: u16,
 ) {
     let body = smframe_ext::sm_openhealth_frame(target_id, hp, max_hp);
-    buf.push_broadcast(
+    // **T-287 残余 #1（7c）**：`SendRefMsg(RM_OPENHEALTH, …)` 同走缓存（含自己）。
+    buf.push_broadcast_cached(
         world,
         online,
         target_id,
@@ -97062,6 +97055,156 @@ fn ",
         assert_eq!(per.get(&(902, fail)), Some(&1), "+5：639 收");
         assert_eq!(per.get(&(903, fail)), None, "|Δ|=11：639 被缓存挡");
         assert_eq!(per.get(&(904, fail)), None, "|Δ|=12：639 被缓存挡");
+    }
+
+    // ---- 批 7c：`push_broadcast` 最后 4 点（非施法驱动：首调用刷新、同窗第二次命中） ----
+
+    /// 取空通道帧并按 `(socket, ident)` 计数（7c 复用）。
+    fn take7c(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> HashMap<(i32, u16), usize> {
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            frames.push((socket, body));
+        }
+        count_by_socket_ident(&frames)
+    }
+
+    /// **7c `push_name_color`（`include_self=false`）**：非施法驱动 ⇒ 首次刷新、同窗第二次命中；
+    /// 自己（901）在两轮都**不收**（自见帧由调用方另发）。
+    #[test]
+    fn push_name_color_two_calls_share_cache_window() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let ident = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        let mut buf = SpellFrameBuf::new();
+        push_name_color(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        let first = take7c(&mut rx);
+        assert_eq!(
+            first.get(&(901, ident)),
+            None,
+            "include_self=false：自己不收"
+        );
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首次：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首次：+13 零帧");
+        let mut buf = SpellFrameBuf::new();
+        push_name_color(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被缓存挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被缓存挡");
+        assert_eq!(second.get(&(901, ident)), None, "第二次：自己仍不收");
+    }
+
+    /// **7c `push_name_color` 隐藏 sender（`include_self=false`）**：`targets=[self]` 被 skip
+    /// ⇒ **零帧**（oracle：退化自投那份由调用方自见帧覆盖）。
+    #[test]
+    fn push_name_color_hidden_sender_has_no_frames() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        world.entities.flags_mut(actor).unwrap().ob_mode = true;
+        let mut buf = SpellFrameBuf::new();
+        push_name_color(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        assert!(
+            take7c(&mut rx).is_empty(),
+            "隐藏 + include_self=false ⇒ 零帧"
+        );
+    }
+
+    /// **7c `push_name_color_self`（`include_self=true`）**：首次刷新含自己；第二次命中只剩
+    /// 自己与 +5。
+    #[test]
+    fn push_name_color_self_two_calls_share_cache_window() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let ident = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        let mut buf = SpellFrameBuf::new();
+        push_name_color_self(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), Some(&1), "首次：自己收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        let mut buf = SpellFrameBuf::new();
+        push_name_color_self(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        let second = take7c(&mut rx);
+        assert_eq!(
+            second.get(&(901, ident)),
+            Some(&1),
+            "第二次：自己仍收（Δ0）"
+        );
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
+    }
+
+    /// **7c `push_name_color_self` 隐藏 sender（`include_self=true`）**：只自己收。
+    #[test]
+    fn push_name_color_self_hidden_sender_only_self() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        world.entities.flags_mut(actor).unwrap().ob_mode = true;
+        let ident = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        let mut buf = SpellFrameBuf::new();
+        push_name_color_self(&mut buf, &world, &online, actor, 7);
+        buf.flush(&online, &gates);
+        let per = take7c(&mut rx);
+        assert_eq!(per.get(&(901, ident)), Some(&1), "隐藏：只自己收");
+        assert_eq!(per.get(&(902, ident)), None, "隐藏：+5 零帧");
+    }
+
+    /// **7c `drain_close_health_for`（1101）**：两个到期事件同窗 ⇒ 首次刷新、第二次命中。
+    #[test]
+    fn close_health_two_events_share_cache_window() {
+        use std::collections::HashMap;
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("src".into(), test_session_ground(actor));
+        world.clock_ms = 1_000;
+        let arm = |world: &mut mir2_world_bevy::World| {
+            let e = world.entities.get_mut(actor).unwrap();
+            e.buff.show_hp = true;
+            e.buff.show_hp_tick = 0;
+            e.buff.show_hp_interval = 100;
+        };
+        let ident = mir2_protocol::messages::SM_CLOSEHEALTH;
+        arm(&mut world);
+        drain_close_health_for(&mut world, &online, &mut sessions, &gates, actor);
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), Some(&1), "首次：自己收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首次：+13 零帧");
+        arm(&mut world);
+        drain_close_health_for(&mut world, &online, &mut sessions, &gates, actor);
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(901, ident)), Some(&1), "第二次：自己仍收");
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
+    }
+
+    /// **7c `push_open_health`（1100）**：两次调用同窗 ⇒ 首次刷新、第二次命中。
+    #[test]
+    fn open_health_two_calls_share_cache_window() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let ident = mir2_protocol::messages::SM_OPENHEALTH;
+        let mut buf = SpellFrameBuf::new();
+        push_open_health(&mut buf, &world, &online, actor, 50, 100);
+        buf.flush(&online, &gates);
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), Some(&1), "首次：自己收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首次：+13 零帧");
+        let mut buf = SpellFrameBuf::new();
+        push_open_health(&mut buf, &world, &online, actor, 50, 100);
+        buf.flush(&online, &gates);
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(901, ident)), Some(&1), "第二次：自己仍收");
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
     }
 }
 
