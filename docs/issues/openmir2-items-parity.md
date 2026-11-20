@@ -506,7 +506,8 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **归类**：**StdMode 3 / Shape 12**，`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`，**内联**，不走 `EatUseItems`）。六个**独立** `if`（可同时命中），各看模板一个字节：`LoByte(DC)`→DCUP、`LoByte(MC)`→MCUP、`LoByte(SC)`→SCUP、`HiByte(AC)`→HITSPEEDUP、`LoByte(AC)`→HPUP、`LoByte(MAC)`→MPUP。每命中：`ExtraAbil=max(旧,字节)`、`Flag=0`、`Times=max(旧, now + HiByte(DC)*60000 + HiByte(MAC)*1000)`。**无 RNG**；全不命中 ⇒ 不吃（636）。
 
 **照抄勿修（与 "sec." 同节，都是 oracle 原样）**
-- **HitSpeed 不对称**：`RecalcAbilitys` 的 HITSPEEDUP 块写临时字段 `HitSpeed`（`src/M2Server/Player/PlayObject.cs:2830-2832`），尾段 `HitSpeed = AddAbil.HitSpeed`（`:2899`）覆盖它；657 载荷在覆盖**之前**取（`:2874-2876`）⇒ **657.Tag 含 buff、落地字段不含**，并非双重计数。
+- **HitSpeed 不对称**：**`RecalcAbilitys` 开头先 `HitSpeed = 0;`**（`src/M2Server/Player/PlayObject.cs:2024`）⇒ HITSPEEDUP 块 `HitSpeed += ExtraAbil[HITSPEEDUP]`（`:2830-2832`）⇒ **657 在 `:2874-2876` 取到的就是 `ExtraAbil[3]` 本身**；尾段 `:2899` 才被 `AddAbil.HitSpeed`（另经 `/2` 或 `(x-1)/2`、`min(15)`，`BaseObject.Abil.cs:55-63`）覆盖 ⇒ **657.Tag == `ExtraAbil[3]`、落地字段 == `AddAbil.HitSpeed`**，并非"字段+extra"，也不是双重计数。
+  - **别漏了开头那条 `HitSpeed = 0;`**——不写它，下一位读者会把 657 载荷误读成"字段 + extra"（本线已有人这么错过一次）。
 - **文本**：六条蓝字是硬编码，非 `MessageSettings`；其中 **MC 那条以 `"sec."` 结尾**，其余五条 `"秒。"`（`:2116` 原文）。golden 里要能看见原文。
 
 **帧/泵序**：635/636 直发；每命中一条蓝 `RM_SYSMESSAGE`(11004→252)，`RecalcAbilitys` 后 `RM_ABILITY`(10051→67)，吃完另有 `RM_WEIGHTCHANGED`(10115→131)；`RecalcAbilitys` 尾部 10139(155)。**同优先级陷阱**：最多 6 条 11004 ⇒ 出队序是堆 sift 序，夹具记出队序；若实测等于入队序也如实写（不反推"泵稳定"）。
