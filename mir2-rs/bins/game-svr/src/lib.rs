@@ -69312,6 +69312,8 @@ SendRefMsgRange=15
         fire_boom_rage: i32,
         snow_wind_range: i32,
         elec_blizzard_range: i32,
+        /// 护身符 `StdItem.Shape`（施毒 6/48 走 `CheckAmulet(1,2)`，要求 ≤2；缺省 5 = nType=1 组）。
+        amulet_shape: u8,
     }
 
     impl SpellFrameRig {
@@ -69458,6 +69460,7 @@ SendRefMsgRange=15
                 fire_boom_rage: 1,
                 snow_wind_range: 1,
                 elec_blizzard_range: 2,
+                amulet_shape: 5,
             }
         }
 
@@ -69472,7 +69475,7 @@ SendRefMsgRange=15
                 mir2_data::StdItem {
                     name: "护身符".into(),
                     std_mode: 25,
-                    shape: 5,
+                    shape: self.amulet_shape,
                     ..mir2_data::StdItem::default()
                 },
             );
@@ -69527,7 +69530,7 @@ SendRefMsgRange=15
                 mir2_data::StdItem {
                     name: "护身符".into(),
                     std_mode: 25,
-                    shape: 5,
+                    shape: self.amulet_shape,
                     ..mir2_data::StdItem::default()
                 },
             );
@@ -71225,6 +71228,37 @@ SendRefMsgRange=15
                 }
             }
         }
+        // **施毒系夹具（6/48，MG-13/14/15/50/64/65）**：三旋钮都从 golden `Fixture` 读，
+        // 缺键 ⇒ 不动（既有件零变化）。
+        //  - `amulet_shape`：`CheckAmulet(1,2)` 要求 `Shape <= 2`（`MagicBase.cs:65-70`）；
+        //  - `target_anti_poison`：`Random(AntiPoison + 7) <= 6` 的右操作数；
+        //  - `amy_ounsul_point`：`point = Round(level/3 * power/AmyOunsulPoint)`（`MagicManager.cs:241`）。
+        if let Some(v) = golden_fixture_opt(stem, label, "amulet_shape") {
+            if let Ok(v) = u8::try_from(v) {
+                if v > 0 {
+                    rig.amulet_shape = v;
+                }
+            }
+        }
+        if let Some(v) = golden_fixture_opt(stem, label, "target_anti_poison") {
+            let v = u16::try_from(v).unwrap_or(0);
+            if v > 0 {
+                rig.world.set_attack_poison(
+                    target,
+                    mir2_world_bevy::combat::AttackPoisonState {
+                        paralysis: false,
+                        un_paralysis: false,
+                        anti_poison: v,
+                    },
+                );
+            }
+        }
+        if let Some(v) = golden_fixture_opt(stem, label, "amy_ounsul_point") {
+            let v = i32::try_from(v).unwrap_or(10);
+            let mut cfg = rig.world.b4_cfg;
+            cfg.amy_ounsul_point = v;
+            rig.world.set_b4_config(cfg);
+        }
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
@@ -71373,6 +71407,24 @@ SendRefMsgRange=15
             .iter()
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DOOPENHEALTH && m.actor_id == target)
             .map(|m| m.priority);
+
+        // `RM_POISON(8037)`（6/48 投毒）在**交付前**抓：到点后消息会从自延迟队列移除。
+        let poison_msgs: Vec<(i32, i32, i32, i32, i32, u8)> = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_POISON)
+            .map(|m| {
+                (
+                    m.actor_id,
+                    m.w_param,
+                    m.n_param1,
+                    m.n_param2,
+                    m.n_param3,
+                    m.priority,
+                )
+            })
+            .collect();
 
         // ---- 段②：**按 due 时刻分步**推进世界时钟并交付（镜像每 tick 排水）----
         // 步长 100ms；总等待取 golden `Fixture.wait_ms`（缺省 1200，28 = 1600——卡 §25(a)），
@@ -71897,6 +71949,69 @@ SendRefMsgRange=15
                     0,
                     141,
                     false,
+                ));
+            }
+        }
+
+        // `RM_POISON(8037)`（6/48 的投毒，`MagicManager.cs:241/245/921/925`）：目标自延迟队列，
+        // 字段 `wParam=type`（0=DECHEALTH/1=DAMAGEARMOR）、`p1=nPower`、`p2=casterActorId`、
+        // `p3=point`，优先级 `Lowest=255`、`late=true`（与 golden `Rm` 同形）。
+        // 毒到点后的三条派生 RM（`PoisonDelivery`：`BaseObject.cs:1941-1971`）：
+        // - `8090`(RM_CHANGENAMECOLOR)：`SetPkFlag` 触发（`name_color`）⇒ 攻击方 hearers，prio 154；
+        // - `10139`(RM_CHARSTATUSCHANGED)：`StatusChanged()` ⇒ `CharStatus`（**绿毒 = int.MinValue**，
+        //   `BaseObject.Base.cs:170` 的 `0x80000000 >> 0`；红毒 = `0x40000000`）⇒ 目标 hearers，prio 155；
+        // - `11004`(RM_SYSMESSAGE)：`SysMsg(Format(YouPoisoned, nTime, nPoint), Red, Hint)`
+        //   （`BaseObject.cs:1970`）⇒ 只给目标，prio 252。
+        for o in &all_outs {
+            let Some(p) = o.poison else { continue };
+            if p.status_changed {
+                for id in chat::hear_targets(&rig.world, p.target_id, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            10139,
+                            0,
+                            i64::from(p.status),
+                            0,
+                            0,
+                            155,
+                            false,
+                        ));
+                    }
+                }
+            }
+            if p.is_player {
+                if let Some(who) = who_of(p.target_id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        11004,
+                        0,
+                        255,
+                        56,
+                        0,
+                        252,
+                        false,
+                    ));
+                }
+            }
+            if let Some(nc) = p.name_color {
+                for id in chat::hear_targets(&rig.world, nc.target_id, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            8090, 0, 0, 0, 0, 154, false,
+                        ));
+                    }
+                }
+            }
+        }
+        for (actor, w_param, p1, p2, p3, prio) in poison_msgs {
+            if let Some(who) = who_of(actor) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    i64::from(mir2_world_bevy::slave::RM_POISON),
+                    i64::from(w_param),
+                    i64::from(p1),
+                    i64::from(p2),
+                    i64::from(p3),
+                    i64::from(prio),
+                    true,
                 ));
             }
         }
@@ -74393,7 +74508,72 @@ SendRefMsgRange=15
         fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
         per_receiver_frame_seq_matches_golden("groupamyounsul", label);
         fireball_case_assert("groupamyounsul", label);
-        b1_golden_drain_assert("groupamyounsul.json", label, 2);
+        // 2026-11-21 非退化重出：护身符 `Shape=1`（`CheckAmulet(1,2)`）+ `AmyOunsulPoint` 显式装载
+        // ⇒ 逐目标循环真的执行（`Rng` 3–4 抽、目标 `RM_POISON(8037)`），`DrainPasses` 2→3。
+        b1_golden_drain_assert("groupamyounsul.json", label, 3);
+    }
+
+    /// **施毒系（6/48）共用判定**：golden 一律从文件读（`amyounsul`/`amyounsul2` 为 6 的
+    /// Shape=1/2；`groupamyounsul`/`groupamyounsul2` 为 48 的 Shape=1/2），三旋钮全部来自
+    /// `Fixture`（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point`）。
+    fn amyounsul_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
+        fireball_case_assert(stem, label);
+        b1_golden_drain_assert(&format!("{stem}.json"), label, 3);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_parity_s1() {
+        amyounsul_assert("amyounsul", 6, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_parity_s5() {
+        amyounsul_assert("amyounsul", 6, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_parity_s13() {
+        amyounsul_assert("amyounsul", 6, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul2_parity_s1() {
+        amyounsul_assert("amyounsul2", 6, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul2_parity_s5() {
+        amyounsul_assert("amyounsul2", 6, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul2_parity_s13() {
+        amyounsul_assert("amyounsul2", 6, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul2_parity_s1() {
+        amyounsul_assert("groupamyounsul2", 48, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul2_parity_s5() {
+        amyounsul_assert("groupamyounsul2", 48, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn groupamyounsul2_parity_s13() {
+        amyounsul_assert("groupamyounsul2", 48, "s13", 13, 3000);
     }
 
     #[test]

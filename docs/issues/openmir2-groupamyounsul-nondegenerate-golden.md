@@ -58,3 +58,39 @@
 
 - `card/magic-mg23-49-50`（`9ec253049`）：接线已完成并合入；本卡**不改**它，只补 oracle 数据。
 - 不新造 oracle 数据的边界属于那张卡；**本卡就是解除它的那张**——需要跑 C# 侧重新采集。
+
+## 6. 施毒 6 条批（MG-13/14/15/50/64/65）WIP 交接（2026-11-21，`card/poison-batch`）
+
+**基线** `b480336f9`。**收敛记录：比较差异 72 → 49 → 每 case 恰 1 条（仅 `SM_SYSMESSAGE(100)` 载荷）**。
+
+### 已就绪（工作树）
+- 装置三旋钮（`Program.cs`）：`AmuletShape`（护身符 StdItem）、`TargetAntiPoison`（登录序 recalc 后写）、
+  **显式装载 `ServerConf`**（`[Setup] AmyOunsulPoint=15` 真正进 Config；`<=0` 即 `FixtureContractViolation`）；
+  `Fixture` 记 `amulet_shape`/`target_anti_poison`/`amy_ounsul_point`。
+- 4 份**非退化** golden：`amyounsul`/`amyounsul2`（6 Shape1/2）、`groupamyounsul`/`groupamyounsul2`（48 Shape1/2）：
+  `rng_total_draws=3–4`、目标 `Rm` 含 `RM_POISON(8037)`、带 `frame_order_scope=poison_cross_actor_same_tick`、
+  `StepDrainMs=100`、`t0` 取在 `DoSpell` 之前。
+- 比较器（`magic_fireball_parity.rs`）：毒口径分支——顺序多重集 + chained 帧 due **批次类（0 vs >0）** +
+  **late 帧（640）`|Δ|≤32ms` 容差**（15.6ms TickCount 粒度 ×2，注释含推导与 600/1000 判别力说明）；
+  marker **白名单写死** `{fire, amyounsul, amyounsul2, groupamyounsul, groupamyounsul2}`。
+- 驱动：`SpellFrameRig.amulet_shape`；三 Fixture 键读取；`RM_POISON` **交付前**抓取；
+  `PoisonDelivery` → `8090`/`10139`/`11004` 装配；6 个新驱动 + 3 个比较器。
+
+### 未做（按依赖，接手清单）
+1. **① 装置补三键**：`Fixture` 增记 `red_msg_f_color`/`red_msg_b_color`/`you_poisoned`（同一 `SystemShare.Config`
+   / String.conf 读；**缺键 ⇒ `FixtureContractViolation`，不许缺省**），驱动把 `drain_b4_self_deliveries(...,0,0,b"")`
+   换成它们（文本经 `enter::gbk`）。牙：改 `you_poisoned` 一个字符 ⇒ `tail` 必红。
+2. **② 驱动口径统一**：`group_amyounsul_assert` 里的 `per_receiver_frame_seq_matches_golden`（严格序）换成
+   「多重集 + chained 批次类 + 640 容差」，与比较器同口径；改后三支须与比较器同绿。
+3. **③ 牙**：L1 三颗（golden 640 due 1000→600 必红、→0 必红、→1016 必绿，且**只**对 late 帧）；
+   `10139` 红毒 `0x40000000` 牙（绿毒 `int.MinValue` 只从 golden 比）；`657.series=HitSpeed` 比对。
+4. **④ 四刀**（本卡 §2）：毒伤表达式 / 目标范围 / 合法目标门 / 毒素骰——至少一刀在比较器上红。
+5. **⑤ 门禁**：fmt / clippy `--all-targets` / `--lib` 三数 / msgcodegen / coverage / manifests / 锚门；
+   红原文进提交信息；`3b`/`10` 复核后由 Leader 合并。
+6. 其余：`c6` 的 head（`49edaf0fd`）与 `magic_effect.rs`、`lib.rs` 魔号 10 区**不可碰**；别删远端分支。
+
+### 已知边界
+- 毒交付帧「跨 actor 同拍」与 `multi_victim_same_tick` **同根**（oracle 逐 actor `Run()` vs Rust 批量 flush）；
+  撤销条件同：产品改为逐 actor 处理时删 marker。
+- `Rm` 的 `10139.p1` 是真实位掩码（绿毒 `0x80000000>>0` = `int.MinValue`；红毒 `0x40000000`），
+  **逐值从 golden 比，不写死常量**。
