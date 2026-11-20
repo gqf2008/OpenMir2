@@ -68260,8 +68260,11 @@ SendRefMsgRange=15
             sg.state.wabil.level = 30;
             sg.state.wabil.mc = 15;
             sg.state.wabil.sc = 15;
-            sg.state.wabil.hp = 500;
-            sg.state.wabil.max_hp = 500;
+            // 卡 36 / B-hp：oracle `MagicGolden/Program.cs:1632-1636` 的 `targetNull` 分支把 caster
+            // `WAbil.HP/MaxHP` 覆盖成 `targetHp/TargetMaxHp=100` ⇒ rig 起点须为 100（非 500）。
+            // recalc 会把 MaxHP 重算为 Abil 派生值（419），HP 保留 100。
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
         }
         let target = fireball_actor(&rig, "target");
         {
