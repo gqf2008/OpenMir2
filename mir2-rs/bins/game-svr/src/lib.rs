@@ -18826,8 +18826,36 @@ fn drain_buff_downlink(
             d.status = *status;
             displays.set(*actor_id, d);
         }
-        let body = game_svr::smframe_ext::sm_charstatuschanged(*actor_id, *status, 0);
-        broadcast_ref_msg_with_self(world, online, gates, *actor_id, &[body]);
+        // **657 修正（2026-11-20，`card/657-buff`）**：oracle handler 的 `Series` 取**收件人自己**
+        // 出队时的 `HitSpeed`（`src/M2Server/Player/PlayObject.Message.cs:1845-1847`）。旧实现用
+        // `broadcast_ref_msg_with_self(.., &[body])` 发**单 body**（`Series` 还固定成 0）⇒ 每个收件人都错。
+        // **不要复用 `broadcast_ref_msg_with_self`**：签名是 `bodies: &[Vec<u8>]`，同一份 body 发给所有收件人。
+        // 逐收件人路径 = `send_charstatuschanged_self_and_observers`（自见 1 + 观察者各 1，每人取自己的 hit_speed）。
+        let self_hit_speed = world.entities.get(*actor_id).map_or(0, |e| e.hit_speed);
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            *actor_id,
+            *status,
+            self_hit_speed,
+            range,
+            "buff 657 自发",
+        );
+        // `SendUpdateMsg` 再追加一条**自见**副本（oracle 同 ident 去重不命中 ⇒ 自见共 2 条）。
+        if let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 657 自更新")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: game_svr::smframe_ext::sm_charstatuschanged(
+                        *actor_id,
+                        *status,
+                        self_hit_speed,
+                    ),
+                });
+            }
+        }
     }
     // **递减段 `SysMsg`（同卡）**：`SysMsg(msg, MsgColor.Green, MsgType.Hint)`（非 Notice 支）⇒
     // `SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, msg)`
