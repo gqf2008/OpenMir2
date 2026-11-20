@@ -1054,7 +1054,7 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   三份侧车 `<stem>_<label>.run.json` 均记该 run_id。负对照：换 id（`WRONG-run-id-negctl`）
   比较器 rc=101，报「台账陈旧：run_id 不匹配」。
 - **全平面回归（同一 run_id）**：`MIR2_LEDGER_RUN_ID=magic-plane-1795127273-1441175` 跑
-  `rerun_magic_plane.sh`（48 支驱动 + 16 条比较器，含 33 与既有 15 条）⇒ 49 个
+  `tools/parity/rerun_magic_plane.sh`（驱动 `--ignored --exact` 逐支 + 比较器 `--ignored`，同一 run_id；脚本按 `--list` 自动取驱动清单并做 run_id 侧车校验）⇒ 49 个
   `test result: ok`、0 failed、rc=0（`evidence/regression-33-plane-final.log`）。
 - **门禁（红→绿留痕）**：首跑 `cargo clippy --workspace --all-targets -- -D warnings` **rc=101**
   —— `doc_lazy_continuation` 两处（`bins/game-svr/src/lib.rs:67718/67719`：列表项后的
