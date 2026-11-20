@@ -62,7 +62,8 @@ pub struct Emitted {
 /// （若 `nInt` 分叉）`SendRefMsg(RM_SPACEMOVE_SHOW(|2), Dir, CurrX, CurrY, 0, "")`；
 /// `PlayObject.EnterAnotherMap`（`PlayObject.cs:3772-3778`）只发前两条（`space_move_show == None`）。
 ///
-/// 参数：`map_file_name` = 新图逻辑名（`Envir.MapFileName` 的 GBK 字节，本层不转 UTF-8）；
+/// 参数：`map_file_name` = 新图的**取图文件主干**（`Envir.MapFileName` = `MapManager.AddMapInfo`
+/// 的 `sMapFileName`，即 `[名|文件]` 的右半，缺省 = 逻辑名；GBK 字节，本层不转 UTF-8）；
 /// `day_bright` = `DayBright()`（新图）；`dir`/`light` = `SM_SPACEMOVE_SHOW` 的 `Series` 两个半字节；
 /// `char_desc` = `Encode(CharDesc{Feature,Status})` 的**未编码** 8B（`sm_spacemove_show` 内再 Encode）。
 #[must_use]
