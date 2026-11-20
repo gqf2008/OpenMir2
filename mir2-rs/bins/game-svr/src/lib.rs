@@ -10504,6 +10504,21 @@ fn emit_eat_notices(
     sent
 }
 
+/// Shape12 的 657 自通知（oracle `RecalcAbilitys` 尾段 `:2874-2876`）：
+/// `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, …)` 的落位是
+/// **`wParam = 临时 HitSpeed`（= 开局清零后的 `ExtraAbil[3]`，657 handler 不读）、
+/// `nParam1 = CharStatus`**（帧的 `Param/Tag` 取它的 Lo/HiWord）。
+fn shape12_status_notice(status: i32, hitspeed_temp: u16) -> game_svr::useitem::QueuedNotice {
+    game_svr::useitem::QueuedNotice {
+        ident: mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32,
+        w_param: i32::from(hitspeed_temp),
+        n_param1: status,
+        n_param2: 0,
+        n_param3: 0,
+        text: game_svr::useitem::NoticeText::None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
 ///
@@ -10848,15 +10863,10 @@ fn handle_eat_cmd(
         // SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus,…)`，`:2874-2876`）：
         // `nParam1 = CharStatus`（帧 Param/Tag 取它的 Lo/HiWord），`wParam = 临时 HitSpeed`
         // （=开局清零后的 `ExtraAbil[3]`，handler 不读）；观察者面由下方 `broadcast_…` 依据本通知触发。
-        let status = world.get_char_status(actor_id);
-        out.notices.push(game_svr::useitem::QueuedNotice {
-            ident: mir2_protocol::messages::RM_CHARSTATUSCHANGED as i32,
-            w_param: i32::from(state.extra.extra_abil[3]),
-            n_param1: status,
-            n_param2: 0,
-            n_param3: 0,
-            text: game_svr::useitem::NoticeText::None,
-        });
+        out.notices.push(shape12_status_notice(
+            world.get_char_status(actor_id),
+            state.extra.extra_abil[3],
+        ));
         out.notices.push(game_svr::useitem::QueuedNotice {
             ident: game_svr::useitem::RM_ABILITY,
             w_param: 0,
@@ -98392,6 +98402,40 @@ fn ",
             ordered, want,
             "出队序：ABILITY(67) → WEIGHT(131) → 六条 SYSMESSAGE(252)"
         );
+    }
+    /// **IT-07 657 断言（host 边界：通知构造 + 帧映射）**：Shape12 的 657 自通知
+    /// `nParam1=CharStatus`、`wParam=临时 HitSpeed`（不读）；帧 `Param/Tag = Lo/HiWord(CharStatus)`、
+    /// `Series = 落地 HitSpeed`（`wire.hit_speed`）。实测依据见 `buff_vectors.json`（param=0/tag=0/series=0）。
+    /// **边界**：本用例钉的是「通知构造 → `notice_frame` 映射」；`handle_eat_cmd` 的**单玩家观察者 0 条**
+    /// 由 master 的广播实现（`broadcast_charstatuschanged_except_self` 跳过自己）保证，
+    /// **观察者面归 `card/charstatuschanged` 的用例**，本卡不重复造。
+    #[test]
+    fn it07_shape12_657_notice_fields() {
+        use mir2_protocol::frame::CommandMessage;
+        let n = shape12_status_notice(0x1234, 7);
+        assert_eq!(
+            n.ident,
+            i32::from(mir2_protocol::messages::RM_CHARSTATUSCHANGED)
+        );
+        assert_eq!(n.n_param1, 0x1234, "nParam1 = CharStatus");
+        assert_eq!(n.w_param, 7, "wParam = 临时 HitSpeed（handler 不读）");
+        let wire = game_svr::pickwire::WireSession {
+            actor_id: 7,
+            gold: 0,
+            game_gold: 0,
+            wabil: game_svr::ability::Ability::default(),
+            abil_exp: 0,
+            sys_msg: None,
+            hunger_status: 0,
+            hit_speed: 0x0BCD,
+        };
+        let body = game_svr::pickwire::notice_frame(&n, &wire).expect("657 必须有映射");
+        let m = CommandMessage::from_bytes(&body).expect("SM 帧可解析");
+        assert_eq!(m.ident, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+        assert_eq!(m.recog, 7, "recog = ActorId");
+        assert_eq!(m.param, 0x1234, "Param = LoWord(CharStatus)");
+        assert_eq!(m.tag, 0, "Tag = HiWord(CharStatus)");
+        assert_eq!(m.series, 0x0BCD, "Series = 落地 HitSpeed（不是临时值）");
     }
 }
 
