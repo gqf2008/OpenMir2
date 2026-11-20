@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "1e335c3f8c773985ada8945ef9c6672944c404d709d809a60c688aee7215fc0d",
+  "oracle_assembly_sha256": "65d9d1069064552dad0c063a08a9e4c9a081e980b977e54d540918a93b41ba40",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -138,6 +138,16 @@
       "name": "repair_oil",
       "std_mode": 3,
       "shape": 9,
+      "weight": 5,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0,
+      "ani_count": 0
+    },
+    "2010": {
+      "name": "super_repair_oil",
+      "std_mode": 3,
+      "shape": 10,
       "weight": 5,
       "ac": 0,
       "mac": 0,
@@ -1114,6 +1124,485 @@
           {
             "make_index": 1,
             "index": 2009,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ],
+        "drain": {
+          "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape10_repair_normal",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "super_repair_oil"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 8,
+        "max_hp": 19,
+        "max_mp": 15,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": {
+        "index": 200,
+        "dura": 5000,
+        "dura_max": 10000
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2010,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10125,
+            "w_param": 1,
+            "n_param1": 10000,
+            "n_param2": 10000,
+            "n_param3": 0,
+            "priority": 141,
+            "late": 0
+          },
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 219,
+            "n_param2": 255,
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 10,
+          "mp": 8,
+          "max_hp": 19,
+          "max_mp": 15,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": {
+          "index": 200,
+          "dura": 10000,
+          "dura_max": 10000
+        },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape10_full_still_eaten",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "super_repair_oil"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 8,
+        "max_hp": 19,
+        "max_mp": 15,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": {
+        "index": 200,
+        "dura": 10000,
+        "dura_max": 10000
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2010,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10125,
+            "w_param": 1,
+            "n_param1": 10000,
+            "n_param2": 10000,
+            "n_param3": 0,
+            "priority": 141,
+            "late": 0
+          },
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 219,
+            "n_param2": 255,
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 10,
+          "mp": 8,
+          "max_hp": 19,
+          "max_mp": 15,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": {
+          "index": 200,
+          "dura": 10000,
+          "dura_max": 10000
+        },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_shape10_no_weapon",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56,
+        "green_msg_fcolor": 219,
+        "green_msg_bcolor": 255,
+        "repair_item_dec_dura": 90
+      },
+      "request": {
+        "make_index": 1,
+        "name": "super_repair_oil"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 10,
+        "mp": 8,
+        "max_hp": 19,
+        "max_mp": 15,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "weapon_before": null,
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2010,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 10,
+          "mp": 8,
+          "max_hp": 19,
+          "max_mp": 15,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "weapon_after": null,
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2010,
             "dura": 10,
             "dura_max": 20,
             "desc": [
@@ -6021,7 +6510,7 @@
         ],
         "added_items": [
           {
-            "make_index": 1124552996,
+            "make_index": 1126943060,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6043,7 +6532,7 @@
             ]
           },
           {
-            "make_index": 1124552997,
+            "make_index": 1126943061,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6065,7 +6554,7 @@
             ]
           },
           {
-            "make_index": 1124552998,
+            "make_index": 1126943062,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6087,7 +6576,7 @@
             ]
           },
           {
-            "make_index": 1124552999,
+            "make_index": 1126943063,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6109,7 +6598,7 @@
             ]
           },
           {
-            "make_index": 1124553000,
+            "make_index": 1126943064,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6131,7 +6620,7 @@
             ]
           },
           {
-            "make_index": 1124553001,
+            "make_index": 1126943065,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6191,7 +6680,7 @@
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1124552996,
+            "make_index": 1126943060,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6213,7 +6702,7 @@
             ]
           },
           {
-            "make_index": 1124552997,
+            "make_index": 1126943061,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6235,7 +6724,7 @@
             ]
           },
           {
-            "make_index": 1124552998,
+            "make_index": 1126943062,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6257,7 +6746,7 @@
             ]
           },
           {
-            "make_index": 1124552999,
+            "make_index": 1126943063,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6279,7 +6768,7 @@
             ]
           },
           {
-            "make_index": 1124553000,
+            "make_index": 1126943064,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6301,7 +6790,7 @@
             ]
           },
           {
-            "make_index": 1124553001,
+            "make_index": 1126943065,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,

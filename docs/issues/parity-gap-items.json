@@ -448,25 +448,21 @@
         "line": 2292,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "useitem::tests::matches_oracle_eat_fixture",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_shape10_repair_normal",
+          "eat_ok_shape10_full_still_eaten",
+          "eat_fail_shape10_no_weapon"
+        ],
         "unit_tests": []
       },
       "cost": "S",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
-        ]
-      },
-      "notes": "登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "deviation": null,
+      "notes": "特修油 Shape10 已在 use_item 实现（StdMode3 的 default→EatUseItems(10)→SuperRepairWeapon：无武器/Index<=0 不吃；否则 Dura=DuraMax、发 RM_DURACHANGE(10125)+绿色 RM_SYSMESSAGE；**无\"已满\"守卫⇒已满仍吃**；**无 RepairItemDecDura**）。oracle 对拍三支（正常/已满仍吃/无武器）+ weapon_after 进比较面。**运行期帧缺口（用户可见）**：SysMsg 复用 MessageSettings.WeaponRepairSuccess（与 IT-14 同文案）的 SM_SYSMESSAGE 文本帧运行期不发，见 docs/issues/openmir2-runtime-sysmsg-text-frames.md（同时指 IT-14/IT-15）⇒ 记 implemented_unverified，不计 verified。"
     },
     {
       "id": "IT-16",

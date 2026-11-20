@@ -1,0 +1,9 @@
+# IT-15 特修油 Shape10 teeth（§16）：每颗 ran=(0,1)=1测跑1失败；快照 E:/UserTemp/it15-useitem-snap.rs(sha 7fa182c5…) 还原相等。
+# T1 耐久+1（w.dura=w.dura_max → +1）：
+weapon_after 不符: left Some((200,10001,10000)) right Some((200,10000,10000))
+# T2 去 RM_DURACHANGE 推送：
+延时通知 不符: left [(131,10115,..),(252,11004,0,219,255,0,false)]
+              right [(131,10115,..),(141,10125,1,10000,10000,0,false),(252,11004,0,219,255,0,false)]
+# T3 shape 臂串到 9（3 if shape==10 → ==9）：
+weapon_after 不符: left Some((200,5000,10000)) right Some((200,10000,10000))  # 走了修复油支、未置 DuraMax
+# 还原后基线绿：--lib 2043 passed / 0 failed / 55 ignored；restore_ok=True。
