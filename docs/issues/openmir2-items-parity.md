@@ -701,7 +701,14 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 **第二批（探针/夹具/比较器/牙，2026-11-20）**
 - **探针**：新建 `mir2-rs/tests/parity/m3/oil-probe`（不动 `eat-probe`），产物 `mir2-rs/tests/parity/m3/fixtures/oil_vectors.json`（12 例）。`weapon_before/after` 记**整套 `desc[14]`**（后续 shape 可复用同一 schema）；抽值用 `ScriptedRandom` 装进 `OpenMir2.RandomNumber.random`（= `WeaptonMakeLuck` 读的字段）；pump `RM_ABILITY`/`RM_SUBABILITY`/`RM_WEIGHTCHANGED` ⇒ 每例 `pumped=[752,52,622]`、直发 `[635]`。
 - **Oracle 实测要点**：`oil_curse_desc4_at_ten_stays` 在 oracle 里**一条 sysmsg 都没有**（`Desc[3]=0` 且 `Desc[4]=10` ⇒ `MakeWeaponUnlock` 两支都不进）——这是"上界不越界"的最强证据；失败支 `oil_fail_no_weapon` = 636 + 零通知、`oil_fail_nodrug` = 636 + 恰一条红字。
-- **新增缺口（登记，不静默）**：所有"吃掉"例的 oracle 通知都含 `RM_CHARSTATUSCHANGED(10139)`（`RecalcAbilitys()` 的侧效应）；Rust 宿主**未建模 10139**（`notice_frame` 无映射、按 WRN 丢弃）——与 sysmsg 文本缺口并列，**不计入行为面 verified**。
+- **新增缺口（登记，不静默）**：所有"吃掉"例的 oracle 通知都含 `RM_CHARSTATUSCHANGED(10139)`（`RecalcAbilitys()` 的侧效应）；Rust 宿主**未建模 10139**（`notice_frame` 无映射、按 WRN 丢弃）——与 sysmsg 文本缺口并列，**不计入行为面 verified**。单独立卡：`docs/issues/openmir2-charstatuschanged-gap.md`（含产生点/丢弃点/blast radius grep/补齐后复评清单）。**泵序键：`10139 & 0xFF = 155`** ⇒ 排 `622(131)` 之后、`252` 之前（`62 < 67 < 131 < 155 < 252`）。
 - **比较器**：`wepmake_luck::tests::it12_oil_fixture_matches_pure_decision`（逐例 Desc[3]/[4] 迁移 + 消耗抽数）、`it12_oil_fail_cases_eat_and_frames`（636/通知/纯路径不吃）。
-- **牙（实跑）**：T1 诅咒阈值 `==1`→`==2`；T2 点1 比较 `<`→`<=`；T3 `Desc[4] < 10`→`< 11`；T4 去掉点3 那次抽——四颗全红；泵序对调牙保持**绿**（线序由堆决定）。
+- **牙（2026-11-20 按章程 §31 五点重述；变异还原后 `touch`，见下方 mtime 教训）**：
+  | 变异 | 变异行（原文） | 已重编 | 红在预期断言 | 还原 sha | 基线 |
+  | --- | --- | --- | --- | --- | --- |
+  | T1 诅咒阈值 | `if rng.random_below(cfg.un_luck_rate) == 2 {` | `Compiling game-svr` 在场 | `it12_oil_fixture_matches_pure_decision` + 宿主帧序例 | 相等 | 绿 |
+  | T2 点1 比较 | `} else if i32::from(d3) <= cfg.point1 {` | 同上 | `oil_point2_hit: 消耗抽数必须与 oracle 相同（script=[0, 1]）` | 相等 | 绿 |
+  | T3 Desc[4] 上界 | `} else if desc4 < 11 {` | 同上 | `it12_oil_fixture_matches_pure_decision` + 宿主帧序例 | 相等 | 绿 |
+  | T4 去点3 抽 | `} else if i32::from(d3) < cfg.point3 {` | 同上 | `oil_point2_miss_point3_hit: 消耗抽数必须与 oracle 相同（script=[0, 0, 1]）` | 相等 | 绿 |
+  | 泵序对调 | `RM_ABILITY`/`RM_SUBABILITY` 两条 push 互换 | 同上 | **不红**（线序由堆决定，这正是要证的） | 相等 | 绿 |
 - **过程留痕（教训）**：变异还原用 `shutil.copy2` 会**保留 mtime** ⇒ cargo 不重编 ⇒ 首轮全量 `2083 passed / 4 failed` 是**陈旧二进制的假红**；`touch` 源码后复跑 `2087 passed / 0 failed / 61 ignored`。后续变异脚本还原后必须 `touch` 或 `cargo clean -p game-svr`。**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口，同 IT-14/15/16）。
