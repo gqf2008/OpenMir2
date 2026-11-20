@@ -49,3 +49,9 @@
 
 ## 7. 边界
 只读盘点 + 本文档；**未改产品代码、未编译**；行号对 `9ff231ba7`，若后续 rebase 需按内容（断言串）重定位而非死认行号。
+
+## 8. 实施与合并（收录，勿抹）
+- 实施 commit：`2dacd95dc`（分支 `card/assert-consts-impl`，base `0b42eb25c`）。
+- 合并进 master：`b61a5ad7d`（合并树 `99b88ef45f`）。
+- **静默默认 4 处已改 `golden_fixture_required`**；**唯一漏掉的 `caster_max_hp` 下游残留行（`u16::try_from(cmax).unwrap_or(100)`）由合并侧删除**——`clippy useless-conversion` 暴露：改 `required` 后该行既多余、又残留一个 `.unwrap_or(100)` 默认。分支 follow-up commit 同步删除该行，使分支 tip 与合并代码一致。
+- 教训：改静默默认要连下游使用行一起看（`required` 返真值后，`.unwrap_or/.try_from/if let Ok` 包裹都是残渣）；门要四项全跑（本次漏跑 `clippy --all-targets`）。
