@@ -12579,7 +12579,23 @@ impl SpellFrameBuf {
         priority: u8,
         body: &[u8],
     ) {
-        for target_id in chat::hear_targets(world, actor_id, chat::send_ref_msg_range()) {
+        let targets = chat::hear_targets(world, actor_id, chat::send_ref_msg_range());
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
+    }
+
+    /// **广播投递段（单一实现）**：收件人 id 已算好，逐收件人 `include_self` 过滤 +
+    /// `push_socket`（共享 body）。[`Self::push_broadcast`]（`chat::hear_targets`）与
+    /// [`Self::push_broadcast_cached`]（`ref_msg_cache::targets`）只差"收件人怎么来"。
+    fn deliver_broadcast_targets(
+        &mut self,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        targets: Vec<i32>,
+        include_self: bool,
+        priority: u8,
+        body: &[u8],
+    ) {
+        for target_id in targets {
             if !include_self && target_id == actor_id {
                 continue;
             }
@@ -12603,15 +12619,8 @@ impl SpellFrameBuf {
         priority: u8,
         body: &[u8],
     ) {
-        for target_id in ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()) {
-            if !include_self && target_id == actor_id {
-                continue;
-            }
-            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
-                continue;
-            };
-            self.push_socket(t.socket, priority, body.to_vec());
-        }
+        let targets = ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range());
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
     }
 
     /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
@@ -96241,7 +96250,7 @@ fn ",
         gates.insert(0, tx0);
         world
             .pending_mag_struck
-            .push(mir2_world_bevy::PendingMagStruck {
+            .push(mir2_world_bevy::world::PendingMagStruck {
                 target_id: victim,
                 caster_id: 2,
                 power: 40,
@@ -96296,7 +96305,7 @@ fn ",
         gates.insert(0, tx0);
         world
             .pending_mag_struck
-            .push(mir2_world_bevy::PendingMagStruck {
+            .push(mir2_world_bevy::world::PendingMagStruck {
                 target_id: mon,
                 caster_id: 2,
                 power: 40,
@@ -96365,7 +96374,7 @@ fn ",
         gates.insert(0, tx0);
         world
             .pending_mag_struck
-            .push(mir2_world_bevy::PendingMagStruck {
+            .push(mir2_world_bevy::world::PendingMagStruck {
                 target_id: victim,
                 caster_id: 2,
                 power: 40,
