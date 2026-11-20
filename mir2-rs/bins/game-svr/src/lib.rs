@@ -72063,6 +72063,44 @@ SendRefMsgRange=15
             0,
             "[{stem}/{label}] caster 不得收 SM_SPELL(17)"
         );
+        // **条件化牙（MG-18 起）：golden 的 caster 有 640 ⇒ 台账必须同样有**，且当 golden
+        // 逐帧带 `due_ms_rel` 时**逐值相等**。**以 golden 有无该帧为开关**：
+        // `boTrain=false`（A 类/召唤失败）、`UserMagicLevel=3`、非训练支本来就不该有 640，
+        // 无条件要求会误伤这些正确行为。旧世代 golden（无 due 键）只比条数。
+        if let Some(g_caster) = g["Receivers"]
+            .as_array()
+            .and_then(|rs| rs.iter().find(|r| r["Who"] == "caster"))
+        {
+            let g_frames: Vec<&serde_json::Value> = g_caster["Sent"]
+                .as_array()
+                .map(|a| a.iter().filter(|s| s["ident"] == 640).collect())
+                .unwrap_or_default();
+            if !g_frames.is_empty() {
+                let r_frames: Vec<&serde_json::Value> = caster["Sent"]
+                    .as_array()
+                    .map(|a| a.iter().filter(|s| s["ident"] == 640).collect())
+                    .unwrap_or_default();
+                assert_eq!(
+                    r_frames.len(),
+                    g_frames.len(),
+                    "[{stem}/{label}] caster 640 条数与金标准不符（golden {} / 台账 {}）",
+                    g_frames.len(),
+                    r_frames.len()
+                );
+                if g_frames.iter().all(|f| f.get("due_ms_rel").is_some()) {
+                    let dues = |fs: &[&serde_json::Value]| -> Vec<i64> {
+                        fs.iter()
+                            .map(|f| f["due_ms_rel"].as_i64().unwrap_or(i64::MIN))
+                            .collect()
+                    };
+                    assert_eq!(
+                        dues(&r_frames),
+                        dues(&g_frames),
+                        "[{stem}/{label}] caster 640 的 due_ms_rel 与金标准不符"
+                    );
+                }
+            }
+        }
         // 负向牙②：obs_out 全空。
         let obs_out = case["Receivers"]
             .as_array()
