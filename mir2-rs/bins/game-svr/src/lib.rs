@@ -68471,26 +68471,62 @@ SendRefMsgRange=15
     #[ignore = "烟测：验证 cast_slave 接缝 + spawn 计数（race 100 WhiteSkeleton）"]
     fn skeleton_cast_smoke() {
         let mut rig = SpellFrameRig::new_layout(
-            200, 200, 0, 100, 100, 17, &[(17, 1)],
-            &[("target",101,100,false,912),("obs_in",105,100,false,913),("obs_out",140,100,false,914)],
+            200,
+            200,
+            0,
+            100,
+            100,
+            17,
+            &[(17, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
         );
         rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
-            magic_id: 17, effect: 1, effect_type: 1, ..mir2_data::MagicInfo::default()
+            magic_id: 17,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
         }]);
         {
             let e = rig.world.entities.get_mut(rig.caster).unwrap();
             e.progression.level = 30;
-            e.vitals.hp = 500; e.vitals.max_hp = 500;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
         }
-        let target = rig.online.iter().find(|e| e.chr_name == "target").unwrap().actor_id;
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
         let before = rig.world.slave_count(rig.caster);
-        let mon = mir2_data::MonsterInfo { name: "变异骷髅".into(), race: 100, level: 1, hp: 17, ..mir2_data::MonsterInfo::default() };
+        let mon = mir2_data::MonsterInfo {
+            name: "变异骷髅".into(),
+            race: 100,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
         rig.cast_slave(17, (101, 100), target, vec![mon]);
         let (frames, _) = rig.drain();
         let after = rig.world.slave_count(rig.caster);
-        let regen = rig.world.slave_cast_regen_calls.last().copied().unwrap_or(999);
-        let sid = rig.world.entities.get(rig.caster).and_then(|c| c.slave_list.last().copied());
-        let (shp, smax, slevel) = sid.and_then(|id| rig.world.entities.get(id)).map_or((0,0,0), |e| (e.hp, e.max_hp, e.level));
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(999);
+        let sid = rig
+            .world
+            .entities
+            .get(rig.caster)
+            .and_then(|c| c.slave_list.last().copied());
+        let (shp, smax, slevel) = sid
+            .and_then(|id| rig.world.entities.get(id))
+            .map_or((0, 0, 0), |e| (e.hp, e.max_hp, e.level));
         eprintln!("SMOKE before={before} after={after} regen={regen} frames={} slave_hp={shp}/{smax} level={slevel}", frames.len());
         assert_eq!(regen, 1, "MonsterTableSpawner.spawn 应被调用 1 次");
         assert_eq!(after, before + 1, "应新增 1 个奴隶");
@@ -68659,8 +68695,7 @@ SendRefMsgRange=15
             "world_entities_after": entities_after,
         }]);
         let out = dir.join(format!("{stem}_{label}.json"));
-        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap())
-            .expect("台账必须可写");
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[skeleton {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",

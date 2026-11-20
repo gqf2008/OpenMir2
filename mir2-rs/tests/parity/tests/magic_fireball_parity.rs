@@ -1213,7 +1213,33 @@ fn real_rust_ledger_skeleton() {
         let gskel = &gcase["Skeleton"];
         let rskel = &rust["Skeleton"];
 
-        // ① Skeleton block 标量逐字段。
+        // ① cap_hit 三断（先验语义层：实体数 / slave_list / spawn 次数；各自独立断言）。
+        //    放在 block 标量之前 ⇒ ②③ 变异在语义层先红，不被标量差抢先。
+        if label == "cap_hit" {
+            let eb = rust["world_entities_before"].as_u64();
+            let ea = rust["world_entities_after"].as_u64();
+            assert_eq!(
+                ea, eb,
+                "[cap_hit 断①/实体数不增] 施法前后实体数变化：before={eb:?} after={ea:?}"
+            );
+            assert_eq!(
+                rskel["slave_count_after"], rskel["slave_count_before"],
+                "[cap_hit 断②/slave_list 不变] slave_count 变化：before={} after={}",
+                rskel["slave_count_before"], rskel["slave_count_after"]
+            );
+            assert_eq!(
+                rskel["new_slaves"].as_array().map_or(usize::MAX, Vec::len),
+                0,
+                "[cap_hit 断②/slave_list 不变] new_slaves 应为空"
+            );
+            assert_eq!(
+                rskel["regen_calls"].as_u64(),
+                Some(0),
+                "[cap_hit 断③/spawn 0 次] regen_calls 应为 0（门 Rejected）"
+            );
+        }
+
+        // ② Skeleton block 标量逐字段 + new_slaves（①的删半补牙落此层：new_slaves[].hp 实值）。
         for key in [
             "regen_calls",
             "slave_count_before",
@@ -1249,7 +1275,7 @@ fn real_rust_ledger_skeleton() {
             }
         }
 
-        // ② 造怪前帧 17/638/642（按 socket 多重集）。
+        // ③ 造怪前帧 17/638/642（按 socket 多重集）。
         let keep: &[i64] = &[17, 638, 642];
         for who in ["caster", "target", "obs_in", "obs_out"] {
             let g_sent = sent_filter(gcase, who, keep);
@@ -1260,30 +1286,6 @@ fn real_rust_ledger_skeleton() {
             );
         }
 
-        // ③ cap_hit 三断（各自独立，红在哪一断一眼可见）。
-        if label == "cap_hit" {
-            let eb = rust["world_entities_before"].as_u64();
-            let ea = rust["world_entities_after"].as_u64();
-            assert_eq!(
-                ea, eb,
-                "[cap_hit 断①/实体数不增] 施法前后实体数变化：before={eb:?} after={ea:?}"
-            );
-            assert_eq!(
-                rskel["slave_count_after"], rskel["slave_count_before"],
-                "[cap_hit 断②/slave_list 不变] slave_count 变化：before={} after={}",
-                rskel["slave_count_before"], rskel["slave_count_after"]
-            );
-            assert_eq!(
-                rskel["new_slaves"].as_array().map_or(usize::MAX, Vec::len),
-                0,
-                "[cap_hit 断②/slave_list 不变] new_slaves 应为空"
-            );
-            assert_eq!(
-                rskel["regen_calls"].as_u64(),
-                Some(0),
-                "[cap_hit 断③/spawn 0 次] regen_calls 应为 0（门 Rejected）"
-            );
-        }
         eprintln!("[skeleton {label}] PASS");
     }
 }
