@@ -240,14 +240,24 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             if ga.first().and_then(|f| f.get("recog")).is_some() {
                 sent_fields.push("recog");
             }
+            // `due_ms_rel`（相对施法时刻的毫秒；**不是墙钟**）：进比较面 ⇒
+            // 多受害者同刻口径放宽的只是"同一 due 内的次序"，时序本身仍被判。
+            //
+            // **建模约定**：施法批（17/638）的 `due_ms_rel = 0` 是**装置口径**——oracle 实际
+            // 在下一个 `Run()` 处理（≈100ms），那是投递调度语义、不是生成时刻语义；
+            // 该字段**不作为行为判据**，只用于区分"施法批 vs 交付批"（0 vs 600/1000）。
+            if ga.first().and_then(|f| f.get("due_ms_rel")).is_some() {
+                sent_fields.push("due_ms_rel");
+            }
             if multi_victim {
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, String) {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
                         num(v, "recog"),
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
+                        num(v, "due_ms_rel"),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -274,13 +284,14 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 }
             } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, String) {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
                         num(v, "recog"),
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
+                        num(v, "due_ms_rel"),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -1226,6 +1237,72 @@ fn tooth_union_deliver_value_changed_red() {
     assert!(
         err.iter().any(|e| e.to_lowercase().contains("rng")),
         "必须红在 Rng 值：{err:?}"
+    );
+}
+
+/// **牙⑧（MG-17）：多受害者同刻口径下 `due_ms_rel` 必须进比较面**。
+///
+/// 合成三帧：**施法批 `due=0`**（638）+ **交付帧 `due=600`**（31/53）+ **交付帧 `due=1000`**（640）。
+/// 三颗子断言：
+/// ① 基准（golden == rust）⇒ 绿；
+/// ② 改**交付帧** 600→601（其余不动）⇒ 多重集不等 ⇒ 红；
+/// ③ 改**投递帧** 640 的 1000→600 ⇒ 红（证"施法批 vs 交付批 / 交付帧先后"仍在判）；
+/// ④ 改**施法帧** 0→100 ⇒ 红（证"施法批 = 0"的约定不是把 0 与交付混为一谈）。
+#[test]
+fn tooth_multi_victim_due_ms_rel_compared_red() {
+    let label = "s1";
+    let side = |cast_due: i64, tail_due: i64| {
+        serde_json::json!([{
+            "Who": "obs_in",
+            "Rm": [],
+            "Sent": [
+                { "ident": 638, "recog": 1001, "param": 105, "tag": 100, "series": 33,
+                  "due_ms_rel": cast_due, "tail": "" },
+                { "ident": 31, "recog": 1002, "param": 85, "tag": 224, "series": 15,
+                  "due_ms_rel": 600, "tail": "" },
+                { "ident": 640, "recog": 9, "param": 1, "tag": 0, "series": 0,
+                  "due_ms_rel": tail_due, "tail": "" },
+            ],
+        }])
+    };
+    let mk_golden = |cast_due: i64, tail_due: i64| {
+        let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+        g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+        g["cases"][0]["Receivers"] = side(cast_due, tail_due);
+        g
+    };
+    let mk_rust = |cast_due: i64, tail_due: i64| {
+        // 台账必须有 `DeliverRng` 列（空数组也算"记了"；缺列 ⇒ 牙④ 直接红）。
+        let mut r = synth_rust(
+            label,
+            serde_json::json!([1, 2]),
+            Some(serde_json::json!([])),
+        );
+        r["cases"][0]["Receivers"] = side(cast_due, tail_due);
+        r
+    };
+    let g = mk_golden(0, 1000);
+    let base = verify_union(&g, &mk_rust(0, 1000));
+    assert!(base.is_ok(), "基准（0/600/1000）必须绿：{base:?}");
+    // ② 交付帧 600→601
+    let mut r = mk_rust(0, 1000);
+    r["cases"][0]["Receivers"][0]["Sent"][1]["due_ms_rel"] = Value::from(601);
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "交付帧 600→601 必须红在多重集：{err:?}"
+    );
+    // ③ 640 的 1000→600（交付帧先后仍在判）
+    let err = verify_union(&g, &mk_rust(0, 600)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "640 的 due 1000→600 必须红：{err:?}"
+    );
+    // ④ 施法帧 0→100（施法批约定不是把 0 与交付混同）
+    let err = verify_union(&g, &mk_rust(100, 1000)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "施法帧 0→100 必须红：{err:?}"
     );
 }
 

@@ -70603,6 +70603,31 @@ SendRefMsgRange=15
             .collect()
     }
 
+    /// 同 [`fireball_sent`]，但带 **`due_ms_rel`**（相对施法时刻的毫秒；交付段 = 步进 elapsed）。
+    /// 该字段进比较面（多受害者同刻口径的多重集 key），防止"顺序放宽"把时序差一起放过。
+    fn fireball_sent_with_due(
+        frames: &[(i32, Vec<u8>, i64)],
+        socket: i32,
+    ) -> Vec<serde_json::Value> {
+        frames
+            .iter()
+            .filter(|(s, _, _)| *s == socket)
+            .map(|(_, body, due)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(body)
+                    .unwrap_or_else(|| panic!("帧体长度不足 12 字节: {body:?}"));
+                serde_json::json!({
+                    "recog": cm.recog,
+                    "ident": cm.ident,
+                    "param": cm.param,
+                    "tag": cm.tag,
+                    "series": cm.series,
+                    "due_ms_rel": due,
+                    "tail": String::from_utf8_lossy(&body[mir2_protocol::frame::CommandMessage::SIZE..]),
+                })
+            })
+            .collect()
+    }
+
     /// `SM_MAGICFIRE` 尾串（`EDCode.EncodeBuffer(int32 LE)`）解出目标 ActorId。
     fn fireball_tail_i32(body: &[u8]) -> i32 {
         let tail = &body[mir2_protocol::frame::CommandMessage::SIZE..];
@@ -70860,7 +70885,7 @@ SendRefMsgRange=15
         // 1100(170) 排到 640(255) 前面，与金标准相反。
         let wait_ms = golden_wait_ms(stem, label);
         let mut all_outs: Vec<mir2_world_bevy::slave::SelfDelayOutcome> = Vec::new();
-        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut deliver_frames: Vec<(i64, SfFrame)> = Vec::new();
         // MG-17/18：穿透命中在**交付段**落 `pending_mag_struck`（`RM_MAGSTRUCK` 延迟 600ms）。
         // 怪物不 `Operate` ⇒ 只记 RM（与 groupdeding 同一观测面）。
         let mut struck_rm: Vec<(i32, i32)> = Vec::new();
@@ -70916,7 +70941,9 @@ SendRefMsgRange=15
                 &rig.gates,
             );
             let (mut step_frames, _raws2) = rig.drain();
-            deliver_frames.append(&mut step_frames);
+            for f in step_frames {
+                deliver_frames.push((elapsed as i64, f));
+            }
             all_outs.extend(outs);
         }
         // 延迟支（2/11/45/13/44 的 `RM_DELAYMAGIC`）的受击发生在**交付段** ⇒ 再取一次；
@@ -70957,8 +70984,11 @@ SendRefMsgRange=15
             assert_eq!(b.0, a.0 + 1, "[{label}] 两段之间 seq 必须连续");
         }
 
-        let mut all_frames = cast_frames;
-        all_frames.extend(deliver_frames);
+        // 帧的**相对到期时刻**（ms，相对施法）：施法段 = 0，交付段 = 该步的 `elapsed`。
+        // 与 C# golden 的 `due_ms_rel`（`DeliveryTime - castTick`；立即=0）同口径、可跨栈比较。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        all_frames.extend(deliver_frames.into_iter().map(|(due, (s, b))| (s, b, due)));
 
         // ---- RM 列组装（卡 §11 映射表；**弱比较面**：RM 是组装出来的，玩家可见证据是 SM）----
         //
@@ -70978,8 +71008,8 @@ SendRefMsgRange=15
         let in_range_target = chat::hear_targets(&rig.world, target, range);
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
-            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
-            .map(|(_, b)| {
+            .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b, _)| {
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
                 (
                     i32::from(cm.param),
@@ -71109,9 +71139,9 @@ SendRefMsgRange=15
         }
         // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
         // 由该帧反推 w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -71355,9 +71385,9 @@ SendRefMsgRange=15
         // `RM_DURACHANGE(10125)`（护身符消耗，`UseAmulet`）：C# 入施法者队列，prio = 10125 & 0xFF = 141，
         // late=false；Rust 观测面 = 实际发出的 `SM_DURACHANGE(642)` 帧（SM 头 = Recog=Dura、
         // Param=槽位、Tag/Series=DuraMax）⇒ 反推 RM 字段（wParam=槽位、p1=Dura、p2=MakeLong(tag,series)）。
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_DURACHANGE)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_DURACHANGE)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -71384,7 +71414,7 @@ SendRefMsgRange=15
             serde_json::json!({
                 "Who": who,
                 "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
-                "Sent": fireball_sent(&all_frames, *socket),
+                "Sent": fireball_sent_with_due(&all_frames, *socket),
             })
         })
         .collect::<Vec<_>>();
@@ -71477,10 +71507,10 @@ SendRefMsgRange=15
              frames/socket: caster={} target={} obs_in={} obs_out={} → {}",
             cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
-            all_frames.iter().filter(|(s, _)| *s == 911).count(),
-            all_frames.iter().filter(|(s, _)| *s == 912).count(),
-            all_frames.iter().filter(|(s, _)| *s == 913).count(),
-            all_frames.iter().filter(|(s, _)| *s == 914).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 911).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 912).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 913).count(),
+            all_frames.iter().filter(|(s, _, _)| *s == 914).count(),
             out.display()
         );
     }

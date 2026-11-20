@@ -9,8 +9,8 @@
 `CheckMagicLevelUp` 未升级 ⇒ `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, **1000**)`。
 全仓 `RM_MAGIC_LVEXP`：22 个发射点 + 1 个处理器，**零处立即发**：
 `SendSelfDelayMsg(…,1000)` ×2（`src/M2Server/Magic/MagicManager.cs:666`、
-`src/M2Server/Combat/Attack.cs:1210`）、`SendSelfDelayMsg(…,3000)` ×19
-（`src/M2Server/Combat/Attack.cs:209…571`）、`UpdateDelayMsg(…,800)` ×1
+`src/M2Server/Player/PlayObject.Attack.cs:1210`）、`SendSelfDelayMsg(…,3000)` ×19
+（`src/M2Server/Player/PlayObject.Attack.cs:209…571`）、`UpdateDelayMsg(…,800)` ×1
 （`src/M2Server/Player/PlayObject.cs:5216`）。
 
 ## 待审站点（`finish_spell_tail(..., None)`）
@@ -26,6 +26,8 @@
 
 ## 影响与做法（供立项）
 
+- **这四处当前也是"立即发"**；是否与 oracle 的 `SendSelfDelayMsg(…,1000)` 冲突，**需逐处核**
+  （审计的人一进来先做这件事）。
 - 若确认这四处也应为 1000ms：**每条的 golden 都要加 `StepDrainMs`（时间忠实排水）并重出**，
   因为它们现在的 golden 里 640 排在 31 之前同样是**多 pass 伪影**；随后逐条重跑比较器。
 - **不要**只改产品而不同步 golden——那会把比较器直接判红（与本卡 MG-17 的教训相同）。

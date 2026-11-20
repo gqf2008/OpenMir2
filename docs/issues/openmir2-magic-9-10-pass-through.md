@@ -32,3 +32,22 @@
   （见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。本包的有效面 =
   **HP / RNG / RM 多重集 / 单受害者帧序**。
 - 该差异为**可观测差异、非装置问题**；修复单独立项。
+
+## `recog` 的语义（**不是**"恒为 actor id"）
+
+SM 头前 4 字节的 `Recog` 槽按帧类不同：
+- `SM_STRUCK(31)` / `SM_CHARSTATUSCHANGED(657)` 等：受击者/主体 ActorId；
+- **`SM_MAGIC_LVEXP(640)`：装的是 MagicId**（oracle `src/M2Server/Player/PlayObject.Message.cs:1801`
+  `SendDefMessage(SM_MAGIC_LVEXP, processMsg.nParam1, …)`，`nParam1` = MagicId；
+  `SendDefMessage(short wIdent, int nRecog, …)` 见
+  `src/M2Server/Player/PlayObject.Socket.cs:17`）。
+
+⇒ **不要写"`recog` 必须是 actor id"的断言**；本包 `fire.json` 里 640 的 `recog=9`（魔号）是正确值。
+
+## 帧时序（`due_ms_rel`）
+
+`Sent[]` 每帧记 `due_ms_rel`（**相对施法时刻的毫秒**，立即发送 = 0）：
+C# 侧 = `DeliveryTime - castTick`（非延迟消息记 0）；Rust 侧 = 交付段的步进 `elapsed`。
+**绝对墙钟（`delivery`）永不进比较面**（跨栈不可比）。多受害者同刻口径下，
+多重集 key = `(ident, recog, param, tag, series, due_ms_rel, tail)` ⇒ 只放宽"同 due 内的次序"，
+**时序本身仍被判**（牙：`tooth_multi_victim_due_ms_rel_compared_red`）。

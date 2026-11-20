@@ -188,6 +188,12 @@ public static class Program
                 // 场景里 obs_in(105,100) 落在穿透线上，与 target 同刻受击 ⇒ 帧序用多重集
                 // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。
                 FrameOrderScope = "multi_victim_same_tick",
+                // **`due_ms_rel` 的建模约定（写进 golden `scenario_note`）**：施法批（17/638）= 0
+                // 是**建模约定**——oracle 实际在下一个 `Run()` 处理（≈100ms），那是投递调度语义、
+                // 不是生成时刻语义；本字段**不作为行为判据**，只用于区分"施法批 vs 交付批"与
+                // 交付帧的先后（640=1000ms、31/53/656=600ms）。
+                ScenarioNote = "登录序（UserLogon→RecalcLevelAbilitys+RecalcAbilitys；target/caster 同标准，HP=公式 MaxHP）；"
+                    + "帧序用步进排水 StepDrainMs=100；due_ms_rel 施法批=0 是建模约定（oracle 实际在下一个 Run 处理，≈100ms），不作为行为判据",
                 // **时间忠实排水**：oracle 的 640 在 +1000ms、穿透受击 31 在 +600ms ⇒ 真实次序
                 // 31 在前、640 在后。默认口径是"Sleep(WaitMs) 后一次排空"，多 pass 的 per-actor
                 // 顺序会把 caster 的 640 排在 pass1、target 的 31 广播排在 pass2（与时间序相反）。
@@ -911,17 +917,17 @@ public static class Program
 /// * `PackLength >= 0` ⇒ 载荷 = 12B `CommandMessage` + `tail`（GB2312 文本，EDCode 字符在 ASCII 区）；
 /// * `PackLength < 0` ⇒ `SendSocket(string)` 动作短包，载荷就是该字符串（记 `ident=0` 便于显形）。
 /// </summary>
-private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers, int gateIdx)
+private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due)> buffers, int gateIdx)
 {
     var list = new List<object>();
-    foreach (var (g, data) in buffers)
+    foreach (var (g, data, due) in buffers)
     {
         if (g != gateIdx) continue;
         int packLength = BitConverter.ToInt32(data, 16);
         if (packLength < 0)
         {
             string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
-            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, tail = action });
+            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, due_ms_rel = due, tail = action });
             continue;
         }
         int off = ServerMessage.PacketSize;
@@ -934,7 +940,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         string tail = data.Length > off + 12
             ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
             : "";
-        list.Add(new { ident, recog, param, tag, series, tail });
+        list.Add(new { ident, recog, param, tag, series, due_ms_rel = due, tail });
     }
     return list;
 }
@@ -1884,13 +1890,15 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
+        // 帧 `due_ms_rel` 的基准：施法时刻（排水循环里 `DeliveryTime - castTick`）。
+        long castTick = HUtil32.GetTickCount();
         int drainPasses = 0;
         bool drainPassesHitCap = false;
         if (spec.StepDrainMs > 0)
         {
             // **步进排水**（见 `MagicSpec.StepDrainMs` 说明）：每步只处理**已到期**的消息，
             // 未到期的按原优先级放回队列；RM 账本按消息对象去重（同一消息跨步只记一次）。
-            void DrainOnce(bool[] operatedAny)
+            void DrainOnce(bool[] operatedAny, long stepMs)
             {
                 foreach (var (who, obj) in byWho)
                 {
@@ -1914,7 +1922,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                                 delivery = m.DeliveryTime,
                                 priority = prio,
                             });
+                            // 延迟消息 = 其到期时刻；**非延迟消息 = 当前步进时刻**（它在本次
+                            // Operate 里被处理，客户端可见时刻就是这一步），与 Rust 台账的
+                            // `due_ms_rel = elapsed` 同口径。
+                            RecordingNetChannel.CurrentDueMs =
+                                m.LateDelivery ? Math.Max(0, m.DeliveryTime - castTick) : stepMs;
                             obj.OperatePublic(m);
+                            RecordingNetChannel.CurrentDueMs = 0;
                             operatedAny[0] = true;
                         }
                         else
@@ -1924,6 +1938,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     }
                     foreach (var (m, prio) in later) obj.PushBack(m, prio);
                 }
+            }
+            // **施法批（t=0）**：与 Rust 台账"施法段 drain（elapsed=0）"同口径 ⇒ 帧 `due_ms_rel=0`。
+            // **这是建模约定、不是行为判据**：oracle 实际在下一个 `Run()` 处理（≈100ms），
+            // 那是投递调度语义；见 golden 的 `scenario_note` 与比较器 `due_ms_rel` 段注释。
+            {
+                var operatedAny = new[] { false };
+                DrainOnce(operatedAny, 0);
             }
             int elapsed = 0;
             while (elapsed < spec.WaitMs)
@@ -1935,7 +1956,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 for (int pass = 0; pass < MaxDrainPasses; pass++)
                 {
                     var operatedAny = new[] { false };
-                    DrainOnce(operatedAny);
+                    DrainOnce(operatedAny, elapsed);
                     stepPasses = pass + 1;
                     if (!operatedAny[0]) break;
                     if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
@@ -1982,7 +2003,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     int now = HUtil32.GetTickCount();
                     foreach (var m in raw)
                     {
-                        if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
+                        if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now)
+                        {
+                            RecordingNetChannel.CurrentDueMs =
+                                m.Msg.LateDelivery ? Math.Max(0, m.Msg.DeliveryTime - castTick) : 0;
+                            obj.OperatePublic(m.Msg);
+                            RecordingNetChannel.CurrentDueMs = 0;
+                        }
                         else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
                     }
                     rmAcc[who].AddRange(rm);
@@ -2307,11 +2334,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
 /// </summary>
 public sealed class RecordingNetChannel : M2Server.Net.INetChannel
 {
-    public List<(int GateIdx, byte[] Data)> Buffers { get; } = new();
+    public List<(int GateIdx, byte[] Data, long Due)> Buffers { get; } = new();
 
-    public void AddGateBuffer(int gateIdx, byte[] senData) => Buffers.Add((gateIdx, senData));
+    /// <summary>
+    /// 当前正在处理的消息的**相对到期时刻**（ms，相对施法时刻；立即发送 = 0）。
+    /// 排水循环在 `OperatePublic` 前置（延迟消息 = `DeliveryTime - castTick`），帧捕获时随帧记录。
+    /// 与 Rust 台账的 `due_ms_rel` 同口径、可跨栈比较（**不得用墙钟绝对值**）。
+    /// </summary>
+    public static long CurrentDueMs;
 
-    public void AddGameGateQueue(int gateIdx, ServerMessage packet, byte[] data) => Buffers.Add((gateIdx, data));
+    public void AddGateBuffer(int gateIdx, byte[] senData) => Buffers.Add((gateIdx, senData, CurrentDueMs));
+
+    public void AddGameGateQueue(int gateIdx, ServerMessage packet, byte[] data) => Buffers.Add((gateIdx, data, CurrentDueMs));
 
     public void CloseAllGate() { }
     public void CloseUser(int gateIdx, int nSocket) { }
