@@ -12334,7 +12334,10 @@ fn recalc_session_ability(
             recalc.recovery_ring,
         );
     }
+    // **内部断言（非帧证据）**：657 的临时 `HitSpeed` = 0(开头清) + ExtraAbil[3]（见字段注释）。
+    let hit_speed_frame = extra_abil.map_or(0, |e| e[3]);
     RecalcEffect {
+        hit_speed_frame,
         revival: recalc.revival,
         flame_ring: recalc.flame_ring,
         recovery_ring: recalc.recovery_ring,
@@ -12384,6 +12387,13 @@ impl MagicSource<'_> {
 /// `recalc_session_ability` 的输出：`revival`/`flame_ring` 均为**本次命中**（调方 `|=` 落账），
 /// `magic_events` 是 212/210 的直接帧事件（oracle 调用序）。
 struct RecalcEffect {
+    /// **内部断言用（不是帧证据）**：oracle `RecalcAbilitys` 里 HITSPEEDUP 的**临时** `HitSpeed`
+    /// ——`HitSpeed` 在本方法开头被清 0（`PlayObject.cs:2024`），随后 `+= ExtraAbil[HITSPEEDUP]`
+    /// （`:2832`），657 的 `wParam` 在 `:2876` 取用它，尾段 `:2899` 才被 `AddAbil.HitSpeed` 覆盖。
+    /// ⇒ 该值恒 == `ExtraAbil[3]`（无 buff ⇒ 0），**不是**「落地字段 + ExtraAbil」。
+    /// 657 接线（`card/charstatuschanged`）落地后，端到端断言应读真实帧；这里只是让不对称今天就可回归。
+    #[allow(dead_code)] // 内部断言用；657 端到端接线后由生产路径消费。
+    hit_speed_frame: u16,
     revival: bool,
     flame_ring: bool,
     /// 本次 `RecoveryRing` 命中（每轮重置；目前只用于判据/诊断，调用方不需要落账）。
@@ -98305,6 +98315,27 @@ fn ",
             "非彩票物品不得动彩票计数"
         );
         assert_eq!(sessions["hero"].state.gold, before_gold);
+    }
+    /// **IT-07 内部断言（不是帧证据）**：657 的 `wParam` 取的是「开头清零 + `ExtraAbil[3]`」的
+    /// 临时 `HitSpeed`（`PlayObject.cs:2024/2832/2876`），而落地字段在 `:2899` 被
+    /// `AddAbil.HitSpeed`（/2 或 (x-1)/2、min 15）覆盖 ⇒ **两者可不同**。
+    /// 本用例只钉这个不对称；**657 的端到端断言待 `2f` 的映射落地后另加**，不得拿这条当"657 已验"。
+    #[test]
+    fn it07_hit_speed_asymmetry_internal_assertion() {
+        use crate::ability::StdItemCatalog;
+        let mut sg = test_session_ground(7);
+        sg.equip.job = 0; // Warrior
+        sg.use_items = vec![None; game_svr::ability::USE_ITEMS_LEN];
+        sg.state.item_list.clear();
+        let catalog = StdItemCatalog::new();
+        let extra = [0u16, 0, 0, 7, 0, 0, 0]; // HITSPEEDUP = 7
+        let effect = recalc_session_ability(&mut sg, &catalog, Some(&extra), None);
+        assert_eq!(
+            effect.hit_speed_frame, 7,
+            "657 临时值 = ExtraAbil[3]（不是 字段+extra）"
+        );
+        assert_eq!(sg.hit_speed, 0, "落地字段 = AddAbil.HitSpeed（无装备 ⇒ 0）");
+        assert_ne!(effect.hit_speed_frame, sg.hit_speed, "不对称必须可见");
     }
 }
 
