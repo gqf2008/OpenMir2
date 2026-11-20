@@ -752,6 +752,14 @@ mod tests {
         v.as_i64().unwrap() as i32
     }
 
+    /// oracle 探针记录的 `text`：`EDCode.EncodeString(Buff)` 的原始字节（hex）；空串 ⇒ 空字节。
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        assert!(hex.len().is_multiple_of(2), "hex 长度必须为偶数：{hex}");
+        (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+            .collect()
+    }
+
     fn template(v: &Value) -> StdItem {
         StdItem {
             name: v["name"].as_str().unwrap().to_string(),
@@ -1021,6 +1029,32 @@ mod tests {
                     assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
                     lost += 1;
                 }
+            }
+            // 卡 `openmir2-runtime-sysmsg-text-frames`：彩票绿/红字必须带文本，且字节 =
+            // oracle `EDCode.EncodeString(MessageSettings.WinLottery{N}Msg / NotWinLotteryMsg)`。
+            // 档位由 `level` 增量给出；无增量的用例（部署档位例）仍须是"七条已知文案"之一。
+            let sysmsgs: Vec<&Value> = c["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| i32v(&n["ident"]) == RM_SYSMESSAGE)
+                .collect();
+            assert_eq!(sysmsgs.len(), 1, "{name}: 每例恰好一条 SysMsg");
+            let got = hex_to_bytes(sysmsgs[0]["text"].as_str().unwrap_or(""));
+            assert!(!got.is_empty(), "{name}: 彩票 SysMsg 必须带文本");
+            let known: Vec<Vec<u8>> = crate::strings::DEFAULT_WIN_LOTTERY_MSGS
+                .iter()
+                .map(|m| mir2_protocol::edcode::encode(&crate::downlink::gbk(m)))
+                .chain(std::iter::once(mir2_protocol::edcode::encode(
+                    &crate::downlink::gbk(crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG),
+                )))
+                .collect();
+            assert!(
+                known.contains(&got),
+                "{name}: 彩票 SysMsg 文本不属于七条已知文案"
+            );
+            if let Some(i) = won_level {
+                assert_eq!(got, known[i], "{name}: 中奖档位与文案不符");
             }
             if name == "eat_ok_lottery_gate_closed" {
                 gate_closed_checked = true;
@@ -1505,18 +1539,53 @@ mod tests {
             got.sort();
             want.sort();
             assert_eq!(got, want, "{name}: 延时通知(七字段排序序列)与 oracle 不符");
-            // 卡 `openmir2-runtime-sysmsg-text-frames`：`RM_SYSMESSAGE` 必须**带文本**（旧版为空 ⇒
-            // 运行期被 `notice_frame` 丢弃）。禁药支是红字、修复油支是绿字，据此选期望文本。
-            for n in out.notices.iter().filter(|n| n.ident == RM_SYSMESSAGE) {
-                let want_text = if n.n_param1 == i32::from(ctx.red_msg_fcolor) {
-                    ctx.sysmsg.canot_use_drug_on_this_map
-                } else {
-                    ctx.sysmsg.weapon_repair_success
-                };
-                assert_eq!(
-                    n.text,
-                    NoticeText::Inline(want_text.to_string()),
-                    "{name}: RM_SYSMESSAGE 文本"
+            // 卡 `openmir2-runtime-sysmsg-text-frames`（§19：文本必须进比较面）：把 Rust 通知的
+            // **线缆尾字节**（`EDCode(GBK(text))`，唯一编码路径见 `pickwire::notice_frame`）
+            // 与 oracle 探针记录的 `text`（`EDCode.EncodeString(Buff)` 的原始字节）**逐字节**比。
+            // 无文本通知两侧都为空；`SessionPickup` 在本接缝不出现（取件不走 `use_item`）。
+            let mut got_text: Vec<(i32, Vec<u8>)> = out
+                .notices
+                .iter()
+                .filter(|n| n.ident == RM_SYSMESSAGE)
+                .map(|n| {
+                    let bytes = match &n.text {
+                        NoticeText::Inline(t) => {
+                            mir2_protocol::edcode::encode(&crate::downlink::gbk(t))
+                        }
+                        NoticeText::None | NoticeText::SessionPickup => Vec::new(),
+                    };
+                    (n.ident, bytes)
+                })
+                .collect();
+            let mut want_text: Vec<(i32, Vec<u8>)> = expect["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| i32v(&v["ident"]) == RM_SYSMESSAGE)
+                .map(|v| {
+                    (
+                        i32v(&v["ident"]),
+                        hex_to_bytes(v["text"].as_str().unwrap_or("")),
+                    )
+                })
+                .collect();
+            got_text.sort();
+            want_text.sort();
+            assert_eq!(
+                got_text, want_text,
+                "{name}: 通知文本尾字节（EDCode）与 oracle 不符"
+            );
+            // 反空集：条数必须相等、且夹具里每条 sysmsg 文本都非空——否则"逐字节比"
+            // 会在空集上整体空过（等价于没比）。
+            assert_eq!(
+                got_text.len(),
+                want_text.len(),
+                "{name}: sysmsg 通知条数不一致"
+            );
+            for (ident, bytes) in &want_text {
+                assert!(
+                    !bytes.is_empty(),
+                    "{name}: 夹具 sysmsg({ident}) 文本为空 ⇒ 比较退化为空"
                 );
             }
             // 报告同 priority 内是否多 ident（供裁定是否需要单列同优先级内序）。
@@ -1611,6 +1680,26 @@ mod tests {
             );
         }
         let total = cases.len();
+        // **已登记缺口**（不在本卡作用域，全夹具一次核）：`RM_MENU_OK` 也带文本尾
+        // （oracle `Operate.cs:685` 的 `SendMsg(..., MessageSettings.CanotUseItemMsg)`
+        //  → `SM_MENU_OK` 的尾文案；另有 drop/脚本两处同 ident）。本卡只做 sysmsg，
+        // 这里钉**集合**：一旦出现新的带文本 ident，必须回来把它纳入比较，不得静默放过。
+        let mut gap: Vec<i32> = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|c| c["expect"]["notices"].as_array().unwrap().iter())
+            .filter(|v| i32v(&v["ident"]) != RM_SYSMESSAGE)
+            .filter(|v| !hex_to_bytes(v["text"].as_str().unwrap_or("")).is_empty())
+            .map(|v| i32v(&v["ident"]))
+            .collect();
+        gap.sort_unstable();
+        gap.dedup();
+        assert_eq!(
+            gap,
+            vec![RM_MENU_OK],
+            "带文本的非 sysmsg ident 集合变化 ⇒ 需重新登记"
+        );
         assert!(
             host_skipped >= 1,
             "至少一个 host_levelup 用例应由宿主级用例覆盖（纯比较器当前跳过 {host_skipped} 例）"

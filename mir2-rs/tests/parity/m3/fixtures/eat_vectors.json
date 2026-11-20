@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "b4d639ed75d706d1aec488a3dc8208f7aab7bf8175df9f205be218bdb8ef4728",
+  "oracle_assembly_sha256": "c1c36a8a967b0951c154959d131b01c09670b0e6a3213d85f7cefa27ba9d33c0",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -41,7 +41,7 @@
     "1": "unbind_item"
   },
   "config": {
-    "exps_conf": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.worktrees\\items-parity\\mir2-rs\\tests\\parity\\m3\\eat-probe\\bin\\Release\\net8.0\\Exps.conf",
+    "exps_conf": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.worktrees\\npc-parity\\mir2-rs\\tests\\parity\\m3\\eat-probe\\bin\\Release\\net8.0\\Exps.conf",
     "exps_conf_sha256": "07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9",
     "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
     "need_exps_head": [
@@ -339,7 +339,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -348,7 +349,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -486,7 +488,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -495,7 +498,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -633,7 +637,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -642,7 +647,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -784,7 +790,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10125,
@@ -793,7 +800,8 @@
             "n_param2": 9945,
             "n_param3": 0,
             "priority": 141,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -802,7 +810,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "564c664e53586e5740405b42554146415e5e3e5c"
           }
         ],
         "added_items": [],
@@ -1258,7 +1267,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10125,
@@ -1267,7 +1277,8 @@
             "n_param2": 10000,
             "n_param3": 0,
             "priority": 141,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -1276,7 +1287,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "564c664e53586e5740405b42554146415e5e3e5c"
           }
         ],
         "added_items": [],
@@ -1422,7 +1434,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10125,
@@ -1431,7 +1444,8 @@
             "n_param2": 10000,
             "n_param3": 0,
             "priority": 141,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -1440,7 +1454,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "564c664e53586e5740405b42554146415e5e3e5c"
           }
         ],
         "added_items": [],
@@ -1733,7 +1748,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -1871,7 +1887,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -2009,7 +2026,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -2191,7 +2209,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -2200,7 +2219,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -2405,7 +2425,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -2414,7 +2435,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -3028,7 +3050,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 69,
-            "late": 0
+            "late": 0,
+            "text": "4141675740566e58433c4d455058785340575a45595b57525d5d496b"
           }
         ],
         "added_items": [],
@@ -3340,7 +3363,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -3478,7 +3502,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -3616,7 +3641,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10139,
@@ -3625,7 +3651,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 8102,
@@ -3634,7 +3661,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 166,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -3772,7 +3800,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -3910,7 +3939,8 @@
             "n_param2": 56,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "4057554558554c404243745956583d5356417b5157545e5942567a503d5657425d5d496b"
           }
         ],
         "added_items": [],
@@ -4071,7 +4101,8 @@
             "n_param2": 56,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "4057554558554c404243745956583d5356417b5157545e5942567a503d5657425d5d496b"
           }
         ],
         "added_items": [],
@@ -4232,7 +4263,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -6518,12 +6550,13 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [
           {
-            "make_index": 1130683853,
+            "make_index": 1132826607,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6545,7 +6578,7 @@
             ]
           },
           {
-            "make_index": 1130683869,
+            "make_index": 1132826608,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6567,7 +6600,7 @@
             ]
           },
           {
-            "make_index": 1130683870,
+            "make_index": 1132826609,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6589,7 +6622,7 @@
             ]
           },
           {
-            "make_index": 1130683871,
+            "make_index": 1132826610,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6611,7 +6644,7 @@
             ]
           },
           {
-            "make_index": 1130683872,
+            "make_index": 1132826611,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6633,7 +6666,7 @@
             ]
           },
           {
-            "make_index": 1130683873,
+            "make_index": 1132826612,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6693,7 +6726,7 @@
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1130683853,
+            "make_index": 1132826607,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6715,7 +6748,7 @@
             ]
           },
           {
-            "make_index": 1130683869,
+            "make_index": 1132826608,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6737,7 +6770,7 @@
             ]
           },
           {
-            "make_index": 1130683870,
+            "make_index": 1132826609,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6759,7 +6792,7 @@
             ]
           },
           {
-            "make_index": 1130683871,
+            "make_index": 1132826610,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6781,7 +6814,7 @@
             ]
           },
           {
-            "make_index": 1130683872,
+            "make_index": 1132826611,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6803,7 +6836,7 @@
             ]
           },
           {
-            "make_index": 1130683873,
+            "make_index": 1132826612,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -6922,7 +6955,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 8075,
@@ -6931,7 +6965,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 139,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -7069,7 +7104,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 68,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10115,
@@ -7078,7 +7114,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 8075,
@@ -7087,7 +7124,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 139,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 8086,
@@ -7096,7 +7134,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 150,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10139,
@@ -7105,7 +7144,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10139,
@@ -7114,7 +7154,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
-            "late": 0
+            "late": 0,
+            "text": null
           }
         ],
         "added_items": [],
@@ -7387,7 +7428,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -7396,7 +7438,8 @@
             "n_param2": 56,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "41545f5556405e5a435253414d40615b5d5d496b"
           }
         ],
         "drained": {
@@ -7591,7 +7634,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -7600,7 +7644,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -7609,7 +7654,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b55515549544159403d3f4b"
           }
         ],
         "drained": {
@@ -7804,7 +7850,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -7813,7 +7860,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -7822,7 +7870,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b564d553e544159403d3f4b"
           }
         ],
         "drained": {
@@ -8017,7 +8066,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -8026,7 +8076,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -8035,7 +8086,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b57545542544159403d3f4b"
           }
         ],
         "drained": {
@@ -8230,7 +8282,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -8239,7 +8292,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -8248,7 +8302,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b54515540544159403d3f4b"
           }
         ],
         "drained": {
@@ -8443,7 +8498,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -8452,7 +8508,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -8461,7 +8518,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b42525544544159403d3f4b"
           }
         ],
         "drained": {
@@ -8656,7 +8714,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -8665,7 +8724,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -8674,7 +8734,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b5a435549544159403d3f4b"
           }
         ],
         "drained": {
@@ -8869,7 +8930,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -8878,7 +8940,8 @@
             "n_param2": 56,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "41545f5556405e5a435253414d40615b5d5d496b"
           }
         ],
         "drained": {
@@ -9073,7 +9136,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -9082,7 +9146,8 @@
             "n_param2": 56,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "41545f5556405e5a435253414d40615b5d5d496b"
           }
         ],
         "drained": {
@@ -9277,7 +9342,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -9286,7 +9352,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -9295,7 +9362,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b55515549544159403d3f4b"
           }
         ],
         "drained": {
@@ -9490,7 +9558,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -9499,7 +9568,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -9508,7 +9578,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b55515549544159403d3f4b"
           }
         ],
         "drained": {
@@ -9703,7 +9774,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 131,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 10136,
@@ -9712,7 +9784,8 @@
             "n_param2": 0,
             "n_param3": 0,
             "priority": 152,
-            "late": 0
+            "late": 0,
+            "text": null
           },
           {
             "ident": 11004,
@@ -9721,7 +9794,8 @@
             "n_param2": 255,
             "n_param3": 0,
             "priority": 252,
-            "late": 0
+            "late": 0,
+            "text": "5b3f5247585452523f3c76585855635b55515549544159403d3f4b"
           }
         ],
         "drained": {

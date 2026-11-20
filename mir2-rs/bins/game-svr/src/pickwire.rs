@@ -800,6 +800,59 @@ mod tests {
         assert_ne!(body, session_frame, "不得回落到会话文本");
     }
 
+    /// **整帧字节级对拍**（卡 `openmir2-runtime-sysmsg-text-frames` §3-3「编码路径只有一条」）：
+    /// 取 oracle 探针实测的两条 `notices[].text`（`EDCode.EncodeString(Buff)` 的原始字节，
+    /// 见 `eat_vectors.json` 的 `eat_fail_nodrug_no_consume` 与 `eat_ok_shape9_repair_normal`），
+    /// 断言 `notice_frame` 的输出与「12B 头 ++ 文本尾」**全等**。
+    /// 外部锚（不是本仓编码器自证）：任何"多做一次转换"的写法都会在这里红。
+    #[test]
+    fn sysmessage_full_frame_matches_oracle_bytes() {
+        fn hex(s: &str) -> Vec<u8> {
+            (0..s.len() / 2)
+                .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("hex"))
+                .collect()
+        }
+        let s = session(4660, 0, 0, None);
+
+        // 禁药红字：`RedMsgFColor=255 / RedMsgBColor=56`（`eat_fail_nodrug_no_consume`）。
+        let drug_hex = "4057554558554c404243745956583d5356417b5157545e5942567a503d5657425d5d496b";
+        let got = notice_frame(
+            &QueuedNotice {
+                ident: RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 255,
+                n_param2: 56,
+                n_param3: 0,
+                text: NoticeText::Inline(
+                    crate::strings::DEFAULT_CANOT_USE_DRUG_ON_THIS_MAP.to_string(),
+                ),
+            },
+            &s,
+        )
+        .expect("禁药红字");
+        let mut want = header(4660, 100, 0x38FF, 0, 1);
+        want.extend_from_slice(&hex(drug_hex));
+        assert_eq!(got, want, "禁药：整帧 == oracle 头 ++ EDCode 文本");
+
+        // 修复油绿字：`GreenMsgFColor=219 / GreenMsgBColor=255`（`eat_ok_shape9_repair_normal`）。
+        let repair_hex = "564c664e53586e5740405b42554146415e5e3e5c";
+        let got = notice_frame(
+            &QueuedNotice {
+                ident: RM_SYSMESSAGE,
+                w_param: 0,
+                n_param1: 219,
+                n_param2: 255,
+                n_param3: 0,
+                text: NoticeText::Inline(crate::strings::DEFAULT_WEAPON_REPAIR_SUCCESS.to_string()),
+            },
+            &s,
+        )
+        .expect("修复油绿字");
+        let mut want = header(4660, 100, 0xFFDB, 0, 1);
+        want.extend_from_slice(&hex(repair_hex));
+        assert_eq!(got, want, "修复油：整帧 == oracle 头 ++ EDCode 文本");
+    }
+
     /// 装配：只装目标图；金币 `item_id`/`count`/归属、物品模板名逐项对上 world 视图。
     ///
     /// 红检：把 `item_id: v.item_id` 改成 `v.item_id + 1` ⇒ 本用例必红。
