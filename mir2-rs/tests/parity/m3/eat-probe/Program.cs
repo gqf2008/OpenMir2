@@ -1132,14 +1132,14 @@ internal static class Program
             }
 
             LotteryPlan MakePlan(string nm, int[] min, int[] max, int count = 0, int noWin = 500,
-                int[] level = null, int goldBefore = 0)
+                int[] level = null, int goldBefore = 0, int[] gold = null)
                 => new LotteryPlan
                 {
                     Name = nm,
                     Rate = rate,
                     Min = min,
                     Max = max,
-                    Gold = dep.Gold,
+                    Gold = gold ?? dep.Gold,
                     InitCount = count,
                     InitNoWin = noWin,
                     InitLevel = level ?? new int[6],
@@ -1213,6 +1213,47 @@ internal static class Program
             // ⑦ P2 稳健例：6 档覆盖全区间 ⇒ 必中 6（不依赖抽值）。
             lotteryCases.Add(Run("eat_ok_lottery_forced_bucket_p2",
                 _ => MakePlan("eat_ok_lottery_forced_bucket_p2", Six(0), Six(rate - 1))));
+
+            // ⑨ 闸闭的非零形态：`Count == NoWinLotteryCount == 500`（`0<0` 之外的另一条假路径）。
+            //    错实现把闸写成 `<=` ⇒ 本例会中奖 ⇒ 红。
+            //    5 档用**宽区间**（d-1..d+1）而非 `[d,d]`：既保证命中，又让 `applied` 与
+            //    既有 `win5_steered`/`gate_closed` 的 `[d,d]` 不同——Rust 用例有
+            //    「applied 互异」机检（`seen_applied`），输出去重不是靠放宽断言。
+            lotteryCases.Add(Run("eat_ok_lottery_gate_closed_nonzero", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[4] = System.Math.Max(d - 1, 0);
+                max[4] = System.Math.Min(d + 1, rate - 1);
+                return MakePlan("eat_ok_lottery_gate_closed_nonzero", min, max, count: 500, noWin: 500);
+            }));
+
+            // ⑩ 命中档但该档 `Gold == 0`：oracle 以 `nGold > 0` 判中奖 ⇒ 本例判**未中**
+            //    （NoWin += 500，红字、无 SM_GOLDCHANGED），等级仍 +1。
+            //    错实现把「命中档」直接当 Won ⇒ 本例会绿/发绿字 ⇒ 红。
+            lotteryCases.Add(Run("eat_ok_lottery_hit_zero_gold", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = d;
+                var gold = (int[])dep.Gold.Clone();
+                gold[5] = 0;
+                return MakePlan("eat_ok_lottery_hit_zero_gold", min, max, gold: gold);
+            }));
+
+            // ⑪ 档位重叠：6 档与 5 档同时包含抽值。oracle 6→5→…→1 链**首即停** ⇒ 只中 6 档。
+            //    错实现反向（1→6）或「取最后一档」⇒ 本例会中 5 档 ⇒ 红。
+            lotteryCases.Add(Run("eat_ok_lottery_overlap_chain_first_stop", d =>
+            {
+                var min = Away(d);
+                var max = Away(d);
+                min[5] = d;
+                max[5] = d; // 6 档命中
+                min[4] = d;
+                max[4] = d; // 5 档也命中（链首即停应取 6 档）
+                return MakePlan("eat_ok_lottery_overlap_chain_first_stop", min, max);
+            }));
 
             // ⑧ `IncGold` 失败支**不进探针**（已证死路，见卡 §9.11）：oracle 走 `DropGoldDown` → `GetDropPosition`，
             //    NRE 只来自 `CellArray` 为空（反射 `Envirnoment.Initialize(8,8)` 即可绕过），并非"必须真实地图"；
@@ -1291,7 +1332,7 @@ internal static class Program
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
                 "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
-                "IT-16：彩票（StdMode3/Shape11）是**宿主级**（`PlayObject.WinLottery`）——本夹具把它的记录放在顶层 `lottery`，不混进 `cases`（既有 31 例键集不变）。抽值经 RNG 钩子固定：每个用例前复位 8 个进程级计数、按预测抽值覆盖档位，跑完还原；台账自检不一致 ⇒ rc=2 不落盘。",
+                "IT-16：彩票（StdMode3/Shape11）是**宿主级**（`PlayObject.WinLottery`）——本夹具把它的记录放在顶层 `lottery`，不混进 `cases`（既有 37 例键集不变）。抽值经 RNG 钩子固定：每个用例前复位 8 个进程级计数、按预测抽值覆盖档位，跑完还原；台账自检不一致 ⇒ rc=2 不落盘。",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),

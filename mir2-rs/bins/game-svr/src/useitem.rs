@@ -1015,7 +1015,7 @@ mod tests {
             "提交的夹具必须是**播种**运行产物（MIR2_RNG_SEED/MIR2_RNG_LOG）"
         );
         let cases = lot["cases"].as_array().expect("lottery.cases 必须是数组");
-        assert_eq!(cases.len(), 12, "彩票用例数固定为 12（改动须同步本断言）");
+        assert_eq!(cases.len(), 15, "彩票用例数固定为 15（改动须同步本断言）");
         let mut levels = [false; 6];
         let mut lost = 0usize;
         let mut gate_closed_checked = false;
@@ -1075,20 +1075,23 @@ mod tests {
             let golds: Vec<i32> = (0..6)
                 .map(|i| i32v(&c["config"]["applied"]["gold"][i]))
                 .collect();
-            match won_level {
-                Some(i) => {
-                    assert_eq!(
-                        d_gold, golds[i],
-                        "{name}: 中奖金币必须 = 该档 WinLotteryNGold"
-                    );
-                    assert_eq!(d_no_win, 0, "{name}: 中奖不加 NoWin");
-                    levels[i] = true;
-                }
-                None => {
-                    assert_eq!(d_gold, 0, "{name}: 未中/闸闭金币不变");
-                    assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
-                    lost += 1;
-                }
+            // 中/未中按**金币增量**判（oracle `PlayObject.cs:3868 if (nGold > 0)`）；命中但该档
+            // `Gold == 0`、或闸闭，都走未中并 `NoWin += 500`，而等级仍在闸内 +1
+            // （`:3820 WinLotteryLevel6++` 与 gold 无关）——按等级增量判会误当 Won。
+            if let Some(i) = won_level {
+                levels[i] = true;
+            }
+            if d_gold > 0 {
+                let i = won_level.unwrap_or_else(|| panic!("{name}: 金币 +{d_gold} 但无命中档"));
+                assert_eq!(
+                    d_gold, golds[i],
+                    "{name}: 中奖金币必须 = 该档 WinLotteryNGold"
+                );
+                assert_eq!(d_no_win, 0, "{name}: 中奖不加 NoWin");
+            } else {
+                assert_eq!(d_gold, 0, "{name}: 未中/闸闭金币不变");
+                assert_eq!(d_no_win, 500, "{name}: 未中/闸闭 NoWin += 500");
+                lost += 1;
             }
             // 卡 `openmir2-runtime-sysmsg-text-frames`：彩票绿/红字必须带文本，且字节 =
             // oracle `EDCode.EncodeString(MessageSettings.WinLottery{N}Msg / NotWinLotteryMsg)`。
@@ -1113,8 +1116,14 @@ mod tests {
                 known.contains(&got),
                 "{name}: 彩票 SysMsg 文本不属于七条已知文案"
             );
-            if let Some(i) = won_level {
+            if d_gold > 0 {
+                let i = won_level.expect("中奖必有命中档");
                 assert_eq!(got, known[i], "{name}: 中奖档位与文案不符");
+            } else {
+                assert_eq!(
+                    got, known[6],
+                    "{name}: 未中/闸闭必须是 NotWinLotteryMsg（红字）"
+                );
             }
             if name == "eat_ok_lottery_gate_closed" {
                 gate_closed_checked = true;
@@ -1157,7 +1166,7 @@ mod tests {
 
         let doc = fixture();
         let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
-        assert_eq!(cases.len(), 12, "彩票例固定 12");
+        assert_eq!(cases.len(), 15, "彩票例固定 15（含 QA 三类盲区例）");
         for c in cases {
             let name = c["name"].as_str().unwrap();
             let ap = &c["config"]["applied"];
@@ -1187,26 +1196,36 @@ mod tests {
             assert_eq!(cr.1, 1, "{name}: win_lottery 必须恰抽一次（实得 {}）", cr.1);
             // 期望 from 夹具 lottery(后) - lottery_before(前)。
             let la = &c["lottery"];
-            let mut exp_level = None;
-            for i in 0..6 {
-                if i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1 {
-                    exp_level = Some((i + 1) as u8);
-                }
-            }
+            let hit_level = (0..6)
+                .find(|&i| i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1)
+                .map(|i| (i + 1) as u8);
             let d_gold = i32v(&c["gold"]) - i32v(&c["gold_before"]);
             let d_no_win = i32v(&la["no_win"]) - i32v(&lb["no_win"]);
             let out_dbg = format!("{out:?}");
-            match (exp_level, out) {
-                (Some(lv), WinLotteryOutcome::Won { level, gold }) => {
-                    assert_eq!(level, lv, "{name}: Rust 命中档位 != oracle");
-                    assert_eq!(gold, d_gold, "{name}: Rust 中奖金币 != oracle");
-                    assert_eq!(d_no_win, 0, "{name}: 中奖不应加 no_win");
+            // **中/不中按金币增量判**（不是按命中档/等级增量）：oracle 以 `nGold > 0` 定 Won；
+            // 命中档但该档 `Gold == 0`（或闸闭）仍走 Lost（NoWin += 500、红字、无 SM_GOLDCHANGED），
+            // 等级增量照常 +1。按等级增量判会把「命中但 0 金」误当 Won（QA 盲区 ②）。
+            if d_gold > 0 {
+                match out {
+                    WinLotteryOutcome::Won { level, gold } => {
+                        assert_eq!(
+                            Some(level),
+                            hit_level,
+                            "{name}: Rust 命中档位 != 夹具等级增量档"
+                        );
+                        assert_eq!(gold, d_gold, "{name}: Rust 中奖金币 != oracle");
+                        assert_eq!(d_no_win, 0, "{name}: 中奖不应加 no_win");
+                    }
+                    other => panic!("{name}: 夹具金币 +{d_gold} 但 Rust outcome = {other:?}"),
                 }
-                (None, WinLotteryOutcome::Lost) => {
-                    assert_eq!(d_gold, 0, "{name}: 未中金币应为 0");
-                    assert_eq!(d_no_win, 500, "{name}: 未中 no_win 应 +500");
+            } else {
+                match out {
+                    WinLotteryOutcome::Lost => {
+                        assert_eq!(d_gold, 0, "{name}: 未中金币应为 0");
+                        assert_eq!(d_no_win, 500, "{name}: 未中 no_win 应 +500");
+                    }
+                    other => panic!("{name}: 夹具金币 +0（未中）但 Rust outcome = {other:?}"),
                 }
-                (e, o) => panic!("{name}: Rust outcome {o:?} 与夹具期望(赢级 {e:?}) 不符"),
             }
             for i in 0..6 {
                 assert_eq!(
@@ -1219,7 +1238,7 @@ mod tests {
             assert_eq!(st.count, i32v(&la["count"]), "{name}: 后态 count");
             eprintln!(
                 "CASE {name}: 输入(seed={seed} rate={} bands_min={:?}) 期望(hit={:?} gold+{d_gold} no_win+{d_no_win}) 实测({out_dbg} draws={} 后态_no_win={} 后态_level={:?})",
-                cfg.rate, cfg.min, exp_level, cr.1, st.no_win, st.level
+                cfg.rate, cfg.min, hit_level, cr.1, st.no_win, st.level
             );
         }
     }

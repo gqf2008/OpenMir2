@@ -100766,7 +100766,7 @@ fn ",
 
             let doc = fixture_doc();
             let cases = doc["lottery"]["cases"].as_array().expect("lottery.cases");
-            assert_eq!(cases.len(), 12, "彩票例固定 12");
+            assert_eq!(cases.len(), 15, "彩票例固定 15（含 QA 三类盲区例）");
             let mut seen_seeds = std::collections::BTreeSet::new();
             let mut seen_applied = std::collections::BTreeSet::new();
             let mut seen_inputs = std::collections::BTreeSet::new();
@@ -100911,17 +100911,22 @@ fn ",
                                 "{name}: 文本帧前景/背景色 != 夹具"
                             );
                             assert_eq!(got.series, 1, "{name}: SM_SYSMESSAGE series 恒 1");
-                            // 夹具文本必须就是**该例命中档（或未中）那条文案**的编码：
-                            // 用常量独立重算（不经被测实现）交叉核对。
+                            // 夹具文本必须就是**该例结算（中/未中）那条文案**的编码：用常量
+                            // 独立重算（不经被测实现）交叉核对。中/未中按**金币增量**判（oracle
+                            // `nGold > 0`）——命中档但 Gold=0 / 闸闭都发未中文案，等级仍 +1。
+                            let won = i32v(&c["gold"]) > i32v(&c["gold_before"]);
                             let hit: Vec<usize> = (0..6)
                                 .filter(|&i| {
                                     i32v(&c["lottery"]["level"][i]) - i32v(&lb["level"][i]) == 1
                                 })
                                 .collect();
-                            let want_msg = match hit.as_slice() {
-                                [i] => crate::strings::DEFAULT_WIN_LOTTERY_MSGS[*i],
-                                [] => crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG,
-                                _ => panic!("{name}: 夹具命中档不唯一 {hit:?}"),
+                            let want_msg = if won {
+                                match hit.as_slice() {
+                                    [i] => crate::strings::DEFAULT_WIN_LOTTERY_MSGS[*i],
+                                    _ => panic!("{name}: 中奖但夹具命中档不唯一 {hit:?}"),
+                                }
+                            } else {
+                                crate::strings::DEFAULT_NOT_WIN_LOTTERY_MSG
                             };
                             assert_eq!(
                                 hex_to_bytes(text),
@@ -100948,10 +100953,21 @@ fn ",
                 let hit: Vec<usize> = (0..6)
                     .filter(|&i| i32v(&la["level"][i]) - i32v(&lb["level"][i]) == 1)
                     .collect();
-                if hit.is_empty() {
-                    losses += 1;
-                } else {
+                // 「命中但该档 Gold==0」是**合法状态**：金币不变、判未中，但等级仍 +1
+                // （`PlayObject.cs:3820` 在闸内、与 gold 无关）——显式断言，不只靠夹具整块相等。
+                if i32v(&c["gold"]) == i32v(&c["gold_before"]) && !hit.is_empty() {
+                    let i = hit[0];
+                    assert_eq!(
+                        snap.level[i],
+                        i32v(&lb["level"][i]) + 1,
+                        "{name}: 命中但 0 金时等级仍应 +1"
+                    );
+                }
+                // 中/未中按金币增量（oracle `nGold > 0`），不是按等级增量。
+                if i32v(&c["gold"]) > i32v(&c["gold_before"]) {
                     wins += 1;
+                } else {
+                    losses += 1;
                 }
                 eprintln!(
                     "CASE12 {name}: seed={seed} rate={} gold {}→{} no_win {}→{} hit={hit:?} ids={ids:?} text={:?}",
