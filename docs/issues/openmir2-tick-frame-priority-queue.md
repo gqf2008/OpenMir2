@@ -258,3 +258,232 @@ impl TickFrameQueue {
 
 "待定点"的数目此前有三种口径（TSV 行 **175** / 源码站点 **124** / 卡面 **136**，互不一致）。
 **以后统一按"源码站点行"计数**，并在报告里注明用的是哪一种口径。
+
+## 10. `#7`（施法支 A）"条件发 657"的读穿结论（2026-11-20）
+
+**产生链**：`BuffApplyEvent.char_status` ← `world.get_char_status(actor_id)`（`crates/world-bevy/src/world.rs`
+的 `defence_up` / `mag_defence_up` / `magic_shield_on`）→ 宿主 `handle_spell_cmd_with_magic` 支 A
+（`smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0)` 经 `SpellFrameBuf` 广播）。**是同一个量**
+（`GetBuffStatus() | (CharStatusEx & 0xFFFF)`），不是局部判断。
+
+**"条件发"对应 oracle 的哪一段**——两类 buff 不同：
+- `DefenceUp`（`BaseObject.cs:2159-2162`）/ `MagDefenceUp`（`:2183-2186`）：**无条件**
+  `SysMsg` + `RecalcAbilitys()` + `SendMsg(RM_ABILITY)` ⇒ 两侧都无条件发；
+- `MagBubbleDefenceUp`（`src/M2Server/Player/CharacterObject.cs:96-114`）：
+  `CharStatus = GetCharStatus(); if (nOldStatus != CharStatus) StatusChanged();` ⇒ **oracle 自己就是条件发**。
+  本仓 `magic_shield_on` 的 `if new_status != old_status { push(ev) }` 与之逐字对应。
+
+⇒ **结论：`#7` 的"条件发"不是语义差异，是 oracle `MagBubbleDefenceUp` 的原样**；
+**不改为无条件**。（若 `SKILL_UENHANCER`(36) 实测缺 657，缺的不在 `#7` 这条链上——它走的是另一条路径。）
+
+## 10b. 四种 657 机制的收敛 seam（记录，不实现）
+
+> **坐标系 = master `165c6edd1`**（行号以该树为准）。
+
+| 站点 | 现机制 | 若收敛需要的上下文 |
+|---|---|---|
+| `#3` `CM_ADJUST_BONUS` | 直发 `tx.send` | `socket`/`gate_idx`（现成）、`status`、`hit_speed` |
+| `#4` 穿脱装备 | 直发 `tx.send` | 同上 |
+| `#6` 吃路径 | `pickwire::notice_frame`（队列记录 → 泵） | 已具备（`WireSession`） |
+| `#7` 施法支 A | `SpellFrameBuf::push_broadcast_cached` | 已具备（buf + ref_msg_cache） |
+
+统一 seam 的签名候选：`emit_charstatuschanged(world, online, gates, sink: &mut dyn FrameSink, actor, status, hit_speed, range)`
+——`FrameSink` 由三条路径各自实现（直发 / 队列 / 帧缓冲）。**本单不实现**，属收敛单。
+
+## 11. 15/16 处矩阵在 master `165c6edd1` 上的重算（2026-11-20）
+
+方法：对 `git show 165c6edd1:mir2-rs/bins/game-svr/src/lib.rs` 取生产面（首个 `^mod tests {` 之前）
+的全部 `recalc_session_ability(` 调用，按**顶层函数括号**归属，在函数体内数
+`sm_charstatuschanged(` / `broadcast_charstatuschanged_except_self(` / `push_broadcast_cached(` / `notice_frame`。
+**本表 16 行**（同一函数可有多个调用点，不可按函数名合并）。
+
+| 行号（master） | 函数 | 自 | 广 | 证据/备注 |
+|---|---|---|---|---|
+| 2967 | `apply_pending_level_up` | Y | Y | sm_csc=1、bcast=1（批A #1） |
+| 3202 | `apply_gm_use_item_write` | Y | Y | sm_csc=1、bcast=1（批A #2） |
+| 4173 | `handle_inbound_cmd`（CM_ADJUST_BONUS） | Y | Y | sm_csc=1、bcast=1 |
+| 5327 | `handle_bag_cmd_with_magic` | Y | Y | sm_csc=1、bcast=1 |
+| **7818** | `handle_shop_cmd_inner`（升级武器） | **n** | **n** | 局部窗口无任何 657 ⇒ **真缺口（#5 / T-289）** |
+| 10980 / 11049 | `handle_eat_cmd` | Y | Y | 自走 `notice_frame`（泵）、广 bcast=1 |
+| 14429 | `handle_spell_cmd_with_magic` 支 A | Y | Y | `sm_charstatuschanged` 14403 + `push_broadcast_cached` 14413/14419 |
+| **16553** | `handle_spell_cmd_with_magic` 支 B | **n** | **n** | ±80 行内无 657 ⇒ **真缺口（#8）** |
+| 18774 | `drain_buff_downlink` | Y | **待核** | `sm_charstatuschanged(*actor_id,*status,0)` 18794；广播未在窗口内 |
+| 19414 | `drain_levelup_healthspell_with_magic` | Y | Y | T-290：链内入队(155)、链末出队并自+广（RM_CSC=1） |
+| **22398 / 22405** | `apply_pending_gm_target_ops` | **n** | **n** | **真缺口（#11/#12 / T-291）** |
+| **25072** | `drain_player_need_recheck_with_magic` | **n** | **n** | **真缺口（#13 / T-292）** |
+| **25359** | `drain_player_hunger` | **n** | **n** | **真缺口（#14 / T-293）** |
+| **25947** | `drain_player_revival_with_magic` | **n** | **n** | **真缺口（#15 / T-294）** |
+
+⇒ **只有"两条都没有"的点进接线批次**：`7818`(#5)、`16553`(#8)、`22398/22405`(#11/#12)、
+`25072`(#13)、`25359`(#14)、`25947`(#15) 共 **7 个调用点**；`18774` 的"广"待核后再定。
+
+> 审计 §3.2 的原句"11 处都没有"**作废**：当前 master 上已有多处接线（批A #1/#2 与 T-290 已合入）。
+
+## 11b. `FrameSink` 三条实现：已有/缺什么（决定下一单能否收敛）
+
+> **坐标系 = master `165c6edd1`**。
+
+| 机制 | 代表站点 | 已有 | 缺 |
+|---|---|---|---|
+| 直发 `tx.send` | `#3` CM_ADJUST_BONUS、`#4` 穿脱 | `socket`/`gate_idx`（`online` 里现成）、`status`、`hit_speed` | 无（可包 `FrameSink` 的"立即发"实现） |
+| `pickwire::notice_frame` | `#6` 吃路径 | `WireSession`（含 `hit_speed`）、`QueuedNotice` 队列、泵位置 | `status` 不在 `WireSession` 里（657 用 `session.hit_speed` + 记录 `n_param1`）⇒ 若收敛需把 `status` 并入队列记录 |
+| `SpellFrameBuf::push_broadcast_cached` | `#7` 施法 | buf + 每收件人 `NetPriorityQueue` + `ref_msg_cache` 收件人 | **泵序位置**（必须在本支所有帧入队后统一 flush）⇒ `FrameSink` 需暴露 `flush` 时机 |
+
+## 12. 7 个"两条都没有"点的 oracle 判定（只认 oracle 代码行，2026-11-20）
+
+> **坐标系 = master `165c6edd1`**；oracle 行号与分支无关。
+
+**共同的 oracle 事实（先立）**：玩家侧 `PlayObject.RecalcAbilitys()` 在 `if (Race == ActorRace.Play)`
+块内**无条件**执行 `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")`
+（`src/M2Server/Player/PlayObject.cs:2848` 起、`:2874-2876`）。
+⇒ 任何"调用 `RecalcAbilitys()`"的玩家路径，**每次都会**产出：`StatusChanged()`（`BaseObject.cs:1515-1517`
+的 `SendRefMsg`，广播含自己）**+** `SendUpdateMsg`（仅自己）。`da` 在 36 技能上实测到 **caster 2 条**
+（广播 1 + 自更新 1）、target/obs 各 1 条（`golden/magic/uenhancer.json` 三 seed 一致）——
+**这就是"每次 recalc = 广播 1 + 自更新 1"的实证**。
+
+| # | Rust 点 | oracle 锚 | 该函数发 657？ | 判 |
+|---|---|---|---|---|
+| #5 | `handle_shop_cmd_inner`（升级武器） | `src/GameSrv/Npc/Merchant.cs:569-571`：`UseItems[Weapon].Index = 0; user.RecalcAbilitys(); user.FeatureChanged(); SendMsg(RM_ABILITY)` | **无条件** | **真缺口** |
+| #8 | spell 支 B `AttPowerUp` | `PlayObject.cs:5323-5331`：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | **无条件** | **真缺口**（`da` 帧表 4 条实证） |
+| #11/#12 | `apply_pending_gm_target_ops`（`@删除技能`） | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71`：`mIPlayerActor.RecalcAbilitys();` | **无条件** | **真缺口** |
+| #13 | `drain_player_need_recheck_with_magic` | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if (boTakeItem) { SendDelItems(...); UseItems[i].Index = 0; RecalcAbilitys(); }` | **有条件**（`boTakeItem` = 该格被摘下并回包/掉落成功） | **真缺口**（Rust 的 `bo_take_item` 已是同一条件） |
+| #14 | `drain_player_hunger` | `src/M2Server/Player/PlayObject.Base.cs:288-292`：`RefMyStatus() { RecalcAbilitys(); SendMsg(RM_MYSTATUS); }` | **无条件**（跨档时 oracle 调 `RefMyStatus`） | **真缺口** |
+| #15 | `drain_player_revival_with_magic` | `PlayObject.cs:5371-5378`：耐久归零 ⇒ `SendDelItems`、`Index = 0`、`RecalcAbilitys()` | **无条件**（进入该支即调） | **真缺口** |
+| #9 | `drain_buff_downlink`（`buff_recalcs` 支） | `src/M2Server/ActorBuffSystem.cs:220-231`：`if (boChg) { CharStatus=...; StatusChanged(); }` 与 `if (boNeedRecalc) { RecalcAbilitys(); SendMsg(RM_ABILITY); }` **是两段** | `boChg` 支发（Rust 已接）；`boNeedRecalc` 支经 `RecalcAbilitys()` **也发** | **真缺口**（Rust 的 recalcs 支只有 52，没有 657） |
+
+⇒ **7 个点全部为真缺口**（#9 是"半个已接"：#buff_status_changes 支已有，recalcs 支没有）。
+
+### 12b. 发射模式：**按 oracle 产出点，不能外推**（2026-11-20，`da` 实测修正）
+
+> **坐标系 = master `165c6edd1`**。
+
+**先前假设作废**：我一度以为"每次 recalc = 广播 1 + 自更新 1"是通用模板——`da` 扫全部
+`golden/magic/*.json` 后证明**不同技能的多重集不同，由 oracle 产出路径决定**：
+
+| golden | caster | target | obs_in | 形态 |
+|---|---|---|---|---|
+| `uenhancer`(36) | **2** | 1 | 1 | `RecalcAbilitys` 无条件 `:2875 StatusChanged()` + `:2876 SendUpdateMsg`（广播1含self + 自更新1） |
+| `bigcloak`(19) | 2 | 2 | 2 | **两次广播**（每收件人 2），无单独自更新 |
+| `cloak`(18) / `shield`(31) | 1 | 1 | 1 | **单广播**（shield = `MagBubbleDefenceUp` 的 `if (nOldStatus != CharStatus) StatusChanged()`） |
+| `dejiwonho`(15) | 1 | **2** | 1 | target 多一条（路径特定） |
+| `hangmajinbub`(14) | 49 | 98 | 49 | 逐格 ×2 |
+
+⇒ **"已接 5 处只发 1 条自己 + 广播一次"不构成缺口证据**：若该路径 oracle 只有 `StatusChanged()`
+（无 `SendUpdateMsg`），1/1/1 就是对的（`shield` 即此）。**复核必须逐路径对 oracle 产出点**，
+不得拿 36 的 2/1/1 外推。
+
+**模板契约（草案，仍待逐点锚定后才可作为实现依据）**：
+> 每条 657 = **一次 oracle 产出调用**（`StatusChanged()` 或 `SendUpdateMsg(...)`）对应一条帧；
+> 收件人集合由该调用决定（`SendRefMsg` = 半径内含自己；`SendUpdateMsg` = 仅自己）；
+> 帧序 = `(byte)RM_CHARSTATUSCHANGED = 155`，同键按**入队序**（源行序：广播先、自更新后）。
+> **反例**：`MagBubbleDefenceUp` 条件不满足时**一条都没有**（条件 StatusChanged）。
+
+### 12c. golden 全量 657 扫描（2026-11-20，只读）
+
+> **坐标系 = master `165c6edd1`**。
+
+`tests/parity/golden/**` 下含 657 的 JSON 共 **10 个文件**（含 `magic/legacy/*` 副本），
+每 case 出现次数：`bigcloak` 6、`cloak` 3、`dejiwonho` 4、`hangmajinbub` **196**、`shield` 3
+（均 ×3 cases，三 seed 一致）；`uenhancer` 的 golden 尚未入 `golden/`（`da` 手扫给出 2/1/1）。
+这些文件被 `docs/issues/parity-gap-magic.json` 的条目引用；比较器在 `tests/parity/tests/magic_fireball_parity.rs`。
+
+## 13. 交接点（下一单）
+
+**下一单 = 12 个站点逐个给出"oracle 调用序列 → 期望 657 条数"的表**：
+
+- **7 个缺口**：`#5 handle_shop_cmd_inner`、`#8`（**已转 `da`**，36 臂，不重复）、`#11/#12 apply_pending_gm_target_ops`、
+  `#13 drain_player_need_recheck_with_magic`、`#14 drain_player_hunger`、`#15 drain_player_revival_with_magic`；
+- **5 个已接点复核**：`#1 apply_pending_level_up`、`#2 apply_gm_use_item_write`、`#3 CM_ADJUST_BONUS`、
+  `#4 穿脱装备`、`#7 施法支 A`（含 `MagBubbleDefenceUp` 的条件发反例）；
+- **外加 `#9 drain_buff_downlink` 的"半接"**：`src/M2Server/ActorBuffSystem.cs:220-231` 两段——
+  `boChg` 的 `StatusChanged()` 已接、`boNeedRecalc` 的 `RecalcAbilitys()` 未接。**不得丢**。
+
+**每个站点要填**：oracle 函数 + 行号 → 该路径上的 657 产出调用（`StatusChanged()` / `SendUpdateMsg(...)` / 其它）
+→ 每种收件人的期望条数（caster/target/obs）→ 对应的 `golden/` 证据（有则引，无则写明"无 golden"）。
+
+**已有坐标系**：§12（7 缺口判定）、§12b（条数按产出路径定 + 反例）、§12c（golden 657 现状）、
+§11b（`FrameSink` 三条实现缺什么）、§10b（seam 候选签名）；全部以 `165c6edd1` 为准。
+
+**不要重复的活**：36（`uenhancer`）的 4 条帧已由 `da` 实测并落地；`#7` 的"条件发"已证为 oracle 原样，别再翻。
+
+## 14. 12 站点 oracle 调用序列 → 期望 657 条数（2026-11-20，只读；坐标系 = `165c6edd1`）
+
+**共同事实（依据，不作外推公式）**：`PlayObject.RecalcAbilitys()` 在 `if (Race==ActorRace.Play)` 块内
+`:2874 CharStatus=GetCharStatus(); :2875 StatusChanged(); :2876 SendUpdateMsg(RM_CHARSTATUSCHANGED,HitSpeed,CharStatus,0,0,"")`。
+⇒ **凡是"只调一次 `RecalcAbilitys()`、无其它 657 产出点"的站点，期望 = 自 2 / 目标 1 / 观察 1**
+（`uenhancer`(36) 实测 2/1/1 即此形态的直接印证）。
+**不经 `RecalcAbilitys()` 的路径不适用**（见 §12b 反例：shield 1/1/1 条件发、bigcloak 2/2/2 两次广播等）。
+
+| # | 站点（`lib.rs`@`165c6edd1`） | oracle 调用序列（行号） | 期望 657（自/目标/观察） | golden |
+|---|---|---|---|---|
+| 1 | `apply_pending_level_up` :2967 | `ChangeLevelCommand` → `HasLevelUp`（`PlayObject.cs:5242-5252`）= `RecalcLevelAbilitys(); RecalcAbilitys(); SendMsg(RM_LEVELUP)` | **2 / 1 / 1** | 无（GM 路径） |
+| 2 | `apply_gm_use_item_write` :3202 | `src/Modules/GameCommand/Commands/SmakeItemCommand.cs:60` `RecalcAbilitys()`（+`SendUpdateItem`） | **2 / 1 / 1** | 无 |
+| 3 | `handle_inbound_cmd`(CM_ADJUST_BONUS) :4173 | `ClientAdjustBonus`（`src/M2Server/Player/PlayObject.Base.cs:1173`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+| 4 | `handle_bag_cmd_with_magic` :5327 | `ClientTakeOn/TakeOffItems`（`Operate.cs:455/544`）`RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+| 5 | `handle_shop_cmd_inner`（升级武器）:7818 | `src/GameSrv/Npc/Merchant.cs:569-571`：`Index=0; RecalcAbilitys(); FeatureChanged(); SendMsg(RM_ABILITY)` | **2 / 1 / 1**（另有 41、52） | 无 |
+| 7 | spell 支 A（按魔法分） | ① `MagBubbleDefenceUp`（`CharacterObject.cs:96-114`）：`CharStatus=GetCharStatus(); if(nOldStatus!=CharStatus) StatusChanged();` ⇒ **条件发、无 SendUpdateMsg**；② `DefenceUp/MagDefenceUp`（`BaseObject.cs:2159-2186`）：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | ① 条件成立 **1 / 1 / 1**、不成立 **0/0/0**；② **2 / 1 / 1** | `shield.json` 1/1/1；`cloak.json` 1/1/1；`dejiwonho.json` 1/**2**/1；`bigcloak.json` **2/2/2**；`hangmajinbub.json` 49/98/49 |
+| 9 | `drain_buff_downlink`（半接）:18774 | `src/M2Server/ActorBuffSystem.cs:220-231` 两段：`if(boChg){ CharStatus=GetCharStatus(); StatusChanged(); }`（已接）/ `if(boNeedRecalc){ RecalcAbilitys(); SendMsg(RM_ABILITY); }`（**未接**） | `boChg` 支 **1/1/1**；`boNeedRecalc` 支 **2/1/1** | 无（buff 侧仅单测） |
+| 11 | `apply_pending_gm_target_ops`（@删除技能）:22398 | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71` `mIPlayerActor.RecalcAbilitys()`（+`SendDelMagic` 直接帧 212） | **2 / 1 / 1** | 无（GM） |
+| 12 | 同上（第二分支）:22405 | 同上 | **2 / 1 / 1** | 无（GM） |
+| 13 | `drain_player_need_recheck_with_magic` :25072 | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if(boTakeItem){ SendDelItems; UseItems[i].Index=0; RecalcAbilitys(); }` | **2 / 1 / 1**（条件：该格确实被摘下） | 无 |
+| 14 | `drain_player_hunger` :25359 | `RefMyStatus()`（`src/M2Server/Player/PlayObject.Base.cs:288-292`）= `RecalcAbilitys(); SendMsg(RM_MYSTATUS)` | **2 / 1 / 1**（+708） | 无 |
+| 15 | `drain_player_revival_with_magic` :25947 | `PlayObject.cs:5371-5378`：耐久归零 ⇒ `SendDelItems; Index=0; RecalcAbilitys()` | **2 / 1 / 1** | 无 |
+
+**反例（保留在表里，防止归纳）**：`shield` 1/1/1（条件 `StatusChanged`、无 `SendUpdateMsg`）、
+`cloak` 1/1/1、`bigcloak` 2/2/2（两次广播）、`dejiwonho` 1/**2**/1（目标多一条）、
+`hangmajinbub` 49/98/49（逐格×2）、`uenhancer` 2/1/1（RecalcAbilitys 标准形态）。
+
+**对已接 5 处的含义**：#1/#2/#3/#4 若现状是"广播 1（含自）+ 自更新 1" ⇒ 已符合；
+若只有"1 条自己 + 广播一次" ⇒ **缺 `SendUpdateMsg` 那条**，需在接线批次里补。
+`#7` 的 ① 形态（条件发、无自更新）**现状即正确**，不得按 ② 补第二条。
+
+## 14b. 接线实施规则（Batch 1–3 的处方，2026-11-20）
+
+**每个"经 `RecalcAbilitys()`"的站点要发 3 个动作、且顺序固定**（oracle 源行序）：
+
+1. **广播副本（含自己）** —— 对应 `PlayObject.cs:2875 StatusChanged()` 的 `SendRefMsg`（收件人 = ±`SendRefMsgRange` 含源）；
+2. 观察者（除自己外的收件人）—— 同一次广播的其它收件人；
+3. **自更新副本（仅自己）** —— 对应 `:2876 SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")`。
+
+⇒ 对**自己**：**两条**，同 prio 155，**入队序 = 广播副本先、自更新副本后**；对**观察者**：一条。
+
+**现状差距（`#1`/`#2` 的批A 实现）**：只有"自己 1 条 + 广播他人"，且自己那条**排在广播之前** ⇒
+既要**补一条自更新**，也要**把顺序改回"广播副本在前"**。`#3`/`#4` 同形。
+
+**测试断言写法**（两条 657 字节完全相同，不能用多重集）：
+> **2026-11-20 修正（§14c）**：本节末条的"断言完整 `ids` 序列 / 两次出现之间无插入"**作废**——
+> 跨 socket 先后不是线上可观测面，见 §14c。以 §14c 为准。
+- 取**自己的帧序列**，断言其中 657 的**下标位置**与**条数**：`pos(657) 出现两次`，且第一条来自广播、
+  第二条来自自更新 —— 由于字节相同，判据只能靠**顺序 + 条数**（例如断言 `ids.iter().filter(==657).count()==2`
+  再断言两次出现之间**没有**更低优先级的帧插入，或直接断言完整 `ids` 序列）；
+- 观察者侧断言 `count == 1`；范围外观察者 `count == 0`；
+- **先写测试、在未接线代码上跑红（现状 1 条自），再接**——§26「只接不发测试」的防线。
+
+**禁区**：`#7` 的 `MagBubbleDefenceUp` 形态（条件 `StatusChanged`、**无**自更新）原样不动；
+任何人想"统一成 2/1/1"必须先推翻 `src/M2Server/Player/CharacterObject.cs:96-114` 的原文。
+
+**口径提醒**：判定"有没有 657"按**行为**，不按"是否调用 helper"——
+（`drain_monster_ref_msgs` 是内联 fan-out，逐收件人重编码），`a2` 已确认它是等价实现，不是缺口。
+
+## 14c. 顺序面裁定：只验计数，不写跨 socket 序（2026-11-20，`opc-19` + 执行者 `openmir2-89`）
+
+**事实（只读核对，`src/M2Server/Actor/BaseObject.Message.cs`）**：
+- `:383 SendRefMsg`；扫描支 `:395-447` 按 x-major 逐格（`nCx` 从 `CurrX-12` 到 `CurrX+12`，`nCy` 同理）
+  枚举 `ObjList` —— **self 位于 `(CurrX,CurrY)` 那一格，先后由坐标决定，既不在最前也不在最后**；
+- 500ms 复用支 `:453-474` 按 `VisibleHumanList` 原序重放；隐身支 `:390-392` 只发自己。
+
+⇒ **广播副本与观察者的相对先后是扫描序的函数**，不同交局会给出不同结果；
+且线上**每 socket 各有自己的 `MsgQueue`**，跨 socket 先后根本不是线上可观测面（测试装置把多个
+socket 汇到一条 mpsc 才产生顺序）。两条自帧字节完全相同 ⇒ "哪条是广播副本"也不可判。
+
+**断言口径（本批及后续 `#3`/`#4` 一律）**：
+1. **主断言 = 逐 socket 计数**：自己恰 2 条 657（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新副本）、
+   每个观察者恰 1、范围外 0。现状 1 条 ⇒ 改前必红，红的**原因必须是计数**；
+2. **顺序只允许同一 socket 流内、且有参照帧**的相对位置（例：T-290 的 self 流 `……45/52/752 → 657 → 657`：
+   657 在 45/52/752 之后、末尾连续两条）；
+3. **禁止**：跨 socket 序、完整全局 `ids` 序列、"两条 self 谁先"、以 helper 的循环写法为判据的断言。
+4. 夹具放**两侧观察者**（x-5 / x+5）⇒ 任何隐性依赖扫描序的实现会在计数/位置断言上露馅。
+
+**实现侧结论**：`send_charstatuschanged_self_and_observers` 的三动作（自广播副本 → 广播他人 →
+自自更新副本）作为实现保留；self 副本统一提到广播循环之前是对扫描序的**已登记近似**，
+差异在线上不可观测（见上）。

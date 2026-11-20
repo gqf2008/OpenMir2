@@ -2978,27 +2978,20 @@ fn apply_pending_level_up(
     // **卡 `openmir2-charstatuschanged-wiring` #1**：oracle `HasLevelUp`
     // （`PlayObject.cs:5242-5252`）内的 `RecalcAbilitys()` 无条件
     // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`
-    // ⇒ 发送者自通知 + 观察者各一条 657。
+    // ⇒ 自己**两条**（广播副本 + 自更新副本）+ 观察者各一条 657。
     // 线上序：`RM_LEVELUP` 低字节 < `RM_CHARSTATUSCHANGED(155)` ⇒ 657 排在 45/52/752 之后；
     // `status` 取**重算之后**的当下值（`PlayObject.cs:2873` 的取值时点）。
     let char_status = world.get_char_status(sg.actor_id);
     let hit_speed = sg.hit_speed;
-    if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
-        let body = game_svr::smframe_ext::sm_charstatuschanged(sg.actor_id, char_status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "657(GM @Level)") {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body,
-            });
-        }
-    }
-    broadcast_charstatuschanged_except_self(
+    send_charstatuschanged_self_and_observers(
         world,
         online,
         gates,
         sg.actor_id,
         char_status,
+        hit_speed,
         chat::send_ref_msg_range(),
+        "657(GM @Level)",
     );
     true
 }
@@ -3202,27 +3195,20 @@ fn apply_gm_use_item_write(
     recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
     // **卡 `openmir2-charstatuschanged-wiring` #2**：oracle `SmakeItemCommand`
     // （`src/Modules/GameCommand/Commands/SmakeItemCommand.cs:60`）内的
-    // `PlayerActor.RecalcAbilitys()` 无条件发 657（自 + 观察者）。发在**做重算的这个函数里**，
-    // 不交给调用方决定；返回值形状不变。帧内序偏差登记 **T-288**（657 先于调用方发出的 203；
-    // 本路径仅 GM 可达、现网权限恒 0）。
+    // `PlayerActor.RecalcAbilitys()` 无条件发 657（自 2：广播副本 + 自更新副本 + 观察者）。
+    // 发在**做重算的这个函数里**，不交给调用方决定；返回值形状不变。帧内序偏差登记 **T-288**
+    // （657 先于调用方发出的 203；本路径仅 GM 可达、现网权限恒 0）。
     let char_status = world.get_char_status(actor);
     let hit_speed = sg.hit_speed;
-    if let Some(entry) = online.iter().find(|e| e.actor_id == actor) {
-        let body = game_svr::smframe_ext::sm_charstatuschanged(actor, char_status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "657(GM 改属性)") {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
-                body,
-            });
-        }
-    }
-    broadcast_charstatuschanged_except_self(
+    send_charstatuschanged_self_and_observers(
         world,
         online,
         gates,
         actor,
         char_status,
+        hit_speed,
         chat::send_ref_msg_range(),
+        "657(GM 改属性)",
     );
     // `:61` `SendUpdateItem`：模板缺失 ⇒ oracle 不发帧（`if (stdItem != null)`）。
     let tpl = catalog.get(w.index)?;
@@ -11240,6 +11226,15 @@ fn broadcast_feature_changed_except(
 
 /// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐；`status` 由调用方给——
 /// **入队路径**在入队时取好、出队时不得重算（否则与 oracle 的取值时点不符）。
+///
+/// **三动作定序**（oracle `PlayObject.cs:2874-2876`）：`:2875 StatusChanged()` 的
+/// `SendRefMsg(RM_CHARSTATUSCHANGED)` 收件人含自己 ⇒ 先发自己的**广播副本**；随后广播他人；
+/// `:2876 SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")` ⇒ 最后发自己的
+/// **自更新副本**。两条自帧同 prio 155，入队序 = 广播副本先、自更新副本后。
+///
+/// **已登记的近似**：oracle 里 self 那份随 `SendRefMsg` 的坐标扫描（`BaseObject.Message.cs:395-447`）
+/// 在自己的格子被发出，位置由坐标决定；这里把 self 副本统一提到广播循环之前。**跨 socket 的
+/// 先后不是线上可观测面**（每 socket 各有 `MsgQueue`），self 两条帧字节也完全相同 ⇒ 差异不可判。
 #[allow(clippy::too_many_arguments)]
 fn send_charstatuschanged_self_and_observers(
     world: &mir2_world_bevy::World,
@@ -11251,23 +11246,37 @@ fn send_charstatuschanged_self_and_observers(
     range: i32,
     what: &str,
 ) {
-    if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
+    let entry = online.iter().find(|e| e.actor_id == actor_id);
+    // ① 自己的**广播副本**（`:2875`，收件人含源）。
+    if let Some(e) = entry {
         let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
-        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, what) {
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
             let _ = tx.send(SimToGate::SendFrame {
-                socket: entry.socket,
+                socket: e.socket,
                 body,
             });
         }
     }
+    // ② 广播他人（同一次 `SendRefMsg` 的其它收件人；隐藏发送者时 `targets` 只回 `[self]` 被跳过）。
     broadcast_charstatuschanged_except_self(world, online, gates, actor_id, status, range);
+    // ③ 自己的**自更新副本**（`:2876` `SendUpdateMsg`，仅自己）。
+    if let Some(e) = entry {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+        }
+    }
 }
 
 /// `StatusChanged()`（`BaseObject.cs:1514` 的 `SendRefMsg(RM_CHARSTATUSCHANGED)`）的宿主等价物，
 /// 用于武器升级 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的**近邻**支：
 /// 给 ±`range` 格内**其它**玩家各一条 `SM_CHARSTATUSCHANGED(657)`。
 ///
-/// 自己那两条（`SendRefMsg` 回环 + `SendUpdateMsg`）由调用方按发送序放进 `out`，本函数跳过自己。
+/// 自己那两帧（`SendRefMsg` 收件人含自己的**广播副本** + `SendUpdateMsg` 的**自更新副本**）
+/// 由 [`send_charstatuschanged_self_and_observers`] 在本函数**前后**各发一条，本函数跳过自己。
 /// 每条的 `Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；
 /// `Recog/Param/Tag` 是**发送者**的 `ActorId` 与 `CharStatus` 的 Lo/Hi。
 fn broadcast_charstatuschanged_except_self(
@@ -50129,8 +50138,9 @@ break
     ///
     /// 牙：① `-1 ⇒ 255`、`300 ⇒ 255`（`(byte)HUtil32._MIN(MAXUPLEVEL=255, n)` 的 unchecked 回绕，
     /// **不得先钳 0**）；② `0 ⇒ 0`、`7 ⇒ 7`；③ 成功路径恰发
-    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752) → SM_CHARSTATUSCHANGED(657)` 四条、顺序固定
-    ///（657 来自 `HasLevelUp` 内 `RecalcAbilitys()`，见卡 `openmir2-charstatuschanged-wiring` #1）；
+    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752) → SM_CHARSTATUSCHANGED(657) ×2` 五条、顺序固定
+    ///（657 来自 `HasLevelUp` 内 `RecalcAbilitys()`：`PlayObject.cs:2875` 广播副本 + `:2876` 自更新副本，
+    /// 见卡 `openmir2-charstatuschanged-wiring` #1 的三动作 helper）；
     /// ④ `wabil.level` / `max_exp` / 实体 `level`·`max_exp` 四处一致；
     /// ⑤ **只发给发起者**：第二个在线角色（socket 902）收不到任何帧
     ///（`GmRig::say` 对任何非 901 socket 直接 panic）；
@@ -50148,8 +50158,8 @@ break
                 .collect();
             assert_eq!(
                 idents,
-                vec![45, 52, 752, 657],
-                "arg={arg}：恰 45→52→752→657 四条（657 = RecalcAbilitys 的 StatusChanged）"
+                vec![45, 52, 752, 657, 657],
+                "arg={arg}：恰 45→52→752→657→657 五条（657 ×2 = RecalcAbilitys 的广播副本 + 自更新副本）"
             );
             let sg = &rig.sessions["aaa"];
             assert_eq!(sg.state.wabil.level, want, "arg={arg} ⇒ level={want}");
@@ -50591,16 +50601,22 @@ break
         }
         let frames = rig.say_gm("@改属性 3 2 7");
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b.as_slice()).0).collect();
+        // **已登记偏差 T-288**（卡 `docs/issues/openmir2-charstatuschanged-wiring.md` §T-288；
+        // 白名单 `mir2-rs/tests/parity/whitelist.md` 的 T-288）：oracle 线上序是 **203 → 657×2**
+        // （203 = `SendUpdateItem` 的直接帧，`PlayObject.Base.cs:1668-1686`；657×2 = 优先级 155 的
+        // 队列项，`BaseObject.Message.cs:94/:181`），本宿主在 recalc 内先发 657×2 ⇒ 差位。
+        // **本断言记录现状，不是 oracle 一致**；要"修"成 203 在前，必须同时撤 T-288 登记。
         assert_eq!(
             idents,
             vec![
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_UPDATEITEM,
                 mir2_protocol::messages::SM_SYSMESSAGE
             ],
-            "657（RecalcAbilitys 的 StatusChanged）→ 203 → 蓝字 100（帧内序偏差 **T-288**，见白名单）。
-             **登记（帧内序）**：oracle 线上序是 203（直接帧）先、657（队列）后；本宿主在 recalc 内
-             先发 657 ⇒ 差一帧。本路径仅 GM 可达（现网 `Permission` 恒 0），卡 `openmir2-charstatuschanged-wiring` #2 已登记。"
+            "657×2（RecalcAbilitys：广播副本 + 自更新副本）→ 203 → 蓝字 100（帧内序偏差 **T-288**，见白名单）。
+             **登记（帧内序）**：oracle 线上序是 203（直接帧）先、657×2（队列）后；本宿主在 recalc 内
+             先发 657 ⇒ 差帧。本路径仅 GM 可达（现网 `Permission` 恒 0），卡 `openmir2-charstatuschanged-wiring` #2 已登记。"
         );
         // 落账：会话 + 实体同源（Desc[2]=7、Desc[9] 0→1）。
         let it = rig.sessions["aaa"].use_items[3]
@@ -50613,7 +50629,7 @@ break
             "实体佩戴位同源写"
         );
         // 蓝字回执逐字节（UTF-8 文本 + GBK 线上字节）。
-        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[2][12..]));
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&frames[3][12..]));
         assert_eq!(text, "5-42 100/200 0/0/7/0/0/0/0/0/0/1/0/0/0/0");
         assert_eq!(
             crate::downlink::gbk(&text),
@@ -86968,8 +86984,9 @@ SendRefMsgRange=15
     ///
     /// 牙：把 P31 奖励从 `exp_awards` 改走独立帧路径 / 不追加进 `exp_awards` ⇒ 本用例只剩 44
     /// **卡 `openmir2-tick-frame-priority-queue`（T-290）**：战斗升级的 657 走"链内入队、链末出队"。
-    /// 断言：① 657 是链内最后一条（`…752 → 657`）；② `param/tag` = **具体值 2/0**（先把
-    /// `buff.char_status_ex` 造到 2）；③ 自己 1 条、+5 观察者 1 条；④ +13（±12 外）零帧。
+    /// 断言：① 自己流末尾是**连续两条** 657（`…752 → 657 → 657`，`:2875` 广播副本 + `:2876`
+    /// 自更新副本）；② `param/tag` = **具体值 2/0**（先把 `buff.char_status_ex` 造到 2）；
+    /// ③ 自己 2 条、两侧 ±5 观察者各 1 条；④ +13（±12 外）零帧。
     /// 链前/链后残差见 T-295/T-296（本用例只证链内）。
     #[test]
     fn t290_levelup_chain_emits_657_at_chain_end_self_and_observers() {
@@ -86990,7 +87007,7 @@ SendRefMsgRange=15
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "t290", 1, 0, 901, hero));
-        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let id = world.add_entity(e);
@@ -87066,9 +87083,14 @@ SendRefMsgRange=15
             );
         }
         assert_eq!(
-            i657 + 1,
+            i657 + 2,
             all.len(),
-            "657 必须仍是链内最后一条（帧序 {all:?}）"
+            "自己流的末尾必须是**连续两条** 657（`:2875` 广播副本 + `:2876` 自更新副本，帧序 {all:?}）"
+        );
+        assert_eq!(
+            all[i657 + 1],
+            SM_CHARSTATUSCHANGED,
+            "两条自帧必须相邻且在链尾（帧序 {all:?}）"
         );
         let mut per: HashMap<i32, usize> = HashMap::new();
         for (socket, b) in &frames {
@@ -87084,9 +87106,14 @@ SendRefMsgRange=15
                 );
             }
         }
-        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
-        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
-        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
     }
 
     /// 或 0 帧，断言必红。
@@ -98309,15 +98336,22 @@ fn ",
     ///    `GetBuffStatus() | (CharStatusEx & 0xFFFF)`），657 的 `param/tag` 期望**具体值 `2 / 0`**
     ///    （不是"与 `get_char_status()` 相等"的自证式断言；恒 0 的夹具下把取值改成常量 0 也能绿
     ///    ⇒ 造非零值才有牙）；
-    /// 3. **自己 1 条、+5 观察者 1 条**；
+    /// 3. **自己 2 条**（`PlayObject.cs:2875` 广播副本 + `:2876` 自更新副本）、**两侧观察者各 1 条**
+    ///    （x-5 / x+5：`SendRefMsg` 的枚举序是 `BaseObject.Message.cs:395-447` 的 x-major 整格扫描，
+    ///    self 位于扫描序中间 ⇒ 夹具两侧各放一个，任何"依赖扫描序"的断言都会露馅）；
     /// 4. **+13 观察者 0 条**（±12 外，范围反例）。
+    ///
+    /// **顺序面不可观测**：两条自帧字节相同，跨 socket 先后不是线上可观测面（每 socket 各有
+    /// `MsgQueue`，装置把它们汇到一条 mpsc 只是测试面）；oracle 里 self 那份在 `SendRefMsg`
+    /// 扫描到 `(CurrX,CurrY)` 格时才发（`BaseObject.Message.cs:395-447`），本 helper 的
+    /// "自广播副本 → 广播他人 → 自自更新副本"是对扫描序的近似 ⇒ 不写跨 socket 顺序断言。
     ///
     /// 每 socket 不重复由原语层 `charstatuschanged_self_and_broadcast_do_not_duplicate` 保证。
     #[test]
     fn gm_level_emits_657_self_and_nearby_observers() {
         use mir2_protocol::messages::{SM_CHARSTATUSCHANGED, SM_LEVELUP};
         let mut rig = GmRig::new();
-        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let id = rig.world.add_entity(e);
@@ -98388,19 +98422,29 @@ fn ",
                 );
             }
         }
-        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
-        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
-        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
+        // oracle `PlayObject.cs:2875` 广播副本（含自己）+ `:2876` 自更新副本 ⇒ 自己**两条**。
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
+        // 两条自帧**字节完全相同** ⇒ "哪条是广播副本"不可判；跨 socket 的先后也不是线上可观测面
+        // （每 socket 各有 `MsgQueue`，这里有顺序只因装置把所有 socket 汇到一条 mpsc）⇒ 顺序面
+        // 记"不可观测"，本用例只验**逐 socket 计数**（卡 §14b：§26 只接不发的防线是计数）。
     }
 
     /// **卡 `openmir2-charstatuschanged-wiring` #2**：GM 佩戴位写
-    /// （oracle `SmakeItemCommand` 的 `RecalcAbilitys()`）同样发 657 ⇒ 自己 1 + ±12 观察者各 1、
-    /// 范围外 0；`status` 用**具体值 2/0**（先把 `buff.char_status_ex` 造到 2）。
+    /// （oracle `SmakeItemCommand` 的 `RecalcAbilitys()`）同样发 657 ⇒ 自己 2（广播副本 + 自更新副本）、
+    /// 两侧 ±5 观察者各 1、范围外 0；`status` 用**具体值 2/0**（先把 `buff.char_status_ex` 造到 2）。
+    /// 顺序面不可观测（两条自帧字节相同、跨 socket 序非线上面）⇒ 只验逐 socket 计数。
     #[test]
     fn gm_use_item_write_emits_657_self_and_observers() {
         use mir2_protocol::messages::SM_CHARSTATUSCHANGED;
         let mut rig = GmRig::new();
-        for (i, (dx, socket)) in [(5, 902), (13, 905)].into_iter().enumerate() {
+        for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let id = rig.world.add_entity(e);
@@ -98468,9 +98512,16 @@ fn ",
                 );
             }
         }
-        assert_eq!(per.get(&901), Some(&1), "自己恰好 1 条");
-        assert_eq!(per.get(&902), Some(&1), "+5 观察者恰好 1 条");
-        assert_eq!(per.get(&905), None, "+13 在 ±12 外 ⇒ 零帧");
+        // oracle `SmakeItemCommand.cs:60` 的 `RecalcAbilitys()` → `PlayObject.cs:2875` 广播副本（含自己）
+        // + `:2876` 自更新副本 ⇒ 自己**两条**；顺序面不可观测（两条字节相同、跨 socket 序非线上面）。
+        assert_eq!(
+            per.get(&901),
+            Some(&2),
+            "自己恰好 2 条（广播副本 + 自更新副本）"
+        );
+        assert_eq!(per.get(&902), Some(&1), "x+5 观察者恰好 1 条");
+        assert_eq!(per.get(&903), Some(&1), "x-5 观察者恰好 1 条");
+        assert_eq!(per.get(&905), None, "x+13 在 ±12 外 ⇒ 零帧");
     }
 
     /// **m1 · drain 步骤②（`apply_pending_level_up`）脚本桥独立牙**：
