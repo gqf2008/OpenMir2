@@ -37,9 +37,9 @@
 //!
 //! **仍未接（登记）**：`@` 命令系统、GM 红字、`SayMsgTime/SayMsgCount/DisableSayMsg` 频率限制、
 //! `FilterSendMsg`、`DenySayMsgList`、地图 `boNOCHAT`、`SayMsgMaxLen` 截断、`@@加速处理` 特判、
-//! 怪物 `WantRefMsg` 支；`SS_208` 跨服无接收端（T-113）。`SendRefMsgTick` 的 500ms 收件人缓存
-//! 也**未接** ⇒ 普通说话恒走 oracle 的**冷路径**（`<= 12` 格）；缓存命中时改用 `< 11` 格，
-//! 两者只在**恰好 11/12 格**的近邻上收件人集合不同（连发才命中缓存）。
+//! 怪物 `WantRefMsg` 支；`SS_208` 跨服无接收端（T-113）。**`SendRefMsgTick` 的 500ms 收件人缓存
+//! 已接入（T-287 C2 批 1 #7）**：普通说词的观察者集合经 `ref_msg_cache::targets`（冷路径 `<= 12`
+//! 格；同窗命中改用 `< 11` 格），两者只在**恰好 11/12 格**的近邻上收件人集合不同。
 //!
 //! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
 //! ⇒ `SM_WHISPER(103)`，发射点见 `lib.rs::handle_whisper`。
