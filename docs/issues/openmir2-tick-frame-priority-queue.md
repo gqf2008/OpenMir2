@@ -487,3 +487,33 @@ socket 汇到一条 mpsc 才产生顺序）。两条自帧字节完全相同 ⇒
 **实现侧结论**：`send_charstatuschanged_self_and_observers` 的三动作（自广播副本 → 广播他人 →
 自自更新副本）作为实现保留；self 副本统一提到广播循环之前是对扫描序的**已登记近似**，
 差异在线上不可观测（见上）。
+
+## 14d. 批 1 合并后全量红 5 条：逐条期望更新（2026-11-20，`openmir2-89`）
+
+**发现方式**：`e1` 在 rebase 后跑 **全量** `cargo test -p game-svr --lib`（`running 2220` →
+`2142 passed; 5 failed; 73 ignored`）。此前我方只跑过滤集（`657`/`level0`/`smake`/`script_bridge_drain`），
+这些用例名不含 "657" ⇒ **过滤跑绿 ≠ 套件绿**。
+
+**共同依据**：oracle `PlayObject.cs:2874 CharStatus=GetCharStatus(); :2875 StatusChanged();`
+`:2876 SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")`；
+`:2875` 的 `SendRefMsg`（`src/M2Server/Actor/BaseObject.Message.cs:383`，扫描支 `:395-447`）收件人**含源**；
+`:2876` 再给源一条 ⇒ 经 `RecalcAbilitys()` 的路径在**自己 socket** 上恰两条 657。
+
+| # | 用例 | 改前 | 改后 | 依据 |
+|---|---|---|---|---|
+| 1 | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` | `[…,45,52,752,657]` | `[…,45,52,752,657,657]` | `:2875` 广播副本 + `:2876` 自更新；657(155) 排在 45/52/752 之后同前（`HasLevelUp` `:5242-5250` 的 RM_LEVELUP=150 先出队） |
+| 2 | `c5_recovery_then_levelup_emit_two_frames` | `[53,53,44,45,52,752,657]` | `[…,752,657,657]` | 同上；两条 53 与 T-296 口径不变 |
+| 3 | `p31_levelup_reuses_kill_exp_chain_order` | `[53,44,45,52,752,657]` | `[…,752,657,657]` | 同上（P31 复用击杀链，不另造帧序） |
+| 4 | `tick_frame_order_puts_stamina_after_kill_exp_chain` | `[53,44,45,52,752,657,53]` | `[…,752,657,657,53]` | 同上；657 与 stamina 53 之间的**偏差 T-296（方向 B）**不变 |
+| 5 | `spell_p3b5_36_uenhancer_frames_amulet_and_gates` | F36-A caster `[53,638,642]`、target `[17,52,638,100]`；自施法 `[52,53,638,642,100]` | caster `[53,638,642,657]`（**只 1 条**＝target `StatusChanged` 的广播副本，收件人含近邻 caster）；target `[17,52,638,657,657,100]`；自施法 `[52,53,638,642,657,657,100]` | `:5328 RecalcAbilitys()` 作用于**目标**：广播副本给 ±range（含 caster 与 target 自己）、自更新只给 target ⇒ target 2 / 旁观 caster 1；自施法两者同体 ⇒ 911 上 2 |
+
+**第 5 条的归属（重要，不是批 1 引入）**：657 发射块来自 `da` 的 36 卡接线
+`47064136e feat(uenhancer): 36 臂补 657（StatusChanged 广播3 + SendUpdateMsg 自更新1，复用 SpellFrameBuf）`
+（13:49 提交、经 `ef47f6a00` 合入 master，**未同步更新本条用例**）。
+**复现**：在批 1 合并前的树 `1d07d2010` 上把 `lib.rs` 单独取回跑同一条用例 ⇒
+`panicked at lib.rs:82165: assertion left == right failed: caster 出队序 … left: [53, 638, 642, 657] right: [53, 638, 642]`
+⇒ **批 1 合并前它就是红的**；批 1 只是让它在全量跑里被看见。（`e1` 的"657 发射点 8→9"确实是批 1 的一处净增，
+但与本条红无因果。）36 的接线形态（函数内两条 push）与批 1 的三动作 helper 是两套实现；本批只更新期望，不改 36 实现。
+
+**判据边界**：以上全部只到**计数与同 socket 参照帧位置**（§14c/§47）；
+两条 657 的相互先后、跨 socket 先后一律不判。
