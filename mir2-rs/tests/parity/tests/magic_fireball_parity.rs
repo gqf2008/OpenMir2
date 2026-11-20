@@ -1538,6 +1538,23 @@ fn real_rust_ledger_skeleton() {
             );
         }
 
+        // ④ 训练尾 640（本卡起自延迟 1000ms）：payload 实测**部分可比**——`(recog,param,series,due)`
+        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，卡 17 SCOPE：离线替身造怪 0 抽
+        // ⇒ RNG 流偏移）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
+        let g640 = frames_640_caster(gcase);
+        let r640 = frames_640_caster(rust);
+        let want640 = usize::from(label == "summon_ok");
+        assert_eq!(
+            r640.len(),
+            want640,
+            "[{label}] Rust 640 条数（自延迟后应在交付批）"
+        );
+        assert_eq!(g640.len(), want640, "[{label}] golden 640 条数");
+        assert_eq!(
+            r640, g640,
+            "[{label}] 640 (recog,param,series,due) 不一致：Rust {r640:?} vs golden {g640:?}"
+        );
+
         eprintln!("[skeleton {label}] PASS");
     }
 }
@@ -1625,6 +1642,34 @@ fn frames_by_ident(case: &Value, ident: i64) -> Vec<(String, i64, i64, i64, i64)
             }
         }
     }
+    out
+}
+
+/// 取某 case 中 **caster** 的 640 帧 `(recog, param, series, due_ms_rel)`——**不含 `tag`**。
+/// 依据：卡 17/MG-41 SCOPE 的「离线替身造怪 0 抽 ⇒ RNG 流偏移」⇒ 640 的 `tag`(=TranPoint)
+/// 实测 golden=2 / Rust=1 或 3，**不同源**；其余字段同源可比。
+fn frames_640_caster(case: &Value) -> Vec<(i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    if let Some(recv) = case["Receivers"].as_array() {
+        for r in recv {
+            if r["Who"].as_str() != Some("caster") {
+                continue;
+            }
+            if let Some(sent) = r["Sent"].as_array() {
+                for s in sent {
+                    if s["ident"].as_i64() == Some(640) {
+                        out.push((
+                            s["recog"].as_i64().unwrap_or(i64::MIN),
+                            s["param"].as_i64().unwrap_or(i64::MIN),
+                            s["series"].as_i64().unwrap_or(i64::MIN),
+                            s["due_ms_rel"].as_i64().unwrap_or(i64::MIN),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
     out
 }
 
@@ -1748,6 +1793,21 @@ fn real_rust_ledger_sinsu() {
             "[{label}] {who} 的 17/638/642 帧不一致（含 recog/due_ms_rel）：Rust {r_sent:?} vs golden {g_sent:?}"
         );
     }
+    // 训练尾 640（本卡起自延迟 1000ms）：**只判 `due_ms_rel`、不判 payload**（已裁决：tag 因
+    // 离线替身 0 抽而错位；640 不进 `keep`）。golden caster 恰 1 条、due=1000；Rust 同条数且 due 相等。
+    let g640 = frames_640_caster(gcase);
+    let r640 = frames_640_caster(rust);
+    assert_eq!(g640.len(), 1, "[{label}] golden 640 条数");
+    assert_eq!(
+        r640.len(),
+        1,
+        "[{label}] Rust 640 条数（自延迟后应在交付批）"
+    );
+    assert_eq!(
+        r640[0].3, g640[0].3,
+        "[{label}] 640 due_ms_rel：Rust={} vs golden={}（golden 侧为 oracle 交付批）",
+        r640[0].3, g640[0].3
+    );
     eprintln!("[sinsu {label}] PASS");
 }
 
@@ -1901,6 +1961,17 @@ fn real_rust_ledger_sinsu_cap_hit() {
             "[{label}] {who} 帧不一致"
         );
     }
+    // cap_hit：门 Rejected ⇒ 无训练尾 640（两侧均 0）。
+    assert_eq!(
+        frames_640_caster(gcase).len(),
+        0,
+        "[{label}] golden 不应有 640"
+    );
+    assert_eq!(
+        frames_640_caster(rust).len(),
+        0,
+        "[{label}] Rust 不应有 640"
+    );
     eprintln!("[sinsu {label}] PASS");
 }
 

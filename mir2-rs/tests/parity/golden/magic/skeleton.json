@@ -22,6 +22,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -78,6 +80,8 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -135,30 +139,36 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1146918812,
+              "delivery": 1184805031,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 17,
               "param": 1,
               "tag": 2,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -192,16 +202,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "17"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -235,16 +249,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "17"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -294,6 +312,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -350,6 +370,8 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -403,16 +425,20 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -446,16 +472,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "17"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -489,16 +519,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "17"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]

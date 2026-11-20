@@ -15324,10 +15324,19 @@ fn handle_spell_cmd_with_magic(
                     );
                     broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                 }
-                // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000)`。
+                // 熟练度尾帧（`:659-669`）：oracle 是
+                // `SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000)`
+                // （升级支 `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），
+                // **不是**施法批立即发 —— 与 `8|37|21` / `20` / `46` 收敛后的同一口径。
                 if outcome.train.levelup_msg {
-                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
-                    send_self_frame(online, gates, chr_name, body);
+                    emit_magic_lvexp_delayed(
+                        world,
+                        actor_id,
+                        req.magic_id,
+                        train.level,
+                        train.tran_point,
+                        outcome.train.level_up,
+                    );
                 }
                 // `if (boSpellFail) return false;`（`MagicManager.cs:644-647`）—— **在共享尾之前**
                 // ⇒ `DoSpell` 返回 false ⇒ 调用方（`PlayObject.Attack.cs:1279-1281`）回
@@ -62553,6 +62562,75 @@ SendRefMsgRange=15
     ///
     /// 红检：① 删掉清槽前取件/发帧（回到登记前的 header-only 无帧）⇒ 无 `SM_DELITEM` 必红；
     /// ② 帧内 `Dura` 用扣光前的值（不做 `Dura=0`）⇒ 尾字节不等必红。
+    /// **41（`SKILL_ANGEL`）训练尾 640 必须自延迟**（本卡 sweep #6；41 无 golden ⇒ 本条是唯一判据）。
+    /// 与 17/30 同支：施法批**无** 640；自延迟队列恰 1 条 `RM_MAGIC_LVEXP`；+1000ms 交付批恰 1 条。
+    #[test]
+    fn spell_cmd_angel_training_tail_is_self_delayed() {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            4000,
+            100,
+            100,
+            41,
+            &[(41, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 41,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+        }
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        let mon = mir2_data::MonsterInfo {
+            name: "精灵".into(),
+            race: 113,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        rig.cast_slave(41, (101, 100), target, vec![mon]);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0,
+            "41 施法批不得有 640（oracle 共享尾是 SendSelfDelayMsg）"
+        );
+        let queued: Vec<_> = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP)
+            .collect();
+        assert_eq!(queued.len(), 1, "41 训练尾应入自延迟队列恰 1 条");
+        let lv = rig.deliver(1000);
+        assert_eq!(
+            sf_count(&lv, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            1,
+            "41 训练尾到点（+1000ms）恰 1 条 640"
+        );
+    }
+
     #[test]
     fn spell_cmd_summon_exhausted_amulet_emits_delitem() {
         use std::collections::HashMap;
@@ -69717,7 +69795,18 @@ SendRefMsgRange=15
             ..mir2_data::MonsterInfo::default()
         };
         rig.cast_slave(17, (101, 100), target, vec![mon]);
-        let (frames, _raws) = rig.drain();
+        let (cast_frames, _raws) = rig.drain();
+        // **本卡起 640 走自延迟**（`emit_magic_lvexp_delayed`：未升级 1000ms / 升级 800ms）⇒
+        // 补交付回路：施法批 due=0；按 100ms 步进泵到 1000，交付帧记所在步的 `due_ms_rel`。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
+            .into_iter()
+            .map(|(s, b)| (s, b, 0_i64))
+            .collect();
+        let mut elapsed = 0i64;
+        while elapsed < 1000 {
+            elapsed += 100;
+            all_frames.extend(rig.deliver(100).into_iter().map(|(s, b)| (s, b, elapsed)));
+        }
 
         let entities_after = rig.world.entities.len();
         let slave_after = rig.world.slave_count(caster);
@@ -69762,7 +69851,7 @@ SendRefMsgRange=15
             receivers.push(serde_json::json!({
                 "Who": who,
                 "Rm": [],
-                "Sent": fireball_sent(&frames, socket),
+                "Sent": fireball_sent_with_due(&all_frames, socket),
             }));
         }
 
@@ -69791,7 +69880,7 @@ SendRefMsgRange=15
         write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[skeleton {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
-            frames.len(),
+            all_frames.len(),
             ledger[0]["Skeleton"]["new_slaves"].as_array().map_or(0, |a| a.len()),
         );
     }
@@ -69909,9 +69998,20 @@ SendRefMsgRange=15
         };
         let mon_race = mon.race; // tooth「race→100 必红」要：账本 stub_monster_race 取自实际 mon.race
         rig.cast_slave(30, (101, 100), target, vec![mon]);
-        let (frames, _raws) = rig.drain();
+        let (cast_frames, _raws) = rig.drain();
         let n1 = trace_line_count(&trace);
         let cast_rng = trace_slice(&trace, n0, n1);
+        // **本卡起 640 走自延迟**（`emit_magic_lvexp_delayed`：未升级 1000ms / 升级 800ms）⇒
+        // 补交付回路（施法批 due=0；100ms 步进泵到 1000，交付帧记所在步）。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
+            .into_iter()
+            .map(|(s, b)| (s, b, 0_i64))
+            .collect();
+        let mut elapsed = 0i64;
+        while elapsed < 1000 {
+            elapsed += 100;
+            all_frames.extend(rig.deliver(100).into_iter().map(|(s, b)| (s, b, elapsed)));
+        }
 
         let entities_after = rig.world.entities.len();
         let slave_after = rig.world.slave_count(caster);
@@ -69963,7 +70063,7 @@ SendRefMsgRange=15
             receivers.push(serde_json::json!({
                 "Who": who,
                 "Rm": [],
-                "Sent": sinsu_sent(&frames.iter().map(|(s, b)| (*s, b.clone(), 0_i64)).collect::<Vec<_>>(), socket),
+                "Sent": sinsu_sent(&all_frames, socket),
             }));
         }
 
@@ -69999,7 +70099,7 @@ SendRefMsgRange=15
         write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[sinsu {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
-            frames.len(),
+            all_frames.len(),
             ledger[0]["SinSu"]["new_slaves"].as_array().map_or(0, |a| a.len()),
         );
     }
