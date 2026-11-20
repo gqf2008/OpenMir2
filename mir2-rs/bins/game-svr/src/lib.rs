@@ -11089,6 +11089,51 @@ fn broadcast_feature_changed_except(
     }
 }
 
+/// **卡 `openmir2-charstatuschanged-wiring` / `openmir2-tick-frame-priority-queue`**：
+/// `RecalcAbilitys()` 的两面（自通知 + 观察者广播）一次发齐。
+///
+/// `status` 取**调用时刻**的 `GetCharStatus()`（`PlayObject.cs:2873` 的取值时点）。
+#[allow(clippy::too_many_arguments)]
+fn emit_charstatuschanged_self_and_observers(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    hit_speed: u16,
+    range: i32,
+    what: &str,
+) {
+    let status = world.get_char_status(actor_id);
+    send_charstatuschanged_self_and_observers(
+        world, online, gates, actor_id, status, hit_speed, range, what,
+    );
+}
+
+/// 同 [`emit_charstatuschanged_self_and_observers`]，但 `status` 由调用方给——
+/// **入队路径**在入队时取好、出队时不得重算（否则与 oracle 的取值时点不符）。
+#[allow(clippy::too_many_arguments)]
+fn send_charstatuschanged_self_and_observers(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    status: i32,
+    hit_speed: u16,
+    range: i32,
+    what: &str,
+) {
+    if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
+        let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, what) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    }
+    broadcast_charstatuschanged_except_self(world, online, gates, actor_id, status, range);
+}
+
 /// `StatusChanged()`（`BaseObject.cs:1514` 的 `SendRefMsg(RM_CHARSTATUSCHANGED)`）的宿主等价物，
 /// 用于武器升级 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的**近邻**支：
 /// 给 ±`range` 格内**其它**玩家各一条 `SM_CHARSTATUSCHANGED(657)`。
@@ -19118,6 +19163,9 @@ fn drain_levelup_healthspell_with_magic(
     // **Lane B**：升级时 oracle `HasLevelUp` 也跑 `RecalcAbilitys()`（`PlayObject.cs:5245-5246`）
     // ⇒ 210/212 尾段照跑；`None` = 单测/无记录。
     mut magic: Option<MagicSource<'_>>,
+    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：657 **只入队**（优先级 155），
+    // 由升级链末尾统一出队——帧序必须是 `53(68) → 44(139) → 45/52/752 → 657(155)`。
+    charstatus_queue: &mut crate::msgqueue::NetPriorityQueue<(i32, i32, u16)>,
 ) {
     for (winner, _amount, leveled, level) in &rec.exp_awards {
         if !*leveled {
@@ -19151,6 +19199,18 @@ fn drain_levelup_healthspell_with_magic(
             extra_abil.as_ref(),
             magic_recalc,
             Some(&mut world.rng),
+        );
+        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+        // T-290：oracle `HasLevelUp` 内的 `RecalcAbilitys()` 发 657；本宿主**入队**（155），
+        // 由 `drain_kill_exp_chain_with_magic` 在链末尾出队 ⇒ 排在 53/44/45/52/752 之后。
+        // `status` 在此刻取（`PlayObject.cs:2873` 的时点），出队时不重算。
+        charstatus_queue.enqueue(
+            (
+                sg.actor_id,
+                world.get_char_status(sg.actor_id),
+                sg.hit_speed,
+            ),
+            (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
         );
         let RecalcEffect {
             revival,
@@ -19329,12 +19389,37 @@ fn drain_kill_exp_chain_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
 ) {
+    // 卡 `openmir2-tick-frame-priority-queue`（T-290）：链内 657 **入队**、链末尾出队
+    //（范例 = `castle.rs` 的"路径末尾局部排序装置"，不是全 tick 泵）。
+    let mut charstatus_queue: crate::msgqueue::NetPriorityQueue<(i32, i32, u16)> =
+        crate::msgqueue::NetPriorityQueue::new();
     // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
     drain_levelup_healthspell_with_magic(
-        rec, world, online, sessions, gates, catalog, range, magic,
+        rec,
+        world,
+        online,
+        sessions,
+        gates,
+        catalog,
+        range,
+        magic,
+        &mut charstatus_queue,
     );
     drain_combat_downlink(rec, world, displays, online, sessions, gates);
     drain_levelup_downlink(rec, online, sessions, gates, client_layout);
+    // 链末尾按 `(byte)ident` 出队：657(155) 排在 53(68)/44(139)/45(150)/52(67)/752(62) 之后。
+    while let Some((actor_id, status, hit_speed)) = charstatus_queue.dequeue() {
+        send_charstatuschanged_self_and_observers(
+            world,
+            online,
+            gates,
+            actor_id,
+            status,
+            hit_speed,
+            range,
+            "657(战斗升级)",
+        );
+    }
 }
 
 /// 每 tick 的**周期恢复状态段**（oracle `PlayObject.Run` 的 `:70-141`，P1；见
