@@ -13,8 +13,9 @@
 - id 9/10 尾 640 改为**立即**出（`finish_spell_tail(..., None)`；oracle 的 640 在施法段，
   延迟 1000ms 会排到 600ms 的 31 之后）。
 - 通用驱动：延迟受击的 RM 重建（玩家 `8044(255, late)` + `10052` + `8103×2`；怪物
-  `8044(108,false)`）；`RM_SPELL(10008)` 的 p1/p2 用**点击点**（oracle 在 case 体前发，
-  9/10 的终点改写发生在 case 体内）。
+  **延迟支同样是 `8044(255, late)`**——`SendStruckDelayMsg` 入队用 `Lowest`(255) +
+  `LateDelivery=true`。**`8044(108,false)` 只属于即时受击支**，别混）；`RM_SPELL(10008)`
+  的 p1/p2 用**点击点**（oracle 在 case 体前发，9/10 的终点改写发生在 case 体内）。
 
 ## 数据（`--case fire`，魔号 9）
 

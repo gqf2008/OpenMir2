@@ -189,9 +189,9 @@ public static class Program
                 // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。
                 FrameOrderScope = "multi_victim_same_tick",
                 // **时间忠实排水**：oracle 的 640 在 +1000ms、穿透受击 31 在 +600ms ⇒ 真实次序
-                // 31 在前、640 在后。默认口径"Sleep(WaitMs) 后一次排空"按固定 actor 序多 pass，
-                // 会把 caster 的 640 排在 pass1、target 的 31 广播排在 pass2（与时间序相反）；
-                // 步进排水按到期时刻处理，golden 才与生产逐 tick 交付同序。
+                // 31 在前、640 在后。默认口径是"Sleep(WaitMs) 后一次排空"，多 pass 的 per-actor
+                // 顺序会把 caster 的 640 排在 pass1、target 的 31 广播排在 pass2（与时间序相反）。
+                // 步进排水按到期时刻处理，golden 才与生产（逐 tick 交付）同序。
                 StepDrainMs = 100,
                 Monsters = new[]
                 {
@@ -855,6 +855,9 @@ public static class Program
         {
             Fixture = new
             {
+                // recog 的归属对照：31 帧的 `recog` = 受击者 ActorId（`SM` 头 4 字节）。
+                caster_actor_id = caster.ActorId,
+                target_actor_id = target.ActorId,
                 caster_mc = (int)caster.WAbil.MC,
                 caster_sc = (int)caster.WAbil.SC,
                 rng_mode = rngMode,
@@ -918,10 +921,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         if (packLength < 0)
         {
             string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
-            list.Add(new { ident = 0, param = 0, tag = 0, series = 0, tail = action });
+            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, tail = action });
             continue;
         }
         int off = ServerMessage.PacketSize;
+        // 头 4 字节 = `Recog`（`CommandMessage` 的 `recog`；此前 ParseFrames 跳过未记）。
+        int recog = BitConverter.ToInt32(data, off);
         ushort ident = BitConverter.ToUInt16(data, off + 4);
         ushort param = BitConverter.ToUInt16(data, off + 6);
         ushort tag = BitConverter.ToUInt16(data, off + 8);
@@ -929,7 +934,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         string tail = data.Length > off + 12
             ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
             : "";
-        list.Add(new { ident, param, tag, series, tail });
+        list.Add(new { ident, recog, param, tag, series, tail });
     }
     return list;
 }
@@ -2129,6 +2134,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 effect_type = spec.EffectType,
                 user_magic_level = spec.UserMagicLevel,
                 caster_level = spec.CasterLevel,
+                caster_actor_id = caster.ActorId,
+                target_actor_id = target.ActorId,
                 caster_mc = (int)caster.WAbil.MC,
                 caster_sc = (int)caster.WAbil.SC,
                 rng_mode = spec.RngMode,

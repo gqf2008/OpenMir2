@@ -231,15 +231,20 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             // `docs/issues/openmir2-b4-multivictim-strike-order.md`）。该标记下本接收者的
             // `Sent` 改为**多重集**比较（字段全比、只放宽顺序）。
             // **撤销条件**：产品卡修复落地后，删掉该标记并恢复严格按序——标记缺失即严格。
-            let sent_fields = ["ident", "param", "tag", "series"];
             let multi_victim =
                 gc["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick");
             let ga = as_array(gr, "Sent").cloned().unwrap_or_default();
             let ra = as_array(rr, "Sent").cloned().unwrap_or_default();
+            // 新件带 `recog` ⇒ 纳入逐帧严格比较；旧件无该键 ⇒ 不比较（全有或全无已断言）。
+            let mut sent_fields: Vec<&str> = vec!["ident", "param", "tag", "series"];
+            if ga.first().and_then(|f| f.get("recog")).is_some() {
+                sent_fields.push("recog");
+            }
             if multi_victim {
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, String) {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
+                        num(v, "recog"),
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
@@ -269,9 +274,10 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 }
             } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, String) {
+                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
+                        num(v, "recog"),
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
@@ -300,7 +306,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 ));
             } else {
                 for (i, (g, r)) in ga.iter().zip(ra.iter()).enumerate() {
-                    for f in sent_fields {
+                    for &f in &sent_fields {
                         if num(g, f) != num(r, f) {
                             errs.push(format!(
                                 "[{label}/{who}] Sent[{i}].{f} 不等：golden={} rust={}",
@@ -679,6 +685,16 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             if f.get("ident").and_then(Value::as_i64) != Some(31) {
                 continue;
             }
+            // 新件带 `recog`（受击者 ActorId）⇒ 只对**关于 target 自己**的 31 施加契约；
+            // 旁观他人受击的 31（穿透/群体）不在这里判。旧件无 recog ⇒ 维持原口径。
+            if let (Some(tid), Some(rc)) = (
+                fixture.get("target_actor_id").and_then(Value::as_i64),
+                f.get("recog").and_then(Value::as_i64),
+            ) {
+                if rc != tid {
+                    continue;
+                }
+            }
             let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
             let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
             let pre = hp_after.saturating_add(dmg);
@@ -804,6 +820,39 @@ fn real_ledger_verify_labels_opts(
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
+    // **`recog` 全有或全无**：同一份 golden 的所有 SM 帧要么全带 `recog`、要么全不带。
+    // 混合出现 ⇒ 直接 panic（否则比较器会"部分严格、部分宽松"而没人察觉）。
+    if let Some(cs) = golden.get("cases").and_then(Value::as_array) {
+        for c in cs {
+            let mut with = 0usize;
+            let mut without = 0usize;
+            for r in c
+                .get("Receivers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for f in r
+                    .get("Sent")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if f.get("recog").is_some() {
+                        with += 1;
+                    } else {
+                        without += 1;
+                    }
+                }
+            }
+            assert!(
+                !(with > 0 && without > 0),
+                "[{stem}] golden `recog` 混合：{} 帧带、{} 帧不带（必须全有或全无）",
+                with,
+                without
+            );
+        }
+    }
     let mut cases = Vec::new();
     for label in labels {
         let path = dir.join(format!("{stem}_{label}.json"));

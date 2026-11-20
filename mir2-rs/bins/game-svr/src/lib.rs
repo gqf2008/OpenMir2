@@ -16860,12 +16860,9 @@ fn handle_spell_cmd_with_magic(
                             base_target.unwrap_or(0),
                             Some(&mut buf),
                             // **640 延迟 1000ms**（oracle `MagicManager.cs:666`
-                            // `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`；全仓 22 个
-                            // `RM_MAGIC_LVEXP` 发射点均为 1000/3000ms，零处立即发）。
-                            // golden 里"640 在 31 之前"是 C# 装置多 pass 排水的伪影
-                            // （pass1 只排 caster 的 640、pass2 才收 target 的 31 广播），
-                            // 且 golden 的 RM 里 `10123(prio 255)` 排在 `8103(prio 167)` 之前
-                            // 已反证记录是跨 pass 追加、不是优先级序。
+                            // `SendSelfDelayMsg(RM_MAGIC_LVEXP, …, 1000)`）。此前改 None 是错的：
+                            // golden 里 640 排在 31 之前是 **C# 装置多 pass 排水**的产物（pass1 只
+                            // 排 caster 的 640、pass2 才收 target 的 31 广播），不是"立即出"。
                             Some(1000),
                         );
                     }
@@ -70592,6 +70589,8 @@ SendRefMsgRange=15
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(body)
                     .unwrap_or_else(|| panic!("帧体长度不足 12 字节: {body:?}"));
                 serde_json::json!({
+                    // 头 4 字节 = `Recog`（受击者 ActorId 等）；新 golden 逐帧记录、旧件无该键。
+                    "recog": cm.recog,
                     "ident": cm.ident,
                     "param": cm.param,
                     "tag": cm.tag,

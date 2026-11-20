@@ -22,6 +22,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -217,13 +219,14 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1169180906,
+              "delivery": 1169282250,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -231,6 +234,7 @@
             },
             {
               "ident": 31,
+              "recog": 1002,
               "param": 85,
               "tag": 224,
               "series": 15,
@@ -238,6 +242,7 @@
             },
             {
               "ident": 31,
+              "recog": 1003,
               "param": 85,
               "tag": 100,
               "series": 15,
@@ -245,6 +250,7 @@
             },
             {
               "ident": 656,
+              "recog": 1001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -252,6 +258,7 @@
             },
             {
               "ident": 640,
+              "recog": 9,
               "param": 1,
               "tag": 2,
               "series": 0,
@@ -292,7 +299,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169180506,
+              "delivery": 1169281850,
               "priority": 255
             },
             {
@@ -343,6 +350,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -350,6 +358,7 @@
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -357,6 +366,7 @@
             },
             {
               "ident": 53,
+              "recog": 1002,
               "param": 85,
               "tag": 0,
               "series": 224,
@@ -364,6 +374,7 @@
             },
             {
               "ident": 31,
+              "recog": 1003,
               "param": 85,
               "tag": 100,
               "series": 15,
@@ -371,6 +382,7 @@
             },
             {
               "ident": 31,
+              "recog": 1002,
               "param": 85,
               "tag": 224,
               "series": 15,
@@ -378,6 +390,7 @@
             },
             {
               "ident": 656,
+              "recog": 1001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -429,7 +442,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169180506,
+              "delivery": 1169281850,
               "priority": 255
             },
             {
@@ -469,6 +482,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -476,6 +490,7 @@
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -483,6 +498,7 @@
             },
             {
               "ident": 31,
+              "recog": 1002,
               "param": 85,
               "tag": 224,
               "series": 15,
@@ -490,6 +506,7 @@
             },
             {
               "ident": 53,
+              "recog": 1003,
               "param": 85,
               "tag": 0,
               "series": 100,
@@ -497,6 +514,7 @@
             },
             {
               "ident": 656,
+              "recog": 1001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -504,6 +522,7 @@
             },
             {
               "ident": 31,
+              "recog": 1003,
               "param": 85,
               "tag": 100,
               "series": 15,
@@ -527,7 +546,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169180506,
+              "delivery": 1169281850,
               "priority": 255
             }
           ],
@@ -549,7 +568,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169180506,
+              "delivery": 1169281850,
               "priority": 255
             }
           ],
@@ -590,6 +609,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -785,13 +806,14 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1169182296,
+              "delivery": 1169283640,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -799,6 +821,7 @@
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 94,
               "tag": 224,
               "series": 6,
@@ -806,6 +829,7 @@
             },
             {
               "ident": 31,
+              "recog": 2003,
               "param": 94,
               "tag": 100,
               "series": 6,
@@ -813,6 +837,7 @@
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -820,6 +845,7 @@
             },
             {
               "ident": 640,
+              "recog": 9,
               "param": 1,
               "tag": 1,
               "series": 0,
@@ -860,7 +886,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169181896,
+              "delivery": 1169283240,
               "priority": 255
             },
             {
@@ -911,6 +937,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -918,6 +945,7 @@
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -925,6 +953,7 @@
             },
             {
               "ident": 53,
+              "recog": 2002,
               "param": 94,
               "tag": 0,
               "series": 224,
@@ -932,6 +961,7 @@
             },
             {
               "ident": 31,
+              "recog": 2003,
               "param": 94,
               "tag": 100,
               "series": 6,
@@ -939,6 +969,7 @@
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 94,
               "tag": 224,
               "series": 6,
@@ -946,6 +977,7 @@
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -997,7 +1029,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169181896,
+              "delivery": 1169283240,
               "priority": 255
             },
             {
@@ -1037,6 +1069,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -1044,6 +1077,7 @@
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -1051,6 +1085,7 @@
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 94,
               "tag": 224,
               "series": 6,
@@ -1058,6 +1093,7 @@
             },
             {
               "ident": 53,
+              "recog": 2003,
               "param": 94,
               "tag": 0,
               "series": 100,
@@ -1065,6 +1101,7 @@
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -1072,6 +1109,7 @@
             },
             {
               "ident": 31,
+              "recog": 2003,
               "param": 94,
               "tag": 100,
               "series": 6,
@@ -1095,7 +1133,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169181896,
+              "delivery": 1169283240,
               "priority": 255
             }
           ],
@@ -1117,7 +1155,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169181896,
+              "delivery": 1169283240,
               "priority": 255
             }
           ],
@@ -1158,6 +1196,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -1342,13 +1382,14 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1169183687,
+              "delivery": 1169285031,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -1356,6 +1397,7 @@
             },
             {
               "ident": 31,
+              "recog": 3003,
               "param": 90,
               "tag": 100,
               "series": 10,
@@ -1363,6 +1405,7 @@
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -1370,6 +1413,7 @@
             },
             {
               "ident": 640,
+              "recog": 9,
               "param": 1,
               "tag": 1,
               "series": 0,
@@ -1428,6 +1472,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -1435,6 +1480,7 @@
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -1442,6 +1488,7 @@
             },
             {
               "ident": 31,
+              "recog": 3003,
               "param": 90,
               "tag": 100,
               "series": 10,
@@ -1449,6 +1496,7 @@
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -1489,7 +1537,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169183287,
+              "delivery": 1169284631,
               "priority": 255
             },
             {
@@ -1529,6 +1577,7 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
@@ -1536,6 +1585,7 @@
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 105,
               "tag": 100,
               "series": 257,
@@ -1543,6 +1593,7 @@
             },
             {
               "ident": 53,
+              "recog": 3003,
               "param": 90,
               "tag": 0,
               "series": 100,
@@ -1550,6 +1601,7 @@
             },
             {
               "ident": 31,
+              "recog": 3003,
               "param": 90,
               "tag": 100,
               "series": 10,
@@ -1557,6 +1609,7 @@
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
@@ -1580,7 +1633,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169183287,
+              "delivery": 1169284631,
               "priority": 255
             }
           ],
@@ -1602,7 +1655,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169183287,
+              "delivery": 1169284631,
               "priority": 255
             }
           ],
