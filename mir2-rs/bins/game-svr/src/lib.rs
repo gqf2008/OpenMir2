@@ -86213,11 +86213,32 @@ SendRefMsgRange=15
             frames.push((socket, body));
         }
         let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
-        let all: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
+        // 只看**自己**（socket 901）那条流：观察者副本（902）也含 657，混在一起会把
+        // "最后一条"判错（观察者的 657 排在自通知之后）。
+        let all: Vec<u16> = frames
+            .iter()
+            .filter(|(socket, _)| *socket == 901)
+            .map(|(_, b)| ident(b))
+            .collect();
+        // **不用"最后一条"这种相对说法**：给出 657 与 45/52/752 的**下标关系**——
+        // 将来链里再加帧时，"最后一条"可能自动成立而掩盖错序。
+        let pos = |want: u16| all.iter().position(|&x| x == want);
+        let i657 = pos(SM_CHARSTATUSCHANGED).expect("必须发 657");
+        for lower in [
+            mir2_protocol::messages::SM_LEVELUP,
+            mir2_protocol::messages::SM_ABILITY,
+            mir2_protocol::messages::SM_SUBABILITY,
+        ] {
+            let i = pos(lower).expect("链内必须发 45/52/752");
+            assert!(
+                i < i657,
+                "657 必须排在 45/52/752 之后（帧序 {all:?}）：{lower} 的下标 {i} 应 < 657 的下标 {i657}"
+            );
+        }
         assert_eq!(
-            frames.last().map(|(_, b)| ident(b)),
-            Some(SM_CHARSTATUSCHANGED),
-            "657 必须是链内最后一条；实得 {all:?}"
+            i657 + 1,
+            all.len(),
+            "657 必须仍是链内最后一条（帧序 {all:?}）"
         );
         let mut per: HashMap<i32, usize> = HashMap::new();
         for (socket, b) in &frames {
