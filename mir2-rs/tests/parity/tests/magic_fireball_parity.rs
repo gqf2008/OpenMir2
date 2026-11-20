@@ -1830,6 +1830,14 @@ fn real_rust_ledger_sinsu_cap_hit() {
         rs["pre_slave_xy_after"], gs["pre_slave_xy_after"],
         "[{label}] after 与 golden 不一致"
     );
+    // Rng：cap_hit 两侧**同源都 0 抽**（门 fail 无造怪抽 + 落点确定无 RandXY 抽）⇒ **逐值比（与 golden 相等）**。
+    // 注意这与 summon_ok 的「不比 Rng」是**两条不同口径**：那条是"离线替身造怪 0 抽 vs Rust create_monster_oracle 真抽**不同源**所以不比"；
+    // 本条是"两侧**同源 0 抽**所以比"。断"==golden"而非"应为空"：任一侧将来多抽一即红。
+    assert_eq!(
+        rust["Rng"], gcase["Rng"],
+        "[{label}] Rng 与 golden 不等（cap_hit 两侧同源 0 抽，逐值比）"
+    );
+
     // 帧 17/638/642（含 recog/due_ms_rel）。
     let keep: &[i64] = &[17, 638, 642];
     for who in ["caster", "target", "obs_in", "obs_out"] {
