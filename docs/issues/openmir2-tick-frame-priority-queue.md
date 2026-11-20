@@ -278,6 +278,8 @@ impl TickFrameQueue {
 
 ## 10b. 四种 657 机制的收敛 seam（记录，不实现）
 
+> **坐标系 = master `165c6edd1`**（行号以该树为准）。
+
 | 站点 | 现机制 | 若收敛需要的上下文 |
 |---|---|---|
 | `#3` `CM_ADJUST_BONUS` | 直发 `tx.send` | `socket`/`gate_idx`（现成）、`status`、`hit_speed` |
@@ -319,6 +321,8 @@ impl TickFrameQueue {
 
 ## 11b. `FrameSink` 三条实现：已有/缺什么（决定下一单能否收敛）
 
+> **坐标系 = master `165c6edd1`**。
+
 | 机制 | 代表站点 | 已有 | 缺 |
 |---|---|---|---|
 | 直发 `tx.send` | `#3` CM_ADJUST_BONUS、`#4` 穿脱 | `socket`/`gate_idx`（`online` 里现成）、`status`、`hit_speed` | 无（可包 `FrameSink` 的"立即发"实现） |
@@ -326,6 +330,8 @@ impl TickFrameQueue {
 | `SpellFrameBuf::push_broadcast_cached` | `#7` 施法 | buf + 每收件人 `NetPriorityQueue` + `ref_msg_cache` 收件人 | **泵序位置**（必须在本支所有帧入队后统一 flush）⇒ `FrameSink` 需暴露 `flush` 时机 |
 
 ## 12. 7 个"两条都没有"点的 oracle 判定（只认 oracle 代码行，2026-11-20）
+
+> **坐标系 = master `165c6edd1`**；oracle 行号与分支无关。
 
 **共同的 oracle 事实（先立）**：玩家侧 `PlayObject.RecalcAbilitys()` 在 `if (Race == ActorRace.Play)`
 块内**无条件**执行 `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")`
@@ -348,6 +354,8 @@ impl TickFrameQueue {
 ⇒ **7 个点全部为真缺口**（#9 是"半个已接"：#buff_status_changes 支已有，recalcs 支没有）。
 
 ### 12b. 发射模式：**按 oracle 产出点，不能外推**（2026-11-20，`da` 实测修正）
+
+> **坐标系 = master `165c6edd1`**。
 
 **先前假设作废**：我一度以为"每次 recalc = 广播 1 + 自更新 1"是通用模板——`da` 扫全部
 `golden/magic/*.json` 后证明**不同技能的多重集不同，由 oracle 产出路径决定**：
@@ -372,7 +380,28 @@ impl TickFrameQueue {
 
 ### 12c. golden 全量 657 扫描（2026-11-20，只读）
 
+> **坐标系 = master `165c6edd1`**。
+
 `tests/parity/golden/**` 下含 657 的 JSON 共 **10 个文件**（含 `magic/legacy/*` 副本），
 每 case 出现次数：`bigcloak` 6、`cloak` 3、`dejiwonho` 4、`hangmajinbub` **196**、`shield` 3
 （均 ×3 cases，三 seed 一致）；`uenhancer` 的 golden 尚未入 `golden/`（`da` 手扫给出 2/1/1）。
 这些文件被 `docs/issues/parity-gap-magic.json` 的条目引用；比较器在 `tests/parity/tests/magic_fireball_parity.rs`。
+
+## 13. 交接点（下一单）
+
+**下一单 = 12 个站点逐个给出"oracle 调用序列 → 期望 657 条数"的表**：
+
+- **7 个缺口**：`#5 handle_shop_cmd_inner`、`#8`（**已转 `da`**，36 臂，不重复）、`#11/#12 apply_pending_gm_target_ops`、
+  `#13 drain_player_need_recheck_with_magic`、`#14 drain_player_hunger`、`#15 drain_player_revival_with_magic`；
+- **5 个已接点复核**：`#1 apply_pending_level_up`、`#2 apply_gm_use_item_write`、`#3 CM_ADJUST_BONUS`、
+  `#4 穿脱装备`、`#7 施法支 A`（含 `MagBubbleDefenceUp` 的条件发反例）；
+- **外加 `#9 drain_buff_downlink` 的"半接"**：`src/M2Server/ActorBuffSystem.cs:220-231` 两段——
+  `boChg` 的 `StatusChanged()` 已接、`boNeedRecalc` 的 `RecalcAbilitys()` 未接。**不得丢**。
+
+**每个站点要填**：oracle 函数 + 行号 → 该路径上的 657 产出调用（`StatusChanged()` / `SendUpdateMsg(...)` / 其它）
+→ 每种收件人的期望条数（caster/target/obs）→ 对应的 `golden/` 证据（有则引，无则写明"无 golden"）。
+
+**已有坐标系**：§12（7 缺口判定）、§12b（条数按产出路径定 + 反例）、§12c（golden 657 现状）、
+§11b（`FrameSink` 三条实现缺什么）、§10b（seam 候选签名）；全部以 `165c6edd1` 为准。
+
+**不要重复的活**：36（`uenhancer`）的 4 条帧已由 `da` 实测并落地；`#7` 的"条件发"已证为 oracle 原样，别再翻。
