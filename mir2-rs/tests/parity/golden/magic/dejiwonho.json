@@ -147,7 +147,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1147972781,
+              "delivery": 1151741843,
               "priority": 255
             }
           ],
@@ -384,7 +384,7 @@
         "user_magic_level": 1,
         "caster_level": 30,
         "caster_mc": 15,
-        "caster_sc": 15,
+        "caster_sc": 2565,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -508,7 +508,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1147974062,
+              "delivery": 1151743109,
               "priority": 255
             }
           ],
@@ -607,7 +607,7 @@
               "p1": 219,
               "p2": 255,
               "p3": 0,
-              "msg": "\u9632\u5FA1\u529B\u589E\u52A0250\u79D2",
+              "msg": "\u9632\u5FA1\u529B\u589E\u52A0151\u79D2",
               "late": false,
               "delivery": 0,
               "priority": 252
@@ -654,7 +654,7 @@
               "param": 65499,
               "tag": 0,
               "series": 1,
-              "tail": "CT{WQUFCXRLF[bUk\u0060WC["
+              "tail": "CT{WQUFCXRLF[aUkaWC["
             }
           ]
         },
@@ -727,7 +727,7 @@
       ],
       "Rng": [
         0,
-        0,
+        1,
         2,
         1
       ],
@@ -745,7 +745,7 @@
         "user_magic_level": 1,
         "caster_level": 30,
         "caster_mc": 15,
-        "caster_sc": 15,
+        "caster_sc": 2565,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -869,7 +869,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1147975390,
+              "delivery": 1151744406,
               "priority": 255
             }
           ],
@@ -968,7 +968,7 @@
               "p1": 219,
               "p2": 255,
               "p3": 0,
-              "msg": "\u9632\u5FA1\u529B\u589E\u52A0250\u79D2",
+              "msg": "\u9632\u5FA1\u529B\u589E\u52A0154\u79D2",
               "late": false,
               "delivery": 0,
               "priority": 252
@@ -1015,7 +1015,7 @@
               "param": 65499,
               "tag": 0,
               "series": 1,
-              "tail": "CT{WQUFCXRLF[bUk\u0060WC["
+              "tail": "CT{WQUFCXRLF[aUk\u0060WCW"
             }
           ]
         },
@@ -1088,7 +1088,7 @@
       ],
       "Rng": [
         0,
-        0,
+        4,
         8,
         0
       ],

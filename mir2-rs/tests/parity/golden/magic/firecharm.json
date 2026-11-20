@@ -368,7 +368,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1150720793,
+              "delivery": 1151722668,
               "priority": 255
             },
             {
@@ -641,8 +641,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
-        "caster_mc": 2565,
-        "caster_sc": 15,
+        "caster_mc": 15,
+        "caster_sc": 2565,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -749,19 +749,19 @@
             },
             {
               "ident": 8021,
-              "wParam": 15,
+              "wParam": 9,
               "p1": 6553701,
               "p2": 2,
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1150722106,
+              "delivery": 1151723981,
               "priority": 255
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -798,9 +798,9 @@
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -829,7 +829,7 @@
             {
               "ident": 8044,
               "wParam": 0,
-              "p1": 15,
+              "p1": 9,
               "p2": 0,
               "p3": 0,
               "msg": "",
@@ -861,8 +861,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -899,16 +899,16 @@
             },
             {
               "ident": 53,
-              "param": 85,
+              "param": 91,
               "tag": 0,
               "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -947,8 +947,8 @@
             },
             {
               "ident": 8103,
-              "wParam": 15,
-              "p1": 85,
+              "wParam": 9,
+              "p1": 91,
               "p2": 224,
               "p3": 3001,
               "msg": "",
@@ -985,9 +985,9 @@
             },
             {
               "ident": 31,
-              "param": 85,
+              "param": 91,
               "tag": 224,
-              "series": 15,
+              "series": 9,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -1009,13 +1009,13 @@
         3,
         0,
         0,
-        0,
+        4,
         4,
         0,
         0,
         9
       ],
-      "TargetHp": 85,
+      "TargetHp": 91,
       "TargetHpBefore": 100,
       "NotDue": [],
       "CasterMp": 0

@@ -23,7 +23,7 @@
         "user_magic_level": 1,
         "caster_level": 30,
         "caster_mc": 15,
-        "caster_sc": 15,
+        "caster_sc": 2565,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -78,6 +78,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -124,7 +125,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1119091906,
+              "delivery": 1151766312,
               "priority": 255
             }
           ],
@@ -173,12 +174,12 @@
             {
               "ident": 8034,
               "wParam": 0,
-              "p1": 30,
+              "p1": 15,
               "p2": 0,
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1119091706,
+              "delivery": 1151766112,
               "priority": 255
             }
           ],
@@ -251,7 +252,7 @@
       "Rng": [
         0,
         0,
-        0,
+        5,
         7,
         1
       ],
@@ -324,6 +325,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -485,7 +487,7 @@
         "user_magic_level": 1,
         "caster_level": 30,
         "caster_mc": 15,
-        "caster_sc": 15,
+        "caster_sc": 2565,
         "rng_mode": "cover_drain",
         "login_order": true,
         "reachability": "reachable",
@@ -540,6 +542,7 @@
           140,
           100
         ],
+        "hit_speed": 0,
         "sockets": [
           911,
           912,
@@ -586,18 +589,18 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1119094468,
+              "delivery": 1151768875,
               "priority": 255
             },
             {
               "ident": 8034,
               "wParam": 0,
-              "p1": 30,
+              "p1": 20,
               "p2": 0,
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1119094268,
+              "delivery": 1151768675,
               "priority": 255
             }
           ],
@@ -646,12 +649,12 @@
             {
               "ident": 8034,
               "wParam": 0,
-              "p1": 30,
+              "p1": 20,
               "p2": 0,
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1119094268,
+              "delivery": 1151768675,
               "priority": 255
             }
           ],
@@ -724,7 +727,7 @@
       "Rng": [
         0,
         0,
-        0,
+        10,
         3,
         0
       ],
