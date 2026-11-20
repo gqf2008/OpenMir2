@@ -287,3 +287,40 @@ impl TickFrameQueue {
 
 统一 seam 的签名候选：`emit_charstatuschanged(world, online, gates, sink: &mut dyn FrameSink, actor, status, hit_speed, range)`
 ——`FrameSink` 由三条路径各自实现（直发 / 队列 / 帧缓冲）。**本单不实现**，属收敛单。
+
+## 11. 15/16 处矩阵在 master `165c6edd1` 上的重算（2026-11-20）
+
+方法：对 `git show 165c6edd1:mir2-rs/bins/game-svr/src/lib.rs` 取生产面（首个 `^mod tests {` 之前）
+的全部 `recalc_session_ability(` 调用，按**顶层函数括号**归属，在函数体内数
+`sm_charstatuschanged(` / `broadcast_charstatuschanged_except_self(` / `push_broadcast_cached(` / `notice_frame`。
+**本表 16 行**（同一函数可有多个调用点，不可按函数名合并）。
+
+| 行号（master） | 函数 | 自 | 广 | 证据/备注 |
+|---|---|---|---|---|
+| 2967 | `apply_pending_level_up` | Y | Y | sm_csc=1、bcast=1（批A #1） |
+| 3202 | `apply_gm_use_item_write` | Y | Y | sm_csc=1、bcast=1（批A #2） |
+| 4173 | `handle_inbound_cmd`（CM_ADJUST_BONUS） | Y | Y | sm_csc=1、bcast=1 |
+| 5327 | `handle_bag_cmd_with_magic` | Y | Y | sm_csc=1、bcast=1 |
+| **7818** | `handle_shop_cmd_inner`（升级武器） | **n** | **n** | 局部窗口无任何 657 ⇒ **真缺口（#5 / T-289）** |
+| 10980 / 11049 | `handle_eat_cmd` | Y | Y | 自走 `notice_frame`（泵）、广 bcast=1 |
+| 14429 | `handle_spell_cmd_with_magic` 支 A | Y | Y | `sm_charstatuschanged` 14403 + `push_broadcast_cached` 14413/14419 |
+| **16553** | `handle_spell_cmd_with_magic` 支 B | **n** | **n** | ±80 行内无 657 ⇒ **真缺口（#8）** |
+| 18774 | `drain_buff_downlink` | Y | **待核** | `sm_charstatuschanged(*actor_id,*status,0)` 18794；广播未在窗口内 |
+| 19414 | `drain_levelup_healthspell_with_magic` | Y | Y | T-290：链内入队(155)、链末出队并自+广（RM_CSC=1） |
+| **22398 / 22405** | `apply_pending_gm_target_ops` | **n** | **n** | **真缺口（#11/#12 / T-291）** |
+| **25072** | `drain_player_need_recheck_with_magic` | **n** | **n** | **真缺口（#13 / T-292）** |
+| **25359** | `drain_player_hunger` | **n** | **n** | **真缺口（#14 / T-293）** |
+| **25947** | `drain_player_revival_with_magic` | **n** | **n** | **真缺口（#15 / T-294）** |
+
+⇒ **只有"两条都没有"的点进接线批次**：`7818`(#5)、`16553`(#8)、`22398/22405`(#11/#12)、
+`25072`(#13)、`25359`(#14)、`25947`(#15) 共 **7 个调用点**；`18774` 的"广"待核后再定。
+
+> 审计 §3.2 的原句"11 处都没有"**作废**：当前 master 上已有多处接线（批A #1/#2 与 T-290 已合入）。
+
+## 11b. `FrameSink` 三条实现：已有/缺什么（决定下一单能否收敛）
+
+| 机制 | 代表站点 | 已有 | 缺 |
+|---|---|---|---|
+| 直发 `tx.send` | `#3` CM_ADJUST_BONUS、`#4` 穿脱 | `socket`/`gate_idx`（`online` 里现成）、`status`、`hit_speed` | 无（可包 `FrameSink` 的"立即发"实现） |
+| `pickwire::notice_frame` | `#6` 吃路径 | `WireSession`（含 `hit_speed`）、`QueuedNotice` 队列、泵位置 | `status` 不在 `WireSession` 里（657 用 `session.hit_speed` + 记录 `n_param1`）⇒ 若收敛需把 `status` 并入队列记录 |
+| `SpellFrameBuf::push_broadcast_cached` | `#7` 施法 | buf + 每收件人 `NetPriorityQueue` + `ref_msg_cache` 收件人 | **泵序位置**（必须在本支所有帧入队后统一 flush）⇒ `FrameSink` 需暴露 `flush` 时机 |
