@@ -2962,7 +2962,7 @@ fn apply_pending_level_up(
     let max_exp = sg.equip.abil.max_exp;
     // `RecalcLevelAbilitys()` + `RecalcAbilitys()`：本仓 `recalc_abilitys_with_prior` 内部
     // 先跑等级派生（`level_ability_base`）再叠装备/加成，与 oracle 同序。
-    recalc_session_ability(sg, catalog, None, None);
+    recalc_session_ability(sg, catalog, None, None, Some(&mut world.rng));
     // 实体侧：`level` 已由 `GmEntityState::apply` 写入；`max_exp` 这里补（oracle 是同一个
     // `PlayObject`，战斗经验读 `Abil.MaxExp`）。
     if let Some(e) = world.entities.get_mut(sg.actor_id) {
@@ -3164,7 +3164,7 @@ fn apply_gm_use_item_write(
         }
     }
     // `:60` `RecalcAbilitys()`（同一份生产实现）。
-    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
     // `:61` `SendUpdateItem`：模板缺失 ⇒ oracle 不发帧（`if (stdItem != null)`）。
     let tpl = catalog.get(w.index)?;
     let (owned, _) = game_svr::bag::upgrade_std_item(tpl, &w.desc);
@@ -4109,7 +4109,13 @@ fn handle_inbound_cmd(
             // 210/212 尾段传 `magic = None`：本支不改装备 ⇒ `FlameRing/RecoveryRing` 命中集不变、
             // `Add/DelItemSkill` 幂等 ⇒ 无可观测事件（与 T-95 ⑨ 同口径，登记）。
             let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-            let effect = recalc_session_ability(sg, frames_ctx.catalog, extra_abil.as_ref(), None);
+            let effect = recalc_session_ability(
+                sg,
+                frames_ctx.catalog,
+                extra_abil.as_ref(),
+                None,
+                Some(&mut world.rng),
+            );
             // `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`（RecalcAbilitys 尾段）。
             let status = world.get_char_status(actor_id);
             if let Some(mut e) = world.entities.get_mut(actor_id) {
@@ -5257,7 +5263,13 @@ fn handle_bag_cmd_with_magic(
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
         // oracle `Operate.cs:458/538`：`RecalcAbilitys()` 里的 `SendAddMagic/SendDelMagic`
         // 是**直接帧**，排在 `SM_TAKEON_OK/TAKEOFF_OK` 之前（`:459-461` 的 52/752 才是队列消息）。
-        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic);
+        let effect = recalc_session_ability(
+            sg,
+            catalog,
+            extra_abil.as_ref(),
+            magic,
+            Some(&mut world.rng),
+        );
         magic_events = effect.magic_events;
         // oracle `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`——必须在
         // `StatusChanged()` 之前取本次重算后的状态。657 的 Param/Tag 与后续帧尾的
@@ -7738,8 +7750,13 @@ fn handle_shop_cmd_inner(
                                 // **复验 F2 附带（T-95⑨ 登记）**：`RecalcAbilitys` 尾段的
                                 // FlameRing/RecoveryRing `Del/AddItemSkill`（210/212 事件）未接——
                                 // 本 handler 无 `SavedHuman`/`MagicCfg` 输入；`WAbil/SubAbility` 语义等价。
-                                let effect =
-                                    recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                                let effect = recalc_session_ability(
+                                    sg,
+                                    catalog,
+                                    extra_abil.as_ref(),
+                                    None,
+                                    Some(&mut world.rng),
+                                );
                                 // **复验 F1**：`RecalcAbilitys` 的产物（`WAbil`/`SubAbility`/`HitSpeed`）
                                 // 同帧落实体（与换装路径 `sync_use_items_to_entity` 同口径）。
                                 if let Some(mut e) = world.entities.get_mut(sg.actor_id) {
@@ -10826,7 +10843,7 @@ fn handle_eat_cmd(
         );
         sg.equip.abil = game_svr::ability::level_ability_base(&sg.equip.abil, sg.equip.job);
         let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
-        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None, Some(&mut world.rng));
         let _ = game_svr::recover::inc_health_spell(&mut sg.state.wabil, 2000, 2000);
         crate::add_body_luck(
             &mut sg.equip.body_luck,
@@ -12290,6 +12307,8 @@ fn recalc_session_ability(
     // **P3-B5**：`PlayObject.ExtraAbil[7]`（`AttPowerUp` 写槽 0）。`None` ⇒ 全 0（既有行为不变）。
     extra_abil: Option<&[u16; 7]>,
     magic: Option<MagicRecalc<'_>>,
+    // **IT-17b 3b**：`world.rng`（攻杀 `RandomByte(7-L)` 与其它取数同一流）。`None` = 3b-1 过渡态。
+    rng: Option<&mut dyn mir2_shared::rng::RandomSource>,
 ) -> RecalcEffect {
     let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
     let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
@@ -12314,8 +12333,8 @@ fn recalc_session_ability(
         bag: &bag,
     };
     // **IT-17b**：`RecalcHitSpeed` 的技能循环（`PlayObject.cs:3681-3712`）——填 `MagicArr`（不清空）
-    // 并把 `HitPoint` 增量带进 752（本批不含攻杀 ⇒ 结构性 0 抽）。
-    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr);
+    // 并把 `HitPoint` 增量带进 752。
+    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr, rng);
     // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
     let recalc =
         game_svr::ability::recalc_abilitys_with_prior_and_skills(catalog, &inputs, &sg.sub, skill);
@@ -14108,6 +14127,7 @@ fn handle_spell_cmd_with_magic(
                                             catalog,
                                             extra.as_ref(),
                                             None,
+                                            Some(&mut world.rng),
                                         );
                                         let body = smframe::sm_ability(
                                             sg.state.gold,
@@ -16192,6 +16212,7 @@ fn handle_spell_cmd_with_magic(
                                             catalog,
                                             extra.as_ref(),
                                             magic,
+                                            Some(&mut world.rng),
                                         );
                                         let RecalcEffect {
                                             revival,
@@ -18380,7 +18401,9 @@ fn drain_skeleton_downlink(
 #[allow(clippy::too_many_arguments)]
 fn drain_buff_downlink(
     rec: &mir2_world_bevy::TickRecord,
-    world: &mir2_world_bevy::World,
+    // **IT-17b 3b**：ReCalc 的攻杀 `RandomByte(7-L)` 要 `world.rng` ⇒ `&World` 升为 `&mut World`
+    //（内部只读用途的借用自动降为 `&`）。
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -18404,7 +18427,8 @@ fn drain_buff_downlink(
             continue;
         };
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
-        let _ = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+        let _ =
+            recalc_session_ability(sg, catalog, extra_abil.as_ref(), None, Some(&mut world.rng));
         let body = game_svr::smframe::sm_ability(
             sg.state.gold,
             sg.equip.job,
@@ -19041,7 +19065,13 @@ fn drain_levelup_healthspell_with_magic(
         let magic_recalc = magic
             .as_mut()
             .and_then(|src| src.recalc_for(&entry.chr_name, flame_ring_in));
-        let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+        let effect = recalc_session_ability(
+            sg,
+            catalog,
+            extra_abil.as_ref(),
+            magic_recalc,
+            Some(&mut world.rng),
+        );
         let RecalcEffect {
             revival,
             flame_ring,
@@ -21988,12 +22018,14 @@ fn apply_pending_gm_target_ops(
                         catalog,
                         extra_abil.as_ref(),
                         Some(magic),
+                        Some(&mut world.rng),
                     )),
                     (Some(tsg), None) => Some(recalc_session_ability(
                         tsg,
                         catalog,
                         extra_abil.as_ref(),
                         None,
+                        Some(&mut world.rng),
                     )),
                     _ => None,
                 }
@@ -24647,7 +24679,13 @@ fn drain_player_need_recheck_with_magic(
                 let magic_recalc = magic
                     .as_mut()
                     .and_then(|src| src.recalc_for(&name, flame_ring_in));
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    magic_recalc,
+                    Some(&mut world.rng),
+                );
                 let RecalcEffect {
                     revival,
                     flame_ring,
@@ -24928,7 +24966,13 @@ fn drain_player_hunger(
                 sg.state.wabil.hp = hp_now;
                 sg.state.wabil.mp = mp_now;
                 let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    None,
+                    Some(&mut world.rng),
+                );
                 if let Some(mut e) = world.entities.get_mut(actor_id) {
                     apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if effect.revival {
@@ -25510,7 +25554,13 @@ fn drain_player_revival_with_magic(
                 let magic_recalc = magic
                     .as_mut()
                     .and_then(|src| src.recalc_for(&name, flame_ring_in));
-                let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic_recalc);
+                let effect = recalc_session_ability(
+                    sg,
+                    catalog,
+                    extra_abil.as_ref(),
+                    magic_recalc,
+                    Some(&mut world.rng),
+                );
                 let RecalcEffect {
                     revival,
                     flame_ring,
@@ -26263,10 +26313,10 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         sg.gm.horse_type = mount_id;
         sg.gm.on_horse = true;
     }
-    // **IT-17b**：登录 `RecalcHitSpeed` 的技能循环——填 `MagicArr`（**只写不清**）并把技能被动
-    // 存进会话（与 `out.sub`/752 同一份计算；纯函数、本批无 RNG）。
-    let skill = skill_ability::recalc_hit_speed_skills(&sg.magic.list, &mut sg.magic.arr);
-    sg.magic.passives = skill;
+    // **IT-17b**：登录装配只**补填 `MagicArr`**（`PlayObject.cs:3684`，只写不清）；技能被动
+    // 已在调用点用 `world.rng` 算好并随 `SessionGroundInputs.magic.passives` 传入——
+    // **不能在这里重算**（否则攻杀的 `RandomByte(7-L)` 会在登录时二次抽数）。
+    skill_ability::fill_magic_arr(&mut sg.magic.arr, &sg.magic.list);
     sg
 }
 
@@ -29987,6 +30037,7 @@ fn sim_loop(
                                                     let login_skill = skill_ability::recalc_hit_speed_skills(
                                                         &login_magic_list,
                                                         &mut vec![None; skill_ability::MAGIC_ARR_LEN],
+                                                        Some(&mut world.rng),
                                                     );
                                                     let out = enter::recalc_for_session_with_skills(
                                                         a,
@@ -30062,6 +30113,7 @@ fn sim_loop(
                                                                 table: Some(std::sync::Arc::clone(
                                                                     &magic_table_arc,
                                                                 )),
+                                                                passives: login_skill,
                                                                 ..Default::default()
                                                             },
                                                             red_home: red_home_of(&enter_cfg),
@@ -31429,7 +31481,7 @@ fn sim_loop(
         // 毒伤帧（`SM_HEALTHSPELLCHANGED(53)`）。同属「本 tick 帧面」，紧随动作下行。
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33533,7 +33585,7 @@ mod tests {
 
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33634,7 +33686,7 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33732,7 +33784,7 @@ mod tests {
         ));
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33762,7 +33814,7 @@ mod tests {
         let rec = mir2_world_bevy::TickRecord::default();
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut ground_sessions,
@@ -33989,7 +34041,7 @@ mod tests {
         rec.buff_health_changes.push((mon_id, 30, 5));
         drain_buff_downlink(
             &rec,
-            &world,
+            &mut world,
             &mut displays,
             &online,
             &mut sessions,
@@ -54302,7 +54354,7 @@ SendRefMsgRange=15
         );
         // ③ 真实同步点（登录/升级/换装都走 recalc_session_ability；非自造函数）。
         let mut sg = sessions.remove("hero").unwrap();
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(
             sg.state.wabil.exp, sg.equip.abil.exp,
             "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
@@ -56471,7 +56523,7 @@ SendRefMsgRange=15
         let mut sg = test_session_ground(1);
         sg.state.item_list = bag_items_from(rec.bag_items.as_deref());
         assert_eq!(sg.state.item_list.len(), 4, "会话列表 = 记录非空件");
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(
             sg.state.wabil.weight, 10,
             "装备/卸下重算读同一份会话 item_list ⇒ 仍是四件的重量"
@@ -56963,7 +57015,7 @@ SendRefMsgRange=15
         sg.equip.abil.max_exp = 10;
         sg.equip.abil.exp = 3;
         sg.state.wabil.max_exp = 10;
-        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
         assert_eq!(sg.state.wabil.max_exp, 10, "重算保留登录 MaxExp");
         assert_eq!(sg.state.wabil.exp, 3, "重算保留 Exp");
     }
@@ -59400,9 +59452,10 @@ SendRefMsgRange=15
             // ③b 走一遍**真实出帧面**（世界 tick → `drain_buff_downlink`）⇒ 线上不得出现 657。
             //     阳性对照见 `spell_cmd_a5_defence_area_buff_frame_reaches_wire_in_range`。
             world.tick();
+            let tick_rec = world.last_tick.clone();
             drain_buff_downlink(
-                &world.last_tick,
-                &world,
+                &tick_rec,
+                &mut world,
                 &mut displays,
                 &online,
                 &mut ground_sessions,
@@ -59821,9 +59874,10 @@ SendRefMsgRange=15
         for _ in 0..400 {
             world.clock_ms += mir2_world_bevy::BUFF_STATE_TICK_GATE_MS;
             world.tick();
+            let tick_rec = world.last_tick.clone();
             drain_buff_downlink(
-                &world.last_tick,
-                &world,
+                &tick_rec,
+                &mut world,
                 &mut displays,
                 &online,
                 &mut ground_sessions,
@@ -66121,7 +66175,7 @@ SendRefMsgRange=15
                 dura_max: 20,
                 desc: [0u8; 14],
             }];
-            let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+            let _ = recalc_session_ability(&mut sg, &catalog, None, None, None);
             if let Some(mut e) = world.entities.get_mut(actor) {
                 apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
             }
@@ -76800,7 +76854,7 @@ SendRefMsgRange=15
         // 收件人 A（施法者自己）：+3。
         let mut cg = rig.ground_sessions.remove("caster").unwrap();
         cg.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7101));
-        recalc_session_ability(&mut cg, &catalog, None, None);
+        recalc_session_ability(&mut cg, &catalog, None, None, None);
         assert_eq!(
             cg.hit_speed, 3,
             "StdMode 5 + Hi(MAC)=13 ⇒ RealAttackSpeed=3"
@@ -76817,7 +76871,7 @@ SendRefMsgRange=15
         // 收件人 B（观察者）：+5。
         let mut og = spell_session_ground(rig.observer);
         og.use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon_item(7102));
-        recalc_session_ability(&mut og, &catalog, None, None);
+        recalc_session_ability(&mut og, &catalog, None, None, None);
         assert_eq!(
             og.hit_speed, 5,
             "StdMode 5 + Hi(MAC)=15 ⇒ RealAttackSpeed=5"
@@ -79938,7 +79992,7 @@ SendRefMsgRange=15
             tsg.show_hp = false;
             tsg.state.gold = 1234;
             tsg.game_gold = 7;
-            recalc_session_ability(&mut tsg, &catalog, None, None);
+            recalc_session_ability(&mut tsg, &catalog, None, None, None);
             assert_eq!(
                 tsg.state.wabil.dc, 0x0A05,
                 "B5Rig 自检：目标全量重算必须产出 dc=0x0A05（合同 §3.4）"
@@ -85072,6 +85126,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert!(eff.magic_events.is_empty());
         assert!(eff.flame_ring && eff.recovery_ring);
@@ -85091,6 +85146,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: flame,
             }),
+            None,
         );
         assert_eq!(
             eff.magic_events,
@@ -85113,6 +85169,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: flame,
             }),
+            None,
         );
         assert!(eff.magic_events.is_empty());
         assert_eq!(saved.record.data.magic, Some(vec![magic(1)]));
@@ -85127,6 +85184,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert_eq!(
             eff.magic_events,
@@ -85151,6 +85209,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert!(!eff.flame_ring, "Dura==0 不置 FlameRing");
     }
@@ -85205,6 +85264,7 @@ SendRefMsgRange=15
                 cfg,
                 flame_ring_in: false,
             }),
+            None,
         );
         assert_eq!(eff.magic_events, vec![smframe::MagicEvent::Add { def }]);
         assert_eq!(

@@ -159,3 +159,29 @@ missing = 无。
 
 **牙（红→还原 sha→复绿）**：M4/M5/M6 分别把 `ergum/banwol/crossmoon` 置 false ⇒ 正向例红；
 M7b 三条件恒真 ⇒ 反向例红。还原后基线复绿。
+
+## 8. 第三批（3b：攻杀 `RandomByte(7-L)` 的 RNG 账本）— 2026-11-20
+
+**两步走（按 opc-19 裁定）**：
+- **3b-1 签名步**（语义不变）：`recalc_hit_speed_skills(..., rng: Option<&mut dyn RandomSource>)`、
+  `recalc_session_ability(..., rng)`；**28 个调用点全传 `None`**；登录装配拆出 `fill_magic_arr`
+  （只补填 `MagicArr`，**不重算**被动——否则攻杀会在登录时二次抽数）。全量 `--lib` = **2100/0/65**
+  与 3a 完全同名单（三行口径：green→red / new / missing 均为空）。
+- **3b-2 语义步**：生产 **15 个** `recalc_session_ability` 调用点改传 `Some(&mut world.rng)`；登录
+  `login_skill` 也传 `Some(&mut world.rng)`；`drain_buff_downlink` 的 `world: &World` 升为
+  `&mut World`（8 个调用点；两个测试站点先 `world.last_tick.clone()` 再传，避免借用冲突）。
+  `case SKILL_YEDO` 抽 `RandomByte(7-L)`（**L=0 也抽**，`PlayObject.cs:3706` 在 Level 门外），
+  结果进 `SkillPassives.attack_skill_point_count`。
+
+**用例（记录器自证 + 固定种子双钉）**：
+- `yedo_recalc_draws_once_per_recalc`：L=2（`7-L=5`）两次 Recalc ⇒ 记录器 `random_below` **2 次**，
+  值 == 同种子独立重放的两次值；`attack_skill_point_count` == 第二次值。
+- `yedo_level_zero_still_draws_once`：L=0 ⇒ **1 抽**，`Count=7`，抽值 == 记录器。
+- `no_yedo_draws_zero`：只含基本/精神/烈火 ⇒ 记录器 **0 抽**。
+- 牙：M1 删抽 ⇒ 用例①红；M2 循环外无条件抽 ⇒ 用例③红；还原 sha 相等、复绿。
+
+**结果**：全量 `--lib`（12:19）= **2103 passed / 0 failed / 65 ignored**；对 3b-1 逐名 diff：
+green→red **空**、new = 上述 3 条、missing **无**。
+
+**仍不做（卡 §6 已列）**：**攻击时第二抽** `PlayObject.Attack.cs:943-952`（`AttackSkillCount` 归零
+重抽 + `PowerHit=true; SendSocket("+PWR")`）与 `PowerHit/FireHitSkill` 战斗态——属攻击批。
