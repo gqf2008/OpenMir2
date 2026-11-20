@@ -274,7 +274,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-11",
@@ -304,7 +305,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-12",
@@ -490,7 +492,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-20",
@@ -644,7 +647,8 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】"
+      "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-28",
@@ -889,7 +893,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。"
+      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-38",
@@ -919,7 +924,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 1（lightflower））= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-39",
@@ -1104,7 +1110,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-46",
@@ -1310,7 +1317,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-54",
@@ -1340,7 +1348,8 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】"
+      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-55",
@@ -1391,7 +1400,8 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case MagicConst.SKILL_47` → MagBigExplosion(FireBoomRage)，与 23 同 helper 仅魔号不同；golden Rng 7 抽、DrainPasses 4、HP 100→85；卡 §32。",
-      "basis": "semantic"
+      "basis": "semantic",
+      "scope": "伤害面未点亮（2026-11-20）：golden 记录且比较了 TargetHp，但 3 seed 取值恒定（恒 15）= base + Lo(MC)，因 CasterMc=15 使 GetAttackPower 的 nPower=0-15+1<0 被钳到 0 ⇒ Random(1)=0；⇒ 丢掉 Random(nPower+1) 与 Luck 分支的错实现同样通过。待 CasterMc 改 Hi>Lo 重出后点亮。"
     },
     {
       "id": "MG-57",
