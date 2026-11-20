@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "306c3250ce4bdfc10f945354da6f7443aeadd209",
-    "time": "2026-11-20T20:26:37+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。"
+    "head": "53ee01959bd0f1a83ef108ef01f98c72f47bf90d",
+    "time": "2026-11-20T21:16:45+0800",
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），合并提交 M 号由合并者补登"
   },
   "status_enum": [
     "verified",
@@ -480,17 +480,29 @@
         "line": 265,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fire",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fire.json（C# MagicGolden `--case fire` 生成；47 条 SM 帧带 recog 与 due_ms_rel）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::fire_parity_s1",
+          "tests::fire_parity_s5",
+          "tests::fire_parity_s13",
+          "real_rust_ledger_fire",
+          "tooth_multi_victim_due_ms_rel_compared_red"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；卡 docs/issues/openmir2-magic-9-10-pass-through.md。golden `fire.json`（C# `--case fire`；SM 帧带 recog/due_ms_rel）；比较器 `real_rust_ledger_fire`。场景：施法者(100,100)→点击(101,100)；怪 x=102/103/104（AntiMagic 1/9/1，互异造命中/必不中两支）+ x=106（给『穿透 5→8 格』刀留红点）；rng_total s1/s5/s13=14/14/12；TargetHp 85/94/100。对照牙：`tooth_multi_victim_due_ms_rel_compared_red`（基准绿/交付帧+1红/640 1000→600 红/施法帧 0→100 红）；§57 门五颗（少一帧/错收件人/改字段/删标记/改 due_ms_rel）由 opc-19 与 10 执行。产品差异见 docs/issues/openmir2-b4-multivictim-strike-order.md。",
+      "basis": "semantic",
+      "scope": "partial: 三支 s1/s5/s13 在 HP / RNG(cast+deliver) / RM 多重集(ident,wParam,p1,p2,p3,priority,late) / SM 逐帧(ident,recog,param,tag,series,tail) / due_ms_rel 上对拍。**多受害者同刻的帧序不判**：产品 B4 批量 flush vs oracle 逐 actor `Run()`，属已登记产品差异 docs/issues/openmir2-b4-multivictim-strike-order.md；比较器由 `Fixture.frame_order_scope=multi_victim_same_tick` 授权把该接收者的 `Sent` 改多重集（只放宽顺序、`due_ms_rel` 仍判；产品卡修复后删标记恢复严格按序）。布局：受 MIR2_CLIENT_ABILITY_LAYOUT 影响的帧（31/52/53/1100）以 env=0 对拍；生产 client 布局属 openmir2-client-e2e-enter-gaps 已登记偏差。**MG-18（魔号 10）不在本升格范围。**"
     },
     {
       "id": "MG-18",
