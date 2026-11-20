@@ -14992,6 +14992,8 @@ fn handle_spell_cmd_with_magic(
                 let outcome = game_svr::slave::cast_slave_spell(
                     world, &input, &mut train, reg, table, displays,
                 );
+                // 卡 17：只读观测（对应 golden `regen_calls`），不参与行为。
+                world.slave_cast_regen_calls.push(outcome.regen_calls);
                 // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
                 if let Some(rcd) = saves
                     .get_mut(chr_name)

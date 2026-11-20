@@ -1471,6 +1471,10 @@ pub struct SimState {
     pub pending_status_changes: Vec<StatusChangeEvent>,
     /// **23 爆裂火焰的 `RM_MAGSTRUCK` 交付观测**（只记录；每 tick 清空 ⇒ 有界）。
     pub struck_log: Vec<StruckEvent>,
+    /// **卡 17：召唤（17/30/41）每次施法的 `MonsterTableSpawner::spawn` 调用次数**
+    /// （对应 golden `regen_calls`）。**只读观测面，追加式、不参与行为**（仿 `buff_apply_log`）；
+    /// 由宿主在 `cast_slave_spell` 之后 push；对拍台账读取。
+    pub slave_cast_regen_calls: Vec<usize>,
     /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
     /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
     /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
@@ -1829,6 +1833,7 @@ impl SimState {
             buff_apply_log: Vec::new(),
             pending_status_changes: Vec::new(),
             struck_log: Vec::new(),
+            slave_cast_regen_calls: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
             pending_refmessage_frames: Vec::new(),

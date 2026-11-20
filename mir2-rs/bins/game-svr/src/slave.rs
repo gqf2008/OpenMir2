@@ -133,6 +133,8 @@ pub struct MonsterTableSpawner<'a> {
     pub registry: &'a MapRegistry,
     pub table: &'a MonsterTable,
     pub displays: &'a mut DisplayTable,
+    /// **只读计数**（对应 golden `regen_calls`）：`spawn` 被调用次数。**不参与任何行为分支**。
+    pub spawn_calls: usize,
 }
 
 impl SlaveSpawner for MonsterTableSpawner<'_> {
@@ -145,6 +147,7 @@ impl SlaveSpawner for MonsterTableSpawner<'_> {
         x: i16,
         y: i16,
     ) -> Option<i32> {
+        self.spawn_calls += 1;
         // `RegenMonsterByName(sMap, …)`：`sMap = Envir.MapName`（主人所在图）。
         let map_name = self.registry.name_of(map_id)?.to_string();
         // `RegenMonsterByName` 首句 `int nRace = GetMonRace(sMonName);`（未命中 = -1 ⇒ `CreateMonster`
@@ -178,13 +181,14 @@ pub fn summon_from_spell(
     registry: &MapRegistry,
     table: &MonsterTable,
     displays: &mut DisplayTable,
-) -> SummonOutcome {
+) -> (SummonOutcome, usize) {
     let mut spawner = MonsterTableSpawner {
         registry,
         table,
         displays,
+        spawn_calls: 0,
     };
-    mir2_world_bevy::summon_slave(
+    let outcome = mir2_world_bevy::summon_slave(
         world,
         caster_id,
         caster_dir,
@@ -192,7 +196,8 @@ pub fn summon_from_spell(
         magic_level,
         cfg,
         &mut spawner,
-    )
+    );
+    (outcome, spawner.spawn_calls)
 }
 
 /// **⑨-2 第②片**：`DoSpell` 召唤面（17/30/41）效果体的宿主输入。
@@ -232,6 +237,9 @@ pub struct SlaveCastOutcome {
     /// 熟练度尾结算（[`SkillTrainState`] 已就地更新；`trained`/`levelup_msg` 决定是否发
     /// `RM_MAGIC_LVEXP`）。
     pub train: magic::SkillProficiencyOutcome,
+    /// **只读计数**（对应 golden `regen_calls`）：本次施法里 `MonsterTableSpawner::spawn` 的调用次数。
+    /// **不参与任何行为分支**（仅观测）。
+    pub regen_calls: usize,
 }
 
 /// **⑨-2 第②片**：召唤技能（17/30/41）的 `DoSpell` 效果体 + 共享尾。
@@ -263,6 +271,7 @@ pub fn cast_slave_spell(
     let mut bo_train = false;
     let mut amulet = None;
     let mut effect = None;
+    let mut regen_calls = 0usize;
     // 17/30/41 有护身符门；20/46 不走本支（调用方不应对它们调本函数）。
     if matches!(input.magic_id, SKILL_SKELLETON | SKILL_SINSU | SKILL_ANGEL) {
         bo_spell_fail = true;
@@ -277,7 +286,7 @@ pub fn cast_slave_spell(
                 }
                 .unwrap_or(0);
                 amulet = Some((slot, magic::use_amulet(dura, count)));
-                let outcome = summon_from_spell(
+                let (outcome, calls) = summon_from_spell(
                     world,
                     input.caster_id,
                     input.caster_dir,
@@ -288,6 +297,7 @@ pub fn cast_slave_spell(
                     table,
                     displays,
                 );
+                regen_calls = calls;
                 // oracle `if (MakeSlave(...) != null) boTrain = true;`（回召/拒绝 ⇒ 不置）。
                 if matches!(outcome, SummonOutcome::Spawned(_)) {
                     bo_train = true;
@@ -316,6 +326,7 @@ pub fn cast_slave_spell(
         amulet,
         effect,
         train: tail.train,
+        regen_calls,
     }
 }
 
