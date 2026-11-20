@@ -5,7 +5,7 @@
   "counting_moment": {
     "head": "8b738d9874146351397a94861b74898e29355a1a",
     "time": "2026-11-20T10:44:09+08:00",
-    "note": "2026-11-20 重测于 8b738d987：verified = NP-01..NP-11（11/11）；旧 head 9f38e5b7 时为 1 verified（计数未重测）"
+    "note": "2026-11-20 重测于 8b738d987：verified = NP-01..NP-11（11/11）；旧 head 9f38e5b7 时为 1 verified（计数未重测）；COUNT_HEAD_STALE 属结构性残留：校验器判 WARN 的条件是「head 是该文件 last_change 的祖先且不相等」，而本批提交本身就是最新 last_change ⇒ 重测后刷必然留下该 WARN；其读法是「head 之后文件又动过」，不是「没重测」（qa-charter §34 补注）"
   },
   "status_enum": [
     "verified",
