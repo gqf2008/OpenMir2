@@ -12558,8 +12558,12 @@ fn recalc_session_ability(
     sg.sub = recalc.sub;
     // `PlayObject.cs:2899` `HitSpeed = AddAbil.HitSpeed;`。
     sg.hit_speed = recalc.hit_speed;
-    // `RecalcAbilitys()` 尾部的 `ExtraAbil` 应用（`PlayObject.cs:2815-2846`）。
-    game_svr::ability::apply_extra_abil(&mut sg.state.wabil, extra_abil.unwrap_or(&[0u16; 7]));
+    // **ExtraAbil 修正（`qa-extraabil-adjudication-20261120`，2026-11-20）**：
+    // oracle `RecalcAbilitys()` 里把 `ExtraAbil` 折进 `WAbil`/`HitSpeed` 的段（`PlayObject.cs:2818-2846`）
+    // 随后被**同方法体、无 early return** 的 `:2899-2906`（`WAbil = Abil + AddAbil`、`HitSpeed = AddAbil.HitSpeed`）
+    // **无条件整体覆盖** ⇒ 对最终值**永远没有影响**。此处曾在其后调用 `apply_extra_abil`（顺序与 oracle 相反，
+    // 叠加**留存**）⇒ 已停用。`ExtraAbil` 状态本身保留（存档 `WorldServer.Switch.cs:139-144` 与机器人 AI 读它）。
+    let _ = extra_abil;
     // **PL-1 / P32**：本次重算是否命中复活戒指（`Shape==114`）。oracle 只置 true、从不重置
     // ⇒ 调用方按 `entity.revival |= 返回值` 落账（粘滞锁存）。
     //
@@ -22378,8 +22382,9 @@ fn apply_pending_gm_target_ops(
             }
             // 末尾 RecalcAbilitys（恒调用，oracle `:71`；F4-R2：魔法审计接真——
             // 按 FlameRing/RecoveryRing 调 Add/DelItemSkill，210/212 帧经 SendSocket **立即**）。
-            // F2-R3：输入与其它 9 处重算点对齐——extra_abil 取目标实体活跃值（AttPowerUp 等
-            // 加成不被抹），flame_ring_in 取实体粘滞位；重算后 apply_ability_to_entity +
+            // F2-R3（修正）：输入与其它 9 处重算点对齐——extra_abil 仍按目标实体活跃值传入
+            //（状态面照传；**不折进 WAbil**，oracle `:2899-2906` 覆盖 `:2818-2846`），
+            // flame_ring_in 取实体粘滞位；重算后 apply_ability_to_entity +
             // `e.flame_ring |= effect.flame_ring` / `e.revival |= effect.revival` 落账。
             let tid = find_id(world, &name);
             let extra_abil = tid
@@ -49469,7 +49474,8 @@ break
         );
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
         // F2-R3 牙敏感点：目标带生效中的 ExtraAbil[0]（AttPowerUp DC 高字节 +3）——
-        // 重算必须传 `Some(&e.extra_abil)`，否则 GM 删技能把加成抹掉（wabil.dc 丢失 0x0300）。
+        // 重算仍按实体活跃值传 `Some(&e.extra_abil)`（状态面照传）；但**不得**折进 `WAbil`
+        //（oracle `:2899-2906` 覆盖 `:2818-2846`，见 F2-R3 的修正）。
         world.entities.get_mut(victim_id).unwrap().buff.extra_abil[0] = 3;
         // F3-R3：**desc ≠ magic_name**——命令按 Desc 匹配（oracle :60），审计按 MagicName 查找
         // （`magicaudit::delete_name_skill` 用 magic_name）。把命令查找改成 magic_name ⇒ 本用例红。
@@ -49568,11 +49574,13 @@ break
         let list = saves["victim"].record.data.magic.as_ref().unwrap();
         assert_eq!(list.len(), 1, "只删命中项（按 Desc）");
         assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
-        // F2-R3：ExtraAbil[0]=3 ⇒ 重算后 wabil.dc 高字节在基础值(0x01)上 +3 = 0x0400；
-        // 若传 None（mutant）⇒ 只剩基础 0x0100。
+        // **F2-R3（2026-11-20 修正：旧期望编码了错误行为）**：`ExtraAbil[0]=3` **不得**进 `WAbil`——
+        // oracle `RecalcAbilitys` 的折算段（`PlayObject.cs:2818-2846`）必被 `:2899-2906` 的
+        // `WAbil.DC = MakeWord(MIN(255,Lo(Add)+Lo(Abil)), MIN(255,Hi+Hi))` 整体覆盖 ⇒ 只能 `0x0100`。
+        // 旧期望 `0x0400`（Hi 1+3）是把"被覆盖值"当成最终值的被测错误。
         assert_eq!(
-            sessions["victim"].state.wabil.dc, 0x0400,
-            "extra_abil 必须传入重算（None ⇒ 加成被抹 ⇒ 0x0100）"
+            sessions["victim"].state.wabil.dc, 0x0100,
+            "ExtraAbil 不进 WAbil（oracle :2899-2906 覆盖 :2818-2846）"
         );
         assert!(
             !world.entities.get(victim_id).unwrap().flame_ring,
@@ -55015,6 +55023,43 @@ SendRefMsgRange=15
             "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
         );
         assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
+    }
+
+    /// **ExtraAbil 修正牙（`qa-extraabil-adjudication-20261120` 的 `ae` 复核点）**：
+    /// oracle 里 `ExtraAbil[HITSPEEDUP]` 只进**临时** `HitSpeed`（`PlayObject.cs:2830-2833`），
+    /// 并随 `:2876` 的 `SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, …)` 作为**队列载荷 wParam**
+    /// （657 handler `PlayObject.Message.cs:1845-1847` **不读** wParam）；落地字段在 `:2899`
+    /// 被 `AddAbil.HitSpeed` 覆盖 ⇒ **657 帧的 Series 不含它**。
+    ///
+    /// 本用例：同一会话跑两次重算（`extra=None` vs `[0,0,0,4,0,0,0]`），
+    /// 落地 `hit_speed` 与由它构造的 657 帧 `Series` 必须**相同**。
+    /// 变异红：①把 `extra_abil[3]` 加进 `sg.hit_speed`（"保留过头"）⇒ 第二次 4 ⇒ 红；
+    /// ②把 `extra_abil` 折进 `WAbil` 由 F2-R3 红（本用例只钉临时面）。
+    #[test]
+    fn extraabil_hitspeedup_stays_out_of_landed_hit_speed() {
+        use mir2_protocol::frame::CommandMessage;
+        let catalog = crate::ability::StdItemCatalog::new();
+        let run = |extra: Option<&[u16; 7]>| -> (u16, u16) {
+            let mut sg = test_session_ground(1);
+            sg.equip.job = 0;
+            sg.equip.bonus_tick_hit = 20;
+            sg.equip.bonus_tick_speed = 35;
+            let _ = recalc_session_ability(&mut sg, &catalog, extra, None, None);
+            let body = crate::smframe_ext::sm_charstatuschanged(sg.actor_id, 0, sg.hit_speed);
+            let m = CommandMessage::from_bytes(&body).expect("657 可解析");
+            (sg.hit_speed, m.series)
+        };
+        let (hs0, series0) = run(None);
+        let extra = [0u16, 0, 0, 4, 0, 0, 0];
+        let (hs1, series1) = run(Some(&extra));
+        assert_eq!(
+            hs1, hs0,
+            "落地 HitSpeed 不得含 ExtraAbil[HITSPEEDUP]（oracle :2899 覆盖 :2830-2833）"
+        );
+        assert_eq!(
+            series1, series0,
+            "657 的 Series 取落地 HitSpeed；临时贡献只在队列 wParam（handler 不读）"
+        );
     }
 
     /// **IT-08 升级支宿主级对拍**：吃经验书(Exp=9990/MaxExp=10000/dura=100)⇒升级；宿主发的
@@ -81869,7 +81914,12 @@ SendRefMsgRange=15
                 "52 尾 = 重算后的整个 WAbil（58B 客户端布局）"
             );
             let after = &rig.ground_sessions["obs"].state.wabil;
-            assert_eq!(after.dc, 0x0E05, "DC 高字节 10 + nPower 4 = 14");
+            // **修正（2026-11-20）**：`AttPowerUp` 写的 `ExtraAbil[0]=nPower` 不折进 `WAbil`
+            //（oracle `:2899-2906` 覆盖）⇒ DC 保持基础 `0x0A05`。
+            assert_eq!(
+                after.dc, 0x0A05,
+                "ExtraAbil 不进 WAbil（旧期望 0x0E05 编码了错误行为）"
+            );
             assert_eq!(after.mc, rig.target_wabil_before.mc);
             assert_eq!(after.sc, rig.target_wabil_before.sc);
             assert_eq!(after.max_hp, rig.target_wabil_before.max_hp);
@@ -88326,7 +88376,7 @@ mod tests {",
     ///    `657×2` = `StatusChanged()` 回环 + `SendUpdateMsg`（`PlayObject.cs:2874-2876`），
     ///    近邻另收 `41 → 657`；状态：gold 20000→10000、`UseItems[1]` 仍 `Some` 且 `index=0`
     ///    （make/desc 保留）、背包清空；**world 实体武器槽同帧 index=0，drain 后会话仍 0**（复验 F1）；
-    ///    **`ExtraAbil[0]=5` ⇒ WAbil.dc=0x0601**（复验 F2）；
+    ///    **`ExtraAbil[0]=5` ⇒ WAbil.dc 仍 0x0101**（F2 修正：ExtraAbil 不进 WAbil，oracle `:2899-2906`）；
     /// ③ 取回到期：`SM_ADDITEM(200)` 一条；**`ItemList` 长度不变**（`AddItemToBag` 被注释的
     ///    BUG-REPLICA），尾含 `desc[10]` 与耐久分支后的 `DuraMax`。
     ///
@@ -88521,7 +88571,8 @@ mod tests {",
                 .use_items,
             &sessions["hero"].use_items,
         );
-        // **复验 F2**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；+5 后 WAbil.dc 应 0x0601。
+        // **复验 F2（修正）**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；但重算后
+        // `WAbil.dc` **不得**含这 +5（oracle `:2899-2906` 覆盖），仍为 0x0101。
         world
             .entities
             .get_mut(hero)
@@ -88710,16 +88761,16 @@ mod tests {",
             0,
             "F1：world 实体武器槽 index == 0"
         );
-        // **复验 F2**：`ExtraAbil[0]=5` 已应用到 WAbil（Hi 1+5 = 6，Lo 1 ⇒ 0x0601）。
+        // **复验 F2（修正）**：`ExtraAbil[0]=5` 存在但**不进** WAbil（Hi 1、Lo 1 ⇒ 0x0101）。
         assert_eq!(
-            sg_after.state.wabil.dc, 0x0601,
-            "F2：ExtraAbil[0]=5 ⇒ Hi 1+5"
+            sg_after.state.wabil.dc, 0x0101,
+            "F2：ExtraAbil 不进 WAbil（oracle :2899-2906）"
         );
         // **复验 F1**：`apply_ability_to_entity` 同帧落 `dc`（战斗侧读 `Entity.dc`）。
         assert_eq!(
             world.entities.get(hero).expect("hero 实体在").dc,
-            0x0601,
-            "F1：实体 dc 跟随重算（含 ExtraAbil）"
+            0x0101,
+            "F1：实体 dc 跟随重算（不含 ExtraAbil）"
         );
         // **顺序即语义**：`RecalcAbilitys`（`Merchant.cs:570`）在 `AddValue`（`:572`）之前 ⇒
         // 52 帧的 `WAbil.Weight` 含材料重量（2×黑铁 weight1 + 项链 weight2 = 4；武器已摘 ⇒ 0）。
