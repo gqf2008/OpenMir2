@@ -708,11 +708,23 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             }
             let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
             let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
-            let pre = hp_after.saturating_add(dmg);
-            if pre != target_hp {
-                return Err(format!(
-                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
-                ));
+            // **致死支**：伤害不被 HP 截断（`series` 记的是掷出的伤害），`HP_after` 归 0 ⇒
+            // `HP_after + damage == target_hp` 必然不成立。此时判据换成"确实是致死一击"
+            // （`damage >= target_hp`），仍能拦住"施法后值当输入"这类混淆（非致死支仍要求恒等式）。
+            // 反例来源：MG-18（10 `(ushort)` 溢出 ⇒ 单击伤害 45921 ≥ HP 100）。§8.3d。
+            if hp_after == 0 {
+                if dmg < target_hp {
+                    return Err(format!(
+                        "[{label}] 31 帧 `HP_after=0` 但 `damage({dmg}) < target_hp({target_hp})`——既非致死一击，也不满足 §8.3d 的恒等式；疑似输入/输出混淆"
+                    ));
+                }
+            } else {
+                let pre = hp_after.saturating_add(dmg);
+                if pre != target_hp {
+                    return Err(format!(
+                        "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
+                    ));
+                }
             }
         }
     }

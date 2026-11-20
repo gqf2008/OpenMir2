@@ -130,21 +130,29 @@ pub fn anti_magic_roll(rng: &mut impl RandomSource, anti_magic: i32) -> bool {
 ///
 /// 对应 `SKILL_FIREBALL(1)`/`SKILL_FIREBALL2(5)`（`MagicManager.cs:182`）、
 /// `SKILL_LIGHTENING(11)`（`:294`）、`SKILL_45(45)`（`:568`）。
+///
+/// **`range_cast_ushort`（仅 `SKILL_SHOOTLIGHTEN(10)`）**：oracle 对 10 的功率范围多一个
+/// `(ushort)` 强转（`MagicManager.cs:283`），对 9 **没有**（`:270`）。这是 **oracle 的不对称**，
+/// 本仓按同样的不对称实现：只有调用方（`cast_pass_through_spell`）按 `magic.magic_id == 10`
+/// 置真；本函数**不认魔号**（共享件不反向依赖魔号）。`Hi < Lo` 时 `Hi-Lo+1` 为负 ⇒ 强转后
+/// 变成 `65522` 量级的巨大范围（oracle 真行为）。
 pub fn single_hit_power_mc(
     rng: &mut impl RandomSource,
     magic: &MagicInfo,
     level: u8,
     mc: i32,
     atk: AttackPowerMode,
+    // `range_cast_ushort`（仅 `SKILL_SHOOTLIGHTEN(10)`）：见函数文档。
+    range_cast_ushort: bool,
 ) -> i32 {
     let mp = mpow(rng, magic);
     let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(mc));
-    atk_power(
-        rng,
-        base,
-        i32::from(hi_byte(mc)) - i32::from(lo_byte(mc)) + 1,
-        atk,
-    )
+    let mut range = i32::from(hi_byte(mc)) - i32::from(lo_byte(mc)) + 1;
+    if range_cast_ushort {
+        // `(ushort)(-14) = 65522`（C# unchecked 语义）：`& 0xFFFF` 取二补数低 16 位。
+        range = i32::from(u16::try_from(range & 0xFFFF).expect("低 16 位必可转 u16"));
+    }
+    atk_power(rng, base, range, atk)
 }
 
 /// 灵魂火符（`SKILL_FIRECHARM(13)`，`MagicManager.cs:337`）的 SC 口径威力：
