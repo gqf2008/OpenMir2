@@ -324,3 +324,31 @@ impl TickFrameQueue {
 | 直发 `tx.send` | `#3` CM_ADJUST_BONUS、`#4` 穿脱 | `socket`/`gate_idx`（`online` 里现成）、`status`、`hit_speed` | 无（可包 `FrameSink` 的"立即发"实现） |
 | `pickwire::notice_frame` | `#6` 吃路径 | `WireSession`（含 `hit_speed`）、`QueuedNotice` 队列、泵位置 | `status` 不在 `WireSession` 里（657 用 `session.hit_speed` + 记录 `n_param1`）⇒ 若收敛需把 `status` 并入队列记录 |
 | `SpellFrameBuf::push_broadcast_cached` | `#7` 施法 | buf + 每收件人 `NetPriorityQueue` + `ref_msg_cache` 收件人 | **泵序位置**（必须在本支所有帧入队后统一 flush）⇒ `FrameSink` 需暴露 `flush` 时机 |
+
+## 12. 7 个"两条都没有"点的 oracle 判定（只认 oracle 代码行，2026-11-20）
+
+**共同的 oracle 事实（先立）**：玩家侧 `PlayObject.RecalcAbilitys()` 在 `if (Race == ActorRace.Play)`
+块内**无条件**执行 `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, HitSpeed, CharStatus, 0,0,"")`
+（`src/M2Server/Player/PlayObject.cs:2848` 起、`:2874-2876`）。
+⇒ 任何"调用 `RecalcAbilitys()`"的玩家路径，**每次都会**产出：`StatusChanged()`（`BaseObject.cs:1515-1517`
+的 `SendRefMsg`，广播含自己）**+** `SendUpdateMsg`（仅自己）。`da` 在 36 技能上实测到 **caster 2 条**
+（广播 1 + 自更新 1）、target/obs 各 1 条（`golden/magic/uenhancer.json` 三 seed 一致）——
+**这就是"每次 recalc = 广播 1 + 自更新 1"的实证**。
+
+| # | Rust 点 | oracle 锚 | 该函数发 657？ | 判 |
+|---|---|---|---|---|
+| #5 | `handle_shop_cmd_inner`（升级武器） | `src/GameSrv/Npc/Merchant.cs:569-571`：`UseItems[Weapon].Index = 0; user.RecalcAbilitys(); user.FeatureChanged(); SendMsg(RM_ABILITY)` | **无条件** | **真缺口** |
+| #8 | spell 支 B `AttPowerUp` | `PlayObject.cs:5323-5331`：`RecalcAbilitys(); SendMsg(RM_ABILITY)` | **无条件** | **真缺口**（`da` 帧表 4 条实证） |
+| #11/#12 | `apply_pending_gm_target_ops`（`@删除技能`） | `src/Modules/GameCommand/Commands/DelSkillCommand.cs:71`：`mIPlayerActor.RecalcAbilitys();` | **无条件** | **真缺口** |
+| #13 | `drain_player_need_recheck_with_magic` | `src/M2Server/Player/PlayObject.Message.cs:430-433`：`if (boTakeItem) { SendDelItems(...); UseItems[i].Index = 0; RecalcAbilitys(); }` | **有条件**（`boTakeItem` = 该格被摘下并回包/掉落成功） | **真缺口**（Rust 的 `bo_take_item` 已是同一条件） |
+| #14 | `drain_player_hunger` | `src/M2Server/Player/PlayObject.Base.cs:288-292`：`RefMyStatus() { RecalcAbilitys(); SendMsg(RM_MYSTATUS); }` | **无条件**（跨档时 oracle 调 `RefMyStatus`） | **真缺口** |
+| #15 | `drain_player_revival_with_magic` | `PlayObject.cs:5371-5378`：耐久归零 ⇒ `SendDelItems`、`Index = 0`、`RecalcAbilitys()` | **无条件**（进入该支即调） | **真缺口** |
+| #9 | `drain_buff_downlink`（`buff_recalcs` 支） | `src/M2Server/ActorBuffSystem.cs:220-231`：`if (boChg) { CharStatus=...; StatusChanged(); }` 与 `if (boNeedRecalc) { RecalcAbilitys(); SendMsg(RM_ABILITY); }` **是两段** | `boChg` 支发（Rust 已接）；`boNeedRecalc` 支经 `RecalcAbilitys()` **也发** | **真缺口**（Rust 的 recalcs 支只有 52，没有 657） |
+
+⇒ **7 个点全部为真缺口**（#9 是"半个已接"：#buff_status_changes 支已有，recalcs 支没有）。
+
+### 12b. 由此得出的发射模式（对既有 4 处同样适用，需复核）
+
+**每次 recalc = `StatusChanged()` 广播（含自己）+ `SendUpdateMsg` 自更新**（两条同 ident 155）。
+本仓现有实现（#1/#2/#3/#4/#7 与 T-290）**大多只发 1 条自己 + 广播一次**，
+**缺"自更新那条"**——与 `da` 的 36 实测（caster 2 条）不符。该差异需在接线时统一，并回头复核已接的 5 处。
