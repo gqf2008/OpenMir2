@@ -282,3 +282,16 @@
 | --- | --- | --- |
 | 7b（施法尾帧） | 施法前 `RM_SPELL(17)` 已刷新缓存 | 53/638/639/657/716 **全部命中**；12 格边界**只收 17** |
 | 7c（名色/血条） | 无预热 | **首调用刷新、同窗第二次命中**；隐藏按各点 `include_self` 语义 |
+
+### 残余 #19 / #20 实现（2026-11-20；证据待 lane）
+- **#19 `broadcast_healthspellchanged`**：收件人改走 `ref_msg_cache::targets(world, actor_id, range)`；
+  隐藏 sender 由 `targets` 早退返回 `[self]`（源在 online ⇒ 只自己；不在 ⇒ 零帧），与 oracle 退化自投一致。
+  既有用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out`（首次调用=刷新，
+  dx=12 仍收）与 `broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy`
+  （隐藏=只自己）**期望不变**。
+- **#20 `broadcast_feature_changed(_except)`**：同上走缓存；`skip` 保留为**循环内过滤**：
+  `skip=None` ⇒ 含自己（隐藏 ⇒ 只自己）；`skip=Some(self)` ⇒ 零帧（调用方已有自见帧）。
+- 用例：`healthspellbroadcast_two_calls_share_cache_window` /
+  `healthspellbroadcast_hidden_sender_only_self` / `feature_changed_two_calls_share_cache_window` /
+  `feature_changed_skip_semantics` / `feature_changed_hidden_sender_respects_skip`。
+- 形态同 7c：**非施法驱动 ⇒ 首调用刷新、同窗第二次命中**。

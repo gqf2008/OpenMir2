@@ -10832,25 +10832,19 @@ fn broadcast_feature_changed_except(
     range: i32,
     skip: Option<i32>,
 ) {
-    let Some(src) = world.entities.get(actor_id) else {
-        glog!(
-            "WRN",
-            "FeatureChanged：actor_id={actor_id} 不在世界 ⇒ 不下发"
-        );
-        return;
-    };
-    let (sx, sy, smap) = (src.x, src.y, src.map_id);
+    // **T-287 残余 #20（普查补漏）**：oracle `BaseObject.FeatureChanged()` 是
+    // `SendRefMsg(RM_FEATURECHANGED)` ⇒ 必须走 500ms 缓存；原手写 `online` 循环是旁路。
+    // `skip` 语义保留为**循环内过滤**（武器升级 NPC 把自己那条按发送序另发）。
+    // 隐藏 sender 由 `targets` 早退返回 `[self]`：`skip=None` ⇒ 只自己收（oracle 退化自投）；
+    // `skip=Some(self)` ⇒ 零帧（调用方已有自见帧）。
     let body = game_svr::smframe::sm_featurechanged(actor_id, feature, feature_ex);
-    for e in online {
-        if skip == Some(e.actor_id) {
+    for target_id in ref_msg_cache::targets(world, actor_id, range) {
+        if skip == Some(target_id) {
             continue;
         }
-        let Some(t) = world.entities.get(e.actor_id) else {
+        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
-        if t.map_id != smap || (t.x - sx).abs() > range || (t.y - sy).abs() > range {
-            continue;
-        }
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "装备 FeatureChanged 广播")
         {
             let _ = tx.send(SimToGate::SendFrame {
@@ -19818,34 +19812,14 @@ fn broadcast_healthspellchanged(
     body: &[u8],
     range: i32,
 ) {
-    let Some(src) = world.entities.get(actor_id) else {
-        return;
-    };
-    // `BaseObject.Message.cs:390-393`：`ObMode || FixedHideMode` 时 `SendRefMsg` 退化为
-    // `SendMsg(self)`（只给源自己；自投重载 `:34-96` 对非机器人恒 `boSend=true` ⇒ 源**再收
-    // 1 条**）。调用方的自见帧只计入 `SendUpdateMsg` 那份，这里补退化自投的一份：
-    // Play 源在 online ⇒ 自见 +1（review `fbfc7614` R3-1 探针实测此前缺）；怪/NPC 源不在
-    // online ⇒ 零帧。隐身态都不得再向 ±`range` 观察者广播。
-    if src.ob_mode || src.fixed_hide_mode {
-        if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
-            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "隐身源退化自投")
-            {
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: entry.socket,
-                    body: body.to_vec(),
-                });
-            }
-        }
-        return;
-    }
-    let (sx, sy, smap) = (src.x, src.y, src.map_id);
-    for e in online {
-        let Some(t) = world.entities.get(e.actor_id) else {
+    // **T-287 残余 #19（普查补漏）**：oracle `HealthSpellChanged()` 的 `ShowHp` 支是
+    // `SendRefMsg(RM_HEALTHSPELLCHANGED)` ⇒ 必须走 500ms 缓存；原手写 `online` 循环是旁路。
+    // 隐藏 sender 由 `ref_msg_cache::targets` 早退返回 `[self]`（oracle 退化自投：源不在
+    // online ⇒ 零帧；在 online ⇒ 自见 +1，与 review `fbfc7614` 的探针口径一致）。
+    for target_id in ref_msg_cache::targets(world, actor_id, range) {
+        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
-        if t.map_id != smap || (t.x - sx).abs() > range || (t.y - sy).abs() > range {
-            continue;
-        }
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "周期恢复广播") {
             let _ = tx.send(SimToGate::SendFrame {
                 socket: e.socket,
@@ -97205,6 +97179,96 @@ fn ",
         assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
         assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
         assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
+    }
+
+    // ---- T-287 残余 #19 / #20（普查补漏的旁路站点） ----
+
+    /// **#19 `broadcast_healthspellchanged`（53）**：非施法驱动 ⇒ 首调用刷新、同窗第二次命中。
+    /// 隐藏 sender ⇒ 只自己（`targets=[self]`，源在 online）。
+    #[test]
+    fn healthspellbroadcast_two_calls_share_cache_window() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let body = game_svr::smframe::sm_healthspellchanged_frame(actor, 90, 10, 100);
+        let ident = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        broadcast_healthspellchanged(&world, &online, &gates, actor, &body, 12);
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), Some(&1), "首次：自己收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首次：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首次：+13 零帧");
+        broadcast_healthspellchanged(&world, &online, &gates, actor, &body, 12);
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(901, ident)), Some(&1), "第二次：自己仍收");
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
+    }
+
+    /// **#19 隐藏 sender 反向**：只自己、观察者零帧。
+    #[test]
+    fn healthspellbroadcast_hidden_sender_only_self() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        world.entities.flags_mut(actor).unwrap().ob_mode = true;
+        let body = game_svr::smframe::sm_healthspellchanged_frame(actor, 90, 10, 100);
+        let ident = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        broadcast_healthspellchanged(&world, &online, &gates, actor, &body, 12);
+        let per = take7c(&mut rx);
+        assert_eq!(per.get(&(901, ident)), Some(&1), "隐藏：只自己收");
+        assert_eq!(per.get(&(902, ident)), None, "隐藏：+5 零帧");
+        assert_eq!(per.get(&(904, ident)), None, "隐藏：|Δ|=12 零帧");
+    }
+
+    /// **#20 `broadcast_feature_changed`（41）**：首调用刷新、同窗第二次命中（含自己）。
+    #[test]
+    fn feature_changed_two_calls_share_cache_window() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let ident = mir2_protocol::messages::SM_FEATURECHANGED;
+        broadcast_feature_changed(&world, &online, &gates, actor, 0x1122_3344, 7, 12);
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), Some(&1), "首次：自己收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首次：+5 收（刷新）");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首次：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首次：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首次：+13 零帧");
+        broadcast_feature_changed(&world, &online, &gates, actor, 0x1122_3344, 7, 12);
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(901, ident)), Some(&1), "第二次：自己仍收");
+        assert_eq!(second.get(&(902, ident)), Some(&1), "第二次：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "第二次：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "第二次：|Δ|=12 被挡");
+    }
+
+    /// **#20 `skip` 语义**：`skip=Some(自己)` 时自己两轮都不收、观察者照常（首刷次命中）。
+    #[test]
+    fn feature_changed_skip_semantics() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let ident = mir2_protocol::messages::SM_FEATURECHANGED;
+        broadcast_feature_changed_except(&world, &online, &gates, actor, 1, 2, 12, Some(actor));
+        let first = take7c(&mut rx);
+        assert_eq!(first.get(&(901, ident)), None, "skip：自己首轮不收");
+        assert_eq!(first.get(&(902, ident)), Some(&1), "skip：+5 首轮收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "skip：|Δ|=12 首轮收");
+        broadcast_feature_changed_except(&world, &online, &gates, actor, 1, 2, 12, Some(actor));
+        let second = take7c(&mut rx);
+        assert_eq!(second.get(&(901, ident)), None, "skip：自己次轮仍不收");
+        assert_eq!(second.get(&(902, ident)), Some(&1), "skip：+5 次轮仍收");
+        assert_eq!(second.get(&(903, ident)), None, "skip：|Δ|=11 次轮被挡");
+        assert_eq!(second.get(&(904, ident)), None, "skip：|Δ|=12 次轮被挡");
+    }
+
+    /// **#20 隐藏 sender 反向**：`skip=None` ⇒ 只自己；`skip=Some(自己)` ⇒ 零帧。
+    #[test]
+    fn feature_changed_hidden_sender_respects_skip() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        world.entities.flags_mut(actor).unwrap().ob_mode = true;
+        let ident = mir2_protocol::messages::SM_FEATURECHANGED;
+        broadcast_feature_changed(&world, &online, &gates, actor, 1, 2, 12);
+        let per = take7c(&mut rx);
+        assert_eq!(per.get(&(901, ident)), Some(&1), "隐藏 skip=None：只自己收");
+        assert_eq!(per.get(&(902, ident)), None, "隐藏 skip=None：+5 零帧");
+        broadcast_feature_changed_except(&world, &online, &gates, actor, 1, 2, 12, Some(actor));
+        assert!(take7c(&mut rx).is_empty(), "隐藏 + skip=Some(自己) ⇒ 零帧");
     }
 }
 
