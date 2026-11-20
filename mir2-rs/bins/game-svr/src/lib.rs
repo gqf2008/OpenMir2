@@ -72995,6 +72995,364 @@ SendRefMsgRange=15
         ]
     }
 
+    /// 共享尾 B 类 rig 的输入面（**全部来自 golden `Fixture`**：记录值 = 实际应用值）。
+    #[derive(Clone, Copy)]
+    struct SkillTailInputs {
+        effect: u16,
+        effect_type: u16,
+        caster_level: u16,
+        caster_mc: u16,
+        caster_sc: u16,
+        anti_magic: u16,
+    }
+
+    /// 共享尾 B 类（49/51/52/53/54）夹具 rig：`train_lv=3`（升级门 `TrainLv>Level` 非退化）、
+    /// `max_train[0]=1000`（不升级 ⇒ 640 走 `:666` 的 1000ms 支）、`UserMagicLevel=0`
+    /// （`nLevel=0` ⇒ `CheckMagicLevelUp` 用的就是 `MaxTrain[0]`；且 `Level<3` 训练门过）。
+    fn skill_tail_rig(id_base: i32, magic_id: u16, inp: SkillTailInputs) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            magic_id,
+            &[(magic_id, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        // 与 C# 夹具 `BuildMagicInfo` 同值（`Effect/EffectType` 亦从 golden `Fixture` 读）。
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: u8::try_from(inp.effect).expect("effect 越界"),
+            effect_type: u8::try_from(inp.effect_type).expect("effect_type 越界"),
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000, 0, 0, 0],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        // `UserMagicLevel=0`、`TranPoint=0`（`new_layout` 缺省是 level=1 ⇒ 这里显式落 0：
+        // `CheckMagicLevelUp` 的 `nLevel` 规则是 `Level<4 && TrainLv>=Level ? Level : 0`，
+        // level=1 时它会去读 `MaxTrain[1]`(=0) ⇒ 直接升级、走 800ms 支，本批 scope 外）。
+        {
+            let list = rig
+                .saves
+                .get_mut("caster")
+                .and_then(|s| s.record.data.magic.as_mut())
+                .expect("new_layout 必须给 caster 一条 magic 记录");
+            let m = list
+                .iter_mut()
+                .flatten()
+                .find(|m| m.mag_idx == magic_id)
+                .expect("caster 魔表必须含本魔号");
+            m.level = 0;
+            m.tran_point = 0;
+        }
+        // 等级/MC/SC/AntiMagic = golden `Fixture` 的记录值（**输入一律从 golden 读**，
+        // 不在驱动里写死：写死会让「实际应用值」与「记录值」脱钩）。
+        let lv = u8::try_from(inp.caster_level).expect("caster_level 越界");
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = lv;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = lv;
+            sg.state.wabil.level = lv;
+            sg.state.wabil.mc = inp.caster_mc;
+            sg.state.wabil.sc = inp.caster_sc;
+        }
+        {
+            let t = fireball_actor(&rig, "target");
+            let e = rig.world.entities.get_mut(t).unwrap();
+            e.vitals.anti_magic = inp.anti_magic;
+        }
+        rig
+    }
+
+    /// 读施法者存档里的 `(level, tran_point)`（`finish_spell_tail` 的熟练度回写目标）。
+    fn skill_tail_rcd(rig: &SpellFrameRig, magic_id: u16) -> (u8, i32) {
+        rig.saves
+            .get("caster")
+            .and_then(|s| s.record.data.magic.as_ref())
+            .and_then(|list| list.iter().flatten().find(|m| m.mag_idx == magic_id))
+            .map_or((0, 0), |m| (m.level, m.tran_point))
+    }
+
+    /// `CheckMagicLevelUp`（`PlayObject.cs:5200-5209`）实际读的下标：`Level<4 && TrainLv>=Level ? Level : 0`。
+    fn skill_tail_n_level(level: u8, train_lv: u8) -> usize {
+        if level < 4 && train_lv >= level {
+            usize::from(level)
+        } else {
+            0
+        }
+    }
+
+    /// 共享尾 B 类真实台账驱动（本批只做 **1000ms 未升级支**；`MaxTrain` 取小的 800ms 变体不在 scope）。
+    fn skill_tail_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+        // **输入一律从 golden 读**（缺键即红）。
+        let effect = golden_fixture_required(stem, label, "effect");
+        let effect_type = golden_fixture_required(stem, label, "effect_type");
+        let caster_level = golden_fixture_required(stem, label, "caster_level");
+        let caster_mc = golden_fixture_required(stem, label, "caster_mc");
+        let caster_sc = golden_fixture_required(stem, label, "caster_sc");
+        let anti_magic = golden_fixture_required(stem, label, "anti_magic");
+        let mut rig = skill_tail_rig(
+            id_base,
+            magic_id,
+            SkillTailInputs {
+                effect,
+                effect_type,
+                caster_level,
+                caster_mc,
+                caster_sc,
+                anti_magic,
+            },
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let target = fireball_actor(&rig, "target");
+        let hp_before = i64::from(rig.world.entities.get(target).unwrap().hp);
+        let (level_before, tp_before) = skill_tail_rcd(&rig, magic_id);
+        let n0 = trace_line_count(&trace);
+        rig.cast(magic_id, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        // 跨 1000ms 排水（640 是 `SendSelfDelayMsg(…,1000)` 的自投递；未到点会进 `NotDue`
+        // ⇒ "没有 640" 是假红，不是行为错）。与 golden `Fixture.wait_ms` 同值（缺省 1200）。
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            // `RM_MAGIC_LVEXP` 到点 ⇒ 640（与 `sim_loop` 同序：B4 先、B3 后）。
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step_frames, _raws2) = rig.drain();
+            for f in step_frames.drain(..) {
+                all_frames.push((f.0, f.1, elapsed as i64));
+            }
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
+        let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
+        let mi = rig.magic_table.get(magic_id).expect("魔表必须有该魔号");
+        // ---- 夹具前提（先于帧断言执行；前提坏了要在这里红，而不是让下游断言变永真）----
+        let n_level = skill_tail_n_level(level_after, mi.train_lv);
+        let mt_used = mi.max_train.get(n_level).copied().unwrap_or(0);
+        // ---- RM 列（**装配**、弱比较面；映射见 P1 设计件 §5.2，不作为主判据）----
+        // `10008 RM_SPELL`：wParam=Effect、p1/p2=点击坐标、p3=MagicId、prio=(byte)10008=24；
+        // `10120 RM_MAGICFIRE`：p1=MakeWord(EffectType,Effect)、p2=MakeLong(x,y)、p3=目标、
+        //                      prio=(byte)10120=136；
+        // `10123 RM_MAGIC_LVEXP`：p1=MagicId、p2=Level、p3=TranPoint、prio=Lowest(255)、late。
+        let rm = |ident: i64, w: i64, p1: i64, p2: i64, p3: i64, prio: i64, late: bool| {
+            serde_json::json!({
+                "ident": ident, "wParam": w, "p1": p1, "p2": p2, "p3": p3,
+                "priority": prio, "late": late
+            })
+        };
+        let spell_rm = rm(
+            10008,
+            i64::from(mi.effect),
+            101,
+            100,
+            i64::from(magic_id),
+            24,
+            false,
+        );
+        let fire_rm = rm(
+            10120,
+            0,
+            i64::from(mi.effect_type) | (i64::from(mi.effect) << 8),
+            101 | (100 << 16),
+            i64::from(target),
+            136,
+            false,
+        );
+        let lvexp_rm = rm(
+            10123,
+            0,
+            i64::from(magic_id),
+            i64::from(level_after),
+            i64::from(tp_after),
+            255,
+            true,
+        );
+        let rm_of = |who: &str| -> Vec<serde_json::Value> {
+            match who {
+                "caster" => vec![spell_rm.clone(), fire_rm.clone(), lvexp_rm.clone()],
+                "target" | "obs_in" => vec![spell_rm.clone(), fire_rm.clone()],
+                _ => Vec::new(),
+            }
+        };
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_of(who),
+                "Sent": fireball_sent_with_due(&all_frames, socket),
+            }));
+        }
+        let train = serde_json::json!({
+            "level_before": level_before,
+            "level_after": level_after,
+            "tran_point_before": tp_before,
+            "tran_point_after": tp_after,
+            "train_lv": mi.train_lv,
+            "max_train0": mi.max_train.first().copied().unwrap_or(0),
+            "n_level": n_level,
+            "max_train_at_level": mt_used,
+            "train_level_at_level": mi.train_level[n_level],
+        });
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            // `verify` 的 `Rng` 判据 = `golden.Rng == rust.Rng ++ rust.DeliverRng`（cover_drain）。
+            // 本 leaf 的两段：施法段恰 1 抽（`Random(3)+1`），交付段 0 抽（640 只出帧）。
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "DeliverRngSeqs": deliver_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "Train": train,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        // ---- 断言（**写在落盘之后**：红了也要留下本次台账，比较器才能给「语义红」而非「陈旧」）----
+        // 顺序：前提 → 抽数 → 帧面。前提坏了要在这里红，而不是让下游断言变永真。
+        assert!(
+            i64::from(mt_used) > i64::from(tp_after),
+            "[{stem}/{label}] 前提：MaxTrain[nLevel={n_level}]={mt_used} 必须 > TranPoint={tp_after}"
+        );
+        assert!(
+            mi.train_lv > level_after,
+            "[{stem}/{label}] 前提：TrainLv={} 必须 > Level={level_after}",
+            mi.train_lv
+        );
+        assert_eq!(
+            level_after, level_before,
+            "[{stem}/{label}] 本批只做未升级支（Level 不得变化）"
+        );
+        assert_eq!(
+            cast_rng.len(),
+            1,
+            "[{stem}/{label}] 训练尾应恰 1 抽（Random(3)+1）"
+        );
+        // ---- 帧面（oracle 形态，**不依赖 golden**：驱动自带的牙面）----
+        // 牙 A（去 638）/C（去 640）/D（caster 收 17）都先在这里红，再让比较器红。
+        let idents = |socket: i32| -> Vec<u16> {
+            all_frames
+                .iter()
+                .filter(|(s, _, _)| *s == socket)
+                .map(|(_, b, _)| sf_ident(b))
+                .collect()
+        };
+        assert_eq!(
+            idents(911),
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_MAGIC_LVEXP
+            ],
+            "[{stem}/{label}] caster 帧序应为 [638, 640]"
+        );
+        assert!(
+            !idents(911).contains(&mir2_protocol::messages::SM_SPELL),
+            "[{stem}/{label}] caster 不得收 SM_SPELL(17)（`PlayObject.Message.cs:1455` 自守卫）"
+        );
+        for socket in [912, 913] {
+            assert_eq!(
+                idents(socket),
+                vec![
+                    mir2_protocol::messages::SM_SPELL,
+                    mir2_protocol::messages::SM_MAGICFIRE
+                ],
+                "[{stem}/{label}] socket {socket} 帧序应为 [17, 638]"
+            );
+        }
+        assert!(idents(914).is_empty(), "[{stem}/{label}] obs_out 必须零帧");
+        eprintln!(
+            "[{stem} {label}] seed={seed} level {level_before}->{level_after} tp {tp_before}->{tp_after} rng={cast_rng:?} deliver={deliver_rng:?} frames={}",
+            all_frames.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill49_parity_s1() {
+        skill_tail_parity_drive("skill49", 49, "s1", golden_seed("skill49", "s1"), 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill49_parity_s5() {
+        skill_tail_parity_drive("skill49", 49, "s5", golden_seed("skill49", "s5"), 2000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill49_parity_s13() {
+        skill_tail_parity_drive("skill49", 49, "s13", golden_seed("skill49", "s13"), 3000);
+    }
+
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
     /// 金标准某接收者 `Sent` 里 `ident` 的帧（按序；**期望只从 golden 来**）。
     fn golden_sent_ident(stem: &str, label: &str, who: &str, ident: i64) -> Vec<serde_json::Value> {

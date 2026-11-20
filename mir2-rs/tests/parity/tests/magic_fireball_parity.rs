@@ -1932,6 +1932,157 @@ fn real_rust_ledger_snowwind() {
     );
 }
 
+/// **`49`（`SKILL_49`；共享尾 B 类，case 体只有 `boTrain = true;`）**真实台账 → 判定面（s1/s5/s13）。
+///
+/// oracle 面（`src/M2Server/Magic/MagicManager.cs`）：`:159 RM_SPELL`（处理器自守卫 ⇒ 施法者
+/// **不收**自己的 `SM_SPELL(17)`）→ `:648 RM_MAGICFIRE`（含自己）→ `:659/:661` 门内
+/// **恰一次** `Random(3)+1`（`:663`）→ `:666 SendSelfDelayMsg(RM_MAGIC_LVEXP, …, **1000**)`。
+///
+/// 本 leaf 除通用 `real_ledger_verify_labels`（帧/RNG/Rm/HP 面）外另钉：
+/// - 帧序/时延：caster = `[638@0]` + `640@1000ms` 且 **恰 0 条 17**（负向断言，钉自守卫）；
+///   target/obs_in = `[17@0, 638@0]`；obs_out = 空。
+/// - `Train` 块逐字段两侧相等（`Level` 不变、`TranPoint` 恰加 `1..=3`）。
+/// - **前提断言**：`max_train[n_level] > tran_point_after`——MaxTrain 调小会让
+///   `CheckMagicLevelUp` 成功 ⇒ 640 改走 `PlayObject.cs:5216` 的 800ms 支（本批 scope 外）；
+///   没有这条，下面的「Level 不变」在前提被破坏后会静默变永真。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill49_parity_*）生成真实台账"]
+fn real_rust_ledger_skill49() {
+    const STEM: &str = "skill49";
+    let golden = golden_file("skill49.json");
+    let dir = ledger_dir();
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+    );
+    // 某 case 某接收者的 `(ident, due_ms_rel)` 序列。
+    let seq = |case: &Value, who: &str| -> Vec<(i64, i64)> {
+        case["Receivers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Sent"].as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|f| (num(f, "ident"), num(f, "due_ms_rel")))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for label in ["s1", "s5", "s13"] {
+        // ---- golden 侧 ----
+        let g_case = golden["cases"]
+            .as_array()
+            .and_then(|cs| cs.iter().find(|c| c["Label"] == label))
+            .unwrap_or_else(|| panic!("[{label}] 金标准缺该支"));
+        let g_train = &g_case["Train"];
+        assert!(
+            g_train.is_object(),
+            "[{label}] 金标准缺 `Train` 块（`SkillTail` 夹具必须落盘训练面）"
+        );
+        // ---- 台账侧（防空转：缺件/陈旧/标签不符一律红，不静默跳过）----
+        let path = dir.join(format!("{STEM}_{label}.json"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("防空转：缺真实台账 {}（{e}）", path.display()));
+        let side = path.with_extension("run.json");
+        let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+            panic!(
+                "防空转：台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到上一次的陈旧台账」",
+                side.display()
+            )
+        });
+        let side_v: Value = serde_json::from_str(&side_text).expect("run.json 必须是合法 JSON");
+        assert_eq!(
+            side_v.get("run_id").and_then(Value::as_str),
+            Some(want.as_str()),
+            "[{label}] 台账陈旧：run_id 不匹配（当前环境 = {want}）；先用同一 id 重跑驱动"
+        );
+        let v: Value = serde_json::from_str(&text).expect("台账必须是合法 JSON");
+        let arr = v.as_array().expect("台账必须是 [case] 数组");
+        assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
+        let r_case = &arr[0];
+        assert_eq!(
+            r_case["Label"].as_str(),
+            Some(label),
+            "[{label}] 台账 Label 不符"
+        );
+        let r_train = &r_case["Train"];
+        for k in [
+            "level_before",
+            "level_after",
+            "tran_point_before",
+            "tran_point_after",
+            "train_lv",
+            "max_train0",
+            "n_level",
+            "max_train_at_level",
+            "train_level_at_level",
+        ] {
+            assert_eq!(
+                num(g_train, k),
+                num(r_train, k),
+                "[{label}] Train.{k} 两侧不等（golden={} 台账={}）",
+                num(g_train, k),
+                num(r_train, k)
+            );
+        }
+        // ---- 训练面形态（前提与载荷；两侧相等已在上；这里钉语义）----
+        assert_eq!(
+            num(g_train, "level_after"),
+            num(g_train, "level_before"),
+            "[{label}] 本批只做未升级支：Level 不得变化"
+        );
+        assert_eq!(
+            num(g_train, "tran_point_before"),
+            0,
+            "[{label}] 夹具前提：初始 TranPoint 必须显式 0（否则「恰加 1..=3」不可钉）"
+        );
+        let tp = num(g_train, "tran_point_after");
+        assert!(
+            (1..=3).contains(&tp),
+            "[{label}] TranPoint 应 = Random(3)+1 ∈ 1..=3，实得 {tp}"
+        );
+        assert!(
+            num(g_train, "max_train_at_level") > tp,
+            "[{label}] 前提：MaxTrain[n_level] 必须 > TranPoint（否则 640 走 800ms 升级支，本批 scope 外）"
+        );
+        assert_eq!(
+            num(g_train, "n_level"),
+            num(g_train, "level_after"),
+            "[{label}] `nLevel` 规则（Level<4 && TrainLv>=Level ⇒ nLevel=Level）不成立 ⇒ MaxTrain 断言核错了项"
+        );
+        // ---- 帧面（golden 与台账同判；负向面只对**产品侧**有意义，故台账侧单独钉）----
+        for (case, side_name) in [(g_case, "golden"), (r_case, "台账")] {
+            let caster = seq(case, "caster");
+            let n17 = caster.iter().filter(|(id, _)| *id == 17).count();
+            assert_eq!(
+                n17, 0,
+                "[{label}/{side_name}] caster 恰 0 条 SM_SPELL(17)（`PlayObject.Message.cs:1455` 自守卫），实得 {caster:?}"
+            );
+            assert_eq!(
+                caster,
+                vec![(638, 0), (640, 1000)],
+                "[{label}/{side_name}] caster 帧序应为 [638@0, 640@1000ms]"
+            );
+            for who in ["target", "obs_in"] {
+                assert_eq!(
+                    seq(case, who),
+                    vec![(17, 0), (638, 0)],
+                    "[{label}/{side_name}] {who} 帧序应为 [17@0, 638@0]"
+                );
+            }
+            assert!(
+                seq(case, "obs_out").is_empty(),
+                "[{label}/{side_name}] obs_out 必须零帧"
+            );
+        }
+    }
+    // 通用面：帧逐字段（含 recog/due_ms_rel/tail）+ `Rng == Rng ++ DeliverRng` + Rm 多重集 + HP。
+    real_ledger_verify_labels(STEM, &golden, &["s1", "s5", "s13"]);
+}
+
 /// **`9 地狱火`（`SKILL_FIRE`）**真实台账 → 判定面（标签 s1/s5/s13）。
 ///
 /// 判定面：逐格穿透骰门 + `RM_MAGSTRUCK(8044)` 逐怪（怪物不 `Operate` ⇒ `Sent` 空、RM 为准）
