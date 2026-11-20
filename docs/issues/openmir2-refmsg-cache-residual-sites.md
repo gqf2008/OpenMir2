@@ -49,6 +49,7 @@
 | # | 站点（file:符号） | 帧族 | 现状 | 修法 |
 | --- | --- | --- | --- | --- |
 | 19 | `lib.rs::broadcast_healthspellchanged`（**新登记，7b 期间发现**） | 53 族 | **手写 `online` 循环**（`ObMode/FixedHideMode` 早退 + 同图 ±range + `!Ghost`），既不调 `chat::hear_targets` 也不走 `ref_msg_cache` ⇒ 每次全额重算；oracle 的 `HealthSpellChanged → SendRefMsg(53)` 应过缓存。**不在原 17 点清单的原因**：原清单口径是「按 `chat::hear_targets` 直算收件人」，它是同形的手写循环未被清点。 | 与 7 系列同法接 `ref_msg_cache::targets`；注意其既有边界用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out` 现钉「dx=12 收」的**未缓存**口径，接入时须按 oracle 改期望并留痕。 |
+| 20 | `lib.rs::broadcast_feature_changed` / `broadcast_feature_changed_except`（**新登记，残余普查补漏**） | `RM_FEATURECHANGED`→`SM_FEATURECHANGED(41)` | **手写 `online` 循环**（同图 ±range、`skip` 过滤），不走 `ref_msg_cache`；oracle `BaseObject.FeatureChanged()` 是 `SendRefMsg(RM_FEATURECHANGED)` ⇒ 应过缓存。**不在原 17 点清单的原因**：清单口径只收了 `chat::hear_targets` 直算点。 | 同 7 系列接 `ref_msg_cache::targets`（`skip` 语义保留为循环内过滤）；牙：同窗两次 `feature_changed` 的 12 格边界只收首帧。 |
 
 ## 3. 修法（统一）
 
@@ -225,3 +226,19 @@
   `spell36_amulet_fail_639_hits_cache`（639）、
   `spell_broadcast_cache_decides_by_call_order_not_queue_priority`（**调用序 ≠ 出队优先级序**：
   先调 657（155）后调 638（136），线上 638 在前，但缓存按调用序 ⇒ 657 收、638 挡）。
+
+### 残余普查补漏表（2026-11-20，7b 期间；只登记不改）
+> 口径：**凡是自己算空间收件人并广播的循环都算旁路**，不管调不调 `chat::hear_targets`。
+
+| 符号 | 是否空间广播旁路 | 已登记 | 判据/处置 |
+| --- | --- | --- | --- |
+| `lib.rs::broadcast_healthspellchanged` | 是（53，手写 `online` 循环） | **#19（本批补登）** | oracle `HealthSpellChanged→SendRefMsg` |
+| `lib.rs::broadcast_feature_changed(_except)` | 是（41，手写循环 + `skip`） | **#20（本批补登）** | oracle `BaseObject.FeatureChanged()` = `SendRefMsg` |
+| `lib.rs::apply_pending_gm_mountride` | 空间循环，但帧 `SM_MOUNTRIDE(1118)` 是 **Rust 自造（D-15，oracle 骑马死）** | 不登记 | 非 oracle `SendRefMsg`，缓存语义不适用 |
+| `castle.rs::fan_out_sysmessage_to_all` / `lib.rs::fan_out_world_sysmessage` | 否（SysMsg 广播，`SendBroadCastMsg` 语义） | 不登记 | 非 `SendRefMsg` |
+| `lib.rs::broadcast_day_changing` | 否 | 不登记 | oracle 是 `SendMsg(RM_DAYCHANGING)` 自队列 |
+| `lib.rs::drain_line_notice` | 否 | 不登记 | 行公告（`SendMsg` 系） |
+| `apply_pending_gm_castle_commands`（StartContest） | 否 | 不登记 | 状态写循环（FightZoneDieCount=0），不出帧 |
+| `lib.rs::drain_buff_downlink` | 否 | 不登记 | 按 actor 单播，非空间广播 |
+| `lib.rs::drain_aoi_downlink` | 否 | 不登记 | 出现帧按观察者 `SendMsg`，非 `SendRefMsg` |
+| `drain_npc_merchant_turns/hits`、`drain_merchant_disappears`、`fan_out_npc_hear`、`handle_say_with_saves` | 是 | 已覆盖（C1/C3/批1） | — |
