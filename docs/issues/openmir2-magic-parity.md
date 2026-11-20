@@ -1219,7 +1219,9 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **契约扩展（schema v2，向后兼容）**：
   - 输入 `MagicSpec.PoisonStates[3]`（**走到状态分支的用例必须显式写**，不靠缺省 0）；
     golden `Fixture.status_time_arr = {dechealth,damagearmor,stone}`（仅该字段被显式给出时出现，
-    既有件**零变化**——已重跑 17 件装置输出核对：除既有墙钟 `delivery` 外无任何差异）。
+    既有件**零变化**——已重跑装置输出核对：**16 件零差异**（除既有墙钟 `delivery`）；另两件各有原因：
+    `lightflower` 当时**分派缺失**（已由 `896390238` 修复，见 §37）、`firecharm` **两次运行不一致**
+    （既有装置墙钟依赖，已另立卡 `openmir2-firecharm-nondeterminism`）。
   - 输出 case `StatusTimeArr = {dechealth,damagearmor,stone}`（术后值）。
   - 台账同形两键 `StatusTimeArrBefore/After`；比较器三处逐值比（golden Fixture ↔ 台账 Before、
     golden case ↔ 台账 After）。

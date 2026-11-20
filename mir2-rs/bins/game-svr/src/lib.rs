@@ -68932,7 +68932,7 @@ SendRefMsgRange=15
     }
 
     /// **`40`（`SKILL_UNAMYOUNSUL`）**：四支分支矩阵（门开+全非零 / 门关+全非零 / 门开+全零 /
-    /// 门开+混合）。三态计时器输入取 golden `Fixture.status_time_arr`，术后值在驱动内按
+    /// 门开+混合）。**边界（§26）**：断言只到 DoSpell 时刻（计时器归 1），"解毒生效"在 Run，不在本支。三态计时器输入取 golden `Fixture.status_time_arr`，术后值在驱动内按
     /// "门结果 + 术前值"独立推导并断言（与装置侧同一规则）。
     fn unamyounsul_assert(label: &str, base: i32) {
         fireball_parity_drive(

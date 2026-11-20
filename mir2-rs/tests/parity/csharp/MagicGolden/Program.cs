@@ -1265,6 +1265,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
     ///
     /// 门 = `Random(7) - (UserMagicLevel + 1) &lt; 0`（Level=1 ⇒ 首抽 &lt; 2 为开）；
     /// 非零初值取 **5/6/7 互不相同**（"置 1"前后可辨）。四支：
+    /// **边界（§26）**：断言只到 DoSpell 时刻——`StatusTimeArr` 归 1 不等于"解毒生效"（清除发生在 Run）。
     /// `gate_open_all`（开+全非零 ⇒ 全归 1）、`gate_closed_all`（关+全非零 ⇒ 不动）、
     /// `gate_open_zero`（开+全零 ⇒ 不动）、`gate_open_mixed`（开+混合 ⇒ 仅非零项归 1）。
     /// 术后值由 `RunMagicCase` 内按"门结果+术前值"独立推导并断言（不拿实现输出自证）。
