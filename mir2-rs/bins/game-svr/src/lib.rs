@@ -96807,6 +96807,72 @@ fn ",
             "|Δ|=11：638（调用在后）命中 ⇒ 不收（缓存判定按调用序，不随队列顺序漂）"
         );
     }
+
+    /// **7b 边界判据（opc-07 要求专钉）**：一次施法里 `RM_SPELL(17)` 是**唯一刷新**，
+    /// 12 格边界（|Δ|=11/12）**只收 17**、不收任何 7b 帧（此处取 53/638）；+13 零帧。
+    #[test]
+    fn spell_boundary_only_gets_spell_frame_17() {
+        let (
+            mut world,
+            caster,
+            target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(22, 12, 10);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.show_hp = true;
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            22,
+            u16::try_from(target).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let spell = mir2_protocol::messages::SM_SPELL;
+        let nc = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let fire = mir2_protocol::messages::SM_MAGICFIRE;
+        assert_eq!(per.get(&(903, spell)), Some(&1), "|Δ|=11：只收 17");
+        assert_eq!(
+            per.get(&(904, spell)),
+            Some(&1),
+            "|Δ|=12：只收 17（闭区间）"
+        );
+        assert_eq!(per.get(&(903, nc)), None, "|Δ|=11：不收 53");
+        assert_eq!(per.get(&(904, nc)), None, "|Δ|=12：不收 53");
+        assert_eq!(per.get(&(903, fire)), None, "|Δ|=11：不收 638");
+        assert_eq!(per.get(&(904, fire)), None, "|Δ|=12：不收 638");
+        assert_eq!(per.get(&(905, spell)), None, "+13：17 零帧");
+        assert_eq!(per.get(&(905, nc)), None, "+13：53 零帧");
+    }
 }
 
 #[cfg(test)]

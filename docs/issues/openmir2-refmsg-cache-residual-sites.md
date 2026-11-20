@@ -46,6 +46,10 @@
 > 收件人走 `broadcast_ref_msg_opt`，已在 T-287 接入缓存；此处仅列作对照，不计入"残余 19 处"。
 > （残余计数 = #1–#18 共 18 行，其中 #9 含两处站点 ⇒ 19 处。）
 
+| # | 站点（file:符号） | 帧族 | 现状 | 修法 |
+| --- | --- | --- | --- | --- |
+| 19 | `lib.rs::broadcast_healthspellchanged`（**新登记，7b 期间发现**） | 53 族 | **手写 `online` 循环**（`ObMode/FixedHideMode` 早退 + 同图 ±range + `!Ghost`），既不调 `chat::hear_targets` 也不走 `ref_msg_cache` ⇒ 每次全额重算；oracle 的 `HealthSpellChanged → SendRefMsg(53)` 应过缓存。**不在原 17 点清单的原因**：原清单口径是「按 `chat::hear_targets` 直算收件人」，它是同形的手写循环未被清点。 | 与 7 系列同法接 `ref_msg_cache::targets`；注意其既有边界用例 `broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out` 现钉「dx=12 收」的**未缓存**口径，接入时须按 oracle 改期望并留痕。 |
+
 ## 3. 修法（统一）
 
 1. 每处把 `chat::hear_targets(world, id, range)` 换成 `crate::ref_msg_cache::targets(world, id, range)`；
@@ -208,6 +212,13 @@
 | 9/10/22/36 延迟 53 | 53 | `BaseObject.cs:700-709` `HealthSpellChanged` | 17 之后 | 命中 |
 | 36 无极真气 amulet 失败支 | 639 | `PlayObject.Base.cs:644-647`（`boSpellFail` 保持 true） | 17 之后 | 命中 |
 | 36 无极真气 `invalid_cast` 防御臂 | 639 | `PlayObject.Base.cs:1525-1529`（同上） | — | **当前入口不可达**（登记；行为牙不可用） |
+- **判据形态（写死）**：**17 刷新、7b 全命中**——12 格边界只收 `SM_SPELL(17)`；专钉用例
+  `spell_boundary_only_gets_spell_frame_17`（|Δ|=11/12 收 17、不收 53/638；+13 零帧）。
+- **缺口登记（36 `invalid_cast` 防御臂）**：`handle_spell_cmd_with_magic` 的 36 无极真气
+  `out.invalid_cast` 支（`PlayObject.Base.cs:1525-1529` 语义镜像）**当前入口不可达**——
+  `cast_uenhancer_spell` 的 `invalid_cast = 目标 race != Play`，而上游 `is_proper_friend`
+  要求 PLAY 目标 ⇒ 该臂只有在「非玩家目标也满足 proper-friend」的语义出现时才可达（当前
+  无此模型）。**m36 记为「该站点无可用行为牙」，既不算通过也不算失败**；其余 8 点牙必须行为化。
 - 用例：`spell_shared_tail_53_and_638_hit_cache_after_spell_frame`（53/638）、
   `spell_group_lightening_638_and_716_hit_cache`（638+716 多次）、
   `spell_shield_657_hits_cache_on_each_cast`（657）、`spell_defence_area_657_hits_cache`（657）、
