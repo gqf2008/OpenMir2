@@ -500,3 +500,19 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
 
 **状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
+
+### 9.16 IT-07 卷轴 Shape12（六属性 buff）— 第一批结构
+
+**归类**：**StdMode 3 / Shape 12**，`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`，**内联**，不走 `EatUseItems`）。六个**独立** `if`（可同时命中），各看模板一个字节：`LoByte(DC)`→DCUP、`LoByte(MC)`→MCUP、`LoByte(SC)`→SCUP、`HiByte(AC)`→HITSPEEDUP、`LoByte(AC)`→HPUP、`LoByte(MAC)`→MPUP。每命中：`ExtraAbil=max(旧,字节)`、`Flag=0`、`Times=max(旧, now + HiByte(DC)*60000 + HiByte(MAC)*1000)`。**无 RNG**；全不命中 ⇒ 不吃（636）。
+
+**照抄勿修（与 "sec." 同节，都是 oracle 原样）**
+- **HitSpeed 不对称**：`RecalcAbilitys` 的 HITSPEEDUP 块写临时字段 `HitSpeed`（`src/M2Server/Player/PlayObject.cs:2830-2832`），尾段 `HitSpeed = AddAbil.HitSpeed`（`:2899`）覆盖它；657 载荷在覆盖**之前**取（`:2874-2876`）⇒ **657.Tag 含 buff、落地字段不含**，并非双重计数。
+- **文本**：六条蓝字是硬编码，非 `MessageSettings`；其中 **MC 那条以 `"sec."` 结尾**，其余五条 `"秒。"`（`:2116` 原文）。golden 里要能看见原文。
+
+**帧/泵序**：635/636 直发；每命中一条蓝 `RM_SYSMESSAGE`(11004→252)，`RecalcAbilitys` 后 `RM_ABILITY`(10051→67)，吃完另有 `RM_WEIGHTCHANGED`(10115→131)；`RecalcAbilitys` 尾部 10139(155)。**同优先级陷阱**：最多 6 条 11004 ⇒ 出队序是堆 sift 序，夹具记出队序；若实测等于入队序也如实写（不反推"泵稳定"）。
+
+**10139 依赖**：吃路径上 10139 目前**两条都缺**（自通知 + 观察者，见 `docs/issues/openmir2-charstatuschanged-gap.md`，`2f` 在补）⇒ 本卡对 657 的期望是**两条**，并记"待 10139 落地后复评"，不算本卡缺陷。
+
+**第一批已落地（结构）**：`use_item` 的 `3 if tpl.shape == 12` 臂（六槽写入 + 蓝字通知 + `eaten`）；`UseItemContext` 增 `blue_msg_fcolor/bcolor`、`now_ms`；宿主写回实体 `BuffState` 的三个数组 → `RecalcAbilitys` → `RM_ABILITY`；三条纯用例（六命中/全零不吃/max 合并）+ 全量 `--lib 2078/0/65`、clippy rc=0。
+
+**状态**：`missing`（清单未动；等探针/比较器/牙齐了再改并先报 `opc-19`）。

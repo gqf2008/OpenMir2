@@ -10620,6 +10620,16 @@ fn handle_eat_cmd(
     // **IT-16 彩票**：oracle 走到 `EatUseItems` case 11 的判据 = 本件模板
     // `StdMode==3 && Shape==11`（`PlayObject.Base.cs:2162-2163/2298`）。
     // 死亡/禁药/物品不存在时 `out.eaten` 为 false，后续不抽、不计数。
+    // **IT-07 卷轴 Shape12**：oracle `EatItems` 的 `case 12` 在**吃完后**做 `RecalcAbilitys + RM_ABILITY`；
+    // 纯 `use_item` 只落 `ExtraAbil/Flag/Times` 与蓝字通知。
+    let shape12_item = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == recog)
+        .and_then(|it| catalog.get(it.index))
+        .is_some_and(|t| t.std_mode == 3 && t.shape == 12);
+    // **IT-16 彩票**：判据 = 本件模板 `StdMode==3 && Shape==11`（模板查找在形状 12 之后复用同一写法）。
     let lottery_item = sg
         .state
         .item_list
@@ -10682,6 +10692,9 @@ fn handle_eat_cmd(
         green_msg_bcolor: u16::from(colors.green_b),
         repair_item_dec_dura,
         sysmsg,
+        blue_msg_fcolor: u16::from(colors.blue_f),
+        blue_msg_bcolor: u16::from(colors.blue_b),
+        now_ms: now_ms() as i32,
         recalc: Some(recalc),
     };
     let mut out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
@@ -10769,6 +10782,31 @@ fn handle_eat_cmd(
                 text,
             });
         }
+    }
+
+    // **IT-07 卷轴 Shape12 宿主半**（oracle `Base.cs:2153-2158`）：写回实体 → `RecalcAbilitys` → `RM_ABILITY`。
+    // **照抄 oracle 的不对称，勿修**：`RecalcAbilitys` 的 HITSPEEDUP 块只写临时字段 `HitSpeed`
+    // （`PlayObject.cs:2830-2832`），尾段 `HitSpeed = AddAbil.HitSpeed`（`:2899`）再覆盖它；而 657 的载荷
+    // 在覆盖**之前**取用（`:2874-2876`）⇒ **657.Tag 含 buff、落地字段不含**。别"修"成两边都含。
+    // （`apply_extra_abil` 本就不含槽 3，与此一致。）
+    // `RecalcAbilitys` 尾部另发 10139（自通知 + 观察者两条，见 openmir2-charstatuschanged-gap.md）。
+    if out.eaten && shape12_item {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            // `BuffState` 是这三组字段的可变组件（`EntityRef` 上的同名扁平字段是只读投影）。
+            e.buff.extra_abil = state.extra.extra_abil;
+            e.buff.extra_abil_flag = state.extra.extra_abil_flag;
+            e.buff.extra_abil_times = state.extra.extra_abil_times;
+        }
+        let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        out.notices.push(game_svr::useitem::QueuedNotice {
+            ident: game_svr::useitem::RM_ABILITY,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            text: game_svr::useitem::NoticeText::None,
+        });
     }
 
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/

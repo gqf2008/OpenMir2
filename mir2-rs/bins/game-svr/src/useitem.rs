@@ -120,6 +120,8 @@ pub const RM_SYSMESSAGE: i32 = 11004;
 /// `RM_GOLDCHANGED`（`src/OpenMir2/Messages.cs`）：`GoldChanged()` 入队的那条；
 /// IT-16 彩票中奖的 `SM_GOLDCHANGED(653)` 经此出帧。
 pub const RM_GOLDCHANGED: i32 = mir2_protocol::messages::RM_GOLDCHANGED as i32;
+/// `RM_ABILITY`（Shape12 的 `RecalcAbilitys` 之后补发；与 IT-12 同名常量同源）。
+pub const RM_ABILITY: i32 = mir2_protocol::messages::RM_ABILITY as i32;
 /// `RM_DURACHANGE`（`Messages.cs` 10125；修复油 `RepairWeapon` 的 `SendMsg(RM_DURACHANGE,1,Dura,DuraMax,0)`）。
 pub const RM_DURACHANGE: i32 = 10125;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
@@ -278,6 +280,11 @@ pub struct UseItemContext<'a> {
     /// `MessageSettings` 的文本（`SysMsg` 的 `sMsg`）：禁药红字与修复油绿字。
     /// 缺省 = oracle 源码默认（见 [`SysMsgTexts`]）。
     pub sysmsg: SysMsgTexts<'a>,
+    /// `[Setup] BlueMsgFColor/BlueMsgBColor`：Shape12 的蓝字 `SysMsg(_, Blue, Hint)`。
+    pub blue_msg_fcolor: u16,
+    pub blue_msg_bcolor: u16,
+    /// 宿主墙钟（`HUtil32.GetTickCount()`）：Shape12 的 `ExtraAbilTimes[k] = max(旧, now + 时长)`。
+    pub now_ms: i32,
     /// `RefMyStatus()` 里 `RecalcAbilitys()` 的观测输入（`PlayObject.cs:2008`）。StdMode 1 跨档才用到；
     /// `None` 时**不**复算 `WAbil`（只发 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）——见模块「未做清单」T-17。
     pub recalc: Option<RecalcInputs<'a>>,
@@ -617,6 +624,54 @@ pub fn use_item(
                             3 if tpl.shape == 11 => {
                                 eaten = true;
                             }
+                            // **IT-07** 卷轴 Shape12：`EatItems` 的 `case 12`（`src/M2Server/Player/PlayObject.Base.cs:2101-2157`）。
+                            // 六个**独立** `if`（可同时命中），每个看模板的一个字节；**无 RNG**。
+                            // 全不命中 ⇒ `result=false` ⇒ 不吃（636）。文本照抄 oracle（含 MC 那条的 "sec."，见卡）。
+                            3 if tpl.shape == 12 => {
+                                let dur = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
+                                    * 60_000
+                                    + i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) * 1_000;
+                                let mut need = false;
+                                // 顺序 = oracle 的六个 if 顺序：DC低/MC低/SC低/AC高/AC低/MAC低。
+                                for (slot, val) in [
+                                    (0usize, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.dc))), // EABIL_DCUP
+                                    (1, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.mc))), // EABIL_MCUP
+                                    (2, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.sc))), // EABIL_SCUP
+                                    (3, u16::from(mir2_shared::hutil32::hi_byte_u16(tpl.ac))), // EABIL_HITSPEEDUP
+                                    (4, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.ac))), // EABIL_HPUP
+                                    (5, u16::from(mir2_shared::hutil32::lo_byte_u16(tpl.mac))), // EABIL_MPUP
+                                ] {
+                                    if val > 0 {
+                                        state.extra.extra_abil[slot] =
+                                            state.extra.extra_abil[slot].max(val);
+                                        state.extra.extra_abil_flag[slot] = 0;
+                                        let t = i64::from(ctx.now_ms.wrapping_add(dur));
+                                        state.extra.extra_abil_times[slot] =
+                                            state.extra.extra_abil_times[slot].max(t);
+                                        // 文本照抄 oracle（`PlayObject.Base.cs:2108-2147`，含 MC 那条 "sec."）。
+                                        let d = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc))
+                                            + i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) / 60;
+                                        let sec = i32::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) % 60;
+                                        let text = match slot {
+                                            0 => format!("攻击力瞬间提高{d}分{sec}秒。"),
+                                            1 => format!("魔法力瞬间提高{d}分{sec}sec."),
+                                            2 => format!("精神力瞬间提高{d}分{sec}秒。"),
+                                            3 => format!("攻速瞬间提高{d}分{sec}秒。"),
+                                            4 => format!("体力值瞬间提高{d}分{sec}秒。"),
+                                            _ => format!("魔法值瞬间提高{d}分{sec}秒。"),
+                                        };
+                                        notices.push(QueuedNotice::sysmsg_text(
+                                            ctx.blue_msg_fcolor,
+                                            ctx.blue_msg_bcolor,
+                                            &text,
+                                        ));
+                                        need = true;
+                                    }
+                                }
+                                if need {
+                                    eaten = true;
+                                }
+                            }
                             _ => {}
                         }
                         if eaten {
@@ -940,6 +995,128 @@ mod tests {
         assert!(cases_or_red(&fixture()).is_ok(), "真实夹具必须过防空转");
     }
 
+    fn shape12_ctx<'a>(
+        cat: &'a StdItemCatalog,
+        unbind: &'a UnbindList,
+        now: i32,
+    ) -> UseItemContext<'a> {
+        UseItemContext {
+            catalog: cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: 1,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            green_msg_fcolor: 219,
+            green_msg_bcolor: 255,
+            repair_item_dec_dura: 90,
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: now,
+            recalc: None,
+        }
+    }
+
+    fn shape12_run(
+        tpl: StdItem,
+        state0: UseItemActorState,
+        now: i32,
+    ) -> (UseItemOutcome, UseItemActorState) {
+        let mut cat = StdItemCatalog::new();
+        cat.insert(2300, tpl);
+        let unbind = UnbindList::default();
+        let ctx = shape12_ctx(&cat, &unbind, now);
+        let mut state = state0;
+        let mut list = vec![crate::bag::BagItem {
+            make_index: 1,
+            index: 2300,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut list, &mut item_number);
+        (out, state)
+    }
+
+    fn shape12_tpl(dc: u16, mc: u16, sc: u16, ac: u16, mac: u16) -> StdItem {
+        StdItem {
+            name: "buff_scroll".into(),
+            std_mode: 3,
+            shape: 12,
+            dc,
+            mc,
+            sc,
+            ac,
+            mac,
+            ..Default::default()
+        }
+    }
+
+    /// **IT-07**：六个独立 `if` 全命中 ⇒ 六槽写入、时长 = `HiByte(DC)*60000 + HiByte(MAC)*1000`、
+    /// 六条蓝字通知、吃。
+    #[test]
+    fn it07_shape12_six_buffs() {
+        let (out, st) = shape12_run(
+            shape12_tpl(0x0505, 0x0007, 0x0003, 0x0410, 0x1E02),
+            UseItemActorState::default(),
+            1_000,
+        );
+        assert!(out.eaten, "至少一项命中 ⇒ 吃");
+        assert_eq!(
+            st.extra.extra_abil,
+            [5, 7, 3, 4, 16, 2, 0],
+            "六槽：DC低/MC低/SC低/AC高/AC低/MAC低（第 7 槽不参与）"
+        );
+        assert_eq!(st.extra.extra_abil_flag, [0; 7]);
+        // dur = 5*60000 + 30*1000 = 330000
+        // 第 7 槽（PWRRATE）不参与 Shape12 ⇒ 保持 0。
+        assert_eq!(
+            st.extra.extra_abil_times,
+            [331_000, 331_000, 331_000, 331_000, 331_000, 331_000, 0]
+        );
+        let blue = out
+            .notices
+            .iter()
+            .filter(|n| n.ident == RM_SYSMESSAGE && n.n_param1 == 251 && n.n_param2 == 252)
+            .count();
+        assert_eq!(blue, 6, "六条蓝字（颜色取自 BlueMsgFColor/BColor）");
+    }
+
+    /// **IT-07**：六字节全 0 ⇒ `result=false` ⇒ 不吃（636），无通知、状态不变。
+    #[test]
+    fn it07_shape12_all_zero_not_eaten() {
+        let (out, st) = shape12_run(
+            shape12_tpl(0, 0, 0, 0, 0),
+            UseItemActorState::default(),
+            1_000,
+        );
+        assert!(!out.eaten, "六项全不命中 ⇒ 不吃");
+        assert!(out.notices.is_empty());
+        assert_eq!(st.extra, ItemsExtraState::default());
+    }
+
+    /// **IT-07**：`max` 合并——更大的旧值/更晚的旧时长**不被覆盖**。
+    #[test]
+    fn it07_shape12_max_merge_keeps_larger_values() {
+        let mut state0 = UseItemActorState::default();
+        state0.extra.extra_abil[0] = 9; // > LoByte(DC)=5
+        state0.extra.extra_abil_times[0] = 1_000 + 400_000; // > now+dur=331_000
+        state0.extra.extra_abil_flag[0] = 1;
+        let (out, st) = shape12_run(shape12_tpl(0x0505, 0, 0, 0, 0), state0, 1_000);
+        assert!(out.eaten);
+        assert_eq!(st.extra.extra_abil[0], 9, "取 max，不覆盖更大的旧值");
+        assert_eq!(
+            st.extra.extra_abil_times[0], 401_000,
+            "取 max，不缩短更晚的旧时长"
+        );
+        assert_eq!(st.extra.extra_abil_flag[0], 0, "命中即清 flag");
+    }
+
     /// **IT-16 彩票（StdMode3/Shape11）宿主级**：夹具 `lottery` 块的**抽值逐值对拍** + 行为面。
     ///
     /// 口径（卡 §9.11）：oracle 与 Rust 共用 legacy `System.Random` 定种子流 ⇒ 夹具按用例序记录
@@ -1252,6 +1429,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -1428,6 +1608,9 @@ mod tests {
                 green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
                 repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
                 sysmsg: SysMsgTexts::default(),
+                blue_msg_fcolor: 251,
+                blue_msg_bcolor: 252,
+                now_ms: 0,
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
@@ -1810,6 +1993,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1860,6 +2046,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1917,6 +2106,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -1955,6 +2147,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -2007,6 +2202,9 @@ mod tests {
             green_msg_bcolor: u16v(&c["green_msg_bcolor"]),
             repair_item_dec_dura: i32v(&c["repair_item_dec_dura"]),
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState {
@@ -2078,6 +2276,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2159,6 +2360,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2250,6 +2454,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut item_number = 0;
@@ -2318,6 +2525,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let mut state = UseItemActorState::default();
@@ -2411,6 +2621,9 @@ mod tests {
             green_msg_bcolor: 0,
             repair_item_dec_dura: 90,
             sysmsg: SysMsgTexts::default(),
+            blue_msg_fcolor: 251,
+            blue_msg_bcolor: 252,
+            now_ms: 0,
             recalc: None,
         };
         let pack = BagItem {
