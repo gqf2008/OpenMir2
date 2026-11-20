@@ -489,7 +489,8 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 M2 Shape1 的 `HomeMap` 换当前图（例 1 终态图/落点变）；M3 删空 `HomeMap` 回落（例 2 不动）；
 M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tick 用例会话断言红）。
 
-**共用路径缺口（登记，**不是** IT-09 私有；影响所有走换图的卡）**：
+**共用路径缺口（登记，**不是** IT-09 私有；影响所有走换图的卡；已独立立卡
+[`docs/issues/openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）**：
 1. **766 `SM_AREASTATE` + 54 `SM_MAPDESCRIPTION`**：oracle `RM_CHANGEMAP` 处理器
    （`PlayObject.Message.cs:1774-1779`）在 `SendDefMessage(SM_CHANGEMAP)` 后还调 `RefUserState()`
    （`PlayObject.Base.cs:285` ⇒ `SM_AREASTATE(766)`）与 `SendMapDescription()`（`:887-895` ⇒
@@ -504,6 +505,43 @@ M4 不消耗物品（ItemList/Weight/622 变）；M5 3s 支不回写会话（tic
 
 **状态**：`implemented_unverified`（对拍面全绿 + 五牙，但共用路径缺口 1/2 未清 ⇒ 不计 verified）。
 转 verified 条件：上述两条并入共用换图路径并进本组对拍面。
+
+### 9.13 IT-10 随机传送 Shape2（`EatUseItems` move 组）— 宿主拦截 + 两支对拍（implemented_unverified）
+
+**归类**：`EatUseItems` case 2（`PlayObject.Base.cs:2238-2246`）：
+```
+if (!Envir.Flag.boNORANDOMMOVE)
+{ SendRefMsg(RM_SPACEMOVE_FIRE); BaseObjectMove(MapName, 0, 0); result = true; }
+```
+即：**未置位** ⇒ 吃 + 本图随机点（两次抽）；**置位** ⇒ `result=false` ⇒ `ClientUseItems` 落
+`SM_EAT_FAIL(636)`，**不消耗、不移动、无 FIRE**。门读的是**当前** `Envir.Flag`（不是目标图）。
+
+**实现**：与 IT-09 同一个钩子（`eat_move::maybe_eat_move` 的 Shape2 分支，§9.12）；本笔补**行为面证据**：
+探针两例 + Rust 侧两支用例 + 分支配读/目标图两颗牙。实现无新增代码路径（分支已随钩子落地）。
+`boNORANDOMMOVE` 判定 = `registry.flag_of(entity.map_id).bo_norandommove`（当前图）。
+
+**对拍（`it10_random_scroll_host_parity` / 单跑 `it10_random_branch_moves` 与
+`it10_norandom_branch_no_eat`；共用 `run_move_parity` 比较面）**：
+- 未置位（`eat_ok_shape2_random_scroll_current_map`，seed 20261122）：`635 → 800 → 622 → 633 → 634 → 801`
+  逐字段含尾；终态 = `move_map` 随机点；物品消耗；Rng 恰 2 抽（记录器 `site=BaseObject.MapRandomMove`）。
+- **置位（`eat_fail_shape2_norandommap_no_eat`）**：`immediate=[636]`、`pumped=[]`、`rng=[]`、
+  `rng_draw_count=0`（**记录器自证 0 抽**，不是「没看到数」）、`item_list` 保留原件 1 件、`weight` 不变、
+  终态 = 当前坐标。
+- 编译期两次 `let mut world = …` 不再复用：**每个 case 独立注册表**（`boNORANDOMMOVE` 逐例），
+  临时目录按测试实例编号（并行 `#[test]` 不互删）。
+- `rng_draw_count` 是记录器自证计数（`RecordingRandom.Draws.Count`），用例先断言它 == 逐次账本长度，
+  再用「Rust 侧下一抽 == 同种子重放下一抽」独立证明 Rust 0 抽。
+
+**牙（分两次跑、分别留原文）**：
+- M6 `if norandom` → `if !norandom`：`it10_norandom_branch_no_eat` 红（期望 `[636]`、实得全套 move 帧）、
+  `it10_random_branch_moves` 红（期望全套、实得 `[636]`）——**先置位支后未置位支各一次**。
+- M7 Shape2 目标图 `cur_map` → `home_map`：`it10_random_branch_moves` 红（634 尾 `EDCode(map)` 由
+  `move_map` 变 `home_map`）。还原后三颗用例复绿（sha 相等）。
+- 变异脚本注意：`shutil.copy2` 还原会带回旧 mtime ⇒ cargo 可能复用变异体二进制；脚本在还原后
+  `os.utime` 强制刷新（本次实测：未刷时「还原后仍红」= 假红）。
+
+**状态**：`implemented_unverified`（同 §9.12：共用换图路径缺口 766/54 与 `[名|文件]`
+见 [`openmir2-map-change-cluster-gaps.md`](openmir2-map-change-cluster-gaps.md)）。
 ### 9.15 IT-17a 技能书 `ReadBook`（StdMode 4）— 宿主拦截 + 真身对拍（implemented_unverified）
 
 **为什么拆 17a/17b**：`ReadBook` 的学习面（四道门 + `MagicList` + `SM_ADDMAGIC` + 两个原始串帧）

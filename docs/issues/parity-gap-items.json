@@ -299,7 +299,7 @@
       },
       "cost": "S-M",
       "deviation": null,
-      "notes": "宿主拦截（eat_move::maybe_eat_move；零改 useitem.rs）：EatUseItems(1)→FIRE+BaseObjectMove(HomeMap,0,0)（PlayObject.Base.cs:2231-2236/2312-2327）。对拍：新探针 move-eat-probe（真 Envir/MapMgr 替身/ActorMgr + 固定种子 RNG 账本）产 move_eat_vectors.json；用例逐字段含尾比 635→800→622→633→634→801、终态 MapName/X/Y、ItemList/Weight、Rng 逐次。HomeMap 快照（SessionGround.home）由登录 final 记录值 + 3s GetStartPoint 同拍同源维护。仍 implemented_unverified：共用换图路径缺 766(SM_AREASTATE)/54(SM_MAPDESCRIPTION)，且 [名|文件] 覆盖时 SM_CHANGEMAP 尾应为文件主干（详见卡 §9.12）。"
+      "notes": "宿主拦截（eat_move::maybe_eat_move；零改 useitem.rs）：EatUseItems(1)→FIRE+BaseObjectMove(HomeMap,0,0)（PlayObject.Base.cs:2231-2236/2312-2327）。对拍：新探针 move-eat-probe（真 Envir/MapMgr 替身/ActorMgr + 固定种子 RNG 账本）产 move_eat_vectors.json；用例逐字段含尾比 635→800→622→633→634→801、终态 MapName/X/Y、ItemList/Weight、Rng 逐次。HomeMap 快照（SessionGround.home）由登录 final 记录值 + 3s GetStartPoint 同拍同源维护。仍 implemented_unverified：共用换图路径缺 766(SM_AREASTATE)/54(SM_MAPDESCRIPTION)，且 [名|文件] 覆盖时 SM_CHANGEMAP 尾应为文件主干（详见卡 §9.12 与 docs/issues/openmir2-map-change-cluster-gaps.md）。"
     },
     {
       "id": "IT-10",
@@ -309,25 +309,23 @@
         "line": 2238,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "eat_move::tests::it10_random_scroll_host_parity",
+        "test_file": "mir2-rs/bins/game-svr/src/eat_move.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/move_eat_vectors.json",
+        "cases": [
+          "eat_ok_shape2_random_scroll_current_map",
+          "eat_fail_shape2_norandommap_no_eat"
+        ],
+        "unit_tests": [
+          "eat_move::tests::it10_random_branch_moves",
+          "eat_move::tests::it10_norandom_branch_no_eat"
         ]
       },
-      "notes": "地图 flag 门；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
+      "cost": "S",
+      "deviation": null,
+      "notes": "宿主拦截（eat_move::maybe_eat_move 的 Shape2 分支，与 IT-09 同一钩子）：未置位 ⇒ 吃 + 本图随机点；boNORANDOMMOVE 置位 ⇒ 只 636、不消耗/不移动/0 抽（golden rng_draw_count=0，记录器自证）。对拍：move_eat_vectors.json 两例 + 共用 run_move_parity（帧含尾/终态/背包/Weight/Rng/剔除集等式）；牙 M6（判读改反，两支分别红）/M7（目标图换 HomeMap）。共用换图路径缺口见 docs/issues/openmir2-map-change-cluster-gaps.md。"
     },
     {
       "id": "IT-11",
