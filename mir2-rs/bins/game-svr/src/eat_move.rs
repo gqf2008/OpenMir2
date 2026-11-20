@@ -319,20 +319,24 @@ mod tests {
     /// 红检：hook 返回值恒改 `false`（回 `_ => {}` ⇒ 636）⇒ 帧序必红；把 hook 里的
     /// `base_object_move_player` 换成不动（不出换图簇）⇒ 帧序/终态必红；HomeMap 空回落删掉 ⇒
     /// 第二例终态图红。
-    #[test]
-    fn it09_town_scroll_host_parity() {
+    fn run_move_parity(case_index: u16, expected_cases: usize, only: Option<&str>) {
         let doc = fixture();
-        let cases: Vec<&serde_json::Value> = doc["cases"]
+        let mut cases: Vec<&serde_json::Value> = doc["cases"]
             .as_array()
             .expect("cases")
             .iter()
-            .filter(|c| case_ctx(c)["index"].as_i64() == Some(3001))
+            .filter(|c| case_ctx(c)["index"].as_i64() == Some(i64::from(case_index)))
             .collect();
-        assert_eq!(
-            cases.len(),
-            2,
-            "IT-09 必须恰有 2 例（home 随机 / 空 home 回落当前图）"
-        );
+        if let Some(name) = only {
+            cases.retain(|c| c["name"].as_str() == Some(name));
+            assert_eq!(cases.len(), 1, "单例筛选 {name} 未命中（夹具被改？）");
+        } else {
+            assert_eq!(
+                cases.len(),
+                expected_cases,
+                "IT 条目 {case_index} 的用例数不符（夹具被改？）"
+            );
+        }
         // 对拍面内/外的 ident 清单（golden 的 pumped 必须恰是这两集合之并）。
         let modeled: [i64; 5] = [800, 622, 633, 634, 801];
         let registered_gap: [i64; 2] = [766, 54];
@@ -352,17 +356,25 @@ mod tests {
             );
         }
 
-        let dir = std::env::temp_dir().join(format!("mir2-it09-host-{}", std::process::id()));
+        // 每个测试调用一个独立目录（同进程内多个 `#[test]` 并行跑；共享目录会被彼此
+        // 的 `remove_dir_all` 删掉 ⇒ 随机红）。
+        static DIR_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mir2-move-host-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("tempdir");
-        // 注册表顺序 = map_id：move_map=0 / home_map=1 / red_map=2。
-        let reg = registry_from(
-            &dir,
-            &[("move_map", false), ("home_map", false), ("red_map", false)],
-        );
-        assert_eq!(reg.map_names().len(), 3);
-
         for c in cases {
             let ctx = case_ctx(c);
+            let norandom = ctx["norandom"].as_bool().unwrap_or(false);
+            // 注册表顺序 = map_id：move_map=0 / home_map=1 / red_map=2；`boNORANDOMMOVE` 逐例（IT-10 两支）。
+            let reg = registry_from(
+                &dir,
+                &[
+                    ("move_map", norandom),
+                    ("home_map", false),
+                    ("red_map", false),
+                ],
+            );
+            assert_eq!(reg.map_names().len(), 3);
             let expect = &c["expect"];
             let cur_name = ctx["current"]["map"].as_str().unwrap();
             let cur_map_id = reg.id_of(cur_name).expect("当前图在注册表");
@@ -527,8 +539,13 @@ mod tests {
                     dropped.push(ident);
                 }
             }
+            let want_gap: Vec<i64> = if norandom {
+                Vec::new()
+            } else {
+                registered_gap.to_vec()
+            };
             assert_eq!(
-                dropped, registered_gap,
+                dropped, want_gap,
                 "{}: 被剔除的只许是登记缺口 766/54（oracle RM_CHANGEMAP 处理器的连带帧）",
                 c["name"]
             );
@@ -553,16 +570,40 @@ mod tests {
             let sess = world.session("hero").expect("会话");
             assert_eq!(sess.map_id, want_map_id, "{}: 终态图（会话）", c["name"]);
 
-            // ③ ItemList 清空 + WAbil.Weight。
-            assert!(sessions["hero"].state.item_list.is_empty(), "物品被吃");
+            // ③ ItemList / WAbil.Weight：吃掉 ⇒ 空；不吃（IT-10 禁随机支）⇒ 原件保留。
+            let golden_items = expect["item_list"].as_array().unwrap();
+            let items = &sessions["hero"].state.item_list;
+            assert_eq!(
+                items.len(),
+                golden_items.len(),
+                "{}: 背包终态件数",
+                c["name"]
+            );
+            if let Some(want_item) = golden_items.first() {
+                assert_eq!(
+                    i64::from(items[0].make_index),
+                    want_item["make_index"].as_i64().unwrap(),
+                    "{}: 未吃时原件保留（make_index 不变）",
+                    c["name"]
+                );
+            }
             assert_eq!(
                 i64::from(sessions["hero"].state.wabil.weight),
                 expect["weight"].as_i64().unwrap()
             );
 
             // ④ Rng 逐次：按 golden 的 `(arg, value)` 重放同 seed 流，再核「没有多抽」。
+            //    golden 的 `rng_draw_count` 是**oracle 记录器自证的抽数**（不是「没看到数」）；
+            //    禁随机支必须为 0，且 Rust 侧的「0 抽」由下一步的流位置等式独立证明。
+            let golden_draws = expect["rng"].as_array().unwrap();
+            assert_eq!(
+                expect["rng_draw_count"].as_i64().unwrap(),
+                golden_draws.len() as i64,
+                "{}: 记录器计数与逐次账本不一致（夹具坏了）",
+                c["name"]
+            );
             let mut replay = RandomNumber::with_seed(seed);
-            for d in expect["rng"].as_array().unwrap() {
+            for d in golden_draws {
                 let arg = d["arg"].as_i64().unwrap() as i32;
                 let value = d["value"].as_i64().unwrap() as i32;
                 assert_eq!(replay.random_below(arg), value, "{}: 逐次取数", c["name"]);
@@ -575,5 +616,39 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **IT-09 回城卷 Shape1** 宿主级对拍（判据清单见 `run_move_parity` 的文档）。
+    ///
+    /// 红检：hook 返回值恒改 `false`（回 `_ => {}` ⇒ 636）⇒ 帧序必红；把 hook 里的
+    /// `base_object_move_player` 换成不动（不出换图簇）⇒ 帧序/终态必红；HomeMap 空回落删掉 ⇒
+    /// 第二例终态图红。
+    #[test]
+    fn it09_town_scroll_host_parity() {
+        run_move_parity(3001, 2, None);
+    }
+
+    /// **IT-10 随机传送 Shape2** 宿主级对拍（两支）：
+    /// - 未置位：吃 + 本图随机点（`BaseObjectMove(MapName,0,0)`）+ 全套换图簇；
+    /// - **`boNORANDOMMOVE` 置位：不吃**（`EatUseItems` 返回 false）⇒ 只 `SM_EAT_FAIL(636)`，
+    ///   **不移动、不消耗、0 抽**（golden `pumped=[]`/`rng=[]`/`item_list` 保留 1 件）。
+    ///
+    /// 红检：把 `bo_norandommove` 判读改反（`if norandom` → `if !norandom`）⇒ 置位支会吃+移动、
+    /// 未置位支变 636 ⇒ 两例同时红；把 Shape2 的目标图换成 HomeMap ⇒ 未置位支终态图红。
+    #[test]
+    fn it10_random_scroll_host_parity() {
+        run_move_parity(3002, 2, None);
+    }
+
+    /// **IT-10 禁随机支单跑**（变异牙要「一支一支红」的原文，而不是两例一起挂）。
+    #[test]
+    fn it10_norandom_branch_no_eat() {
+        run_move_parity(3002, 2, Some("eat_fail_shape2_norandommap_no_eat"));
+    }
+
+    /// **IT-10 未置位支单跑**（同上）。
+    #[test]
+    fn it10_random_branch_moves() {
+        run_move_parity(3002, 2, Some("eat_ok_shape2_random_scroll_current_map"));
     }
 }

@@ -132,11 +132,36 @@ internal class StubProxy : DispatchProxy
 
 internal static class Program
 {
-    /// <summary>`System.Random` 的记录包装：行式账本 `seq|kind|arg|value|site`。</summary>
+    /// <summary>`System.Random` 的记录包装：行式账本 `seq|kind|arg|value|site`。
+    /// `site` = **oracle 代码调用点**（栈上第一个非 `RecordingRandom`/`Random`/`RandomNumber` 的方法，
+    /// 如 `BaseObject.MapRandomMove`）——「抽了几次、从哪抽」都由记录器自己证，不从结果反推。</summary>
     private sealed class RecordingRandom : Random
     {
         public readonly List<string> Draws = new();
         public RecordingRandom(int seed) : base(seed) { }
+
+        private static string CallSite()
+        {
+            var frames = new System.Diagnostics.StackTrace(false).GetFrames();
+            if (frames != null)
+            {
+                foreach (var f in frames)
+                {
+                    var m = f.GetMethod();
+                    if (m == null)
+                    {
+                        continue;
+                    }
+                    var t = m.DeclaringType?.Name ?? string.Empty;
+                    if (t is "RecordingRandom" or "Random" or "RandomNumber")
+                    {
+                        continue;
+                    }
+                    return t + "." + m.Name;
+                }
+            }
+            return string.Empty;
+        }
 
         private void Log(string kind, long arg, long value, string site)
         {
@@ -146,21 +171,21 @@ internal static class Program
         public override int Next()
         {
             int v = base.Next();
-            Log("Next()", 0, v, "next");
+            Log("Next()", 0, v, CallSite());
             return v;
         }
 
         public override int Next(int maxValue)
         {
             int v = base.Next(maxValue);
-            Log("Next(max)", maxValue, v, "max");
+            Log("Next(max)", maxValue, v, CallSite());
             return v;
         }
 
         public override int Next(int minValue, int maxValue)
         {
             int v = base.Next(minValue, maxValue);
-            Log("Next(min,max)", ((long)minValue << 32) | (uint)maxValue, v, "range");
+            Log("Next(min,max)", ((long)minValue << 32) | (uint)maxValue, v, CallSite());
             return v;
         }
     }
@@ -506,6 +531,8 @@ internal static class Program
                 item_list = po.ItemList.Select(ItemDto).ToArray(),
                 weight = (int)po.WAbil.Weight,
                 rng = Draws(),
+                // 记录器自证的抽数（与 `rng.len()` 恒等；禁随机支必须为 0——「没抽」不是「没看到」）。
+                rng_draw_count = ((RecordingRandom)_rngField.GetValue(null)).Draws.Count,
                 drain = new { passes = drainPasses, max_passes = MaxDrainPasses, hit_cap = drainHitCap },
             },
         };
@@ -600,6 +627,29 @@ internal static class Program
                 HomeY = 0,
                 Seed = 20261121,
             }),
+            // IT-10 未置位支：Shape2 `if (!Envir.Flag.boNORANDOMMOVE)` ⇒ FIRE + `BaseObjectMove(MapName,0,0)`
+            // ⇒ 当前图随机点（两次抽 `Next(39)`）；Home/RedHome 都不参与。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape2_random_scroll_current_map",
+                Index = 3002,
+                HomeMap = "home_map",
+                HomeX = 0,
+                HomeY = 0,
+                Seed = 20261122,
+            }),
+            // IT-10 置位支：`boNORANDOMMOVE` ⇒ **不吃**（EatUseItems 返回 false）⇒ 只 `SM_EAT_FAIL(636)`；
+            // 无 FIRE/无移动/无消耗/RNG 0 抽。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_fail_shape2_norandommap_no_eat",
+                Index = 3002,
+                HomeMap = "home_map",
+                HomeX = 0,
+                HomeY = 0,
+                NoRandom = true,
+                Seed = 20261123,
+            }),
         };
 
         // 自检（夹具前提/实现不符 ⇒ rc=2，不落盘）：
@@ -607,13 +657,28 @@ internal static class Program
         {
             var expect = c.expect;
             var im = ((IEnumerable<object>)expect.immediate_frames).Cast<dynamic>().ToList();
+            var pumped = ((IEnumerable<object>)expect.pumped).Cast<dynamic>().ToList();
+            var pumpIds = pumped.Select(p => (int)p.ident).ToList();
+            var rngCount = ((IEnumerable<object>)expect.rng).Cast<object>().Count();
+            var items = ((IEnumerable<object>)expect.item_list).Cast<object>().Count();
+            // 分两族自检：**禁随机支 = 只 636、0 抽、0 帧、物品保留**；其余 = 吃 + 全套 move 帧 + 2 抽。
+            var norandom = c.ctx.norandom is bool b && b;
+            if (norandom)
+            {
+                if (im.Count != 1 || im[^1].ident != 636 || pumped.Count != 0 || rngCount != 0 || items != 1)
+                {
+                    Console.Error.WriteLine(
+                        $"PROBE_SELFTEST_FAIL case={c.name} 禁随机支期望 immediate=[636]/pumped=[]/rng=0/items=1，"
+                        + $"实得 im=[{string.Join(",", im.Select(f => (int)f.ident))}] pumped=[{string.Join(",", pumpIds)}] rng={rngCount} items={items}");
+                    return 2;
+                }
+                continue;
+            }
             if (im.Count == 0 || im[^1].ident != 635)
             {
                 Console.Error.WriteLine($"PROBE_SELFTEST_FAIL case={c.name} 最后一条即时帧不是 SM_EAT_OK(635)");
                 return 2;
             }
-            var pumped = ((IEnumerable<object>)expect.pumped).Cast<dynamic>().ToList();
-            var pumpIds = pumped.Select(p => (int)p.ident).ToList();
             if (pumped.Count < 2 || pumpIds[0] != 800 || pumpIds[1] != 622
                 || !pumpIds.Contains(633) || !pumpIds.Contains(634) || !pumpIds.Contains(801))
             {
@@ -621,9 +686,14 @@ internal static class Program
                     $"PROBE_SELFTEST_FAIL case={c.name} pumped 期望 800/622 起头且含 633/634/801，实得 [{string.Join(",", pumpIds)}]");
                 return 2;
             }
-            if (((IEnumerable<object>)expect.rng).Cast<object>().Count() != 2)
+            if (rngCount != 2)
             {
                 Console.Error.WriteLine($"PROBE_SELFTEST_FAIL case={c.name} 期望恰 2 抽（MapRandomMove 两次）");
+                return 2;
+            }
+            if (items != 0)
+            {
+                Console.Error.WriteLine($"PROBE_SELFTEST_FAIL case={c.name} 吃完后背包应空");
                 return 2;
             }
         }

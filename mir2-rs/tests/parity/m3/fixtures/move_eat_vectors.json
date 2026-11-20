@@ -241,16 +241,17 @@
             "kind": "Next(max)",
             "arg": 39,
             "value": 27,
-            "site": "max"
+            "site": "BaseObject.MapRandomMove"
           },
           {
             "seq": 2,
             "kind": "Next(max)",
             "arg": 39,
             "value": 24,
-            "site": "max"
+            "site": "BaseObject.MapRandomMove"
           }
         ],
+        "rng_draw_count": 2,
         "drain": {
           "passes": 1,
           "max_passes": 8,
@@ -446,18 +447,330 @@
             "kind": "Next(max)",
             "arg": 39,
             "value": 8,
-            "site": "max"
+            "site": "BaseObject.MapRandomMove"
           },
           {
             "seq": 2,
             "kind": "Next(max)",
             "arg": 39,
             "value": 36,
-            "site": "max"
+            "site": "BaseObject.MapRandomMove"
           }
         ],
+        "rng_draw_count": 2,
         "drain": {
           "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape2_random_scroll_current_map",
+      "ctx": {
+        "make_index": 1,
+        "index": 3002,
+        "actor_id": 933002,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 0,
+          "y": 0
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "norandom": false,
+        "seed": 20261122,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 49,
+            "n_param2": 28,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933002,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933002,
+            "param": 49,
+            "tag": 28,
+            "series": 0,
+            "tail": "6d6f566c6d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933002,
+            "param": 49,
+            "tag": 28,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "move_map",
+          "envir": "move_map",
+          "x": 49,
+          "y": 28
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [
+          {
+            "seq": 1,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 29,
+            "site": "BaseObject.MapRandomMove"
+          },
+          {
+            "seq": 2,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 8,
+            "site": "BaseObject.MapRandomMove"
+          }
+        ],
+        "rng_draw_count": 2,
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_fail_shape2_norandommap_no_eat",
+      "ctx": {
+        "make_index": 1,
+        "index": 3002,
+        "actor_id": 933002,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 0,
+          "y": 0
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "norandom": true,
+        "seed": 20261123,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [],
+        "pumped": [],
+        "pump_idents": [],
+        "final": {
+          "map": "move_map",
+          "envir": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 3002,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ],
+        "weight": 0,
+        "rng": [],
+        "rng_draw_count": 0,
+        "drain": {
+          "passes": 0,
           "max_passes": 8,
           "hit_cap": false
         }
