@@ -63,11 +63,12 @@
 //!
 //! # 未做清单（登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist）
 //!
-//! - **StdMode 3/4**：`ExtraAbil` buff / `GetExp`（Shape 12/13）、`ReadBook`（技能书）——
-//!   未实现；且 StdMode 3 的 `default` 还要走 `EatUseItems`（传送/祝福油等大地图副作用）。
-//!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
-//!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` 与 **31 的 `AniCount != 0`**
-//!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
+//! - **StdMode 3/4**：`ExtraAbil` buff（Shape12，IT-07）/ `ReadBook`（技能书，IT-17）——**未实现**；
+//!   `GetExp`：**Shape12 未实现；Shape13 已实现，IT-08 verified**（见 `3 if tpl.shape == 13` 臂）。
+//!   且 StdMode 3 的 `default` 还要走 `EatUseItems`（传送/祝福油/修复/彩票等大地图副作用）。
+//!   oracle 对这些 StdMode 有**成功**路径；本接缝**已实现** StdMode3 的 **Shape 9/10/13**（修复油/特修油/GetExp，
+//!   见 `3 if tpl.shape==9/10/13` 臂），**其余**（StdMode3 传送/祝福油/彩票/ExtraAbil 等 Shape、StdMode4 `ReadBook`）
+//!   **未实现** ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
 //!   **`EatUseItems` 的 8 个 case/Shape（IT-09…IT-16）逐条落点**（均 oracle `PlayObject.Base.cs`）：
 //!   - IT-09 Shape1 回城卷（`:2162→2163`、`:2233`）——未实现，T-17；
 //!   - IT-10 Shape2 随机传送（`:2238`，受 `boNORANDOMMOVE`）——未实现，T-17；
@@ -90,7 +91,7 @@
 //!   （注：`boNODRUG` 开关对 0/1/2/3 都在 `EatItems` 首部生效，故本接缝对 1/3 也做该守卫，
 //!   但未禁药时 1/3 仍落 `SM_EAT_FAIL`。）
 //! - **代码内登记指路**：`useitem.rs` 中段的「StdMode 3/4（ExtraAbil/GetExp、书）未实现」注释
-//!   （`eaten = true` 之后那段）**只覆盖 StdMode 3/4**；`EatUseItems` 的 10 个 Shape 见本节
+//!   （`eaten = true` 之后那段）**只覆盖 StdMode 3/4**；`EatUseItems` 的 10 个 Shape（Shape12/13 + IT-09…IT-16 的 8 个）见本节
 //!   「`StdMode 3` 的 `default`…」那一组条目（IT-09…IT-16）。
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入的模板视为「有效物品」。
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
