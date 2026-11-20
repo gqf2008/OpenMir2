@@ -24,7 +24,7 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 | 6 | `handle_eat_cmd`（第一处） | 吃物品 | ❌ | 是 | **自我走 `WireSession(sg)`；观察者走实体** | **同族风险（观察者面，"半对"）** |
 | 7 | `handle_eat_cmd`（第二处） | 吃物品 | ❌ | 是 | 同上 | 同上 |
 | 8 | `handle_spell_cmd_with_magic` | 施法（36） | ✅ | 是 | 实体 | 无损 |
-| 9 | `handle_spell_cmd_with_magic` | 施法（shield/buff） | ✅（本批新增） | 是 | 实体 | 无损（见 `card/657-series-spellbuf`） |
+| 9 | `handle_spell_cmd_with_magic` | 施法（shield/buff） | ❌（**§2bis 校正**：`card/657-series-spellbuf` 只改来源、未加镜像；旧版此处误记 ✅） | 是 | 实体（可能陈旧） | **同族风险（镜像缺口）** |
 | 10 | `drain_buff_downlink` | buff 排水 | ❌ | 是 | 实体（自见+观察者都经 helper） | **同族风险（`#9` 路径）** |
 | 11 | `drain_levelup_healthspell_with_magic` | 升级回血 | ✅ | 是 | 实体 | 无损 |
 | 12 | `apply_pending_gm_target_ops`（臂 1） | GM 删技能 | ✅ | 是 | 实体（会话优先？按实体裁定应为实体） | 无损 |
@@ -34,6 +34,54 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 | 16 | `drain_player_revival_with_magic` | 复活戒指 | ✅ | 是 | 实体 | 无损 |
 
 ⇒ **10 有 / 6 无**；其中 **3 个函数（4 个调用点）有 657 且读实体**，是真正的同族风险面。
+
+## 2bis 全部 657 发射点与其 `Series` 源（底图）
+
+> 采集：`master 24d2de316`（`card/657-series-spellbuf` 已并入 `ce86a026f` 之后）。
+> 取点方式见下，**行号只作引用、不作散文锚**（§49/HIGH_CHURN）：
+>
+> ```text
+> git show 24d2de316:mir2-rs/bins/game-svr/src/lib.rs | grep -n "sm_charstatuschanged("
+> git grep -n "sm_charstatuschanged\|SM_CHARSTATUSCHANGED" 24d2de316 -- mir2-rs/bins mir2-rs/crates
+> ```
+>
+> **本表不是"这些都是对的清单"**，读它之前必须先看两条定性。
+
+**定性 ①：读 `sg`（会话）的那批不等于错。** 是否错取决于**该点所在函数在重算之后有没有做实体镜像**
+（`apply_ability_to_entity(...)`，或函数内直接写 `e.vitals.hit_speed = sg.hit_speed`）。
+所以"镜像"列取自 §2 的 16 点扫描表；表里 ❌ 的那些点，657 的 `Series` 会读到**重算前的旧实体值**。
+
+**定性 ②：`pickwire::notice_frame` 与 `readbook::maybe_read_book` 取的是"会话"不是"实体"。**
+按本卡口径（`Series` = **收件人自己的实体值**），这两处**本身就是待判点**，不是参照物；
+别把它们当成"正确写法"去对齐。
+
+| # | 发射点（符号锚） | 收件人 | `Series` 源 | 所在函数有镜像 | 定性 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `push_charstatuschanged`（`SpellFrameBuf` 版 helper） | ±range **含自己**，逐人重编码 | **实体**（每个收件人自己） | —（helper） | 参照实现 |
+| 2 | `push_charstatuschanged_except_self`（入队版 helper） | ±range 除自己 | **实体** | —（helper） | 参照实现 |
+| 3 | `broadcast_charstatuschanged_except_self`（flush 版） | 同上 | **实体** | —（helper） | 参照实现 |
+| 4 | `push_charstatuschanged_self_and_observers`（三动作） | 自见 ×2（`:2875` 广播副本 + `:2876` 自更新）+ 观察者 | **自见 = `hit_speed` 入参（会话，调用方传 `sg.hit_speed`）**；观察者 = 实体 | —（helper） | **待判**（自见那两份） |
+| 5 | `send_charstatuschanged_self_once_and_observers` | 自见 ×1 + 观察者 | **自见 = 入参（会话）**；观察者 = 实体 | —（helper） | **待判**（自见那份） |
+| 6 | `handle_spell_cmd_with_magic` · `SKILL_SHIELD` 臂的 `take_buff_applies` 循环 | 每人 1 条 | 实体（经 helper） | **❌**（本支无镜像） | 同族风险（镜像缺口） |
+| 7 | `handle_spell_cmd_with_magic` · buff-apply-kind 支的 `take_buff_applies` 循环 | 每人 1 条 | 实体（经 helper） | ❌ | 同族风险（镜像缺口） |
+| 8 | 同上 · 自更新副本（`push_actor`） | 自己 | 自己实体 | ❌ | 同族风险 |
+| 9 | `handle_spell_cmd_with_magic` · 技能 36 支（`out.status_changed` + 自更新副本） | helper + 自己 | 实体 | **✅**（函数内直接写 `e.vitals.hit_speed = sg.hit_speed`） | 无损 |
+| 10 | `handle_inbound_cmd`（登录入图） | 自己 | `sg.hit_speed`（会话） | ✅ `apply_ability_to_entity` | 无损（会话 = 刚镜像后的值） |
+| 11 | `handle_bag_cmd_with_magic`（穿脱） | 自己 | `sg.hit_speed` | ✅ | 无损 |
+| 12 | `drain_buff_downlink`（`boNeedRecalc`） | 自见 1 条 + 观察者逐人 | 自见 = 自己实体；观察者 = 各自实体 | **❌** | 同族风险（§3 第 3 点） |
+| 13 | `drain_monster_ref_msgs`（`RM_CHARSTATUSCHANGED` 下行） | `m.recipients` 逐人 | **实体** | —（怪无 `RecalcAbilitys`） | 无损 |
+| 14 | `drain_player_need_recheck_with_magic` | 自己 | `hit_speed`（会话） | ✅ | 无损 |
+| 15 | `pickwire::notice_frame`（RM 出队接缝，只发自己那份） | 自己 | **会话 `session.hit_speed`** | —（函数内无重算） | **待判** |
+| 16 | `readbook::maybe_read_book` | 自己 | **会话 `sg.hit_speed`** | —（函数内无重算） | **待判** |
+| 17 | `smframe::frames_split_with_others`（登录队列的两条 657） | 自己 ×2 | `char_status` 的 `hit_speed` 输入（登录构建期 = 重算后值） | — | 无损（输入即新值） |
+
+**§2 行 9 校正（本表暴露的自相矛盾）**：`handle_spell_cmd_with_magic` 的 shield/buff 支在
+`card/657-series-spellbuf` 里**只改来源、没有加实体镜像**（该卡 §6 明写"实体镜像不在本卡"）；
+§2 行 9 原句"✅（本批新增）"是更早草稿的残留，**已改为 ❌**。技能 36 支（行 8）的镜像在函数内
+直接写 `e.vitals.hit_speed`，仍为 ✅。
+
+**表外**：`msgqueue::send_update_msg` 一类的 `RM_CHARSTATUSCHANGED` **入队**不是发射点，
+657 只在出队接缝（第 15 行）或宿主直发处产生。
 
 ## 3. 三个同族风险点（复现条件）
 
