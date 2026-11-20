@@ -96,7 +96,18 @@ grep -rn "nPower|AttPowerUp" mir2-rs/bins/game-svr/src/lib.rs
   绿/红条件：旧实现绿、新实现绿；"把临时值塞进落地 `hit_speed`"（保留过头）必红。
   载荷面（"删过头"）的牙归 it07/G2 模板，不在本卡。
 - **改后绿**：同一条命令 **2146 passed / 0 failed / 70 ignored（rc=0）**。
-- 其余门禁（fmt/clippy/`--workspace`/msgcodegen）待车道空后补跑，结果回填本节。
+- **新牙实跑（区分"删对了/删过头"）**：
+  - 旧实现（加回 `apply_extra_abil`）：`extraabil_hitspeedup_stays_out_of_landed_hit_speed` **绿**
+    （证明该函数从未碰 `hit_speed`，删它不丢临时贡献）；
+  - 新实现：**绿**；
+  - 变异「把 `extra_abil[3]` 加进落地 `hit_speed`（保留过头）」：**红**（`assertion failed`）。
+  还原后 `lib.rs` sha 与快照一致（`1b6ce084…`），`MUTATION` 标记 0。
+- **最终四件套（rebase 到 `cc62ee05e` 后，tip `b6dcd306f` 实跑）**：
+  - `cargo test -p game-svr --lib`：**2147 passed / 0 failed / 70 ignored**（rc=0）
+  - `cargo test --workspace`：**4372 / 0 / 155**（rc=0）
+  - `cargo clippy --workspace --all-targets -- -D warnings`：**rc=0**（0 车道时独占跑）
+  - `cargo fmt --all -- --check`：**rc=0**
+  - `msgcodegen -- --check`：rebase 前 rc=0（604 条一致）；rebase 后待车道空补跑一次（未改动常量面）。
 
 ## 7. 禁区自证
 
