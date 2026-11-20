@@ -12577,23 +12577,9 @@ impl SpellFrameBuf {
         self.frames.push((socket, priority, body));
     }
 
-    /// `SendRefMsg` 收件人集合（±`SendRefMsgRange` 的 `Race==Play && !Ghost`）中在线者。
-    fn push_broadcast(
-        &mut self,
-        world: &mir2_world_bevy::World,
-        online: &OnlineRegistry,
-        actor_id: i32,
-        include_self: bool,
-        priority: u8,
-        body: &[u8],
-    ) {
-        let targets = chat::hear_targets(world, actor_id, chat::send_ref_msg_range());
-        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
-    }
-
     /// **广播投递段（单一实现）**：收件人 id 已算好，逐收件人 `include_self` 过滤 +
-    /// `push_socket`（共享 body）。[`Self::push_broadcast`]（`chat::hear_targets`）与
-    /// [`Self::push_broadcast_cached`]（`ref_msg_cache::targets`）只差"收件人怎么来"。
+    /// `push_socket`（共享 body）。唯一调用方是 [`Self::push_broadcast_cached`]
+    /// （收件人 = `ref_msg_cache::targets`）。
     fn deliver_broadcast_targets(
         &mut self,
         online: &OnlineRegistry,
@@ -12614,10 +12600,10 @@ impl SpellFrameBuf {
         }
     }
 
-    /// [`Self::push_broadcast`] 的**缓存版**（T-287 残余 #1，批 7 逐站点迁移专用）：
-    /// 投递段与 `push_broadcast` 逐字相同（`include_self` 过滤 / 逐收件人 `push_socket` /
-    /// 共享 body），只把收件人换成 `ref_msg_cache::targets`（500ms `VisibleHumanList` +
-    /// 命中时 `|Δ|<11`）。迁移完成后旧 `push_broadcast` 应无调用者。
+    /// `SendRefMsg` 的**缓存版收件人 + 投递**（T-287 残余 #1 收口）：收件人 =
+    /// `ref_msg_cache::targets`（500ms `VisibleHumanList` + 命中时 `|Δ|<11`），投递交给
+    /// [`Self::deliver_broadcast_targets`]。批 7c 完成后旧 `push_broadcast` 已删除
+    /// （全仓 0 引用，见删除提交的 grep 证据）。
     fn push_broadcast_cached(
         &mut self,
         world: &mir2_world_bevy::World,
