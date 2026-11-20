@@ -78,6 +78,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -146,7 +147,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1119086750,
+              "delivery": 1147983125,
               "priority": 255
             }
           ],
@@ -169,7 +170,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -237,7 +238,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -298,7 +299,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -382,6 +383,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -450,7 +452,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1119088000,
+              "delivery": 1147984406,
               "priority": 255
             }
           ],
@@ -473,7 +475,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -541,7 +543,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -602,7 +604,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -686,6 +688,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -754,7 +757,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1119089312,
+              "delivery": 1147985718,
               "priority": 255
             }
           ],
@@ -777,7 +780,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -845,7 +848,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -906,7 +909,7 @@
               "ident": 657,
               "param": 0,
               "tag": 0,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]

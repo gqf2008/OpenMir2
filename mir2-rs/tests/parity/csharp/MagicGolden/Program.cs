@@ -148,13 +148,13 @@ public static class Program
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" });
-            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true });
-            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true });
-            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
+            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7 });
+            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7 });
+            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7 });
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
-            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true });
+            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
-            if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
+            if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
             if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" });
@@ -169,7 +169,7 @@ public static class Program
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
-            if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true });
+            if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
@@ -948,6 +948,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public bool CasterLoginOrderAbil;
         /// <summary>卡 36：施法者 `CharStatusEx`（非 0 夹具使 `GetCharStatus()` 可证伪；缺省 0 ⇒ 既有件零变化）。</summary>
         public int CasterCharStatusEx;
+        /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
+        public int HitSpeed;
         /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
         public int CasterHp;
         public int CasterMaxHp;
@@ -1698,6 +1700,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             SystemModule.SystemShare.ActorMgr.Add(p);
             env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
         }
+        if (spec.HitSpeed > 0)
+        {
+            foreach (var p in new[] { caster, target, obsIn })
+            {
+                p.HitSpeed = (ushort)spec.HitSpeed; // `CharacterObject.HitSpeed`（657 series 的来源）
+            }
+        }
         // **非玩家对象（v1 被动）**：进世界并参与所有对象类型门/筛选；**不 Operate**
         // ⇒ 只记录"它们收到了哪些 RM"（对象选择面）。效果面由目标自己 Operate 时产生，属 v2。
         var monsters = new List<RecordingMonster>();
@@ -2105,6 +2114,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
+                hit_speed = spec.HitSpeed,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null
                 ? null

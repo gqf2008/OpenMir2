@@ -78,6 +78,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -146,7 +147,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1119070328,
+              "delivery": 1147972781,
               "priority": 255
             }
           ],
@@ -169,7 +170,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -352,7 +353,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -438,6 +439,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -506,7 +508,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1119071593,
+              "delivery": 1147974062,
               "priority": 255
             }
           ],
@@ -529,7 +531,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -712,7 +714,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
@@ -798,6 +800,7 @@
           140,
           100
         ],
+        "hit_speed": 7,
         "sockets": [
           911,
           912,
@@ -866,7 +869,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1119072890,
+              "delivery": 1147975390,
               "priority": 255
             }
           ],
@@ -889,7 +892,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             },
             {
@@ -1072,7 +1075,7 @@
               "ident": 657,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "tail": ""
             }
           ]
