@@ -69626,6 +69626,167 @@ SendRefMsgRange=15
         skeleton_parity_drive("cap_hit", 2000);
     }
 
+    /// 30 `SKILL_SINSU`（神兽）夹具 rig：镜像 skeleton，魔号 30。
+    fn sinsu_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            30,
+            &[(30, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 30,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+        }
+        rig
+    }
+
+    /// 30 `SKILL_SINSU` 真实台账驱动（**首批仅 `summon_ok`**；`cap_hit` 回召待 openmir2-golden-harness-mapmgr）。
+    ///
+    /// 神兽 race=113（ELF_MONSTER）→ `apply_slave_level_abilitys` 0.3 第一支；HP=stub 17 ⇒ max 24，半补 20。
+    /// **不比 `Rng`**（离线替身 `RegenMonsterByName` 不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源——
+    /// 与 skeleton 同因；`Rng` 面单列，未纳入本批对拍）。
+    fn sinsu_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "sinsu";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        // Rng 实测：开启 rng_trace 记录造怪/尾段抽数（opc-19 要"实测再定 Rng 是否同源"）。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        let n0 = trace_line_count(&trace);
+        let mut rig = sinsu_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+
+        let entities_before = rig.world.entities.len();
+        let slave_before = rig.world.slave_count(caster);
+
+        let mon = mir2_data::MonsterInfo {
+            name: "神兽".into(),
+            race: 113,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        let mon_race = mon.race; // tooth「race→100 必红」要：账本 stub_monster_race 取自实际 mon.race
+        rig.cast_slave(30, (101, 100), target, vec![mon]);
+        let (frames, _raws) = rig.drain();
+        let n1 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+
+        let entities_after = rig.world.entities.len();
+        let slave_after = rig.world.slave_count(caster);
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(usize::MAX);
+
+        let slave_ids: Vec<i32> = rig
+            .world
+            .entities
+            .get(caster)
+            .map(|c| c.slave_list.clone())
+            .unwrap_or_default();
+        let new_slaves: Vec<serde_json::Value> = slave_ids
+            .into_iter()
+            .filter_map(|id| rig.world.entities.get(id))
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.entity().name,
+                    "level": e.level,
+                    "hp": e.hp,
+                    "max_hp": e.max_hp,
+                    "master_is_caster": e.master == Some(caster),
+                })
+            })
+            .collect();
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": [],
+                "Sent": sinsu_sent(&frames.iter().map(|(s, b)| (*s, b.clone(), 0_i64)).collect::<Vec<_>>(), socket),
+            }));
+        }
+
+        let sinsu = serde_json::json!({
+            "stub_wabil_hp": 17,
+            "stub_abil_max_hp": 17,
+            "stub_monster_race": mon_race,
+            "pre_slave_count": slave_before,
+            "slave_count_before": slave_before,
+            "slave_count_after": slave_after,
+            "regen_calls": regen,
+            "new_slaves": new_slaves,
+        });
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "SinSu": sinsu,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "world_entities_before": entities_before,
+            "world_entities_after": entities_after,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[sinsu {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
+            frames.len(),
+            ledger[0]["SinSu"]["new_slaves"].as_array().map_or(0, |a| a.len()),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn sinsu_parity_summon_ok() {
+        sinsu_parity_drive("summon_ok", 1000);
+    }
+
     // ======================================================================
     // 卡 `openmir2-magic-parity` §22：火球（1/5）**真实台账**驱动
     // ======================================================================
@@ -70601,6 +70762,13 @@ SendRefMsgRange=15
                 })
             })
             .collect()
+    }
+
+    /// SINSU 用帧序列化：**thin wrapper of** [`fireball_sent_with_due`]——`due` 由**调用点按批给定**。
+    /// 本支只 drain 施法批 ⇒ 调用点构造 `(s, b, 0)`。**内部不含任何批次常量**：将来加交付批 ⇒ 调用点按
+    /// `elapsed` 填 due；640 若要进 keep ⇒ 作者须显式决定其属哪批。
+    fn sinsu_sent(frames: &[(i32, Vec<u8>, i64)], socket: i32) -> Vec<serde_json::Value> {
+        fireball_sent_with_due(frames, socket)
     }
 
     /// 同 [`fireball_sent`]，但带 **`due_ms_rel`**（相对施法时刻的毫秒；交付段 = 步进 elapsed）。

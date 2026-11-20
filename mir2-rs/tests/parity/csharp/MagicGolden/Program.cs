@@ -166,6 +166,7 @@ public static class Program
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
             // `SKILL_SKELLETON(17)`：MakeSlave → WorldEngine 替身；两支 = 正常召唤 / 数量上限。
             if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）。SCOPE：本支验的是『给定怪物之后的 adopt 行为』（MakeSlave 的 Master/IsSlave/levels/Recalc/半补/RefNameColor/SlaveList），不是造怪；造怪抽数因离线缺 MonsterInfo（掉落表 MonGetRandomItems、CoolEyeCode）不可复刻 ⇒ Rng 与下游训练面（640/RM10123 p3）不在对拍范围；golden 的 Rng 是替身不抽造怪时的数，不代表生产抽数" });
+            if (name == "sinsu") return SinsuBatch(new MagicSpec { Key = "sinsu", MagicId = 30, MagicName = "SinSu", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "SINSU 神兽=race113；验 MakeSlave adopt + cap_hit 回召(RecallSlave 移 slave)；仅参数化 race/stub，不验龙名变体(数据缺口)" });
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
@@ -1049,6 +1050,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         /// 使 `SlaveList.Count >= nMaxMob` ⇒ `MakeSlave` 必返 null。
         /// </summary>
         public int PreSlaveCount;
+        /// <summary>预置 slave 的 `ChrName`；缺省 `pre-slave`+索引保持 17 既有；SINSU 设为精确 `神兽`使 `RecallSlave` 能命中。</summary>
+        public string PreSlaveName = "pre-slave";
         /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
         /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
         /// </summary>
@@ -1618,6 +1621,24 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         var c2 = RunMagicCase(spec, "cap_hit", 1, 2000, spec.TargetMaxHp, false);
         return EmitGolden(spec, new[] { c1, c2 });
     }
+    private static int SinsuBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        // SINSU 神兽 = race 113（ELF_MONSTER）⇒ apply_slave_level_abilitys 第一支(0.3)。
+        Environment.SetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE", "113");
+        // 预置 slave 用精确名 `神兽`（RecallSlave 只认 ChrName==Config.Dragon|Dragon1）。
+        spec.PreSlaveName = SystemModule.SystemShare.Config.Dragon;
+        spec.PreSlaveCount = 0;
+        var c1 = RunMagicCase(spec, "summon_ok", 1, 1000, spec.TargetMaxHp, false);
+        // cap_hit(回召) 离线不可跑：RecallSlave→SpaceMove→SystemShare.MapMgr 为 null ⇒ NPE。
+        // 首批只出 summon_ok；回召面挂 openmir2-golden-harness-mapmgr（地图注册）。
+        Environment.SetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE", null);
+        return EmitGolden(spec, new[] { c1 });
+    }
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -1843,9 +1864,16 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             caster.SlaveList ??= new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>();
             for (int k = 0; k < spec.PreSlaveCount; k++)
             {
-                caster.SlaveList.Add(new M2Server.Monster.MonsterObject { ChrName = "pre-slave" + k, ActorId = idBase + 50 + k });
+                // exact-name（SINSU 神兽）才能被 RecallSlave 命中（它只认 ChrName==Config.Dragon|Dragon1）。
+                string psName = (spec.PreSlaveName == "pre-slave") ? (spec.PreSlaveName + k) : spec.PreSlaveName;
+                var ps = new M2Server.Monster.MonsterObject { ChrName = psName, ActorId = idBase + 50 + k };
+                ps.CurrX = 0; ps.CurrY = 0; ps.Envir = caster.Envir; // 供 RecallSlave.SpaceMove；xy 从 (0,0) 移动即可观测
+                caster.SlaveList.Add(ps);
             }
         }
+        var preSlaveXyBefore = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+            .Take(spec.PreSlaveCount)
+            .Select(x => (object)new { name = x.ChrName, x = (int)x.CurrX, y = (int)x.CurrY }).ToList();
         int slaveCountBefore = caster.SlaveList?.Count ?? 0;
         int regenBefore = OfflineWorldEngine.RegenCalls;
         var original = RngSeam.Capture();
@@ -2283,6 +2311,37 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                         })
                         .ToList(),
                 },
+            SinSu = spec.MagicId != 30
+                ? null
+                : (object)new
+                {
+                    stub_wabil_hp = 17,
+                    stub_abil_max_hp = 17,
+                    stub_monster_race = 113,
+                    pre_slave_count = spec.PreSlaveCount,
+                    pre_slave_xy_before = preSlaveXyBefore,
+                    pre_slave_xy_after = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                        .Take(spec.PreSlaveCount)
+                        .Select(x => (object)new { name = x.ChrName, x = (int)x.CurrX, y = (int)x.CurrY })
+                        .ToList(),
+                    // 预置 slave 从 (0,0) 移到施法者面前即 moved=true；未命中同名（空操作分界）则 false。
+                    recall_moved = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                        .Take(spec.PreSlaveCount).Any(x => x.CurrX != 0 || x.CurrY != 0),
+                    slave_count_before = slaveCountBefore,
+                    slave_count_after = caster.SlaveList?.Count ?? 0,
+                    regen_calls = OfflineWorldEngine.RegenCalls - regenBefore,
+                    new_slaves = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                        .Skip(slaveCountBefore)
+                        .Select(x => (object)new
+                        {
+                            name = x.ChrName,
+                            level = (int)x.Abil.Level,
+                            hp = (int)x.WAbil.HP,
+                            max_hp = (int)x.WAbil.MaxHP,
+                            master_is_caster = ReferenceEquals(x.Master, caster),
+                        })
+                        .ToList(),
+                },
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -2467,6 +2526,9 @@ public sealed class FireballResult
     /// <summary>17 SKELLETON 观测（仅该魔号；null 不落盘）：预置数/前后 slave 数/regen 次数/新增实体。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Skeleton { get; set; }
+    /// <summary>30 SINSU 观测（仅该魔号；null 不落盘）：召唤 adopt + cap_hit 回召（pre-slave xy before/after + recall_moved）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object SinSu { get; set; }
     /// <summary>三态计时器术后值（只有显式给了 `PoisonStates` 的支才有；`null` 时不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object StatusTimeArr { get; set; }
