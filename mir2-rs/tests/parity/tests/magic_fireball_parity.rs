@@ -1647,7 +1647,7 @@ fn frames_by_ident(case: &Value, ident: i64) -> Vec<(String, i64, i64, i64, i64)
 
 /// 取某 case 中 **caster** 的 640 帧 `(recog, param, series, due_ms_rel)`——**不含 `tag`**。
 /// 依据：卡 17/MG-41 SCOPE 的「离线替身造怪 0 抽 ⇒ RNG 流偏移」⇒ 640 的 `tag`(=TranPoint)
-/// 实测 golden=2 / Rust=1 或 3，**不同源**；其余字段同源可比。
+/// 实测 golden=2 / Rust=1（本 head；世代或夹具变动后需重测），**不同源**；其余字段同源可比。
 fn frames_640_caster(case: &Value) -> Vec<(i64, i64, i64, i64)> {
     let mut out = Vec::new();
     if let Some(recv) = case["Receivers"].as_array() {

@@ -34,7 +34,7 @@ if (userMagic.Level < 3 && boTrain) {
 | 6 | 召唤门 `SKILL_SKELLETON \| SKILL_SINSU \| SKILL_ANGEL` 内的 inlined 尾（出口约 :15285） | 17 / 30 / 41 | **已修**：`emit_magic_lvexp_delayed`（1000/800 + 去重） | ✅ `card/640-sweep-17-30-41` |
 | 7 | `if req.magic_id == SKILL_TAMMING` 内的 inlined 尾（出口约 :15394） | 20 | 已修 | ✅ c6 收敛批 |
 | 8 | `if req.magic_id == SKILL_46` 内的 inlined 尾（出口约 :15504） | 46 | 已修 | ✅ c6 收敛批 |
-| 9 | P1 default arm（`spell_tail_bo_train`）inlined 尾（出口约 :17233） | A 类 55/57/58/59/66–80（`boTrain=false` ⇒ 无 640）；B 类 49/51/52/53/54 | **立即发**（B 类） | ❌ 由 `c6` 的 `skill49` 批处理 |
+| 9 | P1 default arm（`spell_tail_bo_train`）inlined 尾（出口约 :17233） | A 类 55/57/58/59/66–80（`boTrain=false` ⇒ 无 640）；B 类 49/51/52/53/54 | **已修：自延迟**（B 类）；但**未收敛到 helper**（仍 inlined 副本） | ✅ 行为已修（`c6` 批）；**代码收敛待办** |
 
 > A 类零抽、无 640 ⇒ 本卡只涉 B 类（49/51/52/53/54）与 #5–#8。
 
@@ -66,8 +66,9 @@ if (userMagic.Level < 3 && boTrain) {
 ## 收口做法（每处一致）
 
 1. 产品：把该处 inlined 尾的 640 改成 `world.send_self_delay_msg_full(actor_id, RM_MAGIC_LVEXP, …,
-   1000)`（升级支 800 + 去重，与 `finish_spell_tail_with` 的 `Some` 支同口径；或直接收敛到
-   `finish_spell_tail_with(..., Some(1000))`）。
+   1000)`（升级支 800 + 去重）。**收敛目标只能是发射面**：`emit_magic_lvexp_delayed`；
+   **不能直接收敛到 `finish_spell_tail_with(..., Some(1000))`**——理由见 §G（效果体已调过
+   `do_spell_tail`，再调会抽数翻倍 + 638 双发）。
 2. golden：受影响 scenario 加 `StepDrainMs=100` 后重出；**结构 diff 只允许** 640 `due=1000`、次序、
    `recog`/actor-id 键、`DrainPasses` 与墙钟 `delivery`。
 3. 比较器：#6 必须把 640 纳入 `keep`（`sent_filter_sinsu` 现只比 17/638/642）；skeleton 同。
@@ -168,8 +169,7 @@ if (userMagic.Level < 3 && boTrain) {
   #5/#7/#8 三处的效果体已在 `slave.rs` 的 `cast_tamming_spell`/`cast_clone_spell` 内调用过 `do_spell_tail`
   （`slave.rs:312/496/565`），而 `finish_spell_tail_with` 自身也调（`lib.rs:13899`），抽数在
   `magic_effect.rs::spell_train_points`（`Random(3)+1`）⇒ 再调会**抽数翻倍 + 638 双发**。
-  **正确形态是只收敛发射面**：`emit_magic_lvexp_delayed`（已用于 #5/#7/#8）；**#9/P1（49/51/52/53/54）
-  与 #6 待迁**。把 `cast_*` 里的尾拆掉再统一到 `finish_spell_tail_with` 属**重构（会动 `slave.rs`）
+  **正确形态是只收敛发射面**：`emit_magic_lvexp_delayed`（已用于 #5/#7/#8）；**#9/P1（49/51/52/53/54）待迁**（#6 已随 `card/640-sweep-17-30-41` 迁入）。把 `cast_*` 里的尾拆掉再统一到 `finish_spell_tail_with` 属**重构（会动 `slave.rs`）
   ⇒ 另立新卡**，不在本卡范围。
 
 
