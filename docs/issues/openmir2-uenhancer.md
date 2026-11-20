@@ -43,5 +43,24 @@
 - **未覆盖（故不建议 full）**：① **非自身 proper-friend 目标**（`target≠caster` 时 `AttPowerUp` 给他人、657 随 target 走）；② **`CheckAmulet` 失败 → 639** 支；③ DoSpell 之后 **buff 的实际加成与超时**（`ExtraAbilTimes[0]` 到期）。
 - 若 Leader 要 `full`，需补上述三支（另开 case/卡），否则 `range` 行应保留一条（self-target / DoSpell 时刻）。
 
+## 未覆盖面（不在本卡验证范围内）
+
+> 本卡 `verified` = **部分范围**（`targetNull=self` 的 DoSpell 时刻）。以下三面**未验**，登记事实与归属以便追踪（不设时间）。
+
+### U-1 非自身 proper-friend 目标
+- **是什么**：`target≠caster` 时 `AttPowerUp` 落在**他人**，657（`StatusChanged`/`SendUpdateMsg`）的 `recog`/收件人随 target 走；本卡只验 self。
+- **缺什么**：case 用 `targetNull=false` 对准一个 proper-friend 玩家（`IsProperFriend` 门，`MagicManager.cs:618`）；装置已具备（现有 target 玩家 + `ArmRingAmulet`），只需新增 case。
+- **建议归属**：**本卡续**（加 `friend_target` case）。
+
+### U-2 `CheckAmulet` 失败 → 639
+- **是什么**：`CheckAmulet(1,1)` 不过 ⇒ `boSpellFail` 保持 true（`MagicManager.cs:620-647`）⇒ 恰一条 `SM_MAGICFIREFAIL(639)`，无 52/657/642/640，无护身符消耗。
+- **缺什么**：case 不带护身符（`ArmRingAmulet=false`）或错误类型；装置已具备该开关，只需新增 case。
+- **建议归属**：**本卡续**（加 `amulet_fail` case）。
+
+### U-3 DoSpell 之后的 buff 加成与超时
+- **是什么**：`ExtraAbil[0]/Times[0]`（`PlayObject.cs:5323-5331`）设置后，后续战斗的实际攻击力加成，以及 `ExtraAbilTimes[0]` 到期清除。
+- **缺什么**：需**跑多 tick / `Run`** 的装置（本卡是 DoSpell 单刻对拍，不跑 tick）；oracle 依据 = `ExtraAbilTimes` 到期处理与战斗取 DC。
+- **建议归属**：**新卡**（buff 生效/超时面，跨技能通用，与 ExtraAbil 相关卡同域）。
+
 ## 6. 依赖
 - `43`：ExtraAbil 折进 WAbil 的全局修正（`dc` 部分范围的关闭条件）。
