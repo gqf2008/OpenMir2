@@ -110,6 +110,34 @@
   不置 `AttackSkillPointCount`；只要 `MagicList` 不含攻杀剑法就没有任何抽数。**第二批加 `rng` 后
   本句不再成立**（届时「带攻杀 ⇒ 每次 Recalc 恰 1 抽」要进账本与断言）。
 
-**后续批（未做）**：攻杀剑法的 `RandomByte(7-L)` 抽数（函数加 `rng` 形参 + 账本）、`MagicArr`
-消费接线（`GetHitMode` 模式 4/5/8/12、`SkillAttackDamage`）、`HitPlus/HitDouble` 的战斗态、`MagicArr`
-残影在删技能后的行为用例（结构层已覆盖"不清空"）。
+**后续批（未做）**：攻杀剑法的 `RandomByte(7-L)` 抽数（函数加 `rng` 形参 + 账本）、
+`SkillAttackDamage` 的次级伤害（模式 4/5/8/12 的 `nSecPwr`）、`HitPlus/HitDouble` 的战斗态、
+`PowerHit/FireHitSkill`（攻杀/烈火的**战斗态**，`GetHitMode` 模式 3/7）。
+
+## 7. 第二批（`GetHitMode` 的 `MagicArr` 三条件接线）— 2026-11-20
+
+**范围声明（防日后默认扩大）**：本批**只接 `MagicArr` 的 `ergum(12)/banwol(25)/crossmoon(34)`**
+三个条件（`PlayObject.Attack.cs:101-134` 的 `case 4/5/8`）；`PowerHit`/`FireHitSkill`（`case 3/7`
+的战斗态）**不在本批**，`hit_skill_state` 恒传 `false`。
+
+**接线**：`lib.rs` 的动作帧分支（原 `HitSkillState::default()`）改为
+`skill_ability::hit_skill_state(&sg.magic.arr)`（`sessions.get(chr_name)`；缺会话回默认）；
+`skill_ability` 增 `SKILL_ERGUM/SKILL_BANWOL/SKILL_CROSSMOON` 常量（`readbook.rs` 改为 `pub use`，
+避免两处常量漂移）。
+
+**接线前基线快照（路径 + 命令 + 时间；`3b` 复核用）**：
+- `E:/UserTemp/it17b2-baseline-list.txt`（`cd mir2-rs && CARGO_BUILD_JOBS=2 cargo test -p game-svr --lib -- --list`，2162 名）
+- `E:/UserTemp/it17b2-baseline-run.txt`（`… cargo test -p game-svr --lib`；`2097 passed / 0 failed / 65 ignored`，逐条 ok）
+- `E:/UserTemp/it17b2-attack-subset.txt`（名单中含 `attack|hit|struck` 的 103 条）
+- `E:/UserTemp/it17b2-baseline-meta.txt`（时间 `2026-11-20T11:53:36+08:00`、head `1bfc59b28`、master `00cc9e761`、命令原文）
+- 接线后复跑：`E:/UserTemp/it17b2-after-wiring-run.txt`（`2100 passed / 0 failed / 65 ignored`）⇒
+  **逐名 diff：green→red = 空**（"没变"也是结论）；新增 3 条（下），无消失。
+
+**新用例（正反各一）**：
+- `it17b_hit_mode_skill_conditions_positive`：会话 `MagicArr` 有 12/25/34 ⇒ `CM_LONGHIT/CM_WIDEHIT/CM_CRSHIT`
+  的动作帧 = `SM_LONGHIT(19)/SM_WIDEHIT(24)/SM_CRSHIT(25)`。
+- `it17b_hit_mode_skill_conditions_negative`：`MagicArr` 全空 ⇒ 同三条命令仍 `SM_HIT`（且非三种特技帧）。
+- `skill_ability::tests::hit_skill_state_reads_magic_arr_only`：只认 12/25/34，`PowerHit/FireHitSkill` 恒 false。
+
+**牙（红→还原 sha→复绿）**：M4/M5/M6 分别把 `ergum/banwol/crossmoon` 置 false ⇒ 正向例红；
+M7b 三条件恒真 ⇒ 反向例红。还原后基线复绿。
