@@ -207,7 +207,7 @@ oracle 语义（`src/M2Server/Player/PlayObject.Message.cs` 的
 | MG-56 fireboom47 | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
 | MG-45 snowwind | 伤害/MC | 同上 | SM 31 series | 点亮 | 链齐待跑 |
 | MG-27 firecharm | 伤害/SC | hit `caster_sc=2565`，edge 15 | SM 31 series（15/9） | 点亮 | 本轮绿 |
-| MG-38 lightflower | 伤害/MC | s5/s13 `mc=3850`(20..30)，s1 15 | SM 31 series（1/2/3，全 >0 且分叉） | 点亮（观测面 = series；`nPower/10` 使 10..15 压成 1，故取 20..30） | 本轮绿 |
+| MG-38 lightflower | 伤害/MC | s5/s13 `mc=7700`(=`MakeWord(20,30)`)，s1 15 | SM 31 series（1/2/3，全 >0 且分叉） | 点亮（观测面 = series；`nPower/10` 使 10..15 压成 1，故取 20..30） | 本轮绿 |
 | MG-12 healing | 治疗/SC | heal/self `sc=2565` | TargetHp 不动；RM 8034 p1 = 15 / 20（随 seed） | 治疗量**可观测（RM p1）**；TargetHp **不可观测**（`RM_MAGHEALING` 只累计 `IncHealing`，加血在后续 tick） | 本轮绿 |
 | MG-40 bighealing | 治疗/SC | heal/both `sc=2565` | 同上（RM 8034 p1 15 / 20） | 同上 | 本轮绿 |
 | MG-28 hangmajinbub | DefenceUp 强度/SC | s5/s13 `sc=2565` | SM 100 tail（`…250秒`→`…151/154秒`）；657 series 7/0/7 | 点亮（观测面 = 100 的 tail，不是 HP） | 本轮绿 |
