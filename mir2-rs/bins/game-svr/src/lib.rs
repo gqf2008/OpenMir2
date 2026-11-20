@@ -71785,7 +71785,6 @@ SendRefMsgRange=15
             if let Ok(v) = u16::try_from(v) {
                 if v > 0 {
                     let cmax = golden_fixture_required("healing", label, "caster_max_hp");
-                    let cmax = u16::try_from(cmax).unwrap_or(100);
                     let ce = rig.world.entities.get_mut(caster).unwrap();
                     ce.vitals.hp = v;
                     ce.vitals.max_hp = cmax;
