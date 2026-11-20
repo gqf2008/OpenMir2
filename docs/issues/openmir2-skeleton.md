@@ -13,6 +13,7 @@
 - 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 `race=100`（WhiteSkeleton 真身）、`Abil.MaxHP=17`、`WAbil.HP=17`（`stub_wabil_hp=17`、`stub_abil_max_hp=17`、`stub_monster_race=100`）。
 - `apply_slave_level_abilitys`：`chp = 17 + round(17*0.4)*1 = 24`（`SlaveExpLevel=1`）⇒ `MaxHP=24`；半补 `HP = 17 + (24-17)/2 = 20` ⇒ **hp/max_hp = 20/24、level=1**。
 - Rust `skeleton_rig` 照此配怪物表（`race=100 / hp=17`），`skeleton_cast_smoke` 实测 `slave_hp=20/24 level=1`，与 golden 逐项一致（**未改夹具**）。
+- **ActorId 段**：`SM_638`（`RM_MAGICFIRE`）尾 = EDCode(int32 目标 ActorId)；golden `summon_ok` 尾 `Nghcd?`→`1002`、`cap_hit` 尾 `Zghjd?`→`2002`（对应 `RM_MAGICFIRE.p3`=1002/2002）。驱动 `id_base` 取 golden 的 `1000`/`2000`（`new_layout` 令 target=`id_base+2`）。
 
 ## 3. 对拍面（本卡 SCOPE）
 `real_rust_ledger_skeleton`（`mir2-rs/tests/parity/tests/magic_fireball_parity.rs`）比较：
@@ -27,11 +28,16 @@
 - **症状**：召唤施法跑完，`spawn_calls`（`regen_calls`）已 `+1`，但 `slave_count_after == slave_count_before`、无新实体（`frames` 也少），像「spawn 没生效」。
 - **根因**：`bins/game-svr/src/slave.rs` 的 `MonsterTableSpawner::spawn` 首句 `let map_name = self.registry.name_of(map_id)?;` —— 测试 `SpellFrameRig` 用**空** `MapRegistry`（`from_entries(.., Vec::new())`）⇒ `name_of(0)=None` ⇒ `spawn` 在造怪前就 `?` 返回 `None`（但 `spawn_calls` 已 `+=1`，故只看计数会误判「spawn 执行了」）。
 - **补法**：给 rig 写一张**带表头**的临时 `Map/0.map`（`HEADER_BYTES` 前 2 字节 = 宽 LE、次 2 字节 = 高 LE，再 `w*h*CELL_BYTES`）→ `MapRegistry::from_entries(MapLoader::new(base,"Map","Envir"), vec![MapInfoEntry{ name:"map", file:"0", .. }])`。**不带表头会 `parse_map_bytes` Err ⇒ 该条被 skip（仍 `name_of=None`）**——照 `bins/game-svr` 的 `cm_wantminimap` 测试写法。
+- **另一坑（ActorId 尾）**：召唤帧里 `SM_638` 尾编码 int32 目标 ActorId。驱动 `id_base` 若不是 golden 的 `1000`/`2000`，尾就不同（实测 `4002` vs 期望 `1002`）。对齐 `id_base` 即可，勿改 golden。
 
-## 5. 证据（待绿跑回填）
-- 驱动：`tests::skeleton_parity_summon_ok`(id_base 4000) / `tests::skeleton_parity_cap_hit`(5000)。
-- 比较器：`real_rust_ledger_skeleton`（两例各自独立结论）。
-- 待回填：`cargo check` rc、两驱动 passed、比较器 `[skeleton summon_ok] PASS` / `[skeleton cap_hit] PASS`、三断逐条、桩态（`git status` 空 / `MUTATION`=0）。
+## 5. 证据（绿跑，2026-11-20）
+- `cargo check -p game-svr --lib` = **rc 0**；`cargo check -p mir2-parity-tests --tests` = **rc 0**。
+- 驱动（各 1 passed，单独进程 `--exact --test-threads=1`）：`tests::skeleton_parity_summon_ok`（`entities 4->5 slave 0->1 regen=1 frames=7 new=1`）；`tests::skeleton_parity_cap_hit`（`entities 5->5 slave 1->1 regen=0 frames=6 new=0`）。
+- 比较器 `real_rust_ledger_skeleton` = **CMP_RC=0**：`[skeleton summon_ok] PASS` / `[skeleton cap_hit] PASS`（两例各自独立结论）。
+- 覆盖：`Skeleton` block 全字段、`new_slaves` 实值 20/24（level 1 / master_is_caster true）、帧 17/638/642 全等；`cap_hit` 三断（①实体数不增 5->5 ②`slave_count` 不变 1->1 且 `new_slaves` 空 ③`regen_calls=0`）各自独立成立。
+- ActorId 对齐：`id_base` 由 4000/5000 改 1000/2000（对齐 golden 的 `SM_638` 尾目标 ActorId 1002/2002）；此时全绿。
+- 桩态：`git status --porcelain` 空、`grep -rn MUTATION`=0。
+- **待办（窗口）**：全量门 `fmt` / `clippy --workspace` / `cargo test --workspace` / `msgcodegen --check` 尚未跑（车道受限，逐批收口时补跑）；§31 变异牙未做。
 
 ## 6. 未覆盖面
 - **神兽（30）/ 精灵（41）** 的召唤面：`summon_slave` 已含 `Recalled`/`Blocked` 分支，但本卡只验 17。
