@@ -347,8 +347,32 @@ impl TickFrameQueue {
 
 ⇒ **7 个点全部为真缺口**（#9 是"半个已接"：#buff_status_changes 支已有，recalcs 支没有）。
 
-### 12b. 由此得出的发射模式（对既有 4 处同样适用，需复核）
+### 12b. 发射模式：**按 oracle 产出点，不能外推**（2026-11-20，`da` 实测修正）
 
-**每次 recalc = `StatusChanged()` 广播（含自己）+ `SendUpdateMsg` 自更新**（两条同 ident 155）。
-本仓现有实现（#1/#2/#3/#4/#7 与 T-290）**大多只发 1 条自己 + 广播一次**，
-**缺"自更新那条"**——与 `da` 的 36 实测（caster 2 条）不符。该差异需在接线时统一，并回头复核已接的 5 处。
+**先前假设作废**：我一度以为"每次 recalc = 广播 1 + 自更新 1"是通用模板——`da` 扫全部
+`golden/magic/*.json` 后证明**不同技能的多重集不同，由 oracle 产出路径决定**：
+
+| golden | caster | target | obs_in | 形态 |
+|---|---|---|---|---|
+| `uenhancer`(36) | **2** | 1 | 1 | `RecalcAbilitys` 无条件 `:2875 StatusChanged()` + `:2876 SendUpdateMsg`（广播1含self + 自更新1） |
+| `bigcloak`(19) | 2 | 2 | 2 | **两次广播**（每收件人 2），无单独自更新 |
+| `cloak`(18) / `shield`(31) | 1 | 1 | 1 | **单广播**（shield = `MagBubbleDefenceUp` 的 `if (nOldStatus != CharStatus) StatusChanged()`） |
+| `dejiwonho`(15) | 1 | **2** | 1 | target 多一条（路径特定） |
+| `hangmajinbub`(14) | 49 | 98 | 49 | 逐格 ×2 |
+
+⇒ **"已接 5 处只发 1 条自己 + 广播一次"不构成缺口证据**：若该路径 oracle 只有 `StatusChanged()`
+（无 `SendUpdateMsg`），1/1/1 就是对的（`shield` 即此）。**复核必须逐路径对 oracle 产出点**，
+不得拿 36 的 2/1/1 外推。
+
+**模板契约（草案，仍待逐点锚定后才可作为实现依据）**：
+> 每条 657 = **一次 oracle 产出调用**（`StatusChanged()` 或 `SendUpdateMsg(...)`）对应一条帧；
+> 收件人集合由该调用决定（`SendRefMsg` = 半径内含自己；`SendUpdateMsg` = 仅自己）；
+> 帧序 = `(byte)RM_CHARSTATUSCHANGED = 155`，同键按**入队序**（源行序：广播先、自更新后）。
+> **反例**：`MagBubbleDefenceUp` 条件不满足时**一条都没有**（条件 StatusChanged）。
+
+### 12c. golden 全量 657 扫描（2026-11-20，只读）
+
+`tests/parity/golden/**` 下含 657 的 JSON 共 **10 个文件**（含 `magic/legacy/*` 副本），
+每 case 出现次数：`bigcloak` 6、`cloak` 3、`dejiwonho` 4、`hangmajinbub` **196**、`shield` 3
+（均 ×3 cases，三 seed 一致）；`uenhancer` 的 golden 尚未入 `golden/`（`da` 手扫给出 2/1/1）。
+这些文件被 `docs/issues/parity-gap-magic.json` 的条目引用；比较器在 `tests/parity/tests/magic_fireball_parity.rs`。
