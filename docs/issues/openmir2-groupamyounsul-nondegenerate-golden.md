@@ -12,7 +12,11 @@
 - 两侧都没有 `RM_POISON`；`TargetHp` 前后都是 `100`；
 - 帧面只有 `17`（`SM_SPELL`）+ `638`（`SM_MAGICFIRE`），即**只剩施法本身**。
 
-⇒ `cast_group_poison_spell` 的逐目标循环**一次都没执行**（目标没进 `mag_objects_in_range`），
+⇒ `cast_group_poison_spell` 的逐目标循环**一次都没执行**。**根因已钉（2026-11-20 QA 复核）**：
+现行探针的护身符写死 `StdMode=25, **Shape=5**`，而 48 的逐目标门是 `MagicManager.cs:908` 的
+`CheckAmulet(playObject, 1, **nType=2**)`——`MagicBase.cs:65-70` 的 nType=2 支要求 **`Shape <= 2`** ⇒
+**每个目标都在护身符门处被跳过，根本走不到 `Random(AntiPoison+7)`**（这正是 `Rng=0` 的直接原因）。
+（"目标是否在 `mag_objects_in_range` 内"仍未被单独证明；造新夹具时**两件事都要满足**：目标在范围内 + 护身符 `Shape≤2`。）
 48 的"群体施毒"声明行为在本 golden 下**完全不可观测**。
 
 ## 2. 四刀变异原文（最强证据：全绿 ⇒ 循环零次）
@@ -33,7 +37,9 @@
 
 - **一个敌对目标真的落在 `mag_objects_in_range(caster.map, tx, ty, level.max(1))` 内**
   （现行夹具里 caster/target/obs_in 都不进该集合 —— 这是根因）；
-- 施法者有可用护身符（`CheckAmulet(1,1)` 通过 ⇒ `use_amulet` 返回 `Some(Shape)`）；
+- 施法者有可用护身符，且 **`CheckAmulet(playObject, 1, nType=2)` 通过**（`MagicManager.cs:908`；
+  `MagicBase.cs:65-70`：nType=2 要求 **`Shape <= 2`**）⇒ `use_amulet` 才会返回 `Some(Shape)`。
+  **现行探针 `StdMode=25, Shape=5` 过不了这道门**；`nType=1`（`Shape == 5`）是 `:323` 那条、属魔号 14/15（`MG-28/29`），与 48 无关。
 - 触发的 `Shape` 至少覆盖 **1（绿毒，`n_int=40`）**；若 oracle 场景允许，**2（红毒，30）** 另起一支；
 - 期望面必须包含：`RM_POISON`（`type/nPower/caster/point` 四字段）、`Rng` 非空、
   目标 `HP` 或毒状态的可观测变化。
