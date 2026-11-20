@@ -96873,6 +96873,65 @@ fn ",
         assert_eq!(per.get(&(905, spell)), None, "+13：17 零帧");
         assert_eq!(per.get(&(905, nc)), None, "+13：53 零帧");
     }
+
+    /// **7b 32 圣言术 `invalid_cast` 支的 639**（分支归属：`SKILL_KILLUNDEAD` arm）：
+    /// 目标为**怪物**（非 PLAY）⇒ `cast_turn_undead_spell` 的 `invalid_cast=true` ⇒ 恰一条 639；
+    /// 17 已刷新 ⇒ 639 命中缓存（边界只收 17）。覆盖站点：639（32 invalid_cast）。
+    #[test]
+    fn spell32_turn_undead_invalid_cast_639_hits_cache() {
+        let (
+            mut world,
+            caster,
+            _target,
+            online,
+            mut saves,
+            magic_table,
+            mut displays,
+            gates,
+            mut rx0,
+        ) = spell7b_fixture(32, 12, 10);
+        // 点击点放一只怪：非 PLAY ⇒ invalid_cast；proper-target 判定通过。
+        let mut mon_e = mir2_world_bevy::EntitySpawn::new(0, "undead", 12, 10);
+        mon_e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        let mon = world.add_entity(mon_e);
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.mp = 100;
+        sg.state.wabil.max_mp = 100;
+        ground_sessions.insert("caster".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            32,
+            u16::try_from(mon).unwrap_or(0),
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            None,
+            &table,
+            &mut displays,
+            &gates,
+            1,
+            1,
+            2,
+        );
+        let per = spell7b_counts(&mut rx0);
+        let fail = mir2_protocol::messages::SM_MAGICFIRE_FAIL;
+        assert_eq!(per.get(&(902, fail)), Some(&1), "+5：639 收");
+        assert_eq!(per.get(&(903, fail)), None, "|Δ|=11：639 被缓存挡");
+        assert_eq!(per.get(&(904, fail)), None, "|Δ|=12：639 被缓存挡");
+    }
 }
 
 #[cfg(test)]

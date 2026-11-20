@@ -229,6 +229,18 @@
   `cast_uenhancer_spell` 的 `invalid_cast = 目标 race != Play`，而上游 `is_proper_friend`
   要求 PLAY 目标 ⇒ 该臂只有在「非玩家目标也满足 proper-friend」的语义出现时才可达（当前
   无此模型）。**m36 记为「该站点无可用行为牙」，既不算通过也不算失败**；其余 8 点牙必须行为化。
+- **分支归属（逐点核过，2026-11-20）**：
+  - 13029 638（`finish_spell_tail_with` 的 `tail.magic_fire` 支）← 具体入口如 **22 火墙** arm
+    （`match req.magic_id` 的 `22 =>` 调 `finish_spell_tail`）；
+  - 13739 657 ← **31 护盾**（`SKILL_SHIELD` arm）；
+  - 13907 657 ← **14/15**（`SKILL_HANGMAJINBUB | SKILL_DEJIWONHO` arm）；
+  - 15238 639 ← **32 圣言术**（`SKILL_KILLUNDEAD` arm 的 `out.invalid_cast`）；
+  - 15719 638 / 15730 716 ← **42 群体雷电**（block `matches!(6|42|48|50)` 的 `_` arm）；
+  - 15826 53 ← **9/10/22/36 block**（`matches!(9|10|22|36)`，`deferred_health` 出帧，在 match 之前）；
+  - 15943/15964 639 ← **36 无极真气**（同 block 的 `36`/`_` 相关臂；15964 为不可达防御臂）。
+  对应用例：22→`spell_shared_tail_53_and_638...`、42→`spell_group_lightening...`、
+  31→`spell_shield_657...`、14/15→`spell_defence_area_657...`、32→`spell32_turn_undead_invalid_cast_639...`、
+  36→`spell36_amulet_fail_639...`；另有 `spell_boundary_only_gets_spell_frame_17`。
 - 用例：`spell_shared_tail_53_and_638_hit_cache_after_spell_frame`（53/638）、
   `spell_group_lightening_638_and_716_hit_cache`（638+716 多次）、
   `spell_shield_657_hits_cache_on_each_cast`（657）、`spell_defence_area_657_hits_cache`（657）、
