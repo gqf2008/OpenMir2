@@ -70667,14 +70667,23 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
-        // **收件人 HitSpeed**（657 `series` 取 `sg.hit_speed`，见宿主 `sm_charstatuschanged` 调用面）：
-        // golden `Fixture.hit_speed` > 0 时对 caster/target/obs_in 三个会话生效；缺省 0 = 不动。
+        // **收件人 HitSpeed**（657 `series` 取**接收者自己**的 HitSpeed；oracle
+        // `PlayObject.Message.cs` 的 `RM_CHARSTATUSCHANGED` 支 = `SendDefMessage(..., this.HitSpeed)`）。
+        // 出帧侧有两个同名字段：自更新支读会话 `sg.hit_speed`，观察者广播
+        // （`broadcast_charstatuschanged_except_self`）读**接收者实体**的 `hit_speed`。
+        // 这里同时写两份——它就是 `apply_ability_to_entity` 在装置侧的对应；只写会话会让观察者
+        // 副本恒 0（「世代切换」前的假绿来源）。golden 缺键或 0 = 不动。
         if let Some(h) = golden_fixture_opt(stem, label, "hit_speed") {
             let h = u16::try_from(h).unwrap_or(0);
             if h > 0 {
-                for who in ["caster", "target", "obs_in"] {
+                let obs_in = fireball_actor(&rig, "obs_in");
+                for (who, id) in [("caster", caster), ("target", target), ("obs_in", obs_in)] {
                     if let Some(sg) = rig.ground_sessions.get_mut(who) {
                         sg.hit_speed = h;
+                    }
+                    if let Some(e) = rig.world.entities.get_mut(id) {
+                        // `EntityRef.hit_speed` 是 `vitals.hit_speed` 的视图（entity.rs），写源字段。
+                        e.vitals.hit_speed = h;
                     }
                 }
             }
@@ -72603,6 +72612,23 @@ SendRefMsgRange=15
     }
 
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
+    /// 金标准某接收者 `Sent` 里 `ident` 的帧（按序；**期望只从 golden 来**）。
+    fn golden_sent_ident(stem: &str, label: &str, who: &str, ident: i64) -> Vec<serde_json::Value> {
+        let c = golden_case_for(stem, label);
+        c["Receivers"]
+            .as_array()
+            .expect("金标准必须有 Receivers")
+            .iter()
+            .find(|r| r["Who"] == who)
+            .unwrap_or_else(|| panic!("金标准缺 {who} 接收者"))["Sent"]
+            .as_array()
+            .expect("金标准 Sent 必须是数组")
+            .iter()
+            .filter(|m| m["ident"] == ident)
+            .cloned()
+            .collect()
+    }
+
     fn golden_case_for(stem: &str, label: &str) -> serde_json::Value {
         let file = match stem {
             "fireball5" => "fireball-5.json".to_string(),
@@ -73156,9 +73182,10 @@ SendRefMsgRange=15
                 "[{stem}/{label}] {who} 帧序"
             );
         }
-        // 657：每个 socket 恰 2 条、字段逐项 (0,0,0)（隐身位不进 CharStatus）。
+        // 657：每个 socket 恰 2 条；字段逐项**从 golden 读**再比。
+        // 原先写死的 `(0,0,0)` 是从被测实现自己的输出抄来的字面量（注释谎称「与 golden 同源」）：
+        // 实现/golden 一旦给出非零 series（世代切换后 657 已点亮）就会把对的行为判红。
         for who in ["caster", "target", "obs_in"] {
-            assert_eq!(n(who, "Sent", 657), 2, "[{stem}/{label}] {who} 的 657 条数");
             let frames: Vec<&serde_json::Value> = c["Receivers"]
                 .as_array()
                 .unwrap()
@@ -73170,11 +73197,18 @@ SendRefMsgRange=15
                 .iter()
                 .filter(|m| m["ident"] == 657)
                 .collect();
-            for f in frames {
+            let gold = golden_sent_ident(stem, label, who, 657);
+            assert_eq!(frames.len(), 2, "[{stem}/{label}] {who} 的 657 条数");
+            assert_eq!(
+                frames.len(),
+                gold.len(),
+                "[{stem}/{label}] {who} 的 657 条数必须与 golden 一致"
+            );
+            for (f, g) in frames.iter().zip(gold.iter()) {
                 assert_eq!(
                     (f["param"].as_i64(), f["tag"].as_i64(), f["series"].as_i64()),
-                    (Some(0), Some(0), Some(0)),
-                    "[{stem}/{label}] {who} 的 657 字段"
+                    (g["param"].as_i64(), g["tag"].as_i64(), g["series"].as_i64()),
+                    "[{stem}/{label}] {who} 的 657 字段必须与 golden 同源"
                 );
             }
             assert_eq!(
@@ -73388,7 +73422,8 @@ SendRefMsgRange=15
             .filter_map(|m| m["ident"].as_i64())
             .collect();
         assert_eq!(tseq, vec![17, 638, 657], "[{stem}/{label}] target 帧序");
-        // 657 的字段（隐身位不进 CharStatus ⇒ 全 0；与 golden 同源）。
+        // 657 的字段：**从 golden 读该收件人的三元组再比**（原注释「与 golden 同源」不成立——
+        // 期望是抄袭被测实现输出的字面量）。
         let f657 = c["Receivers"]
             .as_array()
             .unwrap()
@@ -73401,14 +73436,24 @@ SendRefMsgRange=15
             .find(|m| m["ident"] == 657)
             .unwrap()
             .clone();
+        let g657 = golden_sent_ident(stem, label, "caster", 657);
+        assert_eq!(
+            g657.len(),
+            1,
+            "[{stem}/{label}] golden 的 caster 657 必须恰 1 条"
+        );
         assert_eq!(
             (
                 f657["param"].as_i64(),
                 f657["tag"].as_i64(),
                 f657["series"].as_i64()
             ),
-            (Some(0), Some(0), Some(0)),
-            "[{stem}/{label}] 657 的 (param,tag,series)"
+            (
+                g657[0]["param"].as_i64(),
+                g657[0]["tag"].as_i64(),
+                g657[0]["series"].as_i64()
+            ),
+            "[{stem}/{label}] 657 的 (param,tag,series) 必须与 golden 同源"
         );
         assert_eq!(
             n("caster", "Sent", 638),
