@@ -1493,6 +1493,10 @@ run_id 侧车挡住）。**新条目交付时卡里必须写这三项：驱动�
 （`src/M2Server/Player/CharacterObject.cs`），**不是** `Abil/WAbil` 字段；Rust 宿主侧对应 `sg.hit_speed`
 （`sm_charstatuschanged` 调用面）。
 
+> **⚠️ 三者同名不同源**：`CharacterObject.HitSpeed`（oracle）/ `sg.hit_speed`（Rust ground session）/
+> `WAbil.HitSpeed` 不是同一个东西；**`series` 只认前两者所映射的一条链**。把 rig 写成 `wabil.hit_speed`
+> 会得到"看起来设了、其实没生效"的**假绿**——golden 的系列值仍是 0 而测试不红（若断言的只是"跑通"）。
+
 **装置旋钮**：`MagicSpec.HitSpeed`（>0 时对 caster/target/obs_in 三会话生效；Fixture 记 `hit_speed`），
 Rust 侧读同一字段（`fireball_parity_drive` / `uenhancer_parity_drive`）。
 
