@@ -80,6 +80,8 @@
           "y": 30
         },
         "pvp_level": 0,
+        "precise": false,
+        "note": null,
         "norandom": false,
         "seed": 20261120,
         "map_sizes": {
@@ -286,6 +288,8 @@
           "y": 30
         },
         "pvp_level": 0,
+        "precise": false,
+        "note": null,
         "norandom": false,
         "seed": 20261121,
         "map_sizes": {
@@ -492,6 +496,8 @@
           "y": 30
         },
         "pvp_level": 0,
+        "precise": false,
+        "note": null,
         "norandom": false,
         "seed": 20261122,
         "map_sizes": {
@@ -698,6 +704,8 @@
           "y": 30
         },
         "pvp_level": 0,
+        "precise": false,
+        "note": null,
         "norandom": true,
         "seed": 20261123,
         "map_sizes": {
@@ -771,6 +779,1001 @@
         "rng_draw_count": 0,
         "drain": {
           "passes": 0,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_dungeon_home_exact",
+      "ctx": {
+        "make_index": 1,
+        "index": 3003,
+        "actor_id": 933003,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 5,
+          "y": 6
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "precise": true,
+        "note": null,
+        "norandom": false,
+        "seed": 20261124,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 5,
+            "n_param2": 6,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933003,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933003,
+            "param": 5,
+            "tag": 6,
+            "series": 0,
+            "tail": "6c6f3d706d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933003,
+            "param": 5,
+            "tag": 6,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "home_map",
+          "envir": "home_map",
+          "x": 5,
+          "y": 6
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [],
+        "rng_draw_count": 0,
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_dungeon_red_home_exact",
+      "ctx": {
+        "make_index": 1,
+        "index": 3003,
+        "actor_id": 933003,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 5,
+          "y": 6
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 2,
+        "precise": true,
+        "note": null,
+        "norandom": false,
+        "seed": 20261125,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 20,
+            "n_param2": 30,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933003,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933003,
+            "param": 20,
+            "tag": 30,
+            "series": 0,
+            "tail": "726d447a7b6d496c703f"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933003,
+            "param": 20,
+            "tag": 30,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "red_map",
+          "envir": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [],
+        "rng_draw_count": 0,
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_dungeon_red_home_alt_values",
+      "ctx": {
+        "make_index": 1,
+        "index": 3003,
+        "actor_id": 933003,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 5,
+          "y": 6
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 25,
+          "y": 35
+        },
+        "pvp_level": 2,
+        "precise": true,
+        "note": "home=(home_map,5,6) \u662F\u767B\u5F55\u65F6 PvpLevel\u003C2 \u6355\u83B7\u7684\u5B57\u6BB5\u5FEB\u7167\uFF1Bred=(red_map,25,35) \u662F\u767B\u5F55\u65F6 SystemShare.Config.RedHome* \u7684\u5FEB\u7167\u3002\u5403\u65F6 PvpLevel=2 \u21D2 \u5FC5\u987B\u7528 red\uFF1B\u82E5\u5B9E\u73B0\u8BEF\u7528\u767B\u5F55\u671F\u7684 home\uFF08\u6216\u5199\u6B7B 20/30\uFF09\uFF0C\u7EC8\u6001\u4F1A\u662F home_map(5,6) / red_map(20,30)\u3002",
+        "norandom": false,
+        "seed": 20261127,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 25,
+            "n_param2": 35,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933003,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933003,
+            "param": 25,
+            "tag": 35,
+            "series": 0,
+            "tail": "726d447a7b6d496c703f"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933003,
+            "param": 25,
+            "tag": 35,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "red_map",
+          "envir": "red_map",
+          "x": 25,
+          "y": 35
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [],
+        "rng_draw_count": 0,
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_home_x_zero_y_nonzero_random",
+      "ctx": {
+        "make_index": 1,
+        "index": 3003,
+        "actor_id": 933003,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 0,
+          "y": 6
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "precise": false,
+        "note": "\u53EA\u7F3A\u4E00\u7EF4\uFF1Aoracle \u0060if (sX != 0 \u0026\u0026 sY != 0)\u0060 \u21D2 \u968F\u673A\u70B9\uFF1B\u0060||\u0060 \u5B9E\u73B0\u4F1A\u843D\u5230\u7CBE\u786E\u70B9 (0,6) \u4E14 0 \u62BD\u3002",
+        "norandom": false,
+        "seed": 20261128,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 54,
+            "n_param2": 58,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933003,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933003,
+            "param": 54,
+            "tag": 58,
+            "series": 0,
+            "tail": "6c6f3d706d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933003,
+            "param": 54,
+            "tag": 58,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "home_map",
+          "envir": "home_map",
+          "x": 54,
+          "y": 58
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [
+          {
+            "seq": 1,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 34,
+            "site": "BaseObject.MapRandomMove"
+          },
+          {
+            "seq": 2,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 38,
+            "site": "BaseObject.MapRandomMove"
+          }
+        ],
+        "rng_draw_count": 2,
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_shape3_dungeon_home_coords_zero_random",
+      "ctx": {
+        "make_index": 1,
+        "index": 3003,
+        "actor_id": 933003,
+        "wabil_before": {
+          "weight": 0,
+          "wear_weight": 0,
+          "hand_weight": 0
+        },
+        "current": {
+          "map": "move_map",
+          "x": 10,
+          "y": 10
+        },
+        "home": {
+          "map": "home_map",
+          "x": 0,
+          "y": 0
+        },
+        "red_home": {
+          "map": "red_map",
+          "x": 20,
+          "y": 30
+        },
+        "pvp_level": 0,
+        "precise": false,
+        "note": null,
+        "norandom": false,
+        "seed": 20261126,
+        "map_sizes": {
+          "move_map": [
+            60,
+            60
+          ],
+          "home_map": [
+            60,
+            60
+          ],
+          "red_map": [
+            60,
+            60
+          ]
+        },
+        "map_day_light": true,
+        "presentation": {
+          "dir": 4,
+          "light": 0,
+          "day_light": true
+        },
+        "map_file_name": "move_map"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          }
+        ],
+        "notices": [
+          {
+            "ident": 8062,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 126,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8097,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 161,
+            "late": 0
+          },
+          {
+            "ident": 8098,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 162,
+            "late": 0
+          },
+          {
+            "ident": 8100,
+            "w_param": 4,
+            "n_param1": 52,
+            "n_param2": 35,
+            "n_param3": 0,
+            "priority": 164,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 800,
+            "recog": 933003,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 622,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 36683,
+            "tail": ""
+          },
+          {
+            "ident": 633,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 634,
+            "recog": 933003,
+            "param": 52,
+            "tag": 35,
+            "series": 0,
+            "tail": "6c6f3d706d7b3d746d704b"
+          },
+          {
+            "ident": 766,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 54,
+            "recog": -1,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "tail": ""
+          },
+          {
+            "ident": 801,
+            "recog": 933003,
+            "param": 52,
+            "tag": 35,
+            "series": 4,
+            "tail": "6464686b6464686b64644b"
+          }
+        ],
+        "pump_idents": [
+          8062,
+          10115,
+          8097,
+          8098,
+          8100
+        ],
+        "final": {
+          "map": "home_map",
+          "envir": "home_map",
+          "x": 52,
+          "y": 35
+        },
+        "item_list": [],
+        "weight": 0,
+        "rng": [
+          {
+            "seq": 1,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 32,
+            "site": "BaseObject.MapRandomMove"
+          },
+          {
+            "seq": 2,
+            "kind": "Next(max)",
+            "arg": 39,
+            "value": 15,
+            "site": "BaseObject.MapRandomMove"
+          }
+        ],
+        "rng_draw_count": 2,
+        "drain": {
+          "passes": 1,
           "max_passes": 8,
           "hit_cap": false
         }

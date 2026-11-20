@@ -651,4 +651,50 @@ mod tests {
     fn it10_random_branch_moves() {
         run_move_parity(3002, 2, Some("eat_ok_shape2_random_scroll_current_map"));
     }
+
+    /// **IT-11 地牢逃脱 Shape3** 宿主级对拍（三支）：
+    /// - `PvpLevel<2` ⇒ `BaseObjectMove(HomeMap,HomeX,HomeY)` 精确点（0 抽）；
+    /// - `PvpLevel>=2` ⇒ `BaseObjectMove(Config.RedHomeMap,RedHomeX,RedHomeY)` 精确点（0 抽）；
+    /// - `HomeX/HomeY` 任一为 0 ⇒ `MapRandomMove(HomeMap)`（两抽）——`BaseObjectMove` 的坐标门。
+    ///
+    /// 红检：把 `pvp >= 2` 改 `pvp > 2`（边界错）⇒ 红名支红；把 home/red 目标互换 ⇒ 红名支红；
+    /// 把坐标 0 门去掉（恒 Fixed）⇒ 零坐标支的落点/抽数红。
+    #[test]
+    fn it11_dungeon_escape_host_parity() {
+        run_move_parity(3003, 5, None);
+    }
+
+    /// **IT-11 单跑**（变异牙要逐支原文）。
+    #[test]
+    fn it11_home_branch_exact() {
+        run_move_parity(3003, 5, Some("eat_ok_shape3_dungeon_home_exact"));
+    }
+
+    /// **IT-11 单跑**：`PvpLevel>=2` ⇒ RedHome 精确点。
+    #[test]
+    fn it11_red_home_branch_exact() {
+        run_move_parity(3003, 5, Some("eat_ok_shape3_dungeon_red_home_exact"));
+    }
+
+    /// **IT-11 单跑**：另一组 RedHome 值（25/35）⇒ 证明目标来自快照、不是写死 20/30。
+    #[test]
+    fn it11_red_home_alt_values() {
+        run_move_parity(3003, 5, Some("eat_ok_shape3_dungeon_red_home_alt_values"));
+    }
+
+    /// **IT-11 单跑**：只缺一维（HomeX=0、HomeY=6）⇒ 随机点——证明门是 `sX!=0 && sY!=0`（`&&`，不是 `||`）。
+    #[test]
+    fn it11_home_x_zero_y_nonzero_random() {
+        run_move_parity(3003, 5, Some("eat_ok_shape3_home_x_zero_y_nonzero_random"));
+    }
+
+    /// **IT-11 单跑**：HomeX/HomeY 都为 0 ⇒ 随机点（`BaseObjectMove` 的 `sX!=0 && sY!=0` 门）。
+    #[test]
+    fn it11_home_zero_coords_random() {
+        run_move_parity(
+            3003,
+            5,
+            Some("eat_ok_shape3_dungeon_home_coords_zero_random"),
+        );
+    }
 }

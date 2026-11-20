@@ -368,6 +368,14 @@ internal static class Program
         /// <summary>`Envir.Flag.boNORANDOMMOVE`（IT-10 的两支）。</summary>
         public bool NoRandom;
         public int Seed = 20261120;
+        /// <summary>目标点是否**精确**（`sX!=0 && sY!=0` ⇒ SpaceMove 精确点、0 抽）；仅自检/ctx 用。</summary>
+        public bool Precise;
+        /// <summary>`SystemShare.Config.RedHome*`（逐例可换值 ⇒ 证明实现读快照而不是写死）。</summary>
+        public string RedMap = "red_map";
+        public short RedX = 20;
+        public short RedY = 30;
+        /// <summary>用例说明（写进 golden ctx；说明输入来源与「误用会怎样」的反例期望）。</summary>
+        public string Note;
     }
 
     private static UserItem ToUser(Ctx c)
@@ -393,7 +401,7 @@ internal static class Program
         // 每 case 独立 Envir 实例（避免上一 case 的对象留在格子里污染 ±12 扫描/换图）。
         var envirCur = NewMap(Path.Combine(tmpDir, mapFileMove), c.CurMap, Path.GetFileNameWithoutExtension(mapFileMove));
         var envirHome = NewMap(Path.Combine(tmpDir, mapFileHome), "home_map", Path.GetFileNameWithoutExtension(mapFileHome));
-        var envirRed = NewMap(Path.Combine(tmpDir, mapFileRed), "red_map", Path.GetFileNameWithoutExtension(mapFileRed));
+        var envirRed = NewMap(Path.Combine(tmpDir, mapFileRed), c.RedMap, Path.GetFileNameWithoutExtension(mapFileRed));
         // 夹具地图固定 `DayLight=true` ⇒ `DayBright()=0`（两侧确定值；不依赖探针墙钟/日相）。
         envirCur.Flag.DayLight = true;
         envirHome.Flag.DayLight = true;
@@ -427,9 +435,9 @@ internal static class Program
         };
         po.ItemList.Add(ToUser(c));
         envirCur.Flag.boNORANDOMMOVE = c.NoRandom;
-        SystemShare.Config.RedHomeMap = "red_map";
-        SystemShare.Config.RedHomeX = 20;
-        SystemShare.Config.RedHomeY = 30;
+        SystemShare.Config.RedHomeMap = c.RedMap;
+        SystemShare.Config.RedHomeX = c.RedX;
+        SystemShare.Config.RedHomeY = c.RedY;
         if (!envirCur.AddMapObject(c.CurX, c.CurY, CellType.Play, po.ActorId, po))
         {
             throw new InvalidOperationException($"AddMapObject 失败（{c.Name}）");
@@ -505,8 +513,10 @@ internal static class Program
                 },
                 current = new { map = c.CurMap, x = (int)c.CurX, y = (int)c.CurY },
                 home = new { map = c.HomeMap, x = (int)c.HomeX, y = (int)c.HomeY },
-                red_home = new { map = "red_map", x = 20, y = 30 },
+                red_home = new { map = c.RedMap, x = (int)c.RedX, y = (int)c.RedY },
                 pvp_level = (byte)(c.PkPoint / 100),
+                precise = c.Precise,
+                note = c.Note,
                 norandom = c.NoRandom,
                 seed = c.Seed,
                 // 离线夹具的地图几何（两侧必须同尺寸/同可走格；本批全可走）。
@@ -650,6 +660,69 @@ internal static class Program
                 NoRandom = true,
                 Seed = 20261123,
             }),
+            // IT-11 PvpLevel<2 支：`BaseObjectMove(HomeMap,HomeX,HomeY)`，两轴非 0 ⇒ **精确点、0 抽**。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape3_dungeon_home_exact",
+                Index = 3003,
+                HomeMap = "home_map",
+                HomeX = 5,
+                HomeY = 6,
+                Seed = 20261124,
+                Precise = true,
+            }),
+            // IT-11 PvpLevel>=2 支：`BaseObjectMove(Config.RedHomeMap, RedHomeX, RedHomeY)`（20/30 非 0）⇒ 精确点。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape3_dungeon_red_home_exact",
+                Index = 3003,
+                HomeMap = "home_map",
+                HomeX = 5,
+                HomeY = 6,
+                PkPoint = 200, // PvpLevel() = 200/100 = 2
+                Seed = 20261125,
+                Precise = true,
+            }),
+            // IT-11 同一 `PvpLevel>=2` 支的**另一组 RedHome 值**：证明实现从快照读（不是写死 20/30）。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape3_dungeon_red_home_alt_values",
+                Index = 3003,
+                HomeMap = "home_map",
+                HomeX = 5,
+                HomeY = 6,
+                PkPoint = 200,
+                RedX = 25,
+                RedY = 35,
+                Seed = 20261127,
+                Precise = true,
+                Note = "home=(home_map,5,6) 是登录时 PvpLevel<2 捕获的字段快照；red=(red_map,25,35) 是"
+                    + "登录时 SystemShare.Config.RedHome* 的快照。吃时 PvpLevel=2 ⇒ 必须用 red；若实现误用"
+                    + "登录期的 home（或写死 20/30），终态会是 home_map(5,6) / red_map(20,30)。",
+            }),
+            // IT-11 第四支（`sX != 0 && sY != 0` 的 **&& 语义**）：只缺一维（HomeX=0、HomeY=6）
+            // ⇒ `MapRandomMove(HomeMap)`；若实现写成 `||` 会走精确点 (0,6)（0 抽）。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape3_home_x_zero_y_nonzero_random",
+                Index = 3003,
+                HomeMap = "home_map",
+                HomeX = 0,
+                HomeY = 6,
+                Seed = 20261128,
+                Precise = false,
+                Note = "只缺一维：oracle `if (sX != 0 && sY != 0)` ⇒ 随机点；`||` 实现会落到精确点 (0,6) 且 0 抽。",
+            }),
+            // IT-11 第三支（`BaseObjectMove` 的坐标 0 门）：HomeX/HomeY=0 ⇒ `MapRandomMove(HomeMap)`，两抽。
+            RunCase(table, net, tmp, mapFileMove, mapFileHome, mapFileRed, new Ctx
+            {
+                Name = "eat_ok_shape3_dungeon_home_coords_zero_random",
+                Index = 3003,
+                HomeMap = "home_map",
+                HomeX = 0,
+                HomeY = 0,
+                Seed = 20261126,
+            }),
         };
 
         // 自检（夹具前提/实现不符 ⇒ rc=2，不落盘）：
@@ -686,9 +759,12 @@ internal static class Program
                     $"PROBE_SELFTEST_FAIL case={c.name} pumped 期望 800/622 起头且含 633/634/801，实得 [{string.Join(",", pumpIds)}]");
                 return 2;
             }
-            if (rngCount != 2)
+            var precise = c.ctx.precise is bool pr && pr;
+            var wantDraws = precise ? 0 : 2;
+            if (rngCount != wantDraws)
             {
-                Console.Error.WriteLine($"PROBE_SELFTEST_FAIL case={c.name} 期望恰 2 抽（MapRandomMove 两次）");
+                Console.Error.WriteLine(
+                    $"PROBE_SELFTEST_FAIL case={c.name} 期望 {wantDraws} 抽（precise={precise}），实得 {rngCount}");
                 return 2;
             }
             if (items != 0)
