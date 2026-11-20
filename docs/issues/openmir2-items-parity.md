@@ -400,7 +400,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **RNG 口径（P1，逐值对拍）**：`nRate = M2Share.RandomNumber.Random(Config.WinLotteryRate)`（`PlayObject.cs:3813`）。
 - **同一实例的符号链（可核，4 段）**：①`M2Share.RandomNumber = RandomNumber.GetInstance()`（`src/M2Server/M2Share.cs:194`）→ ②`OpenMir2.RandomNumber` 的**私有静态** `private static Random random`（`RandomNumber.cs`）→ ③`RandomNumber.Random(int)=random.Next(max)`→ ④魔法种子钩子 `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs` **文件头明写**：反射替换的正是这个 `RandomNumber.random`（换 `RecordingRandom(new Random(seed))`）。⇒ WinLottery 与魔法共用同一 RNG 实例。
 - **caveat（重要）**：P1 的"同种子同序列"**只在 legacy `.NET Random` 算法口径下成立**（钩子把 `random` 换成定种子 `new Random(seed)`=legacy `CompatSeedImpl`/Knuth 减法）。**生产无参 `new Random()` 在 .NET6+ 是 xoshiro、非同序列**。**oracle 原版运行在 legacy 上 ⇒ legacy 即我们该对的目标；Rust `crates/shared/src/rng.rs` 复刻的正是它。** 别以为"任意 .NET 版本都行"。
-- **P1 用例（已落地）**：夹具顶层 `lottery.cases` 12 例，每例用 **`MIR2_RNG_SEED + 序号` 独立播种**（抽值随例变化，常量冒充跑不过）⇒ ①各级中奖各一（目标档收成 `[d,d]`、其余档挪到 `d+1`）；②未中（全档挪开）；③`min`/`max` 端点各一边界例；④`Count<NoWinLotteryCount` **闸取假**（档命中但 `0<0` ⇒ 表现为未中、物品仍吃）；⑤部署档位一例（不改判据、按实记录：实测 `nRate=21242` 落空档 ⇒ 未中）；⑥P2 强制桶（`6Min=0/6Max=rate-1` ⇒ 必中 6）。**抽值逐值对拍**：oracle 侧把 `ProbeRandom(caseSeed)` 临时装进 `OpenMir2.RandomNumber.random`（即 `WinLottery` 读的私有静态字段），记录到的取数点实测为 **`PlayObject.cs:3813`**（符号链直接证据）且「本次调用恰抽一次」；夹具记 `seed/form/arg/result/site`，Rust 侧 `RandomNumber::with_seed(seed).random_below(rate)` 必须逐值相同（`useitem::tests::it16_lottery_fixture_rng_and_deltas`）。
+- **P1 用例（已落地）**：夹具顶层 `lottery.cases` 15 例，每例用 **`MIR2_RNG_SEED + 序号` 独立播种**（抽值随例变化，常量冒充跑不过）⇒ ①各级中奖各一（目标档收成 `[d,d]`、其余档挪到 `d+1`）；②未中（全档挪开）；③`min`/`max` 端点各一边界例；④`Count<NoWinLotteryCount` **闸取假**（档命中但 `0<0` ⇒ 表现为未中、物品仍吃）；⑤部署档位一例（不改判据、按实记录：实测 `nRate=21242` 落空档 ⇒ 未中）；⑥P2 强制桶（`6Min=0/6Max=rate-1` ⇒ 必中 6）；⑦**闸闭的非零形态**（`Count == NoWinLotteryCount == 500`，5 档宽区间命中 ⇒ 未中；把闸写成 `<=` 的实现会红）；⑧**命中档但该档 `Gold == 0`**：oracle `PlayObject.cs:3868 if (nGold > 0)` 为假 ⇒ 虽等级 +1（`:3820` 的 `WinLotteryLevel6++` 在闸内、与 gold 无关）仍判**未中**（`NoWin += 500`、红字、无 `GoldChanged`）；把「命中即 Won」的实现会红；⑨档位重叠链首即停（6 档与 5 档同为 `[d,d]` ⇒ 只中 6 档）。**⑦⑧ 是 QA `3b` 指出的必需盲区**（闸 `<`/`<=`、命中但 0 金）；**⑨ 与既有 `forced_bucket_p2` 判别力重叠**（该例六档全 `[0,29999]`，抽值同时落六档、链首即停应取 6 档），**保留作直读回归，不构成新增验证**。**抽值逐值对拍**：oracle 侧把 `ProbeRandom(caseSeed)` 临时装进 `OpenMir2.RandomNumber.random`（即 `WinLottery` 读的私有静态字段），记录到的取数点实测为 **`PlayObject.cs:3813`**（符号链直接证据）且「本次调用恰抽一次」；夹具记 `seed/form/arg/result/site`，Rust 侧 `RandomNumber::with_seed(seed).random_below(rate)` 必须逐值相同（`useitem::tests::it16_lottery_fixture_rng_and_deltas`）。
 - **⚠ 部署配置下 1 等奖为死代码**：1 级判据是 `WinLottery1Min + WinLottery1Max == nRate`（`PlayObject.cs:3859`，**和式等值**，不是区间），部署 `16180 + 16185 = 32365` ≥ `WinLotteryRate = 30000` ⇒ `nRate ∈ [0,30000)` **永远等不到**。⇒ **1 等奖用例必须覆盖 `WinLottery1Min/1Max`**（取 `5000/8000` ⇒ 和 `13000`；已核 `13000` 不落任一其它档 `[1,4999]/[14000,15999]/[16000,16149]/[16150,16169]/[16170,16179]`），并把它写进夹具 `config` 快照——**同时记原始值与覆盖值**（否则该用例不可复现，且后来人不知道它偏离了部署配置）。
 - **未中档的 seed 空间（越宽 P1 越稳）**：`nRate = 0`（`6Min=1` 故 0 不算 6 档）、`[5000,13999]`、`[16180,29999]` 三段全落"未中"。
 - **P2 稳健例一条**：配置强制桶（如 `6Min=0/6Max=Rate-1` 覆盖全区间 ⇒ 必中 6），断言只写行为/边界、不依赖抽值（兜底）。
@@ -415,16 +415,22 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **登记为「游戏状态层」的唯一显式例外**：设计件要求「World 间无共享可变状态」，而 oracle 该组计数本身就是进程全局 ⇒ 此处**显式共享**；RNG 仍走 `world.rng`（N>1 本就会被切开，与设计一致）。**不许**为"干净"改成 per-shard 语义。gate 层另有进程级共享 `TOMBSTONED_GATE_SOCKETS`（`OnceLock<Mutex<HashSet>>`，基础设施、非游戏状态；登记在 `openmir2-world-keeps-dead-session`）——故「唯一」限定在**游戏状态层**。
 - **分层**：纯函数 `win_lottery(rng, &cfg, &mut state) -> WinLotteryOutcome` 出 outcome；宿主负责加锁、写金、发帧。
 
-**② RNG 钩子是新测量口径（非干扰须给证）**：IT-14/15 的 eat-probe 未用 `DOTNET_STARTUP_HOOKS`；IT-16 启用后要证**既有 31 例**不受影响（原写"28 例"是 IT-15 之前的数，作废）。
+**② RNG 钩子是新测量口径（非干扰须给证）**：IT-14/15 的 eat-probe 未用 `DOTNET_STARTUP_HOOKS`；IT-16 启用后要证**既有非 lottery 例**不受影响——**实测 37 例**（"31 例"是更早的转述数，其后 B3 六例入夹具 ⇒ `eat_vectors.json` 顶层 `cases`=37 且全非 lottery；再早的"28 例"是 IT-15 之前的数，作废）。
 - **"夹具逐字节相同"字面做不到**：解包产物 `make_index` = `GetItemNumber()` = `ItemNumber + HUtil32.GetTickCount()`（`src/Modules/SystemModule/SystemShare.cs:449-455`），任两次运行必不同；它同时出现在 `added_items` 与终态 `item_list`。⇒ **归一化 + 原始 diff 双存档**：
   1. `A1/A2` = 无 `MIR2_RNG_SEED`（钩子关）跑两次；`B1/B2` = 钩子开 + 两个不同 `MIR2_RNG_SEED`；
-  2. **归一化清单（两项，均为墙钟派生、非行为）**：`added_items[*].make_index` 与 `expect.item_list[*].make_index`（**只掩新生成件**——按该例 `added_items` 的值集合匹配，既有件 `make_index=1` 保持可比）；**顶层 `lottery` 块单独比**（A 运行 `enabled=false`、`cases=[]`，B 运行有 12 例；它只存在于播种运行，不参与 A≈B 的逐字节面）。原始 diff 同档保存，不隐藏；
-  3. 判据与**实测结果**（2026-11-20，seed `20261120`/`20261121`）：`normalize(A1)==normalize(A2)` **0 处差异**（噪声基线）→ `normalize(A1)==normalize(B1)` **0 处**（钩子不改既有 31 例与元数据）→ `normalize(B1)==normalize(B2)` **0 处**（同上面的 31 例面）→ **`B1` 与 `B2` 的 12 例 lottery 抽值/种子 12/12 全不同**（把"钩子/播种没生效"与"无影响"分开）；
+  2. **归一化清单（两项，均为墙钟派生、非行为）**：`added_items[*].make_index` 与 `expect.item_list[*].make_index`（**只掩新生成件**——按该例 `added_items` 的值集合匹配，既有件 `make_index=1` 保持可比）；**顶层 `lottery` 块单独比**（A 运行 `enabled=false`、`cases=[]`，B 运行有 15 例；它只存在于播种运行，不参与 A≈B 的逐字节面）。原始 diff 同档保存，不隐藏；
+  3. 判据与**实测结果**（2026-11-20，seed `20261120`/`20261121`；早先一次为 31 例口径，下列为本轮 **37 例**复跑）：
+     `normalize(A1)==normalize(A2)` **0 处差异**（噪声基线；A 运行 `cases=37`、lottery 关）→
+     `normalize(A1)==normalize(B1)` **0 处**（钩子不改既有 **37 例**与元数据）→
+     `normalize(B1)==normalize(B2)` **0 处**（同上面的 37 例面）→
+     **`B1` 与 `B2` 的 15 例 lottery 抽值/种子 15/15 全不同**（`seeds_same=0/15 results_same=0/15`；B 运行 `cases=37, lottery.cases=15`）。
+     三组 `it16_fixture_diff.py … --drop-lottery` 均 `diffs=0`、rc=0；钩子安装证明取 stdout
+     `[RngSeedHook] 已注入种子 seed=20261120/20261121`。
   4. 钩子安装证明取 stdout 的 `[RngSeedHook] 已注入种子 seed=…`（钩子失败 exit 97）；探针侧另有「恰抽一次且等于预测」的自检（不一致 rc=2 不落盘）。
 - **说明**：lottery 的抽值与来源行由探针安装的 `ProbeRandom` 直接记录（见 P1 用例），**不依赖钩子台账**；钩子在这批的唯一职责是第 3 条的 A/B 非干扰面。
 - **证据脚本（入仓、可复跑）**：`mir2-rs/tests/parity/m3/tools/it16_fixture_diff.py` —— 归一化（两项）+ 逐路径 diff，`--drop-lottery` 排除顶层 `lottery` 块。用法（仓库根）：
   `python -I -B mir2-rs/tests/parity/m3/tools/it16_fixture_diff.py <A1.json> <B1.json> --drop-lottery`
-  退出码 0 ⇒ `diffs=0`（钩子不改既有 31 例）；1 ⇒ 有差异并逐条打印路径。
+  退出码 0 ⇒ `diffs=0`（钩子不改既有 37 例）；1 ⇒ 有差异并逐条打印路径。
 - **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
 - **冲突处置**：任何非 `make_index` 差异 ⇒ **停下报 `opc-07`**，不得拿 grep 洗白。
 
@@ -432,6 +438,15 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
   `cases=37`（31 既有 + B3 六例）、`lottery.cases=12`；与合入前逐路径比只剩 **8 处** —— 六例新增 case/template、
   `cases.len 31→37`、`oracle_assembly_sha256`（构建产物 hash，仅溯源）。**31 例除墙钟 `make_index` 外逐字节不变**；
   `oracle_source_sha.py --fixture …` ⇒ **MATCH**（`51a289e2…`）。
+- **彩票 15 例的追加来源（2026-11-20，QA `3b` 三类盲区）**：⑦–⑨ 三例的期望**全部来自 oracle 探针实出**——
+  `dotnet build mir2-rs/tests/parity/m3/eat-probe -c Release` + `MIR2_RNG_SEED=20261120 dotnet …/eat-probe.dll <temp>`，
+  探针原文 `ORACLE_SOURCE_SHA256 51a289e2… / TEMPLATES 25 CASES 37`，**不是手写值**（防"为例过测试而编"的质疑）。
+  追加方式：探针先出到临时文件，脚本证明 `temp.lottery.cases[0..12]` 与仓库**逐字符串相同**
+  （`EXISTING_12_BYTE_IDENTICAL`）后只插入后 3 例；既有 37 例（含墙钟 `make_index`）与既有 12 例零改动
+  （`git diff` 只 +3 例、`git diff --check` rc=0）。
+  **两个 hash 字段角色不同**：`oracle_source_sha256`（M2Server 源码锚，**校验用**）不变 `51a289e2…`；
+  `oracle_assembly_sha256` 因构建非位级可复现而变（`ee2cc2fb→a3b9f1fc`），夹具注释已声明该字段
+  **仅溯源、不参与校验**——不是锚漂了。
 
 **配置同源（27 键，不写死）**：部署 `Server.conf` 实际 **27** 个 `WinLottery*` = **19 参数 + 8 状态初值**（原卡面"25 键"作废）。
 - 19 参数：`WinLotteryRate` + `WinLottery{1..6}Min/Max` + `WinLottery{1..6}Gold`（部署：Rate=30000、6Min=1/6Max=4999…1Min=16180/1Max=16185、Gold 1000000…500；与 `GameSvrConf.cs` ctor 缺省逐键相同）。
