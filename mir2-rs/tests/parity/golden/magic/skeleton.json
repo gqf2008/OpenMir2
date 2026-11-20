@@ -135,7 +135,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1146088312,
+              "delivery": 1146561703,
               "priority": 255
             }
           ],
@@ -268,6 +268,7 @@
       "NotDue": [],
       "CasterMp": 0,
       "Skeleton": {
+        "stub_monster_hp": 17,
         "pre_slave_count": 0,
         "slave_count_before": 0,
         "slave_count_after": 1,
@@ -276,7 +277,7 @@
           {
             "name": "\u53D8\u5F02\u9AB7\u9AC5",
             "level": 1,
-            "hp": 8,
+            "hp": 17,
             "max_hp": 17,
             "master_is_caster": true
           }
@@ -512,6 +513,7 @@
       "NotDue": [],
       "CasterMp": 0,
       "Skeleton": {
+        "stub_monster_hp": 17,
         "pre_slave_count": 1,
         "slave_count_before": 1,
         "slave_count_after": 1,

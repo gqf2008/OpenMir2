@@ -2151,6 +2151,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 ? null
                 : (object)new
                 {
+                    // 替身怪物 HP 常量（生产 MonsterInfo.hp 的占位；见 OfflineWorldEngine）。
+                    stub_monster_hp = 17,
                     pre_slave_count = spec.PreSlaveCount,
                     slave_count_before = slaveCountBefore,
                     slave_count_after = caster.SlaveList?.Count ?? 0,

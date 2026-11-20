@@ -40,6 +40,18 @@ namespace MagicGolden
                 CurrX = nX,
                 CurrY = nY,
             };
+            // **与生产 `MonsterTableSpawner::spawn_monster` 同源语义**：生产按 `MonsterInfo.hp` 同时写
+            // `hp` 与 `max_hp`（⇒ `hp == max_hp`），`MakeSlave` 的半补因此是 no-op。
+            // 离线 harness 没有怪物表，HP 由 `MAGICGOLDEN_STUB_MONSTER_HP`（缺省 17）给定，
+            // **并原值写进 golden 的 `stub_monster_hp`**，让"这个数来自替身常量"可被看见。
+            ushort stubHp = 17;
+            var env = System.Environment.GetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_HP");
+            if (!string.IsNullOrWhiteSpace(env) && ushort.TryParse(env, out var v))
+            {
+                stubHp = v;
+            }
+            mon.WAbil.HP = stubHp;
+            mon.WAbil.MaxHP = stubHp;
             return mon;
         }
 
