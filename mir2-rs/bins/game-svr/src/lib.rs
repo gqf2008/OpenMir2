@@ -61051,8 +61051,10 @@ SendRefMsgRange=15
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
             let mut frames = Vec::new();
-            // 同 `SpellFrameRig::deliver`：不稳定四叉堆 ⇒ 同一 tick 内按生产节奏补泵（有界 8 次）。
-            for _ in 0..8 {
+            // 同 `SpellFrameRig::deliver`：不稳定四叉堆 ⇒ 同一 tick 内按生产节奏补泵；
+            // 上界 = 起点队列长度 + 1（依据见该处注释），另设 64 上限。
+            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
+            for _ in 0..bound {
                 if self.world.self_delay_msgs.is_empty() {
                     break;
                 }
@@ -69468,10 +69470,12 @@ SendRefMsgRange=15
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
             let mut frames = Vec::new();
-            // oracle 每 tick 泵一次；.NET 四叉堆**不稳定** ⇒ 队根若是未到点项，
-            // 「出队+以 Lowest 重入队」只结束本次泵，同 tick 内需再泵几次才轮到已到点项
-            // （生产每 tick 都泵）。按生产节奏补泵（有界 8 次，队列清空即停）。
-            for _ in 0..8 {
+            // **有界补泵的依据**（不是试出来的数）：oracle 每 tick 泵一次；.NET 四叉堆不稳定 ⇒
+            // 队根是未到点项时「出队 + 以 Lowest 重入队」只结束本次泵（该项移到堆尾）。
+            // 设本轮起点队列长度 q，则 q 次泵内每条消息都轮到过队根 ⇒ 所有到期项必已投递
+            // 或只剩「泵门」拦截项；故上界取 q + 1（另设 64 上限防御）。
+            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
+            for _ in 0..bound {
                 if self.world.self_delay_msgs.is_empty() {
                     break;
                 }
