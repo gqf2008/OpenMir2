@@ -465,6 +465,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **原「探针跑不了」的说法要更正**：NRE 只来自 `CellArray` 为空（`src/M2Server/Maps/Envirnoment.cs:322-333` 的 `return ref CellArray[0]`；`CellArray` 私有 :36、由私有 `Initialize(w,h)` :1036 分配），反射调 `Initialize(8,8)` 即可；且失败支结果**与地图内容无关**（守卫在碰 cell 之前就 `return false`）。runtime 加固例另开小卡（不阻塞）。
 - **follow-up（不并入 IT-16）**：`docs/issues/openmir2-lottery-ticket-gm-realtime.md`（master `50d290b8d`）——`@LotteryTicket` 现读 `GmConfig.win_lottery_*` 的 `Default` 常量快照（`gmcmd.rs`），IT-16 落地后必须改读实时 `WinLotteryShared`；交付里引用此卡。
 
+EAD
 ### 9.12 IT-09 回城卷 Shape1（`EatUseItems` move 组）— 宿主拦截 + 宿主级对拍（implemented_unverified）
 
 **归类**：`StdMode==3` 的 `default: EatUseItems(stdItem.Shape)`（`PlayObject.Base.cs:2163`）→ `case 1`（`:2231-2236`）：
@@ -681,6 +682,7 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 以 follow-up 提交回填到 §9.13（避免在签审 head 上追加提交）。
 
 **状态**：`implemented_unverified`（17a 学习面全绿；17b 技能被动未建模，见 §9.16/独立卡）。
+EAD
 ### 9.17 IT-12 祝福油 Shape4（`WeaptonMakeLuck`）— verified（2026-11-20 升格）
 
 **归类**：**StdMode 3 / Shape 4**。链路：`EatItems`（`PlayObject.Base.cs:2047`）→ `case 3`（`:2098`）→ `switch (stdItem.Shape)`（`:2099`）→ `default: EatUseItems(...)`（`:2162`）→ `case 4`（`:2259`）→ `WeaptonMakeLuck()`（`PlayObject.cs:1500`，原文拼写即 `Weapton`）。**有武器且 `Index > 0` 时恒吃**（函数恒 `return true`）；无武器 ⇒ 返回 false ⇒ **不吃**（636）。
@@ -760,3 +762,31 @@ result = true;   // 恒吃（与 IT-10 的禁随机支相反）
 - **IT-03（Shape3 百分比）**：单例，同上**单侧截断/不截断**未覆盖。
 - **IT-04（default 入池）**：两例是「AC>0 且 MAC>0」与「两侧 0」，**`if(AC>0)`/`if(MAC>0)` 的单侧分支未覆盖**。
 > 补法：每条各加 1–2 例（HP 顶/MP 不顶、AC>0/MAC=0 及反向），重生成 `eat_vectors.json` 后逐例对拍；**须在 IT-16 签署结束、`eat-probe` 解冻后进行**，并同步 `counting_moment`。
+### 9.18 IT-13 行会回城 Shape5（`EatUseItems` case 5）— oracle 事实 + 探针（C# 半批）
+
+**归类**：**StdMode 3 / Shape 5**。链路：`EatItems`（`src/M2Server/Player/PlayObject.Base.cs:2047`）→ `case 3`（`:2098`）→ `switch (Shape)` 的 `default`（`:2162`）→ **`EatUseItems` case 5**（`src/M2Server/Player/PlayObject.Base.cs:2264`）。
+
+**五支与"吃/不吃"（不对称，最易写错）**
+| 条件 | 行 | 结果 | 吃？ | 抽 |
+|---|---|---|---|---|
+| `MyGuild == null` | `:2265` | 整段不做 | **否**（636） | 0 |
+| `InGuildWarArea` | `:2267/2282` | 红字「此处无法使用」 | **否**（636） | 0 |
+| 非战区、`IsCastleMember` 返 null | `:2269/2276` | 红字「无效」 | **是**（635，位置不变） | 0 |
+| 非战区、城堡 `MasterGuild == MyGuild` | `:2270/2272` | `BaseObjectMove(home)` | **是**（635，位移） | **2**（先 X 后 Y） |
+| 同上，但 `HomeX-4+draw == 0` 或 Y 侧为 0 | `BaseObjectMove:2312` | 走 `MapRandomMove` | **是** | 2 + MapRandomMove 的抽数 |
+
+- **RNG**：`GetHomeX()` = `HomeX-4+Random(9)`（`src/M2Server/Castle/UserCastle.cs:649-652`）、`GetHomeY()` 同（`:654-657`）；实参从左到右 ⇒ 先 X 后 Y。`BaseObjectMove`（`src/M2Server/Player/PlayObject.Base.cs:2312`）在 `sX!=0 && sY!=0` 时 `SpaceMove`，否则 `MapRandomMove`。
+- **帧/泵序**：直发 635/636；通知红字 `RM_SYSMESSAGE(11004→252)`、成功恒有 `RM_WEIGHTCHANGED(10115→131)` ⇒ `131 < 252`。位移帧走与 IT-09/10/11 **同一条换图路径**（本夹具实测 `pumped=[622,633,634,766,54,801]`）；**766/54 属该线已登记缺口**（见 `docs/issues/openmir2-map-change-cluster-gaps.md`，不在此重抄）。
+- **状态**：位置（MapName/X/Y）与 `IsTimeRecall`；**行会/城堡只读**（`MyGuild`/归属/战区均不改写）。
+
+**部署不可达（§18.1）**：`Castle.MasterGuild` 在部署态**恒 `null`**——唯一赋值点 `UserCastle.LoadConfig`（`src/M2Server/Castle/UserCastle.cs:228-232`）用 `GuildMgr.FindGuild(OwnGuild)`，而 `CastleMgr.Initialize` 早于行会装载（仓内 `castle.rs` 的 R-0 注释同口径）。⇒ **位移两支生产不可达**；生产只会走"不吃"或"无效但吃"。
+- **构造路径**：夹具里**显式构造** `MasterGuild == 玩家行会` 的 `UserCastle`（`HomeMap/HomeX/HomeY` 可设），把 `CastleMgr.CastleList` 换成本探针的实例。
+- **证据性质**：位移两支是 **synthetic 构造**证据，**不得**当作"生产路径已验证"。
+
+**探针（C# 半批，已产）**：`mir2-rs/tests/parity/m3/guild-probe`（由 move-eat-probe 改造），产物 `mir2-rs/tests/parity/m3/fixtures/guild_vectors.json`，5 例：
+`eat_fail_shape5_no_guild`（636/0 抽）｜`eat_fail_shape5_in_war_area`（636/红字/0 抽）｜`eat_ok_shape5_invalid_castle_eaten`（635/红字/0 抽/位置不变）｜`eat_ok_shape5_castle_home_exact`（635/move 全套/2 抽/落 `(30±4,40±4)`）｜`eat_ok_shape5_castle_home_zero_coord_random`（635/move 全套/4 抽/`MapRandomMove`）。
+- **探针私有构造声明**：行会对象与城堡只在探针内构造，**不写回产品状态**；`SystemShare.GuildMgr` 在探针里是空 `GuildManager`。
+
+**Rust 侧（待 move 合入）**：等 `card/items-move-09` 合入 master 后，从新 master rebase 再实现——复用 `eat_move::maybe_eat_move` 的位移机制，不另造。清单 status 与覆盖届时一并改并先报 `opc-19`。
+
+**状态**：C# 半批已交；整体仍 `missing`（清单未动）。
