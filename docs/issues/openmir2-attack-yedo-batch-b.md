@@ -178,6 +178,20 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 ⇒ 段 2 的工作是**接线**而不是重写：把段 1 的 `SkillTrainEvent.levelup_msg` 变成
 「升级走 `UpdateDelayMsg(..., 800)` / 未升级走 `SendSelfDelayMsg(..., 3000)`」两条入队，并让到点排水发 640。
 
+### 3bis.2b 落点决定：**世界侧入队**（不新造宿主队列）
+
+训练发生在世界 tick 内（段 1），640 的入队必须与它同处：若挪到宿主排水时再入队，会丢掉
+`UpdateDelayMsg` 的"摘旧条"能力（宿主看不到世界队列里已有的同 `(ident, MagicId)` 条目）⇒
+同一魔号连续两击会出两条 640，与 oracle 不符。
+
+⇒ 段 2 的接线点 = `attack_once_impl` 训练得到 `SkillTrainEvent` 之后：
+- `levelup_msg && level_up` ⇒ `update_self_delay_msg_full(…, 800)`（替换语义，摘旧条）；
+- `levelup_msg && !level_up` ⇒ 普通 `SendSelfDelayMsg(…, 3000)`（追加）；
+- `Ghost` ⇒ 入队函数自带门（oracle `:189 if (!Ghost)`）。
+
+宿主只在**到点排水**处把 `RM_MAGIC_LVEXP` 变成 `sm_magic_lvexp(magic_id, level, tran_point)`
+发给该 actor 自己的 socket（既有 `drain_self_delay_msgs` 链路）。
+
 ### 3bis.3 判据与牙（草案）
 
 | 判据 | 验法 |
