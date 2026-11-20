@@ -88,3 +88,22 @@
 
 - `Rm` 比较键 = `(ident, wParam, p1, p2, p3, priority, late)`，**不含 due** ⇒ `RM_MAGHEALING`(800ms)/`RM_MAGIC_LVEXP`(1000ms) 的**延期本身不判**，只判「发没发、载荷对不对」。延期/批次由 `Sent` 侧 `due_ms_rel` 判。
 - `RM_MAGICHEALING` 已建模（`slave.rs` 常量、`drain_mag_healing_delivery`、驱动捕获、`Rm` 记账），oracle `Operate` 只累加 `IncHealing` 不发帧 ⇒ golden 记在 `Rm`，无 807 式不对称缺口。
+
+## 全库 640 出口清单（2026-11-20，核查用；**本次只改前四处**）
+
+oracle 共享尾 `src/M2Server/Magic/MagicManager.cs` 的 `:659-669` 是**唯一** 640 出口语义 ⇒ 全库每一处
+出 640 的地方都必须是 `SendSelfDelayMsg(…,1000)`（升级支 800）。当前仓内共 **9 处**：
+
+| # | 位置（`bins/game-svr/src/lib.rs`，行号为 master `1104c26f6` 时） | 覆盖魔号 | 现状 | 本批 |
+| --- | --- | --- | --- | --- |
+| 1 | `finish_spell_tail` 调用（约 14691） | 31 | 本批改 `Some(1000)` | ✅ |
+| 2 | `finish_spell_tail` 调用（约 14918） | 14/15 | 同上 | ✅ |
+| 3 | `finish_spell_tail` 调用（约 15753） | B1：1/5/11/13/44/45 | 同上（本支 golden 无 640 ⇒ 帧面不变） | ✅ |
+| 4 | `finish_spell_tail` 调用（约 15917） | B2：2/23/24/29/33/47 | 同上 | ✅ |
+| 5 | B5 门 `if matches!(req.magic_id, 6 \| 48 \| 9 \| 10 \| 22 \| 36)`（约 14966）内的 inlined 尾（约 15134 `send_self_frame`） | 8/37/21 等 | **仍立即发** | ❌ 未改 |
+| 6 | 召唤门 `SKILL_SKELLETON \| SKILL_SINSU \| SKILL_ANGEL`（约 15147）内 inlined 尾（约 15285） | 17/30/41 | **仍立即发** | ❌ 未改 |
+| 7 | `if req.magic_id == SKILL_TAMMING`（约 15325）内 inlined 尾（约 15394） | 20 | **仍立即发** | ❌ 未改 |
+| 8 | `if req.magic_id == SKILL_46`（约 15419）内 inlined 尾（约 15504） | 46 | **仍立即发** | ❌ 未改 |
+| 9 | P1 default arm（`spell_tail_bo_train`）inlined 尾（约 17233） | A 类 55/57/58/59/66–80（零抽无 640）/ B 类 49/51/52/53/54 | **仍立即发**（B 类另一批在改） | ❌ 未改 |
+
+> 行号会随合并漂移；按门条件/函数名定位。5–8 建议单开一张 follow-up 卡收口（A 类零抽不受影响）。
