@@ -1424,3 +1424,32 @@ master/target_cret/speed_point/death` 全同（golden `Fixture.monsters` 并排�
 `groupdeding_parity_{all_miss_hp0,hit_ac_split,miss_by_draw,dead_excluded,dc_range}`
 —— 真实台账驱动，需 `--exact --test-threads=1` 单独进程（`rng_trace` 进程级 `OnceLock`），
 故标 `#[ignore]`；由 `cargo test -p game-svr --lib` 计入 ignored（2055 passed / 0 failed / 70 ignored）。
+
+### 40. 验证前置链（所有 magic 条目的复跑前提，2026-11-20）
+
+**事实**：`mir2-rs/tests/parity/tests/magic_fireball_parity.rs` 里 `real_rust_ledger_*` 全部带
+`#[ignore = "需先跑 game-svr 三支驱动…生成真实台账"]` ⇒ **默认 `cargo test` 一条 ledger 都不跑**；
+"magic 已验"的真实前提是两步：
+
+```bash
+# 1) 驱动：逐支单跑（rng_trace 进程级），同一 run_id
+export MIR2_LEDGER_RUN_ID=<id>
+cargo test -p game-svr --lib -- --exact --ignored tests::<driver>
+# 2) 台账比较器：必须 --ignored 且同一 run_id
+cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored
+```
+驱动清单与 case 映射见各条目 `evidence.unit_tests` 与 `evidence.test`；缺一步 = 比对不成立（会被
+run_id 侧车挡住）。**新条目交付时卡里必须写这三项：驱动名、比较器名、run_id 与命令原文。**
+
+### 41. 交付前检查清单（模板，每笔必过）
+
+1. **锚**：写 `xxx.cs:N` / `xxx.rs:N` 前先确认是**全路径**或改**符号锚**；高 churn 文件（`lib.rs` 等）禁行号锚；
+   提交前跑 `docs_anchor_gate.py --prose --base master`，红不过。
+2. **装置分派**：改 `Program.cs` 附 `grep -c 'if (name =='` 修前/修后 + `check-dispatch-regression -Base auto -Head <head>`
+   的 GREEN 原文（防相邻行覆盖）。
+3. **验证前置链（§40）**：新条目写清 驱动名 / 比较器名 / `run_id` 与命令原文（驱动 `--ignored --exact` →
+   比较器 `--ignored` 同 run_id）。
+4. **清单**：`validate-parity-manifests.ps1 -RepoRoot <wt>` 与 `coverage-report.ps1 -RepoRoot <wt>` 双绿，贴原文。
+5. **变异牙**：§21 补注——共享臂用镜像变异、变异后仍绿先核"是否打到目标分支"；附 `Ran=(passed,failed)`。
+6. **时钟（§36）**：不依赖真实时钟；时长可注入并写进 golden。
+7. **status 只由 QA 改**；作者只留证据。
