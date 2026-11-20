@@ -165,7 +165,7 @@ public static class Program
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
             // `SKILL_SKELLETON(17)`：MakeSlave → WorldEngine 替身；两支 = 正常召唤 / 数量上限。
-            if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）" });
+            if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）。SCOPE：本支验的是『给定怪物之后的 adopt 行为』（MakeSlave 的 Master/IsSlave/levels/Recalc/半补/RefNameColor/SlaveList），不是造怪；造怪抽数因离线缺 MonsterInfo（掉落表 MonGetRandomItems、CoolEyeCode）不可复刻 ⇒ Rng 与下游训练面（640/RM10123 p3）不在对拍范围；golden 的 Rng 是替身不抽造怪时的数，不代表生产抽数" });
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });

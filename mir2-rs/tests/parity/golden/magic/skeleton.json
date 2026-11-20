@@ -47,7 +47,7 @@
             "Skeleton"
           ]
         },
-        "scenario_note": "\u767B\u5F55\u5E8F\u002B\u62A4\u8EAB\u7B26\uFF1BWorldEngine \u4E3A\u79BB\u7EBF\u66FF\u8EAB\uFF08\u4EC5 RegenMonsterByName\uFF09",
+        "scenario_note": "\u767B\u5F55\u5E8F\u002B\u62A4\u8EAB\u7B26\uFF1BWorldEngine \u4E3A\u79BB\u7EBF\u66FF\u8EAB\uFF08\u4EC5 RegenMonsterByName\uFF09\u3002SCOPE\uFF1A\u672C\u652F\u9A8C\u7684\u662F\u300E\u7ED9\u5B9A\u602A\u7269\u4E4B\u540E\u7684 adopt \u884C\u4E3A\u300F\uFF08MakeSlave \u7684 Master/IsSlave/levels/Recalc/\u534A\u8865/RefNameColor/SlaveList\uFF09\uFF0C\u4E0D\u662F\u9020\u602A\uFF1B\u9020\u602A\u62BD\u6570\u56E0\u79BB\u7EBF\u7F3A MonsterInfo\uFF08\u6389\u843D\u8868 MonGetRandomItems\u3001CoolEyeCode\uFF09\u4E0D\u53EF\u590D\u523B \u21D2 Rng \u4E0E\u4E0B\u6E38\u8BAD\u7EC3\u9762\uFF08640/RM10123 p3\uFF09\u4E0D\u5728\u5BF9\u62CD\u8303\u56F4\uFF1Bgolden \u7684 Rng \u662F\u66FF\u8EAB\u4E0D\u62BD\u9020\u602A\u65F6\u7684\u6570\uFF0C\u4E0D\u4EE3\u8868\u751F\u4EA7\u62BD\u6570",
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
@@ -135,7 +135,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1146561703,
+              "delivery": 1146730265,
               "priority": 255
             }
           ],
@@ -317,7 +317,7 @@
             "Skeleton"
           ]
         },
-        "scenario_note": "\u767B\u5F55\u5E8F\u002B\u62A4\u8EAB\u7B26\uFF1BWorldEngine \u4E3A\u79BB\u7EBF\u66FF\u8EAB\uFF08\u4EC5 RegenMonsterByName\uFF09",
+        "scenario_note": "\u767B\u5F55\u5E8F\u002B\u62A4\u8EAB\u7B26\uFF1BWorldEngine \u4E3A\u79BB\u7EBF\u66FF\u8EAB\uFF08\u4EC5 RegenMonsterByName\uFF09\u3002SCOPE\uFF1A\u672C\u652F\u9A8C\u7684\u662F\u300E\u7ED9\u5B9A\u602A\u7269\u4E4B\u540E\u7684 adopt \u884C\u4E3A\u300F\uFF08MakeSlave \u7684 Master/IsSlave/levels/Recalc/\u534A\u8865/RefNameColor/SlaveList\uFF09\uFF0C\u4E0D\u662F\u9020\u602A\uFF1B\u9020\u602A\u62BD\u6570\u56E0\u79BB\u7EBF\u7F3A MonsterInfo\uFF08\u6389\u843D\u8868 MonGetRandomItems\u3001CoolEyeCode\uFF09\u4E0D\u53EF\u590D\u523B \u21D2 Rng \u4E0E\u4E0B\u6E38\u8BAD\u7EC3\u9762\uFF08640/RM10123 p3\uFF09\u4E0D\u5728\u5BF9\u62CD\u8303\u56F4\uFF1Bgolden \u7684 Rng \u662F\u66FF\u8EAB\u4E0D\u62BD\u9020\u602A\u65F6\u7684\u6570\uFF0C\u4E0D\u4EE3\u8868\u751F\u4EA7\u62BD\u6570",
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
