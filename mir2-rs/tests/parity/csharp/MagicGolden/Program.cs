@@ -159,6 +159,10 @@ public static class Program
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
+            // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
+            if (name == "groupdeding") return BehaviorBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
+            if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
+            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;

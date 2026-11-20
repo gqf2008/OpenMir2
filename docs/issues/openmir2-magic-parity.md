@@ -1304,3 +1304,34 @@ v1 **不 Operate** 怪物 ⇒ 效果面（状态置位/伤害/诱捕）**仍空*
 的覆盖面**——v2 接手时不要把它读成"oracle 不产生事件"。
 
 **未做**：Rust 侧怪物夹具与 16 的驱动/比较器（下一支）；16 **不升格**（v1 不足以判效果面）。
+
+### 39. `SKILL_GROUPDEDING`(39) 门序更正与夹具设计（2026-11-20）
+
+**此前读法作废（留痕）**：本文档上一轮曾写"`MagGroupDeDing` 只打 `Race>=Animal`、玩家目标空转"。
+读完整 helper 后确认**该读法错误**：`Race>=Animal` 只决定 `result`（⇒ `boTrain`），**不参与伤害**。
+玩家目标那次 `HP 100→100` 的真正原因是**命中门**（`Random(SpeedPoint) >= HitPoint ⇒ nPower=0`）
+或护甲衰减到 0。保留这条更正而不是静默替换，是因为两套夹具会长得完全不同（"必须放动物" vs "必须让命中门过"）。
+
+**正确门序（`src/M2Server/Magic/MagicManager.cs` 的 `MagGroupDeDing`，逐条带行号）**
+1. 跳过 `Death || Ghost || self`（`:950`）；
+2. `IsProperTarget(baseObject)`（`:954`）；
+3. `nPower = GetAttackPower(LoByte(DC), HiByte(DC)-LoByte(DC))`（`:956`）；
+4. **命中门**：`Random(baseObject.SpeedPoint) >= playObject.HitPoint ⇒ nPower = 0`（`:957`；
+   `SpeedPoint=0` 时 `Random(0)=0`，若 `HitPoint=0` 则 `0>=0` 恒真 ⇒ **必 miss**）；
+5. `nPower>0` ⇒ `GetHitStruckDamage`（护甲衰减，`:963` 起）；
+6. `StruckDamage(nPower)`（`:967`）+ 施法者 200ms `RM_DELAYMAGIC(nPower, …, 1, target)`（`:968`）；
+7. `Race >= Animal` **仅**置 `result=true`（`:970-972`）；
+8. 对每个对象（含被跳过者）发 `RM_10205`（`:974`）。
+
+**夹具设计（`GroupDeDingBatch`，待实现）**
+- **全额怪**：命中门必过（`HitPoint>0` 且该目标 `SpeedPoint` 抽到小值/为 0 但 HitPoint 使门不成立）+ 低 AC；
+- **衰减怪**：高 AC ⇒ `GetHitStruckDamage` 生效；与全额怪对照证明"同公式、伤害随属性变"；
+- **不该被命中 ×2（分别断言不同分支）**：① `SpeedPoint=0` ⇒ 命中门判 miss（走 4→nPower=0）；② `Death=true`
+  ⇒ 走 1 早退。**若两者帧面相同（都无 31/都只 10205），必须在卡里写明"这两支在帧面不可区分，
+  区分依据 = 是否进入 `IsProperTarget`/是否产生 200ms `RM_DELAYMAGIC`"**，不许用"都没掉血"充当两条断言；
+- **逐目标抽数**：命中门是 `Random(target.SpeedPoint)` ⇒ 每只目标抽数随其 `SpeedPoint` 变；case 里逐目标
+  记抽数并给总数，两只怪 `SpeedPoint` 不同时总抽数也应不同（"抽数随参数变"的正例）；
+- **HP before/after 双值**入 case，与 `mon{i}` 收件人集合并列。
+
+**scope 依据**：39 可升 `verified`，依据是"**伤害由施法者侧同步 `StruckDamage` 计算**"（`:967`），
+不是"HP 变了"——HP 只是该计算的结果观测。
