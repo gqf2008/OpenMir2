@@ -159,3 +159,14 @@
   4. `slave_mutiny_downlink_emits_namecolor_then_username` —— 属 **批 6 的 #8**
      （`drain_slave_mutiny_downlink` 仍走 `chat::hear_targets`），单事件单次 `SendRefMsg`；
      批 5 未动该站点。
+
+### 批 6 裁定（opc-07 2026-11-20）
+- **#8 `drain_slave_mutiny_downlink` = 行为修正（不是重构）**：oracle 对每只叛变宝宝连续调用
+  `RefNameColor(); RefShowName();`（`PlayObject.Base.cs` 的 `PlayObject` 叛变收尾段），即**两次**
+  `SendRefMsg` ⇒ 第二次（`RM_USERNAME`/42）必然命中 500ms 缓存、走 `|Δ|<11`。现实现把一份收件人
+  集合同时用于 656 与 42，会让 12 格边界同时收 656+42，**而 oracle 只收 656**。批 6 按「每帧各判
+  一次缓存」落，并在用例里钉住「656 收而 42 不收」的边界差；如有既有用例随此改变，按 oracle 改
+  期望并留痕（不静默）。
+- **#11 `apply_pending_gm_target_ops` / #12 `apply_pending_gm_guild_commands`：要真实调用面多副本**
+  （经生产排水入口在 500ms 窗口内两次事件），函数级两次直调只能作为补充；若夹具存在硬障碍，
+  明说并登记「真实调用面未覆盖」，不得默认降级。
