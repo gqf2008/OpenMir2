@@ -747,6 +747,9 @@ internal static class Program
         };
 
         // 自检（夹具前提/实现不符 ⇒ rc=2，不落盘）：IT-13 五支逐名断言。
+        // §35 负向自测：`MIR2_GUILDPROBE_BREAK=<case>` 故意污染该例的观测（多一条伪帧）
+        // ⇒ 走**同一条真实断言**失败 ⇒ rc=2 且不写盘（外部用文件 sha 未变证明）。
+        string breakCase = Environment.GetEnvironmentVariable("MIR2_GUILDPROBE_BREAK") ?? "";
         foreach (var c in cases.Select(x => (dynamic)x))
         {
             var expect = c.expect;
@@ -755,6 +758,10 @@ internal static class Program
             var pumpIds = ((IEnumerable<object>)expect.pumped).Cast<dynamic>().Select(p => (int)p.ident).ToList();
             var rngCount = ((IEnumerable<object>)expect.rng).Cast<object>().Count();
             var items = ((IEnumerable<object>)expect.item_list).Cast<object>().Count();
+            if (name == breakCase && im.Count > 0)
+            {
+                im.Add(999); // 注入：让该例的帧断言失败（负向自测专用）
+            }
             var finalMap = (string)expect.final.map;
             var finalX = (int)expect.final.x;
             var finalY = (int)expect.final.y;

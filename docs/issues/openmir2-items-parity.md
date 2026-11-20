@@ -786,6 +786,9 @@ EAD
 **探针（C# 半批，已产）**：`mir2-rs/tests/parity/m3/guild-probe`（由 move-eat-probe 改造），产物 `mir2-rs/tests/parity/m3/fixtures/guild_vectors.json`，5 例：
 `eat_fail_shape5_no_guild`（636/0 抽）｜`eat_fail_shape5_in_war_area`（636/红字/0 抽）｜`eat_ok_shape5_invalid_castle_eaten`（635/红字/0 抽/位置不变）｜`eat_ok_shape5_castle_home_exact`（635/move 全套/2 抽/落 `(30±4,40±4)`）｜`eat_ok_shape5_castle_home_zero_coord_random`（635/move 全套/4 抽/`MapRandomMove`）。
 - **探针私有构造声明**：行会对象与城堡只在探针内构造，**不写回产品状态**；`SystemShare.GuildMgr` 在探针里是空 `GuildManager`。
+- **§35 负向实测（2026-11-20，自检必须被证明会挡）**：`MIR2_GUILDPROBE_BREAK=<case>` 给该例注入一条伪帧 ⇒ 走**同一条真实断言**失败：
+  `PROBE_SELFTEST_FAIL case=eat_ok_shape5_invalid_castle_eaten … 实得 im=[635,999]` ⇒ **rc=2**；
+  同路径复跑前后夹具 sha 不变（`2cfcefc6…`）；换新输出路径 ⇒ rc=2 且**文件不存在**（不落盘）。
 
 **Rust 侧（待 move 合入）**：等 `card/items-move-09` 合入 master 后，从新 master rebase 再实现——复用 `eat_move::maybe_eat_move` 的位移机制，不另造。清单 status 与覆盖届时一并改并先报 `opc-19`。
 
