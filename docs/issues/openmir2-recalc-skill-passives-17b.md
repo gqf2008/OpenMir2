@@ -72,3 +72,90 @@
   `--lib hit_mode_conditions_fall_back_to_rm_hit`（attackwire）、`--lib it17a_`（学技能入口）、`--lib sm_addmagic`。
 - 只要角色带攻杀剑法，**每次 Recalc 抽 1 次**（`:3706`）⇒ 夹具固定 `MIR2_RNG_SEED` 并把该抽记进账本，或选无攻杀的角色做纯被动用例。
 - 动 `MagicArr` 派生时，再加 `attackwire` 的模式用例（`MagicArr` 条件直接决定 `RM_LONGHIT/WIDEHIT/CRSHIT`）。
+
+## 6. 第一批（结构层）落地 — 2026-11-20
+
+**范围**：`RecalcHitSpeed` 的技能被动 + `MagicArr` 填充 + 752 帧面；**不含**攻杀剑法的 RNG 抽数（留后续批）
+与战斗消费（`GetHitMode`/`SkillAttackDamage`）。
+
+**实现（`bins/game-svr/src/skill_ability.rs`）**：
+- `SkillPassives{ hit_point, hit_plus, hit_double, attack_skill_count }` 与
+  `recalc_hit_speed_skills(magics, arr: &mut [Option<MagicRcd>])`：四条技能公式（基本剑法 3L / 精神力
+  `Round(8/3L)` / 攻杀 `L`+`HitPlus=5+L`+`Count=7-L` / 烈火 `4+4L`）、`MagicArr` **只写不清**、
+  `MagIdx>=50` **跳过并 WRN**（oracle 越界崩溃；登记的原样差异）。
+- `ability::recalc_abilitys_with_prior_and_skills(…, skill)`：`HitPoint = hit_base + skill.hit_point + AddAbil.HIT`
+  （顺序同 oracle：技能 → 装备）；`enter::recalc_for_session_with_skills` 给登录用。
+- `SessionGround.magic` 增 `arr: Vec<Option<MagicRcd>>(50)` + `passives`；写点：登录
+  `session_ground_from_login`（由记录 `magic` 过滤结果算）+ 每次 `recalc_session_ability`。**只写不清**。
+- **752 字段名订正（重要）**：oracle `PlayObject.Message.cs:1675` 的实参是
+  `MakeMessage(SM_SUBABILITY, /*Recog*/MakeLong(MakeWord(AntiMagic,0),0), /*Param*/MakeWord(HitPoint,SpeedPoint), /*Tag*/MakeWord(AntiPoison,PoisonRecover))`
+  ⇒ 线上 **`Param` = HitPoint(lo)/SpeedPoint(hi)**；`Tag` 是 AntiPoison/PoisonRecover（此前口述的
+  "Tag=MakeWord(HitPoint,SpeedPoint)" 是 oracle 形参名，不是线缆字段名）。
+
+**测试/牙**（`cargo test -p game-svr --lib skill_ability`，6 颗）：
+- 公式四条 + Level 门 + Round 半数 + `MagicArr` 不清空 + `MagIdx>=50` 忽略；
+- 会话级：`recalc_session_ability` 把技能被动带进 `sub.hit_point` 与 **752 `Param`**；删技能后
+  `MagicArr` 仍非空；
+- 牙：M1 `9/3→8/3`（公式红，left 18/right 19）；M2 函数开头 `arr.fill(None)`（不清空断言红）；
+  M3 `recalc_session_ability` 回 `with_prior`（752 无技能：left 5/right 14）。还原 sha 相等 + 基线复绿。
+- 基线（本批跑绿）：`it08_`(3) / `recalc_`(16) / `hit_mode_conditions`(1) / `it17a_`(6) / `sm_addmagic`(2)；
+  `clippy -p game-svr --all-targets -D warnings` 绿。
+
+**已登记的 known deviation（有意不同，别当 bug 修）**：
+- **`MagIdx >= 50`**：oracle `MagicArr[userMagic.MagIdx]`（数组 50，`PlayObject.cs:1041/3684`）会抛
+  `IndexOutOfRangeException`（进程级崩溃）；本仓 `recalc_hit_speed_skills` **跳过该条目并 WRN**
+  （理由：不把内容数据的错误升级成进程崩溃）。保留用例 `magic_arr_ignores_id_out_of_range`
+  （断言越界条目不写、合法条目照算）——删掉「跳过」或改成写入都会红。
+- **本批 0 抽是结构性的**：`recalc_hit_speed_skills` **没有 `rng` 形参**，攻杀支只置 `AttackSkillCount`
+  不置 `AttackSkillPointCount`；只要 `MagicList` 不含攻杀剑法就没有任何抽数。**第二批加 `rng` 后
+  本句不再成立**（届时「带攻杀 ⇒ 每次 Recalc 恰 1 抽」要进账本与断言）。
+
+**后续批（未做）**：
+- **攻杀的 RNG 两处**：① `RecalcHitSpeed` 的 `PlayObject.cs:3706`（每次 Recalc 恰 1 次，**Level=0 也抽**）；
+  ② **攻击时第二抽** `PlayObject.Attack.cs:943-952`——有攻杀且武器 `Dura>0` 时每击 `AttackSkillCount -= 1`，
+  归零则 `Count = 7-L` 并 `AttackSkillPointCount = RandomByte(7-L)`（**再抽 1 次**）同时
+  `PowerHit = true; SendSocket("+PWR")`。**别以为 RNG 只有 Recalc 一处**。
+- `SkillAttackDamage` 的次级伤害（模式 4/5/8/12 的 `nSecPwr`）；
+- `HitPlus/HitDouble` 的战斗态；`PowerHit/FireHitSkill`（`GetHitMode` 模式 3/7）——与上面的 `+PWR` 同批。
+
+## 7.1 3a 返工（Level 门位置纠正）— 2026-11-20
+
+**偏差**：oracle `PlayObject.cs:3699-3707` 的 `case SKILL_YEDO` 里**只有 `HitPoint += L` 在
+`if (Level > 0)` 内**；`HitPlus = DEFHIT + L`、`AttackSkillCount = 7 - L`（以及 `RandomByte(7-L)`）
+在门**外**（`:3704-3706`）⇒ Level=0 也置 `HitPlus=5`/`Count=7`/抽 1 次。第一批把四件事整体放进
+门内，且单测 `level_zero_skills_add_nothing_but_fire_sword` 把错期望（`hit_plus==0/Count==0`）钉住了。
+
+**修法**：`HitPlus/AttackSkillCount` 移出门（`HitPoint` 保留门内）；单测期望改为
+`HitPoint=0 / HitPlus=DEFHIT / Count=7 / HitDouble=4`，注释写明"旧期望错在哪"。
+**牙**：把两者再塞回门内 ⇒ 该用例红（还原 sha 相等后复绿）。
+**快照 diff（3a 后）**：`E:/UserTemp/it17b3a-run.txt`（`2100 passed / 0 failed / 65 ignored`）对基线
+⇒ green→red = **空**；new = 第二批三条（`hit_skill_state_reads_magic_arr_only` + 两条 hit_mode）；
+missing = 无。
+
+## 7. 第二批（`GetHitMode` 的 `MagicArr` 三条件接线）— 2026-11-20
+
+**范围声明（防日后默认扩大）**：本批**只接 `MagicArr` 的 `ergum(12)/banwol(25)/crossmoon(34)`**
+三个条件（`PlayObject.Attack.cs:101-134` 的 `case 4/5/8`）；`PowerHit`/`FireHitSkill`（`case 3/7`
+的战斗态）**不在本批**，`hit_skill_state` 恒传 `false`。
+
+**接线**：`lib.rs` 的动作帧分支（原 `HitSkillState::default()`）改为
+`skill_ability::hit_skill_state(&sg.magic.arr)`（`sessions.get(chr_name)`；缺会话回默认）；
+`skill_ability` 增 `SKILL_ERGUM/SKILL_BANWOL/SKILL_CROSSMOON` 常量（`readbook.rs` 改为 `pub use`，
+避免两处常量漂移）。
+
+**接线前基线快照（路径 + 命令 + 时间；`3b` 复核用）**：
+- `E:/UserTemp/it17b2-baseline-list.txt`（`cd mir2-rs && CARGO_BUILD_JOBS=2 cargo test -p game-svr --lib -- --list`，2162 名）
+- `E:/UserTemp/it17b2-baseline-run.txt`（`… cargo test -p game-svr --lib`；`2097 passed / 0 failed / 65 ignored`，逐条 ok）
+- `E:/UserTemp/it17b2-attack-subset.txt`（名单中含 `attack|hit|struck` 的 103 条）
+- `E:/UserTemp/it17b2-baseline-meta.txt`（时间 `2026-11-20T11:53:36+08:00`、head `1bfc59b28`、master `00cc9e761`、命令原文）
+- 接线后复跑：`E:/UserTemp/it17b2-after-wiring-run.txt`（`2100 passed / 0 failed / 65 ignored`）⇒
+  **逐名 diff：green→red = 空**（"没变"也是结论）；新增 3 条（下），无消失。
+
+**新用例（正反各一）**：
+- `it17b_hit_mode_skill_conditions_positive`：会话 `MagicArr` 有 12/25/34 ⇒ `CM_LONGHIT/CM_WIDEHIT/CM_CRSHIT`
+  的动作帧 = `SM_LONGHIT(19)/SM_WIDEHIT(24)/SM_CRSHIT(25)`。
+- `it17b_hit_mode_skill_conditions_negative`：`MagicArr` 全空 ⇒ 同三条命令仍 `SM_HIT`（且非三种特技帧）。
+- `skill_ability::tests::hit_skill_state_reads_magic_arr_only`：只认 12/25/34，`PowerHit/FireHitSkill` 恒 false。
+
+**牙（红→还原 sha→复绿）**：M4/M5/M6 分别把 `ergum/banwol/crossmoon` 置 false ⇒ 正向例红；
+M7b 三条件恒真 ⇒ 反向例红。还原后基线复绿。
