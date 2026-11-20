@@ -52,7 +52,7 @@
 **时点（审阅点名要的）**：训练与升级都是**攻击时刻同步发生**的（`AttackSuccess` 在 `AttackDir` 内、
 `AttackDir` 在 `ClientHitXY` 内），**不是** drain 时刻。延迟的只有**帧**：升级走 `UpdateDelayMsg(…, 800)`，
 未升级走 `SendSelfDelayMsg(…, 3000)`。`UpdateDelayMsg`（`BaseObject.Message.cs:257-278`）的语义是
-**先按 `(wIdent, nParam1)` 摘掉队列里已有的同条再重新入队**（即"覆盖旧熟练度帧"），不是"再发一条"。
+**升级支**先把队首连续同键条按 oracle 的 i 循环摘掉 `ceil(N/2)` 条再入队（不是"再发一条"，也**不是摘光**）；**未升级支是纯追加**。
 
 ⇒ 直接后果（A 卡那条「归 B」的偏差）：**同一击里的攻杀重置**（`PlayObject.Attack.cs:942-956`，在
 `AttackSuccess` **之后**跑）读到的是**已升级后**的 `Level` ⇒ `7-L` 用的是新等级。
@@ -75,7 +75,7 @@
 2. **同击内可见**：第 5 步的攻杀重置用新 `Level` ⇒ `7-L` 用新等级（A 卡「归 B」的那条偏差就是它）。
 3. **帧序**：640 帧在攻击时刻**入队**，到点才出；升级走 `UpdateDelayMsg`（先摘掉同 `(ident, MagicId)`
    的旧条再入队，`BaseObject.Message.cs:257-278`），未升级走 `SendSelfDelayMsg`（`:188-206`，优先级
-   `Lowest`）。⇒ 同一击内同一魔号只留**一条** 640；跨击则后一条**覆盖**前一条的等待时间（不是叠加两条）。
+   `Lowest`）。⇒ 同一击内同一魔号只留**一条** 640；**只有升级支**走替换：同魔号连续两击都升级时后一条覆盖前一条；两次未升级是**纯追加（两条）**。
 
 ### 1.2 `PowerHit` 消费（本项 ②）
 
@@ -129,7 +129,7 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 
 | 行为 | 可见性 | 观测面 |
 | --- | --- | --- |
-| 熟练度/升级 | **帧面** | `SM_MAGIC_LVEXP(640)` → **仅施法者自己的 socket**；`Recog=MagicId`、`Param=Level`、`Tag=TranPoint`（lo/hi）；未升级 **3000ms**、升级 **800ms**（`UpdateDelayMsg` 会**覆盖**同 `(ident, MagicId)` 的旧条） |
+| 熟练度/升级 | **帧面** | `SM_MAGIC_LVEXP(640)` → **仅施法者自己的 socket**；`Recog=MagicId`、`Param=Level`、`Tag=TranPoint`（lo/hi）；未升级 **3000ms**、升级 **800ms**（升级支经 `UpdateDelayMsg`：摘 `ceil(N/2)` 条队首同键项再入队；未升级支纯追加） |
 | `PowerHit` 命中 | **帧面 + 数值面** | 模式 3 的动作帧 `RM_SPELL2 → SM_POWERHIT`（现 Rust 发 `SM_HIT`）；伤害数值 `+HitPlus` |
 | `PowerHit` 置位 | 帧面（间接） | A 批的 `+PWR` 短包（已做） |
 | `TwinHitSkill` | **帧面** | 施放技能 `+TWN`；到期 `+UTWN`；模式 9 动作帧 `SM_TWINHIT`（现 Rust 无条件发，是**反向**偏差） |
@@ -163,14 +163,14 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 
 **正难点 = `UpdateDelayMsg` 的"摘旧条再入队"**：它不是"再发一条"，而是**替换**——同一魔号在队列里
 只留最新一条，且新条按**新的** `DeliveryTime`。⇒ 同一击内"先 `SendSelfDelayMsg(3000)` 再
-`UpdateDelayMsg(800)`"不会产生两帧；连续两击都未升级时，第二击会把第一击的 3000ms 条**摘掉重排**。
+`UpdateDelayMsg(800)`"不会产生两帧；连续两击都未升级时，第二击若**升级**，才会把第一击的 3000ms 条**摘掉重排**（未升级不摘）。
 
 ### 3bis.2 本仓可复用面（先查再写）
 
 - `crates/world-bevy/src/slave` 已有 **`update_self_delay_msg_full`**（`UpdateDelayMsg` 的等价物，P3-B3
   落地，注释点名 `BaseObject.Message.cs:257-278`）与 **`SelfDelayQueue::remove_head_matching`**（"删除段"）。
   **注意 oracle 的删除只在队首匹配时才摘**（循环里 `TryPeek` 第 i 条但 `TryDequeue` 摘的是队首）——
-  这条已被本仓逐字复刻，段 2 直接复用，别"修顺"。
+  本仓已按 oracle 的 i 循环复刻（队首连续 N 条只摘 `ceil(N/2)`），段 2 复用，别"修顺"。
 - `bins/game-svr/src/smframe` 已有 **`sm_magic_lvexp`** 编码器（`SM_MAGIC_LVEXP(640)` 的 `Recv/Param/Tag` 三字段）。
 - 宿主 `drain_self_delay_msgs` 已有 `RM_MAGIC_LVEXP` 到点排水（`lib.rs` 的"到点 ⇒ 640，仅该 actor
   自己的 socket"）。
@@ -192,13 +192,35 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 宿主只在**到点排水**处把 `RM_MAGIC_LVEXP` 变成 `sm_magic_lvexp(magic_id, level, tran_point)`
 发给该 actor 自己的 socket（既有 `drain_self_delay_msgs` 链路）。
 
+### 3bis.2c 段 2 的臂 × 牙映射（实测，2026-11-20）
+
+| 臂（独立 `#[test]`） | 验什么 |
+| --- | --- |
+| `magic_lvexp_queued_at_3000_when_not_leveled` | 未升级 ⇒ 恰一条、`DeliveryTime = now+3000`、载荷为调用后值 |
+| `magic_lvexp_queued_at_800_when_level_up` | 升级 ⇒ 恰一条、`now+800`（**没有** 3000 那条）、`Level=1` |
+| `magic_lvexp_update_replaces_previous_entry` | 同魔号两击都升级 ⇒ 只留一条、**按第二击重排**（断言 `> t1` 且 `>= t2_before+800`）、`Level=2` |
+
+| 牙 | 改坏点 | 咬哪条 |
+| --- | --- | --- |
+| T1 | 800↔3000 互换 | 前两条（第三条不受影响） |
+| T2 | 删「摘旧条」 | **只有**第三条 |
+| T3 | 有条就不入（条数对、时间戳停在第一击） | **只有**第三条的"重排"断言 |
+
+T3 是专门为"条数对但时间戳是旧的"这个半对情形设计的：它让替身留在队列里、时间戳仍是第一击 ⇒
+只有"按第二击重排"的断言能抓。
+
+**判据收敛声明（原 P2-2）**：本节原先草拟的"宿主级五条判据"未交付，现**收敛为**下面的三臂
+（3000 / 800 / 替换-重排）+ 两条 N=2（`magic_lvexp_update_leaves_ceil_half_stale_entries`、
+`update_self_delay_msg_full_keeps_ceil_half_when_n2`，分别覆盖 `world.rs` 与 DoSpell 尾两条路径）。
+原表作废，不再作为承诺。
+
 ### 3bis.3 判据与牙（草案）
 
 | 判据 | 验法 |
 | --- | --- |
 | 未升级 ⇒ 3000ms 后一条 640 | 宿主级用例：攻击 → tick → 推进时钟 2999 无帧、3000 有帧；`Param=Level`、`Tag=TranPoint` 按 Lo/Hi 拆 |
 | 升级 ⇒ 800ms 一条 640 | 同上，阈值换 800；且 800 之前**没有** 3000 那条（升级支不进 `SendSelfDelayMsg`） |
-| **替换语义** | 同一魔号连续两击都未升级：只留**一条** 640，`DeliveryTime` 按第二次重排（推进到第一击+3000 时**不**出帧，第二击+3000 才出） |
+| **替换语义** | **升级支**的替换语义：同魔号连续两击都升级 ⇒ 只留一条、按第二击重排；两次未升级则是**两条**（纯追加） |
 | 只发给施法者 | 第二个玩家的 gate 通道上**零** 640；旁观者看不到 |
 | `Ghost` 不入队 | 施法者 `Ghost=true` 时队列零增长 |
 
@@ -209,7 +231,7 @@ A 的攻杀尾巴读的是注入的 `arr` 快照，因此训练后必须**在同
 
 - **①训练**：`CheckSkillProficiency` 门内/门外两支（`Level<3`、`TrainLevel[Level] <= Abil.Level`）；
   `TrainSkill` 的 `FastTrain` ×3；`CheckMagicLevelUp` 的 `nLevel` 计算与「恰好扣到 0 才升」；
-  640 帧的 **800ms/3000ms 两支**与 `UpdateDelayMsg` 的覆盖语义（同击同一 MagicId 只留一条）。
+  640 帧的 **800ms/3000ms 两支**与 `UpdateDelayMsg` 的替换语义（升级支：摘队首同键 `ceil(N/2)` 条再入队）。
 - **①时点**：同一击里升级后，A 的攻杀重置用**新** `Level`（`7-L`）；跨击不回退。
 - **②`PowerHit`**：模式 3 且 arm ⇒ `SM_POWERHIT` + 伤害恰多 `HitPlus` + 标志清零（第二击不再加成）；
   未 arm ⇒ `SM_HIT` + 无加成；`canHit` ⇒ `AttackSuccess:250` 的攻杀抽**恰多 1 次**。
