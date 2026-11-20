@@ -34,7 +34,7 @@
     "kind": "dispatch_branch",
     "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格；duplicate 条目（MG-30≡MG-23、MG-31≡MG-24）不计入分母",
     "entry": "CM_SPELL(3017) -> MagicManager.DoSpell -> case 分支",
-    "count": 63,
+    "count": 58,
     "commands": []
   },
   "migration_note": "由 E:/UserFleet/magic-parity.json（旧 schema）机械转写：implemented -> implemented_unverified（旧清单明示“帧级对拍 0/65、basis 全空” ⇒ verified=0，不升格）；missing 保持 2 条；cost 直译 小时级->S、天级->M，原始值保留在 notes。",
@@ -359,7 +359,7 @@
     },
     {
       "id": "MG-14",
-      "legacy_id": "Shape=1",
+      "legacy_id": "Shape=1@DoSpell",
       "behavior": "Shape=1",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -376,11 +376,11 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支）"
     },
     {
       "id": "MG-15",
-      "legacy_id": "Shape=2",
+      "legacy_id": "Shape=2@DoSpell",
       "behavior": "Shape=2",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -397,7 +397,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上）"
     },
     {
       "id": "MG-16",
@@ -501,17 +501,12 @@
         "line": 315,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
+      "status": "duplicate",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格"
+      "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格。duplicate：与 MG-27 为同一叶子（src/M2Server/Magic/MagicManager.cs:315（外层 `case SKILL_FIRECHARM`）与 :328（内层同魔号 `case`）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-27"
     },
     {
       "id": "MG-21",
@@ -522,19 +517,12 @@
         "line": 316,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_cmd_a5_defence_area_buffs_target_in_range"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-28 为同一叶子（同文件 :316（外层）与 :352（内层，HANGMAJINBUB）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-28"
     },
     {
       "id": "MG-22",
@@ -545,19 +533,12 @@
         "line": 317,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_cmd_a5_defence_area_buffs_target_in_range"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-29 为同一叶子（同文件 :317（外层）与 :359（内层，DEJIWONHO）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-29"
     },
     {
       "id": "MG-23",
@@ -612,19 +593,12 @@
         "line": 320,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层组标签（`:320`，共享 13..19 护身符组），18 的执行链由内层 MG-32 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层组标签（`:320`，共享 13..19 护身符组），18 的执行链由内层 MG-32 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-32 为同一叶子（同文件 :320（外层）与 :378（内层，CLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-32"
     },
     {
       "id": "MG-26",
@@ -635,19 +609,12 @@
         "line": 321,
         "line_end": null
       },
-      "status": "implemented_unverified",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
-        ]
-      },
+      "status": "duplicate",
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；外层组标签（`:321`，共享 13..19 护身符组），19 的执行链由内层 MG-33 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
+      "notes": "旧清单 cost=天级；外层组标签（`:321`，共享 13..19 护身符组），19 的执行链由内层 MG-33 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）。duplicate：与 MG-33 为同一叶子（同文件 :321（外层）与 :384（内层，BIGCLOAK）；内层/同标签只能由同一魔号或同一 Shape 进入，无字段可区分）",
+      "pre_duplicate_status": "implemented_unverified",
+      "merged_into": "MG-33"
     },
     {
       "id": "MG-27",
@@ -1575,7 +1542,7 @@
     },
     {
       "id": "MG-64",
-      "legacy_id": "Shape=1",
+      "legacy_id": "Shape=1@MagGroupAmyounsul",
       "behavior": "Shape=1",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -1583,20 +1550,20 @@
         "line_end": null
       },
       "status": "implemented_unverified",
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@MagGroupAmyounsul`，依据 :919（`MagGroupAmyounsul` 内，群体 48）",
       "evidence": {
         "test": null,
         "test_file": null,
         "fixture": null,
         "cases": [],
         "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      }
     },
     {
       "id": "MG-65",
-      "legacy_id": "Shape=2",
+      "legacy_id": "Shape=2@MagGroupAmyounsul",
       "behavior": "Shape=2",
       "oracle_anchor": {
         "file": "src/M2Server/Magic/MagicManager.cs",
@@ -1604,16 +1571,16 @@
         "line_end": null
       },
       "status": "implemented_unverified",
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@MagGroupAmyounsul`，依据 :923（同上）",
       "evidence": {
         "test": null,
         "test_file": null,
         "fixture": null,
         "cases": [],
         "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      }
     }
   ]
 }
