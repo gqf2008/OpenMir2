@@ -749,17 +749,11 @@
         "line_end": null
       },
       "status": "duplicate",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。duplicate：与 MG-23 为同一叶子（MagicManager.cs`:318（外层 `case SKILL_HOLYSHIELD`）与 `:366（内层 `case MagicConst.SKILL_HOLYSHIELD`）；内层只能由同魔号外层进入，无字段可区分）",
-      "merged_into": "MG-23"
+      "merged_into": "MG-23",
+      "pre_duplicate_status": "implemented_unverified"
     },
     {
       "id": "MG-31",
@@ -771,17 +765,11 @@
         "line_end": null
       },
       "status": "duplicate",
-      "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。duplicate：与 MG-24 为同一叶子（MagicManager.cs`:319（外层）与 `:372（内层）；内层只能由同魔号外层进入，无字段可区分）",
-      "merged_into": "MG-24"
+      "merged_into": "MG-24",
+      "pre_duplicate_status": "implemented_unverified"
     },
     {
       "id": "MG-32",
