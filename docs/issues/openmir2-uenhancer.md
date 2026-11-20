@@ -1,6 +1,6 @@
 # openmir2-uenhancer — 36 `SKILL_UENHANCER`（无极真气）对拍卡
 
-**状态**：实现 + 657 接线完成；`verified`（**部分范围**：`dc` 依赖 `43` 的 ExtraAbil 修正卡）。
+**状态**：实现 + 657 接线完成；`verified`。**`dc` 已 0 差**（`43` 的 ExtraAbil 修复合入 master `648d545d1` 后在 `ec2b1b18e` 复跑：`CMP_RC=0 / 657_hits=0 / DIFF_LINES=0`）。scope 见 §5（建议仍 `部分范围`，理由在 §5）。
 **代码 head**（已验证）：`09882d3d9`（rebase 到 master `3df3b0202`）；**本卡**为 docs-only 追加。
 
 ## 1. oracle 事实（树 `3df3b0202`）
@@ -35,7 +35,13 @@
 - `52` ability 尾的 `dc`：oracle `0x0605`（`RecalcLevelAbilitys` Warrior `MakeWord(max(lv/5-1,1),max(1,lv/5))`，lv30⇒Hi6） vs Rust `0x0805`（Hi8）。
 - 根因：`bins/game-svr/src/ability.rs` 的 `apply_extra_abil` 把 `ExtraAbil[0]=nPower=2` 折进 `WAbil.DC.Hi`；oracle 的 52 帧 `WAbil` 不含该 +2（`ExtraAbil` 不进 `WAbil`）。
 - 裁定（`3b`，`docs/issues/qa-extraabil-adjudication-20261120.md`）：**`ExtraAbil` 折进 `WAbil` 永远不该发生**，全局缺陷，统一由 `43` 修。**本卡不改 `apply_extra_abil`**；`43` 落地后本支应 `diff_fields=0`。
-- ⇒ 本卡 `verified` 为**部分范围**：`dc` 待 `43`。
+- ⇒ （历史）曾记"部分范围：dc 待 43"。
+- **当前状态（2026-11-20）**：`43` 合入 master `648d545d1` 后，在 `ec2b1b18e` 复跑 ① ⇒ `CMP_RC=0 / 657_hits=0 / DIFF_LINES=0`（**dc 已 0 差**）。
+
+### scope 建议（待 Leader 定）
+- 建议：**仍记 `部分范围`（不是 full）**。依据——本支覆盖面 = **`targetNull=self` 的 DoSpell 时刻**：657 四条（逐 socket 2/1/1、param=2）、52 全 22 字段（0 差）、`nPower`(ExtraAbil[0])=2 与 `nTime`=250（含 SC 输入三列可复算）、RNG 五抽、HP、可证伪对照（stale 读 3→15）、牙 A9/B3；这些**全绿**。
+- **未覆盖（故不建议 full）**：① **非自身 proper-friend 目标**（`target≠caster` 时 `AttPowerUp` 给他人、657 随 target 走）；② **`CheckAmulet` 失败 → 639** 支；③ DoSpell 之后 **buff 的实际加成与超时**（`ExtraAbilTimes[0]` 到期）。
+- 若 Leader 要 `full`，需补上述三支（另开 case/卡），否则 `range` 行应保留一条（self-target / DoSpell 时刻）。
 
 ## 6. 依赖
 - `43`：ExtraAbil 折进 WAbil 的全局修正（`dc` 部分范围的关闭条件）。
