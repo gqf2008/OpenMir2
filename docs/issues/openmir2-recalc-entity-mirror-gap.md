@@ -16,7 +16,7 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 
 | # | 调用点 | 函数 | 镜像 | 发 657 | 657 `Series` 读哪 | 判定 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `apply_pending_level_up` | 升级 | ❌ | 是 | 实体 | **同族风险（升级链）** |
+| 1 | `apply_pending_level_up` | 升级 | ❌ | 是 | 自见走 `sg`（`recalc_session_ability` 内赋值）；观察者读各自实体 | **不受 657 值影响（已核）**；仅"实体未镜像"不变量缺口 |
 | 2 | `apply_gm_use_item_write` | GM 用药 | ❌ | 否 | — | 登记（无 657，不变量缺口） |
 | 3 | `handle_inbound_cmd` | 入图 | ✅ | 是 | 实体（已镜像） | 无损 |
 | 4 | `handle_bag_cmd_with_magic` | 穿脱 | ✅ | 是 | 实体 | 无损 |
@@ -37,10 +37,10 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 
 ## 3. 三个同族风险点（复现条件）
 
-1. **`apply_pending_level_up`（升级链）**：目标在**本次**升级重算后、`sg.hit_speed` 与旧实体值不同
-   （给升级前设置一个非 0 且与重算结果不同的 `hit_speed`）⇒ 657 应等于重算后值，实际会等于旧值。
-   复现用例：目标级 30→31（升级使 `AddAbil.HitSpeed` 变化）+ 旧 `hit_speed=7`、重算后应 `0`。
-2. **`handle_eat_cmd`（观察者面，半对）**：吃物品触发 `RecalcAbilitys` 后**观察者**收到的 657
+0. **`apply_pending_level_up`（升级链）：不受 657 值影响（`89` 静态分析确认）**——自见帧的 `Series`
+   取 `sg.hit_speed`（`recalc_session_ability` 内已赋值），**不读实体**；观察者读的是**各自**实体，
+   本 actor 重算不改别人 ⇒ 只保留"实体未镜像"这一不变量缺口登记，**不列风险、不加 657 用例**。
+1. **`handle_eat_cmd`（观察者面，半对）**：吃物品触发 `RecalcAbilitys` 后**观察者**收到的 657
    `Series` 走实体（旧值）；**自我面**走 `WireSession`（`sg`，已新）⇒ 同一事件两套值。
    复现：吃使 `hit_speed` 变化的物品（如带 `atk_spd` 的武器切换类），一名观察者在 ±range 内。
 3. **`drain_buff_downlink`（`#9` 路径）**：`boNeedRecalc` 重算后自见与观察者都经
@@ -51,6 +51,9 @@ oracle 里玩家对象只有**一份**：`RecalcAbilitys()` 尾部 `HitSpeed = A
 
 - 每个风险点**一条能区分的用例**：断言 **`Series` 的具体值**（重算后值 ≠ 旧值），
   **不是条数断言**；夹具必须让"旧值 ≠ 新值"（非退化输入）。
+- **哨兵用例形式（`89` 建议，采纳）**：如 `drain_buff_downlink` 自见面——构造"实体 `hit_speed=99` /
+  会话 `hit_speed=0`"的区分态，期望帧 `Series=0`、缺镜像时实发 `99`。**该用例是"区分性用例"，
+  不代表线上存在这种不一致态**，卡面照此注明，落地时以它转绿。
 - 每个点配**变异**：删掉镜像 ⇒ 该用例红（`golden/期望=新值` vs `实际=旧值`）。
 - `apply_gm_use_item_write` 只登记，不修、不加用例。
 
