@@ -1079,6 +1079,11 @@ pub struct SimState {
     ///
     /// `Mutex` 只为让 `&World` 侧（下行排水）也能读写；sim 线程单线程、无锁竞争。
     pub ref_msg_cache: std::sync::Mutex<std::collections::HashMap<i32, RefMsgCacheEntry>>,
+    /// **cache-first 可观测（M53 卡）**：`SendRefMsg` 扫描面（`chat::hear_targets*`）的累计次数。
+    ///
+    /// 每次调用 `chat::hear_targets_at` 的扫描体 `+1`；宿主缓存命中路径**不得**推进它。
+    /// 仅作诊断/测试断言（Relaxed），不参与模拟语义。
+    pub ref_msg_scan_total: std::sync::atomic::AtomicU64,
     /// **P2-3a release 可观测**：本 World 因「目标图不归自己」而拒绝的入口次数（单调累计）。
     ///
     /// 每个换图/落格入口在 fail-closed 时 `+1`；`MIR2_SHARDS=1` 恒 0。debug 的每 tick 断言之外，
@@ -1621,6 +1626,7 @@ impl SimState {
             // 缺省全拥有（`MIR2_SHARDS=1` / 合成 golden：所有权检查恒过、零行为变化）。
             owned_maps: vec![true; maps_len],
             ref_msg_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            ref_msg_scan_total: std::sync::atomic::AtomicU64::new(0),
             unowned_refusal_count: 0,
             sessions: SessionRegistry::new(),
             clock_ms: 0,
@@ -19056,6 +19062,64 @@ impl World {
                 })
             })
             .collect()
+    }
+
+    /// **cache-first 只读入口（M53）**：缓存新鲜时**不扫描**、直接按旧快照过滤返回。
+    ///
+    /// 返回 `None` ⇔ 需要扫描并刷新（`now - tick >= TTL` 或 `visible` 为空）；
+    /// 返回 `Some(list)` 时**不推进 tick、不刷新**。边角与 oracle 逐字一致：
+    /// - **sender 不存在且缓存新鲜 ⇒ `Some(vec![])` 且不推进 tick**；
+    /// - 命中判据只看 `now - tick < TTL` **且** `visible` 非空。
+    #[must_use]
+    pub fn ref_msg_targets_cached(&self, sender_id: i32) -> Option<Vec<i32>> {
+        let now = self.clock_ms;
+        let map = self.ref_msg_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.get(&sender_id)?;
+        if now - entry.tick >= REF_MSG_CACHE_TTL_MS || entry.visible.is_empty() {
+            return None;
+        }
+        let Some(sender) = self.entities.get(sender_id) else {
+            return Some(Vec::new());
+        };
+        let (sx, sy, smap) = (sender.x, sender.y, sender.map_id);
+        Some(
+            entry
+                .visible
+                .iter()
+                .copied()
+                .filter(|target_id| {
+                    self.entities.get(*target_id).is_some_and(|t| {
+                        t.map_id == smap
+                            && !t.ghost
+                            && (t.x - sx).abs() < REF_MSG_CACHED_RANGE
+                            && (t.y - sy).abs() < REF_MSG_CACHED_RANGE
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// 诊断：sender 的缓存刷新时刻（`None` = 无条目）。仅测试/诊断用。
+    #[must_use]
+    pub fn ref_msg_cache_tick(&self, sender_id: i32) -> Option<i64> {
+        self.ref_msg_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&sender_id)
+            .map(|e| e.tick)
+    }
+
+    /// 诊断：扫描面累计次数（`chat::hear_targets_at` 每次 `+1`）。
+    #[must_use]
+    pub fn ref_msg_scan_total(&self) -> u64 {
+        self.ref_msg_scan_total
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 扫描面计数（`chat::hear_targets_at` 调用；cache-first 命中路径不得触发）。
+    pub fn note_ref_msg_scan(&self) {
+        self.ref_msg_scan_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 清空本世界的缓存（测试夹具在同一世界里跑多例时使用）。

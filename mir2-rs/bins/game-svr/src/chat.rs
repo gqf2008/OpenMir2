@@ -199,6 +199,8 @@ pub fn hear_targets_at(
     y: i32,
     range: i32,
 ) -> Vec<i32> {
+    // **M53 可观测**：扫描面累计（cache-first 命中路径不得触发；见 `World::ref_msg_scan_total`）。
+    world.note_ref_msg_scan();
     // 慢 tick 段快照的命名子项（默认关闭；关闭态只读一次线程局部槽，不取时钟/不分配）。
     let probe = crate::tick_profile::hear_targets_probe_begin();
     let out = hear_targets_at_scan(world, speaker_id, map_id, x, y, range);
