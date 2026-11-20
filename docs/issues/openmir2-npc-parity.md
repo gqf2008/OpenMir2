@@ -9,8 +9,8 @@
 ## 1. 覆盖率口径（不变）
 
 - **分母 11**：NP-01…NP-11（`docs/issues/parity-gap-npc.json`）。**本次不改分母**；若发现分母错，先停并给证据。
-- `verified` 门槛：与原版**同输入**、**语义层对拍**通过（RM 序列 + SM 帧 + 状态差 + RNG 账本），每条写测试名；对外只报 `coverage-report.ps1` 输出（当前 NPC 1/11）。
-- 现状：NP-06 已 verified（M4 双跑），其余 10 条 implemented（未验证）。
+- `verified` 门槛：与原版**同输入**、**语义层对拍**通过（RM 序列 + SM 帧 + 状态差 + RNG 账本），每条写测试名；对外只报 `coverage-report.ps1` 输出（2026-11-20 重测于 `8b738d987`：NPC 11/11；初稿时为 1/11）。
+- 现状（2026-11-20 重测于 `8b738d987`）：11 条全部 verified（NP-01…NP-11）；初稿时为 NP-06 已 verified、其余 10 条 implemented。
 
 ## 2. 判定面总则（记录面 vs 判定面）
 
@@ -457,7 +457,7 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
 - **说词优先级子面未断言**：oracle 金标准记录 `rm_priorities`（本批为普通队列 `1`）；
   Rust 的优先级**不落线缆**（帧头无 priority 字段），无法从帧面断言。NP-08 的 verified 不含该子面。
 
-**NP-11**：本轮不升 verified；装置卡 `docs/issues/openmir2-npc-multiobserve-golden.md`。
+**NP-11**：已升 verified（2026-11-20，`747d542eb`；清单 NP-11=verified，覆盖 `fresh_scan` + `cache_window` 两个子面）；装置卡 `docs/issues/openmir2-npc-multiobserve-golden.md`。
 
 
 ## 18. 看板读路径（观察，2026-11-20）

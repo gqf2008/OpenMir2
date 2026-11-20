@@ -4,8 +4,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "schema_note": "本域无旧清单（legacy_source 不适用 / N/A）：quests 机器清单 2026-11-19 由 master fb999d34a 新建，无 legacy 清单可迁移，故条目无需 legacy_id。",
   "counting_moment": {
-    "head": "fb999d34a110d67d743f2825ade9d669cb92537a",
-    "time": "2026-11-19T23:29:39+08:00"
+    "head": "8b738d9874146351397a94861b74898e29355a1a",
+    "time": "2026-11-20T10:44:09+08:00",
+    "note": "2026-11-20 重测于 8b738d987：verified = QT-02/03/04/05/06/07/08/09（8 条）+ QT-01 dead_in_oracle（分母 9）；旧 head fb999d34 时为 2 verified（计数未重测）；COUNT_HEAD_STALE 属结构性残留：校验器判 WARN 的条件是「head 是该文件 last_change 的祖先且不相等」，而本批提交本身就是最新 last_change ⇒ 重测后刷必然留下该 WARN；其读法是「head 之后文件又动过」，不是「没重测」（qa-charter §34 补注）"
   },
   "status_enum": [
     "verified",
@@ -310,7 +311,7 @@
         "section": "CHECKOPEN 恒假（oracle 缺陷 1:1 复刻）",
         "lines": null
       },
-      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0",
+      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0。覆盖在共享真值表 mir2-rs/tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv 的 8 行中的 CHECKOPEN 4 行（2 handler × 2 value × 2 status），断言见 mir2-rs/crates/script/tests/engine_tests.rs::condition_truth_table_matches_oracle 的 assert_eq!(n, 8)",
       "basis": "semantic"
     },
     {
@@ -334,7 +335,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "语料 0",
+      "notes": "语料 0。覆盖在共享真值表 mir2-rs/tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv 的 8 行中的 CHECKUNIT 4 行（2 handler × 2 value × 2 status），断言见 mir2-rs/crates/script/tests/engine_tests.rs::condition_truth_table_matches_oracle 的 assert_eq!(n, 8)",
       "basis": "semantic"
     },
     {
