@@ -516,4 +516,16 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 
 **第一批已落地（结构）**：`use_item` 的 `3 if tpl.shape == 12` 臂（六槽写入 + 蓝字通知 + `eaten`）；`UseItemContext` 增 `blue_msg_fcolor/bcolor`、`now_ms`；宿主写回实体 `BuffState` 的三个数组 → `RecalcAbilitys` → `RM_ABILITY`；三条纯用例（六命中/全零不吃/max 合并）+ 全量 `--lib 2078/0/65`、clippy rc=0。
 
+**第二批（探针/夹具/比较器/牙，2026-11-20）**
+- **探针**：`mir2-rs/tests/parity/m3/buff-probe`（由 eat-probe 改造；不动 eat/oil/guild/move 探针），产物 `mir2-rs/tests/parity/m3/fixtures/buff_vectors.json`，4 例：六命中 / 单命中（仅 MAC 低）/ 组合（DC+SC）/ 全零不吃。记录 `ExtraAbil[7]/Flag[7]/Times[7]` 前后、`now_before`、**通知文本**（硬编码字面量 + `"sec."`）。
+- **§29 出队序（实测 6 条同 ident）**：入队序 `DC,MC,SC,HITSPEED,HP,MP`；**出队序 = `DC,MP,HP,HITSPEED,SC,MC`**（sift 置换，**与入队序不同**）。Rust 的 notices 不带文本，故出队序在夹具侧按文本核（断言六条文本互异 + 含 `"sec."`）。
+- **时钟**：`now_ms` 注入 ⇒ Rust 精确断言 `times[k] == now + dur`；oracle 侧取 `times - now_before` 的窗口 `[dur, dur+100]`（墙钟取证窗口），**不核绝对 tick**。
+- **比较器**：`useitem::tests::it07_buff_fixture_matches_pure_decision`（逐例 ExtraAbil/Flag 精确、Times 时长、吃/不吃、蓝字条数）。
+- **牙（§31 五点，实跑）**：
+  | 变异 | 变异行 | 红在 | 还原 sha | 基线 |
+  | --- | --- | --- | --- | --- |
+  | T1 `>`→`>=` | `if val >= 0 {` | `it07_shape12_all_zero_not_eaten` + 夹具例 | 相等 | 绿 |
+  | T2 Times max→赋值 | `extra_abil_times[slot] = t;` | `it07_shape12_max_merge_keeps_larger_values` | 相等 | 绿 |
+- **门禁**：`--lib` 2080 passed / 0 failed / 65 ignored；clippy rc=0；fmt rc=0。
+
 **状态**：`missing`（清单未动；等探针/比较器/牙齐了再改并先报 `opc-19`）。

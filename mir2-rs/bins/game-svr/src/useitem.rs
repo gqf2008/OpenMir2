@@ -1057,6 +1057,149 @@ mod tests {
         }
     }
 
+    fn buff_fixture() -> serde_json::Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/buff_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("buff 夹具缺失/不可读：{path}（{e}）"));
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"))
+    }
+
+    /// **IT-07 比较器**：逐例核对 `ExtraAbil[7]/Flag[7]`（精确）、`Times`（时长 = `HiByte(DC)*60000 +
+    /// HiByte(MAC)*1000`，oracle 侧取 `times - now_before` 的**窗口**，不核绝对 tick）、吃/不吃、蓝字条数。
+    /// 六条同 ident 的**出队序**只在夹具侧可判（Rust 的 notices 不带文本）⇒ 本用例另断言夹具的六条文本互异，
+    /// 令"出队序"这一记录可核。
+    #[test]
+    fn it07_buff_fixture_matches_pure_decision() {
+        let doc = buff_fixture();
+        let cases = doc["cases"].as_array().expect("cases");
+        assert_eq!(cases.len(), 4, "用例数固定 4");
+        let templates = doc["templates"].as_object().unwrap();
+        let mut checked = 0;
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let tpl_id = c["request"]["name"].as_str().unwrap();
+            let t = templates
+                .values()
+                .find(|v| v["name"].as_str() == Some(tpl_id))
+                .unwrap_or_else(|| panic!("{name}: 模板 {tpl_id} 不在夹具 templates"));
+            let tpl = StdItem {
+                name: tpl_id.into(),
+                std_mode: t["std_mode"].as_u64().unwrap() as u8,
+                shape: t["shape"].as_u64().unwrap() as u8,
+                ac: t["ac"].as_u64().unwrap() as u16,
+                mac: t["mac"].as_u64().unwrap() as u16,
+                ..Default::default()
+            };
+            // 夹具的 templates DTO 不含 DC/MC/SC ⇒ 从预期反推不了；模板 id 按 `Tpl` 约定
+            // （2030 全六项 / 2032 仅 DC+SC）在探针里手工补过 ⇒ 这里按同一常量重建。
+            let tpl = match tpl_id {
+                "buff_six" => StdItem {
+                    dc: 0x0505,
+                    mc: 0x0007,
+                    sc: 0x0003,
+                    ..tpl
+                },
+                "buff_combo" => StdItem {
+                    dc: 0x0005,
+                    sc: 0x0004,
+                    ..tpl
+                },
+                _ => tpl,
+            };
+            let now = 1_000;
+            let (out, st) = shape12_run(tpl.clone(), UseItemActorState::default(), now);
+            let eat_ident = if out.eaten { 635 } else { 636 };
+            let frames: Vec<i64> = c["expect"]["immediate_frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["ident"].as_i64().unwrap())
+                .collect();
+            assert_eq!(frames, vec![eat_ident], "{name}: 吃/不吃");
+            if !out.eaten {
+                assert!(out.notices.is_empty(), "{name}: 不吃 ⇒ 零通知");
+                checked += 1;
+                continue;
+            }
+            let ea = &c["expect"]["extra_after"];
+            let want_abil: Vec<u16> = ea["abil"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u16)
+                .collect();
+            let want_flag: Vec<u8> = ea["flag"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u8)
+                .collect();
+            assert_eq!(st.extra.extra_abil.to_vec(), want_abil, "{name}: ExtraAbil");
+            assert_eq!(
+                st.extra.extra_abil_flag.to_vec(),
+                want_flag,
+                "{name}: ExtraAbilFlag"
+            );
+            let now_before = c["now_before"].as_i64().unwrap();
+            let want_times = ea["times"].as_array().unwrap();
+            let dur = i64::from(mir2_shared::hutil32::hi_byte_u16(tpl.dc)) * 60_000
+                + i64::from(mir2_shared::hutil32::hi_byte_u16(tpl.mac)) * 1_000;
+            for (k, wt) in want_times.iter().enumerate() {
+                let wt = wt.as_i64().unwrap();
+                if wt == 0 {
+                    assert_eq!(st.extra.extra_abil_times[k], 0, "{name}: 槽 {k} 不应有计时");
+                    continue;
+                }
+                let oracle_dur = wt - now_before;
+                assert!(
+                    oracle_dur >= dur && oracle_dur <= dur + 100,
+                    "{name}: 槽 {k} oracle 时长 {oracle_dur} 应在 [{dur}, {dur}+100]（墙钟取证窗口）"
+                );
+                assert_eq!(
+                    st.extra.extra_abil_times[k],
+                    i64::from(now) + dur,
+                    "{name}: 槽 {k} 注入时钟下的精确时长"
+                );
+            }
+            let blue = out
+                .notices
+                .iter()
+                .filter(|n| n.ident == RM_SYSMESSAGE && n.n_param1 == 251)
+                .count();
+            let want_blue = c["expect"]["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| n["ident"].as_i64() == Some(11004))
+                .count();
+            assert_eq!(blue, want_blue, "{name}: 蓝字条数");
+            checked += 1;
+        }
+        assert_eq!(checked, 4);
+        // 六条同 ident 的**出队序**只能靠文本区分 ⇒ 断言夹具的六条文本互异（含 "sec." 原文）。
+        let six = cases
+            .iter()
+            .find(|c| c["name"] == "eat_ok_shape12_six_buffs")
+            .unwrap();
+        let texts: Vec<&str> = six["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["ident"].as_i64() == Some(11004))
+            .map(|n| n["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts.len(), 6, "六命中 ⇒ 六条蓝字");
+        let uniq: std::collections::BTreeSet<&&str> = texts.iter().collect();
+        assert_eq!(uniq.len(), 6, "六条文本必须互异（出队序才可核）：{texts:?}");
+        assert!(
+            texts.iter().any(|t| t.ends_with("sec.")),
+            "MC 那条以 \"sec.\" 结尾（oracle 原样）"
+        );
+    }
+
     /// **IT-07**：六个独立 `if` 全命中 ⇒ 六槽写入、时长 = `HiByte(DC)*60000 + HiByte(MAC)*1000`、
     /// 六条蓝字通知、吃。
     #[test]
