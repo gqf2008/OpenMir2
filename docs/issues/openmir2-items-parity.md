@@ -530,6 +530,7 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 - **门禁**：`--lib` 2080 passed / 0 failed / 65 ignored；clippy rc=0；fmt rc=0。
 
 **既有断言更正（IT-07 修复带出，单列；QA 逐条核 oracle）**
+> **同一根因，一个锚解释三处**：旧值都把 `ExtraAbil[0]` 加进 DC 高字节（写入点 `PlayObject.cs:2818-2820`），而 `RecalcAbilitys` 尾段 `:2900` 的 `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil)+Lo(Abil)), MIN(255,Hi+Hi))` **整体覆盖**它 ⇒ 三处的正确值都只能是 `Abil+AddAbil`。
 | 测试 | 旧值 → 新值 | 旧值错在哪（oracle 锚） |
 |---|---|---|
 | `tests::gm_del_skill_host_apply_emits_212_and_greens` | `0x0400` → **`0x0100`** | 旧值把 `ExtraAbil[0]=3` 加到 DC 高字节（写入点 `PlayObject.cs:2818-2820`）；尾段 `:2900` `WAbil.DC = MakeWord(MIN(255,Lo(AddAbil)+Lo(Abil)), MIN(255,Hi+Hi))` 整体覆盖 ⇒ 只能 `Abil+AddAbil` |
