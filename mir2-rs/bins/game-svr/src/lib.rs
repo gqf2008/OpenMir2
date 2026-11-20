@@ -13881,7 +13881,8 @@ fn finish_spell_tail_with(
     mut buf: Option<&mut SpellFrameBuf>,
     // P3-B3：`Some(_)` ⇒ `RM_MAGIC_LVEXP` 按 oracle `CheckMagicLevelUp` 分两支：升级 ⇒
     // `UpdateDelayMsg(...,800)` + 去重（`PlayObject.cs:5216`），未升级 ⇒ `SendSelfDelayMsg(...,1000)`
-    // （`MagicManager.cs:666`）；`None` ⇒ 既有立即发行为（P1/P2 各块的登记口径不变）。
+    // （`MagicManager.cs:666`）；`None` ⇒ 立即发（本卡修复后仓内无 `None` 调用点；保留该支
+    // 供显式立即路径与回归牙）。
     lv_exp_delay_ms: Option<i64>,
 ) -> bool {
     let mut train = magic::SkillTrainState {
@@ -14704,8 +14705,10 @@ fn handle_spell_cmd_with_magic(
                             ty,
                             target_id.unwrap_or(0),
                             Some(&mut buf),
-                            // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                            None,
+                            // 共享尾 `MagicManager.cs:666`：`SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000)`
+                            // （未升级支）⇒ 640 落 **+1000ms 交付批**，不是施法批；升级支
+                            // `PlayObject.cs:5216` = `UpdateDelayMsg(...,800)`（由 helper 内部分支）。
+                            Some(1000),
                         );
                         buf.flush(online, gates);
                     }
@@ -14929,8 +14932,9 @@ fn handle_spell_cmd_with_magic(
                                 ty,
                                 target_id.unwrap_or(0),
                                 Some(&mut buf),
-                                // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                                None,
+                                // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                                // （升级支 800ms 由 helper 内部分支）。
+                                Some(1000),
                             );
                             buf.flush(online, gates);
                         } else {
@@ -15763,8 +15767,9 @@ fn handle_spell_cmd_with_magic(
                         ty,
                         outcome.target.unwrap_or(0),
                         spell_buf.as_mut(),
-                        // P3-B1/A-5 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
-                        None,
+                        // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                        // （升级支 800ms 由 helper 内部分支）。本支六魔号 golden 均无 640 ⇒ 帧面不变。
+                        Some(1000),
                     );
                     // 13 支：与 638 同批的 642 在这里按 `(byte)ident` 出队（638=136 先、642=141 后）。
                     if let Some(buf) = spell_buf.take() {
@@ -15926,8 +15931,9 @@ fn handle_spell_cmd_with_magic(
                     tail_ty,
                     tail_target,
                     Some(&mut buf),
-                    // P3-B2 块：`RM_MAGIC_LVEXP` 入缓冲（既有口径；未改）。
-                    None,
+                    // 共享尾 `:666`：640 = `SendSelfDelayMsg(...,1000)` ⇒ +1000ms 交付批
+                    // （升级支 800ms 由 helper 内部分支；`Some` 支不再入 `buf`）。
+                    Some(1000),
                 );
                 // **23/24/33/47 的两段出帧**（oracle 的跨 actor 排水序）：第一段 = 共享尾
                 // （638/640；`buf` 已由 `finish_spell_tail` 填入），**先 flush**；第二段 =
@@ -61041,6 +61047,37 @@ SendRefMsgRange=15
             frames
         }
 
+        /// 推进时钟并按生产节奏投递自身延时消息；返回本批出帧（训练尾 640 = +1000ms）。
+        fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
+            self.world.clock_ms += advance_ms;
+            let mut frames = Vec::new();
+            // 同 `SpellFrameRig::deliver`：不稳定四叉堆 ⇒ 同一 tick 内按生产节奏补泵；
+            // 上界 = 起点队列长度 + 1（依据见该处注释），另设 64 上限。
+            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
+            for _ in 0..bound {
+                if self.world.self_delay_msgs.is_empty() {
+                    break;
+                }
+                let outs = self.world.deliver_self_delay_msgs();
+                if outs.is_empty() {
+                    continue;
+                }
+                let rec = mir2_world_bevy::TickRecord {
+                    slave_self_deliveries: outs,
+                    ..Default::default()
+                };
+                drain_b3_self_deliveries(
+                    &rec,
+                    &self.world,
+                    &self.online,
+                    &mut self.ground_sessions,
+                    &self.gates,
+                );
+                frames.extend(self.drain_frames());
+            }
+            frames
+        }
+
         fn amulet_dura(&self) -> Option<u16> {
             self.ground_sessions
                 .get("caster")
@@ -61164,10 +61201,12 @@ SendRefMsgRange=15
                 1,
                 "[魔号 {magic_id}] 自己恰 1 条 SM_MAGICFIRE（处理器无自守卫）"
             );
+            // **本卡起 640 走 `SendSelfDelayMsg(...,1000)`**（`MagicManager.cs:666`）
+            // ⇒ 不在施法批；下面在 +1000ms 交付批里断言。
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
-                1,
-                "[魔号 {magic_id}] 训练门开 ⇒ 恰 1 条 SM_MAGIC_LVEXP"
+                0,
+                "[魔号 {magic_id}] 训练尾不再落施法批"
             );
             assert_eq!(
                 sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
@@ -61198,14 +61237,20 @@ SendRefMsgRange=15
                 "SM_DURACHANGE",
             );
             let i_fire = p2_pos(&seq, mir2_protocol::messages::SM_MAGICFIRE, "SM_MAGICFIRE");
-            let i_lv = p2_pos(
-                &seq,
-                mir2_protocol::messages::SM_MAGIC_LVEXP,
-                "SM_MAGIC_LVEXP",
-            );
             assert!(
-                i_spell < i_fire && i_fire < i_dura && i_dura < i_lv,
-                "[魔号 {magic_id}] 帧序必须 SM_SPELL < SM_MAGICFIRE < SM_DURACHANGE < SM_MAGIC_LVEXP（oracle 队列序 24 < 136 < 141 < 255）；实得 {seq:?}"
+                i_spell < i_fire && i_fire < i_dura,
+                "[魔号 {magic_id}] 施法批帧序必须 SM_SPELL < SM_MAGICFIRE < SM_DURACHANGE（oracle 队列序 24 < 136 < 141）；实得 {seq:?}"
+            );
+            // 640 走 `SendSelfDelayMsg(...,1000)` ⇒ **+1000ms 交付批**（不是施法批）。
+            let lv_frames = rig.deliver(1000);
+            assert_eq!(
+                sf_count(&lv_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                1,
+                "[魔号 {magic_id}] 到点（+1000ms）⇒ 恰 1 条 SM_MAGIC_LVEXP"
+            );
+            assert_eq!(
+                sf_count(&lv_frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
             );
 
             // 训练尾：门开 vs 同种子门关（`TrainLevel[1]=255 > Abil.Level`）恰多一次抽。
@@ -61263,7 +61308,7 @@ SendRefMsgRange=15
             }
             // `max_train[1] = 1000` ⇒ 不升级，LVEXP 载荷 = (MagicId, Level=1, TranPoint)。
             assert_eq!(rig.tran_level(), 1, "[魔号 {magic_id}] 点数不足 ⇒ 不升级");
-            let lv = sf_first(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
+            let lv = sf_first(&lv_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
             let cmd = mir2_protocol::frame::CommandMessage::from_bytes(lv).unwrap();
             assert_eq!(cmd.recog, i32::from(magic_id), "LVEXP Recog = MagicId");
             assert_eq!(cmd.param, 1, "LVEXP Param = Level");
@@ -61357,8 +61402,17 @@ SendRefMsgRange=15
                 sf_count(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE),
                 1
             );
+            // 训练尾 640 = `SendSelfDelayMsg(...,1000)` ⇒ 施法批 0、+1000ms 交付批 1。
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1
             );
             assert_eq!(
@@ -61533,10 +61587,21 @@ SendRefMsgRange=15
             1,
             "含施法者自己"
         );
+        // 训练尾 640 = `SendSelfDelayMsg(...,1000)` ⇒ 施法批 0；+1000ms 交付批恰 1。
         assert_eq!(
             sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0,
+            "训练尾不再落施法批"
+        );
+        let lv_frames = open.deliver(1000);
+        assert_eq!(
+            sf_count(&lv_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
             1,
-            "训练门开 ⇒ 恰 1 条 LVEXP"
+            "训练门开 ⇒ 到点（+1000ms）恰 1 条 LVEXP"
+        );
+        assert_eq!(
+            sf_count(&lv_frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0
         );
         let tp = open.tran_point();
         assert!((1..=3).contains(&tp), "TranPoint = Random(3)+1；实得 {tp}");
@@ -69398,6 +69463,41 @@ SendRefMsgRange=15
             }
             (frames, raws)
         }
+
+        /// 推进时钟并按生产节奏投递自身延时消息；返回本批出帧。
+        /// 本卡起训练尾 640 走 `SendSelfDelayMsg(...,1000)`（`MagicManager.cs:666`）⇒ 只在
+        /// +1000ms 交付批出现，施法批 `drain()` 里看不到它。
+        fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
+            self.world.clock_ms += advance_ms;
+            let mut frames = Vec::new();
+            // **有界补泵的依据**（不是试出来的数）：oracle 每 tick 泵一次；.NET 四叉堆不稳定 ⇒
+            // 队根是未到点项时「出队 + 以 Lowest 重入队」只结束本次泵（该项移到堆尾）。
+            // 设本轮起点队列长度 q，则 q 次泵内每条消息都轮到过队根 ⇒ 所有到期项必已投递
+            // 或只剩「泵门」拦截项；故上界取 q + 1（另设 64 上限防御）。
+            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
+            for _ in 0..bound {
+                if self.world.self_delay_msgs.is_empty() {
+                    break;
+                }
+                let outs = self.world.deliver_self_delay_msgs();
+                if outs.is_empty() {
+                    continue;
+                }
+                let rec = mir2_world_bevy::TickRecord {
+                    slave_self_deliveries: outs,
+                    ..Default::default()
+                };
+                drain_b3_self_deliveries(
+                    &rec,
+                    &self.world,
+                    &self.online,
+                    &mut self.ground_sessions,
+                    &self.gates,
+                );
+                frames.extend(self.drain().0);
+            }
+            frames
+        }
     }
 
     #[test]
@@ -71375,8 +71475,9 @@ SendRefMsgRange=15
                 }
             }
         }
-        // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
-        // 由该帧反推 w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
+        // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主按 `Some(1000)` 把
+        // `SM_MAGIC_LVEXP(640)` 延迟到 +1000ms 交付批；由该帧反推
+        // w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
         if let Some((_, b, _)) = all_frames
             .iter()
             .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
@@ -72174,11 +72275,51 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_MAGHEALING)
             .map(|m| (m.actor_id, m.n_param1));
 
-        // ---- 段②：推进时钟（800ms 延时 + 余量）后交付；`RM_MAGHEALING` 到点只累计恢复量（无帧）----
-        rig.world.clock_ms += 1200;
-        let _outs = rig.world.deliver_self_delay_msgs();
+        // ---- 段②：按 100ms 步进推进时钟并在**到期时刻**交付（与通用火球驱动同口径）----
+        // `RM_MAGHEALING`(800ms) 到点只累计恢复量（无帧）；`RM_MAGIC_LVEXP`(1000ms) 到点出 640
+        // ——本卡起 640 走 `SendSelfDelayMsg(...,1000)`（`MagicManager.cs:666`），不再属施法批。
+        // 帧的 `due_ms_rel` = 交付所在步（施法批=0；与 C# `StepDrainMs=100` 的 golden 同口径）。
+        let wait_ms = golden_wait_ms("healing", label);
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
+            .into_iter()
+            .map(|(s, b)| (s, b, 0_i64))
+            .collect();
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs,
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (step_frames, _raws2) = rig.drain();
+            for (s, b) in step_frames {
+                all_frames.push((s, b, elapsed as i64));
+            }
+        }
         let n2 = trace_line_count(&trace);
-        let (deliver_frames, _raws2) = rig.drain();
 
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let caster_mp = rig
@@ -72194,20 +72335,18 @@ SendRefMsgRange=15
             assert_eq!(b.0, a.0 + 1, "[healing/{label}] 两段之间 seq 必须连续");
         }
 
-        let mut all_frames = cast_frames;
-        all_frames.extend(deliver_frames);
-
         // ---- RM 组装（**治愈分支专用**，与伤害链不同）----
         //  - `RM_SPELL(10008)` / `RM_MAGICFIRE(10120)`：收件人 = hear_targets(caster)，参数取自 638 帧；
         //  - `RM_MAGHEALING(8034)`：目标自己的自延迟队列（p1=nPower），交付前从 `self_delay_msgs` 抓；
-        //  - `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者；Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
-        //    由该帧反推 (w=0, p1=MagicId(recog), p2=Level(param), p3=MakeLong(tag,series))，late=true。
+        //  - `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者；Rust 宿主按 `Some(1000)` 把
+        //    `SM_MAGIC_LVEXP(640)` 延迟到 +1000ms 交付批；由该帧反推
+        //    (w=0, p1=MagicId(recog), p2=Level(param), p3=MakeLong(tag,series))，late=true。
         let range = chat::send_ref_msg_range();
         let in_range_caster = chat::hear_targets(&rig.world, caster, range);
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
-            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
-            .map(|(_, b)| {
+            .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b, _)| {
                 let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
                 (
                     i32::from(cm.param),
@@ -72264,9 +72403,9 @@ SendRefMsgRange=15
                 ));
             }
         }
-        if let Some((_, b)) = all_frames
+        if let Some((_, b, _)) = all_frames
             .iter()
-            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .find(|(s, b, _)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
         {
             let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
             if let Some(who) = who_of(caster) {
@@ -72293,7 +72432,7 @@ SendRefMsgRange=15
             serde_json::json!({
                 "Who": who,
                 "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
-                "Sent": fireball_sent(&all_frames, *socket),
+                "Sent": fireball_sent_with_due(&all_frames, *socket),
             })
         })
         .collect::<Vec<_>>();
@@ -72406,7 +72545,7 @@ SendRefMsgRange=15
                 "full：{who} {list} {ident} 条数须与 golden 一致"
             );
         }
-        b1_golden_drain_assert("healing.json", "full", 2);
+        b1_golden_drain_assert("healing.json", "full", 1);
     }
 
     /// `self`：targetObject=null ⇒ 目标置为施法者、坐标取施法者；8034 入施法者队列、640 仅施法者。
@@ -72566,7 +72705,7 @@ SendRefMsgRange=15
             1000,
         );
         fireball_case_assert("hbfireball", "miss");
-        b1_golden_drain_assert("hbfireball.json", "miss", 2);
+        b1_golden_drain_assert("hbfireball.json", "miss", 1);
         let c = hbfireball_case("miss");
         // 推挤条数按 golden（期望不写死：seed/抽数变了，标签语义也随之变）。
         assert_eq!(
@@ -73685,7 +73824,7 @@ SendRefMsgRange=15
     fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, 33, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert("snowwind.json", label, 4);
+        b1_golden_drain_assert("snowwind.json", label, 2);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         let seq_of = |who: &str| -> Vec<i64> {
@@ -73701,9 +73840,11 @@ SendRefMsgRange=15
                 .filter_map(|m| m["ident"].as_i64())
                 .collect()
         };
+        // **时间忠实序**（`StepDrainMs=100`）：31/656 在 600ms 交付批、640 在 1000ms
+        // ⇒ 640 在末位（旧 golden 的 `[638,640,31,656]` 是「一次排空」的 per-actor pass 伪影）。
         assert_eq!(
             seq_of("caster"),
-            vec![638, 640, 31, 656],
+            vec![638, 31, 656, 640],
             "[{stem}/{label}] caster 帧序"
         );
         assert_eq!(
@@ -73813,7 +73954,7 @@ SendRefMsgRange=15
     fn fireboom_assert(stem: &str, magic_id: u16, golden: &str, label: &str, seed: i32, base: i32) {
         fireball_parity_drive(stem, magic_id, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert(golden, label, 4);
+        b1_golden_drain_assert(golden, label, 2);
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         let seq_of = |who: &str| -> Vec<i64> {
@@ -73829,9 +73970,11 @@ SendRefMsgRange=15
                 .filter_map(|m| m["ident"].as_i64())
                 .collect()
         };
+        // **时间忠实序**（`StepDrainMs=100`）：31/656 在 600ms 交付批、640 在 1000ms
+        // ⇒ 640 在末位（旧 golden 的 `[638,640,31,656]` 是「一次排空」的 per-actor pass 伪影）。
         assert_eq!(
             seq_of("caster"),
-            vec![638, 640, 31, 656],
+            vec![638, 31, 656, 640],
             "[{stem}/{label}] caster 帧序"
         );
         assert_eq!(
@@ -74268,7 +74411,12 @@ SendRefMsgRange=15
             g["TargetHp"].as_i64(),
             "[{stem}/{label}] 术后 HP 须等于 golden TargetHp（窗口内不回血）"
         );
-        b1_golden_drain_assert("bighealing.json", label, 2);
+        // 640 移到 +1000ms 后 `full`（无 640、无延迟）只需 1 趟；heal/both = 2。
+        b1_golden_drain_assert(
+            "bighealing.json",
+            label,
+            if label == "full" { 1 } else { 2 },
+        );
         let cv = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&cv, who, field, ident);
         // caster 帧序：heal/both `[638,640]`、full `[638]`。
@@ -78814,10 +78962,12 @@ SendRefMsgRange=15
                 1,
                 "[{magic_id}] 施法者自己也收 SM_MAGICFIRE（处理器无自守卫）"
             );
+            // 训练尾 640 = `SendSelfDelayMsg(...,1000)` ⇒ 施法批 0（+1000ms 交付批的断言放在
+            // 取数/对照流断言**之后**，避免交付段抽数混进施法段 RNG 窗口）。
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
-                1,
-                "[{magic_id}] 训练门开口 ⇒ 恰 1 条 LVEXP（仅自己）"
+                0,
+                "[{magic_id}] 训练尾不再落施法批"
             );
             assert_eq!(
                 sf_count(&frames, 912, mir2_protocol::messages::SM_MAGIC_LVEXP),
@@ -78852,6 +79002,16 @@ SendRefMsgRange=15
             let (level, tran) = b1_rcd(&rig);
             assert_eq!(tran, want_tp, "[{magic_id}] TranPoint = Random(3)+1");
             assert_eq!(level, 1, "max_train 拉高 ⇒ 不升级");
+            // 训练尾 640：+1000ms 交付批恰 1 条（仅自己）。
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
+                1,
+                "[{magic_id}] 到点（+1000ms）⇒ 恰 1 条 LVEXP（仅自己）"
+            );
         }
     }
 
@@ -78890,8 +79050,8 @@ SendRefMsgRange=15
             );
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
-                1,
-                "[{magic_id}] 训练尾恰 1 条 LVEXP"
+                0,
+                "[{magic_id}] 训练尾不再落施法批"
             );
             let fire = sf_first(&frames, 912, mir2_protocol::messages::SM_MAGICFIRE);
             assert_eq!(sf_magicfire_target_id(fire), target);
@@ -78906,6 +79066,17 @@ SendRefMsgRange=15
                 format!("{:?}", rig.world.rng),
                 format!("{control:?}"),
                 "[{magic_id}] 取数序列必须逐项 = 手写 oracle 序"
+            );
+            // 训练尾 640：+1000ms 交付批恰 1 条（仅自己）；放在取数/对照流断言之后，
+            // 避免交付段抽数混进施法段 RNG 窗口。
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
+                1,
+                "[{magic_id}] 到点（+1000ms）恰 1 条 LVEXP"
             );
         }
     }
@@ -78946,10 +79117,8 @@ SendRefMsgRange=15
                 .iter()
                 .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
                 .expect("自己收 SM_MAGICFIRE");
-            let i_lv = self_seq
-                .iter()
-                .position(|id| *id == mir2_protocol::messages::SM_MAGIC_LVEXP)
-                .expect("训练尾 ⇒ 自己收 SM_MAGIC_LVEXP");
+            // 640 走 `SendSelfDelayMsg(...,1000)` ⇒ 施法批只有 638/642（640 在 +1000ms 交付批，
+            // 见下方 `rig.deliver(1000)` 断言）。
             // **oracle 队列序**：`(byte)RM_MAGICFIRE(10120)` = 136 < `(byte)RM_DURACHANGE(10125)` = 141；
             // 训练尾 `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` 的 `MessagePriority.Lowest` = 255
             // （**不是** `(byte)10123` = 139）⇒ 同一 `MsgQueue` 出队序 = 638 → 642 → 640。
@@ -78958,12 +79127,21 @@ SendRefMsgRange=15
             // **旧断言（`i_dura < i_fire`）是"UseAmulet 直发"时代实现的顺序，不是 oracle**——
             // 卡 `openmir2-magic-parity` 火符修复（`9f420a94b`）已把 642 纳入同批 `SpellFrameBuf`。
             assert!(
-                i_fire < i_dura && i_dura < i_lv,
-                "oracle 队列序应为 638 → 642 → 640；实得 {self_seq:?}"
+                i_fire < i_dura,
+                "施法批队列序应为 638 → 642；实得 {self_seq:?}"
             );
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
-                1
+                0
+            );
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
+                1,
+                "到点（+1000ms）⇒ 恰 1 条 LVEXP"
             );
             let slot = game_svr::ability::SLOT_ARMRING_L;
             let dura = rig.ground_sessions["caster"].use_items[slot]
@@ -79087,6 +79265,14 @@ SendRefMsgRange=15
             );
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1
             );
         }
@@ -79102,8 +79288,16 @@ SendRefMsgRange=15
             assert_eq!(draws_between(&before, &rig.world.rng), 6);
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0
+            );
+            assert_eq!(
+                sf_count(
+                    &rig.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
-                "race >= Animal ⇒ boTrain=true（不依赖推挤）"
+                "race >= Animal ⇒ boTrain=true（不依赖推挤；+1000ms 交付批）"
             );
         }
     }
@@ -79130,8 +79324,17 @@ SendRefMsgRange=15
             let (open_level, open_tp) = b1_rcd(&open);
             assert_eq!(
                 sf_count(&open_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+                0,
+                "[{magic_id}] 门开 ⇒ 施法批无 LVEXP（+1000ms 交付批）"
+            );
+            assert_eq!(
+                sf_count(
+                    &open.deliver(1000),
+                    911,
+                    mir2_protocol::messages::SM_MAGIC_LVEXP
+                ),
                 1,
-                "[{magic_id}] 门开 ⇒ 恰 1 条 LVEXP"
+                "[{magic_id}] 门开 ⇒ 到点（+1000ms）恰 1 条 LVEXP"
             );
             assert_eq!(open_level, 1, "[{magic_id}] max_train 拉高 ⇒ 不升级");
             assert!(
@@ -87547,7 +87750,19 @@ SendRefMsgRange=15
             let f = rig.deliver(delay_ms - 1);
             assert_eq!(b4_count(&f, 911, SM_31), 0, "[{magic_id}] 未到点不落地");
             // 到点：投递者侧 MSD + 目标侧 `R(1000)`/MSD ⇒ 31。
-            let f = rig.deliver(1);
+            // **本卡起 640（`RM_MAGIC_LVEXP`, Lowest=255）在 +1000ms 与 `RM_DELAYMAGIC`
+            // （同优先级）共用四叉堆**：泵在堆根未到点时「重入队 + 结束本次泵」，.NET 堆不稳定
+            // ⇒ 到点后可能还要再泵几次才轮到 `RM_DELAYMAGIC`（生产每 tick 都泵）。
+            // 按生产节奏补泵：上界与测试辅助同一推导（起点队列长度 q ⇒ q 次泵内每条消息都轮到
+            // 过队根 ⇒ 到期项必已投递或只剩泵门拦截项），即 q + 1，另设 64 上限。
+            let bound = (rig.world.self_delay_msgs.len() + 1).min(64);
+            let mut f = Vec::new();
+            for _ in 0..bound {
+                f.extend(rig.deliver(1));
+                if b4_count(&f, 911, SM_31) >= 1 {
+                    break;
+                }
+            }
             assert!(
                 b4_count(&f, 911, SM_31) >= 1,
                 "[{magic_id}] 到点后 RM_MAGSTRUCK(31) 落地"

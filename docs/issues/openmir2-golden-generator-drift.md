@@ -119,3 +119,17 @@
 ## 11. 不可复现字段：`delivery`（全部 51 份）
 **"`delivery` 在全部 51 份 golden 中都存在（`Rm` 记录的墙钟）⇒ 不是'某些文件旧了'，而是'所有 golden 都含不可复现字段'"**；
 按 §13 口径：行为等价 + 自报身份，不要求字节级，但**必须逐字段写明不可复现集合**（至少 `delivery`）。
+
+## 12. 缺键 ⇒ 整段判据静默失效（`due_ms_rel` 实例）
+
+比较器只在 **golden 第一帧带该键**时才把字段纳入比较面（`magic_fireball_parity.rs` 的
+`sent_fields.push("due_ms_rel")`）；而**收件人级过滤**（如 `sent_filter_sinsu` 的 `keep` 白名单）
+还会把某些 ident 整条移出比较面。两种机制叠加时会出现「金标准与实现不一致、判据却全绿」：
+
+- **实例 A（缺键）**：`skeleton.json` 属旧世代（`Sent` 无 `due_ms_rel`）⇒ 640 的时序整段不判；
+  用现行装置重生成可得 `640 due=1000`，而 Rust 在施法批发（`due=0`）——旧件下看不出来。
+- **实例 B（keep 过滤）**：`sinsu.json` 的 caster 640 是 `due=1000`，Rust 台账全帧 `due=0`，
+  但 `sent_filter_sinsu` 只留 `17/638/642` ⇒ 640 被过滤面吃掉，**当前绿≠已验**。
+
+**防御**：golden 与实现任一侧缺键 ⇒ 该字段判「未验」并显式登记（不得默认通过）；过滤白名单
+（`keep`）必须在卡里列出**被排除的 ident 及其理由**。对应收口：`openmir2-magic-640-delay-sweep`。

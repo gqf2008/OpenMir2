@@ -144,22 +144,26 @@ public static class Program
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
             if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
             if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            // 卡 openmir2-spell-tail-delay-audit：以下 10 支的 640 在 oracle 走共享尾
+            // `MagicManager.cs:666 SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000)` ⇒ 必须**时间忠实排水**
+            // （`StepDrainMs=100`）。否则「Sleep(WaitMs) 后一次排空」按 per-actor pass 序把 640
+            // 排在 600ms 的 31/53/656 之前（MG-17 同类把伪影固化的失效模式）。
             if (name == "healing") return HealingBatch();
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10) });
-            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
-            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10) });
-            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10) });
-            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7 });
+            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7, StepDrainMs = 100 });
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
             if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
-            if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
-            if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
-            if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
-            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30) });
+            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100 });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
@@ -186,7 +190,7 @@ public static class Program
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
-            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
             // `BaseObject.cs:896-931`）。摆位理由（变异牙）：
             //   · 施法者 (100,100) → 点击 (101,100) ⇒ 方向东，检查格 x=101..105；
@@ -1130,6 +1134,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             AntiMagic = spec.AntiMagic,
             ArmRingAmulet = spec.ArmRingAmulet,
             WaitMs = spec.WaitMs,
+            StepDrainMs = spec.StepDrainMs,
             CasterHp = 50,
             CasterMaxHp = 100,
         };
@@ -1219,7 +1224,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing", CasterScNoClamp = HUtil32.MakeWord(5, 10) };
+        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing", CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 };
         // `full` = 目标**整血**（`DoSpell` 的门是 `targetObject.WAbil.HP < targetObject.WAbil.MaxHP`，
         // 见 `MagicConst.SKILL_HEALLING` 支）：输入 HP 必须**由等级派生**，不能写字面量——改 `TargetLevel` 时
         // 字面量会让「满血」静默变成「未满血」，治疗分支又悄悄回来（12 号 2026-11-20 的回归）。
@@ -2067,11 +2072,16 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 }
             }
             // **施法批（t=0）**：与 Rust 台账"施法段 drain（elapsed=0）"同口径 ⇒ 帧 `due_ms_rel=0`。
-            // **这是建模约定、不是行为判据**：oracle 实际在下一个 `Run()` 处理（≈100ms），
-            // 那是投递调度语义；见 golden 的 `scenario_note` 与比较器 `due_ms_rel` 段注释。
+            // **排到空（多趟）**：`SendMsg` 是 `LateDelivery=false` 的即时消息链（受害者的
+            // `RM_MAGSTRUCK` → `RM_STRUCK` 扇出），t=0 全部到期；单趟会把链式后继推到 100ms 步
+            // （`due=100`），既与 Rust 同拍出帧（`due=0`）不一致，也与"施法批 due=0"的建模约定矛盾。
+            // 与下面的步进循环同语义：每步排到空为止（上界同 `MaxDrainPasses`，命中记 cap）。
+            for (int pass = 0; pass < MaxDrainPasses; pass++)
             {
                 var operatedAny = new[] { false };
                 DrainOnce(operatedAny, 0);
+                if (!operatedAny[0]) break;
+                if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
             }
             int elapsed = 0;
             while (elapsed < spec.WaitMs)
