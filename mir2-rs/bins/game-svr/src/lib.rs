@@ -19071,6 +19071,9 @@ fn drain_buff_downlink(
     // （`RM_ABILITY` 是 self 队列消息；无 `RM_SUBABILITY`——那只在 `Operate.cs:458/538` 的穿脱路径）。
     // 重算走 [`recalc_session_ability`]（= oracle `PlayObject.RecalcAbilitys` 的本仓等价物）；
     // buff 位不进 `AddAbil` ⇒ 数值通常不变，但仍按 oracle 逐字段重算并发整帧。
+    // **`#9 boNeedRecalc` 的自见 657 汇总**（每人最后一次 `(status, hit_speed)`）：见循环内说明。
+    let mut buff_recalc_657: std::collections::HashMap<i32, (i32, u16)> =
+        std::collections::HashMap::new();
     for actor_id in &rec.buff_recalcs {
         let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
             continue;
@@ -19098,21 +19101,25 @@ fn drain_buff_downlink(
         // **`boNeedRecalc` 的 657（2026-11-20，`card/657-buff`）**：oracle `RecalcAbilitys()` 尾段
         // （`src/M2Server/Player/PlayObject.cs:2851-2876`）在 `Race == Play` 时
         // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`。
-        // **自见 1 条**：本场景队列空（`ActorBuffSystem.cs:226-230` 之前无 <155 入队），
-        // `SendUpdateMsg` 头去重（`BaseObject.Message.cs:283-304`）⇒ 净 1；观察者各 1，`Series` 逐收件人。
-        // 入队 657(155) 晚于 52(67) ⇒ 线上 **52 先、657 后**（本宿主 52 是直发，657 排其后）。
+        // **每次事件观察者各 1；自见在全部事件后只留 1 条**——`SendUpdateMsg`（`BaseObject.Message.cs:283-304`）
+        // 的 `TryPeek` 不前进、循环把**队首连续的**同 ident 657 全部弹掉再入 1（队列空场景下每轮
+        // recalc 后队列恒剩 1 条）⇒ N 次 recalc（`BUFF_PASSES_PER_TICK=4`，同 actor 可被推多次）
+        // 自见仍净 1，载荷取**最后一次** recalc 的 `(CharStatus, HitSpeed)`。
         let status = world.get_char_status(*actor_id);
         let self_hit_speed = world.entities.get(*actor_id).map_or(0, |e| e.hit_speed);
-        send_charstatuschanged_self_once_and_observers(
-            world,
-            online,
-            gates,
-            *actor_id,
-            status,
-            self_hit_speed,
-            range,
-            "buff 重算 657",
-        );
+        broadcast_charstatuschanged_except_self(world, online, gates, *actor_id, status, range);
+        buff_recalc_657.insert(*actor_id, (status, self_hit_speed));
+    }
+    for (actor_id, (status, hit_speed)) in buff_recalc_657 {
+        if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+            let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+            if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "buff 重算 657") {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
     }
     for (actor_id, status) in &rec.buff_status_changes {
         if let Some(mut d) = displays.get(*actor_id).cloned() {
@@ -25498,20 +25505,33 @@ fn drain_player_need_recheck_with_magic(
         }
         // **卡 `openmir2-charstatuschanged-wiring` #13**：657 在 622 **之后**发
         // （oracle 队列序 622=131 < 657=155；放进 `immediate` 会排到 622 之前 = 错序）。
-        // **自见 1 条**：P21 在消息泵之后（`PlayObject.Message.cs:163-227`），本场景队列空
-        // （夹具无 P1/P2 事件）⇒ `:2876` 的 `SendUpdateMsg` 头去重（`BaseObject.Message.cs:283-304`）
-        // ⇒ 净 1；观察者各 1，由 helper 逐收件人重编码（`Series` = 收件人自己的 `HitSpeed`）。
-        for (status, hit_speed) in take_char_status {
-            send_charstatuschanged_self_once_and_observers(
+        // **观察者**：每次 recalc 的 `StatusChanged()` 各广播一次（每件 1 条，逐收件人重编码）。
+        for (status, _) in &take_char_status {
+            broadcast_charstatuschanged_except_self(
                 world,
                 online,
                 gates,
                 actor_id,
-                status,
-                hit_speed,
+                *status,
                 chat::send_ref_msg_range(),
-                "657(P21 装备复检)",
             );
+        }
+        // **自见**：只留 1 条，载荷 = **最后一次** recalc 的 `(status, hit_speed)`。
+        // oracle `SendUpdateMsg`（`BaseObject.Message.cs:283-304`）的 `TryPeek` 不前进、循环把队首
+        // 连续的 657 全部弹掉再入 1 ⇒ 队列空场景下 N 件之后自见仍净 1（不是 N）。
+        if let Some((status, hit_speed)) = take_char_status.last() {
+            if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+                let body =
+                    game_svr::smframe_ext::sm_charstatuschanged(actor_id, *status, *hit_speed);
+                if let Some(tx) =
+                    route_to_gate(gates, e.gate_idx, e.socket, "657(P21 装备复检)")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: e.socket,
+                        body,
+                    });
+                }
+            }
         }
     }
 }
@@ -56606,6 +56626,96 @@ SendRefMsgRange=15
             "条件假 ⇒ Index 保留"
         );
         assert_eq!(sg.state.wabil.level, 0, "条件假 ⇒ 不得调用 RecalcAbilitys");
+    }
+
+    /// **卡 `openmir2-charstatuschanged-wiring` #13（多事件）**：一次 Run 移出**两件** ⇒
+    /// **观察者每件 1 条（2 条）**、**自见仍只 1 条**——`SendUpdateMsg`（`BaseObject.Message.cs:283-304`）
+    /// 把队首**连续的**同 ident 657 全部弹掉再入 1（`TryPeek` 不前进 + 循环到 `Count <= i`），
+    /// 队列空场景下每件 recalc 后队列恒剩 1 条；载荷取**最后一次** recalc。
+    ///
+    /// 断言**分开写**（自见帧数 / 每个观察者帧数）——合成总数就分不出"自见多发"与"观察者少发"。
+    /// 红检（牙）：把实现改回"每件一次自见" ⇒ 自见断言必红（观察者断言不动）。
+    #[test]
+    fn p21_two_items_self_657_once_observers_twice() {
+        use mir2_protocol::messages::{
+            SM_ADDITEM, SM_CHARSTATUSCHANGED, SM_DELITEM, SM_WEIGHTCHANGED,
+        };
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+            .unwrap();
+        let near = world.add_entity(new_player_entity("near".to_string(), 15, 10));
+        let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero));
+        online_set(&mut online, entry("n", "near", 2, 0, 902, near));
+        online_set(&mut online, entry("f", "far", 3, 0, 905, far));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "guild-only".into(),
+                std_mode: 5,
+                need: 6,
+                ..Default::default()
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        for (slot, mk) in [
+            (game_svr::ability::SLOT_WEAPON, 1),
+            (game_svr::ability::SLOT_RING_L, 2),
+        ] {
+            sg.use_items[slot] = Some(game_svr::bag::BagItem {
+                make_index: mk,
+                index: 500,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+        }
+        sessions.insert("hero".into(), sg);
+
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        let count657 = |sock: i32| {
+            frames
+                .iter()
+                .filter(|(s, b)| *s == sock && ident(b) == SM_CHARSTATUSCHANGED)
+                .count()
+        };
+        // 分开断言：自见 1 条（N 件不叠加）；观察者每件 1 条。
+        assert_eq!(count657(901), 1, "自见恰 1 条（队列空 ⇒ 队首连弹再入 1）");
+        assert_eq!(count657(902), 2, "近邻观察者每件 1 条 ⇒ 2 条");
+        assert_eq!(count657(905), 0, "±12 外零帧");
+        // 自见流：两件各 200/202 → 622 → 657（657 在 622 之后）。
+        let self_seq: Vec<u16> = frames
+            .iter()
+            .filter(|(s, _)| *s == 901)
+            .map(|(_, b)| ident(b))
+            .collect();
+        assert_eq!(
+            self_seq,
+            vec![
+                SM_ADDITEM,
+                SM_DELITEM,
+                SM_ADDITEM,
+                SM_DELITEM,
+                SM_WEIGHTCHANGED,
+                SM_CHARSTATUSCHANGED,
+            ],
+            "自见流 = 两件各 200/202 → 622 → 657×1"
+        );
     }
 
     /// **牙（`drain_player_game_gold`，P22）**：`bo_emergency_close` 支同样必须挡住。

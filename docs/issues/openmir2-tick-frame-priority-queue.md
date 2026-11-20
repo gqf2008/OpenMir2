@@ -582,6 +582,17 @@ oracle 队列序 **622(131) < 657(155)** ⇒ 657 **不得**放进 `immediate`，
   `p21` 两例与 buff 三例同步）。
 - T-288 仍是"657 先于 203"的已登记偏差（条数 1，位置差位不变）。
 
+### `#13` 多物品的判据（2026-11-20 补）
+一次 Run 移出 **N 件**时：**观察者每件 1 条**（每次 `StatusChanged()` 各广播一次）；
+**自见恒 1 条**，载荷 = **最后一次** recalc 的 `(CharStatus, HitSpeed)`。
+为什么不是 N：`SendUpdateMsg`（`src/M2Server/Actor/BaseObject.Message.cs:283-304`）的 `TryPeek`
+**不前进**，循环把**队首连续的同 ident 657 全部弹掉**再入 1（退出条件是 `MsgQueue.Count <= i`）；
+队列空场景下每件 recalc 后队列恒剩 1 条 ⇒ N 件之后仍 1 条。
+用例：`p21_two_items_self_657_once_observers_twice`（自见/观察者**分开断言**），
+牙 = 把实现改回"每件一次自见" ⇒ **自见断言**必红。
+同一机制也适用于 `#9 boNeedRecalc`：`BUFF_PASSES_PER_TICK`（=4，`mir2-rs/crates/world-bevy/src/buff.rs`）+ `world.rs` 的
+`out.recalcs.extend(pass.recalcs)`（跨 pass 累积） ⇒ 同 actor 可被推多次；修法相同（广播按事件、自见在循环末每人一次）。
+
 ### 硬约束与未覆盖面
 - **在逐路径判定前，任何新站点不得按"自 2"接线**；默认按"夹具队列空 ⇒ 1"，除非能指出 `:2876` 前确有的 <155 入队。
 - **"2 条情形"（recalc 前已有 622/638/53 待办）本批未覆盖**（夹具都是空队列）——这是**未覆盖**，不是"不成立"；
