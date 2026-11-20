@@ -14,9 +14,10 @@
 // 向量落 `mir2-rs/tests/parity/m3/fixtures/eat_vectors.json`，Rust 侧用例回读逐字段核对
 //（改坏任一映射 ⇒ 用例必红）。
 //
-// 用法（**在仓库根运行**，源锚点用相对路径）：
-//   dotnet run --project mir2-rs/tests/parity/m3/eat-probe -c Release -- \
+// 用法（**在仓库根运行**，源锚点用相对路径；详见同目录 README.md）：
+//   MIR2_RNG_SEED=20261120 dotnet run --project mir2-rs/tests/parity/m3/eat-probe -c Release -- \
 //     mir2-rs/tests/parity/m3/fixtures/eat_vectors.json
+//   `MIR2_RNG_SEED` **不可省**：不设则彩票块为空（`lottery.enabled=false`），会把已有 12 例静默抹掉。
 
 using System;
 using System.Collections.Generic;
@@ -1264,10 +1265,13 @@ internal static class Program
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
-            // IT-08 升级支：配置文件身份钉进 golden（路径 + sha256；配置一变换 ⇒ 该 golden 失效）。
+            // IT-08 升级支：配置文件身份钉进 golden（**文件名** + sha256；配置一变换 ⇒ 该 golden 失效）。
+            // 只记 basename：绝对路径是"某台机器某 worktree"的产物（`E:\…\items-parity\…` →
+            // `E:\…\npc-parity\…`），进仓即不可复现，身份由 sha256 承担。
+            // Rust 侧 `fixture_free_of_absolute_paths` 做显式归一守卫。
             config = new
             {
-                exps_conf = Path.Combine(AppContext.BaseDirectory, "Exps.conf"),
+                exps_conf = "Exps.conf",
                 exps_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Exps.conf")),
                 server_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Server.conf")),
                 need_exps_head = SystemShare.Config.NeedExps.Take(8).ToArray(),

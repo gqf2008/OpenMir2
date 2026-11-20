@@ -1069,6 +1069,35 @@ mod tests {
         assert!(gate_closed_checked, "缺少 eat_ok_lottery_gate_closed");
     }
 
+    /// 夹具**不得**记录绝对路径（opc-19 2026-11-20 口径）：`config.exps_conf` 只许是
+    /// basename，配置身份由 `exps_conf_sha256` 承担——绝对路径是"某台机器某 worktree"的产物，
+    /// 换机重生成会把 `E:\…\items-parity\…` 变成 `E:\…\npc-parity\…`，进仓即不可复现。
+    /// 这是**显式归一守卫**（不是"碰巧两边一样所以不比"）：正向锚先证 `config` 块存在，
+    /// 再对整份 JSON 扫盘符路径。
+    #[test]
+    fn fixture_free_of_absolute_paths() {
+        let doc = fixture();
+        assert_eq!(
+            doc["config"]["exps_conf"].as_str(),
+            Some("Exps.conf"),
+            "config.exps_conf 必须是 basename"
+        );
+        let sha = doc["config"]["exps_conf_sha256"]
+            .as_str()
+            .unwrap_or_default();
+        assert_eq!(sha.len(), 64, "exps_conf_sha256 必须是 64 位 hex");
+        let text = serde_json::to_string(&doc).unwrap();
+        // JSON 里 Windows 绝对路径形如 `E:\\…`（序列化后是 冒号 + 反斜杠）。
+        assert!(
+            !text.contains(":\\"),
+            "夹具出现 Windows 盘符绝对路径（应为 basename + sha256）"
+        );
+        assert!(
+            !text.contains(":/"),
+            "夹具出现斜杠绝对路径（应为 basename + sha256）"
+        );
+    }
+
     /// L2 牙①：把一条通知的 `priority` 改掉 ⇒ 排序序列不等（优先级进比较面）。
     #[test]
     fn tooth_notice_priority_changed_red() {
