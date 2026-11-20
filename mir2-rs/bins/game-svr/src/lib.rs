@@ -15518,10 +15518,30 @@ fn handle_spell_cmd_with_magic(
                     );
                     broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
                 }
-                // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, …)`。
+                // 熟练度尾帧（`:659-669`）：oracle 是 `SendSelfDelayMsg(…, 1000)`（升级支
+                // `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
                 if outcome.train.levelup_msg {
-                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
-                    send_self_frame(online, gates, chr_name, body);
+                    if outcome.train.level_up {
+                        world.update_self_delay_msg_full(
+                            actor_id,
+                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                            0,
+                            i32::from(req.magic_id),
+                            i32::from(train.level),
+                            train.tran_point,
+                            800,
+                        );
+                    } else {
+                        world.send_self_delay_msg_full(
+                            actor_id,
+                            mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                            0,
+                            i32::from(req.magic_id),
+                            i32::from(train.level),
+                            train.tran_point,
+                            1000,
+                        );
+                    }
                 }
                 // **不接 639（逐项核过，不是遗漏）**：oracle `case SKILL_46`
                 // （`MagicManager.cs:589-592`）**没有** `boSpellFail` 站点（全仓五处
@@ -84702,6 +84722,101 @@ SendRefMsgRange=15
         let lv = sf_first(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
         let cmd = mir2_protocol::frame::CommandMessage::from_bytes(lv).unwrap();
         assert_eq!(cmd.recog, 20, "640 的 recog = MagicId");
+        assert_eq!(cmd.param, 1, "640 的 param = UserMagic.Level");
+        let tp = i32::from(cmd.tag) | (i32::from(cmd.series) << 16);
+        assert!(
+            (1..=3).contains(&tp),
+            "640 的 tag/series = TranPoint = Random(3)+1，实得 {tp}"
+        );
+    }
+
+    /// **46 `SKILL_46`（分身）的训练尾 640 必须是「+1000ms 交付批」**（sweep 卡 #8）：
+    /// oracle `case SKILL_46` 是 `if (MagMakeClone(...)) boTrain = true;`，而 `MagMakeClone`
+    /// **恒 `true`**（`new PlayCloneObject` 后无条件 return true）⇒ 训练尾必跑；
+    /// 640 由共享尾 `MagicManager.cs:666 SendSelfDelayMsg(…, 1000)` 发出（升级支 `:5216` 800ms）。
+    ///
+    /// 断言：① 施法段 `drain()` 后该 socket **恰 0 条** 640；② 跨 1000ms 交付后**恰 1 条**，
+    /// `recog = MagicId`、`param = Level`、`tag/series = TranPoint ∈ 1..=3`。
+    ///
+    /// 红检：把该处改回 `send_self_frame` ⇒ ① 立红。
+    #[test]
+    fn spell_tail_clone46_640_delivered_after_1000ms() {
+        let mut rig = SpellFrameRig::new(
+            mir2_world_bevy::slave::SKILL_46,
+            &[(mir2_world_bevy::slave::SKILL_46, 3)],
+            &[("obs", 12, 11, false, 912)],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: mir2_world_bevy::slave::SKILL_46,
+            effect: 3,
+            effect_type: 2,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [1000; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 30;
+        }
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(46);
+
+        rig.cast(mir2_world_bevy::slave::SKILL_46, (11, 10), 0);
+        let (cast_frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&cast_frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            0,
+            "[46] 施法段不得有 640（oracle 是 SendSelfDelayMsg(…, 1000)）；实得 {:?}",
+            sf_seq(&cast_frames, 911)
+        );
+
+        let mut frames = cast_frames;
+        let mut elapsed = 0u64;
+        while elapsed < 1000 {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step, _r2) = rig.drain();
+            frames.append(&mut step);
+        }
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            1,
+            "[46] 跨 1000ms 后应恰 1 条 640；实得 {:?}",
+            sf_seq(&frames, 911)
+        );
+        let lv = sf_first(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP);
+        let cmd = mir2_protocol::frame::CommandMessage::from_bytes(lv).unwrap();
+        assert_eq!(cmd.recog, 46, "640 的 recog = MagicId");
         assert_eq!(cmd.param, 1, "640 的 param = UserMagic.Level");
         let tp = i32::from(cmd.tag) | (i32::from(cmd.series) << 16);
         assert!(
