@@ -49,6 +49,14 @@ grep -rn "RM_CHARSTATUSCHANGED" mir2-rs/bins/game-svr/src/
   （`RepairWeapon`/`SuperRepairWeapon` 本身不 Recalc，但同路径若有 Recalc 才命中）、
   以及一切经 `recalc_session_ability` 的装备/属性变更路径。
 
+## 3.5 已接的站点（进度，2026-11-20）
+
+- `drain_buff_downlink` 的两个 buff 支（`boNeedRecalc` / `boChg`）：已接 657（自见 2 + 观察者逐收件人 `Series`），
+  详见 `docs/issues/openmir2-657-buff-wiring-20261120.md`。`boChg` 同时修正了"单 body、`Series` 恒 0"的既有偏差。
+- 未接（待四张单）：`apply_pending_gm_target_ops`（`#11/#12`）、`drain_player_need_recheck_with_magic`（`#13`）、
+  `drain_player_hunger`（`#14`）、`drain_player_revival_with_magic`（`#15`）。计划见
+  `docs/issues/qa-657-wiring-plan-20261120.md`。
+
 ## 4. 补齐后哪些卡可复评
 
 - IT-12 / IT-16 / IT-07（以及所有经 `recalc_session_ability` 的吃路径）：657 期望是**两条**（自己一份 + 观察者一份），
