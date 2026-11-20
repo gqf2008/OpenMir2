@@ -380,3 +380,30 @@ max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖�
 **牙（三颗）**：T1 `Dura=DuraMax`→`+1`（weapon_after 不符）；T2 去 `RM_DURACHANGE` 推送（notices 缺 10125）；**T3 `3 if tpl.shape == 10`→`== 9`（串到修复油支）⇒ 必红**（防 shape 臂写错）。
 
 **状态**：`implemented_unverified`（运行期文本帧缺口，同 IT-14 口径，不计 verified）。
+
+### 9.11 IT-16 彩票 Shape11（`WinLottery`）— 开写口径（代码待窗口内写）
+
+**归类**：**StdMode3 / Shape11**，经 `default: EatUseItems(shape)` 的 **case 11**（`PlayObject.Base.cs:2298`）→ `WinLottery()`（`PlayObject.cs:3809`）。**物品恒被吃**（`case 11: WinLottery(); result=true;`）。
+
+**RNG 口径（P1，逐值对拍）**：`nRate = M2Share.RandomNumber.Random(Config.WinLotteryRate)`（`PlayObject.cs:3813`）。
+- **同一实例的符号链（可核，4 段）**：①`M2Share.RandomNumber = RandomNumber.GetInstance()`（`M2Share.cs:194`）→ ②`OpenMir2.RandomNumber` 的**私有静态** `private static Random random`（`RandomNumber.cs`）→ ③`RandomNumber.Random(int)=random.Next(max)`→ ④魔法种子钩子 `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs` **文件头明写**：反射替换的正是这个 `RandomNumber.random`（换 `RecordingRandom(new Random(seed))`）。⇒ WinLottery 与魔法共用同一 RNG 实例。
+- **caveat（重要）**：P1 的"同种子同序列"**只在 legacy `.NET Random` 算法口径下成立**（钩子把 `random` 换成定种子 `new Random(seed)`=legacy `CompatSeedImpl`/Knuth 减法）。**生产无参 `new Random()` 在 .NET6+ 是 xoshiro、非同序列**。**oracle 原版运行在 legacy 上 ⇒ legacy 即我们该对的目标；Rust `crates/shared/src/rng.rs` 复刻的正是它。** 别以为"任意 .NET 版本都行"。
+- **P1 用例**：固定 `MIR2_RNG_SEED` ⇒ `nRate` 确定 ⇒ ①各级中奖各一（选使 `nRate` 落该段的 seed，`WinLottery{1..6}Min/Max` 区间有空档故可精细落点；**1 级=`Min+Max==nRate` 等值带**若能固定 seed 命中则做，否则登记抽值依赖）；②未中（`nRate` 落空档）；③各 Min/Max 边界；④`Count<NoWinLotteryCount` **闸取假**（`nRate` 中奖但闸闭 ⇒ 表现为未中）。draws 逐值对拍（夹具 `rng` 台账 site+seq，Rust 同 seed 同 stream）。
+- **P2 稳健例一条**：配置强制桶（如 `6Min=0/6Max=Rate-1` 覆盖全区间 ⇒ 必中 6），断言只写行为/边界、不依赖抽值（兜底）。
+
+**① 全局计数是进程级（必须复位）**：`WinLotteryCount/NoWinLotteryCount/WinLotteryLevel1..6` 在 `SystemShare.Config` **全局可变**，多 case 同进程**互相污染**。⇒ **探针每个 lottery case 前显式复位**（`WinLotteryCount=0`、`NoWinLotteryCount=初值`、`WinLotteryLevel1..6=0`）到**已知初值**再 `ClientUseItems`；**比较器断 delta 不断绝对值**：中奖 ⇒ `WinLotteryLevelN +1`、`gold += WinLotteryNGold`；未中/闸闭 ⇒ `NoWinLotteryCount +500`。Rust 宿主侧同口径 per-case 复位。（生产 `Server.conf` 两者=0 ⇒ `0<0` 闸初始**闭**；测"中奖"须把 `NoWinLotteryCount` 置>WinLotteryCount，如 500>0。）
+- **默认配置下永不开奖**：`WinLotteryCount=NoWinLotteryCount=0 ⇒ 0<0` 为假 ⇒ **服务端默认状态永不中奖**——非 bug，是**玩法事实**：服主须配置开启，否则该物品在默认服里就是"花钱买空气"。别让后来者以为我们对拍漏了中奖分支。
+
+**② RNG 钩子是新测量口径（非干扰须给证）**：IT-14/15 的 eat-probe 未用 `DOTNET_STARTUP_HOOKS`；IT-16 启用后要证既有 28 例不受影响。
+- **grep 提示（仅接线提示，非行为证据，§12）**：eat 路径（Shape1/2/3/13/31、GetExp、`RepairWeapon`/`SuperRepairWeapon`、解包、StdMode1 食物）取值区**零 `RandomNumber` 调用**（仅 `WinLottery`@3813、未实现 Shape4@1512+、战斗 `GetAttackPower` 有抽）⇒ *提示*钩子无影响，**不作证据**。
+- **真正证据（以字节为准）**：开/关 `DOTNET_STARTUP_HOOKS` **各跑既有 28 例、夹具逐字节相同**（窗口内产）。**两者冲突（grep 说零调用但字节不同）⇒ 以字节证据为准并停下报 opc-07**，不得拿 grep 洗白。
+
+**配置同源（25 键，不写死）**：`WinLotteryRate` + `WinLottery{1..6}Min/Max` + `WinLottery{1..6}Gold`（`Server.conf` 全有：Rate=30000、6Min=1/6Max=4999…1Min=16180/1Max=16185、Gold 1000000…500）落 `config.rs`(struct+parse+default, 仿 `repair_item_dec_dura`)+`EnterConfig`+机检。
+
+**宿主 WinLottery**（`handle_eat_cmd`，shape11 eaten 后）：`world.rng` 抽 → 6 段匹配(含 1 级等值) + `Count<NoWinLotteryCount` 闸 → 中：`IncGold(nGold)→GoldChanged()`（失败 `DropGoldDown` bug-replica）+ 绿 SysMsg + `WinLotteryLevelN++`；未中：`NoWinLotteryCount+=500` + 红 SysMsg。
+
+**恒吃单列断言**：`use_item` Shape11 仅 `eaten=true`；断言"物品恒被吃"**与中/不中解耦**（最易写错处）。
+
+**牙（四类）**：区间边界改一/去 `IncGold`/把 `eaten` 与中奖绑定(应解耦)/闸判定反转——各红。
+
+**状态**：`implemented_unverified`（运行期 `SM_SYSMESSAGE` 文本帧缺口：`WinLotteryNMsg`绿/`NotWinLotteryMsg`红，引用 `openmir2-runtime-sysmsg-text-frames.md`；该卡由 opc-07 加指 IT-16）。
