@@ -69676,6 +69676,15 @@ SendRefMsgRange=15
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
         let run_id = ledger_run_id();
         let seed = golden_seed(stem, label);
+        // Rng 实测：开启 rng_trace 记录造怪/尾段抽数（opc-19 要"实测再定 Rng 是否同源"）。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        let n0 = trace_line_count(&trace);
         let mut rig = sinsu_rig(id_base);
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let caster = rig.caster;
@@ -69691,8 +69700,11 @@ SendRefMsgRange=15
             hp: 17,
             ..mir2_data::MonsterInfo::default()
         };
+        let mon_race = mon.race; // tooth「race→100 必红」要：账本 stub_monster_race 取自实际 mon.race
         rig.cast_slave(30, (101, 100), target, vec![mon]);
         let (frames, _raws) = rig.drain();
+        let n1 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
 
         let entities_after = rig.world.entities.len();
         let slave_after = rig.world.slave_count(caster);
@@ -69740,7 +69752,7 @@ SendRefMsgRange=15
         let sinsu = serde_json::json!({
             "stub_wabil_hp": 17,
             "stub_abil_max_hp": 17,
-            "stub_monster_race": 113,
+            "stub_monster_race": mon_race,
             "pre_slave_count": slave_before,
             "slave_count_before": slave_before,
             "slave_count_after": slave_after,
@@ -69754,6 +69766,8 @@ SendRefMsgRange=15
             "SpellReturn": true,
             "Receivers": receivers,
             "SinSu": sinsu,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
             "world_entities_before": entities_before,
             "world_entities_after": entities_after,
         }]);

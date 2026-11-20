@@ -1575,7 +1575,10 @@ fn sent_filter(case: &Value, who: &str, keep: &[i64]) -> Vec<(i64, i64, i64, i64
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
 /// 造怪前帧 17/638/642（按 socket 多重集）；`stub_monster_race=113`（输入记录）。
-/// **不比 `Rng`**（离线替身不抽造怪数、Rust `create_monster_oracle` 真抽不同源，同 skeleton）；
+/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。MG-41 scope 须写「本 leaf 不比 Rng，原因：离线替身造怪 0 抽 vs Rust create_monster_oracle 真抽」。
+///
+/// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。这是 RNG-payload 差异，不是 drain 窗口没到。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
+///
 /// `cap_hit` 回召面待 `openmir2-golden-harness-mapmgr`。
 #[test]
 #[ignore = "需先跑 game-svr 驱动 (tests::sinsu_parity_summon_ok) 生成台账"]
@@ -1583,11 +1586,17 @@ fn real_rust_ledger_sinsu() {
     let dir = ledger_dir();
     let golden = golden_file("sinsu.json");
     let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
-    assert!(!want.is_empty(), "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28）");
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28）"
+    );
     let label = "summon_ok";
     let path = dir.join(format!("sinsu_{label}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("防空转：缺真实台账 {}（{e}）。先跑 tests::sinsu_parity_summon_ok", path.display())
+        panic!(
+            "防空转：缺真实台账 {}（{e}）。先跑 tests::sinsu_parity_summon_ok",
+            path.display()
+        )
     });
     let side = path.with_extension("run.json");
     let side_v: Value = serde_json::from_str(
@@ -1604,7 +1613,11 @@ fn real_rust_ledger_sinsu() {
     let arr = v.as_array().expect("[case] 数组");
     assert_eq!(arr.len(), 1, "[{label}] 恰 1 个 case");
     let rust = &arr[0];
-    assert_eq!(rust.get("Label").and_then(Value::as_str), Some(label), "[{label}] Label 不符");
+    assert_eq!(
+        rust.get("Label").and_then(Value::as_str),
+        Some(label),
+        "[{label}] Label 不符"
+    );
     let gcase = golden["cases"]
         .as_array()
         .unwrap()
@@ -1627,21 +1640,43 @@ fn real_rust_ledger_sinsu() {
         assert_eq!(rs.get(key), gs.get(key), "[{label}] SinSu.{key} 不等");
     }
     // 显式证「召出来了」：0→1 + regen=1 + race=113（不只依赖 golden 相等）。
-    assert_eq!(rs["slave_count_before"].as_u64(), Some(0), "[{label}] slave_count_before 应 0");
-    assert_eq!(rs["slave_count_after"].as_u64(), Some(1), "[{label}] slave_count_after 应 1");
+    assert_eq!(
+        rs["slave_count_before"].as_u64(),
+        Some(0),
+        "[{label}] slave_count_before 应 0"
+    );
+    assert_eq!(
+        rs["slave_count_after"].as_u64(),
+        Some(1),
+        "[{label}] slave_count_after 应 1"
+    );
     assert_eq!(
         rs["regen_calls"].as_u64(),
         Some(1),
         "[{label}] regen_calls 应 1（走过一次 RegenMonsterByName，非别的分支）"
     );
-    assert_eq!(rs["stub_monster_race"].as_u64(), Some(113), "[{label}] stub_monster_race 应 113");
+    assert_eq!(
+        rs["stub_monster_race"].as_u64(),
+        Some(113),
+        "[{label}] stub_monster_race 应 113"
+    );
     // new_slaves 逐项（name/level/hp/max_hp/master_is_caster）。
     let g_new = gs["new_slaves"].as_array().unwrap();
     let r_new = rs["new_slaves"].as_array().unwrap();
-    assert_eq!(r_new.len(), g_new.len(), "[{label}] new_slaves 条数不等：Rust {} vs golden {}", r_new.len(), g_new.len());
+    assert_eq!(
+        r_new.len(),
+        g_new.len(),
+        "[{label}] new_slaves 条数不等：Rust {} vs golden {}",
+        r_new.len(),
+        g_new.len()
+    );
     for (i, (g, r)) in g_new.iter().zip(r_new.iter()).enumerate() {
         for key in ["name", "level", "hp", "max_hp", "master_is_caster"] {
-            assert_eq!(r.get(key), g.get(key), "[{label}] new_slaves[{i}].{key} 不等");
+            assert_eq!(
+                r.get(key),
+                g.get(key),
+                "[{label}] new_slaves[{i}].{key} 不等"
+            );
         }
     }
     // 造怪前帧 17/638/642（按 socket 多重集）。
@@ -1649,7 +1684,10 @@ fn real_rust_ledger_sinsu() {
     for who in ["caster", "target", "obs_in", "obs_out"] {
         let g_sent = sent_filter(gcase, who, keep);
         let r_sent = sent_filter(rust, who, keep);
-        assert_eq!(r_sent, g_sent, "[{label}] {who} 的 17/638/642 帧不一致：Rust {r_sent:?} vs golden {g_sent:?}");
+        assert_eq!(
+            r_sent, g_sent,
+            "[{label}] {who} 的 17/638/642 帧不一致：Rust {r_sent:?} vs golden {g_sent:?}"
+        );
     }
     eprintln!("[sinsu {label}] PASS");
 }
