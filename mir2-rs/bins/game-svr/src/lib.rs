@@ -34730,7 +34730,7 @@ mod tests {
     /// **重算后**的值 0。当前实现读实体（该路径 recalc 后未把 `sg` 镜像回实体）⇒ 实发 99。
     /// 已知缺口：`openmir2-recalc-entity-mirror-gap`（`43` 的卡）；本用例以 `#[ignore]` 登记，
     /// 缺口修好、去掉 ignore 即应转绿。
-    #[ignore = "recalc-entity-mirror-gap: 自见读实体旧值，见 openmir2-recalc-entity-mirror-gap"]
+    #[ignore = "recalc-entity-mirror-gap: 实体未镜像 hit_speed（recalc 后待 apply_entity 接线），自见读实体旧值；见 openmir2-recalc-entity-mirror-gap"]
     #[test]
     fn buff_657_needrecalc_series_reads_post_recalc_value() {
         let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();

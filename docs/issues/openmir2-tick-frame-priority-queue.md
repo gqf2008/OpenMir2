@@ -614,7 +614,7 @@ rebase 后"升级链 = 2 条"**由 `TickFrameQueue` 入队版产出**：`drain_k
   / `left: [99]` / `right: [0]`（`lib.rs` 第 34769 行）。根因 = 该路径 `recalc_session_ability` 后**未把
   `sg` 镜像回实体**，而自见取 `world.entities…hit_speed`；归 `43` 的
   `openmir2-recalc-entity-mirror-gap`。本用例以
-  `#[ignore = "recalc-entity-mirror-gap: 自见读实体旧值，见 openmir2-recalc-entity-mirror-gap"]`
+  `#[ignore = "recalc-entity-mirror-gap: 实体未镜像 hit_speed（recalc 后待 apply_entity 接线），自见读实体旧值；见 openmir2-recalc-entity-mirror-gap"]`
   登记（不红主套件，缺口修好去掉 ignore 即转绿）。
 
 ### 硬约束与未覆盖面
