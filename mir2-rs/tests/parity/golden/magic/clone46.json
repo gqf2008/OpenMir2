@@ -141,7 +141,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1219234078,
+              "delivery": 1220121218,
               "priority": 255
             }
           ],
@@ -281,8 +281,8 @@
       "Angel": null,
       "Clone": {
         "name": "Clone",
-        "actor_id": 1682780500,
-        "rel_to_caster": 1682779499,
+        "actor_id": 1921834330,
+        "rel_to_caster": 1921833329,
         "x": 100,
         "y": 100,
         "dir": 6,
