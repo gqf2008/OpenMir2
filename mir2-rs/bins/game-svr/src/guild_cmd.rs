@@ -222,7 +222,7 @@ pub(crate) fn handle_guild_cmd<S: GuildSessions>(
     server_index: i32,
     now_tick: i32,
 ) -> Vec<GuildServerEvent> {
-    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(me) = online.find_linear_chr(chr_name) else {
         crate::glog!(
             "WRN",
             "CM_GUILD ident={ident}：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃（与 handle_party_cmd 同构）"
@@ -398,7 +398,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
 
     /// 按 `ActorId` 找在线会话的 `[GateIdx, Socket]` 并投递一帧。
     fn send_to(&self, actor_id: i32, body: Vec<u8>, what: &str) {
-        let Some(t) = self.online.iter().find(|e| e.actor_id == actor_id) else {
+        let Some(t) = self.online.find_linear_actor(actor_id) else {
             crate::glog!("WRN", "{what}：ActorId={actor_id} 不在在线登记表 ⇒ 丢弃");
             return;
         };
@@ -784,7 +784,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
         // `GetPoseCreate()`：掌门面前的 actor；非玩家 ⇒ 保持 -1。
         if let Some(pose) = crate::pose_create(self.world, self.displays, self.me.actor_id) {
             if crate::is_play_actor(self.world, pose) {
-                if let Some(t) = self.online.iter().find(|e| e.actor_id == pose) {
+                if let Some(t) = self.online.find_linear_actor(pose) {
                     let target_chr = t.chr_name.clone();
                     // `posePlayer.MyGuild != null && posePlayer.GetPoseCreate() == this`。
                     if self.target_guild_name(&target_chr).is_some()
