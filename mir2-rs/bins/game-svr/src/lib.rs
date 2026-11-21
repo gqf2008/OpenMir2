@@ -71582,6 +71582,19 @@ SendRefMsgRange=15
 
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
+        // **MG-35（21）**：换图簇（633/634/766/54/11029/807）在 oracle 是 `SpaceMove` 期间入队、
+        // 由**本 tick 的下行段** drain 发出；Rust 对应 `drain_map_change`（参数与 tick 路径逐字一致）。
+        // 驱动的 `cast` 只跑施法段、不跑 tick ⇒ 必须补一次，否则"移动发生了但帧没发"
+        // （症状：台账有 806/638/640、缺 633/634/807；实测 Rng 与 golden 逐值相同即证落地计算已跑）。
+        if magic_id == 21 {
+            drain_map_change(
+                &mut rig.world,
+                &rig.online,
+                &rig.gates,
+                &mut rig.displays,
+                rig.registry.as_ref(),
+            );
+        }
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
         // 不由 SM 帧反推）。必须在**施法之后**取。
         let buff_applies = rig.world.buff_apply_log.clone();
