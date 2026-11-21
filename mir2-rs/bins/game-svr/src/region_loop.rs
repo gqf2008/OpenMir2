@@ -8,8 +8,9 @@
 //!
 //! - **快照在 phase1 之后取** ⇒ 邻居读到的位置/HP 等是**本 tick 终态**；
 //! - 快照槽按 `tick & 1` 双缓冲：barrier2 保证没人还在读上一槽，下一 tick 才能覆盖；
-//! - 本模块提供**数据/同步原语 + 区驱动内核**；生产 `OutputAoi` 的跨区收件人/投递在
-//!   L2-4 段 6 接线（本模块不含帧产生点）。
+//! - 本模块提供**数据/同步原语 + 区驱动内核**；`run_zone_tick`/`ZoneRuntime` 已由
+//!   `run_inner` 的 `MIR2_ZONES` 分支驱动（段 6a）；`OutputAoi` 跨区收件人/投递的记账挂点
+//!   在段 6b（本模块不含帧产生点）。
 //!
 //! 范围（L2-3）：只快照**可见性面**字段（id/位置/视野/名字）；帧字段在 L2-4 扩展。
 //! 边界带 = 距区界 ≤ `halo_width`（全局 `view_range` 上界）的已落格实体。
@@ -37,7 +38,8 @@ use mir2_world_bevy::{TickRecord, World};
 
 use crate::perf_counters;
 use crate::tick_watchdog::ZoneHeartbeats;
-use crate::zone::{ZoneId, ZoneRect, ZoneSpan};
+use crate::zone::{RegionLayout, ZoneId, ZoneRect, ZoneSpan};
+use crate::zone_router::{ZoneRouter, HOST_ZONE};
 
 /// 一个边界实体的只读快照（可见性面字段；帧字段 L2-4 扩展）。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,10 +264,106 @@ pub struct ZoneTickResult {
     pub neighbors: Vec<HaloSnapshot>,
 }
 
-/// 一区一个 tick 的完整阶段序列（段 6 由 `run_inner` 每区一线程驱动）：
+/// 一区的**阶段切面**（段 6 的 `sim_loop` 用；[`run_zone_tick`] 复用同一实现）。
+///
+/// `sim_loop` 的 tick 是 `tick_head → 宿主 P21/P32 段 → tick_tail`，所以多区模式必须把
+/// `tick_tail` 在 AOI 前切开：`tick_tail_before_aoi` → [`Self::after_phase1`]（快照/发布/
+/// barrier1/读邻居）→ `tick_tail_aoi`（phase2）→ [`Self::after_phase2`]（beat/barrier2/探针）。
+pub struct ZoneRuntime<'a> {
+    zone: ZoneId,
+    spans: &'a [ZoneSpan],
+    halo_width: i32,
+    exchange: &'a HaloExchange,
+    barriers: &'a TickBarriers,
+}
+
+impl<'a> ZoneRuntime<'a> {
+    /// 按区构造（`spans` 可含全部区的 span；内部只取本区的）。
+    #[must_use]
+    pub fn new(
+        zone: ZoneId,
+        spans: &'a [ZoneSpan],
+        halo_width: i32,
+        exchange: &'a HaloExchange,
+        barriers: &'a TickBarriers,
+    ) -> Self {
+        Self {
+            zone,
+            spans,
+            halo_width,
+            exchange,
+            barriers,
+        }
+    }
+
+    /// phase1 的尾段（`tick_tail_before_aoi`）之后调用：边界快照 → 发布 → barrier1 → 读邻居。
+    ///
+    /// 返回（本区快照, 邻区快照, barrier1 等待 µs）。
+    ///
+    /// # Errors
+    /// 本区没有 span ⇒ [`ZoneTickError::NoSpans`]；邻区没发布本 tick ⇒
+    /// [`ZoneTickError::StaleNeighbor`]。
+    pub fn after_phase1(
+        &self,
+        world: &World,
+        tick: u64,
+    ) -> Result<(HaloSnapshot, Vec<HaloSnapshot>, u64), ZoneTickError> {
+        let border = snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick)?;
+        self.exchange.publish(self.zone, border.clone());
+        let wait_phase1_us = self.barriers.wait_after_phase1();
+        let mut neighbors = Vec::with_capacity(self.exchange.zone_count().saturating_sub(1));
+        for i in 0..self.exchange.zone_count() {
+            let other = ZoneId::new(u32::try_from(i).expect("区数 <= u32::MAX"));
+            if other == self.zone {
+                continue;
+            }
+            let snap = self
+                .exchange
+                .read(other, tick)
+                .ok_or(ZoneTickError::StaleNeighbor { zone: other, tick })?;
+            neighbors.push(snap);
+        }
+        Ok((border, neighbors, wait_phase1_us))
+    }
+
+    /// phase2（`tick_tail_aoi`）之后调用：beat（若给）→ barrier2 → 探针记账。
+    pub fn after_phase2(&self, wait_phase1_us: u64, beat: Option<(&ZoneHeartbeats, u64)>) {
+        if let Some((heartbeats, now_ms)) = beat {
+            heartbeats.completed(self.zone, now_ms);
+        }
+        let wait_phase2_us = self.barriers.wait_after_phase2();
+        perf_counters::note_region_barrier_us(wait_phase1_us + wait_phase2_us);
+    }
+}
+
+/// 按区过滤 span 并抽边界带快照（一区可多 span；span 互不重叠 ⇒ 实体不会重复）。
+///
+/// # Errors
+/// 该区在 `spans` 里一个 span 都没有 ⇒ [`ZoneTickError::NoSpans`]。
+pub fn snapshot_zone_border(
+    world: &World,
+    zone: ZoneId,
+    spans: &[ZoneSpan],
+    halo_width: i32,
+    tick: u64,
+) -> Result<HaloSnapshot, ZoneTickError> {
+    let mut entities = Vec::new();
+    let mut span_count = 0usize;
+    for span in spans.iter().filter(|s| s.zone == zone) {
+        span_count += 1;
+        entities.extend(snapshot_border(world, span.map_id, span.rect, halo_width, tick).entities);
+    }
+    if span_count == 0 {
+        return Err(ZoneTickError::NoSpans(zone));
+    }
+    Ok(HaloSnapshot { tick, entities })
+}
+
+/// 一区一个 tick 的完整阶段序列（段 5 的构造级入口；段 6 的生产 `sim_loop` 用
+/// [`ZoneRuntime`] 的 split 版本，因为宿主段夹在 `tick_head` 与 `tick_tail` 之间）：
 ///
 /// ```text
-/// tick_phase1 → snapshot_border → publish → barrier1 → 读邻居 → tick_phase2 → beat → barrier2
+/// tick_phase1 → snapshot → publish → barrier1 → 读邻居 → tick_phase2 → beat → barrier2
 /// ```
 ///
 /// `beat = Some((heartbeats, now_ms))` ⇒ phase2 之后写一次心跳（N>1）；`None` ⇒ 不碰心跳表
@@ -293,41 +391,13 @@ pub fn run_zone_tick(
     // 1) phase1：所有写位置/属性/HP 的系统跑完 ⇒ 实体状态是本 tick 终态。
     let mut record = world.tick_phase1();
 
-    // 2) 边界带快照（一区可多 span；span 互不重叠 ⇒ 实体不会重复）。
-    let mut entities = Vec::new();
-    let mut span_count = 0usize;
-    for span in spans.iter().filter(|s| s.zone == zone) {
-        span_count += 1;
-        entities.extend(snapshot_border(world, span.map_id, span.rect, halo_width, tick).entities);
-    }
-    if span_count == 0 {
-        return Err(ZoneTickError::NoSpans(zone));
-    }
-    let border = HaloSnapshot { tick, entities };
-    exchange.publish(zone, border.clone());
+    // 2) 快照 → 发布 → barrier1 → 读邻居（缺 ⇒ fail-closed）。
+    let runtime = ZoneRuntime::new(zone, spans, halo_width, exchange, barriers);
+    let (border, neighbors, wait_phase1_us) = runtime.after_phase1(world, tick)?;
 
-    // 3) barrier1：所有区发布完 ⇒ 读邻居的**本 tick** 快照（缺 ⇒ fail-closed）。
-    let wait_phase1_us = barriers.wait_after_phase1();
-    let mut neighbors = Vec::with_capacity(exchange.zone_count().saturating_sub(1));
-    for i in 0..exchange.zone_count() {
-        let other = ZoneId::new(u32::try_from(i).expect("区数 <= u32::MAX"));
-        if other == zone {
-            continue;
-        }
-        let snap = exchange
-            .read(other, tick)
-            .ok_or(ZoneTickError::StaleNeighbor { zone: other, tick })?;
-        neighbors.push(snap);
-    }
-
-    // 4) phase2（AOI）+ 心跳 + barrier2（双缓冲的下一次覆盖安全点）。
+    // 3) phase2（AOI）→ 心跳 → barrier2 → 探针记账。
     world.tick_phase2(&mut record);
-    if let Some((heartbeats, now_ms)) = beat {
-        heartbeats.completed(zone, now_ms);
-    }
-    let wait_phase2_us = barriers.wait_after_phase2();
-    // 本区「两道屏障等待之和」：tick 列取各区**最大值**（慢区决定墙钟），总列只对账。
-    perf_counters::note_region_barrier_us(wait_phase1_us + wait_phase2_us);
+    runtime.after_phase2(wait_phase1_us, beat);
 
     Ok(ZoneTickResult {
         record,
@@ -684,6 +754,75 @@ impl CrossZoneOutbox {
         self.never = 0;
         self.not_owner = 0;
         Ok(ledger)
+    }
+}
+
+/// **生产 AOI 出帧的单一发射者记账**（段 6）。
+///
+/// 每 tick 一个：`drain_aoi_downlink` 对每一帧调 [`Self::note`]，tick 末调用方 `seal_tick`
+/// 后用 [`TickLedger::check`] 判。**只记 AOI 出现帧**——v1 不存在跨区帧（收件人都是本区
+/// 会话），其它帧源不记账；全帧记账需要逐发射点改签名，超出本段。
+pub struct AoIFrameLedger<'a> {
+    outbox: &'a mut CrossZoneOutbox,
+    layout: &'a RegionLayout,
+    router: &'a ZoneRouter,
+    zone: ZoneId,
+    tick: u64,
+    seq: u32,
+}
+
+impl<'a> AoIFrameLedger<'a> {
+    /// 开一个 tick 的账（调用方已 `begin_tick`）。
+    pub fn new(
+        outbox: &'a mut CrossZoneOutbox,
+        layout: &'a RegionLayout,
+        router: &'a ZoneRouter,
+        zone: ZoneId,
+        tick: u64,
+    ) -> Self {
+        Self {
+            outbox,
+            layout,
+            router,
+            zone,
+            tick,
+            seq: 0,
+        }
+    }
+
+    /// 记一帧：`owner` 实体的坐标所属区是唯一发射者；`dst` 由收件人 `(line, socket)` 查
+    /// [`ZoneRouter`]（未命中 = 区 0）。被拒的帧已在 outbox 内计数，`seal` 后的 `check`
+    /// 会报；这里不 panic。
+    // 一帧的身份就是这几个字段（owner 的三元组 + 收件人 + kind）⇒ 不拆结构体。
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(
+        &mut self,
+        owner: i32,
+        owner_map: usize,
+        owner_x: i32,
+        owner_y: i32,
+        line: u8,
+        socket: i32,
+        kind: u16,
+    ) {
+        let owner_zone = self
+            .layout
+            .zone_of(owner_map, owner_x, owner_y)
+            .unwrap_or(HOST_ZONE);
+        let dst = self.router.lookup(line, socket);
+        let key = FrameKey {
+            tick: self.tick,
+            owner,
+            recipient: Recipient { line, socket },
+            kind,
+        };
+        let frame = XferFrame {
+            seq: self.seq,
+            key,
+            payload: Vec::new(),
+        };
+        self.seq = self.seq.wrapping_add(1);
+        let _ = self.outbox.submit(self.zone, owner_zone, dst, frame);
     }
 }
 

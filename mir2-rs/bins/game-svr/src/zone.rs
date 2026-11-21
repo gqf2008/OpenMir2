@@ -445,6 +445,15 @@ impl RegionLayout {
         }
     }
 
+    /// 全部 span（`WholeHost` ⇒ 空切片）。L2-4 段 6 的区驱动按区取自己的 span。
+    #[must_use]
+    pub fn zone_spans(&self) -> &[ZoneSpan] {
+        match &self.kind {
+            LayoutKind::WholeHost => &[],
+            LayoutKind::Spans(spans) => spans,
+        }
+    }
+
     /// 某区是否拥有该坐标（`zone_of == Some(zone)`）。
     #[must_use]
     pub fn owns(&self, zone: ZoneId, map_id: usize, x: i32, y: i32) -> bool {
@@ -510,6 +519,16 @@ impl fmt::Display for ZoneParseError {
 }
 
 impl std::error::Error for ZoneParseError {}
+
+/// **L2-4 段 6**：多区布局配置的环境变量名（`<区>:<地图>=<x0>,<y0>-<x1>,<y1>[;<…>]`）。
+pub const ENV_ZONES: &str = "MIR2_ZONES";
+
+/// **L2-4 段 6**：每区边界带实体数上限的环境变量名（缺省
+/// [`DEFAULT_MAX_HALO_BAND_ENTITIES`]）。
+pub const ENV_MAX_HALO_BAND_ENTITIES: &str = "MIR2_MAX_HALO_BAND_ENTITIES";
+
+/// **L2-4 段 6**：边界带实体数上限的缺省值（tick 0 启动门；超限拒绝启动）。
+pub const DEFAULT_MAX_HALO_BAND_ENTITIES: usize = 512;
 
 /// **L2-4 段 3**：把 `MIR2_ZONES` 原文解析成 [`RegionLayout`]（**纯函数**，不读环境/I/O）。
 ///
