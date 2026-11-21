@@ -421,7 +421,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。 覆盖叶子 MG-13（case 主链；绿/红毒两支见 MG-14/MG-15）。",
       "basis": "semantic",
-      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。"
+      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。"
     },
     {
       "id": "MG-14",
@@ -453,7 +453,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "basis": "semantic",
-      "scope": "partial：`Shape=1@DoSpell`（`src/M2Server/Magic/MagicManager.cs:239`）绿毒臂（`PoisonState.DECHEALTH`、`GetPower13(40)` 口径）由 `amyounsul.json`（Shape=1）× s1/s5/s13 覆盖：目标 `Rm` 的 `8037` 四字段 + `10139`/`11004` 状态帧逐值。**只验该 shape 臂本身；外层 `CheckAmulet(1,2)`/骰门/目标属性门由 MG-13 的 case 主链覆盖。未验**：其它护身符 Shape；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`）。"
+      "scope": "partial：`Shape=1@DoSpell`（`src/M2Server/Magic/MagicManager.cs:239`）绿毒臂（`PoisonState.DECHEALTH`、`GetPower13(40)` 口径）由 `amyounsul.json`（Shape=1）× s1/s5/s13 覆盖：目标 `Rm` 的 `8037` 四字段 + `10139`/`11004` 状态帧逐值。**只验该 shape 臂本身；外层 `CheckAmulet(1,2)`/骰门/目标属性门由 MG-13 的 case 主链覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-15",
@@ -485,7 +485,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "basis": "semantic",
-      "scope": "partial：`Shape=2@DoSpell`（`src/M2Server/Magic/MagicManager.cs:243`）红毒臂（`DAMAGEARMOR`、`GetPower13(30)`）由 `amyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；字段面同 MG-14。**注意**：本夹具绿/红毒 `10139.p1` **同为 `int.MinValue`**（buff 插入序 i=0），**不代表** `BaseObject.Base.cs:170` 按 `PoisonState` 取位的 `0x40000000` 路径。**未验**：其它护身符 Shape；`0x40000000` 路径（需目标先有别的 buff，另卡）。"
+      "scope": "partial：`Shape=2@DoSpell`（`src/M2Server/Magic/MagicManager.cs:243`）红毒臂（`DAMAGEARMOR`、`GetPower13(30)`）由 `amyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；字段面同 MG-14。**注意**：本夹具绿/红毒 `10139.p1` **同为 `int.MinValue`**（buff 插入序 i=0），**不代表** `BaseObject.Base.cs:170` 按 `PoisonState` 取位的 `0x40000000` 路径。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径（需目标先有别的 buff，另卡）。"
     },
     {
       "id": "MG-16",
@@ -1808,7 +1808,7 @@
         ]
       },
       "basis": "semantic",
-      "scope": "partial：`Shape=1@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:919`）群体绿毒臂由 `groupamyounsul.json`（Shape=1）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。**未验**：其它护身符 Shape；`10139.p1` 跨 buff 位号（本夹具恒 `int.MinValue`）。"
+      "scope": "partial：`Shape=1@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:919`）群体绿毒臂由 `groupamyounsul.json`（Shape=1）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 跨 buff 位号（本夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-65",
@@ -1840,7 +1840,7 @@
         ]
       },
       "basis": "semantic",
-      "scope": "partial：`Shape=2@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:923`）群体红毒臂由 `groupamyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。**注意**：本夹具绿/红毒 `10139.p1` 同为 `int.MinValue`，**不代表** `BaseObject.Base.cs:170` 的 `0x40000000` 路径（同 MG-15）。**未验**：其它护身符 Shape；`0x40000000` 路径。"
+      "scope": "partial：`Shape=2@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:923`）群体红毒臂由 `groupamyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。**注意**：本夹具绿/红毒 `10139.p1` 同为 `int.MinValue`，**不代表** `BaseObject.Base.cs:170` 的 `0x40000000` 路径（同 MG-15）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径。"
     }
   ]
 }
