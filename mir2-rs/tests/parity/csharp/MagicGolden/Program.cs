@@ -252,6 +252,34 @@ public static class Program
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             // **推挤批（MG-16 抗拒火环 8 / MG-57 气功波 37）**：`MagPushArround`，需要 `VisibleActors`
             // 回填（`MakeVisible`）。两支 oracle 函数体逐字相同，装置同形。
+            // **B16 Arm A（非零值魔表对照臂）**：五字段取 `sql/mir2_data.sql` 的**生效行**
+            // （MagID 重复时 `FindMagic` 取最先读到的行；本批 1/11/24 无重复）。
+            // `--nonzero-control`：同 label/seed 把五字段全置 0，产物只供差异清单（不落仓）。
+            if (name is "fireball-nonzero" or "lightning11-nonzero" or "lightflower-nonzero")
+            {
+                bool isControl = args.Contains("--nonzero-control");
+                int p = 0, mp = 0, dp = 0, dmp = 0;
+                if (name == "fireball-nonzero") { p = 8; mp = 8; dp = 2; dmp = 2; }
+                else if (name == "lightning11-nonzero") { p = 14; mp = 28; dp = 10; dmp = 10; }
+                else { p = 10; mp = 30; dp = 10; dmp = 30; }
+                var spec = new MagicSpec
+                {
+                    Key = name,
+                    MagicId = name == "fireball-nonzero" ? 1 : name == "lightning11-nonzero" ? 11 : 24,
+                    MagicName = name,
+                    MagicTrainLv = isControl ? 0 : 3,
+                    NonzeroArm = true,
+                    MagicPower = isControl ? 0 : p,
+                    MagicMaxPower = isControl ? 0 : mp,
+                    MagicDefPower = isControl ? 0 : dp,
+                    MagicDefMaxPower = isControl ? 0 : dmp,
+                    CasterMcNoClamp = name == "lightflower-nonzero" ? HUtil32.MakeWord(20, 30) : HUtil32.MakeWord(5, 10),
+                    // 三支统一时间忠实排水：600ms 交付帧与 1000ms/800ms 训练尾的 `due_ms_rel`
+                    // 必须与 Rust 步进交付同口径（否则 golden=0 / rust=600 是记录面伪影）。
+                    StepDrainMs = 100,
+                };
+                return name == "lightflower-nonzero" ? BehaviorBatch(spec) : AntiMagicBatch(spec);
+            }
             if (name == "firewind") return BehaviorBatch(new MagicSpec { Key = "firewind", MagicId = 8, MagicName = "FireWind", MakeVisible = true });
             if (name == "energyrepulsor") return BehaviorBatch(new MagicSpec { Key = "energyrepulsor", MagicId = 37, MagicName = "EnergyRepulsor", MakeVisible = true });
             // **MG-35（21 瞬息移动）**：`MapRandomMove→SpaceMove` 走 `FindMap(HomeMap)` ⇒
@@ -1470,6 +1498,17 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public int MagicTrainLv;
         public int MagicMaxTrain0;
+        /// <summary>
+        /// **非零值魔表对照臂（B16 Arm A）**：`MagicInfo` 五字段部署真值（`sql/mir2_data.sql` 生效行；
+        /// `LoadMagicDB` 对重复 MagID 取最先读到的行）。`NonzeroArm=true` 时夹具落
+        /// `magic_power/magic_max_power/magic_def_power/magic_def_max_power/magic_train_lv`（非零才写，
+        /// 缺键=0）；旧 stem 全 0 且 `NonzeroArm=false` ⇒ 生成器与 golden 逐字节不变。
+        /// </summary>
+        public bool NonzeroArm;
+        public int MagicPower;
+        public int MagicMaxPower;
+        public int MagicDefPower;
+        public int MagicDefMaxPower;
         /// <summary>为 true ⇒ `EmitGolden` 的 case 里落 `Train` 块（本批专用；缺省零变化）。</summary>
         public bool SkillTail;
         /// <summary>`scenario_note`（`login_order=false` 必填）。</summary>
@@ -2422,14 +2461,18 @@ private static int ReadInstanceInt(object obj, string fieldName)
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
         int? casterDir = null, int? casterGender = null, int? casterHair = null,
         bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
-        bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null)
+        bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null,
+        int? magicPower = null, int? magicMaxPower = null, int? magicDefPower = null,
+        int? magicDefMaxPower = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
             && targetMonster == null && serverConf == null
             && casterDir == null && casterGender == null && casterHair == null
             && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
-            && fastTrain == null && fireCrossSafeZone == null && preEventCells == null)
+            && fastTrain == null && fireCrossSafeZone == null && preEventCells == null
+            && magicPower == null && magicMaxPower == null && magicDefPower == null
+            && magicDefMaxPower == null)
         {
             return fixture;
         }
@@ -2467,6 +2510,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (preSpellFaceTarget.HasValue) node["pre_spell_face_target"] = preSpellFaceTarget.Value;
         if (magicTrainLv.HasValue) node["magic_train_lv"] = magicTrainLv.Value;
         if (magicMaxTrain0.HasValue) node["magic_max_train0"] = magicMaxTrain0.Value;
+        // B16 Arm A：五字段（非零才写；控制臂四键缺省、训练键写 0）。
+        if (magicPower.HasValue) node["magic_power"] = magicPower.Value;
+        if (magicMaxPower.HasValue) node["magic_max_power"] = magicMaxPower.Value;
+        if (magicDefPower.HasValue) node["magic_def_power"] = magicDefPower.Value;
+        if (magicDefMaxPower.HasValue) node["magic_def_max_power"] = magicDefMaxPower.Value;
         if (fastTrain.HasValue) node["fast_train"] = fastTrain.Value;
         if (fireCrossSafeZone.HasValue) node["firecross_safe_zone"] = fireCrossSafeZone.Value;
         if (preEventCells != null) node["pre_event_cells"] = JsonSerializer.SerializeToNode(preEventCells);
@@ -2776,6 +2824,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Effect = (byte)spec.Effect,
             EffectType = (byte)spec.EffectType,
         };
+        // B16 Arm A：五字段直接写入（旧 stem 全 0 ⇒ 与 ctor 缺省相同；golden 侧非零才落键）。
+        mi.Power = (ushort)spec.MagicPower;
+        mi.MaxPower = (ushort)spec.MagicMaxPower;
+        mi.DefPower = (byte)spec.MagicDefPower;
+        mi.DefMaxPower = (byte)spec.MagicDefMaxPower;
         if (spec.MagicTrainLv != 0 || spec.MagicMaxTrain0 != 0)
         {
             mi.TrainLv = (byte)spec.MagicTrainLv;
@@ -3798,8 +3851,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
                 casterHair: spec.MagicId == 46 ? spec.CasterHair : (int?)null,
                 preSpellFaceTarget: spec.MagicId == 46 ? (bool?)spec.PreSpellFaceTarget : null,
-                magicTrainLv: (spec.MagicId == 46 || spec.MagicId == 22) ? (int?)spec.MagicTrainLv : null,
+                magicTrainLv: (spec.MagicId == 46 || spec.MagicId == 22 || spec.NonzeroArm) ? (int?)spec.MagicTrainLv : null,
                 magicMaxTrain0: (spec.MagicId == 46 || spec.MagicId == 22) ? (int?)spec.MagicMaxTrain0 : null,
+                magicPower: (spec.NonzeroArm && spec.MagicPower != 0) ? (int?)spec.MagicPower : null,
+                magicMaxPower: (spec.NonzeroArm && spec.MagicMaxPower != 0) ? (int?)spec.MagicMaxPower : null,
+                magicDefPower: (spec.NonzeroArm && spec.MagicDefPower != 0) ? (int?)spec.MagicDefPower : null,
+                magicDefMaxPower: (spec.NonzeroArm && spec.MagicDefMaxPower != 0) ? (int?)spec.MagicDefMaxPower : null,
                 // `PlayObject.FastTrain` 缺省 false（`PlayObject.cs:2023`），装置从不置 true
                 // （只有快速修炼项链 Shape 才会置）；显式记录，比较器断言为 false。
                 fastTrain: spec.MagicId == 46 ? (bool?)false : null,

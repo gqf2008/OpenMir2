@@ -71935,6 +71935,37 @@ SendRefMsgRange=15
         let mc = golden_fixture_required(stem, label, "caster_mc");
         let sc = golden_fixture_required(stem, label, "caster_sc");
         let mut rig = fireball_rig(id_base, magic_id, mc, sc, user_magic_level);
+        // **B16 Arm A（非零值魔表对照臂）**：五字段从 golden 读。旧 stem 缺键=0（与 `fireball_rig`
+        // 的缺省表逐字段相同 ⇒ 零变化）；`-nonzero` 支 fail-closed 必填（缺键/越界 ⇒ 红）。
+        // 与 C# `BuildMagicInfo` 的五字段一一对应；`max_train` 不属 Arm A，两侧保持缺省 0。
+        let nonzero_stem = stem.ends_with("-nonzero");
+        let magic_field = |key: &str| -> u16 {
+            if nonzero_stem {
+                golden_fixture_required(stem, label, key)
+            } else {
+                u16::try_from(golden_fixture_opt(stem, label, key).unwrap_or(0))
+                    .unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.{key} 越界 u16"))
+            }
+        };
+        let magic_power = magic_field("magic_power");
+        let magic_max_power = magic_field("magic_max_power");
+        let magic_def_power = u8::try_from(magic_field("magic_def_power"))
+            .unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.magic_def_power 越界 u8"));
+        let magic_def_max_power = u8::try_from(magic_field("magic_def_max_power"))
+            .unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.magic_def_max_power 越界 u8"));
+        let magic_train_lv = u8::try_from(magic_field("magic_train_lv"))
+            .unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.magic_train_lv 越界 u8"));
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 1,
+            effect_type: 1,
+            power: magic_power,
+            max_power: magic_max_power,
+            def_power: magic_def_power,
+            def_max_power: magic_def_max_power,
+            train_lv: magic_train_lv,
+            ..mir2_data::MagicInfo::default()
+        }]);
         // **buff 生产链前提**（14/15/31 的 A-5 块）；其它魔号不受影响（A-5 块只认这三支）。
         if matches!(magic_id, 14 | 15 | 31) {
             rig.world.enable_buff_tick();
@@ -76474,6 +76505,7 @@ SendRefMsgRange=15
         match stem {
             "fireball5" => "fireball-5.json".to_string(),
             "lightning11" => "lightning-11.json".to_string(),
+            "lightning11-nonzero" => "lightning-11-nonzero.json".to_string(),
             "lightning45" => "lightning-45.json".to_string(),
             other => format!("{other}.json"),
         }
@@ -76959,6 +76991,85 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightflower_parity_s13() {
         fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
+    }
+
+    // ---------------------------------------------------------------------------------
+    // B16 Arm A（非零值魔表对照臂）：三支新 stem 的驱动（五字段由 `fireball_parity_drive`
+    // 从 golden 读并覆盖魔表；`-nonzero` 支 fail-closed 必填）。
+    // ---------------------------------------------------------------------------------
+    fn fireball_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("fireball-nonzero", label);
+        fireball_parity_drive("fireball-nonzero", 1, 1, label, seed, base);
+        fireball_case_assert("fireball-nonzero", label);
+        golden_drain_not_capped("fireball-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_miss() {
+        fireball_nonzero_assert("miss", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_edge() {
+        fireball_nonzero_assert("edge", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_hit() {
+        fireball_nonzero_assert("hit", 3000);
+    }
+
+    fn lightning11_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("lightning11-nonzero", label);
+        fireball_parity_drive("lightning11-nonzero", 11, 1, label, seed, base);
+        fireball_case_assert("lightning11-nonzero", label);
+        golden_drain_not_capped("lightning11-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_miss() {
+        lightning11_nonzero_assert("miss", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_edge() {
+        lightning11_nonzero_assert("edge", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_hit() {
+        lightning11_nonzero_assert("hit", 3000);
+    }
+
+    fn lightflower_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("lightflower-nonzero", label);
+        fireball_parity_drive("lightflower-nonzero", 24, 1, label, seed, base);
+        fireball_case_assert("lightflower-nonzero", label);
+        golden_drain_not_capped("lightflower-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s1() {
+        lightflower_nonzero_assert("s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s5() {
+        lightflower_nonzero_assert("s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s13() {
+        lightflower_nonzero_assert("s13", 3000);
     }
 
     /// **MG-47（35 `SKILL_WINDTEBO`）**驱动：`GetPoseCreate` 取**前格** target ⇒ `CharPushed`

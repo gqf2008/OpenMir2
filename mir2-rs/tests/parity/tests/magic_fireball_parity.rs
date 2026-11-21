@@ -3604,6 +3604,72 @@ fn real_rust_ledger_fireball5() {
 }
 
 // ---------------------------------------------------------------------------
+// B16 Arm A（非零值魔表对照臂）：per-stem 绝对值表 + 三支 comparator。
+// 期望表只对新增 `-nonzero` stem 生效；值来自 `sql/mir2_data.sql` 的生效行
+// （`LoadMagicDB` 对重复 MagID 取最先读到的行），防止 golden 重生成时静默换行。
+// ---------------------------------------------------------------------------
+fn nonzero_fixture_expect(stem: &str, golden: &Value) {
+    let exp: [(&str, u64); 5] = match stem {
+        "fireball-nonzero" => [
+            ("magic_power", 8),
+            ("magic_max_power", 8),
+            ("magic_def_power", 2),
+            ("magic_def_max_power", 2),
+            ("magic_train_lv", 3),
+        ],
+        "lightning11-nonzero" => [
+            ("magic_power", 14),
+            ("magic_max_power", 28),
+            ("magic_def_power", 10),
+            ("magic_def_max_power", 10),
+            ("magic_train_lv", 3),
+        ],
+        "lightflower-nonzero" => [
+            ("magic_power", 10),
+            ("magic_max_power", 30),
+            ("magic_def_power", 10),
+            ("magic_def_max_power", 30),
+            ("magic_train_lv", 3),
+        ],
+        _ => panic!("nonzero_fixture_expect 只用于 -nonzero 支：{stem}"),
+    };
+    for c in golden["cases"].as_array().expect("cases 必须是数组") {
+        let label = c["Label"].as_str().unwrap_or("?");
+        for (k, v) in exp {
+            assert_eq!(
+                c["Fixture"][k].as_u64().unwrap_or(0),
+                v,
+                "[{stem}/{label}] Fixture.{k} 与 sql 真值 {v} 不符"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::fireball_nonzero_parity_*）生成真实台账"]
+fn real_rust_ledger_fireball_nonzero() {
+    let g = golden_file("fireball-nonzero.json");
+    nonzero_fixture_expect("fireball-nonzero", &g);
+    real_ledger_verify_labels("fireball-nonzero", &g, &["miss", "edge", "hit"]);
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::lightning11_nonzero_parity_*）生成真实台账"]
+fn real_rust_ledger_lightning11_nonzero() {
+    let g = golden_file("lightning-11-nonzero.json");
+    nonzero_fixture_expect("lightning11-nonzero", &g);
+    real_ledger_verify_labels("lightning11-nonzero", &g, &["miss", "edge", "hit"]);
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::lightflower_nonzero_parity_*）生成真实台账"]
+fn real_rust_ledger_lightflower_nonzero() {
+    let g = golden_file("lightflower-nonzero.json");
+    nonzero_fixture_expect("lightflower-nonzero", &g);
+    real_ledger_verify_labels("lightflower-nonzero", &g, &["s1", "s5", "s13"]);
+}
+
+// ---------------------------------------------------------------------------
 // 比较器自检：金标准逐支喂回（identity）+ 三条篡改必须红 + 防空转必须红。
 // ---------------------------------------------------------------------------
 fn golden_file(name: &str) -> Value {
