@@ -144,9 +144,16 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
    见 `golden-harness-blind-spots.md`；本批不动产品、不放宽任何比较口径，
    **装置对齐生产后重出受影响 golden（MG-12/33/40/51/53 + `mabmabe-nondefault`）再判本臂**。
 2. (b)(c) 随对照臂驱动批一起改（8103 逐条组装 + 多条 8021）；
-4. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
+3. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
    `real_rust_ledger_mabmabe_nondefault`）从待落地补丁恢复进批——补丁副本见
    `E:/UserTemp/arm-rust-deferred.patch`（仓外临时物，非交付件）。
+
+> **重同步注意（本支 golden 不得沿用旧值）**：装置对齐生产（B17）后，本支 golden **必须重出**——
+> 31 帧 `tail` 的值会变。依据（bit 级解码）：`tail` 是 `MessageBodyWL`（`Param1=GetFeature`、
+> `Param2=CharStatus`、`Tag1=施法者 ActorId`、`Tag2=1`）经 `EDCode.EncodePacket` 的编码；committed 与
+> current 解码后只有 `Param2` 的 **bit31** 不同（`0x80000000` vs `0`），该 bit = `ActorBuffSystem.GetBuffStatus`
+> 的 **buff 列表下标 0**（本支 STONE 毒）。旧装置一步内把 600/600/650 一起处理（毒先于两次受击应用）⇒
+> 编码时带 buff 位；对齐生产按步结算 ⇒ 两次 31 在毒之前编码。**⇒ "只变顺序"对本支不成立，重出时连该值一起更新**。 
 
 ## 5. 边界
 

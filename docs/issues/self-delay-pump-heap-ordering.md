@@ -95,6 +95,13 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 - **会变（只动延迟帧的出现时刻/顺序）—— 5 支**：`healing`(MG-12)、`bigcloak`(MG-33)、`bighealing`(MG-40)、`groupdeding`(MG-51)、`mabmabe-nondefault`(MG-48 非缺省)。
 - **不变 —— `hbfireball`(MG-53) + 其余全部 stem**：剥绝对墙钟 `delivery` 后**逐字节相等**。
 - **5 支的变必须只限**：延迟帧 `due_ms_rel`/出队顺序；**伤害值、HP、抽数、帧条数不得变**。
+- **限定（2026-11-21 bit 级实证）**："只变顺序"应读作 **"多数 stem 只变顺序；含状态施加的 stem 还会变状态位"**。
+  实例 `mabmabe-nondefault`：31 帧 `tail` 解码为 16B，唯一差异是 `MessageBodyWL.Param2 = CharStatus`
+  的 bit31（`ActorBuffSystem.GetBuffStatus` 按 **buff 列表下标**置位，下标 0 = 本支 STONE 毒）。旧装置
+  一步内把 600/600/650 一起处理（**毒先于两次受击应用**）⇒ 帧编码时 `CharStatus=0x80000000`；对齐生产后
+  按步结算 ⇒ 两次 31 在毒之前编码，`CharStatus=0`。**机制一句话**：`CharStatus` 是**编码时的实时状态**
+  （`struckMessage.Param2 = baseObject.CharStatus`），凡是"处理消息时读实时状态"的字段（`CharStatus`、
+  buff 位、HP 快照），**顺序一变、值就可能变**——判"只变顺序"必须在含状态施加的 stem 上验证过。
 - **停下条件**（任一即停手报 opc-19，不自行调断言/补 golden）：①预期外 stem 变化；②5 支里连伤害值/HP/抽数/帧条数也变；③任何既有对拍由绿转红。
 
 **验收口径（2026-11-21，opc-19 批准收窄）**：经「3 轮 pristine + 2 轮 fixed」噪声地板（见 B19）判定，**无歧义真变仅 `healing`/`bighealing`**——`cases[2].Receivers[0].Rm` 的 `8034(RM_MAGHEALING)↔10123(RM_MAGIC_LVEXP)` **顺序交换**（两轮 pristine 都不抖、两轮 fixed 都稳）；`hbfireball` IDENTICAL；`pr1_*` 未动；语义审查对齐 `GetMessage`。**多延迟/多受害者 stem（含 `mabmabe-nondefault`、施毒 4 支）因装置墙钟非确定（B19），本批无法逐字节证明——这是验收口径收窄，不是「没验」，更不是「已验证全部多延迟 stem」。** 本批只重出 `healing`/`bighealing`。
