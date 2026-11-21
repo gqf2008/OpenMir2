@@ -61,7 +61,7 @@ CSHARP_ATTACK_RE = re.compile(
 # （`6a774ea79` 只把它从 1002 移到 1007，`bbf9694aa` 才到 1014）。三行都必须分类为 attack，
 # 否则玩家攻击链的两次 `AttackSuccess` 取数被算成 noise。
 # 两处 `RUST_ATTACK_RE` 仍逐字同表（`attack_rng_ledger.py` selftest 钉住）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1016|1018|1126|1150|1152|1258|1260)")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1016|1018|1126|1128|1150|1152|1258|1260|1268|1410)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world-bevy\src\combat.rs:109"
@@ -99,7 +99,10 @@ CANON_RULES = [
     # 1258 = 毒门 `Random(AntiPoison+Rate)`（`!UnParalysis && Paralysis` 时抽）。
     # 旧别名：1018 = `e7d432189` 时代的 `Random(5)`（**不是命中骰**）、
     # 1126 = `e7d432189` 时代的毒门。
-    (re.compile(r"crates/world-bevy/src/combat\.rs:(1150|1258|1152|1260|1018|1126)$"), "attack_success"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:(1150|1258|1152|1260|1018|1126|1268|1410)$"), "attack_success"),
+    # 2026-11-21：三处取数再次下移（现读 combat.rs：命中骰 1128 / `Random(5)` 1268 / 毒门 1410；
+    # 1014/1150/1258 降级为旧 trace 别名）。`hit-dice` 的新活栈行：
+    (re.compile(r"crates/world-bevy/src/combat\.rs:1128$"), "hit_gate"),
     # **MB-4 F4**：`struck_damage_durability` / `get_hit_struck_damage` 的**当前**取数行
     # （改前只登记了旧行号 601/609/628/630 ⇒ 真机 trace 落 `UNCLASSIFIED`）。
     (re.compile(r"crates/world-bevy/src/combat\.rs:829$"), "struck_durability"),
