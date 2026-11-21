@@ -1697,10 +1697,10 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
-/// 本侧「帧 `recog` == 本侧 clone id」的命中数（扫 `Receivers[].Sent` + `Clone.receivers[].frames`）。
-/// oracle 出生零帧 ⇒ 两侧都应为 **0**；非零说明产品又广播了 `turn_pair`。
-fn clone_recog_hits(case: &Value) -> (i64, usize) {
-    let cid = case["Clone"]["actor_id"].as_i64().unwrap_or(i64::MIN);
+/// 本侧「帧 `recog` == `id`」的命中数（扫 `Receivers[].Sent` + `Clone.receivers[].frames`）。
+/// **B20**：oracle clone actor-id 非确定 ⇒ 只有 Rust 侧有数值 id；golden 侧用 `clone_count`
+/// 与"无 10/41 帧"的关系面替代绝对值比较。
+fn clone_recog_hits(case: &Value, id: i64) -> usize {
     let from_sent = case["Receivers"]
         .as_array()
         .into_iter()
@@ -1711,11 +1711,10 @@ fn clone_recog_hits(case: &Value) -> (i64, usize) {
         .into_iter()
         .flatten()
         .flat_map(|r| r["frames"].as_array().into_iter().flatten());
-    let n = from_sent
+    from_sent
         .chain(from_clone)
-        .filter(|f| num(f, "recog") == cid)
-        .count();
-    (cid, n)
+        .filter(|f| num(f, "recog") == id)
+        .count()
 }
 
 /// Clone 块的逐字段 + 推导面检查（`verify` 之外的部分）。
@@ -1750,6 +1749,8 @@ fn clone_block_checks(g: &Value, r: &Value) -> Vec<String> {
         "caster_dir",
         "caster_gender",
         "caster_hair",
+        "clone_ordinal",
+        "clone_count",
     ] {
         if num(gb, k) != num(rb, k) {
             errs.push(format!(
@@ -1943,26 +1944,45 @@ fn real_rust_ledger_clone46() {
         "magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
         "cases": [pinned],
     });
-    // **Clone id 判据（2026-11-21 oracle 实测后从「归一化」改为「负向」）**：
-    // 首跑 golden 证明 oracle 克隆体出生零帧（`PlayObject.cs:993` FixedHideMode=true ⇒
-    // `BaseObject.Message.cs:390-394` 自投递；见卡 §6.7），**没有任何帧的 recog 等于 clone id**
-    // ⇒ 原计划"按本侧 clone id 归一化"在新事实下无对象可归一。现行判据：
-    // ① 两侧都**必须零命中**（若产品重新广播 turn_pair，这里先红）；
-    // ② 两侧 clone id 仍必须不等（防止将来把 GUID id 错当成协议量比较）；
-    // ③ 原始 id 两侧可见（`Clone.actor_id`）。
-    let (g_cid, g_hits) = clone_recog_hits(&g["cases"][0]);
-    let (r_cid, r_hits) = clone_recog_hits(&r["cases"][0]);
-    assert_eq!(
-        g_hits, 0,
-        "golden 不应有帧的 recog == Clone.actor_id({g_cid})（oracle 出生零帧；若出现说明夹具/产品变了）"
+    // **B20（2026-11-21 裁定）**：oracle `ActorEntity` ctor 的 `ActorMgr.GetNextIdentity()`
+    // 走 GUID/随机池 ⇒ clone 的绝对 actor-id 跨运行非确定，**不是建模差异**，只是装置在
+    // 用同一非确定源。golden 只记 policy/序数/数量；绝对值不跨栈比。
+    let gc0 = &g["cases"][0];
+    let rc0 = &r["cases"][0];
+    let gb0 = &gc0["Clone"];
+    let rb0 = &rc0["Clone"];
+    assert!(
+        gb0.get("actor_id").is_none(),
+        "golden 不得记录 clone 绝对 actor_id（B20：GUID 非确定，绝对 id 无跨栈意义）"
+    );
+    assert!(
+        gb0.get("rel_to_caster").is_none(),
+        "golden 不得记录 rel_to_caster（同上）"
     );
     assert_eq!(
-        r_hits, 0,
-        "台账不应有帧的 recog == Clone.actor_id({r_cid})（产品不得广播 turn_pair；实得 {r_hits} 帧）"
+        text(gb0, "actor_id_policy"),
+        "oracle_guid_nondeterministic",
+        "golden 必须带 B20 policy 标记（不是漏记）"
     );
-    assert_ne!(
-        g_cid, r_cid,
-        "两侧 clone id 相同（{g_cid}）：它们是进程级自增/GUID，不应相等；若相等请说明"
+    for (side, b) in [("golden", gb0), ("rust", rb0)] {
+        assert_eq!(num(b, "clone_ordinal"), 0, "[{side}] clone 创建序必须为 0");
+        assert_eq!(num(b, "clone_count"), 1, "[{side}] 必须恰有一个 clone");
+    }
+    let r_cid = num(rb0, "actor_id");
+    assert!(r_cid > 0, "Rust 台账必须记本侧 clone actor_id（可见性）");
+    let siblings = rb0["sibling_actor_ids"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !siblings.iter().any(|v| v.as_i64() == Some(r_cid)),
+        "Rust clone id 不得与 caster/target/obs 的 id 相撞"
+    );
+    // oracle 出生零帧 ⇒ 任何一侧都不应有回指 clone 的 10/41 帧（有则必须先解释）。
+    assert_eq!(
+        clone_recog_hits(gc0, r_cid) + clone_recog_hits(rc0, r_cid),
+        0,
+        "不得出现 recog == clone id 的 10/41 帧（oracle FixedHideMode 自投递 ⇒ 零帧）"
     );
     let mut errs = clone_block_checks(&g, &r);
     if let Err(mut e) = verify(&g, &r) {

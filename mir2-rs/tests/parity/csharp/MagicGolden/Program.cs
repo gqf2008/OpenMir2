@@ -3646,12 +3646,23 @@ private static int ReadInstanceInt(object obj, string fieldName)
         {
             IList<SystemModule.Actors.IActor> cellObjects = new List<SystemModule.Actors.IActor>();
             env.GetBaseObjects(caster.CurrX, caster.CurrY, true, ref cellObjects);
-            var cloneObj = cellObjects.OfType<M2Server.Player.PlayCloneObject>()
-                .FirstOrDefault(o => o.ChrName == "Clone");
-            if (cloneObj == null)
+            var clones = cellObjects.OfType<M2Server.Player.PlayCloneObject>()
+                .Where(o => o.ChrName == "Clone").ToList();
+            if (clones.Count != 1)
             {
                 throw new FixtureContractViolation(
-                    $"[{spec.Key}/{label}] 46 施法后同格未找到 ChrName=Clone 的克隆体（同格对象 {cellObjects.Count} 个）");
+                    $"[{spec.Key}/{label}] 46 施法后同格克隆体数 {clones.Count} ≠ 1（同格对象 {cellObjects.Count} 个）");
+            }
+            var cloneObj = clones[0];
+            // **B20 关系契约**：oracle actor-id 是 GUID 派生（非确定），不进 golden；但生成期必须
+            // 断言运行内唯一性/稳定性的一面：clone id 与四个夹具 actor 的固定 id 互不相同。
+            foreach (var other in new[] { caster.ActorId, target.ActorId, obsIn.ActorId, obsOut.ActorId })
+            {
+                if (cloneObj.ActorId == other)
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 克隆体 ActorId {cloneObj.ActorId} 与夹具 actor 撞 id");
+                }
             }
             var cloneReceivers = new List<object>();
             foreach (var (who, obj) in byWho)
@@ -3677,9 +3688,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
             cloneObs = new
             {
                 name = cloneObj.ChrName,
-                // 本侧克隆体 id（**只作比较器的归一化锚**，不进数值相等比较）。
-                actor_id = cloneObj.ActorId,
-                rel_to_caster = cloneObj.ActorId - caster.ActorId,
+                // **B20**：oracle actor-id 由 `ActorMgr.GetNextIdentity()`（GUID/随机池）分配，
+                // 跨运行非确定 ⇒ **绝对值不入 golden**。关系由比较器按本侧 id 断（同侧一致性），
+                // `clone_ordinal` 是确定性可比的创建序（本场景恒 0）。
+                clone_ordinal = 0,
+                clone_count = clones.Count,
+                actor_id_policy = "oracle_guid_nondeterministic",
                 x = (int)cloneObj.CurrX,
                 y = (int)cloneObj.CurrY,
                 dir = (int)cloneObj.Dir,

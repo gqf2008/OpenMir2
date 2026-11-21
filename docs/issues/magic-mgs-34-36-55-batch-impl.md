@@ -379,9 +379,9 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
 **已登记残差（本卡不修）**
 - Rust 骨架未建模克隆体 `fixed_hide_mode/ob_mode`（golden 记录 true/false 作为零帧根因；AOI 可见性差异另行登记）；
 - golden 的 `Clone.actor_id/rel_to_caster` **不参与相等判据**：`HUtil32.Sequence()` 由 GUID 派生，
-  每次生成都不同（实测 `1682780500` → `1921834330`），只作「可见性 / 负向锚」
-  （`clone_recog_hits` 的 id、以及 `两侧 id 不等` 的结构断言）。重生成 clone golden 会在这两个
-  字段漂移，属预期；**不是漏比**——凡进入判据的 id 类量都必须在规范上稳定，GUID 派生量不具备该性质。
+  每次生成都不同。**B20（2026-11-21）已从 golden 移除这两个绝对值**，改为
+  `actor_id_policy="oracle_guid_nondeterministic"` + `clone_ordinal=0` + 关系断言；
+  详见 `docs/issues/golden-harness-blind-spots.md` 的 B20 节。
 
 ### 6.9 需另立卡：既有 magic golden 与当前生成器的既存漂移（与 MG-55 无关）
 
