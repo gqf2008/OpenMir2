@@ -189,6 +189,14 @@ public static class Program
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
+            // **推挤批（MG-16 抗拒火环 8 / MG-57 气功波 37）**：`MagPushArround`，需要 `VisibleActors`
+            // 回填（`MakeVisible`）。两支 oracle 函数体逐字相同，装置同形。
+            if (name == "firewind") return BehaviorBatch(new MagicSpec { Key = "firewind", MagicId = 8, MagicName = "FireWind", MakeVisible = true });
+            if (name == "energyrepulsor") return BehaviorBatch(new MagicSpec { Key = "energyrepulsor", MagicId = 37, MagicName = "EnergyRepulsor", MakeVisible = true });
+            // **MG-35（21 瞬息移动）**：`MapRandomMove→SpaceMove` 走 `FindMap(HomeMap)` ⇒
+            // `EnableMaps`（env.MapName/ServerIndex）+ `HomeMap="0"`。观测面是 `RM_SPACEMOVE_SHOW2(807)`
+            // 的 `param/tag`（落点），不新增任何观测字段。
+            if (name == "spacemove") return BehaviorBatch(new MagicSpec { Key = "spacemove", MagicId = 21, MagicName = "SpaceMove", EnableMaps = true, HomeMap = "0" });
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
             // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
             // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
@@ -1126,6 +1134,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public string PreSlaveName = "pre-slave";
         /// <summary>临时：为 SINSU 设 MapMgr 可用（env.MapName + ServerIndex），供 RecallSlave→SpaceMove；缺省 false ⇒ 其它 golden 零变化。</summary>
         public bool EnableMaps;
+        /// <summary>
+        /// **卡 magic-push-batch（MG-16/57）**：`MagPushArround` 遍历 `playObject.VisibleActors`
+        /// （`MagicManager.cs:27`），而离线装置不跑 AOI（`SearchViewRange`/`UpdateVisibleGay` 都不调）
+        /// ⇒ 表恒空、循环零次。置 true 时在建对象后对每只目标调 `caster.UpdateVisibleGay(...)`。
+        /// **缺省 false ⇒ 其它 stem 的收件人集合零变化。**
+        /// </summary>
+        public bool MakeVisible;
+        /// <summary>
+        /// **MG-35（21 瞬息移动）**：`PlayObject.HomeMap`（`MapRandomMove→SpaceMove→FindMap(HomeMap)`）。
+        /// 离线 ctor 不跑初始化 ⇒ 缺省 null（不设）；需要时置 "0" 并同时 `EnableMaps = true`。
+        /// </summary>
+        public string HomeMap;
         /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
         /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
         /// </summary>
@@ -1776,6 +1796,60 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             cases,
         };
         var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
+        // **卡 magic-push-batch-impl**：记录这三支的 `SoftVersionDateEx` **生效值**。
+        // 它决定 `11029 SM_SERVERCONFIG` 发不发（`SendServerConfig` 在 `SoftVersionDateEx == 0` 时
+        // 直接 return，`src/M2Server/Player/PlayObject.Base.cs:941-971`）；装置四个对象都设 20240101。
+        // **只对这三支写入**，其它 stem 的 Fixture 一字不改 —— 不加 `MagicSpec` 旋钮，
+        // 避免"缺省写不写"这件事改变既有 stem 的行为面（记录 ≠ 输入）。
+        if (spec.Key == "firewind" || spec.Key == "energyrepulsor" || spec.Key == "spacemove")
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            foreach (var c in node["cases"]!.AsArray())
+            {
+                c!["Fixture"]!["soft_version_date_ex"] = 20240101;
+            }
+            // **MG-35（21）还要记"图身份"**：落点由 `Random(Width-nEgdey-1)+nEgdey` 决定
+            // （`MapRandomMove` 的 `SpaceMoveGetRandXY`），**图的宽高直接决定落点**。
+            // 不记图身份的话，换一张尺寸不同的 `0.map` 就会得到不同 golden 而没人知道为什么。
+            // 与 Rust 驱动**读同一个环境变量**（`MAGICGOLDEN_MAP_DIR`），并由驱动侧核 sha256/size
+            // ⇒ "两侧读的是同一张图"由**同一输入 + 同一校验**保证，不是巧合。
+            if (spec.Key == "spacemove")
+            {
+                var mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
+                var mapPath = Path.Combine(mapDir, "0.map");
+                if (!Directory.Exists(mapDir)) throw new InvalidOperationException("MAP_DIR_MISSING " + mapDir);
+                if (!File.Exists(mapPath)) throw new InvalidOperationException("MAP_FILE_MISSING " + mapPath);
+                var bytesMap = File.ReadAllBytes(mapPath);
+                var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytesMap)).ToLowerInvariant();
+                foreach (var c in node["cases"]!.AsArray())
+                {
+                    c!["Fixture"]!["map_dir"] = mapDir;
+                    c!["Fixture"]!["map_file"] = "0.map";
+                    c!["Fixture"]!["map_file_sha256"] = sha;
+                    c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
+                }
+                // **`634.series` 的时刻输入（卡 magic-push-batch-impl）**：`SM_CHANGEMAP(634).Series`
+                // = `PlayObject.DayBright()`，其输入是 `M2Share.GameTime`（`PlayObject.Base.cs:244-269`：
+                // `1→0`、`3→1`、其它 `→2`；`Envir.Flag.DayLight/boDarkness` 另有覆盖）。
+                // 真机由 `SystemProcessor` 每 50ms 用 `DateTime.Now.Hour` 刷新它；**本装置不跑
+                // SystemProcessor** ⇒ 生效值恒为静态默认 `0` ⇒ `DayBright()==2`（golden 的 634.series）。
+                // 不记这个值的话，Rust 驱动只能读真实本地小时：`hour∈{4,11,15,20,23}` 之外
+                // `game_time_from_hour` 给 0/2 ⇒ `DayBright()` 会变成 0，与本 golden 的 2 不同
+                // （当天 09:xx 实测必红）。记录的是**实际用了的值**，不是重算的意图值。
+                var bright = (long)M2Server.M2Share.GameTime;
+                foreach (var c in node["cases"]!.AsArray())
+                {
+                    // **键名语义**：`map_bright` 存的是 `M2Share.GameTime` 的**原值**（0..3），
+                    // **不是** `DayBright()` 的返回值 —— 0 对应 `DayBright()==2`（1→0、3→1、其它→2）。
+                    // 后来人若"顺手修正"成 `DayBright()` 的结果（当前是 2），Rust 驱动注入 2 后
+                    // 得到 series=2，看似等价，但 device 再改 GameTime 时会与记录值脱钩。
+                    c!["Fixture"]!["map_bright"] = bright;
+                    // 无墙钟来源（固定静态默认）⇒ `-1` 表示"不是真实本地小时"，仅作来源标注。
+                    c!["Fixture"]!["map_bright_hour"] = -1;
+                }
+            }
+            json = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
         var argv = Environment.GetCommandLineArgs();
         var outIdx = Array.IndexOf(argv, "--out");
         if (outIdx > 0 && outIdx + 1 < argv.Length)
@@ -1822,7 +1896,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
         // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 门控：env.MapName/ServerIndex + 预置 slave 的 RecordingMonster 构造 + caster.Dir（均 SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
-        if (spec.EnableMaps) { env.MapName = "0"; env.ServerIndex = M2Server.M2Share.ServerIndex; }
+        if (spec.EnableMaps)
+        {
+            env.MapName = "0";
+            env.ServerIndex = M2Server.M2Share.ServerIndex;
+            // **`Envir.MapFileName`（卡 magic-push-batch-impl）**：oracle `RM_CHANGEMAP` 的尾是
+            // `SendMsg(RM_CHANGEMAP, 0,0,0,0, MapFileName)`（`BaseObject.cs:1134`），生产由
+            // `MapManager.AddMapInfo` 从 `[名|文件]` 取（`GameSrv/Maps/MapManager.cs:66-87`）。
+            // 装置原先不设 ⇒ 尾恒空串，与生产（"0" ⇒ EDCode ``?`）不忠实；Rust 侧按注册表
+            // 给 `map_file_name_of` ⇒ 两侧恒不等。这里按生产口径补齐。
+            env.MapFileName = "0";
+        }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = (byte)spec.CasterLevel;
         bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");
@@ -1836,6 +1920,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         if (spec.CasterDC >= 0) caster.WAbil.DC = (ushort)spec.CasterDC;
         if (spec.CasterAttackMode >= 0) caster.AttatckMode = (OpenMir2.Enums.AttackMode)spec.CasterAttackMode;
         // 卡 36：施法者 Abil 按等级派生（只 RecalcLevelAbilitys，不碰 WAbil）。
+        if (!string.IsNullOrEmpty(spec.HomeMap)) caster.HomeMap = spec.HomeMap;
         if (spec.CasterLoginOrderAbil) caster.RecalcLevelAbilitys();
         if (spec.CasterCharStatusEx != 0) caster.CharStatusEx = spec.CasterCharStatusEx;
         if (spec.CasterHp > 0)
@@ -1993,6 +2078,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                     throw new FixtureContractViolation($"[{spec.Key}] MonsterSpec.TargetCret={ms.TargetCret} 超出 {monsters.Count} 只");
                 }
                 monsters[i].TargetCret = monsters[ms.TargetCret - 1];
+            }
+        }
+
+        // **卡 magic-push-batch（MG-16/57）**：`MagPushArround` 遍历 `playObject.VisibleActors`
+        // （`MagicManager.cs:27`）。离线装置不跑 AOI ⇒ 表恒空 ⇒ 循环零次。这里按 `spec.MakeVisible`
+        // 显式回填（`PlayObject.UpdateVisibleGay`：不存在则 `VisibleActors.Add(VisibleFlag.Show)`）。
+        // **只在 MakeVisible 的 spec 里做** ⇒ 其它 stem 零变化（收件人集合不变）。
+        if (spec.MakeVisible)
+        {
+            caster.UpdateVisibleGay(target);
+            caster.UpdateVisibleGay(obsIn);
+            foreach (var mo in monsters)
+            {
+                caster.UpdateVisibleGay(mo);
             }
         }
 

@@ -1471,6 +1471,13 @@ pub struct SimState {
     pub pending_status_changes: Vec<StatusChangeEvent>,
     /// **23 爆裂火焰的 `RM_MAGSTRUCK` 交付观测**（只记录；每 tick 清空 ⇒ 有界）。
     pub struck_log: Vec<StruckEvent>,
+    /// **8/37 `CharPushed` 的逐格推挤事件观测**（卡 `magic-push-batch-impl`；只记录、追加式、
+    /// 不参与行为，仿 `struck_log`）。
+    ///
+    /// 为什么需要：oracle `CharPushed` 每推进一格立即 `SendRefMsg(RM_PUSH)` ⇒ 对拍台账的
+    /// `Rm` 列要有 `RM_PUSH(8092)` 条目。`cast_firewind_spell` 目前只**返回**事件、由宿主
+    /// 出帧；驱动拿不到"推挤决策"就只能从自己发出的 `SM_BACKSTEP` 反推（自证，不做）。
+    pub push_log: Vec<crate::action::PushEvent>,
     /// **卡 17：召唤（17/30/41）每次施法的 `MonsterTableSpawner::spawn` 调用次数**
     /// （对应 golden `regen_calls`）。**只读观测面，追加式、不参与行为**（仿 `buff_apply_log`）；
     /// 由宿主在 `cast_slave_spell` 之后 push；对拍台账读取。
@@ -1833,6 +1840,7 @@ impl SimState {
             buff_apply_log: Vec::new(),
             pending_status_changes: Vec::new(),
             struck_log: Vec::new(),
+            push_log: Vec::new(),
             slave_cast_regen_calls: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
@@ -5830,6 +5838,23 @@ impl World {
     /// 清空受击观测（宿主每 tick 一次；对拍驱动取用后清一次）。**不改变任何行为**。
     pub fn clear_struck_log(&mut self) {
         self.sim.struck_log.clear();
+    }
+
+    /// **8/37 `CharPushed` 的逐格推挤事件**（**只读**；宿主/驱动取用后清空）。
+    ///
+    /// 与 [`World::struck_log`] 同形：产品路径（`cast_firewind_spell` → `push_now`）追加，
+    /// 对拍驱动在施法后取走并清空；不参与任何行为。
+    #[must_use]
+    pub fn push_log(&self) -> &[crate::action::PushEvent] {
+        &self.sim.push_log
+    }
+
+    /// 清空推挤观测。**不改变任何行为**。
+    ///
+    /// **读后必须清空**：本日志跨 case 累积（追加式、无自动窗口），不清空会把上一支的
+    /// 推挤事件带进下一支台账 ⇒ 假差异。
+    pub fn clear_push_log(&mut self) {
+        self.sim.push_log.clear();
     }
 
     /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。
@@ -11290,7 +11315,11 @@ impl World {
     /// （`src/M2Server/Actor/BaseObject.cs:854-897`）——委托给逐句实现
     /// [`World::char_pushed_core`]（含 `Dir` 复原与 `WalkTick += 800`；帧面在宿主）。
     fn push_now(&mut self, actor_id: i32, n_dir: u8, count: u8) -> Vec<crate::action::PushEvent> {
-        Self::push_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, count)
+        let events = Self::push_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, count);
+        // 只读观测面（卡 `magic-push-batch-impl`）：驱动据此组装 `RM_PUSH(8092)` 台账条目，
+        // 而不是从自己发出的 `SM_BACKSTEP(9)` 反推（自证）。追加式、不影响行为。
+        self.sim.push_log.extend(events.iter().cloned());
+        events
     }
 
     /// **P5-A2**：`Command::Push` 的 facade/段共用实现（`EntityAccess` + `SimState`）。

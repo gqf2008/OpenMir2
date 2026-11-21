@@ -3739,6 +3739,139 @@ mod tests {
             assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
         }
     }
+    /// 脚本化 `RandomSource`：按给定序列返回 `random_below` 的值并记账。
+    /// 其它取数入口一律 panic —— `space_move_get_rand_xy` 只调 `Random(Width)`/`Random(Height)`，
+    /// 实现换成别的入口时必须立刻炸，而不是静默抽到另一条流。
+    struct ScriptedRandom {
+        script: Vec<i32>,
+        args: Vec<i32>,
+    }
+
+    impl ScriptedRandom {
+        fn new(script: &[i32]) -> Self {
+            Self {
+                script: script.to_vec(),
+                args: Vec::new(),
+            }
+        }
+    }
+
+    impl mir2_shared::rng::RandomSource for ScriptedRandom {
+        fn random(&mut self) -> i32 {
+            panic!("space_move_get_rand_xy 不得走 `random()`")
+        }
+        fn random_below(&mut self, value: i32) -> i32 {
+            assert!(
+                !self.script.is_empty(),
+                "脚本抽数耗尽：实现比 oracle 多抽了（Random({value})）"
+            );
+            self.args.push(value);
+            let v = self.script.remove(0);
+            assert!((0..value).contains(&v), "脚本值 {v} 不在 [0,{value})");
+            v
+        }
+        fn random_range(&mut self, _min: i32, _max: i32) -> i32 {
+            panic!("space_move_get_rand_xy 不得走 `random_range()`")
+        }
+        fn next_double(&mut self) -> f64 {
+            panic!("space_move_get_rand_xy 不得走 `next_double()`")
+        }
+    }
+
+    /// **700×700 移位环的分支判据（与 64×64 三条不是重复牙）**：21 的 `0.map` 是 700×700
+    /// ⇒ `n18 = 10`、`n1C = 50`；既有三条只覆盖 64×64（`n18=3, n1C=15`），700×700 这一支
+    /// 此前没有任何用例走到。这里**直接调** `space_move_get_rand_xy`（不经 `map_random_move`
+    /// 的两次初始取数），脚本化抽数，**同时断终点 / 消耗抽数 / `can_walk` 调用数（attempts）**：
+    /// 只断终点会放过「少抽/多抽但终点相同」。
+    ///
+    /// 向量由 oracle `BaseObject.SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs`）独立手推
+    /// + 独立模拟器复算（复核方 openmir2-10 提供），不是从本实现反推。
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn space_move_get_rand_xy_700x700_vectors() {
+        use std::collections::HashSet;
+        let walls =
+            |cells: &[(i32, i32)]| -> HashSet<(i32, i32)> { cells.iter().copied().collect() };
+        // V1/V2 的墙：`x = 121 + 10k`（k=0..53，共 54 格）在起点那一行。
+        let wall_row = |y: i32| -> Vec<(i32, i32)> { (0..54).map(|k| (121 + 10 * k, y)).collect() };
+        let all: HashSet<(i32, i32)> = (0..700)
+            .flat_map(|x| (0..700).map(move |y| (x, y)))
+            .collect();
+        // (名字, 墙集, 起点, 脚本抽, 期望终点, 消耗抽数, `can_walk` 调用数)
+        // `can_walk` 调用数 = 成功支 `attempts+1`；放弃支 `attempts`（第 201 次调用不推进状态）。
+        let cases: [(
+            &str,
+            HashSet<(i32, i32)>,
+            (i32, i32),
+            &[i32],
+            Option<(i32, i32)>,
+            usize,
+            usize,
+        ); 4] = [
+            (
+                "V0 起点即可走",
+                walls(&[]),
+                (121, 353),
+                &[],
+                Some((121, 353)),
+                0,
+                1,
+            ),
+            (
+                "V1 x 段步进到 Width-n1C-1 后抽 Random(700)、y 段只推进",
+                walls(&wall_row(353)),
+                (121, 353),
+                &[37],
+                Some((37, 363)),
+                1,
+                55,
+            ),
+            (
+                "V2 x/y 两段都随机跳点",
+                walls(&wall_row(660)),
+                (121, 660),
+                &[37, 12],
+                Some((37, 12)),
+                2,
+                55,
+            ),
+            (
+                "V3 全图墙 ⇒ 201 轮放弃",
+                all,
+                (121, 353),
+                &[0, 0, 0],
+                None,
+                3,
+                201,
+            ),
+        ];
+        for (name, blocked, start, script, want, want_draws, want_calls) in cases {
+            let mut rng = ScriptedRandom::new(script);
+            let mut calls = 0usize;
+            let got = crate::space_move::space_move_get_rand_xy(
+                &mut rng,
+                700,
+                700,
+                start.0,
+                start.1,
+                |x, y| {
+                    calls += 1;
+                    !blocked.contains(&(x, y))
+                },
+            );
+            assert_eq!(got, want, "[{name}] 终点");
+            assert_eq!(
+                rng.args,
+                vec![700; want_draws],
+                "[{name}] 消耗抽数必须恰为 oracle 的 {want_draws} 抽、且每次都是 Random(700)                  —— 少抽/多抽/换取数入口都要红"
+            );
+            assert_eq!(
+                calls, want_calls,
+                "[{name}] can_walk 调用数（成功支 = attempts+1、放弃支 = attempts）"
+            );
+        }
+    }
+
     // ───────────────────── 武器升级 NPC 判据（C1-C7/C9/C10，简报 §4 + 更正 A1-A9） ─────────────────────
 
     fn upgrade_catalog() -> Vec<StdItem> {
