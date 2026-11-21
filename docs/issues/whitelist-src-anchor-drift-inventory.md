@@ -29,6 +29,7 @@
 - **判据主次调换**：span 为主（配对花括号；嵌套块/本地函数/属性 getter）；距离只在方法外。
 - DB/SQL 过滤：表名/列名/`GetByte("…")` 参数/`表.列` 左半段只在字符串里 ⇒ 不参与。
 - 回归集：`T-294`/`D-13`/`T-148`/`T-53`/`T-266` → 严格命中(dist=0)；`T-29` SQL 列名 → 无相邻符号。
+- **块注释 span 洞（`10` 对抗复核）已修**：`_strip_code_noise` 不剥 `/* … */`，体内注释里的不配对 `{` 会把 span 拉到下一方法（潜在误判命中）。新增 `_strip_lines_noise`（块注释跨行状态机）并改用；`report-selftest` 加**反向牙**：块注释里放 `{` ⇒ `Alpha` 体仍 (2,4)、`Beta` 体内的锚判 `SRC_DECL_DRIFT` 红。实测 buckets 不变（91/366/66/4/1/0），与 `10` 的「31 处含花括号块注释、8 代表文件 span 相等」一致。
 
 ## 1d. T-216 溯源四步（结论：**不是漂移，不移锚**）
 
@@ -39,6 +40,18 @@
 - **收紧前影响 7 条，其中 6 条是普通词误吞**：D-13「不得」、B-15「不可恢复」、T-60「无操作」、T-25「加不进」、T-155「未落值」、T-202「不实现」——收紧（否定词与符号之间不得有字母/数字/**汉字**）后全部恢复配对。
 - **收紧后仅 1 条受影响**：`T-216` 的 `GetLineVariableText`（真否定）。⇒ **否定规则目前只由 1 例支撑**；保留但按「样本=1」记，不作独立结论。
 - 边界测试（`report-selftest`）：「不再重试 `Sym`」**不**触发否定；「**不调** `Sym`」触发。
+
+**6 条被否定规则影响的锚（当前版实查）**：
+
+| 条目 | 相关路径 | 现行分类 | 配对符号 | 备注 |
+| --- | --- | --- | --- | --- |
+| `T-25` | `src/M2Server/Player/PlayObject.Base.cs:55` | **严格命中** | `ClientPickUpItem` | 已恢复 |
+| `D-13` | `src/GameSrv/Npc/GuildOfficial.cs:41` / `src/GameSrv/Npc/Merchant.cs:132` | **严格命中 ×2** | `GuildOfficial.Run` / `Merchant.Run` | 已恢复 |
+| `B-15` | `src/M2Server/Maps/Envirnoment.cs:1362-1369` | **严格命中** | `Envir.SetMapXyFlag` | 已恢复 |
+| `T-60` | `src/M2Server/M2Share.cs:1746` | **严格命中** | `LoadNoClearMonList` | 已恢复 |
+| `T-202` | `src/GameSrv/Word/WorldServer.Switch.cs:94-102` | **严格命中** | `SendSwitchData` | 已恢复 |
+| `T-216` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:4933` | **严格命中**（`ActionOfGmExecute`）/ 另一处无符号（真否定 `GetLineVariableText`） | `ActionOfGmExecute` | 同一路径锚已被体内命中覆盖；否定 token 按规则不配 |
+| `T-155` | `src/M2Server/Monster/Monsters/SuperGuard.cs:55` | **松命中·非声明（INFO）** | `AttackPet` | 该符号是**字段**（`protected bool AttackPet`），第 55 行是 ctor 内赋值 ⇒ 无方法体 span；不判红，但也不是严格命中（字段类判据待 Phase 1+ 扩展） |
 
 ## 1f. Phase 1 的独立性（opc 质询 Q3）
 

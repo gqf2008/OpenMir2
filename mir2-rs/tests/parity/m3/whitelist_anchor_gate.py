@@ -808,6 +808,52 @@ def _strip_code_noise(line):
     return "".join(out)
 
 
+def _strip_lines_noise(lines):
+    """对整份文件做**块注释感知**的行级剥离（`/* ... */` 可跨行；`//`、字符串照旧）。
+
+    2026-11-21（`10` 对抗复核）：此前 `_strip_code_noise` 不剥 `/* */`，块注释里的不配对
+    `{` 会把声明体 span 拉长到下一个方法 ⇒ 把下一方法的锚**误判为命中**（潜在洞）。
+    """
+    out = []
+    in_block = False
+    for raw in lines:
+        i = 0
+        n = len(raw)
+        buf = []
+        in_str = None
+        while i < n:
+            ch = raw[i]
+            if in_block:
+                if ch == "*" and i + 1 < n and raw[i + 1] == "/":
+                    in_block = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if in_str:
+                if ch == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if ch == in_str:
+                    in_str = None
+                i += 1
+                continue
+            if ch in ("\"", "'"):
+                in_str = ch
+                i += 1
+                continue
+            if ch == "/" and i + 1 < n and raw[i + 1] == "*":
+                in_block = True
+                i += 2
+                continue
+            if ch == "/" and i + 1 < n and raw[i + 1] == "/":
+                break
+            buf.append(ch)
+            i += 1
+        out.append("".join(buf))
+    return out
+
+
 def _decl_spans(lines, cands):
     """返回 `[(decl_line, span_end_line)]`：声明行 + 由**配对花括号**得到的体结束行。
 
@@ -815,8 +861,9 @@ def _decl_spans(lines, cands):
     属性 getter（`Sym {` 或 `Sym => …` 前的块）。只认声明形态，不认调用行。
     """
     spans = []
+    stripped = _strip_lines_noise(lines)
     for idx, raw in enumerate(lines, 1):
-        code = _strip_code_noise(raw)
+        code = stripped[idx - 1]
         matched = False
         for c in cands:
             e = re.escape(c)
@@ -832,7 +879,7 @@ def _decl_spans(lines, cands):
         started = False
         end_line = idx
         for j in range(idx - 1, len(lines)):
-            cj = _strip_code_noise(lines[j])
+            cj = stripped[j]
             for ch in cj:
                 if ch == "{":
                     depth += 1
@@ -1038,6 +1085,26 @@ def cmd_report_selftest(argv_args=None):
     st2, en2 = _span_around(row_neg, "src/Demo.cs")
     sym_neg = _pair_symbol_v2(row_neg, st2, en2, "src/Demo.cs", demo, demo.split(chr(10)))
     check("否定正例：『**不调** `Body`』触发否定", sym_neg is None, str(sym_neg))
+    # 块注释 span 洞的反向牙（10 对抗复核）：体内注释里的不配对 `{` 不得把 span 拉进下一方法
+    body3 = [
+        "class Demo {",
+        "    public void Alpha() {",
+        "        /* { */",
+        "    }",
+        "    public void Beta() {",
+        "        int x = 1;",
+        "    }",
+        "}",
+    ]
+    spA = _decl_spans(body3, _candidates("Alpha"))
+    check("块注释 span：Alpha 的体 = 2..4（不被注释里的 { 拉长）", spA and spA[0] == (2, 4), str(spA))
+    check("**反向牙**：Beta 体内的行(6)不属于 Alpha 的 span", not _in_decl_span(spA, 6, 6))
+    td3 = tempfile.mkdtemp(prefix="blockcmt-")
+    os.makedirs(os.path.join(td3, "src"), exist_ok=True)
+    open(os.path.join(td3, "src", "Demo.cs"), "w", encoding="utf-8").write(chr(10).join(body3) + chr(10))
+    wl3 = "| T-3 | x `Alpha`（`src/Demo.cs:6`） |" + chr(10)
+    r3, _i3 = check_src_decl(wl3, td3, _build_basename_index(td3), allowed={"src/Demo.cs"})
+    check("**反向牙**：下一方法里的锚 ⇒ SRC_DECL_DRIFT 红", any(c == "SRC_DECL_DRIFT" for c, _ in r3), str(r3))
     # 集合一致性牙：SRC_DECL_FILES 必须等于 6 道场景门 REGISTERED 的路径并集
     import glob as _g
     union2 = set()
