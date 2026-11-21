@@ -71329,6 +71329,35 @@ SendRefMsgRange=15
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
+        // **推挤批（MG-16/57，`card/magic-push-batch-impl`）**：`MagPushArround` 遍历
+        // `playObject.VisibleActors`（oracle `src/M2Server/Magic/MagicManager.cs:27`），而离线
+        // 装置不跑 AOI ⇒ 表恒空、循环零次；`CharPushed` 逐格还要 `CanWalk`/`MoveToMovingObject`
+        // （`push_now→char_pushed_core` 在 `sim.maps` 缺该 actor 的图时**直接返回空事件**）。
+        // ⇒ 这里补一张全 `Walk` 的网格 + 按 oracle 装置同样的顺序回填可见集。
+        //
+        // **为什么必须同序**：`MagPushArround` 按 `VisibleActors` 的**列表序**遍历
+        // （`src/M2Server/Magic/MagicManager.cs:27` 的 `for i in VisibleActors`），而该列表的填充
+        // 顺序由 `UpdateVisibleGay` 的**调用序**决定（追加式，`UpdateVisibleGay` 只 push 不改序）。
+        // 装置侧 `MagicGolden/Program.cs` 的 `MakeVisible` 分支按 `target → obsIn → 怪物` 调用，
+        // 本 rig 必须逐字同序，否则多目标命中时 `Random(20)`/`Random(2)` 的**消耗序**会错位，
+        // 表现为"帧一样但抽数账本对不上"。
+        if matches!(magic_id, 8 | 37) {
+            rig.world
+                .maps
+                .push(mir2_world_bevy::map::MapGrid::new(200, 200));
+            let mut visible_ids = vec![target, fireball_actor(&rig, "obs_in")];
+            visible_ids.extend(monster_ids.iter().copied());
+            let visible = visible_ids
+                .into_iter()
+                .map(|t| mir2_world_bevy::entity::VisibleBaseObject {
+                    target: t,
+                    flag: mir2_world_bevy::entity::VisibleFlag::Show,
+                })
+                .collect();
+            if let Some(mb) = rig.world.entities.map_binding_mut(caster) {
+                mb.visible_actors = visible;
+            }
+        }
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
@@ -74620,6 +74649,63 @@ SendRefMsgRange=15
         );
     }
 
+    /// **退化守卫**（`docs/issues/degenerate-guard-criterion.md`）：效果帧在 **golden 与台账两侧**
+    /// 都必须 ≥1 条；任一侧为 0 ⇒ 具名红。
+    ///
+    /// 防的是"帧集合看起来对、效果体零次执行"的假绿（`MG-50` 四刀变异全绿 = 循环零次）。
+    /// 两侧都断：golden 侧防夹具退化，台账侧防实现零执行。**不用 `.unwrap()` 取数组**——字段缺失
+    /// 会计数 0 并红在本断言上，而不是 `Option::unwrap` 的裸 panic。
+    fn assert_effect_frames_non_degenerate(stem: &str, label: &str, effect_ident: u16) {
+        let arr = |v: &serde_json::Value, k: &str| -> &[serde_json::Value] {
+            v.get(k)
+                .and_then(|x| x.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[])
+        };
+        let count = |v: &serde_json::Value| -> usize {
+            arr(v, "Receivers")
+                .iter()
+                .flat_map(|r| arr(r, "Sent"))
+                .filter(|m| {
+                    m.get("ident").and_then(|x| x.as_i64()) == Some(i64::from(effect_ident))
+                })
+                .count()
+        };
+        let g = count(&golden_case_for(stem, label));
+        let c = count(&defence_case(stem, label));
+        assert!(
+            g >= 1 && c >= 1,
+            "[{stem}/{label}] 效果帧({effect_ident}) golden={g} 台账={c}，必须各 ≥1 ⇒ 效果体零次执行（退化），禁止升格"
+        );
+    }
+
+    /// **收件人集合逐名相等**（含**零帧**收件人）：台账把它踢出集合即红。
+    ///
+    /// 与 [`per_receiver_frame_seq_matches_golden`] 的分工：后者比"有帧的人"的**帧序列**
+    /// （空表两侧都丢），本函数比"**有谁**"——只比帧序列的话，"`obs_out` 被踢出集合"会静默通过。
+    fn assert_receiver_sets_match_golden(stem: &str, label: &str) {
+        let names = |v: &serde_json::Value| -> Vec<String> {
+            v.get("Receivers")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|r| {
+                            r.get("Who").and_then(|w| w.as_str()).map(str::to_string)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut got = names(&defence_case(stem, label));
+        let mut want = names(&golden_case_for(stem, label));
+        got.sort();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "[{stem}/{label}] 收件人集合必须与金标准逐名相等（零帧收件人也必须在集合里）"
+        );
+    }
+
     /// **毒口径的逐收件人帧比较**（与比较器 `magic_fireball_parity.rs` 的
     /// `frame_order_scope = multi_victim_same_tick` 分支（施毒件）**同口径**）：
     /// - 每接收者 **多重集**（`ident/recog/param/tag/series/tail` + **due 分类**），顺序不计；
@@ -74776,6 +74862,62 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn grouplightening_parity_s13() {
         group_lightening_assert("s13", 13, 3000);
+    }
+
+    /// **`MG-16 / MG-57`（8 抗拒火环 / 37 气功波）**：两支 oracle 函数体逐字相同
+    /// （`MagPushArround`，`src/M2Server/Magic/MagicManager.cs:24-52`；case 在 `:259-264` / `:601-607`）。
+    ///
+    /// 装置侧（Rust）：`fireball_parity_drive` 为 8/37 补一张全 `Walk` 网格 + `caster.visible_actors`
+    /// 回填（与 `MagicGolden` 的 `MakeVisible` 同序）；没有这两样，`MagPushArround` 循环零次、
+    /// `CharPushed` 也推进不了格。
+    ///
+    /// 每支都断言：
+    /// ① **收件人集合逐名相等**（空数组也参与 —— `obs_out` 必须**以零帧存在**，被踢出集合即红）；
+    /// ② 逐收件人 `(ident,param,tag,series)` **有序序列** == 金标准；
+    /// ③ **退化守卫**：`SM_BACKSTEP(9)` 两侧各 ≥1 条。
+    fn push_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
+        assert_receiver_sets_match_golden(stem, label);
+        per_receiver_frame_seq_matches_golden(stem, label);
+        assert_effect_frames_non_degenerate(stem, label, mir2_protocol::messages::SM_BACKSTEP);
+        fireball_case_assert(stem, label);
+        b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s1() {
+        push_assert("firewind", 8, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s5() {
+        push_assert("firewind", 8, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s13() {
+        push_assert("firewind", 8, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s1() {
+        push_assert("energyrepulsor", 37, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s5() {
+        push_assert("energyrepulsor", 37, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s13() {
+        push_assert("energyrepulsor", 37, "s13", 13, 3000);
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。

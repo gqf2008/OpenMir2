@@ -1503,6 +1503,26 @@ fn real_rust_ledger_groupamyounsul() {
     );
 }
 
+/// **`MG-16` 抗拒火环(8)** 真实台账 → 判定面。装置侧前提：驱动为 8/37 补了可走网格 +
+/// `caster.visible_actors` 回填（否则 `MagPushArround` 循环零次）。退化守卫在驱动侧
+/// （`SM_BACKSTEP(9)` 两侧各 ≥1）；本比较器只做台账 ↔ golden 的逐帧比对。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::firewind_parity_s*）生成真实台账"]
+fn real_rust_ledger_firewind() {
+    real_ledger_verify_labels("firewind", &golden_file("firewind.json"), &["s1", "s5", "s13"]);
+}
+
+/// **`MG-57` 气功波(37)**：与 8 在 oracle 里函数体逐字相同（同 `MagPushArround`）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::energyrepulsor_parity_s*）生成真实台账"]
+fn real_rust_ledger_energyrepulsor() {
+    real_ledger_verify_labels(
+        "energyrepulsor",
+        &golden_file("energyrepulsor.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
 /// **`17 骷髅`（`SKILL_SKELLETON`）**真实台账 → 判定面（两例 summon_ok / cap_hit，卡 17）。
 ///
 /// 对拍范围（卡 17 SCOPE）：`Skeleton` block（`regen_calls` / `slave_count_before/after` /
