@@ -1582,17 +1582,25 @@
         "line": 589,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_clone46",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/clone46.json（C# MagicGolden `--case clone` 生成；单支 clone(seed 46)；Rng 6 抽=[1136,629,2764,1129,974376,2]，drain cap=false；Clone.actor_id 为 GUID 派生、只作可见性锚）",
+        "cases": [
+          "clone(seed 46)"
+        ],
+        "unit_tests": [
+          "tests::clone46_parity_clone",
+          "real_rust_ledger_clone46",
+          "tests::spell_cmd_clone_wires_entity_and_frames"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；2026-11-21 升格。批 `card/mg55-clone`（MG-34/36/55 实现批卡的 55 段，docs/issues/magic-mgs-34-36-55-batch-impl.md §1/§6）。两处产品修正：① `spawn_clone` 补 oracle ctor 链 5 抽（BaseObject R(1500)/R(2000) + AnimalObject R(3000)×2 + PlayObject RandomNo R(999999)，seed=46 值 1136/629/2764/1129/974376）；② 46 支出生不广播 turn_pair（oracle FixedHideMode 自投递 ⇒ 零帧）。golden 为新增件，未改既有 golden（合并核 `--name-status` 仅 `A clone46.json`）。",
+      "basis": "semantic",
+      "scope": "46 分身术 `MagMakeClone`（`MagicManager.cs:1337-1341`）→ `PlayCloneObject` ctor。**判据面**：① 克隆体静态字段（name/`(100,100)`/dir/gender/hair；`dir == (caster_dir+4)%8`，golden caster_dir=2 → dir=6）；② 帧集合：caster `[638,640]`、target/obs_in `[17,638]`、obs_out 零；**出生帧负向：任何收件人不得有 SM_TURN(10)/SM_FEATURECHANGED(41)**（oracle `PlayObject.cs:993` `FixedHideMode=true` → `BaseObject.Message.cs:390-394` 自投递）；③ RNG 恰 6 抽 = ctor 5 抽（`[1500,2000,3000,3000,999999]`，seed=46 值 `1136/629/2764/1129/974376`）+ 训练尾 `Random(3)+1=2`，且训练值 == TranPoint 增量−1；④ `SpellReturn == has_640`、drain cap=false。**牙（现场重放）**：A 删第 5 抽 ⇒ 驱动 `[clone46/clone] 应恰 6 抽（克隆体 ctor 5 + 训练尾 1）；实得 [1136, 629, 2764, 1129, 2]`、比较器 `[clone] RNG 行数不等：golden=6 rust=5`；B 恢复 turn_pair 广播 ⇒ 驱动 `caster 帧序应为 [638,640]（出生零帧） left: [10,41,638,640] right: [638,640]`、比较器 `台账不应有帧的 recog == Clone.actor_id(1005)（产品不得广播 turn_pair；实得 12 帧）`。**无牙（理由）**：Gender/Hair 的「克隆体复制」只有静态字段面（`Clone.gender/hair` 与 `caster_*` 同源）——原计划用 41 帧 feature 作牙，但 oracle 出生零帧后该帧不存在；本轮未重放该变异；**若将来 AOI 建模后该帧出现，此牙可补**。**门集合**：`tests::clone46_parity_clone` 与 `real_rust_ledger_clone46` 均在 `-Mode Both`；`tests::spell_cmd_clone_wires_entity_and_frames` **不在门集合**，实跑 1 passed / 0 failed（2026-11-21，合并树）。**未验 / 不入比对**：① 生产 AOI/视野（Rust 骨架未建模克隆体 `fixed_hide_mode` 状态，实体仍 false）；② `Clone.actor_id/rel_to_caster` GUID 派生、每次生成不同，不参与相等判据（只作负向锚）；③ 克隆体逐 tick 生命期/后续 turn 未验。"
     },
     {
       "id": "MG-56",
