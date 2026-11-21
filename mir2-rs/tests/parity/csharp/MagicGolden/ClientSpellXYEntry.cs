@@ -125,6 +125,7 @@ public static class ClientSpellXYEntry
     /// <summary>分派入口（`Program.cs` 的 `--case warrskill` 一行调用这里）。读 `--out-dir`。</summary>
     public static int Run()
     {
+        ClockSeam.Begin(1000000);
         var argv = Environment.GetCommandLineArgs();
         string outDir = null;
         int idx = Array.IndexOf(argv, "--out-dir");
@@ -416,7 +417,7 @@ public static class ClientSpellXYEntry
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
         int drainPasses = 0;
         bool drainPassesHitCap = false;
-        Thread.Sleep(WaitMs);
+        ClockSeam.Advance(WaitMs);
         for (int pass = 0; pass < MaxDrainPasses; pass++)
         {
             bool drainedAny = false;
