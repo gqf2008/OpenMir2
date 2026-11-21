@@ -71495,6 +71495,18 @@ SendRefMsgRange=15
                 rig.world.maps.len() - 1
             );
             rig.registry = Some(registry);
+            // **21 支特有的装置前提**（与 `TeleportRig` 同路）：`SpaceMove → switch_map_space →
+            // sessions.get(chr_name)` 要求 caster 在 `world.sessions` 里 `InWorld`、已绑 `actor_id`、
+            // 且 **`sess.map_id` 必须等于实体实际所在图**（`switch_map_inner` 会先
+            // `remove_from_map(actor_id, old_map)`）。生产由 `lib.rs:30844 open_session` +
+            // `:30863 enter_map_at` 完成；rig 只 `add_entity`、不注册 ⇒ 手工做同样几步。
+            let caster_map = rig.world.entities.get(caster).map_or(0, |e| e.map_id);
+            rig.world.open_session("caster");
+            if let Some(sess) = rig.world.sessions.get_mut("caster") {
+                sess.map_id = caster_map;
+                sess.actor_id = Some(caster);
+                sess.stage = mir2_world_bevy::WorldStage::InWorld;
+            }
             if let Some(sv) = rig.saves.get_mut("caster") {
                 sv.record.data.home_map = Some("0".to_string());
             }
