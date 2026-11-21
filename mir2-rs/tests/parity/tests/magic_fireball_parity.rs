@@ -42,6 +42,14 @@ pub const SITE_ALLOWLIST: &[(&str, &str)] = &[
         "GetAttackPower 的随机区间",
     ),
     (
+        "crates/world-bevy/src/merchant.rs",
+        "`MapRandomMove` 的两次初始取数（`BaseObject.cs:1214-1237`；21 的 `MagSaceMove` 入口）",
+    ),
+    (
+        "crates/world-bevy/src/space_move.rs",
+        "`SpaceMoveGetRandXY` 的移位环取数（`BaseObject.cs:1040-1096`；21 落点不可走时进环，700×700 真图上可达）",
+    ),
+    (
         "bins/game-svr/src/lib.rs",
         "宿主侧施法接线（帧参数/训练尾）",
     ),
@@ -330,6 +338,17 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 }
             } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
+                // **`640`（`SM_MAGIC_LVEXP`）的 `due_ms_rel` 只取批次类**：它是
+                // `DeliveryTime − t0`，由 oracle 的 `Environment.TickCount`（15.6ms 粒度）决定
+                // ⇒ 同一次生成会在 1000/1016 间抖动；行为判据是「施法批 0 vs 交付批 >0」，
+                // 具体毫秒另按 |Δ|≤32ms 判（下方，与施毒件同口径）。
+                let due_key = |v: &Value| -> i64 {
+                    if num(v, "ident") == 640 {
+                        0
+                    } else {
+                        num(v, "due_ms_rel")
+                    }
+                };
                 let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
@@ -337,7 +356,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
-                        num(v, "due_ms_rel"),
+                        due_key(v),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -364,6 +383,17 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             } else {
                 for (i, (g, r)) in ga.iter().zip(ra.iter()).enumerate() {
                     for &f in &sent_fields {
+                        // **`640` 的 `due_ms_rel` 按 |Δ|≤32ms 判**（TickCount 15.6ms 粒度；
+                        // 行为判据是批次类，见上方 `multi_victim` 注释与施毒件同口径）。
+                        if f == "due_ms_rel" && num(g, "ident") == 640 {
+                            let (a, b) = (num(g, f), num(r, f));
+                            if (a - b).abs() > 32 {
+                                errs.push(format!(
+                                    "[{label}/{who}] Sent[{i}].due_ms_rel 超出 TickCount 容差（|Δ|≤32ms）：golden={a} rust={b}"
+                                ));
+                            }
+                            continue;
+                        }
                         if num(g, f) != num(r, f) {
                             errs.push(format!(
                                 "[{label}/{who}] Sent[{i}].{f} 不等：golden={} rust={}",
