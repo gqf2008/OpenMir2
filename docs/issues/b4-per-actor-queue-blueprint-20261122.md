@@ -222,3 +222,33 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 - **656(b) 攻击方名色**：**sender=攻击方**，但入队/触发在**受击者 Run** —— 两栏都要写，别只写一个。
 - **100 是 RM_POISON 的自投递、即时、self**，**不参与 struck turn 批次**；不许与 31/53/656 混批按「受击者 turn」延迟。
 - **本表是后续 656/31/53/100 扩面实现的判据；实现与表不符时，以本表为准。**
+
+### §12.3 tick 序契约（2026-11-21，扩面暴露的设计缺口）
+
+> **先给第一句前提**（将来任何人重做扩面都先看这条）：**装置没有 per-recipient 队列延迟模型**（见 12.3.b）——所以装置 golden 对 31/53/100/656 的 `due` 不是权威。本节记录「tick 序」契约口径、装置模型边界、本批判定，以及 order 契约为何没落地。
+
+#### 12.3.a tick 序契约（只写已核实）
+
+- **已核实**：装置 `byWho` 恒为 **4 个具名 actor**：`caster → target → obs_in → obs_out`（`MagicGolden` 的 `byWho`，两处定义一致）。这是 rig 侧 `order` 的唯一确定来源。
+- **怪物 / 其它 actor 的 per-tick 序位 = `OPEN：怪物 tick 序未验证`**：
+  - 装置怪物是 `MonsterSpec` / `RecordingMonster`「被动、不 Operate」⇒ 不占 turn、不出帧；
+  - Rust pump 的 turn 集 = `SelfDelayQueue::actor_ids()`（仅**有自延迟消息**的 actor），没有「全 actor 序」枚举；
+  - 生产 `sim_loop` 走 `world.tick()`（bevy ECS），实体迭代序 = archetype/table 序，**非契约**（`AGENTS.project.md` §4.2.2 明禁把迭代序当契约）。
+  - **影响面**：含 `MonsterSpec` 且「跨 actor 31/656/657 依赖怪物序」的 stem（`turnundead` / `skeleton` / `angel` / `sinsu` / `fireball-on-monster` / 以及任何带 `MonsterSpec` 的支）——这些要么不判怪物序，要么须先在 rig 里建立「全 Run 序」才能判。
+- 生产 `sim_loop` 的 actor 枚举「须遵守同一契约」，但**当前未接线**（胶水批）+ **怪物序 OPEN**；**不得读成已成立**。
+
+#### 12.3.b 装置模型边界（重做扩面时的第一句前提）
+
+- **装置没有 per-recipient 队列延迟模型**：其 SM `due` 记的是**生产/直发时刻**（`Operate` 执行那一步），**不是**「该收件人下一 Run 才见」的延迟时刻。
+- **657 能对上只是间接**：装置在 800/900 步处理 `RM_CHARSTATUSCHANGED` 的时刻恰好对齐 per-viewer 结果。
+- **31 / 53 / 100 / 656 对不上**：装置 golden 对这些帧的 `due` **不是权威**。要判这些帧，需二选一：**装置补 per-recipient 模型**，或**真机 oracle 证据**。
+
+#### 12.3.c 本批判定
+
+- **只保留 657 pilot**（已入 master）。
+- **扩面撤出**：656/31/53/100 的扩面实现与判据另立 `docs/issues/b4-expand-player-events.md`（已入 master，以该卡为准）。**本批 golden 零改动。**
+
+#### 12.3.d 「order 契约」为何没进本批
+
+- order（「本 tick 全部被 Run 的 actor 序」）契约**在本批未落地**——它在 `B3Rig` 单测上**非中性**：试验时 **4 条 `spell_p3b3_16_*` / `spell_p3b3_28_*`** 因**怪物 producer** 触发元断言 panic（`producer 不在 tick 序契约中：4`）。
+- 这正是 12.3.a「怪物序 OPEN」在单测上的体现：order 契约一旦强制，不在 4-actor 序里的怪物 producer 就 panic。故 **order 契约未落地，不得读成已成立**；其落地依赖先解决「怪物 tick 序」（12.3.a OPEN + `b4-expand-player-events`）。
