@@ -13525,6 +13525,33 @@ impl SpellFrameBuf {
         self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
     }
 
+    /// [`Self::push_broadcast_cached`] 的**显式坐标**版：收件人按 `(map_id, x, y)` 算
+    /// （`ref_msg_cache::targets_at`），对应 [`broadcast_ref_msg_with_self_at`] 的缓冲版。
+    ///
+    /// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
+    /// 收件人按**该步**的 `CurrX/CurrY` 计算，不是整段推挤后的最终坐标。
+    #[allow(clippy::too_many_arguments)]
+    fn push_broadcast_cached_at(
+        &mut self,
+        world: &mir2_world_bevy::World,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        include_self: bool,
+        at: (usize, i32, i32),
+        priority: u8,
+        body: &[u8],
+    ) {
+        let targets = ref_msg_cache::targets_at(
+            world,
+            actor_id,
+            at.0,
+            at.1,
+            at.2,
+            chat::send_ref_msg_range(),
+        );
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
+    }
+
     /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
     fn push_actor(&mut self, online: &OnlineRegistry, actor_id: i32, priority: u8, body: Vec<u8>) {
         if let Some(t) = online.iter().find(|e| e.actor_id == actor_id) {
@@ -13663,6 +13690,35 @@ mod spell_frame_buf_tests {
             "A 的两条按 A 自己的堆序（2 条等优先级 = 入队序）"
         );
         assert_eq!(b, vec![1, 3], "B 的两条按 B 自己的堆序（混堆会得 [3,1]）");
+    }
+
+    /// **承重语义：caster 队列里没有 `RM_SPELL(17)`**（oracle `PlayObject.Message.cs:1455` 的
+    /// `if (processMsg.ActorId != ActorId)` ⇒ caster **根本不入队**，不是「入队后在处理器里跳过」）。
+    ///
+    /// 同一组 8/37 帧（两条 `RM_PUSH(9)`=156 + 一条 `RM_MAGICFIRE(638)`=136，`638` 最后入队）：
+    /// - 不含 17 ⇒ 出队 `[638, 9(第一格), 9(第二格)]`（golden `firewind/s13` caster 侧）；
+    /// - 多一条 17(24) ⇒ 四叉堆布局改变 ⇒ `[17, 638, 9(第二格), 9(第一格)]`（与 golden 相反）。
+    ///
+    /// 若把 `RM_SPELL` 的缓冲投递改成 `include_self=true`，效果臂的行为用例
+    /// `spell_cmd_firewind_enters_effect_draws_and_pushes` 的 caster 侧断言必红。
+    #[test]
+    fn caster_queue_without_rm_spell_keeps_push_order() {
+        for (with_spell, want) in [
+            (false, vec![1u8, 2, 3]),   // 638, 9(第一格), 9(第二格)
+            (true, vec![0u8, 1, 3, 2]), // 17, 638, 9(第二格), 9(第一格)
+        ] {
+            let (online, gates, mut rx) = rig();
+            let mut buf = SpellFrameBuf::new();
+            if with_spell {
+                buf.push_socket(911, 24, vec![0]); // `RM_SPELL(10008)` 的 (byte)ident
+            }
+            buf.push_socket(911, 156, vec![2]); // `RM_PUSH(8092)` 第一格
+            buf.push_socket(911, 156, vec![3]); // `RM_PUSH(8092)` 第二格
+            buf.push_socket(911, 136, vec![1]); // 共享尾 `RM_MAGICFIRE(10120)`（最后入队）
+            buf.flush(&online, &gates);
+            let got: Vec<u8> = drain(&mut rx).into_iter().map(|(_, b)| b[0]).collect();
+            assert_eq!(got, want, "with_spell={with_spell}");
+        }
     }
 }
 
@@ -14514,6 +14570,13 @@ fn handle_spell_cmd_with_magic(
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
     // 那会在 `:159` 直接 NPE ⇒ 现实中不可达）⇒ 降级为**不发帧**并记日志（保守方向，非 fail-open）。
+    // **8/37/21 的 per-recipient 队列缓冲（卡 magic-push-batch-impl）**：oracle 的
+    // `MsgQueue` 是**四叉最小堆**（`BaseObject.Message.cs:181`），先入的 `RM_SPELL(17)`
+    // 会改变后续同优先级帧的出队序——golden `firewind/s13` 的 target 侧
+    // `[17, 638, 9(103), 9(102)]` 与 caster 侧（不收 17）`[638, 9(102), 9(103)]`
+    // **是两种不同结果**。故 17 必须与效果体帧进**同一个**收件人队列：本缓冲在
+    // `:159` 处建、在效果体臂末尾 flush。其它魔号仍直发（`None`）。
+    let mut push_batch_buf: Option<SpellFrameBuf> = None;
     if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
         // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
         // **命中判定 = [`queryuser::cetin_near_xy`]**（见 [`spell_snap_target`]：逐格扫**本方图**
@@ -14538,7 +14601,21 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         req.magic_id,
                     );
-                    broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                    if matches!(
+                        req.magic_id,
+                        mir2_world_bevy::magic::SKILL_FIREWIND
+                            | mir2_world_bevy::magic::SKILL_ENERGYREPULSOR
+                            | mir2_world_bevy::magic::SKILL_SPACEMOVE
+                    ) {
+                        // `RM_SPELL(10008)` 的 `(byte)ident = 24`（最低）。入缓冲后由效果体臂
+                        // 末尾按每个收件人的四叉堆出队序统一 flush（见该臂的 RM 优先级注）。
+                        const P_SPELL: u8 = (mir2_protocol::messages::RM_SPELL & 0xFF) as u8;
+                        let mut buf = SpellFrameBuf::new();
+                        buf.push_broadcast_cached(world, online, actor_id, false, P_SPELL, &rm);
+                        push_batch_buf = Some(buf);
+                    } else {
+                        broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                    }
                     // **版本/魔号门**（`MagicManager.cs:167`，B1；设计件
                     // `tests/parity/m3/design-login-notice-and-clienttick-20261017.md` §3.2）：
                     // ```text
@@ -14578,6 +14655,11 @@ fn handle_spell_cmd_with_magic(
                             &mut deferred_health,
                             chat::send_ref_msg_range(),
                         );
+                        // 8/37/21：缓冲里的 `RM_SPELL(17)` 必须**先于** 639 发出
+                        // （oracle 队列里 17 的 ident=24 < 639 的 137，出队序即此）。
+                        if let Some(buf) = push_batch_buf.take() {
+                            buf.flush(online, gates);
+                        }
                         let fail = smframe_ext::sm_magicfire_fail(actor_id);
                         broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
                         send_good_tick(online, gates, chr_name);
@@ -15034,6 +15116,34 @@ fn handle_spell_cmd_with_magic(
                 };
                 let magic_level = matched.as_ref().map_or(0, |m| m.level);
                 // `boSpellFire`：8 保持 `true`（共享尾发帧）；21 在 case 内发帧后置 `false`。
+                // **oracle 的收件人队列是 `MsgQueue.Enqueue(msg, (byte)wIdent)` 优先队列**
+                // （`src/M2Server/Actor/BaseObject.Message.cs:181`）⇒ 同一收件人的 `638`/`9`（8/37）
+                // 或 `806`/`638`（21）按 `(byte)RM ident` 出队，**不等于**调用序。本支把两条都收进
+                // [`SpellFrameBuf`]（flush 时按每个收件人的 .NET 四叉堆出队序），末尾 flush。
+                // **排序键必须是 RM 的 `(byte)ident`，不是 SM 号**：SM 号会得到相反序
+                // （`638&0xFF=126` > `9&0xFF=9`，而 `RM_MAGICFIRE(10120)=136` < `RM_PUSH(8092)=156`；
+                // 21 同理 `RM_SPACEMOVE_FIRE2(8042)=106` < `RM_MAGICFIRE=136`）。
+                const P_MAGICFIRE: u8 = (mir2_protocol::messages::RM_MAGICFIRE & 0xFF) as u8;
+                const P_PUSH: u8 = (mir2_protocol::messages::RM_PUSH & 0xFF) as u8;
+                const P_SPACEMOVE_FIRE2: u8 =
+                    (mir2_protocol::messages::RM_SPACEMOVE_FIRE2 & 0xFF) as u8;
+                // 17 已在上方 `:159` 处进了同一个缓冲（`push_batch_buf`）；无 17 的路径
+                // （如魔号未学 ⇒ `default_arm=false`）按空缓冲起。
+                //
+                // **跨层承重（勿改成静默）**：缓冲在上层距离门内建、这里取；两侧输入目前同源。
+                // 将来中间块若改动 snap/门输入，取不到 17 ⇒ 队列少一条 prio-24 ⇒ 出队序静默变化。
+                // 故取不到时记 WRN（不 panic：`matched == None` 的合法路径本就无 17）。
+                let mut spell_buf = match push_batch_buf.take() {
+                    Some(buf) => buf,
+                    None => {
+                        glog!(
+                            "WRN",
+                            "CM_SPELL：魔号 {} 的施法缓冲缺 RM_SPELL(17)（上层 default/战士/距离门未过）                             ⇒ 本支按无 17 的收件人队列发；若两处输入本应同源，这是一条真缺陷",
+                            req.magic_id
+                        );
+                        SpellFrameBuf::new()
+                    }
+                };
                 let mut bo_spell_fire = true;
                 let bo_train: bool;
                 if req.magic_id == mir2_world_bevy::magic::SKILL_SPACEMOVE {
@@ -15047,7 +15157,14 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    spell_buf.push_broadcast_cached(
+                        world,
+                        online,
+                        actor_id,
+                        true,
+                        P_MAGICFIRE,
+                        &body,
+                    );
                     bo_spell_fire = false;
                     // `MapRandomMove(playObject.HomeMap, 1)`：`HomeMap` 是存档 `CharacterData.HomeMap`，
                     // 经注册表解析成 `map_id`（`None` = oracle `FindMap == null`）。
@@ -15073,7 +15190,16 @@ fn handle_spell_cmd_with_magic(
                                 mir2_protocol::messages::SM_SPACEMOVE_HIDE2,
                                 actor_id,
                             );
-                            broadcast_ref_msg_with_self(w, online, gates, actor_id, &[body]);
+                            // `RM_SPACEMOVE_FIRE2(8042)` 的 `(byte)ident=106` < `RM_MAGICFIRE=136`
+                            // ⇒ 同一收件人的队列出队序是 `806` 先于 `638`（golden 实测）。
+                            spell_buf.push_broadcast_cached(
+                                w,
+                                online,
+                                actor_id,
+                                true,
+                                P_SPACEMOVE_FIRE2,
+                                &body,
+                            );
                         },
                     );
                     // oracle `MagSaceMove` 的返回值 = `Random(11)` 门是否通过（与落地无关）。
@@ -15106,13 +15232,16 @@ fn handle_spell_cmd_with_magic(
                             // oracle `CharPushed` **每推进一格**立即 `SendRefMsg(RM_PUSH)` ⇒ 收件人
                             // 按该步坐标（`ev.x/ev.y`）算，而不是整段推挤后的最终坐标。
                             let map_id = world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
-                            broadcast_ref_msg_with_self_at(
+                            // `RM_PUSH(8092)` 的 `(byte)ident=156` > `RM_MAGICFIRE=136`
+                            // ⇒ 同一收件人的队列出队序是 `638` 先于逐格 `9`（golden 实测）。
+                            spell_buf.push_broadcast_cached_at(
                                 world,
                                 online,
-                                gates,
                                 ev.actor_id,
+                                true,
                                 (map_id, ev.x, ev.y),
-                                &[body],
+                                P_PUSH,
+                                &body,
                             );
                         }
                         // `CharPushed` 收尾把 `Dir` 置为 `nBackDir`（推进 > 0）=> 展示表同步。
@@ -15158,6 +15287,10 @@ fn handle_spell_cmd_with_magic(
                     rcd.tran_point = train.tran_point;
                 }
                 // `:648-658` `boSpellFire => RM_MAGICFIRE`（8 的帧；21 已在 case 内发过、门为 false）。
+                // **入队序承重（勿提前）**：oracle 共享尾（`MagicManager.cs:644-658`）在
+                // `switch`（含 `CharPushed` 的逐格 `RM_PUSH`）**之后**才 `SendRefMsg(RM_MAGICFIRE)`
+                // ⇒ 638 **最后入队**。把它提前到推挤前会改变收件人队列的堆形：caster 侧从
+                // `[638, 9(102), 9(103)]` 变成 `[638, 9(103), 9(102)]`（golden s13 是前者）⇒ 必红。
                 if tail.magic_fire {
                     let body = smframe::sm_magicfire(
                         actor_id,
@@ -15167,7 +15300,14 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    spell_buf.push_broadcast_cached(
+                        world,
+                        online,
+                        actor_id,
+                        true,
+                        P_MAGICFIRE,
+                        &body,
+                    );
                 }
                 // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`：oracle 是 `SendSelfDelayMsg(…, 1000)`
                 // （升级支 `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
@@ -15181,6 +15321,8 @@ fn handle_spell_cmd_with_magic(
                         tail.train.level_up,
                     );
                 }
+                // 本支全部即时帧按每个收件人的 `MsgQueue` 四叉堆出队序发出（见上方 RM 优先级注）。
+                spell_buf.flush(online, gates);
                 let _ = tail.returned;
             }
         } else {
@@ -69301,6 +69443,123 @@ SendRefMsgRange=15
     /// 帧面片的共用夹具：施法者 `caster`(10,10)/socket 911、若干观察者（名, x, y, Ghost, socket）、
     /// 存档里学会的魔号、魔法模板表（逐 `(魔号, Effect)`），以及 `ArmRingl` 槽里的护身符
     /// （`dura = 600` ⇒ `Round(600/100) = 6`，满足 `CheckAmulet` 三档需求 1/5/2）。
+    /// **MG-35（21 瞬息移动）驱动的 rig 输入**：真图（`MAGICGOLDEN_MAP_DIR`）+ 真 `MapRegistry`。
+    ///
+    /// **与旧先例的差异（勿复用）**：`cast_slave` 为 `name_of(map_id)` 写过 200×200 全 0 的临时图，
+    /// 那是"只给 name↔id"用的、可走性仍用 World 图。本支**不能**沿用那个口径：
+    /// `SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040`）是带 `CanWalk` 的**移位环**，
+    /// 不可走会继续抽 `Random(Width)`/`Random(Height)`（至多 201 轮，超限则整段换图不发生）。
+    /// 用全 `Walk` 合成图会让移位环**零轮** ⇒ 系统性少抽 RNG（"帧对、抽数错"的典型假对拍）。
+    ///
+    /// 三档具名 panic（不静默）：`MAP_DIR_MISSING` / `MAP_FILE_MISSING` / `MAP_SIZE_MISMATCH`。
+    fn spacemove_rig_inputs(
+        stem: &str,
+        label: &str,
+    ) -> (mir2_world_bevy::map::MapGrid, mir2_envir::MapRegistry) {
+        let dir = std::env::var("MAGICGOLDEN_MAP_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Map"));
+        assert!(
+            dir.is_dir(),
+            "[{stem}/{label}] MAP_DIR_MISSING 地图目录不存在: {}",
+            dir.display()
+        );
+        let path = dir.join("0.map");
+        assert!(
+            path.is_file(),
+            "[{stem}/{label}] MAP_FILE_MISSING 地图目录里没有 0.map: {}",
+            path.display()
+        );
+        // 图身份：golden 的 `Fixture.map_file_size`（缺键同样 panic —— 不能落成 0 静默通过）
+        let g = golden_case_for(stem, label);
+        let want_size = g["Fixture"]["map_file_size"].as_i64().unwrap_or_else(|| {
+            panic!("[{stem}/{label}] golden 缺 Fixture.map_file_size，先重出 golden")
+        });
+        let got_size = std::fs::metadata(&path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(-1);
+        assert_eq!(
+            got_size,
+            want_size,
+            "[{stem}/{label}] MAP_SIZE_MISMATCH golden={want_size} 磁盘={got_size}（{}）",
+            path.display()
+        );
+        // 光比 size 抓不到"同尺寸换了一张图" ⇒ 必须比内容摘要。
+        let want_sha = g["Fixture"]["map_file_sha256"].as_str().unwrap_or_else(|| {
+            panic!("[{stem}/{label}] golden 缺 Fixture.map_file_sha256，先重出 golden")
+        });
+        let bytes_map = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("[{stem}/{label}] 读 0.map 失败: {e}（{}）", path.display())
+        });
+        use sha2::Digest;
+        let got_sha = format!("{:x}", sha2::Sha256::digest(&bytes_map));
+        assert_eq!(
+            got_sha,
+            want_sha,
+            "[{stem}/{label}] MAP_SHA_MISMATCH golden={want_sha} 磁盘={got_sha}（{}）",
+            path.display()
+        );
+        let loader = mir2_envir::MapLoader::new(&dir, "", "");
+        let mf = loader
+            .load("0")
+            .unwrap_or_else(|e| panic!("[{stem}/{label}] 0.map 解析失败: {e:?}"));
+        let mut grid = mir2_world_bevy::map::MapGrid::new(mf.width, mf.height);
+        let written = game_svr::mapwire::apply_map_file_cells(&mf, &mut grid);
+        let expect = (mf.width as usize) * (mf.height as usize);
+        assert_eq!(
+            written, expect,
+            "[{stem}/{label}] 格属性写入数 {written} != 期望 {expect}（尺寸不符会 fail-closed）"
+        );
+        // 直方图交叉核：写入数相等但属性错位（行列转置）只有这里抓得到
+        assert_eq!(
+            grid.walk_count(),
+            mf.walk_count(),
+            "[{stem}/{label}] 可走格直方图不一致（grid={} file={}）",
+            grid.walk_count(),
+            mf.walk_count()
+        );
+        // 只比 walk 抓不到"高墙↔低墙互换"（写入数同、walk 数也同）⇒ 另两档也核。
+        assert_eq!(
+            grid.high_wall_count(),
+            mf.high_count(),
+            "[{stem}/{label}] 高墙直方图不一致（grid={} file={}）",
+            grid.high_wall_count(),
+            mf.high_count()
+        );
+        assert_eq!(
+            grid.low_wall_count(),
+            mf.low_count(),
+            "[{stem}/{label}] 低墙直方图不一致（grid={} file={}）",
+            grid.low_wall_count(),
+            mf.low_count()
+        );
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(&dir, "", ""),
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                // **`desc` 为什么是空串，以及为什么空串是对的**（三条一起看）：
+                // ① `54 SM_MAPDESCRIPTION` 的尾串取 `Envir.MapDesc`（`src/M2Server/Player/PlayObject.Base.cs:894`）；
+                // ② C# 装置只调 `env.LoadMapData("0.map")`，**不读 MapInfo.txt**
+                //    （且部署的 `MapInfo.txt` 在 `M2GameSvr/Envir/` 而不是 Map 目录，装置根本没看到它）；
+                // ③ 实测 golden 的 `54`/`766` 两条 `tail` 都是 `''` ⇒ 与"装置没读 MapInfo"一致。
+                // ⇒ 这里填 `""` 是**与 golden 同源**，不是"漏读配置"；将来若装置开始读 MapInfo，
+                //    本处要同步改成同一个来源，否则 54 的尾串会与 golden 比不过。
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::mapinfo::MapInfoFlag::default(),
+            }],
+        );
+        // **注册表自检**：`HomeMap="0"` 靠 `registry.id_of("0")` 解析；查不到就会静默"不移动"
+        // ⇒ 在这里就红，并打出注册项名字，省掉"跑完没动再回头查"的一轮。
+        assert_eq!(
+            registry.id_of("0"),
+            Some(0),
+            "[{stem}/{label}] MapRegistry 里查不到 map_name=\"0\"（注册项 = [\"0\"]）⇒ HomeMap 解析 None，本支会退化"
+        );
+        (grid, registry)
+    }
+
     struct SpellFrameRig {
         world: mir2_world_bevy::World,
         caster: i32,
@@ -69317,6 +69576,10 @@ SendRefMsgRange=15
         elec_blizzard_range: i32,
         /// 护身符 `StdItem.Shape`（施毒 6/48 走 `CheckAmulet(1,2)`，要求 ≤2；缺省 5 = nType=1 组）。
         amulet_shape: u8,
+        /// **MG-35（21 瞬息移动）**：驱动可注入的真 `MapRegistry`（解析 `HomeMap`）。
+        /// 缺省 `None` ⇒ 回落历史行为（空注册表 ⇒ `id_of` 恒 `None` ⇒ 不移动）。
+        /// **测试装置专用**；产品路径由 `main` 注入，不在 `handle_spell_cmd` 里加测试缝。
+        registry: Option<mir2_envir::MapRegistry>,
     }
 
     impl SpellFrameRig {
@@ -69464,6 +69727,7 @@ SendRefMsgRange=15
                 snow_wind_range: 1,
                 elec_blizzard_range: 2,
                 amulet_shape: 5,
+                registry: None,
             }
         }
 
@@ -69484,10 +69748,13 @@ SendRefMsgRange=15
             );
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
-            let registry = mir2_envir::MapRegistry::from_entries(
+            // **默认必须仍是"空注册表"而不是 `None`**：魔号 17 等支按 `registry.is_some()` 分流
+            // （"无地图注册表 ⇒ 效果体不接"），把默认从 `Some(empty)` 改成 `None` 会改变这些既有行为。
+            let fallback = mir2_envir::MapRegistry::from_entries(
                 mir2_envir::MapLoader::new(".", "map", "envir"),
                 Vec::new(),
             );
+            let registry = self.registry.as_ref().unwrap_or(&fallback);
             handle_spell_cmd(
                 game_svr::feature::make_long(
                     u16::try_from(click.0).unwrap_or(0),
@@ -69506,7 +69773,7 @@ SendRefMsgRange=15
                 &self.magic_table,
                 &pet_cfg,
                 8,
-                Some(&registry),
+                Some(registry),
                 &table,
                 &mut self.displays,
                 &self.gates,
@@ -71329,6 +71596,104 @@ SendRefMsgRange=15
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
+        // **推挤批（MG-16/57，`card/magic-push-batch-impl`）**：`MagPushArround` 遍历
+        // `playObject.VisibleActors`（oracle `src/M2Server/Magic/MagicManager.cs:27`），而离线
+        // 装置不跑 AOI ⇒ 表恒空、循环零次；`CharPushed` 逐格还要 `CanWalk`/`MoveToMovingObject`
+        // （`push_now→char_pushed_core` 在 `sim.maps` 缺该 actor 的图时**直接返回空事件**）。
+        // ⇒ 这里补一张全 `Walk` 的网格 + 按 oracle 装置同样的顺序回填可见集。
+        //
+        // **为什么必须同序**：`MagPushArround` 按 `VisibleActors` 的**列表序**遍历
+        // （`src/M2Server/Magic/MagicManager.cs:27` 的 `for i in VisibleActors`），而该列表的填充
+        // 顺序由 `UpdateVisibleGay` 的**调用序**决定（追加式，`UpdateVisibleGay` 只 push 不改序）。
+        // 装置侧 `MagicGolden/Program.cs` 的 `MakeVisible` 分支按 `target → obsIn → 怪物` 调用，
+        // 本 rig 必须逐字同序，否则多目标命中时 `Random(20)`/`Random(2)` 的**消耗序**会错位，
+        // 表现为"帧一样但抽数账本对不上"。
+        // **MG-35（21）**：真图 + 真注册表 + `HomeMap="0"`（见 `spacemove_rig_inputs` 的说明）。
+        if magic_id == 21 {
+            let (grid, registry) = spacemove_rig_inputs(stem, label);
+            // **`home_map` 是 `registry.id_of(name)` 的 id，实际取图是 `world.maps[id]`** ⇒
+            // 两者必须指同一张图；`push` 前先断言"当前 `world.maps.len()` 恰好等于该 id"，
+            // 否则多塞一张图就会静默指错图（症状：`SpaceMove` 之后没有 633/634/807）。
+            let home_id = registry.id_of("0").unwrap_or_else(|| {
+                panic!("[{stem}/{label}] MAP_ID_MISSING registry.id_of(\"0\") = None")
+            });
+            // rig 可能已有占位图（实测 len=1）⇒ 直接 push 会让真图落在 id 1，而 registry 指 0
+            // ⇒ `SpaceMove` 作用在错误图上（症状：没有 633/634/807）。**清空后重建**，
+            // 并断言"重建后真图的索引 == registry 给的 id"。
+            let pre_len = rig.world.maps.len();
+            rig.world.maps.clear();
+            glog!(
+                "DBG",
+                "[{}] spacemove 装图：清空 world.maps（原 len={pre_len}）→ 真图索引={home_id} 尺寸={}x{}",
+                label,
+                grid.width,
+                grid.height
+            );
+            rig.world.maps.push(grid);
+            assert_eq!(
+                rig.world.maps.len() - 1,
+                home_id,
+                "[{stem}/{label}] MAP_ID_INDEX_MISMATCH id={home_id} 实际索引={}（真图必须落在 registry 指向的下标）",
+                rig.world.maps.len() - 1
+            );
+            // **装置前提（本卡修正）**：`maps.clear()` 把初始网格连同**格上对象表**一起丢了
+            // （`new_layout` 末尾的 `world.tick()` 已把 caster/目标/观察者登记进旧图）。
+            // 不重登记 ⇒ `CretInNearXy` 在真图上查不到目标 ⇒ 21 的 `RM_MAGICFIRE` 的
+            // `targerActors` 退化成 0（golden 是目标 ActorId），且 `CanWalk` 也看不到实体。
+            // 这里按各实体坐标重做 `AddToMap` 的格子面（生产由 `enter_world_impl` 完成）。
+            {
+                let now = rig.world.clock_ms;
+                let placed: Vec<(usize, i32, i32, i32)> = rig
+                    .world
+                    .entities
+                    .ids_sorted()
+                    .into_iter()
+                    .filter_map(|id| rig.world.entities.get(id).map(|e| (e.map_id, e.x, e.y, id)))
+                    .collect();
+                for (map_id, x, y, id) in placed {
+                    let map = rig.world.maps.get_mut(map_id).unwrap_or_else(|| {
+                        panic!("[{stem}/{label}] 真图重登记：actor={id} 的 map_id={map_id} 不存在")
+                    });
+                    assert!(
+                        map.add_map_object(x, y, mir2_world_bevy::map::CellType::Play, id, now),
+                        "[{stem}/{label}] 真图重登记失败 actor={id} ({x},{y})（格子不合法？）"
+                    );
+                }
+            }
+            rig.registry = Some(registry);
+            // **21 支特有的装置前提**（与 `TeleportRig` 同路）：`SpaceMove → switch_map_space →
+            // sessions.get(chr_name)` 要求 caster 在 `world.sessions` 里 `InWorld`、已绑 `actor_id`、
+            // 且 **`sess.map_id` 必须等于实体实际所在图**（`switch_map_inner` 会先
+            // `remove_from_map(actor_id, old_map)`）。生产由 `lib.rs:30844 open_session` +
+            // `:30863 enter_map_at` 完成；rig 只 `add_entity`、不注册 ⇒ 手工做同样几步。
+            let caster_map = rig.world.entities.get(caster).map_or(0, |e| e.map_id);
+            rig.world.open_session("caster");
+            if let Some(sess) = rig.world.sessions.get_mut("caster") {
+                sess.map_id = caster_map;
+                sess.actor_id = Some(caster);
+                sess.stage = mir2_world_bevy::WorldStage::InWorld;
+            }
+            if let Some(sv) = rig.saves.get_mut("caster") {
+                sv.record.data.home_map = Some("0".to_string());
+            }
+        }
+        if matches!(magic_id, 8 | 37) {
+            rig.world
+                .maps
+                .push(mir2_world_bevy::map::MapGrid::new(200, 200));
+            let mut visible_ids = vec![target, fireball_actor(&rig, "obs_in")];
+            visible_ids.extend(monster_ids.iter().copied());
+            let visible = visible_ids
+                .into_iter()
+                .map(|t| mir2_world_bevy::entity::VisibleBaseObject {
+                    target: t,
+                    flag: mir2_world_bevy::entity::VisibleFlag::Show,
+                })
+                .collect();
+            if let Some(mb) = rig.world.entities.map_binding_mut(caster) {
+                mb.visible_actors = visible;
+            }
+        }
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
@@ -71393,8 +71758,56 @@ SendRefMsgRange=15
         let status_before = status_time_of(&rig.world, target);
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
+        // **21 的 RM 收件人必须取施法前**：oracle 的 `RM_SPELL(:159)` / `RM_MAGICFIRE(:406)` /
+        // `RM_SPACEMOVE_FIRE2(:881)` 都在 `SpaceMove` **之前**入队，收件人按旧图/旧坐标算。
+        // 施法后 caster 已换图 ⇒ `hear_targets` 只剩自己，target/obs_in 的 RM 会整段丢（实测）。
+        let in_range_caster_pre: Vec<i32> = if magic_id == 21 {
+            chat::hear_targets(&rig.world, caster, chat::send_ref_msg_range())
+        } else {
+            Vec::new()
+        };
+
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
+        // **8/37 的推挤决策观测**（卡 `magic-push-batch-impl`）：`RM_PUSH(8092)` 的台账来源取
+        // 产品路径的真实 `PushEvent`（`cast_firewind_spell` → `push_now`），**不是**从我们发出的
+        // `SM_BACKSTEP(9)` 反推（自证）。取后清空 ⇒ 有界；其它魔号此日志恒空。
+        let firewind_pushes: Vec<(i32, u8, i32, i32)> = rig
+            .world
+            .push_log()
+            .iter()
+            .map(|p| (p.actor_id, p.dir, p.x, p.y))
+            .collect();
+        rig.world.clear_push_log();
+        // **MG-35（21）**：换图簇（633/634/766/54/11029/807）在 oracle 是 `SpaceMove` 期间入队、
+        // 由**本 tick 的下行段** drain 发出；Rust 对应 `drain_map_change`（参数与 tick 路径逐字一致）。
+        // 驱动的 `cast` 只跑施法段、不跑 tick ⇒ 必须补一次，否则"移动发生了但帧没发"
+        // （症状：台账有 806/638/640、缺 633/634/807；实测 Rng 与 golden 逐值相同即证落地计算已跑）。
+        if magic_id == 21 {
+            // **`634.series` 的时刻输入（卡 magic-push-batch-impl）**：`SM_CHANGEMAP(634).Series`
+            // = `PlayObject.DayBright()`，输入是 `M2Share.GameTime`（`1→0`、`3→1`、其它→2）。
+            // 生产 [`drain_map_change`] 读**真实本地小时**（`enter::game_time_now()`）；驱动若照走，
+            // 同一份 golden 在 `hour∈{4,11,15,20,23}` 之外会得到 `series=0`（golden 恒为 2）
+            // ⇒ 时变伪红。故这里注入 golden 记录的**装置生效值**（`Fixture.map_bright`）。
+            // 缺键 panic、不兜底：兜一个默认值会让"golden 没记时刻"这件事静默通过。
+            let bright = golden_fixture_opt(stem, label, "map_bright").unwrap_or_else(|| {
+                panic!(
+                    "[{stem}/{label}] golden 缺 Fixture.map_bright（634.series 的时刻输入），先重出 golden"
+                )
+            });
+            assert_eq!(
+                bright, 0,
+                "[{stem}/{label}] Fixture.map_bright 应为 C# 装置生效值 0（`M2Share.GameTime` 静态默认，                 装置不跑 SystemProcessor）；实得 {bright} —— golden 在别的时刻重出过？"
+            );
+            drain_map_change_at_time(
+                &mut rig.world,
+                &rig.online,
+                &rig.gates,
+                &rig.displays,
+                rig.registry.as_ref(),
+                u8::try_from(bright).expect("map_bright 必须落在 0..=3"),
+            );
+        }
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
         // 不由 SM 帧反推）。必须在**施法之后**取。
         let buff_applies = rig.world.buff_apply_log.clone();
@@ -71565,9 +71978,14 @@ SendRefMsgRange=15
         let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
         // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
-        let push_events: Vec<(i32, u8, i32, i32)> = all_outs
+        let push_events: Vec<(i32, u8, i32, i32)> = firewind_pushes
             .iter()
-            .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y)))
+            .copied()
+            .chain(
+                all_outs
+                    .iter()
+                    .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y))),
+            )
             .collect();
         let n2 = trace_line_count(&trace);
 
@@ -71617,6 +72035,12 @@ SendRefMsgRange=15
         let range = chat::send_ref_msg_range();
         let in_range_caster = chat::hear_targets(&rig.world, caster, range);
         let in_range_target = chat::hear_targets(&rig.world, target, range);
+        // 21 的施法帧收件人 = 施法前集合（见上方 `in_range_caster_pre`）；其它魔号用现算。
+        let rm_cast_targets: &[i32] = if magic_id == 21 {
+            &in_range_caster_pre
+        } else {
+            &in_range_caster
+        };
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
             .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
@@ -71638,7 +72062,7 @@ SendRefMsgRange=15
                 .find(|e| e.actor_id == id)
                 .map(|e| e.chr_name.clone())
         };
-        for id in &in_range_caster {
+        for id in rm_cast_targets {
             if let Some(who) = who_of(*id) {
                 let v = rm_by_who.entry(who).or_default();
                 // `RM_SPELL`：wParam=Effect(1)、p1/p2=**点击坐标**、p3=MagicId；priority=(byte)ident。
@@ -71665,6 +72089,36 @@ SendRefMsgRange=15
                     )),
                     i64::from(fire_target),
                     136,
+                    false,
+                ));
+                // **21 的 `RM_SPACEMOVE_FIRE2(8042)`**（oracle `MagicManager.cs:881`，`MapRandomMove`
+                // 之前）：`SendRefMsg` 含自己、按**旧图/旧坐标**算收件人 ⇒ 与 17/638 同集合。
+                if magic_id == 21 {
+                    v.push(fireball_rm(8042, 0, 0, 0, 0, 106, false));
+                }
+            }
+        }
+        // **21 的换图簇 RM**（oracle `BaseObject.cs:1133/1134/1137`，落地后发）：
+        // 8097/8098 是 `SendMsg`（只自己）；8099 是 `SendRefMsg(RM_SPACEMOVE_SHOW2, Dir, CurrX,
+        // CurrY, 0, "")`——新图上没有其他玩家 ⇒ 收件人只有 caster。值取落地后的实体
+        // `Dir/CurrX/CurrY`（golden `[8099, 2, 121, 353]` = Dir=2）。
+        if magic_id == 21 {
+            if let Some(who) = who_of(caster) {
+                let (dir, lx, ly) = rig
+                    .world
+                    .entities
+                    .get(caster)
+                    .map_or((0u8, 0i32, 0i32), |e| (e.dir(), e.x, e.y));
+                let v = rm_by_who.entry(who).or_default();
+                v.push(fireball_rm(8097, 0, 0, 0, 0, 161, false));
+                v.push(fireball_rm(8098, 0, 0, 0, 0, 162, false));
+                v.push(fireball_rm(
+                    8099,
+                    i64::from(dir),
+                    i64::from(lx),
+                    i64::from(ly),
+                    0,
+                    163,
                     false,
                 ));
             }
@@ -74620,6 +75074,61 @@ SendRefMsgRange=15
         );
     }
 
+    /// **退化守卫**（`docs/issues/degenerate-guard-criterion.md`）：效果帧在 **golden 与台账两侧**
+    /// 都必须 ≥1 条；任一侧为 0 ⇒ 具名红。
+    ///
+    /// 防的是"帧集合看起来对、效果体零次执行"的假绿（`MG-50` 四刀变异全绿 = 循环零次）。
+    /// 两侧都断：golden 侧防夹具退化，台账侧防实现零执行。**不用 `.unwrap()` 取数组**——字段缺失
+    /// 会计数 0 并红在本断言上，而不是 `Option::unwrap` 的裸 panic。
+    fn assert_effect_frames_non_degenerate(stem: &str, label: &str, effect_ident: u16) {
+        fn arr<'a>(v: &'a serde_json::Value, k: &str) -> &'a [serde_json::Value] {
+            v.get(k)
+                .and_then(|x| x.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[])
+        }
+        let count = |v: &serde_json::Value| -> usize {
+            arr(v, "Receivers")
+                .iter()
+                .flat_map(|r| arr(r, "Sent"))
+                .filter(|m| {
+                    m.get("ident").and_then(|x| x.as_i64()) == Some(i64::from(effect_ident))
+                })
+                .count()
+        };
+        let g = count(&golden_case_for(stem, label));
+        let c = count(&defence_case(stem, label));
+        assert!(
+            g >= 1 && c >= 1,
+            "[{stem}/{label}] 效果帧({effect_ident}) golden={g} 台账={c}，必须各 ≥1 ⇒ 效果体零次执行（退化），禁止升格"
+        );
+    }
+
+    /// **收件人集合逐名相等**（含**零帧**收件人）：台账把它踢出集合即红。
+    ///
+    /// 与 [`per_receiver_frame_seq_matches_golden`] 的分工：后者比"有帧的人"的**帧序列**
+    /// （空表两侧都丢），本函数比"**有谁**"——只比帧序列的话，"`obs_out` 被踢出集合"会静默通过。
+    fn assert_receiver_sets_match_golden(stem: &str, label: &str) {
+        let names = |v: &serde_json::Value| -> Vec<String> {
+            v.get("Receivers")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|r| r.get("Who").and_then(|w| w.as_str()).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut got = names(&defence_case(stem, label));
+        let mut want = names(&golden_case_for(stem, label));
+        got.sort();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "[{stem}/{label}] 收件人集合必须与金标准逐名相等（零帧收件人也必须在集合里）"
+        );
+    }
+
     /// **毒口径的逐收件人帧比较**（与比较器 `magic_fireball_parity.rs` 的
     /// `frame_order_scope = multi_victim_same_tick` 分支（施毒件）**同口径**）：
     /// - 每接收者 **多重集**（`ident/recog/param/tag/series/tail` + **due 分类**），顺序不计；
@@ -74776,6 +75285,119 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn grouplightening_parity_s13() {
         group_lightening_assert("s13", 13, 3000);
+    }
+
+    /// **`MG-16 / MG-57`（8 抗拒火环 / 37 气功波）**：两支 oracle 函数体逐字相同
+    /// （`MagPushArround`，`src/M2Server/Magic/MagicManager.cs:24-52`；case 在 `:259-264` / `:601-607`）。
+    ///
+    /// 装置侧（Rust）：`fireball_parity_drive` 为 8/37 补一张全 `Walk` 网格 + `caster.visible_actors`
+    /// 回填（与 `MagicGolden` 的 `MakeVisible` 同序）；没有这两样，`MagPushArround` 循环零次、
+    /// `CharPushed` 也推进不了格。
+    ///
+    /// 每支都断言：
+    /// ① **收件人集合逐名相等**（空数组也参与 —— `obs_out` 必须**以零帧存在**，被踢出集合即红）；
+    /// ② 逐收件人 `(ident,param,tag,series)` **有序序列** == 金标准；
+    /// ③ **退化守卫**：`SM_BACKSTEP(9)` 两侧各 ≥1 条。
+    fn push_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
+        assert_receiver_sets_match_golden(stem, label);
+        per_receiver_frame_seq_matches_golden(stem, label);
+        assert_effect_frames_non_degenerate(stem, label, mir2_protocol::messages::SM_BACKSTEP);
+        fireball_case_assert(stem, label);
+        b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s1() {
+        push_assert("firewind", 8, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s5() {
+        push_assert("firewind", 8, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_s13() {
+        push_assert("firewind", 8, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s1() {
+        push_assert("energyrepulsor", 37, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s5() {
+        push_assert("energyrepulsor", 37, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn energyrepulsor_parity_s13() {
+        push_assert("energyrepulsor", 37, "s13", 13, 3000);
+    }
+
+    /// **`MG-35`（21 瞬息移动）**：`MagSaceMove`（`src/M2Server/Magic/MagicManager.cs` 的
+    /// `case SKILL_SPACEMOVE`）→ `MapRandomMove` → `SpaceMove`。
+    /// 观测面 = `RM_SPACEMOVE_SHOW2(807)` 的 `param/tag`（落点），以及换图簇（633/634/54/766/11029）。
+    ///
+    /// 断言：① 收件人集合逐名相等；② 逐收件人帧序列 == 金标准；③ **退化守卫**：
+    /// `SM_SPACEMOVE_SHOW2` 两侧各 ≥1 条（零条 ⇒ 没换图/退化夹具）；④ **换图簇出现性**：
+    /// `SM_CLEAROBJECTS(633)` 必须出现在台账里（与落点对错相互独立——落点算错时仍能区分"没换图"）。
+    fn spacemove_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("spacemove", 21, 1, label, seed, base);
+        assert_receiver_sets_match_golden("spacemove", label);
+        per_receiver_frame_seq_matches_golden("spacemove", label);
+        assert_effect_frames_non_degenerate(
+            "spacemove",
+            label,
+            mir2_protocol::messages::SM_SPACEMOVE_SHOW2,
+        );
+        // 换图簇出现性（独立于落点）
+        let c = defence_case("spacemove", label);
+        let has_633 = c["Receivers"]
+            .as_array()
+            .map(|rs| {
+                rs.iter().any(|r| {
+                    r["Sent"].as_array().is_some_and(|a| {
+                        a.iter().any(|m| {
+                            m["ident"].as_i64()
+                                == Some(i64::from(mir2_protocol::messages::SM_CLEAROBJECTS))
+                        })
+                    })
+                })
+            })
+            .unwrap_or(false);
+        assert!(
+            has_633,
+            "[spacemove/{label}] 台账缺 SM_CLEAROBJECTS(633) ⇒ 换图簇没发生（不是落点错，是根本没换图）"
+        );
+        fireball_case_assert("spacemove", label);
+        b1_golden_drain_assert("spacemove.json", label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s1() {
+        spacemove_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s5() {
+        spacemove_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s13() {
+        spacemove_assert("s13", 13, 3000);
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
@@ -78032,8 +78654,12 @@ SendRefMsgRange=15
             mir2_world_bevy::magic::back_dir(2),
             "CharPushed 收尾 Dir = nBackDir"
         );
-        // ③ 帧序：SM_SPELL 先；逐格 SM_BACKSTEP；SM_MAGICFIRE 在共享尾最后。
-        let seq = effect_seq(&effect_drain(&mut rx), 912);
+        // ③ 帧序：**投递序**（oracle 收件人 `MsgQueue` 四叉堆，`BaseObject.Message.cs:181`）——
+        // `SM_SPELL(17)=RM ident 24` 先，其后 `SM_MAGICFIRE(638)=136` 先于 `SM_BACKSTEP(9)=156`。
+        // golden `firewind/s1` 的 target 侧即 `[17, 638, 9]`。调用序（:159 → CharPushed → 尾）
+        // **不是**投递序：三条 `RM_SPELL`/`RM_MAGICFIRE`/`RM_PUSH` 同进该收件人的堆后按优先级出队。
+        let frames = effect_drain(&mut rx);
+        let seq = effect_seq(&frames, 912);
         println!("FIREWIND_SEQ {seq:?}");
         assert_eq!(
             seq.iter()
@@ -78061,8 +78687,29 @@ SendRefMsgRange=15
             .position(|id| *id == mir2_protocol::messages::SM_BACKSTEP)
             .expect("应至少一条 SM_BACKSTEP");
         assert!(
-            i_spell < i_push && i_push < i_fire,
-            "oracle 帧序 159 -> CharPushed -> 尾"
+            i_spell < i_fire && i_fire < i_push,
+            "oracle 投递序：17(24) → 638(136) → 9(156)（golden firewind/s1 target 侧）"
+        );
+        // ③-b **承重牙：caster 侧零条 17**（oracle `PlayObject.Message.cs:1455` 的
+        // `ActorId != ActorId` 守卫 ⇒ caster 根本不入队，不是「入队后在处理器里跳过」）。
+        // 若把 `RM_SPELL` 的缓冲投递改成 `include_self=true`，caster 会多一条 prio-24 ⇒
+        // 本断言（零条 17）与下面的投递序一起红。golden `firewind/s1` caster = `[638, 9, 640]`。
+        let caster_seq = effect_seq(&frames, 911);
+        assert_eq!(
+            caster_seq
+                .iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                .count(),
+            0,
+            "caster 不得收 SM_SPELL(17)（golden firewind/s1 caster 侧无 17）；实得 {caster_seq:?}"
+        );
+        assert_eq!(
+            caster_seq,
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_BACKSTEP
+            ],
+            "caster 侧投递序 = [638(136), 9(156)]（队列里没有 17；golden firewind/s1 caster 侧）"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -78243,7 +78890,10 @@ SendRefMsgRange=15
         assert_eq!(changes[0].map_id, 1);
         assert_eq!((changes[0].x, changes[0].y), (want_x, want_y));
         assert_eq!(changes[0].space_move_show, Some(true));
-        // ④ 帧：`RM_MAGICFIRE`（case 内、先）→ `RM_SPACEMOVE_FIRE2` ⇒ `SM_SPACEMOVE_HIDE2`。
+        // ④ 帧：**投递序**（oracle 收件人 `MsgQueue` 四叉堆，`BaseObject.Message.cs:181`）——
+        // `RM_SPACEMOVE_FIRE2(8042)` 的 `(byte)ident=106` 先于 `RM_MAGICFIRE(10120)=136`
+        // ⇒ `SM_SPACEMOVE_HIDE2(806)` 先于 `SM_MAGICFIRE(638)`（golden `spacemove/s1` 的 caster 侧
+        // `[806, 638, …]`）。调用序（:406 MAGICFIRE 先于 :881 FIRE2）**不是**投递序。
         let seq = effect_seq(&effect_drain(&mut rx), 911);
         println!("SPACEMOVE_SEQ {seq:?}");
         let i_fire = seq
@@ -78255,8 +78905,8 @@ SendRefMsgRange=15
             .position(|id| *id == mir2_protocol::messages::SM_SPACEMOVE_HIDE2)
             .expect("门通过 ⇒ RM_SPACEMOVE_FIRE2 -> SM_SPACEMOVE_HIDE2");
         assert!(
-            i_fire < i_hide,
-            "oracle 序：:406 的 RM_MAGICFIRE 先于 :881 的 FIRE2"
+            i_hide < i_fire,
+            "oracle 投递序：806(106) → 638(136)（golden spacemove/s1 caster 侧）"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
