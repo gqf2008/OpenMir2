@@ -25,3 +25,18 @@
 
 - `Rng`（summon_ok 6 抽）与 640 的 `tag` 仍**不入比较面**（已登记：离线替身不抽）；本卡不改变该边界。
 - 生产可召唤仍不成立（`monsters` 无 `精灵` 行，见 `openmir2-angel-summon-monster-missing.md`）。
+
+## 5. 实验记录（2026-11-21，已完成）
+
+**变异**：`lib.rs` 41/17/30 共用段的 `if outcome.magic_fire` 加 `&& req.magic_id != SKILL_ANGEL`
+⇒ **只 41 不发芽 638**（17/30 不受影响；oracle 对应 `src/M2Server/Magic/MagicManager.cs:648-658` 的 `boSpellFire ⇒ SendRefMsg(RM_MAGICFIRE)`）。
+
+- **driver**：`tests::angel_parity_summon_ok` / `tests::angel_parity_cap_hit` 均 **1 passed**（driver 不比帧）；
+- **comparator**：`real_rust_ledger_angel` **红**——`tests/parity/tests/magic_fireball_parity.rs:2132`：
+  `[summon_ok] caster 的 17/638/642 帧不一致：Rust [(642, 5, 1000, 0, "")] vs golden [(638, 101, 100, 257, "Nghcd?"), (642, 5, 1000, 0, "")]`
+  / `left: [(642,…)]` / `right: [(638,…), (642,…)]`；
+- **归类（`opc-19` 三态）**：driver 绿 + comparator 红 ⇒ **牙完整**（台账面能发现）；
+- **还原**：`git hash-object` = 变异前 `1c9f963b41fcc19b6d4b5393e28d7feaccde09d2`、`MUTATION`=0；
+  复跑 driver 两支 **1 passed**、comparator **1 passed**（同一 run id）。
+
+⇒ MG-42 的 scope 已由"无牙"改为"牙：41 不发芽 638 ⇒ comparator 红"（manifest 同步）。
