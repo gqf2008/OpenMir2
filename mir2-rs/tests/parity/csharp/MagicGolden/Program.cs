@@ -134,6 +134,10 @@ public static class Program
         {
             return ConfigSelfTest();
         }
+        if (args.Contains("--conf-selftest"))
+        {
+            return ConfFilesSelfTest();
+        }
         if (args.Contains("--case") && args.Length > Array.IndexOf(args, "--case") + 1)
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
@@ -393,6 +397,23 @@ public static class Program
         string baseDir = AppContext.BaseDirectory;
         string confDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_CONF_DIR")
                          ?? @"E:\MirServer\M2GameSvr";
+        return EnsureConfFilesFrom(confDir, baseDir, out copied, out missing);
+    }
+
+    /// <summary>
+    /// 把 `confDir` 的 5 份冻结配置同步到 `baseDir`：**按内容身份**（sha256）比较，
+    /// 不同才拷贝。只读源，不改任何生产文件。
+    ///
+    /// **为什么不是"存在即跳过"**（卡 `openmir2-ensureconffiles-stale-copy`）：
+    /// 只判 `File.Exists(dst)` 会让"换 conf 目录/改源内容"静默沿用上一次的副本，
+    /// 任何"换配置的对照臂"都会变成假绿；`ServerConfSha256()` 又优先读副本 ⇒ golden 会
+    /// **自洽地**记录错的来源。
+    ///
+    /// `copied` = 本轮真正写过的文件名（同源重复运行 ⇒ 空）；`missing` = 源不存在的路径。
+    /// </summary>
+    private static bool EnsureConfFilesFrom(string confDir, string baseDir,
+        out List<string> copied, out List<string> missing)
+    {
         copied = new List<string>();
         missing = new List<string>();
         foreach (var n in ConfNames)
@@ -400,10 +421,84 @@ public static class Program
             var src = Path.Combine(confDir, n);
             var dst = Path.Combine(baseDir, n);
             if (!File.Exists(src)) { missing.Add(src); continue; }
-            // 冻结配置必须非空：0 字节的旧副本（构建产物/读回写坏）会让  全 0 ⇒ 重拷。
-            if (!File.Exists(dst) || new FileInfo(dst).Length == 0) { File.Copy(src, dst, overwrite: true); copied.Add(n); }
+            // 0 字节也算"内容不同"（sha 不同），无须单列。
+            if (!File.Exists(dst) || FileSha256(dst) != FileSha256(src))
+            {
+                File.Copy(src, dst, overwrite: true);
+                copied.Add(n);
+            }
         }
         return missing.Count == 0;
+    }
+
+    private static string FileSha256(string path)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        using var fs = File.OpenRead(path);
+        return Convert.ToHexString(sha.ComputeHash(fs));
+    }
+
+    /// <summary>
+    /// `--conf-selftest`：`EnsureConfFilesFrom` 的**身份**语义三把牙（卡
+    /// `openmir2-ensureconffiles-stale-copy` §6）。只用 `Path.GetTempPath()` 下的临时目录
+    /// （A/B 源 + 临时 base），**不碰部署目录、不改任何生产文件**。
+    /// </summary>
+    private static int ConfFilesSelfTest()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "magicgolden-conf-selftest-" + Guid.NewGuid().ToString("N"));
+        string dirA = Path.Combine(root, "A");
+        string dirB = Path.Combine(root, "B");
+        string baseDir = Path.Combine(root, "base");
+        try
+        {
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+            Directory.CreateDirectory(baseDir);
+            foreach (var n in ConfNames)
+            {
+                File.WriteAllText(Path.Combine(dirA, n), "A:" + n);
+                File.WriteAllText(Path.Combine(dirB, n), "B:" + n);
+            }
+            int failures = 0;
+            void Check(string name, bool cond, string detail)
+            {
+                if (cond) { Console.Error.WriteLine("CONF_SELFTEST OK " + name); return; }
+                Console.Error.WriteLine("CONF_SELFTEST FAIL " + name + " :: " + detail);
+                failures++;
+            }
+            string DstSha() => FileSha256(Path.Combine(baseDir, "Server.conf"));
+
+            // ① 空 base + 源 A ⇒ 5 份全拷
+            bool okA = EnsureConfFilesFrom(dirA, baseDir, out var copied1, out _);
+            Check("copy-from-A", okA && copied1.Count == ConfNames.Length
+                    && DstSha() == FileSha256(Path.Combine(dirA, "Server.conf")),
+                $"copied={copied1.Count}");
+
+            // ② 换源 B（同名不同内容）⇒ 必须重拷（旧实现"存在即跳过"会静默留在 A）
+            bool okB = EnsureConfFilesFrom(dirB, baseDir, out var copied2, out _);
+            Check("switch-to-B-recopies", okB && copied2.Count == ConfNames.Length
+                    && DstSha() == FileSha256(Path.Combine(dirB, "Server.conf")),
+                $"copied={copied2.Count}");
+
+            // ③ 源 B 就地改内容 ⇒ 必须重拷 Server.conf
+            File.WriteAllText(Path.Combine(dirB, "Server.conf"), "B2:" + "Server.conf");
+            bool okB2 = EnsureConfFilesFrom(dirB, baseDir, out var copied3, out _);
+            Check("content-change-recopies", okB2 && copied3.Count == 1 && copied3[0] == "Server.conf"
+                    && DstSha() == FileSha256(Path.Combine(dirB, "Server.conf")),
+                $"copied=[{string.Join(",", copied3)}]");
+
+            // ④ 同源连跑 ⇒ 不重拷（防"每次都覆盖"这种相反的错误）
+            bool okSame = EnsureConfFilesFrom(dirB, baseDir, out var copied4, out _);
+            Check("same-source-no-copy", okSame && copied4.Count == 0,
+                $"copied=[{string.Join(",", copied4)}]");
+
+            return failures == 0 ? 0 : 2;
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* 临时目录清理失败不影响判据 */ }
+        }
     }
 
     /// <summary>
