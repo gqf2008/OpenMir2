@@ -114,6 +114,12 @@
    `10139.p1` 逐值比（值从 golden 读）；`657.series == HitSpeed(7)`；`SM_SYSMESSAGE(100).tail`
    改一字符必红；marker 白名单负例（非白名单 stem ⇒ panic）。
 4. **④ 四刀**：毒伤表达式 `*2→*3` 一刀**真红**（`8037` p1 97→112 进帧面）；还原后全量重跑绿。
+5. **⑧ 抓取时点牙**：把 `RM_POISON(8037)` 的抓取整体后移到排水之后 ⇒ 比较器必红
+   `golden 有 rust 无=[[8037, 0, 97, 1001, 2, 255, 1]] rust 有 golden 无=[]`——证明
+   “交付前抓”不是注释（还原后 `hash-object` 相等、`MUTATION` 计数 0）。
+6. **⑨ marker 白名单负例**：非白名单 stem 带 `multi_victim_same_tick` ⇒ 比较器入口 panic；
+   另加 **stem ↔ magic_id 静态一致性**（fire=9 / amyounsul*=6 / groupamyounsul*=48），
+   防止"给 fire 加旋钮就被静默降级成批次类"。
 5. **⑤ 门禁**：见 §7.4。
 
 ### 7.2 三旋钮 fail-closed（评审 A）
@@ -144,6 +150,8 @@
 - 门禁：fmt / clippy（`-p game-svr -p mir2-parity-tests --all-targets -D warnings`）/
   `cargo test --workspace --lib` 三数 / msgcodegen `--check` / 锚门 / 清单 schema / 分派回归
   （原文见最终 head 的提交信息与交接报告）。
+  **回归**：15 驱动（施毒 12 + fire 3）+ 5 比较器全绿；施毒 5 牙 +
+  `tooth_multi_victim_due_ms_rel_compared_red` + 12 支三键机判全过。
 
 ### 7.5 stem ↔ 魔号/叶子映射（QA 升格按此）
 | stem | 魔号 | 覆盖叶子 |
