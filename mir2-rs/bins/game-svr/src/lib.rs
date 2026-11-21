@@ -134,6 +134,8 @@ pub mod shard;
 pub mod zone;
 // **L2-3**：两阶段 tick 的区边界快照/双缓冲/屏障（构造级；生产接线在 L2-4）。
 pub mod region_loop;
+// **L2-4**：区 tick 看门狗（屏障活性兜底：超时 abort 整机）。
+pub mod tick_watchdog;
 // **P2-3b**：事件路由（纯逻辑 + 可单测；转发线程在 `sim_loop` 调用侧）。
 mod shard_router;
 pub mod shop;
