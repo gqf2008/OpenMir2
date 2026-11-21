@@ -874,9 +874,14 @@ fn real_ledger_verify_labels_opts(
         !scope_marked
             || matches!(
                 stem,
-                "fire" | "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+                "fire"
+                    | "skill10"
+                    | "amyounsul"
+                    | "amyounsul2"
+                    | "groupamyounsul"
+                    | "groupamyounsul2"
             ),
-        "`frame_order_scope=multi_victim_same_tick` 只允许 fire 与施毒 4 支白名单；当前 stem={stem}"
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire/skill10 与施毒 4 支白名单；当前 stem={stem}"
     );
     // **stem ↔ magic_id 静态一致性**（防「给 fire 加护身符旋钮就静默降级成批次类」）：
     // 施毒 due 语义只由 `magic_id ∈ {6,48}` 触发，白名单里每个 stem 的魔号必须与定义一致。
@@ -884,13 +889,14 @@ fn real_ledger_verify_labels_opts(
         let mid = golden["magic_id"].as_i64().unwrap_or(-1);
         let ok = match stem {
             "fire" => mid == 9,
+            "skill10" => mid == 10,
             "amyounsul" | "amyounsul2" => mid == 6,
             "groupamyounsul" | "groupamyounsul2" => mid == 48,
             _ => false,
         };
         assert!(
             ok,
-            "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / amyounsul*=6 / groupamyounsul*=48"
+            "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48"
         );
     }
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
