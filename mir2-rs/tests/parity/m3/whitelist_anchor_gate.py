@@ -689,6 +689,136 @@ def _qualified(sym, lines):
     humps = sum(1 for ch in sym[1:] if ch.isupper())
     return humps >= 1 and len(sym) >= 6
 
+
+
+def _strip_code_noise(line):
+    """去掉行内字符串字面量与 `//` 注释（用于括号计数与"字符串内标识符"判定）。"""
+    out = []
+    i = 0
+    n = len(line)
+    in_str = None
+    while i < n:
+        ch = line[i]
+        if in_str:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+            i += 1
+            continue
+        if ch in ("\"", "'"):
+            in_str = ch
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and line[i + 1] == "/":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _decl_spans(lines, cands):
+    """返回 `[(decl_line, span_end_line)]`：声明行 + 由**配对花括号**得到的体结束行。
+
+    2026-11-21（`10` 抽样后）：span 用花括号配平（不看缩进）；覆盖嵌套块 / 本地函数 /
+    属性 getter（`Sym {` 或 `Sym => …` 前的块）。只认声明形态，不认调用行。
+    """
+    spans = []
+    for idx, raw in enumerate(lines, 1):
+        code = _strip_code_noise(raw)
+        matched = False
+        for c in cands:
+            e = re.escape(c)
+            if re.search(r"\b(?:public|private|protected|internal|static|override|virtual|async|sealed|partial|extern|new|unsafe)\b[^\n]*\b%s\s*\(" % e, code) \
+               or re.search(r"\b(?:class|struct|enum|interface|fn|trait|mod)\s+%s\b" % e, code) \
+               or re.search(r"\b%s\s*\{" % e, code) \
+               or re.search(r"^\s*(?:[A-Za-z_][\w<>\[\],\.]*\s+)+%s\s*\(" % e, code):
+                matched = True
+                break
+        if not matched:
+            continue
+        depth = 0
+        started = False
+        end_line = idx
+        for j in range(idx - 1, len(lines)):
+            cj = _strip_code_noise(lines[j])
+            for ch in cj:
+                if ch == "{":
+                    depth += 1
+                    started = True
+                elif ch == "}" and started:
+                    depth -= 1
+                    if depth == 0:
+                        end_line = j + 1
+                        break
+            if started and depth == 0:
+                break
+            if not started and j > idx + 2:   # 声明后 3 行内仍无 `{` ⇒ 不是带体的声明（如接口/调用）
+                break
+        if started and depth == 0:
+            spans.append((idx, end_line))
+    return spans
+
+def _in_decl_span(spans, lo, hi):
+    for d, end in spans:
+        if d <= lo and hi <= end:
+            return True
+    return False
+
+
+def _only_in_strings(lines, tok):
+    """`tok` 是否只出现在字符串字面量里（DB/SQL 表名列名等）。"""
+    outside = any(tok in _strip_code_noise(l) for l in lines)
+    inside = any(tok in l for l in lines)
+    return inside and not outside
+
+def _pair_symbol_v2(row, start, end, anchor_text, target_text, target_lines=None):
+    """Phase 0 修订（2026-11-21）：按 `10` 的四条规则配对锚的声明符号。
+
+    ① 排除泛名：`*Exception` 不作符号；`SM_*/RM_*/CM_*` 视为帧/消息，不参与符号匹配。
+    ② 否定/对照引用：符号前 15 字内出现「无/缺/不进/未/not」⇒ 判否定引用，不配符号。
+    ③ 语言一致：候选符号必须**出现在锚的目标文件里**（同语言）；Rust 名配 .cs 锚等跨语言句
+       自然落空 ⇒ 返回 None（WARN，不 RED）。
+    ④ 同句多锚：在"距离 + 语言"双条件下取最近合格候选。
+    """
+    best = None
+    for ts, te, val in _tokens_in(row):
+        if val == anchor_text or re.search(r":\d", val): continue
+        if re.search(r"\.(cs|rs|py|pas|sql|ps1|md|json|conf|txt|toml|cfg|ini)$", val, re.I): continue
+        if te <= start: gap = row[te:start]
+        elif ts >= end: gap = row[end:ts]
+        else: continue
+        if len(gap) > JOIN_MAX: continue
+        nonbt = [ch for ch in gap if ch != "`"]
+        if len(nonbt) > 1 or (nonbt and nonbt[0] not in JOIN_CHARS): continue
+        sym = re.sub(r"\([^)]*\)\s*$", "", val).strip()
+        if not PLAIN_IDENT.match(sym) or len(sym) < 3: continue
+        if re.search(r"Exception$", sym): continue
+        if re.match(r"^(SM|RM|CM)_", sym): continue
+        # 规则 2 精化（2026-11-21）：否定词须**紧邻符号**——否定词之后到符号之间
+        # 不得再出现别的字母/数字（否则如"缺 657**：oracle `Sym`"会被误判成否定）。
+        pre = row[max(0, ts - 15):ts]
+        neg = None
+        for w in ("不进", "无", "缺", "未", "not"):
+            k = pre.rfind(w)
+            if k >= 0 and (neg is None or k > neg[0]):
+                neg = (k, w)
+        if neg is not None and not re.search(r"[A-Za-z0-9]", pre[neg[0] + len(neg[1]):]):
+            continue
+        if not any(c in target_text for c in _candidates_filewide(sym)): continue
+        # 规则 6（2026-11-21，10 抽样）：DB/SQL 标识符不参与代码符号匹配——
+        # 点号全名且只出现在字符串字面量里（表名/列名/GetByte 参数）⇒ 跳过。
+        if "." in sym and target_lines is not None:
+            # 规则 6 扩展（10 抽样）：`表.列` 形态——左半段（表名）只在字符串里出现 ⇒ SQL 标识符，跳过。
+            left = sym.split(".", 1)[0]
+            if _only_in_strings(target_lines, sym) or _only_in_strings(target_lines, left):
+                continue
+        dist = len(gap)
+        if best is None or dist < best[0]:
+            best = (dist, sym)
+    return best[1] if best else None
+
 def cmd_report_src_drift(args):
     root = REPO_ROOT
     text = open(args.whitelist, encoding="utf-8").read()
@@ -698,15 +828,17 @@ def cmd_report_src_drift(args):
         rel, _reason = _resolve(a["path"], root, idx)
         if not rel or not rel.startswith("src/"): continue
         lines = _read_lines(os.path.join(root, rel))
-        sym = _adjacent_symbol(a["row"], a["start"] - a["row_start"], a["end"] - a["row_start"], a["path"])
+        sym = _pair_symbol_v2(a["row"], a["start"] - a["row_start"], a["end"] - a["row_start"], a["path"], chr(10).join(lines), lines)
         lo, hi = min(a["lines"]), max(a["lines"])
         if not sym:
             bucket, dist, strict = "无相邻符号", None, False
         elif not _qualified(sym, lines):
             bucket, dist, strict = "符号不合格(通用名)", None, False
-        elif _decl_hit(lines, lo, hi, sym):
+        elif _in_decl_span(_decl_spans(lines, _candidates(sym)), lo, hi):
+            # 规则 5（2026-11-21，10 抽样）：锚落在该声明的方法体内 ⇒ 命中（dist=0）；
+            # 否则才量距离——markdown 引的多是"某方法里的这一句"，按到声明行距离判漂会把常态判成异常。
             strict = True
-            dist = _loose_dist(lines, lo, hi, sym)
+            dist = 0
             bucket = "严格命中"
         else:
             strict = False
@@ -733,6 +865,58 @@ def cmd_report_src_drift(args):
     return 0
 
 
+
+def cmd_report_selftest(argv_args=None):
+    """Phase 0 检测器的**合成夹具**回归（不依赖真实 src/，文件会漂、夹具不会）。
+
+    正例：锚在方法体内 ⇒ span 命中（dist=0）；反向牙：锚在方法外 5 行 ⇒ dist>0（真漂）。
+    另含：属性 getter / 本地函数 / SQL 字符串 / 否定引用 / `*Exception`/`SM_*` 排除。
+    """
+    ok = True
+    def check(name, cond, detail=""):
+        nonlocal ok
+        print(("ok  " if cond else "FAIL") + " " + name + (" | " + detail if detail and not cond else ""))
+        ok = ok and cond
+
+    body = [
+        "class Demo {",                         # 1
+        "    public void Body() {",              # 2
+        "        int a = 1;",                    # 3
+        "        int b = 2;",                    # 4
+        "        void Local() {",                # 5
+        "            int c = 3;",                # 6
+        "        }",                             # 7
+        "    }",                                 # 8
+        "    public int P { get { return 1; } }",# 9
+        "    public void Other() {",             # 10
+        "        int d = 4;",                    # 11
+        "    }",                                 # 12
+        "}",                                     # 13
+    ]
+    spans = _decl_spans(body, _candidates("Body"))
+    check("span: Body 体 = 2..8", spans and spans[0] == (2, 8), str(spans))
+    check("span 正例: 锚在体内(4) ⇒ 命中", _in_decl_span(spans, 4, 4))
+    check("**反向牙**: 锚在方法外 5 行(11 in Other) ⇒ 不命中", not _in_decl_span(spans, 11, 11))
+    d = _loose_dist(body, 11, 11, "Body")
+    check("**反向牙**: 方法外 dist > 3（真漂，不是 0）", d is not None and d > 3, str(d))
+    spans_l = _decl_spans(body, _candidates("Local"))
+    check("本地函数也算 span（5..7 命中）", _in_decl_span(spans_l, 6, 6))
+    body2 = body[:8] + ["    public int Prop { get { return 1; } }"] + body[9:]
+    spans_p = _decl_spans(body2, _candidates("Prop"))
+    check("属性 getter 也算 span（9 命中）", _in_decl_span(spans_p, 9, 9))
+
+    sql_line = '            var x = Db.GetByte("SELECT Level FROM characters_ablity WHERE ID=@ID");'
+    check("SQL: 表名只在字符串里 ⇒ 跳过", _only_in_strings([sql_line], "characters_ablity"))
+    check("SQL: `表.列` 左半段在字符串里 ⇒ 跳过", _only_in_strings(['x = Db.GetByte("SELECT characters_ablity.Level FROM characters_ablity");'], "characters_ablity"))
+    neg_row = "| T-1 | 本宿主**无** `WeightChanged`（`src/X.cs:1`） |"
+    sym = _pair_symbol_v2(neg_row, neg_row.find("`src"), neg_row.find("`）") + 1, "src/X.cs", "class X{}", ["class X{}"])
+    check("否定引用 ⇒ 不配符号", sym is None, str(sym))
+    exc_row = "| T-2 | 抛 `IndexOutOfRangeException`（`src/X.cs:1`） |"
+    sym2 = _pair_symbol_v2(exc_row, exc_row.find("`src"), exc_row.find("`）") + 1, "src/X.cs", "class X{}", ["class X{}"])
+    check("`*Exception` 不作符号", sym2 is None, str(sym2))
+    print("REPORT_SELFTEST " + ("GREEN" if ok else "RED"))
+    return 0 if ok else 1
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="whitelist.md 行号锚保鲜门（只读、零端口）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -745,6 +929,7 @@ def main(argv=None):
     pr.add_argument("--tsv", default=None)
     pa = sub.add_parser("audit", help="清点全部锚与分类（覆盖面）")
     pa.add_argument("--whitelist", default=DEFAULT_WHITELIST)
+    prs = sub.add_parser("report-selftest", help="Phase0 检测器合成夹具回归（含反向牙，不依赖真实 src/）")
     ps = sub.add_parser("selftest", help="合成文本 + 改坏必红的 fail-closed 自检")
     args = p.parse_args(argv)
     if args.cmd == "check":
@@ -753,6 +938,8 @@ def main(argv=None):
         return cmd_audit(args)
     if args.cmd == "report-src-drift":
         return cmd_report_src_drift(args)
+    if args.cmd == "report-selftest":
+        return cmd_report_selftest()
     return selftest()
 
 
