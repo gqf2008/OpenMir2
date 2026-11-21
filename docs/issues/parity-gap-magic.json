@@ -78,7 +78,7 @@
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
         ]
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙与零抽（2026-11-21 补）**：去掉战士门的 `sm_magicfire_fail` 发射 ⇒ `warr_3/4/7_matches_golden` 三支全红（`got [] / want [(639, 0, 0, 0, \"\")]`，left 0/right 1）；另在 `check_golden` 对每份 warr golden 断两侧零抽（golden `Rng` 空 + Rust RNG 状态快照不变，牙：`Arm::Ergum` 插抽数 ⇒ `warr_12` 红，`inext 1/22` vs `0/21`）。本支无 driver 层（静态 golden 测试既是驱动也是比较器）⇒ 三态分类塌缩为\"比较器层能否发现\"。门不覆盖本叶，证据来自 `matches_golden` 19 passed（2026-11-21 run）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
