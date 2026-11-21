@@ -898,7 +898,9 @@ def _pair_symbol_v2(row, start, end, anchor_text, target_text, target_lines=None
         if neg is None:
             m = re.search(r"不[一-鿿]", pre)
             if m: neg = (m.start(), m.group(0))
-        if neg is not None and not re.search(r"[A-Za-z0-9]", pre[neg[0] + len(neg[1]):]):
+        # 2026-11-21（opc 质询 Q2）：否定词之后到符号之间不得再有任何**字母/数字/汉字**
+        # （否则"不可恢复"/"无操作"/"不再重试"等普通词会被误判成否定引用）。
+        if neg is not None and not re.search(r"[A-Za-z0-9一-鿿]", pre[neg[0] + len(neg[1]):]):
             continue
         if not any(c in target_text for c in _candidates_filewide(sym)): continue
         # 规则 6（2026-11-21，10 抽样）：DB/SQL 标识符不参与代码符号匹配——
@@ -1024,6 +1026,18 @@ def cmd_report_selftest(argv_args=None):
     wl_bad = "| T-2 | x `Body`（`src/Demo.cs:9`） |" + chr(10)
     r2, _i2 = check_src_decl(wl_bad, td, _build_basename_index(td), allowed={"src/Demo.cs"})
     check("**Phase1 反向牙**：锚在方法外 ⇒ SRC_DECL_DRIFT 红", any(c == "SRC_DECL_DRIFT" for c, _ in r2), str(r2))
+    # 否定规则的边界（opc 质询 Q2）：普通词含「不」不得触发；真否定仍触发。
+    def _span_around(row, needle):
+        i0 = row.find(needle); st = i0 - 1; en = row.find("`", i0) + 1
+        return st, en
+    row_pos = "| T-9 | 不再重试 `Body`（`src/Demo.cs:3`） |" + chr(10)
+    st, en = _span_around(row_pos, "src/Demo.cs")
+    sym_pos = _pair_symbol_v2(row_pos, st, en, "src/Demo.cs", demo, demo.split(chr(10)))
+    check("否定边界：『不再重试』不触发否定", sym_pos == "Body", str(sym_pos))
+    row_neg = "| T-10 | **不调** `Body`（`src/Demo.cs:3`） |" + chr(10)
+    st2, en2 = _span_around(row_neg, "src/Demo.cs")
+    sym_neg = _pair_symbol_v2(row_neg, st2, en2, "src/Demo.cs", demo, demo.split(chr(10)))
+    check("否定正例：『**不调** `Body`』触发否定", sym_neg is None, str(sym_neg))
     # 集合一致性牙：SRC_DECL_FILES 必须等于 6 道场景门 REGISTERED 的路径并集
     import glob as _g
     union2 = set()
