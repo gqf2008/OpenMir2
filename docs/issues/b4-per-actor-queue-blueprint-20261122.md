@@ -172,3 +172,53 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 - **若将来有人想把 `<` 改成 `<=`，必须附六元组证据**：
   `(who, param/tag, 产生者 turn, 收件人 turn, 实得 due, 期望 due)`——否则会静默把 self 帧也推到下一 tick
   （caster 的 `657/1001` 会从 900 漂到 1000，与装置/契约不符）。
+
+### §12.1 pilot 验收的 oracle 依据 + 第二处施工偏离（pilot 交付，2026-11-21）
+
+> base = `master 4bb9f256c`（pilot 合入 `b8fffa57c` + 诊断留档 `4bb9f256c`）。本节是 §12 的续（§12 记录「容器改动」；本节记录「验收依据 + 第二处偏离 + 三条验收纪律」）。
+
+#### 12.1.a pilot 的 oracle 依据（5 条 `file:line`）
+
+1. 657 的**入队/出帧点**：`bins/game-svr` 的 `b3_outcome_frames`（transparent 分支 → `push_charstatuschanged`；def 同名符号）。两次 657 是**同一 code 点各跑一次**（按 `rec.slave_self_deliveries` 每条 `transparent` 一次），不是两个调用点；`recog = d.target_id` = 该 8045 的受害者。
+2. **turn 序** = `SelfDelayQueue::actor_ids()` 首次入队序：`crates/world-bevy` 的 `SelfDelayQueue::actor_ids()`（pump 内 `let actors = …`）；`SelfDelayTurn` 定义（同文件）。
+3. **oracle 队列语义**：`src/M2Server/Actor/BaseObject.Message.cs:357` `GetMessage(msgTick)`（未到期队首 `Enqueue(Lowest)` + `return false`，`:364`）。
+4. **oracle per-actor Run**：`src/M2Server/Player/PlayObject.Message.cs:360` 的 `while (… && GetMessage(GetMessageTick, …))` —— self 同轮处理、只有「早于自己跑过的别的 actor 入队的消息」要下一 tick 才见。
+5. **产生者/收件人 turn 对照**（本 head 实测，非推断）：caster=0、target=1（首入队序）；obs_in 无自有自延迟、不在 turn 表（按「未跑」⇒ 不延迟）。
+
+**期望表（4 行；`recog@due`）**：
+
+| 接收者 | 657 期望 | 说明 |
+| --- | --- | --- |
+| caster | `(657,1002,900)`、`(657,1001,900)`、`(640,19,1000)` | `1002` 由 target(turn1) 产生、caster(turn0) 已跑 ⇒ 延迟到 900；`1001` 是 caster 自己 turn 内产生 ⇒ 900 |
+| target | `(657,1002,800)`、`(657,1001,900)` | `1002` self turn ⇒ 800；`1001` 由 caster(早于 target) 产生、target 未跑 ⇒ 900 |
+| obs_in | `(657,1002,800)`、`(657,1001,900)` | 同 target |
+| **s5 实测（caster）** | `(657,2002,900)`、`(657,2001,900)`、`(640,19,1000)` | **pilot 实测**，证明「base+2 → 900」不是推断（s5 base=2000） |
+
+#### 12.1.b 第二处施工偏离：`deliver_self_delay_msgs_impl`「空组不产出」→「**空组也产出 turn**」
+
+- **现状（本 head）**：`crates/world-bevy` 的 `deliver_self_delay_msgs_impl` 尾 **无条件** `turns.push(SelfDelayTurn { actor_id, outcomes })`（含空 `outcomes`）；旧实现是 `if !out.is_empty()` 才 push。
+- **理由**：turn 边界须 = 「本 tick 被 `Run` 过的 actor」（oracle 每个 actor 每 tick 跑一次 `Run`，即便本轮零投递也占一个 turn 下标）。否则 at-due 那一步只有 target 在 turn 表、caster 会被误判「未跑」而**不延迟**（pilot 会假通过但行为错）。
+- **扁平 API 不变**：`flatten_self_delay_turns` 对空组无影响 ⇒ 扁平输出逐元素同序不变。**注意：这改的是 (i) 层已写进台账的契约，必须留痕。**
+
+#### 12.1.c 三条验收纪律（合并门暴露，属本卡）
+
+1. **断言里的位置量必须从夹具 base 派生**：s5/s13 红的教训是 `recog` 写死 `1002/1001`。应写 `base+1`/`base+2`（s1 base=1000、s5 base=2000、s13 base=3000）——s5 实测 `(657,2002,900)` 正是 `base+2` 的证明。
+2. **交付循环退出时 `pending_657` 非空 ⇒ fail-closed panic**（已实现 `6e740976c`；`bins/game-svr` 的 `fireball_parity_drive` 交付循环末的 `assert!(pending_657.is_empty(), …)`）。属 §12 的「退化防线」：延迟 657 若在窗口末仍未排空，说明 wait_ms 不足或延迟排队丢帧，必须红而非静默丢。
+3. **seam 目前只由对拍 rig 调用**（`#[allow(dead_code)]`，如 `bins/game-svr` 的 `drain_b3_self_deliveries_with_pending` 上的标注）——生产 `sim_loop` 的接线在「胶水」批，**不得被读成已上线**。
+
+### §12.2 producer 归属表（656 / 31 / 53 / 100）——per-viewer 延迟的 producer 口径
+
+> 本表是后续 656/31/53/100 **扩面实现的判据**。**方法论**：oracle 里 31/53/656 是「**一个入队点 + N 个 per-receiver 出帧点**」，归属必须分「**入队 turn**」与「**sender / 出帧 actor**」两栏写，否则会把 per-receiver 出帧误算到受击者头上。
+
+| 帧类 | Rust 产生点（`bins/game-svr/src/lib.rs`） | oracle 触发上下文 | **入队 turn** | **sender / 出帧 actor** |
+| --- | --- | --- | --- | --- |
+| **656**（多产生点） | 受击者名色 `drain_mag_struck_b2` 的名色支；攻击方名色 `flush_hitter_name_colors`→`push_name_color_self`；helpers `push_name_color`、`push_name_color_self` | (a) 受击者自身：`AnimalObject.cs:125`→`:330-334`→`BaseObject.cs:730-733 RefNameColor`；(b) 攻击方：`PlayObject.Message.cs:1572 SetPkFlag(hitter)`→`PlayObject.cs:4326-4338`→同一 `RefNameColor` | (a) **受击者**；(b) 也在**受击者 Run 内**（SetPkFlag 由受击者调） | (a) sender=**受击者**；(b) sender=**攻击方**（`targetObject.RefNameColor()`），但由受击者 Run 触发 |
+| **31 SM_STRUCK** | `drain_mag_struck_b2` 的 `push_broadcast_cached(...,P_STRUCKMAG)` | 受击者在自己 Run 里 `BaseObject.Base.cs:629 SendRefMsg(RM_STRUCK_MAG)`（入队给可见者）；**每个接收方在自己 Run 里** `PlayObject.Message.cs:1563→1601→1614 SendSocket(self)`（发给**自己**） | **受击者** | **出帧 actor = 各接收方自己（per-receiver）**；sender(RM)=受击者 |
+| **53 SM_HEALTHSPELLCHANGED** | 同函数 `push_actor(target_id,P_HEALTH)`（self）+ `push_broadcast_cached(...,P_HEALTH)`（ShowHp） | `BaseObject.cs:700-710 HealthSpellChanged()`（self `SendUpdateMsg` + `SendRefMsg` if ShowHp），在受击者 `BaseObject.Base.cs:628 RM_MAGSTRUCK` Operate 里调 | **受击者** | self-53 = 受击者自己；ShowHp-53 = 各接收方下一 Run 出帧 |
+| **100 SM_SYSMESSAGE(YouPoisoned)** | `drain_b4_self_deliveries` 的 `push_actor(online, p.target_id, RM_SYSMESSAGE, body)`（**只发 self**） | `BaseObject.Base.cs:740-757 RM_POISON → MakePosion(this)`；`BaseObject.cs:1970 SysMsg(YouPoisoned)` ⇒ `SendMsg(this)`（self，非 SendRefMsg） | **中毒目标自己（RM_POISON 接收方）的 Run** | **producer = 中毒目标自己，即时 self** |
+
+**结论（给实现）**：
+- **31 / 53 / 656(a) 受击者名色**：入队确在**受击者** Run ⇒ 按「谁 Run 里入队、收件人下一 turn 才见」的 deferral 口径，用**受击者 turn** 是正确的。
+- **656(b) 攻击方名色**：**sender=攻击方**，但入队/触发在**受击者 Run** —— 两栏都要写，别只写一个。
+- **100 是 RM_POISON 的自投递、即时、self**，**不参与 struck turn 批次**；不许与 31/53/656 混批按「受击者 turn」延迟。
+- **本表是后续 656/31/53/100 扩面实现的判据；实现与表不符时，以本表为准。**
