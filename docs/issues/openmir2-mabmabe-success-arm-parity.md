@@ -34,16 +34,21 @@
 - **第二条 `RM_DELAYMAGIC` 未入 `Rm`** = 台账装配（`self_delay_msgs.iter().find(...)` 单数）——装置缺口；
 - **`8103(damage=20)`** = 台账装配（上述 `find_map` + 聚合块，且魔号 50 被 `9 | 10` 排除）——**装置缺口**，
   **产品侧 `deliver_mag_struck` 逐条逻辑是对的，不得按"产品合并"去改**；
-- **时序 600/600（golden）vs 700/800（Rust）与 53 中间态 = 已判定：产品缺陷（自延迟泵堆序）**，
-  单独立卡见 [`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)（`e5` 在写）。
-  `e5` 补测（探针原文）：
-  - 两条 `RM_DELAYMAGIC` 的 `deliver_at_ms` **都是 1000**（cast 400 + 600）⇒ 不是调度差异；
-  - `clock=1000` 两条到期**却取 0**（泵 `break` 在一个未到点的堆根上）；`clock=1100` 3 条到期只取 2、
-    **留下一条已到点的 8021**；`clock=1200` 才取完；
-  - 根因：`SelfDelayQueue`（4 叉堆）**只按 priority 排序（全 255）**，堆根可能是 `deliver_at` 更晚的
-    消息，而泵"遇未到点堆根即 break"。
-  **本卡的驱动/比较器不得为迁就这个缺陷而放宽**：不许放大 `due_ms_rel` 容差、不许跳过帧/接收者，
-  等泵修好后再接。本卡此前的 (a) 假设（600 被 650 挡后）已被 `e5` 的根因替代，归到这张新卡。
+- **时序 600/600（golden）vs 700/800（Rust）与 53 中间态 = 已判定：装置缺口（B17：golden 装置
+  `DrainOnce` 偏离生产 `GetMessage`）**；**Rust 泵与生产同构、无需修改**。证据（源码亲核）：
+  - oracle 生产 `BaseObject.Message.cs::GetMessage`：未到期队首 ⇒ `Enqueue(Lowest)` + `return false`，
+    **遇未到点即停**；`ActorEntity.MsgQueue` = `PriorityQueue<SendMessage, byte>`（**只按 priority**）；
+  - 偏离的是 golden 装置 `MagicGolden/Program.cs::DrainOnce`：`DrainRaw()` 取全部 → 逐条判到期 →
+    到期的处理、未到期的 `PushBack` ⇒ **一步内处理所有到点项**；
+  - ⇒ 装置在某一步里把两条 600ms 的到点项一起结算（golden 两条都是 600），而 Rust 泵按生产语义
+    只能逐步推进（700/800），**两侧差异来自装置口径，不是产品**。
+  - B17 归口卡：`docs/issues/golden-harness-blind-spots.md`（`e5` 在写）。
+  - 受影响 stem（`89` 扫描，**引用不重判**）：MG-12/33/40/51/53 + `mabmabe-nondefault`；
+    `pr1_*` 三条单测**正确地断言了生产语义、应保留**。
+  **本卡的驱动/比较器不得为迁就而放宽**：不许放大 `due_ms_rel` 容差、不许跳过帧/接收者
+  （该红线在"装置对齐生产"的新方案下同样成立）——**装置对齐生产后重出受影响 golden，再判本臂**。
+  **定性沿革（留痕）**：①最初假设"600 被 650 挡后"→ ②按 golden 表现判"泵堆序（产品）"→
+  ③`89` 读 C# 真机后定为 **B17 装置缺口**。对拍两侧一致时永远暴露不了模板偏离生产。
 
 ## 1. 复现
 
@@ -84,14 +89,15 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 ## 3. 证据点与嫌疑（函数 / 当前行为）
 
-### (a) 两条 `RM_DELAYMAGIC` 没有在到期时刻交付（**已判定：产品缺陷——自延迟泵堆序**）
+### (a) 两条 `RM_DELAYMAGIC` 的交付时刻与 golden 不一致（**已判定：装置缺口 B17**）
 
 - 现象：golden 两条 `due_ms_rel=600`；Rust 依次 700 / 800，并出现中间态 53（95 → 80）。
-- `e5` 探针判定（原文见 §0）：两条 `deliver_at_ms` 都是 1000（cast 400 + 600）；`clock=1000` 到期却
-  取 0（泵 `break` 在未到点的堆根上）、`clock=1100` 只取 2 并留下一条已到点的 `8021`、`clock=1200`
-  才取完。根因 = `SelfDelayQueue` 4 叉堆**只按 priority（全 255）排序** + 泵"遇未到点堆根即 break"。
-- **单独立卡**：[`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)（`e5` 在写）。
-  本臂不为此放宽任何比较口径（不加 `due_ms_rel` 容差、不跳帧），等泵修好后再接。
+- 判定（源码证据，见 §0）：**Rust 泵与生产 `GetMessage` 同构（未到点即停 + 只按 priority 的队列），
+  无缺陷**；偏离的是 golden 装置 `DrainOnce`（一步内处理所有到点项）。此前把它当"产品泵堆序"
+  是按 golden 表现做的推断，已被 C# 真机核对推翻。
+- 归口：[`golden-harness-blind-spots.md`](golden-harness-blind-spots.md)（B17，`e5` 在写）。
+  本臂不为此放宽任何比较口径（不加 `due_ms_rel` 容差、不跳帧）；**装置对齐生产后重出受影响
+  golden，再判本臂**。
 
 ### (b) 一条聚合 `8103(damage=20)`（**已实测：驱动装配，装置缺口**）
 
@@ -126,18 +132,18 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 - oracle 的 31/53 在**出队编码时**读当前 `WAbil` ⇒ 两条受击都带最终 HP=80，53 只出现一次；
   Rust 在**应用时**出帧 ⇒ 95/80 两条、53 两条。
-- **归属**：本项与 (a) 同源，归到产品缺陷卡
-  [`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)，不另开定性。
-  若泵修好（两条同时在到期时刻结算）后仍在，再按 oracle 的"入队—出队编码"分层评估。
+- **归属**：本项与 (a) 同源，归到 B17 装置缺口卡
+  [`golden-harness-blind-spots.md`](golden-harness-blind-spots.md)，不另开定性。
+  装置对齐生产（逐步结算）后重出受影响 golden 再看；若仍在，按 oracle 的"入队—出队编码"分层评估。
 
 ## 4. 结论与建议顺序
 
 0. **形态判定已完成**（§0）：`8103` 与第二条 `8021` 都是**装置缺口/驱动装配**，产品逐条逻辑正确；
    **不得**按"产品合并"改 `deliver_mag_struck`。
-1. **时序（a/e）已判定为产品缺陷（自延迟泵堆序）**，见 `self-delay-pump-heap-ordering.md`；
-   本批不动产品、不放宽任何比较口径，等泵修复后再接。
-2. **再修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
-3. (b)(c) 随对照臂驱动批一起改（8103 逐条组装 + 多条 8021）；
+1. **时序（a/e）已判定为装置缺口 B17**（golden 装置 `DrainOnce` 偏离生产；Rust 泵无缺陷），
+   见 `golden-harness-blind-spots.md`；本批不动产品、不放宽任何比较口径，
+   **装置对齐生产后重出受影响 golden（MG-12/33/40/51/53 + `mabmabe-nondefault`）再判本臂**。
+2. (b)(c) 随对照臂驱动批一起改（8103 逐条组装 + 多条 8021）；
 4. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
    `real_rust_ledger_mabmabe_nondefault`）从待落地补丁恢复进批——补丁副本见
    `E:/UserTemp/arm-rust-deferred.patch`（仓外临时物，非交付件）。
