@@ -72282,11 +72282,35 @@ SendRefMsgRange=15
                             .map(|f| f["due_ms_rel"].as_i64().unwrap_or(i64::MIN))
                             .collect()
                     };
-                    assert_eq!(
-                        dues(&r_frames),
-                        dues(&g_frames),
-                        "[{stem}/{label}] caster 640 的 due_ms_rel 与金标准不符"
-                    );
+                    let rd = dues(&r_frames);
+                    let gd = dues(&g_frames);
+                    if matches!(
+                        stem,
+                        "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+                    ) {
+                        // **施毒件按 TickCount 容差判**（与比较器同口径）：640 的 due =
+                        // `DeliveryTime − t0`，`t0` 与 `SendSelfDelayMsg` 最多跨 1 个
+                        // `Environment.TickCount` 粒度（15.6ms）⇒ |Δ|≤32ms（2×粒度）。
+                        // 判别力：600/950 vs 1000（≥50ms）≫ 32ms。其它 stem 仍**逐值严格**。
+                        assert_eq!(
+                            rd.len(),
+                            gd.len(),
+                            "[{stem}/{label}] caster 640 条数不等：golden {gd:?} 台账 {rd:?}"
+                        );
+                        let mut rd_s = rd.clone();
+                        let mut gd_s = gd.clone();
+                        rd_s.sort();
+                        gd_s.sort();
+                        assert!(
+                            rd_s.iter().zip(gd_s.iter()).all(|(r, g)| (r - g).abs() <= 32),
+                            "[{stem}/{label}] caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤32ms）：golden {gd:?} 台账 {rd:?}"
+                        );
+                    } else {
+                        assert_eq!(
+                            rd, gd,
+                            "[{stem}/{label}] caster 640 的 due_ms_rel 与金标准不符"
+                        );
+                    }
                 }
             }
         }

@@ -2992,7 +2992,7 @@ fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
         .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
         .unwrap_or_default();
     assert!(
-        msg.contains("只允许 fire 与施毒 4 支白名单"),
+        msg.contains("只允许 fire / skill10"),
         "必须 panic 在白名单自检：{msg}"
     );
 }
