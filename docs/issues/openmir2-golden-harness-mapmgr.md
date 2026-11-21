@@ -28,7 +28,7 @@ M2Server.Magic.MagicManager.MagMakeSinSuSlave(...)            MagicManager.cs:13
   - **其余 9 成员一律抛 `NotImplementedException`**（触达即炸，比静默假值安全——同 `OfflineWorldEngine` 的 40-throw 约定）。
 - **明确不做**：不建图、不载 `MapInfo.txt`、不刷怪、不触发地图事件、不做城门/安全区。
 - **实现后的边界（已落地验证）**：`SpaceMove` 过 `FindMap` 后还会 `DeleteFromMap/SpaceMoveGetRandXY/AddMapObject/SendMsg/SendRefMsg`。**曾在此 NPE**（`RM_SPACEMOVE_SHOW → baseObject.GetFeature`，`PlayObject.Message.cs:1975`，对裸 `MonsterObject`）；**已由「镜像/同构 target 构造」消解**——预置 slave 改用 `RecordingMonster`，与 target 怪物夹具**同形**（`Program.cs:1815`/`:1882-1891`：均为 **harness 手填** Race/Abil/WAbil/Envir/ActorMgr/AddMapObject，**非生产 `RegenMonsterByName`**），git 实测 `cap_hit` `recall_moved=true`（神兽 (0,0)→施法者面前）。**`RecordingMonster` 之外的其余 9 个 `IMapSystem` 成员仍触达即红（抛 NotImplementedException，边界不扩）**。另：C# 侧为 faithful 也把 caster 面向设成施法方向（`caster.Dir=GetNextDirection(caster→click)`），使回召落点与 Rust 一致。
-- **RNG**：`SpaceMoveGetRandXY` 真走 MapGrid 抽数 ⇒ 回召面的 Rng 与 oracle 同源（不再有「替身 0 抽」偏移）。
+- **RNG**：`SpaceMoveGetRandXY` 真走 MapGrid 抽数 ⇒ 回召面的 Rng 与 oracle 同源（**两侧均参与 RNG 记账**）。
 
 ## 5. 影响面（设了 MapMgr 后哪些既有 golden 可能变）
 - **直达 `SpaceMove`/`Move` 的效果（C# `MagicManager.cs`）**：SINSU(30) `RecallSlave`(:1302)、SPACEMOVE(21) `MagSaceMove`(:876→:407)、push：FIREWIND(8)(:260) / ENERGYREPULSOR(37)(:602) 经 `MagPushArround`(:24)。
