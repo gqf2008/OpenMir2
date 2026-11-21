@@ -2862,6 +2862,12 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
                 caster_dir = (int)caster.Dir,
                 caster_gender = (int)caster.Gender,
                 caster_hair = (int)caster.Hair,
+                // **克隆体在建时处于隐藏态**（`PlayObject` ctor `FixedHideMode = true`，
+                // `PlayObject.cs:993`；clones 不登录 ⇒ 无 `:1442` 的复位）⇒ ctor 尾的
+                // `SendRefMsg(RM_TURN)` 走"只发给自己"支（`BaseObject.Message.cs:390-394`），
+                // 不产生任何收件人帧。记录该值让"零帧"有可解释的输入根因。
+                fixed_hide_mode = cloneObj.FixedHideMode,
+                ob_mode = cloneObj.ObMode,
                 // 训练尾 640 的存在性（`SpellReturn == has_640` 由比较器判，驱动/装置不自证）。
                 has_640 = DecodeFramesForGate(recorder.Buffers, caster.ActorId).Any(f => f.ident == 640),
                 receivers = cloneReceivers,
