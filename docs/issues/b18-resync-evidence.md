@@ -97,3 +97,8 @@
 | groupdeding | 800 | 900(+640溢出) | B |
 
 **列义**：S=新增 schema 键数（18 键表）；T=delivery/now 变（虚拟钟后确定）；Y=剥离 schema/time/due 后语义残余（落盘 49 支全 0；`mabmabe-nondefault` Y=6＝CharStatus 单 bit，B17）；due=旧→新；diff±=行尾对齐后 `git diff --no-index --numstat`。
+
+## 门状态（2026-11-22）
+
+- 全绿：`cargo clippy --workspace --all-targets -- -D warnings` RC=0；`cargo test -p mir2-world-bevy --lib` 911 passed；`--test magic_effect_vectors` 6 passed；magic plane（DRIVERS=150 / Comparator 50-0 / sidecar 0 mismatch）；`fmt` / `msgcodegen` / `docs_anchor`。
+- **未完成**：全量 `cargo test --workspace` 在本机因系统内存被 reaper 终止（死在编译 `mir2_mcp`，0 个测试跑过；**非红**）。由合并门在合并树补跑。
