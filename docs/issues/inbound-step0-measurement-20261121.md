@@ -80,6 +80,31 @@
 并为每条事件的处理段记 `max_single_event_us`（`EventTimer` 守卫，仅开关打开时取钟；
 `continue` 也会在 drop 结算）。用于把"重事件占比"与"吞吐"分栏，不再用单一 `drained` 均值下结论。
 
+
+## 4.2 release 复测（同日，profile=release）：**不积压** ⇒ 结论②（Step 1/2 停）
+
+release `mir2-server`（`cargo build --release -p mir2-server`，JOBS=1，3m28s；二进制含
+`MIR2_PERF_COUNTERS`/`max_single_event_us` 特征串），同一套 load_gate 流程、HoldSec=240：
+
+| 列 | tier 500（1274 tick，稳态 300） | tier 986（1319 tick，稳态 300） |
+| --- | --- | --- |
+| load_gate | **GREEN**（login 100%、in_world 500、tick p99 32ms） | **GREEN**（login 100%、in_world 986、tick p99 47ms） |
+| `inbound_enqueued` | 123.5 / 114 / 240 | 145.6 / 134 / 305 |
+| `inbound_drained` | **123.3** / 112 / 243 | **143.6** / 135 / 286 |
+| `inbound_carry` | 0.0（max 1） | 0.1（p95 1） |
+| `inbound_budget_hit` | **0.0**（max 1） | **0.1**（p95 1；≈10% tick） |
+| `inbound_wall_us` | 23,243 / 22,451 / 45,624 | 27,121 / 26,413 / 50,048 |
+| `drained_command` | 122.3 | 142.4 |
+| `drained_close` | 1.0 | 1.2 |
+| `drained_control` | 0.0 | 0.0 |
+| `max_single_event_us` | **482 / 1,426 / 5,723**（p50/p95/max） | **600 / 1,613 / 4,334** |
+
+**结论（三选一里的 ②）**：release 两档 `enqueued ≈ drained`、`carry≈0`、`budget_hit≈0`
+（986 偶发但无持续积压）⇒ **入站不是瓶颈；debug 的 ≈189/tick 净积压是测量偏差**（debug 单条
+成本被放大；release `max_single_event_us` 仅 0.5–5.7ms，而 debug 同口径可到 58–193ms）。
+⇒ **Step 1/2 都不启动**；下一步是查 debug 栈为何慢（单条成本分布对比），不属本卡。
+986 的 `drained_command` 占 99%：稳态事件几乎全是命令（bot 动作探针），控制/进入类为 0。
+
 ## 5. 产物
 
 - TSV：`E:\UserTemp\d8_step0_counters.tsv`（两档全部 tick，15 列）
