@@ -44,12 +44,30 @@ fn who_of(socket: i32) -> &'static str {
     }
 }
 
+/// 一个 case 的观测面：帧面 + **行为副作用**（dir / ack / 零抽 / 目标血 / MP）。
+/// 拆成结构体是为了让 `warr_43_matches_golden`（帧面）与 `warr_43_behavior_side_effects`
+/// （行为面）各自有落点、失败名可定位（§50）。
+struct CaseObs {
+    caster: i32,
+    frames: std::collections::HashMap<String, Frames>,
+    mp_before: u16,
+    mp_after: u16,
+    dir_before: u8,
+    dir_after: u8,
+    /// `+GD/<tick>` 短包条数（调用方尾部；`result=true` 才发，`delay_time>0` 不走该支）。
+    ack_count: usize,
+    target_hp_before: u16,
+    target_hp_after: u16,
+    /// `RandomNumber` 的 `Debug` 状态快照（`seed_array/inext/inextp`）。
+    /// **失效条件**：若将来给 `RandomNumber` 写自定义 `Debug` 且省略这些字段，零抽断言会**变盲**
+    /// ⇒ 届时改用显式 `draws()` 计数。
+    rng_before: String,
+    rng_after: String,
+}
+
 /// 跑一个 case：按 golden 的 `Fixture` 建世界/会话/记录，调宿主 `CM_SPELL` 入口，收集每个
-/// 收件人的线上帧（gate0 一个通道；短包转 `(0,0,0,0,tail)`；`+GD/…` 过滤）。
-fn run_case(
-    magic_id: u16,
-    fx: &Value,
-) -> (i32, std::collections::HashMap<String, Frames>, u16, u16) {
+/// 收件人的**线上帧**（`+GD/…` 不进行比对面、只计数）与行为侧观测。
+fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     let mp = u16::try_from(fx["caster_mp"].as_u64().expect("caster_mp")).expect("mp u16");
     let level =
         u8::try_from(fx["user_magic_level"].as_u64().expect("user_magic_level")).expect("level u8");
@@ -144,17 +162,29 @@ fn run_case(
     let catalog = game_svr::ability::StdItemCatalog::new();
     let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
     let table = game_svr::mongen::MonsterTable::new(Vec::new());
-    // `CM_SPELL` 入参：`tag = magic_id`、`recog = make_long(nTargetX, nTargetY)`（`magicwire::parse_spell`）。
+    // oracle 登录后 `Dir` = golden `Fixture.dir`；先置成同一输入态，调用后要求**不变**。
+    let dir_start = u8::try_from(fx["dir"].as_u64().expect("dir")).expect("dir u8");
+    if let Some(e) = world.entities.get_mut(caster) {
+        e.ai.dir = dir_start;
+    }
+    let dir_before = world.entities.get(caster).map_or(0, |e| e.ai.dir);
+    let target_hp_before = world.entities.get(target).map_or(0, |e| e.hp);
     // MP 直接断言：调用**前**真实会话里的 `state.wabil.mp`（不是 fixture 常量）。
     let mp_before = sessions
         .get("caster")
         .map(|s| s.state.wabil.mp)
         .unwrap_or_default();
+    // 零抽断言的状态快照（见 `CaseObs.rng_before` 的失效条件）。
+    let rng_before = format!("{:?}", world.rng);
+    // `CM_SPELL` 入参：`tag = magic_id`、`recog = make_long(nTargetX, nTargetY)`（`magicwire::parse_spell`）。
+    // `nParam3 = MakeLong(Param, Series)` 才是**目标 ActorId**（`WorldServer.cs:783-790`）：
+    // 之前传 0 会让 `req.target_actor_id = 0`（目标面不可观测）；这里按真实映射传 target，
+    // 使"不伤目标"类断言（43）有可咬的产品侧写点。
     handle_spell_cmd_with_magic(
         game_svr::feature::make_long(tx as u16, ty as u16),
         magic_id,
-        0,
-        0,
+        (target & 0xFFFF) as u16,
+        ((target >> 16) & 0xFFFF) as u16,
         "caster",
         901,
         &online,
@@ -177,11 +207,15 @@ fn run_case(
         &game_svr::strings::StringConf::defaults(),
     );
 
-    // **MP 直接断言用**：取 `SessionGround.state.wabil.mp`（宿主投影 = 客户端 MP 源）。
+    // **行为面观测**：MP 投影（客户端 MP 源）、Dir、目标血、RNG 状态。
     let mp_after = sessions
         .get("caster")
         .map(|s| s.state.wabil.mp)
         .unwrap_or_default();
+    let dir_after = world.entities.get(caster).map_or(0, |e| e.ai.dir);
+    let target_hp_after = world.entities.get(target).map_or(0, |e| e.hp);
+    let rng_after = format!("{:?}", world.rng);
+    let mut ack_count = 0usize;
     let mut out: std::collections::HashMap<String, Frames> = std::collections::HashMap::new();
     while let Ok(msg) = rx0.try_recv() {
         match msg {
@@ -198,8 +232,10 @@ fn run_case(
                 ));
             }
             SimToGate::SendRaw { socket, payload } => {
-                // 调用方尾部 `+GD/<uptime>` 不在 golden（墙钟 + 不属于 ClientSpellXY）。
+                // 调用方尾部 `+GD/<uptime>` 不在 golden（墙钟 + 不属于 ClientSpellXY），
+                // 但**计数**用于 `result=true` 的行为断言。
                 if payload.starts_with(b"+GD/") {
+                    ack_count += 1;
                     continue;
                 }
                 out.entry(who_of(socket).to_string()).or_default().push((
@@ -214,7 +250,19 @@ fn run_case(
             _ => {}
         }
     }
-    (caster, out, mp_before, mp_after)
+    CaseObs {
+        caster,
+        frames: out,
+        mp_before,
+        mp_after,
+        dir_before,
+        dir_after,
+        ack_count,
+        target_hp_before,
+        target_hp_after,
+        rng_before,
+        rng_after,
+    }
 }
 
 fn golden_frames(r: &Value) -> Vec<(u16, u16, u16, u16, String)> {
@@ -251,7 +299,8 @@ fn check_golden(id: u32) {
             fx["reachability"], "reachable",
             "warr-{id}/{label}: 缺 reachability"
         );
-        let (caster, got, _, _) = run_case(id as u16, fx);
+        let obs = run_case(id as u16, fx);
+        let (caster, got) = (obs.caster, obs.frames);
         for r in case["Receivers"].as_array().expect("Receivers") {
             let who = r["Who"].as_str().expect("Who");
             let want = golden_frames(r);
@@ -320,24 +369,69 @@ fn warr_43_matches_golden() {
         doc["fixture_spec"]["toggle_text_off"], "关闭破空剑",
         "43 关闭文案（源码默认，StringConf 不读）"
     );
-    // **不扣蓝的直接断言**（不靠"帧集里没有 53"反推）：取 `SessionGround.state.wabil.mp`
-    // （宿主投影 = 客户端 MP 源），在 `handle_spell_cmd_with_magic` 调用**前**与排水**后**各取一次，
-    // 要求相等且等于 golden 的 `caster_mp`。43 的 oracle 分支不调 `DamageSpell`/`HealthSpellChanged`。
+    check_golden(43);
+}
+
+/// 43 的**行为面**（失败名可定位，§50）：Dir 不变、`result=true` 的 `+GD` ack、零抽、
+/// 目标血不变、MP 不扣。帧面见 [`warr_43_matches_golden`]。
+#[test]
+fn warr_43_behavior_side_effects() {
+    let doc = golden(43);
     for case in doc["cases"].as_array().expect("cases") {
         let fx = &case["Fixture"];
         let label = case["Label"].as_str().unwrap_or("?");
-        let (_, _, mp_before, mp_after) = run_case(43, fx);
+        // oracle 侧记录先核：golden 的 `Rng` 必须为空（只断"Rust 没抽"不看"oracle 记零抽"＝只看一半）。
         assert_eq!(
-            mp_after, mp_before,
-            "warr-43/{label}: 施法前后 MP 必须相等（43 分支不扣蓝）"
+            case["Rng"].as_array().expect("Rng").len(),
+            0,
+            "warr-43/{label}: golden 的 Rng 必须为空（oracle 零抽）"
+        );
+        let want_dir = u8::try_from(fx["dir"].as_u64().expect("dir")).expect("dir u8");
+        let want_hp = u16::try_from(case["TargetHp"].as_u64().expect("TargetHp")).expect("hp u16");
+        let before_hp = u16::try_from(case["TargetHpBefore"].as_u64().expect("TargetHpBefore"))
+            .expect("hp u16");
+        let obs = run_case(43, fx);
+        // ① Dir：显式 case 不执行 default 的 `Dir = GetNextDirection` ⇒ 前后不变且 == golden。
+        assert_eq!(
+            obs.dir_after, obs.dir_before,
+            "warr-43/{label}: Dir 不得变化（显式 case 不走 default 的 GetNextDirection）"
         );
         assert_eq!(
-            mp_before,
+            obs.dir_after, want_dir,
+            "warr-43/{label}: Dir 必须 == golden"
+        );
+        // ② `result=true` 的可观测代理：恰一条 `+GD/<tick>`（`delay_time>0` 不走该支）。
+        assert_eq!(
+            obs.ack_count, 1,
+            "warr-43/{label}: 必须恰一条 +GD ack（result=true / delay_time==0）"
+        );
+        // ③ 零抽：RNG 状态快照前后相等（依赖 `Debug` 含 `seed_array/inext/inextp`；
+        //    若将来自定义 Debug 省略这些字段，本断言会变盲 ⇒ 改用 draws() 计数）。
+        assert_eq!(
+            obs.rng_after, obs.rng_before,
+            "warr-43/{label}: 43 零抽（RNG 状态不得变化）"
+        );
+        // ④ 目标血：前后不变且等于 golden 的 TargetHpBefore/TargetHp。
+        assert_eq!(
+            obs.target_hp_before, before_hp,
+            "warr-43/{label}: 起始目标血必须 == golden TargetHpBefore"
+        );
+        assert_eq!(
+            obs.target_hp_after, obs.target_hp_before,
+            "warr-43/{label}: 43 不得伤目标"
+        );
+        assert_eq!(
+            obs.target_hp_after, want_hp,
+            "warr-43/{label}: 目标血必须 == golden TargetHp"
+        );
+        // ⑤ MP：前后相等且起值 == fixture（从帧测试移来：行为面归行为测试）。
+        assert_eq!(obs.mp_after, obs.mp_before, "warr-43/{label}: MP 不得变化");
+        assert_eq!(
+            obs.mp_before,
             u16::try_from(fx["caster_mp"].as_u64().expect("caster_mp")).expect("u16"),
             "warr-43/{label}: 起始 MP 必须等于 fixture"
         );
     }
-    check_golden(43);
 }
 
 #[test]
