@@ -3787,6 +3787,7 @@ mod tests {
     /// 向量由 oracle `BaseObject.SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs`）独立手推
     /// + 独立模拟器复算（复核方 openmir2-10 提供），不是从本实现反推。
     #[test]
+    #[allow(clippy::type_complexity)]
     fn space_move_get_rand_xy_700x700_vectors() {
         use std::collections::HashSet;
         let walls =

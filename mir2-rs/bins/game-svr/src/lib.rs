@@ -13530,6 +13530,7 @@ impl SpellFrameBuf {
     ///
     /// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
     /// 收件人按**该步**的 `CurrX/CurrY` 计算，不是整段推挤后的最终坐标。
+    #[allow(clippy::too_many_arguments)]
     fn push_broadcast_cached_at(
         &mut self,
         world: &mir2_world_bevy::World,
@@ -71802,7 +71803,7 @@ SendRefMsgRange=15
                 &mut rig.world,
                 &rig.online,
                 &rig.gates,
-                &mut rig.displays,
+                &rig.displays,
                 rig.registry.as_ref(),
                 u8::try_from(bright).expect("map_bright 必须落在 0..=3"),
             );
