@@ -60,10 +60,18 @@
      键清单断言**每个键等于该键的期望部署值**（`MagTurnUndeadLevel==44`、`AmyOunsulPoint==15`、
      `MabMabeHit*==100/10/21/20`；不等或 ≤0 即 `FixtureContractViolation`），**绝不吃缺省**——
      `>0` 不够，它放过 ctor 缺省 10/50。
-   - 返回已装载值快照；落进 golden `Fixture` 的键名固定为：
+   - 返回已装载值快照；落进 golden `Fixture` 的键名固定为（**ASCII 拼写跟 oracle 走**，
+     `Sucess` 一个 c）：
      `server_conf: {mag_turn_undead_level, mab_mabe_hit_rand_rate, mab_mabe_hit_min_lv_limit,
-     mab_mabe_hit_success_rate, mab_mabe_hit_mabe_time_rate, amy_ounsul_point}`。
+     mab_mabe_hit_sucess_rate, mab_mabe_hit_mabe_time_rate, amy_ounsul_point,
+     mag_tamming_level, mag_tamming_target_level, mag_tamming_hp_rate, mag_tamming_count}`。
+     （注意 `MagTammingTargetHPRate` 是**键名**、C# 字段叫 `MagTammingHPRate`、golden 键叫
+     `mag_tamming_hp_rate`——三者不同属 BUG-REPLICA，别混。）
    - `MG-44`（32）与 `MG-48`（50）分支在 `BehaviorBatch` 之前调用它；施毒批的 6/48 分支改为调用同一入口。
+   - **边界**：`StringConf.LoadString()` + `YouPoisoned` 非空断言属于「字符串配置同源」，**不属于**本入口的
+     十键职责——保留在施毒批自己的分支（或另立 `LoadStringOrThrow`）；圣言/魔爆/收服三批不为它多载字符串表。
+   - **副作用说明（只写注释，不加代码）**：`ConfigFile.ReadWriteInteger`（`src/OpenMir2/Common/ConfigFile.cs:55-63`）
+     对缺键会 `WriteInteger` 写回 **内存中的 ini 缓存**（不落磁盘）——加载有内存副作用，无需额外处理。
 2. **Rust 侧**（parity 驱动区新增一个 helper）：
    `fn apply_serverconf_fixture(rig: &mut …, stem: &str, label: &str)`——从 golden 的 `Fixture` 读
    **必填**键：`mag_turn_undead_level` 落 `world.set_mag_turn_undead_level(v)`；`mab_mabe_hit_*` 落
@@ -73,15 +81,20 @@
       `FixtureContractViolation`。当前生成源（`MAGICGOLDEN_CONF_DIR` 缺省 `E:\MirServer\M2GameSvr\Server.conf`）
       的 sha256 = `ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2`；该文件一改，golden
       生成当场红，而不是静默重基线。现有 `ServerConfSha256()` 已会算，缺的只是常量 + 断言。
-      注：`E:/UserFleet` 两份部署副本是另一份文件（sha `f18068c6…`，其余键不同），本批六个键值一致。
+      注：`E:/UserFleet` 两份部署副本是另一份文件（sha `f18068c6…`，其余键不同），本批十键值一致。
       **语义边界**：本包钉的 sha 是**生成源（`MAGICGOLDEN_CONF_DIR` 缺省 `E:\MirServer\M2GameSvr`）整文件身份**，
       用于「文件一改、golden 生成当场红」；它**不**用于证明所有部署副本同值（`E:/UserFleet` 两份 sha 不同、
-      六键相同）。跨部署的一致性由 §3.3 第 2 条的**逐键字面值断言**承担。
+      十键相同）。跨部署的一致性由 §3.3 第 2 条的**逐键字面值断言**承担。
       **不要绕过断言**：若将来把 `MAGICGOLDEN_CONF_DIR` 指向花名册副本，应**更新常量**，不得加 `--force` 旁路。
    2) **比较器断言绝对值**：对 golden 的 `server_conf` 逐键断言
       `mag_turn_undead_level == 44`、`mab_mabe_hit_rand_rate == 100`、`mab_mabe_hit_min_lv_limit == 10`、
-      `mab_mabe_hit_success_rate == 21`、`mab_mabe_hit_mabe_time_rate == 20`、`amy_ounsul_point == 15`
-      —— **不是"两侧相等"**。这是 magic 侧的唯一依赖（**不读文件**），保证 golden 仍是可移植的冻结件。
+      `mab_mabe_hit_sucess_rate == 21`、`mab_mabe_hit_mabe_time_rate == 20`、`amy_ounsul_point == 15`、
+      `mag_tamming_level == 40`、`mag_tamming_target_level == 1`、`mag_tamming_hp_rate == 100`、
+      `mag_tamming_count == 5` —— **不是"两侧相等"**。这是 magic 侧的唯一依赖（**不读文件**），
+      保证 golden 仍是可移植的冻结件。
+      **常量一致性**：十键常量在 C#/Rust 两侧各存一份（跨语言无法共享代码），但必须与
+      `serverconf_parse_parity` 的 `DEPLOY` 数组**逐字一致**；实现批验收必须包含该测试仍
+      `2 passed`（把两份常量钉在一起）。
 
 **不要做全局装载**（不要在 `EnsureConfFiles` 后无条件 `LoadConfig()`）：那会一次性改变所有 stem 的
 Config 面，必须全量重生成 + 全量对拍才能证明无漂移；**分支级装载**最小、可逐批验收。
@@ -89,7 +102,7 @@ Config 面，必须全量重生成 + 全量对拍才能证明无漂移；**分�
 ## 4. fail-closed 口径（本仓惯例）
 
 - 凡依赖配置项的批次：**缺文件 / 缺键 / 读值不等于期望部署值**（`MagTurnUndeadLevel=44`、`AmyOunsulPoint=15`、
-  `MabMabe*=100/10/21/20`）或 ≤0 ⇒ `FixtureContractViolation`（C#）或契约 panic（Rust），不许落缺省。
+  `MabMabe*=100/10/21/20`、`MagTammingLevel=40`、`MagTammingTargetLevel=1`、`MagTamming*HP/Count=100/5`）或 ≤0 ⇒ `FixtureContractViolation`（C#）或契约 panic（Rust），不许落缺省。
   **只断 `>0` 不够**：施毒批内联只断 `AmyOunsulPoint<=0`，比不到 15；本批共享入口断到具体值。
 - golden 必须把**输入**写进 `Fixture`（逐键值 + `server_conf_sha256`），比较器只比"同一份输入的两侧输出"。
 
@@ -125,7 +138,7 @@ Config 面，必须全量重生成 + 全量对拍才能证明无漂移；**分�
 4. **变异牙（真正的牙）**：把 Rust `mag_turn_undead_level` 从 golden 的 **44 改成 50** ⇒
    **44 与 45 两档必红、43 不红**（50 下 `44<50` 与 `45<50` 都成立、结果翻转；43 在两值下都过门，翻不了）。
    只盯 43 档抓不到 50。
-5. **绝对值断言**：比较器对 `server_conf` 逐键断言 §3.3 第 2 条的六个字面值（不是"两侧相等"）。
+5. **绝对值断言**：比较器对 `server_conf` 逐键断言 §3.3 第 2 条的十个字面值（不是"两侧相等"）。
 6. **回归**：既有 31 份 magic golden 的 stem 全部不重新生成、不加 ServerConf 装载（git status 证）。
 7. **独立的 config 解析对拍照（`3b` 方案）**：Rust 生产解析器（`bins/game-svr/src/config.rs` 的 `Server.conf`
    解析）与 C# `ServerConf.LoadConfig` 对**同一份文件**逐键相等；缺键时两侧回落值也相等（C# 回落 ctor 缺省、
