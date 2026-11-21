@@ -72907,6 +72907,14 @@ SendRefMsgRange=15
         }
         // 延迟支（2/11/45/13/44 的 `RM_DELAYMAGIC`）的受击发生在**交付段** ⇒ 再取一次；
         // 只用于 `8090`（改名）的组装——8044/8103 由既有 `delay_magic` 块负责，避免重复。
+        // **(ii) pilot fail-closed**：交付循环退出时延迟队列必须为空；否则延迟 657 被静默丢弃。
+        // 若某 stem 确有合法残留（延迟点落在 wait_ms 之后），必须在此写明原因并改为有区分的断言，
+        // 不得放开。
+        assert!(
+            pending_657.is_empty(),
+            "pilot：交付循环结束时 pending_657 仍有 {} 条 ⇒ 延迟 657 被静默丢弃（wait_ms={wait_ms}）；             若某 stem 合法残留，须写明原因并改为有区分的断言",
+            pending_657.len()
+        );
         let struck_delivered = rig.world.struck_log().to_vec();
         rig.world.clear_struck_log();
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
