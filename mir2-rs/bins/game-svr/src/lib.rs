@@ -25688,6 +25688,35 @@ fn drain_monster_ref_msgs(
                 );
                 smframe::sm_changenamecolor(m.actor_id, color)
             }
+            // `RefShowName()`（`BaseObject.cs:1174-1177`）⇒ 收件人侧
+            // `SM_USERNAME(42)`：`MakeMessage(..., GetChrColor(baseObject), 0, 0)` + 尾
+            // `EncodeString(GetShowName())`（`PlayObject.Message.cs:1662-1664`）。
+            // `GetShowName = FilterShowName(ChrName) [+ "(Master.ChrName)"]`（`BaseObject.Base.cs:779-787`）。
+            mir2_world_bevy::monai::RM_USERNAME => {
+                let (name, master_id) = match world.entities.get(m.actor_id) {
+                    Some(e) => (e.name.clone(), e.master),
+                    None => continue,
+                };
+                const NPC_NAME_COLOR_ORACLE_DEFAULT: u8 = 255;
+                let color = world.entities.get(m.actor_id).map_or(255, |e| {
+                    mir2_world_bevy::slave::get_chr_color(
+                        &e,
+                        &pet_cfg.slave_color,
+                        NPC_NAME_COLOR_ORACLE_DEFAULT,
+                    )
+                });
+                let mut show = downlink::filter_show_name(&name).to_string();
+                if let Some(mid) = master_id {
+                    if let Some(master) = world.entities.get(mid) {
+                        if !master.ob_mode {
+                            show.push('(');
+                            show.push_str(&master.name);
+                            show.push(')');
+                        }
+                    }
+                }
+                smframe::sm_username(m.actor_id, color, &enter::gbk(&show))
+            }
             mir2_world_bevy::monai::RM_DIGUP => {
                 let (feature, light) = displays
                     .get(m.actor_id)
@@ -89824,6 +89853,108 @@ SendRefMsgRange=15
     }
 
     // ---- `openmir2-rm-self-guard-all-idents` A2：路径级牙（docs/rm-self-guard-audit-20261029.md §3）----
+
+    /// **MG-34 帧面接线 D（宿主）**：`RefShowName` 的 `RM_USERNAME(8101)` ⇒
+    /// `SM_USERNAME(42)` + 尾 `EncodeString(FilterShowName(ChrName) + "(Master.ChrName)")`；
+    /// 与 `RefNameColor` 的 656 按 pending 顺序先 656 后 42。
+    #[test]
+    fn adopt_ref_frames_encode_656_then_42_with_master_suffix() {
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        // 名字取自本夹具实体（不是占位常量）：断言按 `FilterShowName` 现算。
+        let master_name = "主人";
+        let mon_name = "怪";
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, master_name.to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, mon_name.to_string(), 10, 10);
+        m.race = 101;
+        let mid = world.add_entity(m);
+        world.tick();
+        world.entities.get_mut(mid).unwrap().slave.master = Some(pid);
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "主人".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let mk = |ident: u16| mir2_world_bevy::MonsterRefMsg {
+            actor_id: mid,
+            ident,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            target_x: 0,
+            target_y: 0,
+            dir: 5,
+            x: 10,
+            y: 10,
+            map_id: 0,
+            status: 0,
+            self_only: false,
+            recipients: vec![pid],
+        };
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_CHANGENAMECOLOR));
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_USERNAME));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                frames.push(body);
+            }
+        }
+        assert_eq!(frames.len(), 2, "两帧：656 + 42");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_CHANGENAMECOLOR
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[1][4], frames[1][5]]),
+            mir2_protocol::messages::SM_USERNAME
+        );
+        assert_eq!(frames[0].len(), 12, "656 无尾");
+        let tail = &frames[1][mir2_protocol::frame::CommandMessage::SIZE..];
+        let decoded = mir2_protocol::edcode::decode(tail);
+        let with_master = format!("{}({})", downlink::filter_show_name(mon_name), master_name);
+        assert_eq!(
+            decoded,
+            enter::gbk(&with_master),
+            "42 尾 = EncodeString(FilterShowName + (Master.ChrName))"
+        );
+
+        // **条件分支**：Master 处于 `ObMode` ⇒ `GetShowName` **不加**主人后缀。
+        world.entities.get_mut(pid).unwrap().flags.ob_mode = true;
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_USERNAME));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut frames2: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                frames2.push(body);
+            }
+        }
+        assert_eq!(frames2.len(), 1);
+        let tail2 = &frames2[0][mir2_protocol::frame::CommandMessage::SIZE..];
+        assert_eq!(
+            mir2_protocol::edcode::decode(tail2),
+            enter::gbk(downlink::filter_show_name(mon_name)),
+            "Master.ObMode ⇒ 42 尾无主人后缀"
+        );
+    }
 
     /// A2 ①：`WALK/RUN/HORSERUN/TURN` 族出帧走 [`broadcast_ref_msg`]（`include_self=false`）：
     /// 发起者自己 **0 帧**、附近另一玩家 **1 帧**（oracle `PlayObject.Message.cs:1404/1414/1424/1528`

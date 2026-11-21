@@ -467,14 +467,15 @@ pub fn cast_tamming_spell(
         if tamed {
             // 落尾（⑨-3）：`Master`/`MasterRoyaltyTick`/`SlaveMakeLevel`/`MasterTick`/
             // `WalkSpeed`/`NextHitTime`/`BreakHolySeizeMode`/`SlaveList.Add`（`MagicManager.cs:753-770`）。
+            // `MagicManager.cs:738` `BreakCrazyMode()` **先于** adopt 字段（`:753-775`）——
+            // 顺序决定 8090 帧序（BreakCrazy 的 RefNameColor 在前）。
+            mir2_world_bevy::monai::break_crazy_mode(world, target_id);
             world.tame_adopt(
                 input.caster_id,
                 target_id,
                 input.magic_level,
                 out.royalty_draw,
             );
-            // 受奴成功支的 `targetObject.BreakCrazyMode()`（`MagicManager.cs:738`）。
-            mir2_world_bevy::monai::break_crazy_mode(world, target_id);
         } else if out.target_hp != tin.target_hp {
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
@@ -849,6 +850,55 @@ mod tests {
             return;
         }
         panic!("else 支应能找到 seed");
+    }
+
+    /// **MG-34 帧面接线 A**：`tame_adopt` 必须按 oracle 顺序产生
+    /// `RM_CHANGENAMECOLOR`（`BreakHolySeizeMode`）→ `RM_USERNAME`（`RefShowName`），且只投附近玩家。
+    #[test]
+    fn tame_adopt_emits_namecolor_then_username() {
+        let (mut w, caster, target) = tamming_world(1, 50, 600, 20);
+        w.tick(); // 入图（否则格扫无收件人，SendRefMsg 等于不发）
+        assert!(w.tame_adopt(caster, target, 0, 0));
+        let msgs = w.take_monster_ref_msgs();
+        let idents: Vec<u16> = msgs.iter().map(|m| m.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_world_bevy::monai::RM_CHANGENAMECOLOR,
+                mir2_world_bevy::monai::RM_USERNAME
+            ],
+            "adopt 帧序：BreakHolySeize(8090) → RefShowName(8101)"
+        );
+        assert!(msgs.iter().all(|m| m.actor_id == target));
+        assert!(
+            msgs.iter().all(|m| !m.recipients.is_empty()),
+            "两个 Ref 帧都必须有格扫收件人（否则等于不发）"
+        );
+    }
+
+    /// **MG-34 帧面接线 B**：`OpenCrazyMode` 尾 `RefNameColor()` ⇒ 一条 8090。
+    #[test]
+    fn open_crazy_mode_emits_namecolor() {
+        let (mut w, _caster, target) = tamming_world(1, 50, 600, 20);
+        mir2_world_bevy::monai::open_crazy_mode(&mut w, target, 12);
+        let msgs = w.take_monster_ref_msgs();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].ident, mir2_world_bevy::monai::RM_CHANGENAMECOLOR);
+        assert_eq!(msgs[0].actor_id, target);
+    }
+
+    /// **MG-34 帧面接线 C**：`BreakCrazyMode` 的 `RefNameColor` **只在** CrazyMode 为真时发。
+    #[test]
+    fn break_crazy_mode_emits_namecolor_only_when_crazy() {
+        let (mut w, _caster, target) = tamming_world(1, 50, 600, 20);
+        mir2_world_bevy::monai::break_crazy_mode(&mut w, target);
+        assert!(w.take_monster_ref_msgs().is_empty(), "非狂暴 ⇒ 不发 8090");
+        mir2_world_bevy::monai::open_crazy_mode(&mut w, target, 12);
+        let _ = w.take_monster_ref_msgs();
+        mir2_world_bevy::monai::break_crazy_mode(&mut w, target);
+        let msgs = w.take_monster_ref_msgs();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].ident, mir2_world_bevy::monai::RM_CHANGENAMECOLOR);
     }
 
     /// **⑨-2 第③片判据 ①（`!Animal` 门）**：动物（race 51）⇒ oracle 连 `MagTamming` 都不进

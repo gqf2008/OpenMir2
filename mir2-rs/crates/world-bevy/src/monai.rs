@@ -80,6 +80,8 @@ pub const RM_TURN: u16 = 10001;
 pub const RM_HIT: u16 = 10004;
 /// `Messages.RM_CHANGENAMECOLOR` = 8090；world 不依赖 protocol crate，常量值对冻结表。
 pub const RM_CHANGENAMECOLOR: u16 = 8090;
+/// `Messages.RM_USERNAME` = 8101（`RefShowName()`，收件人 ⇒ `SM_USERNAME(42)`）。
+pub const RM_USERNAME: u16 = 8101;
 /// `Messages.RM_DIGUP`（`src/OpenMir2/Messages.cs:614`）——出土帧（`SM_DIGUP`）。
 pub const RM_DIGUP: u16 = 10200;
 /// `Messages.RM_SPELL`（`src/OpenMir2/Messages.cs:562` = 10008）——`FireballMonster.Run` 的
@@ -1033,7 +1035,7 @@ fn ref_snapshot_impl<A: crate::entity::EntityAccess>(
 const NO_SENDER_EXCLUSION: i32 = i32::MIN;
 
 /// `BaseObject.SendRefMsg(wIdent, wParam, nParam1, nParam2, nParam3, sMsg)`（`BaseObject.Message.cs:383`）。
-fn send_ref_msg(
+pub(crate) fn send_ref_msg(
     world: &mut World,
     actor_id: i32,
     ident: u16,
@@ -5073,19 +5075,26 @@ pub fn open_crazy_mode(world: &mut World, actor_id: i32, interval_seconds: i32) 
         // C# `int * int` 在 int 上计算；正常取值（`Random(20)+10`）远不溢出。
         e.ai.crazy_mode_interval = i64::from(interval_seconds) * 1000;
     }
+    // `MonsterObject.cs:465-470` `OpenCrazyMode` 尾 `RefNameColor()`（556/656 的 8090）。
+    send_ref_msg(world, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
 }
 
 /// `MonsterObject.BreakCrazyMode()`（`MonsterObject.cs:473-480`）：**只有** `CrazyMode` 为真才清
 /// （`RefNameColor` 同属帧面，world 层不产帧）。
 pub fn break_crazy_mode_impl<A: crate::entity::EntityAccess>(
     access: &mut A,
-    _sim: &mut crate::world::SimState,
+    sim: &mut crate::world::SimState,
     actor_id: i32,
 ) {
+    let was_crazy = access.get(actor_id).is_some_and(|e| e.ai.crazy_mode);
     if let Some(e) = access.get_mut(actor_id) {
         if e.ai.crazy_mode {
             e.ai.crazy_mode = false;
         }
+    }
+    // `MonsterObject.cs:473-480`：**只有** CrazyMode 为真才清且才 `RefNameColor()`。
+    if was_crazy {
+        send_ref_msg_impl(access, sim, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0, None);
     }
 }
 
