@@ -78522,7 +78522,10 @@ SendRefMsgRange=15
             mir2_world_bevy::magic::back_dir(2),
             "CharPushed 收尾 Dir = nBackDir"
         );
-        // ③ 帧序：SM_SPELL 先；逐格 SM_BACKSTEP；SM_MAGICFIRE 在共享尾最后。
+        // ③ 帧序：**投递序**（oracle 收件人 `MsgQueue` 四叉堆，`BaseObject.Message.cs:181`）——
+        // `SM_SPELL(17)=RM ident 24` 先，其后 `SM_MAGICFIRE(638)=136` 先于 `SM_BACKSTEP(9)=156`。
+        // golden `firewind/s1` 的 target 侧即 `[17, 638, 9]`。调用序（:159 → CharPushed → 尾）
+        // **不是**投递序：三条 `RM_SPELL`/`RM_MAGICFIRE`/`RM_PUSH` 同进该收件人的堆后按优先级出队。
         let seq = effect_seq(&effect_drain(&mut rx), 912);
         println!("FIREWIND_SEQ {seq:?}");
         assert_eq!(
@@ -78551,8 +78554,8 @@ SendRefMsgRange=15
             .position(|id| *id == mir2_protocol::messages::SM_BACKSTEP)
             .expect("应至少一条 SM_BACKSTEP");
         assert!(
-            i_spell < i_push && i_push < i_fire,
-            "oracle 帧序 159 -> CharPushed -> 尾"
+            i_spell < i_fire && i_fire < i_push,
+            "oracle 投递序：17(24) → 638(136) → 9(156)（golden firewind/s1 target 侧）"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -78733,7 +78736,10 @@ SendRefMsgRange=15
         assert_eq!(changes[0].map_id, 1);
         assert_eq!((changes[0].x, changes[0].y), (want_x, want_y));
         assert_eq!(changes[0].space_move_show, Some(true));
-        // ④ 帧：`RM_MAGICFIRE`（case 内、先）→ `RM_SPACEMOVE_FIRE2` ⇒ `SM_SPACEMOVE_HIDE2`。
+        // ④ 帧：**投递序**（oracle 收件人 `MsgQueue` 四叉堆，`BaseObject.Message.cs:181`）——
+        // `RM_SPACEMOVE_FIRE2(8042)` 的 `(byte)ident=106` 先于 `RM_MAGICFIRE(10120)=136`
+        // ⇒ `SM_SPACEMOVE_HIDE2(806)` 先于 `SM_MAGICFIRE(638)`（golden `spacemove/s1` 的 caster 侧
+        // `[806, 638, …]`）。调用序（:406 MAGICFIRE 先于 :881 FIRE2）**不是**投递序。
         let seq = effect_seq(&effect_drain(&mut rx), 911);
         println!("SPACEMOVE_SEQ {seq:?}");
         let i_fire = seq
@@ -78745,8 +78751,8 @@ SendRefMsgRange=15
             .position(|id| *id == mir2_protocol::messages::SM_SPACEMOVE_HIDE2)
             .expect("门通过 ⇒ RM_SPACEMOVE_FIRE2 -> SM_SPACEMOVE_HIDE2");
         assert!(
-            i_fire < i_hide,
-            "oracle 序：:406 的 RM_MAGICFIRE 先于 :881 的 FIRE2"
+            i_hide < i_fire,
+            "oracle 投递序：806(106) → 638(136)（golden spacemove/s1 caster 侧）"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
