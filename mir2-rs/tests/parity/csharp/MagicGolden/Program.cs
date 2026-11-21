@@ -190,8 +190,11 @@ public static class Program
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
-            // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**（默认 0 ⇒
-            // `nPower / (double)0` 溢出），不许依赖缺省——装载失败即 rc=2。
+            // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
+            // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
+            // 但部署是 **15** ⇒ 不装载就会**功率数值错**且与部署不同源（卡 §53）。断言 `!= 15` 即 rc=2。
+            // **作用域**：本 `--case` 分支级装载（不全局），且本生成器**一次进程只处理一个 `--case`**
+            // （CLI 只取一个 argv），静态 `SystemShare.Config` 不会泄漏到别的 case 族。
             if (name is "amyounsul" or "amyounsul-shape2" or "groupamyounsul" or "groupamyounsul-shape2")
             {
                 // **显式装载 ServerConf**：`SystemShare` 静态构造只灌 ctor 缺省（`AmyOunsulPoint=10`），
