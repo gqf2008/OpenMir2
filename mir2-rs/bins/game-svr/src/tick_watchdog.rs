@@ -14,7 +14,7 @@
 //! 触发动作用**可注入的 aborter**（生产 = `std::process::abort`；测试 = 记录标志），
 //! 因此「检测 + 触发路径」都能在测试里红检，而不必真的杀测试进程。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,28 @@ pub fn is_stalled(last_ms: u64, now_ms: u64, threshold_ms: u64) -> bool {
     now_ms.saturating_sub(last_ms) > threshold_ms
 }
 
+/// 心跳与看门狗共用的**单调时钟**。
+///
+/// 区线程 beat 与看门狗 `check_once` 必须用**同一个 epoch**：否则 `now - last` 会是巨大值
+/// 或负数（`saturating_sub` 只会把它变成 0，永远不会判卡死）。[`ZoneWatch`] 负责把同一个
+/// 时钟分给两边。
+#[derive(Clone, Copy, Debug)]
+pub struct WatchdogClock(Instant);
+
+impl WatchdogClock {
+    /// 以当前时刻为 epoch。
+    #[must_use]
+    pub fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    /// 自 epoch 起的毫秒数（`u64` 饱和）。
+    #[must_use]
+    pub fn now_ms(self) -> u64 {
+        u64::try_from(self.0.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
 /// 每区「最近一次完成 tick」的时刻表（ms，单调时钟）。
 #[derive(Debug)]
 pub struct ZoneHeartbeats {
@@ -116,6 +138,15 @@ impl ZoneHeartbeats {
             now_ms,
             threshold_ms,
         )
+    }
+
+    /// 某区最近一次完成 tick 的时刻（ms；诊断/测试）。
+    ///
+    /// # Panics
+    /// `zone` 越界 ⇒ panic。
+    #[must_use]
+    pub fn last_completed_ms(&self, zone: ZoneId) -> u64 {
+        self.slots[zone.index()].load(Ordering::Relaxed)
     }
 
     /// 全部卡死的区（按区号升序；空 = 都健康）。
@@ -201,23 +232,158 @@ impl TickWatchdog {
     /// 起独立看门狗线程（`poll_ms` 建议 = `threshold/4`）。
     ///
     /// 生产 aborter 是 `process::abort`，线程不会从 `check_once` 返回；测试注入的 aborter
-    /// 返回后本线程退出（避免测试里空转）。
+    /// 返回后本线程退出（避免测试里空转）。时钟自取（测试便利）；生产接线用
+    /// [`Self::spawn_stoppable`] 与区线程共用同一个 [`WatchdogClock`]。
     #[must_use]
     pub fn spawn(self, poll_ms: u64) -> std::thread::JoinHandle<()> {
+        self.spawn_stoppable(
+            poll_ms,
+            WatchdogClock::start(),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    /// 可停止版本：`clock` 与区线程共用（心跳/检查必须同 epoch）；`stop` 置真后线程在
+    /// 一个 ≤50ms 的切片内退出（测试用；生产不设 stop，靠 abort 终止）。
+    ///
+    /// 检查周期 `poll_ms` 内按 ≤50ms 切片睡眠，因此长阈值也不会让 `join` 等整段阈值。
+    #[must_use]
+    pub fn spawn_stoppable(
+        self,
+        poll_ms: u64,
+        clock: WatchdogClock,
+        stop: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         let poll = Duration::from_millis(poll_ms.max(1));
+        let step = poll.min(Duration::from_millis(50));
         std::thread::Builder::new()
             .name("m2-zone-watchdog".to_string())
             .spawn(move || {
-                let epoch = Instant::now();
-                let now_ms = || u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
-                loop {
-                    std::thread::sleep(poll);
-                    if self.check_once(now_ms()).is_some() {
+                let mut since_check = Duration::ZERO;
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(step);
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    since_check += step;
+                    if since_check < poll {
+                        continue;
+                    }
+                    since_check = Duration::ZERO;
+                    if self.check_once(clock.now_ms()).is_some() {
                         return;
                     }
                 }
             })
             .expect("起区看门狗线程失败")
+    }
+}
+
+/// **N>1** 的生产看门狗组：心跳表 + 共用时钟 + 看门狗线程。
+///
+/// N=1 时**不建线程**（[`Self::watchdog_started`] == false）：单区走原单线程路径，区驱动
+/// 零参与（与 `region_loop::ZoneDriverPlan::SingleThread` 是同一决定的两半）。
+///
+/// 接线（段 6）：每区 `run_zone_tick(.., Some((watch.heartbeats(), watch.now_ms())))`；
+/// 任区 phase2 卡死 ⇒ 心跳停滞 ⇒ 线程 abort 整机（既有「任一片失败整机 Abort」语义）。
+pub struct ZoneWatch {
+    heartbeats: Arc<ZoneHeartbeats>,
+    clock: WatchdogClock,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for ZoneWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZoneWatch")
+            .field("watchdog_started", &self.thread.is_some())
+            .finish()
+    }
+}
+
+impl ZoneWatch {
+    /// 生产构造：跨阈值 ⇒ `process::abort`；N=1 ⇒ 无线程。
+    #[must_use]
+    pub fn start(zone_count: usize, threshold_ms: u64) -> Self {
+        Self::start_with(
+            zone_count,
+            threshold_ms,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    /// 可注入构造：`aborter = None` ⇒ 生产 `process::abort`；`stop` 置真即退出线程。
+    ///
+    /// **N=1 不启动看门狗**：没有区线程可卡，也不该让单区路径有 abort 源。
+    #[must_use]
+    pub fn start_with(
+        zone_count: usize,
+        threshold_ms: u64,
+        aborter: Option<Arc<dyn Fn() + Send + Sync>>,
+        stop: Arc<AtomicBool>,
+    ) -> Self {
+        let clock = WatchdogClock::start();
+        let heartbeats = Arc::new(ZoneHeartbeats::new(zone_count, clock.now_ms()));
+        let thread = (zone_count > 1).then(|| {
+            let watchdog = match aborter {
+                Some(a) => TickWatchdog::with_aborter(Arc::clone(&heartbeats), threshold_ms, a),
+                None => TickWatchdog::new(Arc::clone(&heartbeats), threshold_ms),
+            };
+            watchdog.spawn_stoppable((threshold_ms / 4).max(1), clock, stop)
+        });
+        Self {
+            heartbeats,
+            clock,
+            thread,
+        }
+    }
+
+    /// 看门狗线程是否启动（N=1 ⇒ `false`）。
+    #[must_use]
+    pub fn watchdog_started(&self) -> bool {
+        self.thread.is_some()
+    }
+
+    /// 心跳表（区线程 beat / 段 6 传给 `run_zone_tick`）。
+    #[must_use]
+    pub fn heartbeats(&self) -> &Arc<ZoneHeartbeats> {
+        &self.heartbeats
+    }
+
+    /// 共用时钟（与看门狗同一 epoch）。
+    #[must_use]
+    pub fn clock(&self) -> WatchdogClock {
+        self.clock
+    }
+
+    /// 当前时刻（与看门狗同一 epoch）。
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.clock.now_ms()
+    }
+
+    /// 区完成一个 tick（phase2 之后）。
+    ///
+    /// # Panics
+    /// `zone` 越界 ⇒ panic（编程错误）。
+    pub fn beat(&self, zone: ZoneId) {
+        self.heartbeats.completed(zone, self.clock.now_ms());
+    }
+
+    /// 某区是否卡死（诊断/测试；生产由看门狗线程判）。
+    ///
+    /// # Panics
+    /// `zone` 越界 ⇒ panic。
+    #[must_use]
+    pub fn stalled(&self, zone: ZoneId, threshold_ms: u64) -> bool {
+        self.heartbeats
+            .stalled(zone, self.clock.now_ms(), threshold_ms)
+    }
+
+    /// 取走线程句柄（测试 join 用；N=1 ⇒ `None`）。
+    #[must_use]
+    pub fn into_thread(self) -> Option<std::thread::JoinHandle<()>> {
+        self.thread
     }
 }
 
@@ -308,5 +474,47 @@ mod tests {
         for bad in ["", "   ", "0", "-1", "x", "1.5"] {
             assert!(parse_timeout(Some(bad)).is_err(), "非法值必须拒绝：{bad:?}");
         }
+    }
+
+    /// **接线牙**：N=1 不启动看门狗线程；N>1 启动，且 beat 后区不判卡死。
+    ///
+    /// 红检：把 `start_with` 的 `zone_count > 1` 改成 `zone_count > 0` ⇒ N=1 断言红；
+    /// 删掉 `ZoneWatch::beat` 的 `completed` ⇒ `stalled` 断言红。
+    #[test]
+    fn zone_watch_starts_only_for_multi_zone_and_beats_advance() {
+        let single = ZoneWatch::start(1, 60_000);
+        assert!(
+            !single.watchdog_started(),
+            "N=1 走原单线程路径 ⇒ 不建看门狗线程"
+        );
+        assert!(single.into_thread().is_none());
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let multi = ZoneWatch::start_with(
+            2,
+            60_000,
+            Some(Arc::new(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            })),
+            Arc::clone(&stop),
+        );
+        assert!(multi.watchdog_started(), "N>1 必须启动看门狗线程");
+        multi.beat(ZoneId::new(0));
+        multi.beat(ZoneId::new(1));
+        assert!(!multi.stalled(ZoneId::new(0), 60_000));
+        assert!(!multi.stalled(ZoneId::new(1), 60_000));
+        stop.store(true, Ordering::SeqCst);
+        multi
+            .into_thread()
+            .expect("N>1 有线程")
+            .join()
+            .expect("看门狗线程按 stop 退出");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "健康心跳期间不得触发 abort"
+        );
     }
 }

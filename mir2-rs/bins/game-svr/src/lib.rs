@@ -22486,6 +22486,15 @@ mod perf_counters {
     /// `socket <= 0`（不是活客户端句柄）被拒绝分配的次数。
     pub(crate) static ZONE_ROUTER_REJECTED_SOCKET: AtomicU64 = AtomicU64::new(0);
 
+    // ---- L2-4 段 5：区屏障等待 ----
+    /// 本 tick 各区**「两道屏障等待之和」的最大值**（微秒）——决定整 tick 墙钟的是最慢的
+    /// 区，所以这是 Amdahl 代价；**不是**全部区之和（那个在 [`REGION_BARRIER_TOTAL_US`]，
+    /// 只用于对账）。`write_tick` 每 tick 清零。只记录不设门。
+    pub(crate) static REGION_BARRIER_US: AtomicU64 = AtomicU64::new(0);
+    /// 本 tick 全部区「两道屏障等待之和」的总和（微秒）。**只用于对账**——别把它当 tick
+    /// 成本读（区越多越大，见 `region_barrier_us` 的 max 口径）。
+    pub(crate) static REGION_BARRIER_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
     /// 否则并行测试互相踩（`perf_counters_fail_closed_and_disabled_noop` 与
     /// `zone_router` 的计数器反例）。
@@ -22540,6 +22549,18 @@ mod perf_counters {
         }
     }
 
+    /// 区屏障等待记账：`us` = **该区本 tick 两道屏障等待之和**（微秒）。
+    ///
+    /// 关闭态纯 no-op；启用时 `region_barrier_us = max(各区的值)`、
+    /// `region_barrier_total_us = Σ(各区的值)`（后者只对账）。
+    #[inline]
+    pub(crate) fn note_region_barrier_us(us: u64) {
+        if ENABLED.load(Ordering::Relaxed) {
+            REGION_BARRIER_US.fetch_max(us, Ordering::Relaxed);
+            REGION_BARRIER_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+        }
+    }
+
     /// 本轮 `HostInbound` 墙钟（微秒），覆盖写（每 tick 一个值）。
     #[inline]
     pub(crate) fn note_inbound_wall_us(us: u64) {
@@ -22552,7 +22573,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -22600,6 +22621,8 @@ mod perf_counters {
             SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
             ZONE_ROUTER_OVERWRITES.swap(0, Ordering::Relaxed),
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
+            REGION_BARRIER_US.swap(0, Ordering::Relaxed),
+            REGION_BARRIER_TOTAL_US.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -22657,6 +22680,8 @@ mod perf_counters {
             &SINGLE_EVENT_MAX_US,
             &ZONE_ROUTER_OVERWRITES,
             &ZONE_ROUTER_REJECTED_SOCKET,
+            &REGION_BARRIER_US,
+            &REGION_BARRIER_TOTAL_US,
         ] {
             c.store(0, Ordering::Relaxed);
         }
