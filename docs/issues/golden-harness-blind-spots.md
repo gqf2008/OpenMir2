@@ -32,7 +32,7 @@
 
 | B21 | **夹具意图未物化（`CasterSc/CasterMc` 只写 `WAbil`、不写 `Abil`，被登录序 recalc 覆盖为 0）**：`RunMagicCase` 设 `caster.WAbil.SC=CasterSc`（缺省 15），登录序 `RecalcAbilitys()`（`WAbil=Abil.Clone()`）用 `Abil.SC=0` 覆盖 ⇒ 实际 SC=0，与 fixture 意图 15 不符 | 设 `CasterSc/CasterMc` 却未同步 `Abil.SC/MC` 的 stem（如 `uenhancer`）；golden 记录 `caster.WAbil.SC` | 记录切到「实际应用值」（`9c9782a30`）后**暴露**：`uenhancer` 的 `caster_sc` 15→0；**非 golden 旧、非丢开关**（`CasterScNoClamp` 仍在） | 生产登录序同样 `WAbil=Abil.Clone()`，但 fixture 意图应体现在 `Abil` | `uenhancer` 等 stem 的 SC/MC 意图未物化（实际 0）；**修法（行为性、后续批）**：`CasterSc/CasterMc` 同时写 `Abil.SC/MC` 使 recalc 后仍为意图值；**别在缺口上重出 golden** |
 
-| B22 | **oracle 不表达 per-frame 延迟量（装置 due 表示能力缺口）**：帧 emit 时 `CurrentDueMs` 已归 0（帧在后续 pass 出，与发起它的延迟消息**失去关联**）=> 装置给不出正确 per-frame `due`。**取舍**：harness **不 emit `due_ms_rel`**（回 committed 形状，2026-11-21） | 任何延迟帧（31/53/共享尾）的逐帧定时对拍 | golden 无 `due_ms_rel` => 比较器**不比该字段** => **时间维度无逐帧对拍覆盖** | oracle 逐帧本有延迟量、比较器本可比 | **代价（非"少一项检查"，是"少掉一类缺陷的唯一入口"）**：B17（排水语义缺陷）**恰是从时间维度（due=0/600）暴露的**；放弃 due => 这类缺陷再无逐帧入口。**实证**：把 `due` 当"可忽略 T"曾让「57 支 Y=0」成**假绿**，真实规模 **48 支有 due 差异**。**为什么本次必须放弃**：装置无 per-frame due 表示能力（帧 emit 时链条已断）。**后续正式批次（非可选）**：harness 表示层重构——`due` 沿 self-delay/shared-tail 链传播到下游帧，使 `golden.due==rust.due` 逐帧成立；排在 resync 之后、B20/B21 之前 |
+| B22 | **（前提已推翻·2026-11-21 复核实测）** 原写「oracle 不表达 per-frame 延迟量、装置给不出正确 per-frame `due`」——**不成立**。回滚 `(a)` 后重出 58 支实测：committed **37/60 支有 `due_ms_rel`**；重出 A=32 支与 committed **逐位一致**、B=4 支差异**全是已知修复的预期**（`mabmabe-nondefault` 600→700＝B17 排水对齐；`amyounsul`/`amyounsul2`/`spacemove` 900/1016→1000＝B19 墙钟 elapsed 噪声，虚拟钟后取精确值）、**C=0 支丢 due**、D=12 支**新增**（旧生成器这些路径本就不 emit＝B18 schema 漂移）、E=10 支两侧皆无 ⇒ **装置能正确表达 per-frame due**。`(a)`「不 emit」以**错误前提**（committed 统一无 due）做出，已回滚（`d10de6523`） | 任何延迟帧（31/53/共享尾）的逐帧定时对拍 | 原「golden 无 due ⇒ 比较器不比 ⇒ 时间维度无逐帧覆盖」**不成立**（due 已被正确 emit 并逐帧比较） | oracle 逐帧本有延迟量、比较器本可比——**已被正确利用** | **仅存开放项**：D=12 支由「旧无 due」变「新有 due」，落盘会让比较器**首次**在这些帧比 `due`，须先核 Rust 台账同 `due`（per-stem `-Mode Both`）再落；这是「新增比较面」的验证，不是「无表示能力」。**教训保留**：曾把 `due` 当「可忽略 T」让「57 支 Y=0」成假绿——`due` 属比较面，不得当 T 剥离。**原「后续批次：due 沿链传播重构」降级**：harness 现已正确 emit，无需表示层重构；若 D 支落盘后 Rust 侧不匹配，再按 B17/B19 归口查 |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -46,7 +46,7 @@
 - **装置墙钟非确定性（golden 不可逐字节复现）** —— 落在 **B19**；根因批=`openmir2-firecharm-nondeterminism`。
 - **clone 家族 actor_id 非确定（虚拟钟也治不了）** —— 落在 **B20**。
 - **夹具意图未物化（CasterSc/Mc 只写 WAbil 被 recalc 覆盖）** —— 落在 **B21**（暴露者 `9c9782a30`）。
-- **oracle 不表达 per-frame due（时间维度无逐帧覆盖）** —— 落在 **B22**；代价=B17 那类缺陷的唯一入口。
+- **per-frame due（时间维度逐帧覆盖）** —— 归 **B22**；**已推翻「装置不表达 due」的旧判断**（装置能正确 emit；`d10de6523` 回滚 `(a)`）。仅存开放项：D=12 支新增 due 落盘前需核 Rust 侧同值；B17 那类缺陷的逐帧入口**恢复可用**。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
