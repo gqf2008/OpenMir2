@@ -800,10 +800,14 @@ def _pair_symbol_v2(row, start, end, anchor_text, target_text, target_lines=None
         # 不得再出现别的字母/数字（否则如"缺 657**：oracle `Sym`"会被误判成否定）。
         pre = row[max(0, ts - 15):ts]
         neg = None
-        for w in ("不进", "无", "缺", "未", "not"):
+        # 2026-11-21（T-216 实例）：`不调`/`不调用` 等也是否定引用；用「不+汉字/英文动词」覆盖。
+        for w in ("不调用", "不进", "不调", "不再", "不读", "不写", "不发", "不涉及", "不存在", "无", "缺", "未", "not"):
             k = pre.rfind(w)
             if k >= 0 and (neg is None or k > neg[0]):
                 neg = (k, w)
+        if neg is None:
+            m = re.search(r"不[一-鿿]", pre)
+            if m: neg = (m.start(), m.group(0))
         if neg is not None and not re.search(r"[A-Za-z0-9]", pre[neg[0] + len(neg[1]):]):
             continue
         if not any(c in target_text for c in _candidates_filewide(sym)): continue
