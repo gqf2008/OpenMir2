@@ -90,6 +90,8 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B23 | `lib.rs` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost**。**M-3 落地后（F1 修复）**：同上 —— ① `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
 | B24 | `lib.rs` `sim_loop`（MonGen 门） | 刷怪门计数 | ✅（有意不滤） | 同上注释（两条 ZenTime 门必须同一口径） |
 
+> **消歧（2026-11-21）**：上表 `B21` 指 `lib.rs` 的 `drain_close_health_residual`（ShowHp 到期扫描），与 `docs/issues/golden-harness-blind-spots.md` 的 B21（夹具意图 / `caster_sc` 施法输入）**无关**；跨卡引用请用"卡名 + 代号"。
+
 **已剔除（测试内，不计入矩阵）**：`monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、
 `lib.rs:26081`（`tick_until_next_player_scan`）、`lib.rs:46322`、`lib.rs:74208` —— 全部落在各自文件的
 `mod tests` / `#[cfg(test)]` 之后（行号见 §1 口径）。
