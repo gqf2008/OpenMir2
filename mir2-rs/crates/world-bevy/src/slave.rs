@@ -1527,6 +1527,23 @@ pub struct SelfDelayOutcome {
     pub ref_message: Option<RefMessageDelivery>,
 }
 
+/// **(i) 层：per-actor 回合结果**（`deliver_self_delay_msgs_impl` 的返回单元）。
+///
+/// 组内 = 该 actor 本次泵的投递序（oracle `Run()` 里逐条 `GetMessage` 的顺序）；
+/// 组间 = actor **首次入队序**（`SelfDelayQueue::actor_ids()` 快照序）。
+/// 扁平 API（[`World::deliver_self_delay_msgs`]）按组间→组内展平，与旧扁平 Vec 逐元素同序。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelfDelayTurn {
+    pub actor_id: i32,
+    pub outcomes: Vec<SelfDelayOutcome>,
+}
+
+/// 把 per-actor 回合结果**按组间→组内展平**（旧扁平 API 的兼容形态；保序）。
+#[must_use]
+pub fn flatten_self_delay_turns(turns: Vec<SelfDelayTurn>) -> Vec<SelfDelayOutcome> {
+    turns.into_iter().flat_map(|t| t.outcomes).collect()
+}
+
 /// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
 /// （`BaseObject.Base.cs:699-710`）到点投递的观察值。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1902,6 +1919,15 @@ impl World {
         self.deliver_self_delay_msgs_with(None)
     }
 
+    /// **(i) 层**：per-actor 有序结果（组间 = actor 首次入队序；组内 = 投递序）。
+    ///
+    /// 供宿主 (ii) 层判「消息入给已跑过/未跑过 actor」；行为面与
+    /// [`Self::deliver_self_delay_msgs`] 完全一致（后者 = 本函数按组展平）。
+    pub fn deliver_self_delay_msgs_turns(&mut self) -> Vec<SelfDelayTurn> {
+        let World { entities, sim, .. } = self;
+        deliver_self_delay_msgs_impl(entities, sim)
+    }
+
     /// 到点投递自身延时消息（oracle `PlayObject.Message.cs:360-364` 的消息段）：对每个
     /// 有消息的 actor，按 [`SelfDelayQueue`]（四叉堆，.NET 8 `Arity=4`）**逐条泵出**并按
     /// `ident` 调生产效果体。
@@ -1931,10 +1957,11 @@ impl World {
         // **P6a2**：泵的实体/状态访问面统一到 [`deliver_self_delay_msgs_impl`]（段系统与
         // facade 共用同一份实现）。
         let base = self.pending_special_spawns.len();
-        let mut out = {
+        let turns = {
             let World { entities, sim, .. } = self;
             deliver_self_delay_msgs_impl(entities, sim)
         };
+        let mut out = flatten_self_delay_turns(turns);
         let Some(sp) = spawner else {
             return out;
         };
@@ -2120,14 +2147,15 @@ pub(crate) fn deliver_self_delay_msgs_impl<
 >(
     access: &mut A,
     sim: &mut crate::world::SimState,
-) -> Vec<SelfDelayOutcome> {
+) -> Vec<SelfDelayTurn> {
     let now = sim.clock_ms;
-    let mut out = Vec::new();
+    let mut turns: Vec<SelfDelayTurn> = Vec::new();
     // 每 actor 独立队列；按 actor 首次入队序泵（oracle 每个 actor 的 `Run()` 各泵自己的）。
     // `actors` 只是**本轮起点的快照**：本轮投递中新入队的消息留到下一次调用
     // （oracle 同一 actor 的 `Run()` 一轮只泵一次）。
     let actors = sim.self_delay_msgs.actor_ids();
     for actor_id in actors {
+        let mut out: Vec<SelfDelayOutcome> = Vec::new();
         while let Some(head) = sim.self_delay_msgs.peek(actor_id) {
             let ident = head.ident;
             // Rust 侧登记门（oracle 没有对应的泵调用/开关）：
@@ -2470,8 +2498,14 @@ pub(crate) fn deliver_self_delay_msgs_impl<
                 _ => {}
             }
         }
+        if !out.is_empty() {
+            turns.push(SelfDelayTurn {
+                actor_id,
+                outcomes: out,
+            });
+        }
     }
-    out
+    turns
 }
 
 /// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883`）的**宝宝色支** + 兜底：
@@ -4074,6 +4108,35 @@ mod tests {
         assert!(w.deliver_self_delay_msgs_with(None).is_empty());
         assert!(w.self_delay_msgs.is_empty());
         assert!(w.pending_special_spawns.is_empty());
+    }
+
+    /// **(i) 层**：`deliver_self_delay_msgs_turns` 的**组间序**与**组内序**。
+    ///
+    /// 组间 = actor 首次入队序；组内 = 该 actor 本次泵的投递序；展平必须与旧扁平 API 同序
+    /// （本步是纯重构）。
+    #[test]
+    fn self_delay_turns_keep_actor_and_inner_order() {
+        let mut w = World::new(16, 16);
+        let a = delay_entity(&mut w, "a");
+        let b = delay_entity(&mut w, "b");
+        w.clock_ms = 0;
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 1, 100);
+        w.send_self_delay_msg_with(b, RM_MAGHEALING, 0, 2, 100);
+        w.send_self_delay_msg_with(a, RM_MAGHEALING, 0, 3, 200);
+        w.clock_ms = 200;
+        let turns = w.deliver_self_delay_msgs_turns();
+        assert_eq!(turns.len(), 2, "两个 actor 各一组：{turns:?}");
+        assert_eq!(turns[0].actor_id, a, "组间序 = actor 首次入队序");
+        assert_eq!(turns[1].actor_id, b, "组间序 = actor 首次入队序");
+        let a_vals: Vec<_> = turns[0].outcomes.iter().map(|o| o.mag_healing).collect();
+        assert_eq!(a_vals, vec![Some(1), Some(3)], "组内序 = 投递序");
+        let flat = flatten_self_delay_turns(turns);
+        let flat_vals: Vec<_> = flat.iter().map(|o| (o.actor_id, o.mag_healing)).collect();
+        assert_eq!(
+            flat_vals,
+            vec![(a, Some(1)), (a, Some(3)), (b, Some(2))],
+            "展平 = 组间→组内（与旧扁平 API 同序）"
+        );
     }
 
     /// 实测（四生产者、同一 actor、入队序 D200,Z500,D600,R700）：
