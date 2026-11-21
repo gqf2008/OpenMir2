@@ -19818,6 +19818,42 @@ fn drain_map_change(
     );
 }
 
+/// 卡 `openmir2-changemap-missing-serverconfig` §10：`client_conf` 的**进程级一次性安装**。
+///
+/// 唯一生产写入点 = `sim_loop` 启动（来源 = `enter_cfg.game_conf`，只读单源，见 `red_home_of`
+/// 的「不再另存第二份」）。`OnceLock` 保证只写一次、无第二条写入路径 ⇒ 它是**派生缓存**，
+/// 不是第二份配置真源。
+///
+/// 单测用**线程本地覆盖**（与 `chat` 的 `with_send_ref_msg_range` 同款）：
+/// 驱动测试只影响自己的线程，`--lib` 并行/多测互不污染 ⇒ 零漂移。
+static CLIENT_CONF: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+
+/// 生产安装入口（`sim_loop` 启动时调用一次；后续调用被 `OnceLock` 忽略）。
+pub(crate) fn install_client_conf(bytes: Option<Vec<u8>>) {
+    let _ = CLIENT_CONF.set(bytes);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// 单测覆盖（`None` = 未覆盖 ⇒ 回落到进程级 `CLIENT_CONF`）。
+    static TEST_CLIENT_CONF: std::cell::RefCell<Option<Option<Vec<u8>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_client_conf(bytes: Option<Vec<u8>>) {
+    TEST_CLIENT_CONF.with(|c| *c.borrow_mut() = Some(bytes));
+}
+
+/// 当前生效的 `client_conf` 原文（克隆；17B 级，不值得引 `'static` 引用绕线程本地）。
+fn client_conf_bytes() -> Option<Vec<u8>> {
+    #[cfg(test)]
+    if let Some(v) = TEST_CLIENT_CONF.with(|c| c.borrow().clone()) {
+        return v;
+    }
+    CLIENT_CONF.get().cloned().flatten()
+}
+
 /// [`drain_map_change`] 的**时间注入**版：`game_time` = `Bright` 的桶（1 / 3 / 其它），
 /// 由 [`enter::day_bright`] 映射成 `SM_CHANGEMAP(634)` 的 `Series`（`DayBright()`）。
 pub(crate) fn drain_map_change_at_time(
@@ -19905,8 +19941,23 @@ pub(crate) fn drain_map_change_at_time(
                 None
             }
         };
+        // 卡 `openmir2-changemap-missing-serverconfig` §10：`SoftVersionDateEx` 取自会话
+        // （缺省 0 ⇒ 不发 11029）；`client_conf` 为进程级一次性安装（`None` ⇒ 同样不发）。
+        let soft_version_date = world
+            .sessions
+            .get(&entry.chr_name)
+            .map_or(0, |s| s.soft_version_date);
+        let client_conf = client_conf_bytes();
         let frames = game_svr::sessionwire::map_change_frames(
-            &ev, &map_file, day_bright, dir, light, &desc, visual,
+            &ev,
+            &map_file,
+            day_bright,
+            dir,
+            light,
+            &desc,
+            visual,
+            soft_version_date,
+            client_conf.as_deref(),
         );
         for f in frames {
             match f.route {
@@ -27950,6 +28001,14 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // 卡 `openmir2-changemap-missing-serverconfig` §10：`client_conf` 的进程级一次性安装
+    // （唯一生产写入点；`GameSvrConf` 单源只读）。
+    install_client_conf(
+        enter_cfg
+            .game_conf
+            .as_ref()
+            .map(|c| c.client_conf.to_bytes()),
+    );
     // **IT-17a**：`M2Share.MagicList` 查表面的**进程级** `Arc` 快照（每个会话只 clone Arc，
     // 不复制整表）；登录装配 `readbook::MagicState` 时用。
     let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
@@ -30990,6 +31049,14 @@ fn sim_loop(
                                         let (enter_x, enter_y) =
                                             (shift.x as i16, shift.y as i16);
                                         let _ = world.open_session(&head.chr_name);
+                                        // **SoftVersionDateEx 同步**（卡 §10）：会话对象**从不删除**、
+                                        // `open` 幂等 ⇒ 重登复用同一对象，值必须**每次登录刷新**；
+                                        // 缺省 0 且 0 恰=不发 11029（漏设退化为少一帧）。
+                                        if let Some(sess) =
+                                            world.sessions.get_mut(&head.chr_name)
+                                        {
+                                            sess.soft_version_date = soft_version_date;
+                                        }
                                         let mut ent = new_player_entity_with_login_ctor(
                                             head.chr_name.clone(),
                                             i32::from(enter_x),
@@ -69563,6 +69630,36 @@ SendRefMsgRange=15
             Some(0),
             "[{stem}/{label}] MapRegistry 里查不到 map_name=\"0\"（注册项 = [\"0\"]）⇒ HomeMap 解析 None，本支会退化"
         );
+        // 卡 `openmir2-changemap-missing-serverconfig` §10：`SM_SERVERCONFIG(11029)` 的
+        // `ClientConf` 原文来自**部署 `Server.conf` 的 `[Setup]` 客户端段**（与 C# 装置同源：
+        // `SystemShare.Config.ClientConf`）。先核 golden 记录的 `Fixture.server_conf_sha256`
+        // （生成源一改即红），再 `GameSvrConf::load` 取 `client_conf.to_bytes()`，装进
+        // **线程本地**测试覆盖（只影响本测试线程，`--lib` 并行测试互不污染）。
+        {
+            let conf_path = std::env::var("MAGICGOLDEN_SERVERCONF")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Server.conf")
+                });
+            assert!(
+                conf_path.is_file(),
+                "[{stem}/{label}] SERVERCONF_MISSING（{}）",
+                conf_path.display()
+            );
+            let bytes = std::fs::read(&conf_path)
+                .unwrap_or_else(|e| panic!("[{stem}/{label}] Server.conf 读失败：{e}"));
+            let want_sha = g["Fixture"]["server_conf_sha256"]
+                .as_str()
+                .unwrap_or_else(|| panic!("[{stem}/{label}] golden 缺 Fixture.server_conf_sha256"));
+            use sha2::Digest;
+            let got_sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+            assert_eq!(
+                got_sha, want_sha,
+                "[{stem}/{label}] SERVERCONF_SHA_MISMATCH golden={want_sha} 磁盘={got_sha}"
+            );
+            let conf = mir2_envir::GameSvrConf::from_bytes(&bytes);
+            set_test_client_conf(Some(conf.client_conf.to_bytes()));
+        }
         (grid, registry)
     }
 
@@ -71952,6 +72049,16 @@ SendRefMsgRange=15
                 sess.map_id = caster_map;
                 sess.actor_id = Some(caster);
                 sess.stage = mir2_world_bevy::WorldStage::InWorld;
+                // `PlayObject.SoftVersionDateEx`：装置四对象都设 `20240101`（golden 记录在
+                // `Fixture.soft_version_date_ex`）⇒ 换图簇里的 11029 才会发。
+                sess.soft_version_date = i32::try_from(
+                    golden_case_for(stem, label)["Fixture"]["soft_version_date_ex"]
+                        .as_i64()
+                        .unwrap_or_else(|| {
+                            panic!("[{stem}/{label}] golden 缺 Fixture.soft_version_date_ex")
+                        }),
+                )
+                .expect("soft_version_date_ex 越界 i32");
             }
             if let Some(sv) = rig.saves.get_mut("caster") {
                 sv.record.data.home_map = Some("0".to_string());
@@ -73164,33 +73271,28 @@ SendRefMsgRange=15
                     };
                     let rd = dues(&r_frames);
                     let gd = dues(&g_frames);
-                    if matches!(
-                        stem,
-                        "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
-                    ) {
-                        // **施毒件按 TickCount 容差判**（与比较器同口径）：640 的 due =
-                        // `DeliveryTime − t0`，`t0` 与 `SendSelfDelayMsg` 最多跨 1 个
-                        // `Environment.TickCount` 粒度（15.6ms）⇒ |Δ|≤32ms（2×粒度）。
-                        // 判别力：600/950 vs 1000（≥50ms）≫ 32ms。其它 stem 仍**逐值严格**。
-                        assert_eq!(
-                            rd.len(),
-                            gd.len(),
-                            "[{stem}/{label}] caster 640 条数不等：golden {gd:?} 台账 {rd:?}"
-                        );
-                        let mut rd_s = rd.clone();
-                        let mut gd_s = gd.clone();
-                        rd_s.sort();
-                        gd_s.sort();
-                        assert!(
-                            rd_s.iter().zip(gd_s.iter()).all(|(r, g)| (r - g).abs() <= 32),
-                            "[{stem}/{label}] caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤32ms）：golden {gd:?} 台账 {rd:?}"
-                        );
-                    } else {
-                        assert_eq!(
-                            rd, gd,
-                            "[{stem}/{label}] caster 640 的 due_ms_rel 与金标准不符"
-                        );
-                    }
+                    // **`640.due_ms_rel` 一律按 TickCount 容差判**（与比较器同口径、共用
+                    // `mir2_shared::DUE_MS_TOLERANCE_MS`）：该量 = `DeliveryTime − t0`，由
+                    // `Environment.TickCount`（15.6ms 粒度）派生 ⇒ 生成抖动（实测同一 stem 的
+                    // `1000/1016`）属测量噪声，**精确相等不是正确判据**。判别力：
+                    // 600/950 vs 1000（≥50ms）≫ 32ms ⇒ 容差不是无底洞。
+                    assert_eq!(
+                        rd.len(),
+                        gd.len(),
+                        "[{stem}/{label}] caster 640 条数不等：golden {gd:?} 台账 {rd:?}"
+                    );
+                    let mut rd_s = rd.clone();
+                    let mut gd_s = gd.clone();
+                    rd_s.sort();
+                    gd_s.sort();
+                    assert!(
+                        rd_s
+                            .iter()
+                            .zip(gd_s.iter())
+                            .all(|(r, g)| (r - g).abs() <= mir2_shared::DUE_MS_TOLERANCE_MS),
+                        "[{stem}/{label}] caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤{}ms）：golden {gd:?} 台账 {rd:?}",
+                        mir2_shared::DUE_MS_TOLERANCE_MS
+                    );
                 }
             }
         }
@@ -75640,8 +75742,11 @@ SendRefMsgRange=15
                 "[{stem}/{label}/{who}] 640 帧条数不等：golden {gd:?} rust {rd:?}"
             );
             assert!(
-                gd.iter().zip(rd.iter()).all(|(g, r)| (g - r).abs() <= 32),
-                "[{stem}/{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} rust {rd:?}"
+                gd.iter()
+                    .zip(rd.iter())
+                    .all(|(g, r)| (g - r).abs() <= mir2_shared::DUE_MS_TOLERANCE_MS),
+                "[{stem}/{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤{}ms）：golden {gd:?} rust {rd:?}",
+                mir2_shared::DUE_MS_TOLERANCE_MS
             );
         }
     }
@@ -112506,5 +112611,61 @@ mod tickframe_slice1_tests {
             Some(&vec![b, c]),
             "Y：只按他自己的入队序（B,C）出队；全局堆会给出 [C,B]"
         );
+    }
+}
+
+#[cfg(test)]
+mod soft_version_date_tests {
+
+    /// 卡 `openmir2-changemap-missing-serverconfig` §10.4：**枚举所有会话建立/同步路径**，
+    /// 逐条断言 `Session.soft_version_date` 是「非 0」或「显式登记为 0」——
+    /// 把「我数过所有路径」变成证据，而不是「我改了记得的那几条」。
+    #[test]
+    fn soft_version_date_paths_enumerated() {
+        let mut w = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
+        // ① `open_session`（唯一创建点，缺省路径）：显式登记 0（0 = 不发 11029）。
+        w.open_session("hero");
+        assert_eq!(
+            w.session("hero").unwrap().soft_version_date,
+            0,
+            "open_session 缺省必须显式 0（0=不发；漏设退化为少一帧而非发错值）"
+        );
+        // ② `enter_map`：只进图，不得隐式赋值。
+        let actor = w
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 4),
+                0,
+            )
+            .expect("enter_map 成功");
+        assert_eq!(
+            w.session("hero").unwrap().soft_version_date,
+            0,
+            "enter_map 不得隐式赋值"
+        );
+        // ③ 登录/重登同步路径（生产在输入世界时写；此处模拟该写入）：非 0。
+        w.sessions.get_mut("hero").unwrap().soft_version_date = 20_240_101;
+        assert_eq!(
+            w.session("hero").unwrap().soft_version_date,
+            20_240_101,
+            "登录同步后必须非 0"
+        );
+        // ④ `switch_map`（换图）：不重建会话 ⇒ 值不得丢。
+        w.switch_map("hero", 1, 7, 9).expect("switch_map 成功");
+        assert_eq!(
+            w.session("hero").unwrap().soft_version_date,
+            20_240_101,
+            "换图不得重置会话版本值"
+        );
+        // ⑤ 重登复用同一 Session（`open` 幂等、会话从不删除）⇒ 值保留，需由登录同步刷新。
+        let idx_before = w.session("hero").unwrap().actor_id;
+        w.open_session("hero");
+        let sess = w.session("hero").unwrap();
+        assert_eq!(sess.actor_id, idx_before, "重登必须复用同一会话（不重建）");
+        assert_eq!(
+            sess.soft_version_date, 20_240_101,
+            "重登复用会话 ⇒ `open` 不重置；刷新由登录同步负责"
+        );
+        assert_eq!(sess.actor_id, Some(actor), "重登后 actor 绑定不变");
     }
 }

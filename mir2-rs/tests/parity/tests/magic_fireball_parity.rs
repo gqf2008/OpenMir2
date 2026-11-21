@@ -329,7 +329,10 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     gd.sort();
                     rd.sort();
                     let bad = gd.len() != rd.len()
-                        || gd.iter().zip(rd.iter()).any(|(g, r)| (g - r).abs() > 32);
+                        || gd
+                            .iter()
+                            .zip(rd.iter())
+                            .any(|(g, r)| (g - r).abs() > mir2_shared::DUE_MS_TOLERANCE_MS);
                     if bad {
                         errs.push(format!(
                             "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
@@ -387,9 +390,10 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         // 行为判据是批次类，见上方 `multi_victim` 注释与施毒件同口径）。
                         if f == "due_ms_rel" && num(g, "ident") == 640 {
                             let (a, b) = (num(g, f), num(r, f));
-                            if (a - b).abs() > 32 {
+                            if (a - b).abs() > mir2_shared::DUE_MS_TOLERANCE_MS {
                                 errs.push(format!(
-                                    "[{label}/{who}] Sent[{i}].due_ms_rel 超出 TickCount 容差（|Δ|≤32ms）：golden={a} rust={b}"
+                                    "[{label}/{who}] Sent[{i}].due_ms_rel 超出 TickCount 容差（|Δ|≤{}ms）：golden={a} rust={b}",
+                                    mir2_shared::DUE_MS_TOLERANCE_MS
                                 ));
                             }
                             continue;
