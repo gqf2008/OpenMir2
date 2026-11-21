@@ -1839,6 +1839,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 var bright = (long)M2Server.M2Share.GameTime;
                 foreach (var c in node["cases"]!.AsArray())
                 {
+                    // **键名语义**：`map_bright` 存的是 `M2Share.GameTime` 的**原值**（0..3），
+                    // **不是** `DayBright()` 的返回值 —— 0 对应 `DayBright()==2`（1→0、3→1、其它→2）。
+                    // 后来人若"顺手修正"成 `DayBright()` 的结果（当前是 2），Rust 驱动注入 2 后
+                    // 得到 series=2，看似等价，但 device 再改 GameTime 时会与记录值脱钩。
                     c!["Fixture"]!["map_bright"] = bright;
                     // 无墙钟来源（固定静态默认）⇒ `-1` 表示"不是真实本地小时"，仅作来源标注。
                     c!["Fixture"]!["map_bright_hour"] = -1;
@@ -1892,7 +1896,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // 卡 openmir2-golden-harness-mapmgr：设 MapMgr（FindMap 返回本 case 已加载的 env），供 RecallSlave→SpaceMove。
         // 无条件设 MapMgr 安全：其它 spec 不触达 FindMap（否则原 null 会 NPE），且 skeleton/fireball/fire 结构 diff ⊆ drift；EnableMaps 门控：env.MapName/ServerIndex + 预置 slave 的 RecordingMonster 构造 + caster.Dir（均 SINSU）。
         SystemModule.SystemShare.MapMgr = new OfflineMapSystem(env);
-        if (spec.EnableMaps) { env.MapName = "0"; env.ServerIndex = M2Server.M2Share.ServerIndex; }
+        if (spec.EnableMaps)
+        {
+            env.MapName = "0";
+            env.ServerIndex = M2Server.M2Share.ServerIndex;
+            // **`Envir.MapFileName`（卡 magic-push-batch-impl）**：oracle `RM_CHANGEMAP` 的尾是
+            // `SendMsg(RM_CHANGEMAP, 0,0,0,0, MapFileName)`（`BaseObject.cs:1134`），生产由
+            // `MapManager.AddMapInfo` 从 `[名|文件]` 取（`GameSrv/Maps/MapManager.cs:66-87`）。
+            // 装置原先不设 ⇒ 尾恒空串，与生产（"0" ⇒ EDCode ``?`）不忠实；Rust 侧按注册表
+            // 给 `map_file_name_of` ⇒ 两侧恒不等。这里按生产口径补齐。
+            env.MapFileName = "0";
+        }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = (byte)spec.CasterLevel;
         bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");

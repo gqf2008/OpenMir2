@@ -161,7 +161,7 @@
               "p1": 0,
               "p2": 0,
               "p3": 0,
-              "msg": "",
+              "msg": "0",
               "late": false,
               "delivery": 0,
               "priority": 162
@@ -185,7 +185,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1213354937,
+              "delivery": 1214563281,
               "priority": 255
             }
           ],
@@ -224,7 +224,7 @@
               "tag": 353,
               "series": 2,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 766,
@@ -268,7 +268,7 @@
               "param": 1,
               "tag": 3,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 1016,
               "tail": ""
             }
           ]
@@ -571,7 +571,7 @@
               "p1": 0,
               "p2": 0,
               "p3": 0,
-              "msg": "",
+              "msg": "0",
               "late": false,
               "delivery": 0,
               "priority": 162
@@ -595,7 +595,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1213356187,
+              "delivery": 1214564546,
               "priority": 255
             }
           ],
@@ -634,7 +634,7 @@
               "tag": 220,
               "series": 2,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 766,
@@ -981,7 +981,7 @@
               "p1": 0,
               "p2": 0,
               "p3": 0,
-              "msg": "",
+              "msg": "0",
               "late": false,
               "delivery": 0,
               "priority": 162
@@ -1005,7 +1005,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1213357484,
+              "delivery": 1214565859,
               "priority": 255
             }
           ],
@@ -1044,7 +1044,7 @@
               "tag": 604,
               "series": 2,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 766,
