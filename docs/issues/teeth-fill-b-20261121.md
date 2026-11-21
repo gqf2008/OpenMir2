@@ -26,6 +26,71 @@
 - **还原**：`cp` 快照；`git hash-object crates/world-bevy/src/magic.rs` = `git rev-parse HEAD:mir2-rs/crates/world-bevy/src/magic.rs` = `8ca6c6a0fffcadfdcb2cea83ce29c662885d3365`；`MUTATION` 残留 0。
 - **复跑**：见 §3 最终绿。
 
+### 1.1 复核补证（a2，2026-11-21）：毒类型输入与比较键
+
+**① 该 case 的毒类型输入 = `type=1`（红毒 / `DAMAGEARMOR`），不是默认绿毒。**
+
+- 夹具：`mir2-rs/tests/parity/golden/magic/amyounsul2.json` 的 `s1` case，`Fixture` 原文：
+  ```json
+  "amulet_shape": 2,
+  ```
+  ⇒ `Shape=2` 选红毒臂。
+- 同一 `s1` case 的 target `Rm` 原文：
+  ```json
+  "ident": 8037,
+  "wParam": 1,
+  "p1": 80,
+  "p2": 1001,
+  "p3": 2,
+  "msg": "",
+  "late": true,
+  "delivery": 1209656156,
+  "priority": 255
+  ```
+- 产品映射（`crates/world-bevy/src/world.rs` 的 `cast_poison_on_target`）原文：
+  ```rust
+  let (n_int, poison_type) = match shape {
+      1 => (40, 0u8), // DECHEALTH
+      2 => (30, 1u8), // DAMAGEARMOR
+      _ => return out,
+  };
+  // ...
+  self.send_self_delay_msg_full(
+      target_id,
+      crate::slave::RM_POISON,
+      i32::from(poison_type),
+      power,
+      caster_id,
+      point,
+      1000,
+  );
+  ```
+  同函数注释原文：`wParam=type、nParam1(时间)=nPower、nParam2=caster、nParam3=point`。⇒ `shape=2` ⇒ `poison_type=1` ⇒ RM 8037 的 `wParam=1`。
+- 驱动取值：`bins/game-svr/src/lib.rs` 的 `amyounsul_assert`（经 `fireball_parity_drive`）从 golden 读该键并应用：
+  ```rust
+  let shape = golden_fixture_required(stem, label, "amulet_shape");
+  // ...
+  rig.amulet_shape = shape;
+  ```
+
+**② 比较键包含 `wParam`（不是 `late`）。**
+
+- 比较器：`mir2-rs/tests/parity/tests/magic_fireball_parity.rs` 的 `verify`，键构造原文：
+  ```rust
+  let rm_fields = ["ident", "wParam", "p1", "p2", "p3", "priority", "late"];
+  let rm_key = |v: &Value| -> Vec<i64> { rm_fields.iter().map(|f| num(v, f)).collect() };
+  ```
+  断言原文：
+  ```rust
+  errs.push(format!(
+      "[{label}/{who}] Rm 多重集不等（ident,wParam,p1,p2,p3,priority,late）： golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
+  ));
+  ```
+- 因此红原文的七元组顺序是 `ident, wParam, p1, p2, p3, priority, late`：
+  `[[8037, 1, 80, 1001, 2, 255, 1]]` = `ident=8037, **wParam=1（type=红毒）**, p1=80, p2=1001, p3=2, priority=255, late=1`。
+  紧跟 `8037` 的那个 `1` 是 **`wParam`（毒类型）**；最后一个 `1` 才是 `late`。⇒ `type=1` 确实在被比较的键里。
+
+
 ## 2. MG-12（HEALLING(2)，治疗量）
 
 - **变异**：`crates/world-bevy/src/world.rs` 的 `cast_healing_spell`（**不是** `cast_big_healing_spell` 的同名行，按最近前置函数名定位）：`let power = ...power_healing(...);` → `... + 1; // MUTATION teeth-fill-b MG-12`（快照 `E:/UserTemp/teeth-fill-b-snap2/world.rs`）。

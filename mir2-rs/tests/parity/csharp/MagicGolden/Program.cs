@@ -134,6 +134,10 @@ public static class Program
         {
             return ConfigSelfTest();
         }
+        if (args.Contains("--conf-selftest"))
+        {
+            return ConfFilesSelfTest();
+        }
         if (args.Contains("--case") && args.Length > Array.IndexOf(args, "--case") + 1)
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
@@ -289,6 +293,44 @@ public static class Program
                     ServerConf = ServerConfFixture.LoadOrThrow(name),
                 });
             }
+            // **MG-48 非缺省对照臂**（卡 `magic-serverconf-nondefault-arm-plan`）：独立冻结夹具
+            // `tests/parity/fixtures/serverconf/nondefault/Server.conf`（四键 50/40/90/7，均 ≠ 部署值
+            // 100/10/21/20 且 ≠ ctor 缺省），让「读配置」与「吃缺省」在**行为面**可区分。
+            if (name == "mabmabe-nondefault")
+            {
+                // `--nondefault-control`：**差分对照**用（同一 label/seed、部署配置），产物只供
+                // "两支输出必须真的不同"的证据，不落仓、不进比较器。
+                bool isControl = args.Contains("--nondefault-control");
+                if (isControl)
+                {
+                    // 用默认入口按 sha 把**部署件**同步回来（修复后必需：上一步可能刚写过夹具件）。
+                    if (!EnsureConfFiles(out _, out var ctrlMissing))
+                    {
+                        throw new FixtureContractViolation("对照臂缺部署配置：" + string.Join(",", ctrlMissing));
+                    }
+                }
+                else
+                {
+                    string ndConfDir = FindNonDefaultConfDir();
+                    // 只同步本支需要的夹具（**不**改 env；否则会影响同进程其它 case 的默认入口）。
+                    EnsureConfFilesFrom(ndConfDir, AppContext.BaseDirectory, out var ndCopied, out var ndMissing);
+                    if (ndMissing.Count > 0)
+                    {
+                        throw new FixtureContractViolation("非缺省夹具缺文件：" + string.Join(",", ndMissing));
+                    }
+                    Console.Error.WriteLine("NONDEFAULT_CONF_COPIED " + string.Join(",", ndCopied));
+                }
+                return NonDefaultArmBatch(new MagicSpec
+                {
+                    Key = "mabmabe-nondefault",
+                    MagicId = 50,
+                    MagicName = "MabMabe",
+                    // 刻意**不设** CasterMcNoClamp：本支 label 不属于 s5/s13/hit ⇒ 不命中 MC 变体，
+                    // 第 3 抽固定 `Random(1)`（取数序见卡 §2.1/§2.6）。
+                    StepDrainMs = 100,
+                    ServerConf = ServerConfFixture.LoadOrThrow(name, nonDefault: !isControl),
+                }, expectNonDefault: !isControl);
+            }
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
             // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
             // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
@@ -393,6 +435,23 @@ public static class Program
         string baseDir = AppContext.BaseDirectory;
         string confDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_CONF_DIR")
                          ?? @"E:\MirServer\M2GameSvr";
+        return EnsureConfFilesFrom(confDir, baseDir, out copied, out missing);
+    }
+
+    /// <summary>
+    /// 把 `confDir` 的 5 份冻结配置同步到 `baseDir`：**按内容身份**（sha256）比较，
+    /// 不同才拷贝。只读源，不改任何生产文件。
+    ///
+    /// **为什么不是"存在即跳过"**（卡 `openmir2-ensureconffiles-stale-copy`）：
+    /// 只判 `File.Exists(dst)` 会让"换 conf 目录/改源内容"静默沿用上一次的副本，
+    /// 任何"换配置的对照臂"都会变成假绿；`ServerConfSha256()` 又优先读副本 ⇒ golden 会
+    /// **自洽地**记录错的来源。
+    ///
+    /// `copied` = 本轮真正写过的文件名（同源重复运行 ⇒ 空）；`missing` = 源不存在的路径。
+    /// </summary>
+    private static bool EnsureConfFilesFrom(string confDir, string baseDir,
+        out List<string> copied, out List<string> missing)
+    {
         copied = new List<string>();
         missing = new List<string>();
         foreach (var n in ConfNames)
@@ -400,10 +459,84 @@ public static class Program
             var src = Path.Combine(confDir, n);
             var dst = Path.Combine(baseDir, n);
             if (!File.Exists(src)) { missing.Add(src); continue; }
-            // 冻结配置必须非空：0 字节的旧副本（构建产物/读回写坏）会让  全 0 ⇒ 重拷。
-            if (!File.Exists(dst) || new FileInfo(dst).Length == 0) { File.Copy(src, dst, overwrite: true); copied.Add(n); }
+            // 0 字节也算"内容不同"（sha 不同），无须单列。
+            if (!File.Exists(dst) || FileSha256(dst) != FileSha256(src))
+            {
+                File.Copy(src, dst, overwrite: true);
+                copied.Add(n);
+            }
         }
         return missing.Count == 0;
+    }
+
+    private static string FileSha256(string path)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        using var fs = File.OpenRead(path);
+        return Convert.ToHexString(sha.ComputeHash(fs));
+    }
+
+    /// <summary>
+    /// `--conf-selftest`：`EnsureConfFilesFrom` 的**身份**语义三把牙（卡
+    /// `openmir2-ensureconffiles-stale-copy` §6）。只用 `Path.GetTempPath()` 下的临时目录
+    /// （A/B 源 + 临时 base），**不碰部署目录、不改任何生产文件**。
+    /// </summary>
+    private static int ConfFilesSelfTest()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "magicgolden-conf-selftest-" + Guid.NewGuid().ToString("N"));
+        string dirA = Path.Combine(root, "A");
+        string dirB = Path.Combine(root, "B");
+        string baseDir = Path.Combine(root, "base");
+        try
+        {
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+            Directory.CreateDirectory(baseDir);
+            foreach (var n in ConfNames)
+            {
+                File.WriteAllText(Path.Combine(dirA, n), "A:" + n);
+                File.WriteAllText(Path.Combine(dirB, n), "B:" + n);
+            }
+            int failures = 0;
+            void Check(string name, bool cond, string detail)
+            {
+                if (cond) { Console.Error.WriteLine("CONF_SELFTEST OK " + name); return; }
+                Console.Error.WriteLine("CONF_SELFTEST FAIL " + name + " :: " + detail);
+                failures++;
+            }
+            string DstSha() => FileSha256(Path.Combine(baseDir, "Server.conf"));
+
+            // ① 空 base + 源 A ⇒ 5 份全拷
+            bool okA = EnsureConfFilesFrom(dirA, baseDir, out var copied1, out _);
+            Check("copy-from-A", okA && copied1.Count == ConfNames.Length
+                    && DstSha() == FileSha256(Path.Combine(dirA, "Server.conf")),
+                $"copied={copied1.Count}");
+
+            // ② 换源 B（同名不同内容）⇒ 必须重拷（旧实现"存在即跳过"会静默留在 A）
+            bool okB = EnsureConfFilesFrom(dirB, baseDir, out var copied2, out _);
+            Check("switch-to-B-recopies", okB && copied2.Count == ConfNames.Length
+                    && DstSha() == FileSha256(Path.Combine(dirB, "Server.conf")),
+                $"copied={copied2.Count}");
+
+            // ③ 源 B 就地改内容 ⇒ 必须重拷 Server.conf
+            File.WriteAllText(Path.Combine(dirB, "Server.conf"), "B2:" + "Server.conf");
+            bool okB2 = EnsureConfFilesFrom(dirB, baseDir, out var copied3, out _);
+            Check("content-change-recopies", okB2 && copied3.Count == 1 && copied3[0] == "Server.conf"
+                    && DstSha() == FileSha256(Path.Combine(dirB, "Server.conf")),
+                $"copied=[{string.Join(",", copied3)}]");
+
+            // ④ 同源连跑 ⇒ 不重拷（防"每次都覆盖"这种相反的错误）
+            bool okSame = EnsureConfFilesFrom(dirB, baseDir, out var copied4, out _);
+            Check("same-source-no-copy", okSame && copied4.Count == 0,
+                $"copied=[{string.Join(",", copied4)}]");
+
+            return failures == 0 ? 0 : 2;
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* 临时目录清理失败不影响判据 */ }
+        }
     }
 
     /// <summary>
@@ -1924,6 +2057,189 @@ private static int ReadInstanceInt(object obj, string fieldName)
     }
 
     /// <summary>
+    /// **MC 变体判定**（取数序开关）：`RunMagicCase` 里的 `useMcVariant` 是**按 label 名**判的；
+    /// 抽出共享函数供自检与扫描器使用。非缺省臂必须断言 `false`——`Next(7)` 对约 1/7 的种子
+    /// 也会返回 0，只靠"记录值 `Rng[2]==0`"是概率牙（卡 §2.6 三层）。
+    /// </summary>
+    private static bool IsMcVariantLabel(string label) =>
+        label == "s5" || label == "s13" || label == "hit";
+
+    /// <summary>非缺省臂的三个翻转目标（互斥：见卡 §2.3）。</summary>
+    private enum NonDefaultArm { Hit, RandRateFlip, SucessFlip }
+
+    /// <summary>
+    /// 从 `AppContext.BaseDirectory` 向上找 `<repo>/mir2-rs/tests/parity/fixtures/serverconf/nondefault`。
+    /// 找不到即契约违规（不静默回落部署目录——那会生成一支假绿）。
+    /// </summary>
+    private static string FindNonDefaultConfDir()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; i < 10 && dir != null; i++)
+        {
+            var cand = Path.Combine(dir.FullName, "mir2-rs", "tests", "parity", "fixtures", "serverconf", "nondefault");
+            if (File.Exists(Path.Combine(cand, "Server.conf"))) return cand;
+            dir = dir.Parent;
+        }
+        throw new FixtureContractViolation("找不到非缺省夹具目录 tests/parity/fixtures/serverconf/nondefault");
+    }
+
+    /// <summary>按 oracle 实际取数序取"吃缺省实现"的两道门抽（门①=100、门②=21）。</summary>
+    private static (int C100, int D21) DefaultGateDraws(int seed)
+    {
+        var rn = RandomNumber.GetInstance();
+        var original = RngSeam.Capture();
+        try
+        {
+            RngSeam.Install(seed);
+            rn.Random(0); rn.Random(0); rn.Random(1); rn.Random(10); // MPow / GetPower / GetAttackPower ×2
+            rn.Random(10); rn.Random(2);                              // AntiMagic 门 / Random(2)
+            return (rn.Random(100), rn.Random(21));
+        }
+        finally
+        {
+            RngSeam.Restore(original);
+        }
+    }
+
+    /// <summary>
+    /// 扫 seed：判**两支合取**（本支 + 吃缺省），不是只看本支。取数序与
+    /// `DefaultGateDraws`/装置实测一致（卡 §2.1）。找不到返回 -1。
+    /// </summary>
+    private static int FindSeedForNonDefaultArm(NonDefaultArm arm)
+    {
+        var rn = RandomNumber.GetInstance();
+        var original = RngSeam.Capture();
+        try
+        {
+            for (int seed = 1; seed <= 200000; seed++)
+            {
+                RngSeam.Install(seed);
+                rn.Random(0); rn.Random(0); rn.Random(1); rn.Random(10);
+                int a = rn.Random(10);
+                rn.Random(2);
+                int c50 = rn.Random(50);
+                int d90 = rn.Random(90);
+                RngSeam.Restore(original);
+                if (a < 3) continue;
+                var (c100, d21) = DefaultGateDraws(seed);
+                bool armG1 = c50 < 40;
+                bool armG2 = d90 < 6;
+                bool ok = arm switch
+                {
+                    // Hit 支要求**两支都成功**（缺省也过两道门）⇒ 差异只来自 STONE 时长/模数，
+                    // 不来自"谁进了成功臂"（后者由另两支覆盖）。
+                    NonDefaultArm.Hit => armG1 && armG2 && c100 < 32 && d21 < 6,
+                    NonDefaultArm.RandRateFlip => armG1 && armG2 && c100 >= 32,
+                    NonDefaultArm.SucessFlip => armG1 && c100 < 32 && !armG2 && d21 < 6,
+                    _ => false,
+                };
+                if (ok) return seed;
+            }
+        }
+        finally
+        {
+            RngSeam.Restore(original);
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// 记录值自检（卡 §2.6 第 2 层）+ 翻转谓词的**事后重算**（不是只在扫描期成立）：
+    /// `Rng[4]`=AntiMagic、`Rng[5]`=Random(2)、`Rng[6]`=门①、`Rng[7]`=门②（0 基）。
+    /// </summary>
+    private static void AssertNonDefaultFlip(string label, NonDefaultArm arm, int seed, IReadOnlyList<long> rng)
+    {
+        if (rng.Count < 7)
+        {
+            throw new FixtureContractViolation($"[{label}] Rng 少于 7 抽（实际 {rng.Count}）");
+        }
+        if (rng[2] != 0)
+        {
+            throw new FixtureContractViolation(
+                $"[{label}] Rng[2]={rng[2]} 非 0 ⇒ label 被判成 MC 变体（第 3 抽应为 Random(1)）");
+        }
+        if (rng[4] < 3)
+        {
+            throw new FixtureContractViolation($"[{label}] AntiMagic 门未过：Rng[4]={rng[4]}");
+        }
+        bool g1 = rng[6] < 40;
+        bool g2 = g1 && rng.Count > 7 && rng[7] < 6;
+        var (c100, d21) = DefaultGateDraws(seed);
+        switch (arm)
+        {
+            case NonDefaultArm.Hit:
+                if (!(g1 && g2 && c100 < 32 && d21 < 6))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{label}] 期望两支都成功（arm 门①={g1} 门②={g2}；缺省 c100={c100} 需<32 d21={d21} 需<6）");
+                }
+                break;
+            case NonDefaultArm.RandRateFlip:
+                if (!(g1 && g2 && c100 >= 32))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{label}] randrate flip 不成立：arm g1={g1} g2={g2}，缺省 c100={c100}（需 >=32）");
+                }
+                break;
+            case NonDefaultArm.SucessFlip:
+                if (!(g1 && c100 < 32 && !g2 && d21 < 6))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{label}] sucess flip 不成立：arm g1={g1} g2={g2}，缺省 c100={c100}（需 <32） d21={d21}（需 <6）");
+                }
+                break;
+        }
+    }
+
+    /// <summary>
+    /// **MG-48 非缺省对照臂**：三支各一个翻转目标（`Hit`/`RandRateFlip`/`SucessFlip`），
+    /// seed 由扫描给出，落盘前逐支做记录值自检（卡 §2.6）。**不**再调默认 `EnsureConfFiles`
+    /// ——它会把部署件按 sha 比较后覆盖回来（这正是修复后的预期行为，本支必须避免）。
+    /// </summary>
+    private static int NonDefaultArmBatch(MagicSpec spec, bool expectNonDefault)
+    {
+        foreach (var n in ConfNames)
+        {
+            if (!File.Exists(Path.Combine(AppContext.BaseDirectory, n)))
+            {
+                Console.Error.WriteLine("CONF_MISSING " + n);
+                return 2;
+            }
+        }
+        var arms = new[]
+        {
+            (Label: "nondef_hit", Arm: NonDefaultArm.Hit, Base: 1000),
+            (Label: "nondef_randrate_flip", Arm: NonDefaultArm.RandRateFlip, Base: 2000),
+            (Label: "nondef_sucess_flip", Arm: NonDefaultArm.SucessFlip, Base: 3000),
+        };
+        var results = new FireballResult[arms.Length];
+        for (int i = 0; i < arms.Length; i++)
+        {
+            string label = arms[i].Label;
+            if (IsMcVariantLabel(label))
+            {
+                throw new FixtureContractViolation($"[{label}] 非缺省臂 label 不得命中 MC 变体集合");
+            }
+            int seed = FindSeedForNonDefaultArm(arms[i].Arm);
+            if (seed < 0)
+            {
+                throw new FixtureContractViolation($"[{label}] 找不到满足翻转合取式的 seed（200000 内）");
+            }
+            var r = RunMagicCase(spec, label, seed, arms[i].Base, spec.TargetMaxHp, false);
+            if (expectNonDefault)
+            {
+                AssertNonDefaultFlip(label, arms[i].Arm, seed, r.Rng);
+            }
+            else if (r.Rng.Count > 2 && r.Rng[2] != 0)
+            {
+                throw new FixtureContractViolation($"[{label}] Rng[2]={r.Rng[2]} 非 0 ⇒ label 被判成 MC 变体");
+            }
+            results[i] = r;
+        }
+        return EmitGolden(spec, results);
+    }
+
+    /// <summary>
     /// `--case fixture-selftest`：七道门逐条（每条都要 rc=2 的违规输入）+ 一个合法输入。
     /// </summary>
     private static int FixtureSelfTest()
@@ -2499,7 +2815,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (spec.CasterDir >= 0) caster.Dir = (byte)spec.CasterDir;
         if (spec.CasterGender >= 0) caster.Gender = (OpenMir2.Enums.PlayerGender)spec.CasterGender;
         if (spec.CasterHair >= 0) caster.Hair = (byte)spec.CasterHair;
-        bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");
+        bool useMcVariant = spec.CasterMcNoClamp > 0 && IsMcVariantLabel(label);
         // SC 变体的逐 case 标签：伤害/火魅/DefenceUp 的 `hit`/`s5`/`s13` + 治疗面的 `self`/`both`。
         bool useScVariant = spec.CasterScNoClamp > 0
             && (label == "s5" || label == "s13" || label == "hit" || label == "self" || label == "both" || label == "heal");
