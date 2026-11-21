@@ -13495,11 +13495,96 @@ fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
 struct SpellFrameBuf {
     /// `(socket, priority, body)`。
     frames: Vec<(i32, u8, Vec<u8>)>,
+    /// **(ii) pilot**：当前 actor 回合的上下文（`begin_turn` 设置；未设 ⇒ 旧行为）。
+    current_turn: Option<TurnCtx>,
+    /// **(ii) pilot**：657 的 per-viewer 延迟——收件人本 tick **已跑过**（`turn_index[R] <= current.index`）
+    /// ⇒ 不进本 tick 的 `frames`，由宿主取走留到下一 tick 再入同一收件人堆。
+    deferred: Vec<(i32, u8, Vec<u8>)>,
+    /// 本 buf 实际消费的 turn 数（**元断言**用：本 tick 有 turn 却为 0 ⇒ 忘调 `begin_turn`）。
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 读取
+    turns_seen: usize,
+}
+
+/// **(ii) pilot**：本 tick `Vec<SelfDelayTurn>` 的 actor→turn 下标快照 + 当前处理到的下标。
+struct TurnCtx {
+    index: usize,
+    order: std::collections::HashMap<i32, usize>,
 }
 
 impl SpellFrameBuf {
     fn new() -> Self {
-        Self { frames: Vec::new() }
+        Self {
+            frames: Vec::new(),
+            current_turn: None,
+            deferred: Vec::new(),
+            turns_seen: 0,
+        }
+    }
+
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 使用
+    /// **(ii) pilot**：标出"现在处理的是第 `index` 个 turn、actor=`actor_id`"。
+    /// `order` = 本 tick `SelfDelayTurn` 的 actor→下标快照（组间序）。
+    fn begin_turn(
+        &mut self,
+        index: usize,
+        order: &std::collections::HashMap<i32, usize>,
+        _actor_id: i32,
+    ) {
+        self.turns_seen += 1;
+        self.current_turn = Some(TurnCtx {
+            index,
+            order: order.clone(),
+        });
+    }
+
+    /// **(ii) pilot**：带收件人 id 的入队（只由 657 的 `push_charstatuschanged` 调用）。
+    ///
+    /// 判据（opc-19 2026-11-22，**严格小于**）：本 tick 有 turn 快照且收件人 `R` 的下标 `<` 当前下标 ⇒
+    /// `R` 已跑过本 tick ⇒ 657 落到 `deferred`（下一 tick 由宿主 `preload` 回 `frames`）；
+    /// 未设 turn（旧路径）/收件人不在快照 ⇒ 立即（旧行为）。
+    fn push_addressed(&mut self, recipient_id: i32, socket: i32, priority: u8, body: Vec<u8>) {
+        if let Some(ctx) = &self.current_turn {
+            if let Some(&ri) = ctx.order.get(&recipient_id) {
+                if ri < ctx.index {
+                    self.deferred.push((socket, priority, body));
+                    return;
+                }
+            }
+        }
+        self.frames.push((socket, priority, body));
+    }
+
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 使用
+    /// **(ii) pilot**：把上一 tick 的延迟帧预装回本 tick 的缓冲（同一收件人堆、同一 flush）。
+    fn preload(&mut self, pending: impl IntoIterator<Item = (i32, u8, Vec<u8>)>) {
+        self.frames.extend(pending);
+    }
+
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 使用
+    /// **(ii) pilot**：元断言/测试观测：本 buf 消费了几个 turn。
+    fn turns_seen(&self) -> usize {
+        self.turns_seen
+    }
+
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 使用
+    /// **(ii) pilot**：元断言/测试观测：本 tick 延迟了几条。
+    fn deferred_len(&self) -> usize {
+        self.deferred.len()
+    }
+
+    #[allow(dead_code)] // pilot seam：生产接线前只由 tests/rig 使用
+    /// **(ii) pilot**：发送本 tick `frames`，并把 `deferred` 交给宿主留到下一 tick。
+    fn flush_with_deferred(
+        self,
+        online: &OnlineRegistry,
+        gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        deferred_out: &mut Vec<(i32, u8, Vec<u8>)>,
+    ) {
+        let SpellFrameBuf {
+            frames, deferred, ..
+        } = self;
+        deferred_out.extend(deferred);
+        Self::flush_frames(frames, online, gates);
     }
 
     /// 按 oracle `RM_*` 的 `(byte)wIdent` 入队（ident 已由调用方映射成优先级）。
@@ -13590,7 +13675,16 @@ impl SpellFrameBuf {
         online: &OnlineRegistry,
         gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     ) {
-        let frames = self.frames;
+        // 旧路径不消费 deferred（pilot 未接的调用点保持旧行为）。
+        Self::flush_frames(self.frames, online, gates);
+    }
+
+    /// 发送 `frames`（原 `flush` 主体；per-recipient 四叉堆出队序）。
+    fn flush_frames(
+        frames: Vec<(i32, u8, Vec<u8>)>,
+        online: &OnlineRegistry,
+        gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    ) {
         let mut recipients: Vec<i32> = Vec::new();
         for (socket, _, _) in &frames {
             if !recipients.contains(socket) {
@@ -13723,6 +13817,65 @@ mod spell_frame_buf_tests {
     ///
     /// 若把 `RM_SPELL` 的缓冲投递改成 `include_self=true`，效果臂的行为用例
     /// `spell_cmd_firewind_enters_effect_draws_and_pushes` 的 caster 侧断言必红。
+    /// **(ii) pilot ①**：已跑过的收件人（`turn_index[R] <= current.index`）的 657 落延迟队列；
+    /// 不在 turn 快照内的收件人仍立即发送。
+    #[test]
+    fn pilot_657_defers_only_already_ran_recipients() {
+        let (online, gates, mut rx) = rig();
+        let order: std::collections::HashMap<i32, usize> =
+            [(901, 0usize), (902, 1)].into_iter().collect();
+        let mut buf = SpellFrameBuf::new();
+        buf.begin_turn(1, &order, 902);
+        buf.push_addressed(901, 911, 155, vec![1]); // 严格早于当前 turn ⇒ 延迟
+        buf.push_addressed(902, 912, 155, vec![2]); // 当前 actor（1<1 假）⇒ 立即
+        buf.push_socket(911, 167, vec![9]); // 非 657 / 旧入口 ⇒ 立即
+        let mut deferred = Vec::new();
+        buf.flush_with_deferred(&online, &gates, &mut deferred);
+        let sent: Vec<u8> = drain(&mut rx).into_iter().map(|(_, b)| b[0]).collect();
+        assert_eq!(sent, vec![2, 9], "当前 actor 与非 657 立即发出");
+        assert_eq!(deferred.len(), 1, "只有严格早于当前 turn 的一条落延迟");
+    }
+
+    /// **(ii) pilot ②**：上一 tick 的延迟帧在下一 tick `preload` 后，与立即帧进**同一收件人堆**，
+    /// 出队序仍是 .NET 四叉堆序（3 条同优先级 = `[0,2,1]`）。
+    #[test]
+    fn pilot_deferred_released_next_tick_in_same_heap_order() {
+        let (online, gates, mut rx) = rig();
+        let mut buf = SpellFrameBuf::new();
+        buf.preload(vec![(911, 167, vec![0]), (911, 167, vec![1])]);
+        buf.push_socket(911, 167, vec![2]);
+        let mut deferred = Vec::new();
+        buf.flush_with_deferred(&online, &gates, &mut deferred);
+        assert!(deferred.is_empty(), "本 tick 没有新延迟");
+        let got: Vec<u8> = drain(&mut rx).into_iter().map(|(_, b)| b[0]).collect();
+        assert_eq!(got, vec![0, 2, 1], "立即 + 延迟同堆出队序");
+    }
+
+    /// **(ii) pilot ③（元断言牙）**：本 tick 处理了 turn 却忘了 `begin_turn`，或延迟队列恒空
+    /// ⇒ **必须红**（忘了 set 会静默回退旧行为，这是本设计最大的坑）。
+    #[test]
+    fn pilot_meta_assert_turn_seen_and_deferred_nonempty() {
+        fn assert_pilot_turn_consumed(buf: &SpellFrameBuf, turns_processed: usize) {
+            assert!(
+                turns_processed == 0 || buf.turns_seen() > 0,
+                "元断言：本 tick 处理了 {turns_processed} 个 turn 却未 begin_turn ⇒ 静默回退旧行为"
+            );
+            assert!(
+                turns_processed == 0 || buf.deferred_len() > 0,
+                "元断言：有 turn 但延迟队列恒空 ⇒ per-viewer 判据未生效"
+            );
+        }
+        let (online, gates, _rx) = rig();
+        let order: std::collections::HashMap<i32, usize> =
+            [(901, 0usize), (902, 1)].into_iter().collect();
+        let mut buf = SpellFrameBuf::new();
+        buf.begin_turn(1, &order, 902);
+        buf.push_addressed(901, 911, 155, vec![1]); // 已跑 ⇒ 延迟非空
+        assert_pilot_turn_consumed(&buf, 1);
+        let mut deferred = Vec::new();
+        buf.flush_with_deferred(&online, &gates, &mut deferred);
+    }
+
     #[test]
     fn caster_queue_without_rm_spell_keeps_push_order() {
         for (with_spell, want) in [
@@ -21434,7 +21587,8 @@ fn push_charstatuschanged(
         };
         let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
         let body = smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
-        buf.push_socket(entry.socket, priority, body);
+        // **(ii) pilot**：per-viewer 延迟判据在 `push_addressed` 内（未设 turn ⇒ 旧行为）。
+        buf.push_addressed(target_id, entry.socket, priority, body);
     }
 }
 
@@ -21803,35 +21957,97 @@ fn drain_b3_self_deliveries(
 ) {
     let mut buf = SpellFrameBuf::new();
     for o in self_delivery_outcomes(rec) {
-        if let Some(d) = o.transparent {
-            if d.status_changed {
-                push_charstatuschanged(&mut buf, world, online, d.target_id, d.status);
-            }
-        }
-        if let Some(h) = o.open_health {
-            // `PlayObject.ShowHp` 的宿主镜像（53 的 ShowHp 广播支读会话态）。
-            if let Some(entry) = online.iter().find(|e| e.actor_id == h.target_id) {
-                if let Some(sg) = sessions.get_mut(&entry.chr_name) {
-                    sg.show_hp = true;
-                }
-            }
-            push_open_health(&mut buf, world, online, h.target_id, h.hp, h.max_hp);
-        }
-        if let Some(m) = o.magic_lvexp {
-            // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` ⇒ 出队优先级 `Lowest = 255`。
-            if let Some(entry) = online.iter().find(|e| e.actor_id == o.actor_id) {
-                buf.push_socket(
-                    entry.socket,
-                    255,
-                    smframe::sm_magic_lvexp(m.magic_id, m.level, m.tran_point),
-                );
-            }
-        }
-        if let Some(n) = o.name_color {
-            push_name_color(&mut buf, world, online, n.target_id, n.color);
-        }
+        b3_outcome_frames(&mut buf, world, online, sessions, o);
     }
     buf.flush(online, gates);
+}
+
+/// `drain_b3` 的单条 outcome 出帧（透明 657 / 开血 1100 / 训练 640 / 改名色 656）。
+fn b3_outcome_frames(
+    buf: &mut SpellFrameBuf,
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    o: &mir2_world_bevy::slave::SelfDelayOutcome,
+) {
+    if let Some(d) = o.transparent {
+        if d.status_changed {
+            push_charstatuschanged(buf, world, online, d.target_id, d.status);
+        }
+    }
+    if let Some(h) = o.open_health {
+        // `PlayObject.ShowHp` 的宿主镜像（53 的 ShowHp 广播支读会话态）。
+        if let Some(entry) = online.iter().find(|e| e.actor_id == h.target_id) {
+            if let Some(sg) = sessions.get_mut(&entry.chr_name) {
+                sg.show_hp = true;
+            }
+        }
+        push_open_health(buf, world, online, h.target_id, h.hp, h.max_hp);
+    }
+    if let Some(m) = o.magic_lvexp {
+        // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` ⇒ 出队优先级 `Lowest = 255`。
+        if let Some(entry) = online.iter().find(|e| e.actor_id == o.actor_id) {
+            buf.push_socket(
+                entry.socket,
+                255,
+                smframe::sm_magic_lvexp(m.magic_id, m.level, m.tran_point),
+            );
+        }
+    }
+    if let Some(n) = o.name_color {
+        push_name_color(buf, world, online, n.target_id, n.color);
+    }
+}
+
+#[allow(dead_code)] // pilot seam：目前只由 parity rig/tests 调用
+#[allow(clippy::too_many_arguments)]
+/// **(ii) pilot**：`drain_b3_self_deliveries` 的 **657 per-viewer 延迟**版（只给
+/// `SpellFrameRig::deliver` / `B3Rig::deliver` 用；旧 `drain_b3_self_deliveries` 与其余
+/// 44 个 `SpellFrameBuf::new` / 52 个 `flush` 调用点一字不动）。
+///
+/// - `pending`：宿主 rig 持有的上一 tick 未放行 657；`preload=true` 时先并入本 tick 缓冲
+///   （与立即帧同一收件人 `NetPriorityQueue`，出队序不变）。
+/// - turn 序：`rec.slave_self_delivery_turns` 非空 ⇒ 逐 turn `begin_turn(i, order, actor)`
+///   后处理该 turn 的 outcome；为空（旧夹具/无泵）⇒ 按扁平处理、不设 turn（旧行为）。
+/// - 元断言：turns 非空而 `turns_seen()==0` ⇒ 具名 panic（忘调 `begin_turn` 会静默回退）。
+fn drain_b3_self_deliveries_with_pending(
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pending: &mut Vec<(i32, u8, Vec<u8>)>,
+    preload: bool,
+) {
+    let mut buf = SpellFrameBuf::new();
+    if preload && !pending.is_empty() {
+        let queued = std::mem::take(pending);
+        buf.preload(queued);
+    }
+    let turns = &rec.slave_self_delivery_turns;
+    if turns.is_empty() {
+        for o in &rec.slave_self_deliveries {
+            b3_outcome_frames(&mut buf, world, online, sessions, o);
+        }
+    } else {
+        let order: std::collections::HashMap<i32, usize> = turns
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.actor_id, i))
+            .collect();
+        for (i, t) in turns.iter().enumerate() {
+            buf.begin_turn(i, &order, t.actor_id);
+            for o in &t.outcomes {
+                b3_outcome_frames(&mut buf, world, online, sessions, o);
+            }
+        }
+    }
+    assert!(
+        turns.is_empty() || buf.turns_seen() > 0,
+        "元断言：本 tick 有 {} 个 turn 却未 begin_turn ⇒ per-viewer 判据静默回退旧行为",
+        turns.len()
+    );
+    buf.flush_with_deferred(online, gates, pending);
 }
 
 /// **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems` 的 `SM_DELITEMS(709)` 出帧。
@@ -69856,6 +70072,8 @@ SendRefMsgRange=15
         /// 缺省 `None` ⇒ 回落历史行为（空注册表 ⇒ `id_of` 恒 `None` ⇒ 不移动）。
         /// **测试装置专用**；产品路径由 `main` 注入，不在 `handle_spell_cmd` 里加测试缝。
         registry: Option<mir2_envir::MapRegistry>,
+        /// **(ii) pilot**：上一 tick 未放行的 657（per-viewer 延迟；随 `deliver` 步进放行）。
+        pending_657: Vec<(i32, u8, Vec<u8>)>,
     }
 
     impl SpellFrameRig {
@@ -70004,6 +70222,7 @@ SendRefMsgRange=15
                 elec_blizzard_range: 2,
                 amulet_shape: 5,
                 registry: None,
+                pending_657: Vec::new(),
             }
         }
 
@@ -70160,25 +70379,43 @@ SendRefMsgRange=15
             // 队根是未到点项时「出队 + 以 Lowest 重入队」只结束本次泵（该项移到堆尾）。
             // 设本轮起点队列长度 q，则 q 次泵内每条消息都轮到过队根 ⇒ 所有到期项必已投递
             // 或只剩「泵门」拦截项；故上界取 q + 1（另设 64 上限防御）。
-            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
-            for _ in 0..bound {
-                if self.world.self_delay_msgs.is_empty() {
-                    break;
-                }
-                let outs = self.world.deliver_self_delay_msgs();
-                if outs.is_empty() {
-                    continue;
-                }
-                let rec = mir2_world_bevy::TickRecord {
-                    slave_self_deliveries: outs,
-                    ..Default::default()
-                };
-                drain_b3_self_deliveries(
+            // **(ii) pilot**：先放行上一 tick 的延迟 657（只在这一步的第一次 flush）。
+            if !self.pending_657.is_empty() {
+                let rec = mir2_world_bevy::TickRecord::default();
+                drain_b3_self_deliveries_with_pending(
                     &rec,
                     &self.world,
                     &self.online,
                     &mut self.ground_sessions,
                     &self.gates,
+                    &mut self.pending_657,
+                    true,
+                );
+                frames.extend(self.drain().0);
+            }
+            let bound = (self.world.self_delay_msgs.len() + 1).min(64);
+            for _ in 0..bound {
+                if self.world.self_delay_msgs.is_empty() {
+                    break;
+                }
+                let turns = self.world.deliver_self_delay_msgs_turns();
+                let flat = mir2_world_bevy::slave::flatten_self_delay_turns(turns.clone());
+                if flat.is_empty() && turns.is_empty() {
+                    continue;
+                }
+                let rec = mir2_world_bevy::TickRecord {
+                    slave_self_deliveries: flat,
+                    slave_self_delivery_turns: turns,
+                    ..Default::default()
+                };
+                drain_b3_self_deliveries_with_pending(
+                    &rec,
+                    &self.world,
+                    &self.online,
+                    &mut self.ground_sessions,
+                    &self.gates,
+                    &mut self.pending_657,
+                    false,
                 );
                 frames.extend(self.drain().0);
             }
@@ -72591,11 +72828,31 @@ SendRefMsgRange=15
         // `SendStruckDelayMsg` 路径），**不含** `RM_DELAYMAGIC` 的受击（fireball 走那条，
         // golden 不记 8044/10052/8103，混进来会多记）。
         let mut delayed_player_struck: Vec<(i32, i32, i32)> = Vec::new();
+        // **(ii) pilot**：657 的 per-viewer 延迟（rig 级 pending；只对 657 生效）。
+        let mut pending_657: Vec<(i32, u8, Vec<u8>)> = Vec::new();
         let mut elapsed: u64 = 0;
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
             elapsed += 100;
-            let outs = rig.world.deliver_self_delay_msgs();
+            // 先放行上一 tick 的延迟 657（本步可见 ⇒ due = elapsed）。
+            if !pending_657.is_empty() {
+                let rec = mir2_world_bevy::TickRecord::default();
+                drain_b3_self_deliveries_with_pending(
+                    &rec,
+                    &rig.world,
+                    &rig.online,
+                    &mut rig.ground_sessions,
+                    &rig.gates,
+                    &mut pending_657,
+                    true,
+                );
+                let (late_frames, _raws_late) = rig.drain();
+                for f in late_frames {
+                    deliver_frames.push((elapsed as i64, f));
+                }
+            }
+            let turns = rig.world.deliver_self_delay_msgs_turns();
+            let outs = mir2_world_bevy::slave::flatten_self_delay_turns(turns.clone());
             // **玩家受击必须留给 `drain_b4_self_deliveries`**（`deliver_mag_struck` 做
             // 31 帧 + R(1000)/MSD 抽数）；**怪物受击只记 RM、不结算**——C# 装置的
             // `RecordingMonster` 明确「不 Operate」（`RunMagicCase` 注释），让它结算会多抽。
@@ -72616,6 +72873,7 @@ SendRefMsgRange=15
             }
             let rec = mir2_world_bevy::TickRecord {
                 slave_self_deliveries: outs.clone(),
+                slave_self_delivery_turns: turns,
                 ..Default::default()
             };
             drain_b4_self_deliveries(
@@ -72631,12 +72889,15 @@ SendRefMsgRange=15
             );
             // **P3-B3**：`RM_DOOPENHEALTH` 到点 ⇒ 1100、`RM_MAGIC_LVEXP` 到点 ⇒ 640、
             // `RM_TRANSPARENT` ⇒ 657。与 `sim_loop` 同序（B4 先、B3 后）。
-            drain_b3_self_deliveries(
+            // **(ii) pilot**：turn-aware + rig pending（657 的 per-viewer 延迟）。
+            drain_b3_self_deliveries_with_pending(
                 &rec,
                 &rig.world,
                 &rig.online,
                 &mut rig.ground_sessions,
                 &rig.gates,
+                &mut pending_657,
+                false,
             );
             let (step_frames, _raws2) = rig.drain();
             for f in step_frames {
@@ -72646,6 +72907,14 @@ SendRefMsgRange=15
         }
         // 延迟支（2/11/45/13/44 的 `RM_DELAYMAGIC`）的受击发生在**交付段** ⇒ 再取一次；
         // 只用于 `8090`（改名）的组装——8044/8103 由既有 `delay_magic` 块负责，避免重复。
+        // **(ii) pilot fail-closed**：交付循环退出时延迟队列必须为空；否则延迟 657 被静默丢弃。
+        // 若某 stem 确有合法残留（延迟点落在 wait_ms 之后），必须在此写明原因并改为有区分的断言，
+        // 不得放开。
+        assert!(
+            pending_657.is_empty(),
+            "pilot：交付循环结束时 pending_657 仍有 {} 条 ⇒ 延迟 657 被静默丢弃（wait_ms={wait_ms}）；             若某 stem 合法残留，须写明原因并改为有区分的断言",
+            pending_657.len()
+        );
         let struck_delivered = rig.world.struck_log().to_vec();
         rig.world.clear_struck_log();
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
@@ -77960,6 +78229,56 @@ SendRefMsgRange=15
             );
             assert_eq!(n(who, "Sent", 53), 0, "[{stem}/{label}] {who} 不得有 53");
         }
+        // **(ii) pilot 目标（施工图 §12）**：`(ident, recog, due)` 必须为
+        // caster `{1002@900, 1001@900}`、target/obs_in `{1002@800, 1001@900}`。
+        // 机制：turn 序 [caster0, target1]，`strict <`；caster 的 1002 由 target(turn1) 广播、
+        // 此时 caster 已跑过 ⇒ 延迟一步（800→900）；caster 的 1001 是自身 turn 内产生 ⇒ 900 不变。
+        let due_of = |who: &str, recog: i64| -> Vec<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["ident"] == 657 && m["recog"] == recog)
+                .filter_map(|m| m["due_ms_rel"].as_i64())
+                .collect()
+        };
+        // recog 随 `base` 分段：caster=base+1、target=base+2（s1=1001/1002、s5=2001/2002、s13=3001/3002）。
+        let (caster_recog, target_recog) = (i64::from(base) + 1, i64::from(base) + 2);
+        assert_eq!(
+            due_of("caster", target_recog),
+            vec![900],
+            "[{stem}/{label}] pilot：caster 1002 必须 900"
+        );
+        assert_eq!(
+            due_of("caster", caster_recog),
+            vec![900],
+            "[{stem}/{label}] pilot：caster 1001 保持 900"
+        );
+        assert_eq!(
+            due_of("target", target_recog),
+            vec![800],
+            "[{stem}/{label}] target 1002 保持 800"
+        );
+        assert_eq!(
+            due_of("target", caster_recog),
+            vec![900],
+            "[{stem}/{label}] target 1001 保持 900"
+        );
+        assert_eq!(
+            due_of("obs_in", target_recog),
+            vec![800],
+            "[{stem}/{label}] obs_in 1002 保持 800"
+        );
+        assert_eq!(
+            due_of("obs_in", caster_recog),
+            vec![900],
+            "[{stem}/{label}] obs_in 1001 保持 900"
+        );
         // 8045：仅被施加者（caster、target）各 1 条；obs_in 0。
         assert_eq!(n("caster", "Rm", 8045), 1, "[{stem}/{label}] caster 8045");
         assert_eq!(n("target", "Rm", 8045), 1, "[{stem}/{label}] target 8045");
@@ -84393,6 +84712,8 @@ SendRefMsgRange=15
         displays: downlink::DisplayTable,
         gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx: mpsc::UnboundedReceiver<SimToGate>,
+        /// **(ii) pilot**：上一 tick 未放行的 657。
+        pending_657: Vec<(i32, u8, Vec<u8>)>,
     }
 
     impl B3Rig {
@@ -84498,6 +84819,7 @@ SendRefMsgRange=15
                 displays,
                 gates,
                 rx,
+                pending_657: Vec::new(),
             }
         }
 
@@ -84559,17 +84881,34 @@ SendRefMsgRange=15
         /// 推进时钟并投递到点的自身延时消息；返回本批出帧。
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
-            let outs = self.world.deliver_self_delay_msgs();
+            // **(ii) pilot**：先放行上一 tick 的延迟 657（viewer 的"下一回合"= 本步）。
+            if !self.pending_657.is_empty() {
+                let rec = mir2_world_bevy::TickRecord::default();
+                drain_b3_self_deliveries_with_pending(
+                    &rec,
+                    &self.world,
+                    &self.online,
+                    &mut self.ground_sessions,
+                    &self.gates,
+                    &mut self.pending_657,
+                    true,
+                );
+            }
+            let turns = self.world.deliver_self_delay_msgs_turns();
+            let flat = mir2_world_bevy::slave::flatten_self_delay_turns(turns.clone());
             let rec = mir2_world_bevy::TickRecord {
-                slave_self_deliveries: outs,
+                slave_self_deliveries: flat,
+                slave_self_delivery_turns: turns,
                 ..Default::default()
             };
-            drain_b3_self_deliveries(
+            drain_b3_self_deliveries_with_pending(
                 &rec,
                 &self.world,
                 &self.online,
                 &mut self.ground_sessions,
                 &self.gates,
+                &mut self.pending_657,
+                false,
             );
             self.drain()
         }
@@ -84980,11 +85319,29 @@ SendRefMsgRange=15
             vec![(2, 0)],
             "投递 tick 的账本（B3-19-4）"
         );
-        // 两条投递各广播一次 657；两个玩家互为 ±12 内 ⇒ 每个 socket 各收 2 条。
-        assert_eq!(b3_count(&f, 911, SM_657), 2, "SELF 收两次投递的 657");
-        assert_eq!(b3_count(&f, 912, SM_657), 2, "OBS 收两次投递的 657");
+        // **(ii) pilot（施工图 §12）**：两条投递各广播一次 657；两个玩家互为 ±12 内。
+        // turn 序 = [caster(turn0), obs(turn1)]（首次入队序）；`strict <` 判据：
+        // - SELF(911)：caster 自己的 turn0 里产生的 1001 立即；observer 的 turn1 广播的 1002
+        //   在 caster 已跑过之后 ⇒ **延迟到下一 tick** ⇒ 本步 SELF 只见 1 条；
+        // - OBS(912)：obs 在 turn1，caster(turn0) 的 1001 到达时自己未跑 ⇒ 立即；自己 turn1 的
+        //   1002 是当前 turn ⇒ 立即 ⇒ 本步 2 条。
+        assert_eq!(
+            b3_count(&f, 911, SM_657),
+            1,
+            "pilot：SELF 的另一条 657 已 per-viewer 延迟到下一 tick"
+        );
+        assert_eq!(
+            b3_count(&f, 912, SM_657),
+            2,
+            "OBS 不延迟（两条均未早于其 turn）"
+        );
         let f2 = rig.deliver(200);
-        assert_eq!(b3_seq(&f2, 911), vec![SM_640], "1000ms 训练帧");
+        // 下一 tick：先放行延迟的 657，再是 1000ms 训练帧（优先级 155 < 255 ⇒ 657 在前）。
+        assert_eq!(
+            b3_seq(&f2, 911),
+            vec![SM_657, SM_640],
+            "延迟 657 在下一 tick 放行（先于 640）"
+        );
         assert_eq!(rig.tran_level(), 2);
         assert_eq!(rig.tran_point(), 1);
 
