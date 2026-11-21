@@ -199,9 +199,13 @@ public static class Program
             //   · 刀①：删骰门抽数 ⇒ Rng 计数/序列变；刀②：AntiMagic 恒 0 ⇒ 命中集合变（8044 条数）；
             //     刀③：穿透步数 5→8 ⇒ 第 5 格之外的对象进入（本夹具在 x=106 放一只，便于该刀变红）。
             //   · 禁止"空线"：没有怪时骰门零抽、RM 零条 ⇒ 退化数据，生成后自查会拦。
-            if (name == "fire") return BehaviorBatch(new MagicSpec
+            // 10 疾光电影与 9 同形（`MagicManager.cs:277-289`）：`MagPassThroughMagic(..., 8, true)`
+            // ⇒ 穿透 8 格 + `undeadAttack=true`（**逐击** `Round(pow*1.5)` 复合）。装置同形，
+            // 仅魔号/名字不同；两者共用本支 spec。
+            if (name is "fire" or "skill10") return BehaviorBatch(new MagicSpec
             {
-                Key = "fire", MagicId = 9, MagicName = "Fire",
+                Key = name, MagicId = name == "fire" ? 9 : 10,
+                MagicName = name == "fire" ? "Fire" : "ShootLighten",
                 CasterMcNoClamp = HUtil32.MakeWord(5, 10),
                 // 场景里 obs_in(105,100) 落在穿透线上，与 target 同刻受击 ⇒ 帧序用多重集
                 // （产品批量 flush vs oracle 逐 actor；产品卡修复后删此标记并恢复严格按序）。

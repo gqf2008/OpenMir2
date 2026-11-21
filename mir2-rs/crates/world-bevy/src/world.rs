@@ -4745,7 +4745,8 @@ impl World {
             return SpellStrikeOutcome::default();
         }
         let atk = AttackPowerMode::for_attacker(&caster);
-        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let power =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk, false);
         SpellStrikeOutcome {
             target: Some(tid),
             bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
@@ -4795,7 +4796,7 @@ impl World {
         }
         let atk = AttackPowerMode::for_attacker(&caster);
         let mut power =
-            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk, false);
         if t.life_attrib == crate::magic_effect::LA_UNDEAD {
             // `nPower = (ushort)HUtil32.Round(nPower * 1.5)`（`:296`）。
             power = mir2_shared::hutil::round(f64::from(power) * 1.5);
@@ -4929,7 +4930,8 @@ impl World {
             return SpellStrikeOutcome::default();
         }
         let atk = AttackPowerMode::for_attacker(&caster);
-        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let power =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk, false);
         let push = crate::magic_effect::hb_fireball_push(
             &mut self.rng,
             level,
@@ -7137,8 +7139,14 @@ impl World {
             .unwrap_or((caster.x, caster.y));
         // `:270/:282` 威力（4 抽；按施法者分派 `GetAttackPower` override）。
         let atk = AttackPowerMode::for_attacker(&caster);
-        let mut mag_pwr =
-            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let mut mag_pwr = crate::magic_effect::single_hit_power_mc(
+            &mut self.rng,
+            magic,
+            level,
+            mc,
+            atk,
+            magic.magic_id == 10,
+        );
         let group = self.attacker_group_members(&caster);
         let mut hits = Vec::new();
         for _ in 0..12 {

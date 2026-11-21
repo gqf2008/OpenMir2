@@ -71717,7 +71717,10 @@ SendRefMsgRange=15
                 if let Some(who) = who_of(id) {
                     rm_by_who.entry(who).or_default().push(fireball_rm(
                         8103,
-                        i64::from(*power),
+                        // `RM_STRUCK_MAG` 的 wParam = **`(ushort)` 回绕后的伤害**（与出 31 帧同一
+                        // 转换 [`wire_damage`]）。MG-18 实测 obs_in 的 power=154985 ⇒ 23913
+                        // （`& 0xFFFF`，与 golden 逐值相等）；目标 45921 不受影响。
+                        i64::from(wire_damage(*power)),
                         i64::from(hp_after),
                         i64::from(max_hp),
                         i64::from(*caster_ref),
@@ -72060,6 +72063,55 @@ SendRefMsgRange=15
             0,
             "[{stem}/{label}] caster 不得收 SM_SPELL(17)"
         );
+        // **条件化牙（MG-18 起）：golden 的 caster 有 640 ⇒ 台账必须同样有**，且当 golden
+        // 逐帧带 `due_ms_rel` 时**逐值相等**。**以 golden 有无该帧为开关**：
+        // `boTrain=false`（A 类/召唤失败）、`UserMagicLevel=3`、非训练支本来就不该有 640，
+        // 无条件要求会误伤这些正确行为。旧世代 golden（无 due 键）只比条数。
+        if let Some(g_caster) = g["Receivers"]
+            .as_array()
+            .and_then(|rs| rs.iter().find(|r| r["Who"] == "caster"))
+        {
+            let g_frames: Vec<&serde_json::Value> = g_caster["Sent"]
+                .as_array()
+                .map(|a| a.iter().filter(|s| s["ident"] == 640).collect())
+                .unwrap_or_default();
+            if !g_frames.is_empty() {
+                let r_frames: Vec<&serde_json::Value> = caster["Sent"]
+                    .as_array()
+                    .map(|a| a.iter().filter(|s| s["ident"] == 640).collect())
+                    .unwrap_or_default();
+                assert_eq!(
+                    r_frames.len(),
+                    g_frames.len(),
+                    "[{stem}/{label}] caster 640 条数与金标准不符（golden {} / 台账 {}）",
+                    g_frames.len(),
+                    r_frames.len()
+                );
+                // **全有或全无**（与 `recog` 同款）：一批 640 里若**部分**帧带 `due_ms_rel`，
+                // 直接 panic 点名——否则"部分带"会让 due 比较整体静默跳过（§7 的同一类坑）。
+                let with_due = g_frames
+                    .iter()
+                    .filter(|f| f.get("due_ms_rel").is_some())
+                    .count();
+                assert!(
+                    with_due == 0 || with_due == g_frames.len(),
+                    "[{stem}/{label}] golden 的 640 帧 due_ms_rel 混合：{with_due}/{} 帧带（必须全有或全无）",
+                    g_frames.len()
+                );
+                if with_due == g_frames.len() {
+                    let dues = |fs: &[&serde_json::Value]| -> Vec<i64> {
+                        fs.iter()
+                            .map(|f| f["due_ms_rel"].as_i64().unwrap_or(i64::MIN))
+                            .collect()
+                    };
+                    assert_eq!(
+                        dues(&r_frames),
+                        dues(&g_frames),
+                        "[{stem}/{label}] caster 640 的 due_ms_rel 与金标准不符"
+                    );
+                }
+            }
+        }
         // 负向牙②：obs_out 全空。
         let obs_out = case["Receivers"]
             .as_array()
@@ -73960,6 +74012,31 @@ SendRefMsgRange=15
     fn fire_assert(label: &str, seed: i32, base: i32) {
         fireball_parity_drive("fire", 9, 1, label, seed, base);
         fireball_case_assert("fire", label);
+    }
+
+    /// **10 疾光电影**（MG-18）：与 9 同形，但 `steps = 8`、`undeadAttack = true`
+    /// （`MagicManager.cs:277-289`）⇒ 逐击 `Round(pow*1.5)` 复合。
+    fn skill10_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("skill10", 10, 1, label, seed, base);
+        fireball_case_assert("skill10", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s1() {
+        skill10_assert("s1", golden_seed("skill10", "s1"), 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s5() {
+        skill10_assert("s5", golden_seed("skill10", "s5"), 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn skill10_parity_s13() {
+        skill10_assert("s13", golden_seed("skill10", "s13"), 3000);
     }
 
     #[test]

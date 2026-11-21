@@ -708,11 +708,23 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             }
             let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
             let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
-            let pre = hp_after.saturating_add(dmg);
-            if pre != target_hp {
-                return Err(format!(
-                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
-                ));
+            // **致死支**：伤害不被 HP 截断（`series` 记的是掷出的伤害），`HP_after` 归 0 ⇒
+            // `HP_after + damage == target_hp` 必然不成立。此时判据换成"确实是致死一击"
+            // （`damage >= target_hp`），仍能拦住"施法后值当输入"这类混淆（非致死支仍要求恒等式）。
+            // 反例来源：MG-18（10 `(ushort)` 溢出 ⇒ 单击伤害 45921 ≥ HP 100）。§8.3d。
+            if hp_after == 0 {
+                if dmg < target_hp {
+                    return Err(format!(
+                        "[{label}] 31 帧 `HP_after=0` 但 `damage({dmg}) < target_hp({target_hp})`——既非致死一击，也不满足 §8.3d 的恒等式；疑似输入/输出混淆"
+                    ));
+                }
+            } else {
+                let pre = hp_after.saturating_add(dmg);
+                if pre != target_hp {
+                    return Err(format!(
+                        "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
+                    ));
+                }
             }
         }
     }
@@ -825,8 +837,9 @@ fn real_ledger_verify_labels_opts(
             .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
     });
     assert!(
-        !scope_marked || stem == "fire",
-        "`frame_order_scope=multi_victim_same_tick` 只允许 fire stem（MG-17）；当前 stem={stem}"
+        !scope_marked || stem == "fire" || stem == "skill10",
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18，二者共用
+         穿透批量 flush 路径）；当前 stem={stem}"
     );
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
@@ -2180,6 +2193,22 @@ fn verify_skill_tail_ledger(stem: &str) {
     }
     // 通用面：帧逐字段（含 recog/due_ms_rel/tail）+ `Rng == Rng ++ DeliverRng` + Rm 多重集 + HP。
     real_ledger_verify_labels(stem, &golden, &["s1", "s5", "s13"]);
+}
+
+/// **`10 疾光电影`（`SKILL_SHOOTLIGHTEN`，MG-18）**真实台账 → 判定面（标签 s1/s5/s13）。
+///
+/// 与 9 同形（`MagicManager.cs:277-289`），差别只有两处：`steps = 8`（9 是 5）与
+/// `undeadAttack = true` ⇒ **逐击** `Round(pow*1.5)` 复合（与目标是否不死系无关）。
+/// 判据沿用 `real_ledger_verify_labels`（帧/RNG/Rm/HP），本 leaf 的"复合确实发生"由
+/// `Rng` 与 `HpBefore/HpAfter` 逐值比较兜住（伤害值进入 `SM_STRUCK(31)` 头与 `RM_MAGSTRUCK`）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::skill10_parity_*）生成真实台账"]
+fn real_rust_ledger_skill10() {
+    real_ledger_verify_labels(
+        "skill10",
+        &golden_file("skill10.json"),
+        &["s1", "s5", "s13"],
+    );
 }
 
 /// **`9 地狱火`（`SKILL_FIRE`）**真实台账 → 判定面（标签 s1/s5/s13）。
