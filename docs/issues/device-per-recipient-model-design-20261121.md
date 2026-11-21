@@ -33,13 +33,13 @@
 
 | 行为 | oracle 位置 |
 | --- | --- |
-| 即时消息入**收件人自己的** `MsgQueue`（`DeliveryTime = 0`，优先级 = `(byte)wIdent`） | `src/M2Server/Actor/BaseObject.Message.cs:88-95`（`SendMsg`） |
-| 延时消息入队：`DeliveryTime = GetTickCount() + dwDelay`，优先级 `Lowest` | `src/M2Server/Actor/BaseObject.Message.cs:199-204`（`SendDelayMsg`） |
+| 即时消息入**收件人自己的** `MsgQueue`（`DeliveryTime = 0`，优先级 = `(byte)wIdent`） | `src/M2Server/Actor/BaseObject.Message.cs:34`（`SendMsg`；入队 `MsgQueue.Enqueue(sendMessage, (byte)wIdent)` 在 `:94`） |
+| 延时消息入队：`DeliveryTime = GetTickCount() + dwDelay`，优先级 `Lowest` | `src/M2Server/Actor/BaseObject.Message.cs:188`（`SendSelfDelayMsg`；`DeliveryTime = GetTickCount() + dwDelay` 在 `:199`，入队 `Lowest` 在 `:204`） |
 | 广播：`SendRefMsg` 对视野内每个 actor 调 `SendMsg` ⇒ **各入各的队列** | `src/M2Server/Actor/BaseObject.Message.cs:383` |
-| 取消息：出队后若 `msgTick < DeliveryTime` 则**回炉并返回 false**（本 tick 不再处理） | `src/M2Server/Actor/BaseObject.Message.cs:359-380`（`GetMessage(int msgTick, …)`） |
+| 取消息：出队后若 `msgTick < DeliveryTime` 则**回炉并返回 false**（本 tick 不再处理） | `src/M2Server/Actor/BaseObject.Message.cs:357`（`GetMessage(int msgTick, …)`；回炉 `MsgQueue.Enqueue(…, Lowest)` 在 `:364`） |
 | **玩家**每 tick 的消息泵：`while ((now - GetMessageTick) < HumanGetMsgTime) && GetMessage(GetMessageTick, …) → Operate` | `src/M2Server/Player/PlayObject.Message.cs:360` |
-| **怪物/基类**每 tick 的消息泵：`while (GetMessage(ref msg)) Operate(msg);` | `src/M2Server/Actor/BaseObject.Base.cs:27-31`（`Run`） |
-| `SendSocket` 发生在 **`Operate` 之内**（各 `RM_*` 分支里）——SM 帧离开的时刻 = **收件人 Operate 的时刻** | 例：`AnimalObject.cs:114`、`BaseObject.Base.cs:610`、`MonsterObject.cs:177` 的 `Operate` 覆写 |
+| **怪物/基类**每 tick 的消息泵：`while (GetMessage(ref msg)) Operate(msg);` | `src/M2Server/Actor/BaseObject.Base.cs:25`（`Run`；`while (GetMessage(ref processMessage))` 在 `:28`，`Operate(processMessage)` 在 `:30`） |
+| `SendSocket` 发生在 **`Operate` 之内**（各 `RM_*` 分支里）——SM 帧离开的时刻 = **收件人 Operate 的时刻** | 例：`src/M2Server/Actor/AnimalObject.cs:114`、`src/M2Server/Actor/BaseObject.Base.cs:610`、`src/M2Server/Monster/MonsterObject.cs:177` 的 `Operate` 覆写/定义 |
 
 **由此得到 oracle 的时间线（这就是本设计要建模的唯一语义）**：
 
@@ -105,7 +105,7 @@ shim 把延迟搬到 SM 层，等于**在装置里另造一个 oracle 没有的�
 产生这条 SM 的 RM。理由：oracle 的 `SendSocket` 在 `Operate` 内（§1.2 表），帧"离开服务端"的时刻
 就是该 actor 消费时刻；这就是"收件人可见"的时刻。
 
-**与 `SendDelayMsg` 的关系**：`DeliveryTime = now + dwDelay`（`BaseObject.Message.cs:199-204`）是
+**与 `SendSelfDelayMsg` 的关系**：`DeliveryTime = now + dwDelay`（`src/M2Server/Actor/BaseObject.Message.cs:188`，`:199` 设值、`:204` 入队 `Lowest`）是
 **RM 层**的延迟；在"到点之前 `GetMessage` 回炉"（`:359-380`）。因此
 `due_ms_rel = max(收件人消费 step, DeliveryTime − castTick 四舍五入到 step)`；
 装置现有的 `m.LateDelivery ? DeliveryTime - castTick : stepMs` **在语义不变的前提下仍适用**，
@@ -116,7 +116,7 @@ shim 把延迟搬到 SM 层，等于**在装置里另造一个 oracle 没有的�
 | 帧类别 | 是否变化 | 判据 |
 | --- | --- | --- |
 | 收件人 = 产生者自身的 self 帧（如施法者自己的 640/657 自通知） | **不变** | 入队与 Operate 同一步 |
-| `SendDelayMsg` 到点帧（late = true） | **不变** | due 由 `DeliveryTime − castTick` 决定 |
+| `SendSelfDelayMsg` 到点帧（late = true） | **不变** | due 由 `DeliveryTime − castTick` 决定 |
 | 跨 actor 即时帧，且**入队发生在收件人本 step Run 之后** | **可能 +1 step** | 这正是本设计要修正的那批 |
 | 跨 actor 即时帧，入队发生在收件人本 step Run **之前** | **不变** | 同 step 内仍会消费 |
 
@@ -151,7 +151,7 @@ shim 把延迟搬到 SM 层，等于**在装置里另造一个 oracle 没有的�
 | R1 | 把"每 actor 每 step 只 Run 一次"改回**多趟直到空**（即当前 `MaxDrainPasses` 行为） | bigcloak `caster 1002` 变 `800` ⇒ A1 红（`left [800] right [900]`） |
 | R2 | 忽略 turn 序、按**入队序**全排所有 actor | caster/target 的 31/53 先后与被观测 due 变化 ⇒ A2 红 |
 | R3 | `due` 记**生产 step**（`enqueue_step`）而非 `run_step` | A3 审计断言红（`due != run_step`），且 A2 红 |
-| R4 | `SendDelayMsg` 的 `DeliveryTime` 不参与回炉（到点前也 Operate） | late 帧 due 提前 ⇒ A2 红 |
+| R4 | `SendSelfDelayMsg` 的 `DeliveryTime` 不参与回炉（到点前也 Operate） | late 帧 due 提前 ⇒ A2 红 |
 
 **判据**：R1–R4 每一条都要先跑出红（装置重出 golden 时即红），再还原复绿；红证必须带
 `enqueue_step/run_step/due` 三列原文，不接受"总数变了"。
@@ -173,7 +173,7 @@ shim 把延迟搬到 SM 层，等于**在装置里另造一个 oracle 没有的�
 
 1. **turn 序**：装置只有 `byWho` 的 4-actor 固定序；怪物序 OPEN（§12.3.a）。含 `MonsterSpec` 的 stem
    不得拿本模型当权威。
-2. **玩家消息泵预算**：oracle 有 `HumanGetMsgTime`（`PlayObject.Message.cs:360`）；装置"全排"。
+2. **玩家消息泵预算**：oracle 有 `HumanGetMsgTime`（`src/M2Server/Player/PlayObject.Message.cs:360`）；装置"全排"。
    若某 stem 出现"同 tick 内队列未排完"，装置与生产不等价——需在 scope 里 OPEN。
 3. **怪物 Operate**：装置 `RecordingMonster` 被动不 `Operate`（§5.2），本设计不解决。
 
@@ -181,7 +181,7 @@ shim 把延迟搬到 SM 层，等于**在装置里另造一个 oracle 没有的�
 
 ## 8. 结论
 
-**选方向 A（RM 入队层）**：它逐条对得上 `src/M2Server` 的 `SendMsg`/`SendDelayMsg`/`GetMessage`/`Run`/`Operate`
+**选方向 A（RM 入队层）**：它逐条对得上 `src/M2Server` 的 `SendMsg`/`SendSelfDelayMsg`/`GetMessage`/`Run`/`Operate`
 链路，改动集中在装置的"每步排水结构"与一条审计侧车；方向 B 无 oracle 依据，只能作过渡近似、不作权威。
 `due_ms_rel` 统一改成**收件人消费 step**；旧 47 支 due 需逐帧差分核过（差异必须只落在"跨 actor 且收件人本步
 已跑过"这一类）；657 golden 不重出，作为新模型的回归验证。
