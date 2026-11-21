@@ -49,8 +49,22 @@ SendServerConfig();                                                             
 显式传参要改：
 
 - `drain_map_change` / `drain_map_change_at_time` **2 个签名**；
-- 调用点 **11 处**（生产 3 处 + 测试/driver 8 处：`eat_move` 5、`lib.rs` 单测 2、21 驱动 1）；
-- `handle_move_cmd` 还要加参数、并同步它的 **9 处测试调用**。
+- **外部调用点 13 处**（生产 3：`handle_move_cmd` ×2 + `sim_loop` ×1；测试/driver 10：
+  `eat_move` 5 + `lib.rs` 单测 **4** + 21 驱动 1），另 `drain_map_change` 体内 1 处转调
+  ⇒ **14 处要动**；
+- `handle_move_cmd` 还要加参数、并同步它的 **21 处调用**（1 生产 + 20 测试）。
+
+复核实测（2026-11-21，`items-it13` 树）：
+
+```text
+$ grep -cE '^\s*handle_move_cmd\(' mir2-rs/bins/game-svr/src/lib.rs
+22                       # = 1 个定义行 + 21 个调用点
+
+$ grep -rn 'drain_map_change' mir2-rs/bins/game-svr/src/*.rs
+# 外部调用：lib.rs 12577/12669/32818（生产）+ 68535/68623/92967/110036（单测 4）
+#          + 71768（21 驱动）+ eat_move 484/516/731/1136/1394（5）
+# 函数内转调：lib.rs 19795（drain_map_change → drain_map_change_at_time）
+```
 
 超过卡 `magic-push-batch-impl` 的止损线（>5 调用点）⇒ 停手登记。
 另：靠全局 `OnceLock` 存配置会造成"第二份配置真源"，与 `enter_cfg` 单源口径冲突，不采用。
