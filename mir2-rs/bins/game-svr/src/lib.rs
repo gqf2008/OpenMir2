@@ -71469,7 +71469,31 @@ SendRefMsgRange=15
         // **MG-35（21）**：真图 + 真注册表 + `HomeMap="0"`（见 `spacemove_rig_inputs` 的说明）。
         if magic_id == 21 {
             let (grid, registry) = spacemove_rig_inputs(stem, label);
+            // **`home_map` 是 `registry.id_of(name)` 的 id，实际取图是 `world.maps[id]`** ⇒
+            // 两者必须指同一张图；`push` 前先断言"当前 `world.maps.len()` 恰好等于该 id"，
+            // 否则多塞一张图就会静默指错图（症状：`SpaceMove` 之后没有 633/634/807）。
+            let home_id = registry.id_of("0").unwrap_or_else(|| {
+                panic!("[{stem}/{label}] MAP_ID_MISSING registry.id_of(\"0\") = None")
+            });
+            // rig 可能已有占位图（实测 len=1）⇒ 直接 push 会让真图落在 id 1，而 registry 指 0
+            // ⇒ `SpaceMove` 作用在错误图上（症状：没有 633/634/807）。**清空后重建**，
+            // 并断言"重建后真图的索引 == registry 给的 id"。
+            let pre_len = rig.world.maps.len();
+            rig.world.maps.clear();
+            glog!(
+                "DBG",
+                "[{}] spacemove 装图：清空 world.maps（原 len={pre_len}）→ 真图索引={home_id} 尺寸={}x{}",
+                label,
+                grid.width,
+                grid.height
+            );
             rig.world.maps.push(grid);
+            assert_eq!(
+                rig.world.maps.len() - 1,
+                home_id,
+                "[{stem}/{label}] MAP_ID_INDEX_MISMATCH id={home_id} 实际索引={}（真图必须落在 registry 指向的下标）",
+                rig.world.maps.len() - 1
+            );
             rig.registry = Some(registry);
             if let Some(sv) = rig.saves.get_mut("caster") {
                 sv.record.data.home_map = Some("0".to_string());
