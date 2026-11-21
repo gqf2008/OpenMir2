@@ -60,6 +60,26 @@
    release 口径 = 未测，不能引用本次数字下结论。** Step 1（有界队列/丢弃）在生产数据出来前
    仍不启动——这与总控"先测后治"的口径一致。
 
+
+## 4.1 直接证据：预算被**单事件**吃掉（观测扩展后）
+
+同一批 TSV 里挑出的极端 tick（500 档稳态段）：
+
+| tick 行 | `drained` | `inbound_wall_us` | `inbound_enqueued` | `carry` | 读法 |
+| --- | --- | --- | --- | --- | --- |
+| A | 1 | 58,399 | 312 | 1 | **一条事件吃掉 58ms**，本轮预算已超 |
+| B | 2 | 154,942 | 21 | 1 | 两条事件 → 155ms |
+| C | 7 | 192,959 | 428 | 1 | 七条事件 → 193ms |
+| D | 91 | 50,121 | 100 | 1 | 反之：廉价事件可在一轮排 91 条（≈0.55ms/条） |
+
+⇒ `drained` 少不是"墙钟统计错"，而是**重事件**（登录/关断/保存等）本身贵到一轮只能处理一两条。
+这是将来立卡的依据：**单事件限时/拆分，或把重事件移到 I/O 线程**；"每区入站并行"不对症。
+
+**观测扩展（零语义，同开关同 fail-closed）**：`drained` 拆三类（`drained_command` /
+`drained_close`=`Closed`+`CertificationPending` / `drained_control`=`LoadDbRequest`+控制），
+并为每条事件的处理段记 `max_single_event_us`（`EventTimer` 守卫，仅开关打开时取钟；
+`continue` 也会在 drop 结算）。用于把"重事件占比"与"吞吐"分栏，不再用单一 `drained` 均值下结论。
+
 ## 5. 产物
 
 - TSV：`E:\UserTemp\d8_step0_counters.tsv`（两档全部 tick，15 列）
