@@ -13690,6 +13690,35 @@ mod spell_frame_buf_tests {
         );
         assert_eq!(b, vec![1, 3], "B 的两条按 B 自己的堆序（混堆会得 [3,1]）");
     }
+
+    /// **承重语义：caster 队列里没有 `RM_SPELL(17)`**（oracle `PlayObject.Message.cs:1455` 的
+    /// `if (processMsg.ActorId != ActorId)` ⇒ caster **根本不入队**，不是「入队后在处理器里跳过」）。
+    ///
+    /// 同一组 8/37 帧（两条 `RM_PUSH(9)`=156 + 一条 `RM_MAGICFIRE(638)`=136，`638` 最后入队）：
+    /// - 不含 17 ⇒ 出队 `[638, 9(第一格), 9(第二格)]`（golden `firewind/s13` caster 侧）；
+    /// - 多一条 17(24) ⇒ 四叉堆布局改变 ⇒ `[17, 638, 9(第二格), 9(第一格)]`（与 golden 相反）。
+    ///
+    /// 若把 `RM_SPELL` 的缓冲投递改成 `include_self=true`，效果臂的行为用例
+    /// `spell_cmd_firewind_enters_effect_draws_and_pushes` 的 caster 侧断言必红。
+    #[test]
+    fn caster_queue_without_rm_spell_keeps_push_order() {
+        for (with_spell, want) in [
+            (false, vec![1u8, 2, 3]),   // 638, 9(第一格), 9(第二格)
+            (true, vec![0u8, 1, 3, 2]), // 17, 638, 9(第二格), 9(第一格)
+        ] {
+            let (online, gates, mut rx) = rig();
+            let mut buf = SpellFrameBuf::new();
+            if with_spell {
+                buf.push_socket(911, 24, vec![0]); // `RM_SPELL(10008)` 的 (byte)ident
+            }
+            buf.push_socket(911, 156, vec![2]); // `RM_PUSH(8092)` 第一格
+            buf.push_socket(911, 156, vec![3]); // `RM_PUSH(8092)` 第二格
+            buf.push_socket(911, 136, vec![1]); // 共享尾 `RM_MAGICFIRE(10120)`（最后入队）
+            buf.flush(&online, &gates);
+            let got: Vec<u8> = drain(&mut rx).into_iter().map(|(_, b)| b[0]).collect();
+            assert_eq!(got, want, "with_spell={with_spell}");
+        }
+    }
 }
 
 /// **P3-B2**：`RM_MAGSTRUCK` 交付段的宿主角（世界抽数 → 帧入 B2 缓冲）。
@@ -15099,7 +15128,21 @@ fn handle_spell_cmd_with_magic(
                     (mir2_protocol::messages::RM_SPACEMOVE_FIRE2 & 0xFF) as u8;
                 // 17 已在上方 `:159` 处进了同一个缓冲（`push_batch_buf`）；无 17 的路径
                 // （如魔号未学 ⇒ `default_arm=false`）按空缓冲起。
-                let mut spell_buf = push_batch_buf.take().unwrap_or_else(SpellFrameBuf::new);
+                //
+                // **跨层承重（勿改成静默）**：缓冲在上层距离门内建、这里取；两侧输入目前同源。
+                // 将来中间块若改动 snap/门输入，取不到 17 ⇒ 队列少一条 prio-24 ⇒ 出队序静默变化。
+                // 故取不到时记 WRN（不 panic：`matched == None` 的合法路径本就无 17）。
+                let mut spell_buf = match push_batch_buf.take() {
+                    Some(buf) => buf,
+                    None => {
+                        glog!(
+                            "WRN",
+                            "CM_SPELL：魔号 {} 的施法缓冲缺 RM_SPELL(17)（上层 default/战士/距离门未过）                             ⇒ 本支按无 17 的收件人队列发；若两处输入本应同源，这是一条真缺陷",
+                            req.magic_id
+                        );
+                        SpellFrameBuf::new()
+                    }
+                };
                 let mut bo_spell_fire = true;
                 let bo_train: bool;
                 if req.magic_id == mir2_world_bevy::magic::SKILL_SPACEMOVE {
@@ -15243,6 +15286,10 @@ fn handle_spell_cmd_with_magic(
                     rcd.tran_point = train.tran_point;
                 }
                 // `:648-658` `boSpellFire => RM_MAGICFIRE`（8 的帧；21 已在 case 内发过、门为 false）。
+                // **入队序承重（勿提前）**：oracle 共享尾（`MagicManager.cs:644-658`）在
+                // `switch`（含 `CharPushed` 的逐格 `RM_PUSH`）**之后**才 `SendRefMsg(RM_MAGICFIRE)`
+                // ⇒ 638 **最后入队**。把它提前到推挤前会改变收件人队列的堆形：caster 侧从
+                // `[638, 9(102), 9(103)]` 变成 `[638, 9(103), 9(102)]`（golden s13 是前者）⇒ 必红。
                 if tail.magic_fire {
                     let body = smframe::sm_magicfire(
                         actor_id,
@@ -78526,7 +78573,8 @@ SendRefMsgRange=15
         // `SM_SPELL(17)=RM ident 24` 先，其后 `SM_MAGICFIRE(638)=136` 先于 `SM_BACKSTEP(9)=156`。
         // golden `firewind/s1` 的 target 侧即 `[17, 638, 9]`。调用序（:159 → CharPushed → 尾）
         // **不是**投递序：三条 `RM_SPELL`/`RM_MAGICFIRE`/`RM_PUSH` 同进该收件人的堆后按优先级出队。
-        let seq = effect_seq(&effect_drain(&mut rx), 912);
+        let frames = effect_drain(&mut rx);
+        let seq = effect_seq(&frames, 912);
         println!("FIREWIND_SEQ {seq:?}");
         assert_eq!(
             seq.iter()
@@ -78556,6 +78604,27 @@ SendRefMsgRange=15
         assert!(
             i_spell < i_fire && i_fire < i_push,
             "oracle 投递序：17(24) → 638(136) → 9(156)（golden firewind/s1 target 侧）"
+        );
+        // ③-b **承重牙：caster 侧零条 17**（oracle `PlayObject.Message.cs:1455` 的
+        // `ActorId != ActorId` 守卫 ⇒ caster 根本不入队，不是「入队后在处理器里跳过」）。
+        // 若把 `RM_SPELL` 的缓冲投递改成 `include_self=true`，caster 会多一条 prio-24 ⇒
+        // 本断言（零条 17）与下面的投递序一起红。golden `firewind/s1` caster = `[638, 9, 640]`。
+        let caster_seq = effect_seq(&frames, 911);
+        assert_eq!(
+            caster_seq
+                .iter()
+                .filter(|id| **id == mir2_protocol::messages::SM_SPELL)
+                .count(),
+            0,
+            "caster 不得收 SM_SPELL(17)（golden firewind/s1 caster 侧无 17）；实得 {caster_seq:?}"
+        );
+        assert_eq!(
+            caster_seq,
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_BACKSTEP
+            ],
+            "caster 侧投递序 = [638(136), 9(156)]（队列里没有 17；golden firewind/s1 caster 侧）"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
