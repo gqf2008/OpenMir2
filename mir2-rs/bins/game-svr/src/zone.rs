@@ -1,16 +1,20 @@
-//! **L2-1 区模型 + 每宿主区队列（恒等脚手架）**
+//! **L2 区模型（L2-1 恒等脚手架 / L2-2 区级归属）**
 //!
 //! "区（zone）" = 运行期单位：一个 World + 一条（普通, 优先）入站队列 + 一个固定 owner 线程
-//! （`docs/issues/l2-zone-split-plan-20261122.md` §2.1）。本步只落**区模型与队列表**：
+//! （`docs/issues/l2-zone-split-plan-20261122.md` §2.1）。
 //!
-//! - `MIR2_SHARDS=1`（以及任何未开启 L2 的构建）只有一个区，`zone_of` 恒为 [`ZoneId::new(0)`]；
-//! - 队列表长度 = 区数；N=1 时就是原来那两条 `Receiver`，**运行期零分配、零日志、零额外线程**
-//!   （启动期一次 `Vec<ZoneChannels>` 分配，长度 1）；
-//! - 几何（`map_id` + 矩形）在 L2-2 才进入守卫；本步 [`RegionLayout::single_host`] 只记录地图数。
+//! - **L2-1**：`single_host` 单区恒等——所有地图所有坐标都归区 0；队列表长度 = 区数；
+//!   N=1 时就是原来那两条 `Receiver`，**运行期零分配、零日志、零额外线程**（启动期 1 次
+//!   `Vec<ZoneChannels>` 分配，长度 1）。
+//! - **L2-2**：`from_spans` 多矩形切分——区 = `(map_id, 闭区间矩形)` 的集合（区号 = 下标）；
+//!   构造时校验「同图矩形不重叠、矩形合法、地图在册」；`zone_of` 给出坐标归属，
+//!   `require_owned` 是**宿主侧 fail-closed 守卫**（口径同 `MapNotInShard`，不新造错误码）。
+//!   本步**不启多区生产**：`run_inner` 仍只构造 `single_host`；不建线程、不加日志。
 //!
-//! 为什么先落这个：L2-4 的「每区队列 + 入站 demux」需要一个稳定的类型接缝；先以恒等形式接进
-//! `run_inner`，后续步骤只改「区数/路由」，不动热路径的机器。
+//! 几何只保留当前断言需要的原语：`contains`（点）与 `intersects`（矩形不重叠校验）；
+//! 等 L2-3 有 halo/边界断言再扩。
 
+use std::fmt;
 use std::sync::mpsc::Receiver;
 
 use crate::GateEvent;
@@ -39,7 +43,13 @@ impl ZoneId {
     }
 }
 
-/// 闭区间格子矩形（`x1`/`y1` **含端点**；L2-2 起用于区级归属）。
+impl fmt::Display for ZoneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// 闭区间格子矩形（`x1`/`y1` **含端点**）。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ZoneRect {
     pub x0: i32,
@@ -60,15 +70,125 @@ impl ZoneRect {
     pub const fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
     }
+
+    /// 两矩形是否相交（闭区间；L2-2 的「不得双属」构造校验用）。
+    #[must_use]
+    pub const fn intersects(&self, other: &Self) -> bool {
+        self.x0 <= other.x1 && other.x0 <= self.x1 && self.y0 <= other.y1 && other.y0 <= self.y1
+    }
 }
 
-/// 区布局（L2-1：单区、恒等）。
+/// 一个区在**一张图**上的矩形（区号 = [`RegionLayout::from_spans`] 的下标）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionSpan {
+    pub map_id: usize,
+    pub rect: ZoneRect,
+}
+
+impl RegionSpan {
+    /// 由地图与矩形构造。
+    #[must_use]
+    pub const fn new(map_id: usize, rect: ZoneRect) -> Self {
+        Self { map_id, rect }
+    }
+}
+
+/// 布局构造错误（fail-closed：任何一条都必须让调用方拒绝启动/拒绝该布局）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RegionLayoutError {
+    /// 一个区都没有。
+    Empty,
+    /// `map_id` 超出注册表地图数。
+    MapOutOfRange {
+        /// 配置里写的地图号。
+        map_id: usize,
+        /// 布局覆盖的地图数。
+        map_count: usize,
+    },
+    /// 矩形非法（负起点或 `x0 > x1` / `y0 > y1`）。
+    InvalidRect {
+        /// 该 span 的地图号。
+        map_id: usize,
+        /// 非法矩形。
+        rect: ZoneRect,
+    },
+    /// 同图两个矩形相交（会导致一个坐标双属 ⇒ 归属不确定）。
+    Overlap {
+        /// 相交所在的地图号。
+        map_id: usize,
+        /// 前一个 span 的下标。
+        a: usize,
+        /// 后一个 span 的下标。
+        b: usize,
+    },
+}
+
+impl fmt::Display for RegionLayoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "区布局为空（至少一个区）"),
+            Self::MapOutOfRange { map_id, map_count } => {
+                write!(f, "map_id={map_id} 越界（布局覆盖 {map_count} 张图）")
+            }
+            Self::InvalidRect { map_id, rect } => write!(
+                f,
+                "map_id={map_id} 的矩形非法（负起点或 x0>x1/y0>y1）：({}, {})..=({}, {})",
+                rect.x0, rect.y0, rect.x1, rect.y1
+            ),
+            Self::Overlap { map_id, a, b } => write!(
+                f,
+                "map_id={map_id} 的区 {a} 与区 {b} 矩形相交（一个坐标不得双属）"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RegionLayoutError {}
+
+/// 宿主侧 fail-closed 结果：坐标不属于给定区。
 ///
-/// L2-2 起扩展为「每张图若干矩形 → 区」；本步只表达「所有地图的所有格子都归区 0」。
+/// **口径同 `MapNotInShard`**：可区分错误、可计数；本步只在宿主侧提供判定，L2-4 在
+/// world 边界把它映射成既有拒绝路径（**不新造协议错误码**）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionRefusal {
+    /// 期望的区。
+    pub zone: ZoneId,
+    /// 地图号。
+    pub map_id: usize,
+    /// 坐标。
+    pub x: i32,
+    /// 坐标。
+    pub y: i32,
+}
+
+impl fmt::Display for RegionRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "坐标 map_id={} ({}, {}) 不属于区 {}（fail-closed；口径同 MapNotInShard）",
+            self.map_id, self.x, self.y, self.zone
+        )
+    }
+}
+
+impl std::error::Error for RegionRefusal {}
+
+/// 区布局。
+///
+/// - [`Self::single_host`]：L2 未开启的唯一形态——单区、任意坐标归区 0；
+/// - [`Self::from_spans`]：L2-2 的多矩形切分——区号 = span 下标。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegionLayout {
     map_count: usize,
-    zone_count: usize,
+    kind: LayoutKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LayoutKind {
+    /// 单宿主区：所有地图所有坐标都归区 0。
+    WholeHost,
+    /// 多区：每个 span 一个区（下标即区号）。
+    Spans(Vec<RegionSpan>),
 }
 
 impl RegionLayout {
@@ -77,14 +197,64 @@ impl RegionLayout {
     pub const fn single_host(map_count: usize) -> Self {
         Self {
             map_count,
-            zone_count: 1,
+            kind: LayoutKind::WholeHost,
         }
+    }
+
+    /// **L2-2**：由 `(map_id, 矩形)` span 列表构造多区布局（区号 = 下标）。
+    ///
+    /// 校验（任一条失败 ⇒ 拒绝，不静默降级）：
+    /// - 至少一个区；
+    /// - `map_id < map_count`；
+    /// - 矩形非负且 `x0 <= x1`、`y0 <= y1`；
+    /// - **同一张图内任意两个矩形不相交**（一个坐标不得双属）。
+    ///
+    /// **不校验覆盖 100%**：未覆盖的格子 `zone_of` 返回 `None` ⇒ `require_owned` 拒绝
+    /// （fail-closed）；L2-4 的布局文件会在启动时另行做覆盖校验。
+    ///
+    /// # Errors
+    /// 见 [`RegionLayoutError`] 各变体。
+    pub fn from_spans(map_count: usize, spans: Vec<RegionSpan>) -> Result<Self, RegionLayoutError> {
+        if spans.is_empty() {
+            return Err(RegionLayoutError::Empty);
+        }
+        for (i, span) in spans.iter().enumerate() {
+            if span.map_id >= map_count {
+                return Err(RegionLayoutError::MapOutOfRange {
+                    map_id: span.map_id,
+                    map_count,
+                });
+            }
+            let r = span.rect;
+            if r.x0 < 0 || r.y0 < 0 || r.x0 > r.x1 || r.y0 > r.y1 {
+                return Err(RegionLayoutError::InvalidRect {
+                    map_id: span.map_id,
+                    rect: r,
+                });
+            }
+            for (j, other) in spans.iter().enumerate().skip(i + 1) {
+                if span.map_id == other.map_id && span.rect.intersects(&other.rect) {
+                    return Err(RegionLayoutError::Overlap {
+                        map_id: span.map_id,
+                        a: i,
+                        b: j,
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            map_count,
+            kind: LayoutKind::Spans(spans),
+        })
     }
 
     /// 区数。
     #[must_use]
-    pub const fn zone_count(&self) -> usize {
-        self.zone_count
+    pub fn zone_count(&self) -> usize {
+        match &self.kind {
+            LayoutKind::WholeHost => 1,
+            LayoutKind::Spans(spans) => spans.len(),
+        }
     }
 
     /// 布局覆盖的地图数（= 注册表地图数）。
@@ -93,20 +263,46 @@ impl RegionLayout {
         self.map_count
     }
 
-    /// 某坐标所属区；**越界地图 ⇒ `None`**（与既有 `NoSuchMap` 同口径，不制造新错误）。
+    /// 某坐标所属区。
+    ///
+    /// - `WholeHost`：地图在册 ⇒ 区 0；
+    /// - `Spans`：命中唯一 span ⇒ 该区；未覆盖/越界地图/负坐标 ⇒ `None`（fail-closed）。
     #[must_use]
-    pub fn zone_of(&self, map_id: usize, _x: i32, _y: i32) -> Option<ZoneId> {
-        if map_id < self.map_count {
-            Some(ZoneId::new(0))
-        } else {
-            None
+    pub fn zone_of(&self, map_id: usize, x: i32, y: i32) -> Option<ZoneId> {
+        match &self.kind {
+            LayoutKind::WholeHost => (map_id < self.map_count).then_some(ZoneId::new(0)),
+            LayoutKind::Spans(spans) => spans
+                .iter()
+                .position(|s| s.map_id == map_id && s.rect.contains(x, y))
+                .map(|i| ZoneId::new(u32::try_from(i).expect("区数 <= u32::MAX"))),
         }
     }
 
-    /// 某区是否拥有该坐标（L2-1 单区恒等）。
+    /// 某区是否拥有该坐标（`zone_of == Some(zone)`）。
     #[must_use]
     pub fn owns(&self, zone: ZoneId, map_id: usize, x: i32, y: i32) -> bool {
-        zone == ZoneId::new(0) && self.zone_of(map_id, x, y).is_some()
+        self.zone_of(map_id, x, y) == Some(zone)
+    }
+
+    /// **宿主侧 fail-closed 守卫（L2-2）**：坐标不属于 `zone` ⇒ [`RegionRefusal`]。
+    ///
+    /// 调用方（L2-4）把失败映射成既有的拒绝路径（口径同 `MapNotInShard`），并累计计数；
+    /// 本步只提供判定，不改 world 错误枚举、不加日志。
+    ///
+    /// # Errors
+    /// 坐标不在本区（含未覆盖、越界、负坐标）⇒ [`RegionRefusal`]。
+    pub fn require_owned(
+        &self,
+        zone: ZoneId,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> Result<(), RegionRefusal> {
+        if self.owns(zone, map_id, x, y) {
+            Ok(())
+        } else {
+            Err(RegionRefusal { zone, map_id, x, y })
+        }
     }
 }
 
@@ -191,6 +387,17 @@ mod tests {
         ZoneChannels::new(normal_rx, priority_rx)
     }
 
+    fn two_zone_of_map_zero() -> RegionLayout {
+        RegionLayout::from_spans(
+            1,
+            vec![
+                RegionSpan::new(0, ZoneRect::new(0, 0, 9, 9)),
+                RegionSpan::new(0, ZoneRect::new(10, 0, 19, 9)),
+            ],
+        )
+        .expect("合法双区切分")
+    }
+
     /// **L2-1 牙**：单宿主布局把任意坐标都归区 0；越界地图返回 `None`（不制造新错误）。
     #[test]
     fn single_host_maps_every_coordinate_to_zone_zero() {
@@ -209,14 +416,147 @@ mod tests {
         assert!(!layout.owns(ZoneId::new(1), 2, 1, 1));
     }
 
-    /// **矩形牙**：闭区间含端点；宽高按格数算（L2-2 的边界判据依赖这一点）。
+    /// **矩形牙**：闭区间含端点；相交判定同为闭区间（L2-2 的双属校验依赖它）。
     #[test]
-    fn rect_is_a_closed_interval() {
+    fn rect_is_a_closed_interval_and_intersects() {
         let rect = ZoneRect::new(10, 20, 19, 29);
         assert!(rect.contains(10, 20) && rect.contains(19, 29));
         assert!(!rect.contains(9, 20));
         assert!(!rect.contains(20, 20));
         assert!(!rect.contains(10, 30));
+        assert!(
+            rect.intersects(&ZoneRect::new(19, 29, 30, 40)),
+            "端点相接 = 相交"
+        );
+        assert!(
+            !rect.intersects(&ZoneRect::new(20, 20, 30, 30)),
+            "相邻但不重叠（19 与 20 不交）"
+        );
+    }
+
+    /// **L2-2 牙**：双区边界端点各归一侧、**不得双属**；区外/未覆盖 ⇒ `None`。
+    ///
+    /// 红检：把 `zone_of` 改成「第一个 `x >= x0` 的区」或让闭区间变半开 ⇒ 端点断言红。
+    #[test]
+    fn two_zone_split_assigns_boundary_points_to_exactly_one_zone() {
+        let layout = two_zone_of_map_zero();
+        assert_eq!(layout.zone_count(), 2);
+        assert_eq!(layout.zone_of(0, 0, 0), Some(ZoneId::new(0)));
+        assert_eq!(layout.zone_of(0, 9, 9), Some(ZoneId::new(0)), "左区右端点");
+        assert_eq!(layout.zone_of(0, 10, 0), Some(ZoneId::new(1)), "右区左端点");
+        assert_eq!(layout.zone_of(0, 19, 9), Some(ZoneId::new(1)));
+        assert_eq!(layout.zone_of(0, 20, 0), None, "区外 ⇒ fail-closed");
+        assert_eq!(layout.zone_of(0, 5, 10), None, "y 越界 ⇒ fail-closed");
+        assert_eq!(layout.zone_of(1, 0, 0), None, "其它图未配置 ⇒ fail-closed");
+        assert_eq!(layout.zone_of(0, -1, 0), None, "负坐标 ⇒ fail-closed");
+        assert!(layout.owns(ZoneId::new(0), 0, 9, 9));
+        assert!(!layout.owns(ZoneId::new(1), 0, 9, 9), "不得双属");
+    }
+
+    /// **L2-2 牙（守卫）**：`require_owned` 对区外坐标给出可区分错误，文本点名坐标与区。
+    ///
+    /// 红检：把 `require_owned` 改成恒 `Ok(())` ⇒ 本用例红。
+    #[test]
+    fn require_owned_fails_closed_outside_the_zone() {
+        let layout = two_zone_of_map_zero();
+        assert_eq!(layout.require_owned(ZoneId::new(0), 0, 9, 9), Ok(()));
+        let refusal = layout
+            .require_owned(ZoneId::new(0), 0, 10, 0)
+            .expect_err("右区坐标不属于左区");
+        assert_eq!(
+            refusal,
+            RegionRefusal {
+                zone: ZoneId::new(0),
+                map_id: 0,
+                x: 10,
+                y: 0
+            }
+        );
+        let text = refusal.to_string();
+        for needle in ["map_id=0", "(10, 0)", "区 0", "MapNotInShard"] {
+            assert!(text.contains(needle), "错误文本缺 `{needle}`：{text}");
+        }
+        assert!(
+            layout.require_owned(ZoneId::new(1), 0, 10, 0).is_ok(),
+            "坐标属于右区"
+        );
+        assert!(
+            layout.require_owned(ZoneId::new(0), 0, 20, 0).is_err(),
+            "未覆盖坐标必须拒绝"
+        );
+    }
+
+    /// **L2-2 负例牙**：同图矩形相交 ⇒ 构造拒绝（一个坐标不得双属）。
+    ///
+    /// 红检：删掉 `from_spans` 里的 `intersects` 校验 ⇒ 本用例从 Err 变 Ok ⇒ 红。
+    #[test]
+    fn overlapping_spans_are_rejected() {
+        let err = RegionLayout::from_spans(
+            1,
+            vec![
+                RegionSpan::new(0, ZoneRect::new(0, 0, 9, 9)),
+                RegionSpan::new(0, ZoneRect::new(5, 5, 14, 14)),
+            ],
+        )
+        .expect_err("相交必须拒绝");
+        assert_eq!(
+            err,
+            RegionLayoutError::Overlap {
+                map_id: 0,
+                a: 0,
+                b: 1
+            }
+        );
+        assert!(err.to_string().contains("不得双属"));
+    }
+
+    /// **L2-2 负例牙**：空布局、越界地图、非法矩形（负起点 / x0>x1）全部拒绝。
+    #[test]
+    fn invalid_layouts_are_rejected_fail_closed() {
+        assert_eq!(
+            RegionLayout::from_spans(1, Vec::new()),
+            Err(RegionLayoutError::Empty)
+        );
+        assert_eq!(
+            RegionLayout::from_spans(1, vec![RegionSpan::new(1, ZoneRect::new(0, 0, 1, 1))]),
+            Err(RegionLayoutError::MapOutOfRange {
+                map_id: 1,
+                map_count: 1
+            })
+        );
+        assert_eq!(
+            RegionLayout::from_spans(1, vec![RegionSpan::new(0, ZoneRect::new(5, 0, 4, 0))]),
+            Err(RegionLayoutError::InvalidRect {
+                map_id: 0,
+                rect: ZoneRect::new(5, 0, 4, 0)
+            })
+        );
+        assert_eq!(
+            RegionLayout::from_spans(1, vec![RegionSpan::new(0, ZoneRect::new(-1, 0, 4, 0))]),
+            Err(RegionLayoutError::InvalidRect {
+                map_id: 0,
+                rect: ZoneRect::new(-1, 0, 4, 0)
+            })
+        );
+    }
+
+    /// **L2-2 牙**：区号是**全局 span 下标**（跨地图不重置），避免多图时区号撞车。
+    #[test]
+    fn zone_ids_are_global_span_indices_across_maps() {
+        let layout = RegionLayout::from_spans(
+            2,
+            vec![
+                RegionSpan::new(0, ZoneRect::new(0, 0, 9, 9)),
+                RegionSpan::new(0, ZoneRect::new(10, 0, 19, 9)),
+                RegionSpan::new(1, ZoneRect::new(0, 0, 4, 4)),
+            ],
+        )
+        .expect("跨图三区合法");
+        assert_eq!(layout.zone_count(), 3);
+        assert_eq!(layout.zone_of(0, 9, 9), Some(ZoneId::new(0)));
+        assert_eq!(layout.zone_of(0, 10, 0), Some(ZoneId::new(1)));
+        assert_eq!(layout.zone_of(1, 4, 4), Some(ZoneId::new(2)));
+        assert_eq!(layout.zone_of(1, 5, 0), None);
     }
 
     /// **恒等牙**：单区计划的队列表长度 = 1，拆回的两条通道就是原通道（N=1 零行为差）。
