@@ -7541,6 +7541,73 @@ impl World {
         (result, events)
     }
 
+    /// **魔号 35（`SKILL_WINDTEBO` 狂风/灭天火）效果体**：`MagicManager.MagWindTebo`
+    /// （`MagicManager.cs:858-874`）。
+    ///
+    /// 取数次序（与 oracle 同序；**守卫全在骰之前** ⇒ 任一不过即 0 抽）：
+    /// 1. `GetPoseCreate()`：`GetFrontPosition(Dir)`（[`crate::magic::front_position`]，越界 clamp）
+    ///    + `Envir.GetMovingObject(nx, ny, true)`（[`World::moving_object_at`]，前格首个
+    ///    `!Ghost && !Death` 的 actor）——**零抽**；
+    /// 2. 守卫链（`:862`）：`target != null && target != self && !Death && !Ghost &&
+    ///    IsProperTarget && !StickMode`，再「邻格 + 等级严格大于」；
+    /// 3. `Random(20) < level*6 + 6 + gap`（[`crate::magic_effect::windtebo_chance`]）；
+    /// 4. `CharPushed(next_direction, 1 + max(0, level-1))`（[`World::push_now`]）——**无第二抽**。
+    ///
+    /// 返回 `(bo_train, events)`：oracle `MagWindTebo` 的 `result` 在**骰通过后即 true**
+    /// （不看 `CharPushed` 实际推进格数），`case SKILL_WINDTEBO` 用它置 `boTrain`。
+    #[must_use]
+    pub fn cast_windtebo_spell(
+        &mut self,
+        actor_id: i32,
+        magic_level: i32,
+    ) -> (bool, Vec<crate::action::PushEvent>) {
+        let Some(caster) = self.entities.spawn_cloned(actor_id) else {
+            return (false, Vec::new());
+        };
+        let map_id = caster.map_id;
+        let Some(map) = self.sim.maps.get(map_id) else {
+            return (false, Vec::new());
+        };
+        let (fx, fy) =
+            crate::magic::front_position(caster.x, caster.y, caster.ai.dir, map.width, map.height);
+        let Some(target_id) =
+            Self::moving_object_at_impl(&self.entities, &self.sim, map_id, fx, fy, true)
+        else {
+            return (false, Vec::new());
+        };
+        let Some(target) = self.entities.spawn_cloned(target_id) else {
+            return (false, Vec::new());
+        };
+        // `:862` 守卫链（顺序照 oracle：self/Death/Ghost/IsProperTarget/StickMode，再邻格+等级）。
+        if target_id == actor_id || target.death || target.ghost || target.stick_mode {
+            return (false, Vec::new());
+        }
+        let group_members = self.attacker_group_members(&caster);
+        if !crate::combat::is_proper_target_grouped(&caster, &target, &group_members) {
+            return (false, Vec::new());
+        }
+        if (caster.x - target.x).abs() > 1
+            || (caster.y - target.y).abs() > 1
+            || caster.level <= target.level
+        {
+            return (false, Vec::new());
+        }
+        let level_gap = i32::from(caster.level) - i32::from(target.level);
+        if !crate::magic_effect::windtebo_chance(&mut self.rng, magic_level, level_gap) {
+            return (false, Vec::new());
+        }
+        let n_dir = crate::magic::next_direction(caster.x, caster.y, target.x, target.y);
+        let push = u8::try_from(1 + (magic_level - 1).max(0)).unwrap_or(u8::MAX);
+        let events = self.push_now(target_id, n_dir, push);
+        // `CharPushed` 收尾 `Dir = nBackDir`（`result > 0`）——与 `cast_firewind_spell` 同口径。
+        if !events.is_empty() {
+            if let Some(e) = self.entities.get_mut(target_id) {
+                e.ai.dir = crate::magic::back_dir(n_dir);
+            }
+        }
+        (true, events)
+    }
+
     /// **魔号 21（`SKILL_SPACEMOVE` 瞬息移动）效果体**：`MagicManager.MagSaceMove`
     /// （`MagicManager.cs:876-891`）+ `BaseObject.MapRandomMove`（`:1214-1237`）+
     /// `BaseObject.SpaceMove`（`:1103-1168`，同服支）的生产入口。
@@ -16294,6 +16361,163 @@ mod tests {
             before,
             "StickMode ⇒ Random(20) 零抽"
         );
+    }
+
+    // ---- MG-47（35 `SKILL_WINDTEBO`）S2 判据（卡 openmir2-magic-47-windtebo-plan「S2 六判据」）----
+
+    /// 夹具：caster `(5,5)`、`Dir=EAST` ⇒ 前格 `(6,5)`；target 在 `(6,5)`。两者落图后再设 `Dir`。
+    fn windtebo_world(caster_level: u8, target_level: u8) -> (World, i32, i32) {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 5, 5, caster_level));
+        let target = w.add_entity(player(2, "target", 6, 5, target_level));
+        w.tick(); // `add_entity` 只入队 `Enter`；本 tick 才落图（`moving_object_at` 需要格子 `ObjList`）。
+        w.entities.get_mut(caster).unwrap().ai.dir = crate::magic::DIR_RIGHT;
+        (w, caster, target)
+    }
+
+    /// ① 前格有 proper 目标 + 骰通过 ⇒ `boTrain=true` + 逐格事件；**恰 1 抽**（无 `Random(2)`）。
+    /// 基线：`events.len() = 1`（level=1 ⇒ `1+max(0,0)`）；RNG 只前进一次 `random_below(20)`。
+    #[test]
+    fn windtebo_pushes_front_target_with_single_draw() {
+        let (mut w, caster, _target) = windtebo_world(10, 1);
+        w.rng = RandomNumber::with_seed(7);
+        let mut expect = RandomNumber::with_seed(7);
+        let _ = expect.random_below(20); // 本支唯一的一次抽（level*6+6+gap = 21 > 20 ⇒ 必过）
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(
+            bo_train,
+            "骰过 ⇒ boTrain=true（oracle MagWindTebo 的 result）"
+        );
+        assert_eq!(
+            events.len(),
+            1,
+            "level=1 ⇒ 格数 = 1 + max(0, 0) = 1（确定性，无 Random(2)）"
+        );
+        assert_ne!(format!("{:?}", w.rng), before, "骰确实抽了一次");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            format!("{expect:?}"),
+            "整条 RNG 流恰等于「1 次 Random(20)」后的状态 ⇒ 无第二抽"
+        );
+    }
+
+    /// ①B 同判据的**第二颗种子**（专为牙⑥的"`Random(2)=0` 时帧同、仅抽数红"分支准备）：
+    /// 取「骰过 且 下一抽 `random_below(2)==0`」的种子；基线仍恰 1 抽。
+    #[test]
+    fn windtebo_pushes_front_target_with_single_draw_seed_b() {
+        let (mut w, caster, _target) = windtebo_world(10, 1);
+        let seed = (1..10_000)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                r.random_below(20) < 21 && r.random_below(2) == 0
+            })
+            .expect("必有该形态的种子");
+        w.rng = RandomNumber::with_seed(seed);
+        let mut expect = RandomNumber::with_seed(seed);
+        let _ = expect.random_below(20);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(bo_train);
+        assert_eq!(events.len(), 1, "level=1 ⇒ 恰 1 格");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            format!("{expect:?}"),
+            "恰 1 抽（该种子下若误加 Random(2)，其值为 0 ⇒ 帧不变、仅 RNG 流红）"
+        );
+    }
+
+    /// ② 前格为空 ⇒ `GetPoseCreate` null ⇒ **0 帧 0 抽**。
+    #[test]
+    fn windtebo_empty_front_cell_is_zero_draw() {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 5, 5, 10));
+        w.tick();
+        w.entities.get_mut(caster).unwrap().ai.dir = crate::magic::DIR_RIGHT;
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty());
+        assert_eq!(format!("{:?}", w.rng), before, "前格空 ⇒ 零抽");
+    }
+
+    /// ③ **`StickMode=true` ⇒ 0 帧且 0 抽**（守卫在 `Random(20)` 之前）。
+    /// 牙（删守卫）的变异期望：骰通过种子 ⇒ 帧红；骰失败种子 ⇒ **仅抽数 +1**。
+    #[test]
+    fn windtebo_stick_mode_target_is_zero_draw_zero_frame() {
+        let (mut w, caster, target) = windtebo_world(10, 1);
+        w.entities.get_mut(target).unwrap().flags.stick_mode = true;
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train, "StickMode ⇒ 不推、boTrain=false");
+        assert!(events.is_empty(), "StickMode ⇒ 0 帧");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            before,
+            "StickMode ⇒ 0 抽（漏守卫会 +1 抽）"
+        );
+    }
+
+    /// ③B **骰失败种子**下的 `StickMode`：基线 0 帧 0 抽；删守卫的变异态是 **0 帧、抽数 +1**
+    /// （这一支专门证明"帧集合看不见的那一半由账本看见"）。
+    #[test]
+    fn windtebo_stick_mode_dice_fail_is_zero_draw() {
+        let (mut w, caster, target) = windtebo_world(2, 1); // 骰阈值 = 1*6+6+1 = 13
+        w.entities.get_mut(target).unwrap().flags.stick_mode = true;
+        let seed = (1..10_000)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                r.random_below(20) >= 13
+            })
+            .expect("必有骰失败的种子");
+        w.rng = RandomNumber::with_seed(seed);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty(), "StickMode ⇒ 0 帧");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            before,
+            "StickMode ⇒ 0 抽（即使骰本来会失败，也不得先抽）"
+        );
+    }
+
+    /// ④ 前格目标 `Death` ⇒ `GetMovingObject(..., true)` 过滤 ⇒ 0 帧 0 抽。
+    #[test]
+    fn windtebo_dead_front_target_is_zero_draw() {
+        let (mut w, caster, target) = windtebo_world(10, 1);
+        w.entities.get_mut(target).unwrap().life_cycle.death = true;
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty());
+        assert_eq!(
+            format!("{:?}", w.rng),
+            before,
+            "Death 被 GetPoseCreate 过滤 ⇒ 0 抽"
+        );
+    }
+
+    /// ⑤ 前格目标 `Ghost` ⇒ `GetMovingObject` 恒过滤 ⇒ 0 帧 0 抽。
+    #[test]
+    fn windtebo_ghost_front_target_is_zero_draw() {
+        let (mut w, caster, target) = windtebo_world(10, 1);
+        w.entities.get_mut(target).unwrap().life_cycle.ghost = true;
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty());
+        assert_eq!(format!("{:?}", w.rng), before, "Ghost ⇒ 0 抽");
+    }
+
+    /// ⑥ 等级不高于 ⇒ 0 帧 0 抽（等级门在骰之前）。
+    #[test]
+    fn windtebo_level_gate_is_zero_draw() {
+        let (mut w, caster, _target) = windtebo_world(5, 5);
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty());
+        assert_eq!(format!("{:?}", w.rng), before, "等级不高于 ⇒ 0 抽");
     }
 
     /// `Command::Rush`（`DoMotaebo` 无正前目标支，`PlayObject.Base.cs:1443-1467`）：向前冲刺，

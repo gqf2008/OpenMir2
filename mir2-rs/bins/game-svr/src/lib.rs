@@ -14607,12 +14607,6 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         req.magic_id,
                     );
-                    // **MG-47 S1（占位臂）**：35 `SKILL_WINDTEBO` 的显式识别。效果体在 S2 接入；
-                    // 本臂**不产生任何帧**，只把该魔号从"未分类"变成"已登记、效果待接"，
-                    // 避免将来误落其它 `case` 分派（oracle 的 35 是 `MagicManager` 的独立 case）。
-                    if req.magic_id == mir2_world_bevy::world::SKILL_WINDTEBO {
-                        glog!("DBG", "CM_SPELL：35 SKILL_WINDTEBO 效果体未接（S1 占位）");
-                    }
                     if matches!(
                         req.magic_id,
                         mir2_world_bevy::magic::SKILL_FIREWIND
@@ -14676,6 +14670,71 @@ fn handle_spell_cmd_with_magic(
                         broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
                         send_good_tick(online, gates, chr_name);
                         return;
+                    }
+                    // **MG-47 S2**：35 `SKILL_WINDTEBO`（`MagicManager.cs:524-529`）——
+                    // `MagWindTebo`（`:858-874`）→ `boTrain` → oracle 共享尾（`:644-669`）。
+                    // 位次：**版本门之后**（门失败 ⇒ 无效果体/无尾/零抽，与兄弟支同口径）。
+                    // `RM_SPELL(17)` 已在门之前无条件广播；共享尾的 `RM_MAGICFIRE(638)` 与
+                    // `RM_MAGIC_LVEXP(640)` 由 `finish_spell_tail` 出（`Some(1000)`：未升级支）。
+                    if req.magic_id == mir2_world_bevy::world::SKILL_WINDTEBO {
+                        let magic_level = matched.as_ref().map_or(0, |m| m.level);
+                        // `:160-163` 死亡归一：638 的 ActorId 读归一后的 DoSpell 目标。
+                        let tail_target = world
+                            .entities
+                            .get(req.target_actor_id)
+                            .filter(|t| !t.death)
+                            .map(|t| t.id);
+                        let (bo_train, events) =
+                            world.cast_windtebo_spell(actor_id, i32::from(magic_level));
+                        // **帧序（oracle 队列优先级）**：`638`(0x88=136) 先于逐格 `9`
+                        // （`RM_PUSH` 8092 & 0xFF = 156），`640` 走 `Some(1000)` 交付批（255）。
+                        // ⇒ 先出共享尾（638），再逐格 `SM_BACKSTEP(9)`。
+                        finish_spell_tail(
+                            world,
+                            online,
+                            gates,
+                            saves,
+                            chr_name,
+                            actor_id,
+                            magic,
+                            req.magic_id,
+                            magic_level,
+                            matched.as_ref().map_or(0, |m| m.tran_point),
+                            bo_train,
+                            caster_abil_level,
+                            tx,
+                            ty,
+                            tail_target.unwrap_or(0),
+                            None,
+                            Some(1000),
+                        );
+                        // `CharPushed` 的逐格 `RM_PUSH` ⇒ `SM_BACKSTEP(9)`，逐格一条、保序；
+                        // 收件人按**该步坐标**算（`PlayObject.Message.cs:1527` 的复合条件恒真）。
+                        for ev in &events {
+                            let Some(d) = displays.get(ev.actor_id).cloned() else {
+                                glog!(
+                                    "WRN",
+                                    "35 狂风推挤：actor={} 无展示表 => 跳过 SM_BACKSTEP（登记）",
+                                    ev.actor_id
+                                );
+                                continue;
+                            };
+                            if let Some(body) = downlink::backstep_frame(ev, &d) {
+                                let map_id =
+                                    world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
+                                broadcast_ref_msg_with_self_at(
+                                    world,
+                                    online,
+                                    gates,
+                                    ev.actor_id,
+                                    (map_id, ev.x, ev.y),
+                                    &[body],
+                                );
+                            }
+                            if let Some(e) = world.entities.get(ev.actor_id) {
+                                set_display_dir(displays, ev.actor_id, e.dir());
+                            }
+                        }
                     }
                 }
                 None => glog!(
@@ -62783,6 +62842,74 @@ SendRefMsgRange=15
     /// ② 帧内 `Dura` 用扣光前的值（不做 `Dura=0`）⇒ 尾字节不等必红。
     /// **41（`SKILL_ANGEL`）训练尾 640 必须自延迟**（本卡 sweep #6；41 无 golden ⇒ 本条是唯一判据）。
     /// 与 17/30 同支：施法批**无** 640；自延迟队列恰 1 条 `RM_MAGIC_LVEXP`；+1000ms 交付批恰 1 条。
+    /// **MG-47 S2 接线（35 `SKILL_WINDTEBO`）**：走生产入口 ⇒ `SM_SPELL(17)`（广播 excl self）
+    /// + `SM_MAGICFIRE(638)`（含 self）+ 逐格 `SM_BACKSTEP(9)`（前格目标被推）+ 1000/800ms 后的 640。
+    /// 推挤帧是本支"效果体真的跑到了"的硬证据（oracle `MagWindTebo` → `CharPushed`）。
+    #[test]
+    fn spell_cmd_windtebo_wires_frames_and_pushes() {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            1000,
+            100,
+            100,
+            35,
+            &[(35, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 35,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+        }
+        let target = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == "target")
+            .unwrap()
+            .actor_id;
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        // 点击 (101,100)：`default` 支先 `Dir = GetNextDirection`（东）⇒ 前格 = target 所在格。
+        rig.cast(35, (101, 100), target);
+        let (frames, _raws) = rig.drain();
+        assert_eq!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_SPELL),
+            1,
+            "17 广播 excl self"
+        );
+        assert_eq!(sf_count(&frames, 911, mir2_protocol::messages::SM_SPELL), 0);
+        assert_eq!(
+            sf_count(&frames, 911, mir2_protocol::messages::SM_MAGICFIRE),
+            1,
+            "638 含 self"
+        );
+        assert!(
+            sf_count(&frames, 912, mir2_protocol::messages::SM_BACKSTEP) >= 1,
+            "前格目标应被推（逐格 SM_BACKSTEP(9)）"
+        );
+        let lv = rig.deliver(1000);
+        assert_eq!(
+            sf_count(&lv, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
+            1,
+            "训练尾 640 在交付批（800/1000ms）"
+        );
+    }
+
     #[test]
     fn spell_cmd_angel_training_tail_is_self_delayed() {
         let mut rig = SpellFrameRig::new_layout(
