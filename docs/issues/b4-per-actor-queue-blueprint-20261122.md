@@ -137,3 +137,38 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 2. pilot：657-only 延迟 + 3 条新单测（旧 3 条不变）；
 3. 扩到 656/31/53/100（`push_name_color`/`push_open_health`/b4/b5）；
 4. 胶水 + 装置 + golden 同批 + 全量门逐支点名。
+
+## §12 施工偏离（2026-11-21，pilot 实施中）
+
+> 由 `89` 实施 657 pilot 时发现，经 opc-19 批准。**偏离不改变判据**，只改容器落点。
+
+### 12.1 偏离点：容器从 `SpellFrameBuf` 改为 **rig 级 `pending` 穿透**
+
+§3 表第 3 行原写「657 入 per-viewer 延迟队列，viewer 下一回合才 flush」，隐含以 `SpellFrameBuf`
+为延迟容器。**实测该切面承载不了判据维度**：`SpellFrameBuf` **每次调用都 `new()` + `flush(self)` 消耗**
+（全仓 44 个 `new` / 52 个 `flush`），buf 是**短命对象**，延迟帧无法在 buf 内跨 tick 存活 ⇒
+「只动 `SpellFrameBuf` + `push_charstatuschanged`」**不足以产生 800→900**。
+
+**批准的替换切面**：
+- 新增 `drain_b3_self_deliveries_with_pending(rec, …, pending, preload)`：按
+  `rec.slave_self_delivery_turns` 逐 turn `begin_turn`、`flush_with_deferred` 回写 `pending`；
+- `pending` 只挂在 `SpellFrameRig` / `B3Rig` 各**一个字段**；
+- 旧 `drain_b3_self_deliveries` 与**其余调用点一字不动**（新增函数是并列入口，不是改旧函数）。
+
+即：延迟容器从「短命 buf」上移到「跨 tick 存活的 rig 字段」，由新入口显式穿透，旧路径零改。
+
+### 12.2 偏离不改变判据
+
+验收仍为（bigcloak s1）：
+- caster `(657,1002,**900**)`（延迟项，落下一 tick）；
+- caster `(657,1001,900)` **不变**（self turn 内产生）；
+- target / obs_in `{1002@800, 1001@900}`。
+
+### 12.3 钉死延迟谓词 = **严格 `<`**
+
+「收件人 turn **严格早于**当前 turn」才延迟；`R == current` 是 **self**，**不延迟**。
+- 依据：本蓝图 Q4 pilot 验收段（128–131 行：caster 的 `1001` 是「自己 turn 内产生」⇒ 同轮出）；
+  以及 oracle `while (GetMessage)` 同轮处理 self（`DrainPasses=3`）。
+- **若将来有人想把 `<` 改成 `<=`，必须附六元组证据**：
+  `(who, param/tag, 产生者 turn, 收件人 turn, 实得 due, 期望 due)`——否则会静默把 self 帧也推到下一 tick
+  （caster 的 `657/1001` 会从 900 漂到 1000，与装置/契约不符）。
