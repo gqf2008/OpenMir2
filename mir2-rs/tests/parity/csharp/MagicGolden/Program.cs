@@ -1107,6 +1107,7 @@ public static class Program
             TranPoint = 0,
             Magic = new OpenMir2.Data.MagicInfo { MagicId = 1, MagicName = "FireBall", Effect = 1, EffectType = 1 },
         };
+        long castTick = HUtil32.GetTickCount();
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, target.CurrX, target.CurrY, target);
         List<long> draws = new();
         if (rngMode == "freeze_at_dospell")
@@ -1135,11 +1136,10 @@ public static class Program
         // **上界命中必须可见**（`DrainPassesHitCap` 进产物 + stderr），不得静默截断。
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
-        ClockSeam.Advance(700);
+        // **step-drain**：按 StepDrainMs=100 步进到 700ms，逐消息设 `CurrentDueMs`（同 `RunMagicCase` 口径）。
+        // 使延迟父消息的 non-late 子帧在"到达那步"记 `due=stepMs`（累计 elapsed），与 Rust 100ms pump 同步量化的 step 一致。
         if (probeDrainDraw)
         {
-            // 自测探针（不进 golden）：**在真实排水阶段**（`Thread.Sleep` 之后、排水循环之前）抽一次。
-            // cover 下 seam 仍安装 ⇒ 入账；freeze 下 seam 已在 DoSpell 后还原 ⇒ 这次抽不被记录。
             _ = M2Server.M2Share.RandomNumber.Random(1000);
         }
         var receivers = new List<ReceiverResult>();
@@ -1149,36 +1149,62 @@ public static class Program
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
         int drainPasses = 0;
         bool drainPassesHitCap = false;
+        const int StepDrainMs = 100;
+        const int WaitMs = 700;
+        void DrainOnce(bool[] operatedAny, long stepMs)
+        {
+            foreach (var (who, obj) in byWho)
+            {
+                var raw = obj.DrainRaw();
+                int now = HUtil32.GetTickCount();
+                int stopAt = raw.Count;
+                for (int i = 0; i < raw.Count; i++)
+                {
+                    var (m, prio) = raw[i];
+                    if (!m.LateDelivery || m.DeliveryTime <= now)
+                    {
+                        rmAcc[who].Add(new
+                        {
+                            ident = m.wIdent, wParam = m.wParam, p1 = m.nParam1, p2 = m.nParam2, p3 = m.nParam3,
+                            msg = m.Buff ?? "", late = m.LateDelivery, delivery = m.DeliveryTime, priority = prio,
+                        });
+                        RecordingNetChannel.CurrentDueMs = m.LateDelivery ? Math.Max(0, m.DeliveryTime - castTick) : stepMs;
+                        obj.OperatePublic(m);
+                        RecordingNetChannel.CurrentDueMs = 0;
+                        operatedAny[0] = true;
+                    }
+                    else { stopAt = i; break; }
+                }
+                for (int i = stopAt; i < raw.Count; i++) obj.PushBack(raw[i].Msg, raw[i].Prio);
+            }
+        }
         for (int pass = 0; pass < MaxDrainPasses; pass++)
         {
-        bool drainedAny = false;
+            var operatedAny = new[] { false };
+            DrainOnce(operatedAny, 0);
+            if (!operatedAny[0]) break;
+            if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+        }
+        int elapsed = 0;
+        while (elapsed < WaitMs)
+        {
+            int step = Math.Min(StepDrainMs, WaitMs - elapsed);
+            ClockSeam.Advance(step); elapsed += step;
+            int stepPasses = 0;
+            for (int pass = 0; pass < MaxDrainPasses; pass++)
+            {
+                var operatedAny = new[] { false };
+                DrainOnce(operatedAny, elapsed);
+                stepPasses = pass + 1;
+                if (!operatedAny[0]) break;
+                if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+            }
+            drainPasses = Math.Max(drainPasses, stepPasses);
+        }
         foreach (var (who, obj) in byWho)
         {
-            var raw = obj.DrainRaw();
-            if (raw.Count > 0) drainedAny = true;
-            var rm = raw.Select(m => (object)new
-            {
-                ident = m.Msg.wIdent,
-                wParam = m.Msg.wParam,
-                p1 = m.Msg.nParam1,
-                p2 = m.Msg.nParam2,
-                p3 = m.Msg.nParam3,
-                msg = m.Msg.Buff ?? "",
-                late = m.Msg.LateDelivery,
-                delivery = m.Msg.DeliveryTime,
-                priority = m.Prio,
-            }).ToList();
-            int now = HUtil32.GetTickCount();
-            foreach (var m in raw)
-            {
-                if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
-                else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
-            }
-            rmAcc[who].AddRange(rm);
-        }
-        drainPasses = pass + 1;
-        if (!drainedAny) break;
-        if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
+            foreach (var (m, prio) in obj.DrainRaw())
+                pending.Add(new { who, ident = m.wIdent, delivery = m.DeliveryTime, now = HUtil32.GetTickCount() });
         }
         Console.Error.WriteLine($"DRAIN_PASSES {label} passes={drainPasses} hit_cap={drainPassesHitCap}");
         // **cover 的 draws 与 Restore 必须在排水循环之后**（`rng_mode=cover_drain` 的真实含义：
