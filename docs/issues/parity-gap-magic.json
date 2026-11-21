@@ -613,7 +613,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面无产品公式变异重放（仅装置层 AntiMagic 门槛自检与三支绿跑）；补牙计划见 docs/teeth-audit-B.md §建议清单"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面无产品公式变异重放（仅装置层 AntiMagic 门槛自检与三支绿跑）；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒）⇒ hit 支伤害 9→5：驱动 tests::lightning11_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(95) right=Some(91)）；比较器 real_rust_ledger_lightning11 红（[hit] TargetHp 不等 golden=91 rust=95；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。"
     },
     {
       "id": "MG-20",
