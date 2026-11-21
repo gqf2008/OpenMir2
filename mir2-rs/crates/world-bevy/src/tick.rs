@@ -65,7 +65,7 @@
 use std::thread::ThreadId;
 
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::{LogLevel, ScheduleBuildSettings, SingleThreadedExecutor};
+use bevy_ecs::schedule::{LogLevel, MultiThreadedExecutor, ScheduleBuildSettings};
 
 /// 虚拟时钟（资源）：`clock_ms` 每 tick 前进 `interval_ms`。
 ///
@@ -193,20 +193,13 @@ pub fn tick_schedule_build_settings() -> ScheduleBuildSettings {
 /// 把 world 挪到别的线程上跑，`Schedule::run` 会在此 panic。
 pub fn advance_clock_system(
     mut clock: ResMut<TickClock>,
-    mut owner: ResMut<TickOwnerThread>,
     mut trace: Option<ResMut<StageTrace>>,
 ) {
     if let Some(t) = trace.as_deref_mut() {
         t.0.push(TickStage::Clock);
     }
-    let current = std::thread::current().id();
-    match owner.0 {
-        None => owner.0 = Some(current),
-        Some(t) => assert_eq!(
-            t, current,
-            "世界 tick 必须始终在同一线程上串行执行（设计文档 §4.2：禁止并行）"
-        ),
-    }
+    // 调用者线程断言**已移到 [`TickRunner::run`]**（系统在 MultiThreadedExecutor 的 task pool
+    // 线程上跑，系统内看不到发起线程）。本系统只推进时钟。
     clock.clock_ms += clock.interval_ms;
     clock.tick_seq += 1;
 }
@@ -1051,10 +1044,11 @@ pub struct TickRunner {
 impl TickRunner {
     pub fn new() -> Self {
         let mut schedule = Schedule::default();
-        schedule.set_executor(SingleThreadedExecutor::default());
-        // EXECUTOR-RATIONALE(S1): 世界 tick 必须**可重放确定性**（同固定输入多次逐字节一致）。
-        // 并行化试点(step2)须先过 `tests/no_parallel.rs::replay_determinism_8x`（8× 逐字节），
-        // 再在**无数据冲突**的 system 组上换 MultiThreadedExecutor；有冲突/重放不一致的组退回串行。
+        schedule.set_executor(MultiThreadedExecutor::new());
+        // EXECUTOR-RATIONALE(S2 并行): 用 bevy `MultiThreadedExecutor` 并行调度（用 bevy 自己的 task pool，
+        // 不引 rayon/crossbeam/tokio）。**正确性由 bevy 冲突检测保证**：同阶段下 read/write 冲突的 system 会被
+        // 串行化、无冲突的才并行；乱序写入不可能（依赖图约束）。**确定性由 `tests/no_parallel.rs::replay_determinism_8x`
+        // （8× 逐字节）守**——并行须先过该门。需 `TaskPools`（见 `TickRunner::new` 的 `ComputeTaskPool` 初始化）。
         schedule.set_build_settings(tick_schedule_build_settings());
         // 顺序契约：阶段之间固定链式先后（与 STAGE_ORDER 逐项一致）。
         // bevy 的元组 `.chain()` 支持最多 20 项；本契约恰好 20 段（见 STAGE_ORDER）。
@@ -1104,11 +1098,24 @@ impl TickRunner {
         self
     }
 
-    /// 在调用线程上跑一遍（`SingleThreadedExecutor` 保证不开线程）。
+    /// 跑一遍（`MultiThreadedExecutor` 在 bevy task pool 上并行调度无冲突 system；结果仍确定性）。
     ///
     /// 跑之前先构建 schedule 并断言**零歧义**；歧义 = 构建错误 = 立即 panic，
     /// 不会带着不确定的顺序执行任何系统。
     pub fn run(&mut self, world: &mut World) {
+        // 调用者线程断言（约束**调用者**、非内部并行）：`world.tick` 必须始终由同一线程发起。
+        // 放这里（而非系统内）是因为 `MultiThreadedExecutor` 在 task pool 线程上跑 system，
+        // 系统内看不到发起线程。内部并行不受此约束（由 bevy 冲突检测 + 8× 重放门守）。
+        let current = std::thread::current().id();
+        if let Some(mut owner) = world.get_resource_mut::<TickOwnerThread>() {
+            match owner.0 {
+                None => owner.0 = Some(current),
+                Some(t) => assert_eq!(
+                    t, current,
+                    "世界 tick 必须始终由同一线程发起（调用者线程断言；内部并行不受此约束）"
+                ),
+            }
+        }
         self.assert_build_contract(world);
         self.schedule.run(world);
     }
