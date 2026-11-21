@@ -71,6 +71,16 @@ impl ZoneRect {
         x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
     }
 
+    /// 坐标是否在**边界带**内：在矩形内，且到某条边的格距 ≤ `width`（L2-3 的 halo 范围）。
+    #[must_use]
+    pub const fn border_contains(&self, x: i32, y: i32, width: i32) -> bool {
+        self.contains(x, y)
+            && (x - self.x0 <= width
+                || self.x1 - x <= width
+                || y - self.y0 <= width
+                || self.y1 - y <= width)
+    }
+
     /// 两矩形是否相交（闭区间；L2-2 的「不得双属」构造校验用）。
     #[must_use]
     pub const fn intersects(&self, other: &Self) -> bool {
@@ -432,6 +442,12 @@ mod tests {
             !rect.intersects(&ZoneRect::new(20, 20, 30, 30)),
             "相邻但不重叠（19 与 20 不交）"
         );
+        // L2-3 边界带：含边、带内为真，带深一格为假。
+        let zone = ZoneRect::new(0, 0, 19, 19);
+        assert!(zone.border_contains(0, 5, 3) && zone.border_contains(19, 5, 3));
+        assert!(zone.border_contains(3, 10, 3), "距左边 3 = 带内（含）");
+        assert!(!zone.border_contains(4, 10, 3), "距边 4 > width ⇒ 带外");
+        assert!(!zone.border_contains(20, 5, 3), "矩形外 ⇒ 带外");
     }
 
     /// **L2-2 牙**：双区边界端点各归一侧、**不得双属**；区外/未覆盖 ⇒ `None`。

@@ -8719,6 +8719,17 @@ impl World {
     ///
     /// 不推进时钟（时钟在 [`World::tick_head`]）。不消费 RNG ⇒ 五批 trace 不变。
     pub fn tick_tail(&mut self, record: &mut TickRecord) {
+        self.tick_tail_before_aoi(record);
+        self.tick_tail_aoi(record);
+    }
+
+    /// **L2-3 phase1 的尾段**：`tick_tail` 中 AOI 之前的全部段（线程断言 + SuperMan 回满 +
+    /// 玩家死亡结算 + VerifyMapTime）。
+    ///
+    /// **两阶段 tick 的接缝**：phase1 结束于此。所有写位置/属性/HP 的模拟段都已跑完 ⇒
+    /// 此时取的区边界快照就是**本 tick 终态**，phase2 的 AOI 不会读到上一 tick 的旧值。
+    /// （陈旧镜像牙见 `bins/game-svr/tests/l2_two_zone.rs`。）
+    fn tick_tail_before_aoi(&mut self, record: &mut TickRecord) {
         let current = std::thread::current().id();
         match self.owner_thread {
             None => self.owner_thread = Some(current),
@@ -8769,6 +8780,22 @@ impl World {
         record
             .verify_health_changes
             .append(&mut self.pending_verify_health_changes);
+    }
+
+    /// **L2-3 phase2**：AOI 刷新（`OutputAoi` 单阶段）+ 落格不变式 + `last_tick` 记录。
+    ///
+    /// 单独成函数，是为了让两阶段驱动在 phase1 与 phase2 之间插入边界快照交换；
+    /// phase2 的 AOI 读到的实体状态必然是**本 tick 终态**。
+    /// 线程断言与 `tick_tail` 相同：phase2 也必须在 World 的 owner 线程上发起。
+    fn tick_tail_aoi(&mut self, record: &mut TickRecord) {
+        let current = std::thread::current().id();
+        match self.owner_thread {
+            None => self.owner_thread = Some(current),
+            Some(t) => assert_eq!(
+                t, current,
+                "世界 tick 必须始终在同一线程上串行执行（设计文档 §4.2：禁止并行）"
+            ),
+        }
 
         // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
         // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
@@ -8819,6 +8846,24 @@ impl World {
         self.assert_no_entity_on_unowned_map();
 
         self.last_tick = record.clone();
+    }
+
+    /// **L2-3**：一个 tick 的 **phase1**（`tick_head` + 尾段到 `VerifyMapTime`）。
+    ///
+    /// `MIR2_SHARDS=1` / 单区时，`tick()` 与 `tick_phase1() + tick_phase2()` **逐字段等价**
+    /// （见 `crates/world-bevy/tests/tick_phases.rs` 的 `TickRecord` 相等断言）。
+    #[must_use]
+    pub fn tick_phase1(&mut self) -> TickRecord {
+        let mut record = self.tick_head();
+        self.tick_tail_before_aoi(&mut record);
+        record
+    }
+
+    /// **L2-3**：一个 tick 的 **phase2**（仅 `OutputAoi` + 落格不变式 + `last_tick`）。
+    ///
+    /// 两阶段驱动在 phase1 与 phase2 之间交换区边界快照；本函数本身不认识「区」。
+    pub fn tick_phase2(&mut self, record: &mut TickRecord) {
+        self.tick_tail_aoi(record);
     }
 
     /// **P2-3a 不变式**：非拥有图（stub）上禁止实体。

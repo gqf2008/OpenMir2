@@ -132,6 +132,8 @@ pub mod sessionwire;
 pub mod shard;
 // **L2-1**：区模型 + 每宿主区队列（恒等脚手架；L2-4 起按区 demux）。
 pub mod zone;
+// **L2-3**：两阶段 tick 的区边界快照/双缓冲/屏障（构造级；生产接线在 L2-4）。
+pub mod region_loop;
 // **P2-3b**：事件路由（纯逻辑 + 可单测；转发线程在 `sim_loop` 调用侧）。
 mod shard_router;
 pub mod shop;
