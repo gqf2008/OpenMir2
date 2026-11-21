@@ -41,6 +41,20 @@
 
 三支在至少一个有意义的伤害字段上与零值对照不同 ⇒ 均有判别力（不是"两支一样"）。
 
+**关于 `21d2834e6` 的 `StepDrainMs=100`（回答 opc-19 ②1）**：这是**让装置按真实时间步进排水**
+（`MagicGolden` 的既有口径：每 100ms 睡眠、只在到期时刻处理消息；`firecharm/hbfireball/fireboom`
+等既有 stem 同款），**不是把差异藏到不观测的窗口**。首版 `StepDrainMs=0` 是"睡满 1200ms 后一次排空"，
+600ms 交付帧被记录成 `due_ms_rel=0`（记录面伪影）；Rust 驱动一直按 100ms 步进世界时钟并记 600/800/1000。
+改后**arm vs control 的 HP/series/Rng 差异逐值不变**，只有记录的 due 从 0 变为真实值；因此那 28 条不是
+产品分歧，是记录面口径修正。
+
+**跑批 run_id（数值证据）**：Rust 驱动 + 比较器 `nonzero-final-1795242871`（9 驱动 + 3 比较器全绿）；
+合并前门 `parity-gate -Mode Both` 的 run_id `nonzero-arm-gate-1795242993`（Driver 150 / Comparator 50 全绿）。
+差异清单本身由 C# 生成器的 `--case <stem> --out <临时文件>` 直接产出，不依赖 Rust 台账。
+**`StepDrainMs=100` 的边界**：判据 = 改后 golden 的 `due_ms_rel` 仍表达延迟量
+（`lightflower` control 1000 / arm 800 即证明），且 100ms < 最小可判差 200ms。
+**若未来出现延迟差 < 100ms 的支，本步长不再保真，需重估**。
+
 ## 4. 判据（per-stem 期望表）
 
 - 比较器 `real_rust_ledger_{fireball,lightning11,lightflower}_nonzero` 之前调用
@@ -51,7 +65,11 @@
 
 ## 5. 变异牙（产品侧五字段读取恒零）
 
-- 变异：把 `fireball_parity_drive` 的五字段读取改为 `0u16/0u8`（快照 `E:/UserTemp/nonzero-arm/lib.rs.snap`）。
+- 变异（**注入口/读侧变异，非产品逻辑变异**；按判据 8 属"注入口"）：把 `fireball_parity_drive`
+  的五字段读取改为 `0u16/0u8`（快照 `E:/UserTemp/nonzero-arm/lib.rs.snap`）。它证明"记录值→消费值"
+  这条链在 golden↔Rust 跨栈比较上会红，不声称产品公式被改；真值面由 golden 的 SQL 值 + per-stem 表守。
+- 牙（2026-11-21 补）：五字段读取恒零 = **注入口变异（driver 读路径）** ⇒ 驱动+比较器双层红；
+  **非产品侧变异**。
 - 红（`MIR2_LEDGER_RUN_ID=nonzero-mut-1795242804`）：
   - 驱动：`fireball-nonzero` edge/hit、`lightning11-nonzero` edge/hit、`lightflower-nonzero` s1/s5/s13
     （三支 miss 无伤害，保持绿）；
@@ -68,7 +86,10 @@
 - `cargo fmt --all -- --check`：rc=0；
 - `cargo check -p game-svr --lib -p mir2-parity-tests --tests`：rc=0；
 - `cargo clippy -p game-svr -p mir2-parity-tests --all-targets -- -D warnings`：rc=0；
-- `cargo test -p game-svr --lib`：**2204 passed / 0 failed / 158 ignored**；
+- `cargo test -p game-svr --lib`：**2204 passed / 0 failed / 158 ignored**（前值 149，**+9 全是本批三支
+  stem 的驱动**，均 `#[ignore]`：`tests::fireball_nonzero_parity_{miss,edge,hit}`、
+  `tests::lightning11_nonzero_parity_{miss,edge,hit}`、`tests::lightflower_nonzero_parity_{s1,s5,s13}`）；
+  三个比较器在 `mir2-parity-tests` 里也是 `#[ignore]`，不在 `--lib` 计数内，由 `parity-gate` 覆盖；
 - `cargo test --no-run -p game-svr --lib` / `-p mir2-parity-tests --test magic_fireball_parity`：rc=0；
 - `parity-gate.ps1 -Mode Both -RunId nonzero-arm-gate-1795242993`：
   **Driver 150 ok / 0 红 / 0 零匹配；Comparator 50 ok / 0 红 / 0 零匹配；PARITY_GATE_OK**。
@@ -82,6 +103,13 @@
 - 取 base `master:mir2-rs/tests/parity/csharp/MagicGolden/Program.cs`（`8ce09f334`）与实现版
   （`sha256 be640409…`）分别 build，生成三支既有代表 stem（`fireball` / `lightning11` / `lightflower`）：
   **剥 `delivery` 后逐字段 EQ**（base vs new 均为 EQ）。
+- **剥 `delivery` 后的字段清单**（base/new 逐字段比较）：顶层 `magic_id / anti_magic / fixture_spec / cases`；
+  每 case 的 `Fixture`（全部键）、`Label / DrainPasses / DrainPassesHitCap / Seed / SpellReturn /
+  Receivers / Rng / TargetHp / TargetHpBefore / TargetMonsterHpBefore / TargetMonsterHpAfter /
+  NotDue / CasterMp / CasterExtraAbil0 / Train`；`Receivers` 内 `Who / Rm`
+  （`ident/wParam/p1/p2/p3/msg/late/priority`）与 `Sent`
+  （`ident/recog/param/tag/series/due_ms_rel/tail`）。
+  **唯一剥离字段 = `delivery`（墙钟，跨栈不可比）**；`NotDue` 未剥离。
 - 其余既有 stem 结构上不受影响：`NonzeroArm=false` ⇒ 五键不落盘（`AttachStatusTimeArr` 的
   `HasValue` 门），`BuildMagicInfo` 五字段为 0（= ctor 缺省），`magic_train_lv` 旧门保持。
 
