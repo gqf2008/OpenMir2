@@ -1,9 +1,10 @@
 # 对拍断言自查清单（一页）
 
+> 更新于 2026-11-21（依据四批牙审计，新增判据 8）。
 > 来源：2026-11-21 的两个反向案例——**"golden 有、断言没比"**（`docs/issues/magic-52-clientxy-explicit-case.md` §3b）
 > 与 **"断言写了但永远为真"**（同卡 §3b 的死断言修正）。每个新增/修改对拍断言提交前逐条过。
 
-## 七条判据
+## 八条判据
 
 1. **它会在什么情况下红？**
    写出至少一个**产品侧变异**（不是改测试），实测一次红；把"变异点 → 哪条断言红 → left/right"写进卡。
@@ -41,6 +42,13 @@
      只写测试名可以换，数字换了就得解释（范式：`src/M2Server/Player/PlayObject.Attack.cs:1253-1266` 的 43 显式 case）。
    反例：`MG-42`（`src/M2Server/Magic/MagicManager.cs:462-473` 的 `case SKILL_ANGEL`）升格时 scope 未声明无牙（见 `docs/issues/mg42-angel-behavior-teeth.md`）。
 
+8. **"有牙"的最低门槛：MG 专属产品牙，不是 `tooth_*` 机制牙**（`opc-19` 2026-11-21，四批牙审计归纳）：
+   - **两类牙要分开**：比较器 `magic_fireball_parity.rs` 里的 `tooth_*`（如 `tooth_rm_field_changed_red`、`tooth_poison_657_series_compared_red`）是**机制牙**——只证明 `verify()` 对字段/RNG/deliver 变化会红，**对所有条目不特异**；它**不等于**某条 MG 有"改坏该 MG 产品行为 ⇒ 该 MG 自己断言红"的**产品牙**。
+   - **"有牙"的最低门槛（三条齐）**：① **MG 专属**的产品侧变异（改该 MG 的算法/分支，不是改测试）；② 红的 `left/right` 原文；③ 还原证明（文件 hash 相等 + 复跑绿）。
+   - **"计划里写了刀" ≠ "刀跑过"**：反例 `MG-57`（`SKILL_ENERGYREPULSOR`）的四刀只存在于 `docs/issues/magic-push-batch-wiring-plan.md` §4 的**计划**里、从未实跑（其 oracle 锚仍是 `src/M2Server/Magic/MagicManager.cs:601-606` `MagPushArround`，冻结面未动）；`MG-65`（`Shape=2@MagGroupAmyounsul`）的四刀跑的是 48 主叶、**不覆盖 Shape=2 叶**。⇒ 审计必须落到"实跑记录"，不能因卡里出现"变异/刀"字样就记有牙。
+   - **"绿"的两种含义**：golden **非退化**时的绿只是 **no-regression** 证据（错误实现也可能同样绿）；**只有配上 MG 专属产品牙**，绿才 = **算对**的证据。
+   - **幅度三档**：从 **+1 起** → 不可见则**加大到可见** → 仍不红则记**"最小可观测幅度"**或**"该维度不进任何比较面"**；**不许**把"加大到夸张仍不绿"写成"无牙"糊过去。
+
 ## 三条常见形态（今天都出现过）
 
 | 形态 | 症状 | 修法 |
@@ -57,3 +65,4 @@
 - 断言里有没有比较同一来源的两个值？（恒真信号）
 - 这条测试在门的两集合里吗？（判据 6；不在就自带 `N passed` 证据）
 - 升格 scope 写了"牙 / 无牙（理由）/ 门不覆盖+证据来源"三项吗？（判据 7）
+- **这条 verified 的牙是 MG 专属产品牙，还是仅 `tooth_*` 机制牙？**（机制牙对所有条目不特异、不给这条背书；见判据 8）
