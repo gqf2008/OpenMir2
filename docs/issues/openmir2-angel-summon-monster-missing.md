@@ -43,4 +43,4 @@
 
 - 装置缺口总审计：`docs/issues/device-gap-premise-audit.md`（MG-42 行）
 - 下一批计划：`docs/issues/qa-next-batch-plan-20261121.md`（MG-42 行，已改为「生产数据缺口 + harness 可 stub」）
-- 同类数据缺口：`docs/issues/openmir2-summon-monster-data-gaps.md`（同名族；如不在 master 需同法重立）
+- 同类数据缺口：`docs/issues/openmir2-summon-monster-data-gaps.md`（同名族总卡，2026-11-21 已重立于 master）
