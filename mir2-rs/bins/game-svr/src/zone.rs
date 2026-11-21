@@ -473,6 +473,133 @@ impl RegionLayout {
     }
 }
 
+/// **L2-4**：`MIR2_ZONES` 的解析错误（fail-closed；尽量带原始 token）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ZoneParseError {
+    Empty,
+    Syntax(String),
+    BadZone(String),
+    NonContiguous { missing: u32 },
+    UnknownMap(String),
+    BadCoord(String),
+    InvalidRect(String),
+    Layout(RegionLayoutError),
+}
+
+impl fmt::Display for ZoneParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "MIR2_ZONES 为空（不设 ⇒ 单区；设了必须非空）"),
+            Self::Syntax(t) => write!(
+                f,
+                "语法错：`{t}`（应为 `<区号>:<地图>=<x0>,<y0>-<x1>,<y1>`）"
+            ),
+            Self::BadZone(t) => write!(f, "区号非整数：`{t}`"),
+            Self::NonContiguous { missing } => {
+                write!(
+                    f,
+                    "区号必须 0..=max 连续：缺区 {missing}（稀疏会让空区仍建线程）"
+                )
+            }
+            Self::UnknownMap(t) => write!(f, "地图不在注册表：`{t}`"),
+            Self::BadCoord(t) => write!(f, "坐标非整数：`{t}`"),
+            Self::InvalidRect(t) => write!(f, "矩形非法（需 x0<=x1、y0<=y1）：`{t}`"),
+            Self::Layout(e) => write!(f, "布局校验失败：{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ZoneParseError {}
+
+/// **L2-4 段 3**：把 `MIR2_ZONES` 原文解析成 [`RegionLayout`]（**纯函数**，不读环境/I/O）。
+///
+/// 语法（`;` 分隔；一区可多段）：`<区号>:<地图名>=<x0>,<y0>-<x1>,<y1>`。
+/// 未提到的图由 `default_zone` 整图兜底（交给 `from_zone_spans`）。
+/// 区号必须 **0..=max 连续**（稀疏 ⇒ [`ZoneParseError::NonContiguous`]）。
+///
+/// # Errors
+/// 见 [`ZoneParseError`] 各变体。
+pub fn parse_zone_layout(
+    raw: &str,
+    map_names: &[String],
+    map_sizes: &[(i32, i32)],
+    default_zone: ZoneId,
+) -> Result<RegionLayout, ZoneParseError> {
+    if raw.trim().is_empty() {
+        return Err(ZoneParseError::Empty);
+    }
+    let mut spans = Vec::new();
+    let mut seen = Vec::<u32>::new();
+    for token in raw.split(';') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let (zone_raw, rest) = token
+            .split_once(':')
+            .ok_or_else(|| ZoneParseError::Syntax(token.to_string()))?;
+        let zone: u32 = zone_raw
+            .trim()
+            .parse()
+            .map_err(|_| ZoneParseError::BadZone(zone_raw.to_string()))?;
+        let (map_raw, rect_raw) = rest
+            .split_once('=')
+            .ok_or_else(|| ZoneParseError::Syntax(token.to_string()))?;
+        let (a, b) = rect_raw
+            .split_once('-')
+            .ok_or_else(|| ZoneParseError::InvalidRect(rect_raw.to_string()))?;
+        let parse_xy = |s: &str| -> Result<(i32, i32), ZoneParseError> {
+            let (x, y) = s
+                .split_once(',')
+                .ok_or_else(|| ZoneParseError::BadCoord(s.to_string()))?;
+            let x: i32 = x
+                .trim()
+                .parse()
+                .map_err(|_| ZoneParseError::BadCoord(s.to_string()))?;
+            let y: i32 = y
+                .trim()
+                .parse()
+                .map_err(|_| ZoneParseError::BadCoord(s.to_string()))?;
+            Ok((x, y))
+        };
+        let (x0, y0) = parse_xy(a)?;
+        let (x1, y1) = parse_xy(b)?;
+        if x0 > x1 || y0 > y1 {
+            return Err(ZoneParseError::InvalidRect(rect_raw.to_string()));
+        }
+        let name = map_raw.trim();
+        let map_id = map_names
+            .iter()
+            .position(|n| n.trim().eq_ignore_ascii_case(name))
+            .ok_or_else(|| ZoneParseError::UnknownMap(name.to_string()))?;
+        if map_id >= map_sizes.len() {
+            return Err(ZoneParseError::UnknownMap(name.to_string()));
+        }
+        spans.push(ZoneSpan::new(
+            ZoneId::new(zone),
+            map_id,
+            ZoneRect::new(x0, y0, x1, y1),
+        ));
+        seen.push(zone);
+    }
+    if spans.is_empty() {
+        return Err(ZoneParseError::Empty);
+    }
+    let max = *seen.iter().max().expect("非空");
+    for z in 0..=max {
+        if !seen.contains(&z) {
+            return Err(ZoneParseError::NonContiguous { missing: z });
+        }
+    }
+    RegionLayout::from_zone_spans(
+        usize::try_from(max + 1).expect("区号 <= u32::MAX"),
+        map_sizes,
+        spans,
+        default_zone,
+    )
+    .map_err(ZoneParseError::Layout)
+}
+
 /// 一个区的两条入站通道（普通, 优先）。`GateEvent` 是 crate 私有 ⇒ 本类型也 `pub(crate)`。
 #[derive(Debug)]
 pub(crate) struct ZoneChannels {
@@ -902,5 +1029,99 @@ mod tests {
                 expected: 200
             }
         );
+    }
+
+    // ---------- L2-4 段 3：MIR2_ZONES 解析 ----------
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_single_span_and_default() {
+        let l = parse_zone_layout(
+            "0:0=0,0-9,9;1:0=10,0-19,9",
+            &names(&["0", "1"]),
+            &[(20, 10), (2, 2)],
+            ZoneId::new(0),
+        )
+        .expect("合法");
+        assert_eq!(l.zone_count(), 2);
+        assert_eq!(l.zone_of(0, 9, 9), Some(ZoneId::new(0)));
+        assert_eq!(l.zone_of(0, 10, 0), Some(ZoneId::new(1)));
+        assert_eq!(
+            l.zone_of(1, 0, 0),
+            Some(ZoneId::new(0)),
+            "未提到的图归 default"
+        );
+    }
+
+    #[test]
+    fn parse_multi_span_zone() {
+        let l = parse_zone_layout(
+            "0:0=0,0-9,9;0:1=0,0-1,1;1:0=10,0-19,9",
+            &names(&["0", "1"]),
+            &[(20, 10), (2, 2)],
+            ZoneId::new(0),
+        )
+        .expect("同区多段");
+        assert_eq!(l.zone_of(1, 1, 1), Some(ZoneId::new(0)));
+    }
+
+    #[test]
+    fn parse_case_insensitive_map_names() {
+        let l = parse_zone_layout(
+            "0:ABC=0,0-1,1;1:abc=2,0-3,1",
+            &names(&["Abc"]),
+            &[(4, 2)],
+            ZoneId::new(0),
+        )
+        .expect("大小写不敏感");
+        assert_eq!(l.zone_count(), 2);
+    }
+
+    #[test]
+    fn parse_rejects_empty_and_syntax_with_token() {
+        assert_eq!(
+            parse_zone_layout("  ", &[], &[], ZoneId::new(0)),
+            Err(ZoneParseError::Empty)
+        );
+        let err = parse_zone_layout("0-0", &[], &[], ZoneId::new(0)).unwrap_err();
+        assert!(err.to_string().contains("0-0"), "{err}");
+    }
+
+    #[test]
+    fn parse_rejects_bad_zone_and_non_contiguous() {
+        let e = parse_zone_layout("x:0=0,0-1,1", &names(&["0"]), &[(2, 2)], ZoneId::new(0))
+            .unwrap_err();
+        assert!(e.to_string().contains("x"), "{e}");
+        let e = parse_zone_layout(
+            "0:0=0,0-1,1;2:0=2,0-3,1",
+            &names(&["0"]),
+            &[(4, 2)],
+            ZoneId::new(0),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(e, ZoneParseError::NonContiguous { missing: 1 }),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_map_with_token() {
+        let e = parse_zone_layout("0:nope=0,0-1,1", &names(&["0"]), &[(2, 2)], ZoneId::new(0))
+            .unwrap_err();
+        assert!(e.to_string().contains("nope"), "{e}");
+    }
+
+    #[test]
+    fn parse_rejects_bad_coord_and_invalid_rect() {
+        let e = parse_zone_layout("0:0=a,0-1,1", &names(&["0"]), &[(2, 2)], ZoneId::new(0))
+            .unwrap_err();
+        assert!(matches!(e, ZoneParseError::BadCoord(_)), "{e}");
+        let e = parse_zone_layout("0:0=1,1-0,0", &names(&["0"]), &[(2, 2)], ZoneId::new(0))
+            .unwrap_err();
+        assert!(matches!(e, ZoneParseError::InvalidRect(_)), "{e}");
     }
 }
