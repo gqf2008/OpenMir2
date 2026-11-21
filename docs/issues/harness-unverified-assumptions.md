@@ -16,7 +16,7 @@
 | ④ | 堆 arity | 对拍 | .NET `PriorityQueue` = **4-ary** | 同 .NET = 4-ary；Rust `SelfDelayQueue` 是其 **4-ary 忠实镜像** | **是（已排除）** | 帧序（**排除了**）；覆盖：13 种 prio / len 2–30 / 300k 随机 + 8 手选 / 88% tie / 63% 混 255+非255；4-ary 镜像 vs native **0/300k** 分歧，binary 镜像 **78%** 分歧 |
 | ⑤ | RNG 流（次数/上界/序/值） | 对拍 | `RngSeam` 记录 .NET `System.Random` | 生产=`System.Random`(Knuth)；Rust 复算同一 .NET Knuth | **是（已排除）** | Rng 判据（**排除了**）；覆盖：fireball/amyounsul/groupdeding 共 11 case，`Rng+DeliverRng` 拼接**逐值一致** |
 | ⑥ | `due` 基准 tick | realism（差在装置↔生产；对拍无影响） | 统一 `castTick`(DoSpell 前) + 虚拟钟（DoSpell 不 Advance⇒ε=0 理想化） | 每 msg 自 `GetTickCount()`，**16ms 粒度** | **是（已在容差内）** | `due`；实测粒度 16ms，差 ≤16ms ＜ 640 的 ±32ms 容差；装置↔Rust 都理想化 ⇒ 对拍**不受影响** |
-| ⑦ | AOI / 可见集 | realism | ***不跑 AOI***（`SearchViewRange`/`UpdateVisibleGay` 都不调）；4 个固定玩家 + push magic 的 `MakeVisible` 回填 | 真实 AOI 按距离/范围动态算 `VisibleActors` | **否**（89 在做） | AOI 依赖 magic（push/散布/向"全可见"发帧）的收件人集合 |
+| ⑦ | AOI / 可见集 | realism | ***不跑 AOI***（`MagicGolden/Program.cs:1538` 明注 `SearchViewRange`/`UpdateVisibleGay` 都不调）；可见性 = 4 个固定玩家（caster/target/obs_in/obs_out 手设坐标）+ push magic（firewind/energyrepulsor）的 `MakeVisible` 回填 `VisibleActors` | 真实 AOI 按距离/范围动态算 `VisibleActors` | **否**（89 在做） | AOI 依赖 magic（push/散布/向"全可见"发帧）的收件人集合 |
 | ⑧ | `prio=(byte)wIdent` 语义 | 对拍+realism | 照生产：非延迟 `Enqueue(sm,(byte)wIdent)`、延时 `Lowest` | 同：`BaseObject.Message.cs` 非延迟 `(byte)wIdent`、延时 `Lowest` | **是（生产源码已锚）**；装置各处是否都照做待核 | 队列序 / 帧序 |
 
 ## 备注
