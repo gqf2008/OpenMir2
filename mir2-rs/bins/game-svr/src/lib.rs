@@ -54905,6 +54905,65 @@ break
         assert!(online.is_empty());
     }
 
+    /// **登记序**：`OnlineRegistry` 是 `Vec`，广播/可见集/顶号都依赖**插入序**。
+    /// 保序索引（`Vec` + `HashMap<_, usize>`）改造后，本断言必须仍然绿。
+    ///
+    /// 红检（结构改错）：把迭代改成走 `HashMap` 键序 ⇒ 本用例必红。
+    #[test]
+    fn online_registry_preserves_registration_order() {
+        let mut online: OnlineRegistry = Vec::new();
+        // actor_id 故意**非单调**：若实现偷偷按 id 排序或走哈希序，序列会变。
+        online_set(&mut online, entry("a", "ca", 1, 0, 901, 30));
+        online_set(&mut online, entry("b", "cb", 2, 0, 902, 10));
+        online_set(&mut online, entry("c", "cc", 3, 1, 903, 20));
+        let order: Vec<i32> = online.iter().map(|e| e.actor_id).collect();
+        assert_eq!(order, vec![30, 10, 20], "登记序必须等于插入序（保序索引不得改变遍历序）");
+    }
+
+    /// **摘除保序**：`online_take` 必须用 `Vec::remove`（搬移其余元素），**不能** `swap_remove`。
+    ///
+    /// **为什么必须 4 个元素**：3 个元素取中间时 `Vec::remove` 与 `swap_remove` 的结果**相同**
+    /// （`[30,10,20]` 取 10 都得 `[30,20]`）⇒ 用例会假绿；4 个元素才能区分
+    /// （期望 `[30,20,40]`，`swap_remove` 会给 `[30,40,20]`）。**不要把人简化回 3 个元素。**
+    ///
+    /// 红检：把 `online_take` 的 `Vec::remove` 换成 `swap_remove` ⇒ 本用例必红。
+    #[test]
+    fn online_take_keeps_order() {
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "t30", 1, 0, 901, 30));
+        online_set(&mut online, entry("b", "t10", 2, 0, 902, 10));
+        online_set(&mut online, entry("c", "t20", 3, 0, 903, 20));
+        online_set(&mut online, entry("d", "t40", 4, 0, 904, 40));
+        let taken = online_take(&mut online, "t10").expect("中间那条必须取得到");
+        assert_eq!(taken.actor_id, 10);
+        let order: Vec<i32> = online.iter().map(|e| e.actor_id).collect();
+        assert_eq!(
+            order,
+            vec![30, 20, 40],
+            "摘除中间元素后其余必须保持原序（swap_remove 会得到 [30,40,20]）"
+        );
+    }
+
+    /// **顶号取最小下标**（O-3 裁决语义）：同一账号在某网关上的多条登记，`online_find_for_kick`
+    /// 必须返回该网关**登记序首个**（= 最小下标），且**按网关分桶**、桶内仍按登记序。
+    ///
+    /// 红检：改成"取最后一个"或"全局首个/无序"⇒ 本用例必红。
+    #[test]
+    fn online_kick_prefers_first_registered() {
+        let mut online: OnlineRegistry = Vec::new();
+        // 同账号、同网关两条（不同 chr_name 才不会被子刷掉），后登记者 socket 更大。
+        online_set(&mut online, entry("k", "k1", 1, 0, 901, 1));
+        online_set(&mut online, entry("k", "k2", 2, 0, 902, 2));
+        let t = online_find_for_kick(&online, "k", 1);
+        assert_eq!(t.len(), 1, "同一网关只踢第一个");
+        assert_eq!(t[0].socket, 901, "必须是**先登记**的那条（最小下标）");
+        // 桶隔离：另一网关也要各返回自己的首个，且整体按登记序。
+        online_set(&mut online, entry("k", "k3", 3, 1, 903, 3));
+        let t2 = online_find_for_kick(&online, "k", 1);
+        let socks: Vec<i32> = t2.iter().map(|e| e.socket).collect();
+        assert_eq!(socks, vec![901, 903], "每网关各一条、按登记序（gate0 先于 gate1）");
+    }
+
     /// **`CM_SAY` 普通说话**：与 oracle `SendRefMsg`（`BaseObject.Message.cs:395-440`）同集合 ——
     /// ±`SendRefMsgRange`(12) 格内、同图、`Race==Play && !Ghost` 的 actor，**含说话者自己**。
     /// 帧 = 12B 头（`Recog=说话者 ActorId`、`Ident=SM_HEAR(40)`、`Param=MakeWord(F,B)`、`Tag=0`、
