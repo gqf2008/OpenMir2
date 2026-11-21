@@ -966,7 +966,11 @@ mod tests {
             max_train: [100; 4],
         };
         // 期望的尾：同一条 RNG 上跑一次 `do_spell_tail(boSpellFail=false, magic_fire=true, boTrain=true, …)`。
+        // **本测试旧版隐含假设构造不消费随机数（错）**：oracle `new PlayCloneObject` 的 ctor 链
+        // 消费 5 抽（BaseObject R(1500)/R(2000)、AnimalObject R(3000)×2、PlayObject R(999999)），
+        // `spawn_clone` 现已按同序同界消费 ⇒ 参照流必须先走这 5 步，否则"下一次取数"比较必错位。
         let mut expect_rng = w.rng.clone();
+        mir2_world_bevy::slave::consume_clone_ctor_draws(&mut expect_rng);
         let mut expect_train = mk_train();
         let _ = magic::do_spell_tail(
             false,
