@@ -294,21 +294,86 @@ fn redcheck_import_only_does_not_satisfy_executor_guard() {
         "真实 set_executor + EXECUTOR-RATIONALE 注释必须被识别"
     );
 }
-// ============================================================================
-// 重放确定性门（判据③）——**实现在 build 窗口做**（需 world-bevy World API + 编译迭代）。
-// 设计（8× 逐字节）：
-//   fn replay_once() -> Vec<Vec<u8>> {
-//       let mut w = World::new(32,32);           // 固定尺寸
-//       let mut traces = Vec::new();
-//       // 固定驱动：固定种子 + 固定操作序（spawn/move/attack/...，不含 HashMap 迭代序）
-//       for _tick in 0..K { let rec = w.tick(); traces.push(canonical_bytes(&rec)); }
-//       traces                                    // 每 tick 记录的**规范化字节**（Vec，非 HashMap）
-//   }
-//   #[test] fn replay_determinism_8x() {
-//       let base = replay_once();
-//       for i in 1..8 { assert_eq!(replay_once(), base, "replay #{i} 与基准逐字节不一致 ⇒ 并行引入非确定"); }
-//   }
-// 约束（红线）：canonical_bytes 只序列化**有序**结构（Vec/数组/显式排序的键），**严禁** HashMap/
-// HashSet 迭代序进输出；断言是**逐字节相等**，不得改容差。窗口期内先跑串行骨架应 8× 一致（基准）；
-// 换 MultiThreadedExecutor 后仍 8× 一致才算该并行组可用，否则该组退回串行。
-// ============================================================================
+ 
+// ---------------------------------------------------------------------------
+// 判据③ 重放确定性门（2026-11-23 build 窗口实现）。
+// 同一固定输入（固定种子 + 固定驱动序）跑 8 次，逐 tick 的**有序**输出逐字节相同。
+
+/// 把一次 tick 的 `TickRecord` 序列化成**有序**串（只取 Vec 有序字段；禁 HashMap 迭代序）。
+fn canon_tick(rec: &mir2_world_bevy::world::TickRecord) -> String {
+    let atk: Vec<(i32, i32, i32)> = rec
+        .attacks
+        .iter()
+        .map(|(a, b, o)| (*a, *b, o.power))
+        .collect();
+    format!(
+        "seq={} clk={} proc={:?} aoi={:?} atk={:?} deaths={:?}",
+        rec.tick_seq, rec.clock_ms, rec.processed, rec.aoi_order, atk, rec.deaths
+    )
+}
+
+/// 固定输入跑一遍，返回各 tick 的规范串（Vec，有序）。
+fn replay_once() -> Vec<String> {
+    use mir2_shared::rng::RandomNumber;
+    use mir2_world_bevy::{EntitySpawn, World};
+    let mut world = World::new(32, 32);
+    world.open_session("hero");
+    let mut hero = EntitySpawn::new(1, "hero", 10, 10);
+    hero.race = mir2_world_bevy::entity::ACTOR_RACE_PLAY;
+    hero.dc = 0x0403;
+    hero.hit_point = 20;
+    hero.power_rate = 100;
+    hero.hp = 200;
+    hero.max_hp = 200;
+    let hid = world.enter_map("hero", hero, 0).expect("hero 进图");
+    let mut mon = EntitySpawn::new(2, "mon", 11, 10);
+    mon.race = mir2_world_bevy::entity::ACTOR_RACE_MONSTER;
+    mon.ac = 0;
+    mon.hp = 60000;
+    mon.max_hp = 60000;
+    mon.hit_point = 0;
+    let mid = world.add_entity(mon);
+    let mut out = vec![canon_tick(&world.tick())]; // Enter 落图
+    world.rng = RandomNumber::with_seed(20261012);
+    for _ in 0..3 {
+        world.attack_cmd(hid, mid);
+    }
+    out.push(canon_tick(&world.tick()));
+    for _ in 0..2 {
+        out.push(canon_tick(&world.tick()));
+    }
+    out
+}
+
+/// **判据③（绿门）**：同固定输入跑 8 次，逐 tick 规范字节必须全相同。
+#[test]
+fn replay_determinism_8x() {
+    let base = replay_once();
+    for i in 1..8 {
+        assert_eq!(
+            replay_once(),
+            base,
+            "replay #{i} 与基准逐 tick 字节不一致 ⇒ tick 骨架出现非确定性"
+        );
+    }
+}
+
+/// **判据③ 红证（gate 有牙）**：用同一 8× 逐字节比较法去比一个**故意非确定**的输入
+///（`HashSet` 迭代序随实例随机种子变化）——必须出现不一致，证明该判据能抓非确定。
+#[test]
+fn replay_gate_has_teeth_catches_nondeterminism() {
+    use std::collections::HashSet;
+    fn nondet_once() -> Vec<String> {
+        let mut hs = HashSet::new();
+        for i in 0..12 {
+            hs.insert(format!("t{i}"));
+        }
+        hs.into_iter().collect()
+    }
+    let base = nondet_once();
+    let diverged = (1..8).any(|_| nondet_once() != base);
+    assert!(
+        diverged,
+        "红证失效：8× 比较未捕捉 HashSet 迭代序非确定 ⇒ 判据③ 无判别力"
+    );
+}
