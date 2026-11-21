@@ -1481,17 +1481,24 @@
         "line": 555,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "warr_43_matches_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/warrskill_parity_tests.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/warr-43.json（C# ClientSpellXY 入口生成；rng_mode/login_order/reachability 三键契约；fixture_spec.toggle_text_on/off 记源码默认文案）",
+        "cases": [
+          "off2on(seed=1)",
+          "on2off(seed=1)"
+        ],
+        "unit_tests": [
+          "warrskill_parity_tests::warr_43_matches_golden"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial，静态 golden 比较器）：43 的 `MagicManager` case 体为空，帧面来自 ClientSpellXY 显式 case；本叶**不在** `-Mode Both` 的 Driver/Comparator 集合内（静态 golden `#[test]`），其覆盖由 `cargo test -p game-svr --lib -- matches_golden`（19/19）承担。",
+      "basis": "semantic",
+      "scope": "ClientSpellXY 显式 case（`src/M2Server/Player/PlayObject.Attack.cs:1253-1266`）的 toggle 两向：`Skill43OnOff` 翻转 + 源码默认文案（\"开启破空剑\"/\"关闭破空剑\"）+ `+CID`/`+UCID` 短包 + `SM_SYSMESSAGE(100)`，逐收件人逐字节（off2on/on2off）。**空 case 体**：`src/M2Server/Magic/MagicManager.cs:555-556` 的 `case SKILL_43: break;` 零行为，帧面全部来自 ClientSpellXY 显式 case。**不扣 MP 有直接断言**：取 `SessionGround.state.wabil.mp` 在 dispatcher 调用前/排水后相等（行为牙：`mp-=1` ⇒ 见卡）。**未验 / 不入比对**：①`+GD/<tick>` 为调用方尾部、按既有判据边界不入比对；②MP **数值本身**未与 oracle 对拍（只断言前后不变）；③施法包装层限速（CheckActionStatus/SpellTick-=450）未接（既有登记）；④`MBo43Kill` 除接口声明外无消费者 ⇒ 状态位只体现 toggle 交替；⑤生产 20s 动作限速路径不在本叶。"
     },
     {
       "id": "MG-53",
