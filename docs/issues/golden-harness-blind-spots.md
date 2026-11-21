@@ -139,3 +139,34 @@
 - `docs/issues/openmir2-golden-generator-drift.md`（生成器世代漂移，另一类"看不见"）
 - `docs/issues/groupamyounsul-nondegenerate-golden.md`（退化守卫：效果体零次执行的具名红）
 - 卡 `openmir2-golden-harness-mapmgr`（`OfflineMapSystem`/`MapMgr` 的建立与边界）
+
+## B20：actor-id 在 oracle 侧本来就非确定（2026-11-21 处置：B）
+
+**事实（符号锚）**
+- `src/M2Server/Actor/ActorEntity.cs` 的 `ActorEntity()`：`ActorId = SystemShare.ActorMgr.GetNextIdentity()`（ctor 赋一次，之后稳定）；
+- `src/Modules/SystemModule/ActorManager.cs` 的 `GetNextIdentity()`：队列非空取队列，否则 `HUtil32.Sequence()`；
+- `src/OpenMir2/HUtil32.cs` 的 `Sequence()`：`Guid.NewGuid()` 取 4 字节（拒负重抽）；
+- 生产队列来源 `src/GameSrv/Word/Threads/GeneratorProcessor.cs`：每 10s 用 `StandardRandomizer.NextInteger()`
+  填 10 万 id，而 `src/OpenMir2/Generation/Entities/StandardRandomizer.cs` 缺省
+  `: this(Environment.TickCount)`。
+
+⇒ **"运行内唯一 + 稳定"是契约；绝对 id 跨运行/跨进程非确定，是产品性质，不是装置建模差异。**
+⇒ **处置 B**：golden **不记绝对 actor-id**，只记 policy + 关系面：
+- `Clone.actor_id_policy = "oracle_guid_nondeterministic"`（明示"不是漏记"）；
+- `Clone.clone_ordinal = 0`（创建序，确定性）、`Clone.clone_count = 1`；
+- 生成期断言 clone id 与 caster/target/obs 固定 id 互不相同（违反 ⇒ rc=2 不落盘）；
+- 比较器：golden 不得出现 `actor_id/rel_to_caster`；Rust 台账保留本侧 `actor_id`（可见性）+
+  `sibling_actor_ids`，断言"≠ 四个 sibling"、`clone_ordinal==0`、`clone_count==1`、无回指 clone 的 10/41 帧。
+
+**反面教材（勿做）**：给装置加 `ActorMgr.GetNextIdentity` 反射 seam 注入固定 id，把非确定写成假确定。
+该方法只能作临时对照，**不得进 golden**；它会把"产品不透明句柄"错固化成协议量。
+
+**逐 stem 的 actor 来源与 id 是否进比较面**
+
+| stem 形态 | actor 来源 | id 是否进比较面 | 稳定性 |
+| --- | --- | --- | --- |
+| 其余直接 `DoSpell` 的 magic stem（caster/target/obs_in/obs_out） | 夹具显式 `ActorId=idBase+1..4` | **是**（帧 `recog` / `param`/`p3`） | 稳定（夹具固定） |
+| `clone46` | 产品构造（`new PlayCloneObject` → `ActorEntity`） | 曾经 `Clone.actor_id`；**B20 后只比关系** | **非确定** |
+| `skeleton(17)/sinsu(30)/angel(41)` 的召唤怪 | 产品构造（`OfflineWorldEngine.RegenMonsterByName`） | **否**（mon `Sent` 空、`new_slaves` 无 id）⇒ **现在没暴露** | 非确定（潜在） |
+| `tamming(20)` / `holyshield(16)` 等 `Monsters[]` | 夹具显式 `idBase+10+i` | **是**（`RM_MAGICFIRE.p3` 等） | 稳定（夹具固定） |
+| `firecross(22)` 事件 | `MapEvent.Id`（被注释、恒 0） | 否 | 不适用 |
