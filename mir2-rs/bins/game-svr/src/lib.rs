@@ -70278,8 +70278,11 @@ SendRefMsgRange=15
     ///
     /// **对拍范围（卡 17 SCOPE）**：验「**给定怪物之后**的 adopt 行为」——`regen_calls`、
     /// `slave_count_before/after`、`new_slaves{name,level,hp,max_hp,master_is_caster}`、造怪前帧
-    /// 17/638/642。**不比** `Rng`（离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、
-    /// `640`/`10123-p3`（训练尾，随造怪抽数不同）。
+    /// 17/638/642。**不比** `Rng`：造怪抽数**已记录在 golden `Rng` 中且可复现**
+    /// （`[1500,2000,3000,3000,2000]` + `Random(3)`），而**本 stem 的驱动不做 RNG 记账**
+    /// （台账无 `Rng` 键）——不是「抽 0 次」；`640`/`10123-p3` 随造怪抽数的消费位置不同。
+    /// **656 未验（装置盲区）**：替身怪未绑定 `Envir` ⇒ `SendRefMsg` 早退，
+    /// 见 `docs/issues/golden-harness-blind-spots.md` B1。
     fn skeleton_parity_drive(label: &str, id_base: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let stem = "skeleton";
@@ -70477,8 +70480,11 @@ SendRefMsgRange=15
     ///
     /// **对拍范围（stub SCOPE）**：验「**给定怪物之后**的 adopt 行为」——`regen_calls`、
     /// `slave_count_before/after`、`new_slaves{name,level,hp,max_hp,master_is_caster}`、造怪前帧
-    /// 41/638/642。**不比** `Rng`（离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、
-    /// `640`/`10123-p3`（训练尾，随造怪抽数不同）。**不证明生产可召唤**（数据缺口见卡）。
+    /// 41/638/642。**不比** `Rng`：造怪抽数**已记录在 golden `Rng` 中且可复现**
+    /// （`[1500,2000,3000,3000,2000]` + `Random(3)`），而**本 stem 的驱动不做 RNG 记账**
+    /// （台账无 `Rng` 键）——不是「抽 0 次」；`640`/`10123-p3` 随造怪抽数的消费位置不同。
+    /// **656 未验（装置盲区）**：替身怪未绑定 `Envir` ⇒ `SendRefMsg` 早退，
+    /// 见 `docs/issues/golden-harness-blind-spots.md` B1。**不证明生产可召唤**（数据缺口见卡）。
     fn angel_parity_drive(label: &str, id_base: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let stem = "angel";
@@ -70670,7 +70676,9 @@ SendRefMsgRange=15
     /// 30 `SKILL_SINSU` 真实台账驱动（**两例 `summon_ok` + `cap_hit`**；cap_hit 回召面已由 mapmgr 替身解锁）。
     ///
     /// 神兽 race=113（ELF_MONSTER）→ `apply_slave_level_abilitys` 0.3 第一支；HP=stub 17 ⇒ max 24，半补 20。
-    /// `Rng`：**summon_ok 不比**（离线替身 `RegenMonsterByName` 造怪 0 抽 vs Rust `create_monster_oracle` 真抽不同源）；
+    /// `Rng`：**summon_ok 不比**——台账 `[373,221,1401,2314,1315,3,35,2]` 与 golden
+    /// `[373,221,1401,2314,1315,1]` 的**前 5 抽逐值相同**，差异从第 6 抽起（golden 第 6 抽 =
+    /// 训练尾 1、台账 = 3，另多 35/2 两抽）；造怪抽数本身已记录在 golden 中，差异是记账/消费序列不同。
     /// **cap_hit 逐值比**（门 fail 无造怪抽 + 落点确定无 RandXY 抽 ⇒ 两侧同源都 0 抽）。
     fn sinsu_parity_drive(label: &str, id_base: i32) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
