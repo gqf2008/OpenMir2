@@ -305,3 +305,63 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
   `Rng`/训练 TP 登记"构造抽未建模"不参与比较（同 skeleton 先例），并登记两处已知偏差。
 
 裁决前不改 `slave.rs`/`lib.rs`；当前比较器会因 10/41 缺失与 Rng 6 vs 1 判红，属**已知红**。
+
+### 6.8 选项 A 落地记录（2026-11-21；已构建/已跑，最终 tip 见交付）
+
+**产品修正 1：`spawn_clone` 构造期 5 抽**（`crates/world-bevy/src/slave.rs`）
+- 新增 `consume_clone_ctor_draws(rng)`：按 C# ctor 链顺序消费
+  `Random(1500)/Random(2000)/Random(3000)/Random(3000)/Random(999999)`，注释引用
+  `BaseObject → AnimalObject → CharacterObject → PlayObject` 调用栈，并明写"值不建模，只为对齐 RNG 流"；
+- 调用点：`spawn_clone` 的两道早退门（主人不在/图越界）**之后**（oracle 早退不执行 ctor）；
+- 原文"不抽随机数（oracle 构造器无 `Random`，RNG 账本不变）"已改为事实版；批记录§6.7 保留了
+  "此处曾有错误来源断言"的说明；
+- 单测 `spawn_clone_creates_player_clone_and_occupies_cell` **挪旧牙**：原断言
+  `assert_eq!(w.rng.random(), fresh.random(), "构造克隆体不消费 RNG")` 是 Rust 跟 Rust 比
+  （`fresh` 为构造前克隆），对 oracle 无约束力，已改为断言 seed=46 的 oracle 五抽
+  `[1136, 629, 2764, 1129, 974376]` + "下一次取数与参照流相同"（恰 5 抽）。
+
+**产品修正 2：46 支出生不广播 turn_pair**（`bins/game-svr/src/lib.rs`）
+- 46 支只登记 `displays`（AOI/后续视野用），删除 `downlink::turn_pair` + `broadcast_ref_msg`；
+- 既有单测 `spell_cmd_clone_wires_entity_and_frames` **挪旧牙**：原断言 `turns.len()==2` +
+  名尾 `Clone/255` 编码的是"无条件广播"错误行为，已改为断言三 socket 均**无** 10/41。
+
+**驱动/比较器同步**
+- 驱动：`cast_rng` 恰 6 抽 + `TranPoint 增量 == 第 6 抽 + 1`；帧序 caster `[638,640]`、
+  target/obs_in `[17,638]`、obs_out 零；RM 列不再合成 10001（克隆体自投递）；
+- 比较器：`clone_recog_hits` 扫 `Receivers.Sent + Clone.receivers`，两侧**必须 0 命中**
+  （重新广播即红）；两侧 clone id 必须不等；golden 侧断言 `fixed_hide_mode=true / ob_mode=false`；
+  Clone 块逐字段 + `dir == (caster_dir+4)%8` + `SpellReturn == has_640`。
+
+**变异牙（现场重放，已还原 + sha 核对）**
+- A（删第 5 抽 `Random(999999)`）：驱动
+  `应恰 6 抽（克隆体 ctor 5 + 训练尾 1）；实得 [1136, 629, 2764, 1129, 2]`；比较器
+  `[clone] RNG 行数不等：golden=6 rust=5`。
+- B（恢复 turn_pair 广播）：驱动
+  `caster 帧序应为 [638,640]（出生零帧） left: [10,41,638,640] right: [638,640]`；比较器
+  `台账不应有帧的 recog == Clone.actor_id(1005)（产品不得广播 turn_pair；实得 12 帧）`。
+- 还原后两份文件 sha 均与变异前一致（`MUTATION` 标记为 0），重跑 46 三用例复绿。
+
+**零漂移证明（Leader 条件 1(b)；结论需按下面口径读）**
+- 用 `master`（`015f9c760`）的 `Program.cs` 与我们的 `Program.cs` 各生成 `spacemove`/`shield` 到 temp；
+  剔除 `delivery`/`due_ms_rel` 后：**base vs ours = `IDENTICAL(stripped)`（两支）**
+  ⇒ 本次对 `RunMagicCase`/`AttachStatusTimeArr` 的增量**零漂移**。
+- 但 **base vs 仓库件 ≠ 0**（spacemove 20 行、shield 101 行）：差异只有两类**既存漂移**，
+  与 MG-55 无关：
+  1. `"Angel": null`——master 的 angel 提交给 `FireballResult` 加了无 `JsonIgnore` 的属性，任何重生成都会出现；
+  2. shield 的 `Fixtures` 缺 poison 批新增键（`amulet_shape`/`amy_ounsul_point`/`red_msg_*`/
+     `target_anti_poison`/`you_poisoned`）。
+  ⇒ 卡 §6.1(b) 字面口径（"重生成 == 仓库件"）在当前 master 上**本来就过不了**；本卡以
+  base-vs-ours 的 `IDENTICAL` 作为"本改动零漂移"的证据，并把上述既存漂移单独报给 Leader。
+
+**横向影响（skeleton/sinsu/angel；Leader 要求必回）**
+- 三支 `summon_ok`（seed=1）golden `Rng` 均为 `[373,221,1401,2314,1315,1]`；`cap_hit` 为 `[]`；
+- 用 .NET `Random(1)` 按 `[1500,2000,3000,3000,2000]` 再 `Random(3)` 重放，逐值完全一致
+  ⇒ 前 5 抽 = `BaseObject(1500,2000)` + `AnimalObject(3000,3000)` + **`MonsterObject` ctor
+  `SearchTime = 3000 + Random(2000)`**（`src/M2Server/Monster/MonsterObject.cs`），第 6 抽为训练尾。
+- ⇒ "造怪抽数不可复刻"的登记**错误**：它是**可复现且已记录在 golden 里**的确定序列；Rust 驱动只是没消费。
+  `angel` 的 scope（`parity-gap-magic.json`）与 `openmir2-skeleton.md` 的同一句需要更正（另卡）。
+
+**已登记残差（本卡不修）**
+- Rust 骨架未建模克隆体 `fixed_hide_mode/ob_mode`（golden 记录 true/false 作为零帧根因；AOI 可见性差异另行登记）；
+- golden 的 `Clone.actor_id/rel_to_caster` 为 GUID 派生（每次生成不同），比较器只作可见性/负向锚，不进相等判据；
+  重生成 clone golden 会在这两个字段漂移（预期）。
