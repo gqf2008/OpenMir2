@@ -300,6 +300,20 @@ fn check_golden(id: u32) {
             "warr-{id}/{label}: 缺 reachability"
         );
         let obs = run_case(id as u16, fx);
+        // **零抽两侧断言**（判据 4）：
+        // ① golden 的 `Rng` 必须为空（oracle 记录零抽）；
+        // ② Rust 的 RNG 状态快照前后必须不变（`CaseObs.rng_before/after` 的 `Debug` 快照）。
+        //    **失效条件**：若将来自定义 `Debug` 省略 `seed_array/inext/inextp`，本断言会**变盲**
+        //    ⇒ 届时改用 `draws()` 计数（与 43 的行为用例同口径）。
+        assert_eq!(
+            case["Rng"].as_array().expect("Rng").len(),
+            0,
+            "warr-{id}/{label}: golden 的 Rng 必须为空（oracle 零抽）"
+        );
+        assert_eq!(
+            obs.rng_after, obs.rng_before,
+            "warr-{id}/{label}: Rust 零抽（RNG 状态不得变化）"
+        );
         let (caster, got) = (obs.caster, obs.frames);
         for r in case["Receivers"].as_array().expect("Receivers") {
             let who = r["Who"].as_str().expect("Who");
