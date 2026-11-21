@@ -1,9 +1,31 @@
 # 缺陷登记：50 `MabMabe` 成功臂 Rust/C# 不一致（非缺省对照臂暴露）
 
-> **状态：只读定位，未改产品代码**。触发源是配置批的后续「非缺省对照臂」
+> **状态：只读定位，未改产品代码；修复前必须先做 §0 的"形态判定"**——若判成台账装配，
+> 本卡要**降级为装置缺口**并改写，不得直接改产品。触发源是配置批的后续「非缺省对照臂」
 > （[`magic-serverconf-nondefault-arm-plan.md`](magic-serverconf-nondefault-arm-plan.md)）：既有
 > `mabmabe` 三支（s1/s5/s13）**全部未命中**，成功臂这条路径从未被对拍过；对照臂一进成功臂就红。
 > 本批**不带**这条红：对照臂的驱动与比较器随本卡修复一起落地，master 不留红、不用 `#[ignore]` 掩盖。
+
+## 0. 修复前第一步：判形态（c6 提供，关键判别）
+
+同一现象有两类完全不同的成因，修法相反；**先判形态，再改任何代码**：
+
+> **判据**：看 `pending_mag_struck` 在**排水前**有几条、`struck_log` 在**排水后**有几条。
+> - 排水前 N 条、排水后 **1** 条 ⇒ **产品合并**（`deliver_mag_struck` 把同受害者多条 pending 合算）⇒ 改产品；
+> - 排水前 N 条、排水后 **N** 条、台账只记 1 条 ⇒ **台账装配** ⇒ 改驱动/装配，**不动产品**。
+
+**已可由代码判定的部分**：
+- **第二条 `RM_DELAYMAGIC` 未入 `Rm`** = **台账装配**（已证）。`fireball_parity_drive` 抓延迟载荷用
+  `self_delay_msgs.iter().find(...)`（单数），同一 caster 有多条 `8021` 时天然只记首条。
+- `8103` 的装配与 `struck_log` 逐条记录：`World::deliver_mag_struck` 在**每条** `PendingMagStruck`
+  上各 push 一条 `StruckEvent`（代码逐条，无合并）；`drain_mag_struck_b2` 也逐条出 31/53。**因此
+  "一条 `8103(damage=20)`"与代码读法矛盾**——必须实测"排水前 pending 数 / 排水后 struck_log 数"，
+  不能先下"产品合并"结论。
+- **时序 600 vs 700/800 与 53 中间态**：属"同一时刻多条 due 消息如何在泵内结算 + 出帧取 HP 的时刻"，
+  同样需要该计数证据（泵是 `deliver_self_delay_msgs_impl`，队首未到点即重入队 + break）。
+
+**结论**：本卡的 §3(b)(a)(e)(d) 目前只能标"**待实测判定**"；§3(c) 已证台账缺口。
+若实测落在第二类，本卡整体降级为**装置缺口**，产品侧不动。
 
 ## 1. 复现
 
@@ -62,12 +84,21 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
   （"RM 是组装出来的，玩家可见证据是 SM"），所以这一条**可能是台账缺口而非产品**；
   需在 `drain_mag_struck_b2` 的返回值与 `World::struck_log()` 上探针确认（各几条、damage 各多少）。
 
-### (c) 第二条 `RM_DELAYMAGIC` 未进 `Rm`（**已确定是驱动台账缺口**）
+### (c) 第二条 `RM_DELAYMAGIC` 未进 `Rm`（**已确定是驱动台账缺口**，代码可证）
 
 - 驱动 `fireball_parity_drive` 的 RM 组装段注释与实现是"`world.self_delay_msgs` 里 caster 的
   **那条** 8021"（单数）；实际成功臂有两条 ⇒ 只组装了一条。位置：`bins/game-svr/src/lib.rs`
   的 `fireball_parity_drive`（"RM 列组装"段，`RM_DELAYMAGIC(8021)` 那一行）。
 - 处置：属于对照臂落地批的**驱动**修复（多条 8021 逐条组装），不影响产品判据。
+
+### (f) `8103(damage=20)` 的出处（**待实测**）
+
+- 代码读法：`deliver_mag_struck` 逐条 push `StruckEvent`、`drain_mag_struck_b2` 逐条出帧 ⇒ 两条 pending
+  应得两条 `8103(5)`/`8103(15)`，与 observed 的一条 20 矛盾。
+- 需要实测：**排水前 `pending_mag_struck.len()`** 与 **排水后 `struck_log().len()`**（两者都是世界层
+  公开观测面，测试里读即可，不改产品）；若前者 1 后者 1 ⇒ 回到 `cast_mab_mabe_spell` 看第二条
+  `SendSelfDelayMsg` 的 `w_param` 实际是多少；若前者 2 后者 1 ⇒ 产品合并；若前者 2 后者 2 ⇒
+  查驱动 RM 装配是否还有别的聚合点。
 
 ### (d) `SM 100` 载荷 `14591` vs `0`
 
@@ -84,7 +115,9 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 ## 4. 结论与建议顺序
 
-1. **先修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
+0. **先做 §0 形态判定**（读测试可取的 `pending_mag_struck` / `struck_log` 计数）；结论若指向台账装配，
+   本卡降级为装置缺口、改驱动而不动产品。
+1. **再修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
 2. (b) 若仍红，用探针区分"世界层合并"还是"驱动组装合并"；
 3. (c) 随对照臂驱动批一起改（多条 8021）；
 4. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
