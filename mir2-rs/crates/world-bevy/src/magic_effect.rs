@@ -49,6 +49,14 @@ pub fn push_steps(rng: &mut impl RandomSource, push_level: i32) -> u8 {
     (1 + 0.max(push_level - 1) + rng.random_below(2)) as u8
 }
 
+/// `MagWindTebo`（35）的骰：`Random(20) < userMagic.Level * 6 + 6 + levelGap`
+/// （`MagicManager.cs:869`）。**不复用** [`push_chance`]（8/37 的系数是 3）；本支**无
+/// `Random(2)`**（格数 = `1 + max(0, level-1)`，确定性）。
+#[must_use]
+pub fn windtebo_chance(rng: &mut impl RandomSource, level: i32, level_gap: i32) -> bool {
+    rng.random_below(20) < level * 6 + 6 + level_gap
+}
+
 /// `MagSaceMove` 的施放门：`Random(11) < nLevel * 2 + 4`（`:879`）。
 #[must_use]
 pub fn sace_move_gate(rng: &mut impl RandomSource, level: i32) -> bool {
