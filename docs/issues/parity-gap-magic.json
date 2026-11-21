@@ -1336,22 +1336,36 @@
         "line": 524,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "windtebo_parity_s1/s5/s13 + real_rust_ledger_windtebo",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动 tests::windtebo_parity_*）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器 real_rust_ledger_windtebo）；mir2-rs/crates/world-bevy/src/world.rs（效果体与单测）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/windtebo.json（s1/s5/s13；每支含 SM_BACKSTEP(9)；Rng=2 抽）",
+        "cases": [
+          "s1",
+          "s5",
+          "s13"
+        ],
+        "unit_tests": [
+          "windtebo_pushes_front_target_with_single_draw",
+          "windtebo_pushes_front_target_with_single_draw_seed_b",
+          "windtebo_empty_front_cell_is_zero_draw",
+          "windtebo_chance_uses_coefficient_six_not_three",
+          "windtebo_ignores_target_outside_front_cell",
+          "windtebo_ignores_visible_actor_outside_front_cell",
+          "windtebo_stick_mode_target_is_zero_draw_zero_frame",
+          "windtebo_stick_mode_dice_fail_is_zero_draw",
+          "windtebo_dead_front_target_is_zero_draw",
+          "windtebo_ghost_front_target_is_zero_draw",
+          "windtebo_level_gate_is_zero_draw",
+          "spell_cmd_windtebo_wires_frames_and_pushes"
+        ]
       },
       "cost": "M",
-      "deviation": {
-        "id": "T-285",
-        "file": "mir2-rs/tests/parity/whitelist.md",
-        "section": "技能块缺口转正（T-285）",
-        "lines": null
-      },
-      "notes": "MagWindTebo 未建模（推挤+等级门+Random(20) 骰）；旧清单 cost=天级；已转正经编号 T-285（whitelist.md 登记行）"
+      "scope": "partial：**效果体语义对拍（35 生产不可达）**。golden `windtebo.json` s1/s5/s13（装置 `--case windtebo`：`EnableMaps` 设 `caster.Dir`(东) ⇒ 前格 (101,100) 的 target 被 `GetPoseCreate` 选中）；驱动 `windtebo_parity_*` + 比较器 `real_rust_ledger_windtebo`（Rng/帧/Rm/HP 全比）。**退化守卫**：每支 golden ≥1 条 `SM_BACKSTEP(9)`，零条即具名红（本轮红证：剥掉 9 帧 ⇒ `[windtebo/s1] golden 零条 SM_BACKSTEP(9) ⇒ 本 case 未产生任何推挤帧（效果体零次执行，具名红）`）。**牙（各贴红在哪）**：①系数 `L*6→L*3` ⇒ `windtebo_chance_uses_coefficient_six_not_three` 红（阈值 13 vs 10）；②格数 `+Random(2)` ⇒ 种子 A 帧红 `left:2 right:1`、种子 B 帧同、仅 RNG 红（`inext 2 vs 1`）；③选择面改遍历 `VisibleActors` ⇒ `windtebo_ignores_visible_actor_outside_front_cell` 红在**帧**（「前格为空 ⇒ 即使 VisibleActors 有邻格目标也不得推」），`windtebo_pushes_*` 亦红（`bo_train`）——**不红在抽数**；④删 `StickMode` 门 ⇒ A「StickMode ⇒ 不推、boTrain=false」、B「StickMode ⇒ 0 抽（即使骰本来会失败，也不得先抽）」（仅抽数红）；⑤前格空 = `windtebo_empty_front_cell_is_zero_draw` 基线（0 帧 0 抽）。**无牙项：无**。**门不覆盖的写死 N**：`cargo test -p game-svr --lib` = 2198 passed / 0 failed / 139 ignored / 0 filtered；`cargo test -p mir2-world-bevy --lib` = 909 passed / 0 failed；`parity-gate -Mode Both` Driver 131、Comparator 45，0 红、0 零匹配、`PARITY_GATE_OK`。**生产不可达**：冻结 `sql/magics` 无 `MagicId=35` 行 ⇒ 验的是**效果体语义**、非生产可达性；**名字陷阱：`灭天火` 是魔号 45，不是 35**。限制：`GetPoseCreate` 依赖 `Dir`，装置以 `EnableMaps` 的 `caster.Dir` 复刻（与生产同源）。",
+      "deviation": null,
+      "basis": "semantic",
+      "notes": "MG-47 实现完成（2026-11-21，card/mg47-windtebo：S2 `2acce3eca` + S3/S4 `15e53ab18` + S5 测试 `09b0874d3`）：`cast_windtebo_spell` + `windtebo_chance` + host 臂（版本门后）+ golden/驱动/比较器；退化守卫与五颗牙红证见 scope。**生产不可达（冻结 sql 无魔号 35 行）**；名字陷阱：`灭天火`=45。T-285 已收口，deviation 置 null。"
     },
     {
       "id": "MG-48",

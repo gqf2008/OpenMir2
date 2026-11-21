@@ -62842,9 +62842,9 @@ SendRefMsgRange=15
     /// ② 帧内 `Dura` 用扣光前的值（不做 `Dura=0`）⇒ 尾字节不等必红。
     /// **41（`SKILL_ANGEL`）训练尾 640 必须自延迟**（本卡 sweep #6；41 无 golden ⇒ 本条是唯一判据）。
     /// 与 17/30 同支：施法批**无** 640；自延迟队列恰 1 条 `RM_MAGIC_LVEXP`；+1000ms 交付批恰 1 条。
-    /// **MG-47 S2 接线（35 `SKILL_WINDTEBO`）**：走生产入口 ⇒ `SM_SPELL(17)`（广播 excl self）
-    /// + `SM_MAGICFIRE(638)`（含 self）+ 逐格 `SM_BACKSTEP(9)`（前格目标被推）+ 1000/800ms 后的 640。
-    /// 推挤帧是本支"效果体真的跑到了"的硬证据（oracle `MagWindTebo` → `CharPushed`）。
+    /// **MG-47 S2 接线（35 `SKILL_WINDTEBO`）**：走生产入口 ⇒ `SM_SPELL(17)`（广播 excl self）、
+    /// `SM_MAGICFIRE(638)`（含 self）、逐格 `SM_BACKSTEP(9)`（前格目标被推），以及 1000/800ms 后的 640。
+    /// 推挤帧是本支「效果体真的跑到了」的硬证据（oracle `MagWindTebo` → `CharPushed`）。
     #[test]
     fn spell_cmd_windtebo_wires_frames_and_pushes() {
         let mut rig = SpellFrameRig::new_layout(

@@ -7544,14 +7544,13 @@ impl World {
     /// **魔号 35（`SKILL_WINDTEBO` 狂风/灭天火）效果体**：`MagicManager.MagWindTebo`
     /// （`MagicManager.cs:858-874`）。
     ///
-    /// 取数次序（与 oracle 同序；**守卫全在骰之前** ⇒ 任一不过即 0 抽）：
-    /// 1. `GetPoseCreate()`：`GetFrontPosition(Dir)`（[`crate::magic::front_position`]，越界 clamp）
-    ///    + `Envir.GetMovingObject(nx, ny, true)`（[`World::moving_object_at`]，前格首个
-    ///    `!Ghost && !Death` 的 actor）——**零抽**；
-    /// 2. 守卫链（`:862`）：`target != null && target != self && !Death && !Ghost &&
-    ///    IsProperTarget && !StickMode`，再「邻格 + 等级严格大于」；
-    /// 3. `Random(20) < level*6 + 6 + gap`（[`crate::magic_effect::windtebo_chance`]）；
-    /// 4. `CharPushed(next_direction, 1 + max(0, level-1))`（[`World::push_now`]）——**无第二抽**。
+    /// 取数次序（与 oracle 同序；**守卫全在骰之前** ⇒ 任一不过即 0 抽）。先 `GetPoseCreate()`：
+    /// `GetFrontPosition(Dir)`（[`crate::magic::front_position`]，越界 clamp）+ `Envir.GetMovingObject`
+    /// （[`World::moving_object_at`]，前格首个 `!Ghost && !Death` 的 actor），**零抽**；
+    /// 随后过守卫链（`:862`：`target != null && target != self && !Death && !Ghost && IsProperTarget
+    /// && !StickMode`，再「邻格 + 等级严格大于」），最后 `Random(20) < level*6 + 6 + gap`
+    /// （[`crate::magic_effect::windtebo_chance`]）与 `CharPushed(next_direction, 1 + max(0, level-1))`
+    /// （[`World::push_now`]，**无第二抽**）。
     ///
     /// 返回 `(bo_train, events)`：oracle `MagWindTebo` 的 `result` 在**骰通过后即 true**
     /// （不看 `CharPushed` 实际推进格数），`case SKILL_WINDTEBO` 用它置 `boTrain`。
