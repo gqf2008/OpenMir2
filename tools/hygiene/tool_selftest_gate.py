@@ -59,6 +59,9 @@ REGISTRY = [
     # 卡 device-recipient-model-design：装置 sweep 四类兼容判据分类器。自测用合成 before/after/audit
     # 三目录，证明 ① INSTRUMENT_RED（无审计行 / 仅 due 无 cross）；② 有 cross 证据时 rc=0；离线 <2s。
     ("sweep_classify", ["tools/parity/sweep_classify.py", "--selftest"], False),
+    # 卡 shard-map-group-closure（P0-3）：MapInfo 出口图 → 弱连通分量/切分实验。自测用合成 GBK 夹具
+    # （A->B->C + D/T9 孤立），断言 maps/edges/分量/跨前缀边；离线 <1s。
+    ("map_group_closure", ["tools/parity/map_group_closure.py", "--selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),

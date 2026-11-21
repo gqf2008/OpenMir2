@@ -285,6 +285,7 @@ fn emit_gate_event(
     ev: GateEvent,
 ) {
     let target = if ev.is_priority() { priority } else { normal };
+    perf_counters::bump(&perf_counters::INBOUND_ENQUEUED);
     let _ = target.send(ev);
 }
 
@@ -22387,6 +22388,49 @@ mod perf_counters {
     pub(crate) static SAY_CALLS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static SAY_RECIPIENTS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static KICK_SCANS: AtomicU64 = AtomicU64::new(0);
+    // ---- Step 0 入站测量（只读）----
+    /// 生产端：`emit_gate_event` 投递成功的事件数（两条通道合计）。
+    pub(crate) static INBOUND_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+    /// 消费端：`EventDrain::next` 返回的事件数（含结转）。
+    pub(crate) static INBOUND_DRAINED: AtomicU64 = AtomicU64::new(0);
+    /// 其中来自结转槽（上一轮预算探测取走、本轮才处理）的条数。
+    pub(crate) static INBOUND_CARRY: AtomicU64 = AtomicU64::new(0);
+    /// 本轮 `EventDrain::hit_budget` 为真的 tick 数（每 tick ≤1）。
+    pub(crate) static INBOUND_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
+    /// 本轮 `HostInbound` 排水墙钟（微秒；每 tick 覆盖写，不累加）。
+    pub(crate) static INBOUND_WALL_US: AtomicU64 = AtomicU64::new(0);
+    /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
+    /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
+    pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static DRAINED_CLOSE: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static DRAINED_CONTROL: AtomicU64 = AtomicU64::new(0);
+    /// 本 tick 单条事件**处理**耗时的最大值（微秒；每 tick 取 max 后写行、清零）。
+    pub(crate) static SINGLE_EVENT_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+    /// 单条事件处理计时守卫：只在 ENABLED 时取时钟；`Drop` 时记入本 tick 的 max。
+    /// 放在 `while let Some(ev) = drain.next(..) { ... }` 的 body 首行 ⇒ 任何 `continue`
+    /// 也会在 drop 时结算。**不包 `next()` 之外的语义**，不改事件处理。
+    pub(crate) struct EventTimer(Option<std::time::Instant>);
+
+    impl EventTimer {
+        #[inline]
+        pub(crate) fn start() -> Self {
+            Self(
+                ENABLED
+                    .load(Ordering::Relaxed)
+                    .then(std::time::Instant::now),
+            )
+        }
+    }
+
+    impl Drop for EventTimer {
+        fn drop(&mut self) {
+            if let Some(t0) = self.0 {
+                let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+                SINGLE_EVENT_MAX_US.fetch_max(us, Ordering::Relaxed);
+            }
+        }
+    }
 
     static DATA_LINES: AtomicU64 = AtomicU64::new(0);
     static WRITER: Mutex<Option<std::fs::File>> = Mutex::new(None);
@@ -22407,11 +22451,48 @@ mod perf_counters {
         }
     }
 
+    /// 探针是否启用（调用方用于跳过取时钟等可选工作）。
+    #[inline]
+    pub(crate) fn enabled() -> bool {
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    /// 消费端计数：`from_carry` = 该条来自结转槽（不是本轮从通道新取的）；
+    /// 同时按 `GateEvent` 变体把 `drained` 拆成三类（只计数）。
+    #[inline]
+    pub(crate) fn note_inbound_drained(from_carry: bool, ev: &super::GateEvent) {
+        if ENABLED.load(Ordering::Relaxed) {
+            INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
+            if from_carry {
+                INBOUND_CARRY.fetch_add(1, Ordering::Relaxed);
+            }
+            match ev {
+                super::GateEvent::Command { .. } => {
+                    DRAINED_COMMAND.fetch_add(1, Ordering::Relaxed);
+                }
+                super::GateEvent::Closed { .. } | super::GateEvent::CertificationPending { .. } => {
+                    DRAINED_CLOSE.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {
+                    DRAINED_CONTROL.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// 本轮 `HostInbound` 墙钟（微秒），覆盖写（每 tick 一个值）。
+    #[inline]
+    pub(crate) fn note_inbound_wall_us(us: u64) {
+        if ENABLED.load(Ordering::Relaxed) {
+            INBOUND_WALL_US.store(us, Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn init_with_path(path: &std::path::Path) -> std::io::Result<()> {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -22448,12 +22529,24 @@ mod perf_counters {
             SAY_CALLS.swap(0, Ordering::Relaxed),
             SAY_RECIPIENTS.swap(0, Ordering::Relaxed),
             KICK_SCANS.swap(0, Ordering::Relaxed),
+            INBOUND_ENQUEUED.swap(0, Ordering::Relaxed),
+            INBOUND_DRAINED.swap(0, Ordering::Relaxed),
+            INBOUND_CARRY.swap(0, Ordering::Relaxed),
+            INBOUND_BUDGET_HIT.swap(0, Ordering::Relaxed),
+            INBOUND_WALL_US.swap(0, Ordering::Relaxed),
+            DRAINED_COMMAND.swap(0, Ordering::Relaxed),
+            DRAINED_CLOSE.swap(0, Ordering::Relaxed),
+            DRAINED_CONTROL.swap(0, Ordering::Relaxed),
+            SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
             let line = format!(
-                "{tick}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8]
+                "{tick}\t{}\n",
+                vals.iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\t")
             );
             let _ = f.write_all(line.as_bytes());
         }
@@ -22491,6 +22584,15 @@ mod perf_counters {
             &SAY_CALLS,
             &SAY_RECIPIENTS,
             &KICK_SCANS,
+            &INBOUND_ENQUEUED,
+            &INBOUND_DRAINED,
+            &INBOUND_CARRY,
+            &INBOUND_BUDGET_HIT,
+            &INBOUND_WALL_US,
+            &DRAINED_COMMAND,
+            &DRAINED_CLOSE,
+            &DRAINED_CONTROL,
+            &SINGLE_EVENT_MAX_US,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -28706,11 +28808,13 @@ impl EventDrain {
         // 优先通道的结转先消耗（否则「控制事件先取」会被一条普通结转破坏）。
         if let Some(ev) = priority_carry.take() {
             self.processed += 1;
+            perf_counters::note_inbound_drained(true, &ev);
             return Some(ev);
         }
         // 结转：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
         if let Some(ev) = carry.take() {
             self.processed += 1;
+            perf_counters::note_inbound_drained(true, &ev);
             return Some(ev);
         }
         if self.processed >= self.budget.max_events
@@ -28739,6 +28843,7 @@ impl EventDrain {
                 telemetry::record_drain_event_drained();
                 self.processed += 1;
                 self.priority_used += 1;
+                perf_counters::note_inbound_drained(false, &ev);
                 return Some(ev);
             }
         }
@@ -28746,6 +28851,7 @@ impl EventDrain {
             Ok(ev) => {
                 telemetry::record_drain_event_drained();
                 self.processed += 1;
+                perf_counters::note_inbound_drained(false, &ev);
                 Some(ev)
             }
             Err(_) => None,
@@ -30291,9 +30397,12 @@ fn sim_loop(
         let t = host_prof.begin();
         // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
         // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
+        let inbound_t0 = perf_counters::enabled().then(std::time::Instant::now);
         let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
         while let Some(ev) = drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
         {
+            // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
+            let _event_timer = perf_counters::EventTimer::start();
             match ev {
                 GateEvent::Opened { index, ip } => {
                     if world_start.is_aborted() {
@@ -31556,10 +31665,15 @@ fn sim_loop(
             }
         }
         if drain.hit_budget {
+            perf_counters::bump(&perf_counters::INBOUND_BUDGET_HIT);
             // 到预算即停：剩余事件留到下一轮。WRN 按 100 次节流（高负载档几乎每轮触达）。
             if let Some(line) = telemetry::record_drain_budget_hit() {
                 glog!("WRN", "{}", line);
             }
+        }
+        if let Some(t0) = inbound_t0 {
+            let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+            perf_counters::note_inbound_wall_us(us);
         }
         host_prof.end("HostInbound", t);
         let t = host_prof.begin();
