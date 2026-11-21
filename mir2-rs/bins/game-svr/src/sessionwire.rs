@@ -383,7 +383,11 @@ mod tests {
             ],
             "oracle 序：633 → 634 → 766 → 54 → 11029 → 807"
         );
-        assert_eq!(f[4].route, Route::SelfOnly, "11029 是 SendDefMessage（只发自己）");
+        assert_eq!(
+            f[4].route,
+            Route::SelfOnly,
+            "11029 是 SendDefMessage（只发自己）"
+        );
         let want_tail = mir2_protocol::edcode::encode(&mir2_protocol::edcode::encode(b"cfg"));
         assert_eq!(&f[4].body[12..], want_tail.as_slice(), "尾必须双重编码");
     }

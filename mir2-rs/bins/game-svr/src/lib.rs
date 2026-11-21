@@ -69638,7 +69638,9 @@ SendRefMsgRange=15
         {
             let conf_path = std::env::var("MAGICGOLDEN_SERVERCONF")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Server.conf"));
+                .unwrap_or_else(|_| {
+                    std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Server.conf")
+                });
             assert!(
                 conf_path.is_file(),
                 "[{stem}/{label}] SERVERCONF_MISSING（{}）",
@@ -112432,7 +112434,11 @@ mod soft_version_date_tests {
         );
         // ② `enter_map`：只进图，不得隐式赋值。
         let actor = w
-            .enter_map("hero", mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 4),
+                0,
+            )
             .expect("enter_map 成功");
         assert_eq!(
             w.session("hero").unwrap().soft_version_date,

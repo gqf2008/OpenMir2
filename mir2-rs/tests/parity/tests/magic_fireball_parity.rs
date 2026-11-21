@@ -329,7 +329,8 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     gd.sort();
                     rd.sort();
                     let bad = gd.len() != rd.len()
-                        || gd.iter()
+                        || gd
+                            .iter()
                             .zip(rd.iter())
                             .any(|(g, r)| (g - r).abs() > mir2_shared::DUE_MS_TOLERANCE_MS);
                     if bad {
