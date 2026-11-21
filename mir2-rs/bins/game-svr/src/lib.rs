@@ -13539,15 +13539,11 @@ impl SpellFrameBuf {
 
     /// **(ii) pilot**：带收件人 id 的入队（只由 657 的 `push_charstatuschanged` 调用）。
     ///
-    /// 判据（opc-19 2026-11-22）：本 tick 有 turn 快照且收件人 `R` 的下标 `<=` 当前下标 ⇒
+    /// 判据（opc-19 2026-11-22，**严格小于**）：本 tick 有 turn 快照且收件人 `R` 的下标 `<` 当前下标 ⇒
     /// `R` 已跑过本 tick ⇒ 657 落到 `deferred`（下一 tick 由宿主 `preload` 回 `frames`）；
     /// 未设 turn（旧路径）/收件人不在快照 ⇒ 立即（旧行为）。
     fn push_addressed(&mut self, recipient_id: i32, socket: i32, priority: u8, body: Vec<u8>) {
         if let Some(ctx) = &self.current_turn {
-            eprintln!(
-                "DBG657 recipient={recipient_id} index={} order={:?}",
-                ctx.index, ctx.order
-            );
             if let Some(&ri) = ctx.order.get(&recipient_id) {
                 if ri < ctx.index {
                     self.deferred.push((socket, priority, body));
@@ -21960,10 +21956,6 @@ fn drain_b3_self_deliveries(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     let mut buf = SpellFrameBuf::new();
-    eprintln!(
-        "DBGOLD drain_b3 flat len={}",
-        rec.slave_self_deliveries.len()
-    );
     for o in self_delivery_outcomes(rec) {
         b3_outcome_frames(&mut buf, world, online, sessions, o);
     }
@@ -22033,11 +22025,6 @@ fn drain_b3_self_deliveries_with_pending(
         buf.preload(queued);
     }
     let turns = &rec.slave_self_delivery_turns;
-    eprintln!(
-        "DBGNEW drain_b3_with_pending turns={} flat={}",
-        turns.len(),
-        rec.slave_self_deliveries.len()
-    );
     if turns.is_empty() {
         for o in &rec.slave_self_deliveries {
             b3_outcome_frames(&mut buf, world, online, sessions, o);
@@ -78252,33 +78239,35 @@ SendRefMsgRange=15
                 .filter_map(|m| m["due_ms_rel"].as_i64())
                 .collect()
         };
+        // recog 随 `base` 分段：caster=base+1、target=base+2（s1=1001/1002、s5=2001/2002、s13=3001/3002）。
+        let (caster_recog, target_recog) = (i64::from(base) + 1, i64::from(base) + 2);
         assert_eq!(
-            due_of("caster", 1002),
+            due_of("caster", target_recog),
             vec![900],
             "[{stem}/{label}] pilot：caster 1002 必须 900"
         );
         assert_eq!(
-            due_of("caster", 1001),
+            due_of("caster", caster_recog),
             vec![900],
             "[{stem}/{label}] pilot：caster 1001 保持 900"
         );
         assert_eq!(
-            due_of("target", 1002),
+            due_of("target", target_recog),
             vec![800],
             "[{stem}/{label}] target 1002 保持 800"
         );
         assert_eq!(
-            due_of("target", 1001),
+            due_of("target", caster_recog),
             vec![900],
             "[{stem}/{label}] target 1001 保持 900"
         );
         assert_eq!(
-            due_of("obs_in", 1002),
+            due_of("obs_in", target_recog),
             vec![800],
             "[{stem}/{label}] obs_in 1002 保持 800"
         );
         assert_eq!(
-            due_of("obs_in", 1001),
+            due_of("obs_in", caster_recog),
             vec![900],
             "[{stem}/{label}] obs_in 1001 保持 900"
         );
