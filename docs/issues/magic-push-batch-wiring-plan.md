@@ -22,7 +22,7 @@
 ## 2. 装置缺什么（逐条可核）
 
 ### 2.1 `VisibleActors` 恒空 ⇒ `MagPushArround` 循环零次
-- 依据：`MagPushArround` 遍历 `playObject.VisibleActors`（`MagicManager.cs:27`）。
+- 依据：`MagPushArround` 遍历 `playObject.VisibleActors`（`src/M2Server/Magic/MagicManager.cs:27`）。
 - 现状：`MagicGolden` 装置里 **没有任何 `UpdateVisibleGay` 调用**（`grep UpdateVisibleGay` 0 命中），
   对象只经 `env.AddMapObject(...)` 入图。⇒ 即使目标在邻格，循环体一次都不进。
 - **最小回填**：对每个"应当可见"的目标调用 `caster.UpdateVisibleGay(target)`
@@ -31,7 +31,7 @@
 - 反向（`target.UpdateVisibleGay(caster)`）只在需要"目标自己也有视野"的支才要；本批**不需要**。
 
 ### 2.2 `CharPushed` 要可走地图 ⇒ 需要 `CanWalk`/`MoveToMovingObject` 真语义
-- 现状：装置已 `env.LoadMapData(0.map)`（`Program.cs:687`，`MAGICGOLDEN_MAP_DIR` 缺省
+- 现状：装置已 `env.LoadMapData(0.map)`（`MagicGolden/Program.cs` 的 `RunFireball` 里 `env.LoadMapData(0.map)`；`MAGICGOLDEN_MAP_DIR` 缺省
   `E:\MirServer\M2GameSvr\Map`），并把 caster/target 用 `AddMapObject` 入图 ⇒ **地图是真 Envirnoment**，
   `OfflineMapSystem` 只替身 `IMapSystem`（9 个成员未用），不挡 `Envir.CanWalk`。
 - **测量（一次性；不开图、不进 golden）**：实测 caster/target 落点片及其推挤方向的邻格 `cellSuccess`
@@ -44,7 +44,7 @@
   ⇒ rig 必须给该 actor 的地图；否则"目标不动"会被误读成"Rust 推不动"。
 
 ### 2.3 其它可设项（已具备，确认即可）
-- `Abil.Level`：`Program.cs:695/698` 已设（30/20）⇒ 等级门可通过；
+- `Abil.Level`：`MagicGolden/Program.cs` 的 `RunFireball` 已设（30/20）⇒ 等级门可通过；
 - `StickMode`：需要一支**负例**（StickMode=true ⇒ 零抽、零帧）；
 - `IsProperTarget`：装置里玩家无组队 ⇒ 恒 proper（`cast_firewind_spell` 用
   `combat::is_proper_target_grouped`，同源）。
