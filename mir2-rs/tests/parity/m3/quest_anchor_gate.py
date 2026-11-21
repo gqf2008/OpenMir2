@@ -205,11 +205,11 @@ REGISTERED = [
         (84, 'StringBuilder strSql = new StringBuilder();'),
         (86, 'GamePoint = @GamePoint, HomeMap = @HomeMap'),
     ]),
-    ('PlayDataStorage.Query.cs:192', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs', [
-        (192, 'private CharacterData GetChrRecord(int playerId, StorageContext context)'),
+    ('PlayDataStorage.Query.cs:196', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs', [
+        (196, 'private CharacterData GetChrRecord(int playerId, StorageContext context)'),
     ]),
-    ('PlayDataStorage.Query.cs:194', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs', [
-        (194, 'SELECT * FROM characters WHERE ID=@ID'),
+    ('PlayDataStorage.Query.cs:198', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs', [
+        (198, 'SELECT * FROM characters WHERE ID=@ID'),
     ]),
     ('PlayDataStorage.Save.cs:493', 'src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs', [
         (493, 'private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)'),
@@ -459,12 +459,12 @@ def cmd_mutation(args):
     ok = ok and red1
 
     # MUT2：把补全的真名改回不存在的基名 Query.cs ⇒ 覆盖面（未登记 Query.cs:192）⇒ RED。
-    mut2 = real.replace("PlayDataStorage.Query.cs:192", "Query.cs:192")
+    mut2 = real.replace("PlayDataStorage.Query.cs:196", "Query.cs:196")
     if mut2 == real:
         sys.stdout.write("BUG: 变异 MUT2 找不到 PlayDataStorage.Query.cs:192\n")
         ok = False
     f2 = _evaluate(scenario_text=mut2)
-    red2 = any("未登记 Query.cs:192" in f for f in f2)
+    red2 = any("未登记 Query.cs:196" in f for f in f2)
     sys.stdout.write("MUT2 基名漂移(PlayDataStorage.Query.cs→Query.cs): %s（%d 项）\n"
                      % ("RED" if f2 else "GREEN", len(f2)))
     ok = ok and red2
