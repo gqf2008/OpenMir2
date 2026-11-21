@@ -499,7 +499,7 @@ impl CmdRig {
         let guilds = startup(Some(&store), &sections, cfg.guild_rank_name_len, 0, 0);
         let mut world = World::with_maps(vec![(20, 20)]);
         let mut displays = game_svr::downlink::DisplayTable::new();
-        let mut online: crate::OnlineRegistry = Vec::new();
+        let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
         let mut sessions = HashMap::new();
         for (i, name) in players.iter().enumerate() {
             let (x, y, dir) = if i == 0 { (5, 5, 2) } else { (6, 5, 6) };
@@ -803,7 +803,7 @@ const W4_NAMES: [&str; 5] = ["gm", "a", "b", "bb", "c"];
 
 fn w4_world() -> (World, crate::OnlineRegistry, HashMap<String, i32>) {
     let mut world = World::with_maps(vec![(40, 40)]);
-    let mut online: crate::OnlineRegistry = Vec::new();
+    let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
     let mut ids = HashMap::new();
     for (i, name) in W4_NAMES.iter().enumerate() {
         let id = world.add_entity(mir2_world_bevy::EntitySpawn::new(
@@ -1224,7 +1224,7 @@ fn g3_w4_6c_member_of_guild_first_hit_and_order() {
     m.find_guild_mut("G").unwrap().add_member("b", &c, 0);
     assert_eq!(m.member_of_guild("a"), Some("H"));
     let mut world = World::with_maps(vec![(40, 40)]);
-    let mut online: crate::OnlineRegistry = Vec::new();
+    let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
     let mut ids = HashMap::new();
     for (i, name) in ["gm", "a", "hb", "b"].iter().enumerate() {
         let id = world.add_entity(mir2_world_bevy::EntitySpawn::new(
@@ -1607,7 +1607,7 @@ fn g3_w4_12_gm_del_guild_then_member_disconnect_is_noop() {
     assert!(m.find_guild("G").is_none());
     let mut world = World::with_maps(vec![(40, 40)]);
     let id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hb".to_string(), 5, 5));
-    let mut online: crate::OnlineRegistry = Vec::new();
+    let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
     crate::online_set(
         &mut online,
         crate::OnlineEntry {
@@ -1665,7 +1665,7 @@ fn g3_w4_12_gm_del_guild_then_member_disconnect_is_noop() {
 fn g3_w4_13_closed_event_is_current_four_cases() {
     let mut world = World::with_maps(vec![(20, 20)]);
     let id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "a".to_string(), 5, 5));
-    let mut online: crate::OnlineRegistry = Vec::new();
+    let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
     crate::online_set(
         &mut online,
         crate::OnlineEntry {
@@ -1687,7 +1687,7 @@ fn g3_w4_13_closed_event_is_current_four_cases() {
 fn g3_w4_14_prepare_closed_guild_stale_does_not_dirty_new_session() {
     let mut world = World::with_maps(vec![(20, 20)]);
     let id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "a".to_string(), 5, 5));
-    let mut online: crate::OnlineRegistry = Vec::new();
+    let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
     crate::online_set(
         &mut online,
         crate::OnlineEntry {

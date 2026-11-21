@@ -890,7 +890,7 @@ mod tests {
             let member = add_player(&mut world, MEMBER, 6, 5, 6);
             let bystander = add_player(&mut world, BYSTANDER, 5, 6, 0);
             let mut displays = DisplayTable::new();
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             for (i, (name, id, socket)) in [
                 (GM, gm, GM_SOCKET),
                 (MEMBER, member, MEMBER_SOCKET),

@@ -439,7 +439,7 @@ mod tests {
             };
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {

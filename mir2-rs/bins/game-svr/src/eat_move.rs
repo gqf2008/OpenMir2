@@ -462,7 +462,7 @@ mod tests {
             actor_id,
             crate::downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"hero".to_vec()),
         );
-        let mut online: crate::OnlineRegistry = Vec::new();
+        let mut online: crate::OnlineRegistry = crate::OnlineRegistry::new();
         crate::online_set(
             &mut online,
             crate::OnlineEntry {
@@ -658,7 +658,7 @@ mod tests {
                 red_home_y: ctx["red_home"]["y"].as_i64().unwrap() as i16,
             };
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -1067,7 +1067,7 @@ mod tests {
                 red_home_y: ctx["red_home"]["y"].as_i64().unwrap() as i16,
             };
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -1375,7 +1375,7 @@ mod tests {
                     y: 6,
                 }),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {

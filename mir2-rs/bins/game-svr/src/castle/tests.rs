@@ -801,8 +801,10 @@ fn t127_broadcast_fans_out_to_every_nonghost_player_in_heap_order() {
         tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
     > = std::collections::HashMap::new();
     gates.insert(0, tx0);
-    let online: crate::OnlineRegistry =
-        vec![online_entry("甲", 5, a_id), online_entry("乙", 6, b_id)];
+    let online: crate::OnlineRegistry = crate::OnlineRegistry::from(vec![
+        online_entry("甲", 5, a_id),
+        online_entry("乙", 6, b_id),
+    ]);
 
     let texts = vec![
         "[沙巴克 攻城战已经开始]".to_string(),
@@ -882,7 +884,7 @@ fn t127_ref_show_name_targets_only_palace_area_players() {
     > = std::collections::HashMap::new();
     gates.insert(0, tx0);
     gates.insert(1, tx1);
-    let online: crate::OnlineRegistry = vec![
+    let online: crate::OnlineRegistry = crate::OnlineRegistry::from(vec![
         online_entry("甲", 5, a_id),
         online_entry("乙", 6, b_id),
         crate::OnlineEntry {
@@ -893,7 +895,7 @@ fn t127_ref_show_name_targets_only_palace_area_players() {
             socket: 7,
             actor_id: c_id,
         },
-    ];
+    ]);
     let displays = downlink::DisplayTable::new();
     let sessions: std::collections::HashMap<String, crate::SessionGround> = [
         ("甲".to_string(), crate::tests::test_session_ground(a_id)),
@@ -983,8 +985,10 @@ fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
         tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
     > = std::collections::HashMap::new();
     gates.insert(0, tx0);
-    let online: crate::OnlineRegistry =
-        vec![online_entry("甲", 5, a_id), online_entry("乙", 6, b_id)];
+    let online: crate::OnlineRegistry = crate::OnlineRegistry::from(vec![
+        online_entry("甲", 5, a_id),
+        online_entry("乙", 6, b_id),
+    ]);
     let displays = downlink::DisplayTable::new();
     let mut war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
         std::collections::HashMap::new();
@@ -1111,7 +1115,8 @@ fn t127_door_close_structure_event_drains_to_sm_digdown() {
         tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
     > = std::collections::HashMap::new();
     gates.insert(0, tx0);
-    let online: crate::OnlineRegistry = vec![online_entry("甲", 5, a_id)];
+    let online: crate::OnlineRegistry =
+        crate::OnlineRegistry::from(vec![online_entry("甲", 5, a_id)]);
     let displays = downlink::DisplayTable::new();
     crate::drain_monster_ref_msgs(
         &mut world,
@@ -1205,7 +1210,8 @@ fn t127_cross_source_frames_follow_priority_order() {
         tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
     > = std::collections::HashMap::new();
     gates.insert(0, tx0);
-    let online: crate::OnlineRegistry = vec![online_entry("甲", 5, a_id)];
+    let online: crate::OnlineRegistry =
+        crate::OnlineRegistry::from(vec![online_entry("甲", 5, a_id)]);
     let displays = downlink::DisplayTable::new();
     let sessions: std::collections::HashMap<String, crate::SessionGround> =
         [("甲".to_string(), crate::tests::test_session_ground(a_id))]

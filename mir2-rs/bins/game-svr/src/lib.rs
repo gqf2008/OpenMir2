@@ -2384,7 +2384,7 @@ fn handle_say_with_saves(
     socket: i32,
     tail: Option<&str>,
 ) -> (GmSysMsgs, GmDirectFrames) {
-    let Some(speaker) = host.online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(speaker) = host.online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_SAY：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 不猜说话者，丢弃 tail={tail:?}"
@@ -2441,7 +2441,7 @@ fn handle_say_with_saves(
     for target_id in
         ref_msg_cache::targets(host.world, speaker.actor_id, chat::send_ref_msg_range())
     {
-        let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(t) = host.online.find_by_actor(target_id) else {
             continue;
         };
         let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "说话") else {
@@ -13726,7 +13726,7 @@ mod spell_frame_buf_tests {
     );
 
     fn rig() -> Rig {
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "甲".to_string(),
@@ -13743,7 +13743,7 @@ mod spell_frame_buf_tests {
                 socket: 912,
                 actor_id: 902,
             },
-        ];
+        ]);
         let (tx, rx) = mpsc::unbounded_channel();
         let mut gates = std::collections::HashMap::new();
         gates.insert(0u8, tx);
@@ -18013,7 +18013,7 @@ fn send_ref_msg_to_targets(
         if !include_self && target_id == actor_id {
             continue;
         }
-        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(t) = online.find_by_actor(target_id) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "移动/转身下行") else {
@@ -22184,11 +22184,11 @@ fn drain_b4_self_deliveries(
 /// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
 ///
 /// 进世界成功时登记，断线/被踢时移除；重复进世界的"踢旧"与账号级顶号靠它找回旧连接。
-/// 用 `Vec` 而不是 `HashMap`：顺序确定（本项目不让 `HashMap` 迭代序参与逻辑）。
+/// 顺序源仍是 `Vec`（`OnlineRegistry::entries`）；旁挂的两个 `HashMap` 只服务
+/// `find_by_actor`/`find_by_chr`，**本项目不让 `HashMap` 迭代序参与逻辑**。
 ///
 /// `account`/`session_id` 用于账号级顶号（`TCPNetChannel.KickUser` 按 `Account` 或 `SessionID` 匹配）；
 /// `actor_id` 是进世界时拿到的实体 id（= oracle `PlayObject.ActorId`），`SM_SYSMESSAGE` 的 `Recog` 要用它。
-type OnlineRegistry = Vec<OnlineEntry>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OnlineEntry {
@@ -22200,17 +22200,158 @@ struct OnlineEntry {
     actor_id: i32,
 }
 
-fn online_set(online: &mut OnlineRegistry, e: OnlineEntry) {
-    if let Some(x) = online.iter_mut().find(|x| x.chr_name == e.chr_name) {
-        *x = e;
-        return;
+/// 在线表本体：`entries`（`Vec`）是**唯一**顺序源与内容源，两个 `HashMap` 只是旁挂的保序索引
+/// （容量线 L1/L2）。遍历/切片/下标全部经 `Deref<Target = [OnlineEntry]>` 原样可用；索引只服务
+/// `find_by_actor`/`find_by_chr`，**从不产生迭代序**（`HashMap` 键序不进任何逻辑；
+/// `online_find_for_kick` 的「每网关登记序首个」仍扫 Vec）。
+///
+/// **不变量**
+/// 1. `by_actor`/`by_chr` 的每个 `(key, pos)` 都满足 `entries[pos]` 的对应字段等于 key；同 key
+///    重复时取**最小下标**（与 `iter().find(..)` 的「首个命中」语义一致，见 [`Self::rebuild`]）。
+/// 2. 任何 `set`/`push`/`take`/`clear` 之后由 [`Self::rebuild`] **全量重建**。摘除一律
+///    `Vec::remove`（保序），**不用** `swap_remove`。重建 O(n) 只发生在登记/摘除/顶号，
+///    **不在热路径**；选全量重建而非「按位置修正」，是拿 O(n) 换掉一整类 off-by-one 错误。
+/// 3. **绕过 `set` 直接经 `DerefMut` 改 `chr_name`/`actor_id` 会让索引陈旧** ⇒ 任何新增写点都
+///    必须走 `set`/`push`/`take`/`clear`，**不得经 `DerefMut` 原地改这两个字段**（本文件已无
+///    旁路：全仓 `entries` 的原地改字段只出现在本 `impl` 内）。`find_by_*` 是**权威查找、不做
+///    线性兜底**（热路径不允许因未命中退化为 O(n)）；这个「可以不兜底」由三件保证撑住：
+///    ①**写点收敛**（写入只在方法内）、②`debug_assert_eq!` 字段校验（debug 每次查找都验，
+///    release 零成本）、③**模型对账测试**（随机 set/take 每步逐项对账）。任何新增写点绕过
+///    方法都会让三者同时失效 ⇒ 新写点必须先过本注释。
+#[derive(Debug, Clone, Default)]
+struct OnlineRegistry {
+    entries: Vec<OnlineEntry>,
+    by_actor: std::collections::HashMap<i64, usize>,
+    by_chr: std::collections::HashMap<String, usize>,
+}
+
+impl OnlineRegistry {
+    fn new() -> Self {
+        Self::default()
     }
-    online.push(e);
+
+    /// 全量重建（`set`/`push`/`take`/`clear` 之后唯一的同步手段）。
+    fn rebuild(&mut self) {
+        self.by_actor.clear();
+        self.by_chr.clear();
+        for (pos, e) in self.entries.iter().enumerate() {
+            // **首个命中优先**：与 `entries.iter().find(..)` 的语义逐项一致（重复 key 时后者
+            // 永远只看得到最小下标那条）。
+            self.by_actor.entry(i64::from(e.actor_id)).or_insert(pos);
+            self.by_chr.entry(e.chr_name.clone()).or_insert(pos);
+        }
+    }
+
+    /// 与旧 `online_set` 逐字同义：同名替换，否则追加；随后全量重建。
+    fn set(&mut self, e: OnlineEntry) {
+        if let Some(x) = self.entries.iter_mut().find(|x| x.chr_name == e.chr_name) {
+            *x = e;
+        } else {
+            self.entries.push(e);
+        }
+        self.rebuild();
+    }
+
+    /// 直接追加（只给夹具/一次性构造用；同名去重仍应走 [`Self::set`]）。
+    #[cfg(test)]
+    fn push(&mut self, e: OnlineEntry) {
+        self.entries.push(e);
+        self.rebuild();
+    }
+
+    /// 与旧 `online_take` 逐字同义：按名取位置 ⇒ `Vec::remove`（保序）⇒ 全量重建。
+    /// 位置优先走 `by_chr`（O(1)）；未命中即「取不到」，与线性 `position` 一致。
+    fn take(&mut self, chr: &str) -> Option<OnlineEntry> {
+        let pos = *self.by_chr.get(chr)?;
+        let entry = self.entries.remove(pos);
+        // **删掉本行 = 模型对账测试必红**（by_actor/by_chr 停留在摘除前的下标）。
+        self.rebuild();
+        Some(entry)
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.rebuild();
+    }
+
+    /// 按 `actor_id` 取条目；下标失效或字段不符 ⇒ `None`。
+    ///
+    /// `debug_assert` 把"索引与条目一致"从「我核过没有旁路」变成**每次 debug 运行都检查**的
+    /// 不变量（release 无成本）；运行时仍保留 `filter`，陈旧索引最多返回 `None`，不会返回错条目。
+    fn find_by_actor(&self, actor_id: i32) -> Option<&OnlineEntry> {
+        let pos = *self.by_actor.get(&i64::from(actor_id))?;
+        let e = self.entries.get(pos)?;
+        debug_assert_eq!(
+            e.actor_id, actor_id,
+            "by_actor[{actor_id}] 指向 entries[{pos}]，但该条目 actor_id={}（索引陈旧/有旁路写点）",
+            e.actor_id
+        );
+        (e.actor_id == actor_id).then_some(e)
+    }
+
+    /// 按 `chr_name` 取条目；字段校验与 `debug_assert` 同 [`Self::find_by_actor`]。
+    fn find_by_chr(&self, chr: &str) -> Option<&OnlineEntry> {
+        let pos = *self.by_chr.get(chr)?;
+        let e = self.entries.get(pos)?;
+        debug_assert_eq!(
+            e.chr_name, chr,
+            "by_chr[{chr:?}] 指向 entries[{pos}]，但该条目 chr_name={:?}（索引陈旧/有旁路写点）",
+            e.chr_name
+        );
+        (e.chr_name == chr).then_some(e)
+    }
+}
+
+impl std::ops::Deref for OnlineRegistry {
+    type Target = [OnlineEntry];
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for OnlineRegistry {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+impl From<Vec<OnlineEntry>> for OnlineRegistry {
+    fn from(entries: Vec<OnlineEntry>) -> Self {
+        let mut s = Self {
+            entries,
+            ..Self::default()
+        };
+        s.rebuild();
+        s
+    }
+}
+
+impl IntoIterator for OnlineRegistry {
+    type Item = OnlineEntry;
+    type IntoIter = std::vec::IntoIter<OnlineEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a OnlineRegistry {
+    type Item = &'a OnlineEntry;
+    type IntoIter = std::slice::Iter<'a, OnlineEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+fn online_set(online: &mut OnlineRegistry, e: OnlineEntry) {
+    online.set(e);
 }
 
 fn online_take(online: &mut OnlineRegistry, chr: &str) -> Option<OnlineEntry> {
-    let pos = online.iter().position(|e| e.chr_name == chr)?;
-    Some(online.remove(pos))
+    online.take(chr)
 }
 
 /// 账号级顶号的目标查找（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:246-274`）：
@@ -29372,7 +29513,7 @@ fn sim_loop(
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
     // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
-    let mut online: OnlineRegistry = Vec::new();
+    let mut online: OnlineRegistry = OnlineRegistry::new();
     let mut kick_pending: Vec<String> = Vec::new();
     // 账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：提示帧已即时发出，离开世界/清槽隔一 tick 落地。
     let mut soft_close_pending: Vec<String> = Vec::new();
@@ -35025,7 +35166,7 @@ mod tests {
     /// `+UFIR`/`+UTWN` ⇒ `SendRaw` 短包（网关侧 `'#'+正文+'!'`）。
     #[test]
     fn run_state_expiry_frames_and_socket_payloads() {
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -35258,7 +35399,7 @@ mod tests {
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -35355,7 +35496,7 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -35477,7 +35618,7 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -35755,7 +35896,7 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -35852,14 +35993,14 @@ mod tests {
         mon.show_hp = true;
         let mon_id = world.add_entity(mon);
 
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "ua".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: obs,
-        }];
+        }]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -35947,14 +36088,14 @@ mod tests {
         mon.show_hp = true;
         let mon_id = world.add_entity(mon);
 
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "ua".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: obs,
-        }];
+        }]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -36019,14 +36160,14 @@ mod tests {
         mon.show_hp = true;
         let mon_id = world.add_entity(mon);
 
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "ua".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: obs,
-        }];
+        }]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -36118,7 +36259,7 @@ mod tests {
         sg.stamina.replay_cursor = now_ms() - 60;
         sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -36182,7 +36323,7 @@ mod tests {
         let (at12, s1) = mk("edge12", 22, 10, 0, 901); // dx=12 ⇒ 闭区间内，收
         let (at13, s2) = mk("out13", 23, 10, 0, 902); // dx=13 ⇒ 不收
         let (xmap, s3) = mk("xmap", 22, 10, 1, 903); // 跨图同距 ⇒ 不收
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (i, (id, socket)) in [(at12, s1), (at13, s2), (xmap, s3)].into_iter().enumerate() {
             online_set(
                 &mut online,
@@ -36233,7 +36374,7 @@ mod tests {
         let mut obs = mir2_world_bevy::EntitySpawn::new(0, "p".to_string(), 12, 10); // dx=2 ∈ ±12
         obs.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs_id = world.add_entity(obs);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "ua".into(),
                 chr_name: "hero".into(),
@@ -36250,7 +36391,7 @@ mod tests {
                 socket: 902,
                 actor_id: obs_id,
             },
-        ];
+        ]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -36377,7 +36518,7 @@ mod tests {
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
         let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -36529,7 +36670,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -36623,14 +36764,14 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: id,
-        }];
+        }]);
         let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
         pending.insert("p".to_string(), inputs);
 
@@ -36667,7 +36808,7 @@ mod tests {
     #[test]
     fn drain_login_tail_drops_pending_when_session_not_online() {
         let world = mir2_world_bevy::World::new(32, 32);
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let (_tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
@@ -37921,7 +38062,7 @@ mod tests {
         let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
 
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "L".into(),
@@ -37938,7 +38079,7 @@ mod tests {
                 socket: 6,
                 actor_id: t,
             },
-        ];
+        ]);
 
         let cfg = PartyConfig::default();
 
@@ -38130,14 +38271,14 @@ mod tests {
 
         let mut world = mir2_world_bevy::World::new(32, 32);
         let p = world.add_entity(mir2_world_bevy::EntitySpawn::new(3, "P", 12, 10));
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "c".into(),
             chr_name: "P".into(),
             session_id: 3,
             gate_idx: 0,
             socket: 7,
             actor_id: p,
-        }];
+        }]);
         let cfg = PartyConfig::default();
 
         handle_party_cmd(
@@ -38241,7 +38382,7 @@ mod tests {
         let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
         world.entities.get_mut(t).unwrap().group.allow_group = true;
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "L".into(),
@@ -38258,7 +38399,7 @@ mod tests {
                 socket: 6,
                 actor_id: t,
             },
-        ];
+        ]);
         let cfg = PartyConfig::default();
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
@@ -38388,7 +38529,7 @@ mod tests {
         let mut world = mir2_world_bevy::World::new(32, 32);
         let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "L".into(),
@@ -38405,7 +38546,7 @@ mod tests {
                 socket: 6,
                 actor_id: t,
             },
-        ];
+        ]);
         let cfg = PartyConfig::default();
         // 生产的 world 由 `sim_loop` 灌入同一份配置；此处照做。
         world.party_cfg = cfg.clone();
@@ -38849,7 +38990,7 @@ mod tests {
             downlink::ActorDisplay::new(4, 1, 222, 0, 0, 255, b"b".to_vec()),
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -39011,14 +39152,14 @@ mod tests {
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
     ) {
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "ua".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: player_id,
-        }];
+        }]);
         let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -39807,7 +39948,7 @@ mod tests {
             "Castle != null（`Merchant.cs:143` 第二合取项）"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("up", "p", 1, 0, 901, p));
         online_set(&mut online, entry("uq", "q", 1, 0, 902, q));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -40025,7 +40166,7 @@ mod tests {
         assert!(world.set_merchant_castle_index(a_id, Some(0)));
         assert!(world.set_merchant_castle_index(b_id, Some(0)));
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("up", "p", 1, 0, 901, p));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -40174,7 +40315,7 @@ mod tests {
         assert!(world.set_merchant_castle_index(a_id, Some(0)));
         assert!(world.set_merchant_castle_index(b_id, Some(0)));
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("up", "p", 1, 0, 901, p));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -40951,7 +41092,7 @@ mod tests {
         displays.set(mon_id, downlink::monster_display(2, &info));
         world.entities.get_mut(mon_id).unwrap().ai.dir = 5;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -41063,7 +41204,7 @@ mod tests {
             downlink::monster_display(0, &mir2_data::models::MonsterInfo::default()),
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -41166,7 +41307,7 @@ mod tests {
             .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
             .expect("b 进图");
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -41302,7 +41443,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("up", "p", 1, 0, 901, player));
         // 合成：非玩家 id 也在 online（只为让「误当玩家」发得出帧）。
         online_set(&mut online, entry("ug", "g", 2, 0, 902, guard));
@@ -41356,7 +41497,7 @@ mod tests {
         let guard = 9_001;
         let target = 2_002;
 
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -41433,7 +41574,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         // 合成：clone 也在 online（只为让「误当玩家」发得出帧）。
         online_set(&mut online, entry("uc", "c", 3, 0, 903, clone));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -41543,10 +41684,10 @@ mod tests {
         };
         assert!(g > 0);
 
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             entry("ua", "a", 1, 0, 901, a),
             entry("ub", "b", 2, 0, 902, b),
-        ];
+        ]);
 
         for tick in 0..12 {
             let rec = world.tick();
@@ -41605,7 +41746,7 @@ mod tests {
         // `b` 视野收窄到 1 ⇒ 看不见 2 格外的 `a`（制造单方向：只有 `a` 观察 `b`）。
         world.entities.transform_mut(b).unwrap().view_range = 1;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -41676,7 +41817,7 @@ mod tests {
             .expect("a 进图");
         // `hides` 里的离开者 id：消失帧只编码 id，无需真实体（b 已被移出世界）。
         let b = 4242;
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -42176,10 +42317,10 @@ mod tests {
             vec![(a, 0, 12, 10)],
             "805 坐标 = 共享 sight（B 的首见格），不是 A 的首见格 (10,10)"
         );
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             entry("ua", "a", 1, 0, 901, a),
             entry("ub", "b", 2, 0, 902, b),
-        ];
+        ]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -42336,7 +42477,7 @@ mod tests {
                 0,
             )
             .expect("旧会话在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
         let mut ground: HashMap<String, SessionGround> = HashMap::new();
         ground.insert("lb1a".to_string(), test_session_ground(actor));
@@ -42431,7 +42572,7 @@ mod tests {
                 0,
             )
             .expect("旧会话在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("acct2", "lb1b", 78, 0, 902, actor));
         let mut ground: HashMap<String, SessionGround> = HashMap::new();
         ground.insert("lb1b".to_string(), test_session_ground(actor));
@@ -42674,7 +42815,7 @@ mod tests {
             "前提：`a` 看得见 `b`"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -42734,7 +42875,7 @@ mod tests {
             "前提：`a` 看得见 `b`"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -42858,7 +42999,7 @@ mod tests {
             "前提：`c` 看不见 `b`（非观察者）"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
         online_set(&mut online, entry("uc", "c", 3, 0, 903, c));
@@ -43261,7 +43402,7 @@ mod tests {
             sg.soft_version_date = 120_020_522;
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -46027,7 +46168,7 @@ break
             attacker,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -46147,7 +46288,7 @@ break
             attacker,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -46262,7 +46403,7 @@ break
             attacker,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -46358,7 +46499,7 @@ break
             caster,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -46461,7 +46602,7 @@ break
             mover,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -47042,7 +47183,7 @@ break
                     derived: None,
                 },
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("ua", "hero", 1, 0, 901, actor));
             // 通道接收端不参与断言（帧面不是本卡写集）；丢弃 ⇒ `send` 的 `Err` 被既有 `let _ =` 吞掉。
             let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -48328,7 +48469,7 @@ break
             observer,
             downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -48635,7 +48776,7 @@ break
             observer,
             downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -49061,7 +49202,7 @@ break
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -49279,7 +49420,7 @@ break
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -49465,7 +49606,7 @@ break
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -49626,7 +49767,7 @@ break
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -49814,7 +49955,7 @@ break
             },
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -50012,7 +50153,7 @@ break
         world.open_session("lb1a");
         let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).expect("旧会话应先在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
 
         // 新连接（另一条网关线 1 / socket 902）重复进世界
@@ -50086,7 +50227,7 @@ break
         use std::collections::HashMap;
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let mut kick_pending = vec!["ghost".to_string()];
         drain_kicks(
             &mut world,
@@ -50140,7 +50281,7 @@ break
                 0,
             )
             .expect("旧会话在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
         let mut ground: HashMap<String, SessionGround> = HashMap::new();
         ground.insert("lb1a".to_string(), test_session_ground(actor));
@@ -50212,7 +50353,7 @@ break
                 0,
             )
             .expect("旧会话在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("acct2", "lb1b", 78, 0, 902, actor));
         let mut ground: HashMap<String, SessionGround> = HashMap::new();
         ground.insert("lb1b".to_string(), test_session_ground(actor));
@@ -50277,7 +50418,7 @@ break
         let mut sg = test_session_ground(victim);
         sg.gm.pending_kick = Some("victim".to_string());
         sessions.insert("victim".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "victim", 1, 0, 901, victim));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -50369,7 +50510,7 @@ break
             "命令体必须存实体规范名（存输入串 `ViCtIm` 会让宿主精确匹配落空）"
         );
         sessions.insert("gm".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "victim", 1, 0, 901, victim));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -50527,7 +50668,7 @@ break
             let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("a", "aaa", 1, 0, 901, actor));
             let mut sessions = std::collections::HashMap::new();
             sessions.insert("aaa".to_string(), test_session_ground(actor));
@@ -50842,7 +50983,7 @@ break
                 locks: game_svr::inbound::ActionLocks::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -51101,7 +51242,7 @@ break
             },
         ]);
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -51509,7 +51650,7 @@ break
         );
         let magic_table = magics::MagicTable::new(vec![]);
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (name, sock, id, sid) in [
             ("hero", 901i32, hero_id, 1),
             ("victim", 902, victim_id, 2),
@@ -51642,7 +51783,7 @@ break
         sessions.insert("hero".into(), hero_sg);
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -51714,7 +51855,7 @@ break
         sessions.insert("victim".into(), test_session_ground(victim_id));
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -52308,7 +52449,7 @@ break
         sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
         sessions.insert("gm".to_string(), sg);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "gm", 1, 0, 901, id));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -52369,7 +52510,7 @@ break
             desc,
         });
         sessions.insert("hero".into(), sg);
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
             std::collections::HashMap::new();
         let body =
@@ -53078,7 +53219,7 @@ break
         let mut victim = mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11);
         victim.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let victim_id = world.add_entity(victim);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
         online_set(&mut online, entry("v", "victim", 2, 0, 902, victim_id));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
@@ -53279,7 +53420,7 @@ break
             sg.state.wabil.weight = 0;
             sg.state.wabil.max_weight = 10_000;
             sessions.insert("hero".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
             let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates = std::collections::HashMap::new();
@@ -54041,7 +54182,7 @@ break
 
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero_id));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -54141,7 +54282,7 @@ break
         let hero_id = world.add_entity(hero);
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero_id));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -54196,7 +54337,7 @@ break
         let hero_id = world.add_entity(hero);
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero_id));
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
             std::collections::HashMap::new();
         let mut saves: std::collections::HashMap<String, SavedHuman> =
@@ -54263,7 +54404,7 @@ break
         world.entities.get_mut(dead).unwrap().life_cycle.death = true;
         world.entities.get_mut(ghost).unwrap().life_cycle.ghost = true;
         let mut sessions = std::collections::HashMap::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let mut saves: std::collections::HashMap<String, SavedHuman> =
             std::collections::HashMap::new();
         for (i, (name, actor)) in [
@@ -54522,7 +54663,7 @@ break
         sg.guild.guild_name = Some("测试会".into());
         sg.guild.rank_no = 2;
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -54597,7 +54738,7 @@ break
         let mut sg = test_session_ground(hero_id);
         sg.gm.permission = 10; // GM 权限门
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -54695,7 +54836,7 @@ break
         let (world, actor) = w_session_world("hero");
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(actor));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
         let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -54754,7 +54895,7 @@ break
         let (world, actor) = w_session_world("hero");
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(actor));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -55112,13 +55253,215 @@ break
     /// 在线登记在**进世界成功**时落坐标，断线/踢旧时被 `online_take` 拿走（名字精确匹配）。
     #[test]
     fn online_registry_set_and_take() {
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "lb1a", 1, 0, 901, 5));
         online_set(&mut online, entry("a", "lb1a", 1, 2, 903, 5)); // 同名刷新（重进世界）只有一条
         assert_eq!(online.len(), 1);
         assert_eq!(online_take(&mut online, "lb1a").unwrap().socket, 903);
         assert!(online_take(&mut online, "lb1a").is_none());
         assert!(online.is_empty());
+    }
+
+    /// **登记序**：`OnlineRegistry` 是 `Vec`，广播/可见集/顶号都依赖**插入序**。
+    /// 保序索引（`Vec` + `HashMap<_, usize>`）改造后，本断言必须仍然绿。
+    ///
+    /// 红检（结构改错）：把迭代改成走 `HashMap` 键序 ⇒ 本用例必红。
+    #[test]
+    fn online_registry_preserves_registration_order() {
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        // actor_id 故意**非单调**：若实现偷偷按 id 排序或走哈希序，序列会变。
+        online_set(&mut online, entry("a", "ca", 1, 0, 901, 30));
+        online_set(&mut online, entry("b", "cb", 2, 0, 902, 10));
+        online_set(&mut online, entry("c", "cc", 3, 1, 903, 20));
+        let order: Vec<i32> = online.iter().map(|e| e.actor_id).collect();
+        assert_eq!(
+            order,
+            vec![30, 10, 20],
+            "登记序必须等于插入序（保序索引不得改变遍历序）"
+        );
+    }
+
+    /// **摘除保序**：`online_take` 必须用 `Vec::remove`（搬移其余元素），**不能** `swap_remove`。
+    ///
+    /// **为什么必须 4 个元素**：3 个元素取中间时 `Vec::remove` 与 `swap_remove` 的结果**相同**
+    /// （`[30,10,20]` 取 10 都得 `[30,20]`）⇒ 用例会假绿；4 个元素才能区分
+    /// （期望 `[30,20,40]`，`swap_remove` 会给 `[30,40,20]`）。**不要把人简化回 3 个元素。**
+    ///
+    /// 红检：把 `online_take` 的 `Vec::remove` 换成 `swap_remove` ⇒ 本用例必红。
+    #[test]
+    fn online_take_keeps_order() {
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        online_set(&mut online, entry("a", "t30", 1, 0, 901, 30));
+        online_set(&mut online, entry("b", "t10", 2, 0, 902, 10));
+        online_set(&mut online, entry("c", "t20", 3, 0, 903, 20));
+        online_set(&mut online, entry("d", "t40", 4, 0, 904, 40));
+        let taken = online_take(&mut online, "t10").expect("中间那条必须取得到");
+        assert_eq!(taken.actor_id, 10);
+        let order: Vec<i32> = online.iter().map(|e| e.actor_id).collect();
+        assert_eq!(
+            order,
+            vec![30, 20, 40],
+            "摘除中间元素后其余必须保持原序（swap_remove 会得到 [30,40,20]）"
+        );
+    }
+
+    /// **顶号取最小下标**（O-3 裁决语义）：同一账号在某网关上的多条登记，`online_find_for_kick`
+    /// 必须返回该网关**登记序首个**（= 最小下标），且**按网关分桶**、桶内仍按登记序。
+    ///
+    /// 红检：改成"取最后一个"或"全局首个/无序"⇒ 本用例必红。
+    #[test]
+    fn online_kick_prefers_first_registered() {
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        // 同账号、同网关两条（不同 chr_name 才不会被子刷掉），后登记者 socket 更大。
+        online_set(&mut online, entry("k", "k1", 1, 0, 901, 1));
+        online_set(&mut online, entry("k", "k2", 2, 0, 902, 2));
+        let t = online_find_for_kick(&online, "k", 1);
+        assert_eq!(t.len(), 1, "同一网关只踢第一个");
+        assert_eq!(t[0].socket, 901, "必须是**先登记**的那条（最小下标）");
+        // 桶隔离：另一网关也要各返回自己的首个，且整体按登记序。
+        online_set(&mut online, entry("k", "k3", 3, 1, 903, 3));
+        let t2 = online_find_for_kick(&online, "k", 1);
+        let socks: Vec<i32> = t2.iter().map(|e| e.socket).collect();
+        assert_eq!(
+            socks,
+            vec![901, 903],
+            "每网关各一条、按登记序（gate0 先于 gate1）"
+        );
+    }
+
+    /// **OnlineRegistry 索引模型对账**：随机 `set`/`take` 序列 2000 步，**每一步之后**把
+    /// `by_actor`/`by_chr` 与 `entries` 逐项对账——这是「索引与 Vec 永远一致」这条不变量的
+    /// 可执行版本（不是注释）。
+    ///
+    /// 红检（索引同步缺失）：删掉 `OnlineRegistry::take` 里的 `self.rebuild();` ⇒
+    /// 第一次 `take` 之后两个 map 的长度/下标立即与 Vec 不符 ⇒ 本用例红。
+    #[test]
+    fn online_index_matches_vec_under_random_set_take() {
+        fn assert_same(online: &OnlineRegistry) {
+            assert_eq!(
+                online.by_chr.len(),
+                online.entries.len(),
+                "by_chr 与 entries 条数不等"
+            );
+            assert_eq!(
+                online.by_actor.len(),
+                online.entries.len(),
+                "by_actor 与 entries 条数不等"
+            );
+            for (pos, e) in online.entries.iter().enumerate() {
+                assert_eq!(
+                    online.by_chr.get(&e.chr_name),
+                    Some(&pos),
+                    "by_chr[{:?}] 下标不符",
+                    e.chr_name
+                );
+                assert_eq!(
+                    online.by_actor.get(&i64::from(e.actor_id)),
+                    Some(&pos),
+                    "by_actor[{}] 下标不符",
+                    e.actor_id
+                );
+            }
+        }
+        let mut online = OnlineRegistry::new();
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+        for step in 0..2000u32 {
+            // chr 与 actor_id 一一对应（1000+n），保证两个 map 的条数可逐项对账；chr 序故意
+            // 随机（非单调），换名/随机取都覆盖。
+            let n = next() % 40;
+            let chr = format!("ridx{n}");
+            if next() % 3 != 0 {
+                online.set(entry("acct", &chr, 1, 0, 900 + n as i32, 1000 + n as i32));
+            } else {
+                let expected = online
+                    .entries
+                    .iter()
+                    .position(|e| e.chr_name == chr)
+                    .map(|pos| online.entries[pos].clone());
+                let got = online.take(&chr);
+                assert_eq!(
+                    got, expected,
+                    "第 {step} 步 take({chr}) 返回值与线性 position 不等"
+                );
+            }
+            assert_same(&online);
+        }
+        // 收尾：索引查找必须与线性查找逐项一致（含未命中）。
+        for n in 0..40 {
+            let chr = format!("ridx{n}");
+            assert_eq!(
+                online.find_by_chr(&chr).map(|e| e.actor_id),
+                online
+                    .entries
+                    .iter()
+                    .find(|e| e.chr_name == chr)
+                    .map(|e| e.actor_id),
+                "find_by_chr({chr}) 与线性不等"
+            );
+            assert_eq!(
+                online.find_by_actor(1000 + n).map(|e| e.chr_name.clone()),
+                online
+                    .entries
+                    .iter()
+                    .find(|e| e.actor_id == 1000 + n)
+                    .map(|e| e.chr_name.clone()),
+                "find_by_actor({}) 与线性不等",
+                1000 + n
+            );
+        }
+    }
+
+    /// **同名 `set` 必须把 `by_chr` 指向被替换后的条目**（不是残留旧下标）。随机对账测试可能
+    /// 覆盖也可能没覆盖这条路径；本用例是**具名**的，失败信息直接可读。
+    #[test]
+    fn online_set_same_chr_repoints_index_to_replaced_entry() {
+        let mut online = OnlineRegistry::new();
+        online.set(entry("a", "same", 1, 0, 901, 10));
+        online.set(entry("a", "same", 1, 2, 902, 20)); // 同名刷新（重进世界）
+        assert_eq!(online.entries.len(), 1, "同名只保留一条");
+        assert_eq!(online.entries[0].socket, 902, "保留后写的那条");
+        assert_eq!(
+            online.by_chr.get("same"),
+            Some(&0),
+            "by_chr 必须指向被替换后的唯一条目"
+        );
+        assert_eq!(
+            online.find_by_chr("same").map(|e| e.actor_id),
+            Some(20),
+            "find_by_chr 必须命中新条目"
+        );
+        assert_eq!(
+            online.find_by_actor(20).map(|e| e.socket),
+            Some(902),
+            "新 actor_id 必须可查"
+        );
+        assert!(
+            online.find_by_actor(10).is_none(),
+            "旧 actor_id 不得残留可查（索引必须重指）"
+        );
+    }
+
+    /// **`take` 未命中是零副作用**：返回 `None`，`entries` 与两个索引（长度、下标、条目）全不变。
+    /// 专防"rebuild 后恰好一样"式的假正确：这里要求**未命中路径根本不触碰索引**。
+    #[test]
+    fn online_take_absent_key_is_noop_for_entries_and_indexes() {
+        let mut online = OnlineRegistry::new();
+        for (i, chr) in ["t1", "t2", "t3", "t4"].iter().enumerate() {
+            online.set(entry("acct", chr, 1, 0, 900 + i as i32, 100 + i as i32));
+        }
+        let entries_before = online.entries.clone();
+        let by_actor_before = online.by_actor.clone();
+        let by_chr_before = online.by_chr.clone();
+        assert_eq!(online.take("no-such-chr"), None, "未命中必须返回 None");
+        assert_eq!(online.entries, entries_before, "entries 不得被改动");
+        assert_eq!(online.by_actor, by_actor_before, "by_actor 不得被改动");
+        assert_eq!(online.by_chr, by_chr_before, "by_chr 不得被改动");
     }
 
     /// **`CM_SAY` 普通说话**：与 oracle `SendRefMsg`（`BaseObject.Message.cs:395-440`）同集合 ——
@@ -55150,7 +55493,7 @@ break
         let b = mk("bbb", 12, 12, 0); // dx=dy=12 ⇒ 边界内
         let c = mk("ccc", 11, 11, 1); // 另一张图 ⇒ 不收
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
         online_set(&mut online, entry("c", "ccc", 3, 2, 903, c));
@@ -55274,7 +55617,7 @@ SendRefMsgRange=15
         let d15 = mk("d15", 25, 10);
         let d16 = mk("d16", 26, 10);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("b", "d13", 2, 1, 902, d13));
         online_set(&mut online, entry("c", "d15", 3, 2, 903, d15));
@@ -55432,7 +55775,7 @@ SendRefMsgRange=15
             )
             .expect("目标进图");
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
 
@@ -55522,7 +55865,7 @@ SendRefMsgRange=15
         world.entities.get_mut(a).unwrap().group.group_members = vec![a, b];
         world.entities.get_mut(b).unwrap().group.group_owner = a;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
         online_set(&mut online, entry("c", "ccc", 3, 2, 903, outsider));
@@ -55607,7 +55950,7 @@ SendRefMsgRange=15
         let b = mk("bbb", 11, 10);
         let outsider = mk("ccc", 12, 10);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
         online_set(&mut online, entry("c", "ccc", 3, 2, 903, outsider));
@@ -55706,7 +56049,7 @@ SendRefMsgRange=15
         let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -55773,7 +56116,7 @@ SendRefMsgRange=15
         let other_map = mk("om", 100, 100, 1);
         world.clock_ms = 20_000;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
         online_set(&mut online, entry("i", "in", 2, 1, 902, inside));
         online_set(&mut online, entry("e", "edge", 3, 2, 903, edge));
@@ -55840,7 +56183,7 @@ SendRefMsgRange=15
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         world.clock_ms = 20_000;
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -55935,7 +56278,7 @@ SendRefMsgRange=15
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         world.clock_ms = 20_000;
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -56008,7 +56351,7 @@ SendRefMsgRange=15
         let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -56082,7 +56425,7 @@ SendRefMsgRange=15
         let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -56125,7 +56468,7 @@ SendRefMsgRange=15
         let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
         e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
 
         let colors = MsgColors {
@@ -56172,7 +56515,7 @@ SendRefMsgRange=15
         world.open_session("lb1a");
         let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).expect("旧会话应在世界里");
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("Acct1", "lb1a", 77, 0, 901, actor));
 
         let mut engine = load::FrontEngine::new();
@@ -56284,7 +56627,7 @@ SendRefMsgRange=15
         gm_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let gm = world.add_entity(gm_ent);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
         online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
         online_set(&mut online, entry("ug", "gm", 3, 0, 903, gm));
@@ -56370,7 +56713,7 @@ SendRefMsgRange=15
         gates.insert(1, tx1);
 
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (chr, gate, sock) in [("lb1a", 0_i32, 901_i32), ("lb1b", 1, 902)] {
             world.open_session(chr);
             let ent = mir2_world_bevy::EntitySpawn::new(0, chr.to_string(), 10, 20);
@@ -56485,7 +56828,7 @@ SendRefMsgRange=15
         world.open_session("lb1a");
         let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).unwrap();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "lb1a", 1, 0, 901, actor));
         let mut engine = load::FrontEngine::new();
 
@@ -56621,7 +56964,7 @@ SendRefMsgRange=15
             desc: [0; 14],
         }];
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -56765,7 +57108,7 @@ SendRefMsgRange=15
             })
             .collect();
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -56962,7 +57305,7 @@ SendRefMsgRange=15
             });
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -57135,7 +57478,7 @@ SendRefMsgRange=15
             desc: [0; 14],
         }];
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -57379,7 +57722,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -57517,7 +57860,7 @@ SendRefMsgRange=15
         }];
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -57670,7 +58013,7 @@ SendRefMsgRange=15
         sg.recovery.inc_health_spell_tick = 0;
         sessions.insert("hero".into(), sg);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -57744,7 +58087,7 @@ SendRefMsgRange=15
         sg.state.wabil.max_mp = 50;
         let mut sessions = HashMap::new();
         sessions.insert(chr.to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", chr, 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -57903,7 +58246,7 @@ SendRefMsgRange=15
         let near = world.add_entity(new_player_entity("near".to_string(), 15, 10));
         let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero));
         online_set(&mut online, entry("n", "near", 2, 0, 902, near));
         online_set(&mut online, entry("f", "far", 3, 0, 905, far));
@@ -58046,7 +58389,7 @@ SendRefMsgRange=15
         let near = world.add_entity(new_player_entity("near".to_string(), 15, 10));
         let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero));
         online_set(&mut online, entry("n", "near", 2, 0, 902, near));
         online_set(&mut online, entry("f", "far", 3, 0, 905, far));
@@ -58555,7 +58898,7 @@ SendRefMsgRange=15
                     derived: None,
                 },
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("acct", "hero", 77, 0, 901, actor_id));
             let mut kick_pending = vec!["hero".to_string()];
             let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -58784,7 +59127,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -58952,7 +59295,7 @@ SendRefMsgRange=15
         sg.stamina.replay_cursor = now_ms() - 60;
         sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -59048,7 +59391,7 @@ SendRefMsgRange=15
             e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -59150,7 +59493,7 @@ SendRefMsgRange=15
             mover,
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60046,7 +60389,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60125,7 +60468,7 @@ SendRefMsgRange=15
         let mut sg = test_session_ground(7);
         sg.state.item_list = list;
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60399,7 +60742,7 @@ SendRefMsgRange=15
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), sg);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60491,7 +60834,7 @@ SendRefMsgRange=15
         let mut sg = test_session_ground(id);
         sg.state.item_list = list;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60584,7 +60927,7 @@ SendRefMsgRange=15
             observer,
             downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60811,7 +61154,7 @@ SendRefMsgRange=15
             observer,
             downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -60920,7 +61263,7 @@ SendRefMsgRange=15
             observer,
             downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -61004,7 +61347,7 @@ SendRefMsgRange=15
             attacker,
             downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -61113,7 +61456,7 @@ SendRefMsgRange=15
             caster,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -61380,7 +61723,7 @@ SendRefMsgRange=15
             target,
             downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -61541,7 +61884,7 @@ SendRefMsgRange=15
                 target,
                 downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -62931,7 +63274,7 @@ SendRefMsgRange=15
             observer,
             downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -63253,7 +63596,7 @@ SendRefMsgRange=15
             caster,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -63430,7 +63773,7 @@ SendRefMsgRange=15
             observer,
             downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"obs".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -63653,7 +63996,7 @@ SendRefMsgRange=15
             victim,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -63809,7 +64152,7 @@ SendRefMsgRange=15
             victim,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -63939,7 +64282,7 @@ SendRefMsgRange=15
             victim,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64023,7 +64366,7 @@ SendRefMsgRange=15
             monster,
             downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, Vec::new()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64139,7 +64482,7 @@ SendRefMsgRange=15
             world.add_entity(e)
         };
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (i, (name, socket, actor)) in [("near", 901_i32, near), ("far", 902, far)]
             .into_iter()
             .enumerate()
@@ -64237,7 +64580,7 @@ SendRefMsgRange=15
             world.add_entity(e)
         };
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64308,7 +64651,7 @@ SendRefMsgRange=15
             killer,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"killer".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64415,7 +64758,7 @@ SendRefMsgRange=15
             e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64544,7 +64887,7 @@ SendRefMsgRange=15
             e.vitals.max_hp = 100;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64677,7 +65020,7 @@ SendRefMsgRange=15
             e.progression.max_exp = 1000;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -64929,7 +65272,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -65122,7 +65465,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -65273,7 +65616,7 @@ SendRefMsgRange=15
                 guild: guild_cmd::GuildSession::default(),
             },
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -65537,7 +65880,7 @@ SendRefMsgRange=15
             sg.state.gold = i32v(&case["gold_before"]);
             sg.state.wabil = ability(&case["wabil_before"]);
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -65775,7 +66118,7 @@ SendRefMsgRange=15
                 desc: [0u8; 14],
             }];
             sessions.insert("hero".into(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -65869,7 +66212,7 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "L".into(),
@@ -65886,7 +66229,7 @@ SendRefMsgRange=15
                 socket: 6,
                 actor_id: 2,
             },
-        ];
+        ]);
 
         let weapon = game_svr::bag::BagItem {
             make_index: 100,
@@ -66096,7 +66439,7 @@ SendRefMsgRange=15
         );
         let cfg = game_svr::selloff::SellOffConfig::default();
         let world = mir2_world_bevy::World::new(32, 32);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "L".into(),
@@ -66113,7 +66456,7 @@ SendRefMsgRange=15
                 socket: 6,
                 actor_id: 2,
             },
-        ];
+        ]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -66454,7 +66797,7 @@ SendRefMsgRange=15
         sg.state.wabil.weight = 0;
         sg.state.wabil.max_weight = 100;
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -66673,7 +67016,7 @@ SendRefMsgRange=15
         let catalog = game_svr::ability::StdItemCatalog::new();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -66982,7 +67325,7 @@ SendRefMsgRange=15
             },
         ];
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -67226,7 +67569,7 @@ SendRefMsgRange=15
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -67352,7 +67695,7 @@ SendRefMsgRange=15
         });
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -67516,7 +67859,7 @@ SendRefMsgRange=15
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -67606,7 +67949,7 @@ SendRefMsgRange=15
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
         sessions.insert("tgt".into(), test_session_ground(tgt));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -67658,7 +68001,7 @@ SendRefMsgRange=15
     /// 红检：本用例只钉「调用无副作用」；「不漏接」由 §4-2 派发对账门覆盖（登记在卡内）。
     #[test]
     fn query_user_set_is_noop() {
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, 5));
         // 不 panic、无返回值；直接调用即通过。
         handle_query_user_set_cmd("hero", 901, &online);
@@ -67684,7 +68027,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
 
         // ① ValType=0（串）：写 MNSval[3]=tail，且 GotoNpcLabel 被清。
@@ -67767,7 +68110,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
 
         // ① wParam=1 ⇒ 三标志全置真 + 离开世界。
@@ -67936,7 +68279,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -68020,7 +68363,7 @@ SendRefMsgRange=15
         sessions.insert("other".into(), test_session_ground(other));
         sessions.get_mut("hero").unwrap().switch_state.switch_data = true;
         sessions.get_mut("hero").unwrap().switch_state.rcd_saved = true;
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         online_set(&mut online, entry("ub", "other", 1, 0, 902, other));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -68230,7 +68573,7 @@ SendRefMsgRange=15
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
 
@@ -68410,7 +68753,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let displays = downlink::DisplayTable::new();
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -68521,7 +68864,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -68653,7 +68996,7 @@ SendRefMsgRange=15
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
         sessions.insert("tgt".into(), test_session_ground(tgt));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -68758,7 +69101,7 @@ SendRefMsgRange=15
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let displays = downlink::DisplayTable::new();
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -68821,7 +69164,7 @@ SendRefMsgRange=15
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
         let displays = downlink::DisplayTable::new();
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -68963,7 +69306,7 @@ SendRefMsgRange=15
                 downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
             );
         }
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (acct, nm, sid, sock, id) in [
             ("a", "hero", 1, 901, hero),
             ("b", "peer", 2, 902, peer),
@@ -69067,7 +69410,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -69161,14 +69504,14 @@ SendRefMsgRange=15
             .unwrap();
         assert_eq!(world.session("hero").unwrap().map_id, 0);
 
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "hero".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: hero,
-        }];
+        }]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -69298,14 +69641,14 @@ SendRefMsgRange=15
                     0,
                 )
                 .unwrap();
-            let online: OnlineRegistry = vec![OnlineEntry {
+            let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
                 account: "a".into(),
                 chr_name: "hero".into(),
                 session_id: 1,
                 gate_idx: 0,
                 socket: 901,
                 actor_id: actor,
-            }];
+            }]);
             let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
             gates.insert(0, tx0);
@@ -69550,7 +69893,7 @@ SendRefMsgRange=15
         use std::collections::HashMap;
         let mut world = mir2_world_bevy::World::new(32, 32);
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -69636,7 +69979,7 @@ SendRefMsgRange=15
         use std::collections::HashMap;
         let mut world = mir2_world_bevy::World::new(32, 32);
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -69735,7 +70078,7 @@ SendRefMsgRange=15
             desc: [0u8; 14],
         });
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -69835,7 +70178,7 @@ SendRefMsgRange=15
                 downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"n".to_vec()),
             );
         }
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (acct, nm, sid, sock, id) in [("a", "hero", 1, 901, hero), ("b", "obs", 2, 902, obs)] {
             online_set(
                 &mut online,
@@ -70118,7 +70461,7 @@ SendRefMsgRange=15
                 caster,
                 downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -79131,7 +79474,7 @@ SendRefMsgRange=15
             caster,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -79282,7 +79625,7 @@ SendRefMsgRange=15
             target,
             downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"target".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -79612,7 +79955,7 @@ SendRefMsgRange=15
             caster,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -79896,7 +80239,7 @@ SendRefMsgRange=15
             caster,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -80575,7 +80918,7 @@ SendRefMsgRange=15
         ];
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -80813,7 +81156,7 @@ SendRefMsgRange=15
         }];
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -83514,7 +83857,7 @@ SendRefMsgRange=15
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -84744,7 +85087,7 @@ SendRefMsgRange=15
                 far,
                 downlink::ActorDisplay::new(4, 0, 113, 0, 0, 255, b"far".to_vec()),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             for (i, (name, socket, actor)) in [
                 ("caster", 911, caster),
                 ("obs", 912, observer),
@@ -85831,7 +86174,7 @@ SendRefMsgRange=15
         }];
         sessions.insert("hero".into(), sg);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -87159,7 +87502,7 @@ SendRefMsgRange=15
                 far,
                 downlink::ActorDisplay::new(4, 0, 113, 0, 0, 255, b"far".to_vec()),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             for (i, (name, socket, actor)) in [
                 ("caster", 911, caster),
                 ("obs", 912, observer),
@@ -89125,7 +89468,7 @@ SendRefMsgRange=15
                 far,
                 downlink::ActorDisplay::new(4, 0, 113, 0, 0, 255, b"far".to_vec()),
             );
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             for (i, (name, socket, actor)) in [
                 ("caster", 911, caster),
                 ("obs", 912, observer),
@@ -90145,7 +90488,7 @@ SendRefMsgRange=15
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
     ) {
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -90562,14 +90905,14 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let mut displays = downlink::DisplayTable::new();
 
         let mut max_children = 0usize;
@@ -90642,14 +90985,14 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             mid,
@@ -90774,14 +91117,14 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let displays = downlink::DisplayTable::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
 
@@ -90837,7 +91180,7 @@ SendRefMsgRange=15
         p2.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid2 = world.add_entity(p2);
         world.tick();
-        let online2: OnlineRegistry = vec![
+        let online2: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "P".to_string(),
@@ -90854,7 +91197,7 @@ SendRefMsgRange=15
                 socket: 6,
                 actor_id: pid2,
             },
-        ];
+        ]);
         world
             .pending_monster_ref_msgs
             .push(hit(pid, vec![pid, pid2]));
@@ -90899,14 +91242,14 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "主人".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let displays = downlink::DisplayTable::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let mk = |ident: u16| mir2_world_bevy::MonsterRefMsg {
@@ -91000,7 +91343,7 @@ SendRefMsgRange=15
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "P".to_string(),
@@ -91017,7 +91360,7 @@ SendRefMsgRange=15
                 socket: 6,
                 actor_id: qid,
             },
-        ];
+        ]);
         broadcast_ref_msg(&world, &online, &gates, pid, &[vec![7u8; 12]]);
         let mut to_self = 0usize;
         let mut to_other = 0usize;
@@ -91057,7 +91400,7 @@ SendRefMsgRange=15
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "P".to_string(),
@@ -91074,7 +91417,7 @@ SendRefMsgRange=15
                 socket: 6,
                 actor_id: qid,
             },
-        ];
+        ]);
         broadcast_ref_msg_with_self(&world, &online, &gates, pid, &[vec![9u8; 12]]);
         let mut to_self = 0usize;
         let mut to_other = 0usize;
@@ -91111,14 +91454,14 @@ SendRefMsgRange=15
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let displays = downlink::DisplayTable::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
 
@@ -91173,14 +91516,14 @@ SendRefMsgRange=15
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         let displays = downlink::DisplayTable::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
 
@@ -91264,7 +91607,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "victim".to_string(),
@@ -91289,7 +91632,7 @@ SendRefMsgRange=15
                 socket: 7,
                 actor_id: _fid,
             },
-        ];
+        ]);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             vid,
@@ -91433,7 +91776,7 @@ SendRefMsgRange=15
         let pid = world.add_entity(p);
 
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -91629,7 +91972,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "目标".to_string(),
@@ -91654,7 +91997,7 @@ SendRefMsgRange=15
                 socket: 7,
                 actor_id: fid,
             },
-        ];
+        ]);
         let displays = downlink::DisplayTable::new();
         drain_monster_ref_msgs(
             &mut world,
@@ -91824,7 +92167,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "目标".to_string(),
@@ -91857,7 +92200,7 @@ SendRefMsgRange=15
                 socket: 7,
                 actor_id: fid,
             },
-        ];
+        ]);
         let displays = downlink::DisplayTable::new();
         drain_monster_ref_msgs(
             &mut world,
@@ -91947,7 +92290,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "甲".to_string(),
@@ -91972,7 +92315,7 @@ SendRefMsgRange=15
                 socket: 7,
                 actor_id: fid,
             },
-        ];
+        ]);
         let displays = downlink::DisplayTable::new();
         drain_monster_ref_msgs(
             &mut world,
@@ -92039,7 +92382,7 @@ SendRefMsgRange=15
         let mid = world.add_entity(m);
 
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -92395,7 +92738,7 @@ SendRefMsgRange=15
         );
 
         // `CM_TURN`：实体与展示表同时落新值（展示表是投影）。
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -92480,7 +92823,7 @@ SendRefMsgRange=15
         });
         let mut ground_sessions = std::collections::HashMap::new();
         ground_sessions.insert("dead".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -92568,7 +92911,7 @@ SendRefMsgRange=15
         );
         assert_eq!(world.entities.get(dead).unwrap().use_items[0].index, 0);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -92645,7 +92988,7 @@ SendRefMsgRange=15
             });
         world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -92733,7 +93076,7 @@ SendRefMsgRange=15
         }
         let mut sessions = HashMap::new();
         sessions.insert("p21a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p21a", 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -92938,7 +93281,7 @@ SendRefMsgRange=15
         sg.stamina.auto_recovery_tick = base;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("clamp".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -93172,7 +93515,7 @@ SendRefMsgRange=15
         sg.show_hp = true;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("clamp".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("uc", "clamp", 1, 0, 918, actor));
         for (name, id, sock) in &observers {
             online_set(&mut online, entry("uo", name, 2, 0, *sock, *id));
@@ -93486,7 +93829,7 @@ SendRefMsgRange=15
         sg.inc_hp_tick = 0;
         let mut sessions = HashMap::new();
         sessions.insert("p25a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p25a", 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -93719,7 +94062,7 @@ SendRefMsgRange=15
         sg.recovery.per_spell = 5;
         let mut sessions = HashMap::new();
         sessions.insert("p26a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p26a", 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -93973,7 +94316,7 @@ SendRefMsgRange=15
         let actor = world.enter_map("p27a", ent, 0).unwrap();
         let mut sessions = HashMap::new();
         sessions.insert("p27a".to_string(), test_session_ground(actor));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p27a", 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -94140,7 +94483,7 @@ SendRefMsgRange=15
         });
         let mut sessions = HashMap::new();
         sessions.insert("p32a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p32a", 1, 0, 901, actor));
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = HashMap::new();
@@ -94684,7 +95027,7 @@ SendRefMsgRange=15
         sg.auto_get_exp_envir = Some("A".to_string());
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p31a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p31a", 1, 0, 901, actor));
         let mut rec = mir2_world_bevy::TickRecord::default();
         drain_player_auto_get_exp(
@@ -94700,7 +95043,7 @@ SendRefMsgRange=15
         assert_eq!(sessions["p31a"].auto_get_exp_envir_map_id, Some(0));
         assert_eq!(world.entities.get(actor).unwrap().exp, 10);
         // 离线 ⇒ 整段跳过（tick 不刷新、无经验）。
-        let offline: OnlineRegistry = Vec::new();
+        let offline: OnlineRegistry = OnlineRegistry::new();
         drain_player_auto_get_exp(
             &mut world,
             &mut sessions,
@@ -94750,7 +95093,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"p31hero".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p31hero", 1, 0, 904, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -94814,7 +95157,7 @@ SendRefMsgRange=15
             e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "t290", 1, 0, 901, hero));
         for (i, (dx, socket)) in [(-5, 903), (5, 902), (13, 905)].into_iter().enumerate() {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
@@ -94947,7 +95290,7 @@ SendRefMsgRange=15
             e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p31lv", 1, 0, 905, hero));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95045,7 +95388,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "hero", 1, 0, 906, hero));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95089,7 +95432,7 @@ SendRefMsgRange=15
         };
         world.tick();
         let displays = downlink::DisplayTable::new();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p31die", 1, 0, 907, hero));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95148,7 +95491,7 @@ SendRefMsgRange=15
             sg.auto_get_exp_in_safe_zone = true;
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("p31safe".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("a", "p31safe", 1, 0, 910, actor));
             let mut rec = mir2_world_bevy::TickRecord::default();
             drain_player_auto_get_exp(
@@ -95220,7 +95563,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "hero", 1, 0, 911, hero));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95286,7 +95629,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "hero", 1, 0, 912, hero));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95353,7 +95696,7 @@ SendRefMsgRange=15
             hero,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
         );
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "hero", 1, 0, 913, hero));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95692,7 +96035,7 @@ mod tests {",
         sg.p22.inc_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22a".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22a", 1, 0, 910, actor));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95769,7 +96112,7 @@ mod tests {",
         sg.p22.inc_game_gold_tick = 5;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22h".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22h", 1, 0, 911, actor));
         online_set(&mut online, entry("b", "obs1", 1, 1, 912, obs1));
         online_set(&mut online, entry("c", "obs2", 1, 2, 913, obs2));
@@ -95873,7 +96216,7 @@ mod tests {",
         sg.p22.dec_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22n".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22n", 1, 0, 914, actor));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -95928,7 +96271,7 @@ mod tests {",
         sg.p22.inc_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22s".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22s", 1, 0, 915, actor));
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -96311,7 +96654,7 @@ mod tests {",
         sg.p22.inc_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22o".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22o", 1, 0, 916, actor));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -96371,7 +96714,7 @@ mod tests {",
         sg.p22.dec_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22f".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22f", 1, 0, 917, actor));
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -96449,7 +96792,7 @@ mod tests {",
         sg.p22.dec_game_gold_tick = 0;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p22b".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("a", "p22b", 1, 0, 918, actor));
         online_set(&mut online, entry("b", "obs_old", 1, 1, 919, obs_old));
         online_set(&mut online, entry("c", "obs_new", 1, 2, 920, obs_new));
@@ -96612,7 +96955,7 @@ mod tests {",
         ];
         sg.use_items[1] = Some(weapon.clone());
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -97064,7 +97407,7 @@ mod tests {",
             let mut f = Self {
                 world,
                 npc_id: 0,
-                online: Vec::new(),
+                online: OnlineRegistry::new(),
                 sessions: HashMap::new(),
                 shop_sessions: HashMap::new(),
                 displays: downlink::DisplayTable::new(),
@@ -97521,14 +97864,14 @@ GMEXECUTE f
         gates.insert(0, tx0);
         let mut world = mir2_world_bevy::World::new(32, 32);
         let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "Hero", 10, 10));
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "Hero".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: l,
-        }];
+        }]);
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
             "Hero".into(),
@@ -97658,14 +98001,14 @@ GMEXECUTE f
 
         let mut world = mir2_world_bevy::World::new(32, 32);
         let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "L".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: l,
-        }];
+        }]);
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
             "L".into(),
@@ -98005,14 +98348,14 @@ GMEXECUTE f
         let mut world = mir2_world_bevy::World::new(32, 32);
         let actor = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let sg = production_session_ground(login_account, actor);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: login_account.into(),
             chr_name: "L".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: actor,
-        }];
+        }]);
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
             "L".into(),
@@ -99156,7 +99499,7 @@ GMEXECUTE f
             sg.soft_version_date = 120_020_522;
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -99947,7 +100290,7 @@ GMEXECUTE f
             sg.soft_version_date = 120_020_522;
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -100226,7 +100569,7 @@ GMEXECUTE f
         // `Merchant : NormNpc`：`RaceImg=50`（`Merchant.cs:84`）、`Light=2`、`Dir=4`、`Appr=0`。
         displays.set(npc_id, downlink::npc_display(4, 50, 0, &case.npc.chr_name));
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let mut actor_ids = Vec::new();
         for (i, o) in case.observers.iter().enumerate() {
             let map_id = match o.map.as_str() {
@@ -100358,7 +100701,7 @@ GMEXECUTE f
             })
             .expect("NPC 入世界");
         assert!(world.attach_npc_to_map(npc_id));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let mut add = |id: i32, x: i32, y: i32, socket: i32, world: &mut mir2_world_bevy::World| {
             let mut e = mir2_world_bevy::EntitySpawn::new(id, format!("p{id}"), x, y);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
@@ -100442,7 +100785,7 @@ GMEXECUTE f
         sg.show_hp = show_hp;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -100600,7 +100943,7 @@ GMEXECUTE f
         src.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         src.hit_speed = 7;
         let actor = world.add_entity(src);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -100747,7 +101090,7 @@ GMEXECUTE f
         ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let actor = world.enter_map("hero", ent, 0).expect("进图");
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -101430,7 +101773,7 @@ GMEXECUTE f
             assert!(elder_in_table, "展示表已登记老人");
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".to_string(), test_session_ground(hero));
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -102016,14 +102359,14 @@ GMEXECUTE f
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
         world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "p".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: id,
-        }];
+        }]);
         let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -102225,7 +102568,7 @@ GMEXECUTE f
             near,
             downlink::ActorDisplay::new(0, 0, 0x5566_7788, 0, 0, 255, b"n".to_vec()),
         );
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "n".into(),
@@ -102247,7 +102590,7 @@ GMEXECUTE f
                     .and_then(|s| s.actor_id)
                     .expect("far actor"),
             },
-        ];
+        ]);
         let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -102429,7 +102772,7 @@ GMEXECUTE f
     /// 首次调用没有上一 tick 快照 ⇒ `walkers` 必空（静态夹具里没有走位），候选集与走位无关。
     fn walk_candidates(world: &mir2_world_bevy::World) -> Vec<WalkFanoutCandidate> {
         let displays = downlink::DisplayTable::new();
-        let online: OnlineRegistry = Vec::new();
+        let online: OnlineRegistry = OnlineRegistry::new();
         let mut seen = std::collections::HashMap::new();
         let (candidates, walkers) = collect_monster_walk_batch(
             &mir2_world_bevy::TickRecord::default(),
@@ -102692,7 +103035,7 @@ GMEXECUTE f
             m2,
             downlink::ActorDisplay::new(4, 0, 0x2222_2222, 0, 0, 255, b"m2".to_vec()),
         );
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "p1".into(),
@@ -102741,7 +103084,7 @@ GMEXECUTE f
                 socket: 906,
                 actor_id: p6,
             },
-        ];
+        ]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -102836,7 +103179,7 @@ GMEXECUTE f
             m,
             downlink::ActorDisplay::new(2, 0, 0x3333_3333, 0, 0, 255, b"m".to_vec()),
         );
-        let online: OnlineRegistry = vec![
+        let online: OnlineRegistry = OnlineRegistry::from(vec![
             OnlineEntry {
                 account: "a".into(),
                 chr_name: "c".into(),
@@ -102861,7 +103204,7 @@ GMEXECUTE f
                 socket: 903,
                 actor_id: d,
             },
-        ];
+        ]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -102929,14 +103272,14 @@ GMEXECUTE f
             m,
             downlink::ActorDisplay::new(2, 0, 0x4444_4444, 0, 0, 255, b"m".to_vec()),
         );
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".into(),
             chr_name: "n".into(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: near,
-        }];
+        }]);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
@@ -102973,7 +103316,7 @@ GMEXECUTE f
         let mut t = mir2_world_bevy::EntitySpawn::new(0, "t", 10, 10);
         t.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let target = world.add_entity(t);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -103219,7 +103562,7 @@ GMEXECUTE f
             world.add_entity(e)
         };
         world.tick();
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
             .into_iter()
             .enumerate()
@@ -103909,7 +104252,7 @@ GMEXECUTE f
             desc: [0; 14],
         }];
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -104085,7 +104428,7 @@ GMEXECUTE f
             e.ghost = true;
             e
         });
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (i, (chr, actor_id)) in [("hero", hero), ("other", other), ("ghost", ghost)]
             .into_iter()
             .enumerate()
@@ -104356,7 +104699,7 @@ GMEXECUTE f
             e.ghost = true;
             e
         });
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (chr, actor_id, gate_idx, socket) in [
             ("hero", hero, 0i32, 901i32),
             ("other", other, 1, 902),
@@ -104712,7 +105055,7 @@ fn ",
         });
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -105077,7 +105420,7 @@ fn ",
         sg.state.gold = 1_000;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".to_string(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -105747,7 +106090,7 @@ fn ",
                     },
                 );
             }
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
             online_set(&mut online, entry("v", "victim", 2, 0, 902, victim));
             let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
@@ -106670,7 +107013,7 @@ fn ",
         let mut v = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
         v.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let victim = world.add_entity(v);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let _ = add_657_observers(&mut world, &mut online);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -106727,7 +107070,7 @@ fn ",
         dead_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         dead_e.death = true;
         let dead = world.add_entity(dead_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let _ = add_657_observers(&mut world, &mut online);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -106769,7 +107112,7 @@ fn ",
         let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
         hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero = world.add_entity(hero_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let _ = add_657_observers(&mut world, &mut online);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -106818,7 +107161,7 @@ fn ",
         victim_e.hp = 1;
         victim_e.max_hp = 100;
         let victim = world.add_entity(victim_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -106936,7 +107279,7 @@ fn ",
         let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
         hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero = world.add_entity(hero_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -107070,7 +107413,7 @@ fn ",
         victim_e.hp = 100;
         victim_e.max_hp = 100;
         let victim = world.add_entity(victim_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -107139,7 +107482,7 @@ fn ",
         mon_e.max_hp = 100;
         mon_e.show_hp = true;
         let mon = world.add_entity(mon_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let _ = add_657_observers(&mut world, &mut online);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut displays = downlink::DisplayTable::new();
@@ -107194,7 +107537,7 @@ fn ",
         victim_e.max_hp = 100;
         victim_e.ob_mode = true;
         let victim = world.add_entity(victim_e);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -108136,7 +108479,7 @@ fn ",
         mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         mon.ob_mode = true;
         let mon_id = world.add_entity(mon);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         let _ = add_657_observers(&mut world, &mut online);
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
@@ -108250,7 +108593,7 @@ fn ",
         world.tick();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(actor));
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -108843,14 +109186,14 @@ fn ",
                 text: game_svr::useitem::NoticeText::None,
             },
         ];
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "hero".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 901,
             actor_id: 7,
-        }];
+        }]);
         let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
             std::collections::HashMap::new();
         gates.insert(0, tx);
@@ -108929,7 +109272,7 @@ fn ",
             desc: [0; 14],
         });
         sessions.insert("hero".into(), sg);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -109244,7 +109587,7 @@ fn ",
         // 片① 新架构：`push_eat_notices` 入每收件人队列，`flush` 出队下发。
         let mut tq = TickFrameQueue::new();
         push_eat_notices(&mut tq, 0, 901, &notices, &wire);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -109974,14 +110317,14 @@ mod castle_frame_tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let online: OnlineRegistry = vec![OnlineEntry {
+        let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
             account: "a".to_string(),
             chr_name: "P".to_string(),
             session_id: 1,
             gate_idx: 0,
             socket: 5,
             actor_id: pid,
-        }];
+        }]);
         drain_monster_ref_msgs(
             &mut world,
             &displays,
@@ -110155,7 +110498,7 @@ mod weapon_durability_downlink_tests {
                 desc: [0u8; 14],
             };
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
@@ -110220,7 +110563,7 @@ mod weapon_durability_downlink_tests {
                 desc,
             };
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
         online_set(&mut online, entry("ar", "r", 1, 0, 903, r));
@@ -110267,7 +110610,7 @@ mod weapon_durability_downlink_tests {
         foe.race = 80;
         let foe = world.add_entity(foe);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
@@ -110533,7 +110876,7 @@ mod sm_skeleton_downlink_tests {
         world.entities.get_mut(t).unwrap().ai.body_leathery = n10;
         let displays = displays_with(t, 5);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
@@ -110605,7 +110948,7 @@ mod sm_skeleton_downlink_tests {
         let (mut world, p, _q, _r, t, n10) = rig(SEED, 53, true);
         world.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 10;
         let displays = displays_with(t, 5);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
@@ -110635,7 +110978,7 @@ mod sm_skeleton_downlink_tests {
             let (mut world, p, _q, _r, t, n10) = rig(SEED, race, death);
             world.entities.get_mut(t).unwrap().ai.body_leathery = n10;
             let displays = displays_with(t, 5);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
             let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
             let gates = gates_with(tx);
@@ -110881,7 +111224,7 @@ mod attack_weapon_wear_tests {
             "任何 2..=6 的磨损都会跨 1/1.03 桶位 ⇒ 恰一条 642"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, online_entry("p", 901, p));
         online_set(&mut online, online_entry("q", 902, q));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
@@ -110985,7 +111328,7 @@ mod attack_weapon_wear_tests {
                 recipients: vec![p],
             });
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, online_entry("p", 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
@@ -111041,7 +111384,7 @@ mod attack_weapon_wear_tests {
             "无目标 ⇒ 零磨损"
         );
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, online_entry("p", 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
@@ -111076,7 +111419,7 @@ mod attack_weapon_wear_tests {
             }],
             ..mir2_world_bevy::TickRecord::default()
         };
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(&mut online, online_entry("p", 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
@@ -111315,14 +111658,14 @@ mod admin_channel_tests {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
-            let online: OnlineRegistry = vec![OnlineEntry {
+            let online: OnlineRegistry = OnlineRegistry::from(vec![OnlineEntry {
                 account: "a".to_string(),
                 chr_name: "aaa".to_string(),
                 session_id: 1,
                 gate_idx: 0,
                 socket: 901,
                 actor_id: actor,
-            }];
+            }]);
             let mut sessions = HashMap::new();
             sessions.insert("aaa".to_string(), crate::tests::test_session_ground(actor));
             let mut saves = HashMap::new();
@@ -111806,11 +112149,11 @@ mod level_rank_request_tests {
             e.ghost = true;
             e
         });
-        let online = vec![
+        let online = OnlineRegistry::from(vec![
             online_entry("hero", 0, 100, hero),
             online_entry("other", 1, 200, other),
             online_entry("ghost", 0, 300, ghost),
-        ];
+        ]);
         let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
         let (tx1, rx1) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates = std::collections::HashMap::new();
@@ -112271,7 +112614,7 @@ mod t279_dress_eff_tests {
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), sg);
 
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -112689,7 +113032,7 @@ mod t279_dress_eff_tests {
             sg.equip.abil.level = level;
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".to_string(), sg);
-            let mut online: OnlineRegistry = Vec::new();
+            let mut online: OnlineRegistry = OnlineRegistry::new();
             online_set(
                 &mut online,
                 OnlineEntry {
@@ -114716,7 +115059,7 @@ mod tickframe_slice1_tests {
         let c = spawn(&mut world, "c", 10, 33);
         let x = spawn(&mut world, "x", 10, 22);
         let y = spawn(&mut world, "y", 10, 44);
-        let mut online: OnlineRegistry = Vec::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
         for (i, (name, socket, id)) in [
             ("a", 901, a),
             ("b", 902, b),

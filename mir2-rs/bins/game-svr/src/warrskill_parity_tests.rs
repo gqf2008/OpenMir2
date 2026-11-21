@@ -83,7 +83,7 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     let obs_in = spawn(&mut world, "obs_in", 105, 100);
     let obs_out = spawn(&mut world, "obs_out", 140, 100);
 
-    let mut online: OnlineRegistry = Vec::new();
+    let mut online: OnlineRegistry = OnlineRegistry::new();
     for (i, (name, id)) in [
         ("caster", caster),
         ("target", target),

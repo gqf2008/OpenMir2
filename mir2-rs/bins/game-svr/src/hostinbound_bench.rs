@@ -115,7 +115,7 @@ fn hostinbound_bench_primitives() {
         );
         // online_take = position + remove
         let take = time_ns(5_000, || {
-            let mut v = online.clone();
+            let mut v = crate::OnlineRegistry::from(online.clone());
             let pos = n / 2;
             let nm = v[pos].chr_name.clone();
             online_take(&mut v, &nm).map_or(0, |e| e.actor_id as usize)

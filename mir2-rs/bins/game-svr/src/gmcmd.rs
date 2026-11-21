@@ -12098,7 +12098,7 @@ mod tests {
         };
         magic_list_mut(saves.get_mut("victim").unwrap()).push(mag(1));
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
-        let mut online = Vec::new();
+        let mut online = crate::OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {
@@ -12343,7 +12343,7 @@ mod tests {
         };
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(5), mag(6)]);
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
-        let mut online = Vec::new();
+        let mut online = crate::OnlineRegistry::new();
         online_set(
             &mut online,
             OnlineEntry {

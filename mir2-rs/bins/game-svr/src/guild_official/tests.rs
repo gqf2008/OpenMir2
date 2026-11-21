@@ -70,7 +70,7 @@ impl Fixture {
         let mut f = Self {
             world,
             npc_id: 0,
-            online: Vec::new(),
+            online: crate::OnlineRegistry::new(),
             sessions: HashMap::new(),
             shop_sessions: HashMap::new(),
             displays: DisplayTable::new(),
