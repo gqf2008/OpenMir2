@@ -1,0 +1,52 @@
+# B17 诊断：bigcloak / groupdeding 的受害者出帧顺序（只读，2026-11-22）
+
+> **只读诊断**：不改代码、不跑构建、不碰 golden。承接 B22 due 调查交接的 B 型 2 支（见
+> `docs/issues/b22-due-representation-refactor-design.md` §0/§2/§7.4）。
+
+## 0. 结论速览
+
+- **是行为层（B17 排水/步进时序），不是比较器、不是装置 `recog` 分配。**
+- **不能靠"排序比较"修**：`bigcloak` 的 `due` **多重集都不同**（golden `{800,800}` vs rust `{800,900}`），
+  排序只会**掩盖**真实差异（opc-19 的告诫成立）。
+
+## 1. 现象精确化
+
+### bigcloak（label=s1，caster；golden=重出件 vs rust 台账）
+- **golden(regen)** `Sent`: `638@1001@0, 642@500@0, **657@1001@800, 657@1002@800**, 640@19@1000`
+- **rust ledger** `Sent`: `638@1001@0, 642@500@0, **657@1002@800, 657@1001@900**, 640@19@1000`
+- 两帧 `657`（`RM_CHANGENAMECOLOR`）是**两个受害者**（recog 1001/1002）的改名色帧。
+- **不只是顺序互换**：
+  - due 多重集：golden `{800,800}`（两受害者同一步）、rust `{800,900}`（隔一步）；
+  - "谁在 800"也变：golden 1001@800、rust 1002@800。
+- 周围帧 `638/642/640` 不变；**只有这两帧 657**。
+
+### groupdeding（label 系列 all_miss_hp0/hit_ac_split/…）
+- regen `Sent` 的 `716` 帧（SM_716）**全部 recog=1001、due=0**——**本批数据里没有 recog 互换**。
+- 当前（全量 plane，bigcloak/groupdeding 为 held golden）rust 台账的 `716` Sent **无 `due` 字段** ⇒
+  **精确 due 差需对"重出 golden"重跑一次 rust 才能钉**（是 build/run，超出只读范围）。
+- 结构性同族：716 是**等优先级广播**（prio 221）；groupdeding 比较器已有 `sort_sm_ident(716)`
+  （**仅 groupdeding**），按 `(param,tag,series,tail)` 排、**不含 due/recog** ⇒ 只覆盖"**同 due 的 tie 序**"，
+  **不覆盖"不同 due 的 stagger"**。
+
+## 2. 三候选逐一排除
+
+- **(a) 产品/排水出帧顺序（B17 排水步进）—— 最可能。** `bigcloak` 是 `StepDrainMs=100`。golden 在
+  step=800 把**两个**到期受害者 rename 帧一起排（都 `due=800`）；rust 泵把第二个推到 step=900（`due=900`）。
+  即"**某一步到期集合里排几条、按什么序**"——正是 B17 家族（oracle 逐 actor `Run` vs 产品批量/步进泵）。
+- **(b) 装置 `recog` 分配 —— 排除。** regen golden 的 `recog`（1001/1002）来自受害者 actor id、确定；
+  bigcloak 两帧 recog **集合=`{1001,1002}` = rust 集合**（只是"谁@800"不同）。recog 分配本身没错。
+- **(c) 比较器多重集化不足 —— 排除，且不能靠它修。** bigcloak due 多重集 **`{800,800} ≠ {800,900}`** ⇒
+  即使把 657 组按多重集比也**不相等**（不是顺序问题，是"**何时排第二个受害者**"的真实差异）。
+  排序只会**掩盖**这个真差异（opc-19 告诫成立）。既有 716 sort 是给"**同 due** 的 tie 序"（prio 221
+  堆出队 artifact）用的，**不适用于不同 due**。
+
+## 3. 结论（走"产品顺序要改"这一支）
+
+- **归属：B17（排水/步进时序），不是比较器/装置表示。** 修法在 B17 层——让 rust 泵与 oracle 对
+  "某一步的到期集合与出帧序"一致（例如 rust 在 step=800 把两个到期受害者一起排，而不是推到 900）。
+- **影响面**：多受害者且**受害者非同一 tick 排（stagger）**的 stem——`bigcloak`/`groupdeding`（本 2 支）。
+  `amyounsul`/`groupamyounsul` 是 `same_tick`（已有 `multi_victim_same_tick` scope，顺序不判），**不同类**。
+- **不该做的**：把 657/716 组改成"排序比较"——会掩盖 `{800,800}` vs `{800,900}` 的真差异。要放宽只能放宽
+  **已验证同 due** 的 tie 序（既有 716 sort 的边界），**不能扩到不同 due**。
+- **下一步（非本卡执行，需 build/run）**：B17 层做一次"某步到期集合 rust vs oracle 并列"探针，钉
+  "rust 为何把一个受害者推到 900"（是 `delivery` 排期不同？还是 pump 每步只排一个就 step？）。
