@@ -496,17 +496,28 @@
         "line": 259,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_firewind",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/firewind.json（`rng_total_draws` 3/3/3；目标 `Sent` 含 `SM_BACKSTEP(9)` 1/1/2 条；`DrainPasses=2`；`frame_order_scope=None`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::firewind_parity_s1",
+          "tests::firewind_parity_s5",
+          "tests::firewind_parity_s13",
+          "real_rust_ledger_firewind"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws=3/3/3`、目标 `Sent` 含 `SM_BACKSTEP(9)`）+ 退化守卫（`assert_effect_frames_non_degenerate(SM_BACKSTEP)` 两侧各 ≥1）+ 收件人集合逐名相等（`obs_out` 以**零帧**存在）+ 帧序按 oracle 收件人 `MsgQueue` 四叉堆（`(byte)RM ident`：17=24 → 638=136 → 9=156；比较面 `(ident,param,tag,series)` 严格逐收件人有序）+ `DrainPasses=2`。批 `card/magic-push-batch-impl`，合并提交 dd55ec554。驱动侧装置前提：全 `Walk` 网格 + `caster.visible_actors` 按 target→obs_in（→怪物）同序回填（离线装置不跑 AOI；`MagPushArround` 按该列表序遍历）。同批 21/MG-35 因换图簇缺 `SM_SERVERCONFIG(11029)` **未升格**（`docs/issues/openmir2-changemap-missing-serverconfig.md`）。**局部修边界**：帧序缓冲只覆盖 8/37/21 三魔号；全局 ref-msg 队列差异（oracle 全入队 vs Rust 直发混用）不在本卡范围，见 `docs/issues/openmir2-refmsg-queue-model.md`。",
+      "basis": "semantic",
+      "scope": "partial：SKILL_FIREWIND(8)（`MagicManager.cs:259-264`）的 `MagPushArround(playObject, level)` 逐格 `RM_PUSH`→`SM_BACKSTEP(9)` 主链由 `firewind` × s1/s5/s13 覆盖：各收件人 `Sent` **严格有序**（target/obs_in `17→638→9`；caster `638→9…` 且**不含 17**，= oracle `MsgQueue` 四叉堆口径）、逐格 `9` 的 `param/tag`（落点）、`Rng` 3 抽逐值、收件人集合逐名相等；**未验**：①推挤方向/格数只覆盖本夹具摆位（caster (100,100) 朝东、目标 (101,100) 在 8 邻格；s1/s5 推 1 格、s13 推 2 格），其它方向/多目标/连续推挤未覆盖；②帧序语义**只由 `#[ignore]` 的 parity 驱动覆盖**（默认 `cargo test` 跑的是机制级用例：缓冲四叉堆序 + caster 零条 `SM_SPELL` 的行为断言，不比对 golden 严格序）；③视野回填由驱动按 oracle 装置同序注入，生产 AOI/视差集路径未覆盖；④观察者只有 1 个视野内 + 1 个视野外，`RM_PUSH` 的收件人范围边界（±`SendRefMsgRange`）未覆盖。"
     },
     {
       "id": "MG-17",
@@ -1574,17 +1585,28 @@
         "line": 601,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_energyrepulsor",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/energyrepulsor.json（`rng_total_draws` 3/3/3、与 firewind 逐值同源；目标 `Sent` 含 `SM_BACKSTEP(9)` 1/1/2 条；`DrainPasses=2`；`frame_order_scope=None`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::energyrepulsor_parity_s1",
+          "tests::energyrepulsor_parity_s5",
+          "tests::energyrepulsor_parity_s13",
+          "real_rust_ledger_energyrepulsor"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws=3/3/3`、目标 `Sent` 含 `SM_BACKSTEP(9)`）+ 退化守卫（`assert_effect_frames_non_degenerate(SM_BACKSTEP)` 两侧各 ≥1）+ 收件人集合逐名相等（`obs_out` 以**零帧**存在）+ 帧序按 oracle 收件人 `MsgQueue` 四叉堆（`(byte)RM ident`：17=24 → 638=136 → 9=156；比较面 `(ident,param,tag,series)` 严格逐收件人有序）+ `DrainPasses=2`。批 `card/magic-push-batch-impl`，合并提交 dd55ec554。驱动侧装置前提：全 `Walk` 网格 + `caster.visible_actors` 按 target→obs_in（→怪物）同序回填（离线装置不跑 AOI；`MagPushArround` 按该列表序遍历）。同批 21/MG-35 因换图簇缺 `SM_SERVERCONFIG(11029)` **未升格**（`docs/issues/openmir2-changemap-missing-serverconfig.md`）。**局部修边界**：帧序缓冲只覆盖 8/37/21 三魔号；全局 ref-msg 队列差异（oracle 全入队 vs Rust 直发混用）不在本卡范围，见 `docs/issues/openmir2-refmsg-queue-model.md`。",
+      "basis": "semantic",
+      "scope": "partial：SKILL_ENERGYREPULSOR(37)（`MagicManager.cs:601-606`，与 8 的函数体逐字相同：同 `MagPushArround`、同 `boTrain` 门、无 in-case 帧）的逐格 `RM_PUSH`→`SM_BACKSTEP(9)` 主链由 `energyrepulsor` × s1/s5/s13 覆盖：各收件人 `Sent` **严格有序**（target/obs_in `17→638→9`；caster `638→9…` 且**不含 17**，= oracle `MsgQueue` 四叉堆口径）、逐格 `9` 的 `param/tag`（落点）、`Rng` 3 抽逐值、收件人集合逐名相等；**未验**：①推挤方向/格数只覆盖本夹具摆位（caster (100,100) 朝东、目标 (101,100) 在 8 邻格；s1/s5 推 1 格、s13 推 2 格），其它方向/多目标/连续推挤未覆盖；②帧序语义**只由 `#[ignore]` 的 parity 驱动覆盖**（默认 `cargo test` 跑的是机制级用例：缓冲四叉堆序 + caster 零条 `SM_SPELL` 的行为断言，不比对 golden 严格序）；③视野回填由驱动按 oracle 装置同序注入，生产 AOI/视差集路径未覆盖；④观察者只有 1 个视野内 + 1 个视野外，`RM_PUSH` 的收件人范围边界（±`SendRefMsgRange`）未覆盖。"
     },
     {
       "id": "MG-58",
