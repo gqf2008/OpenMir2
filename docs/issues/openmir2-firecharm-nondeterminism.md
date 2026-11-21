@@ -1,5 +1,7 @@
 # openmir2-firecharm-nondeterminism —— MG-27 `firecharm` golden 不可复现（2026-11-20 立卡）
 
+> **收口（2026-11-21）**：根因已除——装置墙钟 → 虚拟钟（`HUtil32` 惰性时钟接缝 `_tickOverride` + harness `ClockSeam`，见 B19）。证据：虚拟钟下 `firecharm` 连跑 **3 次逐字节相同**（含 `delivery`；`DrainPasses=2 / TargetHp=100 / RngLen=1` 三次全同）。本卡的「墙钟依赖」已消除，`firecharm` 可稳定重出。
+
 ## 现象（`ae` 独立复现，连跑两次 `--case firecharm` 的 hit 支）
 
 | 字段 | 第一次 | 第二次 |

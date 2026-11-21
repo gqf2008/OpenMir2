@@ -101,6 +101,8 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 
 **预测口径更正（opc-19）**：预登记预测（5 支）＝「≥2 条延迟消息」，**漏了「多受害者」类**（施毒 4 支每条受害者各一条延迟/受击亦属多延迟）⇒ **下次预测按「队列里是否存在交错 due」判，不按「消息条数」判**。另：`89` 扫描「可能变」的 `bigcloak`/`groupdeding` 实测**没变** ⇒ **扫描是保守、实测更准**。
 
+**虚拟钟后复核（2026-11-21，B19 修法落地）**：噪声地板里持续抖的 **14 支**在虚拟钟下重测——**13 支连跑 3 次逐字节相同（含 delivery）**：`mabmabe-nondefault`/`amyounsul`/`amyounsul2`/`groupamyounsul`/`groupamyounsul2`/`fireboom47`/`firecross`/`holyshield`/`lightflower`/`lightflower-nonzero`/`skill10`/`skill53`/`windtebo`。⇒ **B17 的多延迟 stem 现在可逐字节验**（本卡「口径收窄」升级为「可逐字节验」）。**唯一例外 `clone46`：虚拟钟后仍不稳** ⇒ 其非确定源是 `Clone.actor_id`（产品 `ActorMgr` 分配，**非时钟、独立于 B19**）——需另案，不影响 B17 多延迟面。
+
 **clone46（独立）**：`Clone.actor_id`/`rel_to_caster` 两跑差 ~9e8 —— 克隆体 ActorId 由产品 `ActorMgr`/`PlayCloneObject` ctor 分配（非 harness 可控的确定源，疑运行时/对象哈希/进程计数），**与排水无关**；clone 家族 golden 的该字段天然不可逐字节比对。
 
 **判据固定（opc-19 2026-11-21）**：B17 的「只 5 支变、其余零变化」**只能用 pristine-vs-fixed**（同码仅差排水语义）判；**不得 vs committed**（committed golden 有 schema 漂移，见 B18，会全 stem 假红）。

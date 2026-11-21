@@ -33,9 +33,15 @@ namespace OpenMir2
             return sequence;
         }
 
+        // 测试接缝（时钟源）：默认 null ⇒ 生产逐字节等价（返回 Environment.TickCount）。
+        // 仅由对拍装置经反射设置（镜像 RngSeam 替换 RandomNumber.random 的同款机制）；私有静态、非 public 可写。
+        // 理由：Environment.TickCount 是无字段可反射替换的直接 BCL 调用，只能在此加惰性 seam。
+        // 热路径仅多一次 null 检查（无锁无分配）。
+        private static int? _tickOverride = null;
+
         public static int GetTickCount()
         {
-            return Environment.TickCount;
+            return _tickOverride ?? Environment.TickCount;
         }
 
         public static long GetTimestamp()

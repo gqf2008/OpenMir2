@@ -61,6 +61,24 @@ public sealed class LoggingRandom : Random
     }
 }
 
+/// <summary>
+/// **测试接缝（时钟源）**：镜像 [`RngSeam`]——反射设置生产 `OpenMir2.HUtil32` 的**私有静态**字段 `_tickOverride`（`int?`），
+/// 使 `HUtil32.GetTickCount()` 在读虚拟钟与真实 `Environment.TickCount` 间切换。默认 `null` ⇒ 生产逐字节等价；仅装置可设。
+/// </summary>
+public static class ClockSeam
+{
+    private static readonly FieldInfo TickField =
+        typeof(OpenMir2.HUtil32).GetField("_tickOverride", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("HUtil32._tickOverride 私有静态字段不存在（原版类结构变了？）");
+
+    public static void Set(int virtualNowMs) => TickField.SetValue(null, virtualNowMs);
+    public static void Clear() => TickField.SetValue(null, null);
+    public static int? Capture() => (int?)TickField.GetValue(null);
+    public static int VNow;
+    public static void Begin(int baseMs) { VNow = baseMs; TickField.SetValue(null, VNow); }
+    public static void Advance(int ms) { VNow += ms; TickField.SetValue(null, VNow); }
+}
+
 public static class RngSeam
 {
     private static readonly FieldInfo RandomField =
@@ -129,6 +147,10 @@ public static class Program
         if (args.Contains("--rng-selftest"))
         {
             return RngSelfTest();
+        }
+        if (args.Contains("--clock-seam-selftest"))
+        {
+            return ClockSeamSelfTest();
         }
         if (args.Contains("--config-selftest"))
         {
@@ -648,6 +670,37 @@ public static class Program
     ///  3) 不同种子 ⇒ 序列不同（证明不是恒等/没接上）；
     ///  4) 还原后字段回到原实例。
     /// </summary>
+    /// <summary>
+    /// **接缝行为牙**：证明 `HUtil32.GetTickCount` 的时钟 seam「默认惰性、设置后固定」。默认 null ⇒ 随真实时间前进；
+    /// 设置后 ⇒ 立即返回该值、不随真实时间变；Clear ⇒ 还原。
+    /// </summary>
+    private static int ClockSeamSelfTest()
+    {
+        int fails = 0;
+        void Check(bool ok, string what) { Console.WriteLine((ok ? "PASS " : "FAIL ") + what); if (!ok) fails++; }
+        ClockSeam.Clear();
+        int a = HUtil32.GetTickCount();
+        Thread.Sleep(90);
+        int b = HUtil32.GetTickCount();
+        int delta = b - a;
+        Console.WriteLine($"[seam@default] a={a} b={b} delta={delta}ms (expect ~90)");
+        Check(delta >= 60 && delta < 500, "default null: 随真实时间前进(delta~sleep)");
+        Check(b >= a, "default null: 单调不减");
+        ClockSeam.Set(123456789);
+        int c = HUtil32.GetTickCount();
+        Thread.Sleep(60);
+        int d = HUtil32.GetTickCount();
+        Console.WriteLine($"[seam@set] c={c} d={d} (expect both 123456789)");
+        Check(c == 123456789, "set: 立即返回注入值");
+        Check(d == 123456789, "set: 不随真实时间变");
+        ClockSeam.Clear();
+        int e = HUtil32.GetTickCount();
+        Console.WriteLine($"[seam@cleared] e={e} (expect != 123456789)");
+        Check(e != 123456789, "clear: 还原为真实时间");
+        Console.WriteLine(fails == 0 ? "CLOCK_SEAM_SELFTEST_OK" : "CLOCK_SEAM_SELFTEST_FAILED fails=" + fails);
+        return fails == 0 ? 0 : 1;
+    }
+
     private static int RngSelfTest()
     {
         var rn = RandomNumber.GetInstance();
@@ -2842,6 +2895,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         MagicSpec spec, string label, int seed, int idBase, int targetHp, bool targetNull,
         AntiMagicBranchExpect branchExpect = null)
     {
+        ClockSeam.Begin(1000000);
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
         if (!env.LoadMapData(Path.Combine(mapDir, "0.map")))
@@ -3300,7 +3354,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             while (elapsed < spec.WaitMs)
             {
                 int step = Math.Min(spec.StepDrainMs, spec.WaitMs - elapsed);
-                Thread.Sleep(step);
+                ClockSeam.Advance(step);
                 elapsed += step;
                 int stepPasses = 0;
                 for (int pass = 0; pass < MaxDrainPasses; pass++)
@@ -3330,7 +3384,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         }
         else
         {
-            Thread.Sleep(spec.WaitMs);
+            ClockSeam.Advance(spec.WaitMs);
             for (int pass = 0; pass < MaxDrainPasses; pass++)
             {
                 bool drainedAny = false;
