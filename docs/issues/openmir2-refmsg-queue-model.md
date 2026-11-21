@@ -88,6 +88,21 @@
 而 `Rm` 有 `delivery`；给 `Sent` 补 `delivery`（或 `StepDrainMs=1` 让批边界近似 1ms）后，
 本卡的普查就能从"上界"变成"可判定"。
 
+### 3.4 放宽清单（**以 `items-it13-37` 的权威清单为准，本卡只引用不复制**）
+
+验证面的放宽**不止** `frame_order_scope`。权威清单见
+`docs/issues/parity-comparator-relaxation-inventory.md`（由 `items-it13-37` 维护）；本卡只记与队列模型
+相关的部分：
+
+- **`frame_order_scope` 授权**：**6 个 stem**（`fire`、`skill10`、`amyounsul`、`amyounsul2`、
+  `groupamyounsul`、`groupamyounsul2`）⇔ **8 条清单条目**（MG-13/14/15/17/18/50/64/65）⇔ **4 个技能**
+  （6 / 9 / 10 / 48）。三个数字口径不同，别混用。
+- **不在该字段名下的 6 条放宽**（同样影响"阶段 2 后红不红"）：
+  `holyshield`（`drop_empty_receivers`，删空接收者）、`groupdeding`（`sort_sm_ident(716)` 组内多重集）、
+  `skeleton` / `sinsu` / `angel`（`sent_filter` 的 `keep=[17,638,642]`，只比三个 ident）、
+  `frames_640_caster`（不比 640 的 `tag`）。
+- **两条全局口径**：`Rm` 面多重集比较、640 `due_ms_rel` 的 `|Δ| ≤ 32` 容差。
+
 ### 3.2 一行可复跑命令（台账长期复用）
 
 ```bash
@@ -165,18 +180,29 @@ PY
 
 | # | 现在的放宽 | 移除条件（X） | 删除项（Y） | 验收（Z） |
 | --- | --- | --- | --- | --- |
-| 1 | `frame_order_scope=multi_victim_same_tick`（6 份 golden：`fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2`；对应 MG-17/18/13/50） | 阶段 2 合并 **且**这 6 个 stem 的 `Sent` 严格序比对全绿 | 6 份 golden 的 marker + `real_ledger_verify_labels_opts` 的 stem 白名单 + `verify` 的 `multi_victim` 分支 | 全量 `--lib` + 全部 magic 比较器绿 |
+| 1 | `frame_order_scope=multi_victim_same_tick`（**6 个 stem**：`fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2`；对应 **8 条清单条目** MG-13/14/15/17/18/50/64/65，即 **4 个技能** 6 / 9 / 10 / 48） | 阶段 2 合并 **且**这 6 个 stem 的 `Sent` 严格序比对全绿 | 6 份 golden 的 marker + `real_ledger_verify_labels_opts` 的 stem 白名单 + `verify` 的 `multi_victim` 分支 | 全量 `--lib` + 全部 magic 比较器绿 |
 | 2 | `Rm` 面通用多重集比较 | 台账 `Rm` 记录 `delivery`/pass 号（装置改动）后 | 把 `Rm` 改为按 `(priority, 入队序)` 严格比 | 全部比较器绿 |
 | 3 | 阶段 1 的站点级 `SpellFrameBuf` 收口 | 阶段 2 落地 | 阶段 1 的局部收口代码 | 8/37 对应 stem 的 `real_rust_ledger_*` 严格序绿 |
 
-## 7. 全量修复的预期红（具体前后对比）
+## 7. 全量修复的预期红（**按"比较面有多宽"分层**，不是按"是否严格序"二分）
 
-- **`fireboom/s1/target`**：golden 现序 `[17, 638, 53, 31, 656]`；按 RM 优先级
-  （24 / 68 / 136 / 154 / 167）应为 `[17, 53, 638, 656, 31]` ⇒ **53↔638、656↔31 两组换位**。
-- 同类 stem（§3 普查的 18 个里除 6 个已放宽的）：`fireboom`、`fireboom47`、`lightflower`、`snowwind`、
-  `grouplightening`、`lightning-11`、`lightning-45`、`fireball`、`fireball-5`、`firecharm`、`hbfireball`、
-  `showhp` —— 它们现在绿是**恰好同序**，阶段 2 后**必先红**，必须与装置序基准化同批处理。
-- 验收口径（opc-19 定死）：`Sent` 严格序 + 全量回归。
+**具体前后对比（宽面）**：`fireboom/s1/target` golden 现序 `[17, 638, 53, 31, 656]`；按 RM 优先级
+（24 / 68 / 136 / 154 / 167）应为 `[17, 53, 638, 656, 31]` ⇒ **53↔638、656↔31 两组换位**。
+
+| 比较面 | stem（示例） | 阶段 2 后预期 |
+| --- | --- | --- |
+| **宽**（全帧严格序） | `fireboom`、`fireboom47`、`lightflower`、`snowwind`、`grouplightening`、`lightning-11`、`lightning-45`、`fireball`、`fireball-5`、`firecharm`、`hbfireball`、`showhp` | **必先红**（上表两组换位即预测） |
+| 宽（现行 marker，阶段 2 后转宽） | `fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2` | 删 marker 后按宽面处理，**可能红** |
+| **窄**（只比 3 个 ident 的 keep） | `skeleton`、`sinsu`、`angel` | **可能根本不红**——比较面本来就窄 |
+| 空接收者裁剪 | `holyshield` | 可能不红 |
+| 组内多重集 | `groupdeding`（716 组） | 可能不红 |
+| 全局口径 | `Rm` 多重集、640 `due_ms_rel` 的 ±32ms 容差 | 与帧序无关/看不见 |
+
+**必须写死的一句**：**"红不了 ≠ 没问题"。** 队列化后上面"窄面/裁剪/组内多重集"的 stem 依然绿，
+**不代表**它们的帧序对了，只代表**比较面看不见**。阶段 2 完成后，**不得**拿"全绿"当"帧序已对齐"的
+证据——那时要按 §6 表逐条把放宽拆掉，拆完仍绿才算。
+
+验收口径（opc-19 定死）：`Sent` 严格序 + 全量回归。
 
 ## 关联
 
