@@ -127,13 +127,13 @@ if (userMagic.Level < 3 && boTrain) {
 ### C. `sinsu`（30）的口径决策 —— **报 opc-19 定，不自行决定**
 
 **不能简单把 640 加进 `keep`**：640 的载荷 `tag/series = TranPoint`，而 TranPoint 来自
-`Random(3)+1`；sinsu 的 RNG 因离线替身 `RegenMonsterByName` 造怪 0 抽而整体偏移
-（实测 golden `tag=2` / Rust `tag=3`）⇒ 纳入 keep 会红在 **payload**，不是红在 due。
+`Random(3)+1`；sinsu 的 RNG 因离线替身 `RegenMonsterByName` 的**造怪抽数消费序列不同**而整体偏移
+（golden 6 抽 / Rust 8 抽，前 5 抽逐值相同；实测 golden `tag=2` / Rust `tag=3`）⇒ 纳入 keep 会红在 **payload**，不是红在 due。
 可选：
 
 - **B1（推荐，成本最小）**：`keep` 不动；另加一条**只比 due** 的断言（640 恰 1 条且
   `due_ms_rel = 1000`），驱动补 1000ms 交付回路；payload 仍不比，理由写进 scope。
-- B2：把 640 纳入 keep —— 需先修离线替身的造怪抽数（另一张卡），短期做不到。
+- B2：把 640 纳入 keep —— 需先让两侧的造怪抽数记账/消费序列对齐（另一张卡），短期做不到。
 - B3：sinsu 比较器面不动，只靠新单测覆盖 30 的 640 延迟（比较面仍留空）。
 
 ### D. `skeleton`（17）的额外成本
@@ -237,3 +237,22 @@ golden `wParam=23913` vs 台账 `154985`：同一受害者的第二条 8103 在�
 `docs/issues/openmir2-b4-multivictim-strike-order.md` **同源**（产品批量 flush vs oracle 逐 actor
 `Run()`）；产品卡修复后须删该标记并恢复严格按序。白名单已从 `fire` 扩到 `fire`/`skill10`，扩的时候
 按同一理由登记。
+
+## MG-35 收口补记：`640.due_ms_rel` 的正确判据（2026-11-21）
+
+**结论：`due_ms_rel` 不能用精确相等判。** 该量 = `DeliveryTime − t0`，由 oracle 的
+`Environment.TickCount`（15.6ms 粒度）派生 ⇒ 同一次生成会抖动。实测同一批 golden 的
+`640` 出现 **`spacemove/s1 = 1016`、`spacemove/s5/s13 = 1000`**（golden 由
+`fc6227711` 重出时记录了这一抖动）；行为判据只判**批次类**（施法批 0 vs 交付批 >0），
+毫秒按 `|Δ| ≤ 32ms`（2×粒度）。
+
+**判据单源**：容差常量在 `mir2_shared::DUE_MS_TOLERANCE_MS`（**唯一来源**），
+比较器（`magic_fireball_parity.rs` 的 640 due 分支）与驱动
+（`game-svr` 的 `fireball_case_assert`）共用，禁止两处各写 `32`。
+
+**被发现的原因**：`spacemove` 的 11029 缺帧修好前，帧序断言先红，把这条
+「驱动比比较器更严」的判据不一致遮住了；修好 11029 后 s1 立刻暴露
+（`left: [1000] right: [1016]`）。这不是放宽文档口径，而是把**驱动**对齐到既有
+文档口径（比较器与施毒卡早已是 `|Δ|≤32ms`）。
+
+**判别力**：改 Rust 侧 640 的 due 加 50ms ⇒ 驱动必红（Δ=50 > 32）——容差不是无底洞。

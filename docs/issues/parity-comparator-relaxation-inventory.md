@@ -42,7 +42,7 @@
 | 3 | `sent_filter`（`keep = [17, 638, 642]`；调用点是 `real_rust_ledger_skeleton`） | **比较面收窄**：只比选定 ident，且按 socket 多重集 | `skeleton` | `real_rust_ledger_skeleton`（若改全帧严格：造怪替身相关非可比帧 + 帧序） | **①`638` vs `642` 的顺序**：golden `638,642` / Rust `642,638`（oracle 队列 `638=136 < 642=141` vs Rust 立即发 642）——属 `openmir2-refmsg-queue-model.md` 的全局队列差异；**②**640 的 `tag` 由 #6 单独排除。✔ 已登记（全局队列卡 + #6 注释）；**但本比较器注释未点名 638/642 这一项**，见 §2b |
 | 4 | `sent_filter_sinsu`（`keep = [17, 638, 642]`；调用点是 `real_rust_ledger_sinsu` 两处） | 同上 + 显式比 `recog` / `due_ms_rel` | `sinsu` | `real_rust_ledger_sinsu` | 同 #3 的 638/642 顺序；**另：`807`（回召）帧未建模**（golden `cap_hit` caster 有 `807`，Rust 无）。✔ 后者已登记（该比较器注释），前者同 #3 |
 | 5 | `sent_filter`（`keep = [17, 638, 642]`；调用点是 `real_rust_ledger_angel`） | 同上（与 skeleton 同形） | `angel` | `real_rust_ledger_angel` | 同 #3 的 638/642 顺序（golden `638,642` / Rust `642,638`）。✔ 已登记（全局队列卡）；本比较器注释未点名，见 §2b |
-| 6 | `frames_640_caster`（只取 `(recog, param, series, due_ms_rel)`，**不含 `tag`**） | **640 的 `tag`（TranPoint）不比** | `skeleton` / `sinsu` / `angel` | 对应比较器：离线替身造怪 0 抽 ⇒ RNG 流偏移 ⇒ golden=2 / Rust=1 | **造怪抽数不同 ⇒ TranPoint 不同**（离线替身 0 抽 vs Rust `create_monster_oracle`）。✔ 已登记（`frames_640_caster` 注释） |
+| 6 | `frames_640_caster`（只取 `(recog, param, series, due_ms_rel)`，**不含 `tag`**） | **640 的 `tag`（TranPoint）不比** | `skeleton` / `sinsu` / `angel` | 对应比较器：造怪抽数记账/消费不同 ⇒ RNG 流偏移 ⇒ golden=2 / Rust=1 | **造怪抽数消费不同 ⇒ TranPoint 不同**（golden 记录 5+1 抽；skeleton/angel 未记账、sinsu 前 5 同第 6 起不同）。✔ 已登记（`frames_640_caster` 注释） |
 
 ### §2b. 逐条自查的结论
 
@@ -52,7 +52,7 @@
    Rust 立即发 642；属 `openmir2-refmsg-queue-model.md` 的全局队列差异。**⚠ 本清单是第一次把
    它明确归到这三个 stem 的 `sent_filter` 名下**（此前只在该全局卡与 MG-16/57 的 notes 里）。
 2. `807`（回召）帧未建模（#4，sinsu 的 `cap_hit`）——比较器注释已登记。
-3. `640` 的 `tag`（TranPoint）随造怪抽数不同（#6）——`frames_640_caster` 注释已登记。
+3. `640` 的 `tag`（TranPoint）随造怪抽数的记账/消费不同（#6）——`frames_640_caster` 注释已登记。
 4. `SM_716` 组内 tie 序（#2，groupdeding）——该比较器注释已登记。
 5. 零帧收件人的台账表形差异（#1，holyshield）——比较器注释已登记，非行为差异。
 

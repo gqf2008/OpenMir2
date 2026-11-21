@@ -1,7 +1,8 @@
 # openmir2-golden-fixture-drift
 
 > 状态：**事故登记 + 处置记录（2026-11-20，opc-07 发布）**。触发：`a2` 按"元数据类/行为类"口径重生成入库魔法金标准时，发现 **6/14 行为类差异非空**。
-> 关联：`docs/issues/openmir2-magic-parity.md`、`docs/qa-charter.md` §18 / §18.1、`docs/issues/openmir2-warrskill-entry.md`
+> 关联：`docs/issues/openmir2-magic-parity.md`、`docs/qa-charter.md` §18 / §18.1、`docs/issues/openmir2-warrskill-entry.md`；
+> 同族（装置输入硬编码/"死数据"）：`docs/issues/openmir2-warrskill-harness-input-hardcode.md`。
 
 ## 1. 现象
 

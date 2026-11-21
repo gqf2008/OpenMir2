@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "6d03e0d40f77c437f602d9b4a8a525e20f93d6dc",
-    "time": "2026-11-21T10:58:07+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。；MG-41 升格（SKILL_SINSU/30，summon_ok，scope=partial），magic 域 verified 33→34（本域 65 条），2026-11-20；**合并提交 M 号 / counting_moment.head 由 opc-19 合并时回填**（本笔仅改条目与计数，head 待并合提交确定）。；MG-41 升格合并提交 fe47cb6e6（2026-11-20，magic verified 34→35，scope=partial/summon_ok）。；MG-58/60/61/62/63（49/51/52/53/54，共享尾 B 类）升格：实现链 101c22528→82c4fbdc4→a9bce24c2→a22bbbef7→f8a759bbf→6e821b31b，合并提交 be3df6544（2026-11-20，magic verified 35→40，scope=partial/仅 1000ms 支；800ms 升级支未验见计划 §5.4）。**合并后 counting_moment.head 由 opc-19 回填**（本笔保留旧值）。；MG-58/60/61/62/63（49/51/52/53/54）升格：共享尾 B 类五号，合并提交 51b71a602（2026-11-20，magic verified 35→40，scope=partial/仅1000ms支）。；M64 = e0a6ac0de（MG-18 升格，magic 域 verified 41/58；合并提交，2026-11-21）；M65 = 0e976468e（施毒 6 条升格 MG-13/14/15/50/64/65，magic 域 verified 47/58；合并提交，2026-11-21）；M66 = 95ed416c8（MG-16 + MG-57 升格，magic 域 verified 49/58；合并提交，2026-11-21）；M67 = de432b094（MG-44 + MG-48 升格，magic 域 verified 51/58；合并提交 de432b094bebdfaab1a5e6862d92337c9810b4cd，2026-11-21）；M68 = d1721347b（MG-42 升格，41 SKILL_ANGEL 精灵召唤，STUB scope；magic 域 verified 52/58；合并提交 d1721347bcd2fb8459431d0786d5a62288b3ac77，2026-11-21）；M69 = 6d03e0d40（MG-52 升格，43 SKILL_43 显式 case；magic 域 verified 53/58；合并提交 6d03e0d40f77c437f602d9b4a8a525e20f93d6dc，2026-11-21）"
+    "head": "d352018447f031dc27be52567ca13387bde320a9",
+    "time": "2026-11-21T11:19:01+0800",
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。；MG-41 升格（SKILL_SINSU/30，summon_ok，scope=partial），magic 域 verified 33→34（本域 65 条），2026-11-20；**合并提交 M 号 / counting_moment.head 由 opc-19 合并时回填**（本笔仅改条目与计数，head 待并合提交确定）。；MG-41 升格合并提交 fe47cb6e6（2026-11-20，magic verified 34→35，scope=partial/summon_ok）。；MG-58/60/61/62/63（49/51/52/53/54，共享尾 B 类）升格：实现链 101c22528→82c4fbdc4→a9bce24c2→a22bbbef7→f8a759bbf→6e821b31b，合并提交 be3df6544（2026-11-20，magic verified 35→40，scope=partial/仅 1000ms 支；800ms 升级支未验见计划 §5.4）。**合并后 counting_moment.head 由 opc-19 回填**（本笔保留旧值）。；MG-58/60/61/62/63（49/51/52/53/54）升格：共享尾 B 类五号，合并提交 51b71a602（2026-11-20，magic verified 35→40，scope=partial/仅1000ms支）。；M64 = e0a6ac0de（MG-18 升格，magic 域 verified 41/58；合并提交，2026-11-21）；M65 = 0e976468e（施毒 6 条升格 MG-13/14/15/50/64/65，magic 域 verified 47/58；合并提交，2026-11-21）；M66 = 95ed416c8（MG-16 + MG-57 升格，magic 域 verified 49/58；合并提交，2026-11-21）；M67 = de432b094（MG-44 + MG-48 升格，magic 域 verified 51/58；合并提交 de432b094bebdfaab1a5e6862d92337c9810b4cd，2026-11-21）；M68 = d1721347b（MG-42 升格，41 SKILL_ANGEL 精灵召唤，STUB scope；magic 域 verified 52/58；合并提交 d1721347bcd2fb8459431d0786d5a62288b3ac77，2026-11-21）；M69 = 6d03e0d40（MG-52 升格，43 SKILL_43 显式 case；magic 域 verified 53/58；合并提交 6d03e0d40f77c437f602d9b4a8a525e20f93d6dc，2026-11-21）；M70 = d35201844（MG-35 升格，21 SKILL_SPACEMOVE；换图簇补 11029 后全量门首次零红；magic 域 verified 54/58；合并提交 d352018447f031dc27be52567ca13387bde320a9，2026-11-21）"
   },
   "status_enum": [
     "verified",
@@ -722,7 +722,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级 2026-11-20 升格：接线早已存在（比较器 `magic_fireball_parity.rs:1243`、驱动 `skeleton_parity_*`、golden `skeleton.json`），此前只是未做升格动作；本日三重验证——作者三牙（`3b` PASS @ `82c8d36e8`）+ 本次实跑两驱动与比较器全绿。",
       "basis": "semantic",
-      "scope": "partial：骨架路径在 `OfflineWorldEngine` 替身上运行（41 成员：1 真实 / 15 最小实值 / 25 抛 `NotImplementedException`，骨架路径未触达抛错项）；`summon_ok`（半补 + adopt + nMaxMob）与 `cap_hit`（等级上限门）两支逐帧对拍；三条变异牙（删半补 / `make_slave_gate` 恒真 / `slave_count` 写死）已证：红层分别在 block 标量与三断「实体数不增」「slave_count 不变」。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。"
+      "scope": "partial：骨架路径在 `OfflineWorldEngine` 替身上运行（41 成员：1 真实 / 15 最小实值 / 25 抛 `NotImplementedException`，骨架路径未触达抛错项）；`summon_ok`（半补 + adopt + nMaxMob）与 `cap_hit`（等级上限门）两支逐帧对拍；三条变异牙（删半补 / `make_slave_gate` 恒真 / `slave_count` 写死）已证：红层分别在 block 标量与三断「实体数不增」「slave_count 不变」。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。 `Rng` 未纳入比较面：造怪抽数已记录在 golden `Rng` 中且可复现（`[1500,2000,3000,3000,2000]` + `Random(3)`）；台账**无 `Rng` 键**（该 stem 的驱动不做 RNG 记账）。"
     },
     {
       "id": "MG-25",
@@ -977,17 +977,28 @@
         "line": 403,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
+      "scope": "partial：`spacemove` 三支（s1/s5/s13）的换图簇逐收件人**严格序**（caster `… 766 → 54 → 11029 → 807 …`；11029 尾 = `EDCode(EDCode(ClientConf))` 双重编码）与 633/634（x,y,Series）/766/54/807（落点 param/tag）字段；驱动侧另核真图身份（`map_file_size`/`map_file_sha256`）与格属性三档直方图（walk/high/low），并按 `Fixture.soft_version_date_ex` 设会话值。**未覆面 / 不证明**：①`SoftVersionDateEx` 非 0 的**生产值来源**（本批只保证「0 ⇒ 不发」与登录同步语义，生产值来自 `LoadDBInfo.SoftVersionDate` 的链路未在此叶对拍）；②`client_conf` 进程级 install 在**多进程/多配置**并发场景下的行为；③`640.due_ms_rel` 的 `|Δ|≤32ms` 容差是**共享判据**（`mir2_shared::DUE_MS_TOLERANCE_MS`），非本叶独有；④生产 AOI 在 SpaceMove 后的 `VisibleActors` 重置（`docs/issues/openmir2-spacemove-visible-actors-reset.md`）不在本叶。",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_spacemove",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动 tests::spacemove_parity_*）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/spacemove.json（`rng_total_draws` 4/4/4；caster `Sent` 含 633/634/766/54/11029/807/640；`DrainPasses=2`；`frame_order_scope=None`；`map_file_size=5880052`、`map_file_sha256=183e9d54…`；`soft_version_date_ex=20240101`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::spacemove_parity_s1",
+          "tests::spacemove_parity_s5",
+          "tests::spacemove_parity_s13",
+          "real_rust_ledger_spacemove"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。2026-11-21 升格（`docs/issues/openmir2-changemap-missing-serverconfig.md` §8-§10）：换图簇补 `SM_SERVERCONFIG(11029)`（`Session.soft_version_date` 缺省 0=不发 + 登录/重登同步 + `client_conf` 进程级单点 install + drain 读 World/online 组装，drain 签名未改）。全量门：125 驱动/42 比较器全绿（实现树），合并后 master 127/43 全绿。"
     },
     {
       "id": "MG-36",
@@ -1156,7 +1167,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级 2026-11-20 升格（scope=partial）：数据+装置合并 master e5ca069ce（C# SinsuBatch + golden sinsu.json + Rust 驱动/比较器）；神兽 race=113（ELF_MONSTER）走 0.3 支，new_slaves 逐字段（神兽/1/hp20/max24/master=true）；三牙（stub_monster_race / 表名→slave_count_after / 发出名→new_slaves[0].name）见 docs/issues/openmir2-sinsu-mg41-evidence.md。驱动 `--exact --test-threads=1` 单跑（已登记 §57 合并门）。",
       "basis": "semantic",
-      "scope": "partial：两例 summon_ok + cap_hit。summon_ok（adopt：race=113 / slave_count 0→1 / regen_calls=1 / new_slaves 逐字段 / 帧 17·638·642 含 recog·due_ms_rel）；**cap_hit 回召面已覆盖**：门 `Rejected` 三断（`regen_calls=0` / `slave_count` 不变 / `new_slaves` 空）+ 帧 17·638·642（含 recog·due_ms_rel）+ `recall_moved` + 落点由 caster 坐标派生（施法方向 `DIR_RIGHT` ⇒ `after=(caster_x+1, caster_y)`，`before(0,0)≠after`）+ `Rng` 两侧同源 0 抽**逐值比** + `807`(SM_SPACEMOVE_SHOW2) 帧**未建模属已登记缺口**（`crates/world-bevy/src/space_move.rs:89`；不对称断言 golden 恰 3 / Rust 恰 0，建模后红）。仍保留的限制：`summon_ok` **不比 `Rng`**（离线替身造怪 0 抽 vs `create_monster_oracle` 真抽不同源）；`807` 仅登记未建模（非逐帧比）。`640`(SM_MAGIC_LVEXP) 仍**不进 `keep`**（多重集只留 17/638/642），但已按裁决补**只判 `due_ms_rel` 的不对称断言**：golden caster 恰 1 条 `due=1000`、Rust 同条数且 due 相等（payload 不比——`tag`(=TranPoint) 因离线替身造怪 0 抽而错位）。缺陷 #6 已收口（卡 `openmir2-magic-640-delay-sweep`）。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。"
+      "scope": "partial：两例 summon_ok + cap_hit。summon_ok（adopt：race=113 / slave_count 0→1 / regen_calls=1 / new_slaves 逐字段 / 帧 17·638·642 含 recog·due_ms_rel）；**cap_hit 回召面已覆盖**：门 `Rejected` 三断（`regen_calls=0` / `slave_count` 不变 / `new_slaves` 空）+ 帧 17·638·642（含 recog·due_ms_rel）+ `recall_moved` + 落点由 caster 坐标派生（施法方向 `DIR_RIGHT` ⇒ `after=(caster_x+1, caster_y)`，`before(0,0)≠after`）+ `Rng` 两侧同源 0 抽**逐值比** + `807`(SM_SPACEMOVE_SHOW2) 帧**未建模属已登记缺口**（`crates/world-bevy/src/space_move.rs:89`；不对称断言 golden 恰 3 / Rust 恰 0，建模后红）。仍保留的限制：`summon_ok` **不比 `Rng`**（造怪抽数已记录且可复现；Rust 侧**已消费前 5 抽且与 golden 逐值相同**（台账 `[373,221,1401,2314,1315,…]`），**差异在第 6 抽起**（golden 第 6 抽 = 1、台账 = 3，另多 35/2 两抽））；`807` 仅登记未建模（非逐帧比）。`640`(SM_MAGIC_LVEXP) 仍**不进 `keep`**（多重集只留 17/638/642），但已按裁决补**只判 `due_ms_rel` 的不对称断言**：golden caster 恰 1 条 `due=1000`、Rust 同条数且 due 相等（payload 不比——`tag`(=TranPoint) 随造怪抽数的消费位置错位（该 stem 的 Rust 侧已消费前 5 抽、差异在第 6 抽起））。缺陷 #6 已收口（卡 `openmir2-magic-640-delay-sweep`）。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。"
     },
     {
       "id": "MG-42",
@@ -1184,9 +1195,9 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial，STUB）：41 的 adopt 主链由 `angel` × summon_ok/cap_hit 覆盖（`MakeSlave` 的 Master/IsSlave/level/Recalc/半补/RefNameColor/SlaveList + 造怪前帧 17/638/642 + 640 自延迟 1000ms）；批 `card/mg42-angel-summon`。装置前提：`OfflineWorldEngine.RegenMonsterByName` 为离线替身（17/30 同法）⇒ `Rng`（替身 0 抽 vs Rust `create_monster_oracle` 真抽）与 640 的 `tag`（TranPoint 随抽数）不入比较面。**生产恒失败（数据缺口）**：冻结 `sql/mir2_data.sql` 的 `monsters` 无 `精灵` 行 ⇒ `GetMonRace` 返 -1 ⇒ `CreateMonster` 无 default ⇒ `MakeSlave` null（卡 `docs/issues/openmir2-angel-summon-monster-missing.md`）；**本升格不证明生产可召唤**。",
+      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial，STUB）：41 的 adopt 主链由 `angel` × summon_ok/cap_hit 覆盖（`MakeSlave` 的 Master/IsSlave/level/Recalc/半补/RefNameColor/SlaveList + 造怪前帧 17/638/642 + 640 自延迟 1000ms）；批 `card/mg42-angel-summon`。装置前提：`OfflineWorldEngine.RegenMonsterByName` 为离线替身（17/30 同法）⇒ `Rng`（替身造怪抽数已记录在 golden `Rng`；该 stem 的驱动不做 RNG 记账，台账无 `Rng` 键）与 640 的 `tag`（TranPoint 随抽数）不入比较面。**生产恒失败（数据缺口）**：冻结 `sql/mir2_data.sql` 的 `monsters` 无 `精灵` 行 ⇒ `GetMonRace` 返 -1 ⇒ `CreateMonster` 无 default ⇒ `MakeSlave` null（卡 `docs/issues/openmir2-angel-summon-monster-missing.md`）；**本升格不证明生产可召唤**。",
       "basis": "semantic",
-      "scope": "partial（STUB）：`SKILL_ANGEL(41)`（`MagicManager.cs:462-473`）→ `MagMakeAngelSlave`（`:1343-1354`）→ `MakeSlave(Config.Angel=精灵, level, level, 1, DwRoyaltySec)` 的主链由 `angel` × summon_ok/cap_hit 覆盖：`Angel` block 标量（regen_calls / slave_count_before/after / pre_slave_count / stub_*）与 new_slaves 逐项（name/level/hp/max_hp/master_is_caster）、造怪前帧 17/638/642 按 socket 多重集、640 的 (recog,param,series,due)；cap_hit 另三断（实体数不增 / slave_list 不变 / regen_calls=0）。**未验 / 不证明**：①生产可召唤（`monsters` 无 `精灵` 行 ⇒ `MakeSlave` 恒 null）；②造怪抽数与掉落表（离线替身不抽）；③`Rng` 与 640 的 `tag`；④生产 AOI / 视野路径；⑤`MakeSlave` 的 `nMaxMob` 是 oracle 硬编码 1（与配置无关），只覆盖预置 1 个奴隶的门失败支。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。"
+      "scope": "partial（STUB）：`SKILL_ANGEL(41)`（`MagicManager.cs:462-473`）→ `MagMakeAngelSlave`（`:1343-1354`）→ `MakeSlave(Config.Angel=精灵, level, level, 1, DwRoyaltySec)` 的主链由 `angel` × summon_ok/cap_hit 覆盖：`Angel` block 标量（regen_calls / slave_count_before/after / pre_slave_count / stub_*）与 new_slaves 逐项（name/level/hp/max_hp/master_is_caster）、造怪前帧 17/638/642 按 socket 多重集、640 的 (recog,param,series,due)；cap_hit 另三断（实体数不增 / slave_list 不变 / regen_calls=0）。**未验 / 不证明**：①生产可召唤（`monsters` 无 `精灵` 行 ⇒ `MakeSlave` 恒 null）；②造怪抽数与掉落表：抽数本身**已记录在 golden `Rng` 中且可复现**（`[1500,2000,3000,3000,2000]` + `Random(3)`），**台账无 `Rng` 键**（该 stem 的驱动不做 RNG 记账）；掉落表（`MonGetRandomItems`/`CoolEyeCode`）未覆；③`Rng` 与 640 的 `tag`；④生产 AOI / 视野路径；⑤`MakeSlave` 的 `nMaxMob` 是 oracle 硬编码 1（与配置无关），只覆盖预置 1 个奴隶的门失败支。 帧序**未验**（`sent_filter` 按 socket 多重集比）：实测 Rust caster `[642, 638]` vs golden `[638, 642]`（`angel`/`skeleton`/`sinsu` 三支 cap_hit 均然；summon_ok 的 640 位置同理），属全局「直发 vs 入队」差异，见 `docs/issues/openmir2-refmsg-queue-model.md`。"
     },
     {
       "id": "MG-43",
