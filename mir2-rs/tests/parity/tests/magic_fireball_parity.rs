@@ -1758,6 +1758,214 @@ fn real_rust_ledger_clone46() {
     );
 }
 
+/// FireCross 块检查（`verify` 之外）：事件表逐项 + 安全区/预占的输入-输出一致性。
+fn firecross_block_checks(g: &Value, r: &Value) -> Vec<String> {
+    let mut errs = Vec::new();
+    for (gi, gc) in g["cases"].as_array().into_iter().flatten().enumerate() {
+        let rc = &r["cases"][gi];
+        let label = text(gc, "Label");
+        let gb = &gc["FireCross"];
+        let rb = &rc["FireCross"];
+        if !gb.is_object() {
+            errs.push(format!("[{label}] golden 缺 FireCross 块"));
+            continue;
+        }
+        if !rb.is_object() {
+            errs.push(format!("[{label}] 台账缺 FireCross 块"));
+            continue;
+        }
+        // 输入面 / 结果标量。
+        for k in [
+            "safe_zone_flag",
+            "disable_in_safe_zone_fire_cross",
+            "in_safe_zone_at_cast",
+            "red_sysmsg",
+            "has_640",
+        ] {
+            if gb.get(k).and_then(Value::as_bool) != rb.get(k).and_then(Value::as_bool) {
+                errs.push(format!(
+                    "[{label}] FireCross.{k} 不等：golden={:?} rust={:?}",
+                    gb.get(k),
+                    rb.get(k)
+                ));
+            }
+        }
+        let gp = gb["pre_event_cells"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let rp = rb["pre_event_cells"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if gp != rp {
+            errs.push(format!(
+                "[{label}] FireCross.pre_event_cells 不等：golden={gp:?} rust={rp:?}"
+            ));
+        }
+        // 事件表：两侧均按 (x,y) 排序后逐项比。
+        let ge = gb["events"].as_array().cloned().unwrap_or_default();
+        let re = rb["events"].as_array().cloned().unwrap_or_default();
+        if ge.len() != re.len() {
+            errs.push(format!(
+                "[{label}] FireCross.events 条数不等：golden={} rust={}",
+                ge.len(),
+                re.len()
+            ));
+        } else {
+            for (i, (a, b)) in ge.iter().zip(re.iter()).enumerate() {
+                for k in ["x", "y", "type", "damage", "continue_ms"] {
+                    if num(a, k) != num(b, k) {
+                        errs.push(format!(
+                            "[{label}] FireCross.events[{i}].{k} 不等：golden={} rust={}",
+                            num(a, k),
+                            num(b, k)
+                        ));
+                    }
+                }
+            }
+        }
+        // 推导面（两侧各自成立）：事件类型/持续时间形态、安全区支零事件、非安全区支 5−预占。
+        for (side, c) in [("golden", gc), ("rust", rc)] {
+            let b = &c["FireCross"];
+            let events = b["events"].as_array().cloned().unwrap_or_default();
+            let pre = b["pre_event_cells"].as_array().map_or(0usize, |a| a.len());
+            let disable = b
+                .get("disable_in_safe_zone_fire_cross")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let insafe = b
+                .get("in_safe_zone_at_cast")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let blocked = disable && insafe;
+            let want = if blocked { 0 } else { 5 - pre };
+            if events.len() != want {
+                errs.push(format!(
+                    "[{side}] events 条数 {} ≠ {want}（blocked={blocked}，pre={pre}）",
+                    events.len()
+                ));
+            }
+            if blocked {
+                if b.get("red_sysmsg").and_then(Value::as_bool) != Some(true) {
+                    errs.push(format!("[{side}] 安全区支必须有 red_sysmsg"));
+                }
+                if b.get("has_640").and_then(Value::as_bool) != Some(false) {
+                    errs.push(format!("[{side}] 安全区支不得有 640"));
+                }
+            } else {
+                if b.get("red_sysmsg").and_then(Value::as_bool) != Some(false) {
+                    errs.push(format!("[{side}] 非安全区支不得有红字"));
+                }
+                if b.get("has_640").and_then(Value::as_bool) != Some(true) {
+                    errs.push(format!("[{side}] 非安全区支必须有 640"));
+                }
+            }
+            let mut cont: Option<i64> = None;
+            for e in &events {
+                if num(e, "type") != 5 {
+                    errs.push(format!(
+                        "[{side}] 事件 type={} ≠ ET_FIRE(5)",
+                        num(e, "type")
+                    ));
+                }
+                let cm = num(e, "continue_ms");
+                if cm <= 0 || cm % 1000 != 0 {
+                    errs.push(format!(
+                        "[{side}] continue_ms={cm} 必须 >0 且为 1000 的整数倍"
+                    ));
+                }
+                if let Some(prev) = cont {
+                    if prev != cm {
+                        errs.push(format!(
+                            "[{side}] 同支事件 continue_ms 不一致：{prev} vs {cm}"
+                        ));
+                    }
+                }
+                cont = Some(cm);
+            }
+            // 安全区支的 golden 必须记录红字原文（台账不记文本，Sent 尾已逐字节比）。
+            if blocked && side == "golden" {
+                let t = text(b, "red_sysmsg_text");
+                if t.is_empty() {
+                    errs.push("[golden] 安全区支 red_sysmsg_text 为空".into());
+                }
+            }
+        }
+    }
+    errs
+}
+
+/// **MG-36（22 火墙）** 真实台账 → 判定面（三支 base/pre_center/safe_zone）。
+///
+/// 判据分层：驱动只记录 + 自带退化守卫（事件数/帧序/RNG 抽数）；本比较器做
+/// `verify` 的通用面 + `FireCross` 块逐字段 + 由输入推导的一致性（安全区支零事件/无 640、
+/// 非安全区 5−预占、`continue_ms` 为 1000 倍数且同支一致、`type==ET_FIRE(5)`）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::firecross_parity_*）生成真实台账"]
+fn real_rust_ledger_firecross() {
+    let stem = "firecross";
+    let labels = ["base", "pre_center", "safe_zone"];
+    let golden = golden_file("firecross.json");
+    for label in labels {
+        check_golden_contract(&golden, label).unwrap_or_else(|m| panic!("{m}"));
+    }
+    let dir = ledger_dir();
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+    );
+    let mut cases = Vec::new();
+    for label in labels {
+        let path = dir.join(format!("{stem}_{label}.json"));
+        let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "防空转：缺真实台账 {}（{e}）。先跑驱动 tests::firecross_parity_*",
+                path.display()
+            )
+        });
+        let side = path.with_extension("run.json");
+        let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+            panic!(
+                "防空转：台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到上一次的陈旧台账」",
+                side.display()
+            )
+        });
+        let side_v: Value = serde_json::from_str(&side_text).expect("run.json 必须是合法 JSON");
+        assert_eq!(
+            side_v.get("run_id").and_then(Value::as_str),
+            Some(want.as_str()),
+            "[{label}] 台账陈旧：run_id 不匹配（当前环境 = {want}）；先用同一 id 重跑驱动"
+        );
+        let v: Value = serde_json::from_str(&txt).expect("防空转：台账必须是合法 JSON");
+        let arr = v.as_array().expect("防空转：台账必须是 [case] 数组");
+        assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
+        assert_eq!(
+            arr[0].get("Label").and_then(Value::as_str),
+            Some(label),
+            "[{label}] 台账 Label 不符"
+        );
+        let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
+        cases.push(pinned);
+    }
+    let g = golden.clone();
+    let r = serde_json::json!({
+        "magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+        "cases": cases,
+    });
+    let mut errs = firecross_block_checks(&g, &r);
+    if let Err(mut e) = verify(&g, &r) {
+        errs.append(&mut e);
+    }
+    assert!(
+        errs.is_empty(),
+        "火墙台账与金标准不等（{} 条）：\n{}",
+        errs.len(),
+        errs.join("\n")
+    );
+}
+
 /// **`36`（`SKILL_UENHANCER`）**真实台账 → 判定面（三支 s1/s5/s13，卡 openmir2-uenhancer）。
 ///
 /// scope：只证 DoSpell 时刻 `ExtraAbil[0]/Times[0]`（`CasterExtraAbil0`）与帧；施法者 `Abil`
