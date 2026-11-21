@@ -176,6 +176,7 @@ fn tick_once(
         None,
         prof.as_deref_mut(),
         None,
+        None,
         Some(&mut rig.seen),
     );
     let ns = t0.elapsed().as_nanos() as u64;

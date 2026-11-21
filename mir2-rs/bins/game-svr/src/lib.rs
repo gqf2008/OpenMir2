@@ -19435,12 +19435,19 @@ fn aoi_appearance_slots(
 /// 返回**本调用每个会话实发的帧数**（`(chr_name, frames)`，只含 `>0` 的会话）——供 sim 循环
 /// 累加成诊断读数 `af=`（root 2026-10-14 要求「打印可见集大小与下发帧数」）。
 /// 这里只对 `Show`（＝首次看见）发帧，是对齐 oracle `Run()` 里 `VisibleFlag.Show` 支。
+///
+/// **`ledger`（L2-4 段 6b）**：给了就逐帧记账（owner = 被看见实体、recipient = 收件人会话、
+/// `kind` = **该帧 12B 头的 ident**——一次 appearance 是多帧，常量 kind 会自判重复）。
+/// 生产恒 `None`；只在 N=2 进程内用例里开（裁决见 `docs/issues/l2-4-6b-hook-plan-20261122.md`）。
 fn drain_aoi_downlink(
     world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     login_pending: Option<&std::collections::HashMap<String, smframe::EnterWorldInputs>>,
+    // **L2-4 段 6b**：AOI 出现帧的单一发射者记账（`None` ⇒ 零成本；**生产恒 `None`**，
+    // 见提交信息：ledger 生产启用 = L2-5 前置）。
+    mut ledger: Option<&mut region_loop::AoIFrameLedger<'_>>,
     mut prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> Vec<(String, usize)> {
     let mut sent: Vec<(String, usize)> = Vec::new();
@@ -19522,6 +19529,23 @@ fn drain_aoi_downlink(
                 continue;
             };
             for body in bodies {
+                // **L2-4 段 6b**：生产不记账（`None`）；N=2 用例按帧记账。kind 取帧头 ident。
+                if let Some(ledger) = ledger.as_deref_mut() {
+                    debug_assert!(body.len() >= COMMAND_MESSAGE_SIZE, "SM_* 至少 12B 头");
+                    // `OnlineEntry.gate_idx` 是 i32（路由表口径），来源是 `gate_conn` 的
+                    // `service_id: u8` ⇒ 转换恒成功；失败说明线号被别处写坏，直接炸出来。
+                    let line =
+                        u8::try_from(entry.gate_idx).expect("网关线号必须来自 u8 的 service_id");
+                    ledger.note(
+                        target.id,
+                        target.map_id,
+                        target.x,
+                        target.y,
+                        line,
+                        entry.socket,
+                        u16::from_le_bytes([body[4], body[5]]),
+                    );
+                }
                 let _ = tx.send(SimToGate::SendFrame {
                     socket: entry.socket,
                     body,
@@ -21934,6 +21958,7 @@ fn drain_run_downlinks(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -21958,6 +21983,8 @@ fn drain_run_downlinks_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
     mut prof: Option<&mut tick_profile::HostTickProfile>,
+    // **L2-4 段 6b**：透传给 [`drain_aoi_downlink`]；生产恒 `None`（L2-5 前置）。
+    ledger: Option<&mut region_loop::AoIFrameLedger<'_>>,
     login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
     walk_seen: Option<&mut std::collections::HashMap<i32, (usize, i32, i32)>>,
 ) -> Vec<(String, usize)> {
@@ -21997,6 +22024,7 @@ fn drain_run_downlinks_with_magic(
         online,
         gates,
         login_tails.as_deref(),
+        ledger,
         prof.as_deref_mut(),
     );
     tick_profile::probe_end(&mut prof, "HostAoiAppear", t);
@@ -30914,6 +30942,9 @@ fn sim_loop(
             return;
         }
         host_prof.end("HostShutdown", t);
+        // **L2-4 段 6b**：本 tick 的**单源** tick 号（快照/屏障/账本共用）。`ticks` 在本 tick
+        // 中段才自增（HostFrames）⇒ 下半段任何要 tick 号的地方一律读这里，不做偏移。
+        let tick_no = ticks;
         // **P2-3b (A)**：计数器跨片累加，汇总行只片 0 打；N>1 行首带 `shards=N aggregated`。
         if is_host && world.clock_ms >= entry_telemetry_next_ms {
             entry_telemetry_next_ms = world.clock_ms + 5_000;
@@ -34331,7 +34362,7 @@ fn sim_loop(
         // `tick_tail_before_aoi → 快照/发布/barrier1/读邻居 → tick_phase2 → 心跳/barrier2`；
         // 边界快照因此是本 tick 终态。N=1 保持原样一行（逐字节不变）。
         if let Some(host) = zone_host.as_deref() {
-            if ticks == 0 {
+            if tick_no == 0 {
                 // **启动门**（静态装载已完成；tick 0 的首个区 tick 之前）：每区边界带实体数
                 // ≤ 上限，超限 ⇒ rc=2（与探针 fail-closed 同口径）。
                 if let Err(e) = zone_wiring::check_band_gate(
@@ -34352,7 +34383,7 @@ fn sim_loop(
                 &host.exchange,
                 &host.barriers,
             );
-            let wait_phase1_us = match runtime.after_phase1(&world, ticks) {
+            let wait_phase1_us = match runtime.after_phase1(&world, tick_no) {
                 Ok((_border, _neighbors, wait_us)) => wait_us,
                 Err(e) => {
                     // `Barrier` 无超时：本区带错退出会让其余区永久阻塞 ⇒ abort 整机
@@ -34369,7 +34400,7 @@ fn sim_loop(
                 wait_phase1_us,
                 Some((&**host.watch.heartbeats(), host.watch.now_ms())),
             );
-            if ticks == 0 {
+            if tick_no == 0 {
                 // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
                 let _ = host.watch.arm();
             }
@@ -34566,6 +34597,8 @@ fn sim_loop(
                 cfg: magic_cfg_of(&enter_cfg),
             }),
             Some(&mut host_prof),
+            // **L2-4 段 6b**：生产不启账本（v1 只有一个 World）；ledger 生产启用 = L2-5 前置。
+            None,
             Some(&mut login_tails),
             Some(&mut monster_walk_seen),
         );
@@ -40176,7 +40209,7 @@ mod tests {
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
             let mut out = Vec::new();
@@ -40277,7 +40310,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending), None);
+        let sent = drain_aoi_downlink(
+            &world,
+            &displays,
+            &online,
+            &gates,
+            Some(&pending),
+            None,
+            None,
+        );
         assert_eq!(sent, vec![("p".to_string(), 8)], "4 对帧 = 8 条");
 
         let mut turn_recogs = Vec::new();
@@ -40384,7 +40425,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         assert_eq!(
             sent,
             vec![("p".to_string(), 2)],
@@ -40474,7 +40515,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         assert_eq!(sent, vec![("p".to_string(), 2)]);
         let frames = aoi_collect_frames(&mut rx0);
         let turn = frames
@@ -40755,6 +40796,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let raws = collect(&mut rx);
         let msgs: Vec<mir2_protocol::frame::CommandMessage> = raws
@@ -40823,6 +40865,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             None,
             None,
             None,
@@ -41957,7 +42000,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         let frames = aoi_collect_frames(&mut rx0);
 
         let mon_turn = frames
@@ -42264,7 +42307,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -42382,7 +42425,7 @@ mod tests {
         // tick 1：怪物首次出现 ⇒ `new >= 1`，实发 2 帧（SM_TURN + SM_FEATURECHANGED），
         // 累计 `af >= 2`；`vis` 也必须 >= 1。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick1 = 0usize;
@@ -42407,7 +42450,7 @@ mod tests {
         // tick 2：怪仍在视野 ⇒ `update_visible_gay` 置 `Invisible` ⇒ `new == 0`，
         // 但当前可见集必须仍 >= 1（旧实现这里恒 0，正是 root 误判的来源）。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick2 = 0usize;
@@ -44069,7 +44112,7 @@ mod tests {
             0,
             "离世帧只发一次（ghost 不重复 DisappearA）"
         );
-        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         assert!(
             sent_aoi.is_empty(),
             "ghost 会话不得再产出现帧：{sent_aoi:?}"
@@ -62263,7 +62306,15 @@ SendRefMsgRange=15
 
         // 登录路径的两类排水（顺序同生产 tick：② aoi → ③ 尾段）；尾段跑两遍覆盖清缓冲。
         let displays = downlink::DisplayTable::new();
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending), None);
+        let _ = drain_aoi_downlink(
+            &world,
+            &displays,
+            &online,
+            &gates,
+            Some(&pending),
+            None,
+            None,
+        );
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
 
@@ -88245,14 +88296,14 @@ SendRefMsgRange=15
             world.entities.get(p).is_some(),
             "夹具前提：stage=Left 时实体仍在（M-3 的 ghost 形态）"
         );
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         let frames = aoi_collect_frames(&mut rx0);
         assert!(sent.is_empty(), "stage=Left ⇒ 不产出现帧");
         assert!(frames.is_empty(), "stage=Left ⇒ 零帧（A1 stage 门）");
 
         // 还原 stage ⇒ 同一夹具照常出帧（门只挡 Left）。
         set_stage(&mut world, mir2_world_bevy::WorldStage::InWorld);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
         assert_eq!(
             sent,
             vec![("p".to_string(), 2)],
@@ -91943,7 +91994,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..400 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 80_000, "400 × 200ms");
@@ -92014,7 +92065,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..149 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 29_800, "149 × 200ms");
@@ -94405,7 +94456,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -116972,5 +117023,548 @@ mod zone_wiring_tests {
         assert!(err.contains("区 0"), "必须点名区号：{err}");
         assert!(err.contains('2'), "必须带实测实体数：{err}");
         assert!(err.contains("上限 1"), "必须带上限：{err}");
+    }
+}
+
+#[cfg(test)]
+mod l2_multi_zone_ledger_tests {
+    //! **L2-4 段 6b**：`AoIFrameLedger` 的单一发射者判据 + N=2 进程内对拍。
+    //!
+    //! 边界（Leader 2026-11-22 裁决）：只做「每区**本地帧** + 账本三条不变式 + 可见集合
+    //! （halo 合成）」对拍；**帧流等价（跨区出现/消失帧）留 L2-5**。生产路径**不启**账本
+    //! （`sim_loop` 传 `None`）：**ledger 生产启用 = L2-5 前置**（需先有 per-zone session/host
+    //! 切片 + 边界拒绝 + MonGen 过滤）。
+
+    use super::*;
+    use mir2_world_bevy::{EntitySpawn, World};
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::{Arc, Mutex};
+
+    use crate::region_loop::{
+        AoIFrameLedger, CrossZoneOutbox, HaloExchange, TickBarriers, ZoneRuntime,
+    };
+    use crate::zone::{parse_zone_layout, RegionLayout, ZoneId};
+    use crate::zone_router::{ZoneRouter, HOST_ZONE};
+
+    fn two_zone_layout() -> RegionLayout {
+        parse_zone_layout(
+            "0:0=0,0-9,9;1:0=10,0-19,9",
+            &["0".to_string()],
+            &[(20, 10)],
+            HOST_ZONE,
+        )
+        .expect("两区布局")
+    }
+
+    fn zone(n: u32) -> ZoneId {
+        ZoneId::new(n)
+    }
+
+    fn fake_display(name: &str) -> downlink::ActorDisplay {
+        downlink::ActorDisplay::new(0, 0, 0, 0, 0, 0, name.as_bytes().to_vec())
+    }
+
+    fn cheb(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
+        (ax - bx).abs().max((ay - by).abs())
+    }
+
+    // ------------------------------------------------------------------
+    // 一、账本判据（构造级；正例 + 两个反例方向）
+    // ------------------------------------------------------------------
+
+    /// **正例**：实体坐标在本区 rect 内 ⇒ 账本 `check()` 绿。
+    ///
+    /// 红检：把 `AoIFrameLedger::note` 里的 `owner_zone` 恒置为本区 ⇒ 下面的反例红（本用例只钉正路径）。
+    #[test]
+    fn ledger_accepts_owner_in_its_own_zone() {
+        let layout = two_zone_layout();
+        let router = ZoneRouter::new();
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(0).expect("begin");
+        {
+            let mut ledger = AoIFrameLedger::new(&mut outbox, &layout, &router, zone(0), 0);
+            ledger.note(7, 0, 3, 3, 0, 900, 17);
+        }
+        assert!(
+            outbox.seal_tick().expect("seal").check().is_ok(),
+            "本区实体由本区发帧：账本必须绿"
+        );
+    }
+
+    /// **反例（单一发射者）**：区 0 替**区 1 rect 内**的实体发帧 ⇒ `NotOwner`、`check()` 红。
+    ///
+    /// 红检：删掉 `CrossZoneOutbox::submit` 的 `src != owner_zone` 闸 ⇒ 本用例红。
+    #[test]
+    fn ledger_rejects_a_frame_from_the_wrong_zone() {
+        let layout = two_zone_layout();
+        let router = ZoneRouter::new();
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(0).expect("begin");
+        {
+            // x=15 落在区 1 的 rect 内，却由区 0 提交。
+            let mut ledger = AoIFrameLedger::new(&mut outbox, &layout, &router, zone(0), 0);
+            ledger.note(8, 0, 15, 3, 0, 900, 17);
+        }
+        let err = outbox
+            .seal_tick()
+            .expect("seal")
+            .check()
+            .expect_err("跨区替发必须被账本拒绝");
+        assert!(
+            matches!(err, crate::region_loop::LedgerViolation::NotOwner(_)),
+            "单一发射者违例：{err}"
+        );
+    }
+
+    /// **反例（kind 必须逐帧取 ident）**：同 owner/recipient、不同 kind 的两帧不是重复；
+    /// 同 kind 第三帧才是 `Duplicate`。
+    ///
+    /// 红检：把 [`AoIFrameLedger::note`] 的 `kind` 改成常量 ⇒ 第 2 帧立刻被判重复（本用例红）。
+    #[test]
+    fn ledger_distinguishes_kinds_and_flags_true_duplicates() {
+        let layout = two_zone_layout();
+        let router = ZoneRouter::new();
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(0).expect("begin");
+        {
+            let mut ledger = AoIFrameLedger::new(&mut outbox, &layout, &router, zone(0), 0);
+            // 一次 appearance 的两帧（SM_TURN + SM_FEATURECHANGED）⇒ kind 不同，不是重复。
+            ledger.note(9, 0, 3, 3, 0, 900, 17);
+            ledger.note(9, 0, 3, 3, 0, 900, 41);
+        }
+        assert!(
+            outbox.seal_tick().expect("seal").check().is_ok(),
+            "同一次 appearance 的多帧（kind 不同）不得判重复"
+        );
+
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(1).expect("begin");
+        {
+            let mut ledger = AoIFrameLedger::new(&mut outbox, &layout, &router, zone(0), 1);
+            ledger.note(9, 0, 3, 3, 0, 900, 17);
+            ledger.note(9, 0, 3, 3, 0, 900, 17); // 真重复：同 tick/owner/recipient/kind
+        }
+        let err = outbox
+            .seal_tick()
+            .expect("seal")
+            .check()
+            .expect_err("同身份两个发射者必须红");
+        assert!(
+            matches!(err, crate::region_loop::LedgerViolation::Duplicate(_)),
+            "重复帧：{err}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // 二、N=2 进程内对拍：本地帧 + 三条不变式
+    // ------------------------------------------------------------------
+
+    struct ZoneRig {
+        world: World,
+        displays: downlink::DisplayTable,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        sessions: HashMap<String, SessionGround>,
+    }
+
+    fn build_zone_rig(
+        line: u8,
+        players: &[(&str, i32, i32, i32)],
+        monsters: &[(i32, &str, i32, i32)],
+    ) -> ZoneRig {
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut displays = downlink::DisplayTable::new();
+        for &(id, name, x, y) in monsters {
+            let mut e = EntitySpawn::new(id, name.to_string(), x, y);
+            e.race = 80;
+            e.view_range = 5;
+            let eid = world.add_entity(e);
+            displays.set(eid, fake_display(name));
+        }
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(line, tx);
+        let mut online = OnlineRegistry::new();
+        let mut sessions = HashMap::new();
+        for &(name, socket, x, y) in players {
+            world.open_session(name);
+            let mut p = EntitySpawn::new(0, name.to_string(), x, y);
+            p.race = 0;
+            p.view_range = 12;
+            let eid = world.enter_map(name, p, 0).expect("玩家进图");
+            displays.set(eid, fake_display(name));
+            online.push(OnlineEntry {
+                account: name.to_string(),
+                chr_name: name.to_string(),
+                session_id: eid,
+                gate_idx: i32::from(line),
+                socket,
+                actor_id: eid,
+            });
+            // 与 `host_aoi_bench` 的 rig 同款：计时器以「当前时刻」为起点（避免默认 0 立刻到期）。
+            let mut sg = crate::tests::test_session_ground(eid);
+            sg.stamina = game_svr::stamina::Stamina::new(now_ms());
+            sg.recovery = game_svr::recover::Recovery::new(now_ms());
+            sessions.insert(name.to_string(), sg);
+        }
+        // **不在这里 tick**：`World` 的 owner 线程在**首个 tick** 上钉死（`tick_head` 断言），
+        // 而拆区的 World 要移到区线程里 tick ⇒ 构建期 tick 会让区线程撞「同一线程」断言。
+        // Enter 由各侧的第一个正式 tick 处理；基线与拆区都从「未 tick 过」的时钟起点出发。
+        ZoneRig {
+            world,
+            displays,
+            online,
+            gates,
+            rx,
+            sessions,
+        }
+    }
+
+    /// 收走本线所有帧，只保留 **AOI 出现面** 的两个 ident（SM_TURN/SM_FEATURECHANGED）：
+    /// 其余帧（会话计时器驱动的 53/654…）依赖墙钟、不在本段对拍面。返回
+    /// `(收件人 socket, 产生方 char_name, ident)`，按发出序。
+    fn collect_aoi(
+        world: &World,
+        rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+    ) -> Vec<(i32, String, u16)> {
+        let mut out = Vec::new();
+        while let Ok(cmd) = rx.try_recv() {
+            let SimToGate::SendFrame { socket, body } = cmd else {
+                continue;
+            };
+            if body.len() < COMMAND_MESSAGE_SIZE {
+                continue;
+            }
+            let ident = u16::from_le_bytes([body[4], body[5]]);
+            if ident != mir2_protocol::messages::SM_TURN
+                && ident != mir2_protocol::messages::SM_FEATURECHANGED
+            {
+                continue;
+            }
+            let recog = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+            let owner = world
+                .entities
+                .get(recog)
+                .map_or_else(|| format!("<{recog}>"), |e| e.name.clone());
+            out.push((socket, owner, ident));
+        }
+        out
+    }
+
+    fn by_socket(frames: &[(i32, String, u16)]) -> BTreeMap<i32, Vec<(String, u16)>> {
+        let mut out: BTreeMap<i32, Vec<(String, u16)>> = BTreeMap::new();
+        for (socket, owner, ident) in frames {
+            out.entry(*socket)
+                .or_default()
+                .push((owner.clone(), *ident));
+        }
+        out
+    }
+
+    /// 基线：全部实体在一个 `World`，单线程 `tick_head + tick_tail` + 同一 drains（账本 `None`）。
+    fn run_baseline(ticks: u64) -> Vec<(i32, String, u16)> {
+        let mut rig = build_zone_rig(
+            0,
+            &[("O", 9001, 2, 2), ("P", 9002, 17, 2)],
+            &[(11, "ea", 3, 2), (12, "eb", 16, 2)],
+        );
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut frames = Vec::new();
+        for _ in 0..ticks {
+            let mut rec = rig.world.tick_head();
+            rig.world.tick_tail(&mut rec);
+            let _ = drain_run_downlinks_with_magic(
+                &rec,
+                &mut rig.world,
+                &rig.displays,
+                &rig.online,
+                &mut rig.sessions,
+                &rig.gates,
+                &catalog,
+                12,
+                3000,
+                3000,
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            frames.extend(collect_aoi(&rig.world, &mut rig.rx));
+        }
+        frames
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_zone_thread(
+        zone_id: ZoneId,
+        mut rig: ZoneRig,
+        layout: Arc<RegionLayout>,
+        exchange: Arc<HaloExchange>,
+        barriers: Arc<TickBarriers>,
+        outbox: Arc<Mutex<CrossZoneOutbox>>,
+        router: Arc<ZoneRouter>,
+        catalog: Arc<game_svr::ability::StdItemCatalog>,
+        after_drain: Arc<std::sync::Barrier>,
+        ticks: u64,
+    ) -> std::thread::JoinHandle<Vec<(i32, String, u16)>> {
+        std::thread::spawn(move || {
+            let runtime = ZoneRuntime::new(
+                zone_id,
+                layout.zone_spans(),
+                ZONE_HALO_WIDTH,
+                &exchange,
+                &barriers,
+            );
+            let mut frames = Vec::new();
+            for tick_no in 0..ticks {
+                if zone_id == zone(0) {
+                    outbox
+                        .lock()
+                        .expect("outbox")
+                        .begin_tick(tick_no)
+                        .expect("begin_tick");
+                }
+                let mut rec = rig.world.tick_phase1();
+                let (_border, _neighbors, wait_us) = runtime
+                    .after_phase1(&rig.world, tick_no)
+                    .expect("快照/发布/barrier1/读邻居");
+                rig.world.tick_phase2(&mut rec);
+                runtime.after_phase2(wait_us, None);
+                {
+                    let mut guard = outbox.lock().expect("outbox");
+                    let mut ledger =
+                        AoIFrameLedger::new(&mut guard, &layout, &router, zone_id, tick_no);
+                    let _ = drain_run_downlinks_with_magic(
+                        &rec,
+                        &mut rig.world,
+                        &rig.displays,
+                        &rig.online,
+                        &mut rig.sessions,
+                        &rig.gates,
+                        catalog.as_ref(),
+                        12,
+                        3000,
+                        3000,
+                        false,
+                        None,
+                        None,
+                        Some(&mut ledger),
+                        None,
+                        None,
+                    );
+                }
+                frames.extend(collect_aoi(&rig.world, &mut rig.rx));
+                // 本 tick 两区的提交都已完成 ⇒ zone 0 才能 seal 账本。
+                let _ = after_drain.wait();
+                if zone_id == zone(0) {
+                    let mut guard = outbox.lock().expect("outbox");
+                    guard
+                        .seal_tick()
+                        .expect("seal_tick")
+                        .check()
+                        .expect("账本三条不变式（not_owner/dup/never/长度）");
+                }
+            }
+            frames
+        })
+    }
+
+    /// 拆区：区 0 = O + ea（line 0/socket 9001）；区 1 = P + eb（line 1/socket 9002）。
+    fn run_split(ticks: u64) -> Vec<(i32, String, u16)> {
+        let layout = Arc::new(two_zone_layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let outbox = Arc::new(Mutex::new(CrossZoneOutbox::new(2)));
+        let router = Arc::new(ZoneRouter::new());
+        router.assign(0, 9001, zone(0)).expect("O 在区 0");
+        router.assign(1, 9002, zone(1)).expect("P 在区 1");
+        let catalog = Arc::new(game_svr::ability::StdItemCatalog::new());
+        let after_drain = Arc::new(std::sync::Barrier::new(2));
+
+        let zone0 = spawn_zone_thread(
+            zone(0),
+            build_zone_rig(0, &[("O", 9001, 2, 2)], &[(11, "ea", 3, 2)]),
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+        );
+        let zone1 = spawn_zone_thread(
+            zone(1),
+            build_zone_rig(1, &[("P", 9002, 17, 2)], &[(12, "eb", 16, 2)]),
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+        );
+        let mut frames = zone0.join().expect("区 0 线程");
+        frames.extend(zone1.join().expect("区 1 线程"));
+        frames
+    }
+
+    /// **N=2 对拍（本地帧 + 三条不变式）**：两区互不可见（距离 > view_range）⇒ 拆区的每收件人
+    /// 有序出现帧流必须与单区基线**逐条相同**；账本每 tick `check()` 绿（线程内断言）。
+    ///
+    /// 基线/拆区各跑两遍，逐字节相同（确定性前置）。跨区帧流等价属 L2-5，不在本用例面内。
+    ///
+    /// 红检：把 `ledger.note` 的 kind 换常量 ⇒ 账本 `Duplicate` panic；把区 1 的实体挪进区 0 的
+    /// rect ⇒ `NotOwner` panic。
+    #[test]
+    fn two_zone_local_frames_match_single_zone_baseline() {
+        const TICKS: u64 = 12;
+        let baseline = by_socket(&run_baseline(TICKS));
+        let baseline_again = by_socket(&run_baseline(TICKS));
+        assert_eq!(
+            baseline, baseline_again,
+            "基线两遍必须逐字节相同（确定性前置）"
+        );
+
+        let split = by_socket(&run_split(TICKS));
+        let split_again = by_socket(&run_split(TICKS));
+        assert_eq!(split, split_again, "拆区两遍必须逐字节相同（确定性前置）");
+
+        assert_eq!(
+            split, baseline,
+            "互不可见的两区：每收件人有序出现帧流必须与单区基线完全一致"
+        );
+        assert!(
+            split.values().any(|v| !v.is_empty()),
+            "夹具必须真的产生出现帧（否则「空 == 空」会假绿）"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // 三、N=2 可见集合（halo 合成）对拍
+    // ------------------------------------------------------------------
+
+    /// 某 World 里观察者（按名字）用 Chebyshev ≤ 12 的可见集合（名字，排序）。
+    fn visible_names(
+        world: &World,
+        observer: &str,
+        extra: Option<&crate::region_loop::HaloSnapshot>,
+    ) -> Vec<String> {
+        let Some(me) = world.entities.iter_ref().find(|e| e.name == observer) else {
+            panic!("观察者 {observer} 不在世界里");
+        };
+        let (ox, oy) = (me.x, me.y);
+        let mut names: Vec<String> = world
+            .entities
+            .iter_ref()
+            .filter(|e| e.add_to_mapped && e.name != observer && cheb(ox, oy, e.x, e.y) <= 12)
+            .map(|e| e.name.clone())
+            .collect();
+        if let Some(snap) = extra {
+            names.extend(
+                snap.entities
+                    .iter()
+                    .filter(|e| e.name != observer && cheb(ox, oy, e.x, e.y) <= 12)
+                    .map(|e| e.name.clone()),
+            );
+        }
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// **可见集合（halo 合成）**：观察者在区 0 的边界带内、`eb` 在区 1 的边界带内（相距 3 格
+    /// ⇒ 单区基线里可见）。拆区后 O 的可见集合 = 本区 AOI ∪ **邻区本 tick** 的 halo 快照
+    /// （≤ view_range）必须与基线逐 tick 相同。
+    ///
+    /// **「本 tick」由 API 保证、不是约定**：`ZoneRuntime::after_phase1` 在 `barrier1` **之后**
+    /// 读邻居，`HaloExchange::read` 对槽里是**别的 tick**（上一 tick 的陈旧镜像）返回 `None` ⇒
+    /// `ZoneTickError::StaleNeighbor`，本用例的 `.expect` 会当场炸——与 L2-3 陈旧镜像牙
+    /// （`tests/l2_two_zone.rs::stale_mirror_must_differ_from_baseline_after_the_move`）同款前提。
+    ///
+    /// 红检：`ZoneRuntime::after_phase1` 不读邻居（或读错区）⇒ 本用例红；
+    /// 改成 barrier1 **之前**取快照 ⇒ `StaleNeighbor` 直接炸（不是静默旧值）。
+    #[test]
+    fn two_zone_halo_visible_set_matches_single_zone_baseline() {
+        const TICKS: u64 = 3;
+        let layout = Arc::new(two_zone_layout());
+
+        // 基线：一个 World，三个实体。
+        let mut base = World::with_maps(vec![(20, 10)]);
+        let mut add = |name: &str, x: i32, y: i32, play: bool| {
+            let mut e = EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = if play { 0 } else { 80 };
+            e.view_range = if play { 12 } else { 5 };
+            base.add_entity(e);
+        };
+        add("O", 8, 5, true);
+        add("ea", 3, 2, false);
+        add("eb", 11, 5, false);
+        let _ = base.tick();
+        let mut baseline = Vec::new();
+        for _ in 0..TICKS {
+            let _ = base.tick();
+            baseline.push(visible_names(&base, "O", None));
+        }
+        assert!(
+            baseline[0].contains(&"eb".to_string()),
+            "基线里 eb（相距 3）必须在 O 的可见集内（否则本用例测不到跨区）"
+        );
+
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+
+        let spawn = |zone_id: ZoneId, entities: Vec<(&'static str, i32, i32, bool)>| {
+            let layout = Arc::clone(&layout);
+            let exchange = Arc::clone(&exchange);
+            let barriers = Arc::clone(&barriers);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut world = World::with_maps(vec![(20, 10)]);
+                for (name, x, y, play) in entities {
+                    let mut e = EntitySpawn::new(0, name.to_string(), x, y);
+                    e.race = if play { 0 } else { 80 };
+                    e.view_range = if play { 12 } else { 5 };
+                    world.add_entity(e);
+                }
+                let _ = world.tick();
+                let runtime = ZoneRuntime::new(
+                    zone_id,
+                    layout.zone_spans(),
+                    ZONE_HALO_WIDTH,
+                    &exchange,
+                    &barriers,
+                );
+                for tick_no in 0..TICKS {
+                    let mut rec = world.tick_phase1();
+                    let (_b, neighbors, wait_us) = runtime
+                        .after_phase1(&world, tick_no)
+                        .expect("快照/发布/barrier1/读邻居");
+                    world.tick_phase2(&mut rec);
+                    runtime.after_phase2(wait_us, None);
+                    if zone_id == zone(0) {
+                        let halo = neighbors.first();
+                        tx.send(visible_names(&world, "O", halo))
+                            .expect("主线程接收");
+                    }
+                }
+            })
+        };
+        let h0 = spawn(zone(0), vec![("O", 8, 5, true), ("ea", 3, 2, false)]);
+        let h1 = spawn(zone(1), vec![("eb", 11, 5, false)]);
+        let split: Vec<Vec<String>> = (0..TICKS)
+            .map(|_| rx.recv().expect("每 tick 一份"))
+            .collect();
+        h0.join().expect("区 0 线程");
+        h1.join().expect("区 1 线程");
+        assert_eq!(
+            split, baseline,
+            "拆区（本区 + halo）可见集合必须与单区基线逐 tick 相同"
+        );
     }
 }
