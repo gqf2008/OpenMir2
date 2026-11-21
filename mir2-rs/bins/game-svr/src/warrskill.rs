@@ -1,9 +1,10 @@
-//! 卡 `openmir2-warrskill-entry` 要求 4：`ClientSpellXY` 的 **6 个战士技独立 `case` 臂**
-//! （12/25/26/27/34/38）。
+//! 卡 `openmir2-warrskill-entry` 要求 4 + 卡 `openmir2-mg52-56-explicit-cases`：`ClientSpellXY` 的
+//! **7 个显式 `case` 臂**（12/25/26/27/34/38/43；56 因 oracle `MagicArr[56]` 越界崩溃不入对拍家族，
+//! 见卡 `openmir2-magic-56-oracle-index-out-of-range`）。
 //!
 //! oracle 出处（`src/M2Server/Player/PlayObject.Attack.cs`，行号按 oracle 文件）：
 //! `case SKILL_ERGUM` `:1120`、`SKILL_BANWOL` `:1136`、`SKILL_FIRESWORD` `:1168`、
-//! `SKILL_MOOTEBO` `:1187`、`SKILL_CROSSMOON` `:1218`、`SKILL_TWINBLADE` `:1234`。
+//! `SKILL_MOOTEBO` `:1187`、`SKILL_CROSSMOON` `:1218`、`SKILL_TWINBLADE` `:1234`、`SKILL_43` `:1253`。
 //! 这 6 个魔号**不进 `default` 支、不调 `DoSpell`**；3/4/7（同样在 `IsWarrSkill` 名单里）走
 //! `default`（`:1269`）⇒ 战士门 ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`，由
 //! `lib.rs::handle_spell_cmd_with_magic` 既有的 `default_arm && is_warr_skill` 块负责（本模块不碰）。
@@ -44,9 +45,11 @@ pub(crate) enum Arm {
     Crossmoon,
     /// 38 `SKILL_TWINBLADE`（`:1234-1252`）。
     Twinblade,
+    /// 43 `SKILL_43`（`:1253-1266`）：`Skill43OnOff` + `"+CID"/"+UCID"`。
+    Skill43,
 }
 
-/// 魔号 → `case` 臂；其余魔号（含 3/4/7 与 43/56）返回 `None`。
+/// 魔号 → `case` 臂；其余魔号（3/4/7 走 `default`）返回 `None`。
 #[must_use]
 pub(crate) fn arm(magic_id: u16) -> Option<Arm> {
     match magic_id {
@@ -56,6 +59,7 @@ pub(crate) fn arm(magic_id: u16) -> Option<Arm> {
         crate::skill_ability::SKILL_MOOTEBO => Some(Arm::Moteebo),
         crate::skill_ability::SKILL_CROSSMOON => Some(Arm::Crossmoon),
         crate::skill_ability::SKILL_TWINBLADE => Some(Arm::Twinblade),
+        crate::skill_ability::SKILL_43 => Some(Arm::Skill43),
         _ => None,
     }
 }
@@ -68,6 +72,15 @@ const SHORT_CRS: &[u8] = b"+CRS";
 const SHORT_UCRS: &[u8] = b"+UCRS";
 const SHORT_FIR: &[u8] = b"+FIR";
 const SHORT_TWN: &[u8] = b"+TWN";
+const SHORT_CID: &[u8] = b"+CID";
+const SHORT_UCID: &[u8] = b"+UCID";
+
+/// 43 的开关文案：`Skill43OnOff` 的**字面量**（`PlayObject.Base.cs`："开启破空剑"/"关闭破空剑"）。
+/// **源码默认 vs 部署**：`StringConf` 不读 `RedHalfMoonOn/Off`、部署 `String.conf` 也无该键；
+/// 43/56 共用这两条串，**只能**来自源码默认（同类第二次，第一次是 `AmyOunsulPoint`）。
+/// 驱动必须把文案记进 Fixture 并断言尾串，防默认串被改而 golden 静默漂移。
+const SKILL43_ON_TEXT: &str = "开启破空剑";
+const SKILL43_OFF_TEXT: &str = "关闭破空剑";
 
 /// `AllowTwinHitSkill` 的文案是**字面量**（`PlayObject.Base.cs:670` 直接写死，不走 `[String]`）。
 const TWIN_HIT_TEXT: &str = "twin hit skill charged";
@@ -258,6 +271,34 @@ pub(crate) fn run(
                     colors.green_f,
                     colors.green_b,
                     strings.crs_hit_off(),
+                );
+            }
+        }
+        // `case MagicConst.SKILL_43`（`:1253-1266`）：`Skill43OnOff` + `"+CID"/"+UCID"`。
+        Arm::Skill43 => {
+            if !sg.magic.mbo43_kill {
+                sg.magic.mbo43_kill = true;
+                send_short(online, gates, chr_name, SHORT_CID);
+                send_sys(
+                    online,
+                    gates,
+                    chr_name,
+                    actor_id,
+                    colors.green_f,
+                    colors.green_b,
+                    SKILL43_ON_TEXT,
+                );
+            } else {
+                sg.magic.mbo43_kill = false;
+                send_short(online, gates, chr_name, SHORT_UCID);
+                send_sys(
+                    online,
+                    gates,
+                    chr_name,
+                    actor_id,
+                    colors.green_f,
+                    colors.green_b,
+                    SKILL43_OFF_TEXT,
                 );
             }
         }

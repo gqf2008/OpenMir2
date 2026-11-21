@@ -64,6 +64,8 @@ pub struct MagicState {
     pub latest_twin_hit_tick: i64,
     /// `PlayObject.DoMotaeboTick`（27 的 3s 限速戳，`ClientSpellXY` case `:1189`）。
     pub do_motaebo_tick: i64,
+    /// `PlayObject.MBo43Kill`（43 `SKILL_43` 开关，`ClientSpellXY` case `:1253-1266` 写；同样无消费者）。
+    pub mbo43_kill: bool,
     pub table: Option<Arc<game_svr::magics::MagicTable>>,
     /// `PlayObject.MagicArr`（`new UserMagic[50]`，`PlayObject.cs:1041`）：**只写不清**（`:3684`），
     /// 删技能后留残影（oracle 原样）。IT-17b 结构层填充；下游 `GetAttackMagic`/`GetHitMode` 读。
@@ -95,6 +97,7 @@ impl Default for MagicState {
             twin_hit_skill: false,
             latest_twin_hit_tick: 0,
             do_motaebo_tick: 0,
+            mbo43_kill: false,
             table: None,
             arr: vec![None; game_svr::skill_ability::MAGIC_ARR_LEN],
             passives: game_svr::skill_ability::SkillPassives::default(),
