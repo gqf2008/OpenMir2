@@ -67,6 +67,7 @@ pub struct Emitted {
 /// `day_bright` = `DayBright()`（新图）；`dir`/`light` = `SM_SPACEMOVE_SHOW` 的 `Series` 两个半字节；
 /// `char_desc` = `Encode(CharDesc{Feature,Status})` 的**未编码** 8B（`sm_spacemove_show` 内再 Encode）。
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn map_change_frames(
     ev: &MapChange,
     map_file_name: &[u8],
