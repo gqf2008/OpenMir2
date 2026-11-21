@@ -102,3 +102,44 @@
   区号不连续（点名缺失号）/ 地图名不在注册表 / 坐标非数 / 矩形非法（`x0>x1` 等）。
 - **测试**：正例 3（单 span、多 span、default 兜底）；反例 ≥6（空串、语法错、区号越界、
   区号不连续、地图不存在、坐标非数、矩形非法），其中 ≥2 条断言错误文本含原始 token。
+
+## 7. 段 4–6 的固化设计（压缩后按此续写；先读 §6+§7）
+
+### 段 4：`GateEvent.line` + `(line,socket)→zone` 分派表
+
+- `line: u8` 加到 `Opened` / `Command` / `CertificationPending`；`Closed.index` 与
+  `LoadDbInfo.gate_idx` **不动**（Closed 已是线号）。
+- 新 `bins/game-svr/src/zone_router.rs`：`(line, socket) → ZoneId`；`lookup` 未命中一律 **区 0**；
+  本段只建表/查询，**不接 `run_inner`**（段 6 接）；N=1 恒 0。
+- 生命周期：`Opened` 插入（初始区 0）；显式 `assign` 更新；`Closed` 删除；
+  `CertificationPending` **不改表**（认证前丢帧分支，不是会话结束）。
+- **重复键裁决 = last-wins 覆盖**，但必须计数 `zone_router_overwrites`
+  （进 `perf_counters`，默认关闭零成本）：静默覆盖会让"玩家被路由到错区"无从发现。
+- **`socket <= 0` 的 `assign` 拒绝**（不是活客户端句柄），并计数 `zone_router_rejected_socket`。
+- 测试：正例 3（已知键→该区、未知键→0、注销后→0）；反例 2（同键跨区覆盖→查到最后一次且
+  计数器 +1；`socket=0` 分配被拒→lookup 仍 0 且计数器 +1）。另需更新所有 `GateEvent`
+  构造/匹配点（`gate_conn`、`shard_router` 测试等）。
+
+### 段 5：生产区驱动 + `region_barrier_us` + 看门狗接线
+
+- `region_loop::run_zone(...)`：每区绑定 `World` + 本地入站双通道；每 tick
+  `phase1 → snapshot_border → publish → barrier1 → read 邻居 → phase2 → barrier2`。
+- 跨区 outbox：实体所属区为**唯一发射者**；邻区观察者从 halo 镜像取数；目标区转发到
+  gate。**生产路径上**的等价断言：`xreg_sent == xreg_recv`、`dup=0`、`never=0`（按 tick 合并）。
+- `region_barrier_us` 探针**同段上线**：每次 `wait_after_phase1/2` 计时写入 `perf_counters`
+  （TSV 末尾新列；只记录、不设门）。
+- 看门狗接线：每区 phase2 后 `heartbeats.completed(zone, now)`；N>1 时
+  `TickWatchdog::new(...).spawn(threshold/4)`；阈值来自 `MIR2_ZONE_TICK_TIMEOUT_MS`。
+  一区 panic/卡死 ⇒ 心跳停滞 ⇒ watchdog abort 整机（与既有语义一致）。
+
+### 段 6：`run_inner` 多区分支 + N=2 进程内对拍
+
+- `MIR2_ZONES` 未设 ⇒ **现有单线程路径**（不建区线程/屏障，逐字节不变）；设了 ⇒
+  `parse_zone_layout` → 启动门（覆盖/重叠/区号连续/每区带内实体数 ≤ `max_halo_band_entities`
+  512，**静态装载后统计**，超限拒绝启动）→ 每区一线程 + 队列 + 看门狗。
+- 区 0 保持登录/DB/IDS/guild/castle（P2-3b gate 表）；非 0 区本步无生产会话来源
+  （登录归属暂缓），N=2 证据用**测试分配缝**。
+- 验收：进程内确定性 bot 驱动走生产区驱动；同脚本/坐标/种子/tick 数，拆区 vs 单区逐 tick
+  比可见集合与每收件人有序帧流；`dup=0/sent==recv/never=0`；`region_barrier_us` p50/p99 记录。
+- 提交信息必须写明：**进程内驱动、非真栈端到端**；真实栈 N=2 需登录归属网络面（另开卡）。
+- N=1 五门 + `-Mode Both` + 归一化 stdout 不变。
