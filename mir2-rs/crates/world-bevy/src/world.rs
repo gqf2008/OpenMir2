@@ -3853,6 +3853,16 @@ impl World {
         self.isolate_attack = true;
     }
 
+    /// **P2-3b**：设置本 World 的业务 id **段基址**（下一个 `ActorId` = `base + 1`）。
+    ///
+    /// 只在 `MIR2_SHARDS>1` 时由宿主按片调用（`base = shard * ACTOR_ID_SEGMENT`）⇒ 跨片
+    /// `ActorId` 全进程唯一；`MIR2_SHARDS=1` 不调用 ⇒ 首个 id 仍为 1（既有路径不变）。
+    ///
+    /// **必须在任何 id 分配/实体装载之前调用**（`SlotTable::set_id_base` 断言）。
+    pub fn set_id_base(&mut self, base: i32) {
+        self.entities.set_id_base(base);
+    }
+
     /// 攻击路径专用流是否开启（隔离口径的真机自证）。
     #[must_use]
     pub fn attack_isolation_enabled(&self) -> bool {
