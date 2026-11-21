@@ -183,5 +183,12 @@ Rust 的 `nTime` 输入，同样必红 ⇒ **committed golden（输入 15 / 帧 
    违规 rc=2、不落 golden；
 3. **golden 不动**：`uenhancer.json` 不重出、不提交。
 
-**牙**：把 `caster.Abil.SC = …` 物化写点加回去 ⇒ `--case uenhancer` rc=2
+**牙（现行，适用于当前代码）**：把 `caster.Abil.SC = …` 物化写点加回去 ⇒ `--case uenhancer` rc=2
 （`Abil.SC/MC 在登录序派生后被改写：登录后(sc=0,mc=0) → DoSpell 后(sc=15,mc=15)…`），不落 golden。
+
+**旧牙（留档，仅属「选项 A」已撤销形态；不适用于当前代码，不可照着重放）**：选项 A 实施期间，
+"删掉 `Abil` 写点"会触发另一条 rc=2——
+`RED FIXTURE_CONTRACT [runmagic/uenhancer/s1] CasterSc/Mc 意图未物化到 Abil：intent(sc=15,mc=15)
+实际 Abil(sc=0,mc=0)——意图必须先写 Abil 再交给 RecalcAbilitys，否则被等级派生值覆盖（B21）`。
+当前代码**不写** `Abil`，所以删 `Abil` 写点是空操作（`grep` 无该写点），这条牙在当前树上**不会触发**；
+保留它只为记录"错误修法会被门抓住"这件事本身。
