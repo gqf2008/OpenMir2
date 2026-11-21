@@ -109,3 +109,36 @@
 `bigcloak`/`groupdeding`（recog 多重集相等、仅位置互换 + 800/900）＝**B17 多受害者出帧顺序对齐**，本卡**不覆盖**。归属：
 - **负责＝B17 顺序任务**：建议新起一张任务卡 `b17-victim-frame-order`（或在 B17 现卡 `self-delay-pump-heap-ordering` 加一节「多受害者出帧次序 vs Rust 泵步进」），本卡与它**边界不重叠**：B17 管**顺序**，顺序对了这两支 due 自动对、**零 due 表示改动**。
 - 本条已在 §2 声明；实现前先在 B17 侧登记该指向，**避免 bigcloak/groupdeding 落成"两个卡都说不是我的"**。
+
+## 8. Probe 结果（2026-11-22，只读；**推翻 §3 的 genealogy 主方案**）
+
+**方法**：临时给 harness 加 stderr 探针（`RecordingNetChannel` 记录每帧 emit 时的 `CurLateWin`/`CurrentDueMs`/触发 msg ident），build 后跑 7 支、抓 FEMIT、**跑完即还原**（Program.cs 与提交态 diff 为空）。
+
+**§8.1 同步/后续分布**（7 支共 207 帧）：
+| stem | 帧数 | late-window(同步, due>0) | 后续 emit(late=0) |
+|---|---|---|---|
+| fireball | 29 | 0 | 29 |
+| fireball-5 | 29 | 0 | 29 |
+| firecharm | 32 | 0 | 32 |
+| grouplightening | 36 | 0 | 36 |
+| lightning-11 | 29 | 0 | 29 |
+| lightning-45 | 29 | 0 | 29 |
+| showhp | 23 | 2（640@1000，对） | 21 |
+
+⇒ **205/207 帧是"后续 emit"**（延迟父消息 `OperatePublic` 只入队、不发帧；真正发帧在其 non-late 子消息处理时）。单标量当然够不着——因为发帧那刻 `CurrentDueMs` 已被父窗口 reset 成 0。
+
+**§8.2 根因（**不是 genealogy**）**：那 6 支 RunMagicCase（除 fireball）**漏了 `StepDrainMs = 100`**——它们被漏出「卡 `openmir2-spell-tail-delay-audit` 的共享尾 640 必须时间忠实排水」那一组（同组的 hbfireball/shield/bigcloak/… 都有）。⇒ 它们走 **one-shot 分支**，其中 non-late 子消息 `due = 0`；而 **step-drain 分支**里同一 non-late 子消息 `due = stepMs`（处理它那步的 elapsed）——延迟到达那步 stepMs 恰好 = 延迟量，due 就对了。
+
+**§8.3 决定性实验**：给 `showhp`/`firecharm`/`lightning11` 各加 `StepDrainMs = 100` → rebuild → 重出：
+- `showhp` due = `[0, 1000, 1500]`（**1500 出现**，原缺；与 Rust 同值）；
+- `firecharm` due = `[0, 1200]`（**1200 出现**，与 Rust 同值）；
+- `lightning11` due = `[0, 600]`（**600 出现**，与 Rust 同值）。
+⇒ **加 `StepDrainMs=100` 就让 due 与 Rust 精确一致，无需任何 genealogy map。**
+
+**§8.4 修正后的结论（取代 §3 的 (ii) 主方案）**：
+- **A 型 6 支（RunMagicCase）＝`StepDrainMs=100` 遗漏**：修法 = **每支加 `, StepDrainMs = 100`**（config 一行），非链路传播、非 genealogy。
+- **A 型 `fireball`（RunFireball）＝单独**：`RunFireball` 无 `castTick`、无 `StepDrainMs`、排水不设 `CurrentDueMs`——**唯一需要 bespoke** 的一支（补 `castTick` + 逐消息 `CurrentDueMs`，或复用 step-drain 语义）。
+- **B 型 2 支＝B17 顺序**（§2/§7.4 不变）。
+- **(ii) genealogy map 不再是主方案**：仅在"step-drain 对某支做不出正确 due"时才回退考虑；(i) 仍否。**"可追溯帧比例"随之作废**——stepMs 就是归属来源，无需追 origin。
+
+**§8.5 待验收确认的残余风险**：实验只证了 **due 值**与 Rust 精确一致；`StepDrainMs=100` 把排水改成**时间忠实步进**，会改帧的**处理顺序**（可能像 B17 一样影响 recog/param 序）。32 支既有 step-drain 已绿，precedent 判"大概率无新红"，但**必须**用 `MAGIC_PLANE_ONLY=<stem>` 逐支跑**全比较器**（不只 due）确认无新 red 再重出落盘——这正是实现后 §4 验收第一关。
