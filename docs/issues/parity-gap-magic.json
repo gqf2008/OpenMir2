@@ -158,7 +158,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙（2026-11-21 行为牙审计 A）**：产品侧 toggle 翻转 ⇒ `warr_12_matches_golden` 红 `+ULNG` vs `+LNG`（帧级跨栈比较；记录见 `docs/issues/openmir2-warrskill-entry.md` C5，该行已标注\"历史描述、无可复现记录\"：无 file:line/侧别）。零抽断言另有牙：`Arm::Ergum` 插 `world.rng.random()` ⇒ `warr_12` 的 RNG 快照断言红。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -184,7 +184,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙（2026-11-21 行为牙审计 A）**：产品侧 toggle 翻转 ⇒ `warr_25_matches_golden` 红 `+UWID` vs `+WID`（帧级跨栈比较；记录见 `docs/issues/openmir2-warrskill-entry.md` C5，该行已标注\"历史描述、无可复现记录\"：无 file:line/侧别）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -211,7 +211,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。 **牙（2026-11-21 行为牙审计 A）**：产品侧 MP 阈值翻转 ⇒ `warr_26_matches_golden` 帧数 `1 vs 3`（got 只剩绿字 / want `+FIR/53/绿字`）；env=0 全帧牙（`damage_spell_and_53` 的 `recog` +1）⇒ `warr_26/27/38` 红（`left: [2,0,0,0,…]` / `right: [1,0,0,0,…]`）。记录见 `openmir2-warrskill-entry.md` C5（描述式，无 file:line）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -236,7 +236,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。 **牙（2026-11-21 行为牙审计 A）**：产品侧 MP 阈值翻转 ⇒ `warr_27_matches_golden` 帧数 `0 vs 3`；env=0 全帧牙（`recog` +1）同红。**DoMotaebo 真支/3s 门仍无断言**（见上文未覆盖声明，不走这颗牙）。记录见 `openmir2-warrskill-entry.md` C5（描述式，无 file:line）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -262,7 +262,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙（2026-11-21 行为牙审计 A）**：产品侧 toggle 翻转 ⇒ `warr_34_matches_golden` 红 `+UCRS` vs `+CRS`（帧级跨栈比较；记录见 `docs/issues/openmir2-warrskill-entry.md` C5，该行已标注\"历史描述、无可复现记录\"：无 file:line/侧别）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -288,7 +288,7 @@
         ],
         "unit_tests": []
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致；53 仅 12B 头与 oracle 对齐，尾部 16B 为本仓冻结客户端布局段（已登记 wire 偏差，责任卡 openmir2-client-e2e-enter-gaps），不在本卡比较面内。 **牙（2026-11-21 行为牙审计 A）**：产品侧 MP 阈值翻转 ⇒ `warr_38_matches_golden` 帧数 `1 vs 3`；env=0 全帧牙（`recog` +1）同红。记录见 `openmir2-warrskill-entry.md` C5（描述式，无 file:line）。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -1006,7 +1006,7 @@
       },
       "status": "verified",
       "basis": "semantic",
-      "scope": "partial：`spacemove` 三支（s1/s5/s13）的换图簇逐收件人**严格序**（caster `… 766 → 54 → 11029 → 807 …`；11029 尾 = `EDCode(EDCode(ClientConf))` 双重编码）与 633/634（x,y,Series）/766/54/807（落点 param/tag）字段；驱动侧另核真图身份（`map_file_size`/`map_file_sha256`）与格属性三档直方图（walk/high/low），并按 `Fixture.soft_version_date_ex` 设会话值。**未覆面 / 不证明**：①`SoftVersionDateEx` 非 0 的**生产值来源**（本批只保证「0 ⇒ 不发」与登录同步语义，生产值来自 `LoadDBInfo.SoftVersionDate` 的链路未在此叶对拍）；②`client_conf` 进程级 install 在**多进程/多配置**并发场景下的行为；③`640.due_ms_rel` 的 `|Δ|≤32ms` 容差是**共享判据**（`mir2_shared::DUE_MS_TOLERANCE_MS`），非本叶独有；④生产 AOI 在 SpaceMove 后的 `VisibleActors` 重置（`docs/issues/openmir2-spacemove-visible-actors-reset.md`）不在本叶。",
+      "scope": "partial：`spacemove` 三支（s1/s5/s13）的换图簇逐收件人**严格序**（caster `… 766 → 54 → 11029 → 807 …`；11029 尾 = `EDCode(EDCode(ClientConf))` 双重编码）与 633/634（x,y,Series）/766/54/807（落点 param/tag）字段；驱动侧另核真图身份（`map_file_size`/`map_file_sha256`）与格属性三档直方图（walk/high/low），并按 `Fixture.soft_version_date_ex` 设会话值。**未覆面 / 不证明**：①`SoftVersionDateEx` 非 0 的**生产值来源**（本批只保证「0 ⇒ 不发」与登录同步语义，生产值来自 `LoadDBInfo.SoftVersionDate` 的链路未在此叶对拍）；②`client_conf` 进程级 install 在**多进程/多配置**并发场景下的行为；③`640.due_ms_rel` 的 `|Δ|≤32ms` 容差是**共享判据**（`mir2_shared::DUE_MS_TOLERANCE_MS`），非本叶独有；④生产 AOI 在 SpaceMove 后的 `VisibleActors` 重置（`docs/issues/openmir2-spacemove-visible-actors-reset.md`）不在本叶。**行为牙（2026-11-21 实跑）**：`640.due_ms_rel` 的**最小可观测幅度 = +1ms**——仅对 21 把共享尾的 delay 从 1000 改 1001 ⇒ 驱动三支红（`golden [1016]/[1000] 台账 [1100]`）、比较器 3 条红（`1016/1000 vs 1100`，|Δ|≤32 容差）；+50ms 给出同一 1100 ⇒ 50 不是阈值。该字段由**驱动 + 比较器双守**。记录见 `docs/issues/openmir2-changemap-missing-serverconfig.md` §12。",
       "evidence": {
         "test": "real_rust_ledger_spacemove",
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动 tests::spacemove_parity_*）",
@@ -1119,7 +1119,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。"
     },
     {
       "id": "MG-39",
@@ -1331,7 +1331,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_big_explosion_spell` 组装的 `PendingMagStruck.power` → `power + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`84/85`、`93/94`、`89/90`）+ 比较器 `real_rust_ledger_snowwind` 33 条不等（`Sent[1].series` golden=15 rust=16）；还原 `hash-object` 相等、复跑绿；**最小可观测幅度 = +1**。"
     },
     {
       "id": "MG-46",

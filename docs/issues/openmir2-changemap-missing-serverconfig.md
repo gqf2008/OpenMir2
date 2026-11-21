@@ -278,3 +278,40 @@ $ grep -rn 'drain_map_change' mir2-rs/bins/game-svr/src/*.rs
 ## 11. 变异实验教训（2026-11-21，MG-35 实现批）
 
 做「640 `due_ms_rel` +50ms 必红」的牙时，曾用 `git checkout -- <path>` 还原变异，把**尚未提交的实现**一并还原；已按补丁重放，并在**已提交态**上把全部证据重跑。**变异前必须先提交或快照**（章程 §16 的实操版）。判断标准很简单：**如果 `git status` 里有你要保留的未提交改动，就不要用 `git checkout -- <path>` 还原。**
+
+## 12. MG-35 行为牙：640 `due_ms_rel` 的**最小可观测幅度 = +1ms**（2026-11-21，实跑记录）
+
+> 背景：牙审计（`3b` 批次 C）把 MG-35 判"证据不足"而非"无牙"——§11 记过做过「+50ms 必红」
+> 的牙，但**没留 `left/right` 原文**；卡里的"Δ=50 必红"是判别力声明。本节把它补成**记录**。
+
+**变异点**：`mir2-rs/bins/game-svr/src/lib.rs` 共享尾分支（8/21/37）的 640 延迟发射——
+把 `emit_magic_lvexp_delayed(...)`（未升级 ⇒ 1000ms）改为内联，**仅对 21（`SKILL_SPACEMOVE`）
+把 delay 置 `1001`**（另试 `1050`），其余魔号仍 1000。UP 支仍 800（未触碰）。
+
+**基线**：`spacemove` golden 的 caster 640 `due_ms_rel` = **s1 `1016` / s5、s13 `1000`**
+（`DeliveryTime − t0`，`Environment.TickCount` 15.6ms 粒度）；Rust 基线 = `1000`。
+
+**红线（+1ms，最小幅度）**
+- **驱动（各自独立进程）**——不是"只有比较器红"：
+  ```
+  [spacemove/s1]  caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤32ms）：golden [1016] 台账 [1100]
+  [spacemove/s5]  caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤32ms）：golden [1000] 台账 [1100]
+  [spacemove/s13] caster 640 的 due_ms_rel 超 TickCount 容差（|Δ|≤32ms）：golden [1000] 台账 [1100]
+  ```
+- **比较器**（`real_rust_ledger_spacemove`）：
+  ```
+  真实台账与金标准不等（3 条）：
+  [s1/caster]  Sent[8].due_ms_rel 超出 TickCount 容差（|Δ|≤32ms）：golden=1016 rust=1100
+  [s5/caster]  Sent[8].due_ms_rel 超出 TickCount 容差（|Δ|≤32ms）：golden=1000 rust=1100
+  [s13/caster] Sent[8].due_ms_rel 超出 TickCount 容差（|Δ|≤32ms）：golden=1000 rust=1100
+  ```
+⇒ 该字段由**驱动 + 比较器双守**（不是仅比较器独守）。
+
+**最小可观测幅度 = +1ms**：装置/驱动按 **100ms 步进**排水；delay ∈ (1000,1100] 都会落到下一步
+⇒ 实测 `due_ms_rel = 1100`。`+50ms`（`1050`）给出**同一** `1100`，因此"50"不是阈值，**+1ms 即可**；
+更小（0ms 差）不红是预期（基线）。**这是"装置步进粒度决定的判别力下限"，不是判据放宽。**
+
+**还原证明**：`cp` 快照还原后
+`git hash-object mir2-rs/bins/game-svr/src/lib.rs` = `git rev-parse HEAD:mir2-rs/bins/game-svr/src/lib.rs`
+= `08f137a3f71fb55e56fa5a35f24de865fdf6714d`；`grep -c MUTATION` = 0；
+重跑 spacemove s1/s5/s13 驱动（各 1 passed）与比较器（1 passed）复绿。
