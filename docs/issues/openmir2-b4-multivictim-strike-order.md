@@ -64,3 +64,16 @@ actor 各跑一次 `Run()`，先处理 target 的受击广播（31 到 obs_in）
 **移除条件**：与上节同——产品改为“逐 `SelfDelayOutcome` 处理 + 条目间 drain”（与 oracle 逐
 `actor Run()` 同构）后，删掉这 4 支 golden 的 `frame_order_scope` 并把白名单缩回 `fire`，
 恢复严格按序。
+
+## 2026-11-22 结构性更正（openmir2-1e，B17 装置对照）
+
+**本卡此前措辞只覆盖 strike 队列层；实测 657 改名帧证明「帧广播层」也要 per-viewer 延迟。** 装置
+（`MagicGolden` 的 `DrainOnce`）改成生产 `GetMessage` 逐条语义后，bigcloak s1 的 target/obs_in 的 657 变
+`{1002@800, 1001@900}`（= Rust），但 caster 仍差 100；把扫序临时换成 `[target,caster]` 则 caster 对齐、target
+差 100 —— **与扫序无关：per-viewer 队列模型下「先被 Run 的 victim 看不到另一个 victim 同 tick 的改名广播」**，
+Rust 的同步批量 flush 没有这一层。⇒ 修法不是「逐 `SelfDelayOutcome` + 条目间 drain」一句话，而是两层：
+**(i) 泵的 per-actor 回合序 + (ii) 帧广播的 per-viewer 延迟**。
+
+详见施工图与影响面：`docs/issues/b4-per-actor-queue-blueprint-20261122.md`（含 7–9 编辑点、50 case 的
+翻转清单、`DrainPasses` 语义变更坑、`warrskill` 覆盖面边界）。实验装置改动在 `card/b4-device-drain`
+（`bcc232572`，不单独合并；须与产品 per-actor 改同批）。
