@@ -247,13 +247,8 @@ fn no_parallel_guard() {
     let mut joined = String::new();
     for p in &paths {
         let code = strip_comments_and_strings(&fs::read_to_string(p).unwrap());
-        for bad in [
-            "MultiThreadedExecutor",
-            "bevy_tasks",
-            "rayon",
-            "crossbeam",
-            "thread::spawn",
-        ] {
+        // 并行化版（判据③，opc-19 2026-11-23）：允许多线程执行器/bevy 线程池，仍禁外部线程库/手搓线程。
+        for bad in ["rayon", "crossbeam", "thread::spawn"] {
             assert!(
                 !code.contains(bad),
                 "{} 不得出现并行 API：{bad}",
@@ -263,10 +258,10 @@ fn no_parallel_guard() {
         joined.push_str(&code);
         joined.push('\n');
     }
-    // 正面断言：显式使用单线程执行器
+    // 正面断言：显式选择执行器（SingleThreaded / MultiThreaded 均可，但须真 set_executor 调用）。
     assert!(
-        joined.contains("SingleThreadedExecutor"),
-        "ECS 内核必须显式用 SingleThreadedExecutor（§4.2.2 硬约束①）"
+        joined.contains("set_executor("),
+        "ECS 内核必须显式 set_executor(...)（并行化版判据②：允许并行但须显式选执行器）"
     );
 }
 

@@ -1,4 +1,4 @@
-//! 判据③（S1 升级版）：**禁止引入并行**，且 **tick 骨架必须是单线程 ECS**。
+//! 判据③（并行化版）：**允许 bevy 并行调度，但必须满足重放确定性**——同一固定输入（固定种子+固定驱动）跑 N=8 次，输出帧序列/状态**逐字节相同**，任一次不同即红。**依赖仍禁外部线程/异步库**（rayon/crossbeam/tokio 等，须用 bevy 自己的线程池）；**tick 骨架须显式选择执行器并注释理由**；**保留** `TickOwnerThread`（调用线程约束，不约束内部并行）。
 //!
 //! 三条独立断言（任一被破坏即红）：
 //!
@@ -36,9 +36,9 @@ const FORBIDDEN_DEPS: [&str; 12] = [
 ];
 
 /// 源码里不得出现的并行 API 字样（扫代码不扫注释/字符串）。
-const FORBIDDEN_CODE: [&str; 5] = [
-    "MultiThreadedExecutor",
-    "bevy_tasks",
+const FORBIDDEN_CODE: [&str; 3] = [
+    // MultiThreadedExecutor / bevy_tasks 现允许（bevy 自己的并行执行器/线程池）；
+    // 仍禁「手搓线程 / 外部线程库」——并行只许走 bevy 调度器。
     "rayon",
     "crossbeam",
     "thread::spawn",
@@ -150,10 +150,11 @@ fn strip_use_lines(code: &str) -> String {
         .join("\n")
 }
 
-/// 单线程执行器的**调用形态**断言：必须真的 `set_executor(SingleThreadedExecutor...)`；
-/// 仅 `use` 进来不算（F2：删掉 set_executor 只留 import 时旧断言仍绿）。
-fn has_explicit_single_threaded_executor(code: &str) -> bool {
-    strip_use_lines(code).contains("set_executor(SingleThreadedExecutor")
+/// 执行器选择断言（②）：tick.rs 必须**真的调用** `set_executor(...)`（裸 `use` 不算，F2），
+/// 且**原始源码（含注释）**里带 `EXECUTOR-RATIONALE` 标记注释说明选择理由。
+fn tick_has_explicit_executor_and_rationale(raw: &str) -> bool {
+    let code = strip_use_lines(&strip_comments_and_strings(raw));
+    code.contains("set_executor(") && raw.contains("EXECUTOR-RATIONALE")
 }
 
 #[test]
@@ -231,14 +232,15 @@ fn world_sources_are_single_threaded_ecs_only() {
     // 注意只认 `set_executor(SingleThreadedExecutor...)` 调用形态，先剥掉 `use` 行：
     // 仅 import 标识符不算（否则删掉真正生效的 set_executor 调用，守卫仍绿 —— F2）。
     let tick_rs = crate_root().join("../world-bevy/src/tick.rs");
-    let tick_code = strip_comments_and_strings(&fs::read_to_string(&tick_rs).unwrap());
+    let tick_raw = fs::read_to_string(&tick_rs).unwrap();
+    let tick_code = strip_comments_and_strings(&tick_raw);
     assert!(
-        has_explicit_single_threaded_executor(&tick_code),
-        "world-bevy 的 tick 骨架必须显式 `set_executor(SingleThreadedExecutor...)`（仅 import 不算）"
+        tick_has_explicit_executor_and_rationale(&tick_raw),
+        "world-bevy 的 tick 骨架必须显式 `set_executor(...)`（裸 import 不算）且带 `EXECUTOR-RATIONALE` 注释说明理由"
     );
     assert!(
         scan_parallel_code(&tick_code).is_empty(),
-        "world-bevy 的 tick 骨架不得出现并行 API"
+        "world-bevy 的 tick 骨架不得出现外部线程/手搓线程 API（bevy 执行器允许）"
     );
 }
 
@@ -272,19 +274,107 @@ fn redcheck_forbidden_dep_detection_works() {
     );
 }
 
-/// 红检（自动，F2）：只剩 `use` 而没有 `set_executor` 调用时，正向断言必须判假；
-/// 有真实调用时才判真。防止把「标识符出现过」当成「执行器被显式设置」。
+/// 红检（自动，F2+②）：只剩 `use`、或有 `set_executor` 却无 `EXECUTOR-RATIONALE` 注释时，
+/// 正向断言必须判假；真实调用 + 理由注释才判真。
 #[test]
 fn redcheck_import_only_does_not_satisfy_executor_guard() {
     let import_only = "use bevy_ecs::schedule::SingleThreadedExecutor;";
     assert!(
-        !has_explicit_single_threaded_executor(&strip_comments_and_strings(import_only)),
-        "只留 import 不得满足单线程执行器守卫"
+        !tick_has_explicit_executor_and_rationale(import_only),
+        "只 import（无 set_executor 调用）不得满足"
     );
-    let with_call = "use bevy_ecs::schedule::SingleThreadedExecutor;
-fn f() { s.set_executor(SingleThreadedExecutor::default()); }";
+    let call_no_rationale = "fn f() { s.set_executor(MultiThreadedExecutor::new()); }";
     assert!(
-        has_explicit_single_threaded_executor(&strip_comments_and_strings(with_call)),
-        "真实 set_executor(SingleThreadedExecutor...) 调用必须被识别"
+        !tick_has_explicit_executor_and_rationale(call_no_rationale),
+        "有 set_executor 但无 EXECUTOR-RATIONALE 注释不得满足（②要理由）"
+    );
+    let call_with_rationale =
+        "fn f() { s.set_executor(MultiThreadedExecutor::new()); } // EXECUTOR-RATIONALE: pilot";
+    assert!(
+        tick_has_explicit_executor_and_rationale(call_with_rationale),
+        "真实 set_executor + EXECUTOR-RATIONALE 注释必须被识别"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 判据③ 重放确定性门（2026-11-23 build 窗口实现）。
+// 同一固定输入（固定种子 + 固定驱动序）跑 8 次，逐 tick 的**有序**输出逐字节相同。
+
+/// 把一次 tick 的 `TickRecord` 序列化成**有序**串（只取 Vec 有序字段；禁 HashMap 迭代序）。
+fn canon_tick(rec: &mir2_world_bevy::world::TickRecord) -> String {
+    let atk: Vec<(i32, i32, i32)> = rec
+        .attacks
+        .iter()
+        .map(|(a, b, o)| (*a, *b, o.power))
+        .collect();
+    format!(
+        "seq={} clk={} proc={:?} aoi={:?} atk={:?} deaths={:?}",
+        rec.tick_seq, rec.clock_ms, rec.processed, rec.aoi_order, atk, rec.deaths
+    )
+}
+
+/// 固定输入跑一遍，返回各 tick 的规范串（Vec，有序）。
+fn replay_once() -> Vec<String> {
+    use mir2_shared::rng::RandomNumber;
+    use mir2_world_bevy::{EntitySpawn, World};
+    let mut world = World::new(32, 32);
+    world.open_session("hero");
+    let mut hero = EntitySpawn::new(1, "hero", 10, 10);
+    hero.race = mir2_world_bevy::entity::ACTOR_RACE_PLAY;
+    hero.dc = 0x0403;
+    hero.hit_point = 20;
+    hero.power_rate = 100;
+    hero.hp = 200;
+    hero.max_hp = 200;
+    let hid = world.enter_map("hero", hero, 0).expect("hero 进图");
+    let mut mon = EntitySpawn::new(2, "mon", 11, 10);
+    mon.race = mir2_world_bevy::entity::ACTOR_RACE_MONSTER;
+    mon.ac = 0;
+    mon.hp = 60000;
+    mon.max_hp = 60000;
+    mon.hit_point = 0;
+    let mid = world.add_entity(mon);
+    let mut out = vec![canon_tick(&world.tick())]; // Enter 落图
+    world.rng = RandomNumber::with_seed(20261012);
+    for _ in 0..3 {
+        world.attack_cmd(hid, mid);
+    }
+    out.push(canon_tick(&world.tick()));
+    for _ in 0..2 {
+        out.push(canon_tick(&world.tick()));
+    }
+    out
+}
+
+/// **判据③（绿门）**：同固定输入跑 8 次，逐 tick 规范字节必须全相同。
+#[test]
+fn replay_determinism_8x() {
+    let base = replay_once();
+    for i in 1..8 {
+        assert_eq!(
+            replay_once(),
+            base,
+            "replay #{i} 与基准逐 tick 字节不一致 ⇒ tick 骨架出现非确定性"
+        );
+    }
+}
+
+/// **判据③ 红证（gate 有牙）**：用同一 8× 逐字节比较法去比一个**故意非确定**的输入
+///（`HashSet` 迭代序随实例随机种子变化）——必须出现不一致，证明该判据能抓非确定。
+#[test]
+fn replay_gate_has_teeth_catches_nondeterminism() {
+    use std::collections::HashSet;
+    fn nondet_once() -> Vec<String> {
+        let mut hs = HashSet::new();
+        for i in 0..12 {
+            hs.insert(format!("t{i}"));
+        }
+        hs.into_iter().collect()
+    }
+    let base = nondet_once();
+    let diverged = (1..8).any(|_| nondet_once() != base);
+    assert!(
+        diverged,
+        "红证失效：8× 比较未捕捉 HashSet 迭代序非确定 ⇒ 判据③ 无判别力"
     );
 }
