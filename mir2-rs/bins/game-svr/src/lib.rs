@@ -75364,7 +75364,10 @@ SendRefMsgRange=15
         let deliver_rng = trace_slice(&trace, n1, n2);
         let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
         let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
-        // ---- 克隆体（本侧 id 只作比较器的归一化锚）----
+        // ---- 克隆体（**B20**：oracle actor-id 非确定 ⇒ 绝对值不入 golden；本侧 id 仅用于
+        // 同侧关系断言与台账可见性，不跨栈比）----
+        let clone_count = rig.world.entities.iter_ref().filter(|e| e.is_clone).count();
+        assert_eq!(clone_count, 1, "46 施法后应恰有一个克隆体实体");
         let (clone_id, cx, cy) = {
             let c = rig
                 .world
@@ -75374,6 +75377,12 @@ SendRefMsgRange=15
                 .expect("46 施法后应有克隆体实体");
             (c.id, c.x, c.y)
         };
+        let sibling_ids = [
+            rig.caster,
+            fireball_actor(&rig, "target"),
+            fireball_actor(&rig, "obs_in"),
+            fireball_actor(&rig, "obs_out"),
+        ];
         assert!(
             rig.world.entities.get(clone_id).is_some(),
             "克隆体必须已落库"
@@ -75469,8 +75478,12 @@ SendRefMsgRange=15
             == 1;
         let clone_block = serde_json::json!({
             "name": mir2_world_bevy::CLONE_NAME,
+            // 本侧 id 可见（供关系断言/复核），**不与 golden 比**。
             "actor_id": clone_id,
-            "rel_to_caster": clone_id - rig.caster,
+            "sibling_actor_ids": sibling_ids,
+            "clone_ordinal": 0,
+            "clone_count": clone_count,
+            "actor_id_policy": "oracle_guid_nondeterministic",
             "x": cx,
             "y": cy,
             "dir": i64::from(clone_dir),
