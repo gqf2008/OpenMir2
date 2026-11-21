@@ -81,3 +81,17 @@
 - 补法：在 60 支装置 casing 中扫 `enqueue_step < run_step`（跨 step 入队）的夹具；找不到就构造最小夹具，
   否则明写「当前 60 支无此类，R3 不可覆盖」并进扩面验收缺口。
 - 该项在 **sweep 窗口放行后**执行，不在本卡完成。
+
+## 4b. 补充：Rust 侧 900 的成因（`openmir2-89` 只读核查 + 本卡复核）
+
+- **Rust 的发帧点**：`bins/game-svr/src/lib.rs` 的 `b3_outcome_frames` 处理
+  `SelfDelayOutcome.transparent`（`if let Some(d) = o.transparent { if d.status_changed { push_charstatuschanged(buf, world, online, d.target_id, d.status); } }`，`:21974-21976`）
+  ⇒ `1001` 这条 657 的 producer 是 **caster 自己的 transparent outcome**。
+- **延迟判据对它不生效**：`drain_b3_self_deliveries_with_pending` 用本 tick 的 turns 建 `order` 并逐 turn
+  `begin_turn`（`:22033-22042`）；`push_addressed` 的判据是 `order[recipient] < ctx.index`
+  ⇒ producer 与收件人同为 caster（同下标）时不成立 ⇒ **立即** ⇒ `due` = **该 outcome 的投递步**。
+- **pilot 前旧台账原文**（`bigcloak_s1.json`，mtime `2026-11-21 13:33`，早于 pilot 合入 ~21:00）：
+  `caster = [(638,1001,0), (642,500,0), (657,1002,800), (657,1001,900), (640,19,1000)]`
+  ⇒ `1001@900` 是**既有 Rust 值**，不是 pilot 引入。
+- ⇒ **结论不变、定位更准**：`1001` 的偏差在「**transparent outcome 的投递步**：Rust 900 vs oracle 800」，
+  与 `begin_turn` / per-viewer 延迟判据无关；该偏差另立卡修，不在 pilot 范围。
