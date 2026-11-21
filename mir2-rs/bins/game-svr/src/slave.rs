@@ -489,6 +489,18 @@ pub fn cast_tamming_spell(
         if crazy_mode {
             mir2_world_bevy::monai::open_crazy_mode(world, target_id, out.crazy_interval);
         }
+        // `:712`/`:812` 的 `RM_MAKEHOLYSEIZEMODE`（**内部 RM**：`AnimalObject.cs:134-136`
+        // `OpenHolySeizeMode(wParam)`，无 SM 帧）。只投目标自己的队列。
+        if let Some(w_param) = out.holy_seize_wparam {
+            world.send_msg_now(
+                target_id,
+                mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE,
+                w_param,
+                0,
+                0,
+                0,
+            );
+        }
         bo_train = out.result;
     }
     // 共享尾（`MagicManager.cs:644-669`）。
@@ -781,6 +793,62 @@ mod tests {
             cfg,
             magic,
         }
+    }
+
+    /// **MG-34 / 60005 到达证据 A（self_master 支，`MagicManager.cs:712`）**：`Master == 施法者`
+    /// ⇒ 目标队列恰一条 `RM_MAKEHOLYSEIZEMODE`，`wParam=(L*5+10)*1000`，且只投目标。
+    #[test]
+    fn tamming_self_master_queues_holy_seize_rm() {
+        let magic = tamming_magic();
+        let cfg = PetSlaveConfig::default();
+        for seed in 1..500 {
+            let (mut w, caster, target) = tamming_world(seed, 50, 30, 1);
+            w.entities.get_mut(target).unwrap().slave.master = Some(caster);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let _ = cast_tamming_spell(&mut w, &input, &mut train);
+            let hits: Vec<_> = w
+                .self_delay_msgs
+                .iter()
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            assert_eq!(hits.len(), 1, "self_master 支恰一条 60005");
+            assert_eq!(hits[0].actor_id, target, "60005 只投目标自己的队列");
+            assert_eq!(hits[0].w_param, (5 + 10) * 1000, "wParam=(L*5+10)*1000");
+            return;
+        }
+        panic!("self_master 支应能找到 seed");
+    }
+
+    /// **MG-34 / 60005 到达证据 B（else 支，`MagicManager.cs:812`）**：`Random(2)!=0`
+    /// ⇒ 目标队列恰一条 60005；目标**未**受奴（与 self_master 支的语义区分）。
+    #[test]
+    fn tamming_else_branch_queues_holy_seize_rm_without_adopting() {
+        let magic = tamming_magic();
+        let cfg = PetSlaveConfig::default();
+        for seed in 1..1000 {
+            let (mut w, caster, target) = tamming_world(seed, 50, 30, 1);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            let hits: Vec<_> = w
+                .self_delay_msgs
+                .iter()
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            assert_eq!(hits.len(), 1, "else 支恰一条 60005");
+            assert_eq!(hits[0].actor_id, target, "60005 只投目标自己的队列");
+            assert_eq!(hits[0].w_param, (5 + 10) * 1000, "L=1 ⇒ (1*5+10)*1000");
+            assert!(!out.tamed, "else 支不得把目标变成奴隶");
+            return;
+        }
+        panic!("else 支应能找到 seed");
     }
 
     /// **⑨-2 第③片判据 ①（`!Animal` 门）**：动物（race 51）⇒ oracle 连 `MagTamming` 都不进
