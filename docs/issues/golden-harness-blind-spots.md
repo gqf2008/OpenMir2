@@ -26,6 +26,8 @@
 | B16 | **魔表口径：装置用零值 `MagicInfo`，部署魔表未覆盖**：C# `MagicGolden/Program.cs` 的 `new OpenMir2.Data.MagicInfo { MagicId, MagicName, Effect, EffectType }`（其余字段默认 0）；Rust `fireball_rig` 同 `..mir2_data::MagicInfo::default()` | 任何读 `TrainLv`/`DefPower`/`DefMaxPower` 的魔号（`GetPower13`/`GetPower` 等） | 装置侧 `TrainLv=0`、`DefPower=DefMaxPower=0`，与部署口径「`src/GameSrv/DB/MySqlDB.cs` 的 `LoadMagicDB` 恒置 `TrainLv=3`、`sql/mir2_data.sql` MagID 48 行 `DefPower=4/DefMaxPower=4`」**不同源**；同一参数代入：**装置口径 P(30)=80（golden 值）、部署口径 P(30)≈54** | 部署魔表实数下的取整/阈值/倍率分支 | **部署口径下的行为**：凡读这三个字段的魔号，「两侧一致」只在**零值口径**下成立 |
 | B17 | **延迟消息排水粒度：装置全量逐条 vs 生产「遇未到期队首即停」**：装置 `MagicGolden/Program.cs` 的 `DrainOnce` 先 `DrainRaw()` 取**全部**消息 → 逐条判 `DeliveryTime <= now`（到期 `OperatePublic`、未到期收进 `later` 后 `PushBack` 回 `MsgQueue`）⇒ **一步内处理所有到点消息、不在首个未到期项处停**；生产对照 `ActorEntity.MsgQueue`=`PriorityQueue<SendMessage,byte>`（**只按 priority**），`BaseObject.Message.cs` 的 `GetMessage`：`TryDequeue` → 若 `DeliveryTime > now` ⇒ `Enqueue(Lowest)` + `return false`（**遇未到期队首即停**） | 同一 cast 产生 ≥2 条延迟 self-delay（如 50 魔爆 `power/3`+`n_power` 两条 `RM_DELAYMAGIC`@600）+ 同队列里一条**更晚到期**项（`RM_POISON`/`RM_MAGIC_LVEXP`）并存 | 装置不看「队首是否到期」，把**所有**到点消息同刻吐出 ⇒ golden 的 `due_ms_rel`/出队顺序按**装置语义**生成 | `GetMessage` 遇未到期队首即 `Lowest` 重入队 + 停 ⇒ 已到点但排在其后的消息被**推到下一 tick**（Rust 泵 `deliver_self_delay_msgs_impl` 同构、忠实复刻） | 生产的「遇未到期队首即停/延后」；多延迟场景 golden 的帧时序/顺序**不代表生产**。**实例**：50 魔爆成功臂（`openmir2-mabmabe-success-arm-parity`）golden 两条 600 同刻出队（装置全量语义），Rust 生产分 tick（700/800）⇒ 曾误判为「产品泵缺陷」，`89` 复核纠正为**装置缺口**（判据 `fixture-self-consistency-is-not-parity`：**装置内部自洽 ≠ 与生产一致**）。**处置**：以生产为准 ⇒ 改 `DrainOnce` 为「遇未到期队首即停」，重出受影响 golden，再复核受影响条目（`89` 列出 6 个 stem） |
 | B18 | **committed golden 与生成器不同步（schema 漂移）**：当前 master 的 `MagicGolden/Program.cs` 对**任意** stem 的 `cases[].Fixture` 多吐 8 个键（`amulet_shape`/`amy_ounsul_point`/`target_anti_poison`/`you_poisoned`/`red_msg_f_color`/`red_msg_b_color`/`caster_name`/`slave_colors`），committed golden 多数没有 | 用当前 harness 重出任意 golden | schema 多键：`regen vs committed 逐字节（剥 delivery）`会**全 stem 假红**（hbfireball pilot：24 处 diff **全是**这些 Fixture 多键、0 处语义） | committed golden 与当前生成器**不同步** ⇒ ①“重出 golden”在本树**默认产生 schema 漂移**；②“committed golden 能被当前代码复现”这一隐含假设**不成立** | **量化（60 支）**：全 8 键有 **5 支**（`fireball-nonzero`、`lightflower-nonzero`、`lightning-11-nonzero`、`mabmabe-nondefault`、`tamming`）；**全缺 8 键 42 支**（`bigcloak`、`bighealing`、`cloak`、`dejiwonho`、`fire`、`fireball-5`、`fireball`、`fireboom`、`fireboom47`、`firecharm`、`groupdeding`、`grouplightening`、`hangmajinbub`、`hbfireball`、`healing`、`holyshield`、`lightflower`、`lightning-11`、`lightning-45`、`shield`、`showhp`、`sinsu`、`skeleton`、`skill10`、`skill49`、`skill51`、`skill52`、`skill53`、`skill54`、`snowwind`、`uenhancer`、`unamyounsul`、`warr-12`、`warr-25`、`warr-26`、`warr-27`、`warr-3`、`warr-34`、`warr-38`、`warr-4`、`warr-43`、`warr-7`）；**部分 13 支**（`amyounsul`、`amyounsul2`、`angel`、`clone46`、`energyrepulsor`、`firecross`、`firewind`、`groupamyounsul`、`groupamyounsul2`、`mabmabe`、`spacemove`、`turnundead`、`windtebo`；均缺 `caster_name/slave_colors`）。**风险判定**：这 8 键的 `golden_fixture_required` 读取**全部 gated 到拥有该键的 stem**（poison 4 支：`amulet_shape`/`target_anti_poison`/`amy_ounsul_point`/`red_msg_*`/`you_poisoned`；`firecross_parity_drive`：`red_msg_*`；`caster_name`/`slave_colors` **无 required 读**）⇒ **当前无驱动因缺键 panic**，55 支陈旧 golden 只是少记了未用输入。**处置**：需要 schema 干净的批次用**快照生成器**（如 B17 用 `c31580a57` 生成器 + 单点改动，避免“排水语义 + schema”两因混淆）；全量重生成是另一批决策。**后续动作（另立批，不并 B17）**：把 55 支 golden 全量对齐当前 schema = 独立批（一批只允许一个自变量，混合则 B17 后异常无法归因）；建议**按被读取性分组**——`caster_name`/`slave_colors`（完全未读）一批、被 gated 读的前 6 键一批。 |
+| B19 | **装置墙钟非确定性 ⇒ golden 不可逐字节复现**：步进排水 `DrainOnce` 用 `Thread.Sleep(step)` + **实时** `GetTickCount()` 判到期；sleep 过冲使「同刻 due 的多条 self-delay 消息本步是否到期」翻转 ⇒ 处理顺序翻转 | 同 cast 多条**同刻/近同刻**延迟消息（`mabmabe-nondefault` 600/600；施毒 4 支；多受害者） | 3 轮 pristine 独立 regen 即轮间抖动：`due_ms_rel` ±15/16ms（TickCount 粒度）+ **顺序级** `Rm[i].ident` 换位；**14 支命中**：`mabmabe-nondefault`/`amyounsul`/`amyounsul2`/`groupamyounsul`/`groupamyounsul2`/`clone46`/`fireboom47`/`firecross`/`holyshield`/`lightflower`/`lightflower-nonzero`/`skill10`/`skill53`/`windtebo` | 生产同样用 `.NET` 实时钟，但装置重放需**可复现**；注入虚拟时钟是正解 | **边界**：比较器靠 `Rm` **多重集**比较 + `due_ms_rel` **32ms 容差**吸收 ⇒ **既有对拍仍通过**；但「逐字节对比 golden」在这 14 支上不可靠 ⇒ **凡逐字节比 golden 必先噪声地板**。根因批 = 虚拟时钟注入（`openmir2-firecharm-nondeterminism` 的正解）。 |
+
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -36,10 +38,11 @@
 - **按物品表/城堡/事件/配置阈值分叉的效果** —— 落在 **B8/B9/B10**。
 - **多延迟同 cast 的帧时序/顺序（实例：50 魔爆成功臂）** —— 落在 **B17**。
 - **committed golden 可复现性（生成器 schema 漂移）** —— 落在 **B18**。
+- **装置墙钟非确定性（golden 不可逐字节复现）** —— 落在 **B19**；根因批=`openmir2-firecharm-nondeterminism`。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 18 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18？
+1. **先查本卡 19 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
@@ -48,7 +51,7 @@
 
 ## 4. 使用法
 
-1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18？"
+1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19？"
 2. 命中盲区 ⇒ 记为**装置限制**（进 scope 或登记卡），**不要**当成产品缺陷去改实现。
 3. 需要把盲区变可见时，改装置的方向（另开卡）：替身怪绑定 `Envir`+`ActorMgr`+`AddMapObject`；对被动怪实现最小 `Operate`；克隆体复位 `FixedHideMode` 并把其队列纳入排水；对 `VisibleActors` 按 AOI 回填；显式装载 `ServerConf`；跑必要 tick 的 `Run`。
 

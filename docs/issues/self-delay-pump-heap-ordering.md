@@ -97,6 +97,12 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 - **5 支的变必须只限**：延迟帧 `due_ms_rel`/出队顺序；**伤害值、HP、抽数、帧条数不得变**。
 - **停下条件**（任一即停手报 opc-19，不自行调断言/补 golden）：①预期外 stem 变化；②5 支里连伤害值/HP/抽数/帧条数也变；③任何既有对拍由绿转红。
 
+**验收口径（2026-11-21，opc-19 批准收窄）**：经「3 轮 pristine + 2 轮 fixed」噪声地板（见 B19）判定，**无歧义真变仅 `healing`/`bighealing`**——`cases[2].Receivers[0].Rm` 的 `8034(RM_MAGHEALING)↔10123(RM_MAGIC_LVEXP)` **顺序交换**（两轮 pristine 都不抖、两轮 fixed 都稳）；`hbfireball` IDENTICAL；`pr1_*` 未动；语义审查对齐 `GetMessage`。**多延迟/多受害者 stem（含 `mabmabe-nondefault`、施毒 4 支）因装置墙钟非确定（B19），本批无法逐字节证明——这是验收口径收窄，不是「没验」，更不是「已验证全部多延迟 stem」。** 本批只重出 `healing`/`bighealing`。
+
+**预测口径更正（opc-19）**：预登记预测（5 支）＝「≥2 条延迟消息」，**漏了「多受害者」类**（施毒 4 支每条受害者各一条延迟/受击亦属多延迟）⇒ **下次预测按「队列里是否存在交错 due」判，不按「消息条数」判**。另：`89` 扫描「可能变」的 `bigcloak`/`groupdeding` 实测**没变** ⇒ **扫描是保守、实测更准**。
+
+**clone46（独立）**：`Clone.actor_id`/`rel_to_caster` 两跑差 ~9e8 —— 克隆体 ActorId 由产品 `ActorMgr`/`PlayCloneObject` ctor 分配（非 harness 可控的确定源，疑运行时/对象哈希/进程计数），**与排水无关**；clone 家族 golden 的该字段天然不可逐字节比对。
+
 **判据固定（opc-19 2026-11-21）**：B17 的「只 5 支变、其余零变化」**只能用 pristine-vs-fixed**（同码仅差排水语义）判；**不得 vs committed**（committed golden 有 schema 漂移，见 B18，会全 stem 假红）。
 
 **两处装置近似（登记）**：
