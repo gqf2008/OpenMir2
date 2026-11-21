@@ -1,21 +1,17 @@
 # whitelist 冻结面（`src/**`）锚漂移底账（Phase 0 报告，2026-11-21）
 
-> 工具：`mir2-rs/tests/parity/m3/whitelist_anchor_gate.py report-src-drift`（**只报告、不判红**；默认 `check` 行为不变）。
-> 口径：A（声明级/span 匹配）+ B（资格过滤）；**检测器已按 `10` 的两轮抽样修正**（§1b/§1c）。
-> 数据：`/UserTemp/qa-b2/src-anchor-drift-v3.{json,tsv}`。
+> 工具：`mir2-rs/tests/parity/m3/whitelist_anchor_gate.py report-src-drift`（只报告、不判红；默认 `check` 行为不变）。
+> 口径：A（span 命中为主）+ B（资格过滤）；检测器经 `10` 两轮抽样修正（§1b/§1c），**另经 T-216 溯源补否定规则（§1d）**。
+> 数据：`/UserTemp/qa-b2/src-anchor-drift-v4.json`。
 
 ## 1. 方法与口径（先读）
 
-- **B 资格过滤**：带 `::`/`.` 限定、或文件内唯一、或 CamelCase≥2 词/长度≥6/全大写 ⇒ 参与；否则「符号不合格」只 WARN。
-- **主判据 = span 命中**（锚 ∈ 声明方法体的 `{声明行 .. 配对右花括号}` ⇒ dist=0）；**距离只在方法外使用**。
-- **上界口径**：通用名可能撞别的成员 ⇒ 「已漂出」仍是**上界**，逐条裁决后才可移锚。
+- B 资格过滤：带 `::`/`.`、文件内唯一、CamelCase≥2 词/长度≥6/全大写 ⇒ 参与；否则「符号不合格」只 WARN。
+- **主判据 = span 命中**（锚 ∈ 声明体 `{声明行..配对右花括号}` ⇒ dist=0）；距离只在方法外使用。
+- 上界口径：通用名可能撞别的成员 ⇒ 「已漂出」仍是上界。
 
-## 1b. 检测器修正 · 第一轮（8 条「符号不存在」全部是配对错）
-
-首版报告的「符号不存在 8」经 `10` 逐条复核，**一条都不是锚漂，全部是提取器配对错**。已修正：
-① 排除 `*Exception`；`SM_*/RM_*/CM_*` 视为帧/消息；② 否定/对照引用不配符号（否定词须紧邻符号）；
-③ 语言一致（候选符号必须出现在锚的目标文件里）；④ 同句多锚按「距离 + 语言」配对。
-
+## 1b. 第一轮修正（8 条「符号不存在」全是配对错）
+规则：①`*Exception`/`SM_*/RM_*/CM_*` 排除；②否定引用不配（否定词须紧邻符号）；③语言一致；④同句多锚按距离+语言。
 | 条目 | 首版误配 | `10` 裁决（该行实际/正确符号） | 修正后 |
 | --- | --- | --- | --- |
 | `B-108` | `IndexOutOfRangeException` | 泛名；实为 `ActionOfAutoGetExp` | 无相邻符号 |
@@ -23,35 +19,40 @@
 | `T-47` | `SM_WEIGHTCHANGED` | 帧名；实为 `WeightChanged` | 无相邻符号 |
 | `T-97` | `ReloadAllGuild` | 命令名；实为 `LoadGuildInfo` | 无相邻符号 |
 | `T-47` | `WeightChanged` | 原文「**无** WeightChanged」⇒ 否定引用 | 无相邻符号 |
-| `T-263` | `ClientGuildAlly` | 原文「**不进** ClientGuildAlly」，实调 `ClientGuildBreakAlly` | 否定句不配；`PlayObject.Operate` 处按同语言配 `ClientGuildAlly` |
+| `T-263` | `ClientGuildAlly` | 原文「**不进** ClientGuildAlly」，实调 `ClientGuildBreakAlly` | 否定句不配；另一处按同语言配 `ClientGuildAlly` |
 | `T-142` | `config_game_gold_name`/`NpcPlayer.frames` | Rust 名配 `.cs` 锚（跨语言） | 无相邻符号 |
 | `T-142` | 同句多锚 | 一句多条锚混排 | 按距离+语言重配 |
 
-## 1c. 检测器修正 · 第二轮（`10` 抽样 6 条「行号漂出」也全是误判）
+## 1c. 第二轮修正（6 条「行号漂出」抽样全是误判）
+- **判据主次调换**：span 为主（配对花括号；覆盖嵌套块/本地函数/属性 getter）；距离只在方法外。
+- 新增 DB/SQL 过滤：表名/列名/`GetByte("…")` 参数/`表.列` 左半段只在字符串里 ⇒ 不参与。
+- 回归集：`T-294`/`D-13`/`T-148`/`T-53`/`T-266` → 严格命中(dist=0)；`T-29` 的 `characters_ablity.Level` → 无相邻符号（SQL）。
 
-**判据主次调换**：原按「到声明行距离」判漂，把**方法体长度**当成了漂移量；改为 **span 命中为主**、距离只在方法外。
-另加：span 用**配对花括号**（不看缩进；覆盖嵌套块 / 本地函数 / 属性 getter）；DB/SQL 标识符（表名/列名/`GetByte("…")` 参数）不参与代码符号匹配。
-回归集：`T-294`/`D-13`/`T-148`/`T-53`/`T-266` 现均 **严格命中（dist=0）**；`T-29` 的 `characters_ablity.Level` 是 SQL 列名 ⇒ **无相邻符号**（不参与匹配）。
-检测器自带合成夹具 + **反向牙**（锚在方法外 5 行 ⇒ dist>3，见 `report-selftest`）。
+## 1d. T-216 溯源四步（结论：**不是漂移，不移锚**）
+1. **锚基线**：写入 `5cc077fe6`（2026-10-23）时，`ActionOfGmExecute` 的声明体 = (4925,4948)，**4933 在体内**；
+2. **漂移提交**：无——HEAD 的声明体仍为 (4925,4948)，4933 始终在体内；
+3. **改动正当性**：不适用（无漂移）；
+4. **无二次漂移**：HEAD 复核仍在体内。
+⇒ 旧底账的 `T-216 dist=720` 是把**否定句**「…**不调** `GetLineVariableText`」误配给该锚；已补否定规则（`不调`/`不+汉字`）。
 
-> **结论（按 opc 措辞）**：**检测器把「方法体内锚」误判为「漂移」**——锚指向方法体是常态，而按「到声明行距离」判漂，会把方法体长度当成漂移量。修正后以 span 命中为一等判据、距离只在方法外使用。
-> **重算效果**：已漂出 **18 → 1**（唯一剩 `T-216`，dist=720，待逐条裁决）；「锚漂移危机」的绝大部分是报告器造成的。**先不下终结论**，等 `T-216` 溯源。
-
-## 2. 分布（两轮修正后）
+## 2. 分布（v4，最终）
 
 | 桶 | 数量 | 首版 | 说明 |
 | --- | ---: | ---: | --- |
-| 严格命中（span） | 89 | 102 | 锚在声明体内（dist=0） |
-| 无相邻符号（含否定/跨语言/混排/SQL 过滤） | 368 | 345 | 本方案不覆盖 |
-| 已漂出（疑似真漂） | 1 | 26 | 仅 `T-216`，需溯源四步 |
-| 松命中·非声明 | 65 | 48 | 常量/调用点；Phase 1 需补「全仓唯一定义」 |
+| 严格命中（span） | 86 | 102 | 锚在声明体内（dist=0） |
+| 无相邻符号（含否定/跨语言/混排/SQL 过滤） | 371 | 345 | 本方案不覆盖 |
+| 已漂出（疑似真漂） | 0 | 26 | **v4 = 0**（26 条全部经两轮抽样 + T-216 溯源判为检测器误判） |
+| 松命中·非声明 | 66 | 48 | 常量/调用点；Phase 1 需补「全仓唯一定义」 |
 | 符号不合格(通用名) | 4 | 4 | `Dir`/`Run`/`Teleport`/`ushort` |
 | ±3 边缘 | 1 | 3 | `CHECKNAMEDATELIST` |
 
-## 3. 已漂出（1 条，待溯源四步）
-- T-216 | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:4933` | `GetLineVariableText` | dist=720
+> **待独立复核**：`26 → 0` 目前只由「同一程序的新旧两版」支撑，**尚无第三方独立复算**；由 `10`（非检测器作者）复核后才作为结论。
+> **Phase 2 的 26 条池子作废**，以本 v4 底账为准（旧池仅供溯源）。
 
-## 4. 松命中·非声明（65 条）
+## 3. 已漂出（0 条）
+（v4 为空。）
+
+## 4. 松命中·非声明（66 条）
 - D-14 | `src/M2Server/Player/PlayObject.Message.cs:398/399` | `LogService.Error` | dist=0
 - B-118 | `src/GameSrv/Word/WorldServer.cs:1131/1285` | `BonusPoint` | dist=0
 - T-60 | `src/M2Server/M2Share.cs:1782/1797` | `M2Share.GetNoClearMonList` | dist=0
@@ -107,6 +108,7 @@
 - T-205 | `src/OpenMir2/Grobal2.cs:48` | `ET_FIRE` | dist=0
 - (散文) | `src/M2Server/Player/PlayObject.Socket.cs:98` | `NetChannel.AddGateBuffer` | dist=0
 - (散文) | `src/GameSrv/GameShare.cs:57/86` | `GetRandpmRoute` | dist=0
+- T-202 | `src/GameSrv/Word/WorldServer.Switch.cs:94/102` | `MakeSwitchData` | dist=0
 - T-202 | `src/M2Server/Player/PlayObject.Base.cs:897/907` | `ChangeSpaceMove` | dist=0
 - T-206 | `src/Modules/SystemModule/Data/MapCellInfo.cs:30` | `ObjList` | dist=0
 - T-222 | `src/M2Server/Player/PlayObject.cs:1023` | `playerActor.DynamicVarMap` | dist=0
@@ -121,13 +123,13 @@
 ## 5. ±3 边缘（1 条）
 - T-220 | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:642` | `CHECKNAMEDATELIST` | dist=3
 
-## 6. 符号不合格（4 条，B 过滤；只 WARN）
+## 6. 符号不合格（4 条，只 WARN）
 - T-31 | `src/M2Server/Monster/Monsters/CastleDoor.cs:99/104` | `Dir` | dist=None
 - T-94 | `src/M2Server/Player/PlayObject.Message.cs:266` | `Run` | dist=None
 - T-169 | `src/M2Server/Player/PlayObject.cs:2235/2237` | `Teleport` | dist=None
 - T-206 | `src/M2Server/Actor/AnimalObject.cs:42` | `ushort` | dist=None
 
-## 7. 无相邻符号（368 条，按文件分组）
+## 7. 无相邻符号（371 条，按文件分组）
 - `src/M2Server/Player/PlayObject.Message.cs`（40）：D-9, D-9, D-10, D-13, A-8, (散文), (散文), T-26, T-28, T-28, T-29, T-57, T-76, T-79, T-80, T-82, T-100, T-101, T-134, T-135, T-142, T-142, T-142, T-147, T-148, T-148, T-203, (散文), T-206, T-206, T-207, T-207, T-207, T-207, T-207, T-214, T-224, T-224, T-270, T-292
 - `src/M2Server/Player/PlayObject.cs`（33）：B-2, T-62, T-65, T-17, T-29, T-29, T-69, T-43, T-47, T-54, T-73, T-79, T-79, T-80, T-80, T-99, T-118, T-142, T-142, (散文), (散文), T-192, T-203, T-201, T-205, T-205, T-205, T-205, T-205, T-205, T-206, T-266, T-266
 - `src/M2Server/Actor/BaseObject.cs`（20）：B-3, T-61, T-28, T-32, T-33, T-57, T-47, T-80, T-142, T-147, T-154, T-196, T-196, T-196, T-196, T-206, T-206, T-206, T-206, T-224
@@ -140,12 +142,12 @@
 - `src/Modules/SystemModule/Conf/Model/GameSvrConf.cs`（9）：T-23, T-23, T-29, B-16, T-101, T-144, T-154, T-199, T-204
 - `src/GameSrv/DB/MySqlDB.cs`（7）：B-4, B-5, B-6, T-61, T-44, T-44, T-266
 - `src/GameSrv/Word/WorldServer.MonGen.cs`（7）：B-1, T-79, T-95, T-155, T-206, T-206, T-269
+- `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs`（7）：B-108, T-79, T-142, T-142, T-220, T-216, T-224
 - `src/Modules/ScriptEngine/ScriptParsers.cs`（7）：B-8, B-8, B-11, B-12, B-13, B-14, T-47
+- `src/M2Server/Maps/Envirnoment.cs`（6）：B-15, B-15, T-65, (散文), (散文), T-29
 - `src/M2Server/Monster/MonsterObject.cs`（6）：B-114, B-114, T-49, T-143, T-143, T-196
-- `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs`（6）：B-108, T-79, T-142, T-142, T-220, T-224
 - `src/Modules/SystemModule/Conf/ServerConf.cs`（6）：B-113, B-113, T-101, T-128, T-142, T-144
 - `src/GameSrv/DB/LocalDB.cs`（5）：T-56, T-140, T-193, T-212, T-219
-- `src/M2Server/Maps/Envirnoment.cs`（5）：B-15, T-65, (散文), (散文), T-29
 - `src/M2Server/Npc/NormNpc.cs`（5）：T-31, T-154, T-155, T-192, T-224
 - `src/M2Server/Player/PlayObject.Chat.cs`（5）：T-113, T-210, T-210, T-212, T-216
 - `src/M2Server/Magic/MagicManager.cs`（4）：T-285, T-285, T-286, T-286
@@ -155,6 +157,7 @@
 - `src/GameGate/Services/ClientSession.cs`（3）：A-1, A-2, T-206
 - `src/GameSrv/GameApp.cs`（3）：D-21, (散文), (散文)
 - `src/GameSrv/Npc/CastleOfficial.cs`（3）：(散文), T-40, T-142
+- `src/GameSrv/Npc/GuildOfficial.cs`（3）：D-13, (散文), T-138
 - `src/M2Server/Castle/CastleConf.cs`（3）：T-127, T-152, T-152
 - `src/M2Server/M2Share.cs`（3）：T-60, T-64, T-42
 - `src/M2Server/Monster/Monsters/ElfWarriorMonster.cs`（3）：T-79, T-143, T-143
@@ -163,7 +166,6 @@
 - `src/Modules/SystemModule/Data/MapItem.cs`（3）：T-19, T-25, T-32
 - `src/OpenMir2/HUtil32.cs`（3）：B-9, B-10, (散文)
 - `src/OpenMir2/Messages.cs`（3）：D-15, T-44, T-196
-- `src/GameSrv/Npc/GuildOfficial.cs`（2）：(散文), T-138
 - `src/LoginGate/Services/ClientSession.cs`（2）：A-3, A-4
 - `src/M2Server/Actor/AnimalObject.cs`（2）：T-31, T-96
 - `src/M2Server/Castle/UserCastle.cs`（2）：T-38, T-153
@@ -227,13 +229,14 @@
 - `src/SelGate/GateShare.cs`（1）：T-172
 - `src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs`（1）：T-29
 
-## 8. Phase 1/2 入口（**暂停**）
-- Phase 1：只对 6 道场景锚门覆盖文件集开启严口径判红；**错误码 `SRC_DECL_DRIFT`**（与场景门 `ANCHOR_DRIFT` 区分），标注「本层=声明级」。
-- Phase 2：**在底账被修正/裁决前不开启**；每条「已漂」先走**溯源四步**（锚基线 → 漂移提交 → 是否登记/正当 → 无二次漂移），确认新状态正确再移锚，不自动修。
+## 8. Phase 1/2 入口
+- Phase 1：只对 6 道场景锚门覆盖文件集开启严口径判红；错误码 **`SRC_DECL_DRIFT`**（与场景门 `ANCHOR_DIST`/`ANCHOR_DRIFT` 区分），标注「本层=声明级」。
+- Phase 2：**26 条旧池作废**；若日后新增「已漂」条目，逐条走溯源四步（锚基线 → 漂移提交 → 是否登记/正当 → 无二次漂移），确认新状态正确再移锚，不自动修。
 - 常量类需补「全仓唯一定义」规则，否则恒落「松命中·非声明」。
+- `report-selftest`（合成夹具+反向牙）**暂不进合并门**（它检查报告器，不检查被检对象）。
 
 ## 9. 复现
 ```text
 python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py report-src-drift --tsv <out.tsv> --json <out.json>
-python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py report-selftest   # 合成夹具 + 反向牙
+python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py report-selftest
 ```
