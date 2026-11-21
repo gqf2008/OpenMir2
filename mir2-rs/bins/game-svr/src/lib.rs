@@ -71635,6 +71635,30 @@ SendRefMsgRange=15
                 "[{stem}/{label}] MAP_ID_INDEX_MISMATCH id={home_id} 实际索引={}（真图必须落在 registry 指向的下标）",
                 rig.world.maps.len() - 1
             );
+            // **装置前提（本卡修正）**：`maps.clear()` 把初始网格连同**格上对象表**一起丢了
+            // （`new_layout` 末尾的 `world.tick()` 已把 caster/目标/观察者登记进旧图）。
+            // 不重登记 ⇒ `CretInNearXy` 在真图上查不到目标 ⇒ 21 的 `RM_MAGICFIRE` 的
+            // `targerActors` 退化成 0（golden 是目标 ActorId），且 `CanWalk` 也看不到实体。
+            // 这里按各实体坐标重做 `AddToMap` 的格子面（生产由 `enter_world_impl` 完成）。
+            {
+                let now = rig.world.clock_ms;
+                let placed: Vec<(usize, i32, i32, i32)> = rig
+                    .world
+                    .entities
+                    .ids_sorted()
+                    .into_iter()
+                    .filter_map(|id| rig.world.entities.get(id).map(|e| (e.map_id, e.x, e.y, id)))
+                    .collect();
+                for (map_id, x, y, id) in placed {
+                    let map = rig.world.maps.get_mut(map_id).unwrap_or_else(|| {
+                        panic!("[{stem}/{label}] 真图重登记：actor={id} 的 map_id={map_id} 不存在")
+                    });
+                    assert!(
+                        map.add_map_object(x, y, mir2_world_bevy::map::CellType::Play, id, now),
+                        "[{stem}/{label}] 真图重登记失败 actor={id} ({x},{y})（格子不合法？）"
+                    );
+                }
+            }
             rig.registry = Some(registry);
             // **21 支特有的装置前提**（与 `TeleportRig` 同路）：`SpaceMove → switch_map_space →
             // sessions.get(chr_name)` 要求 caster 在 `world.sessions` 里 `InWorld`、已绑 `actor_id`、
@@ -71733,8 +71757,27 @@ SendRefMsgRange=15
         let status_before = status_time_of(&rig.world, target);
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
+        // **21 的 RM 收件人必须取施法前**：oracle 的 `RM_SPELL(:159)` / `RM_MAGICFIRE(:406)` /
+        // `RM_SPACEMOVE_FIRE2(:881)` 都在 `SpaceMove` **之前**入队，收件人按旧图/旧坐标算。
+        // 施法后 caster 已换图 ⇒ `hear_targets` 只剩自己，target/obs_in 的 RM 会整段丢（实测）。
+        let in_range_caster_pre: Vec<i32> = if magic_id == 21 {
+            chat::hear_targets(&rig.world, caster, chat::send_ref_msg_range())
+        } else {
+            Vec::new()
+        };
+
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
+        // **8/37 的推挤决策观测**（卡 `magic-push-batch-impl`）：`RM_PUSH(8092)` 的台账来源取
+        // 产品路径的真实 `PushEvent`（`cast_firewind_spell` → `push_now`），**不是**从我们发出的
+        // `SM_BACKSTEP(9)` 反推（自证）。取后清空 ⇒ 有界；其它魔号此日志恒空。
+        let firewind_pushes: Vec<(i32, u8, i32, i32)> = rig
+            .world
+            .push_log()
+            .iter()
+            .map(|p| (p.actor_id, p.dir, p.x, p.y))
+            .collect();
+        rig.world.clear_push_log();
         // **MG-35（21）**：换图簇（633/634/766/54/11029/807）在 oracle 是 `SpaceMove` 期间入队、
         // 由**本 tick 的下行段** drain 发出；Rust 对应 `drain_map_change`（参数与 tick 路径逐字一致）。
         // 驱动的 `cast` 只跑施法段、不跑 tick ⇒ 必须补一次，否则"移动发生了但帧没发"
@@ -71934,9 +71977,14 @@ SendRefMsgRange=15
         let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
         // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
-        let push_events: Vec<(i32, u8, i32, i32)> = all_outs
+        let push_events: Vec<(i32, u8, i32, i32)> = firewind_pushes
             .iter()
-            .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y)))
+            .copied()
+            .chain(
+                all_outs
+                    .iter()
+                    .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y))),
+            )
             .collect();
         let n2 = trace_line_count(&trace);
 
@@ -71986,6 +72034,12 @@ SendRefMsgRange=15
         let range = chat::send_ref_msg_range();
         let in_range_caster = chat::hear_targets(&rig.world, caster, range);
         let in_range_target = chat::hear_targets(&rig.world, target, range);
+        // 21 的施法帧收件人 = 施法前集合（见上方 `in_range_caster_pre`）；其它魔号用现算。
+        let rm_cast_targets: &[i32] = if magic_id == 21 {
+            &in_range_caster_pre
+        } else {
+            &in_range_caster
+        };
         let (fire_x, fire_y, fire_series, fire_target) = all_frames
             .iter()
             .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
@@ -72007,7 +72061,7 @@ SendRefMsgRange=15
                 .find(|e| e.actor_id == id)
                 .map(|e| e.chr_name.clone())
         };
-        for id in &in_range_caster {
+        for id in rm_cast_targets {
             if let Some(who) = who_of(*id) {
                 let v = rm_by_who.entry(who).or_default();
                 // `RM_SPELL`：wParam=Effect(1)、p1/p2=**点击坐标**、p3=MagicId；priority=(byte)ident。
@@ -72034,6 +72088,36 @@ SendRefMsgRange=15
                     )),
                     i64::from(fire_target),
                     136,
+                    false,
+                ));
+                // **21 的 `RM_SPACEMOVE_FIRE2(8042)`**（oracle `MagicManager.cs:881`，`MapRandomMove`
+                // 之前）：`SendRefMsg` 含自己、按**旧图/旧坐标**算收件人 ⇒ 与 17/638 同集合。
+                if magic_id == 21 {
+                    v.push(fireball_rm(8042, 0, 0, 0, 0, 106, false));
+                }
+            }
+        }
+        // **21 的换图簇 RM**（oracle `BaseObject.cs:1133/1134/1137`，落地后发）：
+        // 8097/8098 是 `SendMsg`（只自己）；8099 是 `SendRefMsg(RM_SPACEMOVE_SHOW2, Dir, CurrX,
+        // CurrY, 0, "")`——新图上没有其他玩家 ⇒ 收件人只有 caster。值取落地后的实体
+        // `Dir/CurrX/CurrY`（golden `[8099, 2, 121, 353]` = Dir=2）。
+        if magic_id == 21 {
+            if let Some(who) = who_of(caster) {
+                let (dir, lx, ly) = rig
+                    .world
+                    .entities
+                    .get(caster)
+                    .map_or((0u8, 0i32, 0i32), |e| (e.dir(), e.x, e.y));
+                let v = rm_by_who.entry(who).or_default();
+                v.push(fireball_rm(8097, 0, 0, 0, 0, 161, false));
+                v.push(fireball_rm(8098, 0, 0, 0, 0, 162, false));
+                v.push(fireball_rm(
+                    8099,
+                    i64::from(dir),
+                    i64::from(lx),
+                    i64::from(ly),
+                    0,
+                    163,
                     false,
                 ));
             }
