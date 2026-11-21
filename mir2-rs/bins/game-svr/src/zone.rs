@@ -520,6 +520,16 @@ impl fmt::Display for ZoneParseError {
 
 impl std::error::Error for ZoneParseError {}
 
+/// **L2-4 段 6**：多区布局配置的环境变量名（`<区>:<地图>=<x0>,<y0>-<x1>,<y1>[;<…>]`）。
+pub const ENV_ZONES: &str = "MIR2_ZONES";
+
+/// **L2-4 段 6**：每区边界带实体数上限的环境变量名（缺省
+/// [`DEFAULT_MAX_HALO_BAND_ENTITIES`]）。
+pub const ENV_MAX_HALO_BAND_ENTITIES: &str = "MIR2_MAX_HALO_BAND_ENTITIES";
+
+/// **L2-4 段 6**：边界带实体数上限的缺省值（tick 0 启动门；超限拒绝启动）。
+pub const DEFAULT_MAX_HALO_BAND_ENTITIES: usize = 512;
+
 /// **L2-4 段 3**：把 `MIR2_ZONES` 原文解析成 [`RegionLayout`]（**纯函数**，不读环境/I/O）。
 ///
 /// 语法（`;` 分隔；一区可多段）：`<区号>:<地图名>=<x0>,<y0>-<x1>,<y1>`。

@@ -21,11 +21,12 @@
 //!
 //! 计数器走 [`crate::perf_counters`]：探针关闭时 `bump` 是纯 no-op（一次 relaxed 读）。
 //!
-//! # 本段边界
+//! # 接线状态
 //!
-//! 只建表/查询，**未接 `run_inner`**（段 6 才接）：本模块在生产路径上**没有任何调用点**，
-//! 玩家仍全部落在区 0，N=1 行为逐字节不变——别把本模块的存在误读成「已经按区分派」。
-//! 不校验区号上界——布局的区数要到段 6 的启动门才存在。
+//! **段 6a 已接**：`run_inner` 的 `MIR2_ZONES` 分支起 `m2-zone-demux` 线程，`route_zone_target`
+//! 是本表唯一的判定点（`Opened` 登记 / `Command` 查询 / `Closed` **先查后删**）。
+//! `MIR2_ZONES` 未设（N=1）时本表没有生产者：玩家全部落在区 0，原单线程路径逐字节不变。
+//! 不校验区号上界——布局的区数在启动门（`zone_wiring::plan_zone_mode`）才存在。
 
 use std::collections::HashMap;
 use std::fmt;

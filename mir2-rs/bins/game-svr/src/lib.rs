@@ -217,12 +217,8 @@ enum GateEvent {
     ///
     /// `index` 是**该网关 `UserList` 的对外索引**（下标+1，`users.rs` 的 `open`），**不是** socket。
     Opened {
-        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
-        #[allow(dead_code)]
         line: u8,
         index: i32,
-        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
-        #[allow(dead_code)]
         socket: i32,
         ip: String,
     },
@@ -234,8 +230,6 @@ enum GateEvent {
     /// `socket` = 该槽的客户端句柄（回帧路由仍要用它）。
     Command {
         /// 网关线号（`gate_conn` 的 `service_id`）。
-        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
-        #[allow(dead_code)]
         line: u8,
         index: i32,
         chr_name: String,
@@ -246,13 +240,7 @@ enum GateEvent {
     /// 没通过认证的会话收到的帧：oracle 在这一支走 `DoClientCertification` 的空转（`Account` 为空才真认证）。
     ///
     /// **不改 `zone_router` 的表**（认证前丢帧分支，不是会话结束）。
-    CertificationPending {
-        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
-        #[allow(dead_code)]
-        line: u8,
-        index: i32,
-        ip: String,
-    },
+    CertificationPending { line: u8, index: i32, ip: String },
     /// `GM_CLOSE`。
     ///
     /// `chr_name` = 关断时该槽已认证的角色名（未认证则为空）；`socket` = 该槽的客户端句柄。
@@ -878,6 +866,354 @@ async fn startup_db_load_blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, StartupDbLoadError> {
     startup_db_load_blocking_bounded(STARTUP_DB_LOAD_BOUND, work).await
+}
+
+// ============================================================================================
+// **L2-4 段 6a：多区生产装配（`MIR2_ZONES` ⇒ N 区一线程 + 入站 demux）**
+//
+// **交付的是结构不是容量**：非 0 区本步没有会话/实体来源（登录归属按
+// `docs/issues/shard-session-placement-design-20261121.md` 暂缓）⇒ 真正收益要等 L2-5 的
+// 每区会话切片。`MIR2_ZONES` 与 `MIR2_SHARDS>1` 互斥是 **v1 限制、不是否决**：区×片二维
+// 队列属 L2-5。
+//
+// 形态（N = 布局区数）：
+// - 区 0 = 现 `m2-sim` 线程（原样持有真 `World`）；tick 在 AOI 前切开：
+//   `tick_tail_before_aoi → 快照/发布/barrier1/读邻居 → tick_phase2 → 心跳/barrier2`；
+// - 区 1..N−1 = `m2-zone-<i>` 最小区循环（stub `World`、只排空通道、参与两道屏障）；
+// - `m2-zone-demux` = 入站唯一分派点：`(line, socket) → 区`（`ZoneRouter`）+ 线号广播；
+// - `m2-zone-watchdog` = **按需 arm** 的屏障活性兜底（第一轮 barrier2 之后才启动）。
+// ============================================================================================
+
+/// 边界带宽（格）= 全局 `view_range` 上界（`PlayObject.cs:904` = 12，与 [`new_player_entity`]
+/// 同源）。区边界快照 = 距本区 span 边界 ≤ 该宽度的已落格实体。
+const ZONE_HALO_WIDTH: i32 = 12;
+
+/// **L2-4 段 6a**：多区生产装配的共享句柄（`MIR2_ZONES` 未设 ⇒ 上层拿 `None`，N=1 原单线程
+/// 路径逐字节不变）。
+struct ZoneHost {
+    /// 布局（`zone_spans()` 交给 `region_loop::ZoneRuntime`）。
+    layout: Arc<zone::RegionLayout>,
+    /// 每区双缓冲快照交换。
+    exchange: Arc<region_loop::HaloExchange>,
+    /// 每 tick 两道屏障（参与数 = 区数）。
+    barriers: Arc<region_loop::TickBarriers>,
+    /// 心跳表 + 按需 arm 的看门狗线程（屏障活性兜底）。
+    watch: Arc<tick_watchdog::ZoneWatch>,
+    /// 边界带宽（格），固定 [`ZONE_HALO_WIDTH`]。
+    halo_width: i32,
+    /// 每区边界带实体数上限（tick 0 启动门；`MIR2_MAX_HALO_BAND_ENTITIES`，缺省 512）。
+    max_halo_band_entities: usize,
+    /// 关服/退出：区 0 退出前先置真，让最小区循环在下一个 tick 前离开（不 join——见
+    /// [`spawn_minimal_zone`] 的退出说明）。
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// **L2-4 段 6a 的装配判定**（纯函数；单测直接覆盖，不读环境、不碰 I/O）。
+mod zone_wiring {
+    use crate::{region_loop, shard, zone, zone_router};
+
+    /// `MIR2_ZONES` 的解析结果。
+    pub(super) struct ZoneMode {
+        /// 区布局（覆盖/重叠/区号连续已在 `zone::parse_zone_layout` 里校验）。
+        pub(super) layout: zone::RegionLayout,
+        /// 每区边界带实体数上限。
+        pub(super) max_halo_band_entities: usize,
+    }
+
+    /// 解析 `MIR2_MAX_HALO_BAND_ENTITIES`（缺省
+    /// [`zone::DEFAULT_MAX_HALO_BAND_ENTITIES`]；**fail-closed**）。
+    ///
+    /// **即使 `MIR2_ZONES` 未设也校验**：设了非法值却静默忽略 = 「以为配了、其实没有」
+    /// （总监 2026-11-22 点头）。
+    ///
+    /// # Errors
+    /// 空串 / 非整数 / 0 ⇒ 错误文本（调用方拒绝启动）。
+    pub(super) fn parse_max_band(raw: Option<&str>) -> Result<usize, String> {
+        let Some(raw) = raw else {
+            return Ok(zone::DEFAULT_MAX_HALO_BAND_ENTITIES);
+        };
+        let text = raw.trim();
+        if text.is_empty() {
+            return Err(format!(
+                "{} 为空（缺省 {}）",
+                zone::ENV_MAX_HALO_BAND_ENTITIES,
+                zone::DEFAULT_MAX_HALO_BAND_ENTITIES
+            ));
+        }
+        let n: usize = text
+            .parse()
+            .map_err(|_| format!("{}={raw} 不是非负整数", zone::ENV_MAX_HALO_BAND_ENTITIES))?;
+        if n == 0 {
+            return Err(format!(
+                "{}={raw} 没有意义（必须 >0，缺省 {}）",
+                zone::ENV_MAX_HALO_BAND_ENTITIES,
+                zone::DEFAULT_MAX_HALO_BAND_ENTITIES
+            ));
+        }
+        Ok(n)
+    }
+
+    /// 装配决策：`MIR2_ZONES` 未设 ⇒ `Ok(None)`（原单线程路径）。
+    ///
+    /// 拒绝条件（全部 fail-closed，错误文本点名变量与原始值）：
+    /// - `MIR2_ZONES` 设了且 `MIR2_SHARDS>1`：**互斥**——区×片二维队列属 L2-5，不是被否决；
+    /// - 无真地图注册表（占位图模式）：地图名无从解析；
+    /// - [`zone::parse_zone_layout`] 的任一错误（原文上抛）；
+    /// - 只解析出 1 个区：单区请**不设**该变量（N=1 走原单线程路径）。
+    ///
+    /// # Errors
+    /// 文本见上（调用方 `.map_err(anyhow::Error::msg)?` 拒绝启动）。
+    pub(super) fn plan_zone_mode(
+        shards_single: bool,
+        zones_raw: Option<&str>,
+        map_names: Option<&[String]>,
+        map_sizes: &[(i32, i32)],
+        max_band_raw: Option<&str>,
+    ) -> Result<Option<ZoneMode>, String> {
+        let max_halo_band_entities = parse_max_band(max_band_raw)?;
+        let Some(raw) = zones_raw else {
+            return Ok(None);
+        };
+        if !shards_single {
+            return Err(format!(
+                "{} 与 {}>1 互斥：区×片二维队列属 L2-5，不是被否决；本次启动请只设其一",
+                zone::ENV_ZONES,
+                shard::ENV_SHARDS
+            ));
+        }
+        let Some(map_names) = map_names else {
+            return Err(format!(
+                "{} 需要真地图注册表（Envir/MapInfo.txt）解析地图名；占位图模式（无注册表）拒绝多区启动",
+                zone::ENV_ZONES
+            ));
+        };
+        let layout = zone::parse_zone_layout(raw, map_names, map_sizes, zone_router::HOST_ZONE)
+            .map_err(|e| format!("{}: {e}", zone::ENV_ZONES))?;
+        if layout.zone_count() < 2 {
+            return Err(format!(
+                "{}={raw} 只解析出 {} 个区：单区请不设该变量（N=1 走原单线程路径），多区必须 ≥2 区",
+                zone::ENV_ZONES,
+                layout.zone_count()
+            ));
+        }
+        Ok(Some(ZoneMode {
+            layout,
+            max_halo_band_entities,
+        }))
+    }
+
+    /// **启动门（tick 0，静态装载完成后）**：逐区数边界带实体，超上限 ⇒ 拒绝启动。
+    ///
+    /// 错误文本固定带三项：**区号 + 实测实体数 + 上限**（缺任一项无法区分「布局不合格」与
+    /// 「刷怪规模不合格」；总监 2026-11-22 要求）。
+    ///
+    /// # Errors
+    /// 超限（带三项）/ 布局某区无 span（`ZoneTickError::NoSpans`，布局构造已排除，出现即程序错误）。
+    pub(super) fn check_band_gate(
+        world: &mir2_world_bevy::World,
+        layout: &zone::RegionLayout,
+        halo_width: i32,
+        max: usize,
+    ) -> Result<(), String> {
+        for index in 0..layout.zone_count() {
+            let zone_id = zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
+            // tick 号只写进快照（本门不发布、不比较）⇒ 取 0。
+            let border = region_loop::snapshot_zone_border(
+                world,
+                zone_id,
+                layout.zone_spans(),
+                halo_width,
+                0,
+            )
+            .map_err(|e| e.to_string())?;
+            let count = border.entities.len();
+            if count > max {
+                return Err(format!(
+                    "区 {zone_id} 边界带实体数 {count} 超上限 {max}（{}；布局/刷怪规模不合格，拒绝启动）",
+                    zone::ENV_MAX_HALO_BAND_ENTITIES
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// **L2-4 段 6a**：demux 的目标。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoneTarget {
+    /// 网关线注册/注销：**每个区**都要有该线的 `SimToGate` 发送端。
+    Broadcast,
+    /// 单区（下标 = `ZoneId::index()`）。
+    Zone(usize),
+}
+
+/// **L2-4 段 6a**：按事件类型 + `(line, socket)` 分派表算目标区（demux 的唯一判定点）。
+///
+/// - `Register/UnregisterGate` ⇒ 广播（每区都要能回帧到该网关线）；
+/// - `LoadDb/Kick/AdminGm` ⇒ 区 0（登录/DB/管理动作都在宿主区；登录归属暂缓）；
+/// - `Opened` ⇒ `router.opened(line, socket)`（**登记**，初始区 0；被拒 ⇒ WRN + 区 0）；
+/// - `Command` ⇒ `router.lookup(line, socket)`（未命中 ⇒ 区 0）；
+/// - `Closed` ⇒ **先 `lookup` 再 `remove`**，投 lookup 出的区——关断必须由**持有该世界**的区
+///   处理（摘实体/清会话）；先删后投会把关断错投区 0，实体留在原区成为幽灵；
+/// - `CertificationPending` ⇒ 区 0（认证前丢帧，**不改表**）+ 一行 DBG 读 `line`。
+fn route_zone_target(ev: &GateEvent, router: &zone_router::ZoneRouter) -> ZoneTarget {
+    match ev {
+        GateEvent::RegisterGate { .. } | GateEvent::UnregisterGate { .. } => ZoneTarget::Broadcast,
+        GateEvent::Opened { line, socket, .. } => match router.opened(*line, *socket) {
+            Ok(zone_id) => ZoneTarget::Zone(zone_id.index()),
+            Err(rejected) => {
+                glog!("WRN", "L2-4 demux：{rejected} ⇒ 该 Open 投区 0");
+                ZoneTarget::Zone(zone_router::HOST_ZONE.index())
+            }
+        },
+        GateEvent::Command { line, socket, .. } => {
+            ZoneTarget::Zone(router.lookup(*line, *socket).index())
+        }
+        GateEvent::Closed { index, socket, .. } => {
+            // `Closed.index` 已是**网关线号**（G3/T-102）；超出 u8 的值不可能在表里 ⇒ 区 0。
+            let zone_id = match u8::try_from(*index) {
+                Ok(line) => {
+                    let zone_id = router.lookup(line, *socket);
+                    router.remove(line, *socket);
+                    zone_id
+                }
+                Err(_) => zone_router::HOST_ZONE,
+            };
+            ZoneTarget::Zone(zone_id.index())
+        }
+        GateEvent::CertificationPending { line, index, .. } => {
+            glog!(
+                "DBG",
+                "L2-4 demux：认证未决帧 line={line} index={index} ⇒ 区 0（认证前丢帧，不改表）"
+            );
+            ZoneTarget::Zone(zone_router::HOST_ZONE.index())
+        }
+        GateEvent::LoadDbRequest(_) | GateEvent::KickAccount { .. } | GateEvent::AdminGm { .. } => {
+            ZoneTarget::Zone(zone_router::HOST_ZONE.index())
+        }
+    }
+}
+
+/// **L2-4 段 6a**：起入站 demux 线程（gate 的两条通道 → 每区一对通道）。
+///
+/// 形态抄 `m2-event-router`（片路由）：`EventDrain` + 跨轮结转槽 ⇒ 搬事件不改单事件判定、
+/// 不改变同通道 FIFO；空转 1ms 对 200ms tick 无感（只搬事件，不排队处理）。
+///
+/// # Errors
+/// 起线程失败。
+fn spawn_zone_demux(
+    ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
+    senders: Vec<(
+        std::sync::mpsc::Sender<GateEvent>,
+        std::sync::mpsc::Sender<GateEvent>,
+    )>,
+    router: Arc<zone_router::ZoneRouter>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("m2-zone-demux".to_string())
+        .spawn(move || {
+            let mut zone_carry = None;
+            let mut zone_ctl_carry = None;
+            loop {
+                let mut moved = 0usize;
+                {
+                    let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+                    while let Some(ev) =
+                        drain.next(&ev_rx, &ev_ctl_rx, &mut zone_carry, &mut zone_ctl_carry)
+                    {
+                        moved += 1;
+                        match route_zone_target(&ev, &router) {
+                            // 网关线注册/注销：每个区都要有该线的 `SimToGate` 发送端。
+                            ZoneTarget::Broadcast => match ev {
+                                GateEvent::RegisterGate { service_id, tx } => {
+                                    for (normal, _) in &senders {
+                                        let _ = normal.send(GateEvent::RegisterGate {
+                                            service_id,
+                                            tx: tx.clone(),
+                                        });
+                                    }
+                                }
+                                GateEvent::UnregisterGate { service_id } => {
+                                    for (normal, _) in &senders {
+                                        let _ =
+                                            normal.send(GateEvent::UnregisterGate { service_id });
+                                    }
+                                }
+                                other => panic!("Broadcast 只用于网关线事件，实得 {other:?}"),
+                            },
+                            ZoneTarget::Zone(z) => {
+                                let (normal, priority) = &senders[z];
+                                let target = if ev.is_priority() { priority } else { normal };
+                                let _ = target.send(ev);
+                            }
+                        }
+                    }
+                }
+                if moved == 0 {
+                    // 两条通道没有 select：空转 1ms 对 200ms tick 无感（只搬事件，不排队处理）。
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        })
+        .context("起区 demux 线程失败")?;
+    Ok(())
+}
+
+/// **L2-4 段 6a**：区 ≥1 的最小区循环。
+///
+/// 本段非 0 区**没有会话来源**（登录归属暂缓，L2-5 才做每区会话切片）⇒ 持有 stub `World`
+/// （全 1×1 图、零实体），只做两件事：①排空自己的入站通道（事件**丢弃**；demux 在生产上
+/// 不会把会话投到这里——启动期有一行 WRN 说明这是 L2-5 前的已知限制）；②按 tick 参与
+/// `run_zone_tick` 的两道屏障（区 0 的快照/phase2 必须与它同步才能推进）。
+///
+/// 失败 ⇒ abort 整机（`Barrier` 无超时；静默退出会让其余区**永久阻塞**，同「任一片失败
+/// 整机 Abort」口径）。关服时区 0 退出、本线程若正停在屏障上就保持停泊（线程 detached、
+/// 不 join，进程随主线程退出）。
+///
+/// # Errors
+/// 起线程失败。
+#[allow(clippy::too_many_arguments)]
+fn spawn_minimal_zone(
+    zone_id: zone::ZoneId,
+    map_count: usize,
+    layout: Arc<zone::RegionLayout>,
+    exchange: Arc<region_loop::HaloExchange>,
+    barriers: Arc<region_loop::TickBarriers>,
+    watch: Arc<tick_watchdog::ZoneWatch>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    rx: std::sync::mpsc::Receiver<GateEvent>,
+    ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name(format!("m2-zone-{}", zone_id.get()))
+        .spawn(move || {
+            let mut world = mir2_world_bevy::World::with_maps(vec![(1, 1); map_count]);
+            let mut tick = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                while rx.try_recv().is_ok() {}
+                while ctl_rx.try_recv().is_ok() {}
+                if let Err(e) = region_loop::run_zone_tick(
+                    &mut world,
+                    zone_id,
+                    layout.zone_spans(),
+                    &exchange,
+                    &barriers,
+                    ZONE_HALO_WIDTH,
+                    tick,
+                    Some((&**watch.heartbeats(), watch.now_ms())),
+                ) {
+                    glog!(
+                        "ERR",
+                        "最小区 {zone_id} 在 tick {tick} 失败：{e} ⇒ abort 整机"
+                    );
+                    std::process::abort();
+                }
+                tick += 1;
+            }
+        })
+        .with_context(|| format!("起最小区线程 {zone_id} 失败"))?;
+    Ok(())
 }
 
 async fn run_inner(args: &[String]) -> Result<()> {
@@ -1961,6 +2297,110 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let mut ev_rx_template = Some(ev_rx);
     let mut ev_ctl_rx_template = Some(ev_ctl_rx);
     let mut shutdown_rx_template = Some(shutdown_rx);
+
+    // **L2-4 段 6a：多区生产装配**（`MIR2_ZONES`）。未设 ⇒ 本段零参与（N=1 原单线程路径
+    // 逐字节不变）。交付的是**结构不是容量**：非 0 区本步无会话/无实体来源（登录归属暂缓），
+    // 真正收益等 L2-5 每区会话切片。`MIR2_ZONES` 与 `MIR2_SHARDS>1` 互斥是 **v1 限制、
+    // 不是否决**（区×片二维队列属 L2-5，见 `zone_wiring::plan_zone_mode`）。
+    let zone_host: Option<Arc<ZoneHost>> = {
+        let zones_raw = match std::env::var_os(zone::ENV_ZONES) {
+            None => None,
+            Some(raw) => Some(raw.into_string().map_err(|_| {
+                anyhow::anyhow!("{} 不是合法 Unicode（fail-closed）", zone::ENV_ZONES)
+            })?),
+        };
+        let max_band_raw = match std::env::var_os(zone::ENV_MAX_HALO_BAND_ENTITIES) {
+            None => None,
+            Some(raw) => Some(raw.into_string().map_err(|_| {
+                anyhow::anyhow!(
+                    "{} 不是合法 Unicode（fail-closed）",
+                    zone::ENV_MAX_HALO_BAND_ENTITIES
+                )
+            })?),
+        };
+        let map_names = registry.as_ref().map(|reg| reg.map_names());
+        let mode = zone_wiring::plan_zone_mode(
+            shard_cfg.is_single(),
+            zones_raw.as_deref(),
+            map_names.as_deref(),
+            &map_sizes,
+            max_band_raw.as_deref(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        match mode {
+            None => None,
+            Some(mode) => {
+                let zone_count = mode.layout.zone_count();
+                debug_assert_eq!(
+                    shard_total, 1,
+                    "多区与多片互斥（zone_wiring::plan_zone_mode 已拒绝并存）"
+                );
+                let mut senders = Vec::with_capacity(zone_count);
+                let mut receivers = Vec::with_capacity(zone_count);
+                for _ in 0..zone_count {
+                    let (normal_tx, normal_rx) = std::sync::mpsc::channel();
+                    let (priority_tx, priority_rx) = std::sync::mpsc::channel();
+                    senders.push((normal_tx, priority_tx));
+                    receivers.push((normal_rx, priority_rx));
+                }
+                // 区 0 = 现 `m2-sim` 线程：它的两条通道直接放进 `per_shard_rx[0]`。
+                let (rx0, ctl0) = receivers.remove(0);
+                per_shard_rx[0] = Some((rx0, ctl0));
+                let layout = Arc::new(mode.layout);
+                let exchange = Arc::new(region_loop::HaloExchange::new(zone_count));
+                let barriers = Arc::new(region_loop::TickBarriers::new(zone_count));
+                let timeout_ms = tick_watchdog::timeout_from_env().map_err(anyhow::Error::msg)?;
+                let watch = Arc::new(tick_watchdog::ZoneWatch::start(zone_count, timeout_ms));
+                let router = Arc::new(zone_router::ZoneRouter::new());
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let host = Arc::new(ZoneHost {
+                    layout: Arc::clone(&layout),
+                    exchange: Arc::clone(&exchange),
+                    barriers: Arc::clone(&barriers),
+                    watch: Arc::clone(&watch),
+                    halo_width: ZONE_HALO_WIDTH,
+                    max_halo_band_entities: mode.max_halo_band_entities,
+                    stop: Arc::clone(&stop),
+                });
+                // demux：原两条 gate 入站通道 → 每区一对通道。
+                let template_normal = ev_rx_template.take().expect("多区时原普通通道只给 demux");
+                let template_ctl = ev_ctl_rx_template
+                    .take()
+                    .expect("多区时原优先通道只给 demux");
+                spawn_zone_demux(template_normal, template_ctl, senders, Arc::clone(&router))?;
+                // 区 1..N−1 的最小区循环（区 0 在下面的 sim 线程里）。
+                for (offset, (rx, ctl)) in receivers.into_iter().enumerate() {
+                    let zone_id =
+                        zone::ZoneId::new(u32::try_from(offset + 1).expect("区数 <= u32::MAX"));
+                    spawn_minimal_zone(
+                        zone_id,
+                        map_sizes.len(),
+                        Arc::clone(&layout),
+                        Arc::clone(&exchange),
+                        Arc::clone(&barriers),
+                        Arc::clone(&watch),
+                        Arc::clone(&stop),
+                        rx,
+                        ctl,
+                    )?;
+                }
+                glog!(
+                    "INF",
+                    "L2-4 多区装配：N={} 区、边界带宽 {} 格、边界带上限 {}（{}）",
+                    zone_count,
+                    ZONE_HALO_WIDTH,
+                    mode.max_halo_band_entities,
+                    zone::ENV_MAX_HALO_BAND_ENTITIES
+                );
+                glog!(
+                    "WRN",
+                    "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
+                    zone_count - 1
+                );
+                Some(host)
+            }
+        }
+    };
     if shard_total > 1 {
         let mut senders = Vec::with_capacity(shard_total);
         for slot in &mut per_shard_rx {
@@ -2149,6 +2589,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     planes_i,
                     world_start_i,
                     lottery_i,
+                    zone_host.clone(),
                 )
             })
             .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
@@ -29022,6 +29463,8 @@ fn sim_loop(
     world_start: std::sync::Arc<WorldStartGate>,
     // **IT-16**：进程级彩票计数（oracle `SystemShare.Config` 进程静态的等价物）。
     win_lottery: crate::winlottery::WinLotteryShared,
+    // **L2-4 段 6a**：多区共享句柄（`MIR2_ZONES` 未设 ⇒ `None`，本函数逐字节走原路径）。
+    zone_host: Option<Arc<ZoneHost>>,
 ) {
     // **P2-3b**：本实例服务哪一片 + 是否宿主片（进程级服务只在片 0）。
     let local_shard = shard_runtime.local_shard();
@@ -30399,6 +30842,12 @@ fn sim_loop(
                 ground_sessions.len(),
                 SHUTDOWN_SAVE_TIMEOUT.as_millis()
             );
+            // **L2-4 段 6a**：先 disarm（存档期不得被看门狗误 abort）+ 让最小区在下一 tick 前
+            // 退出。最小区若正停在两道屏障上就保持停泊（线程 detached、不 join，进程随主线程退出）。
+            if let Some(host) = zone_host.as_ref() {
+                host.watch.disarm();
+                host.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             let summary = shutdown_save_all(
                 &ground_sessions,
                 &saves,
@@ -33875,7 +34324,56 @@ fn sim_loop(
         host_prof.end("HostPlayerRun", t);
         let t = host_prof.begin();
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
-        world.tick_tail(&mut rec);
+        //
+        // **L2-4 段 6a**：多区模式把 `tick_tail` 在 AOI 前切开——
+        // `tick_tail_before_aoi → 快照/发布/barrier1/读邻居 → tick_phase2 → 心跳/barrier2`；
+        // 边界快照因此是本 tick 终态。N=1 保持原样一行（逐字节不变）。
+        if let Some(host) = zone_host.as_deref() {
+            if ticks == 0 {
+                // **启动门**（静态装载已完成；tick 0 的首个区 tick 之前）：每区边界带实体数
+                // ≤ 上限，超限 ⇒ rc=2（与探针 fail-closed 同口径）。
+                if let Err(e) = zone_wiring::check_band_gate(
+                    &world,
+                    &host.layout,
+                    host.halo_width,
+                    host.max_halo_band_entities,
+                ) {
+                    glog!("ERR", "{e}");
+                    std::process::exit(2);
+                }
+            }
+            world.tick_tail_before_aoi(&mut rec);
+            let runtime = region_loop::ZoneRuntime::new(
+                zone_router::HOST_ZONE,
+                host.layout.zone_spans(),
+                host.halo_width,
+                &host.exchange,
+                &host.barriers,
+            );
+            let wait_phase1_us = match runtime.after_phase1(&world, ticks) {
+                Ok((_border, _neighbors, wait_us)) => wait_us,
+                Err(e) => {
+                    // `Barrier` 无超时：本区带错退出会让其余区永久阻塞 ⇒ abort 整机
+                    // （与「任一片失败整机 Abort」同口径；看门狗是第二道兜底）。
+                    glog!(
+                        "ERR",
+                        "区 0 在 tick {ticks} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
+                    );
+                    std::process::abort();
+                }
+            };
+            world.tick_phase2(&mut rec);
+            runtime.after_phase2(
+                wait_phase1_us,
+                Some((&**host.watch.heartbeats(), host.watch.now_ms())),
+            );
+            if ticks == 0 {
+                // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
+                let _ = host.watch.arm();
+            }
+        } else {
+            world.tick_tail(&mut rec);
+        }
         host_prof.end("HostWorldTail", t);
         let t = host_prof.begin();
         // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
@@ -115802,46 +116300,75 @@ mod tick_starvation {
             begin_at.push(from + rel);
             from += rel + begin.len();
         }
+        // **L2-4 段 6a：期望集合 2 → 3**。新增的是「区 demux」分发层（`MIR2_ZONES` 时把
+        // gate 入站搬进每区），与片路由同构且必须复用同一预算/反饥饿语义 ⇒ 生产面第三处
+        // 预算排水。身份仍钉死为「位置 + 配对结转变量」，三处互不借用：
+        //   ① 区 demux（`run_inner`，`zone_carry/zone_ctl_carry`）
+        //   ② 事件路由线程（`run_inner`，`carry/ctl_carry`）
+        //   ③ sim 循环头（`fn sim_loop(` 之内，`event_carry/event_carry_ctl`）
         assert_eq!(
             begin_at.len(),
-            2,
-            "生产预算排水必须恰为期望集合两处（sim 头 + 路由线程），实得 {}",
+            3,
+            "生产预算排水必须恰为期望集合三处（sim 头 + 片路由 + 区 demux），实得 {}",
             begin_at.len()
         );
         let sim_loop_at = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
-        assert!(
-            begin_at[0] < sim_loop_at,
-            "第 1 处必须在 fn sim_loop 之前（事件路由线程）"
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for at in &begin_at {
+            if *at < sim_loop_at {
+                before.push(*at);
+            } else {
+                after.push(*at);
+            }
+        }
+        assert_eq!(
+            before.len(),
+            2,
+            "fn sim_loop 之前必须两处（区 demux + 片路由）"
         );
-        assert!(
-            begin_at[1] > sim_loop_at,
-            "第 2 处必须在 fn sim_loop 之内（sim 循环头）"
-        );
+        assert_eq!(after.len(), 1, "fn sim_loop 之内必须一处（sim 循环头）");
         let router_pair = format!(
             "{}.next(&ev_rx, &ev_ctl_rx, &mut carry, &mut ctl_carry)",
+            "drain"
+        );
+        let zone_pair = format!(
+            "{}.next(&ev_rx, &ev_ctl_rx, &mut zone_carry, &mut zone_ctl_carry)",
             "drain"
         );
         let sim_pair = format!(
             "{}.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)",
             "drain"
         );
-        let router_blk = &prod[begin_at[0]..(begin_at[0] + 512).min(prod.len())];
-        let sim_blk = &prod[begin_at[1]..(begin_at[1] + 512).min(prod.len())];
-        assert!(
-            router_blk.contains(&router_pair),
-            "路由线程的预算器必须配自己的结转槽：{router_pair}"
+        let blk = |at: usize| &prod[at..(at + 512).min(prod.len())];
+        let pre_router = before
+            .iter()
+            .filter(|at| blk(**at).contains(&router_pair))
+            .count();
+        let pre_zone = before
+            .iter()
+            .filter(|at| blk(**at).contains(&zone_pair))
+            .count();
+        assert_eq!(pre_router, 1, "片路由线程的预算器必须配 carry/ctl_carry");
+        assert_eq!(
+            pre_zone, 1,
+            "区 demux 的预算器必须配 zone_carry/zone_ctl_carry"
         );
+        let sim_blk = blk(after[0]);
         assert!(
             sim_blk.contains(&sim_pair),
             "sim 循环头的预算器必须配 event_carry/event_carry_ctl：{sim_pair}"
         );
+        for at in &before {
+            let b = blk(*at);
+            assert!(
+                !b.contains(&sim_pair),
+                "fn sim_loop 之前的两处不得借用 sim 头的结转变量名"
+            );
+        }
         assert!(
-            !sim_blk.contains(&router_pair),
-            "sim 头不得借用路由线程的结转变量名（防两处被合并/挪位后仍绿）"
-        );
-        assert!(
-            !router_blk.contains(&sim_pair),
-            "路由线程不得借用 sim 头的结转变量名（防两处被合并/挪位后仍绿）"
+            !sim_blk.contains(&router_pair) && !sim_blk.contains(&zone_pair),
+            "sim 头不得借用路由/demux 的结转变量名（防被合并/挪位后仍绿）"
         );
     }
 }
@@ -116144,5 +116671,307 @@ mod soft_version_date_tests {
             "重登复用会话 ⇒ `open` 不重置；刷新由登录同步负责"
         );
         assert_eq!(sess.actor_id, Some(actor), "重登后 actor 绑定不变");
+    }
+}
+#[cfg(test)]
+mod zone_assembly_tests {
+    use super::*;
+    use mir2_protocol::frame::CommandMessage;
+
+    fn zone(id: u32) -> zone::ZoneId {
+        zone::ZoneId::new(id)
+    }
+
+    fn dummy_cmd() -> CommandMessage {
+        CommandMessage {
+            recog: 0,
+            ident: 0,
+            param: 0,
+            tag: 0,
+            series: 0,
+        }
+    }
+
+    /// **`Opened` 登记 + 投区 0**（初始区 0；表里出现该键）。
+    ///
+    /// 红检：删掉 `router.opened(..)` 调用 ⇒ 表长断言红。
+    #[test]
+    fn opened_registers_and_routes_to_host_zone() {
+        let router = zone_router::ZoneRouter::new();
+        let ev = GateEvent::Opened {
+            line: 5,
+            index: 1,
+            socket: 900,
+            ip: "10.0.0.1".to_string(),
+        };
+        assert_eq!(
+            route_zone_target(&ev, &router),
+            ZoneTarget::Zone(0),
+            "Opened 初始区 0"
+        );
+        assert_eq!(router.len(), 1, "Opened 必须登记 (line, socket)");
+        assert_eq!(router.lookup(5, 900), zone_router::HOST_ZONE);
+    }
+
+    /// **`Command` 按 `(line, socket)` 查表**。
+    ///
+    /// 红检：让 `Command` 恒投区 0 ⇒ 本用例红。
+    #[test]
+    fn command_routes_to_the_sessions_zone() {
+        let router = zone_router::ZoneRouter::new();
+        router.assign(3, 700, zone(1)).expect("活句柄可分配");
+        let ev = GateEvent::Command {
+            line: 3,
+            index: 0,
+            chr_name: "p".to_string(),
+            socket: 700,
+            cmd: dummy_cmd(),
+            tail: None,
+        };
+        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(1));
+        // 同 socket 另一条线未登记 ⇒ 区 0（socket 跨线会重复）。
+        let other_line = GateEvent::Command {
+            line: 4,
+            index: 0,
+            chr_name: "p".to_string(),
+            socket: 700,
+            cmd: dummy_cmd(),
+            tail: None,
+        };
+        assert_eq!(route_zone_target(&other_line, &router), ZoneTarget::Zone(0));
+    }
+
+    /// **`Closed` 先 lookup 再 remove，投 lookup 出的区**（总监 2026-11-22 点名要的单测）。
+    ///
+    /// 会话在区 1 ⇒ 投区 1，且**处理之后**才从表里移除（`lookup` 回落到区 0）；重复 `Closed`
+    /// 不会再次命中区 1。
+    ///
+    /// 红检（顺序互换）：把 `route_zone_target` 里 `Closed` 分支改成「先 remove 再 lookup」
+    /// ⇒ 第一条断言从 `Zone(1)` 变 `Zone(0)`，本用例红——这正是「关断错投区 0、实体留在
+    /// 原区成为幽灵」的失败场景。
+    #[test]
+    fn closed_routes_to_the_sessions_zone_and_removes_afterwards() {
+        let router = zone_router::ZoneRouter::new();
+        router.assign(3, 700, zone(1)).expect("活句柄可分配");
+        let ev = GateEvent::Closed {
+            index: 3,
+            chr_name: "p".to_string(),
+            socket: 700,
+        };
+        assert_eq!(
+            route_zone_target(&ev, &router),
+            ZoneTarget::Zone(1),
+            "会话在区 1 ⇒ Closed 必须投区 1（不是先删后投区 0）"
+        );
+        assert_eq!(
+            router.lookup(3, 700),
+            zone_router::HOST_ZONE,
+            "处理之后必须已从表里移除"
+        );
+        assert!(router.is_empty());
+        assert_eq!(
+            route_zone_target(&ev, &router),
+            ZoneTarget::Zone(0),
+            "重复 Closed ⇒ 表里已无该键 ⇒ 区 0（幂等）"
+        );
+    }
+
+    /// **`Closed.index` 非 u8（不存在于表）⇒ 区 0**，不 panic。
+    #[test]
+    fn closed_out_of_range_line_falls_back_to_host_zone() {
+        let router = zone_router::ZoneRouter::new();
+        let ev = GateEvent::Closed {
+            index: 999,
+            chr_name: String::new(),
+            socket: 1,
+        };
+        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(0));
+        assert!(router.is_empty(), "越界线号不得插表");
+    }
+
+    /// **`CertificationPending` 投区 0 且不改表**。
+    ///
+    /// 红检：在该分支里调 `router.remove`/`opened` ⇒ 表长断言红。
+    #[test]
+    fn certification_pending_routes_to_host_zone_without_touching_table() {
+        let router = zone_router::ZoneRouter::new();
+        router.assign(2, 33, zone(1)).expect("活句柄可分配");
+        let ev = GateEvent::CertificationPending {
+            line: 2,
+            index: 0,
+            ip: "10.0.0.2".to_string(),
+        };
+        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(0));
+        assert_eq!(router.len(), 1, "认证未决不得改表");
+        assert_eq!(router.lookup(2, 33), zone(1), "既有分配保持");
+    }
+
+    /// **控制事件**：网关线注册/注销 ⇒ 广播；顶号 ⇒ 区 0。
+    #[test]
+    fn control_events_broadcast_or_go_to_host_zone() {
+        let router = zone_router::ZoneRouter::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let register = GateEvent::RegisterGate { service_id: 7, tx };
+        assert_eq!(route_zone_target(&register, &router), ZoneTarget::Broadcast);
+        let unregister = GateEvent::UnregisterGate { service_id: 7 };
+        assert_eq!(
+            route_zone_target(&unregister, &router),
+            ZoneTarget::Broadcast
+        );
+        let kick = GateEvent::KickAccount {
+            account: "acc".to_string(),
+            session_id: 9,
+        };
+        assert_eq!(route_zone_target(&kick, &router), ZoneTarget::Zone(0));
+    }
+}
+
+#[cfg(test)]
+mod zone_wiring_tests {
+    //! **L2-4 段 6a**：装配判定 / 启动门的构造级用例（放在测试区，避免污染
+    //! `src[..find("mod tests {")]` 的「生产面」源码扫描）。
+
+    use super::*;
+    use crate::zone_wiring::{check_band_gate, parse_max_band, plan_zone_mode};
+    use crate::{shard, zone, zone_router};
+    use mir2_world_bevy::{EntitySpawn, World};
+
+    fn names() -> Vec<String> {
+        vec!["0".to_string()]
+    }
+
+    const TWO_ZONES: &str = "0:0=0,0-9,9;1:0=10,0-19,9";
+    const SIZES: [(i32, i32); 1] = [(20, 10)];
+
+    /// **缺省与覆盖**：不设 ⇒ 512；`100`/带空白 ⇒ 生效值；`0`/非整数/空串 ⇒ Err。
+    ///
+    /// 红检：把 `parse_max_band` 的 `None` 分支改成 `Ok(0)` ⇒ 缺省断言红；
+    /// 删掉 `n == 0` 守卫 ⇒ `0` 断言红。
+    #[test]
+    fn max_band_default_and_fail_closed() {
+        assert_eq!(
+            parse_max_band(None).expect("缺省"),
+            zone::DEFAULT_MAX_HALO_BAND_ENTITIES,
+            "缺省 = 512"
+        );
+        assert_eq!(parse_max_band(Some("100")).expect("整数"), 100);
+        assert_eq!(parse_max_band(Some(" 64 ")).expect("带空白"), 64);
+        for bad in ["0", "-1", "abc", "", "  "] {
+            assert!(
+                parse_max_band(Some(bad)).is_err(),
+                "{bad:?} 必须 fail-closed"
+            );
+        }
+    }
+
+    /// **`MIR2_ZONES` 未设时非法 band 值同样 fail-closed**（总监点头 (a)）。
+    ///
+    /// 红检：把 `plan_zone_mode` 里的 `parse_max_band` 调用挪到 `Some(raw)` 分支内 ⇒ 本用例红。
+    #[test]
+    fn invalid_band_is_rejected_even_without_zones() {
+        assert!(
+            plan_zone_mode(true, None, None, &SIZES, Some("0")).is_err(),
+            "未设 MIR2_ZONES 时 `MIR2_MAX_HALO_BAND_ENTITIES=0` 也必须拒绝"
+        );
+        let ok = plan_zone_mode(true, None, None, &SIZES, Some("48")).expect("合法值");
+        assert!(ok.is_none(), "未设 MIR2_ZONES ⇒ 不启用多区");
+    }
+
+    /// **互斥**：`MIR2_ZONES` + `MIR2_SHARDS>1` ⇒ Err，点名两个变量 + 「L2-5」「不是被否决」。
+    ///
+    /// 红检：删掉 `!shards_single` 分支 ⇒ 本用例红。
+    #[test]
+    fn zones_and_shards_are_mutually_exclusive_with_named_vars() {
+        let err = plan_zone_mode(false, Some(TWO_ZONES), Some(&names()), &SIZES, None)
+            .err()
+            .expect("多区 + 多片必须拒绝");
+        assert!(err.contains(zone::ENV_ZONES), "点名：{err}");
+        assert!(err.contains(shard::ENV_SHARDS), "点名：{err}");
+        assert!(err.contains("L2-5"), "说明二维队列归属：{err}");
+        assert!(err.contains("不是被否决"), "写明这是 v1 限制：{err}");
+    }
+
+    /// **单区即错**：设了变量却只有 1 个区 ⇒ Err（N=1 必须不设该变量）。
+    ///
+    /// 红检：删掉 `zone_count() < 2` 分支 ⇒ 本用例红。
+    #[test]
+    fn single_zone_is_rejected() {
+        let err = plan_zone_mode(true, Some("0:0=0,0-19,9"), Some(&names()), &SIZES, None)
+            .err()
+            .expect("单区必须拒绝");
+        assert!(err.contains("1 个区"), "{err}");
+        assert!(err.contains(zone::ENV_ZONES), "{err}");
+    }
+
+    /// **占位图模式拒绝**（总监点头 (b)）：无注册表 ⇒ 地图名无从解析。
+    ///
+    /// 红检：把 `map_names` 的 `None` 分支改成回落空名表 ⇒ 本用例红。
+    #[test]
+    fn placeholder_map_registry_is_rejected() {
+        let err = plan_zone_mode(true, Some(TWO_ZONES), None, &SIZES, None)
+            .err()
+            .expect("占位图模式必须拒绝");
+        assert!(err.contains("注册表"), "{err}");
+    }
+
+    /// **地图名错误带原始 token**（段 3 的错误文本上抛）。
+    #[test]
+    fn unknown_map_error_names_the_token() {
+        let err = plan_zone_mode(
+            true,
+            Some("0:zzz=0,0-9,9;1:zzz=10,0-19,9"),
+            Some(&names()),
+            &SIZES,
+            None,
+        )
+        .err()
+        .expect("未知地图必须拒绝");
+        assert!(err.contains("zzz"), "错误文本必须含原始 token：{err}");
+    }
+
+    /// **正例**：合法的两区布局 ⇒ `zone_count == 2`、band 缺省 512。
+    #[test]
+    fn valid_two_zone_plan() {
+        let mode = plan_zone_mode(true, Some(TWO_ZONES), Some(&names()), &SIZES, None)
+            .expect("合法布局")
+            .expect("MIR2_ZONES 设了 ⇒ Some");
+        assert_eq!(mode.layout.zone_count(), 2);
+        assert_eq!(
+            mode.max_halo_band_entities,
+            zone::DEFAULT_MAX_HALO_BAND_ENTITIES
+        );
+        assert_eq!(mode.layout.zone_of(0, 3, 3), Some(zone::ZoneId::new(0)));
+        assert_eq!(mode.layout.zone_of(0, 11, 3), Some(zone::ZoneId::new(1)));
+    }
+
+    /// **band 门**：逐区计数；超限错误带**区号 + 实测数 + 上限**三项。
+    ///
+    /// 布局：一张 20×1 图切成两区（halo=0 ⇒ 1 行图的所有格都在边界带上）。
+    /// 区 0 放 2 个实体、区 1 放 1 个 ⇒ `max=2` 过、`max=1` 红且点名区 0/2/1。
+    ///
+    /// 红检：把 `count > max` 改成 `count >= max` ⇒ `max=2` 正例红；删掉区号 ⇒ 文本断言红。
+    #[test]
+    fn band_gate_counts_each_zone_and_names_zone_count_limit() {
+        let sizes = [(20, 1)];
+        let layout = zone::parse_zone_layout(
+            "0:0=0,0-9,0;1:0=10,0-19,0",
+            &names(),
+            &sizes,
+            zone_router::HOST_ZONE,
+        )
+        .expect("两区布局");
+        let mut world = World::with_maps(vec![(20, 1)]);
+        for (id, x) in [(1, 1), (2, 3), (3, 11)] {
+            let mut e = EntitySpawn::new(id, format!("e{id}"), x, 0);
+            e.race = 80;
+            world.add_entity(e);
+        }
+        // 一次 tick 处理 Enter（落格 ⇒ `add_to_mapped = true`）。
+        let _ = world.tick();
+        check_band_gate(&world, &layout, 0, 2).expect("区 0 有 2 个、区 1 有 1 个，上限 2 ⇒ 过");
+        let err = check_band_gate(&world, &layout, 0, 1).expect_err("区 0 超限");
+        assert!(err.contains("区 0"), "必须点名区号：{err}");
+        assert!(err.contains('2'), "必须带实测实体数：{err}");
+        assert!(err.contains("上限 1"), "必须带上限：{err}");
     }
 }
