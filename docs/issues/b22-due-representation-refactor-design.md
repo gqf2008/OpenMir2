@@ -142,3 +142,35 @@
 - **(ii) genealogy map 不再是主方案**：仅在"step-drain 对某支做不出正确 due"时才回退考虑；(i) 仍否。**"可追溯帧比例"随之作废**——stepMs 就是归属来源，无需追 origin。
 
 **§8.5 待验收确认的残余风险**：实验只证了 **due 值**与 Rust 精确一致；`StepDrainMs=100` 把排水改成**时间忠实步进**，会改帧的**处理顺序**（可能像 B17 一样影响 recog/param 序）。32 支既有 step-drain 已绿，precedent 判"大概率无新红"，但**必须**用 `MAGIC_PLANE_ONLY=<stem>` 逐支跑**全比较器**（不只 due）确认无新 red 再重出落盘——这正是实现后 §4 验收第一关。
+
+## 9. 配置遗漏普查（2026-11-22，opc-19 要求的全系统性检查）
+
+判据（opc-19 给）：golden 有延迟帧（`Rm.late=true`）却无 `StepDrainMs` 的 stem。跑全 58 支 regen 件：
+
+**结果：naive 判据 over-select 到 16 支**——但**"当前 due 是否正确"才是判别器**。16 支里只有 **6 支 due 错**：
+
+| stem | 有延迟帧 | runner | StepDrainMs | 当前 due | 判 |
+|---|---|---|---|---|---|
+| lightning-11 | 是 | AntiMagicBatch | 无 | **错** | **修** |
+| lightning-45 | 是 | AntiMagicBatch | 无 | **错** | **修** |
+| firecharm | 是 | AntiMagicBatch | 无 | **错** | **修** |
+| fireball-5 | 是 | AntiMagicBatch | 无 | **错** | **修** |
+| grouplightening | 是 | BehaviorBatch | 无 | **错** | **修** |
+| showhp | 是 | ShowHpBatch | 无 | **错** | **修** |
+| angel | 是 | AngelBatch | 无 | 对 | 不动 |
+| cloak | 是 | BehaviorBatch | 无 | 对 | 不动 |
+| energyrepulsor | 是 | BehaviorBatch | 无 | 对 | 不动 |
+| firewind | 是 | BehaviorBatch | 无 | 对 | 不动 |
+| holyshield | 是 | HolyShieldBatch | 无 | 对 | 不动 |
+| sinsu | 是 | SinsuBatch | 无 | 对 | 不动 |
+| skeleton | 是 | SkeletonBatch | 无 | 对 | 不动 |
+| spacemove | 是 | BehaviorBatch | 无 | 对 | 不动 |
+| unamyounsul | 是 | UnamyounsulBatch | 无 | 对 | 不动 |
+| windtebo | 是 | BehaviorBatch | 无 | 对 | 不动 |
+
+（另：`healing`＝HealingBatch bespoke；`fireball`＝RunFireball bespoke（第 7 个补，单独）；`groupdeding`＝B 型顺序（非 due）。这 3 支不按"补 StepDrainMs"处理。）
+
+**结论（写死）**：
+- **due 错的 = 仅这 6 支**（fireball-5/firecharm/grouplightening/lightning-11/lightning-45/showhp），**无第 7/第 8**。普查过。
+- **另 10 支"有延迟帧无 StepDrainMs 但 due 已对"——绝不可盲加 `StepDrainMs`**：它们 one-shot 下 due 已与 Rust 一致（49 支落盘时全比较器绿），改 stepping 会动处理顺序、有 B17 顺序回归风险。**保持 one-shot。**
+- ⇒ **naive 判据（16）≠ 修复集（6）**。判别器是"当前 due 是否错"，不是"有无延迟帧"。这一条比"仅 6 支"更值钱：防止把 10 支对的改成 stepping 而引入新红。
