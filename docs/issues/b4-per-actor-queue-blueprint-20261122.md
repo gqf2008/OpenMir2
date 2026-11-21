@@ -206,6 +206,15 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 2. **交付循环退出时 `pending_657` 非空 ⇒ fail-closed panic**（已实现 `6e740976c`；`bins/game-svr` 的 `fireball_parity_drive` 交付循环末的 `assert!(pending_657.is_empty(), …)`）。属 §12 的「退化防线」：延迟 657 若在窗口末仍未排空，说明 wait_ms 不足或延迟排队丢帧，必须红而非静默丢。
 3. **seam 目前只由对拍 rig 调用**（`#[allow(dead_code)]`，如 `bins/game-svr` 的 `drain_b3_self_deliveries_with_pending` 上的标注）——生产 `sim_loop` 的接线在「胶水」批，**不得被读成已上线**。
 
+> **订正（2026-11-21 深夜）**：本小节与 §12.1.a 期望表里「caster `(657,1001,900)` 保持不变 = oracle 依据」**作废**。以 `docs/issues/bigcloak-caster-1001-due-divergence-20261121.md`（正文 `29e8312ac` + Rust 侧成因 `e6af80985`）为准：
+>
+> - **撤回**：`1001@900` **不是** oracle 值。**oracle / 装置（旧、新两版）都是 `800`；`900` 是 Rust 的值**——pilot 前后都是 900（旧台账 `bigcloak_s1.json` mtime `2026-11-21 13:33` 原文：`caster = [(638,1001,0),(642,500,0),(657,1002,800),(657,1001,900),(640,19,1000)]`）。⇒ `1001@900` 是 **Rust vs oracle 的既有分歧**，**另立卡修**，不在 pilot 范围。
+> - **根因（防止后人改谓词）**：偏差在「**`SelfDelayOutcome.transparent` 的投递步**：Rust 900 vs oracle 800」，**与 `begin_turn` / per-viewer 延迟判据无关**——producer=收件人=caster 同下标 ⇒ 不延迟 ⇒ `due` = 该 outcome 的投递步；分歧在「该 outcome 何时到点」，**不在< / <= 谓词**。
+> - **装置 blob 身份**：旧装置（`master c99f7dd47` 的 `Program.cs`）= `48966e170c37363b8acaa1df8ebcad8c63cc5d9f`；新装置 = `3f34d9c04fc6bdafe92390865ca24bf0bdbfa251`。
+> - **该 due 从未跨栈比过**：golden 的 `bigcloak` **无 `due_ms_rel`** ⇒ 比较器的 `sent_fields.push("due_ms_rel")` 受 `ga.first()…get("due_ms_rel").is_some()` 守卫，这条 due **从未进比较面**，故分歧一直没暴露。
+> - **保留**：`1002@900` **不变**（旧装置 800 是假绿；新模型 + oracle 都是 900）。
+> - **同源影响（一并订正 s5 实测行）**：§12.1.a 期望表 s5 行把 `(657,2001,900)` 写成「实测」**不准**——`2001` 是 self 帧，**装置新旧都给 `800`**，`900` 是 Rust 值（同一 `1001` 分歧）；s5 装置新实测应为 `[(657,2001,800),(657,2002,900)]`，「`base+2→900`」说的是 `2002`（正确）。
+
 ### §12.2 producer 归属表（656 / 31 / 53 / 100）——per-viewer 延迟的 producer 口径
 
 > 本表是后续 656/31/53/100 **扩面实现的判据**。**方法论**：oracle 里 31/53/656 是「**一个入队点 + N 个 per-receiver 出帧点**」，归属必须分「**入队 turn**」与「**sender / 出帧 actor**」两栏写，否则会把 per-receiver 出帧误算到受击者头上。
