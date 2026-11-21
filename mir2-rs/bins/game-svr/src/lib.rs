@@ -69363,12 +69363,24 @@ SendRefMsgRange=15
             vec![mir2_envir::MapInfoEntry {
                 map_name: "0".to_string(),
                 map_file_name: "0".to_string(),
-                // `54 SM_MAPDESCRIPTION` 的尾串取 `Envir.MapDesc`；C# 装置只 `LoadMapData("0.map")`、
-                // 不读 MapInfo.txt ⇒ 该值为空，golden 的 54 tail 实测也是 `''` ⇒ 这里同为 `""`。
+                // **`desc` 为什么是空串，以及为什么空串是对的**（三条一起看）：
+                // ① `54 SM_MAPDESCRIPTION` 的尾串取 `Envir.MapDesc`（`src/M2Server/Player/PlayObject.Base.cs:894`）；
+                // ② C# 装置只调 `env.LoadMapData("0.map")`，**不读 MapInfo.txt**
+                //    （且部署的 `MapInfo.txt` 在 `M2GameSvr/Envir/` 而不是 Map 目录，装置根本没看到它）；
+                // ③ 实测 golden 的 `54`/`766` 两条 `tail` 都是 `''` ⇒ 与"装置没读 MapInfo"一致。
+                // ⇒ 这里填 `""` 是**与 golden 同源**，不是"漏读配置"；将来若装置开始读 MapInfo，
+                //    本处要同步改成同一个来源，否则 54 的尾串会与 golden 比不过。
                 desc: String::new(),
                 server_index: 0,
                 flag: mir2_envir::mapinfo::MapInfoFlag::default(),
             }],
+        );
+        // **注册表自检**：`HomeMap="0"` 靠 `registry.id_of("0")` 解析；查不到就会静默"不移动"
+        // ⇒ 在这里就红，并打出注册项名字，省掉"跑完没动再回头查"的一轮。
+        assert_eq!(
+            registry.id_of("0"),
+            Some(0),
+            "[{stem}/{label}] MapRegistry 里查不到 map_name=\"0\"（注册项 = [\"0\"]）⇒ HomeMap 解析 None，本支会退化"
         );
         (grid, registry)
     }
