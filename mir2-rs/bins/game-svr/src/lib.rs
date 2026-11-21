@@ -69,6 +69,12 @@ mod magicaudit;
 mod magicwire;
 mod mapwire;
 mod notice;
+/// 卡 `openmir2-magic-serverconf-batch-plan`：magic 驱动的 ServerConf 共享入口（只读 golden，
+/// 不读 `Server.conf`；细节见文件头）。测试/驱动用 `crate::parity_serverconf::apply_serverconf_fixture`。
+/// **只在测试构建存在**：消费方（magic 驱动）全在 `#[cfg(test)] mod tests` 里，非测试构建若
+/// 无条件编译本模块，`-D warnings` 会判三项 dead_code（clippy 实测）。
+#[cfg(test)]
+mod parity_serverconf;
 mod readbook;
 mod record;
 mod seed;
@@ -71476,6 +71482,19 @@ SendRefMsgRange=15
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
+        // **MG-44（32）**：`fireball_rig` 硬编码施法者等级 30（= 既有全部 stem 的 golden 值）。
+        // 等级门用例（43/44/45 对部署 44）需要更高等级让 `:842` 前置门恒真 ⇒ 按 golden 覆写。
+        // 实体与地面会话两处都写（生产两者同源）；`==30`/缺键 ⇒ 一字不动（旧 stem 零变化）。
+        if let Some(lv) = golden_case_for(stem, label)["Fixture"]["caster_level"].as_i64() {
+            if lv != 30 {
+                let lv = u8::try_from(lv).expect("caster_level 越界 u8");
+                let e = rig.world.entities.get_mut(caster).unwrap();
+                e.progression.level = lv;
+                if let Some(sg) = rig.ground_sessions.get_mut("caster") {
+                    sg.state.wabil.level = lv;
+                }
+            }
+        }
         let target = fireball_actor(&rig, "target");
         // **收件人 HitSpeed**（657 `series` 取**接收者自己**的 HitSpeed；oracle
         // `PlayObject.Message.cs` 的 `RM_CHARSTATUSCHANGED` 支 = `SendDefMessage(..., this.HitSpeed)`）。
@@ -71596,6 +71615,68 @@ SendRefMsgRange=15
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
+        // **MG-44（32 圣言术）**：可选怪物目标。`Fixture.target_monster` 是 **1 基**序号
+        // （Null/缺键 = 0 = 既有的玩家目标 ⇒ 旧 stem 零变化）。存在但非整数/负/越界/不满足
+        // 圣言三条件 ⇒ **契约 panic**（直接红在 golden 生成/驱动上，而不是退化成"帧数不等"）。
+        let target_monster: i64 =
+            match golden_case_for(stem, label)["Fixture"]["target_monster"].clone() {
+                serde_json::Value::Null => 0,
+                v => v.as_i64().unwrap_or_else(|| {
+                    panic!("[{stem}/{label}] Fixture.target_monster 必须是整数（当前 {v}）")
+                }),
+            };
+        assert!(
+            target_monster >= 0,
+            "[{stem}/{label}] Fixture.target_monster 不能为负：{target_monster}"
+        );
+        let (cast_target, cast_click, monster_hp_before) = if target_monster > 0 {
+            let idx = usize::try_from(target_monster).expect("target_monster 转 usize");
+            assert!(
+                idx <= monster_ids.len(),
+                "[{stem}/{label}] Fixture.target_monster={target_monster} 越界（怪物数 {}）",
+                monster_ids.len()
+            );
+            let id = monster_ids[idx - 1];
+            let e = rig
+                .world
+                .entities
+                .get(id)
+                .expect("target_monster 必须已放置");
+            // `MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:830-834`）：三条缺一不可——
+            // `Race >= Animal`、`LifeAttrib == LA_UNDEAD`、`!SuperMan`（`:834` 的
+            // `(AnimalObject)targetObject` 强转隐含 race 前提）。
+            assert!(
+                e.race >= mir2_world_bevy::ACTOR_RACE_ANIMAL,
+                "[{stem}/{label}] target_monster.race={} 必须 >= Animal({})",
+                e.race,
+                mir2_world_bevy::ACTOR_RACE_ANIMAL
+            );
+            assert_eq!(
+                e.life_attrib,
+                mir2_world_bevy::magic_effect::LA_UNDEAD,
+                "[{stem}/{label}] target_monster.life_attrib 必须 LA_UNDEAD"
+            );
+            assert!(
+                !e.super_man,
+                "[{stem}/{label}] target_monster.super_man 必须为 false"
+            );
+            (id, (e.x, e.y), Some(e.hp))
+        } else {
+            (target, (101, 100), None)
+        };
+        // **MG-44/48**：ServerConf 十键（golden `Fixture.server_conf` 存在才应用）。应用点在施法前——
+        // `cast_turn_undead_spell` / `cast_mab_mabe_spell` 直读 `world` 里的这两份配置。
+        // 缺键/非整数/<=0 ⇒ `apply_serverconf_fixture` 具名 panic（不许吃缺省）。
+        let server_conf = if golden_case_for(stem, label)["Fixture"]["server_conf"].is_object() {
+            Some(crate::parity_serverconf::apply_serverconf_fixture(
+                &golden_file_for(stem),
+                &mut rig.world,
+                stem,
+                label,
+            ))
+        } else {
+            None
+        };
         // **推挤批（MG-16/57，`card/magic-push-batch-impl`）**：`MagPushArround` 遍历
         // `playObject.VisibleActors`（oracle `src/M2Server/Magic/MagicManager.cs:27`），而离线
         // 装置不跑 AOI ⇒ 表恒空、循环零次；`CharPushed` 逐格还要 `CanWalk`/`MoveToMovingObject`
@@ -71768,7 +71849,7 @@ SendRefMsgRange=15
         };
 
         // ---- 段①：生产入口施法 ----
-        rig.cast(magic_id, (101, 100), target);
+        rig.cast(magic_id, cast_click, cast_target);
         // **8/37 的推挤决策观测**（卡 `magic-push-batch-impl`）：`RM_PUSH(8092)` 的台账来源取
         // 产品路径的真实 `PushEvent`（`cast_firewind_spell` → `push_now`），**不是**从我们发出的
         // `SM_BACKSTEP(9)` 反推（自证）。取后清空 ⇒ 有界；其它魔号此日志恒空。
@@ -71990,6 +72071,13 @@ SendRefMsgRange=15
         let n2 = trace_line_count(&trace);
 
         let hp_after = rig.world.entities.get(target).unwrap().hp;
+        let monster_hp_after = monster_hp_before.map(|_| {
+            rig.world
+                .entities
+                .get(cast_target)
+                .expect("target_monster 必须仍存在")
+                .hp
+        });
         let caster_mp = rig
             .ground_sessions
             .get("caster")
@@ -72608,6 +72696,30 @@ SendRefMsgRange=15
             "NotDue": [],
             "CasterMp": caster_mp,
         }]);
+        // **MG-44**：怪物目标才落这两个键（玩家目标支零变化，与 golden 的 null-omit 同口径）。
+        if let (Some(hb), Some(ha)) = (monster_hp_before, monster_hp_after) {
+            ledger[0]["TargetMonsterHpBefore"] = serde_json::json!(hb);
+            ledger[0]["TargetMonsterHpAfter"] = serde_json::json!(ha);
+        }
+        // 台账也落 `TargetMonster`（0 不落）：比较器对新增键做**存在性对称**，漏写/多写都判红。
+        if target_monster > 0 {
+            ledger[0]["TargetMonster"] = serde_json::json!(target_monster);
+        }
+        if let Some(sc) = server_conf {
+            // 十键（与 golden `Fixture.server_conf` 同名同序；比较器逐值 + 绝对值双断）。
+            ledger[0]["ServerConf"] = serde_json::json!({
+                "mag_turn_undead_level": sc.mag_turn_undead_level,
+                "mab_mabe_hit_rand_rate": sc.mab_mabe_hit_rand_rate,
+                "mab_mabe_hit_min_lv_limit": sc.mab_mabe_hit_min_lv_limit,
+                "mab_mabe_hit_sucess_rate": sc.mab_mabe_hit_sucess_rate,
+                "mab_mabe_hit_mabe_time_rate": sc.mab_mabe_hit_mabe_time_rate,
+                "amy_ounsul_point": sc.amy_ounsul_point,
+                "mag_tamming_level": sc.mag_tamming_level,
+                "mag_tamming_target_level": sc.mag_tamming_target_level,
+                "mag_tamming_hp_rate": sc.mag_tamming_hp_rate,
+                "mag_tamming_count": sc.mag_tamming_count,
+            });
+        }
         if !monster_ids.is_empty() {
             let rms: Vec<serde_json::Value> = monster_ids
                 .iter()
@@ -72651,6 +72763,34 @@ SendRefMsgRange=15
         );
     }
 
+    /// 按 `a.b` 路径取值（任一环缺失 ⇒ None）。
+    fn value_at_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+        let mut cur = v;
+        for seg in path.split('.') {
+            cur = cur.get(seg)?;
+        }
+        Some(cur)
+    }
+
+    /// **存在性对称**：每一对 `(golden 路径, 台账路径)` 必须同时存在或同时缺失。
+    /// 只查"golden 有 ⇒ 台账有"会放过反向（golden 漏键而台账写了值 ⇒ 静默通过）。
+    fn assert_key_presence_symmetric(
+        stem: &str,
+        label: &str,
+        g: &serde_json::Value,
+        case: &serde_json::Value,
+        pairs: &[(&str, &str)],
+    ) {
+        for (gpath, cpath) in pairs {
+            let gp = value_at_path(g, gpath).is_some();
+            let cp = value_at_path(case, cpath).is_some();
+            assert_eq!(
+                gp, cp,
+                "[{stem}/{label}] {gpath}/{cpath} 存在性不对称（golden={gp} 台账={cp}）"
+            );
+        }
+    }
+
     /// 火球类用例的共用断言（id=1 与 id=5 同构；只差 magic id 进 SM17 尾串与 RM_SPELL 的 p3）。
     fn fireball_case_assert(stem: &str, label: &str) {
         let dir = magic_ledger_dir();
@@ -72674,6 +72814,90 @@ SendRefMsgRange=15
             g["TargetHp"].as_i64(),
             "[{stem}/{label}] 术后 HP 与金标准 TargetHp 不符"
         );
+        // **MG-44/48 新增键**：先做**存在性对称**（golden 漏键 / 台账多写都判红），再比值。
+        assert_key_presence_symmetric(
+            stem,
+            label,
+            &g,
+            case,
+            &[
+                ("Fixture.target_monster", "TargetMonster"),
+                ("TargetMonsterHpBefore", "TargetMonsterHpBefore"),
+                ("TargetMonsterHpAfter", "TargetMonsterHpAfter"),
+                ("Fixture.server_conf", "ServerConf"),
+            ],
+        );
+        if let Some(tm) = g["Fixture"]["target_monster"].as_i64() {
+            assert_eq!(
+                case["TargetMonster"].as_i64(),
+                Some(tm),
+                "[{stem}/{label}] 台账 TargetMonster 必须等于 golden Fixture.target_monster"
+            );
+            assert_eq!(
+                case["TargetMonsterHpBefore"].as_i64(),
+                g["TargetMonsterHpBefore"].as_i64(),
+                "[{stem}/{label}] 目标怪物术前 HP 与金标准不符"
+            );
+            assert_eq!(
+                case["TargetMonsterHpAfter"].as_i64(),
+                g["TargetMonsterHpAfter"].as_i64(),
+                "[{stem}/{label}] 目标怪物术后 HP 与金标准不符"
+            );
+        }
+        if g["Fixture"]["server_conf"].is_object() {
+            // **键集**：golden 与台账都必须与共享常量 `SERVER_CONF_KEYS` 完全一致（漏键/多键都红）。
+            // 用集合（排序后比较）：`serde_json::Map` 的序遍历不可依赖。
+            let key_set = |v: &serde_json::Value| -> Vec<String> {
+                let mut ks: Vec<String> = v
+                    .as_object()
+                    .expect("server_conf 必须是对象")
+                    .keys()
+                    .cloned()
+                    .collect();
+                ks.sort_unstable();
+                ks
+            };
+            let mut want: Vec<String> = crate::parity_serverconf::SERVER_CONF_KEYS
+                .iter()
+                .map(|k| (*k).to_string())
+                .collect();
+            want.sort_unstable();
+            assert_eq!(
+                key_set(&g["Fixture"]["server_conf"]),
+                want,
+                "[{stem}/{label}] golden server_conf 键集与 SERVER_CONF_KEYS 不一致"
+            );
+            assert_eq!(
+                key_set(&case["ServerConf"]),
+                want,
+                "[{stem}/{label}] 台账 ServerConf 键集与 SERVER_CONF_KEYS 不一致"
+            );
+            // **绝对值 = 部署口径**（不是"两侧相等"：两侧同时吃缺省时相等也成立）。
+            const DEPLOY: [(&str, i64); 10] = [
+                ("mag_turn_undead_level", 44),
+                ("mab_mabe_hit_rand_rate", 100),
+                ("mab_mabe_hit_min_lv_limit", 10),
+                ("mab_mabe_hit_sucess_rate", 21),
+                ("mab_mabe_hit_mabe_time_rate", 20),
+                ("amy_ounsul_point", 15),
+                ("mag_tamming_level", 40),
+                ("mag_tamming_target_level", 1),
+                ("mag_tamming_hp_rate", 100),
+                ("mag_tamming_count", 5),
+            ];
+            for (k, want) in DEPLOY {
+                assert_eq!(
+                    g["Fixture"]["server_conf"][k].as_i64(),
+                    Some(want),
+                    "[{stem}/{label}] golden server_conf.{k} 必须等于部署值 {want}"
+                );
+                assert_eq!(
+                    case["ServerConf"][k].as_i64(),
+                    Some(want),
+                    "[{stem}/{label}] 台账 server_conf.{k} 必须等于部署值 {want}"
+                );
+            }
+        }
         let cast_len = case["Rng"].as_array().unwrap().len();
         let deliver_len = case["DeliverRng"].as_array().map_or(0, |a| a.len());
         assert_eq!(
@@ -72882,6 +73106,22 @@ SendRefMsgRange=15
     ///
     /// 断言对象是 C# 产物（`golden/magic/<name>.json`），不是 Rust 台账——Rust 侧没有
     /// "排水趟数"这个概念（它只调一次交付 + 宿主出帧）。
+    /// **只核"排水没命中上限"**（金标准账本完整性的必要条件）；不钉趟数——
+    /// MG-44/48 的趟数随 seed/配置变动，钉死只会让重生成时假红。趟数的两边一致性由
+    /// 比较器（`real_ledger_verify`）负责。
+    fn golden_drain_not_capped(stem: &str, label: &str) {
+        let case = golden_case_for(stem, label);
+        assert_eq!(
+            case["DrainPassesHitCap"],
+            serde_json::json!(false),
+            "[{stem}/{label}] 金标准排水命中上限 ⇒ 账本可能不完整"
+        );
+        assert!(
+            case["DrainPasses"].as_i64().is_some_and(|n| n >= 1),
+            "[{stem}/{label}] 金标准 DrainPasses 必须是 >=1 的整数"
+        );
+    }
+
     fn b1_golden_drain_assert(golden: &str, label: &str, passes: i64) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/parity/golden/magic")
@@ -73838,12 +74078,7 @@ SendRefMsgRange=15
     /// 不许默认兜底——历史上 `wabil.mc = 15` 的硬编码让「golden 声称 15、实际用 0x0A05」的
     /// 断链静默通过了整轮对拍（见卡输入可追溯性审计 2026-11-20）。
     fn golden_fixture_required(stem: &str, label: &str, key: &str) -> u16 {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         let v = golden_case(&file, label)["Fixture"][key]
             .as_u64()
             .unwrap_or_else(|| {
@@ -73855,12 +74090,7 @@ SendRefMsgRange=15
     }
 
     fn golden_fixture_opt(stem: &str, label: &str, key: &str) -> Option<u64> {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         golden_case(&file, label)["Fixture"][key].as_u64()
     }
 
@@ -73868,12 +74098,7 @@ SendRefMsgRange=15
     /// 不许默认兜底——施毒 100 帧的文本若静默回落空串，`SM_SYSMESSAGE` 载荷就会被"比对通过"
     /// （卡 §53：记录端必须 = 实际使用值）。
     fn golden_fixture_str_required(stem: &str, label: &str, key: &str) -> String {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         golden_case(&file, label)["Fixture"][key]
             .as_str()
             .unwrap_or_else(|| {
@@ -74477,12 +74702,7 @@ SendRefMsgRange=15
     }
 
     fn golden_case_for(stem: &str, label: &str) -> serde_json::Value {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         golden_case(&file, label)
     }
 
@@ -74498,18 +74718,33 @@ SendRefMsgRange=15
 
     /// 金标准 `Fixture` 的某个整数字段（缺省回落，兼容旧 golden）。
     fn golden_fixture_u64(stem: &str, label: &str, key: &str, default: u64) -> u64 {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         golden_case(&file, label)["Fixture"][key]
             .as_u64()
             .unwrap_or(default)
     }
 
     /// 取金标准某支（`golden/magic/<file>`）的 case。
+    /// stem -> 金标准文件名（唯一映射；三个历史别名在此集中，别处不许再复制 match）。
+    fn golden_file_name(stem: &str) -> String {
+        match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        }
+    }
+
+    /// 整份金标准文件（`apply_serverconf_fixture` 按 Label 找 case，需要 `cases` 数组本体）。
+    fn golden_file_for(stem: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/magic")
+            .join(golden_file_name(stem));
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("金标准必须存在 {}（{e}）", path.display()));
+        serde_json::from_str(&raw).expect("金标准必须是合法 JSON")
+    }
+
     fn golden_case(file: &str, label: &str) -> serde_json::Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/parity/golden/magic")
@@ -74529,12 +74764,7 @@ SendRefMsgRange=15
     /// 金标准某支的 `Fixture.wait_ms`（排水前等待 = 世界时钟推进量，**两侧同值**）。
     /// 旧 golden 无该字段 ⇒ 缺省 1200（既有十支的口径）；28 = 1600（卡 §25(a)）。
     fn golden_wait_ms(stem: &str, label: &str) -> u64 {
-        let file = match stem {
-            "fireball5" => "fireball-5.json".to_string(),
-            "lightning11" => "lightning-11.json".to_string(),
-            "lightning45" => "lightning-45.json".to_string(),
-            other => format!("{other}.json"),
-        };
+        let file = golden_file_name(stem);
         golden_case(&file, label)["Fixture"]["wait_ms"]
             .as_u64()
             .unwrap_or(1200)
@@ -75398,6 +75628,85 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn spacemove_parity_s13() {
         spacemove_assert("s13", 13, 3000);
+    }
+
+    /// **`MG-44`（32 圣言术）**：目标 = `Fixture.target_monster` 指定的不死怪，等级 43/44/45 三档
+    /// （部署 `MagTurnUndeadLevel=44` 的严格小于口径）。比较面：帧 + Rng（等级门内才抽 `:847`）
+    /// + 怪物 HP 前后（`TargetMonsterHpBefore/After`）+ `server_conf` 十键（绝对值）。
+    fn turnundead_assert(label: &str, base: i32) {
+        // seed 只从金标准来（lv43 的 seed 由装置按"必须走到即死臂"扫出来，可能是任意值）。
+        let seed = golden_seed("turnundead", label);
+        fireball_parity_drive("turnundead", 32, 1, label, seed, base);
+        fireball_case_assert("turnundead", label);
+        golden_drain_not_capped("turnundead", label);
+        let c = defence_case("turnundead", label);
+        // **非退化守卫**：目标怪物必须真的有帧面（`:834 Struck` 起就有 RM），否则夹具退化。
+        let n_rm: usize = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["Rm"].as_array().map_or(0, |a| a.len()))
+            .sum();
+        assert!(
+            n_rm > 0,
+            "[turnundead/{label}] 目标怪物零 RM ⇒ 夹具退化（圣言没走到 Struck）"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_lv43() {
+        turnundead_assert("lv43", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_lv44() {
+        turnundead_assert("lv44", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_lv45() {
+        turnundead_assert("lv45", 3000);
+    }
+
+    /// **`MG-48`（50 魔爆）**：玩家目标（`Race == Play` 才有 STONE 中毒帧）。
+    /// 配置面（`MabMabeHitRandRate/SucessRate/MinLvLimit`）由 `server_conf` 十键落 `b4_cfg`。
+    fn mabmabe_assert(label: &str, base: i32) {
+        let seed = golden_seed("mabmabe", label);
+        fireball_parity_drive("mabmabe", 50, 1, label, seed, base);
+        fireball_case_assert("mabmabe", label);
+        golden_drain_not_capped("mabmabe", label);
+        let c = defence_case("mabmabe", label);
+        // **非退化守卫**：50 必须有帧面（`RM_SPELL`/`RM_MAGICFIRE` 至少一条），否则夹具退化。
+        // 注意**不能**要求 `RM_DELAYMAGIC` 必有：它在 AntiMagic 骰门之后，seed 落空时两侧都零条，
+        // 那种情况是合法输入而不是缺陷（配置面由 `server_conf` 绝对值断言兜住）。
+        let n_rm: usize = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["Rm"].as_array().map_or(0, |a| a.len()))
+            .sum();
+        assert!(n_rm > 0, "[mabmabe/{label}] 零 RM ⇒ 夹具退化");
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_parity_s1() {
+        mabmabe_assert("s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_parity_s5() {
+        mabmabe_assert("s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_parity_s13() {
+        mabmabe_assert("s13", 3000);
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。

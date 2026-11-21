@@ -197,6 +197,41 @@ public static class Program
             // `EnableMaps`（env.MapName/ServerIndex）+ `HomeMap="0"`。观测面是 `RM_SPACEMOVE_SHOW2(807)`
             // 的 `param/tag`（落点），不新增任何观测字段。
             if (name == "spacemove") return BehaviorBatch(new MagicSpec { Key = "spacemove", MagicId = 21, MagicName = "SpaceMove", EnableMaps = true, HomeMap = "0" });
+            // **MG-44（32 圣言术）/ MG-48（50 魔爆）**：ServerConf 十键**分支级**装载（走共享入口，
+            // 不自己再读 `Server.conf`）。32 的目标是**怪物**（`TargetMonster` 1 基），目标等级
+            // 43/44/45 三档钉住部署阈值 44 的严格小于口径；50 保持**玩家目标**（oracle 只有
+            // `Race == Play` 才发 STONE 中毒帧，套 `TargetMonster` 会丢该分支）。
+            if (name == "turnundead")
+            {
+                return TurnUndeadBatch(new MagicSpec
+                {
+                    Key = "turnundead",
+                    MagicId = 32,
+                    MagicName = "TurnUndead",
+                    // `:842 Random(2)+(Level-1) > target.Level` 对 43..45 两抽都真（0+59>45、1+59>45）
+                    // ⇒ 比较面只由 `:844` 的等级门决定。
+                    CasterLevel = 60,
+                    TargetMonster = 1,
+                    Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1 } },
+                    // `Struck` 之后的训练尾 640 在 +1000ms ⇒ 时间忠实排水。
+                    StepDrainMs = 100,
+                    ServerConf = ServerConfFixture.LoadOrThrow(name),
+                });
+            }
+            if (name == "mabmabe")
+            {
+                return BehaviorBatch(new MagicSpec
+                {
+                    Key = "mabmabe",
+                    MagicId = 50,
+                    MagicName = "MabMabe",
+                    // 伤害区间非退化（`GetAttackPower(Lo(MC), Hi(MC)-Lo(MC)+1)` 抽 `Random(6)`）。
+                    CasterMcNoClamp = HUtil32.MakeWord(5, 10),
+                    // RM_DELAYMAGIC 600ms + 训练尾 1000ms ⇒ 步进排水。
+                    StepDrainMs = 100,
+                    ServerConf = ServerConfFixture.LoadOrThrow(name),
+                });
+            }
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
             // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
             // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
@@ -205,23 +240,10 @@ public static class Program
             // （CLI 只取一个 argv），静态 `SystemShare.Config` 不会泄漏到别的 case 族。
             if (name is "amyounsul" or "amyounsul-shape2" or "groupamyounsul" or "groupamyounsul-shape2")
             {
-                // **显式装载 ServerConf**：`SystemShare` 静态构造只灌 ctor 缺省（`AmyOunsulPoint=10`），
-                // 不读 `[Setup]`；默认值既可能与部署（15）不一致、也不会随库变化报警 ⇒ 这里显式读
-                // 冻结部署的 `Server.conf` 并落进 `Config`，随后断言为正（除零 fail-closed）。
-                var serverConfPath = Path.Combine(AppContext.BaseDirectory, "Server.conf");
-                if (!File.Exists(serverConfPath))
-                {
-                    throw new FixtureContractViolation($"[{name}] 缺冻结 Server.conf：{serverConfPath}");
-                }
-                new SystemModule.Conf.ServerConf(serverConfPath).LoadConfig();
-                int aop = SystemModule.SystemShare.Config.AmyOunsulPoint;
-                // **已实测的部署值 = 15**（`E:/MirServer/M2GameSvr/Server.conf:756`，2026-11-21）。
-                // 不写 `>0`：默认缺省是 10，若只断 `>0`，装载失败（落到 ctor 缺省 10）也会绿 ⇒
-                // 夹具记录的 `amy_ounsul_point` 与部署不同源（卡 §53）。合并后改调 `ServerConfFixture.cs` 共享入口。
-                if (aop != 15)
-                {
-                    throw new FixtureContractViolation($"[{name}] AmyOunsulPoint 实测部署值应为 15（={aop}）——装载失败或部署漂移");
-                }
+                // **显式装载 ServerConf（共享入口）**：`ServerConfFixture.LoadOrThrow` 先断生成源 sha、
+                // 再断言十键 == 部署值（含 `AmyOunsulPoint==15`）；缺文件/漂移/任何键吃缺省 ⇒
+                // `FixtureContractViolation`（rc=2）。施毒批不再写内联装载，避免两套口径。
+                _ = ServerConfFixture.LoadOrThrow(name);
                 // **`[String] YouPoisoned` 必须真的读进 `MessageSettings`**：`StringConf` 的 ctor 只做
                 // `Load()`（解析进缓存），`LoadString()` 才是把值写进 `MessageSettings` 的那一步——生产
                 // 由 `GameShare.cs:91` 调用，本离线装置必须显式调；不调就会静默用源码默认「中毒了!!!」，
@@ -1151,6 +1173,19 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         /// </summary>
         public MonsterSpec[] Monsters = Array.Empty<MonsterSpec>();
         /// <summary>
+        /// **MG-44（32 圣言术）**：把 `DoSpell` 的目标从玩家换成 `Monsters` 的第 N 只（**1 基**；0 = 现状）。
+        /// 圣言要求目标是 `AnimalObject` ⇒ 生成阶段即断言 `race>=Animal`、`life_attrib=LA_UNDEAD`、`!SuperMan`，
+        /// 不满足直接 `FixtureContractViolation`（不等比较器给"帧数不等"这种无法归因的红）。
+        /// 缺省 0 ⇒ 既有 stem 的 golden 字节不变。
+        /// </summary>
+        public int TargetMonster;
+        /// <summary>
+        /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
+        /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
+        /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
+        /// </summary>
+        public ServerConfFixture.Snapshot ServerConf;
+        /// <summary>
         /// **三态计时器输入**（`DECHEALTH/DAMAGEARMOR/STONE` 的初始值）。`null` = 本支不涉及状态分支；
         /// **走到状态分支的用例必须显式给**（不靠缺省 0 静默通过）。非零初值取 ≥2 且互不相同，
         /// 否则"置 1"前后同值、观测不到。
@@ -1219,6 +1254,97 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
     /// AntiMagic 骰）。按同一物理意义取三支：miss = 首抽 5（>4）、edge = 首抽 4（==门）、
     /// hit = 首抽 3（<门）。`WaitMs=1600` 跨过 1500ms 的 `RM_DOOPENHEALTH` 自延迟（卡 §25(a)）。
     /// </summary>
+    /// <summary>
+    /// **MG-44（32 圣言术）**：目标等级 **43/44/45** 三档（部署 `MagTurnUndeadLevel=44` 的严格
+    /// 小于口径：43 过 `:844` 等级门、44/45 不过门）。三档共用同一只不死怪（仅 `Level` 不同），
+    /// 各一个 label ⇒ 同一份 golden 里可直接对照三档。
+    ///
+    /// 前置门（`:842 Random(2)+(casterLevel-1) > targetLevel`）由 `CasterLevel=60` 在两抽下都为真
+    /// （0+59>45、1+59>45）⇒ 比较面只由等级门决定；`:847 Random(100) < …` 是**有条件下游随机**，
+    /// 位置在等级门之后（只在等级门内才抽），所以 44/45 档的抽数天然少一次。
+    /// </summary>
+    private static int TurnUndeadBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var baseMonster = spec.Monsters[0];
+        // lv43 必须真的走到即死（否则"43 过门、44/45 不过门"退化成只差一次抽数）：
+        // 按 `Struck` 的 `Random(300)` → `:842 Random(2)` → `:847 Random(100)` 的**实际取数序**
+        // 扫 seed。44/45 不进入 `:847`（等级门在算术前），seed 只需固定。
+        int seedKill = FindSeedForTurnUndeadKill(43, spec.CasterLevel, spec.UserMagicLevel, 44);
+        if (seedKill < 0)
+        {
+            throw new FixtureContractViolation("[turnundead] 找不到让 lv43 即死的 seed（200000 内）");
+        }
+        var cases = new[]
+        {
+            (Label: "lv43", Level: 43, Seed: seedKill, Base: 1000),
+            (Label: "lv44", Level: 44, Seed: 5, Base: 2000),
+            (Label: "lv45", Level: 45, Seed: 13, Base: 3000),
+        };
+        var results = new FireballResult[cases.Length];
+        for (int i = 0; i < cases.Length; i++)
+        {
+            // 只换 `Level`（其余输入逐字段照抄首只）——三档之间只有等级门变量不同。
+            spec.Monsters = new[]
+            {
+                new MonsterSpec
+                {
+                    X = baseMonster.X,
+                    Y = baseMonster.Y,
+                    Race = baseMonster.Race,
+                    Level = cases[i].Level,
+                    Hp = baseMonster.Hp,
+                    LifeAttrib = baseMonster.LifeAttrib,
+                    SpeedPoint = baseMonster.SpeedPoint,
+                    Death = baseMonster.Death,
+                    AC = baseMonster.AC,
+                    AntiMagic = baseMonster.AntiMagic,
+                },
+            };
+            results[i] = RunMagicCase(spec, cases[i].Label, cases[i].Seed, cases[i].Base, spec.TargetMaxHp, false);
+        }
+        return EmitGolden(spec, results);
+    }
+
+    /// <summary>
+    /// 找让 `MagTurnUndead` 走完即死臂的 seed：按 oracle 的**实际取数序**
+    /// `Struck` 的 `Random(300)`（`Animal`）→ `:842 Random(2)` → `:844` 等级门 → `:847 Random(100)`。
+    /// 只模拟取数，不跑整场（无 Sleep）。找不到返回 -1。
+    /// </summary>
+    private static int FindSeedForTurnUndeadKill(int targetLevel, int casterLevel, int magicLevel, int cfgLevel)
+    {
+        var rn = RandomNumber.GetInstance();
+        var original = RngSeam.Capture();
+        try
+        {
+            for (int seed = 1; seed <= 200000; seed++)
+            {
+                RngSeam.Install(seed);
+                rn.Random(300); // Struck：Animal 的 MeatQuality 抽
+                int d842 = rn.Random(2);
+                if (d842 + (casterLevel - 1) > targetLevel && targetLevel < cfgLevel)
+                {
+                    int d847 = rn.Random(100);
+                    int bound = (magicLevel << 3) - magicLevel + 15 + (casterLevel - targetLevel);
+                    if (d847 < bound)
+                    {
+                        return seed;
+                    }
+                }
+                RngSeam.Restore(original);
+            }
+        }
+        finally
+        {
+            RngSeam.Restore(original);
+        }
+        return -1;
+    }
+
     private static int ShowHpBatch(MagicSpec spec)
     {
         if (!EnsureConfFiles(out _, out var missing))
@@ -1561,10 +1687,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
     /// </summary>
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
-        int? casterCharStatusEx = null)
+        int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
-            && casterAttackMode == null && casterSc == null && casterCharStatusEx == null)
+            && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
+            && targetMonster == null && serverConf == null)
         {
             return fixture;
         }
@@ -1589,6 +1716,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             node["caster_sc_hi"] = (casterSc.Value >> 8) & 0xFF;
         }
         if (casterCharStatusEx.HasValue) node["caster_char_status_ex"] = casterCharStatusEx.Value;
+        if (targetMonster.HasValue) node["target_monster"] = targetMonster.Value;
+        if (serverConf != null)
+        {
+            // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
+            node["server_conf"] = JsonSerializer.SerializeToNode(serverConf.Values);
+        }
         return node;
     }
 
@@ -2081,6 +2214,38 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             }
         }
 
+        // **MG-44**：可选"怪物目标"（`TargetMonster` 1 基；0 = 玩家目标 ⇒ 既有件零变化）。
+        SystemModule.Actors.IActor spellTarget = target;
+        RecordingMonster targetMonsterObj = null;
+        int? monsterHpBefore = null;
+        int? monsterHpAfter = null;
+        if (spec.TargetMonster > 0)
+        {
+            if (spec.TargetMonster > monsters.Count)
+            {
+                throw new FixtureContractViolation($"[{spec.Key}] TargetMonster={spec.TargetMonster} 越界（怪物数 {monsters.Count}）");
+            }
+            targetMonsterObj = monsters[spec.TargetMonster - 1];
+            // `MagTurnUndead`（`MagicManager.cs:830-834`）：`!SuperMan`、`LifeAttrib==LA_UNDEAD`、
+            // `Race>=Animal`（`:834` 的 `((AnimalObject)targetObject)` 强转）——三条缺一不可。
+            if (targetMonsterObj.Race < OpenMir2.Enums.ActorRace.Animal
+                || targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD
+                || targetMonsterObj.SuperMan)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}] TargetMonster 不满足圣言条件：race={targetMonsterObj.Race} "
+                    + $"life_attrib={targetMonsterObj.LifeAttrib} super_man={targetMonsterObj.SuperMan}");
+            }
+            // **`Animal = true`（生产形态）**：`RecordingMonster` 直接 new 出来，`BaseObject.Animal`
+            // 保持 ctor 缺省 false；生产怪物由 MonsterInfo 装载时会设 true，而 Rust `place_monsters`
+            // 恒写 `ai.animal = true`。不在这条分支补上，`AnimalObject.Struck` 的
+            // `if (Animal) MeatQuality -= Random(300)` **少一抽**，整条 RNG 流错位（实测 lv43）。
+            // 只在 `TargetMonster > 0` 分支做 ⇒ 其它 stem 零变化。
+            targetMonsterObj.Animal = true;
+            spellTarget = targetMonsterObj;
+            monsterHpBefore = targetMonsterObj.WAbil.HP;
+        }
+
         // **卡 magic-push-batch（MG-16/57）**：`MagPushArround` 遍历 `playObject.VisibleActors`
         // （`MagicManager.cs:27`）。离线装置不跑 AOI ⇒ 表恒空 ⇒ 循环零次。这里按 `spec.MakeVisible`
         // 显式回填（`PlayObject.UpdateVisibleGay`：不存在则 `VisibleActors.Add(VisibleFlag.Show)`）。
@@ -2145,8 +2310,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             TranPoint = 0,
             Magic = BuildMagicInfo(spec),
         };
-        short doX = targetNull ? caster.CurrX : target.CurrX;
-        short doY = targetNull ? caster.CurrY : target.CurrY;
+        short doX = targetNull ? caster.CurrX : spellTarget.CurrX;
+        short doY = targetNull ? caster.CurrY : spellTarget.CurrY;
         // 卡 mapmgr：SINSU cap_hit 回召依赖 RecallSlave→GetFrontPosition 用 caster.Dir；生产施法前 caster 面向施法目标，
         // 故对 EnableMaps 支把 caster 面向设成施法方向（faithful），使回召落点与 Rust(按施法方向)一致。
         if (spec.EnableMaps) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
@@ -2159,7 +2324,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // 取在之后会让延迟帧的 due 变成 `1000 − DoSpell 耗时`（Sleep 过冲下落到 900 一类），
         // 那是测量伪影、不是排期。t0 与 `SendSelfDelayMsg` 的 `GetTickCount()` 同源（同一时钟）。
         long castTick = HUtil32.GetTickCount();
-        bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
+        bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
         List<long> draws = new();
         if (spec.RngMode == "freeze_at_dospell")
         {
@@ -2358,6 +2523,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             ? BuildSeedReason(draws[0], seed, branchExpect)
             : null;
         int hpAfter = target.WAbil.HP;
+        if (targetMonsterObj != null) monsterHpAfter = targetMonsterObj.WAbil.HP;
         // 卡 36：`AttPowerUp` 同步写 `ExtraAbil[0]`（目标=self ⇒ 施法者）⇒ 直接观测，非自证。
         int? casterExtra0 = spec.CasterLoginOrderAbil ? (int)caster.ExtraAbil[0] : (int?)null;
         // 卡 §39：怪物 HP 后值（施法段同步 `StruckDamage` 的结果观测；不喂回驱动输入）。
@@ -2579,7 +2745,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
                 spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
                 spec.CasterLoginOrderAbil ? (int?)caster.WAbil.SC : null,
-                spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null),
+                spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null,
+                spec.TargetMonster > 0 ? (int?)spec.TargetMonster : null,
+                spec.ServerConf),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -2589,6 +2757,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             Rng = draws,
             TargetHp = hpAfter,
             TargetHpBefore = hpBefore,
+            TargetMonsterHpBefore = monsterHpBefore,
+            TargetMonsterHpAfter = monsterHpAfter,
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
             CasterExtraAbil0 = casterExtra0,
@@ -2829,6 +2999,11 @@ public sealed class FireballResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Fixture { get; set; }
     public string Label { get; set; }
+    /// <summary>MG-44：`TargetMonster>0` 时目标怪物的术前/术后 HP（null ⇒ 不落盘，旧件零变化）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetMonsterHpBefore { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetMonsterHpAfter { get; set; }
     /// 实际排水趟数（`DrainRaw` 到空为止；正常 ≤4）。
     public int DrainPasses { get; set; }
     /// 上界 `MaxDrainPasses` 命中（= 可能仍有未排干消息；不得当作完整账本）。

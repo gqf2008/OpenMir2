@@ -30,7 +30,7 @@ const KEYS: [&str; 10] = [
     "mag_turn_undead_level",
     "mab_mabe_hit_rand_rate",
     "mab_mabe_hit_min_lv_limit",
-    "mab_mabe_hit_success_rate",
+    "mab_mabe_hit_sucess_rate",
     "mab_mabe_hit_mabe_time_rate",
     "amy_ounsul_point",
     "mag_tamming_level",

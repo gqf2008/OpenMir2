@@ -3062,3 +3062,31 @@ fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
         "必须 panic 在白名单自检：{msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MG-44（32 圣言术）/ MG-48（50 魔爆）：ServerConf 十键批次
+// ---------------------------------------------------------------------------
+
+/// **`MG-44`（32 圣言术）**：三档目标等级（43/44/45，部署阈值 44 的严格小于口径）。
+/// 金标准 `golden/magic/turnundead.json`；驱动 `tests::turnundead_parity_*`。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::turnundead_parity_*）生成真实台账"]
+fn real_rust_ledger_turnundead() {
+    real_ledger_verify_labels(
+        "turnundead",
+        &golden_file("turnundead.json"),
+        &["lv43", "lv44", "lv45"],
+    );
+}
+
+/// **`MG-48`（50 魔爆）**：玩家目标（`Race == Play` ⇒ STONE 分支可达）。
+/// 金标准 `golden/magic/mabmabe.json`；驱动 `tests::mabmabe_parity_*`。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::mabmabe_parity_*）生成真实台账"]
+fn real_rust_ledger_mabmabe() {
+    real_ledger_verify_labels(
+        "mabmabe",
+        &golden_file("mabmabe.json"),
+        &["s1", "s5", "s13"],
+    );
+}

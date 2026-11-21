@@ -38,7 +38,7 @@ namespace ServerConfProbe
             Console.WriteLine("mag_turn_undead_level=" + cfg.MagTurnUndeadLevel);
             Console.WriteLine("mab_mabe_hit_rand_rate=" + cfg.MabMabeHitRandRate);
             Console.WriteLine("mab_mabe_hit_min_lv_limit=" + cfg.MabMabeHitMinLvLimit);
-            Console.WriteLine("mab_mabe_hit_success_rate=" + cfg.MabMabeHitSucessRate);
+            Console.WriteLine("mab_mabe_hit_sucess_rate=" + cfg.MabMabeHitSucessRate);
             Console.WriteLine("mab_mabe_hit_mabe_time_rate=" + cfg.MabMabeHitMabeTimeRate);
             Console.WriteLine("amy_ounsul_point=" + cfg.AmyOunsulPoint);
             // 追加：`PetSlaveConfig`（`crates/data/src/pet_slave.rs`）读的四个 `[Setup]` 键
