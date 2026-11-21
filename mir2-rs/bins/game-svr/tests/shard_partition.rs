@@ -130,3 +130,49 @@ fn sim_loop_enter_path_calls_cross_shard_guard_before_world_enter() {
         "guard 必须紧邻登录 Ok 臂（arm={arm} guard={guard}）"
     );
 }
+
+/// **P2-3b Step 1**：非 0 片 runtime + World——自己的图可进入、别人的图 `MapNotInShard`。
+///
+/// 红检：让 `ShardRuntime::for_shard` 恒用片 0（忽略参数）⇒ 尺寸表/归属断言与进图断言全红。
+#[test]
+fn shard_one_world_uses_local_ownership_and_refuses_foreign_maps() {
+    let maps = names(&["A", "B", "C", "D"]);
+    let layout = ShardLayout::partition(2, &maps, Some("0:A,B;1:*")).expect("N=2 划分");
+    let runtime = ShardRuntime::for_shard(layout.clone(), ShardId::new(1));
+    assert_eq!(runtime.local_shard(), ShardId::new(1));
+    let sizes = layout.local_map_sizes(ShardId::new(1), &[(16, 16), (17, 17), (18, 18), (19, 19)]);
+    assert_eq!(
+        sizes,
+        vec![(1, 1), (1, 1), (18, 18), (19, 19)],
+        "片 1 的世界：片 0 的图是 stub，自己的图取真实尺寸"
+    );
+    let mut world = World::with_maps(sizes);
+    world.set_map_ownership(&layout.local_ownership(ShardId::new(1)));
+    assert!(!world.is_map_owned(0) && !world.is_map_owned(1));
+    assert!(world.is_map_owned(2) && world.is_map_owned(3));
+
+    // 片 0 的图 ⇒ `MapNotInShard`（片 1 的 World）。
+    for foreign in [0usize, 1] {
+        let name = format!("s1-{foreign}");
+        world.open_session(&name);
+        let err = world
+            .enter_map(&name, spawn(&name), foreign)
+            .expect_err("片 0 的图不属于片 1");
+        assert!(matches!(err, SessionError::MapNotInShard), "{err:?}");
+    }
+    // 片 1 自己的图可进入；全长度（含 stub）表上 tick 不触发不变式。
+    world.open_session("s1-hero");
+    assert!(world.enter_map("s1-hero", spawn("s1-hero"), 2).is_ok());
+    world.tick();
+}
+
+/// **P2-3b Step 1**：单片布局下 `for_shard(0)` 与 `new` 完全相同（零行为变化）。
+#[test]
+fn single_shard_for_shard_zero_is_identity() {
+    let sizes = vec![(16, 16), (17, 17)];
+    let layout = ShardLayout::single(sizes.len());
+    let runtime = ShardRuntime::for_shard(layout.clone(), ShardId::new(0));
+    assert_eq!(runtime, ShardRuntime::new(layout.clone()));
+    assert_eq!(layout.local_map_sizes(ShardId::new(0), &sizes), sizes);
+    assert_eq!(layout.local_ownership(ShardId::new(0)), vec![true, true]);
+}
