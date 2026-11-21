@@ -1796,6 +1796,41 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             cases,
         };
         var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
+        // **卡 magic-push-batch-impl**：记录这三支的 `SoftVersionDateEx` **生效值**。
+        // 它决定 `11029 SM_SERVERCONFIG` 发不发（`SendServerConfig` 在 `SoftVersionDateEx == 0` 时
+        // 直接 return，`src/M2Server/Player/PlayObject.Base.cs:941-971`）；装置四个对象都设 20240101。
+        // **只对这三支写入**，其它 stem 的 Fixture 一字不改 —— 不加 `MagicSpec` 旋钮，
+        // 避免"缺省写不写"这件事改变既有 stem 的行为面（记录 ≠ 输入）。
+        if (spec.Key == "firewind" || spec.Key == "energyrepulsor" || spec.Key == "spacemove")
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            foreach (var c in node["cases"]!.AsArray())
+            {
+                c!["Fixture"]!["soft_version_date_ex"] = 20240101;
+            }
+            // **MG-35（21）还要记"图身份"**：落点由 `Random(Width-nEgdey-1)+nEgdey` 决定
+            // （`MapRandomMove` 的 `SpaceMoveGetRandXY`），**图的宽高直接决定落点**。
+            // 不记图身份的话，换一张尺寸不同的 `0.map` 就会得到不同 golden 而没人知道为什么。
+            // 与 Rust 驱动**读同一个环境变量**（`MAGICGOLDEN_MAP_DIR`），并由驱动侧核 sha256/size
+            // ⇒ "两侧读的是同一张图"由**同一输入 + 同一校验**保证，不是巧合。
+            if (spec.Key == "spacemove")
+            {
+                var mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
+                var mapPath = Path.Combine(mapDir, "0.map");
+                if (!Directory.Exists(mapDir)) throw new InvalidOperationException("MAP_DIR_MISSING " + mapDir);
+                if (!File.Exists(mapPath)) throw new InvalidOperationException("MAP_FILE_MISSING " + mapPath);
+                var bytesMap = File.ReadAllBytes(mapPath);
+                var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytesMap)).ToLowerInvariant();
+                foreach (var c in node["cases"]!.AsArray())
+                {
+                    c!["Fixture"]!["map_dir"] = mapDir;
+                    c!["Fixture"]!["map_file"] = "0.map";
+                    c!["Fixture"]!["map_file_sha256"] = sha;
+                    c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
+                }
+            }
+            json = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
         var argv = Environment.GetCommandLineArgs();
         var outIdx = Array.IndexOf(argv, "--out");
         if (outIdx > 0 && outIdx + 1 < argv.Length)

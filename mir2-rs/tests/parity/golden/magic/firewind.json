@@ -93,7 +93,8 @@
           912,
           913,
           914
-        ]
+        ],
+        "soft_version_date_ex": 20240101
       },
       "Label": "s1",
       "DrainPasses": 2,
@@ -145,7 +146,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1211160468,
+              "delivery": 1211526859,
               "priority": 255
             }
           ],
@@ -408,7 +409,8 @@
           912,
           913,
           914
-        ]
+        ],
+        "soft_version_date_ex": 20240101
       },
       "Label": "s5",
       "DrainPasses": 2,
@@ -460,7 +462,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1211161734,
+              "delivery": 1211528109,
               "priority": 255
             }
           ],
@@ -723,7 +725,8 @@
           912,
           913,
           914
-        ]
+        ],
+        "soft_version_date_ex": 20240101
       },
       "Label": "s13",
       "DrainPasses": 2,
@@ -786,7 +789,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1211163015,
+              "delivery": 1211529406,
               "priority": 255
             }
           ],
