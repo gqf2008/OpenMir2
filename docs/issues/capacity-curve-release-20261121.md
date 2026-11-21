@@ -102,3 +102,33 @@
   `d8_rel_500`、`d8_rel_986`、`d8_rel_stack_logs`
 - 轮 B：`E:\UserTemp\d8_curve2_counters.tsv`、`d8_curve2_2000`、`d8_curve2_logs`
 - 被杀的首次 2000 尝试（仅非稳态部分观测）：`E:\UserTemp\d8_curve_2000`、`d8_curve_counters.tsv`
+
+## 7. 补测（986 档｜探针 + tick profile 同开）：同档两轮差 1.6×
+
+第二次 986 运行（release 同一二进制、`HoldSec=180`、`MIR2_PERF_COUNTERS` + `MIR2_TICK_PROFILE=1`）：
+
+- load_gate **GREEN**：login 100%、in_world 986、internal_errors 0；tick p50/p90/p99 **16/31/47ms**。
+- `refmsg_targets`（稳态 300 tick）：**mean 26,207.5 / p50 27,932 / p95 38,595**；`refmsg_calls` mean 231.1。
+- `HostFrames`（tick profile 稳态末段）：**0.842 ms/tick = 0.42% tick**（分母 200ms 名义 tick；
+  按该档 tick p50 16ms 折算约 5%）；窗口从 0.047 增长到 0.842 ms/tick。
+- 对照：`inbound_enqueued 221.1 ≈ drained 219.7`/tick、carry 0.25、budget_hit 0.25、
+  wall 37.98ms 均值；`max_single_event_us` p95 1.59ms。
+
+**同档两轮差异（必须带着读）**：
+
+| 986 档轮次 | `refmsg_targets` mean | p50 | p95 |
+| --- | --- | --- | --- |
+| 轮 A（500/986 那一轮） | **16,146.6** | 15,216 | 34,253 |
+| 轮 B（本轮，profile 同开） | **26,207.5** | 27,932 | 38,595 |
+
+两轮相差 **1.6×**，成因是**场景/站位（bot 聚簇与探针节奏）而非人数**——同一 986 档、同一二进制。
+⇒ **N 决策请用区间 16k–26k/tick**，不要拿单点当确定值；2000 档 88.5k 与 986 的比值在
+**3.4–5.5×**（人数 2×，超线性迹象，但同样不是单点结论）。
+
+**2000 档未开 tick profile ⇒ `HostFrames` 未测**；不拿 986 的 0.42% 外推 2000。
+
+### 7.1 测量教训（默认区间）
+
+**同参数两轮可差 1.6×**：单点测量不能当确定值。以后容量结论默认给**区间**；只有同一参数
+跑三次且离散度小，才允许给单值。给单值时必须在卡片里附三次原始值与离散度。
+
