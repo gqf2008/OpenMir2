@@ -35,7 +35,10 @@ mod aoi_golden;
 mod auth;
 mod cert;
 mod clock;
-mod config;
+// **卡 openmir2-magic-serverconf-batch-plan §6.7**：integration test（`tests/serverconf_parse_parity.rs`）
+// 需要直接调生产解析器 `config::load` 对拍 C# `ServerConf`；本 crate 是 bin crate，lib target 不是对外 API
+// 契约，`load`/`GateConfig` 本就是 `pub`，这里只打开模块路径，不改任何可见性语义，也不加 re-export。
+pub mod config;
 mod dbclient;
 mod eat_move;
 mod enter;

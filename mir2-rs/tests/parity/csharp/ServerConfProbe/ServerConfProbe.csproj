@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    卡 openmir2-magic-serverconf-batch-plan §6.7：Server.conf 解析对拍探针（只读）。
+    只输出六个键的解析值；不读 golden、无其它逻辑。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ServerConfProbe</AssemblyName>
+    <RootNamespace>ServerConfProbe</RootNamespace>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\OpenMir2\OpenMir2.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+</Project>
