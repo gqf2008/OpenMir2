@@ -102,6 +102,43 @@
 - 负载下的实际间隔分布未实测（只读静态推断；`HumLimit/MonLimit` 预算与 `PeriodicTimer` 不补拍会让右侧变长）。
 - 若未来参数化 `RunTime`，本卡结论需重核；当前全仓没有这种配置项。
 
+## 9. 迭代序：tick 内各 actor 按什么顺序被 `Run()`
+
+### 9.1 容器与顺序（符号锚）
+
+| actor 类 | 容器（符号锚） | 顺序 | 跨趟续位 |
+| --- | --- | --- | --- |
+| 玩家 | `src/GameSrv/Word/WorldServer.cs` 的 `PlayObjectList`（`IList<IPlayerActor>`，ctor 里 `new List<IPlayerActor>()`） | **List 插入序 = 登录完成序**（`ProcessHumans` 内 `PlayObjectList.Add`），**不是 ActorId**、不排序（`WorldServer` 内无 `Sort`） | `ProcessPlayObjectData` 用 `ProcHumIdx` 续位 + `HumLimit`（缺省 30ms）预算：一趟可能只覆盖前 K 个，下一趟从 K 继续；整趟走完归 0 |
+| 怪物（按线程分组） | `WorldServer.MonGen.cs` 的 `MonGenInfoThreadMap`（`Dictionary<int, IList<MonGenInfo>>`） | 线程 id 升序（键是 0..N-1 的稠密整数）；**每线程内 `MonGenInfo` 的顺序 = 加载/按 `MonName` 分组后的插入序** | `MonsterThread.MonGenListPosition` 续位 + `MonLimit`（缺省 30ms）预算 |
+| 怪物（单只） | `MonGenInfo.CertList`（`IList<IMonsterActor>`，`MonGenInfo.TryAdd` 里 `CertList.Add`） | **刷怪/收养的追加序**（`RegenMonsters`/`RegenMonsterByName` 的创建序） | `MonsterThread.MonGenCertListPosition` 续位 |
+| NPC / 商人 | `WorldServer.cs` 的 `MerchantList` / `QuestNpcList`（`new List<...>()`） | List 插入序（加载序） | `MerchantPosition` / `NpcPosition` 续位 + `NpcLimit` 预算 |
+| 脚本机器人 | `src/GameSrv/Robots/RobotManage.cs` 的 `RobotHumanList`（`List<RobotObject>`） | `Robot.txt` 加载序 | 无门，`SystemProcessor` 50ms 全量 |
+| 地图事件 | `EventMgr.Events`（`IList<MapEvent>`） | 插入序 | 按事件自身 `RunTick` |
+
+### 9.2 稳定性与并发（关键）
+
+- **同线程内**：顺序由 List 下标决定（插入序），基本稳定；但**遍历中会改容器**——玩家 ghost 走 `PlayObjectList.Remove`（后续元素前移，本趟 `continue` 重读同一索引）、怪物 ghost 走 `CertList.RemoveAt`；新登录/新刷怪**追加到表尾**。
+- **跨类无全局序**：玩家（`UserProcessor` 的 `PeriodicTimer` 线程）、每个怪物线程（`MobThreading` 各自独立 `Thread`）、NPC（`MerchantProcessor`）、机器人（`SystemProcessor`）是**不同 OS 线程** ⇒ **玩家与怪物谁先 `Run()` 不由任何容器决定，由调度器决定**，不可当判据。
+- **怪物→线程的分配本身是随机的**：`WorldServer.MonGen.cs` 用 `M2Share.RandomNumber.Random(ProcessMonsterMultiThreadLimit)` 把 `MonName` 分到线程；`OpenMir2/RandomNumber.cs` 的底层是 `new Random()`（**时间种子**）⇒ 多线程时**跨怪顺序每次启动都不同**。缺省 `ProcessMonsterMultiThreadLimit=1` ⇒ 全部落线程 0，顺序退化为单条 List 序。
+- **非活跃怪隔趟**：`WorldServer.MonGen.cs` 的 `ProcessRunCount < ProcessMonsterInterval`（缺省 2）分支 ⇒ 未被玩家激活的怪不是每趟都 `Run()`。
+
+### 9.3 一句话结论
+
+**`tick 内同线程 actor 的处理顺序 = 各自 List 的插入序`（玩家 = 登录完成序、怪物 = 刷怪追加序、NPC = 加载序）；同一个 tick 的玩家与怪物分属不同线程 ⇒ 跨类无全局序；怪物→线程分配又是时间种子随机。**
+
+### 9.4 对装置/驱动的含义（第四条未核实假设）
+
+装置（`MagicGolden` 的 `byWho`/`DrainOnce`）与 Rust 驱动都**显式按固定顺序**遍历少数几个 actor（`caster`→`target`→`obs_in`→`obs_out`，或多趟固定轮转）。生产不是这样：
+
+1. 顺序不是 ActorId，而是**容器的插入/追加序**；
+2. 玩家/怪物/NPC/机器人**跨线程并发**；
+3. 怪物线程分配**启动随机**（多线程时）；
+4. 预算（`HumLimit`/`MonLimit` 缺省 30ms、`NpcLimit` 缺省 5ms）会把一趟**截断到 K 个**，下一趟续位——时序随负载；
+5. 非活跃怪**隔趟**（`ProcessMonsterInterval`）；
+6. 遍历中 `Remove` 前移，顺序可变。
+
+⇒ 凡"跨 actor 消息在同一 tick/下一 tick 落到谁"的判据，都隐含"装置迭代序 = 生产迭代序"这一**未核实假设**（本卡 §9 为出处）。
+
 ---
 
 **裁决（单行）**：`生产的 actor Run 间隔 = 玩家 ≈300ms / 怪物 ≈250–300ms / NPC ≈400ms（名义常量、负载可变；怪物首跑相位 0–1500ms 随机），与 100ms 假设 不一致。`
