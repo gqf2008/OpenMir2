@@ -117,6 +117,13 @@ public static class Program
         {
             SystemModule.SystemShare.WorldEngine = new OfflineWorldEngine();
         }
+        // **MG-36**：`BaseObject.InSafeZone(env,x,y)` 在 `SafeArea=false` 时也会遍历
+        // `M2Share.StartPointList`（生产由 StartPoint.txt 装载；离线进程为 null ⇒ NRE）。
+        // 离线替身 = **空表**（没有安全出生点）⇒ 安全区只由地图 Flag 决定；该边界登记在卡 §2。
+        if (M2Server.M2Share.StartPointList == null)
+        {
+            M2Server.M2Share.StartPointList = new System.Collections.Generic.List<OpenMir2.Data.StartPoint>();
+        }
         try
         {
         if (args.Contains("--rng-selftest"))
@@ -158,6 +165,23 @@ public static class Program
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
             // **MG-55（46 分身术）**：`MagMakeClone` 只造克隆体（无配置/事件系统依赖）。训练前提钉死
             // (`level=0 / TrainLv=3 / MaxTrain[0]=1000`)，`Gender=1/Hair=7` 让 feature 面非退化。
+            // **MG-36（22 火墙）**：`MagMakeFireCross` 五格 + 安全区 + 预占去重。非退化 MC
+            // （`MakeWord(5,10)`）让 damage/时间都有抽数；训练前提同 46（640 走 1000ms 支）。
+            if (name == "firecross")
+            {
+                return FireCrossBatch(new MagicSpec
+                {
+                    Key = "firecross",
+                    MagicId = 22,
+                    MagicName = "FireCross",
+                    UserMagicLevel = 0,
+                    MagicTrainLv = 3,
+                    MagicMaxTrain0 = 1000,
+                    CasterMc = HUtil32.MakeWord(5, 10),
+                    StepDrainMs = 100,
+                    SkillTail = true,
+                });
+            }
             if (name == "clone")
             {
                 return CloneBatch(new MagicSpec
@@ -1102,6 +1126,20 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
     return list;
 }
 
+/// **MG-36**：反射读实例字段（沿基类链；`MapEvent.ContinueTime` 是 **private readonly**）。
+private static int ReadInstanceInt(object obj, string fieldName)
+{
+    for (var t = obj.GetType(); t != null; t = t.BaseType)
+    {
+        var f = t.GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (f != null)
+        {
+            return Convert.ToInt32(f.GetValue(obj));
+        }
+    }
+    throw new FixtureContractViolation($"反射读 {obj.GetType().Name}.{fieldName} 失败（字段不存在）");
+}
+
     // ======================================================================
     // 下一批 4 分支（11/45 雷电、2 治愈、13 火符、44 灭天火）：C# golden only
     // ======================================================================
@@ -1178,6 +1216,18 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
         /// 缺省 false ⇒ 既有 stem 零变化。
         /// </summary>
         public bool PreSpellFaceTarget;
+        /// <summary>
+        /// **MG-36（22 火墙）**：安全区夹具。true ⇒ 本支把 `env.Flag.SafeArea` 置 true 并临时打开
+        /// `Config.DisableInSafeZoneFireCross`（oracle `MagicManager.cs:1066-1070` 的门），
+        /// 施法后还原配置。缺省 false ⇒ 既有 stem 零变化。
+        /// </summary>
+        public bool FireCrossSafeZone;
+        /// <summary>
+        /// **MG-36（22 火墙）**：施法前预置事件的格。`new FireBurnEvent(..., Visible:true)` 的 ctor
+        /// 只把事件挂进格子（`Envir.AddMapEvent`）、**不进** `EventMgr.Events` ⇒ 用来造
+        /// `GetEvent(x,y) != null` 的去重支。缺省空 ⇒ 既有 stem 零变化。
+        /// </summary>
+        public (int X, int Y)[] PreEventCells = Array.Empty<(int, int)>();
         /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
         public int HitSpeed;
         /// <summary>
@@ -1439,6 +1489,41 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
     /// - `PreSpellFaceTarget=true`：生产 `ClientSpellXY` 的 default 支在 `DoSpell` 前转向点击坐标
     ///   （`PlayObject.Attack.cs:1269`）——不照做 `clone.dir` 与产品路径不同源。
     /// </summary>
+    /// <summary>
+    /// **MG-36（22 火墙 `MagMakeFireCross`）**：三支——
+    /// `base`（五格全登记）、`pre_center`（施法前预置中心格事件 ⇒ `GetEvent` 去重，4 条且缺中心）、
+    /// `safe_zone`（`DisableInSafeZoneFireCross` + `env.Flag.SafeArea` ⇒ 0 条 + 红字，且无 640）。
+    /// 逐 tick 的 3000ms 伤害不在本卡（事件进程 `EventProcessor` 不启动）。
+    /// </summary>
+    private static int FireCrossBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var results = new FireballResult[3];
+        spec.PreEventCells = Array.Empty<(int, int)>();
+        spec.FireCrossSafeZone = false;
+        results[0] = RunMagicCase(spec, "base", 22, 1000, spec.TargetMaxHp, false);
+        spec.PreEventCells = new[] { (101, 100) };
+        results[1] = RunMagicCase(spec, "pre_center", 23, 2000, spec.TargetMaxHp, false);
+        spec.PreEventCells = Array.Empty<(int, int)>();
+        spec.FireCrossSafeZone = true;
+        results[2] = RunMagicCase(spec, "safe_zone", 24, 3000, spec.TargetMaxHp, false);
+        spec.FireCrossSafeZone = false;
+        foreach (var r in results)
+        {
+            if (r.DrainPassesHitCap)
+            {
+                Console.Error.WriteLine(
+                    $"FIRECROSS_DRAIN_CAP {spec.Key}/{r.Label} passes={r.DrainPasses}（账本可能不完整 ⇒ 拒绝落盘）");
+                return 2;
+            }
+        }
+        return EmitGolden(spec, results);
+    }
+
     private static int CloneBatch(MagicSpec spec)
     {
         if (!EnsureConfFiles(out _, out var missing))
@@ -1818,14 +1903,14 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
         int? casterDir = null, int? casterGender = null, int? casterHair = null,
         bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
-        bool? fastTrain = null)
+        bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
             && targetMonster == null && serverConf == null
             && casterDir == null && casterGender == null && casterHair == null
             && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
-            && fastTrain == null)
+            && fastTrain == null && fireCrossSafeZone == null && preEventCells == null)
         {
             return fixture;
         }
@@ -1864,6 +1949,8 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
         if (magicTrainLv.HasValue) node["magic_train_lv"] = magicTrainLv.Value;
         if (magicMaxTrain0.HasValue) node["magic_max_train0"] = magicMaxTrain0.Value;
         if (fastTrain.HasValue) node["fast_train"] = fastTrain.Value;
+        if (fireCrossSafeZone.HasValue) node["firecross_safe_zone"] = fireCrossSafeZone.Value;
+        if (preEventCells != null) node["pre_event_cells"] = JsonSerializer.SerializeToNode(preEventCells);
         return node;
     }
 
@@ -2486,6 +2573,30 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
         // `playObject.Dir` 转向点击坐标（`PlayObject.Attack.cs:1269`）；装置直调 `DoSpell`
         // ⇒ 显式照做，`clone.dir` 才与产品路径同源。
         if (spec.PreSpellFaceTarget) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
+        // **MG-36（22 火墙）**：安全区输入（夹具面）与预置事件（GetEvent 去重面）。
+        // 二者都必须在 RngSeam.Install **之前**（均不抽随机数；预置走 oracle ctor，
+        // 只落格子、不进 EventMgr.Events）。
+        bool savedDisableSafeZone = SystemModule.SystemShare.Config.DisableInSafeZoneFireCross;
+        if (spec.MagicId == 22 && spec.FireCrossSafeZone)
+        {
+            env.Flag.SafeArea = true;
+            SystemModule.SystemShare.Config.DisableInSafeZoneFireCross = true;
+        }
+        if (spec.MagicId == 22)
+        {
+            var cellSet = new HashSet<(int, int)> { (doX, doY - 1), (doX - 1, doY), (doX, doY), (doX + 1, doY), (doX, doY + 1) };
+            foreach (var cell in spec.PreEventCells)
+            {
+                if (!cellSet.Contains(cell))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] PreEventCells ({cell.X},{cell.Y}) 不在五格 {string.Join(" ", cellSet)} 内");
+                }
+                _ = new SystemModule.MagicEvent.Events.FireBurnEvent(
+                    caster, (short)cell.X, (short)cell.Y, Grobal2.ET_FIRE, 1, 0);
+            }
+        }
+        bool inSafeZoneAtCast = spec.MagicId == 22 && caster.InSafeZone(env, doX, doY);
         int trainTpBefore = um.TranPoint;
         int trainLevelBefore = um.Level;
         // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
@@ -2496,6 +2607,10 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
         // 那是测量伪影、不是排期。t0 与 `SendSelfDelayMsg` 的 `GetTickCount()` 同源（同一时钟）。
         long castTick = HUtil32.GetTickCount();
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
+        if (spec.MagicId == 22 && spec.FireCrossSafeZone)
+        {
+            SystemModule.SystemShare.Config.DisableInSafeZoneFireCross = savedDisableSafeZone;
+        }
         List<long> draws = new();
         if (spec.RngMode == "freeze_at_dospell")
         {
@@ -2877,6 +2992,69 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
                 receivers = cloneReceivers,
             };
         }
+        // **MG-36（22 火墙）**：事件表快照（只记 `EventType/x/y/ContinueTime/Damage`；不记
+        // `RunTick`/时间戳——`GetTickCount` 派生）。只取 `Envirnoment == env` 的事件
+        // （同一 Batch 的前一个 case 会留下别的 env 的事件）。契约 fail-closed：
+        // 预占格 ⊆ 五格、无重复；事件数 == 5 − 预占数且缺格恰为预占格；安全区支 == 0 且有红字。
+        object fireCrossObs = null;
+        if (spec.MagicId == 22)
+        {
+            var pre = spec.PreEventCells.Distinct().ToList();
+            if (pre.Count != spec.PreEventCells.Length)
+            {
+                throw new FixtureContractViolation($"[{spec.Key}/{label}] PreEventCells 有重复格");
+            }
+            var evSnap = SystemModule.SystemShare.EventMgr.Events
+                .Where(e => ReferenceEquals(e.Envirnoment, env))
+                .Select(e => new
+                {
+                    x = (int)e.nX,
+                    y = (int)e.nY,
+                    type = e.EventType,
+                    damage = e.Damage,
+                    continue_ms = ReadInstanceInt(e, "ContinueTime"),
+                })
+                .OrderBy(e => e.x).ThenBy(e => e.y)
+                .ToList();
+            int want = (spec.FireCrossSafeZone ? 0 : 5 - pre.Count);
+            if (evSnap.Count != want)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 事件数 {evSnap.Count} ≠ 期望 {want}（预占 {pre.Count}）");
+            }
+            if (evSnap.Any(e => e.type != Grobal2.ET_FIRE || e.continue_ms <= 0))
+            {
+                throw new FixtureContractViolation($"[{spec.Key}/{label}] 事件字段退化（type!=ET_FIRE 或 continue_ms<=0）");
+            }
+            bool redSysMsg = false;
+            string redText = "";
+            foreach (var rm in rmAcc["caster"])
+            {
+                var t = rm.GetType();
+                if ((int)t.GetProperty("ident").GetValue(rm) == 11004)
+                {
+                    redSysMsg = true;
+                    redText = (string)t.GetProperty("msg").GetValue(rm) ?? "";
+                    break;
+                }
+            }
+            if (spec.FireCrossSafeZone && !redSysMsg)
+            {
+                throw new FixtureContractViolation($"[{spec.Key}/{label}] 安全区支必须出现红字 RM_SYSMESSAGE(11004)");
+            }
+            bool has640 = DecodeFramesForGate(recorder.Buffers, caster.ActorId).Any(f => f.ident == 640);
+            fireCrossObs = new
+            {
+                events = evSnap,
+                pre_event_cells = pre.Select(c => new[] { c.X, c.Y }).ToList(),
+                safe_zone_flag = env.Flag.SafeArea,
+                disable_in_safe_zone_fire_cross = spec.FireCrossSafeZone,
+                in_safe_zone_at_cast = inSafeZoneAtCast,
+                red_sysmsg = redSysMsg,
+                red_sysmsg_text = redText,
+                has_640 = has640,
+            };
+        }
         return new FireballResult
         {
             Fixture = AttachStatusTimeArr(new
@@ -2988,11 +3166,15 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
                 casterHair: spec.MagicId == 46 ? spec.CasterHair : (int?)null,
                 preSpellFaceTarget: spec.MagicId == 46 ? (bool?)spec.PreSpellFaceTarget : null,
-                magicTrainLv: spec.MagicId == 46 ? (int?)spec.MagicTrainLv : null,
-                magicMaxTrain0: spec.MagicId == 46 ? (int?)spec.MagicMaxTrain0 : null,
+                magicTrainLv: (spec.MagicId == 46 || spec.MagicId == 22) ? (int?)spec.MagicTrainLv : null,
+                magicMaxTrain0: (spec.MagicId == 46 || spec.MagicId == 22) ? (int?)spec.MagicMaxTrain0 : null,
                 // `PlayObject.FastTrain` 缺省 false（`PlayObject.cs:2023`），装置从不置 true
                 // （只有快速修炼项链 Shape 才会置）；显式记录，比较器断言为 false。
-                fastTrain: spec.MagicId == 46 ? (bool?)false : null),
+                fastTrain: spec.MagicId == 46 ? (bool?)false : null,
+                fireCrossSafeZone: spec.MagicId == 22 ? (bool?)spec.FireCrossSafeZone : null,
+                preEventCells: spec.MagicId == 22
+                    ? (object)spec.PreEventCells.Select(c => new[] { c.X, c.Y }).ToArray()
+                    : null),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -3103,6 +3285,7 @@ private static List<(ushort ident, int recog, ushort param, ushort tag, ushort s
                         .ToList(),
                 },
             Clone = cloneObs,
+            FireCross = fireCrossObs,
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -3301,6 +3484,9 @@ public sealed class FireballResult
     /// <summary>**MG-55**：46 分身的克隆体静态面 + 逐收件人 10/41 帧（仅该魔号；null 不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Clone { get; set; }
+    /// <summary>**MG-36**：22 火墙的事件表快照 + 安全区/预占输入（仅该魔号；null 不落盘）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object FireCross { get; set; }
     /// <summary>共享尾（49/51/52/53/54）训练面（`SkillTail=true` 才落盘）：Level/TranPoint/TrainLv/MaxTrain[0]。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Train { get; set; }
