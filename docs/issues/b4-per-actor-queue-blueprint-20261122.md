@@ -63,3 +63,77 @@ step 模型缺了**一整层 per-actor 队列语义**：oracle 每个 actor 一�
 
 `GetMessage` 遇未到期队首 `Enqueue(Lowest)`+`return false` 是 per-actor、每 tick 一次；等优先级多条逐 tick swap 换根
 （`swap_remove` 末→根 + `enqueue` 等停）。Rust `SelfDelayQueue` 已逐字复刻该 churn。
+
+## 8. §(ii) 接缝确认（2026-11-22 夜，基于 master `52c351128`，(i) 层已合入）
+
+**前提变化**：(i) 层让 `deliver_self_delay_msgs_impl` 返回 `Vec<SelfDelayTurn>{actor_id, outcomes}`
+（组间 = 首次入队序、组内 = 投递序），扁平 `deliver_self_delay_msgs()` 由 `flatten_self_delay_turns` 保序还原。
+**但宿主现存调用点仍吃扁平版**（`TickRecord.slave_self_deliveries: Vec<SelfDelayOutcome>`，见 `world` 的
+`slave_self_deliveries` 字段与 `sim_loop`/`fireball_parity_drive` 的 `let outs = deliver_self_delay_msgs()`）
+⇒ (ii) 第一步要让宿主改吃 `deliver_self_delay_msgs_turns()`。
+
+### Q1 「当前 turn actor」上下文从哪来？
+
+**推荐 ②：`SpellFrameBuf` 存「当前 turn」上下文，由宿主在 turn 边界切换**——加
+`begin_turn(actor_id)`，内部 `current_turn: Option<{actor_id, turn_index}>`，
+`turn_index` = 本 tick `Vec<SelfDelayTurn>` 的下标快照（`HashMap<actor_id, usize>`），默认 `None`。
+- 判据：帧要发给收件人 R 时，若 `turn_index[R] <= current_turn.turn_index` ⇒ R 本 tick **已 Run 过** ⇒
+  入 R 的**延迟队列**（下一 tick 的 turn 再出）；否则进本 tick 缓冲（R 还没跑）。
+- 为何不选 ①（每次显式传 `&TurnCtx`）：要把该参数串进 `push_socket` / `deliver_broadcast_targets` /
+  `push_broadcast_cached(_at)` / `push_actor` / `push_charstatuschanged` / `push_name_color(_self)` /
+  `push_open_health` + `drain_b3/b4/b5` 十来个签名与调用点。
+- **对 `spell_frame_buf_tests` 破坏最小的是 ②**：三个既有测试都不调用 `begin_turn` ⇒ `current_turn=None`
+  ⇒ 与今天逐字节相同（**0 改**）；①则每个签名都要改。
+- **坑**：默认 `None` = 不延迟 ⇒ 忘记 set 会静默回退旧行为。必须配**元断言/牙**：宿主本 tick 处理了 ≥1 个
+  turn 却没 `begin_turn`（或全程延迟队列恒空）⇒ 红。
+
+### Q2 既有 per-recipient 四叉堆序 / 延迟插入后会不会变 / 同 tick 立即+延迟歧义
+
+- 现状（符号锚）：`SpellFrameBuf::flush` 对**每个收件人**起一个**新的** `NetPriorityQueue`
+  （=`mir2_world_bevy::msgqueue`，.NET 8 四叉最小堆），键 = 下行优先级 `u8`（`(byte)ident`）；
+  **按 priority 出队、同 priority 按堆数组布局**（不稳定；3 条 `[0,2,1]`、4 条 `[0,3,2,1]`）。
+  收件人分组序 = 首次入队序；跨收件人不混堆（`deliver_broadcast_targets` 逐收件人 `push_socket`）。
+- **延迟插入后序会不会变**：只要延迟帧**并入同一 per-recipient 堆**（不是另起排序再拼接），
+  同 priority 的堆布局语义不变。
+- **同 tick「立即 + 延迟」歧义（真存在）**：收件人 R 本 tick 可能同时有 (a) 本 tick 产生、R 还没跑的立即帧，
+  (b) 上一 tick 产生、R 本 turn 才到点的延迟帧。**建议改用「per-recipient 持久 `NetPriorityQueue`（跨 tick
+  存活）」**：延迟帧 = 上一 tick 已入 R 队列、本 tick 仍未出的项；新帧本 tick append——与 oracle
+  `ActorEntity.MsgQueue` 的堆数组布局同构，出队仍只按 priority + 堆布局。**不要**加「先延迟后立即」或按
+  tick/插入序的显式 tie-break（会偏离 oracle 的不稳定堆）。⇒ 忠实做法是把 `SpellFrameBuf` 从「每调用一个
+  `Vec`」升级为「每收件人一个跨 tick 持久堆」；pilot 若不持久化，退而求其次要把延迟帧**先**入本 tick 堆
+  （近似，但同 priority 交错时不保证与 oracle 同序）。
+
+### Q3 `spell_frame_buf_tests` 现状 / 哪些必改 / 哪些必须不变
+
+- 3 条测试（模块 `spell_frame_buf_tests`）：
+  1. `same_priority_frames_follow_dotnet_heap_order`：同 priority（167）3/4 条 → `[0,2,1]`/`[0,3,2,1]`（牙=稳定排序会红）。
+  2. `recipients_get_independent_heaps`：A/B 不混堆（A=`[0,2]`、B=`[1,3]`）。
+  3. `caster_queue_without_rm_spell_keeps_push_order`：混合优先级堆布局 + 「caster 不入 RM_SPELL」语义。
+- **必须保持不变（=「没改坏」的证据）**：以上 3 条 + `msgqueue::tests::ties_dequeue_in_four_ary_heap_order`
+  + `msgqueue::tests::protocol_constants_match_world_literals`。它们只经 `push_socket`/`flush`、不设 turn 上下文
+  ⇒ **默认 no-deferral 路径下应逐字节不变**。
+- **要改的**：**0 条**（若保留 stateless 模式）。做法：把延迟做成 `SpellFrameBuf` 的**新状态模式**
+  （`current_turn` + 持久 per-recipient 堆），`SpellFrameBuf::new()` 仍是今天行为；**新增** 3 条测试：
+  ① R 已跑过 ⇒ 帧落下一 tick；② R 未跑 ⇒ 同 tick 出；③ 延迟项与同 priority 新项在同一持久堆的 tie 序 = 四叉堆布局。
+
+### Q4 最小可验证切法：只让 657 走 per-viewer 延迟
+
+**能，且是理想 pilot。** `push_charstatuschanged` 是 657 唯一发射点（经 `ref_msg_cache::targets` +
+`deliver_broadcast_targets`）。pilot：
+1. 宿主 `drain_b3_self_deliveries` 吃 `Vec<SelfDelayTurn>`（先切成 `_turns`），逐 turn `begin_turn(actor)`；
+2. **仅** `push_charstatuschanged` 走「R 已跑 ⇒ 落 R 的跨 tick 待发；R 未跑 ⇒ 立即」；其余广播
+   （656/31/53/100/640/1100…）**原样不动**；
+3. 下一 tick `drain_b3` 开头先 flush 各 R 的待发 657。
+
+**pilot 验收（bigcloak s1，不动其他广播）**：caster 的 657 应从今天 Rust 的 `(657,1002,800)` 变成
+`(657,1002,900)`（caster 在 turn 序里先于 target，target 的 recog1002 到 caster 时 caster 本 tick 已跑 ⇒ 落下一 tick）；
+target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（它是 caster 自己 turn 内产生）。
+**这与装置的 per-viewer 结果（caster `{1002@900,1001@900}`）一致** —— pilot 目标是让 **Rust 对齐装置/契约**，
+不是让装置迁就 Rust。
+
+### 落地顺序（按 opc-19 预置）
+
+1. (i) 宿主改吃 `_turns`（纯搬，零翻转：`flatten_self_delay_turns` 已保证与今天扁平同序）；
+2. pilot：657-only 延迟 + 3 条新单测（旧 3 条不变）；
+3. 扩到 656/31/53/100（`push_name_color`/`push_open_health`/b4/b5）；
+4. 胶水 + 装置 + golden 同批 + 全量门逐支点名。
