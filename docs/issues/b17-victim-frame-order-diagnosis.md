@@ -99,3 +99,21 @@ probe（`SelfDelayQueue::enqueue` + pump peek 打 log，跑 `big_cloak_parity_s1
 **判定（回答分叉）**：**不是堆实现(arity)差异**（等优先级下两堆同构）。是**等优先级 swap_remove churn × actor 1001 多一条 640 形成 2 元素队列**；分歧 phase＝「strike vs 640 谁先入队」或「peek 次数 parity」——即**入队序/cadence**，不是堆实现、也不是纯「实现自由度」。
 
 **still open（需 C# 侧/对照）**：oracle 侧自延迟队列的入队序/peek 次数无 log（C# 内部），无法从 golden 直接读；要钉 phase 差异落在「入队先后」还是「pump cadence」，需在 oracle 侧或 C# harness 的 `SendSelfDelayMsg`/`GetMessage` 加同类探针对照。**本卡停在诊断，不实施。**
+
+## 7. C# 装置对照 + 关键结论（2026-11-22 夜间）——**B 型很可能是装置 artifact，Rust 忠实于生产**
+
+C# 装置侧探针（`MsgQueue.Enqueue(...,Lowest)` 处打 log，跑 `--case bigcloak`，跑完还原 git 干净）：**入队序与 Rust 完全一致**——actor 1001 = `8045(deliv 800)` 先、`10123(deliv 1000)` 后；actor 1002 = 仅 `8045`。⇒ **不是入队序差异**（内容/序/delivery 两侧相同）。
+
+**读码定位 churn 差异**：
+- **生产 `BaseObject.Message.cs::GetMessage`**：`TryDequeue` 队首（swap_remove 末→根）；未到期则 `Enqueue(Lowest)`（**只把这一条队首重入尾部**，2 元素 `[A,B]→[B,A]`）+ `return false` ⇒ **每次只动队首一条、churn**。
+- **C# 装置 `RecordingPlayObject.DrainRaw`**：`while(TryDequeue) add`（**排空所有**）→ 未到期 `PushBack`=`Enqueue` **按原序重入** ⇒ **顺序复原、无 churn**（head 恒 8045）。
+- **Rust `deliver_self_delay_msgs_impl`**：`dequeue`（swap_remove）+ `enqueue` 未到期队首 ⇒ **同生产、churn**。
+
+⇒ **两层判定（opc-19 要求的区分）**：
+1. **装置 vs Rust**：不同（golden 两 657@800；Rust @800/@900）。
+2. **装置 vs 生产**：**装置不同（无 churn）**；**生产 `GetMessage` 与 Rust 同构（churn）**。
+⇒ **Rust 忠实于生产；分歧来自装置 `DrainOnce` 的『排空+按序回填』未复刻生产 `GetMessage` 的『逐条队首重入 churn』。金标准的 657@800 是装置 artifact。**
+
+**修法方向（不实施，属装置侧）**：`RunMagicCase` 的 `DrainOnce` 应复刻生产 `GetMessage`（逐条：队首未到期 ⇒ 重入尾部 + 停），而非『排空+按序回填』。改后重出，golden 应变 @800/@900（与生产/Rust 一致）。**不在 Rust 改、不在比较器改。** 属 B17『装置对齐生产』的续（上一轮只对齐『遇未到期即停』、未对齐『逐条 churn』）。
+
+**still open**：改 DrainOnce 复刻 churn 后，需确认 49/32 已绿支不翻（churn 影响所有多延迟支）；opc-19 裁定。**本卡停在诊断。**
