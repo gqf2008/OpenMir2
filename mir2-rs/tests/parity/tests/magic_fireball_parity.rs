@@ -257,7 +257,13 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 // 900/1000），只判**批次类**（0 vs >0）；`640` 的 due（`DeliveryTime − t0`，
                 // `TickCount` 15.6ms 粒度）按 **|Δ|≤32ms** 容差判。**字段面不放松**：
                 // ident/recog/param/tag/series/tail 仍逐项进多重集键。
-                let poison_frames = gc["Fixture"].get("amulet_shape").is_some();
+                // **按魔号判定**（定义性，不看夹具形状）：6 = AMYOUNSUL、48 = GROUPAMYOUNSUL。
+                // 不用 `Fixture.amulet_shape` 存在性——那会让"将来别的 stem 加了护身符旋钮"
+                // 静默套上施毒的 due 语义（宽松口径静默扩散）。
+                let poison_frames = matches!(
+                    golden.get("magic_id").and_then(Value::as_i64),
+                    Some(6) | Some(48)
+                );
                 let due_key = |v: &Value| -> i64 {
                     if poison_frames {
                         if num(v, "ident") == 640 {
@@ -872,6 +878,21 @@ fn real_ledger_verify_labels_opts(
             ),
         "`frame_order_scope=multi_victim_same_tick` 只允许 fire 与施毒 4 支白名单；当前 stem={stem}"
     );
+    // **stem ↔ magic_id 静态一致性**（防「给 fire 加护身符旋钮就静默降级成批次类」）：
+    // 施毒 due 语义只由 `magic_id ∈ {6,48}` 触发，白名单里每个 stem 的魔号必须与定义一致。
+    if scope_marked {
+        let mid = golden["magic_id"].as_i64().unwrap_or(-1);
+        let ok = match stem {
+            "fire" => mid == 9,
+            "amyounsul" | "amyounsul2" => mid == 6,
+            "groupamyounsul" | "groupamyounsul2" => mid == 48,
+            _ => false,
+        };
+        assert!(
+            ok,
+            "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / amyounsul*=6 / groupamyounsul*=48"
+        );
+    }
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
@@ -1036,6 +1057,20 @@ fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
         "magic_id": 33,
         "cases": [{ "Label": label, "Fixture": fixture, "Rng": rng, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
     })
+}
+
+/// 施毒件合成夹具：`magic_id = 6`（定义性判定；`verify` 的施毒 due 语义按魔号触发）。
+fn synth_poison_golden(label: &str, rng: Value) -> Value {
+    let mut g = synth_golden(label, rng, Some("cover_drain"));
+    g["magic_id"] = Value::from(6);
+    g
+}
+
+/// 施毒件合成台账：`magic_id = 6`（与 [`synth_poison_golden`] 同源）。
+fn synth_poison_rust(label: &str, rng: Value) -> Value {
+    let mut r = synth_rust(label, rng, Some(serde_json::json!([])));
+    r["magic_id"] = Value::from(6);
+    r
 }
 
 fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
@@ -2688,18 +2723,14 @@ fn tooth_poison_late_due_tolerance() {
     let receivers =
         |frames: Vec<Value>| serde_json::json!([{ "Who": "target", "Rm": [], "Sent": frames }]);
     let mk_g = || {
-        let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+        let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
         g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
         g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
         g["cases"][0]["Receivers"] = receivers(vec![frame(657, 1000), frame(640, 1000)]);
         g
     };
     let mk_r = |tail_due: i64, chained_due: i64| {
-        let mut r = synth_rust(
-            label,
-            serde_json::json!([1, 2]),
-            Some(serde_json::json!([])),
-        );
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
         r["cases"][0]["Receivers"] = receivers(vec![frame(657, chained_due), frame(640, tail_due)]);
         r
     };
@@ -2825,16 +2856,12 @@ fn tooth_poison_657_series_compared_red() {
                        "series": v, "due_ms_rel": 1000, "tail": "" }],
         }])
     };
-    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
     g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
     g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
     g["cases"][0]["Receivers"] = receivers(series);
     let mk_r = |v: i64| {
-        let mut r = synth_rust(
-            label,
-            serde_json::json!([1, 2]),
-            Some(serde_json::json!([])),
-        );
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
         r["cases"][0]["Receivers"] = receivers(v);
         r
     };
@@ -2890,16 +2917,12 @@ fn tooth_poison_sysmessage_tail_compared_red() {
                        "series": 1, "due_ms_rel": 1000, "tail": t }],
         }])
     };
-    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
     g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
     g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
     g["cases"][0]["Receivers"] = receivers(&tail);
     let mk_r = |t: &str| {
-        let mut r = synth_rust(
-            label,
-            serde_json::json!([1, 2]),
-            Some(serde_json::json!([])),
-        );
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
         r["cases"][0]["Receivers"] = receivers(t);
         r
     };
