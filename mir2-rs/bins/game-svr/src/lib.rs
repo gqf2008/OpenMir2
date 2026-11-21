@@ -13525,6 +13525,32 @@ impl SpellFrameBuf {
         self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
     }
 
+    /// [`Self::push_broadcast_cached`] 的**显式坐标**版：收件人按 `(map_id, x, y)` 算
+    /// （`ref_msg_cache::targets_at`），对应 [`broadcast_ref_msg_with_self_at`] 的缓冲版。
+    ///
+    /// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
+    /// 收件人按**该步**的 `CurrX/CurrY` 计算，不是整段推挤后的最终坐标。
+    fn push_broadcast_cached_at(
+        &mut self,
+        world: &mir2_world_bevy::World,
+        online: &OnlineRegistry,
+        actor_id: i32,
+        include_self: bool,
+        at: (usize, i32, i32),
+        priority: u8,
+        body: &[u8],
+    ) {
+        let targets = ref_msg_cache::targets_at(
+            world,
+            actor_id,
+            at.0,
+            at.1,
+            at.2,
+            chat::send_ref_msg_range(),
+        );
+        self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
+    }
+
     /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
     fn push_actor(&mut self, online: &OnlineRegistry, actor_id: i32, priority: u8, body: Vec<u8>) {
         if let Some(t) = online.iter().find(|e| e.actor_id == actor_id) {
@@ -14514,6 +14540,13 @@ fn handle_spell_cmd_with_magic(
     // **`userMagic.Magic.Effect` 的来源**：本仓 `magic_table`（`magics::load_magics`，oracle
     // `MySqlDB.LoadMagicDB`）。表里无该魔号 ⇒ 造不出帧（oracle 侧等价于 `userMagic.Magic == null`，
     // 那会在 `:159` 直接 NPE ⇒ 现实中不可达）⇒ 降级为**不发帧**并记日志（保守方向，非 fail-open）。
+    // **8/37/21 的 per-recipient 队列缓冲（卡 magic-push-batch-impl）**：oracle 的
+    // `MsgQueue` 是**四叉最小堆**（`BaseObject.Message.cs:181`），先入的 `RM_SPELL(17)`
+    // 会改变后续同优先级帧的出队序——golden `firewind/s13` 的 target 侧
+    // `[17, 638, 9(103), 9(102)]` 与 caster 侧（不收 17）`[638, 9(102), 9(103)]`
+    // **是两种不同结果**。故 17 必须与效果体帧进**同一个**收件人队列：本缓冲在
+    // `:159` 处建、在效果体臂末尾 flush。其它魔号仍直发（`None`）。
+    let mut push_batch_buf: Option<SpellFrameBuf> = None;
     if default_arm && !magic::is_warr_skill(i32::from(req.magic_id)) {
         // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
         // **命中判定 = [`queryuser::cetin_near_xy`]**（见 [`spell_snap_target`]：逐格扫**本方图**
@@ -14538,7 +14571,21 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         req.magic_id,
                     );
-                    broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                    if matches!(
+                        req.magic_id,
+                        mir2_world_bevy::magic::SKILL_FIREWIND
+                            | mir2_world_bevy::magic::SKILL_ENERGYREPULSOR
+                            | mir2_world_bevy::magic::SKILL_SPACEMOVE
+                    ) {
+                        // `RM_SPELL(10008)` 的 `(byte)ident = 24`（最低）。入缓冲后由效果体臂
+                        // 末尾按每个收件人的四叉堆出队序统一 flush（见该臂的 RM 优先级注）。
+                        const P_SPELL: u8 = (mir2_protocol::messages::RM_SPELL & 0xFF) as u8;
+                        let mut buf = SpellFrameBuf::new();
+                        buf.push_broadcast_cached(world, online, actor_id, false, P_SPELL, &rm);
+                        push_batch_buf = Some(buf);
+                    } else {
+                        broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                    }
                     // **版本/魔号门**（`MagicManager.cs:167`，B1；设计件
                     // `tests/parity/m3/design-login-notice-and-clienttick-20261017.md` §3.2）：
                     // ```text
@@ -14578,6 +14625,11 @@ fn handle_spell_cmd_with_magic(
                             &mut deferred_health,
                             chat::send_ref_msg_range(),
                         );
+                        // 8/37/21：缓冲里的 `RM_SPELL(17)` 必须**先于** 639 发出
+                        // （oracle 队列里 17 的 ident=24 < 639 的 137，出队序即此）。
+                        if let Some(buf) = push_batch_buf.take() {
+                            buf.flush(online, gates);
+                        }
                         let fail = smframe_ext::sm_magicfire_fail(actor_id);
                         broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
                         send_good_tick(online, gates, chr_name);
@@ -15034,6 +15086,20 @@ fn handle_spell_cmd_with_magic(
                 };
                 let magic_level = matched.as_ref().map_or(0, |m| m.level);
                 // `boSpellFire`：8 保持 `true`（共享尾发帧）；21 在 case 内发帧后置 `false`。
+                // **oracle 的收件人队列是 `MsgQueue.Enqueue(msg, (byte)wIdent)` 优先队列**
+                // （`src/M2Server/Actor/BaseObject.Message.cs:181`）⇒ 同一收件人的 `638`/`9`（8/37）
+                // 或 `806`/`638`（21）按 `(byte)RM ident` 出队，**不等于**调用序。本支把两条都收进
+                // [`SpellFrameBuf`]（flush 时按每个收件人的 .NET 四叉堆出队序），末尾 flush。
+                // **排序键必须是 RM 的 `(byte)ident`，不是 SM 号**：SM 号会得到相反序
+                // （`638&0xFF=126` > `9&0xFF=9`，而 `RM_MAGICFIRE(10120)=136` < `RM_PUSH(8092)=156`；
+                // 21 同理 `RM_SPACEMOVE_FIRE2(8042)=106` < `RM_MAGICFIRE=136`）。
+                const P_MAGICFIRE: u8 = (mir2_protocol::messages::RM_MAGICFIRE & 0xFF) as u8;
+                const P_PUSH: u8 = (mir2_protocol::messages::RM_PUSH & 0xFF) as u8;
+                const P_SPACEMOVE_FIRE2: u8 =
+                    (mir2_protocol::messages::RM_SPACEMOVE_FIRE2 & 0xFF) as u8;
+                // 17 已在上方 `:159` 处进了同一个缓冲（`push_batch_buf`）；无 17 的路径
+                // （如魔号未学 ⇒ `default_arm=false`）按空缓冲起。
+                let mut spell_buf = push_batch_buf.take().unwrap_or_else(SpellFrameBuf::new);
                 let mut bo_spell_fire = true;
                 let bo_train: bool;
                 if req.magic_id == mir2_world_bevy::magic::SKILL_SPACEMOVE {
@@ -15047,7 +15113,14 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    spell_buf.push_broadcast_cached(
+                        world,
+                        online,
+                        actor_id,
+                        true,
+                        P_MAGICFIRE,
+                        &body,
+                    );
                     bo_spell_fire = false;
                     // `MapRandomMove(playObject.HomeMap, 1)`：`HomeMap` 是存档 `CharacterData.HomeMap`，
                     // 经注册表解析成 `map_id`（`None` = oracle `FindMap == null`）。
@@ -15073,7 +15146,16 @@ fn handle_spell_cmd_with_magic(
                                 mir2_protocol::messages::SM_SPACEMOVE_HIDE2,
                                 actor_id,
                             );
-                            broadcast_ref_msg_with_self(w, online, gates, actor_id, &[body]);
+                            // `RM_SPACEMOVE_FIRE2(8042)` 的 `(byte)ident=106` < `RM_MAGICFIRE=136`
+                            // ⇒ 同一收件人的队列出队序是 `806` 先于 `638`（golden 实测）。
+                            spell_buf.push_broadcast_cached(
+                                w,
+                                online,
+                                actor_id,
+                                true,
+                                P_SPACEMOVE_FIRE2,
+                                &body,
+                            );
                         },
                     );
                     // oracle `MagSaceMove` 的返回值 = `Random(11)` 门是否通过（与落地无关）。
@@ -15106,13 +15188,16 @@ fn handle_spell_cmd_with_magic(
                             // oracle `CharPushed` **每推进一格**立即 `SendRefMsg(RM_PUSH)` ⇒ 收件人
                             // 按该步坐标（`ev.x/ev.y`）算，而不是整段推挤后的最终坐标。
                             let map_id = world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
-                            broadcast_ref_msg_with_self_at(
+                            // `RM_PUSH(8092)` 的 `(byte)ident=156` > `RM_MAGICFIRE=136`
+                            // ⇒ 同一收件人的队列出队序是 `638` 先于逐格 `9`（golden 实测）。
+                            spell_buf.push_broadcast_cached_at(
                                 world,
                                 online,
-                                gates,
                                 ev.actor_id,
+                                true,
                                 (map_id, ev.x, ev.y),
-                                &[body],
+                                P_PUSH,
+                                &body,
                             );
                         }
                         // `CharPushed` 收尾把 `Dir` 置为 `nBackDir`（推进 > 0）=> 展示表同步。
@@ -15167,7 +15252,14 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         target_id.unwrap_or(0),
                     );
-                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                    spell_buf.push_broadcast_cached(
+                        world,
+                        online,
+                        actor_id,
+                        true,
+                        P_MAGICFIRE,
+                        &body,
+                    );
                 }
                 // `:659-669` 熟练度尾帧 `RM_MAGIC_LVEXP`：oracle 是 `SendSelfDelayMsg(…, 1000)`
                 // （升级支 `PlayObject.cs:5216` 的 800ms + 同 `(ident, MagicId)` 去重），不是立即发。
@@ -15181,6 +15273,8 @@ fn handle_spell_cmd_with_magic(
                         tail.train.level_up,
                     );
                 }
+                // 本支全部即时帧按每个收件人的 `MsgQueue` 四叉堆出队序发出（见上方 RM 优先级注）。
+                spell_buf.flush(online, gates);
                 let _ = tail.returned;
             }
         } else {
