@@ -2027,6 +2027,157 @@ fn real_rust_ledger_skeleton() {
     }
 }
 
+/// **`MG-42（41 SKILL_ANGEL）`**真实台账 → 判定面（两例 summon_ok / cap_hit）。
+///
+/// **SCOPE（stub + 生产数据缺失）**：`Angel` block（`regen_calls` / `slave_count_before/after` /
+/// `pre_slave_count` / `new_slaves{name,level,hp,max_hp,master_is_caster}` / `stub_*`）+
+/// 造怪前帧 41/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`
+/// （离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、`640`/`10123-p3`
+/// （训练尾，随造怪抽数不同）。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
+/// spawn 0 次（`regen_calls=0`）。
+/// **本夹具证明「给定怪物之后的 adopt 行为」，不证明生产可召唤**（生产 `monsters` 无 `精灵`
+/// 行 ⇒ `MakeSlave` 恒 null；卡 `openmir2-angel-summon-monster-missing`）。
+#[test]
+#[ignore = "需先跑 game-svr 两支驱动（tests::angel_parity_*）生成真实台账"]
+fn real_rust_ledger_angel() {
+    let dir = ledger_dir();
+    let golden = golden_file("angel.json");
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+    );
+
+    for label in ["summon_ok", "cap_hit"] {
+        let path = dir.join(format!("angel_{label}.json"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "防空转：缺真实台账 {}（{e}）。先跑 game-svr 驱动 tests::angel_parity_{label}",
+                path.display()
+            )
+        });
+        let side = path.with_extension("run.json");
+        let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+            panic!(
+                "[{label}] 台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到陈旧台账」",
+                side.display()
+            )
+        });
+        let side_v: Value = serde_json::from_str(&side_text).expect("run.json 必须合法 JSON");
+        assert_eq!(
+            side_v.get("run_id").and_then(Value::as_str),
+            Some(want.as_str()),
+            "[{label}] 台账陈旧：run_id 不匹配（当前={want}）；用同一 id 重跑驱动"
+        );
+        let v: Value = serde_json::from_str(&text).expect("台账必须合法 JSON");
+        let arr = v.as_array().expect("台账必须是 [case] 数组");
+        assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
+        let rust = &arr[0];
+        assert_eq!(
+            rust.get("Label").and_then(Value::as_str),
+            Some(label),
+            "[{label}] 台账 Label 不符"
+        );
+
+        let gcase = golden["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["Label"] == label)
+            .unwrap_or_else(|| panic!("金标准缺 {label} 支"));
+        let gskel = &gcase["Angel"];
+        let rskel = &rust["Angel"];
+
+        // ① cap_hit 三断（先验语义层：实体数 / slave_list / spawn 次数；各自独立断言）。
+        //    放在 block 标量之前 ⇒ ②③ 变异在语义层先红，不被标量差抢先。
+        if label == "cap_hit" {
+            let eb = rust["world_entities_before"].as_u64();
+            let ea = rust["world_entities_after"].as_u64();
+            assert_eq!(
+                ea, eb,
+                "[cap_hit 断①/实体数不增] 施法前后实体数变化：before={eb:?} after={ea:?}"
+            );
+            assert_eq!(
+                rskel["slave_count_after"], rskel["slave_count_before"],
+                "[cap_hit 断②/slave_list 不变] slave_count 变化：before={} after={}",
+                rskel["slave_count_before"], rskel["slave_count_after"]
+            );
+            assert_eq!(
+                rskel["new_slaves"].as_array().map_or(usize::MAX, Vec::len),
+                0,
+                "[cap_hit 断②/slave_list 不变] new_slaves 应为空"
+            );
+            assert_eq!(
+                rskel["regen_calls"].as_u64(),
+                Some(0),
+                "[cap_hit 断③/spawn 0 次] regen_calls 应为 0（门 Rejected）"
+            );
+        }
+
+        // ② Skeleton block 标量逐字段 + new_slaves（①的删半补牙落此层：new_slaves[].hp 实值）。
+        for key in [
+            "regen_calls",
+            "slave_count_before",
+            "slave_count_after",
+            "pre_slave_count",
+            "stub_wabil_hp",
+            "stub_abil_max_hp",
+            "stub_monster_race",
+        ] {
+            assert_eq!(rskel.get(key), gskel.get(key), "[{label}] Angel.{key} 不等");
+        }
+        // new_slaves 逐项。
+        let g_new = gskel["new_slaves"].as_array().unwrap();
+        let r_new = rskel["new_slaves"].as_array().unwrap();
+        assert_eq!(
+            r_new.len(),
+            g_new.len(),
+            "[{label}] new_slaves 条数不等：Rust {} vs golden {}",
+            r_new.len(),
+            g_new.len()
+        );
+        for (i, (g, r)) in g_new.iter().zip(r_new.iter()).enumerate() {
+            for key in ["name", "level", "hp", "max_hp", "master_is_caster"] {
+                assert_eq!(
+                    r.get(key),
+                    g.get(key),
+                    "[{label}] new_slaves[{i}].{key} 不等"
+                );
+            }
+        }
+
+        // ③ 造怪前帧 17/638/642（按 socket 多重集）。
+        let keep: &[i64] = &[17, 638, 642];
+        for who in ["caster", "target", "obs_in", "obs_out"] {
+            let g_sent = sent_filter(gcase, who, keep);
+            let r_sent = sent_filter(rust, who, keep);
+            assert_eq!(
+                r_sent, g_sent,
+                "[{label}] {who} 的 17/638/642 帧不一致：Rust {r_sent:?} vs golden {g_sent:?}"
+            );
+        }
+
+        // ④ 训练尾 640（本卡起自延迟 1000ms）：payload 实测**部分可比**——`(recog,param,series,due)`
+        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，卡 17 SCOPE：离线替身造怪 0 抽
+        // ⇒ RNG 流偏移）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
+        let g640 = frames_640_caster(gcase);
+        let r640 = frames_640_caster(rust);
+        let want640 = usize::from(label == "summon_ok");
+        assert_eq!(
+            r640.len(),
+            want640,
+            "[{label}] Rust 640 条数（自延迟后应在交付批）"
+        );
+        assert_eq!(g640.len(), want640, "[{label}] golden 640 条数");
+        assert_eq!(
+            r640, g640,
+            "[{label}] 640 (recog,param,series,due) 不一致：Rust {r640:?} vs golden {g640:?}"
+        );
+
+        eprintln!("[angel {label}] PASS");
+    }
+}
+
 /// 取某接收者 `Sent` 中 `ident ∈ keep` 的帧，按 `(ident,param,tag,series,tail)` 多重集排序。
 fn sent_filter(case: &Value, who: &str, keep: &[i64]) -> Vec<(i64, i64, i64, i64, String)> {
     let Some(recv) = case["Receivers"].as_array() else {
