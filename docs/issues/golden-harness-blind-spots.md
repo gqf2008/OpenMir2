@@ -34,7 +34,7 @@
 
 | B22 | **（2026-11-22 全量门复核修正）** 原判「oracle 不表达 per-frame 延迟量、装置给不出正确 `due`」**对部分路径成立**。committed **37/60 支有 `due_ms_rel`**（异构）；`(a)`「不 emit」前提错误已回滚（`d10de6523`）。回滚后 `rerun_magic_plane.sh` 实测（58 支、落 49）：**32 支一致＋`cloak`/`holyshield`/`unamyounsul` 与 Rust 同值；9 支路径特异分歧** —— A 型 harness 记 0（`CurrentDueMs` 在 one-shot/RunFireball 路径未设）：`fireball`/`fireball-5`/`firecharm`/`grouplightening`/`lightning-11`/`lightning-45`/`showhp`；B 型 recog 顺序互换＋due 800 vs 900：`bigcloak`/`groupdeding`（后者并触发比较器 640 减法溢出，另行修复）。**定论：B22 真实、待装置表示层重构；不得据此删字段或调断言**（9 支暂留旧 golden 无 due ⇒ 比较器不比 ⇒ 绿，不在缺口上盖新值）。详见下方 D=12 due 值表 | 延迟帧（31/53/共享尾）的逐帧定时对拍 | golden 无 due ⇒ 比较器不比（无逐帧覆盖）；**有 due 但错**同属 B22（A/B 型） | oracle 逐帧本有延迟量、比较器本可比 | **教训**：`due` 属比较面、不得当 T 剥离（曾致「57 支 Y=0」假绿）。**后续（正式批）**：表示层重构（`due` 沿链传播到下游帧）后再逐支落盘 |
 | B23 | **对拍的时间节拍是假设值（100ms 未核实）**：装置 `MagicGolden/Program.cs::DrainOnce` 的步进 `StepDrainMs=100` 与 Rust 驱动都用 100ms；生产 actor `Run()` 由 `RunTime=250` 门 + 玩家 `UserProcessor` 50ms 周期 / 怪物 `ProcessMonsters` 每趟 `Thread.Sleep(20)` 驱动 ⇒ **≈250–300ms**，且 `BaseObject` ctor `RunTick = GetTickCount() + RandomNumber.Random(1500)` ⇒ **怪物首跑时刻按实例随机**（`PlayObject` ctor 覆盖为当前 tick） | 任何"延迟 N ms 后在第几步处理 / 谁先谁后"的判据：自延迟消息、`due_ms_rel`、延迟帧顺序、`DrainPasses` 计数 | 装置与 Rust 用**同一个** 100ms 假设 ⇒ 两栈互相一致、**共同偏离生产**；golden 与台账同错 ⇒ 断言恒绿 | actor 每 ≈250–300ms 才泵一次队列；到 t=800ms 玩家只发生 ≈2–3 次 `Run()`（不是 8 次）；"未到期根把已到点项压到下一步"的奇偶取决于真实拍数 | "第几步/第几次 Run"语义、跨步排序、`DrainPasses` 真实值；怪物首相位随机 ⇒ 顺序不可当确定量。**依据**：`docs/issues/production-tick-cadence.md`；B 型 2 支分歧（`bigcloak`/`groupdeding`）是第一个显形处，**不是唯一** |
-| B24 | **跨 actor 处理顺序被当作生产事实（实际是驱动契约）**：生产里同线程按容器插入序，玩家/怪物/NPC/机器人跨 OS 线程**无全局序**，怪物→线程分配用 `M2Share.RandomNumber.Random`（底层 `new Random()` 时间种子）⇒ 启动随机（见 `docs/issues/production-tick-cadence.md` §9）；装置 `MagicGolden` 的 `byWho` 与 Rust 驱动却固定按 `caster→target→obs_in→obs_out` 遍历 | 任何"跨 actor 帧序 / 同一 tick 谁先谁后 / 消息落到谁的下一 tick"的判据 | 生产顺序不可复刻；装置把契约序当成生产序 ⇒ 比较器绿只证**契约一致**，不证生产一致 | 生产由线程调度 + 容器插入序决定，**没有确定答案** | 跨 actor 帧序、跨 actor 延迟消息落点、旁观者帧先后。**处置**：不追"生产的正确答案"，改为钉死驱动契约并让两侧都按契约（见下方 B24 操作要求） |
+| B24 | **跨 actor 处理顺序被当作生产事实（实际是驱动契约）**：生产里同线程按容器插入序，玩家/怪物/NPC/机器人跨 OS 线程**无全局序**，怪物→线程分配用 `M2Share.RandomNumber.Random`（底层 `new Random()` 时间种子）⇒ 启动随机（见 `docs/issues/production-tick-cadence.md` §9）；装置 `MagicGolden` 固定按 `caster→target→obs_in→obs_out`（`byWho`），Rust 实为 `SelfDelayQueue` **首入队序**（bigcloak 恰好吻合）；契约改为**首入队序**（装置待改） | 任何"跨 actor 帧序 / 同一 tick 谁先谁后 / 消息落到谁的下一 tick"的判据 | 生产顺序不可复刻；装置把契约序当成生产序 ⇒ 比较器绿只证**契约一致**，不证生产一致 | 生产由线程调度 + 容器插入序决定，**没有确定答案** | 跨 actor 帧序、跨 actor 延迟消息落点、旁观者帧先后。**处置**：不追"生产的正确答案"，改为钉死驱动契约并让两侧都按契约（见下方 B24 操作要求） |
 | B25 | **AOI 可见集不是纯几何**：`BaseObject.Message.cs::SendRefMsg` 用 500ms `VisibleHumanList` 缓存；重扫 `SendRefMsgRange`（缺省 12）与复用过滤 `|dx|<11`/`|dy|<11` **不一致**（11–12 格：重扫进、复用丢），缓存期内新进入/移动者不更新 | 11–12 格边界、500ms 内移动/新进入、AOI 边界对拍 | 两侧沿用同一段 oracle 代码 ⇒ **同错**；对拍轴无感（两边一致），realism 轴有偏（真实生产可见集与几何直觉不同） | 真实生产的收件人由缓存 + 边界口径决定，不是纯距离 | AOI 集合/顺序的真实性。**处置**：若做 AOI 边界对拍，先钉"缓存 500ms + 重扫 ±12 / 复用 <11"口径；跨图可见性未覆盖（装置只加载一张图，见 **B6**） |
 
 ### B22 · D=12 `due` 值表（golden 新值 vs Rust 台账，2026-11-22 全量门实测）
@@ -69,12 +69,12 @@
 
 **事实**：生产里"谁的下一 tick 处理"由**线程调度 + 容器插入序**决定——玩家 `PlayObjectList` 是登录完成序、怪物线程分配用 `Random()`（时间种子）、四类 actor 跨 OS 线程并发（`docs/issues/production-tick-cadence.md` §9）⇒ **不存在可复刻的"正确答案"**。
 
-**契约（两侧都按）**：`byWho` 序 `caster → target → obs_in → obs_out`（装置 `MagicGolden` 的 `byWho`/`DrainOnce` 与 Rust 驱动一致）。两侧比较仍然有效——它证的是"**同一契约下**行为一致"。
+**契约（两侧都按）= 首入队序**：跨 actor 处理序 = **首条自延迟消息入队序**（Rust `SelfDelayQueue.order`；caster 通常先入队，但**不保证**）。装置须按此复刻（当前装置 `MagicGolden` 仍固定 `byWho` 循环 caster→target→obs_in→obs_out，**待改**——见 B24 装置修法/harness-unverified-assumptions ③）。两侧比较仍有效——它证的是"**同一契约下**行为一致"。
 
 **`VisibleActors` 迭代序也进契约**：`target → obs_in → monsters[]`（= 装置 `UpdateVisibleGay` 的回填序；生产是 AOI 遇到序）。`MagPushArround` 按该表序对相邻目标逐个抽 `Random(20)` ⇒ **加相邻怪时必须沿用此序**，否则会变成"随机红"（当前 firewind/energyrepulsor 只有 target 相邻，故不显形）。
 
 **操作要求（判据，不是知识）**：
-- 凡 `scope`/卡面写"跨 actor 帧序 / 谁先谁后 / 消息落到谁的下一 tick"的结论，**必须带限定** `@byWho 驱动契约`（与 `@100ms 共享驱动` 并列）。
+- 凡 `scope`/卡面写"跨 actor 帧序 / 谁先谁后 / 消息落到谁的下一 tick"的结论，**必须带限定** `@首入队序 契约`（与 `@100ms 共享驱动` 并列）。
 - 未带限定**不得**读成"生产里也如此"；审卡按缺限定判红（补限定即可、不改结论）。
 - 该要求同时登入 `docs/issues/parity-assertion-selfcheck.md` 判据 10。
 
@@ -94,7 +94,7 @@
 - **夹具意图未物化（CasterSc/Mc 只写 WAbil 被 recalc 覆盖）** —— 落在 **B21**（暴露者 `9c9782a30`）。
 - **per-frame due（时间维度逐帧覆盖）** —— 归 **B22**（**真实**：9 支路径特异分歧，见上）；本轮落 49 支、9 支暂留旧 golden 无 due（不盖缺口）；表示层重构后再补。
 - **对拍的时间节拍是假设值（100ms vs 生产 ≈250–300ms + 怪物随机首相位）** —— 落在 **B23**（见 `docs/issues/production-tick-cadence.md`）；B 型 2 支分歧是第一个显形处，不是唯一。
-- **跨 actor 顺序被当成生产事实** —— 落在 **B24**：生产无全局序（线程调度 + 容器插入序 + 怪物线程随机分配），装置/Rust 固定 `byWho` 序是**驱动契约**；跨 actor 帧序类结论必须带 `@byWho 驱动契约`。
+- **跨 actor 顺序被当成生产事实** —— 落在 **B24**：生产无全局序（线程调度 + 容器插入序 + 怪物线程随机分配），装置/Rust 的**首入队序**（装置当前固定 byWho，待改）是**驱动契约**；跨 actor 帧序类结论必须带 `@首入队序 契约`。
 - **AOI 可见集不是纯几何（缓存 + ±12/<11 边界）** —— 落在 **B25**：两侧同码 ⇒ 同错（对拍轴无感、realism 轴有偏）；AOI 边界对拍前先钉口径；跨图未覆盖见 **B6**。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
@@ -136,7 +136,7 @@
 | B20 clone 家族 actor_id 非确定 | 本卡新立；`clone46` 已实证虚拟钟 3 次仍不稳；与 B19（墙钟源）互补：B19 解墙钟、actor-id 是非时钟独立源 |
 | B21 夹具意图未物化（CasterSc/Mc→Abil） | 本卡新立；`uenhancer` 15→0；暴露于 `9c9782a30`；修法=CasterSc/Mc 同步写 Abil.SC/MC（行为性，后续批） |
 | B23 时间节拍是假设值（100ms 未核实） | 本卡新立；生产 `RunTime=250` + 50/20ms 循环 + `Random(1500)` 首相位，见 `docs/issues/production-tick-cadence.md`；B 型 2 支分歧（`bigcloak`/`groupdeding`）为第一个显形处；改法由总控裁定前暂停 |
-| B24 跨 actor 顺序 = 驱动契约 | 本卡新立；生产无全局序（线程调度 + 容器插入序 + 怪物线程随机分配，见 `production-tick-cadence.md` §9）；装置/Rust 固定 `byWho` 序是契约；跨 actor 帧序 scope 需带 `@byWho 驱动契约`；B 型 2 支契约固定后重出，仍不齐才是真缺陷 |
+| B24 跨 actor 顺序 = 驱动契约 | 本卡新立；生产无全局序（线程调度 + 容器插入序 + 怪物线程随机分配，见 `production-tick-cadence.md` §9）；装置/Rust 按**首入队序**契约（装置当前固定 byWho，待改）；跨 actor 帧序 scope 需带 `@首入队序 契约`；B 型 2 支契约固定后重出，仍不齐才是真缺陷 |
 | B25 AOI 可见集不是纯几何（500ms 缓存 + ±12/<11 边界） | 本卡新立；两侧同码 ⇒ 同错（对拍轴无感、realism 轴有偏）；AOI 边界对拍前先钉口径；跨图见 B6 |
 
 ## 6. 关联
