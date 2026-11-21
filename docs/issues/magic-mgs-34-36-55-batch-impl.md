@@ -493,6 +493,8 @@ crazy `[17,638,656]`+640）、`Rng`（self 2 / adopt 7 / level 3 / else 3 / oute
 | D wParam 漏 ×1000 | 10000 | 10 | 比较器 `rm_makeholyseize[0].w_param 不等` + 推导式 `60005 w_param=10 ≠ 10000`（驱动绿） |
 
 四颗均 `cp` 还原 + sha 核对、`MUTATION` 标记 0，重跑七驱动 + 比较器复绿。
+**四颗全部是"驱动绿 + 比较器红"**（§2.7 的"仅比较器红"层）⇒ 本批判据**全部落在台账面**：
+`Rm` 多重集与 `Tamming` 块字段由**比较器独守**；驱动侧只带 `[17,638,642]` 类帧序与抽数断言。
 
 **零漂移**：master `aed1efdeb` 生成器 vs 本分支生成器，`spacemove`/`shield` 剔 `delivery`/`due_ms_rel`
 后仅多 `caster_name:null`/`slave_colors:null` 两个**新增 null 键**（允许项）；去掉后
