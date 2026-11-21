@@ -22399,6 +22399,38 @@ mod perf_counters {
     pub(crate) static INBOUND_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
     /// 本轮 `HostInbound` 排水墙钟（微秒；每 tick 覆盖写，不累加）。
     pub(crate) static INBOUND_WALL_US: AtomicU64 = AtomicU64::new(0);
+    /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
+    /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
+    pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static DRAINED_CLOSE: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static DRAINED_CONTROL: AtomicU64 = AtomicU64::new(0);
+    /// 本 tick 单条事件**处理**耗时的最大值（微秒；每 tick 取 max 后写行、清零）。
+    pub(crate) static SINGLE_EVENT_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+    /// 单条事件处理计时守卫：只在 ENABLED 时取时钟；`Drop` 时记入本 tick 的 max。
+    /// 放在 `while let Some(ev) = drain.next(..) { ... }` 的 body 首行 ⇒ 任何 `continue`
+    /// 也会在 drop 时结算。**不包 `next()` 之外的语义**，不改事件处理。
+    pub(crate) struct EventTimer(Option<std::time::Instant>);
+
+    impl EventTimer {
+        #[inline]
+        pub(crate) fn start() -> Self {
+            Self(
+                ENABLED
+                    .load(Ordering::Relaxed)
+                    .then(std::time::Instant::now),
+            )
+        }
+    }
+
+    impl Drop for EventTimer {
+        fn drop(&mut self) {
+            if let Some(t0) = self.0 {
+                let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+                SINGLE_EVENT_MAX_US.fetch_max(us, Ordering::Relaxed);
+            }
+        }
+    }
 
     static DATA_LINES: AtomicU64 = AtomicU64::new(0);
     static WRITER: Mutex<Option<std::fs::File>> = Mutex::new(None);
@@ -22425,13 +22457,25 @@ mod perf_counters {
         ENABLED.load(Ordering::Relaxed)
     }
 
-    /// 消费端计数：`from_carry` = 该条来自结转槽（不是本轮从通道新取的）。
+    /// 消费端计数：`from_carry` = 该条来自结转槽（不是本轮从通道新取的）；
+    /// 同时按 `GateEvent` 变体把 `drained` 拆成三类（只计数）。
     #[inline]
-    pub(crate) fn note_inbound_drained(from_carry: bool) {
+    pub(crate) fn note_inbound_drained(from_carry: bool, ev: &super::GateEvent) {
         if ENABLED.load(Ordering::Relaxed) {
             INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
             if from_carry {
                 INBOUND_CARRY.fetch_add(1, Ordering::Relaxed);
+            }
+            match ev {
+                super::GateEvent::Command { .. } => {
+                    DRAINED_COMMAND.fetch_add(1, Ordering::Relaxed);
+                }
+                super::GateEvent::Closed { .. } | super::GateEvent::CertificationPending { .. } => {
+                    DRAINED_CLOSE.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {
+                    DRAINED_CONTROL.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -22448,7 +22492,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -22490,25 +22534,19 @@ mod perf_counters {
             INBOUND_CARRY.swap(0, Ordering::Relaxed),
             INBOUND_BUDGET_HIT.swap(0, Ordering::Relaxed),
             INBOUND_WALL_US.swap(0, Ordering::Relaxed),
+            DRAINED_COMMAND.swap(0, Ordering::Relaxed),
+            DRAINED_CLOSE.swap(0, Ordering::Relaxed),
+            DRAINED_CONTROL.swap(0, Ordering::Relaxed),
+            SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
             let line = format!(
-                "{tick}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                vals[0],
-                vals[1],
-                vals[2],
-                vals[3],
-                vals[4],
-                vals[5],
-                vals[6],
-                vals[7],
-                vals[8],
-                vals[9],
-                vals[10],
-                vals[11],
-                vals[12],
-                vals[13]
+                "{tick}\t{}\n",
+                vals.iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\t")
             );
             let _ = f.write_all(line.as_bytes());
         }
@@ -22551,6 +22589,10 @@ mod perf_counters {
             &INBOUND_CARRY,
             &INBOUND_BUDGET_HIT,
             &INBOUND_WALL_US,
+            &DRAINED_COMMAND,
+            &DRAINED_CLOSE,
+            &DRAINED_CONTROL,
+            &SINGLE_EVENT_MAX_US,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -28766,13 +28808,13 @@ impl EventDrain {
         // 优先通道的结转先消耗（否则「控制事件先取」会被一条普通结转破坏）。
         if let Some(ev) = priority_carry.take() {
             self.processed += 1;
-            perf_counters::note_inbound_drained(true);
+            perf_counters::note_inbound_drained(true, &ev);
             return Some(ev);
         }
         // 结转：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
         if let Some(ev) = carry.take() {
             self.processed += 1;
-            perf_counters::note_inbound_drained(true);
+            perf_counters::note_inbound_drained(true, &ev);
             return Some(ev);
         }
         if self.processed >= self.budget.max_events
@@ -28801,7 +28843,7 @@ impl EventDrain {
                 telemetry::record_drain_event_drained();
                 self.processed += 1;
                 self.priority_used += 1;
-                perf_counters::note_inbound_drained(false);
+                perf_counters::note_inbound_drained(false, &ev);
                 return Some(ev);
             }
         }
@@ -28809,7 +28851,7 @@ impl EventDrain {
             Ok(ev) => {
                 telemetry::record_drain_event_drained();
                 self.processed += 1;
-                perf_counters::note_inbound_drained(false);
+                perf_counters::note_inbound_drained(false, &ev);
                 Some(ev)
             }
             Err(_) => None,
@@ -30359,6 +30401,8 @@ fn sim_loop(
         let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
         while let Some(ev) = drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
         {
+            // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
+            let _event_timer = perf_counters::EventTimer::start();
             match ev {
                 GateEvent::Opened { index, ip } => {
                     if world_start.is_aborted() {
