@@ -76993,6 +76993,85 @@ SendRefMsgRange=15
         fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
     }
 
+    // ---------------------------------------------------------------------------------
+    // B16 Arm A（非零值魔表对照臂）：三支新 stem 的驱动（五字段由 `fireball_parity_drive`
+    // 从 golden 读并覆盖魔表；`-nonzero` 支 fail-closed 必填）。
+    // ---------------------------------------------------------------------------------
+    fn fireball_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("fireball-nonzero", label);
+        fireball_parity_drive("fireball-nonzero", 1, 1, label, seed, base);
+        fireball_case_assert("fireball-nonzero", label);
+        golden_drain_not_capped("fireball-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_miss() {
+        fireball_nonzero_assert("miss", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_edge() {
+        fireball_nonzero_assert("edge", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_nonzero_parity_hit() {
+        fireball_nonzero_assert("hit", 3000);
+    }
+
+    fn lightning11_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("lightning11-nonzero", label);
+        fireball_parity_drive("lightning11-nonzero", 11, 1, label, seed, base);
+        fireball_case_assert("lightning11-nonzero", label);
+        golden_drain_not_capped("lightning11-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_miss() {
+        lightning11_nonzero_assert("miss", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_edge() {
+        lightning11_nonzero_assert("edge", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_nonzero_parity_hit() {
+        lightning11_nonzero_assert("hit", 3000);
+    }
+
+    fn lightflower_nonzero_assert(label: &str, base: i32) {
+        let seed = golden_seed("lightflower-nonzero", label);
+        fireball_parity_drive("lightflower-nonzero", 24, 1, label, seed, base);
+        fireball_case_assert("lightflower-nonzero", label);
+        golden_drain_not_capped("lightflower-nonzero", label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s1() {
+        lightflower_nonzero_assert("s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s5() {
+        lightflower_nonzero_assert("s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_nonzero_parity_s13() {
+        lightflower_nonzero_assert("s13", 3000);
+    }
+
     /// **MG-47（35 `SKILL_WINDTEBO`）**驱动：`GetPoseCreate` 取**前格** target ⇒ `CharPushed`
     /// 逐格 `SM_BACKSTEP(9)`。**退化守卫**：golden 与 Rust 台账都必须 ≥1 条 `9`（零条 ⇒
     /// 效果体零次执行，具名红；同款教训见 `openmir2-groupamyounsul-nondegenerate-golden`）。
