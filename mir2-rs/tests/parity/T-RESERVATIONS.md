@@ -319,3 +319,13 @@
 | T-282 | openmir2-gateway-frame-criticality-queue | 2026-11-15T02:27:41Z | 在用 |
 | T-285 | openmir2-parity-gap-magic-windtebo | 2026-11-19T15:35:10Z | 已落地 |
 | T-286 | openmir2-parity-gap-magic-groupdeding | 2026-11-19T15:35:21Z | 已落地 |
+| T-287 | openmir2-visiblehumanlist-cache | 2026-11-21T04:40:01Z | 已落地 |
+| T-288 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-289 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-290 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-291 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-292 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-293 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-294 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
+| T-295 | openmir2-tick-frame-priority-queue | 2026-11-21T04:40:01Z | 已落地 |
+| T-296 | openmir2-tick-frame-priority-queue | 2026-11-21T04:40:01Z | 已落地 |
