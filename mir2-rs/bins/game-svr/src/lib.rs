@@ -69330,13 +69330,31 @@ SendRefMsgRange=15
         );
         // 图身份：golden 的 `Fixture.map_file_size`（缺键同样 panic —— 不能落成 0 静默通过）
         let g = golden_case_for(stem, label);
-        let want_size = g["Fixture"]["map_file_size"]
-            .as_i64()
-            .unwrap_or_else(|| panic!("[{stem}/{label}] golden 缺 Fixture.map_file_size，先重出 golden"));
-        let got_size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(-1);
+        let want_size = g["Fixture"]["map_file_size"].as_i64().unwrap_or_else(|| {
+            panic!("[{stem}/{label}] golden 缺 Fixture.map_file_size，先重出 golden")
+        });
+        let got_size = std::fs::metadata(&path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(-1);
         assert_eq!(
-            got_size, want_size,
+            got_size,
+            want_size,
             "[{stem}/{label}] MAP_SIZE_MISMATCH golden={want_size} 磁盘={got_size}（{}）",
+            path.display()
+        );
+        // 光比 size 抓不到"同尺寸换了一张图" ⇒ 必须比内容摘要。
+        let want_sha = g["Fixture"]["map_file_sha256"].as_str().unwrap_or_else(|| {
+            panic!("[{stem}/{label}] golden 缺 Fixture.map_file_sha256，先重出 golden")
+        });
+        let bytes_map = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("[{stem}/{label}] 读 0.map 失败: {e}（{}）", path.display())
+        });
+        use sha2::Digest;
+        let got_sha = format!("{:x}", sha2::Sha256::digest(&bytes_map));
+        assert_eq!(
+            got_sha,
+            want_sha,
+            "[{stem}/{label}] MAP_SHA_MISMATCH golden={want_sha} 磁盘={got_sha}（{}）",
             path.display()
         );
         let loader = mir2_envir::MapLoader::new(&dir, "", "");
@@ -69357,6 +69375,21 @@ SendRefMsgRange=15
             "[{stem}/{label}] 可走格直方图不一致（grid={} file={}）",
             grid.walk_count(),
             mf.walk_count()
+        );
+        // 只比 walk 抓不到"高墙↔低墙互换"（写入数同、walk 数也同）⇒ 另两档也核。
+        assert_eq!(
+            grid.high_wall_count(),
+            mf.high_count(),
+            "[{stem}/{label}] 高墙直方图不一致（grid={} file={}）",
+            grid.high_wall_count(),
+            mf.high_count()
+        );
+        assert_eq!(
+            grid.low_wall_count(),
+            mf.low_count(),
+            "[{stem}/{label}] 低墙直方图不一致（grid={} file={}）",
+            grid.low_wall_count(),
+            mf.low_count()
         );
         let registry = mir2_envir::MapRegistry::from_entries(
             mir2_envir::MapLoader::new(&dir, "", ""),
@@ -69573,6 +69606,13 @@ SendRefMsgRange=15
             );
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            // **默认必须仍是"空注册表"而不是 `None`**：魔号 17 等支按 `registry.is_some()` 分流
+            // （"无地图注册表 ⇒ 效果体不接"），把默认从 `Some(empty)` 改成 `None` 会改变这些既有行为。
+            let fallback = mir2_envir::MapRegistry::from_entries(
+                mir2_envir::MapLoader::new(".", "map", "envir"),
+                Vec::new(),
+            );
+            let registry = self.registry.as_ref().unwrap_or(&fallback);
             handle_spell_cmd(
                 game_svr::feature::make_long(
                     u16::try_from(click.0).unwrap_or(0),
@@ -69591,7 +69631,7 @@ SendRefMsgRange=15
                 &self.magic_table,
                 &pet_cfg,
                 8,
-                self.registry.as_ref(),
+                Some(registry),
                 &table,
                 &mut self.displays,
                 &self.gates,
@@ -74750,12 +74790,12 @@ SendRefMsgRange=15
     /// 两侧都断：golden 侧防夹具退化，台账侧防实现零执行。**不用 `.unwrap()` 取数组**——字段缺失
     /// 会计数 0 并红在本断言上，而不是 `Option::unwrap` 的裸 panic。
     fn assert_effect_frames_non_degenerate(stem: &str, label: &str, effect_ident: u16) {
-        let arr = |v: &serde_json::Value, k: &str| -> &[serde_json::Value] {
+        fn arr<'a>(v: &'a serde_json::Value, k: &str) -> &'a [serde_json::Value] {
             v.get(k)
                 .and_then(|x| x.as_array())
                 .map(|a| a.as_slice())
                 .unwrap_or(&[])
-        };
+        }
         let count = |v: &serde_json::Value| -> usize {
             arr(v, "Receivers")
                 .iter()
@@ -74783,9 +74823,7 @@ SendRefMsgRange=15
                 .and_then(|x| x.as_array())
                 .map(|a| {
                     a.iter()
-                        .filter_map(|r| {
-                            r.get("Who").and_then(|w| w.as_str()).map(str::to_string)
-                        })
+                        .filter_map(|r| r.get("Who").and_then(|w| w.as_str()).map(str::to_string))
                         .collect()
                 })
                 .unwrap_or_default()

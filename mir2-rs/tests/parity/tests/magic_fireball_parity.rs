@@ -1509,7 +1509,11 @@ fn real_rust_ledger_groupamyounsul() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::firewind_parity_s*）生成真实台账"]
 fn real_rust_ledger_firewind() {
-    real_ledger_verify_labels("firewind", &golden_file("firewind.json"), &["s1", "s5", "s13"]);
+    real_ledger_verify_labels(
+        "firewind",
+        &golden_file("firewind.json"),
+        &["s1", "s5", "s13"],
+    );
 }
 
 /// **`MG-57` 气功波(37)**：与 8 在 oracle 里函数体逐字相同（同 `MagPushArround`）。
@@ -1520,9 +1524,15 @@ fn real_rust_ledger_firewind() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::spacemove_parity_s*）生成真实台账"]
 fn real_rust_ledger_spacemove() {
-    real_ledger_verify_labels("spacemove", &golden_file("spacemove.json"), &["s1", "s5", "s13"]);
+    real_ledger_verify_labels(
+        "spacemove",
+        &golden_file("spacemove.json"),
+        &["s1", "s5", "s13"],
+    );
 }
 
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::energyrepulsor_parity_s*）生成真实台账"]
 fn real_rust_ledger_energyrepulsor() {
     real_ledger_verify_labels(
         "energyrepulsor",
