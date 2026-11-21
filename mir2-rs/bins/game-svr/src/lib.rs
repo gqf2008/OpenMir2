@@ -48780,15 +48780,16 @@ break
     /// **判据 e（正常运行时零额外调用）**：没有关服请求 ⇒ 周期存档按原计时触发/不触发，
     /// 关服路径的代码只有 sim 循环里那一次 `try_recv`（不是存档调用）。
     ///
-    /// 这里用源码锚点钉住「关服存档只在 `shutdown_rx.try_recv()` 支内调用」——把调用挪到
-    /// tick 正常路径（或删掉守卫）⇒ 必红。
+    /// 这里用源码锚点钉住「关服存档只在关服守卫支内调用」——把调用挪到 tick 正常路径
+    /// （或删掉守卫）⇒ 必红。**P2-3b**：守卫从裸 `shutdown_rx.try_recv()` 改成统一的
+    /// `shutdown.requested()`（N=1 时它就是 `try_recv().is_ok()`；N>1 时是共享旗标）。
     #[test]
     fn shutdown_save_is_only_reachable_from_shutdown_branch() {
         let src = include_str!("lib.rs");
         let lines: Vec<&str> = src.lines().collect();
         let guard = lines
             .iter()
-            .position(|l| l.trim() == "if shutdown_rx.try_recv().is_ok() {")
+            .position(|l| l.trim() == "if shutdown.requested() {")
             .expect("sim 循环里的关服守卫行");
         let call = lines
             .iter()
@@ -48796,7 +48797,7 @@ break
             .expect("关服存档调用行");
         assert!(
             call > guard,
-            "关服存档调用必须在 `shutdown_rx.try_recv()` 守卫支内"
+            "关服存档调用必须在 `shutdown.requested()` 守卫支内"
         );
         // 生产代码里 `shutdown_save_all(` 的**调用**（非定义/注释）只此一处；
         // 扫描范围截止 `mod tests {`（用例自身也调用它，不能计入生产面）。
@@ -115563,10 +115564,58 @@ mod tick_starvation {
             "生产排水必须经过预算器且同时取两条通道（唯一一处：{head}）"
         );
         let begin = format!("{}(EventDrainBudget::PRODUCTION)", "EventDrain::begin");
+        // **P2-3b：期望集合，不是计数**。生产面恰好两处，且身份由「位置 + 配对的结转变量」钉死：
+        //   ① 事件路由线程（在 `run_inner`，**早于** `fn sim_loop(`；配对 `&mut carry/&mut ctl_carry`）
+        //      —— N>1 时把单输入通道搬进每片，必须复用同一预算/反饥饿语义，否则两级队列会饿死；
+        //   ② sim 循环头（在 `fn sim_loop(` **之内**；配对 `&mut event_carry/&mut event_carry_ctl`）。
+        // 第三处 / 两处挪位 / 交叉借用对方的结转变量名 ⇒ 全部红。**不允许**只把数字调大：
+        // 新增预算排水是架构变更（新的分发层），必须显式改成本用例的期望集合并说明理由。
+        let mut begin_at = Vec::new();
+        let mut from = 0usize;
+        while let Some(rel) = prod[from..].find(&begin) {
+            begin_at.push(from + rel);
+            from += rel + begin.len();
+        }
         assert_eq!(
-            prod.matches(&begin).count(),
-            1,
-            "生产预算必须每轮重新起算（唯一一处）"
+            begin_at.len(),
+            2,
+            "生产预算排水必须恰为期望集合两处（sim 头 + 路由线程），实得 {}",
+            begin_at.len()
+        );
+        let sim_loop_at = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
+        assert!(
+            begin_at[0] < sim_loop_at,
+            "第 1 处必须在 fn sim_loop 之前（事件路由线程）"
+        );
+        assert!(
+            begin_at[1] > sim_loop_at,
+            "第 2 处必须在 fn sim_loop 之内（sim 循环头）"
+        );
+        let router_pair = format!(
+            "{}.next(&ev_rx, &ev_ctl_rx, &mut carry, &mut ctl_carry)",
+            "drain"
+        );
+        let sim_pair = format!(
+            "{}.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)",
+            "drain"
+        );
+        let router_blk = &prod[begin_at[0]..(begin_at[0] + 512).min(prod.len())];
+        let sim_blk = &prod[begin_at[1]..(begin_at[1] + 512).min(prod.len())];
+        assert!(
+            router_blk.contains(&router_pair),
+            "路由线程的预算器必须配自己的结转槽：{router_pair}"
+        );
+        assert!(
+            sim_blk.contains(&sim_pair),
+            "sim 循环头的预算器必须配 event_carry/event_carry_ctl：{sim_pair}"
+        );
+        assert!(
+            !sim_blk.contains(&router_pair),
+            "sim 头不得借用路由线程的结转变量名（防两处被合并/挪位后仍绿）"
+        );
+        assert!(
+            !router_blk.contains(&sim_pair),
+            "路由线程不得借用 sim 头的结转变量名（防两处被合并/挪位后仍绿）"
         );
     }
 }
