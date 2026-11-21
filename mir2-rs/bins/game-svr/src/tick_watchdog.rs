@@ -15,7 +15,7 @@
 //! 因此「检测 + 触发路径」都能在测试里红检，而不必真的杀测试进程。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::zone::ZoneId;
@@ -279,29 +279,37 @@ impl TickWatchdog {
     }
 }
 
-/// **N>1** 的生产看门狗组：心跳表 + 共用时钟 + 看门狗线程。
+/// **N>1** 的生产看门狗组：心跳表 + 共用时钟 + **按需 arm** 的看门狗线程。
 ///
-/// N=1 时**不建线程**（[`Self::watchdog_started`] == false）：单区走原单线程路径，区驱动
+/// N=1 时**永不 arm**（[`Self::watchdog_started`] == false）：单区走原单线程路径，区驱动
 /// 零参与（与 `region_loop::ZoneDriverPlan::SingleThread` 是同一决定的两半）。
 ///
-/// 接线（段 6）：每区 `run_zone_tick(.., Some((watch.heartbeats(), watch.now_ms())))`；
-/// 任区 phase2 卡死 ⇒ 心跳停滞 ⇒ 线程 abort 整机（既有「任一片失败整机 Abort」语义）。
+/// **为什么惰性 arm**：地图/ctor/MonGen 装载常超阈值（缺省 5s）。若建表即起线程，
+/// 装载期"没有 tick"会被判成卡死 ⇒ 健康进程被启动期 abort。接线（段 6）由区 0 在
+/// **第一轮 barrier2 之后**调 [`Self::arm`]；之后任区 phase2 卡死 ⇒ 心跳停滞 ⇒ 线程
+/// abort 整机（既有「任一片失败整机 Abort」语义）。关服时 [`Self::disarm`] 让线程退出，
+/// 避免存档期被误 abort。
 pub struct ZoneWatch {
+    zone_count: usize,
+    threshold_ms: u64,
+    aborter: Option<Arc<dyn Fn() + Send + Sync>>,
+    stop: Arc<AtomicBool>,
     heartbeats: Arc<ZoneHeartbeats>,
     clock: WatchdogClock,
-    thread: Option<std::thread::JoinHandle<()>>,
+    /// arm 之后才有线程。
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for ZoneWatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ZoneWatch")
-            .field("watchdog_started", &self.thread.is_some())
+            .field("watchdog_started", &self.watchdog_started())
             .finish()
     }
 }
 
 impl ZoneWatch {
-    /// 生产构造：跨阈值 ⇒ `process::abort`；N=1 ⇒ 无线程。
+    /// 生产构造：跨阈值 ⇒ `process::abort`；N=1 ⇒ 永不 arm。
     #[must_use]
     pub fn start(zone_count: usize, threshold_ms: u64) -> Self {
         Self::start_with(
@@ -314,7 +322,7 @@ impl ZoneWatch {
 
     /// 可注入构造：`aborter = None` ⇒ 生产 `process::abort`；`stop` 置真即退出线程。
     ///
-    /// **N=1 不启动看门狗**：没有区线程可卡，也不该让单区路径有 abort 源。
+    /// **N=1 永不 arm**：没有区线程可卡，也不该让单区路径有 abort 源。
     #[must_use]
     pub fn start_with(
         zone_count: usize,
@@ -324,24 +332,56 @@ impl ZoneWatch {
     ) -> Self {
         let clock = WatchdogClock::start();
         let heartbeats = Arc::new(ZoneHeartbeats::new(zone_count, clock.now_ms()));
-        let thread = (zone_count > 1).then(|| {
-            let watchdog = match aborter {
-                Some(a) => TickWatchdog::with_aborter(Arc::clone(&heartbeats), threshold_ms, a),
-                None => TickWatchdog::new(Arc::clone(&heartbeats), threshold_ms),
-            };
-            watchdog.spawn_stoppable((threshold_ms / 4).max(1), clock, stop)
-        });
         Self {
+            zone_count,
+            threshold_ms,
+            aborter,
+            stop,
             heartbeats,
             clock,
-            thread,
+            thread: Mutex::new(None),
         }
     }
 
-    /// 看门狗线程是否启动（N=1 ⇒ `false`）。
+    /// 启动看门狗线程（**幂等**；N=1 ⇒ 恒 `false`）。
+    ///
+    /// 由区 0 在**第一轮 barrier2 之后**调用（装载期不跑，见类型文档）。
+    pub fn arm(&self) -> bool {
+        if self.zone_count <= 1 {
+            return false;
+        }
+        let mut slot = self.thread.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_some() {
+            return true;
+        }
+        let watchdog = match self.aborter.as_ref() {
+            Some(a) => TickWatchdog::with_aborter(
+                Arc::clone(&self.heartbeats),
+                self.threshold_ms,
+                Arc::clone(a),
+            ),
+            None => TickWatchdog::new(Arc::clone(&self.heartbeats), self.threshold_ms),
+        };
+        *slot = Some(watchdog.spawn_stoppable(
+            (self.threshold_ms / 4).max(1),
+            self.clock,
+            Arc::clone(&self.stop),
+        ));
+        true
+    }
+
+    /// 关服/退出：让看门狗线程自行结束（不得在存档期 abort）。
+    pub fn disarm(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// 看门狗线程是否启动（arm 之后且 N>1 ⇒ `true`）。
     #[must_use]
     pub fn watchdog_started(&self) -> bool {
-        self.thread.is_some()
+        self.thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// 心跳表（区线程 beat / 段 6 传给 `run_zone_tick`）。
@@ -380,10 +420,12 @@ impl ZoneWatch {
             .stalled(zone, self.clock.now_ms(), threshold_ms)
     }
 
-    /// 取走线程句柄（测试 join 用；N=1 ⇒ `None`）。
+    /// 取走线程句柄（测试 join 用；未 arm ⇒ `None`）。
     #[must_use]
     pub fn into_thread(self) -> Option<std::thread::JoinHandle<()>> {
         self.thread
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -476,13 +518,14 @@ mod tests {
         }
     }
 
-    /// **接线牙**：N=1 不启动看门狗线程；N>1 启动，且 beat 后区不判卡死。
+    /// **接线牙**：N=1 永不 arm；N>1 **arm 之前不建线程、arm 之后启动**；beat 后区不判卡死。
     ///
-    /// 红检：把 `start_with` 的 `zone_count > 1` 改成 `zone_count > 0` ⇒ N=1 断言红；
-    /// 删掉 `ZoneWatch::beat` 的 `completed` ⇒ `stalled` 断言红。
+    /// 红检：把 `arm` 的 `zone_count <= 1` 判断删掉 ⇒ N=1 断言红；让 `arm` 不 spawn ⇒
+    /// `watchdog_started` 断言红；删掉 `beat` 的 `completed` ⇒ `stalled` 断言红。
     #[test]
     fn zone_watch_starts_only_for_multi_zone_and_beats_advance() {
         let single = ZoneWatch::start(1, 60_000);
+        assert!(!single.arm(), "N=1 永不 arm");
         assert!(
             !single.watchdog_started(),
             "N=1 走原单线程路径 ⇒ 不建看门狗线程"
@@ -500,17 +543,23 @@ mod tests {
             })),
             Arc::clone(&stop),
         );
-        assert!(multi.watchdog_started(), "N>1 必须启动看门狗线程");
+        assert!(
+            !multi.watchdog_started(),
+            "arm 之前不得建线程（装载期不能误 abort）"
+        );
+        assert!(multi.arm(), "N>1 arm 成功");
+        assert!(multi.arm(), "arm 幂等");
+        assert!(multi.watchdog_started(), "arm 之后必须有看门狗线程");
         multi.beat(ZoneId::new(0));
         multi.beat(ZoneId::new(1));
         assert!(!multi.stalled(ZoneId::new(0), 60_000));
         assert!(!multi.stalled(ZoneId::new(1), 60_000));
-        stop.store(true, Ordering::SeqCst);
+        multi.disarm();
         multi
             .into_thread()
             .expect("N>1 有线程")
             .join()
-            .expect("看门狗线程按 stop 退出");
+            .expect("看门狗线程按 disarm 退出");
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,

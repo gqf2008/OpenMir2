@@ -445,6 +445,15 @@ impl RegionLayout {
         }
     }
 
+    /// 全部 span（`WholeHost` ⇒ 空切片）。L2-4 段 6 的区驱动按区取自己的 span。
+    #[must_use]
+    pub fn zone_spans(&self) -> &[ZoneSpan] {
+        match &self.kind {
+            LayoutKind::WholeHost => &[],
+            LayoutKind::Spans(spans) => spans,
+        }
+    }
+
     /// 某区是否拥有该坐标（`zone_of == Some(zone)`）。
     #[must_use]
     pub fn owns(&self, zone: ZoneId, map_id: usize, x: i32, y: i32) -> bool {

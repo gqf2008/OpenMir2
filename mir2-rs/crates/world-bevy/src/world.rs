@@ -8729,7 +8729,7 @@ impl World {
     /// **两阶段 tick 的接缝**：phase1 结束于此。所有写位置/属性/HP 的模拟段都已跑完 ⇒
     /// 此时取的区边界快照就是**本 tick 终态**，phase2 的 AOI 不会读到上一 tick 的旧值。
     /// （陈旧镜像牙见 `bins/game-svr/tests/l2_two_zone.rs`。）
-    fn tick_tail_before_aoi(&mut self, record: &mut TickRecord) {
+    pub fn tick_tail_before_aoi(&mut self, record: &mut TickRecord) {
         let current = std::thread::current().id();
         match self.owner_thread {
             None => self.owner_thread = Some(current),
