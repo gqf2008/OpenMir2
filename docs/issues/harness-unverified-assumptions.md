@@ -11,8 +11,8 @@
 | # | 假设内容 | 轴 | 装置怎么做 | 生产实际是什么 | 已核实? | 影响哪些判据 |
 |---|---|---|---|---|---|---|
 | ① | tick 节拍 | realism | 100ms 步进（`StepDrainMs` 共享驱动） | 待 89 指定数值/是否可变；**B23 契约=保留 100ms 共享驱动**，时间类结论须带 `@100ms 共享驱动` 限定 | 契约化（B23） | 所有多延迟 stem 的时序 / `due` |
-| ② | 初始相位 `Random(1500)` | 对拍+realism | cast 前抽 `Random(1500)` 定初相 | 未核 | **否** | RNG 流 / `due` 初相 |
-| ③ | 跨 actor 处理顺序 | 对拍 | `byWho` = caster→target→obs_in→obs_out | 待验（B24 落地检查：Rust 实际处理序是否同此序） | 契约化（B24） | 帧序 / 跨 actor 交付时序 |
+| ② | 初始相位 `Random(1500)` | 对拍+realism | cast 前抽 `Random(1500)` 定初相 | **`RunTick = GetTickCount() + RandomNumber.Random(1500)`（`BaseObject.cs`，opc-19 亲核，属 B23）** | **已锚定（B23 内）** | RNG 流 / `due` 初相 |
+| ③ | 跨 actor 处理顺序 | 对拍 | 当前固定 `byWho`（caster→target→obs_in→obs_out），**待改** | Rust = `SelfDelayQueue.order` **首入队序**（非 byWho；bigcloak/groupdeding 恰好 caster 先、吻合） | **契约改「首入队序」（B24）**；装置待改 | 帧序 / 跨 actor 交付时序 |
 | ④ | 堆 arity | 对拍 | .NET `PriorityQueue` = **4-ary** | 同 .NET = 4-ary；Rust `SelfDelayQueue` 是其 **4-ary 忠实镜像** | **是（已排除）** | 帧序（**排除了**）；覆盖：13 种 prio / len 2–30 / 300k 随机 + 8 手选 / 88% tie / 63% 混 255+非255；4-ary 镜像 vs native **0/300k** 分歧，binary 镜像 **78%** 分歧 |
 | ⑤ | RNG 流（次数/上界/序/值） | 对拍 | `RngSeam` 记录 .NET `System.Random` | 生产=`System.Random`(Knuth)；Rust 复算同一 .NET Knuth | **是（已排除）** | Rng 判据（**排除了**）；覆盖：fireball/amyounsul/groupdeding 共 11 case，`Rng+DeliverRng` 拼接**逐值一致** |
 | ⑥ | `due` 基准 tick | realism（差在装置↔生产；对拍无影响） | 统一 `castTick`(DoSpell 前) + 虚拟钟（DoSpell 不 Advance⇒ε=0 理想化） | 每 msg 自 `GetTickCount()`，**16ms 粒度** | **是（已在容差内）** | `due`；实测粒度 16ms，差 ≤16ms ＜ 640 的 ±32ms 容差；装置↔Rust 都理想化 ⇒ 对拍**不受影响** |
