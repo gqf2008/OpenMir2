@@ -45,3 +45,9 @@
 - 比较器 `real_rust_ledger_{firewind,energyrepulsor,spacemove}`；
 - 退化守卫（两侧 ≥1 效果帧）与双向牙；
 - **既有 magic 比较器零漂移**全量跑。
+
+## 6. 本批不覆盖的范围
+
+- **瞬移后的视野状态**：oracle `SpaceMove` 会清空 `VisibleActors`，Rust 换图簇目前不清空/重建
+  ⇒ 本批帧面不可见（见 §3 说明），但**本批不修、不覆盖**。详见
+  `docs/issues/openmir2-spacemove-visible-actors-reset.md`。
