@@ -3524,3 +3524,15 @@ fn real_rust_ledger_mabmabe() {
         &["s1", "s5", "s13"],
     );
 }
+
+/// **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 前格 target 被推 ⇒ 逐格 `SM_BACKSTEP(9)`。
+/// golden `golden/magic/windtebo.json`（s1/s5/s13）；驱动 `tests::windtebo_parity_*`。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（windtebo_parity_*）生成真实台账"]
+fn real_rust_ledger_windtebo() {
+    real_ledger_verify_labels(
+        "windtebo",
+        &golden_file("windtebo.json"),
+        &["s1", "s5", "s13"],
+    );
+}
