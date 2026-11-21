@@ -38,18 +38,14 @@
 //! | --- | --- | --- | --- | --- |
 //! | `:1120` | 12 `SKILL_ERGUM` | `ThrustingOnOff` 切换 + `SendSocket("+LNG"/"+ULNG")` | 已接 | `bins/game-svr/src/warrskill.rs` `Arm::Ergum`（`run` 内 `:181`）；入口 `lib.rs:14268` |
 //! | `:1136` | 25 `SKILL_BANWOL` | `HalfMoonOnOff` 切换 + `"+WID"/"+UWID"` | 已接 | `warrskill.rs` `Arm::Banwol`（`:209`） |
-//! | `:1152` | 56 `SKILL_REDBANWOL` | `RedHalfMoonOnOff` 切换 + `"+WID"/"+UWID"` | **未接**（无 case 臂 / 开关状态位 / 短包） | — |
+//! | `:1152` | 56 `SKILL_REDBANWOL` | `RedHalfMoonOnOff` 切换 + `"+WID"/"+UWID"` | **不适用**：oracle 先 `MagicArr[56]` 越界（`MagicArr` 长 50，`PlayObject.cs:1041/:3684`）⇒ 崩溃路径，见卡 `openmir2-magic-56-oracle-index-out-of-range` | — |
 //! | `:1168` | 26 `SKILL_FIRESWORD` | `AllowFireHitSkill` → MP/`DamageSpell`/`HealthSpellChanged` + `"+FIR"` | 已接 | `warrskill.rs` `Arm::Firesword`（`:267`） |
 //! | `:1187` | 27 `SKILL_MOOTEBO` | 3s 戳 → `Dir=(byte)nTargetX` → MP/`DamageSpell` → `DoMotaebo`（+ 640） | **部分**：`DoMotaebo` 真支未建模（退化支 + WRN 登记） | `warrskill.rs` `Arm::Moteebo`（`:318`），偏差见该文件头 |
 //! | `:1218` | 34 `SKILL_CROSSMOON` | `SkillCrsOnOff` 切换 + `"+CRS"/"+UCRS"` | 已接 | `warrskill.rs` `Arm::Crossmoon`（`:237`） |
 //! | `:1234` | 38 `SKILL_TWINBLADE` | `AllowTwinHitSkill` → MP/`DamageSpell` + `"+TWN"` | 已接 | `warrskill.rs` `Arm::Twinblade`（`:381`） |
-//! | `:1253` | 43 `SKILL_43` | `Skill43OnOff` 切换 + `"+CID"/"+UCID"` | **未接**（无 case 臂 / 开关状态位 / 短包） | — |
+//! | `:1253` | 43 `SKILL_43` | `Skill43OnOff` 切换 + `"+CID"/"+UCID"` | 已接 | `warrskill.rs` `Arm::Skill43`；会话位 `MagicState::mbo43_kill` |
 //!
 //! 逐条核对后的**残留**（不要按常识补）：
-//! - **56 / 43**：oracle 的开关状态位与 `+WID/+UWID/+CID/+UCID` 短包都没有 Rust 实现；两支仍在
-//!   [`EXPLICIT_CASE_MAG_IDX`] 里 ⇒ **分支对（不套 `Dir`、不进 `DoSpell`）、效果缺**。
-//!   （`crates/world-bevy/src/magic.rs` 把 43 记成 `no_effect_case` 是**另一处** `MagicManager` 的
-//!   `switch`（`MagicManager.cs:555-556`），不是本 `ClientSpellXY` switch；两处不能互相代替。）
 //! - **27 真支**：推挤移动 / `SM_RUSH` / `SM_STRUCK` / 自伤 / 训练尾 `Random(3)+1` 未建模
 //!   （见 `warrskill.rs` 文件头「已登记偏差（本模块）」）。
 //! - **8 支共用的包装层**：动作限速（`CheckActionStatus` + `MagicAttackTick`/`MagicAttackInterval`/

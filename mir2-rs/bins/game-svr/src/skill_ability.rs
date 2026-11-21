@@ -43,6 +43,8 @@ pub const SKILL_CROSSMOON: u16 = 34;
 pub const SKILL_MOOTEBO: u16 = 27;
 /// `MagicConst.SKILL_TWINBLADE`（狂风斩，`MagicConst.cs:162`）。
 pub const SKILL_TWINBLADE: u16 = 38;
+/// `MagicConst.SKILL_43`（破空剑，`MagicConst.cs:166`；`ClientSpellXY` 显式 case `:1253-1266`）。
+pub const SKILL_43: u16 = 43;
 /// `MagicArr = new UserMagic[50]`（`PlayObject.cs:1041`）。
 pub const MAGIC_ARR_LEN: usize = 50;
 /// `MessageSettings.DEFHIT`（`MessageSettings.cs:10`；`HitPlus = DEFHIT + Level`）。
