@@ -3135,7 +3135,8 @@ pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
     let out = {
         let mut ad = StageEntities::<SimSelfDeliver>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim)
+        let turns = crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim);
+        crate::slave::flatten_self_delay_turns(turns)
     };
     world.insert_resource(sim);
     world.resource_mut::<StageOut>().self_deliveries = out;
