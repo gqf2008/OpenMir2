@@ -39,6 +39,21 @@
 同一 case 连跑两次，**仅 `delivery`（墙钟）不同**，比较面（`Sent` 的 ident/param/tag/series/tail、`Rm`、
 `Rng`、`TargetHp`）逐字节一致 ⇒ 可作基准。
 
+## 4b. `634.series` 的时刻输入（2026-11-21）
+
+`SM_CHANGEMAP(634).Series` = `PlayObject.DayBright()`，输入是 `M2Share.GameTime`
+（`src/M2Server/Player/PlayObject.Base.cs:244-269`：`1→0`、`3→1`、其它→2；`Envir.Flag` 的
+`DayLight`/`boDarkness` 另有覆盖）。
+
+- C# 装置**不跑** `SystemProcessor`（真机每 50ms 用 `DateTime.Now.Hour` 刷新 `GameTime`）
+  ⇒ 生效值恒为静态默认 `0` ⇒ `DayBright()==2` ⇒ golden 三条 `634.series` 都是 2。
+- Rust 驱动原先走生产 `drain_map_change`（`enter::game_time_now()` 读**真实本地小时**）。
+  `game_time_from_hour` 在 `5..=10 / 16..=19 / 21` 给 1（⇒ `DayBright()==0`）、`11/20/23` 给 2、
+  `4/15` 给 0、其余给 3 ⇒ **多数工作时段跑必红**（2026-11-21 09:12 实测 Rust `series=0` vs golden `2`）。
+- 修法：golden `Fixture` 增加 `map_bright`（装置生效值，恒 0）与 `map_bright_hour`
+  （`-1` = 无墙钟来源，仅标注）；驱动读 `Fixture.map_bright`（**缺键 panic、断言 `==0`**）并调
+  `drain_map_change_at_time` 注入。**生产路径不变**（真机就该读真实时钟）。
+
 ## 5. 待办（本批后续）
 
 - Rust 驱动 `firewind_parity_*` / `energyrepulsor_parity_*` / `spacemove_parity_*`（rig 需补地图与 `visible_actors`）；

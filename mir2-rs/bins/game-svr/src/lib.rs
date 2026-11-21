@@ -71599,12 +71599,28 @@ SendRefMsgRange=15
         // 驱动的 `cast` 只跑施法段、不跑 tick ⇒ 必须补一次，否则"移动发生了但帧没发"
         // （症状：台账有 806/638/640、缺 633/634/807；实测 Rng 与 golden 逐值相同即证落地计算已跑）。
         if magic_id == 21 {
-            drain_map_change(
+            // **`634.series` 的时刻输入（卡 magic-push-batch-impl）**：`SM_CHANGEMAP(634).Series`
+            // = `PlayObject.DayBright()`，输入是 `M2Share.GameTime`（`1→0`、`3→1`、其它→2）。
+            // 生产 [`drain_map_change`] 读**真实本地小时**（`enter::game_time_now()`）；驱动若照走，
+            // 同一份 golden 在 `hour∈{4,11,15,20,23}` 之外会得到 `series=0`（golden 恒为 2）
+            // ⇒ 时变伪红。故这里注入 golden 记录的**装置生效值**（`Fixture.map_bright`）。
+            // 缺键 panic、不兜底：兜一个默认值会让"golden 没记时刻"这件事静默通过。
+            let bright = golden_fixture_opt(stem, label, "map_bright").unwrap_or_else(|| {
+                panic!(
+                    "[{stem}/{label}] golden 缺 Fixture.map_bright（634.series 的时刻输入），先重出 golden"
+                )
+            });
+            assert_eq!(
+                bright, 0,
+                "[{stem}/{label}] Fixture.map_bright 应为 C# 装置生效值 0（`M2Share.GameTime` 静态默认，                 装置不跑 SystemProcessor）；实得 {bright} —— golden 在别的时刻重出过？"
+            );
+            drain_map_change_at_time(
                 &mut rig.world,
                 &rig.online,
                 &rig.gates,
                 &mut rig.displays,
                 rig.registry.as_ref(),
+                u8::try_from(bright).expect("map_bright 必须落在 0..=3"),
             );
         }
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，

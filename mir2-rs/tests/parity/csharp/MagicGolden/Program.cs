@@ -1828,6 +1828,21 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                     c!["Fixture"]!["map_file_sha256"] = sha;
                     c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
                 }
+                // **`634.series` 的时刻输入（卡 magic-push-batch-impl）**：`SM_CHANGEMAP(634).Series`
+                // = `PlayObject.DayBright()`，其输入是 `M2Share.GameTime`（`PlayObject.Base.cs:244-269`：
+                // `1→0`、`3→1`、其它 `→2`；`Envir.Flag.DayLight/boDarkness` 另有覆盖）。
+                // 真机由 `SystemProcessor` 每 50ms 用 `DateTime.Now.Hour` 刷新它；**本装置不跑
+                // SystemProcessor** ⇒ 生效值恒为静态默认 `0` ⇒ `DayBright()==2`（golden 的 634.series）。
+                // 不记这个值的话，Rust 驱动只能读真实本地小时：`hour∈{4,11,15,20,23}` 之外
+                // `game_time_from_hour` 给 0/2 ⇒ `DayBright()` 会变成 0，与本 golden 的 2 不同
+                // （当天 09:xx 实测必红）。记录的是**实际用了的值**，不是重算的意图值。
+                var bright = (long)M2Server.M2Share.GameTime;
+                foreach (var c in node["cases"]!.AsArray())
+                {
+                    c!["Fixture"]!["map_bright"] = bright;
+                    // 无墙钟来源（固定静态默认）⇒ `-1` 表示"不是真实本地小时"，仅作来源标注。
+                    c!["Fixture"]!["map_bright_hour"] = -1;
+                }
             }
             json = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         }
