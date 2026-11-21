@@ -86,3 +86,25 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 - 必须重出受影响 golden，并**逐个点名复跑既有 stem**（不能只看 50 非缺省一支；受影响条目见 `89` 的 6 stem 扫描）；
 - 按常规 review 逐条复核受影响的 `Rm`/`Sent` 期望；
 - **不得**用 `#[ignore]`、放宽断言或删帧来吸收差异（这是装置对齐修正，不是判据放松）。
+
+## 7. 装置对齐修法（B17）与预登记预测（**改代码前落盘**）
+
+**改法（仅 `MagicGolden/Program.cs::DrainOnce`）**：`RecordingPlayObject.DrainRaw()` = `while (MsgQueue.TryDequeue(...))` ⇒ `raw` 已是生产 `GetMessage` 的**堆根出队序**。故把内层从「全取 → 逐条判到期、到期处理、未到期收 `later`、末尾统一 `PushBack`」改为：**按 `raw` 顺序处理，遇第一条 `LateDelivery && DeliveryTime > now` 立即 `break`；已到点前缀照旧处理，把该未到期消息及其后所有未处理条目按原顺序 `PushBack`（该条还原 Lowest，其余按各自记录 prio）**。即生产 `GetMessage`「遇未到期队首即停、单条 `Enqueue(Lowest)` 归还」。**不按到期时间重排/排序**（那是另一种语义，不是生产）。
+
+**预登记预测（改前落盘；用于「预测 vs 实测」对照）**：
+- **会变（只动延迟帧的出现时刻/顺序）—— 5 支**：`healing`(MG-12)、`bigcloak`(MG-33)、`bighealing`(MG-40)、`groupdeding`(MG-51)、`mabmabe-nondefault`(MG-48 非缺省)。
+- **不变 —— `hbfireball`(MG-53) + 其余全部 stem**：剥绝对墙钟 `delivery` 后**逐字节相等**。
+- **5 支的变必须只限**：延迟帧 `due_ms_rel`/出队顺序；**伤害值、HP、抽数、帧条数不得变**。
+- **停下条件**（任一即停手报 opc-19，不自行调断言/补 golden）：①预期外 stem 变化；②5 支里连伤害值/HP/抽数/帧条数也变；③任何既有对拍由绿转红。
+
+**验收口径（2026-11-21，opc-19 批准收窄）**：经「3 轮 pristine + 2 轮 fixed」噪声地板（见 B19）判定，**无歧义真变仅 `healing`/`bighealing`**——`cases[2].Receivers[0].Rm` 的 `8034(RM_MAGHEALING)↔10123(RM_MAGIC_LVEXP)` **顺序交换**（两轮 pristine 都不抖、两轮 fixed 都稳）；`hbfireball` IDENTICAL；`pr1_*` 未动；语义审查对齐 `GetMessage`。**多延迟/多受害者 stem（含 `mabmabe-nondefault`、施毒 4 支）因装置墙钟非确定（B19），本批无法逐字节证明——这是验收口径收窄，不是「没验」，更不是「已验证全部多延迟 stem」。** 本批只重出 `healing`/`bighealing`。
+
+**预测口径更正（opc-19）**：预登记预测（5 支）＝「≥2 条延迟消息」，**漏了「多受害者」类**（施毒 4 支每条受害者各一条延迟/受击亦属多延迟）⇒ **下次预测按「队列里是否存在交错 due」判，不按「消息条数」判**。另：`89` 扫描「可能变」的 `bigcloak`/`groupdeding` 实测**没变** ⇒ **扫描是保守、实测更准**。
+
+**clone46（独立）**：`Clone.actor_id`/`rel_to_caster` 两跑差 ~9e8 —— 克隆体 ActorId 由产品 `ActorMgr`/`PlayCloneObject` ctor 分配（非 harness 可控的确定源，疑运行时/对象哈希/进程计数），**与排水无关**；clone 家族 golden 的该字段天然不可逐字节比对。
+
+**判据固定（opc-19 2026-11-21）**：B17 的「只 5 支变、其余零变化」**只能用 pristine-vs-fixed**（同码仅差排水语义）判；**不得 vs committed**（committed golden 有 schema 漂移，见 B18，会全 stem 假红）。
+
+**两处装置近似（登记）**：
+1. **`now` 采样粒度**：装置每步取一次 `GetTickCount()`；生产每次 `GetMessage` 现取。属**装置对生产的近似**，可接受（步长 100ms、窗口内无跨步 timing 敏感支）。**将来若有亚步长时序支，此近似会失效**。
+2. **同优先级 tie 序**：装置 `MsgQueue` 与生产同为 `PriorityQueue<SendMessage, byte>`，tie 序应一致；但「未到期那条以 Lowest 重入队」会改变等优先级项间的相对次序（`PriorityQueue` tie 序非 FIFO）。**若某支因此产生与生产不同的输出，那是装置表示能力的限制，不是生产语义本身**——届时登记、不据此改产品。

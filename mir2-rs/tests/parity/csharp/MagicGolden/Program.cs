@@ -3245,10 +3245,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 foreach (var (who, obj) in byWho)
                 {
                     var raw = obj.DrainRaw();
-                    var later = new List<(SystemModule.Data.SendMessage Msg, byte Prio)>();
-                    foreach (var (m, prio) in raw)
+                    int now = HUtil32.GetTickCount();
+                    int stopAt = raw.Count;
+                    for (int i = 0; i < raw.Count; i++)
                     {
-                        int now = HUtil32.GetTickCount();
+                        var (m, prio) = raw[i];
                         if (!m.LateDelivery || m.DeliveryTime <= now)
                         {
                             // RM 账本 = 全部「成功入队并被处理」的消息（每条只记一次）。
@@ -3275,10 +3276,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
                         }
                         else
                         {
-                            later.Add((m, prio));
+                            // **B17 对齐生产**：遇第一条未到期即停（`GetMessage`：`Enqueue(Lowest)` + `return false`）。
+                            stopAt = i;
+                            break;
                         }
                     }
-                    foreach (var (m, prio) in later) obj.PushBack(m, prio);
+                    for (int i = stopAt; i < raw.Count; i++) obj.PushBack(raw[i].Msg, raw[i].Prio);
                 }
             }
             // **施法批（t=0）**：与 Rust 台账"施法段 drain（elapsed=0）"同口径 ⇒ 帧 `due_ms_rel=0`。
