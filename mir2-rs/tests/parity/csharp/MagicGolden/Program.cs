@@ -204,15 +204,27 @@ public static class Program
                 }
                 new SystemModule.Conf.ServerConf(serverConfPath).LoadConfig();
                 int aop = SystemModule.SystemShare.Config.AmyOunsulPoint;
-                if (aop <= 0)
+                // **已实测的部署值 = 15**（`E:/MirServer/M2GameSvr/Server.conf:756`，2026-11-21）。
+                // 不写 `>0`：默认缺省是 10，若只断 `>0`，装载失败（落到 ctor 缺省 10）也会绿 ⇒
+                // 夹具记录的 `amy_ounsul_point` 与部署不同源（卡 §53）。合并后改调 `ServerConfFixture.cs` 共享入口。
+                if (aop != 15)
                 {
-                    throw new FixtureContractViolation($"[{name}] AmyOunsulPoint 未装载（={aop}）⇒ 施毒 point 会除零");
+                    throw new FixtureContractViolation($"[{name}] AmyOunsulPoint 实测部署值应为 15（={aop}）——装载失败或部署漂移");
+                }
+                // **`[String] YouPoisoned` 必须真的读进 `MessageSettings`**：`StringConf` 的 ctor 只做
+                // `Load()`（解析进缓存），`LoadString()` 才是把值写进 `MessageSettings` 的那一步——生产
+                // 由 `GameShare.cs:91` 调用，本离线装置必须显式调；不调就会静默用源码默认「中毒了!!!」，
+                // 而部署值（`String.conf:31`）是「您中毒了!!!」⇒ 金标准记的值 ≠ 实际会用的值（卡 §53）。
+                SystemModule.SystemShare.StringConf.LoadString();
+                if (string.IsNullOrEmpty(SystemModule.MessageSettings.YouPoisoned))
+                {
+                    throw new FixtureContractViolation($"[{name}] [String] YouPoisoned 未装载（空）");
                 }
             }
-            if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
-            if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
-            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
-            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
+            if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
+            if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
+            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
+            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "poison_cross_actor_same_tick" });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
             // `BaseObject.cs:896-931`）。摆位理由（变异牙）：
@@ -2423,6 +2435,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
                 hit_speed = spec.HitSpeed,
+                // **施毒 `SysMsg(YouPoisoned)` 载荷来源（MG-13/14/15/50/64/65）**：`BaseObject.MakePosion`
+                // 的 `SysMsg(..., MsgColor.Red, MsgType.Hint)` 以前/背景色 = `[Setup] RedMsgFColor/RedMsgBColor`
+                // （`ServerConf.cs`）与文本 = `[String] YouPoisoned`（`StringConf.cs:76`）出 100 帧。
+                // 驱动**必须**用这三个值，不许硬编码 0/空串（卡 §53：记录端 = 实际使用值）。
+                red_msg_f_color = SystemModule.SystemShare.Config.RedMsgFColor,
+                red_msg_b_color = SystemModule.SystemShare.Config.RedMsgBColor,
+                you_poisoned = SystemModule.MessageSettings.YouPoisoned,
                 frame_order_scope = string.IsNullOrEmpty(spec.FrameOrderScope) ? null : spec.FrameOrderScope,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null

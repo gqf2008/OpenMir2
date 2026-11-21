@@ -83,7 +83,10 @@
           140,
           100
         ],
-        "hit_speed": 0,
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "poison_cross_actor_same_tick",
         "sockets": [
           911,
@@ -142,7 +145,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1208215109,
+              "delivery": 1208772515,
               "priority": 255
             },
             {
@@ -193,7 +196,7 @@
               "param": 1,
               "tag": 2,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 1015,
               "tail": ""
             },
             {
@@ -202,7 +205,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -210,8 +213,8 @@
               "recog": 1002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             }
           ]
@@ -249,7 +252,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1208215109,
+              "delivery": 1208772515,
               "priority": 255
             },
             {
@@ -280,7 +283,7 @@
               "p1": 255,
               "p2": 56,
               "p3": 0,
-              "msg": "\u4E2D\u6BD2\u4E86!!!",
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
               "late": false,
               "delivery": 0,
               "priority": 252
@@ -311,7 +314,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -319,8 +322,8 @@
               "recog": 1002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -329,8 +332,8 @@
               "param": 14591,
               "tag": 0,
               "series": 1,
-              "due_ms_rel": 1000,
-              "tail": "ZXVGBUcO]]Ik"
+              "due_ms_rel": 900,
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -407,7 +410,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -415,8 +418,8 @@
               "recog": 1002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             }
           ]
@@ -506,7 +509,10 @@
           140,
           100
         ],
-        "hit_speed": 0,
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "poison_cross_actor_same_tick",
         "sockets": [
           911,
@@ -565,7 +571,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1208216453,
+              "delivery": 1208773875,
               "priority": 255
             },
             {
@@ -625,7 +631,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -633,8 +639,8 @@
               "recog": 2002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             }
           ]
@@ -672,7 +678,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1208216453,
+              "delivery": 1208773875,
               "priority": 255
             },
             {
@@ -703,7 +709,7 @@
               "p1": 255,
               "p2": 56,
               "p3": 0,
-              "msg": "\u4E2D\u6BD2\u4E86!!!",
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
               "late": false,
               "delivery": 0,
               "priority": 252
@@ -734,7 +740,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -742,8 +748,8 @@
               "recog": 2002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -752,8 +758,8 @@
               "param": 14591,
               "tag": 0,
               "series": 1,
-              "due_ms_rel": 1000,
-              "tail": "ZXVGBUcO]]Ik"
+              "due_ms_rel": 900,
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -830,7 +836,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 1000,
+              "due_ms_rel": 900,
               "tail": ""
             },
             {
@@ -838,8 +844,8 @@
               "recog": 2002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
-              "due_ms_rel": 1000,
+              "series": 7,
+              "due_ms_rel": 900,
               "tail": ""
             }
           ]
@@ -929,7 +935,10 @@
           140,
           100
         ],
-        "hit_speed": 0,
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "poison_cross_actor_same_tick",
         "sockets": [
           911,
@@ -988,7 +997,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1208217843,
+              "delivery": 1208775375,
               "priority": 255
             },
             {
@@ -1056,7 +1065,7 @@
               "recog": 3002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "due_ms_rel": 1000,
               "tail": ""
             }
@@ -1095,7 +1104,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1208217843,
+              "delivery": 1208775375,
               "priority": 255
             },
             {
@@ -1126,7 +1135,7 @@
               "p1": 255,
               "p2": 56,
               "p3": 0,
-              "msg": "\u4E2D\u6BD2\u4E86!!!",
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
               "late": false,
               "delivery": 0,
               "priority": 252
@@ -1165,7 +1174,7 @@
               "recog": 3002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "due_ms_rel": 1000,
               "tail": ""
             },
@@ -1176,7 +1185,7 @@
               "tag": 0,
               "series": 1,
               "due_ms_rel": 1000,
-              "tail": "ZXVGBUcO]]Ik"
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -1261,7 +1270,7 @@
               "recog": 3002,
               "param": 0,
               "tag": 32768,
-              "series": 0,
+              "series": 7,
               "due_ms_rel": 1000,
               "tail": ""
             }
