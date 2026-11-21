@@ -56,6 +56,9 @@ REGISTRY = [
     # `oracle_source_sha256` 按 **git blob（LF）** 复算——Windows 工作树 CRLF 与 blob 会算出两个值；
     # selftest 含顺序敏感 / 工作树 CRLF 不敏感 / 夹具 round-trip 三类断言。
     ("oracle_source_sha", ["tools/parity/oracle_source_sha.py", "--selftest"], False),
+    # 卡 device-recipient-model-design：装置 sweep 四类兼容判据分类器。自测用合成 before/after/audit
+    # 三目录，证明 ① INSTRUMENT_RED（无审计行 / 仅 due 无 cross）；② 有 cross 证据时 rc=0；离线 <2s。
+    ("sweep_classify", ["tools/parity/sweep_classify.py", "--selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
