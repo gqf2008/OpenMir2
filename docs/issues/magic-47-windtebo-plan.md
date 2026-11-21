@@ -16,9 +16,9 @@ public IActor GetPoseCreate() {
 }
 ```
 
-- **取"面朝方向的邻位实体"，不是当前攻击目标**：`GetFrontPosition`（`src/M2Server/Actor/BaseObject.cs:977-1040`）
+- **取"面朝方向的邻位实体"，不是当前攻击目标**：`GetFrontPosition`（`src/M2Server/Actor/BaseObject.cs:977-1038`）
   按 `Dir` 取前一格，**越界时 clamp（原样返回当前格）**；
-  `Envirnoment.GetMovingObject(x, y, true)`（`src/M2Server/Maps/Envirnoment.cs:1203-1232`）
+  `Envirnoment.GetMovingObject(x, y, true)`（`src/M2Server/Maps/Envirnoment.cs:1203-1240`）
   在该格 `ObjList` 里取**首个 `!Ghost` 且（`boFlag=true` ⇒）`!Death`** 的 actor。
 - 与"目标选择"无关：`MagWindTebo` 完全不看 `DoSpell` 的 `targetObject`。
 
@@ -26,16 +26,18 @@ public IActor GetPoseCreate() {
 - 有 `front_position`（`world-bevy` 的 `magic.rs::front_position`，逐行移植 `GetFrontPosition`，
   越界 clamp）；
 - 有 `World::moving_object_at_impl`（`world-bevy` 的 `world.rs::moving_object_at_impl`，
-  `boFlag=true` 语义已在 `monai` 多处使用，例：`monai` 的 `MagMakePrivateTransparent` 一族）；
+  `boFlag=true` 语义已在 `monai` 多处使用，例：`monai::gas_attack_impl`
+  （`monai::gas_attack_impl` 内原文 `crate::world::World::moving_object_at_impl(access, sim, map_id, fx, fy, true)`；
+  其上方 doc 即 `GetPoseCreate` 语义）；
 - **没有** `pose_create` 这个命名封装 ⇒ 实现时按 `front_position` + `moving_object_at_impl(map, fx, fy, true)`
   两步组合（与 `monai` 的既有写法一致），**不需要新建抽象**。
-- **`SKILL_WINDTEBO` 常量本身不存在**（全仓 grep 无命中）；`magic_id = 35`（`src/Modules/SystemModule/Const/MagicConst.cs:142`）。
+- **`SKILL_WINDTEBO` 常量本身不存在**（**源码**无该魔号常量；仅文档提及）；`magic_id = 35`（`src/Modules/SystemModule/Const/MagicConst.cs:142`）。
 
 ## Q2 与 8/37 `MagPushArround` 的共用面
 
 | 面 | 8/37 `MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`） | 35 `MagWindTebo`（`:858-874`） | 一致？ |
 | --- | --- | --- | --- |
-| 推挤动作 | `target.CharPushed(nDir, push)`（`:43`） | `target.CharPushed(dir, (byte)(MAX(0,Level-1)+1))`（`:871`） | **同一方法** `BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）⇒ 逐格 `CanWalk`/`MoveToMovingObject`/`RM_PUSH` **完全一致** |
+| 推挤动作 | `target.CharPushed(nDir, push)`（`:43`） | `target.CharPushed(dir, (byte)(MAX(0,Level-1)+1))`（`:871`） | **同一方法** `BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-894`）⇒ 逐格 `CanWalk`/`MoveToMovingObject`/`RM_PUSH` **完全一致** |
 | 帧面 | 逐格 `RM_PUSH` ⇒ `SM_BACKSTEP(9)` | 同左 | ✅ 一致 |
 | 目标来源 | 遍历 `VisibleActors`（`:27`） | `GetPoseCreate()`（**前格单个**，`:861`） | ❌ 不同 |
 | 骰式 | `Random(20) < 6 + L*3 + gap`（`:37`） | `Random(20) < L*6 + 6 + gap`（`:869`） | ❌ 系数不同（3 vs 6） |
@@ -53,7 +55,7 @@ public IActor GetPoseCreate() {
 
 | 守卫 | oracle | Rust |
 | --- | --- | --- |
-| `StickMode` | `!targetObject.StickMode`（`src/M2Server/Magic/MagicManager.cs:862`） | `Entity::stick_mode`（`entity.rs::Entity::stick_mode`；只读镜像 `EntityRef` 同名字段） |
+| `StickMode` | `!targetObject.StickMode`（`src/M2Server/Magic/MagicManager.cs:862`） | `Entity.stick_mode` **字段**（`Entity` 的 `pub stick_mode: bool`；只读镜像 `EntityRef` 同名字段；**不是方法**） |
 | `Ghost` | `!targetObject.Ghost`（`:862`） | `Entity::ghost`（`entity.rs::Entity::ghost`） |
 | `IsProperTarget` | `playObject.IsProperTarget(targetObject)`（`:862`） | `combat::is_proper_target_grouped`（`combat.rs::is_proper_target_grouped`；直接版 `combat.rs::is_proper_target_grouped_direct`） |
 | `Death` | `!targetObject.Death`（`:862`） | `Entity::death`（`entity.rs::Entity::death`） |
@@ -79,7 +81,7 @@ public IActor GetPoseCreate() {
 | --- | --- | --- |
 | 视野回填 `UpdateVisibleGay` | **必需**（`MagPushArround` 遍历 `VisibleActors`） | **不需要**（`GetPoseCreate` 走地图格，不看视野表） |
 | 可走地图 / `CanWalk` | 必需（`(100,100)` 一带 `cellSuccess` 待探） | **同一条**，直接继承 |
-| 前格构造 | 不需要 | **新增**：目标必须 `AddMapObject` 到 **caster.Dir 指向的那一格**。装置**已能设 `Dir`**：`MagicGolden/Program.cs` 的 `spec.EnableMaps` 分支里 `caster.Dir = GetNextDirection(caster, doX, doY)`（`GetFrontPosition` 用 `Dir`；同处注释已说明该设置的必要性）⇒ 复用该机制，**不需要新开关** |
+| 前格构造 | 不需要 | **新增**：目标必须 `AddMapObject` 到 **caster.Dir 指向的那一格**。装置**已能设 `Dir`**：`MagicGolden/Program.cs` 的 `spec.EnableMaps` 分支里 `if (spec.EnableMaps) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);`（`GetFrontPosition` 用 `Dir`；同处注释已说明该设置的必要性）⇒ 复用该机制，**不需要新开关** |
 | 负例构造 | 邻格/等级/视野 | 前格为空、前格是 `Ghost`/`Death`、`StickMode=true`、等级不低于、非 proper |
 
 ## 牙（每颗写清红在哪）
