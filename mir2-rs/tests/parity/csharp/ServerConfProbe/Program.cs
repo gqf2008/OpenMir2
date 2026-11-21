@@ -41,6 +41,12 @@ namespace ServerConfProbe
             Console.WriteLine("mab_mabe_hit_success_rate=" + cfg.MabMabeHitSucessRate);
             Console.WriteLine("mab_mabe_hit_mabe_time_rate=" + cfg.MabMabeHitMabeTimeRate);
             Console.WriteLine("amy_ounsul_point=" + cfg.AmyOunsulPoint);
+            // 追加：`PetSlaveConfig`（`crates/data/src/pet_slave.rs`）读的四个 `[Setup]` 键
+            // （`ServerConf.cs:531-534`；注意 oracle 缺陷：HP 率的**键**写作 `MagTammingTargetHPRate`）。
+            Console.WriteLine("mag_tamming_level=" + cfg.MagTammingLevel);
+            Console.WriteLine("mag_tamming_target_level=" + cfg.MagTammingTargetLevel);
+            Console.WriteLine("mag_tamming_hp_rate=" + cfg.MagTammingHPRate);
+            Console.WriteLine("mag_tamming_count=" + cfg.MagTammingCount);
             return 0;
         }
     }

@@ -1,18 +1,24 @@
 //! 卡 `openmir2-magic-serverconf-batch-plan` §6.7：**Server.conf 解析对拍照**（独立验收项）。
 //!
-//! C# `ServerConf.LoadConfig()`（探针 `tests/parity/csharp/ServerConfProbe`）与 Rust
-//! `game_svr::config::load` 对**同一份 ini** 的六个契约键解析值必须一致：
-//!   `MagTurnUndeadLevel` / `MabMabeHitRandRate` / `MabMabeHitMinLvLimit` /
-//!   `MabMabeHitSucessRate` / `MabMabeHitMabeTimeRate` / `AmyOunsulPoint`。
+//! 覆盖**两个 Rust 解析器**与 oracle 的逐键对拍：
+//!   1. `game_svr::config::load`（`bins/game-svr/src/config.rs`）——圣言/魔爆六键：
+//!      `MagTurnUndeadLevel` / `MabMabeHitRandRate` / `MabMabeHitMinLvLimit` /
+//!      `MabMabeHitSucessRate` / `MabMabeHitMabeTimeRate` / `AmyOunsulPoint`；
+//!   2. `mir2_data::pet_slave::PetSlaveConfig::load`（`crates/data/src/pet_slave.rs`）——诱惑之光四键：
+//!      `MagTammingLevel` / `MagTammingTargetLevel` / `MagTammingTargetHPRate` / `MagTammingCount`
+//!      （注意 oracle 缺陷：HP 率的**键**写作 `MagTammingTargetHPRate`，`ServerConf.cs:533`）。
+//!
+//! C# 侧由探针 `tests/parity/csharp/ServerConfProbe`（只输出解析值）给出。
 //!
 //! 合成夹具（`tests/parity/fixtures/serverconf/`，随仓提交）覆盖并**断言绝对期望值**：
-//!   ① 六键齐全 = 部署值 44/100/10/21/20/15；
-//!   ② 逐键缺失 ⇒ 该键回落（C# ctor 缺省 / Rust `unwrap_or`），其余保持部署值；
-//!   ③ 某键 = 0；④ 某键 = 负值 / 非数字（非数字按**已知不对称**断言：C# 回落缺省、Rust 报错，
-//!   见 `docs/issues/openmir2-serverconf-nonnumeric-asymmetry.md`）。
-//! 任何一侧语义漂移（含"把那一个键从 44 改成 50"这种基线改动）都会因**期望值断言**变红。
+//!   ① 全键 = 部署值 `44/100/10/21/20/15` + `40/1/100/5`（**四条缺省≠部署**：44/15/40/1）；
+//!   ② 逐键缺失 ⇒ 该键回落缺省，其余保持部署值；
+//!   ③ 某键 = 0；④ 某键为负 / 空 / 非数字。
+//! 非数字与「无守卫键的空值」按**已知不对称**断言（C# 回落缺省、Rust `config.rs` 返回 Err），
+//! 见 `docs/issues/openmir2-serverconf-nonnumeric-asymmetry.md`；`PetSlaveConfig` 的
+//! `read_integer` 对空/非数字都回落缺省（`unwrap_or(def)`），**不属于**不对称。
 //!
-//! 真实部署文件（`E:/MirServer/M2GameSvr/Server.conf`）**只在存在时**验：断言六键 == 部署值并记录
+//! 真实部署文件（`E:/MirServer/M2GameSvr/Server.conf`）**只在存在时**验：断言十键 == 部署值并记录
 //! sha256；缺席时其余用例照样全绿。
 //!
 //! 本测试**不进 magic 驱动、不作为 golden 生成前提**（golden 仍是可移植冻结件）。
@@ -20,19 +26,23 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const KEYS: [&str; 6] = [
+const KEYS: [&str; 10] = [
     "mag_turn_undead_level",
     "mab_mabe_hit_rand_rate",
     "mab_mabe_hit_min_lv_limit",
     "mab_mabe_hit_success_rate",
     "mab_mabe_hit_mabe_time_rate",
     "amy_ounsul_point",
+    "mag_tamming_level",
+    "mag_tamming_target_level",
+    "mag_tamming_hp_rate",
+    "mag_tamming_count",
 ];
 
 /// 部署口径（`Server.conf`）的期望值。
-const DEPLOY: [i32; 6] = [44, 100, 10, 21, 20, 15];
-/// C# `GameSvrConf` ctor 缺省 / Rust `unwrap_or` 缺省。
-const CTOR_DEFAULTS: [i32; 6] = [50, 100, 10, 21, 20, 10];
+const DEPLOY: [i32; 10] = [44, 100, 10, 21, 20, 15, 40, 1, 100, 5];
+/// C# `GameSvrConf` ctor 缺省 / Rust 两解析器的缺省。
+const CTOR_DEFAULTS: [i32; 10] = [50, 100, 10, 21, 20, 10, 50, 10, 100, 5];
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/parity/fixtures/serverconf")
@@ -108,8 +118,11 @@ fn csharp_values(conf: &Path) -> Vec<i32> {
     parse_probe_output(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// 两个 Rust 解析器的十键合并视图（前者失败即整体失败）。
 fn rust_values(conf: &Path) -> Result<Vec<i32>, String> {
     let c = game_svr::config::load(conf).map_err(|e| format!("{e:#}"))?;
+    let p = mir2_data::pet_slave::PetSlaveConfig::load(conf)
+        .map_err(|e| format!("PetSlaveConfig::load: {e}"))?;
     Ok(vec![
         c.mag_turn_undead_level,
         c.mab_mabe_hit_rand_rate,
@@ -117,11 +130,21 @@ fn rust_values(conf: &Path) -> Result<Vec<i32>, String> {
         c.mab_mabe_hit_sucess_rate,
         c.mab_mabe_hit_mabe_time_rate,
         c.amy_ounsul_point,
+        p.mag_tamming_level,
+        p.mag_tamming_target_level,
+        p.mag_tamming_hp_rate,
+        i32::from(p.mag_tamming_count),
     ])
 }
 
+fn with(slot: usize, value: i32) -> [i32; 10] {
+    let mut e = DEPLOY;
+    e[slot] = value;
+    e
+}
+
 /// 两侧都必须等于**绝对期望值**，且相互相等。
-fn assert_case(name: &str, expected: [i32; 6]) {
+fn assert_case(name: &str, expected: [i32; 10]) {
     let path = fixture_dir().join(name);
     let c = csharp_values(&path);
     assert_eq!(c, expected.to_vec(), "[{name}] C# 侧解析值与期望值不一致");
@@ -131,67 +154,61 @@ fn assert_case(name: &str, expected: [i32; 6]) {
     eprintln!("CASE {name}: csharp={c:?} rust={r:?} expected={expected:?}");
 }
 
+/// 已知不对称：C# 侧必须等于期望值（回落缺省），Rust 侧必须显式 `Err`。
+/// 依据：C# `ConfigFile.ReadWriteInteger`/`ReadInteger`（`src/OpenMir2/Common/ConfigFile.cs:55-63`、
+/// `:170-185`）对空/非数字回落缺省；Rust `config.rs` 的 `MABMABEHITRANDRATE` 等臂
+/// `v.parse().with_context(...)?` 直接返回错误。详见
+/// `docs/issues/openmir2-serverconf-nonnumeric-asymmetry.md`。
+fn assert_known_asymmetry(name: &str) {
+    let path = fixture_dir().join(name);
+    let c = csharp_values(&path);
+    assert_eq!(
+        c,
+        DEPLOY.to_vec(),
+        "[{name}] C# 侧必须回落缺省（其它键保持部署值）"
+    );
+    let r = rust_values(&path);
+    assert!(
+        r.is_err(),
+        "[{name}] Rust 侧应显式报错（Got {r:?}）——本用例钉的是已知不对称，不是值相等"
+    );
+    eprintln!(
+        "CASE {name}: csharp={c:?} rust=Err({}) expected=已知不对称",
+        r.unwrap_err()
+    );
+}
+
 #[test]
 fn synthetic_serverconf_parses_identically() {
-    // ① 六键齐全 = 部署值
+    // ① 全键 = 部署值
     assert_case("deploy.conf", DEPLOY);
 
-    // ② 逐键缺失 ⇒ 该键回落 ctor 缺省，其余保持部署值
-    let mut with_default = DEPLOY;
-    with_default[0] = CTOR_DEFAULTS[0];
-    assert_case("missing_magturnundeadlevel.conf", with_default);
-    // 其余四项的缺省 == 部署值（100/10/21/20），缺失后向量不变
-    assert_case("missing_mabmabehitrandrate.conf", DEPLOY);
-    assert_case("missing_mabmabehitminlvlimit.conf", DEPLOY);
-    assert_case("missing_mabmabehitsucessrate.conf", DEPLOY);
-    assert_case("missing_mabmabehitmabetimerate.conf", DEPLOY);
-    let mut with_default_amy = DEPLOY;
-    with_default_amy[5] = CTOR_DEFAULTS[5];
-    assert_case("missing_amyounsulpoint.conf", with_default_amy);
-
-    // ③ 某键 = 0
-    let mut zero = DEPLOY;
-    zero[0] = 0;
-    assert_case("zero.conf", zero);
-
-    // ④ 某键为负 / 非数字
-    let mut negative = DEPLOY;
-    negative[5] = -5;
-    assert_case("negative.conf", negative);
-
-    // 空值（`KEY=`）：只对带 `!v.is_empty()` 守卫的键两侧一致——
-    // Rust `MagTurnUndeadLevel` 有守卫（`config.rs` 的 `MAGTURNUNDEADLEVEL` 臂）、C# `TryParse("")`
-    // 失败回落 ⇒ 两侧都应回落 ctor 缺省 50。注：`MabMabe*`/`AmyOunsulPoint` 的 Rust 臂**无**守卫，
-    // 空值会走 parse Err（与非法数字同类，见下面 nonnumeric 与
-    // `docs/issues/openmir2-serverconf-nonnumeric-asymmetry.md`）。
-    let mut empty = DEPLOY;
-    empty[0] = CTOR_DEFAULTS[0];
-    assert_case("empty.conf", empty);
-
-    // 已知不对称（显式登记，不当作红）：非数字时两侧语义不同——
-    //   C# `ConfigFile.ReadWriteInteger`/`ReadInteger`：键存在但 `int.TryParse` 失败 ⇒ 回落缺省
-    //     （`src/OpenMir2/Common/ConfigFile.cs` 的 `ReadWriteInteger` 与 `ReadInteger`）；
-    //   Rust `config.rs` 的 `MABMABEHITRANDRATE` 臂：`v.parse().with_context(...)?` ⇒ 返回 Err。
-    // 这是**启动期解析语义**，不产生帧面差异；当前决定=保留更严格的 Rust 行为并登记为偏差
-    // （卡 `openmir2-serverconf-nonnumeric-asymmetry`，含移除条件）。
-    {
-        let path = fixture_dir().join("nonnumeric.conf");
-        let c = csharp_values(&path);
-        assert_eq!(
-            c,
-            DEPLOY.to_vec(),
-            "[nonnumeric.conf] C# 侧必须回落缺省（MabMabeHitRandRate=100）"
-        );
-        let r = rust_values(&path);
-        assert!(
-            r.is_err(),
-            "[nonnumeric.conf] Rust 侧应显式报错（Got {r:?}）——本用例钉的是已知不对称，不是值相等"
-        );
-        eprintln!(
-            "CASE nonnumeric.conf: csharp={c:?} rust=Err({}) expected=已知不对称",
-            r.unwrap_err()
-        );
+    // ② 逐键缺失 ⇒ 该键回落缺省，其余保持部署值
+    for slot in 0..KEYS.len() {
+        let name = format!("missing_{}.conf", KEYS[slot]);
+        assert_case(&name, with(slot, CTOR_DEFAULTS[slot]));
     }
+
+    // ③ 某键 = 0（圣言门 / 诱惑等级）
+    assert_case("zero.conf", with(0, 0));
+    assert_case("pet_zero.conf", with(6, 0));
+
+    // ④ 负值
+    assert_case("negative.conf", with(5, -5));
+    assert_case("pet_negative.conf", with(7, -3));
+
+    // 空值：带 `!v.is_empty()` 守卫的键（`MagTurnUndeadLevel`）两侧都回落缺省。
+    assert_case("empty.conf", with(0, CTOR_DEFAULTS[0]));
+    // 空值：`MagTammingLevel` 无守卫但 `IniFile::read_integer` 对空回落 `def`（`unwrap_or`）⇒ 两侧一致。
+    assert_case("pet_empty.conf", with(6, CTOR_DEFAULTS[6]));
+    // 非数字：`PetSlaveConfig` 的 `read_integer` 对非数字回落 `def` ⇒ 两侧一致（与 config.rs 不同）。
+    assert_case("pet_nonnumeric.conf", with(6, CTOR_DEFAULTS[6]));
+
+    // 已知不对称（显式登记，不当作红）：
+    //   - 非数字：C# 回落缺省（100），Rust `config.rs` 返回 Err；
+    //   - 空值（无守卫键 `MabMabeHitRandRate=`）：同上。
+    assert_known_asymmetry("nonnumeric.conf");
+    assert_known_asymmetry("empty_mabmabe.conf");
 }
 
 /// 真实部署文件**只在存在时**验；缺席不影响上面的合成用例。
@@ -217,6 +234,6 @@ fn real_deployment_conf_matches_when_present() {
     assert_eq!(
         c,
         DEPLOY.to_vec(),
-        "真实部署 Server.conf 的六个契约键必须等于部署口径（44/100/10/21/20/15）"
+        "真实部署 Server.conf 的十个契约键必须等于部署口径（44/100/10/21/20/15 + 40/1/100/5）"
     );
 }

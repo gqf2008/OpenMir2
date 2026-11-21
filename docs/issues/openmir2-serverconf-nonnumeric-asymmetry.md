@@ -15,6 +15,21 @@
   `MAGTURNUNDEADLEVEL` 等少量键有 `!v.is_empty()` 守卫（空值回落缺省），但**非数字仍 Err**。
 - 空值口径补充：**带守卫的键**（如 `MagTurnUndeadLevel=`）两侧都回落缺省，一致；
   **无守卫的键**（MabMabe* / AmyOunsulPoint）空值走 `parse("")` ⇒ Rust Err，与「非数字」同类。
+- **第二个 Rust 解析器 `PetSlaveConfig`（`crates/data/src/pet_slave.rs`，读 `[Setup]` 的
+  `MagTammingLevel/TargetLevel/TargetHPRate/Count`）不属于本偏差**：它走 `IniFile::read_integer`
+  （`crates/data/src/exps.rs` 的 `read_integer`）——缺键、空值、非数字**一律回落 `def`**
+  （`unwrap_or(def)`），与 C# `ReadWriteInteger/ReadInteger` 语义一致。
+
+## 三态语义对照（同一输入 → 两侧结果）
+
+| 输入形态 | C#（`ConfigFile`） | Rust `config.rs`（MabMabe*/Amy 等无守卫臂） | Rust `PetSlaveConfig` |
+| --- | --- | --- | --- |
+| 缺键 | 回落 ctor 缺省 | 回落 `unwrap_or` 缺省 | 回落 `def` 缺省 |
+| 空值（`KEY=`，**无** `!v.is_empty()` 守卫） | 回落缺省 | **`Err`** | 回落缺省 |
+| 空值（`KEY=`，**有**守卫，如 `MagTurnUndeadLevel`） | 回落缺省 | 回落缺省 | 回落缺省 |
+| 非数字 | 回落缺省 | **`Err`** | 回落缺省 |
+
+⇒ 只有 `config.rs` 的**无守卫 + 空值/非数字**两个格子是不对称（启动期 fail-closed）。
 
 ## 影响面
 
@@ -39,6 +54,14 @@
 
 ## 证据（可复现）
 
-- 合成夹具 `mir2-rs/tests/parity/fixtures/serverconf/nonnumeric.conf`（`MabMabeHitRandRate=abc`）；
+- 合成夹具 `mir2-rs/tests/parity/fixtures/serverconf/nonnumeric.conf`（`MabMabeHitRandRate=abc`）与
+  `empty_mabmabe.conf`（`MabMabeHitRandRate=`）；
 - C# 探针实测：`mab_mabe_hit_rand_rate=100`（回落缺省）；
-- Rust：`game_svr::config::load()` 返回 `Err`（`MabMabeHitRandRate 不是合法整数："abc"`）。
+- Rust：`game_svr::config::load()` 返回 `Err`（`MabMabeHitRandRate 不是合法整数："abc"` / 空串同）；
+- 对照：`pet_nonnumeric.conf` / `pet_empty.conf` 两侧一致回落 50（`PetSlaveConfig` 无此偏差）。
+
+## 与"缺省≠部署"的关系（四条，不是五条）
+
+对拍照同时钉住**缺省与部署不一致**的键：`MagTurnUndeadLevel` 50→**44**、`AmyOunsulPoint` 10→**15**
+（`config.rs` 六键）；`MagTammingLevel` 50→**40**、`MagTammingTargetLevel` 10→**1**
+（`PetSlaveConfig` 四键）。这四条由测试的**绝对期望值**断言覆盖；与本节的不对称是两个独立问题。
