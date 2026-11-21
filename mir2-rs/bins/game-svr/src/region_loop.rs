@@ -793,6 +793,8 @@ impl<'a> AoIFrameLedger<'a> {
     /// 记一帧：`owner` 实体的坐标所属区是唯一发射者；`dst` 由收件人 `(line, socket)` 查
     /// [`ZoneRouter`]（未命中 = 区 0）。被拒的帧已在 outbox 内计数，`seal` 后的 `check`
     /// 会报；这里不 panic。
+    // 一帧的身份就是这几个字段（owner 的三元组 + 收件人 + kind）⇒ 不拆结构体。
+    #[allow(clippy::too_many_arguments)]
     pub fn note(
         &mut self,
         owner: i32,

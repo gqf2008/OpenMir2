@@ -2565,6 +2565,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         let party_i = sim_party_cfg.clone();
         let done_i = shutdown_done_tx.clone();
+        // `MIR2_ZONES` 未设 ⇒ `None`（零开销；`Arc` 克隆只为让 `move` 闭包不吞掉外层变量）。
+        let zone_host_i = zone_host.clone();
         let _sim = std::thread::Builder::new()
             .name(name)
             .spawn(move || {
@@ -2589,7 +2591,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     planes_i,
                     world_start_i,
                     lottery_i,
-                    zone_host.clone(),
+                    zone_host_i,
                 )
             })
             .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
@@ -116288,12 +116290,11 @@ mod tick_starvation {
             "生产排水必须经过预算器且同时取两条通道（唯一一处：{head}）"
         );
         let begin = format!("{}(EventDrainBudget::PRODUCTION)", "EventDrain::begin");
-        // **P2-3b：期望集合，不是计数**。生产面恰好两处，且身份由「位置 + 配对的结转变量」钉死：
-        //   ① 事件路由线程（在 `run_inner`，**早于** `fn sim_loop(`；配对 `&mut carry/&mut ctl_carry`）
-        //      —— N>1 时把单输入通道搬进每片，必须复用同一预算/反饥饿语义，否则两级队列会饿死；
-        //   ② sim 循环头（在 `fn sim_loop(` **之内**；配对 `&mut event_carry/&mut event_carry_ctl`）。
-        // 第三处 / 两处挪位 / 交叉借用对方的结转变量名 ⇒ 全部红。**不允许**只把数字调大：
-        // 新增预算排水是架构变更（新的分发层），必须显式改成本用例的期望集合并说明理由。
+        // **P2-3b：期望集合，不是计数**。每个分发层各一处，身份由「位置 + 配对的结转变量」
+        // 钉死（片路由 `carry/ctl_carry`、sim 头 `event_carry/event_carry_ctl`；段 6a 又加了
+        // 区 demux `zone_carry/zone_ctl_carry`，见下）。挪位 / 多一处 / 交叉借用对方的结转
+        // 变量名 ⇒ 全部红。**不允许**只把数字调大：新增预算排水是架构变更（新的分发层），
+        // 必须显式改成本用例的期望集合并说明理由。
         let mut begin_at = Vec::new();
         let mut from = 0usize;
         while let Some(rel) = prod[from..].find(&begin) {
@@ -116676,7 +116677,6 @@ mod soft_version_date_tests {
 #[cfg(test)]
 mod zone_assembly_tests {
     use super::*;
-    use mir2_protocol::frame::CommandMessage;
 
     fn zone(id: u32) -> zone::ZoneId {
         zone::ZoneId::new(id)
@@ -116810,7 +116810,7 @@ mod zone_assembly_tests {
     #[test]
     fn control_events_broadcast_or_go_to_host_zone() {
         let router = zone_router::ZoneRouter::new();
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let register = GateEvent::RegisterGate { service_id: 7, tx };
         assert_eq!(route_zone_target(&register, &router), ZoneTarget::Broadcast);
         let unregister = GateEvent::UnregisterGate { service_id: 7 };
@@ -116831,7 +116831,6 @@ mod zone_wiring_tests {
     //! **L2-4 段 6a**：装配判定 / 启动门的构造级用例（放在测试区，避免污染
     //! `src[..find("mod tests {")]` 的「生产面」源码扫描）。
 
-    use super::*;
     use crate::zone_wiring::{check_band_gate, parse_max_band, plan_zone_mode};
     use crate::{shard, zone, zone_router};
     use mir2_world_bevy::{EntitySpawn, World};
