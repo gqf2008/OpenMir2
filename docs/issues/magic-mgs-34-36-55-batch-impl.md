@@ -189,3 +189,78 @@
 - 规划与实现规范：[`magic-observe-surface-plan.md`](magic-observe-surface-plan.md)
 - 配置批与判据层教训：[`magic-serverconf-batch-impl.md`](magic-serverconf-batch-impl.md)
 - 十键入口：`bins/game-svr/src/parity_serverconf.rs`（`apply_serverconf_fixture`）
+
+---
+
+## 6. 实现批记录（MG-55）— 2026-11-21，**未编译**
+
+> 基线 `0e2eb1316`；工作分支 `card/mg55-clone`。本节是 Leader 裁决（opc-19 2026-11-21）的落点：
+> 三处偏差全部批准，偏差 1/2 各带硬条件；构建窗口**尚未**给出。**以下任何「零漂移 / 红绿」结论
+> 在实跑前都只能标 `未验`。**
+
+### 6.1 偏差 1（已批）：`RunMagicCase` 主流程增量
+
+**增量清单（`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs`）**
+1. 4 行 `-1/false` 缺省门控：`CasterDir/CasterGender/CasterHair` 赋值 + `PreSpellFaceTarget` 转向
+   （与生产 `PlayObject.Attack.cs:1269` 同源）；
+2. 一个 `if (spec.MagicId == 46)` 观察块：扫主人同格找 `ChrName=="Clone"`，按 ident 10/41 过滤
+   `recorder.Buffers`，**只读**（无共享状态赋值）；
+3. `AttachStatusTimeArr` 追加 7 个可空参数（仅 46 传），并扩「全 null 直接返回」短路条件。
+
+**Leader 条件**
+- (a) 缺省路径零副作用：`-1`/`false` 时**不调用** `GetNextDirection`、不改 `caster.Dir` 的取值时机、
+  不改任何既有键；
+- (b) **必须实跑证明零漂移**：重生成 2 支既有 case 到 temp，与仓库件逐字节比对（剔除
+  `delivery` / `due_ms_rel` 两个墙钟字段）：
+  - 带转向：`spacemove`（`EnableMaps=true` 走既有 `caster.Dir = GetNextDirection(...)`）；
+  - 不带转向：`shield`；
+- (c) 46 观察块严格门控——非 46 case 走不到，块内零赋值。
+
+**状态**：(a)(c) 代码已满足（审阅面）；**(b) 未验**，等构建窗口。**未验前不得声称「既有 golden 零漂移」。**
+
+### 6.2 偏差 2（已批）：克隆体 ActorId 归一化
+
+**事实**：C# `ActorMgr.GetNextIdentity()` 是**进程级**自增（`src/M2Server/Actor/ActorEntity.cs:20`）；
+harness 的 4 个对象随后被覆写成 `idBase+1..+4`，克隆体 ctor 取到的是全局计数（本支为 `5`），
+与 `idBase=1000` 无固定关系 ⇒ **相对 id 跨栈不可比**（规划 §5.3 的「相对 id」不成立）。
+
+**实现**
+- 两侧各记本侧 `Clone.actor_id`（golden=C# 真值；ledger=Rust `alloc_id` 值），**不参与相等判据**；
+- 10/41 帧的 `recog` 存**原始值**；比较器按「== 本侧 `Clone.actor_id`」归一化为 `0` 后走 `verify`
+  的严格逐帧比较；
+- 其余 recog（`SM_SPELL`/`SM_MAGICFIRE` 的施法者 id、`SM_MAGIC_LVEXP` 的 MagicId）不受影响、仍逐字节比。
+
+**Leader 条件（牙，已写进比较器）**
+1. 归一化前两侧都必须**至少一帧** `recog == 本侧 clone id`；零命中 ⇒ 红（「归一化空转，id 面未验」）；
+2. 两侧 clone id 必须**不等**；相等 ⇒ 红（「归一化多余，请说明」）；
+3. 原始 id 与未归一化帧在两侧产物中可见（`Clone.actor_id` + `frames[].recog`）。
+
+**状态**：牙已写（`clone_recog_hits`），**未跑**（需 golden+ledger）。
+
+### 6.3 偏差 3（已批）：新增 7 个 Fixture 输入键
+
+| 键 | 归属 | 比较器用法 |
+| --- | --- | --- |
+| `caster_dir` | 装置输入（转向**前**） | 驱动读入但不使用；比较 `Clone.caster_dir`（转向后）与 `dir == (caster_dir+4)%8` 推导式 |
+| `caster_gender` / `caster_hair` | 装置输入 | 驱动建主人 `feature`；比较器核 `41.param/tag` == `MakeHumanFeature(0,g,g,h*2+g)` |
+| `pre_spell_face_target` | 装置输入 | 驱动断言必须 `true`（不照做则与产品路径不同源） |
+| `fast_train` | 装置输入（恒 false） | 驱动断言 `false`（`PlayObject.cs:2023` 缺省；只有快速修炼项链置 true） |
+| `magic_train_lv` / `magic_max_train0` | 装置输入 | 驱动建魔表；训练前提由 `Train` 块（`level_*`、`max_train_at_level`、`tran_point_*`）与驱动断言核 |
+
+`MagicSpec` 新字段 = 4（`CasterDir/CasterGender/CasterHair/PreSpellFaceTarget`），未超 8 的止损线。
+
+### 6.4 待验清单（构建窗口一开就按序跑）
+
+1. `dotnet build` MagicGolden（Release）；
+2. `--case clone --out mir2-rs/tests/parity/golden/magic/clone46.json`；同时按 6.1(b) 重生成
+   `spacemove`/`shield` 到 temp 与仓库件比对（剔除墙钟两字段）；
+3. 驱动：`cargo test -p game-svr --lib tests::clone46_parity_clone -- --exact --ignored --test-threads=1`；
+4. 比较器：同一 `MIR2_LEDGER_RUN_ID`，
+   `cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact real_rust_ledger_clone46`；
+5. 变异牙现场重放（§1.5 四行）并贴 `left/right` 原文；
+6. 全绿后回填本节结论 + 提交（提交信息引用本卡）。
+
+### 6.5 车道口径订正
+
+Leader 2026-11-21：`cargo` 进程数**不等于**车道数（同一批测试滚动起落）。后续报窗口必须附
+**命令行**（`Get-CimInstance Win32_Process` 的 `CommandLine`），由 Leader 判断哪些属于同一任务。
