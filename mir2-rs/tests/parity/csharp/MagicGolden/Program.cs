@@ -1029,6 +1029,7 @@ public static class Program
     /// <summary>用给定种子跑一次火球，返回账本（各接收者的 RM 与真实 SM 帧 + RNG + 关键状态）。</summary>
     private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase, bool loginOrder, string rngMode, bool probeDrainDraw = false, AntiMagicBranchExpect branchExpect = null, int mc = 15)
     {
+        ClockSeam.Begin(1000000);
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
         if (!env.LoadMapData(Path.Combine(mapDir, "0.map")))
@@ -1134,7 +1135,7 @@ public static class Program
         // **上界命中必须可见**（`DrainPassesHitCap` 进产物 + stderr），不得静默截断。
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
-        Thread.Sleep(700);
+        ClockSeam.Advance(700);
         if (probeDrainDraw)
         {
             // 自测探针（不进 golden）：**在真实排水阶段**（`Thread.Sleep` 之后、排水循环之前）抽一次。
