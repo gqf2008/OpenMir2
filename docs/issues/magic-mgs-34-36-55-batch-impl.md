@@ -210,10 +210,14 @@
 **Leader 条件**
 - (a) 缺省路径零副作用：`-1`/`false` 时**不调用** `GetNextDirection`、不改 `caster.Dir` 的取值时机、
   不改任何既有键；
-- (b) **必须实跑证明零漂移**：重生成 2 支既有 case 到 temp，与仓库件逐字节比对（剔除
-  `delivery` / `due_ms_rel` 两个墙钟字段）：
+- (b) **必须实跑证明零漂移**：重生成 2 支既有 case 到 temp，与**同一棵树上的基线生成器产物**
+  逐字节比对（剔除 `delivery` / `due_ms_rel` 两个墙钟字段）：
   - 带转向：`spacemove`（`EnableMaps=true` 走既有 `caster.Dir = GetNextDirection(...)`）；
   - 不带转向：`shield`；
+  - **口径更正（2026-11-21，Leader 批准）**：原文写"与仓库件比对"——该字面口径在当前 master 上
+    **本来就过不了**（见 §6.9 的既存漂移），正确判据是**相对漂移**：
+    `master 生成器 vs 本分支生成器 = IDENTICAL(stripped)`。仓库件是否与当前生成器一致，
+    属另一张卡（§6.9），不得混入本卡的零漂移判据。
 - (c) 46 观察块严格门控——非 46 case 走不到，块内零赋值。
 
 **状态**：(a)(c) 代码已满足（审阅面）；**(b) 未验**，等构建窗口。**未验前不得声称「既有 golden 零漂移」。**
@@ -236,6 +240,11 @@ harness 的 4 个对象随后被覆写成 `idBase+1..+4`，克隆体 ctor 取到
 3. 原始 id 与未归一化帧在两侧产物中可见（`Clone.actor_id` + `frames[].recog`）。
 
 **状态**：牙已写（`clone_recog_hits`），**未跑**（需 golden+ledger）。
+
+> **修订（2026-11-21 首跑 golden 后）**：oracle 克隆体出生**零帧**（§6.7），没有任何帧的
+> `recog` 等于 clone id ⇒ 「归一化」无对象可归一，本条 1/2 条的"≥1 帧"前提被事实推翻。
+> 现行判据改为**负向**：两侧 `recog == 本侧 clone id` 的帧数必须为 **0**（重新广播即红），
+> 两侧 id 仍必须不等；实现见 §6.8。
 
 ### 6.3 偏差 3（已批）：新增 7 个 Fixture 输入键
 
@@ -350,8 +359,9 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
   1. `"Angel": null`——master 的 angel 提交给 `FireballResult` 加了无 `JsonIgnore` 的属性，任何重生成都会出现；
   2. shield 的 `Fixtures` 缺 poison 批新增键（`amulet_shape`/`amy_ounsul_point`/`red_msg_*`/
      `target_anti_poison`/`you_poisoned`）。
-  ⇒ 卡 §6.1(b) 字面口径（"重生成 == 仓库件"）在当前 master 上**本来就过不了**；本卡以
-  base-vs-ours 的 `IDENTICAL` 作为"本改动零漂移"的证据，并把上述既存漂移单独报给 Leader。
+  ⇒ 卡 §6.1(b) **原字面口径（"重生成 == 仓库件"）在当前 master 上本来就过不了**；已按 Leader
+  裁定改为**相对漂移**（master 生成器 vs 本分支生成器），本卡以 `IDENTICAL(stripped)` 为证据。
+  仓库件与当前生成器的既存漂移单列 §6.9（需另立卡），不混入本卡判据。
 
 **横向影响（skeleton/sinsu/angel；Leader 要求必回）**
 - 三支 `summon_ok`（seed=1）golden `Rng` 均为 `[373,221,1401,2314,1315,1]`；`cap_hit` 为 `[]`；
@@ -363,5 +373,26 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
 
 **已登记残差（本卡不修）**
 - Rust 骨架未建模克隆体 `fixed_hide_mode/ob_mode`（golden 记录 true/false 作为零帧根因；AOI 可见性差异另行登记）；
-- golden 的 `Clone.actor_id/rel_to_caster` 为 GUID 派生（每次生成不同），比较器只作可见性/负向锚，不进相等判据；
-  重生成 clone golden 会在这两个字段漂移（预期）。
+- golden 的 `Clone.actor_id/rel_to_caster` **不参与相等判据**：`HUtil32.Sequence()` 由 GUID 派生，
+  每次生成都不同（实测 `1682780500` → `1921834330`），只作「可见性 / 负向锚」
+  （`clone_recog_hits` 的 id、以及 `两侧 id 不等` 的结构断言）。重生成 clone golden 会在这两个
+  字段漂移，属预期；**不是漏比**——凡进入判据的 id 类量都必须在规范上稳定，GUID 派生量不具备该性质。
+
+### 6.9 需另立卡：既有 magic golden 与当前生成器的既存漂移（与 MG-55 无关）
+
+**证据（2026-11-21，`master = 015f9c760` 的生成器直接重生成，未含任何 MG-55 改动）**
+- `spacemove.json`：重生成件与仓库件剔除 `delivery`/`due_ms_rel` 后仍差 **20 行**，差异键唯一来源
+  `"Angel": null`（master 的 angel 提交给 `FireballResult` 增加了无 `JsonIgnore` 的属性）；
+- `shield.json`：差 **101 行**，除 `"Angel": null` 外，仓库件**缺** poison 批新增键
+  `amulet_shape` / `amy_ounsul_point` / `red_msg_f_color` / `red_msg_b_color` /
+  `target_anti_poison` / `you_poisoned`（当前生成器会写，仓库件是旧版）。
+⇒ 这两支仓库 golden 与当前生成器**已不一致**，与 MG-55 无关；任何"重生成即应逐字节相等"的验收
+口径在 master 上都会假红/真红混杂。
+
+**建议卡面（供 Leader 立卡）**
+- 背景：golden 是装置产物，装置 schema 演进后未重生成 ⇒ 仓库件逐步陈旧；本次两例已实证。
+- 期望结果：一次性重生成受影响的既有 golden（至少 `spacemove`/`shield`，并先枚举 `Angel: null`
+  与 poison 键两类差异的受影响集合），或为"新增可空键"提供统一序列化抑制策略（二选一由 Leader 定）。
+- 验收：每支重生成件与仓库件的差异**逐键归因**到已知 schema 变更（不允许多余差异）；
+  重生成后对应 Driver/Comparator 全绿且 `RED_SET` 不扩大。
+- 风险：重生成会带入 GUID/墙钟类非判据字段（如 clone 的 `actor_id`），必须先列白名单。
