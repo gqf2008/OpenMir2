@@ -53,6 +53,8 @@
 - 修法：golden `Fixture` 增加 `map_bright`（装置生效值，恒 0）与 `map_bright_hour`
   （`-1` = 无墙钟来源，仅标注）；驱动读 `Fixture.map_bright`（**缺键 panic、断言 `==0`**）并调
   `drain_map_change_at_time` 注入。**生产路径不变**（真机就该读真实时钟）。
+- **键名语义（勿"顺手修正"）**：`map_bright` 存的是 `M2Share.GameTime` 的原值（0..3），
+  **不是** `DayBright()` 的返回值 —— 当前值 0 对应 `DayBright()==2`（即 golden 的 `634.series=2`）。
 
 ## 4c. 8/37/21 的帧序 = oracle 收件人优先队列（2026-11-21）
 
@@ -75,6 +77,29 @@ oracle 的收件人队列是 `MsgQueue.Enqueue(msg, (byte)wIdent)` 的**四叉�
 8/37/21 的 `RM_SPELL(17)` 在 `:159` 处进**同一个**缓冲（s13 的两种结果就是"队列里有没有 17"
 不同造成的堆布局差），效果体帧全部入缓冲，臂末尾 `flush`；版本门失败支先 flush 再发 639。
 其它魔号路径逐字不变。
+
+## 4d. 帧序覆盖的分层（2026-11-21）
+
+- **默认门禁（`cargo test -p game-svr --lib`，非 `#[ignore]`）**：只覆盖**机制级**语义——
+  - `spell_frame_buf_tests::caster_queue_without_rm_spell_keeps_push_order`：同一组帧有无 17 的
+    四叉堆出队序（`[638,9,9]` vs `[17,638,9,9]`）；
+  - `spell_cmd_firewind_enters_effect_draws_and_pushes`：生产入口下 target 侧 `[17,638,9]`、
+    **caster 侧零条 17 且序为 `[638,9]`**（把 17 的 `include_self` 改成真 ⇒ 本用例红）；
+  - `spell_cmd_spacemove_enters_effect_draws_and_moves_home`：caster 侧 `[806,638]`。
+- **与 golden 的严格序一致**：仍只由 `#[ignore]` 的 parity 驱动（`tests::*_parity_s*`）和
+  比较器（`real_rust_ledger_*`）覆盖——默认 `cargo test` **不管**这条语义。
+  本批的绿灯证据必须显式 `--ignored --exact` 跑，别把默认套件当成帧序证明。
+
+## 4e. 装置坑：换图装图会丢掉格上对象（2026-11-21）
+
+`new_layout` 末尾的 `world.tick()` 已把 caster/目标/观察者登记进初始网格；21 支随后
+`world.maps.clear() + push(真图)` —— **格上对象表随旧 `MapGrid` 一起丢**。
+
+症状：`CretInNearXy`（3×3 格子扫描）在真图上查不到目标 ⇒ `RM_MAGICFIRE` 的
+`targerActors` 退化成 0（golden 是目标 ActorId），`CanWalk` 也看不到实体。
+
+修法：按各实体坐标用 `MapGrid::add_map_object` 重做 `AddToMap` 的格子面（生产由
+`enter_world_impl` 完成）。**任何"装真图"的驱动都要做这一步。**
 
 ## 5. 待办（本批后续）
 
