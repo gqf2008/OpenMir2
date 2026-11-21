@@ -7,6 +7,10 @@
 //!
 //! 语义：缺键 / 非整数 / ≤0 ⇒ **具名 panic**（绝不吃缺省）；通过后把五项落到 `&mut World`
 //! （`set_mag_turn_undead_level` + `set_b4_config`），并返回十键快照。
+//!
+//! **`mag_tamming_*` 四键只返回、不落 `World`**：它们由 `PetSlaveConfig`（`mir2_data`）的消费者使用，
+//! `World` 不持有这份配置。**MG-34（收服批）落地时必须接到读 `PetSlaveConfig` 的那一侧**——
+//! 别以为这里"丢了四键"。
 //! 键名与 C# `Keys` 表、golden `server_conf` 完全一致（`mab_mabe_hit_sucess_rate` 一个 c）。
 
 use mir2_world_bevy::World;
@@ -44,7 +48,8 @@ pub struct ServerConfSnapshot {
 /// 从 golden 的 `Fixture.server_conf` 读十键，落到 `world`，返回快照。
 ///
 /// 落盘范围：`World` 只有魔法六键对应的存储（`mag_turn_undead_level` 与 `MabMabeConfig`）；
-/// `mag_tamming_*` 四键在 `PetSlaveConfig`（`mir2_data`），Magic 驱动不使用，只随快照返回。
+/// `mag_tamming_*` 四键在 `PetSlaveConfig`（`mir2_data`），**由它的消费者使用、`World` 不持有**，
+/// 因此只随快照返回——MG-34（收服批）落地时必须接到读 `PetSlaveConfig` 的那一侧。
 ///
 /// # Panics
 /// golden 缺 `Label` / `Fixture.server_conf` / 任一键，或值非整数、≤0、越界 `i32`。
