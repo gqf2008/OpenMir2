@@ -117,3 +117,9 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 **两处装置近似（登记）**：
 1. **`now` 采样粒度**：装置每步取一次 `GetTickCount()`；生产每次 `GetMessage` 现取。属**装置对生产的近似**，可接受（步长 100ms、窗口内无跨步 timing 敏感支）。**将来若有亚步长时序支，此近似会失效**。
 2. **同优先级 tie 序**：装置 `MsgQueue` 与生产同为 `PriorityQueue<SendMessage, byte>`，tie 序应一致；但「未到期那条以 Lowest 重入队」会改变等优先级项间的相对次序（`PriorityQueue` tie 序非 FIFO）。**若某支因此产生与生产不同的输出，那是装置表示能力的限制，不是生产语义本身**——届时登记、不据此改产品。
+
+## 8. B22 due 调查的交接（2026-11-22，避免两卡都不认）
+
+- **`bigcloak`/`groupdeding` 的 recog 多重集相等、仅位置互换 + `due 800 vs 900` = 本卡（B17）多受害者出帧顺序**，不是 B22 装置 due 表示问题（见 `docs/issues/b22-due-representation-refactor-design.md` §2/§7.4/§0）。
+- B22 的 A 型 7 支 due 已收口（StepDrainMs/fireball），**本卡承接这两支的顺序对齐**；顺序对了，这两支的 due 自然对（无需再动 due 表示）。
+- 归属唯一：这两支的剩余红/欠账归 B17，B22 不背。
