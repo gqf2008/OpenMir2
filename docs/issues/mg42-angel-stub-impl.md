@@ -28,6 +28,14 @@ adopt 行为」：
 | 驱动 | `tests::angel_parity_summon_ok` / `tests::angel_parity_cap_hit`（`--exact --ignored`，同 `RUN_ID`） |
 | 比较器 | `real_rust_ledger_angel`（`--exact --ignored`） |
 
+## 2b. golden 的行尾约定
+
+`mir2-rs/tests/parity/golden/magic/angel.json` 与其它 magic golden（`skeleton.json` /
+`spacemove.json` 等）一致，**用 CRLF**——这是**装置输出的既有 golden 约定，不是编辑器副作用**
+（`MagicGolden` 的 `File.WriteAllText` 原样落盘）。`git diff --check` 对该文件报
+`trailing whitespace` 属该约定的已知形态；**不要**用 `.gitattributes` 全局改行尾把它一起改掉
+（那会让 golden 的 diff 炸成整文件）。
+
 ## 3. 不进入比较面的字段（实测口径）
 
 - **`Rng`**：离线替身 `RegenMonsterByName` 不抽造怪数，Rust `create_monster_oracle` 真抽
