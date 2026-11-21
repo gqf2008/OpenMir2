@@ -70176,6 +70176,205 @@ SendRefMsgRange=15
         skeleton_parity_drive("cap_hit", 2000);
     }
 
+    /// **MG-42（41 `SKILL_ANGEL`）夹具 rig**：几何与 golden `angel.json` 的 fixture_spec 同
+    /// （caster 100,100 / target 101,100 / obs_in 105,100 / obs_out 140,100；socket 911..914）。
+    ///
+    /// **SCOPE（stub）**：生产 `monsters` 无 `精灵` 行 ⇒ `MakeSlave` 恒 null（卡
+    /// `openmir2-angel-summon-monster-missing`）；本 rig 用 `MonsterTable` 直接供给 `精灵`
+    /// ⇒ 验的是「给定怪物之后的 adopt 行为」，**不证明生产可召唤**。
+    fn angel_rig(id_base: i32) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            41,
+            &[(41, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 41,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = 30;
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+        }
+        rig
+    }
+
+    /// **MG-42（41 `SKILL_ANGEL`）真实台账驱动**（两例 summon_ok / cap_hit）。
+    ///
+    /// **对拍范围（stub SCOPE）**：验「**给定怪物之后**的 adopt 行为」——`regen_calls`、
+    /// `slave_count_before/after`、`new_slaves{name,level,hp,max_hp,master_is_caster}`、造怪前帧
+    /// 41/638/642。**不比** `Rng`（离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、
+    /// `640`/`10123-p3`（训练尾，随造怪抽数不同）。**不证明生产可召唤**（数据缺口见卡）。
+    fn angel_parity_drive(label: &str, id_base: i32) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "angel";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let mut rig = angel_rig(id_base);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+
+        // cap_hit：golden `pre_slave_count=1` ⇒ 预置 1 个已存在奴隶，令 `MakeSlave` 的
+        // `SlaveList.Count < nMaxMob` 门失败（regen 0 / 不新增实体 / slave_list 不变）。
+        // 直接造实体、不走施法 ⇒ 不污染帧与 RNG。预置 id = id_base+50，比对时排除。
+        let preslave_id = id_base + 50;
+        if label == "cap_hit" {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "preslave".to_string(), 100, 100);
+            e.id = preslave_id;
+            e.race = 100;
+            let sid = rig.world.add_entity(e);
+            {
+                let m = rig.world.entities.get_mut(sid).unwrap();
+                m.slave.master = Some(caster);
+                m.slave.is_slave = true;
+            }
+            rig.world
+                .entities
+                .get_mut(caster)
+                .unwrap()
+                .slave
+                .slave_list
+                .push(sid);
+        }
+
+        let entities_before = rig.world.entities.len();
+        let slave_before = rig.world.slave_count(caster);
+
+        // 怪物表按 golden stub：race=100（WhiteSkeleton 真身）、HP=stub_wabil_hp=17；
+        // MaxHP 由 `apply_slave_level_abilitys` 抬到 24 ⇒ 半补触发 20。
+        let mon = mir2_data::MonsterInfo {
+            name: "精灵".into(),
+            race: 100,
+            level: 1,
+            hp: 17,
+            ..mir2_data::MonsterInfo::default()
+        };
+        rig.cast_slave(41, (101, 100), target, vec![mon]);
+        let (cast_frames, _raws) = rig.drain();
+        // **本卡起 640 走自延迟**（`emit_magic_lvexp_delayed`：未升级 1000ms / 升级 800ms）⇒
+        // 补交付回路：施法批 due=0；按 100ms 步进泵到 1000，交付帧记所在步的 `due_ms_rel`。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
+            .into_iter()
+            .map(|(s, b)| (s, b, 0_i64))
+            .collect();
+        let mut elapsed = 0i64;
+        while elapsed < 1000 {
+            elapsed += 100;
+            all_frames.extend(rig.deliver(100).into_iter().map(|(s, b)| (s, b, elapsed)));
+        }
+
+        let entities_after = rig.world.entities.len();
+        let slave_after = rig.world.slave_count(caster);
+        let regen = rig
+            .world
+            .slave_cast_regen_calls
+            .last()
+            .copied()
+            .unwrap_or(usize::MAX);
+
+        // 新增奴隶（排除 cap_hit 预置的 id）。
+        let slave_ids: Vec<i32> = rig
+            .world
+            .entities
+            .get(caster)
+            .map(|c| c.slave_list.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| *id != preslave_id)
+            .collect();
+        let new_slaves: Vec<serde_json::Value> = slave_ids
+            .into_iter()
+            .filter_map(|id| rig.world.entities.get(id))
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.entity().name,
+                    "level": e.level,
+                    "hp": e.hp,
+                    "max_hp": e.max_hp,
+                    "master_is_caster": e.master == Some(caster),
+                })
+            })
+            .collect();
+
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": [],
+                "Sent": fireball_sent_with_due(&all_frames, socket),
+            }));
+        }
+
+        let angel = serde_json::json!({
+            "stub_wabil_hp": 17,
+            "stub_abil_max_hp": 17,
+            "stub_monster_race": 100,
+            "pre_slave_count": slave_before,
+            "slave_count_before": slave_before,
+            "slave_count_after": slave_after,
+            "regen_calls": regen,
+            "new_slaves": new_slaves,
+        });
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Angel": angel,
+            "world_entities_before": entities_before,
+            "world_entities_after": entities_after,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        eprintln!(
+            "[angel {label}] seed={seed} entities {entities_before}->{entities_after} slave {slave_before}->{slave_after} regen={regen} frames={} new={}",
+            all_frames.len(),
+            ledger[0]["Angel"]["new_slaves"].as_array().map_or(0, |a| a.len()),
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn angel_parity_summon_ok() {
+        angel_parity_drive("summon_ok", 1000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn angel_parity_cap_hit() {
+        angel_parity_drive("cap_hit", 2000);
+    }
+
     /// 30 `SKILL_SINSU`（神兽）夹具 rig：镜像 skeleton，魔号 30。
     fn sinsu_rig(id_base: i32) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
