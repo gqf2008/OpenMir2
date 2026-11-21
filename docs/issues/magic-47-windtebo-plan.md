@@ -16,26 +16,26 @@ public IActor GetPoseCreate() {
 }
 ```
 
-- **取"面朝方向的邻位实体"，不是当前攻击目标**：`GetFrontPosition`（`BaseObject.cs:977-1040`）
+- **取"面朝方向的邻位实体"，不是当前攻击目标**：`GetFrontPosition`（`src/M2Server/Actor/BaseObject.cs:977-1040`）
   按 `Dir` 取前一格，**越界时 clamp（原样返回当前格）**；
   `Envirnoment.GetMovingObject(x, y, true)`（`src/M2Server/Maps/Envirnoment.cs:1203-1232`）
   在该格 `ObjList` 里取**首个 `!Ghost` 且（`boFlag=true` ⇒）`!Death`** 的 actor。
 - 与"目标选择"无关：`MagWindTebo` 完全不看 `DoSpell` 的 `targetObject`。
 
 **Rust 侧**：
-- 有 `front_position`（`mir2-rs/crates/world-bevy/src/magic.rs:802`，逐行移植 `GetFrontPosition`，
+- 有 `front_position`（`world-bevy` 的 `magic.rs::front_position`，逐行移植 `GetFrontPosition`，
   越界 clamp）；
-- 有 `World::moving_object_at_impl`（`mir2-rs/crates/world-bevy/src/world.rs:6558`，
-  `boFlag=true` 语义已在 `monai` 多处使用，例：`mir2-rs/crates/world-bevy/src/monai.rs:4098`）；
+- 有 `World::moving_object_at_impl`（`world-bevy` 的 `world.rs::moving_object_at_impl`，
+  `boFlag=true` 语义已在 `monai` 多处使用，例：`monai` 的 `MagMakePrivateTransparent` 一族）；
 - **没有** `pose_create` 这个命名封装 ⇒ 实现时按 `front_position` + `moving_object_at_impl(map, fx, fy, true)`
   两步组合（与 `monai` 的既有写法一致），**不需要新建抽象**。
 - **`SKILL_WINDTEBO` 常量本身不存在**（全仓 grep 无命中）；`magic_id = 35`（`src/Modules/SystemModule/Const/MagicConst.cs:142`）。
 
 ## Q2 与 8/37 `MagPushArround` 的共用面
 
-| 面 | 8/37 `MagPushArround`（`MagicManager.cs:24-52`） | 35 `MagWindTebo`（`:858-874`） | 一致？ |
+| 面 | 8/37 `MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`） | 35 `MagWindTebo`（`:858-874`） | 一致？ |
 | --- | --- | --- | --- |
-| 推挤动作 | `target.CharPushed(nDir, push)`（`:43`） | `target.CharPushed(dir, (byte)(MAX(0,Level-1)+1))`（`:871`） | **同一方法** `BaseObject.CharPushed`（`BaseObject.cs:854-901`）⇒ 逐格 `CanWalk`/`MoveToMovingObject`/`RM_PUSH` **完全一致** |
+| 推挤动作 | `target.CharPushed(nDir, push)`（`:43`） | `target.CharPushed(dir, (byte)(MAX(0,Level-1)+1))`（`:871`） | **同一方法** `BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）⇒ 逐格 `CanWalk`/`MoveToMovingObject`/`RM_PUSH` **完全一致** |
 | 帧面 | 逐格 `RM_PUSH` ⇒ `SM_BACKSTEP(9)` | 同左 | ✅ 一致 |
 | 目标来源 | 遍历 `VisibleActors`（`:27`） | `GetPoseCreate()`（**前格单个**，`:861`） | ❌ 不同 |
 | 骰式 | `Random(20) < 6 + L*3 + gap`（`:37`） | `Random(20) < L*6 + 6 + gap`（`:869`） | ❌ 系数不同（3 vs 6） |
@@ -45,18 +45,18 @@ public IActor GetPoseCreate() {
 ⇒ **产品链（`CharPushed`）完全共用，调用方三处不同**。因此：
 - **必须同批做**：同一套装置能力（可走地图、`boTrain`→640、逐格 `SM_BACKSTEP` 断言）只建一次；
   且 `Character` 侧推挤语义若有偏差，两批会同时暴露——分开做等于把同一处验证做两遍、且第一遍的结论会被第二遍推翻；
-- **不能复用 `push_chance`**（`mir2-rs/crates/world-bevy/src/magic_effect.rs:42`，系数 3）与
-  `push_steps`（`magic_effect.rs:48`，含 `Random(2)`）：本支需要**自己的**两个站点
+- **不能复用 `push_chance`**（`magic_effect.rs::push_chance`，系数 `3`）与
+  `push_steps`（`magic_effect.rs::push_steps`，含 `Random(2)`）：本支需要**自己的**两个站点
   （`windtebo_chance`：`random_below(20) < level*6 + 6 + gap`；格数 = `1 + max(0, level-1)` 无抽）。
 
 ## Q3 三个守卫 + `Death` 的 Rust 等价物
 
 | 守卫 | oracle | Rust |
 | --- | --- | --- |
-| `StickMode` | `!targetObject.StickMode`（`MagicManager.cs:862`） | `Entity::stick_mode`（`mir2-rs/crates/world-bevy/src/entity.rs:611`；只读镜像 `EntityRef` 同名字段 `:1158`） |
-| `Ghost` | `!targetObject.Ghost`（`:862`） | `Entity::ghost`（`entity.rs:613`） |
-| `IsProperTarget` | `playObject.IsProperTarget(targetObject)`（`:862`） | `combat::is_proper_target_grouped`（`mir2-rs/crates/world-bevy/src/combat.rs:721`；直接版 `_direct` 在 `:746`） |
-| `Death` | `!targetObject.Death`（`:862`） | `Entity::death`（`entity.rs:612`） |
+| `StickMode` | `!targetObject.StickMode`（`src/M2Server/Magic/MagicManager.cs:862`） | `Entity::stick_mode`（`entity.rs::Entity::stick_mode`；只读镜像 `EntityRef` 同名字段） |
+| `Ghost` | `!targetObject.Ghost`（`:862`） | `Entity::ghost`（`entity.rs::Entity::ghost`） |
+| `IsProperTarget` | `playObject.IsProperTarget(targetObject)`（`:862`） | `combat::is_proper_target_grouped`（`combat.rs::is_proper_target_grouped`；直接版 `combat.rs::is_proper_target_grouped_direct`） |
+| `Death` | `!targetObject.Death`（`:862`） | `Entity::death`（`entity.rs::Entity::death`） |
 
 （与 `cast_firewind_spell` 用的是同一批字段；`GetPoseCreate` 自身已按 `boFlag=true` 滤掉 `Ghost`/`Death`，
 守卫链里的这两条是**冗余但必须保留**——决定"是否抽 `Random(20)`"。）
@@ -66,8 +66,8 @@ public IActor GetPoseCreate() {
 | 段 | 抽 | 条件 | 站点 |
 | --- | --- | --- | --- |
 | **本支** | `Random(20)` **1 次** | 守卫链全过（前格有实体、非自己、`!Death`、`!Ghost`、proper、`!StickMode`、邻格、等级） | oracle `:869`；Rust 新增站点（不复用 `push_chance`） |
-| **`CharPushed` 内部** | **0 次** | — | `BaseObject.cs:854-901` 无 RNG |
-| **共享尾** | `Random(3)` **1 次** | `userMagic.Level < 3 && boTrain` 且 `TrainLevel[Level] <= Abil.Level` | oracle `MagicManager.cs:662-668`；Rust `magic::check_skill_proficiency`（`mir2-rs/crates/world-bevy/src/magic.rs:525`）+ 调用方 `Random(3)+1` |
+| **`CharPushed` 内部** | **0 次** | — | `src/M2Server/Actor/BaseObject.cs:854-901` 无 RNG |
+| **共享尾** | `Random(3)` **1 次** | `userMagic.Level < 3 && boTrain` 且 `TrainLevel[Level] <= Abil.Level` | oracle `src/M2Server/Magic/MagicManager.cs:662-668`；Rust `magic::check_skill_proficiency`（`magic.rs::check_skill_proficiency`）+ 调用方 `Random(3)+1` |
 
 **帧**：`17`（`SM_SPELL`，`DoSpell` 开头无条件）+ `638`（`RM_MAGICFIRE`，`:651-658`，`p3 = targetObject?.ActorId ?? 0`
 ——**是 DoSpell 的目标**，不是 `GetPoseCreate` 的）+ 逐格 `9`；`boTrain` 且训练门过 ⇒ `640`（1000ms 延迟）。
@@ -79,7 +79,7 @@ public IActor GetPoseCreate() {
 | --- | --- | --- |
 | 视野回填 `UpdateVisibleGay` | **必需**（`MagPushArround` 遍历 `VisibleActors`） | **不需要**（`GetPoseCreate` 走地图格，不看视野表） |
 | 可走地图 / `CanWalk` | 必需（`(100,100)` 一带 `cellSuccess` 待探） | **同一条**，直接继承 |
-| 前格构造 | 不需要 | **新增**：目标必须 `AddMapObject` 到 **caster.Dir 指向的那一格**。装置**已能设 `Dir`**：`Program.cs:1998` 在 `spec.EnableMaps` 时 `caster.Dir = GetNextDirection(caster, doX, doY)`（`GetFrontPosition` 用 `Dir`；注释见 `Program.cs:1996`）⇒ 复用该机制，**不需要新开关** |
+| 前格构造 | 不需要 | **新增**：目标必须 `AddMapObject` 到 **caster.Dir 指向的那一格**。装置**已能设 `Dir`**：`MagicGolden/Program.cs` 的 `spec.EnableMaps` 分支里 `caster.Dir = GetNextDirection(caster, doX, doY)`（`GetFrontPosition` 用 `Dir`；同处注释已说明该设置的必要性）⇒ 复用该机制，**不需要新开关** |
 | 负例构造 | 邻格/等级/视野 | 前格为空、前格是 `Ghost`/`Death`、`StickMode=true`、等级不低于、非 proper |
 
 ## 牙（每颗写清红在哪）
@@ -91,6 +91,13 @@ public IActor GetPoseCreate() {
 | ③ | `GetPoseCreate` 换成"遍历 `VisibleActors`" | 前格以外的目标也被推 ⇒ 帧集合红 |
 | ④ | 去掉 `StickMode` 门 | 该目标仍零帧、但**多抽 1 次 `Random(20)`** ⇒ 抽数红 |
 | ⑤ | 前格为空（不把目标放进前格） | 零抽零帧、`boTrain=false`（无 640）⇒ 退化守卫 |
+
+### 退化守卫（验收硬条件，与 8/37 同款）
+
+**golden 里必须存在 ≥1 条推挤帧**（`SM_BACKSTEP(9)`）；**零条即具名红**（"本 case 未产生任何推挤帧
+⇒ 效果体零次执行"），**不许静默通过**。`17`/`638`/`640` 都在、帧集合"看起来对"而推挤体零次执行，
+是最难发现的假绿（同款教训：`docs/issues/openmir2-groupamyounsul-nondegenerate-golden.md`）。
+牙⑤ 是该守卫的**证明**，本守卫保证合入后不会退回退化态。
 
 ## 写集与风险
 
