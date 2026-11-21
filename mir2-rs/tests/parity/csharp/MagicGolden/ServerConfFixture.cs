@@ -37,6 +37,14 @@ public static class ServerConfFixture
         "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2";
 
     /// <summary>
+    /// **非缺省对照臂**的冻结夹具身份（`mir2-rs/tests/parity/fixtures/serverconf/nondefault/Server.conf`，
+    /// 由部署件逐字节复制后只改 `MabMabe*` 四键；卡 `magic-serverconf-nondefault-arm-plan`）。
+    /// 同样 fail-closed：夹具件一改，生成当场红——正确动作是更新本常量并重出 `mabmabe-nondefault`。
+    /// </summary>
+    public const string PinnedNonDefaultSha256 =
+        "cc59503c330cd9c41120f440e289a052d50e260f368889fc0e1f5b64be12376f";
+
+    /// <summary>
     /// 十键口径的**唯一来源**：`(golden 键名, oracle `[Setup]` 键, 部署期望值)`。
     ///
     /// 一张表同时定义三个名字的映射：
@@ -46,6 +54,26 @@ public static class ServerConfFixture
     /// 例：`("mag_tamming_hp_rate", "MagTammingTargetHPRate", 100)` —— 键 ≠ 字段（BUG-REPLICA）。
     /// 加键/改期望值只改这张表 + `ReadValue` 的一个映射臂。
     /// </summary>
+    /// <summary>
+    /// 非缺省臂十键期望值：只把 `MabMabe*` 四键换成**第三值**（≠ 部署值、≠ ctor 缺省）：
+    /// `HitRandRate 50`、`MinLvLimit 40`、`SucessRate 90`、`MabeTimeRate 7`。
+    /// 其余六键保持部署口径（本支只针对 MG-48 的四个消费点）。`LoadOrThrow(nonDefault: true)`
+    /// 会用本表断言，并做"第三值 ≠ 部署值 && ≠ ctor 缺省"的元断言。
+    /// </summary>
+    public static readonly (string GoldenKey, string IniKey, int Expected)[] NonDefaultKeys =
+    {
+        ("mag_turn_undead_level", "MagTurnUndeadLevel", 44),
+        ("mab_mabe_hit_rand_rate", "MabMabeHitRandRate", 50),
+        ("mab_mabe_hit_min_lv_limit", "MabMabeHitMinLvLimit", 40),
+        ("mab_mabe_hit_sucess_rate", "MabMabeHitSucessRate", 90),
+        ("mab_mabe_hit_mabe_time_rate", "MabMabeHitMabeTimeRate", 7),
+        ("amy_ounsul_point", "AmyOunsulPoint", 15),
+        ("mag_tamming_level", "MagTammingLevel", 40),
+        ("mag_tamming_target_level", "MagTammingTargetLevel", 1),
+        ("mag_tamming_hp_rate", "MagTammingTargetHPRate", 100),
+        ("mag_tamming_count", "MagTammingCount", 5),
+    };
+
     public static readonly (string GoldenKey, string IniKey, int Expected)[] Keys =
     {
         ("mag_turn_undead_level", "MagTurnUndeadLevel", 44),
@@ -75,8 +103,11 @@ public static class ServerConfFixture
     /// 装载 `&lt;BaseDirectory&gt;/Server.conf` 并断言十键 == 部署期望值。
     /// 任何违约抛 <see cref="FixtureContractViolation"/>（`caseName` 只用于错误定位）。
     /// </summary>
-    public static Snapshot LoadOrThrow(string caseName)
+    public static Snapshot LoadOrThrow(string caseName, bool nonDefault = false)
     {
+        var keys = nonDefault ? NonDefaultKeys : Keys;
+        string pinnedSha = nonDefault ? PinnedNonDefaultSha256 : PinnedServerConfSha256;
+
         string path = Path.Combine(AppContext.BaseDirectory, "Server.conf");
         if (!File.Exists(path))
         {
@@ -84,35 +115,63 @@ public static class ServerConfFixture
         }
 
         string sha = FileSha256(path);
-        if (!string.Equals(sha, PinnedServerConfSha256, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(sha, pinnedSha, StringComparison.OrdinalIgnoreCase))
         {
             throw new FixtureContractViolation(
-                $"[{caseName}] Server.conf sha256 与钉住值不符：got={sha} want={PinnedServerConfSha256}"
+                $"[{caseName}] Server.conf sha256 与钉住值不符：got={sha} want={pinnedSha}"
                 + "（生成源一改必须更新常量，不得绕过断言）");
         }
 
         new SystemModule.Conf.ServerConf(path).LoadConfig();
         var cfg = SystemModule.SystemShare.Config;
 
-        var values = new Dictionary<string, int>(Keys.Length);
-        foreach (var (goldenKey, iniKey, _) in Keys)
+        var values = new Dictionary<string, int>(keys.Length);
+        foreach (var (goldenKey, iniKey, _) in keys)
         {
             values[goldenKey] = ReadValue(cfg, iniKey);
         }
 
         // 顺序固定：sha 已在上面先判完；这里只报「值不符」（消息里不含 sha 字段）。
-        foreach (var (goldenKey, _, expected) in Keys)
+        foreach (var (goldenKey, _, expected) in keys)
         {
             int got = values[goldenKey];
             if (got != expected)
             {
                 throw new FixtureContractViolation(
-                    $"[{caseName}] {goldenKey} 期望 {expected}（部署值），实得 {got}"
+                    $"[{caseName}] {goldenKey} 期望 {expected}，实得 {got}"
                     + "——缺键/空值/非数字会回落缺省，本入口不许吃缺省");
             }
         }
 
+        if (nonDefault) AssertThirdValues(caseName);
         return new Snapshot(values);
+    }
+
+    /// <summary>
+    /// 元断言（卡 §1.1/§6）：非缺省臂改名的那四键必须 **≠ 部署值 && ≠ ctor 缺省**，
+    /// 否则"非缺省臂"退化成复用部署值或复用缺省值，判据整体失效。
+    /// ctor 缺省来自 `GameSvrConf` 构造函数（`MagTurnUndeadLevel=50` 等；四键缺省 = 100/10/21/20）。
+    /// </summary>
+    private static void AssertThirdValues(string caseName)
+    {
+        var deploy = Keys.ToDictionary(k => k.GoldenKey, k => k.Expected);
+        var ctor = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["mab_mabe_hit_rand_rate"] = 100,
+            ["mab_mabe_hit_min_lv_limit"] = 10,
+            ["mab_mabe_hit_sucess_rate"] = 21,
+            ["mab_mabe_hit_mabe_time_rate"] = 20,
+        };
+        foreach (var (goldenKey, _, expected) in NonDefaultKeys)
+        {
+            if (!ctor.TryGetValue(goldenKey, out int ctorDefault)) continue;
+            if (expected == deploy[goldenKey] || expected == ctorDefault)
+            {
+                throw new FixtureContractViolation(
+                    $"[{caseName}] {goldenKey}={expected} 必须 ≠ 部署值 {deploy[goldenKey]} 且 ≠ ctor 缺省 {ctorDefault}"
+                    + "（否则非缺省臂没有判别力）");
+            }
+        }
     }
 
     /// <summary>

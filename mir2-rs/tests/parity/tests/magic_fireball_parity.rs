@@ -755,8 +755,26 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
         ));
     }
     // ---- `target_hp` 是**施法前**输入（卡 §8.3d）----
-    // 有伤害时：`SM_STRUCK(31)` 的 `param` 是扣血后的 HP、`series` 是本次伤害
-    // ⇒ `param + series` 必须回到施法前值（= `Fixture.target_hp`）。
+    // 有伤害时：`SM_STRUCK(31)` 的 `param` 是**该收件人看到的当前 HP**、`series` 是本次伤害。
+    // **同一目标可能经过多次伤害事件**，且 31 的 `param` 可能是"批量刷新后的当前 HP"
+    // （例：50 `MabMabe` 先结算第一条 `RM_DELAYMAGIC`（`nPower/3`）再是成功臂一击；两支 31 的
+    // `param` 都是最终 HP。见 `magic-serverconf-nondefault-arm-plan` 的差分证据）⇒ 不再逐帧链式
+    // 断言 `param`，改用**总量恒等式**：该收件人的 target-31 序列
+    // **末帧 `param` + Σ`series` == `target_hp`**。
+    // 这只依赖"伤害总额 + 最终 HP 回到施法前值"，与 31 的批量/逐条发送时机无关；同时仍能拦住
+    // "把施法后 HP 当 `target_hp`"（那样等式必然不成立）。
+    // 致死支（末帧 `param == 0`）：伤害不被 HP 截断（`series` 是掷出值）⇒ 只要求
+    // `Σseries >= target_hp`。反例来源：MG-18（10 `(ushort)` 溢出 ⇒ 单击伤害 45921 ≥ HP 100）。
+    //
+    // **本契约的口径（d8 独立复核 2026-11-21 的三项落字）**：
+    // 1) 它只做「输入来源 + 总量自洽」检查，**不是逐帧完整性检查**：**中间** 31 的
+    //    `param/series` 由 `verify()` 的跨栈逐帧比较守（golden vs Rust 台账逐值）；"契约绿"
+    //    ≠ "每帧都对"。
+    // 2) 致死支只验「末帧 `param==0` + `Σseries >= target_hp`」，**不验逐事件致死**；
+    //    前提 `target_hp > 0`（`target_hp==0` 时 `Σ>=0` 恒真，属既有弱面）。
+    // 3) **已知接受面**（不加补偿帧约束）：`(85,15),(85,0)`、`(70,15)→(80,5)` 这类
+    //    "中间帧/末帧单值错但总量凑平"的形态本契约不抓。要抓中间帧就得回到逐帧链式，
+    //    而那正是本改动要避开的"批量刷新误红"——**后来人不要为此再补牙把口径拧回去**。
     let target_hp = fixture
         .get("target_hp")
         .and_then(Value::as_i64)
@@ -767,6 +785,8 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
         .into_iter()
         .flatten()
     {
+        let mut last_hp: Option<i64> = None;
+        let mut total_damage: i64 = 0;
         for f in r
             .get("Sent")
             .and_then(Value::as_array)
@@ -788,23 +808,22 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             }
             let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
             let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
-            // **致死支**：伤害不被 HP 截断（`series` 记的是掷出的伤害），`HP_after` 归 0 ⇒
-            // `HP_after + damage == target_hp` 必然不成立。此时判据换成"确实是致死一击"
-            // （`damage >= target_hp`），仍能拦住"施法后值当输入"这类混淆（非致死支仍要求恒等式）。
-            // 反例来源：MG-18（10 `(ushort)` 溢出 ⇒ 单击伤害 45921 ≥ HP 100）。§8.3d。
-            if hp_after == 0 {
-                if dmg < target_hp {
-                    return Err(format!(
-                        "[{label}] 31 帧 `HP_after=0` 但 `damage({dmg}) < target_hp({target_hp})`——既非致死一击，也不满足 §8.3d 的恒等式；疑似输入/输出混淆"
-                    ));
-                }
-            } else {
-                let pre = hp_after.saturating_add(dmg);
-                if pre != target_hp {
-                    return Err(format!(
-                        "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
-                    ));
-                }
+            last_hp = Some(hp_after);
+            total_damage = total_damage.saturating_add(dmg);
+        }
+        let Some(last_hp) = last_hp else { continue };
+        if last_hp == 0 {
+            if total_damage < target_hp {
+                return Err(format!(
+                    "[{label}] 31 序列末帧 `HP_after=0` 但 Σ`damage`({total_damage}) < `target_hp`({target_hp})——既非致死一击，也不满足 §8.3d 的恒等式；疑似输入/输出混淆"
+                ));
+            }
+        } else {
+            let pre = last_hp.saturating_add(total_damage);
+            if pre != target_hp {
+                return Err(format!(
+                    "[{label}] 31 序列 末帧`HP_after({last_hp})+Σdamage({total_damage})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
+                ));
             }
         }
     }
@@ -1146,6 +1165,148 @@ fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
         c["DeliverRng"] = d;
     }
     serde_json::json!({ "magic_id": 33, "cases": [c] })
+}
+
+/// **牙⑦b：多伤害事件（31 的 `param` 批量刷成最终 HP）下总量恒等式仍有牙**。
+/// 两支 31：(HP_after=80, damage=15) 与 (HP_after=80, damage=5)，`target_hp=100` 绿；
+/// `target_hp=80`（施法后值当输入）必须红并点名。
+#[test]
+fn tooth_target_hp_multi_event_batch_refresh() {
+    let label = "s1"; // 与 `synth_golden` 生成的 Label 一致
+    let mk = |target_hp: i64| {
+        let mut g = synth_golden("s1", serde_json::json!([1]), Some("cover_drain"));
+        let c = &mut g["cases"][0];
+        c["Fixture"]["target_actor_id"] = serde_json::json!(1002);
+        c["Fixture"]["target_hp"] = serde_json::json!(target_hp);
+        c["Receivers"] = serde_json::json!([
+            {
+                "Who": "target",
+                "Rm": [],
+                "Sent": [
+                    {"ident": 31, "recog": 1002, "param": 80, "series": 15},
+                    {"ident": 31, "recog": 1002, "param": 80, "series": 5}
+                ]
+            }
+        ]);
+        g
+    };
+    if let Err(e) = check_golden_contract(&mk(100), label) {
+        panic!("多事件 100（施法前）应绿：80 + 15 + 5 = 100；实得 {e}");
+    }
+    let err = check_golden_contract(&mk(80), label).unwrap_err();
+    eprintln!("RED(new, multi-event): {err}");
+    assert!(
+        err.contains("target_hp") && err.contains("施法前") && err.contains("疑似输入/输出混淆"),
+        "施法后值当输入必须红并点名：{err}"
+    );
+}
+
+/// **等价性证据（共享判据放宽的必要条件）**：把 §8.3d 旧判据（逐帧
+/// `param + series == target_hp`）能抓的变异，重放到**既有 `mabmabe` 三支**上：
+/// 旧判据必须红、新判据（总量恒等式）也必须红；未变异时两者都绿。
+/// 判据从"单次伤害事件"放宽到"总量"后，等价性由此测试证明（卡 §8.3d / 非缺省臂 review）。
+#[test]
+fn tooth_target_hp_new_criterion_matches_old_on_existing_mabmabe() {
+    /// 旧判据（逐帧恒等式）的判定：**任一无伤害帧不成立即 false**；无 31 帧 ⇒ true（两版一致）。
+    fn old_criterion_ok(case: &Value) -> bool {
+        let fixture = &case["Fixture"];
+        let target_hp = fixture["target_hp"].as_i64().unwrap_or(i64::MIN);
+        let tid = fixture.get("target_actor_id").and_then(Value::as_i64);
+        for r in case["Receivers"].as_array().into_iter().flatten() {
+            for f in r["Sent"].as_array().into_iter().flatten() {
+                if f["ident"].as_i64() != Some(31) {
+                    continue;
+                }
+                if let (Some(tid), Some(rc)) = (tid, f.get("recog").and_then(Value::as_i64)) {
+                    if rc != tid {
+                        continue;
+                    }
+                }
+                let hp_after = f["param"].as_i64().unwrap_or(i64::MIN);
+                let dmg = f["series"].as_i64().unwrap_or(0);
+                if hp_after == 0 {
+                    if dmg < target_hp {
+                        return false;
+                    }
+                } else if hp_after.saturating_add(dmg) != target_hp {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn mutate_case(mut case: Value, kind: u8) -> Value {
+        match kind {
+            // A：把施法前 HP 改坏（旧判据必红）
+            1 => {
+                let hp = case["Fixture"]["target_hp"].as_i64().unwrap();
+                case["Fixture"]["target_hp"] = Value::from(hp + 5);
+            }
+            // B：把某条 target-31 的 series 改坏（旧判据必红）
+            2 => {
+                let tid = case["Fixture"]["target_actor_id"].as_i64().unwrap();
+                let mut done = false;
+                for r in case["Receivers"].as_array_mut().into_iter().flatten() {
+                    for f in r["Sent"].as_array_mut().into_iter().flatten() {
+                        if !done
+                            && f["ident"].as_i64() == Some(31)
+                            && f.get("recog").and_then(Value::as_i64) == Some(tid)
+                            && f["series"].as_i64().unwrap_or(0) > 0
+                        {
+                            let v = f["series"].as_i64().unwrap() + 1;
+                            f["series"] = Value::from(v);
+                            done = true;
+                        }
+                    }
+                }
+                assert!(done, "B 变异必须命中至少一条 target-31");
+            }
+            _ => {}
+        }
+        case
+    }
+    let g = golden_file("mabmabe.json");
+    let mut checked = 0;
+    for case in g["cases"].as_array().unwrap() {
+        let label = case["Label"].as_str().unwrap();
+        // 只对"有 target-31 帧"的支判等价（无伤害帧时两版判据都空过，变异也无从触发）。
+        let has_strike = case["Receivers"].as_array().unwrap().iter().any(|r| {
+            r["Sent"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|f| f["ident"] == 31))
+        });
+        if !has_strike {
+            continue;
+        }
+        checked += 1;
+        let base = case.clone();
+        let mut one = g.clone();
+        one["cases"] = serde_json::json!([base.clone()]);
+        assert!(
+            old_criterion_ok(&base),
+            "[{label}] 未变异的既有 goldens 必须满足旧判据（前置）"
+        );
+        assert!(
+            check_golden_contract(&one, label).is_ok(),
+            "[{label}] 未变异件在新判据下也必须绿"
+        );
+        for kind in [1u8, 2u8] {
+            let mutated = mutate_case(base.clone(), kind);
+            assert!(
+                !old_criterion_ok(&mutated),
+                "[{label}] 变异 {kind} 必须能被**旧**判据抓住（等价性前置）"
+            );
+            let mut mg = g.clone();
+            mg["cases"] = serde_json::json!([mutated]);
+            let err = check_golden_contract(&mg, label)
+                .expect_err(&format!("[{label}] 变异 {kind}：新判据必须仍然红"));
+            eprintln!("RED(new, existing {label}, mutate {kind}): {err}");
+        }
+    }
+    assert!(
+        checked >= 2,
+        "至少要有两支既有 mabmabe 带伤害帧才能证明等价性；实得 {checked}"
+    );
 }
 
 /// **牙⑦：`target_hp` 必须是施法前输入**（卡 §8.3d）。合成一个 31 帧（HP=85, damage=15）：
