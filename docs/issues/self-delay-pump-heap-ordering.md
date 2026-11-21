@@ -3,13 +3,11 @@
 > 状态：**已实测定位，未修代码**。触发源 = 50 `MabMabe`（魔爆）非缺省对照臂成功臂
 > （卡 `openmir2-mabmabe-success-arm-parity.md`）。同一轮的先一步实测已证"8103 分歧 = 台账装配（N→N，
 > 产品侧逐条产出 2 次受击）"；本卡接着证"两条 `RM_DELAYMAGIC` 的时序 700/800（相对 cast）vs golden
-> 600/600"的成因**不是**调度差异，而是**自延迟泵的堆序保真缺陷**。修复前必须先做 §5 的影响面扫描。
+> 600/600"的成因**不是**调度差异；定性更正见 §0（**装置缺口 B17**，不是产品缺陷）。
 
 ## 0. 定性
 
-**产品缺陷（自延迟泵的堆序保真），不是“装置缺口”。** 理由：`SelfDelayQueue` 在**模拟 oracle 的
-`ActorEntity.MsgQueue`**；oracle 两条 600 先出、中间无跳过，Rust 因堆根可能是更晚到期的消息而 `break`、
-把**已到点**的消息压到下一步 ⇒ **可观测行为与 oracle 不一致 ⇒ 产品缺陷**。
+**定性更正（2026-11-21）**：本条原判「产品缺陷（自延迟泵堆序）」**已撤回**。核对 C# 真机：`ActorEntity.MsgQueue` 为 `PriorityQueue<SendMessage, byte>`（只按 priority），`BaseObject.Message.cs::GetMessage` 遇未到期队首即 `Enqueue(Lowest)` + `return false` ⇒ **Rust 泵与生产同构、无缺陷**；偏离生产的是 golden 装置 `MagicGolden/Program.cs::DrainOnce`（`DrainRaw()` 全取、逐条判到期、未到期 `PushBack`）。⇒ 本条改判**装置缺口 B17**（见 `docs/issues/golden-harness-blind-spots.md`）。**探针事实全部保留**——它们现在是“装置偏离生产”的证据，不是“产品缺陷”的证据。
 
 ## 1. 现象（探针原文，`nondef_hit`，cast 时刻 `clock_ms=400`）
 
@@ -64,16 +62,14 @@
   ⇒ **一遇到"堆根未到点"就整泵 `break`**。因堆根可能是一条更晚到期的消息（如 `RM_POISON@1050`、
   `RM_MAGIC_LVEXP@1400`），已到点（`@1000`）的 `RM_DELAYMAGIC` 会被压到后续步。
 
-## 4. 正确语义（oracle 对照）
+## 4. 两侧语义对照（生产 vs 装置）
 
-oracle 的 `ActorEntity.MsgQueue` 在 golden 里两条 `RM_DELAYMAGIC` **都按 600 同刻出队、中间无跳过**。
-⇒ 正确语义要求：**一步内取出所有已到期消息**，且**取数序不与到期时刻相悖**。Rust 现状不满足：
-- **堆序**：需按 `(priority, deliver_at)`（或 priority 相等时按 `deliver_at`）有序，使"最早到期"在堆根；
-- **一步内**：`deliver_self_delay_msgs` 在 `now` 时刻应把**所有 `deliver_at <= now`** 的消息取出，
-  而不是在第一个未到点堆根处停泵。
+同一多延迟场景在两侧的可观测行为不同，**以生产语义为准**：
+- **生产语义**（`ActorEntity.MsgQueue` 只按 priority；`BaseObject.Message.cs::GetMessage`）：`TryDequeue` 后若 `DeliveryTime > now` ⇒ `Enqueue(Lowest)` + `return false` ⇒ **遇未到期队首即停**，已到点但排在未到期队首之后的消息被推迟到下一 tick。**Rust 泵 `deliver_self_delay_msgs_impl` 与生产同构、正确复刻**。
+- **装置语义**（`MagicGolden/Program.cs::DrainOnce`）：先 `DrainRaw()` 取**全部**消息，逐条判 `DeliveryTime <= now`（到期 `OperatePublic`、未到期收进 `later` 后 `PushBack` 回 `MsgQueue`）⇒ **一步内处理所有到点消息、不因未到期队首而停**。
+⇒ 可观测差异：同一多延迟场景，装置会把「生产本应延后」的到期消息**提前同刻吐出**；因此 golden 的帧 `due_ms_rel`/出队顺序是**装置语义**，不代表生产。§1 的探针（生产分 tick 700/800）恰是「装置 golden 两条 600/600 同刻」反差的证据。
 
-（本卡不对"复刻 `.NET PriorityQueue` 某次具体堆布局"下结论——`.NET` 堆在等优先级下不稳定；
-判据是**可观测行为**：两条 600 必须同刻出队、不被更晚到期消息挡住。）
+（`.NET PriorityQueue` 在等优先级下不稳定——判据是**可观测行为**，不钉某次具体堆布局。）
 
 ## 5. 影响面（待扫描，先写问号）
 
@@ -83,9 +79,10 @@ oracle 的 `ActorEntity.MsgQueue` 在 golden 里两条 `RM_DELAYMAGIC` **都按 
 **具体命中哪些既有 `verified` 条目（golden 是否已暴露、是否被现有断言挡住）需要一次独立扫描**，
 不在本卡猜测。
 
-## 6. 修法建议与风险
+## 6. 修法建议与风险（修装置，不修泵）
 
-改泵/堆序会**改变多支 golden 的时序对拍结果**（`due_ms_rel`、出队顺序、中间态 HP）。因此：
-- 必须跑**全量门**，并**逐个点名复跑既有 stem**（不能只看 50 非缺省一支）；
-- **不得**用 `#[ignore]`、放宽断言或删帧来吸收差异（这是行为修正，不是判据放松）；
-- 改动后按常规 review 逐条重生成/复核受影响的 `golden/magic/*.json` 及对应 `Rm`/`Sent` 期望。
+Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向是**修装置**：把 `MagicGolden/Program.cs::DrainOnce` 改为**遇未到期队首即停**（对齐生产 `GetMessage` 的 `Enqueue(Lowest)` + `return false`），而不是「全量逐条判到期 + `PushBack`」。
+改装置会**改变受影响多延迟场景的 golden 时序**（`due_ms_rel`、出队顺序、中间态 HP），因此：
+- 必须重出受影响 golden，并**逐个点名复跑既有 stem**（不能只看 50 非缺省一支；受影响条目见 `89` 的 6 stem 扫描）；
+- 按常规 review 逐条复核受影响的 `Rm`/`Sent` 期望；
+- **不得**用 `#[ignore]`、放宽断言或删帧来吸收差异（这是装置对齐修正，不是判据放松）。
