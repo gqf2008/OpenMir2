@@ -1108,7 +1108,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。"
     },
     {
       "id": "MG-39",
@@ -1320,7 +1320,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_big_explosion_spell` 组装的 `PendingMagStruck.power` → `power + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`84/85`、`93/94`、`89/90`）+ 比较器 `real_rust_ledger_snowwind` 33 条不等（`Sent[1].series` golden=15 rust=16）；还原 `hash-object` 相等、复跑绿；**最小可观测幅度 = +1**。"
     },
     {
       "id": "MG-46",
