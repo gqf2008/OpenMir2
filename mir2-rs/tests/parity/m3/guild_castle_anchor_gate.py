@@ -288,11 +288,11 @@ REGISTERED = [
         (814, 'public int WithDrawalGolds(PlayObject PlayObject, int nGold)'),
         (889, '/// <param name="boClose"></param>'),
     ]),
-    ('Merchant.cs:544/1250/1385/1637', 'src/GameSrv/Npc/Merchant.cs', [
-        (544, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
-        (1250, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
-        (1385, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
-        (1637, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
+    ('Merchant.cs:546/1257/1392/1644', 'src/GameSrv/Npc/Merchant.cs', [
+        (546, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
+        (1257, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
+        (1392, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
+        (1644, 'if (CastleMerchant || SystemShare.Config.GetAllNpcTax)'),
     ]),
     ('UserCastle.cs:454-478', 'src/M2Server/Castle/UserCastle.cs', [
         (454, 'public bool InCastleWarArea(IEnvirnoment envir, int nX, int nY)'),
