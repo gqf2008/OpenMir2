@@ -86,3 +86,17 @@ Rust 泵与生产同构、无缺陷（§0/§4），**不改泵**。处置方向�
 - 必须重出受影响 golden，并**逐个点名复跑既有 stem**（不能只看 50 非缺省一支；受影响条目见 `89` 的 6 stem 扫描）；
 - 按常规 review 逐条复核受影响的 `Rm`/`Sent` 期望；
 - **不得**用 `#[ignore]`、放宽断言或删帧来吸收差异（这是装置对齐修正，不是判据放松）。
+
+## 7. 装置对齐修法（B17）与预登记预测（**改代码前落盘**）
+
+**改法（仅 `MagicGolden/Program.cs::DrainOnce`）**：`RecordingPlayObject.DrainRaw()` = `while (MsgQueue.TryDequeue(...))` ⇒ `raw` 已是生产 `GetMessage` 的**堆根出队序**。故把内层从「全取 → 逐条判到期、到期处理、未到期收 `later`、末尾统一 `PushBack`」改为：**按 `raw` 顺序处理，遇第一条 `LateDelivery && DeliveryTime > now` 立即 `break`；已到点前缀照旧处理，把该未到期消息及其后所有未处理条目按原顺序 `PushBack`（该条还原 Lowest，其余按各自记录 prio）**。即生产 `GetMessage`「遇未到期队首即停、单条 `Enqueue(Lowest)` 归还」。**不按到期时间重排/排序**（那是另一种语义，不是生产）。
+
+**预登记预测（改前落盘；用于「预测 vs 实测」对照）**：
+- **会变（只动延迟帧的出现时刻/顺序）—— 5 支**：`healing`(MG-12)、`bigcloak`(MG-33)、`bighealing`(MG-40)、`groupdeding`(MG-51)、`mabmabe-nondefault`(MG-48 非缺省)。
+- **不变 —— `hbfireball`(MG-53) + 其余全部 stem**：剥绝对墙钟 `delivery` 后**逐字节相等**。
+- **5 支的变必须只限**：延迟帧 `due_ms_rel`/出队顺序；**伤害值、HP、抽数、帧条数不得变**。
+- **停下条件**（任一即停手报 opc-19，不自行调断言/补 golden）：①预期外 stem 变化；②5 支里连伤害值/HP/抽数/帧条数也变；③任何既有对拍由绿转红。
+
+**两处装置近似（登记）**：
+1. **`now` 采样粒度**：装置每步取一次 `GetTickCount()`；生产每次 `GetMessage` 现取。属**装置对生产的近似**，可接受（步长 100ms、窗口内无跨步 timing 敏感支）。**将来若有亚步长时序支，此近似会失效**。
+2. **同优先级 tie 序**：装置 `MsgQueue` 与生产同为 `PriorityQueue<SendMessage, byte>`，tie 序应一致；但「未到期那条以 Lowest 重入队」会改变等优先级项间的相对次序（`PriorityQueue` tie 序非 FIFO）。**若某支因此产生与生产不同的输出，那是装置表示能力的限制，不是生产语义本身**——届时登记、不据此改产品。
