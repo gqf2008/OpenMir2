@@ -15680,22 +15680,17 @@ fn handle_spell_cmd_with_magic(
                     rcd.level = train.level;
                     rcd.tran_point = train.tran_point;
                 }
-                // `PlayCloneObject` 构造器尾 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName)`
-                // （`PlayCloneObject.cs:17`）：先登记展示表，再广播出现帧（`SM_TURN` 名尾 + 紧随
-                // `SM_FEATURECHANGED`，`downlink::turn_pair`）。`Msg="Clone"` 非空 ⇒ 名尾
-                // `Encode("Clone/{GetChrColor}")`（= `"Clone/255"`，`PlayObject.Message.cs:1549-1555`）。
+                // **出生帧（2026-11-21 依 oracle 更正）**：`PlayCloneObject` 构造器尾虽调用
+                // `SendRefMsg(RM_TURN, …)`（`PlayCloneObject.cs:17`），但 `PlayObject` ctor 把
+                // `FixedHideMode` 置 true（`PlayObject.cs:993`），克隆体不登录、无
+                // `PlayObject.cs:1442` 的复位 ⇒ `SendRefMsg` 命中 `BaseObject.Message.cs:390-394`
+                // 的"隐藏态只发自己"分支；克隆体队列无人排空 ⇒ **旁观者零帧**。
+                // 因此这里只登记展示表（AOI/后续视野用），**不广播** `SM_TURN`/`SM_FEATURECHANGED`。
+                // （原实现无条件 `downlink::turn_pair` 广播；golden 实测 oracle 零帧后更正。）
                 if let Some(clone) = outcome.clone {
                     if let Some(caster_display) = displays.get(actor_id).cloned() {
                         let d = downlink::clone_display(clone.dir, &caster_display);
                         displays.set(clone.clone_id, d.clone());
-                        let frames = downlink::turn_pair(
-                            clone.clone_id,
-                            wire_coord(clone.x),
-                            wire_coord(clone.y),
-                            &d,
-                        );
-                        // 广播集合排除克隆体自己（`RM_TURN` 处理器有 `ActorId != ActorId` 守卫）。
-                        broadcast_ref_msg(world, online, gates, clone.clone_id, &frames);
                     }
                 }
                 // `boSpellFire` ⇒ `RM_MAGICFIRE`（`MagicManager.cs:648-658`）；**F-1**：含施法者自己。
@@ -63202,25 +63197,25 @@ SendRefMsgRange=15
                 .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
             "RM_SPELL 有自身守卫 ⇒ 主人自己不应收 SM_SPELL"
         );
-        // `SM_TURN`（Recog = 克隆体 id）+ 名尾 `"Clone/255"`；两个在线玩家各一。
-        let turns: Vec<&Vec<u8>> = frames
+        // **出生零帧（2026-11-21 依 oracle 更正）**：oracle 的克隆体 ctor 里 `PlayObject` 置
+        // `FixedHideMode = true`（`PlayObject.cs:993`），克隆体不登录、无 `PlayObject.cs:1442`
+        // 的复位 ⇒ ctor 尾 `SendRefMsg(RM_TURN)` 命中 `BaseObject.Message.cs:390-394` 的
+        // "隐藏态只发自己"分支；克隆体队列无人排空 ⇒ **没有任何** SM_TURN/SM_FEATURECHANGED。
+        // 原断言（`turns.len()==2` + 名尾 `Clone/255`）编码的是 Rust 无条件广播 `turn_pair` 的
+        // 错误行为；此处按 golden 与 C# 源码链更正（留痕，不静默改绿）。
+        let turn_idents: Vec<u16> = frames
             .iter()
-            .filter(|(_, b)| ident_of(b) == mir2_protocol::messages::SM_TURN)
-            .map(|(_, b)| b)
+            .filter(|(_, b)| b.len() >= 12)
+            .map(|(_, b)| ident_of(b))
+            .filter(|id| {
+                *id == mir2_protocol::messages::SM_TURN
+                    || *id == mir2_protocol::messages::SM_FEATURECHANGED
+            })
             .collect();
-        assert_eq!(turns.len(), 2, "主人与观察者各一（克隆体自己被排除）");
-        for t in &turns {
-            assert_eq!(
-                i32::from_le_bytes([t[0], t[1], t[2], t[3]]),
-                clone_id,
-                "SM_TURN Recog = 克隆体 ActorId"
-            );
-            let msg = mir2_protocol::edcode::decode(&t[23..]);
-            assert!(
-                msg.starts_with(b"Clone/"),
-                "名尾应为 Clone/<color>；实得 {msg:?}"
-            );
-        }
+        assert!(
+            turn_idents.is_empty(),
+            "克隆体出生不得广播 SM_TURN/SM_FEATURECHANGED（FixedHideMode 自投递）；实得 {turn_idents:?}"
+        );
         assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支回 +GD");
         // 熟练度尾：`level=1 < 3` 且 `boTrain=true` ⇒ 若升级门过则 `TrainSkill(Random(3)+1)` 已落。
         assert_eq!(
@@ -74982,6 +74977,418 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skill54_parity_s13() {
         skill_tail_parity_drive("skill54", 54, "s13", golden_seed("skill54", "s13"));
+    }
+
+    /// **MG-55（46 分身术）**真实台账驱动：金标准 `golden/magic/clone46.json`（单支 `clone`）。
+    ///
+    /// 输入**一律从 golden `Fixture` 读**（caster 等级/MC/SC/AntiMagic、`Dir/Gender/Hair`、
+    /// 魔表 `TrainLv/MaxTrain[0]`、seed、`wait_ms`）。观测面 = 克隆体静态字段 + 逐收件人
+    /// `SM_TURN(10)` / `SM_FEATURECHANGED(41)` + 训练尾 640。
+    ///
+    /// **ActorId 归一化**：克隆体 id 由**进程级自增**分配（C# `ActorEntity.cs:20`；Rust
+    /// `alloc_id`），两侧数值不可比 ⇒ 台账记本侧 `Clone.actor_id`，比较器据此把「等于克隆体
+    /// id 的 recog」归一化后再逐帧比（不把 id 本身写进相等判据）。
+    fn clone46_parity_drive(label: &str) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "clone46";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+        // ---- 输入一律从 golden 读（缺键即红）----
+        let magic_id = golden_fixture_required(stem, label, "magic_id");
+        let effect = golden_fixture_required(stem, label, "effect");
+        let effect_type = golden_fixture_required(stem, label, "effect_type");
+        let user_magic_level = golden_fixture_required(stem, label, "user_magic_level");
+        let caster_level = golden_fixture_required(stem, label, "caster_level");
+        let caster_mc = golden_fixture_required(stem, label, "caster_mc");
+        let caster_sc = golden_fixture_required(stem, label, "caster_sc");
+        let anti_magic = golden_fixture_required(stem, label, "anti_magic");
+        let caster_actor_id = golden_fixture_required(stem, label, "caster_actor_id");
+        let caster_dir_in = golden_fixture_required(stem, label, "caster_dir");
+        let caster_gender = golden_fixture_required(stem, label, "caster_gender");
+        let caster_hair = golden_fixture_required(stem, label, "caster_hair");
+        let magic_train_lv = golden_fixture_required(stem, label, "magic_train_lv");
+        let magic_max_train0 = golden_fixture_required(stem, label, "magic_max_train0");
+        let pre_face = golden_case_for(stem, label)["Fixture"]["pre_spell_face_target"]
+            .as_bool()
+            .expect("golden 必须记录 pre_spell_face_target（夹具输入不许缺省兜底）");
+        assert!(
+            pre_face,
+            "[{stem}/{label}] 生产路径在 DoSpell 前转向点击坐标；pre_spell_face_target 必须为 true"
+        );
+        let fast_train = golden_case_for(stem, label)["Fixture"]["fast_train"]
+            .as_bool()
+            .expect("golden 必须记录 fast_train（输入不许缺省兜底）");
+        assert!(
+            !fast_train,
+            "[{stem}/{label}] PlayObject.FastTrain 缺省 false（只有快速修炼项链会置 true）；夹具必须为 false"
+        );
+        let caster_gender = u8::try_from(caster_gender).expect("caster_gender 越界");
+        let caster_hair = u8::try_from(caster_hair).expect("caster_hair 越界");
+        let level_u8 = u8::try_from(caster_level).expect("caster_level 越界");
+        let id_base = i32::from(caster_actor_id) - 1;
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            magic_id,
+            &[(
+                magic_id,
+                u8::try_from(user_magic_level).expect("user_magic_level 越界"),
+            )],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: u8::try_from(effect).expect("effect 越界"),
+            effect_type: u8::try_from(effect_type).expect("effect_type 越界"),
+            train_lv: u8::try_from(magic_train_lv).expect("train_lv 越界"),
+            train_level: [0; 4],
+            max_train: [i32::from(magic_max_train0), 0, 0, 0],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        // UserMagic 内存态：level 从 golden 读、TranPoint=0（与装置 `um.TranPoint=0` 同源）。
+        {
+            let list = rig
+                .saves
+                .get_mut("caster")
+                .and_then(|s| s.record.data.magic.as_mut())
+                .expect("new_layout 必须给 caster 一条 magic 记录");
+            let m = list
+                .iter_mut()
+                .flatten()
+                .find(|m| m.mag_idx == magic_id)
+                .expect("caster 魔表必须含本魔号");
+            m.level = u8::try_from(user_magic_level).expect("user_magic_level 越界");
+            m.tran_point = 0;
+        }
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = level_u8;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = level_u8;
+            sg.state.wabil.level = level_u8;
+            sg.state.wabil.mc = caster_mc;
+            sg.state.wabil.sc = caster_sc;
+        }
+        {
+            let t = fireball_actor(&rig, "target");
+            let e = rig.world.entities.get_mut(t).unwrap();
+            e.vitals.anti_magic = anti_magic;
+        }
+        // 主人展示面：Gender/Hair 无损编码进 feature（`clone_display` 从位域反解）。
+        // Dress/Weapon 归 0（夹具无装备，与 C# 登录序一致）。
+        let caster_feature = game_svr::feature::make_human_feature(
+            0,
+            caster_gender,
+            caster_gender,
+            caster_hair.wrapping_mul(2).wrapping_add(caster_gender),
+        );
+        rig.displays.set(
+            rig.caster,
+            downlink::ActorDisplay::new(4, 0, caster_feature, 0, 0, 255, b"caster".to_vec()),
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let target = fireball_actor(&rig, "target");
+        let hp_before = i64::from(rig.world.entities.get(target).unwrap().hp);
+        let (level_before, tp_before) = skill_tail_rcd(&rig, magic_id);
+        let n0 = trace_line_count(&trace);
+        rig.cast(magic_id, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        // 跨 1000ms 排水（640 是 `SendSelfDelayMsg(…,1000)` 自投递；与 golden `wait_ms` 同值）。
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step_frames, _raws2) = rig.drain();
+            for f in step_frames.drain(..) {
+                all_frames.push((f.0, f.1, elapsed as i64));
+            }
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
+        let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
+        // ---- 克隆体（本侧 id 只作比较器的归一化锚）----
+        let (clone_id, cx, cy) = {
+            let c = rig
+                .world
+                .entities
+                .iter_ref()
+                .find(|e| e.name == mir2_world_bevy::CLONE_NAME)
+                .expect("46 施法后应有克隆体实体");
+            (c.id, c.x, c.y)
+        };
+        assert!(
+            rig.world.entities.get(clone_id).is_some(),
+            "克隆体必须已落库"
+        );
+        let clone_dir = rig.world.entities.get(clone_id).unwrap().ai.dir;
+        let clone_display = rig.displays.get(clone_id).expect("克隆体展示必须登记");
+        let cf = u32::try_from(clone_display.feature).expect("feature 必须非负");
+        let clone_gender = ((cf >> 8) & 1) as u8;
+        let clone_hair = (((cf >> 16) & 0xFF) as u8) >> 1;
+        let caster_dir_now = actor_dir(&rig.world, &rig.displays, rig.caster);
+        let caster_display = rig.displays.get(rig.caster).expect("caster 展示必须存在");
+        let cf2 = u32::try_from(caster_display.feature).expect("caster feature 必须非负");
+        // ---- RM 列（装配；与 oracle `SendRefMsg` 参数逐项对应）----
+        let spell_rm = fireball_rm(
+            10008,
+            i64::from(effect),
+            101,
+            100,
+            i64::from(magic_id),
+            24,
+            false,
+        );
+        let fire_rm = fireball_rm(
+            10120,
+            0,
+            i64::from(effect_type) | (i64::from(effect) << 8),
+            101 | (100 << 16),
+            i64::from(target),
+            136,
+            false,
+        );
+        let lvexp_rm = fireball_rm(
+            10123,
+            0,
+            i64::from(magic_id),
+            i64::from(level_after),
+            i64::from(tp_after),
+            255,
+            true,
+        );
+        let rm_of = |who: &str| -> Vec<serde_json::Value> {
+            // 出生零帧 ⇒ **无** RM_TURN(10001) 到达任何收件人（克隆体自投递）。
+            match who {
+                "caster" => vec![spell_rm.clone(), fire_rm.clone(), lvexp_rm.clone()],
+                "target" | "obs_in" => vec![spell_rm.clone(), fire_rm.clone()],
+                _ => Vec::new(),
+            }
+        };
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        let mut clone_receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            let sent = fireball_sent_with_due(&all_frames, socket);
+            let clone_frames: Vec<serde_json::Value> = sent
+                .iter()
+                .filter(|f| {
+                    let id = f.get("ident").and_then(serde_json::Value::as_i64);
+                    id == Some(i64::from(mir2_protocol::messages::SM_TURN))
+                        || id == Some(i64::from(mir2_protocol::messages::SM_FEATURECHANGED))
+                })
+                .cloned()
+                .collect();
+            clone_receivers.push(serde_json::json!({ "who": who, "frames": clone_frames }));
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_of(who),
+                "Sent": sent,
+            }));
+        }
+        let mi = rig.magic_table.get(magic_id).expect("魔表必须有该魔号");
+        let n_level = skill_tail_n_level(level_after, mi.train_lv);
+        let mt_used = mi.max_train.get(n_level).copied().unwrap_or(0);
+        let train = serde_json::json!({
+            "level_before": level_before,
+            "level_after": level_after,
+            "tran_point_before": tp_before,
+            "tran_point_after": tp_after,
+            "train_lv": mi.train_lv,
+            "max_train0": mi.max_train.first().copied().unwrap_or(0),
+            "n_level": n_level,
+            "max_train_at_level": mt_used,
+            "train_level_at_level": mi.train_level[n_level],
+        });
+        let has_640 = all_frames
+            .iter()
+            .filter(|(s, _, _)| *s == 911)
+            .filter(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .count()
+            == 1;
+        let clone_block = serde_json::json!({
+            "name": mir2_world_bevy::CLONE_NAME,
+            "actor_id": clone_id,
+            "rel_to_caster": clone_id - rig.caster,
+            "x": cx,
+            "y": cy,
+            "dir": i64::from(clone_dir),
+            "gender": i64::from(clone_gender),
+            "hair": i64::from(clone_hair),
+            "caster_dir": i64::from(caster_dir_now),
+            "caster_gender": i64::from(((cf2 >> 8) & 1) as u8),
+            "caster_hair": i64::from((((cf2 >> 16) & 0xFF) as u8) >> 1),
+            "has_640": has_640,
+            "receivers": clone_receivers,
+        });
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            // `verify` 的 `Rng` 判据 = `golden.Rng == rust.Rng ++ rust.DeliverRng`（cover_drain）。
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "DeliverRngSeqs": deliver_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "Train": train,
+            "Clone": clone_block,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        // ---- 断言（落盘之后：红了也要留下本次台账，比较器才能给语义红）----
+        // 前提：**构造期 5 抽 + 训练尾 1 抽 = 6**、交付段零抽、训练值 = TranPoint 增量 − 1。
+        assert_eq!(
+            cast_rng.len(),
+            6,
+            "[{stem}/{label}] 应恰 6 抽（克隆体 ctor 5 + 训练尾 1）；实得 {:?}",
+            cast_rng.iter().map(|(_, v, _)| *v).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            i64::from(tp_after),
+            i64::from(tp_before) + cast_rng[5].1 + 1,
+            "[{stem}/{label}] 训练尾抽值必须等于 TranPoint 增量 − 1（抽序错位会在这里红）"
+        );
+        assert!(
+            deliver_rng.is_empty(),
+            "[{stem}/{label}] 交付段不应有抽取；实得 {:?}",
+            deliver_rng
+        );
+        assert_eq!(
+            level_after, level_before,
+            "[{stem}/{label}] 本批只做未升级支"
+        );
+        assert!(
+            i64::from(mt_used) > i64::from(tp_after),
+            "[{stem}/{label}] 前提：MaxTrain[nLevel={n_level}]={mt_used} 必须 > TranPoint={tp_after}"
+        );
+        // 帧面（oracle 形态；驱动自带牙）。
+        let idents = |socket: i32| -> Vec<u16> {
+            all_frames
+                .iter()
+                .filter(|(s, _, _)| *s == socket)
+                .map(|(_, b, _)| sf_ident(b))
+                .collect()
+        };
+        assert_eq!(
+            idents(911),
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_MAGIC_LVEXP,
+            ],
+            "[{stem}/{label}] caster 帧序应为 [638,640]（出生零帧）"
+        );
+        for socket in [912, 913] {
+            assert_eq!(
+                idents(socket),
+                vec![
+                    mir2_protocol::messages::SM_SPELL,
+                    mir2_protocol::messages::SM_MAGICFIRE,
+                ],
+                "[{stem}/{label}] socket {socket} 帧序应为 [17,638]（出生零帧）"
+            );
+        }
+        assert!(idents(914).is_empty(), "[{stem}/{label}] obs_out 必须零帧");
+        for socket in [911, 912, 913] {
+            let turns: Vec<u16> = idents(socket)
+                .into_iter()
+                .filter(|id| {
+                    *id == mir2_protocol::messages::SM_TURN
+                        || *id == mir2_protocol::messages::SM_FEATURECHANGED
+                })
+                .collect();
+            assert!(
+                turns.is_empty(),
+                "[{stem}/{label}] socket {socket} 不得有出生帧（oracle FixedHideMode 自投递）；实得 {turns:?}"
+            );
+        }
+        assert!(has_640, "[{stem}/{label}] 训练尾 640 必须存在");
+        assert_eq!(
+            clone_dir,
+            (caster_dir_now + 4) % 8,
+            "[{stem}/{label}] clone.dir 必须是 GetBackDir(caster_dir)：{clone_dir} vs {caster_dir_now}"
+        );
+        assert_eq!(
+            clone_gender, caster_gender,
+            "[{stem}/{label}] Gender 必须复制"
+        );
+        assert_eq!(clone_hair, caster_hair, "[{stem}/{label}] Hair 必须复制");
+        let _ = caster_dir_in;
+        eprintln!(
+            "[{stem} {label}] seed={seed} clone={clone_id} pos=({cx},{cy}) dir={clone_dir} gender={clone_gender} hair={clone_hair} frames={}",
+            all_frames.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn clone46_parity_clone() {
+        clone46_parity_drive("clone");
     }
 
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。

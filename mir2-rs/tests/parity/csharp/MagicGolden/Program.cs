@@ -156,6 +156,27 @@ public static class Program
             if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7, StepDrainMs = 100 });
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
+            // **MG-55（46 分身术）**：`MagMakeClone` 只造克隆体（无配置/事件系统依赖）。训练前提钉死
+            // (`level=0 / TrainLv=3 / MaxTrain[0]=1000`)，`Gender=1/Hair=7` 让 feature 面非退化。
+            if (name == "clone")
+            {
+                return CloneBatch(new MagicSpec
+                {
+                    Key = "clone",
+                    MagicId = 46,
+                    MagicName = "Clone",
+                    UserMagicLevel = 0,
+                    MagicTrainLv = 3,
+                    MagicMaxTrain0 = 1000,
+                    CasterDir = 0,
+                    CasterGender = 1,
+                    CasterHair = 7,
+                    PreSpellFaceTarget = true,
+                    // 640 在 +1000ms ⇒ 必须步进排水（与 49/51 等同口径）。
+                    StepDrainMs = 100,
+                    SkillTail = true,
+                });
+            }
             if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
@@ -1045,6 +1066,38 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
     return list;
 }
 
+/// <summary>
+/// **MG-55（46 分身）**：与 [`ParseFrames`] **同一 wire 布局**的类型化解码（只给 Clone 块用）。
+/// [ParseFrames] 保持匿名类型输出一字不变（既有 golden 重新生成时字段顺序/名字零漂移）。
+/// </summary>
+private static List<(ushort ident, int recog, ushort param, ushort tag, ushort series, long due, string tail)> DecodeFramesForGate(
+    List<(int GateIdx, byte[] Data, long Due)> buffers, int gateIdx)
+{
+    var list = new List<(ushort, int, ushort, ushort, ushort, long, string)>();
+    foreach (var (g, data, due) in buffers)
+    {
+        if (g != gateIdx) continue;
+        int packLength = BitConverter.ToInt32(data, 16);
+        if (packLength < 0)
+        {
+            string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
+            list.Add((0, 0, 0, 0, 0, due, action));
+            continue;
+        }
+        int off = ServerMessage.PacketSize;
+        int recog = BitConverter.ToInt32(data, off);
+        ushort ident = BitConverter.ToUInt16(data, off + 4);
+        ushort param = BitConverter.ToUInt16(data, off + 6);
+        ushort tag = BitConverter.ToUInt16(data, off + 8);
+        ushort series = BitConverter.ToUInt16(data, off + 10);
+        string tail = data.Length > off + 12
+            ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
+            : "";
+        list.Add((ident, recog, param, tag, series, due, tail));
+    }
+    return list;
+}
+
     // ======================================================================
     // 下一批 4 分支（11/45 雷电、2 治愈、13 火符、44 灭天火）：C# golden only
     // ======================================================================
@@ -1103,6 +1156,24 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public bool CasterLoginOrderAbil;
         /// <summary>卡 36：施法者 `CharStatusEx`（非 0 夹具使 `GetCharStatus()` 可证伪；缺省 0 ⇒ 既有件零变化）。</summary>
         public int CasterCharStatusEx;
+        /// <summary>
+        /// **MG-55（46 分身）**：施法者 `Dir` 输入（`-1` = 不设 ⇒ 既有 stem 零变化）。
+        /// 生产读点 = `PlayCloneObject` ctor 的 `GetBackDir(playObject.Dir)`（`PlayCloneObject.cs:12`）；
+        /// 注意生产 `ClientSpellXY` 的 default 支会在 `DoSpell` **之前**转向点击坐标
+        /// （`PlayObject.Attack.cs:1269`）⇒ clone 侧真正用的是**转向后**的方向，见
+        /// `PreSpellFaceTarget` 与 `Clone` 块里的 `caster_dir`。
+        /// </summary>
+        public int CasterDir = -1;
+        /// <summary>**MG-55**：施法者 `Gender`（`PlayerGender`；`-1` = 不设）。克隆体 ctor 复制它（`PlayCloneObject.cs:14`）。</summary>
+        public int CasterGender = -1;
+        /// <summary>**MG-55**：施法者 `Hair`（`-1` = 不设）。克隆体 ctor 复制它（`PlayCloneObject.cs:15`）。</summary>
+        public int CasterHair = -1;
+        /// <summary>
+        /// **MG-55**：施法前按生产 `default` 支把 `Dir` 转向 `(doX,doY)`（`PlayObject.Attack.cs:1269`）。
+        /// 装置直调 `DoSpell` 不走命令层，不照做会让 `clone.dir` 与产品 `handle_spell_cmd` 路径不可比。
+        /// 缺省 false ⇒ 既有 stem 零变化。
+        /// </summary>
+        public bool PreSpellFaceTarget;
         /// <summary>**收件人 HitSpeed 旋钮**（657 `series` 取收件人自己的 HitSpeed）；缺省 0 = 不动。</summary>
         public int HitSpeed;
         /// <summary>
@@ -1350,6 +1421,52 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             RngSeam.Restore(original);
         }
         return -1;
+    }
+
+    /// <summary>
+    /// **MG-55（46 分身术）**：`MagMakeClone`（`MagicManager.cs:1337`）⇒ `new PlayCloneObject`
+    /// （`PlayCloneObject.cs:5-23`）。判据面 = 克隆体静态字段 + 收件人 `SM_TURN(10)` /
+    /// `SM_FEATURECHANGED(41)`（真身 `RM_TURN` handler 产物）+ 训练尾 640 的存在性。
+    ///
+    /// **前提（fail-closed，不满足 ⇒ rc=2）**：
+    /// - `UserMagicLevel=0` 且 `TrainLv=3 > 0`（`CheckMagicLevelUp` 的下标是 `nLevel=0`）；
+    /// - `MaxTrain[0] &gt; 4`（`TranPoint=0 + Random(3)+1 ≤ 4` ⇒ 必不升级 ⇒ 640 走 1000ms 支）；
+    /// - `CasterDir/CasterGender/CasterHair` 必须显式给（不靠缺省 ⇒ feature 面不退化）；
+    /// - `PreSpellFaceTarget=true`：生产 `ClientSpellXY` 的 default 支在 `DoSpell` 前转向点击坐标
+    ///   （`PlayObject.Attack.cs:1269`）——不照做 `clone.dir` 与产品路径不同源。
+    /// </summary>
+    private static int CloneBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        if (spec.UserMagicLevel >= 3 || spec.MagicTrainLv <= spec.UserMagicLevel || spec.MagicMaxTrain0 <= 4)
+        {
+            throw new FixtureContractViolation(
+                $"[{spec.Key}] 训练前提不成立：level={spec.UserMagicLevel} train_lv={spec.MagicTrainLv} "
+                + $"max_train0={spec.MagicMaxTrain0}（要求 level<3、train_lv>level、max_train0>4）");
+        }
+        if (spec.CasterDir < 0 || spec.CasterGender < 0 || spec.CasterHair < 0)
+        {
+            throw new FixtureContractViolation(
+                $"[{spec.Key}] CasterDir/CasterGender/CasterHair 必须显式给出（当前 {spec.CasterDir}/{spec.CasterGender}/{spec.CasterHair}）");
+        }
+        if (!spec.PreSpellFaceTarget)
+        {
+            throw new FixtureContractViolation(
+                $"[{spec.Key}] PreSpellFaceTarget 必须为 true（生产 default 支在 DoSpell 前转向点击坐标）");
+        }
+        // 单支：`label=clone`、seed=46、ActorId 段 1000（沿用其它 magic batch 的分段口径）。
+        var result = RunMagicCase(spec, "clone", 46, 1000, spec.TargetMaxHp, false);
+        if (result.DrainPassesHitCap)
+        {
+            Console.Error.WriteLine(
+                $"CLONE_DRAIN_CAP {spec.Key} passes={result.DrainPasses}（账本可能不完整 ⇒ 拒绝落盘）");
+            return 2;
+        }
+        return EmitGolden(spec, new[] { result });
     }
 
     private static int ShowHpBatch(MagicSpec spec)
@@ -1694,11 +1811,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
     /// </summary>
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
-        int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null)
+        int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
+        int? casterDir = null, int? casterGender = null, int? casterHair = null,
+        bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
+        bool? fastTrain = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
-            && targetMonster == null && serverConf == null)
+            && targetMonster == null && serverConf == null
+            && casterDir == null && casterGender == null && casterHair == null
+            && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
+            && fastTrain == null)
         {
             return fixture;
         }
@@ -1729,6 +1852,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
             node["server_conf"] = JsonSerializer.SerializeToNode(serverConf.Values);
         }
+        // **MG-55（46 分身）**：分身夹具输入（只有 CloneBatch 传；其它 stem 键不出现 ⇒ 零变化）。
+        if (casterDir.HasValue) node["caster_dir"] = casterDir.Value;
+        if (casterGender.HasValue) node["caster_gender"] = casterGender.Value;
+        if (casterHair.HasValue) node["caster_hair"] = casterHair.Value;
+        if (preSpellFaceTarget.HasValue) node["pre_spell_face_target"] = preSpellFaceTarget.Value;
+        if (magicTrainLv.HasValue) node["magic_train_lv"] = magicTrainLv.Value;
+        if (magicMaxTrain0.HasValue) node["magic_max_train0"] = magicMaxTrain0.Value;
+        if (fastTrain.HasValue) node["fast_train"] = fastTrain.Value;
         return node;
     }
 
@@ -2070,6 +2201,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         caster.Abil.Level = (byte)spec.CasterLevel;
+        // **MG-55（46 分身）**：`Dir/Gender/Hair` 夹具输入（`-1` = 不设 ⇒ 既有件零变化）。
+        if (spec.CasterDir >= 0) caster.Dir = (byte)spec.CasterDir;
+        if (spec.CasterGender >= 0) caster.Gender = (OpenMir2.Enums.PlayerGender)spec.CasterGender;
+        if (spec.CasterHair >= 0) caster.Hair = (byte)spec.CasterHair;
         bool useMcVariant = spec.CasterMcNoClamp > 0 && (label == "s5" || label == "s13" || label == "hit");
         // SC 变体的逐 case 标签：伤害/火魅/DefenceUp 的 `hit`/`s5`/`s13` + 治疗面的 `self`/`both`。
         bool useScVariant = spec.CasterScNoClamp > 0
@@ -2343,6 +2478,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // 卡 mapmgr：SINSU cap_hit 回召依赖 RecallSlave→GetFrontPosition 用 caster.Dir；生产施法前 caster 面向施法目标，
         // 故对 EnableMaps 支把 caster 面向设成施法方向（faithful），使回召落点与 Rust(按施法方向)一致。
         if (spec.EnableMaps) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
+        // **MG-55（46 分身）**：生产 `ClientSpellXY` 的 default 支在 `DoSpell` **之前**把
+        // `playObject.Dir` 转向点击坐标（`PlayObject.Attack.cs:1269`）；装置直调 `DoSpell`
+        // ⇒ 显式照做，`clone.dir` 才与产品路径同源。
+        if (spec.PreSpellFaceTarget) caster.Dir = M2Server.M2Share.GetNextDirection(caster.CurrX, caster.CurrY, doX, doY);
         int trainTpBefore = um.TranPoint;
         int trainLevelBefore = um.Level;
         // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
@@ -2670,6 +2809,70 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 GateHit = gateHitOut,
             });
         }
+        // **MG-55（46 分身）**：克隆体静态面 + 逐收件人 `SM_TURN(10)`/`SM_FEATURECHANGED(41)`。
+        // 两帧由真身收件人侧 `RM_TURN` handler 产生（`PlayObject.Message.cs:1524-1559`）⇒ 不新增
+        // 记录机制，只按 ident 过滤 `recorder.Buffers`。`recog`（= 克隆体 ActorId）**记原始值**：
+        // ActorId 是进程级自增（`ActorEntity.cs:20`），两侧数值不可比 ⇒ 比较器按各自的
+        // `Clone.actor_id` 归一化后再比帧；此处不相对化（相对化后无法识别哪些帧属于克隆体）。
+        object cloneObs = null;
+        if (spec.MagicId == 46)
+        {
+            IList<SystemModule.Actors.IActor> cellObjects = new List<SystemModule.Actors.IActor>();
+            env.GetBaseObjects(caster.CurrX, caster.CurrY, true, ref cellObjects);
+            var cloneObj = cellObjects.OfType<M2Server.Player.PlayCloneObject>()
+                .FirstOrDefault(o => o.ChrName == "Clone");
+            if (cloneObj == null)
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] 46 施法后同格未找到 ChrName=Clone 的克隆体（同格对象 {cellObjects.Count} 个）");
+            }
+            var cloneReceivers = new List<object>();
+            foreach (var (who, obj) in byWho)
+            {
+                var frames = DecodeFramesForGate(recorder.Buffers, obj.ActorId)
+                    .Where(f => f.ident == 10 || f.ident == 41) // SM_TURN=10 / SM_FEATURECHANGED=41
+                    .Select(f => (object)new
+                    {
+                        ident = (int)f.ident,
+                        // **原始 recog**（= 克隆体 ActorId）：C# 的 ActorId 由**进程级**自增分配
+                        // （`ActorEntity.cs:20`），绝对值跨栈不可比 ⇒ 比较器按两侧各自的
+                        // `Clone.actor_id` 把它归一化后再逐帧比；此处不相对化（相对化后无法识别）。
+                        recog = f.recog,
+                        param = (int)f.param,
+                        tag = (int)f.tag,
+                        series = (int)f.series,
+                        due_ms_rel = f.due,
+                        tail = f.tail,
+                    })
+                    .ToList();
+                cloneReceivers.Add(new { who, frames });
+            }
+            cloneObs = new
+            {
+                name = cloneObj.ChrName,
+                // 本侧克隆体 id（**只作比较器的归一化锚**，不进数值相等比较）。
+                actor_id = cloneObj.ActorId,
+                rel_to_caster = cloneObj.ActorId - caster.ActorId,
+                x = (int)cloneObj.CurrX,
+                y = (int)cloneObj.CurrY,
+                dir = (int)cloneObj.Dir,
+                gender = (int)cloneObj.Gender,
+                hair = (int)cloneObj.Hair,
+                // 有效施法方向（转向后）；`dir == (caster_dir + 4) % 8` 是 GetBackDir 的推导面。
+                caster_dir = (int)caster.Dir,
+                caster_gender = (int)caster.Gender,
+                caster_hair = (int)caster.Hair,
+                // **克隆体在建时处于隐藏态**（`PlayObject` ctor `FixedHideMode = true`，
+                // `PlayObject.cs:993`；clones 不登录 ⇒ 无 `:1442` 的复位）⇒ ctor 尾的
+                // `SendRefMsg(RM_TURN)` 走"只发给自己"支（`BaseObject.Message.cs:390-394`），
+                // 不产生任何收件人帧。记录该值让"零帧"有可解释的输入根因。
+                fixed_hide_mode = cloneObj.FixedHideMode,
+                ob_mode = cloneObj.ObMode,
+                // 训练尾 640 的存在性（`SpellReturn == has_640` 由比较器判，驱动/装置不自证）。
+                has_640 = DecodeFramesForGate(recorder.Buffers, caster.ActorId).Any(f => f.ident == 640),
+                receivers = cloneReceivers,
+            };
+        }
         return new FireballResult
         {
             Fixture = AttachStatusTimeArr(new
@@ -2775,7 +2978,17 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 spec.CasterLoginOrderAbil ? (int?)caster.WAbil.SC : null,
                 spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null,
                 spec.TargetMonster > 0 ? (int?)spec.TargetMonster : null,
-                spec.ServerConf),
+                spec.ServerConf,
+                // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
+                casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
+                casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
+                casterHair: spec.MagicId == 46 ? spec.CasterHair : (int?)null,
+                preSpellFaceTarget: spec.MagicId == 46 ? (bool?)spec.PreSpellFaceTarget : null,
+                magicTrainLv: spec.MagicId == 46 ? (int?)spec.MagicTrainLv : null,
+                magicMaxTrain0: spec.MagicId == 46 ? (int?)spec.MagicMaxTrain0 : null,
+                // `PlayObject.FastTrain` 缺省 false（`PlayObject.cs:2023`），装置从不置 true
+                // （只有快速修炼项链 Shape 才会置）；显式记录，比较器断言为 false。
+                fastTrain: spec.MagicId == 46 ? (bool?)false : null),
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -2885,6 +3098,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                         })
                         .ToList(),
                 },
+            Clone = cloneObs,
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -3079,6 +3293,9 @@ public sealed class FireballResult
     public object SinSu { get; set; }
     /// <summary>41 `SKILL_ANGEL` 的 adopt 观测块（`MagicId == 41` 时非 null；镜像 `Skeleton`）。</summary>
     public object Angel { get; set; }
+    /// <summary>**MG-55**：46 分身的克隆体静态面 + 逐收件人 10/41 帧（仅该魔号；null 不落盘）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object Clone { get; set; }
     /// <summary>共享尾（49/51/52/53/54）训练面（`SkillTail=true` 才落盘）：Level/TranPoint/TrainLv/MaxTrain[0]。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Train { get; set; }

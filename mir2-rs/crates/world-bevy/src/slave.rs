@@ -2523,14 +2523,38 @@ pub struct CloneSpawn {
 ///   [`mag_make_clone`] 的 `created`（格占用门）；
 /// - `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName)`（`:17`）⇒ 帧面归宿主。
 ///
-/// **不入 `SlaveList`**（oracle `PlayCloneObject` 非 `MonsterObject`）；**不抽随机数**
-/// （oracle 构造器无 `Random`，RNG 账本不变）。
+/// **不入 `SlaveList`**（oracle `PlayCloneObject` 非 `MonsterObject`）。
+///
+/// **构造期消费 5 次随机数**（[`consume_clone_ctor_draws`]）：oracle `new PlayCloneObject` 走
+/// `PlayObject → CharacterObject → AnimalObject → BaseObject` 的 ctor 链，依次抽
+/// `Random(1500)`/`Random(2000)`（`BaseObject` 的 `RunTick`/`SearchTime`）、`Random(3000)`×2
+/// （`AnimalObject` 的 `AttackTick`/`WalkTick`）、`Random(999999)`（`PlayObject` 的 `RandomNo`）。
+/// 本骨架不建模这 5 个字段，**只为对齐 RNG 流**（漏抽会让后续所有取数错位）。
+/// （2026-11-21 更正：此前这里写「oracle 构造器无 `Random`，RNG 账本不变」——与 golden 的
+/// `Rng` 和 C# 调用栈实测相反，且该错误断言曾被单测钉住。）
 ///
 /// oracle 里 `PlayCloneObject` 是完整 `PlayObject` 子类，会走基类 `Run`/AOI/buff/tick；
 /// 本骨架的克隆体是**静态可观测实体**（存在/名字/坐标/朝向/格占用/展示），tick 生命周期
 /// 登记白名单 `T-51`、`not_verified`。
 ///
 /// 主人不在世界 / 地图 id 越界 ⇒ `None`（oracle 侧这两个前置在 `PlayObject`/`Envir` 上不可达）。
+/// `PlayCloneObject` 构造链的 5 次取数（**值本身 Rust 不建模，只为对齐 RNG 流**）。
+///
+/// 顺序按 oracle 的**基类先行**构造链（C# 调用栈实测，seed=46 抽值
+/// `1136/629/2764/1129/974376`）：
+/// 1. `BaseObject..ctor`：`RunTick += Random(1500)`；
+/// 2. `BaseObject..ctor`：`SearchTime = Random(2000) + 2000`；
+/// 3. `AnimalObject..ctor`：`AttackTick -= Random(3000)`；
+/// 4. `AnimalObject..ctor`：`WalkTick -= Random(3000)`；
+/// 5. `PlayObject..ctor`：`RandomNo = Random(999999)`。
+pub fn consume_clone_ctor_draws(rng: &mut impl mir2_shared::rng::RandomSource) {
+    let _run_tick = rng.random_below(1500);
+    let _search_time = rng.random_below(2000);
+    let _attack_tick = rng.random_below(3000);
+    let _walk_tick = rng.random_below(3000);
+    let _random_no = rng.random_below(999_999);
+}
+
 pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<CloneSpawn> {
     let (x, y, map_id) = {
         let c = world.entities.get(caster_id)?;
@@ -2544,6 +2568,8 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
         world.note_unowned_refusal();
         return None;
     }
+    // ctor 链取数（oracle `new PlayCloneObject` 在早退分支不会执行 ⇒ 只能放在两道门之后）。
+    consume_clone_ctor_draws(&mut world.rng);
     let clone_id = world.entities.alloc_id();
     // `Envir.AddMapObject(...)`：`mag_make_clone` 已把「格子能否放下」这一门落成 `created`。
     let out = mag_make_clone(
@@ -4234,7 +4260,8 @@ mod tests {
     }
 
     /// **⑨-2 残余判据（46 分身）**：`spawn_clone` 造玩家型克隆体并落格——名字/坐标/
-    /// 朝向=`GetBackDir(主人)`/格被占/不入 `SlaveList`/不抽 RNG。
+    /// 朝向=`GetBackDir(主人)`/格被占/不入 `SlaveList`/**构造期恰 5 抽**（见
+    /// [`consume_clone_ctor_draws`]）。
     ///
     /// 红检（改坏必红）：① `dir` 改成主人的正向 `caster_dir`（不用 `back_dir`）⇒ 朝向断言必红；
     /// ② 不 `insert` 实体（只落格）⇒ `entities.get` 必红；③ 把 `e.race` 改成 `MONSTER`
@@ -4248,7 +4275,9 @@ mod tests {
             w.add_entity(e)
         };
         w.tick(); // 让 `Enter` 生效（主人落图）。
-        let mut fresh = w.rng.clone();
+                  // 判据用固定 seed，抽值来自 oracle（golden `Rng` + C# 调用栈），不是 Rust 自比。
+        w.rng = mir2_shared::rng::RandomNumber::with_seed(46);
+        let mut reference = mir2_shared::rng::RandomNumber::with_seed(46);
         let out = spawn_clone(&mut w, caster, 2).expect("主人在世界 ⇒ 应造出克隆体");
         // `Dir = GetBackDir(2)` = (2 + 4) % 8 = 6。
         assert_eq!(out.dir, 6, "PlayCloneObject.Dir = GetBackDir(主人.Dir)");
@@ -4284,8 +4313,28 @@ mod tests {
                 .any(|o| o.cell_obj_id == out.clone_id && o.actor_object),
             "克隆体应进同格 obj_list"
         );
-        // 不抽随机数：两流下一次取数相同。
-        assert_eq!(w.rng.random(), fresh.random(), "构造克隆体不消费 RNG");
+        // **构造期恰 5 抽**（seed=46 的 oracle 值 1136/629/2764/1129/974376）。
+        // 原断言 `assert_eq!(w.rng.random(), fresh.random(), "构造克隆体不消费 RNG")`
+        // 是 Rust 跟 Rust 比（`fresh` 是构造前 `w.rng` 的克隆）⇒ 对 oracle 无约束力，
+        // 反而把"不抽"钉成预期。2026-11-21 依 golden `Rng` 与 C# ctor 调用栈更正。
+        // 红检：删任一抽 ⇒ 下一次取数与参照流不等。
+        let vals = [
+            reference.random_below(1500),
+            reference.random_below(2000),
+            reference.random_below(3000),
+            reference.random_below(3000),
+            reference.random_below(999_999),
+        ];
+        assert_eq!(
+            vals,
+            [1136, 629, 2764, 1129, 974_376],
+            "oracle ctor 链的 5 抽（seed=46）"
+        );
+        assert_eq!(
+            w.rng.random(),
+            reference.random(),
+            "克隆体构造后两流同源（恰 5 抽；少/多一抽都会红）"
+        );
     }
 
     /// **⑨-2 残余判据（46 分身）**：主人不在世界 ⇒ `None`（不造实体、不抽数）。
