@@ -57,7 +57,9 @@
    `mir2-rs/tests/parity/csharp/MagicGolden/ServerConfFixture.cs`
    - `public static void LoadOrThrow(string caseName)`：定位 `<BaseDirectory>/Server.conf`，缺文件 ⇒
      `FixtureContractViolation`；`new SystemModule.Conf.ServerConf(path).LoadConfig()`；随后按调用方给的
-     键清单断言**每个键 > 0**（失败抛 `FixtureContractViolation`，绝不吃缺省）。
+     键清单断言**每个键等于该键的期望部署值**（`MagTurnUndeadLevel==44`、`AmyOunsulPoint==15`、
+     `MabMabeHit*==100/10/21/20`；不等或 ≤0 即 `FixtureContractViolation`），**绝不吃缺省**——
+     `>0` 不够，它放过 ctor 缺省 10/50。
    - 返回已装载值快照；落进 golden `Fixture` 的键名固定为：
      `server_conf: {mag_turn_undead_level, mab_mabe_hit_rand_rate, mab_mabe_hit_min_lv_limit,
      mab_mabe_hit_success_rate, mab_mabe_hit_mabe_time_rate, amy_ounsul_point}`。
