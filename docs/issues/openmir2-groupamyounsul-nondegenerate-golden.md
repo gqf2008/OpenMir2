@@ -61,6 +61,10 @@
 
 ## 6. 施毒 6 条批（MG-13/14/15/50/64/65）WIP 交接（2026-11-21，`card/poison-batch`）
 
+> **2026-11-21 收口**：本节“未做 1–5”已全部完成，见 §7。标记 `poison_cross_actor_same_tick`
+> 按总监裁定**复用** `multi_victim_same_tick`（同根，登记见 `openmir2-b4-multivictim-strike-order.md`
+> 「施毒 4 支同源」）；下文旧标记名仅作历史。
+
 **基线** `b480336f9`。**收敛记录：比较差异 72 → 49 → 每 case 恰 1 条（仅 `SM_SYSMESSAGE(100)` 载荷）**。
 
 ### 已就绪（工作树）
@@ -94,3 +98,65 @@
   撤销条件同：产品改为逐 actor 处理时删 marker。
 - `Rm` 的 `10139.p1` 是真实位掩码（绿毒 `0x80000000>>0` = `int.MinValue`；红毒 `0x40000000`），
   **逐值从 golden 比，不写死常量**。
+
+## 7. 施毒 6 条批收口记录（2026-11-21，`openmir2-7d`）
+
+**交付分支**：`card/poison-batch`（base master `b480336f9`；WIP 起点 `19aa909f9`）。
+
+### 7.1 完成项（对应 §6“未做 1–5”）
+1. **① 三键 fail-closed**：装置 `Fixture` 记 `red_msg_f_color`/`red_msg_b_color`/`you_poisoned`
+   （部署 `Server.conf [Setup]` + `String.conf [String]`，显式 `StringConf.LoadString()`）；
+   驱动缺键 ⇒ `FixtureContractViolation`，文本经 `enter::gbk` 进 `drain_b4_self_deliveries`；
+   `RM_SYSMESSAGE(11004)` 的 `param` 也改取 golden 色值（消灭硬编码 `255/56`）。
+2. **② 驱动口径**：`groupamyounsul` 的严格序 → 毒口径（多重集 + chained due 批次类 + 640 |Δ|≤32ms），
+   与比较器同口径；非删除。
+3. **③ 牙**：L1 三态（640 due 1000→600/950/0 红、→1016 绿）+ chained 批次类；
+   `10139.p1` 逐值比（值从 golden 读）；`657.series == HitSpeed(7)`；`SM_SYSMESSAGE(100).tail`
+   改一字符必红；marker 白名单负例（非白名单 stem ⇒ panic）。
+4. **④ 四刀**：毒伤表达式 `*2→*3` 一刀**真红**（`8037` p1 97→112 进帧面）；还原后全量重跑绿。
+5. **⑤ 门禁**：见 §7.4。
+
+### 7.2 三旋钮 fail-closed（评审 A）
+`amulet_shape` 必须 1|2（不写死 5）；`target_anti_poison` **0 也显式写入**（不再 `if v>0` 跳过）；
+`amy_ounsul_point` 必须 >0（不再 `unwrap_or(10)`）。装置侧 `AmyOunsulPoint` 断言部署值 `==15`。
+机判 `poison_goldens_carry_three_knobs`：4 文件 × 3 支 = **12 支**逐支三键存在 + 值域。
+
+### 7.3 §4 四条（给 QA 升格用，本批不改 manifest）
+1. **§2 四刀至少一刀红**：✔（毒伤表达式，红原文见提交 2）。
+2. **`rng_total_draws > 0` 且台账与 golden 都有 `RM_POISON(8037)`**：✔
+   `amyounsul` s1/s5/s13 = **3/4/4**；`amyounsul2` = **3/4/4**；`groupamyounsul` = **3/3/3**；
+   `groupamyounsul2` = **3/3/3**。两侧 RM 均含 `8037`（type 0/1、nPower、caster、point）。
+3. **驱动/比较器纳入新 case；`DrainPasses` 按新 golden 更新**：✔ 4 支 stem × 3 label 全部纳入；
+   `DrainPasses` 2→3 是**非退化后实测真变**（`RM_POISON` 投递后派生即时帧需再排一趟），
+   旧值 2 属于退化 golden（循环体从未执行）。
+4. **manifest `notes` 改写**：**留给 QA `3b`**（本批不动 `docs/issues/parity-gap-magic.json`）。
+   **建议升格**：MG-13 / MG-14 / MG-15 / MG-50 / MG-64 / MG-65（六条，见 §7.5 映射）。
+
+### 7.4 证据（可复现）
+- 驱动：`cargo test -p game-svr --lib -- --exact --ignored tests::<driver>`，driver ∈
+  `{amyounsul,amyounsul2,groupamyounsul,groupamyounsul2}_parity_{s1,s5,s13}`（**12 支**）；
+- 比较器：`cargo test -p mir2-parity-tests --test magic_fireball_parity -- --exact --ignored
+  real_rust_ledger_{amyounsul,amyounsul2,groupamyounsul,groupamyounsul2}`；
+- **同一 `MIR2_LEDGER_RUN_ID` 覆盖全部 3 个 label**（只跑 s1 会让 s5/s13 撞 `run_id 不匹配`——
+  这是唯一的假红入口，已在本批实测踩到并规避）；
+- 牙（非 ignore）：`cargo test -p mir2-parity-tests --test magic_fireball_parity tooth_poison_`
+  与 `cargo test -p game-svr --lib -- --exact tests::poison_goldens_carry_three_knobs`。
+- 门禁：fmt / clippy（`-p game-svr -p mir2-parity-tests --all-targets -D warnings`）/
+  `cargo test --workspace --lib` 三数 / msgcodegen `--check` / 锚门 / 清单 schema / 分派回归
+  （原文见最终 head 的提交信息与交接报告）。
+
+### 7.5 stem ↔ 魔号/叶子映射（QA 升格按此）
+| stem | 魔号 | 覆盖叶子 |
+| --- | --- | --- |
+| `amyounsul`（Shape=1） | 6 | **MG-13**（`CheckAmulet(1,2)` → 骰 → 投递主链）+ **MG-14**（绿毒 `DECHEALTH` 臂） |
+| `amyounsul2`（Shape=2） | 6 | **MG-15**（红毒 `DAMAGEARMOR` 臂） |
+| `groupamyounsul`（Shape=1） | 48 | **MG-50**（逐目标循环主链）+ **MG-64**（绿毒臂） |
+| `groupamyounsul2`（Shape=2） | 48 | **MG-65**（红毒臂） |
+
+### 7.6 已知口径（防后来人误判）
+- `10139.p1` 本夹具绿/红毒**同为 `int.MinValue`**：位号 = `ActorBuffSystem` 的 **buff 插入序**
+  （`0x80000000 >> i`），目标只有一条毒 buff ⇒ i=0。`BaseObject.Base.cs:170` 按 `PoisonState`
+  取位（DAMAGEARMOR=1 ⇒ `0x40000000`）是**另一路径**，本 fixture 不经过；区分性夹具另立卡
+  （需目标先有一条 buff）。
+- 顺序放宽标记复用 `multi_victim_same_tick`（同根），白名单 = `fire` + 施毒 4 支；
+  移除条件见 `openmir2-b4-multivictim-strike-order.md`「施毒 4 支同源」。

@@ -33,3 +33,34 @@ actor 各跑一次 `Run()`，先处理 target 的受击广播（31 到 obs_in）
 条目间 drain"，与 oracle 的逐 `actor Run()` 同构；这会改变所有 stem 的排水序，必须全量重跑。
 在此之前，MG-17/18 的 **B 口径**（见 `docs/issues/openmir2-magic-9-10-pass-through.md`）生效：
 多受害者同刻的帧序不作判据。
+
+## 施毒 4 支同源（2026-11-21，`card/poison-batch`）
+
+**同一根因的第二实例**：施毒（魔号 6）与群体施毒（魔号 48）的 `RM_POISON` 在**目标**的
+`Run()` 里投递，由此派生 656/657/100；这些帧与**施法者自己**的 640（`RM_MAGIC_LVEXP`，同为
+1000ms 到期）分属两条 actor 队列。oracle 逐 actor `Run()`，产品把本 tick 的
+`slave_self_deliveries` 一次性交给 B4 批量 flush ⇒ **跨 actor 的先后不保**。
+
+**实测证据**（`amyounsul` s1，同一 run；只列 caster 的 `Sent` 六元组 `(ident,param,tag,series,tail)`）：
+
+| golden（oracle） | rust（产品） |
+|---|---|
+| `638, 642, **640**, 656, 657` | `638, 642, 656, 657, **640**` |
+
+两条序列的**全部帧字段逐一相等**（`tail`/`param`/`tag`/`series` 均同），仅 `640` 的**位置**不同；
+`target`/`obs_in` 的序列与字段也逐项相等。⇒ **只是顺序**，不是字段差异。
+
+**`due_ms_rel` 的例外**：派生帧（656/657/100）的 `due` 记录的是装置**落地步**
+（`Sleep(100)` 过冲 ⇒ 900/1000，生成期有并发编译），不是产品语义；比较器对施毒件的非 640 帧
+**只判批次类**（0 vs >0），`640` 的 `DeliveryTime − t0` 按 **|Δ|≤32ms**（2× `TickCount` 15.6ms
+粒度）容差判。**判别力保留**：950/600 vs 1000 差 ≥50ms，远大于容差。
+
+**白名单（写死，别处出现即 panic）**：`fire`（MG-17）+ `amyounsul` / `amyounsul2` /
+`groupamyounsul` / `groupamyounsul2`。比较器入口有负例牙（非白名单 stem 带标记 ⇒ panic）。
+
+**放宽的只是顺序**：帧的 `ident/recog/param/tag/series/tail` 仍逐项进多重集键；RM 七字段多重集
+照旧；`Rng` 逐值；HP 面照旧。
+
+**移除条件**：与上节同——产品改为“逐 `SelfDelayOutcome` 处理 + 条目间 drain”（与 oracle 逐
+`actor Run()` 同构）后，删掉这 4 支 golden 的 `frame_order_scope` 并把白名单缩回 `fire`，
+恢复严格按序。

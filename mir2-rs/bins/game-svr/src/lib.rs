@@ -71253,10 +71253,7 @@ SendRefMsgRange=15
             );
             rig.amulet_shape = shape;
 
-            let ap = golden_fixture_required(stem, label, "target_anti_poison");
-            let ap = u16::try_from(ap).unwrap_or_else(|_| {
-                panic!("[{stem}/{label}] Fixture.target_anti_poison={ap} 越界 u16（FixtureContractViolation）")
-            });
+            let ap: u16 = golden_fixture_required(stem, label, "target_anti_poison");
             // **0 也要显式写入**（`AntiPoison=0` 是合法输入；静默跳过会让"记录值 ≠ 使用值"）。
             rig.world.set_attack_poison(
                 target,
@@ -74520,7 +74517,7 @@ SendRefMsgRange=15
     }
 
     /// **毒口径的逐收件人帧比较**（与比较器 `magic_fireball_parity.rs` 的
-    /// `frame_order_scope = poison_cross_actor_same_tick` 分支**同口径**）：
+    /// `frame_order_scope = multi_victim_same_tick` 分支（施毒件）**同口径**）：
     /// - 每接收者 **多重集**（`ident/recog/param/tag/series/tail` + **due 分类**），顺序不计；
     /// - 非 640 帧的 `due_ms_rel` 只区分 `0`（施法批）与 `>0`（交付批）——步进排水按 100ms
     ///   落地，`Sleep` 过冲会让交付批落在 900/1000，那是测量粒度不是排期；
@@ -74680,7 +74677,7 @@ SendRefMsgRange=15
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
     fn group_amyounsul_assert(label: &str, seed: i32, base: i32) {
         fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
-        // **毒口径**（与比较器 `poison_cross_actor_same_tick` 分支同口径）：逐收件人**多重集**
+        // **毒口径**（与比较器 `multi_victim_same_tick` 分支的施毒件同口径）：逐收件人**多重集**
         // + chained 帧 `due` 只判批次类（0 vs >0）+ `640` late `due` 按 `|Δ|≤32ms` 容差。
         // 严格序在这里**必然红**：毒在目标 `Run()` 才派生 656/657/100，oracle 逐 actor 而 Rust 同 tick
         // 批量 flush（登记见 `openmir2-b4-multivictim-strike-order.md`「同根第二实例」）。

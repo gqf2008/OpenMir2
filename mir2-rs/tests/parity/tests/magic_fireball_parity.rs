@@ -233,14 +233,6 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             // **撤销条件**：产品卡修复落地后，删掉该标记并恢复严格按序——标记缺失即严格。
             let multi_victim =
                 gc["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick");
-            // 同根第二实例（施毒 6/48）：毒在**目标** `Run()` 才派生 656/657 ⇒ 对 caster 而言
-            // 落到**下一 tick**（oracle 逐 actor），Rust 同 tick 批量 flush。顺序放宽为多重集；
-            // chained 帧（非 late）due 只判**批次类**（0 vs >0，由落地步近似）；
-            // **late 帧（640）** 的 due 来自 `DeliveryTime − t0`（`Environment.TickCount` 粒度
-            // 15.6ms，t0 与发送最多跨 1 tick ⇒ δ∈[0,15.6]）⇒ 按 **|Δ|≤32ms（2×粒度）** 容差判。
-            // 最小需分辨差 = 600 vs 1000（400ms）、0 vs 1000（1000ms）≫ 32ms ⇒ 判别力保住。
-            let poison_scope =
-                gc["Fixture"]["frame_order_scope"].as_str() == Some("poison_cross_actor_same_tick");
             let ga = as_array(gr, "Sent").cloned().unwrap_or_default();
             let ra = as_array(rr, "Sent").cloned().unwrap_or_default();
             // 新件带 `recog` ⇒ 纳入逐帧严格比较；旧件无该键 ⇒ 不比较（全有或全无已断言）。
@@ -257,15 +249,24 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             if ga.first().and_then(|f| f.get("due_ms_rel")).is_some() {
                 sent_fields.push("due_ms_rel");
             }
-            if poison_scope {
-                // 多重集键：ident/recog/param/tag/series/tail + **due 分类**（640 精确另判；
-                // 其余只区分 0 / >0）。顺序不判（跨 actor 同拍的产品差异，登记见
-                // `openmir2-b4-multivictim-strike-order.md`「同根第二实例」）。
-                let due_class = |v: &Value| -> i64 {
-                    if num(v, "ident") == 640 {
-                        0
+            if multi_victim {
+                // **同根第二实例（施毒 6/48）复用本标记**（不再造第二个名字）：oracle 逐 actor
+                // `Run()` vs 产品批量 flush（见 `openmir2-b4-multivictim-strike-order.md`
+                // 「施毒 4 支同源」一节，含实测帧序证据与移除条件）。
+                // 施毒件的**派生帧**（656/657/100）`due_ms_rel` 是装置落地步（`Sleep` 过冲 ⇒
+                // 900/1000），只判**批次类**（0 vs >0）；`640` 的 due（`DeliveryTime − t0`，
+                // `TickCount` 15.6ms 粒度）按 **|Δ|≤32ms** 容差判。**字段面不放松**：
+                // ident/recog/param/tag/series/tail 仍逐项进多重集键。
+                let poison_frames = gc["Fixture"].get("amulet_shape").is_some();
+                let due_key = |v: &Value| -> i64 {
+                    if poison_frames {
+                        if num(v, "ident") == 640 {
+                            0
+                        } else {
+                            i64::from(num(v, "due_ms_rel") != 0)
+                        }
                     } else {
-                        i64::from(num(v, "due_ms_rel") != 0)
+                        num(v, "due_ms_rel")
                     }
                 };
                 let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
@@ -275,49 +276,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
-                        due_class(v),
-                        text(v, "tail").to_string(),
-                    )
-                };
-                let mut g_keys: Vec<_> = ga.iter().map(sent_key).collect();
-                let mut r_keys: Vec<_> = ra.iter().map(sent_key).collect();
-                g_keys.sort();
-                r_keys.sort();
-                if g_keys != r_keys {
-                    errs.push(format!(
-                        "[{label}/{who}] Sent 多重集不等（毒口径：顺序不计 + chained due 批次类）：golden {g_keys:?} vs rust {r_keys:?}"
-                    ));
-                } else {
-                    // late 帧（640）按 TickCount 容差判（推导见上）。
-                    let mut gd: Vec<i64> = ga
-                        .iter()
-                        .filter(|v| num(v, "ident") == 640)
-                        .map(|v| num(v, "due_ms_rel"))
-                        .collect();
-                    let mut rd: Vec<i64> = ra
-                        .iter()
-                        .filter(|v| num(v, "ident") == 640)
-                        .map(|v| num(v, "due_ms_rel"))
-                        .collect();
-                    gd.sort();
-                    rd.sort();
-                    let bad = gd.len() != rd.len()
-                        || gd.iter().zip(rd.iter()).any(|(g, r)| (g - r).abs() > 32);
-                    if bad {
-                        errs.push(format!(
-                            "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
-                        ));
-                    }
-                }
-            } else if multi_victim {
-                let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
-                    (
-                        num(v, "ident"),
-                        num(v, "recog"),
-                        num(v, "param"),
-                        num(v, "tag"),
-                        num(v, "series"),
-                        num(v, "due_ms_rel"),
+                        due_key(v),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -341,6 +300,27 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     errs.push(format!(
                         "[{label}/{who}] Sent 多重集不等（多受害者同刻口径）：golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
                     ));
+                } else if poison_frames {
+                    // late 帧（640）按 TickCount 容差判；判别力：950/600 vs 1000（≥50ms）> 32ms。
+                    let mut gd: Vec<i64> = ga
+                        .iter()
+                        .filter(|v| num(v, "ident") == 640)
+                        .map(|v| num(v, "due_ms_rel"))
+                        .collect();
+                    let mut rd: Vec<i64> = ra
+                        .iter()
+                        .filter(|v| num(v, "ident") == 640)
+                        .map(|v| num(v, "due_ms_rel"))
+                        .collect();
+                    gd.sort();
+                    rd.sort();
+                    let bad = gd.len() != rd.len()
+                        || gd.iter().zip(rd.iter()).any(|(g, r)| (g - r).abs() > 32);
+                    if bad {
+                        errs.push(format!(
+                            "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
+                        ));
+                    }
                 }
             } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
@@ -885,22 +865,12 @@ fn real_ledger_verify_labels_opts(
             .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
     });
     assert!(
-        !scope_marked || stem == "fire",
-        "`frame_order_scope=multi_victim_same_tick` 只允许 fire stem（MG-17）；当前 stem={stem}"
-    );
-    // 同根第二实例：`poison_cross_actor_same_tick` **只允许**施毒 4 支（白名单写死，不许扩散）。
-    let poison_marked = golden["cases"].as_array().is_some_and(|cs| {
-        cs.iter().any(|c| {
-            c["Fixture"]["frame_order_scope"].as_str() == Some("poison_cross_actor_same_tick")
-        })
-    });
-    assert!(
-        !poison_marked
+        !scope_marked
             || matches!(
                 stem,
-                "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+                "fire" | "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
             ),
-        "`frame_order_scope=poison_cross_actor_same_tick` 只允许施毒 4 支白名单；当前 stem={stem}"
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire 与施毒 4 支白名单；当前 stem={stem}"
     );
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
@@ -2697,7 +2667,7 @@ fn real_rust_ledger_groupamyounsul2() {
 // 施毒系（6/48，MG-13/14/15/50/64/65）毒口径牙
 // ============================================================================
 
-/// **毒口径 L1 牙**：`frame_order_scope = poison_cross_actor_same_tick` 分支的
+/// **毒口径 L1 牙**：`frame_order_scope = multi_victim_same_tick` 分支（施毒件）的
 /// `640` late 帧 `due_ms_rel` 判据（|Δ|≤32ms）与 chained 帧的批次类判据。
 ///
 /// 子断言（每条都对应一个"删掉判据就变绿"的失效模式）：
@@ -2719,7 +2689,8 @@ fn tooth_poison_late_due_tolerance() {
         |frames: Vec<Value>| serde_json::json!([{ "Who": "target", "Rm": [], "Sent": frames }]);
     let mk_g = || {
         let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-        g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("poison_cross_actor_same_tick");
+        g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+        g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
         g["cases"][0]["Receivers"] = receivers(vec![frame(657, 1000), frame(640, 1000)]);
         g
     };
@@ -2855,7 +2826,8 @@ fn tooth_poison_657_series_compared_red() {
         }])
     };
     let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("poison_cross_actor_same_tick");
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
     g["cases"][0]["Receivers"] = receivers(series);
     let mk_r = |v: i64| {
         let mut r = synth_rust(
@@ -2919,7 +2891,8 @@ fn tooth_poison_sysmessage_tail_compared_red() {
         }])
     };
     let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("poison_cross_actor_same_tick");
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
     g["cases"][0]["Receivers"] = receivers(&tail);
     let mk_r = |t: &str| {
         let mut r = synth_rust(
@@ -2942,7 +2915,7 @@ fn tooth_poison_sysmessage_tail_compared_red() {
     );
 }
 
-/// **⑨ marker 白名单负例牙（D）**：把 `frame_order_scope = poison_cross_actor_same_tick`
+/// **⑨ marker 白名单负例牙（D）**：把 `frame_order_scope = multi_victim_same_tick`
 /// 塞进**非白名单** stem ⇒ 比较器入口**必须 panic**（放宽通道不能靠"没人写错"守）。
 ///
 /// 白名单自检在读取台账**之前**执行，所以这里不需要任何 ledger 文件：
@@ -2950,18 +2923,19 @@ fn tooth_poison_sysmessage_tail_compared_red() {
 #[test]
 fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
     let mut g = synth_golden("s1", serde_json::json!([1, 2]), Some("cover_drain"));
-    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("poison_cross_actor_same_tick");
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        real_ledger_verify_labels_opts("fireball", &g, &["s1"], false);
+        real_ledger_verify_labels_opts("sinsu", &g, &["s1"], false);
     }));
-    let payload = res.expect_err("非白名单 stem 带 poison marker 必须 panic");
+    let payload = res.expect_err("非白名单 stem 带顺序放宽 marker 必须 panic");
     let msg = payload
         .downcast_ref::<String>()
         .cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
         .unwrap_or_default();
     assert!(
-        msg.contains("只允许施毒 4 支白名单"),
+        msg.contains("只允许 fire 与施毒 4 支白名单"),
         "必须 panic 在白名单自检：{msg}"
     );
 }
