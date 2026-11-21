@@ -21,7 +21,7 @@
 - `new_slaves` 逐项：`name / level / hp / max_hp / master_is_caster`（`summon_ok` 比实值 20/24）。
 - 造怪前帧 `17/638/642`（按 socket 取多重集，§47 不跨 socket 断言序）。
 - `cap_hit` 另三断**各自独立 assert**：断①实体数不增 / 断②`slave_count` 不变 + `new_slaves` 空 / 断③`regen_calls=0`（门 `Rejected`）。
-- **不比** `Rng`（离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、`640`/`10123-p3`（训练尾，随造怪抽数不同）。
+- **不比** `Rng`（造怪抽数**已记录在 golden `Rng` 中且可复现**——`[1500,2000,3000,3000,2000]` + `Random(3)`；Rust 侧当前**未消费**，`create_monster_oracle` 的抽数/位置不同源）、`640`/`10123-p3`（训练尾，随造怪抽数不同）。
 - SCOPE 本质：**验「给定怪物之后的 adopt 行为」，不是造怪。**
 
 ## 4. 接缝坑（可复用：症状 → 根因 → 补法）
@@ -63,5 +63,19 @@
 
 ## 6. 未覆盖面
 - **神兽（30）/ 精灵（41）** 的召唤面：`summon_slave` 已含 `Recalled`/`Blocked` 分支，但本卡只验 17。
-- **造怪抽数面**（`Rng` / `640` / `10123-p3`）：离线替身缺 `MonsterInfo` 掉落表（`MonGetRandomItems`）/`CoolEyeCode`，不可复刻 ⇒ 不在对拍范围；生产抽数需真装置另开。
+- **造怪抽数面**（`Rng` / `640` / `10123-p3`）：**抽数本身不是不可复刻**——golden `Rng` 已记录确定的 5+1 抽（`[1500,2000,3000,3000,2000]` + `Random(3)`），Rust 侧当前**未消费**这些抽数（故不与 golden 逐值比）；离线替身缺 `MonsterInfo` 掉落表（`MonGetRandomItems`）/`CoolEyeCode` 是**另一层**（生产抽数需真装置另开）。
 - **`CheckAmulet` 失败 → 639** 支；**`CheckServerMakeSlave` 拦截（Blocked）** 支。
+
+## 7. Follow-up（不实现，仅登记）
+
+**让三支的 `Rng` 进比较面**：`skeleton`/`sinsu`/`angel` 的 `summon_ok` 目前**不比 `Rng`**，根因不是
+"抽数不可复刻"：golden `Rng` 已记录确定的 6 抽（`[1500,2000,3000,3000,2000]` + `Random(3)`；
+前五抽 = `BaseObject(1500,2000)` + `AnimalObject(3000,3000)` + `MonsterObject` ctor
+`SearchTime = 3000 + Random(2000)`，第六抽是训练尾）。**实测台账**：
+- `skeleton`/`angel`：**无 `Rng` 键**——**这两支的驱动压根不做 RNG 记账**（不是"抽了 0 次"）；
+- `sinsu`：`Rng = [373,221,1401,2314,1315,3,35,2]`——**已记账，且前 5 抽与 golden 逐值相同**，
+  差异从第 6 抽起（golden=1 / 台账=3，另多 35/2）。
+
+⇒ 修复方向（按序，**先记账后比对**）：① 让 `skeleton`/`angel` 的驱动启用 RNG 记账（与 `sinsu`/
+`d8` 在 46 上的同款）；② 三支与 golden 的 5+1 抽逐值对表；③ 对齐后才把 `Rng` 纳入比较面。
+前置：确认 Rust 造怪抽数能按 oracle 的 ctor 次序重放（三段 `Random` 参数 = 1500/2000、3000/3000、2000）。
