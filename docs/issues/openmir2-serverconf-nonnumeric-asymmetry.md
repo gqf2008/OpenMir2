@@ -30,6 +30,8 @@
 | 非数字 | 回落缺省 | **`Err`** | 回落缺省 |
 
 ⇒ 只有 `config.rs` 的**无守卫 + 空值/非数字**两个格子是不对称（启动期 fail-closed）。
+注意「回落缺省值」不等于「等于部署值」：`pet_empty.conf`（`MagTammingLevel=`）回落的是缺省 **50**，
+而部署值是 **40** —— 这个差值本身证明「空值 ≠ 部署」，对拍照对此有独立断言。
 
 ## 影响面
 
@@ -59,6 +61,21 @@
 - C# 探针实测：`mab_mabe_hit_rand_rate=100`（回落缺省）；
 - Rust：`game_svr::config::load()` 返回 `Err`（`MabMabeHitRandRate 不是合法整数："abc"` / 空串同）；
 - 对照：`pet_nonnumeric.conf` / `pet_empty.conf` 两侧一致回落 50（`PetSlaveConfig` 无此偏差）。
+
+## 变异刀与恢复 sha（证据对准树）
+
+对拍照的两条变异刀都只改 `deploy.conf`，**恢复后 `sha256(deploy.conf)` 与备份相等**：
+
+- 2026-11-21（六键版）：`deploy.conf` sha256 =
+  `f64e902a299e7683581d534fa671b3cff6adcb1be4b68d0914c4390cbeee0498`
+  （`MagTurnUndeadLevel` 44→50 红后恢复验证）。
+- 扩到十键后：`deploy.conf` sha256 =
+  `426203f675e84e1a099373942c755288a54fca183974bdf85a4f2b6dfb5838da`
+  （`MagTurnUndeadLevel` 44→50、`MagTammingLevel` 40→50 两刀各自红后恢复验证）。
+
+红原文（摘要）：`assertion left == right failed: [deploy.conf] C# 侧解析值与期望值不一致`，
+`left: [50, 100, 10, 21, 20, 15, 40, 1, 100, 5]` / `right: [44, …]`（第一刀），
+`left: […, 50, 1, 100, 5]` / `right: […, 40, 1, 100, 5]`（第二刀）。
 
 ## 与"缺省≠部署"的关系（四条，不是五条）
 
