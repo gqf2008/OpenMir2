@@ -1,0 +1,2684 @@
+{
+  "magic_id": 20,
+  "anti_magic": 3,
+  "fixture_spec": {
+    "magic_name": "Tamming",
+    "effect": 1,
+    "effect_type": 1,
+    "user_magic_level": 0,
+    "caster_level": 30,
+    "caster_mc": 15,
+    "caster_sc": 15,
+    "target_level": 20,
+    "target_max_hp": 100,
+    "arm_ring_amulet": false
+  },
+  "cases": [
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 2,
+        "rng_recorded": 2,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": true
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "self_master",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 1010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 1,
+              "msg": "",
+              "late": true,
+              "delivery": 1226838375,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 1001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rghkd?"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 1,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 1010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 1001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 1001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rghkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 1010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 1001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 1001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rghkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [
+            {
+              "ident": 60005,
+              "wParam": 10000,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 101
+            }
+          ],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [
+          {
+            "who": "mon0",
+            "w_param": 10000
+          }
+        ],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": "caster",
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 1,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": 1,
+            "can_re_alive": true,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "adopt_ok",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 952,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 2010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1226839781,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 2001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Zghbd?"
+            },
+            {
+              "ident": 656,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 2010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 2001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 2001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Zghbd?"
+            },
+            {
+              "ident": 656,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 2010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 2001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 2001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Zghbd?"
+            },
+            {
+              "ident": 656,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 2010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0,
+        0,
+        37,
+        0,
+        30,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [
+          0
+        ],
+        "slave_count_after": 1,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": "caster",
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 1500,
+            "next_hit_time": 2000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": 0,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 2,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 40,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "level_gate_fail",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 3010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1226841203,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 3001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vghid?"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 3010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 3001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 3001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vghid?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 3010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 3001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 3001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vghid?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": null,
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 2,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 4001,
+        "target_actor_id": 4002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "branch_else",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 14,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 4010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1226842531,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "\u003Egh\u0060d?"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 4010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 4001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "\u003Egh\u0060d?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 4010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 4001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "\u003Egh\u0060d?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [
+            {
+              "ident": 60005,
+              "wParam": 10000,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 101
+            }
+          ],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        1,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [
+          {
+            "who": "mon0",
+            "w_param": 10000
+          }
+        ],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": null,
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 2,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 5001,
+        "target_actor_id": 5002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "outer_fail_true",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 2,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 5010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 1,
+              "msg": "",
+              "late": true,
+              "delivery": 1226843875,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jkhkd?"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 1,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 5010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jkhkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 5010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jkhkd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        3,
+        0,
+        0
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": null,
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 1,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 6001,
+        "target_actor_id": 6002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 2,
+        "rng_recorded": 2,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "outer_fail_false",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 1,
+      "DrainPassesHitCap": false,
+      "Seed": 3,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 6010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 6001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "rkhbd?"
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 6010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 6001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 6001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "rkhbd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 6010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 6001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 6001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "rkhbd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        1,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": false,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": null,
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 0,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 7001,
+        "target_actor_id": 7002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "crazy",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 35,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 7010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1226846562,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 7001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nkhid?"
+            },
+            {
+              "ident": 656,
+              "recog": 7010,
+              "param": 255,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 7010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 7001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 7001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nkhid?"
+            },
+            {
+              "ident": 656,
+              "recog": 7010,
+              "param": 255,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 7010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 7001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 7001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nkhid?"
+            },
+            {
+              "ident": 656,
+              "recog": 7010,
+              "param": 255,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        2,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [],
+        "slave_count_after": 0,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": null,
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": true,
+            "crazy_interval_ms": 12000
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 2,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
+    }
+  ]
+}
