@@ -1475,6 +1475,311 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **MG-55（46 分身术）**：克隆体 id → `recog` 归一化。
+///
+/// 两侧的克隆体 ActorId 由**进程级自增**分配（C# `ActorEntity.cs:20`；Rust `alloc_id`），
+/// 数值不可比。归一化规则：`recog == 本侧 Clone.actor_id` 的帧改写为 `0`，其余 recog
+/// （`SM_SPELL`/`SM_MAGICFIRE` 的施法者 id、`SM_MAGIC_LVEXP` 的 MagicId）仍逐字节严格比。
+fn normalize_clone_recog(v: &mut Value) {
+    let Some(cases) = v.get_mut("cases").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for c in cases {
+        let Some(cid) = c
+            .get("Clone")
+            .and_then(|x| x.get("actor_id"))
+            .and_then(Value::as_i64)
+        else {
+            continue;
+        };
+        if let Some(rec) = c.get_mut("Receivers").and_then(Value::as_array_mut) {
+            for r in rec {
+                if let Some(sent) = r.get_mut("Sent").and_then(Value::as_array_mut) {
+                    for f in sent {
+                        if f.get("recog").and_then(Value::as_i64) == Some(cid) {
+                            f["recog"] = Value::from(0);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(rec) = c
+            .get_mut("Clone")
+            .and_then(|x| x.get_mut("receivers"))
+            .and_then(Value::as_array_mut)
+        {
+            for r in rec {
+                if let Some(fs) = r.get_mut("frames").and_then(Value::as_array_mut) {
+                    for f in fs {
+                        if f.get("recog").and_then(Value::as_i64) == Some(cid) {
+                            f["recog"] = Value::from(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 本侧 `Clone.receivers` 中 `recog == 本侧克隆体 id` 的帧数（**归一化前**统计）。
+/// 用于证明归一化确实在做事：零命中 ⇒ 所有帧都碰不到 id 面，归一化是空转。
+fn clone_recog_hits(case: &Value) -> (i64, usize) {
+    let cid = case["Clone"]["actor_id"].as_i64().unwrap_or(i64::MIN);
+    let n = case["Clone"]["receivers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|r| r["frames"].as_array().into_iter().flatten())
+        .filter(|f| num(f, "recog") == cid)
+        .count();
+    (cid, n)
+}
+
+/// `M2Share.MakeHumanFeature` 的克隆体形态（`PlayCloneObject` 只拷 Gender/Hair，Dress/Weapon=0）：
+/// `MakeLong(MakeWord(0, gender), MakeWord(hair*2+gender, gender))`。
+fn clone_feature(gender: i64, hair: i64) -> i64 {
+    let g = gender & 0xFF;
+    let lo = g << 8;
+    let hi = ((hair * 2 + g) & 0xFF) | (g << 8);
+    lo | (hi << 16)
+}
+
+/// Clone 块的逐字段 + 推导面检查（`verify` 之外的部分）。
+fn clone_block_checks(g: &Value, r: &Value) -> Vec<String> {
+    let mut errs = Vec::new();
+    let gc = &g["cases"][0];
+    let rc = &r["cases"][0];
+    let gb = &gc["Clone"];
+    let rb = &rc["Clone"];
+    if !gb.is_object() {
+        errs.push("golden 缺 `Clone` 块（46 夹具必须落盘）".into());
+    }
+    if !rb.is_object() {
+        errs.push("台账缺 `Clone` 块（驱动必须落盘）".into());
+    }
+    if !errs.is_empty() {
+        return errs;
+    }
+    if text(gb, "name") != text(rb, "name") {
+        errs.push(format!(
+            "Clone.name 不等：golden={:?} rust={:?}",
+            text(gb, "name"),
+            text(rb, "name")
+        ));
+    }
+    for k in [
+        "x",
+        "y",
+        "dir",
+        "gender",
+        "hair",
+        "caster_dir",
+        "caster_gender",
+        "caster_hair",
+    ] {
+        if num(gb, k) != num(rb, k) {
+            errs.push(format!(
+                "Clone.{k} 不等：golden={} rust={}",
+                num(gb, k),
+                num(rb, k)
+            ));
+        }
+    }
+    if gb.get("has_640").and_then(Value::as_bool) != rb.get("has_640").and_then(Value::as_bool) {
+        errs.push(format!(
+            "Clone.has_640 不等：golden={:?} rust={:?}",
+            gb.get("has_640"),
+            rb.get("has_640")
+        ));
+    }
+    // 逐收件人 10/41 帧：严格按序 + 逐字段 + 尾串（与 `Receivers[].Sent` 同口径）。
+    let ga = gb["receivers"].as_array().cloned().unwrap_or_default();
+    let ra = rb["receivers"].as_array().cloned().unwrap_or_default();
+    if ga.len() != ra.len() {
+        errs.push(format!(
+            "Clone.receivers 数不等：golden={} rust={}",
+            ga.len(),
+            ra.len()
+        ));
+    } else {
+        for (i, (gr, rr)) in ga.iter().zip(ra.iter()).enumerate() {
+            if text(gr, "who") != text(rr, "who") {
+                errs.push(format!(
+                    "Clone.receivers[{i}] who 不等：{:?} vs {:?}",
+                    text(gr, "who"),
+                    text(rr, "who")
+                ));
+                continue;
+            }
+            let gf = gr["frames"].as_array().cloned().unwrap_or_default();
+            let rf = rr["frames"].as_array().cloned().unwrap_or_default();
+            let who = text(gr, "who");
+            if gf.len() != rf.len() {
+                errs.push(format!(
+                    "Clone.receivers[{who}] 帧数不等：golden={} rust={}",
+                    gf.len(),
+                    rf.len()
+                ));
+                continue;
+            }
+            for (j, (a, b)) in gf.iter().zip(rf.iter()).enumerate() {
+                for k in ["ident", "recog", "param", "tag", "series", "due_ms_rel"] {
+                    if num(a, k) != num(b, k) {
+                        errs.push(format!(
+                            "Clone.receivers[{who}].frames[{j}].{k} 不等：golden={} rust={}",
+                            num(a, k),
+                            num(b, k)
+                        ));
+                    }
+                }
+                if text(a, "tail") != text(b, "tail") {
+                    errs.push(format!(
+                        "Clone.receivers[{who}].frames[{j}].tail 不等：golden={:?} rust={:?}",
+                        text(a, "tail"),
+                        text(b, "tail")
+                    ));
+                }
+            }
+        }
+    }
+    // 推导面（两侧各自成立；不依赖另一侧输出）。
+    for (side, c) in [("golden", gc), ("rust", rc)] {
+        let b = &c["Clone"];
+        let dir = num(b, "dir");
+        let caster_dir = num(b, "caster_dir");
+        let want_dir = (caster_dir + 4) % 8;
+        if dir != want_dir {
+            errs.push(format!(
+                "[{side}] Clone.dir={dir} ≠ GetBackDir(caster_dir={caster_dir})={want_dir}"
+            ));
+        }
+        let has640 = b.get("has_640").and_then(Value::as_bool).unwrap_or(false);
+        let spell_return = c
+            .get("SpellReturn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if spell_return != has640 {
+            errs.push(format!(
+                "[{side}] `SpellReturn({spell_return}) != has_640({has640})`（训练前提已钉死 ⇒ 必须恒等）"
+            ));
+        }
+        let gender = num(b, "gender");
+        let hair = num(b, "hair");
+        let want_feature = clone_feature(gender, hair);
+        let frames = b["receivers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|r| r["frames"].as_array().into_iter().flatten())
+            .filter(|f| num(f, "ident") == 41)
+            .collect::<Vec<_>>();
+        if frames.is_empty() {
+            errs.push(format!("[{side}] 缺 `SM_FEATURECHANGED(41)` 帧"));
+        }
+        for f in frames {
+            let feat = num(f, "param") | (num(f, "tag") << 16);
+            if feat != want_feature {
+                errs.push(format!(
+                    "[{side}] 41 帧 feature={feat} ≠ MakeHumanFeature(gender={gender},hair={hair})={want_feature}"
+                ));
+            }
+        }
+    }
+    errs
+}
+
+/// **MG-55（46 分身术）** 真实台账 → 判定面（单支 `clone`，金标准 `golden/magic/clone46.json`）。
+///
+/// 判据分层：
+/// - **驱动**（`tests::clone46_parity_clone`）只记录 + 自带 oracle 形态牙；
+/// - **本比较器**：`verify` 的通用面（RM 多重集 / SM 严格序 / RNG / HP）+ `Clone` 块逐字段
+///   + **由输入推导**的关系（`dir == back_dir(caster_dir)`、`41 帧 feature == MakeHumanFeature`、
+///   `SpellReturn == has_640`）。
+///
+/// 前置（与其它 magic 台账一致）：先跑驱动（`--exact --test-threads=1`），并与本比较器共用
+/// 同一个 `MIR2_LEDGER_RUN_ID`（空转防线）。
+///
+/// 红检：删 `broadcast_ref_msg`（10/41 缺失）、`back_dir→同向`、不复制 Gender/Hair、
+/// 技能等级置 3（绕过训练前提）⇒ 分别在 `frames` / `dir` / `feature` / `SpellReturn==has_640` 红。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::clone46_parity_clone）生成真实台账"]
+fn real_rust_ledger_clone46() {
+    let stem = "clone46";
+    let label = "clone";
+    let golden = golden_file("clone46.json");
+    check_golden_contract(&golden, label).unwrap_or_else(|m| panic!("{m}"));
+    let dir = ledger_dir();
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+    );
+    let path = dir.join(format!("{stem}_{label}.json"));
+    let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "防空转：缺真实台账 {}（{e}）。先跑驱动 tests::clone46_parity_clone",
+            path.display()
+        )
+    });
+    let side = path.with_extension("run.json");
+    let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+        panic!(
+            "防空转：台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到上一次的陈旧台账」",
+            side.display()
+        )
+    });
+    let side_v: Value = serde_json::from_str(&side_text).expect("run.json 必须是合法 JSON");
+    assert_eq!(
+        side_v.get("run_id").and_then(Value::as_str),
+        Some(want.as_str()),
+        "[{label}] 台账陈旧：run_id 不匹配（当前环境 = {want}）；先用同一 id 重跑驱动"
+    );
+    let v: Value = serde_json::from_str(&txt).expect("防空转：台账必须是合法 JSON");
+    let arr = v.as_array().expect("防空转：台账必须是 [case] 数组");
+    assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
+    assert_eq!(
+        arr[0].get("Label").and_then(Value::as_str),
+        Some(label),
+        "[{label}] 台账 Label 不符"
+    );
+    let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
+    let mut g = golden.clone();
+    let mut r = serde_json::json!({
+        "magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+        "cases": [pinned],
+    });
+    // **归一化可判别性（Leader 2026-11-21 硬条件）**：
+    // ① 两侧归一化前都必须**至少有一帧**的 `recog == 本侧 clone id`（零命中 ⇒ 归一化空转 ⇒ 红）；
+    // ② 两侧 clone id 必须**不等**（相等则归一化多余；显式红，不默默通过）；
+    // ③ 原始 id 与未归一化帧都留在两侧产物里（可见性由 `Clone.actor_id` + `frames[].recog` 保证）。
+    let (g_cid, g_hits) = clone_recog_hits(&g);
+    let (r_cid, r_hits) = clone_recog_hits(&r);
+    assert!(
+        g_hits > 0,
+        "golden 侧没有任何帧的 recog == Clone.actor_id({g_cid}) ⇒ 归一化空转，id 面未验"
+    );
+    assert!(
+        r_hits > 0,
+        "台账侧没有任何帧的 recog == Clone.actor_id({r_cid}) ⇒ 归一化空转，id 面未验"
+    );
+    assert_ne!(
+        g_cid, r_cid,
+        "两侧 clone id 相同（{g_cid}）⇒ ActorId 归一化是多余步骤；请说明为何相同并改判据，而不是默默通过"
+    );
+    normalize_clone_recog(&mut g);
+    normalize_clone_recog(&mut r);
+    let mut errs = clone_block_checks(&g, &r);
+    if let Err(mut e) = verify(&g, &r) {
+        errs.append(&mut e);
+    }
+    assert!(
+        errs.is_empty(),
+        "克隆台账与金标准不等（{} 条）：\n{}",
+        errs.len(),
+        errs.join("\n")
+    );
+}
+
 /// **`36`（`SKILL_UENHANCER`）**真实台账 → 判定面（三支 s1/s5/s13，卡 openmir2-uenhancer）。
 ///
 /// scope：只证 DoSpell 时刻 `ExtraAbil[0]/Times[0]`（`CasterExtraAbil0`）与帧；施法者 `Abil`
