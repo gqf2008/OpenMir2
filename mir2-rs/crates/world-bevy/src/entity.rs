@@ -2372,6 +2372,11 @@ impl EntityStore {
         self.inner.alloc_id()
     }
 
+    /// **P2-3b**：设置业务 id 段基址（下一个 id = `base + 1`；见 `SlotTable::set_id_base`）。
+    pub fn set_id_base(&mut self, base: i32) {
+        self.inner.set_id_base(base);
+    }
+
     /// 插入实体（生成期载体），返回其 id（复用本实体的 `id`）。
     ///
     /// **S3a/S3b/S4a 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与

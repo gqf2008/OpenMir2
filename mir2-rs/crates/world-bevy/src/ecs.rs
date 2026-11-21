@@ -128,6 +128,8 @@ pub struct SlotTable {
     free: Vec<usize>,
     index: IdIndex,
     next_id: i32,
+    /// **P2-3b**：是否已显式设过 id 段基址（只允许一次；缺省 `false`）。
+    id_base_set: bool,
     /// `EcsStore::iter_mut` 的「实体 -> 槽位」缓存是否需要重建。任何槽位变动都置位。
     order_dirty: bool,
 }
@@ -139,6 +141,7 @@ impl Default for SlotTable {
             free: Vec::new(),
             index: IdIndex::default(),
             next_id: 1,
+            id_base_set: false,
             order_dirty: true,
         }
     }
@@ -161,6 +164,33 @@ impl SlotTable {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// **P2-3b**：设置业务 id 的**段基址**（多 World 分段，保证跨片 ActorId 不撞号）。
+    ///
+    /// 语义：之后第一个分配到的 id = `base + 1`；缺省（从未调用）同样是 `next_id = 1`。
+    /// 因此 `MIR2_SHARDS=1` 不调用 ⇒ 首个 id 仍为 1（与既有路径逐字节相同）。
+    ///
+    /// # Panics
+    /// - 任何 id 已分配 / 槽位表非空 ⇒ panic（必须在装载之前调用）；
+    /// - 重复调用 ⇒ panic（一个 World 只许设一次）；
+    /// - `base < 0` 或 `base == i32::MAX`（`base + 1` 溢出）⇒ panic。
+    pub fn set_id_base(&mut self, base: i32) {
+        assert!(
+            !self.id_base_set,
+            "id 段基址只能设置一次（已设为 {}）",
+            self.next_id - 1
+        );
+        assert!(
+            self.next_id == 1 && self.slots.is_empty(),
+            "set_id_base 必须在任何 id 分配之前调用（next_id={}，slots={}）",
+            self.next_id,
+            self.slots.len()
+        );
+        assert!(base >= 0, "id 段基址不得为负：{base}");
+        assert!(base < i32::MAX, "id 段基址 + 1 溢出 i32：{base}");
+        self.id_base_set = true;
+        self.next_id = base + 1;
     }
 
     /// 业务 id -> bevy 实体句柄（`None` = id 不在槽位表，或该槽已空）。
@@ -367,6 +397,11 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
     pub fn alloc_id(&mut self) -> i32 {
         self.world.resource_mut::<SlotTable>().alloc_id()
+    }
+
+    /// **P2-3b**：设置业务 id 段基址（见 [`SlotTable::set_id_base`]）。
+    pub fn set_id_base(&mut self, base: i32) {
+        self.world.resource_mut::<SlotTable>().set_id_base(base);
     }
 
     /// 插入实体，返回其业务 id（复用调用方给的 `id`）。
@@ -814,5 +849,77 @@ mod tests {
             trace, master,
             "id 分配/槽位复用序列必须与 master 记录向量逐项相等"
         );
+    }
+}
+
+#[cfg(test)]
+mod id_base_tests {
+    use super::*;
+
+    /// **P2-3b**：N=1 从不调用 `set_id_base` ⇒ 首个 id 仍是 1（与既有路径逐字节相同）。
+    #[test]
+    fn default_first_id_is_one_and_monotonic() {
+        let mut world = crate::World::new(4, 4);
+        assert_eq!(world.entities.alloc_id(), 1);
+        assert_eq!(world.entities.alloc_id(), 2);
+    }
+
+    /// **P2-3b**：两片分段 ⇒ id 集合不相交、段内单调；`base=0` 与缺省同构。
+    #[test]
+    fn segmented_worlds_are_disjoint_and_monotonic() {
+        const SEGMENT: i32 = 1 << 22;
+        let mut a = crate::World::new(4, 4);
+        let mut b = crate::World::new(4, 4);
+        a.set_id_base(0);
+        b.set_id_base(SEGMENT);
+        let aid: Vec<i32> = (0..3).map(|_| a.entities.alloc_id()).collect();
+        let bid: Vec<i32> = (0..3).map(|_| b.entities.alloc_id()).collect();
+        assert_eq!(aid, vec![1, 2, 3], "base=0 与缺省同构（首 id 仍为 1）");
+        assert_eq!(bid, vec![SEGMENT + 1, SEGMENT + 2, SEGMENT + 3]);
+        assert!(
+            aid.iter().all(|x| !bid.contains(x)),
+            "两片 id 集合必须不相交"
+        );
+        assert!(aid.windows(2).all(|w| w[1] == w[0] + 1), "段内单调");
+        assert!(bid.windows(2).all(|w| w[1] == w[0] + 1), "段内单调");
+    }
+
+    /// **牙**：任何 id 分配之后设基址 ⇒ panic（防止在装载后静默改号段）。
+    ///
+    /// 红检：删掉 `set_id_base` 里的 `next_id == 1 && slots.is_empty()` 断言 ⇒ 本用例从 panic
+    /// 变成正常返回 ⇒ 红。
+    #[test]
+    #[should_panic(expected = "必须在任何 id 分配之前")]
+    fn set_id_base_after_allocation_panics() {
+        let mut table = SlotTable::default();
+        let _ = table.alloc_id();
+        table.set_id_base(1 << 22);
+    }
+
+    /// **牙**：重复设基址 ⇒ panic。`base=0` 时 `next_id` 仍是 1，只能靠 `id_base_set` 抓。
+    ///
+    /// 红检：删掉 `!self.id_base_set` 断言 ⇒ 本用例不再 panic ⇒ 红。
+    #[test]
+    #[should_panic(expected = "只能设置一次")]
+    fn set_id_base_twice_panics() {
+        let mut table = SlotTable::default();
+        table.set_id_base(0);
+        table.set_id_base(1 << 22);
+    }
+
+    /// **牙**：负基址 ⇒ panic。
+    #[test]
+    #[should_panic(expected = "不得为负")]
+    fn negative_base_panics() {
+        let mut table = SlotTable::default();
+        table.set_id_base(-1);
+    }
+
+    /// **牙**：`base == i32::MAX`（`base + 1` 溢出）⇒ panic。
+    #[test]
+    #[should_panic(expected = "溢出")]
+    fn overflowing_base_panics() {
+        let mut table = SlotTable::default();
+        table.set_id_base(i32::MAX);
     }
 }

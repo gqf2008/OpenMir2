@@ -148,5 +148,42 @@ fn trace_off_is_byte_identical_and_on_records_same_form() {
         "改坏一行 result ⇒ 校验器必须报红"
     );
 
+    // ---- 阶段 1b：P2-3b 线程本地抑制 ----
+    // 线程 A（本线程）抑制 ⇒ record 不落账；线程 B 未抑制 ⇒ 仍落账；恢复后本线程恢复落账。
+    // 红检：把 `SUPPRESSED` 改成全局 `AtomicBool`（不是 thread_local）⇒ 线程 B 那条也消失 ⇒ 红。
+    let before = std::fs::read_to_string(&path).unwrap().lines().count();
+    mir2_shared::rng_trace::suppress_current_thread();
+    let mut suppressed_rng = RandomNumber::with_seed(7);
+    let suppressed_draw = suppressed_rng.random();
+    mir2_shared::rng_trace::record("it-suppressed", 0, 1, "test", 1);
+    std::thread::spawn(|| {
+        mir2_shared::rng_trace::record("it-other-thread", 0, 2, "test", 2);
+    })
+    .join()
+    .expect("另一线程 join");
+    mir2_shared::rng_trace::unsuppress_current_thread();
+    mir2_shared::rng_trace::record("it-host", 0, 3, "test", 3);
+    let after_text = std::fs::read_to_string(&path).unwrap();
+    let new_rows: Vec<&str> = after_text.lines().skip(before).collect();
+    assert_eq!(
+        new_rows.len(),
+        2,
+        "只应落账两条（另一线程 + 恢复后）；被抑制的（含 random() 内的 record）不落：{new_rows:?}"
+    );
+    assert!(
+        new_rows.iter().any(|r| r.contains("it-other-thread")),
+        "线程 B 必须落账"
+    );
+    assert!(
+        new_rows.iter().any(|r| r.contains("it-host")),
+        "恢复后必须落账"
+    );
+    assert!(
+        !new_rows.iter().any(|r| r.contains("it-suppressed")),
+        "抑制期间不得落账"
+    );
+    // 抑制只影响落账，不影响取数本身（值照常产生）。
+    let _ = suppressed_draw;
+
     let _ = std::fs::remove_dir_all(&dir);
 }
