@@ -101,6 +101,7 @@ fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String
     sg.magic.use_thrusting = preset["use_thrusting"].as_bool().unwrap_or(false);
     sg.magic.use_half_moon = preset["use_half_moon"].as_bool().unwrap_or(false);
     sg.magic.crs_hitkill = preset["crs_hitkill"].as_bool().unwrap_or(false);
+    sg.magic.mbo43_kill = preset["mbo43_kill"].as_bool().unwrap_or(false);
     if preset["fire_hit_busy"].as_bool().unwrap_or(false) {
         // 26 的 `AllowFireHitSkill`：`now - LatestFireHitTick > 10000` 才放行；
         // golden 的 busy case 预设 `LatestFireHitTick = now`（10s 门内）。
@@ -288,6 +289,25 @@ fn check_golden(id: u32) {
             }
         }
     }
+}
+
+/// 43 `SKILL_43`：`Skill43OnOff` 开/关 + `"+CID"/"+UCID"`。
+///
+/// 文案是**源码默认**（`MessageSettings.RedHalfMoonOn/Off`；`StringConf` 不读、部署无该键）
+/// ⇒ golden 的 `fixture_spec` 记了生成时的两条文案，比较器除逐帧外还断言它与字面量一致，
+/// 防默认串被改而 golden 静默漂移。
+#[test]
+fn warr_43_matches_golden() {
+    let doc = golden(43);
+    assert_eq!(
+        doc["fixture_spec"]["toggle_text_on"], "开启破空剑",
+        "43 开启文案（源码默认，StringConf 不读）"
+    );
+    assert_eq!(
+        doc["fixture_spec"]["toggle_text_off"], "关闭破空剑",
+        "43 关闭文案（源码默认，StringConf 不读）"
+    );
+    check_golden(43);
 }
 
 #[test]

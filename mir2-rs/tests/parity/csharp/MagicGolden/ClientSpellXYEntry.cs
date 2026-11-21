@@ -190,6 +190,11 @@ public static class ClientSpellXYEntry
                     magic_spell = spec.MagicSpell,
                     magic_def_spell = spec.MagicDefSpell,
                     spell_point = SpellPoint(spec),
+                    // 43：`Skill43OnOff` 的文案是**源码默认**（`StringConf` 不读 `RedHalfMoon*`、
+                    // 部署无该键）⇒ 记进 Fixture，供比较器断言"实际 100 尾 == Fixture == 字面量"，
+                    // 防默认串被改而 golden 静默漂移（同类：施毒批的 `you_poisoned`）。
+                    toggle_text_on = spec.MagicId == 43 ? SystemModule.MessageSettings.RedHalfMoonOn : (string)null,
+                    toggle_text_off = spec.MagicId == 43 ? SystemModule.MessageSettings.RedHalfMoonOff : (string)null,
                 },
                 cases,
             };
@@ -490,6 +495,7 @@ public static class ClientSpellXYEntry
                     use_half_moon = sc.PresetUseHalfMoon,
                     crs_hitkill = sc.PresetCrsHitkill,
                     fire_hit_busy = sc.PresetFireHitBusy,
+                    mbo43_kill = sc.PresetMbo43Kill,
                 },
                 entry_return = entryReturn,
                 delay_time = delayTime,
