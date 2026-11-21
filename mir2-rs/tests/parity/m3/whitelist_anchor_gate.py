@@ -451,6 +451,41 @@ def check_doc_text(text, root=REPO_ROOT, whitelist_label="<mem>", idx=None,
     return reds, infos, prereq
 
 
+def check_src_decl(text, root, idx, allowed=None):
+    """Phase 1：高频域冻结面锚的**声明级判红**（错误码 `SRC_DECL_DRIFT`）。
+
+    只对 `allowed`（默认 `SRC_DECL_FILES`）内的文件生效；判定复用 Phase 0 的配对 + span：
+    - 合格符号但**不在**其声明体内、且子串距锚 >3 行 ⇒ RED `SRC_DECL_DRIFT`（标注「本层=声明级」）；
+    - 无合格符号 / 常量类（松命中·非声明）⇒ INFO，不判红。
+    """
+    allowed = set(allowed or SRC_DECL_FILES)
+    reds, infos = [], []
+    for a in parse_anchors(text):
+        rel, _reason = _resolve(a["path"], root, idx)
+        if not rel or rel not in allowed:
+            continue
+        lines = _read_lines(os.path.join(root, rel))
+        sym = _pair_symbol_v2(a["row"], a["start"] - a["row_start"], a["end"] - a["row_start"],
+                              a["path"], chr(10).join(lines), lines)
+        if not sym:
+            infos.append("%s WARN SRC_DECL(无合格符号) `%s`" % (a["entry"], rel))
+            continue
+        if not _qualified(sym, lines):
+            infos.append("%s WARN SRC_DECL(符号不合格) `%s`" % (a["entry"], sym))
+            continue
+        lo, hi = min(a["lines"]), max(a["lines"])
+        if _in_decl_span(_decl_spans(lines, _candidates(sym)), lo, hi):
+            continue
+        d = _loose_dist(lines, lo, hi, sym)
+        if d is not None and d > 3:
+            reds.append(("SRC_DECL_DRIFT",
+                         "%s：`%s:%s` 声明的符号 `%s` 不在其声明体内且距 %d 行（本层=声明级）"
+                         % (a["entry"], rel, ",".join(str(x) for x in a["lines"]), sym, d)))
+        else:
+            infos.append("%s INFO SRC_DECL(常量/非声明) `%s`" % (a["entry"], sym))
+    return reds, infos
+
+
 def run_check(whitelist=DEFAULT_WHITELIST, root=REPO_ROOT, high_churn=HIGH_CHURN,
               json_out=None):
     if not os.path.isfile(whitelist):
@@ -460,6 +495,14 @@ def run_check(whitelist=DEFAULT_WHITELIST, root=REPO_ROOT, high_churn=HIGH_CHURN
     with open(whitelist, "r", encoding="utf-8-sig") as fh:
         text = fh.read()
     reds, infos, prereq = check_doc_text(text, root=root, high_churn=high_churn)
+    # Phase 1（2026-11-21）：高频域冻结面锚的声明级判红（独立错误码 SRC_DECL_DRIFT）。
+    try:
+        _idx = _build_basename_index(root)
+        _sr, _si = check_src_decl(text, root, _idx)
+        reds.extend(_sr)
+        infos.extend(_si)
+    except Exception as e:  # fail-closed：判据自身异常不得静默
+        prereq.append("SRC_DECL_CHECK_ERROR: %r" % (e,))
 
     if prereq:
         print("RESULT: FAILED")
@@ -654,6 +697,53 @@ def selftest():
 # Phase 0（2026-11-21，QA）：冻结面 `src/**` 锚的**声明级**漂移报告（只报告，不判红）。
 # 方案 A（声明级窗口匹配）+ B（资格过滤）；默认 `check` 行为不变。
 # ---------------------------------------------------------------------------
+SRC_DECL_FILES = (
+    # Phase 1（2026-11-21）：只对这 6 道场景锚门覆盖的冻结面文件开启「声明级判红」。
+    # 由 castle_oracle / guild_castle / hero_pet / party_trade / quest / selloff 六门
+    # 的 REGISTERED 路径求并集；改动这些门时同步本表（report-selftest 有集合一致性断言）。
+    "src/BotSrv/Player/RobotPlayer.Operate.cs",
+    "src/BotSrv/Player/RobotPlayer.cs",
+    "src/Evil/Messages.cs",
+    "src/GameSrv/DB/MySqlDB.cs",
+    "src/GameSrv/GameApp.cs",
+    "src/GameSrv/Maps/MapManager.cs",
+    "src/GameSrv/Npc/CastleOfficial.cs",
+    "src/GameSrv/Npc/GuildOfficial.cs",
+    "src/GameSrv/Npc/Merchant.cs",
+    "src/GameSrv/Word/WorldServer.cs",
+    "src/M2Server/Actor/BaseObject.Base.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/Castle/CastleConf.cs",
+    "src/M2Server/Castle/CastleConst.cs",
+    "src/M2Server/Castle/CastleManager.cs",
+    "src/M2Server/Castle/UserCastle.cs",
+    "src/M2Server/Guild/GuildInfo.cs",
+    "src/M2Server/Guild/GuildManager.cs",
+    "src/M2Server/M2Share.cs",
+    "src/M2Server/Magic/MagicManager.cs",
+    "src/M2Server/Maps/Envirnoment.cs",
+    "src/M2Server/Monster/MonsterObject.cs",
+    "src/M2Server/Monster/Monsters/CastleDoor.cs",
+    "src/M2Server/Monster/Monsters/WallStructure.cs",
+    "src/M2Server/Npc/NormNpc.cs",
+    "src/M2Server/Player/PlayObject.Base.cs",
+    "src/M2Server/Player/PlayObject.Message.cs",
+    "src/M2Server/Player/PlayObject.Operate.cs",
+    "src/M2Server/Player/PlayObject.Sale.cs",
+    "src/M2Server/Player/PlayObject.cs",
+    "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs",
+    "src/Modules/ScriptEngine/ScriptEngine.cs",
+    "src/Modules/SystemModule/Actors/IPlayerActor.cs",
+    "src/Modules/SystemModule/Conf/Model/GameSvrConf.cs",
+    "src/Modules/SystemModule/Conf/ServerConf.cs",
+    "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+    "src/Modules/SystemModule/Data/ArcherUnit.cs",
+    "src/OpenMir2/HUtil32.cs",
+    "src/OpenMir2/Messages.cs",
+    "src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs",
+    "src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs",
+)
+
 def _decl_hit(lines, lo, hi, sym):
     """±3 行窗口内是否存在**声明形态**的 `sym`（C# 方法/属性/字段/枚举成员；Rust fn/struct/…）。"""
     cands = _candidates(sym)
@@ -918,6 +1008,31 @@ def cmd_report_selftest(argv_args=None):
     exc_row = "| T-2 | 抛 `IndexOutOfRangeException`（`src/X.cs:1`） |"
     sym2 = _pair_symbol_v2(exc_row, exc_row.find("`src"), exc_row.find("`）") + 1, "src/X.cs", "class X{}", ["class X{}"])
     check("`*Exception` 不作符号", sym2 is None, str(sym2))
+    # Phase 1：声明级判红的合成夹具 + **反向牙**（只在 allowed 集内生效）
+    import tempfile
+    td = tempfile.mkdtemp(prefix="srcdecl-")
+    os.makedirs(os.path.join(td, "src"), exist_ok=True)
+    demo = ("class Demo {" + chr(10) +
+            "    public void Body() {" + chr(10) +
+            "        int a = 1;" + chr(10) +
+            "        int b = 2;" + chr(10) +
+            "    }" + chr(10) + "}" + chr(10))
+    open(os.path.join(td, "src", "Demo.cs"), "w", encoding="utf-8").write(demo)
+    wl_ok = "| T-1 | x `Body`（`src/Demo.cs:3`） |" + chr(10)
+    r, _i = check_src_decl(wl_ok, td, _build_basename_index(td), allowed={"src/Demo.cs"})
+    check("Phase1 正例：锚在方法体内 ⇒ 无 SRC_DECL_DRIFT", not any(c == "SRC_DECL_DRIFT" for c, _ in r), str(r))
+    wl_bad = "| T-2 | x `Body`（`src/Demo.cs:9`） |" + chr(10)
+    r2, _i2 = check_src_decl(wl_bad, td, _build_basename_index(td), allowed={"src/Demo.cs"})
+    check("**Phase1 反向牙**：锚在方法外 ⇒ SRC_DECL_DRIFT 红", any(c == "SRC_DECL_DRIFT" for c, _ in r2), str(r2))
+    # 集合一致性牙：SRC_DECL_FILES 必须等于 6 道场景门 REGISTERED 的路径并集
+    import glob as _g
+    union2 = set()
+    for gf in _g.glob(os.path.join(REPO_ROOT, "mir2-rs", "tests", "parity", "m3", "*_anchor_gate.py")):
+        if gf.endswith("whitelist_anchor_gate.py"):
+            continue
+        union2 |= set(re.findall(r'src/[A-Za-z0-9_./-]+\.(?:cs|sql)', open(gf, encoding="utf-8").read()))
+    check("SRC_DECL_FILES == 6 道门路径并集", set(SRC_DECL_FILES) == union2,
+          "missing=%s extra=%s" % (sorted(union2 - set(SRC_DECL_FILES))[:3], sorted(set(SRC_DECL_FILES) - union2)[:3]))
     print("REPORT_SELFTEST " + ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
