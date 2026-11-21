@@ -264,3 +264,44 @@ harness 的 4 个对象随后被覆写成 `idBase+1..+4`，克隆体 ctor 取到
 
 Leader 2026-11-21：`cargo` 进程数**不等于**车道数（同一批测试滚动起落）。后续报窗口必须附
 **命令行**（`Get-CimInstance Win32_Process` 的 `CommandLine`），由 Leader 判断哪些属于同一任务。
+
+### 6.7 首跑 golden 发现（2026-11-21，**待 Leader 裁决**，未改产品）
+
+golden 已生成（temp `E:/UserTemp/mg55-golden/clone46_v2.json`，seed=46，两次生成 Rng 逐值一致），
+发现两处**产品级**缺口，按卡 §1.4 停报：
+
+**(A) oracle 克隆体构造消费 5 个随机数；Rust `spawn_clone` 消费 0**
+`LoggingRandom.Next(int)` 临时调用栈定位（诊断补丁已还原）：
+```text
+DRAW[1] max=1500   v=1136   @ BaseObject..ctor <- AnimalObject..ctor <- CharacterObject..ctor
+DRAW[2] max=2000   v=629    @ BaseObject..ctor <- AnimalObject..ctor <- CharacterObject..ctor
+DRAW[3] max=3000   v=2764   @ AnimalObject..ctor <- CharacterObject..ctor <- PlayObject..ctor
+DRAW[4] max=3000   v=1129   @ AnimalObject..ctor <- CharacterObject..ctor <- PlayObject..ctor
+DRAW[5] max=999999 v=974376 @ PlayObject..ctor (RandomNo) <- PlayCloneObject..ctor <- MagMakeClone
+DRAW[6] max=3      v=2      @ DoSpell 训练尾 Random(3)+1
+```
+影响：不只 `Rng` 长度 6 vs 1；训练抽位置也错（golden 的 `Random(3)=2` 是第 6 抽）⇒ 世界 RNG 流整体偏移。
+反证锚：`crates/world-bevy/src/slave.rs` 的 `spawn_clone` 文档注释称"oracle 构造器无 Random"（与事实相反）；
+`crates/world-bevy/src/slave.rs` 的 `spawn_clone` 放格测试（`构造克隆体不消费 RNG`）把错误行为钉住。
+
+**(B) oracle 克隆体出生零帧；Rust 46 支无条件广播 `turn_pair`**
+golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（17+638）、`obs_out` 零；
+**无任何 SM_TURN(10)/SM_FEATURECHANGED(41)**。Clone 块记录 `fixed_hide_mode=true, ob_mode=false`。
+根因链：`PlayObject` ctor `FixedHideMode = true`（`src/M2Server/Player/PlayObject.cs:993`）→ 克隆体不登录、
+无 `PlayObject.cs:1442` 复位 → ctor 尾 `SendRefMsg(RM_TURN)` 命中 `BaseObject.Message.cs:390-394`
+"隐藏态只发自己" → 克隆体队列无人排空 ⇒ 0 帧。Rust 侧在 `bins/game-svr/src/lib.rs` 的 46 支
+无条件 `turn_pair` 广播（既有单测同断言）。
+
+**已验证一致的面**：clone 静态字段（name/pos/dir=6/gender=1/hair=7）、`caster_dir=2`（`6=(2+4)%8`，
+验证 `pre_spell_face_target` 与 `GetBackDir`）、`has_640=true`、`drain_cap=false`、`SpellReturn=true`。
+**非确定量**：clone `actor_id` 两次生成不同（`HUtil32.Sequence()` 为 GUID 派生）⇒ 归一化必要，
+`rel_to_caster` 每次漂、**不得进比较面**。
+
+**待裁决选项**
+- **A 扩卡修产品**：① `spawn_clone` 按 1500/2000/3000/3000/999999 顺序消费 5 抽，并把
+  上述 `spawn_clone` 放格测试改钉新语义；② 46 支去掉 `turn_pair` 广播（克隆可见性属 AOI 后续帧）。
+  止损线：`slave.rs` / `lib.rs` 产品改动 + 既有 46 单测。
+- **B 收窄 scope=partial**：不改产品；只比静态面 + 638/640/17 + 负向"不得有 10/41"；
+  `Rng`/训练 TP 登记"构造抽未建模"不参与比较（同 skeleton 先例），并登记两处已知偏差。
+
+裁决前不改 `slave.rs`/`lib.rs`；当前比较器会因 10/41 缺失与 Rng 6 vs 1 判红，属**已知红**。
