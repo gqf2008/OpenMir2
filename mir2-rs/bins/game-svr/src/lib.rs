@@ -71233,32 +71233,99 @@ SendRefMsgRange=15
         //  - `amulet_shape`：`CheckAmulet(1,2)` 要求 `Shape <= 2`（`MagicBase.cs:65-70`）；
         //  - `target_anti_poison`：`Random(AntiPoison + 7) <= 6` 的右操作数；
         //  - `amy_ounsul_point`：`point = Round(level/3 * power/AmyOunsulPoint)`（`MagicManager.cs:241`）。
-        if let Some(v) = golden_fixture_opt(stem, label, "amulet_shape") {
-            if let Ok(v) = u8::try_from(v) {
-                if v > 0 {
-                    rig.amulet_shape = v;
+        // **施毒族判定**（4 支 golden 的 stem；下方三旋钮/三键/毒口径都以此为准）。
+        let poison_stem = matches!(
+            stem,
+            "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+        );
+        if poison_stem {
+            // **三旋钮 fail-closed（A）**：缺键 / 越界 / 非法值 ⇒ `FixtureContractViolation`
+            // （panic），**不许 `unwrap_or(10)` 静默吃缺省、不许 `if v > 0` 静默跳过**——
+            // 那正是本批要消灭的"夹具写了、实现没读/读成缺省"失效模式（卡 §53）。
+            // 值本身**来自 golden `Fixture`**（装置已断言部署 `AmyOunsulPoint==15`，此处不写死 15）。
+            let shape = golden_fixture_required(stem, label, "amulet_shape");
+            let shape = u8::try_from(shape).unwrap_or_else(|_| {
+                panic!("[{stem}/{label}] Fixture.amulet_shape={shape} 越界 u8（FixtureContractViolation）")
+            });
+            assert!(
+                matches!(shape, 1 | 2),
+                "[{stem}/{label}] Fixture.amulet_shape={shape} 必须是 1 或 2（`case 1`/`case 2` 两臂；0 会退化成不投毒）"
+            );
+            rig.amulet_shape = shape;
+
+            let ap = golden_fixture_required(stem, label, "target_anti_poison");
+            let ap = u16::try_from(ap).unwrap_or_else(|_| {
+                panic!("[{stem}/{label}] Fixture.target_anti_poison={ap} 越界 u16（FixtureContractViolation）")
+            });
+            // **0 也要显式写入**（`AntiPoison=0` 是合法输入；静默跳过会让"记录值 ≠ 使用值"）。
+            rig.world.set_attack_poison(
+                target,
+                mir2_world_bevy::combat::AttackPoisonState {
+                    paralysis: false,
+                    un_paralysis: false,
+                    anti_poison: ap,
+                },
+            );
+
+            let aop = golden_fixture_required(stem, label, "amy_ounsul_point");
+            let aop = i32::from(aop);
+            assert!(
+                aop > 0,
+                "[{stem}/{label}] Fixture.amy_ounsul_point={aop} 必须 >0（`power/AmyOunsulPoint` 除零防护）"
+            );
+            let mut cfg = rig.world.b4_cfg;
+            cfg.amy_ounsul_point = aop;
+            rig.world.set_b4_config(cfg);
+        } else {
+            // 旧件零变化：非施毒 golden 没有这三个键 ⇒ 保持既有可选覆盖。
+            if let Some(v) = golden_fixture_opt(stem, label, "amulet_shape") {
+                if let Ok(v) = u8::try_from(v) {
+                    if v > 0 {
+                        rig.amulet_shape = v;
+                    }
                 }
             }
-        }
-        if let Some(v) = golden_fixture_opt(stem, label, "target_anti_poison") {
-            let v = u16::try_from(v).unwrap_or(0);
-            if v > 0 {
-                rig.world.set_attack_poison(
-                    target,
-                    mir2_world_bevy::combat::AttackPoisonState {
-                        paralysis: false,
-                        un_paralysis: false,
-                        anti_poison: v,
-                    },
-                );
+            if let Some(v) = golden_fixture_opt(stem, label, "target_anti_poison") {
+                let v = u16::try_from(v).unwrap_or(0);
+                if v > 0 {
+                    rig.world.set_attack_poison(
+                        target,
+                        mir2_world_bevy::combat::AttackPoisonState {
+                            paralysis: false,
+                            un_paralysis: false,
+                            anti_poison: v,
+                        },
+                    );
+                }
+            }
+            if let Some(v) = golden_fixture_opt(stem, label, "amy_ounsul_point") {
+                let v = i32::try_from(v).unwrap_or(10);
+                let mut cfg = rig.world.b4_cfg;
+                cfg.amy_ounsul_point = v;
+                rig.world.set_b4_config(cfg);
             }
         }
-        if let Some(v) = golden_fixture_opt(stem, label, "amy_ounsul_point") {
-            let v = i32::try_from(v).unwrap_or(10);
-            let mut cfg = rig.world.b4_cfg;
-            cfg.amy_ounsul_point = v;
-            rig.world.set_b4_config(cfg);
-        }
+        // **施毒 `SysMsg(YouPoisoned)` 的载荷（MG-13/14/15/50/64/65）**：`MakePosion` 的
+        // `SysMsg(Format(YouPoisoned,...), MsgColor.Red, MsgType.Hint)` ⇒ `SM_SYSMESSAGE(100)` 的
+        // 前/背景色与文本，**一律取自 golden `Fixture`**（装置从部署 `Server.conf` 的
+        // `[Setup] RedMsgFColor/RedMsgBColor` 与 `String.conf` 的 `[String] YouPoisoned` 读**实际使用值**）。
+        // **缺键 ⇒ FixtureContractViolation（fail-closed，不许缺省兜底）**；非施毒件保持 0/空串（零变化）。
+        let (red_f_color, red_b_color, you_poisoned_text) = if poison_stem {
+            (
+                u8::try_from(golden_fixture_required(stem, label, "red_msg_f_color"))
+                    .unwrap_or_else(|_| {
+                        panic!("[{stem}/{label}] Fixture.red_msg_f_color 越界 u8（FixtureContractViolation）")
+                    }),
+                u8::try_from(golden_fixture_required(stem, label, "red_msg_b_color"))
+                    .unwrap_or_else(|_| {
+                        panic!("[{stem}/{label}] Fixture.red_msg_b_color 越界 u8（FixtureContractViolation）")
+                    }),
+                golden_fixture_str_required(stem, label, "you_poisoned"),
+            )
+        } else {
+            (0u8, 0u8, String::new())
+        };
+        let you_poisoned_bytes = enter::gbk(&you_poisoned_text);
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
@@ -71416,12 +71483,7 @@ SendRefMsgRange=15
             .filter(|m| m.ident == mir2_world_bevy::slave::RM_POISON)
             .map(|m| {
                 (
-                    m.actor_id,
-                    m.w_param,
-                    m.n_param1,
-                    m.n_param2,
-                    m.n_param3,
-                    m.priority,
+                    m.actor_id, m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority,
                 )
             })
             .collect();
@@ -71476,9 +71538,9 @@ SendRefMsgRange=15
                 &mut rig.displays,
                 &mut rig.ground_sessions,
                 &rig.gates,
-                0,
-                0,
-                b"",
+                red_f_color,
+                red_b_color,
+                &you_poisoned_bytes,
             );
             // **P3-B3**：`RM_DOOPENHEALTH` 到点 ⇒ 1100、`RM_MAGIC_LVEXP` 到点 ⇒ 640、
             // `RM_TRANSPARENT` ⇒ 657。与 `sim_loop` 同序（B4 先、B3 后）。
@@ -71959,7 +72021,10 @@ SendRefMsgRange=15
         // 毒到点后的三条派生 RM（`PoisonDelivery`：`BaseObject.cs:1941-1971`）：
         // - `8090`(RM_CHANGENAMECOLOR)：`SetPkFlag` 触发（`name_color`）⇒ 攻击方 hearers，prio 154；
         // - `10139`(RM_CHARSTATUSCHANGED)：`StatusChanged()` ⇒ `CharStatus`（**绿毒 = int.MinValue**，
-        //   `BaseObject.Base.cs:170` 的 `0x80000000 >> 0`；红毒 = `0x40000000`）⇒ 目标 hearers，prio 155；
+        //   **位号 = buff 插入序**（`ActorBuffSystem.GetBuffStatus`，`0x80000000 >> i`）：本夹具目标只有
+        //   一条毒 buff ⇒ 绿/红毒同为 `i=0` ⇒ **都是 int.MinValue**。`BaseObject.Base.cs:170` 那条按
+        //   `PoisonState` 取位（DAMAGEARMOR=1 ⇒ `0x40000000`）是**另一路径**，本 fixture 不经过；
+        //   要观测位号随 buff 序变化需目标先有 buff（另立卡，本批不做））⇒ 目标 hearers，prio 155；
         // - `11004`(RM_SYSMESSAGE)：`SysMsg(Format(YouPoisoned, nTime, nPoint), Red, Hint)`
         //   （`BaseObject.cs:1970`）⇒ 只给目标，prio 252。
         for o in &all_outs {
@@ -71984,8 +72049,8 @@ SendRefMsgRange=15
                     rm_by_who.entry(who).or_default().push(fireball_rm(
                         11004,
                         0,
-                        255,
-                        56,
+                        i64::from(red_f_color),
+                        i64::from(red_b_color),
                         0,
                         252,
                         false,
@@ -71995,9 +72060,10 @@ SendRefMsgRange=15
             if let Some(nc) = p.name_color {
                 for id in chat::hear_targets(&rig.world, nc.target_id, range) {
                     if let Some(who) = who_of(id) {
-                        rm_by_who.entry(who).or_default().push(fireball_rm(
-                            8090, 0, 0, 0, 0, 154, false,
-                        ));
+                        rm_by_who
+                            .entry(who)
+                            .or_default()
+                            .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
                     }
                 }
             }
@@ -73268,6 +73334,26 @@ SendRefMsgRange=15
         golden_case(&file, label)["Fixture"][key].as_u64()
     }
 
+    /// 金标准 `Fixture` 的**必填字符串**字段：缺键/非字符串 ⇒ **FixtureContractViolation**（红）。
+    /// 不许默认兜底——施毒 100 帧的文本若静默回落空串，`SM_SYSMESSAGE` 载荷就会被"比对通过"
+    /// （卡 §53：记录端必须 = 实际使用值）。
+    fn golden_fixture_str_required(stem: &str, label: &str, key: &str) -> String {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)["Fixture"][key]
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{stem}/{label}] 金标准 Fixture 缺 `{key}`（FixtureContractViolation：必须显式记录实际输入，不许缺省兜底）"
+                )
+            })
+            .to_string()
+    }
+
     /// 金标准该支某接收者某字段（`Rm`/`Sent`）里 `ident` 的条数——**期望只从 golden 来**。
     fn golden_msg_count(stem: &str, label: &str, who: &str, field: &str, ident: i64) -> usize {
         let c = golden_case_for(stem, label);
@@ -74433,6 +74519,94 @@ SendRefMsgRange=15
         );
     }
 
+    /// **毒口径的逐收件人帧比较**（与比较器 `magic_fireball_parity.rs` 的
+    /// `frame_order_scope = poison_cross_actor_same_tick` 分支**同口径**）：
+    /// - 每接收者 **多重集**（`ident/recog/param/tag/series/tail` + **due 分类**），顺序不计；
+    /// - 非 640 帧的 `due_ms_rel` 只区分 `0`（施法批）与 `>0`（交付批）——步进排水按 100ms
+    ///   落地，`Sleep` 过冲会让交付批落在 900/1000，那是测量粒度不是排期；
+    /// - **640 late 帧** 的 `due_ms_rel`（`DeliveryTime − t0`，`Environment.TickCount` 15.6ms
+    ///   粒度）按 `|Δ| ≤ 32ms`（2× 粒度）容差判。最小需分辨差 600 vs 1000（400ms）≫ 32ms。
+    ///
+    /// 为什么放宽顺序：毒在**目标**的 `Run()` 才派生 656/657/100，oracle 逐 actor 处理、
+    /// Rust 同 tick 批量 flush（登记见 `openmir2-b4-multivictim-strike-order.md`「同根第二实例」）。
+    fn poison_per_receiver_frame_matches_golden(stem: &str, label: &str) {
+        let c = defence_case(stem, label);
+        let g = golden_case_for(stem, label);
+        let due_class = |m: &serde_json::Value| -> i64 {
+            if m["ident"].as_i64() == Some(640) {
+                0
+            } else {
+                i64::from(m["due_ms_rel"].as_i64().unwrap_or(0) != 0)
+            }
+        };
+        let key = |m: &serde_json::Value| -> (i64, i64, i64, i64, i64, i64, String) {
+            (
+                m["ident"].as_i64().unwrap_or(-1),
+                m["recog"].as_i64().unwrap_or(-1),
+                m["param"].as_i64().unwrap_or(-1),
+                m["tag"].as_i64().unwrap_or(-1),
+                m["series"].as_i64().unwrap_or(-1),
+                due_class(m),
+                m["tail"].as_str().unwrap_or("").to_string(),
+            )
+        };
+        let by_who = |v: &serde_json::Value| {
+            v["Receivers"]
+                .as_array()
+                .expect("Receivers 必须是数组")
+                .iter()
+                .map(|r| {
+                    (
+                        r["Who"].as_str().expect("Who 必须是字符串").to_string(),
+                        r["Sent"].as_array().expect("Sent 必须是数组").clone(),
+                    )
+                })
+                .filter(|(_, sent): &(String, Vec<serde_json::Value>)| !sent.is_empty())
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let got = by_who(&c);
+        let want = by_who(&g);
+        assert_eq!(
+            got.keys().collect::<Vec<_>>(),
+            want.keys().collect::<Vec<_>>(),
+            "[{stem}/{label}] 收件人集合不等（毒口径）：rust={:?} golden={:?}",
+            got.keys().collect::<Vec<_>>(),
+            want.keys().collect::<Vec<_>>()
+        );
+        for (who, gf) in &want {
+            let rf = got.get(who).expect("收件人集合已断言相等");
+            let mut gk: Vec<_> = gf.iter().map(key).collect();
+            let mut rk: Vec<_> = rf.iter().map(key).collect();
+            gk.sort();
+            rk.sort();
+            assert_eq!(
+                gk, rk,
+                "[{stem}/{label}/{who}] Sent 多重集不等（毒口径：顺序不计 + chained due 批次类）"
+            );
+            let mut gd: Vec<i64> = gf
+                .iter()
+                .filter(|m| m["ident"].as_i64() == Some(640))
+                .map(|m| m["due_ms_rel"].as_i64().unwrap_or(0))
+                .collect();
+            let mut rd: Vec<i64> = rf
+                .iter()
+                .filter(|m| m["ident"].as_i64() == Some(640))
+                .map(|m| m["due_ms_rel"].as_i64().unwrap_or(0))
+                .collect();
+            gd.sort();
+            rd.sort();
+            assert_eq!(
+                gd.len(),
+                rd.len(),
+                "[{stem}/{label}/{who}] 640 帧条数不等：golden {gd:?} rust {rd:?}"
+            );
+            assert!(
+                gd.iter().zip(rd.iter()).all(|(g, r)| (g - r).abs() <= 32),
+                "[{stem}/{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} rust {rd:?}"
+            );
+        }
+    }
+
     /// **`MG-23 holyshield(16)`**（`SKILL_HOLYSHIELD`，捆魔咒）：四支——`mon_hit_two`（两只全中）、
     /// `mon_blocked_level`（等级门不过）、`mon_blocked_master`（主人门不过）、`mon_partial`（部分命中）。
     /// **四个标签逐一断言完整帧集合**：三条负例的价值就在"帧集合退化"，不能只挑 `mon_hit_two`。
@@ -74506,7 +74680,11 @@ SendRefMsgRange=15
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
     fn group_amyounsul_assert(label: &str, seed: i32, base: i32) {
         fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
-        per_receiver_frame_seq_matches_golden("groupamyounsul", label);
+        // **毒口径**（与比较器 `poison_cross_actor_same_tick` 分支同口径）：逐收件人**多重集**
+        // + chained 帧 `due` 只判批次类（0 vs >0）+ `640` late `due` 按 `|Δ|≤32ms` 容差。
+        // 严格序在这里**必然红**：毒在目标 `Run()` 才派生 656/657/100，oracle 逐 actor 而 Rust 同 tick
+        // 批量 flush（登记见 `openmir2-b4-multivictim-strike-order.md`「同根第二实例」）。
+        poison_per_receiver_frame_matches_golden("groupamyounsul", label);
         fireball_case_assert("groupamyounsul", label);
         // 2026-11-21 非退化重出：护身符 `Shape=1`（`CheckAmulet(1,2)`）+ `AmyOunsulPoint` 显式装载
         // ⇒ 逐目标循环真的执行（`Rng` 3–4 抽、目标 `RM_POISON(8037)`），`DrainPasses` 2→3。
@@ -74574,6 +74752,57 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn groupamyounsul2_parity_s13() {
         amyounsul_assert("groupamyounsul2", 48, "s13", 13, 3000);
+    }
+
+    /// **⑥/⑦ 机判（B）**：4 份施毒 golden × 3 支 = **12 支**，每支 `Fixture` 必须同时带
+    /// `target_anti_poison` / `amulet_shape` / `amy_ounsul_point` 三键（不是抽验：逐文件逐 case 断）。
+    /// 值域：`amulet_shape ∈ {1,2}`（两臂）、`amy_ounsul_point == 15`（装置已断言部署值）、
+    /// `target_anti_poison` 是整数（0 合法——它表示目标无抗毒）。
+    #[test]
+    fn poison_goldens_carry_three_knobs() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/magic");
+        let mut seen = 0usize;
+        for file in [
+            "amyounsul.json",
+            "amyounsul2.json",
+            "groupamyounsul.json",
+            "groupamyounsul2.json",
+        ] {
+            let raw = std::fs::read_to_string(dir.join(file))
+                .unwrap_or_else(|e| panic!("金标准必须存在 {file}（{e}）"));
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let cases = v["cases"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{file} 必须有 cases"));
+            assert_eq!(cases.len(), 3, "{file} 必须恰 3 支");
+            for c in cases {
+                let label = c["Label"].as_str().unwrap_or("?");
+                let fx = &c["Fixture"];
+                for k in ["target_anti_poison", "amulet_shape", "amy_ounsul_point"] {
+                    assert!(
+                        fx.get(k).is_some(),
+                        "[{file}/{label}] Fixture 缺 `{k}`（B：三键必须逐支存在）"
+                    );
+                }
+                let shape = fx["amulet_shape"].as_u64().expect("amulet_shape 整数");
+                assert!(
+                    shape == 1 || shape == 2,
+                    "[{file}/{label}] amulet_shape={shape} 必须是 1 或 2"
+                );
+                assert!(
+                    fx["target_anti_poison"].is_i64(),
+                    "[{file}/{label}] target_anti_poison 必须是整数（0 合法）"
+                );
+                assert_eq!(
+                    fx["amy_ounsul_point"].as_i64(),
+                    Some(15),
+                    "[{file}/{label}] amy_ounsul_point 必须 = 部署值 15"
+                );
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, 12, "必须逐支检查 12 支");
     }
 
     #[test]
