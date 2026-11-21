@@ -131,6 +131,12 @@ pub struct Session {
     pub stage: WorldStage,
     /// 小退计数（用"小退再进"的场景断言：再进会得到新的 actor_id）
     pub soft_close_count: u32,
+    /// oracle `PlayObject.SoftVersionDateEx`（`src/M2Server/Player/PlayObject.cs`）：
+    /// 登录时由 `LoadUser.SoftVersionDate` 写入（`src/GameSrv/Word/WorldServer.cs` 的 `GetPlayObject`），
+    /// init 清零。**缺省 0 且 0 恰对应「不发 `SM_SERVERCONFIG(11029)`」**
+    /// （`PlayObject.Base.cs` 的 `SendServerConfig`：`SoftVersionDateEx == 0` ⇒ return）——
+    /// 漏设某条建立/同步路径时，失败方向是「少一帧」而不是「发出错版本值」。
+    pub soft_version_date: i32,
 }
 
 impl Session {
@@ -141,6 +147,7 @@ impl Session {
             map_id: 0,
             stage: WorldStage::NotInWorld,
             soft_close_count: 0,
+            soft_version_date: 0,
         }
     }
 }

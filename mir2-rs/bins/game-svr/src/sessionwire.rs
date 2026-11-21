@@ -75,8 +75,13 @@ pub fn map_change_frames(
     light: u8,
     char_desc: &[u8],
     visual: Option<MapVisual<'_>>,
+    // `PlayObject.SoftVersionDateEx`（会话字段；0 ⇒ `SendServerConfig` 直接 return，不发 11029）。
+    soft_version_date: i32,
+    // `SystemShare.Config.ClientConf` 的序列化原文（`GameSvrConf::client_conf.to_bytes()`）。
+    // `None`（`Server.conf` 读不到）⇒ 不发并登记方向（oracle 该情形起不来）。
+    client_conf: Option<&[u8]>,
 ) -> Vec<Emitted> {
-    let mut out = Vec::with_capacity(5);
+    let mut out = Vec::with_capacity(6);
     out.push(Emitted {
         body: smframe::sm_clearobjects(),
         route: Route::SelfOnly,
@@ -106,6 +111,17 @@ pub fn map_change_frames(
             ),
             route: Route::SelfOnly,
         });
+    }
+    // `SendServerConfig()`（`PlayObject.Base.cs` 的 `SendServerConfig`）：`SoftVersionDateEx == 0`
+    // ⇒ return（**不发**）；否则尾 = `EncodeString(EncodeMessage(ClientConf))`（双重编码）。
+    // 序在 `54` 之后、`SM_SPACEMOVE_SHOW*` 之前（golden `spacemove`：`… 766, 54, 11029, 807 …`）。
+    if soft_version_date != 0 {
+        if let Some(cfg) = client_conf {
+            out.push(Emitted {
+                body: smframe::sm_serverconfig(cfg),
+                route: Route::SelfOnly,
+            });
+        }
     }
     if let Some(show2) = ev.space_move_show {
         let ident = if show2 {
@@ -172,7 +188,7 @@ mod tests {
             y: 618,
             space_move_show: None,
         };
-        let frames = map_change_frames(&ev, b"0", 12, 3, 7, &[0u8; 8], None);
+        let frames = map_change_frames(&ev, b"0", 12, 3, 7, &[0u8; 8], None, 0, None);
         assert_eq!(frames.len(), 2, "EnterAnotherMap：CLEAROBJECTS + CHANGEMAP");
         assert_eq!(frames[0].route, Route::SelfOnly);
         assert_eq!(frames[1].route, Route::SelfOnly);
@@ -207,7 +223,7 @@ mod tests {
             y: 9,
             space_move_show: Some(false),
         };
-        let f = map_change_frames(&base, b"0101", 0, 2, 5, &[0u8; 8], None);
+        let f = map_change_frames(&base, b"0101", 0, 2, 5, &[0u8; 8], None, 0, None);
         assert_eq!(f.len(), 3);
         assert_eq!(f[2].route, Route::Ref, "SHOW 是 SendRefMsg 广播");
         assert_eq!(u16_at(&f[2].body, 4), messages::SM_SPACEMOVE_SHOW);
@@ -226,6 +242,8 @@ mod tests {
             2,
             5,
             &[0u8; 8],
+            None,
+            0,
             None,
         );
         assert_eq!(u16_at(&f2[2].body, 4), messages::SM_SPACEMOVE_SHOW2);
@@ -261,6 +279,8 @@ mod tests {
                 flag: &flag,
                 desc: "副本",
             }),
+            0,
+            None,
         );
         let ids: Vec<u16> = f.iter().map(|x| u16_at(&x.body, 4)).collect();
         assert_eq!(
@@ -321,6 +341,86 @@ mod tests {
         assert!(
             b[0..4].iter().all(|&x| x == 0) && b[6..12].iter().all(|&x| x == 0),
             "SM_PASSWORD 除 ident 外全 0"
+        );
+    }
+
+    /// **11029 `SM_SERVERCONFIG`**：`soft_version_date != 0` ⇒ 在 `54` 之后、`801/807` 之前插入；
+    /// 尾 = `EDCode(EDCode(ClientConf))`（双重编码）；路由 SelfOnly。
+    #[test]
+    fn map_change_appends_serverconfig_between_mapdesc_and_show() {
+        let ev = MapChange {
+            actor_id: 9,
+            map_id: 2,
+            x: 3,
+            y: 4,
+            space_move_show: Some(true),
+        };
+        let flag = mir2_envir::mapinfo::MapInfoFlag::default();
+        let f = map_change_frames(
+            &ev,
+            b"0",
+            0,
+            0,
+            0,
+            &[0u8; 8],
+            Some(MapVisual {
+                flag: &flag,
+                desc: "x",
+            }),
+            20_240_101,
+            Some(b"cfg"),
+        );
+        let ids: Vec<u16> = f.iter().map(|x| u16_at(&x.body, 4)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                messages::SM_CLEAROBJECTS,
+                messages::SM_CHANGEMAP,
+                messages::SM_AREASTATE,
+                messages::SM_MAPDESCRIPTION,
+                messages::SM_SERVERCONFIG,
+                messages::SM_SPACEMOVE_SHOW2
+            ],
+            "oracle 序：633 → 634 → 766 → 54 → 11029 → 807"
+        );
+        assert_eq!(f[4].route, Route::SelfOnly, "11029 是 SendDefMessage（只发自己）");
+        let want_tail = mir2_protocol::edcode::encode(&mir2_protocol::edcode::encode(b"cfg"));
+        assert_eq!(&f[4].body[12..], want_tail.as_slice(), "尾必须双重编码");
+    }
+
+    /// **负例（行为面）**：`SoftVersionDateEx == 0` ⇒ **不发** 11029（oracle `SendServerConfig` 早退）。
+    #[test]
+    fn map_change_omits_serverconfig_when_soft_version_zero() {
+        let ev = MapChange {
+            actor_id: 9,
+            map_id: 2,
+            x: 3,
+            y: 4,
+            space_move_show: Some(false),
+        };
+        let f = map_change_frames(&ev, b"0", 0, 0, 0, &[0u8; 8], None, 0, Some(b"cfg"));
+        let ids: Vec<u16> = f.iter().map(|x| u16_at(&x.body, 4)).collect();
+        assert!(
+            !ids.contains(&messages::SM_SERVERCONFIG),
+            "soft_version_date=0 ⇒ 不得出现 11029：{ids:?}"
+        );
+    }
+
+    /// **登记方向**：`soft_version_date != 0` 但 `client_conf = None`（Server.conf 读不到）⇒ 不发 11029。
+    #[test]
+    fn map_change_omits_serverconfig_when_client_conf_missing() {
+        let ev = MapChange {
+            actor_id: 9,
+            map_id: 2,
+            x: 3,
+            y: 4,
+            space_move_show: None,
+        };
+        let f = map_change_frames(&ev, b"0", 0, 0, 0, &[0u8; 8], None, 7, None);
+        let ids: Vec<u16> = f.iter().map(|x| u16_at(&x.body, 4)).collect();
+        assert!(
+            !ids.contains(&messages::SM_SERVERCONFIG),
+            "client_conf=None ⇒ 不得出现 11029：{ids:?}"
         );
     }
 }
