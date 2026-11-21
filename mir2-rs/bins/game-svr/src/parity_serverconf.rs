@@ -78,9 +78,9 @@ pub fn apply_serverconf_fixture(
         });
 
     let read = |key: &str| -> i32 {
-        let v = server_conf.get(key).unwrap_or_else(|| {
-            panic!("[{stem}/{label}] server_conf 缺键 `{key}`（不许默认兜底）")
-        });
+        let v = server_conf
+            .get(key)
+            .unwrap_or_else(|| panic!("[{stem}/{label}] server_conf 缺键 `{key}`（不许默认兜底）"));
         let n = v
             .as_i64()
             .unwrap_or_else(|| panic!("[{stem}/{label}] server_conf.{key} 非整数：{v}"));
@@ -105,13 +105,13 @@ pub fn apply_serverconf_fixture(
     };
 
     world.set_mag_turn_undead_level(snapshot.mag_turn_undead_level);
-    let mut b4 = mir2_world_bevy::magic_effect::MabMabeConfig::default();
-    b4.hit_rand_rate = snapshot.mab_mabe_hit_rand_rate;
-    b4.hit_min_lv_limit = snapshot.mab_mabe_hit_min_lv_limit;
-    b4.hit_success_rate = snapshot.mab_mabe_hit_sucess_rate;
-    b4.hit_mabe_time_rate = snapshot.mab_mabe_hit_mabe_time_rate;
-    b4.amy_ounsul_point = snapshot.amy_ounsul_point;
-    world.set_b4_config(b4);
+    world.set_b4_config(mir2_world_bevy::magic_effect::MabMabeConfig {
+        hit_rand_rate: snapshot.mab_mabe_hit_rand_rate,
+        hit_min_lv_limit: snapshot.mab_mabe_hit_min_lv_limit,
+        hit_success_rate: snapshot.mab_mabe_hit_sucess_rate,
+        hit_mabe_time_rate: snapshot.mab_mabe_hit_mabe_time_rate,
+        amy_ounsul_point: snapshot.amy_ounsul_point,
+    });
 
     snapshot
 }
