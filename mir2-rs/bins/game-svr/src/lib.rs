@@ -69317,6 +69317,10 @@ SendRefMsgRange=15
         elec_blizzard_range: i32,
         /// 护身符 `StdItem.Shape`（施毒 6/48 走 `CheckAmulet(1,2)`，要求 ≤2；缺省 5 = nType=1 组）。
         amulet_shape: u8,
+        /// **MG-35（21 瞬息移动）**：驱动可注入的真 `MapRegistry`（解析 `HomeMap`）。
+        /// 缺省 `None` ⇒ 回落历史行为（空注册表 ⇒ `id_of` 恒 `None` ⇒ 不移动）。
+        /// **测试装置专用**；产品路径由 `main` 注入，不在 `handle_spell_cmd` 里加测试缝。
+        registry: Option<mir2_envir::MapRegistry>,
     }
 
     impl SpellFrameRig {
@@ -69464,6 +69468,7 @@ SendRefMsgRange=15
                 snow_wind_range: 1,
                 elec_blizzard_range: 2,
                 amulet_shape: 5,
+                registry: None,
             }
         }
 
@@ -69484,10 +69489,6 @@ SendRefMsgRange=15
             );
             let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
             let table = game_svr::mongen::MonsterTable::new(Vec::new());
-            let registry = mir2_envir::MapRegistry::from_entries(
-                mir2_envir::MapLoader::new(".", "map", "envir"),
-                Vec::new(),
-            );
             handle_spell_cmd(
                 game_svr::feature::make_long(
                     u16::try_from(click.0).unwrap_or(0),
@@ -69506,7 +69507,7 @@ SendRefMsgRange=15
                 &self.magic_table,
                 &pet_cfg,
                 8,
-                Some(&registry),
+                self.registry.as_ref(),
                 &table,
                 &mut self.displays,
                 &self.gates,
