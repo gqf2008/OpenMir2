@@ -57,3 +57,25 @@
 - ⇒ **候选 (ii)「pump 每步只取一条」——排除（代码证）**。**判定 = 候选 (i)：第二个受害者的触发消息（strike/rename）`DeliveryTime` 落在 `(800,900]`**（或它依赖的上游 strike 被排到 700 那步、rename 随之落 900）——**是排期/链路时序差，不是 pump 粒度**。
 - **修法方向（不实施）**：B17 **排期层**——钉「两个受害者的 strike/rename 消息 `delivery` 为何差一步（600 vs 700 或 rename `+200` vs `+300`）」，让 oracle/rust 的「每步到期集合」一致。**在排期/`SendSelfDelayMsg` 链修，不在 pump、更不在比较器。**
 - **严格 runtime 探针（下次，需再 build）**：给 `deliver_self_delay_msgs` 加每步 log（`ident`+`DeliveryTime`），跑 `big_cloak_parity_s1`，dump step=800 的到期集合，钉「第二条 `delivery` 到底几」。本次以代码语义钉到「非 pump 粒度、是排期」这一层。
+
+## 5. Runtime probe 结果（2026-11-22 夜间）——**修正 §4 的读法错误**
+
+给 `deliver_self_delay_msgs_impl` 加临时 `eprintln!`（每条 peek 打 `now/actor/ident/delivery/due`），跑 `big_cloak_parity_s1`（`--nocapture`），跑完**还原**（`git status` 干净）。日志 `e5-logs/b17_probe_run.log`。
+
+**关键行（strike `8045`）**：
+```
+now=1200 actor=1001 ident=10123 deliv=1400 due=false   # 1001 队头是【未到期】的 640 消息
+now=1200 actor=1002 ident=8045  deliv=1200 due=true    # 1002 队头是【到期】的 strike，本步排
+now=1300 actor=1001 ident=8045  deliv=1200 due=true    # 1001 的 strike 晚一步（1300）才排
+```
+
+**三个数（opc-19 要的）**：
+1. 两受害者的 strike(`8045`) `delivery` **相同 = 1200**（不是 800/900 不同）。
+2. 不是不同上游 strike 派生——actor 1001/1002 **各一条 8045、同一 delivery**；657 由 strike **同步派生**（rename `10139` 不在 pump 队列，strike 处理时同步发帧）。
+3. **oracle**：golden Rm `8045 delivery=1000800`（单条、相对 800）⇒ 两 657 都 @800。
+
+**修正 §4**：我 §4 写「deliver 每步把所有到期消息排尽」——**错**。`deliver_self_delay_msgs_impl` 有 **per-actor「遇未到期队首即停（dequeue + enqueue(Lowest) + break）」**（B17 对齐生产 `GetMessage`）。一条**已到期**的消息若排在某 actor 队列的**未到期队首之后**，该步**不会被排**，要等下一步。
+
+**判定（推翻 §3/§4 的「候选(i) delivery 排期差」）**：**不是 delivery，是 pump/队列序**——actor 1001 队头是未到期的 640(`10123`,deliv1400)，把后面到期的 strike(`8045`,deliv1200) 挡了一步。**正是 opc-19 给的「同 delivery 但只排一条 ⇒ 回 pump，立即报」分支。**
+
+**修法方向（不实施）**：B17 **pump/队列序**——钉「**为什么 actor 1001 队头是 10123(640) 而 actor 1002 队头是 8045(strike)**」（两 victim actor 的入队序 / 四叉堆 tie 序不同？）。这决定同一 strike 是否被未到期队首挡住。**在 pump/入队序，不在 delivery 计算、更不在比较器。**
