@@ -28,3 +28,36 @@
 
 - `real_rust_ledger_energyrepulsor`：各收件人 `Sent` 严格序 / `SM_BACKSTEP` 字段 / `rng_total_draws`（golden 3/3/3）；
 - 驱动 `tests::energyrepulsor_parity_s*` 若内置断言同样会红，贴原文。
+
+## 5. 实测补牙（2026-11-21，`card/mg57-tooth`）——**已从"无牙"转为"有牙"**
+
+**变异（leaf-specific，打 37 自己的判定维度）**：在共享推挤分支的宿主调用点
+（`mir2-rs/bins/game-svr/src/lib.rs` 的 8/21/37 共用块）把 `nPushLevel` **仅对
+`SKILL_ENERGYREPULSOR(37)` 加 1**（8 保持原值）：
+`cast_firewind_spell(actor_id, if magic_id == 37 { level + 1 } else { level })`。
+→ 打的是 37 的 `MagPushArround(nPushLevel)` 维度，不是共享 `mag_push_arround` 的实现细节。
+
+**基线**：`energyrepulsor` golden 的推送步数是 **s1 1 步**（目标 101→102）、s5/s13 相应步数；
+37 三驱动 3 passed、比较器 0 红。
+
+**变异后红线（分开记）**
+- **驱动（三支各自红，报帧序列原文）**：
+  ```
+  [energyrepulsor/s1] 逐收件人 (ident,param,tag,series) 序列必须与金标准一致
+    left: caster [(638,101,100,257),(9,102,100,6),(9,103,100,6),(640,1,2,0)] …
+  [energyrepulsor/s5] … left: caster [(638,…),(9,102,…),(9,103,…),(640,1,1,0)] …
+  [energyrepulsor/s13] … left: caster [...,(9,104,…),(9,103,…),...] …
+  ```
+  （golden s1 只有 `(9,102,100,6)` 一条；变异多出 `(9,103,…)`）
+- **比较器（`real_rust_ledger_energyrepulsor`）**：**18 条红**，逐条为多出的
+  `RM_PUSH(8092,wParam=6,p1=103)` 与多出的 `SM_BACKSTEP(9,param=103)`（caster/target/obs_in × s1/s5/s13）。
+- ⇒ 该维度**驱动 + 比较器双守**。
+
+**最小可观测幅度 = `nPushLevel +1`（= 1 step）**：`push_steps = 1 + max(0, L-1) + Random(2)`，
+L 加 1 即基数加 1；更小只能加 0（= 基线）。
+
+**叶归属证明**：同一变异下 `firewind_parity_s1` **仍 ok**（8 的调用点保持原 level）⇒ 牙打的是
+37 的分条，不是 firewind/共享机制。
+
+**还原**：`cp` 快照还原后 `git hash-object lib.rs == git rev-parse HEAD:path`；`MUTATION=0`；
+37 三驱动 + 比较器复绿。
