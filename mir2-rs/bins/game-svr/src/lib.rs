@@ -130,6 +130,8 @@ pub mod run_segments;
 pub mod selloff;
 pub mod sessionwire;
 pub mod shard;
+// **P2-3b**：事件路由（纯逻辑 + 可单测；转发线程在 `sim_loop` 调用侧）。
+mod shard_router;
 pub mod shop;
 pub mod slave;
 pub mod smframe;
@@ -1040,13 +1042,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
             map_groups_raw.as_deref(),
         )?
     };
-    let map_sizes = shard_layout.host_map_sizes(&map_sizes);
+    // **P2-3b**：尺寸表保持**全长度真实值**；每个片在 spawn 循环里按自己的布局取 stub/真实值。
     for (level, line) in
         shard::startup_log_lines(&shard_cfg, &shard_layout, map_groups_raw.as_deref())
     {
         glog!(level, "{}", line);
     }
-    let shard_runtime = shard::ShardRuntime::new(shard_layout);
     // 配置层输入（帧 11029/1106/5008/811；`openmir2-m2-envir-inputs`）：与地图注册表同源，
     // 都读 `Server.conf`。读不到 ⇒ 记 WRN 并跳过依赖它的帧（不猜；见 `enter::apply`）。
     let game_conf = match mir2_envir::GameSvrConf::load(&conf) {
@@ -1332,23 +1333,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let loader = &envir_loader;
         match registry.as_ref() {
             Some(reg) => match game_svr::mongen::load_mon_gen_entries(loader, reg) {
-                Ok(Some(mut entries)) => {
-                    // **P2-2**：刷怪条目按「地图 → 片」过滤，宿主片只装载自己的图。
-                    // `MIR2_SHARDS=1` 时 `host_owns` 恒真 ⇒ 结果与 master 相同（且不打印额外日志）。
-                    if !shard_cfg.is_single() {
-                        let before = entries.len();
-                        entries.retain(|entry| {
-                            reg.id_of(&entry.map_name)
-                                .is_some_and(|id| shard_runtime.host_owns(id))
-                        });
-                        let dropped = before - entries.len();
-                        if dropped > 0 {
-                            glog!(
-                                "WRN",
-                                "Envir/MonGen.txt：{dropped}/{before} 条刷怪配置属于其它片（P2-2 未路由）⇒ 不装载到宿主片"
-                            );
-                        }
-                    }
+                Ok(Some(entries)) => {
+                    // **P2-3b**：刷怪条目**不在这里过滤**——每片宿主在 spawn 时按自己的
+                    // ownership 过滤（N=1 时恒等都装载，与 master 相同）。
                     glog!(
                         "INF",
                         "Envir/MonGen.txt 已载入：{} 条刷怪配置（有文件 ⇒ 末尾哨兵占 thread 0 首槽）",
@@ -1616,39 +1603,65 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // 算不出（读文件失败/隐藏 NPC 名未知）⇒ **只含屏障 A** 的最小计划 + ERR 登记（fail-closed：
     // 宁可少抽可见地报错，也不静默降级；段①②③ 的账本此时**本来就不对齐**，与未实现前同状态）。
     // 屏障 A 与语料**无关**（oracle 在 `LoadConfig()` 里无条件抽它）⇒ 任何情形下都要落账。
-    let ctor_fold_plan = match registry.as_ref() {
-        Some(reg) => {
-            match game_svr::ctor_fold::build_plan(&envir_loader, |n| {
-                reg.id_of(n).is_some_and(|id| shard_runtime.host_owns(id))
-            }) {
-                Ok(plan) => {
-                    glog!(
-                    "INF",
-                    "构造段 fold 计划就绪：段①={} 段②={} 段③={} 合计抽数={}（GameApp ctor: RobotObject/G1-G3 | :124 M2 | :184 M1+L2/L1/L3）",
-                    plan.game_app_ctor.len(),
-                    plan.load_map_info.len(),
-                    plan.load_map_quest.len(),
-                    plan.total_draws()
-                );
-                    plan
-                }
-                Err(e) => {
-                    glog!(
-                        "ERR",
-                        "构造段 fold 计划失败（{e}）⇒ 只含屏障 A 的最小计划：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置**（oracle 该抽排在段①之后）⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
-                    );
+    // **P2-3b**：每片一份 `ctor_fold` 计划（站点表按该片 ownership 过滤；屏障 A 与语料无关）。
+    // N=1 时循环只跑一次，谓词 `owns(片 0)` 与旧的 `host_owns` 相同 ⇒ 日志/输出逐字节不变。
+    let shard_total = usize::from(shard_layout.count());
+    let ctor_fold_plans: Vec<mir2_world_bevy::CtorFoldPlan> = (0..shard_total)
+        .map(|idx| {
+            let shard = shard::ShardId::new(u8::try_from(idx).expect("片数 <= MAX_SHARD_COUNT"));
+            match registry.as_ref() {
+                Some(reg) => match game_svr::ctor_fold::build_plan(&envir_loader, |n| {
+                    reg.id_of(n).is_some_and(|id| shard_layout.owns(shard, id))
+                }) {
+                    Ok(plan) => {
+                        if shard_total == 1 {
+                            glog!(
+                                "INF",
+                                "构造段 fold 计划就绪：段①={} 段②={} 段③={} 合计抽数={}（GameApp ctor: RobotObject/G1-G3 | :124 M2 | :184 M1+L2/L1/L3）",
+                                plan.game_app_ctor.len(),
+                                plan.load_map_info.len(),
+                                plan.load_map_quest.len(),
+                                plan.total_draws()
+                            );
+                        } else {
+                            glog!(
+                                "INF",
+                                "构造段 fold 计划就绪（shard {shard}）：段①={} 段②={} 段③={} 合计抽数={}",
+                                plan.game_app_ctor.len(),
+                                plan.load_map_info.len(),
+                                plan.load_map_quest.len(),
+                                plan.total_draws()
+                            );
+                        }
+                        plan
+                    }
+                    Err(e) => {
+                        if shard_total == 1 {
+                            glog!(
+                                "ERR",
+                                "构造段 fold 计划失败（{e}）⇒ 只含屏障 A 的最小计划：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置**（oracle 该抽排在段①之后）⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
+                            );
+                        } else {
+                            glog!(
+                                "ERR",
+                                "构造段 fold 计划失败（shard {shard}：{e}）⇒ 只含屏障 A 的最小计划（登记）"
+                            );
+                        }
+                        game_svr::ctor_fold::minimal_plan()
+                    }
+                },
+                None => {
+                    if shard_total == 1 {
+                        glog!(
+                            "WRN",
+                            "无地图注册表 ⇒ 构造段 fold 计划只含屏障 A：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置** ⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
+                        );
+                    }
                     game_svr::ctor_fold::minimal_plan()
                 }
             }
-        }
-        None => {
-            glog!(
-                "WRN",
-                "无地图注册表 ⇒ 构造段 fold 计划只含屏障 A：段①②③ 不落账 ⇒ 屏障 A 落在**错误的流水位置** ⇒ 本会话的 `ItemNumber` 初值**不可用于对拍**（登记）"
-            );
-            game_svr::ctor_fold::minimal_plan()
-        }
-    };
+        })
+        .collect();
     // 关服通道：进程级触发器（信号/控制台关闭/关服命名管道）→ sim 线程；sim → 主线程回传读数。
     // 正常运行时 sim 侧每个 tick 只多做一次 `try_recv`；**不发任何存档请求**（零额外存档调用）。
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
@@ -1708,218 +1721,389 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // 初值 = `[Setup]` 的 8 个状态键（`WinLotteryCfg::init_state`，卡 §9.11）。
     let win_lottery = crate::winlottery::WinLotteryShared::new(cfg.win_lottery.init_state());
     let sim_win_lottery = win_lottery.clone();
-    let _sim = std::thread::Builder::new()
-        .name("m2-sim".to_string())
-        // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
-        // 配置层输入，启动时读一次、进程内复用；**R1-1**：读不到时为空字节，但生产路径仍发
-        // header-only 658（照 oracle 空尾分支；`notice.rs` 模块头有源码定位）。
-        .spawn(move || {
-            sim_loop(
-                server_table,
-                map_sizes,
-                shard_runtime,
-                registry,
-                EnterConfig {
-                    repair_item_dec_dura: cfg.repair_item_dec_dura,
-                    win_lottery: cfg.win_lottery,
-                    weapon_make_luck: cfg.weapon_make_luck,
-                    home_start_points: home_fallback.start_points.clone(),
-                    guild_store: Some(mir2_data::guild::GuildStore::new(
-                        &guild_castle_cfg.guild_dir,
-                        &guild_castle_cfg.guild_file,
-                    )),
-                    guild_sections: mir2_data::guild::GuildFileSections::from_strings(
-                        string_conf.guild_notice(),
-                        string_conf.guild_war(),
-                        string_conf.guild_all(),
-                        string_conf.guild_member(),
-                    ),
-                    guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
-                        &mir2_world_bevy::GuildConfig {
-                            guild_msg_f_color: cfg.guild_msg_f_color,
-                            guild_msg_b_color: cfg.guild_msg_b_color,
-                            ..mir2_world_bevy::GuildConfig::default()
-                        },
-                        cfg.show_pre_fix_msg,
-                        string_conf.guild_msg_prefix(),
-                    ),
-                    game_conf,
-                    castle_name_colors,
-                    red_die_home: game_svr::castle::load_red_die_home(&conf),
-                    string_conf,
-                    show_rank_level_name,
-                    level_rank_on_login: cfg.level_rank_on_login,
-                    server_index: cfg.server_index,
-                    lock_human_login: cfg.lock_human_login,
-                    spirit_mutiny_time: cfg.spirit_mutiny_time,
-                    guild_castle_cfg,
-                    catalog: item_catalog,
-                    world_item_catalog: item_table,
-                    magic_table,
-                    pet_cfg,
-                    magic_attack_rage: i32::from(cfg.magic_attack_rage),
-                    fire_boom_rage: i32::from(cfg.fire_boom_rage),
-                    snow_wind_range: i32::from(cfg.snow_wind_range),
-                    elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
-                    mag_turn_undead_level: cfg.mag_turn_undead_level,
-                    pk_flag_time: cfg.pk_flag_time,
-                    upgrade_weapon_max_point: cfg.upgrade_weapon_max_point,
-                    dec_lamp_dura: cfg.dec_lamp_dura,
-                    console_show_user_count_time:
-                        game_svr::castle::load_console_show_user_count_time(&conf),
-                    cry_msg_f_color: cfg.cry_msg_f_color,
-                    cry_msg_b_color: cfg.cry_msg_b_color,
-                    can_shout_msg_level: cfg.can_shout_msg_level,
-                    b4: mir2_world_bevy::magic_effect::MabMabeConfig {
-                        hit_rand_rate: cfg.mab_mabe_hit_rand_rate,
-                        hit_min_lv_limit: cfg.mab_mabe_hit_min_lv_limit,
-                        hit_success_rate: cfg.mab_mabe_hit_sucess_rate,
-                        hit_mabe_time_rate: cfg.mab_mabe_hit_mabe_time_rate,
-                        amy_ounsul_point: cfg.amy_ounsul_point,
-                    },
-                    ground: GroundCfg {
-                        human_max_gold: cfg.human_max_gold,
-                        floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
-                        control_drop_item: cfg.control_drop_item,
-                        in_safe_disable_drop: cfg.in_safe_disable_drop,
-                        can_drop_price: cfg.can_drop_price,
-                        can_drop_gold: cfg.can_drop_gold,
-                        drop_item_rage: cfg.drop_item_rage,
-                    },
-                    shop: ShopCfg {
-                        castle_member_price_rate: cfg.castle_member_price_rate,
-                        super_repair_price_rate: cfg.super_repair_price_rate,
-                        repair_item_dec_dura: cfg.repair_item_dec_dura,
-                        make_durg_price: cfg.make_durg_price,
-                        get_all_npc_tax: cfg.castle_get_all_npc_tax,
-                        castle_tax_rate,
-                        castle_one_day_gold,
-                        castle_gold_max,
-                        human_max_gold: cfg.human_max_gold,
-                        upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig {
-                            price: cfg.upgrade_weapon_price,
-                            get_back_time_ms: i64::from(cfg.upgrade_weapon_get_back_time),
-                            clear_expire_days: cfg.clear_expire_upgrade_weapon_days,
-                            black_stone: cfg.black_stone.clone(),
-                            dc_rate: i32::from(cfg.upgrade_weapon_dc_rate),
-                            dc_two_point_rate: i32::from(cfg.upgrade_weapon_dc_two_point_rate),
-                            dc_three_point_rate: i32::from(cfg.upgrade_weapon_dc_three_point_rate),
-                            mc_rate: i32::from(cfg.upgrade_weapon_mc_rate),
-                            mc_two_point_rate: i32::from(cfg.upgrade_weapon_mc_two_point_rate),
-                            mc_three_point_rate: i32::from(cfg.upgrade_weapon_mc_three_point_rate),
-                            sc_rate: i32::from(cfg.upgrade_weapon_sc_rate),
-                            sc_two_point_rate: i32::from(cfg.upgrade_weapon_sc_two_point_rate),
-                            sc_three_point_rate: i32::from(cfg.upgrade_weapon_sc_three_point_rate),
-                        },
-                        send_ref_msg_range: i32::from(cfg.send_ref_msg_range),
-                        // `PlayObject.Permission` 生产恒 0（简报 §2.3）。
-                        permission: 0,
-                    },
-                    ref_msg_range: i32::from(cfg.send_ref_msg_range),
-                    die_drop_use_item_rate: cfg.die_drop_use_item_rate,
-                    die_red_drop_use_item_rate: cfg.die_red_drop_use_item_rate,
-                    kill_by_human_drop_use_item: cfg.kill_by_human_drop_use_item,
-                    kill_by_monst_drop_use_item: cfg.kill_by_monst_drop_use_item,
-                    red_msg_f_color: cfg.red_msg_f_color,
-                    red_msg_b_color: cfg.red_msg_b_color,
-                    green_msg_f_color: cfg.green_msg_f_color,
-                    green_msg_b_color: cfg.green_msg_b_color,
-                    test_server: cfg.test_server,
-                    make_random_add_value: cfg.make_random_add_value,
-                    item_number_ex: cfg.item_number_ex,
-                    service_mode: cfg.service_mode,
-                    disable_in_safe_zone_fire_cross: cfg.disable_in_safe_zone_fire_cross,
-                    save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
-                    health_fill_time: cfg.health_fill_time,
-                    spell_fill_time: cfg.spell_fill_time,
-                    // **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 60000ms）。
-                    revival_time: i64::from(cfg.revival_time),
-                    hunger_system: cfg.hunger_system,
-                    hunger_dec_hp: cfg.hunger_dec_hp,
-                    home: home_fallback,
-                    newbie: NewbieItems {
-                        candle: cfg.candle.clone(),
-                        basic_drug: cfg.basic_drug.clone(),
-                        wooden_sword: cfg.wooden_sword.clone(),
-                        cloths_man: cfg.cloths_man.clone(),
-                        cloths_woman: cfg.cloths_woman.clone(),
-                        item_number: cfg.item_number,
-                    },
-                    need_exps,
-                    rng_seed,
-                    ctor_fold_plan,
-                    mon_gen: MonGenStartup {
-                        table: monster_table,
-                        entries: mon_gen_entries,
-                        config: mon_gen_config,
-                    },
-                    guards,
-                    minimap,
-                    make_items,
-                    admin_list,
-                    unbind_list,
-                    line_notice,
-                    line_notice_cfg: line_notice::LineNoticeCfg {
-                        interval_ms: i64::from(cfg.show_line_notice_time),
-                        default_color: cfg.line_notice_color,
-                        show_pre_fix_msg: cfg.show_pre_fix_msg,
-                        pre_fix: line_notice::LINE_NOTICE_PRE_FIX_DEFAULT.to_string(),
-                        red: (cfg.red_msg_f_color, cfg.red_msg_b_color),
-                        green: (cfg.green_msg_f_color, cfg.green_msg_b_color),
-                        blue: (cfg.blue_msg_f_color, cfg.blue_msg_b_color),
-                    },
-                    npcs,
-                    loader: Some(envir_loader),
-                    script_goto_count_limit: cfg.script_goto_count_limit,
-                    server_name: cfg.server_name.clone(),
-                    upgrade_weapon_price: cfg.upgrade_weapon_price,
-                    trade: game_svr::trade::DealConfig {
-                        try_deal_time: cfg.try_deal_time,
-                        deal_ok_time: cfg.deal_ok_time,
-                        can_not_get_back_deal: cfg.can_not_get_back_deal,
-                        disable_deal: cfg.disable_deal,
-                        human_max_gold: cfg.human_max_gold,
-                        green_f_color: cfg.green_msg_f_color,
-                        green_b_color: cfg.green_msg_b_color,
-                        red_f_color: cfg.red_msg_f_color,
-                        red_b_color: cfg.red_msg_b_color,
-                        ..game_svr::trade::DealConfig::default()
-                    },
-                    // 元宝寄售（`M3⑩-实现 1`）：`DecUserGameGold` 无配置键（`GameSvrConf.cs:1217` 硬编码
-                    // 10000）；`MaxBagItem` = `Grobal2.MaxBagItem`；蓝色提示色从 `[Setup]` 读（现网 251/252）。
-                    sell_off: game_svr::selloff::SellOffConfig {
-                        dec_user_game_gold: 10_000,
-                        max_bag_item: game_svr::bag::MAX_BAG_ITEM,
-                        blue_f_color: cfg.blue_msg_f_color,
-                        blue_b_color: cfg.blue_msg_b_color,
-                    },
-                    // `M3⑩-实现 2`：`goldsales` 只读加载的启动种子（oracle `M2Share.SellOffItemList`
-                    // 的内容；因读错列名 ⇒ 生产下恒空，见本文件加载块注释）。
-                    sell_off_seed,
-                },
-                notice,
-                colors,
-                partywire::world_config(
-                    cfg.group_members_max,
-                    cfg.group_msg_f_color,
-                    cfg.group_msg_b_color,
-                    cfg.red_msg_f_color,
-                    cfg.red_msg_b_color,
-                ),
-                ev_rx,
-                ev_ctl_rx,
-                shutdown_rx,
-                shutdown_done_tx,
-                Some(db),
-                sim_ids_online,
-                sim_ids_out,
-                cfg.payment_mode,
-                planes,
-                sim_world_start,
-                sim_win_lottery,
+    // **P2-3b**：每片一份 sim 输入模板。N=1 时字段与原来的单份逐项相同（后面只 clone 一次）。
+    let sim_enter_cfg = EnterConfig {
+        repair_item_dec_dura: cfg.repair_item_dec_dura,
+        win_lottery: cfg.win_lottery,
+        weapon_make_luck: cfg.weapon_make_luck,
+        home_start_points: home_fallback.start_points.clone(),
+        guild_store: Some(mir2_data::guild::GuildStore::new(
+            &guild_castle_cfg.guild_dir,
+            &guild_castle_cfg.guild_file,
+        )),
+        guild_sections: mir2_data::guild::GuildFileSections::from_strings(
+            string_conf.guild_notice(),
+            string_conf.guild_war(),
+            string_conf.guild_all(),
+            string_conf.guild_member(),
+        ),
+        guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
+            &mir2_world_bevy::GuildConfig {
+                guild_msg_f_color: cfg.guild_msg_f_color,
+                guild_msg_b_color: cfg.guild_msg_b_color,
+                ..mir2_world_bevy::GuildConfig::default()
+            },
+            cfg.show_pre_fix_msg,
+            string_conf.guild_msg_prefix(),
+        ),
+        game_conf,
+        castle_name_colors,
+        red_die_home: game_svr::castle::load_red_die_home(&conf),
+        string_conf,
+        show_rank_level_name,
+        level_rank_on_login: cfg.level_rank_on_login,
+        server_index: cfg.server_index,
+        lock_human_login: cfg.lock_human_login,
+        spirit_mutiny_time: cfg.spirit_mutiny_time,
+        guild_castle_cfg,
+        catalog: item_catalog,
+        world_item_catalog: item_table,
+        magic_table,
+        pet_cfg,
+        magic_attack_rage: i32::from(cfg.magic_attack_rage),
+        fire_boom_rage: i32::from(cfg.fire_boom_rage),
+        snow_wind_range: i32::from(cfg.snow_wind_range),
+        elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
+        mag_turn_undead_level: cfg.mag_turn_undead_level,
+        pk_flag_time: cfg.pk_flag_time,
+        upgrade_weapon_max_point: cfg.upgrade_weapon_max_point,
+        dec_lamp_dura: cfg.dec_lamp_dura,
+        console_show_user_count_time: game_svr::castle::load_console_show_user_count_time(&conf),
+        cry_msg_f_color: cfg.cry_msg_f_color,
+        cry_msg_b_color: cfg.cry_msg_b_color,
+        can_shout_msg_level: cfg.can_shout_msg_level,
+        b4: mir2_world_bevy::magic_effect::MabMabeConfig {
+            hit_rand_rate: cfg.mab_mabe_hit_rand_rate,
+            hit_min_lv_limit: cfg.mab_mabe_hit_min_lv_limit,
+            hit_success_rate: cfg.mab_mabe_hit_sucess_rate,
+            hit_mabe_time_rate: cfg.mab_mabe_hit_mabe_time_rate,
+            amy_ounsul_point: cfg.amy_ounsul_point,
+        },
+        ground: GroundCfg {
+            human_max_gold: cfg.human_max_gold,
+            floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
+            control_drop_item: cfg.control_drop_item,
+            in_safe_disable_drop: cfg.in_safe_disable_drop,
+            can_drop_price: cfg.can_drop_price,
+            can_drop_gold: cfg.can_drop_gold,
+            drop_item_rage: cfg.drop_item_rage,
+        },
+        shop: ShopCfg {
+            castle_member_price_rate: cfg.castle_member_price_rate,
+            super_repair_price_rate: cfg.super_repair_price_rate,
+            repair_item_dec_dura: cfg.repair_item_dec_dura,
+            make_durg_price: cfg.make_durg_price,
+            get_all_npc_tax: cfg.castle_get_all_npc_tax,
+            castle_tax_rate,
+            castle_one_day_gold,
+            castle_gold_max,
+            human_max_gold: cfg.human_max_gold,
+            upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig {
+                price: cfg.upgrade_weapon_price,
+                get_back_time_ms: i64::from(cfg.upgrade_weapon_get_back_time),
+                clear_expire_days: cfg.clear_expire_upgrade_weapon_days,
+                black_stone: cfg.black_stone.clone(),
+                dc_rate: i32::from(cfg.upgrade_weapon_dc_rate),
+                dc_two_point_rate: i32::from(cfg.upgrade_weapon_dc_two_point_rate),
+                dc_three_point_rate: i32::from(cfg.upgrade_weapon_dc_three_point_rate),
+                mc_rate: i32::from(cfg.upgrade_weapon_mc_rate),
+                mc_two_point_rate: i32::from(cfg.upgrade_weapon_mc_two_point_rate),
+                mc_three_point_rate: i32::from(cfg.upgrade_weapon_mc_three_point_rate),
+                sc_rate: i32::from(cfg.upgrade_weapon_sc_rate),
+                sc_two_point_rate: i32::from(cfg.upgrade_weapon_sc_two_point_rate),
+                sc_three_point_rate: i32::from(cfg.upgrade_weapon_sc_three_point_rate),
+            },
+            send_ref_msg_range: i32::from(cfg.send_ref_msg_range),
+            // `PlayObject.Permission` 生产恒 0（简报 §2.3）。
+            permission: 0,
+        },
+        ref_msg_range: i32::from(cfg.send_ref_msg_range),
+        die_drop_use_item_rate: cfg.die_drop_use_item_rate,
+        die_red_drop_use_item_rate: cfg.die_red_drop_use_item_rate,
+        kill_by_human_drop_use_item: cfg.kill_by_human_drop_use_item,
+        kill_by_monst_drop_use_item: cfg.kill_by_monst_drop_use_item,
+        red_msg_f_color: cfg.red_msg_f_color,
+        red_msg_b_color: cfg.red_msg_b_color,
+        green_msg_f_color: cfg.green_msg_f_color,
+        green_msg_b_color: cfg.green_msg_b_color,
+        test_server: cfg.test_server,
+        make_random_add_value: cfg.make_random_add_value,
+        item_number_ex: cfg.item_number_ex,
+        service_mode: cfg.service_mode,
+        disable_in_safe_zone_fire_cross: cfg.disable_in_safe_zone_fire_cross,
+        save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
+        health_fill_time: cfg.health_fill_time,
+        spell_fill_time: cfg.spell_fill_time,
+        // **PL-1 / P32**：`[Setup] RevivalTime`（`GameSvrConf.cs:804/1725`，缺省 60000ms）。
+        revival_time: i64::from(cfg.revival_time),
+        hunger_system: cfg.hunger_system,
+        hunger_dec_hp: cfg.hunger_dec_hp,
+        home: home_fallback,
+        newbie: NewbieItems {
+            candle: cfg.candle.clone(),
+            basic_drug: cfg.basic_drug.clone(),
+            wooden_sword: cfg.wooden_sword.clone(),
+            cloths_man: cfg.cloths_man.clone(),
+            cloths_woman: cfg.cloths_woman.clone(),
+            item_number: cfg.item_number,
+        },
+        need_exps,
+        rng_seed,
+        // 每片在 spawn 循环里覆盖；N=1 就是唯一一份（与旧路径同参）。
+        ctor_fold_plan: ctor_fold_plans[0].clone(),
+        mon_gen: MonGenStartup {
+            table: monster_table,
+            entries: mon_gen_entries,
+            config: mon_gen_config,
+        },
+        guards,
+        minimap,
+        make_items,
+        admin_list,
+        unbind_list,
+        line_notice,
+        line_notice_cfg: line_notice::LineNoticeCfg {
+            interval_ms: i64::from(cfg.show_line_notice_time),
+            default_color: cfg.line_notice_color,
+            show_pre_fix_msg: cfg.show_pre_fix_msg,
+            pre_fix: line_notice::LINE_NOTICE_PRE_FIX_DEFAULT.to_string(),
+            red: (cfg.red_msg_f_color, cfg.red_msg_b_color),
+            green: (cfg.green_msg_f_color, cfg.green_msg_b_color),
+            blue: (cfg.blue_msg_f_color, cfg.blue_msg_b_color),
+        },
+        npcs,
+        loader: Some(envir_loader),
+        script_goto_count_limit: cfg.script_goto_count_limit,
+        server_name: cfg.server_name.clone(),
+        upgrade_weapon_price: cfg.upgrade_weapon_price,
+        trade: game_svr::trade::DealConfig {
+            try_deal_time: cfg.try_deal_time,
+            deal_ok_time: cfg.deal_ok_time,
+            can_not_get_back_deal: cfg.can_not_get_back_deal,
+            disable_deal: cfg.disable_deal,
+            human_max_gold: cfg.human_max_gold,
+            green_f_color: cfg.green_msg_f_color,
+            green_b_color: cfg.green_msg_b_color,
+            red_f_color: cfg.red_msg_f_color,
+            red_b_color: cfg.red_msg_b_color,
+            ..game_svr::trade::DealConfig::default()
+        },
+        // 元宝寄售（`M3⑩-实现 1`）：`DecUserGameGold` 无配置键（`GameSvrConf.cs:1217` 硬编码
+        // 10000）；`MaxBagItem` = `Grobal2.MaxBagItem`；蓝色提示色从 `[Setup]` 读（现网 251/252）。
+        sell_off: game_svr::selloff::SellOffConfig {
+            dec_user_game_gold: 10_000,
+            max_bag_item: game_svr::bag::MAX_BAG_ITEM,
+            blue_f_color: cfg.blue_msg_f_color,
+            blue_b_color: cfg.blue_msg_b_color,
+        },
+        // `M3⑩-实现 2`：`goldsales` 只读加载的启动种子（oracle `M2Share.SellOffItemList`
+        // 的内容；因读错列名 ⇒ 生产下恒空，见本文件加载块注释）。
+        sell_off_seed,
+    };
+    let sim_party_cfg = partywire::world_config(
+        cfg.group_members_max,
+        cfg.group_msg_f_color,
+        cfg.group_msg_b_color,
+        cfg.red_msg_f_color,
+        cfg.red_msg_b_color,
+    );
+    // N=1：无目录（chr→片 路由全部空操作）；N>1：共享目录 + 路由线程 + 关服广播。
+    let shard_directory = if shard_total > 1 {
+        Some(shard_router::ShardDirectory::new())
+    } else {
+        None
+    };
+    let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut per_shard_rx: Vec<
+        Option<(
+            std::sync::mpsc::Receiver<GateEvent>,
+            std::sync::mpsc::Receiver<GateEvent>,
+        )>,
+    > = (0..shard_total).map(|_| None).collect();
+    let mut ev_rx_template = Some(ev_rx);
+    let mut ev_ctl_rx_template = Some(ev_ctl_rx);
+    let mut shutdown_rx_template = Some(shutdown_rx);
+    if shard_total > 1 {
+        let mut senders = Vec::with_capacity(shard_total);
+        for slot in &mut per_shard_rx {
+            let (n_tx, n_rx) = std::sync::mpsc::channel();
+            let (p_tx, p_rx) = std::sync::mpsc::channel();
+            senders.push((n_tx, p_tx));
+            *slot = Some((n_rx, p_rx));
+        }
+        let dir = shard_directory
+            .clone()
+            .expect("N>1 必有目录（上面按 shard_total 构造）");
+        let ev_rx = ev_rx_template
+            .take()
+            .expect("N>1 时原始普通通道只给路由线程");
+        let ev_ctl_rx = ev_ctl_rx_template
+            .take()
+            .expect("N>1 时原始优先通道只给路由线程");
+        std::thread::Builder::new()
+            .name("m2-event-router".to_string())
+            .spawn(move || {
+                // 复用 `EventDrain` 的「优先通道优先 + 每轮有界 + 结转槽」语义：路由线程只搬事件，
+                // 不改变任何单事件的判定/出帧顺序；每片自己的 `sim_loop` 仍按原预算排水。
+                let mut carry = None;
+                let mut ctl_carry = None;
+                loop {
+                    let mut moved = 0usize;
+                    {
+                        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+                        while let Some(ev) =
+                            drain.next(&ev_rx, &ev_ctl_rx, &mut carry, &mut ctl_carry)
+                        {
+                            moved += 1;
+                            match shard_router::route_target(&ev, &dir) {
+                                // 网关线注册/注销：每片都要有该线的 `SimToGate` 发送端。
+                                shard_router::RouteTarget::Broadcast => match ev {
+                                    GateEvent::RegisterGate { service_id, tx } => {
+                                        for (normal, _) in &senders {
+                                            let _ = normal.send(GateEvent::RegisterGate {
+                                                service_id,
+                                                tx: tx.clone(),
+                                            });
+                                        }
+                                    }
+                                    GateEvent::UnregisterGate { service_id } => {
+                                        for (normal, _) in &senders {
+                                            let _ = normal
+                                                .send(GateEvent::UnregisterGate { service_id });
+                                        }
+                                    }
+                                    other => panic!("Broadcast 只用于网关线事件，实得 {other:?}"),
+                                },
+                                shard_router::RouteTarget::One(shard) => {
+                                    let (normal, priority) = &senders[shard.index()];
+                                    emit_gate_event(normal, priority, ev);
+                                }
+                            }
+                        }
+                    }
+                    if moved == 0 {
+                        // 两通道没有 select：空转 1ms 对 200ms tick 无感（只搬事件，不排队处理）。
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+            })
+            .context("起事件路由线程失败")?;
+        // 关服：`Receiver` 是单消费者 ⇒ 一个 watcher 独占并翻成共享旗标（各片读同一旗标）。
+        let rx = shutdown_rx_template
+            .take()
+            .expect("N>1 时关服 Receiver 只给广播线程");
+        let flag = std::sync::Arc::clone(&shutdown_flag);
+        std::thread::Builder::new()
+            .name("m2-shutdown-broadcast".to_string())
+            .spawn(move || {
+                if rx.recv().is_ok() {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .context("起关服广播线程失败")?;
+    }
+
+    // **P2-3b**：每片一个固定 sim 宿主线程（不迁移；`TickOwnerThread`/`World.owner_thread`
+    // 断言逐 World 生效）。N=1 仍是原来的单线程 `m2-sim`，路径逐字段相同。
+    let mut db_template = Some(db);
+    let mut planes_template = planes;
+    for shard_idx in 0..shard_total {
+        let local = shard::ShardId::new(u8::try_from(shard_idx).expect("片数 <= MAX_SHARD_COUNT"));
+        let runtime_i = shard::ShardRuntime::for_shard(shard_layout.clone(), local);
+        let map_sizes_i = runtime_i.local_map_sizes(&map_sizes);
+        // 每片独立配置副本；ctor 计划按片覆盖、MonGen 条目按片过滤（N=1 都是恒等）。
+        let mut cfg_i = sim_enter_cfg.clone();
+        cfg_i.ctor_fold_plan = ctor_fold_plans[shard_idx].clone();
+        // N=1 不过滤（恒等）；N>1 每片只留自己图的条目（`Option::zip` 同时拿注册表与条目表）。
+        let per_shard_entries = if shard_total > 1 {
+            registry.as_ref().zip(cfg_i.mon_gen.entries.as_mut())
+        } else {
+            None
+        };
+        if let Some((reg, entries)) = per_shard_entries {
+            let before = entries.len();
+            entries.retain(|entry| {
+                reg.id_of(&entry.map_name)
+                    .is_some_and(|id| shard_layout.owns(local, id))
+            });
+            let dropped = before - entries.len();
+            if dropped > 0 {
+                glog!(
+                    "WRN",
+                    "Envir/MonGen.txt：{dropped}/{before} 条刷怪配置不属于片 {local}（P2-3b 每片自装载）"
+                );
+            }
+        }
+        let registry_i = registry.clone();
+        let server_table_i = server_table.clone();
+        let notice_i = notice.clone();
+        let (rx_i, ctl_i) = per_shard_rx[shard_idx].take().unwrap_or_else(|| {
+            (
+                ev_rx_template.take().expect("N=1 原普通通道只给唯一 sim"),
+                ev_ctl_rx_template
+                    .take()
+                    .expect("N=1 原优先通道只给唯一 sim"),
             )
-        })
-        .context("起 sim 线程失败")?;
+        });
+        let shutdown_i = if shard_total == 1 {
+            shutdown_rx_template
+                .take()
+                .expect("N=1 原关服 Receiver")
+                .into()
+        } else {
+            ShutdownSignal::Flag(std::sync::Arc::clone(&shutdown_flag))
+        };
+        let db_i = if shard_idx == 0 {
+            db_template.take()
+        } else {
+            None
+        };
+        let planes_i = if shard_idx == 0 {
+            planes_template.take()
+        } else {
+            None
+        };
+        let ids_online_i = std::sync::Arc::clone(&sim_ids_online);
+        let ids_out_i = sim_ids_out.clone();
+        let world_start_i = std::sync::Arc::clone(&sim_world_start);
+        let lottery_i = sim_win_lottery.clone();
+        let directory_i = shard_directory.clone();
+        // 线程名：N=1 保持 `m2-sim`（与原路径同）；N>1 带片号便于诊断。
+        let name = if shard_total == 1 {
+            "m2-sim".to_string()
+        } else {
+            format!("m2-sim-{shard_idx}")
+        };
+        let party_i = sim_party_cfg.clone();
+        let done_i = shutdown_done_tx.clone();
+        let _sim = std::thread::Builder::new()
+            .name(name)
+            .spawn(move || {
+                sim_loop(
+                    server_table_i,
+                    map_sizes_i,
+                    runtime_i,
+                    registry_i,
+                    cfg_i,
+                    notice_i,
+                    colors,
+                    party_i,
+                    rx_i,
+                    ctl_i,
+                    shutdown_i,
+                    directory_i,
+                    done_i,
+                    db_i,
+                    ids_online_i,
+                    ids_out_i,
+                    cfg.payment_mode,
+                    planes_i,
+                    world_start_i,
+                    lottery_i,
+                )
+            })
+            .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
+    }
 
     // 关服触发器：收到信号/管道请求后先唤醒 accept 循环，再让 sim 线程在 tick 边界存档。
     // `Notify` 会保存一个 permit ⇒ 即使请求发生在 select 之前也不会丢。
@@ -25556,6 +25740,7 @@ struct NewbieItems {
 }
 
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
+#[derive(Clone)]
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     /// IT-14 修复油：`[Setup] RepairItemDecDura`（缺省30/现网90，`config.rs`）。
@@ -25914,6 +26099,7 @@ impl EnterConfig {
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
+#[derive(Clone)]
 struct MonGenStartup {
     table: game_svr::mongen::MonsterTable,
     entries: Option<Vec<mir2_world_bevy::mongen::MonGenEntry>>,
@@ -28567,6 +28753,32 @@ impl EventDrain {
     }
 }
 
+/// **P2-3b**：sim 线程的关服信号。
+///
+/// - N=1：直接持有单消费者 `Receiver`——与 master **同一条路径**（`try_recv().is_ok()`）；
+/// - N>1：`Receiver` 归「关服广播」线程独占（std mpsc 单消费者），各片拿共享 `Flag`。
+#[derive(Debug)]
+enum ShutdownSignal {
+    Receiver(std::sync::mpsc::Receiver<()>),
+    Flag(std::sync::Arc<std::sync::atomic::AtomicBool>),
+}
+
+impl ShutdownSignal {
+    /// 是否收到关服请求（语义 = 原 `shutdown_rx.try_recv().is_ok()`）。
+    fn requested(&self) -> bool {
+        match self {
+            Self::Receiver(rx) => rx.try_recv().is_ok(),
+            Self::Flag(flag) => flag.load(std::sync::atomic::Ordering::SeqCst),
+        }
+    }
+}
+
+impl From<std::sync::mpsc::Receiver<()>> for ShutdownSignal {
+    fn from(rx: std::sync::mpsc::Receiver<()>) -> Self {
+        Self::Receiver(rx)
+    }
+}
+
 /// **tick 顶部应答表读数**（到达积压 → `reply_table_max`）：每轮开头表内条数峰值。
 ///
 /// 与 [`sample_reply_pending_after_drain`] 是**两个不同的量**（卡 `openmir2-tick-starvation`
@@ -28601,7 +28813,10 @@ fn sim_loop(
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     // 卡 `openmir2-world-keeps-dead-session`（扩展）：控制 + 进入事件的**优先通道**。
     ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
-    shutdown_rx: std::sync::mpsc::Receiver<()>,
+    // **P2-3b**：N=1 是原 `Receiver`；N>1 是关服广播后的共享旗标。
+    shutdown: ShutdownSignal,
+    // **P2-3b**：`chr_name → 片` 目录（N=1 传 `None` ⇒ 全部空操作、行为不变）。
+    shard_directory: Option<shard_router::ShardDirectory>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
@@ -28613,6 +28828,27 @@ fn sim_loop(
     // **IT-16**：进程级彩票计数（oracle `SystemShare.Config` 进程静态的等价物）。
     win_lottery: crate::winlottery::WinLotteryShared,
 ) {
+    // **P2-3b**：本实例服务哪一片 + 是否宿主片（进程级服务只在片 0）。
+    let local_shard = shard_runtime.local_shard();
+    let is_host = local_shard == shard::HOST_SHARD;
+    let shard_count = shard_runtime.layout().count();
+    // N>1 时每片只拥有自己的图（`world.maps` 仍是全长度下标空间）；日志报**拥有数**。
+    // N=1 时拥有数 == `world.maps.len()` ⇒ 输出逐字节不变。
+    let owned_map_count = shard_runtime.layout().maps_of(local_shard).len();
+    // **P2-3b · 决定 (B)**：N>1 时非 0 片不落 RNG 流水（env 是进程级、无法按片开关；
+    // 跨片交错账不可对拍）。**调用点必须在 `production_world` 之前**——World 构造
+    // （`with_maps` 的种子流）与装载期（ctor_fold / InitializeMonster）都会抽数，挪到之后就漏计。
+    if !is_host {
+        mir2_shared::rng_trace::suppress_current_thread();
+    }
+    // **P2-3b · 决定 (A)**：遥测计数器仍由各片累加（进程级原子），但只有片 0 打印汇总行；
+    // N>1 时行首加 `shards=N aggregated`（数字是跨片合计，不标会被当成单片读数）。
+    // N=1 时前缀为空串 ⇒ 输出逐字节不变。
+    let telemetry_prefix = if shard_count > 1 {
+        format!("shards={shard_count} aggregated ")
+    } else {
+        String::new()
+    };
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
@@ -28635,7 +28871,7 @@ fn sim_loop(
     let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
     // **P2-3a**：把「片 0 拥有哪些图」交给 World（全局下标保序 + 1×1 stub + 单点 fail-closed）。
     // `MIR2_SHARDS=1` 时布局全拥有 ⇒ 所有权检查恒过、零行为变化。
-    world.set_map_ownership(&shard_runtime.layout().host_ownership());
+    world.set_map_ownership(&shard_runtime.local_ownership_bitmap());
     // **`openmir2-sendrefmsg-range-config`**：`[Setup] SendRefMsgRange` 的生效值
     // （oracle `SystemShare.Config.SendRefMsgRange`：`SendRefMsg` 每次按当时配置值扫
     // `CurrX/Y ± SendRefMsgRange`，`BaseObject.Message.cs:399-402`）。安装一次后所有生产
@@ -28696,8 +28932,11 @@ fn sim_loop(
     guild_cfg.guild_msg_b_color = enter_cfg.guild_msg_cfg.b_color;
     // **G3**：启动加载（`GuildManager.LoadGuildInfo`）：名单缺失 ⇒ WRN + 空表、不拒启。
     let guild_store = enter_cfg.guild_store.clone();
+    // **P2-3b**：行会管理是进程级服务（文件写/存档），只在片 0 装载；非 0 片传 `None` ⇒ 空表。
+    // 空表下 `guild_runtime::step` / `drain_soft_close` 都不会产生存档写（无玩家、无会）。
+    let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
     let mut guilds = guild_runtime::startup(
-        guild_store.as_ref(),
+        guild_startup_store,
         &enter_cfg.guild_sections,
         guild_cfg.guild_rank_name_len,
         world.clock_ms as i32,
@@ -28793,7 +29032,7 @@ fn sim_loop(
     // `map_id` = 注册表下标（与 `resolve_map_id` 同源）⇒ 逐图灌进 world；无注册表 ⇒ 全 `None`（行为不变）。
     if let Some(reg) = registry.as_ref() {
         // **P2-3a**：只给本片拥有的图灌 Flag（stub 不参与；单片 = 全部 ⇒ 逐字节不变）。
-        for &map_id in shard_runtime.layout().maps_of(shard::HOST_SHARD) {
+        for &map_id in shard_runtime.layout().maps_of(local_shard) {
             if let Some(f) = reg.flag_of(map_id) {
                 world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
                 // `Envir.Flag.boNEEDHOLE`（route 落地门；`PlayObject.cs:1874` 作为目标图读）。
@@ -28818,13 +29057,13 @@ fn sim_loop(
         let cell_total = mapwire::apply_map_cells_owned(
             reg,
             &mut world,
-            &shard_runtime.layout().host_ownership(),
+            &shard_runtime.local_ownership_bitmap(),
         );
         let mut walk_cells = 0usize;
         let mut low_cells = 0usize;
         let mut high_cells = 0usize;
         // **P2-3a**：统计只扫本片拥有的图（stub 的 1×1 不应混进 walk/low/high）。
-        for &map_id in shard_runtime.layout().maps_of(shard::HOST_SHARD) {
+        for &map_id in shard_runtime.layout().maps_of(local_shard) {
             let m = &world.maps[map_id];
             walk_cells += m.walk_count();
             low_cells += m.low_wall_count();
@@ -28833,7 +29072,7 @@ fn sim_loop(
         glog!(
             "INF",
             "地图格子属性已灌入（MapCell.Attribute）maps={} cells={cell_total} walk={walk_cells} low={low_cells} high={high_cells}",
-            world.maps.len()
+            owned_map_count
         );
         // **L1 TransMap**：把注册表解析出的地图连接点灌进各图格子（oracle `Maps.LoadMapInfo`
         // 加载即 `MapManager.AddMapRoute` 落格）。无注册表 ⇒ 无 route，行为一字不变。
@@ -28896,7 +29135,7 @@ fn sim_loop(
         let door_total = game_svr::mapdoor::apply_map_doors_owned(
             reg,
             &mut world,
-            &shard_runtime.layout().host_ownership(),
+            &shard_runtime.local_ownership_bitmap(),
         );
         glog!("INF", "地图门数据已灌入（MapDoor）doors={door_total}");
     }
@@ -29077,7 +29316,14 @@ fn sim_loop(
     // `LoadMerchant` `:227`）。`CastleManager.Initialize` 在改 `ConfigDir="0"` **之前**就用
     // ctor 的 `ConfigDir = Config.CastleDir` 初始化 ⇒ 部署实读 `Castle/Castle/SabukW.txt`，
     // **不是**夹具 `Castle/0`。RNG 走同一条 `world.rng`（`mem::replace` 移出/还回）。
-    if let (Some(loader), Some(reg)) = (enter_cfg.loader.as_ref(), registry.as_ref()) {
+    // **P2-3b**：城堡是进程级服务（10min 落盘/战况/税），只在片 0 装载。
+    // 已知缺口：城堡实体（门/墙/弓手）只存在于片 0 的 World；若城堡地图分到非 0 片，该片无这些实体。
+    let castle_loader = if is_host {
+        enter_cfg.loader.as_ref()
+    } else {
+        None
+    };
+    if let (Some(loader), Some(reg)) = (castle_loader, registry.as_ref()) {
         let castle_dir = enter_cfg.guild_castle_cfg.castle_dir.clone();
         match game_svr::castle::load_sabuk_config(loader, &castle_dir) {
             Ok((cfg, specs)) => match mon_gen_host.as_mut() {
@@ -29855,7 +30101,7 @@ fn sim_loop(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
         mir2_world_bevy::TICK_INTERVAL_MS,
-        world.maps.len(),
+        owned_map_count,
         if registry.is_some() {
             "Envir 真地图"
         } else {
@@ -29945,7 +30191,7 @@ fn sim_loop(
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
         // 位置在 tick 边界：先不消费本 tick 的事件，直接以**当前实时态**合成存档体并退出。
         let t = host_prof.begin();
-        if shutdown_rx.try_recv().is_ok() {
+        if shutdown.requested() {
             glog!(
                 "INF",
                 "收到关服请求：保存全部在册会话（{} 个；有界等待 {}ms）",
@@ -29994,15 +30240,20 @@ fn sim_loop(
                     engine.load_temp_len()
                 );
             }
-            if let Some(line) = telemetry::final_line_once() {
-                glog!("INF", "{}", line);
+            if is_host {
+                if let Some(line) = telemetry::final_line_once() {
+                    glog!("INF", "{telemetry_prefix}{line}");
+                }
             }
             // AOI 遥测**终值行**（卡 `openmir2-aoi-incremental`）：窗口未满也在世界线程退出前强制补一行
             //（`final=1`）。线程局部 ⇒ 必须在**本线程**调用；`MIR2_AOI_STATS` 未开时返回 `None`，零输出。
             if let Some(line) = mir2_world_bevy::aoi::aoi_stats_final_line(world.clock_ms) {
                 eprintln!("{line}");
             }
-            let _ = shutdown_done_tx.send(summary);
+            // **P2-3b**：关服汇总只片 0 发（主线程只取一条；非 0 片先发会掩盖主机读数）。
+            if is_host {
+                let _ = shutdown_done_tx.send(summary);
+            }
             // 探针收尾（fail-closed）：启用却 0 个 tick 行 ⇒ rc≠0；硬杀进程无法验证，已在设计里写明。
             if let Err(e) = perf_counters::finish() {
                 glog!("ERR", "{e}");
@@ -30011,9 +30262,10 @@ fn sim_loop(
             return;
         }
         host_prof.end("HostShutdown", t);
-        if world.clock_ms >= entry_telemetry_next_ms {
+        // **P2-3b (A)**：计数器跨片累加，汇总行只片 0 打；N>1 行首带 `shards=N aggregated`。
+        if is_host && world.clock_ms >= entry_telemetry_next_ms {
             entry_telemetry_next_ms = world.clock_ms + 5_000;
-            let line = telemetry::summary_line();
+            let line = format!("{telemetry_prefix}{}", telemetry::summary_line());
             if entry_telemetry_last.as_deref() != Some(line.as_str()) {
                 glog!("INF", "{}", line);
                 entry_telemetry_last = Some(line);
@@ -31151,6 +31403,8 @@ fn sim_loop(
                             &mut sell_off_sessions,
                             &mut displays,
                         );
+                        // **P2-3b**：会话离开世界 ⇒ 清 `chr→片`（N=1 空操作）。
+                        shard_router::note_left(shard_directory.as_ref(), &chr_name);
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             // `openmir2-m3-party-group-state`：oracle `Disappear()`
                             // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
@@ -32271,6 +32525,12 @@ fn sim_loop(
                                                     // 变化（同优先级不是 FIFO）⇒ 首次扫描时才按真机
                                                     // 堆布局重算（[`drain_login_tail`]）。
                                                     login_tails.insert(head.chr_name.clone(), inputs);
+                                                    // **P2-3b**：会话进世界 ⇒ 记 `chr→片`（N=1 时目录为 None，空操作）。
+                                                    shard_router::note_entered(
+                                                        shard_directory.as_ref(),
+                                                        &head.chr_name,
+                                                        local_shard,
+                                                    );
                                                     let _ = tx.send(SimToGate::MarkInWorld { socket });
                                                 }
                                                 // **M3⑥-实现 3 第②片**：进世界完成点 oracle
@@ -32919,21 +33179,26 @@ fn sim_loop(
             .iter_ref()
             .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
             .count() as i32;
-        ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
+        // **P2-3b**：在线数是进程级读数，只片 0 写（非 0 片写 0 会冲掉真实值）。
+        if is_host {
+            ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
+        }
         // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
         // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
         // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
         // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
         // **墙钟**：`periodic_serverinfo` 不收时钟参数，内部取 `keepalive_clock_ms()`
         // ⇒ 生产代码没有「把 world.clock_ms 送进这个门」的路（显式时钟版本是 `#[cfg(test)]`）。
-        if let Some(frame) = game_svr::ids::periodic_serverinfo(
-            &mut online_hum_gate,
-            &enter_cfg.server_name,
-            online_play_objects,
-            payment_mode,
-        ) {
-            if ids_out.send(frame).is_err() {
-                glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
+        if is_host {
+            if let Some(frame) = game_svr::ids::periodic_serverinfo(
+                &mut online_hum_gate,
+                &enter_cfg.server_name,
+                online_play_objects,
+                payment_mode,
+            ) {
+                if ids_out.send(frame).is_err() {
+                    glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
+                }
             }
         }
         let castle_due = castle_gates.tick(world.clock_ms, enter_cfg.console_show_user_count_time);
@@ -32969,7 +33234,8 @@ fn sim_loop(
             let guild_rcpt_tick = guild_recipients(&online, &world, &guild_ban);
             let outcome = guild_runtime::step(
                 &mut guilds,
-                guild_store.as_ref(),
+                // **P2-3b**：行会存档是进程级写；非 0 片传 `None`（空会表本来也不会产生事件）。
+                guild_startup_store,
                 &enter_cfg.guild_sections,
                 &enter_cfg.guild_msg_cfg,
                 i32::from(enter_cfg.server_index),
