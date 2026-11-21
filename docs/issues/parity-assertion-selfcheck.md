@@ -32,7 +32,9 @@
 7. **升格笔的 `scope` 必须写清证据来源与牙**（`opc-19` 2026-11-21 定）：
    - 有行为牙 ⇒ 写"牙：<变异点> ⇒ <断言> 红（`left/right`）"；
    - 无牙 ⇒ **明写"无牙（理由）"**，不得留空；
-   - 门不覆盖本叶 ⇒ 追加一句 **"门不覆盖本叶，证据来自 `<测试名>` N passed"**。
+   - 门不覆盖本叶 ⇒ 追加一句 **"门不覆盖本叶，证据来自 `<测试名>` N passed"**，
+     其中 **N 必须写死具体数字**（如 "`warr_43_behavior_side_effects` **1** passed"）——
+     只写测试名可以换，数字换了就得解释（范式：`src/M2Server/Player/PlayObject.Attack.cs:1253-1266` 的 43 显式 case）。
    反例：`MG-42`（`src/M2Server/Magic/MagicManager.cs:462-473` 的 `case SKILL_ANGEL`）升格时 scope 未声明无牙（见 `docs/issues/mg42-angel-behavior-teeth.md`）。
 
 ## 三条常见形态（今天都出现过）
