@@ -1530,7 +1530,8 @@ pub struct SelfDelayOutcome {
 /// **(i) 层：per-actor 回合结果**（`deliver_self_delay_msgs_impl` 的返回单元）。
 ///
 /// 组内 = 该 actor 本次泵的投递序（oracle `Run()` 里逐条 `GetMessage` 的顺序）；
-/// 组间 = actor **首次入队序**（`SelfDelayQueue::actor_ids()` 快照序）。
+/// 组间 = actor **首次入队序**（`SelfDelayQueue::actor_ids()` 快照序）；**空组也产出**
+/// （本轮被 Run 但零投递的 actor 仍占一个 turn 下标，`(ii)` 的 per-viewer 判据需要它）。
 /// 扁平 API（[`World::deliver_self_delay_msgs`]）按组间→组内展平，与旧扁平 Vec 逐元素同序。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelfDelayTurn {
@@ -2498,12 +2499,13 @@ pub(crate) fn deliver_self_delay_msgs_impl<
                 _ => {}
             }
         }
-        if !out.is_empty() {
-            turns.push(SelfDelayTurn {
-                actor_id,
-                outcomes: out,
-            });
-        }
+        // **(ii) pilot**：空组也产出——turn 边界 = "本 tick 被 Run 过的 actor"（oracle 每个
+        // actor 每 tick 跑一次 `Run`；即便本轮零投递也占一个 turn 下标）。消费方按 turn
+        // 判定收件人是否已跑；`flatten` 对空组无影响。
+        turns.push(SelfDelayTurn {
+            actor_id,
+            outcomes: out,
+        });
     }
     turns
 }
