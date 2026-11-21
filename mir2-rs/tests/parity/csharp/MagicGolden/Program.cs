@@ -3292,6 +3292,7 @@ public sealed class FireballResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object SinSu { get; set; }
     /// <summary>41 `SKILL_ANGEL` 的 adopt 观测块（`MagicId == 41` 时非 null；镜像 `Skeleton`）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Angel { get; set; }
     /// <summary>**MG-55**：46 分身的克隆体静态面 + 逐收件人 10/41 帧（仅该魔号；null 不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
