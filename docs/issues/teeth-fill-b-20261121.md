@@ -12,7 +12,7 @@
 
 ## 1. MG-15（Shape=2 红毒臂，`amyounsul2`）
 
-- **变异**：`crates/world-bevy/src/magic.rs:153` `power_poison`：`... * 2` → `... * 3 // MUTATION teeth-fill-b MG-15`（快照 `E:/UserTemp/teeth-fill-b-snap/magic.rs`）。
+- **变异**：`crates/world-bevy/src/magic.rs` 的 `power_poison`：`... * 2` → `... * 3 // MUTATION teeth-fill-b MG-15`（快照 `E:/UserTemp/teeth-fill-b-snap/magic.rs`）。
 - **为什么**：`amyounsul2` 的 8037 = `(type=1, p1=80/62/70)`；绿毒面已有红（type=0 / 97→112），红毒臂从未咬到。
 - **run_id**：`teeth-b-mg15-mut-1795239545`（驱动 3 支 + 比较器同一 id）。
 - **驱动**：`tests::amyounsul2_parity_s1/s5/s13` **3/3 rc=0**——p1 不进驱动的条数断言，如实记“驱动绿”。
@@ -28,7 +28,7 @@
 
 ## 2. MG-12（HEALLING(2)，治疗量）
 
-- **变异**：`crates/world-bevy/src/world.rs:5634`（`cast_healing_spell`；**不是** 5666 的 bighealing 同名行，按最近前置函数名定位）：`let power = ...power_healing(...);` → `... + 1; // MUTATION teeth-fill-b MG-12`（快照 `E:/UserTemp/teeth-fill-b-snap2/world.rs`）。
+- **变异**：`crates/world-bevy/src/world.rs` 的 `cast_healing_spell`（**不是** `cast_big_healing_spell` 的同名行，按最近前置函数名定位）：`let power = ...power_healing(...);` → `... + 1; // MUTATION teeth-fill-b MG-12`（快照 `E:/UserTemp/teeth-fill-b-snap2/world.rs`）。
 - **为什么**：2 号治疗量经 RM 8034 `p1` 观测（heal 15 / self 20），此前无产品侧红；“最小可观测幅度从 +1 起”。
 - **run_id**：`teeth-b-mg12-mut-1795239597`。
 - **驱动**：`tests::healing_parity_heal/full/self` **3/3 rc=0**（驱动只判条数），如实记“驱动绿”。
