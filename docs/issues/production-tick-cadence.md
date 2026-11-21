@@ -139,6 +139,25 @@
 
 ⇒ 凡"跨 actor 消息在同一 tick/下一 tick 落到谁"的判据，都隐含"装置迭代序 = 生产迭代序"这一**未核实假设**（本卡 §9 为出处）。该假设已登记为 **B24**（`docs/issues/golden-harness-blind-spots.md`）：跨 actor 顺序 = 驱动契约（`caster→target→obs_in→obs_out`），不是生产事实。**`e5` 清单只列这一条**（迭代序与跨 actor 契约是同一条假设，勿拆两行）。
 
+## 10. AOI 可见集与收件人序（⑦，2026-11-21）
+
+### 10.1 集合（一致）
+
+- 生产广播收件人：`src/M2Server/Actor/BaseObject.Message.cs::SendRefMsg`——以发送者为中心扫 `SendRefMsgRange`（缺省 12，`[Setup] SendRefMsgRange` 可配）的全格；**`Play` 非 ghost 恒收**；非 Play 仅 `WantRefMsg` 且 ident∈{`RM_STRUCK`,`RM_HEAR`,`RM_DEATH`}（`WantRefMsg` 只有 `PlayObject`/`ArcherGuard` 为 true ⇒ 常规广播 = ±12 内玩家）；`ObMode||FixedHideMode` ⇒ 只发自己。区域魔法 `src/M2Server/Actor/BaseObject.cs::GetMapBaseObjects` 同几何。
+- 装置：四玩家 (100,100)/(101,100)/(105,100)/(140,100) 均 `ActorMgr.Add` + `env.AddMapObject(CellType.Play)`；怪物进图但 `WantRefMsg=false`；帧按 `GateIdx=ActorId` 归属。
+- 实测：`hbfireball` = caster 8 / target 13 / obs_in 11 / **obs_out 0**（obs_out 距 39–40 格 > 12，负对照成立）；`warr-12` 仅 caster 4 帧（自指路径无广播）。⇒ **集合一致**。
+- 边界：怪物下游不 `Operate`（B2/B5）；装置只加载一张图（B6），跨图可见性未覆盖。
+
+### 10.2 序（两层）
+
+- **单次广播内**：`SendRefMsg`/`GetMapBaseObjects` 的收件人调用序 = 同一段生产代码（**x 外层 → y 内层 → cell `ObjList` 下标序**）⇒ 两侧一致。
+- **跨 actor**：处理序 = **B24 契约**（`caster→target→obs_in→obs_out`），不是 AOI 事实。
+- **`VisibleActors` 迭代序**：生产 = AOI 遇到序；装置 = `target→obs_in→monsters[]`（`UpdateVisibleGay` 回填序）。**今天不显形**（push stem 只有 target 相邻、obs_in 距 5 > 1、monsters 空），但加相邻怪会改变 `MagPushArround` 的 `Random(20)` 分配 ⇒ 已写死进 **B24 契约**。
+
+### 10.3 非纯几何（B25）
+
+`SendRefMsg` 有 500ms `VisibleHumanList` 缓存；重扫 `SendRefMsgRange`(12) 与复用过滤 `|dx|<11`/`|dy|<11` **不一致**（**11–12 格：重扫进、复用丢**），缓存期内新进入/移动者不更新。装置与 Rust 沿用同码 ⇒ **两侧同错**（对拍轴无感、realism 轴有偏）；做 AOI 边界对拍前必须先钉口径。已登记 **B25**。
+
 ---
 
 **裁决（单行）**：`生产的 actor Run 间隔 = 玩家 ≈300ms / 怪物 ≈250–300ms / NPC ≈400ms（名义常量、负载可变；怪物首跑相位 0–1500ms 随机），与 100ms 假设 不一致。`
