@@ -86,7 +86,7 @@ fn build_rig(entities: usize, bots: usize) -> Rig {
     let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
     let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
     gates.insert(0u8, tx);
-    let mut online: OnlineRegistry = Vec::new();
+    let mut online: OnlineRegistry = OnlineRegistry::new();
     let mut sessions: HashMap<String, SessionGround> = HashMap::new();
     if bots > 0 {
         let stride = entities.checked_div(bots).unwrap_or(0).max(1);
