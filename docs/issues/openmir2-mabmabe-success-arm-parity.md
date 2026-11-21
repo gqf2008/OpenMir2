@@ -14,18 +14,28 @@
 > - 排水前 N 条、排水后 **1** 条 ⇒ **产品合并**（`deliver_mag_struck` 把同受害者多条 pending 合算）⇒ 改产品；
 > - 排水前 N 条、排水后 **N** 条、台账只记 1 条 ⇒ **台账装配** ⇒ 改驱动/装配，**不动产品**。
 
-**已可由代码判定的部分**：
-- **第二条 `RM_DELAYMAGIC` 未入 `Rm`** = **台账装配**（已证）。`fireball_parity_drive` 抓延迟载荷用
-  `self_delay_msgs.iter().find(...)`（单数），同一 caster 有多条 `8021` 时天然只记首条。
-- `8103` 的装配与 `struck_log` 逐条记录：`World::deliver_mag_struck` 在**每条** `PendingMagStruck`
-  上各 push 一条 `StruckEvent`（代码逐条，无合并）；`drain_mag_struck_b2` 也逐条出 31/53。**因此
-  "一条 `8103(damage=20)`"与代码读法矛盾**——必须实测"排水前 pending 数 / 排水后 struck_log 数"，
-  不能先下"产品合并"结论。
-- **时序 600 vs 700/800 与 53 中间态**：属"同一时刻多条 due 消息如何在泵内结算 + 出帧取 HP 的时刻"，
-  同样需要该计数证据（泵是 `deliver_self_delay_msgs_impl`，队首未到点即重入队 + break）。
+**实测结论（`e5` 探针，`nondef_hit` seed=41）——落在"前 2 / 后 2 ⇒ 台账装配"**：
 
-**结论**：本卡的 §3(b)(a)(e)(d) 目前只能标"**待实测判定**"；§3(c) 已证台账缺口。
-若实测落在第二类，本卡整体降级为**装置缺口**，产品侧不动。
+> - 累计 `pending_mag_struck = 2`、累计 `struck_log().len() = 2`；**逐排水调用是 1→1 两次**
+>   （step 700 取 1 条、step 800 取 1 条）；
+> - `struck_log` 里受害者 1002 有 **2 条**：`power 5 / damage 5 / hp 95` 与
+>   `power 15 / damage 15 / hp 80` ⇒ **产品逐条产出、没有合并**；
+> - **一行 `8103(damage=20)` 是驱动造的**：`delay_magic = all_outs.iter().find_map(|o| o.delay_magic)`
+>   （**首条**）+ `damage = hp_before − hp_after`（**聚合**）+ `hp_after = entities.get(target).hp`
+>   （循环后末值）⇒ 只 push 一帧；
+> - **关键机制**：`let record_delayed_struck = matches!(magic_id, 9 | 10);` **排除 50**，所以魔号 50
+>   走不到 per-event 的 8103 装配循环，只能落到上面那个 `find_map` + 聚合块。
+
+**三条符号锚依据**：① `World::deliver_mag_struck` 对每条 `PendingMagStruck` 各 push 一条
+`StruckEvent`（逐条、无合并）；② 驱动 `fireball_parity_drive` 的 RM `8103` 装配块（`find_map` +
+`hp_before − hp_after` 聚合）；③ 同一函数里的 `record_delayed_struck = matches!(magic_id, 9 | 10)`。
+
+**结论**：
+- **第二条 `RM_DELAYMAGIC` 未入 `Rm`** = 台账装配（`self_delay_msgs.iter().find(...)` 单数）——装置缺口；
+- **`8103(damage=20)`** = 台账装配（上述 `find_map` + 聚合块，且魔号 50 被 `9 | 10` 排除）——**装置缺口**，
+  **产品侧 `deliver_mag_struck` 逐条逻辑是对的，不得按"产品合并"去改**；
+- **时序 600/600（golden）vs 700/800（Rust）与 53 中间态仍待判定**：`e5` 正在补测是"产品调度差异"
+  还是"排水粒度/装置"。**不提前定性**。
 
 ## 1. 复现
 
@@ -49,8 +59,10 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 1. **时序**：`RM_DELAYMAGIC` 的两条到点帧，golden `due_ms_rel=600`（两条都在 600），
    Rust 依次 **700 / 800**。
-2. **受击播报合并**：golden `RM_STRUCK_MAG(8103)` 两条 `wParam=15`（p1=85）与 `wParam=5`
-   （p1=80）；Rust **只有一条** `wParam=20`（p1=80）。
+2. **受击播报"合并"——实为驱动装配（装置缺口，非产品）**：golden `RM_STRUCK_MAG(8103)` 两条
+   `wParam=15`（p1=85）与 `wParam=5`（p1=80）；Rust 台账**只有一条** `wParam=20`（p1=80）。
+   探针证明世界层 `struck_log` 有两条（5/15），一行 20 来自驱动的 `find_map` 首条 + `hp_before−hp_after`
+   聚合（且 `record_delayed_struck = matches!(magic_id, 9|10)` 排除 50）。详见 §0/§3(b)。
    比较器原文：
    `[nondef_hit/caster] Rm 多重集不等（ident,wParam,p1,p2,p3,priority,late）： golden 有 rust 无=[[8103, 5, 80, 224, 1001, 167, 0], [8103, 15, 85, 224, 1001, 167, 0]] rust 有 golden 无=[[8103, 20, 80, 224, 1001, 167, 0]]`
 3. **HP 快照/帧数**：golden target 侧 `53(80)` 一条、`31(80,15)`、`31(80,5)`；
@@ -75,14 +87,16 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
   需要一条**只读探针**（在测试里打印 `self_delay_msgs` 的 `(ident, deliver_at, enqueue_seq)`
   与每次泵的出队序），不改产品代码。
 
-### (b) 两条受击事件 vs 一条聚合 `8103(damage=20)`
+### (b) 一条聚合 `8103(damage=20)`（**已实测：驱动装配，装置缺口**）
 
-- 当前行为：`World::deliver_mag_struck`（`crates/world-bevy/src/world.rs`）**逐条**处理
-  `pending_mag_struck`，每条各记一条 `StruckEvent`、各出 31/53。
-- 但台账 `Rm` 只有一条 `8103(20)`：要么两条 `PendingMagStruck` 被合并（功率相加），
-  要么驱动侧 `struck_log` → RM 组装把它聚合了。驱动注释本身声明 RM 是**弱比较面**
-  （"RM 是组装出来的，玩家可见证据是 SM"），所以这一条**可能是台账缺口而非产品**；
-  需在 `drain_mag_struck_b2` 的返回值与 `World::struck_log()` 上探针确认（各几条、damage 各多少）。
+- 产品行为（**正确**）：`World::deliver_mag_struck` 逐条处理 `pending_mag_struck`，每条各记一条
+  `StruckEvent`、各出 31/53。`e5` 探针：累计 `pending=2` / `struck_log=2`，逐排水 1→1 两次；
+  `StruckEvent` 为 (power 5/damage 5/hp 95) 与 (power 15/damage 15/hp 80)。
+- 台账成因：驱动 `fireball_parity_drive` 的 `8103` 装配用
+  `delay_magic = all_outs.iter().find_map(|o| o.delay_magic)`（首条）+ `damage = hp_before − hp_after`
+  （聚合）+ `hp_after = entities.get(target).hp`（循环后末值），只 push 一帧；并且
+  `record_delayed_struck = matches!(magic_id, 9 | 10)` **排除魔号 50**，使 50 无法走 per-event 循环。
+- 处置：**改驱动**（按 `struck_log` 逐条组装 8103，或把 50 纳入 per-event 口径），**不改产品**。
 
 ### (c) 第二条 `RM_DELAYMAGIC` 未进 `Rm`（**已确定是驱动台账缺口**，代码可证）
 
@@ -91,14 +105,9 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
   的 `fireball_parity_drive`（"RM 列组装"段，`RM_DELAYMAGIC(8021)` 那一行）。
 - 处置：属于对照臂落地批的**驱动**修复（多条 8021 逐条组装），不影响产品判据。
 
-### (f) `8103(damage=20)` 的出处（**待实测**）
+### (f) （已并入 (b)）`8103(damage=20)` 的出处
 
-- 代码读法：`deliver_mag_struck` 逐条 push `StruckEvent`、`drain_mag_struck_b2` 逐条出帧 ⇒ 两条 pending
-  应得两条 `8103(5)`/`8103(15)`，与 observed 的一条 20 矛盾。
-- 需要实测：**排水前 `pending_mag_struck.len()`** 与 **排水后 `struck_log().len()`**（两者都是世界层
-  公开观测面，测试里读即可，不改产品）；若前者 1 后者 1 ⇒ 回到 `cast_mab_mabe_spell` 看第二条
-  `SendSelfDelayMsg` 的 `w_param` 实际是多少；若前者 2 后者 1 ⇒ 产品合并；若前者 2 后者 2 ⇒
-  查驱动 RM 装配是否还有别的聚合点。
+`e5` 探针已定为驱动装配（前 2 / 后 2），不再单列；细节见 §0 与 §3(b)。
 
 ### (d) `SM 100` 载荷 `14591` vs `0`
 
@@ -115,11 +124,11 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 ## 4. 结论与建议顺序
 
-0. **先做 §0 形态判定**（读测试可取的 `pending_mag_struck` / `struck_log` 计数）；结论若指向台账装配，
-   本卡降级为装置缺口、改驱动而不动产品。
-1. **再修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
-2. (b) 若仍红，用探针区分"世界层合并"还是"驱动组装合并"；
-3. (c) 随对照臂驱动批一起改（多条 8021）；
+0. **形态判定已完成**（§0）：`8103` 与第二条 `8021` 都是**装置缺口/驱动装配**，产品逐条逻辑正确；
+   **不得**按"产品合并"改 `deliver_mag_struck`。
+1. **待判定只剩时序（a/e）**：600/600 vs 700/800 与中间态 53——`e5` 补测中；定性前不动产品。
+2. **再修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
+3. (b)(c) 随对照臂驱动批一起改（8103 逐条组装 + 多条 8021）；
 4. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
    `real_rust_ledger_mabmabe_nondefault`）从待落地补丁恢复进批——补丁副本见
    `E:/UserTemp/arm-rust-deferred.patch`（仓外临时物，非交付件）。
