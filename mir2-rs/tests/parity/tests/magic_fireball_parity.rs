@@ -2292,10 +2292,11 @@ fn real_rust_ledger_energyrepulsor() {
 ///
 /// 对拍范围（卡 17 SCOPE）：`Skeleton` block（`regen_calls` / `slave_count_before/after` /
 /// `pre_slave_count` / `new_slaves{name,level,hp,max_hp,master_is_caster}` / `stub_*`）+
-/// 造怪前帧 17/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`
-/// （离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、`640`/`10123-p3`
-/// （训练尾，随造怪抽数不同）。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
-/// spawn 0 次（`regen_calls=0`）。
+/// 造怪前帧 17/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`：
+/// 造怪抽数已记录在 golden `Rng` 中且可复现（`[1500,2000,3000,3000,2000]` + `Random(3)`），
+/// 而本 stem 的驱动不做 RNG 记账（台账无 `Rng` 键）——不是「抽 0 次」；`640`/`10123-p3`
+/// 随造怪抽数不同。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
+/// spawn 0 次（`regen_calls=0`）。**656 未验（装置盲区，`docs/issues/golden-harness-blind-spots.md` B1）**。
 #[test]
 #[ignore = "需先跑 game-svr 两支驱动（tests::skeleton_parity_*）生成真实台账"]
 fn real_rust_ledger_skeleton() {
@@ -2421,8 +2422,8 @@ fn real_rust_ledger_skeleton() {
         }
 
         // ④ 训练尾 640（本卡起自延迟 1000ms）：payload 实测**部分可比**——`(recog,param,series,due)`
-        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，卡 17 SCOPE：离线替身造怪 0 抽
-        // ⇒ RNG 流偏移）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
+        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，根因：两侧造怪抽数的记账/消费
+        // 序列不同 ⇒ RNG 流错位）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
         let g640 = frames_640_caster(gcase);
         let r640 = frames_640_caster(rust);
         let want640 = usize::from(label == "summon_ok");
@@ -2445,10 +2446,11 @@ fn real_rust_ledger_skeleton() {
 ///
 /// **SCOPE（stub + 生产数据缺失）**：`Angel` block（`regen_calls` / `slave_count_before/after` /
 /// `pre_slave_count` / `new_slaves{name,level,hp,max_hp,master_is_caster}` / `stub_*`）+
-/// 造怪前帧 41/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`
-/// （离线替身不抽造怪数，与 Rust `create_monster_oracle` 真抽不同源）、`640`/`10123-p3`
-/// （训练尾，随造怪抽数不同）。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
-/// spawn 0 次（`regen_calls=0`）。
+/// 造怪前帧 41/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`：
+/// 造怪抽数已记录在 golden `Rng` 中且可复现（`[1500,2000,3000,3000,2000]` + `Random(3)`），
+/// 而本 stem 的驱动不做 RNG 记账（台账无 `Rng` 键）——不是「抽 0 次」；`640`/`10123-p3`
+/// 随造怪抽数不同。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
+/// spawn 0 次（`regen_calls=0`）。**656 未验（装置盲区，`docs/issues/golden-harness-blind-spots.md` B1）**。
 /// **本夹具证明「给定怪物之后的 adopt 行为」，不证明生产可召唤**（生产 `monsters` 无 `精灵`
 /// 行 ⇒ `MakeSlave` 恒 null；卡 `openmir2-angel-summon-monster-missing`）。
 #[test]
@@ -2572,8 +2574,8 @@ fn real_rust_ledger_angel() {
         }
 
         // ④ 训练尾 640（本卡起自延迟 1000ms）：payload 实测**部分可比**——`(recog,param,series,due)`
-        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，卡 17 SCOPE：离线替身造怪 0 抽
-        // ⇒ RNG 流偏移）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
+        // 两侧一致；`tag`(=TranPoint) 不同（golden=2 / Rust=1，根因：两侧造怪抽数的记账/消费
+        // 序列不同 ⇒ RNG 流错位）⇒ 本断言**不比 `tag`**（先实测后入比较面，不凭假设）。
         let g640 = frames_640_caster(gcase);
         let r640 = frames_640_caster(rust);
         let want640 = usize::from(label == "summon_ok");
@@ -2679,7 +2681,7 @@ fn frames_by_ident(case: &Value, ident: i64) -> Vec<(String, i64, i64, i64, i64)
 }
 
 /// 取某 case 中 **caster** 的 640 帧 `(recog, param, series, due_ms_rel)`——**不含 `tag`**。
-/// 依据：卡 17/MG-41 SCOPE 的「离线替身造怪 0 抽 ⇒ RNG 流偏移」⇒ 640 的 `tag`(=TranPoint)
+/// 依据：卡 17/MG-41 SCOPE 的「造怪抽数的记账/消费序列不同 ⇒ RNG 流错位」⇒ 640 的 `tag`(=TranPoint)
 /// 实测 golden=2 / Rust=1（本 head；世代或夹具变动后需重测），**不同源**；其余字段同源可比。
 fn frames_640_caster(case: &Value) -> Vec<(i64, i64, i64, i64)> {
     let mut out = Vec::new();
@@ -2711,9 +2713,9 @@ fn frames_640_caster(case: &Value) -> Vec<(i64, i64, i64, i64)> {
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
 /// 帧：17/638=施法帧、642=`SM_DURACHANGE`(护身符耐久)、807=回召帧(未建模、cap_hit 显式登记)；本函数比 17/638/642 的 socket 多重集；`stub_monster_race=113`（输入记录）。
-/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。前 5 抽逐值相同，随后 Rust 多 3 抽，站点 `bins/game-svr/src/mongen.rs:498/501`（create_monster_oracle 造怪）+ `crates/world-bevy/src/magic_effect.rs:64`（尾训练），而 C# 离线替身 `OfflineWorldEngine.RegenMonsterByName` 造怪 0 抽。长度 6≠8 ⇒ 不可逐值比。**这是离线替身不忠实（造怪 0 抽）导致 RNG 流偏移，不是产品错**；MG-41 scope 须写「离线替身造怪 0 抽 ⇒ RNG 流偏移 ⇒ 本 leaf 不比 Rng」。
+/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。**前 5 抽逐值相同**，随后 Rust 多 3 抽（站点 `bins/game-svr/src/mongen.rs:498/501` 的 `create_monster_oracle` + `crates/world-bevy/src/magic_effect.rs:64` 的尾训练）。长度 6≠8 ⇒ 不可逐值比。**根因是两侧的记账/消费序列不同**（golden 已记录确定的 5+1 抽），不是产品错；MG-41 scope 已按「前 5 抽同、第 6 抽起不同」登记。
 ///
-/// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身 0 造怪抽不同源而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（离线替身 0 抽 ⇒ RNG 流偏移）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
+/// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身的记账/消费序列不同而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（造怪抽数的记账/消费序列不同 ⇒ RNG 流错位）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
 /// `due_ms_rel`：本 leaf 被比较帧（17/638/642）恒为 0（三帧均属**施法批** elapsed=0，驱动无交付回路）——**结构恒定、非伪造**；与两个 stub 键不同：若引入交付批，due 会随 elapsed 变化（stub 17 则永不）。
 ///
@@ -2827,7 +2829,7 @@ fn real_rust_ledger_sinsu() {
         );
     }
     // 训练尾 640（本卡起自延迟 1000ms）：**只判 `due_ms_rel`、不判 payload**（已裁决：tag 因
-    // 离线替身 0 抽而错位；640 不进 `keep`）。golden caster 恰 1 条、due=1000；Rust 同条数且 due 相等。
+    // 造怪抽数的记账/消费序列不同而错位；640 不进 `keep`）。golden caster 恰 1 条、due=1000；Rust 同条数且 due 相等。
     let g640 = frames_640_caster(gcase);
     let r640 = frames_640_caster(rust);
     assert_eq!(g640.len(), 1, "[{label}] golden 640 条数");
@@ -2948,7 +2950,7 @@ fn real_rust_ledger_sinsu_cap_hit() {
         "[{label}] after 与 golden 不一致"
     );
     // Rng：cap_hit 两侧**同源都 0 抽**（门 fail 无造怪抽 + 落点确定无 RandXY 抽）⇒ **逐值比（与 golden 相等）**。
-    // 注意这与 summon_ok 的「不比 Rng」是**两条不同口径**：那条是"离线替身造怪 0 抽 vs Rust create_monster_oracle 真抽**不同源**所以不比"；
+    // 注意这与 summon_ok 的「不比 Rng」是**两条不同口径**：那条是"两侧造怪抽数的**记账/消费序列不同**所以不比"；
     // 本条是"两侧**同源 0 抽**所以比"。断"==golden"而非"应为空"：任一侧将来多抽一即红。
     assert_eq!(
         rust["Rng"], gcase["Rng"],
