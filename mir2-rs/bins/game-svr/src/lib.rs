@@ -69301,6 +69301,78 @@ SendRefMsgRange=15
     /// 帧面片的共用夹具：施法者 `caster`(10,10)/socket 911、若干观察者（名, x, y, Ghost, socket）、
     /// 存档里学会的魔号、魔法模板表（逐 `(魔号, Effect)`），以及 `ArmRingl` 槽里的护身符
     /// （`dura = 600` ⇒ `Round(600/100) = 6`，满足 `CheckAmulet` 三档需求 1/5/2）。
+    /// **MG-35（21 瞬息移动）驱动的 rig 输入**：真图（`MAGICGOLDEN_MAP_DIR`）+ 真 `MapRegistry`。
+    ///
+    /// **与旧先例的差异（勿复用）**：`cast_slave` 为 `name_of(map_id)` 写过 200×200 全 0 的临时图，
+    /// 那是"只给 name↔id"用的、可走性仍用 World 图。本支**不能**沿用那个口径：
+    /// `SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040`）是带 `CanWalk` 的**移位环**，
+    /// 不可走会继续抽 `Random(Width)`/`Random(Height)`（至多 201 轮，超限则整段换图不发生）。
+    /// 用全 `Walk` 合成图会让移位环**零轮** ⇒ 系统性少抽 RNG（"帧对、抽数错"的典型假对拍）。
+    ///
+    /// 三档具名 panic（不静默）：`MAP_DIR_MISSING` / `MAP_FILE_MISSING` / `MAP_SIZE_MISMATCH`。
+    fn spacemove_rig_inputs(
+        stem: &str,
+        label: &str,
+    ) -> (mir2_world_bevy::map::MapGrid, mir2_envir::MapRegistry) {
+        let dir = std::env::var("MAGICGOLDEN_MAP_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Map"));
+        assert!(
+            dir.is_dir(),
+            "[{stem}/{label}] MAP_DIR_MISSING 地图目录不存在: {}",
+            dir.display()
+        );
+        let path = dir.join("0.map");
+        assert!(
+            path.is_file(),
+            "[{stem}/{label}] MAP_FILE_MISSING 地图目录里没有 0.map: {}",
+            path.display()
+        );
+        // 图身份：golden 的 `Fixture.map_file_size`（缺键同样 panic —— 不能落成 0 静默通过）
+        let g = golden_case_for(stem, label);
+        let want_size = g["Fixture"]["map_file_size"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("[{stem}/{label}] golden 缺 Fixture.map_file_size，先重出 golden"));
+        let got_size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(-1);
+        assert_eq!(
+            got_size, want_size,
+            "[{stem}/{label}] MAP_SIZE_MISMATCH golden={want_size} 磁盘={got_size}（{}）",
+            path.display()
+        );
+        let loader = mir2_envir::MapLoader::new(&dir, "", "");
+        let mf = loader
+            .load("0")
+            .unwrap_or_else(|e| panic!("[{stem}/{label}] 0.map 解析失败: {e:?}"));
+        let mut grid = mir2_world_bevy::map::MapGrid::new(mf.width, mf.height);
+        let written = game_svr::mapwire::apply_map_file_cells(&mf, &mut grid);
+        let expect = (mf.width as usize) * (mf.height as usize);
+        assert_eq!(
+            written, expect,
+            "[{stem}/{label}] 格属性写入数 {written} != 期望 {expect}（尺寸不符会 fail-closed）"
+        );
+        // 直方图交叉核：写入数相等但属性错位（行列转置）只有这里抓得到
+        assert_eq!(
+            grid.walk_count(),
+            mf.walk_count(),
+            "[{stem}/{label}] 可走格直方图不一致（grid={} file={}）",
+            grid.walk_count(),
+            mf.walk_count()
+        );
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(&dir, "", ""),
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                // `54 SM_MAPDESCRIPTION` 的尾串取 `Envir.MapDesc`；C# 装置只 `LoadMapData("0.map")`、
+                // 不读 MapInfo.txt ⇒ 该值为空，golden 的 54 tail 实测也是 `''` ⇒ 这里同为 `""`。
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::mapinfo::MapInfoFlag::default(),
+            }],
+        );
+        (grid, registry)
+    }
+
     struct SpellFrameRig {
         world: mir2_world_bevy::World,
         caster: i32,
@@ -71342,6 +71414,15 @@ SendRefMsgRange=15
         // 装置侧 `MagicGolden/Program.cs` 的 `MakeVisible` 分支按 `target → obsIn → 怪物` 调用，
         // 本 rig 必须逐字同序，否则多目标命中时 `Random(20)`/`Random(2)` 的**消耗序**会错位，
         // 表现为"帧一样但抽数账本对不上"。
+        // **MG-35（21）**：真图 + 真注册表 + `HomeMap="0"`（见 `spacemove_rig_inputs` 的说明）。
+        if magic_id == 21 {
+            let (grid, registry) = spacemove_rig_inputs(stem, label);
+            rig.world.maps.push(grid);
+            rig.registry = Some(registry);
+            if let Some(sv) = rig.saves.get_mut("caster") {
+                sv.record.data.home_map = Some("0".to_string());
+            }
+        }
         if matches!(magic_id, 8 | 37) {
             rig.world
                 .maps
@@ -74919,6 +75000,63 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn energyrepulsor_parity_s13() {
         push_assert("energyrepulsor", 37, "s13", 13, 3000);
+    }
+
+    /// **`MG-35`（21 瞬息移动）**：`MagSaceMove`（`src/M2Server/Magic/MagicManager.cs` 的
+    /// `case SKILL_SPACEMOVE`）→ `MapRandomMove` → `SpaceMove`。
+    /// 观测面 = `RM_SPACEMOVE_SHOW2(807)` 的 `param/tag`（落点），以及换图簇（633/634/54/766/11029）。
+    ///
+    /// 断言：① 收件人集合逐名相等；② 逐收件人帧序列 == 金标准；③ **退化守卫**：
+    /// `SM_SPACEMOVE_SHOW2` 两侧各 ≥1 条（零条 ⇒ 没换图/退化夹具）；④ **换图簇出现性**：
+    /// `SM_CLEAROBJECTS(633)` 必须出现在台账里（与落点对错相互独立——落点算错时仍能区分"没换图"）。
+    fn spacemove_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("spacemove", 21, 1, label, seed, base);
+        assert_receiver_sets_match_golden("spacemove", label);
+        per_receiver_frame_seq_matches_golden("spacemove", label);
+        assert_effect_frames_non_degenerate(
+            "spacemove",
+            label,
+            mir2_protocol::messages::SM_SPACEMOVE_SHOW2,
+        );
+        // 换图簇出现性（独立于落点）
+        let c = defence_case("spacemove", label);
+        let has_633 = c["Receivers"]
+            .as_array()
+            .map(|rs| {
+                rs.iter().any(|r| {
+                    r["Sent"].as_array().is_some_and(|a| {
+                        a.iter().any(|m| {
+                            m["ident"].as_i64()
+                                == Some(i64::from(mir2_protocol::messages::SM_CLEAROBJECTS))
+                        })
+                    })
+                })
+            })
+            .unwrap_or(false);
+        assert!(
+            has_633,
+            "[spacemove/{label}] 台账缺 SM_CLEAROBJECTS(633) ⇒ 换图簇没发生（不是落点错，是根本没换图）"
+        );
+        fireball_case_assert("spacemove", label);
+        b1_golden_drain_assert("spacemove.json", label, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s1() {
+        spacemove_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s5() {
+        spacemove_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn spacemove_parity_s13() {
+        spacemove_assert("s13", 13, 3000);
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。

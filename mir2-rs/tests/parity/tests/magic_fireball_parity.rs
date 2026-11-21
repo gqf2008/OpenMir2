@@ -1515,6 +1515,14 @@ fn real_rust_ledger_firewind() {
 /// **`MG-57` 气功波(37)**：与 8 在 oracle 里函数体逐字相同（同 `MagPushArround`）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::energyrepulsor_parity_s*）生成真实台账"]
+/// **`MG-35` 瞬息移动(21)**：驱动侧 `spacemove_rig_inputs` 读真图（`MAGICGOLDEN_MAP_DIR`）并核
+/// `map_file_size`；落点由 `SpaceMoveGetRandXY` 的移位环决定，故必须真格面（合成全 `Walk` 会少抽）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::spacemove_parity_s*）生成真实台账"]
+fn real_rust_ledger_spacemove() {
+    real_ledger_verify_labels("spacemove", &golden_file("spacemove.json"), &["s1", "s5", "s13"]);
+}
+
 fn real_rust_ledger_energyrepulsor() {
     real_ledger_verify_labels(
         "energyrepulsor",
