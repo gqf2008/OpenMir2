@@ -73656,7 +73656,7 @@ SendRefMsgRange=15
             1000,
         );
         fireball_case_assert("lightning11", "miss");
-        b1_golden_drain_assert("lightning-11.json", "miss", 2);
+        b1_golden_drain_assert("lightning-11.json", "miss", 1);
     }
 
     #[test]
@@ -73701,7 +73701,7 @@ SendRefMsgRange=15
             1000,
         );
         fireball_case_assert("lightning45", "miss");
-        b1_golden_drain_assert("lightning-45.json", "miss", 2);
+        b1_golden_drain_assert("lightning-45.json", "miss", 1);
     }
 
     #[test]
@@ -74252,7 +74252,7 @@ SendRefMsgRange=15
             1000,
         );
         fireball_case_assert("firecharm", "miss");
-        b1_golden_drain_assert("firecharm.json", "miss", 2);
+        b1_golden_drain_assert("firecharm.json", "miss", 1);
         firecharm_order_assert("miss");
     }
 
@@ -78158,7 +78158,7 @@ SendRefMsgRange=15
     fn showhp_assert(stem: &str, label: &str, seed: i32, base: i32, pass: bool) {
         fireball_parity_drive(stem, 28, 1, label, seed, base);
         fireball_case_assert(stem, label);
-        b1_golden_drain_assert("showhp.json", label, if pass { 3 } else { 2 });
+        b1_golden_drain_assert("showhp.json", label, if pass { 3 } else { 1 });
         let c = defence_case(stem, label);
         let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
         if pass {

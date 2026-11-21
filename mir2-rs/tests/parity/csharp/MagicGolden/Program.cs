@@ -175,20 +175,20 @@ public static class Program
             if (name == "fireball-selftest") return FireballSelfTest();
             if (name == "warrskill") return ClientSpellXYEntry.Run();
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
-            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
-            if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 卡 openmir2-spell-tail-delay-audit：以下 10 支的 640 在 oracle 走共享尾
             // `MagicManager.cs:666 SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000)` ⇒ 必须**时间忠实排水**
             // （`StepDrainMs=100`）。否则「Sleep(WaitMs) 后一次排空」按 per-actor pass 序把 640
             // 排在 600ms 的 31/53/656 之前（MG-17 同类把伪影固化的失效模式）。
             if (name == "healing") return HealingBatch();
-            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
-            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10) });
+            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7, StepDrainMs = 100 });
-            if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
+            if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp", StepDrainMs = 100 });
             // **MG-55（46 分身术）**：`MagMakeClone` 只造克隆体（无配置/事件系统依赖）。训练前提钉死
             // (`level=0 / TrainLv=3 / MaxTrain[0]=1000`)，`Gender=1/Hair=7` 让 feature 面非退化。
             // **MG-36（22 火墙）**：`MagMakeFireCross` 五格 + 安全区 + 预占去重。非退化 MC
@@ -271,7 +271,7 @@ public static class Program
             // 39/42/48：同在 `CheckAmulet(1,1)` 组（`MagicManager.cs:315-325`），需护身符。
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
-            if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
+            if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true, StepDrainMs = 100 });
             // **推挤批（MG-16 抗拒火环 8 / MG-57 气功波 37）**：`MagPushArround`，需要 `VisibleActors`
             // 回填（`MakeVisible`）。两支 oracle 函数体逐字相同，装置同形。
             // **B16 Arm A（非零值魔表对照臂）**：五字段取 `sql/mir2_data.sql` 的**生效行**
