@@ -286,6 +286,10 @@ public static class Program
             if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            // **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 取**前格**实体 ⇒ 装置用 `EnableMaps`
+            // 设 `caster.Dir`（朝点击方向 = 东）⇒ 前格 (101,100) 的 target 成为推挤目标。
+            // 判据：golden 必须 ≥1 条 `SM_BACKSTEP(9)`（退化守卫；零条即具名红）。
+            if (name == "windtebo") return BehaviorBatch(new MagicSpec { Key = "windtebo", MagicId = 35, MagicName = "WindTebo", EnableMaps = true });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
             // `BaseObject.cs:896-931`）。摆位理由（变异牙）：

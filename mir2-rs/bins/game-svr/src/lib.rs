@@ -76058,6 +76058,67 @@ SendRefMsgRange=15
         fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
     }
 
+    /// **MG-47（35 `SKILL_WINDTEBO`）**驱动：`GetPoseCreate` 取**前格** target ⇒ `CharPushed`
+    /// 逐格 `SM_BACKSTEP(9)`。**退化守卫**：golden 与 Rust 台账都必须 ≥1 条 `9`（零条 ⇒
+    /// 效果体零次执行，具名红；同款教训见 `openmir2-groupamyounsul-nondegenerate-golden`）。
+    fn windtebo_assert(stem: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, 35, 1, label, seed, base);
+        fireball_case_assert(stem, label);
+        b1_golden_drain_assert("windtebo.json", label, 2);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let g = golden_case_for(stem, label);
+        let g9: usize = g["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r["Sent"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| s["ident"] == 9)
+                    .count()
+            })
+            .sum();
+        assert!(
+            g9 >= 1,
+            "[windtebo/{label}] golden 零条 SM_BACKSTEP(9) ⇒ 本 case 未产生任何推挤帧（效果体零次执行，具名红）"
+        );
+        let r9: usize = ["caster", "target", "obs_in"]
+            .iter()
+            .map(|w| n(w, "Sent", 9))
+            .sum();
+        assert!(
+            r9 >= 1,
+            "[windtebo/{label}] Rust 零条 SM_BACKSTEP(9) ⇒ 推挤帧未出（具名红）"
+        );
+        assert_eq!(n("obs_out", "Sent", 9), 0);
+        assert_eq!(
+            n("caster", "Sent", 9),
+            1,
+            "[windtebo/{label}] level=1 ⇒ 推 1 格"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn windtebo_parity_s1() {
+        windtebo_assert("windtebo", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn windtebo_parity_s5() {
+        windtebo_assert("windtebo", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn windtebo_parity_s13() {
+        windtebo_assert("windtebo", "s13", 13, 3000);
+    }
+
     /// **`40`（`SKILL_UNAMYOUNSUL`）**：四支分支矩阵（门开+全非零 / 门关+全非零 / 门开+全零 /
     /// 门开+混合）。**边界（§26）**：断言只到 DoSpell 时刻（计时器归 1），"解毒生效"在 Run，不在本支。三态计时器输入取 golden `Fixture.status_time_arr`，术后值在驱动内按
     /// "门结果 + 术前值"独立推导并断言（与装置侧同一规则）。
