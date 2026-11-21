@@ -136,6 +136,8 @@ pub mod zone;
 pub mod region_loop;
 // **L2-4**：区 tick 看门狗（屏障活性兜底：超时 abort 整机）。
 pub mod tick_watchdog;
+// **L2-4 段 4**：`(网关线号, socket) → ZoneId` 分派表（只建表/查询；段 6 才接进 `run_inner`）。
+pub mod zone_router;
 // **P2-3b**：事件路由（纯逻辑 + 可单测；转发线程在 `sim_loop` 调用侧）。
 mod shard_router;
 pub mod shop;
@@ -203,10 +205,27 @@ enum SimToGate {
 }
 
 /// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
+///
+/// **L2-4 段 4 的会话键**：`Opened` / `Command` / `CertificationPending` 带 `line`（网关线号，
+/// = `gate_conn` 的 `service_id` = oracle 的 `GateIdx`）；`Opened` / `Command` 还带 `socket`
+/// （该槽的客户端句柄）。`(line, socket)` 是 `zone_router` 的分派键——`socket` 在不同网关线
+/// 之间会重复（见 `Command` 的文档），单用 socket 会把别的线的会话路由进本区。
+/// `Closed.index` 已是线号、`LoadDbInfo` 已带 `gate_idx`，两者**不动**。
 #[derive(Debug)]
 enum GateEvent {
     /// 新用户登记（`GM_OPEN`）。
-    Opened { index: i32, ip: String },
+    ///
+    /// `index` 是**该网关 `UserList` 的对外索引**（下标+1，`users.rs` 的 `open`），**不是** socket。
+    Opened {
+        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
+        #[allow(dead_code)]
+        line: u8,
+        index: i32,
+        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
+        #[allow(dead_code)]
+        socket: i32,
+        ip: String,
+    },
     /// 客户端命令帧（`GM_DATA` 里是 12B 命令头 + 可选 EDCode 尾）。
     ///
     /// `chr_name` = `ChannelMessageHandler.cs:170-198` 在该网关连接自己的 `UserList` 上解出的
@@ -214,6 +233,10 @@ enum GateEvent {
     /// `online` 登记表里的说话者；只按 `socket` 查会在**不同网关线 socket 号重复**时认错人。
     /// `socket` = 该槽的客户端句柄（回帧路由仍要用它）。
     Command {
+        /// 网关线号（`gate_conn` 的 `service_id`）。
+        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
+        #[allow(dead_code)]
+        line: u8,
         index: i32,
         chr_name: String,
         socket: i32,
@@ -221,7 +244,15 @@ enum GateEvent {
         tail: Option<String>,
     },
     /// 没通过认证的会话收到的帧：oracle 在这一支走 `DoClientCertification` 的空转（`Account` 为空才真认证）。
-    CertificationPending { index: i32, ip: String },
+    ///
+    /// **不改 `zone_router` 的表**（认证前丢帧分支，不是会话结束）。
+    CertificationPending {
+        // L2-4 段 6 接线：本段只写入不读取；接线后删除本 allow
+        #[allow(dead_code)]
+        line: u8,
+        index: i32,
+        ip: String,
+    },
     /// `GM_CLOSE`。
     ///
     /// `chr_name` = 关断时该槽已认证的角色名（未认证则为空）；`socket` = 该槽的客户端句柄。
@@ -22449,6 +22480,18 @@ mod perf_counters {
         }
     }
 
+    // ---- L2-4 段 4：`(line,socket)→zone` 分派表（`zone_router`）----
+    /// 分派表重复键覆盖次数（last-wins；键已存在 = 生命周期缺 `Closed` 的诊断信号）。
+    pub(crate) static ZONE_ROUTER_OVERWRITES: AtomicU64 = AtomicU64::new(0);
+    /// `socket <= 0`（不是活客户端句柄）被拒绝分配的次数。
+    pub(crate) static ZONE_ROUTER_REJECTED_SOCKET: AtomicU64 = AtomicU64::new(0);
+
+    /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
+    /// 否则并行测试互相踩（`perf_counters_fail_closed_and_disabled_noop` 与
+    /// `zone_router` 的计数器反例）。
+    #[cfg(test)]
+    pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     static DATA_LINES: AtomicU64 = AtomicU64::new(0);
     static WRITER: Mutex<Option<std::fs::File>> = Mutex::new(None);
     static PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
@@ -22509,7 +22552,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -22555,6 +22598,8 @@ mod perf_counters {
             DRAINED_CLOSE.swap(0, Ordering::Relaxed),
             DRAINED_CONTROL.swap(0, Ordering::Relaxed),
             SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
+            ZONE_ROUTER_OVERWRITES.swap(0, Ordering::Relaxed),
+            ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -22610,6 +22655,8 @@ mod perf_counters {
             &DRAINED_CLOSE,
             &DRAINED_CONTROL,
             &SINGLE_EVENT_MAX_US,
+            &ZONE_ROUTER_OVERWRITES,
+            &ZONE_ROUTER_REJECTED_SOCKET,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -30421,7 +30468,7 @@ fn sim_loop(
             // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
             let _event_timer = perf_counters::EventTimer::start();
             match ev {
-                GateEvent::Opened { index, ip } => {
+                GateEvent::Opened { index, ip, .. } => {
                     if world_start.is_aborted() {
                         glog!(
                             "ERR",
@@ -30440,6 +30487,7 @@ fn sim_loop(
                     socket,
                     cmd,
                     tail,
+                    ..
                 } => {
                     if world_start.is_aborted() {
                         glog!(
@@ -31409,7 +31457,7 @@ fn sim_loop(
                         &mut item_number_ex,
                     );
                 }
-                GateEvent::CertificationPending { index, ip } => {
+                GateEvent::CertificationPending { index, ip, .. } => {
                     if world_start.is_aborted() {
                         glog!(
                             "ERR",
@@ -35096,7 +35144,16 @@ async fn dispatch(
                 users.online(),
                 users.slots()
             );
-            emit_gate_event(ev_tx, ev_ctl_tx, GateEvent::Opened { index, ip });
+            emit_gate_event(
+                ev_tx,
+                ev_ctl_tx,
+                GateEvent::Opened {
+                    line: service_id,
+                    index,
+                    socket: msg.socket,
+                    ip,
+                },
+            );
         }
         grobal2::GM_CLOSE => {
             // `:160-162`：**按 socket** 关。角色名要先读（`close_by_socket` 会把槽置空）。
@@ -35242,7 +35299,11 @@ async fn dispatch(
                         emit_gate_event(
                             ev_tx,
                             ev_ctl_tx,
-                            GateEvent::CertificationPending { index, ip },
+                            GateEvent::CertificationPending {
+                                line: service_id,
+                                index,
+                                ip,
+                            },
                         );
                     }
                 }
@@ -35265,6 +35326,7 @@ async fn dispatch(
                 ev_tx,
                 ev_ctl_tx,
                 GateEvent::Command {
+                    line: service_id,
                     index,
                     chr_name,
                     socket: msg.socket,
@@ -56038,8 +56100,10 @@ break
     /// （`sim_loop` 把它转成 rc≠0）；写一条后 Ok。默认关闭时 `bump` 必须是纯 no-op。
     #[test]
     fn perf_counters_fail_closed_and_disabled_noop() {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 与 `zone_router` 的计数器用例共用一把锁：两边都开关全局 `ENABLED`。
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::Ordering;
 
         let dir = std::env::temp_dir();
@@ -114969,7 +115033,9 @@ mod tick_starvation {
 
     fn opened(index: i32) -> GateEvent {
         GateEvent::Opened {
+            line: 1,
             index,
+            socket: index + 1,
             ip: "127.0.0.1".to_string(),
         }
     }
@@ -115254,6 +115320,7 @@ mod tick_starvation {
     /// 一条命令事件（普通通道）。
     fn command_event(index: i32) -> GateEvent {
         GateEvent::Command {
+            line: 0,
             index,
             chr_name: String::new(),
             socket: index,
@@ -115313,10 +115380,13 @@ mod tick_starvation {
         }
         for ev in [
             GateEvent::Opened {
+                line: 0,
                 index: 1,
+                socket: 1,
                 ip: "1.2.3.4".to_string(),
             },
             GateEvent::CertificationPending {
+                line: 0,
                 index: 2,
                 ip: "1.2.3.4".to_string(),
             },

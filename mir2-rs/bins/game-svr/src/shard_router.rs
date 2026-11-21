@@ -19,6 +19,11 @@
 //! 永远落在片 0**；跨片进图仍由既有 guard fail-closed。handoff（P2-5）需要先给事件加
 //! 全局会话键（网关线号 + 会话号）再改这里。
 //!
+//! **L2-4 段 4 注**：`Opened` / `Command` / `CertificationPending` 现在已带 `line`（`Opened`
+//! 还带 `socket`），全局会话键已具备；但本模块的路由口径**本段不变**（仍片 0）——把
+//! `(line, socket)` 接进片路由是 P2-5 handoff 的活。L2-4 的 demux 是**区**级
+//! （`zone_router`），两套键不要混用。
+//!
 //! # N=1
 //!
 //! `MIR2_SHARDS=1` 时 `sim_loop` 传 `None` 目录、不建路由线程——本模块的函数全部不执行，
@@ -133,6 +138,7 @@ mod tests {
 
     fn cmd(chr: &str) -> GateEvent {
         GateEvent::Command {
+            line: 0,
             index: 0,
             chr_name: chr.to_string(),
             socket: 1,
@@ -212,11 +218,14 @@ mod tests {
     fn pre_login_events_go_to_host() {
         let dir = ShardDirectory::new();
         let opened = GateEvent::Opened {
+            line: 1,
             index: 7,
+            socket: 7,
             ip: "127.0.0.1".to_string(),
         };
         assert_eq!(route_target(&opened, &dir), RouteTarget::One(HOST_SHARD));
         let pending = GateEvent::CertificationPending {
+            line: 1,
             index: 7,
             ip: "127.0.0.1".to_string(),
         };
