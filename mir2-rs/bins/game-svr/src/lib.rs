@@ -70364,8 +70364,8 @@ SendRefMsgRange=15
             .filter(|id| *id != preslave_id)
             .collect();
         let new_slaves: Vec<serde_json::Value> = slave_ids
-            .into_iter()
-            .filter_map(|id| rig.world.entities.get(id))
+            .iter()
+            .filter_map(|id| rig.world.entities.get(*id))
             .map(|e| {
                 serde_json::json!({
                     "name": e.entity().name,
@@ -70390,6 +70390,16 @@ SendRefMsgRange=15
                 "Sent": fireball_sent_with_due(&all_frames, socket),
             }));
         }
+
+        let obs_in = fireball_actor(&rig, "obs_in");
+        let obs_out = fireball_actor(&rig, "obs_out");
+        assert_summon_id_contract(
+            label,
+            &[caster, target, obs_in, obs_out, preslave_id],
+            &slave_ids,
+            new_slaves.len(),
+            &receivers,
+        );
 
         let skel = serde_json::json!({
             "stub_wabil_hp": 17,
@@ -70566,8 +70576,8 @@ SendRefMsgRange=15
             .filter(|id| *id != preslave_id)
             .collect();
         let new_slaves: Vec<serde_json::Value> = slave_ids
-            .into_iter()
-            .filter_map(|id| rig.world.entities.get(id))
+            .iter()
+            .filter_map(|id| rig.world.entities.get(*id))
             .map(|e| {
                 serde_json::json!({
                     "name": e.entity().name,
@@ -70592,6 +70602,16 @@ SendRefMsgRange=15
                 "Sent": fireball_sent_with_due(&all_frames, socket),
             }));
         }
+
+        let obs_in = fireball_actor(&rig, "obs_in");
+        let obs_out = fireball_actor(&rig, "obs_out");
+        assert_summon_id_contract(
+            label,
+            &[caster, target, obs_in, obs_out, preslave_id],
+            &slave_ids,
+            new_slaves.len(),
+            &receivers,
+        );
 
         let angel = serde_json::json!({
             "stub_wabil_hp": 17,
@@ -70780,8 +70800,8 @@ SendRefMsgRange=15
             .filter(|id| *id != preslave_id)
             .collect::<Vec<i32>>();
         let new_slaves: Vec<serde_json::Value> = slave_ids
-            .into_iter()
-            .filter_map(|id| rig.world.entities.get(id))
+            .iter()
+            .filter_map(|id| rig.world.entities.get(*id))
             .map(|e| {
                 serde_json::json!({
                     "name": e.entity().name,
@@ -70806,6 +70826,16 @@ SendRefMsgRange=15
                 "Sent": sinsu_sent(&all_frames, socket),
             }));
         }
+
+        let obs_in = fireball_actor(&rig, "obs_in");
+        let obs_out = fireball_actor(&rig, "obs_out");
+        assert_summon_id_contract(
+            label,
+            &[caster, target, obs_in, obs_out, preslave_id],
+            &slave_ids,
+            new_slaves.len(),
+            &receivers,
+        );
 
         let sinsu = serde_json::json!({
             "stub_wabil_hp": 17,
@@ -71808,6 +71838,51 @@ SendRefMsgRange=15
             .iter()
             .find(|e| e.chr_name == who)
             .map_or_else(|| panic!("在线登记表缺 {who}"), |e| e.actor_id)
+    }
+
+    /// **B20**（口径见 `docs/issues/summon-actor-id-surface.md`）：召唤/克隆这类**产品运行期分配**的 actor id 只断言关系，**永不跨侧比绝对值**；
+    /// 只有装置 `id_base` 分配的 caster/target/obs/pre-slave id 允许进比较面（且必须稳定）。
+    ///
+    /// 护栏：任何 `Sent` 帧的 `recog` 若落在召唤 id 集合内 ⇒ **具名红**（把未来的随机 flake
+    /// 变成一次可读的失败）。口径见 `docs/issues/summon-actor-id-surface.md`。
+    fn assert_summon_id_contract(
+        label: &str,
+        stable_ids: &[i32],
+        summon_ids: &[i32],
+        new_slaves_len: usize,
+        receivers: &[serde_json::Value],
+    ) {
+        assert_eq!(
+            summon_ids.len(),
+            new_slaves_len,
+            "[{label}] 召唤 id 条数 {} 与 new_slaves 条数 {} 不一致：ids={summon_ids:?}",
+            summon_ids.len(),
+            new_slaves_len
+        );
+        for (i, id) in summon_ids.iter().enumerate() {
+            assert!(
+                !stable_ids.contains(id),
+                "[{label}] 产品分配的召唤 id {id} 与装置稳定 id 冲突（stable={stable_ids:?}）"
+            );
+            for other in summon_ids.iter().skip(i + 1) {
+                assert_ne!(id, other, "[{label}] 召唤 id 互异失败：{summon_ids:?}");
+            }
+        }
+        for r in receivers {
+            let who = r["Who"].as_str().unwrap_or("?");
+            let Some(sent) = r["Sent"].as_array() else {
+                continue;
+            };
+            for (k, f) in sent.iter().enumerate() {
+                let recog = f["recog"].as_i64().unwrap_or(i64::MIN);
+                if let Ok(rec) = i32::try_from(recog) {
+                    assert!(
+                        !summon_ids.contains(&rec),
+                        "[{label}/{who}] Sent[{k}] 的 recog={recog} 落在产品运行期分配的召唤 id 集合 {summon_ids:?} 内：此类 id 不得进入比较面；若需回指，改用关系口径（B20；口径见 `docs/issues/summon-actor-id-surface.md`）"
+                    );
+                }
+            }
+        }
     }
 
     /// 把某 socket 的帧按 `golden.Receivers[].Sent` 的形状序列化（`ident/param/tag/series/tail`）。
