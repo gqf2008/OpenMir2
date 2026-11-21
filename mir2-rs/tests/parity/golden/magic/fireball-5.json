@@ -18,10 +18,14 @@
       "Fixture": {
         "magic_id": 5,
         "magic_name": "FireBall2",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -31,6 +35,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -79,6 +86,10 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -87,7 +98,7 @@
         ]
       },
       "Label": "miss",
-      "DrainPasses": 2,
+      "DrainPasses": 1,
       "DrainPassesHitCap": false,
       "Seed": 14,
       "SpellReturn": true,
@@ -121,9 +132,11 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "ddhkd?"
             }
           ]
@@ -157,16 +170,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "ddhkd?"
             }
           ]
@@ -200,16 +217,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "ddhkd?"
             }
           ]
@@ -232,10 +253,14 @@
       "Fixture": {
         "magic_id": 5,
         "magic_name": "FireBall2",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -245,6 +270,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -293,6 +321,10 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -339,7 +371,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1150707506,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -368,23 +400,29 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 85,
               "tag": 224,
               "series": 15,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -404,17 +442,6 @@
               "priority": 24
             },
             {
-              "ident": 8044,
-              "wParam": 0,
-              "p1": 15,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 108
-            },
-            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
@@ -424,6 +451,17 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 15,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 108
             },
             {
               "ident": 10052,
@@ -462,37 +500,47 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 53,
+              "recog": 2002,
               "param": 85,
               "tag": 0,
               "series": 224,
+              "due_ms_rel": 600,
               "tail": ""
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 85,
               "tag": 224,
               "series": 15,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -548,30 +596,38 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 31,
+              "recog": 2002,
               "param": 85,
               "tag": 224,
               "series": 15,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
               "ident": 656,
+              "recog": 2001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -601,10 +657,14 @@
       "Fixture": {
         "magic_id": 5,
         "magic_name": "FireBall2",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 2565,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -614,6 +674,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -662,6 +725,10 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -708,7 +775,7 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1150708818,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -737,23 +804,29 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 31,
+              "recog": 3002,
               "param": 91,
               "tag": 224,
               "series": 9,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -773,17 +846,6 @@
               "priority": 24
             },
             {
-              "ident": 8044,
-              "wParam": 0,
-              "p1": 9,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 108
-            },
-            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
@@ -793,6 +855,17 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 9,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 108
             },
             {
               "ident": 10052,
@@ -831,37 +904,47 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 53,
+              "recog": 3002,
               "param": 91,
               "tag": 0,
               "series": 224,
+              "due_ms_rel": 600,
               "tail": ""
             },
             {
               "ident": 31,
+              "recog": 3002,
               "param": 91,
               "tag": 224,
               "series": 9,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -917,30 +1000,38 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "5"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 31,
+              "recog": 3002,
               "param": 91,
               "tag": 224,
               "series": 9,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
               "ident": 656,
+              "recog": 3001,
               "param": 47,
               "tag": 0,
               "series": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]

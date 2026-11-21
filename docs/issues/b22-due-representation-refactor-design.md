@@ -144,6 +144,7 @@
 **§8.5 待验收确认的残余风险**：实验只证了 **due 值**与 Rust 精确一致；`StepDrainMs=100` 把排水改成**时间忠实步进**，会改帧的**处理顺序**（可能像 B17 一样影响 recog/param 序）。32 支既有 step-drain 已绿，precedent 判"大概率无新红"，但**必须**用 `MAGIC_PLANE_ONLY=<stem>` 逐支跑**全比较器**（不只 due）确认无新 red 再重出落盘——这正是实现后 §4 验收第一关。
 
 ## 9. 配置遗漏普查（2026-11-22，opc-19 要求的全系统性检查）
+**主导句：判别器是「当前 `due` 是否错」，不是「有无延迟帧」。** 有延迟帧 + 无 `StepDrainMs` ≠ 要修；只有「当前 `due` 与 Rust 不符」才是修复集。
 
 判据（opc-19 给）：golden 有延迟帧（`Rm.late=true`）却无 `StepDrainMs` 的 stem。跑全 58 支 regen 件：
 
@@ -174,3 +175,24 @@
 - **due 错的 = 仅这 6 支**（fireball-5/firecharm/grouplightening/lightning-11/lightning-45/showhp），**无第 7/第 8**。普查过。
 - **另 10 支"有延迟帧无 StepDrainMs 但 due 已对"——绝不可盲加 `StepDrainMs`**：它们 one-shot 下 due 已与 Rust 一致（49 支落盘时全比较器绿），改 stepping 会动处理顺序、有 B17 顺序回归风险。**保持 one-shot。**
 - ⇒ **naive 判据（16）≠ 修复集（6）**。判别器是"当前 due 是否错"，不是"有无延迟帧"。这一条比"仅 6 支"更值钱：防止把 10 支对的改成 stepping 而引入新红。
+
+## 10. StepDrainMs 实现的两条口径（2026-11-22 实现时定）
+
+### 10.1 DrainPasses 计数约定差（pin 只动 4 处的原因）
+one-shot 排水把**最后一趟"空确认趟"也计入** `DrainPasses`，step-drain 不计 ⇒ 同一 case 两者相差 1。实测切 stepping 后**只有 `miss` 档 2→1**（`edge`/`hit` 不变；`grouplightening` 的 s1/s5/s13 全 4→4 无变）。故：
+- pin 改动**仅 4 处**：`lightning-11`/`lightning-45`/`firecharm`/`showhp` 的 miss 钉值 2→1（showhp 为 `if pass{3}else{2→1}`）；
+- `fireball-5`（driver 用 `fireball_case_assert`，**不钉** DrainPasses）、`grouplightening`（全 4 不变）**无 pin 改动**。
+- `DrainPassesHitCap` 全程 false ⇒ 不是被 cap 截断才变少；逐支帧序列 `frames_identical=True`（无少帧/多帧/重排）。
+
+### 10.2 非 100 整数倍延迟也落对——**因为两侧都按 100ms 步进量化**，不是因为"elapsed 累计"
+`due = stepMs = 该帧所属步的 cumulative elapsed`。C# 走 `StepDrainMs=100`、**Rust driver 也按 100ms 步进泵**（lib.rs 交付回路注释）⇒ 两栈把延迟**量化到同一 100ms 步**、落在同一 step，`due` 自然相等。
+- `firecharm` 延迟 1200（=12×100）⇒ due=1200，精确；
+- 即使出现**非 100 整数倍**延迟（如 1250），两栈都会落到**下一个 100 步（1300）**、仍**相等**（不是"1250 精确"，是"两侧同取 1300"）。
+- ⇒ 结论是"**两侧同步进量化**保证跨栈一致"，**不是**"step-drain 能表达任意精度"。若将来某侧步长改成非 100，或某帧 due 需比 100ms 更细，此口径失效——届时要两边同步改步长。
+
+### 10.3 `fireball`（RunFireball）三缺清单（唯一 bespoke，将来改它先看这份）
+`RunFireball` 排水路径缺三样、须分开补（两笔、各自证）：
+1. **`castTick`**：`RunMagicCase` 在 `DoSpell` 前取 `HUtil32.GetTickCount()` 作 due 基准；`RunFireball` **没取**。
+2. **`CurrentDueMs` 设置点**：`RunMagicCase` 排水循环每条消息前 set `CurrentDueMs=LateDelivery?DeliveryTime−castTick:…`；`RunFireball` 排水 `OperatePublic` 前**完全不设** ⇒ 全 0。
+3. **`StepDrainMs`/步进语义**：`RunFireball` 是 `Advance(700)+一次性排空`，非按 100ms 步进 ⇒ "后续 emit 的子帧"仍需 step-drain 语义。
+- **补序**：先补 1+2（使窗口内同步 emit 的帧从 0 变对），最小验证；再补 3（step-drain 语义，使后续 emit 的子帧对），各自提交、各自证，不一次改完。
