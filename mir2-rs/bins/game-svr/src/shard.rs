@@ -39,6 +39,15 @@ pub const DEFAULT_SHARD_COUNT: u8 = 1;
 /// （`MIR2_SHARDS=100` 之类），不是容量承诺。
 pub const MAX_SHARD_COUNT: u8 = 16;
 
+/// **P2-3b**：每片 `ActorId` 段的跨度（`base = shard * ACTOR_ID_SEGMENT`）。
+///
+/// 4,194,304 = 2^22；16 片的最大 base ≈ 6.3e7，加段内 id 仍远小于 `i32::MAX`。
+///
+/// **已知限制**：个别帧的尾字段按 `(ushort)ActorId` 截断（如 `SM_MOUNTRIDE` 的
+/// `actor_id & 0xFFFF`，oracle 同形）⇒ 非 0 片的 id 高 16 位在这些字段上丢失。本批非 0 片
+/// 无玩家（登录永落片 0），该路径不会被触发；handoff（P2-5）落地时必须重新评估段宽或改帧。
+pub const ACTOR_ID_SEGMENT: i32 = 1 << 22;
+
 /// 宿主当前服务的片号（P2-1/P2-2 阶段只有片 0 承载流量；会话路由在 P2-3）。
 pub const HOST_SHARD: ShardId = ShardId::new(0);
 
@@ -1512,6 +1521,27 @@ mod tests {
         assert!(lines[1].1.contains("per_shard=[1,2]"), "{:?}", lines[1]);
         assert_eq!(lines[2].0, "WRN");
         assert!(lines[2].1.contains("shard 1"), "{:?}", lines[2]);
+    }
+
+    /// **P2-3b 牙**：每片 id 段都在 `i32` 内、升序不重叠（改大 `ACTOR_ID_SEGMENT` 或片数上界 ⇒ 红）。
+    #[test]
+    fn actor_id_segments_fit_i32_and_do_not_overlap() {
+        let mut previous_end: Option<i32> = None;
+        for shard in 0..MAX_SHARD_COUNT {
+            let base = i32::from(shard) * ACTOR_ID_SEGMENT;
+            let end = base.saturating_add(ACTOR_ID_SEGMENT - 1);
+            assert!(
+                base >= 0 && end < i32::MAX,
+                "shard {shard} 段越界：{base}..={end}"
+            );
+            if let Some(prev) = previous_end {
+                assert!(
+                    base > prev,
+                    "段必须升序且不重叠（上一段止于 {prev}，本段起于 {base}）"
+                );
+            }
+            previous_end = Some(end);
+        }
     }
 
     // ---------- P2-3b：本地片参数化 ----------

@@ -28852,6 +28852,12 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **P2-3b**：N>1 时 `ActorId` 按片分段（全进程唯一）。N=1 不调用 ⇒ 首个 id 仍为 1。
+    // 位置：`production_world` 之后、任何装载/建实体之前（`set_id_base` 会断言尚未分配）。
+    if shard_count > 1 {
+        let base = i32::from(local_shard.get()) * shard::ACTOR_ID_SEGMENT;
+        world.set_id_base(base);
+    }
     // 容量线探针（默认关闭；设计 docs/issues/online-probe-design-20261121.md）。
     // fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0，不静默跑一个"没探针"的进程。
     if let Err(e) = perf_counters::init_from_env() {
