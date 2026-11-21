@@ -139,3 +139,34 @@
 - `docs/issues/openmir2-golden-generator-drift.md`（生成器世代漂移，另一类"看不见"）
 - `docs/issues/groupamyounsul-nondegenerate-golden.md`（退化守卫：效果体零次执行的具名红）
 - 卡 `openmir2-golden-harness-mapmgr`（`OfflineMapSystem`/`MapMgr` 的建立与边界）
+
+### B21（2026-11-21，uenhancer 夹具意图未物化 — 结论已由只读复核订正）
+
+**事实（订正版）**：`RunMagicCase` 只写 `caster.WAbil.SC/MC`，从不写 `Abil.SC/MC`。SKILL_UENHANCER(36)
+在 DoSpell 内对施法者自己调 `AttPowerUp`（`src/M2Server/Magic/MagicManager.cs:625` → `PlayObject.AttPowerUp` →
+`RecalcAbilitys()`），把 `WAbil` 从 `Abil`（Warrior 等级派生 SC=0）重新物化。**覆盖发生在
+`nTime = GetAttackPower(… Lo(WAbil.SC)*10 …)` 之后** ⇒ **施法数值用的是 15（意图）**；
+真正分叉的是**事后态**（C# `WAbil.SC=0` / Rust 驱动不重算 ⇒ 15）。`9c9782a30` 切到记录实际值
+只是把它暴露出来。
+
+**受影响 stem**：仅 `uenhancer`(36)（`AttPowerUp` 的唯一调用点）；`CasterMc` 无消费路径被覆盖。
+
+**裁定（opc-19 2026-11-21）：选项 A**——`CasterSc/CasterMc` **同时写 `Abil.SC/MC`**，且
+**必须在可选 `RecalcLevelAbilitys()` 之后**（否则被打回等级派生值）；只重生成 `uenhancer.json`
+并证"除 `caster_sc_after` 外帧/伤害/`nTime` 不变"。
+
+**可执行的 fail-closed 装置契约（新 stem 自检，照抄即可）**：
+```text
+对每个带 CasterLoginOrderAbil 的 stem：
+  1) 记录 spec 意图值 (CasterSc, CasterMc)；
+  2) 跑 RunMagicCase 后读 caster.WAbil.SC/MC；
+  3) 若本 stem 的 magic 路径在 DoSpell 内对施法者触发过 RecalcAbilitys
+     （当前唯一来源：AttPowerUp；新增来源必须在此登记）：
+        断言 WAbil.SC/MC == 意图值，否则 throw FixtureContractViolation（rc=2，不落 golden）；
+  4) 无条件断言 Abil.SC/MC == 意图值（选项 A 的物化前提）。
+```
+实现落点：`MagicGolden/Program.cs` 的 `RunMagicCase`（写点顺序在 `RecalcLevelAbilitys()` 之后）
++ `FixtureContract` 断言；牙：把 `Abil` 写点删掉 ⇒ uenhancer 重生成时契约 rc=2。
+
+**为什么写成可执行检查**：未来任何 stem 只要"先重算再读 SC/MC"就会同样中招；缺口会在很久以后
+以别的形状冒出来，提醒挡不住，断言可以。
