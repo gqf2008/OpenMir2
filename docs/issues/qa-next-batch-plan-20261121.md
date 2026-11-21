@@ -17,7 +17,7 @@
 
 | # | 条目 | 魔号 / 名称 | 类 | oracle 依据（file:line）与抽数/帧面 | B 类缺什么 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | MG-13 | 6 `SKILL_AMYOUNSUL`（单目标施毒） | **B** | `src/M2Server/Magic/MagicManager.cs:225-259`：`CheckAmulet(1,2)` → `Random(AntiPoison+7)`（`:235`）→ 按 `stdItem.Shape` 1/2 发 `RM_POISON` 自延迟（`:239/:243`，功率除 `Config.AmyOunsulPoint`）；`boTrain` 在 `:249-251` | **护身符 Shape 旋钮**（现夹具只有 `ArmRingAmulet` 布尔=固定 Shape 5，过不了 `CheckAmulet(1,2)`）+ **目标 `AntiPoison` 旋钮** + `AmyOunsulPoint` 配置（`MagicGolden` 只 `ExpConf.LoadConfig()`，未载 `ServerConf`，默认 0 会除零） |
+| 1 | MG-13 | 6 `SKILL_AMYOUNSUL`（单目标施毒） | **B** | `src/M2Server/Magic/MagicManager.cs:225-259`：`CheckAmulet(1,2)` → `Random(AntiPoison+7)`（`:235`）→ 按 `stdItem.Shape` 1/2 发 `RM_POISON` 自延迟（`:239/:243`，功率除 `Config.AmyOunsulPoint`）；`boTrain` 在 `:249-251` | **护身符 Shape 旋钮**（现夹具只有 `ArmRingAmulet` 布尔=固定 Shape 5，过不了 `CheckAmulet(1,2)`）+ **目标 `AntiPoison` 旋钮** + `AmyOunsulPoint` 配置（`MagicGolden` 只 `ExpConf.LoadConfig()`；未显式装载 ⇒ 吃 ctor 缺省 **10**（除数非 0、分支可达）；但部署 **15** ⇒ 功率数值错，须装载并断言 `==15`——前提更正见 `docs/issues/magic-serverconf-batch-plan.md` §0） |
 | 2 | MG-14 | `Shape=1@DoSpell` | **B** | 同上 case 的 `case 1:` 臂（`:239-241`，绿毒 `DECHEALTH`） | 同 MG-13（同一 case 的两个 shape 臂） |
 | 3 | MG-15 | `Shape=2@DoSpell` | **B** | 同上 case 的 `case 2:` 臂（`:243-245`，红毒 `DAMAGEARMOR`） | 同 MG-13 |
 | 4 | MG-16 | 8 `SKILL_FIREWIND`（抗拒火环） | **B** | `src/M2Server/Magic/MagicManager.cs:259-264`：`MagPushArround(level)`；helper `:24-52` 抽 `Random(20)`（`:37`）+ `Random(2)`（`:41`）；帧面 = 逐格 `SM_BACKSTEP` + 共享尾 638 | **视野回填**（`MagPushArround` 遍历 `VisibleActors`，探针手工建对象 ⇒ 表空）+ **可走格**（`CharPushed` 要 `CanWalk`）——即计划 §二 的 MG-57 装置前提 |
@@ -26,9 +26,9 @@
 | 7 | MG-35 | 21 `SKILL_SPACEMOVE`（瞬息移动） | **B** | `src/M2Server/Magic/MagicManager.cs:403-409`：case **自**发 `RM_MAGICFIRE` 并置 `boSpellFire=false`；`MagSaceMove`（`:876-891`）抽 `Random(11)`（`:879`） → `MapRandomMove(HomeMap,1)` 移动施法者 + `RM_SPACEMOVE_FIRE2` | **施法后坐标观测**（golden 只记夹具输入 `caster_xy`，不记落点）+ MapMgr/HomeMap（`EnableMaps`/`OfflineMapSystem` 已在，需按此支启用） |
 | 8 | MG-36 | 22 `SKILL_EARTHFIRE`（火墙） | **B** | `src/M2Server/Magic/MagicManager.cs:412-417`：`MagMakeFireCross(attackPower, time, x, y)`（helper `:1064-1098`，抽伤+`GetRPow`）；效果 = 地面火墙事件，跨 tick 伤害 | **定时地面事件观测**（火墙 MapEvent 的逐 tick 伤害/命中面，现有装置只跑施法+短窗口排水） |
 | 9 | MG-42 | 41 `SKILL_ANGEL`（精灵召唤） | **C** | `src/M2Server/Magic/MagicManager.cs:462-472`：`CheckAmulet(2,1)` + `MagMakeAngelSlave` | **数据缺口**：angel 怪物行缺失（卡 `openmir2-angel-summon-monster-missing`）；640 尾已由单测 `spell_cmd_angel_training_tail_is_self_delayed` 覆盖，但召唤效果本身无 golden |
-| 10 | MG-44 | 32 `SKILL_KILLUNDEAD`（圣言术） | **B** | `src/M2Server/Magic/MagicManager.cs:480-487`：`IsProperTarget` + `MagTurnUndead`（`:827-856`，抽 `Random(2)`（`:842`）/`Random(100)`（`:847`）；门读 `Config.MagTurnUndeadLevel`（`:844`）） | **`ServerConf` 配置装载**（harness 只载 `ExpConf` ⇒ `MagTurnUndeadLevel` 默认 0 ⇒ 即死支恒不达）+ 目标 `LifeAttrib=LA_UNDEAD`（`MonsterSpec.LifeAttrib` 已有）+ 目标 HP=0 观测（golden 已有 `HpBefore/HpAfter`） |
+| 10 | MG-44 | 32 `SKILL_KILLUNDEAD`（圣言术） | **B** | `src/M2Server/Magic/MagicManager.cs:480-487`：`IsProperTarget` + `MagTurnUndead`（`:827-856`，抽 `Random(2)`（`:842`）/`Random(100)`（`:847`）；门读 `Config.MagTurnUndeadLevel`（`:844`）） | **`ServerConf` 配置装载**（harness 只载 `ExpConf` ⇒ 吃 ctor 缺省 **50** ⇒ 即死支**可达但阈值错**；部署 **44** ⇒ 目标 Level 45–49 两侧行为相反；须装载并断言 `==44`——前提更正见 `docs/issues/magic-serverconf-batch-plan.md` §0）+ 目标 `LifeAttrib=LA_UNDEAD`（`MonsterSpec.LifeAttrib` 已有）+ 目标 HP=0 观测（golden 已有 `HpBefore/HpAfter`） |
 | 11 | MG-47 | 35 `SKILL_WINDTEBO`（灭天火/狂风） | **B+** | `src/M2Server/Magic/MagicManager.cs:524-529`：`MagWindTebo`（`:858-874`，`Random(20)` + 邻格门 + 等级门 + `CharPushed`）；**Rust 侧 0 引用 ⇒ 未实现**（`missing`，T-285 登记） | **先补实现**（推挤+骰），再复用 8/37 的视野/可走地图装置 |
-| 12 | MG-48 | 50 `SKILL_MABE`（地狱火/魔爆？） | **B** | `src/M2Server/Magic/MagicManager.cs:530-536`：`MabMabe`（`:1230-1267`，抽 `Random(10)`（`:1237`）/`Random(2)`（`:1240`）/`Random(MabMabeHitRandRate)`（`:1243`）/`Random(MabMabeHitSucessRate)`（`:1245`）；发 `RM_DELAYMAGIC`+`RM_POISON(STONE)`） | **`ServerConf` 装载**（`MabMabeHit*` 默认 0 ⇒ 成功支恒不达）+ 目标须为玩家（`Race==Play` 才发 STONE）+ 状态观测（现装置无目标 `StatusTimeArr` 落盘） |
+| 12 | MG-48 | 50 `SKILL_MABE`（地狱火/魔爆？） | **B** | `src/M2Server/Magic/MagicManager.cs:530-536`：`MabMabe`（`:1230-1267`，抽 `Random(10)`（`:1237`）/`Random(2)`（`:1240`）/`Random(MabMabeHitRandRate)`（`:1243`）/`Random(MabMabeHitSucessRate)`（`:1245`）；发 `RM_DELAYMAGIC`+`RM_POISON(STONE)`） | **`ServerConf` 装载**（`MabMabeHit*` 缺省 **100/10/21/20 = 部署值** ⇒ 今天可达且同值；但吃 ctor 缺省是脆弱口径，须装载并断言字面值——前提更正见 `docs/issues/magic-serverconf-batch-plan.md` §0）+ 目标须为玩家（`Race==Play` 才发 STONE）+ 状态观测（现装置无目标 `StatusTimeArr` 落盘） |
 | 13 | MG-50 | 48 `SKILL_GROUPAMYOUNSUL`（群体施毒） | **B** | `src/M2Server/Magic/MagicManager.cs:543-548` → `MagGroupAmyounsul`（`:893+`）；现行 golden **退化**（`rng_total_draws=0`、无 `RM_POISON`），根因=夹具护身符 Shape=5 过不了 `CheckAmulet(1,2)`（卡 `openmir2-groupamyounsul-nondegenerate-golden`） | 同 MG-13（Shape 旋钮 + AntiPoison + `AmyOunsulPoint`）+ 目标落在 `mag_level` 范围内 |
 | 14 | MG-52 | 43 `SKILL_43`（破空剑） | **A** | **case 体是空体**：`src/M2Server/Magic/MagicManager.cs:555-556` `case MagicConst.SKILL_43: break;`（零抽、零帧、零状态）；`mir2-rs/crates/world-bevy/src/magic.rs`（`no_effect_case` 注释） 把它归 `no_effect_case`。注意其可达路径是 ClientSpellXY **显式 case** 的开关（`PlayObject.Attack.cs:1253-1266`，`SendSocket("+CID"/"+UCID")`） | —（走 warr 式入口装置；观测面是 `+CID/+UCID` 短包，须确认 harness 记录短包；见 §3 风险） |
 | 15 | MG-55 | 46 `SKILL_46`（分身术） | **B** | `src/M2Server/Magic/MagicManager.cs:589-594`：`MagMakeClone`（`:1337+`，恒 true）；帧面 = 克隆体 `SM_TURN(10)`/`SM_FEATURECHANGED(41)` + 638/640 | **克隆体观测**（harness 需能 `new PlayCloneObject` 并记录 10/41；现有单测 `spell_tail_clone46_...` 只覆盖尾 640） |
@@ -41,18 +41,18 @@
 ## 2. 建议：下一批做哪几条
 
 **第一批 = 6 条 Amyounsul 线（MG-13/14/15/50/64/65）**，理由：
-1. **一个装置旋钮闭掉 6 条**：只需给 MagicGolden 加「护身符 `Shape` 选择」+「目标 `AntiPoison`」两个旋钮、并在装置侧补 `AmyOunsulPoint`（三个都是 harness-only，**不动产品代码**）；
+1. **一个装置旋钮闭掉 6 条**：只需给 MagicGolden 加「护身符 `Shape` 选择」+「目标 `AntiPoison`」两个旋钮、并在装置侧**装载并断言** `AmyOunsulPoint == 15`（三个都是 harness-only，**不动产品代码**）；
 2. 它同时解除一张**已存在的阻塞卡** `openmir2-groupamyounsul-nondegenerate-golden`（MG-50 的退化 golden），把该卡的 DoD 直接变成新 golden 的判据；
 3. 单目标（6）与群体（48）走**同一形态**，golden+比较器模式与 49–54 批一致，可一次成型。
 
 **并行可做（A 类快赢）**：MG-18（10）直接套 `fire` 的装置（`fire.json` 同构、只换魔号/穿透格数/`res=true`）；MG-52（43）case 体为空体，但**先确认** `+CID/+UCID` 短包在 harness（`RecordingNetChannel`/gate 缓冲）里可观测——若可观测则同批做，否则列入 B（短包观测面）。
 
-**次批**：8/37/21（视野回填 + 可走格，计划 §二 的独立批）+ 32/50（先补 `ServerConf` 装载）。这两组的共同点是"装置面扩展"，与 Amyounsul 批互不依赖，可并行派。
+**次批**：8/37/21（视野回填 + 可走格，计划 §二 的独立批）+ 32/50（先装载 `ServerConf` 并断言 `MagTurnUndeadLevel == 44`、`MabMabeHit* == 100/10/21/20`）。这两组的共同点是"装置面扩展"，与 Amyounsul 批互不依赖，可并行派。
 
 **暂不做**：41（等 angel 怪物数据）、35（先补产品实现）。
 
 ## 3. 风险与前提（给派工用）
 
 - **A 类 MG-52 的观测面**：`+CID/+UCID` 是 `SendSocket` 短包，不是 SM 帧；若 harness 不记短包，则该条实为 B（需在装置里加短包记录）。派工前先核 `RecordingNetChannel` 的缓冲是否收短包。
-- **B 类共同前提**：`MagicGolden` 目前只 `ExpConf.LoadConfig()`（`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs`（`MagicGolden` 只调 `ExpConf.LoadConfig()`））；`AmyOunsulPoint` / `MagTurnUndeadLevel` / `MabMabeHit*` 都在 `ServerConf` 里 ⇒ 相关批次要么在装置里补载 `ServerConf`，要么显式设置这几项（**不得依赖默认 0**，否则分支恒不达、golden 再次退化）。
+- **B 类共同前提**：`MagicGolden` 目前只调 `ExpConf.LoadConfig()`（`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs`）；`AmyOunsulPoint` / `MagTurnUndeadLevel` / `MabMabeHit*` 都在 `ServerConf` 里 ⇒ 相关批次须**显式装载并断言到部署值**。ctor 缺省**非 0**（`AmyOunsulPoint=10` / `MagTurnUndeadLevel=50` / `MabMabeHit*=100/10/21/20`），分支**可达**；真问题是**缺省 ≠ 部署**（`AmyOunsulPoint 10≠15`、`MagTurnUndeadLevel 50≠44`）⇒ 不许吃缺省。前提更正见 `docs/issues/magic-serverconf-batch-plan.md` §0。
 - **35 的 B+**：先补 `MagWindTebo` 实现（推挤 + 等级门 + `Random(20)`），产品面改动与 8/37 同文件同区，须与视野装置批排同序，避免写集冲突。
