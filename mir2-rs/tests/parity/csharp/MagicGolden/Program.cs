@@ -274,7 +274,9 @@ public static class Program
                     MagicDefPower = isControl ? 0 : dp,
                     MagicDefMaxPower = isControl ? 0 : dmp,
                     CasterMcNoClamp = name == "lightflower-nonzero" ? HUtil32.MakeWord(20, 30) : HUtil32.MakeWord(5, 10),
-                    StepDrainMs = name == "lightflower-nonzero" ? 100 : 0,
+                    // 三支统一时间忠实排水：600ms 交付帧与 1000ms/800ms 训练尾的 `due_ms_rel`
+                    // 必须与 Rust 步进交付同口径（否则 golden=0 / rust=600 是记录面伪影）。
+                    StepDrainMs = 100,
                 };
                 return name == "lightflower-nonzero" ? BehaviorBatch(spec) : AntiMagicBatch(spec);
             }

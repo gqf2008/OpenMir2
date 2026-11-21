@@ -103,7 +103,7 @@
         "magic_def_max_power": 2
       },
       "Label": "miss",
-      "DrainPasses": 2,
+      "DrainPasses": 1,
       "DrainPassesHitCap": false,
       "Seed": 14,
       "SpellReturn": true,
@@ -381,7 +381,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1232199365,
+              "delivery": 1232643459,
               "priority": 255
             },
             {
@@ -423,7 +423,7 @@
               "param": 79,
               "tag": 224,
               "series": 21,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
@@ -432,7 +432,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -452,17 +452,6 @@
               "priority": 24
             },
             {
-              "ident": 8044,
-              "wParam": 0,
-              "p1": 21,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 108
-            },
-            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
@@ -472,6 +461,17 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 21,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 108
             },
             {
               "ident": 10052,
@@ -532,7 +532,7 @@
               "param": 79,
               "tag": 0,
               "series": 224,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             },
             {
@@ -541,7 +541,7 @@
               "param": 79,
               "tag": 224,
               "series": 21,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
@@ -550,7 +550,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -628,7 +628,7 @@
               "param": 79,
               "tag": 224,
               "series": 21,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
             {
@@ -637,7 +637,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -790,7 +790,7 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1232200678,
+              "delivery": 1232644865,
               "priority": 255
             },
             {
@@ -832,7 +832,7 @@
               "param": 85,
               "tag": 224,
               "series": 15,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -841,7 +841,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -861,17 +861,6 @@
               "priority": 24
             },
             {
-              "ident": 8044,
-              "wParam": 0,
-              "p1": 15,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": false,
-              "delivery": 0,
-              "priority": 108
-            },
-            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
@@ -881,6 +870,17 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 15,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 108
             },
             {
               "ident": 10052,
@@ -941,7 +941,7 @@
               "param": 85,
               "tag": 0,
               "series": 224,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             },
             {
@@ -950,7 +950,7 @@
               "param": 85,
               "tag": 224,
               "series": 15,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -959,7 +959,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
@@ -1037,7 +1037,7 @@
               "param": 85,
               "tag": 224,
               "series": 15,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
             {
@@ -1046,7 +1046,7 @@
               "param": 47,
               "tag": 0,
               "series": 0,
-              "due_ms_rel": 0,
+              "due_ms_rel": 600,
               "tail": ""
             }
           ]
