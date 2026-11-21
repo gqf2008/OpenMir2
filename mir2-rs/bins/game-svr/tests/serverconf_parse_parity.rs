@@ -52,14 +52,23 @@ fn probe_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/parity/csharp/ServerConfProbe")
 }
 
-/// 构建（如需要）并返回探针 exe。
+/// 构建探针并返回 exe；**每个测试进程构建一次**（`OnceLock` 串行化）。
+///
+/// 两个 `#[test]` 会并行跑；若各自 `dotnet build` 同一工程会抢 MSBuild 文件锁（实测会有一侧
+/// 构建失败）。这里用 `OnceLock` 保证进程内只构建一次；跨进程（每次 `cargo test`）都会重新
+/// 增量构建 ⇒ 改了 `Program.cs` 不会静默拿旧探针。
 fn ensure_probe() -> PathBuf {
+    static PROBE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PROBE.get_or_init(build_probe).clone()
+}
+
+fn build_probe() -> PathBuf {
     let dir = probe_dir();
     let csproj = dir.join("ServerConfProbe.csproj");
     let exe = dir.join("bin/Release/ServerConfProbe.exe");
-    if exe.exists() {
-        return exe;
-    }
+    // **每次都调 `dotnet build`（增量）**：只要探针源变了（例如以后加键），MSBuild 会重编；
+    // 不能 `if exe.exists() { return }`——那会在改了 `Program.cs` 却没删 exe 时拿**旧探针**验旧键集，
+    // 测试照样绿（假绿）。增量构建通常 1 秒内，正确性优先。
     let out = Command::new("dotnet")
         .arg("build")
         .arg(&csproj)
