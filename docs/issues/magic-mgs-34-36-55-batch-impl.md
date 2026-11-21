@@ -317,6 +317,11 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
 
 ### 6.8 选项 A 落地记录（2026-11-21；已构建/已跑，最终 tip 见交付）
 
+> **消歧（2026-11-21）**：本节"选项 A"= **MG-55（46 分身）的产品修正**（`spawn_clone` ctor 5 抽 +
+> 46 支出生不广播 `turn_pair`）。它与 `docs/issues/golden-harness-blind-spots.md` 的
+> **B21-A（夹具物化）**（曾同名"选项 A"，指把 `caster_sc` 物化进 `Abil`，**已撤销**，理由见该卡 §牙与 hex）
+> **无关**。跨卡引用请用"卡名 + 代号"，不要用裸代号。
+
 **产品修正 1：`spawn_clone` 构造期 5 抽**（`crates/world-bevy/src/slave.rs`）
 - 新增 `consume_clone_ctor_draws(rng)`：按 C# ctor 链顺序消费
   `Random(1500)/Random(2000)/Random(3000)/Random(3000)/Random(999999)`，注释引用

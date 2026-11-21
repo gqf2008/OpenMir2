@@ -147,6 +147,10 @@
 
 ### B21（2026-11-21，`caster_sc` 是施法输入、不是事后态 — 定性二订 + 错误修法反例）
 
+> **命名注（2026-11-21）**：本节旧称"选项 A"，与 `docs/issues/magic-mgs-34-36-55-batch-impl.md` §6.8 的
+> "选项 A"（= MG-55 分身的产品修正，已落地且正确）**撞名**。自本日起改名 **B21-A（夹具物化）**，
+> 本卡其余文本已替换；旧名保留于此备查。跨卡引用请用"卡名 + 代号"，不要用裸代号。
+
 **定性（二订版）**：`RunMagicCase` 设 `caster.WAbil.SC/MC = CasterSc/CasterMc`（缺省 15）是**施法输入**——
 `SKILL_UENHANCER(36)` 的 `nTime = GetAttackPower(GetPower13(60) + Lo(WAbil.SC)*10, Hi(SC)-Lo(SC)+1)`
 （`src/M2Server/Magic/MagicManager.cs:624`）用它算。**事后态**由随后的 `AttPowerUp → RecalcAbilitys()`
@@ -161,7 +165,7 @@
 `recalc_session_ability`，`sg.state.wabil = recalc.wabil`（同文件 `recalc_session_ability`），输入是 `sg.equip.abil`；
 `level_ability_base` 每次按等级覆盖 `mc/sc`（`mir2-rs/bins/game-svr/src/ability.rs`，Warrior ⇒ 0）。
 
-**错误修法（反例，必留痕）**：在装置里把 `CasterSc/CasterMc` **物化进 `Abil.SC/MC`**（旧"选项 A"）。
+**错误修法（反例，必留痕）**：在装置里把 `CasterSc/CasterMc` **物化进 `Abil.SC/MC`**（即 **B21-A（夹具物化）**，旧称"选项 A"）。
 实测后果：oracle 事后态 SC/MC 变 15 ⇒ `RM_ABILITY` 的 `SM_ABILITY(52)` 尾
 （= `EDCode.EncodeMessage(WAbil)`，`PlayObject.Message.cs:1731-1734`）翻转——40B `WAbil` 只有两字节变：
 
@@ -174,7 +178,7 @@ diff idx [8, 10]   MC 0→15（off 8）、SC 0→15（off 10）；其余 38 字�
 Rust 侧仍 0/0 ⇒ comparator 的 `Sent[*].tail` 严格比较**必红**；按旧装置重出（`caster_sc = 0`）则改
 Rust 的 `nTime` 输入，同样必红 ⇒ **committed golden（输入 15 / 帧 0）是两侧唯一自洽组合**。
 
-**裁定（opc-19 2026-11-21 二订）：选项 A 撤销**。装置只做三件事：
+**裁定（opc-19 2026-11-21 二订）：B21-A（夹具物化，原名"选项 A"）撤销**。装置只做三件事：
 1. **记录输入**：`caster_sc`/`caster_mc`（与 `caster_sc_raw/lo/hi`）取 `DoSpell` **之前**的 `WAbil`
    （事后态可能被 `RecalcAbilitys()` 重物化，不得当输入）；
 2. **语义门**（`FixtureContract.ValidateCasterAbilitySemantics`）：`CasterLoginOrderAbil` stem 若在
@@ -186,7 +190,7 @@ Rust 的 `nTime` 输入，同样必红 ⇒ **committed golden（输入 15 / 帧 
 **牙（现行，适用于当前代码）**：把 `caster.Abil.SC = …` 物化写点加回去 ⇒ `--case uenhancer` rc=2
 （`Abil.SC/MC 在登录序派生后被改写：登录后(sc=0,mc=0) → DoSpell 后(sc=15,mc=15)…`），不落 golden。
 
-**旧牙（留档，仅属「选项 A」已撤销形态；不适用于当前代码，不可照着重放）**：选项 A 实施期间，
+**旧牙（留档，仅属「B21-A（夹具物化）」已撤销形态；不适用于当前代码，不可照着重放）**：B21-A 实施期间，
 "删掉 `Abil` 写点"会触发另一条 rc=2——
 `RED FIXTURE_CONTRACT [runmagic/uenhancer/s1] CasterSc/Mc 意图未物化到 Abil：intent(sc=15,mc=15)
 实际 Abil(sc=0,mc=0)——意图必须先写 Abil 再交给 RecalcAbilitys，否则被等级派生值覆盖（B21）`。
