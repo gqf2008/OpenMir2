@@ -189,6 +189,14 @@ public static class Program
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
+            // **推挤批（MG-16 抗拒火环 8 / MG-57 气功波 37）**：`MagPushArround`，需要 `VisibleActors`
+            // 回填（`MakeVisible`）。两支 oracle 函数体逐字相同，装置同形。
+            if (name == "firewind") return BehaviorBatch(new MagicSpec { Key = "firewind", MagicId = 8, MagicName = "FireWind", MakeVisible = true });
+            if (name == "energyrepulsor") return BehaviorBatch(new MagicSpec { Key = "energyrepulsor", MagicId = 37, MagicName = "EnergyRepulsor", MakeVisible = true });
+            // **MG-35（21 瞬息移动）**：`MapRandomMove→SpaceMove` 走 `FindMap(HomeMap)` ⇒
+            // `EnableMaps`（env.MapName/ServerIndex）+ `HomeMap="0"`。观测面是 `RM_SPACEMOVE_SHOW2(807)`
+            // 的 `param/tag`（落点），不新增任何观测字段。
+            if (name == "spacemove") return BehaviorBatch(new MagicSpec { Key = "spacemove", MagicId = 21, MagicName = "SpaceMove", EnableMaps = true, HomeMap = "0" });
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
             // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
             // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
@@ -1126,6 +1134,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public string PreSlaveName = "pre-slave";
         /// <summary>临时：为 SINSU 设 MapMgr 可用（env.MapName + ServerIndex），供 RecallSlave→SpaceMove；缺省 false ⇒ 其它 golden 零变化。</summary>
         public bool EnableMaps;
+        /// <summary>
+        /// **卡 magic-push-batch（MG-16/57）**：`MagPushArround` 遍历 `playObject.VisibleActors`
+        /// （`MagicManager.cs:27`），而离线装置不跑 AOI（`SearchViewRange`/`UpdateVisibleGay` 都不调）
+        /// ⇒ 表恒空、循环零次。置 true 时在建对象后对每只目标调 `caster.UpdateVisibleGay(...)`。
+        /// **缺省 false ⇒ 其它 stem 的收件人集合零变化。**
+        /// </summary>
+        public bool MakeVisible;
+        /// <summary>
+        /// **MG-35（21 瞬息移动）**：`PlayObject.HomeMap`（`MapRandomMove→SpaceMove→FindMap(HomeMap)`）。
+        /// 离线 ctor 不跑初始化 ⇒ 缺省 null（不设）；需要时置 "0" 并同时 `EnableMaps = true`。
+        /// </summary>
+        public string HomeMap;
         /// **非玩家对象夹具**（动物/怪物）：默认空 = 既有件零变化。每只的
         /// `(x,y,race,level,hp,life_attrib,master,target_cret)` 既进 `Fixture.monsters[]`，也决定世界里的实物。
         /// </summary>
@@ -1836,6 +1856,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         if (spec.CasterDC >= 0) caster.WAbil.DC = (ushort)spec.CasterDC;
         if (spec.CasterAttackMode >= 0) caster.AttatckMode = (OpenMir2.Enums.AttackMode)spec.CasterAttackMode;
         // 卡 36：施法者 Abil 按等级派生（只 RecalcLevelAbilitys，不碰 WAbil）。
+        if (!string.IsNullOrEmpty(spec.HomeMap)) caster.HomeMap = spec.HomeMap;
         if (spec.CasterLoginOrderAbil) caster.RecalcLevelAbilitys();
         if (spec.CasterCharStatusEx != 0) caster.CharStatusEx = spec.CasterCharStatusEx;
         if (spec.CasterHp > 0)
@@ -1993,6 +2014,20 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                     throw new FixtureContractViolation($"[{spec.Key}] MonsterSpec.TargetCret={ms.TargetCret} 超出 {monsters.Count} 只");
                 }
                 monsters[i].TargetCret = monsters[ms.TargetCret - 1];
+            }
+        }
+
+        // **卡 magic-push-batch（MG-16/57）**：`MagPushArround` 遍历 `playObject.VisibleActors`
+        // （`MagicManager.cs:27`）。离线装置不跑 AOI ⇒ 表恒空 ⇒ 循环零次。这里按 `spec.MakeVisible`
+        // 显式回填（`PlayObject.UpdateVisibleGay`：不存在则 `VisibleActors.Add(VisibleFlag.Show)`）。
+        // **只在 MakeVisible 的 spec 里做** ⇒ 其它 stem 零变化（收件人集合不变）。
+        if (spec.MakeVisible)
+        {
+            caster.UpdateVisibleGay(target);
+            caster.UpdateVisibleGay(obsIn);
+            foreach (var mo in monsters)
+            {
+                caster.UpdateVisibleGay(mo);
             }
         }
 
