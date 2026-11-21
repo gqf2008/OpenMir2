@@ -666,6 +666,11 @@ pub struct TammingOutcome {
     /// `MasterRoyaltyTick = (draw + (magicLevel<<2)*5 + 20)*60_000 + GetTickCount()`。
     /// 未受奴时为 0（不抽数）。调用方把它交给 `World::tame_adopt` / `tame_royalty_tick`。
     pub royalty_draw: i32,
+    /// `RM_MAKEHOLYSEIZEMODE` 的 **wParam**（`(magicLevel*5+10)*1000`）：只在
+    /// `target.Master == playObject` 早退支（`MagicManager.cs:712`）与 `Random(2)!=0` 支
+    /// （`:812`）置 `Some`；两支都发 **内部 RM**（`AnimalObject.cs:134-136` 的
+    /// `OpenHolySeizeMode(wParam)`，无 SM 帧）。宿主据此 `send_msg_now`。
+    pub holy_seize_wparam: Option<i32>,
 }
 
 /// 见 [`TammingInput`]/[`TammingOutcome`]（`MagicManager.cs:704-825`）。
@@ -685,51 +690,61 @@ pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOu
         if inp.target_master_is_caster {
             out.target_master_is_caster = true;
             out.result = true;
+            // `:712` self-master 早退支的 `RM_MAKEHOLYSEIZEMODE`（内部 RM，非客户端帧）。
+            out.holy_seize_wparam = Some((magic_level * 5 + 10) * 1000);
         } else {
-            if rng.random_below(2) == 0 && inp.target_level <= inp.caster_level + 2 {
-                if rng.random_below(3) == 0 {
-                    let roll = rng.random_below(inp.caster_level + 20 + magic_level * 5);
-                    if roll > inp.target_level + inp.cfg_target_level {
-                        if !inp.target_no_tame
-                            && inp.target_life_attrib != LA_UNDEAD
-                            && inp.target_level < inp.cfg_tamming_level
-                            && inp.caster_slave_count < inp.cfg_tamming_count
-                        {
-                            let mut n14 = inp.target_abil_max_hp / inp.cfg_hp_rate;
-                            if n14 <= 2 {
-                                n14 = 2;
-                            } else {
-                                n14 += n14;
-                            }
-                            // 此处 target.Master != 施法者 恒成立（已在上面 else 分支）。
-                            if rng.random_below(n14) == 0 {
-                                if inp.target_master_present {
-                                    out.target_hp /= 10;
+            if rng.random_below(2) == 0 {
+                if inp.target_level <= inp.caster_level + 2 {
+                    if rng.random_below(3) == 0 {
+                        let roll = rng.random_below(inp.caster_level + 20 + magic_level * 5);
+                        if roll > inp.target_level + inp.cfg_target_level {
+                            if !inp.target_no_tame
+                                && inp.target_life_attrib != LA_UNDEAD
+                                && inp.target_level < inp.cfg_tamming_level
+                                && inp.caster_slave_count < inp.cfg_tamming_count
+                            {
+                                let mut n14 = inp.target_abil_max_hp / inp.cfg_hp_rate;
+                                if n14 <= 2 {
+                                    n14 = 2;
+                                } else {
+                                    n14 += n14;
                                 }
-                                out.target_master_is_caster = true;
-                                out.crazy_mode = false; // BreakCrazyMode()
-                                                        // `MasterRoyaltyTick = (Random(caster.Lv * 2) + …) * 60_000 + GetTickCount()`：
-                                                        // GetTickCount 非确定，但 Random(caster.Lv * 2) 是取数账本的一部分。
-                                                        // 表面积化：把抽到的值随结果返回（调用方算到期 tick）。
-                                out.royalty_draw = rng.random_below(inp.caster_level * 2);
-                                out.walk_speed = out.walk_speed.min(1500 - magic_level * 200);
-                                out.next_hit_time = out.next_hit_time.min(2000 - magic_level * 200);
-                            } else if rng.random_below(14) == 0 {
+                                // 此处 target.Master != 施法者 恒成立（已在上面 else 分支）。
+                                if rng.random_below(n14) == 0 {
+                                    if inp.target_master_present {
+                                        out.target_hp /= 10;
+                                    }
+                                    out.target_master_is_caster = true;
+                                    out.crazy_mode = false; // BreakCrazyMode()
+                                                            // `MasterRoyaltyTick = (Random(caster.Lv * 2) + …) * 60_000 + GetTickCount()`：
+                                                            // GetTickCount 非确定，但 Random(caster.Lv * 2) 是取数账本的一部分。
+                                                            // 表面积化：把抽到的值随结果返回（调用方算到期 tick）。
+                                    out.royalty_draw = rng.random_below(inp.caster_level * 2);
+                                    out.walk_speed = out.walk_speed.min(1500 - magic_level * 200);
+                                    out.next_hit_time =
+                                        out.next_hit_time.min(2000 - magic_level * 200);
+                                } else if rng.random_below(14) == 0 {
+                                    out.target_hp = 0;
+                                }
+                            } else if inp.target_life_attrib == LA_UNDEAD
+                                && rng.random_below(20) == 0
+                            {
                                 out.target_hp = 0;
                             }
-                        } else if inp.target_life_attrib == LA_UNDEAD && rng.random_below(20) == 0 {
-                            out.target_hp = 0;
+                        } else if inp.target_life_attrib != LA_UNDEAD && rng.random_below(20) == 0 {
+                            // `OpenCrazyMode(Random(20) + 10)`：抽数位置/次数与 oracle 相同，只把值留存。
+                            out.crazy_interval = rng.random_below(20) + 10;
+                            out.crazy_mode = true;
                         }
-                    } else if inp.target_life_attrib != LA_UNDEAD && rng.random_below(20) == 0 {
-                        // `OpenCrazyMode(Random(20) + 10)`：抽数位置/次数与 oracle 相同，只把值留存。
+                    } else if inp.target_life_attrib != LA_UNDEAD {
+                        // `OpenCrazyMode(Random(20) + 10)`（`MagicManager.cs:805` 的「变红」支）。
                         out.crazy_interval = rng.random_below(20) + 10;
                         out.crazy_mode = true;
                     }
-                } else if inp.target_life_attrib != LA_UNDEAD {
-                    // `OpenCrazyMode(Random(20) + 10)`（`MagicManager.cs:805` 的「变红」支）。
-                    out.crazy_interval = rng.random_below(20) + 10;
-                    out.crazy_mode = true;
                 }
+            } else {
+                // `:812` `Random(2)!=0` 支的 `RM_MAKEHOLYSEIZEMODE`（内部 RM，非客户端帧）。
+                out.holy_seize_wparam = Some((magic_level * 5 + 10) * 1000);
             }
             out.result = true;
         }
@@ -837,5 +852,116 @@ mod tests {
         let mut f = RandomNumber::with_seed(13);
         assert_eq!(hb_fireball_push(&mut e, 1, 5, 1, true), None);
         assert_eq!(e.random(), f.random());
+    }
+
+    /// `RM_MAKEHOLYSEIZEMODE`（60005）的 **wParam 公式与两个分支**（`:712` self-master / `:812` else）。
+    /// 该 RM 是**内部消息**（`AnimalObject.cs:134-136` → `OpenHolySeizeMode`），无 SM/EDCode 字节可断言；
+    /// 这里钉的是「哪两支置 `Some` + 公式 + 其它支必须 `None`」。
+    fn tamming_test_input(magic_level: u8, master_is_caster: bool) -> TammingInput {
+        TammingInput {
+            magic_level,
+            caster_level: 30,
+            target_race: crate::entity::ACTOR_RACE_ANIMAL + 10,
+            target_level: 20,
+            target_abil_max_hp: 300,
+            target_life_attrib: 0,
+            target_no_tame: false,
+            target_master_is_caster: master_is_caster,
+            target_master_present: false,
+            target_hp: 300,
+            walk_speed: 1000,
+            next_hit_time: 1000,
+            caster_slave_count: 0,
+            cfg_target_level: 1,
+            cfg_tamming_level: 40,
+            cfg_tamming_count: 5,
+            cfg_hp_rate: 100,
+        }
+    }
+
+    #[test]
+    fn mag_tamming_holy_seize_wparam_only_on_two_branches() {
+        for lv in [1u8, 2u8] {
+            let want = (i32::from(lv) * 5 + 10) * 1000;
+            // self-master 支：`Master == caster` 且外层 `Random(4-lv)==0`。
+            let mut self_seed = None;
+            for seed in 1..20_000 {
+                let mut rng = RandomNumber::with_seed(seed);
+                let out = mag_tamming(&mut rng, &tamming_test_input(lv, true));
+                if out.holy_seize_wparam.is_some() {
+                    assert_eq!(out.holy_seize_wparam, Some(want));
+                    assert!(
+                        out.target_master_is_caster,
+                        "self-master 支必须保留 master 结果"
+                    );
+                    assert!(out.result, "self-master 支 result=true（`:714`）");
+                    self_seed = Some(seed);
+                    break;
+                }
+            }
+            assert!(self_seed.is_some(), "self-master 支应能找到 seed");
+            // else 支：`Random(2)!=0` ⇒ 发 60005（master 结果不变）。
+            let mut else_seed = None;
+            for seed in 1..20_000 {
+                let mut rng = RandomNumber::with_seed(seed);
+                let out = mag_tamming(&mut rng, &tamming_test_input(lv, false));
+                if out.holy_seize_wparam.is_some() {
+                    assert_eq!(out.holy_seize_wparam, Some(want));
+                    assert!(!out.target_master_is_caster, "else 支不得把目标变成奴隶");
+                    assert!(out.result, "else 支 result=true（`:814`）");
+                    else_seed = Some(seed);
+                    break;
+                }
+            }
+            assert!(else_seed.is_some(), "else 支应能找到 seed");
+        }
+        // 其它支必须 `None`（这里取 outer-fail 且 `Random(2)==0` ⇒ result=true 但不发 RM）。
+        let mut none_seen = false;
+        for seed in 1..20_000 {
+            let mut rng = RandomNumber::with_seed(seed);
+            let out = mag_tamming(&mut rng, &tamming_test_input(1, false));
+            if out.result && out.holy_seize_wparam.is_none() {
+                none_seen = true;
+                break;
+            }
+        }
+        assert!(
+            none_seen,
+            "必须能找到 result=true 但不发 60005 的支（证明字段不是恒 Some）"
+        );
+    }
+
+    /// **求值顺序牙**：`Random(2)==0 && level门` 拆嵌套后，level 门失败时 `Random(2)` **必须已被消费**。
+    /// 判据：同 seed 参照流只走 `Random(4-L)` 与 `Random(2)`，两边「下一次取数」必须相等；
+    /// 若将来有人把门写回短路或搬到 `Random(2)` 之前，这里红。
+    #[test]
+    fn mag_tamming_level_gate_fail_still_consumes_random2() {
+        let mut inp = tamming_test_input(1, false);
+        inp.target_level = 99; // caster_level=30 ⇒ `target.Level <= caster+2` 必假
+        for seed in 1..20_000 {
+            let mut rng = RandomNumber::with_seed(seed);
+            let out = mag_tamming(&mut rng, &inp);
+            let mut reference = RandomNumber::with_seed(seed);
+            if reference.random_below(i32::from(4 - inp.magic_level)) != 0 {
+                continue;
+            }
+            if reference.random_below(2) != 0 {
+                continue;
+            }
+            // 走到这里 ⇒ level 门失败支：result=true、不发 60005、不改 HP。
+            assert!(out.result);
+            assert!(
+                out.holy_seize_wparam.is_none(),
+                "level 门失败支不得发 60005"
+            );
+            assert_eq!(out.target_hp, inp.target_hp, "level 门失败支不得改 HP");
+            assert_eq!(
+                rng.random(),
+                reference.random(),
+                "level 门失败支必须已消费 Random(2)（拆合取不得短路 RNG）"
+            );
+            return;
+        }
+        panic!("找不到 outer 命中且 Random(2)==0 的 seed");
     }
 }

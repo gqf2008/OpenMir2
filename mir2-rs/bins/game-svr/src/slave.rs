@@ -467,14 +467,15 @@ pub fn cast_tamming_spell(
         if tamed {
             // 落尾（⑨-3）：`Master`/`MasterRoyaltyTick`/`SlaveMakeLevel`/`MasterTick`/
             // `WalkSpeed`/`NextHitTime`/`BreakHolySeizeMode`/`SlaveList.Add`（`MagicManager.cs:753-770`）。
+            // `MagicManager.cs:738` `BreakCrazyMode()` **先于** adopt 字段（`:753-775`）——
+            // 顺序决定 8090 帧序（BreakCrazy 的 RefNameColor 在前）。
+            mir2_world_bevy::monai::break_crazy_mode(world, target_id);
             world.tame_adopt(
                 input.caster_id,
                 target_id,
                 input.magic_level,
                 out.royalty_draw,
             );
-            // 受奴成功支的 `targetObject.BreakCrazyMode()`（`MagicManager.cs:738`）。
-            mir2_world_bevy::monai::break_crazy_mode(world, target_id);
         } else if out.target_hp != tin.target_hp {
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
@@ -488,6 +489,18 @@ pub fn cast_tamming_spell(
         // 非受奴支的 `targetObject.OpenCrazyMode(Random(20)+10)`（`MagicManager.cs:797/805`）。
         if crazy_mode {
             mir2_world_bevy::monai::open_crazy_mode(world, target_id, out.crazy_interval);
+        }
+        // `:712`/`:812` 的 `RM_MAKEHOLYSEIZEMODE`（**内部 RM**：`AnimalObject.cs:134-136`
+        // `OpenHolySeizeMode(wParam)`，无 SM 帧）。只投目标自己的队列。
+        if let Some(w_param) = out.holy_seize_wparam {
+            world.send_msg_now(
+                target_id,
+                mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE,
+                w_param,
+                0,
+                0,
+                0,
+            );
         }
         bo_train = out.result;
     }
@@ -781,6 +794,111 @@ mod tests {
             cfg,
             magic,
         }
+    }
+
+    /// **MG-34 / 60005 到达证据 A（self_master 支，`MagicManager.cs:712`）**：`Master == 施法者`
+    /// ⇒ 目标队列恰一条 `RM_MAKEHOLYSEIZEMODE`，`wParam=(L*5+10)*1000`，且只投目标。
+    #[test]
+    fn tamming_self_master_queues_holy_seize_rm() {
+        let magic = tamming_magic();
+        let cfg = PetSlaveConfig::default();
+        for seed in 1..500 {
+            let (mut w, caster, target) = tamming_world(seed, 50, 30, 1);
+            w.entities.get_mut(target).unwrap().slave.master = Some(caster);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let _ = cast_tamming_spell(&mut w, &input, &mut train);
+            let hits: Vec<_> = w
+                .self_delay_msgs
+                .iter()
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            assert_eq!(hits.len(), 1, "self_master 支恰一条 60005");
+            assert_eq!(hits[0].actor_id, target, "60005 只投目标自己的队列");
+            assert_eq!(hits[0].w_param, (5 + 10) * 1000, "wParam=(L*5+10)*1000");
+            return;
+        }
+        panic!("self_master 支应能找到 seed");
+    }
+
+    /// **MG-34 / 60005 到达证据 B（else 支，`MagicManager.cs:812`）**：`Random(2)!=0`
+    /// ⇒ 目标队列恰一条 60005；目标**未**受奴（与 self_master 支的语义区分）。
+    #[test]
+    fn tamming_else_branch_queues_holy_seize_rm_without_adopting() {
+        let magic = tamming_magic();
+        let cfg = PetSlaveConfig::default();
+        for seed in 1..1000 {
+            let (mut w, caster, target) = tamming_world(seed, 50, 30, 1);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            let hits: Vec<_> = w
+                .self_delay_msgs
+                .iter()
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            assert_eq!(hits.len(), 1, "else 支恰一条 60005");
+            assert_eq!(hits[0].actor_id, target, "60005 只投目标自己的队列");
+            assert_eq!(hits[0].w_param, (5 + 10) * 1000, "L=1 ⇒ (1*5+10)*1000");
+            assert!(!out.tamed, "else 支不得把目标变成奴隶");
+            return;
+        }
+        panic!("else 支应能找到 seed");
+    }
+
+    /// **MG-34 帧面接线 A**：`tame_adopt` 必须按 oracle 顺序产生
+    /// `RM_CHANGENAMECOLOR`（`BreakHolySeizeMode`）→ `RM_USERNAME`（`RefShowName`），且只投附近玩家。
+    #[test]
+    fn tame_adopt_emits_namecolor_then_username() {
+        let (mut w, caster, target) = tamming_world(1, 50, 600, 20);
+        w.tick(); // 入图（否则格扫无收件人，SendRefMsg 等于不发）
+        assert!(w.tame_adopt(caster, target, 0, 0));
+        let msgs = w.take_monster_ref_msgs();
+        let idents: Vec<u16> = msgs.iter().map(|m| m.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_world_bevy::monai::RM_CHANGENAMECOLOR,
+                mir2_world_bevy::monai::RM_USERNAME
+            ],
+            "adopt 帧序：BreakHolySeize(8090) → RefShowName(8101)"
+        );
+        assert!(msgs.iter().all(|m| m.actor_id == target));
+        assert!(
+            msgs.iter().all(|m| !m.recipients.is_empty()),
+            "两个 Ref 帧都必须有格扫收件人（否则等于不发）"
+        );
+    }
+
+    /// **MG-34 帧面接线 B**：`OpenCrazyMode` 尾 `RefNameColor()` ⇒ 一条 8090。
+    #[test]
+    fn open_crazy_mode_emits_namecolor() {
+        let (mut w, _caster, target) = tamming_world(1, 50, 600, 20);
+        mir2_world_bevy::monai::open_crazy_mode(&mut w, target, 12);
+        let msgs = w.take_monster_ref_msgs();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].ident, mir2_world_bevy::monai::RM_CHANGENAMECOLOR);
+        assert_eq!(msgs[0].actor_id, target);
+    }
+
+    /// **MG-34 帧面接线 C**：`BreakCrazyMode` 的 `RefNameColor` **只在** CrazyMode 为真时发。
+    #[test]
+    fn break_crazy_mode_emits_namecolor_only_when_crazy() {
+        let (mut w, _caster, target) = tamming_world(1, 50, 600, 20);
+        mir2_world_bevy::monai::break_crazy_mode(&mut w, target);
+        assert!(w.take_monster_ref_msgs().is_empty(), "非狂暴 ⇒ 不发 8090");
+        mir2_world_bevy::monai::open_crazy_mode(&mut w, target, 12);
+        let _ = w.take_monster_ref_msgs();
+        mir2_world_bevy::monai::break_crazy_mode(&mut w, target);
+        let msgs = w.take_monster_ref_msgs();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].ident, mir2_world_bevy::monai::RM_CHANGENAMECOLOR);
     }
 
     /// **⑨-2 第③片判据 ①（`!Animal` 门）**：动物（race 51）⇒ oracle 连 `MagTamming` 都不进

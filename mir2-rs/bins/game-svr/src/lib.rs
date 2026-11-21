@@ -25688,6 +25688,35 @@ fn drain_monster_ref_msgs(
                 );
                 smframe::sm_changenamecolor(m.actor_id, color)
             }
+            // `RefShowName()`（`BaseObject.cs:1174-1177`）⇒ 收件人侧
+            // `SM_USERNAME(42)`：`MakeMessage(..., GetChrColor(baseObject), 0, 0)` + 尾
+            // `EncodeString(GetShowName())`（`PlayObject.Message.cs:1662-1664`）。
+            // `GetShowName = FilterShowName(ChrName) [+ "(Master.ChrName)"]`（`BaseObject.Base.cs:779-787`）。
+            mir2_world_bevy::monai::RM_USERNAME => {
+                let (name, master_id) = match world.entities.get(m.actor_id) {
+                    Some(e) => (e.name.clone(), e.master),
+                    None => continue,
+                };
+                const NPC_NAME_COLOR_ORACLE_DEFAULT: u8 = 255;
+                let color = world.entities.get(m.actor_id).map_or(255, |e| {
+                    mir2_world_bevy::slave::get_chr_color(
+                        &e,
+                        &pet_cfg.slave_color,
+                        NPC_NAME_COLOR_ORACLE_DEFAULT,
+                    )
+                });
+                let mut show = downlink::filter_show_name(&name).to_string();
+                if let Some(mid) = master_id {
+                    if let Some(master) = world.entities.get(mid) {
+                        if !master.ob_mode {
+                            show.push('(');
+                            show.push_str(&master.name);
+                            show.push(')');
+                        }
+                    }
+                }
+                smframe::sm_username(m.actor_id, color, &enter::gbk(&show))
+            }
             mir2_world_bevy::monai::RM_DIGUP => {
                 let (feature, light) = displays
                     .get(m.actor_id)
@@ -75946,6 +75975,450 @@ SendRefMsgRange=15
         firecross_parity_drive("safe_zone");
     }
 
+    /// **MG-34（20 诱惑之光）**真实台账驱动：七支（`self_master`/`adopt_ok`/`level_gate_fail`/
+    /// `branch_else`/`outer_fail_true`/`outer_fail_false`/`crazy`）。
+    ///
+    /// 输入全从 golden `Fixture` 读；配置四键（`mag_tamming_*`）从 `Fixture.server_conf` 构造
+    /// `PetSlaveConfig`（**不落 World**）。观测：60005 待投递、8090/8101 待投递 + 宿主帧、
+    /// caster SlaveList、怪物术后面、Rng。
+    /// **不建模/不比较**：`CanReAlive` 清除后效、`MonGen.ActiveCount--`（golden 记录，Rust 无字段）。
+    fn tamming_parity_drive(label: &str) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "tamming";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(trace_header_seed(&trace), seed, "trace 头部 seed");
+
+        let magic_id = golden_fixture_required(stem, label, "magic_id");
+        let effect = golden_fixture_required(stem, label, "effect");
+        let effect_type = golden_fixture_required(stem, label, "effect_type");
+        let user_magic_level = golden_fixture_required(stem, label, "user_magic_level");
+        let caster_level = golden_fixture_required(stem, label, "caster_level");
+        let caster_mc = golden_fixture_required(stem, label, "caster_mc");
+        let caster_sc = golden_fixture_required(stem, label, "caster_sc");
+        let caster_actor_id = golden_fixture_required(stem, label, "caster_actor_id");
+        let fx = golden_case_for(stem, label)["Fixture"].clone();
+        let mon = &fx["monsters"][0];
+        let mon_x = i32::try_from(mon["x"].as_i64().expect("x")).expect("x i32");
+        let mon_y = i32::try_from(mon["y"].as_i64().expect("y")).expect("y i32");
+        let mon_race = u8::try_from(mon["race"].as_u64().expect("race")).expect("race u8");
+        let mon_level = u8::try_from(mon["level"].as_u64().expect("level")).expect("level u8");
+        let mon_hp = u16::try_from(mon["hp"].as_u64().expect("hp")).expect("hp u16");
+        let mon_life =
+            u8::try_from(mon["life_attrib"].as_u64().expect("life_attrib")).expect("life u8");
+        let mon_walk = mon["walk_speed"].as_i64().expect("walk_speed");
+        let mon_next_hit = mon["next_hit_time"].as_i64().expect("next_hit_time");
+        let master_caster = mon["master_caster"].as_bool().expect("master_caster");
+        let mon_name = mon["name"].as_str().expect("monster.name").to_string();
+        let caster_name = fx["caster_name"]
+            .as_str()
+            .expect("Fixture.caster_name")
+            .to_string();
+        let slave_colors: Vec<u8> = fx["slave_colors"]
+            .as_array()
+            .expect("Fixture.slave_colors")
+            .iter()
+            .map(|b| u8::try_from(b.as_u64().expect("slave color")).expect("u8"))
+            .collect();
+        // 配置四键：只从 golden `server_conf` 构造 `PetSlaveConfig`（不落 World）。
+        let sc = fx["server_conf"].as_object().expect("server_conf");
+        let cfg_i32 = |k: &str| -> i32 {
+            i32::try_from(
+                sc.get(k)
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_else(|| panic!("[{stem}/{label}] server_conf 缺 {k}")),
+            )
+            .expect("server_conf i32")
+        };
+        let mut cfg = mir2_data::pet_slave::PetSlaveConfig {
+            mag_tamming_level: cfg_i32("mag_tamming_level"),
+            mag_tamming_target_level: cfg_i32("mag_tamming_target_level"),
+            mag_tamming_hp_rate: cfg_i32("mag_tamming_hp_rate"),
+            mag_tamming_count: u8::try_from(cfg_i32("mag_tamming_count"))
+                .expect("mag_tamming_count u8"),
+            ..Default::default()
+        };
+        for (i, c) in slave_colors.iter().enumerate().take(cfg.slave_color.len()) {
+            cfg.slave_color[i] = *c;
+        }
+
+        let level_u8 = u8::try_from(caster_level).expect("caster_level 越界");
+        let id_base = i32::from(caster_actor_id) - 1;
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            magic_id,
+            &[(
+                magic_id,
+                u8::try_from(user_magic_level).expect("user_magic_level 越界"),
+            )],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: u8::try_from(effect).expect("effect"),
+            effect_type: u8::try_from(effect_type).expect("effect_type"),
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let list = rig
+                .saves
+                .get_mut("caster")
+                .and_then(|s| s.record.data.magic.as_mut())
+                .expect("caster 魔表");
+            let m = list
+                .iter_mut()
+                .flatten()
+                .find(|m| m.mag_idx == magic_id)
+                .expect("魔号必须存在");
+            m.level = u8::try_from(user_magic_level).expect("level");
+            m.tran_point = 0;
+        }
+        {
+            let mut e = rig.world.entities.get_mut(rig.caster).unwrap();
+            // `GetShowName` 的主人名取 golden 的真名（`golden-caster`）。
+            e.name = caster_name;
+            e.progression.level = level_u8;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = level_u8;
+            sg.state.wabil.level = level_u8;
+            sg.state.wabil.mc = caster_mc;
+            sg.state.wabil.sc = caster_sc;
+        }
+        // 怪物实体：id = id_base+10（与 C# 装置 `idBase+10` 同段）。
+        let mon_id = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, mon_name.clone(), mon_x, mon_y);
+            e.id = id_base + 10;
+            e.race = mon_race;
+            e.level = mon_level;
+            e.hp = mon_hp;
+            e.max_hp = mon_hp;
+            e.life_attrib = mon_life;
+            let id = rig.world.add_entity(e);
+            {
+                let m = rig.world.entities.get_mut(id).unwrap();
+                m.ai.walk_speed = mon_walk;
+                m.ai.next_hit_time = mon_next_hit;
+                if master_caster {
+                    m.slave.master = Some(rig.caster);
+                }
+            }
+            id
+        };
+        rig.world.tick();
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let (level_before, tp_before) = skill_tail_rcd(&rig, magic_id);
+        let player_target = fireball_actor(&rig, "target");
+        let hp_before = i64::from(rig.world.entities.get(player_target).unwrap().hp);
+        let n0 = trace_line_count(&trace);
+        rig.cast(magic_id, (mon_x, mon_y), mon_id);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        // 怪物 Ref 帧（656/42）：先快照待办，再走宿主 drain（产生真实帧）。
+        let ref_snapshot: Vec<(u16, Vec<i32>)> = rig
+            .world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|m| (m.ident, m.recipients.clone()))
+            .collect();
+        let holy: Vec<i32> = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| {
+                m.actor_id == mon_id && m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE
+            })
+            .map(|m| m.w_param)
+            .collect();
+        drain_monster_ref_msgs(&mut rig.world, &rig.displays, &rig.online, &rig.gates, &cfg);
+        let (mut ref_frames, _raws3) = rig.drain();
+        for f in ref_frames.drain(..) {
+            all_frames.push((f.0, f.1, 0i64));
+        }
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let mut outs = rig.world.deliver_self_delay_msgs();
+            // **装置口径**：oracle `RecordingMonster` 被动、不 `Operate` ⇒ 60005 不被处理；
+            // 这里同样丢弃该投递（Rng/帧面均不入账），避免驱动凭空产出 656。
+            outs.retain(|m| m.ident != mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE);
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step_frames, _raws2) = rig.drain();
+            for f in step_frames.drain(..) {
+                all_frames.push((f.0, f.1, elapsed as i64));
+            }
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
+        let hp_after = i64::from(rig.world.entities.get(player_target).unwrap().hp);
+        let has_640 = all_frames
+            .iter()
+            .filter(|(s, _, _)| *s == 911)
+            .filter(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .count()
+            == 1;
+        // ---- RM 列（装配；60005/8090/8101 来自**实际待办**）----
+        let spell_rm = fireball_rm(
+            10008,
+            i64::from(effect),
+            i64::from(mon_x),
+            i64::from(mon_y),
+            i64::from(magic_id),
+            24,
+            false,
+        );
+        let fire_rm = fireball_rm(
+            10120,
+            0,
+            i64::from(effect_type) | (i64::from(effect) << 8),
+            i64::from(mon_x) | (i64::from(mon_y) << 16),
+            i64::from(mon_id),
+            136,
+            false,
+        );
+        let lvexp_rm = fireball_rm(
+            10123,
+            0,
+            i64::from(magic_id),
+            i64::from(level_after),
+            i64::from(tp_after),
+            255,
+            true,
+        );
+        let ref_rm =
+            |ident: u16| fireball_rm(i64::from(ident), 0, 0, 0, 0, i64::from(ident & 0xFF), false);
+        let rm_of = |who: &str| -> Vec<serde_json::Value> {
+            match who {
+                "caster" | "target" | "obs_in" => {
+                    let actor_id = match who {
+                        "caster" => rig.caster,
+                        "target" => fireball_actor(&rig, "target"),
+                        _ => fireball_actor(&rig, "obs_in"),
+                    };
+                    let mut v = vec![spell_rm.clone(), fire_rm.clone()];
+                    if who == "caster" && has_640 {
+                        v.push(lvexp_rm.clone());
+                    }
+                    for (ident, recipients) in &ref_snapshot {
+                        if recipients.contains(&actor_id) {
+                            v.push(ref_rm(*ident));
+                        }
+                    }
+                    v
+                }
+                "mon0" => holy
+                    .iter()
+                    .map(|w| fireball_rm(60005, i64::from(*w), 0, 0, 0, 101, false))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_of(who),
+                "Sent": fireball_sent_with_due(&all_frames, socket),
+            }));
+        }
+        let (master, walk_speed, next_hit_time, slave_make_level, crazy_mode, crazy_interval) = {
+            let e = rig.world.entities.get(mon_id).unwrap();
+            let master = match e.master {
+                Some(id) if id == rig.caster => serde_json::Value::String("caster".into()),
+                Some(_) => serde_json::Value::String("other".into()),
+                None => serde_json::Value::Null,
+            };
+            (
+                master,
+                e.ai.walk_speed,
+                e.ai.next_hit_time,
+                e.slave_make_level,
+                e.ai.crazy_mode,
+                e.ai.crazy_mode_interval,
+            )
+        };
+        let mon_hp_after = i64::from(rig.world.entities.get(mon_id).unwrap().hp);
+        let slave_ids: Vec<i32> = rig
+            .world
+            .entities
+            .get(rig.caster)
+            .map(|e| e.slave_list.clone())
+            .unwrap_or_default();
+        let slave_rel: Vec<i64> = slave_ids
+            .iter()
+            .map(|id| if *id == mon_id { 0 } else { -1 })
+            .collect();
+        receivers.push(serde_json::json!({
+            "Who": "mon0",
+            "Rm": rm_of("mon0"),
+            "Sent": Vec::<serde_json::Value>::new(),
+        }));
+        let mi = rig.magic_table.get(magic_id).expect("魔表");
+        let n_level = skill_tail_n_level(level_after, mi.train_lv);
+        let mt_used = mi.max_train.get(n_level).copied().unwrap_or(0);
+        let train = serde_json::json!({
+            "level_before": level_before,
+            "level_after": level_after,
+            "tran_point_before": tp_before,
+            "tran_point_after": tp_after,
+            "train_lv": mi.train_lv,
+            "max_train0": mi.max_train.first().copied().unwrap_or(0),
+            "n_level": n_level,
+            "max_train_at_level": mt_used,
+            "train_level_at_level": mi.train_level[n_level],
+        });
+        let tamming_block = serde_json::json!({
+            "spell_return": true,
+            "has_640": has_640,
+            "rm_makeholyseize": holy.iter().map(|w| serde_json::json!({"who": "mon0", "w_param": w})).collect::<Vec<_>>(),
+            "slave_list_rel": slave_rel,
+            "slave_count_after": slave_ids.len(),
+            "monsters_after": [{
+                "name": mon_name,
+                "master": master,
+                "hp": mon_hp_after,
+                "max_hp": i64::from(mon_hp),
+                "walk_speed": walk_speed,
+                "next_hit_time": next_hit_time,
+                "slave_make_level": i64::from(slave_make_level),
+                "crazy_mode": crazy_mode,
+                "crazy_interval_ms": crazy_interval,
+            }],
+        });
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "DeliverRngSeqs": deliver_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "Train": train,
+            "Tamming": tamming_block,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账可写");
+        write_run_sidecar(&out, &run_id, seed);
+        // ---- 断言（落盘后）----
+        assert!(
+            deliver_rng.is_empty(),
+            "[{stem}/{label}] 交付段不应有抽取；实得 {:?}",
+            deliver_rng
+        );
+        eprintln!(
+            "[{stem} {label}] seed={seed} holy={:?} refs={:?} slave={:?} frames={:?}",
+            holy,
+            ref_snapshot.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            slave_rel,
+            all_frames
+                .iter()
+                .map(|(s, b, _)| (*s, sf_ident(b)))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_self_master() {
+        tamming_parity_drive("self_master");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_adopt_ok() {
+        tamming_parity_drive("adopt_ok");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_level_gate_fail() {
+        tamming_parity_drive("level_gate_fail");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_branch_else() {
+        tamming_parity_drive("branch_else");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_outer_fail_true() {
+        tamming_parity_drive("outer_fail_true");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_outer_fail_false() {
+        tamming_parity_drive("outer_fail_false");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_crazy() {
+        tamming_parity_drive("crazy");
+    }
+
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
     /// 金标准某接收者 `Sent` 里 `ident` 的帧（按序；**期望只从 golden 来**）。
     fn golden_sent_ident(stem: &str, label: &str, who: &str, ident: i64) -> Vec<serde_json::Value> {
@@ -89824,6 +90297,108 @@ SendRefMsgRange=15
     }
 
     // ---- `openmir2-rm-self-guard-all-idents` A2：路径级牙（docs/rm-self-guard-audit-20261029.md §3）----
+
+    /// **MG-34 帧面接线 D（宿主）**：`RefShowName` 的 `RM_USERNAME(8101)` ⇒
+    /// `SM_USERNAME(42)` + 尾 `EncodeString(FilterShowName(ChrName) + "(Master.ChrName)")`；
+    /// 与 `RefNameColor` 的 656 按 pending 顺序先 656 后 42。
+    #[test]
+    fn adopt_ref_frames_encode_656_then_42_with_master_suffix() {
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        // 名字取自本夹具实体（不是占位常量）：断言按 `FilterShowName` 现算。
+        let master_name = "主人";
+        let mon_name = "怪";
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, master_name.to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, mon_name.to_string(), 10, 10);
+        m.race = 101;
+        let mid = world.add_entity(m);
+        world.tick();
+        world.entities.get_mut(mid).unwrap().slave.master = Some(pid);
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "主人".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let mk = |ident: u16| mir2_world_bevy::MonsterRefMsg {
+            actor_id: mid,
+            ident,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            target_x: 0,
+            target_y: 0,
+            dir: 5,
+            x: 10,
+            y: 10,
+            map_id: 0,
+            status: 0,
+            self_only: false,
+            recipients: vec![pid],
+        };
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_CHANGENAMECOLOR));
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_USERNAME));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                frames.push(body);
+            }
+        }
+        assert_eq!(frames.len(), 2, "两帧：656 + 42");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_CHANGENAMECOLOR
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[1][4], frames[1][5]]),
+            mir2_protocol::messages::SM_USERNAME
+        );
+        assert_eq!(frames[0].len(), 12, "656 无尾");
+        let tail = &frames[1][mir2_protocol::frame::CommandMessage::SIZE..];
+        let decoded = mir2_protocol::edcode::decode(tail);
+        let with_master = format!("{}({})", downlink::filter_show_name(mon_name), master_name);
+        assert_eq!(
+            decoded,
+            enter::gbk(&with_master),
+            "42 尾 = EncodeString(FilterShowName + (Master.ChrName))"
+        );
+
+        // **条件分支**：Master 处于 `ObMode` ⇒ `GetShowName` **不加**主人后缀。
+        world.entities.get_mut(pid).unwrap().flags.ob_mode = true;
+        world
+            .pending_monster_ref_msgs
+            .push(mk(mir2_world_bevy::monai::RM_USERNAME));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut frames2: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                frames2.push(body);
+            }
+        }
+        assert_eq!(frames2.len(), 1);
+        let tail2 = &frames2[0][mir2_protocol::frame::CommandMessage::SIZE..];
+        assert_eq!(
+            mir2_protocol::edcode::decode(tail2),
+            enter::gbk(downlink::filter_show_name(mon_name)),
+            "Master.ObMode ⇒ 42 尾无主人后缀"
+        );
+    }
 
     /// A2 ①：`WALK/RUN/HORSERUN/TURN` 族出帧走 [`broadcast_ref_msg`]（`include_self=false`）：
     /// 发起者自己 **0 帧**、附近另一玩家 **1 帧**（oracle `PlayObject.Message.cs:1404/1414/1424/1528`

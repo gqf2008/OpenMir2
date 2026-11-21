@@ -1056,8 +1056,11 @@ impl World {
             t.slave.master_tick = master_tick;
             t.ai.walk_speed = walk_speed;
             t.ai.next_hit_time = next_hit_time;
-            t.ai.holy_seize = false; // `BreakHolySeizeMode()`
         }
+        // `MagicManager.cs:765` `BreakHolySeizeMode()`（= `RefNameColor()` ⇒ RM_CHANGENAMECOLOR），
+        // 与 `:774` `RefShowName()`（⇒ RM_USERNAME）；**顺序固定**：先 8090 后 8101。
+        crate::monai::break_holy_seize_mode(self, target_id);
+        crate::monai::send_ref_msg(self, target_id, crate::monai::RM_USERNAME, 0, 0, 0, 0);
         self.entities
             .get_mut(caster_id)
             .expect("caster 已确认存在")

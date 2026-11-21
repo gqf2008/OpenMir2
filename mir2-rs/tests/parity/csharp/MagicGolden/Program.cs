@@ -167,6 +167,11 @@ public static class Program
             // (`level=0 / TrainLv=3 / MaxTrain[0]=1000`)，`Gender=1/Hair=7` 让 feature 面非退化。
             // **MG-36（22 火墙）**：`MagMakeFireCross` 五格 + 安全区 + 预占去重。非退化 MC
             // （`MakeWord(5,10)`）让 damage/时间都有抽数；训练前提同 46（640 走 1000ms 支）。
+            // **MG-34（20 诱惑之光）**：七支分支表；配置十键由 ServerConfFixture 记录。
+            if (name == "tamming")
+            {
+                return TammingBatch(new MagicSpec { Key = "tamming", MagicId = 20, MagicName = "Tamming" });
+            }
             if (name == "firecross")
             {
                 return FireCrossBatch(new MagicSpec
@@ -1489,6 +1494,204 @@ private static int ReadInstanceInt(object obj, string fieldName)
     /// - `PreSpellFaceTarget=true`：生产 `ClientSpellXY` 的 default 支在 `DoSpell` 前转向点击坐标
     ///   （`PlayObject.Attack.cs:1269`）——不照做 `clone.dir` 与产品路径不同源。
     /// </summary>
+    /// <summary>MG-34 七个分支（只用于生成期选 seed；与 `MagTamming` 的取数序逐字对应）。</summary>
+    private enum TammingBranch
+    {
+        Other,
+        SelfMaster,
+        AdoptOk,
+        LevelGateFail,
+        ElseSend,
+        OuterTrue,
+        OuterFalse,
+        Crazy,
+    }
+
+    private static TammingBranch SimulateTamming(
+        int seed,
+        int magicLevel,
+        int casterLevel,
+        bool masterIsCaster,
+        int targetLevel,
+        int maxHp,
+        int cfgTargetLevel,
+        int cfgLevel,
+        int cfgCount,
+        int hpRate,
+        bool noTame,
+        bool undead,
+        int slaveCount)
+    {
+        var r = new Random(seed);
+        if (r.Next(4 - magicLevel) != 0)
+        {
+            return r.Next(2) == 0 ? TammingBranch.OuterTrue : TammingBranch.OuterFalse;
+        }
+        if (masterIsCaster)
+        {
+            return TammingBranch.SelfMaster;
+        }
+        if (r.Next(2) != 0)
+        {
+            return TammingBranch.ElseSend;
+        }
+        if (targetLevel > casterLevel + 2)
+        {
+            return TammingBranch.LevelGateFail;
+        }
+        if (r.Next(3) != 0)
+        {
+            if (!undead && r.Next(20) == 0)
+            {
+                return TammingBranch.Crazy;
+            }
+            return TammingBranch.Other;
+        }
+        if (r.Next(casterLevel + 20 + magicLevel * 5) <= targetLevel + cfgTargetLevel)
+        {
+            if (!undead && r.Next(20) == 0)
+            {
+                return TammingBranch.Crazy;
+            }
+            return TammingBranch.Other;
+        }
+        if (!noTame && !undead && targetLevel < cfgLevel && slaveCount < cfgCount)
+        {
+            int n14 = maxHp / hpRate;
+            n14 = n14 <= 2 ? 2 : n14 * 2;
+            if (r.Next(n14) == 0)
+            {
+                return TammingBranch.AdoptOk;
+            }
+            return r.Next(14) == 0 ? TammingBranch.Other : TammingBranch.Other;
+        }
+        if (undead && r.Next(20) == 0)
+        {
+            return TammingBranch.Other;
+        }
+        return TammingBranch.Other;
+    }
+
+    private static int FindTammingSeed(
+        TammingBranch want,
+        int magicLevel,
+        int casterLevel,
+        bool masterIsCaster,
+        int targetLevel,
+        int maxHp,
+        int cfgTargetLevel,
+        int cfgLevel,
+        int cfgCount,
+        int hpRate,
+        bool noTame,
+        bool undead,
+        int slaveCount)
+    {
+        for (int seed = 1; seed <= 200_000; seed++)
+        {
+            if (SimulateTamming(
+                    seed, magicLevel, casterLevel, masterIsCaster, targetLevel, maxHp,
+                    cfgTargetLevel, cfgLevel, cfgCount, hpRate, noTame, undead, slaveCount)
+                == want)
+            {
+                return seed;
+            }
+        }
+        throw new FixtureContractViolation($"[tamming] 200000 内找不到分支 {want} 的 seed");
+    }
+
+    /// <summary>
+    /// **MG-34（20 诱惑之光 `MagTamming`）**：七支覆盖卡 §3.3 的分支表。
+    /// 配置十键由 `ServerConfFixture.LoadOrThrow` 记录（部署 40/1/100/5）；配置不在 `World`，
+    /// 驱动侧用 `Fixture.server_conf` 构造 `PetSlaveConfig`。
+    /// **不建模/不比较**：`CanReAlive` 清除后效与 `MonGen.ActiveCount--` 的 Rust 侧落值（golden 记录）。
+    /// </summary>
+    private static int TammingBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var serverConf = ServerConfFixture.LoadOrThrow("tamming");
+        int cfgTargetLevel = serverConf.Values["mag_tamming_target_level"];
+        int cfgLevel = serverConf.Values["mag_tamming_level"];
+        int cfgCount = serverConf.Values["mag_tamming_count"];
+        int hpRate = serverConf.Values["mag_tamming_hp_rate"];
+        const int casterLevel = 30;
+        const int magicLevel = 0; // 训练前提：level=0 ⇒ nLevel=0、MaxTrain[0]=1000 不升级
+
+        void SetMonster(int level, bool masterCaster, bool canReAlive, int monGenActive, bool undead)
+        {
+            spec.Monsters = new[]
+            {
+                new MonsterSpec
+                {
+                    Name = "golden-mon0",
+                    X = 102,
+                    Y = 100,
+                    Race = 50,
+                    Level = level,
+                    Hp = 600,
+                    LifeAttrib = undead ? 1 : 0,
+                    SpeedPoint = 10,
+                    Death = false,
+                    AC = 0,
+                    AntiMagic = 3,
+                    NoTame = false,
+                    Animal = false,
+                    CanReAlive = canReAlive,
+                    MonGenActive = monGenActive,
+                    WalkSpeed = 2000,
+                    NextHitTime = 3000,
+                    MasterCaster = masterCaster,
+                },
+            };
+        }
+
+        int SeedFor(TammingBranch b, int level, bool masterCaster, bool undead)
+        {
+            return FindTammingSeed(
+                b, magicLevel, casterLevel, masterCaster, level, 600,
+                cfgTargetLevel, cfgLevel, cfgCount, hpRate, noTame: false, undead, slaveCount: 0);
+        }
+
+        var results = new FireballResult[7];
+        spec.ServerConf = serverConf;
+        spec.TargetMonster = 1;
+        spec.CasterLevel = casterLevel;
+        spec.UserMagicLevel = magicLevel;
+        spec.MagicTrainLv = 3;
+        spec.MagicMaxTrain0 = 1000;
+        spec.SkillTail = true;
+        spec.StepDrainMs = 100;
+
+        SetMonster(20, true, false, -1, false);
+        results[0] = RunMagicCase(spec, "self_master", SeedFor(TammingBranch.SelfMaster, 20, true, false), 1000, spec.TargetMaxHp, false);
+        SetMonster(20, false, true, 1, false);
+        results[1] = RunMagicCase(spec, "adopt_ok", SeedFor(TammingBranch.AdoptOk, 20, false, false), 2000, spec.TargetMaxHp, false);
+        SetMonster(40, false, false, -1, false);
+        results[2] = RunMagicCase(spec, "level_gate_fail", SeedFor(TammingBranch.LevelGateFail, 40, false, false), 3000, spec.TargetMaxHp, false);
+        SetMonster(20, false, false, -1, false);
+        results[3] = RunMagicCase(spec, "branch_else", SeedFor(TammingBranch.ElseSend, 20, false, false), 4000, spec.TargetMaxHp, false);
+        SetMonster(20, false, false, -1, false);
+        results[4] = RunMagicCase(spec, "outer_fail_true", SeedFor(TammingBranch.OuterTrue, 20, false, false), 5000, spec.TargetMaxHp, false);
+        SetMonster(20, false, false, -1, false);
+        results[5] = RunMagicCase(spec, "outer_fail_false", SeedFor(TammingBranch.OuterFalse, 20, false, false), 6000, spec.TargetMaxHp, false);
+        SetMonster(20, false, false, -1, false);
+        results[6] = RunMagicCase(spec, "crazy", SeedFor(TammingBranch.Crazy, 20, false, false), 7000, spec.TargetMaxHp, false);
+        foreach (var r in results)
+        {
+            if (r.DrainPassesHitCap)
+            {
+                Console.Error.WriteLine(
+                    $"TAMMING_DRAIN_CAP {spec.Key}/{r.Label} passes={r.DrainPasses}（账本可能不完整 ⇒ 拒绝落盘）");
+                return 2;
+            }
+        }
+        return EmitGolden(spec, results);
+    }
+
     /// <summary>
     /// **MG-36（22 火墙 `MagMakeFireCross`）**：三支——
     /// `base`（五格全登记）、`pre_center`（施法前预置中心格事件 ⇒ `GetEvent` 去重，4 条且缺中心）、
@@ -2440,6 +2643,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
             mo.WAbil.AC = (ushort)ms.AC;
             mo.AntiMagic = (ushort)ms.AntiMagic;
             mo.Death = ms.Death;
+            // **MG-34**：诱惑夹具字段（缺省零变化：NoTame/Animal/CanReAlive 均 ctor 缺省 false）。
+            mo.NoTame = ms.NoTame;
+            mo.Animal = ms.Animal;
+            mo.CanReAlive = ms.CanReAlive;
+            if (ms.WalkSpeed >= 0) mo.WalkSpeed = ms.WalkSpeed;
+            if (ms.NextHitTime >= 0) mo.NextHitTime = ms.NextHitTime;
+            if (ms.MonGenActive >= 0)
+            {
+                mo.MonGen = new SystemModule.Data.MonGenInfo { ActiveCount = (ushort)ms.MonGenActive };
+            }
             mo.FixedHideMode = false;
             mo.ObMode = false;
             mo.Envir = env;
@@ -2450,7 +2663,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // `Master`/`TargetCret` 用**本列表的 1 基序号**解析（0 = 无）；越界即配置错误。
         foreach (var (ms, i) in spec.Monsters.Select((v, i) => (v, i)))
         {
-            if (ms.Master != 0)
+            if (ms.MasterCaster)
+            {
+                monsters[i].Master = caster;
+            }
+            else if (ms.Master != 0)
             {
                 if (ms.Master < 1 || ms.Master > monsters.Count)
                 {
@@ -2481,21 +2698,28 @@ private static int ReadInstanceInt(object obj, string fieldName)
             }
             targetMonsterObj = monsters[spec.TargetMonster - 1];
             // `MagTurnUndead`（`MagicManager.cs:830-834`）：`!SuperMan`、`LifeAttrib==LA_UNDEAD`、
-            // `Race>=Animal`（`:834` 的 `((AnimalObject)targetObject)` 强转）——三条缺一不可。
-            if (targetMonsterObj.Race < OpenMir2.Enums.ActorRace.Animal
-                || targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD
-                || targetMonsterObj.SuperMan)
+            // `Race>=Animal` —— 三条缺一不可。**20 诱惑**的派发门不同（`!target.Animal`，
+            // `MagicManager.cs:395`）⇒ 20 跳过圣言三条件、且**不得**把 Animal 强置 true。
+            if (spec.MagicId != 20)
             {
-                throw new FixtureContractViolation(
-                    $"[{spec.Key}] TargetMonster 不满足圣言条件：race={targetMonsterObj.Race} "
-                    + $"life_attrib={targetMonsterObj.LifeAttrib} super_man={targetMonsterObj.SuperMan}");
+                if (targetMonsterObj.Race < OpenMir2.Enums.ActorRace.Animal
+                    || targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD
+                    || targetMonsterObj.SuperMan)
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}] TargetMonster 不满足圣言条件：race={targetMonsterObj.Race} "
+                        + $"life_attrib={targetMonsterObj.LifeAttrib} super_man={targetMonsterObj.SuperMan}");
+                }
             }
             // **`Animal = true`（生产形态）**：`RecordingMonster` 直接 new 出来，`BaseObject.Animal`
             // 保持 ctor 缺省 false；生产怪物由 MonsterInfo 装载时会设 true，而 Rust `place_monsters`
             // 恒写 `ai.animal = true`。不在这条分支补上，`AnimalObject.Struck` 的
             // `if (Animal) MeatQuality -= Random(300)` **少一抽**，整条 RNG 流错位（实测 lv43）。
             // 只在 `TargetMonster > 0` 分支做 ⇒ 其它 stem 零变化。
-            targetMonsterObj.Animal = true;
+            if (spec.MagicId != 20)
+            {
+                targetMonsterObj.Animal = true;
+            }
             spellTarget = targetMonsterObj;
             monsterHpBefore = targetMonsterObj.WAbil.HP;
         }
@@ -2597,6 +2821,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
             }
         }
         bool inSafeZoneAtCast = spec.MagicId == 22 && caster.InSafeZone(env, doX, doY);
+        // **MG-34**：20 的 `MagTamming` 读/写 `playObject.SlaveList`（`:725/:779`）；离线 ctor 不建表。
+        if (spec.MagicId == 20)
+        {
+            caster.SlaveList ??= new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>();
+        }
         int trainTpBefore = um.TranPoint;
         int trainLevelBefore = um.Level;
         // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
@@ -3055,12 +3284,89 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 has_640 = has640,
             };
         }
+        // **MG-34（20 诱惑）**：术后怪物面 + caster SlaveList + 目标收到的 60005。
+        // **不建模/不比较**：`CanReAlive` 的清除后效与 `MonGen.ActiveCount--` 的 Rust 侧落值（Rust 无字段）。
+        object tammingObs = null;
+        if (spec.MagicId == 20)
+        {
+            var monSnap = new List<object>();
+            for (int i = 0; i < monsters.Count; i++)
+            {
+                var m = monsters[i];
+                string master = null;
+                if (m.Master != null)
+                {
+                    if (ReferenceEquals(m.Master, caster))
+                    {
+                        master = "caster";
+                    }
+                    else
+                    {
+                        int mi = monsters.FindIndex(x => ReferenceEquals(x, m.Master));
+                        master = mi >= 0 ? "mon" + mi : "other";
+                    }
+                }
+                monSnap.Add(new
+                {
+                    name = m.ChrName,
+                    master,
+                    hp = (int)m.WAbil.HP,
+                    max_hp = (int)m.WAbil.MaxHP,
+                    walk_speed = m.WalkSpeed,
+                    next_hit_time = m.NextHitTime,
+                    can_re_alive = m.CanReAlive,
+                    no_tame = m.NoTame,
+                    animal = m.Animal,
+                    slave_make_level = (int)m.SlaveMakeLevel,
+                    mongen_active = m.MonGen == null ? (int?)null : (int)m.MonGen.ActiveCount,
+                    crazy_mode = m.CrazyMode,
+                    crazy_interval_ms = ReadInstanceInt(m, "CrazyModeInterval"),
+                });
+            }
+            var slaveRel = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                .Select(s => monsters.FindIndex(x => ReferenceEquals(x, s)))
+                .ToList();
+            var rm60005 = new List<object>();
+            foreach (var r in receivers)
+            {
+                if (!r.Who.StartsWith("mon"))
+                {
+                    continue;
+                }
+                foreach (var o in r.Rm)
+                {
+                    var t = o.GetType();
+                    if ((int)t.GetProperty("ident").GetValue(o) == 60005)
+                    {
+                        rm60005.Add(new
+                        {
+                            who = r.Who,
+                            w_param = (int)t.GetProperty("wParam").GetValue(o),
+                        });
+                    }
+                }
+            }
+            tammingObs = new
+            {
+                spell_return = ok,
+                has_640 = DecodeFramesForGate(recorder.Buffers, caster.ActorId).Any(f => f.ident == 640),
+                rm_makeholyseize = rm60005,
+                slave_list_rel = slaveRel,
+                slave_count_after = caster.SlaveList?.Count ?? 0,
+                monsters_after = monSnap,
+            };
+        }
         return new FireballResult
         {
             Fixture = AttachStatusTimeArr(new
             {
                 magic_id = spec.MagicId,
                 magic_name = spec.MagicName,
+                // MG-34：`GetShowName` 的主人名与 `GetChrColor` 的 SlaveColor 槽（驱动输入）。
+                caster_name = spec.MagicId == 20 ? caster.ChrName : null,
+                slave_colors = spec.MagicId == 20
+                    ? SystemModule.SystemShare.Config.SlaveColor.Select(b => (int)b).ToArray()
+                    : null,
                 effect = spec.Effect,
                 effect_type = spec.EffectType,
                 user_magic_level = spec.UserMagicLevel,
@@ -3141,6 +3447,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 ? null
                 : (object)spec.Monsters.Select(m => new
                 {
+                    // MG-34：名称是 `GetShowName`/`RM_USERNAME` 尾的输入（仅 20 记录）。
+                    name = spec.MagicId == 20 ? m.Name : null,
                     x = m.X,
                     y = m.Y,
                     race = m.Race,
@@ -3153,6 +3461,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     death = m.Death,
                     ac = m.AC,
                     anti_magic = m.AntiMagic,
+                    // **MG-34**：诱惑夹具字段（旧 stem 均为缺省值，零语义变化）。
+                    no_tame = m.NoTame,
+                    animal = m.Animal,
+                    mongen_active = m.MonGenActive,
+                    can_re_alive = m.CanReAlive,
+                    walk_speed = m.WalkSpeed,
+                    next_hit_time = m.NextHitTime,
+                    master_caster = m.MasterCaster,
                 }).ToArray(),
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
@@ -3286,6 +3602,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 },
             Clone = cloneObs,
             FireCross = fireCrossObs,
+            Tamming = tammingObs,
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -3324,6 +3641,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 否则三条 seed 全落同一支、变异无从变红。
         /// </summary>
         public int AntiMagic;
+        /// <summary>**MG-34**：`NoTame`（`WorldServer.MonGen.cs:911` 由 `MonsterInfo.boTame` 置；本夹具显式）。</summary>
+        public bool NoTame;
+        /// <summary>**MG-34**：`Animal`（`MagicManager.cs:395` 的 `!targetObject.Animal` 门）。</summary>
+        public bool Animal;
+        /// <summary>**MG-34**：`MonGen.ActiveCount`（`-1` = `MonGen=null`；`>=0` = 建 `MonGenInfo{ActiveCount=v}`）。</summary>
+        public int MonGenActive = -1;
+        /// <summary>**MG-34**：`CanReAlive`（`MagicManager.cs:745` 的收服支前置）。缺省 false = ctor 缺省。</summary>
+        public bool CanReAlive;
+        /// <summary>**MG-34**：`WalkSpeed`（`-1` = 不设）。</summary>
+        public int WalkSpeed = -1;
+        /// <summary>**MG-34**：`NextHitTime`（`-1` = 不设）。</summary>
+        public int NextHitTime = -1;
+        /// <summary>**MG-34**：`Master = 施法者`（1 基 `Master` 之外的快捷写法；给 self_master 支）。</summary>
+        public bool MasterCaster;
+        /// <summary>**MG-34**：怪物 `ChrName`（`GetShowName` 输入；仅 20 落 Fixture）。</summary>
+        public string Name;
     }
 
     private static readonly string[] Unused = Array.Empty<string>();
@@ -3487,6 +3820,9 @@ public sealed class FireballResult
     /// <summary>**MG-36**：22 火墙的事件表快照 + 安全区/预占输入（仅该魔号；null 不落盘）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object FireCross { get; set; }
+    /// <summary>**MG-34**：20 诱惑的术后怪物面 / SlaveList / 60005 投递（仅该魔号；null 不落盘）。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object Tamming { get; set; }
     /// <summary>共享尾（49/51/52/53/54）训练面（`SkillTail=true` 才落盘）：Level/TranPoint/TrainLv/MaxTrain[0]。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Train { get; set; }

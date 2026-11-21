@@ -458,3 +458,58 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
 1. 驱动内的断言必须落在**台账落盘之后**（否则驱动红了比较器读旧台账可假绿——MG-36 牙 A 第一版就踩到）；
 2. 每颗牙写"基线期望 / 变异期望 / 红在哪一层"，形态为"仅比较器红"时要在卡里点名该字段由比较器独守；
 3. 出现"仅驱动红"先按缺陷查，不当作覆盖证明。
+
+### 3.6 MG-34 实现记录（2026-11-21，已构建/已跑）
+
+**产品三笔**（按 Leader 顺序，不混笔）
+1. `25e254132` 纯模型：`TammingOutcome.holy_seize_wparam: Option<i32>`，仅 `src/M2Server/Magic/MagicManager.cs:712`
+   （self-master）与 `:812`（`Random(2)!=0`）两支置 `Some((L*5+10)*1000)`；把
+   `Random(2)==0 && level门` 合取拆回嵌套以**保留求值顺序**；单测含"其它 result=true 支必须 None"
+   与"level 门失败仍已消费 R(2)"（参照流下一次取数相等）。
+2. `ec56a5fea` 宿主发送：`cast_tamming_spell` 在两支投递 `RM_MAKEHOLYSEIZEMODE`（**内部 RM**：
+   `AnimalObject.cs:134-136` `OpenHolySeizeMode`，无 SM/EDCode）；两处到达证据各自断言
+   `tamming_self_master_queues_holy_seize_rm` / `..._else_branch_...`。
+3. `7b89f3fcf` 帧面接线（**通用，无魔号分支**）：`tame_adopt` 走 `break_holy_seize_mode`（8090）
+   + `RM_USERNAME`（8101）；`open_crazy_mode` 与条件 `break_crazy_mode` 补 8090；宿主 drain 接
+   `8101 → SM_USERNAME(42)`（尾 `FilterShowName(ChrName) [+ "(Master.ChrName)" when !ObMode]`）；
+   `BreakCrazyMode` 调到 adopt 之前（oracle `:738` 先于 `:753-775`）。
+
+**装置**：`TammingBatch` 七支（`self_master/adopt_ok/level_gate_fail/branch_else/outer_fail_true/
+outer_fail_false/crazy`），生成期按 oracle 取数序扫 seed；`MonsterSpec` 加
+`NoTame/Animal/MonGenActive/CanReAlive/WalkSpeed/NextHitTime/MasterCaster/Name`；配置十键由
+`ServerConfFixture.LoadOrThrow` 记录，驱动侧用 `Fixture.server_conf` 构造 `PetSlaveConfig`（**不落 World**）；
+Fixture 记录 `caster_name/slave_colors/monsters[].name`（驱动输入）。
+
+**golden 五面**：`rm_makeholyseize`（self/else 各 1 条 wParam=10000）、`slave_list_rel`/`slave_count_after`、
+`monsters_after`（master/hp/walk=1500/next=2000/slave_make_level/crazy）、帧面（adopt `[17,638,656,42]`+640、
+crazy `[17,638,656]`+640）、`Rng`（self 2 / adopt 7 / level 3 / else 3 / outer_t 3 / outer_f 2 / crazy 7）。
+
+**变异牙（现场重放；基线/变异/红在哪）**
+| 牙 | 基线 | 变异 | 红原文（摘） |
+|---|---|---|---|
+| A 删 60005 发送 | self/else mon0 恰 1 条 | 0 条 | 比较器 `rm_makeholyseize 条数不等：golden=1 rust=0` + `mon0 Rm 多重集`（驱动绿） |
+| B 删 adopt 8090/8101 | adopt 帧 [17,638,656,42] | [17,638] | 比较器 `adopt Rm 缺 [8090,8101]`、`Sent 条数不等（golden=4 rust=2）`（驱动绿） |
+| C 删 OpenCrazy 的 RefNameColor | crazy 含 656 | 无 656 | 比较器 `crazy Rm 缺 8090`、`Sent golden=3 rust=2`（驱动绿） |
+| D wParam 漏 ×1000 | 10000 | 10 | 比较器 `rm_makeholyseize[0].w_param 不等` + 推导式 `60005 w_param=10 ≠ 10000`（驱动绿） |
+
+四颗均 `cp` 还原 + sha 核对、`MUTATION` 标记 0，重跑七驱动 + 比较器复绿。
+**四颗全部是"驱动绿 + 比较器红"**（§2.7 的"仅比较器红"层）⇒ 本批判据**全部落在台账面**：
+`Rm` 多重集与 `Tamming` 块字段由**比较器独守**；驱动侧只带 `[17,638,642]` 类帧序与抽数断言。
+
+**零漂移**：master `aed1efdeb` 生成器 vs 本分支生成器，`spacemove`/`shield` 剔 `delivery`/`due_ms_rel`
+后仅多 `caster_name:null`/`slave_colors:null` 两个**新增 null 键**（允许项）；去掉后
+`IDENTICAL_after_allowed_nulls=True`。
+
+**scope = partial（未建模/不比较）**
+- `CanReAlive` 清除后效、`MonGen.ActiveCount--`：golden 记录（留锚），Rust 无字段 ⇒ 不比较；
+- `NoTame`：Rust 常量 false（`MonsterInfo.boTame` 全仓无赋值点），golden 也全 false；
+- 60005 的**下游效果**（`RefNameColor → 656`）在装置不可观测（`RecordingMonster` 被动、不 Operate），
+  本叶只验 **RM 投递本身**（`Rm` 恰一条、wParam 公式、只在目标队列）；
+- follow-up：`MagMakeHolyCurtain`（`src/M2Server/Magic/MagicManager.cs:1168`）也发 60005，公式 `nPower*1000`，**本次未接**，
+  该叶子的 60005 投递面未验（别把两处共用 helper 当作"60005 已全接"）。
+
+**装置盲区登记（新增一类）**：`OfflineWorldEngine.RegenMonsterByName` 返回的替身怪**未入图/未进
+ActorMgr** ⇒ 任何 `SendRefMsg` 首句 `Envir == null` 早退。⇒ `MakeSlave` 的 `RefNameColor`（656，
+`BaseObject.cs:1203`）在 17/30/41 的 golden 中**不可见**，**生产应有、未验**；42 只由 adopt 的
+`RefShowName` 产生，召唤路径不调。已同步在 `parity-gap-magic.json` 的 MG-24/41/42 scope 记一句
+"656 未验（装置盲区：替身怪未入图 ⇒ SendRefMsg 早退；生产应有）"。
