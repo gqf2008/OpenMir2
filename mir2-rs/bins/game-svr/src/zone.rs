@@ -99,6 +99,22 @@ pub struct RegionSpan {
     pub rect: ZoneRect,
 }
 
+/// **L2-4**：带显式区号的 span（一区可有多段；区号由 `MIR2_ZONES` 给出）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ZoneSpan {
+    pub zone: ZoneId,
+    pub map_id: usize,
+    pub rect: ZoneRect,
+}
+
+impl ZoneSpan {
+    /// 由区号/地图/矩形构造。
+    #[must_use]
+    pub const fn new(zone: ZoneId, map_id: usize, rect: ZoneRect) -> Self {
+        Self { zone, map_id, rect }
+    }
+}
+
 impl RegionSpan {
     /// 由地图与矩形构造。
     #[must_use]
@@ -135,6 +151,18 @@ pub enum RegionLayoutError {
         /// 后一个 span 的下标。
         b: usize,
     },
+    /// 区号越界。
+    ZoneOutOfRange { zone: u32, zone_count: usize },
+    /// 某区没有任何 span。
+    EmptyZone(usize),
+    /// 矩形越出地图范围。
+    RectOutOfBounds { map_id: usize, rect: ZoneRect },
+    /// 某图的 span 并集未覆盖整图。
+    MapNotCovered {
+        map_id: usize,
+        covered: i64,
+        expected: i64,
+    },
 }
 
 impl fmt::Display for RegionLayoutError {
@@ -152,6 +180,23 @@ impl fmt::Display for RegionLayoutError {
             Self::Overlap { map_id, a, b } => write!(
                 f,
                 "map_id={map_id} 的区 {a} 与区 {b} 矩形相交（一个坐标不得双属）"
+            ),
+            Self::ZoneOutOfRange { zone, zone_count } => {
+                write!(f, "区号 {zone} 越界（配置 {zone_count} 个区）")
+            }
+            Self::EmptyZone(z) => write!(f, "区 {z} 一个 span 都没有"),
+            Self::RectOutOfBounds { map_id, rect } => write!(
+                f,
+                "map_id={map_id} 的矩形越界：({}, {})..=({}, {})",
+                rect.x0, rect.y0, rect.x1, rect.y1
+            ),
+            Self::MapNotCovered {
+                map_id,
+                covered,
+                expected,
+            } => write!(
+                f,
+                "map_id={map_id} 未覆盖整图（已覆盖 {covered} 格 / 共 {expected} 格）"
             ),
         }
     }
@@ -194,6 +239,7 @@ impl std::error::Error for RegionRefusal {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegionLayout {
     map_count: usize,
+    zone_count: usize,
     kind: LayoutKind,
 }
 
@@ -201,8 +247,8 @@ pub struct RegionLayout {
 enum LayoutKind {
     /// 单宿主区：所有地图所有坐标都归区 0。
     WholeHost,
-    /// 多区：每个 span 一个区（下标即区号）。
-    Spans(Vec<RegionSpan>),
+    /// 多区：每个 span 带显式区号。
+    Spans(Vec<ZoneSpan>),
 }
 
 impl RegionLayout {
@@ -211,6 +257,7 @@ impl RegionLayout {
     pub const fn single_host(map_count: usize) -> Self {
         Self {
             map_count,
+            zone_count: 1,
             kind: LayoutKind::WholeHost,
         }
     }
@@ -256,19 +303,125 @@ impl RegionLayout {
                 }
             }
         }
+        let zone_count = spans.len();
+        let spans = spans
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                ZoneSpan::new(
+                    ZoneId::new(u32::try_from(i).expect("区数 <= u32::MAX")),
+                    s.map_id,
+                    s.rect,
+                )
+            })
+            .collect();
         Ok(Self {
             map_count,
+            zone_count,
+            kind: LayoutKind::Spans(spans),
+        })
+    }
+
+    /// **L2-4**：由显式区号的 span 列表 + 地图尺寸构造多区布局（启动期校验）。
+    ///
+    /// 覆盖等价见模块头注释（**只对轴对齐矩形成立**）：界内 + 不重叠 + 面积和 == 地图面积
+    /// ⇒ 并集 = 整图。未被任何 span 提到的图由 `default_zone` 的整图 span 兜底。
+    ///
+    /// # Errors
+    /// 区号越界 / 空区 / 非法矩形 / 越界 / 同图相交 / 覆盖不足 ⇒ 指名 `map_id` 与矩形。
+    pub fn from_zone_spans(
+        zone_count: usize,
+        map_sizes: &[(i32, i32)],
+        mut spans: Vec<ZoneSpan>,
+        default_zone: ZoneId,
+    ) -> Result<Self, RegionLayoutError> {
+        if zone_count == 0 {
+            return Err(RegionLayoutError::Empty);
+        }
+        for (map_id, &(w, h)) in map_sizes.iter().enumerate() {
+            if !spans.iter().any(|s| s.map_id == map_id) {
+                spans.push(ZoneSpan::new(
+                    default_zone,
+                    map_id,
+                    ZoneRect::new(0, 0, w - 1, h - 1),
+                ));
+            }
+        }
+        if spans.is_empty() {
+            return Err(RegionLayoutError::Empty);
+        }
+        let mut per_zone = vec![0usize; zone_count];
+        for (i, span) in spans.iter().enumerate() {
+            let z = span.zone.index();
+            if z >= zone_count {
+                return Err(RegionLayoutError::ZoneOutOfRange {
+                    zone: span.zone.get(),
+                    zone_count,
+                });
+            }
+            per_zone[z] += 1;
+            let r = span.rect;
+            if r.x0 < 0 || r.y0 < 0 || r.x0 > r.x1 || r.y0 > r.y1 {
+                return Err(RegionLayoutError::InvalidRect {
+                    map_id: span.map_id,
+                    rect: r,
+                });
+            }
+            let (w, h) =
+                map_sizes
+                    .get(span.map_id)
+                    .copied()
+                    .ok_or(RegionLayoutError::MapOutOfRange {
+                        map_id: span.map_id,
+                        map_count: map_sizes.len(),
+                    })?;
+            if r.x1 >= w || r.y1 >= h {
+                return Err(RegionLayoutError::RectOutOfBounds {
+                    map_id: span.map_id,
+                    rect: r,
+                });
+            }
+            for (j, other) in spans.iter().enumerate().skip(i + 1) {
+                if span.map_id == other.map_id && span.rect.intersects(&other.rect) {
+                    return Err(RegionLayoutError::Overlap {
+                        map_id: span.map_id,
+                        a: i,
+                        b: j,
+                    });
+                }
+            }
+        }
+        if let Some((z, _)) = per_zone.iter().enumerate().find(|(_, n)| **n == 0) {
+            return Err(RegionLayoutError::EmptyZone(z));
+        }
+        for (map_id, &(w, h)) in map_sizes.iter().enumerate() {
+            let covered: i64 = spans
+                .iter()
+                .filter(|s| s.map_id == map_id)
+                .map(|s| {
+                    i64::from(s.rect.x1 - s.rect.x0 + 1) * i64::from(s.rect.y1 - s.rect.y0 + 1)
+                })
+                .sum();
+            let expected = i64::from(w) * i64::from(h);
+            if covered != expected {
+                return Err(RegionLayoutError::MapNotCovered {
+                    map_id,
+                    covered,
+                    expected,
+                });
+            }
+        }
+        Ok(Self {
+            map_count: map_sizes.len(),
+            zone_count,
             kind: LayoutKind::Spans(spans),
         })
     }
 
     /// 区数。
     #[must_use]
-    pub fn zone_count(&self) -> usize {
-        match &self.kind {
-            LayoutKind::WholeHost => 1,
-            LayoutKind::Spans(spans) => spans.len(),
-        }
+    pub const fn zone_count(&self) -> usize {
+        self.zone_count
     }
 
     /// 布局覆盖的地图数（= 注册表地图数）。
@@ -287,8 +440,8 @@ impl RegionLayout {
             LayoutKind::WholeHost => (map_id < self.map_count).then_some(ZoneId::new(0)),
             LayoutKind::Spans(spans) => spans
                 .iter()
-                .position(|s| s.map_id == map_id && s.rect.contains(x, y))
-                .map(|i| ZoneId::new(u32::try_from(i).expect("区数 <= u32::MAX"))),
+                .find(|s| s.map_id == map_id && s.rect.contains(x, y))
+                .map(|s| s.zone),
         }
     }
 
@@ -598,5 +751,156 @@ mod tests {
         let mut plan = ZoneHostPlan::single_host(1, chans());
         plan.channels.push(chans());
         let _ = plan.into_single();
+    }
+
+    // ---------- L2-4：一区多 span + 覆盖 100% ----------
+
+    fn zs(zone: u32, map: usize, r: ZoneRect) -> ZoneSpan {
+        ZoneSpan::new(ZoneId::new(zone), map, r)
+    }
+
+    #[test]
+    fn zone_spans_split_one_map_into_two_zones() {
+        let l = RegionLayout::from_zone_spans(
+            2,
+            &[(20, 10)],
+            vec![
+                zs(0, 0, ZoneRect::new(0, 0, 9, 9)),
+                zs(1, 0, ZoneRect::new(10, 0, 19, 9)),
+            ],
+            ZoneId::new(0),
+        )
+        .expect("合法双区");
+        assert_eq!(l.zone_count(), 2);
+        assert_eq!(l.zone_of(0, 9, 9), Some(ZoneId::new(0)));
+        assert_eq!(l.zone_of(0, 10, 0), Some(ZoneId::new(1)));
+        assert_eq!(l.zone_of(0, 20, 0), None);
+    }
+
+    #[test]
+    fn zone_spans_default_covers_unmentioned_map() {
+        let l = RegionLayout::from_zone_spans(
+            2,
+            &[(20, 10), (4, 4), (2, 2)],
+            vec![
+                zs(0, 0, ZoneRect::new(0, 0, 9, 9)),
+                zs(1, 0, ZoneRect::new(10, 0, 19, 9)),
+                zs(1, 1, ZoneRect::new(0, 0, 3, 3)),
+            ],
+            ZoneId::new(0),
+        )
+        .expect("map 2 未提到 ⇒ default 区 0 兜底");
+        assert_eq!(l.zone_of(2, 1, 1), Some(ZoneId::new(0)));
+        assert_eq!(l.zone_of(1, 3, 3), Some(ZoneId::new(1)));
+    }
+
+    #[test]
+    fn zone_spans_reject_overlap_within_a_zone() {
+        let err = RegionLayout::from_zone_spans(
+            1,
+            &[(20, 10)],
+            vec![
+                zs(0, 0, ZoneRect::new(0, 0, 9, 9)),
+                zs(0, 0, ZoneRect::new(5, 5, 14, 9)),
+            ],
+            ZoneId::new(0),
+        )
+        .expect_err("同区重叠必须拒绝");
+        assert!(
+            matches!(
+                err,
+                RegionLayoutError::Overlap {
+                    map_id: 0,
+                    a: 0,
+                    b: 1
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn zone_spans_reject_overlap_across_zones() {
+        let err = RegionLayout::from_zone_spans(
+            2,
+            &[(20, 10)],
+            vec![
+                zs(0, 0, ZoneRect::new(0, 0, 10, 9)),
+                zs(1, 0, ZoneRect::new(10, 0, 19, 9)),
+            ],
+            ZoneId::new(0),
+        )
+        .expect_err("跨区重叠必须拒绝");
+        assert!(
+            matches!(err, RegionLayoutError::Overlap { map_id: 0, .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn zone_spans_reject_area_short_by_one() {
+        let err = RegionLayout::from_zone_spans(
+            2,
+            &[(20, 10)],
+            vec![
+                zs(0, 0, ZoneRect::new(0, 0, 19, 8)),
+                zs(1, 0, ZoneRect::new(0, 9, 18, 9)),
+            ],
+            ZoneId::new(0),
+        )
+        .expect_err("面积差 1 必须拒绝");
+        assert_eq!(
+            err,
+            RegionLayoutError::MapNotCovered {
+                map_id: 0,
+                covered: 199,
+                expected: 200
+            }
+        );
+        let text = err.to_string();
+        for needle in ["map_id=0", "199", "200"] {
+            assert!(text.contains(needle), "错误文本缺 `{needle}`：{text}");
+        }
+    }
+
+    #[test]
+    fn zone_spans_reject_out_of_bounds_rect() {
+        let err = RegionLayout::from_zone_spans(
+            1,
+            &[(20, 10)],
+            vec![zs(0, 0, ZoneRect::new(0, 0, 20, 9))],
+            ZoneId::new(0),
+        )
+        .expect_err("越界必须拒绝");
+        assert_eq!(
+            err,
+            RegionLayoutError::RectOutOfBounds {
+                map_id: 0,
+                rect: ZoneRect::new(0, 0, 20, 9)
+            }
+        );
+        let text = err.to_string();
+        for needle in ["map_id=0", "(0, 0)..=(20, 9)"] {
+            assert!(text.contains(needle), "错误文本缺 `{needle}`：{text}");
+        }
+    }
+
+    #[test]
+    fn zone_spans_reject_half_map_gap() {
+        let err = RegionLayout::from_zone_spans(
+            1,
+            &[(20, 10)],
+            vec![zs(0, 0, ZoneRect::new(0, 0, 9, 9))],
+            ZoneId::new(0),
+        )
+        .expect_err("半图缺口必须拒绝");
+        assert_eq!(
+            err,
+            RegionLayoutError::MapNotCovered {
+                map_id: 0,
+                covered: 100,
+                expected: 200
+            }
+        );
     }
 }
