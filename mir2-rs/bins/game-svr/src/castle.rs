@@ -1127,7 +1127,7 @@ fn guild_name_of(
     sessions: &std::collections::HashMap<String, crate::SessionGround>,
     actor_id: i32,
 ) -> Option<String> {
-    let chr = &online.iter().find(|e| e.actor_id == actor_id)?.chr_name;
+    let chr = &online.find_linear_actor(actor_id)?.chr_name;
     sessions.get(chr)?.guild.guild_name.clone()
 }
 
@@ -1233,7 +1233,7 @@ pub(crate) fn refresh_show_name_in_area(
     // （键 = `(byte)RM_USERNAME` = 165），入队序 = 目标序 × 格扫序。
     let mut frames = crate::TickFrameQueue::new();
     for (recipient, bodies) in per_recipient {
-        let Some(entry) = online.iter().find(|e| e.actor_id == recipient) else {
+        let Some(entry) = online.find_linear_actor(recipient) else {
             continue;
         };
         for body in bodies {
