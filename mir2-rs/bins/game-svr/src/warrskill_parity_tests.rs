@@ -46,7 +46,10 @@ fn who_of(socket: i32) -> &'static str {
 
 /// 跑一个 case：按 golden 的 `Fixture` 建世界/会话/记录，调宿主 `CM_SPELL` 入口，收集每个
 /// 收件人的线上帧（gate0 一个通道；短包转 `(0,0,0,0,tail)`；`+GD/…` 过滤）。
-fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String, Frames>) {
+fn run_case(
+    magic_id: u16,
+    fx: &Value,
+) -> (i32, std::collections::HashMap<String, Frames>, u16, u16) {
     let mp = u16::try_from(fx["caster_mp"].as_u64().expect("caster_mp")).expect("mp u16");
     let level =
         u8::try_from(fx["user_magic_level"].as_u64().expect("user_magic_level")).expect("level u8");
@@ -101,6 +104,7 @@ fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String
     sg.magic.use_thrusting = preset["use_thrusting"].as_bool().unwrap_or(false);
     sg.magic.use_half_moon = preset["use_half_moon"].as_bool().unwrap_or(false);
     sg.magic.crs_hitkill = preset["crs_hitkill"].as_bool().unwrap_or(false);
+    sg.magic.mbo43_kill = preset["mbo43_kill"].as_bool().unwrap_or(false);
     if preset["fire_hit_busy"].as_bool().unwrap_or(false) {
         // 26 的 `AllowFireHitSkill`：`now - LatestFireHitTick > 10000` 才放行；
         // golden 的 busy case 预设 `LatestFireHitTick = now`（10s 门内）。
@@ -141,6 +145,11 @@ fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String
     let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
     let table = game_svr::mongen::MonsterTable::new(Vec::new());
     // `CM_SPELL` 入参：`tag = magic_id`、`recog = make_long(nTargetX, nTargetY)`（`magicwire::parse_spell`）。
+    // MP 直接断言：调用**前**真实会话里的 `state.wabil.mp`（不是 fixture 常量）。
+    let mp_before = sessions
+        .get("caster")
+        .map(|s| s.state.wabil.mp)
+        .unwrap_or_default();
     handle_spell_cmd_with_magic(
         game_svr::feature::make_long(tx as u16, ty as u16),
         magic_id,
@@ -168,6 +177,11 @@ fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String
         &game_svr::strings::StringConf::defaults(),
     );
 
+    // **MP 直接断言用**：取 `SessionGround.state.wabil.mp`（宿主投影 = 客户端 MP 源）。
+    let mp_after = sessions
+        .get("caster")
+        .map(|s| s.state.wabil.mp)
+        .unwrap_or_default();
     let mut out: std::collections::HashMap<String, Frames> = std::collections::HashMap::new();
     while let Ok(msg) = rx0.try_recv() {
         match msg {
@@ -200,7 +214,7 @@ fn run_case(magic_id: u16, fx: &Value) -> (i32, std::collections::HashMap<String
             _ => {}
         }
     }
-    (caster, out)
+    (caster, out, mp_before, mp_after)
 }
 
 fn golden_frames(r: &Value) -> Vec<(u16, u16, u16, u16, String)> {
@@ -237,7 +251,7 @@ fn check_golden(id: u32) {
             fx["reachability"], "reachable",
             "warr-{id}/{label}: 缺 reachability"
         );
-        let (caster, got) = run_case(id as u16, fx);
+        let (caster, got, _, _) = run_case(id as u16, fx);
         for r in case["Receivers"].as_array().expect("Receivers") {
             let who = r["Who"].as_str().expect("Who");
             let want = golden_frames(r);
@@ -288,6 +302,42 @@ fn check_golden(id: u32) {
             }
         }
     }
+}
+
+/// 43 `SKILL_43`：`Skill43OnOff` 开/关 + `"+CID"/"+UCID"`。
+///
+/// 文案是**源码默认**（`MessageSettings.RedHalfMoonOn/Off`；`StringConf` 不读、部署无该键）
+/// ⇒ golden 的 `fixture_spec` 记了生成时的两条文案，比较器除逐帧外还断言它与字面量一致，
+/// 防默认串被改而 golden 静默漂移。
+#[test]
+fn warr_43_matches_golden() {
+    let doc = golden(43);
+    assert_eq!(
+        doc["fixture_spec"]["toggle_text_on"], "开启破空剑",
+        "43 开启文案（源码默认，StringConf 不读）"
+    );
+    assert_eq!(
+        doc["fixture_spec"]["toggle_text_off"], "关闭破空剑",
+        "43 关闭文案（源码默认，StringConf 不读）"
+    );
+    // **不扣蓝的直接断言**（不靠"帧集里没有 53"反推）：取 `SessionGround.state.wabil.mp`
+    // （宿主投影 = 客户端 MP 源），在 `handle_spell_cmd_with_magic` 调用**前**与排水**后**各取一次，
+    // 要求相等且等于 golden 的 `caster_mp`。43 的 oracle 分支不调 `DamageSpell`/`HealthSpellChanged`。
+    for case in doc["cases"].as_array().expect("cases") {
+        let fx = &case["Fixture"];
+        let label = case["Label"].as_str().unwrap_or("?");
+        let (_, _, mp_before, mp_after) = run_case(43, fx);
+        assert_eq!(
+            mp_after, mp_before,
+            "warr-43/{label}: 施法前后 MP 必须相等（43 分支不扣蓝）"
+        );
+        assert_eq!(
+            mp_before,
+            u16::try_from(fx["caster_mp"].as_u64().expect("caster_mp")).expect("u16"),
+            "warr-43/{label}: 起始 MP 必须等于 fixture"
+        );
+    }
+    check_golden(43);
 }
 
 #[test]

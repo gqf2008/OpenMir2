@@ -1,6 +1,6 @@
 # MG-52：魔号 43（`SKILL_43`）的 `ClientSpellXY` 显式 case —— 勘察结论与接线清单
 
-> 状态：**只读勘察完成，未实现**（2026-11-21）。A 类小叶子，排在有效果的技能之后。
+> 状态：**已实现**（2026-11-21，`card/mg-52-56-explicit-cases`）：43 接入 `warrskill`，golden `warr-43.json` 两例（off2on/on2off）对拍通过。A 类小叶子。
 > 分支：`card/mg-52-card`（docs-only）；base `master = b480336f9`。
 
 ## 1. oracle 事实：不是"零行为"
@@ -35,7 +35,7 @@
 
 ⇒ **装置零增量**。
 
-## 3. Rust 侧要补什么（逐项）
+## 3. Rust 侧实现清单（已按此落地，逐项）
 
 1. **会话位 `MBo43Kill`**（默认 `false`；toggle 语义；存档面 oracle 未落库 ⇒ 只做会话态）。
 2. **`SM_SYSMESSAGE(100)` 两段文案**："开启破空剑" / "关闭破空剑"（Green/Hint；文本取自 oracle 原文，
@@ -46,7 +46,11 @@
    - 显式 case **不执行 `default` 首句** `Dir = GetNextDirection(...)`（既有 `takes_default_dir` /
      `EXPLICIT_CASE_MAG_IDX` 已按此建模，新接线不得回退）；
    - toggle 交替：第一次 `+CID`/绿字"开启"，第二次 `+UCID`/绿字"关闭"。
-5. `magicwire.rs` 模块头「本片未接」清单里该项（8 条显式 case 效果体）要随之更新一处，避免登记腐坏。
+5. `magicwire.rs` 的 8-case 表格 43 行已改为「已接 + `Arm::Skill43` + `MagicState::mbo43_kill`」
+   （56 行改注「不适用：oracle `MagicArr[56]` 越界」，见 `openmir2-magic-56-oracle-index-out-of-range`）。
+6. **源码默认文案记进 Fixture**：golden 的 `fixture_spec.toggle_text_on/off` 记录生成时的
+   `MessageSettings.RedHalfMoonOn/Off`（"开启破空剑"/"关闭破空剑"）；比较器 `warr_43_matches_golden`
+   断言 Fixture 值 == 字面量，并逐帧比对 100 的尾串，防默认串被改而 golden 静默漂移。
 
 ## 4. 为什么值得验
 
