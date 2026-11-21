@@ -172,3 +172,9 @@
 待办：驱动侧 `poison_stem`（三旋钮判定）与 `fireball_case_assert`（640 due 容差）两处 stem 名单，
 应合并为 `fn is_poison(golden) -> bool`（`Fixture.magic_id ∈ {6,48}`，与比较器同源）；
 失效方向为假红/漏检。并入下一个改驱动/比较器的批次，不单独开批。
+**QA 复核追加（P3，2026-11-21）**：驱动侧 fail-closed 的「施毒族判定」目前按 **stem 名单**
+`poison_stem = matches!(stem, …)` 开分支，而读侧 `else` 仍保留旧可选路径（`golden_fixture_opt` +
+`if v > 0` / `unwrap_or(10)`）。今天四支都被名单命中、**无实害**；但**未来新增施毒 stem 未进名单**
+会**静默**落旧可选路径（`amy_ounsul_point` 10 vs 15 这类错配可静默变绿）。修法同上条：按
+`Fixture.magic_id ∈ {6,48}` 判定，或「三键任一存在 ⇒ 三键全必填」。**与上条合并为一个 follow-up**，
+不单独开卡（`openmir2-10` 在 `0e8988dd8` 复核时提出）。
