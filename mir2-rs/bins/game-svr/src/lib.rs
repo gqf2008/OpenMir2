@@ -75541,8 +75541,11 @@ SendRefMsgRange=15
                 "[{stem}/{label}/{who}] 640 帧条数不等：golden {gd:?} rust {rd:?}"
             );
             assert!(
-                gd.iter().zip(rd.iter()).all(|(g, r)| (g - r).abs() <= 32),
-                "[{stem}/{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} rust {rd:?}"
+                gd.iter()
+                    .zip(rd.iter())
+                    .all(|(g, r)| (g - r).abs() <= mir2_shared::DUE_MS_TOLERANCE_MS),
+                "[{stem}/{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤{}ms）：golden {gd:?} rust {rd:?}",
+                mir2_shared::DUE_MS_TOLERANCE_MS
             );
         }
     }
