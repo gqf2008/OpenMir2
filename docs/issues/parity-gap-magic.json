@@ -323,7 +323,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红（golden=9/rust=15）与比较器级篡改，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单"
     },
     {
       "id": "MG-11",
@@ -354,7 +354,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红与三支绿跑，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单"
     },
     {
       "id": "MG-12",
@@ -385,7 +385,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3"
     },
     {
       "id": "MG-13",
@@ -485,7 +485,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "basis": "semantic",
-      "scope": "partial：`Shape=2@DoSpell`（`src/M2Server/Magic/MagicManager.cs:243`）红毒臂（`DAMAGEARMOR`、`GetPower13(30)`）由 `amyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；字段面同 MG-14。**注意**：本夹具绿/红毒 `10139.p1` **同为 `int.MinValue`**（buff 插入序 i=0），**不代表** `BaseObject.Base.cs:170` 按 `PoisonState` 取位的 `0x40000000` 路径。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径（需目标先有别的 buff，另卡）。"
+      "scope": "partial：`Shape=2@DoSpell`（`src/M2Server/Magic/MagicManager.cs:243`）红毒臂（`DAMAGEARMOR`、`GetPower13(30)`）由 `amyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；字段面同 MG-14。**注意**：本夹具绿/红毒 `10139.p1` **同为 `int.MinValue`**（buff 插入序 i=0），**不代表** `BaseObject.Base.cs:170` 按 `PoisonState` 取位的 `0x40000000` 路径。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径（需目标先有别的 buff，另卡）。 牙（2026-11-21 补）：power_poison *2→*3 ⇒ 比较器 Rm 8037 type=1 p1 红（s1 80→95 / s13 70→80）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3"
     },
     {
       "id": "MG-16",
@@ -613,7 +613,7 @@
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面无产品公式变异重放（仅装置层 AntiMagic 门槛自检与三支绿跑）；补牙计划见 docs/teeth-audit-B.md §建议清单"
     },
     {
       "id": "MG-20",
@@ -694,7 +694,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级 2026-11-20 接线并升格：四支覆盖命中/等级门负例/主人门负例/部分命中；帧面逐收件人 (ident,param,tag,series) 比；牙=去掉等级门 ⇒ 帧集合退化可见。",
       "basis": "semantic",
-      "scope": "无牙（理由）：等级门四档变异（`>`→`>=`、`caster_level-3`、`caster_level+1`、`caster_level+50`）× 四个种子（`mon_hit_two`/`mon_blocked_level`/`mon_blocked_master`/`mon_partial`），驱动与比较器**全绿** ⇒ 该门不驱动 `mon_blocked_level` 判据；阻挡真正来源在 `master` 门或目标格 `mag_objects_in_range` 为空，属装置盲区（见 `docs/issues/golden-harness-blind-spots.md` 的 B15）。"
+      "scope": "有牙（2026-11-21）：删等级比较（`if obj.master.is_none()`）⇒ 驱动 `holyshield_parity_mon_blocked_level` 红（`left.caster` 多一帧 `(640,1,2,0)`）+ 比较器 `real_rust_ledger_holyshield` 红（`[mon_blocked_level/caster] Sent 条数不等（golden=2 rust=3）`、多出 `(640,16,1,2,0,\"\")`、RNG 行数 2 vs 3）；**等级差 170 级 ⇒ 小幅度变异不可观测**：判据 `draw + (caster_level - 1) > obj.level`，`draw∈[0,3]` 最坏需 `caster_level ≥ 202`（至少 +172）；实测 +1/+50 均绿属幅度不足。归因纠正与推导见 `docs/issues/golden-harness-blind-spots.md` 的 B15。"
     },
     {
       "id": "MG-24",
@@ -787,7 +787,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】【golden 复现性存疑：两次运行 Rng/DrainPasses/TargetHp/NotDue 不一致（既有装置墙钟依赖），见 openmir2-firecharm-nondeterminism；status 未改，升降由 leader 定】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——产品侧红只在帧序维（638→642→640），伤害面(SC)无变异；补牙计划见 docs/teeth-audit-B.md §建议清单"
     },
     {
       "id": "MG-28",
