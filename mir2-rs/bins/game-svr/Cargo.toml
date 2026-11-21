@@ -42,6 +42,8 @@ uptime_lib = "=0.3.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }
 serde_json = "1"   # feature.rs 用例回读 oracle 实测向量（tests/parity/m3/fixtures/feature_vectors.json）；bin 侧亦用
+sha2 = "0.10"      # 卡 openmir2-magic-serverconf-batch-plan §6.7：真实部署 Server.conf 的 sha 记录；
+                     # 仓内 bins/mir2-mcp、bins/res-svr、crates/protocol、tools/replay 已用同一 0.10（非新增供应链面）
 
 [build-dependencies]
 mir2-build-meta = { path = "../../crates/build-meta" }
