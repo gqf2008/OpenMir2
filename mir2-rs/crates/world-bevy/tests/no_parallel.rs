@@ -274,20 +274,24 @@ fn redcheck_forbidden_dep_detection_works() {
     );
 }
 
-/// 红检（自动，F2）：只剩 `use` 而没有 `set_executor` 调用时，正向断言必须判假；
-/// 有真实调用时才判真。防止把「标识符出现过」当成「执行器被显式设置」。
+/// 红检（自动，F2+②）：只剩 `use`、或有 `set_executor` 却无 `EXECUTOR-RATIONALE` 注释时，
+/// 正向断言必须判假；真实调用 + 理由注释才判真。
 #[test]
 fn redcheck_import_only_does_not_satisfy_executor_guard() {
     let import_only = "use bevy_ecs::schedule::SingleThreadedExecutor;";
     assert!(
-        !has_explicit_single_threaded_executor(&strip_comments_and_strings(import_only)),
-        "只留 import 不得满足单线程执行器守卫"
+        !tick_has_explicit_executor_and_rationale(import_only),
+        "只 import（无 set_executor 调用）不得满足"
     );
-    let with_call = "use bevy_ecs::schedule::SingleThreadedExecutor;
-fn f() { s.set_executor(SingleThreadedExecutor::default()); }";
+    let call_no_rationale = "fn f() { s.set_executor(MultiThreadedExecutor::new()); }";
     assert!(
-        has_explicit_single_threaded_executor(&strip_comments_and_strings(with_call)),
-        "真实 set_executor(SingleThreadedExecutor...) 调用必须被识别"
+        !tick_has_explicit_executor_and_rationale(call_no_rationale),
+        "有 set_executor 但无 EXECUTOR-RATIONALE 注释不得满足（②要理由）"
+    );
+    let call_with_rationale = "fn f() { s.set_executor(MultiThreadedExecutor::new()); } // EXECUTOR-RATIONALE: pilot";
+    assert!(
+        tick_has_explicit_executor_and_rationale(call_with_rationale),
+        "真实 set_executor + EXECUTOR-RATIONALE 注释必须被识别"
     );
 }
 // ============================================================================
