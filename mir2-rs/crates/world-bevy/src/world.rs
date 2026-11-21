@@ -993,7 +993,8 @@ pub struct FireBurnEvent {
     pub map_id: usize,
     pub x: i32,
     pub y: i32,
-    /// `EventType`：`Grobal2.ET_FIRE = 1`。
+    /// `EventType`：`Grobal2.ET_FIRE = 5`（`src/OpenMir2/Grobal2.cs:48`；此前误写 1 =
+    /// `ET_DIGOUTZOMBI`，实现值一直是 5，见 `add_fire_burn_event_impl` 的订正记录）。
     pub event_type: i32,
     pub damage: i32,
     pub open_start_ms: i64,

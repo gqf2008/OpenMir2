@@ -75524,6 +75524,428 @@ SendRefMsgRange=15
         clone46_parity_drive("clone");
     }
 
+    /// **MG-36（22 火墙 `MagMakeFireCross`）**真实台账驱动：金标准 `golden/magic/firecross.json`
+    /// （三支 `base` / `pre_center` / `safe_zone`）。
+    ///
+    /// 观测面：事件表（`EventType/x/y/ContinueTime/Damage`；**不记 RunTick/时间戳**）+ 安全区门 +
+    /// 预占去重 + 帧面/RNG。逐 tick 的 3000ms 伤害不启动（事件进程不在 harness）。
+    fn firecross_parity_drive(label: &str) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let stem = "firecross";
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
+        let seed = golden_seed(stem, label);
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+        // ---- 输入一律从 golden 读（缺键即红）----
+        let magic_id = golden_fixture_required(stem, label, "magic_id");
+        let effect = golden_fixture_required(stem, label, "effect");
+        let effect_type = golden_fixture_required(stem, label, "effect_type");
+        let user_magic_level = golden_fixture_required(stem, label, "user_magic_level");
+        let caster_level = golden_fixture_required(stem, label, "caster_level");
+        let caster_mc = golden_fixture_required(stem, label, "caster_mc");
+        let caster_sc = golden_fixture_required(stem, label, "caster_sc");
+        let anti_magic = golden_fixture_required(stem, label, "anti_magic");
+        let caster_actor_id = golden_fixture_required(stem, label, "caster_actor_id");
+        let magic_train_lv = golden_fixture_required(stem, label, "magic_train_lv");
+        let magic_max_train0 = golden_fixture_required(stem, label, "magic_max_train0");
+        let red_f = golden_fixture_required(stem, label, "red_msg_f_color");
+        let red_b = golden_fixture_required(stem, label, "red_msg_b_color");
+        let fx = golden_case_for(stem, label)["Fixture"].clone();
+        let safe_zone = fx["firecross_safe_zone"]
+            .as_bool()
+            .expect("golden 必须记录 firecross_safe_zone（输入不许缺省兜底）");
+        let pre_cells: Vec<(i32, i32)> = fx["pre_event_cells"]
+            .as_array()
+            .expect("golden 必须记录 pre_event_cells（数组）")
+            .iter()
+            .map(|c| {
+                let a = c.as_array().expect("pre_event_cells 每项是 [x,y]");
+                (
+                    i32::try_from(a[0].as_i64().expect("x")).expect("x i32"),
+                    i32::try_from(a[1].as_i64().expect("y")).expect("y i32"),
+                )
+            })
+            .collect();
+        let level_u8 = u8::try_from(caster_level).expect("caster_level 越界");
+        let id_base = i32::from(caster_actor_id) - 1;
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            magic_id,
+            &[(
+                magic_id,
+                u8::try_from(user_magic_level).expect("user_magic_level 越界"),
+            )],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: u8::try_from(effect).expect("effect 越界"),
+            effect_type: u8::try_from(effect_type).expect("effect_type 越界"),
+            train_lv: u8::try_from(magic_train_lv).expect("train_lv 越界"),
+            train_level: [0; 4],
+            max_train: [i32::from(magic_max_train0), 0, 0, 0],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let list = rig
+                .saves
+                .get_mut("caster")
+                .and_then(|s| s.record.data.magic.as_mut())
+                .expect("new_layout 必须给 caster 一条 magic 记录");
+            let m = list
+                .iter_mut()
+                .flatten()
+                .find(|m| m.mag_idx == magic_id)
+                .expect("caster 魔表必须含本魔号");
+            m.level = u8::try_from(user_magic_level).expect("user_magic_level 越界");
+            m.tran_point = 0;
+        }
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = level_u8;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+            e.flags.in_safe_zone = safe_zone;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.equip.abil.level = level_u8;
+            sg.state.wabil.level = level_u8;
+            sg.state.wabil.mc = caster_mc;
+            sg.state.wabil.sc = caster_sc;
+        }
+        {
+            let t = fireball_actor(&rig, "target");
+            let e = rig.world.entities.get_mut(t).unwrap();
+            e.vitals.anti_magic = anti_magic;
+        }
+        // B5 配置：安全区门 + 红字颜色（一律取 golden 的记录值）。
+        {
+            let mut cfg = rig.world.b5_cfg;
+            cfg.disable_in_safe_zone_fire_cross = safe_zone;
+            cfg.red_msg_f_color = u8::try_from(red_f).expect("red_msg_f_color 越界");
+            cfg.red_msg_b_color = u8::try_from(red_b).expect("red_msg_b_color 越界");
+            rig.world.set_b5_config(cfg);
+        }
+        // 预置事件（oracle ctor + AddMapEvent：只落格子；**不进** EventMgr）。
+        let map_id = rig.world.entities.get(rig.caster).unwrap().map_id;
+        for (x, y) in &pre_cells {
+            rig.world
+                .add_fire_burn_event(rig.caster, map_id, *x, *y, 0, 1);
+        }
+        let pre_count = rig.world.sim.fire_burn_events.len();
+        assert_eq!(
+            pre_count,
+            pre_cells.len(),
+            "[{stem}/{label}] 预置事件条数必须等于 Fixture.pre_event_cells"
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let target = fireball_actor(&rig, "target");
+        let hp_before = i64::from(rig.world.entities.get(target).unwrap().hp);
+        let (level_before, tp_before) = skill_tail_rcd(&rig, magic_id);
+        let n0 = trace_line_count(&trace);
+        rig.cast(magic_id, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step_frames, _raws2) = rig.drain();
+            for f in step_frames.drain(..) {
+                all_frames.push((f.0, f.1, elapsed as i64));
+            }
+        }
+        let n2 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
+        let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
+        // ---- 事件快照（只取本 case 新增的；排除预置）----
+        let mut events: Vec<serde_json::Value> = rig
+            .world
+            .sim
+            .fire_burn_events
+            .iter()
+            .skip(pre_count)
+            .filter(|e| e.map_id == map_id)
+            .map(|e| {
+                serde_json::json!({
+                    "x": e.x,
+                    "y": e.y,
+                    "type": e.event_type,
+                    "damage": e.damage,
+                    "continue_ms": e.continue_ms,
+                })
+            })
+            .collect();
+        events.sort_by_key(|e| (e["x"].as_i64().unwrap_or(0), e["y"].as_i64().unwrap_or(0)));
+        // **退化守卫（S 序列同款）**：非安全区支必须至少产生 1 条事件；0 条即具名红。
+        let expected_events = if safe_zone { 0 } else { 5 - pre_cells.len() };
+        // ---- RM 列（装配；与 oracle `SendRefMsg`/`SendMsg` 参数逐项对应）----
+        let spell_rm = fireball_rm(
+            10008,
+            i64::from(effect),
+            101,
+            100,
+            i64::from(magic_id),
+            24,
+            false,
+        );
+        let fire_rm = fireball_rm(
+            10120,
+            0,
+            i64::from(effect_type) | (i64::from(effect) << 8),
+            101 | (100 << 16),
+            i64::from(target),
+            136,
+            false,
+        );
+        let sys_rm = fireball_rm(11004, 0, i64::from(red_f), i64::from(red_b), 0, 252, false);
+        let lvexp_rm = fireball_rm(
+            10123,
+            0,
+            i64::from(magic_id),
+            i64::from(level_after),
+            i64::from(tp_after),
+            255,
+            true,
+        );
+        let has_640 = all_frames
+            .iter()
+            .filter(|(s, _, _)| *s == 911)
+            .filter(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .count()
+            == 1;
+        let red_sysmsg = all_frames
+            .iter()
+            .filter(|(s, _, _)| *s == 911)
+            .filter(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
+            .count()
+            == 1;
+        let rm_of = |who: &str| -> Vec<serde_json::Value> {
+            match who {
+                "caster" => {
+                    let mut v = vec![spell_rm.clone(), fire_rm.clone()];
+                    if safe_zone {
+                        v.push(sys_rm.clone());
+                    } else {
+                        v.push(lvexp_rm.clone());
+                    }
+                    v
+                }
+                "target" | "obs_in" => vec![spell_rm.clone(), fire_rm.clone()],
+                _ => Vec::new(),
+            }
+        };
+        let mut receivers: Vec<serde_json::Value> = Vec::new();
+        for (who, socket) in [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ] {
+            receivers.push(serde_json::json!({
+                "Who": who,
+                "Rm": rm_of(who),
+                "Sent": fireball_sent_with_due(&all_frames, socket),
+            }));
+        }
+        let mi = rig.magic_table.get(magic_id).expect("魔表必须有该魔号");
+        let n_level = skill_tail_n_level(level_after, mi.train_lv);
+        let mt_used = mi.max_train.get(n_level).copied().unwrap_or(0);
+        let train = serde_json::json!({
+            "level_before": level_before,
+            "level_after": level_after,
+            "tran_point_before": tp_before,
+            "tran_point_after": tp_after,
+            "train_lv": mi.train_lv,
+            "max_train0": mi.max_train.first().copied().unwrap_or(0),
+            "n_level": n_level,
+            "max_train_at_level": mt_used,
+            "train_level_at_level": mi.train_level[n_level],
+        });
+        let firecross_block = serde_json::json!({
+            "events": events,
+            "pre_event_cells": pre_cells
+                .iter()
+                .map(|(x, y)| serde_json::json!([x, y]))
+                .collect::<Vec<_>>(),
+            "safe_zone_flag": safe_zone,
+            "disable_in_safe_zone_fire_cross": safe_zone,
+            "in_safe_zone_at_cast": safe_zone,
+            "red_sysmsg": red_sysmsg,
+            "red_sysmsg_text": "",
+            "has_640": has_640,
+        });
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "DeliverRngSeqs": deliver_rng.iter().map(|(sq, _, _)| *sq).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "Train": train,
+            "FireCross": firecross_block,
+        }]);
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
+        // ---- 断言（落盘后；红了也留台账）----
+        // **事件退化守卫（S 序列同款）**：非安全区支必须至少产生 1 条事件；0 条即具名红。
+        assert_eq!(
+            events.len(),
+            expected_events,
+            "[{stem}/{label}] 火墙事件数 {}/{expected_events}（预占 {}，safe={safe_zone}）",
+            events.len(),
+            pre_cells.len()
+        );
+        if expected_events > 0 {
+            assert!(
+                !events.is_empty(),
+                "[{stem}/{label}] 本 case 未产生任何火墙事件（退化：五格登记一次都没执行）"
+            );
+        }
+        let expected_draws = if safe_zone { 6 } else { 7 };
+        assert_eq!(
+            cast_rng.len(),
+            expected_draws,
+            "[{stem}/{label}] 应恰 {expected_draws} 抽（安全区支无训练尾）；实得 {:?}",
+            cast_rng.iter().map(|(_, v, _)| *v).collect::<Vec<_>>()
+        );
+        assert!(
+            deliver_rng.is_empty(),
+            "[{stem}/{label}] 交付段不应有抽取；实得 {:?}",
+            deliver_rng
+        );
+        if !safe_zone {
+            assert_eq!(
+                i64::from(tp_after),
+                i64::from(tp_before) + cast_rng[6].1 + 1,
+                "[{stem}/{label}] 训练尾抽值必须等于 TranPoint 增量 − 1"
+            );
+        } else {
+            assert_eq!(tp_after, tp_before, "[{stem}/{label}] 安全区支不得训练");
+        }
+        assert_eq!(
+            has_640, !safe_zone,
+            "[{stem}/{label}] has_640 必须等于「非安全区」"
+        );
+        assert_eq!(
+            red_sysmsg, safe_zone,
+            "[{stem}/{label}] red_sysmsg 必须等于「安全区」"
+        );
+        let idents = |socket: i32| -> Vec<u16> {
+            all_frames
+                .iter()
+                .filter(|(s, _, _)| *s == socket)
+                .map(|(_, b, _)| sf_ident(b))
+                .collect()
+        };
+        let want_caster = if safe_zone {
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ]
+        } else {
+            vec![
+                mir2_protocol::messages::SM_MAGICFIRE,
+                mir2_protocol::messages::SM_MAGIC_LVEXP,
+            ]
+        };
+        assert_eq!(idents(911), want_caster, "[{stem}/{label}] caster 帧序");
+        for socket in [912, 913] {
+            assert_eq!(
+                idents(socket),
+                vec![
+                    mir2_protocol::messages::SM_SPELL,
+                    mir2_protocol::messages::SM_MAGICFIRE,
+                ],
+                "[{stem}/{label}] socket {socket} 帧序应为 [17,638]"
+            );
+        }
+        assert!(idents(914).is_empty(), "[{stem}/{label}] obs_out 必须零帧");
+        eprintln!(
+            "[{stem} {label}] seed={seed} safe={safe_zone} pre={} events={} rng={:?}",
+            pre_cells.len(),
+            expected_events,
+            cast_rng.iter().map(|(_, v, _)| *v).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn firecross_parity_base() {
+        firecross_parity_drive("base");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn firecross_parity_pre_center() {
+        firecross_parity_drive("pre_center");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn firecross_parity_safe_zone() {
+        firecross_parity_drive("safe_zone");
+    }
+
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
     /// 金标准某接收者 `Sent` 里 `ident` 的帧（按序；**期望只从 golden 来**）。
     fn golden_sent_ident(stem: &str, label: &str, who: &str, ident: i64) -> Vec<serde_json::Value> {

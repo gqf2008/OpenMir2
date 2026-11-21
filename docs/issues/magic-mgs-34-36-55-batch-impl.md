@@ -396,3 +396,50 @@ golden 逐收件人：`caster rm3/sm2`（638+640）、`target/obs_in rm2/sm2`（
 - 验收：每支重生成件与仓库件的差异**逐键归因**到已知 schema 变更（不允许多余差异）；
   重生成后对应 Driver/Comparator 全绿且 `RED_SET` 不扩大。
 - 风险：重生成会带入 GUID/墙钟类非判据字段（如 clone 的 `actor_id`），必须先列白名单。
+
+### 2.6 MG-36 实现记录（2026-11-21，已构建/已跑）
+
+**装置**（`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs`）
+- `MagicSpec.FireCrossSafeZone` + `PreEventCells`（缺省 false/空 ⇒ 既有 stem 零变化）；
+- `RunMagicCase` 额外两处门控：① 预置事件 `new FireBurnEvent(caster, x, y, ET_FIRE, 1, 0)`
+  （oracle ctor 只落格子、**不进** `EventMgr.Events`，用于 `GetEvent` 去重支）；② 安全区
+  （`env.Flag.SafeArea=true` + 临时 `Config.DisableInSafeZoneFireCross=true`，**施法后立即还原**）；
+- 事件快照：只取 `Envirnoment == env` 的 `EventMgr.Events`，反射读 `ContinueTime`
+  （private readonly，沿基类链），只记 `EventType/x/y/ContinueTime/Damage`，**不记 RunTick/时间戳**；
+- 契约 fail-closed（不满足 ⇒ rc=2 不落盘）：预占格 ⊆ 五格且无重复；事件数 == 5 − 预占数；
+  安全区支 == 0 且必须有 `RM_SYSMESSAGE(11004)`；`type==ET_FIRE(5)`、`continue_ms>0`；
+- **离线替身坑**：`InSafeZone(env,x,y)` 在 `SafeArea=false` 时也遍历 `M2Share.StartPointList`
+  （生产由 StartPoint.txt 装载；离线为 null ⇒ NRE）⇒ 装置补**空表**（"离线替身必须比真实环境更空"）。
+
+**golden `golden/magic/firecross.json`**（`--case firecross`，seed=22/23/24）
+| case | 事件 | 安全区 | 红字 | 640 | Rng |
+| --- | --- | --- | --- | --- | --- |
+| `base` | 5（四邻+中心，damage=6，continue=7000） | 否 | 无 | 有 | 7（6+训练） |
+| `pre_center` | 4（缺中心） | 否 | 无 | 有 | 7 |
+| `safe_zone` | 0 | 是 | `SM_SYSMESSAGE(100)` | 无 | 6（无训练） |
+
+**驱动/比较器**
+- `tests::firecross_parity_{base,pre_center,safe_zone}`（各自独立进程）+ `real_rust_ledger_firecross`；
+- 驱动自带退化守卫：非安全区支"事件数 == 5−预占，且 ≥1；0 条即具名红"
+  （**安全区支形态不同**：判据是"0 事件 + 红字 + 无 640"三者同时成立）；
+- 比较器：`verify` 通用面 + `FireCross` 块逐字段 + 推导面（blocked ⇒ 0 事件/红字/无 640；
+  非 blocked ⇒ 5−预占/无红字/有 640；`type==5`；`continue_ms>0` 且 1000 整数倍、同支一致）。
+
+**变异牙（现场重放；基线/变异期望 + 红在哪类判据）**
+| 变异 | 基线期望 | 变异期望 | 红在哪 |
+|---|---|---|---|
+| A 删安全区门 | safe_zone：0 事件/红字/无 640 | 5 事件/无红字/有 640 | 驱动 `火墙事件数 5/0`；比较器 `red_sysmsg/has_640/events 条数` + `safe_zone/caster Sent[1]`；共 14 条 |
+| B 无视 `GetEvent` 去重 | pre_center：4 事件 | 5 事件 | 驱动 `火墙事件数 5/4`；比较器 `[pre_center] events 条数不等：golden=4 rust=5`（仅 2 条） |
+| C 漏 S 格 | base 5 / pre 4 | base 4 / pre 3 | 驱动 `base 4/5`、`pre_center 3/4`；比较器 4 条 |
+| D `continue_ms` 用 `time`（不 ×1000） | 7000 | 7 | 驱动全绿（不断言数值）；比较器 `continue_ms 不等：golden=7000 rust=7` + 倍数检查，共 18 条 |
+
+四颗均 `cp` 还原后 sha 与变异前一致、`MUTATION` 标记 0，重跑三驱动 + 比较器复绿。
+
+**零漂移**：`master a209f36fd` 生成器 vs 本分支生成器，`spacemove`/`shield` 剔 `delivery`/`due_ms_rel`
+后均 `IDENTICAL(stripped)` ⇒ `RunMagicCase` 增量与 `StartPointList` 空表替身对既有 stem 零影响。
+
+**顺手订正**：`FireBurnEvent.event_type` 的文档注释原写 "`ET_FIRE = 1`"（实为 5，实现一直是 5）
+⇒ 改正并注明是注释错误（同"注释如何骗人"清单的骗法 A）。
+
+**门**：三驱动 1 passed；比较器 1 passed；`clippy -D warnings` 三包 0；`cargo fmt --check` 0；
+全量 `cargo test -p game-svr --lib` = **2198 passed / 0 failed / 142 ignored**。
