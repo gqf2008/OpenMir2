@@ -328,15 +328,21 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         .collect();
                     gd.sort();
                     rd.sort();
-                    let bad = gd.len() != rd.len()
-                        || gd
-                            .iter()
-                            .zip(rd.iter())
-                            .any(|(g, r)| (g - r).abs() > mir2_shared::DUE_MS_TOLERANCE_MS);
-                    if bad {
+                    if gd.iter().chain(rd.iter()).any(|&x| x == i64::MIN) {
                         errs.push(format!(
-                            "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
+                            "[{label}/{who}] 640 late due_ms_rel 缺失（一侧 i64::MIN）：golden {gd:?} vs rust {rd:?}"
                         ));
+                    } else {
+                        let bad = gd.len() != rd.len()
+                            || gd
+                                .iter()
+                                .zip(rd.iter())
+                                .any(|(g, r)| (g - r).abs() > mir2_shared::DUE_MS_TOLERANCE_MS);
+                        if bad {
+                            errs.push(format!(
+                                "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
+                            ));
+                        }
                     }
                 }
             } else if ga.len() != ra.len() {
@@ -390,7 +396,9 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         // 行为判据是批次类，见上方 `multi_victim` 注释与施毒件同口径）。
                         if f == "due_ms_rel" && num(g, "ident") == 640 {
                             let (a, b) = (num(g, f), num(r, f));
-                            if (a - b).abs() > mir2_shared::DUE_MS_TOLERANCE_MS {
+                            if a == i64::MIN || b == i64::MIN {
+                                errs.push(format!("[{label}/{who}] Sent[{i}].due_ms_rel 缺失（一侧 i64::MIN，不比较差值）：golden={a} rust={b}"));
+                            } else if (a - b).abs() > mir2_shared::DUE_MS_TOLERANCE_MS {
                                 errs.push(format!(
                                     "[{label}/{who}] Sent[{i}].due_ms_rel 超出 TickCount 容差（|Δ|≤{}ms）：golden={a} rust={b}",
                                     mir2_shared::DUE_MS_TOLERANCE_MS
@@ -1595,6 +1603,55 @@ fn tooth_multi_victim_due_ms_rel_compared_red() {
     assert!(
         err.iter().any(|e| e.contains("多重集")),
         "施法帧 0→100 必须红：{err:?}"
+    );
+}
+
+/// **牙（B22 比较器健壮性）：640 帧缺 `due_ms_rel`（一侧 i64::MIN）⇒ 明确报「缺失」，不得在 `(a-b).abs()` 溢出 panic。**
+///
+/// 构造：非 multi_victim（不设 frame_order_scope）、magic_id=33（非施毒）、等长两帧
+/// `[31(due=600), 640(due=1000)]`；rust 侧 640 帧不写 `due_ms_rel` ⇒ `num` 回落 `i64::MIN`。
+/// 旧代码 `(1000 - i64::MIN).abs()` 溢出 panic；修复后必须返回 Err 且含「缺失」。
+#[test]
+fn tooth_missing_due_640_reports_not_panic() {
+    let label = "s1";
+    let side = |with_640_due: bool| {
+        let mut f640 = serde_json::json!({ "ident": 640, "recog": 9, "param": 1, "tag": 0, "series": 0, "tail": "" });
+        if with_640_due {
+            f640["due_ms_rel"] = Value::from(1000);
+        }
+        serde_json::json!([{
+            "Who": "obs_in",
+            "Rm": [],
+            "Sent": [
+                { "ident": 31, "recog": 1002, "param": 85, "tag": 224, "series": 15, "due_ms_rel": 600, "tail": "" },
+                f640,
+            ],
+        }])
+    };
+    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g["cases"][0]["Receivers"] = side(true);
+    // 退化形态：两侧 640 都有 due ⇒ 必须绿（牙不恒红）
+    let mut r_ok = synth_rust(
+        label,
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([])),
+    );
+    r_ok["cases"][0]["Receivers"] = side(true);
+    assert!(verify_union(&g, &r_ok).is_ok(), "640 两侧都有 due 时应绿");
+    // 触发形态：rust 640 缺 due ⇒ i64::MIN ⇒ 旧代码溢出 panic
+    let mut r = synth_rust(
+        label,
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([])),
+    );
+    r["cases"][0]["Receivers"] = side(false);
+    let res = verify_union(&g, &r);
+    assert!(res.is_err(), "640 缺 due 必须报错：{res:?}");
+    let err = res.unwrap_err();
+    assert!(
+        err.iter()
+            .any(|e| e.contains("缺失") && e.contains("due_ms_rel")),
+        "640 缺 due_ms_rel 必须报「缺失」而非 panic：{err:?}"
     );
 }
 
