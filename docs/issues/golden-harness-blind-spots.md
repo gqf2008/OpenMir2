@@ -25,6 +25,7 @@
 | B15 | **等级门判据的夹具灵敏度极低**（16 圣言术/`holyshield`）：`cast_holy_curtain_spell` 的等级门 `draw + (caster_level - 1) > obj.level`（`mir2-rs/crates/world-bevy/src/world.rs`） | 任何**小幅度**修改该门的变异 | 判据 `draw + (caster_level - 1) > obj.level`，`draw = Random(4) ∈ [0,3]`；本 case 怪 `level=200`、caster 30 ⇒ 最坏 `draw=0` 时需 `caster_level ≥ 202`（**至少 +172** 才可能翻转）⇒ +1/+50 之类的小幅度变异**结构性不可观测** | 等级门决定 `RM_MAKEHOLYSEIZEMODE` 是否下发 | **本 case 的真因就是等级门**（`master=0`、目标格 objects 非空——原“master 门/objects 为空”归因**错误**，由 `bd` 于 2026-11-21 复核纠正）；**决定性变异可红**：删等级比较 （`if obj.master.is_none()`）⇒ 驱动与比较器双层红（见 MG-23 scope）。**纪律**：判“不可观测”前先用公式算出最小翻转幅度；算不出/没试到就只能写“已试幅度与所需幅度” |
 | B16 | **魔表口径：装置用零值 `MagicInfo`，部署魔表未覆盖**：C# `MagicGolden/Program.cs` 的 `new OpenMir2.Data.MagicInfo { MagicId, MagicName, Effect, EffectType }`（其余字段默认 0）；Rust `fireball_rig` 同 `..mir2_data::MagicInfo::default()` | 任何读 `TrainLv`/`DefPower`/`DefMaxPower` 的魔号（`GetPower13`/`GetPower` 等） | 装置侧 `TrainLv=0`、`DefPower=DefMaxPower=0`，与部署口径「`src/GameSrv/DB/MySqlDB.cs` 的 `LoadMagicDB` 恒置 `TrainLv=3`、`sql/mir2_data.sql` MagID 48 行 `DefPower=4/DefMaxPower=4`」**不同源**；同一参数代入：**装置口径 P(30)=80（golden 值）、部署口径 P(30)≈54** | 部署魔表实数下的取整/阈值/倍率分支 | **部署口径下的行为**：凡读这三个字段的魔号，「两侧一致」只在**零值口径**下成立 |
 | B17 | **延迟消息排水粒度：装置全量逐条 vs 生产「遇未到期队首即停」**：装置 `MagicGolden/Program.cs` 的 `DrainOnce` 先 `DrainRaw()` 取**全部**消息 → 逐条判 `DeliveryTime <= now`（到期 `OperatePublic`、未到期收进 `later` 后 `PushBack` 回 `MsgQueue`）⇒ **一步内处理所有到点消息、不在首个未到期项处停**；生产对照 `ActorEntity.MsgQueue`=`PriorityQueue<SendMessage,byte>`（**只按 priority**），`BaseObject.Message.cs` 的 `GetMessage`：`TryDequeue` → 若 `DeliveryTime > now` ⇒ `Enqueue(Lowest)` + `return false`（**遇未到期队首即停**） | 同一 cast 产生 ≥2 条延迟 self-delay（如 50 魔爆 `power/3`+`n_power` 两条 `RM_DELAYMAGIC`@600）+ 同队列里一条**更晚到期**项（`RM_POISON`/`RM_MAGIC_LVEXP`）并存 | 装置不看「队首是否到期」，把**所有**到点消息同刻吐出 ⇒ golden 的 `due_ms_rel`/出队顺序按**装置语义**生成 | `GetMessage` 遇未到期队首即 `Lowest` 重入队 + 停 ⇒ 已到点但排在其后的消息被**推到下一 tick**（Rust 泵 `deliver_self_delay_msgs_impl` 同构、忠实复刻） | 生产的「遇未到期队首即停/延后」；多延迟场景 golden 的帧时序/顺序**不代表生产**。**实例**：50 魔爆成功臂（`openmir2-mabmabe-success-arm-parity`）golden 两条 600 同刻出队（装置全量语义），Rust 生产分 tick（700/800）⇒ 曾误判为「产品泵缺陷」，`89` 复核纠正为**装置缺口**（判据 `fixture-self-consistency-is-not-parity`：**装置内部自洽 ≠ 与生产一致**）。**处置**：以生产为准 ⇒ 改 `DrainOnce` 为「遇未到期队首即停」，重出受影响 golden，再复核受影响条目（`89` 列出 6 个 stem） |
+| B18 | **committed golden 与生成器不同步（schema 漂移）**：当前 master 的 `MagicGolden/Program.cs` 对**任意** stem 的 `cases[].Fixture` 多吐 8 个键（`amulet_shape`/`amy_ounsul_point`/`target_anti_poison`/`you_poisoned`/`red_msg_f_color`/`red_msg_b_color`/`caster_name`/`slave_colors`），committed golden 多数没有 | 用当前 harness 重出任意 golden | schema 多键：`regen vs committed 逐字节（剥 delivery）`会**全 stem 假红**（hbfireball pilot：24 处 diff **全是**这些 Fixture 多键、0 处语义） | committed golden 与当前生成器**不同步** ⇒ ①“重出 golden”在本树**默认产生 schema 漂移**；②“committed golden 能被当前代码复现”这一隐含假设**不成立** | **量化（60 支）**：全 8 键有 **5 支**（`fireball-nonzero`、`lightflower-nonzero`、`lightning-11-nonzero`、`mabmabe-nondefault`、`tamming`）；**全缺 8 键 42 支**（`bigcloak`、`bighealing`、`cloak`、`dejiwonho`、`fire`、`fireball-5`、`fireball`、`fireboom`、`fireboom47`、`firecharm`、`groupdeding`、`grouplightening`、`hangmajinbub`、`hbfireball`、`healing`、`holyshield`、`lightflower`、`lightning-11`、`lightning-45`、`shield`、`showhp`、`sinsu`、`skeleton`、`skill10`、`skill49`、`skill51`、`skill52`、`skill53`、`skill54`、`snowwind`、`uenhancer`、`unamyounsul`、`warr-12`、`warr-25`、`warr-26`、`warr-27`、`warr-3`、`warr-34`、`warr-38`、`warr-4`、`warr-43`、`warr-7`）；**部分 13 支**（`amyounsul`、`amyounsul2`、`angel`、`clone46`、`energyrepulsor`、`firecross`、`firewind`、`groupamyounsul`、`groupamyounsul2`、`mabmabe`、`spacemove`、`turnundead`、`windtebo`；均缺 `caster_name/slave_colors`）。**风险判定**：这 8 键的 `golden_fixture_required` 读取**全部 gated 到拥有该键的 stem**（poison 4 支：`amulet_shape`/`target_anti_poison`/`amy_ounsul_point`/`red_msg_*`/`you_poisoned`；`firecross_parity_drive`：`red_msg_*`；`caster_name`/`slave_colors` **无 required 读**）⇒ **当前无驱动因缺键 panic**，55 支陈旧 golden 只是少记了未用输入。**处置**：需要 schema 干净的批次用**快照生成器**（如 B17 用 `c31580a57` 生成器 + 单点改动，避免“排水语义 + schema”两因混淆）；全量重生成是另一批决策。 |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -34,10 +35,11 @@
 - **按可见集选目标类**（8/37 之外的将来效果）—— 落在 **B4**。
 - **按物品表/城堡/事件/配置阈值分叉的效果** —— 落在 **B8/B9/B10**。
 - **多延迟同 cast 的帧时序/顺序（实例：50 魔爆成功臂）** —— 落在 **B17**。
+- **committed golden 可复现性（生成器 schema 漂移）** —— 落在 **B18**。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 17 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17？
+1. **先查本卡 18 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
@@ -46,7 +48,7 @@
 
 ## 4. 使用法
 
-1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17？"
+1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18？"
 2. 命中盲区 ⇒ 记为**装置限制**（进 scope 或登记卡），**不要**当成产品缺陷去改实现。
 3. 需要把盲区变可见时，改装置的方向（另开卡）：替身怪绑定 `Envir`+`ActorMgr`+`AddMapObject`；对被动怪实现最小 `Operate`；克隆体复位 `FixedHideMode` 并把其队列纳入排水；对 `VisibleActors` 按 AOI 回填；显式装载 `ServerConf`；跑必要 tick 的 `Run`。
 
@@ -70,6 +72,7 @@
 | B14 `ObMode`/`FixedHideMode` 待复位 | `docs/issues/notes-comments-that-lie-20261121.md`、`docs/issues/openmir2-hidden-npc-world-entities.md` |
 | B16 魔表零值口径 | 无（本卡新立）；影响面见 `docs/issues/parity-gap-magic.json` 的 MG-65 `scope` |
 | B17 延迟消息排水粒度（装置全量逐条 vs 生产遇未到期队首即停） | 本卡新立；实例见 `docs/issues/openmir2-mabmabe-success-arm-parity.md` 与 `89` 的 6 stem 复核 |
+| B18 committed golden / 生成器 schema 漂移 | 与 `docs/issues/openmir2-golden-generator-drift.md` 同源（本卡给量化与风险判定）；B17 的快照生成器口径即为此处的隔离手段 |
 
 ## 6. 关联
 
