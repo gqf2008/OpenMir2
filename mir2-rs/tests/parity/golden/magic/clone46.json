@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 46,
         "magic_name": "Clone",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 0,
@@ -141,7 +143,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1220121218,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -278,11 +280,11 @@
       "TargetHpBefore": 100,
       "NotDue": [],
       "CasterMp": 0,
-      "Angel": null,
       "Clone": {
         "name": "Clone",
-        "actor_id": 1921834330,
-        "rel_to_caster": 1921833329,
+        "clone_ordinal": 0,
+        "clone_count": 1,
+        "actor_id_policy": "oracle_guid_nondeterministic",
         "x": 100,
         "y": 100,
         "dir": 6,
