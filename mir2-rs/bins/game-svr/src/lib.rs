@@ -14607,6 +14607,12 @@ fn handle_spell_cmd_with_magic(
                         magic.effect,
                         req.magic_id,
                     );
+                    // **MG-47 S1（占位臂）**：35 `SKILL_WINDTEBO` 的显式识别。效果体在 S2 接入；
+                    // 本臂**不产生任何帧**，只把该魔号从"未分类"变成"已登记、效果待接"，
+                    // 避免将来误落其它 `case` 分派（oracle 的 35 是 `MagicManager` 的独立 case）。
+                    if req.magic_id == mir2_world_bevy::world::SKILL_WINDTEBO {
+                        glog!("DBG", "CM_SPELL：35 SKILL_WINDTEBO 效果体未接（S1 占位）");
+                    }
                     if matches!(
                         req.magic_id,
                         mir2_world_bevy::magic::SKILL_FIREWIND

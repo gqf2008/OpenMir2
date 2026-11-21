@@ -57,6 +57,10 @@ pub const SKILL_BIGCLOAK: u16 = 19; // `MagicConst.cs:80` 集体隐身术
 pub const SKILL_SHOWHP: u16 = 28; // `MagicConst.cs:116` 心灵启示
 pub const SKILL_KILLUNDEAD: u16 = 32; // `MagicConst.cs:132` 圣言术
 pub const SKILL_UNAMYOUNSUL: u16 = 40; // `MagicConst.cs:140` 解毒术常量（部署行「十方斩」）
+/// `MagicConst.SKILL_WINDTEBO`（`MagicConst.cs:142`）——狂风/灭天火（35）。
+/// 效果体 `MagWindTebo`（`MagicManager.cs:858-874`）；**注意名字陷阱**：冻结 `sql/magics` 里
+/// 唯一叫「灭天火」的是魔号 **45**，本常量是 **35**（`sql/magics` 无 35 行 ⇒ 生产不可学）。
+pub const SKILL_WINDTEBO: u16 = 35;
 
 /// 世界 tick 里排队执行的命令。
 #[derive(Clone, Debug, PartialEq, Eq)]
