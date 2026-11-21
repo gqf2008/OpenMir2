@@ -1939,7 +1939,7 @@
         ]
       },
       "basis": "semantic",
-      "scope": "partial：`Shape=1@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:919`）群体绿毒臂由 `groupamyounsul.json`（Shape=1）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 跨 buff 位号（本夹具恒 `int.MinValue`）。"
+      "scope": "partial：`Shape=1@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:919`）群体绿毒臂由 `groupamyounsul.json`（Shape=1）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 跨 buff 位号（本夹具恒 `int.MinValue`）。**牙（2026-11-21，QA 补）**：`world.rs:5126` 的 Shape=1 臂毒型 `0u8→1u8`（绿→红，威力 `40` 不动）⇒ 比较器 3 条 `RM_POISON(8037) wParam` 0→1 红、**驱动三支全绿**（该字段由比较器独守，§2.7「仅比较器红」形态）；同变异同 RUN_ID 下 Shape=2 保持绿（选支特异）；还原 `hash-object` 相等、复跑绿；最小可观测幅度 = 分类值 0→1。"
     },
     {
       "id": "MG-65",
