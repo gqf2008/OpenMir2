@@ -55464,6 +55464,153 @@ break
         assert_eq!(online.by_chr, by_chr_before, "by_chr 不得被改动");
     }
 
+    /// **MP-1 微基准（算法级证据，不是端到端收益）**：`OnlineRegistry` 线性查找 vs 旁挂索引。
+    ///
+    /// 只测「单次查找」的复杂度：n ∈ {986, 2800}、命中/未命中各半、各 1e5 次查找，median-3。
+    /// **不证明 tick 收益**——端到端需要「真实 `sim_loop` 每 tick 调用次数 × 单次耗时」探针（另立卡）。
+    /// 另：`simmonsterai_bench_tiers` **不经过** `OnlineRegistry`（该文件无 `online` 引用），
+    /// 不能拿它当收益证据（见 `docs/issues/single-thread-lookup-inventory-20261121.md` §5）。
+    ///
+    /// 红检：索引臂若未比线性快 ≥5× ⇒ panic（结构改了但没吃上索引 / 索引退化成线性）。
+    #[test]
+    #[ignore = "微基准：需 MIR2_PERF_MICRO=1 + --ignored --nocapture"]
+    fn online_lookup_micro_index_vs_linear() {
+        use std::hint::black_box;
+
+        if std::env::var("MIR2_PERF_MICRO").ok().as_deref() != Some("1") {
+            eprintln!("MIR2_PERF_MICRO != 1 不跑微基准");
+            return;
+        }
+        const ITERS: u64 = 100_000;
+        const REPEATS: usize = 3;
+        const MIN_SPEEDUP: f64 = 5.0;
+
+        fn build(n: usize) -> OnlineRegistry {
+            let mut r = OnlineRegistry::new();
+            for i in 0..n {
+                r.set(entry(
+                    "acct",
+                    &format!("m{i}"),
+                    1,
+                    0,
+                    900 + (i % 100) as i32,
+                    10_000 + i as i32,
+                ));
+            }
+            r
+        }
+
+        fn median3(mut v: [u128; REPEATS]) -> u128 {
+            v.sort_unstable();
+            v[REPEATS / 2]
+        }
+
+        fn time<F: FnOnce() -> u64>(f: F) -> u128 {
+            let t = std::time::Instant::now();
+            black_box(f());
+            t.elapsed().as_nanos()
+        }
+
+        println!("# online_lookup_micro iters={ITERS}（命中/未命中各半）repeats={REPEATS}");
+        let mut failures: Vec<String> = Vec::new();
+        for &n in &[986usize, 2_800usize] {
+            let r = build(n);
+            // **键预构造**：format! 不放进计时循环（否则测的是分配器，不是查找）。
+            // 偶数下标是命中键（m{i} / actor 10_000+i），奇数下标是未命中键。
+            let keys: Vec<(i32, String)> = (0..n)
+                .map(|i| {
+                    if i % 2 == 0 {
+                        (10_000 + i as i32, format!("m{i}"))
+                    } else {
+                        (-1 - i as i32, format!("miss{i}"))
+                    }
+                })
+                .collect();
+
+            let lin_actor: [u128; REPEATS] = std::array::from_fn(|_| {
+                time(|| {
+                    let mut sum = 0u64;
+                    for k in 0..ITERS as usize {
+                        let (aid, _) = &keys[k % n];
+                        sum += r
+                            .entries
+                            .iter()
+                            .find(|e| e.actor_id == *aid)
+                            .map_or(0, |e| e.socket as u64);
+                    }
+                    sum
+                })
+            });
+            let idx_actor: [u128; REPEATS] = std::array::from_fn(|_| {
+                time(|| {
+                    let mut sum = 0u64;
+                    for k in 0..ITERS as usize {
+                        let (aid, _) = &keys[k % n];
+                        sum += r.find_by_actor(*aid).map_or(0, |e| e.socket as u64);
+                    }
+                    sum
+                })
+            });
+            let lin_chr: [u128; REPEATS] = std::array::from_fn(|_| {
+                time(|| {
+                    let mut sum = 0u64;
+                    for k in 0..ITERS as usize {
+                        let (_, chr) = &keys[k % n];
+                        sum += r
+                            .entries
+                            .iter()
+                            .find(|e| e.chr_name == *chr)
+                            .map_or(0, |e| e.socket as u64);
+                    }
+                    sum
+                })
+            });
+            let idx_chr: [u128; REPEATS] = std::array::from_fn(|_| {
+                time(|| {
+                    let mut sum = 0u64;
+                    for k in 0..ITERS as usize {
+                        let (_, chr) = &keys[k % n];
+                        sum += r.find_by_chr(chr).map_or(0, |e| e.socket as u64);
+                    }
+                    sum
+                })
+            });
+
+            let (la, ia) = (median3(lin_actor), median3(idx_actor));
+            let (lc, ic) = (median3(lin_chr), median3(idx_chr));
+            let per = |total: u128| total as f64 / ITERS as f64;
+            let sp_actor = la as f64 / ia.max(1) as f64;
+            let sp_chr = lc as f64 / ic.max(1) as f64;
+            println!(
+                "n={n}: actor linear={:.2} ns/lookup index={:.2} ns/lookup speedup={:.1}x；                 chr linear={:.2} ns/lookup index={:.2} ns/lookup speedup={:.1}x",
+                per(la),
+                per(ia),
+                sp_actor,
+                per(lc),
+                per(ic),
+                sp_chr
+            );
+            println!(
+                "        总量 median-3：actor linear={la} ns index={ia} ns；chr linear={lc} ns index={ic} ns"
+            );
+            if sp_actor < MIN_SPEEDUP {
+                failures.push(format!(
+                    "n={n} actor 加速仅 {sp_actor:.2}x < {MIN_SPEEDUP}x（linear {la} ns / index {ia} ns，{ITERS} 次）"
+                ));
+            }
+            if sp_chr < MIN_SPEEDUP {
+                failures.push(format!(
+                    "n={n} chr 加速仅 {sp_chr:.2}x < {MIN_SPEEDUP}x（linear {lc} ns / index {ic} ns，{ITERS} 次）"
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "索引臂未达到 ≥{MIN_SPEEDUP}x（结构改了但没吃上索引？）：\n{}",
+            failures.join("\n")
+        );
+    }
+
     /// **`CM_SAY` 普通说话**：与 oracle `SendRefMsg`（`BaseObject.Message.cs:395-440`）同集合 ——
     /// ±`SendRefMsgRange`(12) 格内、同图、`Race==Play && !Ghost` 的 actor，**含说话者自己**。
     /// 帧 = 12B 头（`Recog=说话者 ActorId`、`Ident=SM_HEAR(40)`、`Param=MakeWord(F,B)`、`Tag=0`、
