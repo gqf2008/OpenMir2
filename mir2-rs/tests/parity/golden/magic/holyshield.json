@@ -18,10 +18,14 @@
       "Fixture": {
         "magic_id": 16,
         "magic_name": "HolyShield",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -31,6 +35,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -78,6 +85,11 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -86,6 +98,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -93,9 +106,21 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 0,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 101,
             "y": 101,
             "race": 50,
@@ -103,7 +128,18 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 0,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -157,30 +193,36 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1131359875,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 16,
               "param": 1,
               "tag": 3,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -214,16 +256,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -257,16 +303,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             }
           ]
@@ -326,10 +376,14 @@
       "Fixture": {
         "magic_id": 16,
         "magic_name": "HolyShield",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -339,6 +393,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -386,6 +443,11 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -394,6 +456,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -401,7 +464,18 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 0,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -451,16 +525,20 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -494,16 +572,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -537,16 +619,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             }
           ]
@@ -575,10 +661,14 @@
       "Fixture": {
         "magic_id": 16,
         "magic_name": "HolyShield",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -588,6 +678,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -635,6 +728,11 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -643,6 +741,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -650,7 +749,18 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 1,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -700,16 +810,20 @@
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -743,16 +857,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             }
           ]
@@ -786,16 +904,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             }
           ]
@@ -824,10 +946,14 @@
       "Fixture": {
         "magic_id": 16,
         "magic_name": "HolyShield",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 4001,
+        "target_actor_id": 4002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -837,6 +963,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -884,6 +1013,11 @@
           140,
           100
         ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -892,6 +1026,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -899,9 +1034,21 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 0,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 101,
             "y": 101,
             "race": 50,
@@ -909,7 +1056,18 @@
             "hp": 300,
             "life_attrib": 0,
             "master": 0,
-            "target_cret": 0
+            "target_cret": 0,
+            "speed_point": 15,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -963,30 +1121,36 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1131363796,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 4001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "\u003Eghhd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 16,
               "param": 1,
               "tag": 3,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -1020,16 +1184,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 4001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 4001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "\u003Eghhd?"
             }
           ]
@@ -1063,16 +1231,20 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 4001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "16"
             },
             {
               "ident": 638,
+              "recog": 4001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "\u003Eghhd?"
             }
           ]

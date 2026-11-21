@@ -19,7 +19,7 @@
       "path": "E:\\MirServer\\M2GameSvr\\Map\\0.map",
       "sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7"
     },
-    "repo_head": "1e467b8967dc77c8a2b77d05063572b64c484e39"
+    "repo_head": "7f21aa6a32f2ab106de9005230311ed768d600e2"
   },
   "fixture_spec": {
     "magic_name": "SwordLong",
@@ -33,7 +33,9 @@
     "target_max_hp": 100,
     "magic_spell": 20,
     "magic_def_spell": 0,
-    "spell_point": 10
+    "spell_point": 10,
+    "toggle_text_on": null,
+    "toggle_text_off": null
   },
   "cases": [
     {
@@ -67,7 +69,8 @@
           "use_thrusting": false,
           "use_half_moon": false,
           "crs_hitkill": false,
-          "fire_hit_busy": false
+          "fire_hit_busy": false,
+          "mbo43_kill": false
         },
         "entry_return": true,
         "delay_time": 0,

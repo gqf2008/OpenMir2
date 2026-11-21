@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 2,
         "magic_name": "Healing",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -33,6 +35,9 @@
         "target_hp": 50,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -81,6 +86,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": null,
         "sockets": [
           911,
@@ -128,7 +136,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1176870562,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -186,7 +194,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1176870362,
+              "delivery": 1000800,
               "priority": 255
             }
           ],
@@ -280,6 +288,8 @@
       "Fixture": {
         "magic_id": 2,
         "magic_name": "Healing",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -295,6 +305,9 @@
         "target_hp": 224,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -343,6 +356,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": null,
         "sockets": [
           911,
@@ -510,6 +526,8 @@
       "Fixture": {
         "magic_id": 2,
         "magic_name": "Healing",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -525,6 +543,9 @@
         "target_hp": 50,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -573,6 +594,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": null,
         "sockets": [
           911,
@@ -620,7 +644,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1176873343,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -631,7 +655,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1176873143,
+              "delivery": 1000800,
               "priority": 255
             }
           ],

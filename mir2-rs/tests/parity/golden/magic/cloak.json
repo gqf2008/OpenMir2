@@ -18,10 +18,14 @@
       "Fixture": {
         "magic_id": 18,
         "magic_name": "Cloak",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -31,6 +35,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -79,6 +86,10 @@
           100
         ],
         "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -147,37 +158,45 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1147983125,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 657,
+              "recog": 1001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 18,
               "param": 1,
               "tag": 1,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -222,23 +241,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 657,
+              "recog": 1001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -283,23 +308,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
             },
             {
               "ident": 657,
+              "recog": 1001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -323,10 +354,14 @@
       "Fixture": {
         "magic_id": 18,
         "magic_name": "Cloak",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -336,6 +371,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -384,6 +422,10 @@
           100
         ],
         "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -452,37 +494,45 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1147984406,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 657,
+              "recog": 2001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 18,
               "param": 1,
               "tag": 1,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -527,23 +577,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 657,
+              "recog": 2001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -588,23 +644,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
             },
             {
               "ident": 657,
+              "recog": 2001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -628,10 +690,14 @@
       "Fixture": {
         "magic_id": 18,
         "magic_name": "Cloak",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -641,6 +707,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 5,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -689,6 +758,10 @@
           100
         ],
         "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
         "sockets": [
           911,
           912,
@@ -757,37 +830,45 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1147985718,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 642,
+              "recog": 500,
               "param": 5,
               "tag": 1000,
               "series": 0,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 657,
+              "recog": 3001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             },
             {
               "ident": 640,
+              "recog": 18,
               "param": 1,
               "tag": 2,
               "series": 0,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -832,23 +913,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 657,
+              "recog": 3001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]
@@ -893,23 +980,29 @@
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "18"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
             },
             {
               "ident": 657,
+              "recog": 3001,
               "param": 0,
               "tag": 0,
               "series": 7,
+              "due_ms_rel": 0,
               "tail": ""
             }
           ]

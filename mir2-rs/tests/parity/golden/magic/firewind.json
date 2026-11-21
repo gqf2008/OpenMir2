@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 8,
         "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -146,7 +148,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1211526859,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -334,6 +336,8 @@
       "Fixture": {
         "magic_id": 8,
         "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -462,7 +466,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1211528109,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -650,6 +654,8 @@
       "Fixture": {
         "magic_id": 8,
         "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -789,7 +795,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1211529406,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
