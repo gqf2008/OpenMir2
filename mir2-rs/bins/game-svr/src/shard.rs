@@ -849,6 +849,18 @@ impl ShardRuntime {
         self.counters
     }
 
+    /// 本片 World 的 `map_sizes`（= `layout.local_map_sizes(self.local, all)`）。
+    #[must_use]
+    pub fn local_map_sizes(&self, all: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        self.layout.local_map_sizes(self.local, all)
+    }
+
+    /// 本片 World 的 `owned_maps` 位图（= `layout.local_ownership(self.local)`）。
+    #[must_use]
+    pub fn local_ownership_bitmap(&self) -> Vec<bool> {
+        self.layout.local_ownership(self.local)
+    }
+
     /// `map_id` 是否归**本地片**。单片布局恒真。
     ///
     /// **P2-3b**：这是主谓词（每个 World 只关心自己片）；[`Self::host_owns`] 是片 0 之上的
@@ -1581,6 +1593,30 @@ mod tests {
             layout.local_ownership(ShardId::new(1)),
             vec![true, false, true, false]
         );
+    }
+
+    /// **P2-3b 牙**：runtime 级便捷方法必须与 layout 级按片方法逐位一致。
+    ///
+    /// 红检：把 `local_map_sizes`/`local_ownership_bitmap` 写成恒用 HOST_SHARD ⇒ 片 1 断言红。
+    #[test]
+    fn runtime_conveniences_match_layout_per_shard() {
+        let maps = map_names(&["A", "B", "C", "D"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:B,D;1:*")).expect("非前缀划分");
+        let all = vec![(10, 10), (11, 11), (12, 12), (13, 13)];
+        let s1 = ShardRuntime::for_shard(layout.clone(), ShardId::new(1));
+        assert_eq!(
+            s1.local_map_sizes(&all),
+            layout.local_map_sizes(ShardId::new(1), &all)
+        );
+        assert_eq!(
+            s1.local_ownership_bitmap(),
+            layout.local_ownership(ShardId::new(1))
+        );
+        assert_eq!(
+            s1.local_map_sizes(&all),
+            vec![(10, 10), (1, 1), (12, 12), (1, 1)]
+        );
+        assert!(!s1.local_ownership_bitmap()[1] && s1.local_ownership_bitmap()[2]);
     }
 
     /// 越界片号是编程错误 ⇒ `for_shard` panic（不静默起一个永远没有地图的 World）。

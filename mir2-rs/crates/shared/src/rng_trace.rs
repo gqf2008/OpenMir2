@@ -21,7 +21,12 @@
 //! 线程：C# 侧是全局单例 + 多线程；Rust 侧 `RandomNumber` 按持有者分（`World.rng`）。本 sink 用
 //! `Mutex` 串行化写盘，`seq` 全局单调 ⇒ 与 C# 的 `RecordingRandom` 同口径（记录的是「写盘顺序」，
 //! 亦即实际取数顺序）。
+//!
+//! **P2-3b（同进程多 World）**：`MIR2_SHARDS>1` 时非 0 片的 sim 线程用
+//! [`suppress_current_thread`] 抑制自己的落账——env 是进程级、无法按片开关，N 份流水交错后
+//! 不可对拍 ⇒ **N>1 时只有片 0 的取数进流水**；`MIR2_SHARDS=1` 不变（无人调用抑制）。
 
+use std::cell::Cell;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -44,6 +49,32 @@ static SINK: OnceLock<Sink> = OnceLock::new();
 #[inline]
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+thread_local! {
+    /// **P2-3b**：本线程是否抑制落账。默认 `false` ⇒ N=1 / 既有路径逐字节不变。
+    static SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 抑制**当前线程**的 trace 落账。
+///
+/// **P2-3b 用途**：`MIR2_SHARDS>1` 时同进程有 N 个 World，但 trace 的开关是进程级 env
+/// （无法按片开关），N 份流水交错后不可对拍 ⇒ 非 0 片的 sim 线程在构造 World **之前**
+/// 调用本函数，只让片 0 的取数落账（见 `bins/game-svr/src/lib.rs` 的 `sim_loop` 开头）。
+///
+/// 线程本地（`thread_local!`），不影响其它片的线程；默认不抑制。
+pub fn suppress_current_thread() {
+    SUPPRESSED.with(|c| c.set(true));
+}
+
+/// 恢复当前线程的落账（默认即落账；提供它是为了对称/RAII 语义与测试）。
+pub fn unsuppress_current_thread() {
+    SUPPRESSED.with(|c| c.set(false));
+}
+
+#[inline]
+fn suppressed() -> bool {
+    SUPPRESSED.with(Cell::get)
 }
 
 /// 显式开启（测试 / 程序化接线用）：打开 `path`，写与 C# 钩子同形的两行头。
@@ -138,7 +169,7 @@ pub fn write_isolation_marker(attack_seed: i32) {
 /// `Next(min,max)`→arg=`(min<<32)|max`、`NextDouble()`→arg=0。
 #[inline]
 pub fn record(kind: &str, arg: i64, result: i64, file: &'static str, line: u32) {
-    if !enabled() {
+    if !enabled() || suppressed() {
         return;
     }
     if let Some(sink) = SINK.get() {
