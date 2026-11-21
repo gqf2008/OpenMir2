@@ -1966,6 +1966,234 @@ fn real_rust_ledger_firecross() {
     );
 }
 
+/// Tamming 块检查（`verify` 之外）：建模面逐字段 + 分支推导（60005 公式/受奴后效/狂暴）。
+fn tamming_block_checks(g: &Value, r: &Value) -> Vec<String> {
+    let mut errs = Vec::new();
+    let g_cases = g["cases"].as_array().cloned().unwrap_or_default();
+    let r_cases = r["cases"].as_array().cloned().unwrap_or_default();
+    if g_cases.len() != r_cases.len() {
+        errs.push(format!(
+            "Tamming cases 数不等：golden={} rust={}",
+            g_cases.len(),
+            r_cases.len()
+        ));
+        return errs;
+    }
+    for (gc, rc) in g_cases.iter().zip(r_cases.iter()) {
+        let label = text(gc, "Label");
+        let gb = &gc["Tamming"];
+        let rb = &rc["Tamming"];
+        if !gb.is_object() || !rb.is_object() {
+            errs.push(format!("[{label}] Tamming 块缺失"));
+            continue;
+        }
+        for k in ["spell_return", "has_640"] {
+            if gb.get(k).and_then(Value::as_bool) != rb.get(k).and_then(Value::as_bool) {
+                errs.push(format!(
+                    "[{label}] Tamming.{k} 不等：golden={:?} rust={:?}",
+                    gb.get(k),
+                    rb.get(k)
+                ));
+            }
+        }
+        for k in ["slave_list_rel", "slave_count_after"] {
+            if gb.get(k) != rb.get(k) {
+                errs.push(format!(
+                    "[{label}] Tamming.{k} 不等：golden={:?} rust={:?}",
+                    gb.get(k),
+                    rb.get(k)
+                ));
+            }
+        }
+        // 60005 投递（列表逐项）。
+        let gr = gb["rm_makeholyseize"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let rr = rb["rm_makeholyseize"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if gr.len() != rr.len() {
+            errs.push(format!(
+                "[{label}] rm_makeholyseize 条数不等：golden={} rust={}",
+                gr.len(),
+                rr.len()
+            ));
+        } else {
+            for (j, (a, b)) in gr.iter().zip(rr.iter()).enumerate() {
+                for k in ["who", "w_param"] {
+                    if a.get(k) != b.get(k) {
+                        errs.push(format!(
+                            "[{label}] rm_makeholyseize[{j}].{k} 不等：golden={:?} rust={:?}",
+                            a.get(k),
+                            b.get(k)
+                        ));
+                    }
+                }
+            }
+        }
+        // monsters_after：只比**已建模**字段（CanReAlive 后效 / MonGen 不建模）。
+        let ga = gb["monsters_after"].as_array().cloned().unwrap_or_default();
+        let ra = rb["monsters_after"].as_array().cloned().unwrap_or_default();
+        if ga.len() != ra.len() {
+            errs.push(format!(
+                "[{label}] monsters_after 数不等：golden={} rust={}",
+                ga.len(),
+                ra.len()
+            ));
+        } else {
+            for (j, (a, b)) in ga.iter().zip(ra.iter()).enumerate() {
+                for k in ["name", "master"] {
+                    if a.get(k) != b.get(k) {
+                        errs.push(format!(
+                            "[{label}] monsters_after[{j}].{k} 不等：golden={:?} rust={:?}",
+                            a.get(k),
+                            b.get(k)
+                        ));
+                    }
+                }
+                for k in [
+                    "hp",
+                    "max_hp",
+                    "walk_speed",
+                    "next_hit_time",
+                    "slave_make_level",
+                    "crazy_mode",
+                    "crazy_interval_ms",
+                ] {
+                    if a.get(k) != b.get(k) {
+                        errs.push(format!(
+                            "[{label}] monsters_after[{j}].{k} 不等：golden={:?} rust={:?}",
+                            a.get(k),
+                            b.get(k)
+                        ));
+                    }
+                }
+            }
+        }
+        // 推导面（两侧各自）：60005 公式、分支后效自洽。
+        let lvl = num(&gc["Fixture"], "user_magic_level");
+        let want_w = (lvl * 5 + 10) * 1000;
+        for (side, c) in [("golden", gc), ("rust", rc)] {
+            let b = &c["Tamming"];
+            let holy = b["rm_makeholyseize"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            for e in &holy {
+                if num(e, "w_param") != want_w {
+                    errs.push(format!(
+                        "[{side}/{label}] 60005 w_param={} ≠ (L*5+10)*1000={want_w}",
+                        num(e, "w_param")
+                    ));
+                }
+            }
+            let slave = b["slave_list_rel"].as_array().cloned().unwrap_or_default();
+            let mon = &b["monsters_after"][0];
+            let master = text(mon, "master");
+            if !slave.is_empty() {
+                if master != "caster" {
+                    errs.push(format!("[{side}/{label}] 有 SlaveList 但 master≠caster"));
+                }
+                if num(mon, "walk_speed") != 1500 || num(mon, "next_hit_time") != 2000 {
+                    errs.push(format!(
+                        "[{side}/{label}] 受奴后钳制值应为 1500/2000，实得 {}/{}",
+                        num(mon, "walk_speed"),
+                        num(mon, "next_hit_time")
+                    ));
+                }
+            }
+            if b.get("has_640").and_then(Value::as_bool) != Some(true)
+                && label != "outer_fail_false"
+            {
+                errs.push(format!("[{side}/{label}] 非 outer_fail_false 支必须有 640"));
+            }
+            if label == "outer_fail_false"
+                && b.get("has_640").and_then(Value::as_bool) != Some(false)
+            {
+                errs.push(format!("[{side}/{label}] Result=false ⇒ 不得有 640"));
+            }
+        }
+    }
+    errs
+}
+
+/// **MG-34（20 诱惑之光）** 真实台账 → 判定面（七支）。
+///
+/// 判据分层：驱动只记录（输入全从 golden 读、配置四键构造 `PetSlaveConfig`）；比较器做
+/// `verify` 通用面 + `Tamming` 块逐字段（建模面）+ 推导面（60005 公式 `(L*5+10)*1000`、
+/// 受奴后 `Master=caster`/`SlaveList`/WalkSpeed/NextHitTime 钳制、`Result=false ⇒ 无 640`）。
+/// **不比较**：`CanReAlive` 清除后效 / `MonGen.ActiveCount--`（Rust 未建模；golden 记录留锚）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::tamming_parity_*）生成真实台账"]
+fn real_rust_ledger_tamming() {
+    let stem = "tamming";
+    let labels = [
+        "self_master",
+        "adopt_ok",
+        "level_gate_fail",
+        "branch_else",
+        "outer_fail_true",
+        "outer_fail_false",
+        "crazy",
+    ];
+    let golden = golden_file("tamming.json");
+    for label in labels {
+        check_golden_contract(&golden, label).unwrap_or_else(|m| panic!("{m}"));
+    }
+    let dir = ledger_dir();
+    let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+    assert!(
+        !want.is_empty(),
+        "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+    );
+    let mut cases = Vec::new();
+    for label in labels {
+        let path = dir.join(format!("{stem}_{label}.json"));
+        let txt = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "防空转：缺真实台账 {}（{e}）。先跑驱动 tests::tamming_parity_*",
+                path.display()
+            )
+        });
+        let side = path.with_extension("run.json");
+        let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+            panic!(
+                "防空转：台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到上一次的陈旧台账」",
+                side.display()
+            )
+        });
+        let side_v: Value = serde_json::from_str(&side_text).expect("run.json 合法 JSON");
+        assert_eq!(
+            side_v.get("run_id").and_then(Value::as_str),
+            Some(want.as_str()),
+            "[{label}] 台账陈旧：run_id 不匹配"
+        );
+        let v: Value = serde_json::from_str(&txt).expect("台账合法 JSON");
+        let arr = v.as_array().expect("台账是数组");
+        assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 case");
+        assert_eq!(arr[0].get("Label").and_then(Value::as_str), Some(label));
+        let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
+        cases.push(pinned);
+    }
+    let g = golden.clone();
+    let r = serde_json::json!({
+        "magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+        "cases": cases,
+    });
+    let mut errs = tamming_block_checks(&g, &r);
+    if let Err(mut e) = verify(&g, &r) {
+        errs.append(&mut e);
+    }
+    assert!(
+        errs.is_empty(),
+        "诱惑台账与金标准不等（{} 条）：\n{}",
+        errs.len(),
+        errs.join("\n")
+    );
+}
+
 /// **`36`（`SKILL_UENHANCER`）**真实台账 → 判定面（三支 s1/s5/s13，卡 openmir2-uenhancer）。
 ///
 /// scope：只证 DoSpell 时刻 `ExtraAbil[0]/Times[0]`（`CasterExtraAbil0`）与帧；施法者 `Abil`
