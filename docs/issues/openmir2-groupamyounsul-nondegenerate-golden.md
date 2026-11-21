@@ -168,3 +168,7 @@
   （需目标先有一条 buff）。
 - 顺序放宽标记复用 `multi_victim_same_tick`（同根），白名单 = `fire` + 施毒 4 支；
   移除条件见 `openmir2-b4-multivictim-strike-order.md`「施毒 4 支同源」。
+### 7.7 follow-up 待办（2026-11-21，合并后登记）
+待办：驱动侧 `poison_stem`（三旋钮判定）与 `fireball_case_assert`（640 due 容差）两处 stem 名单，
+应合并为 `fn is_poison(golden) -> bool`（`Fixture.magic_id ∈ {6,48}`，与比较器同源）；
+失效方向为假红/漏检。并入下一个改驱动/比较器的批次，不单独开批。
