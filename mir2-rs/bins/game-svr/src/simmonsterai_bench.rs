@@ -346,6 +346,35 @@ fn simmonsterai_bench_tiers() {
     println!("# 三臂：none=无宿主探针/无世界探针；off=宿主探针关闭态；on=宿主探针+World 探针开启");
     println!();
 
+    // ---- 客户端档（opc-19 2026-11-23：整 `HostTickTotal` 按客户端数 500/1000）----
+    // 主口径 (a) player-only（entities=0，对得上容量模型 W(C)）；辅口径 (b) 常规怪混合
+    // （entities=MIR2_SIMMON_MIX_ENTITIES，默认 2000，现实性检查，不与 (a) 混报）。
+    // `MIR2_SIMMON_CLIENT_ONLY=1` ⇒ 只跑客户端档后返回（跳过下面默认怪臂，快）。
+    let client_tiers = env_usize_list("MIR2_SIMMON_CLIENT_TIERS", &[]);
+    if !client_tiers.is_empty() {
+        let mix = env_usize_list("MIR2_SIMMON_MIX_ENTITIES", &[2_000])
+            .first()
+            .copied()
+            .unwrap_or(2_000);
+        println!("## 客户端档 (a) player-only（entities=0）：整 HostTickTotal by clients（容量模型 W(C)）");
+        for &c in &client_tiers {
+            let on = run_arm(0, c, ticks, Arm::On, 0, MONSTER_RACE, false);
+            println!("CLIENT (a) player-only clients={c} entities=0 ticks={ticks}");
+            print_arm("on", &on, ticks);
+            println!();
+        }
+        println!("## 客户端档 (b) {mix}-monster mixed：整 HostTickTotal by clients（现实性，不与 (a) 混报）");
+        for &c in &client_tiers {
+            let on = run_arm(mix, c, ticks, Arm::On, 0, MONSTER_RACE, false);
+            println!("CLIENT (b) mixed entities={mix} clients={c} ticks={ticks}");
+            print_arm("on", &on, ticks);
+            println!();
+        }
+        if std::env::var("MIR2_SIMMON_CLIENT_ONLY").ok().as_deref() == Some("1") {
+            return;
+        }
+    }
+
     // ---- 三档缩放（bots=0，纯怪基线）+ 8k/8bot（A6 同构）----
     let mut rows: Vec<(usize, usize, ArmResult, ArmResult, ArmResult)> = Vec::new();
     for &entities in &tiers {
