@@ -870,7 +870,8 @@ def _decl_spans(lines, cands):
             if re.search(r"\b(?:public|private|protected|internal|static|override|virtual|async|sealed|partial|extern|new|unsafe)\b[^\n]*\b%s\s*\(" % e, code) \
                or re.search(r"\b(?:class|struct|enum|interface|fn|trait|mod)\s+%s\b" % e, code) \
                or re.search(r"\b%s\s*\{" % e, code) \
-               or re.search(r"^\s*(?:[A-Za-z_][\w<>\[\],\.]*\s+)+%s\s*\(" % e, code):
+               or re.search(r"^\s*(?:[A-Za-z_][\w<>\[\],\.]*\s+)+%s\s*\(" % e, code) \
+               or re.search(r"\b(?:public|private|protected|internal|static|readonly|const|volatile|new|unsafe|fixed)\b[^\n]*\b%s\s*(?:;|\{|=[^;]*;)" % e, code):
                 matched = True
                 break
         if not matched:
@@ -895,6 +896,9 @@ def _decl_spans(lines, cands):
                 break
         if started and depth == 0:
             spans.append((idx, end_line))
+        elif not started and re.search(r"\b(?:public|private|protected|internal|static|readonly|const|volatile)\b[^\n]*\b%s\s*(?:;|=[^;]*;)" % "|".join(re.escape(c) for c in cands), code):
+            # 字段声明（无花括号）：span = 声明行本身（10 的 #18：`public bool X;`）
+            spans.append((idx, idx))
     return spans
 
 def _in_decl_span(spans, lo, hi):
@@ -977,12 +981,17 @@ def cmd_report_src_drift(args):
             bucket, dist, strict = "无相邻符号", None, False
         elif not _qualified(sym, lines):
             bucket, dist, strict = "符号不合格(通用名)", None, False
-        elif _in_decl_span(_decl_spans(lines, _candidates(sym)), lo, hi):
+        elif (lambda sp: (_in_decl_span(sp, lo, hi) or sum(1 for L in a["lines"] if _in_decl_span(sp, L, L)) > 0))(_decl_spans(lines, _candidates(sym))):
             # 规则 5（2026-11-21，10 抽样）：锚落在该声明的方法体内 ⇒ 命中（dist=0）；
             # 否则才量距离——markdown 引的多是"某方法里的这一句"，按到声明行距离判漂会把常态判成异常。
             strict = True
             dist = 0
-            bucket = "严格命中"
+            _sp = _decl_spans(lines, _candidates(sym))
+            _cov = sum(1 for L in a["lines"] if _in_decl_span(_sp, L, L))
+            if _cov == len(a["lines"]):
+                bucket = "严格命中"
+            else:
+                bucket = "严格命中·部分点(%d/%d)" % (_cov, len(a["lines"]))
         else:
             strict = False
             dist = _loose_dist(lines, lo, hi, sym)
