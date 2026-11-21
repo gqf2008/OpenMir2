@@ -110,22 +110,31 @@
    `RM_SYSMESSAGE(11004)` 的 `param` 也改取 golden 色值（消灭硬编码 `255/56`）。
 2. **② 驱动口径**：`groupamyounsul` 的严格序 → 毒口径（多重集 + chained due 批次类 + 640 |Δ|≤32ms），
    与比较器同口径；非删除。
-3. **③ 牙**：L1 三态（640 due 1000→600/950/0 红、→1016 绿）+ chained 批次类；
-   `10139.p1` 逐值比（值从 golden 读）；`657.series == HitSpeed(7)`；`SM_SYSMESSAGE(100).tail`
-   改一字符必红；marker 白名单负例（非白名单 stem ⇒ panic）。
-4. **④ 四刀**：毒伤表达式 `*2→*3` 一刀**真红**（`8037` p1 97→112 进帧面）；还原后全量重跑绿。
-5. **⑧ 抓取时点牙**：把 `RM_POISON(8037)` 的抓取整体后移到排水之后 ⇒ 比较器必红
+3. **③ 判据与牙（按 charter §12 分档，别混列）**：
+   - **产品行为牙**（同输入两套实现/变异，输出或状态变）：`SM_SYSMESSAGE(100).tail` 改一字符
+     必红 —— `tooth_poison_sysmessage_tail_compared_red`。
+   - **比较器级牙**（合成或改 golden 输入 ⇒ 比较器红，证"该字段在判"，**不是产品行为证据**）：
+     L1 三态（640 due 1000→600/950/0 红、→1016 绿）+ **chained 批次类**（`657` due 1000→0 红）
+     —— `tooth_poison_late_due_tolerance`；`10139.p1` 逐值比（期望从 golden 读）——
+     `tooth_poison_10139_status_p1_compared_red`。
+   - **断言（不是牙）**：`657.series == HitSpeed(7)` —— golden 输出 vs 夹具输入的一致性断言；
+     其负例是**比较器级**的 `tooth_poison_657_series_compared_red`（改 0 必红）。
+4. **④ 四刀（产品行为牙）**：毒伤表达式 `*2→*3` 一刀**真红**（`8037` p1 97→112 进帧面）；
+   还原后全量重跑绿。
+5. **⑧ 抓取时点牙（产品行为牙）**：把 `RM_POISON(8037)` 的抓取整体后移到排水之后 ⇒ 比较器必红
    `golden 有 rust 无=[[8037, 0, 97, 1001, 2, 255, 1]] rust 有 golden 无=[]`——证明
    “交付前抓”不是注释（还原后 `hash-object` 相等、`MUTATION` 计数 0）。
-6. **⑨ marker 白名单负例**：非白名单 stem 带 `multi_victim_same_tick` ⇒ 比较器入口 panic；
-   另加 **stem ↔ magic_id 静态一致性**（fire=9 / amyounsul*=6 / groupamyounsul*=48），
-   防止"给 fire 加旋钮就被静默降级成批次类"。
-5. **⑤ 门禁**：见 §7.4。
+6. **⑨ 静态守卫（接线提示，非行为证据，charter §12）**：marker 白名单负例（非白名单 stem 带
+   `multi_victim_same_tick` ⇒ 比较器入口 panic，`tooth_poison_marker_whitelist_rejects_foreign_stem`）；
+   **`stem ↔ magic_id` 静态一致性**（fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48），
+   防止"给 fire 加旋钮就被静默降级成批次类"。二者都是 `grep`/`matches!` 级检查。
+7. **⑤ 门禁**：见 §7.4。
 
 ### 7.2 三旋钮 fail-closed（评审 A）
 `amulet_shape` 必须 1|2（不写死 5）；`target_anti_poison` **0 也显式写入**（不再 `if v>0` 跳过）；
 `amy_ounsul_point` 必须 >0（不再 `unwrap_or(10)`）。装置侧 `AmyOunsulPoint` 断言部署值 `==15`。
-机判 `poison_goldens_carry_three_knobs`：4 文件 × 3 支 = **12 支**逐支三键存在 + 值域。
+静态机判 `poison_goldens_carry_three_knobs`（读 JSON 键；**接线提示，非行为证据**，charter §12）：
+4 文件 × 3 支 = **12 支**逐支三键存在 + 值域。
 
 ### 7.3 §4 四条（给 QA 升格用，本批不改 manifest）
 1. **§2 四刀至少一刀红**：✔（毒伤表达式，红原文见提交 2）。
@@ -150,8 +159,10 @@
 - 门禁：fmt / clippy（`-p game-svr -p mir2-parity-tests --all-targets -D warnings`）/
   `cargo test --workspace --lib` 三数 / msgcodegen `--check` / 锚门 / 清单 schema / 分派回归
   （原文见最终 head 的提交信息与交接报告）。
-  **回归**：15 驱动（施毒 12 + fire 3）+ 5 比较器全绿；施毒 5 牙 +
-  `tooth_multi_victim_due_ms_rel_compared_red` + 12 支三键机判全过。
+  **回归（合并后树，最终）**：18 驱动（施毒 12 + fire 3 + skill10 3）+ 6 比较器全绿。
+  **证据分档（charter §12）**：产品行为牙 3 条（④ 四刀、⑧ 抓取时点、`100.tail` 单字符）；
+  比较器级牙 2 组（L1 三态+chained 批次类、`10139.p1`）；断言 1 条（`657.series==HitSpeed`）；
+  静态守卫 3 条（marker 白名单、`stem↔magic_id`、12 支三键机判）——后者只作接线提示。
 
 ### 7.5 stem ↔ 魔号/叶子映射（QA 升格按此）
 | stem | 魔号 | 覆盖叶子 |
