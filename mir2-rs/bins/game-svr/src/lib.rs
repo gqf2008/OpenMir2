@@ -130,6 +130,8 @@ pub mod run_segments;
 pub mod selloff;
 pub mod sessionwire;
 pub mod shard;
+// **L2-1**：区模型 + 每宿主区队列（恒等脚手架；L2-4 起按区 demux）。
+pub mod zone;
 // **P2-3b**：事件路由（纯逻辑 + 可单测；转发线程在 `sim_loop` 调用侧）。
 mod shard_router;
 pub mod shop;
@@ -2046,6 +2048,17 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     .expect("N=1 原优先通道只给唯一 sim"),
             )
         });
+        // **L2-1**：区模型 + 每宿主区队列的**恒等接缝**（未开启 L2 ⇒ 每宿主一个区）。
+        // 运行期零分配（启动期 1 次 `Vec`，长度 1）；不加日志、不建线程、不改事件序。
+        let zone_plan = zone::ZoneHostPlan::single_host(
+            map_sizes_i.len(),
+            zone::ZoneChannels::new(rx_i, ctl_i),
+        );
+        // 不变量：队列表长度 == 区数（L2-1 都是 1）；debug 断言，release 零开销。
+        debug_assert_eq!(zone_plan.channel_count(), zone_plan.layout().zone_count());
+        let (region_layout_i, (rx_i, ctl_i)) = zone_plan.into_single();
+        // 未开启 L2 时恒为单区；区域布局留到 L2-2 接入守卫（debug 断言保证接缝不被误用）。
+        debug_assert_eq!(region_layout_i.zone_count(), 1);
         let shutdown_i = if shard_total == 1 {
             shutdown_rx_template
                 .take()
