@@ -15680,22 +15680,17 @@ fn handle_spell_cmd_with_magic(
                     rcd.level = train.level;
                     rcd.tran_point = train.tran_point;
                 }
-                // `PlayCloneObject` 构造器尾 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName)`
-                // （`PlayCloneObject.cs:17`）：先登记展示表，再广播出现帧（`SM_TURN` 名尾 + 紧随
-                // `SM_FEATURECHANGED`，`downlink::turn_pair`）。`Msg="Clone"` 非空 ⇒ 名尾
-                // `Encode("Clone/{GetChrColor}")`（= `"Clone/255"`，`PlayObject.Message.cs:1549-1555`）。
+                // **出生帧（2026-11-21 依 oracle 更正）**：`PlayCloneObject` 构造器尾虽调用
+                // `SendRefMsg(RM_TURN, …)`（`PlayCloneObject.cs:17`），但 `PlayObject` ctor 把
+                // `FixedHideMode` 置 true（`PlayObject.cs:993`），克隆体不登录、无
+                // `PlayObject.cs:1442` 的复位 ⇒ `SendRefMsg` 命中 `BaseObject.Message.cs:390-394`
+                // 的"隐藏态只发自己"分支；克隆体队列无人排空 ⇒ **旁观者零帧**。
+                // 因此这里只登记展示表（AOI/后续视野用），**不广播** `SM_TURN`/`SM_FEATURECHANGED`。
+                // （原实现无条件 `downlink::turn_pair` 广播；golden 实测 oracle 零帧后更正。）
                 if let Some(clone) = outcome.clone {
                     if let Some(caster_display) = displays.get(actor_id).cloned() {
                         let d = downlink::clone_display(clone.dir, &caster_display);
                         displays.set(clone.clone_id, d.clone());
-                        let frames = downlink::turn_pair(
-                            clone.clone_id,
-                            wire_coord(clone.x),
-                            wire_coord(clone.y),
-                            &d,
-                        );
-                        // 广播集合排除克隆体自己（`RM_TURN` 处理器有 `ActorId != ActorId` 守卫）。
-                        broadcast_ref_msg(world, online, gates, clone.clone_id, &frames);
                     }
                 }
                 // `boSpellFire` ⇒ `RM_MAGICFIRE`（`MagicManager.cs:648-658`）；**F-1**：含施法者自己。
@@ -63135,25 +63130,25 @@ SendRefMsgRange=15
                 .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
             "RM_SPELL 有自身守卫 ⇒ 主人自己不应收 SM_SPELL"
         );
-        // `SM_TURN`（Recog = 克隆体 id）+ 名尾 `"Clone/255"`；两个在线玩家各一。
-        let turns: Vec<&Vec<u8>> = frames
+        // **出生零帧（2026-11-21 依 oracle 更正）**：oracle 的克隆体 ctor 里 `PlayObject` 置
+        // `FixedHideMode = true`（`PlayObject.cs:993`），克隆体不登录、无 `PlayObject.cs:1442`
+        // 的复位 ⇒ ctor 尾 `SendRefMsg(RM_TURN)` 命中 `BaseObject.Message.cs:390-394` 的
+        // "隐藏态只发自己"分支；克隆体队列无人排空 ⇒ **没有任何** SM_TURN/SM_FEATURECHANGED。
+        // 原断言（`turns.len()==2` + 名尾 `Clone/255`）编码的是 Rust 无条件广播 `turn_pair` 的
+        // 错误行为；此处按 golden 与 C# 源码链更正（留痕，不静默改绿）。
+        let turn_idents: Vec<u16> = frames
             .iter()
-            .filter(|(_, b)| ident_of(b) == mir2_protocol::messages::SM_TURN)
-            .map(|(_, b)| b)
+            .filter(|(_, b)| b.len() >= 12)
+            .map(|(_, b)| ident_of(b))
+            .filter(|id| {
+                *id == mir2_protocol::messages::SM_TURN
+                    || *id == mir2_protocol::messages::SM_FEATURECHANGED
+            })
             .collect();
-        assert_eq!(turns.len(), 2, "主人与观察者各一（克隆体自己被排除）");
-        for t in &turns {
-            assert_eq!(
-                i32::from_le_bytes([t[0], t[1], t[2], t[3]]),
-                clone_id,
-                "SM_TURN Recog = 克隆体 ActorId"
-            );
-            let msg = mir2_protocol::edcode::decode(&t[23..]);
-            assert!(
-                msg.starts_with(b"Clone/"),
-                "名尾应为 Clone/<color>；实得 {msg:?}"
-            );
-        }
+        assert!(
+            turn_idents.is_empty(),
+            "克隆体出生不得广播 SM_TURN/SM_FEATURECHANGED（FixedHideMode 自投递）；实得 {turn_idents:?}"
+        );
         assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支回 +GD");
         // 熟练度尾：`level=1 < 3` 且 `boTrain=true` ⇒ 若升级门过则 `TrainSkill(Random(3)+1)` 已落。
         assert_eq!(
@@ -75098,15 +75093,6 @@ SendRefMsgRange=15
             24,
             false,
         );
-        let turn_rm = fireball_rm(
-            10001,
-            i64::from(clone_dir),
-            i64::from(cx),
-            i64::from(cy),
-            0,
-            17,
-            false,
-        );
         let fire_rm = fireball_rm(
             10120,
             0,
@@ -75126,14 +75112,10 @@ SendRefMsgRange=15
             true,
         );
         let rm_of = |who: &str| -> Vec<serde_json::Value> {
+            // 出生零帧 ⇒ **无** RM_TURN(10001) 到达任何收件人（克隆体自投递）。
             match who {
-                "caster" => vec![
-                    spell_rm.clone(),
-                    turn_rm.clone(),
-                    fire_rm.clone(),
-                    lvexp_rm.clone(),
-                ],
-                "target" | "obs_in" => vec![spell_rm.clone(), turn_rm.clone(), fire_rm.clone()],
+                "caster" => vec![spell_rm.clone(), fire_rm.clone(), lvexp_rm.clone()],
+                "target" | "obs_in" => vec![spell_rm.clone(), fire_rm.clone()],
                 _ => Vec::new(),
             }
         };
@@ -75218,11 +75200,17 @@ SendRefMsgRange=15
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
         // ---- 断言（落盘之后：红了也要留下本次台账，比较器才能给语义红）----
-        // 前提：训练尾恰 1 抽、无升级、交付段零抽。
+        // 前提：**构造期 5 抽 + 训练尾 1 抽 = 6**、交付段零抽、训练值 = TranPoint 增量 − 1。
         assert_eq!(
             cast_rng.len(),
-            1,
-            "[{stem}/{label}] 训练尾应恰 1 抽（Random(3)+1）"
+            6,
+            "[{stem}/{label}] 应恰 6 抽（克隆体 ctor 5 + 训练尾 1）；实得 {:?}",
+            cast_rng.iter().map(|(_, v, _)| *v).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            i64::from(tp_after),
+            i64::from(tp_before) + cast_rng[5].1 + 1,
+            "[{stem}/{label}] 训练尾抽值必须等于 TranPoint 增量 − 1（抽序错位会在这里红）"
         );
         assert!(
             deliver_rng.is_empty(),
@@ -75248,26 +75236,35 @@ SendRefMsgRange=15
         assert_eq!(
             idents(911),
             vec![
-                mir2_protocol::messages::SM_TURN,
-                mir2_protocol::messages::SM_FEATURECHANGED,
                 mir2_protocol::messages::SM_MAGICFIRE,
                 mir2_protocol::messages::SM_MAGIC_LVEXP,
             ],
-            "[{stem}/{label}] caster 帧序应为 [10,41,638,640]"
+            "[{stem}/{label}] caster 帧序应为 [638,640]（出生零帧）"
         );
         for socket in [912, 913] {
             assert_eq!(
                 idents(socket),
                 vec![
-                    mir2_protocol::messages::SM_TURN,
-                    mir2_protocol::messages::SM_FEATURECHANGED,
                     mir2_protocol::messages::SM_SPELL,
                     mir2_protocol::messages::SM_MAGICFIRE,
                 ],
-                "[{stem}/{label}] socket {socket} 帧序应为 [10,41,17,638]"
+                "[{stem}/{label}] socket {socket} 帧序应为 [17,638]（出生零帧）"
             );
         }
         assert!(idents(914).is_empty(), "[{stem}/{label}] obs_out 必须零帧");
+        for socket in [911, 912, 913] {
+            let turns: Vec<u16> = idents(socket)
+                .into_iter()
+                .filter(|id| {
+                    *id == mir2_protocol::messages::SM_TURN
+                        || *id == mir2_protocol::messages::SM_FEATURECHANGED
+                })
+                .collect();
+            assert!(
+                turns.is_empty(),
+                "[{stem}/{label}] socket {socket} 不得有出生帧（oracle FixedHideMode 自投递）；实得 {turns:?}"
+            );
+        }
         assert!(has_640, "[{stem}/{label}] 训练尾 640 必须存在");
         assert_eq!(
             clone_dir,

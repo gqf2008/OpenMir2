@@ -1475,73 +1475,25 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
-/// **MG-55（46 分身术）**：克隆体 id → `recog` 归一化。
-///
-/// 两侧的克隆体 ActorId 由**进程级自增**分配（C# `ActorEntity.cs:20`；Rust `alloc_id`），
-/// 数值不可比。归一化规则：`recog == 本侧 Clone.actor_id` 的帧改写为 `0`，其余 recog
-/// （`SM_SPELL`/`SM_MAGICFIRE` 的施法者 id、`SM_MAGIC_LVEXP` 的 MagicId）仍逐字节严格比。
-fn normalize_clone_recog(v: &mut Value) {
-    let Some(cases) = v.get_mut("cases").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for c in cases {
-        let Some(cid) = c
-            .get("Clone")
-            .and_then(|x| x.get("actor_id"))
-            .and_then(Value::as_i64)
-        else {
-            continue;
-        };
-        if let Some(rec) = c.get_mut("Receivers").and_then(Value::as_array_mut) {
-            for r in rec {
-                if let Some(sent) = r.get_mut("Sent").and_then(Value::as_array_mut) {
-                    for f in sent {
-                        if f.get("recog").and_then(Value::as_i64) == Some(cid) {
-                            f["recog"] = Value::from(0);
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(rec) = c
-            .get_mut("Clone")
-            .and_then(|x| x.get_mut("receivers"))
-            .and_then(Value::as_array_mut)
-        {
-            for r in rec {
-                if let Some(fs) = r.get_mut("frames").and_then(Value::as_array_mut) {
-                    for f in fs {
-                        if f.get("recog").and_then(Value::as_i64) == Some(cid) {
-                            f["recog"] = Value::from(0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// 本侧 `Clone.receivers` 中 `recog == 本侧克隆体 id` 的帧数（**归一化前**统计）。
-/// 用于证明归一化确实在做事：零命中 ⇒ 所有帧都碰不到 id 面，归一化是空转。
+/// 本侧「帧 `recog` == 本侧 clone id」的命中数（扫 `Receivers[].Sent` + `Clone.receivers[].frames`）。
+/// oracle 出生零帧 ⇒ 两侧都应为 **0**；非零说明产品又广播了 `turn_pair`。
 fn clone_recog_hits(case: &Value) -> (i64, usize) {
     let cid = case["Clone"]["actor_id"].as_i64().unwrap_or(i64::MIN);
-    let n = case["Clone"]["receivers"]
+    let from_sent = case["Receivers"]
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|r| r["frames"].as_array().into_iter().flatten())
+        .flat_map(|r| r["Sent"].as_array().into_iter().flatten());
+    let from_clone = case["Clone"]["receivers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|r| r["frames"].as_array().into_iter().flatten());
+    let n = from_sent
+        .chain(from_clone)
         .filter(|f| num(f, "recog") == cid)
         .count();
     (cid, n)
-}
-
-/// `M2Share.MakeHumanFeature` 的克隆体形态（`PlayCloneObject` 只拷 Gender/Hair，Dress/Weapon=0）：
-/// `MakeLong(MakeWord(0, gender), MakeWord(hair*2+gender, gender))`。
-fn clone_feature(gender: i64, hair: i64) -> i64 {
-    let g = gender & 0xFF;
-    let lo = g << 8;
-    let hi = ((hair * 2 + g) & 0xFF) | (g << 8);
-    lo | (hi << 16)
 }
 
 /// Clone 块的逐字段 + 推导面检查（`verify` 之外的部分）。
@@ -1584,6 +1536,20 @@ fn clone_block_checks(g: &Value, r: &Value) -> Vec<String> {
                 num(rb, k)
             ));
         }
+    }
+    // 装置状态断言：克隆体建时为隐藏态（零帧的输入根因）。只断 golden 侧——
+    // Rust 骨架未建模 `fixed_hide_mode`（残差登记在卡 §6.7）。
+    if gb.get("fixed_hide_mode").and_then(Value::as_bool) != Some(true) {
+        errs.push(format!(
+            "golden Clone.fixed_hide_mode 必须为 true（PlayObject ctor 置隐藏）；实得 {:?}",
+            gb.get("fixed_hide_mode")
+        ));
+    }
+    if gb.get("ob_mode").and_then(Value::as_bool) != Some(false) {
+        errs.push(format!(
+            "golden Clone.ob_mode 必须为 false；实得 {:?}",
+            gb.get("ob_mode")
+        ));
     }
     if gb.get("has_640").and_then(Value::as_bool) != rb.get("has_640").and_then(Value::as_bool) {
         errs.push(format!(
@@ -1663,26 +1629,33 @@ fn clone_block_checks(g: &Value, r: &Value) -> Vec<String> {
                 "[{side}] `SpellReturn({spell_return}) != has_640({has640})`（训练前提已钉死 ⇒ 必须恒等）"
             ));
         }
-        let gender = num(b, "gender");
-        let hair = num(b, "hair");
-        let want_feature = clone_feature(gender, hair);
-        let frames = b["receivers"]
+        // **出生零帧（负向判据）**：两侧都不得出现 SM_TURN(10)/SM_FEATURECHANGED(41)。
+        // oracle 根因：`PlayObject` ctor `FixedHideMode = true`（`PlayObject.cs:993`），克隆体
+        // 不登录、无复位 ⇒ ctor 尾 `SendRefMsg(RM_TURN)` 自投递（`BaseObject.Message.cs:390-394`）。
+        let all_frames: Vec<&Value> = c["Receivers"]
             .as_array()
             .into_iter()
             .flatten()
-            .flat_map(|r| r["frames"].as_array().into_iter().flatten())
-            .filter(|f| num(f, "ident") == 41)
-            .collect::<Vec<_>>();
-        if frames.is_empty() {
-            errs.push(format!("[{side}] 缺 `SM_FEATURECHANGED(41)` 帧"));
-        }
-        for f in frames {
-            let feat = num(f, "param") | (num(f, "tag") << 16);
-            if feat != want_feature {
-                errs.push(format!(
-                    "[{side}] 41 帧 feature={feat} ≠ MakeHumanFeature(gender={gender},hair={hair})={want_feature}"
-                ));
-            }
+            .flat_map(|r| r["Sent"].as_array().into_iter().flatten())
+            .chain(
+                c["Clone"]["receivers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|r| r["frames"].as_array().into_iter().flatten()),
+            )
+            .collect();
+        let turns = all_frames
+            .iter()
+            .filter(|f| {
+                let id = num(f, "ident");
+                id == 10 || id == 41
+            })
+            .count();
+        if turns != 0 {
+            errs.push(format!(
+                "[{side}] 出生不得有 SM_TURN(10)/SM_FEATURECHANGED(41)；实得 {turns} 帧"
+            ));
         }
     }
     errs
@@ -1693,8 +1666,8 @@ fn clone_block_checks(g: &Value, r: &Value) -> Vec<String> {
 /// 判据分层：
 /// - **驱动**（`tests::clone46_parity_clone`）只记录 + 自带 oracle 形态牙；
 /// - **本比较器**：`verify` 的通用面（RM 多重集 / SM 严格序 / RNG / HP）+ `Clone` 块逐字段
-///   + **由输入推导**的关系（`dir == back_dir(caster_dir)`、`41 帧 feature == MakeHumanFeature`、
-///   `SpellReturn == has_640`）。
+///   + 由输入推导的关系（`dir == back_dir(caster_dir)`、`SpellReturn == has_640`、
+///     出生帧负向：两侧均不得有 SM_TURN/SM_FEATURECHANGED）。
 ///
 /// 前置（与其它 magic 台账一致）：先跑驱动（`--exact --test-threads=1`），并与本比较器共用
 /// 同一个 `MIR2_LEDGER_RUN_ID`（空转防线）。
@@ -1743,31 +1716,32 @@ fn real_rust_ledger_clone46() {
         "[{label}] 台账 Label 不符"
     );
     let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
-    let mut g = golden.clone();
-    let mut r = serde_json::json!({
+    let g = golden.clone();
+    let r = serde_json::json!({
         "magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
         "cases": [pinned],
     });
-    // **归一化可判别性（Leader 2026-11-21 硬条件）**：
-    // ① 两侧归一化前都必须**至少有一帧**的 `recog == 本侧 clone id`（零命中 ⇒ 归一化空转 ⇒ 红）；
-    // ② 两侧 clone id 必须**不等**（相等则归一化多余；显式红，不默默通过）；
-    // ③ 原始 id 与未归一化帧都留在两侧产物里（可见性由 `Clone.actor_id` + `frames[].recog` 保证）。
-    let (g_cid, g_hits) = clone_recog_hits(&g);
-    let (r_cid, r_hits) = clone_recog_hits(&r);
-    assert!(
-        g_hits > 0,
-        "golden 侧没有任何帧的 recog == Clone.actor_id({g_cid}) ⇒ 归一化空转，id 面未验"
+    // **Clone id 判据（2026-11-21 oracle 实测后从「归一化」改为「负向」）**：
+    // 首跑 golden 证明 oracle 克隆体出生零帧（`PlayObject.cs:993` FixedHideMode=true ⇒
+    // `BaseObject.Message.cs:390-394` 自投递；见卡 §6.7），**没有任何帧的 recog 等于 clone id**
+    // ⇒ 原计划"按本侧 clone id 归一化"在新事实下无对象可归一。现行判据：
+    // ① 两侧都**必须零命中**（若产品重新广播 turn_pair，这里先红）；
+    // ② 两侧 clone id 仍必须不等（防止将来把 GUID id 错当成协议量比较）；
+    // ③ 原始 id 两侧可见（`Clone.actor_id`）。
+    let (g_cid, g_hits) = clone_recog_hits(&g["cases"][0]);
+    let (r_cid, r_hits) = clone_recog_hits(&r["cases"][0]);
+    assert_eq!(
+        g_hits, 0,
+        "golden 不应有帧的 recog == Clone.actor_id({g_cid})（oracle 出生零帧；若出现说明夹具/产品变了）"
     );
-    assert!(
-        r_hits > 0,
-        "台账侧没有任何帧的 recog == Clone.actor_id({r_cid}) ⇒ 归一化空转，id 面未验"
+    assert_eq!(
+        r_hits, 0,
+        "台账不应有帧的 recog == Clone.actor_id({r_cid})（产品不得广播 turn_pair；实得 {r_hits} 帧）"
     );
     assert_ne!(
         g_cid, r_cid,
-        "两侧 clone id 相同（{g_cid}）⇒ ActorId 归一化是多余步骤；请说明为何相同并改判据，而不是默默通过"
+        "两侧 clone id 相同（{g_cid}）：它们是进程级自增/GUID，不应相等；若相等请说明"
     );
-    normalize_clone_recog(&mut g);
-    normalize_clone_recog(&mut r);
     let mut errs = clone_block_checks(&g, &r);
     if let Err(mut e) = verify(&g, &r) {
         errs.append(&mut e);
