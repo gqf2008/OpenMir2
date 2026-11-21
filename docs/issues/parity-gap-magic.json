@@ -105,7 +105,7 @@
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
         ]
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙（2026-11-21 行为牙审计 A）**：产品侧变异与 MG-01 共享——删 `default_arm && is_warr_skill` 块的 `sm_magicfire_fail` 发射 ⇒ `warr_3/4/7` 三支全红，本条目 `warr_4_matches_golden` 的红原文为 `warr-4/invoke 收件人 caster 的帧数不一致（got [] / want [(639, 0, 0, 0, \"\")]）`（left 0 / right 1）；见 MG-01 `scope` 与 `docs/issues/warr-explicit-case-teeth-gaps.md` §4a。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -132,7 +132,7 @@
           "tests::spell_frame_warr_skill_explicit_case_sends_nothing_and_default_arm_gets_639"
         ]
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人逐字节一致（比较器 warrskill_parity_tests）；不涉及 53。 **牙（2026-11-21 行为牙审计 A）**：产品侧变异与 MG-01 共享——删 `default_arm && is_warr_skill` 块的 `sm_magicfire_fail` 发射 ⇒ `warr_3/4/7` 三支全红，本条目 `warr_7_matches_golden` 的红原文为 `warr-7/invoke 收件人 caster 的帧数不一致（got [] / want [(639, 0, 0, 0, \"\")]）`（left 0 / right 1）；见 MG-01 `scope` 与 `docs/issues/warr-explicit-case-teeth-gaps.md` §4a。",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
@@ -1561,7 +1561,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial，静态 golden 比较器）：43 的 `MagicManager` case 体为空，帧面来自 ClientSpellXY 显式 case；本叶**不在** `-Mode Both` 的 Driver/Comparator 集合内（静态 golden `#[test]`），其覆盖由 `cargo test -p game-svr --lib -- matches_golden`（19/19）承担。",
       "basis": "semantic",
-      "scope": "ClientSpellXY 显式 case（`src/M2Server/Player/PlayObject.Attack.cs:1253-1266`）的 toggle 两向：`Skill43OnOff` 翻转 + 源码默认文案（\"开启破空剑\"/\"关闭破空剑\"）+ `+CID`/`+UCID` 短包 + `SM_SYSMESSAGE(100)`，逐收件人逐字节（off2on/on2off）。**空 case 体**：`src/M2Server/Magic/MagicManager.cs:555-556` 的 `case SKILL_43: break;` 零行为，帧面全部来自 ClientSpellXY 显式 case。**不扣 MP 有直接断言**：取 `SessionGround.state.wabil.mp` 在 dispatcher 调用前/排水后相等（行为牙：`mp-=1` ⇒ 见卡）。**未验 / 不入比对**：①`+GD/<tick>` 为调用方尾部、按既有判据边界不入比对；②MP **数值本身**未与 oracle 对拍（只断言前后不变）；③施法包装层限速（CheckActionStatus/SpellTick-=450）未接（既有登记）；④`MBo43Kill` 除接口声明外无消费者 ⇒ 状态位只体现 toggle 交替；⑤生产 20s 动作限速路径不在本叶。"
+      "scope": "ClientSpellXY 显式 case（`src/M2Server/Player/PlayObject.Attack.cs:1253-1266`）的 toggle 两向：`Skill43OnOff` 翻转 + 源码默认文案（\"开启破空剑\"/\"关闭破空剑\"）+ `+CID`/`+UCID` 短包 + `SM_SYSMESSAGE(100)`，逐收件人逐字节（off2on/on2off）。**空 case 体**：`src/M2Server/Magic/MagicManager.cs:555-556` 的 `case SKILL_43: break;` 零行为，帧面全部来自 ClientSpellXY 显式 case。**不扣 MP 有直接断言**：取 `SessionGround.state.wabil.mp` 在 dispatcher 调用前/排水后相等（行为牙：`mp-=1` ⇒ 见卡）。**未验 / 不入比对**：①`+GD/<tick>` 为调用方尾部、按既有判据边界不入比对；②MP **数值本身**未与 oracle 对拍（只断言前后不变）；③施法包装层限速（CheckActionStatus/SpellTick-=450）未接（既有登记）；④`MBo43Kill` 除接口声明外无消费者 ⇒ 状态位只体现 toggle 交替；⑤生产 20s 动作限速路径不在本叶。 **帧用例无专属产品牙（2026-11-21 审计 A 显式声明，不留白）**：四颗产品侧变异牙（`Arm::Skill43` 写 `e.ai.dir = 0`、跳过调用方 `send_good_tick`、`Arm::Skill43` 里 `world.rng.random()`、`req.target_actor_id` 扣 1 血）全部落在行为用例 `warr_43_behavior_side_effects`（红原文见 `docs/issues/magic-52-clientxy-explicit-case.md` §3b）；`warr_43_matches_golden` 本身**没有产品侧变异记录**——历史那次 `+CID` vs `+UCID` 红是生成器未记 `preset.mbo43_kill` 的装置致因，按判据不计牙。帧用例在此是**接线提示**（逐收件人逐字节跨栈比较）；补一条产品 toggle 翻转牙另行排期。"
     },
     {
       "id": "MG-53",
