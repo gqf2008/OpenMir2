@@ -32,6 +32,7 @@
 
 | B21 | **夹具意图未物化（`CasterSc/CasterMc` 只写 `WAbil`、不写 `Abil`，被登录序 recalc 覆盖为 0）**：`RunMagicCase` 设 `caster.WAbil.SC=CasterSc`（缺省 15），登录序 `RecalcAbilitys()`（`WAbil=Abil.Clone()`）用 `Abil.SC=0` 覆盖 ⇒ 实际 SC=0，与 fixture 意图 15 不符 | 设 `CasterSc/CasterMc` 却未同步 `Abil.SC/MC` 的 stem（如 `uenhancer`）；golden 记录 `caster.WAbil.SC` | 记录切到「实际应用值」（`9c9782a30`）后**暴露**：`uenhancer` 的 `caster_sc` 15→0；**非 golden 旧、非丢开关**（`CasterScNoClamp` 仍在） | 生产登录序同样 `WAbil=Abil.Clone()`，但 fixture 意图应体现在 `Abil` | `uenhancer` 等 stem 的 SC/MC 意图未物化（实际 0）；**修法（行为性、后续批）**：`CasterSc/CasterMc` 同时写 `Abil.SC/MC` 使 recalc 后仍为意图值；**别在缺口上重出 golden** |
 
+| B22 | **oracle 不表达 per-frame 延迟量（装置 due 表示能力缺口）**：帧 emit 时 `CurrentDueMs` 已归 0（帧在后续 pass 出，与发起它的延迟消息**失去关联**）=> 装置给不出正确 per-frame `due`。**取舍**：harness **不 emit `due_ms_rel`**（回 committed 形状，2026-11-21） | 任何延迟帧（31/53/共享尾）的逐帧定时对拍 | golden 无 `due_ms_rel` => 比较器**不比该字段** => **时间维度无逐帧对拍覆盖** | oracle 逐帧本有延迟量、比较器本可比 | **代价（非"少一项检查"，是"少掉一类缺陷的唯一入口"）**：B17（排水语义缺陷）**恰是从时间维度（due=0/600）暴露的**；放弃 due => 这类缺陷再无逐帧入口。**实证**：把 `due` 当"可忽略 T"曾让「57 支 Y=0」成**假绿**，真实规模 **48 支有 due 差异**。**为什么本次必须放弃**：装置无 per-frame due 表示能力（帧 emit 时链条已断）。**后续正式批次（非可选）**：harness 表示层重构——`due` 沿 self-delay/shared-tail 链传播到下游帧，使 `golden.due==rust.due` 逐帧成立；排在 resync 之后、B20/B21 之前 |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -45,10 +46,11 @@
 - **装置墙钟非确定性（golden 不可逐字节复现）** —— 落在 **B19**；根因批=`openmir2-firecharm-nondeterminism`。
 - **clone 家族 actor_id 非确定（虚拟钟也治不了）** —— 落在 **B20**。
 - **夹具意图未物化（CasterSc/Mc 只写 WAbil 被 recalc 覆盖）** —— 落在 **B21**（暴露者 `9c9782a30`）。
+- **oracle 不表达 per-frame due（时间维度无逐帧覆盖）** —— 落在 **B22**；代价=B17 那类缺陷的唯一入口。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 21 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21？
+1. **先查本卡 22 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
@@ -57,7 +59,7 @@
 
 ## 4. 使用法
 
-1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21？"
+1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22？"
 2. 命中盲区 ⇒ 记为**装置限制**（进 scope 或登记卡），**不要**当成产品缺陷去改实现。
 3. 需要把盲区变可见时，改装置的方向（另开卡）：替身怪绑定 `Envir`+`ActorMgr`+`AddMapObject`；对被动怪实现最小 `Operate`；克隆体复位 `FixedHideMode` 并把其队列纳入排水；对 `VisibleActors` 按 AOI 回填；显式装载 `ServerConf`；跑必要 tick 的 `Run`。
 
