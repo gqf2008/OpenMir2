@@ -127,9 +127,9 @@ step 模型缺了**一整层 per-actor 队列语义**：oracle 每个 actor 一�
 
 **pilot 验收（bigcloak s1，不动其他广播）**：caster 的 657 应从今天 Rust 的 `(657,1002,800)` 变成
 `(657,1002,900)`（caster 在 turn 序里先于 target，target 的 recog1002 到 caster 时 caster 本 tick 已跑 ⇒ 落下一 tick）；
-target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（它是 caster 自己 turn 内产生）。
-**这与装置的 per-viewer 结果（caster `{1002@900,1001@900}`）一致** —— pilot 目标是让 **Rust 对齐装置/契约**，
-不是让装置迁就 Rust。
+target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 是 **Rust 值**（self 帧，oracle/装置为 `800`，见 §12.1「订正」）。
+**装置新模型的真实值：caster `{1001@800, 1002@900}`**（旧装置为 `{1001@800, 1002@800}`；`1002` 的 800→900 差异与 §12.1「二次订正」同源）。
+pilot 目标是让 **Rust 对齐契约**；`1001` 的「Rust 900 vs oracle 800」另立卡修，不属 pilot。
 
 ### 落地顺序（按 opc-19 预置）
 
@@ -161,7 +161,7 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 
 验收仍为（bigcloak s1）：
 - caster `(657,1002,**900**)`（延迟项，落下一 tick）；
-- caster `(657,1001,900)` **不变**（self turn 内产生）；
+- caster `(657,1001,900)` 是 **Rust 值**（self 帧；oracle/装置为 `800`，见 §12.1「订正」——旧表述「不变」已作废）；
 - target / obs_in `{1002@800, 1001@900}`。
 
 ### 12.3 钉死延迟谓词 = **严格 `<`**
@@ -206,6 +206,22 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 2. **交付循环退出时 `pending_657` 非空 ⇒ fail-closed panic**（已实现 `6e740976c`；`bins/game-svr` 的 `fireball_parity_drive` 交付循环末的 `assert!(pending_657.is_empty(), …)`）。属 §12 的「退化防线」：延迟 657 若在窗口末仍未排空，说明 wait_ms 不足或延迟排队丢帧，必须红而非静默丢。
 3. **seam 目前只由对拍 rig 调用**（`#[allow(dead_code)]`，如 `bins/game-svr` 的 `drain_b3_self_deliveries_with_pending` 上的标注）——生产 `sim_loop` 的接线在「胶水」批，**不得被读成已上线**。
 
+> **订正（2026-11-21 深夜）**：本小节与 §12.1.a 期望表里「caster `(657,1001,900)` 保持不变 = oracle 依据」**作废**。以 `docs/issues/bigcloak-caster-1001-due-divergence-20261121.md`（正文 `29e8312ac` + Rust 侧成因 `e6af80985`）为准：
+>
+> - **撤回**：`1001@900` **不是** oracle 值。**oracle / 装置（旧、新两版）都是 `800`；`900` 是 Rust 的值**——pilot 前后都是 900（旧台账 `bigcloak_s1.json` mtime `2026-11-21 13:33` 原文：`caster = [(638,1001,0),(642,500,0),(657,1002,800),(657,1001,900),(640,19,1000)]`）。⇒ `1001@900` 是 **Rust vs oracle 的既有分歧**，**另立卡修**，不在 pilot 范围。
+> - **根因（防止后人改谓词）**：偏差在「**`SelfDelayOutcome.transparent` 的投递步**：Rust 900 vs oracle 800」，**与 `begin_turn` / per-viewer 延迟判据无关**——producer=收件人=caster 同下标 ⇒ 不延迟 ⇒ `due` = 该 outcome 的投递步；分歧在「该 outcome 何时到点」，**不在< / <= 谓词**。
+> - **装置 blob 身份**：旧装置（`master c99f7dd47` 的 `Program.cs`）= `48966e170c37363b8acaa1df8ebcad8c63cc5d9f`；新装置 = `3f34d9c04fc6bdafe92390865ca24bf0bdbfa251`。
+> - **该 due 从未跨栈比过**：golden 的 `bigcloak` **无 `due_ms_rel`** ⇒ 比较器的 `sent_fields.push("due_ms_rel")` 受 `ga.first()…get("due_ms_rel").is_some()` 守卫，这条 due **从未进比较面**，故分歧一直没暴露。
+> - **保留**：`1002@900` **不变**（旧装置 800 是假绿；新模型 + oracle 都是 900）。 （此句已被 §12.1「二次订正」升级：`1002@900` 为**已证实**；`1001` 以订正为准 = oracle `800`）
+> - **同源影响（一并订正 s5 实测行）**：§12.1.a 期望表 s5 行把 `(657,2001,900)` 写成「实测」**不准**——`2001` 是 self 帧，**装置新旧都给 `800`**，`900` 是 Rust 值（同一 `1001` 分歧）；s5 装置新实测应为 `[(657,2001,800),(657,2002,900)]`，「`base+2→900`」说的是 `2002`（正确）。
+
+> **二次订正（2026-11-21 深夜，入队级 trace 实测）**：`3b` 修正一处**仪器 bug** 后，入队级 trace **实测**钉死了 `1002@900` 的 per-recipient 延迟（**时点 / 写入者 / 延迟语义三项齐全**）。上文第 215 行「`1002@900` 不变」据此**升级为「已证实」**（不再是「数值巧合」）。同时记录仪器坑与一处覆盖结论更新：
+>
+> - **trace 原文（s13，base 3000）**：`{"who":"caster","ident":657,"recog":3002,"enqueue_step":800,"run_step":900,"due":900}`；广播入队点 = `post_all_target`（3b 入队级 trace 的广播点）。⇒ caster 在 800 步**已 Run**，其队列在 800 步被写入 `recog=3002` 的 657，**900 步才消费**——正是 per-recipient 语义（收件人本步已跑 ⇒ 下一拍才见）。
+> - **写入者已证实**：caster 在 800 步广播（`recog=caster`）写进 **target / obs_in** 队列；**caster 自己那条（`recog=target=3002`）由 target 在 800 步写入**——与 §12.2 的 byWho / producer 推断一致。
+> - **仪器坑（防重踩）**：曾有一版审计因 `SendMessage` 是 `record struct`、却用**装箱对象做键**（引用比较恒 miss）⇒ `enqueue_step` 恒等于当前步 ⇒ 得出「641 行审计、`enqueue_step < run_step` 恒 0、**无跨步入队**」的**错误结论**；修正为**按值比较**后该结论被推翻。**今后入队级审计必须按值建键，不得用装箱对象做键。**
+> - **R3 覆盖结论更新**：**bigcloak 自身即有 per-recipient 延迟样本**（上面 JSON 即证）；此前「60 支不可覆盖」的结论**作废**（仪器 bug 产物）。
+
 ### §12.2 producer 归属表（656 / 31 / 53 / 100）——per-viewer 延迟的 producer 口径
 
 > 本表是后续 656/31/53/100 **扩面实现的判据**。**方法论**：oracle 里 31/53/656 是「**一个入队点 + N 个 per-receiver 出帧点**」，归属必须分「**入队 turn**」与「**sender / 出帧 actor**」两栏写，否则会把 per-receiver 出帧误算到受击者头上。
@@ -222,3 +238,34 @@ target/obs_in 仍 `{1002@800,1001@900}`；caster 的 `(657,1001,900)` 不变（�
 - **656(b) 攻击方名色**：**sender=攻击方**，但入队/触发在**受击者 Run** —— 两栏都要写，别只写一个。
 - **100 是 RM_POISON 的自投递、即时、self**，**不参与 struck turn 批次**；不许与 31/53/656 混批按「受击者 turn」延迟。
 - **本表是后续 656/31/53/100 扩面实现的判据；实现与表不符时，以本表为准。**
+
+### §12.3 tick 序契约（2026-11-21，扩面暴露的设计缺口）
+
+> **先给第一句前提**（将来任何人重做扩面都先看这条）：**装置对 31/53/100/656 没有 per-recipient 队列延迟模型**（657 的 per-recipient 已实测，见 12.3.b）——所以装置 golden 对 31/53/100/656 的 `due` 不是权威。本节记录「tick 序」契约口径、装置模型边界、本批判定，以及 order 契约为何没落地。
+
+#### 12.3.a tick 序契约（只写已核实）
+
+- **已核实**：装置 `byWho` 恒为 **4 个具名 actor**：`caster → target → obs_in → obs_out`（`MagicGolden` 的 `byWho`，两处定义一致）。这是 rig 侧 `order` 的唯一确定来源。
+- **怪物 / 其它 actor 的 per-tick 序位 = `OPEN：怪物 tick 序未验证`**：
+  - 装置怪物是 `MonsterSpec` / `RecordingMonster`「被动、不 Operate」⇒ 不占 turn、不出帧；
+  - Rust pump 的 turn 集 = `SelfDelayQueue::actor_ids()`（仅**有自延迟消息**的 actor），没有「全 actor 序」枚举；
+  - 生产 `sim_loop` 走 `world.tick()`（bevy ECS），实体迭代序 = archetype/table 序，**非契约**（`AGENTS.project.md` §4.2.2 明禁把迭代序当契约）。
+  - **影响面**：含 `MonsterSpec` 且「跨 actor 31/656/657 依赖怪物序」的 stem（`turnundead` / `skeleton` / `angel` / `sinsu` / `fireball-on-monster` / 以及任何带 `MonsterSpec` 的支）——这些要么不判怪物序，要么须先在 rig 里建立「全 Run 序」才能判。
+- 生产 `sim_loop` 的 actor 枚举「须遵守同一契约」，但**当前未接线**（胶水批）+ **怪物序 OPEN**；**不得读成已成立**。
+
+#### 12.3.b 装置模型边界（重做扩面时的第一句前提）
+
+- **装置对 31/53/100/656 没有 per-recipient 队列延迟模型**：其 SM `due` 记的是**生产/直发时刻**（`Operate` 执行那一步），**不是**「该收件人下一 Run 才见」的延迟时刻。
+- **657：per-recipient 延迟已由入队级 trace 实测证实**（不再是「间接/巧合」）：bigcloak `enqueue_step=800 / run_step=900 / due=900`——caster 在 800 步已 Run，其队列在 800 步被写入 `recog=target` 的 657，**900 步才消费**。（详见 §12.1「二次订正」。）
+- **31 / 53 / 100 / 656：仍无装置模型 ⇒ `OPEN`**：装置 golden 对这些帧的 `due` **不是权威**；要判需**装置补 per-recipient 模型**或**真机 oracle 证据**。
+- **两件事分开写，不得混**：**657 的 per-recipient 成立 ≠ 扩面（31/53/100/656）成立**；扩面仍 `OPEN`，见 `docs/issues/b4-expand-player-events.md`。
+
+#### 12.3.c 本批判定
+
+- **只保留 657 pilot**（已入 master）。
+- **扩面撤出**：656/31/53/100 的扩面实现与判据另立 `docs/issues/b4-expand-player-events.md`（已入 master，以该卡为准）。**本批 golden 零改动。**
+
+#### 12.3.d 「order 契约」为何没进本批
+
+- order（「本 tick 全部被 Run 的 actor 序」）契约**在本批未落地**——它在 `B3Rig` 单测上**非中性**：试验时 **4 条 `spell_p3b3_16_*` / `spell_p3b3_28_*`** 因**怪物 producer** 触发元断言 panic（`producer 不在 tick 序契约中：4`）。
+- 这正是 12.3.a「怪物序 OPEN」在单测上的体现：order 契约一旦强制，不在 4-actor 序里的怪物 producer 就 panic。故 **order 契约未落地，不得读成已成立**；其落地依赖先解决「怪物 tick 序」（12.3.a OPEN + `b4-expand-player-events`）。
