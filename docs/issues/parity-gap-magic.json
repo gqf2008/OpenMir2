@@ -1167,17 +1167,26 @@
         "line": 462,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_angel",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/angel.json（STUB：OfflineWorldEngine.RegenMonsterByName 造怪；summon_ok：1 个新奴隶 `精灵` level 1 hp 20/24、regen_calls 1、pre_slave 0；cap_hit：pre_slave 1、slave 前后 1/1、regen_calls 0、new_slaves 为空；`Rng` 与 640 的 `tag` 不入比较面）",
+        "cases": [
+          "summon_ok(seed 1)",
+          "cap_hit(seed 1)"
+        ],
+        "unit_tests": [
+          "tests::angel_parity_summon_ok",
+          "tests::angel_parity_cap_hit",
+          "real_rust_ledger_angel"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial，STUB）：41 的 adopt 主链由 `angel` × summon_ok/cap_hit 覆盖（`MakeSlave` 的 Master/IsSlave/level/Recalc/半补/RefNameColor/SlaveList + 造怪前帧 17/638/642 + 640 自延迟 1000ms）；批 `card/mg42-angel-summon`。装置前提：`OfflineWorldEngine.RegenMonsterByName` 为离线替身（17/30 同法）⇒ `Rng`（替身 0 抽 vs Rust `create_monster_oracle` 真抽）与 640 的 `tag`（TranPoint 随抽数）不入比较面。**生产恒失败（数据缺口）**：冻结 `sql/mir2_data.sql` 的 `monsters` 无 `精灵` 行 ⇒ `GetMonRace` 返 -1 ⇒ `CreateMonster` 无 default ⇒ `MakeSlave` null（卡 `docs/issues/openmir2-angel-summon-monster-missing.md`）；**本升格不证明生产可召唤**。",
+      "basis": "semantic",
+      "scope": "partial（STUB）：`SKILL_ANGEL(41)`（`MagicManager.cs:462-473`）→ `MagMakeAngelSlave`（`:1343-1354`）→ `MakeSlave(Config.Angel=精灵, level, level, 1, DwRoyaltySec)` 的主链由 `angel` × summon_ok/cap_hit 覆盖：`Angel` block 标量（regen_calls / slave_count_before/after / pre_slave_count / stub_*）与 new_slaves 逐项（name/level/hp/max_hp/master_is_caster）、造怪前帧 17/638/642 按 socket 多重集、640 的 (recog,param,series,due)；cap_hit 另三断（实体数不增 / slave_list 不变 / regen_calls=0）。**未验 / 不证明**：①生产可召唤（`monsters` 无 `精灵` 行 ⇒ `MakeSlave` 恒 null）；②造怪抽数与掉落表（离线替身不抽）；③`Rng` 与 640 的 `tag`；④生产 AOI / 视野路径；⑤`MakeSlave` 的 `nMaxMob` 是 oracle 硬编码 1（与配置无关），只覆盖预置 1 个奴隶的门失败支。"
     },
     {
       "id": "MG-43",

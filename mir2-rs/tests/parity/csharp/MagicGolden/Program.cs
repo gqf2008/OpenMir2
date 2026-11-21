@@ -170,6 +170,13 @@ public static class Program
             // v1 被动怪物 —— 只判"对象选择"（谁收到 `RM_MAKEHOLYSEIZEMODE`）。
             // `SKILL_SKELLETON(17)`：MakeSlave → WorldEngine 替身；两支 = 正常召唤 / 数量上限。
             if (name == "skeleton") return SkeletonBatch(new MagicSpec { Key = "skeleton", MagicId = 17, MagicName = "Skeleton", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "登录序+护身符；WorldEngine 为离线替身（仅 RegenMonsterByName）。SCOPE：本支验的是『给定怪物之后的 adopt 行为』（MakeSlave 的 Master/IsSlave/levels/Recalc/半补/RefNameColor/SlaveList），不是造怪；造怪抽数因离线缺 MonsterInfo（掉落表 MonGetRandomItems、CoolEyeCode）不可复刻 ⇒ Rng 与下游训练面（640/RM10123 p3）不在对拍范围；golden 的 Rng 是替身不抽造怪时的数，不代表生产抽数" });
+            // **MG-42（41 SKILL_ANGEL）**：`case SKILL_ANGEL`（`MagicManager.cs:462-473`）→
+            // `MagMakeAngelSlave`（`:1343-1354`）→ `MakeSlave(Config.Angel="精灵", level, level, 1, …)`。
+            // **SCOPE 写死**：stub 验证（`OfflineWorldEngine.RegenMonsterByName` 是离线替身）+
+            // 生产数据缺失（冻结 `sql/mir2_data.sql` 的 `monsters` 无 `精灵` 行 ⇒ `GetMonRace` 返 -1
+            // ⇒ `CreateMonster` 无 default ⇒ `MakeSlave` null ⇒ 41 生产恒失败；卡
+            // `openmir2-angel-summon-monster-missing`）。**不得**把本支绿灯说成"生产可召唤"。
+            if (name == "angel") return AngelBatch(new MagicSpec { Key = "angel", MagicId = 41, MagicName = "Angel", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "STUB 验证 + 生产数据缺失：WorldEngine 为离线替身（仅 RegenMonsterByName），验的是『给定怪物之后的 adopt 行为』；生产 `monsters` 无 `精灵` 行 ⇒ MakeSlave 恒 null（卡 openmir2-angel-summon-monster-missing），本 golden 不证明生产可召唤；造怪抽数不可复刻 ⇒ Rng/640-tag 不在对拍范围" });
             if (name == "sinsu") return SinsuBatch(new MagicSpec { Key = "sinsu", MagicId = 30, MagicName = "SinSu", ArmRingAmulet = true, Reachability = "unverified", ScenarioNote = "SINSU 神兽=race113；验 MakeSlave adopt + cap_hit 回召(RecallSlave 移 slave)；仅参数化 race/stub，不验龙名变体(数据缺口)" });
             if (name == "holyshield") return HolyShieldBatch(new MagicSpec { Key = "holyshield", MagicId = 16, MagicName = "HolyShield", ArmRingAmulet = true });
             // 49/51/52/53/54：共享尾 B 类（case 体只有 `boTrain = true;`）——本批先做 49。
@@ -1887,6 +1894,27 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         return EmitGolden(spec, cases);
     }
 
+    /// <summary>
+    /// `--case angel`：41 `SKILL_ANGEL` 两支（summon_ok / cap_hit），镜像 17 的 skeleton 批次。
+    ///
+    /// cap 门：`MagMakeAngelSlave`（`MagicManager.cs:1346-1349`）调
+    /// `MakeSlave(Config.Angel, level, level, **1**, DwRoyaltySec)` ⇒ `nMaxMob = 1`；
+    /// 预置 1 个已存在奴隶即令 `SlaveList.Count < 1` 门失败（与 `SkeletonCount` 无关）。
+    /// </summary>
+    private static int AngelBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        spec.PreSlaveCount = 0;
+        var c1 = RunMagicCase(spec, "summon_ok", 1, 1000, spec.TargetMaxHp, false);
+        spec.PreSlaveCount = 1; // `MakeSlave(..., nMaxMob = 1)`
+        var c2 = RunMagicCase(spec, "cap_hit", 1, 2000, spec.TargetMaxHp, false);
+        return EmitGolden(spec, new[] { c1, c2 });
+    }
+
     private static int SinsuBatch(MagicSpec spec)
     {
         if (!EnsureConfFiles(out _, out var missing))
@@ -2833,6 +2861,30 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                         })
                         .ToList(),
                 },
+            Angel = spec.MagicId != 41
+                ? null
+                : (object)new
+                {
+                    // 与 Skeleton 同源：替身常量的可见值（生产 MonsterInfo.hp 的占位）。
+                    stub_wabil_hp = 17,
+                    stub_abil_max_hp = 17,
+                    stub_monster_race = 100,
+                    pre_slave_count = spec.PreSlaveCount,
+                    slave_count_before = slaveCountBefore,
+                    slave_count_after = caster.SlaveList?.Count ?? 0,
+                    regen_calls = OfflineWorldEngine.RegenCalls - regenBefore,
+                    new_slaves = (caster.SlaveList ?? new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>())
+                        .Skip(slaveCountBefore)
+                        .Select(x => (object)new
+                        {
+                            name = x.ChrName,
+                            level = (int)x.Abil.Level,
+                            hp = (int)x.WAbil.HP,
+                            max_hp = (int)x.WAbil.MaxHP,
+                            master_is_caster = ReferenceEquals(x.Master, caster),
+                        })
+                        .ToList(),
+                },
             StatusTimeArr = spec.PoisonStates == null
                 ? null
                 : (object)new
@@ -3025,6 +3077,8 @@ public sealed class FireballResult
     /// <summary>30 SINSU 观测（仅该魔号；null 不落盘）：召唤 adopt + cap_hit 回召（pre-slave xy before/after + recall_moved）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object SinSu { get; set; }
+    /// <summary>41 `SKILL_ANGEL` 的 adopt 观测块（`MagicId == 41` 时非 null；镜像 `Skeleton`）。</summary>
+    public object Angel { get; set; }
     /// <summary>共享尾（49/51/52/53/54）训练面（`SkillTail=true` 才落盘）：Level/TranPoint/TrainLv/MaxTrain[0]。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Train { get; set; }
