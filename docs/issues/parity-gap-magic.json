@@ -694,7 +694,7 @@
       "deviation": null,
       "notes": "旧清单 cost=天级 2026-11-20 接线并升格：四支覆盖命中/等级门负例/主人门负例/部分命中；帧面逐收件人 (ident,param,tag,series) 比；牙=去掉等级门 ⇒ 帧集合退化可见。",
       "basis": "semantic",
-      "scope": "无牙（理由）：等级门四档变异（`>`→`>=`、`caster_level-3`、`caster_level+1`、`caster_level+50`）× 四个种子（`mon_hit_two`/`mon_blocked_level`/`mon_blocked_master`/`mon_partial`），驱动与比较器**全绿** ⇒ 该门不驱动 `mon_blocked_level` 判据；阻挡真正来源在 `master` 门或目标格 `mag_objects_in_range` 为空，属装置盲区（见 `docs/issues/golden-harness-blind-spots.md` 的 B15）。"
+      "scope": "有牙（2026-11-21）：删等级比较（`if obj.master.is_none()`）⇒ 驱动 `holyshield_parity_mon_blocked_level` 红（`left.caster` 多一帧 `(640,1,2,0)`）+ 比较器 `real_rust_ledger_holyshield` 红（`[mon_blocked_level/caster] Sent 条数不等（golden=2 rust=3）`、多出 `(640,16,1,2,0,\"\")`、RNG 行数 2 vs 3）；**等级差 170 级 ⇒ 小幅度变异不可观测**：判据 `draw + (caster_level - 1) > obj.level`，`draw∈[0,3]` 最坏需 `caster_level ≥ 202`（至少 +172）；实测 +1/+50 均绿属幅度不足。归因纠正与推导见 `docs/issues/golden-harness-blind-spots.md` 的 B15。"
     },
     {
       "id": "MG-24",
