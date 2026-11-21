@@ -33,6 +33,7 @@
 | B21 | **夹具意图未物化（`CasterSc/CasterMc` 只写 `WAbil`、不写 `Abil`，被登录序 recalc 覆盖为 0）**：`RunMagicCase` 设 `caster.WAbil.SC=CasterSc`（缺省 15），登录序 `RecalcAbilitys()`（`WAbil=Abil.Clone()`）用 `Abil.SC=0` 覆盖 ⇒ 实际 SC=0，与 fixture 意图 15 不符 | 设 `CasterSc/CasterMc` 却未同步 `Abil.SC/MC` 的 stem（如 `uenhancer`）；golden 记录 `caster.WAbil.SC` | 记录切到「实际应用值」（`9c9782a30`）后**暴露**：`uenhancer` 的 `caster_sc` 15→0；**非 golden 旧、非丢开关**（`CasterScNoClamp` 仍在） | 生产登录序同样 `WAbil=Abil.Clone()`，但 fixture 意图应体现在 `Abil` | `uenhancer` 等 stem 的 SC/MC 意图未物化（实际 0）；**修法（行为性、后续批）**：`CasterSc/CasterMc` 同时写 `Abil.SC/MC` 使 recalc 后仍为意图值；**别在缺口上重出 golden** |
 
 | B22 | **（2026-11-22 全量门复核修正）** 原判「oracle 不表达 per-frame 延迟量、装置给不出正确 `due`」**对部分路径成立**。committed **37/60 支有 `due_ms_rel`**（异构）；`(a)`「不 emit」前提错误已回滚（`d10de6523`）。回滚后 `rerun_magic_plane.sh` 实测（58 支、落 49）：**32 支一致＋`cloak`/`holyshield`/`unamyounsul` 与 Rust 同值；9 支路径特异分歧** —— A 型 harness 记 0（`CurrentDueMs` 在 one-shot/RunFireball 路径未设）：`fireball`/`fireball-5`/`firecharm`/`grouplightening`/`lightning-11`/`lightning-45`/`showhp`；B 型 recog 顺序互换＋due 800 vs 900：`bigcloak`/`groupdeding`（后者并触发比较器 640 减法溢出，另行修复）。**定论：B22 真实、待装置表示层重构；不得据此删字段或调断言**（9 支暂留旧 golden 无 due ⇒ 比较器不比 ⇒ 绿，不在缺口上盖新值）。详见下方 D=12 due 值表 | 延迟帧（31/53/共享尾）的逐帧定时对拍 | golden 无 due ⇒ 比较器不比（无逐帧覆盖）；**有 due 但错**同属 B22（A/B 型） | oracle 逐帧本有延迟量、比较器本可比 | **教训**：`due` 属比较面、不得当 T 剥离（曾致「57 支 Y=0」假绿）。**后续（正式批）**：表示层重构（`due` 沿链传播到下游帧）后再逐支落盘 |
+| B23 | **对拍的时间节拍是假设值（100ms 未核实）**：装置 `MagicGolden/Program.cs::DrainOnce` 的步进 `StepDrainMs=100` 与 Rust 驱动都用 100ms；生产 actor `Run()` 由 `RunTime=250` 门 + 玩家 `UserProcessor` 50ms 周期 / 怪物 `ProcessMonsters` 每趟 `Thread.Sleep(20)` 驱动 ⇒ **≈250–300ms**，且 `BaseObject` ctor `RunTick = GetTickCount() + RandomNumber.Random(1500)` ⇒ **怪物首跑时刻按实例随机**（`PlayObject` ctor 覆盖为当前 tick） | 任何"延迟 N ms 后在第几步处理 / 谁先谁后"的判据：自延迟消息、`due_ms_rel`、延迟帧顺序、`DrainPasses` 计数 | 装置与 Rust 用**同一个** 100ms 假设 ⇒ 两栈互相一致、**共同偏离生产**；golden 与台账同错 ⇒ 断言恒绿 | actor 每 ≈250–300ms 才泵一次队列；到 t=800ms 玩家只发生 ≈2–3 次 `Run()`（不是 8 次）；"未到期根把已到点项压到下一步"的奇偶取决于真实拍数 | "第几步/第几次 Run"语义、跨步排序、`DrainPasses` 真实值；怪物首相位随机 ⇒ 顺序不可当确定量。**依据**：`docs/issues/production-tick-cadence.md`；B 型 2 支分歧（`bigcloak`/`groupdeding`）是第一个显形处，**不是唯一** |
 
 ### B22 · D=12 `due` 值表（golden 新值 vs Rust 台账，2026-11-22 全量门实测）
 
@@ -64,10 +65,11 @@
 - **clone 家族 actor_id 非确定（虚拟钟也治不了）** —— 落在 **B20**。
 - **夹具意图未物化（CasterSc/Mc 只写 WAbil 被 recalc 覆盖）** —— 落在 **B21**（暴露者 `9c9782a30`）。
 - **per-frame due（时间维度逐帧覆盖）** —— 归 **B22**（**真实**：9 支路径特异分歧，见上）；本轮落 49 支、9 支暂留旧 golden 无 due（不盖缺口）；表示层重构后再补。
+- **对拍的时间节拍是假设值（100ms vs 生产 ≈250–300ms + 怪物随机首相位）** —— 落在 **B23**（见 `docs/issues/production-tick-cadence.md`）；B 型 2 支分歧是第一个显形处，不是唯一。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 22 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22？
+1. **先查本卡 23 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22/B23？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
@@ -76,7 +78,7 @@
 
 ## 4. 使用法
 
-1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22？"
+1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16/B17/B18/B19/B20/B21/B22/B23？"
 2. 命中盲区 ⇒ 记为**装置限制**（进 scope 或登记卡），**不要**当成产品缺陷去改实现。
 3. 需要把盲区变可见时，改装置的方向（另开卡）：替身怪绑定 `Envir`+`ActorMgr`+`AddMapObject`；对被动怪实现最小 `Operate`；克隆体复位 `FixedHideMode` 并把其队列纳入排水；对 `VisibleActors` 按 AOI 回填；显式装载 `ServerConf`；跑必要 tick 的 `Run`。
 
@@ -103,6 +105,7 @@
 | B18 committed golden / 生成器 schema 漂移 | 与 `docs/issues/openmir2-golden-generator-drift.md` 同源（本卡给量化与风险判定）；B17 的快照生成器口径即为此处的隔离手段 |
 | B20 clone 家族 actor_id 非确定 | 本卡新立；`clone46` 已实证虚拟钟 3 次仍不稳；与 B19（墙钟源）互补：B19 解墙钟、actor-id 是非时钟独立源 |
 | B21 夹具意图未物化（CasterSc/Mc→Abil） | 本卡新立；`uenhancer` 15→0；暴露于 `9c9782a30`；修法=CasterSc/Mc 同步写 Abil.SC/MC（行为性，后续批） |
+| B23 时间节拍是假设值（100ms 未核实） | 本卡新立；生产 `RunTime=250` + 50/20ms 循环 + `Random(1500)` 首相位，见 `docs/issues/production-tick-cadence.md`；B 型 2 支分歧（`bigcloak`/`groupdeding`）为第一个显形处；改法由总控裁定前暂停 |
 
 ## 6. 关联
 
