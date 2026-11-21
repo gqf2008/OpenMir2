@@ -35,18 +35,23 @@
 > 与既有节的分工：§5 给**抽数口径**（已记录、两侧记账/消费不同）；§7 给 51 份的**字段出现表**（actor_id/recog/due/delivery）；
 > §12 给“缺键 ⇒ 静默失效”的**实例**。本节给**全量 52 份的三类分类 + 消费面 + 待办**，不重复它们的数字。
 
-### 5b.1 类 A：`FireballResult.Angel` 漏 ignore-null（**装置一行 bug，待修**）
+### 5b.1 类 A：`FireballResult.Angel` 漏 ignore-null（**装置一行 bug，已修**）
 
 - **现象**：51/52 文件的 case 级**没有** `Angel` 键（仅 `angel.json` 有）。
 - **根因**：`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs` 的 `FireballResult.Angel` 声明为普通属性，
   **漏了** `[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]`；同文件 `Skeleton` / `SinSu` / `Train` /
   `StatusTimeArr` / `TargetMonsterHpBefore/After` **都有**该属性（装置自身不一致，angel 批引入）。
 - **后果**：任何 stem 用今天的生成器重出 ⇒ 每个 case 多一行 `"Angel": null`（52 份共 144 case）——与取值无关。
-- **修法**：补该属性（**本卡不改**；`Program.cs` 正被 MG-55 改，避免撞车，由编排在合入后统一排）。
-- **修后可验判据**：
-  1. 重生成任一**非 41** stem ⇒ 产物 `grep -c '"Angel"'` = **0**；
-  2. 重生成 `angel` ⇒ `Angel` 对象块仍在、字段集合与仓库件一致（值除墙钟外可比）；
-  3. 全量重生成后，**类 A 差集 = 0**（下表 A 列归零）。
+- **修复**（2026-11-21，提交 `3286be9eb`，合并 `8731fd733`）：补一行
+  `[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]`；`dotnet build` 0 错误。
+- **修复后的判据与已验范围**：
+  1. 非 41 stem 重生成 ⇒ `grep -c '"Angel"'` = **0**：**已验 3 支**（`spacemove` / `skeleton` / `shield`，
+     均为 0）；**其余 48 支未逐一验**（等类 C 全量重生成一并确认，勿当已验）；
+  2. `angel` 重生成 ⇒ `Angel` 对象块仍在、与仓库件**逐字段相等**（两 case 已验）；
+  3. 全量重生成后 **A 列归零**——**未验**（同第 1 条剩余的 48 支）。
+- **修复 ≠ 清存量（重要）**：仓库 51 份 golden **仍然没有**这个键（本笔未重生成任何文件）。
+  本修复只保证“**以后**重生成不会再多出 `"Angel": null`”；将来重生成得到的产物与仓库件相比会
+  **少一行该键**——那是“源头已修”的**预期差异，不是回归**。判别依据就是本节 A 列。
 
 ### 5b.2 类 B：历史陈旧（“重生成 ≠ 仓库件”，**不是缺陷**）
 
@@ -135,7 +140,7 @@
 
 ### 5b.6 待办
 
-1. **类 A 一行修复**（§5b.1），MG-55 合入后统一排；修后按三条判据验（尤其“全量重生成后 A 列归零”）。
+1. **类 A 已修**（`3286be9eb`，§5b.1）：三支已验 `"Angel"` 计数 0；余项 = 全量重生成时确认其余 48 支、并核 A 列归零。**仓库件存量仍漂**（未重生成），见 §5b.1 末条。
 2. **类 C 全量重生成**（§5b.3），先报车道；结果回填本节，**值不同单独点名**。
 3. **RNG 记账 follow-up**（§5）：`skeleton`/`angel` 驱动先落 `Rng`，再谈消费/比对。
 4. 类 B 是否全量重出，等类 C 结果一并决策（避免二次翻动）。
