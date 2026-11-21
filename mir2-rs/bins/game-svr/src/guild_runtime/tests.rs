@@ -2037,8 +2037,9 @@ fn g3_anchor_a4_production_wiring() {
     let startup = (0..l.len())
         .find(|&i| l[i].contains("guild_runtime::startup("))
         .unwrap();
-    let sblk = l[startup..startup + 8].join("\n");
-    assert!(sblk.contains("guild_store"));
+    // **P2-3b**：startup 的实参是 host-gated 的 `guild_startup_store`（非 0 片 None），
+    // 其来源 `guild_store.as_ref()` 就在上面三行内 ⇒ 窗口前移，原断言不变。
+    let sblk = l[startup.saturating_sub(3)..startup + 8].join("\n");
     assert!(sblk.contains("guild_sections"));
 
     assert_eq!(

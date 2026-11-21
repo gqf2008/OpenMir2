@@ -522,7 +522,7 @@ pub fn startup_log_lines(
         (
             "INF",
             format!(
-                "世界分片：{}={} {}={}（宿主只服务片 0；片 1..{} 的路由在 P2-3，跨片换图在 P2-2 一律拒绝）",
+                "世界分片：{}={} {}={}（每片一个固定 sim 线程；登录只落片 0，片 1..{} 的会话待 handoff P2-5；跨片进入一律 fail-closed）",
                 ENV_SHARDS,
                 cfg.count(),
                 ENV_MAP_GROUPS,
@@ -544,7 +544,7 @@ pub fn startup_log_lines(
         lines.push((
             "WRN",
             format!(
-                "shard {} 已划分 {} 张地图，但会话路由未接线（P2-3）⇒ 该片当前 0 会话/0 实体；跨片进入按 fail-closed 拒绝",
+                "shard {} 已划分 {} 张地图并起独立 World/sim 线程，但登录仍只落片 0（无全局会话键）⇒ 该片当前 0 会话；跨片进入按 fail-closed 拒绝",
                 id,
                 layout.maps_of(id).len()
             ),
