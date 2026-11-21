@@ -34,8 +34,16 @@
 - **第二条 `RM_DELAYMAGIC` 未入 `Rm`** = 台账装配（`self_delay_msgs.iter().find(...)` 单数）——装置缺口；
 - **`8103(damage=20)`** = 台账装配（上述 `find_map` + 聚合块，且魔号 50 被 `9 | 10` 排除）——**装置缺口**，
   **产品侧 `deliver_mag_struck` 逐条逻辑是对的，不得按"产品合并"去改**；
-- **时序 600/600（golden）vs 700/800（Rust）与 53 中间态仍待判定**：`e5` 正在补测是"产品调度差异"
-  还是"排水粒度/装置"。**不提前定性**。
+- **时序 600/600（golden）vs 700/800（Rust）与 53 中间态 = 已判定：产品缺陷（自延迟泵堆序）**，
+  单独立卡见 [`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)（`e5` 在写）。
+  `e5` 补测（探针原文）：
+  - 两条 `RM_DELAYMAGIC` 的 `deliver_at_ms` **都是 1000**（cast 400 + 600）⇒ 不是调度差异；
+  - `clock=1000` 两条到期**却取 0**（泵 `break` 在一个未到点的堆根上）；`clock=1100` 3 条到期只取 2、
+    **留下一条已到点的 8021**；`clock=1200` 才取完；
+  - 根因：`SelfDelayQueue`（4 叉堆）**只按 priority 排序（全 255）**，堆根可能是 `deliver_at` 更晚的
+    消息，而泵"遇未到点堆根即 break"。
+  **本卡的驱动/比较器不得为迁就这个缺陷而放宽**：不许放大 `due_ms_rel` 容差、不许跳过帧/接收者，
+  等泵修好后再接。本卡此前的 (a) 假设（600 被 650 挡后）已被 `e5` 的根因替代，归到这张新卡。
 
 ## 1. 复现
 
@@ -76,16 +84,14 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 ## 3. 证据点与嫌疑（函数 / 当前行为）
 
-### (a) 同一时刻两条 `RM_DELAYMAGIC` 没有同步交付（时序 + 中间态的共同上游）
+### (a) 两条 `RM_DELAYMAGIC` 没有在到期时刻交付（**已判定：产品缺陷——自延迟泵堆序**）
 
-- 当前行为：魔法 50 在 `cast_mab_mabe_spell` 里**连发两条** `RM_DELAYMAGIC`（`power/3` 与 `n_power`，
-  均 `delay=600`），并可能再发一条 `RM_POISON(650)`。
-- 泵：`slave.rs` 的 `deliver_self_delay_msgs_impl` —— 逐 actor 泵四叉堆，**队首未到点时
-  "出队 + 以 Lowest 重入队 + break"**（复刻 oracle `GetMessage`）。同一 actor 同时存在
-  600/600/650 三条时，堆根序可能先出现 650 ⇒ 两条 600 被推迟，observed = 700/800。
-- 待证：oracle 侧 `.NET PriorityQueue` 的根序下两条 600 是同一 `Run()` 内一起出队（golden 均为 600）。
-  需要一条**只读探针**（在测试里打印 `self_delay_msgs` 的 `(ident, deliver_at, enqueue_seq)`
-  与每次泵的出队序），不改产品代码。
+- 现象：golden 两条 `due_ms_rel=600`；Rust 依次 700 / 800，并出现中间态 53（95 → 80）。
+- `e5` 探针判定（原文见 §0）：两条 `deliver_at_ms` 都是 1000（cast 400 + 600）；`clock=1000` 到期却
+  取 0（泵 `break` 在未到点的堆根上）、`clock=1100` 只取 2 并留下一条已到点的 `8021`、`clock=1200`
+  才取完。根因 = `SelfDelayQueue` 4 叉堆**只按 priority（全 255）排序** + 泵"遇未到点堆根即 break"。
+- **单独立卡**：[`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)（`e5` 在写）。
+  本臂不为此放宽任何比较口径（不加 `due_ms_rel` 容差、不跳帧），等泵修好后再接。
 
 ### (b) 一条聚合 `8103(damage=20)`（**已实测：驱动装配，装置缺口**）
 
@@ -119,14 +125,17 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 ### (e) 帧编码时刻（批量刷 vs 应用时取值）
 
 - oracle 的 31/53 在**出队编码时**读当前 `WAbil` ⇒ 两条受击都带最终 HP=80，53 只出现一次；
-  Rust 在**应用时**出帧 ⇒ 95/80 两条、53 两条。与 (a) 互为因果：若(a)修好（同时刻一起结算），
-  本项大概率一并消失；若仍在，则需要按 oracle 的"入队—出队编码"分层重构该段。
+  Rust 在**应用时**出帧 ⇒ 95/80 两条、53 两条。
+- **归属**：本项与 (a) 同源，归到产品缺陷卡
+  [`self-delay-pump-heap-ordering.md`](self-delay-pump-heap-ordering.md)，不另开定性。
+  若泵修好（两条同时在到期时刻结算）后仍在，再按 oracle 的"入队—出队编码"分层评估。
 
 ## 4. 结论与建议顺序
 
 0. **形态判定已完成**（§0）：`8103` 与第二条 `8021` 都是**装置缺口/驱动装配**，产品逐条逻辑正确；
    **不得**按"产品合并"改 `deliver_mag_struck`。
-1. **待判定只剩时序（a/e）**：600/600 vs 700/800 与中间态 53——`e5` 补测中；定性前不动产品。
+1. **时序（a/e）已判定为产品缺陷（自延迟泵堆序）**，见 `self-delay-pump-heap-ordering.md`；
+   本批不动产品、不放宽任何比较口径，等泵修复后再接。
 2. **再修 (a)**（泵/堆序 + 同时刻多消息），再复测：预期 (e) 自动收敛、(b)(d) 可能随之消失；
 3. (b)(c) 随对照臂驱动批一起改（8103 逐条组装 + 多条 8021）；
 4. 修完后再把 `mabmabe-nondefault` 的驱动/比较器（per-stem 期望表、3 个 `#[ignore]` 驱动、
