@@ -36,5 +36,7 @@
 
 ## 4. 关联
 
-- 卡 `docs/issues/magic-52-clientxy-explicit-case.md` §3b（43 的行为面断言）；
+- **同族第一张**：`docs/issues/openmir2-golden-fixture-drift.md`（golden 夹具/生成侧漂移）；
+  本卡是"死数据"第二次被写成已知项（第一次是那张；两张互为引用）。
+- 卡 `docs/issues/magic-52-clientxy-explicit-case.md` §3b（43 的行为面断言，含"死断言"修正记录）；
 - 口径："夹具硬编码的输入字段不是覆盖面，是死数据"（全组台账）。

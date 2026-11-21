@@ -67,6 +67,10 @@
 | 43 施法误伤目标（`req.target_actor_id` 扣 1 血） | `43 不得伤目标… left: 99 / right: 100`（第 416 行） |
 
 每次变异均反向还原、`git hash-object` 与改前同值、`MUTATION`=0、复跑绿。
+**本批修正了一处死断言**：`run_case` 原以 `param=series=0` 调用 ⇒ `target_actor_id=0` ⇒
+「43 不得伤目标」断言**恒真**（永远不会红）。按 `src/GameSrv/Word/WorldServer.cs:783-790` 的
+`nParam3 = MakeLong(Param, Series)` 传真实 target 后该断言才具判别力（牙已证）。
+
 **顺带修**：`run_case` 之前把 `param/series` 传 0 ⇒ `req.target_actor_id=0`（目标面不可观测）；
 现按 `nParam3 = MakeLong(Param, Series)` 传真实 target，19 支 golden 复跑不变。
 
