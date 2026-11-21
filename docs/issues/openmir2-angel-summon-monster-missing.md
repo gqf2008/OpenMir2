@@ -8,7 +8,7 @@
 
 | 面 | 结论 | 依据 |
 | --- | --- | --- |
-| **harness 能不能出 golden** | **能**（不阻塞） | `mir2-rs/tests/parity/csharp/MagicGolden/OfflineWorldEngine.cs` 的 `RegenMonsterByName` 是离线替身，按名字造一个 `MonsterObject`（17/30 同法，只登记「造怪抽数不可复刻」） |
+| **harness 能不能出 golden** | **能**（不阻塞） | `mir2-rs/tests/parity/csharp/MagicGolden/OfflineWorldEngine.cs` 的 `RegenMonsterByName` 是离线替身，按名字造一个 `MonsterObject`（17/30 同法；造怪抽数**已记录在 golden `Rng` 中且可复现**——skeleton/angel 的驱动不做 RNG 记账，sinsu 已记账且前 5 抽逐值相同） |
 | **生产里 41 能不能召唤出东西** | **不能（恒失败）** | 见 §2 |
 
 ## 2. 生产链为什么恒失败

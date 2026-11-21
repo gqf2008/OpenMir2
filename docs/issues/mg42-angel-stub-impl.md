@@ -38,8 +38,8 @@ adopt 行为」：
 
 ## 3. 不进入比较面的字段（实测口径）
 
-- **`Rng`**：离线替身 `RegenMonsterByName` 不抽造怪数，Rust `create_monster_oracle` 真抽
-  ⇒ 两侧不同源（与 17/30 同口径）。
+- **`Rng`**：造怪抽数**已记录在 golden `Rng` 中且可复现**（`[1500,2000,3000,3000,2000]` + `Random(3)`）；
+  本 stem 的驱动**不做 RNG 记账**（台账无 `Rng` 键）⇒ 当前不入比较面（sinsu 已记账，见 MG-41）。
 - **640 的 `tag`**（TranPoint）：随造怪抽数不同（与 17 同口径）；比较
   `(recog,param,series,due)`，`due` 按既有 `|Δ|≤32ms` 判。
 

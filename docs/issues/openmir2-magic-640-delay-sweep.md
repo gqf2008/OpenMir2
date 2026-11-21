@@ -127,13 +127,13 @@ if (userMagic.Level < 3 && boTrain) {
 ### C. `sinsu`（30）的口径决策 —— **报 opc-19 定，不自行决定**
 
 **不能简单把 640 加进 `keep`**：640 的载荷 `tag/series = TranPoint`，而 TranPoint 来自
-`Random(3)+1`；sinsu 的 RNG 因离线替身 `RegenMonsterByName` 造怪 0 抽而整体偏移
-（实测 golden `tag=2` / Rust `tag=3`）⇒ 纳入 keep 会红在 **payload**，不是红在 due。
+`Random(3)+1`；sinsu 的 RNG 因离线替身 `RegenMonsterByName` 的**造怪抽数消费序列不同**而整体偏移
+（golden 6 抽 / Rust 8 抽，前 5 抽逐值相同；实测 golden `tag=2` / Rust `tag=3`）⇒ 纳入 keep 会红在 **payload**，不是红在 due。
 可选：
 
 - **B1（推荐，成本最小）**：`keep` 不动；另加一条**只比 due** 的断言（640 恰 1 条且
   `due_ms_rel = 1000`），驱动补 1000ms 交付回路；payload 仍不比，理由写进 scope。
-- B2：把 640 纳入 keep —— 需先修离线替身的造怪抽数（另一张卡），短期做不到。
+- B2：把 640 纳入 keep —— 需先让两侧的造怪抽数记账/消费序列对齐（另一张卡），短期做不到。
 - B3：sinsu 比较器面不动，只靠新单测覆盖 30 的 640 延迟（比较面仍留空）。
 
 ### D. `skeleton`（17）的额外成本
