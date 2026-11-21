@@ -649,12 +649,100 @@ def selftest():
     return 0
 
 
+
+# ---------------------------------------------------------------------------
+# Phase 0（2026-11-21，QA）：冻结面 `src/**` 锚的**声明级**漂移报告（只报告，不判红）。
+# 方案 A（声明级窗口匹配）+ B（资格过滤）；默认 `check` 行为不变。
+# ---------------------------------------------------------------------------
+def _decl_hit(lines, lo, hi, sym):
+    """±3 行窗口内是否存在**声明形态**的 `sym`（C# 方法/属性/字段/枚举成员；Rust fn/struct/…）。"""
+    cands = _candidates(sym)
+    win = lines[max(0, lo - 4):min(len(lines), hi + 3)]
+    cs_mods = re.compile(r"\b(?:public|private|protected|internal|static|override|virtual|async|sealed|partial|void|bool|int|uint|ushort|short|byte|string|object|Task|List)\b")
+    for line in win:
+        for c in cands:
+            e = re.escape(c)
+            if re.search(r"\b(?:class|struct|enum|interface)\s+%s\b" % e, line): return True
+            if re.search(r"\b(?:fn|struct|enum|const|static|type|trait|mod)\b[^\n]*\b%s\b" % e, line): return True
+            if re.search(r"\b%s\s*\(" % e, line) and cs_mods.search(line): return True
+            if re.search(r"\b%s\s*[{=;]" % e, line): return True
+            if re.search(r"\b%s\s*,\s*$" % e, line): return True
+            if re.search(r"\b%s\s*[:(]" % e, line) and ("fn " in line or "let " in line): return True
+    return False
+
+def _loose_dist(lines, lo, hi, sym):
+    """松口径：任意出现（子串）到锚区间的最近行距；文件内不存在 ⇒ None。"""
+    cands = _candidates(sym)
+    best = None
+    for i, line in enumerate(lines, 1):
+        if any(c in line for c in cands):
+            d = min(abs(i - x) for x in range(lo, hi + 1))
+            if best is None or d < best: best = d
+    return best
+
+def _qualified(sym, lines):
+    """B：带限定前缀 / 文件内唯一 / CamelCase≥2 词或长度≥6 / 全大写常量 ⇒ 合格。"""
+    if "::" in sym or "." in sym: return True
+    n = sum(1 for l in lines if re.search(r"\b%s\b" % re.escape(sym), l))
+    if n <= 1: return True
+    if sym.isupper() and len(sym) >= 4: return True
+    humps = sum(1 for ch in sym[1:] if ch.isupper())
+    return humps >= 1 and len(sym) >= 6
+
+def cmd_report_src_drift(args):
+    root = REPO_ROOT
+    text = open(args.whitelist, encoding="utf-8").read()
+    idx = _build_basename_index(root)
+    rows = []
+    for a in parse_anchors(text):
+        rel, _reason = _resolve(a["path"], root, idx)
+        if not rel or not rel.startswith("src/"): continue
+        lines = _read_lines(os.path.join(root, rel))
+        sym = _adjacent_symbol(a["row"], a["start"] - a["row_start"], a["end"] - a["row_start"], a["path"])
+        lo, hi = min(a["lines"]), max(a["lines"])
+        if not sym:
+            bucket, dist, strict = "无相邻符号", None, False
+        elif not _qualified(sym, lines):
+            bucket, dist, strict = "符号不合格(通用名)", None, False
+        elif _decl_hit(lines, lo, hi, sym):
+            strict = True
+            dist = _loose_dist(lines, lo, hi, sym)
+            bucket = "严格命中"
+        else:
+            strict = False
+            dist = _loose_dist(lines, lo, hi, sym)
+            if dist is None: bucket = "已漂出"
+            elif dist == 0: bucket = "松命中·非声明"
+            elif dist <= 3: bucket = "±3 边缘"
+            else: bucket = "已漂出"
+        rows.append(dict(entry=a["entry"], line=a["line"], path=rel, lines=a["lines"], sym=sym,
+                         bucket=bucket, dist=dist, strict=strict))
+    from collections import Counter
+    cnt = Counter(r["bucket"] for r in rows)
+    print("SRC_ANCHOR_REPORT total=%d %s" % (len(rows), dict(cnt)))
+    if args.json:
+        json.dump(rows, open(args.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if args.tsv:
+        with open(args.tsv, "w", encoding="utf-8", newline="\n") as f:
+            f.write("bucket\tentry\tpath\tlines\tsym\tdist\n")
+            for r in rows:
+                f.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(
+                    r["bucket"], r["entry"], r["path"],
+                    "/".join(map(str, r["lines"])), r["sym"] or "",
+                    "" if r["dist"] is None else r["dist"]))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="whitelist.md 行号锚保鲜门（只读、零端口）")
     sub = p.add_subparsers(dest="cmd", required=True)
     pc = sub.add_parser("check", help="核 whitelist.md 的全部 path:line 锚")
     pc.add_argument("--whitelist", default=DEFAULT_WHITELIST)
     pc.add_argument("--json", default=None)
+    pr = sub.add_parser("report-src-drift", help="Phase0：冻结面 src 锚的声明级漂移报告（只报告不判红）")
+    pr.add_argument("--whitelist", default=DEFAULT_WHITELIST)
+    pr.add_argument("--json", default=None)
+    pr.add_argument("--tsv", default=None)
     pa = sub.add_parser("audit", help="清点全部锚与分类（覆盖面）")
     pa.add_argument("--whitelist", default=DEFAULT_WHITELIST)
     ps = sub.add_parser("selftest", help="合成文本 + 改坏必红的 fail-closed 自检")
@@ -663,6 +751,8 @@ def main(argv=None):
         return run_check(args.whitelist, json_out=args.json)
     if args.cmd == "audit":
         return cmd_audit(args)
+    if args.cmd == "report-src-drift":
+        return cmd_report_src_drift(args)
     return selftest()
 
 
