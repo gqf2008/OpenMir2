@@ -22,6 +22,7 @@
 | B12 | **RNG 账本只覆盖单例**：`RngSeam` 反射替换 `OpenMir2.RandomNumber` 的私有静态 `random`（`Program.cs` 的 `RngSeam`） | 任何绕开该单例的随机源（`new Random()`、外部库） | 抽数**不进账本** | — | 若某路径绕开单例：RNG 对比面缺项（当前全仓 `new Random(` 0 命中，风险为将来） |
 | B13 | **`RecordingNetChannel` 只记两条入队口**：`AddGateBuffer`/`AddGameGateQueue`（`Program.cs` 的 `RecordingNetChannel` 入队口）；`Send/Close/Kick` 等为空实现（同文件 `:3353` 起） | 非 `SendSocket`/`SendDefMessage` 通道的帧 | 不进 `Buffers` ⇒ **不可见** | 经相应通道真正下行 | 走这些通道的任何帧（现网 magic 面不涉，属结构性限制） |
 | B14 | **`ObMode`/`FixedHideMode` 需每支显式复位**：装置只在「正常玩家」处显式置 false（`Program.cs` 启动段的 `FixedHideMode=false` 与 `:2408`） | 新增 case 忘记复位（ctor 可能为 true） | 同样命中"只发自己"支 ⇒ **旁观者零帧** | 登录后复位 | 新支的旁观者帧（与 B3 同源，但成因是"忘记复位"） |
+| B15 | **等级门判据未被夹具驱动**（16 圣言术/`holyshield`）：`cast_holy_curtain_spell` 的等级门 `draw + (caster_level - 1) > obj.level`（`mir2-rs/crates/world-bevy/src/world.rs`）在现有四支夹具下**改动不可观测** | 任何只改该等级门的变异 | 四个幅度（`>`→`>=`、`caster_level-3`、`+1`、`+50`）× `mon_hit_two`/`mon_blocked_level`/`mon_blocked_master`/`mon_partial` × 驱动+比较器 **全绿** | 等级门决定 `RM_MAKEHOLYSEIZEMODE` 是否下发 | `mon_blocked_level` 的真实阻挡来源在 `obj.master` 门或目标格 `mag_objects_in_range` 为空 ⇒ **等级门这一维不可观测**（MG-23 因此记「无牙（理由）」，2026-11-21） |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -33,7 +34,7 @@
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 14 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11？
+1. **先查本卡 15 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
