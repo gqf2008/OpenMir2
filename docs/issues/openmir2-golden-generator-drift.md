@@ -7,7 +7,7 @@
 
 ## 1. 现象
 仓库既有 magic golden（如 `mir2-rs/tests/parity/golden/magic/skeleton.json`）是**旧 schema** 生成的；用当前 master 的 MagicGolden 生成器**重跑会出 diff**：
-- **新增字段**（结构 diff）：`caster_actor_id` / `target_actor_id` / `recog` / `due_ms_rel` / `hit_speed` / `frame_order_scope`（均已在 master `Program.cs` 的 `FireballResult`/帧记录里，属 c6 的 recog-schema 变更：`:866/867/931/944/1000`）。
+- **新增字段**（结构 diff）：`caster_actor_id` / `target_actor_id` / `recog` / `due_ms_rel` / `hit_speed` / `frame_order_scope`（均已在 master 的 `Program.cs` 里：属性声明见 `FireballResult`，帧字段见 `ParseFrames`；属 c6 的 recog-schema 变更）。
 - **值变化**：`delivery`（`GetTickCount` **墙钟**）。
 
 ## 2. 影响
