@@ -34,9 +34,12 @@
 - 现状：装置已 `env.LoadMapData(0.map)`（`Program.cs:687`，`MAGICGOLDEN_MAP_DIR` 缺省
   `E:\MirServer\M2GameSvr\Map`），并把 caster/target 用 `AddMapObject` 入图 ⇒ **地图是真 Envirnoment**，
   `OfflineMapSystem` 只替身 `IMapSystem`（9 个成员未用），不挡 `Envir.CanWalk`。
-- **未验证项（必须先探）**：`(100,100)/(101,100)` 及其东侧邻格的 `cellSuccess` 是否为真
-  （`0.map` 这一片可能是墙）。探法：装置里 `Console.Error.WriteLine` 打 `env.CanWalk(x,y,false)`
-  对 `x∈[97..104], y∈[99..101]` 的结果（一次性、只读、不进 golden）；若不可走，改选可走格。
+- **测量（一次性；不开图、不进 golden）**：实测 caster/target 落点片及其推挤方向的邻格 `cellSuccess`
+  ——装置里 `Console.Error.WriteLine` 打 `env.CanWalk(x,y,false)`，范围 `x∈[97..104], y∈[99..101]`；
+  **结果要写回本卡**（"已实测：`(x,y)` 可走 / 不可走"）。**不可走就换一组落点再测，不靠碰运气。**
+- **与 `3b` 审计的分工（两件事，别混）**：`3b` 证的是"`VisibleActors` 表空 ⇒ `MagPushArround` 循环零次
+  ⇒ `CanWalk` **根本不会被调用**"；这**不等于**"回填视野后能推进格"。前者已证，后者**尚未有人实测**
+  ⇒ 本条的测量仍然必须做（回填之后 `CharPushed` 真的会走到 `CanWalk`）。
 - Rust 侧对应：`char_pushed_core` 在 `sim.maps.get(map_id)` 为 `None` 时**直接返回空事件**
   ⇒ rig 必须给该 actor 的地图；否则"目标不动"会被误读成"Rust 推不动"。
 
@@ -60,6 +63,15 @@
 **抽数账本**：`Random(20)` **每个通过"邻格+等级+StickMode"门的目标各一次**；
 `Random(2)` **每次成功调用 `CharPushed` 一次**（不看实际推进格数）。
 即：一个目标命中 ⇒ 恰 2 抽 + 逐格 `MoveToMovingObject` 不抽。
+
+### 3.1 退化守卫（验收硬条件；8/37 与 MG-47 同款）
+
+**golden 里必须存在 ≥1 条推挤帧**（两支都是 `SM_BACKSTEP(9)`）；**零条即具名红**：
+断言文案要写清"本 case 未产生任何推挤帧 ⇒ 效果体零次执行"，**不许静默通过**。
+
+理由：`17`/`638`/`640` 都在、帧集合"看起来对"，但推挤体一次都没执行——这是最难发现的假绿。
+同款教训见 `docs/issues/openmir2-groupamyounsul-nondegenerate-golden.md`（四刀变异全绿 = 循环零次）。
+本条也是 §4 牙④（"视野为空"）的**产品化**：牙④ 证明守卫有牙，本守卫保证**合入后**不会退回退化态。
 
 ## 4. 牙（每颗写清红在哪）
 
