@@ -22,6 +22,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 1001,
+        "target_actor_id": 1002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -31,6 +33,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 1,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -51,8 +56,8 @@
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
-        "rng_total_draws": 0,
-        "rng_recorded": 0,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
@@ -78,6 +83,11 @@
           140,
           100
         ],
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
           912,
@@ -86,7 +96,7 @@
         ]
       },
       "Label": "s1",
-      "DrainPasses": 2,
+      "DrainPasses": 3,
       "DrainPassesHitCap": false,
       "Seed": 1,
       "SpellReturn": true,
@@ -115,15 +125,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 10125,
+              "wParam": 5,
+              "p1": 500,
+              "p2": 1000,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 141
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 48,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1209660984,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
+            },
+            {
+              "ident": 642,
+              "recog": 500,
+              "param": 5,
+              "tag": 1000,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 640,
+              "recog": 48,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 656,
+              "recog": 1001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 1002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -151,22 +243,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8037,
+              "wParam": 0,
+              "p1": 97,
+              "p2": 1001,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1209660984,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
+            },
+            {
+              "ident": 11004,
+              "wParam": 0,
+              "p1": 255,
+              "p2": 56,
+              "p3": 0,
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+              "late": false,
+              "delivery": 0,
+              "priority": 252
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
+            },
+            {
+              "ident": 656,
+              "recog": 1001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 1002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 100,
+              "recog": 1002,
+              "param": 14591,
+              "tag": 0,
+              "series": 1,
+              "due_ms_rel": 1000,
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -194,22 +361,66 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 1001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Nghcd?"
+            },
+            {
+              "ident": 656,
+              "recog": 1001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 1002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -219,7 +430,11 @@
           "Sent": []
         }
       ],
-      "Rng": [],
+      "Rng": [
+        1,
+        0,
+        1
+      ],
       "TargetHp": 100,
       "TargetHpBefore": 100,
       "NotDue": [],
@@ -233,6 +448,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 2001,
+        "target_actor_id": 2002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -242,6 +459,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 1,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -262,8 +482,8 @@
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
-        "rng_total_draws": 0,
-        "rng_recorded": 0,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
@@ -289,6 +509,11 @@
           140,
           100
         ],
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
           912,
@@ -297,7 +522,7 @@
         ]
       },
       "Label": "s5",
-      "DrainPasses": 2,
+      "DrainPasses": 3,
       "DrainPassesHitCap": false,
       "Seed": 5,
       "SpellReturn": true,
@@ -326,15 +551,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 10125,
+              "wParam": 5,
+              "p1": 500,
+              "p2": 1000,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 141
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 48,
+              "p2": 1,
+              "p3": 1,
+              "msg": "",
+              "late": true,
+              "delivery": 1209662359,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 642,
+              "recog": 500,
+              "param": 5,
+              "tag": 1000,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 640,
+              "recog": 48,
+              "param": 1,
+              "tag": 1,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 656,
+              "recog": 2001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 2002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -362,22 +669,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8037,
+              "wParam": 0,
+              "p1": 97,
+              "p2": 2001,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1209662359,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
+            },
+            {
+              "ident": 11004,
+              "wParam": 0,
+              "p1": 255,
+              "p2": 56,
+              "p3": 0,
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+              "late": false,
+              "delivery": 0,
+              "priority": 252
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 656,
+              "recog": 2001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 2002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 100,
+              "recog": 2002,
+              "param": 14591,
+              "tag": 0,
+              "series": 1,
+              "due_ms_rel": 1000,
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -405,22 +787,66 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 2001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 656,
+              "recog": 2001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 2002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -430,7 +856,11 @@
           "Sent": []
         }
       ],
-      "Rng": [],
+      "Rng": [
+        2,
+        0,
+        0
+      ],
       "TargetHp": 100,
       "TargetHpBefore": 100,
       "NotDue": [],
@@ -444,6 +874,8 @@
         "effect_type": 1,
         "user_magic_level": 1,
         "caster_level": 30,
+        "caster_actor_id": 3001,
+        "target_actor_id": 3002,
         "caster_mc": 15,
         "caster_sc": 15,
         "rng_mode": "cover_drain",
@@ -453,6 +885,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 1,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -473,8 +908,8 @@
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
-        "rng_total_draws": 0,
-        "rng_recorded": 0,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
         "target_null": false,
         "arm_ring_amulet": true,
         "wait_ms": 1200,
@@ -500,6 +935,11 @@
           140,
           100
         ],
+        "hit_speed": 7,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
           912,
@@ -508,7 +948,7 @@
         ]
       },
       "Label": "s13",
-      "DrainPasses": 2,
+      "DrainPasses": 3,
       "DrainPassesHitCap": false,
       "Seed": 13,
       "SpellReturn": true,
@@ -537,15 +977,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 10125,
+              "wParam": 5,
+              "p1": 500,
+              "p2": 1000,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 141
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 48,
+              "p2": 1,
+              "p3": 3,
+              "msg": "",
+              "late": true,
+              "delivery": 1209663781,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 642,
+              "recog": 500,
+              "param": 5,
+              "tag": 1000,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 640,
+              "recog": 48,
+              "param": 1,
+              "tag": 3,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 656,
+              "recog": 3001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 3002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -573,22 +1095,97 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8037,
+              "wParam": 0,
+              "p1": 97,
+              "p2": 3001,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1209663781,
+              "priority": 255
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
+            },
+            {
+              "ident": 11004,
+              "wParam": 0,
+              "p1": 255,
+              "p2": 56,
+              "p3": 0,
+              "msg": "\u60A8\u4E2D\u6BD2\u4E86!!!",
+              "late": false,
+              "delivery": 0,
+              "priority": 252
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 656,
+              "recog": 3001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 3002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 100,
+              "recog": 3002,
+              "param": 14591,
+              "tag": 0,
+              "series": 1,
+              "due_ms_rel": 1000,
+              "tail": "TRvUXBNJUWIi]]K"
             }
           ]
         },
@@ -616,22 +1213,66 @@
               "late": false,
               "delivery": 0,
               "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 10139,
+              "wParam": 0,
+              "p1": -2147483648,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 155
             }
           ],
           "Sent": [
             {
               "ident": 17,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 1,
+              "due_ms_rel": 0,
               "tail": "48"
             },
             {
               "ident": 638,
+              "recog": 3001,
               "param": 101,
               "tag": 100,
               "series": 257,
+              "due_ms_rel": 0,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 656,
+              "recog": 3001,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            },
+            {
+              "ident": 657,
+              "recog": 3002,
+              "param": 0,
+              "tag": 32768,
+              "series": 7,
+              "due_ms_rel": 1000,
+              "tail": ""
             }
           ]
         },
@@ -641,7 +1282,11 @@
           "Sent": []
         }
       ],
-      "Rng": [],
+      "Rng": [
+        3,
+        0,
+        2
+      ],
       "TargetHp": 100,
       "TargetHpBefore": 100,
       "NotDue": [],

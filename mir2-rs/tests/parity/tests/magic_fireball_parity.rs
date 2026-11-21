@@ -250,6 +250,31 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 sent_fields.push("due_ms_rel");
             }
             if multi_victim {
+                // **同根第二实例（施毒 6/48）复用本标记**（不再造第二个名字）：oracle 逐 actor
+                // `Run()` vs 产品批量 flush（见 `openmir2-b4-multivictim-strike-order.md`
+                // 「施毒 4 支同源」一节，含实测帧序证据与移除条件）。
+                // 施毒件的**派生帧**（656/657/100）`due_ms_rel` 是装置落地步（`Sleep` 过冲 ⇒
+                // 900/1000），只判**批次类**（0 vs >0）；`640` 的 due（`DeliveryTime − t0`，
+                // `TickCount` 15.6ms 粒度）按 **|Δ|≤32ms** 容差判。**字段面不放松**：
+                // ident/recog/param/tag/series/tail 仍逐项进多重集键。
+                // **按魔号判定**（定义性，不看夹具形状）：6 = AMYOUNSUL、48 = GROUPAMYOUNSUL。
+                // 不用 `Fixture.amulet_shape` 存在性——那会让"将来别的 stem 加了护身符旋钮"
+                // 静默套上施毒的 due 语义（宽松口径静默扩散）。
+                let poison_frames = matches!(
+                    golden.get("magic_id").and_then(Value::as_i64),
+                    Some(6) | Some(48)
+                );
+                let due_key = |v: &Value| -> i64 {
+                    if poison_frames {
+                        if num(v, "ident") == 640 {
+                            0
+                        } else {
+                            i64::from(num(v, "due_ms_rel") != 0)
+                        }
+                    } else {
+                        num(v, "due_ms_rel")
+                    }
+                };
                 let sent_key = |v: &Value| -> (i64, i64, i64, i64, i64, i64, String) {
                     (
                         num(v, "ident"),
@@ -257,7 +282,7 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                         num(v, "param"),
                         num(v, "tag"),
                         num(v, "series"),
-                        num(v, "due_ms_rel"),
+                        due_key(v),
                         text(v, "tail").to_string(),
                     )
                 };
@@ -281,6 +306,27 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     errs.push(format!(
                         "[{label}/{who}] Sent 多重集不等（多受害者同刻口径）：golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
                     ));
+                } else if poison_frames {
+                    // late 帧（640）按 TickCount 容差判；判别力：950/600 vs 1000（≥50ms）> 32ms。
+                    let mut gd: Vec<i64> = ga
+                        .iter()
+                        .filter(|v| num(v, "ident") == 640)
+                        .map(|v| num(v, "due_ms_rel"))
+                        .collect();
+                    let mut rd: Vec<i64> = ra
+                        .iter()
+                        .filter(|v| num(v, "ident") == 640)
+                        .map(|v| num(v, "due_ms_rel"))
+                        .collect();
+                    gd.sort();
+                    rd.sort();
+                    let bad = gd.len() != rd.len()
+                        || gd.iter().zip(rd.iter()).any(|(g, r)| (g - r).abs() > 32);
+                    if bad {
+                        errs.push(format!(
+                            "[{label}/{who}] 640 late due 超出 TickCount 容差（|Δ|≤32ms）：golden {gd:?} vs rust {rd:?}"
+                        ));
+                    }
                 }
             } else if ga.len() != ra.len() {
                 // 逐帧报缺/多（不打印整表；逐字段比较留给等长分支）。
@@ -829,18 +875,42 @@ fn real_ledger_verify_labels_opts(
 ) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
-    // **`frame_order_scope` 自检**：`multi_victim_same_tick` 只允许用于 `fire`（MG-17 穿透，
-    // 多受害者同刻延迟受击；可观测差异见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。
+    // **`frame_order_scope` 自检**：`multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）
+    // 与施毒 4 支（同根；可观测差异见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。
     // 出现在别的 stem ⇒ 直接 panic，防止宽松口径静默扩散。
     let scope_marked = golden["cases"].as_array().is_some_and(|cs| {
         cs.iter()
             .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
     });
     assert!(
-        !scope_marked || stem == "fire" || stem == "skill10",
-        "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18，二者共用
-         穿透批量 flush 路径）；当前 stem={stem}"
+        !scope_marked
+            || matches!(
+                stem,
+                "fire"
+                    | "skill10"
+                    | "amyounsul"
+                    | "amyounsul2"
+                    | "groupamyounsul"
+                    | "groupamyounsul2"
+            ),
+        "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18）与施毒 4 支；当前 stem={stem}"
     );
+    // **stem ↔ magic_id 静态一致性**（防「给 fire 加护身符旋钮就静默降级成批次类」）：
+    // 施毒 due 语义只由 `magic_id ∈ {6,48}` 触发，白名单里每个 stem 的魔号必须与定义一致。
+    if scope_marked {
+        let mid = golden["magic_id"].as_i64().unwrap_or(-1);
+        let ok = match stem {
+            "fire" => mid == 9,
+            "skill10" => mid == 10,
+            "amyounsul" | "amyounsul2" => mid == 6,
+            "groupamyounsul" | "groupamyounsul2" => mid == 48,
+            _ => false,
+        };
+        assert!(
+            ok,
+            "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48"
+        );
+    }
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
@@ -1005,6 +1075,20 @@ fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
         "magic_id": 33,
         "cases": [{ "Label": label, "Fixture": fixture, "Rng": rng, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
     })
+}
+
+/// 施毒件合成夹具：`magic_id = 6`（定义性判定；`verify` 的施毒 due 语义按魔号触发）。
+fn synth_poison_golden(label: &str, rng: Value) -> Value {
+    let mut g = synth_golden(label, rng, Some("cover_drain"));
+    g["magic_id"] = Value::from(6);
+    g
+}
+
+/// 施毒件合成台账：`magic_id = 6`（与 [`synth_poison_golden`] 同源）。
+fn synth_poison_rust(label: &str, rng: Value) -> Value {
+    let mut r = synth_rust(label, rng, Some(serde_json::json!([])));
+    r["magic_id"] = Value::from(6);
+    r
 }
 
 fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
@@ -2610,5 +2694,305 @@ fn tooth_missing_rng_line_red() {
     assert!(
         err.iter().any(|e| e.contains("RNG 行数不等")),
         "必须红在总量：{err:?}"
+    );
+}
+
+/// **施毒系（6/48，MG-13/14/15/50/64/65）**：非退化 golden 的真实台账判定面。
+/// 三旋钮（护身符 `Shape` / 目标 `AntiPoison` / `AmyOunsulPoint`）全部经 `Fixture` 传给驱动；
+/// 期望只从 golden 来（`Rng`/`RM_POISON(8037)` 多重集/帧面/`TargetHp`）。
+/// 驱动：`tests::amyounsul_parity_*`（6 Shape=1）、`tests::amyounsul2_parity_*`（6 Shape=2）、
+/// `tests::groupamyounsul_parity_*`（48 Shape=1）、`tests::groupamyounsul2_parity_*`（48 Shape=2）。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（amyounsul_parity_*）生成真实台账"]
+fn real_rust_ledger_amyounsul() {
+    real_ledger_verify_labels(
+        "amyounsul",
+        &golden_file("amyounsul.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（amyounsul2_parity_*）生成真实台账"]
+fn real_rust_ledger_amyounsul2() {
+    real_ledger_verify_labels(
+        "amyounsul2",
+        &golden_file("amyounsul2.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（groupamyounsul2_parity_*）生成真实台账"]
+fn real_rust_ledger_groupamyounsul2() {
+    real_ledger_verify_labels(
+        "groupamyounsul2",
+        &golden_file("groupamyounsul2.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+// ============================================================================
+// 施毒系（6/48，MG-13/14/15/50/64/65）毒口径牙
+// ============================================================================
+
+/// **毒口径 L1 牙**：`frame_order_scope = multi_victim_same_tick` 分支（施毒件）的
+/// `640` late 帧 `due_ms_rel` 判据（|Δ|≤32ms）与 chained 帧的批次类判据。
+///
+/// 子断言（每条都对应一个"删掉判据就变绿"的失效模式）：
+/// ① 基准（golden 1000 / rust 1000）⇒ 绿；
+/// ② golden 1000 vs rust **600** ⇒ 红（400ms 远大于 32ms 容差）；
+/// ③ golden 1000 vs rust **0** ⇒ 红（1000ms 远大于 32ms）；
+/// ④ golden 1000 vs rust **1016** ⇒ **绿**（2× `TickCount` 15.6ms 粒度，落在容差内）；
+/// ⑤ chained 帧 `657` 的 `due` 从 1000 改 **0** ⇒ 红（交付批 vs 施法批的批次类仍在判）。
+#[test]
+fn tooth_poison_late_due_tolerance() {
+    let label = "s1";
+    let frame = |ident: i64, due: i64| {
+        serde_json::json!({
+            "ident": ident, "recog": 1002, "param": 0, "tag": 32768,
+            "series": 7, "due_ms_rel": due, "tail": "",
+        })
+    };
+    let receivers =
+        |frames: Vec<Value>| serde_json::json!([{ "Who": "target", "Rm": [], "Sent": frames }]);
+    let mk_g = || {
+        let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
+        g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+        g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
+        g["cases"][0]["Receivers"] = receivers(vec![frame(657, 1000), frame(640, 1000)]);
+        g
+    };
+    let mk_r = |tail_due: i64, chained_due: i64| {
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
+        r["cases"][0]["Receivers"] = receivers(vec![frame(657, chained_due), frame(640, tail_due)]);
+        r
+    };
+    let g = mk_g();
+    assert!(
+        verify_union(&g, &mk_r(1000, 1000)).is_ok(),
+        "基准（640 1000/1000）必须绿：{:?}",
+        verify_union(&g, &mk_r(1000, 1000))
+    );
+    // ② 640: 1000 → 600
+    let err = verify_union(&g, &mk_r(600, 1000)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("640 late due")),
+        "640 的 due 1000→600 必须红在容差判据：{err:?}"
+    );
+    // ②b 640: 1000 → 950（|Δ|=50 > 32ms）必须红——容差不是"随便放宽"
+    let err = verify_union(&g, &mk_r(950, 1000)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("640 late due")),
+        "640 的 due 1000→950（|Δ|=50 > 32）必须红在容差判据：{err:?}"
+    );
+    // ③ 640: 1000 → 0
+    let err = verify_union(&g, &mk_r(0, 1000)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("640 late due")),
+        "640 的 due 1000→0 必须红在容差判据：{err:?}"
+    );
+    // ④ 640: 1000 → 1016（粒度内）必须绿
+    let ok = verify_union(&g, &mk_r(1016, 1000));
+    assert!(
+        ok.is_ok(),
+        "640 的 due 1000→1016（|Δ|=16 ≤ 32）必须绿：{ok:?}"
+    );
+    // ⑤ chained 657: 1000 → 0（批次类变化）必须红
+    let err = verify_union(&g, &mk_r(1000, 0)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "chained 帧 657 的 due 1000→0（交付批→施法批）必须红：{err:?}"
+    );
+}
+
+/// **`10139`（`RM_CHARSTATUSCHANGED`）的 `p1` 必须逐值比**。
+///
+/// 期望值**从 golden 读**（`amyounsul.json` 的 10139.p1；本夹具 = 绿毒 `i=0` ⇒ `0x80000000`
+/// 即 `i32::MIN`），**不硬写常量**；牙 = 把台账的 `p1` 改一个值 ⇒ 比较器在 `Rm` 多重集上红。
+/// （红毒在本夹具也是 `i32::MIN`：位号是 buff 插入序，不是 PoisonState——见交接单口径。）
+#[test]
+fn tooth_poison_10139_status_p1_compared_red() {
+    let label = "s1";
+    let g_file = golden_file("amyounsul.json");
+    let p1 = g_file["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .flat_map(|c| c["Receivers"].as_array().expect("Receivers"))
+        .flat_map(|r| r["Rm"].as_array().expect("Rm"))
+        .find(|m| m["ident"].as_i64() == Some(10139))
+        .map(|m| m["p1"].as_i64().expect("10139.p1 是整数"))
+        .expect("amyounsul golden 必须含 10139");
+    let receivers = |rm_p1: i64| {
+        serde_json::json!([{
+            "Who": "target", "Sent": [],
+            "Rm": [{ "ident": 10139, "wParam": 0, "p1": rm_p1, "p2": 0, "p3": 0,
+                     "priority": 155, "late": false }],
+        }])
+    };
+    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g["cases"][0]["Receivers"] = receivers(p1);
+    let mk_r = |v: i64| {
+        let mut r = synth_rust(
+            label,
+            serde_json::json!([1, 2]),
+            Some(serde_json::json!([])),
+        );
+        r["cases"][0]["Receivers"] = receivers(v);
+        r
+    };
+    assert!(
+        verify_union(&g, &mk_r(p1)).is_ok(),
+        "基准（10139.p1 两侧都用 golden 值 {p1}）必须绿：{:?}",
+        verify_union(&g, &mk_r(p1))
+    );
+    let mutated = if p1 == i64::MIN { 0 } else { p1 + 1 };
+    let err = verify_union(&g, &mk_r(mutated)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("Rm 多重集")),
+        "10139.p1 {p1}→{mutated} 必须在 Rm 多重集上红：{err:?}"
+    );
+}
+
+/// **`657`（`SM_CHARSTATUSCHANGED`）的 `series` 必须 = 接收者 `HitSpeed`，且在比较面里**。
+///
+/// 期望值从 golden 读：`Fixture.hit_speed` 与各收件人 657 帧的 `series` 必须一致；
+/// 牙 = 把台账 657 的 `series` 改成 0（"未点亮"的旧值）⇒ 毒口径多重集红。
+#[test]
+fn tooth_poison_657_series_compared_red() {
+    let label = "s1";
+    let gf = golden_file("amyounsul.json");
+    let case = gf["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|c| c["Label"].as_str() == Some(label))
+        .expect("amyounsul 必须有 s1");
+    let hit_speed = case["Fixture"]["hit_speed"].as_i64().expect("hit_speed");
+    let series = case["Receivers"]
+        .as_array()
+        .expect("Receivers")
+        .iter()
+        .flat_map(|r| r["Sent"].as_array().expect("Sent"))
+        .find(|f| f["ident"].as_i64() == Some(657))
+        .map(|f| f["series"].as_i64().expect("657.series"))
+        .expect("amyounsul golden 必须含 657");
+    assert_eq!(
+        series, hit_speed,
+        "657.series({series}) 必须 = 收件人 HitSpeed({hit_speed})——否则 golden 自身不自洽"
+    );
+    assert_ne!(hit_speed, 0, "HitSpeed 必须非退化（0 与缺省不可区分）");
+    let receivers = |v: i64| {
+        serde_json::json!([{
+            "Who": "target", "Rm": [],
+            "Sent": [{ "ident": 657, "recog": 1002, "param": 0, "tag": 32768,
+                       "series": v, "due_ms_rel": 1000, "tail": "" }],
+        }])
+    };
+    let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
+    g["cases"][0]["Receivers"] = receivers(series);
+    let mk_r = |v: i64| {
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
+        r["cases"][0]["Receivers"] = receivers(v);
+        r
+    };
+    assert!(
+        verify_union(&g, &mk_r(series)).is_ok(),
+        "基准（657.series 两侧 = {series}）必须绿：{:?}",
+        verify_union(&g, &mk_r(series))
+    );
+    let err = verify_union(&g, &mk_r(0)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "657.series {series}→0 必须红：{err:?}"
+    );
+}
+
+/// **`SM_SYSMESSAGE(100)` 的 `tail`（`[String] YouPoisoned` 的 GBK 编码）必须逐字节比**。
+///
+/// 期望值从 golden 读（`amyounsul.json` 的 100 帧 `tail`，由部署 `String.conf:31` 的
+/// 「您中毒了!!!」编码而来）；牙 = 台账 `tail` 改**一个字符** ⇒ 毒口径多重集红。这条把
+/// 「① 三键 fail-closed」的文本链路钉在比较面上：驱动若回退成 `b""`，这里必然红。
+#[test]
+fn tooth_poison_sysmessage_tail_compared_red() {
+    let label = "s1";
+    let gf = golden_file("amyounsul.json");
+    let case = gf["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|c| c["Label"].as_str() == Some(label))
+        .expect("amyounsul 必须有 s1");
+    let tail = case["Receivers"]
+        .as_array()
+        .expect("Receivers")
+        .iter()
+        .flat_map(|r| r["Sent"].as_array().expect("Sent"))
+        .find(|f| f["ident"].as_i64() == Some(100))
+        .map(|f| f["tail"].as_str().expect("100.tail").to_string())
+        .expect("amyounsul golden 必须含 100");
+    assert!(
+        !tail.is_empty(),
+        "100 帧 tail 不得为空（否则文本链退化成 b\"\"）"
+    );
+    // 改**一个字符**（末位换成一个不同的 ASCII 字符）。
+    let mut chars: Vec<char> = tail.chars().collect();
+    let last = chars.len() - 1;
+    chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
+    let mutated: String = chars.into_iter().collect();
+    assert_ne!(mutated, tail);
+    let receivers = |t: &str| {
+        serde_json::json!([{
+            "Who": "target", "Rm": [],
+            "Sent": [{ "ident": 100, "recog": 1002, "param": 14591, "tag": 0,
+                       "series": 1, "due_ms_rel": 1000, "tail": t }],
+        }])
+    };
+    let mut g = synth_poison_golden(label, serde_json::json!([1, 2]));
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
+    g["cases"][0]["Receivers"] = receivers(&tail);
+    let mk_r = |t: &str| {
+        let mut r = synth_poison_rust(label, serde_json::json!([1, 2]));
+        r["cases"][0]["Receivers"] = receivers(t);
+        r
+    };
+    assert!(
+        verify_union(&g, &mk_r(&tail)).is_ok(),
+        "基准（100.tail 两侧同值）必须绿：{:?}",
+        verify_union(&g, &mk_r(&tail))
+    );
+    let err = verify_union(&g, &mk_r(&mutated)).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("多重集")),
+        "100.tail 改一个字符必须红：{err:?}（golden={tail:?} rust={mutated:?}）"
+    );
+}
+
+/// **⑨ marker 白名单负例牙（D）**：把 `frame_order_scope = multi_victim_same_tick`
+/// 塞进**非白名单** stem ⇒ 比较器入口**必须 panic**（放宽通道不能靠"没人写错"守）。
+///
+/// 白名单自检在读取台账**之前**执行，所以这里不需要任何 ledger 文件：
+/// `real_ledger_verify_labels_opts("fireball", …)` 应在第一道断言处直接 panic，错误串点名白名单。
+#[test]
+fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
+    let mut g = synth_golden("s1", serde_json::json!([1, 2]), Some("cover_drain"));
+    g["cases"][0]["Fixture"]["frame_order_scope"] = Value::from("multi_victim_same_tick");
+    g["cases"][0]["Fixture"]["amulet_shape"] = Value::from(1);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        real_ledger_verify_labels_opts("sinsu", &g, &["s1"], false);
+    }));
+    let payload = res.expect_err("非白名单 stem 带顺序放宽 marker 必须 panic");
+    let msg = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default();
+    assert!(
+        msg.contains("只允许 fire / skill10"),
+        "必须 panic 在白名单自检：{msg}"
     );
 }

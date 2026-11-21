@@ -189,7 +189,45 @@ public static class Program
             if (name == "groupdeding") return GroupDeDingBatch(new MagicSpec { Key = "groupdeding", MagicId = 39, MagicName = "GroupDeDing", ArmRingAmulet = true });
             if (name == "uenhancer") return UenhancerBatch(new MagicSpec { Key = "uenhancer", MagicId = 36, MagicName = "UEnhancer", ArmRingAmulet = true , HitSpeed = 7 });
             if (name == "grouplightening") return BehaviorBatch(new MagicSpec { Key = "grouplightening", MagicId = 42, MagicName = "GroupLightening", ArmRingAmulet = true });
-            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true });
+            // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
+            // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
+            // ctor 缺省 **10**（`GameSvrConf.cs` 的 `AmyOunsulPoint = 10`，**不是 0、不除零**），
+            // 但部署是 **15** ⇒ 不装载就会**功率数值错**且与部署不同源（卡 §53）。断言 `!= 15` 即 rc=2。
+            // **作用域**：本 `--case` 分支级装载（不全局），且本生成器**一次进程只处理一个 `--case`**
+            // （CLI 只取一个 argv），静态 `SystemShare.Config` 不会泄漏到别的 case 族。
+            if (name is "amyounsul" or "amyounsul-shape2" or "groupamyounsul" or "groupamyounsul-shape2")
+            {
+                // **显式装载 ServerConf**：`SystemShare` 静态构造只灌 ctor 缺省（`AmyOunsulPoint=10`），
+                // 不读 `[Setup]`；默认值既可能与部署（15）不一致、也不会随库变化报警 ⇒ 这里显式读
+                // 冻结部署的 `Server.conf` 并落进 `Config`，随后断言为正（除零 fail-closed）。
+                var serverConfPath = Path.Combine(AppContext.BaseDirectory, "Server.conf");
+                if (!File.Exists(serverConfPath))
+                {
+                    throw new FixtureContractViolation($"[{name}] 缺冻结 Server.conf：{serverConfPath}");
+                }
+                new SystemModule.Conf.ServerConf(serverConfPath).LoadConfig();
+                int aop = SystemModule.SystemShare.Config.AmyOunsulPoint;
+                // **已实测的部署值 = 15**（`E:/MirServer/M2GameSvr/Server.conf:756`，2026-11-21）。
+                // 不写 `>0`：默认缺省是 10，若只断 `>0`，装载失败（落到 ctor 缺省 10）也会绿 ⇒
+                // 夹具记录的 `amy_ounsul_point` 与部署不同源（卡 §53）。合并后改调 `ServerConfFixture.cs` 共享入口。
+                if (aop != 15)
+                {
+                    throw new FixtureContractViolation($"[{name}] AmyOunsulPoint 实测部署值应为 15（={aop}）——装载失败或部署漂移");
+                }
+                // **`[String] YouPoisoned` 必须真的读进 `MessageSettings`**：`StringConf` 的 ctor 只做
+                // `Load()`（解析进缓存），`LoadString()` 才是把值写进 `MessageSettings` 的那一步——生产
+                // 由 `GameShare.cs:91` 调用，本离线装置必须显式调；不调就会静默用源码默认「中毒了!!!」，
+                // 而部署值（`String.conf:31`）是「您中毒了!!!」⇒ 金标准记的值 ≠ 实际会用的值（卡 §53）。
+                SystemModule.SystemShare.StringConf.LoadString();
+                if (string.IsNullOrEmpty(SystemModule.MessageSettings.YouPoisoned))
+                {
+                    throw new FixtureContractViolation($"[{name}] [String] YouPoisoned 未装载（空）");
+                }
+            }
+            if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 9 `SKILL_FIRE`（`MagicManager.cs:265-274`）：沿方向穿透 **5 格**（`MagPassThroughMagic`，
             // `BaseObject.cs:896-931`）。摆位理由（变异牙）：
@@ -995,6 +1033,16 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         public int TargetMaxHp = 100;
         public int AntiMagic = 3;
         public bool ArmRingAmulet;
+        /// <summary>
+        /// 护身符 `StdItem.Shape` 旋钮（`ArmRingAmulet=true` 时生效；缺省 5 = `CheckAmulet(...,1,nType=1)`
+        /// 那一组）。施毒 6/48 走 `nType=2`，要求 **`Shape <= 2`**（`MagicBase.cs:65-70`）。
+        /// </summary>
+        public int AmuletShape = 5;
+        /// <summary>
+        /// 目标 `AntiPoison` 旋钮（施毒骰 `Random(AntiPoison + 7) <= 6`，`MagicManager.cs:235/:914`）；
+        /// 缺省 0（= ctor 缺省）⇒ 既有件零变化。
+        /// </summary>
+        public int TargetAntiPoison;
         /// <summary>
         /// 施法者 `HitPoint`（命中门 `Random(target.SpeedPoint) >= HitPoint`）；`-1` = 不设
         /// （保持 `BaseObject` ctor 缺省 5）。卡 §39：`0` = 门恒真 ⇒ 全 miss；`5` = `Random(0)=0 < 5` 必中。
@@ -1815,6 +1863,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // `WAbil.HP/MaxHP`（`PlayObject.Message.cs:2009-2011`），少了这一步 MaxHP 会是 ctor 的 0。
         target.RecalcAbilitys();
         target.DrainRaw();
+        // **施毒骰输入**：`AntiPoison` 在登录序 recalc 之后再写（recalc 会把 `Abil` 物化到 `WAbil`，
+        // 但 `AntiPoison` 是 `BaseObject` 的独立字段；先写会被 recalc 的累加覆盖）。
+        if (spec.TargetAntiPoison > 0)
+        {
+            target.AntiPoison = (byte)spec.TargetAntiPoison;
+        }
         // **三态计时器输入**（状态/辅助族，卡 §34）：只有显式给了 `PoisonStates` 的支才写；
         // 写入是纯状态赋值（不入队、不产生帧），且在 RNG/DoSpell 之前 ⇒ 不影响既有支。
         if (spec.PoisonStates != null)
@@ -1841,6 +1895,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         int inputTargetHp = target.WAbil.HP;
         int inputTargetMaxHp = target.WAbil.MaxHP;
         int inputAntiMagic = target.AntiMagic;
+        int inputAntiPoison = target.AntiPoison;
         CheckBranchThreshold("runmagic/" + spec.Key + "/" + label, inputAntiMagic, branchExpect);
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
@@ -1863,7 +1918,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
             {
                 Name = "护身符",
                 StdMode = 25,
-                Shape = 5,
+                Shape = (byte)spec.AmuletShape,
             });
             caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl] = new OpenMir2.Packets.ClientPackets.UserItem
             {
@@ -2001,6 +2056,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
         int trainNLevel = 0;
         int trainMtUsed = 0;
+        // **施法时刻 t0**：`due_ms_rel = DeliveryTime − t0`（调度器口径）。必须取在 DoSpell **之前**——
+        // 取在之后会让延迟帧的 due 变成 `1000 − DoSpell 耗时`（Sleep 过冲下落到 900 一类），
+        // 那是测量伪影、不是排期。t0 与 `SendSelfDelayMsg` 的 `GetTickCount()` 同源（同一时钟）。
+        long castTick = HUtil32.GetTickCount();
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
         List<long> draws = new();
         if (spec.RngMode == "freeze_at_dospell")
@@ -2026,8 +2085,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
-        // 帧 `due_ms_rel` 的基准：施法时刻（排水循环里 `DeliveryTime - castTick`）。
-        long castTick = HUtil32.GetTickCount();
+        // 帧 `due_ms_rel` 的基准 = **DoSpell 之前**捕获的 `castTick`（见上方 t0 注释）。
         int drainPasses = 0;
         bool drainPassesHitCap = false;
         if (spec.StepDrainMs > 0)
@@ -2340,6 +2398,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 target_hp = inputTargetHp,
                 target_max_hp = inputTargetMaxHp,
                 anti_magic = inputAntiMagic,
+                target_anti_poison = inputAntiPoison,
+                amulet_shape = spec.ArmRingAmulet ? spec.AmuletShape : 0,
+                amy_ounsul_point = SystemModule.SystemShare.Config.AmyOunsulPoint,
                 derived = new
                 {
                     max_hp = contract.Derived.MaxHp,
@@ -2381,6 +2442,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
                 obs_in_xy = new[] { 105, 100 },
                 obs_out_xy = new[] { 140, 100 },
                 hit_speed = spec.HitSpeed,
+                // **施毒 `SysMsg(YouPoisoned)` 载荷来源（MG-13/14/15/50/64/65）**：`BaseObject.MakePosion`
+                // 的 `SysMsg(..., MsgColor.Red, MsgType.Hint)` 以前/背景色 = `[Setup] RedMsgFColor/RedMsgBColor`
+                // （`ServerConf.cs`）与文本 = `[String] YouPoisoned`（`StringConf.cs:76`）出 100 帧。
+                // 驱动**必须**用这三个值，不许硬编码 0/空串（卡 §53：记录端 = 实际使用值）。
+                red_msg_f_color = SystemModule.SystemShare.Config.RedMsgFColor,
+                red_msg_b_color = SystemModule.SystemShare.Config.RedMsgBColor,
+                you_poisoned = SystemModule.MessageSettings.YouPoisoned,
                 frame_order_scope = string.IsNullOrEmpty(spec.FrameOrderScope) ? null : spec.FrameOrderScope,
                 sockets = new[] { 911, 912, 913, 914 },
             }, spec.PoisonStates == null
