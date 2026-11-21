@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 48,
         "magic_name": "GroupAmyounsul",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -145,7 +147,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1209665906,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -252,7 +254,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1209665906,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -444,6 +446,8 @@
       "Fixture": {
         "magic_id": 48,
         "magic_name": "GroupAmyounsul",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -571,7 +575,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1209667265,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -678,7 +682,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1209667265,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -870,6 +874,8 @@
       "Fixture": {
         "magic_id": 48,
         "magic_name": "GroupAmyounsul",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -997,7 +1003,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1209668687,
+              "delivery": 1001000,
               "priority": 255
             },
             {
@@ -1104,7 +1110,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1209668687,
+              "delivery": 1001000,
               "priority": 255
             },
             {

@@ -32,7 +32,24 @@
 
 | B21 | **夹具意图未物化（`CasterSc/CasterMc` 只写 `WAbil`、不写 `Abil`，被登录序 recalc 覆盖为 0）**：`RunMagicCase` 设 `caster.WAbil.SC=CasterSc`（缺省 15），登录序 `RecalcAbilitys()`（`WAbil=Abil.Clone()`）用 `Abil.SC=0` 覆盖 ⇒ 实际 SC=0，与 fixture 意图 15 不符 | 设 `CasterSc/CasterMc` 却未同步 `Abil.SC/MC` 的 stem（如 `uenhancer`）；golden 记录 `caster.WAbil.SC` | 记录切到「实际应用值」（`9c9782a30`）后**暴露**：`uenhancer` 的 `caster_sc` 15→0；**非 golden 旧、非丢开关**（`CasterScNoClamp` 仍在） | 生产登录序同样 `WAbil=Abil.Clone()`，但 fixture 意图应体现在 `Abil` | `uenhancer` 等 stem 的 SC/MC 意图未物化（实际 0）；**修法（行为性、后续批）**：`CasterSc/CasterMc` 同时写 `Abil.SC/MC` 使 recalc 后仍为意图值；**别在缺口上重出 golden** |
 
-| B22 | **（前提已推翻·2026-11-21 复核实测）** 原写「oracle 不表达 per-frame 延迟量、装置给不出正确 per-frame `due`」——**不成立**。回滚 `(a)` 后重出 58 支实测：committed **37/60 支有 `due_ms_rel`**；重出 A=32 支与 committed **逐位一致**、B=4 支差异**全是已知修复的预期**（`mabmabe-nondefault` 600→700＝B17 排水对齐；`amyounsul`/`amyounsul2`/`spacemove` 900/1016→1000＝B19 墙钟 elapsed 噪声，虚拟钟后取精确值）、**C=0 支丢 due**、D=12 支**新增**（旧生成器这些路径本就不 emit＝B18 schema 漂移）、E=10 支两侧皆无 ⇒ **装置能正确表达 per-frame due**。`(a)`「不 emit」以**错误前提**（committed 统一无 due）做出，已回滚（`d10de6523`） | 任何延迟帧（31/53/共享尾）的逐帧定时对拍 | 原「golden 无 due ⇒ 比较器不比 ⇒ 时间维度无逐帧覆盖」**不成立**（due 已被正确 emit 并逐帧比较） | oracle 逐帧本有延迟量、比较器本可比——**已被正确利用** | **仅存开放项**：D=12 支由「旧无 due」变「新有 due」，落盘会让比较器**首次**在这些帧比 `due`，须先核 Rust 台账同 `due`（per-stem `-Mode Both`）再落；这是「新增比较面」的验证，不是「无表示能力」。**教训保留**：曾把 `due` 当「可忽略 T」让「57 支 Y=0」成假绿——`due` 属比较面，不得当 T 剥离。**原「后续批次：due 沿链传播重构」降级**：harness 现已正确 emit，无需表示层重构；若 D 支落盘后 Rust 侧不匹配，再按 B17/B19 归口查 |
+| B22 | **（2026-11-22 全量门复核修正）** 原判「oracle 不表达 per-frame 延迟量、装置给不出正确 `due`」**对部分路径成立**。committed **37/60 支有 `due_ms_rel`**（异构）；`(a)`「不 emit」前提错误已回滚（`d10de6523`）。回滚后 `rerun_magic_plane.sh` 实测（58 支、落 49）：**32 支一致＋`cloak`/`holyshield`/`unamyounsul` 与 Rust 同值；9 支路径特异分歧** —— A 型 harness 记 0（`CurrentDueMs` 在 one-shot/RunFireball 路径未设）：`fireball`/`fireball-5`/`firecharm`/`grouplightening`/`lightning-11`/`lightning-45`/`showhp`；B 型 recog 顺序互换＋due 800 vs 900：`bigcloak`/`groupdeding`（后者并触发比较器 640 减法溢出，另行修复）。**定论：B22 真实、待装置表示层重构；不得据此删字段或调断言**（9 支暂留旧 golden 无 due ⇒ 比较器不比 ⇒ 绿，不在缺口上盖新值）。详见下方 D=12 due 值表 | 延迟帧（31/53/共享尾）的逐帧定时对拍 | golden 无 due ⇒ 比较器不比（无逐帧覆盖）；**有 due 但错**同属 B22（A/B 型） | oracle 逐帧本有延迟量、比较器本可比 | **教训**：`due` 属比较面、不得当 T 剥离（曾致「57 支 Y=0」假绿）。**后续（正式批）**：表示层重构（`due` 沿链传播到下游帧）后再逐支落盘 |
+
+### B22 · D=12 `due` 值表（golden 新值 vs Rust 台账，2026-11-22 全量门实测）
+
+| stem | golden `due` | Rust `due` | 判 |
+|---|---|---|---|
+| cloak | 1000 | 1000 | PASS |
+| holyshield | 1000 | 1000 | PASS |
+| unamyounsul | 1000 | 1000 | PASS |
+| fireball | 0 | 600 | A |
+| fireball-5 | 0 | 600 | A |
+| firecharm | 0 | 1200 | A |
+| grouplightening | 0 | 600 | A |
+| lightning-11 | 0 | 600 | A |
+| lightning-45 | 0 | 600 | A |
+| showhp | 0 | 1500 | A |
+| bigcloak | 800 | 900(+recog互换) | B |
+| groupdeding | 800 | 900(+640溢出) | B |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -46,7 +63,7 @@
 - **装置墙钟非确定性（golden 不可逐字节复现）** —— 落在 **B19**；根因批=`openmir2-firecharm-nondeterminism`。
 - **clone 家族 actor_id 非确定（虚拟钟也治不了）** —— 落在 **B20**。
 - **夹具意图未物化（CasterSc/Mc 只写 WAbil 被 recalc 覆盖）** —— 落在 **B21**（暴露者 `9c9782a30`）。
-- **per-frame due（时间维度逐帧覆盖）** —— 归 **B22**；**已推翻「装置不表达 due」的旧判断**（装置能正确 emit；`d10de6523` 回滚 `(a)`）。仅存开放项：D=12 支新增 due 落盘前需核 Rust 侧同值；B17 那类缺陷的逐帧入口**恢复可用**。
+- **per-frame due（时间维度逐帧覆盖）** —— 归 **B22**（**真实**：9 支路径特异分歧，见上）；本轮落 49 支、9 支暂留旧 golden 无 due（不盖缺口）；表示层重构后再补。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 

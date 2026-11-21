@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 32,
         "magic_name": "TurnUndead",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -96,6 +98,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 101,
             "y": 100,
             "race": 50,
@@ -107,7 +110,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 0
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ],
         "target_monster": 1,
@@ -165,7 +175,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1217061859,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -310,6 +320,8 @@
       "Fixture": {
         "magic_id": 32,
         "magic_name": "TurnUndead",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -388,6 +400,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 101,
             "y": 100,
             "race": 50,
@@ -399,7 +412,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 0
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ],
         "target_monster": 1,
@@ -580,6 +600,8 @@
       "Fixture": {
         "magic_id": 32,
         "magic_name": "TurnUndead",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -658,6 +680,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 101,
             "y": 100,
             "race": 50,
@@ -669,7 +692,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 0
+            "anti_magic": 0,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ],
         "target_monster": 1,

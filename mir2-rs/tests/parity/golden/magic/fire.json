@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 9,
         "magic_name": "Fire",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -33,6 +35,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -81,6 +86,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
@@ -90,6 +98,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -101,9 +110,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 103,
             "y": 100,
             "race": 50,
@@ -115,9 +132,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 9
+            "anti_magic": 9,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 104,
             "y": 100,
             "race": 50,
@@ -129,9 +154,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 106,
             "y": 100,
             "race": 50,
@@ -143,7 +176,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -219,7 +259,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1169850109,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -304,7 +344,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169849709,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -453,7 +493,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169849709,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -563,7 +603,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169849709,
+              "delivery": 1000600,
               "priority": 255
             }
           ],
@@ -585,7 +625,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169849709,
+              "delivery": 1000600,
               "priority": 255
             }
           ],
@@ -622,6 +662,8 @@
       "Fixture": {
         "magic_id": 9,
         "magic_name": "Fire",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -637,6 +679,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -685,6 +730,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
@@ -694,6 +742,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -705,9 +754,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 103,
             "y": 100,
             "race": 50,
@@ -719,9 +776,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 9
+            "anti_magic": 9,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 104,
             "y": 100,
             "race": 50,
@@ -733,9 +798,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 106,
             "y": 100,
             "race": 50,
@@ -747,7 +820,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -823,7 +903,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1169851484,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -908,7 +988,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169851084,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -1057,7 +1137,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169851084,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -1167,7 +1247,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169851084,
+              "delivery": 1000600,
               "priority": 255
             }
           ],
@@ -1189,7 +1269,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169851084,
+              "delivery": 1000600,
               "priority": 255
             }
           ],
@@ -1226,6 +1306,8 @@
       "Fixture": {
         "magic_id": 9,
         "magic_name": "Fire",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -1241,6 +1323,9 @@
         "target_hp": 100,
         "target_max_hp": 224,
         "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -1289,6 +1374,9 @@
           100
         ],
         "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
         "frame_order_scope": "multi_victim_same_tick",
         "sockets": [
           911,
@@ -1298,6 +1386,7 @@
         ],
         "monsters": [
           {
+            "name": null,
             "x": 102,
             "y": 100,
             "race": 50,
@@ -1309,9 +1398,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 103,
             "y": 100,
             "race": 50,
@@ -1323,9 +1420,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 9
+            "anti_magic": 9,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 104,
             "y": 100,
             "race": 50,
@@ -1337,9 +1442,17 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           },
           {
+            "name": null,
             "x": 106,
             "y": 100,
             "race": 50,
@@ -1351,7 +1464,14 @@
             "speed_point": 15,
             "death": false,
             "ac": 0,
-            "anti_magic": 1
+            "anti_magic": 1,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": -1,
+            "can_re_alive": false,
+            "walk_speed": -1,
+            "next_hit_time": -1,
+            "master_caster": false
           }
         ]
       },
@@ -1416,7 +1536,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1169852859,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -1579,7 +1699,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169852459,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -1680,7 +1800,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169852459,
+              "delivery": 1000600,
               "priority": 255
             }
           ],
@@ -1702,7 +1822,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1169852459,
+              "delivery": 1000600,
               "priority": 255
             }
           ],

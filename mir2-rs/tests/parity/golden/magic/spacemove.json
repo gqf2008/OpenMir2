@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 21,
         "magic_name": "SpaceMove",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -185,7 +187,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1214563281,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -268,7 +270,7 @@
               "param": 1,
               "tag": 3,
               "series": 0,
-              "due_ms_rel": 1016,
+              "due_ms_rel": 1000,
               "tail": ""
             }
           ]
@@ -428,6 +430,8 @@
       "Fixture": {
         "magic_id": 21,
         "magic_name": "SpaceMove",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -595,7 +599,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1214564546,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -838,6 +842,8 @@
       "Fixture": {
         "magic_id": 21,
         "magic_name": "SpaceMove",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -1005,7 +1011,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1214565859,
+              "delivery": 1001000,
               "priority": 255
             }
           ],

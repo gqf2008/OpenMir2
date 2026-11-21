@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 50,
         "magic_name": "MabMabe",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -146,7 +148,7 @@
               "p3": 1002,
               "msg": "",
               "late": true,
-              "delivery": 1216953756,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -434,6 +436,8 @@
       "Fixture": {
         "magic_id": 50,
         "magic_name": "MabMabe",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,
@@ -562,7 +566,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1216955115,
+              "delivery": 1000600,
               "priority": 255
             },
             {
@@ -851,6 +855,8 @@
       "Fixture": {
         "magic_id": 50,
         "magic_name": "MabMabe",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 1,

@@ -18,6 +18,8 @@
       "Fixture": {
         "magic_id": 22,
         "magic_name": "FireCross",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 0,
@@ -138,7 +140,7 @@
               "p3": 3,
               "msg": "",
               "late": true,
-              "delivery": 1224897968,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -338,6 +340,8 @@
       "Fixture": {
         "magic_id": 22,
         "magic_name": "FireCross",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 0,
@@ -463,7 +467,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1224899390,
+              "delivery": 1001000,
               "priority": 255
             }
           ],
@@ -661,6 +665,8 @@
       "Fixture": {
         "magic_id": 22,
         "magic_name": "FireCross",
+        "caster_name": null,
+        "slave_colors": null,
         "effect": 1,
         "effect_type": 1,
         "user_magic_level": 0,
