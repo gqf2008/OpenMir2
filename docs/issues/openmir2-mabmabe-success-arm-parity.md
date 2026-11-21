@@ -96,3 +96,48 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 - 本卡**不**改 `crates/world-bevy` / 驱动 / 比较器；只登记行为与证据点。
 - 既有 `mabmabe` 三支 golden 与台账**不受影响**（未命中路径）。
 - 合并门不应出现这条红：本批不含对照臂驱动与比较器。
+
+## 6. §8.3d 判据口径（d8 独立复核 2026-11-21 的三项落字）
+
+判据已改为**总量恒等式**（末帧 `param + Σseries == target_hp`；致死支 `Σseries >= target_hp`）。
+独立复核确认其口径边界，写死如下（代码注释同款，见 `magic_fireball_parity.rs` 的 §8.3d 段）：
+
+1. **本契约是「输入来源 + 总量自洽」检查，不是逐帧完整性检查**。**中间** `31` 的
+   `param/series` 由 `verify()` 的跨栈逐帧比较守（golden vs Rust 台账逐值）——"契约绿"
+   **不等于**"每帧都对"。
+2. **致死支**：多事件致死只验「末帧 `param==0` + `Σseries >= target_hp`」，**不验逐事件致死**；
+   前提 `target_hp > 0`（`target_hp==0` 时 `Σ>=0` 恒真，属既有弱面）。
+3. **已知接受面**：`(85,15),(85,0)`（中间 `series=0` 帧）与 `(70,15)→(80,5)`（末帧 `param`
+   错但 Σ 凑平）两种补偿形态本契约**不抓**。要抓中间帧就必须回到逐帧链式——那正是本次
+   改动的目的所要避开的"批量刷新误判为输入/输出混淆"。**后来人不要为此再加牙把口径拧回去。**
+
+Q2 定性（复核同意）：致死支从"单帧 `damage >= target_hp`"放宽到"`Σseries >= target_hp`"是
+**有意修正**（多段小伤害致死时旧判据会误红合法 golden）；跨栈伤害面的正确性仍由 `verify()`
+逐帧守，此放宽只作用于 golden 自洽检查。
+
+## 7. 旧 stem 零漂移证据（送审复跑原文）
+
+```
+# 快照本次 merge 的目标 master（c31580a57）的生成器，放在仓外（src 用 junction 指回本树）
+git archive c31580a57 -- mir2-rs/tests/parity/csharp/MagicGolden | tar -x -C E:/UserTemp/mgbase-c315
+New-Item -ItemType Junction -Path E:/UserTemp/mgbase-c315/src -Target <本 worktree>/src
+dotnet build E:/UserTemp/mgbase-c315/mir2-rs/tests/parity/csharp/MagicGolden -c Release
+MAGICGOLDEN_EXPS_JSON=<本 worktree>/mir2-rs/tests/parity/fixtures/exps-need-exps.json   <base>/MagicGolden.exe --case <stem> --out E:/UserTemp/armcheck5/base/<stem>.json
+<本 worktree>/mir2-rs/tests/parity/csharp/MagicGolden/bin/Release/MagicGolden.exe   --case <stem> --out E:/UserTemp/armcheck5/new/<stem>.json
+# 归一化只剔墙钟字段 delivery / due_ms_rel 后逐字段比较
+```
+
+输出（9 个既有 stem）：
+
+```
+fireball: True
+fireball5: True
+shield: True
+firewind: True
+spacemove: True
+amyounsul: True
+groupamyounsul-shape2: True
+snowwind: True
+groupdeding: True
+ALL_ZERO_DRIFT True
+```
