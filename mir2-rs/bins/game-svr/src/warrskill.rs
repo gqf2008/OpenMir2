@@ -92,7 +92,7 @@ fn send_short(
     chr_name: &str,
     payload: &[u8],
 ) {
-    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(me) = online.find_linear_chr(chr_name) else {
         return;
     };
     let Some(tx) = crate::route_to_gate(gates, me.gate_idx, me.socket, "战士技短包") else {

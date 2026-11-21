@@ -2384,6 +2384,7 @@ fn handle_say_with_saves(
     socket: i32,
     tail: Option<&str>,
 ) -> (GmSysMsgs, GmDirectFrames) {
+    perf_counters::bump(&perf_counters::SAY_CALLS);
     let Some(speaker) = host.online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
@@ -2438,9 +2439,10 @@ fn handle_say_with_saves(
     let mut delivered = 0usize;
     // **T-287 残余站点 #7**：`RM_HEAR` 在 oracle 里走 `SendRefMsg`（`BaseObject.Base.cs`）⇒ 同走
     // 500ms 缓存；连说两句时 12 格边界观察者只收首句。
-    for target_id in
-        ref_msg_cache::targets(host.world, speaker.actor_id, chat::send_ref_msg_range())
-    {
+    let say_recipients =
+        ref_msg_cache::targets(host.world, speaker.actor_id, chat::send_ref_msg_range());
+    perf_counters::bump_by(&perf_counters::SAY_RECIPIENTS, say_recipients.len() as u64);
+    for target_id in say_recipients {
         let Some(t) = host.online.find_by_actor(target_id) else {
             continue;
         };
@@ -2504,7 +2506,7 @@ fn handle_channel_say(
                 let Some((to, frame)) = partywire::event_body(ev) else {
                     continue;
                 };
-                let Some(t) = host.online.iter().find(|e| e.actor_id == to) else {
+                let Some(t) = host.online.find_linear_actor(to) else {
                     continue;
                 };
                 let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "组队说话")
@@ -2987,7 +2989,7 @@ fn apply_pending_level_up(
         // 直接写回它；本宿主实体是那份对象的投影 ⇒ 重算后同值镜像（不变量；本路径 657 自见取会话值）。
         e.vitals.hit_speed = sg.hit_speed;
     }
-    if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
+    if let Some(entry) = online.find_linear_chr(chr_name) {
         let client_layout = game_svr::smframe::client_layout_enabled();
         send_levelup_frames(sg, entry, gates, client_layout);
     }
@@ -3423,7 +3425,7 @@ fn handle_whisper(
     text: &str,
 ) {
     // `GetPlayObject(whostr)`：按 `ChrName` 找在线目标（同名唯一）。
-    let Some(target) = online.iter().find(|e| e.chr_name == who) else {
+    let Some(target) = online.find_linear_chr(who) else {
         glog!(
             "DBG",
             "私聊：目标 {who} 不在线 ⇒ 丢弃（oracle `SysMsg(...UserNotOnLine)` 未建模，登记）"
@@ -3493,7 +3495,7 @@ fn handle_party_cmd(
     gm: Option<&ScriptGmEnv<'_>>,
     npc_vars: &game_svr::npc::NpcVars,
 ) {
-    let Some(sender) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(sender) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "组队 CM：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -3539,7 +3541,7 @@ fn handle_party_cmd(
         let Some((to, body)) = partywire::event_body(ev) else {
             continue;
         };
-        let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+        let Some(t) = online.find_linear_actor(to) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "组队回帧") else {
@@ -3588,7 +3590,7 @@ fn run_party_goto_label(
     if !host.has_function_npc() {
         return;
     }
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         return;
     };
     let actor = entry.actor_id;
@@ -3849,7 +3851,7 @@ fn drain_party_death_events(
     for ev in &rec.party_events {
         let (to, body) =
             partywire::event_body(ev).expect("死亡退组路径不含 GotoLabel（无脚本触发）");
-        let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+        let Some(t) = online.find_linear_actor(to) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "死亡退组回帧") else {
@@ -4008,7 +4010,7 @@ fn drain_slave_mutiny_downlink(
     observers.dedup();
     let mut sent = 0usize;
     for observer in observers {
-        let Some(entry) = online.iter().find(|e| e.actor_id == observer) else {
+        let Some(entry) = online.find_linear_actor(observer) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "叛变名色帧") else {
@@ -4110,7 +4112,7 @@ fn handle_inbound_cmd(
     use mir2_protocol::messages;
 
     let ident = cmd.ident;
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "R1 入站：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -4558,7 +4560,7 @@ fn handle_level_rank_request_cmd(
     if !enabled {
         return;
     }
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_LEVELRANK：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -4701,7 +4703,7 @@ fn handle_ground_cmd(
     strings: &game_svr::strings::StringConf,
 ) {
     // 找会话（`online` 给出该角色当前的网关线号；`sessions` 给出地面交互态）。
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_PICKUP/DROP：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -4947,7 +4949,7 @@ fn handle_deal_cmd(
     cfg: &game_svr::trade::DealConfig,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "交易命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -5087,7 +5089,7 @@ fn handle_deal_cmd(
         let Some((target, body)) = game_svr::trade::deal_event_body(ev, catalog, &wire_of) else {
             continue;
         };
-        let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+        let Some(t) = online.find_linear_actor(target) else {
             glog!(
                 "DBG",
                 "交易回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
@@ -5158,7 +5160,7 @@ fn drain_deal_tick(
         if !trade_sessions.get(&chr).is_some_and(|s| s.dealing) {
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.chr_name == chr) else {
+        let Some(entry) = online.find_linear_chr(&chr) else {
             // 不在世界（已掉线）⇒ 由掉线路径的 `DealCancelA` 收口。
             continue;
         };
@@ -5277,7 +5279,7 @@ fn handle_bag_cmd_with_magic(
     // **Lane B**：`PlayObject.MagicList` 的唯一投影 + 魔表/配置名 + 历史粘滞值。
     magic: Option<MagicRecalc<'_>>,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_TAKEON/TAKEOFF：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -5575,7 +5577,7 @@ fn handle_bag_cmd_with_magic(
         // + 观察者副本都进 `TickFrameQueue`（每收件人一条四叉堆），flush 后自己线上序仍是
         // `615 → 752 → 52 → 41 → 657`。
         let mut frame_q = TickFrameQueue::new();
-        if let Some(entry) = online.iter().find(|e| e.actor_id == sg.actor_id) {
+        if let Some(entry) = online.find_linear_actor(sg.actor_id) {
             frame_q.push(
                 entry.gate_idx,
                 entry.socket,
@@ -5710,7 +5712,7 @@ fn handle_query_bag_cmd(
     catalog: &game_svr::ability::StdItemCatalog,
     world: &mir2_world_bevy::World,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYBAGITEMS：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -5806,7 +5808,7 @@ fn handle_query_user_name_cmd(
     displays: &downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYUSERNAME：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -5923,7 +5925,7 @@ fn handle_query_user_state_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYUSERSTATE：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -6282,7 +6284,7 @@ fn handle_click_npc_cmd(
     // `None` = 未接线（请求丢弃，且脚本期 `mon_gen_enabled=false` 与旧行为逐字节相同）。
     mut script_world: Option<&mut ScriptWorldCtx<'_>>,
 ) -> bool {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_CLICKNPC：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -7089,7 +7091,7 @@ fn handle_selloff_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
     use mir2_protocol::messages;
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "元宝寄售命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -7225,7 +7227,7 @@ fn handle_selloff_cmd(
         let Some((target, body)) = game_svr::selloff::selloff_event_body(ev, catalog) else {
             continue;
         };
-        let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+        let Some(t) = online.find_linear_actor(target) else {
             glog!(
                 "DBG",
                 "元宝寄售回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
@@ -7340,7 +7342,7 @@ fn handle_shop_cmd_inner(
     queue: &mut HandlerMsgQueue,
     deferred: &mut Vec<DeferredSend>,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "商店命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -7794,7 +7796,7 @@ fn handle_shop_cmd_inner(
                     else {
                         continue;
                     };
-                    let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+                    let Some(t) = online.find_linear_actor(target) else {
                         glog!(
                             "DBG",
                             "元宝寄售开窗回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
@@ -8507,7 +8509,7 @@ fn handle_storage_cmd(
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "仓库命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -10340,7 +10342,7 @@ fn fan_out_npc_hear(
         if target_id == caller_actor_id {
             continue;
         }
-        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(e) = online.find_linear_actor(target_id) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "NPC 喊话 SM_HEAR") else {
@@ -10741,7 +10743,7 @@ fn handle_eat_cmd(
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_EAT：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -11368,7 +11370,7 @@ fn broadcast_feature_changed_except(
         if skip == Some(target_id) {
             continue;
         }
-        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(e) = online.find_linear_actor(target_id) else {
             continue;
         };
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "装备 FeatureChanged 广播")
@@ -11510,7 +11512,7 @@ fn push_charstatuschanged_self_and_observers(
     hit_speed: u16,
     range: i32,
 ) {
-    let entry = online.iter().find(|e| e.actor_id == actor_id);
+    let entry = online.find_linear_actor(actor_id);
     // ① 自己的**广播副本**（`:2875`，收件人含源）。
     if let Some(e) = entry {
         q.push(
@@ -11558,7 +11560,7 @@ fn send_charstatuschanged_self_once_and_observers(
     range: i32,
     what: &str,
 ) {
-    if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+    if let Some(e) = online.find_linear_actor(actor_id) {
         let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, what) {
             let _ = tx.send(SimToGate::SendFrame {
@@ -11608,7 +11610,7 @@ fn push_charstatuschanged_except_self(
         if target_id == actor_id {
             continue;
         }
-        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(t) = online.find_linear_actor(target_id) else {
             continue;
         };
         let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
@@ -12526,7 +12528,7 @@ fn handle_move_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "移动命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -13042,7 +13044,7 @@ fn handle_hit_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> bool {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "攻击命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -13286,7 +13288,7 @@ fn drain_skill_train_events(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
 ) {
     for ev in world.drain_skill_train() {
-        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+        let Some(me) = online.find_linear_actor(ev.actor_id) else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&me.chr_name) else {
@@ -13309,7 +13311,7 @@ fn drain_skill_train_events(
         if !ev.power_hit_consumed {
             continue;
         }
-        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+        let Some(me) = online.find_linear_actor(ev.actor_id) else {
             continue;
         };
         if let Some(sg) = sessions.get_mut(&me.chr_name) {
@@ -13337,7 +13339,7 @@ fn drain_yedo_events(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     for ev in world.drain_yedo() {
-        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+        let Some(me) = online.find_linear_actor(ev.actor_id) else {
             glog!(
                 "WRN",
                 "攻杀计数：actor_id={} 不在在线登记表 ⇒ 事件丢弃",
@@ -13608,7 +13610,7 @@ impl SpellFrameBuf {
             if !include_self && target_id == actor_id {
                 continue;
             }
-            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            let Some(t) = online.find_linear_actor(target_id) else {
                 continue;
             };
             self.push_socket(t.socket, priority, body.to_vec());
@@ -13661,7 +13663,7 @@ impl SpellFrameBuf {
 
     /// 单个 actor 的自身帧（`SendMsg(this)` / `SendSelfDelayMsg`）。
     fn push_actor(&mut self, online: &OnlineRegistry, actor_id: i32, priority: u8, body: Vec<u8>) {
-        if let Some(t) = online.iter().find(|e| e.actor_id == actor_id) {
+        if let Some(t) = online.find_linear_actor(actor_id) {
             self.push_socket(t.socket, priority, body);
         }
     }
@@ -13936,7 +13938,7 @@ fn drain_mag_struck_b2(
             continue;
         }
         if o.is_player {
-            if let Some(entry) = online.iter().find(|e| e.actor_id == o.target_id) {
+            if let Some(entry) = online.find_linear_actor(o.target_id) {
                 // 世界实体是本宿主战斗权威值；同步回会话（oracle 只有一份 `WAbil`）。
                 let mut mp = 0u16;
                 let mut max_hp = o.max_hp;
@@ -14210,7 +14212,7 @@ fn finish_spell_tail_with(
                 match buf.as_mut() {
                     Some(buf) => {
                         // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg`（优先级 `Lowest = 255`）。
-                        if let Some(me) = online.iter().find(|e| e.chr_name == chr_name) {
+                        if let Some(me) = online.find_linear_chr(chr_name) {
                             buf.push_socket(me.socket, 255, body);
                         }
                     }
@@ -14452,7 +14454,7 @@ fn handle_spell_cmd_with_magic(
     colors: &MsgColors,
     strings: &game_svr::strings::StringConf,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "魔法命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 CM_SPELL"
@@ -15200,9 +15202,7 @@ fn handle_spell_cmd_with_magic(
                                 // （`card/657-series-spellbuf` 起 657 的 `Series` 以实体为源）。
                                 // 入 buf 的次序仍是 100 → 657×2 → 52（优先级 52=67 < 657=155 < 100=252），
                                 // 出队结果不变，变的只有 `Series` 的取值时点。
-                                if let Some(entry) =
-                                    online.iter().find(|e| e.actor_id == ev.actor_id)
-                                {
+                                if let Some(entry) = online.find_linear_actor(ev.actor_id) {
                                     let name = entry.chr_name.clone();
                                     if let Some(sg) = ground_sessions.get_mut(&name) {
                                         let extra =
@@ -15255,9 +15255,7 @@ fn handle_spell_cmd_with_magic(
                                     body,
                                 );
                                 // 52 留在 657 之后入 buf（次序与改造前一致）；数值取**重算后**的 `wabil`。
-                                if let Some(entry) =
-                                    online.iter().find(|e| e.actor_id == ev.actor_id)
-                                {
+                                if let Some(entry) = online.find_linear_actor(ev.actor_id) {
                                     let name = entry.chr_name.clone();
                                     if let Some(sg) = ground_sessions.get(&name) {
                                         let body = smframe::sm_ability(
@@ -17449,8 +17447,7 @@ fn handle_spell_cmd_with_magic(
                                     body,
                                 );
                                 // `:5328 RecalcAbilitys()` + `:5329 SendMsg(RM_ABILITY)` ⇒ 52 仅目标自己。
-                                let target_entry =
-                                    online.iter().find(|e| e.actor_id == out.target).cloned();
+                                let target_entry = online.find_linear_actor(out.target).cloned();
                                 if let Some(entry) = target_entry {
                                     let extra =
                                         world.entities.get(out.target).map(|e| e.extra_abil);
@@ -17878,7 +17875,7 @@ fn send_self_frame(
     chr_name: &str,
     body: Vec<u8>,
 ) {
-    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(me) = online.find_linear_chr(chr_name) else {
         return;
     };
     let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "魔法自身帧") else {
@@ -18009,6 +18006,8 @@ fn send_ref_msg_to_targets(
     bodies: &[Vec<u8>],
     include_self: bool,
 ) {
+    perf_counters::bump(&perf_counters::REFMSG_CALLS);
+    perf_counters::bump_by(&perf_counters::REFMSG_TARGETS, targets.len() as u64);
     for target_id in targets {
         if !include_self && target_id == actor_id {
             continue;
@@ -18216,7 +18215,7 @@ fn send_good_tick(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
 ) {
-    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(me) = online.find_linear_chr(chr_name) else {
         return;
     };
     let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "回 +GD") else {
@@ -18586,7 +18585,7 @@ fn drain_aoi_disappear_with_counts(
                 counts.player_observer += 1;
             }
         }
-        let Some(observer) = online.iter().find(|e| e.actor_id == *observer_id) else {
+        let Some(observer) = online.find_linear_actor(*observer_id) else {
             counts.missing_online += 1;
             glog!(
                 "WRN",
@@ -18655,7 +18654,7 @@ fn drain_depart_frames(
 ) -> usize {
     let mut sent = 0usize;
     for (observer_id, target_id) in world.drain_departs() {
-        let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
+        let Some(observer) = online.find_linear_actor(observer_id) else {
             glog!(
                 "WRN",
                 "离世广播：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
@@ -18794,7 +18793,7 @@ fn drain_aoi_downlink(
         // **可见集/进入差分选择**：在线坐标查找 + `visible_actors` 过滤 + 入队槽 + 出队序。
         // （`online` 是按插入序的 `Vec` ⇒ 这里的按名查找是 O(会话数)，本探针会把它计入。）
         let t_select = tick_profile::probe_begin(&prof);
-        let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
+        let Some(entry) = online.find_linear_chr(&sess.chr_name) else {
             glog!(
                 "WRN",
                 "同屏下行：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
@@ -18903,7 +18902,7 @@ fn drain_aoi_events(
     // ① `Hidden` ⇒ `SM_HIDEEVENT(805)`：`SendDefMessage(SM_HIDEEVENT, 0 /*nParam1*/,
     //    Id /*wParam = 0*/, nX /*nParam2*/, nY /*nParam3*/)`（`PlayObject.cs:3278`）。
     for (observer_id, _event_idx, x, y) in &rec.event_hides {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *observer_id) else {
+        let Some(entry) = online.find_linear_actor(*observer_id) else {
             glog!(
                 "WRN",
                 "事件消失帧：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_HIDEEVENT(805)"
@@ -18937,7 +18936,7 @@ fn drain_aoi_events(
         {
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
+        let Some(entry) = online.find_linear_chr(&sess.chr_name) else {
             glog!(
                 "WRN",
                 "事件出现帧：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
@@ -19412,7 +19411,7 @@ fn drain_merchant_disappears(
         // **T-287**：消失帧同样是 `SendRefMsg` ⇒ 同一份 500ms 缓存（世界侧给的收件人快照当扫描面）。
         let recipients = ref_msg_cache::targets_from_scan(world, *target_id, recipients.clone());
         for actor_id in &recipients {
-            let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            let Some(entry) = online.find_linear_actor(*actor_id) else {
                 // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
                 glog!(
                     "WRN",
@@ -19464,7 +19463,7 @@ fn drain_login_tail(
     let mut keys: Vec<String> = pending.keys().cloned().collect();
     keys.sort();
     for chr in keys {
-        let Some(entry) = online.iter().find(|e| e.chr_name == chr) else {
+        let Some(entry) = online.find_linear_chr(&chr) else {
             // 首次扫描前掉线：缓冲作废（不静默留给下一次登录）。
             finished.push(chr);
             continue;
@@ -19731,7 +19730,7 @@ fn drain_buff_downlink(
     let mut buff_recalc_657: std::collections::HashMap<i32, (i32, u16)> =
         std::collections::HashMap::new();
     for actor_id in &rec.buff_recalcs {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(entry) = online.find_linear_actor(*actor_id) else {
             continue;
         };
         let name = entry.chr_name.clone();
@@ -19776,7 +19775,7 @@ fn drain_buff_downlink(
         buff_recalc_657.insert(*actor_id, (status, self_hit_speed));
     }
     for (actor_id, (status, hit_speed)) in buff_recalc_657 {
-        if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+        if let Some(e) = online.find_linear_actor(actor_id) {
             let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
             if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "buff 重算 657") {
                 let _ = tx.send(SimToGate::SendFrame {
@@ -19824,7 +19823,7 @@ fn drain_buff_downlink(
             BuffSysMsg::DefensePower10Sec => "防御力10秒后恢复正常。",
             BuffSysMsg::MagicDefensePower10Sec => "魔法防御力10秒后恢复正常。",
         };
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(entry) = online.find_linear_actor(*actor_id) else {
             continue;
         };
         let body = game_svr::smframe::sm_sysmessage(
@@ -19842,7 +19841,7 @@ fn drain_buff_downlink(
         }
     }
     for (actor_id, hp, mp) in &rec.buff_health_changes {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(entry) = online.find_linear_actor(*actor_id) else {
             // **卡 `openmir2-monster-showhp-53-broadcast`**：毒伤段的 `HealthSpellChanged()`
             // 对怪/NPC 同样走 `ShowHp` 第二支（`BaseObject.cs:706-708`，无 race 门）⇒
             // 非会话实体在 `show_hp` 时也向 ±`range` 玩家广播 53（`hp/mp` 取记录值，
@@ -20105,7 +20104,7 @@ pub(crate) fn drain_map_change_at_time(
             );
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+        let Some(entry) = online.find_linear_actor(ev.actor_id) else {
             glog!(
                 "WRN",
                 "切图下行：actor={} 不在在线登记表 ⇒ 跳过 TransMap 簇（登记）",
@@ -20289,7 +20288,7 @@ fn drain_combat_downlink(
         if outcome.damage == 0 {
             continue;
         }
-        if let Some(victim_entry) = online.iter().find(|e| e.actor_id == *target) {
+        if let Some(victim_entry) = online.find_linear_actor(*target) {
             if let Some(sg) = sessions.get_mut(&victim_entry.chr_name) {
                 sg.state.wabil.hp = outcome.target_hp_after;
                 // 受击清零 ⇒ 受害者永远到不了 `HealthFillTime`，与真机 dump 一致（受害方不回血）。
@@ -20330,7 +20329,7 @@ fn drain_combat_downlink(
         // 同一受击者 500ms 内多次受击是真实的多副本场景）。
         for observer_id in ref_msg_cache::targets(world, frame.actor_id, chat::send_ref_msg_range())
         {
-            let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
+            let Some(observer) = online.find_linear_actor(observer_id) else {
                 continue;
             };
             let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "受击帧")
@@ -20374,7 +20373,7 @@ fn drain_combat_downlink(
         );
         // **T-287 残余 #9②**：死亡帧同走缓存（sender = 死者，含死者自己）。
         for target_id in ref_msg_cache::targets(world, dead_id, chat::send_ref_msg_range()) {
-            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            let Some(t) = online.find_linear_actor(target_id) else {
                 continue;
             };
             let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "死亡下行") else {
@@ -20390,7 +20389,7 @@ fn drain_combat_downlink(
     // 归属已由 world 按 `KillFunc` 算好（`ExpHitter.Master` 优先）；这里只做「找到在线会话 ⇒
     // 同步世界权威值 + 回帧」。未在线（怪物/NPC 获得者）跳过。
     for (winner, amount, leveled, level) in &rec.exp_awards {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+        let Some(entry) = online.find_linear_actor(*winner) else {
             continue;
         };
         let Some(entity) = world.entities.get(*winner) else {
@@ -20477,7 +20476,7 @@ fn drain_levelup_healthspell_with_magic(
         if !*leveled {
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+        let Some(entry) = online.find_linear_actor(*winner) else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&entry.chr_name) else {
@@ -20636,7 +20635,7 @@ fn drain_levelup_downlink(
         if !*leveled {
             continue;
         }
-        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+        let Some(entry) = online.find_linear_actor(*winner) else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&entry.chr_name) else {
@@ -20895,7 +20894,7 @@ fn flush_healthspell_slots(
         let Some(sg) = sessions.values().find(|s| s.actor_id == actor_id) else {
             continue;
         };
-        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
+        let Some(entry) = online.find_linear_actor(actor_id) else {
             glog!(
                 "WRN",
                 "健康/魔法变化：actor={actor_id} 无在线网关坐标 ⇒ 不回帧（登记）"
@@ -20926,7 +20925,7 @@ fn flush_healthspell_slots(
                 if target_id == actor_id {
                     continue;
                 }
-                let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                let Some(t) = online.find_linear_actor(target_id) else {
                     continue;
                 };
                 if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "健康/魔法变化广播")
@@ -21091,7 +21090,7 @@ fn drain_stamina(
                 e.vitals.hp = sg.state.wabil.hp;
                 e.vitals.mp = sg.state.wabil.mp;
             }
-            if let Some(entry) = online.iter().find(|e| e.chr_name == name) {
+            if let Some(entry) = online.find_linear_chr(&name) {
                 // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，
                 // 这里只发其它人；目标集**逐份**判定 500ms 缓存（见下）。
                 // 每个 Run 一组槽；载荷 = 该 Run 终态（P8 命中时最后一 Run 已换成钳制终态）。
@@ -21126,7 +21125,7 @@ fn drain_stamina(
                             if *target_id == actor_id {
                                 continue;
                             }
-                            let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                            let Some(t) = online.find_linear_actor(*target_id) else {
                                 continue;
                             };
                             if let Some(tx) =
@@ -21401,7 +21400,7 @@ fn drain_mag_healing_delivery(
         let Some(n) = outcome.mag_healing else {
             continue;
         };
-        let Some(entry) = online.iter().find(|e| e.actor_id == outcome.actor_id) else {
+        let Some(entry) = online.find_linear_actor(outcome.actor_id) else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&entry.chr_name) else {
@@ -21527,7 +21526,7 @@ fn broadcast_healthspellchanged(
     // 隐藏 sender 由 `ref_msg_cache::targets` 早退返回 `[self]`（oracle 退化自投：源不在
     // online ⇒ 零帧；在 online ⇒ 自见 +1，与 review `fbfc7614` 的探针口径一致）。
     for target_id in ref_msg_cache::targets(world, actor_id, range) {
-        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(e) = online.find_linear_actor(target_id) else {
             continue;
         };
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "周期恢复广播") {
@@ -21582,7 +21581,7 @@ fn push_charstatuschanged(
     // `SendRefMsg(RM_CHARSTATUSCHANGED, …)`）。每次调用 = 一次 `SendRefMsg`；同窗口内
     // 第二次命中缓存（`|Δ|<11`）。含自己（`StatusChanged` 的 `SendRefMsg` 收件人含源）。
     for target_id in ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()) {
-        let Some(entry) = online.iter().find(|e| e.actor_id == target_id) else {
+        let Some(entry) = online.find_linear_actor(target_id) else {
             continue;
         };
         let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
@@ -21699,7 +21698,7 @@ fn drain_weapon_durability(
         let body = smframe_ext::sm_breakweapon(ev.actor_id);
         // **T-287 残余 #10**：破武器 1102 同走缓存（sender = 断武器者）。
         for target_id in ref_msg_cache::targets(world, ev.actor_id, chat::SEND_REF_MSG_RANGE) {
-            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            let Some(t) = online.find_linear_actor(target_id) else {
                 continue;
             };
             buf.push_socket(
@@ -21747,7 +21746,7 @@ fn drain_attack_weapon_wear(
     let mut buf = SpellFrameBuf::new();
     let mut sent = 0usize;
     for ev in &rec.weapon_wears {
-        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+        let Some(me) = online.find_linear_actor(ev.actor_id) else {
             continue;
         };
         for frame in &ev.frames {
@@ -21894,7 +21893,7 @@ fn drain_close_health_for(
         e.buff.char_status = status;
     }
     // `PlayObject.ShowHp` 的宿主镜像（`SM_HEALTHSPELLCHANGED(53)` 的 ShowHp 广播支读会话态）。
-    if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
+    if let Some(entry) = online.find_linear_actor(actor_id) {
         if let Some(sg) = sessions.get_mut(&entry.chr_name) {
             sg.show_hp = false;
         }
@@ -21977,7 +21976,7 @@ fn b3_outcome_frames(
     }
     if let Some(h) = o.open_health {
         // `PlayObject.ShowHp` 的宿主镜像（53 的 ShowHp 广播支读会话态）。
-        if let Some(entry) = online.iter().find(|e| e.actor_id == h.target_id) {
+        if let Some(entry) = online.find_linear_actor(h.target_id) {
             if let Some(sg) = sessions.get_mut(&entry.chr_name) {
                 sg.show_hp = true;
             }
@@ -21986,7 +21985,7 @@ fn b3_outcome_frames(
     }
     if let Some(m) = o.magic_lvexp {
         // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` ⇒ 出队优先级 `Lowest = 255`。
-        if let Some(entry) = online.iter().find(|e| e.actor_id == o.actor_id) {
+        if let Some(entry) = online.find_linear_actor(o.actor_id) {
             buf.push_socket(
                 entry.socket,
                 255,
@@ -22065,7 +22064,7 @@ fn drain_death_use_item_drops(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     for (actor_id, deleted) in &rec.death_use_item_drops {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(entry) = online.find_linear_actor(*actor_id) else {
             glog!(
                 "WRN",
                 "死亡删装：actor={actor_id} 不在在线登记表 ⇒ 跳过 SM_DELITEMS"
@@ -22181,6 +22180,142 @@ fn drain_b4_self_deliveries(
     flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
 }
 
+/// **在线查找探针（容量线）**：只计数，**不改任何查找路径**。
+///
+/// 设计：`docs/issues/online-probe-design-20261121.md`。默认关闭；关闭时每个入口只做一次
+/// `Relaxed` 原子读，**无分配、无锁、无字符串拼接**。`MIR2_PERF_COUNTERS=<path>` 由
+/// `sim_loop` 启动时打开并截断；每 tick 尾写一行 TSV。
+///
+/// fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0；env 设了但收尾时**一行 tick 都没写**
+/// （只有表头）⇒ rc≠0 —— 不允许"探针以为在跑、其实没数据"。
+mod perf_counters {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
+    pub(crate) static ACTOR_INDEXED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CHR_INDEXED: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static ACTOR_LINEAR: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static CHR_LINEAR: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static REFMSG_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static REFMSG_TARGETS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SAY_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SAY_RECIPIENTS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static KICK_SCANS: AtomicU64 = AtomicU64::new(0);
+
+    static DATA_LINES: AtomicU64 = AtomicU64::new(0);
+    static WRITER: Mutex<Option<std::fs::File>> = Mutex::new(None);
+    static PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+    /// 关闭态：一次 `Relaxed` 读 + 分支；启用时一次原子加。
+    #[inline]
+    pub(crate) fn bump(c: &AtomicU64) {
+        if ENABLED.load(Ordering::Relaxed) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn bump_by(c: &AtomicU64, n: u64) {
+        if n > 0 && ENABLED.load(Ordering::Relaxed) {
+            c.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn init_with_path(path: &std::path::Path) -> std::io::Result<()> {
+        let mut f = std::fs::File::create(path)?;
+        writeln!(
+            f,
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans"
+        )?;
+        *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
+        *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
+        DATA_LINES.store(0, Ordering::Relaxed);
+        ENABLED.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(crate) fn init_from_env() -> Result<bool, String> {
+        match std::env::var("MIR2_PERF_COUNTERS") {
+            Ok(p) if !p.trim().is_empty() => {
+                init_with_path(std::path::Path::new(p.trim())).map_err(|e| {
+                    format!("MIR2_PERF_COUNTERS={p} 打不开（探针 fail-closed）：{e}")
+                })?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// 每 tick 尾调用；关闭态在第一次原子读就返回（无分配/无锁）。
+    pub(crate) fn write_tick() {
+        if !ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let tick = DATA_LINES.fetch_add(1, Ordering::Relaxed);
+        let vals = [
+            ACTOR_INDEXED.swap(0, Ordering::Relaxed),
+            CHR_INDEXED.swap(0, Ordering::Relaxed),
+            ACTOR_LINEAR.swap(0, Ordering::Relaxed),
+            CHR_LINEAR.swap(0, Ordering::Relaxed),
+            REFMSG_CALLS.swap(0, Ordering::Relaxed),
+            REFMSG_TARGETS.swap(0, Ordering::Relaxed),
+            SAY_CALLS.swap(0, Ordering::Relaxed),
+            SAY_RECIPIENTS.swap(0, Ordering::Relaxed),
+            KICK_SCANS.swap(0, Ordering::Relaxed),
+        ];
+        let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(f) = guard.as_mut() {
+            let line = format!(
+                "{tick}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8]
+            );
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
+    /// 收尾：启用却一条 tick 行都没有 ⇒ Err（调用方转 rc≠0）。
+    pub(crate) fn finish() -> Result<(), String> {
+        if !ENABLED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if DATA_LINES.load(Ordering::Relaxed) == 0 {
+            let p = PATH
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .unwrap_or_default();
+            return Err(format!(
+                "MIR2_PERF_COUNTERS={} 启用但 0 个 tick 行（探针 fail-closed）",
+                p.display()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_for_tests() {
+        ENABLED.store(false, Ordering::Relaxed);
+        for c in [
+            &ACTOR_INDEXED,
+            &CHR_INDEXED,
+            &ACTOR_LINEAR,
+            &CHR_LINEAR,
+            &REFMSG_CALLS,
+            &REFMSG_TARGETS,
+            &SAY_CALLS,
+            &SAY_RECIPIENTS,
+            &KICK_SCANS,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+        DATA_LINES.store(0, Ordering::Relaxed);
+        *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *PATH.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 /// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
 ///
 /// 进世界成功时登记，断线/被踢时移除；重复进世界的"踢旧"与账号级顶号靠它找回旧连接。
@@ -22280,6 +22415,7 @@ impl OnlineRegistry {
     /// `debug_assert` 把"索引与条目一致"从「我核过没有旁路」变成**每次 debug 运行都检查**的
     /// 不变量（release 无成本）；运行时仍保留 `filter`，陈旧索引最多返回 `None`，不会返回错条目。
     fn find_by_actor(&self, actor_id: i32) -> Option<&OnlineEntry> {
+        perf_counters::bump(&perf_counters::ACTOR_INDEXED);
         let pos = *self.by_actor.get(&i64::from(actor_id))?;
         let e = self.entries.get(pos)?;
         debug_assert_eq!(
@@ -22292,6 +22428,7 @@ impl OnlineRegistry {
 
     /// 按 `chr_name` 取条目；字段校验与 `debug_assert` 同 [`Self::find_by_actor`]。
     fn find_by_chr(&self, chr: &str) -> Option<&OnlineEntry> {
+        perf_counters::bump(&perf_counters::CHR_INDEXED);
         let pos = *self.by_chr.get(chr)?;
         let e = self.entries.get(pos)?;
         debug_assert_eq!(
@@ -22300,6 +22437,21 @@ impl OnlineRegistry {
             e.chr_name
         );
         (e.chr_name == chr).then_some(e)
+    }
+
+    /// **线性查找（C/D 类未索引调用点）**：只包一个计数，查找语义与
+    /// `entries.iter().find(..)` 逐字相同。**不得在这里顺手改成索引**——探针与优化是两件事。
+    #[inline]
+    fn find_linear_actor(&self, actor_id: i32) -> Option<&OnlineEntry> {
+        perf_counters::bump(&perf_counters::ACTOR_LINEAR);
+        self.entries.iter().find(|e| e.actor_id == actor_id)
+    }
+
+    /// 线性按名查找；计数与约束同 [`Self::find_linear_actor`]。
+    #[inline]
+    fn find_linear_chr(&self, chr: &str) -> Option<&OnlineEntry> {
+        perf_counters::bump(&perf_counters::CHR_LINEAR);
+        self.entries.iter().find(|e| e.chr_name == chr)
     }
 }
 
@@ -22370,6 +22522,7 @@ fn online_find_for_kick(
     account: &str,
     session_id: i32,
 ) -> Vec<OnlineEntry> {
+    perf_counters::bump_by(&perf_counters::KICK_SCANS, online.len() as u64);
     let matched =
         |e: &OnlineEntry| e.account.eq_ignore_ascii_case(account) || e.session_id == session_id;
     let mut targets: Vec<OnlineEntry> = Vec::new();
@@ -22444,7 +22597,7 @@ fn send_guild_notices(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     for (actor_id, body) in notices {
-        let Some(t) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(t) = online.find_linear_actor(*actor_id) else {
             glog!(
                 "WRN",
                 "行会 104：ActorId={actor_id} 不在在线登记表 ⇒ 丢弃（收件人解析时还在，帧序中离开）"
@@ -23468,7 +23621,7 @@ fn apply_pending_gm_target_ops(
                 // 390-394/407-414/423-428 的完整建模），不另写收件人条件。
                 // **T-287 残余 #11**：GM 复活的 RM_ALIVE 同走缓存（sender = 被复活者）。
                 for rid in ref_msg_cache::targets(world, id, send_ref_range) {
-                    let Some(e) = online.iter().find(|e| e.actor_id == rid) else {
+                    let Some(e) = online.find_linear_actor(rid) else {
                         continue;
                     };
                     if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "GM 复活 SM_ALIVE")
@@ -23764,7 +23917,7 @@ fn apply_pending_gm_target_ops(
                 let status = world.get_char_status(tid);
                 // `Series` 源 = **实体**（重算后已镜像，见上方注释）。
                 let hit_speed = world.entities.get(tid).map_or(0, |e| e.hit_speed);
-                if let Some(entry) = online.iter().find(|e| e.actor_id == tid) {
+                if let Some(entry) = online.find_linear_actor(tid) {
                     if let Some(tx) =
                         route_to_gate(gates, entry.gate_idx, entry.socket, "GM 删技能 657 自见")
                     {
@@ -24014,7 +24167,7 @@ fn apply_pending_gm_m_commands(
     if spawn.is_none() && make.is_none() && mine.is_none() {
         return;
     }
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name).cloned() else {
+    let Some(entry) = online.find_linear_chr(chr_name).cloned() else {
         glog!(
             "WRN",
             "M 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃刷怪/造物请求"
@@ -24524,7 +24677,7 @@ fn apply_pending_gm_guild_commands(
     if add.is_none() && del.is_none() && end.is_none() {
         return;
     }
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name).cloned() else {
+    let Some(entry) = online.find_linear_chr(chr_name).cloned() else {
         glog!("WRN", "W 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃");
         return;
     };
@@ -24639,7 +24792,7 @@ fn apply_pending_gm_guild_commands(
                     smframe::sm_username(entry.actor_id, display.name_color, &display.show_name);
                 // **T-287 残余 #12**：GM 退出门派的 RefShowName(42) 同走缓存（sender = 出门派者）。
                 for recipient in ref_msg_cache::targets(world, entry.actor_id, ref_range) {
-                    let Some(t) = online.iter().find(|e| e.actor_id == recipient) else {
+                    let Some(t) = online.find_linear_actor(recipient) else {
                         continue;
                     };
                     if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "GM 退出门派 42")
@@ -24736,7 +24889,7 @@ fn drain_script_gm_pendings(
         online,
         gates,
     ) {
-        if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+        if let Some(e) = online.find_linear_chr(chr_name) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 改属性 SM_UPDATEITEM")
             {
@@ -24751,7 +24904,7 @@ fn drain_script_gm_pendings(
     if let Some((target, body)) =
         apply_pending_gm_clear_bag(ground_sessions, chr_name, &enter_cfg.catalog)
     {
-        if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+        if let Some(e) = online.find_linear_chr(&target) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 清理垃圾 SM_DELITEMS")
             {
@@ -24787,7 +24940,7 @@ fn drain_script_gm_pendings(
         .get_mut(chr_name)
         .and_then(|sg| sg.gm.pending_reconnect.take())
     {
-        if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+        if let Some(e) = online.find_linear_chr(chr_name) {
             reconnect_pending.push(ReconnectPending {
                 gate_idx: e.gate_idx,
                 socket: e.socket,
@@ -25041,7 +25194,7 @@ fn execute_admin_gm_command(
         // oracle `PlayObject.Chat.cs:372-400` 的回落第二条；`Permission` 读执行当下的 10。
         texts.push(gmcmd::incorrect_msg(ADMIN_GM_PERMISSION, cmd));
     }
-    if let Some(e) = online.iter().find(|e| e.chr_name == chr) {
+    if let Some(e) = online.find_linear_chr(chr) {
         for msg in &result.msgs {
             let (f, b) = match msg.color {
                 gmcmd::GmColor::Red => (colors.red_f, colors.red_b),
@@ -25293,7 +25446,7 @@ fn switch_data_send_change_server(
     server_table: &[RouteInfo],
     pending: &mut Vec<ReconnectPending>,
 ) {
-    let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
+    let Some(entry) = online.find_linear_chr(name) else {
         glog!(
             "WRN",
             "换服：ChrName={name} 不在在线登记表 ⇒ SendChangeServer 跳过（登记）"
@@ -25993,7 +26146,7 @@ fn drain_monster_ref_msgs(
             let frames =
                 downlink::turn_pair_nameless(m.actor_id, wire_coord(m.x), wire_coord(m.y), &d);
             for target_id in &m.recipients {
-                let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                let Some(t) = online.find_linear_actor(*target_id) else {
                     continue;
                 };
                 let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "城堡结构转向帧下行")
@@ -26019,7 +26172,7 @@ fn drain_monster_ref_msgs(
         // `send_ref_msg` 在发帧时刻快照（怪物 sender ⇒ 只有 `Race == Play` 的格扫命中项）。
         if m.ident == mir2_world_bevy::monai::RM_CHARSTATUSCHANGED {
             for target_id in &m.recipients {
-                let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+                let Some(t) = online.find_linear_actor(*target_id) else {
                     continue;
                 };
                 let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "657 怪物状态帧下行")
@@ -26215,7 +26368,7 @@ fn drain_monster_ref_msgs(
             if drop_self && *target_id == m.actor_id {
                 continue;
             }
-            let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
+            let Some(t) = online.find_linear_actor(*target_id) else {
                 continue;
             };
             let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "怪物参照帧下行")
@@ -26330,7 +26483,7 @@ fn drain_player_need_recheck_with_magic(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+        let Some(entry) = online.find_linear_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
@@ -26522,7 +26675,7 @@ fn drain_player_need_recheck_with_magic(
         // oracle `SendUpdateMsg`（`BaseObject.Message.cs:283-304`）的 `TryPeek` 不前进、循环把队首
         // 连续的 657 全部弹掉再入 1 ⇒ 队列空场景下 N 件之后自见仍净 1（不是 N）。
         if let Some((status, hit_speed)) = take_char_status.last() {
-            if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+            if let Some(e) = online.find_linear_actor(actor_id) {
                 let body =
                     game_svr::smframe_ext::sm_charstatuschanged(actor_id, *status, *hit_speed);
                 if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "657(P21 装备复检)")
@@ -26884,7 +27037,7 @@ fn flush_run_frames(
         let Some(sg) = sessions.values().find(|s| s.actor_id == actor_id) else {
             continue;
         };
-        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
+        let Some(entry) = online.find_linear_actor(actor_id) else {
             glog!(
                 "WRN",
                 "G-B 帧：actor={actor_id} 无在线网关坐标 ⇒ 不回帧（登记）"
@@ -26929,7 +27082,7 @@ fn flush_run_frames(
                 if target_id == actor_id {
                     continue;
                 }
-                let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                let Some(t) = online.find_linear_actor(target_id) else {
                     continue;
                 };
                 if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "G-B 健康变化广播")
@@ -27056,7 +27209,7 @@ fn drain_player_game_gold(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+        let Some(entry) = online.find_linear_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
@@ -27264,7 +27417,7 @@ fn drain_player_revival_with_magic(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.iter().find(|e| e.chr_name == name).cloned() else {
+        let Some(entry) = online.find_linear_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
@@ -27720,7 +27873,7 @@ fn drain_run_state_expiries(
     // `MessageSettings.SpiritsGone` = "召唤烈火结束!!!"（GBK 15B）。
     const SPIRITS_GONE_GBK: &[u8] = b"\xd5\xd9\xbb\xbd\xc1\xd2\xbb\xf0\xbd\xe1\xca\xf8!!!";
     for (actor_id, ev) in &rec.run_state_expiries {
-        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+        let Some(entry) = online.find_linear_actor(*actor_id) else {
             continue;
         };
         let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "Run 状态到期帧")
@@ -28463,6 +28616,12 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // 容量线探针（默认关闭；设计 docs/issues/online-probe-design-20261121.md）。
+    // fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0，不静默跑一个"没探针"的进程。
+    if let Err(e) = perf_counters::init_from_env() {
+        glog!("ERR", "{e}");
+        std::process::exit(2);
+    }
     // 卡 `openmir2-changemap-missing-serverconfig` §10：`client_conf` 的进程级一次性安装
     // （唯一生产写入点；`GameSvrConf` 单源只读）。
     install_client_conf(
@@ -29844,6 +30003,11 @@ fn sim_loop(
                 eprintln!("{line}");
             }
             let _ = shutdown_done_tx.send(summary);
+            // 探针收尾（fail-closed）：启用却 0 个 tick 行 ⇒ rc≠0；硬杀进程无法验证，已在设计里写明。
+            if let Err(e) = perf_counters::finish() {
+                glog!("ERR", "{e}");
+                std::process::exit(2);
+            }
             return;
         }
         host_prof.end("HostShutdown", t);
@@ -29985,7 +30149,7 @@ fn sim_loop(
                             &online,
                             &gates,
                         ) {
-                            if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+                            if let Some(e) = online.find_linear_chr(&chr_name) {
                                 if let Some(tx) = route_to_gate(
                                     &gates,
                                     e.gate_idx,
@@ -30006,7 +30170,7 @@ fn sim_loop(
                             &chr_name,
                             &enter_cfg.catalog,
                         ) {
-                            if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+                            if let Some(e) = online.find_linear_chr(&target) {
                                 if let Some(tx) = route_to_gate(
                                     &gates,
                                     e.gate_idx,
@@ -30055,7 +30219,7 @@ fn sim_loop(
                                 .get_mut(&chr_name)
                                 .and_then(|sg| sg.gm.pending_reconnect.take())
                             {
-                                if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+                                if let Some(e) = online.find_linear_chr(&chr_name) {
                                     reconnect_pending.push(ReconnectPending {
                                         gate_idx: e.gate_idx,
                                         socket: e.socket,
@@ -30139,7 +30303,7 @@ fn sim_loop(
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
-                            if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+                            if let Some(e) = online.find_linear_chr(&chr_name) {
                                 for (f, b, text) in &gm_deferred {
                                     send_gm_sysmsg(&gates, e, *f, *b, text);
                                 }
@@ -30998,7 +31162,7 @@ fn sim_loop(
                                 for ev in world.party_del_member(owner, aid, &party_cfg) {
                                     let (to, body) = partywire::event_body(&ev)
                                         .expect("断线退组路径不含 GotoLabel（无脚本触发）");
-                                    let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+                                    let Some(t) = online.find_linear_actor(to) else {
                                         continue;
                                     };
                                     let Some(tx) =
@@ -32690,7 +32854,7 @@ fn sim_loop(
             &online,
             &gates,
         ) {
-            if let Some(e) = online.iter().find(|e| e.actor_id == actor_id) {
+            if let Some(e) = online.find_linear_actor(actor_id) {
                 if let Some(tx) =
                     route_to_gate(&gates, e.gate_idx, e.socket, "GM 改属性 SM_UPDATEITEM")
                 {
@@ -32706,7 +32870,7 @@ fn sim_loop(
         // 清的是**目标**的背包、709 发给**目标**（oracle 命令体内当场发）。
         for (target, body) in collect_gm_clear_bag_pending(&mut ground_sessions, &enter_cfg.catalog)
         {
-            if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+            if let Some(e) = online.find_linear_chr(&target) {
                 if let Some(tx) =
                     route_to_gate(&gates, e.gate_idx, e.socket, "GM 清理垃圾 SM_DELITEMS")
                 {
@@ -33040,7 +33204,7 @@ fn sim_loop(
                         actor_id,
                         in_guild_war_area,
                     } => {
-                        let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) else {
+                        let Some(entry) = online.find_linear_actor(actor_id) else {
                             continue;
                         };
                         let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
@@ -33525,6 +33689,8 @@ fn sim_loop(
                 tick_profile::log_window(&window, delta.as_ref(), world.entities.len());
             }
         }
+        // 探针：每 tick 尾落一行（关闭态零分配；见 perf_counters::write_tick）。
+        perf_counters::write_tick();
     }
 }
 
@@ -55464,6 +55630,57 @@ break
         assert_eq!(online.by_chr, by_chr_before, "by_chr 不得被改动");
     }
 
+    /// **探针 fail-closed**：`MIR2_PERF_COUNTERS` 设了但一个 tick 行都没写 ⇒ `finish()` Err
+    /// （`sim_loop` 把它转成 rc≠0）；写一条后 Ok。默认关闭时 `bump` 必须是纯 no-op。
+    #[test]
+    fn perf_counters_fail_closed_and_disabled_noop() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::sync::atomic::Ordering;
+
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!("d8_perf_counters_{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+
+        // 1) 默认关闭：bump 是 no-op（不分配、不加计数）。
+        let before = crate::perf_counters::ACTOR_INDEXED.load(Ordering::Relaxed);
+        crate::perf_counters::bump(&crate::perf_counters::ACTOR_INDEXED);
+        assert_eq!(
+            before,
+            crate::perf_counters::ACTOR_INDEXED.load(Ordering::Relaxed),
+            "关闭态 bump 必须 no-op"
+        );
+
+        // 2) 打不开的路径 ⇒ Err（启动 fail-closed 的来源）。
+        let bad = dir.join("d8_probe_no_such_dir").join("x.tsv");
+        assert!(
+            crate::perf_counters::init_with_path(&bad).is_err(),
+            "不可写路径必须报错"
+        );
+
+        // 3) env 设了但 0 tick 行 ⇒ finish Err（rc≠0 的来源）。
+        std::env::set_var("MIR2_PERF_COUNTERS", &p);
+        assert!(
+            crate::perf_counters::init_from_env().expect("env 路径可建"),
+            "env 设了应启用"
+        );
+        let err = crate::perf_counters::finish().expect_err("0 tick 行必须 fail-closed");
+        assert!(
+            err.contains("0 个 tick 行"),
+            "错误必须点名 fail-closed：{err}"
+        );
+
+        // 4) 写一条 tick ⇒ Ok；文件 = 表头 + 1 行。
+        crate::perf_counters::write_tick();
+        crate::perf_counters::finish().expect("有 tick 行应通过");
+        let text = std::fs::read_to_string(&p).expect("探针文件可读");
+        assert_eq!(text.lines().count(), 2, "表头 + 1 行 tick：{text:?}");
+
+        std::env::remove_var("MIR2_PERF_COUNTERS");
+        crate::perf_counters::reset_for_tests();
+        let _ = std::fs::remove_file(&p);
+    }
+
     /// **MP-1 微基准（算法级证据，不是端到端收益）**：`OnlineRegistry` 线性查找 vs 旁挂索引。
     ///
     /// 只测「单次查找」的复杂度：n ∈ {986, 2800}、命中/未命中各半、各 1e5 次查找，median-3。
@@ -55511,6 +55728,14 @@ break
             t.elapsed().as_nanos()
         }
 
+        // 探针开销 A/B：`MIR2_PERF_COUNTERS` 设了就在测量期间启用（只影响本次 ignored 测试）。
+        let probe_on = std::env::var("MIR2_PERF_COUNTERS")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        if probe_on {
+            crate::perf_counters::init_from_env().expect("探针启用失败");
+            println!("# PROBE_ENABLED=1（本次 ns 含计数开销）");
+        }
         println!("# online_lookup_micro iters={ITERS}（命中/未命中各半）repeats={REPEATS}");
         let mut failures: Vec<String> = Vec::new();
         for &n in &[986usize, 2_800usize] {
@@ -55608,6 +55833,43 @@ break
             failures.is_empty(),
             "索引臂未达到 ≥{MIN_SPEEDUP}x（结构改了但没吃上索引？）：\n{}",
             failures.join("\n")
+        );
+        if probe_on {
+            crate::perf_counters::reset_for_tests();
+        }
+    }
+
+    /// **探针自身开销**：`write_tick` 关闭态 vs 启用态（启用 = format + 写一行到文件）。
+    /// 只在 `MIR2_PERF_MICRO=1` 时跑；输出 ns/tick。
+    #[test]
+    #[ignore = "微基准：需 MIR2_PERF_MICRO=1 + --ignored --nocapture"]
+    fn perf_counters_write_tick_cost() {
+        use std::hint::black_box;
+
+        if std::env::var("MIR2_PERF_MICRO").ok().as_deref() != Some("1") {
+            eprintln!("MIR2_PERF_MICRO != 1 不跑微基准");
+            return;
+        }
+        // 关闭态：1e6 次（每次 = 一次原子读 + 分支）。
+        let t = std::time::Instant::now();
+        for _ in 0..1_000_000u32 {
+            crate::perf_counters::write_tick();
+            black_box(());
+        }
+        let off_ns = t.elapsed().as_nanos() as f64 / 1_000_000.0;
+        // 启用态：1e4 次真实写入（含 format + write_all）。
+        let p = std::env::temp_dir().join(format!("d8_write_tick_cost_{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        crate::perf_counters::init_with_path(&p).expect("探针文件可建");
+        let t = std::time::Instant::now();
+        for _ in 0..10_000u32 {
+            crate::perf_counters::write_tick();
+        }
+        let on_ns = t.elapsed().as_nanos() as f64 / 10_000.0;
+        crate::perf_counters::reset_for_tests();
+        let _ = std::fs::remove_file(&p);
+        println!(
+            "# write_tick disabled={off_ns:.2} ns/call enabled={on_ns:.0} ns/call（1 行/tick）"
         );
     }
 
@@ -103279,7 +103541,7 @@ GMEXECUTE f
                 if target == *walker {
                     continue;
                 }
-                if let Some(t) = online.iter().find(|e| e.actor_id == target) {
+                if let Some(t) = online.find_linear_actor(target) {
                     want.push((t.socket, *walker));
                 }
             }

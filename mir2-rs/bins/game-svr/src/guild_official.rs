@@ -344,7 +344,7 @@ fn flush(
             heap.enqueue(f, f.priority);
         }
         while let Some(f) = heap.dequeue() {
-            let Some(t) = online.iter().find(|e| e.actor_id == f.actor_id) else {
+            let Some(t) = online.find_linear_actor(f.actor_id) else {
                 glog!(
                     "WRN",
                     "行会 NPC 回帧：ActorId={} 不在在线登记表 ⇒ 丢弃 pri={}",
@@ -489,7 +489,7 @@ pub(crate) fn handle_select(
     now_tick: i32,
     script: &mut dyn FixedNpcScript,
 ) -> bool {
-    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+    let Some(entry) = online.find_linear_chr(chr_name) else {
         glog!(
             "WRN",
             "NPC 对话：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
