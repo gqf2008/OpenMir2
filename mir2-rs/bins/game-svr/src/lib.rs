@@ -19532,12 +19532,16 @@ fn drain_aoi_downlink(
                 // **L2-4 段 6b**：生产不记账（`None`）；N=2 用例按帧记账。kind 取帧头 ident。
                 if let Some(ledger) = ledger.as_deref_mut() {
                     debug_assert!(body.len() >= COMMAND_MESSAGE_SIZE, "SM_* 至少 12B 头");
+                    // `OnlineEntry.gate_idx` 是 i32（路由表口径），来源是 `gate_conn` 的
+                    // `service_id: u8` ⇒ 转换恒成功；失败说明线号被别处写坏，直接炸出来。
+                    let line =
+                        u8::try_from(entry.gate_idx).expect("网关线号必须来自 u8 的 service_id");
                     ledger.note(
                         target.id,
                         target.map_id,
                         target.x,
                         target.y,
-                        entry.gate_idx,
+                        line,
                         entry.socket,
                         u16::from_le_bytes([body[4], body[5]]),
                     );
@@ -117166,7 +117170,7 @@ mod l2_multi_zone_ledger_tests {
 
     fn build_zone_rig(
         line: u8,
-        players: &[(&str, i32, i32)],
+        players: &[(&str, i32, i32, i32)],
         monsters: &[(i32, &str, i32, i32)],
     ) -> ZoneRig {
         let mut world = World::with_maps(vec![(20, 10)]);
@@ -117194,7 +117198,7 @@ mod l2_multi_zone_ledger_tests {
                 account: name.to_string(),
                 chr_name: name.to_string(),
                 session_id: eid,
-                gate_idx: line,
+                gate_idx: i32::from(line),
                 socket,
                 actor_id: eid,
             });
@@ -117204,8 +117208,9 @@ mod l2_multi_zone_ledger_tests {
             sg.recovery = game_svr::recover::Recovery::new(now_ms());
             sessions.insert(name.to_string(), sg);
         }
-        // 一次 tick 处理 `Enter`（落格），与基线/拆区的时钟起点对齐。
-        let _ = world.tick();
+        // **不在这里 tick**：`World` 的 owner 线程在**首个 tick** 上钉死（`tick_head` 断言），
+        // 而拆区的 World 要移到区线程里 tick ⇒ 构建期 tick 会让区线程撞「同一线程」断言。
+        // Enter 由各侧的第一个正式 tick 处理；基线与拆区都从「未 tick 过」的时钟起点出发。
         ZoneRig {
             world,
             displays,
@@ -117473,10 +117478,16 @@ mod l2_multi_zone_ledger_tests {
     }
 
     /// **可见集合（halo 合成）**：观察者在区 0 的边界带内、`eb` 在区 1 的边界带内（相距 3 格
-    /// ⇒ 单区基线里可见）。拆区后 O 的可见集合 = 本区 AOI ∪ 邻区 halo 快照（≤ view_range）
-    /// 必须与基线逐 tick 相同。
+    /// ⇒ 单区基线里可见）。拆区后 O 的可见集合 = 本区 AOI ∪ **邻区本 tick** 的 halo 快照
+    /// （≤ view_range）必须与基线逐 tick 相同。
     ///
-    /// 红检：`ZoneRuntime::after_phase1` 不读邻居（或读错区）⇒ 本用例红。
+    /// **「本 tick」由 API 保证、不是约定**：`ZoneRuntime::after_phase1` 在 `barrier1` **之后**
+    /// 读邻居，`HaloExchange::read` 对槽里是**别的 tick**（上一 tick 的陈旧镜像）返回 `None` ⇒
+    /// `ZoneTickError::StaleNeighbor`，本用例的 `.expect` 会当场炸——与 L2-3 陈旧镜像牙
+    /// （`tests/l2_two_zone.rs::stale_mirror_must_differ_from_baseline_after_the_move`）同款前提。
+    ///
+    /// 红检：`ZoneRuntime::after_phase1` 不读邻居（或读错区）⇒ 本用例红；
+    /// 改成 barrier1 **之前**取快照 ⇒ `StaleNeighbor` 直接炸（不是静默旧值）。
     #[test]
     fn two_zone_halo_visible_set_matches_single_zone_baseline() {
         const TICKS: u64 = 3;
