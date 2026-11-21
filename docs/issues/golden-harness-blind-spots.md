@@ -23,6 +23,7 @@
 | B13 | **`RecordingNetChannel` 只记两条入队口**：`AddGateBuffer`/`AddGameGateQueue`（`Program.cs` 的 `RecordingNetChannel` 入队口）；`Send/Close/Kick` 等为空实现（同文件 `:3353` 起） | 非 `SendSocket`/`SendDefMessage` 通道的帧 | 不进 `Buffers` ⇒ **不可见** | 经相应通道真正下行 | 走这些通道的任何帧（现网 magic 面不涉，属结构性限制） |
 | B14 | **`ObMode`/`FixedHideMode` 需每支显式复位**：装置只在「正常玩家」处显式置 false（`Program.cs` 启动段的 `FixedHideMode=false` 与 `:2408`） | 新增 case 忘记复位（ctor 可能为 true） | 同样命中"只发自己"支 ⇒ **旁观者零帧** | 登录后复位 | 新支的旁观者帧（与 B3 同源，但成因是"忘记复位"） |
 | B15 | **等级门判据的夹具灵敏度极低**（16 圣言术/`holyshield`）：`cast_holy_curtain_spell` 的等级门 `draw + (caster_level - 1) > obj.level`（`mir2-rs/crates/world-bevy/src/world.rs`） | 任何**小幅度**修改该门的变异 | 判据 `draw + (caster_level - 1) > obj.level`，`draw = Random(4) ∈ [0,3]`；本 case 怪 `level=200`、caster 30 ⇒ 最坏 `draw=0` 时需 `caster_level ≥ 202`（**至少 +172** 才可能翻转）⇒ +1/+50 之类的小幅度变异**结构性不可观测** | 等级门决定 `RM_MAKEHOLYSEIZEMODE` 是否下发 | **本 case 的真因就是等级门**（`master=0`、目标格 objects 非空——原“master 门/objects 为空”归因**错误**，由 `bd` 于 2026-11-21 复核纠正）；**决定性变异可红**：删等级比较 （`if obj.master.is_none()`）⇒ 驱动与比较器双层红（见 MG-23 scope）。**纪律**：判“不可观测”前先用公式算出最小翻转幅度；算不出/没试到就只能写“已试幅度与所需幅度” |
+| B16 | **魔表口径：装置用零值 `MagicInfo`，部署魔表未覆盖**：C# `MagicGolden/Program.cs` 的 `new OpenMir2.Data.MagicInfo { MagicId, MagicName, Effect, EffectType }`（其余字段默认 0）；Rust `fireball_rig` 同 `..mir2_data::MagicInfo::default()` | 任何读 `TrainLv`/`DefPower`/`DefMaxPower` 的魔号（`GetPower13`/`GetPower` 等） | 装置侧 `TrainLv=0`、`DefPower=DefMaxPower=0`，与部署口径「`src/GameSrv/DB/MySqlDB.cs` 的 `LoadMagicDB` 恒置 `TrainLv=3`、`sql/mir2_data.sql` MagID 48 行 `DefPower=4/DefMaxPower=4`」**不同源**；同一参数代入：**装置口径 P(30)=80（golden 值）、部署口径 P(30)≈54** | 部署魔表实数下的取整/阈值/倍率分支 | **部署口径下的行为**：凡读这三个字段的魔号，「两侧一致」只在**零值口径**下成立 |
 
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
@@ -34,7 +35,7 @@
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
-1. **先查本卡 15 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11？
+1. **先查本卡 16 条盲区**：该帧的发送者/目标是否 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16？
 2. **再查队列模型**：`docs/issues/openmir2-refmsg-queue-model.md`（oracle 全入队 vs Rust 直发 ⇒ 跨 actor 次序/可见面的系统性差异）。
 3. **再查比较器是否把它滤掉了**：`keep` / `sent_filter` / `sent_filter_sinsu` 白名单、`frame_order_scope` 放宽、`due` 容差——**先确认这条帧在判据面内**。
 4. **最后才判产品缺陷**（并按 §1 的 R/L 分级与 §3 的牙要求取证）。
@@ -43,7 +44,7 @@
 
 ## 4. 使用法
 
-1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11？"
+1. 看到「Rust 少帧/少抽」时，先按上表逐行问："该帧的发送者/目标是不是 B1/B2/B3/B5 的对象？是否依赖 B4/B6/B7/B8/B9/B10/B11/B16？"
 2. 命中盲区 ⇒ 记为**装置限制**（进 scope 或登记卡），**不要**当成产品缺陷去改实现。
 3. 需要把盲区变可见时，改装置的方向（另开卡）：替身怪绑定 `Envir`+`ActorMgr`+`AddMapObject`；对被动怪实现最小 `Operate`；克隆体复位 `FixedHideMode` 并把其队列纳入排水；对 `VisibleActors` 按 AOI 回填；显式装载 `ServerConf`；跑必要 tick 的 `Run`。
 
@@ -65,6 +66,7 @@
 | B12 RNG 单例覆盖 | `docs/issues/openmir2-golden-fixture-drift.md`、`docs/issues/openmir2-magic-parity.md` |
 | B13 `RecordingNetChannel` 覆盖 | `docs/issues/openmir2-magic-parity.md`、`docs/issues/magic-52-clientxy-explicit-case.md` |
 | B14 `ObMode`/`FixedHideMode` 待复位 | `docs/issues/notes-comments-that-lie-20261121.md`、`docs/issues/openmir2-hidden-npc-world-entities.md` |
+| B16 魔表零值口径 | 无（本卡新立）；影响面见 `docs/issues/parity-gap-magic.json` 的 MG-65 `scope` |
 
 ## 6. 关联
 
