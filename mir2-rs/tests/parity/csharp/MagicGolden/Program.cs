@@ -1296,7 +1296,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         if (packLength < 0)
         {
             string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
-            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, due_ms_rel = due, tail = action });
+            list.Add(new { ident = 0, recog = 0, param = 0, tag = 0, series = 0, tail = action });
             continue;
         }
         int off = ServerMessage.PacketSize;
@@ -1309,7 +1309,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data, long Due
         string tail = data.Length > off + 12
             ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
             : "";
-        list.Add(new { ident, recog, param, tag, series, due_ms_rel = due, tail });
+        list.Add(new { ident, recog, param, tag, series, tail });
     }
     return list;
 }
@@ -3616,7 +3616,6 @@ private static int ReadInstanceInt(object obj, string fieldName)
                         param = (int)f.param,
                         tag = (int)f.tag,
                         series = (int)f.series,
-                        due_ms_rel = f.due,
                         tail = f.tail,
                     })
                     .ToList();
