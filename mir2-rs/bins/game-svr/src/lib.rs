@@ -888,6 +888,29 @@ async fn startup_db_load_blocking<T: Send + 'static>(
 /// 同源）。区边界快照 = 距本区 span 边界 ≤ 该宽度的已落格实体。
 const ZONE_HALO_WIDTH: i32 = 12;
 
+/// **L2-5 ①**：区数上限——`(zone_count - 1) * ACTOR_ID_SEGMENT` 必须装进 `i32` ⇒ 最多 512 区。
+///
+/// 与 [`zone_id_base`] 同一约束；超限在启动门（[`zone_wiring::plan_zone_mode`]）拒绝，
+/// 不等到区线程里 `checked_mul` panic。
+const MAX_ZONE_COUNT: usize = (i32::MAX / shard::ACTOR_ID_SEGMENT) as usize + 1;
+
+/// **L2-5 ①**：区 `zone` 的 `ActorId` 段基址（下一个 id = base + 1）。
+///
+/// 区 0 ⇒ 0（首个 id 仍为 1，与原路径相同）；区 k ⇒ `k * ACTOR_ID_SEGMENT` ⇒ 任意两区的
+/// actor id 集合不相交（出现帧 `recog` 不会撞车）。段长与分片共用：`MIR2_ZONES` 与
+/// `MIR2_SHARDS>1` 互斥 ⇒ 两套基址不会同时出现；将来放开「区×片」二维队列时必须改成
+/// `(shard, zone)` 二维编码（登记于 `docs/issues/l2-5-zone-ownership-plan-20261122.md`）。
+///
+/// # Panics
+/// 区号超 [`MAX_ZONE_COUNT`]（启动门已拒绝，出现即程序错误）。
+#[must_use]
+fn zone_id_base(zone: zone::ZoneId) -> i32 {
+    let index = i32::try_from(zone.get()).expect("区号 <= u32::MAX");
+    index
+        .checked_mul(shard::ACTOR_ID_SEGMENT)
+        .expect("区号超上限（启动门已按 MAX_ZONE_COUNT 拒绝）")
+}
+
 /// **L2-4 段 6a**：多区生产装配的共享句柄（`MIR2_ZONES` 未设 ⇒ 上层拿 `None`，N=1 原单线程
 /// 路径逐字节不变）。
 struct ZoneHost {
@@ -994,6 +1017,15 @@ mod zone_wiring {
                 "{}={raw} 只解析出 {} 个区：单区请不设该变量（N=1 走原单线程路径），多区必须 ≥2 区",
                 zone::ENV_ZONES,
                 layout.zone_count()
+            ));
+        }
+        if layout.zone_count() > crate::MAX_ZONE_COUNT {
+            return Err(format!(
+                "{}={raw} 解析出 {} 个区，超过上限 {}（ActorId 段 {} 的 i32 约束 ⇒ 两区 id 会重叠）",
+                zone::ENV_ZONES,
+                layout.zone_count(),
+                crate::MAX_ZONE_COUNT,
+                shard::ACTOR_ID_SEGMENT
             ));
         }
         Ok(Some(ZoneMode {
@@ -1189,6 +1221,8 @@ fn spawn_minimal_zone(
         .name(format!("m2-zone-{}", zone_id.get()))
         .spawn(move || {
             let mut world = mir2_world_bevy::World::with_maps(vec![(1, 1); map_count]);
+            // **L2-5 ①**：本区独立 actor id 段（与区 0 及彼此不相交；须在首个实体之前）。
+            world.set_id_base(zone_id_base(zone_id));
             let mut tick = 0u64;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 while rx.try_recv().is_ok() {}
@@ -29525,6 +29559,16 @@ fn sim_loop(
     if shard_count > 1 {
         let base = i32::from(local_shard.get()) * shard::ACTOR_ID_SEGMENT;
         world.set_id_base(base);
+    }
+    // **L2-5 ①**：多区时每区独立 actor id 段（跨区 ActorId 全进程唯一 ⇒ 出现帧 `recog` 不撞车）。
+    // 区 0 的基址 = 0（首个 id 仍是 1，与 N=1 相同）；区 1.. 在 [`spawn_minimal_zone`] 里设。
+    // `MIR2_ZONES` 未设 ⇒ 不调用（N=1 逐字节不变）；必须在任何 id 分配/实体装载之前。
+    if zone_host.is_some() {
+        debug_assert_eq!(
+            shard_count, 1,
+            "多区与多片互斥（zone_wiring::plan_zone_mode 已拒绝并存）"
+        );
+        world.set_id_base(zone_id_base(zone_router::HOST_ZONE));
     }
     // 容量线探针（默认关闭；设计 docs/issues/online-probe-design-20261121.md）。
     // fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0，不静默跑一个"没探针"的进程。
@@ -117565,6 +117609,110 @@ mod l2_multi_zone_ledger_tests {
         assert_eq!(
             split, baseline,
             "拆区（本区 + halo）可见集合必须与单区基线逐 tick 相同"
+        );
+    }
+}
+
+#[cfg(test)]
+mod l2_zone_id_base_tests {
+    //! **L2-5 ①**：每区 `ActorId` 段的构造级用例——**任意两区 id 集合不相交**、
+    //! 区 0 仍从 1 起（N=1 语义不变）、区数上限在启动门拒绝。
+
+    use super::*;
+    use crate::zone_wiring::plan_zone_mode;
+    use mir2_world_bevy::{EntitySpawn, World};
+
+    fn zone(n: u32) -> zone::ZoneId {
+        zone::ZoneId::new(n)
+    }
+
+    /// **线性与零偏移**：区 0 基址 = 0（首个 id 仍是 1 ⇒ N=1 语义不变）；区 k = k * 段长。
+    ///
+    /// 红检：把 `zone_id_base` 改成恒 0（或不乘段长）⇒ 第二、三条断言红。
+    #[test]
+    fn zone_id_base_is_zero_for_zone_zero_and_linear() {
+        assert_eq!(
+            zone_id_base(zone(0)),
+            0,
+            "区 0 不得有偏移（N=1 首个 id 仍为 1）"
+        );
+        assert_eq!(zone_id_base(zone(1)), shard::ACTOR_ID_SEGMENT);
+        assert_eq!(zone_id_base(zone(2)), 2 * shard::ACTOR_ID_SEGMENT);
+        for z in 1..8u32 {
+            assert!(
+                zone_id_base(zone(z + 1)) > zone_id_base(zone(z)),
+                "段基址必须严格递增（z={z}）"
+            );
+        }
+    }
+
+    /// **两区 id 集合不相交**（第②步镜像/出现帧的前提：`recog` 不得撞车）。
+    ///
+    /// 红检：删掉任一 `World` 的 `set_id_base` 调用 ⇒ 两区都从 1 分配 ⇒ 交集非空、本用例红。
+    #[test]
+    fn two_zones_allocate_disjoint_actor_ids() {
+        let mut zone0 = World::with_maps(vec![(8, 8)]);
+        let mut zone1 = World::with_maps(vec![(8, 8)]);
+        zone0.set_id_base(zone_id_base(zone(0)));
+        zone1.set_id_base(zone_id_base(zone(1)));
+        let mut ids0 = Vec::new();
+        let mut ids1 = Vec::new();
+        for i in 0..3 {
+            ids0.push(zone0.add_entity(EntitySpawn::new(0, format!("a{i}"), i, 0)));
+            ids1.push(zone1.add_entity(EntitySpawn::new(0, format!("b{i}"), i, 0)));
+        }
+        // 退化形态：区 0 仍从 1 起（N=1 语义）；区 1 从 段长+1 起。
+        assert_eq!(ids0, vec![1, 2, 3], "区 0 首个 id 必须仍是 1");
+        assert_eq!(
+            ids1,
+            vec![
+                shard::ACTOR_ID_SEGMENT + 1,
+                shard::ACTOR_ID_SEGMENT + 2,
+                shard::ACTOR_ID_SEGMENT + 3
+            ],
+            "区 1 从段基址之后分配"
+        );
+        let set0: std::collections::BTreeSet<i32> = ids0.iter().copied().collect();
+        let set1: std::collections::BTreeSet<i32> = ids1.iter().copied().collect();
+        assert!(set0.is_disjoint(&set1), "两区 actor id 集合必须不相交");
+    }
+
+    /// **区数上限**：512 区可装配、513 区在启动门拒绝（`zone * 段长` 不得溢出 i32）。
+    ///
+    /// 红检：删掉 `plan_zone_mode` 的上限检查 ⇒ 513 用例红（返回 `Ok` 而非 `Err`）。
+    #[test]
+    fn zone_count_above_the_id_segment_bound_is_rejected_at_startup() {
+        fn wide_raw(count: usize) -> String {
+            (0..count)
+                .map(|i| format!("{i}:0={i},0-{i},0"))
+                .collect::<Vec<_>>()
+                .join(";")
+        }
+        let names = vec!["0".to_string()];
+        let at_bound = plan_zone_mode(
+            true,
+            Some(&wide_raw(MAX_ZONE_COUNT)),
+            Some(&names),
+            &[(i32::try_from(MAX_ZONE_COUNT).expect("上限装进 i32"), 1)],
+            None,
+        )
+        .expect("512 区在段容量内");
+        assert!(at_bound.is_some(), "上限内必须装配");
+
+        let over = MAX_ZONE_COUNT + 1;
+        let err = plan_zone_mode(
+            true,
+            Some(&wide_raw(over)),
+            Some(&names),
+            &[(i32::try_from(over).expect("513 装进 i32"), 1)],
+            None,
+        )
+        .err()
+        .expect("513 区必须拒绝");
+        assert!(err.contains("上限"), "错误文本必须点名上限：{err}");
+        assert!(
+            err.contains(&MAX_ZONE_COUNT.to_string()),
+            "错误文本必须带上限值：{err}"
         );
     }
 }
