@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "51b71a60286ffae1f28a093ab6bf4c30de99f5b3",
-    "time": "2026-11-20T23:38:47+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。；MG-41 升格（SKILL_SINSU/30，summon_ok，scope=partial），magic 域 verified 33→34（本域 65 条），2026-11-20；**合并提交 M 号 / counting_moment.head 由 opc-19 合并时回填**（本笔仅改条目与计数，head 待并合提交确定）。；MG-41 升格合并提交 fe47cb6e6（2026-11-20，magic verified 34→35，scope=partial/summon_ok）。；MG-58/60/61/62/63（49/51/52/53/54，共享尾 B 类）升格：实现链 101c22528→82c4fbdc4→a9bce24c2→a22bbbef7→f8a759bbf→6e821b31b，合并提交 be3df6544（2026-11-20，magic verified 35→40，scope=partial/仅 1000ms 支；800ms 升级支未验见计划 §5.4）。**合并后 counting_moment.head 由 opc-19 回填**（本笔保留旧值）。；MG-58/60/61/62/63（49/51/52/53/54）升格：共享尾 B 类五号，合并提交 51b71a602（2026-11-20，magic verified 35→40，scope=partial/仅1000ms支）。"
+    "head": "e0a6ac0deaaeea9f47b09301e8f2cb2ebc2f5b38",
+    "time": "2026-11-21T08:05:17+0800",
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）；e779b8875（33/MG-45 升格，magic 域 16/65，2026-11-20；合并顺序见 opc-07 合并表）。；重测于 a30651dd7ac506dbbd4d47a44e210905311a5039（39 合入后，2026-11-20）；verified 集合含 MG-51（GROUPDE DING 39）；旧 head 时代值 = 19（技能 19/65）。；M59 = ef47f6a00（36/MG-59 升格，magic 域 verified 21/58，2026-11-20；scope=partial）。；MG-17（魔号 9 穿透）升格：实现链 56375493c→5db076754→0d4e72872→53ee01959（rebase 后），升格提交 9363edac2（分支 card/mg17-promote），合并提交 88058e3e5（2026-11-20）。；MG-41 升格（SKILL_SINSU/30，summon_ok，scope=partial），magic 域 verified 33→34（本域 65 条），2026-11-20；**合并提交 M 号 / counting_moment.head 由 opc-19 合并时回填**（本笔仅改条目与计数，head 待并合提交确定）。；MG-41 升格合并提交 fe47cb6e6（2026-11-20，magic verified 34→35，scope=partial/summon_ok）。；MG-58/60/61/62/63（49/51/52/53/54，共享尾 B 类）升格：实现链 101c22528→82c4fbdc4→a9bce24c2→a22bbbef7→f8a759bbf→6e821b31b，合并提交 be3df6544（2026-11-20，magic verified 35→40，scope=partial/仅 1000ms 支；800ms 升级支未验见计划 §5.4）。**合并后 counting_moment.head 由 opc-19 回填**（本笔保留旧值）。；MG-58/60/61/62/63（49/51/52/53/54）升格：共享尾 B 类五号，合并提交 51b71a602（2026-11-20，magic verified 35→40，scope=partial/仅1000ms支）。；M64 = e0a6ac0de（MG-18 升格，magic 域 verified 41/58；合并提交，2026-11-21）"
   },
   "status_enum": [
     "verified",
@@ -513,17 +513,28 @@
         "line": 277,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_skill10",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器 `real_rust_ledger_skill10`）；mir2-rs/bins/game-svr/src/lib.rs（驱动 `tests::skill10_parity_s1/_s5/_s13`）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/skill10.json（C# MagicGolden `--case skill10` 生成；SM 帧带 recog/due_ms_rel；s1 为负范围致死支）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::skill10_parity_s1",
+          "tests::skill10_parity_s5",
+          "tests::skill10_parity_s13",
+          "real_rust_ledger_skill10"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial）：装置 `skill10.json`（seed 1/5/13）+ 驱动 `tests::skill10_parity_s{1,5,13}` + 比较器 `real_rust_ledger_skill10`；实现（含 `(ushort)` 参数化）31c2e9550，装置/四牙 29c597399 / 49edaf0fd / d03e20340 / 2a225a398，合并提交 2b762a2c0。",
+      "basis": "semantic",
+      "scope": "partial：魔号 10（`SKILL_SHOOTLIGHTEN`）与 9（`SKILL_FIRE`）同形穿透（`src/M2Server/Magic/MagicManager.cs:277-289` vs `:265-274`），但 **oracle 对 10 多一个 `(ushort)` 强转**（`:282` 的 `(ushort)(Hi(MC)-Lo(MC)+1)`；9 在 `:270` 无强转）——本仓按同样不对称实现：`mir2-rs/crates/world-bevy/src/magic_effect.rs` 的 `single_hit_power_mc(..., range_cast_ushort)` **共享件不认魔号**，仅 `cast_pass_through_spell`（`mir2-rs/crates/world-bevy/src/world.rs`）按 `magic.magic_id == 10` 置真（其余 3 个调用点传 false）。**两支都验过**：①正常 MC 范围（s5/s13，`CasterMcNoClamp=MakeWord(5,10)` ⇒ 范围 6）；②负范围（s1，`CasterMc=15` ⇒ `Hi-Lo+1=-14` ⇒ `(ushort)` 得 **65522** ⇒ 抽 30599 ⇒ `Round(pow*1.5)` 一击致死，golden `TargetHp=0`）。**条件化 640 牙**：`fireball_case_assert` 以 golden 为开关（golden 无 640 不要求；有则条数相等；逐帧带 `due_ms_rel` 则逐值相等），并新增「`due_ms_rel` 全有或全无」断言（混合即 panic 点名 `{with_due}/{len}`）；`RM_STRUCK_MAG(8103)` 的 wParam 用与 31 帧同一 `wire_damage`（`(ushort)` 回绕：154985→23913）。golden 契约对致死支放宽（`hp_after==0 ⇒ damage >= target_hp`，非致死支仍要求 `hp_after+damage==target_hp`）。**已知未覆盖（不许当已验）**：①`frame_order_scope=multi_victim_same_tick` 白名单扩到 `skill10` 只有静态断言，**未跑**「把该标记塞到别的 stem ⇒ panic」的负例；②`due_ms_rel` 对 late 帧的 **32ms 容差属装置口径**，不是 oracle 语义。"
     },
     {
       "id": "MG-19",

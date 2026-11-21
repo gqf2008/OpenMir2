@@ -29,36 +29,43 @@
 //!   命中 `userMagic.Magic.MagicId == nSkillIdx` 即置 `userMagic.Key = nKey` 并 `break`；
 //!   **无命中则什么都不做、无回帧**。
 //!
-//! # 本片未接（登记，别按常识补）
+//! # `ClientSpellXY` 的 8 条显式 `case`（`PlayObject.Attack.cs:1119-1275`）逐条状态
 //!
-//! **`ClientSpellXY` 的技能效果体**（`PlayObject.Attack.cs:1071-1275`）整个 `switch (UserMagic.MagIdx)` 未接：
-//! 限速（`CheckActionStatus` + `MagicAttackTick`/`MagicAttackInterval`/`MagicAttackCount`/`OverSpeedCount`/`BoEmergencyClose`）、
-//! `SpellTick -= 450`、战士技切换
-//! （`ThrustingOnOff`/`HalfMoonOnOff`/`RedHalfMoonOnOff`/`SkillCrsOnOff`/`Skill43OnOff` 与
-//! `SendSocket("+LNG"/"+ULNG"/"+WID"/"+UWID"/"+FIR"/"+CRS"/"+UCRS"/"+TWN"/"+CID"/"+UCID")`），
-//! 以及 `default` 支的 `Dir = GetNextDirection`（`:1269-1270`）+ `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）。
-//! 其中 `switch` 的 8 条独立 `case`（`:1120/1136/1152/1168/1187/1218/1234/1253`，魔号见
-//! [`EXPLICIT_CASE_MAG_IDX`]）**不走 `default`** ⇒ Rust 侧只对这些之外的魔号套用 `Dir`。
-//! `DoSpell` 开头的 `IsWarrSkill`/`MagicAttackRage` 门与
-//! `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）**已接**
-//! （片 `openmir2-default-arm-spell-surface`，2026-10-17：宿主 `handle_spell_cmd` 在这三条门之后
-//! **无条件**广播一帧 `SM_SPELL(17)` —— 任何非战士魔号一律恰一条，与是否有 `case`/是否 `>80` 无关；
-//! 逐行依据见 `lib.rs` 该片的块注释）⇒ 原「本片不产出 `SM_SPELL(17)`」一句作废。
-//! **已接（2026-10-17，default 支的 `PlayObject.DoSpell` 包装层）**：`GetSpellPoint`/
-//! `DamageSpell`/`HealthSpellChanged`（`PlayObject.Base.cs:1505-1531`）与蓝不足早退的
-//! `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（宿主 `lib.rs::handle_spell_cmd`）。
-//! **已接（2026-10-17，卡 `openmir2-spell-distance-fail`）**：`MagicManager.DoSpell` 的**距离门**
-//! （`MagicManager.cs:155-157`）失败回帧（`RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`；宿主
-//! `handle_spell_cmd` 的 `default` 支 `else`，只此一处）。
-//! **已接（2026-10-17，卡 `openmir2-spell-dospell-fail-rest`）**：`MagicManager.DoSpell` 的
-//! **战士门**（`:151-153`）失败回帧（3/4/7 等走 default 的战士魔号 ⇒ `SM_MAGICFIRE_FAIL(639)`；
-//! 且无 MP/53/`SM_SPELL`），以及 `:644-647 if (boSpellFail) return false` 在**已建模**召唤面
-//! （17/30/41，护身符门不过）上的 639。20/46 无 `boSpellFail` 站点 ⇒ 不接（登记）。
-//! **仍未接**：8 条显式 `case` 各自的 MP 逻辑（12/25/26/27/34/38/43/56）、`:167` 版本门，
-//! 以及未建模 `boSpellFail` 站点（6/13/16/18/19/36 —— 本仓没有对应效果体/护身符门，
-//! 见 `lib.rs::handle_spell_cmd` 的登记）。**14/15 已建模**（2026-10-17，
-//! `openmir2-spell-shared-tail-p2`：`CheckAmulet(1,1)`/`UseAmulet(1,1)` + 共享尾）。
-//! 技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片，其接口就绪后再接这一层。
+//! 8 支都**不执行** `default:` 首句 `Dir = M2Share.GetNextDirection(...)`（`:1269`）、**不调 `DoSpell`**。
+//! 下表为 2026-11-21 逐条核对结果，**只写核过的**（每行都有 Rust 位置）：
+//!
+//! | oracle | 魔号 | 效果要点（oracle） | Rust 现状 | Rust 位置 |
+//! | --- | --- | --- | --- | --- |
+//! | `:1120` | 12 `SKILL_ERGUM` | `ThrustingOnOff` 切换 + `SendSocket("+LNG"/"+ULNG")` | 已接 | `bins/game-svr/src/warrskill.rs` `Arm::Ergum`（`run` 内 `:181`）；入口 `lib.rs:14268` |
+//! | `:1136` | 25 `SKILL_BANWOL` | `HalfMoonOnOff` 切换 + `"+WID"/"+UWID"` | 已接 | `warrskill.rs` `Arm::Banwol`（`:209`） |
+//! | `:1152` | 56 `SKILL_REDBANWOL` | `RedHalfMoonOnOff` 切换 + `"+WID"/"+UWID"` | **未接**（无 case 臂 / 开关状态位 / 短包） | — |
+//! | `:1168` | 26 `SKILL_FIRESWORD` | `AllowFireHitSkill` → MP/`DamageSpell`/`HealthSpellChanged` + `"+FIR"` | 已接 | `warrskill.rs` `Arm::Firesword`（`:267`） |
+//! | `:1187` | 27 `SKILL_MOOTEBO` | 3s 戳 → `Dir=(byte)nTargetX` → MP/`DamageSpell` → `DoMotaebo`（+ 640） | **部分**：`DoMotaebo` 真支未建模（退化支 + WRN 登记） | `warrskill.rs` `Arm::Moteebo`（`:318`），偏差见该文件头 |
+//! | `:1218` | 34 `SKILL_CROSSMOON` | `SkillCrsOnOff` 切换 + `"+CRS"/"+UCRS"` | 已接 | `warrskill.rs` `Arm::Crossmoon`（`:237`） |
+//! | `:1234` | 38 `SKILL_TWINBLADE` | `AllowTwinHitSkill` → MP/`DamageSpell` + `"+TWN"` | 已接 | `warrskill.rs` `Arm::Twinblade`（`:381`） |
+//! | `:1253` | 43 `SKILL_43` | `Skill43OnOff` 切换 + `"+CID"/"+UCID"` | **未接**（无 case 臂 / 开关状态位 / 短包） | — |
+//!
+//! 逐条核对后的**残留**（不要按常识补）：
+//! - **56 / 43**：oracle 的开关状态位与 `+WID/+UWID/+CID/+UCID` 短包都没有 Rust 实现；两支仍在
+//!   [`EXPLICIT_CASE_MAG_IDX`] 里 ⇒ **分支对（不套 `Dir`、不进 `DoSpell`）、效果缺**。
+//!   （`crates/world-bevy/src/magic.rs` 把 43 记成 `no_effect_case` 是**另一处** `MagicManager` 的
+//!   `switch`（`MagicManager.cs:555-556`），不是本 `ClientSpellXY` switch；两处不能互相代替。）
+//! - **27 真支**：推挤移动 / `SM_RUSH` / `SM_STRUCK` / 自伤 / 训练尾 `Random(3)+1` 未建模
+//!   （见 `warrskill.rs` 文件头「已登记偏差（本模块）」）。
+//! - **8 支共用的包装层**：动作限速（`CheckActionStatus` + `MagicAttackTick`/`MagicAttackInterval`/
+//!   `MagicAttackCount`/`OverSpeedCount`/`BoEmergencyClose`）与 `SpellTick -= 450` 未接
+//!   （与 `attackwire`/`movewire` 同源登记）。
+//! - **`default` 支**（8 支之外）：`Dir = GetNextDirection` + `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）
+//!   已接（片 `openmir2-default-arm-spell-surface`）：`DoSpell` 开头的 `IsWarrSkill`/`MagicAttackRage` 门与
+//!   `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）后**无条件**广播一帧
+//!   `SM_SPELL(17)`（任何非战士魔号恰一条，与是否有 `case`/是否 `>80` 无关；逐行依据见 `lib.rs` 该片块注释）。
+//!   **已接**：`GetSpellPoint`/`DamageSpell`/`HealthSpellChanged`（`PlayObject.Base.cs:1505-1531`）与蓝不足
+//!   早退的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`；**距离门**（`MagicManager.cs:155-157`）与
+//!   **战士门**（`:151-153`）的 639；`:644-647 boSpellFail` 在已建模召唤面（17/30/41）的 639。
+//! - **仍未接**：`:167` 版本门；未建模 `boSpellFail` 站点（6/13/16/18/19/36 —— 本仓没有对应效果体/
+//!   护身符门，见 `lib.rs::handle_spell_cmd` 的登记）；20/46 无 `boSpellFail` 站点 ⇒ 不接（登记）。
+//!   **14/15 已建模**（2026-10-17，`openmir2-spell-shared-tail-p2`：`CheckAmulet(1,1)`/`UseAmulet(1,1)` + 共享尾）。
+//!   技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片。
 //!
 //! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时
 //! `!boLateDelivery` 限速支**应生效**，本片按**直通**（等价 `boLateDelivery`）并登记（与
@@ -95,8 +102,9 @@ pub const fn is_magic_key_ident(ident: u16) -> bool {
 /// `SKILL_CROSSMOON(34)` / `SKILL_TWINBLADE(38)` / `SKILL_43(43)` / `SKILL_REDBANWOL(56)`
 /// （`src/Modules/SystemModule/Const/MagicConst.cs:52-197`；`case` 行号 `:1120/1136/1152/1168/1187/1218/1234/1253`）。
 ///
-/// 这 8 支**不执行** `default:` 首句 `Dir = M2Share.GetNextDirection(...)`（`:1269-1270`）——效果体
-/// 整段未接（归 m3cs），本表只用于对齐“走哪条分支”：不在表内的魔号才套用 `default` 首句。
+/// 这 8 支**不执行** `default:` 首句 `Dir = M2Share.GetNextDirection(...)`（`:1269-1270`）；逐支的
+/// 效果体实接状态见本模块头表格（12/25/26/34/38 已接、27 部分、43/56 未接，2026-11-21 核）。
+/// 本表只用于对齐“走哪条分支”：不在表内的魔号才套用 `default` 首句。
 /// （reviewer-5 `1de8fca5` 的 **F-2** 收口。）
 pub const EXPLICIT_CASE_MAG_IDX: [i32; 8] = [12, 25, 26, 27, 34, 38, 43, 56];
 
