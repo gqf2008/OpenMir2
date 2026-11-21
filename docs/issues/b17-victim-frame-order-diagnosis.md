@@ -50,3 +50,10 @@
   **已验证同 due** 的 tie 序（既有 716 sort 的边界），**不能扩到不同 due**。
 - **下一步（非本卡执行，需 build/run）**：B17 层做一次"某步到期集合 rust vs oracle 并列"探针，钉
   "rust 为何把一个受害者推到 900"（是 `delivery` 排期不同？还是 pump 每步只排一个就 step？）。
+
+## 4. 机制判定（opc-19 探针；代码语义证）
+
+- **pump 不是「每步只取一条就 advance」**：`SpellFrameRig::deliver(advance_ms)` 先 `clock_ms += advance_ms`，再**循环到队空/无到期**（`bound = queue_len+1`（min 64），反复 `deliver_self_delay_msgs()`）⇒ 每个 `deliver(100)` 把该步**所有 `DeliveryTime<=now` 的消息排尽**。所以 step=800 时「`delivery<=800` 的条数」是**全排**，不会取一条就 advance。
+- ⇒ **候选 (ii)「pump 每步只取一条」——排除（代码证）**。**判定 = 候选 (i)：第二个受害者的触发消息（strike/rename）`DeliveryTime` 落在 `(800,900]`**（或它依赖的上游 strike 被排到 700 那步、rename 随之落 900）——**是排期/链路时序差，不是 pump 粒度**。
+- **修法方向（不实施）**：B17 **排期层**——钉「两个受害者的 strike/rename 消息 `delivery` 为何差一步（600 vs 700 或 rename `+200` vs `+300`）」，让 oracle/rust 的「每步到期集合」一致。**在排期/`SendSelfDelayMsg` 链修，不在 pump、更不在比较器。**
+- **严格 runtime 探针（下次，需再 build）**：给 `deliver_self_delay_msgs` 加每步 log（`ident`+`DeliveryTime`），跑 `big_cloak_parity_s1`，dump step=800 的到期集合，钉「第二条 `delivery` 到底几」。本次以代码语义钉到「非 pump 粒度、是排期」这一层。
