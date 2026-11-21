@@ -237,3 +237,22 @@ golden `wParam=23913` vs 台账 `154985`：同一受害者的第二条 8103 在�
 `docs/issues/openmir2-b4-multivictim-strike-order.md` **同源**（产品批量 flush vs oracle 逐 actor
 `Run()`）；产品卡修复后须删该标记并恢复严格按序。白名单已从 `fire` 扩到 `fire`/`skill10`，扩的时候
 按同一理由登记。
+
+## MG-35 收口补记：`640.due_ms_rel` 的正确判据（2026-11-21）
+
+**结论：`due_ms_rel` 不能用精确相等判。** 该量 = `DeliveryTime − t0`，由 oracle 的
+`Environment.TickCount`（15.6ms 粒度）派生 ⇒ 同一次生成会抖动。实测同一批 golden 的
+`640` 出现 **`spacemove/s1 = 1016`、`spacemove/s5/s13 = 1000`**（golden 由
+`fc6227711` 重出时记录了这一抖动）；行为判据只判**批次类**（施法批 0 vs 交付批 >0），
+毫秒按 `|Δ| ≤ 32ms`（2×粒度）。
+
+**判据单源**：容差常量在 `mir2_shared::DUE_MS_TOLERANCE_MS`（**唯一来源**），
+比较器（`magic_fireball_parity.rs` 的 640 due 分支）与驱动
+（`game-svr` 的 `fireball_case_assert`）共用，禁止两处各写 `32`。
+
+**被发现的原因**：`spacemove` 的 11029 缺帧修好前，帧序断言先红，把这条
+「驱动比比较器更严」的判据不一致遮住了；修好 11029 后 s1 立刻暴露
+（`left: [1000] right: [1016]`）。这不是放宽文档口径，而是把**驱动**对齐到既有
+文档口径（比较器与施毒卡早已是 `|Δ|≤32ms`）。
+
+**判别力**：改 Rust 侧 640 的 due 加 50ms ⇒ 驱动必红（Δ=50 > 32）——容差不是无底洞。
