@@ -315,3 +315,14 @@ $ grep -rn 'drain_map_change' mir2-rs/bins/game-svr/src/*.rs
 `git hash-object mir2-rs/bins/game-svr/src/lib.rs` = `git rev-parse HEAD:mir2-rs/bins/game-svr/src/lib.rs`
 = `08f137a3f71fb55e56fa5a35f24de865fdf6714d`；`grep -c MUTATION` = 0；
 重跑 spacemove s1/s5/s13 驱动（各 1 passed）与比较器（1 passed）复绿。
+
+### 12.1 归属证明（同变异下 8/37 仍绿；2026-11-21，run_id `mg35attr-20261121-135839-*`）
+
+- **变异点**：`mir2-rs/bins/game-svr/src/lib.rs` 的 8/21/37 **共享尾**，仅 `SKILL_SPACEMOVE(21)` 的
+  640 delay `1000 → 1001`（8/37 保持 1000）。
+- **同 run 结果（原文）**：
+  `spacemove_parity_s1/s5/s13` = `FAILED`（due `golden=1016/1000 rust=1100`）；
+  `firewind_parity_s1` = `ok. 1 passed`；`energyrepulsor_parity_s1` = `ok. 1 passed`
+  （s5/s13 亦各 `ok. 1 passed`；比较器 `real_rust_ledger_firewind` / `..._energyrepulsor` 均 `1 passed`）。
+- **归属结论**：同变异下 8（firewind）与 37（energyrepulsor）驱动与比较器全绿 ⇒ 该牙打的是
+  **21 的分条**，不是共享尾机制。还原后 `hash-object == HEAD:path`、`MUTATION=0`，spacemove 三驱动 + 比较器复绿。
