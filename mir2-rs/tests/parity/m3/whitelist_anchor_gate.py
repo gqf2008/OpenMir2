@@ -78,6 +78,7 @@ HIGH_CHURN = (
     ("mir2-rs/bins/game-svr/src/useitem.rs", 8, "CM_EAT 面"),
     ("mir2-rs/crates/world-bevy/src/map.rs", 6, "地图格/门/地面物"),
     ("mir2-rs/bins/game-svr/src/mongen.rs", 5, "MonGen 刷怪 sink"),
+    ("mir2-rs/bins/game-svr/src/npc.rs", 5, "NPC 宿主角（实测 10 天 5 次 / 30 天 45 次；A-14/T-207 锚两次被顶走）"),
     ("mir2-rs/bins/game-svr/src/dbclient.rs", 5, "存档 DB 客户端"),
     ("mir2-rs/bins/game-svr/src/smframe.rs", 13, "出站编码器面（本文件 13 次/10 天；`smframe*.rs` 合计 22。2026-10-27 turn-order 的 +150/−46 把 T-206 锚顶走 69 行）"),
     ("mir2-rs/crates/world-bevy/src/npc.rs", 2, "固定 NPC tick（任务点名，contention 区）"),
@@ -419,7 +420,13 @@ def check_doc_text(text, root=REPO_ROOT, whitelist_label="<mem>", idx=None,
 
     # 判据 4b：高 churn 文件的**符号锚**——紧贴的反引号符号必须真存在（防「符号被删」假绿）。
     for p, _n, _w in high_churn:
-        for form in (p, os.path.basename(p)):
+        # 2026-11-21（QA）：白名单里的路径常写作 `bins/game-svr/...`（相对 `mir2-rs/`），
+        # 此前只匹配仓库根相对/裸文件名 ⇒ 本规则对多数实际锚**从未生效**
+        # （负例：把 `merchant_say_gbk` 改成 `merchant_say_gbkXX` 仍 ALL PASS）。
+        _forms = [p, os.path.basename(p)]
+        if p.startswith("mir2-rs/"):
+            _forms.append(p[len("mir2-rs/"):])
+        for form in _forms:
           for m in re.finditer(r"`%s`" % re.escape(form), text):
             ls, le = text.rfind("\n", 0, m.start()) + 1, text.find("\n", m.start())
             if le < 0:

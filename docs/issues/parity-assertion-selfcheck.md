@@ -12,6 +12,10 @@
 2. **观测值从哪来：golden 记录的字段，还是夹具硬编码？**
    夹具里写死的输入（等级/HP/魔表/种子）**不是覆盖面，是死数据**——golden 改了输入，Rust 不会跟随。
    影响面范式见 `docs/issues/openmir2-warrskill-harness-input-hardcode.md`。
+   **同一功能里，"名字最像结果"的字段可能不可见，而"看起来是中间量"的字段才是判据面**
+   （实例：50 `SKILL_MABE`，`src/M2Server/Magic/MagicManager.cs:530-536`——`msd_power` +1/+3 全绿，
+   `success_gate` 恒 false 全绿，真正承载 `TargetHp`/`SM_STRUCK` 的是**第一条 `RM_DELAYMAGIC` 的
+   `power/3`**，+1 即双红）。验证方法是**在同一功能上试多个字段**，看哪个能红——**不是猜名字**。
 
 3. **调用参数是否真的把被测对象传进去了？**
    例：`CM_SPELL` 的目标只在 `nParam3 = MakeLong(Param, Series)`（`src/GameSrv/Word/WorldServer.cs:783-790`）；
