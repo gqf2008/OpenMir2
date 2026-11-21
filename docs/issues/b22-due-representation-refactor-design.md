@@ -1,7 +1,8 @@
 # B22 装置表示层重构设计：Sent 帧逐帧 `due_ms_rel` 归属
 
 > 性质：**设计卡，只出方案，不改代码 / 不跑构建 / 不碰 golden**（opc-19 2026-11-22 派）。批准后再排实现。
-> 归口：B22（`docs/issues/golden-harness-blind-spots.md`）的「后续正式批：表示层重构」。
+> 归口：B22（`docs/issues/golden-harness-blind-spots.md`）的「后续正式批：表示层重构」。> 
+> **状态（2026-11-22 收口）**：**A 型 7 支 due 全部收口**——6 支 `StepDrainMs=100`（已合）+ `fireball` bespoke step-drain（已合），**均非 genealogy**（§8 probe 实验推翻 §3 主方案，root 是配置遗漏/one-shot 而非链路传播）；**B 型 2 支（`bigcloak`/`groupdeding`）转入 B17 顺序任务**（recog 互换 + 800/900）。全 plane DRIVERS=150/Comparator 50-0、49+6+fireball 无一翻转。
 
 ## 0. 结论速览
 
@@ -39,7 +40,7 @@
 - ⇒ **顺序与 due 同一根因＝多受害者出帧次序**（B17 家族：`DrainOnce`/`Operate` 扇出次序 vs Rust 泵步进次序）。**顺序对齐后 due 自动对，无需表示层改动**。
 - ⇒ **本重构不覆盖 B 型**；B 型留给 B17 顺序对齐（先对齐顺序，再把这两支的 due 纳入即绿）。
 
-## 3. 设计方案（i vs ii）
+## 3. 设计方案（i vs ii）（**§8 已推翻：实际采用 StepDrainMs/fireball，未用 i 或 ii**）
 
 ### (i) 显式传递 —— **建议否决**
 把 due 作为参数沿 `OperatePublic → SendMsg → 下游帧` 传下去。
@@ -68,7 +69,7 @@
 4. **同步/后续两态都覆盖**：A 型每支至少各有 1 帧"触发消息 `OperatePublic` 窗口内同步 emit"（如 showhp 640）与 1 帧"后续 pass emit"（如 showhp 1100），两者改后都等于 rust 值——分别证 set 点与 inherit 都生效。
 5. **B 型不入本验收**：B 型由 B17 顺序对齐单独验收（顺序对齐后 due 自动对）。
 
-## 5. 风险与止损线
+## 5. 风险与止损线（2026-11-22：本次走 StepDrainMs+fireball，**四条均未触发**，genealogy 主方案未实施）
 
 - **止损 1（伪解）**：若某帧即使做了 genealogy inherit 仍记 0——说明该帧是 C# **真正在施法时即时 emit**、而 Rust 建模为延迟（**产品分歧**，非装置）。那时 doit 停 harness 重构，转判"是否 Rust 侧错/或真不可对角"。
 - **止损 2（不可捕获）**：若生产入队**拷贝**消息（非引用）导致引用 map 失配，或队列未暴露子项——(ii) 不可行，退回 (i) 需生产改动（须 Owner/Leader 另批），否则**退回"这些帧永不比较 due"**（＝现状欠账，文档化，不硬凑）。
@@ -76,7 +77,7 @@
 - **止损 4（B 型误并）**：若把 B 型的 `800/900` 当成"due 表示"去改 scalar——错。B 型是顺序；**本重构不碰**，否则会把 B17 拖成"装置 due 问题"再误修。
 - **永远可退的现状**：当前 9 支"暂留旧 golden 无 due、不比较"是**已知、文档化欠账**（B22/B17），不是绿；重构走不通就维持它，**不得在缺口上盖 golden 充绿**。
 
-## 6. 建议下一步（实现排序，非本卡执行）
+## 6. 建议下一步（实现排序，非本卡执行）（**2026-11-22：步骤 1–3 已执行、A 型收口**）
 
 1. **先做一个小 probe（只读）**：对 7 支各 dump「每帧触发消息的 `LateDelivery`/`DeliveryTime` + 帧当前 due」，逐帧标注「同步 emit / 后续 emit」，确认 A 型全部落在"后续 emit"。这决定 inherit 覆盖范围。
 2. B 型另起 B17 顺序对齐任务（与本卡并行、不耦合）。
