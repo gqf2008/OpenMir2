@@ -35,6 +35,13 @@ adopt 行为」：
 - **640 的 `tag`**（TranPoint）：随造怪抽数不同（与 17 同口径）；比较
   `(recog,param,series,due)`，`due` 按既有 `|Δ|≤32ms` 判。
 
+## 3b. §57 规则 3：新增 `#[ignore]` 用例由谁跑
+
+`tests::angel_parity_{summon_ok,cap_hit}` 与 `real_rust_ledger_angel` 由**合并门**
+`parity-gate.ps1 -Mode Both` 自动发现，并逐个 `--exact --ignored` 跑（驱动与比较器共用同一次
+`RUN_ID`）。本批全量门实测：**Driver 127 支 / Comparator 43 支**（angel 在集合内且绿；
+唯一红是已登记的 `spacemove 11029`）。
+
 ## 4. 前卡边界
 
 `41` 的"施法帧 + 640 自延迟"原本只由单测 `spell_cmd_angel_training_tail_is_self_delayed` 覆盖
