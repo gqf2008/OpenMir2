@@ -132,13 +132,47 @@ PY
 2. **pass 边界**：装置多 pass 排水把一部分"优先级序 vs 调用序"的差异吸收进录制序（见 §3.1 限定）。
 3. **恰好同序**：其余严格按序比较的 stem，Rust 的调用序恰好与 golden 序一致（否则早已红）。
 
-## 5. 移除条件
+## 4.1 证据更正（2026-11-21）：本卡的修复证据**只有 8/37**
 
-把所有 `RM_*` 下发（含发给自己的那条）统一进**逐收件人的 `NetPriorityQueue`**（键 `(byte)wIdent`；
-自延迟消息 255），消除 57 处直发；然后：
-- 全量重跑 `--lib` 与全部 magic 比较器（新 `run_id`）；
-- 8/37 的 `StepDrainMs=1` 实验结论并入（若证明 oracle 真按优先级出队，则本卡即其修复载体）；
-- 删掉为遮盖该差异而存在的多重集标记（`frame_order_scope`）并恢复严格按序。
+早先把 **21（`SKILL_SPACEMOVE`）** 也算作本卡证据是错的：21 当前的驱动/比较器红是
+**换图簇缺 `SM_SERVERCONFIG(11029)` 一帧**（`golden 有 rust 无=[(11029,…)]`），属**另一条独立线**
+（Session 加字段 + 登录同步，另卡已批）。**21 已从本卡证据中移除**——按队列模型去修 21 不会消掉那条红。
+本卡的实证基础只剩 **8/37**：`SM_BACKSTEP(9)` 先于 `SM_MAGICFIRE(638)`，且 `StepDrainMs=1` 重放
+仍为 `638, 9`（`43` 的实验）⇒ 不是 100ms 排水伪影。
+
+## 5. 修复方案 v1（两段式）
+
+**机制目标（不变）**：所有 `RM_*` 下发（**含发给自己的那条**）统一进**逐收件人**的
+`NetPriorityQueue`，键 = `(byte)RM ident`（自延迟消息 255）；同优先级按入队序出队。
+
+**阶段 1（stopgap，按站点，可独立合）**：只处理已确证的 8/37 —— 把该支效果体产生的
+`RM_PUSH` 派生帧（`SM_BACKSTEP`）与共享尾的 `RM_MAGICFIRE` 派生帧（`SM_MAGICFIRE`）收进**同一个**
+`SpellFrameBuf`，统一按优先级 flush。写集：`mir2-rs/bins/game-svr/src/lib.rs`（8/37 分支及其
+`finish_spell_tail` 调用点）。**不含 21**（见 §4.1）。
+
+**阶段 2（全局）**：把 §2 统计的 57 处直发收敛为入队。写集：同一 `lib.rs`（57 处调用点）+
+视需要 `mir2-rs/crates/world-bevy/src/world.rs`（效果体内的发送）+ 比较器删除放宽（见 §6）。
+
+**阶段 2 的前置（必须先做）**：让装置序可当基准——给台账 `Sent` 补 `delivery`（`Rm` 已有）或
+全量 `StepDrainMs=1` 重出；否则队列化后 Rust 出优先级序、golden 记的是"pass 内优先级 + pass 间时间"，
+会**修了产品、红了装置**（§7 具体例子）。
+
+## 6. 移除条件（逐条可执行；"当 X 成立 ⇒ 删 Y，并要求 Z 绿"）
+
+| # | 现在的放宽 | 移除条件（X） | 删除项（Y） | 验收（Z） |
+| --- | --- | --- | --- | --- |
+| 1 | `frame_order_scope=multi_victim_same_tick`（6 份 golden：`fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2`；对应 MG-17/18/13/50） | 阶段 2 合并 **且**这 6 个 stem 的 `Sent` 严格序比对全绿 | 6 份 golden 的 marker + `real_ledger_verify_labels_opts` 的 stem 白名单 + `verify` 的 `multi_victim` 分支 | 全量 `--lib` + 全部 magic 比较器绿 |
+| 2 | `Rm` 面通用多重集比较 | 台账 `Rm` 记录 `delivery`/pass 号（装置改动）后 | 把 `Rm` 改为按 `(priority, 入队序)` 严格比 | 全部比较器绿 |
+| 3 | 阶段 1 的站点级 `SpellFrameBuf` 收口 | 阶段 2 落地 | 阶段 1 的局部收口代码 | 8/37 对应 stem 的 `real_rust_ledger_*` 严格序绿 |
+
+## 7. 全量修复的预期红（具体前后对比）
+
+- **`fireboom/s1/target`**：golden 现序 `[17, 638, 53, 31, 656]`；按 RM 优先级
+  （24 / 68 / 136 / 154 / 167）应为 `[17, 53, 638, 656, 31]` ⇒ **53↔638、656↔31 两组换位**。
+- 同类 stem（§3 普查的 18 个里除 6 个已放宽的）：`fireboom`、`fireboom47`、`lightflower`、`snowwind`、
+  `grouplightening`、`lightning-11`、`lightning-45`、`fireball`、`fireball-5`、`firecharm`、`hbfireball`、
+  `showhp` —— 它们现在绿是**恰好同序**，阶段 2 后**必先红**，必须与装置序基准化同批处理。
+- 验收口径（opc-19 定死）：`Sent` 严格序 + 全量回归。
 
 ## 关联
 
