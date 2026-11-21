@@ -1,23 +1,26 @@
 # 装置 sweep 分类（§5.1 四类兼容判据）——脚本与口径（2026-11-21）
 
-> 状态：**脚本已就绪，尚未跑**（等 `d8` 交 Rust 构建窗口；opc-19 放行后执行）。
+> 状态：**已跑三次**。第三版（按 label 分审计文件）`rc=0`，全表通过；分类表见
+> `docs/issues/device-sweep-classification-20261121-233522.md`。**前两份表（`…-232908.md` / `…-233311.md`）作废**。
 > 目的：把 `docs/issues/device-per-recipient-model-design-20261121.md` §3 的"兼容判据"从纸面
 > 落成可执行的分类表——对 60 支装置 casing 逐支给出类别，并**单独标出**属于
 > 「跨 actor 且收件人本步已跑过」那一类的差异；该类之外的变化一律按"疑模型"报红。
 
 ## 脚本位置与用法
 
-- 脚本：`E:/UserFleet/qa/sweep_classify.py`（**仓外**：避免触发"新工具必须登记进工具门"的合并门约束；
-  若将来要入仓，需先向 opc-19 报备并登记）。
+- 脚本：**`tools/parity/sweep_classify.py`（已入仓并登记进工具门**，`--selftest` 3/3：
+  `INSTRUMENT_RED` 两态 + 有 cross 证据时 `rc=0`）。
+  自检与两次仪器坑的说明见本卡「仪器坑与自检」节。
 - 用法（判 rc 不接管道）：
   ```
-  python -I -B E:/UserFleet/qa/sweep_classify.py \
+  python -I -B tools/parity/sweep_classify.py \
     --before <旧装置输出目录> --after <新装置输出目录> \
     --audit <新装置 frames-audit.jsonl 目录> \
     --out E:/UserFleet/qa/device-sweep-classification-<时间戳>.md
   echo RC=$?
   ```
-- 60 支的输出/审计文件命名约定：`<stem>.json`（装置 `--out`）与 `<stem>.audit.jsonl`
+- 输出/审计文件命名约定：`<stem>.json`（装置 `--out`）与 **`<stem>.<label>.audit.jsonl`**
+  （按 case label 分文件；旧单文件 `<stem>.audit.jsonl` 仍兼容，但会互相覆盖——见「仪器坑与自检」坑 2）
   （装置 `MIR2_FRAMES_AUDIT`）。
 
 ## 分类口径（与设计 §3 一一对应）
