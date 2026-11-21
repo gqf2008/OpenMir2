@@ -396,17 +396,32 @@
         "line": 225,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_amyounsul + real_rust_ledger_amyounsul2",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/amyounsul.json + amyounsul2.json（Shape=1/2 两 stem；`rng_total_draws` 3/4/4；目标 `Rm` 含 `RM_POISON(8037)`；`DrainPasses=3`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::amyounsul_parity_s1",
+          "tests::amyounsul_parity_s5",
+          "tests::amyounsul_parity_s13",
+          "tests::amyounsul2_parity_s1",
+          "tests::amyounsul2_parity_s5",
+          "tests::amyounsul2_parity_s13",
+          "real_rust_ledger_amyounsul",
+          "real_rust_ledger_amyounsul2"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。 覆盖叶子 MG-13（case 主链；绿/红毒两支见 MG-14/MG-15）。",
+      "basis": "semantic",
+      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。"
     },
     {
       "id": "MG-14",
@@ -417,17 +432,28 @@
         "line": 239,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_amyounsul",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/amyounsul.json（Shape=1；目标 `Rm` 含 `8037` type=DECHEALTH；`DrainPasses=3`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::amyounsul_parity_s1",
+          "tests::amyounsul_parity_s5",
+          "tests::amyounsul_parity_s13",
+          "real_rust_ledger_amyounsul"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支）"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
+      "basis": "semantic",
+      "scope": "partial：`Shape=1@DoSpell`（`src/M2Server/Magic/MagicManager.cs:239`）绿毒臂（`PoisonState.DECHEALTH`、`GetPower13(40)` 口径）由 `amyounsul.json`（Shape=1）× s1/s5/s13 覆盖：目标 `Rm` 的 `8037` 四字段 + `10139`/`11004` 状态帧逐值。**只验该 shape 臂本身；外层 `CheckAmulet(1,2)`/骰门/目标属性门由 MG-13 的 case 主链覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-15",
@@ -438,17 +464,28 @@
         "line": 243,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_amyounsul2",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/amyounsul2.json（Shape=2；目标 `Rm` 含 `8037` type=DAMAGEARMOR；`DrainPasses=3`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::amyounsul2_parity_s1",
+          "tests::amyounsul2_parity_s5",
+          "tests::amyounsul2_parity_s13",
+          "real_rust_ledger_amyounsul2"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上）"
+      "notes": "旧清单 cost=小时级。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@DoSpell`，依据 :243（同上） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
+      "basis": "semantic",
+      "scope": "partial：`Shape=2@DoSpell`（`src/M2Server/Magic/MagicManager.cs:243`）红毒臂（`DAMAGEARMOR`、`GetPower13(30)`）由 `amyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；字段面同 MG-14。**注意**：本夹具绿/红毒 `10139.p1` **同为 `int.MinValue`**（buff 插入序 i=0），**不代表** `BaseObject.Base.cs:170` 按 `PoisonState` 取位的 `0x40000000` 路径。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径（需目标先有别的 buff，另卡）。"
     },
     {
       "id": "MG-16",
@@ -1331,21 +1368,32 @@
         "line": 543,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "groupamyounsul_parity_s1 / _s5 / _s13 + real_rust_ledger_groupamyounsul（**仅接线覆盖**）",
-        "test_file": "mir2-rs/bins/game-svr/src/lib.rs（驱动）；mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）",
-        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json（**退化场景**：rng_total_draws=0、无 RM_POISON、TargetHp 100→100）",
+        "test": "real_rust_ledger_groupamyounsul + real_rust_ledger_groupamyounsul2",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json + groupamyounsul2.json（Shape=1/2 两 stem；`rng_total_draws` 3/3/3；目标 `Rm` 含 `RM_POISON(8037)`；`DrainPasses=3`）",
         "cases": [
-          "s1",
-          "s5",
-          "s13"
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
         ],
-        "unit_tests": []
+        "unit_tests": [
+          "tests::groupamyounsul_parity_s1",
+          "tests::groupamyounsul_parity_s5",
+          "tests::groupamyounsul_parity_s13",
+          "tests::groupamyounsul2_parity_s1",
+          "tests::groupamyounsul2_parity_s5",
+          "tests::groupamyounsul2_parity_s13",
+          "real_rust_ledger_groupamyounsul",
+          "real_rust_ledger_groupamyounsul2"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级 2026-11-20 接线完成但**不升格**：golden 为退化场景（`rng_total_draws=0`、无 `RM_POISON`、`TargetHp` 100→100）⇒ `cast_group_poison_spell` 的逐目标循环零次执行，只覆盖 17/638 施法帧面；四刀变异（毒伤系数/范围+5/移除 proper-target 门/强制 poison dice）**全绿**。需非退化 case 才能升格，见 `openmir2-groupamyounsul-nondegenerate-golden`。"
+      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：**旧「golden 退化」（`rng_total_draws=0`/无 `RM_POISON`/四刀全不咬）已解除**——现由非退化 case `groupamyounsul`/`groupamyounsul2`（s1/s5/s13）覆盖（`rng_total_draws=3`、目标 `Rm` 含 `RM_POISON(8037)`、§2 毒伤表达式 `*2→*3` 一刀真红）；装置三旋钮 + `AmyOunsulPoint=15` 显式装载见 scope；批 `card/poison-batch`，合并提交 1d7868313。绿/红毒 shape 臂见 MG-64/MG-65。",
+      "basis": "semantic",
+      "scope": "partial：`SKILL_GROUPAMYOUNSUL(48)` 逐目标循环主链（`MagGroupAmyounsul`）由 `groupamyounsul`/`groupamyounsul2` × s1/s5/s13 覆盖：每目标 `RM_POISON` 四字段、`Rng` 逐值、`rng_total_draws` 3/3/3、`DrainPasses=3`；装置三旋钮 fail-closed 与顺序放宽（`multi_victim_same_tick`，只放宽次序、due 仍判）同 MG-13。**旧 golden 退化问题已解除**（原 `rng_total_draws=0`/无 `RM_POISON` 的退化件已被非退化件替换）。**未验**：`mag_level` 范围边界（目标全在范围内）、`GetMapBaseObjects` 的多目标上限、顺序放宽的撤销。"
     },
     {
       "id": "MG-51",
@@ -1739,17 +1787,28 @@
         "line": 919,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@MagGroupAmyounsul`，依据 :919（`MagGroupAmyounsul` 内，群体 48）",
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@MagGroupAmyounsul`，依据 :919（`MagGroupAmyounsul` 内，群体 48） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      }
+        "test": "real_rust_ledger_groupamyounsul",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json（Shape=1；目标 `Rm` 含 `8037` type=DECHEALTH；`DrainPasses=3`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::groupamyounsul_parity_s1",
+          "tests::groupamyounsul_parity_s5",
+          "tests::groupamyounsul_parity_s13",
+          "real_rust_ledger_groupamyounsul"
+        ]
+      },
+      "basis": "semantic",
+      "scope": "partial：`Shape=1@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:919`）群体绿毒臂由 `groupamyounsul.json`（Shape=1）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 跨 buff 位号（本夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-65",
@@ -1760,17 +1819,28 @@
         "line": 923,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@MagGroupAmyounsul`，依据 :923（同上）",
+      "notes": "旧清单 cost=小时级。**非 duplicate**：`:239/:243`（DoSpell 内联，单目标 Amyounsul 支）与 `:919/:923`（`MagGroupAmyounsul`，群体 48）是**不同叶子**、不同 helper，仅 Shape 标签同值；待 QA 按\"真不同叶子共用标签\"机制处理。原 legacy_id `Shape=2` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=2@MagGroupAmyounsul`，依据 :923（同上） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      }
+        "test": "real_rust_ledger_groupamyounsul2",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul2.json（Shape=2；目标 `Rm` 含 `8037` type=DAMAGEARMOR；`DrainPasses=3`）",
+        "cases": [
+          "s1(seed 1)",
+          "s5(seed 5)",
+          "s13(seed 13)"
+        ],
+        "unit_tests": [
+          "tests::groupamyounsul2_parity_s1",
+          "tests::groupamyounsul2_parity_s5",
+          "tests::groupamyounsul2_parity_s13",
+          "real_rust_ledger_groupamyounsul2"
+        ]
+      },
+      "basis": "semantic",
+      "scope": "partial：`Shape=2@MagGroupAmyounsul`（`src/M2Server/Magic/MagicManager.cs:923`）群体红毒臂由 `groupamyounsul2.json`（Shape=2）× s1/s5/s13 覆盖；外层多目标收集/护身符门由 MG-50 覆盖。**注意**：本夹具绿/红毒 `10139.p1` 同为 `int.MinValue`，**不代表** `BaseObject.Base.cs:170` 的 `0x40000000` 路径（同 MG-15）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`0x40000000` 路径。"
     }
   ]
 }
