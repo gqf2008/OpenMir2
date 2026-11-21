@@ -406,6 +406,9 @@ pub struct TickRecord {
     /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
     /// `crates/world-bevy` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
     pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **(i) 层**：per-actor 有序的自投递回合结果（组间 = actor 首次入队序、组内 = 投递序）；
+    /// `slave_self_deliveries` 是其按组展平（对旧消费者逐元素同序）。
+    pub slave_self_delivery_turns: Vec<crate::slave::SelfDelayTurn>,
     /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
     pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
     /// **PL-1 硬前置**：`BaseObject.Run` 的 HP/MP 超上限钳制段
@@ -2218,8 +2221,10 @@ pub struct StageOut {
     pub pushes: Vec<crate::action::PushEvent>,
     /// **P6a**：`SimBuff` 段的合并产出（`BUFF_PASSES_PER_TICK` 个 pass 拼接；facade 在段后取走）。
     pub buff: Option<BuffTickOutcome>,
-    /// **P6a2**：`SimSelfDeliver` 段的自投递产出（facade 在段后取走）。
+    /// **P6a2**：`SimSelfDeliver` 段的自投递产出（facade 在段后取走；= turns 按组展平）。
     pub self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **(i) 层**：`SimSelfDeliver` 段的 per-actor 回合结果（组间/组内有序；`self_deliveries` = 其展平）。
+    pub self_delivery_turns: Vec<crate::slave::SelfDelayTurn>,
     /// **P6a2b**：`SimNpc` 段的 `ProcessNpcs` 产出（facade 在段后取走）。
     pub npc: Option<crate::npc::NpcTickOutcome>,
     /// **P6b**：`SimMerchant` 段的 `ProcessMerchants` 产出（facade 在段后取走）。
@@ -3136,10 +3141,14 @@ pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
         let mut ad = StageEntities::<SimSelfDeliver>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
         let turns = crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim);
-        crate::slave::flatten_self_delay_turns(turns)
+        let flat = crate::slave::flatten_self_delay_turns(turns.clone());
+        (turns, flat)
     };
     world.insert_resource(sim);
-    world.resource_mut::<StageOut>().self_deliveries = out;
+    let (turns, flat) = out;
+    let mut stage_out = world.resource_mut::<StageOut>();
+    stage_out.self_delivery_turns = turns;
+    stage_out.self_deliveries = flat;
 }
 
 crate::stage_spec!(
@@ -4090,6 +4099,17 @@ impl World {
             .buff
             .take()
             .expect("SimBuff 段必须产出 BuffTickOutcome（段边界契约）")
+    }
+
+    /// 取走 `SimSelfDeliver` 段的 per-actor 回合结果（(i) 层；段边界之后调用）。
+    fn take_self_delivery_turns(&mut self) -> Vec<crate::slave::SelfDelayTurn> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .self_delivery_turns,
+        )
     }
 
     /// 取走 `SimSelfDeliver` 段落到 [`StageOut`] 的自投递产出（段边界之后调用；P6a2）。
@@ -8416,6 +8436,7 @@ impl World {
             npc_removed: Vec::new(),
             party_events: Vec::new(),
             slave_self_deliveries: Vec::new(),
+            slave_self_delivery_turns: Vec::new(),
             extra_abil_expiries: Vec::new(),
             pushes: Vec::new(),
             rushes: Vec::new(),
@@ -8524,6 +8545,7 @@ impl World {
         // S4d-3/P6a2 #5：段系统（`SimSelfDeliver`），段位与旧内联调用完全相同。
         let __prof_selfd = self.prof_begin();
         self.run_head_stage(|world, head| head.run(TickStage::SimSelfDeliver, world));
+        record.slave_self_delivery_turns = self.take_self_delivery_turns();
         record.slave_self_deliveries = self.take_self_deliveries();
         self.prof_end(TickStage::SimSelfDeliver, __prof_selfd);
         // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；

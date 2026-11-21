@@ -3930,6 +3930,22 @@ enum MutinyFrame {
     },
 }
 
+/// **(i) 层消费**：优先按 [`mir2_world_bevy::TickRecord::slave_self_delivery_turns`] 的
+/// **组间→组内**序展开；旧夹具只填扁平 `slave_self_deliveries` 时回退（两者逐元素同序）。
+/// 宿主逐条处理：结构变（turn 分组）、顺序与内容不变。
+fn self_delivery_outcomes(
+    rec: &mir2_world_bevy::TickRecord,
+) -> Vec<&mir2_world_bevy::slave::SelfDelayOutcome> {
+    if rec.slave_self_delivery_turns.is_empty() {
+        rec.slave_self_deliveries.iter().collect()
+    } else {
+        rec.slave_self_delivery_turns
+            .iter()
+            .flat_map(|t| t.outcomes.iter())
+            .collect()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drain_slave_mutiny_downlink(
     rec: &mir2_world_bevy::TickRecord,
@@ -3939,7 +3955,7 @@ fn drain_slave_mutiny_downlink(
     cfg: &mir2_data::pet_slave::PetSlaveConfig,
     range: i32,
 ) -> usize {
-    if rec.slave_self_deliveries.is_empty() {
+    if self_delivery_outcomes(rec).is_empty() {
         return 0;
     }
     // `NpcNameColor` 未在 Rust 配置层建模；本路径 `Race != NPC` ⇒ 不可达不消费（见函数头登记）。
@@ -3951,7 +3967,7 @@ fn drain_slave_mutiny_downlink(
     // 656 首扫（`<= range`）、42 命中 500ms 缓存（`|Δ|<11`）。因此两帧的收件人集合必须
     // **各判一次缓存**：12 格边界收 656 而**不收** 42。旧实现共用一份集合是本批修正的偏差。
     let mut hits: Vec<(i32, MutinyFrame)> = Vec::new();
-    for outcome in &rec.slave_self_deliveries {
+    for outcome in self_delivery_outcomes(rec) {
         if outcome.ident != mir2_world_bevy::slave::RM_MASTERDIEMUTINY {
             continue;
         }
@@ -21228,7 +21244,7 @@ fn drain_mag_healing_delivery(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
 ) {
-    for outcome in &rec.slave_self_deliveries {
+    for outcome in self_delivery_outcomes(rec) {
         let Some(n) = outcome.mag_healing else {
             continue;
         };
@@ -21786,7 +21802,7 @@ fn drain_b3_self_deliveries(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     let mut buf = SpellFrameBuf::new();
-    for o in &rec.slave_self_deliveries {
+    for o in self_delivery_outcomes(rec) {
         if let Some(d) = o.transparent {
             if d.status_changed {
                 push_charstatuschanged(&mut buf, world, online, d.target_id, d.status);
@@ -21880,7 +21896,7 @@ fn drain_b4_self_deliveries(
     // `RM_PUSH` ⇒ `SM_BACKSTEP(9)`。oracle 在 `Operate` 内**即时** `SendRefMsg`，收件人含
     // 受推者自己（`PlayObject.Message.cs:1527` 的复合条件恒真）。跨 actor 的投递序无契约
     // （每个 actor 一条队列）⇒ 先按 outcome 序出推挤帧，再走毒/受击缓冲。
-    for o in &rec.slave_self_deliveries {
+    for o in self_delivery_outcomes(rec) {
         for ev in &o.pushes {
             let Some(d) = displays.get(ev.actor_id).cloned() else {
                 glog!(
@@ -21913,7 +21929,7 @@ fn drain_b4_self_deliveries(
         }
     }
     let mut buf = SpellFrameBuf::new();
-    for o in &rec.slave_self_deliveries {
+    for o in self_delivery_outcomes(rec) {
         if let Some(p) = o.poison {
             if p.status_changed {
                 push_charstatuschanged(&mut buf, world, online, p.target_id, p.status);
