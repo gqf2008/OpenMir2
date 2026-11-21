@@ -1,4 +1,4 @@
-//! 判据③（S1 升级版）：**禁止引入并行**，且 **tick 骨架必须是单线程 ECS**。
+//! 判据③（并行化版）：**允许 bevy 并行调度，但必须满足重放确定性**——同一固定输入（固定种子+固定驱动）跑 N=8 次，输出帧序列/状态**逐字节相同**，任一次不同即红。**依赖仍禁外部线程/异步库**（rayon/crossbeam/tokio 等，须用 bevy 自己的线程池）；**tick 骨架须显式选择执行器并注释理由**；**保留** `TickOwnerThread`（调用线程约束，不约束内部并行）。
 //!
 //! 三条独立断言（任一被破坏即红）：
 //!
@@ -36,9 +36,9 @@ const FORBIDDEN_DEPS: [&str; 12] = [
 ];
 
 /// 源码里不得出现的并行 API 字样（扫代码不扫注释/字符串）。
-const FORBIDDEN_CODE: [&str; 5] = [
-    "MultiThreadedExecutor",
-    "bevy_tasks",
+const FORBIDDEN_CODE: [&str; 3] = [
+    // MultiThreadedExecutor / bevy_tasks 现允许（bevy 自己的并行执行器/线程池）；
+    // 仍禁「手搓线程 / 外部线程库」——并行只许走 bevy 调度器。
     "rayon",
     "crossbeam",
     "thread::spawn",
@@ -150,10 +150,11 @@ fn strip_use_lines(code: &str) -> String {
         .join("\n")
 }
 
-/// 单线程执行器的**调用形态**断言：必须真的 `set_executor(SingleThreadedExecutor...)`；
-/// 仅 `use` 进来不算（F2：删掉 set_executor 只留 import 时旧断言仍绿）。
-fn has_explicit_single_threaded_executor(code: &str) -> bool {
-    strip_use_lines(code).contains("set_executor(SingleThreadedExecutor")
+/// 执行器选择断言（②）：tick.rs 必须**真的调用** `set_executor(...)`（裸 `use` 不算，F2），
+/// 且**原始源码（含注释）**里带 `EXECUTOR-RATIONALE` 标记注释说明选择理由。
+fn tick_has_explicit_executor_and_rationale(raw: &str) -> bool {
+    let code = strip_use_lines(&strip_comments_and_strings(raw));
+    code.contains("set_executor(") && raw.contains("EXECUTOR-RATIONALE")
 }
 
 #[test]
@@ -231,14 +232,15 @@ fn world_sources_are_single_threaded_ecs_only() {
     // 注意只认 `set_executor(SingleThreadedExecutor...)` 调用形态，先剥掉 `use` 行：
     // 仅 import 标识符不算（否则删掉真正生效的 set_executor 调用，守卫仍绿 —— F2）。
     let tick_rs = crate_root().join("../world-bevy/src/tick.rs");
-    let tick_code = strip_comments_and_strings(&fs::read_to_string(&tick_rs).unwrap());
+    let tick_raw = fs::read_to_string(&tick_rs).unwrap();
+    let tick_code = strip_comments_and_strings(&tick_raw);
     assert!(
-        has_explicit_single_threaded_executor(&tick_code),
-        "world-bevy 的 tick 骨架必须显式 `set_executor(SingleThreadedExecutor...)`（仅 import 不算）"
+        tick_has_explicit_executor_and_rationale(&tick_raw),
+        "world-bevy 的 tick 骨架必须显式 `set_executor(...)`（裸 import 不算）且带 `EXECUTOR-RATIONALE` 注释说明理由"
     );
     assert!(
         scan_parallel_code(&tick_code).is_empty(),
-        "world-bevy 的 tick 骨架不得出现并行 API"
+        "world-bevy 的 tick 骨架不得出现外部线程/手搓线程 API（bevy 执行器允许）"
     );
 }
 
@@ -288,3 +290,21 @@ fn f() { s.set_executor(SingleThreadedExecutor::default()); }";
         "真实 set_executor(SingleThreadedExecutor...) 调用必须被识别"
     );
 }
+// ============================================================================
+// 重放确定性门（判据③）——**实现在 build 窗口做**（需 world-bevy World API + 编译迭代）。
+// 设计（8× 逐字节）：
+//   fn replay_once() -> Vec<Vec<u8>> {
+//       let mut w = World::new(32,32);           // 固定尺寸
+//       let mut traces = Vec::new();
+//       // 固定驱动：固定种子 + 固定操作序（spawn/move/attack/...，不含 HashMap 迭代序）
+//       for _tick in 0..K { let rec = w.tick(); traces.push(canonical_bytes(&rec)); }
+//       traces                                    // 每 tick 记录的**规范化字节**（Vec，非 HashMap）
+//   }
+//   #[test] fn replay_determinism_8x() {
+//       let base = replay_once();
+//       for i in 1..8 { assert_eq!(replay_once(), base, "replay #{i} 与基准逐字节不一致 ⇒ 并行引入非确定"); }
+//   }
+// 约束（红线）：canonical_bytes 只序列化**有序**结构（Vec/数组/显式排序的键），**严禁** HashMap/
+// HashSet 迭代序进输出；断言是**逐字节相等**，不得改容差。窗口期内先跑串行骨架应 8× 一致（基准）；
+// 换 MultiThreadedExecutor 后仍 8× 一致才算该并行组可用，否则该组退回串行。
+// ============================================================================

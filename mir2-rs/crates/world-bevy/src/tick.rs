@@ -1052,6 +1052,9 @@ impl TickRunner {
     pub fn new() -> Self {
         let mut schedule = Schedule::default();
         schedule.set_executor(SingleThreadedExecutor::default());
+        // EXECUTOR-RATIONALE(S1): 世界 tick 必须**可重放确定性**（同固定输入多次逐字节一致）。
+        // 并行化试点(step2)须先过 `tests/no_parallel.rs::replay_determinism_8x`（8× 逐字节），
+        // 再在**无数据冲突**的 system 组上换 MultiThreadedExecutor；有冲突/重放不一致的组退回串行。
         schedule.set_build_settings(tick_schedule_build_settings());
         // 顺序契约：阶段之间固定链式先后（与 STAGE_ORDER 逐项一致）。
         // bevy 的元组 `.chain()` 支持最多 20 项；本契约恰好 20 段（见 STAGE_ORDER）。
