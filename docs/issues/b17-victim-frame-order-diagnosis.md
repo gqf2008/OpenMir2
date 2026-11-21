@@ -79,3 +79,23 @@ now=1300 actor=1001 ident=8045  deliv=1200 due=true    # 1001 的 strike 晚一�
 **判定（推翻 §3/§4 的「候选(i) delivery 排期差」）**：**不是 delivery，是 pump/队列序**——actor 1001 队头是未到期的 640(`10123`,deliv1400)，把后面到期的 strike(`8045`,deliv1200) 挡了一步。**正是 opc-19 给的「同 delivery 但只排一条 ⇒ 回 pump，立即报」分支。**
 
 **修法方向（不实施）**：B17 **pump/队列序**——钉「**为什么 actor 1001 队头是 10123(640) 而 actor 1002 队头是 8045(strike)**」（两 victim actor 的入队序 / 四叉堆 tie 序不同？）。这决定同一 strike 是否被未到期队首挡住。**在 pump/入队序，不在 delivery 计算、更不在比较器。**
+
+## 6. tie 序对照实验（2026-11-22 夜间）——arity 假设被数据否掉
+
+probe（`SelfDelayQueue::enqueue` + pump peek 打 log，跑 `big_cloak_parity_s1`，跑完**还原 git 干净**；日志 `e5-logs/b17_probe2_run.log`）。
+
+**入队序列（全部 `prio=255` 相同）**：
+- actor `1001`: `[8045(seq0,deliv1200), 10123(seq2,deliv1400)]`
+- actor `1002`: `[8045(seq1,deliv1200)]`  ← 只有 strike，无 10123
+
+**arity 假设（4 叉 vs 二叉堆 tie 序）——被否**：`SelfDelayQueue` 只比 `priority`；enqueue sift-up `>=` 即停、dequeue sift-down `<=` 即停。**全等优先级下两者都不交换** ⇒ 二叉(.NET)与四叉(Rust) 在等优先级下**行为同构**：`swap_remove(0)` + 末元素移根、无重排。**arity 在等优先级下不起作用。**
+
+**churn 模拟**（等优先级：dequeue=swap_remove(0)末→根、enqueue=append）：
+- actor `1001` `[8045,10123]`：每次未到期队首 re-enqueue 后**交替** `[8045,10123]↔[10123,8045]`；
+- actor `1002` `[8045]`：恒 head=8045。
+
+⇒ 机制：2 元素等优先级队列的 swap churn 让「到期的 strike」与「未到期的 640」**每步交替出队首**；now 首次到 1200 那步若队首是 640 ⇒ strike 推后一步到 1300。此 churn **是 .NET-faithful** 的（Rust 已复刻 swap_remove+等停）。
+
+**判定（回答分叉）**：**不是堆实现(arity)差异**（等优先级下两堆同构）。是**等优先级 swap_remove churn × actor 1001 多一条 640 形成 2 元素队列**；分歧 phase＝「strike vs 640 谁先入队」或「peek 次数 parity」——即**入队序/cadence**，不是堆实现、也不是纯「实现自由度」。
+
+**still open（需 C# 侧/对照）**：oracle 侧自延迟队列的入队序/peek 次数无 log（C# 内部），无法从 golden 直接读；要钉 phase 差异落在「入队先后」还是「pump cadence」，需在 oracle 侧或 C# harness 的 `SendSelfDelayMsg`/`GetMessage` 加同类探针对照。**本卡停在诊断，不实施。**
