@@ -139,6 +139,49 @@
 
 ⇒ 凡"跨 actor 消息在同一 tick/下一 tick 落到谁"的判据，都隐含"装置迭代序 = 生产迭代序"这一**未核实假设**（本卡 §9 为出处）。该假设已登记为 **B24**（`docs/issues/golden-harness-blind-spots.md`）：跨 actor 顺序 = 驱动契约（`caster→target→obs_in→obs_out`），不是生产事实。**`e5` 清单只列这一条**（迭代序与跨 actor 契约是同一条假设，勿拆两行）。
 
+## 10. AOI 可见集与收件人序（⑦，2026-11-21）
+
+### 10.1 集合（一致）
+
+- 生产广播收件人：`src/M2Server/Actor/BaseObject.Message.cs::SendRefMsg`——以发送者为中心扫 `SendRefMsgRange`（缺省 12，`[Setup] SendRefMsgRange` 可配）的全格；**`Play` 非 ghost 恒收**；非 Play 仅 `WantRefMsg` 且 ident∈{`RM_STRUCK`,`RM_HEAR`,`RM_DEATH`}（`WantRefMsg` 只有 `PlayObject`/`ArcherGuard` 为 true ⇒ 常规广播 = ±12 内玩家）；`ObMode||FixedHideMode` ⇒ 只发自己。区域魔法 `src/M2Server/Actor/BaseObject.cs::GetMapBaseObjects` 同几何。
+- 装置：四玩家 (100,100)/(101,100)/(105,100)/(140,100) 均 `ActorMgr.Add` + `env.AddMapObject(CellType.Play)`；怪物进图但 `WantRefMsg=false`；帧按 `GateIdx=ActorId` 归属。
+- 实测：`hbfireball` = caster 8 / target 13 / obs_in 11 / **obs_out 0**（obs_out 距 39–40 格 > 12，负对照成立）；`warr-12` 仅 caster 4 帧（自指路径无广播）。⇒ **集合一致**。
+- 边界：怪物下游不 `Operate`（B2/B5）；装置只加载一张图（B6），跨图可见性未覆盖。
+
+### 10.2 序（两层）
+
+- **单次广播内**：`SendRefMsg`/`GetMapBaseObjects` 的收件人调用序 = 同一段生产代码（**x 外层 → y 内层 → cell `ObjList` 下标序**）⇒ 两侧一致。
+- **跨 actor**：处理序 = **B24 契约**（`caster→target→obs_in→obs_out`），不是 AOI 事实。
+- **`VisibleActors` 迭代序**：生产 = AOI 遇到序；装置 = `target→obs_in→monsters[]`（`UpdateVisibleGay` 回填序）。**今天不显形**（push stem 只有 target 相邻、obs_in 距 5 > 1、monsters 空），但加相邻怪会改变 `MagPushArround` 的 `Random(20)` 分配 ⇒ 已写死进 **B24 契约**。
+
+### 10.3 非纯几何（B25）
+
+`SendRefMsg` 有 500ms `VisibleHumanList` 缓存；重扫 `SendRefMsgRange`(12) 与复用过滤 `|dx|<11`/`|dy|<11` **不一致**（**11–12 格：重扫进、复用丢**），缓存期内新进入/移动者不更新。装置与 Rust 沿用同码 ⇒ **两侧同错**（对拍轴无感、realism 轴有偏）；做 AOI 边界对拍前必须先钉口径。已登记 **B25**。
+
+## 11. `due_ms_rel` 容差 32ms 的出处与盲区（⑨，2026-11-21）
+
+### 11.1 定义与推导
+
+- **唯一来源**：`mir2-rs/crates/shared/src/lib.rs` 的 `pub const DUE_MS_TOLERANCE_MS: i64 = 32;`（注释明写：比较器与驱动共用，禁止两处各写 32）。
+- **推导是保守取整，不是误差分析**：注释给"2× `Environment.TickCount` 粒度（15.6ms）"；实测同 stem 重生成抖动 `1000/1016`（= 1×16ms）。同一时钟两次量化读数的差，噪声上界约 1× 粒度，2× 不是严格推导。
+- **使用面**：只对 `ident==640` 的 late 帧（比较器 `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`、驱动 `game-svr` 的 `fireball_case_assert`；施毒 6/48 同口径）；其余帧的 `due_ms_rel` 只判**批次类**（0 vs >0）。比较器 `|Δ|>32` 红、驱动 `|Δ|<=32` 绿，两侧口径一致。
+
+### 11.2 可检出的最小真分歧
+
+- 机械阈值：`|Δ|>32` 才红。
+- 在带粒度噪声的取样下（golden 值可有 ±16ms 偏置、Rust 侧按步进精确）：真实差 δ **≤16ms 必被吞**（观测 ≤32）、**δ>48ms 必红**（观测 ≥δ−16>32）、**16–48ms 不确定**（20ms 可被吞）。
+
+### 11.3 当前状态：实际无掩蔽（但这是状态，不是容差性质）
+
+- committed golden 的 `due_ms_rel` 实测全部落在 **100ms 格点**（值集 0/600/700/800/1000/1200/1500，无非百倍数）；Rust 侧也按 100ms 步进 ⇒ 任何真实差异 ≥100ms ⇒ **32 在这些 stem 上等价于精确相等，藏不住**。
+- **B19 路径覆盖**（合并提交 `979851027`）：`RunFireball` 与 `ClientSpellXYEntry.Run` 均已接 `ClockSeam`（`MagicGolden/Program.cs::ClockSeam`、`ClientSpellXYEntry.cs` 同）；`--case fireball` 三跑逐字节相同、`warrskill` 两轮各 10 份 `diff -r` rc=0 ⇒ **`fireball` 的 due 已是确定值**，容差风险不再集中在它身上。
+
+### 11.4 判据（原样入卡）
+
+> **"容差内 = 没问题"是错的，只能说"无法与测量噪声区分"。**
+
+盲区是 **16–48ms 的亚格点差异**；当前所有 golden 都不产生亚格点差异 ⇒ **实际无掩蔽**，但这是"当前状态"，不是"容差性质"。若将来引入亚格点 `due`（真实时钟/非整步路径），应先归一化到格点或记录生成时噪声界，再谈容差。
+
 ---
 
 **裁决（单行）**：`生产的 actor Run 间隔 = 玩家 ≈300ms / 怪物 ≈250–300ms / NPC ≈400ms（名义常量、负载可变；怪物首跑相位 0–1500ms 随机），与 100ms 假设 不一致。`
