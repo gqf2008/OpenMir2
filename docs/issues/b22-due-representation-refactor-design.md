@@ -81,3 +81,31 @@
 1. **先做一个小 probe（只读）**：对 7 支各 dump「每帧触发消息的 `LateDelivery`/`DeliveryTime` + 帧当前 due」，逐帧标注「同步 emit / 后续 emit」，确认 A 型全部落在"后续 emit"。这决定 inherit 覆盖范围。
 2. B 型另起 B17 顺序对齐任务（与本卡并行、不耦合）。
 3. A 型按 (ii) 实现 → 第 §4 验收 → 重出 7 支 → 全量门。
+
+## 7. 审阅补充（opc-19 2026-11-22 批 probe 时要求明确）
+
+### 7.1 子消息 due 的 tie-break —— 结构性排除（比规则更强）
+
+`OperatePublic` 窗口内入队的子消息，若存在两层延迟来源（嵌套窗口/两条延迟消息窗口交叠），继承哪一个？
+- **本装置排水模型结构性排除嵌套/交叠**：排水是**单线程逐消息** `OperatePublic`——一次只对**一条**消息 `set CurrentDueMs → OperatePublic(m) → reset 0`；`OperatePublic(m)` 期间产生的子消息**只入队、不递归 drain**（C# `SendMsg` 入队，不在同一调用栈里再 `OperatePublic`）。⇒ 任一时刻至多**一个**"当前触发窗口"，子消息恒继承**当前 OperatePublic 那条消息**的 due，无需多源 tie-break。
+- **兜底规则（若将来引入递归/交叠 drain）**：取**最内层**（当前栈顶 OperatePublic 消息）的 due。此规则仅在模型变更时启用。
+
+### 7.2 genealogy 失效面 → §4 增「覆盖度自检」
+
+引用式 map 的已知失效面＝**跨队列拷贝/重排后引用丢失**（§5 止损 2）。⇒ §4 验收**新增**：
+- **probe 阶段就报「7 支里每支：能追到 origin 的帧数 / 追不到的帧数」**；
+- **追不到的比例**是 (ii) 可行性的**先决判据**：若追不到比例高（尤其覆盖到 A 型的"后续 emit"帧），说明引用链在这些路径已断 ⇒ (ii) 不值，退 (i)（需另批）或维持欠账。
+- 实现后验收：**逐帧追得到 origin 的比例 = 100%** 才允许把该帧 due 纳入比较；追不到的帧**保持不比较**（不硬凑）。
+
+### 7.3 `fireball`(RunFireball) 的双重缺口：castTick 与 genealogy 独立可验
+
+两个缺陷**分开验证、分开提交**，不许一个提交里互相掩盖：
+- **缺陷 1（castTick 缺失）**：`RunFireball` 未取 `castTick`、排水不 set `CurrentDueMs` ⇒ 该支**所有**帧记 0。**最小验证**：只补 `castTick` + 逐消息 set 点（不加 genealogy），看"同步 emit 的帧"是否从 0 变成正确值——绿则缺陷 1 已修。
+- **缺陷 2（genealogy）**：即使补了 set 点，"后续 emit 的帧"仍 0 ⇒ 需 inherit。**最小验证**：在缺陷 1 已绿的基础上加 genealogy，看"后续 emit 帧"是否变对。
+- ⇒ 两步各自带证据（同步帧 vs 后续帧分别由哪一步修好），**不得合在一提交**。
+
+### 7.4 B 型 2 支的归属（避免两卡都不认）
+
+`bigcloak`/`groupdeding`（recog 多重集相等、仅位置互换 + 800/900）＝**B17 多受害者出帧顺序对齐**，本卡**不覆盖**。归属：
+- **负责＝B17 顺序任务**：建议新起一张任务卡 `b17-victim-frame-order`（或在 B17 现卡 `self-delay-pump-heap-ordering` 加一节「多受害者出帧次序 vs Rust 泵步进」），本卡与它**边界不重叠**：B17 管**顺序**，顺序对了这两支 due 自动对、**零 due 表示改动**。
+- 本条已在 §2 声明；实现前先在 B17 侧登记该指向，**避免 bigcloak/groupdeding 落成"两个卡都说不是我的"**。
