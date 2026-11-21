@@ -88,6 +88,21 @@
 而 `Rm` 有 `delivery`；给 `Sent` 补 `delivery`（或 `StepDrainMs=1` 让批边界近似 1ms）后，
 本卡的普查就能从"上界"变成"可判定"。
 
+### 3.4 放宽清单（**以 `items-it13-37` 的权威清单为准，本卡只引用不复制**）
+
+验证面的放宽**不止** `frame_order_scope`。权威清单见
+`docs/issues/parity-comparator-relaxation-inventory.md`（由 `items-it13-37` 维护）；本卡只记与队列模型
+相关的部分：
+
+- **`frame_order_scope` 授权**：**6 个 stem**（`fire`、`skill10`、`amyounsul`、`amyounsul2`、
+  `groupamyounsul`、`groupamyounsul2`）⇔ **8 条清单条目**（MG-13/14/15/17/18/50/64/65）⇔ **4 个技能**
+  （6 / 9 / 10 / 48）。三个数字口径不同，别混用。
+- **不在该字段名下的 6 条放宽**（同样影响"阶段 2 后红不红"）：
+  `holyshield`（`drop_empty_receivers`，删空接收者）、`groupdeding`（`sort_sm_ident(716)` 组内多重集）、
+  `skeleton` / `sinsu` / `angel`（`sent_filter` 的 `keep=[17,638,642]`，只比三个 ident）、
+  `frames_640_caster`（不比 640 的 `tag`）。
+- **两条全局口径**：`Rm` 面多重集比较、640 `due_ms_rel` 的 `|Δ| ≤ 32` 容差。
+
 ### 3.2 一行可复跑命令（台账长期复用）
 
 ```bash
@@ -132,13 +147,62 @@ PY
 2. **pass 边界**：装置多 pass 排水把一部分"优先级序 vs 调用序"的差异吸收进录制序（见 §3.1 限定）。
 3. **恰好同序**：其余严格按序比较的 stem，Rust 的调用序恰好与 golden 序一致（否则早已红）。
 
-## 5. 移除条件
+## 4.1 证据更正（2026-11-21）：本卡的修复证据**只有 8/37**
 
-把所有 `RM_*` 下发（含发给自己的那条）统一进**逐收件人的 `NetPriorityQueue`**（键 `(byte)wIdent`；
-自延迟消息 255），消除 57 处直发；然后：
-- 全量重跑 `--lib` 与全部 magic 比较器（新 `run_id`）；
-- 8/37 的 `StepDrainMs=1` 实验结论并入（若证明 oracle 真按优先级出队，则本卡即其修复载体）；
-- 删掉为遮盖该差异而存在的多重集标记（`frame_order_scope`）并恢复严格按序。
+早先把 **21（`SKILL_SPACEMOVE`）** 也算作本卡证据是错的：21 当前的驱动/比较器红是
+**换图簇缺 `SM_SERVERCONFIG(11029)` 一帧**（`golden 有 rust 无=[(11029,…)]`），属**另一条独立线**
+（Session 加字段 + 登录同步，另卡已批）。**21 已从本卡证据中移除**——按队列模型去修 21 不会消掉那条红。
+本卡的实证基础只剩 **8/37**：`SM_BACKSTEP(9)` 先于 `SM_MAGICFIRE(638)`，且 `StepDrainMs=1` 重放
+仍为 `638, 9`（`43` 的实验）⇒ 不是 100ms 排水伪影。
+
+## 5. 修复方案 v1（两段式）
+
+**机制目标（不变）**：所有 `RM_*` 下发（**含发给自己的那条**）统一进**逐收件人**的
+`NetPriorityQueue`，键 = `(byte)RM ident`（自延迟消息 255）；同优先级按入队序出队。
+
+**阶段 1（stopgap，按站点，可独立合）**：只处理已确证的 8/37 —— 把该支效果体产生的
+`RM_PUSH` 派生帧（`SM_BACKSTEP`）与共享尾的 `RM_MAGICFIRE` 派生帧（`SM_MAGICFIRE`）收进**同一个**
+`SpellFrameBuf`，统一按优先级 flush。写集：`mir2-rs/bins/game-svr/src/lib.rs`（8/37 分支及其
+`finish_spell_tail` 调用点）。**不含 21**（见 §4.1）。
+
+**阶段 2（全局）**：把 §2 统计的 57 处直发收敛为入队。写集：同一 `lib.rs`（57 处调用点）+
+视需要 `mir2-rs/crates/world-bevy/src/world.rs`（效果体内的发送）+ 比较器删除放宽（见 §6）。
+
+**阶段 1 不做也活着（重要，别读成前置）**：阶段 1 只是 stopgap，**可以整段跳过、直接做阶段 2**。
+反过来则不行——**只做阶段 1 不做阶段 2**，本卡的全局差异（其余 stem 的直发）仍然存在，只是 8/37 的
+红不再出现。阶段 2 落地后，阶段 1 的站点改动按 §6 表第 3 行删除。
+
+**阶段 2 的前置（必须先做）**：让装置序可当基准——给台账 `Sent` 补 `delivery`（`Rm` 已有）或
+全量 `StepDrainMs=1` 重出；否则队列化后 Rust 出优先级序、golden 记的是"pass 内优先级 + pass 间时间"，
+会**修了产品、红了装置**（§7 具体例子）。
+
+## 6. 移除条件（逐条可执行；"当 X 成立 ⇒ 删 Y，并要求 Z 绿"）
+
+| # | 现在的放宽 | 移除条件（X） | 删除项（Y） | 验收（Z） |
+| --- | --- | --- | --- | --- |
+| 1 | `frame_order_scope=multi_victim_same_tick`（**6 个 stem**：`fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2`；对应 **8 条清单条目** MG-13/14/15/17/18/50/64/65，即 **4 个技能** 6 / 9 / 10 / 48） | 阶段 2 合并 **且**这 6 个 stem 的 `Sent` 严格序比对全绿 | 6 份 golden 的 marker + `real_ledger_verify_labels_opts` 的 stem 白名单 + `verify` 的 `multi_victim` 分支 | 全量 `--lib` + 全部 magic 比较器绿 |
+| 2 | `Rm` 面通用多重集比较 | 台账 `Rm` 记录 `delivery`/pass 号（装置改动）后 | 把 `Rm` 改为按 `(priority, 入队序)` 严格比 | 全部比较器绿 |
+| 3 | 阶段 1 的站点级 `SpellFrameBuf` 收口 | 阶段 2 落地 | 阶段 1 的局部收口代码 | 8/37 对应 stem 的 `real_rust_ledger_*` 严格序绿 |
+
+## 7. 全量修复的预期红（**按"比较面有多宽"分层**，不是按"是否严格序"二分）
+
+**具体前后对比（宽面）**：`fireboom/s1/target` golden 现序 `[17, 638, 53, 31, 656]`；按 RM 优先级
+（24 / 68 / 136 / 154 / 167）应为 `[17, 53, 638, 656, 31]` ⇒ **53↔638、656↔31 两组换位**。
+
+| 比较面 | stem（示例） | 阶段 2 后预期 |
+| --- | --- | --- |
+| **宽**（全帧严格序） | `fireboom`、`fireboom47`、`lightflower`、`snowwind`、`grouplightening`、`lightning-11`、`lightning-45`、`fireball`、`fireball-5`、`firecharm`、`hbfireball`、`showhp` | **必先红**（上表两组换位即预测） |
+| 宽（现行 marker，阶段 2 后转宽） | `fire`、`skill10`、`amyounsul`、`amyounsul2`、`groupamyounsul`、`groupamyounsul2` | 删 marker 后按宽面处理，**可能红** |
+| **窄**（只比 3 个 ident 的 keep） | `skeleton`、`sinsu`、`angel` | **可能根本不红**——比较面本来就窄 |
+| 空接收者裁剪 | `holyshield` | 可能不红 |
+| 组内多重集 | `groupdeding`（716 组） | 可能不红 |
+| 全局口径 | `Rm` 多重集、640 `due_ms_rel` 的 ±32ms 容差 | 与帧序无关/看不见 |
+
+**必须写死的一句**：**"红不了 ≠ 没问题"。** 队列化后上面"窄面/裁剪/组内多重集"的 stem 依然绿，
+**不代表**它们的帧序对了，只代表**比较面看不见**。阶段 2 完成后，**不得**拿"全绿"当"帧序已对齐"的
+证据——那时要按 §6 表逐条把放宽拆掉，拆完仍绿才算。
+
+验收口径（opc-19 定死）：`Sent` 严格序 + 全量回归。
 
 ## 关联
 
