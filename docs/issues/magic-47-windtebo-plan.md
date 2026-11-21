@@ -158,3 +158,22 @@ public IActor GetPoseCreate() {
   - 取两颗种子覆盖 `Random(2)=0/1`：`=1` 时步数 +1（帧数红）；`=0` 时帧可能相同、**仅抽数红**
     ——这正是它比「帧集合对不上」精确的地方。
 - **禁项**：不得用「帧集合相同」反推「变异未生效」；判据以 `Rng` 账本为准。
+
+## S6 收口记录（2026-11-21，`card/mg47-windtebo`）
+
+**交付**：S2 `2acce3eca`（效果体 + host 臂 + 6 判据单测）、S3/S4 `15e53ab18`（装置 spec + `windtebo.json`
+非退化 golden + 驱动 + 比较器；**折笔理由**：装置与驱动/比较器是同一件事的两面，拆开中间态不可跑）、
+S5 `09b0874d3`（判别性测试三颗）。manifest MG-47 已由本批作者升格 `verified`（scope 含牙红证、门 N、
+生产不可达与名字陷阱两句），`deviation: null`；whitelist T-285 标已收口。
+
+**五颗牙（红在哪一类判据，写死）**
+| 牙 | 改坏点 | 红在哪 |
+| --- | --- | --- |
+| ① | `windtebo_chance` 系数 `L*6→L*3` | 阈值 13 vs 10 ⇒ `windtebo_chance_uses_coefficient_six_not_three` 红（抽数面） |
+| ② | 格数 `+Random(2)`（误抄 8/37） | 种子 A **帧**红 `left:2 right:1`；种子 B 帧同、**仅 RNG** 红 `inext 2 vs 1` |
+| ③ | 选择面改遍历 `VisibleActors` | **帧集合**红（`windtebo_ignores_visible_actor_outside_front_cell` 与 `windtebo_pushes_*` 的 `bo_train`）——**不红在抽数** |
+| ④ | 删 `StickMode` 门 | A **帧**红「不推、boTrain=false」；B **抽数**红「0 抽…不得先抽」 |
+| ⑤ | 前格空（夹具） | 基线 `windtebo_empty_front_cell_is_zero_draw`：0 帧 0 抽 |
+
+**门（写死 N）**：`game-svr --lib` 2198/0/139/0；`world-bevy --lib` 909/0；`parity-gate Both`
+Driver 131 / Comparator 45，0 红 0 零匹配。

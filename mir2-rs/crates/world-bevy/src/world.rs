@@ -7544,14 +7544,13 @@ impl World {
     /// **魔号 35（`SKILL_WINDTEBO` 狂风/灭天火）效果体**：`MagicManager.MagWindTebo`
     /// （`MagicManager.cs:858-874`）。
     ///
-    /// 取数次序（与 oracle 同序；**守卫全在骰之前** ⇒ 任一不过即 0 抽）：
-    /// 1. `GetPoseCreate()`：`GetFrontPosition(Dir)`（[`crate::magic::front_position`]，越界 clamp）
-    ///    + `Envir.GetMovingObject(nx, ny, true)`（[`World::moving_object_at`]，前格首个
-    ///    `!Ghost && !Death` 的 actor）——**零抽**；
-    /// 2. 守卫链（`:862`）：`target != null && target != self && !Death && !Ghost &&
-    ///    IsProperTarget && !StickMode`，再「邻格 + 等级严格大于」；
-    /// 3. `Random(20) < level*6 + 6 + gap`（[`crate::magic_effect::windtebo_chance`]）；
-    /// 4. `CharPushed(next_direction, 1 + max(0, level-1))`（[`World::push_now`]）——**无第二抽**。
+    /// 取数次序（与 oracle 同序；**守卫全在骰之前** ⇒ 任一不过即 0 抽）。先 `GetPoseCreate()`：
+    /// `GetFrontPosition(Dir)`（[`crate::magic::front_position`]，越界 clamp）+ `Envir.GetMovingObject`
+    /// （[`World::moving_object_at`]，前格首个 `!Ghost && !Death` 的 actor），**零抽**；
+    /// 随后过守卫链（`:862`：`target != null && target != self && !Death && !Ghost && IsProperTarget
+    /// && !StickMode`，再「邻格 + 等级严格大于」），最后 `Random(20) < level*6 + 6 + gap`
+    /// （[`crate::magic_effect::windtebo_chance`]）与 `CharPushed(next_direction, 1 + max(0, level-1))`
+    /// （[`World::push_now`]，**无第二抽**）。
     ///
     /// 返回 `(bo_train, events)`：oracle `MagWindTebo` 的 `result` 在**骰通过后即 true**
     /// （不看 `CharPushed` 实际推进格数），`case SKILL_WINDTEBO` 用它置 `boTrain`。
@@ -16424,6 +16423,68 @@ mod tests {
             format!("{expect:?}"),
             "恰 1 抽（该种子下若误加 Random(2)，其值为 0 ⇒ 帧不变、仅 RNG 流红）"
         );
+    }
+
+    /// ① 系数判据：`level*6 + 6`（不是 8/37 的 `*3`）。取「首抽 ∈ [10,12]」的种子：
+    /// 6 支阈值 13 ⇒ 过；3 支阈值 10 ⇒ 不过。牙（改成 `level*3`）⇒ 本测必红。
+    #[test]
+    fn windtebo_chance_uses_coefficient_six_not_three() {
+        let seed = (1..10_000)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let v = r.random_below(20);
+                (10..=12).contains(&v)
+            })
+            .expect("必有首抽 10..=12 的种子");
+        let mut r = RandomNumber::with_seed(seed);
+        assert!(
+            crate::magic_effect::windtebo_chance(&mut r, 1, 1),
+            "level=1 gap=1 ⇒ 阈值 6+6+1=13；首抽 ≤12 时 6 支必过（3 支阈值 10 ⇒ 该种子会判失败）"
+        );
+    }
+
+    /// ③ 选择面：**只取 `Dir` 前格**。目标在前格外（同图、非前格）⇒ 0 帧 0 抽。
+    /// 牙（改成遍历 `VisibleActors`/扫描邻居）⇒ 该目标会被选中 ⇒ 本测必红。
+    #[test]
+    fn windtebo_ignores_target_outside_front_cell() {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 5, 5, 10));
+        // (5,7)：同图、相邻距离 2（不在前格 (6,5)）。
+        let _other = w.add_entity(player(2, "other", 5, 7, 1));
+        w.tick();
+        w.entities.get_mut(caster).unwrap().ai.dir = crate::magic::DIR_RIGHT;
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(!bo_train && events.is_empty(), "非前格目标不得被推");
+        assert_eq!(format!("{:?}", w.rng), before, "未选中 ⇒ 0 抽");
+    }
+
+    /// ③B 选择面（牙用）：**`VisibleActors` 里有邻格目标（6,6）、但前格 (6,5) 为空** ⇒
+    /// 基线必须 **0 帧 0 抽**（`GetPoseCreate` 只看前格）。牙（改成遍历 `VisibleActors`）⇒
+    /// 该目标被选中并被推 ⇒ **帧集合红**（不是抽数红）。
+    #[test]
+    fn windtebo_ignores_visible_actor_outside_front_cell() {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 5, 5, 10));
+        let side = w.add_entity(player(2, "side", 6, 6, 1)); // 斜邻，不是前格
+        w.tick();
+        {
+            let b = w.entities.map_binding_mut(caster).unwrap();
+            b.visible_actors.push(crate::entity::VisibleBaseObject {
+                target: side,
+                flag: crate::entity::VisibleFlag::Show,
+            });
+        }
+        w.entities.get_mut(caster).unwrap().ai.dir = crate::magic::DIR_RIGHT; // 前格 = (6,5)
+        w.rng = RandomNumber::with_seed(7);
+        let before = format!("{:?}", w.rng);
+        let (bo_train, events) = w.cast_windtebo_spell(caster, 1);
+        assert!(
+            !bo_train && events.is_empty(),
+            "前格为空 ⇒ 即使 VisibleActors 有邻格目标也不得推（选谁，不是抽几次）"
+        );
+        assert_eq!(format!("{:?}", w.rng), before, "未选中 ⇒ 0 抽");
     }
 
     /// ② 前格为空 ⇒ `GetPoseCreate` null ⇒ **0 帧 0 抽**。
