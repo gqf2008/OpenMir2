@@ -6,9 +6,11 @@
 //! - [`ShardId`]：分片编号（0 起；[`HOST_SHARD`] = 宿主当前服务的片）；
 //! - [`ShardConfig`]：`MIR2_SHARDS`（**默认 1**；非法值 fail-closed）；
 //! - [`ShardLayout`]：`map_id → ShardId` 的**静态**归属表（任意分组；P2-3a 起不再要求前缀）；
-//!   [`ShardLayout::host_map_sizes`] 返回**全长度**尺寸表（拥有图真实尺寸 + 其它片 1×1 stub），
-//!   [`ShardLayout::host_ownership`] 给出 `world.set_map_ownership` 的位图；
-//! - [`ShardRuntime`]：宿主侧运行期句柄（布局 + 跨片进图/连接点/MapChange 拒绝计数）。
+//!   [`ShardLayout::local_map_sizes`] 返回**全长度**尺寸表（拥有图真实尺寸 + 其它片 1×1 stub），
+//!   [`ShardLayout::local_ownership`] 给出 `world.set_map_ownership` 的位图；片 0 另有
+//!   `host_*` 兼容别名（P2-1/P2-2 调用点语义不变）；
+//! - [`ShardRuntime`]：**每片**运行期句柄（本地片号 + 布局 + 跨片进图/连接点/MapChange 拒绝计数）；
+//!   [`ShardRuntime::new`] 造片 0（P2-1/P2-2 宿主语义），[`ShardRuntime::for_shard`] 造任意片（P2-3b）。
 //!
 //! **`MIR2_SHARDS=1` 零行为变化**：单片布局把每张图都归片 0，
 //! [`ShardRuntime::host_owns`] 与 [`ShardRuntime::route_allowed`] 恒真、
@@ -394,15 +396,16 @@ impl ShardLayout {
         }
     }
 
-    /// 宿主 World 的 `map_sizes`（**全局下标保序**，P2-3a）：长度 = 注册表地图数。
+    /// **某片** World 的 `map_sizes`（**全局下标保序**，P2-3a）：长度 = 注册表地图数。
     ///
-    /// - 片 0 拥有的图 ⇒ 取 `all[map_id]` 的真实尺寸；
-    /// - 其它片 ⇒ **1×1 stub**（`MapGrid::new` 要求尺寸 > 0），承载全局下标；
+    /// - `shard` 拥有的图 ⇒ 取 `all[map_id]` 的真实尺寸；
+    /// - 其它图 ⇒ **1×1 stub**（`MapGrid::new` 要求尺寸 > 0），承载全局下标；
     ///   stub 上的实体由 `World::owned_maps` + 换图/落格入口 fail-closed 禁止。
     ///
     /// 单片时片 0 拥有全部图 ⇒ 返回与输入逐元素相同的副本（零行为变化）。
+    /// 越界片号返回全 stub（[`ShardRuntime::for_shard`] 已先行 panic；本方法保持纯函数语义）。
     #[must_use]
-    pub fn host_map_sizes(&self, all: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    pub fn local_map_sizes(&self, shard: ShardId, all: &[(i32, i32)]) -> Vec<(i32, i32)> {
         const STUB: (i32, i32) = (1, 1);
         debug_assert_eq!(
             self.map_count(),
@@ -412,7 +415,7 @@ impl ShardLayout {
             all.len()
         );
         let mut sizes = vec![STUB; self.map_count()];
-        for &map_id in self.maps_of(HOST_SHARD) {
+        for &map_id in self.maps_of(shard) {
             if let Some(&size) = all.get(map_id) {
                 sizes[map_id] = size;
             }
@@ -420,18 +423,31 @@ impl ShardLayout {
         sizes
     }
 
-    /// 宿主 World 的 `owned_maps` 位图（长度 = 注册表地图数；`true` = 片 0 拥有）。
-    ///
-    /// 宿主在 `World::with_maps` 之后调用 `world.set_map_ownership(&layout.host_ownership())`。
+    /// 宿主片（片 0）的 `map_sizes`——P2-1/P2-2 的兼容别名（= `local_map_sizes(HOST_SHARD, …)`）。
     #[must_use]
-    pub fn host_ownership(&self) -> Vec<bool> {
+    pub fn host_map_sizes(&self, all: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        self.local_map_sizes(HOST_SHARD, all)
+    }
+
+    /// **某片** World 的 `owned_maps` 位图（长度 = 注册表地图数；`true` = 该片拥有）。
+    ///
+    /// 每个 World 在 `World::with_maps` 之后调用 `world.set_map_ownership(&layout.local_ownership(id))`。
+    /// 越界片号返回全 `false`（[`ShardRuntime::for_shard`] 已先行 panic）。
+    #[must_use]
+    pub fn local_ownership(&self, shard: ShardId) -> Vec<bool> {
         let mut owned = vec![false; self.map_count()];
-        for &map_id in self.maps_of(HOST_SHARD) {
+        for &map_id in self.maps_of(shard) {
             if let Some(slot) = owned.get_mut(map_id) {
                 *slot = true;
             }
         }
         owned
+    }
+
+    /// 宿主片（片 0）的 `owned_maps` 位图——P2-1/P2-2 的兼容别名。
+    #[must_use]
+    pub fn host_ownership(&self) -> Vec<bool> {
+        self.local_ownership(HOST_SHARD)
     }
 
     /// 覆盖校验输出（启动日志用）：`shards/maps/assigned/per_shard`。
@@ -778,22 +794,39 @@ pub struct ShardCounters {
     pub cross_shard_map_change_refused: u64,
 }
 
-/// 宿主侧分片运行时句柄：布局 + 拒绝计数。
+/// 每片运行期句柄：**本地片号** + 布局 + 拒绝计数。
 ///
-/// P2-1 只定义与单测覆盖；P2-2 起 `sim_loop` 持有它做 map 组守卫，
-/// P2-3 起由会话路由器按 `shard_of_map` 分发事件。
+/// P2-1 只定义与单测覆盖；P2-2 起 `sim_loop` 持有它做 map 组守卫；
+/// **P2-3b** 起每片一个实例（[`Self::for_shard`]），[`Self::new`] 是片 0 的兼容入口。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShardRuntime {
     layout: ShardLayout,
+    /// **P2-3b**：本实例服务的片。P2-1/P2-2 只有一个实例（片 0）。
+    local: ShardId,
     counters: ShardCounters,
 }
 
 impl ShardRuntime {
-    /// 用给定布局构造（计数归零）。
+    /// 用给定布局构造**片 0** 的运行时（P2-1/P2-2 宿主语义；计数归零）。
     #[must_use]
     pub fn new(layout: ShardLayout) -> Self {
+        Self::for_shard(layout, HOST_SHARD)
+    }
+
+    /// 为指定片构造运行时（P2-3b：每片一个实例，各驱动自己的 World）。
+    ///
+    /// `shard` 必须落在 `0..layout.count()`：两处由同一份配置构造，越界是**编程错误**
+    /// （不是用户配置错误）⇒ 立即 panic，免得静默起一个永远没有地图的 World。
+    #[must_use]
+    pub fn for_shard(layout: ShardLayout, shard: ShardId) -> Self {
+        assert!(
+            shard.index() < usize::from(layout.count()),
+            "本地片 {shard} 越界：布局只有 {} 片",
+            layout.count()
+        );
         Self {
             layout,
+            local: shard,
             counters: ShardCounters::default(),
         }
     }
@@ -804,33 +837,57 @@ impl ShardRuntime {
         &self.layout
     }
 
+    /// 本地片号（该 runtime 服务的片）。
+    #[must_use]
+    pub const fn local_shard(&self) -> ShardId {
+        self.local
+    }
+
     /// 累计拒绝计数。
     #[must_use]
     pub fn counters(&self) -> ShardCounters {
         self.counters
     }
 
-    /// `map_id` 是否归宿主片（片 0）。单片布局恒真。
+    /// `map_id` 是否归**本地片**。单片布局恒真。
+    ///
+    /// **P2-3b**：这是主谓词（每个 World 只关心自己片）；[`Self::host_owns`] 是片 0 之上的
+    /// 兼容别名。P2-3b 的每片 runtime 必须经本方法判归属——否则非 0 片会把自己的图当外来图。
     #[must_use]
-    pub fn host_owns(&self, map_id: usize) -> bool {
-        self.layout.owns(HOST_SHARD, map_id)
+    pub fn local_owns(&self, map_id: usize) -> bool {
+        self.layout.owns(self.local, map_id)
     }
 
-    /// 一条地图连接点（走路换图）是否允许注册：**源与目标都必须在宿主片内**。
+    /// `map_id` 是否归宿主片（片 0）。
+    ///
+    /// 兼容别名：P2-1/P2-2 的调用点都建在「本地片 = 片 0」的 runtime 上（[`Self::new`]）
+    /// ⇒ 与 [`Self::local_owns`] 等价。非 0 片的 runtime 请用 `local_owns`。
+    #[must_use]
+    pub fn host_owns(&self, map_id: usize) -> bool {
+        self.local_owns(map_id)
+    }
+
+    /// 一条地图连接点（走路换图）是否允许注册：**源与目标都必须在本地片内**。
     /// 单片布局恒真。
     #[must_use]
+    pub fn local_route_allowed(&self, src_map: usize, dst_map: usize) -> bool {
+        self.local_owns(src_map) && self.local_owns(dst_map)
+    }
+
+    /// 宿主片（片 0）的连接点判定——[`Self::new`] 上的兼容别名。
+    #[must_use]
     pub fn route_allowed(&self, src_map: usize, dst_map: usize) -> bool {
-        self.host_owns(src_map) && self.host_owns(dst_map)
+        self.local_route_allowed(src_map, dst_map)
     }
 
     /// 地图连接点分类（**唯一分类口径**；`sim_loop` 的注册过滤与日志都走这里）。
     ///
-    /// 顺序是契约：先看源（整条是否属宿主片），再看目标（是否跨片）。
+    /// 顺序是契约：先看源（整条是否属本地片），再看目标（是否跨片）。
     #[must_use]
     pub fn classify_route(&self, src_map: usize, dst_map: usize) -> RouteClass {
-        if !self.host_owns(src_map) {
+        if !self.local_owns(src_map) {
             RouteClass::ForeignShard
-        } else if !self.host_owns(dst_map) {
+        } else if !self.local_owns(dst_map) {
             RouteClass::CrossShard
         } else {
             RouteClass::Keep
@@ -855,7 +912,7 @@ impl ShardRuntime {
         map_name: &str,
         map_id: usize,
     ) -> Option<String> {
-        if self.host_owns(map_id) {
+        if self.local_owns(map_id) {
             return None;
         }
         let count = self.note_cross_shard_entry_refused();
@@ -881,7 +938,7 @@ impl ShardRuntime {
     /// 目标图归本片 ⇒ `true`；否则累计 `cross_shard_map_change_refused` 并返回 `false`
     /// （handoff 归 P2-5）。正常恒 `true`：world 已在所有换图入口 fail-closed，这里是宿主侧防御。
     pub fn accept_map_change(&mut self, map_id: usize) -> bool {
-        if self.host_owns(map_id) {
+        if self.local_owns(map_id) {
             return true;
         }
         self.counters.cross_shard_map_change_refused += 1;
@@ -1443,5 +1500,97 @@ mod tests {
         assert!(lines[1].1.contains("per_shard=[1,2]"), "{:?}", lines[1]);
         assert_eq!(lines[2].0, "WRN");
         assert!(lines[2].1.contains("shard 1"), "{:?}", lines[2]);
+    }
+
+    // ---------- P2-3b：本地片参数化 ----------
+
+    /// **P2-3b 牙**：同一份布局造出的每片 runtime 只认自己的图（片 1 视角与片 0 互补）。
+    ///
+    /// 红检：把 `for_shard` 忽略 `shard`（恒用 HOST_SHARD）⇒ 片 1 的 `local_owns(1)` 变 false、
+    /// `local_owns(0)` 变 true ⇒ 前四条断言红；把 `classify_route` 的 `local_owns` 改回
+    /// `layout.owns(HOST_SHARD, …)` ⇒ 分类三条红。
+    #[test]
+    fn for_shard_keeps_from_its_own_perspective() {
+        let maps = map_names(&["A", "B", "C"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:A;1:*")).expect("两片划分");
+        let mut s1 = ShardRuntime::for_shard(layout, ShardId::new(1));
+        assert_eq!(s1.local_shard(), ShardId::new(1));
+        assert!(s1.local_owns(1) && s1.local_owns(2), "片 1 拥有 B/C");
+        assert!(!s1.local_owns(0), "片 1 不拥有 A");
+        assert_eq!(s1.classify_route(2, 1), RouteClass::Keep, "片内");
+        assert_eq!(
+            s1.classify_route(2, 0),
+            RouteClass::CrossShard,
+            "片 1 → 片 0"
+        );
+        assert_eq!(
+            s1.classify_route(0, 1),
+            RouteClass::ForeignShard,
+            "源不在片 1"
+        );
+        // guard 以本地片为准：片 1 的图放行、片 0 的图拒绝并计数。
+        assert_eq!(s1.guard_cross_shard_enter("hero", "B", 1), None);
+        let line = s1
+            .guard_cross_shard_enter("hero", "A", 0)
+            .expect("片 0 的图对片 1 是跨片");
+        assert!(line.contains("map_id=0"), "{line}");
+        assert_eq!(s1.counters().cross_shard_entry_refused, 1);
+        assert!(!s1.accept_map_change(0) && s1.accept_map_change(2));
+    }
+
+    /// **P2-3b 牙**：`new` 与 `for_shard(…, 0)` 逐字段相等（兼容别名不改片 0 语义）。
+    ///
+    /// 红检：让 `new` 直接填 `local: ShardId::new(1)`（或跳过 `for_shard` 的越界断言）⇒ 相等断言红。
+    #[test]
+    fn new_is_for_shard_zero() {
+        let layout =
+            ShardLayout::partition(2, &map_names(&["A", "B"]), Some("0:A;1:*")).expect("两片划分");
+        assert_eq!(
+            ShardRuntime::new(layout.clone()),
+            ShardRuntime::for_shard(layout, HOST_SHARD)
+        );
+    }
+
+    /// **P2-3b 牙**：每张图在**恰好一片**的 `local_map_sizes` 里是真实尺寸，其余片是 1×1 stub；
+    /// `local_ownership` 与之逐位一致。
+    ///
+    /// 红检：把 `local_map_sizes` 里的 `self.maps_of(shard)` 改回 `maps_of(HOST_SHARD)`
+    /// ⇒ 片 1 的尺寸表变成与片 0 相同 ⇒ 第二条与「恰属一片」断言红。
+    #[test]
+    fn local_sizes_and_ownership_partition_every_map_exactly_once() {
+        let maps = map_names(&["A", "B", "C", "D"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:B,D;1:*")).expect("非前缀划分");
+        let all = vec![(10, 10), (11, 11), (12, 12), (13, 13)];
+        let s0 = layout.local_map_sizes(HOST_SHARD, &all);
+        let s1 = layout.local_map_sizes(ShardId::new(1), &all);
+        assert_eq!(s0, vec![(1, 1), (11, 11), (1, 1), (13, 13)]);
+        assert_eq!(s1, vec![(10, 10), (1, 1), (12, 12), (1, 1)]);
+        for map_id in 0..maps.len() {
+            let real = [s0[map_id] != (1, 1), s1[map_id] != (1, 1)];
+            assert_eq!(
+                real.iter().filter(|&&x| x).count(),
+                1,
+                "map_id={map_id} 必须恰属一片"
+            );
+        }
+        assert_eq!(
+            layout.local_ownership(HOST_SHARD),
+            vec![false, true, false, true]
+        );
+        assert_eq!(
+            layout.local_ownership(ShardId::new(1)),
+            vec![true, false, true, false]
+        );
+    }
+
+    /// 越界片号是编程错误 ⇒ `for_shard` panic（不静默起一个永远没有地图的 World）。
+    ///
+    /// 红检：删掉 `for_shard` 开头的 `assert!` ⇒ 本用例从 panic 变成正常返回 ⇒ 红。
+    #[test]
+    #[should_panic(expected = "越界")]
+    fn for_shard_panics_on_out_of_range_shard() {
+        let layout =
+            ShardLayout::partition(2, &map_names(&["A", "B"]), Some("0:A;1:*")).expect("两片划分");
+        let _ = ShardRuntime::for_shard(layout, ShardId::new(2));
     }
 }
