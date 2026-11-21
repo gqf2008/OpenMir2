@@ -55,3 +55,24 @@
 - **文档过时**：`DisplayTable` 已经是 `Vec + HashMap` 索引；任何把它的 `get` 描述成 O(n) 的旧文字以本表 L5 为准。
 - **需实测**：L8 的格内对象分布、以及"每 tick 各 `online.iter()` 实际次数"（可用 tick profile / 计数器在 `43` 的批里量化）——本文件不给测量值。
 - **红线复述**：任何"保序索引"改动只能加速 `get`，不得让 `HashMap` 迭代序进入逻辑；摘除必须维持 `Vec` 原序（`Vec::remove`，不用 `swap_remove`）。
+
+## 5. 实测：`simmonsterai_bench` **不经过** `OnlineRegistry`（2026-11-21）
+
+`mir2-rs/bins/game-svr/src/simmonsterai_bench.rs` 全文件**没有** `online` / `OnlineRegistry` /
+`handle_say` / `send_ref_msg_to_targets` 引用；`run_arm` 只 `build_world` + `world.tick()`。
+所谓"客户端 500/1000 档"是 `race=0` 的实体，不是在线表 ⇒ 用它跑 L1/L2 索引前后两臂，
+测到的是**同一份代码**。
+
+实测（同机、同 target、debug、每臂 3 次，口径
+`MIR2_SIMMON_BENCH=1 MIR2_SIMMON_CLIENT_TIERS=500,1000 MIR2_SIMMON_CLIENT_ONLY=1 MIR2_SIMMON_TICKS=100`）：
+
+| 档（ms/tick，median） | 无索引 | 有索引 | 结论 |
+| --- | --- | --- | --- |
+| player-only 500 | 20.435 | 22.001 | 噪声 |
+| player-only 1000 | 40.301 | 52.196 | 噪声（单次抖动达 34%） |
+| mixed 500 | 172.085 | 183.731 | 噪声 |
+| mixed 1000 | 222.870 | 243.929 | 噪声 |
+
+**用途边界**：该 bench **不能**作为 L1/L2 索引的收益证据。端到端收益需
+`sim_loop` 每 tick 的 `online.iter().find` 调用次数 × 单次耗时探针（另立卡）；
+算法级证据见 `online_lookup_micro_index_vs_linear` 微基准（n=986/2800，线性 vs 索引，≥5× 才算过）。
