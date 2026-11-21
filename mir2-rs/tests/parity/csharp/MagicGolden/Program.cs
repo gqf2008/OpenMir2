@@ -2962,6 +2962,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // 卡 36：施法者 Abil 按等级派生（只 RecalcLevelAbilitys，不碰 WAbil）。
         if (!string.IsNullOrEmpty(spec.HomeMap)) caster.HomeMap = spec.HomeMap;
         if (spec.CasterLoginOrderAbil) caster.RecalcLevelAbilitys();
+        // **B21 语义声明**：`caster_sc`/`caster_mc` 是**施法输入**——`WAbil.SC/MC` 在 `DoSpell` 之前的
+        // 取值，供 `nTime = GetAttackPower(GetPower13(60) + Lo(SC)*10, Hi(SC)-Lo(SC)+1)`。
+        // **不是事后态声明**：生产 `AttPowerUp → RecalcAbilitys()`（`WAbil = Abil.Clone()`，
+        // `BaseObject.Abil.cs:27`）会按 `Abil` 重物化（Warrior 等级派生 ⇒ SC/MC = 0），两者**本就不同**。
+        // **错误修法（反例，2026-11-21 实测）**：把输入"物化"进 `Abil.SC/MC` ⇒ oracle 事后态变成 15，
+        // `SM_ABILITY(52)` 的 `WAbil` 尾 MC/SC 字节 0→15（帧翻转），而 Rust `recalc_session_ability`
+        // → `level_ability_base` 每次按等级覆盖 ⇒ comparator 的 `Sent[*].tail` 严格比较**必红**。
+        // 语义门只守反方向：`Abil` 自登录序派生后**不得再被改写**（防再造同一错误修法）。
+        int loginAbilSc = caster.Abil.SC;
+        int loginAbilMc = caster.Abil.MC;
         if (spec.CasterCharStatusEx != 0) caster.CharStatusEx = spec.CasterCharStatusEx;
         if (spec.CasterHp > 0)
         {
@@ -3285,6 +3295,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // 取在之后会让延迟帧的 due 变成 `1000 − DoSpell 耗时`（Sleep 过冲下落到 900 一类），
         // 那是测量伪影、不是排期。t0 与 `SendSelfDelayMsg` 的 `GetTickCount()` 同源（同一时钟）。
         long castTick = HUtil32.GetTickCount();
+        // B21：施法者重算计数清零——只统计本支 `DoSpell` 窗口（覆写见 `RecordingPlayObject`）。
+        caster.RecalcAbilitysCalls = 0;
+        // B21：记录**施法输入**（`DoSpell` 之前）。golden 的 `caster_sc`/`caster_mc` 与
+        // `caster_sc_raw/lo/hi` 都取它；事后 `WAbil` 可能被 `RecalcAbilitys()` 重物化，不得当输入用。
+        int casterInputMc = caster.WAbil.MC;
+        int casterInputSc = caster.WAbil.SC;
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
@@ -3494,6 +3510,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (targetMonsterObj != null) monsterHpAfter = targetMonsterObj.WAbil.HP;
         // 卡 36：`AttPowerUp` 同步写 `ExtraAbil[0]`（目标=self ⇒ 施法者）⇒ 直接观测，非自证。
         int? casterExtra0 = spec.CasterLoginOrderAbil ? (int)caster.ExtraAbil[0] : (int?)null;
+        // **B21 语义门（fail-closed ⇒ rc=2、不落 golden）**：`CasterLoginOrderAbil` stem 若在 `DoSpell`
+        // 内对施法者触发过 `RecalcAbilitys()`（**运行期计数**，不靠静态清单 ⇒ 新增来源自动覆盖；
+        // 当前唯一来源：`SKILL_UENHANCER`(36) 的 `AttPowerUp`，`MagicManager.cs:625`，target=None
+        // ⇒ target=self），只断言**反方向**：`Abil` 自登录序派生之后不得再被改写；
+        // **不得**断言事后态 `WAbil == 输入`（等级派生本来就允许不同，见上方 B21 说明）。
+        if (spec.CasterLoginOrderAbil && caster.RecalcAbilitysCalls > 0)
+        {
+            FixtureContract.ValidateCasterAbilitySemantics(
+                $"runmagic/{spec.Key}/{label}", loginAbilSc, loginAbilMc, caster.Abil.SC, caster.Abil.MC);
+        }
         // 卡 §39：怪物 HP 后值（施法段同步 `StruckDamage` 的结果观测；不喂回驱动输入）。
         var monHpAfter = monsters.Select(m => (int)m.WAbil.HP).ToArray();
         // **三态计时器的术后值必须由"门结果 + 术前值"独立推出**（不拿实现输出自证）：
@@ -3826,8 +3852,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 caster_level = spec.CasterLevel,
                 caster_actor_id = caster.ActorId,
                 target_actor_id = target.ActorId,
-                caster_mc = (int)caster.WAbil.MC,
-                caster_sc = (int)caster.WAbil.SC,
+                // B21：施法**输入**（`DoSpell` 之前的 `WAbil.SC/MC`），不是事后态。
+                caster_mc = casterInputMc,
+                caster_sc = casterInputSc,
                 rng_mode = spec.RngMode,
                 login_order = spec.LoginOrder,
                 reachability = spec.Reachability,
@@ -3926,7 +3953,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
                 spec.CasterAttackMode >= 0 ? (int?)spec.CasterAttackMode : null,
-                spec.CasterLoginOrderAbil ? (int?)caster.WAbil.SC : null,
+                spec.CasterLoginOrderAbil ? (int?)casterInputSc : null,
                 spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null,
                 spec.TargetMonster > 0 ? (int?)spec.TargetMonster : null,
                 spec.ServerConf,
@@ -4180,6 +4207,18 @@ public sealed class RecordingMonster : M2Server.Monster.MonsterObject
 
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
+    /// <summary>
+    /// B21：本对象被 `RecalcAbilitys()` 的次数。装置用它**运行期**判定「本支 `DoSpell` 是否把
+    /// 施法者重算过」（`WAbil = Abil.Clone()`），取代易漏登记的静态来源清单；调用方在 `DoSpell`
+    /// 前清零。覆写只计数 + 走基类，不改行为。
+    /// </summary>
+    public int RecalcAbilitysCalls;
+
+    public override void RecalcAbilitys()
+    {
+        RecalcAbilitysCalls++;
+        base.RecalcAbilitys();
+    }
 
     /// <summary>
     /// 抽 RM 账本：连同**入队优先级**一起取（`priority` 必须进比较面——金标准要与

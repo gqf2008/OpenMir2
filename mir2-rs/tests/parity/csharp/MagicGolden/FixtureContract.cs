@@ -235,4 +235,31 @@ public static class FixtureContract
             }
         }
     }
+
+    /// <summary>
+    /// B21 语义门（不是"意图物化"门）：`caster_sc`/`caster_mc` 是**施法输入**
+    /// （`WAbil.SC/MC` 在 `DoSpell` 之前的取值，供 `nTime` 的 `Lo(SC)*10`），**不是事后态声明**。
+    ///
+    /// 生产 `AttPowerUp → RecalcAbilitys()`（`WAbil = Abil.Clone()`）会把事后态按 `Abil` 重物化，
+    /// 与输入**本就允许不同** ⇒ 这里**不得**断言 `WAbil == 输入`。
+    ///
+    /// 可机检且必须守的是反方向（调用点只在施法者确实被重算时调用）：`Abil` 自登录序派生之后
+    /// **不得再被改写**。把输入"物化"进 `Abil` 是**错误修法**（2026-11-21 实测反例）：
+    /// oracle 事后态变成输入值 ⇒ `SM_ABILITY(52)` 的 `WAbil` 尾 MC/SC 0→15（帧翻转），
+    /// 而 Rust `recalc_session_ability → level_ability_base` 每次按等级覆盖 ⇒
+    /// comparator 的 `Sent[*].tail` 严格比较**必红**。
+    ///
+    /// 违规 ⇒ <see cref="FixtureContractViolation"/>（调用方 rc=2、不落盘）。
+    /// </summary>
+    public static void ValidateCasterAbilitySemantics(
+        string where, int loginAbilSc, int loginAbilMc, int abilSc, int abilMc)
+    {
+        if (abilSc != loginAbilSc || abilMc != loginAbilMc)
+        {
+            throw new FixtureContractViolation(
+                $"[{where}] Abil.SC/MC 在登录序派生后被改写：登录后(sc={loginAbilSc},mc={loginAbilMc}) "
+                + $"→ DoSpell 后(sc={abilSc},mc={abilMc})。`caster_sc/caster_mc` 是施法输入、不是事后态，"
+                + "不得物化进 Abil（B21 错误修法：翻转 SM_ABILITY(52) 的 WAbil 尾 ⇒ 与 Rust 必红）");
+        }
+    }
 }
