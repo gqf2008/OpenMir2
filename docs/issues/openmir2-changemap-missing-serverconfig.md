@@ -274,3 +274,7 @@ $ grep -rn 'drain_map_change' mir2-rs/bins/game-svr/src/*.rs
 - `soft_version_date == 0` 的会话不发 11029（负例）；`client_conf = None` 同样不发并登记方向；
 - 全量比较器零漂移（含 `spacemove` 42 支）；
 - 10.4 的「路径枚举测试」必须存在且在其覆盖面内全绿。
+
+## 11. 变异实验教训（2026-11-21，MG-35 实现批）
+
+做「640 `due_ms_rel` +50ms 必红」的牙时，曾用 `git checkout -- <path>` 还原变异，把**尚未提交的实现**一并还原；已按补丁重放，并在**已提交态**上把全部证据重跑。**变异前必须先提交或快照**（章程 §16 的实操版）。判断标准很简单：**如果 `git status` 里有你要保留的未提交改动，就不要用 `git checkout -- <path>` 还原。**
