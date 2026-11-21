@@ -956,17 +956,44 @@
         "line": 394,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_tamming",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/tamming.json（C# MagicGolden `--case tamming`；七支 self_master/adopt_ok/level_gate_fail/branch_else/outer_fail_true/outer_fail_false/crazy；配置十键由 ServerConfFixture 记录，驱动用 Fixture.server_conf 构造 PetSlaveConfig）",
+        "cases": [
+          "self_master",
+          "adopt_ok",
+          "level_gate_fail",
+          "branch_else",
+          "outer_fail_true",
+          "outer_fail_false",
+          "crazy"
+        ],
+        "unit_tests": [
+          "tests::tamming_parity_self_master",
+          "tests::tamming_parity_adopt_ok",
+          "tests::tamming_parity_level_gate_fail",
+          "tests::tamming_parity_branch_else",
+          "tests::tamming_parity_outer_fail_true",
+          "tests::tamming_parity_outer_fail_false",
+          "tests::tamming_parity_crazy",
+          "real_rust_ledger_tamming",
+          "tests::tamming_self_master_queues_holy_seize_rm",
+          "tests::tamming_else_branch_queues_holy_seize_rm_without_adopting",
+          "tests::tame_adopt_emits_namecolor_then_username",
+          "tests::open_crazy_mode_emits_namecolor",
+          "tests::break_crazy_mode_emits_namecolor_only_when_crazy",
+          "tests::adopt_ref_frames_encode_656_then_42_with_master_suffix",
+          "magic_effect::tests::mag_tamming_holy_seize_wparam_only_on_two_branches",
+          "magic_effect::tests::mag_tamming_level_gate_fail_still_consumes_random2"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）。批 `card/mg34-tamming`：产品三笔 25e254132（holy_seize_wparam 两支 + 求值顺序）/ ec56a5fea（宿主两处 60005 发送）/ 7b89f3fcf（通用帧面接线 8090/8101）；装置 8432a3317 + 驱动比较器 a6a97a471。门：Driver 141/141、Comparator 47/47、game-svr --lib 2204/0/149、world-bevy 911/0、clippy 三包 0。",
+      "basis": "semantic",
+      "scope": "partial：`MagTamming`（`src/M2Server/Magic/MagicManager.cs:704-825`）主链由 `tamming` × 七支覆盖：外层 `Random(4-L)`、self-master、`Random(2)`/等级门、`Random(3)`、威力骰、收服 gate/n14、受奴后效（Master/SlaveList/WalkSpeed 1500/NextHitTime 2000/slave_make_level）、HP0/狂暴支；60005 投递（self/else 各 1 条、wParam=(L*5+10)*1000）、adopt 的 8090+8101 与 crazy 的 8090 帧序、`Rng` 逐值、`Result=false ⇒ 无 640`。**牙（四颗全部「驱动绿 + 比较器红」= §2.7 仅比较器红层；Rm/Tamming 块由比较器独守）**：A 删 60005 发送 ⇒ 基线 mon0 1 条 / 变异 0 ⇒ `rm_makeholyseize 条数不等 golden=1 rust=0` + `mon0 Rm 多重集`；B 删 adopt 8090/8101 ⇒ 基线 `[17,638,656,42]` / 变异 `[17,638]` ⇒ `Rm 缺 [8090,8101]`、`Sent golden=4 rust=2`；C 删 `OpenCrazyMode` 的 `RefNameColor` ⇒ 基线 crazy 含 656 / 变异无 ⇒ `Rm 缺 8090`、`Sent golden=3 rust=2`；D wParam 漏 ×1000 ⇒ 基线 10000 / 变异 10 ⇒ `rm_makeholyseize[0].w_param 不等` + 推导式 `60005 w_param=10 ≠ 10000`。**无牙（理由）**：`NoTame` 在 Rust 为常量 false（oracle `MonsterInfo.boTame` 全仓无赋值点、golden 全 false）⇒ 无法用输入旋钮构造真/假对照，不设牙；`CanReAlive` 清除后效与 `MonGen.ActiveCount--` Rust 未建模 ⇒ **只记录不比较**（golden 留锚）。**门不覆盖**：六个 game-svr 单测（60005 两处到达 + adopt/crazy 帧 + 宿主 42 字节）与两个 `mir2-world-bevy` 单测不在 `-Mode Both` 集合 ⇒ 落地实测 **game-svr 6 passed / 0 failed、world-bevy 2 passed / 0 failed**（2026-11-21，合并树）。**未验面**：① 60005 的下游 `RefNameColor→656` 装置不可观测（`RecordingMonster` 被动、不 Operate），本叶只验 RM 投递；② `MagMakeHolyCurtain`（`src/M2Server/Magic/MagicManager.cs:1168`，公式 `nPower*1000`）的 60005 **未接/未验**；③ 17/30/41 的 `MakeSlave` 656 属装置盲区（另 scope 已登记）；④ `partial`（上述未建模/不可观测面）。"
     },
     {
       "id": "MG-35",
