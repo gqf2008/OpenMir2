@@ -16,7 +16,7 @@
 apply_mirrors → tick_phase2`）＋移动类命令 + 本区 MonGen；它**产出了 `TickRecord` 但没有
 任何下行排水**，命令也只认移动 ⇒ 区 k 玩家「会走不会打、不动不出门」。
 
-要让每区跑**完整 host 循环**，本质上不是重写游戏逻辑——`sim_loop` 主循环体（`lib.rs:34094`
+要让每区跑**完整 host 循环**，本质上不是重写游戏逻辑——`sim_loop` 主循环体（`lib.rs`
 起约 2,760 行）里绝大多数的 `handle_*` / `drain_*` 已经是**对 `(world, displays, online,
 ground_sessions, gates, 配置)` 的纯函数**——而是**把这段循环体抽取成「每区一个实例」，
 把极少数进程级依赖（DB、行会、城堡、脚本宿主 `!Send`）留在区 0**。
@@ -29,7 +29,7 @@ ground_sessions, gates, 配置)` 的纯函数**——而是**把这段循环体�
 
 ## 1. 七问①：`sim_loop` 子系统清单（进程级 / 区级 / 需共享通道）
 
-`fn sim_loop` = `lib.rs:32504–36857`（**启动段** `32504–34093`，**主循环** `34094–36856`）。
+`fn sim_loop` = `lib.rs`（**启动段** `32504–34093`，**主循环** `34094–36856`）。
 主循环已由 `host_prof` 标出段名（`MIR2_TICK_PROFILE=1` 时打印），下表「证据锚」用段名 + 行号。
 
 | # | 子系统 | 现状代码锚（【已核】） | 今天归属 | 每区是否要独立实例 | 说明 / 缺口 |
@@ -43,14 +43,14 @@ ground_sessions, gates, 配置)` 的纯函数**——而是**把这段循环体�
 | 7 | 技能 / 术法 | `handle_magic_key_cmd` `35054`；`handle_spell_cmd_with_magic` `35057`；魔法下行 `drain_mag_struck_b2` `15750`、`drain_b3_self_deliveries` `36708`、`drain_b4_with_enter_cfg` `36699`、`drain_b5_self_deliveries` `36710` | 区 0 | 是 | 命令与 drain 都需在区 k 运行；魔法表 `magic_table_arc`（`32627`）是进程级只读 `Arc`，可借 |
 | 8 | 物品（背包/地面/吃/存/商店/交易/寄售） | `handle_ground_cmd` `34497`、`handle_deal_cmd` `34529`、`handle_selloff_cmd` `34556`、`handle_bag_cmd_with_magic` `34588`、`handle_eat_cmd` `34636`、`handle_query_bag_cmd` `34665`、`handle_shop_cmd` `34911`（`fn handle_shop_cmd_inner`）、`handle_storage_cmd` `10305` | 区 0 | 是（多数）；**商店/点击 NPC 例外**（见 9） | 背包/地面/吃/存/查询纯区级；`handle_bag_cmd` 等的 `sell_off_book` 需是进程级或分区（见 §2） |
 | 9 | NPC / 商人 | world tick 内 `npc_tick`/`merchant_tick`（`crates/world-bevy/src/world.rs` 段系统，缺省由宿主 `enable_*`）；`drain_npc_merchant_turns` `21208`、`hits` `21259`、`merchant_disappears` `21339`；交互：`handle_click_npc_cmd`（签名带 `merchant_book`/`npc_vars`）、`handle_shop_cmd`（带 `merchant_book`） | tick：每区各自的 World（已能跑）；**脚本交互：进程级**（`merchant_book`/`npc_host` 含 `Rc` ⇒ `!Send`） | tick：是；交互：**需共享通道/区 0 执行** | 这是「区 k 玩家可正常游戏」最难的一环：NPC 说话/商店脚本必须回到拥有 `merchant_book` 的线程（区 0）执行，再持锁写回区 k 的 World |
-| 10 | AOI 与帧 flush | `tick_phase2`（`world.rs:9277`）；`drain_run_downlinks_with_magic` `36736`；`flush_run_frames` `36480`；`drain_action_downlink` `36641`、`drain_buff_downlink` `36644` 等约 30 个 `drain_*` | 区 0 | 是 | zone k 的 `run_zone_tick` **调用 `tick_phase2` 但丢弃 `TickRecord`** ⇒ AOI 算出可见集却没有任何 drain 发帧。这是「区 k 不出网关帧」的直接原因 |
+| 10 | AOI 与帧 flush | `tick_phase2`（`world.rs`）；`drain_run_downlinks_with_magic` `36736`；`flush_run_frames` `36480`；`drain_action_downlink` `36641`、`drain_buff_downlink` `36644` 等约 30 个 `drain_*` | 区 0 | 是 | zone k 的 `run_zone_tick` **调用 `tick_phase2` 但丢弃 `TickRecord`** ⇒ AOI 算出可见集却没有任何 drain 发帧。这是「区 k 不出网关帧」的直接原因 |
 | 11 | 聊天 | `handle_say_with_saves` `34289` | 区 0 | 是（扇出可能跨区 ⇒ 需 ⑤ 通道） | 本地会话在区中；全服/行会/广播扇出跨区 |
 | 12 | 行会 | 启动 `guild_runtime::startup` `32696`；`guild_run_tick` `32703`；10s 门 `36051`；命令 `guild_cmd::handle_guild_cmd` `35087`、`guild_official::handle_select` `34818`；GM `apply_pending_gm_guild_commands` `34458` | **进程级（只在片 0/区 0 装载）** | **否**（单点） | 行会表是进程级服务（文件写/存档）。区 k 的行会命令须路由区 0 或经共享只读视图（见 §5） |
 | 13 | 城堡 | 宿主 `CastleHostGates` `32707`、`CastleStore` `32708`、`castle_war_states` `32711`；10s/10min 门 `36028`；`CastleMgr::run` `36072`；GM `apply_pending_gm_castle_commands` `34445` | **进程级（只在片 0/区 0 装载）** | **否**（单点） | 10min 落盘 / 战况 / 税；城堡实体今天只在区 0 World（④b-2 归属） |
-| 14 | World tick 仿真本体 | `tick_phase1`（world.rs:9268）= `tick_head`（命令 FIFO/死亡/buff/怪 AI/NPC/商人）+ `tick_tail_before_aoi`（world.rs:9144，SuperMan/玩家死亡/VerifyMapTime）；`tick_phase2`（world.rs:9277）= AOI | **区 k 已在跑** | 是（已完成） | `World` 有 `owner_thread` 断言（`world.rs:9146/9204`）：一个 World 只能在其线程 tick ⇒ 任何「把区 k 的 World 借给别的线程 tick」都会 panic |
-| 15 | 存档（周期/断线/关服） | 周期 `drain_periodic_save` `36773`（`fn` `23412`，默认 `SaveHumanRcdTime=10min`，`config.rs:1595`）；区断线 `drain_zone_saves` `1485`（调用 `35487`）；关服 `shutdown_save_all` `34114` | **进程级 DB 链**（`db`/`engine` 属区 0） | 存档**数据**区级，**通道**进程级 | 区 k 已能把断线存档编码进 `save_outbox` 由区 0 发 DB；周期存档需给区 k 也接这条出口 |
+| 14 | World tick 仿真本体 | `tick_phase1`（world.rs）= `tick_head`（命令 FIFO/死亡/buff/怪 AI/NPC/商人）+ `tick_tail_before_aoi`（world.rs，SuperMan/玩家死亡/VerifyMapTime）；`tick_phase2`（world.rs）= AOI | **区 k 已在跑** | 是（已完成） | `World` 有 `owner_thread` 断言（`world.rs`）：一个 World 只能在其线程 tick ⇒ 任何「把区 k 的 World 借给别的线程 tick」都会 panic |
+| 15 | 存档（周期/断线/关服） | 周期 `drain_periodic_save` `36773`（`fn` `23412`，默认 `SaveHumanRcdTime=10min`，`config.rs`）；区断线 `drain_zone_saves` `1485`（调用 `35487`）；关服 `shutdown_save_all` `34114` | **进程级 DB 链**（`db`/`engine` 属区 0） | 存档**数据**区级，**通道**进程级 | 区 k 已能把断线存档编码进 `save_outbox` 由区 0 发 DB；周期存档需给区 k 也接这条出口 |
 | 16 | 定时器 | 城堡 10s/10min `36028`；行会 10s `36051`；滚动公告 `36244`；换服 100ms `process_switch_data` `36793`；MonGen regen（区 k `36211`） | 混：行会/城堡进程级；公告/换服/ MonGen 区级 | 区级定时器：是；进程级：否 | 定时器本身便宜，风险在「全局门」与区级门混淆 |
-| 17 | 看门狗 | `tick_watchdog::ZoneWatch`（`ZoneHost.watch` `985`）；`FailFastBarrier`（`region_loop.rs:424`）；区 panic ⇒ `abort` 整机（`spawn_minimal_zone` catch_unwind） | 进程级（守全机的屏障活性） | 复用（每区已参与心跳/屏障） | 已有每区心跳 `heartbeats`；扩循环体后仍受同一看门狗保护 |
+| 17 | 看门狗 | `tick_watchdog::ZoneWatch`（`ZoneHost.watch` `985`）；`FailFastBarrier`（`region_loop.rs`）；区 panic ⇒ `abort` 整机（`spawn_minimal_zone` catch_unwind） | 进程级（守全机的屏障活性） | 复用（每区已参与心跳/屏障） | 已有每区心跳 `heartbeats`；扩循环体后仍受同一看门狗保护 |
 | 18 | 计数 / 日志 / 探针 | `perf_counters`（TSV 尾 `write_tick` `36855`）；`tick_profile::HostTickProfile` `34015`；`glog!`；入口三段计数 `telemetry` | 进程级（原子累加；只区 0 打汇总行 `32548`） | 计数原子共享；但**分区诊断**（每区 `af=`/`zone_cmd_unsupported`）需按区分列，否则读数不可引用 | ⑤ 已在扩 `perf_counters`（跨区三桶），本项要避免与其抢列 |
 | 19 | 换服 / 跨服 | `process_switch_data` `36793`；`switch_data_send_change_server` `36805`；`drain_reconnects` `36819` | 进程级（G11 大多未移植，生产恒 false） | 否（单点） | 依赖 `server_table`（进程级只读） |
 | 20 | 组队 | `handle_party_cmd` `35013`；`world.party_run_tick()` `36713`；`party_cfg`（进程级只读） | 会话表区级；`party_run_tick` 在 World 内 ⇒ 区 k 已有 | 是 | 组队的跨区成员通知需经 ⑤ 通道（与聊天/广播同类） |
@@ -70,7 +70,7 @@ ground_sessions, gates, 配置)` 里——这正是 ④a 能直接复用 `handle
 |---|---|---|---|---|
 | `World`（实体/地图格/命令 FIFO/RNG） | 区级：区 0 是 `sim_loop` 局部 `let mut world`；区 k 是 `ZoneState.world` | 是（镜像/边界） | 是（halo 快照 + mirror） | `ZoneState` `1005`；`World` 有 `owner_thread` 断言 |
 | 地图格（`maps`）| **每区各一份全图 grid**：`ZoneState::new` → `World::with_maps(map_sizes.to_vec())` `3910` | 否（只读，应可共享） | 否 | **【推断】内存风险**：N 区 = N 份全图 grid。单图 10k 场景只 1 张图 ⇒ 可接受；多图 N 份需评估（见 §3 失败模式） |
-| `displays`（`DisplayTable`）| 区级：区 0 `33095`；区 k `ZoneState.displays` | 是（镜像展示项经快照） | 是（`apply_mirrors` 写收件区展示表） | `downlink.rs:288`；`apply_mirrors` 带 `displays` |
+| `displays`（`DisplayTable`）| 区级：区 0 `33095`；区 k `ZoneState.displays` | 是（镜像展示项经快照） | 是（`apply_mirrors` 写收件区展示表） | `downlink.rs`；`apply_mirrors` 带 `displays` |
 | `online`（`OnlineRegistry`）| 区级：区 0 `33745`；区 k `ZoneState.online` | 是（快照 `route` = 在线登记） | 是（⑤ 用 `HaloEntity::route` 合成跨区收件人） | ⑤ 设计 `apply_mirrors` 写/清 route |
 | `ground_sessions` | 区级 | 否（会话只属落区） | 否 | `33969`；`ZoneState.ground_sessions` |
 | `saves`（`SavedHuman`）| 区级 | 否 | 否 | `33996`；`ZoneState.saves` |
@@ -183,7 +183,7 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 
 ### 5.2 1 万时会不会成为新瓶颈（粗算）
 
-- **周期存档**：默认 `SaveHumanRcdTime=600s`（`config.rs:1595`）。稳态 = 10000 / 600 ≈ **16.7 次/s**；
+- **周期存档**：默认 `SaveHumanRcdTime=600s`（`config.rs`）。稳态 = 10000 / 600 ≈ **16.7 次/s**；
   每条记录约 1–4KB ⇒ **< 100KB/s**。单 DB 链绰绰有余。【推断】稳态不是瓶颈。
 - **冷启动登录风暴**：10k 登录集中在数分钟 ⇒ 这才是 DB 读档的真正峰值（不是稳态）。
   今天已用 `EventDrain` 预算 + 入口三段计数节流；【推断】需按登录速率限流，与「每区 host 循环」正交。
@@ -261,8 +261,8 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 ## 8. 已核事实 vs 推断（给复核者）
 
 **已核（读代码/文档确认）**
-1. `sim_loop` = `lib.rs:32504–36857`；主循环 `34094–36856`；启动段 `32504–34093`。
-2. 区 k `run_zone_tick`（`region_loop.rs:726`）调用 `tick_phase1/phase2` 但**不消费 `TickRecord`**
+1. `sim_loop` = `lib.rs`；主循环 `34094–36856`；启动段 `32504–34093`。
+2. 区 k `run_zone_tick`（`region_loop.rs`）调用 `tick_phase1/phase2` 但**不消费 `TickRecord`**
    ⇒ 区 k 无下行 drain ⇒ 不出网关帧。
 3. 区 k 命令只认移动（`handle_zone_command` `1441`，`movewire::is_move_command` 之外一律
    `note_zone_cmd_unsupported`）。
@@ -273,9 +273,9 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 6. 约 30 个 `drain_*` 是 `(rec, world, displays, online, sessions, gates, 配置)` 的纯函数
    （抽样 `drain_npc_merchant_turns` `21208`、`drain_run_downlinks_with_magic` `23229`、
    `drain_kill_exp_chain_with_magic` `22639`）。
-7. `World` 有 `owner_thread` 断言（`world.rs:9146/9204`）。
+7. `World` 有 `owner_thread` 断言（`world.rs`）。
 8. `ZoneState::new` 对每区 `World::with_maps(map_sizes.to_vec())`（`1043`）⇒ N 份全图 grid。
-9. 默认 `SaveHumanRcdTime=600s`（`config.rs:1595`）。
+9. 默认 `SaveHumanRcdTime=600s`（`config.rs`）。
 10. 容量：986 档 p99 47ms GREEN；2000 档 p99 201ms RED、`refmsg_targets` 均值 88.5k/tick
     （`docs/issues/capacity-curve-release-20261121.md`）。
 11. ⑤ 设计 + 最小 diff 在 `card/l25-step5`，**未在基线**（基线无该文档；diff 触
@@ -326,7 +326,7 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
      但非测试代码仍有 **44 处 `find_linear_chr`**（字符串线性扫描）+ **64 处 `find_linear_actor`**
      （id 线性扫描）。`find_linear_*` 是**显式探针**（注释 24817：「只包一个计数，不得顺手改成索引」，
      计数键 `CHR_LINEAR`/`ACTOR_LINEAR`）。
-   - `SessionRegistry` 有 `get`(`crates/world-bevy/src/session.rs:236`)/`get_mut`(:241)（O(1)，卡
+   - `SessionRegistry` 有 `get`(`crates/world-bevy/src/session.rs`)/`get_mut`(:241)（O(1)，卡
      `openmir2-p1-hostinbound-index` 已接 `open`），但 `drain_login_tail` 仍 `sessions.iter().find(name)`(21414)。
 2. **每 tick 有多处 O(n²) 扫描环**（A 组：4 个满 n²、2 个 n²/5；都是先收集/排序全部会话名，再对每个名字做一次 O(n) 线性查表）——
    这是结构性缺陷，随 n 平方增长。
@@ -334,8 +334,8 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
    后者调用时 `entry` 已在 `handle_move_cmd` 作用域内（重复取同一条）。
 4. **投递段已用 O(1)，但同类未统一**：`send_ref_msg_to_targets`(19899) 用 `find_by_actor`（O(1)）；
    而 combat/buff/aoi 的**观察者投递**仍用 `find_linear_actor`（下表 B 组）——同一项目两条路径口径不一致。
-5. `DisplayTable.get`(`bins/game-svr/src/downlink.rs:315`，`by_id:HashMap<i32,usize>`) 与
-   `World.entities.get`(`crates/world-bevy/src/ecs.rs:560`，dense 数组/sparse 表，按 i32) 都是 **O(1)**，
+5. `DisplayTable.get`(`bins/game-svr/src/downlink.rs`，`by_id:HashMap<i32,usize>`) 与
+   `World.entities.get`(`crates/world-bevy/src/ecs.rs`，dense 数组/sparse 表，按 i32) 都是 **O(1)**，
    **不在缺陷面**。
 
 ### 10.3 排序表（按预计贡献从高到低）
@@ -381,10 +381,10 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 |---|---|---|---|---|---|---|---|---|
 | D1 | `OnlineRegistry::set` 24757 | `entries.iter_mut().find(name)` | O(n) | 每登录/离世（`online_set`） | str | n | **是** | 随后 `rebuild()` O(n) |
 | D2 | `online_find_for_kick` 24919 | `online.iter().filter` + `seen_gate` 线性 | O(n×gates) | 每 `KickAccount`（顶号/踢） | str(account,忽略大小写)/int | n | 是 | 已有 `KICK_SCANS` 计数 |
-| D3 | `party_play_object_by_name`(`crates/world-bevy/src/party.rs:434-441`) → 440 | `entities.iter_ref().find(race==Play && name==name && !ghost)` | O(E) | 每次组队按名找人 | str | E | **是** | oracle 同款线性（`GetPlayObject`） |
-| D4 | `guild` 名查 (`crates/world-bevy/src/guild.rs:1072/1077/1212/1222`) | `guilds.iter().find(name)` / `position(name)` | O(会数) | 每次行会命令 | str | 会数 | **是** | 低频 |
+| D3 | `party_play_object_by_name`(`crates/world-bevy/src/party.rs`) → 440 | `entities.iter_ref().find(race==Play && name==name && !ghost)` | O(E) | 每次组队按名找人 | str | E | **是** | oracle 同款线性（`GetPlayObject`） |
+| D4 | `guild` 名查 (`crates/world-bevy/src/guild.rs`) | `guilds.iter().find(name)` / `position(name)` | O(会数) | 每次行会命令 | str | 会数 | **是** | 低频 |
 | D5 | `handle_query_user_set_cmd` 7853 | `online.iter().any(name)` | O(n) | 每次 `CM_QUERYUSERSET` | str | n | **是** | oracle 函数体为空 |
-| D6 | `castle` 图名查 (`crates/world-bevy/src/castle.rs:3459`) | `maps.iter().position(name)` | O(图数) | 城堡操作 | str | 图数 | **是** | 低频 |
+| D6 | `castle` 图名查 (`crates/world-bevy/src/castle.rs`) | `maps.iter().position(name)` | O(图数) | 城堡操作 | str | 图数 | **是** | 低频 |
 
 **E 组：字符串键 Hash（不是 O(n)，是 O(key 长度) 哈希；供完整对照）**
 
@@ -394,7 +394,7 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 
 ### 10.4 不计入「查表缺陷」的 O(n)（说明，避免误读）
 
-- `hear_targets_at_scan`（`chat.rs:213-241`）`iter_send_ref_targets().filter(...).collect()` + `sort_unstable`
+- `hear_targets_at_scan`（`chat.rs`）`iter_send_ref_targets().filter(...).collect()` + `sort_unstable`
   是 **AOI 收件人选择本体**，O(E) + O(k log k)；且 `ref_msg_cache` 500ms 缓存命中时**不扫**
   （`cache_first_hit_does_not_scan` 用例）。它是「选择」不是「查表」，故不列缺陷；但它是走位扇出的候选面
   （每次缓存刷新 O(E)）。
@@ -413,21 +413,21 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 - 现存可机读探针/计数（无需新写即可对账）：
   - `perf_counters::CHR_LINEAR` / `ACTOR_LINEAR`（`find_linear_*` 每次 +1），`CHR_INDEXED`/`ACTOR_INDEXED`
     （`find_by_*` 每次 +1）—— 见 24793/24806/24821/24828。
-  - `REFMSG_TARGETS`（19894）、`KICK_SCANS`（24914）、`World::ref_msg_scan_total`（`note_ref_msg_scan` chat.rs:203）。
+  - `REFMSG_TARGETS`（19894）、`KICK_SCANS`（24914）、`World::ref_msg_scan_total`（`note_ref_msg_scan` chat.rs）。
   - tick_profile 段：`HostAoiAppearSelect`（20692-20711）专门计 A1 的选择段；`HostInbound` 计 C 组；
     `HostPlayerRun`/`HostAoiDownlink`/`HostRecovery` 覆盖 A1、A3–A7 与 B0。
 - 本表**未**把「按名字收集再排序」的价格算进 A 组（只算其后的线性查表）；A 组的真实常数含两部分，**需测**。
 
 ---
 
-## 11. §10 前置：`lib.rs:24817`「不得顺手改索引」的来龙去脉与现状（只读；未编译/未起栈；2026-11-23）
+## 11. §10 前置：`lib.rs`「不得顺手改索引」的来龙去脉与现状（只读；未编译/未起栈；2026-11-23）
 
 > 承接 opc-27 单：查清该约束的背景与效力，判断批量迁移的前置条件。
 > 只读；§0–§10 冻结不动。
 
 ### 11.1 Q1：谁、何时、什么背景下写的
 
-- **原注释**（`lib.rs:24816-24830`）：
+- **原注释**（`lib.rs`）：
   `/// **线性查找（C/D 类未索引调用点）**：只包一个计数，查找语义与 entries.iter().find(..) 逐字相同。**不得在这里顺手改成索引**——探针与优化是两件事。`
 - **作者/时间/提交**：`t`，**2026-11-21 23:47**，commit **`a8701bf11d`**
   「perf(online): 端到端查找探针（只计数）+ 设计稿入库」。
@@ -552,7 +552,7 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 4. `online_set(&mut *online, ..)` → `online_set(online, ..)`（同义、免 reborrow）；门 2 **无条件**禁 `&mut *online`。
 - 门：`fmt=0` / `clippy=0` / `cargo test -p game-svr --lib` **2359 passed / 0 failed / 160 ignored**，rc=0。
 - 能红（各一例；验证后已 `git restore`，HEAD 恢复 `4f4948e3b`、clean）：
-  `online.by_chr.len()` ⇒ 字段旁路用例 FAILED@lib.rs:25184；
+  `online.by_chr.len()` ⇒ 字段旁路用例 FAILED@lib.rs；
   `online.sort_by_key(..)` ⇒ FAILED；`&mut *online` ⇒ FAILED；
   边界扰动（`mod tests` 双空格）⇒ fail-closed panic「找不到 `mod tests {` 边界行」。
 
@@ -600,6 +600,7 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 **【推算】工作量重估**
 - **完整 A（每区完整 host 循环、功能全）**：中位仍 **~95 工程日**（与区数无关）。
 - **最短路径（让 1 万先跑起来、功能不全）**：中位可压到 **~45–60 工程日**（P1 分区出帧 + P2 命令最小集[移动/攻击] + P4 10k 窗口 + 网关多线）；其余（完整命令/物品/组队/跨区 ⑤/全量对拍）另算补齐到 ~95。
+- ⚠ **口径**：以上 **45–60 覆盖 P1+P2+P4**，**不含** P3（跨区帧 ⑤）与完整命令/组队。若只先批 **P1**（区 k 出帧 + N 区并行 + 首窗口 work/p99 回预算），**P1 单列约 15–20 工程日**【推算】（乐观 12 / 悲观 25）。
 
 ### 12.3 分期与第一片（能让 1 万跑起来的最短路径）
 
