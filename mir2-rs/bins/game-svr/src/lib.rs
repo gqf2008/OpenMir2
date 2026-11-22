@@ -68,6 +68,7 @@ mod ids;
 mod items;
 mod line_notice;
 mod load;
+mod log_level;
 mod magicaudit;
 mod magicwire;
 mod mapwire;
@@ -178,6 +179,10 @@ const COMMAND_MESSAGE_SIZE: usize = 12;
 #[macro_export]
 macro_rules! glog {
     ($lvl:expr, $($arg:tt)*) => {{
+        // **DBG 级别闸**：一次 relaxed 原子读 + 比较（未设 `MIR2_LOG_LEVEL` ⇒ 全打）。
+        if !$crate::log_level::enabled($crate::log_level::severity_for($lvl)) {
+            // 不格式化、不写盘；`$($arg)*` 不求值。
+        } else {
         let now = ::std::time::SystemTime::now()
             .duration_since(::std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -187,6 +192,7 @@ macro_rules! glog {
         let m = (secs / 60) % 60;
         let s = secs % 60;
         println!("{h:02}:{m:02}:{s:02}.{ms:03} [{}] {}", $lvl, format!($($arg)*));
+        }
     }};
 }
 
@@ -2240,6 +2246,8 @@ fn spawn_minimal_zone(
     Ok(())
 }
 async fn run_inner(args: &[String]) -> Result<()> {
+    // **DBG 级别闸**：未设 `MIR2_LOG_LEVEL` ⇒ 全打（与今天逐字节相同）。
+    log_level::init_from_env();
     let conf = args
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
