@@ -331,3 +331,33 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 参考重放与生产臂等价」。1c 的行为证据 = 结果向量对拍（区 0 参考 vs 区 1 处理
 逐项相等）+ 两侧调的是**同一批生产函数**。物理共用同一函数列为后续卡
 `openmir2-zone-close-shared-core`（见 §5）。
+
+## 10. 段 2 实施记录（handoff 引擎，2026-11-22）
+
+**引擎层（`world-bevy` + `region_loop`，本段已交）**：
+
+- `Flags.handoff_pending`（`EntitySpawn`/`EntityRef` 投影同步）；`SimState.zone_bounds` +
+  `World::set_zone_bounds`：移动判定成功且新格在本区 rect 之外 ⇒ 置位（未设边界 ⇒ 零参与）。
+- `HaloEntity.outgoing`；源区快照过滤 = rect 边界带 **∪ outgoing 带**
+  （`handoff_pending && ZoneRect::within_distance(≤ HALO)`）——T 时源区仍发布被挪出的实体。
+- `apply_mirrors` 定序：`outgoing` 条目**追加格尾、忽略 `cell_pos`**（普通镜像仍按 `cell_pos`）。
+- `apply_mirrors` 兜底：镜像 id 已是本区**真实**实体 ⇒ 跳过 + `mirror_shadowed_by_local`，
+  **不 abort、不动本地实体**（防御计数；时序正确时恒 0）。
+- `World::promote_mirror_to_real`：同 id 同格镜像**原地提升**（清 `mirror`、逐字段覆盖、
+  续期格条目；**不** `add_map_object`、**不**先删后插），计数 `handoff_mirror_promoted`；
+  非镜像 ⇒ `NotMirror`（幂等），位置不一致 ⇒ `CellMismatch`（fail-closed）。
+- 带规模门 `check_band_gate` 用同一份 `snapshot_zone_border` ⇒ **自动计入 outgoing**（§2.4 第 4 条）。
+
+**测试**（`l2_handoff_tests`，7 条）：零闪烁两区真屏障夹具（T 跨界、T+1 tick 顶提升/移除，
+`handoff_mirror_promoted==1` 且 `mirror_shadowed_by_local==0`）、原地提升（格内恰一条/幂等/
+位置不一致）、outgoing 格尾定序、遮蔽跳过+计数、outgoing 带正反例、距离谓词。
+
+**本段未做（明确登记）**：
+
+1. **生产 offer/ack 接线未接入 `spawn_minimal_zone`/`sim_loop`**：引擎与判据已就位，但两区之间的
+   `HandoffOffer`/`HandoffAck` 通道、tick 顶排水、`set_zone_bounds` 的生产设置尚未接——合并后
+   handoff 在生产路径仍不触发（登录落区/②镜像路径不受影响）。接入清单：ZoneState 收件箱 +
+   barrier2 后发 offer + T+1 tick 顶提升/移除 + 超时/拒绝回滚 + 多 span 区的边界（单 span 之外
+   暂不设 `zone_bounds`）。
+2. **appear/disappear 帧流两窗口**（legacy / `MIR2_AOI_INCREMENTAL=0`）未做逐帧捕获：本段以
+   「目标区世界可见集合逐 tick 连续」为等价证据；帧窗口留接入后按 `frames.ndjson`/账本补。

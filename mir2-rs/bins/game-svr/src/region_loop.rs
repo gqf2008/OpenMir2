@@ -239,8 +239,8 @@ pub fn snapshot_border(
             // **L2-5 ③ 段 2**：过滤 = rect 边界带 ∪ outgoing 带。
             // outgoing：实体 `handoff_pending`（已挪进邻区 rect、仍归本区）且距本区 rect
             // **≤ HALO**（`within_distance` 把 rect 内部也算进来，两者并集不会漏）。
-            // 段 2 红态（提交 1）：**还没有 outgoing 带**——只用 rect 边界带（旧口径）。
-            let in_band = rect.border_contains(e.x, e.y, halo_width);
+            let in_band = rect.border_contains(e.x, e.y, halo_width)
+                || (e.handoff_pending && rect.within_distance(e.x, e.y, halo_width));
             e.add_to_mapped && !e.mirror && e.map_id == map_id && in_band
         })
         .map(|e| {
