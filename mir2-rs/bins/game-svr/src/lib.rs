@@ -941,6 +941,13 @@ fn check_zone_id_base(zone: zone::ZoneId, world: &mir2_world_bevy::World) -> Res
             "区 {zone} 的 ActorId 分配器起点 {got} != 期望 {want}（id 段未落到分配器）"
         ));
     }
+    if world.entities.id_segment() != shard::ACTOR_ID_SEGMENT {
+        return Err(format!(
+            "区 {zone} 的 id 段长度未登记（{} != {}）⇒ 外来 id 归属校验不生效",
+            world.entities.id_segment(),
+            shard::ACTOR_ID_SEGMENT
+        ));
+    }
     Ok(())
 }
 
@@ -1035,6 +1042,8 @@ impl ZoneState {
             world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
         }
         world.set_id_base(zone_id_base(zone));
+        // **L2-5 ④b-0**：登记段长（外来 id 归属校验；本区 id 不得走外来插入路径）。
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         Self {
             world,
             displays: downlink::DisplayTable::new(),
@@ -32325,6 +32334,7 @@ fn sim_loop(
     if shard_count > 1 {
         let base = i32::from(local_shard.get()) * shard::ACTOR_ID_SEGMENT;
         world.set_id_base(base);
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
     }
     // **L2-5 ①**：多区时每区独立 actor id 段（跨区 ActorId 全进程唯一 ⇒ 出现帧 `recog` 不撞车）。
     // 区 0 的基址 = 0（首个 id 仍是 1，与 N=1 相同）；区 1.. 在 [`spawn_minimal_zone`] 里设。
@@ -32335,6 +32345,7 @@ fn sim_loop(
             "多区与多片互斥（zone_wiring::plan_zone_mode 已拒绝并存）"
         );
         world.set_id_base(zone_id_base(zone_router::HOST_ZONE));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上。
         if let Err(e) = check_zone_id_base(zone_router::HOST_ZONE, &world) {
             glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
@@ -120004,6 +120015,7 @@ mod l2_zone_id_base_tests {
     fn foreign_mirror_id_does_not_advance_local_allocator() {
         let mut world = World::with_maps(vec![(8, 8)]);
         world.set_id_base(zone_id_base(zone(0)));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         let foreign = zone_id_base(zone(1)) + 1;
         let upsert = world.upsert_mirror(MirrorSpec {
             id: foreign,
@@ -120039,13 +120051,15 @@ mod l2_zone_id_base_tests {
     /// **启动门牙**：`check_zone_id_base` 只接受「本区基址 + 尚未分配」的 World（fail-closed）。
     #[test]
     fn check_zone_id_base_is_fail_closed() {
-        let w = World::with_maps(vec![(8, 8)]);
+        let mut w = World::with_maps(vec![(8, 8)]);
+        w.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         assert!(
             check_zone_id_base(zone(0), &w).is_ok(),
             "未设基址 = 区 0 基址"
         );
         let mut w1 = World::with_maps(vec![(8, 8)]);
         w1.set_id_base(zone_id_base(zone(1)));
+        w1.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         assert!(check_zone_id_base(zone(1), &w1).is_ok());
         assert!(
             check_zone_id_base(zone(0), &w1).is_err(),
@@ -120053,11 +120067,51 @@ mod l2_zone_id_base_tests {
         );
         let mut used = World::with_maps(vec![(8, 8)]);
         used.set_id_base(zone_id_base(zone(1)));
+        used.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         let _ = used.add_entity(EntitySpawn::new(0, "x".to_string(), 0, 0));
         assert!(
             check_zone_id_base(zone(1), &used).is_err(),
             "已分配后起点 ≠ 基址 + 1 ⇒ 必须报错"
         );
+        // 段长未登记 ⇒ 外来 id 归属校验不生效 ⇒ 启动门必须拒绝。
+        let mut no_seg = World::with_maps(vec![(8, 8)]);
+        no_seg.set_id_base(zone_id_base(zone(0)));
+        assert!(
+            check_zone_id_base(zone(0), &no_seg).is_err(),
+            "id 段长度未登记 ⇒ 必须报错"
+        );
+    }
+
+    /// **外来 id 归属牙**：本区段 id 走「外来插入」路径 ⇒ 必须 panic（否则会掩盖分配错误）。
+    /// 红检：删掉 `bind_foreign` 的归属断言 ⇒ 本用例不再 panic ⇒ 红。
+    #[test]
+    #[should_panic(expected = "落在本区段")]
+    fn foreign_insert_rejects_local_segment_id() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(0)));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
+        // 本区段（区 0）的 id 走了外来路径 ⇒ 断言必须触发。
+        let _ = world.upsert_mirror(MirrorSpec {
+            id: zone_id_base(zone(0)) + 7,
+            name: "local-as-foreign".to_string(),
+            map_id: 0,
+            x: 1,
+            y: 1,
+            view_range: 5,
+            race: 0,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 0,
+            cell_type: CellType::Play,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        });
     }
 
     /// **两区 id 集合不相交**（第②步镜像/出现帧的前提：`recog` 不得撞车）。

@@ -759,7 +759,46 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 - 遮蔽计数拆两列（`mirror_shadowed_static` / `mirror_shadowed_handoff`）：修复后 100 人冒烟
   **static=0**，handoff=46（全部是同一玩家的提升收敛窗口，≤1 tick，属正常面）。
 
+**外来 id 归属校验（2026-11-22 追加）**：`insert_foreign` 不只"不推进"——`set_id_segment`
+登记段长后，`bind_foreign` **断言外来 id 落在别的区段**（`id / SEGMENT != id_base / SEGMENT`），
+本区 id 走外来路径直接 panic（否则会掩盖真正的分配错误）；启动门 `check_zone_id_base`
+同时要求段长已登记，未登记即拒绝启动。
+
+**handoff 分量的正常面与越界判据（2026-11-22 追加）**：`mirror_shadowed_handoff` 的正常面 =
+「提升已发生、源区快照还带它一个 tick 的残留」——同一 id/同名/同格的提升实体，每次跨界在
+源区**至多 1 tick** 残留 ⇒ 上界 `≤ 1 × 每秒邻区发布次数`；按 §10 的两阶段口径记
+**≤ 6N（N = 提升次数）**。实测：100 人/10s 冒烟 `44 / 22 = 2.0 次/提升`（界 132），在界内。
+**越界判据**：持续 `mirror_shadowed_handoff > 6 × handoff_promoted`（同窗口）⇒ 查快照残留
+超窗 / 重复提升 / 源区未释放；`mirror_shadowed_static` 必须**恒 0**（任何非 0 都是跨区
+静态同 id 复现）。
+
 **牙**：`foreign_mirror_id_does_not_advance_local_allocator`（镜像外来 id 不改分配器）、
-`check_zone_id_base_is_fail_closed`（启动门两侧）；变异 M8/M9/M10 各自只红对应用例。
+`check_zone_id_base_is_fail_closed`（启动门两侧 + 段长未登记拒绝）、
+`foreign_insert_rejects_local_segment_id`（本区段 id 走外来路径必须 panic）；变异
+M8/M9/M10 各自只红对应用例。
 **纪律更正**：变异脚本的还原**不许**用 `git checkout`（未提交工作会被退回 HEAD 丢掉），
 必须用内存原件写回 + sha 相等断言。
+
+### 12.7 段 4b 主项（静态实体按区归属）：接缝与分段（2026-11-22，实施前调查）
+
+**接缝事实**（`sim_loop` 启动段，按 oracle 次序）：`ctor fold 段① → 屏障 A(1 抽) → 段② →
+MonGenHost::start（屏障 B）→ 段③ → LoadMerchant → NpCinitialize（固定 NPC + 脚本）→
+隐藏 NPC（QManage/QFunction/RobotManage）→ GuardList（依赖 mon_gen_host）→ 城堡（宿主限定）`。
+其中商人/NPC/守卫的**脚本宿主**（`merchant_book`/`npc_host`/quest host）是进程级、`displays` 每区、
+城堡只有宿主区 ⇒ 「每区只装自己 rects」必须把这段启动序列参数化后**在区 k 的线程里再跑一遍**
+（用区 k 自己的 RNG 流），不能在区 0 装完再搬运（搬运会把区 0 段 id 带进区 k，违反段隔离）。
+
+**语义写死**：
+1. `slicing=0` / N=1 **不调用**新的过滤/装载路径（不是"过滤后结果相同"）⇒ N=1 两树 sha 必须
+   与 ④a/④b-0 同一对。
+2. **2 区与 N=1 的 MonGen 抽数不等价**（被过滤 entry 不消耗抽数 ⇒ 区 0 的抽数序列与 N=1 不同）：
+   这是 ③ 步承认的「per-zone 独立 RNG 流」，**有意偏离**；解除条件 = ④d「全局产生 + 分发」
+   （所有 entry 按全局序抽、结果按区分发）。**禁止**用「先全量抽再丢」凑等价（会污染各区流）。
+3. **正面断言**（不是反向牙）：2 区下区 0 的 MonGen 抽数计数 **<** N=1 的计数（少掉被过滤 entry）。
+4. `MonGenHost` **每区一份**，用各区自己的 `seed ⊕ zone` RNG；不共享流（避免跨线程顺序依赖）。
+
+**分段（待总监确认，先 ④b-1）**：
+- **④b-1**：MonGen 首刷 + 商人 + 固定 NPC + 守卫 按 `zone_of` 过滤（先过滤后抽、per-zone host/RNG）；
+  未覆盖的 321 图**显式归区 0**；「同 id 恰一份 + 并集==N=1 全量」装置；`mirror_shadowed_static==0`。
+- **④b-2**：ctor-fold 的 per-map 站点（MapCheckQuest/MapQuestRow）、隐藏 NPC 实体、城堡实体在
+  区 k 的归属/可见性；④d 解除条件（全局产生+分发）在此片写死。

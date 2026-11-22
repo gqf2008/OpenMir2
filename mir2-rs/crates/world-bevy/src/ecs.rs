@@ -130,6 +130,10 @@ pub struct SlotTable {
     next_id: i32,
     /// **P2-3b**：是否已显式设过 id 段基址（只允许一次；缺省 `false`）。
     id_base_set: bool,
+    /// 本 World 的 id 段基址（`set_id_base` 记录；外来 id 归属校验用）。
+    id_base: i32,
+    /// 本 World 的 id 段长度（`set_id_segment` 记录；0 = 未知 ⇒ 不做归属校验）。
+    id_segment: i32,
     /// `EcsStore::iter_mut` 的「实体 -> 槽位」缓存是否需要重建。任何槽位变动都置位。
     order_dirty: bool,
 }
@@ -142,6 +146,8 @@ impl Default for SlotTable {
             index: IdIndex::default(),
             next_id: 1,
             id_base_set: false,
+            id_base: 0,
+            id_segment: 0,
             order_dirty: true,
         }
     }
@@ -190,7 +196,26 @@ impl SlotTable {
         assert!(base >= 0, "id 段基址不得为负：{base}");
         assert!(base < i32::MAX, "id 段基址 + 1 溢出 i32：{base}");
         self.id_base_set = true;
+        self.id_base = base;
         self.next_id = base + 1;
+    }
+
+    /// **L2-5 ④b-0**：登记本 World 的 id 段长度（`ACTOR_ID_SEGMENT`）。
+    ///
+    /// 外来 id 的归属校验依赖它：`id / id_segment != id_base / id_segment` 才算"别的区段"。
+    /// 未调用（0）⇒ 不做校验（N=1 / 测试的兼容面）。
+    ///
+    /// # Panics
+    /// `segment <= 0`。
+    pub fn set_id_segment(&mut self, segment: i32) {
+        assert!(segment > 0, "id 段长度必须为正：{segment}");
+        self.id_segment = segment;
+    }
+
+    /// 本 World 的 id 段长度（0 = 未登记）。
+    #[must_use]
+    pub fn id_segment(&self) -> i32 {
+        self.id_segment
     }
 
     /// **L2-5 ④b-0**：下一个将分配的 id（= 已分配数 + 基址 + 1）。启动期自检用。
@@ -304,6 +329,17 @@ impl SlotTable {
     /// 拿到区 1 的 id ⇒ **两个不同玩家共用 ActorId**（100 人冒烟 10 组重复），镜像互相遮蔽、
     /// AOI/帧/会话表全被污染。外来 id 必须只登记、不参与本区分配器。
     fn bind_foreign(&mut self, slot_idx: usize, id: i32, entity: Entity) {
+        // **归属校验（fail-closed）**：外来 id 必须落在**别的区段**——本区 id 走外来路径说明
+        // 真正的分配错误就在附近（例如调用方错把本区新实体当镜像/提升插入），不拦会掩盖它。
+        if self.id_segment > 0 {
+            let local = self.id_base / self.id_segment;
+            let incoming = id / self.id_segment;
+            assert_ne!(
+                incoming, local,
+                "外来 id {id} 落在本区段（base={}，segment={}）：本区 id 不得走外来插入路径",
+                self.id_base, self.id_segment
+            );
+        }
         self.bind_inner(slot_idx, id, entity, false);
     }
 
@@ -429,6 +465,19 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     #[must_use]
     pub fn next_actor_id(&self) -> i32 {
         self.world.resource::<SlotTable>().next_actor_id()
+    }
+
+    /// **L2-5 ④b-0**：登记 id 段长度（见 [`SlotTable::set_id_segment`]）。
+    pub fn set_id_segment(&mut self, segment: i32) {
+        self.world
+            .resource_mut::<SlotTable>()
+            .set_id_segment(segment);
+    }
+
+    /// 本 World 的 id 段长度（0 = 未登记）。
+    #[must_use]
+    pub fn id_segment(&self) -> i32 {
+        self.world.resource::<SlotTable>().id_segment()
     }
 
     /// 插入实体，返回其业务 id（复用调用方给的 `id`）。
