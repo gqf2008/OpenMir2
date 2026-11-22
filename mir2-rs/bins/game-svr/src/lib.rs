@@ -21446,7 +21446,7 @@ fn drain_login_tail(
     let mut keys: Vec<String> = pending.keys().cloned().collect();
     keys.sort();
     for chr in keys {
-        let Some(entry) = online.find_linear_chr(&chr) else {
+        let Some(entry) = online.find_by_chr(&chr) else {
             // 首次扫描前掉线：缓冲作废（不静默留给下一次登录）。
             finished.push(chr);
             continue;
@@ -23087,7 +23087,7 @@ fn drain_stamina(
                 e.vitals.hp = sg.state.wabil.hp;
                 e.vitals.mp = sg.state.wabil.mp;
             }
-            if let Some(entry) = online.find_linear_chr(&name) {
+            if let Some(entry) = online.find_by_chr(&name) {
                 // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，
                 // 这里只发其它人；目标集**逐份**判定 500ms 缓存（见下）。
                 // 每个 Run 一组槽；载荷 = 该 Run 终态（P8 命中时最后一 Run 已换成钳制终态）。
@@ -29038,7 +29038,7 @@ fn drain_player_need_recheck_with_magic(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.find_linear_chr(&name).cloned() else {
+        let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
@@ -29772,7 +29772,7 @@ fn drain_player_game_gold(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.find_linear_chr(&name).cloned() else {
+        let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
@@ -29980,7 +29980,7 @@ fn drain_player_revival_with_magic(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
-        let Some(entry) = online.find_linear_chr(&name).cloned() else {
+        let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
         };
         let Some(sg) = sessions.get_mut(&name) else {
