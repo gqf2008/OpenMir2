@@ -176,8 +176,13 @@
    后、`world.tick_phase2`（AOI）**之前**应用；不要在 phase1 之前刷新（会读到上一 tick 的旧值）。
 5. **镜像必须被隔离**：`mirror` 标志；不进 AI/仇恨/攻击目标/碰撞权威；MonGen 不生成镜像；
    指向镜像的命中走 `CrossZoneIntent`（目标区下一 tick；计数 `cross_hit_delayed`）。逐个列出并加用例。
-6. **消失帧天然覆盖**：镜像被移除时 `rec.hides` 会包含它 ⇒ `drain_aoi_disappear` 的次序与基线同源
-   （这是镜像模型的额外收益：不需要单独实现跨区 disappear）。
+6. **消失帧天然覆盖（已证伪，2026-11-22）**：原判断「镜像被移除时 `rec.hides` 会包含它」**不成立**。
+   镜像离带 = **删除实体**；而 `hides` 对**被删实体**恒不产出——`aoi.rs` 的 legacy
+   （`search_view_range_with_updates`）与增量（`incremental_gate`）两处收尾都过滤
+   `store.get(t).is_some_and(|e| !e.fixed_hide_mode && !e.ghost)`，被删目标过不了 `is_some_and`。oracle 用**保留引用**
+   （`PlayObject.cs:3206-3218`，取 `visibleBaseObject.BaseObject`，**不查环境里还在不在**），
+   守卫只有 `!FixedHideMode && !Ghost` ⇒ 这是**移植引入的既有分歧**，不是镜像带来的新语义。
+   修复独立开卡 `card/aoi-disappear-on-removal`；C10 复现用例以 `#[ignore]` 冻结在树里。
 7. **账本口径切换**（§7）：`CrossZoneOutbox::submit` 的来源闸由「`src == owner_zone`（坐标）」改为
    「`src == 收件人所在区`」；旧判据保留为 L2-4 形态并标注；两个方向都要负例。
 8. **跨线程 outbox 形态**：6b 的 N=2 用例用 `Mutex<CrossZoneOutbox>` + 第三道屏障（tick 末 seal）。

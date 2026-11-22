@@ -2042,6 +2042,154 @@ mod tests {
         assert!(displays.get(900).is_none(), "展示项必须随镜像移除");
     }
 
+    /// **C10（②第 2 步）**：镜像消失帧时序——owner 走出边界带 ⇒ 镜像移除；基线的真实实体
+    /// 走出视野。两者的消失帧必须同 tick（判据允许晚 1 tick）。
+    ///
+    /// 夹具：O(8,5) `view_range=3`（视野 x∈[5,11]）；eb 在 (10,5)（区 1，距边界 0）；`halo=3`。
+    /// - 基线：tick T 把 eb 向东走 5 格到 (15,5)（距 O 7 > 3 ⇒ 出视野，**实体仍在表里**）；
+    /// - 拆区：tick T 发空快照（owner 已在带外）⇒ 镜像被 `apply_mirrors` 移除。
+    ///
+    /// 红检：把 `run_zone_tick` 的 `apply_mirrors` 挪到 `tick_phase2` 之后 ⇒ 拆区消失帧晚到
+    /// 下一次扫描（+6 tick）⇒ 超窗红。
+    #[test]
+    #[ignore = "blocked by card/aoi-disappear-on-removal"] // 红：被删实体不进 hides（aoi.rs:432/2155）
+    fn step2_disappear_tick_window() {
+        // 玩家扫描门：`clock - search_tick > SearchTime(1000)`，200ms/tick ⇒ 下一次扫描 +6 tick。
+        const SCAN_GAP: u64 = 6;
+        const HALO: i32 = 3;
+        let spans = vec![ZoneSpan::new(ZoneId::new(0), 0, ZoneRect::new(0, 0, 9, 9))];
+        let exchange = HaloExchange::new(2);
+        let barriers = TickBarriers::new(1);
+        let mut world = World::new(20, 10);
+        let mut p = entity(1, "O", 8, 5);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        p.view_range = 3;
+        world.add_entity(p);
+        let eb = halo_entity(21, 10, 5);
+
+        // 阶段 A：跑到 O 首次看到镜像（Show）。
+        let mut seen_at = None;
+        let mut tick = 0u64;
+        while tick < 20 && seen_at.is_none() {
+            exchange.publish(
+                ZoneId::new(1),
+                HaloSnapshot {
+                    tick,
+                    entities: vec![eb.clone()],
+                },
+            );
+            let out = run_zone_tick(
+                &mut world,
+                ZoneId::new(0),
+                &spans,
+                &exchange,
+                &barriers,
+                HALO,
+                tick,
+                &HaloFrameSource::none(),
+                true,
+                None,
+            )
+            .expect("区 tick（镜像开）");
+            assert!(out.record.hides.is_empty(), "镜像在场时不得有消失帧");
+            if world.entities.get(1).is_some_and(|o| {
+                o.visible_actors
+                    .iter()
+                    .any(|v| v.target == 21 && v.flag == mir2_world_bevy::VisibleFlag::Show)
+            }) {
+                seen_at = Some(tick);
+            }
+            tick += 1;
+        }
+        let seen_at = seen_at.expect("20 tick 内必须首次看见镜像");
+        let remove_at = seen_at + SCAN_GAP;
+
+        // 阶段 B：继续到 remove_at；该 tick 发空快照（镜像在 phase2 之前被移除）。
+        let mut first_hide = None;
+        while tick <= remove_at {
+            let entities = if tick < remove_at {
+                vec![eb.clone()]
+            } else {
+                Vec::new()
+            };
+            exchange.publish(ZoneId::new(1), HaloSnapshot { tick, entities });
+            let out = run_zone_tick(
+                &mut world,
+                ZoneId::new(0),
+                &spans,
+                &exchange,
+                &barriers,
+                HALO,
+                tick,
+                &HaloFrameSource::none(),
+                true,
+                None,
+            )
+            .expect("区 tick（移除 tick）");
+            if first_hide.is_none() && out.record.hides.iter().any(|(o, t)| *o == 1 && *t == 21) {
+                first_hide = Some(tick);
+            }
+            tick += 1;
+        }
+        // ---- 基线臂：同一个 O + 真实 eb；T 时走出视野（实体保留在实体表）----
+        let mut base = World::new(20, 10);
+        let mut bp = entity(1, "O", 8, 5);
+        bp.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        bp.view_range = 3;
+        base.add_entity(bp);
+        let real = base.add_entity(entity(21, "eb", 10, 5));
+
+        let mut b_seen = None;
+        let mut bt = 0u64;
+        while bt < 20 && b_seen.is_none() {
+            let mut rec = base.tick_phase1();
+            base.tick_phase2(&mut rec);
+            if base.entities.get(1).is_some_and(|o| {
+                o.visible_actors
+                    .iter()
+                    .any(|v| v.target == 21 && v.flag == mir2_world_bevy::VisibleFlag::Show)
+            }) {
+                b_seen = Some(bt);
+            }
+            bt += 1;
+        }
+        let b_seen = b_seen.expect("基线 20 tick 内必须首次看见");
+        assert_eq!(b_seen, seen_at, "两臂的首扫 tick 必须相同（同一夹具）");
+        let b_remove = b_seen + SCAN_GAP;
+        let mut b_hide = None;
+        while bt <= b_remove {
+            if bt == b_remove {
+                // 走出视野：5 步东移（(10,5) → (15,5)），实体仍在实体表里。
+                for _ in 0..5 {
+                    base.walk(real, 1, 0);
+                }
+            }
+            let mut rec = base.tick_phase1();
+            base.tick_phase2(&mut rec);
+            if b_hide.is_none() && rec.hides.iter().any(|(o, t)| *o == 1 && *t == 21) {
+                b_hide = Some(bt);
+            }
+            bt += 1;
+        }
+        assert_eq!(
+            b_hide,
+            Some(b_remove),
+            "基线：走出视野的真实实体必须在同一 tick 出消失帧"
+        );
+        assert_eq!(
+            first_hide,
+            Some(remove_at),
+            "镜像消失帧必须在下一次扫描的同一 tick 出（baseline={:?}）",
+            b_hide
+        );
+        assert!(
+            first_hide.unwrap() <= b_hide.unwrap() + 1,
+            "镜像消失帧允许晚 1 tick：split={:?} baseline={:?}",
+            first_hide,
+            b_hide
+        );
+    }
+
     /// **屏障牙**：2 区内两道屏障各放行 2 个参与者（不死锁）。
     #[test]
     fn barriers_release_all_participants_twice() {
