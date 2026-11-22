@@ -115,6 +115,27 @@ function Get-N1ShutdownPayload {
   return ,[System.Text.Encoding]::ASCII.GetBytes('SHUTDOWN')
 }
 
+# **退出码读数的判据分类**（2026-11-22 缺陷修复）。
+#
+# 现象：`Start-Process -PassThru -RedirectStandardOutput/-RedirectStandardError` 返回的 Process 对象
+# `.ExitCode` 可能是 `$null`（本机最小复现：`Start-Process cmd.exe '/c exit 3' -PassThru
+# -NoNewWindow -Redirect*` ⇒ `WaitForExit(5000)=True` 但 `.ExitCode=[]`；补一句
+# `$null = $p.Handle` 再等 ⇒ `.ExitCode=3`）。
+# 旧判据 `if ($proc.ExitCode -ne 0)` 对 `$null` 为**真** ⇒ 正常退出被报成「退出码（空）」的失败，
+# 把「读不到」当成「不为 0」——违反「判不了 ≠ 红」。
+#
+# 分类：0 ⇒ `OK`；其它整数 ⇒ `FAIL`（产品非零）；`$null`/非整数 ⇒ `HARNESS`（**判据脚本自身
+# 缺陷，不是产品失败**，调用方以 rc=2「判不了」退出）。
+function Get-N1ExitVerdict {
+  param([object]$Code)
+  if ($null -eq $Code) { return 'HARNESS' }
+  if ($Code -is [int] -or $Code -is [long]) {
+    if ($Code -eq 0) { return 'OK' }
+    return 'FAIL'
+  }
+  return 'HARNESS'
+}
+
 function Get-N1RunOutputPath {
   param([string]$Dir, [string]$Tag)
   return (Join-Path $Dir "$Tag.stdout.txt")
@@ -307,6 +328,12 @@ function Invoke-Selftest {
   Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=false WarDate=false（墙钟 2026-11-22 14:30:10）') -cne `
       (ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 2026-11-22 14:29:50）')) 'castle wall-clock: semantic bit still differs'
 
+  # ⑦d 退出码分类（缺陷 #N1-EXITCODE：$null 曾被当成「不为 0」⇒ 正常退出报失败）
+  Assert-True ((Get-N1ExitVerdict 0) -ceq 'OK') 'exit verdict: 0 -> OK'
+  Assert-True ((Get-N1ExitVerdict 3) -ceq 'FAIL') 'exit verdict: 3 -> FAIL'
+  Assert-True ((Get-N1ExitVerdict $null) -ceq 'HARNESS') 'exit verdict: $null -> HARNESS (not product failure)'
+  Assert-True ((Get-N1ExitVerdict 'x') -ceq 'HARNESS') 'exit verdict: non-integer -> HARNESS'
+
   # ⑧ DB/IDS 重试环属顺序噪声类：顺序比较剔除、多重集全量
   Assert-True (Test-N1NoiseLine '[ERR] 链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line (real shape with level prefix)'
   Assert-True (Test-N1NoiseLine '[ERR] 链接登录服务器[127.0.0.1:5600]失败...（e）') 'noise class: ids retry line (real shape with level prefix)'
@@ -417,6 +444,9 @@ function Invoke-N1Run {
   $confArg = '"' + $Conf + '"'
   $proc = Start-Process -FilePath $Exe -ArgumentList $confArg -WorkingDirectory $exeDir `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -NoNewWindow
+  # **2026-11-22 缺陷修复**：立刻碰一次 `.Handle`（缓存 OS 句柄）。不碰时 Process 对象与句柄的
+  # 关联是惰性的，重定向 + `-PassThru` 的组合下 `.ExitCode` 可能在进程退出后仍读到 `$null`。
+  $null = $proc.Handle
   Start-Sleep -Seconds $DurationSeconds
   if ($proc.HasExited) {
     Fail-Usage "$Tag 在 ${DurationSeconds}s 内提前退出（rc=$($proc.ExitCode)）；stderr=$stderr"
@@ -442,7 +472,15 @@ function Invoke-N1Run {
     Show-Tail $stderr 'stderr' 5
     Fail-Usage "$Tag 优雅关服超时（${GracefulTimeoutSeconds}s；stdout=$stdout）"
   }
-  if ($proc.ExitCode -ne 0) {
+  # **判据分类**：`$null`/非整数 = 「退出码不可读」（HARNESS，rc=2「判不了」，**不是产品失败**）；
+  # 非零整数 = 产品失败（沿用既有的 Fail-Usage 口径）。两侧 stdout 对比只在两侧都读到时才有意义。
+  $exitVerdict = Get-N1ExitVerdict $proc.ExitCode
+  if ($exitVerdict -eq 'HARNESS') {
+    [Console]::WriteLine(
+      "HARNESS $Tag 退出码不可读（ExitCode=$($proc.ExitCode)；Process 对象未拿到句柄）——**非产品失败**；stdout=$stdout")
+    exit 2
+  }
+  if ($exitVerdict -eq 'FAIL') {
     Fail-Usage "$Tag 退出码 $($proc.ExitCode)（要求 0）"
   }
   return $stdout
