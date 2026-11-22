@@ -144,6 +144,11 @@
   旧用例保留并标注「L2-4 形态（已被 §7 取代）」。
 - 新断言的最小失败用例：让非收件人区替收件人区发帧 ⇒ 新闸红；让 owner 区直发（旧形态）⇒ 新闸红
   （两个方向都要有负例，防「闸被拆掉后两边都绿」）。
+- **实现形态（②第 2 步落地）**：`region_loop::EmitterCriterion::{OwnerByRect, RecipientZone}`；
+  `CrossZoneOutbox::new` 保持旧口径（L2-4 对照/旧用例不动），镜像 rig 用
+  `CrossZoneOutbox::with_criterion(.., RecipientZone)`。双向负例
+  `emitter_criterion_recipient_zone_has_two_way_teeth`：收件人区发 ⇒ 绿；非收件人区发 ⇒
+  `NotOwner`；旧口径下同一帧仍红。
 
 ## 8. 已知差异表（L2-5 起生效，必须进发布说明）
 
