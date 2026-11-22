@@ -3530,6 +3530,13 @@ pub struct MirrorSpec {
     /// 本 tick 朝向（oracle `BaseObject.Dir`；出帧用它而不是展示表副本）。
     pub dir: u8,
     pub death: bool,
+    /// AOI 可见性/阻挡标志（与 owner 逐项一致；缺一项 ⇒ 拆区多出可见/挡路的实体）。
+    pub invisible: bool,
+    pub ghost: bool,
+    pub fixed_hide_mode: bool,
+    pub ob_mode: bool,
+    /// 主人（宝宝/分身）；`None` = 无主。AOI 谓词与「非玩家观察者」门都读它。
+    pub master: Option<i32>,
 }
 
 /// [`World::upsert_mirror`] 的结果；`Refused*` 都是 fail-closed（调用方当错误处理）。
@@ -8248,6 +8255,11 @@ impl World {
         spawn.death = spec.death;
         spawn.mirror = true;
         spawn.ai.dir = spec.dir;
+        spawn.invisible = spec.invisible;
+        spawn.ghost = spec.ghost;
+        spawn.fixed_hide_mode = spec.fixed_hide_mode;
+        spawn.ob_mode = spec.ob_mode;
+        spawn.master = spec.master;
         let id = self.entities.insert(spawn);
         if let Some(b) = self.entities.map_binding_mut(id) {
             b.add_to_mapped = true;
@@ -8289,8 +8301,13 @@ impl World {
             e.appearance.light = spec.light;
             e.appearance.name_color = spec.name_color;
             e.life_cycle.death = spec.death;
+            e.life_cycle.ghost = spec.ghost;
             e.ai.dir = spec.dir;
             e.flags.mirror = true;
+            e.flags.invisible = spec.invisible;
+            e.flags.fixed_hide_mode = spec.fixed_hide_mode;
+            e.flags.ob_mode = spec.ob_mode;
+            e.slave.master = spec.master;
         }
     }
 

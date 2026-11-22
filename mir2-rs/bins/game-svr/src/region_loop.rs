@@ -184,6 +184,13 @@ pub struct HaloEntity {
     pub dir: u8,
     /// 本 tick 生死（出帧的死亡/骷髅支用它）。
     pub death: bool,
+    /// AOI 可见性/阻挡标志（镜像必须逐项复制；`is_blocking` 与可见性谓词都读它们）。
+    pub invisible: bool,
+    pub ghost: bool,
+    pub fixed_hide_mode: bool,
+    pub ob_mode: bool,
+    /// 主人（宝宝/分身）；`None` = 无主。
+    pub master: Option<i32>,
     /// owner 区展示表条目（`None` = owner 侧本就没有 ⇒ 镜像也不登记）。
     pub display: Option<HaloDisplay>,
     /// 玩家网关路由（`None` = 非玩家/未登记）。
@@ -237,6 +244,11 @@ pub fn snapshot_border(
             cell_type: halo_cell_type(&e),
             dir: e.ai.dir,
             death: e.death,
+            invisible: e.invisible,
+            ghost: e.ghost,
+            fixed_hide_mode: e.fixed_hide_mode,
+            ob_mode: e.ob_mode,
+            master: e.master,
             display: source
                 .displays
                 .and_then(|d| d.get(e.id))
@@ -633,6 +645,11 @@ pub fn apply_mirrors(
                 cell_type: e.cell_type,
                 dir: e.dir,
                 death: e.death,
+                invisible: e.invisible,
+                ghost: e.ghost,
+                fixed_hide_mode: e.fixed_hide_mode,
+                ob_mode: e.ob_mode,
+                master: e.master,
             };
             match world.upsert_mirror(spec) {
                 MirrorUpsert::Inserted => stats.inserted += 1,
@@ -1614,6 +1631,11 @@ mod tests {
                     cell_type: CellType::Monster,
                     dir: 0,
                     death: false,
+                    invisible: false,
+                    ghost: false,
+                    fixed_hide_mode: false,
+                    ob_mode: false,
+                    master: None,
                     display: None,
                     route: None,
                 }],
@@ -1658,6 +1680,11 @@ mod tests {
             cell_type: CellType::Monster,
             dir: 3,
             death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
         }
     }
 
@@ -1677,6 +1704,11 @@ mod tests {
             cell_type: CellType::Monster,
             dir: 1,
             death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
             display: None,
             route: None,
         }
@@ -1805,6 +1837,51 @@ mod tests {
             snap.entities.iter().any(|e| e.actor_id == 1),
             "真实实体仍在快照里（过滤不过头）"
         );
+    }
+
+    /// **段 0 牙（Q4）**：快照的 5 个可见性/阻挡标志逐项落到镜像（插入与刷新两条路径）。
+    /// 缺一项 ⇒ 拆区会多出可见/挡路的实体（C7 与 A6 都会红）。
+    ///
+    /// 红检：删 `update_mirror_frame_fields` 任一标志回填（如 `invisible`）⇒ 对应断言红；
+    /// 删插入路径的 `spawn.invisible` ⇒ 首条断言红。
+    #[test]
+    fn mirror_copies_aoi_and_blocking_flags() {
+        let mut world = World::new(20, 20);
+        let mut h = halo_entity(902, 4, 5);
+        h.invisible = true;
+        h.ghost = true;
+        h.fixed_hide_mode = true;
+        h.ob_mode = true;
+        h.master = Some(77);
+        let snap = HaloSnapshot {
+            tick: 1,
+            entities: vec![h],
+        };
+        apply_mirrors(&mut world, std::slice::from_ref(&snap), None).expect("apply");
+        let e = world.entities.get(902).expect("镜像在");
+        assert!(
+            e.invisible && e.ghost && e.fixed_hide_mode && e.ob_mode,
+            "4 个状态位必须逐项复制：invisible={} ghost={} fixed_hide={} ob={}",
+            e.invisible,
+            e.ghost,
+            e.fixed_hide_mode,
+            e.ob_mode
+        );
+        assert_eq!(e.master, Some(77), "master 必须复制");
+
+        // 刷新路径（同坐标）同样逐项更新：清回 false/None。
+        let h2 = halo_entity(902, 4, 5);
+        let snap2 = HaloSnapshot {
+            tick: 2,
+            entities: vec![h2],
+        };
+        apply_mirrors(&mut world, std::slice::from_ref(&snap2), None).expect("apply2");
+        let e = world.entities.get(902).expect("镜像在");
+        assert!(
+            !e.invisible && !e.ghost && !e.fixed_hide_mode && !e.ob_mode,
+            "刷新必须把状态位清回 false"
+        );
+        assert_eq!(e.master, None, "刷新必须清 master");
     }
 
     /// **`apply_mirrors`**：邻区快照 ⇒ 插入 + 登记展示项；下一 tick 快照不含它 ⇒ 移除镜像
