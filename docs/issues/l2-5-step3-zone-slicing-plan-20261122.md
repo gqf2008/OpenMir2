@@ -493,6 +493,14 @@ tick 增量之和，由构造保证），表头已同步 ⇒ 段 4 容量脚本�
 **未做（按范围）**：跨区帧合成（镜像 route 消费、事件跨区队列）——第④/⑤步；真机 bot 跨界冒烟
 由总监排窗口。
 
+### 10.1 §10 的适用范围收窄（总监 2026-11-22 裁决）
+
+§10 的「遮蔽 ≤6N（每区 ≤3）/ 上界不是目标」**只对 handoff 窗口成立**。`mirror_shadowed_by_local`
+的唯一自增点是「镜像 id 撞本区真实体」（`apply_mirrors` 的 `RefusedOccupied`），而两区各装 322 张图
+⇒ **静态 NPC/怪在两区同 id** ⇒ 只要两区同时在线，该计数**稳态也不为 0**。因此：
+- 它**不能**当回归红线；看到非 0 不代表 handoff 时序破了；
+- ④/⑤ 必须把它拆成「handoff 窗口内」与「静态实体撞名」两类计数后，才恢复「窗口内应 ≤6N」的判据。
+
 ### 11.1 评审补充（总监 2026-11-22）
 
 - **`refmsg` 没有独立牙，隔离证据由一对变异承担（写死）**：`refmsg` 与 `npc_merchant` **共用同一
@@ -595,3 +603,52 @@ rss.ndjson、run.json、summary.json；2 区另有 load_gate.log / stack-start.l
 尖峰时 sim_loop 单轮超出 200ms（此时 `checked_duration_since` 为 None、pacing sleep 归零，区 1 多等
 到 ~550ms）。因此该列在**有空区的布局**下度量的是「空区被忙区节拍拖着等」的 Amdahl 相位代价，
 **不是**屏障实现的开销；屏障本身（`FailFastBarrier::wait`）只是 condvar 等待。
+
+### 12.3 段 4 跨区冒烟记录（2026-11-22，窗口内）
+
+**结论先说**：**真机客户端的跨界 handoff 目前无法端到端触发**——不是夹具问题，是**接线缺口**：
+切片模式下**非 0 区线程只处理 `Closed`，其余命令一律丢弃**（「命令处理属段 2」），所以落在区 1
+的假人发的 `CM_WALK` 根本到不了世界；而区 0 多 span（321 张未提图默认归区 0）⇒ `bounds_for`
+返回 None、**区 0 不设 handoff 边界**。两个条件叠加 ⇒ 当前布局下**没有任何一侧既能发起 handoff
+又能收到真实客户端移动命令**。`handoff_offered=0` 是接线缺口的必然结果，**不是**「跨了没计数」。
+
+**夹具（BotSrv 侧，默认关，env 门控）**：`MIR2_BOT_BOUNDARY_WALK=1` +
+`MIR2_BOT_BOUNDARY_WALK_HALF`（各自落点 ±HALF，默认 3）+ `_STEP_MS`（默认 700）。
+- 走的是**真协议**：`MakeMessage(CM_WALK, MakeLong(目的地X, 目的地Y), 0, dir, 0)` +
+  `SendSocket(EDCode.EncodeMessage(...))`（与压测 `CM_TURN` 探针同一编码路径；协议实证：
+  oracle `ClientWalkXY` 用 `GetNextDirection(CurrX,CurrY,nX,nY)` 走一步并要求到达 ⇒ **Recog 是目的地**）。
+- **绕开客户端 `PlayScene.CanWalk` 预检**（夹具行为，已登记）：该预检依赖 `Map.LoadMapData()`
+  的块窗口，压测环境不可用 ⇒ 曾把消息在排空时静默丢弃（证据：`bots.log` 1000 条
+  `[BOUNDARY_WALK] blocked … CanWalk=false`）。绕开后服务端仍是唯一裁决者。
+- **夹具有效性证据**：短诊断轮（100 bots/60s，`MIR2_LOG_MOVES=1`）服务端日志
+  `MIR2_MOVE ident=3011 … moved=true after=Some((x,y))` **3928 条**（区 0 侧）；区 1 侧 0 条。
+
+**夹具/布局踩坑（已修，留证）**：
+- 首次把假人放在 (344/356,618) —— **墙格**（解析 `0.map`：`bk/fr` bit15 置位 ⇒ 非 Walk）⇒
+  镜像写失败 `RefusedCell` ⇒ 旧代码 abort 整机（见下「abort 裁决」）。`0.map` 实测：
+  (330..332,265) Walk、(344,618)/(356,618) 非 Walk。
+- 第二轮把 1973 个角色铺到 **108 个已解析为 Walk 的格**（x 316..339 × y 250..254；
+  `E:/UserTemp/walkable_cells.txt`），布局分界 x=326（区 1 侧 58 格 / 区 0 侧 50 格）。
+
+**abort 裁决落地（总监 2026-11-22）**：`apply_mirrors` 遇 `RefusedCell` **不再 abort**——丢弃该条
+镜像 + `mirror_write_refused_cell`（进 perf TSV）+ 限流 WRN（id/map/坐标/原因，前 8 条 + 每 1000 条）；
+`RefusedOccupied` 仍跳过 + `mirror_shadowed_by_local`（同时计 `mirror_write_refused_occupied`，同事件）。
+**口径纠正（写死）**：`mirror_shadowed_by_local` **不是 handoff 指标**——唯一自增点是「镜像 id 撞本区
+真实体」，而两区各装 322 张图 ⇒ 静态 NPC/怪在两区同 id ⇒ 稳态也非 0。§10 的「遮蔽 ≤6N」只对
+**handoff 窗口**成立；带静态实体共存时该计数**不能当红线**，④/⑤ 再拆两类计数。
+
+**六面缺口基线（近边界负载，供 ④/⑤ 对照）**：`cross_recipient_missing` 总计
+**1.46M / 1.63M / 3.01M**（三次近边界轮，随边界带实体密度变化）；分解主要为
+`refmsg`（1.46M–3.00M）+ `npc_merchant`（1.2k–13.4k），其余四面 0（本轮负载不触发）。
+`mirror_shadowed_by_local` 0.75M–1.38M；`mirror_write_refused cell` 0–3603（非走格上的静态实体镜像）。
+tick p50 0–47ms / p99 78–79ms / 有效 4.95–4.99/s；`region_barrier_us` mean ≈198–211ms（§12.2 口径）。
+RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
+
+**跨界冒烟的前提（写死，缺一条只能算稳定性跑）**：
+1. 假人武装后的 **range 必须覆盖分界**（日志回显 `[BOUNDARY_WALK] armed … range=[x0,x1]`，必须与布局分界对照，不能只看 env 配置）；
+2. 假人必须落在**允许发起 handoff 的源区**（今天只有区 1；区 0 多 span 不设边界）；
+3. 该区线程必须**真的处理 `Command` 事件**（当前只有区 0 处理；非 0 区丢弃 —— ④/⑤ 的接线前提）。
+
+**待 ④/⑤**：①非 0 区命令接线；②区 0 的 span 问题（322 张未提图默认归区 0）；③静态实体「每区恰一份」
+（本次两区各装 322 张图，静态 NPC/怪同 id 各模拟一次 —— 内存 + 行为分歧）；④拆分
+`mirror_shadowed_by_local` 的「handoff 窗口」与「静态撞名」两类计数。

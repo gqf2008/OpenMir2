@@ -36,6 +36,19 @@ CROSS_COLS = [
     "cross_recipient_merchant_disappear",
 ]
 TOTAL_COL = "cross_recipient_missing"
+# L2-5 ③ 段 4 追加的 handoff 列：有就打印（新二进制），没有就标注 absent（旧产物仍可读）。
+HANDFOFF_COLS = [
+    "handoff_offered",
+    "handoff_accepted",
+    "handoff_refused",
+    "handoff_promoted",
+    "handoff_inserted_fresh",
+    # 段 4 裁决：该列**不是** handoff 专属指标——「镜像 id 撞本区真实体」，包含静态图实体撞名。
+    "mirror_shadowed_by_local",
+    "handoff_dup_dropped",
+    "mirror_write_refused_cell",
+    "mirror_write_refused_occupied",
+]
 REQUIRED = CROSS_COLS + [
     TOTAL_COL,
     "region_barrier_us",
@@ -78,10 +91,12 @@ def _read_tsv(path):
         raise InputError("perf TSV 为空（无表头）：%s" % path)
     if not rows:
         raise InputError("perf TSV 只有表头、无 tick 行（探针 fail-closed）：%s" % path)
-    idx = {name: header.index(name) for name in REQUIRED}
-    out = {name: [] for name in REQUIRED}
+    optional = [c for c in HANDFOFF_COLS if c in header]
+    want = REQUIRED + optional
+    idx = {name: header.index(name) for name in want}
+    out = {name: [] for name in want}
     for cells in rows:
-        for name in REQUIRED:
+        for name in want:
             raw = cells[idx[name]].strip()
             try:
                 out[name].append(int(raw))
@@ -157,18 +172,27 @@ def _rss(game_role, path):
 def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, label=None, game_role="game-svr"):
     perf = _read_tsv(perf_path)
     rows = len(perf[CROSS_COLS[0]])
-    # 合计列必须逐行等于六面之和（防手改/漂移；不等 ⇒ 输入不可判）
-    for i in range(rows):
-        six = sum(perf[c][i] for c in CROSS_COLS)
-        if six != perf[TOTAL_COL][i]:
-            raise InputError("第 %d 行合计 %d != 六面之和 %d" % (i + 1, perf[TOTAL_COL][i], six))
+    # **六面是权威口径**：合计 = 六面之和（合计列只是冗余展示）。列值不一致 ⇒ 记 info
+    # （`total_column_mismatch`），不判 PREREQ——2026-11-22 实测记到过 writer 把合计恒写 0
+    # 的 bug；读数不能被冗余列绑架，但差异必须显式暴露。
     cross = {c: sum(perf[c]) for c in CROSS_COLS}
-    cross["total"] = sum(perf[TOTAL_COL])
+    cross["total"] = sum(cross[c] for c in CROSS_COLS)
+    total_col = sum(perf[TOTAL_COL])
+    total_mismatch = None
+    if total_col != cross["total"]:
+        first = next(i for i in range(rows)
+                     if perf[TOTAL_COL][i] != sum(perf[c][i] for c in CROSS_COLS))
+        total_mismatch = {
+            "column_sum": total_col,
+            "six_sum": cross["total"],
+            "first_bad_row": first + 1,
+        }
     summary = {
         "label": label,
         "perf_tsv": os.path.abspath(perf_path),
         "tick_rows": rows,
         "cross_recipient_missing": cross,
+        "total_column_mismatch": total_mismatch,
         "region_barrier_us": {
             "max": max(perf["region_barrier_us"]),
             "mean": round(sum(perf["region_barrier_us"]) / rows, 1),
@@ -187,6 +211,11 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
             "targets_total": sum(perf["refmsg_targets"]),
         },
     }
+    present = [c for c in HANDFOFF_COLS if c in perf]
+    if len(present) == len(HANDFOFF_COLS):
+        summary["handoff"] = {c: sum(perf[c]) for c in HANDFOFF_COLS}
+    else:
+        summary["handoff"] = None
     if run_json:
         run = _load_json(run_json, "run.json")
         try:
@@ -215,6 +244,10 @@ def print_summary(s):
         "cross_recipient_missing（合计）= %d  [%s]"
         % (cross["total"], " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS))
     )
+    if s.get("total_column_mismatch"):
+        m = s["total_column_mismatch"]
+        print("NOTE total 列与六面之和不一致（合计列冗余，按六面计）：列=%d 六面=%d 首个坏行=%d"
+              % (m["column_sum"], m["six_sum"], m["first_bad_row"]))
     tail = []
     if "effective_tick_hz" in s:
         tail.append("有效 tick 率=%.2f/s (rows=%d, %.1fs)" % (s["effective_tick_hz"], s["tick_rows"], s["run"]["duration_sec"]))
@@ -228,6 +261,16 @@ def print_summary(s):
         for role, r in s["rss"].items():
             print("RSS(%s): ws max=%.2fMB mean=%.2fMB | priv max=%.2fMB mean=%.2fMB" % (
                 role, r["ws"]["max_mb"], r["ws"]["mean_mb"], r["priv"]["max_mb"], r["priv"]["mean_mb"]))
+    h = s.get("handoff")
+    if h:
+        print("handoff: offered=%d accepted=%d refused=%d | promoted=%d inserted_fresh=%d dup_dropped=%d" % (
+            h["handoff_offered"], h["handoff_accepted"], h["handoff_refused"],
+            h["handoff_promoted"], h["handoff_inserted_fresh"], h["handoff_dup_dropped"]))
+        print("mirror: shadowed_by_local=%d（含静态图实体撞名，非 handoff 专属、不是红线） | write_refused cell=%d occupied=%d" % (
+            h["mirror_shadowed_by_local"], h["mirror_write_refused_cell"],
+            h["mirror_write_refused_occupied"]))
+    else:
+        print("handoff: absent（本 TSV 无 handoff 列：旧二进制产物）")
     ib = s["inbound"]
     print("inbound: enq=%.2f/tick drained=%.2f/tick carry_ticks=%d budget_hit_ticks=%d" % (
         ib["enqueued_mean"], ib["drained_mean"], ib["carry_ticks"], ib["budget_hit_ticks"]))
@@ -321,16 +364,15 @@ def selftest():
         except InputError as e:
             expect(TOTAL_COL in str(e), "缺列报错必须点名列：%s" % e)
 
-        # 负例 2：合计列与六面不等 ⇒ rc=2
+        # 负例 2：合计列与六面不等 ⇒ 六面权威、差异显式暴露（不再判 PREREQ）
         drift = os.path.join(td, "drift.tsv")
         r2 = [dict(row), dict(row)]
         r2[0][TOTAL_COL] = 99
         _write(drift, _tsv(header, [[r[h] for h in header] for r in r2]))
-        try:
-            summarize(drift)
-            expect(False, "合计漂移必须 InputError")
-        except InputError:
-            pass
+        sd = summarize(drift)
+        expect(sd["total_column_mismatch"] is not None, "合计列漂移必须被显式记录")
+        expect(sd["total_column_mismatch"]["six_sum"] == 6, "六面之和应为 6（权威口径）")
+        expect(sd["cross_recipient_missing"]["total"] == 6, "合计应按六面之和计")
 
         # 负例 3：只有表头 ⇒ rc=2
         empty = os.path.join(td, "empty.tsv")

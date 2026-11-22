@@ -23777,6 +23777,39 @@ mod perf_counters {
     /// 成本读（区越多越大，见 `region_barrier_us` 的 max 口径）。
     pub(crate) static REGION_BARRIER_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 
+    // ---- L2-5 ③ 段 4：handoff 读数（mirror_metrics 的累计原子 → 每 tick 增量列）----
+    /// 上一次写行时的累计值（下标 = 下面 [`handoff_snapshot`] 的顺序）。
+    static HANDOFF_LAST: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+
+    /// 累计读数的固定顺序：offered / accepted(=promoted+inserted) / refused / promoted /
+    /// inserted_fresh / shadowed / dup_dropped。
+    fn handoff_snapshot() -> [u64; 9] {
+        let promoted = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted();
+        let inserted = mir2_world_bevy::mirror_metrics::handoff_inserted_fresh();
+        [
+            mir2_world_bevy::mirror_metrics::handoff_offered(),
+            promoted.saturating_add(inserted),
+            mir2_world_bevy::mirror_metrics::handoff_refused(),
+            promoted,
+            inserted,
+            mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local(),
+            mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped(),
+            mir2_world_bevy::mirror_metrics::mirror_write_refused_cell(),
+            mir2_world_bevy::mirror_metrics::mirror_write_refused_occupied(),
+        ]
+    }
+
+    /// 本 tick 增量（与其它列同为「写行即清零」口径）。
+    fn handoff_deltas() -> [u64; 9] {
+        let cur = handoff_snapshot();
+        let mut out = [0u64; 9];
+        for (i, c) in cur.iter().enumerate() {
+            let prev = HANDOFF_LAST[i].swap(*c, Ordering::Relaxed);
+            out[i] = c.saturating_sub(prev);
+        }
+        out
+    }
+
     // ---- L2-5 ③ 段 3：跨区收件人帧缺失（六面分开；**只加计数，不合成帧**）----
     /// 切片运行态（`MIR2_ZONE_SLICING`）。计数闸：切片关 ⇒ 六面全 0（N=1 逐字节不变）。
     static SLICING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -23925,7 +23958,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -23952,6 +23985,15 @@ mod perf_counters {
             return;
         }
         let tick = DATA_LINES.fetch_add(1, Ordering::Relaxed);
+        let hd = handoff_deltas();
+        let cr = [
+            CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[2].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
+        ];
         let vals = [
             ACTOR_INDEXED.swap(0, Ordering::Relaxed),
             CHR_INDEXED.swap(0, Ordering::Relaxed),
@@ -23975,19 +24017,24 @@ mod perf_counters {
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
             REGION_BARRIER_US.swap(0, Ordering::Relaxed),
             REGION_BARRIER_TOTAL_US.swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[2].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
-            // 合计列 = 六面本 tick 增量之和（由构造保证，不另存一份）。
-            CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed)
-                + CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed)
-                + CROSS_RECIPIENT_BY_SURFACE[2].swap(0, Ordering::Relaxed)
-                + CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed)
-                + CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed)
-                + CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
+            cr[0],
+            cr[1],
+            cr[2],
+            cr[3],
+            cr[4],
+            cr[5],
+            // 合计列 = 六面本 tick 增量之和（**同一组 swap 结果**，不能再 swap 一次——那会把
+            // 合计恒写成 0；2026-11-22 冒烟实测抓到过，见提交信息）。
+            cr.iter().sum::<u64>(),
+            hd[0],
+            hd[1],
+            hd[2],
+            hd[3],
+            hd[4],
+            hd[5],
+            hd[6],
+            hd[7],
+            hd[8],
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -121112,6 +121159,61 @@ mod l2_handoff_tests {
             vec![local, 41, 42],
             "outgoing 镜像必须追加格尾（忽略 cell_pos=0）；普通镜像按 cell_pos"
         );
+    }
+
+    /// **段 4 裁决（2026-11-22）**：镜像落格失败（`RefusedCell`）⇒ **丢弃该条 + 计数**，
+    /// **不 abort 整机**（旧行为是 `Err(MirrorRefused)`）。缺口不许静默 ⇒ 计数进 perf TSV。
+    ///
+    /// 红检：恢复旧行为（`return Err`）⇒ 本用例红；删 `note_mirror_write_refused_cell` ⇒ 计数 0 ⇒ 红。
+    #[test]
+    fn mirror_write_refused_cell_is_dropped_and_counted() {
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_mirror_write_refused_cell_for_tests();
+        let mut world = World::with_maps(vec![(20, 10)]);
+        {
+            let map = world.sim.maps.get_mut(0).expect("矩阵 0 存在");
+            let (cell, ok) = map.get_cell_info_mut(5, 5);
+            assert!(ok, "前置：格存在");
+            cell.attribute = mir2_world_bevy::CellAttribute::LowWall;
+        }
+        let snap = HaloSnapshot {
+            tick: 0,
+            entities: vec![HaloEntity {
+                actor_id: 77,
+                map_id: 0,
+                x: 5,
+                y: 5,
+                view_range: 5,
+                name: "R".into(),
+                race: 80,
+                race_img: 0,
+                appr: 0,
+                light: 0,
+                name_color: 255,
+                cell_type: mir2_world_bevy::CellType::Monster,
+                dir: 0,
+                death: false,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+                cell_pos: 0,
+                display: None,
+                route: None,
+                outgoing: false,
+            }],
+        };
+        let stats = apply_mirrors(&mut world, &[snap], None)
+            .expect("RefusedCell 必须被丢弃，不得 abort/Err");
+        assert_eq!(stats.mirror_write_refused_cell, 1);
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::mirror_write_refused_cell(),
+            1
+        );
+        assert!(world.entities.get(77).is_none(), "落格失败不得留半实体");
     }
 
     // ------------------------------------------------------------------

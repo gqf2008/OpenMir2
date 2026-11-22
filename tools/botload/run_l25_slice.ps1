@@ -192,7 +192,9 @@ try {
   }
 }
 
-if ($gateRc -ne 0) { Write-Output ("RED: load_gate rc=$gateRc（档位未达标；见 $TierDir 的 report.json）"); exit 1 }
+# **RED 轮也要出摘要/产物**（缺口基线必须在红轮上可读）：先继续做产物与摘要，最后再以 rc=1 退出。
+$gateFailed = $gateRc -ne 0
+if ($gateFailed) { Write-Output ("RED: load_gate rc=$gateRc（档位未达标；见 $TierDir 的 report.json）——仍继续出摘要") }
 
 # ---- 6) 产物完整性（fail-closed） ----
 if (-not (Test-Path -LiteralPath $PerfTsv)) { Prereq "perf TSV 不存在（MIR2_PERF_COUNTERS 未进 game-svr？）：$PerfTsv" }
@@ -210,6 +212,13 @@ if (-not (Test-Path -LiteralPath $RssNdjson)) { Prereq "缺 RSS 采样：$RssNdj
   pid_file = $pidFile
   start_wall_ms = $runStartMs
   end_wall_ms = $runEndMs
+  # **本次用哪个开关驱动走位**（总监要求写进产物；空 = 未驱动走位）。
+  bot_boundary_walk = [pscustomobject]@{
+    enabled = [string]$env:MIR2_BOT_BOUNDARY_WALK
+    x0 = [string]$env:MIR2_BOT_BOUNDARY_WALK_X0
+    x1 = [string]$env:MIR2_BOT_BOUNDARY_WALK_X1
+    step_ms = [string]$env:MIR2_BOT_BOUNDARY_WALK_STEP_MS
+  }
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $RunJson -Encoding utf8
 
 # ---- 7) 摘要（按列名读 7 列；合计在首屏） ----
@@ -236,5 +245,6 @@ if ($Zones -eq 2 -and $baseline -and (Test-Path -LiteralPath $baseline)) {
   Write-Output ("NOTE: 未找到 1 区基线摘要（" + $baseline + "）——按段 4 硬要求 3，跑一次 -Zones 1 再 --compare")
 }
 
+if ($gateFailed) { Write-Output ("SLICE_SMOKE_OUT=" + $OutDir + "（load_gate RED，摘要已出）"); exit 1 }
 Write-Output ("SLICE_SMOKE_OK out=" + $OutDir)
 exit 0

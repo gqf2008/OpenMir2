@@ -176,6 +176,7 @@ impl HandoffRuntime {
                 );
             } else {
                 self.refused += 1;
+                mir2_world_bevy::mirror_metrics::note_handoff_refused();
                 if let Some(e) = world.entities.get_mut(ack.id) {
                     e.flags.handoff_pending = false;
                 }
@@ -340,6 +341,7 @@ impl HandoffRuntime {
         for id in expired {
             self.pending_since.remove(&id);
             self.refused += 1;
+            mir2_world_bevy::mirror_metrics::note_handoff_refused();
             if let Some(e) = world.entities.get_mut(id) {
                 e.flags.handoff_pending = false;
             }
@@ -366,6 +368,7 @@ impl HandoffRuntime {
             let Some(target) = self.layout.zone_of(spec.map_id, spec.x, spec.y) else {
                 // 不属任何区（越界坐标）⇒ 回滚，不投。
                 self.refused += 1;
+                mir2_world_bevy::mirror_metrics::note_handoff_refused();
                 if let Some(e) = world.entities.get_mut(id) {
                     e.flags.handoff_pending = false;
                 }
@@ -395,6 +398,7 @@ impl HandoffRuntime {
                     epoch,
                     spec,
                 });
+                mir2_world_bevy::mirror_metrics::note_handoff_offered();
             }
         }
     }

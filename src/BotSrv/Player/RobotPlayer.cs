@@ -288,6 +288,24 @@ namespace BotSrv.Player
         private static readonly int _probeIntervalMs = ProbeIntervalFromEnv();
         private int _probeLastTick;
         private int _probeDir;
+        // ---- L2-5 ③ 段 4：边界带来回走夹具（默认关；env 门控；走既有 CM_WALK 发送路径）----
+        //
+        // 为什么需要它：默认 autoplay 只在 `g_gcAss[6]`（目标筛选）开启且视野内有怪时才走位；
+        // 压测栈默认关、出生点附近无怪 ⇒ 假人原地不动。本夹具按 `MIR2_BOT_BOUNDARY_WALK=1`
+        // 打开，在 [X0, X1] 之间每 STEP_MS 发一步 `CM_WALK`（与 autoplay 的 CM_WALK 分支同一条
+        // `MShare.MySelf.UpdateMsg(CM_WALK, …)` 调用：真协议、不传送）。
+        private static readonly bool BoundaryWalkEnabled =
+            Environment.GetEnvironmentVariable("MIR2_BOT_BOUNDARY_WALK") == "1";
+        private static readonly int BoundaryWalkHalf = BoundaryWalkEnvInt("MIR2_BOT_BOUNDARY_WALK_HALF", 3);
+        private static readonly int BoundaryWalkStepMs = BoundaryWalkEnvInt("MIR2_BOT_BOUNDARY_WALK_STEP_MS", 700);
+        private int _bwLastTick;
+        /// <summary>本假人的来回走区间（首次武装时按自身落点 ±HALF 定；各假人不同 ⇒ 有人会跨边界）。</summary>
+        private int _bwX0;
+        private int _bwX1;
+        private bool _bwRangeSet;
+        private bool _bwTargetHigh = true;
+        private bool _bwLoggedOnce;
+        private int _bwSteps;
         /// <summary>服务端确认进世界（收到 SM_LOGON）——探针的武装条件。</summary>
         private volatile bool _inWorld;
         private bool _inWorldCounted;
@@ -317,6 +335,67 @@ namespace BotSrv.Player
         public static bool ProbeEnabled => _probeEnabled;
 
         public static int ProbeIntervalMs => _probeIntervalMs;
+
+        private static int BoundaryWalkEnvInt(string name, int fallback)
+        {
+            string v = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(v) && int.TryParse(v, out int n) && n > 0)
+            {
+                return n;
+            }
+            return fallback;
+        }
+
+        /// <summary>L2-5 ③ 段 4：边界带来回走（默认关；仅 BotSrv 侧夹具）。</summary>
+        private void BoundaryWalkTick()
+        {
+            if (!BoundaryWalkEnabled || !_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            if (MShare.MySelf == null)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (_bwLastTick != 0 && now - _bwLastTick < BoundaryWalkStepMs)
+            {
+                return;
+            }
+            short x = MShare.MySelf.CurrX;
+            short y = MShare.MySelf.CurrY;
+            if (!_bwRangeSet)
+            {
+                _bwRangeSet = true;
+                _bwX0 = x - BoundaryWalkHalf;
+                _bwX1 = x + BoundaryWalkHalf;
+            }
+            if (_bwTargetHigh && x >= _bwX1)
+            {
+                _bwTargetHigh = false;
+            }
+            else if (!_bwTargetHigh && x <= _bwX0)
+            {
+                _bwTargetHigh = true;
+            }
+            int dir = _bwTargetHigh ? 2 : 6; // 2=右、6=左（oracle 方向常量）
+            short nx = (short)(x + (_bwTargetHigh ? 1 : -1));
+            _bwSteps++;
+            if (!_bwLoggedOnce)
+            {
+                _bwLoggedOnce = true;
+                MainOutMessage($"[BOUNDARY_WALK] armed at ({x},{y}) range=[{_bwX0},{_bwX1}] step={BoundaryWalkStepMs}ms");
+            }
+            // **真协议直发**（与压测动作探针同一编码路径）。协议实证（oracle
+            // `PlayObject.Attack.cs::ClientWalkXY`）：CM_WALK 的 nParam1/nParam2 = LoWord/HiWord(Recog)
+            // 是**目的地**格（`GetNextDirection(CurrX,CurrY,nX,nY)` 走一步、并须 `CurrX==nX&&CurrY==nY`）；
+            // 不是当前坐标。不走 `m_MsgList` 的客户端预检（`PlayScene.CanWalk` 依赖地图块加载，
+            // 压测环境不可用 ⇒ 会把消息在排空时静默丢弃）——服务端仍是唯一裁决者。
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_WALK,
+                HUtil32.MakeLong(nx, y), 0, dir, 0);
+            SendSocket(EDCode.EncodeMessage(msg));
+            _bwLastTick = now;
+        }
 
         private static int ProbeIntervalFromEnv()
         {
@@ -2733,6 +2812,7 @@ namespace BotSrv.Player
                 }
                 DScreen.CurrentScene.DoNotifyEvent();
                 ProbeActionTick();
+                BoundaryWalkTick();
                 BagEquipSequenceTick();
                 AttackSequenceTick();
                 ShopSequenceTick();
