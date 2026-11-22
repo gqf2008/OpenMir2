@@ -370,11 +370,19 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 从首次可见起逐 tick 连续、`promoted==1`、`refused==0`。默认（增量）与
 `MIR2_AOI_INCREMENTAL=0`（legacy）两个进程窗口各跑一次，均绿。
 
-**并发竞态（待 Leader 裁决）**：两线程自由跑时 ack 可能晚一 tick，期间源区快照仍含该 id ⇒
-目标区 `apply_mirrors` 命中「已是真实体」⇒ 遮蔽兜底（跳过 + 计数，正是它的防御价值）。因此生产
-用例断言 `mirror_shadowed_by_local ≤ 2`（瞬态上界），**不是 0**；引擎级夹具（单 tick 显式定序）
-仍断言 0。若要「恒 0」，需要第三次同步点（handoff 专用屏障）或把 offer 提前到 barrier1——属设计
-变更，等 Leader 拍板。
+**并发竞态（总监 2026-11-22 裁决：接受 ≤2，不加第三道屏障、不把 offer 提前到 barrier1）**：
+
+- **界的推导（不是魔数）**：目标区在 T+1 的 tick 顶提升并回 ack；源区要**在自己的** T+1 顶收到
+  ack 才移除。两线程自由跑时 ack 可能晚 **1 tick** ⇒ 源区在自己的 T+1 快照里仍发布该 id
+  （outgoing）、在 T+2 的顶才移除 ⇒ 目标区在 **T+1、T+2 这两 tick** 命中「已是真实体」的遮蔽
+  兜底。故**一次跨界最多遮蔽 2 tick**；N 次跨界累计 ≤2N，且 `promoted == N`（每次跨界恰一次提升）。
+- **异常口径**：`shadowed > 2N`、或随跨界次数呈「非每次 ≤2」的增长 ⇒ 判定**时序设计破了**，要查
+  而不是庆祝兜底生效。
+- **两条硬判据不松**：`refused == 0`；受害者（该 id）**全程无 appear/disappear**（收件人
+  `visible_actors` 台账逐 tick 连续）。
+- **「恒 0」的正确范围**：**引擎级单 tick 显式定序夹具**恒 0（`l2_handoff_tests` 的断言保留）；
+  自由运行的两区线程 ≤2/次（`l2_handoff_prod_tests::production_runtime_multi_crossing_bounded_shadow`
+  用**多次跨界**断言 `promoted == N`、`shadowed ≤ 2N`、`refused == 0`、受害者台账连续）。
 
 **仍未做（明确登记）**：真机 bot 过网关跨界的批量冒烟（`tools/botload`）——本段的生产证据是
 「两区真线程 + 真实移动命令」，尚未跑完整网关栈。

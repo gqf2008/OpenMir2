@@ -120468,9 +120468,10 @@ mod l2_handoff_tests {
                         //      目标区把同 id 镜像原地提升（offer 的 spec 来自上一 tick 的邻区快照）。
                         if tick_no == CROSS_TICK && zone_id == zone(0) {
                             let id = entity_id.expect("源区必须有 E");
-                            if let Some(t) = world.entities.transform_mut(id) {
-                                t.x = 10;
-                            }
+                            // **真实移动命令**（不是裸改 transform）：保证格表与坐标同步——
+                            // 裸改会让快照的 `cell_pos` 查不到（`mirror_cell_pos_unknown` 污染
+                            // 并行的 C1–C3 用例）。本夹具不设 `zone_bounds` ⇒ pending 手动置位。
+                            world.walk(id, 1, 0);
                             if let Some(e) = world.entities.get_mut(id) {
                                 e.flags.handoff_pending = true;
                             }
@@ -121025,6 +121026,183 @@ mod l2_handoff_prod_tests {
         assert!(
             shadowed <= 2,
             "遮蔽兜底只允许 ack 竞态的瞬态上界（≤2），实得 {shadowed}"
+        );
+    }
+
+    /// **多次跨界的累计上界**（总监 2026-11-22 裁决：把 `≤2` 从魔数变成可解释的界 + 可观察异常）。
+    ///
+    /// **界的一次推导**：ack 迟到 ≤1 tick ⇒ 源区在 T+1 的快照里仍发布该 id（outgoing）、在 T+2 的
+    /// 顶才移除 ⇒ 目标区在 **T+1、T+2 两 tick** 命中「已是真实体」的遮蔽兜底。故**每次跨界**
+    /// 遮蔽 ≤2。N 次跨界 ⇒ 累计 ≤2N，且 `promoted == N`（每次跨界恰一次提升）。
+    ///
+    /// **异常口径**：`shadowed > 2N` 或随跨界次数呈非「每次 ≤2」的增长 ⇒ 时序设计破了，
+    /// 要查（不是庆祝兜底生效）。`refused == 0`、受害者全程在收件人台账里不消失，仍是**硬 0/零**。
+    ///
+    /// 驱动：E 在 9↔10（区 0 rect 的 x≤9、区 1 rect 的 x≥10）来回走，每 `K` tick 迈一步；
+    /// 拥有者由「本 World 里有名为 E 且 `!mirror` 的实体」判定（提升后即换手）。
+    #[test]
+    fn production_runtime_multi_crossing_bounded_shadow() {
+        // 主驱动窗口 + settle 尾巴：最后若干 tick 只推进世界（不再迈步），让在途 offer/ack 收口，
+        // 使「每次跨界恰一次提升」的累计断言不依赖线程调度。
+        const TICKS: u64 = 60;
+        const SETTLE: u64 = 16;
+        const K: u64 = 12;
+        const CROSSINGS: u64 = 3;
+        let _guard = PROD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
+        let layout = Arc::new(layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let boxes = handoff::new_mailboxes(2);
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, u64, u64, Vec<bool>)>();
+
+        let run = |zone_id: ZoneId, spawn_e: bool, spawn_p: bool| {
+            let layout = Arc::clone(&layout);
+            let exchange = Arc::clone(&exchange);
+            let barriers = Arc::clone(&barriers);
+            let boxes = boxes.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let abort = Arc::clone(&barriers);
+                let body = move || {
+                    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+                    world.set_id_base(zone_id_base(zone_id));
+                    world.set_zone_bounds(crate::handoff::bounds_for(&layout, zone_id));
+                    if spawn_e {
+                        let mut e = mir2_world_bevy::EntitySpawn::new(0, "E".to_string(), 9, 5);
+                        e.race = 0;
+                        e.view_range = 12;
+                        world.add_entity(e);
+                    }
+                    if spawn_p {
+                        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 12, 5);
+                        p.race = 0;
+                        p.view_range = 12;
+                        world.add_entity(p);
+                    }
+                    let _ = world.tick();
+                    let runtime = ZoneRuntime::new(
+                        zone_id,
+                        layout.zone_spans(),
+                        ZONE_HALO_WIDTH,
+                        &exchange,
+                        &barriers,
+                    );
+                    let mut handoff = crate::handoff::HandoffRuntime::new(
+                        zone_id,
+                        Arc::clone(&layout),
+                        boxes.clone(),
+                    );
+                    let mut next_issue = 0u64;
+                    let mut crossed = 0u64;
+                    let mut p_stream: Vec<bool> = Vec::new();
+                    for tick in 0..TICKS + SETTLE {
+                        handoff.tick_top(&mut world, tick);
+                        // 拥有者与方向：区 0 推 +x、区 1 推 -x，每 K tick 最多迈一步。
+                        let owned = world
+                            .entities
+                            .iter_ref()
+                            .find(|e| e.name == "E" && !e.mirror)
+                            .map(|e| (e.id, e.x, e.handoff_pending));
+                        if let Some((id, x, pending)) = owned {
+                            if !pending && tick >= next_issue && tick < TICKS {
+                                let dx = if zone_id == zone(0) && x >= 9 {
+                                    Some(1)
+                                } else if zone_id == zone(1) && x <= 10 {
+                                    Some(-1)
+                                } else {
+                                    None
+                                };
+                                if let Some(dx) = dx {
+                                    world.walk(id, dx, 0);
+                                    // 跨区判定与 `zone_bounds` 同口径：走完**出本区 rect**才算一次跨界。
+                                    let nx = x + dx;
+                                    let my_inside = if zone_id == zone(0) {
+                                        (0..=9).contains(&nx)
+                                    } else {
+                                        (10..=19).contains(&nx)
+                                    };
+                                    if !my_inside {
+                                        crossed += 1;
+                                    }
+                                    next_issue = tick + K;
+                                }
+                            }
+                        }
+                        let mut rec = world.tick_phase1();
+                        let (_b, neighbors, wait_us) = runtime
+                            .after_phase1(&world, tick, &HaloFrameSource::none())
+                            .expect("快照/发布/barrier1/读邻居");
+                        if let Err(e) = apply_mirrors(&mut world, &neighbors, None) {
+                            panic!("apply_mirrors 失败：{e}");
+                        }
+                        world.tick_phase2(&mut rec);
+                        runtime.after_phase2(wait_us, None);
+                        handoff.after_phase2(&mut world, tick);
+                        if zone_id == zone(1) {
+                            let e_now = world
+                                .entities
+                                .iter_ref()
+                                .find(|e| e.name == "E")
+                                .map(|e| e.id);
+                            let seen =
+                                e_now.is_some_and(|id| visible_targets(&world, "P").contains(&id));
+                            p_stream.push(seen);
+                        }
+                    }
+                    tx.send((handoff.promoted(), handoff.refused(), crossed, p_stream))
+                        .expect("主线程接收");
+                };
+                if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+                    abort.abort();
+                    std::panic::resume_unwind(p);
+                }
+            })
+        };
+        let h0 = run(zone(0), true, false);
+        let h1 = run(zone(1), false, true);
+        // 两区各回一份（到达序不定）；只有区 1 的 `p_stream` 有内容（P 在区 1）。
+        let mut refused_total = 0u64;
+        let mut crossings = 0u64;
+        let mut stream: Vec<bool> = Vec::new();
+        for _ in 0..2 {
+            let (_promoted, refused, crossed, p_stream) = rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("每区一份结果（超时 = 屏障死锁/线程 panic）");
+            refused_total += refused;
+            crossings += crossed;
+            if p_stream.len() > stream.len() {
+                stream = p_stream;
+            }
+        }
+        h0.join().expect("区 0 线程");
+        h1.join().expect("区 1 线程");
+        let shadowed = mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local();
+        // 每次跨界恰一次提升：总量用进程级 `handoff_mirror_promoted`（`promote_mirror_to_real`
+        // 在**目标区**线程里计数，两区合计 = 跨界次数）。
+        let promoted_all = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted();
+        assert!(
+            crossings >= 2,
+            "至少完成 2 次跨界（驱动自证；实得 {crossings}）"
+        );
+        assert_eq!(
+            promoted_all, crossings,
+            "每次跨界恰一次提升（累计 promoted={promoted_all} crossings={crossings}）"
+        );
+        assert_eq!(refused_total, 0, "无拒绝/超时回滚（硬 0）");
+        assert!(
+            shadowed <= 2 * crossings,
+            "遮蔽兜底累计 ≤ 2N（每次跨界 ack 迟到 ≤1 tick 的推导上界；实得 {shadowed}，N={crossings}）"
+        );
+        let _ = CROSSINGS;
+        // 受害者（E）从首次可见起全程在 P 的收件人台账里（appear/disappear 帧的直接来源）。
+        let first = stream.iter().position(|s| *s).unwrap_or_else(|| {
+            panic!("P 的台账从未出现 E：{stream:?}");
+        });
+        assert!(
+            stream[first..].iter().all(|s| *s),
+            "E 在 P 的台账里出现缺口（零闪烁失败）：{stream:?}"
         );
     }
 
