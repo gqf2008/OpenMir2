@@ -2597,11 +2597,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     mode.max_halo_band_entities,
                     zone::ENV_MAX_HALO_BAND_ENTITIES
                 );
-                glog!(
-                    "WRN",
-                    "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
-                    zone_count - 1
-                );
+                if slicing {
+                    glog!(
+                        "INF",
+                        "区 1..{} 为切片区：真 World（全图网格 + 每区 rng）；登录落区在 L2-5 ③ 段 1 接入",
+                        zone_count - 1
+                    );
+                } else {
+                    glog!(
+                        "WRN",
+                        "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
+                        zone_count - 1
+                    );
+                }
                 if mirror_enabled {
                     glog!(
                         "INF",
