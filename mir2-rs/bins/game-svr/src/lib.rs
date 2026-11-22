@@ -7877,6 +7877,9 @@ fn handle_query_user_state_cmd(
 /// 本单测只能钉「调用不产帧/不改态」。
 fn handle_query_user_set_cmd(chr_name: &str, socket: i32, online: &OnlineRegistry) {
     // oracle 体为空：不发帧、不改任何会话态；仅记一行供对账门/日志确认「已派发」。
+    // **索引迁移口径**：本点由 `iter().any()` 改为 `find_by_chr().is_some()`；旧路径不计 `CHR_LINEAR`、
+    // 新路径计 `CHR_INDEXED` ⇒ 本点每 `CM_QUERYUSERSET` 使 `chr_indexed` +1，**不计入**「线性→索引守恒式」
+    // （见评估稿 §11.8 的计数口径）。
     let online_found = online.find_by_chr(chr_name).is_some();
     glog!(
         "DBG",
@@ -124382,6 +124385,11 @@ mod online_immutability_gate {
             "iter_mut",
             "as_mut_slice",
             "get_mut",
+            "sort_by_cached_key",
+            "extend_from_slice",
+            "extend_from_within",
+            "resize_with",
+            "swap_remove",
         ];
         // 直接字段访问（绕过 rebuild；今天生产只用 self.* 在 impl 内，故变量名 `online.*` 的形态为零）。
         let field_bypass = ["online.entries", "online.by_chr", "online.by_actor"];
