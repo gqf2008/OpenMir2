@@ -97,6 +97,15 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   由 `tick()` 持有并传 `&mut`。**这是 M0 实现时最大的机械工作**：每段逐一核对「本段产出、
   后续段消费」的局部值，全部走 scratch 或结构字段，不许改表达式顺序。
 
+### 3.1 「构造入口闸」的准确范围（opc-27 2026-11-23 裁决）
+
+- **N=1（`slicing=0`）照常构造 `HostLoop`**：它就是被抽出来的 `sim_loop` 状态，构造属纯重构，
+  不是「额外区实例」；
+- 闸针对的是**额外的区实例**：`slicing=0` 时**不得**构造任何 zone-k 的 `HostLoop`/`ZoneState`
+  （M0 不接线 `spawn_minimal_zone` 正是为此）；
+- 判据落点：`slicing_layout.is_none()`（既有判据）之下，`HostLoop` 构造点唯一，且区 k 的
+  `for_zone` 在 `slicing=0` 路径上**不可达**（源码扫描用例钉调用点，见 §6）。
+
 ## 4. N=1 / slicing=0 逐字节不变：怎么保
 
 1. **纯搬移**：只挪代码位置，不改任何表达式、分支、调用顺序、分配次数；`PhaseSet::ALL`
@@ -104,7 +113,13 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
 2. **构造顺序不变**：`HostLoop`/`HostServices` 在 `loop {` 之前用字段简写从既有局部「装入」，
    不重排启动装载（M0 不搬 `new_host`；`for_zone` 是另一条只给区 k 用的构造）。
 3. **不新增热路径开销**：无新克隆/新 `Vec`/新锁；`Cell`/`RefCell` 仍是原实例。
-4. 门（三条，缺一不合并）：
+4. **「零新增分配/克隆/锁」要可检查，不是承诺**（opc-27 要求）：
+   - `PhaseSet` 是 `u32` 位集（Copy，参数不分配）；`TickScratch` 在 `HostLoop` 内**预分配**
+     （字段是既有容器/`Option`，逐 tick 复用，不 new）；
+   - **A1 交付时贴结构证据**：`HostLoop`/`HostServices`/`TickIo` 的字段数与
+     `size_of`（含 `TickScratch`），并说明「每 tick 新增分配 = 0（无新 `Vec`/`String`/锁）」；
+   - 运行期旁证（1k 臂 TICKPROF 各段差 < 噪声）**由窗口排期执行**，不在 A1 交付内。
+5. 门（三条，缺一不合并）：
    - N=1 两树 stdout 对拍（`n1_stdout_equivalence.ps1`，最终树，`order_sha`/`multiset_sha`/86 行）；
      **真机窗口，由 a7 在最终合并树执行**——我不把结构论证当证据；
    - `crates/world-bevy/tests/tick_phases.rs` 等价用例 + `cargo test --workspace` 全绿；
@@ -132,6 +147,11 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
 两处 `spawn_statics_for_zone(` 与区 0 商人装载、`event_carry/event_carry_ctl` 的预算排水分组等。
 **约束**：`struct HostLoop` 与 `impl` 放在 `fn sim_loop(` 之后、`mod tests {` 之前；正文逐行搬。
 若某条扫描用例因抽取而语义含糊（如按「`sim_loop` 体内」理解），**先报告再改用例**，不静默放宽。
+
+**锚形态确认（opc-27 第 3 点）**：这 18 处用例**全部按符号/字面内容定位**——用
+`lines.iter().position(|l| l.trim() == "fn sim_loop(")` 一类**文本匹配**求位置，再与目标行的
+`position` 比大小；**没有任何硬编码行号**（本文档自身亦只用符号锚，未写 `path:line`，
+docs-anchor gate 对新增行「检查 0」即依据）。
 
 ## 7. 风险与规避
 
