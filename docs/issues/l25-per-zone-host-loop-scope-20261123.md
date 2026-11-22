@@ -417,3 +417,108 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
   - tick_profile 段：`HostAoiAppearSelect`（20692-20711）专门计 A1 的选择段；`HostInbound` 计 C 组；
     `HostPlayerRun`/`HostAoiDownlink`/`HostRecovery` 覆盖 A1、A3–A7 与 B0。
 - 本表**未**把「按名字收集再排序」的价格算进 A 组（只算其后的线性查表）；A 组的真实常数含两部分，**需测**。
+
+---
+
+## 11. §10 前置：`lib.rs:24817`「不得顺手改索引」的来龙去脉与现状（只读；未编译/未起栈；2026-11-23）
+
+> 承接 opc-27 单：查清该约束的背景与效力，判断批量迁移的前置条件。
+> 只读；§0–§10 冻结不动。
+
+### 11.1 Q1：谁、何时、什么背景下写的
+
+- **原注释**（`lib.rs:24816-24830`）：
+  `/// **线性查找（C/D 类未索引调用点）**：只包一个计数，查找语义与 entries.iter().find(..) 逐字相同。**不得在这里顺手改成索引**——探针与优化是两件事。`
+- **作者/时间/提交**：`t`，**2026-11-21 23:47**，commit **`a8701bf11d`**
+  「perf(online): 端到端查找探针（只计数）+ 设计稿入库」。
+- **前序（33 分钟前）**：commit **`b464aa7b9f`**（2026-11-21 23:14）
+  「perf(online): OnlineRegistry 改 Vec+旁挂保序索引，热路径按 id/名 O(1)」——**索引本体在这条**。
+- **设计稿**：`docs/issues/online-probe-design-20261121.md`（范围写「容量线 L1/L2/L3
+  （`card/perf-index-d8` follow-up）」）；合并提交 `5672669a7 Merge branch 'card/perf-index-d8'`。
+- **原文（commit `a8701bf11d` body）**：「117 处 C/D 类线性查找改 `find_linear_actor`/`find_linear_chr`：
+  **只包计数**，语义与 `entries.iter().find` 逐字相同，**未顺手改成索引**。」
+  设计稿原文：「关键事实…106 处线性里当前只有 3 处真走索引」（§1）；
+  「判据（先定，再看数）…<5% ⇒ 回改 `bd` 清单，不再加索引」（§5）；
+  「探针 commit 独立于产品语义 commit」（§2）。
+- 两个提交都在当前 `HEAD` 的祖先链上（`git merge-base --is-ancestor` 均 YES）。
+
+### 11.2 Q2：它约束的到底是什么
+
+**是「测量卫生」——不是索引陈旧、不是保序、也不是当年没维护 `by_chr/by_actor`。**
+
+- `b464aa7b9f` body 明确：「`find_by_actor`/`find_by_chr` 是**权威查找、不做线性兜底**」；写点收敛到
+  `set`/`push`/`take`/`clear`，每次末尾 **全量 `rebuild()`**；摘除一律 `Vec::remove`（保序，不用
+  `swap_remove`）；`debug_assert_eq!` 字段校验。⇒ **索引才是真相，线性不是**；不存在「线性版更可信」。
+- `a8701bf11d` 的目的：让剩下 117 处线性点保持**逐字线性**，好让计数器（`CHR_LINEAR`/`ACTOR_LINEAR`）
+  反映真实的每 tick 次数（设计稿 §0「每 tick 各被调多少次」）。
+- 若在 `a870` 同一提交里把调用点改成索引，就**抹掉了这条测量信号**，设计稿 §5「先定判据、再看数、
+  <5% 就不迁」也无从执行。⇒ 「探针与优化是两件事」= **测量与迁移分开提交**，不是「永远不许改」。
+- **不是保序**：顺序源是 `Vec<OnlineEntry>`（`Deref`/`IntoIterator` 迭代序）；索引只存 `pos`、不参与迭代序。
+- **不是「当时没维护」**：维护从第一天（`b464`）就在。
+
+### 11.3 Q3：现在这个理由还成立吗
+
+**维护点（现状，【已核】）**：
+- 写点 = `set`(24756) / `push`(cfg test, 24767) / `take`(24774) / `clear`(cfg test, 24783)；
+  每个末尾 `rebuild()`(24744) 按 `entries` **升序** `.or_insert(pos)` ⇒ **首匹配 = 最小下标 = `iter().find` 首个**。
+  `take` 用 `by_chr` O(1) 定位 + `Vec::remove` 保序。
+- **无旁路就地改**：全仓 grep 无 `online.iter_mut()` / `&mut *online` 就地写；两处 `&mut OnlineRegistry`
+  （`drain_kicks` 25165、`drain_soft_close` 25372）只调 `online_take`（触发 rebuild）；
+  `finish_login` 的 `&mut **online`(31113) 是重借用，不是切片。
+- **一致性断言**：`find_by_actor`(24792)/`find_by_chr`(24805) 带 `debug_assert_eq!`（debug 每次查）+
+  运行时 `(e.x == key).then_some(e)` 保底（陈旧索引只会返回 `None`，**不会**返回错条目）。
+- **测试（5 条，【已核】）**：
+  - `online_index_matches_vec_under_random_set_take`(58694)：LCG 2000 步随机 set/take，**每步**重建后
+    `by_actor`/`by_chr` 与 `entries` 逐项对账（长度+下标+字段）；
+  - `online_registry_set_and_take`(58610)、`online_registry_preserves_registration_order`(58625)、
+    `online_set_same_chr_repoints_index_to_replaced_entry`(58778)、
+    `online_take_absent_key_is_noop_for_entries_and_indexes`(58808)。
+
+**结论**：**正确性层面的理由已不成立**——索引权威、维护完整、首匹配与线性逐项相同、有断言与逐步对账测试。
+**唯一仍成立的是「测量卫生」**：迁移应与探针读数**分开提交**（对应你说的「先修日志闸 → 再迁移」）。
+- 一个残留事实（**不是阻碍**）：`DerefMut` 仍对 crate 可见；未来若有人 `online.iter_mut()` 就地改
+  `chr_name`/`actor_id` 会绕过 rebuild ⇒ 索引陈旧 ⇒ `find_by_*` 返回 `None`。今天**无此调用点**；
+  `debug_assert`+guard 会在 debug 暴露。
+
+### 11.4 Q4：哪些调用点不能换（逐点）
+
+- **真正不能换（非单键查找）**：`online_find_for_kick`(24919) —— 按网关扫全部命中、每网关取首个
+  （O-3 裁决语义），不是单键 O(1) 能表达。
+- **写路径内部（价值低/需新访问器，非语义阻碍）**：`OnlineRegistry::set`(24757) 需**可变**首匹配
+  （`find_by_chr` 只给 `&`，无 `_mut` 版）；`take`(24774) 已是 O(1)。
+- **可换、但受「测量」约束（暂不换 ≠ 不能换）**：其余 44 chr + 64 actor 里**所有单键 `iter().find`**。
+  首匹配语义逐项相同（`or_insert`=最小下标=`iter().find` 首个）；id 版键等价（i32→i64）。
+- **`.any(...)` 存在性判断**（如 `handle_query_user_set_cmd` 7853）：可换成 `.is_some()`。
+- **重复名字/首匹配不是阻碍**：生产 `set` 按 chr 去重；重复键只在 test-only `push` 出现，
+  索引与线性**都取首个**。
+- **依赖迭代序的**：用的是 `online.iter()`（Vec 序），不是查找；不受影响。
+- **汇总**：语义上**唯一「不能换」的是 `online_find_for_kick`**；`set/take` 是写路径（接口/价值问题）；
+  其余都是「按测量计划延后」，**不是语义限制**。
+
+### 11.5 子型①「收集+排序」那一半（数）
+
+- **12 处** `sessions.keys().cloned().collect()` + `names.sort()`（【已核】12 处全部紧随 `.sort()`）：
+  - `shutdown_save_all`(14229，**仅关服**)；`process_switch_data`(25808，**每 tick**)；
+  - 10 个 `drain_*`：`drain_recovery`(22795)、`drain_stamina`(22951)、
+    `drain_periodic_save`(23427，`SaveHumanRcdTime`=10min 门，**非每 tick**)、
+    `drain_player_need_recheck_with_magic`(28875)、`drain_player_map_hp`(29194)、
+    `drain_player_hunger`(29262)、`drain_player_run_rates`(29361)、
+    `drain_player_auto_get_exp`(29521)、`drain_player_game_gold`(29607)、
+    `drain_player_revival_with_magic`(29815)。
+- **排序键**：`String`（chr_name），Rust `str`/`String` 的 `Ord` = **逐字节字典序（UTF-8 bytes）**。
+- **每次排 n 个**（n = 该区 `ground_sessions` 键数 = 会话数）；`cloned()` 同时产出 **n 个 String**（各一次小分配）。
+- **每 tick 都排**：collect+sort 在函数入口、无缓存、无门（`drain_periodic_save` 除外，10min）。
+- **目的**（源码注释 14227）：「排序只为请求/日志顺序可复现…不让 `HashMap` 迭代序参与帧叙」
+  ⇒ 是**确定性**，不是「必须按名序」。
+- **静态估**：每处 O(n log n) 字节比较 + n 次 String 分配；每 tick 约 **11 处**
+  （10 drain + `process_switch_data`；`periodic_save` 摊薄）：
+  - n=1e3 ≈ **1.1e5 compares + 1.1e4 allocs/tick**；
+  - n=1e4 ≈ **1.5e6 compares + 1.1e5 allocs/tick**。
+  - **需测**（分配器压力与字节比较常数未测；这是 §10 A 组之外、**尚未计价**的另一半）。
+
+### 11.6 给排序/批次的直接结论
+
+- `24817` 是**测量卫生**约束（探针与迁移分两步），**不是**正确性 / 保序 / 陈旧约束。
+- 索引已权威、维护完整、首匹配等价、有 `debug_assert` + LCG 2000 步对账测试 ⇒ **批量迁移在正确性上安全**；
+  「先修日志闸（探针 fail-closed 可对账）→ 再单独提交迁移」的顺序成立。
+- 迁移批次上**唯一不能换**的是 `online_find_for_kick`（非单键）；`set`/`take` 属写路径；其余按测量优先级分批即可。
