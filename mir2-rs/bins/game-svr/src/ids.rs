@@ -26,6 +26,10 @@
 /// IDS 链路自己的日志宏（与 main 的 `glog!` 同形，便于两侧日志按前缀过滤）。
 macro_rules! glog_ids {
     ($lvl:expr, $($arg:tt)*) => {{
+        // **DBG 级别闸**（与 `glog!` 同一阈值，未设 `MIR2_LOG_LEVEL` ⇒ 全打）。
+        if !$crate::log_level::enabled($crate::log_level::severity_for($lvl)) {
+            // 不格式化、不写盘。
+        } else {
         let now = ::std::time::SystemTime::now()
             .duration_since(::std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -39,6 +43,7 @@ macro_rules! glog_ids {
             $lvl,
             format!($($arg)*)
         );
+        }
     }};
 }
 
