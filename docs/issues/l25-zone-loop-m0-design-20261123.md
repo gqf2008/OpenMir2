@@ -47,11 +47,20 @@ impl HostLoop {
 
 ### 2.1 `HostLoop`（区级，owned）
 
-`world`、`displays`、`online`、`ground_sessions`、`saves`、`login_tails`、`aoi_frames_total`、
-`shop_sessions`、`trade_sessions`、`sell_off_sessions`、`mon_gen`、`line_notice_states`、
-`monster_walk_seen`、`gates`（每区一份的 `SimToGate` 发送端表）、`handoff_runtime`、
-`ticks`、`aoi_frames_total`、`gm_filter_word` / `gm_mission` / `gm_spirit_mutiny_tick`（`Cell`/`RefCell`，
-本区命令路径用；始终同线程）。
+**世界与身份侧**：`world`、`displays`、`online`、`ground_sessions`、`saves`、`login_tails`、
+`aoi_frames_total`、`shop_sessions`、`trade_sessions`、`sell_off_sessions`、`mon_gen`。
+
+**区级调度/观测（含跨 tick 结转，**不是**段内局部）**：`ticks`、`tick`（200ms 节拍）、
+`event_carry` / `event_carry_ctl`（`EventDrain` 结转槽——**跨 tick 保序状态**，放段内局部会改
+跨 tick 排水行为）、`entry_telemetry_next_ms` / `entry_telemetry_last`（5s 遥测门与去重串）、
+`host_prof`（`HostTickProfile`）、`world_prof_last`、`line_notice_states`、`monster_walk_seen`、
+`handoff_runtime`、`gates`（每区一份的 `SimToGate` 发送端表，由广播填充）、`ready_delay`
+（`test_seams` 注入）、`is_host` / `telemetry_prefix`（片级派生量，只读）。
+
+> **`gm_filter_word` / `gm_mission` / `gm_spirit_mutiny_tick` 不放这里**（0c 复核 P1，2026-11-23）：
+> 它们是**进程级单例**——代码注释原文「进程级单例 ⇒ 由 `sim_loop` 持有」、
+> `ChatHost.filter_word → GmWorld.filter_word` 注入 `@` 命令体。每区一份 `Cell`/`RefCell` 会让
+> `@DisableFilter`/`@祈祷生效`/`@Mission` 只改一个区的副本 ⇒ 分区语义分裂。归 `HostServices`。
 
 - 判据：**该状态只被本区会话/实体读写，或每区各有一份且由广播填充**（`gates`）。
 - `ZoneState` 改为持有 `host: HostLoop` + 区 k 专属的 `save_outbox`/`alive`（`mon_gen` 进 `host`，
@@ -66,9 +75,13 @@ impl HostLoop {
 `planes`、`registry`、`enter_cfg`（含 `mon_gen.table`/`catalog`/`pet_cfg`）、`shard_runtime`、
 `shutdown`/`shutdown_done_tx`、`ids_online`/`ids_out`、`world_start`、`win_lottery`、`zone_host`、
 `server_table`、`colors`/`notice`/`party_cfg`、`pwd_sessions`/`reconnect_pending`/`kick_pending`/
-`soft_close_pending`、`state_log`、`host_prof`、`perf`（原子，无需借）。
+`soft_close_pending`、`state_log`、`perf`（原子，无需借）、
+**`gm_filter_word` / `gm_mission` / `gm_spirit_mutiny_tick`**（进程级单例，见 §2.1 注）、
+**`magic_table_arc`**（进程级只读 `Arc`；每区 clone `Arc` 即可——M1 区 k 施法要用）。
 
 - 判据：**跨区共享/单点**（评估稿 §5.1 的七项 + 登录/踢/换服编排 + 只读配置）。
+- 注：`host_prof`/`world_prof_last` **留在 `HostLoop`**（每循环实例一份诊断器）：段计时由循环体
+  自己 `begin/end`，与段同属区级；区 k 的实例 M0_MIN 不需要段读数（不跑段计时）。
 
 ### 2.3 `TickIo<'a>`（本区 I/O）
 
@@ -87,15 +100,40 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
 `HostLoop::tick` 按**固定顺序**逐段调用，`phases` 只决定「跳过哪些」，不改变其余段的相对顺序。
 区 0 传 `PhaseSet::ALL` ⇒ 与今天逐行同序。
 
-## 3. 段边界即方法边界（保住行为与 TICKPROF 口径）
+**成本与边界（0c 复核，2026-11-23）**：
+- `PhaseSet(u32)` 是 `const` 位集：**无分配、无锁**；每段一次整型与运算 + 分支
+  （16–17 次/tick，N=1 热路径可忽略，但按「零新增开销」边界**记明在此**）。
+- `TickScratch` 在 `HostLoop` 内**预分配**，跨段值只 **move/借用**，**不得 clone** `TickRecord`/`Vec`。
+- **`PhaseSet` 只 gate 段，不 gate gap** ⇒ 见 §3.1 的 gap 归属规则（不满足就会被区 k 无条件执行）。
 
-- 每个 `host_prof` 段 = 一个 `fn phase_xxx(&mut self, svc, io, scratch)`；**段内自带
-  `begin()`/`end("NAME", t)`**，段名、位置不变。
+## 3. 段边界 = `PhaseSet` 内联守卫（M0 **不**做方法化；保住行为与 TICKPROF 口径）
+
+- **M0 的段边界 = 现有 `host_prof` 的 `begin/end` 之间**，用**内联守卫**
+  `if phases.has(Phase::X) { … }` 包住该段（段内自带 `begin()`/`end("NAME", t)`，段名、位置不变）。
+- **为什么 M0 不抽 `fn phase_*` 方法**（设计修订，2026-11-23）：方法化要把段内 2,750 行的裸局部
+  （`world`/`online`/…）改成 `self.world`/`self.online`，而这恰是 18 处源码扫描用例**逐字**匹配的
+  行（如 `drain_pk_flag_downlink(&mut world, &online, &gates);`）——那会迫使在「零行为变化」的
+  M0 里改成用例，风险与收益倒挂。**方法化推迟到 M1**（与命令接线、用例更新一起做）；
+  M0 交付的"可实例化单元" = `HostLoop::tick` 本身 + 段级 `PhaseSet` 守卫（区 k 用位集跳过）；
+- 段间 gap 的归属见 §3.1（归其后第一个段，受同一守卫控制）。
 - 段与段之间**未计入**的代码留在 `tick()` 里、原相对位置不变 ⇒ TICKPROF 段归属逐字节不变
   （不是「行为」但同属不回归面）。
 - 跨段值（`rec: TickRecord`、`t: Instant`、以及逐段核对出的少数值）放进 `struct TickScratch`，
   由 `tick()` 持有并传 `&mut`。**这是 M0 实现时最大的机械工作**：每段逐一核对「本段产出、
   后续段消费」的局部值，全部走 scratch 或结构字段，不许改表达式顺序。
+
+### 3.1 gap 的归属（0c/opc-27 要求，2026-11-23 定稿）
+
+- **规则**：段与段之间**未计入** TICKPROF 的代码（如 `drain_yedo_events`/`drain_skill_train_events`/
+  `clear_status_changes`/`clear_struck_log`）**归入其后第一个段**的 `phase_*` 方法，并放在该段
+  `let t = host_prof.begin();` **之前**。⇒ 代码顺序不变、TICKPROF 段归属不变（gap 仍在 begin/end
+  之外），但 gap 受**该段的 `PhaseSet` 位**控制。
+- 由此 **M0_MIN 下 gap 不会无条件执行**：被跳过段的 gap 随该段一起跳过。
+- **唯一的无条件 gap = 循环头**（`tick_no = ticks`、`cross_zone_frames::begin_tick`、
+  5s 遥测行、`db` 应答表顶部采样、`next = now + tick`）。其代价逐项记明：两次原子读 +
+  一次 `is_host && clock>=next`（区 k `is_host=false` ⇒ 跳过、**零分配**）+ `db.is_some()` 才采样
+  （区 k 空实例 `db=None`）。⇒ 区 k 空实例的循环头在空世界/空 db 上**纯 no-op、无 I/O、无分配**。
+- 逐段的 gap 清单在 A2 搬移时**逐条列出**并核对「空世界下不发帧、不分配、不取墙钟做门」。
 
 ### 3.1 「构造入口闸」的准确范围（opc-27 2026-11-23 裁决）
 
