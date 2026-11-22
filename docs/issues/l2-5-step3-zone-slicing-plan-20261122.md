@@ -802,3 +802,90 @@ MonGenHost::start（屏障 B）→ 段③ → LoadMerchant → NpCinitialize（�
   未覆盖的 321 图**显式归区 0**；「同 id 恰一份 + 并集==N=1 全量」装置；`mirror_shadowed_static==0`。
 - **④b-2**：ctor-fold 的 per-map 站点（MapCheckQuest/MapQuestRow）、隐藏 NPC 实体、城堡实体在
   区 k 的归属/可见性；④d 解除条件（全局产生+分发）在此片写死。
+
+### 12.8 段 4b-1：静态实体按区归属（2026-11-22，实施 + 装置 + 证据）
+
+**范围**：`MonGen 首刷 + 商人 + 固定 NPC + 守卫` 按 `zone_of` 归属；未覆盖图显式归区 0；per-zone
+`MonGenHost`/RNG；`slicing=0`/N=1 不进入任何新过滤路径。
+
+**实施落点（写集）**：
+
+- `crates/envir/src/merchant.rs`：新增 `MapLoader::load_merchants_loaded_filtered(keep, rename_rand)`；
+  原 `load_merchants_loaded` 变为 `|_| true` 转发（既有调用点逐字节不变）。`keep` 在
+  `parse_merchant_line` 之后、`ScriptParsers::load_script_file` **之前**判定——`rename_rand`
+  只在重名 label 才抽（`crates/script/src/parser.rs:399`），故"被拒记录零抽数"成立。
+- `bins/game-svr/src/merchant.rs`：`load_merchant_spawns_filtered(.., keep: Option<&dyn Fn(&MerchantRecord)->bool>, ..)`；
+  `load_merchant_spawns` 收敛为 `None` 转发。`MerchantLoadReport` 增 `zone_filtered`（解析前被拒条数）。
+- `bins/game-svr/src/zone.rs`：`RegionLayout::static_owned` / `static_owned_name`——**不对称归属**：
+  坐标命中本区 span ⇒ 本区；`None`（未覆盖图/空隙/负坐标/未在册）⇒ **仅区 0**（显式规则写死）。
+- `bins/game-svr/src/lib.rs`：
+  - `slicing_layout: Option<&RegionLayout>`（只有 `slicing` 开才构造；`None` ⇒ 四处装载点都**不调用**
+    过滤路径）；`ZoneStaticsSource` = 区 0 过滤**之前**的原样输入快照。
+  - 区 0 四处装载点：MonGen `entries.retain` → `MonGenHost::start`；商人走 filtered 入口；
+    固定 NPC/守卫先 `retain` 再放置。逐源打印 `区 0 静态装载：<源> 归属过滤 a/b 条`。
+  - `spawn_statics_for_zone(zone, layout, registry, loader, src, table, &mut ZoneState, &mut merchant_book, goto_limit)`：
+    区 k 的 MonGen 先过滤再 `start`（本区 `world.rng` = `seed ⊕ zone`）→ 商人（filtered 入口）→
+    固定 NPC → 守卫（依赖**本区** host）。调用点在区 0 静态段之后、`StartReady` 之前；逐区打一行
+    `区 k 静态装载完成：MonGen x/y（过滤 a）；商人 n（解析前过滤 m）；固定 NPC x/y（挂图 p）；守卫 x/y（放置 q）`。
+  - `ZoneState.mon_gen: Option<MonGenHost>`；区 k 线程每 tick 在 `tick_phase1` 前调 `step_mon_gen`
+    （首刷 + 周期刷；`MonGenConfig.regen_monsters_time` 门照旧）。
+  - `mongen.rs` 新增 `MapLookup` trait（`id_of` + `no_hum_no_mon`）与 `ZoneMapView`（名字表 +
+    `boNOHUMNOMON` 位，**不含**格数据）：`WorldMonsterSink`/`step_mon_gen`/`place_guards` 改吃
+    `&dyn MapLookup`；区 k 线程用 `Arc<ZoneMapView>`，不复制整张 `MapRegistry`。
+    `MonGenStartup.table` 改 `Arc<MonsterTable>`（只读共享，无 `Clone`）。
+  - `crates/shared/src/rng.rs`：`RandomNumber::draws()` 取数计数器（只供判据；不参与取数状态，
+    `mem::replace` 换出换回计数随行）。
+
+**与 §12.7 的偏差（重要，写死理由）**：§12.7 写「在**区 k 的线程里**再跑一遍」启动序列。实施发现
+脚本宿主 `MerchantScriptBook` / `NpcHost` 内含 `Rc<NpcDef>` ⇒ **`!Send`**，进程级单实例不能跨线程。
+⇒ 区 k 的静态装载在**区 0 的 sim 线程**执行（`&mut merchant_book` 经函数签名显式传入；锁住区 k 的
+`Arc<Mutex<ZoneState>>` 把实体写进区 k 的 World/展示表）。语义仍满足交接 §0.6：**只建实体并登记**，
+不新建宿主、不重复解析脚本、不从全局取状态；id 段隔离不受影响（实体 id 由区 k World 分配）。
+区 k 的**逐 tick** 刷怪由区 k 自己的线程驱动（host/表/视图均可 `Send`），与装载点解耦。
+
+**老板点名的不对称（2026-11-22）**：未在册地图名 —— **区 0 放行**（照旧走各 loader 的 FindMap 门
+丢弃并记日志）、**区 k 拒绝**（否则双装，且因 id 段正确不会触发 `mirror_shadowed_static`）。
+`static_owned_name(None)` 的语义就是这条不对称，装置里 ghost 记录逐区断言（区 0 filtered=1 只含
+属区 1 的 S/B；区 1 filtered=3 含 ghost）。
+
+**装置（总监三条）**：`lib.rs` 的 `zone_statics_tests::two_zone_statics_partition_with_exactly_one_owner`
+（合成 20×20 图切两区 + 10×10 未覆盖图 + 未在册名 ghost；四来源各四条记录）：
+1. 区 0/区 1 静态身份四列 `(name,map,x,y)` **交集 = 0**（ActorId 也互不相交）；
+2. **并集 == N=1 全量**（单宿主布局口径；含未覆盖图→区 0 那一块）；
+3. 每条落点在本区 rects 内（区 0 另接受未覆盖图）；
+4. 正面断言：`draws(z0) < draws(N=1)` 且 `draws(z1) < draws(N=1)`；
+5. 确定性：单宿主口径两次跑抽数/实体集合逐项相同。
+
+`zone_statics_tests::merchant_filter_consumes_exact_draws_per_zone`（同一夹具、同一组）：
+只装商人，逐区**精确**抽数 —— N=1 = **16**（4 解析 + 3×4 ctor）、区 0 = **11**（3 解析 + 2×4）、
+区 1 = **5**（1 解析 + 1×4）；并与现网入口 `load_merchant_spawns`（`None` 过滤）+ `spawn_merchants_with_scripts`
+的抽数（16）与落点集合逐项相等 ⇒ "谓词恒真 == 无过滤入口"的 game-svr 侧证据。
+
+**envir 侧正面判据**：`filtered_loader_judges_before_rename_rand_draws` —— 夹具脚本各含一组重名
+`[@main]`（**没有重名 label 则基线本就 0 抽，判决力为零**）；keep 恒假 ⇒ **0 抽**、结果空；
+keep 恒真 ⇒ 与无过滤入口**同抽数同参数序列同记录**；只留一条 ⇒ 恰好 1 抽。
+
+**变异（本树重放，还原用内存原件 + sha 相等，禁 `git checkout`）**：
+- M1 删"未覆盖 ⇒ 区 0"兜底（`static_owned` 的 `None` 臂恒 false）⇒ 装置 ②红；
+- M2 谓词恒真 ⇒ 装置 ①红；
+- M3 商人谓词挪到脚本解析之后（先全量抽再过滤）⇒ 精确抽数用例 + envir 零抽用例**双红**。
+三支均 `passed+failed ≥ 1`（用例真跑了），还原后 sha 与原件相等、无 `MUTATION` 残留。
+
+**N=1 逐字节证据（两树 stdout + RNG 流水）**：
+- `tools/hygiene/n1_stdout_equivalence.ps1`，基线 exe = ④a 的 `E:/UserTemp/n1-base-4a-target/debug/game-svr.exe`，
+  conf = `E:/MirServer/M2GameSvr/Server.n1-1b.conf`、端口 5077、20s ⇒ **GREEN**
+  `lines=86/86 bytes=11980/11980`、`order_sha=b78156a766b010332297c9475b08998a0918f27c97d2cecb639640121f690d24`、
+  `multiset_sha=bd4b13bad3a1c1076cf5a62023e48c322caa41b2f73e75d603c39d96402c29fd`
+  —— 与 ④a/④b-0 **同一对**。
+- `MIR2_RNG_LOG`（seed=424242、同 conf、20s×2）两树流水：前 **16,000** 行 `(kind,arg,result)` **逐项相同**
+  （0 处值差；唯一差异是 1 行 `file:line` 数字随源码行号平移），基线尾部 315 行全是 `crates/world-bevy/src/monai.rs`
+  的怪物 AI tick 驱动抽数（两次运行时长差）⇒ 取数序列为同一前缀，**计数与序列等价**。
+  证据目录：`E:/UserTemp/n1-trace-4b1/{base,feat}.tsv`。
+
+**残余（登记，交 ④b-2 / 后续片）**：
+1. 区 k 的隐藏 NPC（QManage/QFunction/RobotManage）、城堡实体、ctor-fold per-map 站点 —— 按分段归 ④b-2；
+2. 区 k 目前不出网关帧（既有缺口）：刷出的怪物/守卫无下行；商人 `merchant_tick`（`RM_TURN`/补货）
+   与点击/商店命令消费也未接（脚本已登记进共享 `merchant_book`，等待消费方）；
+3. `WorldSpecialSpawner`（特殊怪产仔）仍吃 `&MapRegistry`（区 0 路径）；区 k 若接入需用
+   `ZoneMapView`（同一 `MapLookup` 口径已备）；
+4. 2 区与 N=1 的 MonGen 抽数**有意不等价**（per-zone 流）；解除条件 = ④d「全局产生 + 分发」。

@@ -43,7 +43,7 @@
 
 use mir2_envir::guardlist::GuardInfo;
 use mir2_envir::paths::envir_file_path;
-use mir2_envir::{decode_text, MapLoader, MapRegistry};
+use mir2_envir::{decode_text, MapLoader};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::mongen::{MonGenEntry, MonGenState};
 
@@ -130,7 +130,7 @@ pub fn place_guards(
     guards: &[GuardInfo],
     table: &MonsterTable,
     host: &mut MonGenHost,
-    registry: &MapRegistry,
+    registry: &dyn crate::mongen::MapLookup,
     world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
 ) -> GuardPlacementReport {
@@ -201,6 +201,7 @@ pub fn load_guard_list_file(loader: &MapLoader) -> Result<Option<Vec<GuardInfo>>
 mod tests {
     use super::*;
     use mir2_data::models::MonsterInfo;
+    use mir2_envir::MapRegistry;
     use mir2_world_bevy::mongen::MonGenConfig;
 
     /// 用例级唯一临时目录的序号（照 `mongen.rs` 测试的 pid+原子计数口径）。

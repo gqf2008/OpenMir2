@@ -483,6 +483,39 @@ impl RegionLayout {
         self.zone_of(map_id, x, y) == Some(zone)
     }
 
+    /// **L2-5 ④b-1**：静态实体（MonGen 首刷 / 商人 / 固定 NPC / 守卫）的**装配期归属**。
+    ///
+    /// 与 [`Self::zone_of`] 的唯一差别在 `None` 的归口：
+    /// - 命中本区 span ⇒ 仅本区；
+    /// - `zone_of == None`（**未被任何 rect 覆盖**的地图 / 图内空隙 / 负坐标）⇒ **显式归区 0**。
+    ///   未覆盖的 321 张图由宿主模拟——这是写死的规则，**不是**隐式默认值：区 k
+    ///   (`zone.get() > 0`) 不得接受任何 `None` 坐标。
+    /// - `map_id` 越界（未在册）同样落 `None` ⇒ 仅区 0：区 0 后续照旧走各自的
+    ///   FindMap 门丢弃并记日志；区 k 拒绝，否则同一条记录会在区 k 再装一份，
+    ///   而且因 id 段正确不会触发 `mirror_shadowed_static`，更难被发现。
+    ///
+    /// 调用方（`lib.rs` 的装载段）只在 `slicing` 开启时调用 ⇒ N=1 / `slicing=0`
+    /// 不构造过滤路径，取数序列逐字节不变。
+    #[must_use]
+    pub fn static_owned(&self, zone: ZoneId, map_id: usize, x: i32, y: i32) -> bool {
+        match self.zone_of(map_id, x, y) {
+            Some(z) => z == zone,
+            None => zone.get() == 0,
+        }
+    }
+
+    /// **[`Self::static_owned`] 的名字版**：`map_id == None`（地图名不在注册表）⇒ 仅区 0。
+    ///
+    /// 名字型静态来源（`Merchant.txt` / `Npcs.txt` / `GuardList.txt` / `MonGen.txt`）在解析
+    /// 阶段只有逻辑图名；未在册名字保留给区 0，使 oracle 的 FindMap 门/日志口径不变。
+    #[must_use]
+    pub fn static_owned_name(&self, zone: ZoneId, map_id: Option<usize>, x: i32, y: i32) -> bool {
+        match map_id {
+            Some(id) => self.static_owned(zone, id, x, y),
+            None => zone.get() == 0,
+        }
+    }
+
     /// **宿主侧 fail-closed 守卫（L2-2）**：坐标不属于 `zone` ⇒ [`RegionRefusal`]。
     ///
     /// 调用方（L2-4）把失败映射成既有的拒绝路径（口径同 `MapNotInShard`），并累计计数；
@@ -759,6 +792,44 @@ mod tests {
         assert_eq!(layout.zone_of(3, 0, 0), None, "越界地图不制造新错误");
         assert!(layout.owns(ZoneId::new(0), 2, 1, 1));
         assert!(!layout.owns(ZoneId::new(1), 2, 1, 1));
+    }
+
+    /// **L2-5 ④b-1 牙**：静态归属把 `None` 显式归区 0（未覆盖图/空隙/未在册/负坐标），
+    /// 且区 k 永不接受 `None`。
+    ///
+    /// 变异（各自只红对应用例）：① 删 `None ⇒ 区 0` 兜底 ⇒ 未覆盖/未在册断言红；
+    /// ② 让 `None` 对**所有**区为真 ⇒ `区 k 拒绝 None` 断言红（双装回潮）。
+    #[test]
+    fn static_owned_gives_uncovered_maps_to_zone_zero_explicitly() {
+        // 3 张图在册，只有图 0 有 span；图 1/图 2 = 未覆盖的"321 图"形态。
+        let layout = RegionLayout::from_spans(
+            3,
+            vec![
+                RegionSpan::new(0, ZoneRect::new(0, 0, 9, 9)),
+                RegionSpan::new(0, ZoneRect::new(10, 0, 19, 9)),
+            ],
+        )
+        .expect("合法双区切分");
+        let z0 = ZoneId::new(0);
+        let z1 = ZoneId::new(1);
+        // 覆盖区内：各归其区，互斥。
+        assert!(layout.static_owned(z0, 0, 9, 9));
+        assert!(!layout.static_owned(z1, 0, 9, 9));
+        assert!(layout.static_owned(z1, 0, 10, 0));
+        assert!(!layout.static_owned(z0, 0, 10, 0));
+        // 未覆盖图（在册但无 span）⇒ 显式归区 0；区 1 拒绝。
+        assert!(layout.static_owned(z0, 1, 0, 0), "未覆盖图 ⇒ 区 0");
+        assert!(!layout.static_owned(z1, 1, 0, 0), "未覆盖图不得落区 k");
+        assert!(layout.static_owned(z0, 2, 123, 456));
+        // 图内空隙（x=20 在两个 rect 之外）⇒ 区 0；区 1 拒绝。
+        assert!(layout.static_owned_name(z0, Some(0), 20, 0));
+        assert!(!layout.static_owned_name(z1, Some(0), 20, 0));
+        // 未在册（`map_id == None`）⇒ 仅区 0（保留 FindMap 门口径）。
+        assert!(layout.static_owned_name(z0, None, 0, 0));
+        assert!(!layout.static_owned_name(z1, None, 0, 0));
+        // 负坐标 ⇒ 区 0。
+        assert!(layout.static_owned_name(z0, Some(0), -1, 0));
+        assert!(!layout.static_owned_name(z1, Some(0), -1, 0));
     }
 
     /// **矩形牙**：闭区间含端点；相交判定同为闭区间（L2-2 的双属校验依赖它）。

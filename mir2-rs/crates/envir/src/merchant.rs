@@ -218,6 +218,30 @@ impl crate::registry::MapLoader {
         &self,
         rename_rand: &mut dyn FnMut(i32, i32) -> i32,
     ) -> Result<Option<Vec<LoadedMerchant>>, EnvirError> {
+        self.load_merchants_loaded_filtered(|_| true, rename_rand)
+    }
+
+    /// **L2-5 ④b-1**：[`Self::load_merchants_loaded`] + **逐条准入谓词**（装配期按区归属过滤）。
+    ///
+    /// `keep` 在 `parse_merchant_line` 得到记录之后、`ScriptParsers::load_script_file` **之前**
+    /// 判定：被拒记录**不解析脚本** ⇒ 不抽 `rename_rand`（重名 label 改名的
+    /// `GetRandomNumber(1, 200)`，`ScriptParsers.cs:857`）。这是"先过滤后抽"的唯一落点——
+    /// 在 [`crate::merchant::MapLoader::load_merchants_loaded`] 返回后再过滤**已经太晚**
+    /// （抽数已发生，2 区的 RNG 流会被不属于本区的条目污染）。
+    ///
+    /// `keep` 只看已解析的 [`MerchantRecord`]（`map_name`/`x`/`y`），不消费记录；返回 `false`
+    /// 的记录**完全不出现在结果里**（调用方的 `records` 计数只含存活记录，被拒条目由调用方
+    /// 自己计数/记日志）。
+    ///
+    /// `keep` 恒真 ⇒ 与 [`Self::load_merchants_loaded`] 逐字节等价（同一循环、同一抽数序列）。
+    ///
+    /// # Errors
+    /// 同 [`Self::load_merchants_loaded`]。
+    pub fn load_merchants_loaded_filtered(
+        &self,
+        keep: impl Fn(&MerchantRecord) -> bool,
+        rename_rand: &mut dyn FnMut(i32, i32) -> i32,
+    ) -> Result<Option<Vec<LoadedMerchant>>, EnvirError> {
         let path = self.merchant_path();
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
@@ -236,6 +260,10 @@ impl crate::registry::MapLoader {
             let Some(mut record) = parse_merchant_line(line) else {
                 continue;
             };
+            // **L2-5 ④b-1**：准入判定必须在脚本解析（⇒ `rename_rand` 抽数）之前。
+            if !keep(&record) {
+                continue;
+            }
             let stem = record.script_file_stem();
             let mut scripts = Vec::new();
             match parsers.load_script_file(
@@ -357,6 +385,135 @@ mod tests {
         let movable = parse_merchant_line("A/店 0 1 2 甲 0 3 0 1 30").unwrap();
         assert!(movable.can_move);
         assert_eq!(movable.move_time, 30);
+    }
+
+    // ---- **L2-5 ④b-1**：准入谓词在 `rename_rand` 抽数**之前** → 被拒记录零抽数 ----
+
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::MapLoader;
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "mir2-envir-merchant-test-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("清旧临时目录");
+        }
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        dir
+    }
+
+    /// 无 BOM 文本按 cp936 解码（[`crate::decode_text`]）⇒ 夹具必须写 **GBK**，
+    /// 否则 UTF-8 的汉字尾字节会吞掉空格分隔符，行被解析成错误列数。
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().expect("有父目录")).unwrap();
+        let (bytes, _, _) = encoding_rs::GBK.encode(text);
+        std::fs::write(path, &bytes[..]).unwrap();
+    }
+
+    /// 两条商人记录、两条脚本，**每条脚本各含一组重名 `[@main]`**（⇒ 各 1 次
+    /// `rename_rand(1, 200)`）。没有重名 label 的夹具会让"零抽数"断言失去判决力。
+    fn fixture_base(tag: &str) -> PathBuf {
+        let base = temp_dir(tag);
+        write_file(
+            &base.join("Envir").join("Merchant.txt"),
+            "A/店 m0 1 2 甲 0 3 0
+B/店 m0 5 6 乙 0 4 0
+",
+        );
+        for stem in ["A/店-m0", "B/店-m0"] {
+            write_file(
+                &base
+                    .join("Envir")
+                    .join("Market_Def")
+                    .join(format!("{stem}.txt")),
+                "[@main]
+#ACT
+break
+
+[@main]
+#SAY
+hi
+",
+            );
+        }
+        base
+    }
+
+    /// **正面判据（总监 2026-11-22 点名）**：谓词恒假 ⇒ **零抽数**；谓词恒真 ⇒ 与无过滤入口
+    /// **同抽数、同序列、同记录**（`slicing=0` / N=1 逐字节不变的 envir 侧证据）。
+    /// 变异：把 `keep` 移到 `load_script_file` 之后 ⇒ 恒假仍抽 2 次 ⇒ 本用例红。
+    #[test]
+    fn filtered_loader_judges_before_rename_rand_draws() {
+        let base = fixture_base("draws");
+        let loader = MapLoader::new(&base, "Map", "Envir");
+
+        // 基线：无过滤入口（N=1 现网路径）。
+        let mut seq_all = Vec::new();
+        let mut rr = |min: i32, max: i32| {
+            seq_all.push(format!("{min}..{max}"));
+            min
+        };
+        let plain = loader
+            .load_merchants_loaded(&mut rr)
+            .expect("基线装载")
+            .expect("Merchant.txt 存在");
+        assert_eq!(plain.len(), 2, "两条记录入库");
+        assert_eq!(seq_all.len(), 2, "每条脚本一组重名 label ⇒ 恰 2 抽");
+
+        // keep 恒真：与基线同抽数、同参数序列、同记录集合。
+        let mut seq_true = Vec::new();
+        let mut rr_true = |min: i32, max: i32| {
+            seq_true.push(format!("{min}..{max}"));
+            min
+        };
+        let kept_all = loader
+            .load_merchants_loaded_filtered(|_| true, &mut rr_true)
+            .expect("keep 恒真装载")
+            .expect("Merchant.txt 存在");
+        assert_eq!(seq_true, seq_all, "谓词恒真 ⇒ 抽数序列与 N=1 相同");
+        assert_eq!(kept_all.len(), plain.len());
+        for (a, b) in kept_all.iter().zip(plain.iter()) {
+            assert_eq!(a.record.chr_name, b.record.chr_name);
+            assert_eq!(a.record.map_name, b.record.map_name);
+            assert_eq!((a.record.x, a.record.y), (b.record.x, b.record.y));
+        }
+
+        // keep 恒假：零抽数（判定发生在 `load_script_file` 之前）。
+        let mut seq_none = Vec::new();
+        let mut rr_none = |min: i32, max: i32| {
+            seq_none.push(format!("{min}..{max}"));
+            min
+        };
+        let kept_none = loader
+            .load_merchants_loaded_filtered(|_| false, &mut rr_none)
+            .expect("keep 恒假装载")
+            .expect("Merchant.txt 存在");
+        assert!(kept_none.is_empty(), "恒假 ⇒ 无记录");
+        assert!(
+            seq_none.is_empty(),
+            "恒假 ⇒ 零抽数（若抽了，2 区 RNG 流已被污染）"
+        );
+
+        // 只留一条：只解析存活的那一条（抽数 = 1）。
+        let mut seq_one = Vec::new();
+        let mut rr_one = |min: i32, max: i32| {
+            seq_one.push(format!("{min}..{max}"));
+            min
+        };
+        let kept_one = loader
+            .load_merchants_loaded_filtered(|r| r.chr_name == "甲", &mut rr_one)
+            .expect("keep 一条装载")
+            .expect("Merchant.txt 存在");
+        assert_eq!(kept_one.len(), 1);
+        assert_eq!(kept_one[0].record.chr_name, "甲");
+        assert_eq!(seq_one.len(), 1, "只有存活记录进入脚本解析（恰 1 抽）");
     }
 
     /// 空行 / `;` 注释 / `Appr` 缺列 ⇒ 不入库（`LocalDB.cs:431-447`）。

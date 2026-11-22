@@ -233,6 +233,10 @@ impl Default for DotNetRandom {
 #[derive(Clone, Debug)]
 pub struct RandomNumber {
     rng: DotNetRandom,
+    /// **L2-5 ④b-1**：累计取数次数（只供判据/测试断言"被过滤条目未消耗抽数"）。
+    /// 不参与取数状态、不进 `rng_trace`；`mem::replace` 换出再换回时随结构体一起往返，
+    /// 计数不丢。初值 0。
+    drawn: u64,
 }
 
 /// C# `RandomNumber.Constant` 原样。
@@ -252,12 +256,22 @@ impl RandomNumber {
         crate::rng_trace::enable_from_env();
         RandomNumber {
             rng: DotNetRandom::new(seed),
+            drawn: 0,
         }
+    }
+
+    /// 累计取数次数（`random`/`random_below`/`random_range`/`next_double` 各计 1；
+    /// `random_byte`/`get_random_number`/`generate_random_number`/`random_select`
+    /// 经这些入口转发，不重复计数）。
+    #[must_use]
+    pub const fn draws(&self) -> u64 {
+        self.drawn
     }
 
     /// C# `int Random()` → `random.Next()`（非负随机数）。
     #[track_caller]
     pub fn random(&mut self) -> i32 {
+        self.drawn += 1;
         let v = self.rng.next_value();
         if crate::rng_trace::enabled() {
             let loc = std::panic::Location::caller();
@@ -272,6 +286,7 @@ impl RandomNumber {
     /// `value < 0` 时由 `Next` 抛 `ArgumentOutOfRangeException`；均对齐为 panic。
     #[track_caller]
     pub fn random_below(&mut self, value: i32) -> i32 {
+        self.drawn += 1;
         assert!(value < i32::MAX, "错误的数值");
         let v = self.rng.next_max(value);
         if crate::rng_trace::enabled() {
@@ -291,6 +306,7 @@ impl RandomNumber {
     /// 返回 `[min, max)`（**上界不含**，与 `get_random_number` 不同）。
     #[track_caller]
     pub fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+        self.drawn += 1;
         let v = self.rng.next_range(min_value, max_value);
         if crate::rng_trace::enabled() {
             let loc = std::panic::Location::caller();
@@ -442,6 +458,7 @@ impl RandomSource for RandomNumber {
 
     #[track_caller]
     fn next_double(&mut self) -> f64 {
+        self.drawn += 1;
         let v = self.rng.next_double();
         if crate::rng_trace::enabled() {
             let loc = std::panic::Location::caller();
@@ -483,6 +500,28 @@ mod tests {
         let mut r = RandomNumber::with_seed(42);
         let seq: Vec<i32> = (0..10).map(|_| r.get_random_number(1, 200)).collect();
         assert_eq!(seq, vec![134, 29, 26, 105, 34, 53, 145, 103, 35, 153]);
+    }
+
+    /// **L2-5 ④b-1**：取数计数器只数"入口调用"，转发型入口不重复计数。
+    #[test]
+    fn draws_counter_counts_entry_calls_once() {
+        let mut r = RandomNumber::with_seed(42);
+        assert_eq!(r.draws(), 0);
+        let _ = r.random();
+        assert_eq!(r.draws(), 1);
+        let _ = r.random_below(10);
+        assert_eq!(r.draws(), 2);
+        let _ = r.get_random_number(1, 200); // → random_range
+        assert_eq!(r.draws(), 3);
+        let _ = r.random_byte(8); // → random_below
+        assert_eq!(r.draws(), 4);
+        let mut src = vec![1, 2, 3];
+        let _ = r.random_select(&mut src, 2); // → get_random_number ×2
+        assert_eq!(r.draws(), 6);
+        // 换出再换回（`step_mon_gen`/`place_guards` 的 mem::replace 口径）计数不丢。
+        let swapped = std::mem::replace(&mut r, RandomNumber::with_seed(0));
+        assert_eq!(swapped.draws(), 6);
+        assert_eq!(r.draws(), 0);
     }
 
     /// .NET `new Random(42).Next()` 的实测值（C# golden 生成器同序列首项）。
