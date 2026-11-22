@@ -901,7 +901,18 @@ impl fmt::Display for LedgerViolation {
 
 impl std::error::Error for LedgerViolation {}
 
-/// 跨区 outbox：实体所属区是**唯一发射者**，帧按收件人所属区入箱，目标区转发到 gate。
+/// **L2-5 §7：单一发射者判据的口径**（两种并存，旧形态保留给 L2-4 用例/对照）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmitterCriterion {
+    /// **L2-4 形态（已被 §7 取代，仅保留对照/旧用例）**：发射者 = 实体坐标所属区。
+    OwnerByRect,
+    /// **L2-5 形态（镜像模型）**：发射者 = **收件人所在区**——镜像占同一格、扫描序可复现，
+    /// 出现帧必须由收件人区发出；否则镜像模型恒红（§7 的约 90% 反例）。
+    RecipientZone,
+}
+
+/// 跨区 outbox：**唯一发射者**（口径见 [`EmitterCriterion`]），帧按收件人所属区入箱，
+/// 目标区转发到 gate。
 ///
 /// 单一发射者由两道**自动判据**保证（不是注释）：
 /// 1. [`Self::submit`] 的来源闸：`src != owner_zone` ⇒ [`OutboxError::NotOwner`] 并计数；
@@ -913,6 +924,8 @@ impl std::error::Error for LedgerViolation {}
 #[derive(Debug)]
 pub struct CrossZoneOutbox {
     zone_count: usize,
+    /// §7 的发射者口径（`new` = 旧形态；镜像 rig 用 [`Self::with_criterion`] 切到收件人区）。
+    criterion: EmitterCriterion,
     active: Option<u64>,
     seen: HashMap<FrameKey, ZoneId>,
     inboxes: Vec<Vec<DeliveredFrame>>,
@@ -927,8 +940,15 @@ impl CrossZoneOutbox {
     /// 按区数构造（启动期一次分配）。
     #[must_use]
     pub fn new(zone_count: usize) -> Self {
+        Self::with_criterion(zone_count, EmitterCriterion::OwnerByRect)
+    }
+
+    /// 指定 §7 口径构造（镜像模型用 [`EmitterCriterion::RecipientZone`]）。
+    #[must_use]
+    pub fn with_criterion(zone_count: usize, criterion: EmitterCriterion) -> Self {
         Self {
             zone_count,
+            criterion,
             active: None,
             seen: HashMap::new(),
             inboxes: (0..zone_count).map(|_| Vec::new()).collect(),
@@ -979,11 +999,16 @@ impl CrossZoneOutbox {
                 frame: frame.key.tick,
             });
         }
-        if src != owner_zone {
+        // §7：旧口径看「实体坐标所属区」，新口径看「收件人所在区」。
+        let allowed = match self.criterion {
+            EmitterCriterion::OwnerByRect => owner_zone,
+            EmitterCriterion::RecipientZone => dst,
+        };
+        if src != allowed {
             self.not_owner += 1;
             return Err(OutboxError::NotOwner {
                 src,
-                owner_zone,
+                owner_zone: allowed,
                 owner: frame.key.owner,
             });
         }
@@ -1498,6 +1523,53 @@ mod tests {
         assert_eq!(to_z1, vec![1, 5], "目标区按 (src, seq) 定序");
         assert_eq!(ledger.recv_for(z0).len(), 1);
         assert!(ledger.recv_for(ZoneId::new(9)).is_empty(), "越界区 ⇒ 空");
+    }
+
+    /// **§7 新口径（镜像模型）双向负例**：发射者 = **收件人所在区**；旧口径保留为对照。
+    ///
+    /// ① 收件人区发（src = dst）、实体坐标在别区 ⇒ 绿；
+    /// ② 非收件人区发 ⇒ `NotOwner`；
+    /// ③ 旧口径（`CrossZoneOutbox::new`）下同一帧 ⇒ 仍红（旧用例语义不变）。
+    ///
+    /// 红检：把 `submit` 的口径分派删掉（恒按坐标）⇒ ① 红；恒按收件人区 ⇒ ③ 红——
+    /// 两个方向都要有，防「闸被拆掉后两边都绿」。
+    #[test]
+    fn emitter_criterion_recipient_zone_has_two_way_teeth() {
+        let z0 = ZoneId::new(0);
+        let z1 = ZoneId::new(1);
+
+        // ① src = 收件人区（0），实体坐标在区 1 ⇒ 新口径绿。
+        let mut outbox = CrossZoneOutbox::with_criterion(2, EmitterCriterion::RecipientZone);
+        outbox.begin_tick(1).expect("begin");
+        outbox
+            .submit(z0, z1, z0, xfer(0, frame_key(1, 7, 0, 900, 10)))
+            .expect("收件人区发帧必须放行");
+        assert!(outbox.seal_tick().expect("seal").check().is_ok());
+
+        // ② 非收件人区发 ⇒ NotOwner。
+        let mut outbox = CrossZoneOutbox::with_criterion(2, EmitterCriterion::RecipientZone);
+        outbox.begin_tick(1).expect("begin");
+        let err = outbox
+            .submit(z0, z1, z1, xfer(0, frame_key(1, 7, 0, 900, 10)))
+            .expect_err("非收件人区必须被拒");
+        assert!(
+            matches!(err, OutboxError::NotOwner { src, owner_zone, .. } if src == z0 && owner_zone == z1),
+            "{err}"
+        );
+        assert_eq!(
+            outbox.seal_tick().expect("seal").check(),
+            Err(LedgerViolation::NotOwner(1))
+        );
+
+        // ③ 旧口径对照：同一帧仍红（旧用例语义不变）。
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(1).expect("begin");
+        assert!(
+            outbox
+                .submit(z0, z1, z0, xfer(0, frame_key(1, 7, 0, 900, 10)))
+                .is_err(),
+            "旧口径（坐标所属区）必须仍拒"
+        );
     }
 
     /// **单一发射者反例**：非所属区提交 ⇒ `NotOwner` 计数；同身份二次提交 ⇒ `Duplicate`。
