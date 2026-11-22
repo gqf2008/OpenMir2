@@ -611,6 +611,8 @@ pub struct EntitySpawn {
     pub stick_mode: bool,
     /// **L2-5 ②**：插镜像时置 true（`flags_component` 落进 `Flags.mirror`）。
     pub mirror: bool,
+    /// **L2-5 ③ 段 2**：handoff 待提交（见 `Flags.handoff_pending`）。
+    pub handoff_pending: bool,
     pub death: bool,
     pub ghost: bool,
     pub death_tick: i64,
@@ -781,6 +783,7 @@ impl EntitySpawn {
             want_ref_msg: self.want_ref_msg,
             stick_mode: self.stick_mode,
             mirror: self.mirror,
+            handoff_pending: self.handoff_pending,
         }
     }
 
@@ -1160,6 +1163,7 @@ pub struct EntityRef<'a> {
     pub want_ref_msg: bool,
     pub stick_mode: bool,
     pub mirror: bool,
+    pub handoff_pending: bool,
     pub death: bool,
     pub ghost: bool,
     pub death_tick: i64,
@@ -1353,6 +1357,7 @@ impl<'a> EntityRef<'a> {
             want_ref_msg: flags.want_ref_msg,
             stick_mode: flags.stick_mode,
             mirror: flags.mirror,
+            handoff_pending: flags.handoff_pending,
             death: life_cycle.death,
             ghost: life_cycle.ghost,
             death_tick: life_cycle.death_tick,
@@ -1687,6 +1692,7 @@ impl PvpView for EntityRef<'_> {
             want_ref_msg: self.want_ref_msg,
             stick_mode: self.stick_mode,
             mirror: self.mirror,
+            handoff_pending: self.handoff_pending,
         }
     }
     fn name_color(&self) -> u8 {
@@ -1954,6 +1960,8 @@ impl EntitySpawn {
             stick_mode: false,
             // L2-5 ②：生成/装载路径恒 false；只有 `World::upsert_mirror` 建镜像时置 true。
             mirror: false,
+            // L2-5 ③ 段 2：移动判定进邻区 rect 时置 true（源区快照的 outgoing 带）。
+            handoff_pending: false,
             death: false,
             ghost: false,
             death_tick: 0,
@@ -3213,6 +3221,7 @@ impl EntityStore {
             want_ref_msg: flags.want_ref_msg,
             stick_mode: flags.stick_mode,
             mirror: flags.mirror,
+            handoff_pending: flags.handoff_pending,
             death: life_cycle.death,
             ghost: life_cycle.ghost,
             death_tick: life_cycle.death_tick,

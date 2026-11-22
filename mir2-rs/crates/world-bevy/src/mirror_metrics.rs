@@ -18,6 +18,13 @@ static CROSS_HIT_DELAYED: AtomicU64 = AtomicU64::new(0);
 /// 本 tick 的 AOI 也看不见它。②对拍夹具必须断言本计数为 0（夹具里真取不到格内序 = 牙）。
 static MIRROR_CELL_POS_UNKNOWN: AtomicU64 = AtomicU64::new(0);
 
+/// **L2-5 ③ 段 2**：镜像**原地提升为真实体**的次数（handoff 提交侧）。
+static HANDOFF_MIRROR_PROMOTED: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 2（兜底，防御不是牙）**：`apply_mirrors` 收到「该 id 已是本区**真实**实体」
+/// 而跳过的次数。时序正确时**恒 0**；>0 说明 handoff 时序被破坏（不要用人工变异把它当牙宣传）。
+static MIRROR_SHADOWED_BY_LOCAL: AtomicU64 = AtomicU64::new(0);
+
 /// 记一次「镜像进了 AI 段」（隔离被拆的唯一读数）。
 pub fn note_mirror_ai_action() {
     MIRROR_AI_ACTIONS.fetch_add(1, Ordering::Relaxed);
@@ -49,6 +56,38 @@ pub fn note_mirror_cell_pos_unknown() {
 #[must_use]
 pub fn mirror_cell_pos_unknown() -> u64 {
     MIRROR_CELL_POS_UNKNOWN.load(Ordering::Relaxed)
+}
+
+/// 记一次镜像原地提升。
+pub fn note_handoff_mirror_promoted() {
+    HANDOFF_MIRROR_PROMOTED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 提升计数（测试/诊断）。
+#[must_use]
+pub fn handoff_mirror_promoted() -> u64 {
+    HANDOFF_MIRROR_PROMOTED.load(Ordering::Relaxed)
+}
+
+/// 记一次「镜像被本地真实体遮蔽」（防御计数；时序正确时恒 0）。
+pub fn note_mirror_shadowed_by_local() {
+    MIRROR_SHADOWED_BY_LOCAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 遮蔽计数（测试/诊断）。
+#[must_use]
+pub fn mirror_shadowed_by_local() -> u64 {
+    MIRROR_SHADOWED_BY_LOCAL.load(Ordering::Relaxed)
+}
+
+/// 复位提升计数（**只给测试**）。
+pub fn reset_handoff_mirror_promoted_for_tests() {
+    HANDOFF_MIRROR_PROMOTED.store(0, Ordering::Relaxed);
+}
+
+/// 复位遮蔽计数（**只给测试**）。
+pub fn reset_mirror_shadowed_by_local_for_tests() {
+    MIRROR_SHADOWED_BY_LOCAL.store(0, Ordering::Relaxed);
 }
 
 /// 复位「格内序未知」计数（**只给测试**）。

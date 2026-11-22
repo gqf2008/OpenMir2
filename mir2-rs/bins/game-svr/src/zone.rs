@@ -85,6 +85,29 @@ impl ZoneRect {
                 || self.y1 - y <= width)
     }
 
+    /// **L2-5 ③ 段 2**：点到矩形的切比雪夫距离 ≤ `width`（含矩形内部；越界也算）。
+    ///
+    /// 只给 outgoing 带的过滤用：`handoff_pending` 的实体已被挪到**邻区 rect**，源区要把它
+    /// 继续发布最多 `HALO` 宽的距离（否则目标区那一 tick 就丢镜像 ⇒ 闪一帧）。
+    #[must_use]
+    pub const fn within_distance(&self, x: i32, y: i32, width: i32) -> bool {
+        let dx = if x < self.x0 {
+            self.x0 - x
+        } else if x > self.x1 {
+            x - self.x1
+        } else {
+            0
+        };
+        let dy = if y < self.y0 {
+            self.y0 - y
+        } else if y > self.y1 {
+            y - self.y1
+        } else {
+            0
+        };
+        dx <= width && dy <= width
+    }
+
     /// 两矩形是否相交（闭区间；L2-2 的「不得双属」构造校验用）。
     #[must_use]
     pub const fn intersects(&self, other: &Self) -> bool {

@@ -120259,3 +120259,514 @@ mod zone_disconnect_tests {
         perf_counters::reset_zone_login_counters_for_tests();
     }
 }
+
+/// **L2-5 ③ 段 2**：handoff（跨界移动，两阶段、源从不放手、零闪烁）。
+///
+/// 覆盖（对应总监六条硬要求）：
+/// 1. **零闪烁夹具**：跨界全程观察者可见集合逐 tick 连续（先红后绿；红原文见提交信息）。
+/// 2. **outgoing 带**：`handoff_pending` 的实体被挪出本区 rect 后，源区快照仍发布它
+///    （`HaloEntity.outgoing`），目标区那一 tick 拿到的仍是普通镜像。
+/// 3. **镜像原地提升**：`promote_mirror_to_real` 只改标志/状态，不新建、不先删后插、
+///    不重复登记格表；格内该 id 恰一条；计数 `handoff_mirror_promoted`。
+/// 4. **outgoing 镜像追加格尾、忽略 `cell_pos`**；普通镜像仍按 `cell_pos`。
+/// 5. **兜底不 abort**：收到的镜像 id 已是本区真实体 ⇒ 跳过 + `mirror_shadowed_by_local`，
+///    **恒 0**（防御计数，不是牙）。
+/// 6. **时序**：offer 在 T 的 barrier2 后；目标区提升与源区移除都在 T+1 的 tick 顶、phase1 之前
+///    （夹具按此顺序驱动；正确时序下遮蔽计数恒 0）。
+///
+/// 未覆盖（明确登记）：appear/disappear **帧流**（legacy/增量两个 AOI 窗口）需要按帧路径捕获；
+/// 本段先用「可见集合逐 tick 连续」作为等价证据，帧窗口留窗口跑/后续段。
+#[cfg(test)]
+mod l2_handoff_tests {
+    use super::*;
+    use crate::region_loop::{
+        apply_mirrors, snapshot_border, HaloEntity, HaloExchange, HaloFrameSource, HaloSnapshot,
+        TickBarriers, ZoneRuntime,
+    };
+    use crate::zone::{parse_zone_layout, RegionLayout, ZoneId, ZoneRect};
+    use crate::zone_router::HOST_ZONE;
+    use mir2_world_bevy::{EntitySpawn, MirrorPromote, MirrorSpec, MirrorUpsert, World};
+
+    /// `mirror_metrics` 的计数是**进程级**的：本模块内互斥，避免并行用例互相污染。
+    static COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn layout() -> RegionLayout {
+        parse_zone_layout(
+            "0:0=0,0-9,9;1:0=10,0-19,9",
+            &["0".to_string()],
+            &[(20, 10)],
+            HOST_ZONE,
+        )
+        .expect("两区布局")
+    }
+
+    fn add(world: &mut World, name: &str, x: i32, y: i32, play: bool) -> i32 {
+        let mut e = EntitySpawn::new(0, name.to_string(), x, y);
+        e.race = if play { 0 } else { 80 };
+        e.view_range = if play { 12 } else { 5 };
+        world.add_entity(e)
+    }
+
+    /// 观察者在**本 World**（含镜像）里按坐标算的可见 id 集合（不含 halo 合成——handoff 要的是
+    /// 「目标区世界自己连续可见」，不是邻区快照补充）。
+    fn visible_ids(world: &World, observer: &str) -> Vec<i32> {
+        let me = world
+            .entities
+            .iter_ref()
+            .find(|e| e.name == observer)
+            .expect("观察者不在世界");
+        let (ox, oy) = (me.x, me.y);
+        let mut ids: Vec<i32> = world
+            .entities
+            .iter_ref()
+            .filter(|e| {
+                e.add_to_mapped
+                    && e.name != observer
+                    && (ox - e.x).abs().max((oy - e.y).abs()) <= 12
+            })
+            .map(|e| e.id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn spec_from(e: &HaloEntity) -> MirrorSpec {
+        MirrorSpec {
+            id: e.actor_id,
+            name: e.name.clone(),
+            map_id: e.map_id,
+            x: e.x,
+            y: e.y,
+            view_range: e.view_range,
+            race: e.race,
+            race_img: e.race_img,
+            appr: e.appr,
+            light: e.light,
+            name_color: e.name_color,
+            cell_type: e.cell_type,
+            dir: e.dir,
+            death: e.death,
+            invisible: e.invisible,
+            ghost: e.ghost,
+            fixed_hide_mode: e.fixed_hide_mode,
+            ob_mode: e.ob_mode,
+            master: e.master,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 1+6：零闪烁（两区真实屏障线程；T 跨界、T+1 提升/移除都在 tick 顶）
+    // ------------------------------------------------------------------
+    #[test]
+    fn cross_boundary_entity_never_leaves_target_visible_set() {
+        const TICKS: u64 = 6;
+        const CROSS_TICK: u64 = 2;
+        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
+        let layout = Arc::new(layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<i32>>();
+
+        let run = |zone_id: ZoneId, spawn_e: bool, spawn_p: bool| {
+            let layout = Arc::clone(&layout);
+            let exchange = Arc::clone(&exchange);
+            let barriers = Arc::clone(&barriers);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                // 与生产同口径：本区 panic ⇒ 先唤醒其余区（FailFastBarrier），再 unwind。
+                let abort = Arc::clone(&barriers);
+                let body = move || {
+                    let mut world = World::with_maps(vec![(20, 10)]);
+                    // 每区独立 actor id 段（与生产同口径；否则两区都从 1 起，镜像 id 会撞本地实体）。
+                    world.set_id_base(zone_id_base(zone_id));
+                    let entity_id = if spawn_e {
+                        Some(add(&mut world, "E", 9, 5, false))
+                    } else {
+                        None
+                    };
+                    if spawn_p {
+                        add(&mut world, "P", 12, 5, true);
+                    }
+                    let _ = world.tick();
+                    let runtime = ZoneRuntime::new(
+                        zone_id,
+                        layout.zone_spans(),
+                        ZONE_HALO_WIDTH,
+                        &exchange,
+                        &barriers,
+                    );
+                    for tick_no in 0..TICKS {
+                        // ---- tick 顶（phase1 之前）：T 时源区把 E 挪进邻区 rect；T+1 源区移除、
+                        //      目标区把同 id 镜像原地提升（offer 的 spec 来自上一 tick 的邻区快照）。
+                        if tick_no == CROSS_TICK && zone_id == zone(0) {
+                            let id = entity_id.expect("源区必须有 E");
+                            if let Some(t) = world.entities.transform_mut(id) {
+                                t.x = 10;
+                            }
+                            if let Some(e) = world.entities.get_mut(id) {
+                                e.flags.handoff_pending = true;
+                            }
+                        }
+                        let mut promoted = false;
+                        if tick_no == CROSS_TICK + 1 && zone_id == zone(1) {
+                            // 目标区：用上一 tick 收到（outgoing=true）的邻区快照做原地提升。
+                            let last = exchange
+                                .read(zone(0), tick_no - 1)
+                                .expect("上一 tick 的源区快照");
+                            if let Some(e) = last.entities.iter().find(|e| e.name == "E") {
+                                match world.promote_mirror_to_real(&spec_from(e)) {
+                                    MirrorPromote::Promoted => promoted = true,
+                                    other => panic!("提升必须是 Promoted，实得 {other:?}"),
+                                }
+                                assert!(e.outgoing, "offer 必须来自 outgoing 带");
+                            }
+                        }
+                        if tick_no == CROSS_TICK + 1 && zone_id == zone(0) {
+                            // 源区：收到 Ack 之后移除（tick 顶、phase1 之前）。
+                            let id = entity_id.expect("源区必须有 E");
+                            assert!(
+                                world.release_entity(id),
+                                "源区提交必须移除实体（Ack 之后的 leave_world 等价物）"
+                            );
+                        }
+                        let mut rec = world.tick_phase1();
+                        let (_b, neighbors, wait_us) = runtime
+                            .after_phase1(&world, tick_no, &HaloFrameSource::none())
+                            .expect("快照/发布/barrier1/读邻居");
+                        if let Err(e) = apply_mirrors(&mut world, &neighbors, None) {
+                            panic!("apply_mirrors 失败（tick {tick_no} zone {zone_id}）：{e}");
+                        }
+                        world.tick_phase2(&mut rec);
+                        runtime.after_phase2(wait_us, None);
+                        if zone_id == zone(1) {
+                            let _ = promoted;
+                            tx.send(visible_ids(&world, "P")).expect("主线程接收");
+                        }
+                    }
+                };
+                if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+                    abort.abort();
+                    std::panic::resume_unwind(p);
+                }
+            })
+        };
+        let h0 = run(zone(0), true, false);
+        let h1 = run(zone(1), false, true);
+        let seen: Vec<Vec<i32>> = (0..TICKS)
+            .map(|_| {
+                rx.recv_timeout(std::time::Duration::from_secs(20))
+                    .expect("每 tick 一份可见集合（20s 超时 = 屏障死锁/线程 panic）")
+            })
+            .collect();
+        h0.join().expect("区 0 线程");
+        h1.join().expect("区 1 线程");
+
+        // 前置：跨界前目标区确实看得到 E（否则本用例测不到）。
+        assert!(
+            !seen[0].is_empty() && !seen[CROSS_TICK as usize - 1].is_empty(),
+            "跨界前目标区必须可见 E：{seen:?}"
+        );
+        // 零闪烁：**每一 tick** 都可见（跨界 tick 与提交 tick 都不许闪）。
+        for (tick, ids) in seen.iter().enumerate() {
+            assert!(
+                !ids.is_empty(),
+                "tick {tick} 目标区丢了 E（零闪烁失败）：{seen:?}"
+            );
+        }
+        // 时序证据：提升恰一次，遮蔽计数恒 0（正确时序下兜底不触发）。
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_mirror_promoted(),
+            1
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local(),
+            0
+        );
+    }
+
+    fn zone(n: u32) -> ZoneId {
+        ZoneId::new(n)
+    }
+
+    // ------------------------------------------------------------------
+    // 3：原地提升（同一格该 id 恰一条；幂等；位置不一致 fail-closed）
+    // ------------------------------------------------------------------
+    #[test]
+    fn promote_mirror_in_place_keeps_one_cell_entry() {
+        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let spec = MirrorSpec {
+            id: 7,
+            name: "E".into(),
+            map_id: 0,
+            x: 5,
+            y: 5,
+            view_range: 5,
+            race: 80,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 2,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        assert_eq!(
+            world.upsert_mirror(spec.clone()),
+            MirrorUpsert::Inserted,
+            "前置：镜像插入"
+        );
+        let entries_at = |w: &World| -> usize {
+            let (cell, _) = w.map(0).get_cell_info(5, 5);
+            cell.obj_list
+                .iter()
+                .filter(|o| o.actor_object && o.cell_obj_id == 7)
+                .count()
+        };
+        assert_eq!(entries_at(&world), 1);
+        assert_eq!(
+            world.promote_mirror_to_real(&spec),
+            MirrorPromote::Promoted,
+            "同 id 同格镜像必须原地提升"
+        );
+        assert_eq!(
+            entries_at(&world),
+            1,
+            "提升不得重复登记格表（该 id 恰一条）"
+        );
+        let e = world.entities.get(7).expect("实体仍在");
+        assert!(!e.mirror, "提升后 mirror=false");
+        assert!(!e.handoff_pending);
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_mirror_promoted(),
+            1
+        );
+        // 幂等：已是真实体 ⇒ NotMirror，不重复计数。
+        assert_eq!(
+            world.promote_mirror_to_real(&spec),
+            MirrorPromote::NotMirror
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_mirror_promoted(),
+            1
+        );
+        // 位置不一致（镜像存在但不是同格）⇒ fail-closed。
+        let mut other = spec.clone();
+        other.x = 6;
+        assert_eq!(
+            world.promote_mirror_to_real(&other),
+            MirrorPromote::NotMirror,
+            "已是真实体 ⇒ NotMirror（不再看位置）"
+        );
+    }
+
+    /// 位置不一致的失败面：**镜像**存在但坐标与 offer 不同 ⇒ `CellMismatch`（不提升）。
+    #[test]
+    fn promote_mirror_rejects_cell_mismatch() {
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut spec = MirrorSpec {
+            id: 8,
+            name: "M".into(),
+            map_id: 0,
+            x: 5,
+            y: 5,
+            view_range: 5,
+            race: 80,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        assert_eq!(world.upsert_mirror(spec.clone()), MirrorUpsert::Inserted);
+        spec.x = 6;
+        assert_eq!(
+            world.promote_mirror_to_real(&spec),
+            MirrorPromote::CellMismatch
+        );
+        assert!(world.entities.get(8).expect("实体仍在").mirror);
+    }
+
+    // ------------------------------------------------------------------
+    // 4：outgoing 镜像追加格尾、忽略 cell_pos；普通镜像仍按 cell_pos
+    // ------------------------------------------------------------------
+    #[test]
+    fn outgoing_mirror_appends_to_cell_tail_ignoring_cell_pos() {
+        let mut world = World::with_maps(vec![(20, 10)]);
+        // 目标区本地真实体（先占该格；`tick` 处理 `Command::Enter` 才真正落格）。
+        let local = add(&mut world, "L", 5, 5, false);
+        let _ = world.tick();
+        let base = |id: i32, name: &str, outgoing: bool, cell_pos: usize| HaloEntity {
+            actor_id: id,
+            map_id: 0,
+            x: 5,
+            y: 5,
+            view_range: 5,
+            name: name.into(),
+            race: 80,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+            cell_pos,
+            display: None,
+            route: None,
+            outgoing,
+        };
+        // 普通镜像 cell_pos=1（应在 L 之后）；outgoing 镜像 cell_pos=0（假装最前，但必须排最后）。
+        let snap = HaloSnapshot {
+            tick: 0,
+            entities: vec![base(42, "O", true, 0), base(41, "N", false, 1)],
+        };
+        let stats = apply_mirrors(&mut world, &[snap], None).expect("镜像应用");
+        assert_eq!(stats.inserted, 2);
+        let (cell, _) = world.map(0).get_cell_info(5, 5);
+        let order: Vec<i32> = cell
+            .obj_list
+            .iter()
+            .filter(|o| o.actor_object)
+            .map(|o| o.cell_obj_id)
+            .collect();
+        assert_eq!(
+            order,
+            vec![local, 41, 42],
+            "outgoing 镜像必须追加格尾（忽略 cell_pos=0）；普通镜像按 cell_pos"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // 5：兜底——镜像 id 已是本区真实体 ⇒ 跳过 + 计数（不 abort、不动本地实体）
+    // ------------------------------------------------------------------
+    #[test]
+    fn mirror_shadowed_by_local_is_skipped_and_counted() {
+        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let local = add(&mut world, "L", 5, 5, false);
+        let _ = world.tick();
+        let snap = HaloSnapshot {
+            tick: 0,
+            entities: vec![HaloEntity {
+                actor_id: local,
+                map_id: 0,
+                x: 5,
+                y: 5,
+                view_range: 5,
+                name: "L".into(),
+                race: 80,
+                race_img: 0,
+                appr: 0,
+                light: 0,
+                name_color: 255,
+                cell_type: mir2_world_bevy::CellType::Monster,
+                dir: 0,
+                death: false,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+                cell_pos: 0,
+                display: None,
+                route: None,
+                outgoing: false,
+            }],
+        };
+        let stats = apply_mirrors(&mut world, &[snap], None).expect("遮蔽不得 abort");
+        assert_eq!(stats.shadowed_by_local, 1);
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local(),
+            1
+        );
+        let e = world.entities.get(local).expect("本地真实体不得被删");
+        assert!(!e.mirror, "本地真实体不得被改成镜像");
+    }
+
+    // ------------------------------------------------------------------
+    // 2：outgoing 带 = 距本区 rect ≤ HALO 的 handoff_pending 实体
+    // ------------------------------------------------------------------
+    #[test]
+    fn outgoing_band_includes_pending_entity_beyond_rect() {
+        let layout = layout();
+        let spans = layout.zone_spans();
+        let mut world = World::with_maps(vec![(20, 10)]);
+        // E 在区 0 rect 外（x=10 属区 1），但 handoff_pending ⇒ 仍须进区 0 的 outgoing 带。
+        let id = add(&mut world, "E", 10, 5, false);
+        let _ = world.tick();
+        if let Some(e) = world.entities.get_mut(id) {
+            e.flags.handoff_pending = true;
+        }
+        let border = snapshot_border(
+            &world,
+            0,
+            spans
+                .iter()
+                .find(|s| s.zone == zone(0))
+                .expect("区 0 span")
+                .rect,
+            ZONE_HALO_WIDTH,
+            0,
+            &HaloFrameSource::none(),
+        );
+        let hit = border
+            .entities
+            .iter()
+            .find(|e| e.actor_id == id)
+            .expect("outgoing 实体必须仍出现在源区快照");
+        assert!(hit.outgoing, "快照条目必须标记 outgoing");
+        // 反例：不置 pending ⇒ 不在带内（旧口径）。
+        let mut world2 = World::with_maps(vec![(20, 10)]);
+        let id2 = add(&mut world2, "E2", 10, 5, false);
+        let _ = world2.tick();
+        let border2 = snapshot_border(
+            &world2,
+            0,
+            spans
+                .iter()
+                .find(|s| s.zone == zone(0))
+                .expect("区 0 span")
+                .rect,
+            ZONE_HALO_WIDTH,
+            0,
+            &HaloFrameSource::none(),
+        );
+        assert!(
+            border2.entities.iter().all(|e| e.actor_id != id2),
+            "非 pending 的界外实体不得进快照"
+        );
+    }
+
+    /// 距离谓词的边界：rect 内恒真；界外 ≤ HALO 真、> HALO 假。
+    #[test]
+    fn within_distance_covers_inside_and_halo() {
+        let r = ZoneRect::new(0, 0, 9, 9);
+        assert!(r.within_distance(5, 5, 0), "rect 内恒真（width=0 也算）");
+        assert!(r.within_distance(10, 5, ZONE_HALO_WIDTH));
+        // dx 是「到 rect **边**的距离」：x1=9 ⇒ x=9+HALO 恰在 HALO 距离内，再远 1 格即出带。
+        assert!(r.within_distance(9 + ZONE_HALO_WIDTH, 5, ZONE_HALO_WIDTH));
+        assert!(!r.within_distance(9 + ZONE_HALO_WIDTH + 1, 5, ZONE_HALO_WIDTH));
+    }
+}

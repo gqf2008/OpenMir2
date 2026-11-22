@@ -184,6 +184,10 @@ pub struct Flags {
     /// **L2-5 ②**：邻区实体的只读镜像（同一全局 `ActorId`，不新分配）。镜像**不参与模拟**
     /// （AI/仇恨/攻击目标/碰撞/MonGen 的隔离判据在 ②第 3 步落地）；`false` = 真实实体。
     pub mirror: bool,
+    /// **L2-5 ③ 段 2（handoff）**：本 tick 移动判定把实体挪进了**邻区 rect**（源区仍拥有它、
+    /// 仍在本区 World 模拟）。源区快照据此把它算进 **outgoing 带**（`HaloEntity.outgoing`），
+    /// 目标区拿到的是普通镜像；下一 tick 目标区原地提升、源区才移除（两阶段，源从不放手）。
+    pub handoff_pending: bool,
 }
 
 /// PK/善恶状态（`PvpLevel` 派生自 `pk_point`，见 oracle 事实）。

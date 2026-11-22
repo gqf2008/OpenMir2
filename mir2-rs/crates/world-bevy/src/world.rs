@@ -1197,6 +1197,12 @@ pub const REF_MSG_CACHED_RANGE: i32 = 11;
 pub struct SimState {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
+    /// **L2-5 ③ 段 2**：本区边界（`(map_id, (x0, y0, x1, y1))`；`None` = 未切片/N=1）。
+    ///
+    /// 只给移动判定一处消费：成功的移动把实体挪到**界外格** ⇒ 置 `Flags.handoff_pending`
+    /// （仍归本区、仍在本 World 模拟；源区快照据此把它算进 outgoing 带）。
+    /// `world-bevy` 不认识"区"类型 ⇒ 用裸矩形，由宿主（game-svr）在每区世界构造时设置。
+    pub zone_bounds: Option<(usize, (i32, i32, i32, i32))>,
     /// **地图归属（P2-3a）**：`owned_maps[map_id]` = 本 World 是否拥有该图。
     ///
     /// 长度恒等于 [`SimState::maps`]；缺省全 `true`（单片/既有行为逐字节不变）。
@@ -1778,6 +1784,8 @@ impl SimState {
         let maps_len = maps.len();
         SimState {
             maps,
+            // L2-5 ③ 段 2：未切片 ⇒ 无边界（移动判定零行为变化）。
+            zone_bounds: None,
             // 缺省全拥有（`MIR2_SHARDS=1` / 合成 golden：所有权检查恒过、零行为变化）。
             owned_maps: vec![true; maps_len],
             ref_msg_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -3560,6 +3568,17 @@ impl MirrorUpsert {
     }
 }
 
+/// **L2-5 ③ 段 2**：[`World::promote_mirror_to_real`] 的结果。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirrorPromote {
+    /// 同 id、同格镜像 ⇒ 原地升为真实体（不新建、不先删后插、不重复登记格表）。
+    Promoted,
+    /// 该 id 不存在**或**不是镜像（已是真实体 ⇒ 幂等跳过）。
+    NotMirror,
+    /// 镜像存在但位置与 offer 不一致 ⇒ fail-closed，调用方按拒绝处理。
+    CellMismatch,
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -3916,6 +3935,11 @@ impl World {
     /// **必须在任何 id 分配/实体装载之前调用**（`SlotTable::set_id_base` 断言）。
     pub fn set_id_base(&mut self, base: i32) {
         self.entities.set_id_base(base);
+    }
+
+    /// **L2-5 ③ 段 2**：设置本区边界（见 [`SimState::zone_bounds`]）。`None` 清除。
+    pub fn set_zone_bounds(&mut self, bounds: Option<(usize, (i32, i32, i32, i32))>) {
+        self.sim.zone_bounds = bounds;
     }
 
     /// 攻击路径专用流是否开启（隔离口径的真机自证）。
@@ -8297,6 +8321,42 @@ impl World {
         }
     }
 
+    /// **L2-5 ③ 段 2**：把**同 id、同格**的镜像**原地提升**为真实体（handoff 的提交侧）。
+    ///
+    /// 只改标志与状态：清 `Flags.mirror`、逐字段覆盖（名字/坐标/视野/外观/可见性/主人/朝向）、
+    /// `add_to_mapped` 保持真。**不得**再 `add_map_object`（格表里该 id 已有一条；重复登记会让
+    /// `cell_pos` 取第一条、AOI 扫描出双份——§2.4 第 3 条），也**不得**先删后插（会产生一次假消失）。
+    ///
+    /// 返回：
+    /// - `Promoted`：提升成功；
+    /// - `NotMirror`：该 id 不是镜像（已是真实体 ⇒ 幂等跳过；不存在 ⇒ 调用方按拒绝处理）；
+    /// - `CellMismatch`：镜像存在但位置与 offer 不一致（fail-closed：不提升，交调用方拒绝）。
+    pub fn promote_mirror_to_real(&mut self, spec: &MirrorSpec) -> MirrorPromote {
+        let Some(e) = self.entities.get(spec.id) else {
+            return MirrorPromote::NotMirror;
+        };
+        if !e.mirror {
+            return MirrorPromote::NotMirror;
+        }
+        if e.map_id != spec.map_id || e.x != spec.x || e.y != spec.y {
+            return MirrorPromote::CellMismatch;
+        }
+        self.update_mirror_frame_fields(spec.id, spec);
+        let now = self.clock_ms;
+        // 提升后仍续一次格内 `AddTime`（与镜像刷新同口径；格子条目不动、不新增）。
+        self.touch_mirror_cell_object(spec.map_id, spec.x, spec.y, spec.id, now);
+        if let Some(mut e) = self.entities.get_mut(spec.id) {
+            e.flags.mirror = false;
+            e.flags.handoff_pending = false;
+            e.name.clone_from(&spec.name);
+        }
+        if let Some(t) = self.entities.transform_mut(spec.id) {
+            t.view_range = spec.view_range;
+        }
+        crate::mirror_metrics::note_handoff_mirror_promoted();
+        MirrorPromote::Promoted
+    }
+
     /// **L2-5 ②**：移除镜像（摘格 + 删实体）。`false` = 不是镜像/不存在（**不得**删真实实体）。
     pub fn remove_mirror(&mut self, id: i32) -> bool {
         let Some(e) = self.entities.get(id) else {
@@ -11697,6 +11757,16 @@ impl World {
         if let Some(t) = access.transform_mut(actor_id) {
             t.x = tx;
             t.y = ty;
+        }
+        // **L2-5 ③ 段 2（handoff 检测）**：成功的移动把实体挪到**本区 rect 之外** ⇒ 置
+        // `handoff_pending`（实体仍归本区、仍在本 World 模拟；源区快照的 outgoing 带据此保留它
+        // 一个 tick，目标区原地提升后源区才移除）。未设边界（N=1/未切片）⇒ 整段零参与。
+        if let Some((bounds_map, (x0, y0, x1, y1))) = sim.zone_bounds {
+            if map_id == bounds_map && !(x0 <= tx && tx <= x1 && y0 <= ty && ty <= y1) {
+                if let Some(m) = access.get_mut(actor_id) {
+                    m.flags.handoff_pending = true;
+                }
+            }
         }
         Ok(())
     }

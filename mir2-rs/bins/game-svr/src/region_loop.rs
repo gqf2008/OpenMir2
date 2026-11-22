@@ -202,6 +202,11 @@ pub struct HaloEntity {
     pub display: Option<HaloDisplay>,
     /// 玩家网关路由（`None` = 非玩家/未登记）。
     pub route: Option<HaloRoute>,
+    /// **L2-5 ③ 段 2（handoff）**：实体已挪进邻区 rect、仍归本区（`Flags.handoff_pending`）。
+    ///
+    /// 仅用于观测与**定序**（§2.4 第 1 条：收件人区对 `outgoing: true` 的镜像一律追加到格尾、
+    /// **忽略** `cell_pos`——那个下标是在源区世界算的，与收件人格内序无关）。
+    pub outgoing: bool,
 }
 
 /// 某区某 tick 的边界带快照。
@@ -231,10 +236,12 @@ pub fn snapshot_border(
         .entities
         .iter_ref()
         .filter(|e| {
-            e.add_to_mapped
-                && !e.mirror
-                && e.map_id == map_id
-                && rect.border_contains(e.x, e.y, halo_width)
+            // **L2-5 ③ 段 2**：过滤 = rect 边界带 ∪ outgoing 带。
+            // outgoing：实体 `handoff_pending`（已挪进邻区 rect、仍归本区）且距本区 rect
+            // **≤ HALO**（`within_distance` 把 rect 内部也算进来，两者并集不会漏）。
+            // 段 2 红态（提交 1）：**还没有 outgoing 带**——只用 rect 边界带（旧口径）。
+            let in_band = rect.border_contains(e.x, e.y, halo_width);
+            e.add_to_mapped && !e.mirror && e.map_id == map_id && in_band
         })
         .map(|e| {
             // **合法中间态**：`add_to_mapped` 在生成/登录时置真，进格要等 `Command::Enter` 被
@@ -276,6 +283,7 @@ pub fn snapshot_border(
                     .and_then(|d| d.get(e.id))
                     .map(HaloDisplay::from_display),
                 route: halo_route(source, &e),
+                outgoing: e.handoff_pending,
             }
         })
         .collect();
@@ -733,6 +741,8 @@ pub struct MirrorStats {
     pub updated: usize,
     /// 本 tick 消失并移除的镜像数。
     pub removed: usize,
+    /// **L2-5 ③ 段 2**：镜像被本区真实体遮蔽而跳过的条数（防御计数；时序正确时恒 0）。
+    pub shadowed_by_local: usize,
 }
 
 /// **L2-5 ②**：用 barrier1 之后读到的**邻区本 tick** 快照刷新本区镜像。
@@ -756,13 +766,27 @@ pub fn apply_mirrors(
     let mut stats = MirrorStats::default();
     let mut seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
     // **同格序（Q1 裁决 / §9.1.2）**：先按 `(map, x, y, cell_pos, id)` 定序，再逐条 upsert。
+    //
+    // **L2-5 ③ 段 2（§2.4 第 1 条）**：`outgoing: true` 的镜像一律**追加到格尾**、**忽略**
+    // `cell_pos`——基线里跨界那一步是 `move_object` 的 push（追加到目标格尾部），而 `cell_pos`
+    // 是在**源区**世界算的（混有源区的镜像），与收件人格内序无关。排序键把 outgoing 排在同格
+    // 非 outgoing 之后；outgoing 组内退化为 `(id)`。
     // 镜像的格子登记是「追加」⇒ 只有按 owner 侧格内序追加，收件人世界的 `obj_list` 序才与基线
     // 一致（否则出现帧相对序会不同）。跨格定序只影响镜像槽位序（确定性），不影响扫描（按坐标）。
     let mut ordered: Vec<&HaloEntity> = neighbors
         .iter()
         .flat_map(|snap| snap.entities.iter())
         .collect();
-    ordered.sort_by_key(|e| (e.map_id, e.x, e.y, e.cell_pos, e.actor_id));
+    ordered.sort_by_key(|e| {
+        (
+            e.map_id,
+            e.x,
+            e.y,
+            u8::from(e.outgoing),
+            if e.outgoing { 0 } else { e.cell_pos },
+            e.actor_id,
+        )
+    });
     for e in ordered {
         {
             seen.insert(e.actor_id);
@@ -790,6 +814,13 @@ pub fn apply_mirrors(
             match world.upsert_mirror(spec) {
                 MirrorUpsert::Inserted => stats.inserted += 1,
                 MirrorUpsert::Updated => stats.updated += 1,
+                // **L2-5 ③ 段 2（兜底，防御不是牙）**：该 id 已是本区**真实**实体 ⇒ handoff 收敛
+                // 的正常面（目标区先提升、源区快照里还有它一 tick 的残留）。**跳过 + 计数**，
+                // 不 abort、不删本地实体（§2.3 必带要求 3）。时序正确时该计数恒 0。
+                MirrorUpsert::RefusedOccupied => {
+                    mir2_world_bevy::mirror_metrics::note_mirror_shadowed_by_local();
+                    stats.shadowed_by_local += 1;
+                }
                 outcome => {
                     return Err(ZoneTickError::MirrorRefused {
                         id: e.actor_id,
@@ -1847,6 +1878,7 @@ mod tests {
                     cell_pos: 0,
                     display: None,
                     route: None,
+                    outgoing: false,
                 }],
             },
         );
@@ -1921,6 +1953,7 @@ mod tests {
             cell_pos: 0,
             display: None,
             route: None,
+            outgoing: false,
         }
     }
 
