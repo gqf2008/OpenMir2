@@ -34732,6 +34732,16 @@ impl HostServices {
     }
 }
 
+// **M0/A3 见证（仅测试期）**：本线程上一次 tick **实际进入**的段位集。
+//
+// 每个 `phases.has(X)` 守卫入口在 `cfg(test)` 下记一位 ⇒ 用例可**直接**断言
+// 「只有 `M0_MIN` 的段被执行」，而不是靠个别段的副作用间接推断（定向单 bit 误开会被抓到）。
+// （用 `//` 不用 `///`：`#[cfg]` + 宏调用的组合下 doc comment 会触发 unused_doc_comments。）
+#[cfg(test)]
+thread_local! {
+    static RAN_SEGMENTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickOutcome {
     Continue,
@@ -34899,6 +34909,8 @@ impl HostLoop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
         if phases.has(PhaseSet::SHUTDOWN) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::SHUTDOWN));
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
         // 位置在 tick 边界：先不消费本 tick 的事件，直接以**当前实时态**合成存档体并退出。
@@ -35007,6 +35019,8 @@ impl HostLoop {
         }
         let next = std::time::Instant::now() + tick;
         if phases.has(PhaseSet::INBOUND) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND));
         let t = host_prof.begin();
         // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
         // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
@@ -36292,6 +36306,8 @@ impl HostLoop {
         host_prof.end("HostInbound", t);
         }
         if phases.has(PhaseSet::DB_POLL) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DB_POLL));
         // **L2-5 ③ 段 1c**：各区线程的断线存档请求 → 进程级 DB 链
         // （qid/`engine.begin_save`/`save_outstanding` 属区 0；载荷已在区线程内编码）。
         if let Some(host) = zone_host.as_deref() {
@@ -36802,6 +36818,8 @@ impl HostLoop {
         host_prof.end("HostDbPoll", t);
         }
         if phases.has(PhaseSet::PERIODIC) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERIODIC));
         let t = host_prof.begin();
         // **A-22 P3 · `SystemProcessor.ShowOnline`**（`SystemProcessor.cs:54-62`）：
         // `GetTickCount()-ShowOnlineTick > ConsoleShowUserCountTime`（**严格 `>`**，10 分钟门）⇒
@@ -37131,6 +37149,8 @@ impl HostLoop {
             scratch.castle_broadcast_texts = castle_broadcast_texts;
         }
         if phases.has(PhaseSet::WORLD_HEAD) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::WORLD_HEAD));
         let t = host_prof.begin();
         // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None，零参与）。
         // **tick 顶（phase1 之前）**：区 0 排 ack/offer（handoff 两阶段）。
@@ -37162,6 +37182,8 @@ impl HostLoop {
             .as_mut()
             .expect("HostWorldHead 必须置位（M0_MIN 含它）");
         if phases.has(PhaseSet::POST_HEAD) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::POST_HEAD));
         let castle_broadcast_texts = &scratch.castle_broadcast_texts;
         // **攻击批 A**：命令 FIFO 里攻击结算的攻杀计数块（`AttackDir` 之后，`PlayObject.Attack.cs:942-956`）
         // 在这里排水。`SendSocket("+PWR")` 是直发短包（不经 MsgQueue）⇒ 紧跟 `tick_head` 发最接近
@@ -37217,6 +37239,8 @@ impl HostLoop {
         host_prof.end("HostPostHead", t);
         }
         if phases.has(PhaseSet::PLAYER_RUN) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PLAYER_RUN));
         let t = host_prof.begin();
         // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
         // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
@@ -37321,6 +37345,8 @@ impl HostLoop {
         host_prof.end("HostPlayerRun", t);
         }
         if phases.has(PhaseSet::WORLD_TAIL) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::WORLD_TAIL));
         let t = host_prof.begin();
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         //
@@ -37403,6 +37429,8 @@ impl HostLoop {
         host_prof.end("HostWorldTail", t);
         }
         if phases.has(PhaseSet::PLANES) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PLANES));
         let t = host_prof.begin();
         // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
         // 才跑 `PlanesServer/Client.Run()`。这里的插入点在本 tick 的中段（`tick_tail` 之后、
@@ -37420,6 +37448,8 @@ impl HostLoop {
         host_prof.end("HostPlanes", t);
         }
         if phases.has(PhaseSet::RECOVERY) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::RECOVERY));
         let t = host_prof.begin();
         // **G-A（oracle P1 → P2）**：`PlayObject.Run` 的周期恢复（`:70-141`）与 `ExtraAbil`
         // 到期（`:163-227`）落在同一队列批次；两者的 `SendUpdateMsg(53)` 只保留一条 pending。
@@ -37446,6 +37476,8 @@ impl HostLoop {
         host_prof.end("HostRecovery", t);
         }
         if phases.has(PhaseSet::FRAMES) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::FRAMES));
         let t = host_prof.begin();
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
@@ -37560,6 +37592,8 @@ impl HostLoop {
         host_prof.end("HostFrames", t);
         }
         if phases.has(PhaseSet::DEAL_TICK) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DEAL_TICK));
         ticks += 1;
         let t = host_prof.begin();
         // `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
@@ -37577,6 +37611,8 @@ impl HostLoop {
         host_prof.end("HostDealTick", t);
         }
         if phases.has(PhaseSet::AOI_DOWNLINK) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::AOI_DOWNLINK));
         let t = host_prof.begin();
         // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
         // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
@@ -37611,6 +37647,8 @@ impl HostLoop {
         host_prof.end("HostAoiDownlink", t);
         }
         if phases.has(PhaseSet::PERSIST) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERSIST));
         let t = host_prof.begin();
         // **G-06 耐久回写（`openmir2-persist-useitems-wiring`）**：本 tick 的攻击/受击路径
         // （`PlayObject.StruckDamage` 的耐久段）只改世界实体 `Entity.use_items`；oracle 改的是
@@ -37635,6 +37673,8 @@ impl HostLoop {
         host_prof.end("HostPersist", t);
         }
         if phases.has(PhaseSet::SWITCH) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::SWITCH));
         let t = host_prof.begin();
         // oracle `WorldServer.cs:592-610` 的换服轮询（G11）。生产闭合：跨服搬家
         // （`ChangeSpaceMove`）、`.shr` 序列化与 `SendServerGroupMsg` 均未移植 ⇒
@@ -37674,6 +37714,8 @@ impl HostLoop {
         host_prof.end("HostSwitch", t);
         }
         if phases.has(PhaseSet::DIAG) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DIAG));
         let t = host_prof.begin();
         if let Some(diag) = host_diag_maybe(ticks, &world, &displays, &aoi_frames_total) {
             glog!(
@@ -37689,6 +37731,8 @@ impl HostLoop {
         host_prof.end("HostDiag", t);
         }
         if phases.has(PhaseSet::SLEEP) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::SLEEP));
         let t = host_prof.begin();
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
             std::thread::sleep(d);
@@ -45370,8 +45414,19 @@ mod tests {
             ev_ctl_rx,
             shutdown,
         };
+        RAN_SEGMENTS.with(|c| c.set(0));
         let (host, _services, io, outcome) = host.tick(services, io, PhaseSet::M0_MIN);
         assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
+        assert_eq!(
+            PhaseSet::M0_MIN.0,
+            PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL,
+            "M0_MIN 的组成写死：只允许世界头/世界尾（有人往常量里加位 ⇒ 本断言红）"
+        );
+        assert_eq!(
+            RAN_SEGMENTS.with(std::cell::Cell::get),
+            PhaseSet::M0_MIN.0,
+            "实际进入的段集必须**恰好**等于 M0_MIN（多一位即红：定向单 bit 误开会被抓到）"
+        );
         assert_eq!(host.world.entities.len(), 0, "空实例无实体");
         assert!(host.world.clock_ms > 0, "世界 tick 必须推进 clock");
         assert_eq!(host.ticks, 0, "ticks 的推进归 HostFrames（M0_MIN 不含）");

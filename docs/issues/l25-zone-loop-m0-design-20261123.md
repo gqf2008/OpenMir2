@@ -154,6 +154,20 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   17 个守卫的开关、`scratch` 初始化与两处跨段搬运；**唯一被改的 1 行 = `fn tick` 签名**；
   17 个 `host_prof.end` 段名与顺序与 A1 完全相同。
 
+### 3.2 段集见证（A3 补牙）与**源码扫描窗口**的坑（2026-11-23）
+
+- **段集见证（仅测试期）**：`RAN_SEGMENTS` 是 `#[cfg(test)] thread_local!` 的 `Cell<u32>`；
+  每个 `phases.has(X)` 守卫入口在 `cfg(test)` 下记一位；空实例用例断言
+  `ran_segments == PhaseSet::M0_MIN.0`（**直接**证明只有 M0_MIN 的段被执行），并另有一条
+  「`M0_MIN` 的组成写死 = `WORLD_HEAD | WORLD_TAIL`」——常量本身被塞位也红。
+- **坑（实测踩到）**：本仓有多条源码扫描用例用
+  `body = lines[fn sim_loop( .. 其后第一条以 "fn " 开头的行]` 作扫描窗口。**任何新增的顶层 `fn`
+  只要插在 `fn sim_loop` 之后、被扫描调用点之前，就会把窗口截断** ⇒ 扫描计数变 0、用例假红
+  （本次实际打到 `p31_production_wiring_anchors` 与
+  `closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view`）。
+  ⇒ 见证的读写一律**内联**成 `RAN_SEGMENTS.with(...)`，**不新增顶层 `fn`**。
+  M1 若要在这一带新增顶层函数，必须同时核这两条及同类扫描用例的窗口边界。
+
 ### 3.1 gap 的归属（0c/opc-27 要求，2026-11-23 定稿）
 
 - **规则**：段与段之间**未计入** TICKPROF 的代码（如 `drain_yedo_events`/`drain_skill_train_events`/
