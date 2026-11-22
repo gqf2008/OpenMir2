@@ -1430,7 +1430,8 @@ def cmd_summarize(args):
     stat_paths = [x for x in stat_paths if x]
     stats = merge_shard_stats([load_ndjson(p) for p in stat_paths])
     tier = summarize_tick(stats, args.count)
-    tier["shards"] = {"stats_files": len(stat_paths), "merged": len(stat_paths) > 1}
+    if len(stat_paths) > 1:
+        tier["shards"] = {"stats_files": len(stat_paths), "merged": True}
     if args.mem:
         _mem_rows = load_ndjson(args.mem)
         tier["mem"] = summarize_mem(_mem_rows, tail_sec=args.mem_tail_sec)
