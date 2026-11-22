@@ -8630,7 +8630,7 @@ mod tests {
         let _guard = MIRROR_COUNTER_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        crate::mirror_metrics::reset_for_tests();
+        crate::mirror_metrics::reset_mirror_ai_actions_for_tests();
         let mut world = World::new(30, 30);
         world.enable_monster_ai();
         assert_eq!(
@@ -8648,7 +8648,7 @@ mod tests {
         }
         let after = world.entities.get(900).map(|e| (e.x, e.y));
         let actions = crate::mirror_metrics::mirror_ai_actions();
-        crate::mirror_metrics::reset_for_tests();
+        crate::mirror_metrics::reset_mirror_ai_actions_for_tests();
         assert_eq!(after, Some((4, 5)), "镜像坐标不得被 AI 改动");
         assert_eq!(
             actions, 0,

@@ -10851,6 +10851,13 @@ impl World {
         if access.get(actor_id).is_none() || access.get(target_id).is_none() {
             return None;
         }
+        // **L2-5 ② 段 5（Q2 裁决）**：指向镜像的攻击 v1 **只计数、不生效**——跨区伤害生效留
+        // intent 步（届时 `cross_hit_delayed` 应归零或改判；本步**不**引 per-zone intent 队列）。
+        // 镜像不参与模拟 ⇒ 不扣 HP、不写 `record.attacks`（否则会出伤害/受击帧并污染账本）。
+        if access.get(target_id).is_some_and(|e| e.mirror) {
+            crate::mirror_metrics::note_cross_hit_delayed();
+            return None;
+        }
         // 取出双方属性做结算（避免同时可变借用），再写回
         let mut attacker = access.spawn_cloned(actor_id)?;
         let mut target = access.spawn_cloned(target_id)?;
@@ -15330,6 +15337,56 @@ mod tests {
             a.power
         );
         assert!(a.damage > 0, "护甲 0 时伤害应大于 0");
+    }
+
+    /// **段 5（C6）**：指向镜像的攻击 v1 **只计数、不生效**——镜像 HP 不变、不记
+    /// `record.attacks`、`cross_hit_delayed` +1（Q2 裁决；跨区伤害生效留 intent 步）。
+    ///
+    /// 红检：删 `attack_once_impl` 的镜像分支 ⇒ 计数 0 且 `record.attacks` 有记录 ⇒ 红；
+    /// 只删 `return None` ⇒ 攻击结算打在镜像上（Hp 可能下降）⇒ 红。
+    #[test]
+    fn step2_mirror_isolation_attack() {
+        crate::mirror_metrics::reset_cross_hit_delayed_for_tests();
+        let mut w = World::new(32, 32);
+        let hero = w.add_entity(player(1, "hero", 10, 10, 10));
+        assert_eq!(
+            w.upsert_mirror(crate::MirrorSpec {
+                id: 900,
+                name: "mirror".to_string(),
+                map_id: 0,
+                x: 11,
+                y: 10,
+                view_range: 5,
+                race: 80,
+                race_img: 0,
+                appr: 1,
+                light: 0,
+                name_color: 255,
+                cell_type: crate::CellType::Monster,
+                dir: 0,
+                death: false,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+            }),
+            crate::MirrorUpsert::Inserted
+        );
+        w.tick(); // 英雄落图
+        w.attack_cmd(hero, 900);
+        let rec = w.tick();
+        let hp = w.entities.get(900).map(|e| e.hp);
+        let hits = rec
+            .attacks
+            .iter()
+            .filter(|(a, t, _)| *a == hero && *t == 900)
+            .count();
+        let delayed = crate::mirror_metrics::cross_hit_delayed();
+        crate::mirror_metrics::reset_cross_hit_delayed_for_tests();
+        assert_eq!(hp, Some(100), "镜像 HP 不得下降");
+        assert_eq!(hits, 0, "不得记 record.attacks（否则会出伤害/受击帧）");
+        assert_eq!(delayed, 1, "cross_hit_delayed 必须计数");
     }
 
     /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。

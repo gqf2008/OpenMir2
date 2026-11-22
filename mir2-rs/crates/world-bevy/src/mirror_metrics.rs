@@ -34,8 +34,12 @@ pub fn cross_hit_delayed() -> u64 {
     CROSS_HIT_DELAYED.load(Ordering::Relaxed)
 }
 
-/// 复位（**只给测试**；本 crate 的镜像用例都在同一测试二进制里自行串行化）。
-pub fn reset_for_tests() {
+/// 复位 AI 计数（**只给测试**；并行用例只复位自己读的计数，避免互相清零）。
+pub fn reset_mirror_ai_actions_for_tests() {
     MIRROR_AI_ACTIONS.store(0, Ordering::Relaxed);
+}
+
+/// 复位「指向镜像的攻击」计数（**只给测试**）。
+pub fn reset_cross_hit_delayed_for_tests() {
     CROSS_HIT_DELAYED.store(0, Ordering::Relaxed);
 }
