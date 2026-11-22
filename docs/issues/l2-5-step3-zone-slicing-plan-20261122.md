@@ -581,16 +581,15 @@ rss.ndjson、run.json、summary.json；2 区另有 load_gate.log / stack-start.l
 **barrier2 之后、下一 tick 的 barrier1 之前**，非 0 区（无节拍 sleep）早到 barrier1 后就在那里
 等区 0 睡完。
 
-**代码位置（依据）**：
-- `bins/game-svr/src/region_loop.rs:486` `wait_with_probe`：计时只包 `barrier.wait()`，计时区间内**没有**
-  sleep；
-- `bins/game-svr/src/lib.rs:33476` `let next = Instant::now() + tick;` 与 `lib.rs:36110-36113`
-  （`HostSleep`：`next.checked_duration_since(now)` 后 `thread::sleep`）——节拍在 **sim_loop 每轮尾部**；
-- 区 0 的 barrier2 在 tick 内（`lib.rs:35822` `runtime.after_phase2(...)`），即**先 barrier2、
-  后节拍 sleep、再下一轮 barrier1**；
-- 非 0 区线程（`lib.rs:1660` 起的 `while !stop { … run_zone_tick(…) }`）**没有 sleep**，`run_zone_tick`
-  里依次 phase1 → barrier1 → … → barrier2 → 立刻下一轮 ⇒ 它们到 barrier1 时区 0 还在上一轮的节拍
-  sleep 里。
+**依据（符号锚；高 churn 文件不写行号）**：
+- `wait_with_probe`（`region_loop` 模块）：计时只包 `barrier.wait()`，计时区间内**没有** sleep；
+- `sim_loop` 每轮尾部：`let next = Instant::now() + tick;` 之后进入 `HostSleep` 段
+  （`next.checked_duration_since(now)` 后 `thread::sleep`）——节拍 sleep 的落点；
+- `sim_loop` 的区 0 切片分支里 `runtime.after_phase2(...)`（barrier2）在 tick 内，
+  **先 barrier2、后节拍 sleep、再下一轮 barrier1**；
+- 非 0 区线程：`spawn_minimal_zone` 里的 `while !stop { … run_zone_tick(…) }` 循环
+  **没有 sleep**，`run_zone_tick` 依次 phase1 → barrier1 → … → barrier2 → 立刻下一轮 ⇒
+  它们到 barrier1 时区 0 还在上一轮的节拍 sleep 里。
 
 **读数解释**：均值 ≈ 200ms（tick 周期）− 区 0 单轮工作量（+ 调度抖动）；max 548.9ms 对应登录/进世界
 尖峰时 sim_loop 单轮超出 200ms（此时 `checked_duration_since` 为 None、pacing sleep 归零，区 1 多等
