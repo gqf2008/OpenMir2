@@ -1461,7 +1461,7 @@ fn handle_zone_command(
         return;
     }
     if online
-        .find_linear_chr(chr_name)
+        .find_by_chr(chr_name)
         .is_some_and(|e| world.entities.get(e.actor_id).is_none())
     {
         perf_counters::note_handoff_move_after_transfer_dropped();
@@ -4804,7 +4804,7 @@ fn apply_pending_level_up(
         // 直接写回它；本宿主实体是那份对象的投影 ⇒ 重算后同值镜像（不变量；本路径 657 自见取会话值）。
         e.vitals.hit_speed = sg.hit_speed;
     }
-    if let Some(entry) = online.find_linear_chr(chr_name) {
+    if let Some(entry) = online.find_by_chr(chr_name) {
         let client_layout = game_svr::smframe::client_layout_enabled();
         send_levelup_frames(sg, entry, gates, client_layout);
     }
@@ -5261,7 +5261,7 @@ fn handle_whisper(
     text: &str,
 ) {
     // `GetPlayObject(whostr)`：按 `ChrName` 找在线目标（同名唯一）。
-    let Some(target) = online.find_linear_chr(who) else {
+    let Some(target) = online.find_by_chr(who) else {
         glog!(
             "DBG",
             "私聊：目标 {who} 不在线 ⇒ 丢弃（oracle `SysMsg(...UserNotOnLine)` 未建模，登记）"
@@ -5426,7 +5426,7 @@ fn run_party_goto_label(
     if !host.has_function_npc() {
         return;
     }
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         return;
     };
     let actor = entry.actor_id;
@@ -6396,7 +6396,7 @@ fn handle_level_rank_request_cmd(
     if !enabled {
         return;
     }
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_LEVELRANK：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -6996,7 +6996,7 @@ fn drain_deal_tick(
         if !trade_sessions.get(&chr).is_some_and(|s| s.dealing) {
             continue;
         }
-        let Some(entry) = online.find_linear_chr(&chr) else {
+        let Some(entry) = online.find_by_chr(&chr) else {
             // 不在世界（已掉线）⇒ 由掉线路径的 `DealCancelA` 收口。
             continue;
         };
@@ -7548,7 +7548,7 @@ fn handle_query_bag_cmd(
     catalog: &game_svr::ability::StdItemCatalog,
     world: &mir2_world_bevy::World,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYBAGITEMS：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -7644,7 +7644,7 @@ fn handle_query_user_name_cmd(
     displays: &downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYUSERNAME：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -7761,7 +7761,7 @@ fn handle_query_user_state_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_QUERYUSERSTATE：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -19737,7 +19737,7 @@ fn send_self_frame(
     chr_name: &str,
     body: Vec<u8>,
 ) {
-    let Some(me) = online.find_linear_chr(chr_name) else {
+    let Some(me) = online.find_by_chr(chr_name) else {
         return;
     };
     let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "魔法自身帧") else {
@@ -26719,7 +26719,7 @@ fn apply_pending_gm_m_commands(
     if spawn.is_none() && make.is_none() && mine.is_none() {
         return;
     }
-    let Some(entry) = online.find_linear_chr(chr_name).cloned() else {
+    let Some(entry) = online.find_by_chr(chr_name).cloned() else {
         glog!(
             "WRN",
             "M 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃刷怪/造物请求"
@@ -27229,7 +27229,7 @@ fn apply_pending_gm_guild_commands(
     if add.is_none() && del.is_none() && end.is_none() {
         return;
     }
-    let Some(entry) = online.find_linear_chr(chr_name).cloned() else {
+    let Some(entry) = online.find_by_chr(chr_name).cloned() else {
         glog!("WRN", "W 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃");
         return;
     };
@@ -27441,7 +27441,7 @@ fn drain_script_gm_pendings(
         online,
         gates,
     ) {
-        if let Some(e) = online.find_linear_chr(chr_name) {
+        if let Some(e) = online.find_by_chr(chr_name) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 改属性 SM_UPDATEITEM")
             {
@@ -27456,7 +27456,7 @@ fn drain_script_gm_pendings(
     if let Some((target, body)) =
         apply_pending_gm_clear_bag(ground_sessions, chr_name, &enter_cfg.catalog)
     {
-        if let Some(e) = online.find_linear_chr(&target) {
+        if let Some(e) = online.find_by_chr(&target) {
             if let Some(tx) =
                 route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 清理垃圾 SM_DELITEMS")
             {
@@ -27492,7 +27492,7 @@ fn drain_script_gm_pendings(
         .get_mut(chr_name)
         .and_then(|sg| sg.gm.pending_reconnect.take())
     {
-        if let Some(e) = online.find_linear_chr(chr_name) {
+        if let Some(e) = online.find_by_chr(chr_name) {
             reconnect_pending.push(ReconnectPending {
                 gate_idx: e.gate_idx,
                 socket: e.socket,
@@ -27746,7 +27746,7 @@ fn execute_admin_gm_command(
         // oracle `PlayObject.Chat.cs:372-400` 的回落第二条；`Permission` 读执行当下的 10。
         texts.push(gmcmd::incorrect_msg(ADMIN_GM_PERMISSION, cmd));
     }
-    if let Some(e) = online.find_linear_chr(chr) {
+    if let Some(e) = online.find_by_chr(chr) {
         for msg in &result.msgs {
             let (f, b) = match msg.color {
                 gmcmd::GmColor::Red => (colors.red_f, colors.red_b),
@@ -27998,7 +27998,7 @@ fn switch_data_send_change_server(
     server_table: &[RouteInfo],
     pending: &mut Vec<ReconnectPending>,
 ) {
-    let Some(entry) = online.find_linear_chr(name) else {
+    let Some(entry) = online.find_by_chr(name) else {
         glog!(
             "WRN",
             "换服：ChrName={name} 不在在线登记表 ⇒ SendChangeServer 跳过（登记）"
@@ -34498,7 +34498,7 @@ fn sim_loop(
                             &online,
                             &gates,
                         ) {
-                            if let Some(e) = online.find_linear_chr(&chr_name) {
+                            if let Some(e) = online.find_by_chr(&chr_name) {
                                 if let Some(tx) = route_to_gate(
                                     &gates,
                                     e.gate_idx,
@@ -34519,7 +34519,7 @@ fn sim_loop(
                             &chr_name,
                             &enter_cfg.catalog,
                         ) {
-                            if let Some(e) = online.find_linear_chr(&target) {
+                            if let Some(e) = online.find_by_chr(&target) {
                                 if let Some(tx) = route_to_gate(
                                     &gates,
                                     e.gate_idx,
@@ -34568,7 +34568,7 @@ fn sim_loop(
                                 .get_mut(&chr_name)
                                 .and_then(|sg| sg.gm.pending_reconnect.take())
                             {
-                                if let Some(e) = online.find_linear_chr(&chr_name) {
+                                if let Some(e) = online.find_by_chr(&chr_name) {
                                     reconnect_pending.push(ReconnectPending {
                                         gate_idx: e.gate_idx,
                                         socket: e.socket,
@@ -34652,7 +34652,7 @@ fn sim_loop(
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
-                            if let Some(e) = online.find_linear_chr(&chr_name) {
+                            if let Some(e) = online.find_by_chr(&chr_name) {
                                 for (f, b, text) in &gm_deferred {
                                     send_gm_sysmsg(&gates, e, *f, *b, text);
                                 }
@@ -36133,7 +36133,7 @@ fn sim_loop(
         // 清的是**目标**的背包、709 发给**目标**（oracle 命令体内当场发）。
         for (target, body) in collect_gm_clear_bag_pending(&mut ground_sessions, &enter_cfg.catalog)
         {
-            if let Some(e) = online.find_linear_chr(&target) {
+            if let Some(e) = online.find_by_chr(&target) {
                 if let Some(tx) =
                     route_to_gate(&gates, e.gate_idx, e.socket, "GM 清理垃圾 SM_DELITEMS")
                 {
