@@ -8315,7 +8315,9 @@ impl World {
         spawn.fixed_hide_mode = spec.fixed_hide_mode;
         spawn.ob_mode = spec.ob_mode;
         spawn.master = spec.master;
-        // **L2-5 ④b-0**：镜像 id 来自邻区段 ⇒ 外来插入，**不得推进本 World 分配器**。
+        // **L2-5 ④b-0 / own-segment 修正**：镜像 id 用**显式插入**（不推进本 World 分配器）。
+        // id 可以落在**本区段**（跨区迁移的实体保留原段 id，见 `bind_foreign` 文档）。
+        let own_segment = self.entities.id_in_own_segment(spec.id);
         let id = self.entities.insert_foreign(spawn);
         if let Some(b) = self.entities.map_binding_mut(id) {
             b.add_to_mapped = true;
@@ -8328,6 +8330,9 @@ impl World {
         if !added {
             self.entities.remove(id);
             return MirrorUpsert::RefusedCell;
+        }
+        if own_segment {
+            crate::mirror_metrics::note_mirror_own_segment_id();
         }
         MirrorUpsert::Inserted
     }
@@ -8408,7 +8413,9 @@ impl World {
         spawn.master = spec.master;
         spawn.ai.dir = spec.dir;
         // mirror 保持 false（= 真实实体）；handoff_pending 也保持 false。
-        // **L2-5 ④b-0**：id 来自源区段 ⇒ 外来插入，不推进本区分配器。
+        // **L2-5 ④b-0 / own-segment 修正**：用显式插入（不推进本区分配器）。id 可以落在
+        // **本区段**——handoff 把玩家送回原生区时就是自己的 id（合法）。
+        let own_segment = self.entities.id_in_own_segment(spec.id);
         let id = self.entities.insert_foreign(spawn);
         if let Some(b) = self.entities.map_binding_mut(id) {
             b.add_to_mapped = true;
@@ -8423,6 +8430,9 @@ impl World {
             return HandoffAccept::RefusedCell;
         }
         crate::mirror_metrics::note_handoff_inserted_fresh();
+        if own_segment {
+            crate::mirror_metrics::note_handoff_fresh_own_segment();
+        }
         HandoffAccept::Inserted
     }
 

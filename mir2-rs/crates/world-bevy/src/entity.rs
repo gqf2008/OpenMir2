@@ -2403,9 +2403,16 @@ impl EntityStore {
         self.inner.next_actor_id()
     }
 
-    /// **L2-5 ④b-0**：登记 id 段长度（外来 id 归属校验用）。
+    /// **L2-5 ④b-0 / own-segment 修正**：登记 id 段长度（供分配器越段断言与信息计数；
+    /// `bind_foreign` 不再断言段归属——id 段是分配来源，不是当前归属）。
     pub fn set_id_segment(&mut self, segment: i32) {
         self.inner.set_id_segment(segment);
+    }
+
+    /// 该 id 是否落在**本分配段**（`id_segment == 0` ⇒ 恒 `false`）。**不是归属判定**。
+    #[must_use]
+    pub fn id_in_own_segment(&self, id: i32) -> bool {
+        self.inner.id_in_own_segment(id)
     }
 
     /// 本 World 的 id 段长度（0 = 未登记）。

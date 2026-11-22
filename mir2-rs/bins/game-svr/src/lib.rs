@@ -1046,7 +1046,8 @@ impl ZoneState {
             world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
         }
         world.set_id_base(zone_id_base(zone));
-        // **L2-5 ④b-0**：登记段长（外来 id 归属校验；本区 id 不得走外来插入路径）。
+        // **L2-5 ④b-0 / own-segment 修正**：登记段长（供分配器越段断言；`bind_foreign`
+        // **不**断言段归属——id 段是分配来源，不是当前归属，跨区迁移的实体保留原段 id）。
         world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         Self {
             world,
@@ -24224,14 +24225,15 @@ mod perf_counters {
 
     // ---- L2-5 ③ 段 4：handoff 读数（mirror_metrics 的累计原子 → 每 tick 增量列）----
     /// 上一次写行时的累计值（下标 = 下面 [`handoff_snapshot`] 的顺序）。
-    static HANDOFF_LAST: [AtomicU64; 11] = [const { AtomicU64::new(0) }; 11];
+    static HANDOFF_LAST: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 
     /// 累计读数的固定顺序：offered / accepted(=promoted+inserted) / refused / promoted /
     /// inserted_fresh / shadowed（总）/ shadowed_static / shadowed_handoff / dup_dropped /
-    /// write_refused_cell / write_refused_occupied。
+    /// write_refused_cell / write_refused_occupied / **mirror_own_segment_ids /
+    /// handoff_fresh_own_segment**（后两项信息性：本段 id 的镜像/回迁插入，非 0 正常）。
     ///
     /// **L2-5 ④b**：遮蔽按本地实体类别拆两列后，**报告与判据一律看分量**（总数只作对账）。
-    fn handoff_snapshot() -> [u64; 11] {
+    fn handoff_snapshot() -> [u64; 13] {
         let promoted = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted();
         let inserted = mir2_world_bevy::mirror_metrics::handoff_inserted_fresh();
         [
@@ -24246,13 +24248,16 @@ mod perf_counters {
             mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped(),
             mir2_world_bevy::mirror_metrics::mirror_write_refused_cell(),
             mir2_world_bevy::mirror_metrics::mirror_write_refused_occupied(),
+            // **L2-5 own-segment 修正**：信息性（段是分配来源、不是当前归属）。
+            mir2_world_bevy::mirror_metrics::mirror_own_segment_ids(),
+            mir2_world_bevy::mirror_metrics::handoff_fresh_own_segment(),
         ]
     }
 
     /// 本 tick 增量（与其它列同为「写行即清零」口径）。
-    fn handoff_deltas() -> [u64; 11] {
+    fn handoff_deltas() -> [u64; 13] {
         let cur = handoff_snapshot();
-        let mut out = [0u64; 11];
+        let mut out = [0u64; 13];
         for (i, c) in cur.iter().enumerate() {
             let prev = HANDOFF_LAST[i].swap(*c, Ordering::Relaxed);
             out[i] = c.saturating_sub(prev);
@@ -24408,7 +24413,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24487,6 +24492,8 @@ mod perf_counters {
             hd[8],
             hd[9],
             hd[10],
+            hd[11],
+            hd[12],
             // **L2-5 ④a**：区 k 命令接线 / ④b 缺口基线 / 区 k 换图帧降级（均为本 tick 增量）。
             ZONE_CMD_UNSUPPORTED.swap(0, Ordering::Relaxed),
             HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.swap(0, Ordering::Relaxed),
@@ -120384,7 +120391,7 @@ mod l2_zone_id_base_tests {
 
     use super::*;
     use crate::zone_wiring::plan_zone_mode;
-    use mir2_world_bevy::{CellType, EntitySpawn, MirrorSpec, World};
+    use mir2_world_bevy::{CellType, EntitySpawn, HandoffAccept, MirrorSpec, MirrorUpsert, World};
 
     fn zone(n: u32) -> zone::ZoneId {
         zone::ZoneId::new(n)
@@ -120478,7 +120485,7 @@ mod l2_zone_id_base_tests {
             check_zone_id_base(zone(1), &used).is_err(),
             "已分配后起点 ≠ 基址 + 1 ⇒ 必须报错"
         );
-        // 段长未登记 ⇒ 外来 id 归属校验不生效 ⇒ 启动门必须拒绝。
+        // 段长未登记 ⇒ 分配器越段断言不生效 ⇒ 启动门必须拒绝。
         let mut no_seg = World::with_maps(vec![(8, 8)]);
         no_seg.set_id_base(zone_id_base(zone(0)));
         assert!(
@@ -120487,18 +120494,10 @@ mod l2_zone_id_base_tests {
         );
     }
 
-    /// **外来 id 归属牙**：本区段 id 走「外来插入」路径 ⇒ 必须 panic（否则会掩盖分配错误）。
-    /// 红检：删掉 `bind_foreign` 的归属断言 ⇒ 本用例不再 panic ⇒ 红。
-    #[test]
-    #[should_panic(expected = "落在本区段")]
-    fn foreign_insert_rejects_local_segment_id() {
-        let mut world = World::with_maps(vec![(8, 8)]);
-        world.set_id_base(zone_id_base(zone(0)));
-        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
-        // 本区段（区 0）的 id 走了外来路径 ⇒ 断言必须触发。
-        let _ = world.upsert_mirror(MirrorSpec {
-            id: zone_id_base(zone(0)) + 7,
-            name: "local-as-foreign".to_string(),
+    fn mirror_spec(id: i32, name: &str) -> MirrorSpec {
+        MirrorSpec {
+            id,
+            name: name.to_string(),
             map_id: 0,
             x: 1,
             y: 1,
@@ -120516,7 +120515,101 @@ mod l2_zone_id_base_tests {
             fixed_hide_mode: false,
             ob_mode: false,
             master: None,
-        });
+        }
+    }
+
+    /// **own-segment 修正牙 ①**：分配器**不越段**——区 1 的世界连续分配 2000 个 id，全部落在
+    /// `(base, base + SEGMENT)` 内。
+    ///
+    /// 这是「号段不混」的唯一不变量（`bind_foreign` 不再断言段归属：id 段是分配来源，不是当前
+    /// 归属）。红检：把 `SlotTable::alloc_id` 的越段断言删掉不会让本用例红（分配器本身正确），
+    /// 所以另配 `allocator_crossing_segment_is_fail_closed` 用人工越段起点钉断言本体。
+    #[test]
+    fn allocator_never_crosses_own_segment() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(1)));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
+        let base = zone_id_base(zone(1));
+        let upper = base + shard::ACTOR_ID_SEGMENT;
+        for _ in 0..2000 {
+            let id = world.add_entity(EntitySpawn::new(0, "x".to_string(), 1, 1));
+            assert!(
+                id > base && id < upper,
+                "分配器越段：id={id} 不在 ({base}, {upper})"
+            );
+        }
+    }
+
+    /// **own-segment 修正牙 ①（断言本体）**：把段长缩到 4、连分 5 个 ⇒ 第 4 个越段 ⇒
+    /// 分配器出口必须 panic（fail-closed）。红检：删 `alloc_id` 的越段断言 ⇒ 本用例不再 panic。
+    #[test]
+    #[should_panic(expected = "分配器越段")]
+    fn allocator_crossing_segment_is_fail_closed() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(1)));
+        world.entities.set_id_segment(4);
+        for _ in 0..5 {
+            let _ = world.add_entity(EntitySpawn::new(0, "x".to_string(), 1, 1));
+        }
+    }
+
+    /// **own-segment 修正牙 ②**：玩家跨到区 0 后，原生区（区 1）从快照收到**本段 id** 的镜像
+    /// ⇒ 不 panic、正常插入（镜像标志真）、`mirror_own_segment_ids` +1、分配器不动。
+    ///
+    /// 真实事故（2026-11-22 1k 2 区）：区 1 收到本段 id 的镜像 ⇒ 旧的 `bind_foreign` 归属断言
+    /// panic ⇒ 整机 abort。id 段是分配来源，不是当前归属。
+    #[test]
+    fn own_segment_mirror_insert_is_allowed_and_counted() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(1)));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
+        let id = world.add_entity(EntitySpawn::new(0, "p".to_string(), 2, 2));
+        assert_eq!(id, zone_id_base(zone(1)) + 1);
+        // 玩家已跨到区 0：本区实体被移除，但快照里还会带它（自 id 回声）。
+        assert!(world.entities.remove(id).is_some());
+        let next_before = world.entities.next_actor_id();
+        let before = mir2_world_bevy::mirror_metrics::mirror_own_segment_ids();
+        let upsert = world.upsert_mirror(mirror_spec(id, "p-echo"));
+        assert_eq!(upsert, MirrorUpsert::Inserted, "本段 id 的镜像必须允许插入");
+        assert_eq!(
+            world.entities.next_actor_id(),
+            next_before,
+            "镜像插入不得推进分配器"
+        );
+        let entity = world.entities.get(id).expect("镜像已入世界");
+        assert!(entity.mirror, "必须是镜像（不是真实体）");
+        assert!(
+            mir2_world_bevy::mirror_metrics::mirror_own_segment_ids() > before,
+            "must count own-segment mirror insert"
+        );
+    }
+
+    /// **own-segment 修正牙 ③**：handoff 把玩家**送回原生区**时，目标区没有该 id ⇒ fresh 插入
+    /// 本段 id 必须成功、`next_id` 不变、`handoff_fresh_own_segment` +1。
+    #[test]
+    fn handoff_back_to_origin_fresh_insert_keeps_next_id() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(1)));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
+        let id = world.add_entity(EntitySpawn::new(0, "p".to_string(), 2, 2));
+        assert!(world.entities.remove(id).is_some());
+        let next_before = world.entities.next_actor_id();
+        let before = mir2_world_bevy::mirror_metrics::handoff_fresh_own_segment();
+        let accepted = world.handoff_accept(&mirror_spec(id, "p-back"));
+        assert_eq!(accepted, HandoffAccept::Inserted, "回原生区必须直接落真身");
+        assert_eq!(
+            world.entities.next_actor_id(),
+            next_before,
+            "fresh 插入不得推进分配器"
+        );
+        assert!(
+            world.entities.get(id).is_some_and(|e| !e.mirror),
+            "回迁落的是真实体"
+        );
+        assert!(
+            mir2_world_bevy::mirror_metrics::handoff_fresh_own_segment() > before,
+            "must count handoff fresh own-segment insert"
+        );
     }
 
     /// **两区 id 集合不相交**（第②步镜像/出现帧的前提：`recog` 不得撞车）。

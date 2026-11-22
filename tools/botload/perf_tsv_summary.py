@@ -55,6 +55,9 @@ HANDFOFF_COLS = [
     "handoff_dup_dropped",
     "mirror_write_refused_cell",
     "mirror_write_refused_occupied",
+    # **own-segment 修正**：信息性列（本段 id 的镜像/回迁插入；非 0 正常，突发变化才查）。
+    "mirror_own_segment_ids",
+    "handoff_fresh_own_segment",
 ]
 # L2-5 ④a 追加的区 k 缺口列：有就打印（新二进制），没有就标注 absent（旧产物仍可读）。
 ZONE_K_COLS = [
