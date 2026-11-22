@@ -27,29 +27,37 @@
    `barrier1` 之后**（`barrier1` 时全部区已完成上一 tick 全部产帧，不加会合点）。按总监规则
    「测不出差别默认 V2」，**选 V2**（§1.4 给对比与判据），并用 `src_tick < 当前 tick` 过滤把
    延迟钉死为**恰好** 1 tick。
-5. **本步实测覆盖面只有「区 0 发送者 → 区 k 收件人」**：计划页 §12.8 残余 2 已写死「区 k 目前
-   不出网关帧」。反问方向（区 k 发送者）要等区 k 有自己的 host 循环，**登记为前置缺口**，本步
-   不做，也不得在验收里假装覆盖（§0.1）。
+5. **本步实测覆盖面不是「全向全通」**：区 0→区 k 六面全量；区 k→区 0 只有**移动类 RefMsg**
+   （区 k 无 host 循环，但 `handle_move_cmd → broadcast_ref_msg` 会产 RefMsg 面）。验收结论必须
+   带方向限定（§0.1）。
 
 ### 0.1 实测覆盖面（先说边界）
 
-今天六面的**全部产生点都在区 0 的 host 循环**里；区 k 线程（`spawn_minimal_zone`）只跑
-`phase1 → snapshot → barrier1 → apply_mirrors → phase2 → barrier2`，外加移动命令 / 断线 /
-handoff。⇒ ⑤ 今天能验证的方向只有 **区 0 发送者 → 区 k 收件人**（区 0 世界里的镜像带 route）。
-反向（区 k 的怪/NPC/玩家广播给区 0 或其它区）**今天根本不产生事件**，不是「生成了但发不到」。
+区 k 线程（`spawn_minimal_zone`）跑 `phase1 → snapshot → barrier1 → apply_mirrors → phase2 →
+barrier2`，外加移动命令 / 断线 / handoff。**移动命令路径**（`handle_zone_command` →
+`handle_move_cmd` → `broadcast_ref_msg`）会产 **RefMsg 面**的帧；`hear_targets` 在区 k 的 World
+里能看到邻区玩家的**镜像**（带 route）⇒ ⑤ 的邮箱一旦在区 k 安装，**移动类 RefMsg 的
+区 k → 区 0/其它区方向也立即打通**（这是本设计按「每区都有 sink」写接线的直接收益）。
 
-- 设计按「每区都有自己的 host 循环」写接线点（同一个 `CrossZoneSink`），避免区 k 接 host 时
-  二次改造；
-- **验收只对区 0→区 k 方向立**；区 k→区 0 方向在「区 k 帧产生循环」落地前不列入验收，也不得
-  用「missing=0」暗示反向已通。
+但区 k **没有 host 循环**，所以六面里的其余五面（`run_frames` / `npc_merchant` /
+`feature_changed` / `mountride` / `merchant_disappear`）、AOI 出现/消失、登录/进图、
+战斗/技能/物品/商店/聊天/53/657 **都不在区 k 产生**（计划页 §12.8 残余 2）。⇒ ⑤ 的实测覆盖面是：
+
+- **区 0 → 区 k**：六面全量；
+- **区 k → 区 0/其它区**：**只有移动类 RefMsg**（区 k 唯一已接的 host 式路径）。
+
+**任何 `missing=0` 的结论必须带这两句限定**；反向的其余五面与 AOI/战斗等要等区 k 有自己的
+host 循环（另立路线项）。
 
 ### 0.2 既有事实（符号锚；不重查）
 
 - 六面 = `perf_counters::CrossRecipientSurface::{RefMsg, RunFrames, NpcMerchant, FeatureChanged,
   MountRide, MerchantDisappear}`；计数点条件 = 收件人 id 来自 World 扫描/缓存、本地会话查表
   **未命中**、且 World 里 `mirror == true`。
-- 缺口成因：`region_loop::apply_mirrors` 构造 `world_bevy::MirrorSpec` 时**没有 route 字段**，
-  快照里的 `HaloEntity::route` 被丢弃 ⇒ 收件区无法把帧路由给跨区会话。
+- 缺口成因：快照里的 `HaloEntity::route` **没有落到世界侧**（`apply_mirrors` 只 upsert 镜像
+  外观，不保存 route）⇒ 收件区无法把帧路由给跨区会话。**实现**把 route 存进
+  `World::mirror_routes`（`set_mirror_route`），与镜像同生命周期；**不扩 `MirrorSpec`**（避免
+  20 处字面量与 offer 载荷膨胀）。
 - `HaloRoute` 只在 `race == Play` 且在线登记命中时 `Some`；非玩家/未登记 ⇒ `None`。
 - `region_loop::CrossZoneOutbox` 是 ② 的**测试 rig**（`EmitterCriterion::RecipientZone`），
   **生产未接线**；本步要的是生产形态的跨区帧邮箱，不复用它当生产队列。
@@ -199,7 +207,7 @@ A/V2   : L(T) 全部照旧在 T 内发；X(T) 全部推迟到 T+1 barrier1 之�
 
 ### 2.1 方案 A：非对称延迟（只跨区帧延 1 tick）
 
-- **实现面**：`MirrorSpec`/`World` 存镜像 route；六面在「本地会话未命中且 mirror」处改为
+- **实现面**：`World::mirror_routes` 存镜像 route（`apply_mirrors` 写）；六面在「本地会话未命中且 mirror」处改为
   `classify_and_enqueue`；按 (dst, src) 的邮箱；收件区 `barrier1` 之后排水（V2，`src_tick`
   过滤保确定性）。
   本地帧路径**一行不改**。
@@ -324,8 +332,8 @@ V2 的 `barrier1` 排水点保证，「全序位置」由 §1.1 的段序推出�
 
 1. **构造入口**：`CrossZoneMailboxes` 只在 `slicing == 1 && mirror_enabled` 时构造
    （`run_inner`）；测试 `cross_zone_mailboxes_absent_without_slicing` 断言 `None`。
-2. **route 字段**：N=1 不调用 `apply_mirrors`，`MirrorSpec::route` 只由 `apply_mirrors` 填；
-   测试 `mirror_spec_route_fields_default_none`（`mirror_spec_for` 的手动 offer 路径 `None`）。
+2. **route 字段**：N=1 不调用 `apply_mirrors`，`World::mirror_routes` 只由 `apply_mirrors` 写；
+   测试 `mirror_route_lifecycle`（upsert 后写入；remove/promote 后清除）。
 3. **计数**：`counting_recipients_enabled()` 闸扩展覆盖 `delivered/unroutable/overflow`；
    测试 `slicing_off_counts_nothing_three_buckets`（切片关 ⇒ 四列全 0）。
 4. **排水点**：V2 的 `barrier1` 后排水只在切片路径存在；N=1 走 `world.tick_tail`、无
@@ -391,10 +399,14 @@ V2 的 `barrier1` 排水点保证，「全序位置」由 §1.1 的段序推出�
 **恒等式（结构保证，不是事后核对）**：
 
 ```text
-cross_recipient_missing (合计) == cross_recipient_delivered
-                               + cross_recipient_unroutable
-                               + cross_frame_queue_overflow
+cross_recipient_missing (窗口合计) == cross_recipient_delivered
+                                   + cross_recipient_unroutable
+                                   + cross_frame_queue_overflow
 ```
+
+> 逐行（单 tick）可能因「区 k 线程 increment」与 host `write_tick` 的多个原子 swap 交错而错一
+> 拍；每个 incidence 同时给「六面」与「一个结果桶」各 +1 ⇒ **窗口合计严格相等**，脚本按窗口
+> 校验（不是逐行）。
 
 - 每个面计数仍 +1（六面列照旧），同时恰好一个结果桶 +1 ⇒ 恒等式由构造保证。
 - `drop_closed` 是「已交付到网关、但 socket/gate 已关」的诊断，**不**再加进三桶（否则重复计）。
@@ -450,7 +462,7 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
 
 **变异清单（逐支，恢复后 sha 回合）**：
 
-1. 删 route 传递（`apply_mirrors` 不填 `MirrorSpec::route`）⇒ T1 红、T7 红；
+1. 删 route 传递（`apply_mirrors` 不写 `World::mirror_routes`）⇒ T1 红、T7 红；
 2. **破掉结构性恰一次**（收件区本地路径也发同一事件 / 源区入队两次）⇒ T4 红
    （对应总监清单的「去重键」一支；本设计**没有**去重键，故改为破结构约束，而不是删键）；
 3. **排水挪相位**（barrier1 之后 → phase2 之后 / barrier1 之前）⇒ T7 红；
@@ -461,10 +473,11 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
 
 ## 9. 交付顺序（最先落地的「单事件跑通」最小切片）
 
-1. **route 传递**：`world_bevy::MirrorRoute { line, socket }`；`MirrorSpec::route`；
-   `World::mirror_routes` 随 `upsert_mirror` / `remove_mirror` / 提升（`handoff_accept`）同生共死；
-   `region_loop::HaloRoute` 改为 `MirrorRoute` 的别名/复用；`apply_mirrors` 填
-   `e.route`；`mirror_spec_for`（offer）置 `None`。单测 route 往返 + 清扫移除。
+1. **route 传递**：`world_bevy::MirrorRoute { line, socket }`；`World::mirror_routes`
+   （**不扩 `MirrorSpec`**：避免 20 处字面量与 offer 载荷膨胀）。`apply_mirrors` 在 `upsert_mirror`
+   成功后 `set_mirror_route(e.actor_id, e.route)`，`RefusedOccupied`/`RefusedCell` 清空；
+   `remove_mirror` / `promote_mirror_to_real` / `handoff_accept(AlreadyHeld)` 清空；
+   `region_loop::HaloRoute` = `MirrorRoute` 的别名。单测 route 往返 + 清扫移除。
 2. **邮箱 + sink**：`CrossZoneMailboxes`（按 dst，内含按 src 的槽）、`CrossZoneSink`（源区写、
    不暴露 gates）；只在 `slicing && mirror` 构造（I4 闸 + 测试）。
 3. **单个面**：先接 `RefMsg` 的 `send_ref_msg_to_targets` 未命中支（同一嵌套处
