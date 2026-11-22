@@ -6,8 +6,10 @@
 
 ## 0. 为什么必须做第七面（调查结论）
 
-`drain_depart_frames` 对「观察者是镜像/无网关坐标」逐个 WRN + 跳过 `SM_DISAPPEAR(30)`，实测约
-**305 行/秒**。收件区的本地 AOI **部分覆盖**这条消失（`remove_mirror` → `record_departure_of`
+`drain_depart_frames` 对「观察者是镜像/无网关坐标」逐个 WRN + 跳过 `SM_DISAPPEAR(30)`。实测
+**单区/切片窗口都在 15–120 行/秒**（`hin-mv-n1` 13,723 行/165s ≈ 83/s；`retest-1k` 18,271 行/165s；
+`1z-210502` 19,935 行/396s；`hin-mv-2z` 19,968 行/166s），早期记录的「305 行/秒」未能在产物中
+复现为**持续**速率（按整窗口重算），按区间引用。收件区的本地 AOI **部分覆盖**这条消失（`remove_mirror` → `record_departure_of`
 → 观察者下一次 `search_view_range` 的 `departure_mark` hide → `drain_aoi_disappear`），但与
 oracle 的 `DisappearA` 有三条硬差距：
 

@@ -27,6 +27,11 @@
   python -I -B tools/botload/perf_tsv_summary.py --selftest
 
 退出码：0 = 摘要完整；2 = 输入不可判（缺列/无行/宽不一/JSON 坏/缺 report），**fail-closed**。
+
+**旧产物警告（2026-11-23）**：writer 修复（vals 与表头列名对齐）**之前**的 perf TSV，按列名读在错位段
+之后是错的；受影响列（⑤ outcome、handoff/zone/own-segment，以及 legacy 七面）必须先用
+``tools/hygiene/tsv_recompute_legacy.py --tsv <perf_counters.tsv>`` 按**旧 vals 位置**回算。
+本脚本的 legacy 分支只保证六面 / ``cross_recipient_missing``（错位段之前）与「seven = 六面」。
 """
 import argparse
 import json

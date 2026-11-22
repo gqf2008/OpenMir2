@@ -24442,10 +24442,10 @@ mod perf_counters {
     /// **不是**去重 observer 数）。与 `DepartWarnLimiter` 的 `suppressed` 同语义。
     static DEPART_WRN_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
 
+    /// **第七面 WRN 限流**：本 tick 被抑制的 WRN **条数**（日志指标；**不受** `SLICING_ENABLED`
+    /// 门控——N=1 窗口也要能读出；与 `CROSS_RECIPIENT_BY_SURFACE` 的切片门控分开）。
     pub(crate) fn note_depart_wrn_suppressed() {
-        if SLICING_ENABLED.load(Ordering::Relaxed) {
-            DEPART_WRN_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-        }
+        DEPART_WRN_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
     }
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
@@ -124142,6 +124142,26 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(l.should_log(60_001), None);
     }
 
+    /// **P1 回归（0c/opc-27 复核 2026-11-23）**：抑制数是**日志指标**，不受 `SLICING_ENABLED`
+    /// 门控——单区窗口也要能从 TSV 读出（实测单区 `hin-mv-n1` 13,723 行/165s、1z 19,935 行）。
+    /// 回退成门控版 ⇒ 这些窗口计数恒 0 ⇒ 本用例红。
+    #[test]
+    fn depart_wrn_suppressed_count_readable_with_slicing_off() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(false);
+        let before = perf_counters::depart_wrn_suppressed();
+        perf_counters::note_depart_wrn_suppressed();
+        perf_counters::note_depart_wrn_suppressed();
+        let after = perf_counters::depart_wrn_suppressed();
+        perf_counters::set_slicing_enabled(true);
+        assert!(
+            after >= before + 2,
+            "slicing off 时抑制数也必须累加（before={before}, after={after}）"
+        );
+    }
+
     /// **L2-5 ⑦ 七面恒等式**：六面 + 第七面各触发一次 ⇒
     /// `七面合计 == delivered+unroutable+overflow`，六面小计只含六面。
     #[test]
@@ -124222,6 +124242,12 @@ mod perf_writer_alignment_tests {
             .unwrap_or_else(|e| e.into_inner());
         perf_counters::set_slicing_enabled(true);
         perf_counters::reset_cross_recipient_missing_for_tests();
+        let path =
+            std::env::temp_dir().join(format!("mir2_perf_writer_{}.tsv", std::process::id()));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        // 基线行：把 handoff 的 `HANDOFF_LAST` 与各 `swap(0)` 计数对齐到当前全局值
+        // （避免同进程别的用例留下的增量混进下一行）。
+        perf_counters::write_tick();
         // 7 次 incidence：六面各 1 + 第七面 1；桶 5/1/1。
         perf_counters::note_cross_recipient_outcome(S::RefMsg, O::Delivered);
         perf_counters::note_cross_recipient_outcome(S::RunFrames, O::Unroutable);
@@ -124230,15 +124256,27 @@ mod perf_writer_alignment_tests {
         perf_counters::note_cross_recipient_outcome(S::MountRide, O::Delivered);
         perf_counters::note_cross_recipient_outcome(S::MerchantDisappear, O::Delivered);
         perf_counters::note_cross_recipient_outcome(S::DepartFrames, O::Delivered);
-        let path =
-            std::env::temp_dir().join(format!("mir2_perf_writer_{}.tsv", std::process::id()));
-        perf_counters::init_with_path(&path).expect("init perf tsv");
+        // **P2**：handoff/zone/own 用**互异非零**值（11/22/33/44），挡住「zone 三列 ↔
+        // own 两列」或 handoff 内部再顺序弄错——全 0 的尾部对任何换位都不敏感。
+        for _ in 0..11 {
+            mir2_world_bevy::mirror_metrics::note_handoff_offered();
+        }
+        for _ in 0..22 {
+            let _ = perf_counters::note_zone_cmd_unsupported(0);
+        }
+        for _ in 0..33 {
+            mir2_world_bevy::mirror_metrics::note_mirror_own_segment_id();
+        }
+        for _ in 0..44 {
+            mir2_world_bevy::mirror_metrics::note_handoff_fresh_own_segment();
+        }
         perf_counters::write_tick();
         let text = std::fs::read_to_string(&path).expect("read perf tsv");
         perf_counters::reset_writer_for_tests();
         let _ = std::fs::remove_file(&path);
         let mut lines = text.lines();
         let header: Vec<&str> = lines.next().expect("header").split('\t').collect();
+        let _baseline = lines.next().expect("baseline row");
         let row: Vec<&str> = lines.next().expect("row").split('\t').collect();
         let idx = |name: &str| header.iter().position(|h| *h == name).expect(name);
         let val = |name: &str| row[idx(name)].parse::<u64>().expect(name);
@@ -124255,6 +124293,11 @@ mod perf_writer_alignment_tests {
         assert_eq!(val("cross_recipient_unroutable"), 1);
         assert_eq!(val("cross_frame_queue_overflow"), 1);
         assert_eq!(val("depart_wrn_suppressed"), 0);
+        // **P2**：尾部三块按列名钉值（表头顺序 = 11 → 22 → 33 → 44；换位即红）。
+        assert_eq!(val("handoff_offered"), 11, "handoff 11 列");
+        assert_eq!(val("zone_cmd_unsupported"), 22, "zone-k 3 列");
+        assert_eq!(val("mirror_own_segment_ids"), 33, "own-segment 2 列");
+        assert_eq!(val("handoff_fresh_own_segment"), 44, "own-segment 2 列");
     }
 }
 
