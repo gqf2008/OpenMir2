@@ -10536,9 +10536,14 @@ impl World {
                 continue;
             };
             {}
+            // **L2-5 ② 段 6**：镜像不参与死亡结算。**当前代码下这条本来恒成立**（镜像 hp 取
+            // 构造缺省 100、`die_called=false`），本守卫是**把不变量写成判据**：将来若镜像开始
+            // 复制 hp（帧 53/100 面）或任何路径把镜像 hp 置 0，不得触发 `Die()` 的掉落/经验/
+            // 尸体链。牙由「用例把镜像 hp 置 0」的变异造出（见 `step2_mirror_isolation_death`）。
             if (e.hp == 0 || e.die_called)
                 && !e.death_settled
                 && !e.ghost
+                && !e.mirror
                 && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
             {
                 dead.push(id);
@@ -15387,6 +15392,55 @@ mod tests {
         assert_eq!(hp, Some(100), "镜像 HP 不得下降");
         assert_eq!(hits, 0, "不得记 record.attacks（否则会出伤害/受击帧）");
         assert_eq!(delayed, 1, "cross_hit_delayed 必须计数");
+    }
+
+    /// **段 6（C9）**：镜像不参与死亡结算——即使把镜像 hp 置 0（模拟将来 hp 被镜像的风险），
+    /// 也不得触发 `death_settled` / `MakeGhost` / `death_tick` 推进（掉落与经验链的前置）。
+    ///
+    /// **诚实口径**：当前代码下 `!e.mirror` 恒成立（镜像 hp=100、`die_called=false`），所以
+    /// 这条守卫是「把不变量写成判据」；本用例**故意**把镜像 hp 置 0 造出变异面。
+    ///
+    /// 红检：删 `settle_deaths_impl` 候选条件的 `!e.mirror` ⇒ `death_settled=true` 且
+    /// `death_tick` 被推进 ⇒ 红。
+    #[test]
+    fn step2_mirror_isolation_death() {
+        let mut w = World::new(32, 32);
+        assert_eq!(
+            w.upsert_mirror(crate::MirrorSpec {
+                id: 900,
+                name: "mirror".to_string(),
+                map_id: 0,
+                x: 5,
+                y: 5,
+                view_range: 5,
+                race: 80,
+                race_img: 0,
+                appr: 1,
+                light: 0,
+                name_color: 255,
+                cell_type: crate::CellType::Monster,
+                dir: 0,
+                death: true,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+            }),
+            crate::MirrorUpsert::Inserted
+        );
+        // 变异形：把镜像 hp 置 0（当前不会发生；用来证明守卫真的挡得住）。
+        if let Some(e) = w.entities.get_mut(900) {
+            e.vitals.hp = 0;
+        }
+        let rec = w.tick();
+        let e = w.entities.get(900).expect("镜像在");
+        assert!(e.death, "快照的 death 必须保留");
+        assert!(!e.death_settled, "镜像不得被死亡结算");
+        assert!(!e.ghost, "不得 MakeGhost");
+        assert_eq!(e.death_tick, 0, "死亡结算不得推进 death_tick");
+        assert!(rec.skeletons.is_empty(), "不得产生尸体/骷髅事件");
+        assert!(rec.death_use_item_drops.is_empty(), "不得产生玩家掉落");
     }
 
     /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。
