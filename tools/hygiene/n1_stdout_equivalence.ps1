@@ -76,7 +76,11 @@ function ConvertTo-N1Line {
   $Line = [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
   # `世界时钟变化：Bright=<n>`：昼夜由**墙钟日期**派生 ⇒ 跨时段两次运行必然不同（1 vs 2），
   # 不是产品差异 ⇒ 归一化为 `Bright=<n>`（字面取值与总监代修一致，两边 sha 可对账）。
-  return [regex]::Replace($Line, 'Bright=\d+', 'Bright=<n>')
+  $Line = [regex]::Replace($Line, 'Bright=\d+', 'Bright=<n>')
+  # `城堡 N 日期串刷新：… （墙钟 YYYY-MM-DD HH:MM:SS）`：消息体里嵌**墙钟时刻**（每次启动
+  # 的首轮刷新必然不同）⇒ 只归一化时刻本身；`IncomeToday/WarDate` 是语义位，**不**归一化
+  # （两者不同仍判 RED）。
+  return [regex]::Replace($Line, '（墙钟 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}）', '（墙钟 <wallclock>）')
 }
 
 function Get-Sha256Hex {
@@ -294,6 +298,14 @@ function Invoke-Selftest {
   # ⑦b 昼夜值归一化（`Bright=<n>` 由墙钟日期派生，跨时段会变）
   Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 世界时钟变化：Bright=1 ⇒ 向 0 个在线玩家各发一条 SM_DAYCHANGING(46)') -ceq `
       '[INF] 世界时钟变化：Bright=<n> ⇒ 向 0 个在线玩家各发一条 SM_DAYCHANGING(46)') 'clock Bright value normalized'
+
+  # ⑦c 城堡日期串刷新：只归一化消息体里的墙钟时刻（语义位保留 ⇒ 仍能抓真差异）
+  Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 2026-11-22 14:29:50）') -ceq `
+      '[INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 <wallclock>）') 'castle wall-clock normalized'
+  Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 2026-11-22 14:30:10）') -ceq `
+      (ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 2026-11-22 14:29:50）')) 'castle wall-clock: two runs equal'
+  Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=false WarDate=false（墙钟 2026-11-22 14:30:10）') -cne `
+      (ConvertTo-N1Line '00:00:00.000 [INF] 城堡 0 日期串刷新：IncomeToday=true WarDate=false（墙钟 2026-11-22 14:29:50）')) 'castle wall-clock: semantic bit still differs'
 
   # ⑧ DB/IDS 重试环属顺序噪声类：顺序比较剔除、多重集全量
   Assert-True (Test-N1NoiseLine '[ERR] 链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line (real shape with level prefix)'
