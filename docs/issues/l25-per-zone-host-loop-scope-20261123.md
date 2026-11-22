@@ -522,3 +522,18 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 - 索引已权威、维护完整、首匹配等价、有 `debug_assert` + LCG 2000 步对账测试 ⇒ **批量迁移在正确性上安全**；
   「先修日志闸（探针 fail-closed 可对账）→ 再单独提交迁移」的顺序成立。
 - 迁移批次上**唯一不能换**的是 `online_find_for_kick`（非单键）；`set`/`take` 属写路径；其余按测量优先级分批即可。
+
+### 11.7 试点组口径更正（opc-27 2026-11-23 裁决；覆盖§11与试点报告中的说法）
+
+- **debug / release 口径**：`Δchr=2675.7ns`、`5.4µs/移动`、`0.8ms/tick`、`HostAoiDownlink≈1.0ms/tick` 都是**debug 口径**
+  （设计稿 §4 的代入示例）。**release 未测，预计显著更小（约一个量级）**；不得当成 release 收益。
+- **「CHR_LINEAR 归 0」更正为可验证式**（计数器是进程全局的；只迁 4 处不可能全归 0）。相对「迁移前」基线，单区/N=1 口径：
+  - `chr_linear`/tick 应**下降 ≈ 2·ℳ + 2·(n/5)**：`2·ℳ` = `handle_move_cmd` 入口 + `send_good_tick`（ℳ = 本 tick 移动命令处理数）；
+    `2·(n/5)` = `drain_aoi_downlink` 与 `drain_aoi_events` 各约 n/5 个「本 tick 扫过」会话（SearchTime=1000ms / tick=200ms）。
+  - `chr_indexed`/tick 应**等量上升**。
+  - **守恒**：`chr_linear_feat + chr_indexed_feat ≈ chr_linear_base + chr_indexed_base`（总 chr 查找次数不变，只换路径）。
+  - `actor_linear` / `actor_indexed` **不变**（本组只动 chr）。
+  - **基线值**取 a7「仅日志闸」窗口 TSV 的 `chr_linear`/`chr_indexed` 两列（同 bot 场景、同窗口长度取均值）；对账用上式与守恒式，
+    **不依赖任何绝对值预测**。多区下区 k 暂无这些 drain，公式不适用。
+- **合并时序**（opc-27）：日志闸 → 1k 基线 → 2000 基线 → 索引迁移复测；试点组暂不合并。本迁移分支基于 `03b103c25`，
+  master 已到 `e69274b61295`，合并前 rebase 一次。
