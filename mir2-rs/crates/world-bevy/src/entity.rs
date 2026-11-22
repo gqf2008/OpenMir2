@@ -2527,12 +2527,43 @@ impl EntityStore {
     pub(crate) fn inner_resource_departure_mark(
         &self,
         id: i32,
-        now_ms: i64,
     ) -> Option<crate::aoi::DepartureMark> {
         self.inner
             .world()
             .get_resource::<crate::aoi::DepartureMarks>()
-            .and_then(|m| m.get(id, now_ms))
+            .and_then(|m| m.get(id))
+    }
+
+    /// **离场标记维护**：到期项做「还有没有观察者持有」检查——仍被持有 ⇒ 续期；无人持有 ⇒ 丢弃；
+    /// 超硬上限 ⇒ 丢弃并计数（`aoi::departure_mark_held_past_cap`）。
+    pub(crate) fn inner_sweep_departure_marks(&mut self, now_ms: i64) {
+        let expired = match self
+            .inner
+            .world()
+            .get_resource::<crate::aoi::DepartureMarks>()
+        {
+            Some(m) => m.expired_ids(now_ms),
+            None => return,
+        };
+        if expired.is_empty() {
+            return;
+        }
+        // 成员检查：无反向索引 ⇒ 遍历可见集（标记很少、到期才扫）。
+        let mut held = std::collections::HashSet::new();
+        for v in self.iter_ref() {
+            for vb in v.visible_actors {
+                if expired.binary_search(&vb.target).is_ok() {
+                    held.insert(vb.target);
+                }
+            }
+        }
+        if let Some(mut marks) = self
+            .inner
+            .world_mut()
+            .get_resource_mut::<crate::aoi::DepartureMarks>()
+        {
+            marks.renew_or_drop(&expired, &held, now_ms);
+        }
     }
 
     /// 受控读取位置/视野组件（S3b 起真值在组件，不在 `Entity`）。
