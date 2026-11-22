@@ -2597,11 +2597,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     mode.max_halo_band_entities,
                     zone::ENV_MAX_HALO_BAND_ENTITIES
                 );
-                glog!(
-                    "WRN",
-                    "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
-                    zone_count - 1
-                );
+                if slicing {
+                    glog!(
+                        "INF",
+                        "区 1..{} 为切片区：真 World（全图网格 + 每区 rng）；登录落区在 L2-5 ③ 段 1 接入",
+                        zone_count - 1
+                    );
+                } else {
+                    glog!(
+                        "WRN",
+                        "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
+                        zone_count - 1
+                    );
+                }
                 if mirror_enabled {
                     glog!(
                         "INF",
@@ -29703,6 +29711,1321 @@ fn sample_reply_pending_after_drain(len: u64) -> Option<String> {
     telemetry::record_reply_pending(len)
 }
 
+/// **L2-5 ③ 段 1a**：登录完成块（`DBR_LOADHUMANRCD` 回执 → 进图/出帧）的**机械搬移**载体。
+///
+/// **纯搬移**：字段只收集原块捕获的 `sim_loop` 局部/参数；本步不重排、不清理、不改归属。
+/// 段 1b 会在目标区线程用**该区**的 ctx 调同一份 `finish_login`。
+#[allow(clippy::struct_field_names)]
+struct LoginCtx<'a> {
+    world: &'a mut mir2_world_bevy::World,
+    displays: &'a mut downlink::DisplayTable,
+    online: &'a mut OnlineRegistry,
+    ground_sessions: &'a mut std::collections::HashMap<String, SessionGround>,
+    saves: &'a mut std::collections::HashMap<String, SavedHuman>,
+    engine: &'a mut load::FrontEngine,
+    gates: &'a mut std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    login_tails: &'a mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    aoi_frames_total: &'a mut std::collections::HashMap<String, usize>,
+    reconnect_pending: &'a mut Vec<ReconnectPending>,
+    kick_pending: &'a mut Vec<String>,
+    pwd_sessions: &'a mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    npc_host: &'a mut Option<game_svr::npc::NpcHost>,
+    guilds: &'a mut mir2_world_bevy::GuildManager,
+    npc_vars_base: &'a mut game_svr::npc::NpcVars,
+    enter_cfg: &'a EnterConfig,
+    shard_runtime: &'a mut shard::ShardRuntime,
+    registry: &'a Option<mir2_envir::MapRegistry>,
+    server_table: &'a Vec<RouteInfo>,
+    notice: &'a Vec<u8>,
+    shard_directory: &'a Option<shard_router::ShardDirectory>,
+    magic_table_arc: &'a std::sync::Arc<magics::MagicTable>,
+    gm_filter_word: &'a std::cell::Cell<bool>,
+    gm_mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
+    gm_spirit_mutiny_tick: &'a std::cell::Cell<i64>,
+    local_shard: shard::ShardId,
+    reply: &'a dbclient::Reply,
+    socket: i32,
+    gate_idx: i32,
+    soft_version_date: i32,
+    session_id: i32,
+    pay_ment: i32,
+    account: &'a String,
+    item_number: &'a mut i32,
+}
+
+// 纯搬移：块内的 `&world` / `&gates` 等表达式在解构绑定（字段是引用）后成了
+// `needless_borrow`；不改表达式（保持逐句同一），只在本函数放行该 lint。
+#[allow(clippy::needless_borrow)]
+fn finish_login(ctx: &mut LoginCtx<'_>) {
+    let LoginCtx {
+        world,
+        displays,
+        online,
+        ground_sessions,
+        saves,
+        engine,
+        gates,
+        login_tails,
+        aoi_frames_total,
+        reconnect_pending,
+        kick_pending,
+        pwd_sessions,
+        npc_host,
+        guilds,
+        npc_vars_base,
+        enter_cfg,
+        shard_runtime,
+        registry,
+        server_table,
+        notice,
+        shard_directory,
+        magic_table_arc,
+        gm_filter_word,
+        gm_mission,
+        gm_spirit_mutiny_tick,
+        local_shard,
+        reply,
+        socket,
+        gate_idx,
+        soft_version_date,
+        session_id,
+        pay_ment,
+        account,
+        item_number,
+    } = ctx;
+    // Copy 标量：从 `&mut` 绑定拷出（纯搬移的显式化）；`item_number` 拷入 + 末尾写回，
+    // 因为原块以 `&mut item_number` 传参（不允许为抽取改行为）。
+    let local_shard = *local_shard;
+    let reply = *reply;
+    let socket = *socket;
+    let gate_idx = *gate_idx;
+    let soft_version_date = *soft_version_date;
+    let session_id = *session_id;
+    let pay_ment = *pay_ment;
+    let account = *account;
+    let mut item_number = **item_number;
+    // 可变字段：解构出来的是 `&mut &'a mut T`；重新借用成 `&mut T`（纯搬移的显式化）。
+    let world = &mut **world;
+    let displays = &mut **displays;
+    let online = &mut **online;
+    let ground_sessions = &mut **ground_sessions;
+    let saves = &mut **saves;
+    let engine = &mut **engine;
+    let gates = &mut **gates;
+    let login_tails = &mut **login_tails;
+    let aoi_frames_total = &mut **aoi_frames_total;
+    let reconnect_pending = &mut **reconnect_pending;
+    let kick_pending = &mut **kick_pending;
+    let pwd_sessions = &mut **pwd_sessions;
+    let npc_host = &mut **npc_host;
+    let guilds = &mut **guilds;
+    let npc_vars_base = &mut **npc_vars_base;
+    let shard_runtime = &mut **shard_runtime;
+    // **入口三段计数 ②**：拿到角色数据、开始进世界流程。只计数、不改分支。
+    if let Some(line) = telemetry::record_attempt() {
+        glog!("INF", "{}", line);
+    }
+    // **orphan 编码器/搜索基准（卡 `openmir2-searchtick-origin-parity`）**：
+    // oracle `PlayObject.cs:901` 的 `SearchTick = GetTickCount()` 在
+    // `new PlayObject()`（`WorldServer.cs:234`，紧跟 `GetPlayData` 之后）写一次，
+    // 早于 `UserLogon`/`AddToMap`，且落图/切图**不重置**。本宿主在这里
+    // （角色记录刚到达 = ctor 等价点）取一次构造基准，进图时传给
+    // `World::enter_map_at`；**不要**再让 `enter_map` 用进图时刻重盖。
+    let login_ctor_tick = world.clock_ms;
+    let payload = mir2_protocol::edcode::decode(&reply.packet);
+    // 头部窗口维持既有控制流（`parse_player_data_head`）；**全字段**
+    // （`parse_player_data`，`openmir2-m2-record-fields`）额外供给入图帧的
+    // 世界/配置层输入（`job`/`game_gold`/`bonus_abil` 等）。两者都解不出才算失败。
+    let head_only = record::parse_player_data_head(&payload);
+    let mut full = record::parse_player_data(&payload);
+    match head_only {
+        Some(head) => {
+            if full.is_none() {
+                glog!(
+                                            "WRN",
+                                            "角色记录全字段解析失败（{} 字节），仅头部窗口可解 ⇒ 入图帧只发有输入的（合成/诊断载荷；真线上 DB 回包恒为全字段）",
+                                            payload.len()
+                                        );
+            }
+            // oracle `WorldServer.cs:248-262`：`MapName = 记录 CurMap`；`HomeMap` 空 ⇒
+            // `GetHomeInfo` 覆盖 `MapName` 与坐标（`-FixedNewChr` 新角色两条都空）。
+            // 缺陷现场与确定性口径见 `homemap` 模块头。
+            // 只有**全字段可解**时才能判定 `HomeMap` 是否为空；仅头部窗口（合成/诊断载荷，
+            // 真线上 DB 回包恒为全字段）保持记录 `CurMap` + 坐标，不假设为空。
+            let rec_home = full
+                .as_ref()
+                .and_then(|r| r.data.home_map.as_deref())
+                .unwrap_or("");
+            let home_empty = full
+                .as_ref()
+                .is_some_and(|r| r.data.home_map.as_deref().unwrap_or("").is_empty());
+            // **准入判据提前**（oracle `WorldServer.cs:503`）：`IsFull` /
+            // `ProcessHumansIsLogined` 的检查在 `ProcessHumansMakeNewHuman`
+            // (`:518`) **之前** ⇒ 重复登录**不构造 PlayObject、不抽数**。
+            let in_save = engine.in_save_rcd_list(&head.chr_name);
+            let in_world = matches!(
+                world.session(&head.chr_name).map(|s| s.stage),
+                Some(mir2_world_bevy::WorldStage::InWorld)
+            );
+            // **oracle `WorldServer.cs:234` 的 `new PlayObject()`（5 抽）**
+            // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
+            // ① HomeMap 出生点抽数（`:254-259`）②落点改写抽数
+            // （`:306-307`/`:339-340`/`:346-347`）③移位环（`:380-381`）。
+            // 只在非重复登录分支抽（重复支 oracle 不构造）——判定与抽数
+            // 同在一处 [`login_ctor_draws_for`]（行为牙见其 doc）。
+            let login_ctor = login_ctor_draws_for(&mut *world, in_save, in_world);
+            let (enter_map_name, home_x, home_y, enter_x, enter_y) = if home_empty {
+                // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
+                //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
+                // 见 `homemap` 模块头的 RNG 抽数账本。同时取出生点**原坐标**
+                //（`MakeSaveRcd` 要写 `HomeX/HomeY`，`:1257-1258`）。
+                enter_cfg.home.new_human_spawn_with_home(&mut world.rng)
+            } else {
+                let hx = full.as_ref().map_or(0, |r| r.data.home_x);
+                let hy = full.as_ref().map_or(0, |r| r.data.home_y);
+                (head.cur_map.clone(), hx, hy, head.cur_x, head.cur_y)
+            };
+            // `is_new_human` 是本轮新角色分支的**唯一判据**（oracle `WorldServer.cs:258`
+            // 的 `if (playObject.Abil.Level == 0)`）；不能拿重算后的 Abil 当门。
+            let abil_level = full
+                .as_ref()
+                .and_then(|r| r.data.abil.as_ref())
+                .map_or(0, |a| a.level);
+            let is_new_human = home_empty && abil_level == 0;
+            // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
+            // 找不到且有非空记录 `HomeMap` 时按 oracle `FindMap==null ⇒ MapName=HomeMap`
+            // 回落（`WorldServer.cs:319-341`）；仍找不到即拒绝进图并记 WRN
+            //（`MapRegistry::require_id`），不许静默退回 0 号占位图。无注册表（S1
+            // `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
+            // **T-202**：oracle `WorldServer.cs:352-368`（`ProcessHumansMakeNewHuman`
+            // 的跨服分支）——`envir = MapMgr.GetMapInfo(ServerIndex, MapName); if (envir
+            // == null)` 时先 `SendSwitchData`（.shr 序列化，未移植，登记）+ 同时
+            // `SendChangeServer`（`SM_RECONNECT`），再 `playObject = null; return`。
+            // 这里的等价条件是下面的 `resolve_enter_map(..)` 返回 `Err`（CurMap 与
+            // 回落 HomeMap 都**不在本服地图表**里）；`resolve_map_id` 是纯查表，
+            // 调两次无抽数、无副作用。
+            // 命中且有路由 ⇒ 排 `SM_RECONNECT`（进图随即失败，下面的 `Err` 臂照旧记
+            // 既有的「拒绝进图」WRN：两条日志互补，不是重复错误）。
+            if mapwire::resolve_enter_map(registry.as_ref(), &enter_map_name, rec_home).is_err() {
+                let _ = try_cross_server_redirect(
+                    &server_table,
+                    &mut world.rng,
+                    registry.as_ref(),
+                    &enter_map_name,
+                    gate_idx,
+                    socket,
+                    &mut *reconnect_pending,
+                );
+            }
+            match mapwire::resolve_enter_map(registry.as_ref(), &enter_map_name, rec_home) {
+                Err(e) => glog!(
+                    "WRN",
+                    "拒绝进图 ChrName:{} CurMap:{}：{e}（真地图注册表里没有这张图）",
+                    head.chr_name,
+                    enter_map_name
+                ),
+                // **P2-2 跨片 fail-closed**：目标图在注册表里但属其它片
+                // ⇒ 明确拒绝（日志 + 计数），不偷偷塞进本片 World（那样会
+                // 因 `map_id >= world.maps.len()` 落到「找不到图」的既有分支，
+                // 错误原因不可读）。handoff 在 P2-5。单片布局下本臂不可达。
+                Ok((final_map_name, map_id)) if !shard_runtime.host_owns(map_id) => {
+                    // 判定/计数/日志文本都在 `guard_cross_shard_enter`
+                    // （可单测、可变异；删掉本臂会让接线用例变红）。
+                    if let Some(line) = shard_runtime.guard_cross_shard_enter(
+                        &head.chr_name,
+                        &final_map_name,
+                        map_id,
+                    ) {
+                        glog!("WRN", "{}", line);
+                    }
+                }
+                Ok((final_map_name, map_id)) => {
+                    // 准入判据（oracle `WorldServer.cs:503` 的
+                    // `!IsFull && !ProcessHumansIsLogined(chr)`）：
+                    // `ProcessHumansIsLogined`（`:200-217`）= `FrontEngine.InSaveRcdList(chr)`
+                    // **或** `PlayObjectList` 有同名。命中 ⇒ 关新（旧仍在世界时再踢旧）；
+                    // 未命中 ⇒ 放行。**判定已提前到 `new PlayObject()` 抽数之前**
+                    // （oracle `:503` 在 `:518` 之前）⇒ 此处不再重算。
+                    if in_save || in_world {
+                        if in_save {
+                            glog!(
+                                "INF",
+                                "角色数据保存中,稍后重新读取. Account:{} ChrName:{}",
+                                head.account,
+                                head.chr_name
+                            );
+                        }
+                        handle_duplicate_enter(
+                            &gates,
+                            &mut *kick_pending,
+                            &head.chr_name,
+                            gate_idx,
+                            socket,
+                            in_world,
+                        );
+                    } else {
+                        let login_ctor = login_ctor
+                            .as_ref()
+                            .expect("非重复登录：oracle new PlayObject() 的 5 抽必已发生");
+                        // oracle `WorldServer.cs:298-350`：进图/死亡落点改写（生产实现在
+                        // `rewrite_enter_position`；**Home 输入取角色记录**，不是 `[Setup]`）。
+                        // **位置**：`resolve_enter_map` 之后、地形移位环之前；抽数走
+                        // **同一条** `world.rng`（X 先 Y 后）。
+                        let (final_map_name, map_id, enter_x, enter_y, die_in_fight3_zone) =
+                            if let Some(r) = full.as_mut() {
+                                let guild_name =
+                                    guild_cmd::materialize(&guilds, &head.chr_name).guild_name;
+                                // `WorldServer.cs:284` 读的是 `envir.Flag.Fight3Zone`
+                                // （MapInfo 的 `FIGHT3`），不是 `FightZone`（`FIGHT`）。
+                                let fight3_zone = registry
+                                    .as_ref()
+                                    .and_then(|reg| reg.flag_of(map_id))
+                                    .is_some_and(|f| f.fight3_zone);
+                                let mut rng = std::mem::replace(
+                                    &mut world.rng,
+                                    mir2_shared::rng::RandomNumber::with_seed(0),
+                                );
+                                let out = rewrite_enter_position(
+                                    &world,
+                                    &mut rng,
+                                    r,
+                                    &final_map_name,
+                                    map_id,
+                                    enter_x,
+                                    enter_y,
+                                    guild_name.as_deref(),
+                                    is_new_human,
+                                    fight3_zone,
+                                    registry.as_ref(),
+                                    &enter_cfg.red_die_home,
+                                );
+                                world.rng = rng;
+                                out
+                            } else {
+                                // 仅头部窗口（合成/诊断载荷）：oracle 恒有全字段记录，
+                                // 本仓无法判定 HP/PkPoint/Home ⇒ **不做**改写、**不抽数**
+                                // （与入图帧「输入不足 ⇒ 跳过」同口径，避免污染 RNG 流水）。
+                                (final_map_name, map_id, enter_x, enter_y, false)
+                            };
+                        // 进世界：`World::open_session` + `enter_map`
+                        // oracle `WorldServer.cs:371-395` 进图前的**地形移位环**：
+                        // 出生/存档格是墙 ⇒ 每轮 `-3+Random(6)`（X 先 Y 后），至多 5 轮；
+                        // 环用尽仍不可走 ⇒ 回落 `[Setup] HomeMap/HomeX/HomeY`。
+                        // 不接这段时墙格出生会「进世界但不入格表」（对他人 AOI 隐身），
+                        // 而 oracle 先移到邻近可走格再落图。
+                        // 抽数走**同一条** `world.rng`；`shift_enter_position` 带
+                        // `#[track_caller]` ⇒ trace 站点落在本文件（`startup` 组，见
+                        // `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`）。
+                        let home_id =
+                            mapwire::resolve_map_id(registry.as_ref(), &enter_cfg.home.home_map)
+                                .ok();
+                        let shift = mapwire::shift_enter_position(
+                            &mut *world,
+                            mapwire::EnterTarget {
+                                map_name: &final_map_name,
+                                map_id,
+                                x: i32::from(enter_x),
+                                y: i32::from(enter_y),
+                            },
+                            mapwire::HomePoint {
+                                map_name: &enter_cfg.home.home_map,
+                                map_id: home_id,
+                                x: i32::from(enter_cfg.home.home_x),
+                                y: i32::from(enter_cfg.home.home_y),
+                            },
+                        );
+                        if shift.home_fallback {
+                            glog!(
+                                                "WRN",
+                                                "进图落格失败，回落 HomeMap ChrName:{} CurMap:{} -> {} ({},{})（oracle WorldServer.cs:388-395）",
+                                                head.chr_name,
+                                                final_map_name,
+                                                shift.map_name,
+                                                shift.x,
+                                                shift.y
+                                            );
+                        }
+                        if let Some(e) = &shift.home_fallback_error {
+                            glog!(
+                                                "ERR",
+                                                "进图回落 HomeMap 解析失败 ChrName:{}：{e}（oracle PEnvir = nil 支）",
+                                                head.chr_name
+                                            );
+                        }
+                        let (final_map_name, map_id) = (shift.map_name, shift.map_id);
+                        let (enter_x, enter_y) = (shift.x as i16, shift.y as i16);
+                        let _ = world.open_session(&head.chr_name);
+                        // **SoftVersionDateEx 同步**（卡 §10）：会话对象**从不删除**、
+                        // `open` 幂等 ⇒ 重登复用同一对象，值必须**每次登录刷新**；
+                        // 缺省 0 且 0 恰=不发 11029（漏设退化为少一帧）。
+                        if let Some(sess) = world.sessions.get_mut(&head.chr_name) {
+                            sess.soft_version_date = soft_version_date;
+                        }
+                        let mut ent = new_player_entity_with_login_ctor(
+                            head.chr_name.clone(),
+                            i32::from(enter_x),
+                            i32::from(enter_y),
+                            login_ctor,
+                            login_ctor_tick,
+                        );
+                        // oracle `GetHumData` 的记录 → `PlayObject` 标量装载
+                        // （`Dir` 与 `WorldServer.cs:1159` 的 `AllowGroupReCall`）；
+                        // 唯一生产入口，测试不得手工置位。
+                        apply_login_record_scalars(&mut ent, full.as_ref().map(|r| &r.data));
+                        // `WorldServer.cs:290`：Fight3Zone 死亡恢复支置位
+                        // `PlayObject.DieInFight3Zone`（随后由登录 `MapRandomMove` 消费；
+                        // 该调用点未移植，位仍按 oracle 保存）。
+                        ent.die_in_fight3_zone = die_in_fight3_zone;
+                        match world.enter_map_at(&head.chr_name, ent, map_id, login_ctor_tick) {
+                            Ok(id) => {
+                                // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
+                                if let Some(line) = telemetry::record_ok(world.clock_ms) {
+                                    glog!("INF", "{}", line);
+                                }
+                                // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
+                                // 会话/actor 重置——同名角色重新登录时清掉上一会话
+                                // 的累计值，避免 `af` 跨登录继承造成假绿。
+                                aoi_frames_total.remove(&head.chr_name);
+                                // 在线登记（`PlayObject.GateIdx`/`SocketId`）：断线、重复进世界
+                                // （踢旧）与账号级顶号都要靠它找回该角色当前的网关连接。
+                                online_set(
+                                    &mut *online,
+                                    OnlineEntry {
+                                        account: account.clone(),
+                                        chr_name: head.chr_name.clone(),
+                                        session_id,
+                                        gate_idx,
+                                        socket,
+                                        actor_id: id,
+                                    },
+                                );
+                                glog!(
+                                    "INF",
+                                    concat!(
+                                        "进世界 ChrName:{} CurMap:{} ({},{}) ",
+                                        "Dir:{} entity={}"
+                                    ),
+                                    head.chr_name,
+                                    final_map_name,
+                                    enter_x,
+                                    enter_y,
+                                    head.dir,
+                                    id
+                                );
+                                // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
+                                // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
+                                // `enter::apply` 装配世界/配置/记录层有输入的帧（51/766/54/11029/1106/
+                                // 5008/811/42/46/50/41/213）；仍缺输入的（52/752 = `RecalcAbilitys`
+                                // 未移植、10 = 世界 tick）保持 `None` 并登记。
+                                let mut inputs = smframe::EnterWorldInputs {
+                                    actor_id: id,
+                                    cur_x: u16::from_ne_bytes(enter_x.to_ne_bytes()),
+                                    cur_y: u16::from_ne_bytes(enter_y.to_ne_bytes()),
+                                    dir: head.dir,
+                                    // 658 `SM_SENDNOTICE`：oracle `PlayObject.SendNotice`
+                                    // 在 `SendLogon` **之前**下发（金标准 #1 在 #2 前），
+                                    // `EnterWorldInputs::frames()` 的序已把它放第一位。
+                                    notice: notice.clone(),
+                                    // G-11：oracle 走 `EDCode.EncodeString(MapFileName)`
+                                    // = GB2312 字节；旧实现用 UTF-8（现网地图名 ASCII 无差）。
+                                    map_file_name: Some(enter::gbk(&final_map_name)),
+                                    ..smframe::EnterWorldInputs::default()
+                                };
+                                // oracle `WorldServer.cs:250-262`：`HomeMap` 为空的回落分支
+                                // **与 `Abil.Level == 0` 解耦**——非新角色同样把
+                                // `HomeMap/HomeX/HomeY/MapName/CurrX/CurrY` 写回记录
+                                // （`MakeSaveRcd:1256-1282` 存的就是这些会话值），只有
+                                // `Abil.Level == 0` 才额外做新手能力/物品初始化。
+                                // 旧实现把两半都关在 `is_new_human` 里 ⇒ 非新角色且 DB
+                                // `HomeMap` 为空时记录恒空，每次登录都重新抽出生点（F1）。
+                                if home_empty {
+                                    if let Some(r) = full.as_mut() {
+                                        write_home_fallback_to_record(
+                                            r,
+                                            &enter_map_name,
+                                            home_x,
+                                            home_y,
+                                            &final_map_name,
+                                            enter_x,
+                                            enter_y,
+                                        );
+                                    }
+                                }
+                                // oracle `PlayObject.cs:1199`：登录后**无条件**
+                                // `GetStartPoint()`（`PlayObject.Base.cs:704-721`）——
+                                // `PvpLevel()>=2`（`PkPoint/100`）走 `RedHome*`；否则按
+                                // **当前** `Envir.MapName` 命中 `StartPointList` 就**覆盖**
+                                // Home*（覆盖值随存档落库）。
+                                if let Some(r) = full.as_mut() {
+                                    apply_get_start_point_on_login(r, &final_map_name, &enter_cfg);
+                                }
+                                // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化：
+                                // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
+                                // `enter::recalc_for_session` 里）按 `Job` 覆盖等级派生字段。
+                                if is_new_human {
+                                    if let Some(r) = full.as_mut() {
+                                        r.data.abil = Some(new_human_ability());
+                                        // **Lane A 缺口 1**（oracle `PlayObject.cs:1205-1244`）：
+                                        // 四件新手物品必须**先并入记录背包**——`:1308-1310` 的
+                                        // `RecalcAbilitys()` 读的就是 `ItemList`。旧实现直到下面
+                                        // 的 late 调用才写会话 `item_list`，而重算读记录
+                                        // `bag_items`（两个列表不同源）⇒ 新号首登 52 的重量少四件。
+                                        let gender = r.data.sex;
+                                        let warns = merge_newbie_items_into_record(
+                                            &mut r.data,
+                                            &enter_cfg.catalog,
+                                            &enter_cfg.newbie,
+                                            gender,
+                                            &mut item_number,
+                                        );
+                                        for w in warns {
+                                            glog!(
+                                                                "WRN",
+                                                                "{w}（照 oracle CopyToUserItemFromName 失败分支，不入包）"
+                                                            );
+                                        }
+                                    }
+                                }
+                                // **Lane A 缺口 2**（oracle `PlayObject.cs:1310-1312`）：
+                                // 登录末尾对**所有角色** `Abil.MaxExp = GetLevelExp(Abil.Level)`。
+                                // `RecalcAbilitys` 本身不写 `MaxExp`（`ability.rs` 只 `..abil`
+                                // 复制记录值）⇒ 必须在这里补。放在新角色
+                                // `new_human_ability()`（`max_exp=100`）之后，与 oracle 同序
+                                // 覆盖为 `Exps[Level]`（现网 1 级 = 10）。
+                                if let Some(r) = full.as_mut() {
+                                    refresh_login_max_exp(&mut r.data, &world.need_exps);
+                                }
+                                // **Lane B**：`WorldServer.GetHumData`（`:1198-1213`）的
+                                // `FindMagic(MagIdx)==null ⇒ 丢弃`（V1 装载过滤）+ 紧接着
+                                // `UserLogon → RecalcAbilitys()` 尾段（`:2764-2779`）的
+                                // `Del/AddItemSkill`。两者都就地改角色记录的 `Magic`
+                                // （= oracle `MagicList`，`MakeSaveRcd` 同源）：
+                                // 211/852 与存档都看这一份；212/210 事件走 `magic_journal`，
+                                // 在 658 之后、登录队列出队（51 等）之前发出。
+                                let mut login_magic_events = Vec::new();
+                                if let Some(r) = full.as_mut() {
+                                    let mut list = magicaudit::filter_for_logon(
+                                        r.data.magic.take().unwrap_or_default(),
+                                        &enter_cfg.magic_table,
+                                    );
+                                    let (flame_ring_hit, recovery_ring_hit) = enter::ring_hits(
+                                        &enter_cfg.catalog,
+                                        r.data.hum_items.as_deref(),
+                                    );
+                                    let cfg = magic_cfg_of(&enter_cfg);
+                                    login_magic_events = magicaudit::audit(
+                                        r.data.job,
+                                        &mut list,
+                                        cfg.table,
+                                        cfg.fire_ball_skill,
+                                        cfg.heal_skill,
+                                        // 登录 = 新 PlayObject：`FlameRing` 初始 false，
+                                        // 首次 `RecalcAbilitys` 的命中即锁存值。
+                                        flame_ring_hit,
+                                        recovery_ring_hit,
+                                    );
+                                    // `MakeSaveRcd` 的 20 槽存档形态（前 N 槽 = MagicList）。
+                                    r.data.magic = Some(magicaudit::pad_for_save(list));
+                                }
+                                inputs.magic_journal = login_magic_events;
+                                let data = full.as_ref().map(|r| &r.data);
+                                // 帧 42 的展示名输入（`GetShowName()`）：成员/师徒/婚姻/转生/职业
+                                // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
+                                let show_name = enter::ShowNameInputs {
+                                    chr_name: &head.chr_name,
+                                    re_level: data.map_or(0, |d| d.re_level),
+                                    job: data.map_or(0, |d| d.job),
+                                    sex: data.map_or(0, |d| d.sex),
+                                    dear_name: data
+                                        .and_then(|d| d.dear_name.as_deref())
+                                        .unwrap_or(""),
+                                    master_name: data
+                                        .and_then(|d| d.master_name.as_deref())
+                                        .unwrap_or(""),
+                                    is_master: data.is_some_and(|d| d.is_master),
+                                    show_rank_level_name: enter_cfg.show_rank_level_name,
+                                };
+                                // 帧 50/41 的 `GetFeatureToLong()`/`GetFeatureEx()` 输入：
+                                // Dress/Weapon 模板 `Shape` + Dress 槽模板 `AniCount`
+                                // （T-279），统一由 [`login_feature_inputs`] 现算（单一
+                                // 装配点；重连重新读档后同函数，不新增角色列）。
+                                // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
+                                // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
+                                //
+                                // **`openmir2-login-charstatus-657`**：`CharStatus` 是
+                                // **同一份** `GetCharStatus()` 输出，登录态两处都读它
+                                // （`SendLogon` 的 `MessageBodyWL` 与 `RecalcAbilitys` 尾的
+                                // `CharStatus = GetCharStatus()`）⇒ 这里算一次，两处共用，
+                                // 防止 `50` 尾与两条 `657` 的 `Param/Tag` 漂移。
+                                // 会话实体刚由 `enter_map` 建好：`world.get_char_status`
+                                // 读 `ActorBuffSystem.GetBuffStatus() | (CharStatusEx & 0xFFFF)`
+                                // 的等价实现（`crates/world-bevy/src/buff.rs`）；新登录无 buff、
+                                // `char_status_ex` 初值 0 ⇒ 当前值恒 0（与金标准 #3 的
+                                // `CharStatus == 0` 一致），但走真实实现而非硬编码。
+                                let login_char_status: i32 = world.get_char_status(id);
+                                let logon = data.map(|d| enter::LogonInputs {
+                                    feature: login_feature_inputs(
+                                        d.hum_items.as_deref(),
+                                        &enter_cfg.catalog,
+                                        d.sex,
+                                        d.hair,
+                                    ),
+                                    // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
+                                    // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
+                                    // （`BaseObject.cs:393`）⇒ 0。这里直接调用
+                                    // `world.get_char_status(id)`（buff 系统已移植），当前同值，
+                                    // 金标准 #3 的 `CharStatus == 0` 印证。
+                                    char_status: login_char_status,
+                                    // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
+                                    allow_group: d.allow_group > 0,
+                                    // `WorldServer.cs:1147`：`AttatckMode = (AttackMode)记录 attatck_mode`。
+                                    attack_mode: d.attatck_mode,
+                                });
+                                // 帧 52/752 的输入（`AbilityInputs`）：`wx` 与下面登记的地面会话态
+                                // 共用同一份（`AbilityInputs` 是 `Copy`），保证只有一份 `RecalcAbilitys`
+                                // 实现（`enter::recalc_for_session`）。
+                                let ability_inputs: Option<enter::AbilityInputs> =
+                                    data.and_then(|d| {
+                                        let conf = enter_cfg.game_conf.as_ref()?;
+                                        let abil = d.abil.as_ref()?;
+                                        let bonus_abil = d.bonus_abil.as_ref()?;
+                                        let (hit, speed) = enter::bonus_tick(conf, d.job);
+                                        Some(enter::AbilityInputs {
+                                            catalog: &enter_cfg.catalog,
+                                            abil,
+                                            bonus_abil,
+                                            bonus_tick_hit: hit,
+                                            bonus_tick_speed: speed,
+                                            use_items: d.hum_items.as_deref(),
+                                            bag_items: d.bag_items.as_deref(),
+                                            // 621/211：同一份角色记录 + 已装载魔表。
+                                            magics: d.magic.as_deref(),
+                                            magic_table: Some(&enter_cfg.magic_table),
+                                            gold: d.gold,
+                                            // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+                                            // 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
+                                            // 才 oracle 逐字节，见该字段文档与
+                                            // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+                                            client_ability_layout: mir2_client_ability_layout(),
+                                        })
+                                    });
+                                let wx = enter::WorldFrameInputs {
+                                    flag: registry.as_ref().and_then(|r| r.flag_of(map_id)),
+                                    map_desc: registry.as_ref().and_then(|r| r.map_desc_of(map_id)),
+                                    conf: enter_cfg.game_conf.as_ref(),
+                                    bonus_abil: data.and_then(|d| d.bonus_abil.as_ref()),
+                                    soft_version_date,
+                                    game_gold: data.map_or(0, |d| d.game_gold),
+                                    game_point: data.map_or(0, |d| d.game_point),
+                                    job: data.map_or(0, |d| d.job),
+                                    bonus_point: data.map_or(0, |d| d.bonus_point),
+                                    // `Bright = M2Share.GameTime`：oracle 由 `SystemProcessor`
+                                    // 每 50ms 按真实小时刷新，登录时读到的就是该桶值。
+                                    game_time: Some(enter::game_time_now()),
+                                    strings: Some(&enter_cfg.string_conf),
+                                    show_name: Some(show_name),
+                                    logon,
+                                    // 帧 52/752：角色记录 `Abil`/`BonusAbil` + `stditems`
+                                    // 目录 + 各职业 `Config.BonusAbilofXxx` 除数（见上面 hoist）。
+                                    ability: ability_inputs,
+                                    green_msg: (
+                                        enter_cfg.green_msg_f_color,
+                                        enter_cfg.green_msg_b_color,
+                                    ),
+                                    test_server: enter_cfg.test_server,
+                                    service_mode: enter_cfg.service_mode,
+                                    pay_ment,
+                                };
+                                for w in enter::apply(&mut inputs, &wx) {
+                                    glog!("WRN", "入图帧输入：{w}");
+                                }
+                                // oracle `PlayObject.Message.cs:286-290`：城堡检查在
+                                // 消息段**之前** ⇒ `RM_LOGON` 的 766 带本 tick 的
+                                // `InGuildWarArea`，不是恒 0。
+                                if let Some(flag) = wx.flag {
+                                    let in_guild_war_area = world
+                                        .castle_war_area_at(
+                                            Some(map_id),
+                                            i32::from(enter_x),
+                                            i32::from(enter_y),
+                                        )
+                                        .is_some_and(|i| world.castles[i].under_war);
+                                    inputs.area_state = Some(game_svr::castle::area_state_with(
+                                        flag,
+                                        in_guild_war_area,
+                                    ));
+                                }
+                                // **G2**：登录物化 `MyGuild`/`GuildRankNo`（`PlayObject.cs:1391-1400`）：
+                                // 有会才 `GetRankName` ⇒ `RM_CHANGEGUILDNAME`（优先级 61）；
+                                // 无会不发、队列不占堆位（简报 §0.4 / §3.1）。
+                                let guild_session = guild_cmd::materialize(&guilds, &head.chr_name);
+                                inputs.guild_changename = guild_frames::login_changename_750(
+                                    guild_session.guild_name.as_deref(),
+                                    &guild_session.rank_name,
+                                );
+                                // 地面交互会话态（`CM_PICKUP`/`CM_DROPITEM`，owner §26）：进世界时
+                                // 从同一份 `CharacterData` + `recalc_for_session`（**与帧 52/752
+                                // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
+                                // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
+                                if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
+                                    // **IT-17b**：登录的 `RecalcHitSpeed` 技能循环增量
+                                    // （`PlayObject.cs:3681-3712`；本批无攻杀 ⇒ 0 抽）。
+                                    let login_magic_list = magicaudit::filter_for_logon(
+                                        d.magic.clone().unwrap_or_default(),
+                                        &magic_table_arc,
+                                    );
+                                    let login_skill = skill_ability::recalc_hit_speed_skills(
+                                        &login_magic_list,
+                                        &mut vec![None; skill_ability::MAGIC_ARR_LEN],
+                                        Some(&mut world.rng),
+                                    );
+                                    let out = enter::recalc_for_session_with_skills(
+                                        a,
+                                        d.job,
+                                        login_skill,
+                                    );
+                                    // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
+                                    // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
+                                    // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
+                                    // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
+                                    // 只读日志，不改任何模拟/出帧语义。
+                                    log_enter_ability(&head.chr_name, &out);
+                                    // **`openmir2-login-charstatus-657`**：`RecalcAbilitys`
+                                    // 尾段（`PlayObject.cs:2874-2876`）的
+                                    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(…)`
+                                    // ⇒ 登录队列里那两条 `RM_CHARSTATUSCHANGED` 的载荷
+                                    // `(CharStatus, 自己的 HitSpeed)`。`HitSpeed` 取本次重算的
+                                    // `AddAbil.HitSpeed`（`:2899`，与写进实体的同一值）。
+                                    inputs.char_status = Some((login_char_status, out.hit_speed));
+                                    // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
+                                    // （此前只喂 52/752 帧，实体属性仍是 `EntitySpawn::new` 的空值）。
+                                    if let Some(mut e) = world.entities.get_mut(id) {
+                                        apply_ability_to_entity(
+                                            &mut e,
+                                            &out.wabil,
+                                            &out.sub,
+                                            out.hit_speed,
+                                        );
+                                        // oracle `CharStatus = GetCharStatus()` 的落账
+                                        // （`BaseObject.cs:56` 的 `CharStatus` 缓存；657 的
+                                        // `Param/Tag` 与 `SM_DIGUP` 尾的 `Status` 都读它）。
+                                        e.buff.char_status = login_char_status;
+                                        // **PL-1 / P32**：登录时已戴复活戒指 ⇒ `Revival=true`
+                                        // （oracle 在 `RecalcAbilitys` 里置位，粘滞）。
+                                        if out.revival {
+                                            e.revival.revival = true;
+                                        }
+                                        // **Lane B**：火球戒指粘滞锁存（首次登录 = 本次命中）。
+                                        e.revival.flame_ring |= out.flame_ring;
+                                    } else {
+                                        glog!(
+                                                            "WRN",
+                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 攻击/命中属性未装载（登记）"
+                                                        );
+                                    }
+                                    // **G-06（`openmir2-persist-useitems-wiring`）**：
+                                    // 会话 `PlayObject.UseItems` 同时装载进世界实体槽
+                                    // （`PlayObject.cs:1163-1176` 的 `GetHumData` 之后的
+                                    // 对象同一性）——耐久循环读的是实体槽，不装载就恒全零。
+                                    let session_use_items = use_items_from(d.hum_items.as_deref());
+                                    if let Some(inv) = world.entities.inventory_mut(id) {
+                                        apply_use_items_to_entity(
+                                            &mut inv.use_items,
+                                            &session_use_items,
+                                        );
+                                    } else {
+                                        glog!(
+                                                            "WRN",
+                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 装备槽未装载（登记）"
+                                                        );
+                                    }
+                                    ground_sessions.insert(
+                                        head.chr_name.clone(),
+                                        session_ground_from_login(SessionGroundInputs {
+                                            login_account: &account,
+                                            record: d,
+                                            recalc: &out,
+                                            ability: a,
+                                            use_items: session_use_items,
+                                            guild_session: &guild_session,
+                                            soft_version_date,
+                                            actor_id: id,
+                                            server_index: enter_cfg.server_index,
+                                            magic: readbook::MagicState {
+                                                list: login_magic_list.clone(),
+                                                table: Some(std::sync::Arc::clone(
+                                                    &magic_table_arc,
+                                                )),
+                                                passives: login_skill,
+                                                ..Default::default()
+                                            },
+                                            red_home: red_home_of(&enter_cfg),
+                                            canot_pick_up_item: enter_cfg
+                                                .string_conf
+                                                .canot_pick_up_item(),
+                                            now: now_ms(),
+                                        }),
+                                    );
+                                    // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
+                                    // 新角色的 `Abil/HomeMap/坐标` 已在上面按 oracle 落进 `full`。
+                                    if let Some(r) = full.as_ref() {
+                                        saves.insert(
+                                            head.chr_name.clone(),
+                                            SavedHuman {
+                                                account: account.clone(),
+                                                record: r.clone(),
+                                                enter_map: final_map_name.clone(),
+                                                derived: None,
+                                            },
+                                        );
+                                    }
+                                    // oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品
+                                    // （`IsNewHuman` 由 `WorldServer.cs:258-277` 在 `HomeMap` 空且
+                                    // `Abil.Level==0` 时置位）。**Lane A 缺口 1**：四件已在上面
+                                    // `full.as_mut()` 的新角色块里并入**记录背包**（重算/帧/会话/
+                                    // 存档同源）；旧 late `add_newbie_items`（写
+                                    // `sg.state.item_list`，不同源）已删除。
+                                    // 日志语义 = **非空件数**（`bag_items_from` 展平后计数）：
+                                    // 记录 Vec 是定长槽位（新号 46 空槽 + 4 件），`Vec::len()`
+                                    // 会打印 50，不表实际件数（评审员更正）。
+                                    glog!(
+                                                        "INF",
+                                                        "IsNewHuman 判定 ChrName={} home_empty={home_empty} 记录 Abil.Level={abil_level} is_new_human={is_new_human} bag_items={}",
+                                                        head.chr_name,
+                                                        bag_items_from(d.bag_items.as_deref()).len()
+                                                    );
+                                }
+                                // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
+                                // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
+                                // `GetCharStatus` / `GetMyLight` / `GetShowName`）。
+                                // `Dir` 取记录值（`ClientChangeDir` 会改它——属移动接线，登记为下一格）。
+                                let light_pairs: Vec<(u16, u16)> = data
+                                    .and_then(|d| d.hum_items.as_deref())
+                                    .unwrap_or(&[])
+                                    .iter()
+                                    .take(downlink::USE_ITEM_SLOTS)
+                                    .map(|cell| {
+                                        cell.as_ref().map_or((0, 0), |it| (it.index, it.dura))
+                                    })
+                                    .collect();
+                                let light = downlink::my_light(
+                                    data.and_then(|d| d.abil.as_ref()).map_or(0, |a| a.level),
+                                    &light_pairs,
+                                    &enter_cfg.catalog,
+                                );
+                                if let Some(wl) = inputs.logon_body_wl {
+                                    let show_bytes =
+                                        wx.show_name.as_ref().map_or_else(Vec::new, |sn| {
+                                            enter::gbk(&enter::show_name(
+                                                &enter_cfg.string_conf,
+                                                sn,
+                                            ))
+                                        });
+                                    // **T-277**：展示表带骑乘 `mount_id`，后续 AOI
+                                    // 出现帧会追加独立帧 `SM_MOUNTRIDE(1118)`。
+                                    let login_mount_id =
+                                        ground_sessions.get(&head.chr_name).map_or(0, |sg| {
+                                            if sg.gm.on_horse {
+                                                sg.gm.horse_type
+                                            } else {
+                                                0
+                                            }
+                                        });
+                                    displays.set(
+                                        id,
+                                        downlink::ActorDisplay::new(
+                                            inputs.dir,
+                                            light,
+                                            wl.0,
+                                            inputs.feature.map_or(0, |(_, fe)| fe),
+                                            wl.1,
+                                            enter::PLAY_NAME_COLOR,
+                                            show_bytes,
+                                        )
+                                        .with_mount_id(login_mount_id),
+                                    );
+                                    glog!(
+                                                        "DBG",
+                                                        "同屏展示表登记：actor={id} dir={} light={light} feature={}",
+                                                        inputs.dir,
+                                                        wl.0
+                                                    );
+                                }
+                                // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
+                                // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
+                                // 绝不 `gates.values().next()` 静默挑一个。
+                                //
+                                // **卡 `openmir2-script-broadcast-tx-gating`**：`own_tx` 只把关
+                                // 「本例玩家自己」的入图帧 / `MarkInWorld` / 说词 / 直发帧 / 脚本帧；
+                                // `@Login` 脚本执行、写回与**其余在线玩家**的 `SENDMSG 0-3`
+                                // 扇出**不**受它约束（oracle `SendBroadCastMsg` 遍历
+                                // `PlayObjectList`，与发送者自身 socket 状态无关）。
+                                let own_tx = route_to_gate(
+                                    &gates,
+                                    gate_idx,
+                                    socket,
+                                    "标记进世界/下发入图帧",
+                                );
+                                if let Some(tx) = own_tx {
+                                    // **lane654**：登录队列切成两段。`before` =
+                                    // 优先级 ≤ `(byte)RM_TURN`(17) 的帧（oracle 在同一
+                                    // `Run()` 里先出队的那些，含入图 15 帧）；`after` =
+                                    // `654` 及其后（657/42/100，含优先级 61 的 750）——
+                                    // oracle 在**其他 actor 的出现帧（RM_TURN=17）之后**
+                                    // 才出队它们（2026-10-20 真机：10/41×6 → 654 → …），
+                                    // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
+                                    let (bodies, tail_probe) = inputs.frames_split();
+                                    // **T-275**：`[Setup] LevelRankOnLogin`（缺省 0）——
+                                    // 只给**本次进世界的会话**自己的批次追加一帧
+                                    // `SM_LEVELRANK(1108)`；缺省关 ⇒ `bodies` 原样（A1）。
+                                    // 数据源 = 在线登记表 ∩ 世界实体（非 ghost），排序/编码
+                                    // 全在纯函数 `enter::level_rank_body`（A2）。
+                                    let rank_players = level_rank_players(&online, &world);
+                                    let mut bodies = enter::append_level_rank(
+                                        bodies,
+                                        enter_cfg.level_rank_on_login,
+                                        0,
+                                        enter::LEVEL_RANK_KIND_HUMAN,
+                                        &rank_players,
+                                    );
+                                    // **T-277**：重连仍骑乘 ⇒ 自己的登录批次里补一帧
+                                    // `SM_MOUNTRIDE(1118)`（本地角色渲染坐骑；同屏其他玩家
+                                    // 由 AOI 出现帧携带，见 `downlink::appear_frames`）。
+                                    if let Some(sg) = ground_sessions.get(&head.chr_name) {
+                                        if sg.gm.on_horse && sg.gm.horse_type != 0 {
+                                            bodies.push(game_svr::mount::sm_mountride_body(
+                                                id,
+                                                sg.gm.horse_type,
+                                            ));
+                                        }
+                                    }
+                                    glog!(
+                                                        "INF",
+                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的），延迟段 {} 条",
+                                                        bodies.len(),
+                                                        tail_probe.len()
+                                                    );
+                                    for body in bodies {
+                                        let _ = tx.send(SimToGate::SendFrame { socket, body });
+                                    }
+                                    // 延迟段 = 654/第二 42/100×4 —— 出队序随本 tick
+                                    // `SearchViewRange` 对其他 actor 的 `RM_TURN` 槽数
+                                    // 变化（同优先级不是 FIFO）⇒ 首次扫描时才按真机
+                                    // 堆布局重算（[`drain_login_tail`]）。
+                                    login_tails.insert(head.chr_name.clone(), inputs);
+                                    // **P2-3b**：会话进世界 ⇒ 记 `chr→片`（N=1 时目录为 None，空操作）。
+                                    shard_router::note_entered(
+                                        shard_directory.as_ref(),
+                                        &head.chr_name,
+                                        local_shard,
+                                    );
+                                    let _ = tx.send(SimToGate::MarkInWorld { socket });
+                                }
+                                // **M3⑥-实现 3 第②片**：进世界完成点 oracle
+                                // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
+                                // SystemShare.ManageNPC.GotoLable(this, "@Login", false)`。
+                                // 引擎产出的说词经 oracle `MsgQueue` 出队序落
+                                // `SM_MERCHANTSAY(643)`（`PlayObject.Message.cs:1722`）。
+                                // 脚本取数走**同一条** `world.rng`（临时移出后归位，
+                                // 与 `step_mon_gen` 同法）。
+                                if let Some(host) = npc_host.as_ref() {
+                                    if host.has_manage_npc() {
+                                        let mut rng = std::mem::replace(
+                                            &mut world.rng,
+                                            mir2_shared::rng::RandomNumber::with_seed(0),
+                                        );
+                                        {
+                                            let mut rngf = |v: i32| rng.random_below(v);
+                                            let level = data
+                                                .and_then(|d| d.abil.as_ref())
+                                                .map_or(1, |a| i32::from(a.level));
+                                            // §1.O `recall-ext` 读侧：同源自 `World` 的组队快照。
+                                            let (group_owner, group_member_jobs) =
+                                                world.party_script_group_snapshot(id);
+                                            // **Lane A 缺口 1 的正向副作用（登记）**：`npc_player_from` 读记录
+                                            // `bag_items`；四件新手物品已并入记录 ⇒ 脚本侧 `CHECKBAGGAGE` 一类
+                                            // 查询在新号首次登录即可见四件（与 oracle 的 `ItemList` 语义一致，
+                                            // 但与旧 Rust 行为不同——旧行为要等 late 调用之后才有）。
+                                            // **卡 `openmir2-gm-script-host-seam`（T-210）**：
+                                            // `player.gm` 借住 `&mut ground_sessions[..].gm` 与 `&world`
+                                            // ⇒ 把「建快照 + 跑 @Login」收进独立块；块尾 `player`
+                                            // 析构即释放借用，后面的脚本帧排水 / 写回才能再借同一张表。
+                                            let (
+                                                login_says,
+                                                login_frames,
+                                                gm_direct,
+                                                gm_notes,
+                                                login_broadcasts,
+                                                wb,
+                                            ) = {
+                                                let mut player = npc_player_from(
+                                                    &mut rngf,
+                                                    &head.chr_name,
+                                                    id,
+                                                    &final_map_name,
+                                                    level,
+                                                    data.map_or(0, |d| d.gold),
+                                                    data.and_then(|d| d.bag_items.as_deref()),
+                                                    data.and_then(|d| d.quest_flag.as_deref()),
+                                                    &enter_cfg.catalog,
+                                                    group_owner,
+                                                    &group_member_jobs,
+                                                    &npc_vars_base,
+                                                );
+                                                // **PL-3 / P27**：脚本 197/198 的
+                                                // 读写源（见 `run_party_goto_label` 同段）。
+                                                if let Some(e) = world.entities.get(id) {
+                                                    player.kill_mon_exp_rate = e.kill_mon_exp_rate;
+                                                    player.kill_mon_exp_rate_time =
+                                                        e.kill_mon_exp_rate_time;
+                                                    player.power_rate = e.power_rate;
+                                                    player.power_rate_time = e.power_rate_time;
+                                                }
+                                                // **PL-2 / P31**：`SETAUTOGETEXP`
+                                                // 四字段从宿主会话 seed（`@Login` 里
+                                                // 脚本可写，执行后写回）。
+                                                if let Some(sg) =
+                                                    ground_sessions.get(&head.chr_name)
+                                                {
+                                                    player.auto_get_exp_in_safe_zone =
+                                                        sg.auto_get_exp_in_safe_zone;
+                                                    player.auto_get_exp_envir =
+                                                        sg.auto_get_exp_envir.clone();
+                                                    player.auto_get_exp_time = sg.auto_get_exp_time;
+                                                    player.auto_get_exp_point =
+                                                        sg.auto_get_exp_point;
+                                                    // **PL-4 / P22**：脚本 192/193
+                                                    // 的 `BoIncGameGold`/`BoDecGameGold`。
+                                                    player.bo_inc_game_gold =
+                                                        sg.p22.bo_inc_game_gold;
+                                                    player.bo_dec_game_gold =
+                                                        sg.p22.bo_dec_game_gold;
+                                                    // **A-10/T-86**：`SETOFFLINE`
+                                                    // 的两字段（同一个 `PlayObject`）。
+                                                    player.off_line_flag = sg.off_line_flag;
+                                                    player.kick_off_line_tick =
+                                                        sg.kick_off_line_tick;
+                                                }
+                                                // **A-26/T-207**：`Abil.Exp` 的登录侧 seed 取角色记录里的
+                                                // `Ability.Exp`（oracle 此时读的是 `PlayObject.Abil.Exp` 初值；
+                                                // 会话虽已建，但 `equip.abil` 的 exp 同样来自该记录）。
+                                                player.abil_exp = data
+                                                    .and_then(|d| d.abil.as_ref())
+                                                    .map_or(0, |a| a.exp);
+                                                // **卡 `openmir2-script-user-account`**：
+                                                // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
+                                                player.user_account = head.account.clone();
+                                                // `HUtil32.GetTickCount()` 的宿主值
+                                                //（与 P31 `host_now` 同源）。
+                                                player.tick = now_ms() as i32;
+                                                // **卡 `openmir2-gm-script-host-seam`（T-210）**：脚本
+                                                // `GMEXECUTE` 的宿主跳线（oracle `PlayObject.Permission`
+                                                // 的读写 + `ProcessUserLineMsg`，`PlayObject.cs:58` /
+                                                // `PlayObject.Chat.cs:229-406`）。
+                                                //
+                                                // `Permission` 的权威 = 会话 `GmSession`；抬权在脚本动作里
+                                                // （`ExecutionProcessingSys.cs:4938-4947`，actions.rs 的
+                                                // `PermissionGuard`），跳线本身不抬权。
+                                                //
+                                                // 密码状态机在本仓是会话层（`pwd_sessions`，`CM_PASSWORD`
+                                                // 驱动）：oracle 在 `@` 支**之前**判它（`Chat.cs:241-362`）
+                                                // ⇒ 正在密码流里时注入 `pwd_busy`，跳线不执行（不绕过拦截）。
+                                                let gm_cfg = gmcmd::GmConfig {
+                                                    lock_human_login: enter_cfg.lock_human_login,
+                                                    spirit_mutiny_time: enter_cfg
+                                                        .spirit_mutiny_time,
+                                                    ..gmcmd::GmConfig::default()
+                                                };
+                                                // **T-277**：`@Login` 时背包里可能已有
+                                                // 马牌（读档即见）⇒ 与 CM_SAY 同源注入。
+                                                let horse_plate_mount_for_login = ground_sessions
+                                                    .get(&head.chr_name)
+                                                    .and_then(|sg| {
+                                                        game_svr::mount::held_mount_id(
+                                                            &enter_cfg.catalog,
+                                                            sg.state.item_list.iter(),
+                                                        )
+                                                    });
+                                                let gm_world = gmcmd::GmWorld {
+                                                    guilds: &guilds,
+                                                    maps: registry.as_ref(),
+                                                    world: Some(&world),
+                                                    speaker: &head.chr_name,
+                                                    speaker_id: id,
+                                                    now_ms: world.clock_ms,
+                                                    // 与 CM_SAY 支同一份全局单元
+                                                    // （`SystemShare.FilterWord` 进程单例）。
+                                                    pose_target: None,
+                                                    filter_word: Some(&gm_filter_word),
+                                                    mission: Some(&gm_mission),
+                                                    spirit_mutiny_tick: Some(
+                                                        &gm_spirit_mutiny_tick,
+                                                    ),
+                                                    // 族 F：`@Login` 时任务位阵
+                                                    // 恒为新角色全零（oracle 不落库）；
+                                                    // 脚本 `GMEXECUTE` 的写不落地
+                                                    // （部署无这些命令的可达调用）。
+                                                    quests: None,
+                                                    // 族 M：`@Login` 脚本不走刷怪/造物
+                                                    // 落地通道（同桥口径）。
+                                                    speaker_dir: 0,
+                                                    m_host: false,
+                                                    caller_guild: None,
+                                                    horse_plate_mount: horse_plate_mount_for_login,
+                                                };
+                                                if let Some(sg) =
+                                                    ground_sessions.get_mut(&head.chr_name)
+                                                {
+                                                    let pwd_busy = pwd_sessions
+                                                        .get(&head.chr_name)
+                                                        .is_some_and(|p| {
+                                                            let st = &p.state;
+                                                            st.is_set_storage_pwd
+                                                                || st.is_re_config_pwd
+                                                                || st.is_un_lock_pwd
+                                                                || st.is_un_lock_storage_pwd
+                                                                || st.is_check_old_pwd
+                                                        });
+                                                    player.gm = Some(game_svr::npc::NpcGm {
+                                                        sess: &mut sg.gm,
+                                                        cfg: &gm_cfg,
+                                                        world: gm_world,
+                                                        pwd_busy,
+                                                    });
+                                                }
+                                                let login_says = host.run_login(&mut player);
+                                                // 写回快照：`player` 带 GM 跳线的借用，块外不能再持有它
+                                                // ⇒ 先把 oracle 会落账的标量取出来（语义与逐字段读写等价）。
+                                                let wb = LoginScriptWriteBack {
+                                                    abil_exp: player.abil_exp,
+                                                    gold: player.gold,
+                                                    game_gold: player.game_gold,
+                                                    game_point: player.game_point,
+                                                    quest_flag: player
+                                                        .quest_flag
+                                                        .as_bytes()
+                                                        .to_vec(),
+                                                    auto_get_exp_in_safe_zone: player
+                                                        .auto_get_exp_in_safe_zone,
+                                                    auto_get_exp_envir: player
+                                                        .auto_get_exp_envir
+                                                        .clone(),
+                                                    auto_get_exp_time: player.auto_get_exp_time,
+                                                    auto_get_exp_point: player.auto_get_exp_point,
+                                                    bo_inc_game_gold: player.bo_inc_game_gold,
+                                                    bo_dec_game_gold: player.bo_dec_game_gold,
+                                                    off_line_flag: player.off_line_flag,
+                                                    kick_off_line_tick: player.kick_off_line_tick,
+                                                    kill_mon_exp_rate: player.kill_mon_exp_rate,
+                                                    kill_mon_exp_rate_time: player
+                                                        .kill_mon_exp_rate_time,
+                                                    power_rate: player.power_rate,
+                                                    power_rate_time: player.power_rate_time,
+                                                };
+                                                (
+                                                    login_says,
+                                                    std::mem::take(&mut player.frames),
+                                                    std::mem::take(&mut player.gm_direct_frames),
+                                                    std::mem::take(&mut player.gm_notes),
+                                                    // 卡 `openmir2-sendmsg-login-qmanage-cases`：
+                                                    // `SENDMSG 0-3` 的**其余玩家**扇出正文
+                                                    // （`WorldServer.SendBroadCastMsg`）。本例玩家
+                                                    // 自己那一份已在 `player.frames` 里。
+                                                    std::mem::take(&mut player.world_broadcasts),
+                                                    wb,
+                                                )
+                                            };
+                                            // 脚本已跑完、`player` 已 drop（对 `sg.gm`/`world` 的
+                                            // 借用结束）⇒ 落地脚本里抬权执行的 `@改属性`
+                                            // （oracle `SendUpdateItem` 立即 ⇒ 早于下面的脚本帧）。
+                                            let gm_use_item =
+                                                match ground_sessions.get_mut(&head.chr_name) {
+                                                    Some(sg) => apply_pending_gm_use_item_in(
+                                                        sg,
+                                                        &mut *world,
+                                                        &enter_cfg.catalog,
+                                                        &online,
+                                                        &gates,
+                                                    ),
+                                                    None => None,
+                                                };
+                                            if let Some(says) = login_says {
+                                                let sent = own_tx.map_or(0, |tx| {
+                                                    emit_npc_says(tx, socket, id, &says)
+                                                });
+                                                glog!(
+                                                                    "INF",
+                                                                    "@Login 已执行 ChrName={} 说词 {} 条（下发 {sent}）",
+                                                                    head.chr_name,
+                                                                    says.len()
+                                                                );
+                                            }
+                                            // `GMEXECUTE` 的**直发帧**（oracle `SendDefMessage`：
+                                            // 命令体执行时立即下发，不经 `MsgQueue`）⇒ 先于本批
+                                            // `MsgQueue` 投影排水；未接项/被吞路径记 DBG（不静默）。
+                                            if let Some(body) = gm_use_item {
+                                                if let Some(tx) = own_tx {
+                                                    let _ = tx.send(SimToGate::SendFrame {
+                                                        socket,
+                                                        body,
+                                                    });
+                                                }
+                                            }
+                                            if let Some(tx) = own_tx {
+                                                for f in &gm_direct {
+                                                    let body = match f {
+                                                        gmcmd::GmFrame::AttackMode(mode) => {
+                                                            smframe::sm_attackmode(*mode)
+                                                        }
+                                                    };
+                                                    let _ = tx.send(SimToGate::SendFrame {
+                                                        socket,
+                                                        body,
+                                                    });
+                                                }
+                                            }
+                                            for note in &gm_notes {
+                                                glog!(
+                                                    "DBG",
+                                                    "@Login GMEXECUTE ChrName={}：{note}",
+                                                    head.chr_name
+                                                );
+                                            }
+                                            // 脚本帧（`NpcPlayer.frames` =
+                                            // `MsgQueue` 的脚本侧投影）：@Login
+                                            // 此前只发说词、整组脚本帧被丢 ⇒
+                                            // QManage 的 `MESSAGEBOX` 零帧。现与
+                                            // 商人/组队同一映射（T-194）。
+                                            // 出队序：说词优先级 0/1 恒先于
+                                            // 脚本帧（最小 `RM_PLAYDICE` 4）。
+                                            //
+                                            // 抽成生产函数 [`drain_login_script_batch`]（内部复用
+                                            // [`emit_login_script_frames`] 的脚本帧排水）：
+                                            // 单测直接在**同一函数**上断言 767 的存在与
+                                            // 同批出队序（删本调用或删函数体内的排水 ⇒
+                                            // `login_messagebox_...` / `login_frame_batch_...`
+                                            // 两用例必红）。
+                                            //
+                                            // **卡 `openmir2-sendmsg-login-qmanage-cases`**：
+                                            // `SENDMSG 0-3` 的其余玩家扇出也在这个生产函数里
+                                            // （复用 [`fan_out_world_sysmessage`]；牙=把它的正
+                                            // 文实参换成 `&[]` ⇒ `login_sendmsg_*` 用例必红）。
+                                            let (n, fanned) = drain_login_script_batch(
+                                                own_tx,
+                                                socket,
+                                                id,
+                                                &head.chr_name,
+                                                &ground_sessions,
+                                                (wb.gold, wb.game_gold, wb.game_point),
+                                                wb.abil_exp,
+                                                &login_frames,
+                                                &login_broadcasts,
+                                                &online,
+                                                &world,
+                                                &gates,
+                                                (
+                                                    npc_vars_base.sys_msg.red.0,
+                                                    npc_vars_base.sys_msg.red.1,
+                                                ),
+                                            );
+                                            if n > 0 {
+                                                glog!(
+                                                    "INF",
+                                                    "@Login ChrName={} 脚本帧 {n} 条",
+                                                    head.chr_name
+                                                );
+                                            }
+                                            if fanned > 0 {
+                                                glog!(
+                                                    "INF",
+                                                    "@Login ChrName={} 全服广播 {fanned} 帧",
+                                                    head.chr_name
+                                                );
+                                            }
+                                            // 回写（本片回写 `Gold`、`QuestFlag`
+                                            // 与 `Abil.Exp`（T-207 I-1；
+                                            // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
+                                            // 的写回登记为后续分片，见 patch body）。
+                                            if let Some(s) = saves.get_mut(&head.chr_name) {
+                                                s.record.data.gold = wb.gold;
+                                                if let Some(qf) = s.record.data.quest_flag.as_mut()
+                                                {
+                                                    let n = qf.len().min(wb.quest_flag.len());
+                                                    qf[..n].copy_from_slice(&wb.quest_flag[..n]);
+                                                }
+                                            }
+                                            // **A-26/T-207 I-1**：`@Login`
+                                            // 的 `CHANGEEXP` 增量落进角色记录
+                                            // 与会话两字段（常态会话已存在；
+                                            // 未建会话的分支记录是唯一载体）。
+                                            write_back_login_player_abil_exp(
+                                                saves.get_mut(&head.chr_name),
+                                                ground_sessions.get_mut(&head.chr_name),
+                                                wb.abil_exp,
+                                            );
+                                            if let Some(sg) =
+                                                ground_sessions.get_mut(&head.chr_name)
+                                            {
+                                                sg.state.gold = wb.gold;
+                                                // **PL-2 / P31**：脚本写回。
+                                                sg.auto_get_exp_in_safe_zone =
+                                                    wb.auto_get_exp_in_safe_zone;
+                                                sg.auto_get_exp_envir =
+                                                    wb.auto_get_exp_envir.clone();
+                                                sg.auto_get_exp_envir_map_id = None;
+                                                sg.auto_get_exp_time = wb.auto_get_exp_time;
+                                                sg.auto_get_exp_point = wb.auto_get_exp_point;
+                                                // **PL-4 / P22**：脚本写回。
+                                                sg.p22.bo_inc_game_gold = wb.bo_inc_game_gold;
+                                                sg.p22.bo_dec_game_gold = wb.bo_dec_game_gold;
+                                                // **A-10/T-86**：两字段写回
+                                                //（四字段已在上方 P31 块内写回）。
+                                                sg.off_line_flag = wb.off_line_flag;
+                                                sg.kick_off_line_tick = wb.kick_off_line_tick;
+                                            }
+                                            if let Some(e) = world.entities.get_mut(id) {
+                                                e.player_run.kill_mon_exp_rate =
+                                                    wb.kill_mon_exp_rate;
+                                                e.player_run.kill_mon_exp_rate_time =
+                                                    wb.kill_mon_exp_rate_time;
+                                                e.player_run.power_rate = wb.power_rate;
+                                                e.player_run.power_rate_time = wb.power_rate_time;
+                                            }
+                                        }
+                                        world.rng = rng;
+                                    }
+                                }
+                            }
+                            // oracle `WorldServer.cs:503` 的准入判据：
+                            // `AlreadyInWorld` 在加了上面的预检后基本不可达（`in_world` 已挡在前面）；
+                            // 保留为安全网：`enter_map` 报此错 ⇒ 旧必在世界 ⇒ `kick_old = true`。
+                            Err(mir2_world_bevy::SessionError::AlreadyInWorld) => {
+                                handle_duplicate_enter(
+                                    &gates,
+                                    &mut *kick_pending,
+                                    &head.chr_name,
+                                    gate_idx,
+                                    socket,
+                                    true,
+                                );
+                            }
+                            Err(e) => glog!("WRN", "进世界失败 ChrName:{}：{e:?}", head.chr_name),
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            glog!(
+                "WRN",
+                "角色记录头部窗口解析失败（{} 字节；`LoadPlayerDataPacket`）",
+                payload.len()
+            )
+        }
+    }
+    *ctx.item_number = item_number;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -32615,1313 +33938,42 @@ fn sim_loop(
                         );
                         // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
                         if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
-                            // **入口三段计数 ②**：拿到角色数据、开始进世界流程。只计数、不改分支。
-                            if let Some(line) = telemetry::record_attempt() {
-                                glog!("INF", "{}", line);
-                            }
-                            // **orphan 编码器/搜索基准（卡 `openmir2-searchtick-origin-parity`）**：
-                            // oracle `PlayObject.cs:901` 的 `SearchTick = GetTickCount()` 在
-                            // `new PlayObject()`（`WorldServer.cs:234`，紧跟 `GetPlayData` 之后）写一次，
-                            // 早于 `UserLogon`/`AddToMap`，且落图/切图**不重置**。本宿主在这里
-                            // （角色记录刚到达 = ctor 等价点）取一次构造基准，进图时传给
-                            // `World::enter_map_at`；**不要**再让 `enter_map` 用进图时刻重盖。
-                            let login_ctor_tick = world.clock_ms;
-                            let payload = mir2_protocol::edcode::decode(&reply.packet);
-                            // 头部窗口维持既有控制流（`parse_player_data_head`）；**全字段**
-                            // （`parse_player_data`，`openmir2-m2-record-fields`）额外供给入图帧的
-                            // 世界/配置层输入（`job`/`game_gold`/`bonus_abil` 等）。两者都解不出才算失败。
-                            let head_only = record::parse_player_data_head(&payload);
-                            let mut full = record::parse_player_data(&payload);
-                            match head_only {
-                                Some(head) => {
-                                    if full.is_none() {
-                                        glog!(
-                                            "WRN",
-                                            "角色记录全字段解析失败（{} 字节），仅头部窗口可解 ⇒ 入图帧只发有输入的（合成/诊断载荷；真线上 DB 回包恒为全字段）",
-                                            payload.len()
-                                        );
-                                    }
-                                    // oracle `WorldServer.cs:248-262`：`MapName = 记录 CurMap`；`HomeMap` 空 ⇒
-                                    // `GetHomeInfo` 覆盖 `MapName` 与坐标（`-FixedNewChr` 新角色两条都空）。
-                                    // 缺陷现场与确定性口径见 `homemap` 模块头。
-                                    // 只有**全字段可解**时才能判定 `HomeMap` 是否为空；仅头部窗口（合成/诊断载荷，
-                                    // 真线上 DB 回包恒为全字段）保持记录 `CurMap` + 坐标，不假设为空。
-                                    let rec_home = full
-                                        .as_ref()
-                                        .and_then(|r| r.data.home_map.as_deref())
-                                        .unwrap_or("");
-                                    let home_empty = full.as_ref().is_some_and(|r| {
-                                        r.data.home_map.as_deref().unwrap_or("").is_empty()
-                                    });
-                                    // **准入判据提前**（oracle `WorldServer.cs:503`）：`IsFull` /
-                                    // `ProcessHumansIsLogined` 的检查在 `ProcessHumansMakeNewHuman`
-                                    // (`:518`) **之前** ⇒ 重复登录**不构造 PlayObject、不抽数**。
-                                    let in_save = engine.in_save_rcd_list(&head.chr_name);
-                                    let in_world = matches!(
-                                        world.session(&head.chr_name).map(|s| s.stage),
-                                        Some(mir2_world_bevy::WorldStage::InWorld)
-                                    );
-                                    // **oracle `WorldServer.cs:234` 的 `new PlayObject()`（5 抽）**
-                                    // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
-                                    // ① HomeMap 出生点抽数（`:254-259`）②落点改写抽数
-                                    // （`:306-307`/`:339-340`/`:346-347`）③移位环（`:380-381`）。
-                                    // 只在非重复登录分支抽（重复支 oracle 不构造）——判定与抽数
-                                    // 同在一处 [`login_ctor_draws_for`]（行为牙见其 doc）。
-                                    let login_ctor =
-                                        login_ctor_draws_for(&mut world, in_save, in_world);
-                                    let (enter_map_name, home_x, home_y, enter_x, enter_y) =
-                                        if home_empty {
-                                            // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
-                                            //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
-                                            // 见 `homemap` 模块头的 RNG 抽数账本。同时取出生点**原坐标**
-                                            //（`MakeSaveRcd` 要写 `HomeX/HomeY`，`:1257-1258`）。
-                                            enter_cfg.home.new_human_spawn_with_home(&mut world.rng)
-                                        } else {
-                                            let hx = full.as_ref().map_or(0, |r| r.data.home_x);
-                                            let hy = full.as_ref().map_or(0, |r| r.data.home_y);
-                                            (head.cur_map.clone(), hx, hy, head.cur_x, head.cur_y)
-                                        };
-                                    // `is_new_human` 是本轮新角色分支的**唯一判据**（oracle `WorldServer.cs:258`
-                                    // 的 `if (playObject.Abil.Level == 0)`）；不能拿重算后的 Abil 当门。
-                                    let abil_level = full
-                                        .as_ref()
-                                        .and_then(|r| r.data.abil.as_ref())
-                                        .map_or(0, |a| a.level);
-                                    let is_new_human = home_empty && abil_level == 0;
-                                    // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
-                                    // 找不到且有非空记录 `HomeMap` 时按 oracle `FindMap==null ⇒ MapName=HomeMap`
-                                    // 回落（`WorldServer.cs:319-341`）；仍找不到即拒绝进图并记 WRN
-                                    //（`MapRegistry::require_id`），不许静默退回 0 号占位图。无注册表（S1
-                                    // `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
-                                    // **T-202**：oracle `WorldServer.cs:352-368`（`ProcessHumansMakeNewHuman`
-                                    // 的跨服分支）——`envir = MapMgr.GetMapInfo(ServerIndex, MapName); if (envir
-                                    // == null)` 时先 `SendSwitchData`（.shr 序列化，未移植，登记）+ 同时
-                                    // `SendChangeServer`（`SM_RECONNECT`），再 `playObject = null; return`。
-                                    // 这里的等价条件是下面的 `resolve_enter_map(..)` 返回 `Err`（CurMap 与
-                                    // 回落 HomeMap 都**不在本服地图表**里）；`resolve_map_id` 是纯查表，
-                                    // 调两次无抽数、无副作用。
-                                    // 命中且有路由 ⇒ 排 `SM_RECONNECT`（进图随即失败，下面的 `Err` 臂照旧记
-                                    // 既有的「拒绝进图」WRN：两条日志互补，不是重复错误）。
-                                    if mapwire::resolve_enter_map(
-                                        registry.as_ref(),
-                                        &enter_map_name,
-                                        rec_home,
-                                    )
-                                    .is_err()
-                                    {
-                                        let _ = try_cross_server_redirect(
-                                            &server_table,
-                                            &mut world.rng,
-                                            registry.as_ref(),
-                                            &enter_map_name,
-                                            gate_idx,
-                                            socket,
-                                            &mut reconnect_pending,
-                                        );
-                                    }
-                                    match mapwire::resolve_enter_map(
-                                        registry.as_ref(),
-                                        &enter_map_name,
-                                        rec_home,
-                                    ) {
-                                        Err(e) => glog!(
-                                            "WRN",
-                                            "拒绝进图 ChrName:{} CurMap:{}：{e}（真地图注册表里没有这张图）",
-                                            head.chr_name,
-                                            enter_map_name
-                                        ),
-                                        // **P2-2 跨片 fail-closed**：目标图在注册表里但属其它片
-                                        // ⇒ 明确拒绝（日志 + 计数），不偷偷塞进本片 World（那样会
-                                        // 因 `map_id >= world.maps.len()` 落到「找不到图」的既有分支，
-                                        // 错误原因不可读）。handoff 在 P2-5。单片布局下本臂不可达。
-                                        Ok((final_map_name, map_id))
-                                            if !shard_runtime.host_owns(map_id) =>
-                                        {
-                                            // 判定/计数/日志文本都在 `guard_cross_shard_enter`
-                                            // （可单测、可变异；删掉本臂会让接线用例变红）。
-                                            if let Some(line) =
-                                                shard_runtime.guard_cross_shard_enter(
-                                                    &head.chr_name,
-                                                    &final_map_name,
-                                                    map_id,
-                                                )
-                                            {
-                                                glog!("WRN", "{}", line);
-                                            }
-                                        }
-                                        Ok((final_map_name, map_id)) => {
-                                        // 准入判据（oracle `WorldServer.cs:503` 的
-                                        // `!IsFull && !ProcessHumansIsLogined(chr)`）：
-                                        // `ProcessHumansIsLogined`（`:200-217`）= `FrontEngine.InSaveRcdList(chr)`
-                                        // **或** `PlayObjectList` 有同名。命中 ⇒ 关新（旧仍在世界时再踢旧）；
-                                        // 未命中 ⇒ 放行。**判定已提前到 `new PlayObject()` 抽数之前**
-                                        // （oracle `:503` 在 `:518` 之前）⇒ 此处不再重算。
-                                        if in_save || in_world {
-                                            if in_save {
-                                                glog!(
-                                                    "INF",
-                                                    "角色数据保存中,稍后重新读取. Account:{} ChrName:{}",
-                                                    head.account,
-                                                    head.chr_name
-                                                );
-                                            }
-                                            handle_duplicate_enter(
-                                                &gates,
-                                                &mut kick_pending,
-                                                &head.chr_name,
-                                                gate_idx,
-                                                socket,
-                                                in_world,
-                                            );
-                                        } else {
-                                        let login_ctor = login_ctor.as_ref().expect(
-                                            "非重复登录：oracle new PlayObject() 的 5 抽必已发生",
-                                        );
-                                        // oracle `WorldServer.cs:298-350`：进图/死亡落点改写（生产实现在
-                                        // `rewrite_enter_position`；**Home 输入取角色记录**，不是 `[Setup]`）。
-                                        // **位置**：`resolve_enter_map` 之后、地形移位环之前；抽数走
-                                        // **同一条** `world.rng`（X 先 Y 后）。
-                                        let (final_map_name, map_id, enter_x, enter_y, die_in_fight3_zone) =
-                                            if let Some(r) = full.as_mut() {
-                                                let guild_name =
-                                                    guild_cmd::materialize(&guilds, &head.chr_name)
-                                                        .guild_name;
-                                                // `WorldServer.cs:284` 读的是 `envir.Flag.Fight3Zone`
-                                                // （MapInfo 的 `FIGHT3`），不是 `FightZone`（`FIGHT`）。
-                                                let fight3_zone = registry
-                                                    .as_ref()
-                                                    .and_then(|reg| reg.flag_of(map_id))
-                                                    .is_some_and(|f| f.fight3_zone);
-                                                let mut rng = std::mem::replace(
-                                                    &mut world.rng,
-                                                    mir2_shared::rng::RandomNumber::with_seed(0),
-                                                );
-                                                let out = rewrite_enter_position(
-                                                    &world,
-                                                    &mut rng,
-                                                    r,
-                                                    &final_map_name,
-                                                    map_id,
-                                                    enter_x,
-                                                    enter_y,
-                                                    guild_name.as_deref(),
-                                                    is_new_human,
-                                                    fight3_zone,
-                                                    registry.as_ref(),
-                                                    &enter_cfg.red_die_home,
-                                                );
-                                                world.rng = rng;
-                                                out
-                                            } else {
-                                                // 仅头部窗口（合成/诊断载荷）：oracle 恒有全字段记录，
-                                                // 本仓无法判定 HP/PkPoint/Home ⇒ **不做**改写、**不抽数**
-                                                // （与入图帧「输入不足 ⇒ 跳过」同口径，避免污染 RNG 流水）。
-                                                (final_map_name, map_id, enter_x, enter_y, false)
-                                            };
-                                        // 进世界：`World::open_session` + `enter_map`
-                                        // oracle `WorldServer.cs:371-395` 进图前的**地形移位环**：
-                                        // 出生/存档格是墙 ⇒ 每轮 `-3+Random(6)`（X 先 Y 后），至多 5 轮；
-                                        // 环用尽仍不可走 ⇒ 回落 `[Setup] HomeMap/HomeX/HomeY`。
-                                        // 不接这段时墙格出生会「进世界但不入格表」（对他人 AOI 隐身），
-                                        // 而 oracle 先移到邻近可走格再落图。
-                                        // 抽数走**同一条** `world.rng`；`shift_enter_position` 带
-                                        // `#[track_caller]` ⇒ trace 站点落在本文件（`startup` 组，见
-                                        // `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`）。
-                                        let home_id = mapwire::resolve_map_id(
-                                            registry.as_ref(),
-                                            &enter_cfg.home.home_map,
-                                        )
-                                        .ok();
-                                        let shift = mapwire::shift_enter_position(
-                                            &mut world,
-                                            mapwire::EnterTarget {
-                                                map_name: &final_map_name,
-                                                map_id,
-                                                x: i32::from(enter_x),
-                                                y: i32::from(enter_y),
-                                            },
-                                            mapwire::HomePoint {
-                                                map_name: &enter_cfg.home.home_map,
-                                                map_id: home_id,
-                                                x: i32::from(enter_cfg.home.home_x),
-                                                y: i32::from(enter_cfg.home.home_y),
-                                            },
-                                        );
-                                        if shift.home_fallback {
-                                            glog!(
-                                                "WRN",
-                                                "进图落格失败，回落 HomeMap ChrName:{} CurMap:{} -> {} ({},{})（oracle WorldServer.cs:388-395）",
-                                                head.chr_name,
-                                                final_map_name,
-                                                shift.map_name,
-                                                shift.x,
-                                                shift.y
-                                            );
-                                        }
-                                        if let Some(e) = &shift.home_fallback_error {
-                                            glog!(
-                                                "ERR",
-                                                "进图回落 HomeMap 解析失败 ChrName:{}：{e}（oracle PEnvir = nil 支）",
-                                                head.chr_name
-                                            );
-                                        }
-                                        let (final_map_name, map_id) =
-                                            (shift.map_name, shift.map_id);
-                                        let (enter_x, enter_y) =
-                                            (shift.x as i16, shift.y as i16);
-                                        let _ = world.open_session(&head.chr_name);
-                                        // **SoftVersionDateEx 同步**（卡 §10）：会话对象**从不删除**、
-                                        // `open` 幂等 ⇒ 重登复用同一对象，值必须**每次登录刷新**；
-                                        // 缺省 0 且 0 恰=不发 11029（漏设退化为少一帧）。
-                                        if let Some(sess) =
-                                            world.sessions.get_mut(&head.chr_name)
-                                        {
-                                            sess.soft_version_date = soft_version_date;
-                                        }
-                                        let mut ent = new_player_entity_with_login_ctor(
-                                            head.chr_name.clone(),
-                                            i32::from(enter_x),
-                                            i32::from(enter_y),
-                                            login_ctor,
-                                            login_ctor_tick,
-                                        );
-                                        // oracle `GetHumData` 的记录 → `PlayObject` 标量装载
-                                        // （`Dir` 与 `WorldServer.cs:1159` 的 `AllowGroupReCall`）；
-                                        // 唯一生产入口，测试不得手工置位。
-                                        apply_login_record_scalars(
-                                            &mut ent,
-                                            full.as_ref().map(|r| &r.data),
-                                        );
-                                        // `WorldServer.cs:290`：Fight3Zone 死亡恢复支置位
-                                        // `PlayObject.DieInFight3Zone`（随后由登录 `MapRandomMove` 消费；
-                                        // 该调用点未移植，位仍按 oracle 保存）。
-                                        ent.die_in_fight3_zone = die_in_fight3_zone;
-                                        match world.enter_map_at(
-                                            &head.chr_name,
-                                            ent,
-                                            map_id,
-                                            login_ctor_tick,
-                                        ) {
-                                            Ok(id) => {
-                                                // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
-                                                if let Some(line) = telemetry::record_ok(world.clock_ms) {
-                                                    glog!("INF", "{}", line);
-                                                }
-                                                // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
-                                                // 会话/actor 重置——同名角色重新登录时清掉上一会话
-                                                // 的累计值，避免 `af` 跨登录继承造成假绿。
-                                                aoi_frames_total.remove(&head.chr_name);
-                                                // 在线登记（`PlayObject.GateIdx`/`SocketId`）：断线、重复进世界
-                                                // （踢旧）与账号级顶号都要靠它找回该角色当前的网关连接。
-                                                online_set(
-                                                    &mut online,
-                                                    OnlineEntry {
-                                                        account: account.clone(),
-                                                        chr_name: head.chr_name.clone(),
-                                                        session_id,
-                                                        gate_idx,
-                                                        socket,
-                                                        actor_id: id,
-                                                    },
-                                                );
-                                                glog!(
-                                                    "INF",
-                                                    concat!(
-                                                        "进世界 ChrName:{} CurMap:{} ({},{}) ",
-                                                        "Dir:{} entity={}"
-                                                    ),
-                                                    head.chr_name,
-                                                    final_map_name,
-                                                    enter_x,
-                                                    enter_y,
-                                                    head.dir,
-                                                    id
-                                                );
-                                                // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
-                                                // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
-                                                // `enter::apply` 装配世界/配置/记录层有输入的帧（51/766/54/11029/1106/
-                                                // 5008/811/42/46/50/41/213）；仍缺输入的（52/752 = `RecalcAbilitys`
-                                                // 未移植、10 = 世界 tick）保持 `None` 并登记。
-                                                let mut inputs = smframe::EnterWorldInputs {
-                                                    actor_id: id,
-                                                    cur_x: u16::from_ne_bytes(enter_x.to_ne_bytes()),
-                                                    cur_y: u16::from_ne_bytes(enter_y.to_ne_bytes()),
-                                                    dir: head.dir,
-                                                    // 658 `SM_SENDNOTICE`：oracle `PlayObject.SendNotice`
-                                                    // 在 `SendLogon` **之前**下发（金标准 #1 在 #2 前），
-                                                    // `EnterWorldInputs::frames()` 的序已把它放第一位。
-                                                    notice: notice.clone(),
-                                                    // G-11：oracle 走 `EDCode.EncodeString(MapFileName)`
-                                                    // = GB2312 字节；旧实现用 UTF-8（现网地图名 ASCII 无差）。
-                                                    map_file_name: Some(enter::gbk(&final_map_name)),
-                                                    ..smframe::EnterWorldInputs::default()
-                                                };
-                                                // oracle `WorldServer.cs:250-262`：`HomeMap` 为空的回落分支
-                                                // **与 `Abil.Level == 0` 解耦**——非新角色同样把
-                                                // `HomeMap/HomeX/HomeY/MapName/CurrX/CurrY` 写回记录
-                                                // （`MakeSaveRcd:1256-1282` 存的就是这些会话值），只有
-                                                // `Abil.Level == 0` 才额外做新手能力/物品初始化。
-                                                // 旧实现把两半都关在 `is_new_human` 里 ⇒ 非新角色且 DB
-                                                // `HomeMap` 为空时记录恒空，每次登录都重新抽出生点（F1）。
-                                                if home_empty {
-                                                    if let Some(r) = full.as_mut() {
-                                                        write_home_fallback_to_record(
-                                                            r,
-                                                            &enter_map_name,
-                                                            home_x,
-                                                            home_y,
-                                                            &final_map_name,
-                                                            enter_x,
-                                                            enter_y,
-                                                        );
-                                                    }
-                                                }
-                                                // oracle `PlayObject.cs:1199`：登录后**无条件**
-                                                // `GetStartPoint()`（`PlayObject.Base.cs:704-721`）——
-                                                // `PvpLevel()>=2`（`PkPoint/100`）走 `RedHome*`；否则按
-                                                // **当前** `Envir.MapName` 命中 `StartPointList` 就**覆盖**
-                                                // Home*（覆盖值随存档落库）。
-                                                if let Some(r) = full.as_mut() {
-                                                    apply_get_start_point_on_login(
-                                                        r,
-                                                        &final_map_name,
-                                                        &enter_cfg,
-                                                    );
-                                                }
-                                                // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化：
-                                                // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
-                                                // `enter::recalc_for_session` 里）按 `Job` 覆盖等级派生字段。
-                                                if is_new_human {
-                                                    if let Some(r) = full.as_mut() {
-                                                        r.data.abil = Some(new_human_ability());
-                                                        // **Lane A 缺口 1**（oracle `PlayObject.cs:1205-1244`）：
-                                                        // 四件新手物品必须**先并入记录背包**——`:1308-1310` 的
-                                                        // `RecalcAbilitys()` 读的就是 `ItemList`。旧实现直到下面
-                                                        // 的 late 调用才写会话 `item_list`，而重算读记录
-                                                        // `bag_items`（两个列表不同源）⇒ 新号首登 52 的重量少四件。
-                                                        let gender = r.data.sex;
-                                                        let warns = merge_newbie_items_into_record(
-                                                            &mut r.data,
-                                                            &enter_cfg.catalog,
-                                                            &enter_cfg.newbie,
-                                                            gender,
-                                                            &mut item_number,
-                                                        );
-                                                        for w in warns {
-                                                            glog!(
-                                                                "WRN",
-                                                                "{w}（照 oracle CopyToUserItemFromName 失败分支，不入包）"
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                // **Lane A 缺口 2**（oracle `PlayObject.cs:1310-1312`）：
-                                                // 登录末尾对**所有角色** `Abil.MaxExp = GetLevelExp(Abil.Level)`。
-                                                // `RecalcAbilitys` 本身不写 `MaxExp`（`ability.rs` 只 `..abil`
-                                                // 复制记录值）⇒ 必须在这里补。放在新角色
-                                                // `new_human_ability()`（`max_exp=100`）之后，与 oracle 同序
-                                                // 覆盖为 `Exps[Level]`（现网 1 级 = 10）。
-                                                if let Some(r) = full.as_mut() {
-                                                    refresh_login_max_exp(
-                                                        &mut r.data,
-                                                        &world.need_exps,
-                                                    );
-                                                }
-                                                // **Lane B**：`WorldServer.GetHumData`（`:1198-1213`）的
-                                                // `FindMagic(MagIdx)==null ⇒ 丢弃`（V1 装载过滤）+ 紧接着
-                                                // `UserLogon → RecalcAbilitys()` 尾段（`:2764-2779`）的
-                                                // `Del/AddItemSkill`。两者都就地改角色记录的 `Magic`
-                                                // （= oracle `MagicList`，`MakeSaveRcd` 同源）：
-                                                // 211/852 与存档都看这一份；212/210 事件走 `magic_journal`，
-                                                // 在 658 之后、登录队列出队（51 等）之前发出。
-                                                let mut login_magic_events = Vec::new();
-                                                if let Some(r) = full.as_mut() {
-                                                    let mut list = magicaudit::filter_for_logon(
-                                                        r.data.magic.take().unwrap_or_default(),
-                                                        &enter_cfg.magic_table,
-                                                    );
-                                                    let (flame_ring_hit, recovery_ring_hit) =
-                                                        enter::ring_hits(
-                                                            &enter_cfg.catalog,
-                                                            r.data.hum_items.as_deref(),
-                                                        );
-                                                    let cfg = magic_cfg_of(&enter_cfg);
-                                                    login_magic_events = magicaudit::audit(
-                                                        r.data.job,
-                                                        &mut list,
-                                                        cfg.table,
-                                                        cfg.fire_ball_skill,
-                                                        cfg.heal_skill,
-                                                        // 登录 = 新 PlayObject：`FlameRing` 初始 false，
-                                                        // 首次 `RecalcAbilitys` 的命中即锁存值。
-                                                        flame_ring_hit,
-                                                        recovery_ring_hit,
-                                                    );
-                                                    // `MakeSaveRcd` 的 20 槽存档形态（前 N 槽 = MagicList）。
-                                                    r.data.magic =
-                                                        Some(magicaudit::pad_for_save(list));
-                                                }
-                                                inputs.magic_journal = login_magic_events;
-                                                let data = full.as_ref().map(|r| &r.data);
-                                                // 帧 42 的展示名输入（`GetShowName()`）：成员/师徒/婚姻/转生/职业
-                                                // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
-                                                let show_name = enter::ShowNameInputs {
-                                                    chr_name: &head.chr_name,
-                                                    re_level: data.map_or(0, |d| d.re_level),
-                                                    job: data.map_or(0, |d| d.job),
-                                                    sex: data.map_or(0, |d| d.sex),
-                                                    dear_name: data
-                                                        .and_then(|d| d.dear_name.as_deref())
-                                                        .unwrap_or(""),
-                                                    master_name: data
-                                                        .and_then(|d| d.master_name.as_deref())
-                                                        .unwrap_or(""),
-                                                    is_master: data.is_some_and(|d| d.is_master),
-                                                    show_rank_level_name: enter_cfg
-                                                        .show_rank_level_name,
-                                                };
-                                                // 帧 50/41 的 `GetFeatureToLong()`/`GetFeatureEx()` 输入：
-                                                // Dress/Weapon 模板 `Shape` + Dress 槽模板 `AniCount`
-                                                // （T-279），统一由 [`login_feature_inputs`] 现算（单一
-                                                // 装配点；重连重新读档后同函数，不新增角色列）。
-                                                // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
-                                                // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
-                                                //
-                                                // **`openmir2-login-charstatus-657`**：`CharStatus` 是
-                                                // **同一份** `GetCharStatus()` 输出，登录态两处都读它
-                                                // （`SendLogon` 的 `MessageBodyWL` 与 `RecalcAbilitys` 尾的
-                                                // `CharStatus = GetCharStatus()`）⇒ 这里算一次，两处共用，
-                                                // 防止 `50` 尾与两条 `657` 的 `Param/Tag` 漂移。
-                                                // 会话实体刚由 `enter_map` 建好：`world.get_char_status`
-                                                // 读 `ActorBuffSystem.GetBuffStatus() | (CharStatusEx & 0xFFFF)`
-                                                // 的等价实现（`crates/world-bevy/src/buff.rs`）；新登录无 buff、
-                                                // `char_status_ex` 初值 0 ⇒ 当前值恒 0（与金标准 #3 的
-                                                // `CharStatus == 0` 一致），但走真实实现而非硬编码。
-                                                let login_char_status: i32 = world.get_char_status(id);
-                                                let logon = data.map(|d| enter::LogonInputs {
-                                                    feature: login_feature_inputs(
-                                                        d.hum_items.as_deref(),
-                                                        &enter_cfg.catalog,
-                                                        d.sex,
-                                                        d.hair,
-                                                    ),
-                                                    // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
-                                                    // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
-                                                    // （`BaseObject.cs:393`）⇒ 0。这里直接调用
-                                                    // `world.get_char_status(id)`（buff 系统已移植），当前同值，
-                                                    // 金标准 #3 的 `CharStatus == 0` 印证。
-                                                    char_status: login_char_status,
-                                                    // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
-                                                    allow_group: d.allow_group > 0,
-                                                    // `WorldServer.cs:1147`：`AttatckMode = (AttackMode)记录 attatck_mode`。
-                                                    attack_mode: d.attatck_mode,
-                                                });
-                                                // 帧 52/752 的输入（`AbilityInputs`）：`wx` 与下面登记的地面会话态
-                                                // 共用同一份（`AbilityInputs` 是 `Copy`），保证只有一份 `RecalcAbilitys`
-                                                // 实现（`enter::recalc_for_session`）。
-                                                let ability_inputs: Option<enter::AbilityInputs> =
-                                                    data.and_then(|d| {
-                                                        let conf = enter_cfg.game_conf.as_ref()?;
-                                                        let abil = d.abil.as_ref()?;
-                                                        let bonus_abil = d.bonus_abil.as_ref()?;
-                                                        let (hit, speed) =
-                                                            enter::bonus_tick(conf, d.job);
-                                                        Some(enter::AbilityInputs {
-                                                            catalog: &enter_cfg.catalog,
-                                                            abil,
-                                                            bonus_abil,
-                                                            bonus_tick_hit: hit,
-                                                            bonus_tick_speed: speed,
-                                                            use_items: d.hum_items.as_deref(),
-                                                            bag_items: d.bag_items.as_deref(),
-                                                            // 621/211：同一份角色记录 + 已装载魔表。
-                                                            magics: d.magic.as_deref(),
-                                                            magic_table: Some(&enter_cfg.magic_table),
-                                                            gold: d.gold,
-                                                            // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
-                                                            // 默认开（未设 = client-58；`MIR2_CLIENT_ABILITY_LAYOUT=0`
-                                                            // 才 oracle 逐字节，见该字段文档与
-                                                            // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
-                                                            client_ability_layout:
-                                                                mir2_client_ability_layout(),
-                                                        })
-                                                    });
-                                                let wx = enter::WorldFrameInputs {
-                                                    flag: registry
-                                                        .as_ref()
-                                                        .and_then(|r| r.flag_of(map_id)),
-                                                    map_desc: registry
-                                                        .as_ref()
-                                                        .and_then(|r| r.map_desc_of(map_id)),
-                                                    conf: enter_cfg.game_conf.as_ref(),
-                                                    bonus_abil: data
-                                                        .and_then(|d| d.bonus_abil.as_ref()),
-                                                    soft_version_date,
-                                                    game_gold: data.map_or(0, |d| d.game_gold),
-                                                    game_point: data.map_or(0, |d| d.game_point),
-                                                    job: data.map_or(0, |d| d.job),
-                                                    bonus_point: data.map_or(0, |d| d.bonus_point),
-                                                    // `Bright = M2Share.GameTime`：oracle 由 `SystemProcessor`
-                                                    // 每 50ms 按真实小时刷新，登录时读到的就是该桶值。
-                                                    game_time: Some(enter::game_time_now()),
-                                                    strings: Some(&enter_cfg.string_conf),
-                                                    show_name: Some(show_name),
-                                                    logon,
-                                                    // 帧 52/752：角色记录 `Abil`/`BonusAbil` + `stditems`
-                                                    // 目录 + 各职业 `Config.BonusAbilofXxx` 除数（见上面 hoist）。
-                                                    ability: ability_inputs,
-                                                    green_msg: (
-                                                        enter_cfg.green_msg_f_color,
-                                                        enter_cfg.green_msg_b_color,
-                                                    ),
-                                                    test_server: enter_cfg.test_server,
-                                                    service_mode: enter_cfg.service_mode,
-                                                    pay_ment,
-                                                };
-                                                for w in enter::apply(&mut inputs, &wx) {
-                                                    glog!("WRN", "入图帧输入：{w}");
-                                                }
-                                                // oracle `PlayObject.Message.cs:286-290`：城堡检查在
-                                                // 消息段**之前** ⇒ `RM_LOGON` 的 766 带本 tick 的
-                                                // `InGuildWarArea`，不是恒 0。
-                                                if let Some(flag) = wx.flag {
-                                                    let in_guild_war_area = world
-                                                        .castle_war_area_at(
-                                                            Some(map_id),
-                                                            i32::from(enter_x),
-                                                            i32::from(enter_y),
-                                                        )
-                                                        .is_some_and(|i| world.castles[i].under_war);
-                                                    inputs.area_state = Some(
-                                                        game_svr::castle::area_state_with(
-                                                            flag,
-                                                            in_guild_war_area,
-                                                        ),
-                                                    );
-                                                }
-                                                // **G2**：登录物化 `MyGuild`/`GuildRankNo`（`PlayObject.cs:1391-1400`）：
-                                                // 有会才 `GetRankName` ⇒ `RM_CHANGEGUILDNAME`（优先级 61）；
-                                                // 无会不发、队列不占堆位（简报 §0.4 / §3.1）。
-                                                let guild_session =
-                                                    guild_cmd::materialize(&guilds, &head.chr_name);
-                                                inputs.guild_changename =
-                                                    guild_frames::login_changename_750(
-                                                        guild_session.guild_name.as_deref(),
-                                                        &guild_session.rank_name,
-                                                    );
-                                                // 地面交互会话态（`CM_PICKUP`/`CM_DROPITEM`，owner §26）：进世界时
-                                                // 从同一份 `CharacterData` + `recalc_for_session`（**与帧 52/752
-                                                // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
-                                                // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
-                                                if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
-                                                    // **IT-17b**：登录的 `RecalcHitSpeed` 技能循环增量
-                                                    // （`PlayObject.cs:3681-3712`；本批无攻杀 ⇒ 0 抽）。
-                                                    let login_magic_list = magicaudit::filter_for_logon(
-                                                        d.magic.clone().unwrap_or_default(),
-                                                        &magic_table_arc,
-                                                    );
-                                                    let login_skill = skill_ability::recalc_hit_speed_skills(
-                                                        &login_magic_list,
-                                                        &mut vec![None; skill_ability::MAGIC_ARR_LEN],
-                                                        Some(&mut world.rng),
-                                                    );
-                                                    let out = enter::recalc_for_session_with_skills(
-                                                        a,
-                                                        d.job,
-                                                        login_skill,
-                                                    );
-                                                    // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
-                                                    // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
-                                                    // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
-                                                    // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
-                                                    // 只读日志，不改任何模拟/出帧语义。
-                                                    log_enter_ability(&head.chr_name, &out);
-                                                    // **`openmir2-login-charstatus-657`**：`RecalcAbilitys`
-                                                    // 尾段（`PlayObject.cs:2874-2876`）的
-                                                    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(…)`
-                                                    // ⇒ 登录队列里那两条 `RM_CHARSTATUSCHANGED` 的载荷
-                                                    // `(CharStatus, 自己的 HitSpeed)`。`HitSpeed` 取本次重算的
-                                                    // `AddAbil.HitSpeed`（`:2899`，与写进实体的同一值）。
-                                                    inputs.char_status =
-                                                        Some((login_char_status, out.hit_speed));
-                                                    // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
-                                                    // （此前只喂 52/752 帧，实体属性仍是 `EntitySpawn::new` 的空值）。
-                                                    if let Some(mut e) = world.entities.get_mut(id) {
-                                                        apply_ability_to_entity(&mut e, &out.wabil, &out.sub, out.hit_speed);
-                                                        // oracle `CharStatus = GetCharStatus()` 的落账
-                                                        // （`BaseObject.cs:56` 的 `CharStatus` 缓存；657 的
-                                                        // `Param/Tag` 与 `SM_DIGUP` 尾的 `Status` 都读它）。
-                                                        e.buff.char_status = login_char_status;
-                                                        // **PL-1 / P32**：登录时已戴复活戒指 ⇒ `Revival=true`
-                                                        // （oracle 在 `RecalcAbilitys` 里置位，粘滞）。
-                                                        if out.revival {
-                                                            e.revival.revival = true;
-                                                        }
-                                                        // **Lane B**：火球戒指粘滞锁存（首次登录 = 本次命中）。
-                                                        e.revival.flame_ring |= out.flame_ring;
-                                                    } else {
-                                                        glog!(
-                                                            "WRN",
-                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 攻击/命中属性未装载（登记）"
-                                                        );
-                                                    }
-                                                    // **G-06（`openmir2-persist-useitems-wiring`）**：
-                                                    // 会话 `PlayObject.UseItems` 同时装载进世界实体槽
-                                                    // （`PlayObject.cs:1163-1176` 的 `GetHumData` 之后的
-                                                    // 对象同一性）——耐久循环读的是实体槽，不装载就恒全零。
-                                                    let session_use_items =
-                                                        use_items_from(d.hum_items.as_deref());
-                                                    if let Some(inv) = world.entities.inventory_mut(id) {
-                                                        apply_use_items_to_entity(
-                                                            &mut inv.use_items,
-                                                            &session_use_items,
-                                                        );
-                                                    } else {
-                                                        glog!(
-                                                            "WRN",
-                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 装备槽未装载（登记）"
-                                                        );
-                                                    }
-                                                    ground_sessions.insert(
-                                                        head.chr_name.clone(),
-                                                        session_ground_from_login(SessionGroundInputs {
-                                                            login_account: &account,
-                                                            record: d,
-                                                            recalc: &out,
-                                                            ability: a,
-                                                            use_items: session_use_items,
-                                                            guild_session: &guild_session,
-                                                            soft_version_date,
-                                                            actor_id: id,
-                                                            server_index: enter_cfg.server_index,
-                                                            magic: readbook::MagicState {
-                                                                list: login_magic_list.clone(),
-                                                                table: Some(std::sync::Arc::clone(
-                                                                    &magic_table_arc,
-                                                                )),
-                                                                passives: login_skill,
-                                                                ..Default::default()
-                                                            },
-                                                            red_home: red_home_of(&enter_cfg),
-                                                            canot_pick_up_item: enter_cfg
-                                                                .string_conf
-                                                                .canot_pick_up_item(),
-                                                            now: now_ms(),
-                                                        }),
-                                                    );
-                                                    // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
-                                                    // 新角色的 `Abil/HomeMap/坐标` 已在上面按 oracle 落进 `full`。
-                                                    if let Some(r) = full.as_ref() {
-                                                        saves.insert(
-                                                            head.chr_name.clone(),
-                                                            SavedHuman {
-                                                                account: account.clone(),
-                                                                record: r.clone(),
-                                                                enter_map: final_map_name.clone(),
-                                                                derived: None,
-                                                            },
-                                                        );
-                                                    }
-                                                    // oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品
-                                                    // （`IsNewHuman` 由 `WorldServer.cs:258-277` 在 `HomeMap` 空且
-                                                    // `Abil.Level==0` 时置位）。**Lane A 缺口 1**：四件已在上面
-                                                    // `full.as_mut()` 的新角色块里并入**记录背包**（重算/帧/会话/
-                                                    // 存档同源）；旧 late `add_newbie_items`（写
-                                                    // `sg.state.item_list`，不同源）已删除。
-                                                    // 日志语义 = **非空件数**（`bag_items_from` 展平后计数）：
-                                                    // 记录 Vec 是定长槽位（新号 46 空槽 + 4 件），`Vec::len()`
-                                                    // 会打印 50，不表实际件数（评审员更正）。
-                                                    glog!(
-                                                        "INF",
-                                                        "IsNewHuman 判定 ChrName={} home_empty={home_empty} 记录 Abil.Level={abil_level} is_new_human={is_new_human} bag_items={}",
-                                                        head.chr_name,
-                                                        bag_items_from(d.bag_items.as_deref()).len()
-                                                    );
-                                                }
-                                                // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
-                                                // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
-                                                // `GetCharStatus` / `GetMyLight` / `GetShowName`）。
-                                                // `Dir` 取记录值（`ClientChangeDir` 会改它——属移动接线，登记为下一格）。
-                                                let light_pairs: Vec<(u16, u16)> = data
-                                                    .and_then(|d| d.hum_items.as_deref())
-                                                    .unwrap_or(&[])
-                                                    .iter()
-                                                    .take(downlink::USE_ITEM_SLOTS)
-                                                    .map(|cell| {
-                                                        cell.as_ref().map_or((0, 0), |it| (it.index, it.dura))
-                                                    })
-                                                    .collect();
-                                                let light = downlink::my_light(
-                                                    data.and_then(|d| d.abil.as_ref())
-                                                        .map_or(0, |a| a.level),
-                                                    &light_pairs,
-                                                    &enter_cfg.catalog,
-                                                );
-                                                if let Some(wl) = inputs.logon_body_wl {
-                                                    let show_bytes = wx.show_name.as_ref().map_or_else(
-                                                        Vec::new,
-                                                        |sn| {
-                                                            enter::gbk(&enter::show_name(
-                                                                &enter_cfg.string_conf,
-                                                                sn,
-                                                            ))
-                                                        },
-                                                    );
-                                                    // **T-277**：展示表带骑乘 `mount_id`，后续 AOI
-                                                    // 出现帧会追加独立帧 `SM_MOUNTRIDE(1118)`。
-                                                    let login_mount_id = ground_sessions
-                                                        .get(&head.chr_name)
-                                                        .map_or(0, |sg| {
-                                                            if sg.gm.on_horse {
-                                                                sg.gm.horse_type
-                                                            } else {
-                                                                0
-                                                            }
-                                                        });
-                                                    displays.set(
-                                                        id,
-                                                        downlink::ActorDisplay::new(
-                                                            inputs.dir,
-                                                            light,
-                                                            wl.0,
-                                                            inputs.feature.map_or(0, |(_, fe)| fe),
-                                                            wl.1,
-                                                            enter::PLAY_NAME_COLOR,
-                                                            show_bytes,
-                                                        )
-                                                        .with_mount_id(login_mount_id),
-                                                    );
-                                                    glog!(
-                                                        "DBG",
-                                                        "同屏展示表登记：actor={id} dir={} light={light} feature={}",
-                                                        inputs.dir,
-                                                        wl.0
-                                                    );
-                                                }
-                                                // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
-                                                // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
-                                                // 绝不 `gates.values().next()` 静默挑一个。
-                                                //
-                                                // **卡 `openmir2-script-broadcast-tx-gating`**：`own_tx` 只把关
-                                                // 「本例玩家自己」的入图帧 / `MarkInWorld` / 说词 / 直发帧 / 脚本帧；
-                                                // `@Login` 脚本执行、写回与**其余在线玩家**的 `SENDMSG 0-3`
-                                                // 扇出**不**受它约束（oracle `SendBroadCastMsg` 遍历
-                                                // `PlayObjectList`，与发送者自身 socket 状态无关）。
-                                                let own_tx = route_to_gate(
-                                                    &gates,
-                                                    gate_idx,
-                                                    socket,
-                                                    "标记进世界/下发入图帧",
-                                                );
-                                                if let Some(tx) = own_tx {
-                                                    // **lane654**：登录队列切成两段。`before` =
-                                                    // 优先级 ≤ `(byte)RM_TURN`(17) 的帧（oracle 在同一
-                                                    // `Run()` 里先出队的那些，含入图 15 帧）；`after` =
-                                                    // `654` 及其后（657/42/100，含优先级 61 的 750）——
-                                                    // oracle 在**其他 actor 的出现帧（RM_TURN=17）之后**
-                                                    // 才出队它们（2026-10-20 真机：10/41×6 → 654 → …），
-                                                    // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
-                                                    let (bodies, tail_probe) = inputs.frames_split();
-                                                    // **T-275**：`[Setup] LevelRankOnLogin`（缺省 0）——
-                                                    // 只给**本次进世界的会话**自己的批次追加一帧
-                                                    // `SM_LEVELRANK(1108)`；缺省关 ⇒ `bodies` 原样（A1）。
-                                                    // 数据源 = 在线登记表 ∩ 世界实体（非 ghost），排序/编码
-                                                    // 全在纯函数 `enter::level_rank_body`（A2）。
-                                                    let rank_players =
-                                                        level_rank_players(&online, &world);
-                                                    let mut bodies = enter::append_level_rank(
-                                                        bodies,
-                                                        enter_cfg.level_rank_on_login,
-                                                        0,
-                                                        enter::LEVEL_RANK_KIND_HUMAN,
-                                                        &rank_players,
-                                                    );
-                                                    // **T-277**：重连仍骑乘 ⇒ 自己的登录批次里补一帧
-                                                    // `SM_MOUNTRIDE(1118)`（本地角色渲染坐骑；同屏其他玩家
-                                                    // 由 AOI 出现帧携带，见 `downlink::appear_frames`）。
-                                                    if let Some(sg) = ground_sessions.get(&head.chr_name) {
-                                                        if sg.gm.on_horse && sg.gm.horse_type != 0 {
-                                                            bodies.push(
-                                                                game_svr::mount::sm_mountride_body(
-                                                                    id,
-                                                                    sg.gm.horse_type,
-                                                                ),
-                                                            );
-                                                        }
-                                                    }
-                                                    glog!(
-                                                        "INF",
-                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的），延迟段 {} 条",
-                                                        bodies.len(),
-                                                        tail_probe.len()
-                                                    );
-                                                    for body in bodies {
-                                                        let _ = tx.send(SimToGate::SendFrame {
-                                                            socket,
-                                                            body,
-                                                        });
-                                                    }
-                                                    // 延迟段 = 654/第二 42/100×4 —— 出队序随本 tick
-                                                    // `SearchViewRange` 对其他 actor 的 `RM_TURN` 槽数
-                                                    // 变化（同优先级不是 FIFO）⇒ 首次扫描时才按真机
-                                                    // 堆布局重算（[`drain_login_tail`]）。
-                                                    login_tails.insert(head.chr_name.clone(), inputs);
-                                                    // **P2-3b**：会话进世界 ⇒ 记 `chr→片`（N=1 时目录为 None，空操作）。
-                                                    shard_router::note_entered(
-                                                        shard_directory.as_ref(),
-                                                        &head.chr_name,
-                                                        local_shard,
-                                                    );
-                                                    let _ = tx.send(SimToGate::MarkInWorld { socket });
-                                                }
-                                                // **M3⑥-实现 3 第②片**：进世界完成点 oracle
-                                                // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
-                                                // SystemShare.ManageNPC.GotoLable(this, "@Login", false)`。
-                                                // 引擎产出的说词经 oracle `MsgQueue` 出队序落
-                                                // `SM_MERCHANTSAY(643)`（`PlayObject.Message.cs:1722`）。
-                                                // 脚本取数走**同一条** `world.rng`（临时移出后归位，
-                                                // 与 `step_mon_gen` 同法）。
-                                                if let Some(host) = npc_host.as_ref() {
-                                                    if host.has_manage_npc() {
-                                                        let mut rng = std::mem::replace(
-                                                            &mut world.rng,
-                                                            mir2_shared::rng::RandomNumber::with_seed(0),
-                                                        );
-                                                        {
-                                                            let mut rngf =
-                                                                |v: i32| rng.random_below(v);
-                                                            let level = data
-                                                                .and_then(|d| d.abil.as_ref())
-                                                                .map_or(1, |a| i32::from(a.level));
-                                                            // §1.O `recall-ext` 读侧：同源自 `World` 的组队快照。
-                                                            let (group_owner, group_member_jobs) =
-                                                                world
-                                                                    .party_script_group_snapshot(
-                                                                        id,
-                                                                    );
-                                                            // **Lane A 缺口 1 的正向副作用（登记）**：`npc_player_from` 读记录
-                                                            // `bag_items`；四件新手物品已并入记录 ⇒ 脚本侧 `CHECKBAGGAGE` 一类
-                                                            // 查询在新号首次登录即可见四件（与 oracle 的 `ItemList` 语义一致，
-                                                            // 但与旧 Rust 行为不同——旧行为要等 late 调用之后才有）。
-                                                            // **卡 `openmir2-gm-script-host-seam`（T-210）**：
-                                                            // `player.gm` 借住 `&mut ground_sessions[..].gm` 与 `&world`
-                                                            // ⇒ 把「建快照 + 跑 @Login」收进独立块；块尾 `player`
-                                                            // 析构即释放借用，后面的脚本帧排水 / 写回才能再借同一张表。
-                                                            let (
-                                                                login_says,
-                                                                login_frames,
-                                                                gm_direct,
-                                                                gm_notes,
-                                                                login_broadcasts,
-                                                                wb,
-                                                            ) = {
-                                                            let mut player = npc_player_from(
-                                                                &mut rngf,
-                                                                &head.chr_name,
-                                                                id,
-                                                                &final_map_name,
-                                                                level,
-                                                                data.map_or(0, |d| d.gold),
-                                                                data.and_then(|d| {
-                                                                    d.bag_items.as_deref()
-                                                                }),
-                                                                data.and_then(|d| {
-                                                                    d.quest_flag.as_deref()
-                                                                }),
-                                                                &enter_cfg.catalog,
-                                                                group_owner,
-                                                                &group_member_jobs,
-                                                            &npc_vars_base,
-                                                            );
-                                                            // **PL-3 / P27**：脚本 197/198 的
-                                                            // 读写源（见 `run_party_goto_label` 同段）。
-                                                            if let Some(e) = world.entities.get(id) {
-                                                                player.kill_mon_exp_rate =
-                                                                    e.kill_mon_exp_rate;
-                                                                player.kill_mon_exp_rate_time =
-                                                                    e.kill_mon_exp_rate_time;
-                                                                player.power_rate = e.power_rate;
-                                                                player.power_rate_time =
-                                                                    e.power_rate_time;
-                                                            }
-                                                            // **PL-2 / P31**：`SETAUTOGETEXP`
-                                                            // 四字段从宿主会话 seed（`@Login` 里
-                                                            // 脚本可写，执行后写回）。
-                                                            if let Some(sg) =
-                                                                ground_sessions
-                                                                    .get(&head.chr_name)
-                                                            {
-                                                                player.auto_get_exp_in_safe_zone =
-                                                                    sg.auto_get_exp_in_safe_zone;
-                                                                player.auto_get_exp_envir =
-                                                                    sg.auto_get_exp_envir.clone();
-                                                                player.auto_get_exp_time =
-                                                                    sg.auto_get_exp_time;
-                                                                player.auto_get_exp_point =
-                                                                    sg.auto_get_exp_point;
-                                                                // **PL-4 / P22**：脚本 192/193
-                                                                // 的 `BoIncGameGold`/`BoDecGameGold`。
-                                                                player.bo_inc_game_gold =
-                                                                    sg.p22.bo_inc_game_gold;
-                                                                player.bo_dec_game_gold =
-                                                                    sg.p22.bo_dec_game_gold;
-                                                                // **A-10/T-86**：`SETOFFLINE`
-                                                                // 的两字段（同一个 `PlayObject`）。
-                                                                player.off_line_flag =
-                                                                    sg.off_line_flag;
-                                                                player.kick_off_line_tick =
-                                                                    sg.kick_off_line_tick;
-                                                            }
-                                                            // **A-26/T-207**：`Abil.Exp` 的登录侧 seed 取角色记录里的
-                                                            // `Ability.Exp`（oracle 此时读的是 `PlayObject.Abil.Exp` 初值；
-                                                            // 会话虽已建，但 `equip.abil` 的 exp 同样来自该记录）。
-                                                            player.abil_exp = data
-                                                                .and_then(|d| d.abil.as_ref())
-                                                                .map_or(0, |a| a.exp);
-                                                            // **卡 `openmir2-script-user-account`**：
-                                                            // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
-                                                            player.user_account = head.account.clone();
-                                                            // `HUtil32.GetTickCount()` 的宿主值
-                                                            //（与 P31 `host_now` 同源）。
-                                                            player.tick = now_ms() as i32;
-                                                            // **卡 `openmir2-gm-script-host-seam`（T-210）**：脚本
-                                                            // `GMEXECUTE` 的宿主跳线（oracle `PlayObject.Permission`
-                                                            // 的读写 + `ProcessUserLineMsg`，`PlayObject.cs:58` /
-                                                            // `PlayObject.Chat.cs:229-406`）。
-                                                            //
-                                                            // `Permission` 的权威 = 会话 `GmSession`；抬权在脚本动作里
-                                                            // （`ExecutionProcessingSys.cs:4938-4947`，actions.rs 的
-                                                            // `PermissionGuard`），跳线本身不抬权。
-                                                            //
-                                                            // 密码状态机在本仓是会话层（`pwd_sessions`，`CM_PASSWORD`
-                                                            // 驱动）：oracle 在 `@` 支**之前**判它（`Chat.cs:241-362`）
-                                                            // ⇒ 正在密码流里时注入 `pwd_busy`，跳线不执行（不绕过拦截）。
-                                                            let gm_cfg = gmcmd::GmConfig {
-                                                                lock_human_login: enter_cfg
-                                                                    .lock_human_login,
-                                                                spirit_mutiny_time: enter_cfg
-                                                                    .spirit_mutiny_time,
-                                                                ..gmcmd::GmConfig::default()
-                                                            };
-                                                            // **T-277**：`@Login` 时背包里可能已有
-                                                            // 马牌（读档即见）⇒ 与 CM_SAY 同源注入。
-                                                            let horse_plate_mount_for_login =
-                                                                ground_sessions
-                                                                    .get(&head.chr_name)
-                                                                    .and_then(|sg| {
-                                                                        game_svr::mount::held_mount_id(
-                                                                            &enter_cfg.catalog,
-                                                                            sg.state.item_list.iter(),
-                                                                        )
-                                                                    });
-                                                            let gm_world = gmcmd::GmWorld {
-                                                                guilds: &guilds,
-                                                                maps: registry.as_ref(),
-                                                                world: Some(&world),
-                                                                speaker: &head.chr_name,
-                                                                speaker_id: id,
-                                                                now_ms: world.clock_ms,
-                                                                // 与 CM_SAY 支同一份全局单元
-                                                                // （`SystemShare.FilterWord` 进程单例）。
-                                                                pose_target: None,
-                                                                filter_word: Some(&gm_filter_word),
-                                                                mission: Some(&gm_mission),
-                                                                spirit_mutiny_tick: Some(
-                                                                    &gm_spirit_mutiny_tick,
-                                                                ),
-                                                                // 族 F：`@Login` 时任务位阵
-                                                                // 恒为新角色全零（oracle 不落库）；
-                                                                // 脚本 `GMEXECUTE` 的写不落地
-                                                                // （部署无这些命令的可达调用）。
-                                                                quests: None,
-                                                                // 族 M：`@Login` 脚本不走刷怪/造物
-                                                                // 落地通道（同桥口径）。
-                                                                speaker_dir: 0,
-                                                                m_host: false,
-                                                                caller_guild: None,
-                                                                horse_plate_mount:
-                                                                    horse_plate_mount_for_login,
-                                                            };
-                                                            if let Some(sg) = ground_sessions
-                                                                .get_mut(&head.chr_name)
-                                                            {
-                                                                let pwd_busy = pwd_sessions
-                                                                    .get(&head.chr_name)
-                                                                    .is_some_and(|p| {
-                                                                        let st = &p.state;
-                                                                        st.is_set_storage_pwd
-                                                                            || st.is_re_config_pwd
-                                                                            || st.is_un_lock_pwd
-                                                                            || st.is_un_lock_storage_pwd
-                                                                            || st.is_check_old_pwd
-                                                                    });
-                                                                player.gm =
-                                                                    Some(game_svr::npc::NpcGm {
-                                                                        sess: &mut sg.gm,
-                                                                        cfg: &gm_cfg,
-                                                                        world: gm_world,
-                                                                        pwd_busy,
-                                                                    });
-                                                            }
-                                                            let login_says = host.run_login(&mut player);
-                                                            // 写回快照：`player` 带 GM 跳线的借用，块外不能再持有它
-                                                            // ⇒ 先把 oracle 会落账的标量取出来（语义与逐字段读写等价）。
-                                                            let wb = LoginScriptWriteBack {
-                                                                abil_exp: player.abil_exp,
-                                                                gold: player.gold,
-                                                                game_gold: player.game_gold,
-                                                                game_point: player.game_point,
-                                                                quest_flag: player
-                                                                    .quest_flag
-                                                                    .as_bytes()
-                                                                    .to_vec(),
-                                                                auto_get_exp_in_safe_zone: player
-                                                                    .auto_get_exp_in_safe_zone,
-                                                                auto_get_exp_envir: player
-                                                                    .auto_get_exp_envir
-                                                                    .clone(),
-                                                                auto_get_exp_time: player
-                                                                    .auto_get_exp_time,
-                                                                auto_get_exp_point: player
-                                                                    .auto_get_exp_point,
-                                                                bo_inc_game_gold: player
-                                                                    .bo_inc_game_gold,
-                                                                bo_dec_game_gold: player
-                                                                    .bo_dec_game_gold,
-                                                                off_line_flag: player
-                                                                    .off_line_flag,
-                                                                kick_off_line_tick: player
-                                                                    .kick_off_line_tick,
-                                                                kill_mon_exp_rate: player
-                                                                    .kill_mon_exp_rate,
-                                                                kill_mon_exp_rate_time: player
-                                                                    .kill_mon_exp_rate_time,
-                                                                power_rate: player.power_rate,
-                                                                power_rate_time: player
-                                                                    .power_rate_time,
-                                                            };
-                                                            (
-                                                                login_says,
-                                                                std::mem::take(&mut player.frames),
-                                                                std::mem::take(
-                                                                    &mut player.gm_direct_frames,
-                                                                ),
-                                                                std::mem::take(&mut player.gm_notes),
-                                                                // 卡 `openmir2-sendmsg-login-qmanage-cases`：
-                                                                // `SENDMSG 0-3` 的**其余玩家**扇出正文
-                                                                // （`WorldServer.SendBroadCastMsg`）。本例玩家
-                                                                // 自己那一份已在 `player.frames` 里。
-                                                                std::mem::take(
-                                                                    &mut player.world_broadcasts,
-                                                                ),
-                                                                wb,
-                                                            )
-                                                            };
-                                                            // 脚本已跑完、`player` 已 drop（对 `sg.gm`/`world` 的
-                                                            // 借用结束）⇒ 落地脚本里抬权执行的 `@改属性`
-                                                            // （oracle `SendUpdateItem` 立即 ⇒ 早于下面的脚本帧）。
-                                                            let gm_use_item = match ground_sessions
-                                                                .get_mut(&head.chr_name)
-                                                            {
-                                                                Some(sg) => {
-                                                                    apply_pending_gm_use_item_in(
-                                                                        sg,
-                                                                        &mut world,
-                                                                        &enter_cfg.catalog,
-                                                                        &online,
-                                                                        &gates,
-                                                                    )
-                                                                }
-                                                                None => None,
-                                                            };
-                                                            if let Some(says) = login_says {
-                                                                let sent = own_tx.map_or(0, |tx| {
-                                                                    emit_npc_says(tx, socket, id, &says)
-                                                                });
-                                                                glog!(
-                                                                    "INF",
-                                                                    "@Login 已执行 ChrName={} 说词 {} 条（下发 {sent}）",
-                                                                    head.chr_name,
-                                                                    says.len()
-                                                                );
-                                                            }
-                                                            // `GMEXECUTE` 的**直发帧**（oracle `SendDefMessage`：
-                                                            // 命令体执行时立即下发，不经 `MsgQueue`）⇒ 先于本批
-                                                            // `MsgQueue` 投影排水；未接项/被吞路径记 DBG（不静默）。
-                                                            if let Some(body) = gm_use_item {
-                                                                if let Some(tx) = own_tx {
-                                                                    let _ = tx.send(
-                                                                        SimToGate::SendFrame {
-                                                                            socket,
-                                                                            body,
-                                                                        },
-                                                                    );
-                                                                }
-                                                            }
-                                                            if let Some(tx) = own_tx {
-                                                                for f in &gm_direct {
-                                                                    let body = match f {
-                                                                        gmcmd::GmFrame::AttackMode(mode) => {
-                                                                            smframe::sm_attackmode(*mode)
-                                                                        }
-                                                                    };
-                                                                    let _ = tx.send(SimToGate::SendFrame {
-                                                                        socket,
-                                                                        body,
-                                                                    });
-                                                                }
-                                                            }
-                                                            for note in &gm_notes {
-                                                                glog!(
-                                                                    "DBG",
-                                                                    "@Login GMEXECUTE ChrName={}：{note}",
-                                                                    head.chr_name
-                                                                );
-                                                            }
-                                                            // 脚本帧（`NpcPlayer.frames` =
-                                                            // `MsgQueue` 的脚本侧投影）：@Login
-                                                            // 此前只发说词、整组脚本帧被丢 ⇒
-                                                            // QManage 的 `MESSAGEBOX` 零帧。现与
-                                                            // 商人/组队同一映射（T-194）。
-                                                            // 出队序：说词优先级 0/1 恒先于
-                                                            // 脚本帧（最小 `RM_PLAYDICE` 4）。
-                                                            //
-                                                            // 抽成生产函数 [`drain_login_script_batch`]（内部复用
-                                                            // [`emit_login_script_frames`] 的脚本帧排水）：
-                                                            // 单测直接在**同一函数**上断言 767 的存在与
-                                                            // 同批出队序（删本调用或删函数体内的排水 ⇒
-                                                            // `login_messagebox_...` / `login_frame_batch_...`
-                                                            // 两用例必红）。
-                                                            //
-                                                            // **卡 `openmir2-sendmsg-login-qmanage-cases`**：
-                                                            // `SENDMSG 0-3` 的其余玩家扇出也在这个生产函数里
-                                                            // （复用 [`fan_out_world_sysmessage`]；牙=把它的正
-                                                            // 文实参换成 `&[]` ⇒ `login_sendmsg_*` 用例必红）。
-                                                            let (n, fanned) = drain_login_script_batch(
-                                                                own_tx,
-                                                                socket,
-                                                                id,
-                                                                &head.chr_name,
-                                                                &ground_sessions,
-                                                                (wb.gold, wb.game_gold, wb.game_point),
-                                                                wb.abil_exp,
-                                                                &login_frames,
-                                                                &login_broadcasts,
-                                                                &online,
-                                                                &world,
-                                                                &gates,
-                                                                (
-                                                                    npc_vars_base.sys_msg.red.0,
-                                                                    npc_vars_base.sys_msg.red.1,
-                                                                ),
-                                                            );
-                                                            if n > 0 {
-                                                                glog!(
-                                                                    "INF",
-                                                                    "@Login ChrName={} 脚本帧 {n} 条",
-                                                                    head.chr_name
-                                                                );
-                                                            }
-                                                            if fanned > 0 {
-                                                                glog!(
-                                                                    "INF",
-                                                                    "@Login ChrName={} 全服广播 {fanned} 帧",
-                                                                    head.chr_name
-                                                                );
-                                                            }
-                                                            // 回写（本片回写 `Gold`、`QuestFlag`
-                                                            // 与 `Abil.Exp`（T-207 I-1；
-                                                            // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
-                                                            // 的写回登记为后续分片，见 patch body）。
-                                                            if let Some(s) =
-                                                                saves.get_mut(&head.chr_name)
-                                                            {
-                                                                s.record.data.gold = wb.gold;
-                                                                if let Some(qf) = s
-                                                                    .record
-                                                                    .data
-                                                                    .quest_flag
-                                                                    .as_mut()
-                                                                {
-                                                                    let n = qf
-                                                                        .len()
-                                                                        .min(wb.quest_flag.len());
-                                                                    qf[..n].copy_from_slice(
-                                                                        &wb.quest_flag[..n],
-                                                                    );
-                                                                }
-                                                            }
-                                                            // **A-26/T-207 I-1**：`@Login`
-                                                            // 的 `CHANGEEXP` 增量落进角色记录
-                                                            // 与会话两字段（常态会话已存在；
-                                                            // 未建会话的分支记录是唯一载体）。
-                                                            write_back_login_player_abil_exp(
-                                                                saves.get_mut(&head.chr_name),
-                                                                ground_sessions
-                                                                    .get_mut(&head.chr_name),
-                                                                wb.abil_exp,
-                                                            );
-                                                            if let Some(sg) =
-                                                                ground_sessions
-                                                                    .get_mut(&head.chr_name)
-                                                            {
-                                                                sg.state.gold = wb.gold;
-                                                                // **PL-2 / P31**：脚本写回。
-                                                                sg.auto_get_exp_in_safe_zone = wb.auto_get_exp_in_safe_zone;
-                                                                sg.auto_get_exp_envir = wb.auto_get_exp_envir.clone();
-                                                                sg.auto_get_exp_envir_map_id = None;
-                                                                sg.auto_get_exp_time = wb.auto_get_exp_time;
-                                                                sg.auto_get_exp_point = wb.auto_get_exp_point;
-                                                                // **PL-4 / P22**：脚本写回。
-                                                                sg.p22.bo_inc_game_gold = wb.bo_inc_game_gold;
-                                                                sg.p22.bo_dec_game_gold = wb.bo_dec_game_gold;
-                                                                // **A-10/T-86**：两字段写回
-                                                                //（四字段已在上方 P31 块内写回）。
-                                                                sg.off_line_flag = wb.off_line_flag;
-                                                                sg.kick_off_line_tick = wb.kick_off_line_tick;
-                                                            }
-                                                            if let Some(e) = world.entities.get_mut(id) {
-                                                                e.player_run.kill_mon_exp_rate = wb.kill_mon_exp_rate;
-                                                                e.player_run.kill_mon_exp_rate_time = wb.kill_mon_exp_rate_time;
-                                                                e.player_run.power_rate = wb.power_rate;
-                                                                e.player_run.power_rate_time = wb.power_rate_time;
-                                                            }
-                                                        }
-                                                        world.rng = rng;
-                                                    }
-                                                }
-                                            }
-                                            // oracle `WorldServer.cs:503` 的准入判据：
-                                            // `AlreadyInWorld` 在加了上面的预检后基本不可达（`in_world` 已挡在前面）；
-                                            // 保留为安全网：`enter_map` 报此错 ⇒ 旧必在世界 ⇒ `kick_old = true`。
-                                            Err(mir2_world_bevy::SessionError::AlreadyInWorld) => {
-                                                handle_duplicate_enter(
-                                                    &gates,
-                                                    &mut kick_pending,
-                                                    &head.chr_name,
-                                                    gate_idx,
-                                                    socket,
-                                                    true,
-                                                );
-                                            }
-                                            Err(e) => glog!(
-                                                "WRN",
-                                                "进世界失败 ChrName:{}：{e:?}",
-                                                head.chr_name
-                                            ),
-                                        }
-                                        }
-                                        }
-                                    }
-                                }
-                                None => {
-                                    glog!(
-                                        "WRN",
-                                        "角色记录头部窗口解析失败（{} 字节；`LoadPlayerDataPacket`）",
-                                        payload.len()
-                                    )
-                                }
-                            }
+                            finish_login(&mut LoginCtx {
+                                world: &mut world,
+                                displays: &mut displays,
+                                online: &mut online,
+                                ground_sessions: &mut ground_sessions,
+                                saves: &mut saves,
+                                engine: &mut engine,
+                                gates: &mut gates,
+                                login_tails: &mut login_tails,
+                                aoi_frames_total: &mut aoi_frames_total,
+                                reconnect_pending: &mut reconnect_pending,
+                                kick_pending: &mut kick_pending,
+                                pwd_sessions: &mut pwd_sessions,
+                                npc_host: &mut npc_host,
+                                guilds: &mut guilds,
+                                npc_vars_base: &mut npc_vars_base,
+                                enter_cfg: &enter_cfg,
+                                shard_runtime: &mut shard_runtime,
+                                registry: &registry,
+                                server_table: &server_table,
+                                notice: &notice,
+                                shard_directory: &shard_directory,
+                                magic_table_arc: &magic_table_arc,
+                                gm_filter_word: &gm_filter_word,
+                                gm_mission: &gm_mission,
+                                gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                                local_shard,
+                                reply: &reply,
+                                socket,
+                                gate_idx,
+                                soft_version_date,
+                                session_id,
+                                pay_ment,
+                                account: &account,
+                                item_number: &mut item_number,
+                            });
                         } else if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
                             // **取档应答 recog != 1**（卡 `openmir2-entry-load-reply-buckets`）：修复前
                             // 这里**完全静默**——应答被取走、不打日志、不计 `enter_attempt` ⇒
@@ -38299,7 +38351,7 @@ mod tests {
             "ctor 基准必须在进图之前捕获（capture={capture}, enter={enter}）"
         );
         assert!(
-            prod[enter..].starts_with("world.enter_map_at(\n"),
+            prod[enter..].starts_with("world.enter_map_at("),
             "进图调用点必须是 enter_map_at"
         );
         assert!(
@@ -42437,7 +42489,9 @@ mod tests {
         // 调用点锚（不是 helper 定义）：完整生产调用形 `login_ctor_draws_for(&mut world,
         // in_save, in_world);` 只在 `sim_loop` 出现。`concat!` 拆开字面量 ⇒ 本测试自身的
         // 文本与 `mod tests` 里的直接调用（实参不同）都不会命中；定义签名分行写亦不命中。
-        let call = concat!("login_ctor_draws_for(&mut ", "world, in_save, in_world);");
+        // L2-5 ③ 段 1a：搬进 `finish_login` 后 `world` 是解构出的 `&mut World`，
+        // 生产调用形为 `&mut *world`（纯搬移的类型适配，行为不变）。
+        let call = concat!("login_ctor_draws_for(&mut *", "world, in_save, in_world);");
         assert_eq!(
             src.matches(call).count(),
             1,
@@ -61564,7 +61618,12 @@ SendRefMsgRange=15
                 .any(|l| l.contains("for w in add_newbie_items(")),
             "旧 late `add_newbie_items`（写会话 item_list，不同源）必须已删除"
         );
-        let refresh = pos("refresh_login_max_exp(");
+        let refresh: Vec<usize> = prod
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim().starts_with("refresh_login_max_exp("))
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(refresh.len(), 1, "登录 MaxExp 刷新必须恰一处：{refresh:?}");
         assert!(
             refresh[0] < data,
@@ -61622,7 +61681,7 @@ SendRefMsgRange=15
         let calls: Vec<usize> = prod
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.trim() == "apply_login_record_scalars(")
+            .filter(|(_, l)| l.trim().starts_with("apply_login_record_scalars("))
             .map(|(i, _)| i)
             .collect();
         assert_eq!(calls.len(), 1, "登录装载必须恰一处：{calls:?}");
@@ -70173,7 +70232,11 @@ SendRefMsgRange=15
         let prod_end = src.find("\nmod tests {").expect("测试模块起点");
         let prod = &src[..prod_end];
         let sim_loop = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
-        let body = &prod[sim_loop..];
+        // L2-5 ③ 段 1a：登录块搬进 `finish_login`（在 sim_loop 之前）⇒ 扫描从它起。
+        let body_start = prod
+            .find("fn finish_login(")
+            .map_or(sim_loop, |f| f.min(sim_loop));
+        let body = &prod[body_start..];
         let login = body
             .find("try_cross_server_redirect(")
             .expect("登录跨服分支必须调 try_cross_server_redirect(");
@@ -97455,22 +97518,36 @@ SendRefMsgRange=15
     fn p31_production_wiring_anchors() {
         let src = include_str!("lib.rs");
         let lines: Vec<&str> = src.lines().collect();
-        let start = lines
+        let sim_loop = lines
             .iter()
             .position(|l| l.trim() == "fn sim_loop(")
             .expect("`fn sim_loop(` 定义行");
+        // L2-5 ③ 段 1a：登录完成块已搬进 `finish_login`（紧挨 sim_loop 之前）⇒ 扫描范围
+        // 从 `finish_login` 起、到 sim_loop 之后的下一顶层函数止。
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == "fn finish_login(ctx: &mut LoginCtx<'_>) {")
+            .map_or(sim_loop, |f| f.min(sim_loop));
         let end = lines
             .iter()
             .enumerate()
-            .skip(start + 1)
+            .skip(sim_loop + 1)
             .find(|(_, l)| l.starts_with("fn "))
             .map(|(i, _)| i)
             .expect("sim_loop 之后的下一顶层函数");
         let body = &lines[start..end];
+        /// 序列计数：**空白不敏感**（L2-5 ③ 段 1a 机械搬移后 rustfmt 会改变换行位置；
+        /// 断言语义是「这些 token 按序相邻」，不是「原始换行形状」）。
         fn count_seq(body: &[&str], want: &[&str]) -> usize {
-            body.windows(want.len())
-                .filter(|w| w.iter().zip(want).all(|(l, x)| l.trim() == *x))
-                .count()
+            let joined: String = body
+                .iter()
+                .flat_map(|l| l.chars().filter(|c| !c.is_whitespace()))
+                .collect();
+            let needle: String = want
+                .iter()
+                .flat_map(|l| l.chars().filter(|c| !c.is_whitespace()))
+                .collect();
+            joined.matches(needle.as_str()).count()
         }
         // ① sim_loop 的生产调用点（实参形状与其它调用点不同 ⇒ 唯一命中）。
         assert_eq!(
@@ -115369,8 +115446,14 @@ mod entry_telemetry_wiring {
         let i = SRC.find(&anchor).expect("角色数据回包分支");
         let seg = window(SRC, i, 1200);
         assert!(
-            seg.contains(&needle("attempt")),
-            "record_attempt 必须在 DBR_LOADHUMANRCD(1100) recog==1 分支入口"
+            seg.contains("finish_login("),
+            "分支体必须调 finish_login（L2-5 ③ 段 1a 机械搬移后）"
+        );
+        let f = SRC.find("fn finish_login(").expect("finish_login 定义");
+        let head = window(SRC, f, 4000);
+        assert!(
+            head.contains(&needle("attempt")),
+            "record_attempt 必须在 finish_login 入口（原 DBR_LOADHUMANRCD(1100) recog==1 分支入口）"
         );
     }
 
@@ -118519,5 +118602,172 @@ mod l2_zone_id_base_tests {
             err.contains(&MAX_ZONE_COUNT.to_string()),
             "错误文本必须带上限值：{err}"
         );
+    }
+}
+
+/// **L2-5 ③ 段 1a**：真正走 `finish_login`（`DBR_LOADHUMANRCD` 回执 → 进图/出帧）的端到端用例。
+///
+/// 这是 1a「纯搬移」的唯一行为证据（N=1 stdout 脚本只起栈/关服，**不登录**，证明不了这段）。
+/// 夹具：临时目录里一张 20×20 可走图 + `MapRegistry`；一份默认 `PlayerRecord`（CurMap/Home 都是
+/// 该图）编码成 `DBReply.packet`；`finish_login` 成功后断言：actor 进图（`InWorld`）、账号进在线表、
+/// 出现帧已发到网关通道。
+///
+/// 红检：把 `finish_login` 内部的 `enter_map_at` 行删掉 ⇒ 第一条断言红；把
+/// `online.push/set` 删掉 ⇒ 第二条红；把出帧块删掉 ⇒ 第三条红。
+#[cfg(test)]
+mod finish_login_tests {
+    use super::*;
+
+    fn write_map_fixture(base: &std::path::Path) {
+        let (w, h) = (20_i16, 20_i16);
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+    }
+
+    fn fixture_registry(base: &std::path::Path) -> mir2_envir::MapRegistry {
+        let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
+        mir2_envir::MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        )
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)] // 夹具：默认记录上只覆盖登录相关列
+    fn finish_login_enters_world_online_table_and_emits_frames() {
+        let base = std::env::temp_dir().join(format!("finish_login_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_map_fixture(&base);
+        let registry = fixture_registry(&base);
+
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        let mut engine = load::FrontEngine::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs> =
+            std::collections::HashMap::new();
+        let mut aoi_frames_total: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+        let mut kick_pending: Vec<String> = Vec::new();
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let mut npc_host: Option<game_svr::npc::NpcHost> = None;
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        let mut npc_vars_base = game_svr::npc::NpcVars::default();
+        let enter_cfg = EnterConfig::for_test(crate::strings::StringConf::defaults());
+        let mut shard_runtime = shard::ShardRuntime::new(shard::ShardLayout::single(1));
+        let server_table: Vec<RouteInfo> = Vec::new();
+        let notice: Vec<u8> = Vec::new();
+        let shard_directory: Option<shard_router::ShardDirectory> = None;
+        let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
+        let gm_filter_word = std::cell::Cell::new(true);
+        let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
+        let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
+        let mut item_number = 0i32;
+        let account = "acct".to_string();
+
+        // 合成角色记录：CurMap/Home 都是夹具图 "0"，坐标 (5,5) 可走。
+        let mut rec = record::PlayerRecord::default();
+        rec.chr_name = Some("hero".to_string());
+        rec.header.name = Some("hero".to_string());
+        rec.header.s_account = Some("acct".to_string());
+        rec.data.cur_map = Some("0".to_string());
+        rec.data.cur_x = 5;
+        rec.data.cur_y = 5;
+        rec.data.home_map = Some("0".to_string());
+        rec.data.home_x = 5;
+        rec.data.home_y = 5;
+        let packet = mir2_protocol::edcode::encode(&record::encode_player_data(&rec));
+        let reply = dbclient::Reply {
+            query_id: 1,
+            message: Vec::new(),
+            packet,
+            sign: Vec::new(),
+        };
+
+        finish_login(&mut LoginCtx {
+            world: &mut world,
+            displays: &mut displays,
+            online: &mut online,
+            ground_sessions: &mut ground_sessions,
+            saves: &mut saves,
+            engine: &mut engine,
+            gates: &mut gates,
+            login_tails: &mut login_tails,
+            aoi_frames_total: &mut aoi_frames_total,
+            reconnect_pending: &mut reconnect_pending,
+            kick_pending: &mut kick_pending,
+            pwd_sessions: &mut pwd_sessions,
+            npc_host: &mut npc_host,
+            guilds: &mut guilds,
+            npc_vars_base: &mut npc_vars_base,
+            enter_cfg: &enter_cfg,
+            shard_runtime: &mut shard_runtime,
+            registry: &Some(registry),
+            server_table: &server_table,
+            notice: &notice,
+            shard_directory: &shard_directory,
+            magic_table_arc: &magic_table_arc,
+            gm_filter_word: &gm_filter_word,
+            gm_mission: &gm_mission,
+            gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+            local_shard: shard::HOST_SHARD,
+            reply: &reply,
+            socket: 7,
+            gate_idx: 0,
+            soft_version_date: 0,
+            session_id: 1,
+            pay_ment: 0,
+            account: &account,
+            item_number: &mut item_number,
+        });
+
+        // ① actor 进图。
+        assert_eq!(
+            world.session("hero").map(|s| s.stage),
+            Some(mir2_world_bevy::WorldStage::InWorld),
+            "finish_login 必须把 actor 送进世界"
+        );
+        // ② 账号进在线表。
+        assert!(
+            online.iter().any(|e| e.chr_name == "hero"),
+            "在线表必须有该会话"
+        );
+        // ③ 出现/进图帧已发到网关通道。
+        let mut frames = 0usize;
+        while let Ok(cmd) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, .. } = cmd {
+                assert_eq!(socket, 7, "帧必须按会话 socket 路由");
+                frames += 1;
+            }
+        }
+        assert!(frames > 0, "finish_login 必须下发进图/出现帧");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
