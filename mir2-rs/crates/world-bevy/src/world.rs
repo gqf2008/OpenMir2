@@ -8184,6 +8184,15 @@ impl World {
         }
     }
 
+    /// **L2-5 ②**：`race == Play` 且**非镜像**的实体数（oracle `PlayObjectList.Count` 的等价物）。
+    ///
+    /// 镜像不是会话/在线玩家（只读副本）⇒ 不得计入。本函数是**生产唯一来源**：MonGen 的
+    /// play 人数与 IDS 在线数（`WorldEngine.OnlinePlayObject`）都走它，避免两份内联谓词漂移。
+    #[must_use]
+    pub fn play_object_count(&self) -> i32 {
+        crate::monai::play_object_count_impl(&self.entities)
+    }
+
     /// **L2-5 ②**：该 id 是否镜像（`Flags.mirror`）。镜像用 owner 的全局 `ActorId` 插入。
     #[must_use]
     pub fn is_mirror(&self, id: i32) -> bool {
@@ -10536,9 +10545,14 @@ impl World {
                 continue;
             };
             {}
+            // **L2-5 ② 段 6**：镜像不参与死亡结算。**当前代码下这条本来恒成立**（镜像 hp 取
+            // 构造缺省 100、`die_called=false`），本守卫是**把不变量写成判据**：将来若镜像开始
+            // 复制 hp（帧 53/100 面）或任何路径把镜像 hp 置 0，不得触发 `Die()` 的掉落/经验/
+            // 尸体链。牙由「用例把镜像 hp 置 0」的变异造出（见 `step2_mirror_isolation_death`）。
             if (e.hp == 0 || e.die_called)
                 && !e.death_settled
                 && !e.ghost
+                && !e.mirror
                 && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
             {
                 dead.push(id);
@@ -10849,6 +10863,13 @@ impl World {
             .and_then(std::collections::VecDeque::pop_front)
             .unwrap_or(0);
         if access.get(actor_id).is_none() || access.get(target_id).is_none() {
+            return None;
+        }
+        // **L2-5 ② 段 5（Q2 裁决）**：指向镜像的攻击 v1 **只计数、不生效**——跨区伤害生效留
+        // intent 步（届时 `cross_hit_delayed` 应归零或改判；本步**不**引 per-zone intent 队列）。
+        // 镜像不参与模拟 ⇒ 不扣 HP、不写 `record.attacks`（否则会出伤害/受击帧并污染账本）。
+        if access.get(target_id).is_some_and(|e| e.mirror) {
+            crate::mirror_metrics::note_cross_hit_delayed();
             return None;
         }
         // 取出双方属性做结算（避免同时可变借用），再写回
@@ -15330,6 +15351,105 @@ mod tests {
             a.power
         );
         assert!(a.damage > 0, "护甲 0 时伤害应大于 0");
+    }
+
+    /// **段 5（C6）**：指向镜像的攻击 v1 **只计数、不生效**——镜像 HP 不变、不记
+    /// `record.attacks`、`cross_hit_delayed` +1（Q2 裁决；跨区伤害生效留 intent 步）。
+    ///
+    /// 红检：删 `attack_once_impl` 的镜像分支 ⇒ 计数 0 且 `record.attacks` 有记录 ⇒ 红；
+    /// 只删 `return None` ⇒ 攻击结算打在镜像上（Hp 可能下降）⇒ 红。
+    #[test]
+    fn step2_mirror_isolation_attack() {
+        crate::mirror_metrics::reset_cross_hit_delayed_for_tests();
+        let mut w = World::new(32, 32);
+        let hero = w.add_entity(player(1, "hero", 10, 10, 10));
+        assert_eq!(
+            w.upsert_mirror(crate::MirrorSpec {
+                id: 900,
+                name: "mirror".to_string(),
+                map_id: 0,
+                x: 11,
+                y: 10,
+                view_range: 5,
+                race: 80,
+                race_img: 0,
+                appr: 1,
+                light: 0,
+                name_color: 255,
+                cell_type: crate::CellType::Monster,
+                dir: 0,
+                death: false,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+            }),
+            crate::MirrorUpsert::Inserted
+        );
+        w.tick(); // 英雄落图
+        w.attack_cmd(hero, 900);
+        let rec = w.tick();
+        let hp = w.entities.get(900).map(|e| e.hp);
+        let hits = rec
+            .attacks
+            .iter()
+            .filter(|(a, t, _)| *a == hero && *t == 900)
+            .count();
+        let delayed = crate::mirror_metrics::cross_hit_delayed();
+        crate::mirror_metrics::reset_cross_hit_delayed_for_tests();
+        assert_eq!(hp, Some(100), "镜像 HP 不得下降");
+        assert_eq!(hits, 0, "不得记 record.attacks（否则会出伤害/受击帧）");
+        assert_eq!(delayed, 1, "cross_hit_delayed 必须计数");
+    }
+
+    /// **段 6（C9）**：镜像不参与死亡结算——即使把镜像 hp 置 0（模拟将来 hp 被镜像的风险），
+    /// 也不得触发 `death_settled` / `MakeGhost` / `death_tick` 推进（掉落与经验链的前置）。
+    ///
+    /// **诚实口径**：当前代码下 `!e.mirror` 恒成立（镜像 hp=100、`die_called=false`），所以
+    /// 这条守卫是「把不变量写成判据」；本用例**故意**把镜像 hp 置 0 造出变异面。
+    ///
+    /// 红检：删 `settle_deaths_impl` 候选条件的 `!e.mirror` ⇒ `death_settled=true` 且
+    /// `death_tick` 被推进 ⇒ 红。
+    #[test]
+    fn step2_mirror_isolation_death() {
+        let mut w = World::new(32, 32);
+        assert_eq!(
+            w.upsert_mirror(crate::MirrorSpec {
+                id: 900,
+                name: "mirror".to_string(),
+                map_id: 0,
+                x: 5,
+                y: 5,
+                view_range: 5,
+                race: 80,
+                race_img: 0,
+                appr: 1,
+                light: 0,
+                name_color: 255,
+                cell_type: crate::CellType::Monster,
+                dir: 0,
+                death: true,
+                invisible: false,
+                ghost: false,
+                fixed_hide_mode: false,
+                ob_mode: false,
+                master: None,
+            }),
+            crate::MirrorUpsert::Inserted
+        );
+        // 变异形：把镜像 hp 置 0（当前不会发生；用来证明守卫真的挡得住）。
+        if let Some(e) = w.entities.get_mut(900) {
+            e.vitals.hp = 0;
+        }
+        let rec = w.tick();
+        let e = w.entities.get(900).expect("镜像在");
+        assert!(e.death, "快照的 death 必须保留");
+        assert!(!e.death_settled, "镜像不得被死亡结算");
+        assert!(!e.ghost, "不得 MakeGhost");
+        assert_eq!(e.death_tick, 0, "死亡结算不得推进 death_tick");
+        assert!(rec.skeletons.is_empty(), "不得产生尸体/骷髅事件");
+        assert!(rec.death_use_item_drops.is_empty(), "不得产生玩家掉落");
     }
 
     /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。
