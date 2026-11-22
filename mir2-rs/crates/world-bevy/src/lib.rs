@@ -394,6 +394,7 @@ pub mod magic;
 pub mod magic_effect;
 pub mod map;
 pub mod merchant;
+pub mod mirror_metrics;
 pub mod monai;
 pub mod mongen;
 pub mod msgqueue;

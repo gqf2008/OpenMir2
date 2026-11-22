@@ -5870,7 +5870,11 @@ fn play_object_count_impl<A: crate::entity::EntityAccess>(access: &A) -> i32 {
     access
         .order_ids()
         .into_iter()
-        .filter(|id| access.get(*id).is_some_and(|x| x.race == ACTOR_RACE_PLAY))
+        .filter(|id| {
+            access
+                .get(*id)
+                .is_some_and(|x| x.race == ACTOR_RACE_PLAY && !x.mirror)
+        })
         .count() as i32
 }
 
@@ -6556,6 +6560,8 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
             e.race > ACTOR_RACE_PLAY
                 && e.merchant.is_none()
                 && e.npc.is_none()
+                // **L2-5 ② 段 4**：镜像不参与 AI（只读副本；`mirror_ai_actions` 正常恒 0）。
+                && !e.mirror
                 // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
                 // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
                 // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
@@ -6600,6 +6606,11 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
             continue;
         }
         crate::world::World::set_process_run_count_impl(sim, id, 0);
+        // **L2-5 ② 段 4**：镜像不得进 AI 段（正常 `ids` 里没有镜像）。本计数是「隔离被拆」的
+        // 唯一读数；正常恒 0。位置 = 过了 `ProcessMonsterInterval` 门、即将模拟之前。
+        if access.get(id).is_some_and(|e| e.mirror) {
+            crate::mirror_metrics::note_mirror_ai_action();
+        }
         // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
         // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
         if access.get(id).is_some_and(|e| e.death) {
@@ -8562,6 +8573,39 @@ mod tests {
     use crate::world::World;
     use mir2_shared::rng::RandomNumber;
 
+    /// 镜像计数是**进程级原子** ⇒ 本模块里读它的用例必须串行。
+    static MIRROR_COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn mirror_spec(
+        id: i32,
+        x: i32,
+        y: i32,
+        race: u8,
+        cell_type: crate::CellType,
+    ) -> crate::MirrorSpec {
+        crate::MirrorSpec {
+            id,
+            name: format!("m{id}"),
+            map_id: 0,
+            x,
+            y,
+            view_range: 5,
+            race,
+            race_img: 0,
+            appr: 1,
+            light: 0,
+            name_color: 255,
+            cell_type,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        }
+    }
+
     fn monster(world: &mut World, x: i32, y: i32) -> i32 {
         let mut e = crate::EntitySpawn::new(0, "稻草人", x, y);
         e.race = ACTOR_RACE_MONSTER;
@@ -8575,6 +8619,65 @@ mod tests {
         e.hp = 100;
         e.max_hp = 100;
         world.add_entity(e)
+    }
+
+    /// **段 4（C5）**：镜像不得进怪物 AI 段。计数 `mirror_ai_actions` 正常恒 0；镜像坐标只由
+    /// 快照驱动（本用例不刷新快照 ⇒ 坐标不得变）。
+    ///
+    /// 红检：删 `monster_ai_tick_impl_probed` 的 `ids.retain` 里的 `!e.mirror` ⇒ 计数 > 0 ⇒ 红。
+    #[test]
+    fn step2_mirror_isolation_ai() {
+        let _guard = MIRROR_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::mirror_metrics::reset_for_tests();
+        let mut world = World::new(30, 30);
+        world.enable_monster_ai();
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(
+                900,
+                4,
+                5,
+                ACTOR_RACE_MONSTER,
+                crate::CellType::Monster
+            )),
+            crate::MirrorUpsert::Inserted
+        );
+        for _ in 0..6 {
+            world.tick();
+        }
+        let after = world.entities.get(900).map(|e| (e.x, e.y));
+        let actions = crate::mirror_metrics::mirror_ai_actions();
+        crate::mirror_metrics::reset_for_tests();
+        assert_eq!(after, Some((4, 5)), "镜像坐标不得被 AI 改动");
+        assert_eq!(
+            actions, 0,
+            "镜像不得进入 AI 段（正常恒 0；实测 {actions} 次）"
+        );
+    }
+
+    /// **段 4（C8 的 play 面）**：玩家镜像不得计入 `play_object_count`（该数喂怪物死亡/刷怪口径）。
+    ///
+    /// 红检：`play_object_count_impl` 的过滤去掉 `!x.mirror` ⇒ 本用例计数变 2 ⇒ 红。
+    #[test]
+    fn step2_mirror_player_is_not_counted_as_play_object() {
+        let mut world = World::new(30, 30);
+        player(&mut world, 2, 2);
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(
+                901,
+                4,
+                5,
+                crate::entity::ACTOR_RACE_PLAY,
+                crate::CellType::Play
+            )),
+            crate::MirrorUpsert::Inserted
+        );
+        assert_eq!(
+            play_object_count_impl(&world.entities),
+            1,
+            "玩家镜像不得计入 play 数"
+        );
     }
 
     /// 找一个「首抽 `Random(20)` 为 `want_zero`、且（可选）次抽 `Random(4)` 为 `want4`」的种子。
