@@ -101,6 +101,10 @@ REGISTRY = [
     ("scenario_manifest_gate", ["tools/hygiene/scenario_manifest_gate.py", "--selftest"], False),
     # 卡 `openmir2-doc-anchor-drift`：判据文档（`[[files]]` 登记）里的行号/符号锚。
     ("docs_anchor_gate", ["tools/hygiene/docs_anchor_gate.py", "--selftest"], False),
+    # 卡 `openmir2-n1-stdout-equivalence`：N=1 归一化 stdout 的可复跑判据（两棵树 + 同一启动命令 +
+    # 剥 12 位时间戳 + 顺序 sha/多重集 sha）。此前「51 行逐字节」没有任何可复跑命令。
+    ("n1_stdout_equivalence",
+     ["tools/hygiene/n1_stdout_equivalence.ps1", "-Selftest"], False),
     ("t_reservation_gate", ["tools/whitelist/t_reservation_gate.py", "selftest"], False),
     ("next_t", ["tools/whitelist/next_t.py", "selftest"], False),
     # 卡 `openmir2-whitelist-status-audit`：只读普查 whitelist 的「待独立 principal 复核」
