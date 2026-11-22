@@ -43,6 +43,18 @@ CROSS_COLS = [
     "cross_recipient_merchant_disappear",
 ]
 TOTAL_COL = "cross_recipient_missing"
+# **L2-5 ⑤**：六面未命中的投递结果三桶（构造保证 delivered+unroutable+overflow == 六面合计）。
+OUTCOME_COLS = [
+    "cross_recipient_delivered",
+    "cross_recipient_unroutable",
+    "cross_frame_queue_overflow",
+]
+# ⑤ 的 canary/诊断列（有就打印；旧产物 absent）。
+DIAG_COLS = [
+    "cross_frame_dup",
+    "cross_frame_drop_closed",
+    "cross_recipient_zone_unknown",
+]
 # L2-5 ③ 段 4 追加的 handoff 列：有就打印（新二进制），没有就标注 absent（旧产物仍可读）。
 HANDFOFF_COLS = [
     "handoff_offered",
@@ -109,6 +121,8 @@ def _read_tsv(path):
         raise InputError("perf TSV 只有表头、无 tick 行（探针 fail-closed）：%s" % path)
     optional = [c for c in HANDFOFF_COLS if c in header]
     optional += [c for c in ZONE_K_COLS if c in header]
+    optional += [c for c in OUTCOME_COLS if c in header]
+    optional += [c for c in DIAG_COLS if c in header]
     want = REQUIRED + optional
     idx = {name: header.index(name) for name in want}
     out = {name: [] for name in want}
@@ -204,11 +218,26 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
             "six_sum": cross["total"],
             "first_bad_row": first + 1,
         }
+    # **L2-5 ⑤**：三桶 + 恒等式（只在三列齐全时校验；旧产物缺列 ⇒ absent，不判错）。
+    outcome = None
+    if all(c in perf for c in OUTCOME_COLS):
+        outcome = {c: sum(perf[c]) for c in OUTCOME_COLS}
+        outcome["total"] = sum(outcome[c] for c in OUTCOME_COLS)
+        # **窗口合计**校验：跨线程 increment（区 k）与 `write_tick` 的逐行 swap 可能错一拍，
+        # 但每个 incidence 同时给「六面」与「一个结果桶」各 +1 ⇒ **窗口合计严格相等**。
+        if outcome["total"] != cross["total"]:
+            raise InputError(
+                "三桶恒等式破坏（窗口合计）：delivered+unroutable+overflow=%d != 六面=%d"
+                % (outcome["total"], cross["total"])
+            )
+    present_diag = [c for c in DIAG_COLS if c in perf]
     summary = {
         "label": label,
         "perf_tsv": os.path.abspath(perf_path),
         "tick_rows": rows,
         "cross_recipient_missing": cross,
+        "cross_recipient_outcome": outcome,
+        "cross_frame_diag": ({c: sum(perf[c]) for c in present_diag} if present_diag else None),
         "total_column_mismatch": total_mismatch,
         "region_barrier_us": {
             "max": max(perf["region_barrier_us"]),
@@ -279,6 +308,19 @@ def print_summary(s):
             " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS),
         )
     )
+    oc = s.get("cross_recipient_outcome")
+    if oc:
+        print(
+            "cross outcome: delivered=%d unroutable=%d overflow=%d | 六面合计=%d（恒等式 OK）"
+            % (oc["cross_recipient_delivered"], oc["cross_recipient_unroutable"],
+               oc["cross_frame_queue_overflow"], cross["total"]))
+    else:
+        print("cross outcome: absent（旧二进制产物，无三桶列）")
+    dg = s.get("cross_frame_diag")
+    if dg:
+        print("cross diag: dup=%d drop_closed=%d zone_unknown=%d" % (
+            dg["cross_frame_dup"], dg["cross_frame_drop_closed"],
+            dg["cross_recipient_zone_unknown"]))
     if s.get("total_column_mismatch"):
         m = s["total_column_mismatch"]
         print("NOTE total 列与六面之和不一致（合计列冗余，按六面计）：列=%d 六面=%d 首个坏行=%d"
@@ -367,7 +409,7 @@ def selftest():
         header = ["region_barrier_us"] + list(reversed(CROSS_COLS)) + [
             "region_barrier_total_us", "inbound_enqueued", "inbound_drained", "inbound_carry",
             "inbound_budget_hit", "refmsg_calls", "refmsg_targets", TOTAL_COL,
-        ] + list(reversed(ZONE_K_COLS))
+        ] + list(OUTCOME_COLS) + list(DIAG_COLS) + list(reversed(ZONE_K_COLS))
         row = {c: 0 for c in header}
         row["region_barrier_us"] = 120
         row["region_barrier_total_us"] = 240
@@ -378,6 +420,13 @@ def selftest():
         row["cross_recipient_refmsg"] = 1
         row["cross_recipient_mountride"] = 2
         row[TOTAL_COL] = 3  # = 1 + 2
+        # ⑤ 三桶：每行 delivered(2)+unroutable(1)+overflow(0) == 六面(3)
+        row["cross_recipient_delivered"] = 2
+        row["cross_recipient_unroutable"] = 1
+        row["cross_frame_queue_overflow"] = 0
+        row["cross_frame_dup"] = 0
+        row["cross_frame_drop_closed"] = 0
+        row["cross_recipient_zone_unknown"] = 0
         row["zone_cmd_unsupported"] = 3
         row["handoff_move_after_transfer_dropped"] = 1
         row["move_map_change_unsupported"] = 0
@@ -414,6 +463,9 @@ def selftest():
         expect("窗口 ticks=2 时长=0.4s" in first, "首屏必须带窗口（ticks/时长）：%s" % first)
         expect("= 60.000%" in first, "占比 = 6/10：%s" % first)
         expect("zone-k 缺口" in buf.getvalue(), "④a 列必须打印")
+        expect("delivered=4 unroutable=2 overflow=0" in buf.getvalue(),
+               "⑤ 三桶必须同屏打印：%s" % buf.getvalue())
+        expect("恒等式 OK" in buf.getvalue(), "⑤ 恒等式必须显式展示")
 
         # 无 run.json ⇒ 时长明写 unknown（不静默丢窗口）。
         s_norun = summarize(perf, None, rep, None, bots=1000, label="2zone")
@@ -441,6 +493,28 @@ def selftest():
         expect(sd["total_column_mismatch"] is not None, "合计列漂移必须被显式记录")
         expect(sd["total_column_mismatch"]["six_sum"] == 6, "六面之和应为 6（权威口径）")
         expect(sd["cross_recipient_missing"]["total"] == 6, "合计应按六面之和计")
+
+        # 负例 2b（⑤）：三桶与六面不等 ⇒ rc=2（构造保证，破坏即缺陷）
+        broke = os.path.join(td, "identity_broke.tsv")
+        rb = [dict(row), dict(row)]
+        rb[0]["cross_recipient_delivered"] = 1  # 1+1+0=2 != 3
+        _write(broke, _tsv(header, [[r[h] for h in header] for r in rb]))
+        try:
+            summarize(broke)
+            expect(False, "三桶恒等式破坏必须 InputError")
+        except InputError as e:
+            expect("三桶恒等式破坏" in str(e), "必须点名恒等式：%s" % e)
+
+        # 负例 2c（⑤）：旧产物无三桶列 ⇒ absent（不判错）
+        legacy = os.path.join(td, "legacy_no_outcome.tsv")
+        lh = [h for h in header if h not in OUTCOME_COLS and h not in DIAG_COLS]
+        _write(legacy, _tsv(lh, [[r[h] for h in lh] for r in [dict(row), dict(row)]]))
+        sl = summarize(legacy)
+        expect(sl["cross_recipient_outcome"] is None, "旧产物应 absent")
+        buf3 = _io.StringIO()
+        with contextlib.redirect_stdout(buf3):
+            print_summary(sl)
+        expect("cross outcome: absent" in buf3.getvalue(), "旧产物必须标 absent")
 
         # 负例 3：只有表头 ⇒ rc=2
         empty = os.path.join(td, "empty.tsv")

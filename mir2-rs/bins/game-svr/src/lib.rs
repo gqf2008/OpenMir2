@@ -25,6 +25,8 @@
 // 合并进 lib 后，把 crate 自身绑成同名，使这些路径与 `crate::xxx` 等价。
 extern crate self as game_svr;
 
+/// **L2-5 ⑤**：跨区收件人帧的邮箱与排水（详见模块头）。
+mod cross_zone_frames;
 /// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`；卡 `openmir2-visiblehumanlist-cache`）。
 mod ref_msg_cache;
 
@@ -982,6 +984,8 @@ struct ZoneHost {
     /// **L2-5 ③ 段 2（接线）**：每区一个 handoff offer/ack 邮箱（下标 = 区号）。
     /// 切片关 ⇒ 空表（`HandoffRuntime` 根本不构造 ⇒ `handoff_pending` 恒 false）。
     handoff_boxes: Vec<handoff::HandoffMailbox>,
+    /// **L2-5 ⑤**：跨区收件人帧邮箱（`slicing && mirror` 才构造；否则 `None` ⇒ 零参与）。
+    cross_mailboxes: Option<Arc<cross_zone_frames::CrossZoneMailboxes>>,
 }
 
 impl ZoneHost {
@@ -1975,6 +1979,9 @@ fn spawn_minimal_zone(
     stop: Arc<std::sync::atomic::AtomicBool>,
     // **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`；关 ⇒ `run_zone_tick` 的 `mirrors` 为 false）。
     mirrors: bool,
+    // **L2-5 ⑤**：跨区收件人帧邮箱 + 路由（切片 + 镜像才 `Some`；否则零参与）。
+    router: Arc<zone_router::ZoneRouter>,
+    cross_mailboxes: Option<Arc<cross_zone_frames::CrossZoneMailboxes>>,
     // **L2-5 ③**：切片区状态（`None` ⇒ stub 形态；`Some` ⇒ 真 World，登录可落本区）。
     state: Option<Arc<std::sync::Mutex<ZoneState>>>,
     // stub 形态的图数（只用来凑地图下标空间）。
@@ -1997,6 +2004,10 @@ fn spawn_minimal_zone(
             // 非 0 区不落 RNG 流水（与 P2-3b「非宿主片不落流水」同口径：对拍账只属于区 0）。
             if state.is_some() {
                 mir2_shared::rng_trace::suppress_current_thread();
+            }
+            // **L2-5 ⑤**：安装本线程跨区 sink（切片 + 镜像才有邮箱；否则零参与）。
+            if let Some(mb) = cross_mailboxes.as_ref() {
+                cross_zone_frames::install(Arc::clone(mb), Arc::clone(&router), zone_id);
             }
             let mut tick = 0u64;
             // **失败快传**：本区 panic ⇒ 唤醒其余区（否则它们永久阻塞在 Barrier 上）。
@@ -2055,6 +2066,8 @@ fn spawn_minimal_zone(
                 let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
                     std::collections::HashMap::new();
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    // **L2-5 ⑤**：本 tick 的跨区帧 `src_tick`/`seq` 起点。
+                    cross_zone_frames::begin_tick(tick);
                     // **L2-5 ③ 段 1c**：`Closed` 由本区处理（世界侧在本区线程内完成，
                     // 存档请求进 `save_outbox` 由区 0 发 DB）。
                     // **L2-5 ④a**：`Command` 的**移动类**（`CM_TURN/WALK/RUN/HORSERUN`）由区 k
@@ -2181,6 +2194,11 @@ fn spawn_minimal_zone(
                             std::process::abort();
                         }
                     };
+                    // **L2-5 ⑤（V2）**：barrier1 之后、phase2 之前排空跨区帧（`src_tick` 过滤
+                    // 保恰好 1 tick；切片关 ⇒ 无 sink ⇒ 零参与）。
+                    if cross_mailboxes.is_some() {
+                        let _ = cross_zone_frames::drain_zone(zone_id, tick, &gates);
+                    }
                     // 批 2（持锁）：镜像刷新 + phase2（AOI）。
                     {
                         let mut st = state
@@ -3422,6 +3440,15 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 } else {
                     None
                 };
+                // **L2-5 ⑤**：跨区收件人帧邮箱（只有切片 + 镜像才构造；N=1/② 关 ⇒ None）。
+                let cross_mailboxes = if slicing && mirror_enabled {
+                    Some(Arc::new(cross_zone_frames::CrossZoneMailboxes::new(
+                        zone_count,
+                        cross_zone_frames::MAX_FRAMES_PER_SLOT,
+                    )))
+                } else {
+                    None
+                };
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
@@ -3435,6 +3462,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     router: Arc::clone(&router),
                     zone_states,
                     handoff_boxes,
+                    cross_mailboxes: cross_mailboxes.clone(),
                 });
                 // demux：原两条 gate 入站通道 → 每区一对通道。
                 let template_normal = ev_rx_template.take().expect("多区时原普通通道只给 demux");
@@ -3461,6 +3489,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         Arc::clone(&watch),
                         Arc::clone(&stop),
                         mirror_enabled,
+                        Arc::clone(&router),
+                        cross_mailboxes.clone(),
                         host.zone_states[index].clone(),
                         map_sizes.len(),
                         Arc::clone(&zone_map_names),
@@ -19897,11 +19927,15 @@ fn send_ref_msg_to_targets(
             continue;
         }
         let Some(t) = online.find_by_actor(target_id) else {
-            // **L2-5 ③ 段 3**（只加计数）：候选来自 World 扫描/缓存（含镜像），本地无会话
-            // 且该 id 是本区世界里的**镜像** ⇒ 收件人在邻区，本区发不到。判据/反证见
-            // `perf_counters::note_cross_recipient_missing`。
+            // **L2-5 ⑤**：候选来自 World 扫描/缓存（含镜像），本地无会话且该 id 是镜像 ⇒
+            // 收件人在邻区。分类 + 入目标区邮箱：route=Some 且路由登记 ⇒ delivered；
+            // 否则 unroutable / overflow（三桶恒等式见 `perf_counters::note_cross_recipient_outcome`）。
             if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                perf_counters::note_cross_recipient_missing(surface);
+                crate::cross_zone_frames::note_mirror_recipient(
+                    surface,
+                    world.mirror_route(target_id),
+                    bodies,
+                );
             }
             continue;
         };
@@ -24289,6 +24323,32 @@ mod perf_counters {
     /// 六面计数（下标 = [`CrossRecipientSurface`] 的判别值）。
     static CROSS_RECIPIENT_BY_SURFACE: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
+    /// **L2-5 ⑤**：每一次「六面未命中（收件人是镜像）」的**投递结果**（三桶，互斥）。
+    ///
+    /// 恒等式（构造保证）：`delivered + unroutable + overflow == 六面合计`。`missing` 列保留
+    /// 旧义（六面合计），所以 10.004% 基线仍按同一列可比。
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CrossRecipientOutcome {
+        /// route=Some 且已入目标区邮箱。
+        Delivered = 0,
+        /// route=None（非玩家/未登记/同 tick 下线在快照里已无 route），或 zone 未登记。
+        Unroutable = 1,
+        /// 目标槽满，拒新。
+        Overflow = 2,
+    }
+
+    /// 三桶计数（下标 = [`CrossRecipientOutcome`] 的判别值）。
+    static CROSS_RECIPIENT_OUTCOME: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    /// **canary（只计数、不丢帧）**：排空时同一 `(src_zone, src_tick, seq, dst)` 第二次出现。
+    /// 正常恒 0；>0 是重发缺陷，**不得**写成「已知且无害」。
+    static CROSS_FRAME_DUP: AtomicU64 = AtomicU64::new(0);
+    /// 排空时 gate 线/socket 已不在（已计 delivered 的子集；诊断）。
+    static CROSS_FRAME_DROP_CLOSED: AtomicU64 = AtomicU64::new(0);
+    /// route=Some 但 `ZoneRouter::lookup_registered == None`（未 assign；缺陷信号，应恒 0）。
+    static CROSS_RECIPIENT_ZONE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
+    /// dst == 本区（本地会话表却未命中；一致性缺陷信号，应恒 0）。
+    static CROSS_RECIPIENT_SELF_ZONE_MISS: AtomicU64 = AtomicU64::new(0);
+
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
     pub(crate) fn set_slicing_enabled(on: bool) {
         SLICING_ENABLED.store(on, Ordering::Relaxed);
@@ -24308,10 +24368,67 @@ mod perf_counters {
     /// 玩家**；唯一残差是「同一 tick 内下线」（≤1 tick，投递点不可辨，按跨区计），不另造不可达
     /// 的 `target_mirror_not_deliverable` 计数器。
     pub(crate) fn note_cross_recipient_missing(surface: CrossRecipientSurface) {
+        // **L2-5 ⑤ 兼容支**：尚未接跨区邮箱的面（⑤ 最小切片只接 `RefMsg`）仍走本函数；
+        // 结果桶按「不可路由」计，保证三桶恒等式对全部六面成立（不是把未接的面漏掉）。
+        note_cross_recipient_outcome(surface, CrossRecipientOutcome::Unroutable);
+    }
+
+    /// **L2-5 ⑤**：记一次六面未命中 + **恰好一个**结果桶（构造保证恒等式）。
+    pub(crate) fn note_cross_recipient_outcome(
+        surface: CrossRecipientSurface,
+        outcome: CrossRecipientOutcome,
+    ) {
         if !SLICING_ENABLED.load(Ordering::Relaxed) {
             return;
         }
         CROSS_RECIPIENT_BY_SURFACE[surface as usize].fetch_add(1, Ordering::Relaxed);
+        CROSS_RECIPIENT_OUTCOME[outcome as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 三桶读数（测试/摘要）。
+    #[allow(dead_code)] // 生产读点在 perf TSV；本函数供测试与后续接线。
+    pub(crate) fn cross_recipient_outcome(outcome: CrossRecipientOutcome) -> u64 {
+        CROSS_RECIPIENT_OUTCOME[outcome as usize].load(Ordering::Relaxed)
+    }
+
+    /// canary / 诊断计数（测试/摘要）。
+    pub(crate) fn note_cross_frame_dup() {
+        if SLICING_ENABLED.load(Ordering::Relaxed) {
+            CROSS_FRAME_DUP.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn note_cross_frame_drop_closed() {
+        if SLICING_ENABLED.load(Ordering::Relaxed) {
+            CROSS_FRAME_DROP_CLOSED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn note_cross_recipient_zone_unknown() {
+        if SLICING_ENABLED.load(Ordering::Relaxed) {
+            CROSS_RECIPIENT_ZONE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn note_cross_recipient_self_zone_miss() {
+        if SLICING_ENABLED.load(Ordering::Relaxed) {
+            CROSS_RECIPIENT_SELF_ZONE_MISS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cross_frame_dup() -> u64 {
+        CROSS_FRAME_DUP.load(Ordering::Relaxed)
+    }
+
+    #[allow(dead_code)] // 诊断列（perf TSV 是生产读点）；测试用。
+    pub(crate) fn cross_frame_drop_closed() -> u64 {
+        CROSS_FRAME_DROP_CLOSED.load(Ordering::Relaxed)
+    }
+
+    #[allow(dead_code)] // 诊断列（perf TSV 是生产读点）；测试用。
+    pub(crate) fn cross_recipient_zone_unknown() -> u64 {
+        CROSS_RECIPIENT_ZONE_UNKNOWN.load(Ordering::Relaxed)
     }
 
     /// 六面合计（段 4 容量脚本的读点；也是 `cross_recipient_missing` 指标口径）。
@@ -24333,6 +24450,13 @@ mod perf_counters {
         for c in &CROSS_RECIPIENT_BY_SURFACE {
             c.store(0, Ordering::Relaxed);
         }
+        for c in &CROSS_RECIPIENT_OUTCOME {
+            c.store(0, Ordering::Relaxed);
+        }
+        CROSS_FRAME_DUP.store(0, Ordering::Relaxed);
+        CROSS_FRAME_DROP_CLOSED.store(0, Ordering::Relaxed);
+        CROSS_RECIPIENT_ZONE_UNKNOWN.store(0, Ordering::Relaxed);
+        CROSS_RECIPIENT_SELF_ZONE_MISS.store(0, Ordering::Relaxed);
     }
 
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
@@ -24413,7 +24537,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24498,6 +24622,13 @@ mod perf_counters {
             ZONE_CMD_UNSUPPORTED.swap(0, Ordering::Relaxed),
             HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.swap(0, Ordering::Relaxed),
             MOVE_MAP_CHANGE_UNSUPPORTED.swap(0, Ordering::Relaxed),
+            // **L2-5 ⑤**：三桶 + canary/诊断（本 tick 增量；与六面合计同源构造）。
+            CROSS_RECIPIENT_OUTCOME[0].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_OUTCOME[1].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_OUTCOME[2].swap(0, Ordering::Relaxed),
+            CROSS_FRAME_DUP.swap(0, Ordering::Relaxed),
+            CROSS_FRAME_DROP_CLOSED.swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_ZONE_UNKNOWN.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -32555,6 +32686,16 @@ fn sim_loop(
     };
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
+    // **L2-5 ⑤**：安装区 0 的跨区 sink（切片 + 镜像才有邮箱；否则零参与）。
+    if let Some(host) = zone_host.as_deref() {
+        if let Some(mb) = host.cross_mailboxes.as_ref() {
+            cross_zone_frames::install(
+                Arc::clone(mb),
+                Arc::clone(&host.router),
+                zone_router::HOST_ZONE,
+            );
+        }
+    }
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
     // **P2-3b**：N>1 时 `ActorId` 按片分段（全进程唯一）。N=1 不调用 ⇒ 首个 id 仍为 1。
     // 位置：`production_world` 之后、任何装载/建实体之前（`set_id_base` 会断言尚未分配）。
@@ -34178,6 +34319,8 @@ fn sim_loop(
         // **L2-4 段 6b**：本 tick 的**单源** tick 号（快照/屏障/账本共用）。`ticks` 在本 tick
         // 中段才自增（HostFrames）⇒ 下半段任何要 tick 号的地方一律读这里，不做偏移。
         let tick_no = ticks;
+        // **L2-5 ⑤**：本 tick 的跨区帧 `src_tick`/`seq` 起点。
+        cross_zone_frames::begin_tick(tick_no);
         // **P2-3b (A)**：计数器跨片累加，汇总行只片 0 打；N>1 行首带 `shards=N aggregated`。
         if is_host && world.clock_ms >= entry_telemetry_next_ms {
             entry_telemetry_next_ms = world.clock_ms + 5_000;
@@ -36529,6 +36672,11 @@ fn sim_loop(
                         std::process::abort();
                     }
                 };
+            // **L2-5 ⑤（V2）**：barrier1 之后、phase2 之前排空跨区帧（`src_tick` 过滤
+            // 保恰好 1 tick；切片关 ⇒ 无 sink ⇒ 零参与）。
+            if host.cross_mailboxes.is_some() {
+                let _ = cross_zone_frames::drain_zone(zone_router::HOST_ZONE, tick_no, &gates);
+            }
             // **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
             // 闸关 ⇒ 整段零参与（N≥2 + 闸关与段 6a 逐字节相同）。
             if host.mirror_enabled {
@@ -123433,6 +123581,90 @@ mod l2_s3_cross_recipient_tests {
         let base = snapshot();
         fire_merchant_disappear(&world, &online, &g);
         assert_only(base, S::MerchantDisappear);
+    }
+
+    /// **L2-5 ⑤ 最小切片（单事件跑通）**：`RefMsg` 一面跨区送达。
+    ///
+    /// 夹具：本地玩家（有会话）+ 邻区玩家镜像（挂 route）；router 把 `(0, 900)` 指派到区 1。
+    /// 断言：`broadcast_ref_msg` 后 delivered +1（不投本地）；同 tick 不排；tick 1 的 barrier1
+    /// 之后排水，网关收到原样帧体。
+    #[test]
+    fn refmsg_cross_zone_single_event_delivers_at_next_tick() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        world.set_mirror_route(
+            MIRROR,
+            Some(mir2_world_bevy::MirrorRoute {
+                line: 0,
+                socket: 900,
+            }),
+        );
+        let router = std::sync::Arc::new(crate::zone_router::ZoneRouter::new());
+        let _ = router.assign(0, 900, crate::zone::ZoneId::new(1));
+        let mb = std::sync::Arc::new(crate::cross_zone_frames::CrossZoneMailboxes::new(2, 8));
+        crate::cross_zone_frames::install(
+            std::sync::Arc::clone(&mb),
+            std::sync::Arc::clone(&router),
+            crate::zone_router::HOST_ZONE,
+        );
+        crate::cross_zone_frames::begin_tick(0);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let base =
+            perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Delivered);
+        fire_refmsg(&world, &online, &g);
+        assert_eq!(
+            perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Delivered)
+                - base,
+            1,
+            "跨区收件人必须入邮箱（delivered +1）"
+        );
+        // V2：src_tick=0 不得在 tick 0 排出；tick 1 才排。
+        assert_eq!(
+            crate::cross_zone_frames::drain_zone(crate::zone::ZoneId::new(1), 0, &g),
+            0,
+            "src_tick == tick 不得本轮排出"
+        );
+        assert_eq!(
+            crate::cross_zone_frames::drain_zone(crate::zone::ZoneId::new(1), 1, &g),
+            1,
+            "tick 1（barrier1 之后）必须排出"
+        );
+        match rx.try_recv().expect("跨区帧") {
+            SimToGate::SendFrame { socket, body } => {
+                assert_eq!(socket, 900);
+                assert_eq!(body.len(), 12, "帧体应原样转发");
+            }
+            _ => panic!("非 SendFrame"),
+        }
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤**：镜像路由与镜像同生命周期（upsert 后写入；remove/promote 后清除）。
+    #[test]
+    fn mirror_route_lifecycle() {
+        use mir2_world_bevy::MirrorRoute;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorUpsert::Inserted
+        );
+        let r = MirrorRoute { line: 0, socket: 7 };
+        world.set_mirror_route(MIRROR, Some(r));
+        assert_eq!(world.mirror_route(MIRROR), Some(r));
+        assert!(world.remove_mirror(MIRROR));
+        assert_eq!(world.mirror_route(MIRROR), None, "移除镜像必须清除 route");
+
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorUpsert::Inserted
+        );
+        world.set_mirror_route(MIRROR, Some(r));
+        assert_eq!(
+            world.promote_mirror_to_real(&spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorPromote::Promoted
+        );
+        assert_eq!(world.mirror_route(MIRROR), None, "提升为真身必须清除 route");
     }
 
     /// **N=1 逐字节不变的护栏**：切片关 ⇒ 同一组注入六面**全 0**。

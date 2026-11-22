@@ -48,13 +48,10 @@ use crate::zone::{RegionLayout, ZoneId, ZoneRect, ZoneSpan};
 use crate::zone_router::{ZoneRouter, HOST_ZONE};
 
 /// 玩家的网关路由（`line, socket`；只有玩家有）。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HaloRoute {
-    /// 网关线号。
-    pub line: u8,
-    /// 该槽的客户端句柄。
-    pub socket: i32,
-}
+///
+/// **L2-5 ⑤**：与 `world_bevy::MirrorRoute` 同一类型——镜像的 route 要经
+/// `World::set_mirror_route` 存进世界，供六面在「本地会话未命中」时合成跨区收件人。
+pub type HaloRoute = mir2_world_bevy::MirrorRoute;
 
 /// 帧面展示字段（= `downlink::ActorDisplay` 的**逐字节**子集；镜像区据此重建展示表条目）。
 ///
@@ -855,12 +852,23 @@ pub fn apply_mirrors(
                 spec.name.clone(),
             );
             match world.upsert_mirror(spec) {
-                MirrorUpsert::Inserted => stats.inserted += 1,
-                MirrorUpsert::Updated => stats.updated += 1,
+                MirrorUpsert::Inserted => {
+                    stats.inserted += 1;
+                    // **L2-5 ⑤**：route 与镜像同生命周期（快照 `HaloEntity::route` = 本 tick 邻区
+                    // 在线登记；非玩家/未登记 ⇒ None）。写入失败的两支下面清掉，陈旧镜像的
+                    // route 随 `remove_mirror` 一起消失。
+                    world.set_mirror_route(e.actor_id, e.route);
+                }
+                MirrorUpsert::Updated => {
+                    stats.updated += 1;
+                    world.set_mirror_route(e.actor_id, e.route);
+                }
                 // **L2-5 ③ 段 2（兜底，防御不是牙）**：该 id 已是本区**真实**实体 ⇒ handoff 收敛
                 // 的正常面（目标区先提升、源区快照里还有它一 tick 的残留）。**跳过 + 计数**，
                 // 不 abort、不删本地实体（§2.3 必带要求 3）。时序正确时该计数恒 0。
                 MirrorUpsert::RefusedOccupied => {
+                    // **L2-5 ⑤**：路由清理是 `World::upsert_mirror` 的不变量（拒绝支清），
+                    // 这里不再重复。
                     // 该 id 在本区已是**真实体**（玩家 / 静态 NPC / 怪，均可能）⇒ 跳过。
                     // **L2-5 ④b 诊断（2026-11-22）**：先按本地真实体类别拆两列（静态 / 玩家）
                     // 并限流采样——两处文档对「非 0 区是否有静态实体」自相矛盾，先用读数裁决，
@@ -911,6 +919,7 @@ pub fn apply_mirrors(
                     // 原因通常是该条镜像的坐标在本区地图上不是可走格（`cell.valid()` 只认
                     // `CellAttribute::Walk`）；实体本体不受影响。
                     mir2_world_bevy::mirror_metrics::note_mirror_write_refused_cell();
+                    // **L2-5 ⑤**：route 清理在 `World::upsert_mirror` 的拒绝支（不变量），不重复。
                     stats.mirror_write_refused_cell += 1;
                     static REFUSED_CELL_LOGGED: std::sync::atomic::AtomicU64 =
                         std::sync::atomic::AtomicU64::new(0);

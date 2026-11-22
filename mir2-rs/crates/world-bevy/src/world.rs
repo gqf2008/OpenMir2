@@ -3513,6 +3513,19 @@ pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
     world.insert_resource(sim);
 }
 
+/// **L2-5 ⑤**：镜像的网关路由（`(line, socket)`）。
+///
+/// 只在切片 + 镜像模式下由边界快照（`HaloEntity::route`）填充；**与镜像同生命周期**：
+/// `apply_mirrors` 在镜像 upsert 成功后写入，`remove_mirror` / 提升为真身 / 被本地真实体遮蔽时
+/// 清除。不放进 `Entity`（避免给所有实体加字段，也避免 `SimState` 跨段搬迁时丢状态）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MirrorRoute {
+    /// 网关线号。
+    pub line: u8,
+    /// 该槽的客户端句柄。
+    pub socket: i32,
+}
+
 /// **L2-5 ②**：邻区实体的镜像规格（owner 区边界带快照 → 接收区只读镜像）。
 ///
 /// 镜像**用 owner 的全局 `ActorId`** 插入（不新分配；每区 id 段保证不相交 ⇒ 出现帧 `recog`
@@ -3614,6 +3627,9 @@ pub struct World {
     /// 既有的 `world.clock_ms` / `world.rng` 等字段访问形态不变；crate 内需要与 `entities`
     /// 同时分借用时直接解构本字段（`let World { entities, sim, .. } = self;`）。
     pub sim: SimState,
+    /// **L2-5 ⑤**：镜像网关路由（只对 `mirror == true` 的实体有值；与镜像同生共死）。
+    /// 由 `apply_mirrors` 经 [`World::set_mirror_route`] 维护；`remove_mirror` / 提升 / 遮蔽时清除。
+    pub mirror_routes: std::collections::HashMap<i32, MirrorRoute>,
     /// **S4d-3/P0 段边界哨兵**（设计件 §2.5，review F5）：`true` = 正处于段窗口内
     /// （`SimState` 归 bevy `World` 资源所有，或已被段内 `remove_resource` 取成 owned 局部——
     /// Dv5），facade 侧是 `Default` 占位；只在一次 runner 调用窗口内为真。
@@ -3929,6 +3945,7 @@ impl World {
             head_runner,
             tail_runner,
             sim,
+            mirror_routes: std::collections::HashMap::new(),
             sim_in_flight: false,
             tick_profile: None,
         };
@@ -8270,6 +8287,9 @@ impl World {
         let now = self.clock_ms;
         if let Some(e) = self.entities.get(spec.id) {
             if !e.mirror {
+                // **L2-5 ⑤ 不变量**：本区已有同 id 真实体 ⇒ 任何残留镜像路由必须清掉
+                // （否则下个 tick 会把跨区帧投给一个"不是镜像"的收件人）。
+                self.mirror_routes.remove(&spec.id);
                 return MirrorUpsert::RefusedOccupied;
             }
             let (old_map, old_x, old_y) = (e.map_id, e.x, e.y);
@@ -8279,6 +8299,8 @@ impl World {
                     m.add_map_object(spec.x, spec.y, spec.cell_type, spec.id, now)
                 });
                 if !added {
+                    // **L2-5 ⑤ 不变量**：镜像换格失败（旧状态不变）⇒ 不保留陈旧 route。
+                    self.mirror_routes.remove(&spec.id);
                     return MirrorUpsert::RefusedCell;
                 }
                 self.remove_mirror_cell_object(old_map, old_x, old_y, spec.id);
@@ -8329,6 +8351,8 @@ impl World {
             .is_some_and(|m| m.add_map_object(spec.x, spec.y, spec.cell_type, id, now));
         if !added {
             self.entities.remove(id);
+            // **L2-5 ⑤ 不变量**：落地失败 ⇒ 不得留下 route（防御；本路径此前也没写过）。
+            self.mirror_routes.remove(&spec.id);
             return MirrorUpsert::RefusedCell;
         }
         if own_segment {
@@ -8376,6 +8400,9 @@ impl World {
                 // 计数不是装饰：它是「幂等支被删」护栏的直接读数（删掉本支 ⇒ 重发落
                 // `RefusedOccupied` ⇒ 源区 `handoff_refused > 0`，本计数同时掉回 0）。
                 let _ = (spec.map_id, spec.x, spec.y);
+                // **L2-5 ⑤**：该 id 已是本区真实体 ⇒ 任何残留的镜像路由必须清掉
+                // （提升/遮蔽后路由不再成立；否则跨区帧会继续发到本区）。
+                self.mirror_routes.remove(&spec.id);
                 crate::mirror_metrics::note_handoff_already_held();
                 return HandoffAccept::AlreadyHeld;
             }
@@ -8468,8 +8495,50 @@ impl World {
         if let Some(t) = self.entities.transform_mut(spec.id) {
             t.view_range = spec.view_range;
         }
+        self.mirror_routes.remove(&spec.id);
         crate::mirror_metrics::note_handoff_mirror_promoted();
         MirrorPromote::Promoted
+    }
+
+    /// **L2-5 ⑤**：写入/清除镜像网关路由（`None` ⇒ 删除）。
+    ///
+    /// 由 `apply_mirrors` 在镜像 `upsert_mirror` 成功后调用（`Inserted`/`Updated` ⇒ `Some`；
+    /// `RefusedOccupied`/`RefusedCell` ⇒ `None`）。与镜像同生命周期：`remove_mirror` 与
+    /// `promote_mirror_to_real` 会清理。
+    pub fn set_mirror_route(&mut self, id: i32, route: Option<MirrorRoute>) {
+        match route {
+            Some(r) => {
+                self.mirror_routes.insert(id, r);
+            }
+            None => {
+                self.mirror_routes.remove(&id);
+            }
+        }
+    }
+
+    /// **L2-5 ⑤**：取镜像网关路由（非镜像/未登记 ⇒ `None`）。
+    ///
+    /// 调用方仍应先用 `entities.get(id).is_some_and(|e| e.mirror)` 判「这是镜像」，本方法只查路由。
+    #[must_use]
+    pub fn mirror_route(&self, id: i32) -> Option<MirrorRoute> {
+        self.mirror_routes.get(&id).copied()
+    }
+
+    /// **L2-5 ⑤ 不变量（测试）**：`mirror_routes` 的**每个 key 都必须指向一个存在的镜像**。
+    ///
+    /// 反方向**不**成立：非玩家镜像恒无 route；玩家镜像未登记/已下线也合法地无 route。
+    /// 反过来（route 有 key 但实体不在 / 已是真实体）就是「孤儿 route」——最危险的缺陷，
+    /// 会把跨区帧投给一个已不在的收件人。由 `remove_mirror` / `promote_mirror_to_real` /
+    /// `upsert_mirror` 的拒绝支三处清理保证。
+    #[cfg(test)]
+    pub fn assert_mirror_routes_consistent(&self) {
+        for id in self.mirror_routes.keys() {
+            match self.entities.get(*id) {
+                Some(e) if e.mirror => {}
+                Some(_) => panic!("镜像路由指向本区真实体 id={id}（孤儿 route）"),
+                None => panic!("孤儿镜像路由 id={id}（实体已不在）"),
+            }
+        }
     }
 
     /// **L2-5 ②**：移除镜像（摘格 + 删实体）。`false` = 不是镜像/不存在（**不得**删真实实体）。
@@ -8480,6 +8549,7 @@ impl World {
         if !e.mirror {
             return false;
         }
+        self.mirror_routes.remove(&id);
         let (map_id, x, y, mapped) = (e.map_id, e.x, e.y, e.add_to_mapped);
         if mapped {
             self.remove_mirror_cell_object(map_id, x, y, id);
@@ -15608,6 +15678,79 @@ mod tests {
         assert_eq!(hp, Some(100), "镜像 HP 不得下降");
         assert_eq!(hits, 0, "不得记 record.attacks（否则会出伤害/受击帧）");
         assert_eq!(delayed, 1, "cross_hit_delayed 必须计数");
+    }
+
+    /// **L2-5 ⑤**：`mirror_routes` 与镜像同生共死（**无孤儿 route**）。
+    ///
+    /// 三条清理路径各断言一次：`remove_mirror` / `promote_mirror_to_real` /
+    /// `upsert_mirror` 的 `RefusedOccupied`（被本地真实体遮蔽）。
+    ///
+    /// **反向不变量不成立**（写死原因）：非玩家镜像恒无 route；玩家镜像未登记/已下线也合法地
+    /// 无 route ⇒ 只断言「route 的每个 key 必指向存在的镜像」。孤儿 route 才是缺陷（会把跨区
+    /// 帧投给已不在的收件人）。
+    ///
+    /// 红检（三支各自）：删 `remove_mirror` / `promote_mirror_to_real` / `RefusedOccupied` 支的
+    /// `mirror_routes.remove` ⇒ 对应断言红。
+    #[test]
+    fn mirror_route_has_no_orphans_on_remove_promote_and_shadow() {
+        let spec = |id: i32| crate::MirrorSpec {
+            id,
+            name: "mirror".to_string(),
+            map_id: 0,
+            x: 11,
+            y: 10,
+            view_range: 5,
+            race: 0,
+            race_img: 0,
+            appr: 1,
+            light: 0,
+            name_color: 255,
+            cell_type: crate::CellType::Monster,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        let route = crate::MirrorRoute { line: 0, socket: 7 };
+
+        // 1) remove_mirror
+        let mut w = World::new(32, 32);
+        assert_eq!(w.upsert_mirror(spec(900)), crate::MirrorUpsert::Inserted);
+        w.set_mirror_route(900, Some(route));
+        w.assert_mirror_routes_consistent();
+        assert!(w.remove_mirror(900));
+        assert_eq!(w.mirror_route(900), None, "remove_mirror 必须清 route");
+        w.assert_mirror_routes_consistent();
+
+        // 2) 提升为真身
+        let mut w = World::new(32, 32);
+        assert_eq!(w.upsert_mirror(spec(901)), crate::MirrorUpsert::Inserted);
+        w.set_mirror_route(901, Some(route));
+        assert_eq!(
+            w.promote_mirror_to_real(&spec(901)),
+            crate::MirrorPromote::Promoted
+        );
+        assert_eq!(w.mirror_route(901), None, "提升必须清 route");
+        w.assert_mirror_routes_consistent();
+
+        // 3) 被本地真实体遮蔽（RefusedOccupied）
+        let mut w = World::new(32, 32);
+        assert_eq!(w.upsert_mirror(spec(902)), crate::MirrorUpsert::Inserted);
+        assert_eq!(
+            w.promote_mirror_to_real(&spec(902)),
+            crate::MirrorPromote::Promoted
+        );
+        // 模拟「提升后残留一条陈旧 route」（正常不会发生；用来证明拒绝支会清）。
+        w.set_mirror_route(902, Some(route));
+        assert_eq!(
+            w.upsert_mirror(spec(902)),
+            crate::MirrorUpsert::RefusedOccupied
+        );
+        assert_eq!(w.mirror_route(902), None, "被真实体遮蔽必须清 route");
+        w.assert_mirror_routes_consistent();
     }
 
     /// **段 6（C9）**：镜像不参与死亡结算——即使把镜像 hp 置 0（模拟将来 hp 被镜像的风险），
