@@ -1,0 +1,286 @@
+//! **L2-5 ③ 段 2（接线）**：handoff 的生产运行时——offer/ack 邮箱 + tick 顶排水 + 超时回滚。
+//!
+//! 协议（计划页 §2.2，两阶段、源从不放手）：
+//!
+//! - **T（源区）**：移动判定把实体挪进邻区 rect ⇒ `Flags.handoff_pending`
+//!   （`World::set_zone_bounds` 驱动）；**barrier2 之后**由 [`HandoffRuntime::after_phase2`]
+//!   向目标区邮箱投 `HandoffOffer`（全量 `MirrorSpec`）。
+//! - **T+1 顶（目标区，phase1 之前）**：[`HandoffRuntime::tick_top`] 排水 offer ⇒
+//!   `zone_of` 校验 ⇒ `World::promote_mirror_to_real`（同 id 镜像原地提升）⇒ 回 `HandoffAck`。
+//! - **T+1 顶（源区）**：同一函数排 ack：`ok` ⇒ `World::release_entity`（源侧移除）；
+//!   `reject`/超时 ⇒ 清 `handoff_pending`（回滚：实体留在源区、不再重发）+ 计数。
+//!
+//! **默认关闭**：邮箱只在 `MIR2_ZONE_SLICING=1` 时建；`zone_bounds` 也只在切片时设。
+//! `slicing=0` ⇒ `handoff_pending` 恒 false（单区/N=1 逐字节不变）。
+//!
+//! **§2.2 的取舍（显式登记）**：超时/拒绝不做「退回原格」（原格已在另区，回格需再次
+//! 跨界）——实体保留在源区的当前坐标继续模拟，并以 `handoff_refused` 计数 + WRN 暴露。
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use mir2_world_bevy::{MirrorPromote, MirrorSpec, World};
+
+use crate::glog;
+
+use crate::zone::{RegionLayout, ZoneId};
+
+/// §2.2：offer 后等待 ack 的最大 tick 数（超过 ⇒ 回滚 + `handoff_refused`）。
+pub(crate) const HANDOFF_TIMEOUT_TICKS: u64 = 3;
+
+/// 源区 → 目标区的提交申请（全量状态；目标区用它覆盖同 id 镜像）。
+#[derive(Debug)]
+pub(crate) struct HandoffOffer {
+    /// 源区。
+    pub from: ZoneId,
+    /// 源区发出的 tick（诊断用）。
+    pub at_tick: u64,
+    /// 实体全量状态（与快照同一组字段）。
+    pub spec: MirrorSpec,
+}
+
+/// 目标区 → 源区的回执。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HandoffAck {
+    /// 回执面向的源区。
+    pub to: ZoneId,
+    /// 实体 id。
+    pub id: i32,
+    /// `true` = 目标区已提升（源区可移除）。
+    pub ok: bool,
+}
+
+/// 一个区的邮箱（offer / ack 各一条队列；区线程互相 push、各自 tick 顶排水）。
+pub(crate) type HandoffMailbox = Arc<Mutex<(Vec<HandoffOffer>, Vec<HandoffAck>)>>;
+
+/// 新建一组邮箱（区数 = 区数）。
+pub(crate) fn new_mailboxes(zone_count: usize) -> Vec<HandoffMailbox> {
+    (0..zone_count)
+        .map(|_| Arc::new(Mutex::new((Vec::new(), Vec::new()))))
+        .collect()
+}
+
+/// **区的单 span 边界**（供 `World::set_zone_bounds`）：多 span 区返回 `None`
+/// （动作定义不明确 ⇒ 宁可不开 handoff；调用方记 WRN）。
+pub(crate) fn bounds_for(
+    layout: &RegionLayout,
+    zone: ZoneId,
+) -> Option<(usize, (i32, i32, i32, i32))> {
+    let mut spans = layout.zone_spans().iter().filter(|s| s.zone == zone);
+    let first = spans.next()?;
+    if spans.next().is_some() {
+        return None;
+    }
+    let r = first.rect;
+    Some((first.map_id, (r.x0, r.y0, r.x1, r.y1)))
+}
+
+/// **每区一个的 handoff 运行时**（区线程内持有，无锁竞争）。
+pub(crate) struct HandoffRuntime {
+    zone: ZoneId,
+    layout: Arc<RegionLayout>,
+    boxes: Vec<HandoffMailbox>,
+    /// 已发 offer 的实体 → 首次发送 tick（超时回滚用）。
+    pending_since: HashMap<i32, u64>,
+    /// 被拒绝/超时的回滚次数（正常恒 0）。
+    refused: u64,
+    /// 提升成功次数（本区作为**目标区**的读数）。
+    promoted: u64,
+}
+
+impl HandoffRuntime {
+    pub(crate) fn new(zone: ZoneId, layout: Arc<RegionLayout>, boxes: Vec<HandoffMailbox>) -> Self {
+        Self {
+            zone,
+            layout,
+            boxes,
+            pending_since: HashMap::new(),
+            refused: 0,
+            promoted: 0,
+        }
+    }
+
+    /// 本区作为**源区**的回滚次数（诊断/测试）。
+    #[cfg(test)]
+    pub(crate) fn refused(&self) -> u64 {
+        self.refused
+    }
+
+    /// 本区作为**目标区**的提升次数（诊断/测试）。
+    #[cfg(test)]
+    pub(crate) fn promoted(&self) -> u64 {
+        self.promoted
+    }
+
+    fn take_mail(&self) -> (Vec<HandoffOffer>, Vec<HandoffAck>) {
+        let Some(b) = self.boxes.get(self.zone.index()) else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut m = b.lock().unwrap_or_else(PoisonError::into_inner);
+        (std::mem::take(&mut m.0), std::mem::take(&mut m.1))
+    }
+
+    fn send_ack(&self, to: ZoneId, id: i32, ok: bool) {
+        if let Some(b) = self.boxes.get(to.index()) {
+            let mut m = b.lock().unwrap_or_else(PoisonError::into_inner);
+            m.1.push(HandoffAck { to, id, ok });
+        }
+    }
+
+    /// **tick 顶（phase1 之前）**：排 ack（源侧提交/回滚）+ 排 offer（目标侧提升+回执）。
+    pub(crate) fn tick_top(&mut self, world: &mut World, tick: u64) {
+        let (offers, acks) = self.take_mail();
+        // 1) acks（本区是源区）。
+        for ack in acks {
+            if ack.to != self.zone {
+                continue;
+            }
+            // 同一 offer 会每 tick 重发（幂等），ack 也就可能多份：只认第一份（还在待提交表里）。
+            if self.pending_since.remove(&ack.id).is_none() {
+                continue;
+            }
+            if ack.ok {
+                let removed = world.release_entity(ack.id);
+                glog!(
+                    "INF",
+                    "handoff 提交：区 {} 移除实体 {} (已提升 removed={removed}) tick={tick}",
+                    self.zone,
+                    ack.id
+                );
+            } else {
+                self.refused += 1;
+                if let Some(e) = world.entities.get_mut(ack.id) {
+                    e.flags.handoff_pending = false;
+                }
+                glog!(
+                    "WRN",
+                    "handoff 被拒：区 {} 实体 {} 保留本区（回滚 {}）tick={tick}",
+                    self.zone,
+                    ack.id,
+                    self.refused
+                );
+            }
+        }
+        // 2) offers（本区是目标区）。
+        for offer in offers {
+            let owned = self
+                .layout
+                .zone_of(offer.spec.map_id, offer.spec.x, offer.spec.y)
+                == Some(self.zone);
+            let ok = if owned {
+                match world.promote_mirror_to_real(&offer.spec) {
+                    MirrorPromote::Promoted => {
+                        self.promoted += 1;
+                        glog!(
+                            "INF",
+                            "handoff 提升：区 {} 将镜像 {} 原地升为真实体（来自区 {}，应在 tick {}）",
+                            self.zone,
+                            offer.spec.id,
+                            offer.from,
+                            offer.at_tick
+                        );
+                        true
+                    }
+                    // 幂等：已是真实体（重复 offer）⇒ 视为已提升。
+                    MirrorPromote::NotMirror
+                        if world.entities.get(offer.spec.id).is_some_and(|e| !e.mirror) =>
+                    {
+                        true
+                    }
+                    other => {
+                        glog!(
+                            "WRN",
+                            "handoff 拒绝：区 {} 收到实体 {} 但镜像缺失或位置不符（{other:?}），来自区 {}",
+                            self.zone,
+                            offer.spec.id,
+                            offer.from
+                        );
+                        false
+                    }
+                }
+            } else {
+                glog!(
+                    "WRN",
+                    "handoff 拒绝：区 {} 收到不属本区的实体 {} @({},{} map {})",
+                    self.zone,
+                    offer.spec.id,
+                    offer.spec.x,
+                    offer.spec.y,
+                    offer.spec.map_id
+                );
+                false
+            };
+            self.send_ack(offer.from, offer.spec.id, ok);
+        }
+    }
+
+    /// **barrier2 之后**：把本区所有 `handoff_pending` 实体投给目标区；
+    /// 同时把超过 [`HANDOFF_TIMEOUT_TICKS`] 未回执的回滚。
+    pub(crate) fn after_phase2(&mut self, world: &mut World, tick: u64) {
+        // 超时回滚（目标区已死/邮箱丢失）。
+        let expired: Vec<i32> = self
+            .pending_since
+            .iter()
+            .filter(|(_, since)| tick.saturating_sub(**since) > HANDOFF_TIMEOUT_TICKS)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            self.pending_since.remove(&id);
+            self.refused += 1;
+            if let Some(e) = world.entities.get_mut(id) {
+                e.flags.handoff_pending = false;
+            }
+            glog!(
+                "WRN",
+                "handoff 超时：区 {} 实体 {} 在 {} tick 内未回执 ⇒ 回滚（累计 {}）",
+                self.zone,
+                id,
+                HANDOFF_TIMEOUT_TICKS,
+                self.refused
+            );
+        }
+        // 发 offer（只对真实实体；镜像不参与 handoff）。
+        let ids: Vec<i32> = world
+            .entities
+            .iter_ref()
+            .filter(|e| !e.mirror && e.handoff_pending)
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            let Some(spec) = crate::region_loop::mirror_spec_for(world, id) else {
+                continue;
+            };
+            let Some(target) = self.layout.zone_of(spec.map_id, spec.x, spec.y) else {
+                // 不属任何区（越界坐标）⇒ 回滚，不投。
+                self.refused += 1;
+                if let Some(e) = world.entities.get_mut(id) {
+                    e.flags.handoff_pending = false;
+                }
+                glog!(
+                    "WRN",
+                    "handoff 拒绝：区 {} 实体 {} 落点不属任何区（已回滚）",
+                    self.zone,
+                    id
+                );
+                continue;
+            };
+            if target == self.zone {
+                // 回到自己区（rect 内）⇒ 取消待提交。
+                if let Some(e) = world.entities.get_mut(id) {
+                    e.flags.handoff_pending = false;
+                }
+                self.pending_since.remove(&id);
+                continue;
+            }
+            self.pending_since.entry(id).or_insert(tick);
+            if let Some(b) = self.boxes.get(target.index()) {
+                let mut m = b.lock().unwrap_or_else(PoisonError::into_inner);
+                m.0.push(HandoffOffer {
+                    from: self.zone,
+                    at_tick: tick,
+                    spec,
+                });
+            }
+        }
+    }
+}

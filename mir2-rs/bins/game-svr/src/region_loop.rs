@@ -290,6 +290,35 @@ pub fn snapshot_border(
     HaloSnapshot { tick, entities }
 }
 
+/// **L2-5 ③ 段 2（接线）**：从本区 World 取某实体的全量镜像状态（handoff offer 的载荷）。
+///
+/// 与 [`snapshot_border`] 的字段集合一致（同一批字段、同一 `halo_cell_type` 口径）；镜像本身
+/// 不参与 handoff（调用方先过滤 `!mirror`）。
+pub(crate) fn mirror_spec_for(world: &World, id: i32) -> Option<MirrorSpec> {
+    let e = world.entities.get(id)?;
+    Some(MirrorSpec {
+        id: e.id,
+        name: e.name.clone(),
+        map_id: e.map_id,
+        x: e.x,
+        y: e.y,
+        view_range: e.view_range,
+        race: e.race,
+        race_img: e.race_img,
+        appr: e.appr,
+        light: e.light,
+        name_color: e.name_color,
+        cell_type: halo_cell_type(&e),
+        dir: e.ai.dir,
+        death: e.death,
+        invisible: e.invisible,
+        ghost: e.ghost,
+        fixed_hide_mode: e.fixed_hide_mode,
+        ob_mode: e.ob_mode,
+        master: e.master,
+    })
+}
+
 /// 每区两个槽（`tick & 1` 双缓冲）的快照交换。
 #[derive(Debug)]
 pub struct HaloExchange {
