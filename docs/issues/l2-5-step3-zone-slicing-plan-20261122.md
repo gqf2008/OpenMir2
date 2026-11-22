@@ -700,3 +700,42 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 **D. 验收说明补充（防止翻旧账误读）**：本轮三轮 `handoff_offered` 全 0，**按"驱动不成立"记录**，不是
 "跨了没计数"，也**不得**被当成"无缺口"——缺口基线请看 §12.3 的六面读数；跨界冒烟的有效性前提见
 §12.3 末尾三条。
+
+### 12.5 段 4a 实施与窗口实测（2026-11-22）
+
+**实施（已合入 `master`）**：区 k 线程处理移动类 `Command`（复用 `handle_move_cmd`）；区 k 的 World
+灌入与区 0 同一份 `.map` 格子属性/传送点/门（`new_zone_state` 单点构造）；三处缺口计数进
+`perf_counters` TSV：`zone_cmd_unsupported`、`handoff_move_after_transfer_dropped`、
+`move_map_change_unsupported`。
+
+**读数口径（写死，防止再踩）**：`perf_counters` TSV 是**逐 tick 值**，汇总必须**按列求和**——
+不要把最后一行当累计（2026-11-22 总管亲自踩过一次：末行 `offered=0` ≠ 全轮 0）。
+
+**窗口实测（2 区臂，`2z-20261122-205726`，385.7s，走廊铺位）**：
+- `handoff`：offered=334 / accepted=58 / refused=0 / promoted=58 / dup_dropped=166；
+  **offered/accepted ≈ 5.8 次/跨界**、dup≈50%——④b 优化 offer 重发策略的直接输入。
+- A1：`MIR2_MOVE` 区 1 侧 `moved=true` **4164** 条。
+- A4 首屏：`cross_recipient_missing = 6,432,455 / refmsg_targets=64,296,771 = 10.004%`（归一 100 万/min）。
+- zone-k 计数：`zone_cmd_unsupported=1446`、`handoff_move_after_transfer_dropped=60502`（归一 9410/min）、
+  `move_map_change_unsupported=0`。
+- 同负载 1 区臂（`1z-20261122-210502`）：**两臂 p99 均 109ms**（p50 46 vs 31）⇒ `p99>100ms` 的
+  load_gate RED 属**负载本身**，与分区/④a 无关；同负载 `ΔRSS = 1128.00 − 799.68 = 328.32MB/区`
+  （旧 362/425MB 因负载自变量不同作废）。
+- 走廊夹具：`x=321..339 × y=263..280`（342 格，7×7 邻域全 Walk、跨分界 x=326）；DB 铺位快照
+  `db_chars_before_4a_corridor.tsv`；逐 bot 断言（落点在矩形/band 全 Walk/7×7）为 840/936/992/861（2z 臂）。
+
+**判据裁决（2026-11-22，总管）**：`tick P99` 的 FAIL 线改为 **Owner 验收线 200ms**；`>100ms` 降为
+**WARN**（内部余量提示，不判红）；`tick P50 ≤ 100ms` 保留为硬门。依据 = 4a 窗口两臂同负载 p99
+均 109ms（1z 的 p50 反而更高）⇒ 100ms 红线是负载本身打的，不是分区代价。改动落点：
+`tools/botload/load_report.py` 的 `DEFAULT_THRESHOLDS`/`judge`（新增 `warns` 字段与两侧牙）、
+`tools/botload/load_gate.ps1` 的 GREEN 行、`tools/botload/README.md` 判据表。
+
+**④b 登记（本轮窗口实测暴露，未做）**：
+1. `handoff_refused` 拆成 `handoff_rejected`（目标区显式拒）与 `handoff_timeout`（等 ack 超时）——
+   两者语义不同（红线 vs 抖动）。
+2. `handoff_move_after_transfer_dropped` 改名 `zone_move_online_without_entity`（自增点是通用
+   「在线表有条目、世界无实体」，来源含提升后与 `AlreadyHeld` 后）。
+3. `handoff_already_held` 进 TSV（本轮日志 `handoff 提交=168 vs 提升=58`，~110 条只能靠日志推）。
+4. 会话/路由随迁（提升后源区丢走位 = 本轮的 60,502 条）。
+5. 走廊外异常落点 2 例（bot 自报 CurrX=839 > map 宽 700，与 DB 铺位不符）——数据/夹具异常单独记，
+   不混入通道断言通过率。

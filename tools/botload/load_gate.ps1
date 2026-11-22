@@ -225,7 +225,7 @@ function Exit-WithGateResult {
             if (-not $t.window -or -not $t.window.conclusion_valid) { $windowAllValid = $false }
         }
         if ($windowAllValid) {
-            Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms / internal_errors 未超白名单预算 / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
+            Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 200ms（Owner 验收线；>100ms 出 WARN）/ tick P50 ≤ 100ms / internal_errors 未超白名单预算 / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
         } else {
             # A4：测量判据全过但窗口不足 ⇒ 只能冒烟；不打印 GREEN:（避免被 grep 成结论）。
             Write-Output ("GREEN_SMOKE_ONLY: " + $tierReports.Count + " 轮次测量判据全过，但 HoldSec=" + $HoldSec +

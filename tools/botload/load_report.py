@@ -41,7 +41,13 @@ import sys
 DEFAULT_THRESHOLDS = {
     "login_success_pct": 100.0,     # §6 M5：登录成功率 100%
     "conn_lost_steady": 0,          # §6 M5：无掉线
-    "tick_p99_ms": 100.0,           # §6 M5：tick P99 ≤ 100ms
+    # tick 判据（2026-11-22 总监裁决，依据 = 4a 窗口两臂同负载 p99 均 109ms）：
+    #   FAIL 线 = **Owner 验收线 200ms**；
+    #   100ms 只作 **WARN**（内部余量提示，不判红）；
+    #   P50 ≤ 100ms 仍是**硬门**。
+    "tick_p99_ms": 200.0,
+    "tick_p99_warn_ms": 100.0,
+    "tick_p50_ms": 100.0,
     # A1（2026-11-15）：BotSrv 兜住的内部异常数。默认 0（绝对上限）。
     # 唯一的放宽通道 = 卡面评审过的 internal-errors-allowlist.json（按类别 + max）。
     "internal_errors": 0,
@@ -1199,6 +1205,7 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     确实天然拿不到 tick 的场景（例如 M1 ⑤ 只比登录+选角）也必须显式加开关，不许"顺手改成可选"。
     """
     fails = []
+    warns = []
     # 登录阈值：按档位的可复现下界（默认 tier>=1000 为 95%，其余 100%），可被 CLI 覆盖。
     # 「爬坡未完成」不再是独立判据：它等于「峰值登录 < 档位人数」，已被这条阈值判据覆盖
     # （tier-1000 的已知上游上限会让峰值停在 ~948/1000，用 100% 当判据就永远是 RED）。
@@ -1224,8 +1231,19 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
             tier["missing_tick_note"] = "本次未采集 tick P99（--allow-missing-tick 显式放行；不得当作 M5 的 tick 基线）"
         else:
             fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
-    elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
-        fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
+    elif "tick" in criteria:
+        # 2026-11-22 总监裁决：FAIL = Owner 验收线（200ms）；>100ms 降为 WARN（内部余量提示）。
+        if tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
+            fails.append(
+                f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms（Owner 验收线）")
+        elif tier["tick_p99_ms"] > thresholds.get("tick_p99_warn_ms", 0):
+            warns.append(
+                f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_warn_ms']}ms"
+                f"（内部余量提示；未达 Owner 验收线 {thresholds['tick_p99_ms']}ms，不判红）")
+        p50 = tier.get("tick_p50_ms")
+        p50_thr = thresholds.get("tick_p50_ms")
+        if p50 is not None and p50_thr is not None and p50 > p50_thr:
+            fails.append(f"tick P50 {p50}ms > {p50_thr}ms")
     # A1（2026-11-15）：internal_errors 判据。默认 0 容忍；唯一放宽通道是按类别评审的白名单
     # （未列入/超 max/无法归因/白名单缺失 ⇒ 都按容忍度 0 处理，fail-closed）。
     tier["internal_error_allowlist"] = evaluate_internal_errors(tier, allowlist)
@@ -1278,6 +1296,7 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     tier["ramp_target"] = int(-(-tier.get("count", 0) * login_thr // 100))
     tier["criteria"] = list(criteria)
     tier["allow_missing_tick"] = bool(allow_missing_tick)
+    tier["warns"] = warns
     tier["verdict"] = "GREEN" if not fails else "RED"
     tier["fails"] = fails
     return tier
@@ -1367,6 +1386,7 @@ def cmd_summarize(args):
         "scene_list_race_skipped": tier.get("scene_list_race_skipped"),
         "scene_index_race_skipped": tier.get("scene_index_race_skipped"),
         "verdict": tier["verdict"],
+        "warns": tier.get("warns") or [],
         "note": ("四项必列字段 + 错误类别普查 + scene_null 上界；None = 证据缺（不得当作 0）；"
                  "scene_null_actor_skipped 是 0 也必须显式列出；不得写「夹具无错」"),
     }
@@ -1599,11 +1619,27 @@ def cmd_selftest(_args):
     expect(not any("缺 tick 样本" in f for f in t6["fails"]), "显式 --allow-missing-tick 后不应再因缺样本判红")
     expect(t6.get("tick_missing_acknowledged") is True and "本次未采集 tick P99" in t6.get("missing_tick_note", ""),
            "放行后基线文件必须带「本次未采集 tick P99」标注")
-    # 有样本时开关无副作用：仍只按阈值判（P99=150 > 100 ⇒ RED，且不得出现 tick_missing 标注）
+    # 有样本时开关无副作用：仍只按阈值判，且不得出现 tick_missing 标注。
+    # 2026-11-22 裁决：FAIL=200ms、WARN=100ms ⇒ P99=150 必须 GREEN + WARN（不是 RED）。
     t7 = judge(summarize_tick(stats, 100), DEFAULT_THRESHOLDS, ("login", "conn", "tick"), allow_missing_tick=True)
-    expect(t7["tick_p99_ms"] == 150 and t7["verdict"] == "RED" and any("tick P99 150" in f for f in t7["fails"]),
-           "有样本时按阈值判（150ms > 100ms ⇒ RED），且开关不得改变这条判定")
+    expect(t7["tick_p99_ms"] == 150 and t7["verdict"] == "GREEN",
+           "P99=150 在 FAIL=200/WARN=100 下必须 GREEN（只有 WARN）")
+    expect(any("tick P99 150" in w for w in t7.get("warns") or []),
+           "P99=150 必须出现在 warns 里（内部余量提示）")
     expect("tick_missing" not in t7, "有样本时不得出现 tick_missing 标注")
+
+    # 新判据的牙：P99=250 ⇒ RED；P50=110 ⇒ RED（硬门保留）；P99=200 恰好不过线不算红。
+    t_hi = dict(t7); t_hi["tick_p99_ms"] = 250; t_hi["warns"] = []
+    t_hi = judge(t_hi, DEFAULT_THRESHOLDS, ("login", "conn", "tick"))
+    expect(t_hi["verdict"] == "RED" and any("tick P99 250" in f for f in t_hi["fails"]),
+           "P99=250 > FAIL 200 ⇒ 必须 RED")
+    t_p50 = dict(t7); t_p50["tick_p50_ms"] = 110; t_p50["warns"] = []
+    t_p50 = judge(t_p50, DEFAULT_THRESHOLDS, ("login", "conn", "tick"))
+    expect(t_p50["verdict"] == "RED" and any("tick P50 110" in f for f in t_p50["fails"]),
+           "P50=110 > 100 ⇒ 必须 RED（P50 硬门）")
+    t_edge = dict(t7); t_edge["tick_p99_ms"] = 200; t_edge["warns"] = []
+    t_edge = judge(t_edge, DEFAULT_THRESHOLDS, ("login", "conn", "tick"))
+    expect(t_edge["verdict"] == "GREEN", "P99=200（=FAIL 线）不判红（严格大于才红）")
 
     # 6) A1（2026-11-15）：internal_errors 判据 —— 默认 0 容忍；有异常必红；0 不变绿；缺字段 fail-closed。
     i3 = ("login", "conn", "tick", "internal")
@@ -2250,7 +2286,7 @@ def cmd_aggregate(args):
     lines.append(f"- 口径：{data.get('caliber', '见 tools/botload/load_report.py')}")
     lines.append(f"- 档位：{data.get('tiers')}；连接错峰 {data.get('stagger_ms')}ms/个；稳态时长 {data.get('hold_sec')}s")
     lines.append(f"- 判据（§6 M5）：登录成功率 = 档位阈值（tier≥1000 为 95%，其余 100%，见 report.json 的 "
-                 f"login_threshold_pct）/ 稳态掉线 0 / tick P99 ≤ 100ms")
+                 f"login_threshold_pct）/ 稳态掉线 0 / tick P99 ≤ 200ms（FAIL；>100ms 记 WARN）/ tick P50 ≤ 100ms")
     lines.append("")
     has_run = any(t.get("run") for t in reports)
 
@@ -2316,7 +2352,7 @@ def cmd_aggregate(args):
                 mx=t.get("max_ms"), cm=hl.get("cpu_mean_pct", "-"), cp=hl.get("cpu_peak_pct", "-"),
                 hv=hl.get("heavy_procs_max", "-"), lw=hl.get("loaded_window", "-")))
     lines.append("")
-    lines.append("> **M5 待办（写实）**：§6 的「tick P99 ≤ 100ms」**目前在任何栈上都未验证通过**——")
+    lines.append("> **判据更新（2026-11-22 总监裁决）**：tick P99 的 FAIL 线 = **200ms（Owner 验收线）**；>100ms 记 **WARN**；P50 ≤ 100ms 硬门。")
     lines.append("> C# 参考栈 1000 档实测 125/201ms（在共享负载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。")
     lines.append("> 另：`in_world` 实测只有 ~10%（tier-500/1000 稳态 15~26），**不得**用这三档宣称「M5 三档：1000 假人在线」；")
     lines.append("> 「假人真正进世界」是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。")
@@ -2325,7 +2361,7 @@ def cmd_aggregate(args):
     pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
     pts_p50 = [(t["count"], t["tick_p50_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
     pts_mx = [(t["count"], t.get("max_ms") or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
-    lines.append("## 曲线 1：tick 服务时延 vs 假人数（目标 P99 ≤ 100ms）")
+    lines.append("## 曲线 1：tick 服务时延 vs 假人数（目标 P99 ≤ 200ms；>100ms 为 WARN）")
     lines.append("")
     lines.append("```html")
     lines.append(svg_curve([("P99", pts_p99), ("P50", pts_p50), ("max", pts_mx)],

@@ -67,7 +67,8 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 | --- | --- | --- |
 | 登录成功率 | **tier ≥ 1000：≥ 95%（可复现下界）；tier < 1000：100%** | §6 M5-3 + owner 裁决 `11dbde39`（见下《阈值与理由》） |
 | 稳态掉线 | **0** | §6 M5-3 |
-| tick P99 | **≤ 100ms** | §6 M5-3 |
+| tick P99 | **≤ 200ms**（FAIL 线 = Owner 验收线）；**> 100ms 记 WARN**（内部余量提示，不判红） | 2026-11-22 总监裁决（依据：4a 窗口同负载两臂 p99 均 109ms，见计划页 §12.5） |
+| tick P50 | **≤ 100ms（硬门）** | 同上 |
 | **internal_errors** | **0**（默认容忍度 0；唯一放宽通道 = `tools/botload/internal-errors-allowlist.json` 按类别 `max`，随卡面评审；未列入/超 max/文件缺失为空 ⇒ RED；字段缺失 fail-closed） | 卡 `openmir2-loadgate-criteria-gaps` A1（2026-11-15） |
 | **错误类别普查（error_census）** | **枚举出的每一个 fault 类别都为 0**（或按 `error-census-allowlist.json` 的 `category+max` 登记；feeds_internal 类别也可由 internal-errors 白名单整体豁免）；缺类别/多出未登记类别/缺对象/`internal_errors` 与分类之和不等/缺任一既有事件计数 ⇒ RED | 卡 `openmir2-botsrv-recv-thread-nre`（2026-11-15）；详见 `docs/botsrv-error-census-20261115.md` |
 | **scene_null_actor_skipped** | **每份报告必须显式列出（0 也列）**；稳态窗口内 `< 0.5%` 的 BeginScene 轮次（`scene_rounds` 为分母），超界必须用 `--scene-null-explanation` 单独解释；`scene_list_race_skipped` / `scene_index_race_skipped` 必须为 0。语义：并发下读到正被清尾的槽位，安全跳过、不读不删不登记；**不等于夹具无错** | 总监 2026-11-15 裁决；父卡 `openmir2-botsrv-autoplay-nre`（master `39d418816`） |
@@ -119,7 +120,8 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 
 ### M5 tick 判据的现状（写实）
 
-**§6 M5 的「tick P99 ≤ 100ms」目前在任何栈上都未验证通过**——C# 参考栈 1000 档实测 125/201ms
+**判据（2026-11-22 起）**：tick P99 的 **FAIL 线 = 200ms（Owner 验收线）**，>100ms 只记 WARN；P50 ≤ 100ms 仍是硬门。
+历史上 §6 M5 写的是「P99 ≤ 100ms」，此前在任何栈上都未稳定通过——C# 参考栈 1000 档实测 125/201ms
 （加载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。另：`in_world` 实测只有 ~10%
 （tier-500/1000 稳态 15~26）⇒ **不得**用这三档宣称「M5 三档：1000 假人在线」；「假人真正进世界」
 是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。
