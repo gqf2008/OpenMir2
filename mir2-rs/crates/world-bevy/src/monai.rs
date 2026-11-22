@@ -5866,7 +5866,7 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 ///
 /// 计数口径与旧实现逐字相同（`order_ids` 槽位序 + `access.get` 存在性 + `race == Play`）；
 /// 本函数不消费 RNG、不写实体。
-fn play_object_count_impl<A: crate::entity::EntityAccess>(access: &A) -> i32 {
+pub(crate) fn play_object_count_impl<A: crate::entity::EntityAccess>(access: &A) -> i32 {
     access
         .order_ids()
         .into_iter()
@@ -8677,6 +8677,11 @@ mod tests {
             play_object_count_impl(&world.entities),
             1,
             "玩家镜像不得计入 play 数"
+        );
+        assert_eq!(
+            world.play_object_count(),
+            1,
+            "公开 facade 必须与 impl 同口径（MonGen/IDS 在线数唯一来源）"
         );
     }
 

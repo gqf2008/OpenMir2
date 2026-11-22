@@ -8184,6 +8184,15 @@ impl World {
         }
     }
 
+    /// **L2-5 ②**：`race == Play` 且**非镜像**的实体数（oracle `PlayObjectList.Count` 的等价物）。
+    ///
+    /// 镜像不是会话/在线玩家（只读副本）⇒ 不得计入。本函数是**生产唯一来源**：MonGen 的
+    /// play 人数与 IDS 在线数（`WorldEngine.OnlinePlayObject`）都走它，避免两份内联谓词漂移。
+    #[must_use]
+    pub fn play_object_count(&self) -> i32 {
+        crate::monai::play_object_count_impl(&self.entities)
+    }
+
     /// **L2-5 ②**：该 id 是否镜像（`Flags.mirror`）。镜像用 owner 的全局 `ActorId` 插入。
     #[must_use]
     pub fn is_mirror(&self, id: i32) -> bool {

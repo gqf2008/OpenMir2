@@ -34003,11 +34003,9 @@ fn sim_loop(
         // （`WorldServer.cs:635/709`）⇒ **不能排除 ghost**。与既有宿主口径一致：MonGen 两条门
         // 与 `crates/world-bevy/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
         // 否则幽灵/断线窗口里本段会比 oracle 小 1..N（reviewer-1 m-2）。
-        let online_play_objects = world
-            .entities
-            .iter_ref()
-            .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
-            .count() as i32;
+        // **L2-5 ② 段 7**：唯一来源 `World::play_object_count()`（已排除镜像）——镜像不是
+        // 在线玩家，计入会把 IDS 在线数抬高。
+        let online_play_objects = world.play_object_count();
         // **P2-3b**：在线数是进程级读数，只片 0 写（非 0 片写 0 会冲掉真实值）。
         if is_host {
             ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
@@ -34218,14 +34216,8 @@ fn sim_loop(
                 // oracle 两条门读**同一个** `WorldEngine.PlayObjectCount`（`WorldServer.cs:99/199`
                 // = `PlayObjectList.Count`）。`MakeGhost` 门（`monai.rs`）数的是 `race == Play` 的实体；
                 // 这里必须同口径，否则下线/顶号窗口里「变尸」与「复活」两处 ZenTime 加速档可能不同（复验 F2）。
-                let play_object_count = i32::try_from(
-                    world
-                        .entities
-                        .iter_ref()
-                        .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
-                        .count(),
-                )
-                .unwrap_or(i32::MAX);
+                // **L2-5 ② 段 7**：唯一来源（已排除镜像；见 `World::play_object_count`）。
+                let play_object_count = world.play_object_count();
                 step_mon_gen(
                     host,
                     &enter_cfg.mon_gen.table,
@@ -117959,6 +117951,26 @@ mod l2_multi_zone_ledger_tests {
         recv.tick();
         apply_mirrors(&mut recv, std::slice::from_ref(&snap), None).expect("镜像写入");
         measure_step(&mut recv, o)
+    }
+
+    /// **段 7（C8）**：play 人数（MonGen 门 + IDS 在线数）必须走**单一来源**
+    /// `World::play_object_count()`（已排除镜像）；生产面不得再内联 `iter_ref().filter(race==Play)`
+    /// 的重复谓词（两份谓词迟早漂移，镜像只会在其中一份被漏掉）。
+    ///
+    /// 红检：把任一调用点改回内联计数 ⇒ 第一条（计数 == 2）红；内联形状再次出现 ⇒ 第二条红。
+    #[test]
+    fn step2_play_count_has_a_single_source() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        assert_eq!(
+            prod.matches("world.play_object_count()").count(),
+            2,
+            "MonGen 门与 IDS 在线数两处必须都走单一来源"
+        );
+        assert!(
+            !prod.contains("filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)"),
+            "生产面不得再内联 play 人数谓词（会漏掉 !mirror）"
+        );
     }
 
     /// **C7 补格（无镜像）**：邻区**空快照** ⇒ 拆区目标格无阻挡、可走；基线无邻居同样可走。
