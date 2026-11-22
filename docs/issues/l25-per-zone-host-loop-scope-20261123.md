@@ -537,3 +537,31 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
     **不依赖任何绝对值预测**。多区下区 k 暂无这些 drain，公式不适用。
 - **合并时序**（opc-27）：日志闸 → 1k 基线 → 2000 基线 → 索引迁移复测；试点组暂不合并。本迁移分支基于 `03b103c25`，
   master 已到 `e69274b61295`，合并前 rebase 一次。
+
+### 11.8 门禁加强 v2 + 计数口径 + a7 步骤①结论（2026-11-23，只读/文档）
+
+**门禁加强 v2（commit `4f4948e3b`，分支 `card/perf-index-migrate`）**——按 5b / opc-27 复核：
+1. 源码门增「直接字段旁路」：生产前缀禁 `online.entries` / `online.by_chr` / `online.by_actor`。
+   字段可见性审计：三字段均**私有**；生产读写仅 `impl OnlineRegistry` 内 `self.*`，外部只经
+   `Deref`/method（`online.<field>` 形态在生产前缀为零）。更强解（字段收私有内层类型 + 只读访问器）需把
+   impl 搬进子模块并改约 9 处测试字段读点，登记 follow-up。
+2. 禁用方法补全：+`sort_by_key`/`sort_unstable_by`/`sort_unstable_by_key`/`retain_mut`/`dedup*`/
+   `resize`/`splice`/`split_off`/`append`/`copy_from_slice`/`fill`/`rotate_left`/`rotate_right`/`reverse`。
+3. `production()` 行级精确匹配（`trim()=="mod tests {"`）+ 断言前一行 `#[cfg(test)]`；找不到边界 ⇒
+   **fail-closed** panic（不许默认全生产）。
+4. `online_set(&mut *online, ..)` → `online_set(online, ..)`（同义、免 reborrow）；门 2 **无条件**禁 `&mut *online`。
+- 门：`fmt=0` / `clippy=0` / `cargo test -p game-svr --lib` **2359 passed / 0 failed / 160 ignored**，rc=0。
+- 能红（各一例；验证后已 `git restore`，HEAD 恢复 `4f4948e3b`、clean）：
+  `online.by_chr.len()` ⇒ 字段旁路用例 FAILED@lib.rs:25184；
+  `online.sort_by_key(..)` ⇒ FAILED；`&mut *online` ⇒ FAILED；
+  边界扰动（`mod tests` 双空格）⇒ fail-closed panic「找不到 `mod tests {` 边界行」。
+
+**计数口径（5b 指出的守恒式例外）**：`.any()→is_some()` 那一点（`handle_query_user_set_cmd` 7853）
+旧路径**不**调 `find_linear_chr`、不计 `CHR_LINEAR`；新路径计 `CHR_INDEXED` ⇒ **该点每 `CM_QUERYUSERSET`
+调用使 `chr_indexed` +1**，**不计入**「线性→索引守恒」。a7 对账：13 处 `find_linear_chr→find_by_chr`
+满足守恒式；`.any()` 点单独按「预期 +调用数」核。
+
+**a7 步骤①结论（日志闸默认行为逐字节不变）**：GREEN ——
+`order_sha=b78156a766b010332297c9475b08998a0918f27c97d2cecb639640121f690d24`、
+`multiset_sha=bd4b13bad3a1c1076cf5a62023e48c322caa41b2f73e75d603c39d96402c29fd`、`lines=86/86`，
+与既有基线同一对。⇒ **日志闸不改变输出**。
