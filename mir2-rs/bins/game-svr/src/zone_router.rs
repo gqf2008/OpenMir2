@@ -90,7 +90,16 @@ impl ZoneRouter {
         self.insert(line, socket, HOST_ZONE)
     }
 
-    /// 显式分配（段 6 的测试分配缝 / 将来的登录归属）。重复键 last-wins 并计覆盖。
+    /// **L2-5 ③ 1b**：`(line,socket)` 是否已经在表里。
+    ///
+    /// `lookup` 未命中会回落区 0，这里把「真的被 assign 到区 0」与「没 assign」区分开——
+    /// 后者是登录落区漏接，必须计数（`zone_router_unassigned`），不能静默回落。
+    #[must_use]
+    pub fn lookup_registered(&self, line: u8, socket: i32) -> Option<ZoneId> {
+        self.lock().get(&(line, socket)).copied()
+    }
+
+    /// 显式分配（段 6 的测试分配缝 / 登录落区）。重复键 last-wins 并计覆盖。
     ///
     /// # Errors
     /// `socket <= 0` ⇒ [`SocketRejected`]（计 `zone_router_rejected_socket`，表不变）。

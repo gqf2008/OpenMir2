@@ -585,9 +585,36 @@ impl<'a> ZoneRuntime<'a> {
         tick: u64,
         source: &HaloFrameSource<'_>,
     ) -> Result<(HaloSnapshot, Vec<HaloSnapshot>, u64), ZoneTickError> {
+        let border = self.snapshot_publish(world, tick, source)?;
+        let (neighbors, wait_phase1_us) = self.await_neighbors(tick)?;
+        Ok((border, neighbors, wait_phase1_us))
+    }
+
+    /// `after_phase1` 的**前半**：边界快照 → 发布（止于 barrier1 之前）。
+    ///
+    /// **L2-5 ③ 段 1b** 的锁纪律用：切片区的世界/展示/在线表在 `Mutex` 后，屏障等待期间
+    /// **不得持锁**（区 0 线程登录落区会拿同一把锁；持锁等屏障 = 死锁）。拆成
+    /// 「持锁段 = 快照/发布」+「无锁段 = 等屏障/读邻居」两步，合起来与 `after_phase1` 同序。
+    ///
+    /// # Errors
+    /// 本区没有 span ⇒ [`ZoneTickError::NoSpans`]。
+    pub fn snapshot_publish(
+        &self,
+        world: &World,
+        tick: u64,
+        source: &HaloFrameSource<'_>,
+    ) -> Result<HaloSnapshot, ZoneTickError> {
         let border =
             snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick, source)?;
         self.exchange.publish(self.zone, border.clone());
+        Ok(border)
+    }
+
+    /// `after_phase1` 的**后半**：barrier1 → 读邻居。返回（邻区快照, barrier1 等待 µs）。
+    ///
+    /// # Errors
+    /// 邻区没发布本 tick ⇒ [`ZoneTickError::StaleNeighbor`]。
+    pub fn await_neighbors(&self, tick: u64) -> Result<(Vec<HaloSnapshot>, u64), ZoneTickError> {
         let wait_phase1_us = self.barriers.wait_after_phase1();
         let mut neighbors = Vec::with_capacity(self.exchange.zone_count().saturating_sub(1));
         for i in 0..self.exchange.zone_count() {
@@ -601,7 +628,7 @@ impl<'a> ZoneRuntime<'a> {
                 .ok_or(ZoneTickError::StaleNeighbor { zone: other, tick })?;
             neighbors.push(snap);
         }
-        Ok((border, neighbors, wait_phase1_us))
+        Ok((neighbors, wait_phase1_us))
     }
 
     /// phase2（`tick_tail_aoi`）之后调用：beat（若给）→ barrier2 → 探针记账。

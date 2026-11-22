@@ -264,3 +264,50 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 - ③ 关服命名管道发 ASCII `SHUTDOWN` ⇒ **30s 内 `EXIT=0`**。
 - 旁注：独立冒烟未起 DB/IDS ⇒ 启动期有 `链接数据库服务器[127.0.0.1:6000]失败` 重试行，属预期（非切片问题）。
 - 证据文件：`E:	mp\zone-mirror-gates\seg1-smoke2.out.txt`。
+
+## 8. 段 1b 实施记录（登录落区，2026-11-22）
+
+开关：`MIR2_ZONE_SLICING=1`（另需 `MIR2_ZONES` ≥2 区 + `MIR2_ZONE_MIRROR=1`）。`slicing=0` ⇒ 登录路径与
+段 1a **同一份** `finish_login` 调用、同一组实参（N=1 的 stdout 等价门复跑过）。
+
+**机制**：`DBR_LOADHUMANRCD(1100) recog==1` 回执到达时，先 `decide_login_landing`（纯函数：解回包 +
+`resolve_enter_map` + `RegionLayout::zone_of`）定区，再选 ctx：
+
+- 归区 0（或未切片）⇒ 原 `sim_loop` 局部 ctx 调 `finish_login`（不变）；切片模式下计 `zone_login_landed{0}`；
+- 归区 k≠0 ⇒ `lock` 该区 `ZoneState`、用 `finish_login_on_zone_state`（世界侧表全指向该区，
+  进程级句柄借用区 0 线程的 `LoginProc`），**回执完成之后**才 `ZoneRouter::assign(gate_idx, socket, k)`，
+  并计 `zone_login_landed{k}`；
+- 未覆盖（越界坐标 / 图不在注册表 / 新角色 `HomeMap` 空）⇒ 计 `zone_login_uncovered`、踢该会话；
+- 目标区不可用（状态缺失 / 线程已退出）⇒ 计 `zone_target_unavailable`、踢该会话。**两条都不回落区 0**。
+
+**锁纪律**（死锁边界）：区线程只在 `tick_phase1`+`snapshot_publish` 与 `apply_mirrors`+`tick_phase2`
+两段持 `ZoneState` 锁；屏障等待（`await_neighbors`/`after_phase2`）**不持锁**。登录线程持锁期间只跑
+`finish_login`（不碰屏障）⇒ 两边不会互等。`ZoneRuntime` 为此把 `after_phase1` 拆成
+`snapshot_publish` + `await_neighbors`（合成路径与拆开路径同序）。
+
+**计数**（`perf_counters`）：`zone_login_uncovered`、`zone_login_landed{zone}`（下标 = 区号）、
+`zone_router_unassigned`（demux 回落现场计，采样 WRN 注明来源 `Command`/`Closed`/`assign_rejected`/
+`assign_bad_line`）、`zone_target_unavailable`、`zone_login_offzone`（诊断：落点最终不属于判定区）。
+
+**所有权**：`world`/`displays`/`online`/`ground_sessions`/`saves`/`login_tails`/`aoi_frames_total` 属
+**落地区**（`ZoneState`），区 0 不保留副本；`gates`/`engine`/`guilds`/`npc_host`/`pwd_sessions`/
+`reconnect_pending`/`kick_pending` 属**进程**，由区 0 线程借用（登录落区只在区 0 线程执行）。
+
+**已知限制（段 1b 明确不做，登记给后续段）**：
+
+1. **新角色**（记录 `HomeMap` 空）：出生点由区世界 RNG 抽数决定 ⇒ 落区前不可知 ⇒ 计
+   `zone_login_uncovered` 并拒登（不猜区）。定区前移抽数或按 `[Setup]` Home 图定区，属交接段；
+2. **落点偏移**：墙格移位（≤3 格）或死亡/红名改写可能改变归属 ⇒ `zone_login_offzone` 计数 +
+   WRN 暴露；不改判据（跨区搬迁在交接段）；
+3. **区 k 无命令处理/退出路径**：`Closed` 与后续命令投到区 k 后由区循环丢弃 ⇒ 会话保留到进程结束；
+   关服存档只覆盖区 0 的 `ground_sessions`（段 2 交接 + 逐区存档）；
+4. 区 k 的 `World` 不装物品目录（`production_world` 的 `item_catalog` 由区 0 独占；区 k 无掉落路径）。
+
+**证据**：
+
+- 单测：`zone_login_landing_tests::landing_decision_maps_position_to_zone`（区 0/区 k/越界/新角色/
+  图缺失五臂）、`zone_login_landing_tests::landing_in_zone_one_leaves_no_residue_in_zone_zero`
+  （硬要求 4：区 k 有会话 + 区 0 六张表零残留 + actor id 落在区 k 段）、
+  `zone_login_landing_tests::zone_login_counters_note_and_reset`；
+- 真栈冒烟（切片 N=2，20s + 优雅关服）：三条启动 INF、无 abort/看门狗、`EXIT=0`（§7 同口径复跑）；
+- N=1 stdout 等价门（`tools/hygiene/n1_stdout_equivalence.ps1`）：基线 `55e738ce8` vs 本段 head，绿。
