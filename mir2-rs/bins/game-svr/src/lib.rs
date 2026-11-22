@@ -34515,7 +34515,8 @@ fn sim_loop(
         shutdown,
     };
     loop {
-        let (host_next, services_next, tick_io_next, outcome) = host.tick(services, tick_io);
+        let (host_next, services_next, tick_io_next, outcome) =
+            host.tick(services, tick_io, PhaseSet::ALL);
         host = host_next;
         services = services_next;
         tick_io = tick_io_next;
@@ -34617,6 +34618,45 @@ struct TickIo {
     shutdown: ShutdownSignal,
 }
 
+/// **M0/A2**：本 tick 允许执行哪些 host 段（`const` 位集：无分配、无锁；每段一次整型判断）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PhaseSet(u32);
+
+impl PhaseSet {
+    const SHUTDOWN: u32 = 1 << 0;
+    const INBOUND: u32 = 1 << 1;
+    const DB_POLL: u32 = 1 << 2;
+    const PERIODIC: u32 = 1 << 3;
+    const WORLD_HEAD: u32 = 1 << 4;
+    const POST_HEAD: u32 = 1 << 5;
+    const PLAYER_RUN: u32 = 1 << 6;
+    const WORLD_TAIL: u32 = 1 << 7;
+    const PLANES: u32 = 1 << 8;
+    const RECOVERY: u32 = 1 << 9;
+    const FRAMES: u32 = 1 << 10;
+    const DEAL_TICK: u32 = 1 << 11;
+    const AOI_DOWNLINK: u32 = 1 << 12;
+    const PERSIST: u32 = 1 << 13;
+    const SWITCH: u32 = 1 << 14;
+    const DIAG: u32 = 1 << 15;
+    const SLEEP: u32 = 1 << 16;
+    /// 区 0：全集（执行序 = 原正文顺序）。
+    const ALL: PhaseSet = PhaseSet((1 << 17) - 1);
+    #[inline]
+    fn has(self, bit: u32) -> bool {
+        self.0 & bit != 0
+    }
+}
+
+/// **M0/A2**：tick 内**真正跨段**的值（只放这两个；清单与「谁产出/谁消费」见设计稿）。
+#[derive(Default)]
+struct TickScratch {
+    /// 产出：`HostWorldHead`；消费：其后所有用到 `rec` 的段（`as_mut` 借用，保持原调用形状）。
+    rec: Option<mir2_world_bevy::TickRecord>,
+    /// 产出：`HostPeriodic`；消费：`HostPostHead`（同 tick 的 252 广播扇出）。
+    castle_broadcast_texts: Vec<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TickOutcome {
     Continue,
@@ -34628,8 +34668,16 @@ type TickOut = (HostLoop, HostServices, TickIo, TickOutcome);
 
 impl HostLoop {
     /// 跑一个 tick（与原 `sim_loop` 循环体**逐行**相同；A1 零行为变化）。
+    ///
+    /// **M0/A2**：段级 `PhaseSet` 内联守卫；守卫只包住段体的 `host_prof.begin()/end()` 与
+    /// 归入本段的 gap 代码。`PhaseSet::ALL` 下执行序与 A1 逐字节一致。
+    /// 本 fn 关闭 rustfmt：给 2,800 行正文套 `if` 会让整段重排缩进、把「纯搬移」的 review
+    /// 变成不可读的大 diff；新增/修改此 fn 内的代码请手工按现有排版。
+    #[rustfmt::skip]
     #[allow(clippy::too_many_lines)]
-    fn tick(self, services: HostServices, io: TickIo) -> TickOut {
+    // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
+    #[allow(clippy::needless_borrow)]
+    fn tick(self, services: HostServices, io: TickIo, phases: PhaseSet) -> TickOut {
         let HostLoop {
             mut world,
             mut displays,
@@ -34712,6 +34760,7 @@ impl HostLoop {
             ev_ctl_rx,
             shutdown,
         } = io;
+        let mut scratch = TickScratch::default();
         // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
         // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
         let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
@@ -34728,6 +34777,7 @@ impl HostLoop {
         }
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
+        if phases.has(PhaseSet::SHUTDOWN) {
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
         // 位置在 tick 边界：先不消费本 tick 的事件，直接以**当前实时态**合成存档体并退出。
@@ -34809,6 +34859,7 @@ impl HostLoop {
             return pack_tick_out!(TickOutcome::Exited);
         }
         host_prof.end("HostShutdown", t);
+        }
         // **L2-4 段 6b**：本 tick 的**单源** tick 号（快照/屏障/账本共用）。`ticks` 在本 tick
         // 中段才自增（HostFrames）⇒ 下半段任何要 tick 号的地方一律读这里，不做偏移。
         let tick_no = ticks;
@@ -34834,6 +34885,7 @@ impl HostLoop {
             }
         }
         let next = std::time::Instant::now() + tick;
+        if phases.has(PhaseSet::INBOUND) {
         let t = host_prof.begin();
         // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
         // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
@@ -36117,6 +36169,8 @@ impl HostLoop {
             perf_counters::note_inbound_wall_us(us);
         }
         host_prof.end("HostInbound", t);
+        }
+        if phases.has(PhaseSet::DB_POLL) {
         // **L2-5 ③ 段 1c**：各区线程的断线存档请求 → 进程级 DB 链
         // （qid/`engine.begin_save`/`save_outstanding` 属区 0；载荷已在区线程内编码）。
         if let Some(host) = zone_host.as_deref() {
@@ -36625,6 +36679,8 @@ impl HostLoop {
             i32::from(enter_cfg.server_index),
         );
         host_prof.end("HostDbPoll", t);
+        }
+        if phases.has(PhaseSet::PERIODIC) {
         let t = host_prof.begin();
         // **A-22 P3 · `SystemProcessor.ShowOnline`**（`SystemProcessor.cs:54-62`）：
         // `GetTickCount()-ShowOnlineTick > ConsoleShowUserCountTime`（**严格 `>`**，10 分钟门）⇒
@@ -36951,12 +37007,16 @@ impl HostLoop {
             }
         }
         host_prof.end("HostPeriodic", t);
+            scratch.castle_broadcast_texts = castle_broadcast_texts;
+        }
+        if phases.has(PhaseSet::WORLD_HEAD) {
         let t = host_prof.begin();
         // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None，零参与）。
         // **tick 顶（phase1 之前）**：区 0 排 ack/offer（handoff 两阶段）。
         if let Some(h) = handoff_runtime.as_mut() {
             h.tick_top(&mut world, tick_no);
         }
+        #[allow(unused_mut)] // 字面量是 3 处源码扫描牙的锚点（`sim_loop` 顺序判定），保留 `mut`
         let mut rec = tick_world_head_with_specials(
             &mut world,
             mon_gen_host.as_mut(),
@@ -36967,7 +37027,15 @@ impl HostLoop {
             &gates,
             &enter_cfg.pet_cfg,
         );
+        scratch.rec = Some(rec);
         host_prof.end("HostWorldHead", t);
+        }
+        let mut rec = scratch
+            .rec
+            .as_mut()
+            .expect("HostWorldHead 必须置位（M0_MIN 含它）");
+        if phases.has(PhaseSet::POST_HEAD) {
+        let castle_broadcast_texts = &scratch.castle_broadcast_texts;
         // **攻击批 A**：命令 FIFO 里攻击结算的攻杀计数块（`AttackDir` 之后，`PlayObject.Attack.cs:942-956`）
         // 在这里排水。`SendSocket("+PWR")` 是直发短包（不经 MsgQueue）⇒ 紧跟 `tick_head` 发最接近
         // oracle 的时序。
@@ -37020,6 +37088,8 @@ impl HostLoop {
             }
         }
         host_prof.end("HostPostHead", t);
+        }
+        if phases.has(PhaseSet::PLAYER_RUN) {
         let t = host_prof.begin();
         // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
         // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
@@ -37122,6 +37192,8 @@ impl HostLoop {
             enter_cfg.ref_msg_range,
         );
         host_prof.end("HostPlayerRun", t);
+        }
+        if phases.has(PhaseSet::WORLD_TAIL) {
         let t = host_prof.begin();
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         //
@@ -37202,6 +37274,8 @@ impl HostLoop {
             world.tick_tail(&mut rec);
         }
         host_prof.end("HostWorldTail", t);
+        }
+        if phases.has(PhaseSet::PLANES) {
         let t = host_prof.begin();
         // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
         // 才跑 `PlanesServer/Client.Run()`。这里的插入点在本 tick 的中段（`tick_tail` 之后、
@@ -37217,6 +37291,8 @@ impl HostLoop {
         // 值（oracle 同一对象语义）。对非 `super_man` 角色是纯 no-op。
         sync_super_man_wabil(&world, &mut ground_sessions);
         host_prof.end("HostPlanes", t);
+        }
+        if phases.has(PhaseSet::RECOVERY) {
         let t = host_prof.begin();
         // **G-A（oracle P1 → P2）**：`PlayObject.Run` 的周期恢复（`:70-141`）与 `ExtraAbil`
         // 到期（`:163-227`）落在同一队列批次；两者的 `SendUpdateMsg(53)` 只保留一条 pending。
@@ -37241,6 +37317,8 @@ impl HostLoop {
         );
         extra_abil_frames.flush(&online, &gates);
         host_prof.end("HostRecovery", t);
+        }
+        if phases.has(PhaseSet::FRAMES) {
         let t = host_prof.begin();
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
@@ -37353,6 +37431,8 @@ impl HostLoop {
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
         host_prof.end("HostFrames", t);
+        }
+        if phases.has(PhaseSet::DEAL_TICK) {
         ticks += 1;
         let t = host_prof.begin();
         // `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
@@ -37368,6 +37448,8 @@ impl HostLoop {
             &enter_cfg.catalog,
         );
         host_prof.end("HostDealTick", t);
+        }
+        if phases.has(PhaseSet::AOI_DOWNLINK) {
         let t = host_prof.begin();
         // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
         // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
@@ -37400,6 +37482,8 @@ impl HostLoop {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         host_prof.end("HostAoiDownlink", t);
+        }
+        if phases.has(PhaseSet::PERSIST) {
         let t = host_prof.begin();
         // **G-06 耐久回写（`openmir2-persist-useitems-wiring`）**：本 tick 的攻击/受击路径
         // （`PlayObject.StruckDamage` 的耐久段）只改世界实体 `Entity.use_items`；oracle 改的是
@@ -37422,6 +37506,8 @@ impl HostLoop {
             now_ms(),
         );
         host_prof.end("HostPersist", t);
+        }
+        if phases.has(PhaseSet::SWITCH) {
         let t = host_prof.begin();
         // oracle `WorldServer.cs:592-610` 的换服轮询（G11）。生产闭合：跨服搬家
         // （`ChangeSpaceMove`）、`.shr` 序列化与 `SendServerGroupMsg` 均未移植 ⇒
@@ -37459,6 +37545,8 @@ impl HostLoop {
         // 登录跨服分支（`:366`）放弃进图后该 socket 无其它帧 ⇒ 本轮内帧序等价（详见模块头）。
         drain_reconnects(&mut reconnect_pending, &mut ground_sessions, &gates);
         host_prof.end("HostSwitch", t);
+        }
+        if phases.has(PhaseSet::DIAG) {
         let t = host_prof.begin();
         if let Some(diag) = host_diag_maybe(ticks, &world, &displays, &aoi_frames_total) {
             glog!(
@@ -37472,11 +37560,14 @@ impl HostLoop {
             );
         }
         host_prof.end("HostDiag", t);
+        }
+        if phases.has(PhaseSet::SLEEP) {
         let t = host_prof.begin();
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
             std::thread::sleep(d);
         }
         host_prof.end("HostSleep", t);
+        }
         // **卡 `openmir2-host-segment-profiler-500`**：第二道门（`MIR2_TICK_PROFILE_SLOW_MS=N`）
         // 开启且本 tick 工作段 ≥ N ms ⇒ 打印该 tick 的段构成（哪一段吃掉了尾部 tick）。
         // 关闭态：`end_tick` 在段计时前就返回，`take_slow_tick` 只做一次 `Option::take`

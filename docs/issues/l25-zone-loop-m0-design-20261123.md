@@ -126,6 +126,25 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   由 `tick()` 持有并传 `&mut`。**这是 M0 实现时最大的机械工作**：每段逐一核对「本段产出、
   后续段消费」的局部值，全部走 scratch 或结构字段，不许改表达式顺序。
 
+### 3.0 A2 实施落地（2026-11-23，与 §3/§3.1 一致）
+
+- 17 个段各加 `if phases.has(PhaseSet::X) { … }`；**守卫包住段体的 `host_prof.begin()/end()`**，
+  段间 gap 归其后段（唯一例外 = 循环头：`tick_no`/`begin_tick`/5s 遥测/`db` 顶部采样/`next`
+  保持无条件，见 §3.1）。
+- **跨段值只有两个**（`TickScratch`）：`rec`（WorldHead 产出，其后用到它的段消费）与
+  `castle_broadcast_texts`（Periodic 产出 → PostHead 消费）。`rec` 在 WorldHead 守卫**之后**
+  统一绑定一次（`let mut rec = scratch.rec.as_mut().expect(...)`）⇒ **凡启用「用 rec 的段」就必须
+  同时启用 `WORLD_HEAD`**（M0_MIN 满足；违者 panic，属编程错误）。
+- **`let mut rec = tick_world_head_with_specials(` 字面量保留**（3 处源码扫描牙用它做 `sim_loop`
+  顺序锚），`mut` 已无用 ⇒ 该行加 `#[allow(unused_mut)]`。
+- `&mut rec` / `&rec` 保持 A1 原调用形状（`rec` 现为 `&mut TickRecord`）⇒ fn 级
+  `#[allow(clippy::needless_borrow)]`。
+- 本 fn 加 `#[rustfmt::skip]`：给 2,800 行正文套 `if` 会让 rustfmt 整段重排缩进，把「纯搬移」
+  的 review 变成不可读的大 diff；代价 = 此 fn 内新增代码需手工排版（已在 fn doc 写明）。
+- **自证**（去缩进后与 A1 比）：正文语句 **2,865 → 2,908（+44，−1）**——新增的 44 行全是
+  17 个守卫的开关、`scratch` 初始化与两处跨段搬运；**唯一被改的 1 行 = `fn tick` 签名**；
+  17 个 `host_prof.end` 段名与顺序与 A1 完全相同。
+
 ### 3.1 gap 的归属（0c/opc-27 要求，2026-11-23 定稿）
 
 - **规则**：段与段之间**未计入** TICKPROF 的代码（如 `drain_yedo_events`/`drain_skill_train_events`/
@@ -167,6 +186,8 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
      （`HostLoop` 10,256 含 `World` 8,400；`HostServices` 7,448；`TickIo` 48）⇒ 进出 ≈35 KB memcpy，
      按 ~10 GB/s 粗算 ≈3–5 µs/tick（预算 200 ms）；编译器还可能省掉大部分。
    - 副作用：tick 期间三块状态被消费；panic 语义不变（sim 线程 panic 本就让该线程退出）。
+   - **这不是永久架构决定**：`&mut self` 方法化（M1）落地后，循环体改用 `self.field`，
+     不再需要按值搬入搬出 ⇒ 这笔 move 在 **M1 方法化时消除**（opc-27 2026-11-23 裁决）。
 2. **构造顺序不变**：`HostLoop`/`HostServices` 在 `loop {` 之前用字段简写从既有局部「装入」，
    不重排启动装载（M0 不搬 `new_host`；`for_zone` 是另一条只给区 k 用的构造）。
 3. **不新增热路径开销**：无新克隆/新 `Vec`/新锁；`Cell`/`RefCell` 仍是原实例。
@@ -240,3 +261,25 @@ docs-anchor gate 对新增行「检查 0」即依据）。
 - 不动 `World.OutputAoi`/`AoiMonsterWalk` 算法、不动 `collect+sort` 顺序契约。
 - 不加分区计数列（后续标 additive）、不改日志/帧内容与计时。
 - 不搬启动装载（`new_host` 留在 `sim_loop` 内联；M1 之后再评估）。
+
+## 附：测试端口探针（A1 合并门被阻塞后的修复，2026-11-23）
+
+**现象**：A1 合并门红在 `login-srv` 的 `session_face_accepts_loopback_despite_whitelist_miss`——
+子进程绑定 `0.0.0.0:24670` 报 `os error 10048`，就绪门超时。
+
+**根因（订正过一版认知）**：`24670`/`26200` **不是硬编码**，而是 `next_port()` 从
+`[20000,32000)` 算出的动态候选；缺陷在**探针地址与子进程绑定地址不同形**：
+探针 `bind("127.0.0.1", port)`，子进程 `bind("0.0.0.0", port)`。ToDesk 在 `127.0.0.1:24670`
+上有一条 **established 连接**（无 listener）时，Windows 让 `127.0.0.1` 绑成功、`0.0.0.0`
+报 10048 ⇒ 旧探针把端口判为空闲发出去。
+
+**修复**：`port_bindable_for_child(port) = bind(("0.0.0.0", port))`，`next_port()` 改用它；
+五个 `tests/support/mod.rs`（db-srv / game-svr / login-gate / login-srv / sel-gate）同步同一文本
+（该文件头声明五份「逐行相同」）。提交 `2d1829786`。
+
+**没有合成牙——回归保护是缺位的，别误以为有**：已在进程内尝试复现 ToDesk 形状
+（先 `listen` 再 `accept`、随后关闭 listener，只留 established 连接），Windows 上复现不出
+「`127.0.0.1` 可绑 / `0.0.0.0` 冲突」；改用 `SO_EXCLUSIVEADDRUSE` 占用得到的是相反形状
+（`127.0.0.1 FAIL 10048` / `0.0.0.0 OK`）。⇒ **不放假牙**；验收依赖**真实环境条件**
+（ToDesk 占 24670 时该用例通过）+ 进程内一次性判别式
+（`old_127_probe_ok=true / new_0_probe_ok=false`，见提交信息）。
