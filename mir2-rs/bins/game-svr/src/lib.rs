@@ -31553,7 +31553,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                 // 在线登记（`PlayObject.GateIdx`/`SocketId`）：断线、重复进世界
                                 // （踢旧）与账号级顶号都要靠它找回该角色当前的网关连接。
                                 online_set(
-                                    &mut *online,
+                                    online,
                                     OnlineEntry {
                                         account: account.clone(),
                                         chr_name: head.chr_name.clone(),
@@ -124311,13 +124311,26 @@ mod online_immutability_gate {
         include_str!("lib.rs")
     }
 
-    /// 本仓约定：`mod tests {` 之后是测试代码；其前缀即生产代码（既有锚点用例同法）。
-    fn production() -> &'static str {
+    /// 生产前缀：`mod tests {` 之前。**行级精确匹配** + 断言前一行 `#[cfg(test)]`；
+    /// 找不到边界 ⇒ fail-closed（不许默认全生产 ⇒ 假绿）。
+    ///
+    /// 局限（如实）：切分只认「行首 trim 后恰为 `mod tests {`」这一形态；若未来测试模块改名，
+    /// 本函数 fail-closed 报警（不是静默放行）。
+    fn production() -> String {
         let src = source();
-        let cut = src
-            .find("mod tests {")
-            .expect("lib.rs 必须有 `mod tests {` 标记");
-        &src[..cut]
+        let lines: Vec<&str> = src.lines().collect();
+        let idx = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("门禁 fail-closed：找不到 `mod tests {` 边界行（不许默认全生产）");
+        assert!(idx > 0, "门禁 fail-closed：`mod tests {{` 不能在首行");
+        assert_eq!(
+            lines[idx - 1].trim(),
+            "#[cfg(test)]",
+            "门禁 fail-closed：`mod tests {{` 前一行必须是 #[cfg(test)]（实得 {:?}）",
+            lines[idx - 1]
+        );
+        lines[..idx].join("\n")
     }
 
     #[test]
@@ -124335,29 +124348,45 @@ mod online_immutability_gate {
 
     #[test]
     fn production_has_no_online_mutation_calls() {
+        // 经 DerefMut 的 slice 变异方法（`[T]` 上与 `Vec` 常见全集）。
         let banned = [
             "push",
             "clear",
             "retain",
+            "retain_mut",
             "sort",
             "sort_by",
+            "sort_by_key",
             "sort_unstable",
+            "sort_unstable_by",
+            "sort_unstable_by_key",
+            "dedup",
+            "dedup_by",
+            "dedup_by_key",
             "remove",
             "insert",
             "pop",
             "truncate",
             "extend",
+            "resize",
+            "splice",
+            "split_off",
+            "append",
+            "copy_from_slice",
+            "fill",
+            "rotate_left",
+            "rotate_right",
+            "reverse",
+            "swap",
             "drain",
             "iter_mut",
             "as_mut_slice",
             "get_mut",
-            "swap",
-            "reverse",
         ];
+        // 直接字段访问（绕过 rebuild；今天生产只用 self.* 在 impl 内，故变量名 `online.*` 的形态为零）。
+        let field_bypass = ["online.entries", "online.by_chr", "online.by_actor"];
         let prod = production();
-        let lines: Vec<&str> = prod.lines().collect();
-        for (i, raw) in lines.iter().enumerate() {
-            // 去掉行内 `//` 注释，避免注释里提到被禁写法误报（字符串字面量不剥离，见下）。
+        for (i, raw) in prod.lines().enumerate() {
             let code = raw.split("//").next().unwrap_or("");
             for m in banned {
                 let pat = format!("online.{m}(");
@@ -124368,16 +124397,20 @@ mod online_immutability_gate {
                     raw.trim()
                 );
             }
-            if code.contains("&mut *online") {
-                // 只允许作为 `online_set` 的实参：允许本行或前两行出现 `online_set(`。
-                let window: String = lines[i.saturating_sub(2)..=i].join("\n");
+            for p in field_bypass {
                 assert!(
-                    window.contains("online_set("),
-                    "生产代码禁止 `&mut *online`（online_set 实参除外）：lib.rs:{}: {}",
+                    !code.contains(p),
+                    "生产代码禁止直接访问字段 `{p}`（绕过 rebuild，索引会陈旧）：lib.rs:{}: {}",
                     i + 1,
                     raw.trim()
                 );
             }
+            assert!(
+                !code.contains("&mut *online"),
+                "生产代码禁止 `&mut *online`（可变 deref 的另一写法；online_set 也不再用 reborrow）：lib.rs:{}: {}",
+                i + 1,
+                raw.trim()
+            );
         }
     }
 }
