@@ -135,12 +135,21 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   `castle_broadcast_texts`（Periodic 产出 → PostHead 消费）。`rec` 在 WorldHead 守卫**之后**
   统一绑定一次（`let mut rec = scratch.rec.as_mut().expect(...)`）⇒ **凡启用「用 rec 的段」就必须
   同时启用 `WORLD_HEAD`**（M0_MIN 满足；违者 panic，属编程错误）。
+  **A3 已落成运行期断言**（opc-27 2026-11-23 要求）：取 `scratch.rec` 之前
+  `debug_assert!(phases.has(PhaseSet::WORLD_HEAD), "…（phases=0x{:05x}）", phases.0)`；
+  负例 `zone_tick_without_world_head_panics`（`should_panic(expected = "WORLD_HEAD")`）——
+  删掉该断言后 panic 来自 `expect`（文案不含 `WORLD_HEAD`）⇒ 负例红，已实测。
 - **`let mut rec = tick_world_head_with_specials(` 字面量保留**（3 处源码扫描牙用它做 `sim_loop`
   顺序锚），`mut` 已无用 ⇒ 该行加 `#[allow(unused_mut)]`。
 - `&mut rec` / `&rec` 保持 A1 原调用形状（`rec` 现为 `&mut TickRecord`）⇒ fn 级
   `#[allow(clippy::needless_borrow)]`。
-- 本 fn 加 `#[rustfmt::skip]`：给 2,800 行正文套 `if` 会让 rustfmt 整段重排缩进，把「纯搬移」
-  的 review 变成不可读的大 diff；代价 = 此 fn 内新增代码需手工排版（已在 fn doc 写明）。
+- 本 fn 加 `#[rustfmt::skip]`（**临时**）：给 2,800 行正文套 `if` 会让 rustfmt 整段重排缩进，
+  把「纯搬移」的 review 变成不可读的大 diff；代价 = 此 fn 内新增代码需手工排版（已在 fn doc 写明）。
+  **移除条件（写死）：M1 方法化把段体拆成 `fn phase_*` 时，同步移除本 `#[rustfmt::skip]` 并统一
+  格式化**——不得让这个函数永久脱离 rustfmt（opc-27 2026-11-23 裁决）。
+- 两处 `#[allow]` 的理由同上并保留：`#[allow(unused_mut)]`（`let mut rec = tick_world_head_with_specials(`
+  是 3 处源码扫描牙的 `sim_loop` 顺序锚，字面量不得改）、`#[allow(clippy::needless_borrow)]`
+  （`&mut rec` / `&rec` 保持 A1 原调用形状）。
 - **自证**（去缩进后与 A1 比）：正文语句 **2,865 → 2,908（+44，−1）**——新增的 44 行全是
   17 个守卫的开关、`scratch` 初始化与两处跨段搬运；**唯一被改的 1 行 = `fn tick` 签名**；
   17 个 `host_prof.end` 段名与顺序与 A1 完全相同。

@@ -34642,6 +34642,11 @@ impl PhaseSet {
     const SLEEP: u32 = 1 << 16;
     /// 区 0：全集（执行序 = 原正文顺序）。
     const ALL: PhaseSet = PhaseSet((1 << 17) - 1);
+    /// **区 k 空实例（M0）**：只跑世界头/世界尾（handoff 顶与 phase2 在它们体内）。
+    /// 不含 INBOUND/DB/PERIODIC/…/SLEEP（无 I/O、无帧、无存档）。
+    // M0 不接线 spawn_minimal_zone ⇒ 目前只有单测用（M1 起为区 k 生产入口）。
+    #[allow(dead_code)]
+    const M0_MIN: PhaseSet = PhaseSet(PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL);
     #[inline]
     fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
@@ -34657,7 +34662,77 @@ struct TickScratch {
     castle_broadcast_texts: Vec<String>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+impl HostServices {
+    /// **M0/A3**：空世界 tick 用的最小服务集（全部空/默认；不触 DB/脚本/行会/城堡）。
+    fn for_test() -> Self {
+        let (shutdown_done_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (ids_out, _) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            db: None,
+            engine: load::FrontEngine::new(),
+            guilds: mir2_world_bevy::GuildManager::new(),
+            guild_run_tick: 0,
+            guild_cfg: mir2_world_bevy::GuildConfig::default(),
+            guild_store: None,
+            castle_gates: game_svr::castle::CastleHostGates::new(0),
+            castle_store: None,
+            castle_war_states: std::collections::HashMap::new(),
+            pending_gm_castle_broadcasts: Vec::new(),
+            online_hum_gate: startup_online_hum_gate(),
+            npc_host: None,
+            merchant_book: game_svr::npc::MerchantScriptBook::new(0),
+            npc_vars_base: game_svr::npc::NpcVars::default(),
+            sell_off_book: game_svr::selloff::SellOffBook {
+                entries: Vec::new(),
+            },
+            item_number: 0,
+            item_number_ex: 0,
+            planes: None,
+            registry: None,
+            enter_cfg: EnterConfig::for_test(crate::strings::StringConf::defaults()),
+            shard_runtime: shard::ShardRuntime::new(shard::ShardLayout::single(0)),
+            shutdown_done_tx,
+            ids_online: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            ids_out,
+            world_start: std::sync::Arc::new(WorldStartGate::new()),
+            win_lottery: crate::winlottery::WinLotteryShared::new(
+                crate::winlottery::WinLotteryState::default(),
+            ),
+            zone_host: None,
+            server_table: Vec::new(),
+            colors: MsgColors::default(),
+            notice: Vec::new(),
+            party_cfg: mir2_world_bevy::PartyConfig::default(),
+            shard_directory: None,
+            state_log: state_log::StateLog::from_env(),
+            pwd_sessions: std::collections::HashMap::new(),
+            reconnect_pending: Vec::new(),
+            kick_pending: Vec::new(),
+            soft_close_pending: Vec::new(),
+            gm_filter_word: std::cell::Cell::new(true),
+            gm_mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
+            gm_spirit_mutiny_tick: std::cell::Cell::new(0i64),
+            magic_table_arc: std::sync::Arc::new(magics::MagicTable::new(Vec::new())),
+            minimap: None,
+            unbind_list: game_svr::unbindlist::UnbindList::default(),
+            make_items: None,
+            line_notice_lines: Vec::new(),
+            line_notice_cfg: line_notice::LineNoticeCfg {
+                interval_ms: 0,
+                default_color: 0,
+                show_pre_fix_msg: false,
+                pre_fix: String::new(),
+                red: (0, 0),
+                green: (0, 0),
+                blue: (0, 0),
+            },
+            payment_mode: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickOutcome {
     Continue,
     Exited,
@@ -34667,12 +34742,58 @@ enum TickOutcome {
 type TickOut = (HostLoop, HostServices, TickIo, TickOutcome);
 
 impl HostLoop {
+    /// **M0/A3**：区 k 的空实例（口径同 `ZoneState::new`：`with_maps` + `seed ^ zone` +
+    /// id 基址/段长）。M0 只用它验证「空实例能跑一个 tick」，**不接线** `spawn_minimal_zone`。
+    // M0 不接线 spawn_minimal_zone ⇒ 目前只有单测用（M1 起为区 k 生产构造）。
+    #[allow(dead_code)]
+    fn for_zone(zone: zone::ZoneId, map_sizes: &[(i32, i32)], rng_seed: Option<i32>) -> Self {
+        let mut world = mir2_world_bevy::World::with_maps(map_sizes.to_vec());
+        if let Some(seed) = rng_seed {
+            let zone_index = i32::try_from(zone.get()).expect("区号 <= i32::MAX");
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
+        }
+        world.set_id_base(zone_id_base(zone));
+        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
+        Self {
+            world,
+            displays: downlink::DisplayTable::new(),
+            online: OnlineRegistry::new(),
+            ground_sessions: std::collections::HashMap::new(),
+            saves: std::collections::HashMap::new(),
+            login_tails: std::collections::HashMap::new(),
+            aoi_frames_total: std::collections::HashMap::new(),
+            shop_sessions: std::collections::HashMap::new(),
+            trade_sessions: std::collections::HashMap::new(),
+            sell_off_sessions: std::collections::HashMap::new(),
+            mon_gen_host: None,
+            line_notice_states: std::collections::HashMap::new(),
+            monster_walk_seen: std::collections::HashMap::new(),
+            gates: std::collections::HashMap::new(),
+            handoff_runtime: None,
+            ticks: 0,
+            tick: std::time::Duration::from_millis(
+                u64::try_from(mir2_world_bevy::TICK_INTERVAL_MS).unwrap_or(200),
+            ),
+            event_carry: None,
+            event_carry_ctl: None,
+            entry_telemetry_next_ms: 0,
+            entry_telemetry_last: None,
+            host_prof: tick_profile::HostTickProfile::from_env(),
+            world_prof_last: tick_profile::WorldSnapshot::default(),
+            local_shard: shard::HOST_SHARD,
+            is_host: false,
+            telemetry_prefix: String::new(),
+        }
+    }
+
     /// 跑一个 tick（与原 `sim_loop` 循环体**逐行**相同；A1 零行为变化）。
     ///
     /// **M0/A2**：段级 `PhaseSet` 内联守卫；守卫只包住段体的 `host_prof.begin()/end()` 与
     /// 归入本段的 gap 代码。`PhaseSet::ALL` 下执行序与 A1 逐字节一致。
-    /// 本 fn 关闭 rustfmt：给 2,800 行正文套 `if` 会让整段重排缩进、把「纯搬移」的 review
-    /// 变成不可读的大 diff；新增/修改此 fn 内的代码请手工按现有排版。
+    /// 本 fn 关闭 rustfmt（**临时**）：给 2,800 行正文套 `if` 会让整段重排缩进、把「纯搬移」的
+    /// review 变成不可读的大 diff；新增/修改此 fn 内的代码请手工按现有排版。
+    /// **移除条件：M1 方法化把段体拆成 `fn phase_*` 时，同步移除本 `#[rustfmt::skip]` 并统一格式化**
+    /// （不得让这个函数永久脱离 rustfmt）。
     #[rustfmt::skip]
     #[allow(clippy::too_many_lines)]
     // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
@@ -37030,6 +37151,12 @@ impl HostLoop {
         scratch.rec = Some(rec);
         host_prof.end("HostWorldHead", t);
         }
+        // **依赖契约（A3 落成断言）**：`rec` 是无条件取的 ⇒ 任何非 `ALL` 的调用必须含 WORLD_HEAD。
+        debug_assert!(
+            phases.has(PhaseSet::WORLD_HEAD),
+            "启用「用 rec 的段」时必须同时启用 WORLD_HEAD（phases=0x{:05x}）",
+            phases.0
+        );
         let mut rec = scratch
             .rec
             .as_mut()
@@ -45216,6 +45343,61 @@ mod tests {
         );
         assert_eq!(frames[1].0, mon_id, "SM_FEATURECHANGED 的 Recog 同怪物");
         assert_eq!(frames[1].1, mir2_protocol::messages::SM_FEATURECHANGED);
+    }
+
+    /// **M0/A3**：区 k 空实例跑一个 tick —— 不 panic、世界 clock 前进、**位集之外的段未执行**。
+    ///
+    /// 观测「未执行」：`M0_MIN` 不含 INBOUND ⇒ 通道里预置的事件必须**仍在**（被排水即红）。
+    /// 红检：把 `PhaseSet::has` 改恒真（或 `M0_MIN` 换成 `ALL`）⇒ 事件被消费 ⇒ 本用例必红。
+    #[test]
+    fn empty_zone_loop_runs_one_tick_without_panic() {
+        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(100, 100)], Some(0));
+        let services = HostServices::for_test();
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctl_tx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        ev_tx
+            .send(GateEvent::Closed {
+                index: 0,
+                chr_name: String::new(),
+                socket: 0,
+            })
+            .expect("预置事件");
+        let io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        let (host, _services, io, outcome) = host.tick(services, io, PhaseSet::M0_MIN);
+        assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
+        assert_eq!(host.world.entities.len(), 0, "空实例无实体");
+        assert!(host.world.clock_ms > 0, "世界 tick 必须推进 clock");
+        assert_eq!(host.ticks, 0, "ticks 的推进归 HostFrames（M0_MIN 不含）");
+        assert!(
+            io.ev_rx.try_recv().is_ok(),
+            "M0_MIN 不含 INBOUND ⇒ 预置事件必须仍在通道里（位集恒真 ⇒ 本断言红）"
+        );
+    }
+
+    /// **M0/A3 负例**：取 `rec` 前必须已启用 `WORLD_HEAD`；缺位 ⇒ 依赖断言触发（文案带位集）。
+    #[test]
+    #[should_panic(expected = "WORLD_HEAD")]
+    fn zone_tick_without_world_head_panics() {
+        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(10, 10)], None);
+        let services = HostServices::for_test();
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        let _ = host.tick(services, io, PhaseSet(PhaseSet::WORLD_TAIL));
     }
 
     /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
