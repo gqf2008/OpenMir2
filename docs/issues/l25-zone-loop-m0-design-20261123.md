@@ -45,7 +45,7 @@ sim_loop(...)                       // 薄驱动：启动装载 → 组两个结
 impl HostLoop {
     fn new_host(...) -> Self        // M0：不搬启动装载，只在 loop 前用字段简写把既有局部装进结构
     fn for_zone(zone, map_sizes, rng_seed) -> Self   // 区 k 空实例（复用 ZoneState::new 的构造口径）
-    fn tick(&mut self, svc: &mut HostServices<'_>, io: &mut TickIo<'_>, phases: PhaseSet)
+    fn tick(self, svc: HostServices, io: TickIo) -> (Self, HostServices, TickIo, TickOutcome)
 }
 ```
 
@@ -159,6 +159,14 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
 
 1. **纯搬移**：只挪代码位置，不改任何表达式、分支、调用顺序、分配次数；`PhaseSet::ALL`
    下方法调用序列 = 原正文顺序。
+   - **传递方式（A1 实施决定，2026-11-23）**：`tick` 按**值**拿走 `HostLoop`/`HostServices`/
+     `TickIo` 并在返回时交还（`type TickOut`）。理由：只有按值解构才能让循环体 2,767 行
+     **逐字不变**（裸局部 `world`/`online`/… 原样可用）；按引用解构会让每个 `&mut world` 变成
+     `&mut &mut World`、每处 `&world` 变成 `&&mut World`，全靠 deref 强制转换，风险大。
+     代价：每 tick 一次结构 **move**（无堆分配、无 clone、无锁）：`size_of::<TickOut>() = 17,760 B`
+     （`HostLoop` 10,256 含 `World` 8,400；`HostServices` 7,448；`TickIo` 48）⇒ 进出 ≈35 KB memcpy，
+     按 ~10 GB/s 粗算 ≈3–5 µs/tick（预算 200 ms）；编译器还可能省掉大部分。
+   - 副作用：tick 期间三块状态被消费；panic 语义不变（sim 线程 panic 本就让该线程退出）。
 2. **构造顺序不变**：`HostLoop`/`HostServices` 在 `loop {` 之前用字段简写从既有局部「装入」，
    不重排启动装载（M0 不搬 `new_host`；`for_zone` 是另一条只给区 k 用的构造）。
 3. **不新增热路径开销**：无新克隆/新 `Vec`/新锁；`Cell`/`RefCell` 仍是原实例。

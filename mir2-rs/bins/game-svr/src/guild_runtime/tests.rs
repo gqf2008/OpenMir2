@@ -2082,8 +2082,10 @@ fn g3_anchor_a4_production_wiring() {
     let sblk = l[startup.saturating_sub(3)..startup + 8].join("\n");
     assert!(sblk.contains("guild_sections"));
 
+    // **M0/A1**：该局部已被 move 进 `HostLoop`，`mut` 不再需要（cargo fix 去掉）⇒ 字面量同步；
+    // 断言意图不变：`guild_run_tick` 必须**恰一处**由 `world.clock_ms` 初始化。
     assert_eq!(
-        exact(&l, "let mut guild_run_tick = world.clock_ms as i32;").len(),
+        exact(&l, "let guild_run_tick = world.clock_ms as i32;").len(),
         1
     );
 
