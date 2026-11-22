@@ -956,8 +956,9 @@ impl ZoneHost {
 ///   **属落地区**：登录落在区 k ⇒ 这些表里只出现该会话，区 0 不留任何副本。
 /// - `gates`/`engine`/`guilds`/`npc_host`/`pwd_sessions`/`reconnect_pending`/`kick_pending`
 ///   **属进程**（`sim_loop` 局部，区 0 线程持有）：登录落区由区 0 线程执行，这些句柄直接借用。
-/// - 段 1b 不给区 k 装配退出路径：`Closed` 投到区 k 后由最小区循环丢弃 ⇒ 会话在区 k 保留
-///   到进程结束；关服存档也只覆盖区 0 的 `ground_sessions`（交接/逐区存档在段 2）。
+/// - 段 1b 不给区 k 装配退出路径：`Closed` 投到区 k 后由区循环丢弃（**丢弃现场计
+///   `zone_disconnect_dropped`**——缺口必须看得见；1c 接线后应恒 0）⇒ 会话在区 k
+///   保留到进程结束；关服存档也只覆盖区 0 的 `ground_sessions`（交接/逐区存档在段 2）。
 struct ZoneState {
     world: mir2_world_bevy::World,
     displays: downlink::DisplayTable,
@@ -1505,8 +1506,20 @@ fn spawn_minimal_zone(
                 );
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     // 段 1b 本区还没有命令处理：入站事件（含广播来的网关线注册）全部丢弃。
-                    while rx.try_recv().is_ok() {}
-                    while ctl_rx.try_recv().is_ok() {}
+                    // **已知缺口**：`Closed` 投到本区后被这里丢弃 ⇒ 实体永不离开本区、
+                    // 在线表/存档对不上。丢弃现场计数 `zone_disconnect_dropped`——
+                    // 缺口必须**看得见**；1c 实现本区退出路径后该计数应恒 0。
+                    // `Closed` 走优先通道（`GateEvent::is_priority`），两条都看。
+                    while let Ok(ev) = rx.try_recv() {
+                        if matches!(ev, GateEvent::Closed { .. }) {
+                            perf_counters::note_zone_disconnect_dropped();
+                        }
+                    }
+                    while let Ok(ev) = ctl_rx.try_recv() {
+                        if matches!(ev, GateEvent::Closed { .. }) {
+                            perf_counters::note_zone_disconnect_dropped();
+                        }
+                    }
                     // 批 1（持锁）：phase1 + 边界快照/发布。发布后立即放锁。
                     let (mut record, border) = {
                         let mut st = state
@@ -23569,6 +23582,9 @@ mod perf_counters {
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
     /// 落区后落点**不属于**判定区（墙格移位/死亡改写越过边界；只在切片模式计）。
     pub(crate) static ZONE_LOGIN_OFFZONE: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ③ 段 1b→1c 的已知缺口**：`Closed` 被投到区 k 后由区循环**丢弃**的次数
+    /// （区 k 还没有退出路径；1c 接线后应恒 0。缺口必须**看得见**）。
+    pub(crate) static ZONE_DISCONNECT_DROPPED: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn note_zone_login_uncovered() {
         ZONE_LOGIN_UNCOVERED.fetch_add(1, Ordering::Relaxed);
@@ -23605,6 +23621,13 @@ mod perf_counters {
     pub(crate) fn note_zone_login_offzone() {
         ZONE_LOGIN_OFFZONE.fetch_add(1, Ordering::Relaxed);
     }
+    pub(crate) fn note_zone_disconnect_dropped() {
+        ZONE_DISCONNECT_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_disconnect_dropped() -> u64 {
+        ZONE_DISCONNECT_DROPPED.load(Ordering::Relaxed)
+    }
     #[cfg(test)]
     pub(crate) fn zone_login_offzone() -> u64 {
         ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed)
@@ -23615,6 +23638,7 @@ mod perf_counters {
         ZONE_TARGET_UNAVAILABLE.store(0, Ordering::Relaxed);
         ZONE_ROUTER_UNASSIGNED.store(0, Ordering::Relaxed);
         ZONE_LOGIN_OFFZONE.store(0, Ordering::Relaxed);
+        ZONE_DISCONNECT_DROPPED.store(0, Ordering::Relaxed);
         for c in &ZONE_LOGIN_LANDED {
             c.store(0, Ordering::Relaxed);
         }
@@ -119529,11 +119553,13 @@ mod zone_login_landing_tests {
         perf_counters::note_zone_target_unavailable();
         perf_counters::note_zone_router_unassigned();
         perf_counters::note_zone_login_offzone();
+        perf_counters::note_zone_disconnect_dropped();
         perf_counters::note_zone_login_landed(1);
         assert_eq!(perf_counters::zone_login_uncovered(), 1);
         assert_eq!(perf_counters::zone_target_unavailable(), 1);
         assert_eq!(perf_counters::zone_router_unassigned(), 1);
         assert_eq!(perf_counters::zone_login_offzone(), 1);
+        assert_eq!(perf_counters::zone_disconnect_dropped(), 1);
         assert_eq!(perf_counters::zone_login_landed(1), 1, "区 1 落区 +1");
         assert_eq!(perf_counters::zone_login_landed(0), 0, "区 0 独立计");
         perf_counters::note_zone_login_landed(9999);
@@ -119544,6 +119570,7 @@ mod zone_login_landing_tests {
         );
         perf_counters::reset_zone_login_counters_for_tests();
         assert_eq!(perf_counters::zone_login_uncovered(), 0);
+        assert_eq!(perf_counters::zone_disconnect_dropped(), 0);
         assert_eq!(perf_counters::zone_login_landed(1), 0);
     }
 
