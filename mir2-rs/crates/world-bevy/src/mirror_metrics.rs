@@ -21,6 +21,27 @@ static MIRROR_CELL_POS_UNKNOWN: AtomicU64 = AtomicU64::new(0);
 /// **L2-5 ③ 段 2**：镜像**原地提升为真实体**的次数（handoff 提交侧）。
 static HANDOFF_MIRROR_PROMOTED: AtomicU64 = AtomicU64::new(0);
 
+/// **L2-5 ③ 段 2（目标侧）**：handoff 收下时目标区**没有该 id 实体**（邻区快照还没送到 ⇒ 无镜像）
+/// ⇒ **直接落真身** 的次数。与 `handoff_mirror_promoted` 合计 = 跨界次数
+/// （「目标区已有镜像」是被证伪的假设，见计划页 §10）。
+static HANDOFF_INSERTED_FRESH: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 2（总监 2026-11-22 裁定 ①）**：`handoff_accept` 命中 `AlreadyHeld`（源区拿到
+/// ack 前的**每 tick 重发**、目的地已是同 id 真实体 ⇒ 幂等收下）的次数。
+///
+/// **不为 0 是正常的**（重发天然会发生）；它是「幂等支被删」护栏的**直接读数**：若该支被删，
+/// 重发会落到 `RefusedOccupied` ⇒ 源区回滚 ⇒ `handoff_refused > 0`（硬红线），本计数同时掉回 0。
+/// **异常口径**：每次跨界收下对应的 `AlreadyHeld` 结构性上界是 3（第一次 offer 被收下；pending 寿命
+/// ≤ `HANDOFF_TIMEOUT_TICKS+1 = 4` tick ⇒ 至多还有 3 次重发）——远大于 3 的突变要查。
+static HANDOFF_ALREADY_HELD: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 2（总监 2026-11-22 裁定）**：目标区按 offer 身份去重时**丢弃的迟到重发**次数。
+///
+/// 迟到重发 = 同一次 pending epoch 的重发在目标区已提交（且可能已移除实体）之后才被排到。
+/// **丢弃是对的**（它再收下就会把实体「传送」一次）；本计数是这条去重支的读数与护栏：
+/// 为 0 正常（重发从未迟到），>0 说明 ack 有延迟但去重生效。
+static HANDOFF_OFFER_DUP_DROPPED: AtomicU64 = AtomicU64::new(0);
+
 /// **L2-5 ③ 段 2（兜底，防御不是牙）**：`apply_mirrors` 收到「该 id 已是本区**真实**实体」
 /// 而跳过的次数。时序正确时**恒 0**；>0 说明 handoff 时序被破坏（不要用人工变异把它当牙宣传）。
 static MIRROR_SHADOWED_BY_LOCAL: AtomicU64 = AtomicU64::new(0);
@@ -58,6 +79,22 @@ pub fn mirror_cell_pos_unknown() -> u64 {
     MIRROR_CELL_POS_UNKNOWN.load(Ordering::Relaxed)
 }
 
+/// 记一次 handoff 「直接落真身」（目标区无镜像）。
+pub fn note_handoff_inserted_fresh() {
+    HANDOFF_INSERTED_FRESH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 「直接落真身」计数（测试/诊断）。
+#[must_use]
+pub fn handoff_inserted_fresh() -> u64 {
+    HANDOFF_INSERTED_FRESH.load(Ordering::Relaxed)
+}
+
+/// 复位「直接落真身」计数（**只给测试**）。
+pub fn reset_handoff_inserted_fresh_for_tests() {
+    HANDOFF_INSERTED_FRESH.store(0, Ordering::Relaxed);
+}
+
 /// 记一次镜像原地提升。
 pub fn note_handoff_mirror_promoted() {
     HANDOFF_MIRROR_PROMOTED.fetch_add(1, Ordering::Relaxed);
@@ -67,6 +104,38 @@ pub fn note_handoff_mirror_promoted() {
 #[must_use]
 pub fn handoff_mirror_promoted() -> u64 {
     HANDOFF_MIRROR_PROMOTED.load(Ordering::Relaxed)
+}
+
+/// 记一次 handoff「重发时目的地已是同 id 真实体 ⇒ 幂等收下」。
+pub fn note_handoff_already_held() {
+    HANDOFF_ALREADY_HELD.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 「幂等收下」次数（测试/诊断；不为 0 正常，每次跨界收下的结构性上界是 3）。
+#[must_use]
+pub fn handoff_already_held() -> u64 {
+    HANDOFF_ALREADY_HELD.load(Ordering::Relaxed)
+}
+
+/// 复位「幂等收下」计数（**只给测试**）。
+pub fn reset_handoff_already_held_for_tests() {
+    HANDOFF_ALREADY_HELD.store(0, Ordering::Relaxed);
+}
+
+/// 记一次「目标区丢弃迟到重发 offer」。
+pub fn note_handoff_offer_dup_dropped() {
+    HANDOFF_OFFER_DUP_DROPPED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 「丢弃迟到重发」次数（测试/诊断）。
+#[must_use]
+pub fn handoff_offer_dup_dropped() -> u64 {
+    HANDOFF_OFFER_DUP_DROPPED.load(Ordering::Relaxed)
+}
+
+/// 复位「丢弃迟到重发」计数（**只给测试**）。
+pub fn reset_handoff_offer_dup_dropped_for_tests() {
+    HANDOFF_OFFER_DUP_DROPPED.store(0, Ordering::Relaxed);
 }
 
 /// 记一次「镜像被本地真实体遮蔽」（防御计数；时序正确时恒 0）。

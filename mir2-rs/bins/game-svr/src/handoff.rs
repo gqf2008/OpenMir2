@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mir2_world_bevy::{MirrorPromote, MirrorSpec, World};
+use mir2_world_bevy::{HandoffAccept, MirrorSpec, World};
 
 use crate::glog;
 
@@ -28,13 +28,23 @@ use crate::zone::{RegionLayout, ZoneId};
 /// §2.2：offer 后等待 ack 的最大 tick 数（超过 ⇒ 回滚 + `handoff_refused`）。
 pub(crate) const HANDOFF_TIMEOUT_TICKS: u64 = 3;
 
+/// **offer 去重表的回收窗口**（总监 2026-11-22 裁定「幂等键 = offer 身份」）。
+///
+/// 一次 pending epoch 内源区每 tick 重发，寿命受 [`HANDOFF_TIMEOUT_TICKS`] 约束（≤4 tick）；
+/// 投递只在内存邮箱里、目标区每 tick 排水 ⇒ 迟到重发最多再晚 ~2 tick。TTL 取 2×寿命，
+/// 保证「丢掉一行的时刻，该 epoch 不可能还有重发在路上」（表有界）。
+pub(crate) const HANDOFF_DUP_TTL_TICKS: u64 = 2 * (HANDOFF_TIMEOUT_TICKS + 1);
+
 /// 源区 → 目标区的提交申请（全量状态；目标区用它覆盖同 id 镜像）。
 #[derive(Debug)]
 pub(crate) struct HandoffOffer {
     /// 源区。
     pub from: ZoneId,
-    /// 源区发出的 tick（诊断用）。
+    /// 本次**发送**的 tick（诊断用；同一 epoch 的重发会变）。
     pub at_tick: u64,
+    /// **offer 身份**：源端该 id 这一次 pending epoch 的起始 tick（同一次跨界的所有重发相同；
+    /// 下一次跨界必然更大）。目标区按 `(from, id, epoch)` 去重——迟到重发不是新跨界。
+    pub epoch: u64,
     /// 实体全量状态（与快照同一组字段）。
     pub spec: MirrorSpec,
 }
@@ -86,6 +96,14 @@ pub(crate) struct HandoffRuntime {
     refused: u64,
     /// 提升成功次数（本区作为**目标区**的读数）。
     promoted: u64,
+    /// **诊断（不改变行为）**：RefusedCell 已打过的 id（同一 id 只打一次）。
+    refused_cell_logged: std::collections::HashSet<i32>,
+    /// **目标区去重表**（总监 2026-11-22 裁定）：`(源区, 实体 id) → (已处理的最大 offer epoch,
+    /// 最近处理的 tick)`。`offer.epoch <= 已处理` ⇒ 迟到重发，直接丢弃。
+    /// 按 [`HANDOFF_DUP_TTL_TICKS`] 回收 ⇒ 有界。
+    last_offer_epoch: HashMap<(ZoneId, i32), (u64, u64)>,
+    /// 本区作为**目标区**丢弃的迟到重发数（诊断/测试）。
+    dup_dropped: u64,
 }
 
 impl HandoffRuntime {
@@ -97,6 +115,9 @@ impl HandoffRuntime {
             pending_since: HashMap::new(),
             refused: 0,
             promoted: 0,
+            refused_cell_logged: std::collections::HashSet::new(),
+            last_offer_epoch: HashMap::new(),
+            dup_dropped: 0,
         }
     }
 
@@ -110,6 +131,12 @@ impl HandoffRuntime {
     #[cfg(test)]
     pub(crate) fn promoted(&self) -> u64 {
         self.promoted
+    }
+
+    /// 本区作为**目标区**丢弃的迟到重发数（诊断/测试）。
+    #[cfg(test)]
+    pub(crate) fn dup_dropped(&self) -> u64 {
+        self.dup_dropped
     }
 
     fn take_mail(&self) -> (Vec<HandoffOffer>, Vec<HandoffAck>) {
@@ -162,14 +189,31 @@ impl HandoffRuntime {
             }
         }
         // 2) offers（本区是目标区）。
+        //
+        // **按 offer 身份去重**（总监 2026-11-22 裁定）：`AlreadyHeld` 只能挡住「目标区此刻
+        // 还持有该实体」的重复；一旦目标区在提交后把它移除，**迟到重发会被当成新跨界再收下**
+        // （`flake_leg_1.log`：往返两次却 `accepted=3`，多出的一次就是这种「传送」）。
+        // 因此先按 `(from, id, epoch)` 比 stamp：`epoch <= 已处理` ⇒ 丢弃（不 ack、不动作）。
+        //
+        // 表回收放在排 offer 之前：任何可能迟到的重发都在 TTL 内，TTL 外的行不可能还会用到。
+        self.last_offer_epoch
+            .retain(|_, (_, seen)| tick.saturating_sub(*seen) <= HANDOFF_DUP_TTL_TICKS);
         for offer in offers {
+            let key = (offer.from, offer.spec.id);
+            if let Some(&(last_epoch, _)) = self.last_offer_epoch.get(&key) {
+                if offer.epoch <= last_epoch {
+                    self.dup_dropped += 1;
+                    mir2_world_bevy::mirror_metrics::note_handoff_offer_dup_dropped();
+                    continue;
+                }
+            }
             let owned = self
                 .layout
                 .zone_of(offer.spec.map_id, offer.spec.x, offer.spec.y)
                 == Some(self.zone);
             let ok = if owned {
-                match world.promote_mirror_to_real(&offer.spec) {
-                    MirrorPromote::Promoted => {
+                match world.handoff_accept(&offer.spec) {
+                    HandoffAccept::Promoted => {
                         self.promoted += 1;
                         glog!(
                             "INF",
@@ -181,20 +225,87 @@ impl HandoffRuntime {
                         );
                         true
                     }
-                    // 幂等：已是真实体（重复 offer）⇒ 视为已提升。
-                    MirrorPromote::NotMirror
-                        if world.entities.get(offer.spec.id).is_some_and(|e| !e.mirror) =>
-                    {
+                    HandoffAccept::Inserted => {
+                        self.promoted += 1;
+                        glog!(
+                            "INF",
+                            "handoff 落真身：区 {} 直接新增实体 {}（目标区当时无镜像，来自区 {}，应在 tick {}）",
+                            self.zone,
+                            offer.spec.id,
+                            offer.from,
+                            offer.at_tick
+                        );
                         true
                     }
-                    other => {
+                    HandoffAccept::AlreadyHeld => {
+                        // 幂等重发（提升/落真身后源区还没收到 ack）：按已收下应答。
+                        // 计在 `World::handoff_accept`（`handoff_already_held`，总监裁定 ①）：
+                        // 不为 0 正常，每次跨界收下的结构性上界是 3（首次 offer 被收下 + pending
+                        // 寿命 ≤4 tick 的至多 3 次重发），突变要查。
+                        true
+                    }
+                    HandoffAccept::RefusedOccupied => {
                         glog!(
                             "WRN",
-                            "handoff 拒绝：区 {} 收到实体 {} 但镜像缺失或位置不符（{other:?}），来自区 {}",
+                            "handoff 拒绝：区 {} 收到实体 {} 但已被真实体占用，来自区 {}",
                             self.zone,
                             offer.spec.id,
                             offer.from
                         );
+                        false
+                    }
+                    HandoffAccept::RefusedCell => {
+                        glog!(
+                            "WRN",
+                            "handoff 拒绝：区 {} 收到实体 {} 但落格失败（fail-closed），来自区 {}",
+                            self.zone,
+                            offer.spec.id,
+                            offer.from
+                        );
+                        // **诊断（总监 2026-11-22：先取证不修行为）**：同一 id 只打一次，
+                        // 报告 `add_map_object` 的两个失败点（`cell_match` / `cell.valid()`）与
+                        // 实体形态（ghost/death/mirror/handoff_pending）。
+                        if self.refused_cell_logged.insert(offer.spec.id) {
+                            let (match_ok, valid, cell_type, ghost, death, pending, mirror) =
+                                match world.sim.maps.get(offer.spec.map_id) {
+                                    Some(g) => {
+                                        let m = g.cell_match(offer.spec.x, offer.spec.y);
+                                        let (cell, _) = g.get_cell_info(offer.spec.x, offer.spec.y);
+                                        let e = world.entities.get(offer.spec.id);
+                                        (
+                                            m,
+                                            cell.valid(),
+                                            crate::region_loop::mirror_spec_for(
+                                                world,
+                                                offer.spec.id,
+                                            )
+                                            .map(|s| s.cell_type),
+                                            e.as_ref().is_some_and(|e| e.ghost),
+                                            e.as_ref().is_some_and(|e| e.death),
+                                            e.as_ref().is_some_and(|e| e.handoff_pending),
+                                            e.as_ref().is_some_and(|e| e.mirror),
+                                        )
+                                    }
+                                    None => (false, false, None, false, false, false, false),
+                                };
+                            glog!(
+                                "WRN",
+                                "HANDOFF_DIAG RefusedCell：id={} map={} ({},{}) cell_match={} cell_valid={} cell_type={:?} ghost={} death={} pending={} mirror={} 来自区 {} 本区 {}",
+                                offer.spec.id,
+                                offer.spec.map_id,
+                                offer.spec.x,
+                                offer.spec.y,
+                                match_ok,
+                                valid,
+                                cell_type,
+                                ghost,
+                                death,
+                                pending,
+                                mirror,
+                                offer.from,
+                                self.zone
+                            );
+                        }
                         false
                     }
                 }
@@ -210,6 +321,8 @@ impl HandoffRuntime {
                 );
                 false
             };
+            // 记下已处理到的 epoch（任何结果都记：拒绝已被回执告知源区，重发不再重试）。
+            self.last_offer_epoch.insert(key, (offer.epoch, tick));
             self.send_ack(offer.from, offer.spec.id, ok);
         }
     }
@@ -272,12 +385,14 @@ impl HandoffRuntime {
                 self.pending_since.remove(&id);
                 continue;
             }
-            self.pending_since.entry(id).or_insert(tick);
+            // epoch = 这次 pending 的起点：同一次跨界的所有重发共享它，下一次跨界必然更大。
+            let epoch = *self.pending_since.entry(id).or_insert(tick);
             if let Some(b) = self.boxes.get(target.index()) {
                 let mut m = b.lock().unwrap_or_else(PoisonError::into_inner);
                 m.0.push(HandoffOffer {
                     from: self.zone,
                     at_tick: tick,
+                    epoch,
                     spec,
                 });
             }

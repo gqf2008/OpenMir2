@@ -512,10 +512,10 @@ pub use special_monster::{
 pub use world::{
     ownership_table_miss_first_map_id, ownership_table_misses, AttackSkillInput, AutoGetExpState,
     BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot, ExtraAbilEventKind,
-    ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HideObserverKind, HitModeEvent,
-    HomeMoveTarget, LampDuraChange, MirrorPromote, MirrorSpec, MirrorUpsert, PassThroughHit,
-    PassThroughOutcome, RouteCheck, RunStateExpiry, SkillTrainEvent, SpaceMoveCastOutcome,
-    StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent, WeaponUpgradeOutcome,
-    World, YedoEvent, YedoRuntime, TICK_INTERVAL_MS,
+    ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HandoffAccept,
+    HideObserverKind, HitModeEvent, HomeMoveTarget, LampDuraChange, MirrorPromote, MirrorSpec,
+    MirrorUpsert, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry, SkillTrainEvent,
+    SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
+    WeaponUpgradeOutcome, World, YedoEvent, YedoRuntime, TICK_INTERVAL_MS,
 };
 pub use world::{RefMsgCacheEntry, REF_MSG_CACHED_RANGE, REF_MSG_CACHE_TTL_MS};

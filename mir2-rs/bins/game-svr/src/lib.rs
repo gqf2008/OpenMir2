@@ -120352,7 +120352,9 @@ mod l2_handoff_tests {
     };
     use crate::zone::{parse_zone_layout, RegionLayout, ZoneId, ZoneRect};
     use crate::zone_router::HOST_ZONE;
-    use mir2_world_bevy::{EntitySpawn, MirrorPromote, MirrorSpec, MirrorUpsert, World};
+    use mir2_world_bevy::{
+        EntitySpawn, HandoffAccept, MirrorPromote, MirrorSpec, MirrorUpsert, World,
+    };
 
     fn layout() -> RegionLayout {
         parse_zone_layout(
@@ -120669,6 +120671,187 @@ mod l2_handoff_tests {
             MirrorPromote::CellMismatch
         );
         assert!(world.entities.get(8).expect("实体仍在").mirror);
+    }
+
+    /// **`handoff_accept` 的幂等支 + 计数**（总监 2026-11-22 裁定 ①/②）。
+    ///
+    /// 原始回归：合并门那 5 条拒收**全是**「提升后源区还每 tick 重发 offer、命中真实体被
+    /// 误拒（`RefusedOccupied`）」——幂等支被删。本用例钉住：
+    /// - 首次落真身 ⇒ `Inserted`；重发 ⇒ `AlreadyHeld`，**位置不参与**（旧坐标也不拒）；
+    /// - 每次 `AlreadyHeld` 恰计一次 `handoff_already_held`（重发次数的直接读数，裁定 ①）；
+    /// - 不重复落格（格内该 id 恰一条）、不重复计 `handoff_inserted_fresh`。
+    ///
+    /// 红检：删 `handoff_accept` 的幂等支 ⇒ 第二次变 `RefusedOccupied` 且计数 0 ⇒ 本用例红；
+    /// 把位置重新纳入判断 ⇒ `stale` 那条红。（`AlreadyHeld` 位置不参与的依据与反证见
+    /// `World::handoff_accept` 文档：业务 id 全局唯一 ⇒ 同 id 真实体 = 同一逻辑实体；将来引入
+    /// id 复用须按代际区分。）
+    #[test]
+    fn handoff_accept_idempotent_resend_is_counted() {
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_inserted_fresh_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_already_held_for_tests();
+        let spec = |id: i32, x: i32| MirrorSpec {
+            id,
+            name: "E".into(),
+            map_id: 0,
+            x,
+            y: 5,
+            view_range: 5,
+            race: 80,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 2,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        let mut world = World::with_maps(vec![(20, 10)]);
+        // 无该 id 实体 ⇒ 直接落真身。
+        assert_eq!(
+            world.handoff_accept(&spec(7, 5)),
+            HandoffAccept::Inserted,
+            "目的地无该 id ⇒ 落真身（不得以「已有镜像」为前提）"
+        );
+        assert_eq!(mir2_world_bevy::mirror_metrics::handoff_inserted_fresh(), 1);
+        // 源区未收到 ack 前的重发：坐标是**旧**的，同样必须幂等收下（位置不参与）。
+        assert_eq!(
+            world.handoff_accept(&spec(7, 4)),
+            HandoffAccept::AlreadyHeld,
+            "同 id 已是真实体 ⇒ 幂等收下，位置不参与"
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_already_held(),
+            1,
+            "每次 AlreadyHeld 恰计一次"
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_inserted_fresh(),
+            1,
+            "重发不得重复落真身/计数"
+        );
+        let entries = |w: &World, x: i32| -> usize {
+            let (cell, _) = w.map(0).get_cell_info(x, 5);
+            cell.obj_list
+                .iter()
+                .filter(|o| o.actor_object && o.cell_obj_id == 7)
+                .count()
+        };
+        assert_eq!(entries(&world, 5), 1, "格内该 id 恰一条（不重复登记）");
+        assert_eq!(entries(&world, 4), 0, "旧坐标不得再落一条");
+
+        // 镜像 ⇒ 原地提升，重发同样幂等（合并门原始场景）。
+        assert_eq!(
+            world.upsert_mirror(spec(8, 5)),
+            MirrorUpsert::Inserted,
+            "前置：镜像插入"
+        );
+        assert_eq!(world.handoff_accept(&spec(8, 5)), HandoffAccept::Promoted);
+        assert_eq!(
+            world.handoff_accept(&spec(8, 5)),
+            HandoffAccept::AlreadyHeld
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_already_held(),
+            2,
+            "提升后的重发同样计一次"
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_mirror_promoted(),
+            1,
+            "重发不得重复提升/计数"
+        );
+    }
+
+    /// **offer 按身份去重（总监 2026-11-22 裁定；`flake_leg_1.log` 的根因）**。
+    ///
+    /// 迟到重发（同 epoch）在目标区已提交后到达 ⇒ **丢弃**，不得再收下一次（否则实体被
+    /// 「传送」一次：往返两次却 `accepted=3`）。新 epoch 的 offer 仍是新跨界 ⇒ 必须收下
+    /// （负例：去重不得过度）。
+    ///
+    /// 红检：删 `tick_top` 的 epoch 去重块 ⇒ 第二次变 `Inserted`、`dup_dropped` 恒 0 ⇒ 本用例红；
+    /// 比较方向写反（新 epoch 也丢）⇒ 第三段红。
+    #[test]
+    fn tick_top_drops_late_duplicate_offer_epochs() {
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_inserted_fresh_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_offer_dup_dropped_for_tests();
+        let layout = Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut rt =
+            crate::handoff::HandoffRuntime::new(zone(1), Arc::clone(&layout), boxes.clone());
+        let spec = MirrorSpec {
+            id: 7,
+            name: "E".into(),
+            map_id: 0,
+            x: 12,
+            y: 5,
+            view_range: 5,
+            race: 80,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 2,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        let push = |epoch: u64, at_tick: u64| {
+            let mut m = boxes[1].lock().unwrap_or_else(|e| e.into_inner());
+            m.0.push(crate::handoff::HandoffOffer {
+                from: zone(0),
+                at_tick,
+                epoch,
+                spec: spec.clone(),
+            });
+        };
+        // epoch=6 首发 ⇒ 目标区无该 id ⇒ 落真身（收下 1 次）。
+        push(6, 6);
+        rt.tick_top(&mut world, 7);
+        assert!(world.entities.get(7).is_some(), "首发必须收下");
+        assert_eq!(mir2_world_bevy::mirror_metrics::handoff_inserted_fresh(), 1);
+        assert_eq!(rt.promoted(), 1);
+        // 同 epoch 的迟到重发（目标区已提交）⇒ 丢弃：不再收下、不重复落格。
+        push(6, 8);
+        rt.tick_top(&mut world, 9);
+        assert_eq!(rt.dup_dropped(), 1, "迟到重发必须被丢弃");
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped(),
+            1
+        );
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_inserted_fresh(),
+            1,
+            "不得第二次收下"
+        );
+        assert_eq!(rt.promoted(), 1);
+        // 实体回到源区（源区提交移除）后，**新 epoch** 是新跨界 ⇒ 必须收下（去重不得过度）。
+        assert!(world.release_entity(7), "前置：实体可释放");
+        push(7, 10);
+        rt.tick_top(&mut world, 11);
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::handoff_inserted_fresh(),
+            2,
+            "新 epoch 必须收下"
+        );
+        assert_eq!(rt.dup_dropped(), 1, "新 epoch 不得计入丢弃");
+        assert_eq!(rt.promoted(), 2);
     }
 
     // ------------------------------------------------------------------
@@ -121033,7 +121216,7 @@ mod l2_handoff_prod_tests {
     ///
     /// **界的一次推导**：ack 迟到 ≤1 tick ⇒ 源区在 T+1 的快照里仍发布该 id（outgoing）、在 T+2 的
     /// 顶才移除 ⇒ 目标区在 **T+1、T+2 两 tick** 命中「已是真实体」的遮蔽兜底。故**每次跨界**
-    /// 遮蔽 ≤2。N 次跨界 ⇒ 累计 ≤2N，且 `promoted == N`（每次跨界恰一次提升）。
+    /// 遮蔽 ≤2。N 次跨界 ⇒ 累计 ≤2N，且 `promoted + inserted_fresh == N`（每次跨界恰一次收下）。
     ///
     /// **异常口径**：`shadowed > 2N` 或随跨界次数呈非「每次 ≤2」的增长 ⇒ 时序设计破了，
     /// 要查（不是庆祝兜底生效）。`refused == 0`、受害者全程在收件人台账里不消失，仍是**硬 0/零**。
@@ -121050,12 +121233,14 @@ mod l2_handoff_prod_tests {
         const CROSSINGS: u64 = 3;
         let _guard = PROD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_inserted_fresh_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_already_held_for_tests();
         mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
         let layout = Arc::new(layout());
         let exchange = Arc::new(HaloExchange::new(2));
         let barriers = Arc::new(TickBarriers::new(2));
         let boxes = handoff::new_mailboxes(2);
-        let (tx, rx) = std::sync::mpsc::channel::<(u64, u64, u64, Vec<bool>)>();
+        let (tx, rx) = std::sync::mpsc::channel::<(u32, u64, u64, u64, Vec<bool>, u64)>();
 
         let run = |zone_id: ZoneId, spawn_e: bool, spawn_p: bool| {
             let layout = Arc::clone(&layout);
@@ -121097,6 +121282,8 @@ mod l2_handoff_prod_tests {
                     let mut next_issue = 0u64;
                     let mut crossed = 0u64;
                     let mut p_stream: Vec<bool> = Vec::new();
+                    // 本区 apply_mirrors 自己记到的遮蔽次数（分区读数；与进程级合计对账）。
+                    let mut zone_shadowed = 0u64;
                     for tick in 0..TICKS + SETTLE {
                         handoff.tick_top(&mut world, tick);
                         // 拥有者与方向：区 0 推 +x、区 1 推 -x，每 K tick 最多迈一步。
@@ -121134,8 +121321,9 @@ mod l2_handoff_prod_tests {
                         let (_b, neighbors, wait_us) = runtime
                             .after_phase1(&world, tick, &HaloFrameSource::none())
                             .expect("快照/发布/barrier1/读邻居");
-                        if let Err(e) = apply_mirrors(&mut world, &neighbors, None) {
-                            panic!("apply_mirrors 失败：{e}");
+                        match apply_mirrors(&mut world, &neighbors, None) {
+                            Ok(stats) => zone_shadowed += stats.shadowed_by_local as u64,
+                            Err(e) => panic!("apply_mirrors 失败：{e}"),
                         }
                         world.tick_phase2(&mut rec);
                         runtime.after_phase2(wait_us, None);
@@ -121151,8 +121339,15 @@ mod l2_handoff_prod_tests {
                             p_stream.push(seen);
                         }
                     }
-                    tx.send((handoff.promoted(), handoff.refused(), crossed, p_stream))
-                        .expect("主线程接收");
+                    tx.send((
+                        zone_id.get(),
+                        handoff.promoted(),
+                        handoff.refused(),
+                        crossed,
+                        p_stream,
+                        zone_shadowed,
+                    ))
+                    .expect("主线程接收");
                 };
                 if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
                     abort.abort();
@@ -121166,36 +121361,82 @@ mod l2_handoff_prod_tests {
         let mut refused_total = 0u64;
         let mut crossings = 0u64;
         let mut stream: Vec<bool> = Vec::new();
+        let mut shadowed_by_zone: Vec<(u32, u64)> = Vec::new();
         for _ in 0..2 {
-            let (_promoted, refused, crossed, p_stream) = rx
+            let (zone_no, _promoted, refused, crossed, p_stream, zone_shadowed) = rx
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .expect("每区一份结果（超时 = 屏障死锁/线程 panic）");
             refused_total += refused;
             crossings += crossed;
+            shadowed_by_zone.push((zone_no, zone_shadowed));
             if p_stream.len() > stream.len() {
                 stream = p_stream;
             }
         }
+        shadowed_by_zone.sort_unstable();
+        let shadowed_local_total: u64 = shadowed_by_zone.iter().map(|(_, n)| *n).sum();
         h0.join().expect("区 0 线程");
         h1.join().expect("区 1 线程");
         let shadowed = mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local();
+        let already_held = mir2_world_bevy::mirror_metrics::handoff_already_held();
+        let dup_dropped = mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped();
         // 每次跨界恰一次提升：总量用进程级 `handoff_mirror_promoted`（`promote_mirror_to_real`
         // 在**目标区**线程里计数，两区合计 = 跨界次数）。
-        let promoted_all = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted();
+        let promoted_all = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted()
+            + mir2_world_bevy::mirror_metrics::handoff_inserted_fresh();
+        // **诊断读数（env 门控，默认静默）**：flake 定性/窗口取证用（shadowed/N 与
+        // already_held/N 的实际分布），不改变任何断言。
+        if std::env::var_os("MIR2_HANDOFF_TEST_DIAG").is_some() {
+            eprintln!(
+                "HANDOFF_TEST_DIAG multi_crossing: promoted_all={promoted_all} shadowed_global={shadowed} shadowed_by_zone={shadowed_by_zone:?} shadowed_local_total={shadowed_local_total} already_held={already_held} dup_dropped={dup_dropped} refused={refused_total} crossings_intent={crossings}"
+            );
+        }
         assert!(
             crossings >= 2,
             "至少完成 2 次跨界（驱动自证；实得 {crossings}）"
         );
-        assert_eq!(
-            promoted_all, crossings,
-            "每次跨界恰一次提升（累计 promoted={promoted_all} crossings={crossings}）"
+        // **N 的口径 = 被收下的跨界次数**（`promoted + inserted_fresh`）。驱动侧的
+        // `crossings` 是「意图迈步」计数（可能含被挡/未完成），只作自证参考——不拿它当 N。
+        assert!(
+            promoted_all >= 2,
+            "至少完成一次往返（promoted+inserted_fresh={promoted_all}）"
         );
         assert_eq!(refused_total, 0, "无拒绝/超时回滚（硬 0）");
+        // **上界的推导（两区口径，修正版）**：`mirror_shadowed_by_local` 是**进程级两区合计**，
+        // 而 `shadowed_by_zone` 的分区读数（快照见 `MIR2_HANDOFF_TEST_DIAG`）证明**每次跨界
+        // 两区各命中一次**（10 次跨界、两区读数恒等：5/5、6/6、…）——旧推导只算单区，4N 是错的。
+        //
+        // 对每个区：遮蔽只在**两区都持有该 id**时累积——源区在 ack 前保留真实体（pending 寿命
+        // ≤ `HANDOFF_TIMEOUT_TICKS+1 = 4` tick），目标区自提升 tick P 起到源区移除 tick C-1
+        // 都持有 ⇒ 每区每次收下 ≤ C-P ≤ 3（P≥T+1、C≤T+4）⇒ **两区合计 ≤ 6N**。
+        //
+        // **`6N` 是上界不是目标**（总监 2026-11-22 裁定 ③ 的两区口径）：实测（去重修复后）
+        // 每区每次收下 ≈0.5–0.9 ⇒ 合计 ≤1.8N；**每区读数接近 3/次（合计接近 6N）同样判时序
+        // 设计破了**，要查，不许拿上界掩盖。修复前的 52（=5.2N）正是「迟到重发把实体传送一次
+        // ⇒ 两区各多遮蔽若干 tick」的病态读数，已由 `(from, id, epoch)` 去重消除。
         assert!(
-            shadowed <= 2 * crossings,
-            "遮蔽兜底累计 ≤ 2N（每次跨界 ack 迟到 ≤1 tick 的推导上界；实得 {shadowed}，N={crossings}）"
+            shadowed <= 6 * promoted_all,
+            "遮蔽兜底累计 ≤ 6N（两区 × 每区 ≤3 的结构上界，非目标；实测 ≈1.8N，接近 6N 即判时序破了；实得 {shadowed}，N={promoted_all}）"
+        );
+        assert_eq!(
+            shadowed, shadowed_local_total,
+            "进程级遮蔽计数必须等于两区自记之和（不等 ⇒ 被并发用例污染，读数不可引用）"
+        );
+        // **两道幂等护栏的读数**（总监 2026-11-22 裁定）：
+        // 1. `handoff_offer_dup_dropped`（第一道，offer 身份去重）：同 epoch 的迟到重发被丢弃。
+        //    每次收下的重发 ≤3（pending 寿命 ≤4 tick）⇒ ≤3N；**为 0 正常**（ack 从未迟到）。
+        // 2. `handoff_already_held`（第二道）：去重生效后几乎恒 0（重发在到达 `handoff_accept`
+        //    之前就被第一道拦下）；保留作 defense-in-depth，上界同为 3N。
+        assert!(
+            dup_dropped <= 3 * promoted_all,
+            "迟到重发丢弃累计 ≤ 3N（每次收下重发上界 3；实得 {dup_dropped}，N={promoted_all}）"
+        );
+        assert!(
+            already_held <= 3 * promoted_all,
+            "AlreadyHeld 累计 ≤ 3N（第二道幂等；实得 {already_held}，N={promoted_all}）"
         );
         let _ = CROSSINGS;
+        let _ = crossings;
         // 受害者（E）从首次可见起全程在 P 的收件人台账里（appear/disappear 帧的直接来源）。
         let first = stream.iter().position(|s| *s).unwrap_or_else(|| {
             panic!("P 的台账从未出现 E：{stream:?}");
@@ -121203,6 +121444,159 @@ mod l2_handoff_prod_tests {
         assert!(
             stream[first..].iter().all(|s| *s),
             "E 在 P 的台账里出现缺口（零闪烁失败）：{stream:?}"
+        );
+    }
+
+    /// **同 tick 往返**（总监 2026-11-22 裁决必带）：跨过去的下一个 tick 立刻跨回，**两次都必须
+    /// 收下**（第二次目的地可能**没有**该 id 的镜像——「目的地必有镜像」是被证伪的假设，
+    /// 见计划页 §10）；`refused == 0`、受害者台账连续、落点无重复实体。
+    #[test]
+    fn production_runtime_same_tick_round_trip_both_accepted() {
+        const TICKS: u64 = 40;
+        const OUT_TICK: u64 = 6;
+        let _guard = PROD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_inserted_fresh_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_already_held_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_offer_dup_dropped_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
+        let layout = Arc::new(layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let boxes = handoff::new_mailboxes(2);
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, Vec<bool>, usize)>();
+
+        let run = |zone_id: ZoneId, spawn_e: bool, spawn_p: bool| {
+            let layout = Arc::clone(&layout);
+            let exchange = Arc::clone(&exchange);
+            let barriers = Arc::clone(&barriers);
+            let boxes = boxes.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let abort = Arc::clone(&barriers);
+                let body = move || {
+                    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+                    world.set_id_base(zone_id_base(zone_id));
+                    world.set_zone_bounds(crate::handoff::bounds_for(&layout, zone_id));
+                    if spawn_e {
+                        let mut e = mir2_world_bevy::EntitySpawn::new(0, "E".to_string(), 9, 5);
+                        e.race = 0;
+                        e.view_range = 12;
+                        world.add_entity(e);
+                    }
+                    if spawn_p {
+                        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 12, 5);
+                        p.race = 0;
+                        p.view_range = 12;
+                        world.add_entity(p);
+                    }
+                    let _ = world.tick();
+                    let runtime = ZoneRuntime::new(
+                        zone_id,
+                        layout.zone_spans(),
+                        ZONE_HALO_WIDTH,
+                        &exchange,
+                        &barriers,
+                    );
+                    let mut handoff = crate::handoff::HandoffRuntime::new(
+                        zone_id,
+                        Arc::clone(&layout),
+                        boxes.clone(),
+                    );
+                    let mut returned = false;
+                    let mut p_stream: Vec<bool> = Vec::new();
+                    for tick in 0..TICKS {
+                        handoff.tick_top(&mut world, tick);
+                        let owned = world
+                            .entities
+                            .iter_ref()
+                            .find(|e| e.name == "E" && !e.mirror)
+                            .map(|e| (e.id, e.x, e.handoff_pending));
+                        if let Some((id, x, pending)) = owned {
+                            if !pending {
+                                if tick == OUT_TICK && zone_id == zone(0) && x >= 9 {
+                                    world.walk(id, 1, 0);
+                                } else if tick > OUT_TICK
+                                    && zone_id == zone(1)
+                                    && x >= 10
+                                    && !returned
+                                {
+                                    // 跨过来的**下一个 tick 立刻跨回**（同 tick 往返）。
+                                    world.walk(id, -1, 0);
+                                    returned = true;
+                                }
+                            }
+                        }
+                        let mut rec = world.tick_phase1();
+                        let (_b, neighbors, wait_us) = runtime
+                            .after_phase1(&world, tick, &HaloFrameSource::none())
+                            .expect("快照/发布/barrier1/读邻居");
+                        if let Err(e) = apply_mirrors(&mut world, &neighbors, None) {
+                            panic!("apply_mirrors 失败：{e}");
+                        }
+                        world.tick_phase2(&mut rec);
+                        runtime.after_phase2(wait_us, None);
+                        handoff.after_phase2(&mut world, tick);
+                        if zone_id == zone(1) {
+                            let e_now = world
+                                .entities
+                                .iter_ref()
+                                .find(|e| e.name == "E")
+                                .map(|e| e.id);
+                            p_stream.push(
+                                e_now.is_some_and(|id| visible_targets(&world, "P").contains(&id)),
+                            );
+                        }
+                    }
+                    let dups = world.entities.iter_ref().filter(|e| e.name == "E").count();
+                    tx.send((handoff.refused(), p_stream, dups))
+                        .expect("主线程接收");
+                };
+                if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+                    abort.abort();
+                    std::panic::resume_unwind(p);
+                }
+            })
+        };
+        let h0 = run(zone(0), true, false);
+        let h1 = run(zone(1), false, true);
+        let mut refused = 0u64;
+        let mut stream: Vec<bool> = Vec::new();
+        let mut dups_max = 0usize;
+        for _ in 0..2 {
+            let (r, p_stream, dups) = rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("每区一份结果");
+            refused += r;
+            dups_max = dups_max.max(dups);
+            if p_stream.len() > stream.len() {
+                stream = p_stream;
+            }
+        }
+        h0.join().expect("区 0 线程");
+        h1.join().expect("区 1 线程");
+        let accepted = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted()
+            + mir2_world_bevy::mirror_metrics::handoff_inserted_fresh();
+        let already_held = mir2_world_bevy::mirror_metrics::handoff_already_held();
+        if std::env::var_os("MIR2_HANDOFF_TEST_DIAG").is_some() {
+            eprintln!(
+                "HANDOFF_TEST_DIAG round_trip: accepted={accepted} already_held={already_held} dup_dropped={} refused={refused} dups_max={dups_max}",
+                mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped()
+            );
+        }
+        assert_eq!(
+            accepted, 2,
+            "往返两次都必须收下（提升/落真身合计；destination 可能无镜像）"
+        );
+        assert_eq!(refused, 0, "同 tick 往返不得被拒（硬红线）");
+        assert!(dups_max <= 1, "同 id 不得出现重复实体（实得 {dups_max}）");
+        let first = stream
+            .iter()
+            .position(|s| *s)
+            .unwrap_or_else(|| panic!("P 台账从未出现 E：{stream:?}"));
+        assert!(
+            stream[first..].iter().all(|s| *s),
+            "受害者台账出现缺口（零闪烁失败）：{stream:?}"
         );
     }
 

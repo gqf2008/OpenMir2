@@ -3568,6 +3568,28 @@ impl MirrorUpsert {
     }
 }
 
+/// **L2-5 ③ 段 2**：[`World::handoff_accept`] 的结果。
+///
+/// 目的地收下/拒收 handoff 的形态（总监 2026-11-22 裁决：**不得以「目的地已有镜像」
+/// 为前提**，否则同 tick 往返会因内部记账拒收）：**收下三种** +
+/// **拒收两种**（兜底；正常跨界不产生）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HandoffAccept {
+    /// 已有同 id 镜像 ⇒ **原地提升**（计 `handoff_mirror_promoted`）。
+    Promoted,
+    /// 本区**没有该 id 实体** ⇒ **直接落真身**（落格一次，计 `handoff_inserted_fresh`）。
+    Inserted,
+    /// 该 id 已是本区**真实体**（位置**不参与判断**）⇒ **幂等收下**（源区会每 tick 重发 offer
+    /// 直到 ack；提升/落真身后的重发不是错误，不能拒，否则源区回滚、该走却被拒）。
+    AlreadyHeld,
+    /// **兜底**：同 id 被真实体占用且不能按「已持有」处理 ⇒ 拒收。
+    /// 当前 [`World::handoff_accept`] 的正常路径**不会**返回它（同 id 真实体一律 `AlreadyHeld`），
+    /// 保留作明确的拒收结果（正常跨界不该出现）。
+    RefusedOccupied,
+    /// 落格失败（越界/墙格/图不存在）⇒ 拒收，fail-closed。
+    RefusedCell,
+}
+
 /// **L2-5 ③ 段 2**：[`World::promote_mirror_to_real`] 的结果。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MirrorPromote {
@@ -8319,6 +8341,87 @@ impl World {
             self.entities
                 .record_departure(id, ghost, fixed_hide_mode, self.clock_ms);
         }
+    }
+
+    /// **L2-5 ③ 段 2**：收下一次 handoff（四种形态，见 [`HandoffAccept`]）。
+    ///
+    /// - 同 id 不存在 ⇒ 建**真实实体**并落格一次（**不**先建镜像再提升）⇒ `Inserted`；
+    /// - 同 id 是镜像 ⇒ 必要时先按 offer 校正位置（`upsert_mirror`）再原地提升 ⇒ `Promoted`；
+    /// - 同 id 已是真实体 ⇒ `AlreadyHeld`（**幂等**，位置**不参与**判断）；
+    /// - 同 id 镜像存在但位置不一致且校正/提升失败 ⇒ `RefusedCell`（fail-closed）。
+    ///
+    /// **`AlreadyHeld` 位置不参与的依据（总监 2026-11-22 裁定 ②）**：actor 业务 id **全局唯一**
+    /// （`zone_id_base` = 区号 × `shard::ACTOR_ID_SEGMENT`，各区 id 段不相交，见
+    /// `zone_id_base_is_zero_for_zone_zero_and_linear`）⇒ 同 id 的真实体**就是**同一逻辑实体；
+    /// 源区在拿到 ack 前的重发里携带的坐标必然旧（目标区已在走），拿旧坐标判「位置不符」只会
+    /// 把幂等重发误判成拒收（即 2026-11-22 合并门那 5 条 `RefusedOccupied` 的成因）。
+    ///
+    /// **反证（引入 id 复用即失效）**：若将来允许同一 id 跨代复用（实体死亡/下线后 id 回到池子），
+    /// 旧实体的迟到重发会与新实体撞 id，本幂等会把**不同实体**误判成同一 ⇒ 届时不变量变成
+    /// 「id + 代际（generation）」而非 id 单键，必须按代际区分，不能沿用本支。
+    pub fn handoff_accept(&mut self, spec: &MirrorSpec) -> HandoffAccept {
+        if let Some(e) = self.entities.get(spec.id) {
+            if !e.mirror {
+                // **幂等**：源区拿到 ack 前每 tick 重发 offer；提升/落真身后重发命中真实体 ⇒
+                // 按「已收下」应答（否则源区回滚 ⇒ 「该走却被拒」）。**位置不参与**：业务 id
+                // 全局唯一（每区 id 段不相交）⇒ 同 id 真实体 = 同一逻辑实体；依据与反证见上方
+                // 函数文档。
+                //
+                // 计数不是装饰：它是「幂等支被删」护栏的直接读数（删掉本支 ⇒ 重发落
+                // `RefusedOccupied` ⇒ 源区 `handoff_refused > 0`，本计数同时掉回 0）。
+                let _ = (spec.map_id, spec.x, spec.y);
+                crate::mirror_metrics::note_handoff_already_held();
+                return HandoffAccept::AlreadyHeld;
+            }
+            if e.map_id != spec.map_id || e.x != spec.x || e.y != spec.y {
+                // 镜像在旧位置（目标区还没拿到最新快照）⇒ 先按 offer 校正（含换格）。
+                if !self.upsert_mirror(spec.clone()).is_ok() {
+                    return HandoffAccept::RefusedCell;
+                }
+            }
+            return match self.promote_mirror_to_real(spec) {
+                MirrorPromote::Promoted => HandoffAccept::Promoted,
+                MirrorPromote::NotMirror
+                    if self.entities.get(spec.id).is_some_and(|e| !e.mirror) =>
+                {
+                    HandoffAccept::Promoted
+                }
+                _ => HandoffAccept::RefusedCell,
+            };
+        }
+        // 本区没有该 id：**直接落真身**（不建空镜像）。
+        let now = self.clock_ms;
+        let mut spawn = EntitySpawn::new(spec.id, spec.name.clone(), spec.x, spec.y);
+        spawn.map_id = spec.map_id;
+        spawn.view_range = spec.view_range;
+        spawn.race = spec.race;
+        spawn.race_img = spec.race_img;
+        spawn.appr = spec.appr;
+        spawn.light = spec.light;
+        spawn.name_color = spec.name_color;
+        spawn.death = spec.death;
+        spawn.invisible = spec.invisible;
+        spawn.ghost = spec.ghost;
+        spawn.fixed_hide_mode = spec.fixed_hide_mode;
+        spawn.ob_mode = spec.ob_mode;
+        spawn.master = spec.master;
+        spawn.ai.dir = spec.dir;
+        // mirror 保持 false（= 真实实体）；handoff_pending 也保持 false。
+        let id = self.entities.insert(spawn);
+        if let Some(b) = self.entities.map_binding_mut(id) {
+            b.add_to_mapped = true;
+        }
+        let added = self
+            .sim
+            .maps
+            .get_mut(spec.map_id)
+            .is_some_and(|m| m.add_map_object(spec.x, spec.y, spec.cell_type, id, now));
+        if !added {
+            self.entities.remove(id);
+            return HandoffAccept::RefusedCell;
+        }
+        crate::mirror_metrics::note_handoff_inserted_fresh();
+        HandoffAccept::Inserted
     }
 
     /// **L2-5 ③ 段 2**：把**同 id、同格**的镜像**原地提升**为真实体（handoff 的提交侧）。
