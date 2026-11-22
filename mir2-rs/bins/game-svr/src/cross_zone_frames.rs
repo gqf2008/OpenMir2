@@ -161,6 +161,8 @@ pub(crate) fn note_mirror_recipient(
     route: Option<MirrorRoute>,
     bodies: &[Vec<u8>],
 ) {
+    // **L2-5 ⑤ 成本探针**：只统计「镜像收件人」的整段（含 `bodies.to_vec()`）；关闭态不取钟。
+    let t0 = perf_counters::cross_cost_probe_begin();
     let outcome = SINK.with(|cell| {
         let mut guard = cell.borrow_mut();
         let Some(st) = guard.as_mut() else {
@@ -195,6 +197,7 @@ pub(crate) fn note_mirror_recipient(
         }
     });
     perf_counters::note_cross_recipient_outcome(surface, outcome);
+    perf_counters::cross_cost_probe_end(t0);
 }
 
 /// 收件区在 `barrier1` 返回之后、`phase2` 之前调用：排空本区邮箱并写网关。

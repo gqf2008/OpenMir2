@@ -24342,6 +24342,11 @@ mod perf_counters {
     static CROSS_RECIPIENT_ZONE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
     /// dst == 本区（本地会话表却未命中；一致性缺陷信号，应恒 0）。
     static CROSS_RECIPIENT_SELF_ZONE_MISS: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ⑤ 成本探针**：本 tick 跨区入队总耗时（µs）与次数（= 六面镜像收件人次）。
+    /// `note_mirror_recipient` 的整段（含 `bodies.to_vec()` + 邮箱 push）计入；`ENABLED &&
+    /// SLICING` 双闸，关闭态只多两次原子读（不取钟）。
+    static CROSS_ENQUEUE_US: AtomicU64 = AtomicU64::new(0);
+    static CROSS_ENQUEUE_EVENTS: AtomicU64 = AtomicU64::new(0);
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
     pub(crate) fn set_slicing_enabled(on: bool) {
@@ -24410,6 +24415,32 @@ mod perf_counters {
         }
     }
 
+    /// **L2-5 ⑤ 成本探针起点**：只有 perf TSV 与切片同时开才取钟（关闭态零成本）。
+    pub(crate) fn cross_cost_probe_begin() -> Option<std::time::Instant> {
+        if ENABLED.load(Ordering::Relaxed) && SLICING_ENABLED.load(Ordering::Relaxed) {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        }
+    }
+
+    /// **L2-5 ⑤ 成本探针终点**：累计本 tick 的跨区入队总耗时与次数。
+    pub(crate) fn cross_cost_probe_end(t0: Option<std::time::Instant>) {
+        if let Some(t0) = t0 {
+            let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+            CROSS_ENQUEUE_US.fetch_add(us, Ordering::Relaxed);
+            CROSS_ENQUEUE_EVENTS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cross_enqueue_cost() -> (u64, u64) {
+        (
+            CROSS_ENQUEUE_US.load(Ordering::Relaxed),
+            CROSS_ENQUEUE_EVENTS.load(Ordering::Relaxed),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn cross_frame_dup() -> u64 {
         CROSS_FRAME_DUP.load(Ordering::Relaxed)
@@ -24451,6 +24482,8 @@ mod perf_counters {
         CROSS_FRAME_DROP_CLOSED.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_ZONE_UNKNOWN.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_SELF_ZONE_MISS.store(0, Ordering::Relaxed);
+        CROSS_ENQUEUE_US.store(0, Ordering::Relaxed);
+        CROSS_ENQUEUE_EVENTS.store(0, Ordering::Relaxed);
     }
 
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
@@ -24531,7 +24564,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24623,6 +24656,8 @@ mod perf_counters {
             CROSS_FRAME_DUP.swap(0, Ordering::Relaxed),
             CROSS_FRAME_DROP_CLOSED.swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_ZONE_UNKNOWN.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_US.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_EVENTS.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
