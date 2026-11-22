@@ -61,3 +61,32 @@
 
 C4（记法）→ C1–C3（格序）→ C7（**跨界一步的阻挡归属**：先测量两侧再判同结论）→ C6/C9（直写副作用）→ C5/C8 → C10。
 每步合并门：五门 + `-Mode Both`（Window 内）+ 本草案逐条 PASS；`MIR2_ZONES` 未设时零变化仍须成立。
+
+## 6. Leader 裁决（2026-11-22，第 2 步开窗前）
+
+- **Q1（C1–C3 同格序口径；`bf` 原措辞不成立，理由如下）**：rect 互斥 ⇒ 同一 World 的一格里
+  **不可能**同时有「本区真实实体 + 邻区镜像」（镜像按 owner 坐标落在 owner 的 rect 内）。真正
+  能出错的面是：**同一个 owner 格里的多个实体，在收件人世界里变成多个镜像**——oracle 那一格的
+  `obj_list` 序 = 进入该格的先后（`Enter`/`MoveTo`），而镜像的追加序 = 快照的**槽位序**；两者
+  不等时，收件人看到的出现帧相对序就与 oracle 不同。**夹具必须构造「槽位序 ≠ 进入序」**
+  （出格再进 / 延迟 `enter_map` 都行）；两者恰好相同 ⇒ 这条牙是空的，**不算过**。
+  三布局定名：`同格两镜像_槽位序==进入序`、`同格两镜像_槽位序≠进入序`、`多格混合`。
+- **Q2（C6 v1 语义）**：取 **(a) 只计数、不生效**——`cross_hit_delayed` 同时是契约缺口读数；
+  跨区伤害生效留 intent 步，届时计数应归零或改判。**不许**本步引 per-zone intent 队列（跨线程
+  面提前会把本步验收搅浑）。
+- **Q3（计数落点）**：`mirror_ai_actions` / `cross_hit_delayed` 放 `perf_counters`（与 region
+  探针同款、测试可读）；**不加** `World` 字段。
+- **Q4（段 0 范围）**：只镜像 5 个标志：`invisible` / `ghost` / `fixed_hide_mode` / `ob_mode` /
+  `master`。其余帧面外字段见下表，**由判据逼出来再加**。
+
+### 6.1 尚未镜像的帧面外字段（防「以为已经带全了」）
+
+| 字段 | 为什么还不带 | 由哪条判据逼出来 |
+| --- | --- | --- |
+| `is_visible_active` | 只影响 AI 跑动门（`monster_ai_tick` 的不可见怪跳步），镜像已被 AI 排除 | 若 C5 的隔离改成「不排除镜像」时才需要 |
+| `show_hp` / `show_hp_tick` / `show_hp_interval` | 只影响 53 帧广播（`HealthSpellChanged` 第二支） | C4/P1 的帧流一旦包含 53 帧 |
+| `nasty_mode` / `want_ref_msg` | 观察者侧谓词（`aoi_visible_predicate` 的 viewer 参数），镜像从不作观察者 | 镜像成为观察者（当前不成立） |
+| `attack_mode` / `in_safe_zone` / `super_man` / `stone_mode` / `rush_mode` | 参与攻击/死亡/推挤判定；镜像不参与模拟 | C6 若从「只计数」升级为 intent 应用 |
+| `death_tick` / `ghost_tick` / `death_settled` / `die_called` | 死亡结算闩锁；镜像直写 `death` 绕过 `Die()`（计划页 §9.1.1） | C9 若发现结算链读这些字段 |
+| `hp` / `max_hp` / `mp` / `dc` 等 Vitals | 53/100 帧载荷；v1 不出这些帧 | C4/P1 扩到 53/100 时 |
+| 类状态（`merchant`/`npc` 状态、`slave_list`、`group` 等） | 身份门用 `is_some`，镜像不带状态 ⇒ 不跑商人/NPC tick | C8/C9 若出现身份门误判 |
