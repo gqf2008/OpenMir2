@@ -49,6 +49,12 @@ barrier2`，外加移动命令 / 断线 / handoff。**移动命令路径**（`ha
 **任何 `missing=0` 的结论必须带这两句限定**；反向的其余五面与 AOI/战斗等要等区 k 有自己的
 host 循环（另立路线项）。
 
+**第一片（最小切片）的覆盖面更正**：第一片只改了 `send_ref_msg_to_targets` 的未命中支，但
+`npc_merchant` 的两个排水点（`drain_npc_merchant_turns/hits`）经 `broadcast_ref_msg_with_surface`
+**共用同一投递段** ⇒ 第一片实际覆盖 **`refmsg` + `npc_merchant` 两面**，不是一面。**由共用
+投递段导致、不是额外接线**；读覆盖率时按两面计。其余四面（`run_frames` / `feature_changed` /
+`mountride` / `merchant_disappear`）在各自接线前走兼容支（计 `unroutable`）。
+
 ### 0.2 既有事实（符号锚；不重查）
 
 - 六面 = `perf_counters::CrossRecipientSurface::{RefMsg, RunFrames, NpcMerchant, FeatureChanged,
@@ -418,7 +424,8 @@ push）与 `cross_enqueue_events`（本 tick 入队次数 = 六面镜像收件�
 
 ## 7. 计数口径（不漂移；10.004% 仍可比）
 
-**原则**：在**同一表达式嵌套**把 v1 的 `note_cross_recipient_missing(surface)` 换成
+**原则**：在**同一表达式嵌套**把 v1 的未命中计数换成 `note_cross_recipient_outcome`（六面
+全接后旧的兼容支已删除，无生产调用）
 `classify_cross_recipient(surface, outcome, ...)`——每个「收件人 id 来自 World 扫描/缓存、
 本地会话未命中、World 里 `mirror==true`」的事件**恰好记一次**，且**只**归入一个结果桶。
 
@@ -429,6 +436,9 @@ push）与 `cross_enqueue_events`（本 tick 入队次数 = 六面镜像收件�
 | `cross_recipient_unroutable` | route=None（镜像无 route / 未登记 / 同 tick 下线在快照里已无 route） | 新增；**残差桶** |
 | `cross_frame_queue_overflow` | 槽满拒新的条数 | 新增 |
 | `cross_frame_drop_closed` | 排空时 gate 线/socket 已不在（**诊断**，属 delivered 的子集） | 新增；**不进三桶恒等式** |
+
+**第一片的两面**：`delivered` 桶同时含 `refmsg` 与 `npc_merchant`（共用 `send_ref_msg_to_targets`；
+不是额外接线）。读首屏三桶时不要把 `npc_merchant` 当成「未接线」面。
 
 **恒等式（结构保证，不是事后核对）**：
 
@@ -515,14 +525,17 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
 2. **邮箱 + sink**：`CrossZoneMailboxes`（按 dst，内含按 src 的槽）、`CrossZoneSink`（源区写、
    不暴露 gates）；只在 `slicing && mirror` 构造（I4 闸 + 测试）。
 3. **单个面**：先接 `RefMsg` 的 `send_ref_msg_to_targets` 未命中支（同一嵌套处
-   `classify_cross_recipient` + 入邮箱）；三桶计数 + `missing` 合计恒等。
+   `classify_cross_recipient` + 入邮箱）；三桶计数 + `missing` 合计恒等。**注意：`npc_merchant`
+   经 `broadcast_ref_msg_with_surface` 共用本段 ⇒ 本步实际覆盖 `refmsg` + `npc_merchant` 两面**
+   （不是额外接线）。
 4. **收件区排水（V2）**：`spawn_minimal_zone` 与区 0 host 的 **`barrier1`（`await_neighbors`）
    返回之后、`apply_mirrors`/`tick_phase2` 之前**各加一处排空 → `gates.send`；排水时按
    `src_tick < 当前 tick` 过滤（保恰好 1 tick）。**不加新会合点。**
 6. **单事件测试**：合成 2 区夹具，区 0 发送者 → 区 1 收件人（镜像带 route），断言 T+1 恰一帧、
    bytes 相等、`delivered=1 / unroutable=0 / overflow=0 / missing=1`。
-7. 再依次接其余五面 → T1–T7 → N=1 复跑（三件套 + 两树 sha）→ 2 区走廊窗口（三桶 + 恒等式 +
-   `order_overlap` / `inverted_pair_bound`）。
+7. 再依次接其余**四面**（`run_frames` / `feature_changed` / `mountride` / `merchant_disappear`），
+   并为 `npc_merchant` 补迁移牙（共用投递段，**无单独接线**）→ T1–T7 → N=1 复跑（三件套 + 两树 sha）
+   → 2 区走廊窗口（三桶 + 恒等式 + `order_overlap` / `inverted_pair_bound`）。
 
 ## 10. 风险与待决
 
