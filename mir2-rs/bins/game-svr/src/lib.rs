@@ -1019,6 +1019,78 @@ impl ZoneState {
     }
 }
 
+/// **L2-5 ④a**：把静态地图数据灌进**区 k 的 World**——与区 0 同一组 loader、同一份注册表。
+///
+/// 区 0 的 `sim_loop` 从注册表灌三样：格子属性（[`mapwire::apply_map_cells_owned`]）、传送点
+/// （[`mir2_world_bevy::World::add_map_routes`]）、门（[`game_svr::mapdoor::apply_map_doors_owned`]）。
+/// 区 k 的 [`ZoneState::new`] 此前只有 `World::with_maps`（全 `Walk`）⇒ **区 k 玩家穿墙走**
+/// （移动/碰撞/视野全被污染），外在症状 = handoff 落到真墙格时目标区 `RefusedCell`。
+/// 本函数让区 k 与区 0 看到同一张地图。
+///
+/// 归属表传 `&[]`（空 = 全图）：区 k 拥有全部图（与片所有权正交——多区与多片互斥）。
+/// 次序与区 0 相同：**先格子属性、再传送点、最后门**（`add_map_routes` 的 `Valid` 门依赖属性）。
+/// 返回 `(cells, routes, doors)` 供启动日志对账。
+fn load_zone_map_data(
+    reg: &mir2_envir::MapRegistry,
+    world: &mut mir2_world_bevy::World,
+) -> (usize, usize, usize) {
+    let cells = mapwire::apply_map_cells_all(reg, world);
+    let routes: Vec<mir2_world_bevy::map::MapRouteSpec> = reg
+        .routes()
+        .iter()
+        .map(|r| mir2_world_bevy::map::MapRouteSpec {
+            map_id: r.src_map_id,
+            x: r.src_x,
+            y: r.src_y,
+            route_id: r.route_id,
+            hop: mir2_world_bevy::map::RouteHop {
+                dst_map_id: r.dst_map_id,
+                dst_x: r.dst_x,
+                dst_y: r.dst_y,
+            },
+        })
+        .collect();
+    let routes = world.add_map_routes(routes);
+    let doors = game_svr::mapdoor::apply_map_doors_owned(reg, world, &[]);
+    (cells, routes, doors)
+}
+
+/// **L2-5 ④a**：区 k 的完整世界侧状态（真 World + handoff 边界 + **静态地图数据**）。
+///
+/// 把「边界」与「地图数据装载」收敛到**一个构造点**：`slicing=0` 时本函数不被调用
+/// （建区循环只在 `if slicing` 里）⇒ 零参与；`MIR2_ZONES` 未设 ⇒ 整段不存在。
+fn new_zone_state(
+    zone_id: zone::ZoneId,
+    layout: &zone::RegionLayout,
+    map_sizes: &[(i32, i32)],
+    rng_seed: Option<i32>,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> ZoneState {
+    let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
+    match handoff::bounds_for(layout, zone_id) {
+        Some(b) => state.world.set_zone_bounds(Some(b)),
+        None => glog!(
+            "WRN",
+            "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
+        ),
+    }
+    // **L2-5 ④a（产品缺陷修复）**：区 k 的 World 必须与区 0 是同一份静态地图数据
+    // （格子属性/传送点/门）——否则区 k 玩家穿墙走，handoff 落到真墙格被目标区拒绝。
+    if let Some(reg) = registry {
+        let (cells, routes, doors) = load_zone_map_data(reg, &mut state.world);
+        glog!(
+            "INF",
+            "区 {zone_id} 静态地图数据已灌入（cells={cells} routes={routes} doors={doors}；与区 0 同源同函数）"
+        );
+    } else {
+        glog!(
+            "WRN",
+            "区 {zone_id} 无 MapRegistry ⇒ 格子属性/传送点/门未灌入（区 k 移动不判墙；登记）"
+        );
+    }
+    state
+}
+
 /// 区线程退出（含 panic unwind）时把 `ZoneState::alive` 置假——登录线程据此拒绝落区。
 struct ZoneAliveOnDrop(Arc<std::sync::Mutex<ZoneState>>);
 
@@ -3063,14 +3135,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     for (index, slot) in zone_states.iter_mut().enumerate().skip(1) {
                         let zone_id =
                             zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
-                        let mut state = ZoneState::new(zone_id, &map_sizes, rng_seed);
-                        match handoff::bounds_for(&layout, zone_id) {
-                            Some(b) => state.world.set_zone_bounds(Some(b)),
-                            None => glog!(
-                                "WRN",
-                                "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
-                            ),
-                        }
+                        // **L2-5 ④a**：边界 + 静态地图数据（格子属性/传送点/门）一次构造。
+                        let state = new_zone_state(
+                            zone_id,
+                            &layout,
+                            &map_sizes,
+                            rng_seed,
+                            registry.as_ref(),
+                        );
                         *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
                 }
@@ -120728,6 +120800,168 @@ mod zone_disconnect_tests {
         assert_eq!(sess.actor_id, Some(actor), "陈旧 Closed 不得摘实体");
         assert!(state.save_outbox.is_empty(), "陈旧 Closed 不得生成存档");
         perf_counters::reset_zone_login_counters_for_tests();
+    }
+}
+
+/// **L2-5 ④a**：区 k 的 World 必须与区 0 是同一份静态地图数据（格子属性/传送点/门）。
+///
+/// 夹具坐标取段 4 诊断的真实回归点：map 的 `x=325`、`y=243..249` 是 7 个墙格（诊断里
+/// `RefusedCell … (325,24x) cell_valid=false` 的落点）。地图尺寸 340×260（覆盖区 0/区 1 分界 326）。
+///
+/// 红检（各自实测）：删掉 [`new_zone_state`] 里的 `load_zone_map_data` 调用 ⇒ 用例 1/2 红
+/// （墙不再挡、`handoff_pending` 又被置起）；把 `apply_map_cells_owned` 的 `&[]` 改成
+/// `&[false]`（空归属）⇒ 用例 1/3 红。
+#[cfg(test)]
+mod zone_map_data_tests {
+    use super::zone_login_landing_tests::fixture_registry;
+    use super::*;
+
+    const W: i16 = 340;
+    const H: i16 = 260;
+    const BOUNDARY_X: i32 = 326;
+    /// 段 4 诊断的真实墙格列（map 26，x=325，y=243..=249）。
+    const WALL_X: i32 = 325;
+    const WALL_YS: std::ops::RangeInclusive<i32> = 243..=249;
+
+    fn write_wall_map_fixture(base: &std::path::Path) {
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&W.to_le_bytes());
+        bytes[2..4].copy_from_slice(&H.to_le_bytes());
+        let cells = usize::try_from(W).unwrap() * usize::try_from(H).unwrap();
+        bytes.resize(mir2_envir::HEADER_BYTES + cells * mir2_envir::CELL_BYTES, 0);
+        // 文件序 `k = x * Height + y`（列主序）；`wBkImg` bit15 ⇒ HighWall。
+        for y in WALL_YS {
+            let k = usize::try_from(WALL_X).unwrap() * usize::try_from(H).unwrap()
+                + usize::try_from(y).unwrap();
+            let off = mir2_envir::HEADER_BYTES + k * mir2_envir::CELL_BYTES;
+            bytes[off..off + 2].copy_from_slice(&mir2_envir::WALL_BIT.to_le_bytes());
+        }
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+    }
+
+    fn wall_fixture(tag: &str) -> (std::path::PathBuf, mir2_envir::MapRegistry) {
+        let base = std::env::temp_dir().join(format!("zone_map_data_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_wall_map_fixture(&base);
+        let reg = fixture_registry(&base);
+        (base, reg)
+    }
+
+    fn layout() -> zone::RegionLayout {
+        zone::parse_zone_layout(
+            &format!(
+                "0:0=0,0-{},{};1:0={},0-{},{}",
+                BOUNDARY_X - 1,
+                H - 1,
+                BOUNDARY_X,
+                W - 1,
+                H - 1
+            ),
+            &["0".to_string()],
+            &[(i32::from(W), i32::from(H))],
+            zone::ZoneId::new(0),
+        )
+        .expect("两区布局")
+    }
+
+    fn zone_state_with(reg: Option<&mir2_envir::MapRegistry>) -> ZoneState {
+        new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            reg,
+        )
+    }
+
+    /// 牙 ①：区 k 的实体走到真墙格 ⇒ 被拒；同一网格按区 0 的装载路径也同结论。
+    #[test]
+    fn zone_k_world_blocks_real_wall_cells_like_zone_0() {
+        let (base, reg) = wall_fixture("block");
+        let mut k = zone_state_with(Some(&reg));
+
+        // 区 k 侧：站在 (326,243)，向墙格 (325,243) 走一步 ⇒ 不移动。
+        let id = k.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out = k.world.step_with_route(id, -1, 0, 1);
+        assert!(!out.moved, "区 k：真墙格必须挡住走位（与区 0 同结论）");
+        assert_eq!(pos_of(&k.world, id), (BOUNDARY_X, 243));
+
+        // 区 0 侧（同一注册表、区 0 自己的装载路径）：站在 (324,243) 向东走 ⇒ 同样被挡。
+        let mut z0 = ZoneState::new(zone::ZoneId::new(0), &[(i32::from(W), i32::from(H))], None);
+        let owned = vec![true; 1];
+        mapwire::apply_map_cells_owned(&reg, &mut z0.world, &owned);
+        let id0 = z0.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0,
+            "hero",
+            WALL_X - 1,
+            243,
+        ));
+        let out0 = z0.world.step_with_route(id0, 1, 0, 1);
+        assert!(!out0.moved, "区 0：同一条真墙格同样被挡（两侧对拍）");
+
+        // 属性面：区 k 的装载与区 0 的装载得到同一组计数（walk/low/high）。
+        assert_eq!(k.world.maps[0].walk_count(), z0.world.maps[0].walk_count());
+        assert_eq!(
+            k.world.maps[0].low_wall_count(),
+            z0.world.maps[0].low_wall_count()
+        );
+        assert_eq!(
+            k.world.maps[0].high_wall_count(),
+            z0.world.maps[0].high_wall_count()
+        );
+        assert_eq!(
+            k.world.maps[0].high_wall_count(),
+            WALL_YS.count(),
+            "夹具只有 x=325,y=243..249 这 7 个墙格"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 牙 ②：段 4 诊断的墙格列（x=325,y=243..249）不再产生跨界 offer/refusal。
+    /// 反例 = 不灌地图数据的旧行为（穿墙 + `handoff_pending`）——两半都在本用例里。
+    #[test]
+    fn handoff_onto_production_wall_coords_no_longer_triggers() {
+        let (base, reg) = wall_fixture("handoff");
+
+        // 修复后：区 1 的实体撞墙 ⇒ 不移动、不置 handoff_pending（不会 offer ⇒ 不会 refused）。
+        let mut fixed = zone_state_with(Some(&reg));
+        let id = fixed.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out = fixed.world.step_with_route(id, -1, 0, 1);
+        assert!(!out.moved, "真墙格 ⇒ 不得走进去");
+        let e = fixed.world.entities.get(id).expect("实体仍在世界");
+        assert_eq!((e.x, e.y), (BOUNDARY_X, 243));
+        assert!(
+            !e.handoff_pending,
+            "被墙挡住 ⇒ 不得置 handoff_pending（链条: no pending ⇒ no offer ⇒ refused 归零）"
+        );
+
+        // 反例（修复前的旧行为）：不灌地图数据 ⇒ 穿墙进 (325,243) 并置 handoff_pending
+        // （诊断里的 RefusedCell 就由此产生）。
+        let mut legacy = zone_state_with(None);
+        let id2 = legacy.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out2 = legacy.world.step_with_route(id2, -1, 0, 1);
+        assert!(out2.moved, "无注册表（旧行为）⇒ 穿墙");
+        let e2 = legacy.world.entities.get(id2).expect("实体仍在世界");
+        assert_eq!((e2.x, e2.y), (WALL_X, 243));
+        assert!(
+            e2.handoff_pending,
+            "旧行为：跨出本区 rect ⇒ handoff_pending（随后目标区 RefusedCell）"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn pos_of(world: &mir2_world_bevy::World, id: i32) -> (i32, i32) {
+        let e = world.entities.get(id).expect("实体仍在世界");
+        (e.x, e.y)
     }
 }
 
