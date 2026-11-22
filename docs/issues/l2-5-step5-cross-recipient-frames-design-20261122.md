@@ -74,8 +74,10 @@ tick 顶（handoff tick_top）→ 命令/事件排水 → tick_world_head_with_s
   `send_ref_msg_to_targets` / `broadcast_feature_changed_except` / `apply_pending_gm_mountride`
   在命令段或 `HostFrames`；`drain_npc_merchant_*` / `drain_merchant_disappears` / AOI 在
   `HostAoiDownlink`（`barrier2` 之后）。这些都是 `gates[line].send(...)` 当场发。
-- **跨区帧只能在收件区下一 tick 的 `tick_top` 排水发射**：源区在 tick T 把帧写进目标区邮箱，
-  目标区在 T+1 的 `tick_top` 取走并 `send`。
+- **跨区帧只能在收件区下一 tick 的迭代最开头排水发射**：源区在 tick T 把帧写进目标区邮箱，
+  目标区在 T+1 的**迭代最开头**（区 0 是 `drain.next` 事件/命令排水之前，区 k 是
+  `rx.try_recv` 之前；**不是** handoff 的 `h.tick_top`——后者在命令段之后）取走并 `send`。
+  这样跨区帧才排在 T+1 的**任何**本地帧之前。
 
 ⇒ v1 §3 的 `phase_rank`（跨区=0、本地=1）与物理事实**相反**：同一源 tick T 的本地帧在 T 内
 先发，跨区帧在 T+1 `tick_top` 才发（即在 T 的所有本地帧之后、T+1 的本地帧之前）。
@@ -227,7 +229,7 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
 相位记号：**P0** = 命令/事件段（phase1 之前）；**P2** = HostPlayerRun（barrier1 之前）；
 **P3** = HostFrames（barrier2 之后、HostAoiDownlink 之前）；**P4** = HostAoiDownlink
 （`drain_run_downlinks_with_magic`，barrier2 之后）；**P5** = 收件区 T+1 `barrier3` 之后的
-`tick_top` 排水。**交付相位一律 P5(T+1)**（方案 A）。
+**迭代最开头**排水（早于本 tick 的事件/命令段任何本地帧）。**交付相位一律 P5(T+1)**（方案 A）。
 
 | 面 | 产生相位（tick 内） | 交付相位 | 与本地帧的全序位置 | N=1 相对顺序是否保持 | 不保持时的偏离形态与量级 |
 | --- | --- | --- | --- | --- | --- |
@@ -427,7 +429,9 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
    不暴露 gates）；只在 `slicing && mirror` 构造（I4 闸 + 测试）。
 3. **单个面**：先接 `RefMsg` 的 `send_ref_msg_to_targets` 未命中支（同一嵌套处
    `classify_cross_recipient` + 入邮箱）；三桶计数 + `missing` 合计恒等。
-4. **收件区排水**：`spawn_minimal_zone` 与区 0 host 的 `tick_top` 各加一处排空 → `gates.send`。
+4. **收件区排水**：`spawn_minimal_zone` 与区 0 host 的**迭代最开头**（前者 `rx.try_recv` 之前、
+   后者 `drain.next` 之前；**不是** `h.tick_top`）各加一处排空 → `gates.send`，保证跨区帧先于
+   本 tick 任何本地帧。
 5. **`barrier3`**：`TickBarriers::after_frames` + 两处等待 + `abort` 接线 + `region_barrier3_us`。
 6. **单事件测试**：合成 2 区夹具，区 0 发送者 → 区 1 收件人（镜像带 route），断言 T+1 恰一帧、
    bytes 相等、`delivered=1 / unroutable=0 / overflow=0 / missing=1`。
