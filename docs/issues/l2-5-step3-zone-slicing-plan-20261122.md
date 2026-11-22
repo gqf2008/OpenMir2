@@ -778,3 +778,27 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 M8/M9/M10 各自只红对应用例。
 **纪律更正**：变异脚本的还原**不许**用 `git checkout`（未提交工作会被退回 HEAD 丢掉），
 必须用内存原件写回 + sha 相等断言。
+
+### 12.7 段 4b 主项（静态实体按区归属）：接缝与分段（2026-11-22，实施前调查）
+
+**接缝事实**（`sim_loop` 启动段，按 oracle 次序）：`ctor fold 段① → 屏障 A(1 抽) → 段② →
+MonGenHost::start（屏障 B）→ 段③ → LoadMerchant → NpCinitialize（固定 NPC + 脚本）→
+隐藏 NPC（QManage/QFunction/RobotManage）→ GuardList（依赖 mon_gen_host）→ 城堡（宿主限定）`。
+其中商人/NPC/守卫的**脚本宿主**（`merchant_book`/`npc_host`/quest host）是进程级、`displays` 每区、
+城堡只有宿主区 ⇒ 「每区只装自己 rects」必须把这段启动序列参数化后**在区 k 的线程里再跑一遍**
+（用区 k 自己的 RNG 流），不能在区 0 装完再搬运（搬运会把区 0 段 id 带进区 k，违反段隔离）。
+
+**语义写死**：
+1. `slicing=0` / N=1 **不调用**新的过滤/装载路径（不是"过滤后结果相同"）⇒ N=1 两树 sha 必须
+   与 ④a/④b-0 同一对。
+2. **2 区与 N=1 的 MonGen 抽数不等价**（被过滤 entry 不消耗抽数 ⇒ 区 0 的抽数序列与 N=1 不同）：
+   这是 ③ 步承认的「per-zone 独立 RNG 流」，**有意偏离**；解除条件 = ④d「全局产生 + 分发」
+   （所有 entry 按全局序抽、结果按区分发）。**禁止**用「先全量抽再丢」凑等价（会污染各区流）。
+3. **正面断言**（不是反向牙）：2 区下区 0 的 MonGen 抽数计数 **<** N=1 的计数（少掉被过滤 entry）。
+4. `MonGenHost` **每区一份**，用各区自己的 `seed ⊕ zone` RNG；不共享流（避免跨线程顺序依赖）。
+
+**分段（待总监确认，先 ④b-1）**：
+- **④b-1**：MonGen 首刷 + 商人 + 固定 NPC + 守卫 按 `zone_of` 过滤（先过滤后抽、per-zone host/RNG）；
+  未覆盖的 321 图**显式归区 0**；「同 id 恰一份 + 并集==N=1 全量」装置；`mirror_shadowed_static==0`。
+- **④b-2**：ctor-fold 的 per-map 站点（MapCheckQuest/MapQuestRow）、隐藏 NPC 实体、城堡实体在
+  区 k 的归属/可见性；④d 解除条件（全局产生+分发）在此片写死。
