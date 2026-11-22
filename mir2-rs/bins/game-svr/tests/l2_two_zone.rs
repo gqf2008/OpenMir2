@@ -17,7 +17,9 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use game_svr::region_loop::{snapshot_border, HaloExchange, HaloSnapshot, TickBarriers};
+use game_svr::region_loop::{
+    snapshot_border, HaloExchange, HaloFrameSource, HaloSnapshot, TickBarriers,
+};
 use game_svr::zone::{ZoneId, ZoneRect};
 use mir2_world_bevy::{EntitySpawn, World};
 
@@ -153,7 +155,7 @@ fn run_split(stale: bool) -> Vec<ZoneVisible> {
             if stale {
                 b_exchange.publish(
                     ZoneId::new(1),
-                    snapshot_border(&world, 0, RECT_B, HALO, tick),
+                    snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
                 );
             }
             if tick == MOVE_TICK {
@@ -163,7 +165,7 @@ fn run_split(stale: bool) -> Vec<ZoneVisible> {
             if !stale {
                 b_exchange.publish(
                     ZoneId::new(1),
-                    snapshot_border(&world, 0, RECT_B, HALO, tick),
+                    snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
                 );
             }
             b_barriers.wait_after_phase1();
@@ -181,14 +183,14 @@ fn run_split(stale: bool) -> Vec<ZoneVisible> {
             if stale {
                 a_exchange.publish(
                     ZoneId::new(0),
-                    snapshot_border(&world, 0, RECT_A, HALO, tick),
+                    snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
                 );
             }
             let mut record = world.tick_phase1();
             if !stale {
                 a_exchange.publish(
                     ZoneId::new(0),
-                    snapshot_border(&world, 0, RECT_A, HALO, tick),
+                    snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
                 );
             }
             a_barriers.wait_after_phase1();

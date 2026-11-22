@@ -183,3 +183,49 @@
 (b) 边界带可见集与出现/消失帧对拍（静态实体，A6/A7/A8）；
 (c) 账本口径切换（§7 新判据 + 双向负例）；
 (d) 移动实体的镜像同步（先静态→后走位），再谈 handoff（§4）。
+
+### 9.1 ②第 1 步（零变化骨架）落地备注
+
+- **镜像插入不走 `Command::Enter` 队列**（`World::upsert_mirror` 直接进实体存储 + 同步挂格）：
+  本 tick 的 phase2（AOI）能看见它，但经 `Enter` 队列消费的系统（`record.processed` 等）
+  **本 tick 看不到**。这是**已知不对称**；②第 3 步若出现依赖「Enter 后状态」的隔离判据，
+  必须回头改 `upsert_mirror` 的时序，而不是在调用方补写记录。
+- **`MIR2_ZONE_MIRROR`（fail-closed）**：`unset`/`0` ⇒ 关；`1` ⇒ 开；其它取值、或
+  `MIR2_ZONES` 未设/只解析出 <2 区时置 `1` ⇒ **拒绝启动**（点名两个变量；避免「以为开了
+  镜像、其实没有」）。闸关时 `apply_mirrors` 整条路径零参与 ⇒ 段 6a 的 N≥2 行为逐字节不变。
+- **`cell_order` 不进第 1 步**（Leader 2026-11-22 裁决）：第 2 步先立「同格多实体逐帧同序」
+  判据，再决定快照该带格内追加序、还是 owner 侧全局序；若最终需要，必须在该步把
+  「为什么是这个序」写进 doc 与断言，不许只加字段。
+- **快照过滤 `mirror` 必须配反向牙**：镜像不得被再次发布成 owner 实体（否则镜像的镜像），
+  但**必须进本地 AOI 扫描**（否则「屏蔽」会把可见性一起屏蔽、帧消失）。两条断言同处一测。
+#### 9.1.1 已知直写点（`bf` 复核 Q4 采纳；取代/补齐上面的「不走 Enter 队列」一条）
+
+`World::upsert_mirror` 及其辅助函数**全部绕过 oracle 的模拟入口**直写世界/格表。逐点清单
+（②第 3 步做隔离判据时必须逐条对，任一漏掉都会让「不参与模拟」变成注释）：
+
+1. **新插入**：`EntityStore::insert` + `map_binding.add_to_mapped = true` + `MapGrid::add_map_object`
+   （**不**入 `Command::Enter` 队列 ⇒ `record.processed` 等本 tick 看不到）。
+2. **换位**：新格 `add_map_object` + 摘旧格（`remove_mirror_cell_object`）+ 直写 `Transform`
+   （x/y/map_id/view_range）。基线里真实实体的换位走 `MoveToMovingObject`（含其**跳过前移项**
+   的 oracle 怪癖）；镜像换位不复刻该怪癖 ⇒ **同格相对序会不同**（见 9.1.2）。
+3. **`remove_mirror`**：摘格 + `EntityStore::remove`（不经过 `leave_world`/`Closed` 路径，
+   也不产生玩家离场语义）。
+4. **`touch_mirror_cell_object`**：直写格内 `CellObject.add_time`（模拟 owner 的
+   `verify_map_time` 续期，但节奏是每 tick 而非 30s）。
+5. **`update_mirror_frame_fields`**：直写 `Appearance`（race/race_img/appr/light/name_color）、
+   `LifeCycle.death`、`AiState.dir`。**`death` 绕过 `Die()` 语义**（无死亡结算/无 `DeathSettled`）
+   ⇒ ②第 3 步若有「镜像不参与死亡结算」的判据，必须以这里为准；不得假设镜像的 `death`
+   只能经 `Die()` 到达。
+
+#### 9.1.2 第 2 步验收判据（Q2）
+
+镜像新插入恒排在格尾（`add_map_object` 追加）；基线里「远端实体先于本地实体落格」时相对序会
+反转。**本步不改**；②第 2 步必须立「同格多实体逐帧同序」的**正反牙**（含：同格 本地+镜像、
+同格多镜像、远端先落格三种夹具）。`cell_order` 是否加，由该判据的数据决定；若要加，必须把
+「为什么是这个序」写进 doc 与断言。
+
+#### 9.1.3 待办（Q3）
+
+`upsert_mirror` 是 `pub`：`id <= 0` 目前会静默登记进 `IdIndex.sparse`（不 panic，污染
+`recog=0` 与 `mirror_ids()`）。当前调用链 `HaloEntity.actor_id` 恒 >0 不可触发，但**②第 3 步
+必须补**：`MirrorUpsert` 新变体（如 `RefusedInvalidId`）或 `debug_assert!`，并在用例里钉住。
