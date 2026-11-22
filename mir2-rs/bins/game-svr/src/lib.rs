@@ -5331,7 +5331,7 @@ fn handle_party_cmd(
     gm: Option<&ScriptGmEnv<'_>>,
     npc_vars: &game_svr::npc::NpcVars,
 ) {
-    let Some(sender) = online.find_linear_chr(chr_name) else {
+    let Some(sender) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "组队 CM：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -5948,7 +5948,7 @@ fn handle_inbound_cmd(
     use mir2_protocol::messages;
 
     let ident = cmd.ident;
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "R1 入站：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -6539,7 +6539,7 @@ fn handle_ground_cmd(
     strings: &game_svr::strings::StringConf,
 ) {
     // 找会话（`online` 给出该角色当前的网关线号；`sessions` 给出地面交互态）。
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_PICKUP/DROP：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -6785,7 +6785,7 @@ fn handle_deal_cmd(
     cfg: &game_svr::trade::DealConfig,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "交易命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -7115,7 +7115,7 @@ fn handle_bag_cmd_with_magic(
     // **Lane B**：`PlayObject.MagicList` 的唯一投影 + 魔表/配置名 + 历史粘滞值。
     magic: Option<MagicRecalc<'_>>,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_TAKEON/TAKEOFF：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -7877,7 +7877,7 @@ fn handle_query_user_state_cmd(
 /// 本单测只能钉「调用不产帧/不改态」。
 fn handle_query_user_set_cmd(chr_name: &str, socket: i32, online: &OnlineRegistry) {
     // oracle 体为空：不发帧、不改任何会话态；仅记一行供对账门/日志确认「已派发」。
-    let online_found = online.iter().any(|e| e.chr_name == chr_name);
+    let online_found = online.find_by_chr(chr_name).is_some();
     glog!(
         "DBG",
         "CM_QUERYUSERSET：ChrName={chr_name} socket={socket} 在线={online_found}（oracle 函数体为空 ⇒ 无帧/无副作用）"
@@ -8120,7 +8120,7 @@ fn handle_click_npc_cmd(
     // `None` = 未接线（请求丢弃，且脚本期 `mon_gen_enabled=false` 与旧行为逐字节相同）。
     mut script_world: Option<&mut ScriptWorldCtx<'_>>,
 ) -> bool {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_CLICKNPC：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -8927,7 +8927,7 @@ fn handle_selloff_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
     use mir2_protocol::messages;
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "元宝寄售命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -9178,7 +9178,7 @@ fn handle_shop_cmd_inner(
     queue: &mut HandlerMsgQueue,
     deferred: &mut Vec<DeferredSend>,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "商店命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -10345,7 +10345,7 @@ fn handle_storage_cmd(
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "仓库命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -12579,7 +12579,7 @@ fn handle_eat_cmd(
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "CM_EAT：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
@@ -14903,7 +14903,7 @@ fn handle_hit_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> bool {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "攻击命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -16071,7 +16071,7 @@ fn finish_spell_tail_with(
                 match buf.as_mut() {
                     Some(buf) => {
                         // `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg`（优先级 `Lowest = 255`）。
-                        if let Some(me) = online.find_linear_chr(chr_name) {
+                        if let Some(me) = online.find_by_chr(chr_name) {
                             buf.push_socket(me.socket, 255, body);
                         }
                     }
@@ -16313,7 +16313,7 @@ fn handle_spell_cmd_with_magic(
     colors: &MsgColors,
     strings: &game_svr::strings::StringConf,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "魔法命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 CM_SPELL"
