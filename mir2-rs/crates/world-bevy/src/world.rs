@@ -3505,6 +3505,54 @@ pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
     world.insert_resource(sim);
 }
 
+/// **L2-5 ②**：邻区实体的镜像规格（owner 区边界带快照 → 接收区只读镜像）。
+///
+/// 镜像**用 owner 的全局 `ActorId`** 插入（不新分配；每区 id 段保证不相交 ⇒ 出现帧 `recog`
+/// 与 owner 一致）。`cell_type` 取 owner 侧的落格类型——AOI 扫描对玩家观察者有
+/// `cell_type == CellType::Monster` 的距离门，类型错了帧面就会不同。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirrorSpec {
+    /// owner 的全局 `ActorId`（= 镜像 id）。
+    pub id: i32,
+    /// 名字（`Entity.name`）。
+    pub name: String,
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    pub view_range: i32,
+    pub race: u8,
+    pub race_img: u8,
+    pub appr: u16,
+    pub light: u8,
+    pub name_color: u8,
+    /// owner 侧的落格类型（`entity_cell_type` 的等价物）。
+    pub cell_type: CellType,
+    /// 本 tick 朝向（oracle `BaseObject.Dir`；出帧用它而不是展示表副本）。
+    pub dir: u8,
+    pub death: bool,
+}
+
+/// [`World::upsert_mirror`] 的结果；`Refused*` 都是 fail-closed（调用方当错误处理）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirrorUpsert {
+    /// 此前没有该 id 的镜像 ⇒ 新插入 + 同步挂格。
+    Inserted,
+    /// 已有同 id 镜像 ⇒ 原地刷新（位置变化时换格）。
+    Updated,
+    /// id 被**非镜像**实体占用（区 id 段保证不应发生）⇒ 拒绝，不改动任何状态。
+    RefusedOccupied,
+    /// 挂格失败（越界/墙格/图不存在）⇒ 拒绝，不改动已有状态。
+    RefusedCell,
+}
+
+impl MirrorUpsert {
+    /// `Inserted | Updated`。
+    #[must_use]
+    pub fn is_ok(self) -> bool {
+        matches!(self, Self::Inserted | Self::Updated)
+    }
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -8125,6 +8173,155 @@ impl World {
                 let _ =
                     Self::butch_effect_now_impl(access, sim, record, actor_id, target_id, n_x, n_y);
                 record.processed.push((actor_id, true));
+            }
+        }
+    }
+
+    /// **L2-5 ②**：该 id 是否镜像（`Flags.mirror`）。镜像用 owner 的全局 `ActorId` 插入。
+    #[must_use]
+    pub fn is_mirror(&self, id: i32) -> bool {
+        self.entities.flags(id).is_some_and(|f| f.mirror)
+    }
+
+    /// 本 World 全部镜像 id（`iter_ref` 槽位序 = 确定性；供陈旧镜像清扫）。
+    #[must_use]
+    pub fn mirror_ids(&self) -> Vec<i32> {
+        self.entities
+            .iter_ref()
+            .filter(|e| e.mirror)
+            .map(|e| e.entity().id)
+            .collect()
+    }
+
+    /// **L2-5 ②**：插入/刷新一个镜像实体（同一全局 `ActorId`、只读、不参与模拟）。
+    ///
+    /// **不走 `Command::Enter` 队列**：镜像在本 tick 的 phase2（AOI）之前由
+    /// `region_loop::apply_mirrors` 写入；走队列要等下一 tick 的 `Command` 段，本 tick 的 AOI
+    /// 就看不见它。**已知不对称**（`docs/issues/l2-5-zone-ownership-plan-20261122.md` §9）：
+    /// 经 `Enter` 队列消费的系统（`record.processed` 等）**本 tick 看不到**镜像；②第 3 步若
+    /// 出现依赖「Enter 后状态」的隔离判据，必须回头改这里，而不是在调用方补写记录。
+    ///
+    /// 失败语义（fail-closed，均**不改动**已有状态）：id 被非镜像实体占用 ⇒
+    /// [`MirrorUpsert::RefusedOccupied`]；挂格失败 ⇒ [`MirrorUpsert::RefusedCell`]。
+    /// 位置变化时**先挂新格、成功后才摘旧格**。
+    pub fn upsert_mirror(&mut self, spec: MirrorSpec) -> MirrorUpsert {
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get(spec.id) {
+            if !e.mirror {
+                return MirrorUpsert::RefusedOccupied;
+            }
+            let (old_map, old_x, old_y) = (e.map_id, e.x, e.y);
+            let moved = old_map != spec.map_id || old_x != spec.x || old_y != spec.y;
+            if moved {
+                let added = self.sim.maps.get_mut(spec.map_id).is_some_and(|m| {
+                    m.add_map_object(spec.x, spec.y, spec.cell_type, spec.id, now)
+                });
+                if !added {
+                    return MirrorUpsert::RefusedCell;
+                }
+                self.remove_mirror_cell_object(old_map, old_x, old_y, spec.id);
+                if let Some(t) = self.entities.transform_mut(spec.id) {
+                    t.x = spec.x;
+                    t.y = spec.y;
+                    t.map_id = spec.map_id;
+                    t.view_range = spec.view_range;
+                }
+            } else {
+                // 原地：续期格内 `AddTime`（owner 侧由 `verify_map_time` 每 30s 续期 ⇒
+                // 非玩家观察者扫描的 60s 过期门对基线实体永不命中；镜像每 tick 续期同效）。
+                self.touch_mirror_cell_object(spec.map_id, spec.x, spec.y, spec.id, now);
+                if let Some(t) = self.entities.transform_mut(spec.id) {
+                    t.view_range = spec.view_range;
+                }
+            }
+            self.update_mirror_frame_fields(spec.id, &spec);
+            return MirrorUpsert::Updated;
+        }
+        let mut spawn = EntitySpawn::new(spec.id, spec.name.clone(), spec.x, spec.y);
+        spawn.map_id = spec.map_id;
+        spawn.view_range = spec.view_range;
+        spawn.race = spec.race;
+        spawn.race_img = spec.race_img;
+        spawn.appr = spec.appr;
+        spawn.light = spec.light;
+        spawn.name_color = spec.name_color;
+        spawn.death = spec.death;
+        spawn.mirror = true;
+        spawn.ai.dir = spec.dir;
+        let id = self.entities.insert(spawn);
+        if let Some(b) = self.entities.map_binding_mut(id) {
+            b.add_to_mapped = true;
+        }
+        let added = self
+            .sim
+            .maps
+            .get_mut(spec.map_id)
+            .is_some_and(|m| m.add_map_object(spec.x, spec.y, spec.cell_type, id, now));
+        if !added {
+            self.entities.remove(id);
+            return MirrorUpsert::RefusedCell;
+        }
+        MirrorUpsert::Inserted
+    }
+
+    /// **L2-5 ②**：移除镜像（摘格 + 删实体）。`false` = 不是镜像/不存在（**不得**删真实实体）。
+    pub fn remove_mirror(&mut self, id: i32) -> bool {
+        let Some(e) = self.entities.get(id) else {
+            return false;
+        };
+        if !e.mirror {
+            return false;
+        }
+        let (map_id, x, y, mapped) = (e.map_id, e.x, e.y, e.add_to_mapped);
+        if mapped {
+            self.remove_mirror_cell_object(map_id, x, y, id);
+        }
+        self.entities.remove(id);
+        true
+    }
+
+    /// 镜像帧面字段原地刷新（不改坐标/落格）：外观轴 + `death` + 朝向。
+    fn update_mirror_frame_fields(&mut self, id: i32, spec: &MirrorSpec) {
+        if let Some(mut e) = self.entities.get_mut(id) {
+            e.appearance.race = spec.race;
+            e.appearance.race_img = spec.race_img;
+            e.appearance.appr = spec.appr;
+            e.appearance.light = spec.light;
+            e.appearance.name_color = spec.name_color;
+            e.life_cycle.death = spec.death;
+            e.ai.dir = spec.dir;
+            e.flags.mirror = true;
+        }
+    }
+
+    /// 摘镜像的格子对象（只动本 id 的 actor 对象；空格按 `clear` 收敛）。
+    fn remove_mirror_cell_object(&mut self, map_id: usize, x: i32, y: i32, id: i32) {
+        let Some(map) = self.sim.maps.get_mut(map_id) else {
+            return;
+        };
+        let (cell, ok) = map.get_cell_info_mut(x, y);
+        if ok {
+            cell.obj_list
+                .retain(|o| !(o.actor_object && o.cell_obj_id == id));
+            if cell.count() == 0 {
+                cell.clear();
+            }
+        }
+    }
+
+    /// 续期镜像的格内 `AddTime`（对应 owner 侧 `verify_map_time` 的 `Update(i, ref cellObject)`）。
+    fn touch_mirror_cell_object(&mut self, map_id: usize, x: i32, y: i32, id: i32, now: i64) {
+        let Some(map) = self.sim.maps.get_mut(map_id) else {
+            return;
+        };
+        let (cell, ok) = map.get_cell_info_mut(x, y);
+        if ok {
+            if let Some(o) = cell
+                .obj_list
+                .iter_mut()
+                .find(|o| o.actor_object && o.cell_obj_id == id)
+            {
+                o.add_time = now;
             }
         }
     }

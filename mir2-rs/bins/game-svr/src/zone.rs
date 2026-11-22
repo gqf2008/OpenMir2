@@ -527,6 +527,10 @@ pub const ENV_ZONES: &str = "MIR2_ZONES";
 /// [`DEFAULT_MAX_HALO_BAND_ENTITIES`]）。
 pub const ENV_MAX_HALO_BAND_ENTITIES: &str = "MIR2_MAX_HALO_BAND_ENTITIES";
 
+/// **L2-5 ②**：镜像开关（`0`/未设 = 关；`1` = 开）。只在 `MIR2_ZONES` 解析出 >=2 区时可用；
+/// 其它取值、或单区/未设多区时置 `1` ⇒ 启动即拒绝（不静默忽略）。
+pub const ENV_ZONE_MIRROR: &str = "MIR2_ZONE_MIRROR";
+
 /// **L2-4 段 6**：边界带实体数上限的缺省值（tick 0 启动门；超限拒绝启动）。
 pub const DEFAULT_MAX_HALO_BAND_ENTITIES: usize = 512;
 

@@ -609,6 +609,8 @@ pub struct EntitySpawn {
     pub rush_mode: bool,
     pub want_ref_msg: bool,
     pub stick_mode: bool,
+    /// **L2-5 ②**：插镜像时置 true（`flags_component` 落进 `Flags.mirror`）。
+    pub mirror: bool,
     pub death: bool,
     pub ghost: bool,
     pub death_tick: i64,
@@ -778,6 +780,7 @@ impl EntitySpawn {
             rush_mode: self.rush_mode,
             want_ref_msg: self.want_ref_msg,
             stick_mode: self.stick_mode,
+            mirror: self.mirror,
         }
     }
 
@@ -1156,6 +1159,7 @@ pub struct EntityRef<'a> {
     pub rush_mode: bool,
     pub want_ref_msg: bool,
     pub stick_mode: bool,
+    pub mirror: bool,
     pub death: bool,
     pub ghost: bool,
     pub death_tick: i64,
@@ -1348,6 +1352,7 @@ impl<'a> EntityRef<'a> {
             rush_mode: flags.rush_mode,
             want_ref_msg: flags.want_ref_msg,
             stick_mode: flags.stick_mode,
+            mirror: flags.mirror,
             death: life_cycle.death,
             ghost: life_cycle.ghost,
             death_tick: life_cycle.death_tick,
@@ -1681,6 +1686,7 @@ impl PvpView for EntityRef<'_> {
             rush_mode: self.rush_mode,
             want_ref_msg: self.want_ref_msg,
             stick_mode: self.stick_mode,
+            mirror: self.mirror,
         }
     }
     fn name_color(&self) -> u8 {
@@ -1946,6 +1952,8 @@ impl EntitySpawn {
             rush_mode: false,
             want_ref_msg: false,
             stick_mode: false,
+            // L2-5 ②：生成/装载路径恒 false；只有 `World::upsert_mirror` 建镜像时置 true。
+            mirror: false,
             death: false,
             ghost: false,
             death_tick: 0,

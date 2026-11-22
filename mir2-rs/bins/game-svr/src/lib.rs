@@ -926,6 +926,9 @@ struct ZoneHost {
     halo_width: i32,
     /// 每区边界带实体数上限（tick 0 启动门；`MIR2_MAX_HALO_BAND_ENTITIES`，缺省 512）。
     max_halo_band_entities: usize,
+    /// **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`）。关 ⇒ `apply_mirrors` 整条路径零参与
+    /// （段 6a 的 N=2 行为逐字节不变）。
+    mirror_enabled: bool,
     /// 关服/退出：区 0 退出前先置真，让最小区循环在下一个 tick 前离开（不 join——见
     /// [`spawn_minimal_zone`] 的退出说明）。
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -974,6 +977,55 @@ mod zone_wiring {
             ));
         }
         Ok(n)
+    }
+
+    /// **L2-5 ②**：解析 `MIR2_ZONE_MIRROR`（纯函数；`unset`/`0` ⇒ 关，`1` ⇒ 开）。
+    ///
+    /// 其它取值 ⇒ 错误（点名变量）。**单区/未设多区时置 1 ⇒ 错误**（点名两个变量 + 写明
+    /// 「避免静默忽略」）：设了开关却什么都没发生，比启动失败更难查。
+    ///
+    /// # Errors
+    /// 空串/非 `0`/`1`；`=1` 但 `MIR2_ZONES` 未设或只解析出 <2 区。
+    pub(super) fn plan_mirror(
+        mirror_raw: Option<&str>,
+        zone_count: Option<usize>,
+    ) -> Result<bool, String> {
+        let Some(raw) = mirror_raw else {
+            return Ok(false);
+        };
+        let text = raw.trim();
+        let on = match text {
+            "0" => false,
+            "1" => true,
+            "" => {
+                return Err(format!(
+                    "{} 为空（缺省关；=1 开、=0 关；仅在 {} 解析出 >=2 区时生效）",
+                    crate::zone::ENV_ZONE_MIRROR,
+                    crate::zone::ENV_ZONES
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "{}={raw} 不是 0/1（fail-closed；仅在 {} 解析出 >=2 区时生效）",
+                    crate::zone::ENV_ZONE_MIRROR,
+                    crate::zone::ENV_ZONES
+                ))
+            }
+        };
+        if on {
+            match zone_count {
+                Some(n) if n >= 2 => {}
+                _ => {
+                    return Err(format!(
+                        "{}={text} 但 {} 未设或只解析出 {} 个区：镜像需要 >=2 区；为避免静默忽略（以为开了镜像、其实没有），拒绝启动",
+                        crate::zone::ENV_ZONE_MIRROR,
+                        crate::zone::ENV_ZONES,
+                        zone_count.map_or_else(|| "0".to_string(), |n| n.to_string())
+                    ))
+                }
+            }
+        }
+        Ok(on)
     }
 
     /// 装配决策：`MIR2_ZONES` 未设 ⇒ `Ok(None)`（原单线程路径）。
@@ -1056,6 +1108,7 @@ mod zone_wiring {
                 layout.zone_spans(),
                 halo_width,
                 0,
+                &region_loop::HaloFrameSource::none(),
             )
             .map_err(|e| e.to_string())?;
             let count = border.entities.len();
@@ -1214,6 +1267,8 @@ fn spawn_minimal_zone(
     barriers: Arc<region_loop::TickBarriers>,
     watch: Arc<tick_watchdog::ZoneWatch>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    // **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`；关 ⇒ `run_zone_tick` 的 `mirrors` 为 false）。
+    mirrors: bool,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
@@ -1235,6 +1290,9 @@ fn spawn_minimal_zone(
                     &barriers,
                     ZONE_HALO_WIDTH,
                     tick,
+                    // 最小区没有展示表/在线表（②本步无会话来源）⇒ 快照只带 id/坐标/世界侧帧面。
+                    &region_loop::HaloFrameSource::none(),
+                    mirrors,
                     Some((&**watch.heartbeats(), watch.now_ms())),
                 ) {
                     glog!(
@@ -2352,6 +2410,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 )
             })?),
         };
+        let mirror_raw = match std::env::var_os(zone::ENV_ZONE_MIRROR) {
+            None => None,
+            Some(raw) => Some(raw.into_string().map_err(|_| {
+                anyhow::anyhow!("{} 不是合法 Unicode（fail-closed）", zone::ENV_ZONE_MIRROR)
+            })?),
+        };
         let map_names = registry.as_ref().map(|reg| reg.map_names());
         let mode = zone_wiring::plan_zone_mode(
             shard_cfg.is_single(),
@@ -2359,6 +2423,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
             map_names.as_deref(),
             &map_sizes,
             max_band_raw.as_deref(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        // **L2-5 ②**：镜像闸——单区/未设多区却 =1 ⇒ 拒绝（见 `plan_mirror`）。
+        let mirror_enabled = zone_wiring::plan_mirror(
+            mirror_raw.as_deref(),
+            mode.as_ref().map(|m| m.layout.zone_count()),
         )
         .map_err(anyhow::Error::msg)?;
         match mode {
@@ -2394,6 +2464,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     watch: Arc::clone(&watch),
                     halo_width: ZONE_HALO_WIDTH,
                     max_halo_band_entities: mode.max_halo_band_entities,
+                    mirror_enabled,
                     stop: Arc::clone(&stop),
                 });
                 // demux：原两条 gate 入站通道 → 每区一对通道。
@@ -2414,6 +2485,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         Arc::clone(&barriers),
                         Arc::clone(&watch),
                         Arc::clone(&stop),
+                        mirror_enabled,
                         rx,
                         ctl,
                     )?;
@@ -2431,6 +2503,13 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     "区 1..{} 为最小区循环：本段无会话/无实体来源（登录归属暂缓）⇒ 交付的是结构不是容量；事件只排空丢弃（L2-5 前的已知限制）",
                     zone_count - 1
                 );
+                if mirror_enabled {
+                    glog!(
+                        "INF",
+                        "L2-5 ② 镜像已启用（{}=1）：barrier1 之后、AOI 之前用邻区本 tick 快照刷新镜像（每区 id 段 ⇒ 同一全局 ActorId）",
+                        zone::ENV_ZONE_MIRROR
+                    );
+                }
                 Some(host)
             }
         }
@@ -23335,6 +23414,20 @@ impl OnlineRegistry {
     }
 }
 
+/// **L2-5 ②**：快照的路由视图——`OnlineRegistry` 保持 crate 私有，只经公开 trait 暴露
+/// `(line, socket)`（避免 `private_interfaces` 进入 `pub` 快照接口）。
+impl region_loop::HaloRouteSource for OnlineRegistry {
+    fn route_of(&self, actor_id: i32) -> Option<region_loop::HaloRoute> {
+        let pos = *self.by_actor.get(&i64::from(actor_id))?;
+        let entry = self.entries.get(pos)?;
+        let line = u8::try_from(entry.gate_idx).ok()?;
+        Some(region_loop::HaloRoute {
+            line,
+            socket: entry.socket,
+        })
+    }
+}
+
 impl std::ops::Deref for OnlineRegistry {
     type Target = [OnlineEntry];
 
@@ -34427,18 +34520,36 @@ fn sim_loop(
                 &host.exchange,
                 &host.barriers,
             );
-            let wait_phase1_us = match runtime.after_phase1(&world, tick_no) {
-                Ok((_border, _neighbors, wait_us)) => wait_us,
-                Err(e) => {
-                    // `Barrier` 无超时：本区带错退出会让其余区永久阻塞 ⇒ abort 整机
-                    // （与「任一片失败整机 Abort」同口径；看门狗是第二道兜底）。
+            // **L2-5 ②**：快照的帧面来源 = 本区展示表 + 在线路由表（只在多区路径构造）。
+            let frame_source = region_loop::HaloFrameSource::new(&displays, &online);
+            let (_border, neighbors, wait_phase1_us) =
+                match runtime.after_phase1(&world, tick_no, &frame_source) {
+                    Ok((border, neighbors, wait_us)) => (border, neighbors, wait_us),
+                    Err(e) => {
+                        // `Barrier` 无超时：本区带错退出会让其余区永久阻塞 ⇒ abort 整机
+                        // （与「任一片失败整机 Abort」同口径；看门狗是第二道兜底）。
+                        glog!(
+                            "ERR",
+                            "区 0 在 tick {ticks} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
+                        );
+                        std::process::abort();
+                    }
+                };
+            // **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
+            // 闸关 ⇒ 整段零参与（N≥2 + 闸关与段 6a 逐字节相同）。
+            if host.mirror_enabled {
+                if let Err(e) =
+                    region_loop::apply_mirrors(&mut world, &neighbors, Some(&mut displays))
+                {
                     glog!(
                         "ERR",
-                        "区 0 在 tick {ticks} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
+                        "区 0 在 tick {ticks} 应用邻区镜像失败：{e} ⇒ abort 整机"
                     );
                     std::process::abort();
                 }
-            };
+            } else {
+                let _ = &neighbors;
+            }
             world.tick_phase2(&mut rec);
             runtime.after_phase2(
                 wait_phase1_us,
@@ -116926,7 +117037,7 @@ mod zone_wiring_tests {
     //! **L2-4 段 6a**：装配判定 / 启动门的构造级用例（放在测试区，避免污染
     //! `src[..find("mod tests {")]` 的「生产面」源码扫描）。
 
-    use crate::zone_wiring::{check_band_gate, parse_max_band, plan_zone_mode};
+    use crate::zone_wiring::{check_band_gate, parse_max_band, plan_mirror, plan_zone_mode};
     use crate::{shard, zone, zone_router};
     use mir2_world_bevy::{EntitySpawn, World};
 
@@ -116969,6 +117080,31 @@ mod zone_wiring_tests {
         );
         let ok = plan_zone_mode(true, None, None, &SIZES, Some("48")).expect("合法值");
         assert!(ok.is_none(), "未设 MIR2_ZONES ⇒ 不启用多区");
+    }
+
+    /// **L2-5 ② 镜像闸**：`unset`/`0` ⇒ 关；`1` 需 `MIR2_ZONES` 解析出 >=2 区；
+    /// 非法值、或单区/未设多区却置 `1` ⇒ 错误文本**点名两个变量**并写明「避免静默忽略」。
+    ///
+    /// 红检：删掉 `plan_mirror` 的 `zone_count` 检查 ⇒ 单区/未设两条断言红；
+    /// 错误文本删掉 `ENV_ZONES` ⇒ 「点名两个变量」断言红。
+    #[test]
+    fn mirror_gate_is_fail_closed_and_names_both_vars() {
+        assert!(!plan_mirror(None, None).expect("缺省关"));
+        assert!(!plan_mirror(Some("0"), Some(2)).expect("显式关"));
+        assert!(!plan_mirror(Some(" 0 "), None).expect("空白 + 显式关"));
+        assert!(plan_mirror(Some("1"), Some(2)).expect("两区可开"));
+
+        for bad in ["", "2", "-1", "abc"] {
+            let err = plan_mirror(Some(bad), Some(2)).expect_err("非法值必须拒绝");
+            assert!(err.contains(zone::ENV_ZONE_MIRROR), "点名 MIRROR：{err}");
+            assert!(err.contains(zone::ENV_ZONES), "点名 ZONES：{err}");
+        }
+        for zone_count in [None, Some(0), Some(1)] {
+            let err = plan_mirror(Some("1"), zone_count).expect_err("单区/未设必须拒绝");
+            assert!(err.contains(zone::ENV_ZONE_MIRROR), "点名 MIRROR：{err}");
+            assert!(err.contains(zone::ENV_ZONES), "点名 ZONES：{err}");
+            assert!(err.contains("静默忽略"), "写明理由：{err}");
+        }
     }
 
     /// **互斥**：`MIR2_ZONES` + `MIR2_SHARDS>1` ⇒ Err，点名两个变量 + 「L2-5」「不是被否决」。
@@ -117085,7 +117221,7 @@ mod l2_multi_zone_ledger_tests {
     use std::sync::{Arc, Mutex};
 
     use crate::region_loop::{
-        AoIFrameLedger, CrossZoneOutbox, HaloExchange, TickBarriers, ZoneRuntime,
+        AoIFrameLedger, CrossZoneOutbox, HaloExchange, HaloFrameSource, TickBarriers, ZoneRuntime,
     };
     use crate::zone::{parse_zone_layout, RegionLayout, ZoneId};
     use crate::zone_router::{ZoneRouter, HOST_ZONE};
@@ -117373,7 +117509,7 @@ mod l2_multi_zone_ledger_tests {
                 }
                 let mut rec = rig.world.tick_phase1();
                 let (_border, _neighbors, wait_us) = runtime
-                    .after_phase1(&rig.world, tick_no)
+                    .after_phase1(&rig.world, tick_no, &HaloFrameSource::none())
                     .expect("快照/发布/barrier1/读邻居");
                 rig.world.tick_phase2(&mut rec);
                 runtime.after_phase2(wait_us, None);
@@ -117587,7 +117723,7 @@ mod l2_multi_zone_ledger_tests {
                 for tick_no in 0..TICKS {
                     let mut rec = world.tick_phase1();
                     let (_b, neighbors, wait_us) = runtime
-                        .after_phase1(&world, tick_no)
+                        .after_phase1(&world, tick_no, &HaloFrameSource::none())
                         .expect("快照/发布/barrier1/读邻居");
                     world.tick_phase2(&mut rec);
                     runtime.after_phase2(wait_us, None);

@@ -181,6 +181,9 @@ pub struct Flags {
     pub rush_mode: bool,
     pub want_ref_msg: bool,
     pub stick_mode: bool,
+    /// **L2-5 ②**：邻区实体的只读镜像（同一全局 `ActorId`，不新分配）。镜像**不参与模拟**
+    /// （AI/仇恨/攻击目标/碰撞/MonGen 的隔离判据在 ②第 3 步落地）；`false` = 真实实体。
+    pub mirror: bool,
 }
 
 /// PK/善恶状态（`PvpLevel` 派生自 `pk_point`，见 oracle 事实）。

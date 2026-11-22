@@ -27,6 +27,11 @@
 //!   `seal_tick` 给出 `sent/recv/dup/never/not_owner`，[`TickLedger::check`] 自动判。
 //!   帧的**产生点**（downlink 发射）在段 6 接线。
 //! - [`ZoneDriverPlan`]：**N=1 时区驱动零参与**（原单线程路径：不建线程/屏障/心跳/看门狗）。
+//!
+//! **L2-5 ②（镜像 + 跨区可见）**：`HaloEntity` 扩帧面（`dir/death/展示项/玩家 route`）+
+//! [`apply_mirrors`]（barrier1 之后、`tick_phase2` 之前用邻区本 tick 快照刷新本区镜像）。
+//! 镜像用 owner 的全局 `ActorId` 插入、只读、不参与模拟；`MIR2_ZONE_MIRROR` 关（缺省）⇒
+//! 整条路径零参与（段 6a 的 N≥2 行为逐字节不变）。
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -34,17 +39,124 @@ use std::fmt;
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
-use mir2_world_bevy::{TickRecord, World};
+use mir2_world_bevy::{CellType, MirrorSpec, MirrorUpsert, TickRecord, World};
 
+use crate::downlink::{ActorDisplay, DisplayTable};
 use crate::perf_counters;
 use crate::tick_watchdog::ZoneHeartbeats;
 use crate::zone::{RegionLayout, ZoneId, ZoneRect, ZoneSpan};
 use crate::zone_router::{ZoneRouter, HOST_ZONE};
 
-/// 一个边界实体的只读快照（可见性面字段；帧字段 L2-4 扩展）。
+/// 玩家的网关路由（`line, socket`；只有玩家有）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HaloRoute {
+    /// 网关线号。
+    pub line: u8,
+    /// 该槽的客户端句柄。
+    pub socket: i32,
+}
+
+/// 帧面展示字段（= `downlink::ActorDisplay` 的**逐字节**子集；镜像区据此重建展示表条目）。
+///
+/// `dir` 也在里面（展示表注册值），但出帧实际用的是快照顶层的 [`HaloEntity::dir`]
+/// （= 本 tick 的 `BaseObject.Dir`）——与 `drain_aoi_downlink` 的覆盖口径一致。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HaloDisplay {
+    pub dir: u8,
+    pub light: u8,
+    pub feature: i32,
+    pub feature_ex: u16,
+    pub status: i32,
+    pub name_color: u8,
+    /// `GetShowName()` 的 GBK 字节（帧 42 / 出现帧的 `show_name`）。
+    pub show_name: Vec<u8>,
+    /// `SM_MOUNTRIDE(1118)` 的 `mount_id`（0 = 未骑马）。
+    pub mount_id: u8,
+}
+
+impl HaloDisplay {
+    /// 从 owner 区展示表条目取帧面字段（唯一来源；不猜缺省）。
+    #[must_use]
+    pub fn from_display(d: &ActorDisplay) -> Self {
+        Self {
+            dir: d.dir,
+            light: d.light,
+            feature: d.feature,
+            feature_ex: d.feature_ex,
+            status: d.status,
+            name_color: d.name_color,
+            show_name: d.show_name.clone(),
+            mount_id: d.mount_id,
+        }
+    }
+}
+
+/// 在线路由来源（`OnlineRegistry` 是本 crate 私有类型 ⇒ 用公开 trait 隔离，避免
+/// `private_interfaces`：`HaloFrameSource` 要能被集成测试与本仓 `pub` 面使用）。
+pub trait HaloRouteSource {
+    /// 玩家实体的 `(line, socket)`；非玩家/未登记 ⇒ `None`。
+    fn route_of(&self, actor_id: i32) -> Option<HaloRoute>;
+}
+
+/// 快照的**帧面来源**（区域里的 `DisplayTable` + 在线路由表）。
+///
+/// [`Self::none`] 供启动门与单测：`displays=None`、`routes=None`。N=1 不构造任何快照 ⇒
+/// 本结构在单区路径上零参与。
+#[derive(Clone, Copy, Default)]
+pub struct HaloFrameSource<'a> {
+    /// AOI 展示表（帧面字段的唯一来源；缺项 ⇒ 镜像侧同样不登记，与基线「缺项跳过」同口径）。
+    pub displays: Option<&'a DisplayTable>,
+    /// 在线路由表（玩家的 `(line, socket)`；非玩家恒 `None`）。
+    pub routes: Option<&'a dyn HaloRouteSource>,
+}
+
+impl HaloFrameSource<'static> {
+    /// 不带帧面来源（只比 id/坐标的调用方用）。
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+}
+
+impl<'a> HaloFrameSource<'a> {
+    /// 生产/对拍路径：展示表 + 在线路由表。
+    #[must_use]
+    pub fn new(displays: &'a DisplayTable, routes: &'a dyn HaloRouteSource) -> Self {
+        Self {
+            displays: Some(displays),
+            routes: Some(routes),
+        }
+    }
+}
+
+/// owner 侧的落格类型（与 `world-bevy` 的 `entity_cell_type` 同口径：商人/NPC ⇒ Merchant、
+/// 玩家 ⇒ Play、其余 ⇒ Monster）。AOI 扫描对玩家观察者有 `CellType::Monster` 距离门 ⇒ 镜像
+/// 必须按 owner 的类型挂格，否则出现帧面不同。
+fn halo_cell_type(e: &mir2_world_bevy::EntityRef<'_>) -> CellType {
+    if e.merchant.is_some() || e.npc.is_some() {
+        CellType::Merchant
+    } else if e.race == mir2_world_bevy::ACTOR_RACE_PLAY {
+        CellType::Play
+    } else {
+        CellType::Monster
+    }
+}
+
+/// 玩家镜像的 `(line, socket)`：按 `ActorId` 查在线表；非玩家/未登记 ⇒ `None`。
+fn halo_route(
+    source: &HaloFrameSource<'_>,
+    e: &mir2_world_bevy::EntityRef<'_>,
+) -> Option<HaloRoute> {
+    if e.race != mir2_world_bevy::ACTOR_RACE_PLAY {
+        return None;
+    }
+    source.routes?.route_of(e.entity().id)
+}
+
+/// 一个边界实体的只读快照（可见性面 + **帧面**字段；L2-5 ② 扩帧面）。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HaloEntity {
-    /// 业务 ActorId（跨区唯一，P2-3b Step 3 已按片分段）。
+    /// 业务 ActorId（跨区唯一，P2-3b Step 3 已按片分段；镜像**不新分配**）。
     pub actor_id: i32,
     /// 地图号（全局下标）。
     pub map_id: usize,
@@ -54,8 +166,28 @@ pub struct HaloEntity {
     pub y: i32,
     /// 观察者视野半径（`PlayObject.cs:904` = 12；非玩家取缺省）。
     pub view_range: i32,
-    /// 名字（帧面在 L2-4 需要；本步只用于快照自证）。
+    /// 名字（`Entity.name`）。
     pub name: String,
+    /// 行为轴 `Race`（镜像的 `Appearance.race`）。
+    pub race: u8,
+    /// 外观轴 `RaceImg`（镜像的 `Appearance.race_img`）。
+    pub race_img: u8,
+    /// 外观 `Appr`。
+    pub appr: u16,
+    /// `GetMyLight()` 的当前值（镜像 `Appearance.light`）。
+    pub light: u8,
+    /// 名字颜色（镜像 `Appearance.name_color`）。
+    pub name_color: u8,
+    /// owner 侧落格类型（镜像挂格用）。
+    pub cell_type: CellType,
+    /// 本 tick 朝向（oracle `BaseObject.Dir`；出帧用它而不是展示表副本）。
+    pub dir: u8,
+    /// 本 tick 生死（出帧的死亡/骷髅支用它）。
+    pub death: bool,
+    /// owner 区展示表条目（`None` = owner 侧本就没有 ⇒ 镜像也不登记）。
+    pub display: Option<HaloDisplay>,
+    /// 玩家网关路由（`None` = 非玩家/未登记）。
+    pub route: Option<HaloRoute>,
 }
 
 /// 某区某 tick 的边界带快照。
@@ -69,8 +201,9 @@ pub struct HaloSnapshot {
 
 /// 从 World 抽某区（`map_id` + `rect`）的边界带快照。
 ///
-/// 过滤：`add_to_mapped`（已落格）+ 地图匹配 + `rect.border_contains(width)`。
-/// **必须在 phase1 之后调用**（此时实体状态是本 tick 终态）。
+/// 过滤：`add_to_mapped`（已落格）+ 地图匹配 + `rect.border_contains(width)` +
+/// **`!mirror`**（镜像不得被当成 owner 实体再次发布——否则会形成镜像的镜像）。
+/// 入队序 = `iter_ref` 槽位序（确定性）。**必须在 phase1 之后调用**（此时实体状态是本 tick 终态）。
 #[must_use]
 pub fn snapshot_border(
     world: &World,
@@ -78,12 +211,16 @@ pub fn snapshot_border(
     rect: ZoneRect,
     halo_width: i32,
     tick: u64,
+    source: &HaloFrameSource<'_>,
 ) -> HaloSnapshot {
     let entities = world
         .entities
         .iter_ref()
         .filter(|e| {
-            e.add_to_mapped && e.map_id == map_id && rect.border_contains(e.x, e.y, halo_width)
+            e.add_to_mapped
+                && !e.mirror
+                && e.map_id == map_id
+                && rect.border_contains(e.x, e.y, halo_width)
         })
         .map(|e| HaloEntity {
             actor_id: e.id,
@@ -92,6 +229,19 @@ pub fn snapshot_border(
             y: e.y,
             view_range: e.view_range,
             name: e.name.clone(),
+            race: e.race,
+            race_img: e.race_img,
+            appr: e.appr,
+            light: e.light,
+            name_color: e.name_color,
+            cell_type: halo_cell_type(&e),
+            dir: e.ai.dir,
+            death: e.death,
+            display: source
+                .displays
+                .and_then(|d| d.get(e.id))
+                .map(HaloDisplay::from_display),
+            route: halo_route(source, &e),
         })
         .collect();
     HaloSnapshot { tick, entities }
@@ -238,6 +388,13 @@ pub enum ZoneTickError {
         /// 期望的 tick。
         tick: u64,
     },
+    /// 镜像写入被拒（fail-closed）：id 撞真实实体（区 id 段保证不应发生）或格不可用。
+    MirrorRefused {
+        /// 被拒的实体 id。
+        id: i32,
+        /// `World::upsert_mirror` 的结果。
+        outcome: MirrorUpsert,
+    },
 }
 
 impl fmt::Display for ZoneTickError {
@@ -246,6 +403,12 @@ impl fmt::Display for ZoneTickError {
             Self::NoSpans(zone) => write!(f, "区 {zone} 没有任何 span（布局非法或调用方过滤错）"),
             Self::StaleNeighbor { zone, tick } => {
                 write!(f, "tick {tick}：区 {zone} 没有发布本 tick 的边界快照")
+            }
+            Self::MirrorRefused { id, outcome } => {
+                write!(
+                    f,
+                    "镜像 {id} 写入被拒（{outcome:?}）：id 撞真实实体或格不可用"
+                )
             }
         }
     }
@@ -307,8 +470,10 @@ impl<'a> ZoneRuntime<'a> {
         &self,
         world: &World,
         tick: u64,
+        source: &HaloFrameSource<'_>,
     ) -> Result<(HaloSnapshot, Vec<HaloSnapshot>, u64), ZoneTickError> {
-        let border = snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick)?;
+        let border =
+            snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick, source)?;
         self.exchange.publish(self.zone, border.clone());
         let wait_phase1_us = self.barriers.wait_after_phase1();
         let mut neighbors = Vec::with_capacity(self.exchange.zone_count().saturating_sub(1));
@@ -346,12 +511,15 @@ pub fn snapshot_zone_border(
     spans: &[ZoneSpan],
     halo_width: i32,
     tick: u64,
+    source: &HaloFrameSource<'_>,
 ) -> Result<HaloSnapshot, ZoneTickError> {
     let mut entities = Vec::new();
     let mut span_count = 0usize;
     for span in spans.iter().filter(|s| s.zone == zone) {
         span_count += 1;
-        entities.extend(snapshot_border(world, span.map_id, span.rect, halo_width, tick).entities);
+        entities.extend(
+            snapshot_border(world, span.map_id, span.rect, halo_width, tick, source).entities,
+        );
     }
     if span_count == 0 {
         return Err(ZoneTickError::NoSpans(zone));
@@ -386,6 +554,8 @@ pub fn run_zone_tick(
     barriers: &TickBarriers,
     halo_width: i32,
     tick: u64,
+    source: &HaloFrameSource<'_>,
+    mirrors: bool,
     beat: Option<(&ZoneHeartbeats, u64)>,
 ) -> Result<ZoneTickResult, ZoneTickError> {
     // 1) phase1：所有写位置/属性/HP 的系统跑完 ⇒ 实体状态是本 tick 终态。
@@ -393,7 +563,15 @@ pub fn run_zone_tick(
 
     // 2) 快照 → 发布 → barrier1 → 读邻居（缺 ⇒ fail-closed）。
     let runtime = ZoneRuntime::new(zone, spans, halo_width, exchange, barriers);
-    let (border, neighbors, wait_phase1_us) = runtime.after_phase1(world, tick)?;
+    let (border, neighbors, wait_phase1_us) = runtime.after_phase1(world, tick, source)?;
+
+    // 2b) 镜像刷新：barrier1 之后（邻区快照已是本 tick 终态）、phase2（AOI）之前。
+    //     `mirrors == false` ⇒ 零参与（N=1 与 ②第 1 步的默认态；生产 N≥2 由
+    //     `MIR2_ZONE_MIRROR` decide，见 `ZoneHost::mirror_enabled`）。
+    if mirrors {
+        // 最小区没有展示表/在线表 ⇒ `None`（镜像帧面由区 0 一侧负责；本区暂无会话）。
+        let _stats = apply_mirrors(world, &neighbors, None)?;
+    }
 
     // 3) phase2（AOI）→ 心跳 → barrier2 → 探针记账。
     world.tick_phase2(&mut record);
@@ -404,6 +582,100 @@ pub fn run_zone_tick(
         border,
         neighbors,
     })
+}
+
+/// 一区的镜像应用读数（②对拍/诊断用；不参与判定）。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MirrorStats {
+    /// 新插入的镜像数。
+    pub inserted: usize,
+    /// 原地刷新的镜像数。
+    pub updated: usize,
+    /// 本 tick 消失并移除的镜像数。
+    pub removed: usize,
+}
+
+/// **L2-5 ②**：用 barrier1 之后读到的**邻区本 tick** 快照刷新本区镜像。
+///
+/// 时序：`after_phase1`（快照/发布/barrier1/读邻居）之后、`tick_phase2`（AOI）之前。
+/// 邻居槽由 `HaloExchange::read(tick)` 保证是本 tick（陈旧 ⇒ `StaleNeighbor`，调用方 fail-closed）。
+///
+/// - 邻区快照里的实体 ⇒ [`World::upsert_mirror`]（**同一全局 id，不新分配**）；
+/// - 本 tick 没有任何邻区快照包含的镜像 ⇒ 移除（消失帧由下一次 AOI 扫描的 `hides` 自然覆盖，
+///   不需要单独实现跨区 disappear）；
+/// - `displays` = **收件人区**的展示表：镜像条目逐字段取快照的 `display`；快照没有展示项
+///   （owner 侧本来就没有）⇒ 摘掉（与基线「展示表缺项 ⇒ 跳过出帧」同口径）。
+///
+/// # Errors
+/// `upsert_mirror` 返回 `Refused*` ⇒ [`ZoneTickError::MirrorRefused`]（fail-closed）。
+pub fn apply_mirrors(
+    world: &mut World,
+    neighbors: &[HaloSnapshot],
+    mut displays: Option<&mut DisplayTable>,
+) -> Result<MirrorStats, ZoneTickError> {
+    let mut stats = MirrorStats::default();
+    let mut seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for snap in neighbors {
+        for e in &snap.entities {
+            seen.insert(e.actor_id);
+            let spec = MirrorSpec {
+                id: e.actor_id,
+                name: e.name.clone(),
+                map_id: e.map_id,
+                x: e.x,
+                y: e.y,
+                view_range: e.view_range,
+                race: e.race,
+                race_img: e.race_img,
+                appr: e.appr,
+                light: e.light,
+                name_color: e.name_color,
+                cell_type: e.cell_type,
+                dir: e.dir,
+                death: e.death,
+            };
+            match world.upsert_mirror(spec) {
+                MirrorUpsert::Inserted => stats.inserted += 1,
+                MirrorUpsert::Updated => stats.updated += 1,
+                outcome => {
+                    return Err(ZoneTickError::MirrorRefused {
+                        id: e.actor_id,
+                        outcome,
+                    })
+                }
+            }
+            if let Some(d) = displays.as_deref_mut() {
+                match &e.display {
+                    Some(hd) => d.set(
+                        e.actor_id,
+                        ActorDisplay {
+                            dir: hd.dir,
+                            light: hd.light,
+                            feature: hd.feature,
+                            feature_ex: hd.feature_ex,
+                            status: hd.status,
+                            name_color: hd.name_color,
+                            show_name: hd.show_name.clone(),
+                            mount_id: hd.mount_id,
+                        },
+                    ),
+                    None => d.remove(e.actor_id),
+                }
+            }
+        }
+    }
+    // 陈旧镜像清扫：`mirror_ids` 是槽位序（确定性），不在本 tick 任何邻区快照里 ⇒ 移除。
+    for id in world.mirror_ids() {
+        if !seen.contains(&id) {
+            if world.remove_mirror(id) {
+                stats.removed += 1;
+            }
+            if let Some(d) = displays.as_deref_mut() {
+                d.remove(id);
+            }
+        }
+    }
+    Ok(stats)
 }
 
 /// 世界侧收件人（会话的网关坐标；与 `zone_router` 的键同形）。
@@ -904,6 +1176,8 @@ mod tests {
             &TickBarriers::new(1),
             3,
             1,
+            &HaloFrameSource::none(),
+            false,
             None,
         )
         .expect("单区 tick");
@@ -940,7 +1214,19 @@ mod tests {
                 let mut world = World::new(20, 10);
                 world.add_entity(entity(id, "bot", x, 5));
                 let zone = ZoneId::new(zone);
-                run_zone_tick(&mut world, zone, &spans, &exchange, &barriers, 3, 1, None).map(|r| {
+                run_zone_tick(
+                    &mut world,
+                    zone,
+                    &spans,
+                    &exchange,
+                    &barriers,
+                    3,
+                    1,
+                    &HaloFrameSource::none(),
+                    false,
+                    None,
+                )
+                .map(|r| {
                     (
                         zone,
                         r.border
@@ -990,6 +1276,8 @@ mod tests {
             &barriers,
             3,
             1,
+            &HaloFrameSource::none(),
+            false,
             None,
         )
         .expect_err("区 1 没发布 ⇒ 必须报错");
@@ -1020,6 +1308,8 @@ mod tests {
             &TickBarriers::new(1),
             3,
             1,
+            &HaloFrameSource::none(),
+            false,
             Some((&hb, 12_345)),
         )
         .expect("带心跳 tick");
@@ -1034,6 +1324,8 @@ mod tests {
             &TickBarriers::new(1),
             3,
             2,
+            &HaloFrameSource::none(),
+            false,
             None,
         )
         .expect("不带心跳 tick");
@@ -1119,6 +1411,8 @@ mod tests {
             &barriers,
             3,
             1,
+            &HaloFrameSource::none(),
+            false,
             None,
         )
         .expect("区 tick");
@@ -1287,7 +1581,7 @@ mod tests {
                                                        // `add_entity` 只入队 `Command::Enter`；跑一个 tick 才落图（`add_to_mapped=true`）。
         world.tick();
         let rect = ZoneRect::new(0, 0, 9, 19);
-        let snap = snapshot_border(&world, 0, rect, 3, 7);
+        let snap = snapshot_border(&world, 0, rect, 3, 7, &HaloFrameSource::none());
         assert_eq!(snap.tick, 7);
         assert_eq!(
             snap.entities.iter().map(|e| e.actor_id).collect::<Vec<_>>(),
@@ -1312,6 +1606,16 @@ mod tests {
                     y: 2,
                     view_range: 12,
                     name: "m".to_string(),
+                    race: 80,
+                    race_img: 0,
+                    appr: 0,
+                    light: 0,
+                    name_color: 255,
+                    cell_type: CellType::Monster,
+                    dir: 0,
+                    death: false,
+                    display: None,
+                    route: None,
                 }],
             },
         );
@@ -1334,6 +1638,225 @@ mod tests {
                 entities: vec![]
             })
         );
+    }
+
+    // ---- L2-5 ② 第 1 步：镜像实体（骨架；闸关 ⇒ 零变化） ----
+
+    fn mirror_spec(id: i32, x: i32, y: i32) -> MirrorSpec {
+        MirrorSpec {
+            id,
+            name: format!("m{id}"),
+            map_id: 0,
+            x,
+            y,
+            view_range: 5,
+            race: 80,
+            race_img: 0,
+            appr: 1,
+            light: 0,
+            name_color: 255,
+            cell_type: CellType::Monster,
+            dir: 3,
+            death: false,
+        }
+    }
+
+    fn halo_entity(id: i32, x: i32, y: i32) -> HaloEntity {
+        HaloEntity {
+            actor_id: id,
+            map_id: 0,
+            x,
+            y,
+            view_range: 5,
+            name: format!("h{id}"),
+            race: 80,
+            race_img: 0,
+            appr: 1,
+            light: 0,
+            name_color: 255,
+            cell_type: CellType::Monster,
+            dir: 1,
+            death: false,
+            display: None,
+            route: None,
+        }
+    }
+
+    fn cell_has(world: &World, x: i32, y: i32, id: i32) -> bool {
+        let (cell, ok) = world.map(0).get_cell_info(x, y);
+        ok && cell
+            .obj_list
+            .iter()
+            .any(|o| o.actor_object && o.cell_obj_id == id)
+    }
+
+    /// **镜像 API 往返**：插入（同一 id + 同步挂格）→ 原地刷新 → 换位 → 移除（摘格）。
+    ///
+    /// 红检：`upsert_mirror` 去掉 `add_to_mapped`/`add_map_object` ⇒ 首条挂格断言红；
+    /// 换位时不摘旧格 ⇒ 「旧格必须摘掉」红；`remove_mirror` 不摘格 ⇒ 末条红。
+    #[test]
+    fn mirror_upsert_refresh_move_and_remove_round_trip() {
+        let mut world = World::new(20, 20);
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(900, 4, 5)),
+            MirrorUpsert::Inserted
+        );
+        assert!(world.is_mirror(900), "镜像标志");
+        assert!(cell_has(&world, 4, 5, 900), "插入即挂格（不走 Enter 队列）");
+        assert_eq!(world.mirror_ids(), vec![900]);
+        assert_eq!(world.entities.get(900).map(|e| e.dir()), Some(3));
+
+        // 原地刷新（同坐标）：Updated，格不变，帧面字段按快照更新。
+        let mut spec = mirror_spec(900, 4, 5);
+        spec.dir = 5;
+        spec.death = true;
+        assert_eq!(world.upsert_mirror(spec), MirrorUpsert::Updated);
+        let e = world.entities.get(900).expect("镜像在");
+        assert_eq!(e.dir(), 5, "朝向按快照刷新");
+        assert!(e.death, "death 按快照刷新");
+        assert!(cell_has(&world, 4, 5, 900), "原地刷新不动格");
+
+        // 换位：新格有、旧格无。
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(900, 7, 9)),
+            MirrorUpsert::Updated
+        );
+        assert!(cell_has(&world, 7, 9, 900), "新格必须有");
+        assert!(!cell_has(&world, 4, 5, 900), "旧格必须摘掉");
+
+        assert!(world.remove_mirror(900));
+        assert!(!world.is_mirror(900));
+        assert!(world.entities.get(900).is_none());
+        assert!(!cell_has(&world, 7, 9, 900), "移除必须摘格");
+        assert!(world.mirror_ids().is_empty());
+    }
+
+    /// **镜像两条 fail-closed**：id 撞真实实体 ⇒ `RefusedOccupied`（不改真实实体）；
+    /// 越界格 ⇒ `RefusedCell`（不留半实体）。
+    ///
+    /// 红检：删 `RefusedOccupied` 分支 ⇒ 首条红；挂格失败不回滚 `entities.remove` ⇒ 末条红。
+    #[test]
+    fn mirror_upsert_refuses_occupied_id_and_bad_cell() {
+        let mut world = World::new(20, 20);
+        world.add_entity(entity(7, "real", 3, 3));
+        world.tick();
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(7, 4, 4)),
+            MirrorUpsert::RefusedOccupied
+        );
+        assert!(!world.is_mirror(7), "真实实体不得被改成镜像");
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(901, 100, 100)),
+            MirrorUpsert::RefusedCell
+        );
+        assert!(world.entities.get(901).is_none(), "挂格失败不得留半实体");
+    }
+
+    /// **正向牙（总监条件③）**：镜像进**本地 AOI 扫描**结果——否则「快照过滤 mirror」会把
+    /// 可见性一起屏蔽、帧直接消失。**反向牙**：镜像不出现在 owner 侧发布快照里；
+    /// 真实实体照旧在（防「过滤过头」）。
+    ///
+    /// 红检（正向）：`upsert_mirror` 不挂格 ⇒ 扫描看不到 ⇒ 红；
+    /// 红检（反向）：删 `snapshot_border` 的 `!e.mirror` ⇒ 反向红。
+    #[test]
+    fn mirror_is_scanned_by_local_aoi_and_excluded_from_snapshot() {
+        let mut world = World::new(20, 20);
+        let mut p = entity(1, "O", 5, 5);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        p.view_range = 5;
+        world.add_entity(p);
+        world.tick(); // 落图（Enter 在 tick_head 处理）
+        assert_eq!(
+            world.upsert_mirror(mirror_spec(900, 6, 5)),
+            MirrorUpsert::Inserted
+        );
+        // 玩家扫描门 = `clock - search_tick > 1000`（SearchTime=1000）⇒ 跑到门开的那一拍。
+        let mut seen = false;
+        for _ in 0..10 {
+            world.tick();
+            if let Some(o) = world.entities.get(1) {
+                if o.visible_actors
+                    .iter()
+                    .any(|v| v.target == 900 && v.flag == mir2_world_bevy::VisibleFlag::Show)
+                {
+                    seen = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            seen,
+            "镜像必须出现在本地 AOI 扫描结果里（否则过滤会把可见性一起屏蔽）"
+        );
+
+        let snap = snapshot_border(
+            &world,
+            0,
+            ZoneRect::new(0, 0, 19, 19),
+            12,
+            1,
+            &HaloFrameSource::none(),
+        );
+        assert!(
+            !snap.entities.iter().any(|e| e.actor_id == 900),
+            "镜像不得被再次发布成 owner 实体（快照过滤 mirror）"
+        );
+        assert!(
+            snap.entities.iter().any(|e| e.actor_id == 1),
+            "真实实体仍在快照里（过滤不过头）"
+        );
+    }
+
+    /// **`apply_mirrors`**：邻区快照 ⇒ 插入 + 登记展示项；下一 tick 快照不含它 ⇒ 移除镜像
+    /// 与展示项。消失帧由下次 AOI 扫描的 `hides` 自然覆盖（本用例只钉镜像/展示表状态）。
+    ///
+    /// 红检：删 `mirror_ids` 清扫循环 ⇒ 「移除」断言红；删 `displays.set` ⇒ 展示断言红。
+    #[test]
+    fn apply_mirrors_inserts_refreshes_removes_and_syncs_displays() {
+        let mut world = World::new(20, 20);
+        let mut displays = DisplayTable::new();
+        let mut halo = halo_entity(900, 4, 5);
+        halo.display = Some(HaloDisplay {
+            dir: 2,
+            light: 1,
+            feature: 0x1234,
+            feature_ex: 0,
+            status: 0,
+            name_color: 255,
+            show_name: b"hero".to_vec(),
+            mount_id: 0,
+        });
+        let snap1 = HaloSnapshot {
+            tick: 1,
+            entities: vec![halo],
+        };
+        let stats = apply_mirrors(
+            &mut world,
+            std::slice::from_ref(&snap1),
+            Some(&mut displays),
+        )
+        .expect("apply");
+        assert_eq!((stats.inserted, stats.updated, stats.removed), (1, 0, 0));
+        assert!(world.is_mirror(900));
+        assert_eq!(
+            displays.get(900).map(|d| (d.feature, d.show_name.clone())),
+            Some((0x1234, b"hero".to_vec()))
+        );
+
+        // 下一 tick：快照不再包含它 ⇒ 移除镜像 + 展示项。
+        let empty = HaloSnapshot {
+            tick: 2,
+            entities: Vec::new(),
+        };
+        let stats = apply_mirrors(
+            &mut world,
+            std::slice::from_ref(&empty),
+            Some(&mut displays),
+        )
+        .expect("apply empty");
+        assert_eq!((stats.inserted, stats.updated, stats.removed), (0, 0, 1));
+        assert!(!world.is_mirror(900));
+        assert!(displays.get(900).is_none(), "展示项必须随镜像移除");
     }
 
     /// **屏障牙**：2 区内两道屏障各放行 2 个参与者（不死锁）。
