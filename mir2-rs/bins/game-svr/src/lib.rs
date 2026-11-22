@@ -51,6 +51,7 @@ mod guild_cmd;
 mod guild_frames;
 mod guild_official;
 mod guild_runtime;
+mod handoff;
 mod homemap;
 /// 卡 `openmir2-host-aoi-downlink-profile`：`HostAoiDownlink` 子探针的测量 harness
 /// （`#[ignore]` + `MIR2_HOST_AOI_BENCH=1`；只观测，不是判据）。
@@ -939,6 +940,9 @@ struct ZoneHost {
     /// **L2-5 ③ 段 1b**：非 0 区的世界侧状态（下标 = 区号；下标 0 恒 `None`——区 0 仍用
     /// `sim_loop` 的局部变量，原路径逐字节不变）。切片关 ⇒ 全部 `None`（最小区保持 stub）。
     zone_states: Vec<Option<Arc<std::sync::Mutex<ZoneState>>>>,
+    /// **L2-5 ③ 段 2（接线）**：每区一个 handoff offer/ack 邮箱（下标 = 区号）。
+    /// 切片关 ⇒ 空表（`HandoffRuntime` 根本不构造 ⇒ `handoff_pending` 恒 false）。
+    handoff_boxes: Vec<handoff::HandoffMailbox>,
 }
 
 impl ZoneHost {
@@ -1617,6 +1621,8 @@ fn spawn_minimal_zone(
     // **L2-5 ③ 段 1c**：`registry.map_names()` 快照（`map_id` 下标）——断线存档要把
     // 会话 `map_id` 解析成当前图名；整张 `MapRegistry` 含全图格数据，不能跨线程复制。
     map_names: Arc<Vec<String>>,
+    // **L2-5 ③ 段 2（接线）**：handoff 邮箱（切片关 ⇒ 空表 ⇒ 不构造运行时）。
+    handoff_boxes: Vec<handoff::HandoffMailbox>,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
@@ -1662,6 +1668,14 @@ fn spawn_minimal_zone(
                     return;
                 };
                 // ---- 切片开：真 World + 本区展示/在线表 ----
+                // **L2-5 ③ 段 2（接线）**：handoff 运行时（邮箱空 = 切片关 ⇒ 不构造）。
+                let mut handoff_runtime = (!handoff_boxes.is_empty()).then(|| {
+                    handoff::HandoffRuntime::new(
+                        zone_id,
+                        Arc::clone(&layout),
+                        handoff_boxes.clone(),
+                    )
+                });
                 let _alive = ZoneAliveOnDrop(Arc::clone(&state));
                 let runtime = region_loop::ZoneRuntime::new(
                     zone_id,
@@ -1722,6 +1736,10 @@ fn spawn_minimal_zone(
                         let mut st = state
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        // tick 顶（phase1 之前）：排 ack/offer（handoff 两阶段）。
+                        if let Some(h) = handoff_runtime.as_mut() {
+                            h.tick_top(&mut st.world, tick);
+                        }
                         let record = st.world.tick_phase1();
                         let source =
                             region_loop::HaloFrameSource::new(&st.displays, &st.online);
@@ -1765,6 +1783,13 @@ fn spawn_minimal_zone(
                         wait_phase1_us,
                         Some((&**watch.heartbeats(), watch.now_ms())),
                     );
+                    // **barrier2 之后**：把本区 `handoff_pending` 实体投给目标区（offer）。
+                    if let Some(h) = handoff_runtime.as_mut() {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        h.after_phase2(&mut st.world, tick);
+                    }
                     tick += 1;
                 }
             };
@@ -2949,11 +2974,22 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     for (index, slot) in zone_states.iter_mut().enumerate().skip(1) {
                         let zone_id =
                             zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
-                        *slot = Some(Arc::new(std::sync::Mutex::new(ZoneState::new(
-                            zone_id, &map_sizes, rng_seed,
-                        ))));
+                        let mut state = ZoneState::new(zone_id, &map_sizes, rng_seed);
+                        match handoff::bounds_for(&layout, zone_id) {
+                            Some(b) => state.world.set_zone_bounds(Some(b)),
+                            None => glog!(
+                                "WRN",
+                                "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
+                            ),
+                        }
+                        *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
                 }
+                let handoff_boxes = if slicing {
+                    handoff::new_mailboxes(zone_count)
+                } else {
+                    Vec::new()
+                };
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
@@ -2966,6 +3002,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     slicing,
                     router: Arc::clone(&router),
                     zone_states,
+                    handoff_boxes,
                 });
                 // demux：原两条 gate 入站通道 → 每区一对通道。
                 let template_normal = ev_rx_template.take().expect("多区时原普通通道只给 demux");
@@ -2995,6 +3032,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         host.zone_states[index].clone(),
                         map_sizes.len(),
                         Arc::clone(&zone_map_names),
+                        host.handoff_boxes.clone(),
                         rx,
                         ctl,
                     )?;
@@ -31772,6 +31810,16 @@ fn sim_loop(
         );
         world.set_id_base(zone_id_base(zone_router::HOST_ZONE));
     }
+    // **L2-5 ③ 段 2（接线）**：区 0 的单 span 边界（切片关 ⇒ 不设 ⇒ `handoff_pending` 恒 false）。
+    if let Some(host) = zone_host.as_ref().filter(|h| h.slicing) {
+        match handoff::bounds_for(&host.layout, zone_router::HOST_ZONE) {
+            Some(b) => world.set_zone_bounds(Some(b)),
+            None => glog!(
+                "WRN",
+                "区 0 多 span（或多段边界不明）⇒ 不设 handoff 边界（区 0 不发起跨界移动）"
+            ),
+        }
+    }
     // 容量线探针（默认关闭；设计 docs/issues/online-probe-design-20261121.md）。
     // fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0，不静默跑一个"没探针"的进程。
     if let Err(e) = perf_counters::init_from_env() {
@@ -33104,6 +33152,16 @@ fn sim_loop(
         world_start.mark_ready();
         glog!("INF", "世界初始化完成：准入就绪");
     }
+    // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None ⇒ 零参与；
+    // `handoff_pending` 在 `zone_bounds` 未设时恒 false）。
+    let mut handoff_runtime: Option<handoff::HandoffRuntime> =
+        zone_host.as_ref().filter(|h| h.slicing).map(|h| {
+            handoff::HandoffRuntime::new(
+                zone_router::HOST_ZONE,
+                Arc::clone(&h.layout),
+                h.handoff_boxes.clone(),
+            )
+        });
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -35327,6 +35385,11 @@ fn sim_loop(
         }
         host_prof.end("HostPeriodic", t);
         let t = host_prof.begin();
+        // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None，零参与）。
+        // **tick 顶（phase1 之前）**：区 0 排 ack/offer（handoff 两阶段）。
+        if let Some(h) = handoff_runtime.as_mut() {
+            h.tick_top(&mut world, tick_no);
+        }
         let mut rec = tick_world_head_with_specials(
             &mut world,
             mon_gen_host.as_mut(),
@@ -35555,6 +35618,10 @@ fn sim_loop(
                 wait_phase1_us,
                 Some((&**host.watch.heartbeats(), host.watch.now_ms())),
             );
+            // **barrier2 之后**：区 0 把 `handoff_pending` 实体投给目标区（offer）。
+            if let Some(h) = handoff_runtime.as_mut() {
+                h.after_phase2(&mut world, tick_no);
+            }
             if tick_no == 0 {
                 // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
                 let _ = host.watch.arm();
@@ -120287,9 +120354,6 @@ mod l2_handoff_tests {
     use crate::zone_router::HOST_ZONE;
     use mir2_world_bevy::{EntitySpawn, MirrorPromote, MirrorSpec, MirrorUpsert, World};
 
-    /// `mirror_metrics` 的计数是**进程级**的：本模块内互斥，避免并行用例互相污染。
-    static COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn layout() -> RegionLayout {
         parse_zone_layout(
             "0:0=0,0-9,9;1:0=10,0-19,9",
@@ -120361,7 +120425,9 @@ mod l2_handoff_tests {
     fn cross_boundary_entity_never_leaves_target_visible_set() {
         const TICKS: u64 = 6;
         const CROSS_TICK: u64 = 2;
-        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
         mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
         let layout = Arc::new(layout());
@@ -120495,7 +120561,9 @@ mod l2_handoff_tests {
     // ------------------------------------------------------------------
     #[test]
     fn promote_mirror_in_place_keeps_one_cell_entry() {
-        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
         let mut world = World::with_maps(vec![(20, 10)]);
         let spec = MirrorSpec {
@@ -120662,7 +120730,9 @@ mod l2_handoff_tests {
     // ------------------------------------------------------------------
     #[test]
     fn mirror_shadowed_by_local_is_skipped_and_counted() {
-        let _counter_guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _counter_guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
         let mut world = World::with_maps(vec![(20, 10)]);
         let local = add(&mut world, "L", 5, 5, false);
@@ -120768,5 +120838,212 @@ mod l2_handoff_tests {
         // dx 是「到 rect **边**的距离」：x1=9 ⇒ x=9+HALO 恰在 HALO 距离内，再远 1 格即出带。
         assert!(r.within_distance(9 + ZONE_HALO_WIDTH, 5, ZONE_HALO_WIDTH));
         assert!(!r.within_distance(9 + ZONE_HALO_WIDTH + 1, 5, ZONE_HALO_WIDTH));
+    }
+}
+
+/// **L2-5 ③ 段 2（接线）**：handoff 走**生产运行时**（`HandoffRuntime`）的零闪烁用例。
+///
+/// 与引擎级夹具的区别：跨界由**真实移动命令**（`World::walk` → `try_step_blocked_impl` →
+/// `zone_bounds` 判定置 `handoff_pending`）驱动，offer/ack/提升/移除全部由生产
+/// [`handoff::HandoffRuntime`] 完成；断言用**收件人自己的 AOI 台账**（观察者的
+/// `visible_actors`——appear/disappear 帧的直接来源）逐 tick 连续，而不是坐标重算。
+///
+/// 两窗口：本用例不设 env；按 `MIR2_AOI_INCREMENTAL`（进程级 OnceLock）跑两次
+/// （默认增量窗口 + `MIR2_AOI_INCREMENTAL=0` 的 legacy 窗口）即可覆盖两条 AOI 路径。
+///
+/// 红检：删 `tick_top` 里的提升块 ⇒ 目标区 T+1 丢实体（visible_actors 断档）；
+/// 删 `after_phase2` 的 offer ⇒ 源区不移除、目标区永不提升（promoted==0）；
+/// 不设 `zone_bounds` ⇒ 不置 pending（见 `walk_without_zone_bounds_never_sets_pending`）。
+#[cfg(test)]
+mod l2_handoff_prod_tests {
+    use super::*;
+    use crate::region_loop::{
+        apply_mirrors, HaloExchange, HaloFrameSource, TickBarriers, ZoneRuntime,
+    };
+    use crate::zone::{parse_zone_layout, RegionLayout, ZoneId};
+    use crate::zone_router::HOST_ZONE;
+    use mir2_world_bevy::World;
+
+    /// `mirror_metrics` + 运行时计数是进程级的：**两个 handoff 测试模块共用**这把锁，
+    /// 避免并行用例互相清零/污染。
+    pub(super) static PROD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn layout() -> RegionLayout {
+        parse_zone_layout(
+            "0:0=0,0-9,9;1:0=10,0-19,9",
+            &["0".to_string()],
+            &[(20, 10)],
+            HOST_ZONE,
+        )
+        .expect("两区布局")
+    }
+
+    fn zone(n: u32) -> ZoneId {
+        ZoneId::new(n)
+    }
+
+    /// 观察者 AOI 台账里当前可见的 actor id 集合（`visible_actors` = 本 tick AOI 扫描的产物；
+    /// appear/disappear 帧正是按它的差集发出的）。
+    fn visible_targets(world: &World, observer: &str) -> Vec<i32> {
+        let obs = world
+            .entities
+            .iter_ref()
+            .find(|e| e.name == observer)
+            .expect("观察者不在世界");
+        let mut ids: Vec<i32> = obs.visible_actors.iter().map(|v| v.target).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn production_runtime_crossing_keeps_recipient_stream_continuous() {
+        const TICKS: u64 = 14;
+        const CROSS_TICK: u64 = 7;
+        let _guard = PROD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_mirror_promoted_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_mirror_shadowed_by_local_for_tests();
+        let layout = Arc::new(layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let boxes = handoff::new_mailboxes(2);
+        let (tx, rx) = std::sync::mpsc::channel::<(Vec<i32>, u64, u64)>();
+
+        let run = |zone_id: ZoneId, spawn_e: bool, spawn_p: bool| {
+            let layout = Arc::clone(&layout);
+            let exchange = Arc::clone(&exchange);
+            let barriers = Arc::clone(&barriers);
+            let boxes = boxes.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let abort = Arc::clone(&barriers);
+                let body = move || {
+                    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+                    world.set_id_base(zone_id_base(zone_id));
+                    // 生产同口径：单 span 区设边界（`handoff_pending` 只由它驱动）。
+                    world.set_zone_bounds(crate::handoff::bounds_for(&layout, zone_id));
+                    let mut e_id = 0;
+                    if spawn_e {
+                        let mut e = mir2_world_bevy::EntitySpawn::new(0, "E".to_string(), 9, 5);
+                        e.race = 0; // 玩家（可行走、被 AOI 按 Play 挂格）
+                        e.view_range = 12;
+                        e_id = world.add_entity(e);
+                    }
+                    if spawn_p {
+                        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 12, 5);
+                        p.race = 0;
+                        p.view_range = 12;
+                        world.add_entity(p);
+                    }
+                    let _ = world.tick();
+                    let runtime = ZoneRuntime::new(
+                        zone_id,
+                        layout.zone_spans(),
+                        ZONE_HALO_WIDTH,
+                        &exchange,
+                        &barriers,
+                    );
+                    let mut handoff = crate::handoff::HandoffRuntime::new(
+                        zone_id,
+                        Arc::clone(&layout),
+                        boxes.clone(),
+                    );
+                    for tick in 0..TICKS {
+                        // tick 顶：排 ack/offer（生产接线）。
+                        handoff.tick_top(&mut world, tick);
+                        // 跨界：源区在 T 用**真实移动命令**走一步（进邻区 rect ⇒ 置 pending）。
+                        if tick == CROSS_TICK && zone_id == zone(0) {
+                            world.walk(e_id, 1, 0);
+                        }
+                        let mut rec = world.tick_phase1();
+                        let (_b, neighbors, wait_us) = runtime
+                            .after_phase1(&world, tick, &HaloFrameSource::none())
+                            .expect("快照/发布/barrier1/读邻居");
+                        if let Err(e) = apply_mirrors(&mut world, &neighbors, None) {
+                            panic!("apply_mirrors 失败：{e}");
+                        }
+                        world.tick_phase2(&mut rec);
+                        runtime.after_phase2(wait_us, None);
+                        // barrier2 之后：发 offer / 超时回滚。
+                        handoff.after_phase2(&mut world, tick);
+                        if zone_id == zone(1) {
+                            tx.send((
+                                visible_targets(&world, "P"),
+                                handoff.promoted(),
+                                handoff.refused(),
+                            ))
+                            .expect("主线程接收");
+                        }
+                    }
+                };
+                if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+                    abort.abort();
+                    std::panic::resume_unwind(p);
+                }
+            })
+        };
+        let h0 = run(zone(0), true, false);
+        let h1 = run(zone(1), false, true);
+        let mut seen: Vec<Vec<i32>> = Vec::new();
+        let mut promoted = 0u64;
+        let mut refused = 0u64;
+        for _ in 0..TICKS {
+            let (ids, p, r) = rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("每 tick 一份（超时 = 屏障死锁/线程 panic）");
+            seen.push(ids);
+            promoted = p;
+            refused = r;
+        }
+        h0.join().expect("区 0 线程");
+        h1.join().expect("区 1 线程");
+
+        // 前置：AOI 扫描按 `SearchTime` 节流（每 5 tick 一次），跨界前必须先有一次扫描
+        // 让 E 进入 P 的台账——取「首次出现」为连续性的起点。
+        let first = seen
+            .iter()
+            .position(|ids| !ids.is_empty())
+            .unwrap_or_else(|| panic!("跨界前 P 的 AOI 台账从未出现 E：{seen:?}"));
+        assert!(
+            (first as u64) < CROSS_TICK,
+            "前置：首次可见必须早于跨界 tick（first={first} cross={CROSS_TICK}）：{seen:?}"
+        );
+        // 零闪烁（收件人流连续）：从首次可见起每一 tick 都在。
+        for (tick, ids) in seen.iter().enumerate().skip(first) {
+            assert!(
+                !ids.is_empty(),
+                "tick {tick} 目标区收件人台账丢了 E（零闪烁失败）：{seen:?}"
+            );
+        }
+        assert_eq!(promoted, 1, "提升恰一次");
+        assert_eq!(refused, 0, "无拒绝/超时回滚");
+        // **已知的并发竞态（报 Leader 裁决是否加第三道屏障）**：目标区在 T+1 的 tick 顶提升、
+        // 源区要在**自己的** T+1 顶收到 ack 才移除；两线程自由跑时 ack 可能晚一 tick，期间源区
+        // 快照仍含该 id ⇒ 目标区 `apply_mirrors` 命中「已是真实体」⇒ 遮蔽兜底跳过并计数
+        // （这正是它作为**防御**的价值：不 abort、不删真实体）。因此这里断言**瞬态上界**
+        // （≤2：ack 最多晚一 tick，之后源区移除、计数停止增长），不是 0。
+        let shadowed = mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local();
+        assert!(
+            shadowed <= 2,
+            "遮蔽兜底只允许 ack 竞态的瞬态上界（≤2），实得 {shadowed}"
+        );
+    }
+
+    /// **接线默认关闭**：不设 `zone_bounds`（= `slicing=0` 的等价物）⇒ 跨界走一步也**不置**
+    /// `handoff_pending`（单区/N=1 逐字节不变的钉子）。
+    #[test]
+    fn walk_without_zone_bounds_never_sets_pending() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "E".to_string(), 9, 5);
+        e.race = 0;
+        let id = world.add_entity(e);
+        let _ = world.tick();
+        world.walk(id, 1, 0);
+        let _ = world.tick();
+        let ef = world.entities.get(id).expect("实体在");
+        assert_eq!(ef.x, 10, "移动必须成功（前置）");
+        assert!(
+            !ef.handoff_pending,
+            "未设 zone_bounds（slicing=0）⇒ handoff_pending 必须恒 false"
+        );
     }
 }

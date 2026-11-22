@@ -352,12 +352,29 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 `handoff_mirror_promoted==1` 且 `mirror_shadowed_by_local==0`）、原地提升（格内恰一条/幂等/
 位置不一致）、outgoing 格尾定序、遮蔽跳过+计数、outgoing 带正反例、距离谓词。
 
-**本段未做（明确登记）**：
+**接线（同一分支下一提交，2026-11-22）**：
 
-1. **生产 offer/ack 接线未接入 `spawn_minimal_zone`/`sim_loop`**：引擎与判据已就位，但两区之间的
-   `HandoffOffer`/`HandoffAck` 通道、tick 顶排水、`set_zone_bounds` 的生产设置尚未接——合并后
-   handoff 在生产路径仍不触发（登录落区/②镜像路径不受影响）。接入清单：ZoneState 收件箱 +
-   barrier2 后发 offer + T+1 tick 顶提升/移除 + 超时/拒绝回滚 + 多 span 区的边界（单 span 之外
-   暂不设 `zone_bounds`）。
-2. **appear/disappear 帧流两窗口**（legacy / `MIR2_AOI_INCREMENTAL=0`）未做逐帧捕获：本段以
-   「目标区世界可见集合逐 tick 连续」为等价证据；帧窗口留接入后按 `frames.ndjson`/账本补。
+- `handoff::HandoffRuntime`（每区一个）：`tick_top` = 排 ack（源侧提交/回滚）+ 排 offer
+  （目标侧 `zone_of` 校验 → `promote_mirror_to_real` → 回 ack）；`after_phase2` = 发 offer +
+  `HANDOFF_TIMEOUT_TICKS=3` 超时回滚（`handoff_refused` 计数 + WRN）。
+- `ZoneHost.handoff_boxes`（每区一个 offer/ack 邮箱）；`spawn_minimal_zone` 与 `sim_loop`
+  （区 0）都按「tick 顶排水 / barrier2 后发 offer」接入；运行时只在 `slicing=1` 构造。
+- `set_zone_bounds` 生产设置：区 0 在 `sim_loop` 序言、区 k 在 `ZoneState::new` 之后；
+  **多 span 区不设边界**（WRN 登记——本区不发起跨界移动）。
+- **默认关闭**：`slicing=0` ⇒ 不建邮箱、不设边界 ⇒ `handoff_pending` 恒 false
+  （用例 `walk_without_zone_bounds_never_sets_pending` 钉住）。
+
+**证据（生产运行时 + 两 AOI 窗口）**：`l2_handoff_prod_tests::production_runtime_crossing_keeps_recipient_stream_continuous`
+——两区真屏障线程 + **真实 `World::walk`** 驱动跨界，offer/ack/提升/移除全走生产
+`HandoffRuntime`；断言**收件人自己的 `visible_actors` 台账**（appear/disappear 帧的直接来源）
+从首次可见起逐 tick 连续、`promoted==1`、`refused==0`。默认（增量）与
+`MIR2_AOI_INCREMENTAL=0`（legacy）两个进程窗口各跑一次，均绿。
+
+**并发竞态（待 Leader 裁决）**：两线程自由跑时 ack 可能晚一 tick，期间源区快照仍含该 id ⇒
+目标区 `apply_mirrors` 命中「已是真实体」⇒ 遮蔽兜底（跳过 + 计数，正是它的防御价值）。因此生产
+用例断言 `mirror_shadowed_by_local ≤ 2`（瞬态上界），**不是 0**；引擎级夹具（单 tick 显式定序）
+仍断言 0。若要「恒 0」，需要第三次同步点（handoff 专用屏障）或把 offer 提前到 barrier1——属设计
+变更，等 Leader 拍板。
+
+**仍未做（明确登记）**：真机 bot 过网关跨界的批量冒烟（`tools/botload`）——本段的生产证据是
+「两区真线程 + 真实移动命令」，尚未跑完整网关栈。
