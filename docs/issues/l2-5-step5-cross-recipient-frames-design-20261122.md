@@ -335,7 +335,8 @@ V2 的 `barrier1` 排水点保证，「全序位置」由 §1.1 的段序推出�
 2. **route 字段**：N=1 不调用 `apply_mirrors`，`World::mirror_routes` 只由 `apply_mirrors` 写；
    测试 `mirror_route_lifecycle`（upsert 后写入；remove/promote 后清除）。
 3. **计数**：`counting_recipients_enabled()` 闸扩展覆盖 `delivered/unroutable/overflow`；
-   测试 `slicing_off_counts_nothing_three_buckets`（切片关 ⇒ 四列全 0）。
+   测试 `slicing_off_counts_nothing_three_buckets`（切片关 ⇒ 三桶 `delivered/unroutable/`
+   `overflow` + 诊断列 `dup/drop_closed/zone_unknown` **各自 0**）。
 4. **排水点**：V2 的 `barrier1` 后排水只在切片路径存在；N=1 走 `world.tick_tail`、无
    `ZoneRuntime`，测试 `cross_drain_absent_without_slicing`。
 5. **端到端**：`n1_stdout_equivalence.ps1` 两树归一化 stdout sha 相等（沿用 ④a/④b-0 的
@@ -345,9 +346,20 @@ V2 的 `barrier1` 排水点保证，「全序位置」由 §1.1 的段序推出�
 
 见 §5：**拒新**，唯一策略，写死。
 
+### I5 附：待落地断言（完整片；**不写进本文档就等于没有**）
+
+以下三条是**完整片的验收项**，最小切片故意未做；实施时必须落到代码，测试名写死：
+
+1. **`single_emitter_only_recipient_zone_drains`**：源区写入后，源区侧 gate 收端 **0 帧**，
+   收件区侧**恰 1 帧**——证明「唯一有序发射者 = 收件区」不是靠注释（I1）。
+2. **`same_source_subsequence_equals_n1`**：合成「同源、同收件人」多帧，断言收件人观察到的
+   **同源子序列**与 N=1 基线逐项相同（跨源交错不在 I2 里；只比同源）。
+3. **`cross_delay_is_exactly_one_tick`**：人为让源区 **post-barrier2 段变慢 N ms**，收件区仍在
+   T+1 收到（不是 T+2）；并覆盖「本 tick pre-barrier1 产帧 ⇒ 落 T+2」的 `src_tick` 过滤面。
+
 ## 5. 有界与溢出：拒新（并修掉 v1 自相矛盾）
 
-- **容量**：每个 `(dst, src)` 槽上限 `MAX_CROSS_FRAMES_PER_SOURCE_PER_ZONE`（启动常量，初值
+- **容量**：`MAX_FRAMES_PER_SLOT` = **每 `(dst, src)` 槽的单 tick 上限**（启动常量，初值
   **16384**；从 §1.5 的 3.3k/tick（1k 2 区）起，按 1万 ≈ 10 倍预留；**禁止无界**）。
   槽每 tick 排空 ⇒ 上界含义 = 「单源单 tick 的跨区帧数」。
 - **溢出策略（唯一）**：**拒新**——槽满时丢弃**新来的**帧，`cross_frame_queue_overflow` +1，
