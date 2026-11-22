@@ -93,6 +93,9 @@ REGISTRY = [
     ("dynamic_count_stamp_gate", ["tools/hygiene/dynamic_count_stamp_gate.py", "--selftest"], False),
     ("merge_tree_helper", ["tools/hygiene/merge_tree_helper.py", "--selftest"], False),
     ("stale_pointer_gate", ["tools/hygiene/stale_pointer_gate.py", "--selftest"], False),
+    # 卡 openmir2-zone-mirror-depart-frames（writer 列错位回算）：按旧 `write_tick` 的 vals 位置
+    # 回算旧 perf TSV 受影响列；自测用合成 ④b/⑤-6/⑤-8 三份 TSV 断言 as_read vs true；离线 <1s。
+    ("tsv_recompute_legacy", ["tools/hygiene/tsv_recompute_legacy.py", "--selftest"], False),
     # 卡 `openmir2-entry-gap-buckets`：主检出 / 影子 / 本次构建 三份 DBSrv 产物的 **sha 相等** 断言。
     # 判据是相等而不是 `-Check GREEN`（旧的戳配旧的文件同样 GREEN，两次误报都源于此）。
     ("assert_three_way_aligned", ["tools/hygiene/assert_three_way_aligned.ps1", "-Selftest"], False),

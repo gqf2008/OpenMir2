@@ -4972,7 +4972,7 @@ fn apply_pending_gm_mountride(
                 && (m.y - sy).abs() <= ref_msg_range
             {
                 // **L2-5 ⑤ 面迁移**：镜像收件人 ⇒ 分类 + 入目标区邮箱。
-                crate::cross_zone_frames::note_mirror_recipient(
+                let _ = crate::cross_zone_frames::note_mirror_recipient(
                     perf_counters::CrossRecipientSurface::MountRide,
                     world.mirror_route(m.id),
                     std::slice::from_ref(&body),
@@ -13220,7 +13220,7 @@ fn broadcast_feature_changed_except(
         let Some(e) = online.find_linear_actor(target_id) else {
             // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱。
             if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                crate::cross_zone_frames::note_mirror_recipient(
+                let _ = crate::cross_zone_frames::note_mirror_recipient(
                     perf_counters::CrossRecipientSurface::FeatureChanged,
                     world.mirror_route(target_id),
                     std::slice::from_ref(&body),
@@ -19941,7 +19941,7 @@ fn send_ref_msg_to_targets(
             // 收件人在邻区。分类 + 入目标区邮箱：route=Some 且路由登记 ⇒ delivered；
             // 否则 unroutable / overflow（三桶恒等式见 `perf_counters::note_cross_recipient_outcome`）。
             if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                crate::cross_zone_frames::note_mirror_recipient(
+                let _ = crate::cross_zone_frames::note_mirror_recipient(
                     surface,
                     world.mirror_route(target_id),
                     bodies,
@@ -20563,6 +20563,51 @@ fn drain_aoi_disappear(
     sent
 }
 
+/// **第七面 WRN 限流器**（纯逻辑、可注入时钟）：≤1 条摘要/分钟。
+///
+/// **被抑制的语义写死**：计数单位是 **WRN 条数**（= 非投递的观察者 incidence 数），
+/// **不是**去重 observer 数。`should_log` 返回 `Some(n)` 时 `n` = 上次放行以来被抑制的条数；
+/// 返回 `None` 时内部 +1。TSV 列 `depart_wrn_suppressed` 与它同语义（本 tick 增量）。
+#[derive(Debug)]
+pub(crate) struct DepartWarnLimiter {
+    /// 上次放行的 `now_ms`（初值 `i64::MIN` ⇒ 首次必放行）。
+    last_log_ms: i64,
+    /// 上次放行以来被抑制的 WRN 条数。
+    suppressed: u64,
+}
+
+impl DepartWarnLimiter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            last_log_ms: i64::MIN,
+            suppressed: 0,
+        }
+    }
+
+    /// `Some(n)` = 本次放行（`n` = 上次放行以来被抑制的 WRN 条数）；`None` = 本次抑制。
+    pub(crate) fn should_log(&mut self, now_ms: i64) -> Option<u64> {
+        const INTERVAL_MS: i64 = 60_000;
+        if now_ms.saturating_sub(self.last_log_ms) >= INTERVAL_MS {
+            let suppressed = self.suppressed;
+            self.suppressed = 0;
+            self.last_log_ms = now_ms;
+            Some(suppressed)
+        } else {
+            self.suppressed = self.suppressed.saturating_add(1);
+            None
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn suppressed(&self) -> u64 {
+        self.suppressed
+    }
+}
+
+/// 宿主进程级限流状态（纯日志用途；不参与任何帧/计数构造）。
+static DEPART_WRN_LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+    std::sync::Mutex::new(DepartWarnLimiter::new());
+
 /// **orphan 接线第二批**：掉线/小退/顶号的**离世广播**帧
 /// （oracle `BaseObject.DisappearA`，`src/M2Server/Actor/BaseObject.cs:1519-1524`）。
 ///
@@ -20588,22 +20633,45 @@ fn drain_depart_frames(
 ) -> usize {
     let mut sent = 0usize;
     for (observer_id, target_id) in world.drain_departs() {
-        let Some(observer) = online.find_by_actor(observer_id) else {
-            glog!(
-                "WRN",
-                "离世广播：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
-            );
+        // **L2-5 ⑦**：帧体只构造一次；本地与跨区共用同一构造（逐字节一致）。
+        let body = downlink::disappear_frame(target_id);
+        if let Some(observer) = online.find_by_actor(observer_id) {
+            let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "离世广播")
+            else {
+                continue;
+            };
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: observer.socket,
+                body,
+            });
+            sent += 1;
             continue;
+        }
+        // **L2-5 ⑦ 第七面**：镜像观察者 ⇒ 目标区邮箱（收件区 barrier1 后排水，`src_tick`
+        // 过滤保恰好 1 tick）。帧体与本地路径同一构造；`route=None/未登记/溢出` 计残差。
+        let outcome = if world.entities.get(observer_id).is_some_and(|e| e.mirror) {
+            crate::cross_zone_frames::note_mirror_recipient(
+                perf_counters::CrossRecipientSurface::DepartFrames,
+                world.mirror_route(observer_id),
+                std::slice::from_ref(&body),
+            )
+        } else {
+            perf_counters::CrossRecipientOutcome::Unroutable
         };
-        let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "离世广播")
-        else {
-            continue;
-        };
-        let _ = tx.send(SimToGate::SendFrame {
-            socket: observer.socket,
-            body: downlink::disappear_frame(target_id),
-        });
-        sent += 1;
+        if outcome != perf_counters::CrossRecipientOutcome::Delivered {
+            // 残差（非镜像/离线/route=None/未登记/溢出）：WRN 限流（≤1 条摘要/分钟 + 抑制数进 TSV）。
+            let now = now_ms();
+            let mut limiter = DEPART_WRN_LIMITER
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match limiter.should_log(now) {
+                Some(suppressed) => glog!(
+                    "WRN",
+                    "离世广播：观察者 actor={observer_id} 未投递（{outcome:?}）⇒ 跳过 SM_DISAPPEAR(30)；上一分钟抑制 {suppressed} 条"
+                ),
+                None => perf_counters::note_depart_wrn_suppressed(),
+            }
+        }
     }
     sent
 }
@@ -21396,7 +21464,7 @@ fn drain_merchant_disappears(
                 // **L2-5 ③ 段 3**（只加计数）：收件人是本区世界里的镜像 ⇒ 在邻区、本区发不到。
                 if world.entities.get(*actor_id).is_some_and(|e| e.mirror) {
                     // **L2-5 ⑤ 面迁移**：镜像收件人 ⇒ 分类 + 入目标区邮箱。
-                    crate::cross_zone_frames::note_mirror_recipient(
+                    let _ = crate::cross_zone_frames::note_mirror_recipient(
                         perf_counters::CrossRecipientSurface::MerchantDisappear,
                         world.mirror_route(*actor_id),
                         std::slice::from_ref(&body),
@@ -24332,10 +24400,12 @@ mod perf_counters {
         MountRide = 4,
         /// `drain_merchant_disappears`（`SM_DISAPPEAR(30)`）。
         MerchantDisappear = 5,
+        /// **第七面**：`drain_depart_frames` 的离世广播（`SM_DISAPPEAR(30)`）镜像观察者分支。
+        DepartFrames = 6,
     }
 
-    /// 六面计数（下标 = [`CrossRecipientSurface`] 的判别值）。
-    static CROSS_RECIPIENT_BY_SURFACE: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+    /// 七面计数（下标 = [`CrossRecipientSurface`] 的判别值；0..=5 = 历史六面，6 = `DepartFrames`）。
+    static CROSS_RECIPIENT_BY_SURFACE: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
 
     /// **L2-5 ⑤**：每一次「六面未命中（收件人是镜像）」的**投递结果**（三桶，互斥）。
     ///
@@ -24367,6 +24437,16 @@ mod perf_counters {
     /// SLICING` 双闸，关闭态只多两次原子读（不取钟）。
     static CROSS_ENQUEUE_US: AtomicU64 = AtomicU64::new(0);
     static CROSS_ENQUEUE_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+    /// **第七面 WRN 限流**：本 tick 被抑制的 WRN **条数**（= 非投递的观察者 incidence 数；
+    /// **不是**去重 observer 数）。与 `DepartWarnLimiter` 的 `suppressed` 同语义。
+    static DEPART_WRN_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+
+    /// **第七面 WRN 限流**：本 tick 被抑制的 WRN **条数**（日志指标；**不受** `SLICING_ENABLED`
+    /// 门控——N=1 窗口也要能读出；与 `CROSS_RECIPIENT_BY_SURFACE` 的切片门控分开）。
+    pub(crate) fn note_depart_wrn_suppressed() {
+        DEPART_WRN_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+    }
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
     pub(crate) fn set_slicing_enabled(on: bool) {
@@ -24467,12 +24547,28 @@ mod perf_counters {
     }
 
     /// 六面合计（段 4 容量脚本的读点；也是 `cross_recipient_missing` 指标口径）。
+    ///
+    /// **只求前 6 项**：历史 10.004% 是六面口径；第七面（`DepartFrames`）另计，见
+    /// [`Self::cross_recipient_depart_frames`] 与 [`Self::cross_recipient_seven_total`]。
     #[allow(dead_code)]
     pub(crate) fn cross_recipient_missing() -> u64 {
-        CROSS_RECIPIENT_BY_SURFACE
+        CROSS_RECIPIENT_BY_SURFACE[..6]
             .iter()
             .map(|c| c.load(Ordering::Relaxed))
             .sum()
+    }
+
+    /// 第七面本 tick 增量（窗口读点）。
+    #[allow(dead_code)] // 生产读点在 perf TSV；本函数供测试与后续接线。
+    pub(crate) fn cross_recipient_depart_frames() -> u64 {
+        CROSS_RECIPIENT_BY_SURFACE[CrossRecipientSurface::DepartFrames as usize]
+            .load(Ordering::Relaxed)
+    }
+
+    /// 七面合计 = 六面小计 + 第七面（**不得**与历史 10.004% 直接比；旧基线只对六面小计）。
+    #[allow(dead_code)] // 生产读点在 perf TSV；本函数供测试与后续接线。
+    pub(crate) fn cross_recipient_seven_total() -> u64 {
+        cross_recipient_missing() + cross_recipient_depart_frames()
     }
 
     #[cfg(test)]
@@ -24494,6 +24590,23 @@ mod perf_counters {
         CROSS_RECIPIENT_SELF_ZONE_MISS.store(0, Ordering::Relaxed);
         CROSS_ENQUEUE_US.store(0, Ordering::Relaxed);
         CROSS_ENQUEUE_EVENTS.store(0, Ordering::Relaxed);
+        DEPART_WRN_SUPPRESSED.store(0, Ordering::Relaxed);
+    }
+
+    /// 测试用：关掉 perf writer（`init_with_path` 之后复位；避免跨用例串味）。
+    #[cfg(test)]
+    pub(crate) fn reset_writer_for_tests() {
+        ENABLED.store(false, Ordering::Relaxed);
+        DATA_LINES.store(0, Ordering::Relaxed);
+        *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *PATH.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// 测试用：第七面 WRN 抑制数（本 tick 增量）。
+    #[cfg(test)]
+    #[allow(dead_code)] // 供后续用例/诊断；当前 TSV writer 用例按列名读，不直接调用。
+    pub(crate) fn depart_wrn_suppressed() -> u64 {
+        DEPART_WRN_SUPPRESSED.load(Ordering::Relaxed)
     }
 
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
@@ -24574,7 +24687,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24609,6 +24722,7 @@ mod perf_counters {
             CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[6].swap(0, Ordering::Relaxed),
         ];
         let vals = [
             ACTOR_INDEXED.swap(0, Ordering::Relaxed),
@@ -24633,15 +24747,30 @@ mod perf_counters {
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
             REGION_BARRIER_US.swap(0, Ordering::Relaxed),
             REGION_BARRIER_TOTAL_US.swap(0, Ordering::Relaxed),
+            // 六面逐面（历史列，顺序不变）。
             cr[0],
             cr[1],
             cr[2],
             cr[3],
             cr[4],
             cr[5],
-            // 合计列 = 六面本 tick 增量之和（**同一组 swap 结果**，不能再 swap 一次——那会把
-            // 合计恒写成 0；2026-11-22 冒烟实测抓到过，见提交信息）。
+            // 六面小计（**历史 10.004% 口径**；只求前 6 项，不能再 swap 一次）。
+            cr[..6].iter().sum::<u64>(),
+            // **L2-5 ⑦**：第七面 + 七面合计（七面合计 ≠ 历史 10.004% 口径）。
+            cr[6],
             cr.iter().sum::<u64>(),
+            // **L2-5 ⑤**：三桶 + canary/诊断（本 tick 增量；与七面合计同源构造）。
+            CROSS_RECIPIENT_OUTCOME[0].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_OUTCOME[1].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_OUTCOME[2].swap(0, Ordering::Relaxed),
+            CROSS_FRAME_DUP.swap(0, Ordering::Relaxed),
+            CROSS_FRAME_DROP_CLOSED.swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_ZONE_UNKNOWN.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_US.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_EVENTS.swap(0, Ordering::Relaxed),
+            // **L2-5 ⑦**：WRN 抑制数（本 tick 增量；与限流器同语义）。
+            DEPART_WRN_SUPPRESSED.swap(0, Ordering::Relaxed),
+            // handoff 11（hd[0..=10]；表头顺序 offered..write_refused_occupied）。
             hd[0],
             hd[1],
             hd[2],
@@ -24653,21 +24782,13 @@ mod perf_counters {
             hd[8],
             hd[9],
             hd[10],
-            hd[11],
-            hd[12],
             // **L2-5 ④a**：区 k 命令接线 / ④b 缺口基线 / 区 k 换图帧降级（均为本 tick 增量）。
             ZONE_CMD_UNSUPPORTED.swap(0, Ordering::Relaxed),
             HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.swap(0, Ordering::Relaxed),
             MOVE_MAP_CHANGE_UNSUPPORTED.swap(0, Ordering::Relaxed),
-            // **L2-5 ⑤**：三桶 + canary/诊断（本 tick 增量；与六面合计同源构造）。
-            CROSS_RECIPIENT_OUTCOME[0].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_OUTCOME[1].swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_OUTCOME[2].swap(0, Ordering::Relaxed),
-            CROSS_FRAME_DUP.swap(0, Ordering::Relaxed),
-            CROSS_FRAME_DROP_CLOSED.swap(0, Ordering::Relaxed),
-            CROSS_RECIPIENT_ZONE_UNKNOWN.swap(0, Ordering::Relaxed),
-            CROSS_ENQUEUE_US.swap(0, Ordering::Relaxed),
-            CROSS_ENQUEUE_EVENTS.swap(0, Ordering::Relaxed),
+            // **L2-5 own-segment 修正**：信息性两列（表头在 zone-k 之后）。
+            hd[11],
+            hd[12],
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -29648,7 +29769,7 @@ fn flush_run_frames(
                 let Some(t) = online.find_linear_actor(target_id) else {
                     // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱（不再只计数）。
                     if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                        crate::cross_zone_frames::note_mirror_recipient(
+                        let _ = crate::cross_zone_frames::note_mirror_recipient(
                             perf_counters::CrossRecipientSurface::RunFrames,
                             world.mirror_route(target_id),
                             std::slice::from_ref(&health_body),
@@ -123906,6 +124027,277 @@ mod l2_s3_cross_recipient_tests {
         fire_mountride(&world, &online, &g);
         fire_merchant_disappear(&world, &online, &g);
         assert_eq!(snapshot(), base, "slicing=0 ⇒ 六面必须全 0");
+    }
+
+    /// **L2-5 ⑦**：源区 `drain_depart_frames` 的镜像观察者 → 邮箱 → 收件区 T+1 排水；
+    /// 帧体与本地路径同一 `downlink::disappear_frame` 构造（逐字节）。
+    #[test]
+    fn depart_frames_cross_zone_delivers_at_next_tick() {
+        let _g = arm();
+        let mut world = mir2_world_bevy::World::new(200, 200);
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 10, 10)),
+            mir2_world_bevy::MirrorUpsert::Inserted,
+            "前置：镜像观察者插入"
+        );
+        arm_cross(&mut world); // MIRROR route (0,900)→zone1 + sink + begin_tick(0)
+        let mut online = OnlineRegistry::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        let (g, mut rx) = gates();
+        let d0 = delivered();
+        world.disconnect("b").expect("b 离世");
+        let sent = drain_depart_frames(&mut world, &online, &g);
+        assert_eq!(sent, 0, "本地无观察者（MIRROR 是镜像）");
+        assert_eq!(delivered() - d0, 1, "第七面必须投递（delivered +1）");
+        assert_eq!(drain_cross(&g), 1, "T+1 排水 1 帧");
+        let expected = downlink::disappear_frame(b);
+        let mut got: Option<Vec<u8>> = None;
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            if socket == 900 {
+                got = Some(body);
+            }
+        }
+        assert_eq!(
+            got.expect("跨区帧必须到达 socket 900"),
+            expected,
+            "跨区 body 必须与本地路径同一构造（逐字节）"
+        );
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑦**：镜像观察者无 route ⇒ `unroutable +1`、不投递。
+    #[test]
+    fn depart_frames_route_none_counts_unroutable() {
+        let _g = arm();
+        let mut world = mir2_world_bevy::World::new(200, 200);
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 10, 10)),
+            mir2_world_bevy::MirrorUpsert::Inserted
+        );
+        // 装 sink 但**不**给 MIRROR 设 route（对比 `arm_cross`）。
+        let router = std::sync::Arc::new(crate::zone_router::ZoneRouter::new());
+        let _ = router.assign(0, 900, zone1());
+        let mb = std::sync::Arc::new(crate::cross_zone_frames::CrossZoneMailboxes::new(2, 64));
+        crate::cross_zone_frames::install(
+            std::sync::Arc::clone(&mb),
+            router,
+            crate::zone_router::HOST_ZONE,
+        );
+        crate::cross_zone_frames::begin_tick(0);
+        let mut online = OnlineRegistry::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        let (gates_map, _rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        world.disconnect("b").expect("b 离世");
+        let _ = drain_depart_frames(&mut world, &online, &gates_map);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (0, 1),
+            "route=None ⇒ delivered+0 / unroutable+1（实际 {dd}/{du}）"
+        );
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑦**：WRN 限流纯逻辑——≤1 条/分钟；被抑制的是 **WRN 条数**。
+    #[test]
+    fn depart_warn_limiter_one_per_minute() {
+        let mut l = DepartWarnLimiter::new();
+        assert_eq!(l.should_log(0), Some(0), "首次必放行");
+        assert_eq!(l.should_log(1_000), None);
+        assert_eq!(l.should_log(2_000), None);
+        assert_eq!(l.suppressed(), 2);
+        assert_eq!(l.should_log(59_999), None);
+        assert_eq!(l.suppressed(), 3);
+        assert_eq!(l.should_log(60_000), Some(3), "跨分钟放行并带上抑制数");
+        assert_eq!(l.suppressed(), 0);
+        assert_eq!(l.should_log(60_001), None);
+    }
+
+    /// **P1 回归（0c/opc-27 复核 2026-11-23）**：抑制数是**日志指标**，不受 `SLICING_ENABLED`
+    /// 门控——单区窗口也要能从 TSV 读出（实测单区 `hin-mv-n1` 13,723 行/165s、1z 19,935 行）。
+    /// 回退成门控版 ⇒ 这些窗口计数恒 0 ⇒ 本用例红。
+    #[test]
+    fn depart_wrn_suppressed_count_readable_with_slicing_off() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(false);
+        let before = perf_counters::depart_wrn_suppressed();
+        perf_counters::note_depart_wrn_suppressed();
+        perf_counters::note_depart_wrn_suppressed();
+        let after = perf_counters::depart_wrn_suppressed();
+        perf_counters::set_slicing_enabled(true);
+        assert!(
+            after >= before + 2,
+            "slicing off 时抑制数也必须累加（before={before}, after={after}）"
+        );
+    }
+
+    /// **L2-5 ⑦ 七面恒等式**：六面 + 第七面各触发一次 ⇒
+    /// `七面合计 == delivered+unroutable+overflow`，六面小计只含六面。
+    #[test]
+    fn seven_face_identity_holds_after_all_faces() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, _rx) = gates();
+        fire_refmsg(&world, &online, &g);
+        fire_run_frames(&world, &online, &g);
+        fire_npc_merchant(&world, &online, &g);
+        fire_feature_changed(&world, &online, &g);
+        fire_mountride(&world, &online, &g);
+        fire_merchant_disappear(&world, &online, &g);
+        // 第七面：另一个世界（离开者 b + 镜像观察者 MIRROR，挂 route）。
+        let mut w2 = mir2_world_bevy::World::new(200, 200);
+        w2.open_session("b");
+        let b = w2
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        assert_eq!(
+            w2.upsert_mirror(spec(MIRROR, 10, 10)),
+            mir2_world_bevy::MirrorUpsert::Inserted
+        );
+        w2.set_mirror_route(
+            MIRROR,
+            Some(mir2_world_bevy::MirrorRoute {
+                line: 0,
+                socket: 900,
+            }),
+        );
+        let mut online2 = OnlineRegistry::new();
+        online_set(
+            &mut online2,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        w2.disconnect("b").expect("b 离世");
+        let _ = drain_depart_frames(&mut w2, &online2, &g);
+        let six: u64 = ALL
+            .iter()
+            .map(|s| perf_counters::cross_recipient_by_surface(*s))
+            .sum();
+        let depart = perf_counters::cross_recipient_depart_frames();
+        let buckets = delivered()
+            + unroutable()
+            + perf_counters::cross_recipient_outcome(
+                perf_counters::CrossRecipientOutcome::Overflow,
+            );
+        assert_eq!(six + depart, buckets, "七面合计必须等于三桶之和");
+        assert_eq!(perf_counters::cross_recipient_seven_total(), buckets);
+        assert_eq!(depart, 1, "第七面 1 次");
+        assert_eq!(delivered(), 7, "六面 + 第七面各 1 次 ⇒ delivered=7");
+        crate::cross_zone_frames::uninstall();
+    }
+}
+
+/// **L2-5 ⑤/⑦ writer 列对齐**：按**列名**读回 `write_tick` 的行，断言 ⑤/⑦ 值在正确列。
+///
+/// 红检：把 vals 里的 ⑤/⑦ 块与 handoff/zone 块对调（本次修复前的形态）⇒ 各断言红。
+#[cfg(test)]
+mod perf_writer_alignment_tests {
+    use super::*;
+    use perf_counters::CrossRecipientOutcome as O;
+    use perf_counters::CrossRecipientSurface as S;
+
+    #[test]
+    fn write_tick_columns_align_with_header() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(true);
+        perf_counters::reset_cross_recipient_missing_for_tests();
+        let path =
+            std::env::temp_dir().join(format!("mir2_perf_writer_{}.tsv", std::process::id()));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        // 基线行：把 handoff 的 `HANDOFF_LAST` 与各 `swap(0)` 计数对齐到当前全局值
+        // （避免同进程别的用例留下的增量混进下一行）。
+        perf_counters::write_tick();
+        // 7 次 incidence：六面各 1 + 第七面 1；桶 5/1/1。
+        perf_counters::note_cross_recipient_outcome(S::RefMsg, O::Delivered);
+        perf_counters::note_cross_recipient_outcome(S::RunFrames, O::Unroutable);
+        perf_counters::note_cross_recipient_outcome(S::NpcMerchant, O::Overflow);
+        perf_counters::note_cross_recipient_outcome(S::FeatureChanged, O::Delivered);
+        perf_counters::note_cross_recipient_outcome(S::MountRide, O::Delivered);
+        perf_counters::note_cross_recipient_outcome(S::MerchantDisappear, O::Delivered);
+        perf_counters::note_cross_recipient_outcome(S::DepartFrames, O::Delivered);
+        // **P2**：handoff/zone/own 用**互异非零**值（11/22/33/44），挡住「zone 三列 ↔
+        // own 两列」或 handoff 内部再顺序弄错——全 0 的尾部对任何换位都不敏感。
+        for _ in 0..11 {
+            mir2_world_bevy::mirror_metrics::note_handoff_offered();
+        }
+        for _ in 0..22 {
+            let _ = perf_counters::note_zone_cmd_unsupported(0);
+        }
+        for _ in 0..33 {
+            mir2_world_bevy::mirror_metrics::note_mirror_own_segment_id();
+        }
+        for _ in 0..44 {
+            mir2_world_bevy::mirror_metrics::note_handoff_fresh_own_segment();
+        }
+        perf_counters::write_tick();
+        let text = std::fs::read_to_string(&path).expect("read perf tsv");
+        perf_counters::reset_writer_for_tests();
+        let _ = std::fs::remove_file(&path);
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().expect("header").split('\t').collect();
+        let _baseline = lines.next().expect("baseline row");
+        let row: Vec<&str> = lines.next().expect("row").split('\t').collect();
+        let idx = |name: &str| header.iter().position(|h| *h == name).expect(name);
+        let val = |name: &str| row[idx(name)].parse::<u64>().expect(name);
+        assert_eq!(val("cross_recipient_refmsg"), 1);
+        assert_eq!(val("cross_recipient_run_frames"), 1);
+        assert_eq!(val("cross_recipient_npc_merchant"), 1);
+        assert_eq!(val("cross_recipient_feature_changed"), 1);
+        assert_eq!(val("cross_recipient_mountride"), 1);
+        assert_eq!(val("cross_recipient_merchant_disappear"), 1);
+        assert_eq!(val("cross_recipient_missing"), 6, "六面小计");
+        assert_eq!(val("cross_recipient_depart_frames"), 1, "第七面");
+        assert_eq!(val("cross_recipient_seven_total"), 7, "七面合计");
+        assert_eq!(val("cross_recipient_delivered"), 5);
+        assert_eq!(val("cross_recipient_unroutable"), 1);
+        assert_eq!(val("cross_frame_queue_overflow"), 1);
+        assert_eq!(val("depart_wrn_suppressed"), 0);
+        // **P2**：尾部三块按列名钉值（表头顺序 = 11 → 22 → 33 → 44；换位即红）。
+        assert_eq!(val("handoff_offered"), 11, "handoff 11 列");
+        assert_eq!(val("zone_cmd_unsupported"), 22, "zone-k 3 列");
+        assert_eq!(val("mirror_own_segment_ids"), 33, "own-segment 2 列");
+        assert_eq!(val("handoff_fresh_own_segment"), 44, "own-segment 2 列");
     }
 }
 

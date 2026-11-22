@@ -27,6 +27,11 @@
   python -I -B tools/botload/perf_tsv_summary.py --selftest
 
 退出码：0 = 摘要完整；2 = 输入不可判（缺列/无行/宽不一/JSON 坏/缺 report），**fail-closed**。
+
+**旧产物警告（2026-11-23）**：writer 修复（vals 与表头列名对齐）**之前**的 perf TSV，按列名读在错位段
+之后是错的；受影响列（⑤ outcome、handoff/zone/own-segment，以及 legacy 七面）必须先用
+``tools/hygiene/tsv_recompute_legacy.py --tsv <perf_counters.tsv>`` 按**旧 vals 位置**回算。
+本脚本的 legacy 分支只保证六面 / ``cross_recipient_missing``（错位段之前）与「seven = 六面」。
 """
 import argparse
 import json
@@ -43,6 +48,10 @@ CROSS_COLS = [
     "cross_recipient_merchant_disappear",
 ]
 TOTAL_COL = "cross_recipient_missing"
+# **L2-5 ⑦**：第七面（离世帧）与七面合计；`missing` 仍是六面口径（10.004% 只与它比）。
+DEPART_COL = "cross_recipient_depart_frames"
+SEVEN_COL = "cross_recipient_seven_total"
+WRN_SUPP_COL = "depart_wrn_suppressed"
 # **L2-5 ⑤**：六面未命中的投递结果三桶（构造保证 delivered+unroutable+overflow == 六面合计）。
 OUTCOME_COLS = [
     "cross_recipient_delivered",
@@ -129,6 +138,7 @@ def _read_tsv(path):
     optional += [c for c in OUTCOME_COLS if c in header]
     optional += [c for c in DIAG_COLS if c in header]
     optional += [c for c in COST_COLS if c in header]
+    optional += [c for c in (DEPART_COL, SEVEN_COL, WRN_SUPP_COL) if c in header]
     want = REQUIRED + optional
     idx = {name: header.index(name) for name in want}
     out = {name: [] for name in want}
@@ -224,18 +234,44 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
             "six_sum": cross["total"],
             "first_bad_row": first + 1,
         }
-    # **L2-5 ⑤**：三桶 + 恒等式（只在三列齐全时校验；旧产物缺列 ⇒ absent，不判错）。
+    # **L2-5 ⑦**：七面口径。`missing` 仍是六面（历史 10.004% 只与它比）；第七面与七面合计单列。
+    depart = sum(perf[DEPART_COL]) if DEPART_COL in perf else None
+    seven = (
+        sum(perf[SEVEN_COL])
+        if SEVEN_COL in perf
+        else (cross["total"] + (depart or 0))
+    )
+    # **L2-5 ⑤/⑦**：三桶 + 恒等式（只在三列齐全时校验；旧产物缺列 ⇒ absent，不判错）。
     outcome = None
     if all(c in perf for c in OUTCOME_COLS):
         outcome = {c: sum(perf[c]) for c in OUTCOME_COLS}
         outcome["total"] = sum(outcome[c] for c in OUTCOME_COLS)
         # **窗口合计**校验：跨线程 increment（区 k）与 `write_tick` 的逐行 swap 可能错一拍，
-        # 但每个 incidence 同时给「六面」与「一个结果桶」各 +1 ⇒ **窗口合计严格相等**。
-        if outcome["total"] != cross["total"]:
-            raise InputError(
-                "三桶恒等式破坏（窗口合计）：delivered+unroutable+overflow=%d != 六面=%d"
-                % (outcome["total"], cross["total"])
-            )
+        # 但每个 incidence 同时给「一个面」与「一个结果桶」各 +1 ⇒ **窗口合计严格相等**。
+        if SEVEN_COL in perf:
+            # 七面产物：`seven_total == 三桶`；且 `seven_total == 六面小计 + 第七面`。
+            for i in range(rows):
+                sv = perf[SEVEN_COL][i]
+                six = sum(perf[c][i] for c in CROSS_COLS)
+                buckets = sum(perf[c][i] for c in OUTCOME_COLS)
+                if sv != 0 and six != 0 and sv != buckets:
+                    raise InputError(
+                        "七面恒等式破坏（第 %d 行）：seven_total=%d != delivered+unroutable+overflow=%d"
+                        % (i + 1, sv, buckets)
+                    )
+                if DEPART_COL in perf and sv != six + perf[DEPART_COL][i]:
+                    raise InputError(
+                        "七面合计 != 六面小计 + 第七面（第 %d 行）：seven=%d six=%d depart=%d"
+                        % (i + 1, sv, six, perf[DEPART_COL][i])
+                    )
+        else:
+            # ⑤-era 产物（有三桶、无第七面）：按六面口径校验；注意 ⑤ 加列时的历史
+            # writer 有列错位，这类产物本身不可信，恒等式破坏即 fail-closed。
+            if outcome["total"] != cross["total"]:
+                raise InputError(
+                    "三桶恒等式破坏（窗口合计）：delivered+unroutable+overflow=%d != 六面=%d"
+                    % (outcome["total"], cross["total"])
+                )
     present_diag = [c for c in DIAG_COLS if c in perf]
     cost = None
     if all(c in perf for c in COST_COLS):
@@ -251,8 +287,11 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
         "perf_tsv": os.path.abspath(perf_path),
         "tick_rows": rows,
         "cross_recipient_missing": cross,
+        "cross_recipient_depart_frames": depart,
+        "cross_recipient_seven_total": seven,
         "cross_recipient_outcome": outcome,
         "cross_frame_diag": ({c: sum(perf[c]) for c in present_diag} if present_diag else None),
+        "depart_wrn_suppressed": (sum(perf[WRN_SUPP_COL]) if WRN_SUPP_COL in perf else None),
         "cross_enqueue": cost,
         "total_column_mismatch": total_mismatch,
         "region_barrier_us": {
@@ -324,19 +363,33 @@ def print_summary(s):
             " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS),
         )
     )
+    six = cross["total"]
+    depart = s.get("cross_recipient_depart_frames")
+    seven = s.get("cross_recipient_seven_total")
+    if depart is None and seven is None:
+        print("cross windows: missing(六面)=%d | 第七面 absent（旧产物；七面合计=六面）" % six)
+    else:
+        print(
+            "cross windows: missing(六面)=%d | depart_frames=%s | seven_total=%s"
+            "（10.004%% 只对六面小计）"
+            % (six, "absent" if depart is None else depart,
+               "absent" if seven is None else seven))
     oc = s.get("cross_recipient_outcome")
     if oc:
         print(
-            "cross outcome: delivered=%d unroutable=%d overflow=%d | 六面合计=%d（恒等式 OK）"
+            "cross outcome: delivered=%d unroutable=%d overflow=%d | seven_total=%d"
+            "（= 六面 %d + 第七面 %s；恒等式 OK）"
             % (oc["cross_recipient_delivered"], oc["cross_recipient_unroutable"],
-               oc["cross_frame_queue_overflow"], cross["total"]))
+               oc["cross_frame_queue_overflow"], seven,
+               six, "absent" if depart is None else depart))
     else:
         print("cross outcome: absent（旧二进制产物，无三桶列）")
     dg = s.get("cross_frame_diag")
     if dg:
-        print("cross diag: dup=%d drop_closed=%d zone_unknown=%d" % (
+        supp = s.get("depart_wrn_suppressed") or 0
+        print("cross diag: dup=%d drop_closed=%d zone_unknown=%d | depart_wrn_suppressed=%d" % (
             dg["cross_frame_dup"], dg["cross_frame_drop_closed"],
-            dg["cross_recipient_zone_unknown"]))
+            dg["cross_recipient_zone_unknown"], supp))
     ce = s.get("cross_enqueue")
     if ce:
         per = "%.3f" % ce["us_per_event"] if ce["us_per_event"] is not None else "n/a"
@@ -430,7 +483,9 @@ def selftest():
         header = ["region_barrier_us"] + list(reversed(CROSS_COLS)) + [
             "region_barrier_total_us", "inbound_enqueued", "inbound_drained", "inbound_carry",
             "inbound_budget_hit", "refmsg_calls", "refmsg_targets", TOTAL_COL,
-        ] + list(OUTCOME_COLS) + list(DIAG_COLS) + list(COST_COLS) + list(reversed(ZONE_K_COLS))
+        ] + list(OUTCOME_COLS) + list(DIAG_COLS) + list(COST_COLS) + [
+            DEPART_COL, SEVEN_COL, WRN_SUPP_COL,
+        ] + list(reversed(ZONE_K_COLS))
         row = {c: 0 for c in header}
         row["region_barrier_us"] = 120
         row["region_barrier_total_us"] = 240
@@ -442,12 +497,16 @@ def selftest():
         row["cross_recipient_mountride"] = 2
         row[TOTAL_COL] = 3  # = 1 + 2
         # ⑤ 三桶：每行 delivered(2)+unroutable(1)+overflow(0) == 六面(3)
-        row["cross_recipient_delivered"] = 2
+        # ⑦：六面 3 + 第七面 1 = 七面 4；三桶 3+1+0 = 4。
+        row["cross_recipient_delivered"] = 3
         row["cross_recipient_unroutable"] = 1
         row["cross_frame_queue_overflow"] = 0
+        row[DEPART_COL] = 1
+        row[SEVEN_COL] = 4
         row["cross_frame_dup"] = 0
         row["cross_frame_drop_closed"] = 0
         row["cross_recipient_zone_unknown"] = 0
+        row[WRN_SUPP_COL] = 0
         row["cross_enqueue_us"] = 100
         row["cross_enqueue_events"] = 4
         row["zone_cmd_unsupported"] = 3
@@ -486,8 +545,10 @@ def selftest():
         expect("窗口 ticks=2 时长=0.4s" in first, "首屏必须带窗口（ticks/时长）：%s" % first)
         expect("= 60.000%" in first, "占比 = 6/10：%s" % first)
         expect("zone-k 缺口" in buf.getvalue(), "④a 列必须打印")
-        expect("delivered=4 unroutable=2 overflow=0" in buf.getvalue(),
+        expect("delivered=6 unroutable=2 overflow=0" in buf.getvalue(),
                "⑤ 三桶必须同屏打印：%s" % buf.getvalue())
+        expect("missing(六面)=6 | depart_frames=2 | seven_total=8" in buf.getvalue(),
+               "⑦ 六面/第七面/七面合计必须同屏：%s" % buf.getvalue())
         expect("恒等式 OK" in buf.getvalue(), "⑤ 恒等式必须显式展示")
         expect("cross enqueue: events=8 total_us=200 per_event_us=25.000" in buf.getvalue(),
                "⑤ 每事件成本必须打印：%s" % buf.getvalue())
@@ -522,18 +583,19 @@ def selftest():
         # 负例 2b（⑤）：三桶与六面不等 ⇒ rc=2（构造保证，破坏即缺陷）
         broke = os.path.join(td, "identity_broke.tsv")
         rb = [dict(row), dict(row)]
-        rb[0]["cross_recipient_delivered"] = 1  # 1+1+0=2 != 3
+        rb[0]["cross_recipient_delivered"] = 1  # 1+1+0=2 != 七面 4
         _write(broke, _tsv(header, [[r[h] for h in header] for r in rb]))
         try:
             summarize(broke)
             expect(False, "三桶恒等式破坏必须 InputError")
         except InputError as e:
-            expect("三桶恒等式破坏" in str(e), "必须点名恒等式：%s" % e)
+            expect("七面恒等式破坏" in str(e), "必须点名恒等式：%s" % e)
 
         # 负例 2c（⑤）：旧产物无三桶列 ⇒ absent（不判错）
         legacy = os.path.join(td, "legacy_no_outcome.tsv")
         lh = [h for h in header
-              if h not in OUTCOME_COLS and h not in DIAG_COLS and h not in COST_COLS]
+              if h not in OUTCOME_COLS and h not in DIAG_COLS and h not in COST_COLS
+              and h not in (DEPART_COL, SEVEN_COL, WRN_SUPP_COL)]
         _write(legacy, _tsv(lh, [[r[h] for h in lh] for r in [dict(row), dict(row)]]))
         sl = summarize(legacy)
         expect(sl["cross_recipient_outcome"] is None, "旧产物应 absent")
