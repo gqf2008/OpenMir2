@@ -299,3 +299,121 @@ login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox`（`100
 - `docs/issues/l2-5-step5-cross-recipient-frames-design-20261122.md`（⑤ 设计 v3，在 `card/l25-step5`）。
 - `docs/issues/capacity-curve-release-20261121.md`（986/2000 实测与扇出读数）。
 - `docs/AGENTS.project.md`（判据分级 R/L、五门禁、收尾 DoD）。
+
+---
+
+## 10. 热路径 O(n) 扫描清单（只读扫描；未编译 / 未起栈 / 未测；2026-11-23）
+
+> **任务口径**（opc-27 限定单）：扫 `sim_loop` 主 tick 与 `tick_phase1/phase2` 内**每事件路径**
+> （移动 / 攻击 / 物品 / NPC 商人 / 广播收件人选择），以及查询接口 `OnlineRegistry` /
+> `DisplayTable` / `ground_sessions`(=`HashMap<String,SessionGround>`) / `World.entities`。
+> 本节**只给事实与排序**，不评估工程日（§0–§9 的评估冻结不动），也**不给改法**。
+> 行号 = 本 worktree `03b103c25` 的 `lib.rs`（未特别标注时）。
+
+### 10.1 口径
+
+- **n** = 每区在线玩家数：`OnlineRegistry.entries` 只装玩家（`by_actor`/`by_chr` 是它的索引）。
+- **E** = 区内 `want_ref_msg` 实体数：`iter_send_ref_targets()` 的扫描面（玩家 + 可被看见的怪）。
+- **「每 tick × 每事件」**：该调用是否在 tick 内按事件/按会话重复。
+- 扫描规模是**静态估**（按 n/E 的符号复杂度），没有真实时长；标「需测」的是无法静态定量的。
+- 未编译、未起栈、未测。
+
+### 10.2 顶层事实：这是**一类**缺陷，不是一处
+
+1. **O(1) 索引已存在，热路径未用**：
+   - `OnlineRegistry` 同时持有 `Vec<OnlineEntry>`（插入序，唯一真源）与 `by_actor:HashMap<i64,usize>`、
+     `by_chr:HashMap<String,usize>`；`find_by_actor`(24792)/`find_by_chr`(24805) 是 **O(1)**。
+     但非测试代码仍有 **44 处 `find_linear_chr`**（字符串线性扫描）+ **64 处 `find_linear_actor`**
+     （id 线性扫描）。`find_linear_*` 是**显式探针**（注释 24817：「只包一个计数，不得顺手改成索引」，
+     计数键 `CHR_LINEAR`/`ACTOR_LINEAR`）。
+   - `SessionRegistry` 有 `get`(`crates/world-bevy/src/session.rs:236`)/`get_mut`(:241)（O(1)，卡
+     `openmir2-p1-hostinbound-index` 已接 `open`），但 `drain_login_tail` 仍 `sessions.iter().find(name)`(21414)。
+2. **每 tick 有多处 O(n²) 扫描环**（A 组：4 个满 n²、2 个 n²/5；都是先收集/排序全部会话名，再对每个名字做一次 O(n) 线性查表）——
+   这是结构性缺陷，随 n 平方增长。
+3. **移动命令每事件 2 次 O(n) 字符串线性扫描**：入口 `handle_move_cmd`(14361) + `send_good_tick`(20108)；
+   后者调用时 `entry` 已在 `handle_move_cmd` 作用域内（重复取同一条）。
+4. **投递段已用 O(1)，但同类未统一**：`send_ref_msg_to_targets`(19899) 用 `find_by_actor`（O(1)）；
+   而 combat/buff/aoi 的**观察者投递**仍用 `find_linear_actor`（下表 B 组）——同一项目两条路径口径不一致。
+5. `DisplayTable.get`(`bins/game-svr/src/downlink.rs:315`，`by_id:HashMap<i32,usize>`) 与
+   `World.entities.get`(`crates/world-bevy/src/ecs.rs:560`，dense 数组/sparse 表，按 i32) 都是 **O(1)**，
+   **不在缺陷面**。
+
+### 10.3 排序表（按预计贡献从高到低）
+
+> 「键」：str = 字符串相等；id = i32 相等。「同款」= 与 `find_linear_chr` 同款（字符串线性扫描）。
+
+**A 组：每 tick × O(n²)（结构性，最陡）**
+
+| 排名 | 函数 : 行（循环 → 扫描） | 操作 | 数据结构 / 复杂度 | 每 tick × 每事件 | 键 | 平均扫描规模 | 同款 | 备注 |
+|---|---|---|---|---|---|---|---|---|
+| A1 | `drain_aoi_downlink` 20668(`for sess`) → 20693 | `find_linear_chr(&sess.chr_name)` | `Vec` 线性 / **O(n²)**（约 n/5 会话/tick，search 门见 20685-20689） | 每 tick（HostAoiDownlink） | str | ≈ n²/5 compares/tick（n=1e3≈2e5；1e4≈2e7） | **是** | 该处已有 `HostAoiAppearSelect` 探针包裹 |
+| A3 | `drain_stamina` 22953(`for name in names`) → 23050 | `find_linear_chr(&name)` | 同上 **O(n²)** | 每 tick（HostRecovery 经 run_downlinks） | str | ≈ n² | **是** | |
+| A4 | `drain_player_need_recheck_with_magic` 28877 → 28878 | `find_linear_chr(&name)` | 同上 **O(n²)** | 每 tick（HostPlayerRun） | str | ≈ n² | **是** | |
+| A5 | `drain_player_game_gold` 29609 → 29610 | `find_linear_chr(&name)` | 同上 **O(n²)** | 每 tick（HostPlayerRun） | str | ≈ n² | **是** | |
+| A6 | `drain_player_revival_with_magic` 29817 → 29818 | `find_linear_chr(&name)` | 同上 **O(n²)** | 每 tick（HostPlayerRun） | str | ≈ n² | **是** | |
+| A7 | `drain_aoi_events` 20837(`for sess`) → 20853 | `find_linear_chr(&sess.chr_name)` | 同上 **O(n²)** | 每 tick（HostFrames 经 run_downlinks） | str | ≈ n²/5（同 A1 的 search 门） | **是** | 20819 另有 `find_linear_actor`(event_hides) |
+
+**B 组：每 tick × 每事件 / 每帧的 O(n) 观察者投递（id 线性）**
+
+| 排名 | 函数 : 行 | 操作 | 复杂度 | 每 tick × 每事件 | 键 | 扫描规模 | 同款 | 备注 |
+|---|---|---|---|---|---|---|---|---|
+| B0 | `flush_run_frames` 29426(`for actor_id in actors`) → 29432 / 29477 | `find_linear_actor`（每个本 tick 有帧的 actor + 每个 ref_msg 收件人） | O(k×n)，k=本 tick 有帧的 actor/收件人数 | 每 tick（HostPlayerRun），按**有帧 actor** | id | k×n（k 取决于本 tick 活动，**需测**） | 否（id 版） | `actors=frames.pending_actors()`，非全会话；29477 另叠加观察者×n |
+| B1 | `drain_combat_downlink` 22248 / 22289 / 22333 / 22349 | `find_linear_actor`（受击者 / 观察者 / 死亡目标 / 经验者） | O(k×n)，k=该事件收件人/观察者数 | 每 tick，每战斗/死亡/经验记录 | id | k×n（k≈视野内玩家数，需测） | 否（id 版） | 2 处走 `ref_msg_cache::targets` 后逐 observer 再线性查 |
+| B2 | `drain_buff_downlink` 21676 / 21721 / 21769 / 21787 | `find_linear_actor`（recalc / 657 / sysmsg / hp-mp） | O(k×n) | 每 tick，每 buff 记录 | id | k×n | 否 | |
+| B3 | `drain_aoi_disappear_with_counts` 20478、`drain_depart_frames` 20547、`drain_aoi_events` 20819 | `find_linear_actor(observer)` | O(k×n) | 每 tick，每出现/消失/离世事件 | id | k×n | 否 | |
+| B4 | `drain_monster_ref_msgs` 28518 区（3 处）、`drain_skill_train_events` 15115 区（2 处）、`drain_mag_struck_b2` 15750 区 | `find_linear_actor` | O(k×n) | 每 tick，对应记录非空时 | id | k×n | 否 | 怪/技能/法术受击扇出 |
+| B5 | 其它 `find_linear_actor` 单点（`drain_weapon_durability`/`drain_attack_weapon_wear`/`drain_close_health_for`/`drain_death_use_item_drops`/`drain_levelup_*`/`drain_mag_healing_delivery`/`drain_party_death_events`/`drain_slave_mutiny_downlink`/`drain_yedo_events`/`drain_run_state_expiries`/`flush_healthspell_slots`/`b3_outcome_frames`/`push_charstatuschanged*`/`broadcast_*` 等，共约 40 处） | `find_linear_actor` | O(n) 每次 | 每 tick（视记录）+ 每广播 | id | n | 否 | 逐条见 §8 的函数分布 |
+
+**C 组：每事件 O(n) 字符串（命令路径）**
+
+| 排名 | 函数 : 行 | 操作 | 复杂度 | 每 tick × 每事件 | 键 | 扫描规模 | 同款 | 备注 |
+|---|---|---|---|---|---|---|---|---|
+| C1 | `handle_move_cmd` 14361 | `find_linear_chr(chr_name)` | O(n) | **每移动事件**（实测主导入站） | str | n（≈150 moves/tick×n） | **是** | peer 实测 MoveRest 30.4/42.3ms/tick 的候选面 |
+| C2 | `send_good_tick` 20108 | `find_linear_chr(chr_name)` | O(n) | **每移动事件**（+GD） | str | n | **是** | 与 C1 同一事件内**第二次**取同一 `entry` |
+| C3 | `handle_hit_cmd` 14877 | `find_linear_chr(chr_name)` | O(n) | 每攻击事件 | str | n | **是** | |
+| C4 | `handle_inbound_cmd` 5924 及分派到的 `handle_ground_cmd` 6515 / `handle_deal_cmd` 6761 / `handle_bag_cmd_with_magic` 7091 / `handle_selloff_cmd` 8903 / `handle_shop_cmd_inner` 9154 / `handle_storage_cmd` 10321 / `handle_eat_cmd` 12555 / `handle_click_npc_cmd` 8096 / `handle_party_cmd` 5307 / `handle_query_*` | `find_linear_chr(chr_name)` | 每条命令 O(n) | 每命令事件（频次低于移动） | str | n | **是** | 每个 handler 入口各一次 |
+| C5 | `handle_spell_cmd_with_magic` 16287 / `finish_spell_tail_with` 16045 | `find_linear_chr` + 3 处 `find_linear_actor` | O(k×n) | 每施法事件 | str/id | n | **是（chr 处）** | |
+| C6 | `drain_login_tail` 21396 区 → 21409(chr) + 21414(`sessions.iter().find`) | `find_linear_chr` + `Vec` 线性 | O(pending×n) | 每 tick（有登录尾时） | str | pending×n（pending 小） | **是**（21414 是 sessions 名线性，且 `sessions.get` 已存在） | |
+
+**D 组：低频 O(n)/O(E)（不在每 tick 路径，供完整对照）**
+
+| 排名 | 函数 : 行 | 操作 | 复杂度 | 触发 | 键 | 规模 | 同款 | 备注 |
+|---|---|---|---|---|---|---|---|---|
+| D1 | `OnlineRegistry::set` 24757 | `entries.iter_mut().find(name)` | O(n) | 每登录/离世（`online_set`） | str | n | **是** | 随后 `rebuild()` O(n) |
+| D2 | `online_find_for_kick` 24919 | `online.iter().filter` + `seen_gate` 线性 | O(n×gates) | 每 `KickAccount`（顶号/踢） | str(account,忽略大小写)/int | n | 是 | 已有 `KICK_SCANS` 计数 |
+| D3 | `party_play_object_by_name`(`crates/world-bevy/src/party.rs:434-441`) → 440 | `entities.iter_ref().find(race==Play && name==name && !ghost)` | O(E) | 每次组队按名找人 | str | E | **是** | oracle 同款线性（`GetPlayObject`） |
+| D4 | `guild` 名查 (`crates/world-bevy/src/guild.rs:1072/1077/1212/1222`) | `guilds.iter().find(name)` / `position(name)` | O(会数) | 每次行会命令 | str | 会数 | **是** | 低频 |
+| D5 | `handle_query_user_set_cmd` 7853 | `online.iter().any(name)` | O(n) | 每次 `CM_QUERYUSERSET` | str | n | **是** | oracle 函数体为空 |
+| D6 | `castle` 图名查 (`crates/world-bevy/src/castle.rs:3459`) | `maps.iter().position(name)` | O(图数) | 城堡操作 | str | 图数 | **是** | 低频 |
+
+**E 组：字符串键 Hash（不是 O(n)，是 O(key 长度) 哈希；供完整对照）**
+
+| 排名 | 位置 | 操作 | 复杂度 | 触发 | 键 | 备注 |
+|---|---|---|---|---|---|---|
+| E1 | `sessions.get`/`get_mut` / `ground_sessions.get`（约 420 处，含 `handle_move_cmd` 内 14421/14482/14516/14530） | `HashMap<String,_>` 取/改 | O(len) 哈希 + 相等 | 每事件多次 | str | 非 O(n)；移动路径每次事件多达 4 次字符串哈希 |
+
+### 10.4 不计入「查表缺陷」的 O(n)（说明，避免误读）
+
+- `hear_targets_at_scan`（`chat.rs:213-241`）`iter_send_ref_targets().filter(...).collect()` + `sort_unstable`
+  是 **AOI 收件人选择本体**，O(E) + O(k log k)；且 `ref_msg_cache` 500ms 缓存命中时**不扫**
+  （`cache_first_hit_does_not_scan` 用例）。它是「选择」不是「查表」，故不列缺陷；但它是走位扇出的候选面
+  （每次缓存刷新 O(E)）。
+- `drain_*` 里 `sessions.keys().cloned().collect()` + `names.sort()` 是 O(n log n) **确定性排序**（为帧序），
+  不是查表缺陷；缺陷在其后的 per-name 线性查表（A3–A6）。
+- `World::tick_phase1` 的怪 AI 按实体槽位序遍历 O(E) 是**仿真本体**，不是查询缺陷。
+- `aoi_show_targets`(20594) 遍历观察者自身 `visible_actors`，O(可见集)，与全局 n 无关。
+
+### 10.5 与实测的对应（事实；不下结论）与现存探针
+
+- peer 实测（1k，120s，两臂）：入站 98.9–99.9% 在移动；MoveRest 30.4/42.3ms/tick，格占用/格子更新/帧构造
+  合计 <0.15ms/tick；转身 ~255–282µs、行走 ~240–246µs；切片开关无可测差异。
+  → C1+C2（每次移动 **2 次 O(n) 字符串线性扫描**）落在 MoveRest 的候选面内；静态量级 ≈ 2×n×移动数/tick
+  （n=1e3、~150 移动/tick ≈ 3e5 compares/tick）。**需测**：以 `CHR_LINEAR` 计数与 `HostInbound` 探针核对。
+- A1 等每 tick O(n²) 与容量曲线「986 p99 47ms → 2000 p99 201ms、超线性」方向一致（仅三点，不宣称因果）。
+- 现存可机读探针/计数（无需新写即可对账）：
+  - `perf_counters::CHR_LINEAR` / `ACTOR_LINEAR`（`find_linear_*` 每次 +1），`CHR_INDEXED`/`ACTOR_INDEXED`
+    （`find_by_*` 每次 +1）—— 见 24793/24806/24821/24828。
+  - `REFMSG_TARGETS`（19894）、`KICK_SCANS`（24914）、`World::ref_msg_scan_total`（`note_ref_msg_scan` chat.rs:203）。
+  - tick_profile 段：`HostAoiAppearSelect`（20692-20711）专门计 A1 的选择段；`HostInbound` 计 C 组；
+    `HostPlayerRun`/`HostAoiDownlink`/`HostRecovery` 覆盖 A1、A3–A7 与 B0。
+- 本表**未**把「按名字收集再排序」的价格算进 A 组（只算其后的线性查表）；A 组的真实常数含两部分，**需测**。
