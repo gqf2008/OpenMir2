@@ -531,6 +531,11 @@ pub const ENV_MAX_HALO_BAND_ENTITIES: &str = "MIR2_MAX_HALO_BAND_ENTITIES";
 /// 其它取值、或单区/未设多区时置 `1` ⇒ 启动即拒绝（不静默忽略）。
 pub const ENV_ZONE_MIRROR: &str = "MIR2_ZONE_MIRROR";
 
+/// **L2-5 ③**：会话/宿主切片开关（`0`/未设 = 关；`1` = 开）。**与 `MIR2_ZONES` 解耦**：
+/// `MIR2_ZONES`/`MIR2_ZONE_MIRROR` 现有组合语义逐字节不变；切片是额外的一层，三条 fail-closed：
+/// `=1` 且 `MIR2_ZONES` 未设或 <2 区 ⇒ 拒绝；`=1` 且 `MIR2_ZONE_MIRROR≠1` ⇒ 拒绝；未设 ⇒ 一切照旧。
+pub const ENV_ZONE_SLICING: &str = "MIR2_ZONE_SLICING";
+
 /// **L2-4 段 6**：边界带实体数上限的缺省值（tick 0 启动门；超限拒绝启动）。
 pub const DEFAULT_MAX_HALO_BAND_ENTITIES: usize = 512;
 

@@ -11,6 +11,18 @@
 `OnlineRegistry` / `ground_sessions`；登录按坐标落到目标区；跨界移动走两阶段 handoff；出现/消失帧
 仍由**收件人区**发出（§7 口径不变）。
 
+### 0.1 开关语义（Leader 裁决：新开关，与 `MIR2_ZONES` 解耦）
+
+切片**不**绑到 `MIR2_ZONES` 上——现有全部多区用例（`l2_two_zone`、②的 `step2_*`、L2-4 的
+`MIR2_ZONES` 结构态）都是「N≥2 但玩家仍在区 0」，不能因为切片未实现就判启动失败。
+
+- **`MIR2_ZONE_SLICING`**（`0`/未设 = 关；`1` = 开），三条全部 fail-closed 并点名变量：
+  1. `=1` 且 `MIR2_ZONES` 未设或 <2 区 ⇒ 拒绝启动；
+  2. `=1` 且 `MIR2_ZONE_MIRROR≠1` ⇒ 拒绝启动（零闪烁与跨区可见都依赖镜像）；
+  3. 未设 ⇒ 一切照旧（现有 `MIR2_ZONES`/`MIR2_ZONE_MIRROR` 组合语义**逐字节不变**）。
+- 开关可叠加：`SLICING=1` 意味着 `ZONES≥2` 且 `MIRROR=1`；反向不成立。
+- N=1 判据的基线树保持干净（切片关 ⇒ 非 0 区仍是 stub World）。
+
 ## 1. 切什么（逐项：切 / 不切 / 暂不切）
 
 | 状态 | 现状（`sim_loop` 内） | 第③步 | 理由 |
@@ -199,6 +211,9 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
   面向 Owner 的"1 万在线验收通过"结论必须等该计数为 0**）；`departure_mark_held_past_cap` 恒 0；
   `mirror_shadowed_by_local` 恒 0（handoff 收敛兜底；恒 0 才说明时序设计成立，**不是牙**）；
 - **资源**：进程 RSS 与每区线程 CPU；登录成功率、登录→首帧时延；
+  **RSS 随区数 N 的伸缩（Leader 点名，可能是 1 万的真正瓶颈）**：采 `RSS(2 区) − RSS(1 区基线)`，
+  给出**每区地图网格 / 实体内存的粗估**（每区复制一份地图网格，N=8 可能翻数倍）——这条决定 1 万
+  要几个区、机器够不够；在 2 区冒烟里就采，不等 10k 长跑；
 - **稳定性（改成计数斜率，不用"无增长"这种不可判句）**：`mirror_ids` 数、`DepartureMarks` 数、
   `process_run_counts`、各 `pending` 表——**后 20min 斜率 ≈ 前 20min 斜率**（稳态），并报
   RSS 前/后 20min 斜率对比；看门狗 abort / `Barrier` 超时次数必须为 0。

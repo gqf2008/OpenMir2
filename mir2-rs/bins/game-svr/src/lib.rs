@@ -1028,6 +1028,67 @@ mod zone_wiring {
         Ok(on)
     }
 
+    /// **L2-5 ③**：解析 `MIR2_ZONE_SLICING`（`unset`/`0` ⇒ 关，`1` ⇒ 开；**fail-closed**）。
+    ///
+    /// 三条（错误文本一律点名相关变量）：
+    /// 1. `=1` 且 `MIR2_ZONES` 未设或只解析出 <2 区 ⇒ 拒绝（切片需要 ≥2 区）；
+    /// 2. `=1` 且 `MIR2_ZONE_MIRROR≠1` ⇒ 拒绝（零闪烁与跨区可见都依赖镜像）；
+    /// 3. 未设/`0` ⇒ 关，`MIR2_ZONES`/`MIR2_ZONE_MIRROR` 现有组合语义逐字节不变。
+    ///
+    /// # Errors
+    /// 空串/非 `0`/`1`；或上述两条前提不满足。
+    pub(super) fn plan_slicing(
+        slicing_raw: Option<&str>,
+        zone_count: Option<usize>,
+        mirror_enabled: bool,
+    ) -> Result<bool, String> {
+        let Some(raw) = slicing_raw else {
+            return Ok(false);
+        };
+        let text = raw.trim();
+        let on = match text {
+            "0" => false,
+            "1" => true,
+            "" => {
+                return Err(format!(
+                    "{} 为空（缺省关；=1 开、=0 关；需要 {} 解析出 >=2 区且 {}=1）",
+                    crate::zone::ENV_ZONE_SLICING,
+                    crate::zone::ENV_ZONES,
+                    crate::zone::ENV_ZONE_MIRROR
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "{}={raw} 不是 0/1（fail-closed；需要 {} 解析出 >=2 区且 {}=1）",
+                    crate::zone::ENV_ZONE_SLICING,
+                    crate::zone::ENV_ZONES,
+                    crate::zone::ENV_ZONE_MIRROR
+                ))
+            }
+        };
+        if on {
+            match zone_count {
+                Some(n) if n >= 2 => {}
+                _ => {
+                    return Err(format!(
+                        "{}={text} 但 {} 未设或只解析出 {} 个区：切片需要 >=2 区；为避免静默忽略，拒绝启动",
+                        crate::zone::ENV_ZONE_SLICING,
+                        crate::zone::ENV_ZONES,
+                        zone_count.map_or_else(|| "0".to_string(), |n| n.to_string())
+                    ))
+                }
+            }
+            if !mirror_enabled {
+                return Err(format!(
+                    "{}={text} 但 {} 不是 1：切片的零闪烁与跨区可见都依赖镜像；为避免静默忽略，拒绝启动",
+                    crate::zone::ENV_ZONE_SLICING,
+                    crate::zone::ENV_ZONE_MIRROR
+                ));
+            }
+        }
+        Ok(on)
+    }
+
     /// 装配决策：`MIR2_ZONES` 未设 ⇒ `Ok(None)`（原单线程路径）。
     ///
     /// 拒绝条件（全部 fail-closed，错误文本点名变量与原始值）：
@@ -1261,7 +1322,6 @@ fn spawn_zone_demux(
 #[allow(clippy::too_many_arguments)]
 fn spawn_minimal_zone(
     zone_id: zone::ZoneId,
-    map_count: usize,
     layout: Arc<zone::RegionLayout>,
     exchange: Arc<region_loop::HaloExchange>,
     barriers: Arc<region_loop::TickBarriers>,
@@ -1269,13 +1329,29 @@ fn spawn_minimal_zone(
     stop: Arc<std::sync::atomic::AtomicBool>,
     // **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`；关 ⇒ `run_zone_tick` 的 `mirrors` 为 false）。
     mirrors: bool,
+    // **L2-5 ③**：切片开关（`MIR2_ZONE_SLICING`）。开 ⇒ 本区建真 World（全部地图 + 每区 rng）。
+    slicing: bool,
+    // 全图尺寸表（切片时建真 World 用；stub 只用它的长度）。
+    map_sizes: Vec<(i32, i32)>,
+    // `MIR2_RNG_SEED`；切片时非 0 区用 `seed ⊕ zone` 派生（禁止与区 0 同 seed）。
+    rng_seed: Option<i32>,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
     std::thread::Builder::new()
         .name(format!("m2-zone-{}", zone_id.get()))
         .spawn(move || {
-            let mut world = mir2_world_bevy::World::with_maps(vec![(1, 1); map_count]);
+            // **L2-5 ③**：切片 ⇒ 真 World（全图网格 + 每区 rng）；否则保持 L2-4 的 stub。
+            let mut world = if slicing {
+                let mut w = mir2_world_bevy::World::with_maps(map_sizes.clone());
+                if let Some(seed) = rng_seed {
+                    let zone_index = i32::try_from(zone_id.get()).expect("区号 <= i32::MAX");
+                    w.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
+                }
+                w
+            } else {
+                mir2_world_bevy::World::with_maps(vec![(1, 1); map_sizes.len()])
+            };
             // **L2-5 ①**：本区独立 actor id 段（与区 0 及彼此不相交；须在首个实体之前）。
             world.set_id_base(zone_id_base(zone_id));
             let mut tick = 0u64;
@@ -2439,6 +2515,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
             mode.as_ref().map(|m| m.layout.zone_count()),
         )
         .map_err(anyhow::Error::msg)?;
+        // **L2-5 ③**：切片闸——与 `MIR2_ZONES`/`MIR2_ZONE_MIRROR` **解耦**，见 `plan_slicing`。
+        let slicing_raw = match std::env::var_os(zone::ENV_ZONE_SLICING) {
+            None => None,
+            Some(raw) => Some(raw.into_string().map_err(|_| {
+                anyhow::anyhow!("{} 不是合法 Unicode（fail-closed）", zone::ENV_ZONE_SLICING)
+            })?),
+        };
+        let slicing = zone_wiring::plan_slicing(
+            slicing_raw.as_deref(),
+            mode.as_ref().map(|m| m.layout.zone_count()),
+            mirror_enabled,
+        )
+        .map_err(anyhow::Error::msg)?;
         match mode {
             None => None,
             Some(mode) => {
@@ -2487,13 +2576,15 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         zone::ZoneId::new(u32::try_from(offset + 1).expect("区数 <= u32::MAX"));
                     spawn_minimal_zone(
                         zone_id,
-                        map_sizes.len(),
                         Arc::clone(&layout),
                         Arc::clone(&exchange),
                         Arc::clone(&barriers),
                         Arc::clone(&watch),
                         Arc::clone(&stop),
                         mirror_enabled,
+                        slicing,
+                        map_sizes.clone(),
+                        rng_seed,
                         rx,
                         ctl,
                     )?;
@@ -2516,6 +2607,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         "INF",
                         "L2-5 ② 镜像已启用（{}=1）：barrier1 之后、AOI 之前用邻区本 tick 快照刷新镜像（每区 id 段 ⇒ 同一全局 ActorId）",
                         zone::ENV_ZONE_MIRROR
+                    );
+                }
+                if slicing {
+                    glog!(
+                        "INF",
+                        "L2-5 ③ 切片已启用（{}=1）：非 0 区建真 World（{} 张地图，rng={}）",
+                        zone::ENV_ZONE_SLICING,
+                        map_sizes.len(),
+                        if rng_seed.is_some() {
+                            "seed ⊕ zone"
+                        } else {
+                            "缺省随机"
+                        }
                     );
                 }
                 Some(host)
@@ -117080,6 +117184,33 @@ mod zone_wiring_tests {
         );
         let ok = plan_zone_mode(true, None, None, &SIZES, Some("48")).expect("合法值");
         assert!(ok.is_none(), "未设 MIR2_ZONES ⇒ 不启用多区");
+    }
+
+    /// **L2-5 ③ 切片闸**：`unset`/`0` ⇒ 关；`1` 需 `MIR2_ZONES` 解析出 >=2 区**且**
+    /// `MIR2_ZONE_MIRROR=1`；非法值点名变量；与 `MIR2_ZONES` 解耦（前两变量的既有组合语义不变）。
+    ///
+    /// 红检：删两条前提检查之一 ⇒ 对应用例红；错误文本删任一变量名 ⇒ 点名断言红。
+    #[test]
+    fn slicing_gate_is_fail_closed_and_named() {
+        use crate::zone_wiring::plan_slicing;
+        assert!(!plan_slicing(None, None, false).expect("缺省关"));
+        assert!(!plan_slicing(Some("0"), Some(2), true).expect("显式关"));
+        assert!(!plan_slicing(Some(" 0 "), None, false).expect("空白 + 关"));
+        assert!(plan_slicing(Some("1"), Some(2), true).expect("两区 + 镜像 = 可开"));
+
+        for bad in ["", "2", "on"] {
+            let err = plan_slicing(Some(bad), Some(2), true).expect_err("非法值必须拒绝");
+            assert!(err.contains(zone::ENV_ZONE_SLICING), "点名 SLICING：{err}");
+            assert!(err.contains(zone::ENV_ZONES), "点名 ZONES：{err}");
+        }
+        for zone_count in [None, Some(0), Some(1)] {
+            let err = plan_slicing(Some("1"), zone_count, true).expect_err("<2 区必须拒绝");
+            assert!(err.contains(zone::ENV_ZONE_SLICING), "点名 SLICING：{err}");
+            assert!(err.contains(zone::ENV_ZONES), "点名 ZONES：{err}");
+        }
+        let err = plan_slicing(Some("1"), Some(2), false).expect_err("镜像关必须拒绝");
+        assert!(err.contains(zone::ENV_ZONE_SLICING), "点名 SLICING：{err}");
+        assert!(err.contains(zone::ENV_ZONE_MIRROR), "点名 MIRROR：{err}");
     }
 
     /// **L2-5 ② 镜像闸**：`unset`/`0` ⇒ 关；`1` 需 `MIR2_ZONES` 解析出 >=2 区；
