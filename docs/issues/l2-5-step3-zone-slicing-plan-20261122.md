@@ -652,3 +652,46 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 **待 ④/⑤**：①非 0 区命令接线；②区 0 的 span 问题（322 张未提图默认归区 0）；③静态实体「每区恰一份」
 （本次两区各装 322 张图，静态 NPC/怪同 id 各模拟一次 —— 内存 + 行为分歧）；④拆分
 `mirror_shadowed_by_local` 的「handoff 窗口」与「静态撞名」两类计数。
+
+### 12.4 段 4 补证（总监 2026-11-22 三点）
+
+**A. `cross_recipient_missing` 的口径与分母（防止误读成"丢了 N 帧"）**
+
+它是**广播收件人次**（每次广播 × 每个落在邻区、本地会话查表未命中的镜像收件人），**不是帧数**、
+也不是"只有 N 帧"。分母 = 同一投递段的候选收件人次 `refmsg_targets`（`send_ref_msg_to_targets`
+对**全部 `broadcast_ref_msg*` 面**统一计）与窗口（ticks/时长）：
+
+| 轮 | 窗口 | ticks | refmsg calls | refmsg targets（分母） | cross 合计 | 占比 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `2z-20261122-182056` | 446.1s | 2222 | 208,129 | 77,620,190 | 325,378 | 0.42% |
+| `2z-20261122-183911` | 446.1s | 2210 | 208,649 | 74,942,165 | 1,630,474 | 2.2% |
+| `2z-20261122-185934` | 444.8s | 2220 | 86,412 | 15,046,874 | 3,014,231 | 20.0% |
+| `2z-20261122-190833`（诊断，100 bots） | 70.6s | 344 | — | 50,189 | 5,515 | 11.0% |
+
+读法：表内三轮的 bots 位置/密度不同（前两轮边界带只有少量实体，第三轮铺满 108 格），所以占比
+在 0.4%–20% 间变化——**只能作 ④/⑤ 的同条件对照基线**，不能单独当"缺帧率"结论。
+
+**B. BotSrv 产物证据（被测/部署二进制自报 sha+mtime）**
+
+| 项 | 值 |
+| --- | --- |
+| 构建命令 | `dotnet build src/BotSrv/BotSrv.csproj -c Release -v q --nologo`（工作树根执行） |
+| 产物路径 | `<本工作树>/src/BotSrv/bin/Release/BotSrv.exe` |
+| sha256 | `10299a2c85189d8b9e6a96bf9af2e91946c9b445426542ed567a6c27fcff3a7d` |
+| mtime | 2026-11-22 **18:59**（与最后一次构建日志 `E:/UserTemp/s4c_botsrv_build2.log` 同时刻） |
+| 本轮读数所用 | 185934（起于 18:59:34）与 190833（起于 19:08:33）**都晚于该构建**；`load_gate` 的 `BOTGUARD_ENV` 行打印 `exe=<本工作树>/src/BotSrv/bin/Release/BotSrv.exe` ⇒ **同一份 exe** |
+
+**C. 数据库写入留痕（保留，不删除；删除需 Owner 授权）**
+
+| 项 | 值 |
+| --- | --- |
+| 库/表 | `mir2_db.characters`（只此一张表被写） |
+| 写入列 | `MapName, CX, CY, HomeMap, HomeX, HomeY, Dir`（铺到 `0.map` 已验证 Walk 的 108 格） |
+| 行数 | **1973** 行（`WHERE LoginID LIKE 'loadbot%'`） |
+| 角色名前缀集合 | `LoginID` 全部 `loadbot*`；`ChrName` 1972 行 `loadbot*` + 1 行 `lb1a` |
+| 识别为测试数据 | 账号前缀 `loadbot`（由 `tools/client/account_provision.ps1 -Prefix loadbot` 创建）；真实玩家/其他卡不使用该前缀 |
+| 唯一回滚依据 | `E:/UserTemp/l25-slice/db_chars_before.tsv`（1973 行，改前快照，含上述 10 列） |
+
+**D. 验收说明补充（防止翻旧账误读）**：本轮三轮 `handoff_offered` 全 0，**按"驱动不成立"记录**，不是
+"跨了没计数"，也**不得**被当成"无缺口"——缺口基线请看 §12.3 的六面读数；跨界冒烟的有效性前提见
+§12.3 末尾三条。
