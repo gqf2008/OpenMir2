@@ -20,10 +20,20 @@
 | A2 段级 `PhaseSet` 守卫 | `015a88c268b5` | `f4fc7e365` | 同上（4683 passed） | 同上 | 86 / 11980 |
 | A3 `for_zone` + 空实例用例 + 补牙 | `6e26d776a333` | `e4251a012` + `3a5dbb230` | 同上（4685 passed） | 同上 | 86 / 11980 |
 
-- **N=1 证据来源**：`a7` 在最终树的 `n1_stdout_equivalence` 运行（N1-A3 原文
-  `RUN_START 07:45:25 hour=7 bucket=1`；两树各自与 golden 相等、首差行无；两树 sha256
-  `7b581d3f…` / `4c61e048…`；`git status` 跑前跑后 0 行）。门 RunId 与产物目录以 opc-27 / a7
-  的台账为准，本地不留副本。
+- **绿门 RunId / 日志 / N=1 产物目录**（opc-27 台账权威值，照抄）：
+
+  | 步骤 | 绿门 RunId | 绿门日志 | N=1 对拍产物目录 |
+  | --- | --- | --- | --- |
+  | A1（`1629bba1abd4`） | `l25-m1a2-0630-1629bba1abd4` | `E:/tmp/zone-mirror-gates/merge-1629bba1abd4.log` | `E:/UserTemp/l25-slice/n1-master-equiv-20261123-0638-1629bba1` |
+  | A2（`015a88c268b5`） | `l25-m1a3-0700-015a88c268b5` | `E:/tmp/zone-mirror-gates/merge-015a88c268b5.log` | `E:/UserTemp/l25-slice/n1-master-equiv-20261123-0708-015a88c2` |
+  | A3（`6e26d776a333`） | `l25-m1a5-0740-6e26d776a333` | `E:/tmp/zone-mirror-gates/merge-6e26d776a333.log` | `E:/UserTemp/l25-slice/n1-master-equiv-20261123-0745-6e26d776` |
+
+  **绿门的界定（0c 特别点的坑）**：A1 的合并**首次**曾因环境红（ToDesk 占 24670）而作废——
+  `94017d77c489`，门日志 `E:/tmp/zone-mirror-gates/merge-94017d77c489.log`（`TEST_RC=101`、
+  `PORT24670=43644`）。该次**不是** A1 的绿门；A1 的绿门是端口修复（`2d1829786`）之后的
+  `1629bba1abd4`（RunId `l25-m1a2-0630-1629bba1abd4`）。
+- **N=1 原文**：N1-A3 `RUN_START 07:45:25 hour=7 bucket=1`；两树各自与 golden 相等、首差行无；
+  两树 sha256 `7b581d3f…` / `4c61e048…`；`git status` 跑前跑后 0 行。
 - 端口探针修复（`2d1829786`，A1 合并门被 ToDesk 占 24670 阻塞后的修复）随 A1 一并合并。
 
 ## 2. 关键决定与它们的「临时性」
@@ -65,6 +75,13 @@
 3. **`spawn_minimal_zone` 在 M0 仍未接线**：区 k 不参与生产调度、不出帧。M1 才接。
 4. 段集见证 `RAN_SEGMENTS`（`#[cfg(test)]` thread-local）+ 空实例用例的
    `assert_eq!(ran, M0_MIN.0)` 与「`M0_MIN` 组成写死」两条断言，M1 改段集时须同步更新。
+5. **`host_prof` 每区一份的 TICKPROF 归属**：A1 把 `host_prof` 放进 `HostLoop`（每区一份）。
+   **M1 多区后若不标区、也不限「仅区 0 打」，N 区的 `[TICKPROF]` 行会交错、读数不可归属**
+   ⇒ M1 必须给 TICKPROF 输出**加区标签**或**仅区 0 打**（opc-27/0c 2026-11-23 采纳）。
+6. **`guild_startup_store = guild_store.as_ref()` 的每 tick 重建**：结构不能自引用，故在
+   `tick` 内按同一表达式重建（`guild_store` 只被 `.as_ref()` 读，值恒等）。
+   **M1 方法化或改 `HostServices` 传递方式时，必须保留该 `as_ref()` 重建或显式重构**，
+   否则 `guild_runtime::startup/step` 拿不到 store。
 
 ## 4. 证据与口径（延续约定）
 
