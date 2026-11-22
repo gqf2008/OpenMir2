@@ -8282,7 +8282,7 @@ impl World {
 
     /// 镜像帧面字段原地刷新（不改坐标/落格）：外观轴 + `death` + 朝向。
     fn update_mirror_frame_fields(&mut self, id: i32, spec: &MirrorSpec) {
-        if let Some(mut e) = self.entities.get_mut(id) {
+        if let Some(e) = self.entities.get_mut(id) {
             e.appearance.race = spec.race;
             e.appearance.race_img = spec.race_img;
             e.appearance.appr = spec.appr;

@@ -3150,6 +3150,7 @@ impl EntityStore {
             rush_mode: flags.rush_mode,
             want_ref_msg: flags.want_ref_msg,
             stick_mode: flags.stick_mode,
+            mirror: flags.mirror,
             death: life_cycle.death,
             ghost: life_cycle.ghost,
             death_tick: life_cycle.death_tick,
