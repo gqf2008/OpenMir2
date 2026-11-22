@@ -845,6 +845,15 @@ pub fn apply_mirrors(
                 ob_mode: e.ob_mode,
                 master: e.master,
             };
+            // **L2-5 ④b 诊断**：`upsert_mirror` 消费 `spec`；先取采样所需的只读字段（只 clone 名字）。
+            let diag = (
+                spec.id,
+                spec.map_id,
+                spec.x,
+                spec.y,
+                spec.race,
+                spec.name.clone(),
+            );
             match world.upsert_mirror(spec) {
                 MirrorUpsert::Inserted => stats.inserted += 1,
                 MirrorUpsert::Updated => stats.updated += 1,
@@ -853,10 +862,49 @@ pub fn apply_mirrors(
                 // 不 abort、不删本地实体（§2.3 必带要求 3）。时序正确时该计数恒 0。
                 MirrorUpsert::RefusedOccupied => {
                     // 该 id 在本区已是**真实体**（玩家 / 静态 NPC / 怪，均可能）⇒ 跳过。
-                    // 不区分「handoff 收敛窗口内」与「静态图实体撞名」（④/⑤ 再拆）。
+                    // **L2-5 ④b 诊断（2026-11-22）**：先按本地真实体类别拆两列（静态 / 玩家）
+                    // 并限流采样——两处文档对「非 0 区是否有静态实体」自相矛盾，先用读数裁决，
+                    // 再决定「静态归属」怎么修（不许先选一个说法往下写）。
+                    let local = world.entities.get(diag.0);
+                    let local_race = local.as_ref().map(|l| l.race);
+                    if local_race == Some(mir2_world_bevy::ACTOR_RACE_PLAY) {
+                        mir2_world_bevy::mirror_metrics::note_mirror_shadowed_handoff();
+                    } else {
+                        mir2_world_bevy::mirror_metrics::note_mirror_shadowed_static();
+                    }
                     mir2_world_bevy::mirror_metrics::note_mirror_shadowed_by_local();
                     mir2_world_bevy::mirror_metrics::note_mirror_write_refused_occupied();
                     stats.shadowed_by_local += 1;
+                    static SHADOW_LOGGED: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    let n = SHADOW_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if n <= 8 || n.is_multiple_of(1000) {
+                        let seg = |id: i32| id / crate::shard::ACTOR_ID_SEGMENT;
+                        let (lm, lx, ly, lp, lname) = local
+                            .as_ref()
+                            .map_or((usize::MAX, 0, 0, false, String::new()), |l| {
+                                (l.map_id, l.x, l.y, l.handoff_pending, l.name.clone())
+                            });
+                        let (did, dmap, dx, dy, drace, dname) = diag;
+                        crate::glog!(
+                            "WRN",
+                            "MIRROR_SHADOW id={} 段={} 本地race={:?} 名={} 图={} 格=({},{}) pending={} | 镜像 图={} ({},{}) race={} name={}；累计 {}",
+                            did,
+                            seg(did),
+                            local_race,
+                            lname,
+                            lm,
+                            lx,
+                            ly,
+                            lp,
+                            dmap,
+                            dx,
+                            dy,
+                            drace,
+                            dname,
+                            n
+                        );
+                    }
                 }
                 MirrorUpsert::RefusedCell => {
                     // **段 4 裁决**：单条镜像写失败不 abort 整机 ⇒ 丢弃 + 计数 + 限流 WRN。

@@ -2397,6 +2397,12 @@ impl EntityStore {
         self.inner.set_id_base(base);
     }
 
+    /// **L2-5 ④b-0**：下一个将分配的业务 id（启动期 id 段自检用）。
+    #[must_use]
+    pub fn next_actor_id(&self) -> i32 {
+        self.inner.next_actor_id()
+    }
+
     /// 插入实体（生成期载体），返回其 id（复用本实体的 `id`）。
     ///
     /// **S3a/S3b/S4a 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与
@@ -2408,14 +2414,25 @@ impl EntityStore {
     /// （release 也保持行为）：宁可立即 panic，也不允许半实体被 AOI/重叠检查静默跳过
     ///（S3a 评审 P3-3）。
     pub fn insert(&mut self, spawn: EntitySpawn) -> i32 {
-        self.insert_parts(spawn.into_parts())
+        self.insert_parts_inner(spawn.into_parts(), true)
+    }
+
+    /// **L2-5 ④b-0**：插入**外来 id** 的实体（镜像 / handoff 提升）——只登记，**不推进本 World
+    /// 的 `next_id`**。`insert` 会在 `id >= next_id` 时把分配器推到该 id + 1；对别的区段的 id
+    /// 这么做会让本区后续分配落进邻区段（同 id 撞车）。
+    pub fn insert_foreign(&mut self, spawn: EntitySpawn) -> i32 {
+        self.insert_parts_inner(spawn.into_parts(), false)
     }
 
     /// 组件已拆好的插入入口（克隆/迁移路径用，避免再拼一个 `EntitySpawn`）。
     ///
     /// **整 bundle 插入**：任一可选组件缺失都立即 panic（半实体不得进入 AOI/重叠检查）。
-    fn insert_parts(&mut self, parts: SpawnParts) -> i32 {
-        let id = self.inner.insert(parts.entity.id, parts.entity);
+    fn insert_parts_inner(&mut self, parts: SpawnParts, advance: bool) -> i32 {
+        let id = if advance {
+            self.inner.insert(parts.entity.id, parts.entity)
+        } else {
+            self.inner.insert_foreign(parts.entity.id, parts.entity)
+        };
         assert!(
             self.inner.insert_component(id, parts.transform),
             "刚插入的实体必须能挂 Transform 组件（id={id}）"

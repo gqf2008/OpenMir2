@@ -912,6 +912,38 @@ fn zone_id_base(zone: zone::ZoneId) -> i32 {
         .expect("区号超上限（启动门已按 MAX_ZONE_COUNT 拒绝）")
 }
 
+/// **L2-5 ④b-0 诊断**：每区**首个玩家**的实体 id（只打一行；用**实测分配结果**，
+/// 不用配置值或抽样推断——1000 人实测 97% 玩家 id 落在区 1 段，就是"设计值没落到分配器"）。
+fn note_first_player_id(zone: zone::ZoneId, world: &mir2_world_bevy::World) {
+    static LOGGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let bit = 1u64 << (zone.get() % 64);
+    if LOGGED.fetch_or(bit, std::sync::atomic::Ordering::Relaxed) & bit == 0 {
+        glog!(
+            "INF",
+            "ZONE_ID_FIRST zone={zone} id={}（首个玩家；0 分配时=基址）",
+            world.entities.next_actor_id().saturating_sub(1)
+        );
+    }
+}
+
+/// **L2-5 ④b-0**：区 World 的 ActorId 分配器必须**在任何分配之前**落在本区段基址上。
+///
+/// 期望：`next_actor_id() == zone_id_base(zone) + 1`（= 尚未分配任何 id）。返回 `Err` 时
+/// 调用方必须 fail-closed（启动期 `exit(2)`）——**id 段撞车会让两个不同实体共用 ActorId**，
+/// 污染 AOI/帧/镜像/会话表，且事后无法区分（1000 人实测：97% 的玩家 id 落在区 1 段）。
+fn check_zone_id_base(zone: zone::ZoneId, world: &mir2_world_bevy::World) -> Result<(), String> {
+    let want = zone_id_base(zone)
+        .checked_add(1)
+        .ok_or_else(|| format!("区 {zone} 的 id 基址溢出：{}", zone_id_base(zone)))?;
+    let got = world.entities.next_actor_id();
+    if got != want {
+        return Err(format!(
+            "区 {zone} 的 ActorId 分配器起点 {got} != 期望 {want}（id 段未落到分配器）"
+        ));
+    }
+    Ok(())
+}
+
 /// **L2-4 段 6a**：多区生产装配的共享句柄（`MIR2_ZONES` 未设 ⇒ 上层拿 `None`，N=1 原单线程
 /// 路径逐字节不变）。
 struct ZoneHost {
@@ -1067,6 +1099,17 @@ fn new_zone_state(
     registry: Option<&mir2_envir::MapRegistry>,
 ) -> ZoneState {
     let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
+    // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上（与区 0 同口径）。
+    if let Err(e) = check_zone_id_base(zone_id, &state.world) {
+        glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
+        std::process::exit(2);
+    }
+    glog!(
+        "INF",
+        "ZONE_ID_BASE zone={zone_id} base={} next_id={}",
+        zone_id_base(zone_id),
+        state.world.entities.next_actor_id()
+    );
     match handoff::bounds_for(layout, zone_id) {
         Some(b) => state.world.set_zone_bounds(Some(b)),
         None => glog!(
@@ -23952,11 +23995,14 @@ mod perf_counters {
 
     // ---- L2-5 ③ 段 4：handoff 读数（mirror_metrics 的累计原子 → 每 tick 增量列）----
     /// 上一次写行时的累计值（下标 = 下面 [`handoff_snapshot`] 的顺序）。
-    static HANDOFF_LAST: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+    static HANDOFF_LAST: [AtomicU64; 11] = [const { AtomicU64::new(0) }; 11];
 
     /// 累计读数的固定顺序：offered / accepted(=promoted+inserted) / refused / promoted /
-    /// inserted_fresh / shadowed / dup_dropped。
-    fn handoff_snapshot() -> [u64; 9] {
+    /// inserted_fresh / shadowed（总）/ shadowed_static / shadowed_handoff / dup_dropped /
+    /// write_refused_cell / write_refused_occupied。
+    ///
+    /// **L2-5 ④b**：遮蔽按本地实体类别拆两列后，**报告与判据一律看分量**（总数只作对账）。
+    fn handoff_snapshot() -> [u64; 11] {
         let promoted = mir2_world_bevy::mirror_metrics::handoff_mirror_promoted();
         let inserted = mir2_world_bevy::mirror_metrics::handoff_inserted_fresh();
         [
@@ -23966,6 +24012,8 @@ mod perf_counters {
             promoted,
             inserted,
             mir2_world_bevy::mirror_metrics::mirror_shadowed_by_local(),
+            mir2_world_bevy::mirror_metrics::mirror_shadowed_static(),
+            mir2_world_bevy::mirror_metrics::mirror_shadowed_handoff(),
             mir2_world_bevy::mirror_metrics::handoff_offer_dup_dropped(),
             mir2_world_bevy::mirror_metrics::mirror_write_refused_cell(),
             mir2_world_bevy::mirror_metrics::mirror_write_refused_occupied(),
@@ -23973,9 +24021,9 @@ mod perf_counters {
     }
 
     /// 本 tick 增量（与其它列同为「写行即清零」口径）。
-    fn handoff_deltas() -> [u64; 9] {
+    fn handoff_deltas() -> [u64; 11] {
         let cur = handoff_snapshot();
-        let mut out = [0u64; 9];
+        let mut out = [0u64; 11];
         for (i, c) in cur.iter().enumerate() {
             let prev = HANDOFF_LAST[i].swap(*c, Ordering::Relaxed);
             out[i] = c.saturating_sub(prev);
@@ -24131,7 +24179,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24208,6 +24256,8 @@ mod perf_counters {
             hd[6],
             hd[7],
             hd[8],
+            hd[9],
+            hd[10],
             // **L2-5 ④a**：区 k 命令接线 / ④b 缺口基线 / 区 k 换图帧降级（均为本 tick 增量）。
             ZONE_CMD_UNSUPPORTED.swap(0, Ordering::Relaxed),
             HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.swap(0, Ordering::Relaxed),
@@ -32285,6 +32335,18 @@ fn sim_loop(
             "多区与多片互斥（zone_wiring::plan_zone_mode 已拒绝并存）"
         );
         world.set_id_base(zone_id_base(zone_router::HOST_ZONE));
+        // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上。
+        if let Err(e) = check_zone_id_base(zone_router::HOST_ZONE, &world) {
+            glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
+            std::process::exit(2);
+        }
+        glog!(
+            "INF",
+            "ZONE_ID_BASE zone={} base={} next_id={}",
+            zone_router::HOST_ZONE,
+            zone_id_base(zone_router::HOST_ZONE),
+            world.entities.next_actor_id()
+        );
     }
     // **L2-5 ③ 段 2（接线）**：区 0 的单 span 边界（切片关 ⇒ 不设 ⇒ `handoff_pending` 恒 false）。
     if let Some(host) = zone_host.as_ref().filter(|h| h.slicing) {
@@ -35206,6 +35268,7 @@ fn sim_loop(
                                         item_number: &mut item_number,
                                     });
                                     if slicing_host.is_some() {
+                                        note_first_player_id(zone_router::HOST_ZONE, &world);
                                         perf_counters::note_zone_login_landed(
                                             zone_router::HOST_ZONE.get(),
                                         );
@@ -35287,6 +35350,7 @@ fn sim_loop(
                                                         item_number: &mut item_number,
                                                     },
                                                 );
+                                                note_first_player_id(target_zone, &st.world);
                                                 // 落点归属校验：边界 3 格内的墙格移位/死亡改写可能改归属 ⇒
                                                 // `zone_login_offzone` 计数 + WRN 暴露（不改判据）。
                                                 if let Some(actor) = st
@@ -119904,7 +119968,7 @@ mod l2_zone_id_base_tests {
 
     use super::*;
     use crate::zone_wiring::plan_zone_mode;
-    use mir2_world_bevy::{EntitySpawn, World};
+    use mir2_world_bevy::{CellType, EntitySpawn, MirrorSpec, World};
 
     fn zone(n: u32) -> zone::ZoneId {
         zone::ZoneId::new(n)
@@ -119928,6 +119992,72 @@ mod l2_zone_id_base_tests {
                 "段基址必须严格递增（z={z}）"
             );
         }
+    }
+
+    /// **L2-5 ④b-0 回归牙**：邻区 id（镜像）插入**不得推进本区分配器**。
+    ///
+    /// 真实事故（2026-11-22，100 人冒烟）：区 0 收到区 1 玩家镜像（id ≥ 4,194,305）后，
+    /// `EcsStore::bind` 把区 0 的 `next_id` 推到区 1 段 ⇒ 之后在区 0 落地的玩家拿到区 1 的 id，
+    /// 与区 1 玩家**同 id**（10 组重复），镜像互相遮蔽、AOI/帧/会话表全被污染。
+    /// 红检：把 `upsert_mirror` 的 `insert_foreign` 改回 `insert`（或 `bind` 恒推进）⇒ 本用例红。
+    #[test]
+    fn foreign_mirror_id_does_not_advance_local_allocator() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        world.set_id_base(zone_id_base(zone(0)));
+        let foreign = zone_id_base(zone(1)) + 1;
+        let upsert = world.upsert_mirror(MirrorSpec {
+            id: foreign,
+            name: "mirror".to_string(),
+            map_id: 0,
+            x: 1,
+            y: 1,
+            view_range: 5,
+            race: 0,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 0,
+            cell_type: CellType::Play,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        });
+        assert!(upsert.is_ok(), "镜像插入必须成功：{upsert:?}");
+        assert_eq!(
+            world.entities.next_actor_id(),
+            zone_id_base(zone(0)) + 1,
+            "外来镜像 id 不得推进本区分配器"
+        );
+        let local = world.add_entity(EntitySpawn::new(0, "local".to_string(), 2, 2));
+        assert_eq!(local, zone_id_base(zone(0)) + 1, "本区仍从区 0 段分配");
+    }
+
+    /// **启动门牙**：`check_zone_id_base` 只接受「本区基址 + 尚未分配」的 World（fail-closed）。
+    #[test]
+    fn check_zone_id_base_is_fail_closed() {
+        let w = World::with_maps(vec![(8, 8)]);
+        assert!(
+            check_zone_id_base(zone(0), &w).is_ok(),
+            "未设基址 = 区 0 基址"
+        );
+        let mut w1 = World::with_maps(vec![(8, 8)]);
+        w1.set_id_base(zone_id_base(zone(1)));
+        assert!(check_zone_id_base(zone(1), &w1).is_ok());
+        assert!(
+            check_zone_id_base(zone(0), &w1).is_err(),
+            "区 1 的世界冒充区 0 ⇒ 必须报错（启动门拒绝）"
+        );
+        let mut used = World::with_maps(vec![(8, 8)]);
+        used.set_id_base(zone_id_base(zone(1)));
+        let _ = used.add_entity(EntitySpawn::new(0, "x".to_string(), 0, 0));
+        assert!(
+            check_zone_id_base(zone(1), &used).is_err(),
+            "已分配后起点 ≠ 基址 + 1 ⇒ 必须报错"
+        );
     }
 
     /// **两区 id 集合不相交**（第②步镜像/出现帧的前提：`recog` 不得撞车）。

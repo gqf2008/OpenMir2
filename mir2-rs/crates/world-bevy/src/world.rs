@@ -8315,7 +8315,8 @@ impl World {
         spawn.fixed_hide_mode = spec.fixed_hide_mode;
         spawn.ob_mode = spec.ob_mode;
         spawn.master = spec.master;
-        let id = self.entities.insert(spawn);
+        // **L2-5 ④b-0**：镜像 id 来自邻区段 ⇒ 外来插入，**不得推进本 World 分配器**。
+        let id = self.entities.insert_foreign(spawn);
         if let Some(b) = self.entities.map_binding_mut(id) {
             b.add_to_mapped = true;
         }
@@ -8407,7 +8408,8 @@ impl World {
         spawn.master = spec.master;
         spawn.ai.dir = spec.dir;
         // mirror 保持 false（= 真实实体）；handoff_pending 也保持 false。
-        let id = self.entities.insert(spawn);
+        // **L2-5 ④b-0**：id 来自源区段 ⇒ 外来插入，不推进本区分配器。
+        let id = self.entities.insert_foreign(spawn);
         if let Some(b) = self.entities.map_binding_mut(id) {
             b.add_to_mapped = true;
         }

@@ -739,3 +739,27 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 4. 会话/路由随迁（提升后源区丢走位 = 本轮的 60,502 条）。
 5. 走廊外异常落点 2 例（bot 自报 CurrX=839 > map 宽 700，与 DB 铺位不符）——数据/夹具异常单独记，
    不混入通道断言通过率。
+
+### 12.6 段 4b-0：跨区 ActorId 撞车修复（2026-11-22）
+
+**症状**：100 人 2 区冒烟里，`MIRROR_SHADOW` 同一 id 出现两个不同玩家（`loadbot24`/`loadbot26`
+都是 4194330，共 10 组），一只怪（`暗之双头血魔`）与玩家同 id；`进世界` 的 100 条实体 id 里
+97 条 ≥ 4,194,304（区 1 段）——**设计上的"每区分段"没有落到实际分配器**。
+
+**根因**：`EcsStore::bind` 对**任何** id 都执行 `next_id = id + 1`。区 0 的世界收到区 1 玩家的
+**镜像**（id ≥ 4,194,305）后被登记，区 0 的分配器即被推到区 1 段 ⇒ 之后在区 0 落地的玩家
+拿到区 1 的 id，与区 1 玩家撞车（镜像互相遮蔽；AOI/帧/会话表全被污染）。
+
+**修法**（最小、单点）：
+- 新增 `EcsStore::insert_foreign` / `SlotTable::bind_foreign`：**外来 id 只登记、不推进 `next_id`**；
+  `upsert_mirror`（镜像插入）与 `handoff_accept`（提升落真身）改走该入口。
+- **启动门（fail-closed）**：`check_zone_id_base` 要求每个区 World 在任何分配之前
+  `next_actor_id == zone*SEGMENT + 1`，否则 ERP + `exit(2)`；启动期打印每区
+  `ZONE_ID_BASE` 与首个玩家 `ZONE_ID_FIRST`（实测分配结果，不靠配置值推断）。
+- 遮蔽计数拆两列（`mirror_shadowed_static` / `mirror_shadowed_handoff`）：修复后 100 人冒烟
+  **static=0**，handoff=46（全部是同一玩家的提升收敛窗口，≤1 tick，属正常面）。
+
+**牙**：`foreign_mirror_id_does_not_advance_local_allocator`（镜像外来 id 不改分配器）、
+`check_zone_id_base_is_fail_closed`（启动门两侧）；变异 M8/M9/M10 各自只红对应用例。
+**纪律更正**：变异脚本的还原**不许**用 `git checkout`（未提交工作会被退回 HEAD 丢掉），
+必须用内存原件写回 + sha 相等断言。

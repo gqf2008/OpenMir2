@@ -63,6 +63,11 @@ static HANDOFF_REFUSED: AtomicU64 = AtomicU64::new(0);
 /// 而跳过的次数。时序正确时**恒 0**；>0 说明 handoff 时序被破坏（不要用人工变异把它当牙宣传）。
 static MIRROR_SHADOWED_BY_LOCAL: AtomicU64 = AtomicU64::new(0);
 
+/// **L2-5 ④b 诊断**：遮蔽按本地真实体类别拆两列（静态 / 玩家）。总数仍是
+/// `MIRROR_SHADOWED_BY_LOCAL`；**报告与判据一律看两列分量**（避免「总数归零」掩盖单列非零）。
+static MIRROR_SHADOWED_STATIC: AtomicU64 = AtomicU64::new(0);
+static MIRROR_SHADOWED_HANDOFF: AtomicU64 = AtomicU64::new(0);
+
 /// 记一次「镜像进了 AI 段」（隔离被拆的唯一读数）。
 pub fn note_mirror_ai_action() {
     MIRROR_AI_ACTIONS.fetch_add(1, Ordering::Relaxed);
@@ -222,6 +227,35 @@ pub fn reset_handoff_offer_dup_dropped_for_tests() {
 /// 记一次「镜像被本地真实体遮蔽」（防御计数；时序正确时恒 0）。
 pub fn note_mirror_shadowed_by_local() {
     MIRROR_SHADOWED_BY_LOCAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// **L2-5 ④b 诊断**：遮蔽的本地实体是**静态**（非玩家：NPC/怪/守卫/商人）。
+/// 语义 = 「同一静态实体在多个区各模拟一份」的直接读数；目标是归零。
+pub fn note_mirror_shadowed_static() {
+    MIRROR_SHADOWED_STATIC.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 遮蔽的本地实体是**玩家**（handoff 收敛窗口，或玩家副本）。
+pub fn note_mirror_shadowed_handoff() {
+    MIRROR_SHADOWED_HANDOFF.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 静态撞名遮蔽计数。
+#[must_use]
+pub fn mirror_shadowed_static() -> u64 {
+    MIRROR_SHADOWED_STATIC.load(Ordering::Relaxed)
+}
+
+/// 玩家遮蔽计数。
+#[must_use]
+pub fn mirror_shadowed_handoff() -> u64 {
+    MIRROR_SHADOWED_HANDOFF.load(Ordering::Relaxed)
+}
+
+/// 复位两列拆分计数（**只给测试**）。
+pub fn reset_mirror_shadowed_split_for_tests() {
+    MIRROR_SHADOWED_STATIC.store(0, Ordering::Relaxed);
+    MIRROR_SHADOWED_HANDOFF.store(0, Ordering::Relaxed);
 }
 
 /// 遮蔽计数（测试/诊断）。
