@@ -117221,10 +117221,10 @@ mod l2_multi_zone_ledger_tests {
     use std::sync::{Arc, Mutex};
 
     use crate::region_loop::{
-        AoIFrameLedger, CrossZoneOutbox, EmitterCriterion, HaloExchange, HaloFrameSource,
-        TickBarriers, ZoneRuntime,
+        apply_mirrors, snapshot_border, AoIFrameLedger, CrossZoneOutbox, EmitterCriterion,
+        HaloExchange, HaloFrameSource, TickBarriers, ZoneRuntime,
     };
-    use crate::zone::{parse_zone_layout, RegionLayout, ZoneId};
+    use crate::zone::{parse_zone_layout, RegionLayout, ZoneId, ZoneRect};
     use crate::zone_router::{ZoneRouter, HOST_ZONE};
 
     fn two_zone_layout() -> RegionLayout {
@@ -117855,6 +117855,148 @@ mod l2_multi_zone_ledger_tests {
             },
             "多格混合",
         );
+    }
+
+    // ------------------------------------------------------------------
+    // C7（先测量，不改 is_blocking）：跨界一步的阻挡归属
+    // ------------------------------------------------------------------
+
+    const BOUNDARY_CELL: (i32, i32) = (10, 5);
+    const RECT_B_BOUNDARY: ZoneRect = ZoneRect::new(10, 0, 19, 9);
+
+    /// 目标格的阻挡者 id（**与 `try_step_blocked_impl` 的谓词逐项同口径**：
+    /// `!ghost && !death && !fixed_hide_mode && !ob_mode`；`invisible` 不参与阻挡）。
+    fn blockers_at(world: &World, x: i32, y: i32) -> Vec<i32> {
+        let (cell, ok) = world.map(0).get_cell_info(x, y);
+        if !ok {
+            return Vec::new();
+        }
+        cell.obj_list
+            .iter()
+            .filter(|o| o.actor_object)
+            .map(|o| o.cell_obj_id)
+            .filter(|id| {
+                world
+                    .entities
+                    .get(*id)
+                    .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+            })
+            .collect()
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum NeighborFlags {
+        Alive,
+        Ghost,
+        FixedHide,
+        ObMode,
+        Invisible,
+        Dead,
+    }
+
+    fn apply_neighbor_flags(world: &mut World, id: i32, flags: NeighborFlags) {
+        if let Some(e) = world.entities.get_mut(id) {
+            match flags {
+                NeighborFlags::Alive => {}
+                NeighborFlags::Ghost => e.life_cycle.ghost = true,
+                NeighborFlags::FixedHide => e.flags.fixed_hide_mode = true,
+                NeighborFlags::ObMode => e.flags.ob_mode = true,
+                NeighborFlags::Invisible => e.flags.invisible = true,
+                NeighborFlags::Dead => e.life_cycle.death = true,
+            }
+        }
+    }
+
+    fn boundary_player(id: i32, x: i32, y: i32) -> EntitySpawn {
+        let mut e = EntitySpawn::new(id, "O".to_string(), x, y);
+        e.race = 0;
+        e.view_range = 12;
+        e
+    }
+
+    fn boundary_monster(id: i32, x: i32, y: i32) -> EntitySpawn {
+        let mut e = EntitySpawn::new(id, "eb".to_string(), x, y);
+        e.race = 80;
+        e.view_range = 5;
+        e
+    }
+
+    /// 测一次「向东迈一步」：先量目标格阻挡者，再走一拍，返回 (是否走成, 阻挡者 id)。
+    fn measure_step(world: &mut World, actor: i32) -> (bool, Vec<i32>) {
+        let blockers = blockers_at(world, BOUNDARY_CELL.0, BOUNDARY_CELL.1);
+        world.walk(actor, 1, 0);
+        let rec = world.tick_phase1();
+        let accepted = rec
+            .processed
+            .iter()
+            .rev()
+            .find(|(id, _)| *id == actor)
+            .is_some_and(|(_, ok)| *ok);
+        (accepted, blockers)
+    }
+
+    /// 基线（单 World）：O(9,5) 向东走进 (10,5)，`eb` 真实占格。
+    fn c7_baseline(flags: NeighborFlags) -> (bool, Vec<i32>) {
+        let mut w = World::new(20, 10);
+        let o = w.add_entity(boundary_player(1, 9, 5));
+        let e = w.add_entity(boundary_monster(21, 10, 5));
+        w.tick();
+        apply_neighbor_flags(&mut w, e, flags);
+        measure_step(&mut w, o)
+    }
+
+    /// 拆区：owner 侧世界产出 (10,5) 的快照，收件人区世界 = O + 该格**镜像**。
+    fn c7_split(flags: NeighborFlags) -> (bool, Vec<i32>) {
+        let mut owner = World::new(20, 10);
+        let e = owner.add_entity(boundary_monster(21, 10, 5));
+        owner.tick();
+        apply_neighbor_flags(&mut owner, e, flags);
+        let snap = snapshot_border(&owner, 0, RECT_B_BOUNDARY, 12, 0, &HaloFrameSource::none());
+        let mut recv = World::new(20, 10);
+        let o = recv.add_entity(boundary_player(1, 9, 5));
+        recv.tick();
+        apply_mirrors(&mut recv, std::slice::from_ref(&snap), None).expect("镜像写入");
+        measure_step(&mut recv, o)
+    }
+
+    /// **C7（②第 2 步的闸）**：跨界一步的阻挡归属——**先量两侧**（单 World vs 拆区），
+    /// 两侧的 (能否迈步, 阻挡者 id) 必须一致；**测量到手前不改 `is_blocking`**。
+    ///
+    /// 覆盖 6 种邻居状态：alive（必须被挡，阻挡者 = 21）、ghost / fixed_hide / ob_mode / dead
+    /// （必须可走）、invisible（谓词不含它 ⇒ 仍被挡）。其中 ghost/fixed_hide/ob_mode 正是
+    /// 段 0 补的镜像标志——若镜像丢了这些标志，拆区会「挡路而基线可走」⇒ 本用例红。
+    ///
+    /// 红检（方向）：删 `MirrorSpec` 的 ghost/fixed_hide_mode/ob_mode 回填 ⇒ 对应变体红；
+    /// 删 `apply_mirrors` 的镜像写入 ⇒ alive 变体两侧不等（拆区无人挡）⇒ 红。
+    #[test]
+    fn step2_boundary_step_block_attribution() {
+        let all = [
+            NeighborFlags::Alive,
+            NeighborFlags::Ghost,
+            NeighborFlags::FixedHide,
+            NeighborFlags::ObMode,
+            NeighborFlags::Invisible,
+            NeighborFlags::Dead,
+        ];
+        for flags in all {
+            assert_eq!(
+                c7_split(flags),
+                c7_baseline(flags),
+                "{flags:?}：拆区与单 World 的 (能否迈步, 阻挡者 id) 必须一致"
+            );
+        }
+        // 非空牙：alive 必须真的被挡（防「两边都空」假绿）。
+        assert_eq!(c7_baseline(NeighborFlags::Alive), (false, vec![21]));
+        assert_eq!(c7_split(NeighborFlags::Alive), (false, vec![21]));
+        for flags in [
+            NeighborFlags::Ghost,
+            NeighborFlags::FixedHide,
+            NeighborFlags::ObMode,
+            NeighborFlags::Dead,
+        ] {
+            assert!(c7_baseline(flags).0, "{flags:?} 基线可走");
+            assert!(c7_split(flags).0, "{flags:?} 拆区可走");
+        }
     }
 
     /// **C4 夹具**：O（区 0）在 (8,2)，`eb`（区 1）在 (11,2)，`eb` 展示带 `mount_id=1`。
