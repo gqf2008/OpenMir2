@@ -492,3 +492,36 @@ tick 增量之和，由构造保证），表头已同步 ⇒ 段 4 容量脚本�
 
 **未做（按范围）**：跨区帧合成（镜像 route 消费、事件跨区队列）——第④/⑤步；真机 bot 跨界冒烟
 由总监排窗口。
+
+### 11.1 评审补充（总监 2026-11-22）
+
+- **`refmsg` 没有独立牙，隔离证据由一对变异承担（写死）**：`refmsg` 与 `npc_merchant` **共用同一
+  投递段**（`send_ref_msg_to_targets`），所以**不存在**只打红 `refmsg` 面而 `npc_merchant` 仍绿的
+  变异——删投递段 note 两面同红（M1）。`refmsg` 的**面隔离**证据 = **{M1 双红 + M3 单红}**：
+  M3（NPC 面的 surface 参数写成 `RefMsg`）只打红 `npc_merchant`、`refmsg` 仍绿，证明面参数确实
+  分流。将来看到 M1 双红**不要**当成牙有问题。
+- **`mirror` 判据的残差不再分桶（写死）**：收件人谓词已要求 `race == Play && !ghost`；镜像每 tick
+  由 `apply_mirrors` 刷新、陈旧镜像**同 tick** 清扫 ⇒ 候选里的镜像 = 本 tick 邻区仍在发布的活玩家。
+  唯一残差「同一 tick 内下线」（≤1 tick）在**投递点不可辨**（本地会话表未命中、World 里只有镜像、
+  没有 route）⇒ **不新增** `target_mirror_not_deliverable`（在不可辨处造计数器就是造死代码），
+  残差按跨区计并如实写明；若第 ⑤ 步让镜像带上 `route`，届时可按 route 有无再分。
+
+## 12. 段 4 实施记录（容量冒烟：2 区 1k + 1 区基线，2026-11-22）
+
+**三条硬要求（总监）**：①脚本**按列名**读 7 列，`cross_recipient_missing` 合计在**摘要首屏**；
+②2 区 1k 冒烟落 TSV/JSON 产物，摘要含有效 tick 率、p50、`region_barrier_us` max/total、六面分解、
+RSS；③额外跑 **1 区基线**（同机同时长，`MIR2_ZONES`/`MIR2_ZONE_MIRROR`/`MIR2_ZONE_SLICING`
+**一律 Remove**，作内存伸缩对照），给 `RSS(2区)−RSS(1区)` 与每区粗估。
+
+**工具**：
+- `tools/botload/perf_tsv_summary.py`（已入工具门 `tool_selftest_gate` 的 `REGISTRY`）：
+  按列名读；缺列/列宽不一/零 tick 行/合计≠六面之和/缺 p50 ⇒ rc=2；`--selftest` 覆盖列序打散、
+  缺列、合计漂移、零 tick 行、缺 p50、compare 区数不递减；`--compare` 给 RSS 差与每区粗估。
+- `tools/botload/run_l25_slice.ps1`（**纯编排、无自测** ⇒ 由 2 区 1k 冒烟端到端覆盖；证据 =
+  perf TSV + report.json + rss.ndjson + summary.json）：注入三开关 + `MIR2_PERF_COUNTERS` → 起栈 →
+  按 pid 采 game-svr RSS → `load_gate` → graceful 停栈 → `run.json` → 摘要 →（有基线时）对比。
+
+**窗口规则（总监）**：单次只跑一个压测、起栈后不跑 cargo；先基线后 2 区、同机同时长；
+RSS 单调增长则停下贴曲线；跑完栈停干净、game-svr 进程 0。
+
+**实测**：见 §12.1（本卡交付时回填）。

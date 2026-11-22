@@ -160,6 +160,10 @@ REGISTRY = [
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
     ("in_world_stability", ["tools/botload/in_world_stability.py", "selftest"], False),
+    # 卡 `openmir2-l25-s3-cross-recipient-count` 段 4（总监 2026-11-22）：容量切片摘要——
+    # perf TSV **按列名**读 7 列（缺列/无 tick 行/合计≠六面之和 ⇒ rc=2）。自测覆盖：列序打散、
+    # 缺列、合计漂移、零 tick 行、report 缺 p50、compare 区数不递减；离线、合成夹具、<1s。
+    ("perf_tsv_summary", ["tools/botload/perf_tsv_summary.py", "--selftest"], False),
     # M3 落地时由「未分类>0 ⇒ rc≠0」当场抓到的第一例（master 新工具，2026-10-25 合入）。
     ("gm_gate_check", ["tools/window/gm_gate_check.py", "selftest"], False),
     # 2026-10-25 mirflow-teeth 合入时由 --inventory 抓到（未分类 1）；离线假 mysql + 合成 frames，0.0s。

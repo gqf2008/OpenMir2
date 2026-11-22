@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""L2-5 ③ 段 4：容量切片摘要（perf TSV **按列名**读；fail-closed）。
+
+卡：`openmir2-l25-s3-cross-recipient-count` 的段 4（总监 2026-11-22 三条硬要求）。
+
+职责（只做可复算的投影，不下结论）：
+  * **首屏**打印 `cross_recipient_missing` 合计 + 六面分解（合计必须等于六面之和，逐行校验）；
+  * 读 perf TSV 的 `region_barrier_us`（max / mean）与 `region_barrier_total_us`（mean）；
+  * 从 `load_gate` 的 report JSON 取 tick p50/p99（缺 ⇒ PREREQ，不静默）；
+  * 从 RSS 采样 NDJSON 取 `game-svr` 的 WS/私有字节 max/mean；
+  * 有效 tick 率 = tick 行数 ÷ run.json 的 `[start_wall_ms, end_wall_ms]`；
+  * `--compare`：`RSS(2区) − RSS(1区)` 与每区粗估。
+
+用法::
+
+  python -I -B tools/botload/perf_tsv_summary.py --perf <perf.tsv> --run-json <run.json> \
+      --report <tier report.json> [--rss <rss.ndjson>] [--json <out.json>] [--label 2zone]
+  python -I -B tools/botload/perf_tsv_summary.py --compare <two.json> <one.json> --labels 2zone 1zone
+  python -I -B tools/botload/perf_tsv_summary.py --selftest
+
+退出码：0 = 摘要完整；2 = 输入不可判（缺列/无行/宽不一/JSON 坏/缺 report），**fail-closed**。
+"""
+import argparse
+import json
+import os
+import sys
+import tempfile
+
+CROSS_COLS = [
+    "cross_recipient_refmsg",
+    "cross_recipient_run_frames",
+    "cross_recipient_npc_merchant",
+    "cross_recipient_feature_changed",
+    "cross_recipient_mountride",
+    "cross_recipient_merchant_disappear",
+]
+TOTAL_COL = "cross_recipient_missing"
+REQUIRED = CROSS_COLS + [
+    TOTAL_COL,
+    "region_barrier_us",
+    "region_barrier_total_us",
+    "inbound_enqueued",
+    "inbound_drained",
+    "inbound_carry",
+    "inbound_budget_hit",
+    "refmsg_calls",
+    "refmsg_targets",
+]
+
+
+class InputError(Exception):
+    pass
+
+
+def _read_tsv(path):
+    """按**表头名**读列（不按位置）；缺列/无行/宽不一 ⇒ InputError（rc=2）。"""
+    if not os.path.exists(path):
+        raise InputError("perf TSV 不存在：%s" % path)
+    header = None
+    rows = []
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            cells = line.split("\t")
+            if header is None:
+                header = cells
+                missing = [c for c in REQUIRED if c not in header]
+                if missing:
+                    raise InputError("perf TSV 缺列（按名读，不按位置）：%s" % ",".join(missing))
+                continue
+            if len(cells) != len(header):
+                raise InputError("第 %d 行列数 %d != 表头 %d（宽不一）" % (lineno, len(cells), len(header)))
+            rows.append(cells)
+    if header is None:
+        raise InputError("perf TSV 为空（无表头）：%s" % path)
+    if not rows:
+        raise InputError("perf TSV 只有表头、无 tick 行（探针 fail-closed）：%s" % path)
+    idx = {name: header.index(name) for name in REQUIRED}
+    out = {name: [] for name in REQUIRED}
+    for cells in rows:
+        for name in REQUIRED:
+            raw = cells[idx[name]].strip()
+            try:
+                out[name].append(int(raw))
+            except ValueError:
+                raise InputError("列 %r 出现非整数：%r" % (name, raw))
+    return out
+
+
+def _load_json(path, what):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise InputError("%s 读不了：%s（%s）" % (what, path, exc))
+
+
+def _tick_percentiles(report, bots):
+    """从 load report 里取 tick 分位。兼容 `{tiers:[...]}` 与单 tier；按 `count` 选档。"""
+    tiers = report.get("tiers") if isinstance(report, dict) else None
+    if not tiers:
+        tiers = [report] if isinstance(report, dict) else []
+    if not tiers:
+        raise InputError("report 里没有 tiers")
+    chosen = None
+    for t in tiers:
+        if bots is None or t.get("count") == bots:
+            chosen = t
+            break
+    if chosen is None:
+        chosen = tiers[0]
+    if chosen.get("tick_p50_ms") is None:
+        raise InputError("report 该档缺 tick_p50_ms（缺样本 ⇒ 不可判）")
+    return {
+        "count": chosen.get("count"),
+        "tick_p50_ms": chosen.get("tick_p50_ms"),
+        "tick_p90_ms": chosen.get("tick_p90_ms"),
+        "tick_p99_ms": chosen.get("tick_p99_ms"),
+        "max_ms": chosen.get("max_ms"),
+        "login_pct": chosen.get("login_pct"),
+        "world_ok": chosen.get("world_ok"),
+        "verdict": chosen.get("verdict"),
+    }
+
+
+def _rss(game_role, path):
+    """RSS 采样 NDJSON → game-svr 的 ws/priv max/mean（MB）。缺 game-svr 样本 ⇒ InputError。"""
+    if not path:
+        return None
+    rows = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                raise InputError("rss NDJSON 坏行：%r" % line[:80])
+    mine = [r for r in rows if str(r.get("role", "")) == game_role]
+    if not mine:
+        roles = sorted({str(r.get("role", "")) for r in rows})
+        raise InputError("rss 采样里没有 role=%r（实有 %s）" % (game_role, roles))
+
+    def stat(key):
+        vals = [int(r[key]) for r in mine if r.get(key) is not None]
+        if not vals:
+            raise InputError("rss 采样缺 %r" % key)
+        return {"max_mb": round(max(vals) / 1048576.0, 2), "mean_mb": round(sum(vals) / len(vals) / 1048576.0, 2), "samples": len(vals)}
+
+    return {"ws": stat("ws_bytes"), "priv": stat("priv_bytes")}
+
+
+def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, label=None, game_role="game-svr"):
+    perf = _read_tsv(perf_path)
+    rows = len(perf[CROSS_COLS[0]])
+    # 合计列必须逐行等于六面之和（防手改/漂移；不等 ⇒ 输入不可判）
+    for i in range(rows):
+        six = sum(perf[c][i] for c in CROSS_COLS)
+        if six != perf[TOTAL_COL][i]:
+            raise InputError("第 %d 行合计 %d != 六面之和 %d" % (i + 1, perf[TOTAL_COL][i], six))
+    cross = {c: sum(perf[c]) for c in CROSS_COLS}
+    cross["total"] = sum(perf[TOTAL_COL])
+    summary = {
+        "label": label,
+        "perf_tsv": os.path.abspath(perf_path),
+        "tick_rows": rows,
+        "cross_recipient_missing": cross,
+        "region_barrier_us": {
+            "max": max(perf["region_barrier_us"]),
+            "mean": round(sum(perf["region_barrier_us"]) / rows, 1),
+        },
+        "region_barrier_total_us": {
+            "mean_per_tick": round(sum(perf["region_barrier_total_us"]) / rows, 1),
+        },
+        "inbound": {
+            "enqueued_mean": round(sum(perf["inbound_enqueued"]) / rows, 2),
+            "drained_mean": round(sum(perf["inbound_drained"]) / rows, 2),
+            "carry_ticks": sum(1 for v in perf["inbound_carry"] if v > 0),
+            "budget_hit_ticks": sum(1 for v in perf["inbound_budget_hit"] if v > 0),
+        },
+        "refmsg": {
+            "calls_total": sum(perf["refmsg_calls"]),
+            "targets_total": sum(perf["refmsg_targets"]),
+        },
+    }
+    if run_json:
+        run = _load_json(run_json, "run.json")
+        try:
+            start = int(run["start_wall_ms"])
+            end = int(run["end_wall_ms"])
+        except (KeyError, TypeError, ValueError):
+            raise InputError("run.json 缺 start_wall_ms/end_wall_ms（整数）")
+        dur = (end - start) / 1000.0
+        if dur <= 0:
+            raise InputError("run.json 时长非正：start=%d end=%d" % (start, end))
+        summary["run"] = {"start_wall_ms": start, "end_wall_ms": end, "duration_sec": round(dur, 3)}
+        summary["effective_tick_hz"] = round(rows / dur, 3)
+    if report:
+        rep = _load_json(report, "load report")
+        summary["tick"] = _tick_percentiles(rep, bots)
+    if rss_path:
+        summary["rss"] = {game_role: _rss(game_role, rss_path)}
+    return summary
+
+
+def print_summary(s):
+    cross = s["cross_recipient_missing"]
+    print("=== L2-5 ③ 容量切片摘要 (%s) ===" % (s.get("label") or "unlabeled"))
+    # 首屏第一行：合计 + 六面分解（总监硬要求 1）
+    print(
+        "cross_recipient_missing（合计）= %d  [%s]"
+        % (cross["total"], " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS))
+    )
+    tail = []
+    if "effective_tick_hz" in s:
+        tail.append("有效 tick 率=%.2f/s (rows=%d, %.1fs)" % (s["effective_tick_hz"], s["tick_rows"], s["run"]["duration_sec"]))
+    if "tick" in s:
+        t = s["tick"]
+        tail.append("tick p50=%sms p99=%sms max=%sms" % (t["tick_p50_ms"], t["tick_p99_ms"], t["max_ms"]))
+    tail.append("region_barrier_us max=%dµs mean=%.1fµs" % (s["region_barrier_us"]["max"], s["region_barrier_us"]["mean"]))
+    tail.append("region_barrier_total_us mean=%.1fµs/tick" % s["region_barrier_total_us"]["mean_per_tick"])
+    print(" | ".join(tail))
+    if "rss" in s:
+        for role, r in s["rss"].items():
+            print("RSS(%s): ws max=%.2fMB mean=%.2fMB | priv max=%.2fMB mean=%.2fMB" % (
+                role, r["ws"]["max_mb"], r["ws"]["mean_mb"], r["priv"]["max_mb"], r["priv"]["mean_mb"]))
+    ib = s["inbound"]
+    print("inbound: enq=%.2f/tick drained=%.2f/tick carry_ticks=%d budget_hit_ticks=%d" % (
+        ib["enqueued_mean"], ib["drained_mean"], ib["carry_ticks"], ib["budget_hit_ticks"]))
+    print("refmsg: calls=%d targets=%d" % (s["refmsg"]["calls_total"], s["refmsg"]["targets_total"]))
+
+
+def compare(a, b, labels):
+    ra, rb = a.get("rss"), b.get("rss")
+    if not ra or not rb:
+        raise InputError("compare 需要两份摘要都带 rss")
+    role = next(iter(ra))
+    if role not in rb:
+        raise InputError("两份摘要的 RSS 角色不一致（%s vs %s）" % (role, sorted(rb)))
+    za, zb = a.get("zones"), b.get("zones")
+    if za is None or zb is None or za <= zb:
+        raise InputError("compare 需要 zones 字段且 A 区数 > B 区数（实得 %r / %r）" % (za, zb))
+    d_ws = ra[role]["ws"]["max_mb"] - rb[role]["ws"]["max_mb"]
+    d_priv = ra[role]["priv"]["max_mb"] - rb[role]["priv"]["max_mb"]
+    per_zone = d_ws / (za - zb)
+    print("=== 内存伸缩（%s %d 区 − %s %d 区，同机同时长）===" % (labels[0], za, labels[1], zb))
+    print("RSS(%s) ws: %.2fMB − %.2fMB = Δ%.2fMB；priv: Δ%.2fMB" % (role, ra[role]["ws"]["max_mb"], rb[role]["ws"]["max_mb"], d_ws, d_priv))
+    print("每区粗估（ws）：约 %.2fMB/区（Δ÷(%d−%d)）" % (per_zone, za, zb))
+    return {"role": role, "delta_ws_mb": round(d_ws, 2), "delta_priv_mb": round(d_priv, 2), "per_zone_ws_mb": round(per_zone, 2)}
+
+
+# --------------------------- selftest ---------------------------
+def _write(path, text):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
+def _tsv(header, rows):
+    out = ["\t".join(header)]
+    for r in rows:
+        out.append("\t".join(str(v) for v in r))
+    return "\n".join(out) + "\n"
+
+
+def selftest():
+    ok = True
+
+    def expect(cond, msg):
+        nonlocal ok
+        if not cond:
+            ok = False
+            print("SELFTEST_FAIL: " + msg)
+
+    with tempfile.TemporaryDirectory() as td:
+        # 故意把列顺序打散：证明按名读、不按位置
+        header = ["region_barrier_us"] + list(reversed(CROSS_COLS)) + [
+            "region_barrier_total_us", "inbound_enqueued", "inbound_drained", "inbound_carry",
+            "inbound_budget_hit", "refmsg_calls", "refmsg_targets", TOTAL_COL,
+        ]
+        row = {c: 0 for c in header}
+        row["region_barrier_us"] = 120
+        row["region_barrier_total_us"] = 240
+        row["inbound_enqueued"] = 10
+        row["inbound_drained"] = 9
+        row["refmsg_calls"] = 2
+        row["refmsg_targets"] = 5
+        row["cross_recipient_refmsg"] = 1
+        row["cross_recipient_mountride"] = 2
+        row[TOTAL_COL] = 3  # = 1 + 2
+        rows = [dict(row), dict(row)]
+        perf = os.path.join(td, "perf.tsv")
+        _write(perf, _tsv(header, [[r[h] for h in header] for r in rows]))
+        run = os.path.join(td, "run.json")
+        _write(run, json.dumps({"start_wall_ms": 0, "end_wall_ms": 400}))
+        rep = os.path.join(td, "report.json")
+        _write(rep, json.dumps({"tiers": [{"count": 1000, "tick_p50_ms": 41, "tick_p90_ms": 80, "tick_p99_ms": 96, "max_ms": 120}]}))
+        rss = os.path.join(td, "rss.ndjson")
+        _write(rss, "\n".join([
+            json.dumps({"role": "game-svr", "ws_bytes": 100 * 1048576, "priv_bytes": 80 * 1048576}),
+            json.dumps({"role": "game-svr", "ws_bytes": 200 * 1048576, "priv_bytes": 90 * 1048576}),
+            json.dumps({"role": "login-srv", "ws_bytes": 10 * 1048576, "priv_bytes": 5 * 1048576}),
+        ]) + "\n")
+        s = summarize(perf, run, rep, rss, bots=1000, label="2zone")
+        expect(s["cross_recipient_missing"]["total"] == 6, "合计应为 6")
+        expect(s["cross_recipient_missing"]["cross_recipient_mountride"] == 4, "mountride 应为 4")
+        expect(s["effective_tick_hz"] == 5.0, "2 行 / 0.4s 应为 5.0/s")
+        expect(s["tick"]["tick_p50_ms"] == 41, "p50 应取 count=1000 档")
+        expect(s["rss"]["game-svr"]["ws"]["max_mb"] == 200.0, "RSS ws max 应为 200MB")
+        expect(s["region_barrier_us"]["max"] == 120, "barrier max 应为 120")
+
+        # 负例 1：缺列（把 total 列改名）⇒ rc=2
+        bad = perf + ".bad.tsv"
+        _write(bad, _tsv([h for h in header if h != TOTAL_COL], [[r[h] for h in header if h != TOTAL_COL] for r in rows]))
+        try:
+            summarize(bad)
+            expect(False, "缺列必须 InputError")
+        except InputError as e:
+            expect(TOTAL_COL in str(e), "缺列报错必须点名列：%s" % e)
+
+        # 负例 2：合计列与六面不等 ⇒ rc=2
+        drift = os.path.join(td, "drift.tsv")
+        r2 = [dict(row), dict(row)]
+        r2[0][TOTAL_COL] = 99
+        _write(drift, _tsv(header, [[r[h] for h in header] for r in r2]))
+        try:
+            summarize(drift)
+            expect(False, "合计漂移必须 InputError")
+        except InputError:
+            pass
+
+        # 负例 3：只有表头 ⇒ rc=2
+        empty = os.path.join(td, "empty.tsv")
+        _write(empty, _tsv(header, []))
+        try:
+            summarize(empty)
+            expect(False, "无 tick 行必须 InputError")
+        except InputError:
+            pass
+
+        # 负例 4：report 缺 p50 ⇒ rc=2（缺样本不可判）
+        badrep = os.path.join(td, "badrep.json")
+        _write(badrep, json.dumps({"tiers": [{"count": 1000, "tick_p50_ms": None}]}))
+        try:
+            summarize(perf, run, badrep)
+            expect(False, "缺 p50 必须 InputError")
+        except InputError:
+            pass
+
+        # compare：2 区 200MB vs 1 区 150MB ⇒ Δ50MB、每区 50MB
+        s1 = json.loads(json.dumps(s))
+        s1["zones"] = 2
+        s2 = json.loads(json.dumps(s))
+        s2["zones"] = 1
+        s2["rss"]["game-svr"]["ws"]["max_mb"] = 150.0
+        d = compare(s1, s2, ("2zone", "1zone"))
+        expect(d["delta_ws_mb"] == 50.0 and d["per_zone_ws_mb"] == 50.0, "RSS 差与每区粗估")
+        s2["zones"] = 2
+        try:
+            compare(s1, s2, ("a", "b"))
+            expect(False, "区数不递减必须 InputError")
+        except InputError:
+            pass
+
+    print("SELFTEST " + ("OK" if ok else "FAIL"))
+    return 0 if ok else 2
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="L2-5 ③ 段 4 容量切片摘要（按列名读；fail-closed）")
+    ap.add_argument("--perf")
+    ap.add_argument("--run-json")
+    ap.add_argument("--report")
+    ap.add_argument("--rss")
+    ap.add_argument("--bots", type=int)
+    ap.add_argument("--label")
+    ap.add_argument("--zones", type=int)
+    ap.add_argument("--json", dest="out_json")
+    ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ap.add_argument("--labels", nargs=2)
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args(argv)
+    try:
+        if args.selftest:
+            return selftest()
+        if args.compare:
+            a = _load_json(args.compare[0], "摘要 A")
+            b = _load_json(args.compare[1], "摘要 B")
+            labels = args.labels or (a.get("label") or "A", b.get("label") or "B")
+            if args.out_json:
+                d = compare(a, b, labels)
+                d["labels"] = labels
+                _write_json(args.out_json, d)
+            else:
+                compare(a, b, labels)
+            return 0
+        if not args.perf:
+            raise InputError("缺 --perf（或 --selftest / --compare）")
+        if not args.report:
+            raise InputError("缺 --report（容量摘要必须带 tick p50/p99，缺样本不可判）")
+        s = summarize(args.perf, args.run_json, args.report, args.rss, args.bots, args.label)
+        s["zones"] = args.zones
+        print_summary(s)
+        if args.out_json:
+            _write_json(args.out_json, s)
+        return 0
+    except InputError as e:
+        print("PREREQ: " + str(e), file=sys.stderr)
+        return 2
+
+
+def _write_json(path, obj):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(obj, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
