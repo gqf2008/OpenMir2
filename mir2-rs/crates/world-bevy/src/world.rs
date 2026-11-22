@@ -8285,6 +8285,18 @@ impl World {
         MirrorUpsert::Inserted
     }
 
+    /// 删除实体前记「离场标记」（AOI 的 oracle 保留引用语义，见 [`crate::aoi::DepartureMark`]）。
+    ///
+    /// **必须在 `entities.remove` 之前调用**（要读删除瞬间的 `ghost` / `fixed_hide_mode`）。
+    /// **AOI 通用机制，不是镜像专属墓碑**：任何「被删且仍在他人可见集里」的实体都走这里。
+    pub(crate) fn record_departure_of(&mut self, id: i32) {
+        if let Some(e) = self.entities.get(id) {
+            let (ghost, fixed_hide_mode) = (e.ghost, e.fixed_hide_mode);
+            self.entities
+                .record_departure(id, ghost, fixed_hide_mode, self.clock_ms);
+        }
+    }
+
     /// **L2-5 ②**：移除镜像（摘格 + 删实体）。`false` = 不是镜像/不存在（**不得**删真实实体）。
     pub fn remove_mirror(&mut self, id: i32) -> bool {
         let Some(e) = self.entities.get(id) else {
@@ -8297,6 +8309,8 @@ impl World {
         if mapped {
             self.remove_mirror_cell_object(map_id, x, y, id);
         }
+        // 离场标记（AOI 通用；镜像离带 = 非 ghost 删除 ⇒ 收件人区下一次扫描出消失帧）。
+        self.record_departure_of(id);
         self.entities.remove(id);
         true
     }
@@ -9799,6 +9813,8 @@ impl World {
         // `ProcessRunCount` 旁挂项随实体一起清（id 单调不复用，删除只为控内存）。
         self.process_run_counts.remove(actor_id);
         self.disappear_a(actor_id);
+        // 离场标记：ghost 5min 清理时实体仍是 ghost ⇒ 标记 ghost=true ⇒ 扫描侧不发（与 oracle 守卫一致）。
+        self.record_departure_of(actor_id);
         self.entities.remove(actor_id).is_some()
     }
 
@@ -15450,6 +15466,52 @@ mod tests {
         assert_eq!(e.death_tick, 0, "死亡结算不得推进 death_tick");
         assert!(rec.skeletons.is_empty(), "不得产生尸体/骷髅事件");
         assert!(rec.death_use_item_drops.is_empty(), "不得产生玩家掉落");
+    }
+
+    /// **本卡（U3 验收 · 重进清旧 ghost 同款）**：ghost 被删不发，非 ghost 被删照发。
+    ///
+    /// 夹具：观察者先看见 p，再删 p（ghost / 非 ghost 两种），跑到下一次扫描看 `hides`。
+    /// 红检：删 `leave_world_inner` 两处 `record_departure_of` ⇒ ghost 组红（会补发）。
+    #[test]
+    fn departure_mark_ghost_deleted_silent_live_deleted_disappears() {
+        let run = |ghost_first: bool| -> bool {
+            let mut w = World::new(32, 32);
+            let _viewer = w.add_entity(player(1, "v", 10, 10, 10));
+            w.open_session("p");
+            let p = w
+                .enter_map("p", player(0, "p", 11, 10, 10), 0)
+                .expect("p 进图");
+            // 跑到首次扫描（玩家门 1000ms，200ms/tick ⇒ tick 5）。
+            for _ in 0..=5 {
+                let mut rec = w.tick_phase1();
+                w.tick_phase2(&mut rec);
+            }
+            assert!(
+                w.entities
+                    .get(1)
+                    .is_some_and(|v| v.visible_actors.iter().any(|x| x.target == p)),
+                "首次扫描必须看见 p"
+            );
+            if ghost_first {
+                w.soft_close("p").expect("小退（ghost）");
+            }
+            w.disconnect("p").expect("移除");
+            // 下一次扫描（+6 tick）。
+            let mut hid = false;
+            for _ in 0..6 {
+                let mut rec = w.tick_phase1();
+                w.tick_phase2(&mut rec);
+                if rec.hides.iter().any(|(o, t)| *o == 1 && *t == p) {
+                    hid = true;
+                }
+            }
+            hid
+        };
+        assert!(
+            !run(true),
+            "ghost 被删：扫描侧不得补发消失（oracle 保留引用 + !Ghost 同判）"
+        );
+        assert!(run(false), "非 ghost 被删：下一次扫描必须出消失");
     }
 
     /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。

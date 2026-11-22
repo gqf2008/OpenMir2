@@ -372,6 +372,11 @@ impl World {
         // ③ 任何按名/按 id 的读者会命中旧实体。
         // 位置在**全部入参校验之后**：`NoSuchMap` 之类的失败不得顺手摘掉 ghost。
         if let Some(old) = sess.actor_id {
+            // 离场标记：旧 ghost 被删时 ghost=true ⇒ 扫描侧不发（oracle 保留引用 + 守卫同判）。
+            if let Some(e) = entities.get(old) {
+                let (ghost, fixed_hide_mode) = (e.ghost, e.fixed_hide_mode);
+                entities.record_departure(old, ghost, fixed_hide_mode, sim.clock_ms);
+            }
             entities.remove(old);
             sess.actor_id = None;
         }
@@ -595,6 +600,8 @@ impl World {
             let Some(actor_id) = sess.actor_id else {
                 return Err(SessionError::NotInWorld);
             };
+            // 离场标记（ghost 被删 ⇒ 扫描侧不发；与 oracle 守卫 `!Ghost` 同形）。
+            self.record_departure_of(actor_id);
             self.entities.remove(actor_id);
             let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
             sess.actor_id = None;
@@ -665,6 +672,8 @@ impl World {
             debug_assert_eq!(sess.actor_id, Some(actor_id));
             debug_assert!(self.entities.get(actor_id).is_some_and(|e| e.ghost));
         } else {
+            // 离场标记（硬移除时按删除瞬间的 ghost/fixed_hide；非 ghost 被删 ⇒ 扫描侧照发）。
+            self.record_departure_of(actor_id);
             self.entities.remove(actor_id);
             let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
             sess.actor_id = None;

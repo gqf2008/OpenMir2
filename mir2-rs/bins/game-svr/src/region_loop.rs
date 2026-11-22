@@ -2129,7 +2129,6 @@ mod tests {
     /// 红检：把 `run_zone_tick` 的 `apply_mirrors` 挪到 `tick_phase2` 之后 ⇒ 拆区消失帧晚到
     /// 下一次扫描（+6 tick）⇒ 超窗红。
     #[test]
-    #[ignore = "blocked by card/aoi-disappear-on-removal"] // 红：被删实体不进 hides（aoi.rs:432/2155）
     fn step2_disappear_tick_window() {
         // 玩家扫描门：`clock - search_tick > SearchTime(1000)`，200ms/tick ⇒ 下一次扫描 +6 tick。
         const SCAN_GAP: u64 = 6;

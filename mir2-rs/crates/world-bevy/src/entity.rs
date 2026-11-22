@@ -2252,6 +2252,10 @@ impl EntityStore {
         inner
             .world_mut()
             .insert_resource(crate::TickOrder::default());
+        // **AOI 离场标记**（见 `crate::aoi::DepartureMarks`）：与 `OutputAoi` 段共享同一 bevy World。
+        inner
+            .world_mut()
+            .insert_resource(crate::aoi::DepartureMarks::default());
         // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项，C1–C25）。
         // 键与判定都是 `TypeId`（泛型组件按实例如 `AbilitySnapshot<BaseAbil>` 精确登记，
         // P2b P2-GENERIC-NAMES）；显示名见 `ComponentRegistry::name_of`。
@@ -2502,6 +2506,33 @@ impl EntityStore {
         );
         self.refresh_view();
         id
+    }
+
+    /// **AOI 离场标记**：实体从实体表删除**之前**调用，记下删除瞬间的 `(ghost, fixed_hide_mode)`。
+    ///
+    /// oracle 的消失判定用保留引用（`PlayObject.cs:3206-3218`），删除后读不到这两个位 ⇒ 由删除
+    /// 入口记下，供观察者下一次扫描判 `RM_DISAPPEAR`。**AOI 通用机制，不是镜像专属墓碑。**
+    pub fn record_departure(&mut self, id: i32, ghost: bool, fixed_hide_mode: bool, now_ms: i64) {
+        if let Some(mut marks) = self
+            .inner
+            .world_mut()
+            .get_resource_mut::<crate::aoi::DepartureMarks>()
+        {
+            marks.insert(id, ghost, fixed_hide_mode, now_ms);
+        }
+    }
+
+    /// [`Self::record_departure`] 的只读访问（`AoiStore::departure_mark` 的实体表实现）。
+    #[must_use]
+    pub(crate) fn inner_resource_departure_mark(
+        &self,
+        id: i32,
+        now_ms: i64,
+    ) -> Option<crate::aoi::DepartureMark> {
+        self.inner
+            .world()
+            .get_resource::<crate::aoi::DepartureMarks>()
+            .and_then(|m| m.get(id, now_ms))
     }
 
     /// 受控读取位置/视野组件（S3b 起真值在组件，不在 `Entity`）。
