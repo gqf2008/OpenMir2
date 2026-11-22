@@ -15,6 +15,10 @@
   * 有效 tick 率 = tick 行数 ÷ run.json 的 `[start_wall_ms, end_wall_ms]`；
   * `--compare`：`RSS(2区) − RSS(1区)` 与每区粗估。
 
+**重要口径（2026-11-22 总管踩坑）**：perf TSV 的每一行是**该 tick 的增量**（多数列写行即清零），
+**不是累计值**——汇总必须**按列求和**，绝不能把最后一行当全轮读数（末行 `handoff_offered=0`
+不代表全轮 0）。本脚本所有汇总都按列求和。
+
 用法::
 
   python -I -B tools/botload/perf_tsv_summary.py --perf <perf.tsv> --run-json <run.json> \
