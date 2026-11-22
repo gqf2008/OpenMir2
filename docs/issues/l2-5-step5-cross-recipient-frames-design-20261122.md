@@ -11,19 +11,22 @@
 
 ## 0. 结论摘要
 
-1. **推荐方案 A（非对称延迟）**：只有**跨区帧**延 1 tick（在收件区 `tick_top` 排水发射），
-   本地帧路径不动。理由见 §2.4：它是唯一同时满足「改动面最小 / 内部（非边界）收件人零变化 /
+1. **推荐方案 A（非对称延迟）**：只有**跨区帧**延 1 tick（在收件区 `barrier1` 之后、`phase2`
+   之前排水发射；V2，见 §1.4），本地帧路径不动。理由见 §2.4：它是唯一同时满足「改动面最小 / 内部（非边界）收件人零变化 /
    可回滚」的方案，且 **B 声称的「全序与 N=1 完全同构」不成立**（§1.3），C 的双写者序不可判。
 2. **前手 §3 的序键 `(tick, phase_rank=0 跨区 / 1 本地)` 与现实相反**：同一源 tick 里本地帧
-   **先**发（产生即发），跨区帧 **后**发（下一 tick `tick_top`）⇒ 任何「跨区在前」的序键都是
+   **先**发（产生即发），跨区帧 **后**发（下一 tick，见 §1.4 的 V2 排水点）⇒ 任何「跨区在前」的序键都是
    反的（§1.1）。
 3. **比序键更根本**：N=1 的同 tick 收件人帧序来自**单线程实体遍历 + 每收件人四叉堆**；分区后
    任何合并只能得到「区内序 + 区际 canonical 序」，**跨源交错不可能逐帧复刻 N=1**（§1.3）。
    因此边界收件人的「同收件人相对顺序」硬面**必然偏离**；偏离量级可量化（§1.5），是否接受由
    Owner 定（总监已去问）。文档**不写**「顺序完全保持」。
 4. **barrier2 不足以保证 I3**：六面里有产生点在 `barrier2` **之后**（NPC/商人转身/受击、
-   商人消失），它们与收件区下一 tick 的 `tick_top` 之间没有 happens-before ⇒ 延迟会在 1/2 tick
-   间漂移。**必须加第三条屏障 `barrier3`**（§4 I3）。
+   商人消失），它们与收件区下一 tick 的排水点之间没有 happens-before ⇒ 延迟会在 1/2 tick 间漂移。
+   两个修法：**V1 = 加 `barrier3`**（tick 尾会合、下一 tick 最开头排水）；**V2 = 排水挪到
+   `barrier1` 之后**（`barrier1` 时全部区已完成上一 tick 全部产帧，不加会合点）。按总监规则
+   「测不出差别默认 V2」，**选 V2**（§1.4 给对比与判据），并用 `src_tick < 当前 tick` 过滤把
+   延迟钉死为**恰好** 1 tick。
 5. **本步实测覆盖面只有「区 0 发送者 → 区 k 收件人」**：计划页 §12.8 残余 2 已写死「区 k 目前
    不出网关帧」。反问方向（区 k 发送者）要等区 k 有自己的 host 循环，**登记为前置缺口**，本步
    不做，也不得在验收里假装覆盖（§0.1）。
@@ -74,13 +77,15 @@ tick 顶（handoff tick_top）→ 命令/事件排水 → tick_world_head_with_s
   `send_ref_msg_to_targets` / `broadcast_feature_changed_except` / `apply_pending_gm_mountride`
   在命令段或 `HostFrames`；`drain_npc_merchant_*` / `drain_merchant_disappears` / AOI 在
   `HostAoiDownlink`（`barrier2` 之后）。这些都是 `gates[line].send(...)` 当场发。
-- **跨区帧只能在收件区下一 tick 的迭代最开头排水发射**：源区在 tick T 把帧写进目标区邮箱，
-  目标区在 T+1 的**迭代最开头**（区 0 是 `drain.next` 事件/命令排水之前，区 k 是
-  `rx.try_recv` 之前；**不是** handoff 的 `h.tick_top`——后者在命令段之后）取走并 `send`。
-  这样跨区帧才排在 T+1 的**任何**本地帧之前。
+- **跨区帧在收件区 T+1 的 `barrier1` 之后、`phase2` 之前排水发射（V2）**：源区在 tick T 把帧
+  写进目标区邮箱；目标区在 T+1 的 `barrier1`（`await_neighbors` 返回）之后、`apply_mirrors` /
+  `tick_phase2` 之前取走并 `send`。`barrier1` 时全部区已完成**上一 tick 的全部产帧**（含
+  `barrier2` 之后的段）⇒ 延迟确定性 1 tick；排水点用 `src_tick < 当前 tick` 过滤，把「本 tick
+  pre-barrier1 产生、已在邮箱里」的帧留到下一轮，保证**恰好** 1 tick（不是 0/1 混）。
 
 ⇒ v1 §3 的 `phase_rank`（跨区=0、本地=1）与物理事实**相反**：同一源 tick T 的本地帧在 T 内
-先发，跨区帧在 T+1 `tick_top` 才发（即在 T 的所有本地帧之后、T+1 的本地帧之前）。
+先发，跨区帧在 T+1 `barrier1` 之后才发（即在 T 的所有本地帧之后；相对 T+1 的本地帧则落在
+「P0/P2 之后、P3/P4 之前」——V2 的代价，见 §1.4）。
 
 ### 1.2 结论：不许用「序键」冒充顺序契约
 
@@ -110,7 +115,7 @@ N=1 里同一收件人在同一 tick 收到的帧序来自：
 因此：**不存在一个可实现的合并键能逐帧复刻 N=1 的跨源交错**。这不是本方案的缺陷，是分区的
 数学后果。任何声称「全序完全同构」的写法必须给出上述键的构造与证明，否则是过度承诺。
 
-### 1.4 barrier2 不足以保证 1 tick 上界（I3 的硬缺口）
+### 1.4 barrier2 不足以保证 1 tick：V1 vs V2，选 V2
 
 `barrier2` 只保证「所有区完成 `phase2`」。但六面里有产生点在 `barrier2` **之后**：
 
@@ -118,24 +123,49 @@ N=1 里同一收件人在同一 tick 收到的帧序来自：
 - `MerchantDisappear`：`drain_merchant_disappears`；
 - 以及部分 `RefMsg` 调用点（`HostAoiDownlink` 内的各 `drain_*`）。
 
-源区在 `barrier2` 之后 `push` 邮箱，收件区的 T+1 `tick_top` 也在它自己的 `barrier2` 之后——
-两者**没有 happens-before**：收件区可能先排空邮箱、源区后写 ⇒ 该帧落到 T+2。线程调度一变，
-延迟在 1/2 tick 间漂移，违反 I3。
+源区在 `barrier2` 之后 `push` 邮箱；收件区若在「本 tick 的 `tick_top` / `barrier2` 之后」排水，
+两者**没有 happens-before**：收件区可能先排空、源区后写 ⇒ 该帧落到 T+2。线程调度一变，延迟
+在 1/2 tick 间漂移，违反 I3。两个修法：
 
-**修法（写死）**：新增第三道会合点 `TickBarriers::after_frames`（下称 `barrier3`），放在
-**每区本 tick 最后一个跨区入队点之后、下一 tick `tick_top` 之前**：
+**V1（barrier3）**：tick 尾最后一个入队点之后加第三道会合点（区 0 在
+`drain_run_downlinks_with_magic` 之后、HostPersist 之前；区 k 在 `handoff.after_phase2` 之后），
+下一 tick 的**最开头**排水（早于本 tick 任何本地帧）。
 
-- 区 0 host：放在 `drain_run_downlinks_with_magic`（HostAoiDownlink）之后、HostPersist 之前
-  （最后一个六面产生点在此；放在这里只让最小区等「帧产生段」，不等持久化/睡眠）；
-- 区 k（`spawn_minimal_zone`）：放在 `handoff_runtime.after_phase2` 之后、`tick += 1` 之前；
-- N=1（`zone_host == None`）不构造 `TickBarriers`，`barrier3` 零参与（I4）。
+- 顺序：跨区帧领跑 T+1 ⇒ **最接近 N=1**（N=1 里 T 的帧都在 T+1 的任何帧之前）；
+- 代价：每 tick 多一个**全局会合点**。现有 2 区窗口是**空区臂**（1000 bot 全在区 0，区 1 空转），
+  测不到 V1 的真实代价——`region_barrier_us` 的 202ms 均值是**相位差 + 区 0 节拍 sleep**
+  （§12.2 已澄清），不是屏障开销；V1 的增量在空区臂≈一次 condvar 往返（µs 级），在边界负载臂
+  则可能等于被消除的 overlap（区 k 下一 tick phase1 与 host 帧产生段的重叠）。
 
-于是：**T 的入队 → barrier3(T) → T+1 的 tick_top 排水**，延迟确定性地恰好 1 tick（T→T+1），
-不随调度漂移。代价：区 k 不再与 host 的持久化/睡眠段重叠（但仍与 host 的帧产生段重叠之外的
-部分解耦）；新增探针 `region_barrier3_us`，窗口里与 p50/p99 一起看（§10 风险 2）。
+**V2（排水挪到 `barrier1` 之后，不加会合点）**：
+
+- `barrier1` 时全部区已完成**本 tick phase1**；而每区上一 tick 的全部产帧（含 barrier2 之后的段）
+  在它自己的本 tick phase1 之前 ⇒ **全部 T 入队 happens-before barrier1(T+1)**。在 barrier1(T+1)
+  之后排水，延迟确定 1 tick；
+- 但 barrier1(T+1) 也可能看见某些区**本 tick pre-barrier1** 产的帧（`src_tick == T+1`）。排水时
+  按 `src_tick < 当前 tick` **过滤**（槽内按 tick 单调，front-scan 到 `src_tick == 当前` 即停），
+  把这些帧留到下一轮 ⇒ **恰好** 1 tick，不是 0/1 混；
+- 顺序：跨区帧落在 T+1 的「P0/P2 本地帧之后、P3/P4 本地帧之前」⇒ 相对 V1 多出
+  「跨区 T 帧 vs T+1 的 P0/P2 本地帧」的**跨 tick 倒置**；
+- 代价：**零新增会合点**；多出的倒置暴露面 = `cross_recipient_order_overlap_early`
+  （本 tick X 非空 且 T+1 的 P0/P2 本地帧非空 的 (R,T) 对）。
+
+**判据与选择**：
+
+| 维度 | V1 barrier3 | V2 barrier1 后排水 |
+| --- | --- | --- |
+| 延迟 | 恰好 1 tick | 恰好 1 tick（靠 `src_tick` 过滤） |
+| 顺序 | 跨区 T 帧领跑 T+1 全部本地帧（最接近 N=1） | 跨区 T 帧在 T+1 的 P0/P2 之后（多一类跨 tick 倒置） |
+| 代价 | 每 tick 一个全局会合点（空区臂测不出；边界臂未知） | **零新增会合点** |
+| 今天可测差异 | `cross_recipient_order_overlap_early == 0`（收件区 k 无本地帧）⇒ **测不出** | 同左 |
+| 未来风险 | 会合点可能压 tick 尾 | 区 k 接 host 后多出 P0/P2 倒置 |
+
+按总监规则「两种都可行且测不出差别 ⇒ 默认 V2」，**选 V2**：今天收件区 k 连本地帧都没有，
+V1 的顺序收益不可测；V2 零新增会合点。**未来 revisit 条件**：区 k 接 host 循环后，若
+`cross_recipient_order_overlap_early > 0` 且不可接受，再评估 V1。
 
 > v1 §2 说「`tick_top` 排水 + barrier2 已给保证」——**不成立**，因为产生点跨过了 barrier2。
-> 这是本稿对 v1 的实质性修正之一。
+> 本稿把排水点钉在 `barrier1` 之后、`phase2` 之前（V2），并以 `src_tick` 过滤保证恰好 1 tick。
 
 ### 1.5 偏离的形态与量级（可检查）
 
@@ -143,7 +173,8 @@ N=1 里同一收件人在同一 tick 收到的帧序来自：
 
 ```text
 N=1    : [T 的本地帧 L 与跨区帧 X 按单线程序交错]
-A      : L(T) 全部照旧在 T 内发；X(T) 全部推迟到 T+1 tick_top，排在 L(T) 之后、L(T+1) 之前
+A/V2   : L(T) 全部照旧在 T 内发；X(T) 全部推迟到 T+1 barrier1 之后，排在 L(T) 之后、
+         L_early(T+1)（P0/P2）之后、L_late(T+1)（P3/P4）之前
 ⇒ 倒置对 = {(x, l) | x ∈ X(T), l ∈ L(T), 且 N=1 里 x 在 l 之前}
 ```
 
@@ -169,7 +200,8 @@ A      : L(T) 全部照旧在 T 内发；X(T) 全部推迟到 T+1 tick_top，排
 ### 2.1 方案 A：非对称延迟（只跨区帧延 1 tick）
 
 - **实现面**：`MirrorSpec`/`World` 存镜像 route；六面在「本地会话未命中且 mirror」处改为
-  `classify_and_enqueue`；按 (dst, src) 的邮箱；收件区 `tick_top` 排水；`barrier3` 保确定性。
+  `classify_and_enqueue`；按 (dst, src) 的邮箱；收件区 `barrier1` 之后排水（V2，`src_tick`
+  过滤保确定性）。
   本地帧路径**一行不改**。
 - **延迟**：只有跨区收件人的跨区帧 +1 tick（200ms）；内部收件人**零变化**。
 - **可验证性**：I2（同源子序列）与 canonical 跨源序可逐项断言；与 N=1 的对比只能对
@@ -184,7 +216,7 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
 `(源 tick, 源区, seq)` 合并 ⇒ 全序与 N=1 完全同构」。**逐项核**：
 
 - 实现面：所有 `gates[].send` 的收件人帧都要改成入缓冲（AOI、run_frames、六面、登录尾…），
-  改动面远大于 A；还需要 barrier3（同样问题）。
+  改动面远大于 A；同样需要 V2 的排水相位与 `src_tick` 过滤。
 - 延迟：**全局 +1 tick（+200ms）**，包括内部收件人。
 - 可验证性：内部收件人 = N=1 流**整体平移 1 tick**（可机械对比）；边界收件人 = 每源子序列
   相同 + canonical 跨源序——**与 A 的偏离形态相同**（§1.3），并没有变好。
@@ -228,20 +260,25 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
 
 相位记号：**P0** = 命令/事件段（phase1 之前）；**P2** = HostPlayerRun（barrier1 之前）；
 **P3** = HostFrames（barrier2 之后、HostAoiDownlink 之前）；**P4** = HostAoiDownlink
-（`drain_run_downlinks_with_magic`，barrier2 之后）；**P5** = 收件区 T+1 `barrier3` 之后的
-**迭代最开头**排水（早于本 tick 的事件/命令段任何本地帧）。**交付相位一律 P5(T+1)**（方案 A）。
+（`drain_run_downlinks_with_magic`，barrier2 之后）；**P5** = 收件区 T+1 的 `barrier1` 之后、`phase2` 之前的排水（V2）。**交付相位一律 P5(T+1)**
+（方案 A）；`src_tick` 过滤保证恰好 1 tick。
 
 | 面 | 产生相位（tick 内） | 交付相位 | 与本地帧的全序位置 | N=1 相对顺序是否保持 | 不保持时的偏离形态与量级 |
 | --- | --- | --- | --- | --- | --- |
-| `refmsg` | **P0–P4 全跨**：`send_ref_msg_to_targets` 被命令段、HostPlayerRun 之后各 `drain_*`、HostAoiDownlink 多处调用；收件人可能来自 500ms 缓存 | P5(T+1) `tick_top` | 排在 L(T) 之后、L(T+1) 之前 | **否**（跨源）；同一来源子序列**是** | 每个 (R,T) 的跨区 `refmsg` 帧整体后移 1 tick；倒置对 ≤ `|L|·|X|`。这是六面里**量最大**的一类（10.004% 分母就是它的投递段） |
+| `refmsg` | **P0–P4 全跨**：`send_ref_msg_to_targets` 被命令段、HostPlayerRun 之后各 `drain_*`、HostAoiDownlink 多处调用；收件人可能来自 500ms 缓存 | P5(T+1)（barrier1 后） | L(T) 之后；T+1 的 P0/P2 之后、P3/P4 之前 | **否**（跨源）；同一来源子序列**是** | 每个 (R,T) 的跨区 `refmsg` 帧整体后移 1 tick；倒置对 ≤ `|L|·|X|`。这是六面里**量最大**的一类（10.004% 分母就是它的投递段） |
 | `run_frames` | **P2**（`flush_run_frames` 的 `SendRefMsg(53)` 观察者副本，barrier1 之前） | P5(T+1) | 同上 | **否**（跨源）；同源 **是** | 只影响 53 健康变化观察者副本；低频、每源每次 `ref_copies` 份。偏离形态同 A：跨区副本后移 1 tick；同源副本序不变 |
 | `npc_merchant` | **P4**（`drain_npc_merchant_turns/hits`，barrier2 之后） | P5(T+1) | 同上 | **否**（跨源）；同源 **是** | 仅当 NPC/商人在**源区**、收件人在邻区。今天区 k 的静态 NPC 无 host 循环 ⇒ 只覆盖「区 0 NPC → 区 k 玩家」（§0.1）；区 k NPC 的转身/受击**今天不产生**，不是本路径能补 |
 | `feature_changed` | **P0**（`apply_pending_gm_feature_changed` / 装备重算命令段） | P5(T+1) | 同上 | **否**（跨源）；同源 **是** | 低频（换装/`@OnHorse` 的 41）。偏离：跨区观察者收 41 晚 1 tick；同源序不变 |
 | `mountride` | **P0**（`apply_pending_gm_mountride`，命令段） | P5(T+1) | 同上 | **否**（跨源）；同源 **是** | 极低频（GM `@OnHorse`/`@OffHorse`）。它按**本地会话表**枚举收件人，跨区玩家靠**镜像 + range** 单独枚举；偏离：跨区玩家收 1118 晚 1 tick；含自己那帧仍走本地 |
 | `merchant_disappear` | **P4**（`drain_merchant_disappears`，barrier2 之后） | P5(T+1) | 同上 | **否**（跨源）；同源 **是** | 低频、局部（城堡商人战中 `FixedHideMode`）。偏离：跨区观察者收 30 晚 1 tick；收件人是**发帧时刻快照**，不是本 tick 现扫 |
 
+**表内「同上」的精确含义**：交付相位 = P5(T+1)；全序位置 = **L(T) 之后、L_early(T+1)
+（P0/P2）之后、L_late(T+1)（P3/P4）之前**。V2 与 V1 的唯一差别是「落在 L_early 之前还是
+之后」；今天跨区收件人只在区 k、而区 k 无本地帧 ⇒ `cross_recipient_order_overlap_early == 0`
+（§1.4），两者**测不出差别**，故按总监规则选 V2。区 k 接 host 后如有 L_early，需要重测。
+
 **三列不留空的证据**：每行的「产生相位」是符号锚（函数名 + 所在段），「交付相位」由 §1.4 的
-`barrier3` 保证，「全序位置」由 §1.1 的段序推出，「N=1 是否保持」按 §1.3 的通则逐个面判
+V2 的 `barrier1` 排水点保证，「全序位置」由 §1.1 的段序推出，「N=1 是否保持」按 §1.3 的通则逐个面判
 （同源保持、跨源不保持），「偏离形态与量级」按面的频率/收件人来源分别写。
 
 **补充（六面之外）**：AOI 出现/消失帧**不是**跨区面——观察者在本区，帧由收件区从本区 World
@@ -252,12 +289,12 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
 
 ### I1 同一收件人的帧流只有一个有序发射者
 
-- **机制**：源区只把帧写进**目标区邮箱**；唯一的 gate `send` 在**收件区线程**（`tick_top` 排水
+- **机制**：源区只把帧写进**目标区邮箱**；唯一的 gate `send` 在**收件区线程**（`barrier1` 之后排水
   + 本地帧路径）。源区永不直接写目标收件人的 gate。
 - **邮箱形状（关键）**：目标区一个邮箱，内部按**源区**分槽
   `inboxes[dst][src] = Mutex<VecDeque<CrossZoneFrame>>`；每个槽只有一个写者（源区线程）⇒
   无跨源抢锁交错；收件区按源区号升序排空 ⇒ 跨源序是**声明序**，不是抢锁序。
-- **断言**：收件区排水只在 `tick_top` 一处；`CrossZoneSink` 不暴露 `gates`（源区拿不到 gate
+- **断言**：收件区排水只在 `barrier1` 之后一处；`CrossZoneSink` 不暴露 `gates`（源区拿不到 gate
   发送端）；测试 `single_emitter_only_recipient_zone_drains`（源区写入后，源区侧 gate 收端 0 帧，
   收件区侧恰 1 帧）。
 
@@ -271,13 +308,15 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
 
 ### I3 跨区交付延迟确定性且上界 1 tick
 
-- **机制**：`barrier3`（§1.4）——T 的入队 `happens-before` barrier3(T) `happens-before`
-  T+1 的 `tick_top` 排水。所有六面产生点必须在 barrier3 之前；barrier3 放在最后一个产生点
-  之后。
+- **机制（V2）**：排水点 = 收件区 T+1 的 `barrier1` 之后、`phase2` 之前；`barrier1` 时全部 T
+  入队已 happens-before（§1.4）。排水按 `src_tick < 当前 tick` 过滤，保证**恰好** 1 tick
+  （pre-barrier1 产的 T+1 帧留到下一轮）。
 - **断言**：`cross_delay_is_exactly_one_tick`（人为让源区 post-barrier2 段变慢 N ms，收件区仍在
-  T+1 收到，不是 T+2）；变异「把 barrier3 拆掉 / 把排水挪到 barrier3 前」⇒ 红。
-- **守卫**：如果将来有人在 barrier3 之后新增六面产生点，顺序守卫（源码锚 + 相邻调用序断言）
-  要红；这是「门修门」的接线（新产生点必须同时移动 barrier3）。
+  T+1 收到，不是 T+2；人为让源区 pre-barrier1 产帧，断言它落在 T+2 而不是 T+1）→ 证明过滤生效；
+  变异「去掉 `src_tick` 过滤」⇒ 该帧 0 tick 到达 ⇒ 红；「把排水挪到 barrier1 之前」⇒ 与源区产帧
+  无序 / 丢帧 ⇒ 红。
+- **守卫**：排水点必须**在 `barrier1` 返回之后**（源码锚 + 调用序断言）；任何把排水挪回
+  `barrier2` 之后或 `barrier1` 之前的改动 ⇒ 顺序守卫红。
 
 ### I4 切片关闭（`slicing=0`）时新路径零参与，N=1 逐字节不变
 
@@ -289,8 +328,8 @@ v1 的表述是「切片模式下**所有**面向收件人的帧都缓一 tick�
    测试 `mirror_spec_route_fields_default_none`（`mirror_spec_for` 的手动 offer 路径 `None`）。
 3. **计数**：`counting_recipients_enabled()` 闸扩展覆盖 `delivered/unroutable/overflow`；
    测试 `slicing_off_counts_nothing_three_buckets`（切片关 ⇒ 四列全 0）。
-4. **屏障**：`TickBarriers::after_frames` 只在切片路径构造/等待；N=1 走 `world.tick_tail`，
-   测试 `barrier3_not_constructed_without_slicing`。
+4. **排水点**：V2 的 `barrier1` 后排水只在切片路径存在；N=1 走 `world.tick_tail`、无
+   `ZoneRuntime`，测试 `cross_drain_absent_without_slicing`。
 5. **端到端**：`n1_stdout_equivalence.ps1` 两树归一化 stdout sha 相等（沿用 ④a/④b-0 的
    `order_sha` / `multiset_sha` 同一对）+ `l2_two_zone` 全绿。
 
@@ -402,22 +441,23 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
 - **T7 同一收件人「本地帧 + 跨区帧」全序用例**（§1 的核心，新增）：
   - 夹具：收件人 R 在区 1；区 1 本地事件产生 L（如本地 NPC 转身）；区 0 的边 source 产生 X
     （同源 tick T，走 `refmsg`）；
-  - 断言：L 在 T 内到达；X 在 **T+1 `tick_top`** 到达，且排在 L(T) 之后、L(T+1) 之前
-    （= 声明的 canonical 位置）；同源子序列与 N=1 相同；
+  - 断言：L 在 T 内到达；X 在 **T+1 `barrier1` 之后、`phase2` 之前**到达，且排在 L(T) 之后、
+    L_early(T+1) 之后（= V2 声明的 canonical 位置）；同源子序列与 N=1 相同；
   - **先红后绿**：未实现时 X 不出现（`delivered==0`）⇒ 红；实现后绿；
   - 变异：把排水挪到 `phase2` 之后（应红：X 出现在 T 而不是 T+1，或顺序错）；把延迟改成
-    **2 tick**（应红）；拆 `barrier3` 并人为延迟源区（应红：X 落到 T+2）。
+    **2 tick**（应红）；**去掉 `src_tick` 过滤**（pre-barrier1 产的帧应在 T+1 排、却在本轮被排
+    ⇒ 0 tick，应红）；**把排水挪到 barrier1 之前**（应红：与源区产帧无序、可能丢帧）。
 
 **变异清单（逐支，恢复后 sha 回合）**：
 
 1. 删 route 传递（`apply_mirrors` 不填 `MirrorSpec::route`）⇒ T1 红、T7 红；
 2. **破掉结构性恰一次**（收件区本地路径也发同一事件 / 源区入队两次）⇒ T4 红
    （对应总监清单的「去重键」一支；本设计**没有**去重键，故改为破结构约束，而不是删键）；
-3. **排水挪相位**（`tick_top` → phase2 之后）⇒ T7 红；
+3. **排水挪相位**（barrier1 之后 → phase2 之后 / barrier1 之前）⇒ T7 红；
 4. **去掉上限**（无界）⇒ T6 红（无界增长断言）；
 5. **拆 N=1 闸**（切片关仍构造邮箱/计数）⇒ `slicing_off_counts_nothing_three_buckets` 红；
 6. **延迟改成 2 tick** ⇒ `cross_delay_is_exactly_one_tick` 红；
-7. **拆 `barrier3`** ⇒ T7 / I3 用例红（配合人为延迟）。
+7. **去掉 `src_tick` 过滤 / 去掉 barrier1 排水点** ⇒ `cross_delay_is_exactly_one_tick` 红。
 
 ## 9. 交付顺序（最先落地的「单事件跑通」最小切片）
 
@@ -429,10 +469,9 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
    不暴露 gates）；只在 `slicing && mirror` 构造（I4 闸 + 测试）。
 3. **单个面**：先接 `RefMsg` 的 `send_ref_msg_to_targets` 未命中支（同一嵌套处
    `classify_cross_recipient` + 入邮箱）；三桶计数 + `missing` 合计恒等。
-4. **收件区排水**：`spawn_minimal_zone` 与区 0 host 的**迭代最开头**（前者 `rx.try_recv` 之前、
-   后者 `drain.next` 之前；**不是** `h.tick_top`）各加一处排空 → `gates.send`，保证跨区帧先于
-   本 tick 任何本地帧。
-5. **`barrier3`**：`TickBarriers::after_frames` + 两处等待 + `abort` 接线 + `region_barrier3_us`。
+4. **收件区排水（V2）**：`spawn_minimal_zone` 与区 0 host 的 **`barrier1`（`await_neighbors`）
+   返回之后、`apply_mirrors`/`tick_phase2` 之前**各加一处排空 → `gates.send`；排水时按
+   `src_tick < 当前 tick` 过滤（保恰好 1 tick）。**不加新会合点。**
 6. **单事件测试**：合成 2 区夹具，区 0 发送者 → 区 1 收件人（镜像带 route），断言 T+1 恰一帧、
    bytes 相等、`delivered=1 / unroutable=0 / overflow=0 / missing=1`。
 7. 再依次接其余五面 → T1–T7 → N=1 复跑（三件套 + 两树 sha）→ 2 区走廊窗口（三桶 + 恒等式 +
@@ -445,10 +484,11 @@ root/tempdir，不 assert 真实仓库状态；每颗牙写「退化形态 → �
 1. **区 k 无帧产生循环（范围风险，非本步能补）**：§0.1 / §12.8 残余 2 ⇒ ⑤ 实测只覆盖
    「区 0 → 区 k」。任何「跨区帧已全通」的结论在区 k host 循环落地前都是**越界结论**。
    缓解：验收显式标注方向；把区 k host 循环登记为 ⑤ 之后的前置卡。
-2. **`barrier3` 的活性与容量代价**：新每 tick 会合点会让区 k 等 host 的「帧产生段」完成
-   （不再与之重叠）。若 `region_barrier3_us` 或 p99 变差，需要 per-direction seal（按源区
-   seal 而不全局会合）或把入队前移到 barrier2 之前（代价是重复收件人计算）。
-   窗口必须同时报 `region_barrier3_us`、p50/p99、`overflow`、`unroutable`。
+2. **V2 的排水点代价与未来 revisit**：V2 不加会合点 ⇒ 无 `region_barrier3_us` 增量；代价是
+   跨区帧落在 T+1 的 `barrier1` 之后（排在 P0/P2 本地帧之后）。今天收件区 k 无本地帧 ⇒
+   暴露为 0；区 k 接 host 循环后，若 `cross_recipient_order_overlap_early > 0` 且不可接受，
+   再评估 V1（`barrier3`）。窗口必须报 `cross_recipient_order_overlap` /
+   `inverted_pair_bound` / `overflow` / `unroutable`。
 3. **顺序面在边界收件人上必然偏离 N=1**：§1.3 的数学结论。若 Owner 不接受「边界收件人排除
    在顺序硬面外」，⑤ 无法按 tier A §3 立判据；此时只能走 B（+200ms）并**仍然**要接受跨源
    交错的降格声明。缓解：用 §1.5 的 `order_overlap` / `inverted_pair_bound` 把暴露面量化后
