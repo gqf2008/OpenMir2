@@ -14387,7 +14387,7 @@ fn handle_move_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
 ) {
-    let Some(entry) = online.find_linear_chr(chr_name) else {
+    let Some(entry) = online.find_by_chr(chr_name) else {
         glog!(
             "WRN",
             "移动命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
@@ -20138,7 +20138,7 @@ fn send_good_tick(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
 ) {
-    let Some(me) = online.find_linear_chr(chr_name) else {
+    let Some(me) = online.find_by_chr(chr_name) else {
         return;
     };
     let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "回 +GD") else {
@@ -20723,7 +20723,7 @@ fn drain_aoi_downlink(
         // **可见集/进入差分选择**：在线坐标查找 + `visible_actors` 过滤 + 入队槽 + 出队序。
         // （`online` 是按插入序的 `Vec` ⇒ 这里的按名查找是 O(会话数)，本探针会把它计入。）
         let t_select = tick_profile::probe_begin(&prof);
-        let Some(entry) = online.find_linear_chr(&sess.chr_name) else {
+        let Some(entry) = online.find_by_chr(&sess.chr_name) else {
             glog!(
                 "WRN",
                 "同屏下行：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
@@ -20883,7 +20883,7 @@ fn drain_aoi_events(
         {
             continue;
         }
-        let Some(entry) = online.find_linear_chr(&sess.chr_name) else {
+        let Some(entry) = online.find_by_chr(&sess.chr_name) else {
             glog!(
                 "WRN",
                 "事件出现帧：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
