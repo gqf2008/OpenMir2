@@ -193,6 +193,12 @@ impl SlotTable {
         self.next_id = base + 1;
     }
 
+    /// **L2-5 ④b-0**：下一个将分配的 id（= 已分配数 + 基址 + 1）。启动期自检用。
+    #[must_use]
+    pub fn next_actor_id(&self) -> i32 {
+        self.next_id
+    }
+
     /// 业务 id -> bevy 实体句柄（`None` = id 不在槽位表，或该槽已空）。
     pub fn entity_of(&self, id: i32) -> Option<Entity> {
         let slot_idx = self.index.get(id)?;
@@ -287,10 +293,25 @@ impl SlotTable {
 
     /// 把 (id, bevy 实体) 绑到刚取的槽位，并推进 `next_id`。
     fn bind(&mut self, slot_idx: usize, id: i32, entity: Entity) {
+        self.bind_inner(slot_idx, id, entity, true);
+    }
+
+    /// **L2-5 ④b-0**：绑一个**外来 id**（镜像 / handoff 提升 —— 来自别的 World 的 id 段），
+    /// **不推进本 World 的 `next_id`**。
+    ///
+    /// 为什么危险（2026-11-22 实测）：`bind` 无条件 `next_id = id + 1`。区 0 的世界收到区 1
+    /// 玩家的镜像（id ≥ 4,194,305）后，本世界分配器被推到区 1 段 ⇒ 之后在区 0 落地的玩家
+    /// 拿到区 1 的 id ⇒ **两个不同玩家共用 ActorId**（100 人冒烟 10 组重复），镜像互相遮蔽、
+    /// AOI/帧/会话表全被污染。外来 id 必须只登记、不参与本区分配器。
+    fn bind_foreign(&mut self, slot_idx: usize, id: i32, entity: Entity) {
+        self.bind_inner(slot_idx, id, entity, false);
+    }
+
+    fn bind_inner(&mut self, slot_idx: usize, id: i32, entity: Entity, advance: bool) {
         self.slots[slot_idx].entity = Some(entity);
         self.slots[slot_idx].key = Some(id);
         self.index.insert(id, slot_idx);
-        if id >= self.next_id {
+        if advance && id >= self.next_id {
             self.next_id = id + 1;
         }
         self.order_dirty = true;
@@ -404,6 +425,12 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         self.world.resource_mut::<SlotTable>().set_id_base(base);
     }
 
+    /// **L2-5 ④b-0**：下一个将分配的业务 id（启动期 id 段自检用）。
+    #[must_use]
+    pub fn next_actor_id(&self) -> i32 {
+        self.world.resource::<SlotTable>().next_actor_id()
+    }
+
     /// 插入实体，返回其业务 id（复用调用方给的 `id`）。
     ///
     /// 槽位分配与既有 `EntityStore::insert` 逐条一致：优先复用 `free.pop()` 的槽
@@ -419,6 +446,19 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
             .bind(slot_idx, id, bevy_entity);
         // 结构性变更后刷新缓存查询状态的 archetype 匹配集（`&T` 的 archetype 在首次
         // 插入时创建；之后同组件集的 spawn 复用同一 archetype）。`remove` 同理兜底。
+        self.refresh_archetypes();
+        id
+    }
+
+    /// **L2-5 ④b-0**：[`Self::insert`] 的「外来 id」版：登记实体但**不推进** `next_id`
+    /// （镜像 / handoff 提升的 id 来自别的 World 段；见 [`SlotTable::bind_foreign`]）。
+    pub fn insert_foreign(&mut self, id: i32, value: T) -> i32 {
+        assert!(id > 0, "外来实体 id 必须为正：{id}");
+        let slot_idx = self.world.resource_mut::<SlotTable>().take_free_slot();
+        let bevy_entity = self.world.spawn(value).id();
+        self.world
+            .resource_mut::<SlotTable>()
+            .bind_foreign(slot_idx, id, bevy_entity);
         self.refresh_archetypes();
         id
     }
