@@ -566,6 +566,12 @@ mod tests {
             0,
             "slicing=0 ⇒ zone_unknown 必须 0"
         );
+        let (us, events) = perf_counters::cross_enqueue_cost();
+        assert_eq!(
+            (us, events),
+            (0, 0),
+            "slicing=0 ⇒ 成本探针不得取钟/计数（双闸）"
+        );
         perf_counters::set_slicing_enabled(true);
     }
 

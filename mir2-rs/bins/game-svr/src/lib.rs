@@ -4953,7 +4953,7 @@ fn apply_pending_gm_mountride(
     }
     // **L2-5 ③ 段 3**（只加计数）：本面按**本地会话表**枚举收件人，跨区玩家根本不在表里
     // ⇒ 上面循环看不到它们。同图 ±range 内的**镜像玩家**即「在邻区、本区发不到」，
-    // 每个计一次（判据/反证见 `perf_counters::note_cross_recipient_missing`）。
+    // 每个计一次（判据/反证见 `perf_counters::note_cross_recipient_outcome`）。
     if perf_counters::counting_recipients_enabled() {
         for m in world.entities.iter_ref() {
             if m.mirror
@@ -24367,20 +24367,10 @@ mod perf_counters {
         SLICING_ENABLED.load(Ordering::Relaxed)
     }
 
-    /// 记一次「收件人在邻区 ⇒ 本区发不到」（**只加计数**，不改变任何投递/帧）。
-    ///
-    /// **调用判据**：收件人 id 来自 World 扫描/缓存、本地会话查表**未命中**，且该 id 在 World 里
-    /// `mirror == true`。反证：收件人谓词已要求 `race == Play && !ghost`，且镜像每 tick 由
-    /// `apply_mirrors` 刷新、陈旧镜像同 tick 清扫 ⇒ 候选里的镜像 = **本 tick 邻区仍在发布的活
-    /// 玩家**；唯一残差是「同一 tick 内下线」（≤1 tick，投递点不可辨，按跨区计），不另造不可达
-    /// 的 `target_mirror_not_deliverable` 计数器。
-    pub(crate) fn note_cross_recipient_missing(surface: CrossRecipientSurface) {
-        // **L2-5 ⑤ 兼容支**：尚未接跨区邮箱的面（⑤ 最小切片只接 `RefMsg`）仍走本函数；
-        // 结果桶按「不可路由」计，保证三桶恒等式对全部六面成立（不是把未接的面漏掉）。
-        note_cross_recipient_outcome(surface, CrossRecipientOutcome::Unroutable);
-    }
-
     /// **L2-5 ⑤**：记一次六面未命中 + **恰好一个**结果桶（构造保证恒等式）。
+    ///
+    /// 六面全部经 `cross_zone_frames::note_mirror_recipient` 分类；旧的「未接面走兼容支」函数
+    /// 在六面全接后删除（无生产调用）。
     pub(crate) fn note_cross_recipient_outcome(
         surface: CrossRecipientSurface,
         outcome: CrossRecipientOutcome,
@@ -123405,7 +123395,7 @@ mod l2_handoff_prod_tests {
 /// 在邻区）。每次注入只触发**一个**广播面，断言「该面 +Δ、其余五面 0」（用**增量**断言，
 /// 避免与并行用例的全局计数互扰）。
 ///
-/// 红检：删任一面的 `note_cross_recipient_missing` 调用 ⇒ 该面牙红；把面参数写错 ⇒ 串面牙红；
+/// 红检：删任一面的 `note_mirror_recipient` 调用 ⇒ 该面迁移牙红；把面参数写错 ⇒ 串面牙红；
 /// 删 `SLICING_ENABLED` 判据 ⇒ [`slicing_off_counts_nothing`] 红。
 #[cfg(test)]
 mod l2_s3_cross_recipient_tests {
@@ -123615,6 +123605,58 @@ mod l2_s3_cross_recipient_tests {
         false
     }
 
+    /// **L2-5 ⑤ 六面恒等式**：六面各触发一次（镜像带 route）⇒
+    /// `六面合计 == delivered + unroutable + overflow`（窗口合计）。
+    #[test]
+    fn six_face_identity_holds_after_all_faces() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, _rx) = gates();
+        fire_refmsg(&world, &online, &g);
+        fire_run_frames(&world, &online, &g);
+        fire_npc_merchant(&world, &online, &g);
+        fire_feature_changed(&world, &online, &g);
+        fire_mountride(&world, &online, &g);
+        fire_merchant_disappear(&world, &online, &g);
+        let six: u64 = ALL
+            .iter()
+            .map(|s| perf_counters::cross_recipient_by_surface(*s))
+            .sum();
+        let buckets = delivered()
+            + unroutable()
+            + perf_counters::cross_recipient_outcome(
+                perf_counters::CrossRecipientOutcome::Overflow,
+            );
+        assert_eq!(six, buckets, "六面合计必须等于三桶之和（窗口合计）");
+        assert_eq!(delivered(), 6, "六个面各 1 次镜像收件 ⇒ delivered=6");
+        assert_eq!(unroutable(), 0, "route=Some ⇒ 不得落 unroutable");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `npc_merchant`**：与 `refmsg` **共用** `send_ref_msg_to_targets` 投递段
+    /// （§11.1 的 M1），因此 RefMsg 接线后本面已自动走邮箱；本牙只证明「确实走邮箱」。
+    #[test]
+    fn npc_merchant_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_npc_merchant(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "npc_merchant 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 排水（1 帧，含 SM_TURN 对 2 体）");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
     /// **L2-5 ⑤ 面迁移 `merchant_disappear`**：unroutable → delivered（走邮箱）。
     #[test]
     fn merchant_disappear_cross_zone_migrates_to_mailbox() {
@@ -123625,8 +123667,12 @@ mod l2_s3_cross_recipient_tests {
         let (g, mut rx) = gates();
         let (d0, u0) = (delivered(), unroutable());
         fire_merchant_disappear(&world, &online, &g);
-        assert_eq!(delivered() - d0, 1, "merchant_disappear 必须走邮箱");
-        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "merchant_disappear 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
         assert_eq!(drain_cross(&g), 1, "T+1 排水");
         assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
         crate::cross_zone_frames::uninstall();
@@ -123642,8 +123688,12 @@ mod l2_s3_cross_recipient_tests {
         let (g, mut rx) = gates();
         let (d0, u0) = (delivered(), unroutable());
         fire_mountride(&world, &online, &g);
-        assert_eq!(delivered() - d0, 1, "mountride 必须走邮箱");
-        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "mountride 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
         assert_eq!(drain_cross(&g), 1, "T+1 排水");
         assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
         crate::cross_zone_frames::uninstall();
@@ -123659,8 +123709,12 @@ mod l2_s3_cross_recipient_tests {
         let (g, mut rx) = gates();
         let (d0, u0) = (delivered(), unroutable());
         fire_feature_changed(&world, &online, &g);
-        assert_eq!(delivered() - d0, 1, "feature_changed 必须走邮箱");
-        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "feature_changed 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
         assert_eq!(drain_cross(&g), 1, "T+1 排水");
         assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
         crate::cross_zone_frames::uninstall();
@@ -123676,8 +123730,12 @@ mod l2_s3_cross_recipient_tests {
         let (g, mut rx) = gates();
         let (d0, u0) = (delivered(), unroutable());
         fire_run_frames(&world, &online, &g);
-        assert_eq!(delivered() - d0, 1, "run_frames 必须走邮箱（delivered +1）");
-        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "run_frames 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
         assert_eq!(drain_cross(&g), 1, "T+1 barrier1 后必须排水");
         assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
         crate::cross_zone_frames::uninstall();
