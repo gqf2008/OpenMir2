@@ -237,8 +237,9 @@ pub fn snapshot_border(
                 && rect.border_contains(e.x, e.y, halo_width)
         })
         .map(|e| {
-            // 边界带实体一定 `add_to_mapped`；查不到 = 格表与 `add_to_mapped` 失同步（程序错误）。
-            // **不得静默退化成槽位序**（若基线恰好槽位序，错位会被掩盖）⇒ debug 断言 + release 兜底。
+            // **合法中间态**：`add_to_mapped` 在生成/登录时置真，进格要等 `Command::Enter` 被
+            // 消费（`session.rs`/`monai.rs` 的落图前状态）⇒ 本 tick 的 AOI 也看不见它。
+            // 查不到 ⇒ 计数（`mirror_cell_pos_unknown`）+ `usize::MAX` 兜底；②夹具断言计数恒 0。
             let cell_pos = world
                 .map(map_id)
                 .get_cell_info(e.x, e.y)
@@ -246,11 +247,9 @@ pub fn snapshot_border(
                 .obj_list
                 .iter()
                 .position(|o| o.actor_object && o.cell_obj_id == e.id);
-            debug_assert!(
-                cell_pos.is_some(),
-                "边界带实体 {} 已落格但不在其格 obj_list 里（格表/add_to_mapped 失同步）",
-                e.id
-            );
+            if cell_pos.is_none() {
+                mir2_world_bevy::mirror_metrics::note_mirror_cell_pos_unknown();
+            }
             HaloEntity {
                 actor_id: e.id,
                 map_id: e.map_id,
@@ -331,10 +330,14 @@ impl HaloExchange {
 }
 
 /// 每个 tick 的两道屏障（phase1 之后 / phase2 之后）。
+///
+/// **失败快传**：任一线程 panic 后调用 [`Self::abort`]，其余线程立刻从屏障上醒来并 panic。
+/// `std::sync::Barrier` 没有超时接口——不做快传会让「一区 panic ⇒ 其余区永久阻塞」把整机或
+/// 整测试挂死（实测：区线程 panic 后 `l2_two_zone` 卡 180s+，进程 CPU=0）。
 #[derive(Debug)]
 pub struct TickBarriers {
-    after_phase1: std::sync::Barrier,
-    after_phase2: std::sync::Barrier,
+    after_phase1: FailFastBarrier,
+    after_phase2: FailFastBarrier,
 }
 
 impl TickBarriers {
@@ -342,9 +345,16 @@ impl TickBarriers {
     #[must_use]
     pub fn new(zone_count: usize) -> Self {
         Self {
-            after_phase1: std::sync::Barrier::new(zone_count),
-            after_phase2: std::sync::Barrier::new(zone_count),
+            after_phase1: FailFastBarrier::new(zone_count),
+            after_phase2: FailFastBarrier::new(zone_count),
         }
+    }
+
+    /// **失败快传**：区线程在 `catch_unwind` 的 `Err` 分支调用（应在 `resume_unwind` 之前）。
+    /// 唤醒两道屏障上的所有等待者并让它们 panic。
+    pub fn abort(&self) {
+        self.after_phase1.abort();
+        self.after_phase2.abort();
     }
 
     /// phase1 之后的屏障：所有区发布完自己的快照后才返回（随后可安全读邻居）。
@@ -363,13 +373,80 @@ impl TickBarriers {
     }
 }
 
+/// 一通屏障。语义同 [`std::sync::Barrier`]（N 方到达才放行、代际复用），另加 `failed` 标志。
+#[derive(Debug)]
+struct FailFastBarrier {
+    parties: usize,
+    /// `(arrived, generation)`。
+    state: Mutex<(usize, u64)>,
+    cv: std::sync::Condvar,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl FailFastBarrier {
+    fn new(parties: usize) -> Self {
+        Self {
+            parties,
+            state: Mutex::new((0, 0)),
+            cv: std::sync::Condvar::new(),
+            failed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn abort(&self) {
+        self.failed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.cv.notify_all();
+    }
+
+    fn is_failed(&self) -> bool {
+        self.failed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn wait(&self) {
+        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.is_failed() {
+            drop(st);
+            fail_fast_panic();
+        }
+        let generation = st.1;
+        st.0 += 1;
+        if st.0 >= self.parties {
+            st.0 = 0;
+            st.1 = st.1.wrapping_add(1);
+            self.cv.notify_all();
+            drop(st);
+            if self.is_failed() {
+                fail_fast_panic();
+            }
+            return;
+        }
+        while st.1 == generation {
+            st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+            if self.is_failed() {
+                drop(st);
+                fail_fast_panic();
+            }
+        }
+        drop(st);
+        if self.is_failed() {
+            fail_fast_panic();
+        }
+    }
+}
+
+/// 失败快传的 panic 文本（测试据此判「快传」而不是超时）。
+fn fail_fast_panic() -> ! {
+    panic!("多区屏障：另一区已失败（panic）⇒ 快速失败，避免永久阻塞在 Barrier 上")
+}
+
 /// 屏障等待计时：探针关闭时**不取钟**、返回 0；启用时返回本次等待的 µs。
 ///
 /// 区驱动（[`run_zone_tick`]）把**同一区的两道屏障等待相加**后交给
 /// `perf_counters::note_region_barrier_us`；tick 列 `region_barrier_us` 取各区的**最大值**
 /// （Amdahl 代价：决定整 tick 墙钟的是最慢的区），`region_barrier_total_us` 是全部区之和
 /// （只用于对账）。
-fn wait_with_probe(barrier: &std::sync::Barrier) -> u64 {
+fn wait_with_probe(barrier: &FailFastBarrier) -> u64 {
     if perf_counters::enabled() {
         let t0 = Instant::now();
         barrier.wait();

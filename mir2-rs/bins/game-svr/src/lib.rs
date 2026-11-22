@@ -1279,29 +1279,37 @@ fn spawn_minimal_zone(
             // **L2-5 ①**：本区独立 actor id 段（与区 0 及彼此不相交；须在首个实体之前）。
             world.set_id_base(zone_id_base(zone_id));
             let mut tick = 0u64;
-            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                while rx.try_recv().is_ok() {}
-                while ctl_rx.try_recv().is_ok() {}
-                if let Err(e) = region_loop::run_zone_tick(
-                    &mut world,
-                    zone_id,
-                    layout.zone_spans(),
-                    &exchange,
-                    &barriers,
-                    ZONE_HALO_WIDTH,
-                    tick,
-                    // 最小区没有展示表/在线表（②本步无会话来源）⇒ 快照只带 id/坐标/世界侧帧面。
-                    &region_loop::HaloFrameSource::none(),
-                    mirrors,
-                    Some((&**watch.heartbeats(), watch.now_ms())),
-                ) {
-                    glog!(
-                        "ERR",
-                        "最小区 {zone_id} 在 tick {tick} 失败：{e} ⇒ abort 整机"
-                    );
-                    std::process::abort();
+            // **失败快传**：本区 panic ⇒ 唤醒其余区（否则它们永久阻塞在 Barrier 上）。
+            let abort_barriers = Arc::clone(&barriers);
+            let run = move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    while rx.try_recv().is_ok() {}
+                    while ctl_rx.try_recv().is_ok() {}
+                    if let Err(e) = region_loop::run_zone_tick(
+                        &mut world,
+                        zone_id,
+                        layout.zone_spans(),
+                        &exchange,
+                        &barriers,
+                        ZONE_HALO_WIDTH,
+                        tick,
+                        // 最小区没有展示表/在线表（②本步无会话来源）⇒ 快照只带 id/坐标/世界侧帧面。
+                        &region_loop::HaloFrameSource::none(),
+                        mirrors,
+                        Some((&**watch.heartbeats(), watch.now_ms())),
+                    ) {
+                        glog!(
+                            "ERR",
+                            "最小区 {zone_id} 在 tick {tick} 失败：{e} ⇒ abort 整机"
+                        );
+                        std::process::abort();
+                    }
+                    tick += 1;
                 }
-                tick += 1;
+            };
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+                abort_barriers.abort();
+                std::panic::resume_unwind(payload);
             }
         })
         .with_context(|| format!("起最小区线程 {zone_id} 失败"))?;
@@ -117502,74 +117510,85 @@ mod l2_multi_zone_ledger_tests {
         mirrors: bool,
     ) -> std::thread::JoinHandle<Vec<(i32, String, u16)>> {
         std::thread::spawn(move || {
-            let runtime = ZoneRuntime::new(
-                zone_id,
-                layout.zone_spans(),
-                ZONE_HALO_WIDTH,
-                &exchange,
-                &barriers,
-            );
-            let mut frames = Vec::new();
-            for tick_no in 0..ticks {
-                if zone_id == zone(0) {
-                    outbox
-                        .lock()
-                        .expect("outbox")
-                        .begin_tick(tick_no)
-                        .expect("begin_tick");
+            // **失败快传**：本区 panic ⇒ `barriers.abort()` 唤醒另一区，避免测试挂死。
+            let abort_barriers = Arc::clone(&barriers);
+            let run = move || {
+                let runtime = ZoneRuntime::new(
+                    zone_id,
+                    layout.zone_spans(),
+                    ZONE_HALO_WIDTH,
+                    &exchange,
+                    &barriers,
+                );
+                let mut frames = Vec::new();
+                for tick_no in 0..ticks {
+                    if zone_id == zone(0) {
+                        outbox
+                            .lock()
+                            .expect("outbox")
+                            .begin_tick(tick_no)
+                            .expect("begin_tick");
+                    }
+                    let mut rec = rig.world.tick_phase1();
+                    // 快照的帧面来源 = 本区展示表 + 在线路由表（与生产区 0 的 `sim_loop` 同源）。
+                    let source = HaloFrameSource::new(&rig.displays, &rig.online);
+                    let (_border, neighbors, wait_us) = runtime
+                        .after_phase1(&rig.world, tick_no, &source)
+                        .expect("快照/发布/barrier1/读邻居");
+                    if mirrors {
+                        crate::region_loop::apply_mirrors(
+                            &mut rig.world,
+                            &neighbors,
+                            Some(&mut rig.displays),
+                        )
+                        .expect("应用邻区镜像");
+                    }
+                    rig.world.tick_phase2(&mut rec);
+                    runtime.after_phase2(wait_us, None);
+                    {
+                        let mut guard = outbox.lock().expect("outbox");
+                        let mut ledger =
+                            AoIFrameLedger::new(&mut guard, &layout, &router, zone_id, tick_no);
+                        let _ = drain_run_downlinks_with_magic(
+                            &rec,
+                            &mut rig.world,
+                            &rig.displays,
+                            &rig.online,
+                            &mut rig.sessions,
+                            &rig.gates,
+                            catalog.as_ref(),
+                            12,
+                            3000,
+                            3000,
+                            false,
+                            None,
+                            None,
+                            Some(&mut ledger),
+                            None,
+                            None,
+                        );
+                    }
+                    frames.extend(collect_aoi(&rig.world, &mut rig.rx));
+                    // 本 tick 两区的提交都已完成 ⇒ zone 0 才能 seal 账本。
+                    let _ = after_drain.wait();
+                    if zone_id == zone(0) {
+                        let mut guard = outbox.lock().expect("outbox");
+                        guard
+                            .seal_tick()
+                            .expect("seal_tick")
+                            .check()
+                            .expect("账本三条不变式（not_owner/dup/never/长度）");
+                    }
                 }
-                let mut rec = rig.world.tick_phase1();
-                // 快照的帧面来源 = 本区展示表 + 在线路由表（与生产区 0 的 `sim_loop` 同源）。
-                let source = HaloFrameSource::new(&rig.displays, &rig.online);
-                let (_border, neighbors, wait_us) = runtime
-                    .after_phase1(&rig.world, tick_no, &source)
-                    .expect("快照/发布/barrier1/读邻居");
-                if mirrors {
-                    crate::region_loop::apply_mirrors(
-                        &mut rig.world,
-                        &neighbors,
-                        Some(&mut rig.displays),
-                    )
-                    .expect("应用邻区镜像");
-                }
-                rig.world.tick_phase2(&mut rec);
-                runtime.after_phase2(wait_us, None);
-                {
-                    let mut guard = outbox.lock().expect("outbox");
-                    let mut ledger =
-                        AoIFrameLedger::new(&mut guard, &layout, &router, zone_id, tick_no);
-                    let _ = drain_run_downlinks_with_magic(
-                        &rec,
-                        &mut rig.world,
-                        &rig.displays,
-                        &rig.online,
-                        &mut rig.sessions,
-                        &rig.gates,
-                        catalog.as_ref(),
-                        12,
-                        3000,
-                        3000,
-                        false,
-                        None,
-                        None,
-                        Some(&mut ledger),
-                        None,
-                        None,
-                    );
-                }
-                frames.extend(collect_aoi(&rig.world, &mut rig.rx));
-                // 本 tick 两区的提交都已完成 ⇒ zone 0 才能 seal 账本。
-                let _ = after_drain.wait();
-                if zone_id == zone(0) {
-                    let mut guard = outbox.lock().expect("outbox");
-                    guard
-                        .seal_tick()
-                        .expect("seal_tick")
-                        .check()
-                        .expect("账本三条不变式（not_owner/dup/never/长度）");
+                frames
+            };
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+                Ok(frames) => frames,
+                Err(payload) => {
+                    abort_barriers.abort();
+                    std::panic::resume_unwind(payload);
                 }
             }
-            frames
         })
     }
 
@@ -117747,6 +117766,9 @@ mod l2_multi_zone_ledger_tests {
         frames
     }
 
+    /// C1–C3 串行化：`mirror_cell_pos_unknown` 是进程级原子，并行会互相清零。
+    static CELL_POS_COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// 基线/拆区各跑两遍并断言确定性 + 逐收件人有序帧流相等。
     fn assert_split_matches_baseline(
         baseline_rig: impl Fn() -> ZoneRig,
@@ -117754,6 +117776,10 @@ mod l2_multi_zone_ledger_tests {
         zone1_rig: impl Fn() -> ZoneRig,
         what: &str,
     ) {
+        let _lock = CELL_POS_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_mirror_cell_pos_unknown_for_tests();
         let baseline = by_socket(&run_one_world(baseline_rig(), TICKS_ORDER));
         let baseline_again = by_socket(&run_one_world(baseline_rig(), TICKS_ORDER));
         assert_eq!(baseline, baseline_again, "{what}：基线两遍必须逐字节相同");
@@ -117767,6 +117793,12 @@ mod l2_multi_zone_ledger_tests {
         assert!(
             split.values().any(|v| !v.is_empty()),
             "{what}：夹具必须真的产生出现帧（否则「空 == 空」会假绿）"
+        );
+        // 「已落格但查不到格内序」在夹具里必须为 0（合法中间态只属于 Enter 未消费的生成期）。
+        assert_eq!(
+            mir2_world_bevy::mirror_metrics::mirror_cell_pos_unknown(),
+            0,
+            "{what}：夹具里出现 cell_pos 未知 ⇒ 定序会退化成 usize::MAX（牙失效）"
         );
     }
 
