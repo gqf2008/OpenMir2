@@ -107,6 +107,46 @@ function Get-N1ShutdownPayload {
   return ,[System.Text.Encoding]::ASCII.GetBytes('SHUTDOWN')
 }
 
+function Get-N1RunOutputPath {
+  param([string]$Dir, [string]$Tag)
+  return (Join-Path $Dir "$Tag.stdout.txt")
+}
+
+# 单值守卫：`Invoke-N1Run` 一旦用 `Write-Output` 打诊断行，返回值就会变成**数组**（此前真实发生：
+# 两侧各 9600 字节的 stdout 被判 0 行 ⇒ EMPTY_BOTH 假绿）。所有读路径入口都先过这道守卫。
+function Assert-N1SinglePath {
+  param([object]$Path)
+  return ($Path -is [string] -and -not [string]::IsNullOrEmpty($Path))
+}
+
+# 文件字节数；不存在 ⇒ -1（判不了，不当作空文件）。
+function Get-N1FileBytes {
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
+  return [int](Get-Item -LiteralPath $Path).Length
+}
+
+# 判决矩阵（纯函数）：**空文件**（字节 0）才算 EMPTY_BOTH；文件非空却解析 0 行 ⇒ UNDECIDABLE，
+# 绝不因为「没比」而 PASS。
+function Get-N1Verdict {
+  param(
+    [int]$BaselineBytes,
+    [int]$FeatureBytes,
+    [int]$BaselineLines,
+    [int]$FeatureLines,
+    [bool]$OrderOk,
+    [bool]$MultisetOk
+  )
+  if ($BaselineBytes -lt 0 -or $FeatureBytes -lt 0) { return 'UNDECIDABLE' }
+  if ($BaselineBytes -gt 0 -and $BaselineLines -eq 0) { return 'UNDECIDABLE' }
+  if ($FeatureBytes -gt 0 -and $FeatureLines -eq 0) { return 'UNDECIDABLE' }
+  if ($BaselineBytes -eq 0 -and $FeatureBytes -eq 0) { return 'EMPTY_BOTH' }
+  if ($BaselineBytes -eq 0 -or $FeatureBytes -eq 0) { return 'RED' }
+  if ($BaselineLines -ne $FeatureLines) { return 'RED' }
+  if ($OrderOk -and $MultisetOk) { return 'GREEN' }
+  return 'RED'
+}
+
 # 配置守卫：`[Server]` 段必须存在，`GatePort` 必须存在且 == 期望端口，且不得是 5000。
 function Test-N1Conf {
   param([string]$Path, [int]$ExpectedPort)
@@ -209,6 +249,23 @@ function Invoke-Selftest {
   for ($i = 0; $i -lt 8; $i++) { if ($payload[$i] -ne $oldWrong[$i]) { $equalsOld = $false } }
   Assert-True (-not $equalsOld) 'shutdown payload is not the old 0..7 byte pattern'
 
+  # ⑤ 假绿回归：文件非空却解析 0 行 ⇒ UNDECIDABLE（不是 EMPTY_BOTH/PASS）
+  $v = { param($bb, $fb, $bl, $fl, $o, $m) Get-N1Verdict -BaselineBytes $bb -FeatureBytes $fb `
+      -BaselineLines $bl -FeatureLines $fl -OrderOk $o -MultisetOk $m }
+  Assert-True ((& $v 0 0 0 0 $true $true) -eq 'EMPTY_BOTH') 'verdict: both empty files -> EMPTY_BOTH'
+  Assert-True ((& $v 100 100 0 0 $true $true) -eq 'UNDECIDABLE') 'verdict: non-empty but 0 lines -> UNDECIDABLE (no false green)'
+  Assert-True ((& $v 10 0 1 0 $false $false) -eq 'RED') 'verdict: one side empty -> RED'
+  Assert-True ((& $v 100 100 5 5 $true $true) -eq 'GREEN') 'verdict: equal sha -> GREEN'
+  Assert-True ((& $v 100 100 5 5 $false $true) -eq 'RED') 'verdict: order differs -> RED'
+  Assert-True ((& $v 100 100 5 6 $true $true) -eq 'RED') 'verdict: line count differs -> RED'
+  Assert-True ((& $v -1 100 0 0 $false $false) -eq 'UNDECIDABLE') 'verdict: missing artifact -> UNDECIDABLE'
+
+  # ⑥ 输出污染防线（真实事故：Write-Output 让返回值变数组 ⇒ 9600 字节被判 0 行）
+  Assert-True (Assert-N1SinglePath 'E:/x/a.txt') 'single path guard accepts string'
+  Assert-True (-not (Assert-N1SinglePath @('RUN x', 'E:/x/a.txt'))) 'single path guard rejects array'
+  Assert-True (-not (Assert-N1SinglePath '')) 'single path guard rejects empty'
+  Assert-True ((Get-N1RunOutputPath 'E:/x' 'baseline') -is [string]) 'run output path is a string'
+
   if ($script:selftestFail -ne 0) {
     [Console]::WriteLine("SELFTEST_FAILED count=$($script:selftestFail)")
     return 1
@@ -256,10 +313,10 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 function Invoke-N1Run {
   param([string]$Exe, [string]$Tag)
-  $stdout = Join-Path $OutDir "$Tag.stdout.txt"
+  $stdout = Get-N1RunOutputPath -Dir $OutDir -Tag $Tag
   $stderr = Join-Path $OutDir "$Tag.stderr.txt"
   $exeDir = Split-Path -Parent $Exe
-  Write-Output "RUN $Tag exe=$Exe conf=$Conf port=$Port duration=${DurationSeconds}s"
+  [Console]::WriteLine("RUN $Tag exe=$Exe conf=$Conf port=$Port duration=${DurationSeconds}s")
   $confArg = '"' + $Conf + '"'
   $proc = Start-Process -FilePath $Exe -ArgumentList $confArg -WorkingDirectory $exeDir `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -NoNewWindow
@@ -295,15 +352,29 @@ function Invoke-N1Run {
 }
 
 $baselineOut = Invoke-N1Run -Exe $BaselineExe -Tag 'baseline'
+Assert-N1RunPath $baselineOut 'baseline'
 $featureOut = Invoke-N1Run -Exe $FeatureExe -Tag 'feature'
+Assert-N1RunPath $featureOut 'feature'
 
-function Read-N1Lines([string]$Path) {
+function Read-N1Lines([object]$Path) {
+  if (-not (Assert-N1SinglePath $Path)) {
+    Fail-Usage ("Read-N1Lines 只接受单个路径字符串（实得 {0}：函数输出被污染）" -f `
+        $(if ($null -eq $Path) { 'null' } else { $Path.GetType().FullName }))
+  }
   if (-not (Test-Path -LiteralPath $Path)) { return @() }
   return @(Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object { ConvertTo-N1Line $_ })
 }
 
+function Assert-N1RunPath([object]$Path, [string]$Tag) {
+  if (-not (Assert-N1SinglePath $Path)) {
+    Fail-Usage "$Tag 运行返回的不是单个路径（函数输出被污染：诊断行必须走 Console/Write-Host）"
+  }
+}
+
 $baselineLines = Read-N1Lines $baselineOut
 $featureLines = Read-N1Lines $featureOut
+$baseBytes = Get-N1FileBytes $baselineOut
+$featBytes = Get-N1FileBytes $featureOut
 $baseNorm = Join-Path $OutDir 'baseline.normalized.txt'
 $featNorm = Join-Path $OutDir 'feature.normalized.txt'
 Set-Content -LiteralPath $baseNorm -Value $baselineLines -Encoding UTF8
@@ -313,6 +384,12 @@ $baseOrder = Get-N1OrderSha $baselineLines
 $featOrder = Get-N1OrderSha $featureLines
 $baseMulti = Get-N1MultisetSha $baselineLines
 $featMulti = Get-N1MultisetSha $featureLines
+$orderOk = ($baseOrder -eq $featOrder)
+$multiOk = ($baseMulti -eq $featMulti)
+
+$verdict = Get-N1Verdict -BaselineBytes $baseBytes -FeatureBytes $featBytes `
+  -BaselineLines $baselineLines.Count -FeatureLines $featureLines.Count `
+  -OrderOk $orderOk -MultisetOk $multiOk
 
 $summary = [pscustomobject]@{
   baseline_exe   = $BaselineExe
@@ -320,20 +397,30 @@ $summary = [pscustomobject]@{
   conf           = $Conf
   port           = $Port
   duration_s     = $DurationSeconds
+  baseline_bytes = $baseBytes
+  feature_bytes  = $featBytes
   baseline_lines = $baselineLines.Count
   feature_lines  = $featureLines.Count
   baseline_order_sha = $baseOrder
   feature_order_sha  = $featOrder
   baseline_multiset_sha = $baseMulti
   feature_multiset_sha  = $featMulti
-  result         = ''
+  result         = $verdict
 }
 $summaryPath = Join-Path $OutDir 'summary.json'
+$summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 
-if ($baselineLines.Count -eq 0 -and $featureLines.Count -eq 0) {
-  $summary.result = 'EMPTY_BOTH'
-  $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
-  Write-Output "EMPTY_BOTH 两侧 stdout 都为空（空文件 sha 相同=$baseOrder）；stderr 行数作为旁证："
+if ($verdict -eq 'UNDECIDABLE') {
+  Write-Output ("UNDECIDABLE 判不了：baseline_bytes={0} feature_bytes={1} baseline_lines={2} feature_lines={3}" -f `
+      $baseBytes, $featBytes, $baselineLines.Count, $featureLines.Count)
+  Write-Output '  （产物缺失 / 非空文件却解析 0 行 / 函数输出被污染——一律不判绿；末尾 5 行见下）'
+  Show-Tail $baselineOut 'baseline.stdout' 5
+  Show-Tail $featureOut 'feature.stdout' 5
+  exit 2
+}
+
+if ($verdict -eq 'EMPTY_BOTH') {
+  Write-Output ("EMPTY_BOTH 两侧 stdout 文件长度都为 0（空文件 sha 相同={0}）；stderr 行数作为旁证：" -f $baseOrder)
   foreach ($tag in @('baseline', 'feature')) {
     $errPath = Join-Path $OutDir "$tag.stderr.txt"
     $errLines = @(Get-Content -LiteralPath $errPath -Encoding UTF8 -ErrorAction SilentlyContinue)
@@ -346,20 +433,14 @@ if ($baselineLines.Count -eq 0 -and $featureLines.Count -eq 0) {
   exit 0
 }
 
-$orderOk = ($baseOrder -eq $featOrder)
-$multiOk = ($baseMulti -eq $featMulti)
-if ($orderOk -and $multiOk) {
-  $summary.result = 'GREEN'
-  $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
-  Write-Output ("GREEN lines={0}/{1} order_sha={2} multiset_sha={3}" -f `
-      $baselineLines.Count, $featureLines.Count, $baseOrder, $baseMulti)
+if ($verdict -eq 'GREEN') {
+  Write-Output ("GREEN lines={0}/{1} bytes={2}/{3} order_sha={4} multiset_sha={5}" -f `
+      $baselineLines.Count, $featureLines.Count, $baseBytes, $featBytes, $baseOrder, $baseMulti)
   exit 0
 }
 
-$summary.result = 'RED'
-$summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
-Write-Output ("RED baseline_lines={0} feature_lines={1} order_equal={2} multiset_equal={3}" -f `
-    $baselineLines.Count, $featureLines.Count, $orderOk, $multiOk)
+Write-Output ("RED baseline_lines={0} feature_lines={1} bytes={2}/{3} order_equal={4} multiset_equal={5}" -f `
+    $baselineLines.Count, $featureLines.Count, $baseBytes, $featBytes, $orderOk, $multiOk)
 if (-not $orderOk) {
   $max = [Math]::Min($baselineLines.Count, $featureLines.Count)
   for ($i = 0; $i -lt $max; $i++) {
