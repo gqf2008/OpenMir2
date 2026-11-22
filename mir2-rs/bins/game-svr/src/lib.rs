@@ -29635,10 +29635,12 @@ fn flush_run_frames(
                     continue;
                 }
                 let Some(t) = online.find_linear_actor(target_id) else {
-                    // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区。
+                    // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱（不再只计数）。
                     if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                        perf_counters::note_cross_recipient_missing(
+                        crate::cross_zone_frames::note_mirror_recipient(
                             perf_counters::CrossRecipientSurface::RunFrames,
+                            world.mirror_route(target_id),
+                            std::slice::from_ref(&health_body),
                         );
                     }
                     continue;
@@ -123556,6 +123558,70 @@ mod l2_s3_cross_recipient_tests {
             ..Default::default()
         };
         let _ = drain_merchant_disappears(&rec, world, online, g);
+    }
+
+    fn zone1() -> crate::zone::ZoneId {
+        crate::zone::ZoneId::new(1)
+    }
+
+    fn delivered() -> u64 {
+        perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Delivered)
+    }
+
+    fn unroutable() -> u64 {
+        perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Unroutable)
+    }
+
+    /// 镜像挂 route `(0, 900)`，router 指派到区 1；装 sink（源区 = HOST_ZONE），本 tick = 0。
+    fn arm_cross(world: &mut mir2_world_bevy::World) {
+        world.set_mirror_route(
+            MIRROR,
+            Some(mir2_world_bevy::MirrorRoute {
+                line: 0,
+                socket: 900,
+            }),
+        );
+        let router = std::sync::Arc::new(crate::zone_router::ZoneRouter::new());
+        let _ = router.assign(0, 900, zone1());
+        let mb = std::sync::Arc::new(crate::cross_zone_frames::CrossZoneMailboxes::new(2, 64));
+        crate::cross_zone_frames::install(
+            std::sync::Arc::clone(&mb),
+            router,
+            crate::zone_router::HOST_ZONE,
+        );
+        crate::cross_zone_frames::begin_tick(0);
+    }
+
+    fn drain_cross(g: &Gates) -> usize {
+        crate::cross_zone_frames::drain_zone(zone1(), 1, g)
+    }
+
+    fn recv_socket(rx: &mut mpsc::UnboundedReceiver<SimToGate>, socket: i32) -> bool {
+        while let Ok(msg) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket: s, .. } = msg {
+                if s == socket {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// **L2-5 ⑤ 面迁移 `run_frames`**：unroutable → delivered（走邮箱），收件区 T+1 排水到网关。
+    #[test]
+    fn run_frames_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_run_frames(&world, &online, &g);
+        assert_eq!(delivered() - d0, 1, "run_frames 必须走邮箱（delivered +1）");
+        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        assert_eq!(drain_cross(&g), 1, "T+1 barrier1 后必须排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
     }
 
     #[test]
