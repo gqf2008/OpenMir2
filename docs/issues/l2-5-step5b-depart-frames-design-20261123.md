@@ -1,6 +1,6 @@
 # L2-5 ⑤-第七面 设计：离世帧跨区投递（`DepartFrames`，2026-11-23）
 
-> 状态：**设计稿，未写代码**。基线：当前 master `000f09346`（代码 = ⑤ 合并点 `e69274b61295` + docs-only 复测）。
+> 状态：**设计稿 → 实施中（未编译）**。基线：当前 master `000f09346`（含 ⑤、perf-index 迁移、docs-only 复测）。
 > 决策（opc-27 2026-11-23）：**做第七面**，不走「接受 AOI 覆盖」。理由见 §0。
 > 实施：本文审过后再写码；a7 实验窗口结束后才编译。**0c 复核**。
 
@@ -31,7 +31,7 @@ oracle 的 `DisappearA` 有三条硬差距：
 fn drain_depart_frames(world, online, gates) -> usize {
     for (observer_id, target_id) in world.drain_departs() {
         let body = downlink::disappear_frame(target_id);      // 唯一构造函数（提前，本地/跨区共用）
-        if let Some(observer) = online.find_*(observer_id) {  // find_by_actor（迁移后）/find_linear_actor
+        if let Some(observer) = online.find_by_actor(observer_id) {  // 当前 master 已是索引版
             // 本地路径：不变
             route_to_gate(...)?.send(SimToGate::SendFrame { socket, body });
             sent += 1;
@@ -79,6 +79,51 @@ fn drain_depart_frames(world, online, gates) -> usize {
   除非夹具状态能钉死。
 
 ## 2. 七面计数与基线口径（防漂移）
+
+### 2.0 先修一个既有 writer 列错位（实施中发现，必须一起修）
+
+`write_tick` 的 **vals 顺序与表头列名顺序不一致**：
+- 表头把 ⑤ 的 outcome/诊断列放在 `cross_recipient_missing` 之后，但 vals 把它们放在
+  `handoff`/zone-k 之后；
+- **既有**的 own-segment 两列（`hd[11..12]`）在 vals 里排在 zone-k 三列之前，表头却排在之后。
+⇒ 列数对得上、**位置错**；`perf_tsv_summary` 按名读会读到错列。历史 10.004% 的六面列在错位段
+**之前**，不受影响；但 ④a 的 zone-k/own-segment 读数与 ⑤ 的 outcome 读数可能被误读。
+
+**修法**：header 与 vals 统一为同一顺序（六面 → `missing` → `depart_frames` → `seven_total` →
+三桶 → dup/drop_closed/zone_unknown → enqueue_us/events → `depart_wrn_suppressed` → handoff 11 →
+zone-k 3 → own-segment 2）；并加**行为对齐用例**
+`perf_writer_alignment_tests::write_tick_columns_align_with_header`（`init_with_path` + 设已知
+计数 + `write_tick` + **按列名**读回断言）。修复前该用例必红。
+
+### 2.0.1 既有产物回算（as_read vs true，2026-11-23）
+
+旧产物只能按**旧 vals 位置**读；按列名读（`as_read`）在错位段之后是错的。工具：
+`tools/hygiene/tsv_recompute_legacy.py --tsv <perf_counters.tsv>`（映射常量 + 自测已入工具门）。
+
+| artifact | column | as_read | **true** |
+| --- | --- | --- | --- |
+| `2z-20261122-2359`（④b-1 2z） | `zone_cmd_unsupported` | 126 | **1425** |
+| 同上 | `handoff_move_after_transfer_dropped` | 0 | **2225** |
+| 同上 | `move_map_change_unsupported` | 1425 | **0** |
+| 同上 | `mirror_own_segment_ids` | 2225 | **126** |
+| 同上 | `handoff_fresh_own_segment` | 0 | **0** |
+| `hin-mv-2z-20261123-0125`（⑤ 2z） | `cross_recipient_delivered` | 116 | **5,160,199** |
+| 同上 | `cross_recipient_unroutable` | 58 | **192** |
+| 同上 | `cross_frame_queue_overflow` | 0 | **471,317（8.4%）** |
+| 同上 | `cross_frame_dup` | 58 | **0** |
+| 同上 | `cross_frame_drop_closed` | 0 | **15,245** |
+| 同上 | `cross_recipient_zone_unknown` | 116 | **192** |
+
+- **成立不动**：④a 全部（`2z-205726`：handoff 334/58/0/58/166，zone 1446/60502/0）；④b-1
+  `mirror_shadowed_static == 0`；**10.004% 基线**（六面/`missing` 在错位段之前）。
+- **据此更正**：④b-1 2z 的 zone-k/own；⑤ 的 `delivered/unroutable/overflow/dup/drop_closed/
+  zone_unknown`。`overflow` 真值 471,317 表示 `MAX_FRAMES_PER_SLOT=16384` 在该臂溢出过；
+  此前「overflow=0」的判读不成立（进 ⑤ 容量结论）。
+- 其余 ⑤/`retest`/`4k`/`twogate`/`singleline`/`exp1` 臂六面/⑤ 全 0（无跨区活动），不受影响；
+  `1z-2350`/`hin-mv-n1` 全 0。
+
+### 2.1 七面口径
+
 
 - 新增 `CrossRecipientSurface::DepartFrames`（第 7 面）；`CROSS_RECIPIENT_BY_SURFACE` 6 → 7。
 - **`cross_recipient_missing` 保持六面口径（不变）**；历史 10.004% 只与它比。

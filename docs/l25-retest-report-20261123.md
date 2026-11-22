@@ -94,3 +94,21 @@
 ## 7. 残留物
 
 产物目录：`E:/UserTemp/l25-slice/` 下 `n1-master-equiv-20261123-0301-3ac846e0`、`twogate-20261123-0315`、`singleline-master-20261123-0324`、`retest-1k-20261123-0333`、`retest-2k-20261123-0333`、`4k-single-20261123-0340`（作废）、`4k-single-retry-20261123-0349`（作废）。临时脚本（不在仓库）：`n1_master_equiv.ps1`、`gate_route_two.ps1`、`run_twogate_arm.ps1`、`mem_guard.ps1`、`launch_4k_retry.ps1`、`parse_gate_ledger.py`。配置已还原（见 3.3）。
+
+## 8. 更正块（2026-11-23，perf TSV writer 列错位回算）
+
+`game-svr` 的 `perf_counters::write_tick` 在 2026-11-23 修复前，vals 顺序与表头列名不一致（⑤ 的
+outcome 列、更早的 own-segment/zone-k 列）；**按列名读旧产物**在错位段之后是错的。回算工具：
+`tools/hygiene/tsv_recompute_legacy.py --tsv <perf_counters.tsv>`（已入工具门）。
+
+- **本报告列出的臂**（`twogate-0315`、`singleline-master-0324`、`retest-1k/2k`、`4k-single-*`）：
+  六面/⑤ 列**全 0**（无跨区活动）⇒ **本报告的线数/网关结论不受影响**。
+  本报告的 `overflow` 是**网关队列**指标，与 `cross_frame_queue_overflow` 不同名不同义。
+- **同批唯一有跨区活动的 ⑤ 臂** `hin-mv-2z-20261123-0125`：`delivered` **5,160,199** /
+  `unroutable` **192** / `overflow` **471,317（8.4%）** / `dup` **0** / `drop_closed` **15,245** /
+  `zone_unknown` **192**（as-read 116/58/0/58/0/116 均错）。
+- **④b-1 臂** `2z-20261122-2359`：`zone_cmd_unsupported` **1425**、`handoff_move_after_transfer_dropped`
+  **2225**、`move_map_change_unsupported` **0**、`mirror_own_segment_ids` **126**（as-read
+  126/0/1425/2225）。⇒ 此前基于「1425 次换图降级」的计数结论作废（由总监单独处置卡面）。
+- **成立不动**：④a 臂 `2z-205726`（handoff 334/58/0/58/166、zone 1446/60502/0）；④b-1
+  `mirror_shadowed_static == 0`；10.004% 基线（六面/`missing` 在错位段之前）。
