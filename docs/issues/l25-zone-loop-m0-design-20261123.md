@@ -135,15 +135,38 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   `castle_broadcast_texts`（Periodic 产出 → PostHead 消费）。`rec` 在 WorldHead 守卫**之后**
   统一绑定一次（`let mut rec = scratch.rec.as_mut().expect(...)`）⇒ **凡启用「用 rec 的段」就必须
   同时启用 `WORLD_HEAD`**（M0_MIN 满足；违者 panic，属编程错误）。
+  **A3 已落成运行期断言**（opc-27 2026-11-23 要求）：取 `scratch.rec` 之前
+  `debug_assert!(phases.has(PhaseSet::WORLD_HEAD), "…（phases=0x{:05x}）", phases.0)`；
+  负例 `zone_tick_without_world_head_panics`（`should_panic(expected = "WORLD_HEAD")`）——
+  删掉该断言后 panic 来自 `expect`（文案不含 `WORLD_HEAD`）⇒ 负例红，已实测。
 - **`let mut rec = tick_world_head_with_specials(` 字面量保留**（3 处源码扫描牙用它做 `sim_loop`
   顺序锚），`mut` 已无用 ⇒ 该行加 `#[allow(unused_mut)]`。
 - `&mut rec` / `&rec` 保持 A1 原调用形状（`rec` 现为 `&mut TickRecord`）⇒ fn 级
   `#[allow(clippy::needless_borrow)]`。
-- 本 fn 加 `#[rustfmt::skip]`：给 2,800 行正文套 `if` 会让 rustfmt 整段重排缩进，把「纯搬移」
-  的 review 变成不可读的大 diff；代价 = 此 fn 内新增代码需手工排版（已在 fn doc 写明）。
+- 本 fn 加 `#[rustfmt::skip]`（**临时**）：给 2,800 行正文套 `if` 会让 rustfmt 整段重排缩进，
+  把「纯搬移」的 review 变成不可读的大 diff；代价 = 此 fn 内新增代码需手工排版（已在 fn doc 写明）。
+  **移除条件（写死）：M1 方法化把段体拆成 `fn phase_*` 时，同步移除本 `#[rustfmt::skip]` 并统一
+  格式化**——不得让这个函数永久脱离 rustfmt（opc-27 2026-11-23 裁决）。
+- 两处 `#[allow]` 的理由同上并保留：`#[allow(unused_mut)]`（`let mut rec = tick_world_head_with_specials(`
+  是 3 处源码扫描牙的 `sim_loop` 顺序锚，字面量不得改）、`#[allow(clippy::needless_borrow)]`
+  （`&mut rec` / `&rec` 保持 A1 原调用形状）。
 - **自证**（去缩进后与 A1 比）：正文语句 **2,865 → 2,908（+44，−1）**——新增的 44 行全是
   17 个守卫的开关、`scratch` 初始化与两处跨段搬运；**唯一被改的 1 行 = `fn tick` 签名**；
   17 个 `host_prof.end` 段名与顺序与 A1 完全相同。
+
+### 3.2 段集见证（A3 补牙）与**源码扫描窗口**的坑（2026-11-23）
+
+- **段集见证（仅测试期）**：`RAN_SEGMENTS` 是 `#[cfg(test)] thread_local!` 的 `Cell<u32>`；
+  每个 `phases.has(X)` 守卫入口在 `cfg(test)` 下记一位；空实例用例断言
+  `ran_segments == PhaseSet::M0_MIN.0`（**直接**证明只有 M0_MIN 的段被执行），并另有一条
+  「`M0_MIN` 的组成写死 = `WORLD_HEAD | WORLD_TAIL`」——常量本身被塞位也红。
+- **坑（实测踩到）**：本仓有多条源码扫描用例用
+  `body = lines[fn sim_loop( .. 其后第一条以 "fn " 开头的行]` 作扫描窗口。**任何新增的顶层 `fn`
+  只要插在 `fn sim_loop` 之后、被扫描调用点之前，就会把窗口截断** ⇒ 扫描计数变 0、用例假红
+  （本次实际打到 `p31_production_wiring_anchors` 与
+  `closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view`）。
+  ⇒ 见证的读写一律**内联**成 `RAN_SEGMENTS.with(...)`，**不新增顶层 `fn`**。
+  M1 若要在这一带新增顶层函数，必须同时核这两条及同类扫描用例的窗口边界。
 
 ### 3.1 gap 的归属（0c/opc-27 要求，2026-11-23 定稿）
 
