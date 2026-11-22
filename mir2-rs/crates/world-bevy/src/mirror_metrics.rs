@@ -68,6 +68,48 @@ static MIRROR_SHADOWED_BY_LOCAL: AtomicU64 = AtomicU64::new(0);
 static MIRROR_SHADOWED_STATIC: AtomicU64 = AtomicU64::new(0);
 static MIRROR_SHADOWED_HANDOFF: AtomicU64 = AtomicU64::new(0);
 
+/// **L2-5 own-segment 修正（2026-11-22 总管裁决）**：**本区段** id 的镜像插入次数。
+///
+/// id 段是「分配来源」不是「当前归属」：玩家跨到区 0 后，区 1 从快照收到它的镜像时 id 仍在
+/// 区 1 段 ⇒ 合法插入。**信息性计数**：非 0 正常，突发变化才查（**不是** fail-closed 判据）。
+static MIRROR_OWN_SEGMENT_IDS: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 own-segment 修正**：handoff **回原生区**时以本区段 id 直接落真身的次数。
+/// 同样**信息性**（回迁天然发生；不为 0 正常）。
+static HANDOFF_FRESH_OWN_SEGMENT: AtomicU64 = AtomicU64::new(0);
+
+/// 记一次「本区段 id 的镜像插入」（信息性）。
+pub fn note_mirror_own_segment_id() {
+    MIRROR_OWN_SEGMENT_IDS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 本区段 id 镜像插入次数（测试/诊断）。
+#[must_use]
+pub fn mirror_own_segment_ids() -> u64 {
+    MIRROR_OWN_SEGMENT_IDS.load(Ordering::Relaxed)
+}
+
+/// 复位（**只给测试**）。
+pub fn reset_mirror_own_segment_ids_for_tests() {
+    MIRROR_OWN_SEGMENT_IDS.store(0, Ordering::Relaxed);
+}
+
+/// 记一次「handoff 回原生区 fresh 插入」（信息性）。
+pub fn note_handoff_fresh_own_segment() {
+    HANDOFF_FRESH_OWN_SEGMENT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// handoff 回原生区 fresh 插入次数（测试/诊断）。
+#[must_use]
+pub fn handoff_fresh_own_segment() -> u64 {
+    HANDOFF_FRESH_OWN_SEGMENT.load(Ordering::Relaxed)
+}
+
+/// 复位（**只给测试**）。
+pub fn reset_handoff_fresh_own_segment_for_tests() {
+    HANDOFF_FRESH_OWN_SEGMENT.store(0, Ordering::Relaxed);
+}
+
 /// 记一次「镜像进了 AI 段」（隔离被拆的唯一读数）。
 pub fn note_mirror_ai_action() {
     MIRROR_AI_ACTIONS.fetch_add(1, Ordering::Relaxed);

@@ -764,6 +764,13 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 本区 id 走外来路径直接 panic（否则会掩盖真正的分配错误）；启动门 `check_zone_id_base`
 同时要求段长已登记，未登记即拒绝启动。
 
+**⚠ 更正（2026-11-22 夜，1k 2 区窗口实测；详见 §12.9）**：上面这条"外来 id 必须属于别的段"
+的断言**前提是错的**——**id 段是"分配来源"，不是"当前归属"**。玩家从区 1 跨到区 0 后其实体归
+区 0、id 仍在区 1 段；区 1 之后从快照收到该 id 的镜像、或 handoff 把玩家送回原生区时以本段 id
+直接落真身，**都合法**。该断言已删除；「号段不混」改由**分配器出口**保证（`SlotTable::alloc_id`
+断言 `base < id < base + SEGMENT`），两条路径只留**信息性**计数
+`mirror_own_segment_ids` / `handoff_fresh_own_segment`（非 0 正常）。
+
 **handoff 分量的正常面与越界判据（2026-11-22 追加）**：`mirror_shadowed_handoff` 的正常面 =
 「提升已发生、源区快照还带它一个 tick 的残留」——同一 id/同名/同格的提升实体，每次跨界在
 源区**至多 1 tick** 残留 ⇒ 上界 `≤ 1 × 每秒邻区发布次数`；按 §10 的两阶段口径记
@@ -889,3 +896,47 @@ keep 恒真 ⇒ 与无过滤入口**同抽数同参数序列同记录**；只留
 3. `WorldSpecialSpawner`（特殊怪产仔）仍吃 `&MapRegistry`（区 0 路径）；区 k 若接入需用
    `ZoneMapView`（同一 `MapLookup` 口径已备）；
 4. 2 区与 N=1 的 MonGen 抽数**有意不等价**（per-zone 流）；解除条件 = ④d「全局产生 + 分发」。
+
+### 12.9 own-segment id 修正（2026-11-22 夜，1k 2 区窗口实测触发）
+
+**症状（master `3c09abf9b`，2 区 1k + 走廊铺位，启动后约 19s）**：区 1 线程 panic，整机 abort：
+
+```text
+thread 'm2-zone-1' panicked at crates/world-bevy/src/ecs.rs:337:13:
+assertion `left != right` failed: 外来 id 4194554 落在本区段（base=4194304，segment=4194304）…
+thread 'm2-sim' panicked at bins/game-svr/src/region_loop.rs:477:5: 多区屏障：另一区已失败（panic）
+```
+
+`4194554 = 4194304 + 250`（区 1 段、按 id 序≈第 229 个玩家；区 1 静态只占 21 个 id）。
+
+**根因**：④b-0 补强（`4d61a4834`）的 `bind_foreign` 断言「外来 id 必须落在别的段」**前提错误**
+——**id 段是"分配来源"，不是"当前归属"**。跨区迁移的实体保留原段 id：
+①玩家跨到区 0 后，区 1 从快照收到它的镜像；②handoff 把玩家送回原生区时以本段 id 直接落真身。
+两路径都合法，却被断言当成分配错误。
+
+**总监裁决（2026-11-22）**：**删断言**，不加豁免；守护换成真正的不变量——**分配器不得发出段外 id**。
+
+**实现**
+- `SlotTable::bind_foreign`：删除段归属断言；文档改写为"显式 id 插入：只登记、不推进 `next_id`"，
+  明确 id 段是分配来源。`EcsStore::insert_foreign` 名称保留（语义已改名实相符）。
+- `SlotTable::alloc_id`：出口断言 `id_base < id < id_base + id_segment`（`id_segment == 0` 不检查
+  ⇒ N=1 逐字节不变）——「号段不混」的唯一不变量，且与实体迁移无关。
+- `upsert_mirror` / `handoff_accept` 的 fresh 插入：允许本段 id（仍走显式插入、不推进分配器）；
+  新增**信息性**计数 `mirror_own_segment_ids` / `handoff_fresh_own_segment`（perf TSV 尾两列；
+  **不是** fail-closed 判据）。
+- `crates/world-bevy/src/mirror_metrics.rs`：两个计数 + note/get/reset；`tools/botload/perf_tsv_summary.py`
+  的 handoff 列清单追加这两列（缺列 tolerant，旧二进制产物仍可读）。
+
+**牙（换掉旧 panic 牙）**
+1. `allocator_never_crosses_own_segment`：区 1 连续分配 2000 个 id 全在段内；
+   `allocator_crossing_segment_is_fail_closed`：段长缩到 4、连分 5 个 ⇒ 第 4 个越段 panic。
+2. `own_segment_mirror_insert_is_allowed_and_counted`：玩家跨区后原生区收到本段 id 镜像
+   ⇒ 插入成功、`mirror` 标志真、分配器不动、计数 +1。
+3. `handoff_back_to_origin_fresh_insert_keeps_next_id`：回原生区 fresh 插入成功、落真实体、
+   `next_id` 不变、`handoff_fresh_own_segment` +1。
+旧牙 `foreign_insert_rejects_local_segment_id`（本段 id 走外来路径必 panic）**删除**。
+
+**1k 窗口状态**：本轮窗口判无效——1 区臂有并发 `cargo/rustc`（`loaded_window=true`）且
+`internal_errors=37`（`recv_packet_null`，BotSrv 已知类别、allowlist 空）；2 区臂崩溃（本缺陷）。
+修正合入后按总监安排重报窗口、复跑两臂；判据仍是 §5：`mirror_shadowed_static==0`、
+`handoff_refused==0`、`cross_recipient_missing` 不变差、`ΔRSS`（对比 328MB）方向性下降。

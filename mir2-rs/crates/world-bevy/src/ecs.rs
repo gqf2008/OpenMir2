@@ -168,6 +168,22 @@ impl SlotTable {
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
     pub fn alloc_id(&mut self) -> i32 {
         let id = self.next_id;
+        // **L2-5 own-segment 修正（2026-11-22 总管裁决）**：分配器**不得发出本段以外的 id**
+        // ——这是「号段不混」的唯一不变量（`bind_foreign` 不断言段归属：id 段是**分配来源**，
+        // 不是**当前归属**；跨区迁移的实体带着原段 id 完全合法）。
+        // 段长未登记（0，例如 N=1 / 单 World 测试）⇒ 不检查（逐字节不变）。
+        if self.id_segment > 0 {
+            let upper = self
+                .id_base
+                .checked_add(self.id_segment)
+                .expect("id 段上界溢出 i32");
+            assert!(
+                id > self.id_base && id < upper,
+                "分配器越段：id={id} 不在 ({}, {upper}) 内（segment={}）",
+                self.id_base,
+                self.id_segment
+            );
+        }
         self.next_id += 1;
         id
     }
@@ -222,6 +238,16 @@ impl SlotTable {
     #[must_use]
     pub fn next_actor_id(&self) -> i32 {
         self.next_id
+    }
+
+    /// 该 id 是否落在**本分配段**（`id_segment == 0` ⇒ 恒 `false`）。**不是归属判定**
+    /// ——跨区迁移的实体保留原段 id；只供信息性计数。
+    #[must_use]
+    pub fn id_in_own_segment(&self, id: i32) -> bool {
+        if self.id_segment == 0 {
+            return false;
+        }
+        id / self.id_segment == self.id_base / self.id_segment
     }
 
     /// 业务 id -> bevy 实体句柄（`None` = id 不在槽位表，或该槽已空）。
@@ -321,25 +347,19 @@ impl SlotTable {
         self.bind_inner(slot_idx, id, entity, true);
     }
 
-    /// **L2-5 ④b-0**：绑一个**外来 id**（镜像 / handoff 提升 —— 来自别的 World 的 id 段），
-    /// **不推进本 World 的 `next_id`**。
+    /// **L2-5 ④b-0**：用**显式 id** 插入实体（镜像 / handoff 提升 / 回迁原生区），
+    /// **只登记、不推进本 World 的 `next_id`**。
     ///
-    /// 为什么危险（2026-11-22 实测）：`bind` 无条件 `next_id = id + 1`。区 0 的世界收到区 1
+    /// 为什么必须不推进（2026-11-22 实测）：`bind` 无条件 `next_id = id + 1`。区 0 的世界收到区 1
     /// 玩家的镜像（id ≥ 4,194,305）后，本世界分配器被推到区 1 段 ⇒ 之后在区 0 落地的玩家
     /// 拿到区 1 的 id ⇒ **两个不同玩家共用 ActorId**（100 人冒烟 10 组重复），镜像互相遮蔽、
-    /// AOI/帧/会话表全被污染。外来 id 必须只登记、不参与本区分配器。
+    /// AOI/帧/会话表全被污染。
+    ///
+    /// **不断言段归属（2026-11-22 总管更正）**：id 段是「分配来源」，不是「当前归属」——
+    /// 玩家从区 1 跨到区 0 后其实体归区 0、id 仍在区 1 段；区 1 之后从快照收到「本段 id」的
+    /// 镜像、或 handoff 把玩家送回原生区时以本段 id 直接落真身，**都合法**。
+    /// 「号段不混」由分配器出口保证：见 [`SlotTable::alloc_id`] 的越段断言。
     fn bind_foreign(&mut self, slot_idx: usize, id: i32, entity: Entity) {
-        // **归属校验（fail-closed）**：外来 id 必须落在**别的区段**——本区 id 走外来路径说明
-        // 真正的分配错误就在附近（例如调用方错把本区新实体当镜像/提升插入），不拦会掩盖它。
-        if self.id_segment > 0 {
-            let local = self.id_base / self.id_segment;
-            let incoming = id / self.id_segment;
-            assert_ne!(
-                incoming, local,
-                "外来 id {id} 落在本区段（base={}，segment={}）：本区 id 不得走外来插入路径",
-                self.id_base, self.id_segment
-            );
-        }
         self.bind_inner(slot_idx, id, entity, false);
     }
 
@@ -465,6 +485,12 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     #[must_use]
     pub fn next_actor_id(&self) -> i32 {
         self.world.resource::<SlotTable>().next_actor_id()
+    }
+
+    /// 该 id 是否落在**本分配段**（委托 [`SlotTable::id_in_own_segment`]）。
+    #[must_use]
+    pub fn id_in_own_segment(&self, id: i32) -> bool {
+        self.world.resource::<SlotTable>().id_in_own_segment(id)
     }
 
     /// **L2-5 ④b-0**：登记 id 段长度（见 [`SlotTable::set_id_segment`]）。
