@@ -144,6 +144,11 @@
   旧用例保留并标注「L2-4 形态（已被 §7 取代）」。
 - 新断言的最小失败用例：让非收件人区替收件人区发帧 ⇒ 新闸红；让 owner 区直发（旧形态）⇒ 新闸红
   （两个方向都要有负例，防「闸被拆掉后两边都绿」）。
+- **实现形态（②第 2 步落地）**：`region_loop::EmitterCriterion::{OwnerByRect, RecipientZone}`；
+  `CrossZoneOutbox::new` 保持旧口径（L2-4 对照/旧用例不动），镜像 rig 用
+  `CrossZoneOutbox::with_criterion(.., RecipientZone)`。双向负例
+  `emitter_criterion_recipient_zone_has_two_way_teeth`：收件人区发 ⇒ 绿；非收件人区发 ⇒
+  `NotOwner`；旧口径下同一帧仍红。
 
 ## 8. 已知差异表（L2-5 起生效，必须进发布说明）
 
@@ -217,7 +222,20 @@
    ⇒ ②第 3 步若有「镜像不参与死亡结算」的判据，必须以这里为准；不得假设镜像的 `death`
    只能经 `Die()` 到达。
 
-#### 9.1.2 第 2 步验收判据（Q2）
+#### 9.1.2 第 2 步落地（Q1/Q2 裁决）：`cell_pos` 格内序
+
+- **快照新增 `HaloEntity.cell_pos`** = owner 侧该格 `obj_list` 内的下标（非 actor 对象也计入，
+  保证相对序单调）；读不到 ⇒ `usize::MAX`。
+- **`apply_mirrors` 先按 `(map_id, x, y, cell_pos, actor_id)` 定序再 upsert**：镜像的格子登记
+  是「追加」，只有按 owner 侧格内序追加，收件人世界的 `obj_list` 序才与基线一致。
+- **为什么是「格内进入序」而不是槽位序**：oracle 扫描按 `obj_list` 下标序出帧
+  （`search_view_range_with_updates` → `VisibleActors` 入队序 → `drain_aoi_downlink`），而槽位
+  序是实体存储的分配序；「后进先出 / 延迟 `Enter`」时两者不等。用槽位序会让同格出现帧相对序
+  与基线不同（Q1 裁决认可的口径）。
+- **牙的映射**：布局 2/3 被「删掉定序（回到槽位序）」打红；布局 1（槽位序==进入序）被
+  「反序定序（descending cell_pos）」打红——每个布局至少有一种变异能让它红。
+
+#### 9.1.2 原判据草案（Q2）
 
 镜像新插入恒排在格尾（`add_map_object` 追加）；基线里「远端实体先于本地实体落格」时相对序会
 反转。**本步不改**；②第 2 步必须立「同格多实体逐帧同序」的**正反牙**（含：同格 本地+镜像、

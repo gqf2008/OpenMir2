@@ -184,6 +184,20 @@ pub struct HaloEntity {
     pub dir: u8,
     /// 本 tick 生死（出帧的死亡/骷髅支用它）。
     pub death: bool,
+    /// AOI 可见性/阻挡标志（镜像必须逐项复制；`is_blocking` 与可见性谓词都读它们）。
+    pub invisible: bool,
+    pub ghost: bool,
+    pub fixed_hide_mode: bool,
+    pub ob_mode: bool,
+    /// 主人（宝宝/分身）；`None` = 无主。
+    pub master: Option<i32>,
+    /// **格内序（Q1 裁决）**：owner 侧该格 `obj_list` 里的下标（非 actor 对象也计入，保证相对序
+    /// 单调）。镜像按它追加 ⇒ 收件人世界的格内序 = owner 侧的「进入该格先后」。
+    ///
+    /// 为什么不是槽位序：oracle 扫描按 `obj_list` 下标序出帧，而槽位序是实体存储的分配序——
+    /// 「后进先出 / 延迟 `Enter`」时两者不等，用槽位序会让同格出现帧相对序与基线不同。
+    /// 读不到（未落格/越界）⇒ `usize::MAX`（排最后；正常不会发生）。
+    pub cell_pos: usize,
     /// owner 区展示表条目（`None` = owner 侧本就没有 ⇒ 镜像也不登记）。
     pub display: Option<HaloDisplay>,
     /// 玩家网关路由（`None` = 非玩家/未登记）。
@@ -237,6 +251,19 @@ pub fn snapshot_border(
             cell_type: halo_cell_type(&e),
             dir: e.ai.dir,
             death: e.death,
+            invisible: e.invisible,
+            ghost: e.ghost,
+            fixed_hide_mode: e.fixed_hide_mode,
+            ob_mode: e.ob_mode,
+            master: e.master,
+            cell_pos: world
+                .map(map_id)
+                .get_cell_info(e.x, e.y)
+                .0
+                .obj_list
+                .iter()
+                .position(|o| o.actor_object && o.cell_obj_id == e.id)
+                .unwrap_or(usize::MAX),
             display: source
                 .displays
                 .and_then(|d| d.get(e.id))
@@ -615,8 +642,16 @@ pub fn apply_mirrors(
 ) -> Result<MirrorStats, ZoneTickError> {
     let mut stats = MirrorStats::default();
     let mut seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    for snap in neighbors {
-        for e in &snap.entities {
+    // **同格序（Q1 裁决 / §9.1.2）**：先按 `(map, x, y, cell_pos, id)` 定序，再逐条 upsert。
+    // 镜像的格子登记是「追加」⇒ 只有按 owner 侧格内序追加，收件人世界的 `obj_list` 序才与基线
+    // 一致（否则出现帧相对序会不同）。跨格定序只影响镜像槽位序（确定性），不影响扫描（按坐标）。
+    let mut ordered: Vec<&HaloEntity> = neighbors
+        .iter()
+        .flat_map(|snap| snap.entities.iter())
+        .collect();
+    ordered.sort_by_key(|e| (e.map_id, e.x, e.y, e.cell_pos, e.actor_id));
+    for e in ordered {
+        {
             seen.insert(e.actor_id);
             let spec = MirrorSpec {
                 id: e.actor_id,
@@ -633,6 +668,11 @@ pub fn apply_mirrors(
                 cell_type: e.cell_type,
                 dir: e.dir,
                 death: e.death,
+                invisible: e.invisible,
+                ghost: e.ghost,
+                fixed_hide_mode: e.fixed_hide_mode,
+                ob_mode: e.ob_mode,
+                master: e.master,
             };
             match world.upsert_mirror(spec) {
                 MirrorUpsert::Inserted => stats.inserted += 1,
@@ -884,7 +924,18 @@ impl fmt::Display for LedgerViolation {
 
 impl std::error::Error for LedgerViolation {}
 
-/// 跨区 outbox：实体所属区是**唯一发射者**，帧按收件人所属区入箱，目标区转发到 gate。
+/// **L2-5 §7：单一发射者判据的口径**（两种并存，旧形态保留给 L2-4 用例/对照）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmitterCriterion {
+    /// **L2-4 形态（已被 §7 取代，仅保留对照/旧用例）**：发射者 = 实体坐标所属区。
+    OwnerByRect,
+    /// **L2-5 形态（镜像模型）**：发射者 = **收件人所在区**——镜像占同一格、扫描序可复现，
+    /// 出现帧必须由收件人区发出；否则镜像模型恒红（§7 的约 90% 反例）。
+    RecipientZone,
+}
+
+/// 跨区 outbox：**唯一发射者**（口径见 [`EmitterCriterion`]），帧按收件人所属区入箱，
+/// 目标区转发到 gate。
 ///
 /// 单一发射者由两道**自动判据**保证（不是注释）：
 /// 1. [`Self::submit`] 的来源闸：`src != owner_zone` ⇒ [`OutboxError::NotOwner`] 并计数；
@@ -896,6 +947,8 @@ impl std::error::Error for LedgerViolation {}
 #[derive(Debug)]
 pub struct CrossZoneOutbox {
     zone_count: usize,
+    /// §7 的发射者口径（`new` = 旧形态；镜像 rig 用 [`Self::with_criterion`] 切到收件人区）。
+    criterion: EmitterCriterion,
     active: Option<u64>,
     seen: HashMap<FrameKey, ZoneId>,
     inboxes: Vec<Vec<DeliveredFrame>>,
@@ -910,8 +963,15 @@ impl CrossZoneOutbox {
     /// 按区数构造（启动期一次分配）。
     #[must_use]
     pub fn new(zone_count: usize) -> Self {
+        Self::with_criterion(zone_count, EmitterCriterion::OwnerByRect)
+    }
+
+    /// 指定 §7 口径构造（镜像模型用 [`EmitterCriterion::RecipientZone`]）。
+    #[must_use]
+    pub fn with_criterion(zone_count: usize, criterion: EmitterCriterion) -> Self {
         Self {
             zone_count,
+            criterion,
             active: None,
             seen: HashMap::new(),
             inboxes: (0..zone_count).map(|_| Vec::new()).collect(),
@@ -962,11 +1022,16 @@ impl CrossZoneOutbox {
                 frame: frame.key.tick,
             });
         }
-        if src != owner_zone {
+        // §7：旧口径看「实体坐标所属区」，新口径看「收件人所在区」。
+        let allowed = match self.criterion {
+            EmitterCriterion::OwnerByRect => owner_zone,
+            EmitterCriterion::RecipientZone => dst,
+        };
+        if src != allowed {
             self.not_owner += 1;
             return Err(OutboxError::NotOwner {
                 src,
-                owner_zone,
+                owner_zone: allowed,
                 owner: frame.key.owner,
             });
         }
@@ -1483,6 +1548,53 @@ mod tests {
         assert!(ledger.recv_for(ZoneId::new(9)).is_empty(), "越界区 ⇒ 空");
     }
 
+    /// **§7 新口径（镜像模型）双向负例**：发射者 = **收件人所在区**；旧口径保留为对照。
+    ///
+    /// ① 收件人区发（src = dst）、实体坐标在别区 ⇒ 绿；
+    /// ② 非收件人区发 ⇒ `NotOwner`；
+    /// ③ 旧口径（`CrossZoneOutbox::new`）下同一帧 ⇒ 仍红（旧用例语义不变）。
+    ///
+    /// 红检：把 `submit` 的口径分派删掉（恒按坐标）⇒ ① 红；恒按收件人区 ⇒ ③ 红——
+    /// 两个方向都要有，防「闸被拆掉后两边都绿」。
+    #[test]
+    fn emitter_criterion_recipient_zone_has_two_way_teeth() {
+        let z0 = ZoneId::new(0);
+        let z1 = ZoneId::new(1);
+
+        // ① src = 收件人区（0），实体坐标在区 1 ⇒ 新口径绿。
+        let mut outbox = CrossZoneOutbox::with_criterion(2, EmitterCriterion::RecipientZone);
+        outbox.begin_tick(1).expect("begin");
+        outbox
+            .submit(z0, z1, z0, xfer(0, frame_key(1, 7, 0, 900, 10)))
+            .expect("收件人区发帧必须放行");
+        assert!(outbox.seal_tick().expect("seal").check().is_ok());
+
+        // ② 非收件人区发 ⇒ NotOwner。
+        let mut outbox = CrossZoneOutbox::with_criterion(2, EmitterCriterion::RecipientZone);
+        outbox.begin_tick(1).expect("begin");
+        let err = outbox
+            .submit(z0, z1, z1, xfer(0, frame_key(1, 7, 0, 900, 10)))
+            .expect_err("非收件人区必须被拒");
+        assert!(
+            matches!(err, OutboxError::NotOwner { src, owner_zone, .. } if src == z0 && owner_zone == z1),
+            "{err}"
+        );
+        assert_eq!(
+            outbox.seal_tick().expect("seal").check(),
+            Err(LedgerViolation::NotOwner(1))
+        );
+
+        // ③ 旧口径对照：同一帧仍红（旧用例语义不变）。
+        let mut outbox = CrossZoneOutbox::new(2);
+        outbox.begin_tick(1).expect("begin");
+        assert!(
+            outbox
+                .submit(z0, z1, z0, xfer(0, frame_key(1, 7, 0, 900, 10)))
+                .is_err(),
+            "旧口径（坐标所属区）必须仍拒"
+        );
+    }
+
     /// **单一发射者反例**：非所属区提交 ⇒ `NotOwner` 计数；同身份二次提交 ⇒ `Duplicate`。
     ///
     /// 红检：删来源闸 ⇒ 第一条红；删身份账本 ⇒ 第二条红。
@@ -1614,6 +1726,12 @@ mod tests {
                     cell_type: CellType::Monster,
                     dir: 0,
                     death: false,
+                    invisible: false,
+                    ghost: false,
+                    fixed_hide_mode: false,
+                    ob_mode: false,
+                    master: None,
+                    cell_pos: 0,
                     display: None,
                     route: None,
                 }],
@@ -1658,6 +1776,11 @@ mod tests {
             cell_type: CellType::Monster,
             dir: 3,
             death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
         }
     }
 
@@ -1677,6 +1800,12 @@ mod tests {
             cell_type: CellType::Monster,
             dir: 1,
             death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+            cell_pos: 0,
             display: None,
             route: None,
         }
@@ -1805,6 +1934,51 @@ mod tests {
             snap.entities.iter().any(|e| e.actor_id == 1),
             "真实实体仍在快照里（过滤不过头）"
         );
+    }
+
+    /// **段 0 牙（Q4）**：快照的 5 个可见性/阻挡标志逐项落到镜像（插入与刷新两条路径）。
+    /// 缺一项 ⇒ 拆区会多出可见/挡路的实体（C7 与 A6 都会红）。
+    ///
+    /// 红检：删 `update_mirror_frame_fields` 任一标志回填（如 `invisible`）⇒ 对应断言红；
+    /// 删插入路径的 `spawn.invisible` ⇒ 首条断言红。
+    #[test]
+    fn mirror_copies_aoi_and_blocking_flags() {
+        let mut world = World::new(20, 20);
+        let mut h = halo_entity(902, 4, 5);
+        h.invisible = true;
+        h.ghost = true;
+        h.fixed_hide_mode = true;
+        h.ob_mode = true;
+        h.master = Some(77);
+        let snap = HaloSnapshot {
+            tick: 1,
+            entities: vec![h],
+        };
+        apply_mirrors(&mut world, std::slice::from_ref(&snap), None).expect("apply");
+        let e = world.entities.get(902).expect("镜像在");
+        assert!(
+            e.invisible && e.ghost && e.fixed_hide_mode && e.ob_mode,
+            "4 个状态位必须逐项复制：invisible={} ghost={} fixed_hide={} ob={}",
+            e.invisible,
+            e.ghost,
+            e.fixed_hide_mode,
+            e.ob_mode
+        );
+        assert_eq!(e.master, Some(77), "master 必须复制");
+
+        // 刷新路径（同坐标）同样逐项更新：清回 false/None。
+        let h2 = halo_entity(902, 4, 5);
+        let snap2 = HaloSnapshot {
+            tick: 2,
+            entities: vec![h2],
+        };
+        apply_mirrors(&mut world, std::slice::from_ref(&snap2), None).expect("apply2");
+        let e = world.entities.get(902).expect("镜像在");
+        assert!(
+            !e.invisible && !e.ghost && !e.fixed_hide_mode && !e.ob_mode,
+            "刷新必须把状态位清回 false"
+        );
+        assert_eq!(e.master, None, "刷新必须清 master");
     }
 
     /// **`apply_mirrors`**：邻区快照 ⇒ 插入 + 登记展示项；下一 tick 快照不含它 ⇒ 移除镜像
