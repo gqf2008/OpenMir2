@@ -453,3 +453,42 @@ assertion `left == right` failed: 每次跨界恰一次提升（累计 promoted=
 
 **仍未做（明确登记）**：真机 bot 过网关跨界的批量冒烟（`tools/botload`）——本段的生产证据是
 「两区真线程 + 真实移动命令」，尚未跑完整网关栈。
+
+## 11. 段 3 实施记录（跨区收件人帧缺失计数，2026-11-22）
+
+**范围（总监 2026-11-22）**：只加计数、**不实现跨区帧合成**（留第④/⑤步）。六个广播面各一条
+独立计数，`slicing=0 ⇒ 六面全 0`（N=1 逐字节不变的护栏）。
+
+| 面（`CrossRecipientSurface`） | 计数点 | 判据 |
+| --- | --- | --- |
+| `refmsg` | `send_ref_msg_to_targets` 的 `find_by_actor` 未命中 | `world.entities.get(id).mirror` |
+| `run_frames` | `flush_run_frames` 的 `SendRefMsg(53)` 观察者副本未命中 | 同上 |
+| `npc_merchant` | `drain_npc_merchant_turns/hits` 经 `broadcast_ref_msg_with_surface` | 同上 |
+| `feature_changed` | `broadcast_feature_changed_except` 自身循环未命中 | 同上 |
+| `mountride` | `apply_pending_gm_mountride`：本地会话表枚举**看不到**跨区玩家 ⇒ 同图 ±range 内**镜像玩家**逐个计 | `mirror && race==Play && !ghost` |
+| `merchant_disappear` | `drain_merchant_disappears` 的收件人未命中 | 同上（镜像） |
+
+**判据反证（总监要求写死）**：收件人谓词（`chat::hear_targets*` / `ref_msg_cache`）已要求
+`race == Play && !ghost`；镜像每 tick 由 `apply_mirrors` 刷新、陈旧镜像**同 tick** 清扫 ⇒ 候选里的
+镜像 = **本 tick 邻区仍在发布的活玩家**。唯一残差是「同一 tick 内下线」（≤1 tick，投递点不可辨，
+按跨区计）；不另造不可达的 `target_mirror_not_deliverable` 计数器（等 ⑤ 步镜像带 route 后可按
+route 有无再分）。
+
+**开关/读点**：计数闸 = 启动时 `plan_slicing` 的结果（`perf_counters::set_slicing_enabled`）；
+`perf_counters` TSV **末尾新增 7 列**（六面 + `cross_recipient_missing` 合计；合计列 = 六面本
+tick 增量之和，由构造保证），表头已同步 ⇒ 段 4 容量脚本按列名读取并打印。读函数
+`cross_recipient_missing()` = 六面之和。
+
+**六条独立牙**（`l2_s3_cross_recipient_tests`）：夹具 = 本地玩家（有会话）+ 镜像玩家（race=Play、
+无本地会话）；每次注入只用**一个**面，断言「该面 +1、其余五面 0」（增量口径，避免与并行用例的
+全局计数互扰）；另有一条 `slicing=0 ⇒ 六面全 0` 护栏。
+
+**变异验证（逐面，恢复后 sha 回合 `ace073fe`）**：
+- 删 `refmsg` 面调用 ⇒ `refmsg_face_counts_one` 红（同时 `npc_merchant_face_counts_one` 红——
+  两面共用同一投递段，符合预期）；
+- 删 `run_frames` / `feature_changed` / `mountride` / `merchant_disappear` 各面调用 ⇒ 各自牙红；
+- 把 NPC 面参数写成 `RefMsg` ⇒ `npc_merchant_face_counts_one` 红（面隔离被抓）；
+- 删 `SLICING_ENABLED` 早退 ⇒ `slicing_off_counts_nothing` 红。
+
+**未做（按范围）**：跨区帧合成（镜像 route 消费、事件跨区队列）——第④/⑤步；真机 bot 跨界冒烟
+由总监排窗口。

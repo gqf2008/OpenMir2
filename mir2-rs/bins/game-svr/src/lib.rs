@@ -2937,6 +2937,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
             mirror_enabled,
         )
         .map_err(anyhow::Error::msg)?;
+        // **L2-5 ③ 段 3**：跨区收件人缺失计数的闸——切片关 ⇒ 六面全不计数（N=1 逐字节不变）。
+        perf_counters::set_slicing_enabled(slicing);
         match mode {
             None => None,
             Some(mode) => {
@@ -4491,6 +4493,24 @@ fn apply_pending_gm_mountride(
                 socket: e.socket,
                 body: body.clone(),
             });
+        }
+    }
+    // **L2-5 ③ 段 3**（只加计数）：本面按**本地会话表**枚举收件人，跨区玩家根本不在表里
+    // ⇒ 上面循环看不到它们。同图 ±range 内的**镜像玩家**即「在邻区、本区发不到」，
+    // 每个计一次（判据/反证见 `perf_counters::note_cross_recipient_missing`）。
+    if perf_counters::counting_recipients_enabled() {
+        for m in world.entities.iter_ref() {
+            if m.mirror
+                && m.race == mir2_world_bevy::ACTOR_RACE_PLAY
+                && !m.ghost
+                && m.map_id == smap
+                && (m.x - sx).abs() <= ref_msg_range
+                && (m.y - sy).abs() <= ref_msg_range
+            {
+                perf_counters::note_cross_recipient_missing(
+                    perf_counters::CrossRecipientSurface::MountRide,
+                );
+            }
         }
     }
     true
@@ -12728,6 +12748,12 @@ fn broadcast_feature_changed_except(
             continue;
         }
         let Some(e) = online.find_linear_actor(target_id) else {
+            // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区（本区发不到）。
+            if world.entities.get(target_id).is_some_and(|e| e.mirror) {
+                perf_counters::note_cross_recipient_missing(
+                    perf_counters::CrossRecipientSurface::FeatureChanged,
+                );
+            }
             continue;
         };
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "装备 FeatureChanged 广播")
@@ -19311,7 +19337,29 @@ fn broadcast_ref_msg(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false, None);
+    broadcast_ref_msg_opt(
+        world,
+        online,
+        gates,
+        actor_id,
+        bodies,
+        false,
+        None,
+        perf_counters::CrossRecipientSurface::RefMsg,
+    );
+}
+
+/// [`broadcast_ref_msg`] 的**广播面显式**版（L2-5 ③ 段 3：NPC/商人等各自一列计数）。
+/// 投递口径与 [`broadcast_ref_msg`] 逐字相同，只有 `cross_recipient_missing` 的面不同。
+fn broadcast_ref_msg_with_surface(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+    surface: perf_counters::CrossRecipientSurface,
+) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false, None, surface);
 }
 
 /// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
@@ -19323,7 +19371,16 @@ fn broadcast_ref_msg_with_self(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true, None);
+    broadcast_ref_msg_opt(
+        world,
+        online,
+        gates,
+        actor_id,
+        bodies,
+        true,
+        None,
+        perf_counters::CrossRecipientSurface::RefMsg,
+    );
 }
 
 /// [`broadcast_ref_msg_with_self`] 的**显式坐标**版：收件人按 `(map_id, x, y)` 算（不含实体当前坐标）。
@@ -19338,10 +19395,20 @@ fn broadcast_ref_msg_with_self_at(
     at: (usize, i32, i32),
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true, Some(at));
+    broadcast_ref_msg_opt(
+        world,
+        online,
+        gates,
+        actor_id,
+        bodies,
+        true,
+        Some(at),
+        perf_counters::CrossRecipientSurface::RefMsg,
+    );
 }
 
 /// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
+#[allow(clippy::too_many_arguments)] // 投递面：world 仅用于段 3 的 mirror 判据
 fn broadcast_ref_msg_opt(
     world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
@@ -19350,6 +19417,7 @@ fn broadcast_ref_msg_opt(
     bodies: &[Vec<u8>],
     include_self: bool,
     at: Option<(usize, i32, i32)>,
+    surface: perf_counters::CrossRecipientSurface,
 ) {
     // **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（oracle `BaseObject.Message.cs:395-466`；
     // 偏差 `T-287`）。扫描面仍由 `chat::hear_targets*` 给（±range 闭区间），缓存两段由
@@ -19360,7 +19428,16 @@ fn broadcast_ref_msg_opt(
         }
         None => ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()),
     };
-    send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, include_self);
+    send_ref_msg_to_targets(
+        world,
+        online,
+        gates,
+        actor_id,
+        targets,
+        bodies,
+        include_self,
+        surface,
+    );
 }
 
 /// `SendRefMsg` 的**投递段**：收件人 id 已按升序算好（`chat::hear_targets*` 的返回契约），
@@ -19370,13 +19447,16 @@ fn broadcast_ref_msg_opt(
 /// （[`broadcast_ref_msg_from_walk_candidates`]）共用**同一份**投递代码——两条路径的收件人
 /// 计算方式不同，投递口径（`include_self` 门、`online` 查表、`route_to_gate` 返回 `None`
 /// 即跳过、逐 `body` 克隆发送）必须逐字节相同。
+#[allow(clippy::too_many_arguments)] // 投递面：world 仅用于段 3 的 mirror 判据
 fn send_ref_msg_to_targets(
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
     targets: Vec<i32>,
     bodies: &[Vec<u8>],
     include_self: bool,
+    surface: perf_counters::CrossRecipientSurface,
 ) {
     perf_counters::bump(&perf_counters::REFMSG_CALLS);
     perf_counters::bump_by(&perf_counters::REFMSG_TARGETS, targets.len() as u64);
@@ -19385,6 +19465,12 @@ fn send_ref_msg_to_targets(
             continue;
         }
         let Some(t) = online.find_by_actor(target_id) else {
+            // **L2-5 ③ 段 3**（只加计数）：候选来自 World 扫描/缓存（含镜像），本地无会话
+            // 且该 id 是本区世界里的**镜像** ⇒ 收件人在邻区，本区发不到。判据/反证见
+            // `perf_counters::note_cross_recipient_missing`。
+            if world.entities.get(target_id).is_some_and(|e| e.mirror) {
+                perf_counters::note_cross_recipient_missing(surface);
+            }
             continue;
         };
         let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "移动/转身下行") else {
@@ -20642,7 +20728,16 @@ fn broadcast_ref_msg_from_walk_candidates(
     let scanned =
         hear_targets_from_walk_candidates(world, candidates, actor_id, chat::send_ref_msg_range());
     let targets = ref_msg_cache::targets_from_scan(world, actor_id, scanned);
-    send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, false);
+    send_ref_msg_to_targets(
+        world,
+        online,
+        gates,
+        actor_id,
+        targets,
+        bodies,
+        false,
+        perf_counters::CrossRecipientSurface::RefMsg,
+    );
 }
 
 /// **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_TURN`（`TurnTo`）下行。
@@ -20704,7 +20799,14 @@ fn drain_npc_merchant_turns(
         fd.dir = *dir;
         let bodies = downlink::turn_pair_nameless(*id, wire_coord(e.x), wire_coord(e.y), &fd);
         sent += bodies.len();
-        broadcast_ref_msg(world, online, gates, *id, &bodies);
+        broadcast_ref_msg_with_surface(
+            world,
+            online,
+            gates,
+            *id,
+            &bodies,
+            perf_counters::CrossRecipientSurface::NpcMerchant,
+        );
     }
     sent
 }
@@ -20743,7 +20845,14 @@ fn drain_npc_merchant_hits(
         }
         let body = downlink::hit_frame(*id, wire_coord(e.x), wire_coord(e.y), e.ai.dir);
         sent += 1;
-        broadcast_ref_msg(world, online, gates, *id, &[body]);
+        broadcast_ref_msg_with_surface(
+            world,
+            online,
+            gates,
+            *id,
+            &[body],
+            perf_counters::CrossRecipientSurface::NpcMerchant,
+        );
     }
     sent
 }
@@ -20808,6 +20917,12 @@ fn drain_merchant_disappears(
         let recipients = ref_msg_cache::targets_from_scan(world, *target_id, recipients.clone());
         for actor_id in &recipients {
             let Some(entry) = online.find_linear_actor(*actor_id) else {
+                // **L2-5 ③ 段 3**（只加计数）：收件人是本区世界里的镜像 ⇒ 在邻区、本区发不到。
+                if world.entities.get(*actor_id).is_some_and(|e| e.mirror) {
+                    perf_counters::note_cross_recipient_missing(
+                        perf_counters::CrossRecipientSurface::MerchantDisappear,
+                    );
+                }
                 // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
                 glog!(
                     "WRN",
@@ -23662,6 +23777,76 @@ mod perf_counters {
     /// 成本读（区越多越大，见 `region_barrier_us` 的 max 口径）。
     pub(crate) static REGION_BARRIER_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 
+    // ---- L2-5 ③ 段 3：跨区收件人帧缺失（六面分开；**只加计数，不合成帧**）----
+    /// 切片运行态（`MIR2_ZONE_SLICING`）。计数闸：切片关 ⇒ 六面全 0（N=1 逐字节不变）。
+    static SLICING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+    /// **跨区收件人缺失的广播面**（总监 2026-11-22：每面独立列 + 独立牙）。
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CrossRecipientSurface {
+        /// 全部 `broadcast_ref_msg*`（经 `send_ref_msg_to_targets` 的投递段）。
+        RefMsg = 0,
+        /// `flush_run_frames` 的 `SendRefMsg(53)` 观察者副本。
+        RunFrames = 1,
+        /// `drain_npc_merchant_turns/hits` 的 NPC/商人距离广播。
+        NpcMerchant = 2,
+        /// `broadcast_feature_changed_except`。
+        FeatureChanged = 3,
+        /// `apply_pending_gm_mountride`（`SM_MOUNTRIDE(1118)`）。
+        MountRide = 4,
+        /// `drain_merchant_disappears`（`SM_DISAPPEAR(30)`）。
+        MerchantDisappear = 5,
+    }
+
+    /// 六面计数（下标 = [`CrossRecipientSurface`] 的判别值）。
+    static CROSS_RECIPIENT_BY_SURFACE: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
+    /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
+    pub(crate) fn set_slicing_enabled(on: bool) {
+        SLICING_ENABLED.store(on, Ordering::Relaxed);
+    }
+
+    /// 计数闸是否打开（调用方用它跳过扫码等可选工作；切片关 ⇒ 整条零参与）。
+    #[inline]
+    pub(crate) fn counting_recipients_enabled() -> bool {
+        SLICING_ENABLED.load(Ordering::Relaxed)
+    }
+
+    /// 记一次「收件人在邻区 ⇒ 本区发不到」（**只加计数**，不改变任何投递/帧）。
+    ///
+    /// **调用判据**：收件人 id 来自 World 扫描/缓存、本地会话查表**未命中**，且该 id 在 World 里
+    /// `mirror == true`。反证：收件人谓词已要求 `race == Play && !ghost`，且镜像每 tick 由
+    /// `apply_mirrors` 刷新、陈旧镜像同 tick 清扫 ⇒ 候选里的镜像 = **本 tick 邻区仍在发布的活
+    /// 玩家**；唯一残差是「同一 tick 内下线」（≤1 tick，投递点不可辨，按跨区计），不另造不可达
+    /// 的 `target_mirror_not_deliverable` 计数器。
+    pub(crate) fn note_cross_recipient_missing(surface: CrossRecipientSurface) {
+        if !SLICING_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        CROSS_RECIPIENT_BY_SURFACE[surface as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 六面合计（段 4 容量脚本的读点；也是 `cross_recipient_missing` 指标口径）。
+    #[allow(dead_code)]
+    pub(crate) fn cross_recipient_missing() -> u64 {
+        CROSS_RECIPIENT_BY_SURFACE
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cross_recipient_by_surface(surface: CrossRecipientSurface) -> u64 {
+        CROSS_RECIPIENT_BY_SURFACE[surface as usize].load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_cross_recipient_missing_for_tests() {
+        for c in &CROSS_RECIPIENT_BY_SURFACE {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
     /// 否则并行测试互相踩（`perf_counters_fail_closed_and_disabled_noop` 与
     /// `zone_router` 的计数器反例）。
@@ -23740,7 +23925,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -23790,6 +23975,19 @@ mod perf_counters {
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
             REGION_BARRIER_US.swap(0, Ordering::Relaxed),
             REGION_BARRIER_TOTAL_US.swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[2].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed),
+            CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
+            // 合计列 = 六面本 tick 增量之和（由构造保证，不另存一份）。
+            CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed)
+                + CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed)
+                + CROSS_RECIPIENT_BY_SURFACE[2].swap(0, Ordering::Relaxed)
+                + CROSS_RECIPIENT_BY_SURFACE[3].swap(0, Ordering::Relaxed)
+                + CROSS_RECIPIENT_BY_SURFACE[4].swap(0, Ordering::Relaxed)
+                + CROSS_RECIPIENT_BY_SURFACE[5].swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -27712,6 +27910,7 @@ fn drain_special_ref_msgs(
             &[body],
             false,
             Some((m.map_id, m.x, m.y)),
+            perf_counters::CrossRecipientSurface::RefMsg,
         );
     }
 }
@@ -28719,6 +28918,12 @@ fn flush_run_frames(
                     continue;
                 }
                 let Some(t) = online.find_linear_actor(target_id) else {
+                    // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区。
+                    if world.entities.get(target_id).is_some_and(|e| e.mirror) {
+                        perf_counters::note_cross_recipient_missing(
+                            perf_counters::CrossRecipientSurface::RunFrames,
+                        );
+                    }
                     continue;
                 };
                 if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "G-B 健康变化广播")
@@ -121617,5 +121822,245 @@ mod l2_handoff_prod_tests {
             !ef.handoff_pending,
             "未设 zone_bounds（slicing=0）⇒ handoff_pending 必须恒 false"
         );
+    }
+}
+
+/// **L2-5 ③ 段 3**：跨区收件人帧缺失——**六面独立牙** + `slicing=0` 护栏。
+///
+/// 夹具：本区 World = 本地玩家（有会话）+ **镜像玩家**（`race = Play`、无本地会话 ⇒ 收件人
+/// 在邻区）。每次注入只触发**一个**广播面，断言「该面 +Δ、其余五面 0」（用**增量**断言，
+/// 避免与并行用例的全局计数互扰）。
+///
+/// 红检：删任一面的 `note_cross_recipient_missing` 调用 ⇒ 该面牙红；把面参数写错 ⇒ 串面牙红；
+/// 删 `SLICING_ENABLED` 判据 ⇒ [`slicing_off_counts_nothing`] 红。
+#[cfg(test)]
+mod l2_s3_cross_recipient_tests {
+    use super::*;
+    use perf_counters::CrossRecipientSurface as S;
+
+    const SENDER: i32 = 1;
+    const MIRROR: i32 = 9;
+    const ALL: [S; 6] = [
+        S::RefMsg,
+        S::RunFrames,
+        S::NpcMerchant,
+        S::FeatureChanged,
+        S::MountRide,
+        S::MerchantDisappear,
+    ];
+
+    type Gates = std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>;
+
+    fn spec(id: i32, x: i32, y: i32) -> mir2_world_bevy::MirrorSpec {
+        mir2_world_bevy::MirrorSpec {
+            id,
+            name: "R".into(),
+            map_id: 0,
+            x,
+            y,
+            view_range: 12,
+            race: 0, // ACTOR_RACE_PLAY
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Monster,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        }
+    }
+
+    /// 本地玩家（有会话）+ 邻区玩家的**镜像**（无本地会话）。
+    fn world_with_remote_mirror() -> mir2_world_bevy::World {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        let mut p = mir2_world_bevy::EntitySpawn::new(SENDER, "P".to_string(), 5, 5);
+        p.race = 0;
+        p.view_range = 12;
+        world.add_entity(p);
+        let _ = world.tick();
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorUpsert::Inserted,
+            "前置：镜像插入"
+        );
+        world
+    }
+
+    fn local_online() -> OnlineRegistry {
+        OnlineRegistry::from(vec![OnlineEntry {
+            account: "ua".into(),
+            chr_name: "P".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: SENDER,
+        }])
+    }
+
+    fn gates() -> (Gates, mpsc::UnboundedReceiver<SimToGate>) {
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut g = std::collections::HashMap::new();
+        g.insert(0u8, tx);
+        (g, rx)
+    }
+
+    fn displays() -> downlink::DisplayTable {
+        let mut d = downlink::DisplayTable::new();
+        d.set(
+            SENDER,
+            downlink::ActorDisplay::new(3, 2, 0, 0, 0, 255, b"P".to_vec()),
+        );
+        d
+    }
+
+    fn arm() -> std::sync::MutexGuard<'static, ()> {
+        let g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(true);
+        perf_counters::reset_cross_recipient_missing_for_tests();
+        g
+    }
+
+    fn snapshot() -> [u64; 6] {
+        ALL.map(perf_counters::cross_recipient_by_surface)
+    }
+
+    /// 增量断言：`surface` 恰 +1，其余五面 +0，合计 +1（面隔离）。
+    fn assert_only(base: [u64; 6], surface: S) {
+        let after = snapshot();
+        for (i, s) in ALL.iter().enumerate() {
+            let d = after[i] - base[i];
+            if *s == surface {
+                assert_eq!(d, 1, "{s:?} 必须 +1");
+            } else {
+                assert_eq!(d, 0, "{s:?} 不得计数（面隔离）");
+            }
+        }
+        assert_eq!(after.iter().sum::<u64>() - base.iter().sum::<u64>(), 1);
+    }
+
+    fn fire_refmsg(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        broadcast_ref_msg(world, online, g, SENDER, &[vec![0u8; 12]]);
+    }
+
+    fn fire_run_frames(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        frames.health_spell_changed(SENDER, true);
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("P".to_string(), crate::tests::test_session_ground(SENDER));
+        flush_run_frames(&mut frames, world, online, &sessions, g, 12);
+    }
+
+    fn fire_npc_merchant(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        let d = displays();
+        let rec = mir2_world_bevy::TickRecord {
+            npc_turns: vec![(SENDER, 3)],
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_turns(&rec, world, &d, online, g),
+            2,
+            "前置：SM_TURN 对（2 帧）必须产出"
+        );
+    }
+
+    fn fire_feature_changed(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        broadcast_feature_changed(world, online, g, SENDER, 41, 0, 12);
+    }
+
+    fn fire_mountride(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = crate::tests::test_session_ground(SENDER);
+        sg.gm.pending_mount_ride = Some(1);
+        sessions.insert("P".to_string(), sg);
+        let mut d = displays();
+        assert!(
+            apply_pending_gm_mountride(&mut sessions, "P", world, online, g, &mut d, 12),
+            "前置：骑乘帧必须落地"
+        );
+    }
+
+    fn fire_merchant_disappear(world: &mir2_world_bevy::World, online: &OnlineRegistry, g: &Gates) {
+        let rec = mir2_world_bevy::TickRecord {
+            merchant_disappears: vec![(SENDER, vec![MIRROR])],
+            ..Default::default()
+        };
+        let _ = drain_merchant_disappears(&rec, world, online, g);
+    }
+
+    #[test]
+    fn refmsg_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_refmsg(&world, &online, &g);
+        assert_only(base, S::RefMsg);
+    }
+
+    #[test]
+    fn run_frames_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_run_frames(&world, &online, &g);
+        assert_only(base, S::RunFrames);
+    }
+
+    #[test]
+    fn npc_merchant_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_npc_merchant(&world, &online, &g);
+        assert_only(base, S::NpcMerchant);
+    }
+
+    #[test]
+    fn feature_changed_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_feature_changed(&world, &online, &g);
+        assert_only(base, S::FeatureChanged);
+    }
+
+    #[test]
+    fn mountride_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_mountride(&world, &online, &g);
+        assert_only(base, S::MountRide);
+    }
+
+    #[test]
+    fn merchant_disappear_face_counts_one() {
+        let _g = arm();
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_merchant_disappear(&world, &online, &g);
+        assert_only(base, S::MerchantDisappear);
+    }
+
+    /// **N=1 逐字节不变的护栏**：切片关 ⇒ 同一组注入六面**全 0**。
+    #[test]
+    fn slicing_off_counts_nothing() {
+        let _g = arm();
+        perf_counters::set_slicing_enabled(false);
+        let (world, online, g) = (world_with_remote_mirror(), local_online(), gates().0);
+        let base = snapshot();
+        fire_refmsg(&world, &online, &g);
+        fire_run_frames(&world, &online, &g);
+        fire_npc_merchant(&world, &online, &g);
+        fire_feature_changed(&world, &online, &g);
+        fire_mountride(&world, &online, &g);
+        fire_merchant_disappear(&world, &online, &g);
+        assert_eq!(snapshot(), base, "slicing=0 ⇒ 六面必须全 0");
     }
 }
