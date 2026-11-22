@@ -196,6 +196,10 @@ REGISTRY = [
     ("stamp_binaries", ["tools/orchestration/stamp-binaries.ps1", "-Selftest"], False),
     # 卡 openmir2-deploy-deps-manifest：部署依赖清单（生成器 + 两级核验，离线合成夹具）
     ("deps_manifest", ["tools/deploy/deps_manifest.py", "selftest"], False),
+    # L2-5 ③ 段 1a：登录完成块「纯搬移」机械对账——base 的 DBR_LOADHUMANRCD recog==1 臂体 vs
+    # `finish_login` 函数体；去空白正文逐字符相等 + 字符串字面量多重集相等；已知适配归一：
+    # reborrow/前导/写回/Copy 拷贝、rustfmt 花括号折叠与尾逗号/臂逗号增删。
+    ("finish_login_move_diff", ["tools/hygiene/finish_login_move_diff.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
