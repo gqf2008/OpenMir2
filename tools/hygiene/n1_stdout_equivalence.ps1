@@ -129,9 +129,11 @@ function Get-N1FileBytes {
 
 # **顺序噪声类**：DB / IDS 连接**重试环**的失败行。两条环各自按墙钟退避重试，两侧**内容相同**但
 # 相对顺序由重试时刻决定 ⇒ 只在**顺序比较**时剔除；**行多重集仍用全量**（内容漂移必须红）。
+# 注意：**不要用 `^` 锚定行首**——剥掉时间戳后真实行仍带 `[ERR] ` 前缀（`[ERR] 链接数据库服务器[…]
+# 失败…`）；锚定写法会一条都匹配不到，噪声类形同虚设（2026-11-22 实测）。
 $script:N1NoisePatterns = @(
-  '^链接数据库服务器\[.*\]失败',
-  '^链接登录服务器\[.*\]失败'
+  '链接数据库服务器\[.*\]失败',
+  '链接登录服务器\[.*\]失败'
 )
 
 function Test-N1NoiseLine {
@@ -287,11 +289,11 @@ function Invoke-Selftest {
       '[INF] x openmir2-gamesvr-shutdown-<pid>') 'shutdown pipe pid normalized'
 
   # ⑧ DB/IDS 重试环属顺序噪声类：顺序比较剔除、多重集全量
-  Assert-True (Test-N1NoiseLine '链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line'
-  Assert-True (Test-N1NoiseLine '链接登录服务器[127.0.0.1:5600]失败...（e）') 'noise class: ids retry line'
+  Assert-True (Test-N1NoiseLine '[ERR] 链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line (real shape with level prefix)'
+  Assert-True (Test-N1NoiseLine '[ERR] 链接登录服务器[127.0.0.1:5600]失败...（e）') 'noise class: ids retry line (real shape with level prefix)'
   Assert-True (-not (Test-N1NoiseLine '[INF] 链接数据库服务器就绪')) 'noise class: normal line not matched'
-  $noisyA = @('[INF] a', '链接数据库服务器[1.2.3.4:3306]失败...（e）', '链接登录服务器[1.2.3.4:5600]失败...（e）', '[INF] b')
-  $noisyB = @('[INF] a', '链接登录服务器[1.2.3.4:5600]失败...（e）', '链接数据库服务器[1.2.3.4:3306]失败...（e）', '[INF] b')
+  $noisyA = @('[INF] a', '[ERR] 链接数据库服务器[1.2.3.4:3306]失败...（e）', '[ERR] 链接登录服务器[1.2.3.4:5600]失败...（e）', '[INF] b')
+  $noisyB = @('[INF] a', '[ERR] 链接登录服务器[1.2.3.4:5600]失败...（e）', '[ERR] 链接数据库服务器[1.2.3.4:3306]失败...（e）', '[INF] b')
   Assert-True ((Get-N1OrderSha $noisyA) -ne (Get-N1OrderSha $noisyB)) 'premise: noise reorder changes full order-sha'
   $fA = @($noisyA | Where-Object { -not (Test-N1NoiseLine $_) })
   $fB = @($noisyB | Where-Object { -not (Test-N1NoiseLine $_) })
