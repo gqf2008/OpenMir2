@@ -3441,14 +3441,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     None
                 };
                 // **L2-5 ⑤**：跨区收件人帧邮箱（只有切片 + 镜像才构造；N=1/② 关 ⇒ None）。
-                let cross_mailboxes = if slicing && mirror_enabled {
-                    Some(Arc::new(cross_zone_frames::CrossZoneMailboxes::new(
-                        zone_count,
-                        cross_zone_frames::MAX_FRAMES_PER_SLOT,
-                    )))
-                } else {
-                    None
-                };
+                let cross_mailboxes =
+                    cross_zone_frames::construct_for_run(slicing, mirror_enabled, zone_count);
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
@@ -4959,7 +4953,7 @@ fn apply_pending_gm_mountride(
     }
     // **L2-5 ③ 段 3**（只加计数）：本面按**本地会话表**枚举收件人，跨区玩家根本不在表里
     // ⇒ 上面循环看不到它们。同图 ±range 内的**镜像玩家**即「在邻区、本区发不到」，
-    // 每个计一次（判据/反证见 `perf_counters::note_cross_recipient_missing`）。
+    // 每个计一次（判据/反证见 `perf_counters::note_cross_recipient_outcome`）。
     if perf_counters::counting_recipients_enabled() {
         for m in world.entities.iter_ref() {
             if m.mirror
@@ -4969,8 +4963,11 @@ fn apply_pending_gm_mountride(
                 && (m.x - sx).abs() <= ref_msg_range
                 && (m.y - sy).abs() <= ref_msg_range
             {
-                perf_counters::note_cross_recipient_missing(
+                // **L2-5 ⑤ 面迁移**：镜像收件人 ⇒ 分类 + 入目标区邮箱。
+                crate::cross_zone_frames::note_mirror_recipient(
                     perf_counters::CrossRecipientSurface::MountRide,
+                    world.mirror_route(m.id),
+                    std::slice::from_ref(&body),
                 );
             }
         }
@@ -13210,10 +13207,12 @@ fn broadcast_feature_changed_except(
             continue;
         }
         let Some(e) = online.find_linear_actor(target_id) else {
-            // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区（本区发不到）。
+            // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱。
             if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                perf_counters::note_cross_recipient_missing(
+                crate::cross_zone_frames::note_mirror_recipient(
                     perf_counters::CrossRecipientSurface::FeatureChanged,
+                    world.mirror_route(target_id),
+                    std::slice::from_ref(&body),
                 );
             }
             continue;
@@ -21383,17 +21382,20 @@ fn drain_merchant_disappears(
         let recipients = ref_msg_cache::targets_from_scan(world, *target_id, recipients.clone());
         for actor_id in &recipients {
             let Some(entry) = online.find_linear_actor(*actor_id) else {
-                // **L2-5 ③ 段 3**（只加计数）：收件人是本区世界里的镜像 ⇒ 在邻区、本区发不到。
                 if world.entities.get(*actor_id).is_some_and(|e| e.mirror) {
-                    perf_counters::note_cross_recipient_missing(
+                    // **L2-5 ⑤ 面迁移**：镜像收件人 ⇒ 分类 + 入目标区邮箱。
+                    crate::cross_zone_frames::note_mirror_recipient(
                         perf_counters::CrossRecipientSurface::MerchantDisappear,
+                        world.mirror_route(*actor_id),
+                        std::slice::from_ref(&body),
+                    );
+                } else {
+                    // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
+                    glog!(
+                        "WRN",
+                        "商人消失帧：收件人 actor={actor_id} 无在线网关坐标且非镜像 ⇒ 跳过 SM_DISAPPEAR(30)"
                     );
                 }
-                // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
-                glog!(
-                    "WRN",
-                    "商人消失帧：收件人 actor={actor_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
-                );
                 continue;
             };
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "商人消失帧")
@@ -24348,6 +24350,11 @@ mod perf_counters {
     static CROSS_RECIPIENT_ZONE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
     /// dst == 本区（本地会话表却未命中；一致性缺陷信号，应恒 0）。
     static CROSS_RECIPIENT_SELF_ZONE_MISS: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ⑤ 成本探针**：本 tick 跨区入队总耗时（µs）与次数（= 六面镜像收件人次）。
+    /// `note_mirror_recipient` 的整段（含 `bodies.to_vec()` + 邮箱 push）计入；`ENABLED &&
+    /// SLICING` 双闸，关闭态只多两次原子读（不取钟）。
+    static CROSS_ENQUEUE_US: AtomicU64 = AtomicU64::new(0);
+    static CROSS_ENQUEUE_EVENTS: AtomicU64 = AtomicU64::new(0);
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
     pub(crate) fn set_slicing_enabled(on: bool) {
@@ -24360,20 +24367,10 @@ mod perf_counters {
         SLICING_ENABLED.load(Ordering::Relaxed)
     }
 
-    /// 记一次「收件人在邻区 ⇒ 本区发不到」（**只加计数**，不改变任何投递/帧）。
-    ///
-    /// **调用判据**：收件人 id 来自 World 扫描/缓存、本地会话查表**未命中**，且该 id 在 World 里
-    /// `mirror == true`。反证：收件人谓词已要求 `race == Play && !ghost`，且镜像每 tick 由
-    /// `apply_mirrors` 刷新、陈旧镜像同 tick 清扫 ⇒ 候选里的镜像 = **本 tick 邻区仍在发布的活
-    /// 玩家**；唯一残差是「同一 tick 内下线」（≤1 tick，投递点不可辨，按跨区计），不另造不可达
-    /// 的 `target_mirror_not_deliverable` 计数器。
-    pub(crate) fn note_cross_recipient_missing(surface: CrossRecipientSurface) {
-        // **L2-5 ⑤ 兼容支**：尚未接跨区邮箱的面（⑤ 最小切片只接 `RefMsg`）仍走本函数；
-        // 结果桶按「不可路由」计，保证三桶恒等式对全部六面成立（不是把未接的面漏掉）。
-        note_cross_recipient_outcome(surface, CrossRecipientOutcome::Unroutable);
-    }
-
     /// **L2-5 ⑤**：记一次六面未命中 + **恰好一个**结果桶（构造保证恒等式）。
+    ///
+    /// 六面全部经 `cross_zone_frames::note_mirror_recipient` 分类；旧的「未接面走兼容支」函数
+    /// 在六面全接后删除（无生产调用）。
     pub(crate) fn note_cross_recipient_outcome(
         surface: CrossRecipientSurface,
         outcome: CrossRecipientOutcome,
@@ -24414,6 +24411,32 @@ mod perf_counters {
         if SLICING_ENABLED.load(Ordering::Relaxed) {
             CROSS_RECIPIENT_SELF_ZONE_MISS.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// **L2-5 ⑤ 成本探针起点**：只有 perf TSV 与切片同时开才取钟（关闭态零成本）。
+    pub(crate) fn cross_cost_probe_begin() -> Option<std::time::Instant> {
+        if ENABLED.load(Ordering::Relaxed) && SLICING_ENABLED.load(Ordering::Relaxed) {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        }
+    }
+
+    /// **L2-5 ⑤ 成本探针终点**：累计本 tick 的跨区入队总耗时与次数。
+    pub(crate) fn cross_cost_probe_end(t0: Option<std::time::Instant>) {
+        if let Some(t0) = t0 {
+            let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+            CROSS_ENQUEUE_US.fetch_add(us, Ordering::Relaxed);
+            CROSS_ENQUEUE_EVENTS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cross_enqueue_cost() -> (u64, u64) {
+        (
+            CROSS_ENQUEUE_US.load(Ordering::Relaxed),
+            CROSS_ENQUEUE_EVENTS.load(Ordering::Relaxed),
+        )
     }
 
     #[cfg(test)]
@@ -24457,6 +24480,8 @@ mod perf_counters {
         CROSS_FRAME_DROP_CLOSED.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_ZONE_UNKNOWN.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_SELF_ZONE_MISS.store(0, Ordering::Relaxed);
+        CROSS_ENQUEUE_US.store(0, Ordering::Relaxed);
+        CROSS_ENQUEUE_EVENTS.store(0, Ordering::Relaxed);
     }
 
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
@@ -24537,7 +24562,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24629,6 +24654,8 @@ mod perf_counters {
             CROSS_FRAME_DUP.swap(0, Ordering::Relaxed),
             CROSS_FRAME_DROP_CLOSED.swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_ZONE_UNKNOWN.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_US.swap(0, Ordering::Relaxed),
+            CROSS_ENQUEUE_EVENTS.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -29606,10 +29633,12 @@ fn flush_run_frames(
                     continue;
                 }
                 let Some(t) = online.find_linear_actor(target_id) else {
-                    // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区。
+                    // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱（不再只计数）。
                     if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                        perf_counters::note_cross_recipient_missing(
+                        crate::cross_zone_frames::note_mirror_recipient(
                             perf_counters::CrossRecipientSurface::RunFrames,
+                            world.mirror_route(target_id),
+                            std::slice::from_ref(&health_body),
                         );
                     }
                     continue;
@@ -123366,7 +123395,7 @@ mod l2_handoff_prod_tests {
 /// 在邻区）。每次注入只触发**一个**广播面，断言「该面 +Δ、其余五面 0」（用**增量**断言，
 /// 避免与并行用例的全局计数互扰）。
 ///
-/// 红检：删任一面的 `note_cross_recipient_missing` 调用 ⇒ 该面牙红；把面参数写错 ⇒ 串面牙红；
+/// 红检：删任一面的 `note_mirror_recipient` 调用 ⇒ 该面迁移牙红；把面参数写错 ⇒ 串面牙红；
 /// 删 `SLICING_ENABLED` 判据 ⇒ [`slicing_off_counts_nothing`] 红。
 #[cfg(test)]
 mod l2_s3_cross_recipient_tests {
@@ -123527,6 +123556,189 @@ mod l2_s3_cross_recipient_tests {
             ..Default::default()
         };
         let _ = drain_merchant_disappears(&rec, world, online, g);
+    }
+
+    fn zone1() -> crate::zone::ZoneId {
+        crate::zone::ZoneId::new(1)
+    }
+
+    fn delivered() -> u64 {
+        perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Delivered)
+    }
+
+    fn unroutable() -> u64 {
+        perf_counters::cross_recipient_outcome(perf_counters::CrossRecipientOutcome::Unroutable)
+    }
+
+    /// 镜像挂 route `(0, 900)`，router 指派到区 1；装 sink（源区 = HOST_ZONE），本 tick = 0。
+    fn arm_cross(world: &mut mir2_world_bevy::World) {
+        world.set_mirror_route(
+            MIRROR,
+            Some(mir2_world_bevy::MirrorRoute {
+                line: 0,
+                socket: 900,
+            }),
+        );
+        let router = std::sync::Arc::new(crate::zone_router::ZoneRouter::new());
+        let _ = router.assign(0, 900, zone1());
+        let mb = std::sync::Arc::new(crate::cross_zone_frames::CrossZoneMailboxes::new(2, 64));
+        crate::cross_zone_frames::install(
+            std::sync::Arc::clone(&mb),
+            router,
+            crate::zone_router::HOST_ZONE,
+        );
+        crate::cross_zone_frames::begin_tick(0);
+    }
+
+    fn drain_cross(g: &Gates) -> usize {
+        crate::cross_zone_frames::drain_zone(zone1(), 1, g)
+    }
+
+    fn recv_socket(rx: &mut mpsc::UnboundedReceiver<SimToGate>, socket: i32) -> bool {
+        while let Ok(msg) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket: s, .. } = msg {
+                if s == socket {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// **L2-5 ⑤ 六面恒等式**：六面各触发一次（镜像带 route）⇒
+    /// `六面合计 == delivered + unroutable + overflow`（窗口合计）。
+    #[test]
+    fn six_face_identity_holds_after_all_faces() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, _rx) = gates();
+        fire_refmsg(&world, &online, &g);
+        fire_run_frames(&world, &online, &g);
+        fire_npc_merchant(&world, &online, &g);
+        fire_feature_changed(&world, &online, &g);
+        fire_mountride(&world, &online, &g);
+        fire_merchant_disappear(&world, &online, &g);
+        let six: u64 = ALL
+            .iter()
+            .map(|s| perf_counters::cross_recipient_by_surface(*s))
+            .sum();
+        let buckets = delivered()
+            + unroutable()
+            + perf_counters::cross_recipient_outcome(
+                perf_counters::CrossRecipientOutcome::Overflow,
+            );
+        assert_eq!(six, buckets, "六面合计必须等于三桶之和（窗口合计）");
+        assert_eq!(delivered(), 6, "六个面各 1 次镜像收件 ⇒ delivered=6");
+        assert_eq!(unroutable(), 0, "route=Some ⇒ 不得落 unroutable");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `npc_merchant`**：与 `refmsg` **共用** `send_ref_msg_to_targets` 投递段
+    /// （§11.1 的 M1），因此 RefMsg 接线后本面已自动走邮箱；本牙只证明「确实走邮箱」。
+    #[test]
+    fn npc_merchant_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_npc_merchant(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "npc_merchant 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 排水（1 帧，含 SM_TURN 对 2 体）");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `merchant_disappear`**：unroutable → delivered（走邮箱）。
+    #[test]
+    fn merchant_disappear_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_merchant_disappear(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "merchant_disappear 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `mountride`**：unroutable → delivered（走邮箱）。
+    #[test]
+    fn mountride_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_mountride(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "mountride 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `feature_changed`**：unroutable → delivered（走邮箱）。
+    #[test]
+    fn feature_changed_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_feature_changed(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "feature_changed 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **L2-5 ⑤ 面迁移 `run_frames`**：unroutable → delivered（走邮箱），收件区 T+1 排水到网关。
+    #[test]
+    fn run_frames_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_run_frames(&world, &online, &g);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (1, 0),
+            "run_frames 面迁移必须 delivered+1 / unroutable+0（实际 {dd}/{du}）"
+        );
+        assert_eq!(drain_cross(&g), 1, "T+1 barrier1 后必须排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
     }
 
     #[test]

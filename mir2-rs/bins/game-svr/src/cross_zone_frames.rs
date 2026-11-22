@@ -26,7 +26,7 @@ use crate::zone::ZoneId;
 use crate::zone_router::ZoneRouter;
 use crate::SimToGate;
 
-/// 每个 `(dst, src)` 槽的单 tick 上限（**拒新**；初值 16384，按窗口实测峰值调整）。
+/// **`MAX_FRAMES_PER_SLOT` = 每 `(dst, src)` 槽的单 tick 上限**（**拒新**；初值 16384，按窗口实测峰值调整）。
 pub(crate) const MAX_FRAMES_PER_SLOT: usize = 16384;
 
 /// 一条待投递的跨区帧（一个收件人 × 一次广播；`bodies` = 该次广播的全部帧体）。
@@ -84,6 +84,19 @@ impl CrossZoneMailboxes {
         q.push_back(frame);
         true
     }
+}
+
+/// **L2-5 ⑤**：切片 + 镜像同时开才构造邮箱（N=1 / ② 关 ⇒ `None`，零参与）。
+///
+/// 单独成函数是为了让「构造闸」可被单测直接断言
+/// （`cross_zone_mailboxes_absent_without_slicing`）；生产调用点在 `run_inner`。
+pub(crate) fn construct_for_run(
+    slicing: bool,
+    mirror_enabled: bool,
+    zone_count: usize,
+) -> Option<Arc<CrossZoneMailboxes>> {
+    (slicing && mirror_enabled)
+        .then(|| Arc::new(CrossZoneMailboxes::new(zone_count, MAX_FRAMES_PER_SLOT)))
 }
 
 /// 当前线程的跨区 sink（源区写邮箱用）。线程局部 ⇒ 每区线程各自一份，测试线程互不干扰。
@@ -148,6 +161,8 @@ pub(crate) fn note_mirror_recipient(
     route: Option<MirrorRoute>,
     bodies: &[Vec<u8>],
 ) {
+    // **L2-5 ⑤ 成本探针**：只统计「镜像收件人」的整段（含 `bodies.to_vec()`）；关闭态不取钟。
+    let t0 = perf_counters::cross_cost_probe_begin();
     let outcome = SINK.with(|cell| {
         let mut guard = cell.borrow_mut();
         let Some(st) = guard.as_mut() else {
@@ -182,6 +197,7 @@ pub(crate) fn note_mirror_recipient(
         }
     });
     perf_counters::note_cross_recipient_outcome(surface, outcome);
+    perf_counters::cross_cost_probe_end(t0);
 }
 
 /// 收件区在 `barrier1` 返回之后、`phase2` 之前调用：排空本区邮箱并写网关。
@@ -447,6 +463,116 @@ mod tests {
         assert_eq!(perf_counters::cross_frame_dup(), 1);
         assert!(rx.try_recv().is_ok());
         assert!(rx.try_recv().is_ok(), "重复帧不得被丢");
+    }
+
+    /// **L2-5 ⑤ I4-1**：构造闸 = `slicing && mirror`；任一关 ⇒ `None`（N=1/② 零参与）。
+    #[test]
+    fn cross_zone_mailboxes_absent_without_slicing() {
+        assert!(
+            construct_for_run(false, true, 2).is_none(),
+            "slicing=0 不得构造邮箱"
+        );
+        assert!(
+            construct_for_run(true, false, 2).is_none(),
+            "mirror=0 不得构造邮箱"
+        );
+        assert!(construct_for_run(false, false, 2).is_none());
+        assert!(
+            construct_for_run(true, true, 2).is_some(),
+            "slicing+mirror 同时开必须构造"
+        );
+    }
+
+    /// **L2-5 ⑤ I4-4**：无 sink（切片关的形态）⇒ 排水 0、gates 收不到帧。
+    #[test]
+    fn cross_drain_absent_without_slicing() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(false);
+        perf_counters::reset_cross_recipient_missing_for_tests();
+        uninstall();
+        let (g, mut rx) = gates();
+        assert_eq!(drain_zone(zone(1), 1, &g), 0, "无 sink ⇒ 不排水");
+        assert!(rx.try_recv().is_err(), "无 sink ⇒ gates 不得收帧");
+        perf_counters::set_slicing_enabled(true);
+    }
+
+    /// **L2-5 ⑤ I4-3**：切片关 ⇒ 三桶 + 诊断列**各自 0**（即使错误地装了 sink）。
+    ///
+    /// 覆盖：delivered / unroutable / overflow / dup / drop_closed / zone_unknown。
+    #[test]
+    fn slicing_off_counts_nothing_three_buckets() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(false);
+        perf_counters::reset_cross_recipient_missing_for_tests();
+        let mb = Arc::new(CrossZoneMailboxes::new(2, 4));
+        let router = router_with(&[(900, 1)]);
+        // 错误配置：切片关但装了 sink；计数器闸必须让所有桶保持 0。
+        let _sink = arm_src(&mb, &router, HOST_ZONE, 0);
+        note_mirror_recipient(CrossRecipientSurface::RefMsg, route(900), &body(1)); // delivered 路径
+        note_mirror_recipient(CrossRecipientSurface::RefMsg, None, &body(2)); // unroutable 路径
+        note_mirror_recipient(CrossRecipientSurface::RefMsg, route(999), &body(3)); // zone_unknown 路径
+        for _ in 0..3 {
+            note_mirror_recipient(CrossRecipientSurface::RefMsg, route(900), &body(4));
+        }
+        // 槽上限 4：上面已入 4 帧，再来 1 帧走 overflow。
+        note_mirror_recipient(CrossRecipientSurface::RefMsg, route(900), &body(5));
+        // dup / drop_closed：清空槽（空 gates 强制 drop_closed），再压两条同 key 帧。
+        let empty_gates: Gates = HashMap::new();
+        let _ = drain_zone(zone(1), 1, &empty_gates);
+        let f = || CrossZoneFrame {
+            src_zone: HOST_ZONE,
+            src_tick: 0,
+            seq: 0,
+            dst: MirrorRoute {
+                line: 0,
+                socket: 900,
+            },
+            bodies: body(9),
+        };
+        assert!(mb.push(zone(1), f()));
+        assert!(mb.push(zone(1), f()));
+        let _ = drain_zone(zone(1), 1, &empty_gates);
+        assert_eq!(
+            perf_counters::cross_recipient_outcome(CrossRecipientOutcome::Delivered),
+            0,
+            "slicing=0 ⇒ delivered 必须 0"
+        );
+        assert_eq!(
+            perf_counters::cross_recipient_outcome(CrossRecipientOutcome::Unroutable),
+            0,
+            "slicing=0 ⇒ unroutable 必须 0"
+        );
+        assert_eq!(
+            perf_counters::cross_recipient_outcome(CrossRecipientOutcome::Overflow),
+            0,
+            "slicing=0 ⇒ overflow 必须 0"
+        );
+        assert_eq!(
+            perf_counters::cross_frame_dup(),
+            0,
+            "slicing=0 ⇒ dup 必须 0"
+        );
+        assert_eq!(
+            perf_counters::cross_frame_drop_closed(),
+            0,
+            "slicing=0 ⇒ drop_closed 必须 0"
+        );
+        assert_eq!(
+            perf_counters::cross_recipient_zone_unknown(),
+            0,
+            "slicing=0 ⇒ zone_unknown 必须 0"
+        );
+        let (us, events) = perf_counters::cross_enqueue_cost();
+        assert_eq!(
+            (us, events),
+            (0, 0),
+            "slicing=0 ⇒ 成本探针不得取钟/计数（双闸）"
+        );
+        perf_counters::set_slicing_enabled(true);
     }
 
     /// N=1 / 切片关：sink 不装 ⇒ 不投递、不计数。

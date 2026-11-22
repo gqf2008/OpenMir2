@@ -55,6 +55,11 @@ DIAG_COLS = [
     "cross_frame_drop_closed",
     "cross_recipient_zone_unknown",
 ]
+# **L2-5 ⑤ 成本探针**：本 tick 跨区入队总耗时（µs）与次数；窗口打印每事件 us。
+COST_COLS = [
+    "cross_enqueue_us",
+    "cross_enqueue_events",
+]
 # L2-5 ③ 段 4 追加的 handoff 列：有就打印（新二进制），没有就标注 absent（旧产物仍可读）。
 HANDFOFF_COLS = [
     "handoff_offered",
@@ -123,6 +128,7 @@ def _read_tsv(path):
     optional += [c for c in ZONE_K_COLS if c in header]
     optional += [c for c in OUTCOME_COLS if c in header]
     optional += [c for c in DIAG_COLS if c in header]
+    optional += [c for c in COST_COLS if c in header]
     want = REQUIRED + optional
     idx = {name: header.index(name) for name in want}
     out = {name: [] for name in want}
@@ -231,6 +237,15 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
                 % (outcome["total"], cross["total"])
             )
     present_diag = [c for c in DIAG_COLS if c in perf]
+    cost = None
+    if all(c in perf for c in COST_COLS):
+        us = sum(perf["cross_enqueue_us"])
+        events = sum(perf["cross_enqueue_events"])
+        cost = {
+            "us_total": us,
+            "events_total": events,
+            "us_per_event": round(us / events, 3) if events else None,
+        }
     summary = {
         "label": label,
         "perf_tsv": os.path.abspath(perf_path),
@@ -238,6 +253,7 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
         "cross_recipient_missing": cross,
         "cross_recipient_outcome": outcome,
         "cross_frame_diag": ({c: sum(perf[c]) for c in present_diag} if present_diag else None),
+        "cross_enqueue": cost,
         "total_column_mismatch": total_mismatch,
         "region_barrier_us": {
             "max": max(perf["region_barrier_us"]),
@@ -321,6 +337,11 @@ def print_summary(s):
         print("cross diag: dup=%d drop_closed=%d zone_unknown=%d" % (
             dg["cross_frame_dup"], dg["cross_frame_drop_closed"],
             dg["cross_recipient_zone_unknown"]))
+    ce = s.get("cross_enqueue")
+    if ce:
+        per = "%.3f" % ce["us_per_event"] if ce["us_per_event"] is not None else "n/a"
+        print("cross enqueue: events=%d total_us=%d per_event_us=%s" % (
+            ce["events_total"], ce["us_total"], per))
     if s.get("total_column_mismatch"):
         m = s["total_column_mismatch"]
         print("NOTE total 列与六面之和不一致（合计列冗余，按六面计）：列=%d 六面=%d 首个坏行=%d"
@@ -409,7 +430,7 @@ def selftest():
         header = ["region_barrier_us"] + list(reversed(CROSS_COLS)) + [
             "region_barrier_total_us", "inbound_enqueued", "inbound_drained", "inbound_carry",
             "inbound_budget_hit", "refmsg_calls", "refmsg_targets", TOTAL_COL,
-        ] + list(OUTCOME_COLS) + list(DIAG_COLS) + list(reversed(ZONE_K_COLS))
+        ] + list(OUTCOME_COLS) + list(DIAG_COLS) + list(COST_COLS) + list(reversed(ZONE_K_COLS))
         row = {c: 0 for c in header}
         row["region_barrier_us"] = 120
         row["region_barrier_total_us"] = 240
@@ -427,6 +448,8 @@ def selftest():
         row["cross_frame_dup"] = 0
         row["cross_frame_drop_closed"] = 0
         row["cross_recipient_zone_unknown"] = 0
+        row["cross_enqueue_us"] = 100
+        row["cross_enqueue_events"] = 4
         row["zone_cmd_unsupported"] = 3
         row["handoff_move_after_transfer_dropped"] = 1
         row["move_map_change_unsupported"] = 0
@@ -466,6 +489,8 @@ def selftest():
         expect("delivered=4 unroutable=2 overflow=0" in buf.getvalue(),
                "⑤ 三桶必须同屏打印：%s" % buf.getvalue())
         expect("恒等式 OK" in buf.getvalue(), "⑤ 恒等式必须显式展示")
+        expect("cross enqueue: events=8 total_us=200 per_event_us=25.000" in buf.getvalue(),
+               "⑤ 每事件成本必须打印：%s" % buf.getvalue())
 
         # 无 run.json ⇒ 时长明写 unknown（不静默丢窗口）。
         s_norun = summarize(perf, None, rep, None, bots=1000, label="2zone")
@@ -507,7 +532,8 @@ def selftest():
 
         # 负例 2c（⑤）：旧产物无三桶列 ⇒ absent（不判错）
         legacy = os.path.join(td, "legacy_no_outcome.tsv")
-        lh = [h for h in header if h not in OUTCOME_COLS and h not in DIAG_COLS]
+        lh = [h for h in header
+              if h not in OUTCOME_COLS and h not in DIAG_COLS and h not in COST_COLS]
         _write(legacy, _tsv(lh, [[r[h] for h in lh] for r in [dict(row), dict(row)]]))
         sl = summarize(legacy)
         expect(sl["cross_recipient_outcome"] is None, "旧产物应 absent")
