@@ -21382,17 +21382,20 @@ fn drain_merchant_disappears(
         let recipients = ref_msg_cache::targets_from_scan(world, *target_id, recipients.clone());
         for actor_id in &recipients {
             let Some(entry) = online.find_linear_actor(*actor_id) else {
-                // **L2-5 ③ 段 3**（只加计数）：收件人是本区世界里的镜像 ⇒ 在邻区、本区发不到。
                 if world.entities.get(*actor_id).is_some_and(|e| e.mirror) {
-                    perf_counters::note_cross_recipient_missing(
+                    // **L2-5 ⑤ 面迁移**：镜像收件人 ⇒ 分类 + 入目标区邮箱。
+                    crate::cross_zone_frames::note_mirror_recipient(
                         perf_counters::CrossRecipientSurface::MerchantDisappear,
+                        world.mirror_route(*actor_id),
+                        std::slice::from_ref(&body),
+                    );
+                } else {
+                    // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
+                    glog!(
+                        "WRN",
+                        "商人消失帧：收件人 actor={actor_id} 无在线网关坐标且非镜像 ⇒ 跳过 SM_DISAPPEAR(30)"
                     );
                 }
-                // 收件人是世界侧发帧时刻的 Play 快照；不在线（掉线/未登记网关）⇒ 不猜线。
-                glog!(
-                    "WRN",
-                    "商人消失帧：收件人 actor={actor_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
-                );
                 continue;
             };
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "商人消失帧")
@@ -123610,6 +123613,23 @@ mod l2_s3_cross_recipient_tests {
             }
         }
         false
+    }
+
+    /// **L2-5 ⑤ 面迁移 `merchant_disappear`**：unroutable → delivered（走邮箱）。
+    #[test]
+    fn merchant_disappear_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_merchant_disappear(&world, &online, &g);
+        assert_eq!(delivered() - d0, 1, "merchant_disappear 必须走邮箱");
+        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        assert_eq!(drain_cross(&g), 1, "T+1 排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
     }
 
     /// **L2-5 ⑤ 面迁移 `mountride`**：unroutable → delivered（走邮箱）。
