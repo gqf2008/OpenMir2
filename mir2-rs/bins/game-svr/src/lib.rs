@@ -932,6 +932,80 @@ struct ZoneHost {
     /// 关服/退出：区 0 退出前先置真，让最小区循环在下一个 tick 前离开（不 join——见
     /// [`spawn_minimal_zone`] 的退出说明）。
     stop: Arc<std::sync::atomic::AtomicBool>,
+    /// **L2-5 ③ 段 1b**：切片开关（`MIR2_ZONE_SLICING`）。关 ⇒ 登录落区整段零参与（区 0 原路径）。
+    slicing: bool,
+    /// **L2-5 ③ 段 1b**：`(line, socket) → 区` 分派表。登录落区成功后由登录线程 `assign`。
+    router: Arc<zone_router::ZoneRouter>,
+    /// **L2-5 ③ 段 1b**：非 0 区的世界侧状态（下标 = 区号；下标 0 恒 `None`——区 0 仍用
+    /// `sim_loop` 的局部变量，原路径逐字节不变）。切片关 ⇒ 全部 `None`（最小区保持 stub）。
+    zone_states: Vec<Option<Arc<std::sync::Mutex<ZoneState>>>>,
+}
+
+impl ZoneHost {
+    /// 取区 `zone` 的世界侧状态（区 0 / 未切片的区 ⇒ `None`）。
+    fn zone_state(&self, zone: zone::ZoneId) -> Option<&Arc<std::sync::Mutex<ZoneState>>> {
+        self.zone_states.get(zone.index()).and_then(Option::as_ref)
+    }
+}
+
+/// **L2-5 ③ 段 1b**：非 0 区的世界侧状态（真 World + 该区自己的展示表/在线表/地面会话/存档体）。
+///
+/// # 所有权（段 1b 口径，见提交信息）
+///
+/// - `world`/`displays`/`online`/`ground_sessions`/`saves`/`login_tails`/`aoi_frames_total`
+///   **属落地区**：登录落在区 k ⇒ 这些表里只出现该会话，区 0 不留任何副本。
+/// - `gates`/`engine`/`guilds`/`npc_host`/`pwd_sessions`/`reconnect_pending`/`kick_pending`
+///   **属进程**（`sim_loop` 局部，区 0 线程持有）：登录落区由区 0 线程执行，这些句柄直接借用。
+/// - 段 1b 不给区 k 装配退出路径：`Closed` 投到区 k 后由最小区循环丢弃 ⇒ 会话在区 k 保留
+///   到进程结束；关服存档也只覆盖区 0 的 `ground_sessions`（交接/逐区存档在段 2）。
+struct ZoneState {
+    world: mir2_world_bevy::World,
+    displays: downlink::DisplayTable,
+    online: OnlineRegistry,
+    ground_sessions: std::collections::HashMap<String, SessionGround>,
+    saves: std::collections::HashMap<String, SavedHuman>,
+    login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    aoi_frames_total: std::collections::HashMap<String, usize>,
+    /// 区线程存活（线程退出/panic ⇒ 假）。登录落区前检真：线程已死 ⇒ 拒登（不回落区 0）。
+    alive: std::sync::atomic::AtomicBool,
+}
+
+impl ZoneState {
+    /// 切片区的世界侧状态：真 World（全图网格 + `seed ⊕ zone` 的独立 rng + 本区 actor id 段）。
+    ///
+    /// 不装物品目录（`production_world` 的 `item_catalog` 是 `move` 进世界，且区 0 独占）：
+    /// 段 1b 区 k 无掉落路径，登录也不读世界目录（新手物品走 `enter_cfg.catalog`）。
+    fn new(zone: zone::ZoneId, map_sizes: &[(i32, i32)], rng_seed: Option<i32>) -> Self {
+        let mut world = mir2_world_bevy::World::with_maps(map_sizes.to_vec());
+        if let Some(seed) = rng_seed {
+            let zone_index = i32::try_from(zone.get()).expect("区号 <= i32::MAX");
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
+        }
+        world.set_id_base(zone_id_base(zone));
+        Self {
+            world,
+            displays: downlink::DisplayTable::new(),
+            online: OnlineRegistry::new(),
+            ground_sessions: std::collections::HashMap::new(),
+            saves: std::collections::HashMap::new(),
+            login_tails: std::collections::HashMap::new(),
+            aoi_frames_total: std::collections::HashMap::new(),
+            alive: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+}
+
+/// 区线程退出（含 panic unwind）时把 `ZoneState::alive` 置假——登录线程据此拒绝落区。
+struct ZoneAliveOnDrop(Arc<std::sync::Mutex<ZoneState>>);
+
+impl Drop for ZoneAliveOnDrop {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .alive
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// **L2-4 段 6a 的装配判定**（纯函数；单测直接覆盖，不读环境、不碰 I/O）。
@@ -1193,6 +1267,19 @@ enum ZoneTarget {
     Zone(usize),
 }
 
+/// **L2-5 ③ 段 1b**：demux 回落现场计数（`zone_router_unassigned`），采样 WRN 注明来源。
+///
+/// 前 8 次与每 1000 次各打一行（正常运行时恒 0；出现即缺 `Opened`/`assign` 的生命周期信号）。
+fn note_zone_router_unassigned(source: &str, line: u8, socket: i32) {
+    let n = perf_counters::note_zone_router_unassigned();
+    if n <= 8 || n.is_multiple_of(1000) {
+        glog!(
+            "WRN",
+            "L2-5 ③ demux：来源={source} 的 (line={line}, socket={socket}) 未 assign ⇒ 回落区 0（zone_router_unassigned={n}）"
+        );
+    }
+}
+
 /// **L2-4 段 6a**：按事件类型 + `(line, socket)` 分派表算目标区（demux 的唯一判定点）。
 ///
 /// - `Register/UnregisterGate` ⇒ 广播（每区都要能回帧到该网关线）；
@@ -1202,7 +1289,13 @@ enum ZoneTarget {
 /// - `Closed` ⇒ **先 `lookup` 再 `remove`**，投 lookup 出的区——关断必须由**持有该世界**的区
 ///   处理（摘实体/清会话）；先删后投会把关断错投区 0，实体留在原区成为幽灵；
 /// - `CertificationPending` ⇒ 区 0（认证前丢帧，**不改表**）+ 一行 DBG 读 `line`。
-fn route_zone_target(ev: &GateEvent, router: &zone_router::ZoneRouter) -> ZoneTarget {
+fn route_zone_target(
+    ev: &GateEvent,
+    router: &zone_router::ZoneRouter,
+    // **L2-5 ③ 段 1b**：`true` ⇒ 未 assign 的回落计 `zone_router_unassigned`（采样 WRN 注明来源）。
+    // `slicing=0` 时调用方传 `false` ⇒ 本函数行为与 ② 逐字节相同。
+    count_unassigned: bool,
+) -> ZoneTarget {
     match ev {
         GateEvent::RegisterGate { .. } | GateEvent::UnregisterGate { .. } => ZoneTarget::Broadcast,
         GateEvent::Opened { line, socket, .. } => match router.opened(*line, *socket) {
@@ -1213,15 +1306,35 @@ fn route_zone_target(ev: &GateEvent, router: &zone_router::ZoneRouter) -> ZoneTa
             }
         },
         GateEvent::Command { line, socket, .. } => {
-            ZoneTarget::Zone(router.lookup(*line, *socket).index())
+            // **L2-5 ③ 1b**：区分「assign 到区 0」与「没 assign」——后者是登录落区漏接，
+            // 必须在回落现场计数（`zone_router_unassigned`），不能静默回落。
+            match router.lookup_registered(*line, *socket) {
+                Some(zone_id) => ZoneTarget::Zone(zone_id.index()),
+                None => {
+                    if count_unassigned {
+                        note_zone_router_unassigned("Command", *line, *socket);
+                    }
+                    ZoneTarget::Zone(zone_router::HOST_ZONE.index())
+                }
+            }
         }
         GateEvent::Closed { index, socket, .. } => {
             // `Closed.index` 已是**网关线号**（G3/T-102）；超出 u8 的值不可能在表里 ⇒ 区 0。
             let zone_id = match u8::try_from(*index) {
                 Ok(line) => {
-                    let zone_id = router.lookup(line, *socket);
+                    // 先查后删（顺序不可换，见 doc）；查用 `lookup_registered`，把「没 assign 的
+                    // 关闭」也计进回落现场。
+                    let registered = router.lookup_registered(line, *socket);
                     router.remove(line, *socket);
-                    zone_id
+                    match registered {
+                        Some(zone_id) => zone_id,
+                        None => {
+                            if count_unassigned {
+                                note_zone_router_unassigned("Closed", line, *socket);
+                            }
+                            zone_router::HOST_ZONE
+                        }
+                    }
                 }
                 Err(_) => zone_router::HOST_ZONE,
             };
@@ -1255,6 +1368,8 @@ fn spawn_zone_demux(
         std::sync::mpsc::Sender<GateEvent>,
     )>,
     router: Arc<zone_router::ZoneRouter>,
+    // **L2-5 ③ 段 1b**：切片开才在回落现场计 `zone_router_unassigned`（slicing=0 ⇒ 行为逐字节不变）。
+    count_unassigned: bool,
 ) -> Result<()> {
     std::thread::Builder::new()
         .name("m2-zone-demux".to_string())
@@ -1269,7 +1384,7 @@ fn spawn_zone_demux(
                         drain.next(&ev_rx, &ev_ctl_rx, &mut zone_carry, &mut zone_ctl_carry)
                     {
                         moved += 1;
-                        match route_zone_target(&ev, &router) {
+                        match route_zone_target(&ev, &router, count_unassigned) {
                             // 网关线注册/注销：每个区都要有该线的 `SimToGate` 发送端。
                             ZoneTarget::Broadcast => match ev {
                                 GateEvent::RegisterGate { service_id, tx } => {
@@ -1306,16 +1421,18 @@ fn spawn_zone_demux(
     Ok(())
 }
 
-/// **L2-4 段 6a**：区 ≥1 的最小区循环。
+/// **L2-4 段 6a / L2-5 ③ 段 1b**：区 ≥1 的区线程（最小区 / 切片区两形态）。
 ///
-/// 本段非 0 区**没有会话来源**（登录归属暂缓，L2-5 才做每区会话切片）⇒ 持有 stub `World`
-/// （全 1×1 图、零实体），只做两件事：①排空自己的入站通道（事件**丢弃**；demux 在生产上
-/// 不会把会话投到这里——启动期有一行 WRN 说明这是 L2-5 前的已知限制）；②按 tick 参与
-/// `run_zone_tick` 的两道屏障（区 0 的快照/phase2 必须与它同步才能推进）。
+/// - **切片关**（`MIR2_ZONE_SLICING` 未设）：L2-4 的 stub 形态——全 1×1 图、零实体，只排空
+///   自己的入站通道（事件**丢弃**）并按 tick 参与 `run_zone_tick` 的两道屏障。
+/// - **切片开**：本区持有 [`ZoneState`]（真 World + 该区展示表/在线表/会话表）。区 0 线程
+///   登录落区时 `lock` 同一把锁跑 `finish_login`；本线程的锁纪律是
+///   **快照/发布 + phase1/phase2 持锁，屏障等待不持锁**（否则与登录线程互相等 ⇒ 死锁）。
+///   快照的帧面来源也换成该区自己的展示表/在线表（镜像的出帧面不再依赖区 0）。
 ///
 /// 失败 ⇒ abort 整机（`Barrier` 无超时；静默退出会让其余区**永久阻塞**，同「任一片失败
 /// 整机 Abort」口径）。关服时区 0 退出、本线程若正停在屏障上就保持停泊（线程 detached、
-/// 不 join，进程随主线程退出）。
+/// 不 join，进程随主线程退出）。线程退出/panic 由 [`ZoneAliveOnDrop`] 把 `alive` 置假。
 ///
 /// # Errors
 /// 起线程失败。
@@ -1329,57 +1446,115 @@ fn spawn_minimal_zone(
     stop: Arc<std::sync::atomic::AtomicBool>,
     // **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`；关 ⇒ `run_zone_tick` 的 `mirrors` 为 false）。
     mirrors: bool,
-    // **L2-5 ③**：切片开关（`MIR2_ZONE_SLICING`）。开 ⇒ 本区建真 World（全部地图 + 每区 rng）。
-    slicing: bool,
-    // 全图尺寸表（切片时建真 World 用；stub 只用它的长度）。
-    map_sizes: Vec<(i32, i32)>,
-    // `MIR2_RNG_SEED`；切片时非 0 区用 `seed ⊕ zone` 派生（禁止与区 0 同 seed）。
-    rng_seed: Option<i32>,
+    // **L2-5 ③**：切片区状态（`None` ⇒ stub 形态；`Some` ⇒ 真 World，登录可落本区）。
+    state: Option<Arc<std::sync::Mutex<ZoneState>>>,
+    // stub 形态的图数（只用来凑地图下标空间）。
+    map_count: usize,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
     std::thread::Builder::new()
         .name(format!("m2-zone-{}", zone_id.get()))
         .spawn(move || {
-            // **L2-5 ③**：切片 ⇒ 真 World（全图网格 + 每区 rng）；否则保持 L2-4 的 stub。
-            let mut world = if slicing {
-                let mut w = mir2_world_bevy::World::with_maps(map_sizes.clone());
-                if let Some(seed) = rng_seed {
-                    let zone_index = i32::try_from(zone_id.get()).expect("区号 <= i32::MAX");
-                    w.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
-                }
-                w
-            } else {
-                mir2_world_bevy::World::with_maps(vec![(1, 1); map_sizes.len()])
-            };
-            // **L2-5 ①**：本区独立 actor id 段（与区 0 及彼此不相交；须在首个实体之前）。
-            world.set_id_base(zone_id_base(zone_id));
+            // 非 0 区不落 RNG 流水（与 P2-3b「非宿主片不落流水」同口径：对拍账只属于区 0）。
+            if state.is_some() {
+                mir2_shared::rng_trace::suppress_current_thread();
+            }
             let mut tick = 0u64;
             // **失败快传**：本区 panic ⇒ 唤醒其余区（否则它们永久阻塞在 Barrier 上）。
             let abort_barriers = Arc::clone(&barriers);
             let run = move || {
+                let Some(state) = state else {
+                    // ---- 切片关：L2-4 最小区 stub（与原实现逐字节相同）----
+                    let mut world = mir2_world_bevy::World::with_maps(vec![(1, 1); map_count]);
+                    world.set_id_base(zone_id_base(zone_id));
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        while rx.try_recv().is_ok() {}
+                        while ctl_rx.try_recv().is_ok() {}
+                        if let Err(e) = region_loop::run_zone_tick(
+                            &mut world,
+                            zone_id,
+                            layout.zone_spans(),
+                            &exchange,
+                            &barriers,
+                            ZONE_HALO_WIDTH,
+                            tick,
+                            // 最小区没有展示表/在线表（②本步无会话来源）⇒ 快照只带 id/坐标/世界侧帧面。
+                            &region_loop::HaloFrameSource::none(),
+                            mirrors,
+                            Some((&**watch.heartbeats(), watch.now_ms())),
+                        ) {
+                            glog!(
+                                "ERR",
+                                "最小区 {zone_id} 在 tick {tick} 失败：{e} ⇒ abort 整机"
+                            );
+                            std::process::abort();
+                        }
+                        tick += 1;
+                    }
+                    return;
+                };
+                // ---- 切片开：真 World + 本区展示/在线表 ----
+                let _alive = ZoneAliveOnDrop(Arc::clone(&state));
+                let runtime = region_loop::ZoneRuntime::new(
+                    zone_id,
+                    layout.zone_spans(),
+                    ZONE_HALO_WIDTH,
+                    &exchange,
+                    &barriers,
+                );
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    // 段 1b 本区还没有命令处理：入站事件（含广播来的网关线注册）全部丢弃。
                     while rx.try_recv().is_ok() {}
                     while ctl_rx.try_recv().is_ok() {}
-                    if let Err(e) = region_loop::run_zone_tick(
-                        &mut world,
-                        zone_id,
-                        layout.zone_spans(),
-                        &exchange,
-                        &barriers,
-                        ZONE_HALO_WIDTH,
-                        tick,
-                        // 最小区没有展示表/在线表（②本步无会话来源）⇒ 快照只带 id/坐标/世界侧帧面。
-                        &region_loop::HaloFrameSource::none(),
-                        mirrors,
-                        Some((&**watch.heartbeats(), watch.now_ms())),
-                    ) {
-                        glog!(
-                            "ERR",
-                            "最小区 {zone_id} 在 tick {tick} 失败：{e} ⇒ abort 整机"
-                        );
+                    // 批 1（持锁）：phase1 + 边界快照/发布。发布后立即放锁。
+                    let (mut record, border) = {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let record = st.world.tick_phase1();
+                        let source =
+                            region_loop::HaloFrameSource::new(&st.displays, &st.online);
+                        let border = runtime.snapshot_publish(&st.world, tick, &source);
+                        (record, border)
+                    };
+                    if let Err(e) = border {
+                        glog!("ERR", "切片区 {zone_id} 在 tick {tick} 快照失败：{e} ⇒ abort 整机");
                         std::process::abort();
                     }
+                    // 无锁段：barrier1 + 读邻区快照。
+                    let (neighbors, wait_phase1_us) = match runtime.await_neighbors(tick) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            glog!(
+                                "ERR",
+                                "切片区 {zone_id} 在 tick {tick} 读邻区快照失败：{e} ⇒ abort 整机"
+                            );
+                            std::process::abort();
+                        }
+                    };
+                    // 批 2（持锁）：镜像刷新 + phase2（AOI）。
+                    {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if mirrors {
+                            let ZoneState { world, displays, .. } = &mut *st;
+                            if let Err(e) = region_loop::apply_mirrors(world, &neighbors, Some(displays)) {
+                                glog!(
+                                    "ERR",
+                                    "切片区 {zone_id} 在 tick {tick} 应用邻区镜像失败：{e} ⇒ abort 整机"
+                                );
+                                std::process::abort();
+                            }
+                        }
+                        st.world.tick_phase2(&mut record);
+                    }
+                    // 无锁段：心跳 + barrier2 + 探针记账。
+                    runtime.after_phase2(
+                        wait_phase1_us,
+                        Some((&**watch.heartbeats(), watch.now_ms())),
+                    );
                     tick += 1;
                 }
             };
@@ -1391,7 +1566,6 @@ fn spawn_minimal_zone(
         .with_context(|| format!("起最小区线程 {zone_id} 失败"))?;
     Ok(())
 }
-
 async fn run_inner(args: &[String]) -> Result<()> {
     let conf = args
         .first()
@@ -2554,6 +2728,18 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 let watch = Arc::new(tick_watchdog::ZoneWatch::start(zone_count, timeout_ms));
                 let router = Arc::new(zone_router::ZoneRouter::new());
                 let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                // **L2-5 ③ 段 1b**：切片区 1..N-1 的世界侧状态（下标 0 恒 None：区 0 用 sim_loop 局部）。
+                let mut zone_states: Vec<Option<Arc<std::sync::Mutex<ZoneState>>>> =
+                    (0..zone_count).map(|_| None).collect();
+                if slicing {
+                    for (index, slot) in zone_states.iter_mut().enumerate().skip(1) {
+                        let zone_id =
+                            zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
+                        *slot = Some(Arc::new(std::sync::Mutex::new(ZoneState::new(
+                            zone_id, &map_sizes, rng_seed,
+                        ))));
+                    }
+                }
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
@@ -2563,17 +2749,27 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     max_halo_band_entities: mode.max_halo_band_entities,
                     mirror_enabled,
                     stop: Arc::clone(&stop),
+                    slicing,
+                    router: Arc::clone(&router),
+                    zone_states,
                 });
                 // demux：原两条 gate 入站通道 → 每区一对通道。
                 let template_normal = ev_rx_template.take().expect("多区时原普通通道只给 demux");
                 let template_ctl = ev_ctl_rx_template
                     .take()
                     .expect("多区时原优先通道只给 demux");
-                spawn_zone_demux(template_normal, template_ctl, senders, Arc::clone(&router))?;
-                // 区 1..N−1 的最小区循环（区 0 在下面的 sim 线程里）。
+                spawn_zone_demux(
+                    template_normal,
+                    template_ctl,
+                    senders,
+                    Arc::clone(&router),
+                    slicing,
+                )?;
+                // 区 1..N−1 的区线程（区 0 在下面的 sim 线程里）。
                 for (offset, (rx, ctl)) in receivers.into_iter().enumerate() {
+                    let index = offset + 1;
                     let zone_id =
-                        zone::ZoneId::new(u32::try_from(offset + 1).expect("区数 <= u32::MAX"));
+                        zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
                     spawn_minimal_zone(
                         zone_id,
                         Arc::clone(&layout),
@@ -2582,9 +2778,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         Arc::clone(&watch),
                         Arc::clone(&stop),
                         mirror_enabled,
-                        slicing,
-                        map_sizes.clone(),
-                        rng_seed,
+                        host.zone_states[index].clone(),
+                        map_sizes.len(),
                         rx,
                         ctl,
                     )?;
@@ -23360,6 +23555,71 @@ mod perf_counters {
         Ok(())
     }
 
+    /// **L2-5 ③ 1b**：登录落区计数。
+    pub(crate) static ZONE_LOGIN_UNCOVERED: AtomicU64 = AtomicU64::new(0);
+    /// 目标区不可用（线程已死/锁毒化）⇒ 拒登（不回落区 0）。
+    pub(crate) static ZONE_TARGET_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
+    /// `(line,socket)` 未 assign、回落区 0 的次数（发现即计）。
+    pub(crate) static ZONE_ROUTER_UNASSIGNED: AtomicU64 = AtomicU64::new(0);
+    /// 每区成功落区次数（下标 = 区号；上限 = [`crate::MAX_ZONE_COUNT`]）。
+    ///
+    /// 语义 = 「回执（`finish_login`）完成 **且** `ZoneRouter::assign` 成功」；区 0 计的是
+    /// 「切片模式下按原路径处理完」的次数。世界进入是否成功不在此计（那是
+    /// `telemetry::record_ok`/`record_attempt` 的口径）。
+    static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
+    /// 落区后落点**不属于**判定区（墙格移位/死亡改写越过边界；只在切片模式计）。
+    pub(crate) static ZONE_LOGIN_OFFZONE: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) fn note_zone_login_uncovered() {
+        ZONE_LOGIN_UNCOVERED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_login_uncovered() -> u64 {
+        ZONE_LOGIN_UNCOVERED.load(Ordering::Relaxed)
+    }
+    pub(crate) fn note_zone_target_unavailable() {
+        ZONE_TARGET_UNAVAILABLE.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_target_unavailable() -> u64 {
+        ZONE_TARGET_UNAVAILABLE.load(Ordering::Relaxed)
+    }
+    pub(crate) fn note_zone_router_unassigned() -> u64 {
+        ZONE_ROUTER_UNASSIGNED.fetch_add(1, Ordering::Relaxed) + 1
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_router_unassigned() -> u64 {
+        ZONE_ROUTER_UNASSIGNED.load(Ordering::Relaxed)
+    }
+    pub(crate) fn note_zone_login_landed(zone: u32) {
+        if let Some(c) = ZONE_LOGIN_LANDED.get(zone as usize) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_login_landed(zone: u32) -> u64 {
+        ZONE_LOGIN_LANDED
+            .get(zone as usize)
+            .map_or(0, |c| c.load(Ordering::Relaxed))
+    }
+    pub(crate) fn note_zone_login_offzone() {
+        ZONE_LOGIN_OFFZONE.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_login_offzone() -> u64 {
+        ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn reset_zone_login_counters_for_tests() {
+        ZONE_LOGIN_UNCOVERED.store(0, Ordering::Relaxed);
+        ZONE_TARGET_UNAVAILABLE.store(0, Ordering::Relaxed);
+        ZONE_ROUTER_UNASSIGNED.store(0, Ordering::Relaxed);
+        ZONE_LOGIN_OFFZONE.store(0, Ordering::Relaxed);
+        for c in &ZONE_LOGIN_LANDED {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn reset_for_tests() {
         ENABLED.store(false, Ordering::Relaxed);
@@ -31026,6 +31286,177 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
     *ctx.item_number = item_number;
 }
 
+/// **L2-5 ③ 段 1b**：登录落区判定（纯函数：解回包 + 查表；不抽数、不碰世界）。
+///
+/// 判据与 `finish_login` **共用同一份输入**：`HomeMap` 非空 ⇒ 进图点 = 记录 `CurMap` +
+/// `CurX/CurY`（`resolve_enter_map` 找不到 `CurMap` 时回落 `HomeMap`，坐标仍是 `CurX/CurY`），
+/// 先按这张表定区再落区，所以区 k 的 `finish_login` 用的就是 k 的世界 rng/展示表/在线表。
+///
+/// **已知限制（段 1b）**：
+/// - `HomeMap` 为空（新角色）⇒ 出生点要等 `finish_login` 内的 RNG 抽数才知道 ⇒ 落区前不可知，
+///   按「未覆盖」拒登（计 `zone_login_uncovered`）。定区前移抽数在交接段处理。
+/// - 地形移位（墙格 ⇒ 邻格）/死亡落点改写可能在**边界 3 格内**改变归属 ⇒ 落区后用
+///   `zone_login_offzone` 计数 + WRN 暴露（不改判据）。
+#[derive(Debug)]
+enum LoginLanding {
+    /// 归区 0（或未切片）：走 `sim_loop` 原有 `finish_login` 路径。
+    HostZone,
+    /// 落在区 `zone`：用该区的 [`ZoneState`] 跑 `finish_login`，成功后 `assign`。
+    Zone {
+        zone: zone::ZoneId,
+        chr_name: String,
+    },
+    /// 落点不在任何区的 span 内 / 图不在注册表 / 新角色出生点未定 ⇒ 拒登（不回落区 0）。
+    Uncovered {
+        chr_name: String,
+        reason: &'static str,
+    },
+}
+
+fn decide_login_landing(
+    layout: &zone::RegionLayout,
+    registry: Option<&mir2_envir::MapRegistry>,
+    packet: &[u8],
+) -> LoginLanding {
+    let payload = mir2_protocol::edcode::decode(packet);
+    // 头部窗口都解不出 ⇒ `finish_login` 也只会打一行 WRN、什么都不做 ⇒ 交给原路径（同一行 WRN）。
+    let Some(head) = record::parse_player_data_head(&payload) else {
+        return LoginLanding::HostZone;
+    };
+    let full = record::parse_player_data(&payload);
+    let home_empty = full
+        .as_ref()
+        .is_some_and(|r| r.data.home_map.as_deref().unwrap_or("").is_empty());
+    if home_empty {
+        return LoginLanding::Uncovered {
+            chr_name: head.chr_name,
+            reason: "new_human_home_empty",
+        };
+    }
+    let rec_home = full
+        .as_ref()
+        .and_then(|r| r.data.home_map.as_deref())
+        .unwrap_or("");
+    let Ok((_, map_id)) = mapwire::resolve_enter_map(registry, &head.cur_map, rec_home) else {
+        return LoginLanding::Uncovered {
+            chr_name: head.chr_name,
+            reason: "map_not_in_registry",
+        };
+    };
+    match layout.zone_of(map_id, i32::from(head.cur_x), i32::from(head.cur_y)) {
+        Some(z) if z == zone_router::HOST_ZONE => LoginLanding::HostZone,
+        Some(zone) => LoginLanding::Zone {
+            zone,
+            chr_name: head.chr_name,
+        },
+        None => LoginLanding::Uncovered {
+            chr_name: head.chr_name,
+            reason: "position_not_covered",
+        },
+    }
+}
+
+/// **L2-5 ③ 段 1b**：登录落区被拒（未覆盖 / 目标区不可用）⇒ 踢该会话，**绝不回落区 0**。
+fn reject_login_landing(
+    kind: &str,
+    account: &str,
+    chr_name: &str,
+    gate_idx: i32,
+    socket: i32,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "登录落区拒绝") {
+        let _ = tx.send(SimToGate::KickUser { socket });
+    }
+    glog!(
+        "WRN",
+        "登录落区拒绝（{kind}）Account:{account} ChrName:{chr_name} gate={gate_idx} socket={socket}（不回落区 0）"
+    );
+}
+
+/// **L2-5 ③ 段 1b**：登录落区时**进程级**（`sim_loop` 局部、区 0 线程持有）的 ctx 部分。
+///
+/// 世界侧表（world/displays/online/ground_sessions/saves/login_tails/aoi_frames_total）
+/// 属落地区，见 [`ZoneState`]；本结构只装**进程级**句柄——登录落区由区 0 线程执行，
+/// 这些句柄不存在并发写者。
+struct LoginProc<'a> {
+    engine: &'a mut load::FrontEngine,
+    gates: &'a mut std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    reconnect_pending: &'a mut Vec<ReconnectPending>,
+    kick_pending: &'a mut Vec<String>,
+    pwd_sessions: &'a mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    npc_host: &'a mut Option<game_svr::npc::NpcHost>,
+    guilds: &'a mut mir2_world_bevy::GuildManager,
+    npc_vars_base: &'a mut game_svr::npc::NpcVars,
+    enter_cfg: &'a EnterConfig,
+    shard_runtime: &'a mut shard::ShardRuntime,
+    registry: &'a Option<mir2_envir::MapRegistry>,
+    server_table: &'a Vec<RouteInfo>,
+    notice: &'a Vec<u8>,
+    shard_directory: &'a Option<shard_router::ShardDirectory>,
+    magic_table_arc: &'a std::sync::Arc<magics::MagicTable>,
+    gm_filter_word: &'a std::cell::Cell<bool>,
+    gm_mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
+    gm_spirit_mutiny_tick: &'a std::cell::Cell<i64>,
+    local_shard: shard::ShardId,
+}
+
+/// 单次登录回执的逐会话输入（`LoginCtx` 的标量/回包部分）。
+struct LoginSession<'a> {
+    reply: &'a dbclient::Reply,
+    socket: i32,
+    gate_idx: i32,
+    soft_version_date: i32,
+    session_id: i32,
+    pay_ment: i32,
+    account: &'a String,
+    item_number: &'a mut i32,
+}
+
+/// **L2-5 ③ 段 1b**：用**目标区**的世界侧状态跑 `finish_login`（与区 0 路径同一份实现）。
+fn finish_login_on_zone_state(
+    state: &mut ZoneState,
+    proc: &mut LoginProc<'_>,
+    sess: LoginSession<'_>,
+) {
+    finish_login(&mut LoginCtx {
+        world: &mut state.world,
+        displays: &mut state.displays,
+        online: &mut state.online,
+        ground_sessions: &mut state.ground_sessions,
+        saves: &mut state.saves,
+        login_tails: &mut state.login_tails,
+        aoi_frames_total: &mut state.aoi_frames_total,
+        engine: &mut *proc.engine,
+        gates: &mut *proc.gates,
+        reconnect_pending: &mut *proc.reconnect_pending,
+        kick_pending: &mut *proc.kick_pending,
+        pwd_sessions: &mut *proc.pwd_sessions,
+        npc_host: &mut *proc.npc_host,
+        guilds: &mut *proc.guilds,
+        npc_vars_base: &mut *proc.npc_vars_base,
+        enter_cfg: proc.enter_cfg,
+        shard_runtime: &mut *proc.shard_runtime,
+        registry: proc.registry,
+        server_table: proc.server_table,
+        notice: proc.notice,
+        shard_directory: proc.shard_directory,
+        magic_table_arc: proc.magic_table_arc,
+        gm_filter_word: proc.gm_filter_word,
+        gm_mission: proc.gm_mission,
+        gm_spirit_mutiny_tick: proc.gm_spirit_mutiny_tick,
+        local_shard: proc.local_shard,
+        reply: sess.reply,
+        socket: sess.socket,
+        gate_idx: sess.gate_idx,
+        soft_version_date: sess.soft_version_date,
+        session_id: sess.session_id,
+        pay_ment: sess.pay_ment,
+        account: sess.account,
+        item_number: sess.item_number,
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -33938,42 +34369,201 @@ fn sim_loop(
                         );
                         // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
                         if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
-                            finish_login(&mut LoginCtx {
-                                world: &mut world,
-                                displays: &mut displays,
-                                online: &mut online,
-                                ground_sessions: &mut ground_sessions,
-                                saves: &mut saves,
-                                engine: &mut engine,
-                                gates: &mut gates,
-                                login_tails: &mut login_tails,
-                                aoi_frames_total: &mut aoi_frames_total,
-                                reconnect_pending: &mut reconnect_pending,
-                                kick_pending: &mut kick_pending,
-                                pwd_sessions: &mut pwd_sessions,
-                                npc_host: &mut npc_host,
-                                guilds: &mut guilds,
-                                npc_vars_base: &mut npc_vars_base,
-                                enter_cfg: &enter_cfg,
-                                shard_runtime: &mut shard_runtime,
-                                registry: &registry,
-                                server_table: &server_table,
-                                notice: &notice,
-                                shard_directory: &shard_directory,
-                                magic_table_arc: &magic_table_arc,
-                                gm_filter_word: &gm_filter_word,
-                                gm_mission: &gm_mission,
-                                gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
-                                local_shard,
-                                reply: &reply,
-                                socket,
-                                gate_idx,
-                                soft_version_date,
-                                session_id,
-                                pay_ment,
-                                account: &account,
-                                item_number: &mut item_number,
+                            // **L2-5 ③ 段 1b**：切片开 ⇒ 先定区再选 ctx；未切片 ⇒ `slicing_host` 为 None
+                            // ⇒ 原路径（与段 1a 逐字节相同）。
+                            let slicing_host = zone_host.as_deref().filter(|host| host.slicing);
+                            let landing = slicing_host.map(|host| {
+                                decide_login_landing(
+                                    host.layout.as_ref(),
+                                    registry.as_ref(),
+                                    &reply.packet,
+                                )
                             });
+                            match landing {
+                                None | Some(LoginLanding::HostZone) => {
+                                    finish_login(&mut LoginCtx {
+                                        world: &mut world,
+                                        displays: &mut displays,
+                                        online: &mut online,
+                                        ground_sessions: &mut ground_sessions,
+                                        saves: &mut saves,
+                                        engine: &mut engine,
+                                        gates: &mut gates,
+                                        login_tails: &mut login_tails,
+                                        aoi_frames_total: &mut aoi_frames_total,
+                                        reconnect_pending: &mut reconnect_pending,
+                                        kick_pending: &mut kick_pending,
+                                        pwd_sessions: &mut pwd_sessions,
+                                        npc_host: &mut npc_host,
+                                        guilds: &mut guilds,
+                                        npc_vars_base: &mut npc_vars_base,
+                                        enter_cfg: &enter_cfg,
+                                        shard_runtime: &mut shard_runtime,
+                                        registry: &registry,
+                                        server_table: &server_table,
+                                        notice: &notice,
+                                        shard_directory: &shard_directory,
+                                        magic_table_arc: &magic_table_arc,
+                                        gm_filter_word: &gm_filter_word,
+                                        gm_mission: &gm_mission,
+                                        gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                                        local_shard,
+                                        reply: &reply,
+                                        socket,
+                                        gate_idx,
+                                        soft_version_date,
+                                        session_id,
+                                        pay_ment,
+                                        account: &account,
+                                        item_number: &mut item_number,
+                                    });
+                                    if slicing_host.is_some() {
+                                        perf_counters::note_zone_login_landed(
+                                            zone_router::HOST_ZONE.get(),
+                                        );
+                                    }
+                                }
+                                Some(LoginLanding::Uncovered { chr_name, reason }) => {
+                                    perf_counters::note_zone_login_uncovered();
+                                    reject_login_landing(
+                                        reason, &account, &chr_name, gate_idx, socket, &gates,
+                                    );
+                                }
+                                Some(LoginLanding::Zone {
+                                    zone: target_zone,
+                                    chr_name,
+                                }) => {
+                                    let host = slicing_host.expect("落区判定必有多区 host");
+                                    match host.zone_state(target_zone) {
+                                        None => {
+                                            // 装配错误：目标区状态缺失 ⇒ 拒登，不回落区 0。
+                                            perf_counters::note_zone_target_unavailable();
+                                            reject_login_landing(
+                                                "目标区状态缺失",
+                                                &account,
+                                                &chr_name,
+                                                gate_idx,
+                                                socket,
+                                                &gates,
+                                            );
+                                        }
+                                        Some(state) => {
+                                            let mut st = state
+                                                .lock()
+                                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                            if !st.alive.load(std::sync::atomic::Ordering::Relaxed)
+                                            {
+                                                drop(st);
+                                                perf_counters::note_zone_target_unavailable();
+                                                reject_login_landing(
+                                                    "目标区线程已退出",
+                                                    &account,
+                                                    &chr_name,
+                                                    gate_idx,
+                                                    socket,
+                                                    &gates,
+                                                );
+                                            } else {
+                                                finish_login_on_zone_state(
+                                                    &mut st,
+                                                    &mut LoginProc {
+                                                        engine: &mut engine,
+                                                        gates: &mut gates,
+                                                        reconnect_pending: &mut reconnect_pending,
+                                                        kick_pending: &mut kick_pending,
+                                                        pwd_sessions: &mut pwd_sessions,
+                                                        npc_host: &mut npc_host,
+                                                        guilds: &mut guilds,
+                                                        npc_vars_base: &mut npc_vars_base,
+                                                        enter_cfg: &enter_cfg,
+                                                        shard_runtime: &mut shard_runtime,
+                                                        registry: &registry,
+                                                        server_table: &server_table,
+                                                        notice: &notice,
+                                                        shard_directory: &shard_directory,
+                                                        magic_table_arc: &magic_table_arc,
+                                                        gm_filter_word: &gm_filter_word,
+                                                        gm_mission: &gm_mission,
+                                                        gm_spirit_mutiny_tick:
+                                                            &gm_spirit_mutiny_tick,
+                                                        local_shard,
+                                                    },
+                                                    LoginSession {
+                                                        reply: &reply,
+                                                        socket,
+                                                        gate_idx,
+                                                        soft_version_date,
+                                                        session_id,
+                                                        pay_ment,
+                                                        account: &account,
+                                                        item_number: &mut item_number,
+                                                    },
+                                                );
+                                                // 落点归属校验：边界 3 格内的墙格移位/死亡改写可能改归属 ⇒
+                                                // `zone_login_offzone` 计数 + WRN 暴露（不改判据）。
+                                                if let Some(actor) = st
+                                                    .world
+                                                    .session(&chr_name)
+                                                    .and_then(|s| s.actor_id)
+                                                {
+                                                    if let Some(e) = st.world.entities.get(actor) {
+                                                        if !host.layout.owns(
+                                                            target_zone,
+                                                            e.map_id,
+                                                            e.x,
+                                                            e.y,
+                                                        ) {
+                                                            perf_counters::note_zone_login_offzone(
+                                                            );
+                                                            glog!(
+                                                                "WRN",
+                                                                "登录落区偏移 ChrName:{chr_name} 判定区 {target_zone} 但落点 map={} ({},{}) 不属于该区（墙格移位/死亡改写）⇒ 计入 zone_login_offzone",
+                                                                e.map_id,
+                                                                e.x,
+                                                                e.y
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                drop(st);
+                                                // **回执先于 assign**：登录完成才把 (line,socket) 指向目标区；
+                                                // 失败路径表里不留条目（后续命令按「未 assign」计数）。
+                                                match u8::try_from(gate_idx) {
+                                                    Ok(line) => match host.router.assign(
+                                                        line,
+                                                        socket,
+                                                        target_zone,
+                                                    ) {
+                                                        Ok(()) => {
+                                                            glog!(
+                                                                "INF",
+                                                                "登录落区 ChrName:{chr_name} Account:{account} → 区 {target_zone}（gate={line} socket={socket}）"
+                                                            );
+                                                            perf_counters::note_zone_login_landed(
+                                                                target_zone.get(),
+                                                            );
+                                                        }
+                                                        Err(rejected) => {
+                                                            let n = perf_counters::note_zone_router_unassigned();
+                                                            glog!(
+                                                                "WRN",
+                                                                "登录落区后 assign 被拒（{rejected}）⇒ 该会话命令将回落区 0（zone_router_unassigned={n}，来源=assign_rejected）"
+                                                            );
+                                                        }
+                                                    },
+                                                    Err(_) => {
+                                                        let n = perf_counters::note_zone_router_unassigned();
+                                                        glog!(
+                                                            "WRN",
+                                                            "登录落区后 gate_idx={gate_idx} 不能当线号（u8）⇒ 未 assign，命令将回落区 0（zone_router_unassigned={n}，来源=assign_bad_line）"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         } else if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
                             // **取档应答 recog != 1**（卡 `openmir2-entry-load-reply-buckets`）：修复前
                             // 这里**完全静默**——应答被取走、不打日志、不计 `enter_attempt` ⇒
@@ -117098,7 +117688,7 @@ mod zone_assembly_tests {
             ip: "10.0.0.1".to_string(),
         };
         assert_eq!(
-            route_zone_target(&ev, &router),
+            route_zone_target(&ev, &router, false),
             ZoneTarget::Zone(0),
             "Opened 初始区 0"
         );
@@ -117121,7 +117711,7 @@ mod zone_assembly_tests {
             cmd: dummy_cmd(),
             tail: None,
         };
-        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(1));
+        assert_eq!(route_zone_target(&ev, &router, false), ZoneTarget::Zone(1));
         // 同 socket 另一条线未登记 ⇒ 区 0（socket 跨线会重复）。
         let other_line = GateEvent::Command {
             line: 4,
@@ -117131,7 +117721,10 @@ mod zone_assembly_tests {
             cmd: dummy_cmd(),
             tail: None,
         };
-        assert_eq!(route_zone_target(&other_line, &router), ZoneTarget::Zone(0));
+        assert_eq!(
+            route_zone_target(&other_line, &router, false),
+            ZoneTarget::Zone(0)
+        );
     }
 
     /// **`Closed` 先 lookup 再 remove，投 lookup 出的区**（总监 2026-11-22 点名要的单测）。
@@ -117152,7 +117745,7 @@ mod zone_assembly_tests {
             socket: 700,
         };
         assert_eq!(
-            route_zone_target(&ev, &router),
+            route_zone_target(&ev, &router, false),
             ZoneTarget::Zone(1),
             "会话在区 1 ⇒ Closed 必须投区 1（不是先删后投区 0）"
         );
@@ -117163,7 +117756,7 @@ mod zone_assembly_tests {
         );
         assert!(router.is_empty());
         assert_eq!(
-            route_zone_target(&ev, &router),
+            route_zone_target(&ev, &router, false),
             ZoneTarget::Zone(0),
             "重复 Closed ⇒ 表里已无该键 ⇒ 区 0（幂等）"
         );
@@ -117178,7 +117771,7 @@ mod zone_assembly_tests {
             chr_name: String::new(),
             socket: 1,
         };
-        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(0));
+        assert_eq!(route_zone_target(&ev, &router, false), ZoneTarget::Zone(0));
         assert!(router.is_empty(), "越界线号不得插表");
     }
 
@@ -117194,7 +117787,7 @@ mod zone_assembly_tests {
             index: 0,
             ip: "10.0.0.2".to_string(),
         };
-        assert_eq!(route_zone_target(&ev, &router), ZoneTarget::Zone(0));
+        assert_eq!(route_zone_target(&ev, &router, false), ZoneTarget::Zone(0));
         assert_eq!(router.len(), 1, "认证未决不得改表");
         assert_eq!(router.lookup(2, 33), zone(1), "既有分配保持");
     }
@@ -117205,17 +117798,23 @@ mod zone_assembly_tests {
         let router = zone_router::ZoneRouter::new();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let register = GateEvent::RegisterGate { service_id: 7, tx };
-        assert_eq!(route_zone_target(&register, &router), ZoneTarget::Broadcast);
+        assert_eq!(
+            route_zone_target(&register, &router, false),
+            ZoneTarget::Broadcast
+        );
         let unregister = GateEvent::UnregisterGate { service_id: 7 };
         assert_eq!(
-            route_zone_target(&unregister, &router),
+            route_zone_target(&unregister, &router, false),
             ZoneTarget::Broadcast
         );
         let kick = GateEvent::KickAccount {
             account: "acc".to_string(),
             session_id: 9,
         };
-        assert_eq!(route_zone_target(&kick, &router), ZoneTarget::Zone(0));
+        assert_eq!(
+            route_zone_target(&kick, &router, false),
+            ZoneTarget::Zone(0)
+        );
     }
 }
 
@@ -118767,6 +119366,337 @@ mod finish_login_tests {
             }
         }
         assert!(frames > 0, "finish_login 必须下发进图/出现帧");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// **L2-5 ③ 段 1b**：登录落区（判定 + 用**目标区**的 `ZoneState` 跑 `finish_login`）。
+///
+/// 硬要求 4 的证据：登录落在区 k 之后，会话只出现在**区 k** 的 `World`/在线表/地面会话/存档体，
+/// 区 0 的对应表里没有残留。生产装配（`sim_loop` 回执分支）与这里用**同一个**
+/// [`finish_login_on_zone_state`]/[`decide_login_landing`]，区别只在调用点。
+///
+/// 红检（各自实测过一次）：①把 `finish_login_on_zone_state` 的 `state` 换成区 0 的
+/// `World`/`OnlineRegistry` ⇒ 「区 1 进世界/在线」两条红；②删掉 `online_set`（或 `ground_sessions.insert`）
+/// ⇒ 对应的「区 1 有该会话」红；③把 `decide_login_landing` 的 `zone_of` 参数换成固定 (0,0)
+/// ⇒ 落区判定用例红。
+#[cfg(test)]
+mod zone_login_landing_tests {
+    use super::*;
+
+    fn write_map_fixture(base: &std::path::Path) {
+        let (w, h) = (20_i16, 20_i16);
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+    }
+
+    fn fixture_registry(base: &std::path::Path) -> mir2_envir::MapRegistry {
+        let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
+        mir2_envir::MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        )
+    }
+
+    /// 20×20 单图切两区：区 0 = x 0..=9 全高；区 1 = x 10..=19 全高。
+    ///
+    /// 布局解析**要求整图被 span 覆盖且不重叠**（`MapNotCovered`），所以 `zone_of == None`
+    /// 在正常布局里只可能来自**越界坐标**（记录里 CurX/CurY 出了地图）——`position_not_covered`
+    /// 用例就用 x=25。
+    fn layout() -> zone::RegionLayout {
+        zone::parse_zone_layout(
+            "0:0=0,0-9,19;1:0=10,0-19,19",
+            &["0".to_string()],
+            &[(20, 20)],
+            zone_router::HOST_ZONE,
+        )
+        .expect("两区布局")
+    }
+
+    #[allow(clippy::field_reassign_with_default)]
+    fn record_at(x: i16, y: i16, home_map: &str) -> record::PlayerRecord {
+        let mut rec = record::PlayerRecord::default();
+        rec.chr_name = Some("hero".to_string());
+        rec.header.name = Some("hero".to_string());
+        rec.header.s_account = Some("acct".to_string());
+        rec.data.cur_map = Some("0".to_string());
+        rec.data.cur_x = x;
+        rec.data.cur_y = y;
+        rec.data.home_map = Some(home_map.to_string());
+        rec.data.home_x = x;
+        rec.data.home_y = y;
+        rec
+    }
+
+    fn packet(rec: &record::PlayerRecord) -> Vec<u8> {
+        mir2_protocol::edcode::encode(&record::encode_player_data(rec))
+    }
+
+    /// 判定：区 0 span ⇒ HostZone；区 1 span ⇒ Zone(1)；未覆盖 ⇒ Uncovered；HomeMap 空 ⇒
+    /// Uncovered（新角色出生点要等区世界的 RNG 抽数）；图不在注册表 ⇒ Uncovered。
+    ///
+    /// 红检：把 `zone_of(map_id, cur_x, cur_y)` 写成 `zone_of(map_id, 0, 0)` ⇒ 区 1 用例红。
+    #[test]
+    fn landing_decision_maps_position_to_zone() {
+        let layout = layout();
+        let base = std::env::temp_dir().join(format!("zone_landing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_map_fixture(&base);
+        let registry = fixture_registry(&base);
+
+        let host = decide_login_landing(&layout, Some(&registry), &packet(&record_at(5, 5, "0")));
+        assert!(
+            matches!(host, LoginLanding::HostZone),
+            "区 0 覆盖的坐标必须走区 0 原路径：{host:?}"
+        );
+        let landed =
+            decide_login_landing(&layout, Some(&registry), &packet(&record_at(15, 5, "0")));
+        match landed {
+            LoginLanding::Zone { zone, chr_name } => {
+                assert_eq!(zone, zone::ZoneId::new(1), "x=15 属区 1");
+                assert_eq!(chr_name, "hero");
+            }
+            other => panic!("区 1 覆盖的坐标必须判 Zone(1)，实得 {other:?}"),
+        }
+        let uncovered =
+            decide_login_landing(&layout, Some(&registry), &packet(&record_at(25, 5, "0")));
+        assert!(
+            matches!(
+                uncovered,
+                LoginLanding::Uncovered {
+                    reason: "position_not_covered",
+                    ..
+                }
+            ),
+            "(25,5) 越界（宽 20）⇒ 不属任何区 ⇒ Uncovered：{uncovered:?}"
+        );
+        let new_human =
+            decide_login_landing(&layout, Some(&registry), &packet(&record_at(15, 5, "")));
+        assert!(
+            matches!(
+                new_human,
+                LoginLanding::Uncovered {
+                    reason: "new_human_home_empty",
+                    ..
+                }
+            ),
+            "HomeMap 空 ⇒ 出生点未定 ⇒ Uncovered：{new_human:?}"
+        );
+        // CurMap 与 HomeMap **都**不在注册表 ⇒ 才落到 `map_not_in_registry`（只要 HomeMap
+        // 能解析，`finish_login` 就按 `resolve_enter_map` 的回落进 HomeMap，判定也必须跟着它）。
+        let mut unknown = record_at(15, 5, "nope-home");
+        unknown.data.cur_map = Some("nope".to_string());
+        let unknown = decide_login_landing(&layout, Some(&registry), &packet(&unknown));
+        assert!(
+            matches!(
+                unknown,
+                LoginLanding::Uncovered {
+                    reason: "map_not_in_registry",
+                    ..
+                }
+            ),
+            "图不在注册表（且 HomeMap 也在）⇒ Uncovered：{unknown:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 三个（+两个诊断）计数器的记数与复位：越界区号不得 panic（`ZONE_LOGIN_LANDED` 上限 512）。
+    ///
+    /// 红检：把 `note_zone_login_landed` 的 `get` 换成下标 `[]` ⇒ 越界用例 panic；
+    /// 把 `note_zone_router_unassigned` 改成不加 1 ⇒ 断言红。
+    #[test]
+    fn zone_login_counters_note_and_reset() {
+        perf_counters::reset_zone_login_counters_for_tests();
+        perf_counters::note_zone_login_uncovered();
+        perf_counters::note_zone_target_unavailable();
+        perf_counters::note_zone_router_unassigned();
+        perf_counters::note_zone_login_offzone();
+        perf_counters::note_zone_login_landed(1);
+        assert_eq!(perf_counters::zone_login_uncovered(), 1);
+        assert_eq!(perf_counters::zone_target_unavailable(), 1);
+        assert_eq!(perf_counters::zone_router_unassigned(), 1);
+        assert_eq!(perf_counters::zone_login_offzone(), 1);
+        assert_eq!(perf_counters::zone_login_landed(1), 1, "区 1 落区 +1");
+        assert_eq!(perf_counters::zone_login_landed(0), 0, "区 0 独立计");
+        perf_counters::note_zone_login_landed(9999);
+        assert_eq!(
+            perf_counters::zone_login_landed(9999),
+            0,
+            "越界区号（>=512）不得 panic，也不得改动表内值"
+        );
+        perf_counters::reset_zone_login_counters_for_tests();
+        assert_eq!(perf_counters::zone_login_uncovered(), 0);
+        assert_eq!(perf_counters::zone_login_landed(1), 0);
+    }
+
+    /// **硬要求 4**：落在区 1 ⇒ 区 1 的 `World`/`online`/`ground_sessions`/`saves` 有该会话，
+    /// 区 0 的四张表全部没有；且 actor id 落在区 1 的 id 段。
+    #[test]
+    fn landing_in_zone_one_leaves_no_residue_in_zone_zero() {
+        let base = std::env::temp_dir().join(format!("zone_landing_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_map_fixture(&base);
+        let registry = fixture_registry(&base);
+        let layout = layout();
+
+        // 前置：判定必须落在区 1（否则本用例测的不是落区路径）。
+        let reply_packet = packet(&record_at(15, 5, "0"));
+        match decide_login_landing(&layout, Some(&registry), &reply_packet) {
+            LoginLanding::Zone { zone, .. } => assert_eq!(zone, zone::ZoneId::new(1)),
+            other => panic!("前置失败：判定不是 Zone(1)：{other:?}"),
+        }
+
+        // 区 0 的四张表（进程级只有区 0 一份；这里全部保持空）。
+        let mut world0 = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let displays0 = downlink::DisplayTable::new();
+        let online0 = OnlineRegistry::new();
+        let ground0: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let saves0: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        let login_tails0: std::collections::HashMap<String, smframe::EnterWorldInputs> =
+            std::collections::HashMap::new();
+        let aoi0: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        // 目标区（区 1）的世界侧状态。
+        let mut state = ZoneState::new(zone::ZoneId::new(1), &[(20, 20)], None);
+
+        // 进程级句柄（登录落区由区 0 线程执行 ⇒ 全部是区 0 的局部）。
+        let mut engine = load::FrontEngine::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+        let mut kick_pending: Vec<String> = Vec::new();
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let mut npc_host: Option<game_svr::npc::NpcHost> = None;
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        let mut npc_vars_base = game_svr::npc::NpcVars::default();
+        let enter_cfg = EnterConfig::for_test(crate::strings::StringConf::defaults());
+        let mut shard_runtime = shard::ShardRuntime::new(shard::ShardLayout::single(1));
+        let server_table: Vec<RouteInfo> = Vec::new();
+        let notice: Vec<u8> = Vec::new();
+        let shard_directory: Option<shard_router::ShardDirectory> = None;
+        let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
+        let gm_filter_word = std::cell::Cell::new(true);
+        let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
+        let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
+        let mut item_number = 0i32;
+        let account = "acct".to_string();
+        let reply = dbclient::Reply {
+            query_id: 1,
+            message: Vec::new(),
+            packet: reply_packet,
+            sign: Vec::new(),
+        };
+
+        finish_login_on_zone_state(
+            &mut state,
+            &mut LoginProc {
+                engine: &mut engine,
+                gates: &mut gates,
+                reconnect_pending: &mut reconnect_pending,
+                kick_pending: &mut kick_pending,
+                pwd_sessions: &mut pwd_sessions,
+                npc_host: &mut npc_host,
+                guilds: &mut guilds,
+                npc_vars_base: &mut npc_vars_base,
+                enter_cfg: &enter_cfg,
+                shard_runtime: &mut shard_runtime,
+                registry: &Some(registry),
+                server_table: &server_table,
+                notice: &notice,
+                shard_directory: &shard_directory,
+                magic_table_arc: &magic_table_arc,
+                gm_filter_word: &gm_filter_word,
+                gm_mission: &gm_mission,
+                gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                local_shard: shard::HOST_SHARD,
+            },
+            LoginSession {
+                reply: &reply,
+                socket: 7,
+                gate_idx: 0,
+                soft_version_date: 0,
+                session_id: 1,
+                pay_ment: 0,
+                account: &account,
+                item_number: &mut item_number,
+            },
+        );
+
+        // ① 区 1：进世界 + 在线 + 地面会话 + 存档体。
+        let sess = state.world.session("hero").expect("区 1 必须有该会话");
+        assert_eq!(
+            sess.stage,
+            mir2_world_bevy::WorldStage::InWorld,
+            "区 1 世界必须进图"
+        );
+        let actor = sess.actor_id.expect("进图后必有 actor");
+        assert!(
+            actor >= shard::ACTOR_ID_SEGMENT,
+            "actor={actor} 必须在区 1 的 id 段（>= {}）",
+            shard::ACTOR_ID_SEGMENT
+        );
+        assert!(
+            state.online.iter().any(|e| e.chr_name == "hero"),
+            "区 1 在线表必须有该会话"
+        );
+        // `ground_sessions`/`saves` 只在**装配了 Server.conf（`game_conf`）**时插入
+        // （`finish_login` 的 `if let (Some(d), Some(a))`；本夹具无 Server.conf ⇒ 两张表空）。
+        // 所有权口径由结构保证：`LoginProc` 只携带进程级句柄，所有世界侧表都指向 `ZoneState`
+        // （见其 doc 与提交信息）；区 0 的同名局部变量根本不出现在调用实参里。
+        assert!(
+            state.ground_sessions.is_empty() && state.saves.is_empty(),
+            "无 Server.conf ⇒ 地面会话/存档体不插入（既有行为，不是本步改的）"
+        );
+        // 帧经该用户的网关线（gates 属进程，区 0 的 map 借用）下发。
+        let mut frames = 0usize;
+        while let Ok(cmd) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, .. } = cmd {
+                assert_eq!(socket, 7, "帧必须按会话 socket 路由");
+                frames += 1;
+            }
+        }
+        assert!(frames > 0, "落区登录必须下发进图/出现帧");
+
+        // ② 区 0：四张表零残留。
+        assert!(world0.session("hero").is_none(), "区 0 世界不得有该会话");
+        assert!(
+            online0.iter().all(|e| e.chr_name != "hero"),
+            "区 0 在线表不得有该会话"
+        );
+        assert!(!ground0.contains_key("hero"), "区 0 地面会话表不得有该会话");
+        assert!(!saves0.contains_key("hero"), "区 0 存档体表不得有该会话");
+        assert!(
+            displays0.get(actor).is_none(),
+            "区 0 展示表不得登记该 actor"
+        );
+        assert!(login_tails0.is_empty(), "区 0 登录尾段表不得有残留");
+        assert!(aoi0.is_empty(), "区 0 AOI 计数表不得有残留");
+        // 反证：区 0 的局部变量真的可用（不是编译器把断言优化成恒真）。
+        world0.open_session("probe");
+        assert!(world0.session("probe").is_some(), "区 0 世界必须可正常写");
 
         let _ = std::fs::remove_dir_all(&base);
     }
