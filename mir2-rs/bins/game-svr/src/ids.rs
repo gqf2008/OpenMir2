@@ -23,9 +23,20 @@
 //! **登记不做**（各需世界/配置，属后续切片）：`SS_KEEPALIVE`(104)/`SS_KICKUSER`(111)/`SS_SERVERLOAD`(113)/
 //! `ISM_ACCOUNTEXPIRED`(114)/`ISM_QUERYPLAYTIME`(116)。
 
+/// **IDS 路径的级别闸**（与 `glog!` 共用 `log_level` 阈值；抽成函数是为了给该路径
+/// 一条可测的牙——宏本身无法在单测里断言输出）。
+#[inline]
+fn ids_log_enabled(level: &str) -> bool {
+    crate::log_level::enabled(crate::log_level::severity_for(level))
+}
+
 /// IDS 链路自己的日志宏（与 main 的 `glog!` 同形，便于两侧日志按前缀过滤）。
 macro_rules! glog_ids {
     ($lvl:expr, $($arg:tt)*) => {{
+        // **DBG 级别闸**（与 `glog!` 同一阈值，未设 `MIR2_LOG_LEVEL` ⇒ 全打）。
+        if !ids_log_enabled($lvl) {
+            // 不格式化、不写盘。
+        } else {
         let now = ::std::time::SystemTime::now()
             .duration_since(::std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -39,6 +50,7 @@ macro_rules! glog_ids {
             $lvl,
             format!($($arg)*)
         );
+        }
     }};
 }
 
@@ -774,5 +786,25 @@ mod serverinfo_tests {
             super::periodic_serverinfo(&mut fresh, "热血传奇", 0, 1).is_none(),
             "刚建门不得首发"
         );
+    }
+}
+
+#[cfg(test)]
+mod test_log_gate {
+    use super::*;
+
+    /// **牙（总监 2026-11-23 ② 实抓）**：IDS 路径必须与 `glog!` 共用同一阈值——
+    /// `MIR2_LOG_LEVEL=INFO`（阈值 3）下 `ids_log_enabled("DBG") == false`；
+    /// 默认（阈值 4）下为 true；WRN/INF 在 INFO 下仍为 true。
+    #[test]
+    fn ids_debug_is_gated_by_log_level() {
+        crate::log_level::set_threshold_for_test(4);
+        assert!(ids_log_enabled("DBG"), "默认全打");
+        crate::log_level::set_threshold_for_test(3);
+        assert!(!ids_log_enabled("DBG"), "INFO 阈值必须抑制 IDS 的 DBG");
+        assert!(ids_log_enabled("INF"));
+        assert!(ids_log_enabled("WRN"));
+        assert!(ids_log_enabled("ERR"));
+        crate::log_level::set_threshold_for_test(4);
     }
 }

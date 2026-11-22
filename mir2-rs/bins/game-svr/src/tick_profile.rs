@@ -267,7 +267,7 @@ impl SlowTick {
             s
         };
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF] SLOW tick#{} work={:.3}ms total={:.3}ms sleep={:.3}ms unacct={:.3}ms ({:.1}%){}{}",
             self.tick,
             self.work_ns as f64 / 1e6,
@@ -451,7 +451,7 @@ impl HostTickProfile {
                 crate::glog!("WRN", "{msg}");
             }
             if let Some(msg) = gate.notice_message() {
-                crate::glog!("DBG", "{msg}");
+                crate::glog!("INF", "{msg}");
             }
             gate.threshold_ns()
         } else {
@@ -723,7 +723,7 @@ fn log_quantiles(label: &str, samples: &[u64]) {
     let max = *samples.iter().max().unwrap_or(&0);
     let ms = |v: u64| v as f64 / 1e6;
     crate::glog!(
-        "DBG",
+        "INF",
         "[TICKPROF]   {label} 逐 tick 分位数（n={:.0}）：p50 {:.3} / p95 {:.3} / p99 {:.3} / max {:.3} / mean {:.3} ms",
         n,
         ms(percentile_ns(samples, 50.0)),
@@ -819,13 +819,13 @@ fn diff_rows(
 
 /// 打印一个窗口的**完整 tick 分解表**（宿主段 + World 内部分段）。
 ///
-/// 一行一个段：`ms/tick`、占整 tick 的百分比、调用次数。所有行都是 `glog!("DBG", …)`，
+/// 一行一个段：`ms/tick`、占整 tick 的百分比、调用次数。所有行都是 `glog!("INF", …)`，
 /// 只在门控开启时被调用。
 pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize) {
     let ticks = host.ticks.max(1) as f64;
     let total_ms = host.total_ns as f64 / 1e6 / ticks;
     crate::glog!(
-        "DBG",
+        "INF",
         "[TICKPROF] 窗口 {} tick：整 tick 均值 {:.2} ms/tick（墙钟合计 {:.2}s，实体内 {}，门控 MIR2_TICK_PROFILE=1）",
         host.ticks,
         total_ms,
@@ -843,7 +843,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         let ms = *ns as f64 / 1e6 / ticks;
         let pct = *ns as f64 / total_ns * 100.0;
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF]   {:<22} {:>9.3} ms/tick {:>7.2}% tick  ({} 次)",
             name,
             ms,
@@ -858,12 +858,12 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         let mut probes = host.probes.clone();
         probes.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF] 宿主命名子探针（默认关闭；MIR2_TICK_PROFILE=1 时每窗口输出）："
         );
         for (name, ns, calls) in &probes {
             crate::glog!(
-                "DBG",
+                "INF",
                 "[TICKPROF]   {:<26} {:>9.3} ms/tick {:>7.2}% tick  ({} 次/tick)",
                 name,
                 *ns as f64 / 1e6 / ticks,
@@ -873,7 +873,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         }
     }
     crate::glog!(
-        "DBG",
+        "INF",
         "[TICKPROF] 工作段合计（= HostTickTotal - HostSleep）= {:.2} ms/tick，占比 {:.2}%",
         work_ns as f64 / 1e6 / ticks,
         work_ns as f64 / total_ns * 100.0
@@ -882,7 +882,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
     log_quantiles("HostTickTotal 工作段", &host.work_samples);
     let Some(world) = world else {
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF] World 探针未开启（world.tick_profile() = None）"
         );
         return;
@@ -890,7 +890,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
     let w_ticks = world.ticks.max(1) as f64;
     let w_sum: u64 = world.stages.iter().map(|(_, ns, _)| *ns).sum();
     crate::glog!(
-        "DBG",
+        "INF",
         "[TICKPROF] World::tick 内部（World 探针 {} tick，段合计 {:.3} ms/tick）：",
         world.ticks,
         w_sum as f64 / 1e6 / w_ticks
@@ -899,7 +899,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
     stages.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
     for (name, ns, calls) in &stages {
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF]   World.{:<22} {:>9.3} ms/tick {:>7.2}% World  {:>7.2}% tick  ({} 次/tick)",
             name,
             *ns as f64 / 1e6 / w_ticks,
@@ -916,12 +916,12 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         let m = &world.monai;
         let loop_ns = m.loop_ns as f64;
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF]   SimMonsterAi 结构分解（{} tick 累计；collect=遍历, gate=门判定模型, loop=门+AI 体）：",
             world.monai_ticks
         );
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF]     collect {:.3} ms/tick；gate {:.3} ms/tick；loop {:.3} ms/tick ⇒ AI 体（loop−gate）{:.3} ms/tick",
             m.collect_ns as f64 / 1e6 / mt,
             m.gate_ns as f64 / 1e6 / mt,
@@ -930,7 +930,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         );
         let per = |v: u64| v as f64 / mt;
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF]     counts/tick：slot {:.0}，scanned {:.0}（inactive {:.0}），throttle-skip {:.0}，ran {:.0}（dead {:.0} / frozen {:.0} / no-target {:.0} / idle-wander {:.0} / walk-due {:.0} / target {:.0}）",
             per(m.slot_total),
             per(m.scanned),
@@ -954,7 +954,7 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         .sum();
     if host_world_ns != 0 {
         crate::glog!(
-            "DBG",
+            "INF",
             "[TICKPROF] 对账：HostWorldHead+HostWorldTail = {:.3} ms/tick；ΣWorld.* = {:.3} ms/tick；宿主附加（专用怪产仔/ref 等）= {:.3} ms/tick",
             host_world_ns as f64 / 1e6 / ticks,
             w_sum as f64 / 1e6 / ticks,
@@ -964,10 +964,10 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
     if !world.probes.is_empty() {
         let mut probes = world.probes.clone();
         probes.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
-        crate::glog!("DBG", "[TICKPROF] World 命名探针（ms/tick）：");
+        crate::glog!("INF", "[TICKPROF] World 命名探针（ms/tick）：");
         for (name, ns, calls) in &probes {
             crate::glog!(
-                "DBG",
+                "INF",
                 "[TICKPROF]   Probe.{} = {:.4} ms/tick ({} 次/tick)",
                 name,
                 *ns as f64 / 1e6 / w_ticks,
