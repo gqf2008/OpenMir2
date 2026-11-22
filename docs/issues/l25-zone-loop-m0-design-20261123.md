@@ -3,7 +3,11 @@
 > 依据：已入 master 的评估稿 [`l25-per-zone-host-loop-scope-20261123.md`](l25-per-zone-host-loop-scope-20261123.md)
 > §4（M0–M5）与 §12（今晚容量重估）。**本稿只覆盖 M0**（骨架），不写 M1 及以后。
 > 派工：opc-27（2026-11-23）；复核：0c（评估稿作者）；实现：本会话（`card/zone-loop-m0`，自 `05be6a65e`）。
-> 状态：**设计待审**（opc-27 审过再写码）。
+> 状态：**设计已改版，待 0c 最终确认后开 A1**。
+>
+> **M0 的实例化单元（写死）**：`HostLoop::tick`（含段级 `PhaseSet` 内联守卫）+ `HostLoop::for_zone`
+> 构造。**段级方法化（`fn phase_*`）推迟到 M1**，与区 k 命令接线、源码扫描用例更新一起做——
+> M0 不含 phase 方法**不是**不完整，是本阶段的范围定义。
 
 ## 0. M0 的验收（原文）
 
@@ -129,10 +133,17 @@ const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  //
   `let t = host_prof.begin();` **之前**。⇒ 代码顺序不变、TICKPROF 段归属不变（gap 仍在 begin/end
   之外），但 gap 受**该段的 `PhaseSet` 位**控制。
 - 由此 **M0_MIN 下 gap 不会无条件执行**：被跳过段的 gap 随该段一起跳过。
-- **唯一的无条件 gap = 循环头**（`tick_no = ticks`、`cross_zone_frames::begin_tick`、
-  5s 遥测行、`db` 应答表顶部采样、`next = now + tick`）。其代价逐项记明：两次原子读 +
-  一次 `is_host && clock>=next`（区 k `is_host=false` ⇒ 跳过、**零分配**）+ `db.is_some()` 才采样
-  （区 k 空实例 `db=None`）。⇒ 区 k 空实例的循环头在空世界/空 db 上**纯 no-op、无 I/O、无分配**。
+- **唯一的无条件 gap = 循环头**。逐项与区 k 空实例上的 no-op **代码依据**（不是「跑一下不 panic」）：
+
+  | 循环头项 | 区 0 语义 | 区 k 空实例（`for_zone` + `M0_MIN`）上为何是 no-op |
+  | --- | --- | --- |
+  | `let tick_no = ticks;` | 本 tick 单源 tick 号 | 纯整数读取，无副作用 |
+  | `cross_zone_frames::begin_tick(tick_no)` | 跨区邮箱 `src_tick/seq` 起点 | 线程局部 `SINK` 为 `None`（未 `install`）⇒ 直接返回，**无分配** |
+  | 5s 遥测行（`entry_telemetry_*`） | `is_host && clock >= next` 才 `format!` | `is_host=false` ⇒ 短路，**零 `String` 分配**、无日志 |
+  | `db` 应答表顶部采样 | `if let Some(w) = db.as_ref()` | `db=None` ⇒ 跳过（`sample_reply_table_at_tick_top` 不被调用） |
+  | `let next = Instant::now() + tick;` | HostSleep 截止点 | 一次 `Instant::now()`（M0_MIN 的 tick 里 HostSleep 也被跳过，`next` 不参与） |
+
+  ⇒ 区 k 空实例的循环头 = 两次原子读 + 一次整数赋值，**无 I/O、无分配、无锁**。
 - 逐段的 gap 清单在 A2 搬移时**逐条列出**并核对「空世界下不发帧、不分配、不取墙钟做门」。
 
 ### 3.1 「构造入口闸」的准确范围（opc-27 2026-11-23 裁决）
