@@ -117778,10 +117778,12 @@ mod l2_multi_zone_ledger_tests {
         );
     }
 
-    /// **C1/Q1 布局 1**：同格两镜像，**槽位序 == 进入序**（两怪按创建序同格落格）。
+    /// **C1/Q1 布局 1（回归/对照，不是牙）**：同格两镜像，**槽位序 == 进入序**（两怪按创建序
+    /// 同格落格）。
     ///
-    /// 说明：本布局下两序相同 ⇒ 若只按槽位序追加也**不会红**，是「牙是空的」对照组；
-    /// 真正咬住的是布局 2。
+    /// 本布局下两序相同 ⇒ 删掉定序也**不会红**。它只防「镜像内容/坐标/多帧」回归；**真牙在
+    /// 布局 2/3**（`add_entity` 入队 vs `enter_map` 当场进格 ⇒ 槽位序 ≠ 进入序在生产可达）。
+    /// 反序定序能打红本布局，属人工变异、仅证断言可动，不称可达缺陷。
     #[test]
     fn step2_same_cell_order_slot_equals_entry() {
         let players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5)];
@@ -117957,6 +117959,35 @@ mod l2_multi_zone_ledger_tests {
         recv.tick();
         apply_mirrors(&mut recv, std::slice::from_ref(&snap), None).expect("镜像写入");
         measure_step(&mut recv, o)
+    }
+
+    /// **C7 补格（无镜像）**：邻区**空快照** ⇒ 拆区目标格无阻挡、可走；基线无邻居同样可走。
+    /// （「快照陈旧」不走本格：它是 `StaleNeighbor` fail-closed，不是「没有镜像」。）
+    ///
+    /// 红检：让 `apply_mirrors` 对空快照也留下旧镜像（删陈旧清扫）⇒ 拆区被挡而基线可走 ⇒ 红。
+    #[test]
+    fn step2_boundary_no_neighbor_is_walkable() {
+        // 基线：O 独占一侧。
+        let mut base = World::new(20, 10);
+        let ob = base.add_entity(boundary_player(1, 9, 5));
+        base.tick();
+        assert_eq!(measure_step(&mut base, ob), (true, Vec::new()));
+
+        // 拆区：owner 侧世界**没有实体** ⇒ 空快照 ⇒ 无镜像。
+        let mut owner = World::new(20, 10);
+        owner.tick();
+        let snap = snapshot_border(&owner, 0, RECT_B_BOUNDARY, 12, 0, &HaloFrameSource::none());
+        assert!(snap.entities.is_empty(), "空世界快照必须为空");
+        let mut recv = World::new(20, 10);
+        let or = recv.add_entity(boundary_player(1, 9, 5));
+        recv.tick();
+        apply_mirrors(&mut recv, std::slice::from_ref(&snap), None).expect("空快照应用");
+        assert!(recv.mirror_ids().is_empty(), "空快照不得留下镜像");
+        assert_eq!(
+            measure_step(&mut recv, or),
+            (true, Vec::new()),
+            "无镜像时目标格不得有阻挡者"
+        );
     }
 
     /// **C7（②第 2 步的闸）**：跨界一步的阻挡归属——**先量两侧**（单 World vs 拆区），

@@ -236,39 +236,48 @@ pub fn snapshot_border(
                 && e.map_id == map_id
                 && rect.border_contains(e.x, e.y, halo_width)
         })
-        .map(|e| HaloEntity {
-            actor_id: e.id,
-            map_id: e.map_id,
-            x: e.x,
-            y: e.y,
-            view_range: e.view_range,
-            name: e.name.clone(),
-            race: e.race,
-            race_img: e.race_img,
-            appr: e.appr,
-            light: e.light,
-            name_color: e.name_color,
-            cell_type: halo_cell_type(&e),
-            dir: e.ai.dir,
-            death: e.death,
-            invisible: e.invisible,
-            ghost: e.ghost,
-            fixed_hide_mode: e.fixed_hide_mode,
-            ob_mode: e.ob_mode,
-            master: e.master,
-            cell_pos: world
+        .map(|e| {
+            // 边界带实体一定 `add_to_mapped`；查不到 = 格表与 `add_to_mapped` 失同步（程序错误）。
+            // **不得静默退化成槽位序**（若基线恰好槽位序，错位会被掩盖）⇒ debug 断言 + release 兜底。
+            let cell_pos = world
                 .map(map_id)
                 .get_cell_info(e.x, e.y)
                 .0
                 .obj_list
                 .iter()
-                .position(|o| o.actor_object && o.cell_obj_id == e.id)
-                .unwrap_or(usize::MAX),
-            display: source
-                .displays
-                .and_then(|d| d.get(e.id))
-                .map(HaloDisplay::from_display),
-            route: halo_route(source, &e),
+                .position(|o| o.actor_object && o.cell_obj_id == e.id);
+            debug_assert!(
+                cell_pos.is_some(),
+                "边界带实体 {} 已落格但不在其格 obj_list 里（格表/add_to_mapped 失同步）",
+                e.id
+            );
+            HaloEntity {
+                actor_id: e.id,
+                map_id: e.map_id,
+                x: e.x,
+                y: e.y,
+                view_range: e.view_range,
+                name: e.name.clone(),
+                race: e.race,
+                race_img: e.race_img,
+                appr: e.appr,
+                light: e.light,
+                name_color: e.name_color,
+                cell_type: halo_cell_type(&e),
+                dir: e.ai.dir,
+                death: e.death,
+                invisible: e.invisible,
+                ghost: e.ghost,
+                fixed_hide_mode: e.fixed_hide_mode,
+                ob_mode: e.ob_mode,
+                master: e.master,
+                cell_pos: cell_pos.unwrap_or(usize::MAX),
+                display: source
+                    .displays
+                    .and_then(|d| d.get(e.id))
+                    .map(HaloDisplay::from_display),
+                route: halo_route(source, &e),
+            }
         })
         .collect();
     HaloSnapshot { tick, entities }

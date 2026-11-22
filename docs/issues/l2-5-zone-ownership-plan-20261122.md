@@ -149,6 +149,9 @@
   `CrossZoneOutbox::with_criterion(.., RecipientZone)`。双向负例
   `emitter_criterion_recipient_zone_has_two_way_teeth`：收件人区发 ⇒ 绿；非收件人区发 ⇒
   `NotOwner`；旧口径下同一帧仍红。
+- **待办（latent 双轨风险）**：当前生产 `sim_loop` 没有 `CrossZoneOutbox`（账本恒 `None`）⇒
+  不存在双轨；将来生产启用账本时，**生产构造点必须 `with_criterion(RecipientZone)`**，并加
+  一条源码牙（结构判定/grep）钉住生产构造点，防止顺手 `new(..)` 落回旧口径。
 
 ## 8. 已知差异表（L2-5 起生效，必须进发布说明）
 
@@ -225,15 +228,18 @@
 #### 9.1.2 第 2 步落地（Q1/Q2 裁决）：`cell_pos` 格内序
 
 - **快照新增 `HaloEntity.cell_pos`** = owner 侧该格 `obj_list` 内的下标（非 actor 对象也计入，
-  保证相对序单调）；读不到 ⇒ `usize::MAX`。
+  保证相对序单调）。**已落格却查不到 ⇒ `debug_assert!`**（格表与 `add_to_mapped` 失同步 =
+  程序错误；静默退化成槽位序会掩盖错位），release 兜底 `usize::MAX`。
 - **`apply_mirrors` 先按 `(map_id, x, y, cell_pos, actor_id)` 定序再 upsert**：镜像的格子登记
   是「追加」，只有按 owner 侧格内序追加，收件人世界的 `obj_list` 序才与基线一致。
 - **为什么是「格内进入序」而不是槽位序**：oracle 扫描按 `obj_list` 下标序出帧
   （`search_view_range_with_updates` → `VisibleActors` 入队序 → `drain_aoi_downlink`），而槽位
   序是实体存储的分配序；「后进先出 / 延迟 `Enter`」时两者不等。用槽位序会让同格出现帧相对序
   与基线不同（Q1 裁决认可的口径）。
-- **牙的映射**：布局 2/3 被「删掉定序（回到槽位序）」打红；布局 1（槽位序==进入序）被
-  「反序定序（descending cell_pos）」打红——每个布局至少有一种变异能让它红。
+- **牙的映射**：**布局 2/3 是真牙**——`add_entity` 把 `Enter` 入队、`enter_map` 当场进格 ⇒
+  「槽位序 ≠ 进入序」在生产可达；删掉定序（回到槽位序）即红。**布局 1 是回归/对照，不是牙**
+  （槽位序==进入序，结构上恒绿）；反序定序能打红它，但那是**人工变异、仅证断言可动，不是可达
+  缺陷**（没人会把格内序写成逆序）。
 
 #### 9.1.2 原判据草案（Q2）
 
