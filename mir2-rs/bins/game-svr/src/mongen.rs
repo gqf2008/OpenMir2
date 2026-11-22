@@ -668,9 +668,70 @@ pub fn bind_new_certificates(
 /// `Level = monster.Level`、`HP/MaxHP = monster.HP`、`AC = AC`、`DC = MakeWord(DC, MaxDC)`、
 /// `LifeAttrib = monster.btLifeAttrib`、`HitPoint = monster.HitPoint`、`SpeedPoint = monster.Speed`、
 /// `FightExp = monster.Exp`。`dir`/`cool_eye` 随生成结果写进 `Entity.ai`（见模块头）。
+/// **L2-5 ④b-1**：怪物生成/守卫放置所需的**最小地图视图**（逻辑名 → `map_id` +
+/// `boNOHUMNOMON` 标志）。生产区 0 直接由 [`MapRegistry`] 实现；区 k 用 [`ZoneMapView`]
+/// ——只带名字表与标志位，**不复制**整张注册表的地图格数据（区 k 线程因此能自己驱动
+/// MonGen 首刷/周期刷，且每个区仍只用自己 `seed ⊕ zone` 的 RNG）。
+pub trait MapLookup {
+    /// `SystemShare.MapMgr.FindMap(MapName)` 的等价物（大小写口径同 `MapRegistry::id_of`）。
+    fn id_of(&self, map_name: &str) -> Option<usize>;
+    /// `Envir.Flag.boNOHUMNOMON`（`WorldServer.MonGen.cs:235-243` 的 `canCreate` 门）。
+    fn no_hum_no_mon(&self, map_id: usize) -> bool;
+}
+
+impl MapLookup for MapRegistry {
+    fn id_of(&self, map_name: &str) -> Option<usize> {
+        MapRegistry::id_of(self, map_name)
+    }
+
+    fn no_hum_no_mon(&self, map_id: usize) -> bool {
+        self.flag_of(map_id).is_some_and(|f| f.bo_nohumnomon)
+    }
+}
+
+/// **L2-5 ④b-1**：区 k 的轻量地图视图（`zone_map_names` 快照 + `boNOHUMNOMON` 位）。
+#[derive(Debug)]
+pub struct ZoneMapView {
+    index: std::collections::HashMap<String, usize>,
+    no_hum_no_mon: Vec<bool>,
+}
+
+impl ZoneMapView {
+    /// 从注册表抽取名字表与标志位（启动期一次；只读、可跨区线程共享）。
+    #[must_use]
+    pub fn from_registry(registry: &MapRegistry) -> Self {
+        let names = registry.map_names();
+        // `MapRegistry::id_of` 的查表口径是 **ASCII 大小写不敏感**（`normalize_name` =
+        // `to_ascii_lowercase`）⇒ 本视图必须同口径，否则区 k 的 `FindMap` 等价物会对
+        // 大小写不同的记录（如 `MonGen.txt` 写 `0`、`MapInfo.txt` 写 `0z`）给出不同答案。
+        let index = names
+            .iter()
+            .enumerate()
+            .map(|(id, name)| (name.to_ascii_lowercase(), id))
+            .collect();
+        let no_hum_no_mon = (0..names.len())
+            .map(|id| registry.flag_of(id).is_some_and(|f| f.bo_nohumnomon))
+            .collect();
+        Self {
+            index,
+            no_hum_no_mon,
+        }
+    }
+}
+
+impl MapLookup for ZoneMapView {
+    fn id_of(&self, map_name: &str) -> Option<usize> {
+        self.index.get(&map_name.to_ascii_lowercase()).copied()
+    }
+
+    fn no_hum_no_mon(&self, map_id: usize) -> bool {
+        self.no_hum_no_mon.get(map_id).copied().unwrap_or(false)
+    }
+}
+
 pub struct WorldMonsterSink<'a> {
     pub world: &'a mut mir2_world_bevy::World,
-    pub registry: &'a MapRegistry,
+    pub registry: &'a dyn MapLookup,
     pub table: &'a MonsterTable,
     /// **M3④-实现 C 第 ③ 片**：怪物的展示层字段（`Feature/Light/ShowName/…`）由
     /// `bins/game-svr` 的展示表承载（与玩家同表）——生成时按 `MonsterInfo` 算一次注册，
@@ -885,6 +946,80 @@ impl mir2_world_bevy::SpecialSpawner for WorldSpecialSpawner<'_> {
 mod tests {
     use super::*;
     use mir2_data::models::MonsterDropItem;
+
+    /// **L2-5 ④b-1 牙**：区 k 的轻量视图与 `MapRegistry` **同口径**（ASCII 大小写不敏感 +
+    /// `boNOHUMNOMON` 位），否则区 k 的刷怪 `canCreate`/`FindMap` 会与区 0 分叉。
+    /// 变异：视图查表去掉 `to_ascii_lowercase`（或索引不折叠）⇒ 大小写断言红；
+    /// `no_hum_no_mon` 恒 false ⇒ 标志位断言红。
+    #[test]
+    fn zone_map_view_matches_registry_lookup_and_flag() {
+        use mir2_envir::{MapInfoEntry, MapInfoFlag};
+        let base = std::env::temp_dir().join(format!(
+            "mir2-zone-map-view-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        for (file, flag) in [
+            ("a", MapInfoFlag::default()),
+            (
+                "b",
+                MapInfoFlag {
+                    bo_nohumnomon: true,
+                    ..MapInfoFlag::default()
+                },
+            ),
+        ] {
+            let (w, h) = (5_i16, 5_i16);
+            let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+            bytes[0..2].copy_from_slice(&w.to_le_bytes());
+            bytes[2..4].copy_from_slice(&h.to_le_bytes());
+            bytes.resize(
+                mir2_envir::HEADER_BYTES
+                    + usize::try_from(w).unwrap()
+                        * usize::try_from(h).unwrap()
+                        * mir2_envir::CELL_BYTES,
+                0,
+            );
+            std::fs::write(base.join("Map").join(format!("{file}.map")), &bytes).unwrap();
+            let _ = flag;
+        }
+        let loader = mir2_envir::MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = MapRegistry::from_entries(
+            loader,
+            vec![
+                MapInfoEntry {
+                    map_name: "Case0".to_string(),
+                    map_file_name: "a".to_string(),
+                    desc: String::new(),
+                    server_index: 0,
+                    flag: MapInfoFlag::default(),
+                },
+                MapInfoEntry {
+                    map_name: "nomon".to_string(),
+                    map_file_name: "b".to_string(),
+                    desc: String::new(),
+                    server_index: 0,
+                    flag: MapInfoFlag {
+                        bo_nohumnomon: true,
+                        ..MapInfoFlag::default()
+                    },
+                },
+            ],
+        );
+        let view = ZoneMapView::from_registry(&registry);
+        for name in ["Case0", "case0", "CASE0"] {
+            assert_eq!(view.id_of(name), registry.id_of(name), "{name} 查表口径");
+        }
+        assert_eq!(view.id_of("case0"), Some(0));
+        assert_eq!(view.id_of("missing"), None);
+        assert_eq!(view.no_hum_no_mon(1), registry.no_hum_no_mon(1));
+        assert!(view.no_hum_no_mon(1), "boNOHUMNOMON 位必须带过来");
+        assert!(!view.no_hum_no_mon(0));
+        assert!(!view.no_hum_no_mon(99), "越界 id ⇒ false（与生产门一致）");
+        assert!(registry.no_hum_no_mon(1));
+    }
 
     /// 用例级唯一临时目录的序号（`pid + 原子计数`，照 `LESSON_并行测试临时路径须pid加原子计数构造`）。
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

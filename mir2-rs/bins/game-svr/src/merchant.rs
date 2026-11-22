@@ -26,7 +26,7 @@
 //!   （卡 `openmir2-qfunction-hidden-merchant-world-wiring`）。oracle `MerchantInitialize` 在
 //!   `LoadMerchantScript` 之前读它，故 `Merchant.txt` 侧仍为默认 `false`，1:1 成立。
 
-use mir2_envir::{MapLoader, QuestNpcRecord};
+use mir2_envir::{MapLoader, MerchantRecord, QuestNpcRecord};
 use mir2_script::ScriptInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
@@ -43,6 +43,10 @@ pub struct MerchantLoadReport {
     pub kept: usize,
     /// 被 `FindMap` 门丢弃的 `(ChrName, MapName)`（部署件 = 空；合成用例才触发门）。
     pub dropped_unknown_map: Vec<(String, String)>,
+    /// **L2-5 ④b-1**：被准入谓词在**脚本解析之前**丢弃的记录数（按区分装载时；单区恒 0）。
+    ///
+    /// 这些记录不进 `records`（`records` = 存活记录），也不消耗 `rename_rand` 抽数。
+    pub zone_filtered: usize,
 }
 
 /// 与 [`MerchantSpawn`] 下标对齐的脚本种子（`Merchant.ScriptList` + 说词变量所需字段）。
@@ -218,15 +222,62 @@ pub fn load_merchant_spawns(
     ),
     String,
 > {
+    load_merchant_spawns_filtered(loader, resolve_map, None, rng)
+}
+
+/// [`load_merchant_spawns`] + **逐条准入谓词**（**L2-5 ④b-1** 的按区装载入口）。
+///
+/// `keep = None` ⇒ 与 [`load_merchant_spawns`] **逐字节相同**（同一 envir 入口、同一抽数序列；
+/// `slicing=0` / N=1 走这条）。
+///
+/// `keep = Some(p)` ⇒ 谓词在 `crates/envir` 的**脚本解析之前**判定（`load_merchants_loaded_filtered`）：
+/// 被拒记录不解析 `Market_Def` 脚本 ⇒ **不抽 `rename_rand`**。谓词只看已解析记录
+/// （`map_name`/`x`/`y`）；调用方负责把逻辑图名解析成 `map_id` 并决定"未在册名字"归谁
+/// （区 0 放行、区 k 拒绝——见 `zone::RegionLayout::static_owned_name`）。
+///
+/// 被拒条目不进 `records`/`dropped_unknown_map`，计入 `report.zone_filtered`。
+///
+/// # Errors
+/// 同 [`load_merchant_spawns`]。
+pub fn load_merchant_spawns_filtered(
+    loader: &MapLoader,
+    resolve_map: impl Fn(&str) -> Option<usize>,
+    keep: Option<&dyn Fn(&MerchantRecord) -> bool>,
+    rng: &mut RandomNumber,
+) -> Result<
+    (
+        Vec<MerchantSpawn>,
+        MerchantLoadReport,
+        Vec<MerchantScriptSeed>,
+    ),
+    String,
+> {
     // O-2：`SystemShare.RandomNumber.GetRandomNumber(1, 200)`（`ScriptParsers.cs:857`）。
     // 经 `crates/world-bevy::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
     // `crates/world-bevy/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
     let mut rename_rand =
         |min: i32, max: i32| mir2_world_bevy::merchant::merchant_rename_rand(rng, min, max);
-    let records = loader
-        .load_merchants_loaded(&mut rename_rand)
-        .map_err(|e| e.to_string())?
-        .unwrap_or_default();
+    let mut zone_filtered = 0usize;
+    let records = match keep {
+        None => loader.load_merchants_loaded(&mut rename_rand),
+        Some(keep) => {
+            let dropped = std::cell::Cell::new(0usize);
+            let out = loader.load_merchants_loaded_filtered(
+                |record| {
+                    let ok = keep(record);
+                    if !ok {
+                        dropped.set(dropped.get() + 1);
+                    }
+                    ok
+                },
+                &mut rename_rand,
+            );
+            zone_filtered = dropped.get();
+            out
+        }
+    }
+    .map_err(|e| e.to_string())?
+    .unwrap_or_default();
     let total = records.len();
     let mut spawns = Vec::with_capacity(total);
     let mut seeds = Vec::with_capacity(total);
@@ -254,6 +305,7 @@ pub fn load_merchant_spawns(
         records: total,
         kept: spawns.len(),
         dropped_unknown_map,
+        zone_filtered,
     };
     Ok((spawns, report, seeds))
 }

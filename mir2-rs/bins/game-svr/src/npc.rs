@@ -476,6 +476,21 @@ impl MerchantScriptBook {
         self.by_actor.insert(entry.def.actor_id, entry);
     }
 
+    /// **L2-5 ④b-1**：把**另一个区**的商人脚本表并入本表（进程级单实例宿主）。
+    ///
+    /// 键 = `ActorId`；多区时各区 id 段互斥（`zone_id_base`）⇒ 正常情况下两表键集不相交。
+    /// 撞键 ⇒ **panic（fail-closed）**：那意味着两个区拿到同一实体 id（段隔离已坏），
+    /// 静默覆盖会让脚本表指向错误实体。
+    pub fn merge(&mut self, other: MerchantScriptBook) {
+        for (id, npc) in other.by_actor {
+            assert!(
+                !self.by_actor.contains_key(&id),
+                "商人脚本表 ActorId 撞键 {id}：跨区 id 段隔离被破坏（fail-closed）"
+            );
+            self.by_actor.insert(id, npc);
+        }
+    }
+
     /// **隐藏脚本 NPC 的脚本登记**（卡 `openmir2-hidden-npc-world-entities`）。
     ///
     /// 把 `NpcHost` 的**同一份** `NpcDef`（[`NpcHost::def_rc`] 给出的 `Rc` 共享）以

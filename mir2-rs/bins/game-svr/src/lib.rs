@@ -1005,6 +1005,10 @@ impl ZoneHost {
 struct ZoneState {
     world: mir2_world_bevy::World,
     displays: downlink::DisplayTable,
+    /// **L2-5 ④b-1**：本区的 MonGen 宿主（每区一份；entries 已按本区 rect 过滤、
+    /// `initialize_monster` 的抽数走本区 `seed ⊕ zone` 的 `world.rng`）。`None` = 无
+    /// `MonGen.txt` / 切片关 / 尚未装载。
+    mon_gen: Option<game_svr::mongen::MonGenHost>,
     online: OnlineRegistry,
     ground_sessions: std::collections::HashMap<String, SessionGround>,
     saves: std::collections::HashMap<String, SavedHuman>,
@@ -1047,6 +1051,7 @@ impl ZoneState {
         Self {
             world,
             displays: downlink::DisplayTable::new(),
+            mon_gen: None,
             online: OnlineRegistry::new(),
             ground_sessions: std::collections::HashMap::new(),
             saves: std::collections::HashMap::new(),
@@ -1141,6 +1146,187 @@ fn new_zone_state(
         );
     }
     state
+}
+
+/// **L2-5 ④b-1**：区 k 的静态装载输入（区 0 装载前的**原样快照**；只在切片开启时构造）。
+///
+/// 与区 0 的输入同源：`MonGen.txt` 未过滤条目、`Npcs.txt`、`GuardList.txt`；各区装载时再按
+/// 自己的 rect 谓词过滤（先过滤后抽，见 [`spawn_statics_for_zone`]）。
+struct ZoneStaticsSource {
+    /// `None` = 无 `MonGen.txt`（区 0 不建宿主 ⇒ 区 k 也不建）。
+    mon_gen_entries: Option<Vec<mir2_world_bevy::mongen::MonGenEntry>>,
+    mon_gen_config: mir2_world_bevy::mongen::MonGenConfig,
+    npcs: Option<Vec<mir2_envir::npcs::NpcInfo>>,
+    guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
+}
+
+/// [`spawn_statics_for_zone`] 的读数（启动日志按区打，见调用点）。
+#[derive(Clone, Copy, Debug, Default)]
+struct ZoneStaticsReport {
+    mon_gen_total: usize,
+    mon_gen_kept: usize,
+    merchants_total: usize,
+    merchants_filtered: usize,
+    merchants_kept: usize,
+    npcs_total: usize,
+    npcs_kept: usize,
+    npcs_placed: usize,
+    guards_total: usize,
+    guards_kept: usize,
+    guards_placed: usize,
+}
+
+/// **L2-5 ④b-1**：把**区 k 的静态实体**（MonGen 首刷 / 商人 / 固定 NPC / 守卫）装进区 k 的
+/// [`ZoneState`]——同一组 loader、区 k 自己的 rect 谓词、区 k 自己的 `seed ⊕ zone` RNG。
+///
+/// ## 为什么在**区 0 的 sim 线程**里调用
+///
+/// 脚本宿主（[`game_svr::npc::MerchantScriptBook`] / [`game_svr::npc::NpcHost`]）内含
+/// `Rc<NpcDef>` ⇒ **`!Send`**，且是进程级单实例（交接 §0.6：不新建宿主、不重解析脚本 VM）。
+/// 因此装载只能由持有宿主的线程执行：本函数在 sim 线程里 **`&mut` 传入宿主**，只把**实体**
+/// 写进区 k 的 `World`/展示表（锁住 `Arc<Mutex<ZoneState>>`）。语义仍是「区 k 只建实体并登记」：
+/// 没有新宿主、没有二次脚本解析、没有从全局取任何东西。
+///
+/// ## 次序与 oracle 一致
+///
+/// `InitializeMonster`（`MonGenHost::start`）→ `LoadMerchant` → `LoadNpcs` → `LoadGuardList`
+/// （`GameApp.cs:150/227/229/239`）。
+///
+/// ## 语义写死（计划页 §12.7）
+///
+/// - 被过滤条目不消耗抽数（MonGen 先过滤再 `start`；商人谓词在 envir 的脚本解析之前）；
+/// - 未覆盖图 / 未在册名：**区 0 收、区 k 拒**（`zone::RegionLayout::static_owned_name` 的不对称）；
+/// - 守卫放置依赖**本区**的 `MonGenHost`（`place_guards` 的 `host` 参数）。
+#[allow(clippy::too_many_arguments)]
+fn spawn_statics_for_zone(
+    zone_id: zone::ZoneId,
+    layout: &zone::RegionLayout,
+    registry: &mir2_envir::MapRegistry,
+    loader: &mir2_envir::MapLoader,
+    src: &ZoneStaticsSource,
+    table: &game_svr::mongen::MonsterTable,
+    state: &mut ZoneState,
+    merchant_book: &mut game_svr::npc::MerchantScriptBook,
+    goto_count_limit: i32,
+) -> ZoneStaticsReport {
+    let mut report = ZoneStaticsReport::default();
+    let envir_root = loader.base_path.join(&loader.envir_dir);
+
+    // ① `InitializeMonster`（`GameApp.cs:150`）：先按本区过滤 entries，再 `start`
+    //    （`initialize_monster` 的怪名分组/分线程抽数只发生在本区条目上）。
+    if let Some(raw) = src.mon_gen_entries.as_ref() {
+        let mut entries = raw.clone();
+        report.mon_gen_total = entries.len();
+        entries.retain(|e| {
+            layout.static_owned_name(
+                zone_id,
+                registry.id_of(&e.map_name),
+                i32::from(e.x),
+                i32::from(e.y),
+            )
+        });
+        report.mon_gen_kept = entries.len();
+        state.mon_gen = Some(game_svr::mongen::MonGenHost::start(
+            entries,
+            table,
+            true, // 部署件必有 MonGen.txt（与区 0 同口径：有文件 ⇒ 末尾哨兵已入 thread 0）
+            src.mon_gen_config,
+            &mut state.world.rng,
+        ));
+    }
+
+    // ② `LoadMerchant`（`GameApp.cs:227`）：准入在 envir 的脚本解析/`rename_rand` 抽数**之前**。
+    //    未在册地图**拒绝**（区 0 放行并走 FindMap 门——不对称规则见 `static_owned_name`）。
+    let keep = |r: &mir2_envir::MerchantRecord| {
+        layout.static_owned_name(
+            zone_id,
+            registry.id_of(&r.map_name),
+            i32::from(r.x),
+            i32::from(r.y),
+        )
+    };
+    match game_svr::merchant::load_merchant_spawns_filtered(
+        loader,
+        |n| registry.id_of(n),
+        Some(&keep),
+        &mut state.world.rng,
+    ) {
+        Ok((spawns, mreport, seeds)) => {
+            report.merchants_total = mreport.records + mreport.zone_filtered;
+            report.merchants_filtered = mreport.zone_filtered;
+            let (kept, _failed, mut book) = game_svr::merchant::spawn_merchants_with_scripts(
+                &mut state.world,
+                spawns,
+                seeds,
+                &mut state.displays,
+            );
+            report.merchants_kept = kept;
+            book.goto_count_limit = goto_count_limit;
+            merchant_book.merge(book);
+        }
+        Err(e) => glog!(
+            "WRN",
+            "区 {zone_id} 的 Envir/Merchant.txt 装载失败（{e}）⇒ 本区无商人（登记）"
+        ),
+    }
+
+    // ③ `LoadNpcs`（`GameApp.cs:229`）：先按本区过滤 `Vec` 再放置。
+    if let Some(raw) = src.npcs.as_ref() {
+        let mut npcs = raw.clone();
+        report.npcs_total = npcs.len();
+        npcs.retain(|n| {
+            layout.static_owned_name(
+                zone_id,
+                registry.id_of(&n.map_name),
+                i32::from(n.x),
+                i32::from(n.y),
+            )
+        });
+        report.npcs_kept = npcs.len();
+        let placed = game_svr::npcs::place_fixed_npcs_with_scripts(
+            &mut state.world,
+            &npcs,
+            |n| registry.id_of(n),
+            &envir_root,
+            merchant_book,
+            &mut state.displays,
+        );
+        report.npcs_placed = placed.placed;
+    }
+
+    // ④ `LoadGuardList`（`GameApp.cs:239`）：需要**本区**的 MonGen 宿主（线程表）。
+    if let Some(raw) = src.guards.as_ref() {
+        let mut guards = raw.clone();
+        report.guards_total = guards.len();
+        guards.retain(|g| {
+            layout.static_owned_name(
+                zone_id,
+                registry.id_of(&g.map_name),
+                i32::from(g.x),
+                i32::from(g.y),
+            )
+        });
+        report.guards_kept = guards.len();
+        match state.mon_gen.as_mut() {
+            Some(host) => {
+                let placed = game_svr::guardlist::place_guards(
+                    &guards,
+                    table,
+                    host,
+                    registry,
+                    &mut state.world,
+                    &mut state.displays,
+                );
+                report.guards_placed = placed.placed;
+            }
+            None => glog!(
+                "WRN",
+                "区 {zone_id} 无 MonGen 宿主（无 Envir/MonGen.txt）⇒ {} 条守卫不放置（登记）",
+                guards.len()
+            ),
+        }
+    }
+    report
 }
 
 /// 区线程退出（含 panic unwind）时把 `ZoneState::alive` 置假——登录线程据此拒绝落区。
@@ -1797,6 +1983,10 @@ fn spawn_minimal_zone(
     map_names: Arc<Vec<String>>,
     // **L2-5 ③ 段 2（接线）**：handoff 邮箱（切片关 ⇒ 空表 ⇒ 不构造运行时）。
     handoff_boxes: Vec<handoff::HandoffMailbox>,
+    // **L2-5 ④b-1**：本区自己的一份 `MonGenHost` 驱动所需（模板表 `Arc` 共享 + 轻量地图视图；
+    // 切片关 / 无注册表 ⇒ `None` ⇒ 不驱动、不用任何新路径）。
+    mon_table: Option<std::sync::Arc<game_svr::mongen::MonsterTable>>,
+    map_view: Option<std::sync::Arc<game_svr::mongen::ZoneMapView>>,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
@@ -1950,6 +2140,24 @@ fn spawn_minimal_zone(
                         // tick 顶（phase1 之前）：排 ack/offer（handoff 两阶段）。
                         if let Some(h) = handoff_runtime.as_mut() {
                             h.tick_top(&mut st.world, tick);
+                        }
+                        // **L2-5 ④b-1**：本区 MonGen 首刷/周期刷（与区 0 同一个 `step_mon_gen`；
+                        // 宿主/host 状态/RT 全是本区的，抽数走本区 `world.rng`）。
+                        // `mon_gen == None`（切片关 / 无 MonGen.txt / 尚未装载）⇒ 不动。
+                        {
+                            let ZoneState {
+                                world,
+                                displays,
+                                mon_gen,
+                                ..
+                            } = &mut *st;
+                            if let (Some(host), Some(view)) = (mon_gen.as_mut(), map_view.as_deref())
+                            {
+                                if let Some(table) = mon_table.as_deref() {
+                                    let play = world.play_object_count();
+                                    step_mon_gen(host, table, view, world, displays, play);
+                                }
+                            }
                         }
                         let record = st.world.tick_phase1();
                         let source =
@@ -3022,7 +3230,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         // 每片在 spawn 循环里覆盖；N=1 就是唯一一份（与旧路径同参）。
         ctor_fold_plan: ctor_fold_plans[0].clone(),
         mon_gen: MonGenStartup {
-            table: monster_table,
+            table: std::sync::Arc::new(monster_table),
             entries: mon_gen_entries,
             config: mon_gen_config,
         },
@@ -3203,6 +3411,16 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 } else {
                     Vec::new()
                 };
+                // **L2-5 ④b-1**：区 k 线程驱动自己的 MonGen 宿主所需的两份**只读**共享件
+                // （模板表 `Arc`；轻量地图视图不含格数据）。切片关 ⇒ 都不构造。
+                let zone_mon_table = slicing.then(|| Arc::clone(&sim_enter_cfg.mon_gen.table));
+                let zone_map_view = if slicing {
+                    registry
+                        .as_ref()
+                        .map(|r| Arc::new(game_svr::mongen::ZoneMapView::from_registry(r)))
+                } else {
+                    None
+                };
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
@@ -3246,6 +3464,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         map_sizes.len(),
                         Arc::clone(&zone_map_names),
                         host.handoff_boxes.clone(),
+                        zone_mon_table.clone(),
+                        zone_map_view.clone(),
                         rx,
                         ctl,
                     )?;
@@ -28045,7 +28265,7 @@ impl EnterConfig {
             rng_seed: None,
             ctor_fold_plan: mir2_world_bevy::CtorFoldPlan::default(),
             mon_gen: MonGenStartup {
-                table: game_svr::mongen::MonsterTable::new(Vec::new()),
+                table: std::sync::Arc::new(game_svr::mongen::MonsterTable::new(Vec::new())),
                 entries: None,
                 config: mir2_world_bevy::mongen::MonGenConfig::default(),
             },
@@ -28079,7 +28299,9 @@ impl EnterConfig {
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
 #[derive(Clone)]
 struct MonGenStartup {
-    table: game_svr::mongen::MonsterTable,
+    /// **L2-5 ④b-1**：`Arc` 共享——区 0 与各区线程各自驱动自己的 `MonGenHost`，但怪物模板表
+    /// 是同一份只读数据（`MonsterTable` 无 `Clone`；不复制）。
+    table: std::sync::Arc<game_svr::mongen::MonsterTable>,
     entries: Option<Vec<mir2_world_bevy::mongen::MonGenEntry>>,
     config: mir2_world_bevy::mongen::MonGenConfig,
 }
@@ -28116,7 +28338,7 @@ fn seed_probe_text(seed: i32) -> String {
 fn step_mon_gen(
     host: &mut game_svr::mongen::MonGenHost,
     table: &game_svr::mongen::MonsterTable,
-    registry: &mir2_envir::MapRegistry,
+    registry: &dyn game_svr::mongen::MapLookup,
     world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     play_object_count: i32,
@@ -28136,9 +28358,7 @@ fn step_mon_gen(
             continue;
         }
         let ok = registry.id_of(&entry.map_name).is_some_and(|id| {
-            registry.flag_of(id).is_some_and(|f| {
-                !(f.bo_nohumnomon && hum_by_map.get(&id).copied().unwrap_or(0) <= 0)
-            })
+            !(registry.no_hum_no_mon(id) && hum_by_map.get(&id).copied().unwrap_or(0) <= 0)
         });
         can_map.insert(entry.map_name.clone(), ok);
     }
@@ -32369,6 +32589,20 @@ fn sim_loop(
             ),
         }
     }
+    // **L2-5 ④b-1**：切片开启时的静态归属谓词（`RegionLayout` 只读借用）。
+    // `None` ⇒ N=1 / `slicing=0`：下面四个装载点（MonGen/商人/固定 NPC/守卫）**都不调用**
+    // 过滤路径，取数序列与抽数序列逐字节不变。
+    let slicing_layout: Option<&zone::RegionLayout> = zone_host
+        .as_ref()
+        .filter(|h| h.slicing)
+        .map(|h| h.layout.as_ref());
+    // **L2-5 ④b-1**：区 k 静态装载输入快照（**区 0 过滤之前**的原样副本；只在切片开启时克隆）。
+    let zone_statics_src: Option<ZoneStaticsSource> = slicing_layout.map(|_| ZoneStaticsSource {
+        mon_gen_entries: enter_cfg.mon_gen.entries.clone(),
+        mon_gen_config: enter_cfg.mon_gen.config,
+        npcs: enter_cfg.npcs.clone(),
+        guards: enter_cfg.guards.clone(),
+    });
     // 容量线探针（默认关闭；设计 docs/issues/online-probe-design-20261121.md）。
     // fail-closed：env 设了但文件打不开 ⇒ 启动即 rc≠0，不静默跑一个"没探针"的进程。
     if let Err(e) = perf_counters::init_from_env() {
@@ -32763,7 +32997,31 @@ fn sim_loop(
         ctor_ledger_m2.len(),
         enter_cfg.ctor_fold_plan.load_map_info.len()
     );
-    let mut mon_gen_host = match enter_cfg.mon_gen.entries.take() {
+    // **L2-5 ④b-1**：MonGen **首刷**按区归属——先过滤 `entries` 再 `MonGenHost::start`
+    // （被过滤条目不进入 `initialize_monster` 的怪名分组/分线程抽数；"先全量抽再丢"会污染本区流）。
+    // `slicing=0`/N=1 ⇒ `slicing_layout == None` ⇒ 不调用任何过滤路径。
+    let mut mon_gen_entries = enter_cfg.mon_gen.entries.take();
+    if let (Some(layout), Some(entries), Some(reg)) =
+        (slicing_layout, mon_gen_entries.as_mut(), registry.as_ref())
+    {
+        let before = entries.len();
+        entries.retain(|e| {
+            layout.static_owned_name(
+                zone_router::HOST_ZONE,
+                reg.id_of(&e.map_name),
+                i32::from(e.x),
+                i32::from(e.y),
+            )
+        });
+        glog!(
+            "INF",
+            "区 0 静态装载：MonGen 归属过滤 {}/{} 条（{} 条归其它区/未在册；未覆盖图归区 0）",
+            before - entries.len(),
+            before,
+            before - entries.len()
+        );
+    }
+    let mut mon_gen_host = match mon_gen_entries {
         Some(entries) => {
             let host = game_svr::mongen::MonGenHost::start(
                 entries,
@@ -32954,6 +33212,8 @@ fn sim_loop(
     // 按世界实体 id 索引；`GotoLable`（点击 `@main`、1011 说词、`~@repair`）从这里取脚本。
     let mut merchant_book =
         game_svr::npc::MerchantScriptBook::new(enter_cfg.script_goto_count_limit);
+    // **L2-5 ④b-1**：区 k 的静态装载复用同一个 Envir loader（clone；路径字段只读）。
+    let zone_statics_loader = enter_cfg.loader.clone();
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
         // `Envir` 根（`ScriptParsers.LoadScriptFile` 的 `envir_root`）：商人与固定 NPC 的脚本装载共用。
         let envir_root = loader.base_path.join(&loader.envir_dir);
@@ -33102,12 +33362,34 @@ fn sim_loop(
                 foreign_quest_records.get()
             );
         }
-        match game_svr::merchant::load_merchant_spawns(
+        // **L2-5 ④b-1**：区 0 的商人准入（在 envir 的脚本解析/`rename_rand` 抽数**之前**判定；
+        // 未在册地图**放行**给区 0——照旧走 FindMap 门丢弃并记日志；区 k 反之拒绝）。
+        let zone0_merchant_keep = slicing_layout.map(|layout| {
+            move |r: &mir2_envir::MerchantRecord| {
+                layout.static_owned_name(
+                    zone_router::HOST_ZONE,
+                    reg.id_of(&r.map_name),
+                    i32::from(r.x),
+                    i32::from(r.y),
+                )
+            }
+        });
+        match game_svr::merchant::load_merchant_spawns_filtered(
             &loader,
             |n| reg.id_of(n).filter(|id| shard_runtime.host_owns(*id)),
+            zone0_merchant_keep
+                .as_ref()
+                .map(|f| f as &dyn Fn(&mir2_envir::MerchantRecord) -> bool),
             &mut world.rng,
         ) {
             Ok((spawns, report, seeds)) => {
+                if report.zone_filtered > 0 {
+                    glog!(
+                        "INF",
+                        "区 0 静态装载：Merchant 归属过滤 {} 条（其余归区 k；未在册地图由 FindMap 门处置）",
+                        report.zone_filtered
+                    );
+                }
                 // `Merchant.LoadMerchantScript()` 的缺失分支（oracle `LogService.Error`）。
                 // 必须在 `seeds` 被 `spawn_merchants_with_scripts` 消费前取清单。
                 let market_def_missing = market_def_script_missing(&envir_root, &seeds);
@@ -33200,7 +33482,25 @@ fn sim_loop(
         // 建实体（`BaseObject`/`AnimalObject` ctor 共 4 抽）在商人之后、守卫之前，与 oracle
         // `GameApp.cs:226-244`（LoadMerchant → LoadNpcs → … → LoadGuardList）同序；挂图（RNG-free）
         // 与脚本装载（`rename_rand` = `world.rng` 同一条流）都在 `place_fixed_npcs_with_scripts` 里。
-        if let Some(npcs) = enter_cfg.npcs.take() {
+        if let Some(mut npcs) = enter_cfg.npcs.take() {
+            // **L2-5 ④b-1**：固定 NPC 先按区过滤 `Vec` 再放置（建实体 4 抽/脚本登记只发生在本区记录上）。
+            if let Some(layout) = slicing_layout {
+                let before = npcs.len();
+                npcs.retain(|n| {
+                    layout.static_owned_name(
+                        zone_router::HOST_ZONE,
+                        reg.id_of(&n.map_name),
+                        i32::from(n.x),
+                        i32::from(n.y),
+                    )
+                });
+                glog!(
+                    "INF",
+                    "区 0 静态装载：固定 NPC 归属过滤 {}/{} 条",
+                    before - npcs.len(),
+                    before
+                );
+            }
             let report = game_svr::npcs::place_fixed_npcs_with_scripts(
                 &mut world,
                 &npcs,
@@ -33528,6 +33828,24 @@ fn sim_loop(
                 );
             }
         }
+        // **L2-5 ④b-1**：守卫按区过滤（叠加在 shard 过滤之后；`slicing=0` ⇒ 不调用）。
+        if let Some(layout) = slicing_layout {
+            let before = guards.len();
+            guards.retain(|g| {
+                layout.static_owned_name(
+                    zone_router::HOST_ZONE,
+                    reg.id_of(&g.map_name),
+                    i32::from(g.x),
+                    i32::from(g.y),
+                )
+            });
+            glog!(
+                "INF",
+                "区 0 静态装载：守卫归属过滤 {}/{} 条",
+                before - guards.len(),
+                before
+            );
+        }
         match mon_gen_host.as_mut() {
             Some(host) => {
                 let report = game_svr::guardlist::place_guards(
@@ -33550,6 +33868,61 @@ fn sim_loop(
                 "WRN",
                 "无 MonGen 刷怪宿主（无 Envir/MonGen.txt）⇒ 跳过 {} 条守卫放置（登记：oracle InitializeMonster 恒建线程表，部署件必有 MonGen.txt）",
                 guards.len()
+            ),
+        }
+    }
+    // **L2-5 ④b-1**：区 k（k≥1）的静态实体装载（同一组 loader + 各区自己的 rect 谓词/RNG）。
+    // 位置：区 0 静态装载全部完成之后、`M2Share.StartReady = true` 之前 ⇒ 就绪前每区的静态
+    // 集合已完整（登录落区不会看到"半装"的区）。脚本宿主是进程级单实例（`Rc` ⇒ !Send），
+    // 由本线程持 `&mut` 调用，目标仍是各区自己的 `ZoneState`（锁内）。
+    if let (Some(layout), Some(src)) = (slicing_layout, zone_statics_src.as_ref()) {
+        match (
+            zone_host.as_ref(),
+            registry.as_ref(),
+            zone_statics_loader.as_ref(),
+        ) {
+            (Some(host), Some(reg), Some(loader)) => {
+                for index in 1..layout.zone_count() {
+                    let zone_id =
+                        zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
+                    let Some(state) = host.zone_states.get(index).and_then(|s| s.as_ref()) else {
+                        glog!("WRN", "区 {zone_id} 无 ZoneState（切片关）⇒ 跳过静态装载");
+                        continue;
+                    };
+                    let mut st = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let report = spawn_statics_for_zone(
+                        zone_id,
+                        layout,
+                        reg,
+                        loader,
+                        src,
+                        &enter_cfg.mon_gen.table,
+                        &mut st,
+                        &mut merchant_book,
+                        enter_cfg.script_goto_count_limit,
+                    );
+                    glog!(
+                        "INF",
+                        "区 {zone_id} 静态装载完成：MonGen {}/{} 条（过滤 {}）；商人 {}（解析前过滤 {}）；固定 NPC {}/{} 条（挂图 {}）；守卫 {}/{} 条（放置 {}）",
+                        report.mon_gen_kept,
+                        report.mon_gen_total,
+                        report.mon_gen_total - report.mon_gen_kept,
+                        report.merchants_kept,
+                        report.merchants_filtered,
+                        report.npcs_kept,
+                        report.npcs_total,
+                        report.npcs_placed,
+                        report.guards_kept,
+                        report.guards_total,
+                        report.guards_placed
+                    );
+                }
+            }
+            _ => glog!(
+                "WRN",
+                "切片区静态装载缺少注册表/loader/区状态之一 ⇒ 区 k 不装载（登记）"
             ),
         }
     }
@@ -113009,10 +113382,11 @@ mod castle_shift_order_tests {
 /// **C9 `castle_spawn_startup_order_before_merchant`**（L 子项）：启动插入点的**源码序门**。
 ///
 /// RNG 流水账本（16×6=96 抽）由 `game_svr::castle::tests` 钉死；本用例钉「城堡块确实位于
-/// `fold_ctor_draws_load_map_quest`（`GameApp.cs:184`）之后、`load_merchant_spawns`
-/// （`GameApp.cs:227`）之前」——即 oracle `CastleMgr.Initialize`（`:213`）的位置。
+/// `fold_ctor_draws_load_map_quest`（`GameApp.cs:184`）之后、商人装载
+/// （`GameApp.cs:227`，现为 `load_merchant_spawns_filtered`；**L2-5 ④b-1** 按区准入后
+/// 原入口收敛为 `None` 转发）之前」——即 oracle `CastleMgr.Initialize`（`:213`）的位置。
 ///
-/// 牙：把城堡块移到 `load_merchant_spawns` 之后（或 fold 之前）⇒ 位置断言红。
+/// 牙：把城堡块移到商人装载之后（或 fold 之前）⇒ 位置断言红。
 #[cfg(test)]
 mod castle_insertion_tests {
     /// 剥掉 `//` 行注释（保留换行），避免文档里的同一标识符误命中（「守卫扫代码不扫注释」同口径）。
@@ -113051,14 +113425,43 @@ mod castle_insertion_tests {
         };
         let fold = pos("world.fold_ctor_draws_load_map_quest(");
         let castle = pos("game_svr::castle::initialize_castle(");
-        let merchant = pos("game_svr::merchant::load_merchant_spawns(");
+        // **L2-5 ④b-1**：商人装载有**两个**生产调用点（区 0 的 sim 段 + 区 k 的
+        // `spawn_statics_for_zone` 函数体——后者是**定义**里的调用，执行点仍是 sim_loop 里的
+        // `spawn_statics_for_zone(..)`）。⇒ 次序断言按**执行点**做：sim_loop 内两处调用都必须在
+        // 城堡块之后；源码里总调用点数量钉成 2，防止再长出第三处。
+        let merchant_needle = "game_svr::merchant::load_merchant_spawns_filtered(";
+        let all_merchant: Vec<usize> = code
+            .match_indices(merchant_needle)
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(
+            all_merchant.len(),
+            2,
+            "商人装载生产调用点必须恰两处（区 0 + 区 k）：{merchant_needle}"
+        );
+        let sim_loop_start = code.find("fn sim_loop(").expect("`fn sim_loop(` 定义");
+        let in_sim: Vec<usize> = all_merchant
+            .iter()
+            .copied()
+            .filter(|&p| p > sim_loop_start)
+            .collect();
+        assert_eq!(in_sim.len(), 1, "sim_loop 内的区 0 商人装载调用点恰一处");
+        let zone_loads: Vec<usize> = code
+            .match_indices("let report = spawn_statics_for_zone(")
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(zone_loads.len(), 1, "区 k 静态装载调用点恰一处");
         assert!(
             fold < castle,
             "城堡块必须在 LoadMapQuest fold 之后（oracle GameApp.cs:184 → :213）"
         );
         assert!(
-            castle < merchant,
-            "城堡块必须在 LoadMerchant 之前（oracle GameApp.cs:213 → :227）"
+            castle < in_sim[0],
+            "区 0 商人装载必须在 CastleMgr.Initialize 之后（oracle GameApp.cs:213 → :227）"
+        );
+        assert!(
+            castle < zone_loads[0],
+            "区 k 静态装载（含商人）也必须在 CastleMgr.Initialize 之后"
         );
     }
 
@@ -119674,15 +120077,17 @@ mod l2_multi_zone_ledger_tests {
     /// `World::play_object_count()`（已排除镜像）；生产面不得再内联 `iter_ref().filter(race==Play)`
     /// 的重复谓词（两份谓词迟早漂移，镜像只会在其中一份被漏掉）。
     ///
-    /// 红检：把任一调用点改回内联计数 ⇒ 第一条（计数 == 2）红；内联形状再次出现 ⇒ 第二条红。
+    /// **L2-5 ④b-1**：第三处 = 区 k 线程的 `step_mon_gen` 人数门（与区 0 同一个函数、同一来源）。
+    ///
+    /// 红检：把任一调用点改回内联计数 ⇒ 第一条（计数 == 3）红；内联形状再次出现 ⇒ 第二条红。
     #[test]
     fn step2_play_count_has_a_single_source() {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("生产面边界")];
         assert_eq!(
             prod.matches("world.play_object_count()").count(),
-            2,
-            "MonGen 门与 IDS 在线数两处必须都走单一来源"
+            3,
+            "MonGen 门（区 0/区 k）与 IDS 在线数三处必须都走单一来源"
         );
         assert!(
             !prod.contains("filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)"),
@@ -122951,5 +123356,405 @@ mod l2_s3_cross_recipient_tests {
         fire_mountride(&world, &online, &g);
         fire_merchant_disappear(&world, &online, &g);
         assert_eq!(snapshot(), base, "slicing=0 ⇒ 六面必须全 0");
+    }
+}
+
+/// **L2-5 ④b-1 装置（总监三条）**：两区静态集合 **交集 = 0**、**并集 == N=1 全量**
+/// （含"未覆盖图 → 区 0"），且每条落点在本区 rects 内（或显式命中未覆盖→区 0）。
+///
+/// 变异（各自只红一条，实施时逐一重放过）：
+/// ① `static_owned_name` 对 `None` 不再兜底区 0 ⇒ 未覆盖图记录从并集中消失 ⇒ ②红；
+/// ② 谓词恒真（区 1 也收全量）⇒ ①红（交集非空、并集重复）；
+/// ③ 商人先全量抽再过滤（谓词挪到 `load_script_file` 之后）⇒ ④的"2 区抽数 < N=1"正面断言红。
+#[cfg(test)]
+mod zone_statics_tests {
+    use super::*;
+
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn base_dir(tag: &str) -> std::path::PathBuf {
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "mir2-zone-statics-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_text(base: &std::path::Path, rel: &str, text: &str) {
+        let p = base.join(rel);
+        std::fs::create_dir_all(p.parent().expect("有父目录")).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    fn write_map(base: &std::path::Path, name: &str, w: i16, h: i16) {
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join(format!("{name}.map")), &bytes).unwrap();
+    }
+
+    fn map_entry(name: &str) -> mir2_envir::MapInfoEntry {
+        mir2_envir::MapInfoEntry {
+            map_name: name.to_string(),
+            map_file_name: name.to_string(),
+            desc: String::new(),
+            server_index: 0,
+            flag: mir2_envir::MapInfoFlag::default(),
+        }
+    }
+
+    /// `m0` = 20×20（被两区切分）；`m1` = 10×10（**未被任何 rect 覆盖** ⇒ 显式归区 0）。
+    fn fixture_registry(base: &std::path::Path) -> mir2_envir::MapRegistry {
+        let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
+        mir2_envir::MapRegistry::from_entries(loader, vec![map_entry("m0"), map_entry("m1")])
+    }
+
+    fn layout_two_zones() -> zone::RegionLayout {
+        zone::RegionLayout::from_spans(
+            2,
+            vec![
+                zone::RegionSpan::new(0, zone::ZoneRect::new(0, 0, 9, 19)),
+                zone::RegionSpan::new(0, zone::ZoneRect::new(10, 0, 19, 19)),
+            ],
+        )
+        .expect("两区切分 m0")
+    }
+
+    fn monster_table() -> game_svr::mongen::MonsterTable {
+        let row = |name: &str, race: u8| mir2_data::models::MonsterInfo {
+            name: name.to_string(),
+            race,
+            level: 3,
+            hp: 25,
+            ..mir2_data::models::MonsterInfo::default()
+        };
+        game_svr::mongen::MonsterTable::new(vec![
+            row("chicken", 80),
+            row("deer", 80),
+            row("guard", 11),
+        ])
+    }
+
+    fn gen_entry(map: &str, x: i16, y: i16, mon: &str) -> mir2_world_bevy::mongen::MonGenEntry {
+        mir2_world_bevy::mongen::MonGenEntry {
+            map_name: map.to_string(),
+            x,
+            y,
+            mon_name: mon.to_string(),
+            range: 0,
+            count: 1,
+            active_count: 0,
+            zen_time: 0,
+            mission_gen_rate: 0,
+            race: 0,
+            start_tick: 0,
+            cert_list: Vec::new(),
+            thread_id: 0,
+        }
+    }
+
+    /// 四个来源 × 四种归属（区 0 rect / 区 1 rect / 未覆盖图 / 未在册名）。
+    /// 商人脚本各含一组重名 `[@main]` ⇒ 每条被**解析**的记录恰抽 1 次 `rename_rand`
+    /// （正面抽数断言的判决力来自这里；没有重名 label 的夹具是空牙）。
+    fn fixture_sources(base: &std::path::Path) -> ZoneStaticsSource {
+        write_text(
+            base,
+            "Envir/Merchant.txt",
+            "S/A m0 3 3 shopA 0 3 0\n\
+             S/B m0 12 3 shopB 0 3 0\n\
+             S/C m1 5 5 shopC 0 3 0\n\
+             S/D ghost 1 1 shopD 0 3 0\n",
+        );
+        for (stem, map) in [
+            ("S/A", "m0"),
+            ("S/B", "m0"),
+            ("S/C", "m1"),
+            ("S/D", "ghost"),
+        ] {
+            write_text(
+                base,
+                &format!("Envir/Market_Def/{stem}-{map}.txt"),
+                "[@main]\n#ACT\nbreak\n\n[@main]\n#SAY\nhi\n",
+            );
+        }
+        write_text(
+            base,
+            "Envir/Npcs.txt",
+            "npcA 0 m0 2 2 0 9\n\
+             npcB 0 m0 13 4 0 9\n\
+             npcC 0 m1 6 6 0 9\n\
+             npcD 0 ghost 1 1 0 9\n",
+        );
+        ZoneStaticsSource {
+            mon_gen_entries: Some(vec![
+                gen_entry("m0", 1, 1, "chicken"),
+                gen_entry("m0", 11, 1, "chicken"),
+                gen_entry("m1", 2, 2, "deer"),
+            ]),
+            mon_gen_config: mir2_world_bevy::mongen::MonGenConfig::default(),
+            npcs: Some(
+                [
+                    ("npcA", "m0", 2, 2),
+                    ("npcB", "m0", 13, 4),
+                    ("npcC", "m1", 6, 6),
+                    ("npcD", "ghost", 1, 1),
+                ]
+                .into_iter()
+                .map(|(chr, map, x, y)| mir2_envir::npcs::NpcInfo {
+                    chr_name: chr.to_string(),
+                    npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                    map_name: map.to_string(),
+                    x,
+                    y,
+                    npc_flag: 0,
+                    appr: 9,
+                })
+                .collect(),
+            ),
+            guards: Some(
+                [("m0", 4, 4), ("m0", 14, 4), ("m1", 3, 3)]
+                    .into_iter()
+                    .map(|(map, x, y)| mir2_envir::guardlist::GuardInfo {
+                        mon_name: "guard".to_string(),
+                        map_name: map.to_string(),
+                        x,
+                        y,
+                        dir: 4,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    struct Run {
+        report: ZoneStaticsReport,
+        /// `(id, name, map_id, x, y)`——实体身份四列（id 另作段隔离断言）。
+        statics: Vec<(i32, String, usize, i32, i32)>,
+        draws: u64,
+    }
+
+    fn run_zone(
+        base: &std::path::Path,
+        registry: &mir2_envir::MapRegistry,
+        layout: &zone::RegionLayout,
+        zone: u32,
+        src: &ZoneStaticsSource,
+        table: &game_svr::mongen::MonsterTable,
+    ) -> Run {
+        let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
+        let mut state = ZoneState::new(zone::ZoneId::new(zone), &[(20, 20), (10, 10)], Some(7));
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        let report = spawn_statics_for_zone(
+            zone::ZoneId::new(zone),
+            layout,
+            registry,
+            &loader,
+            src,
+            table,
+            &mut state,
+            &mut book,
+            30,
+        );
+        let statics = state
+            .world
+            .entities
+            .iter_ref()
+            .map(|e| (e.id, e.name.clone(), e.map_id, e.x, e.y))
+            .collect();
+        Run {
+            report,
+            statics,
+            draws: state.world.rng.draws(),
+        }
+    }
+
+    fn keys(run: &Run) -> Vec<(String, usize, i32, i32)> {
+        let mut k: Vec<_> = run
+            .statics
+            .iter()
+            .map(|e| (e.1.clone(), e.2, e.3, e.4))
+            .collect();
+        k.sort();
+        k
+    }
+
+    #[test]
+    fn two_zone_statics_partition_with_exactly_one_owner() {
+        let base = base_dir("partition");
+        write_map(&base, "m0", 20, 20);
+        write_map(&base, "m1", 10, 10);
+        let registry = fixture_registry(&base);
+        let src = fixture_sources(&base);
+        let table = monster_table();
+        let two = layout_two_zones();
+        let full_layout = zone::RegionLayout::single_host(2);
+
+        // N=1 口径 = 单宿主布局（谓词恒真、不丢一条）；与 slicing=0 的生产路径共用
+        // 同一组 loader（envir 过滤器在"恒真"时与无过滤入口逐字节等价，见 envir 侧用例）。
+        let full = run_zone(&base, &registry, &full_layout, 0, &src, &table);
+        let z0 = run_zone(&base, &registry, &two, 0, &src, &table);
+        let z1 = run_zone(&base, &registry, &two, 1, &src, &table);
+
+        // ① 两集合交集 = 0（按身份四列；id 另按段互斥断言）。
+        let k0 = keys(&z0);
+        let k1 = keys(&z1);
+        assert!(
+            k0.iter().all(|k| !k1.contains(k)),
+            "静态身份不得双属：{k0:?}"
+        );
+        for a in &z0.statics {
+            for b in &z1.statics {
+                assert_ne!(a.0, b.0, "ActorId 不得跨区重复");
+            }
+        }
+
+        // ② 并集 == N=1 全量（无丢无重；含"未覆盖图 → 区 0"那一块）。
+        let mut union = k0.clone();
+        union.extend(k1.clone());
+        union.sort();
+        assert_eq!(union, keys(&full), "union(z0,z1) 必须等于 N=1 全量集合");
+        assert_eq!(
+            z0.statics.len() + z1.statics.len(),
+            full.statics.len(),
+            "条数守恒（不丢不重）"
+        );
+
+        // ③ 每条落点：区 1 必须严格在 m0 区 1 rect 内；区 0 要么在本区 rect 内，
+        //    要么是"未覆盖图 → 区 0"（m1）。
+        for e in &z0.statics {
+            if e.2 == 1 {
+                continue; // m1 未覆盖 ⇒ 显式归区 0（规则本身由 zone 单测钉死）
+            }
+            assert_eq!(
+                two.zone_of(e.2, e.3, e.4),
+                Some(zone::ZoneId::new(0)),
+                "区 0 落点越界：{e:?}"
+            );
+        }
+        for e in &z1.statics {
+            assert_eq!(
+                two.zone_of(e.2, e.3, e.4),
+                Some(zone::ZoneId::new(1)),
+                "区 1 落点越界：{e:?}"
+            );
+        }
+        // 未覆盖图 m1 的静态**只**在区 0（区 1 一条都没有）。
+        assert!(z1.statics.iter().all(|e| e.2 != 1));
+        assert!(
+            z0.statics.iter().any(|e| e.2 == 1),
+            "未覆盖图必须由区 0 模拟"
+        );
+
+        // ④ 正面断言（计划页 §12.7 写死）：2 区各自抽数 **<** N=1 抽数
+        //    （被过滤条目在抽数之前就被拒；"先全量抽再丢"会红）。
+        assert!(
+            z0.draws < full.draws,
+            "区 0 抽数 {} 必须小于 N=1 的 {}",
+            z0.draws,
+            full.draws
+        );
+        assert!(
+            z1.draws < full.draws,
+            "区 1 抽数 {} 必须小于 N=1 的 {}",
+            z1.draws,
+            full.draws
+        );
+        // 解析前过滤的逐区面（4 条记录：S/A=区0、S/B=区1、S/C=未覆盖图、S/D=未在册名）：
+        // 区 0 拒 S/B（属区 1），收 S/A/S/C/S/D（ghost 放行、由 FindMap 门处置）；
+        // 区 1 拒 S/A/S/C/S/D（含未覆盖图**与未在册名**——不对称规则），只收 S/B。
+        assert_eq!(z0.report.merchants_filtered, 1, "区 0 只拒属区 1 的那条");
+        assert_eq!(
+            z1.report.merchants_filtered, 3,
+            "区 1 拒其它区 + 未覆盖图 + 未在册名"
+        );
+        assert_eq!(z0.report.merchants_total, full.report.merchants_total);
+
+        // ⑤ 确定性：keep-all 口径两次跑逐项相同（抽数 + 实体集合）。
+        let full2 = run_zone(&base, &registry, &full_layout, 0, &src, &table);
+        assert_eq!(full2.draws, full.draws);
+        assert_eq!(keys(&full2), keys(&full));
+    }
+
+    /// **抽数精确口径（与装置同一组夹具）**：只装商人，逐区断言**精确**抽数——
+    /// 这钉死"被过滤记录不消耗抽数"（把谓词挪到脚本解析之后 ⇒ 每区抽数立刻变大 ⇒ 红），
+    /// 同时给出"谓词恒真 == 无过滤入口"的 game-svr 侧证据。
+    ///
+    /// 夹具（4 条商人记录，各 1 个重名 `[@main]` ⇒ 每条被解析的记录恰 1 抽）：
+    /// - S/A=`m0(3,3)` 区 0；S/B=`m0(12,3)` 区 1；S/C=`m1(5,5)` 未覆盖图；S/D=`ghost` 未在册名。
+    /// - `FindMap` 门存活 3 条（S/D 被门丢弃）⇒ 每条存活记录再抽 **4** 次
+    ///   （`BaseAnimalCtorDraws::draw`；`merchant_ctor_run_delay` 整条公共链）。
+    /// - 预期：N=1 = 4 解析 + 3×4 ctor = **16**；区 0 = 3 解析 + 2×4 = **11**；
+    ///   区 1 = 1 解析 + 1×4 = **5**。
+    #[test]
+    fn merchant_filter_consumes_exact_draws_per_zone() {
+        let base = base_dir("draws");
+        write_map(&base, "m0", 20, 20);
+        write_map(&base, "m1", 10, 10);
+        let registry = fixture_registry(&base);
+        let mut src = fixture_sources(&base);
+        // 只留商人来源：把 MonGen/NPC/守卫清空，抽数账只含商人装载。
+        src.mon_gen_entries = None;
+        src.npcs = None;
+        src.guards = None;
+        let table = monster_table();
+        let two = layout_two_zones();
+        let full_layout = zone::RegionLayout::single_host(2);
+
+        let full = run_zone(&base, &registry, &full_layout, 0, &src, &table);
+        let z0 = run_zone(&base, &registry, &two, 0, &src, &table);
+        let z1 = run_zone(&base, &registry, &two, 1, &src, &table);
+        assert_eq!(full.draws, 16, "N=1：4 次解析抽 + 3×4 次 ctor 抽");
+        assert_eq!(
+            z0.draws, 11,
+            "区 0：3 次解析抽（S/B 在解析前被拒）+ 2×4 ctor"
+        );
+        assert_eq!(z1.draws, 5, "区 1：1 次解析抽 + 1×4 ctor");
+
+        // "谓词恒真 == 无过滤入口"（game-svr 侧）：直接走现网入口 `load_merchant_spawns`
+        // （`None` 过滤）与单宿主装载逐项一致——同抽数、同落点集合。
+        // 与 `spawn_statics_for_zone` 完全同链：装载 → 建实体/挂图，抽数账可比。
+        let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20), (10, 10)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(7); // 区 0 = seed ⊕ 0
+        let mut displays = downlink::DisplayTable::new();
+        let (spawns, report, seeds) = game_svr::merchant::load_merchant_spawns(
+            &loader,
+            |n| registry.id_of(n),
+            &mut world.rng,
+        )
+        .expect("无过滤入口装载");
+        assert_eq!(report.kept, 3);
+        let (kept, _failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
+        assert_eq!(kept, 3);
+        assert_eq!(world.rng.draws(), 16, "无过滤入口与单宿主装载抽数一致");
+        let mut plain: Vec<(String, usize, i32, i32)> = world
+            .entities
+            .iter_ref()
+            .map(|e| (e.name.clone(), e.map_id, e.x, e.y))
+            .collect();
+        plain.sort();
+        let mut full_merchants: Vec<(String, usize, i32, i32)> = full
+            .statics
+            .iter()
+            .map(|e| (e.1.clone(), e.2, e.3, e.4))
+            .collect();
+        full_merchants.sort();
+        assert_eq!(plain, full_merchants, "商人落点集合逐项一致");
     }
 }
