@@ -117221,7 +117221,8 @@ mod l2_multi_zone_ledger_tests {
     use std::sync::{Arc, Mutex};
 
     use crate::region_loop::{
-        AoIFrameLedger, CrossZoneOutbox, HaloExchange, HaloFrameSource, TickBarriers, ZoneRuntime,
+        AoIFrameLedger, CrossZoneOutbox, EmitterCriterion, HaloExchange, HaloFrameSource,
+        TickBarriers, ZoneRuntime,
     };
     use crate::zone::{parse_zone_layout, RegionLayout, ZoneId};
     use crate::zone_router::{ZoneRouter, HOST_ZONE};
@@ -117349,11 +117350,15 @@ mod l2_multi_zone_ledger_tests {
     }
 
     fn build_zone_rig(
+        // **L2-5 ①**：本区 ActorId 段基址。镜像用 owner 的全局 id 插入 ⇒ 两区的自动分配
+        // 段必须不相交，否则镜像会撞本区真实实体（`RefusedOccupied`）。
+        id_base: i32,
         line: u8,
         players: &[(&str, i32, i32, i32)],
         monsters: &[(i32, &str, i32, i32)],
     ) -> ZoneRig {
         let mut world = World::with_maps(vec![(20, 10)]);
+        world.set_id_base(id_base);
         let mut displays = downlink::DisplayTable::new();
         for &(id, name, x, y) in monsters {
             let mut e = EntitySpawn::new(id, name.to_string(), x, y);
@@ -117401,9 +117406,12 @@ mod l2_multi_zone_ledger_tests {
         }
     }
 
-    /// 收走本线所有帧，只保留 **AOI 出现面** 的两个 ident（SM_TURN/SM_FEATURECHANGED）：
-    /// 其余帧（会话计时器驱动的 53/654…）依赖墙钟、不在本段对拍面。返回
-    /// `(收件人 socket, 产生方 char_name, ident)`，按发出序。
+    /// 收走本线所有帧，只保留 **AOI 出现面**（`SM_TURN`/`SM_FEATURECHANGED`/`SM_DEATH`/
+    /// `SM_SKELETON`/`SM_MOUNTRIDE`）：其余帧（会话计时器驱动的 53/654…）依赖墙钟、不在本段
+    /// 对拍面。返回 `(收件人 socket, 产生方 char_name, ident)`，按发出序。
+    ///
+    /// **C4 口径**：一次 appearance 不是一帧（`turn_pair` 两帧；骑乘 +`SM_MOUNTRIDE`；死亡单帧）
+    /// ⇒ 本收集器必须逐帧保留 ident，账本去重键也逐帧取 ident（不许常量 kind）。
     fn collect_aoi(
         world: &World,
         rx: &mut mpsc::UnboundedReceiver<SimToGate>,
@@ -117417,9 +117425,7 @@ mod l2_multi_zone_ledger_tests {
                 continue;
             }
             let ident = u16::from_le_bytes([body[4], body[5]]);
-            if ident != mir2_protocol::messages::SM_TURN
-                && ident != mir2_protocol::messages::SM_FEATURECHANGED
-            {
+            if !is_appearance_ident(ident) {
                 continue;
             }
             let recog = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
@@ -117430,6 +117436,15 @@ mod l2_multi_zone_ledger_tests {
             out.push((socket, owner, ident));
         }
         out
+    }
+
+    /// AOI 出现面的帧 ident（C4：多帧同属一次 appearance，逐帧记）。
+    fn is_appearance_ident(ident: u16) -> bool {
+        ident == mir2_protocol::messages::SM_TURN
+            || ident == mir2_protocol::messages::SM_FEATURECHANGED
+            || ident == mir2_protocol::messages::SM_DEATH
+            || ident == mir2_protocol::messages::SM_SKELETON
+            || ident == game_svr::mount::SM_MOUNTRIDE
     }
 
     fn by_socket(frames: &[(i32, String, u16)]) -> BTreeMap<i32, Vec<(String, u16)>> {
@@ -117445,6 +117460,7 @@ mod l2_multi_zone_ledger_tests {
     /// 基线：全部实体在一个 `World`，单线程 `tick_head + tick_tail` + 同一 drains（账本 `None`）。
     fn run_baseline(ticks: u64) -> Vec<(i32, String, u16)> {
         let mut rig = build_zone_rig(
+            0,
             0,
             &[("O", 9001, 2, 2), ("P", 9002, 17, 2)],
             &[(11, "ea", 3, 2), (12, "eb", 16, 2)],
@@ -117489,6 +117505,9 @@ mod l2_multi_zone_ledger_tests {
         catalog: Arc<game_svr::ability::StdItemCatalog>,
         after_drain: Arc<std::sync::Barrier>,
         ticks: u64,
+        // **②第 2 步**：本区是否应用邻区镜像（快照刷新在 barrier1 之后、phase2 之前，
+        // 与生产区 0 的 `sim_loop` 完全同序）。
+        mirrors: bool,
     ) -> std::thread::JoinHandle<Vec<(i32, String, u16)>> {
         std::thread::spawn(move || {
             let runtime = ZoneRuntime::new(
@@ -117508,9 +117527,19 @@ mod l2_multi_zone_ledger_tests {
                         .expect("begin_tick");
                 }
                 let mut rec = rig.world.tick_phase1();
-                let (_border, _neighbors, wait_us) = runtime
-                    .after_phase1(&rig.world, tick_no, &HaloFrameSource::none())
+                // 快照的帧面来源 = 本区展示表 + 在线路由表（与生产区 0 的 `sim_loop` 同源）。
+                let source = HaloFrameSource::new(&rig.displays, &rig.online);
+                let (_border, neighbors, wait_us) = runtime
+                    .after_phase1(&rig.world, tick_no, &source)
                     .expect("快照/发布/barrier1/读邻居");
+                if mirrors {
+                    crate::region_loop::apply_mirrors(
+                        &mut rig.world,
+                        &neighbors,
+                        Some(&mut rig.displays),
+                    )
+                    .expect("应用邻区镜像");
+                }
                 rig.world.tick_phase2(&mut rec);
                 runtime.after_phase2(wait_us, None);
                 {
@@ -117553,11 +117582,21 @@ mod l2_multi_zone_ledger_tests {
     }
 
     /// 拆区：区 0 = O + ea（line 0/socket 9001）；区 1 = P + eb（line 1/socket 9002）。
-    fn run_split(ticks: u64) -> Vec<(i32, String, u16)> {
+    ///
+    /// `mirrors = true` ⇒ 每区在 barrier1 之后、phase2 之前用邻区快照刷新镜像（②第 2 步）。
+    fn run_split(ticks: u64, mirrors: bool) -> Vec<(i32, String, u16)> {
         let layout = Arc::new(two_zone_layout());
         let exchange = Arc::new(HaloExchange::new(2));
         let barriers = Arc::new(TickBarriers::new(2));
-        let outbox = Arc::new(Mutex::new(CrossZoneOutbox::new(2)));
+        // §7：镜像模型下发射者 = 收件人所在区；镜像关时保持 L2-4 旧口径（对照）。
+        let outbox = Arc::new(Mutex::new(CrossZoneOutbox::with_criterion(
+            2,
+            if mirrors {
+                EmitterCriterion::RecipientZone
+            } else {
+                EmitterCriterion::OwnerByRect
+            },
+        )));
         let router = Arc::new(ZoneRouter::new());
         router.assign(0, 9001, zone(0)).expect("O 在区 0");
         router.assign(1, 9002, zone(1)).expect("P 在区 1");
@@ -117566,7 +117605,7 @@ mod l2_multi_zone_ledger_tests {
 
         let zone0 = spawn_zone_thread(
             zone(0),
-            build_zone_rig(0, &[("O", 9001, 2, 2)], &[(11, "ea", 3, 2)]),
+            build_zone_rig(0, 0, &[("O", 9001, 2, 2)], &[(11, "ea", 3, 2)]),
             Arc::clone(&layout),
             Arc::clone(&exchange),
             Arc::clone(&barriers),
@@ -117575,10 +117614,16 @@ mod l2_multi_zone_ledger_tests {
             Arc::clone(&catalog),
             Arc::clone(&after_drain),
             ticks,
+            mirrors,
         );
         let zone1 = spawn_zone_thread(
             zone(1),
-            build_zone_rig(1, &[("P", 9002, 17, 2)], &[(12, "eb", 16, 2)]),
+            build_zone_rig(
+                crate::shard::ACTOR_ID_SEGMENT,
+                1,
+                &[("P", 9002, 17, 2)],
+                &[(12, "eb", 16, 2)],
+            ),
             Arc::clone(&layout),
             Arc::clone(&exchange),
             Arc::clone(&barriers),
@@ -117587,6 +117632,7 @@ mod l2_multi_zone_ledger_tests {
             Arc::clone(&catalog),
             Arc::clone(&after_drain),
             ticks,
+            mirrors,
         );
         let mut frames = zone0.join().expect("区 0 线程");
         frames.extend(zone1.join().expect("区 1 线程"));
@@ -117610,8 +117656,8 @@ mod l2_multi_zone_ledger_tests {
             "基线两遍必须逐字节相同（确定性前置）"
         );
 
-        let split = by_socket(&run_split(TICKS));
-        let split_again = by_socket(&run_split(TICKS));
+        let split = by_socket(&run_split(TICKS, false));
+        let split_again = by_socket(&run_split(TICKS, false));
         assert_eq!(split, split_again, "拆区两遍必须逐字节相同（确定性前置）");
 
         assert_eq!(
@@ -117622,6 +117668,94 @@ mod l2_multi_zone_ledger_tests {
             split.values().any(|v| !v.is_empty()),
             "夹具必须真的产生出现帧（否则「空 == 空」会假绿）"
         );
+    }
+
+    /// **C4 夹具**：O（区 0）在 (8,2)，`eb`（区 1）在 (11,2)，`eb` 展示带 `mount_id=1`。
+    /// 两区都开镜像 ⇒ O 通过镜像看 `eb`，`eb` 的展示项来自区 1 的快照。
+    fn run_split_c4(ticks: u64) -> Vec<(i32, String, u16)> {
+        let layout = Arc::new(two_zone_layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        // 本夹具恒开镜像 ⇒ §7 新口径（发射者 = 收件人所在区）。
+        let outbox = Arc::new(Mutex::new(CrossZoneOutbox::with_criterion(
+            2,
+            EmitterCriterion::RecipientZone,
+        )));
+        let router = Arc::new(ZoneRouter::new());
+        router.assign(0, 9001, zone(0)).expect("O 在区 0");
+        router.assign(1, 9002, zone(1)).expect("P 在区 1");
+        let catalog = Arc::new(game_svr::ability::StdItemCatalog::new());
+        let after_drain = Arc::new(std::sync::Barrier::new(2));
+
+        let mut zone1_rig = build_zone_rig(
+            crate::shard::ACTOR_ID_SEGMENT,
+            1,
+            &[("P", 9002, 17, 2)],
+            &[(12, "eb", 11, 2)],
+        );
+        // 展示表带骑乘 ⇒ 镜像必须复制 `mount_id` 才能出 `SM_MOUNTRIDE`（C4 的第三帧）。
+        let mut eb_display = zone1_rig.displays.get(12).expect("eb 展示项").clone();
+        eb_display.mount_id = 1;
+        zone1_rig.displays.set(12, eb_display);
+
+        let zone0 = spawn_zone_thread(
+            zone(0),
+            build_zone_rig(0, 0, &[("O", 9001, 8, 2)], &[]),
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+            true,
+        );
+        let zone1 = spawn_zone_thread(
+            zone(1),
+            zone1_rig,
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+            true,
+        );
+        let mut frames = zone0.join().expect("区 0 线程");
+        frames.extend(zone1.join().expect("区 1 线程"));
+        frames
+    }
+
+    /// **C4（②第 2 步）**：一次 appearance = 多帧——镜像侧同样多帧，账本逐帧 `(recog, ident)`
+    /// 记账不得判重复；收件人侧有序帧流必须是 `SM_TURN → SM_FEATURECHANGED → SM_MOUNTRIDE`。
+    ///
+    /// 红检：把 `AoIFrameLedger::note` 的 kind 换成常量 ⇒ 第二帧即 `Duplicate` panic（账本
+    /// check 在两区线程内跑）；把收集器退回两个 ident ⇒ 本用例的 1118 断言红；镜像不带
+    /// `mount_id`（快照漏展示项）⇒ 只剩两帧 ⇒ 红。
+    #[test]
+    fn step2_multi_frame_appearance_is_not_duplicate() {
+        const TICKS: u64 = 12;
+        let frames = run_split_c4(TICKS);
+        let eb_to_o: Vec<u16> = frames
+            .iter()
+            .filter(|(socket, owner, _)| *socket == 9001 && owner == "eb")
+            .map(|(_, _, ident)| *ident)
+            .collect();
+        assert_eq!(
+            eb_to_o,
+            vec![
+                mir2_protocol::messages::SM_TURN,
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                game_svr::mount::SM_MOUNTRIDE,
+            ],
+            "镜像的一次 appearance 必须三帧且按 turn→feature→mount 出"
+        );
+        // 同一次 appearance 的多帧不得被判重复：账本 check 已在两区线程内 panic 式断言。
+        let again = run_split_c4(TICKS);
+        assert_eq!(frames, again, "C4 夹具两遍必须逐字节相同（确定性前置）");
     }
 
     // ------------------------------------------------------------------
