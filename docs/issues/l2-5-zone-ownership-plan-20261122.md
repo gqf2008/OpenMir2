@@ -152,3 +152,34 @@
 | 区界命中延迟 | **+1 tick**（`CrossZoneIntent` 目标区下一 tick 处理） | `cross_hit_delayed`；断言 = 脚本注入的跨界命中数 | 登记为已知差异；不做「拒绝」默认 |
 | 未支持意图拒绝 | 按类型 | `cross_intent_refused` | 逐类型登记，类型表随实现更新 |
 | 区界附近镜像不可交互（交易/拾取/脚本查找） | 1 tick 或拒绝 | 同上 | 随 `CrossZoneIntent` 类型表推进 |
+
+## 9. 交接要点（第②步：镜像 + 跨区可见）
+
+前提：第①步已合（每区 `ActorId` 段、两区 id 集合不相交、区数启动门 512）。
+
+**接缝清单（实现时逐个核）**
+1. **唯一发射点**：`drain_aoi_downlink` 的 `for body in bodies` 循环。镜像必须作为**本地 `World` 的实体**
+   进入 AOI 扫描（否则观察者的扫描序不可复现）；不要在发射点旁加第二处记账。
+2. **镜像用 owner 的全局 actor id 插入**：`EntityStore` 的 `insert(id, value)` 支持指定 id ⇒ 镜像不分配
+   新 id，`recog` 与 owner 一致（第①步的 id 段保证不冲突）。
+3. **`HaloEntity` 扩帧面字段**：`dir`、`death`、`mount_id`、展示项（feature/light/name）与玩家
+   `route(line, socket)`——只为让镜像能生成**与基线逐字节相同**的出现帧。
+4. **镜像刷新位置**：`ZoneRuntime::after_phase1`（barrier1 之后、本 tick 快照已是终态）返回 `neighbors`
+   后、`world.tick_phase2`（AOI）**之前**应用；不要在 phase1 之前刷新（会读到上一 tick 的旧值）。
+5. **镜像必须被隔离**：`mirror` 标志；不进 AI/仇恨/攻击目标/碰撞权威；MonGen 不生成镜像；
+   指向镜像的命中走 `CrossZoneIntent`（目标区下一 tick；计数 `cross_hit_delayed`）。逐个列出并加用例。
+6. **消失帧天然覆盖**：镜像被移除时 `rec.hides` 会包含它 ⇒ `drain_aoi_disappear` 的次序与基线同源
+   （这是镜像模型的额外收益：不需要单独实现跨区 disappear）。
+7. **账本口径切换**（§7）：`CrossZoneOutbox::submit` 的来源闸由「`src == owner_zone`（坐标）」改为
+   「`src == 收件人所在区`」；旧判据保留为 L2-4 形态并标注；两个方向都要负例。
+8. **跨线程 outbox 形态**：6b 的 N=2 用例用 `Mutex<CrossZoneOutbox>` + 第三道屏障（tick 末 seal）。
+   生产形态二选一——「每区一个 outbox + 区 0 汇总」或「共享大锁 + 屏障」；**建议前者**（锁粒度小，
+   汇总点唯一），并在文档里写明选择理由。
+9. **规模**：镜像数 = 邻区边界带实体数，受 `MIR2_MAX_HALO_BAND_ENTITIES`（512，启动门）约束；
+   镜像存储建议复用实体存储 + 标志位，不另建索引。
+
+**②内部的落地顺序（每步保持 `MIR2_ZONES` 未设零变化）**
+(a) `HaloEntity` 扩字段 + 镜像插入/刷新（feature 关、单区零变化）；
+(b) 边界带可见集与出现/消失帧对拍（静态实体，A6/A7/A8）；
+(c) 账本口径切换（§7 新判据 + 双向负例）；
+(d) 移动实体的镜像同步（先静态→后走位），再谈 handoff（§4）。

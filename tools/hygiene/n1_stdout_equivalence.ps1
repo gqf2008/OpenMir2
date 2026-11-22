@@ -66,28 +66,17 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 
 # 剥开头的 12 位墙钟时间戳 `HH:MM:SS.mmm` 与其后的 1 个空格（`glog!` = println! + 该前缀）。
-# 运行期顺序噪声类：由**墙钟驱动的重试环**产生，两侧行内容相同、但**相对顺序**由调度决定，
-# 不属于可比较的顺序面。它们仍参与「行多重集」比对（内容必须一致），只是不参与顺序判据。
-$script:N1NoisePatterns = @(
-  '^\[ERR\] 链接数据库服务器\[.*\]失败',
-  '^\[ERR\] 链接登录服务器\[.*\]失败'
-)
-function Test-N1NoiseLine {
-  param([string]$Line)
-  foreach ($pat in $script:N1NoisePatterns) { if ($Line -match $pat) { return $true } }
-  return $false
-}
-
 function ConvertTo-N1Line {
   param([string]$Line)
   if ($null -eq $Line) { return '' }
-  $s = $Line
-  if ($s.Length -ge 13 -and $s -match '^\d{2}:\d{2}:\d{2}\.\d{3} ') {
-    $s = $s.Substring(13)
+  if ($Line.Length -ge 13 -and $Line -match '^\d{2}:\d{2}:\d{2}\.\d{3} ') {
+    $Line = $Line.Substring(13)
   }
-  # 运行期易变字段归一：关服管道名里的**进程号**（两侧必然不同，不是产品差异）。
-  $s = [regex]::Replace($s, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
-  return $s
+  # 关服命名管道行带进程 pid（`...shutdown-<pid>`）：每次运行必然不同，不是产品差异 ⇒ 归一化。
+  $Line = [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
+  # 世界时钟 `Bright=N` 由**墙钟日期/时段**派生（白天/夜晚），两次运行跨时段必然不同值 ⇒ 归一化。
+  $Line = [regex]::Replace($Line, 'Bright=\d+', 'Bright=<n>')
+  return $Line
 }
 
 function Get-Sha256Hex {
@@ -134,17 +123,28 @@ function Assert-N1SinglePath {
   return ($Path -is [string] -and -not [string]::IsNullOrEmpty($Path))
 }
 
-function Assert-N1RunPath([object]$Path, [string]$Tag) {
-  if (-not (Assert-N1SinglePath $Path)) {
-    Fail-Usage "$Tag 运行返回的不是单个路径（函数输出被污染：诊断行必须走 Console/Write-Host）"
-  }
-}
-
 # 文件字节数；不存在 ⇒ -1（判不了，不当作空文件）。
 function Get-N1FileBytes {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
   return [int](Get-Item -LiteralPath $Path).Length
+}
+
+# **顺序噪声类**：DB / IDS 连接**重试环**的失败行。两条环各自按墙钟退避重试，两侧**内容相同**但
+# 相对顺序由重试时刻决定 ⇒ 只在**顺序比较**时剔除；**行多重集仍用全量**（内容漂移必须红）。
+# 注意：**不要用 `^` 锚定行首**——剥掉时间戳后真实行仍带 `[ERR] ` 前缀（`[ERR] 链接数据库服务器[…]
+# 失败…`）；锚定写法会一条都匹配不到，噪声类形同虚设（2026-11-22 实测）。
+$script:N1NoisePatterns = @(
+  '链接数据库服务器\[.*\]失败',
+  '链接登录服务器\[.*\]失败'
+)
+
+function Test-N1NoiseLine {
+  param([string]$Line)
+  foreach ($p in $script:N1NoisePatterns) {
+    if ($Line -match $p) { return $true }
+  }
+  return $false
 }
 
 # 判决矩阵（纯函数）：**空文件**（字节 0）才算 EMPTY_BOTH；文件非空却解析 0 行 ⇒ UNDECIDABLE，
@@ -287,6 +287,51 @@ function Invoke-Selftest {
   Assert-True (-not (Assert-N1SinglePath '')) 'single path guard rejects empty'
   Assert-True ((Get-N1RunOutputPath 'E:/x' 'baseline') -is [string]) 'run output path is a string'
 
+  # ⑦ 关服管道 pid 归一化（每次运行必然不同，不是产品差异）
+  Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] x openmir2-gamesvr-shutdown-12345') -ceq `
+      '[INF] x openmir2-gamesvr-shutdown-<pid>') 'shutdown pipe pid normalized'
+
+  # ⑧ DB/IDS 重试环属顺序噪声类：顺序比较剔除、多重集全量
+  Assert-True (Test-N1NoiseLine '[ERR] 链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line (real shape with level prefix)'
+  Assert-True (Test-N1NoiseLine '[ERR] 链接登录服务器[127.0.0.1:5600]失败...（e）') 'noise class: ids retry line (real shape with level prefix)'
+  Assert-True (-not (Test-N1NoiseLine '[INF] 链接数据库服务器就绪')) 'noise class: normal line not matched'
+  $noisyA = @('[INF] a', '[ERR] 链接数据库服务器[1.2.3.4:3306]失败...（e）', '[ERR] 链接登录服务器[1.2.3.4:5600]失败...（e）', '[INF] b')
+  $noisyB = @('[INF] a', '[ERR] 链接登录服务器[1.2.3.4:5600]失败...（e）', '[ERR] 链接数据库服务器[1.2.3.4:3306]失败...（e）', '[INF] b')
+  Assert-True ((Get-N1OrderSha $noisyA) -ne (Get-N1OrderSha $noisyB)) 'premise: noise reorder changes full order-sha'
+  $fA = @($noisyA | Where-Object { -not (Test-N1NoiseLine $_) })
+  $fB = @($noisyB | Where-Object { -not (Test-N1NoiseLine $_) })
+  Assert-True ((Get-N1OrderSha $fA) -eq (Get-N1OrderSha $fB)) 'noise reorder ignored by noise-filtered order-sha'
+  Assert-True ((Get-N1MultisetSha $noisyA) -eq (Get-N1MultisetSha $noisyB)) 'noise reorder keeps full multiset equal'
+
+  # ⑨ PowerShell 逐条执行：函数必须**先定义后调用**（曾实测 `术语 'Assert-N1RunPath' 不会被识别`）。
+  # 「首个调用」只扫 `if ($Selftest) {` 之后的主流程区（自测区自身含函数名，不能计入）。
+  $selfLines = @(Get-Content -LiteralPath $PSCommandPath -Encoding UTF8)
+  $dispatchAt = 0
+  for ($li = 0; $li -lt $selfLines.Count; $li++) {
+    if ($selfLines[$li].StartsWith('if ($Selftest)')) {
+      $dispatchAt = $li + 1
+      break
+    }
+  }
+  foreach ($fn in @('Assert-N1RunPath', 'Read-N1Lines', 'Get-N1Verdict')) {
+    $defAt = 0
+    for ($li = 0; $li -lt $selfLines.Count; $li++) {
+      if ($selfLines[$li].StartsWith("function $fn ") -or $selfLines[$li].StartsWith("function $fn(")) {
+        $defAt = $li + 1
+        break
+      }
+    }
+    $callAt = 0
+    for ($li = $dispatchAt; $li -lt $selfLines.Count; $li++) {
+      $isDef = $selfLines[$li].StartsWith("function $fn ") -or $selfLines[$li].StartsWith("function $fn(")
+      if ($selfLines[$li].Contains($fn) -and -not $isDef) {
+        $callAt = $li + 1
+        break
+      }
+    }
+    Assert-True ($dispatchAt -gt 0 -and $defAt -gt 0 -and $callAt -gt 0 -and $defAt -lt $callAt) ("function {0} defined before first call (def={1}, call={2})" -f $fn, $defAt, $callAt)
+  }
+
   if ($script:selftestFail -ne 0) {
     [Console]::WriteLine("SELFTEST_FAILED count=$($script:selftestFail)")
     return 1
@@ -331,6 +376,21 @@ if ([string]::IsNullOrEmpty($OutDir)) {
   $OutDir = Join-Path 'E:\tmp\m2-acceptance\n1-stdout' (Get-Date -Format 'yyyyMMdd-HHmmss')
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+function Read-N1Lines([object]$Path) {
+  if (-not (Assert-N1SinglePath $Path)) {
+    Fail-Usage ("只接受单个路径字符串（实得 {0}：函数输出被污染/返回值被诊断行污染）" -f `
+        $(if ($null -eq $Path) { 'null' } else { $Path.GetType().FullName }))
+  }
+  if (-not (Test-Path -LiteralPath $Path)) { return @() }
+  return @(Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object { ConvertTo-N1Line $_ })
+}
+
+function Assert-N1RunPath([object]$Path, [string]$Tag) {
+  if (-not (Assert-N1SinglePath $Path)) {
+    Fail-Usage "$Tag 运行返回的不是单个路径（函数输出被污染：诊断行必须走 Console/Write-Host）"
+  }
+}
 
 function Invoke-N1Run {
   param([string]$Exe, [string]$Tag)
@@ -377,15 +437,6 @@ Assert-N1RunPath $baselineOut 'baseline'
 $featureOut = Invoke-N1Run -Exe $FeatureExe -Tag 'feature'
 Assert-N1RunPath $featureOut 'feature'
 
-function Read-N1Lines([object]$Path) {
-  if (-not (Assert-N1SinglePath $Path)) {
-    Fail-Usage ("Read-N1Lines 只接受单个路径字符串（实得 {0}：函数输出被污染）" -f `
-        $(if ($null -eq $Path) { 'null' } else { $Path.GetType().FullName }))
-  }
-  if (-not (Test-Path -LiteralPath $Path)) { return @() }
-  return @(Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object { ConvertTo-N1Line $_ })
-}
-
 $baselineLines = Read-N1Lines $baselineOut
 $featureLines = Read-N1Lines $featureOut
 $baseBytes = Get-N1FileBytes $baselineOut
@@ -395,10 +446,13 @@ $featNorm = Join-Path $OutDir 'feature.normalized.txt'
 Set-Content -LiteralPath $baseNorm -Value $baselineLines -Encoding UTF8
 Set-Content -LiteralPath $featNorm -Value $featureLines -Encoding UTF8
 
-$baseOrderLines = @($baselineLines | Where-Object { -not (Test-N1NoiseLine $_) })
-$featOrderLines = @($featureLines | Where-Object { -not (Test-N1NoiseLine $_) })
-$baseOrder = Get-N1OrderSha $baseOrderLines
-$featOrder = Get-N1OrderSha $featOrderLines
+# **顺序比较剔除顺序噪声类**（DB/IDS 重试环）；**多重集仍用全量**（内容漂移必须红）。
+$baselineOrderLines = @($baselineLines | Where-Object { -not (Test-N1NoiseLine $_) })
+$featureOrderLines = @($featureLines | Where-Object { -not (Test-N1NoiseLine $_) })
+$noiseBase = $baselineLines.Count - $baselineOrderLines.Count
+$noiseFeat = $featureLines.Count - $featureOrderLines.Count
+$baseOrder = Get-N1OrderSha $baselineOrderLines
+$featOrder = Get-N1OrderSha $featureOrderLines
 $baseMulti = Get-N1MultisetSha $baselineLines
 $featMulti = Get-N1MultisetSha $featureLines
 $orderOk = ($baseOrder -eq $featOrder)
@@ -418,10 +472,10 @@ $summary = [pscustomobject]@{
   feature_bytes  = $featBytes
   baseline_lines = $baselineLines.Count
   feature_lines  = $featureLines.Count
-  baseline_order_lines = $baseOrderLines.Count
-  feature_order_lines  = $featOrderLines.Count
-  noise_lines_baseline = ($baselineLines.Count - $baseOrderLines.Count)
-  noise_lines_feature  = ($featureLines.Count - $featOrderLines.Count)
+  baseline_order_lines = $baselineOrderLines.Count
+  feature_order_lines  = $featureOrderLines.Count
+  noise_lines_baseline = $noiseBase
+  noise_lines_feature  = $noiseFeat
   baseline_order_sha = $baseOrder
   feature_order_sha  = $featOrder
   baseline_multiset_sha = $baseMulti

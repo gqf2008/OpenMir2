@@ -15,6 +15,7 @@
 1. **顺序敏感**：两侧 stdout 每行剥掉开头的 12 位 `HH:MM:SS.mmm` 与 1 个空格（`glog!` 的墙钟
    前缀）后，按**行序**拼接的 SHA256 相等；
 2. **行多重集**：同一批行按序数排序后的 SHA256 相等。
+   （**顺序**一项先剔除 §1b 的噪声类；**多重集**一项用全量行。）
 
 补充细则：
 - 两侧都为空 ⇒ **PASS** 并打印 `EMPTY_BOTH`（记「空文件 sha 相同」），同时打印两侧 stderr 的
@@ -25,6 +26,18 @@
 - 一侧空一侧非空、或行数不等 ⇒ **FAIL**；
 - 退出码：**0 绿 / 1 红 / 2 判不了**（用法错误、文件缺失、提前退出、优雅关服超时）。
 - **不接受**：`| tail` 之类取 rc、只看某几行、或「重跑一下变绿」——判据是两条 sha 同时相等。
+
+## 1b. 归一化与噪声类（三条规则，都不是产品差异）
+
+1. **关服管道名里的 pid 归一化**：`...openmir2-gamesvr-shutdown-<pid>` 每次运行必然不同（进程 pid）
+   ⇒ 统一替换为 `<pid>` 再比。
+2. **DB/IDS 连接重试环的失败行属「顺序噪声类」**：两条边各自按墙钟退避重试，两侧**内容相同**但
+   相对顺序由重试时刻决定 ⇒ **顺序比较剔除这两类行，行多重集仍用全量**（内容真漂移仍然红）。
+   归一化实现见 `$N1NoisePatterns` / `Test-N1NoiseLine`；`summary.json` 记
+   `baseline_order_lines / feature_order_lines / noise_lines_baseline / noise_lines_feature`。
+3. **PowerShell 逐条执行：函数必须先定义后调用**（曾实测 `术语 'Assert-N1RunPath' 不会被识别`）。
+   脚本 `-Selftest` 对 `Assert-N1RunPath` / `Read-N1Lines` / `Get-N1Verdict` 逐个断言
+   「定义行号 < 首个调用行号」。
 
 ## 2. 怎么跑
 
