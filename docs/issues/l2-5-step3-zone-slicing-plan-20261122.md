@@ -479,6 +479,11 @@ route 有无再分）。
 tick 增量之和，由构造保证），表头已同步 ⇒ 段 4 容量脚本按列名读取并打印。读函数
 `cross_recipient_missing()` = 六面之和。
 
+**④a 追加 3 列（2026-11-22）**：`zone_cmd_unsupported`（区 k 未接线的非移动命令，按 `ident`
+采样日志）、`handoff_move_after_transfer_dropped`（handoff 提升后源区丢走位 = ④b「会话/路由随迁」
+的缺口基线）、`move_map_change_unsupported`（无 `MapRegistry` 的换图批次 = 区 k 换图帧降级）。
+`perf_tsv_summary.py` 首屏同时给「窗口（ticks/时长）+ `refmsg_targets` 分母 + 占比」（§12.4A 口径）。
+
 **六条独立牙**（`l2_s3_cross_recipient_tests`）：夹具 = 本地玩家（有会话）+ 镜像玩家（race=Play、
 无本地会话）；每次注入只用**一个**面，断言「该面 +1、其余五面 0」（增量口径，避免与并行用例的
 全局计数互扰）；另有一条 `slicing=0 ⇒ 六面全 0` 护栏。

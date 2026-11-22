@@ -1019,6 +1019,78 @@ impl ZoneState {
     }
 }
 
+/// **L2-5 ④a**：把静态地图数据灌进**区 k 的 World**——与区 0 同一组 loader、同一份注册表。
+///
+/// 区 0 的 `sim_loop` 从注册表灌三样：格子属性（[`mapwire::apply_map_cells_owned`]）、传送点
+/// （[`mir2_world_bevy::World::add_map_routes`]）、门（[`game_svr::mapdoor::apply_map_doors_owned`]）。
+/// 区 k 的 [`ZoneState::new`] 此前只有 `World::with_maps`（全 `Walk`）⇒ **区 k 玩家穿墙走**
+/// （移动/碰撞/视野全被污染），外在症状 = handoff 落到真墙格时目标区 `RefusedCell`。
+/// 本函数让区 k 与区 0 看到同一张地图。
+///
+/// 归属表传 `&[]`（空 = 全图）：区 k 拥有全部图（与片所有权正交——多区与多片互斥）。
+/// 次序与区 0 相同：**先格子属性、再传送点、最后门**（`add_map_routes` 的 `Valid` 门依赖属性）。
+/// 返回 `(cells, routes, doors)` 供启动日志对账。
+fn load_zone_map_data(
+    reg: &mir2_envir::MapRegistry,
+    world: &mut mir2_world_bevy::World,
+) -> (usize, usize, usize) {
+    let cells = mapwire::apply_map_cells_all(reg, world);
+    let routes: Vec<mir2_world_bevy::map::MapRouteSpec> = reg
+        .routes()
+        .iter()
+        .map(|r| mir2_world_bevy::map::MapRouteSpec {
+            map_id: r.src_map_id,
+            x: r.src_x,
+            y: r.src_y,
+            route_id: r.route_id,
+            hop: mir2_world_bevy::map::RouteHop {
+                dst_map_id: r.dst_map_id,
+                dst_x: r.dst_x,
+                dst_y: r.dst_y,
+            },
+        })
+        .collect();
+    let routes = world.add_map_routes(routes);
+    let doors = game_svr::mapdoor::apply_map_doors_owned(reg, world, &[]);
+    (cells, routes, doors)
+}
+
+/// **L2-5 ④a**：区 k 的完整世界侧状态（真 World + handoff 边界 + **静态地图数据**）。
+///
+/// 把「边界」与「地图数据装载」收敛到**一个构造点**：`slicing=0` 时本函数不被调用
+/// （建区循环只在 `if slicing` 里）⇒ 零参与；`MIR2_ZONES` 未设 ⇒ 整段不存在。
+fn new_zone_state(
+    zone_id: zone::ZoneId,
+    layout: &zone::RegionLayout,
+    map_sizes: &[(i32, i32)],
+    rng_seed: Option<i32>,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> ZoneState {
+    let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
+    match handoff::bounds_for(layout, zone_id) {
+        Some(b) => state.world.set_zone_bounds(Some(b)),
+        None => glog!(
+            "WRN",
+            "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
+        ),
+    }
+    // **L2-5 ④a（产品缺陷修复）**：区 k 的 World 必须与区 0 是同一份静态地图数据
+    // （格子属性/传送点/门）——否则区 k 玩家穿墙走，handoff 落到真墙格被目标区拒绝。
+    if let Some(reg) = registry {
+        let (cells, routes, doors) = load_zone_map_data(reg, &mut state.world);
+        glog!(
+            "INF",
+            "区 {zone_id} 静态地图数据已灌入（cells={cells} routes={routes} doors={doors}；与区 0 同源同函数）"
+        );
+    } else {
+        glog!(
+            "WRN",
+            "区 {zone_id} 无 MapRegistry ⇒ 格子属性/传送点/门未灌入（区 k 移动不判墙；登记）"
+        );
+    }
+    state
+}
+
 /// 区线程退出（含 panic unwind）时把 `ZoneState::alive` 置假——登录线程据此拒绝落区。
 struct ZoneAliveOnDrop(Arc<std::sync::Mutex<ZoneState>>);
 
@@ -1114,6 +1186,56 @@ fn handle_zone_closed(
         Err(e) => glog!("WRN", "区断线清世界失败 ChrName:{chr_name}：{e:?}"),
     }
     true
+}
+
+/// **L2-5 ④a**：区 k 的 `Command` 派发——**只接移动类**（`CM_TURN/WALK/RUN/HORSERUN`），
+/// 与区 0 共用同一条 [`handle_move_cmd`]（不抄第二份）。其余命令仍丢弃，但计入
+/// [`perf_counters::note_zone_cmd_unsupported`]（按 `ident` 采样日志；④b 的余量清单）。
+///
+/// - **`gates`**：区 k 自己的线程局部表（`RegisterGate/UnregisterGate` 由 demux 广播到每区）。
+///   没有新锁——`ZoneState` 锁之外没有共享可变状态。
+/// - **`registry` 传 `None`**（区 k 不持有进程级 `MapRegistry`）：换图事件仍出帧但降级，
+///   由 [`perf_counters::note_move_map_change_unsupported`] 计数（只在换图批次内计）。
+/// - **④b 缺口基线**：在线表有条目、世界里已无实体（handoff 提升后源区不随迁）⇒ 本条走位必被
+///   `handle_move_cmd` 丢弃；在**调用前**计 `handoff_move_after_transfer_dropped`，
+///   `handle_move_cmd` 自身行为不变。
+fn handle_zone_command(
+    state: &mut ZoneState,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    cmd: &CommandMessage,
+) {
+    let ZoneState {
+        world,
+        displays,
+        online,
+        ground_sessions,
+        ..
+    } = state;
+    if !movewire::is_move_command(cmd.ident) {
+        perf_counters::note_zone_cmd_unsupported(cmd.ident);
+        return;
+    }
+    if online
+        .find_linear_chr(chr_name)
+        .is_some_and(|e| world.entities.get(e.actor_id).is_none())
+    {
+        perf_counters::note_handoff_move_after_transfer_dropped();
+    }
+    handle_move_cmd(
+        cmd.ident,
+        cmd.recog,
+        cmd.tag,
+        chr_name,
+        socket,
+        online,
+        ground_sessions,
+        world,
+        displays,
+        gates,
+        None,
+    );
 }
 
 /// **L2-5 ③ 段 1c**：把各区线程的断线存档请求发进进程级 DB 链（区 0 每 tick 调一次）。
@@ -1684,29 +1806,56 @@ fn spawn_minimal_zone(
                     &exchange,
                     &barriers,
                 );
+                // **L2-5 ④a**：本区自己的网关线发送端表。demux 把 `RegisterGate/UnregisterGate`
+                // **广播到每区**（`is_priority` ⇒ 走 priority 通道），区 0 用的是它自己栈上的
+                // 同名表；区 k 复用同一广播，**不新增锁、不共享可变状态**。
+                let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+                    std::collections::HashMap::new();
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     // **L2-5 ③ 段 1c**：`Closed` 由本区处理（世界侧在本区线程内完成，
-                    // 存档请求进 `save_outbox` 由区 0 发 DB）；其余命令/网关线事件仍丢弃
-                    // （命令处理属段 2）。`Closed` 走优先通道，两条都收。
+                    // 存档请求进 `save_outbox` 由区 0 发 DB）。
+                    // **L2-5 ④a**：`Command` 的**移动类**（`CM_TURN/WALK/RUN/HORSERUN`）由区 k
+                    // 自己处理（与区 0 共用同一条 `handle_move_cmd`）；其余命令仍丢弃但计入
+                    // `zone_cmd_unsupported`（④b 余量）。`Closed/RegisterGate/UnregisterGate`
+                    // 走优先通道，两条通道都收。
                     let mut closed_events: Vec<(i32, String, i32)> = Vec::new();
+                    let mut cmd_events: Vec<(String, i32, CommandMessage)> = Vec::new();
                     while let Ok(ev) = rx.try_recv() {
-                        if let GateEvent::Closed {
-                            index,
-                            chr_name,
-                            socket,
-                        } = ev
-                        {
-                            closed_events.push((index, chr_name, socket));
+                        match ev {
+                            GateEvent::Closed {
+                                index,
+                                chr_name,
+                                socket,
+                            } => closed_events.push((index, chr_name, socket)),
+                            GateEvent::Command {
+                                chr_name,
+                                socket,
+                                cmd,
+                                ..
+                            } => cmd_events.push((chr_name, socket, cmd)),
+                            GateEvent::RegisterGate { service_id, tx } => {
+                                gates.insert(service_id, tx);
+                            }
+                            GateEvent::UnregisterGate { service_id } => {
+                                gates.remove(&service_id);
+                            }
+                            _ => {}
                         }
                     }
                     while let Ok(ev) = ctl_rx.try_recv() {
-                        if let GateEvent::Closed {
-                            index,
-                            chr_name,
-                            socket,
-                        } = ev
-                        {
-                            closed_events.push((index, chr_name, socket));
+                        match ev {
+                            GateEvent::Closed {
+                                index,
+                                chr_name,
+                                socket,
+                            } => closed_events.push((index, chr_name, socket)),
+                            GateEvent::RegisterGate { service_id, tx } => {
+                                gates.insert(service_id, tx);
+                            }
+                            GateEvent::UnregisterGate { service_id } => {
+                                gates.remove(&service_id);
+                            }
+                            _ => {}
                         }
                     }
                     if !closed_events.is_empty() {
@@ -1729,6 +1878,16 @@ fn spawn_minimal_zone(
                                 socket,
                                 map_names.as_slice(),
                             );
+                        }
+                    }
+                    // **L2-5 ④a**：移动命令在**同一 tick 顶、phase1 之前**、持本区 `ZoneState`
+                    // 锁处理（与区 0「先排事件再 tick」同序；`gates` 是本线程局部表，无新锁）。
+                    if !cmd_events.is_empty() {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        for (chr_name, socket, cmd) in cmd_events {
+                            handle_zone_command(&mut st, &gates, &chr_name, socket, &cmd);
                         }
                     }
                     // 批 1（持锁）：phase1 + 边界快照/发布。发布后立即放锁。
@@ -2976,14 +3135,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     for (index, slot) in zone_states.iter_mut().enumerate().skip(1) {
                         let zone_id =
                             zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
-                        let mut state = ZoneState::new(zone_id, &map_sizes, rng_seed);
-                        match handoff::bounds_for(&layout, zone_id) {
-                            Some(b) => state.world.set_zone_bounds(Some(b)),
-                            None => glog!(
-                                "WRN",
-                                "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
-                            ),
-                        }
+                        // **L2-5 ④a**：边界 + 静态地图数据（格子属性/传送点/门）一次构造。
+                        let state = new_zone_state(
+                            zone_id,
+                            &layout,
+                            &map_sizes,
+                            rng_seed,
+                            registry.as_ref(),
+                        );
                         *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
                 }
@@ -21595,6 +21754,14 @@ fn client_conf_bytes() -> Option<Vec<u8>> {
 
 /// [`drain_map_change`] 的**时间注入**版：`game_time` = `Bright` 的桶（1 / 3 / 其它），
 /// 由 [`enter::day_bright`] 映射成 `SM_CHANGEMAP(634)` 的 `Series`（`DayBright()`）。
+/// **L2-5 ④a**：换图批次是否要计「无注册表降级」——`registry` 缺失**且**本批有换图事件。
+///
+/// 抽成纯函数是为了让两侧判据（有/无注册表）不依赖全局计数器的并发状态：
+/// [drain_map_change_at_time] 用同一个谓词决定是否 `note_move_map_change_unsupported`。
+const fn counts_as_map_change_unsupported(registry_is_none: bool, changes: usize) -> bool {
+    registry_is_none && changes > 0
+}
+
 pub(crate) fn drain_map_change_at_time(
     world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
@@ -21604,6 +21771,12 @@ pub(crate) fn drain_map_change_at_time(
     game_time: u8,
 ) {
     let changes = world.sessions.drain_map_changes();
+    // **L2-5 ④a**：无注册表的换图事件照旧出帧，但图名/flag/766·54 降级——区 k 一律传
+    // `None` ⇒ 这里就是「区 k 过传送点、帧内容降级」的可见读数（区 0 有注册表 ⇒ 正常恒 0）。
+    // 只计数，不改任何帧。判据本身是纯函数（牙的两侧判据不依赖全局计数器的并发状态）。
+    if counts_as_map_change_unsupported(registry.is_none(), changes.len()) {
+        perf_counters::note_move_map_change_unsupported(changes.len() as u64);
+    }
     for mut ev in changes {
         // **P2-3a**：目标图不归本 World（stub/跨片）⇒ 不发 TransMap 簇（防御性；
         // world 已在所有换图入口 fail-closed；handoff 归 P2-5）。
@@ -23958,7 +24131,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24035,6 +24208,10 @@ mod perf_counters {
             hd[6],
             hd[7],
             hd[8],
+            // **L2-5 ④a**：区 k 命令接线 / ④b 缺口基线 / 区 k 换图帧降级（均为本 tick 增量）。
+            ZONE_CMD_UNSUPPORTED.swap(0, Ordering::Relaxed),
+            HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.swap(0, Ordering::Relaxed),
+            MOVE_MAP_CHANGE_UNSUPPORTED.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -24087,6 +24264,18 @@ mod perf_counters {
     /// 全部 `Closed`（当时的已知缺口）；1c 起 `Closed` 一律进 [`handle_zone_closed`]，
     /// **正常断线不再计入**，非 0 即说明 `(chr, gate, socket)` 与在线表不一致。
     pub(crate) static ZONE_DISCONNECT_DROPPED: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ④a**：区 k（切片区）命令派发里**未接线**的非移动命令次数。首 8 次与每 1000 次
+    /// 各打一行 WRN（带 `ident`，即按命令类别采样）；非 0 = ④b 的余量清单，不是缺陷计数。
+    /// 切片关 / N=1 恒 0（stub 路径与 N=1 不经过区 k 派发）。
+    pub(crate) static ZONE_CMD_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ④a**：区 k 走位命令因「在线表有条目、世界里已无实体」被丢的次数。
+    /// 当前唯一来源 = handoff 提升后源区不随迁（④b「会话/路由随迁」的缺口基线）；
+    /// 正常稳态恒 0，迁完以后必须归零——用它证明缺口已补。
+    pub(crate) static HANDOFF_MOVE_AFTER_TRANSFER_DROPPED: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ④a**：换图事件在**没有 `MapRegistry`** 时处理的次数（区 k 一律传 `None`：
+    /// 帧仍发但降级——图名空 / flag 0 / 无 766·54）。区 0 有注册表 ⇒ 正常恒 0；
+    /// ④b 补区 k 换图帧后应归零。
+    pub(crate) static MOVE_MAP_CHANGE_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn note_zone_login_uncovered() {
         ZONE_LOGIN_UNCOVERED.fetch_add(1, Ordering::Relaxed);
@@ -24125,6 +24314,38 @@ mod perf_counters {
     }
     pub(crate) fn note_zone_disconnect_dropped() {
         ZONE_DISCONNECT_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+    /// 区 k 的未接线非移动命令：计数 + 按 `ident` 采样（前 8 次 / 每 1000 次一行 WRN）。
+    pub(crate) fn note_zone_cmd_unsupported(ident: u16) -> u64 {
+        let n = ZONE_CMD_UNSUPPORTED.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 8 || n.is_multiple_of(1000) {
+            glog!(
+                "WRN",
+                "区 k 命令未接线：ident={ident}（zone_cmd_unsupported={n}；④b 余量）"
+            );
+        }
+        n
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_cmd_unsupported() -> u64 {
+        ZONE_CMD_UNSUPPORTED.load(Ordering::Relaxed)
+    }
+    pub(crate) fn note_handoff_move_after_transfer_dropped() {
+        HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn handoff_move_after_transfer_dropped() -> u64 {
+        HANDOFF_MOVE_AFTER_TRANSFER_DROPPED.load(Ordering::Relaxed)
+    }
+    /// 无注册表的换图事件：`n` = 本批 `drain_map_changes()` 的条数（一次 tick 一批）。
+    pub(crate) fn note_move_map_change_unsupported(n: u64) {
+        if n > 0 {
+            MOVE_MAP_CHANGE_UNSUPPORTED.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn move_map_change_unsupported() -> u64 {
+        MOVE_MAP_CHANGE_UNSUPPORTED.load(Ordering::Relaxed)
     }
     #[cfg(test)]
     pub(crate) fn zone_disconnect_dropped() -> u64 {
@@ -24172,6 +24393,9 @@ mod perf_counters {
             &ZONE_ROUTER_REJECTED_SOCKET,
             &REGION_BARRIER_US,
             &REGION_BARRIER_TOTAL_US,
+            &ZONE_CMD_UNSUPPORTED,
+            &HANDOFF_MOVE_AFTER_TRANSFER_DROPPED,
+            &MOVE_MAP_CHANGE_UNSUPPORTED,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -120298,7 +120522,7 @@ mod zone_disconnect_tests {
     use super::*;
 
     /// 在指定区落一个玩家（沿用 1b 的登录落区路径），返回（区状态, actor id）。
-    fn landed(tag: &str, zone_id: zone::ZoneId) -> (ZoneState, i32) {
+    pub(super) fn landed(tag: &str, zone_id: zone::ZoneId) -> (ZoneState, i32) {
         let base =
             std::env::temp_dir().join(format!("zone_disconnect_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -120579,6 +120803,168 @@ mod zone_disconnect_tests {
     }
 }
 
+/// **L2-5 ④a**：区 k 的 World 必须与区 0 是同一份静态地图数据（格子属性/传送点/门）。
+///
+/// 夹具坐标取段 4 诊断的真实回归点：map 的 `x=325`、`y=243..249` 是 7 个墙格（诊断里
+/// `RefusedCell … (325,24x) cell_valid=false` 的落点）。地图尺寸 340×260（覆盖区 0/区 1 分界 326）。
+///
+/// 红检（各自实测）：删掉 [`new_zone_state`] 里的 `load_zone_map_data` 调用 ⇒ 用例 1/2 红
+/// （墙不再挡、`handoff_pending` 又被置起）；把 `apply_map_cells_owned` 的 `&[]` 改成
+/// `&[false]`（空归属）⇒ 用例 1/3 红。
+#[cfg(test)]
+mod zone_map_data_tests {
+    use super::zone_login_landing_tests::fixture_registry;
+    use super::*;
+
+    const W: i16 = 340;
+    const H: i16 = 260;
+    const BOUNDARY_X: i32 = 326;
+    /// 段 4 诊断的真实墙格列（map 26，x=325，y=243..=249）。
+    const WALL_X: i32 = 325;
+    const WALL_YS: std::ops::RangeInclusive<i32> = 243..=249;
+
+    fn write_wall_map_fixture(base: &std::path::Path) {
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&W.to_le_bytes());
+        bytes[2..4].copy_from_slice(&H.to_le_bytes());
+        let cells = usize::try_from(W).unwrap() * usize::try_from(H).unwrap();
+        bytes.resize(mir2_envir::HEADER_BYTES + cells * mir2_envir::CELL_BYTES, 0);
+        // 文件序 `k = x * Height + y`（列主序）；`wBkImg` bit15 ⇒ HighWall。
+        for y in WALL_YS {
+            let k = usize::try_from(WALL_X).unwrap() * usize::try_from(H).unwrap()
+                + usize::try_from(y).unwrap();
+            let off = mir2_envir::HEADER_BYTES + k * mir2_envir::CELL_BYTES;
+            bytes[off..off + 2].copy_from_slice(&mir2_envir::WALL_BIT.to_le_bytes());
+        }
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+    }
+
+    fn wall_fixture(tag: &str) -> (std::path::PathBuf, mir2_envir::MapRegistry) {
+        let base = std::env::temp_dir().join(format!("zone_map_data_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_wall_map_fixture(&base);
+        let reg = fixture_registry(&base);
+        (base, reg)
+    }
+
+    fn layout() -> zone::RegionLayout {
+        zone::parse_zone_layout(
+            &format!(
+                "0:0=0,0-{},{};1:0={},0-{},{}",
+                BOUNDARY_X - 1,
+                H - 1,
+                BOUNDARY_X,
+                W - 1,
+                H - 1
+            ),
+            &["0".to_string()],
+            &[(i32::from(W), i32::from(H))],
+            zone::ZoneId::new(0),
+        )
+        .expect("两区布局")
+    }
+
+    fn zone_state_with(reg: Option<&mir2_envir::MapRegistry>) -> ZoneState {
+        new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            reg,
+        )
+    }
+
+    /// 牙 ①：区 k 的实体走到真墙格 ⇒ 被拒；同一网格按区 0 的装载路径也同结论。
+    #[test]
+    fn zone_k_world_blocks_real_wall_cells_like_zone_0() {
+        let (base, reg) = wall_fixture("block");
+        let mut k = zone_state_with(Some(&reg));
+
+        // 区 k 侧：站在 (326,243)，向墙格 (325,243) 走一步 ⇒ 不移动。
+        let id = k.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out = k.world.step_with_route(id, -1, 0, 1);
+        assert!(!out.moved, "区 k：真墙格必须挡住走位（与区 0 同结论）");
+        assert_eq!(pos_of(&k.world, id), (BOUNDARY_X, 243));
+
+        // 区 0 侧（同一注册表、区 0 自己的装载路径）：站在 (324,243) 向东走 ⇒ 同样被挡。
+        let mut z0 = ZoneState::new(zone::ZoneId::new(0), &[(i32::from(W), i32::from(H))], None);
+        let owned = vec![true; 1];
+        mapwire::apply_map_cells_owned(&reg, &mut z0.world, &owned);
+        let id0 = z0.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0,
+            "hero",
+            WALL_X - 1,
+            243,
+        ));
+        let out0 = z0.world.step_with_route(id0, 1, 0, 1);
+        assert!(!out0.moved, "区 0：同一条真墙格同样被挡（两侧对拍）");
+
+        // 属性面：区 k 的装载与区 0 的装载得到同一组计数（walk/low/high）。
+        assert_eq!(k.world.maps[0].walk_count(), z0.world.maps[0].walk_count());
+        assert_eq!(
+            k.world.maps[0].low_wall_count(),
+            z0.world.maps[0].low_wall_count()
+        );
+        assert_eq!(
+            k.world.maps[0].high_wall_count(),
+            z0.world.maps[0].high_wall_count()
+        );
+        assert_eq!(
+            k.world.maps[0].high_wall_count(),
+            WALL_YS.count(),
+            "夹具只有 x=325,y=243..249 这 7 个墙格"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 牙 ②：段 4 诊断的墙格列（x=325,y=243..249）不再产生跨界 offer/refusal。
+    /// 反例 = 不灌地图数据的旧行为（穿墙 + `handoff_pending`）——两半都在本用例里。
+    #[test]
+    fn handoff_onto_production_wall_coords_no_longer_triggers() {
+        let (base, reg) = wall_fixture("handoff");
+
+        // 修复后：区 1 的实体撞墙 ⇒ 不移动、不置 handoff_pending（不会 offer ⇒ 不会 refused）。
+        let mut fixed = zone_state_with(Some(&reg));
+        let id = fixed.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out = fixed.world.step_with_route(id, -1, 0, 1);
+        assert!(!out.moved, "真墙格 ⇒ 不得走进去");
+        let e = fixed.world.entities.get(id).expect("实体仍在世界");
+        assert_eq!((e.x, e.y), (BOUNDARY_X, 243));
+        assert!(
+            !e.handoff_pending,
+            "被墙挡住 ⇒ 不得置 handoff_pending（链条: no pending ⇒ no offer ⇒ refused 归零）"
+        );
+
+        // 反例（修复前的旧行为）：不灌地图数据 ⇒ 穿墙进 (325,243) 并置 handoff_pending
+        // （诊断里的 RefusedCell 就由此产生）。
+        let mut legacy = zone_state_with(None);
+        let id2 = legacy.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+            0, "hero", BOUNDARY_X, 243,
+        ));
+        let out2 = legacy.world.step_with_route(id2, -1, 0, 1);
+        assert!(out2.moved, "无注册表（旧行为）⇒ 穿墙");
+        let e2 = legacy.world.entities.get(id2).expect("实体仍在世界");
+        assert_eq!((e2.x, e2.y), (WALL_X, 243));
+        assert!(
+            e2.handoff_pending,
+            "旧行为：跨出本区 rect ⇒ handoff_pending（随后目标区 RefusedCell）"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn pos_of(world: &mir2_world_bevy::World, id: i32) -> (i32, i32) {
+        let e = world.entities.get(id).expect("实体仍在世界");
+        (e.x, e.y)
+    }
+}
+
 /// **L2-5 ③ 段 2**：handoff（跨界移动，两阶段、源从不放手、零闪烁）。
 ///
 /// 覆盖（对应总监六条硬要求）：
@@ -120593,6 +120979,223 @@ mod zone_disconnect_tests {
 /// 6. **时序**：offer 在 T 的 barrier2 后；目标区提升与源区移除都在 T+1 的 tick 顶、phase1 之前
 ///    （夹具按此顺序驱动；正确时序下遮蔽计数恒 0）。
 ///
+/// **L2-5 ④a**：区 k 的 `Command` 派发（移动类复用区 0 同一条 `handle_move_cmd`）。
+///
+/// 红检（各自实测）：删掉 `handle_zone_command` 的移动分支 / 让它永远早退 ⇒ 用例 1 红；
+/// 删掉非移动分支的 `note_zone_cmd_unsupported` ⇒ 用例 2 红；删掉提升后丢弃的预检 ⇒ 用例 3 红；
+/// 不 `set_zone_bounds` 装夹具 ⇒ 用例 4 的 `handoff_pending` 断言红。
+#[cfg(test)]
+mod zone_command_tests {
+    use super::zone_disconnect_tests::landed;
+    use super::*;
+
+    fn gates_and_rx() -> (
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0u8, tx);
+        (gates, rx)
+    }
+
+    /// `CM_*` 的 12B 解码态（`Recog` = MakeLong(目的地 x, 目的地 y)，`Tag` = 方向）。
+    fn cmd(ident: u16, nx: i32, ny: i32, tag: u16) -> CommandMessage {
+        CommandMessage {
+            recog: game_svr::feature::make_long(
+                u16::try_from(nx).expect("夹具坐标在 u16 内"),
+                u16::try_from(ny).expect("夹具坐标在 u16 内"),
+            ),
+            ident,
+            param: 0,
+            tag,
+            series: 0,
+        }
+    }
+
+    /// 落区后的**实际**坐标（登录落点由 `enter_map` 裁决，夹具不假设输入值）。
+    fn pos_of(state: &ZoneState, actor: i32) -> (i32, i32) {
+        let e = state.world.entities.get(actor).expect("实体仍在世界");
+        (e.x, e.y)
+    }
+
+    #[test]
+    fn zone_k_move_command_reaches_world_and_emits_walk_frame() {
+        let (mut state, actor) = landed("cmd_move", zone::ZoneId::new(1));
+        let (x, y) = pos_of(&state, actor);
+        // 同区观察者（真实玩家实体 + 在线表 + 展示表）：证明移动帧真的经**本区** gates 表
+        // 发到网关线（`broadcast_ref_msg` 不含自己 ⇒ 没有观察者时本来就不出帧）。
+        state.world.open_session("peer");
+        let peer = state
+            .world
+            .enter_map("peer", new_player_entity("peer".to_string(), x + 2, y), 0)
+            .expect("peer 进图");
+        online_set(
+            &mut state.online,
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "peer".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: peer,
+            },
+        );
+        state.displays.set(
+            peer,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
+        );
+        let (gates, mut rx) = gates_and_rx();
+        handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(mir2_protocol::messages::CM_WALK, x + 1, y, 2),
+        );
+        assert_eq!(
+            pos_of(&state, actor),
+            (x + 1, y),
+            "区 k 的 CM_WALK 必须真的移动实体"
+        );
+        let mut framed = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, SimToGate::SendFrame { socket: 902, .. }) {
+                framed = true;
+            }
+        }
+        assert!(
+            framed,
+            "成功走位必须给观察者产出 SM_WALK 帧（经本区 gates 表）"
+        );
+    }
+
+    #[test]
+    fn zone_k_non_move_command_is_counted_and_ignored() {
+        let (mut state, actor) = landed("cmd_nonmove", zone::ZoneId::new(1));
+        let (gates, _rx) = gates_and_rx();
+        let before_pos = pos_of(&state, actor);
+        let before = perf_counters::zone_cmd_unsupported();
+        handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(
+                mir2_protocol::messages::CM_SAY,
+                before_pos.0 + 1,
+                before_pos.1,
+                0,
+            ),
+        );
+        assert!(
+            perf_counters::zone_cmd_unsupported() > before,
+            "非移动命令必须计入 zone_cmd_unsupported（④b 余量；只断言增量，避免并行测试的计数器互踩）"
+        );
+        assert_eq!(pos_of(&state, actor), before_pos, "非移动命令不得移动实体");
+    }
+
+    #[test]
+    fn post_transfer_move_drop_is_counted() {
+        let (mut state, actor) = landed("cmd_transfer", zone::ZoneId::new(1));
+        let (gates, _rx) = gates_and_rx();
+        let (x, y) = pos_of(&state, actor);
+        // 模拟「handoff 已提升、源区已释放实体」：在线表仍有条目（区域路由未随迁，④b）。
+        assert!(
+            state.world.release_entity(actor),
+            "夹具先摘实体（模拟源区已 release）"
+        );
+        let before = perf_counters::handoff_move_after_transfer_dropped();
+        handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(mir2_protocol::messages::CM_WALK, x + 1, y, 2),
+        );
+        assert!(
+            perf_counters::handoff_move_after_transfer_dropped() > before,
+            "提升后源区丢走位必须计入 handoff_move_after_transfer_dropped"
+        );
+        assert!(
+            state.world.entities.get(actor).is_none(),
+            "丢弃后实体仍不在世界"
+        );
+    }
+
+    /// **两侧判据**（纯谓词，不依赖全局计数器并发状态）：无注册表**且**本批有换图事件才计。
+    /// 红检：把 `counts_as_map_change_unsupported` 改成只看 `changes > 0` ⇒ 本用例红。
+    #[test]
+    fn map_change_count_predicate_needs_missing_registry_and_events() {
+        assert!(
+            counts_as_map_change_unsupported(true, 1),
+            "无注册表 + 有事件 ⇒ 计"
+        );
+        assert!(
+            !counts_as_map_change_unsupported(false, 1),
+            "有注册表 ⇒ 不计（降级只属于缺注册表路径）"
+        );
+        assert!(
+            !counts_as_map_change_unsupported(true, 0),
+            "无事件 ⇒ 不计（空批不是降级）"
+        );
+    }
+
+    /// **集成正向**：`drain_map_change` 走 `registry=None` 的真路径 ⇒ `move_map_change_unsupported`
+    /// 必须增长。红检：删掉 `drain_map_change_at_time` 里的计数调用 ⇒ 本用例红。
+    #[test]
+    fn map_change_without_registry_is_counted() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20), (20, 20)]);
+        world.open_session("hero");
+        let _hero = world
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5),
+                0,
+            )
+            .expect("进图");
+        let online: OnlineRegistry = OnlineRegistry::new();
+        let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        let displays = downlink::DisplayTable::new();
+        world
+            .switch_map_space("hero", 1, 5, 5, false)
+            .expect("换图落地");
+        let before = perf_counters::move_map_change_unsupported();
+        drain_map_change(&mut world, &online, &gates, &displays, None);
+        assert!(
+            perf_counters::move_map_change_unsupported() > before,
+            "无注册表的换图批次必须计入 move_map_change_unsupported"
+        );
+    }
+
+    #[test]
+    fn zone_k_move_across_zone_bounds_marks_handoff_pending() {
+        let (mut state, actor) = landed("cmd_handoff", zone::ZoneId::new(1));
+        let (x, y) = pos_of(&state, actor);
+        // 本区 rect = 落点左侧 5 格到落点本身 ⇒ 向右一格即出界（跨界判定只看 rect）。
+        state.world.set_zone_bounds(Some((0, (x - 5, 0, x, 19))));
+        let (gates, _rx) = gates_and_rx();
+        handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(mir2_protocol::messages::CM_WALK, x + 1, y, 2),
+        );
+        let e = state
+            .world
+            .entities
+            .get(actor)
+            .expect("跨界后实体仍在源区（源从不放手）");
+        assert_eq!((e.x, e.y), (x + 1, y), "跨界移动必须成功落格");
+        assert!(
+            e.handoff_pending,
+            "跨出本区 rect 必须置 handoff_pending（④a 的命令 ⇒ ③ 的 handoff 衔接）"
+        );
+    }
+}
+
 /// 未覆盖（明确登记）：appear/disappear **帧流**（legacy/增量两个 AOI 窗口）需要按帧路径捕获；
 /// 本段先用「可见集合逐 tick 连续」作为等价证据，帧窗口留窗口跑/后续段。
 #[cfg(test)]

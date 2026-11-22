@@ -219,6 +219,14 @@ pub fn apply_map_cells_owned(reg: &MapRegistry, world: &mut World, owned: &[bool
     total
 }
 
+/// **L2-5 ④a**：全图装载（空归属表 = 不做归属过滤）。
+///
+/// 区 k 的 World 拥有全部图（与片所有权正交），与区 0 的生产调用点
+/// （[`apply_map_cells_owned`] + `owned` 掩码）**同源同函数**，只是不做掩码过滤。
+pub fn apply_map_cells_all(reg: &MapRegistry, world: &mut World) -> usize {
+    apply_map_cells_owned(reg, world, &[])
+}
+
 /// `CurMap`（逻辑名）→ `map_id`。
 ///
 /// - 有注册表：`require_id`（找不到 ⇒ `Err`，调用方拒绝进图）；

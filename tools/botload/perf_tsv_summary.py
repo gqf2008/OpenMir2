@@ -5,7 +5,10 @@
 卡：`openmir2-l25-s3-cross-recipient-count` 的段 4（总监 2026-11-22 三条硬要求）。
 
 职责（只做可复算的投影，不下结论）：
-  * **首屏**打印 `cross_recipient_missing` 合计 + 六面分解（合计必须等于六面之和，逐行校验）；
+  * **首屏**打印 `cross_recipient_missing` 合计 + 六面分解（合计必须等于六面之和，逐行校验），
+    **并带本轮窗口（ticks/时长）与 `refmsg_targets` 分母 + 占比**（L2-5 ④a 的 A4 口径）；
+  * 有 ④a 新列（`zone_cmd_unsupported` / `handoff_move_after_transfer_dropped` /
+    `move_map_change_unsupported`）就逐列打印（旧二进制产物缺列 ⇒ 标注 absent，不判错）；
   * 读 perf TSV 的 `region_barrier_us`（max / mean）与 `region_barrier_total_us`（mean）；
   * 从 `load_gate` 的 report JSON 取 tick p50/p99（缺 ⇒ PREREQ，不静默）；
   * 从 RSS 采样 NDJSON 取 `game-svr` 的 WS/私有字节 max/mean；
@@ -48,6 +51,12 @@ HANDFOFF_COLS = [
     "handoff_dup_dropped",
     "mirror_write_refused_cell",
     "mirror_write_refused_occupied",
+]
+# L2-5 ④a 追加的区 k 缺口列：有就打印（新二进制），没有就标注 absent（旧产物仍可读）。
+ZONE_K_COLS = [
+    "zone_cmd_unsupported",
+    "handoff_move_after_transfer_dropped",
+    "move_map_change_unsupported",
 ]
 REQUIRED = CROSS_COLS + [
     TOTAL_COL,
@@ -92,6 +101,7 @@ def _read_tsv(path):
     if not rows:
         raise InputError("perf TSV 只有表头、无 tick 行（探针 fail-closed）：%s" % path)
     optional = [c for c in HANDFOFF_COLS if c in header]
+    optional += [c for c in ZONE_K_COLS if c in header]
     want = REQUIRED + optional
     idx = {name: header.index(name) for name in want}
     out = {name: [] for name in want}
@@ -211,6 +221,8 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
             "targets_total": sum(perf["refmsg_targets"]),
         },
     }
+    present_z = [c for c in ZONE_K_COLS if c in perf]
+    summary["zone_k"] = {c: sum(perf[c]) for c in present_z} if present_z else None
     present = [c for c in HANDFOFF_COLS if c in perf]
     if len(present) == len(HANDFOFF_COLS):
         summary["handoff"] = {c: sum(perf[c]) for c in HANDFOFF_COLS}
@@ -236,13 +248,29 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
     return summary
 
 
+def _window_text(s):
+    """本轮窗口：ticks 恒有；时长只在给了 run.json 时才有（缺 ⇒ 明写 unknown，不静默）。"""
+    if "run" in s:
+        return "ticks=%d 时长=%.1fs" % (s["tick_rows"], s["run"]["duration_sec"])
+    return "ticks=%d 时长=unknown（未给 run.json）" % s["tick_rows"]
+
+
 def print_summary(s):
     cross = s["cross_recipient_missing"]
     print("=== L2-5 ③ 容量切片摘要 (%s) ===" % (s.get("label") or "unlabeled"))
-    # 首屏第一行：合计 + 六面分解（总监硬要求 1）
+    # 首屏第一行：合计 + 六面分解（总监硬要求 1）+ ④a 的 A4 分母口径：
+    # 分母 = 同一投递段的候选收件人次 `refmsg_targets`，占比 = 合计/分母；窗口 = ticks/时长。
+    denom = s["refmsg"]["targets_total"]
+    pct = "%.3f%%" % (100.0 * cross["total"] / denom) if denom > 0 else "n/a"
     print(
-        "cross_recipient_missing（合计）= %d  [%s]"
-        % (cross["total"], " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS))
+        "cross_recipient_missing（合计）= %d / 分母 refmsg_targets=%d = %s（窗口 %s）  [%s]"
+        % (
+            cross["total"],
+            denom,
+            pct,
+            _window_text(s),
+            " ".join("%s=%d" % (c.replace("cross_recipient_", ""), cross[c]) for c in CROSS_COLS),
+        )
     )
     if s.get("total_column_mismatch"):
         m = s["total_column_mismatch"]
@@ -271,6 +299,15 @@ def print_summary(s):
             h["mirror_write_refused_occupied"]))
     else:
         print("handoff: absent（本 TSV 无 handoff 列：旧二进制产物）")
+    zk = s.get("zone_k")
+    if zk:
+        print("zone-k 缺口: cmd_unsupported=%d post_transfer_move_dropped=%d map_change_unsupported=%d" % (
+            zk.get("zone_cmd_unsupported", 0),
+            zk.get("handoff_move_after_transfer_dropped", 0),
+            zk.get("move_map_change_unsupported", 0),
+        ))
+    else:
+        print("zone-k 缺口: absent（本 TSV 无 ④a 列：旧二进制产物）")
     ib = s["inbound"]
     print("inbound: enq=%.2f/tick drained=%.2f/tick carry_ticks=%d budget_hit_ticks=%d" % (
         ib["enqueued_mean"], ib["drained_mean"], ib["carry_ticks"], ib["budget_hit_ticks"]))
@@ -323,7 +360,7 @@ def selftest():
         header = ["region_barrier_us"] + list(reversed(CROSS_COLS)) + [
             "region_barrier_total_us", "inbound_enqueued", "inbound_drained", "inbound_carry",
             "inbound_budget_hit", "refmsg_calls", "refmsg_targets", TOTAL_COL,
-        ]
+        ] + list(reversed(ZONE_K_COLS))
         row = {c: 0 for c in header}
         row["region_barrier_us"] = 120
         row["region_barrier_total_us"] = 240
@@ -334,6 +371,9 @@ def selftest():
         row["cross_recipient_refmsg"] = 1
         row["cross_recipient_mountride"] = 2
         row[TOTAL_COL] = 3  # = 1 + 2
+        row["zone_cmd_unsupported"] = 3
+        row["handoff_move_after_transfer_dropped"] = 1
+        row["move_map_change_unsupported"] = 0
         rows = [dict(row), dict(row)]
         perf = os.path.join(td, "perf.tsv")
         _write(perf, _tsv(header, [[r[h] for h in header] for r in rows]))
@@ -354,6 +394,27 @@ def selftest():
         expect(s["tick"]["tick_p50_ms"] == 41, "p50 应取 count=1000 档")
         expect(s["rss"]["game-svr"]["ws"]["max_mb"] == 200.0, "RSS ws max 应为 200MB")
         expect(s["region_barrier_us"]["max"] == 120, "barrier max 应为 120")
+        expect(s["zone_k"]["zone_cmd_unsupported"] == 6, "④a 列按名求和（3×2 行）")
+
+        # A4 口径：首屏第一行必带窗口（ticks/时长）+ refmsg_targets 分母 + 占比。
+        import contextlib
+        import io as _io
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_summary(s)
+        first = buf.getvalue().splitlines()[1]  # 第 1 行是标题，A4 口径在首屏第二行
+        expect("分母 refmsg_targets=10" in first, "首屏必须带 refmsg_targets 分母：%s" % first)
+        expect("窗口 ticks=2 时长=0.4s" in first, "首屏必须带窗口（ticks/时长）：%s" % first)
+        expect("= 60.000%" in first, "占比 = 6/10：%s" % first)
+        expect("zone-k 缺口" in buf.getvalue(), "④a 列必须打印")
+
+        # 无 run.json ⇒ 时长明写 unknown（不静默丢窗口）。
+        s_norun = summarize(perf, None, rep, None, bots=1000, label="2zone")
+        buf2 = _io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            print_summary(s_norun)
+        first2 = buf2.getvalue().splitlines()[1]
+        expect("窗口 ticks=2 时长=unknown" in first2, "缺 run.json 时长必须明写 unknown：%s" % first2)
 
         # 负例 1：缺列（把 total 列改名）⇒ rc=2
         bad = perf + ".bad.tsv"
