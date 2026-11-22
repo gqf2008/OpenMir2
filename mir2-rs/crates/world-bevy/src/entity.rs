@@ -3520,6 +3520,9 @@ pub trait EntityAccess {
     fn set_progression(&mut self, id: i32, progression: Progression) -> bool;
     /// `MapBinding` 的可变视图（`EntityMut` 不含该组件；`verify_map_time` 写 `VerifyTick`/`AddToMaped`）。
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
+    /// **删除前的离场标记**（AOI 的 oracle 保留引用语义；见 `crate::aoi::DepartureMark`）。
+    /// 缺省 no-op（测试桩/段访问器不参与）；`EntityStore` 覆写为写入 bevy 资源。
+    fn record_departure(&mut self, _id: i32, _ghost: bool, _fixed_hide_mode: bool, _now_ms: i64) {}
     /// `DupState` 快照（`EntityMut`/`EntityRef` 不含该组件；`check_dup_obj` 用）。
     fn dup_state(&mut self, id: i32) -> Option<crate::DupState>;
     /// `DupState` 可变视图（`check_dup_obj` 的 tick/置位写回）。
@@ -3534,6 +3537,9 @@ pub trait EntityAccess {
 }
 
 impl EntityAccess for EntityStore {
+    fn record_departure(&mut self, id: i32, ghost: bool, fixed_hide_mode: bool, now_ms: i64) {
+        EntityStore::record_departure(self, id, ghost, fixed_hide_mode, now_ms);
+    }
     fn order_ids(&self) -> Vec<i32> {
         self.order_index()
     }
@@ -3621,6 +3627,16 @@ where
         + crate::tick::Reads<NpcState>
         + crate::tick::Reads<AiState>,
 {
+    fn record_departure(&mut self, id: i32, ghost: bool, fixed_hide_mode: bool, now_ms: i64) {
+        // 段访问器直写 bevy **资源**（不经组件白名单）：离场标记是 AOI 诊断面，不是实体组件。
+        if let Some(mut marks) = self
+            .ad
+            .world_mut()
+            .get_resource_mut::<crate::aoi::DepartureMarks>()
+        {
+            marks.insert(id, ghost, fixed_hide_mode, now_ms);
+        }
+    }
     fn order_ids(&self) -> Vec<i32> {
         // **T10 Top2**：旧实现 `order()`（克隆 11k 项 `(id, Entity)` Vec）+ 再 `collect`
         // 一个 `Vec<i32>` = 每 tick 两次全量分配；改为从槽位表**一次**收集 id。

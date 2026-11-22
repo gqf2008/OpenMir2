@@ -690,6 +690,12 @@ pub struct StageEntities<'w, S: StageSpec> {
 }
 
 impl<'w, S: StageSpec> StageEntities<'w, S> {
+    /// 段内直取 bevy World（**只给资源读写**：`StageAccess::record_departure` 写 AOI 离场标记；
+    /// 组件访问仍必须走 `view_mut` 的段白名单）。
+    pub fn world_mut(&mut self) -> &mut World {
+        self.world
+    }
+
     pub fn new(world: &'w mut World) -> Self {
         let queries = Some(
             world

@@ -9673,6 +9673,12 @@ impl World {
                 return false;
             }
         }
+        // **离场标记**：与其它删除入口同形（`Command::Leave` 当前调用点只在测试/bench，但它是
+        // 同一类陷阱的下一个入口；见 `aoi::DepartureMark`）。
+        if let Some(e) = access.get(actor_id) {
+            let (ghost, fixed_hide_mode) = (e.ghost, e.fixed_hide_mode);
+            access.record_departure(actor_id, ghost, fixed_hide_mode, sim.clock_ms);
+        }
         access.remove(actor_id);
         true
     }
@@ -15466,6 +15472,38 @@ mod tests {
         assert_eq!(e.death_tick, 0, "死亡结算不得推进 death_tick");
         assert!(rec.skeletons.is_empty(), "不得产生尸体/骷髅事件");
         assert!(rec.death_use_item_drops.is_empty(), "不得产生玩家掉落");
+    }
+
+    /// **本卡（复核补口）**：`World::leave`（→ `Command::Leave` → `leave_world_impl`）也必须记
+    /// 离场标记。今天该入口只在测试/bench 可达，但它是同类陷阱的下一个入口。
+    ///
+    /// 红检：删 `leave_world_impl` 里的 `record_departure` ⇒ 本用例红（没有消失帧）。
+    #[test]
+    fn departure_mark_via_command_leave_emits_hide() {
+        let mut w = World::new(32, 32);
+        let _viewer = w.add_entity(player(1, "v", 10, 10, 10));
+        let t = w.add_entity(player(2, "t", 11, 10, 10));
+        // 首次扫描（tick 5）看见 t。
+        for _ in 0..=5 {
+            let mut rec = w.tick_phase1();
+            w.tick_phase2(&mut rec);
+        }
+        assert!(
+            w.entities
+                .get(1)
+                .is_some_and(|v| v.visible_actors.iter().any(|x| x.target == t)),
+            "首次扫描必须看见 t"
+        );
+        w.leave(t);
+        let mut hid = false;
+        for _ in 0..6 {
+            let mut rec = w.tick_phase1();
+            w.tick_phase2(&mut rec);
+            if rec.hides.iter().any(|(o, x)| *o == 1 && *x == t) {
+                hid = true;
+            }
+        }
+        assert!(hid, "Command::Leave 删除的可见实体必须在下次扫描出消失帧");
     }
 
     /// **本卡（U3 验收 · 重进清旧 ghost 同款）**：ghost 被删不发，非 ghost 被删照发。
