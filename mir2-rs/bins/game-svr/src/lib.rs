@@ -20291,6 +20291,9 @@ fn world_aoi_diag(
     displays: &downlink::DisplayTable,
     aoi_frames: &std::collections::HashMap<String, usize>,
 ) -> WorldDiag {
+    // 测试期计数：证明「被闸住时**计算**被跳过」，而不只是「没打印」。
+    #[cfg(test)]
+    AOI_DIAG_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let entities: Vec<mir2_world_bevy::EntityRef<'_>> = world.entities.iter_ref().collect();
     let mut sessions = Vec::new();
     for sess in world.sessions.iter() {
@@ -20358,6 +20361,41 @@ fn world_aoi_diag(
         displays: displays.len(),
         sessions,
     }
+}
+
+/// 测试期计数：`world_aoi_diag` 被调用次数（见 `host_diag_computation_is_skipped_when_dbg_is_gated`）。
+#[cfg(test)]
+static AOI_DIAG_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn aoi_diag_calls() -> u64 {
+    AOI_DIAG_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// **HostDiag 是否该算这一拍**：`ticks % 50 == 0` **且** `DBG` 未被 `MIR2_LOG_LEVEL` 闸住。
+///
+/// 缘由（opc-27 2026-11-23）：`world_aoi_diag` 每 50 tick 全量扫会话/实体，真机摊薄 ≈7.3ms、
+/// 单次 ≈365ms（≈每 10s 一次）。这是**测量自身**的成本，不是被测路径；`glog!` 被闸住时
+/// 输出本就不写，但计算仍在跑 ⇒ 计算一起跳过。
+///
+/// 成本：`ticks.is_multiple_of(50)` **先短路**，非 50 倍数零额外成本；50 倍数多一次
+/// relaxed 原子读。默认（未设 `MIR2_LOG_LEVEL`）⇒ 阈值 4 ⇒ 判定恒真 ⇒ 计算与输出逐字节不变。
+fn host_diag_due(ticks: u64) -> bool {
+    ticks.is_multiple_of(50) && crate::log_level::enabled(crate::log_level::severity_for("DBG"))
+}
+
+/// HostDiag 的**唯一**生产入口：闸外不计算（`None`）。生产调用点只经此函数触达
+/// [`world_aoi_diag`]——把计算挪回闸外，`host_diag_computation_is_skipped_when_dbg_is_gated` 即红。
+fn host_diag_maybe(
+    ticks: u64,
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    aoi_frames: &std::collections::HashMap<String, usize>,
+) -> Option<WorldDiag> {
+    if !host_diag_due(ticks) {
+        return None;
+    }
+    Some(world_aoi_diag(world, displays, aoi_frames))
 }
 
 /// 实体是否仍在格子索引里（`MapGrid` 对应格的 `ObjList` 有 `ActorObject` 且 id 匹配）。
@@ -37130,8 +37168,7 @@ fn sim_loop(
         drain_reconnects(&mut reconnect_pending, &mut ground_sessions, &gates);
         host_prof.end("HostSwitch", t);
         let t = host_prof.begin();
-        if ticks.is_multiple_of(50) {
-            let diag = world_aoi_diag(&world, &displays, &aoi_frames_total);
+        if let Some(diag) = host_diag_maybe(ticks, &world, &displays, &aoi_frames_total) {
             glog!(
                 "DBG",
                 "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
@@ -44834,6 +44871,55 @@ mod tests {
         assert!(s.vis >= 1, "近怪（距离 2 ≤ view_range）必须在可见集：{s:?}");
         assert_eq!(s.same_map, 2, "同图除自己外 2 只");
         assert_eq!(s.nearest, 2, "最近 Chebyshev 距离 = 2（近怪）");
+    }
+
+    /// **测量开销自降（opc-27 2026-11-23）**：`MIR2_LOG_LEVEL=INFO`（阈值 3）下 HostDiag 的
+    /// **计算**被跳过——要证的**不是**「没打印」（打印本就被 `glog!` 闸住），而是
+    /// `world_aoi_diag` **未被调用**（测试期计数器）。
+    ///
+    /// 默认（阈值 4）⇒ 每 50 tick 照常计算；非 50 倍数 ⇒ 不计算。
+    /// 红检：把计算挪回闸外 / `host_diag_due` 去掉级别判定 ⇒ INFO 段的调用计数 +1 ⇒ 必红。
+    #[test]
+    fn host_diag_computation_is_skipped_when_dbg_is_gated() {
+        let _g = crate::log_level::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut world = mir2_world_bevy::World::new(10, 10);
+        world.open_session("p");
+        let displays = downlink::DisplayTable::new();
+        let aoi = std::collections::HashMap::new();
+
+        crate::log_level::set_threshold_for_test(3); // INFO：DBG 被闸
+        let before = aoi_diag_calls();
+        assert!(
+            host_diag_maybe(50, &world, &displays, &aoi).is_none(),
+            "INFO 阈值下不计算"
+        );
+        assert!(
+            host_diag_maybe(100, &world, &displays, &aoi).is_none(),
+            "INFO 阈值下不计算（第二个 50 倍数）"
+        );
+        assert_eq!(
+            aoi_diag_calls(),
+            before,
+            "INFO 阈值下 world_aoi_diag 不得被调用（不是「没打印」）"
+        );
+
+        crate::log_level::set_threshold_for_test(4); // 默认全打
+        assert!(
+            host_diag_maybe(49, &world, &displays, &aoi).is_none(),
+            "非 50 倍数不计算"
+        );
+        assert_eq!(aoi_diag_calls(), before, "非 50 倍数不得计算");
+        assert!(
+            host_diag_maybe(50, &world, &displays, &aoi).is_some(),
+            "默认阈值下照常计算"
+        );
+        assert_eq!(
+            aoi_diag_calls(),
+            before + 1,
+            "默认阈值下恰好计算一次（与今天逐字节相同的前提）"
+        );
     }
 
     /// 卡 `openmir2-client-e2e-enter-gaps` 缺口②（root 2026-10-14 判读误伤）：AOI 诊断的 `vis`

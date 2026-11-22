@@ -798,6 +798,9 @@ mod test_log_gate {
     /// 默认（阈值 4）下为 true；WRN/INF 在 INFO 下仍为 true。
     #[test]
     fn ids_debug_is_gated_by_log_level() {
+        let _g = crate::log_level::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::log_level::set_threshold_for_test(4);
         assert!(ids_log_enabled("DBG"), "默认全打");
         crate::log_level::set_threshold_for_test(3);
