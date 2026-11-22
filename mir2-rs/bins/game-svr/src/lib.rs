@@ -117670,6 +117670,193 @@ mod l2_multi_zone_ledger_tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // C1–C3（Q1 裁决）：同格序 = owner 格内进入序 vs 镜像追加序
+    // ------------------------------------------------------------------
+
+    const TICKS_ORDER: u64 = 12;
+
+    /// 单 World 基线跑法（与 `run_baseline` 同一条 drain，但 rig 由调用方给）。
+    fn run_one_world(mut rig: ZoneRig, ticks: u64) -> Vec<(i32, String, u16)> {
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut frames = Vec::new();
+        for _ in 0..ticks {
+            let mut rec = rig.world.tick_head();
+            rig.world.tick_tail(&mut rec);
+            let _ = drain_run_downlinks_with_magic(
+                &rec,
+                &mut rig.world,
+                &rig.displays,
+                &rig.online,
+                &mut rig.sessions,
+                &rig.gates,
+                &catalog,
+                12,
+                3000,
+                3000,
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            frames.extend(collect_aoi(&rig.world, &mut rig.rx));
+        }
+        frames
+    }
+
+    /// 任意两区 rig 的拆区跑法（恒开镜像 + §7 收件人区口径）。
+    fn run_split_with_rigs(
+        zone0_rig: ZoneRig,
+        zone1_rig: ZoneRig,
+        ticks: u64,
+    ) -> Vec<(i32, String, u16)> {
+        let layout = Arc::new(two_zone_layout());
+        let exchange = Arc::new(HaloExchange::new(2));
+        let barriers = Arc::new(TickBarriers::new(2));
+        let outbox = Arc::new(Mutex::new(CrossZoneOutbox::with_criterion(
+            2,
+            EmitterCriterion::RecipientZone,
+        )));
+        let router = Arc::new(ZoneRouter::new());
+        router.assign(0, 9001, zone(0)).expect("O 在区 0");
+        let _ = router.assign(1, 9002, zone(1));
+        let catalog = Arc::new(game_svr::ability::StdItemCatalog::new());
+        let after_drain = Arc::new(std::sync::Barrier::new(2));
+        let zone0 = spawn_zone_thread(
+            zone(0),
+            zone0_rig,
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+            true,
+        );
+        let zone1 = spawn_zone_thread(
+            zone(1),
+            zone1_rig,
+            Arc::clone(&layout),
+            Arc::clone(&exchange),
+            Arc::clone(&barriers),
+            Arc::clone(&outbox),
+            Arc::clone(&router),
+            Arc::clone(&catalog),
+            Arc::clone(&after_drain),
+            ticks,
+            true,
+        );
+        let mut frames = zone0.join().expect("区 0 线程");
+        frames.extend(zone1.join().expect("区 1 线程"));
+        frames
+    }
+
+    /// 基线/拆区各跑两遍并断言确定性 + 逐收件人有序帧流相等。
+    fn assert_split_matches_baseline(
+        baseline_rig: impl Fn() -> ZoneRig,
+        zone0_rig: impl Fn() -> ZoneRig,
+        zone1_rig: impl Fn() -> ZoneRig,
+        what: &str,
+    ) {
+        let baseline = by_socket(&run_one_world(baseline_rig(), TICKS_ORDER));
+        let baseline_again = by_socket(&run_one_world(baseline_rig(), TICKS_ORDER));
+        assert_eq!(baseline, baseline_again, "{what}：基线两遍必须逐字节相同");
+        let split = by_socket(&run_split_with_rigs(zone0_rig(), zone1_rig(), TICKS_ORDER));
+        let split_again = by_socket(&run_split_with_rigs(zone0_rig(), zone1_rig(), TICKS_ORDER));
+        assert_eq!(split, split_again, "{what}：拆区两遍必须逐字节相同");
+        assert_eq!(
+            split, baseline,
+            "{what}：每收件人有序出现帧流必须与单 World 基线逐条相同"
+        );
+        assert!(
+            split.values().any(|v| !v.is_empty()),
+            "{what}：夹具必须真的产生出现帧（否则「空 == 空」会假绿）"
+        );
+    }
+
+    /// **C1/Q1 布局 1**：同格两镜像，**槽位序 == 进入序**（两怪按创建序同格落格）。
+    ///
+    /// 说明：本布局下两序相同 ⇒ 若只按槽位序追加也**不会红**，是「牙是空的」对照组；
+    /// 真正咬住的是布局 2。
+    #[test]
+    fn step2_same_cell_order_slot_equals_entry() {
+        let players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5)];
+        assert_split_matches_baseline(
+            || build_zone_rig(0, 0, &players, &[(21, "m1", 11, 5), (22, "m2", 11, 5)]),
+            || build_zone_rig(0, 0, &players, &[]),
+            || {
+                build_zone_rig(
+                    crate::shard::ACTOR_ID_SEGMENT,
+                    1,
+                    &[],
+                    &[(21, "m1", 11, 5), (22, "m2", 11, 5)],
+                )
+            },
+            "同格两镜像_槽位序==进入序",
+        );
+    }
+
+    /// **C2/Q1 布局 2（Q2 的正例）**：同格两实体，**槽位序 ≠ 进入序**。
+    ///
+    /// 构造：怪物 `m1` 先 `add_entity`（槽位在前、`Enter` 延到首 tick），玩家 `p2` 后
+    /// `enter_map`（槽位在后、**当场进格**）⇒ 基线格内序 = `[p2, m1]`，槽位序 = `[m1, p2]`。
+    ///
+    /// 红检（实测方向）：`apply_mirrors` 若按槽位序追加（删掉 `cell_pos` 定序）⇒ 拆区格内序
+    /// 变成 `[m1, p2]` ⇒ 本用例 `FIRST_DIFF` 红。
+    #[test]
+    fn step2_same_cell_order_slot_differs_from_entry() {
+        let base_players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5), ("p2", 9002, 11, 5)];
+        let zone0_players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5)];
+        let zone1_players: Vec<(&str, i32, i32, i32)> = vec![("p2", 9002, 11, 5)];
+        assert_split_matches_baseline(
+            || build_zone_rig(0, 0, &base_players, &[(21, "m1", 11, 5)]),
+            || build_zone_rig(0, 0, &zone0_players, &[]),
+            || {
+                build_zone_rig(
+                    crate::shard::ACTOR_ID_SEGMENT,
+                    1,
+                    &zone1_players,
+                    &[(21, "m1", 11, 5)],
+                )
+            },
+            "同格两镜像_槽位序≠进入序",
+        );
+    }
+
+    /// **C3/Q1 布局 3（多格混合）**：格 (11,5) 槽位≠进入序、格 (11,6) 同格两怪、
+    /// 格 (12,5) 单实体——整条有序帧流必须与基线相同。
+    ///
+    /// 红检：同布局 2（删 `cell_pos` 定序 ⇒ (11,5) 的 `[p2,m1]` 反序 ⇒ 红）。
+    #[test]
+    fn step2_same_cell_order_mixed_cells() {
+        let base_players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5), ("p2", 9002, 11, 5)];
+        let zone0_players: Vec<(&str, i32, i32, i32)> = vec![("O", 9001, 8, 5)];
+        let zone1_players: Vec<(&str, i32, i32, i32)> = vec![("p2", 9002, 11, 5)];
+        let base_mons: Vec<(i32, &str, i32, i32)> = vec![
+            (21, "m1", 11, 5),
+            (23, "m3", 11, 6),
+            (24, "m4", 11, 6),
+            (25, "m5", 12, 5),
+        ];
+        assert_split_matches_baseline(
+            || build_zone_rig(0, 0, &base_players, &base_mons),
+            || build_zone_rig(0, 0, &zone0_players, &[]),
+            || {
+                build_zone_rig(
+                    crate::shard::ACTOR_ID_SEGMENT,
+                    1,
+                    &zone1_players,
+                    &base_mons,
+                )
+            },
+            "多格混合",
+        );
+    }
+
     /// **C4 夹具**：O（区 0）在 (8,2)，`eb`（区 1）在 (11,2)，`eb` 展示带 `mount_id=1`。
     /// 两区都开镜像 ⇒ O 通过镜像看 `eb`，`eb` 的展示项来自区 1 的快照。
     fn run_split_c4(ticks: u64) -> Vec<(i32, String, u16)> {

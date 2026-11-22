@@ -191,6 +191,13 @@ pub struct HaloEntity {
     pub ob_mode: bool,
     /// 主人（宝宝/分身）；`None` = 无主。
     pub master: Option<i32>,
+    /// **格内序（Q1 裁决）**：owner 侧该格 `obj_list` 里的下标（非 actor 对象也计入，保证相对序
+    /// 单调）。镜像按它追加 ⇒ 收件人世界的格内序 = owner 侧的「进入该格先后」。
+    ///
+    /// 为什么不是槽位序：oracle 扫描按 `obj_list` 下标序出帧，而槽位序是实体存储的分配序——
+    /// 「后进先出 / 延迟 `Enter`」时两者不等，用槽位序会让同格出现帧相对序与基线不同。
+    /// 读不到（未落格/越界）⇒ `usize::MAX`（排最后；正常不会发生）。
+    pub cell_pos: usize,
     /// owner 区展示表条目（`None` = owner 侧本就没有 ⇒ 镜像也不登记）。
     pub display: Option<HaloDisplay>,
     /// 玩家网关路由（`None` = 非玩家/未登记）。
@@ -249,6 +256,14 @@ pub fn snapshot_border(
             fixed_hide_mode: e.fixed_hide_mode,
             ob_mode: e.ob_mode,
             master: e.master,
+            cell_pos: world
+                .map(map_id)
+                .get_cell_info(e.x, e.y)
+                .0
+                .obj_list
+                .iter()
+                .position(|o| o.actor_object && o.cell_obj_id == e.id)
+                .unwrap_or(usize::MAX),
             display: source
                 .displays
                 .and_then(|d| d.get(e.id))
@@ -627,8 +642,16 @@ pub fn apply_mirrors(
 ) -> Result<MirrorStats, ZoneTickError> {
     let mut stats = MirrorStats::default();
     let mut seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    for snap in neighbors {
-        for e in &snap.entities {
+    // **同格序（Q1 裁决 / §9.1.2）**：先按 `(map, x, y, cell_pos, id)` 定序，再逐条 upsert。
+    // 镜像的格子登记是「追加」⇒ 只有按 owner 侧格内序追加，收件人世界的 `obj_list` 序才与基线
+    // 一致（否则出现帧相对序会不同）。跨格定序只影响镜像槽位序（确定性），不影响扫描（按坐标）。
+    let mut ordered: Vec<&HaloEntity> = neighbors
+        .iter()
+        .flat_map(|snap| snap.entities.iter())
+        .collect();
+    ordered.sort_by_key(|e| (e.map_id, e.x, e.y, e.cell_pos, e.actor_id));
+    for e in ordered {
+        {
             seen.insert(e.actor_id);
             let spec = MirrorSpec {
                 id: e.actor_id,
@@ -1708,6 +1731,7 @@ mod tests {
                     fixed_hide_mode: false,
                     ob_mode: false,
                     master: None,
+                    cell_pos: 0,
                     display: None,
                     route: None,
                 }],
@@ -1781,6 +1805,7 @@ mod tests {
             fixed_hide_mode: false,
             ob_mode: false,
             master: None,
+            cell_pos: 0,
             display: None,
             route: None,
         }
