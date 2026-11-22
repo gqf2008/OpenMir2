@@ -396,6 +396,129 @@ def summarize_mem(rows, tail_sec=60, peak_mean_pct=5.0):
     return out
 
 
+
+def _mem_series_stats(rs, tail_sec=60, peak_mean_pct=5.0):
+    """一组采样行（单进程或单实例）的内存峰值/均值/末段斜率。与 summarize_mem 的计算逐字段一致。"""
+    rs = [r for r in rs if r.get("ws_mb") is not None]
+    if not rs:
+        return None
+    ws = [r["ws_mb"] for r in rs]
+    t0 = rs[0].get("t_ms", 0)
+    last = rs[-1]
+    tail = [r for r in rs if r.get("t_ms", 0) >= last.get("t_ms", 0) - tail_sec * 1000]
+    if len(tail) >= 2:
+        dt = (tail[-1]["t_ms"] - tail[0]["t_ms"]) / 1000.0
+        slope = (tail[-1]["ws_mb"] - tail[0]["ws_mb"]) / dt if dt > 0 else 0.0
+    else:
+        slope = None
+    ws_peak = round(max(ws), 1)
+    ws_mean = round(sum(ws) / len(ws), 1)
+    peak_mean_gap = (round(100.0 * (ws_peak - ws_mean) / ws_mean, 1) if ws_mean > 0 else None)
+    return {
+        "samples": len(rs),
+        "ws_peak_mb": ws_peak,
+        "ws_mean_mb": ws_mean,
+        "ws_last_mb": round(ws[-1], 1),
+        "priv_peak_mb": round(max((r.get("priv_mb") or 0) for r in rs), 1),
+        "slope_tail_mb_per_s": (round(slope, 3) if slope is not None else None),
+        "tail_window_s": round((last.get("t_ms", 0) - tail[0].get("t_ms", 0)) / 1000.0, 1) if tail else 0,
+        "window_s": round((last.get("t_ms", 0) - t0) / 1000.0, 1),
+        "peak_mean_gap_pct": peak_mean_gap,
+        "peak_mean_pct": peak_mean_pct,
+        "peak_mean_ok": (peak_mean_gap is not None) and (peak_mean_gap < peak_mean_pct),
+    }
+
+
+def summarize_mem_instances(rows, tail_sec=60, peak_mean_pct=5.0):
+    """**分片聚合（C4 前置，2026-11-23）**：按 `(proc, pid)` 分组给每个实例的内存曲线，
+    另给每个 proc 名下的『合计』视图（把同一 t_ms 的各实例 ws/priv 求和）。
+
+    返回 `{"by_instance": {"BotSvr#1234": {...}}, "by_proc_sum": {"BotSvr": {...}}, "instances": N}`。
+    单实例时 by_proc_sum 与 summarize_mem 逐字段相等（向后兼容）；summarize_mem 本身不改。
+    """
+    by_inst = {}
+    for r in rows:
+        pid = r.get("pid")
+        key = "%s#%s" % (r.get("proc"), pid) if pid is not None else str(r.get("proc"))
+        by_inst.setdefault(key, []).append(r)
+    inst = {}
+    for k, rs in sorted(by_inst.items()):
+        st = _mem_series_stats(rs, tail_sec, peak_mean_pct)
+        if st is not None:
+            inst[k] = st
+    # 合计：同 proc 名下按 t_ms 把各实例求和（同一采样循环的各 pid 共享 t_ms）
+    by_t = {}
+    for r in rows:
+        by_t.setdefault(r.get("proc"), {}).setdefault(r.get("t_ms"), []).append(r)
+    by_proc_sum = {}
+    for proc, tmap in sorted(by_t.items(), key=lambda kv: str(kv[0])):
+        summed = []
+        for t, rs in sorted(tmap.items(), key=lambda kv: (kv[0] is None, kv[0] or 0)):
+            summed.append({
+                "proc": proc, "pid": None, "t_ms": t,
+                "ws_mb": sum((x.get("ws_mb") or 0) for x in rs),
+                "priv_mb": sum((x.get("priv_mb") or 0) for x in rs),
+                "cpu_s": sum((x.get("cpu_s") or 0) for x in rs),
+            })
+        st = _mem_series_stats(summed, tail_sec, peak_mean_pct)
+        if st is not None:
+            by_proc_sum[proc] = st
+    return {"by_instance": inst, "by_proc_sum": by_proc_sum, "instances": len(inst)}
+
+
+def _sum_numeric_dict(a, b):
+    """两个计数字典逐键求和（非数值键保留先到者）。用于 ident_counts / error_census。"""
+    out = dict(a or {})
+    for k, v in (b or {}).items():
+        cur = out.get(k)
+        if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and isinstance(cur, (int, float)) and not isinstance(cur, bool)):
+            out[k] = cur + v
+        elif k not in out:
+            out[k] = v
+    return out
+
+
+def _merge_stats_rows(rows):
+    """把同一时刻各分片的一行合并为一行：计数求和、hist 逐桶求和、tick_max_ms 取 max、
+    ident_counts/error_census 逐键求和、t_ms/hist_bucket_ms/schema 取首个、字符串取首见。"""
+    first = rows[0]
+    m = dict(first)
+    for r in rows[1:]:
+        for k, v in r.items():
+            if k in ("t_ms", "hist_bucket_ms", "error_census_schema", "hist"):
+                continue  # 取首个 / hist 另行逐桶求和
+            if k == "tick_max_ms":
+                if isinstance(v, (int, float)) and isinstance(m.get(k), (int, float)):
+                    m[k] = max(m[k], v)
+                else:
+                    m[k] = v
+            elif isinstance(v, dict):
+                m[k] = _sum_numeric_dict(m.get(k) if isinstance(m.get(k), dict) else {}, v)
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                cur = m.get(k)
+                m[k] = (cur + v) if (isinstance(cur, (int, float)) and not isinstance(cur, bool)) else v
+            elif k not in m:
+                m[k] = v
+    hs = [r.get("hist", []) for r in rows]
+    n = max((len(h) for h in hs), default=0)
+    m["hist"] = [sum((h[i] if i < len(h) else 0) for h in hs) for i in range(n)]
+    return m
+
+
+def merge_shard_stats(stats_list):
+    """**分片聚合（C4 前置）**：多份 load_stats.ndjson（每分片一份）按行下标对齐后逐行求和。
+    单分片原样返回（向后兼容）。随后交给 `summarize_tick(merged, total_count)` ⇒
+    login/world/internal/tick 全部『求和后再算比率』（不是对各分片比率取平均）。"""
+    stats_list = [s for s in stats_list if s]
+    if not stats_list:
+        return []
+    if len(stats_list) == 1:
+        return stats_list[0]
+    n = min(len(s) for s in stats_list)
+    return [_merge_stats_rows([s[i] for s in stats_list]) for i in range(n)]
+
+
 def summarize_login_conns(rows, bucket_ms=5000):
     """T-11 残余丢包**方向**归算（owner 裁决 11dbde39 的 must_first）。
 
@@ -1303,10 +1426,17 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
 
 
 def cmd_summarize(args):
-    stats = load_ndjson(args.stats) if args.stats else []
+    stat_paths = args.stats if isinstance(args.stats, list) else ([args.stats] if args.stats else [])
+    stat_paths = [x for x in stat_paths if x]
+    stats = merge_shard_stats([load_ndjson(p) for p in stat_paths])
     tier = summarize_tick(stats, args.count)
+    tier["shards"] = {"stats_files": len(stat_paths), "merged": len(stat_paths) > 1}
     if args.mem:
-        tier["mem"] = summarize_mem(load_ndjson(args.mem), tail_sec=args.mem_tail_sec)
+        _mem_rows = load_ndjson(args.mem)
+        tier["mem"] = summarize_mem(_mem_rows, tail_sec=args.mem_tail_sec)
+        _mi = summarize_mem_instances(_mem_rows, tail_sec=args.mem_tail_sec)
+        if _mi["instances"] > 1:
+            tier["mem_instances"] = _mi
     # 卡 openmir2-botsrv-actor-pool-leak（总监追加）：只采样落盘、不参与越界判定的服务端进程名。
     # 声明值与「实际在 mem 行里出现过的名字」分开记录：不在跑 ⇒ 无行即为事实，不补 0。
     extra_names = [x for x in (args.mem_extra_names or "").replace(",", " ").split() if x]
@@ -2226,6 +2356,47 @@ def cmd_selftest(_args):
     expect(_tw2["window"]["conclusion_valid"] is True and _tw2["window"]["conclusion_invalid_reason"] == "",
            "HoldSec=360 时 conclusion_valid 必须 true")
 
+    # 9) C4 前置（2026-11-23）：(proc,pid) 分组 + 各分片/合计两视图；分片求和后再算比率。
+    # 9a) mem：两个 BotSvr 进程（pid 1001/1002）各一路采样 ⇒ by_instance 两键、by_proc_sum 峰值=同刻求和。
+    _mem_shard = []
+    for _pid, _base in ((1001, 1000.0), (1002, 1200.0)):
+        for _k in range(3):
+            _mem_shard.append({"proc": "BotSvr", "pid": _pid, "t_ms": _k * 1000,
+                               "ws_mb": _base + _k * 10, "priv_mb": _base + _k * 10, "cpu_s": 0})
+    _mi = summarize_mem_instances(_mem_shard)
+    expect(set(_mi["by_instance"]) == {"BotSvr#1001", "BotSvr#1002"},
+           "mem 实例必须按 (proc,pid) 分组，实得 " + str(sorted(_mi["by_instance"])))
+    expect(_mi["by_proc_sum"]["BotSvr"]["ws_peak_mb"] == 2240.0,
+           "合计峰值 = 各实例同刻求和（2200/2220/2240 ⇒ 2240），实得 "
+           + str(_mi["by_proc_sum"]["BotSvr"]["ws_peak_mb"]))
+    _m1 = summarize_mem([{"proc": "BotSvr", "pid": 7, "t_ms": 0, "ws_mb": 100, "priv_mb": 100},
+                         {"proc": "BotSvr", "pid": 7, "t_ms": 1000, "ws_mb": 120, "priv_mb": 120}])
+    expect(_m1["BotSvr"]["ws_peak_mb"] == 120.0, "单 pid 的 summarize_mem 输出必须不变（向后兼容）")
+
+    # 9b) stats：A=100/100、B=150/300 ⇒ 求和=250/400=62.5%（若取比率平均会是 75%）⇒ 证明「先求和再算比率」。
+    def _shard_stats(_ok, _nrows=3):
+        return [{"t_ms": _i * 1000, "login_ok": (_ok if _i >= 1 else 0),
+                 "in_world": (_ok if _i >= 1 else 0),
+                 "internal_errors": (1 if _i == _nrows - 1 else 0),
+                 "hist": ([0, 1] if _i == _nrows - 1 else [0, 0]),
+                 "tick_samples": (1 if _i == _nrows - 1 else 0),
+                 "tick_sum_ms": (_ok if _i == _nrows - 1 else 0),
+                 "tick_max_ms": (_ok if _i == _nrows - 1 else 0),
+                 "hist_bucket_ms": 1, "error_census_schema": "x",
+                 "ident_counts": {"a": _ok}} for _i in range(_nrows)]
+    _sA = _shard_stats(100)
+    _sB = _shard_stats(150)
+    _merged = merge_shard_stats([_sA, _sB])
+    _t = summarize_tick(_merged, 400)  # 目标总数 = 100+300
+    expect(_t["peak_login_ok"] == 250 and _t["login_success_pct"] == round(100.0 * 250 / 400, 2),
+           "分片 login 必须『求和后再算比率』（250/400=62.5%，非 75%），实得 "
+           + str(_t.get("login_success_pct")))
+    expect(_t["world_ok"] == 250, "分片 world_ok 必须求和，实得 " + str(_t.get("world_ok")))
+    expect(_t["internal_errors"] == 2, "分片 internal_errors 必须求和，实得 " + str(_t.get("internal_errors")))
+    expect(_t["mean_ms"] == round(250 / 2, 2),
+           "分片 tick mean = 求和 tick_sum_ms / 求和 tick_samples（250/2），实得 " + str(_t.get("mean_ms")))
+    expect(merge_shard_stats([_sA]) is _sA, "单分片 merge 必须原样返回（向后兼容）")
+
     if not ok:
         print("RED: load_report selftest 有未通过项")
         return 1
@@ -2402,7 +2573,8 @@ def main():
     ap = argparse.ArgumentParser(description="假人压测指标归算（C6）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("summarize")
-    s.add_argument("--stats", required=True, help="BotSrv 落的 load_stats.ndjson")
+    s.add_argument("--stats", required=True, action="append",
+                   help="BotSrv 落的 load_stats.ndjson；分片时可重复传多份（按行求和后再算比率）")
     s.add_argument("--mem", default="", help="内存采样 mem.ndjson（可选）")
     s.add_argument("--mem-tail-sec", type=int, default=60,
                    help="内存末段斜率窗口（秒）；默认 60（不传 ⇒ 与既有报告口径逐字段一致）。"
