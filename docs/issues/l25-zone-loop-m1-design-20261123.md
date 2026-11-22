@@ -68,8 +68,16 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   区 0 的 T+1 `HostInbound` 被看到**。
 - 结论：**回 0 命令的延迟恒为 T+1（200ms）**；"同 tick 靠 barriers 窗口"是**错误表述**，已删。
 
-**偏差登记（T-* 待立）**：oracle 单线程下脚本交互是**同 tick 同步**；两区模式下回 0 命令与其
-结果帧比 oracle 晚 1 tick。
+### 2.2 偏差条目（具体条目，不是"待立"）
+
+| 编号（暂定） | 内容 | 影响面 | 验收口径 |
+| --- | --- | --- | --- |
+| **D-M1-CMD-T1** | 回区 0 执行的命令（商店/点击 NPC；行会/城堡/GM 请求）及其结果帧比 oracle 晚 **1 tick（200ms）** | ①NPC 对话文本与随附物品帧整体晚 200ms；②商店买卖的结果帧晚 200ms；③依赖「同 tick 内先脚本后 AOI」的极端场景可见差异 | 两区对拍的期望帧序按 **+1 tick 平移**后与 N=1 golden **逐帧相同**（平移规则写进场景脚本，不在断言里放宽） |
+
+- 正式编号在 **M1 卡**建立时挂到 T-* 台账；本卡（M0）不承载 M1 偏差。
+- **该偏差同时写进 M1 卡的验收口径**：「NPC 对话/商店帧晚 200ms」是**已知偏差**，不属于回归。
+- 旧表述（"T-* 待立"）删除：以下为原始影响描述——oracle 单线程下脚本交互是**同 tick 同步**；
+  两区模式下回 0 命令与其结果帧比 oracle 晚 1 tick。
 - **可见影响**：NPC 对话/商店买卖的**帧相对顺序**（对话文本与随附物品帧仍彼此同序，但整体晚 200ms）；
   依赖「同一 tick 内先脚本后 AOI」的极端用例可能观察到差异。
 - **不可见**：静态/周期行为（怪物 AI、刷新、AOI 扫描）不经过该通道；纯本区命令（移动/攻击/技能/
@@ -97,8 +105,11 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   | 行会/城堡/GM（新） | **只持区 0 自己的锁**（不取区 k） | 区 0 `HostPeriodic` 的 10s 门内 | 一个门周期 | 结果帧发给区 k 玩家时只查 `gates`，不动区 k 状态 |
   | 换服/改图 handoff | 既有 handoff 邮箱（无锁） | 既有相位 | — | 不改 |
 - **背压**：控制邮箱**有界**（每区 `sync_channel(K)` 或 `try_send` + 上限计数）。满了 ⇒ **拒绝入队
-  并计入 `zone_control_overflow`（新 perf 列，标 additive）**；区 k 侧对该命令回一条可见失败
-  （`SysMsg` 与区 0 普通背压同款文案），**不静默丢**。上限 K 由窗口实测定（先取 1024）。
+  并计入 `zone_control_overflow`（新 perf 列，标 additive）**；区 k 侧对该命令回一条**可见失败**：
+  给该玩家发 **`SM_SYSMESSAGE(100)`**（`Recog` = 玩家自己的 `ActorId`、`Param = MakeWord(RedF,RedB)`、
+  `Series = 0`，只投自己），**文本取 oracle 既有背压提示串（实施时从 oracle 的同款提示里取，不得
+  新造文案）**；同时打一行 `WRN`（含 zone/命令 ident/队列长度）。**不静默丢**。
+  上限 K 由窗口实测定（先取 1024）。
 
 ## 4. N=1 与 N≥2（区 0 的「双角色」）
 
@@ -184,7 +195,7 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 
 | 提交 | 内容 | 判据 |
 | --- | --- | --- |
-| **M1-0a 纯格式**（单独提交，**零语义**） | 移除 `#[rustfmt::skip]` + `cargo fmt --all`（一次性格式化 `HostLoop::tick` 与守卫块缩进） | 提交前后 `git diff --ignore-all-space <parent> <this>` **为空**；FMT/CLIPPY/TEST 绿；**不改任何字面行内容** |
+| **M1-0a 纯格式**（单独提交，**零语义**） | 移除 `#[rustfmt::skip]` + `cargo fmt --all`（一次性格式化 `HostLoop::tick` 与守卫块缩进） | **两条一起贴**：①`git diff --ignore-all-space <parent> <this>` **为空**；②**移除 skip 后** `cargo fmt --all -- --check` **仍全绿**（证明格式化稳定、不是"跑一次 fmt 就变"）；另 FMT/CLIPPY/TEST 绿、**不改任何字面行内容** |
 | **M1-0b 方法化 + 逐字字面量同步**（单独提交） | 段体拆成 `fn phase_*`；同时把被逐字扫描的字面行列出并同步给对应牙（`world.tick_tail(&mut rec);`、`drain_pk_flag_downlink(&mut world, &online, &gates);`、`let guild_run_tick = world.clock_ms as i32;`、`*_in_sim_loop`/`*_is_wired_in_sim_loop` 那批…完整清单在该提交信息里逐条列） | **不许 `#[ignore]`、不许把「精确匹配」改成「包含即可」、不许删牙**；每条牙改前先跑一次**旧断言**证明其仍能红（负例），改后全量绿；两条 `allow` 仅在字面量已改后移除，并在提交信息点名 |
 | **M1-0c 结构** | `ZoneState { host: HostLoop, save_outbox, alive }` + `HostServices` 区位形态（零行为变化） | 全量门 + N=1 两树对拍 |
 
