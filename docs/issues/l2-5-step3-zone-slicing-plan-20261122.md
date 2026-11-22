@@ -240,7 +240,12 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 - 静态装载切片（ctor fold/商人/NPC/守卫，第④步）；
 - 跨区收件人帧合成（镜像 route 消费，第④/⑤步）；
 - 存档按区聚合与关服收口（第⑥步）；
-- 城堡地图参与分区（启动门继续排除）。
+- 城堡地图参与分区（启动门继续排除）；
+- **区 0 与区 k 的断线清理物理共用同一个函数**（卡
+  `openmir2-zone-close-shared-core`，段 1c 后登记）：现在两条路径调**同一批生产函数**、
+  顺序由两处顺序锚钉住；物理共用要先重排 `Closed` 臂（`online_take` 在
+  交易之后、`disconnect` 在组队之后，中间不连续）并让两处顺序锚退休。
+  **验收 = 区 0 与区 k 共用同一个函数 + 两处顺序锚可以退休**。
 
 ## 6. 风险与验收边界
 
@@ -311,3 +316,18 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
   `zone_login_landing_tests::zone_login_counters_note_and_reset`；
 - 真栈冒烟（切片 N=2，20s + 优雅关服）：三条启动 INF、无 abort/看门狗、`EXIT=0`（§7 同口径复跑）；
 - N=1 stdout 等价门（`tools/hygiene/n1_stdout_equivalence.ps1`）：基线 `55e738ce8` vs 本段 head，绿。
+
+## 9. 段 1c 实施记录（区 k 断线，2026-11-22）
+
+切片区的 `Closed` 由区 k 自己处理（`handle_zone_closed`），世界侧全在区 k 线程内完成：
+`prepare_closed_guild`（陈旧早退 + `bo_soft_close`）→ `online_take` → 存档快照
+（`build_save_record_with_map_name`，实时态）→ `close_cleanup_residue`（四容器 + 展示表）→
+`world.disconnect`（移除门：实体摘除、`actor_id=None`、`stage=Left`）。存档载荷进
+`ZoneState::save_outbox`，区 0 每 tick `drain_zone_saves` 发进共享 DB 链（区 0 不读区 k 的世界）。
+
+**判据边界（必读）**：`g3_anchor_a5_prepare_closed_guild_and_flags` 与
+`closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view` 属
+**接线提示、非行为证据**（§12）：它们只能证明「生产臂没改序」，**不能**证明「区 0
+参考重放与生产臂等价」。1c 的行为证据 = 结果向量对拍（区 0 参考 vs 区 1 处理
+逐项相等）+ 两侧调的是**同一批生产函数**。物理共用同一函数列为后续卡
+`openmir2-zone-close-shared-core`（见 §5）。
