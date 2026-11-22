@@ -59,7 +59,7 @@ pub fn next_port() -> u16 {
         let seq = PORT_SEQ.fetch_add(1, Ordering::Relaxed);
         let off = base.wrapping_add(seq.wrapping_mul(17)) % span;
         let port = PORT_LO + u16::try_from(off).expect("段内偏移必落 u16");
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        if port_bindable_for_child(port) {
             return port;
         }
     }
@@ -81,6 +81,16 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).ok();
     }
+}
+
+/// 子进程实际按 **`0.0.0.0`** 绑定（各 bin 的 `bind_listeners`/监听点都是 `0.0.0.0`）⇒ 探针必须同形。
+///
+/// 反例（2026-11-23 实测，卡 `zone-loop-m0`（M0/A1）的合并门）：ToDesk 有一条
+/// `127.0.0.1:24670 <-> 127.0.0.1:35600` 的 **established 连接**——此时 `bind("127.0.0.1", 24670)`
+/// **成功**、`bind("0.0.0.0", 24670)` 报 `10048`。旧探针（127.0.0.1）会把这个端口当空闲发出去，
+/// 子进程 `0.0.0.0` 绑定失败 ⇒ 就绪门超时，表现为「测试莫名挂起」。
+pub fn port_bindable_for_child(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 /// 有超时地轮询日志直到出现 `needle`，返回**最后一次**读到的全文。

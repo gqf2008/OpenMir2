@@ -32839,7 +32839,7 @@ fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     // **P2-2**：地图组归属表 + 跨片拒绝计数。单片布局时 `host_owns` 恒真、计数恒 0（零行为变化）。
     mut shard_runtime: shard::ShardRuntime,
-    mut registry: Option<mir2_envir::MapRegistry>,
+    registry: Option<mir2_envir::MapRegistry>,
     mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
@@ -32852,7 +32852,7 @@ fn sim_loop(
     // **P2-3b**：`chr_name → 片` 目录（N=1 传 `None` ⇒ 全部空操作、行为不变）。
     shard_directory: Option<shard_router::ShardDirectory>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
-    mut db: Option<DbWiring>,
+    db: Option<DbWiring>,
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     payment_mode: u8,
@@ -32984,7 +32984,7 @@ fn sim_loop(
     // **T-202**：`SM_RECONNECT` 的宿主排水队列（与 `soft_close_pending` 同构）。生产者：
     // ① 登录跨服分支（`login_cross_server_or_refuse`）②换服门 100ms 轮询（`process_switch_data`
     // 的第二闭包）。唯一排水点 = 每轮 tick 的 `drain_reconnects`。
-    let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+    let reconnect_pending: Vec<ReconnectPending> = Vec::new();
     // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G3 启动加载）。
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
@@ -33035,30 +33035,28 @@ fn sim_loop(
     // **P2-3b**：行会管理是进程级服务（文件写/存档），只在片 0 装载；非 0 片传 `None` ⇒ 空表。
     // 空表下 `guild_runtime::step` / `drain_soft_close` 都不会产生存档写（无玩家、无会）。
     let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
-    let mut guilds = guild_runtime::startup(
+    let guilds = guild_runtime::startup(
         guild_startup_store,
         &enter_cfg.guild_sections,
         guild_cfg.guild_rank_name_len,
         world.clock_ms as i32,
         i32::from(enter_cfg.server_index),
     );
-    let mut guild_run_tick = world.clock_ms as i32;
+    let guild_run_tick = world.clock_ms as i32;
     // **A-22 P3**：城堡宿主的两道门（`SystemProcessor.cs`）：`ShowOnline` 的落盘门
     // （严格 `>`，间隔 = `[Setup] ConsoleShowUserCountTime`，缺省 600000ms）与
     // `ProcessGameRun` 的 10s 门**各自独立**；基准都由 `CastleHostGates::new` 同刻起算。
-    let mut castle_gates = game_svr::castle::CastleHostGates::new(world.clock_ms);
+    let castle_gates = game_svr::castle::CastleHostGates::new(world.clock_ms);
     let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
-    let mut castle_war_states: std::collections::HashMap<
-        i32,
-        mir2_world_bevy::castle::CastleWarState,
-    > = std::collections::HashMap::new();
+    let castle_war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
+        std::collections::HashMap::new();
     // **族 C（卡 `openmir2-gm-family-c-castle`）**：`@开始攻城` 的 `SendBroadCastMsg` 正文
     // （`RM_SYSMESSAGE` 优先级 252）必须在 tick head 把门/墙 216/217 排完之后才扇出
     // （oracle 每个 `PlayObject` 的 MsgQueue 按优先级升序）⇒ 先压这里，稍后并入
     // `castle_broadcast_texts`（见同一个变量的消费点）。
-    let mut pending_gm_castle_broadcasts: Vec<String> = Vec::new();
+    let pending_gm_castle_broadcasts: Vec<String> = Vec::new();
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -33109,7 +33107,7 @@ fn sim_loop(
     // 基准若写死 0 会在首个 tick 就 `-0 > 10000` ⇒ 连上即多发一帧。
     // **卡 `openmir2-ids-keepalive-timeout`**：世界钟会随模拟负荷变慢（实测 0.832×），
     // 不能喂给这个墙钟协议门；`keepalive_clock_ms()` 零参、内部取 `clock::now_ms()`。
-    let mut online_hum_gate = startup_online_hum_gate();
+    let online_hum_gate = startup_online_hum_gate();
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world-bevy` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -34082,20 +34080,20 @@ fn sim_loop(
         }
     }
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
-    let mut engine = load::FrontEngine::new();
+    let engine = load::FrontEngine::new();
     // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
-    let mut online: OnlineRegistry = OnlineRegistry::new();
-    let mut kick_pending: Vec<String> = Vec::new();
+    let online: OnlineRegistry = OnlineRegistry::new();
+    let kick_pending: Vec<String> = Vec::new();
     // 账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：提示帧已即时发出，离开世界/清槽隔一 tick 落地。
-    let mut soft_close_pending: Vec<String> = Vec::new();
+    let soft_close_pending: Vec<String> = Vec::new();
     // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
-    let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+    let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
         std::collections::HashMap::new();
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world-bevy`**。
     // **Lane B**：声明已提前到城堡块之前（门/墙/弓手在启动期登记展示层）。
     // **接线批 A**：`CM_PASSWORD` 的会话密码态（`PlayObject.StoragePwdState` + `ActionLocks`）。
-    let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+    let pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
         std::collections::HashMap::new();
     // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
     // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**已接线**（`handle_inbound_cmd` →
@@ -34141,7 +34139,7 @@ fn sim_loop(
     // [`line_notice_states`] 承载（chr_name → 态）。
     let line_notice_lines = std::mem::take(&mut enter_cfg.line_notice);
     let line_notice_cfg = enter_cfg.line_notice_cfg.clone();
-    let mut line_notice_states: std::collections::HashMap<String, line_notice::LineNoticeState> =
+    let line_notice_states: std::collections::HashMap<String, line_notice::LineNoticeState> =
         std::collections::HashMap::new();
     {
         if !line_notice_lines.is_empty() {
@@ -34279,7 +34277,7 @@ fn sim_loop(
     // **服务端权威逐击状态 dump**（环境变量 `MIR2_RNG_STATE_LOG`；未设 ⇒ 关闭、零行为差）。
     // 每个**玩家攻击单元**落一行，供 `server_state_gate.py` 判「目标格上是否还站着 `!Ghost && !Death`
     // 的对象」——客户端视图看不到服务端 `Ghost`，必须用它。
-    let mut state_log = state_log::StateLog::from_env();
+    let state_log = state_log::StateLog::from_env();
     if state_log.enabled() {
         // 只在**设了** `MIR2_RNG_STATE_LOG` 时打印（未设 ⇒ 一行不多，行为与改动前逐字节相同）。
         glog!(
@@ -34292,12 +34290,12 @@ fn sim_loop(
     // **加上**屏障 A 的抽数（oracle `ServerConf.cs:114` 的 `+=`；屏障 A 已在段①之后落账，见上面的
     // `barrier_a`）。`item_number_counter_init` 是这一加的**唯一**接线处（fail-closed：账本不恰 1 条
     // 即 panic）。新角色四件新手物品的 `MakeIndex` 用它（`add_newbie_items`）。
-    let mut item_number =
+    let item_number =
         game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
             .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
     // `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器：初值 = `[Setup] ItemNumberEx`
     // （部署 1073741872；`GetItemNumberEx` 自身的复位/加法在 `next_item_number_ex` 内逐行复刻）。
-    let mut item_number_ex = enter_cfg.item_number_ex;
+    let item_number_ex = enter_cfg.item_number_ex;
     // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
     // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
     // 见卡 `openmir2-ctor-barrier-a-draw` 的残余 ①）。
@@ -34308,21 +34306,21 @@ fn sim_loop(
     );
     // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
-    let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+    let ground_sessions: std::collections::HashMap<String, SessionGround> =
         std::collections::HashMap::new();
     // 商店会话态（`PlayObject.ScriptLable`）：`CM_MERCHANTDLGSELECT` 写入、断线/小退移除。
-    let mut shop_sessions: std::collections::HashMap<String, ShopSession> =
+    let shop_sessions: std::collections::HashMap<String, ShopSession> =
         std::collections::HashMap::new();
     // `M3⑦-实现 3`：交易会话态（按 `ChrName` 键；与 `ground_sessions` 同生命周期，
     // 交易栏 `DealItemList`/`DealGolds` 从这里读写；掉线/每 tick 取消见 [`deal_cancel_between`]。
-    let mut trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState> =
+    let trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState> =
         std::collections::HashMap::new();
     // `M3⑩-实现 1`：元宝寄售——`M2Share.SellOffItemList`（进程级全局列表，所有会话共享）
     // + 每个在线角色的 `SaleDeal`/`SellOffConfirm`/`SellOffItemList`（后二者又随断线一并移除）。
-    let mut sell_off_book = game_svr::selloff::SellOffBook {
+    let sell_off_book = game_svr::selloff::SellOffBook {
         entries: std::mem::take(&mut enter_cfg.sell_off_seed),
     };
-    let mut sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState> =
+    let sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState> =
         std::collections::HashMap::new();
     // **`SystemShare.FilterWord` 全局位**（`SystemShare.cs:157` 声明、部署启动 `GameApp.cs:70`
     // 置 true；`@DisableFilter` 翻转）：进程级单例 ⇒ 进程生命周期一份 `Cell`，经
@@ -34335,7 +34333,7 @@ fn sim_loop(
     let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
     let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
-    let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+    let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
@@ -34350,12 +34348,12 @@ fn sim_loop(
     let tick = std::time::Duration::from_millis(
         u64::try_from(mir2_world_bevy::TICK_INTERVAL_MS).unwrap_or(200),
     );
-    let mut ticks: u64 = 0;
+    let ticks: u64 = 0;
     // **T10b · 宿主段计时**（默认关闭；`MIR2_TICK_PROFILE=1` 开启）。关闭态每段边界只多一次
     // `Option` 判别：`begin` 不取 `Instant`、`end`/`end_tick` 直接返回 ⇒ 不取时钟、不分配、
     // 不写状态（代码见 `tick_profile` 模块头与单测 `disabled_profile_does_no_work`）。
-    let mut host_prof = tick_profile::HostTickProfile::from_env();
-    let mut world_prof_last = tick_profile::WorldSnapshot::default();
+    let host_prof = tick_profile::HostTickProfile::from_env();
+    let world_prof_last = tick_profile::WorldSnapshot::default();
     if host_prof.enabled() {
         // 与宿主段同口径的 World 探针（`TickStage` 20 段 + 命名探针），输出按 `World.*` 前缀展开。
         world.enable_tick_profile();
@@ -34377,28 +34375,28 @@ fn sim_loop(
     }
     // AOI 出现帧累计读数（按 `chr_name`）：root 2026-10-14 要求诊断行同时打印「可见集大小与下发帧数」。
     // 只读观测：不参与任何模拟/出帧语义。
-    let mut aoi_frames_total: std::collections::HashMap<String, usize> =
+    let aoi_frames_total: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     // **lane654**：登录队列 `after` 段的补发缓冲（`654` / 第二 `42` / `100×4`，含优先级 61 的
     // `750`）。oracle 在观察者**首次** `SearchViewRange` 的同一次 `Run()` 里出队（优先级 17 的
     // 其他 actor 出现帧之后）；本宿主在会话首次扫描 tick 由 [`drain_login_tail`] 补发。
-    let mut login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs> =
+    let login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs> =
         std::collections::HashMap::new();
     // **卡 `openmir2-monster-smwalk`**：怪物/宝宝/分身的走位游标 `actor_id → (map_id, x, y)`。
     // 逐 tick 与实体当前位置比对 ⇒ 单格且方向一致 ⇒ 一条 `SM_WALK`（世界层不产 `RM_WALK`，
     // 见 [`drain_monster_walk_downlink`]）。
-    let mut monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)> =
+    let monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)> =
         std::collections::HashMap::new();
     // **入口三段心跳**（卡 `openmir2-game-svr-entry-triple`）：每 5s 一行汇总；与上一行相同
     // 就不打（空载不刷屏）。补「整百才打」在尾段（如 975/1000）留下的空档；被强杀时最多丢
     // 最后一个 5s 窗口，正常关服在下面的关服分支补一行终值。只打印、不改任何分支。
-    let mut entry_telemetry_next_ms: i64 = 0;
-    let mut entry_telemetry_last: Option<String> = None;
+    let entry_telemetry_next_ms: i64 = 0;
+    let entry_telemetry_last: Option<String> = None;
     // **事件排水周转槽**（卡 `openmir2-tick-starvation`）：预算用尽时探到的那一条留到下一轮，
     // 循环外持有 ⇒ 跨 tick 保序、不丢。预算常量见 [`EventDrainBudget::PRODUCTION`]。
     // 两条通道各一个周转槽；优先通道的结转**先**被消耗（「控制事件先取」不被普通结转破坏）。
-    let mut event_carry: Option<GateEvent> = None;
-    let mut event_carry_ctl: Option<GateEvent> = None;
+    let event_carry: Option<GateEvent> = None;
+    let event_carry_ctl: Option<GateEvent> = None;
     // 测试缝：把就绪/中止的**决策点**延迟（缺省 0 = 不延迟；仅供进程级用例构造超时场景）。
     let ready_delay = test_seams::world_ready_delay();
     if !ready_delay.is_zero() {
@@ -34425,7 +34423,7 @@ fn sim_loop(
     }
     // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None ⇒ 零参与；
     // `handoff_pending` 在 `zone_bounds` 未设时恒 false）。
-    let mut handoff_runtime: Option<handoff::HandoffRuntime> =
+    let handoff_runtime: Option<handoff::HandoffRuntime> =
         zone_host.as_ref().filter(|h| h.slicing).map(|h| {
             handoff::HandoffRuntime::new(
                 zone_router::HOST_ZONE,
@@ -34433,7 +34431,301 @@ fn sim_loop(
                 h.handoff_boxes.clone(),
             )
         });
+    // **L2-5 P1 · M0（A1）**：区级状态/进程级服务/本区 I/O 装进结构（纯搬移；字段与局部同名）。
+    let mut host = HostLoop {
+        world,
+        displays,
+        online,
+        ground_sessions,
+        saves,
+        login_tails,
+        aoi_frames_total,
+        shop_sessions,
+        trade_sessions,
+        sell_off_sessions,
+        mon_gen_host,
+        line_notice_states,
+        monster_walk_seen,
+        gates,
+        handoff_runtime,
+        ticks,
+        tick,
+        event_carry,
+        event_carry_ctl,
+        entry_telemetry_next_ms,
+        entry_telemetry_last,
+        host_prof,
+        world_prof_last,
+        local_shard,
+        is_host,
+        telemetry_prefix,
+    };
+    let mut services = HostServices {
+        db,
+        engine,
+        guilds,
+        guild_run_tick,
+        guild_cfg,
+        guild_store,
+        castle_gates,
+        castle_store,
+        castle_war_states,
+        pending_gm_castle_broadcasts,
+        online_hum_gate,
+        npc_host,
+        merchant_book,
+        npc_vars_base,
+        sell_off_book,
+        item_number,
+        item_number_ex,
+        planes,
+        registry,
+        enter_cfg,
+        shard_runtime,
+        shutdown_done_tx,
+        ids_online,
+        ids_out,
+        world_start,
+        win_lottery,
+        zone_host,
+        server_table,
+        colors,
+        notice,
+        party_cfg,
+        shard_directory,
+        state_log,
+        pwd_sessions,
+        reconnect_pending,
+        kick_pending,
+        soft_close_pending,
+        gm_filter_word,
+        gm_mission,
+        gm_spirit_mutiny_tick,
+        magic_table_arc,
+        minimap,
+        unbind_list,
+        make_items,
+        line_notice_lines,
+        line_notice_cfg,
+        payment_mode,
+    };
+    let mut tick_io = TickIo {
+        ev_rx,
+        ev_ctl_rx,
+        shutdown,
+    };
     loop {
+        let (host_next, services_next, tick_io_next, outcome) = host.tick(services, tick_io);
+        host = host_next;
+        services = services_next;
+        tick_io = tick_io_next;
+        if outcome == TickOutcome::Exited {
+            return;
+        }
+    }
+}
+
+/// **L2-5 P1 · M0（A1）**：`sim_loop` 的区级状态（每个 host/区循环实例一份）。
+///
+/// 纯搬移：字段就是原 `sim_loop` 的局部；A1 不改任何行为（[`HostLoop::tick`] 逐行是原循环体）。
+/// 归属判据见 `docs/issues/l25-zone-loop-m0-design-20261123.md` §2.1。
+struct HostLoop {
+    world: mir2_world_bevy::World,
+    displays: downlink::DisplayTable,
+    online: OnlineRegistry,
+    ground_sessions: std::collections::HashMap<String, SessionGround>,
+    saves: std::collections::HashMap<String, SavedHuman>,
+    login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    aoi_frames_total: std::collections::HashMap<String, usize>,
+    shop_sessions: std::collections::HashMap<String, ShopSession>,
+    trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState>,
+    sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    mon_gen_host: Option<game_svr::mongen::MonGenHost>,
+    line_notice_states: std::collections::HashMap<String, line_notice::LineNoticeState>,
+    monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)>,
+    gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    handoff_runtime: Option<handoff::HandoffRuntime>,
+    ticks: u64,
+    tick: std::time::Duration,
+    event_carry: Option<GateEvent>,
+    event_carry_ctl: Option<GateEvent>,
+    entry_telemetry_next_ms: i64,
+    entry_telemetry_last: Option<String>,
+    host_prof: tick_profile::HostTickProfile,
+    world_prof_last: tick_profile::WorldSnapshot,
+    local_shard: shard::ShardId,
+    is_host: bool,
+    telemetry_prefix: String,
+}
+
+/// **M0（A1）**：进程级服务（跨区单点/只读共享；判据见设计 §2.2）。
+/// `!Send` 的成员（`Rc` 脚本宿主等）可以在这里，因为 `sim_loop` 跑在独立的 std 线程、按 owner 借用。
+struct HostServices {
+    db: Option<DbWiring>,
+    engine: load::FrontEngine,
+    guilds: mir2_world_bevy::GuildManager,
+    guild_run_tick: i32,
+    guild_cfg: mir2_world_bevy::GuildConfig,
+    guild_store: Option<mir2_data::guild::GuildStore>,
+    castle_gates: game_svr::castle::CastleHostGates,
+    castle_store: Option<game_svr::castle::CastleStore>,
+    castle_war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    pending_gm_castle_broadcasts: Vec<String>,
+    online_hum_gate: game_svr::ids::OnlineHumGate,
+    npc_host: Option<game_svr::npc::NpcHost>,
+    merchant_book: game_svr::npc::MerchantScriptBook,
+    npc_vars_base: game_svr::npc::NpcVars,
+    sell_off_book: game_svr::selloff::SellOffBook,
+    item_number: i32,
+    item_number_ex: i32,
+    planes: Option<planes::PlanesLink>,
+    registry: Option<mir2_envir::MapRegistry>,
+    enter_cfg: EnterConfig,
+    shard_runtime: shard::ShardRuntime,
+    shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
+    ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ids_out: tokio::sync::mpsc::UnboundedSender<String>,
+    world_start: std::sync::Arc<WorldStartGate>,
+    win_lottery: crate::winlottery::WinLotteryShared,
+    zone_host: Option<Arc<ZoneHost>>,
+    server_table: Vec<RouteInfo>,
+    colors: MsgColors,
+    notice: Vec<u8>,
+    party_cfg: mir2_world_bevy::PartyConfig,
+    shard_directory: Option<shard_router::ShardDirectory>,
+    state_log: state_log::StateLog,
+    pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    reconnect_pending: Vec<ReconnectPending>,
+    kick_pending: Vec<String>,
+    soft_close_pending: Vec<String>,
+    gm_filter_word: std::cell::Cell<bool>,
+    gm_mission: std::cell::RefCell<gmcmd::GmMissionState>,
+    gm_spirit_mutiny_tick: std::cell::Cell<i64>,
+    magic_table_arc: std::sync::Arc<magics::MagicTable>,
+    minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
+    unbind_list: game_svr::unbindlist::UnbindList,
+    make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
+    line_notice_lines: Vec<String>,
+    line_notice_cfg: line_notice::LineNoticeCfg,
+    payment_mode: u8,
+}
+
+/// **M0（A1）**：本区 I/O（入站两条通道 + 关服信号）。
+struct TickIo {
+    ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
+    shutdown: ShutdownSignal,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TickOutcome {
+    Continue,
+    Exited,
+}
+
+/// [`HostLoop::tick`] 的返回值：把三块状态原样交还（move，不分配）。
+type TickOut = (HostLoop, HostServices, TickIo, TickOutcome);
+
+impl HostLoop {
+    /// 跑一个 tick（与原 `sim_loop` 循环体**逐行**相同；A1 零行为变化）。
+    #[allow(clippy::too_many_lines)]
+    fn tick(self, services: HostServices, io: TickIo) -> TickOut {
+        let HostLoop {
+            mut world,
+            mut displays,
+            mut online,
+            mut ground_sessions,
+            mut saves,
+            mut login_tails,
+            mut aoi_frames_total,
+            mut shop_sessions,
+            mut trade_sessions,
+            mut sell_off_sessions,
+            mut mon_gen_host,
+            mut line_notice_states,
+            mut monster_walk_seen,
+            mut gates,
+            mut handoff_runtime,
+            mut ticks,
+            tick,
+            mut event_carry,
+            mut event_carry_ctl,
+            mut entry_telemetry_next_ms,
+            mut entry_telemetry_last,
+            mut host_prof,
+            mut world_prof_last,
+            local_shard,
+            is_host,
+            telemetry_prefix,
+        } = self;
+        let HostServices {
+            mut db,
+            mut engine,
+            mut guilds,
+            mut guild_run_tick,
+            guild_cfg,
+            guild_store,
+            mut castle_gates,
+            castle_store,
+            mut castle_war_states,
+            mut pending_gm_castle_broadcasts,
+            mut online_hum_gate,
+            mut npc_host,
+            merchant_book,
+            mut npc_vars_base,
+            mut sell_off_book,
+            mut item_number,
+            mut item_number_ex,
+            planes,
+            mut registry,
+            enter_cfg,
+            mut shard_runtime,
+            shutdown_done_tx,
+            ids_online,
+            ids_out,
+            world_start,
+            win_lottery,
+            zone_host,
+            server_table,
+            colors,
+            notice,
+            party_cfg,
+            shard_directory,
+            mut state_log,
+            mut pwd_sessions,
+            mut reconnect_pending,
+            mut kick_pending,
+            mut soft_close_pending,
+            gm_filter_word,
+            gm_mission,
+            gm_spirit_mutiny_tick,
+            magic_table_arc,
+            minimap,
+            unbind_list,
+            make_items,
+            line_notice_lines,
+            line_notice_cfg,
+            payment_mode,
+        } = services;
+        let TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        } = io;
+        // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
+        // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
+        let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
+        // 退出/正常收尾都把三块状态原样交还（move；同一批局部在两条路径上都在作用域内）。
+        macro_rules! pack_tick_out {
+            ($o:expr) => {
+                (
+                    HostLoop { world, displays, online, ground_sessions, saves, login_tails, aoi_frames_total, shop_sessions, trade_sessions, sell_off_sessions, mon_gen_host, line_notice_states, monster_walk_seen, gates, handoff_runtime, ticks, tick, event_carry, event_carry_ctl, entry_telemetry_next_ms, entry_telemetry_last, host_prof, world_prof_last, local_shard, is_host, telemetry_prefix },
+                    HostServices { db, engine, guilds, guild_run_tick, guild_cfg, guild_store, castle_gates, castle_store, castle_war_states, pending_gm_castle_broadcasts, online_hum_gate, npc_host, merchant_book, npc_vars_base, sell_off_book, item_number, item_number_ex, planes, registry, enter_cfg, shard_runtime, shutdown_done_tx, ids_online, ids_out, world_start, win_lottery, zone_host, server_table, colors, notice, party_cfg, shard_directory, state_log, pwd_sessions, reconnect_pending, kick_pending, soft_close_pending, gm_filter_word, gm_mission, gm_spirit_mutiny_tick, magic_table_arc, minimap, unbind_list, make_items, line_notice_lines, line_notice_cfg, payment_mode },
+                    TickIo { ev_rx, ev_ctl_rx, shutdown },
+                    $o,
+                )
+            };
+        }
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
@@ -34514,7 +34806,7 @@ fn sim_loop(
                 glog!("ERR", "{e}");
                 std::process::exit(2);
             }
-            return;
+            return pack_tick_out!(TickOutcome::Exited);
         }
         host_prof.end("HostShutdown", t);
         // **L2-4 段 6b**：本 tick 的**单源** tick 号（快照/屏障/账本共用）。`ticks` 在本 tick
@@ -37201,6 +37493,7 @@ fn sim_loop(
         }
         // 探针：每 tick 尾落一行（关闭态零分配；见 perf_counters::write_tick）。
         perf_counters::write_tick();
+        pack_tick_out!(TickOutcome::Continue)
     }
 }
 

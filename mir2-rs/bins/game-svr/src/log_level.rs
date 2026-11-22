@@ -64,6 +64,10 @@ pub fn enabled(severity: u8) -> bool {
 
 /// 测试期：所有改 `THRESHOLD` 的用例共用一把锁（`THRESHOLD` 是进程级全局，
 /// `cargo test` 的并行线程会互相串改阈值 ⇒ 断言时序性翻转）。
+///
+/// **这一条修复的是既有测试隔离缺陷，不是 HostDiag 闸所需的新装置**：在 `host_diag_*`
+/// 引入之前，`log_level::tests` 与 `ids::test_log_gate` 两个用例就已经在同一全局上
+/// 无锁互串（opc-27 2026-11-23 复核指出，按缺陷登记）。
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
