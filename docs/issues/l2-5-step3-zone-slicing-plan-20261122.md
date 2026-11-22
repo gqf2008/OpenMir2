@@ -88,11 +88,14 @@ TICK T+1（两区 phase2）：源区观察者扫到"格子已空" ⇒ 恰一条�
 ```
 
 **要写死的两件事**：
-1. **源区移除必须在 T+1 的 phase1 之前**（这样源区 T+1 快照不含它；否则目标区 `apply_mirrors`
-   仍会收到它的快照项，而目标区已有同 id **真实体** ⇒ 今天 `upsert_mirror` 会返回
-   `RefusedOccupied` ⇒ `apply_mirrors` 失败即 **abort**）。若时序做不到，则 `apply_mirrors` 必须把
-   「镜像 id 已是本区真实体」视为 **handoff 收敛**（跳过 + 计数，不 abort）——二选一，本步选定后在
-   代码与用例里写死。
+1. **时序（设计，不是可选）**：源区移除必须在**源区自己的** T+1 phase1 之前（这样它 T+1 的边界
+   快照不含该实体）。
+2. **兜底（防御，不是牙；Leader 2026-11-22 裁决）**：`apply_mirrors` 仍要把「镜像 id 已是本区
+   **真实**实体」视为 **handoff 收敛**——**跳过该条 + 计数 `mirror_shadowed_by_local`，不许
+   abort**。理由：abort 是给「程序错误」的，handoff 并发窗口是**预期内的瞬态**，一次时序偏差不应
+   整机退出。兜底分支**不得**顺手 `remove_mirror` 或改动本地真实体（只跳过 + 计数）。
+   **时序正确时该计数恒 0**：它是「时序设计被破了」的读数，**不是牙**；**不许**用人工变异把它当牙
+   宣传；真出现 >0 要查时序，而不是庆祝兜底生效。
 2. **目标区插入必须在 T+1 的 phase1 之前**（这样目标区 T+1 扫描能看到它）。
 
 **验收用例（帧原子性）**：源区观察者恰收到 **一次** 离开、目标区观察者恰收到 **一次** 出现，
@@ -146,6 +149,7 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
 - **正确性**：outbox `sent==recv`、`dup=0`、`never=0`；`handoff_offered/accepted/refused`；
   `cross_recipient_missing`（第③步已知缺口计数；**容量报告必须标注「跨区收件人帧未合入」；
   面向 Owner 的"1 万在线验收通过"结论必须等该计数为 0**）；`departure_mark_held_past_cap` 恒 0；
+  `mirror_shadowed_by_local` 恒 0（handoff 收敛兜底；恒 0 才说明时序设计成立，**不是牙**）；
 - **资源**：进程 RSS 与每区线程 CPU；网关队列深度/背压（`gate_queue`/`gate_backpressure`）；
   登录成功率、登录→首帧时延；关服存档时长（目标 ≤ 60s 收敛）；
 - **稳定性**：30min 内无看门狗 abort、无 `Barrier` 超时、无内存单调增长（镜像/离场标记有界）。
