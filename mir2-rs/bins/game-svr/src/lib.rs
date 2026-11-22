@@ -3441,14 +3441,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     None
                 };
                 // **L2-5 ⑤**：跨区收件人帧邮箱（只有切片 + 镜像才构造；N=1/② 关 ⇒ None）。
-                let cross_mailboxes = if slicing && mirror_enabled {
-                    Some(Arc::new(cross_zone_frames::CrossZoneMailboxes::new(
-                        zone_count,
-                        cross_zone_frames::MAX_FRAMES_PER_SLOT,
-                    )))
-                } else {
-                    None
-                };
+                let cross_mailboxes =
+                    cross_zone_frames::construct_for_run(slicing, mirror_enabled, zone_count);
                 let host = Arc::new(ZoneHost {
                     layout: Arc::clone(&layout),
                     exchange: Arc::clone(&exchange),
