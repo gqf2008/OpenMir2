@@ -207,8 +207,9 @@ docs-anchor gate 对新增行「检查 0」即依据）。
 
 1. **A1 结构**：加 `HostLoop`/`HostServices`/`TickIo`/`PhaseSet` 类型 + 空实现；`loop {` 前装入
    （`HostLoop::new_host` 用字段简写），`sim_loop` 仍跑原正文 ⇒ 编译 + 全量测试绿（此时零行为变化）。
-2. **A2 逐段搬移**：按 §3 一段一提交（或两段一提交），每段搬完跑 `cargo test -p game-svr --lib`
-   + 该段相关用例；`PhaseSet::ALL` 路径不变。
+2. **A2 段级守卫**：按 §3 给每个 `host_prof` 段加内联 `PhaseSet` 守卫（gap 一并归入后段守卫），
+   一段一提交（或两段一提交）；每步跑 `cargo test -p game-svr --lib` + 该段相关用例；
+   `PhaseSet::ALL` 路径逐字节不变。
 3. **A3 区 k 构造**：`for_zone` + `ZoneState { host, … }` + `empty_zone_loop_runs_one_tick_without_panic`
    用例；`spawn_minimal_zone` 行为不变（仍走 `run_zone_tick`）。
 4. **A4 收口**：`PhaseSet` 位集负例变异、18 处源码锚用例核对、全量门（FMT/CLIPPY/TEST/msgcodegen/
