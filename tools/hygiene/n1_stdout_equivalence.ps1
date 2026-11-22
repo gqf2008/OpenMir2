@@ -73,7 +73,10 @@ function ConvertTo-N1Line {
     $Line = $Line.Substring(13)
   }
   # 关服命名管道行带进程 pid（`...shutdown-<pid>`）：每次运行必然不同，不是产品差异 ⇒ 归一化。
-  return [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
+  $Line = [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
+  # `世界时钟变化：Bright=<n>`：昼夜由**墙钟日期**派生 ⇒ 跨时段两次运行必然不同（1 vs 2），
+  # 不是产品差异 ⇒ 归一化为 `Bright=<n>`（字面取值与总监代修一致，两边 sha 可对账）。
+  return [regex]::Replace($Line, 'Bright=\d+', 'Bright=<n>')
 }
 
 function Get-Sha256Hex {
@@ -287,6 +290,10 @@ function Invoke-Selftest {
   # ⑦ 关服管道 pid 归一化（每次运行必然不同，不是产品差异）
   Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] x openmir2-gamesvr-shutdown-12345') -ceq `
       '[INF] x openmir2-gamesvr-shutdown-<pid>') 'shutdown pipe pid normalized'
+
+  # ⑦b 昼夜值归一化（`Bright=<n>` 由墙钟日期派生，跨时段会变）
+  Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 世界时钟变化：Bright=1 ⇒ 向 0 个在线玩家各发一条 SM_DAYCHANGING(46)') -ceq `
+      '[INF] 世界时钟变化：Bright=<n> ⇒ 向 0 个在线玩家各发一条 SM_DAYCHANGING(46)') 'clock Bright value normalized'
 
   # ⑧ DB/IDS 重试环属顺序噪声类：顺序比较剔除、多重集全量
   Assert-True (Test-N1NoiseLine '[ERR] 链接数据库服务器[127.0.0.1:3306]失败...（e）') 'noise class: db retry line (real shape with level prefix)'
