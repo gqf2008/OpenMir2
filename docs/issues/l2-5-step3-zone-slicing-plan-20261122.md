@@ -759,7 +759,22 @@ RSS(game-svr) 2 区 ≈1.03–1.14GB（Δ 313–421MB vs 1 区基线）。
 - 遮蔽计数拆两列（`mirror_shadowed_static` / `mirror_shadowed_handoff`）：修复后 100 人冒烟
   **static=0**，handoff=46（全部是同一玩家的提升收敛窗口，≤1 tick，属正常面）。
 
+**外来 id 归属校验（2026-11-22 追加）**：`insert_foreign` 不只"不推进"——`set_id_segment`
+登记段长后，`bind_foreign` **断言外来 id 落在别的区段**（`id / SEGMENT != id_base / SEGMENT`），
+本区 id 走外来路径直接 panic（否则会掩盖真正的分配错误）；启动门 `check_zone_id_base`
+同时要求段长已登记，未登记即拒绝启动。
+
+**handoff 分量的正常面与越界判据（2026-11-22 追加）**：`mirror_shadowed_handoff` 的正常面 =
+「提升已发生、源区快照还带它一个 tick 的残留」——同一 id/同名/同格的提升实体，每次跨界在
+源区**至多 1 tick** 残留 ⇒ 上界 `≤ 1 × 每秒邻区发布次数`；按 §10 的两阶段口径记
+**≤ 6N（N = 提升次数）**。实测：100 人/10s 冒烟 `44 / 22 = 2.0 次/提升`（界 132），在界内。
+**越界判据**：持续 `mirror_shadowed_handoff > 6 × handoff_promoted`（同窗口）⇒ 查快照残留
+超窗 / 重复提升 / 源区未释放；`mirror_shadowed_static` 必须**恒 0**（任何非 0 都是跨区
+静态同 id 复现）。
+
 **牙**：`foreign_mirror_id_does_not_advance_local_allocator`（镜像外来 id 不改分配器）、
-`check_zone_id_base_is_fail_closed`（启动门两侧）；变异 M8/M9/M10 各自只红对应用例。
+`check_zone_id_base_is_fail_closed`（启动门两侧 + 段长未登记拒绝）、
+`foreign_insert_rejects_local_segment_id`（本区段 id 走外来路径必须 panic）；变异
+M8/M9/M10 各自只红对应用例。
 **纪律更正**：变异脚本的还原**不许**用 `git checkout`（未提交工作会被退回 HEAD 丢掉），
 必须用内存原件写回 + sha 相等断言。

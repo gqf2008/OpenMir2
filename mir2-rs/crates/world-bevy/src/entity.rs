@@ -2403,6 +2403,17 @@ impl EntityStore {
         self.inner.next_actor_id()
     }
 
+    /// **L2-5 ④b-0**：登记 id 段长度（外来 id 归属校验用）。
+    pub fn set_id_segment(&mut self, segment: i32) {
+        self.inner.set_id_segment(segment);
+    }
+
+    /// 本 World 的 id 段长度（0 = 未登记）。
+    #[must_use]
+    pub fn id_segment(&self) -> i32 {
+        self.inner.id_segment()
+    }
+
     /// 插入实体（生成期载体），返回其 id（复用本实体的 `id`）。
     ///
     /// **S3a/S3b/S4a 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与
