@@ -39,6 +39,125 @@ pub trait AoiStore {
     fn get(&self, id: i32) -> Option<EntityRef<'_>>;
     fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState>;
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
+    /// **被删实体的离场标记**（见 [`DepartureMark`]）；缺省 `None`（测试桩不参与）。
+    fn departure_mark(&self, _id: i32, _now_ms: i64) -> Option<DepartureMark> {
+        None
+    }
+
+    /// **离场标记维护**（每次扫描入口调一次）：到期标记做「还有没有观察者持有」检查——
+    /// 仍被持有 ⇒ 续期；无人持有 ⇒ 丢弃；超过硬上限 ⇒ 丢弃并计数。缺省 no-op。
+    fn sweep_departure_marks(&mut self, _now_ms: i64) {}
+}
+
+/// 实体**从实体表删除**的瞬间记下的离场位。
+///
+/// oracle 的消失判定用**保留引用**（`PlayObject.cs:3206-3218`：取 `visibleBaseObject.BaseObject`，
+/// **不查环境里还在不在**），守卫只有 `!FixedHideMode && !Ghost`。实体被删后读不到这两个位 ⇒
+/// 删除入口把它们记在这里，供观察者的下一次扫描按 oracle 语义判 `RM_DISAPPEAR`。
+///
+/// **这是 AOI 通用机制，不是镜像专属墓碑**：服务「任意被删实体仍在他人可见集里」的通用情形，
+/// 对单 World 也成立。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DepartureMark {
+    /// 首次记录时刻（`World.clock_ms`）。
+    pub created_ms: i64,
+    /// 最近一次续期检查时刻。
+    pub checked_ms: i64,
+    /// 删除瞬间的 `Ghost`。
+    pub ghost: bool,
+    /// 删除瞬间的 `FixedHideMode`。
+    pub fixed_hide_mode: bool,
+}
+
+/// **到期检查间隔（不是删除条件）**：≥ 玩家扫描周期（`SearchTime=1000ms`）。到期时做一次
+/// 「还有没有观察者持有」检查——仍被持有就续期。用墙钟直接删会在「观察者扫描被推迟 >2s」
+/// （卡顿/低帧/复算）时漏发，而 oracle 的保留引用不会漏。
+pub const DEPARTURE_MARK_TTL_MS: i64 = 2 * crate::entity::PLAYER_SEARCH_TIME;
+
+/// **硬上限**：标记最多保留这么久（防脏数据永久留住）。超上限仍被持有 ⇒ 强制丢弃并计数
+/// [`departure_mark_held_past_cap`]（正常恒 0；真触发 = 观察者冻结 >30s 的已登记差异）。
+pub const DEPARTURE_MARK_HARD_CAP_MS: i64 = 30_000;
+
+static DEPARTURE_MARK_HELD_PAST_CAP: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// 超硬上限仍被持有、被强制丢弃的次数（正常恒 0）。
+#[must_use]
+pub fn departure_mark_held_past_cap() -> u64 {
+    DEPARTURE_MARK_HELD_PAST_CAP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 测试复位。
+pub fn reset_departure_mark_held_past_cap_for_tests() {
+    DEPARTURE_MARK_HELD_PAST_CAP.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 离场标记表（bevy 资源；实体表与 `OutputAoi` 段共享同一个 bevy `World`）。
+#[derive(bevy_ecs::prelude::Resource, Debug, Default)]
+pub struct DepartureMarks {
+    marks: std::collections::HashMap<i32, DepartureMark>,
+}
+
+impl DepartureMarks {
+    /// 记一条标记（顺手清超硬上限项——store-free 的安全裁剪；正常的「无人持有」检查在 sweep 里做）。
+    pub fn insert(&mut self, id: i32, ghost: bool, fixed_hide_mode: bool, now_ms: i64) {
+        if !self.marks.is_empty() {
+            self.marks
+                .retain(|_, m| now_ms.saturating_sub(m.created_ms) <= DEPARTURE_MARK_HARD_CAP_MS);
+        }
+        self.marks.insert(
+            id,
+            DepartureMark {
+                created_ms: now_ms,
+                checked_ms: now_ms,
+                ghost,
+                fixed_hide_mode,
+            },
+        );
+    }
+
+    /// 读标记（有效期由 [`AoiStore::sweep_departure_marks`] 维护）。
+    #[must_use]
+    pub fn get(&self, id: i32) -> Option<DepartureMark> {
+        self.marks.get(&id).copied()
+    }
+
+    /// 到期（`now - checked_ms > TTL`）的 id 列表（升序，确定性）。
+    #[must_use]
+    pub fn expired_ids(&self, now_ms: i64) -> Vec<i32> {
+        let mut ids: Vec<i32> = self
+            .marks
+            .iter()
+            .filter(|(_, m)| now_ms.saturating_sub(m.checked_ms) > DEPARTURE_MARK_TTL_MS)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 维护到期标记：仍被持有 ⇒（未超硬上限）续期，超上限 ⇒ 丢弃并计数；无人持有 ⇒ 丢弃。
+    pub fn renew_or_drop(
+        &mut self,
+        expired: &[i32],
+        held: &std::collections::HashSet<i32>,
+        now_ms: i64,
+    ) {
+        for id in expired {
+            let Some(m) = self.marks.get_mut(id) else {
+                continue;
+            };
+            if !held.contains(id) {
+                self.marks.remove(id);
+                continue;
+            }
+            if now_ms.saturating_sub(m.created_ms) > DEPARTURE_MARK_HARD_CAP_MS {
+                self.marks.remove(id);
+                DEPARTURE_MARK_HELD_PAST_CAP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                m.checked_ms = now_ms;
+            }
+        }
+    }
 }
 
 impl AoiStore for EntityStore {
@@ -50,6 +169,12 @@ impl AoiStore for EntityStore {
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
+    }
+    fn departure_mark(&self, id: i32, _now_ms: i64) -> Option<DepartureMark> {
+        self.inner_resource_departure_mark(id)
+    }
+    fn sweep_departure_marks(&mut self, now_ms: i64) {
+        self.inner_sweep_departure_marks(now_ms);
     }
 }
 
@@ -269,6 +394,8 @@ pub fn search_view_range_with_updates<S: AoiStore>(
     viewer_id: i32,
     now_ms: i64,
 ) -> SearchViewRangeOutcome {
+    // 离场标记维护（到期检查「还有人看得见吗」；见 `AoiStore::sweep_departure_marks`）。
+    store.sweep_departure_marks(now_ms);
     let Some(viewer) = store.get(viewer_id) else {
         return SearchViewRangeOutcome::default();
     };
@@ -426,10 +553,13 @@ pub fn search_view_range_with_updates<S: AoiStore>(
     }
     let removed: Vec<i32> = removed
         .into_iter()
-        .filter(|t| {
-            store
-                .get(*t)
-                .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
+        .filter(|t| match store.get(*t) {
+            Some(e) => !e.fixed_hide_mode && !e.ghost,
+            // **被删实体**：oracle 用保留引用（不查环境里还在不在）⇒ 按删除瞬间的两位判；
+            // 标记由删除入口写入，TTL 内多个观察者各自消费（见 [`DepartureMark`]）。
+            None => store
+                .departure_mark(*t, now_ms)
+                .is_some_and(|m| !m.fixed_hide_mode && !m.ghost),
         })
         .collect();
     if let Some(start) = stats_start {
@@ -1955,6 +2085,8 @@ pub fn search_view_range_incremental<S: AoiStore>(
     state: &mut AoiIncremental,
 ) -> SearchViewRangeOutcome {
     state.counters.searches_total = state.counters.searches_total.saturating_add(1);
+    // 离场标记维护（到期检查「还有人看得见吗」）。
+    store.sweep_departure_marks(now_ms);
     state.begin_tick(map, store, ids, now_ms);
     let Some(viewer) = store.get(viewer_id) else {
         state.counters.viewer_missing = state.counters.viewer_missing.saturating_add(1);
@@ -1981,7 +2113,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
             // —— 增量路径 ——
             state.counters.inc_path_used = state.counters.inc_path_used.saturating_add(1);
             let stats_start = aoi_stats_search_begin();
-            let (outcome, touched) = incremental_gate(map, store, viewer_id, &key, state);
+            let (outcome, touched) = incremental_gate(map, store, viewer_id, &key, state, now_ms);
             if let Some(start) = stats_start {
                 let visible = store
                     .get(viewer_id)
@@ -2026,7 +2158,8 @@ pub fn search_view_range_incremental<S: AoiStore>(
                     aoi_idx_record_phase(AoiIdxPhase::WindowDiff, start);
                 }
                 let stats_start = aoi_stats_search_begin();
-                let (outcome, touched) = incremental_gate(map, store, viewer_id, &key, state);
+                let (outcome, touched) =
+                    incremental_gate(map, store, viewer_id, &key, state, now_ms);
                 if let Some(start) = stats_start {
                     let visible = store
                         .get(viewer_id)
@@ -2089,6 +2222,7 @@ fn incremental_gate<S: AoiStore>(
     viewer_id: i32,
     key: &AoiViewerKey,
     state: &mut AoiIncremental,
+    now_ms: i64,
 ) -> (SearchViewRangeOutcome, u64) {
     // 0) 缓存成员表（回退之后首趟重建一次）。
     let dirty = state.visible_dirty.remove(&viewer_id);
@@ -2149,10 +2283,11 @@ fn incremental_gate<S: AoiStore>(
     }
     let removed: Vec<i32> = removed_raw
         .into_iter()
-        .filter(|t| {
-            store
-                .get(*t)
-                .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
+        .filter(|t| match store.get(*t) {
+            Some(e) => !e.fixed_hide_mode && !e.ghost,
+            None => store
+                .departure_mark(*t, now_ms)
+                .is_some_and(|m| !m.fixed_hide_mode && !m.ghost),
         })
         .collect();
     // ④ 新进按**扫描序**追加（与 legacy 的追加顺序一致，不是事件到达顺序）。数量小，直接排。
@@ -2319,6 +2454,34 @@ impl AoiStore for BevyAoiStore<'_> {
         self.world
             .get_mut::<MapBinding>(e)
             .map(bevy_ecs::change_detection::Mut::into_inner)
+    }
+    fn departure_mark(&self, id: i32, _now_ms: i64) -> Option<DepartureMark> {
+        self.world
+            .get_resource::<DepartureMarks>()
+            .and_then(|m| m.get(id))
+    }
+    fn sweep_departure_marks(&mut self, now_ms: i64) {
+        let expired = match self.world.get_resource::<DepartureMarks>() {
+            Some(m) => m.expired_ids(now_ms),
+            None => return,
+        };
+        if expired.is_empty() {
+            return;
+        }
+        // 成员检查：无反向索引 ⇒ 遍历可见集（标记很少、到期才扫）。
+        let mut held = std::collections::HashSet::new();
+        for id in self.table.ids_sorted() {
+            if let Some(v) = self.get(id) {
+                for vb in v.visible_actors {
+                    if expired.binary_search(&vb.target).is_ok() {
+                        held.insert(vb.target);
+                    }
+                }
+            }
+        }
+        if let Some(mut marks) = self.world.get_resource_mut::<DepartureMarks>() {
+            marks.renew_or_drop(&expired, &held, now_ms);
+        }
     }
 }
 
@@ -2595,6 +2758,171 @@ mod tests {
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = view_range;
         e
+    }
+
+    // ---------------- 本卡：AOI 离场标记（oracle 保留引用语义） ----------------
+
+    fn departure_fixture() -> (MapGrid, EntityStore, i32) {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 6));
+        let t = store.insert(monster_entity(2, 11, 10, 5));
+        put_typed(&mut map, 2, 11, 10, CellType::Monster, 0);
+        (map, store, t)
+    }
+
+    fn legacy_first_scan(map: &mut MapGrid, store: &mut EntityStore) {
+        let out = search_view_range_with_updates(map, store, 1, 1000);
+        assert!(out.removed.is_empty(), "首扫无离开");
+        assert!(
+            store
+                .get(1)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == 2),
+            "首扫必须看见目标"
+        );
+    }
+
+    /// **非 ghost 被删 ⇒ 下一次扫描照发**（oracle 用保留引用，不查环境）。
+    ///
+    /// 红检：删 legacy 过滤器里的 `None => store.departure_mark(..)` 分支 ⇒ 本用例红。
+    #[test]
+    fn departure_mark_emits_hide_for_deleted_non_ghost_legacy() {
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, false, false, 1100);
+        store.remove(t);
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 2200);
+        assert_eq!(
+            out.removed,
+            vec![t],
+            "被删非 ghost 实体必须在下一次扫描出消失"
+        );
+    }
+
+    /// **ghost 被删 ⇒ 不发**（oracle 守卫 `!Ghost` 同判）。
+    ///
+    /// 红检：把标记判据里的 `!m.ghost` 删掉 ⇒ 本用例红。
+    #[test]
+    fn departure_mark_suppresses_deleted_ghost_legacy() {
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, true, false, 1100);
+        store.remove(t);
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 2200);
+        assert!(out.removed.is_empty(), "ghost 被删：oracle 守卫同样不发");
+    }
+
+    /// **`FixedHideMode` 被删 ⇒ 不发**（守卫另一半）。
+    #[test]
+    fn departure_mark_suppresses_deleted_fixed_hide_legacy() {
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, false, true, 1100);
+        store.remove(t);
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 2200);
+        assert!(out.removed.is_empty(), "FixedHideMode 被删：不发");
+    }
+
+    /// **到期且无人持有 ⇒ 丢弃、不发**（TTL 只是最早检查时刻，不是删除条件）。
+    #[test]
+    fn departure_mark_dropped_when_nobody_holds_it() {
+        let (mut map, mut store, t) = departure_fixture();
+        // 从未扫描 ⇒ 观察者没持有 t。
+        store.record_departure(t, false, false, 1100);
+        store.remove(t);
+        let out = search_view_range_with_updates(
+            &mut map,
+            &mut store,
+            1,
+            1100 + DEPARTURE_MARK_TTL_MS + 1,
+        );
+        assert!(out.removed.is_empty(), "无人持有且过 TTL ⇒ 标记丢弃、不发");
+        assert!(store.departure_mark(t, 0).is_none(), "标记必须已丢弃");
+    }
+
+    /// **扫描被推迟到 > TTL 仍恰收一条**（续期语义的牙）。
+    ///
+    /// 观察者在标记到期后 2.5s 才扫（卡顿/低帧/复算场景）：到期检查发现「仍被持有」⇒ 续期
+    /// ⇒ 本次扫描照发；再下一次扫描不重复。
+    ///
+    /// 红检：把 `renew_or_drop` 的「仍被持有 ⇒ 续期」改成直接丢 ⇒ 本用例红。
+    #[test]
+    fn departure_mark_survives_delayed_scan_beyond_ttl() {
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, false, false, 1100);
+        store.remove(t);
+        let delayed = 1100 + DEPARTURE_MARK_TTL_MS + 500;
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, delayed);
+        assert_eq!(
+            out.removed,
+            vec![t],
+            "扫描推迟到 {delayed}ms（> TTL）仍必须恰好收到一条消失"
+        );
+        let again = search_view_range_with_updates(&mut map, &mut store, 1, delayed + 500);
+        assert!(again.removed.is_empty(), "同一次离开只能发一条");
+    }
+
+    /// **硬上限**：超 `DEPARTURE_MARK_HARD_CAP_MS` 仍被持有 ⇒ 强制丢弃 + 计数（防脏数据永久留住）。
+    #[test]
+    fn departure_mark_hard_cap_drops_and_counts() {
+        reset_departure_mark_held_past_cap_for_tests();
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, false, false, 1100);
+        store.remove(t);
+        let past_cap = 1100 + DEPARTURE_MARK_HARD_CAP_MS + 1;
+        // 直接跑维护（不扫描）：观察者仍持有 ⇒ 本会被续期，但超硬上限 ⇒ 丢弃并计数。
+        store.sweep_departure_marks(past_cap);
+        assert_eq!(
+            departure_mark_held_past_cap(),
+            1,
+            "超硬上限被强制丢弃必须计数"
+        );
+        assert!(store.departure_mark(t, 0).is_none(), "超上限标记必须丢弃");
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, past_cap);
+        assert!(
+            out.removed.is_empty(),
+            "标记已丢弃 ⇒ 不发（登记为已知差异）"
+        );
+        reset_departure_mark_held_past_cap_for_tests();
+    }
+
+    /// **无标记（未走删除入口）⇒ 维持旧口径**（负对照：证明牙来自标记，不是别的路径）。
+    #[test]
+    fn no_departure_mark_keeps_old_behavior_legacy() {
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.remove(t);
+        let out = search_view_range_with_updates(&mut map, &mut store, 1, 2200);
+        assert!(out.removed.is_empty(), "无标记 ⇒ 旧口径（不发）");
+    }
+
+    /// **增量路径同口径**：非 ghost 被删 ⇒ 下一次扫描照发；ghost 被删 ⇒ 不发。
+    ///
+    /// 红检：删 `incremental_gate` 里的 `None => store.departure_mark(..)` 分支 ⇒ 第一条红。
+    #[test]
+    fn departure_mark_incremental_both_directions() {
+        let run = |ghost: bool| -> Vec<i32> {
+            let (mut map, mut store, t) = departure_fixture();
+            let mut state = AoiIncremental::default();
+            let ids = vec![1, t];
+            let _ = search_view_range_incremental(&mut map, &mut store, 1, 1000, &ids, &mut state);
+            assert!(store
+                .get(1)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == t));
+            store.record_departure(t, ghost, false, 1100);
+            store.remove(t);
+            search_view_range_incremental(&mut map, &mut store, 1, 2200, &[1], &mut state).removed
+        };
+        assert_eq!(run(false), vec![2], "增量：非 ghost 被删必须出消失");
+        assert!(run(true).is_empty(), "增量：ghost 被删不发");
     }
 
     /// **判据③：距离门 `|Δ| <= ViewRange(玩家) - ViewRange(怪)` 的精确边界（差 1 格）**。
