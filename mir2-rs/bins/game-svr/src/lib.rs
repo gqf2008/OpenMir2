@@ -956,8 +956,9 @@ impl ZoneHost {
 ///   **属落地区**：登录落在区 k ⇒ 这些表里只出现该会话，区 0 不留任何副本。
 /// - `gates`/`engine`/`guilds`/`npc_host`/`pwd_sessions`/`reconnect_pending`/`kick_pending`
 ///   **属进程**（`sim_loop` 局部，区 0 线程持有）：登录落区由区 0 线程执行，这些句柄直接借用。
-/// - 段 1b 不给区 k 装配退出路径：`Closed` 投到区 k 后由最小区循环丢弃 ⇒ 会话在区 k 保留
-///   到进程结束；关服存档也只覆盖区 0 的 `ground_sessions`（交接/逐区存档在段 2）。
+/// - **段 1c 起**：`Closed` 由区 k 自己处理（[`handle_zone_closed`]：世界侧四容器 + 展示表 +
+///   `world.disconnect`）；存档请求进 `save_outbox`，由区 0 的 [`drain_zone_saves`] 发进共享 DB 链。
+///   区 k 仍不做：行会/交易/组队通知与 `shard_router` 目录（见该函数 doc）。
 struct ZoneState {
     world: mir2_world_bevy::World,
     displays: downlink::DisplayTable,
@@ -966,8 +967,24 @@ struct ZoneState {
     saves: std::collections::HashMap<String, SavedHuman>,
     login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
     aoi_frames_total: std::collections::HashMap<String, usize>,
+    /// **L2-5 ③ 段 1c**：商店/元宝寄售会话（`close_cleanup_residue` 的四个容器之一；
+    /// 区 k 目前没有开店/寄售路径，保留空表只为与区 0 共用同一个清理收敛函数）。
+    shop_sessions: std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    /// **L2-5 ③ 段 1c**：区 k 断线存档出队（区线程写；区 0 每 tick `drain_zone_saves` 取走送 DB）。
+    save_outbox: Vec<ZoneSaveRequest>,
     /// 区线程存活（线程退出/panic ⇒ 假）。登录落区前检真：线程已死 ⇒ 拒登（不回落区 0）。
     alive: std::sync::atomic::AtomicBool,
+}
+
+/// **L2-5 ③ 段 1c**：区 k 断线时生成的存档请求（世界侧快照已由区线程编码）。
+///
+/// qid 分配、`engine.begin_save`、`save_outstanding` 记账与发送都属区 0 的进程级 DB 链
+/// （[`drain_zone_saves`]）——区 0 **不读**区 k 的世界，只发这条已定型的载荷。
+struct ZoneSaveRequest {
+    chr_name: String,
+    /// `record::encode_save_character_data` 的原样载荷（与区 0 `save_human_rcd` 同一编码器）。
+    packet: Vec<u8>,
 }
 
 impl ZoneState {
@@ -990,6 +1007,9 @@ impl ZoneState {
             saves: std::collections::HashMap::new(),
             login_tails: std::collections::HashMap::new(),
             aoi_frames_total: std::collections::HashMap::new(),
+            shop_sessions: std::collections::HashMap::new(),
+            sell_off_sessions: std::collections::HashMap::new(),
+            save_outbox: Vec::new(),
             alive: std::sync::atomic::AtomicBool::new(true),
         }
     }
@@ -1006,6 +1026,150 @@ impl Drop for ZoneAliveOnDrop {
             .alive
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
+}
+
+/// **L2-5 ③ 段 1c**：区 k 的 `Closed` 处理（世界侧全部在区 k 线程内完成）。
+///
+/// 与区 0 `sim_loop` 的 `GateEvent::Closed` 臂**同序同口径**的部分：
+/// `prepare_closed_guild`（陈旧早退 + `bo_soft_close=1`）→ `online_take` → 存档快照
+/// （`build_save_record_with_map_name` 取实时态，**必须在清理之前**）→
+/// `close_cleanup_residue`（四容器 + 展示表）→ `world.disconnect`（oracle `MakeGhost` 的
+/// 移除门：实体摘除、`actor_id=None`、`stage=Left`，与单区逐项一致）。
+///
+/// **不在本函数**（区 k 目前不具备前置：1c 之前不能组队/交易/入会、无本区网关帧消费方）：
+/// 行会 `on_disconnect` 通知、交易 `deal_cancel_between`、组队 `party_del_member`、
+/// `engine.delete_human`（进程级读档表；落区会话的读档项已在登录回执消耗）、
+/// `shard_router::note_left`（区 k 会话不进片目录）。这些是段 2/3 的**显式差异**，不是静默缺口。
+///
+/// **存档不在本函数发送**：qid/`engine`/`save_outstanding` 属区 0 的进程级 DB 链 ⇒ 请求进
+/// [`ZoneState::save_outbox`]，由区 0 的 [`drain_zone_saves`] 发出（世界侧快照已编码，
+/// 区 0 不读区 k 的世界）。
+///
+/// 返回 `false` = 陈旧 `Closed`/在线表无匹配（整臂早退，与区 0 T-101/M-12 同口径；同时计
+/// `zone_disconnect_dropped` 让「投到区 k 却没得清」可见）。
+fn handle_zone_closed(
+    state: &mut ZoneState,
+    chr_name: &str,
+    gate_idx: i32,
+    socket: i32,
+    map_names: &[String],
+) -> bool {
+    let ZoneState {
+        world,
+        displays,
+        online,
+        ground_sessions,
+        saves,
+        shop_sessions,
+        sell_off_sessions,
+        save_outbox,
+        ..
+    } = state;
+    // 陈旧早退 + `CloseUser` 的 `bo_soft_close` 置位：与区 0 同一个 guard（T-101/M-12）。
+    if !prepare_closed_guild(ground_sessions, online, chr_name, gate_idx, socket) {
+        perf_counters::note_zone_disconnect_dropped();
+        glog!(
+            "DBG",
+            "区断线：无匹配在线项（陈旧 Closed/错投）⇒ 不处理 ChrName:{chr_name} gate={gate_idx} socket={socket}"
+        );
+        return false;
+    }
+    online_take(online, chr_name);
+    // 存档（实时态，必须在 close_cleanup_residue 之前；与区 0 同序）。
+    if let (Some(saved), Some(sg)) = (saves.get(chr_name), ground_sessions.get(chr_name)) {
+        let cur_map = world
+            .session(chr_name)
+            .and_then(|s| map_names.get(s.map_id))
+            .map(String::as_str);
+        let rec = build_save_record_with_map_name(saved, chr_name, world, sg, cur_map);
+        let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
+        save_outbox.push(ZoneSaveRequest {
+            chr_name: chr_name.to_string(),
+            packet,
+        });
+    }
+    // 四容器 + 展示表（与区 0 同一个收敛函数；host aid 只来自 remove 的返回值）。
+    close_cleanup_residue(
+        world,
+        chr_name,
+        saves,
+        ground_sessions,
+        shop_sessions,
+        sell_off_sessions,
+        displays,
+    );
+    match world.disconnect(chr_name) {
+        Ok(()) => glog!(
+            "INF",
+            "区断线清世界 ChrName:{chr_name} gate={gate_idx} socket={socket}（世界侧在本区摘除；FrontEngine 摘除属区 0 的读档表）"
+        ),
+        Err(mir2_world_bevy::SessionError::NotInWorld) => glog!(
+            "DBG",
+            "区断线：gate={gate_idx} ChrName={chr_name} 关闭但未在世界（无需摘除）"
+        ),
+        Err(e) => glog!("WRN", "区断线清世界失败 ChrName:{chr_name}：{e:?}"),
+    }
+    true
+}
+
+/// **L2-5 ③ 段 1c**：把各区线程的断线存档请求发进进程级 DB 链（区 0 每 tick 调一次）。
+///
+/// 顺序照区 0 的 `save_human_rcd`：`next_query_id` → `req_tx.send` → `engine.begin_save` →
+/// `save_outstanding.push`。载荷已由区 k 编码（同一 `encode_save_character_data`），
+/// 区 0 **不读**区 k 的世界。返回本 tick 实际发出的条数。
+fn drain_zone_saves(
+    host: &ZoneHost,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+) -> usize {
+    let mut fired = 0usize;
+    for state in host.zone_states.iter().flatten() {
+        let reqs: Vec<ZoneSaveRequest> = {
+            let mut st = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut st.save_outbox)
+        };
+        for req in reqs {
+            let Some(w) = db.as_mut() else {
+                glog!(
+                    "WRN",
+                    "区断线存档：DB 链路未装配 ⇒ 跳过 ChrName:{}（未落库）",
+                    req.chr_name
+                );
+                continue;
+            };
+            if !w.state.is_connected() {
+                glog!(
+                    "WRN",
+                    "区断线存档：DB 链路未连接 ⇒ 跳过 ChrName:{}（照 oracle IsConnected 支；未落库）",
+                    req.chr_name
+                );
+                continue;
+            }
+            let qid = w.next_query_id();
+            let frame = dbclient::save_human_rcd_request(qid, &req.packet);
+            match w.req_tx.send(frame) {
+                Ok(()) => {
+                    engine.begin_save(&req.chr_name);
+                    w.save_outstanding.push((qid, req.chr_name.clone()));
+                    glog!(
+                        "INF",
+                        "存档请求已发（DB_SAVEHUMANRCD）ChrName:{} queryId={qid} 记录 {} 字节（区断线）",
+                        req.chr_name,
+                        req.packet.len()
+                    );
+                    fired += 1;
+                }
+                Err(_) => glog!(
+                    "WRN",
+                    "区断线存档：请求发送失败（DB 链路断开？）ChrName:{}（未落库）",
+                    req.chr_name
+                ),
+            }
+        }
+    }
+    fired
 }
 
 /// **L2-4 段 6a 的装配判定**（纯函数；单测直接覆盖，不读环境、不碰 I/O）。
@@ -1450,6 +1614,9 @@ fn spawn_minimal_zone(
     state: Option<Arc<std::sync::Mutex<ZoneState>>>,
     // stub 形态的图数（只用来凑地图下标空间）。
     map_count: usize,
+    // **L2-5 ③ 段 1c**：`registry.map_names()` 快照（`map_id` 下标）——断线存档要把
+    // 会话 `map_id` 解析成当前图名；整张 `MapRegistry` 含全图格数据，不能跨线程复制。
+    map_names: Arc<Vec<String>>,
     rx: std::sync::mpsc::Receiver<GateEvent>,
     ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
 ) -> Result<()> {
@@ -1504,9 +1671,52 @@ fn spawn_minimal_zone(
                     &barriers,
                 );
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    // 段 1b 本区还没有命令处理：入站事件（含广播来的网关线注册）全部丢弃。
-                    while rx.try_recv().is_ok() {}
-                    while ctl_rx.try_recv().is_ok() {}
+                    // **L2-5 ③ 段 1c**：`Closed` 由本区处理（世界侧在本区线程内完成，
+                    // 存档请求进 `save_outbox` 由区 0 发 DB）；其余命令/网关线事件仍丢弃
+                    // （命令处理属段 2）。`Closed` 走优先通道，两条都收。
+                    let mut closed_events: Vec<(i32, String, i32)> = Vec::new();
+                    while let Ok(ev) = rx.try_recv() {
+                        if let GateEvent::Closed {
+                            index,
+                            chr_name,
+                            socket,
+                        } = ev
+                        {
+                            closed_events.push((index, chr_name, socket));
+                        }
+                    }
+                    while let Ok(ev) = ctl_rx.try_recv() {
+                        if let GateEvent::Closed {
+                            index,
+                            chr_name,
+                            socket,
+                        } = ev
+                        {
+                            closed_events.push((index, chr_name, socket));
+                        }
+                    }
+                    if !closed_events.is_empty() {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        for (index, chr_name, socket) in closed_events {
+                            record_closed_event(index, &chr_name, socket);
+                            if chr_name.is_empty() {
+                                glog!(
+                                    "DBG",
+                                    "切片区 {zone_id}：关闭（未认证/无角色，无需清世界）gate={index} socket={socket}"
+                                );
+                                continue;
+                            }
+                            handle_zone_closed(
+                                &mut st,
+                                &chr_name,
+                                index,
+                                socket,
+                                map_names.as_slice(),
+                            );
+                        }
+                    }
                     // 批 1（持锁）：phase1 + 边界快照/发布。发布后立即放锁。
                     let (mut record, border) = {
                         let mut st = state
@@ -2728,6 +2938,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 let watch = Arc::new(tick_watchdog::ZoneWatch::start(zone_count, timeout_ms));
                 let router = Arc::new(zone_router::ZoneRouter::new());
                 let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                // **L2-5 ③ 段 1c**：区线程的图名快照（断线存档解析当前图名用；
+                // 无注册表 ⇒ 空表 ⇒ 回落 `SavedHuman::enter_map`，与 `build_save_record(None)` 同口径）。
+                let zone_map_names: Arc<Vec<String>> =
+                    Arc::new(map_names.clone().unwrap_or_default());
                 // **L2-5 ③ 段 1b**：切片区 1..N-1 的世界侧状态（下标 0 恒 None：区 0 用 sim_loop 局部）。
                 let mut zone_states: Vec<Option<Arc<std::sync::Mutex<ZoneState>>>> =
                     (0..zone_count).map(|_| None).collect();
@@ -2780,6 +2994,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         mirror_enabled,
                         host.zone_states[index].clone(),
                         map_sizes.len(),
+                        Arc::clone(&zone_map_names),
                         rx,
                         ctl,
                     )?;
@@ -13237,6 +13452,24 @@ fn build_save_record(
     sg: &SessionGround,
     registry: Option<&mir2_envir::MapRegistry>,
 ) -> record::PlayerRecord {
+    let cur_map = world
+        .session(chr_name)
+        .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)));
+    build_save_record_with_map_name(saved, chr_name, world, sg, cur_map)
+}
+
+/// **L2-5 ③ 段 1c**：[`build_save_record`] 的「当前图名已解析」形态。
+///
+/// 区 k 线程拿不到 `MapRegistry`（整表含全图格数据，不能跨线程复制）⇒ 只带一份
+/// `map_names` 快照（`registry.map_names()`，`map_id` 下标）进区线程，由调用方按
+/// `sess.map_id` 查好名字再进来。语义与 `build_save_record` 完全同一条实现。
+fn build_save_record_with_map_name(
+    saved: &SavedHuman,
+    chr_name: &str,
+    world: &mir2_world_bevy::World,
+    sg: &SessionGround,
+    cur_map_name: Option<&str>,
+) -> record::PlayerRecord {
     let mut rec = saved.record.clone();
     // **IT-17a**：`PlayObject.MagicList`（会话快照）回写记录（oracle `MakeSaveRcd` 写 MagicList）。
     // 只在魔法态已装配（`table` 有）时写——未装配的测试夹具保持记录原值，不隐性清空。
@@ -13244,12 +13477,9 @@ fn build_save_record(
         rec.data.magic = Some(crate::magicaudit::pad_for_save(sg.magic.list.clone()));
     }
     // oracle `MakeSaveRcd`（`:1243`）写的是 `playObject.MapName`（**当前**逻辑图名，不是进图时的）。
-    // 换图/传送接线前 `enter_map` == 当前图；这里优先用会话的 `map_id` 反查注册表
-    //（`MapRegistry::name_of`），拿不到注册表/会话时回落到 `enter_map`。
-    let cur_map = world
-        .session(chr_name)
-        .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)))
-        .unwrap_or(saved.enter_map.as_str());
+    // 换图/传送接线前 `enter_map` == 当前图；这里用调用方解析好的当前图名，拿不到时回落到
+    // `enter_map`。
+    let cur_map = cur_map_name.unwrap_or(saved.enter_map.as_str());
     rec.data.cur_map = Some(cur_map.to_string());
     // ---- 实体派生标量：**实体 → 离世快照 → 载入记录** -------------------------------
     // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`，~402ms 后
@@ -23569,6 +23799,11 @@ mod perf_counters {
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
     /// 落区后落点**不属于**判定区（墙格移位/死亡改写越过边界；只在切片模式计）。
     pub(crate) static ZONE_LOGIN_OFFZONE: AtomicU64 = AtomicU64::new(0);
+    /// **L2-5 ③ 段 1c**：`Closed` 投到区 k 但**没有匹配在线项**（陈旧 `Closed` /
+    /// 网关重登窗口 / 路由错投）而整臂早退的次数。段 1b 时本计数 = 被丢弃的
+    /// 全部 `Closed`（当时的已知缺口）；1c 起 `Closed` 一律进 [`handle_zone_closed`]，
+    /// **正常断线不再计入**，非 0 即说明 `(chr, gate, socket)` 与在线表不一致。
+    pub(crate) static ZONE_DISCONNECT_DROPPED: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn note_zone_login_uncovered() {
         ZONE_LOGIN_UNCOVERED.fetch_add(1, Ordering::Relaxed);
@@ -23605,6 +23840,13 @@ mod perf_counters {
     pub(crate) fn note_zone_login_offzone() {
         ZONE_LOGIN_OFFZONE.fetch_add(1, Ordering::Relaxed);
     }
+    pub(crate) fn note_zone_disconnect_dropped() {
+        ZONE_DISCONNECT_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_disconnect_dropped() -> u64 {
+        ZONE_DISCONNECT_DROPPED.load(Ordering::Relaxed)
+    }
     #[cfg(test)]
     pub(crate) fn zone_login_offzone() -> u64 {
         ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed)
@@ -23615,6 +23857,7 @@ mod perf_counters {
         ZONE_TARGET_UNAVAILABLE.store(0, Ordering::Relaxed);
         ZONE_ROUTER_UNASSIGNED.store(0, Ordering::Relaxed);
         ZONE_LOGIN_OFFZONE.store(0, Ordering::Relaxed);
+        ZONE_DISCONNECT_DROPPED.store(0, Ordering::Relaxed);
         for c in &ZONE_LOGIN_LANDED {
             c.store(0, Ordering::Relaxed);
         }
@@ -34251,6 +34494,17 @@ fn sim_loop(
             perf_counters::note_inbound_wall_us(us);
         }
         host_prof.end("HostInbound", t);
+        // **L2-5 ③ 段 1c**：各区线程的断线存档请求 → 进程级 DB 链
+        // （qid/`engine.begin_save`/`save_outstanding` 属区 0；载荷已在区线程内编码）。
+        if let Some(host) = zone_host.as_deref() {
+            let fired = drain_zone_saves(host, &mut db, &mut engine);
+            if fired > 0 {
+                glog!(
+                    "INF",
+                    "区断线存档：本 tick 发出 {fired} 条（DB_SAVEHUMANRCD）"
+                );
+            }
+        }
         let t = host_prof.begin();
         // 一轮读档：`query` = oracle 的 `QueryCharacterData`（`CharacterDataProcessor.cs:165`）——
         // 已连上 DBSvr ⇒ 发 `DB_LOADHUMANRCD` 请求并返回 query_id；未连上 ⇒ None（照 `IsConnected`，
@@ -119385,7 +119639,7 @@ mod finish_login_tests {
 mod zone_login_landing_tests {
     use super::*;
 
-    fn write_map_fixture(base: &std::path::Path) {
+    pub(super) fn write_map_fixture(base: &std::path::Path) {
         let (w, h) = (20_i16, 20_i16);
         let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
         bytes[0..2].copy_from_slice(&w.to_le_bytes());
@@ -119401,7 +119655,7 @@ mod zone_login_landing_tests {
         std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
     }
 
-    fn fixture_registry(base: &std::path::Path) -> mir2_envir::MapRegistry {
+    pub(super) fn fixture_registry(base: &std::path::Path) -> mir2_envir::MapRegistry {
         let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
         mir2_envir::MapRegistry::from_entries(
             loader,
@@ -119431,7 +119685,7 @@ mod zone_login_landing_tests {
     }
 
     #[allow(clippy::field_reassign_with_default)]
-    fn record_at(x: i16, y: i16, home_map: &str) -> record::PlayerRecord {
+    pub(super) fn record_at(x: i16, y: i16, home_map: &str) -> record::PlayerRecord {
         let mut rec = record::PlayerRecord::default();
         rec.chr_name = Some("hero".to_string());
         rec.header.name = Some("hero".to_string());
@@ -119529,11 +119783,13 @@ mod zone_login_landing_tests {
         perf_counters::note_zone_target_unavailable();
         perf_counters::note_zone_router_unassigned();
         perf_counters::note_zone_login_offzone();
+        perf_counters::note_zone_disconnect_dropped();
         perf_counters::note_zone_login_landed(1);
         assert_eq!(perf_counters::zone_login_uncovered(), 1);
         assert_eq!(perf_counters::zone_target_unavailable(), 1);
         assert_eq!(perf_counters::zone_router_unassigned(), 1);
         assert_eq!(perf_counters::zone_login_offzone(), 1);
+        assert_eq!(perf_counters::zone_disconnect_dropped(), 1);
         assert_eq!(perf_counters::zone_login_landed(1), 1, "区 1 落区 +1");
         assert_eq!(perf_counters::zone_login_landed(0), 0, "区 0 独立计");
         perf_counters::note_zone_login_landed(9999);
@@ -119544,6 +119800,7 @@ mod zone_login_landing_tests {
         );
         perf_counters::reset_zone_login_counters_for_tests();
         assert_eq!(perf_counters::zone_login_uncovered(), 0);
+        assert_eq!(perf_counters::zone_disconnect_dropped(), 0);
         assert_eq!(perf_counters::zone_login_landed(1), 0);
     }
 
@@ -119699,5 +119956,306 @@ mod zone_login_landing_tests {
         assert!(world0.session("probe").is_some(), "区 0 世界必须可正常写");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// **L2-5 ③ 段 1c**：区 k 的 `Closed`（断线）处理。
+///
+/// 硬要求（总监 2026-11-22）：区 k 处理 `Closed`、语义与区 0 对齐（`soft_close` 标志 +
+/// 清理四容器与展示表 + 存档走共享 db 链路），**不许**改成「区 0 代劳区 k 的世界」。
+///
+/// 口径说明（与总监原文的两处措辞差异，按「与区 0 对齐」的母句落）：
+/// ① 区 0 的 `Closed` 臂在清理前先存档，随后 `close_cleanup_residue` **连 `saves` 一起摘**
+///    ⇒ 处理完 `saves` 为空；本仓用例断言「存档请求已带着该角色出队」+「四容器清干净」；
+/// ② 区 0 的 `Closed` 走 `world.disconnect`（移除门：实体摘除、`actor_id=None`、`stage=Left`），
+///    不是 `soft_close`（后者是 `CM_SOFTCLOSE`/顶号路径）；用例按 `disconnect` 断言。
+///
+/// 红检（编译期后各自实测）：删掉 `handle_zone_closed` 里的存档块 ⇒ outbox 断言红；
+/// 删掉 `close_cleanup_residue` 调用 ⇒ 四容器/展示表断言红；把 `world.disconnect` 换成
+/// `soft_close` ⇒ `actor_id=None` 断言红；把 `prepare_closed_guild` 的早退删掉 ⇒ 陈旧用例红。
+#[cfg(test)]
+mod zone_disconnect_tests {
+    use super::zone_login_landing_tests::{fixture_registry, record_at, write_map_fixture};
+    use super::*;
+
+    /// 在指定区落一个玩家（沿用 1b 的登录落区路径），返回（区状态, actor id）。
+    fn landed(tag: &str, zone_id: zone::ZoneId) -> (ZoneState, i32) {
+        let base =
+            std::env::temp_dir().join(format!("zone_disconnect_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        write_map_fixture(&base);
+        let registry = fixture_registry(&base);
+
+        let mut state = ZoneState::new(zone_id, &[(20, 20)], None);
+        let mut engine = load::FrontEngine::new();
+        let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+        let mut kick_pending: Vec<String> = Vec::new();
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let mut npc_host: Option<game_svr::npc::NpcHost> = None;
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        let mut npc_vars_base = game_svr::npc::NpcVars::default();
+        let enter_cfg = EnterConfig::for_test(crate::strings::StringConf::defaults());
+        let mut shard_runtime = shard::ShardRuntime::new(shard::ShardLayout::single(1));
+        let server_table: Vec<RouteInfo> = Vec::new();
+        let notice: Vec<u8> = Vec::new();
+        let shard_directory: Option<shard_router::ShardDirectory> = None;
+        let magic_table_arc = std::sync::Arc::new(enter_cfg.magic_table.clone());
+        let gm_filter_word = std::cell::Cell::new(true);
+        let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
+        let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
+        let mut item_number = 0i32;
+        let account = "acct".to_string();
+        let reply = dbclient::Reply {
+            query_id: 1,
+            message: Vec::new(),
+            packet: mir2_protocol::edcode::encode(&record::encode_player_data(&record_at(
+                15, 5, "0",
+            ))),
+            sign: Vec::new(),
+        };
+        finish_login_on_zone_state(
+            &mut state,
+            &mut LoginProc {
+                engine: &mut engine,
+                gates: &mut gates,
+                reconnect_pending: &mut reconnect_pending,
+                kick_pending: &mut kick_pending,
+                pwd_sessions: &mut pwd_sessions,
+                npc_host: &mut npc_host,
+                guilds: &mut guilds,
+                npc_vars_base: &mut npc_vars_base,
+                enter_cfg: &enter_cfg,
+                shard_runtime: &mut shard_runtime,
+                registry: &Some(registry),
+                server_table: &server_table,
+                notice: &notice,
+                shard_directory: &shard_directory,
+                magic_table_arc: &magic_table_arc,
+                gm_filter_word: &gm_filter_word,
+                gm_mission: &gm_mission,
+                gm_spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                local_shard: shard::HOST_SHARD,
+            },
+            LoginSession {
+                reply: &reply,
+                socket: 7,
+                gate_idx: 0,
+                soft_version_date: 0,
+                session_id: 1,
+                pay_ment: 0,
+                account: &account,
+                item_number: &mut item_number,
+            },
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let actor = state
+            .world
+            .session("hero")
+            .and_then(|s| s.actor_id)
+            .expect("落区后必有 actor");
+        (state, actor)
+    }
+
+    /// **"与区 0 对齐"的结果向量**（总监 2026-11-22 裁决：硬编码期望只能证明符合我写的期望，
+    /// 逐项与区 0 同场景对拍才是行为证据）。
+    ///
+    /// 四组：① 在线表剩余项；② 四容器是否空；③ 世界侧 `stage`/`actor_id`/实体在否；
+    /// ④ 存档载荷条数与非空。
+    #[derive(Debug, PartialEq)]
+    struct DisconnectOutcome {
+        online: Vec<String>,
+        saves_empty: bool,
+        ground_empty: bool,
+        shop_empty: bool,
+        selloff_empty: bool,
+        stage: mir2_world_bevy::WorldStage,
+        actor_id: Option<i32>,
+        entity_present: bool,
+        save_count: usize,
+        save_all_non_empty: bool,
+    }
+
+    impl DisconnectOutcome {
+        fn of(state: &ZoneState, actor: i32) -> Self {
+            let mut online: Vec<String> = state
+                .online
+                .iter()
+                .map(|e| format!("{}@{}:{}", e.chr_name, e.gate_idx, e.socket))
+                .collect();
+            online.sort();
+            let sess = state.world.session("hero").expect("会话对象不删除");
+            Self {
+                online,
+                saves_empty: state.saves.is_empty(),
+                ground_empty: state.ground_sessions.is_empty(),
+                shop_empty: state.shop_sessions.is_empty(),
+                selloff_empty: state.sell_off_sessions.is_empty(),
+                stage: sess.stage,
+                actor_id: sess.actor_id,
+                entity_present: state.world.entities.get(actor).is_some(),
+                save_count: state.save_outbox.len(),
+                save_all_non_empty: state.save_outbox.iter().all(|r| !r.packet.is_empty()),
+            }
+        }
+    }
+
+    /// **区 0 参考路径**：逐行照 `sim_loop` 的 `GateEvent::Closed` 臂里**世界/会话侧**的部分
+    /// （进程级部分——行会/交易/组队/`engine`/DB 发送——不在本层，两侧都不做）：
+    /// `prepare_closed_guild` → `online_take` → 存档快照（`build_save_record` 实时态）→
+    /// `close_cleanup_residue` → `world.disconnect`。顺序锚见
+    /// `guild_runtime::tests::g3_anchor_a1_four_disconnect_calls_and_order`。
+    ///
+    /// 存档载荷进 `save_outbox` 只为与区 k 用同一个观测面（区 0 生产路径在这里是直接发 DB）。
+    fn zone_zero_reference(state: &mut ZoneState, map_names: &[String]) {
+        let ZoneState {
+            world,
+            displays,
+            online,
+            ground_sessions,
+            saves,
+            shop_sessions,
+            sell_off_sessions,
+            save_outbox,
+            ..
+        } = state;
+        assert!(prepare_closed_guild(ground_sessions, online, "hero", 0, 7));
+        online_take(online, "hero");
+        if let (Some(saved), Some(sg)) = (saves.get("hero"), ground_sessions.get("hero")) {
+            let cur_map = world
+                .session("hero")
+                .and_then(|s| map_names.get(s.map_id))
+                .map(String::as_str);
+            let rec = build_save_record_with_map_name(saved, "hero", world, sg, cur_map);
+            save_outbox.push(ZoneSaveRequest {
+                chr_name: "hero".to_string(),
+                packet: record::encode_save_character_data(&saved.account, "hero", &rec),
+            });
+        }
+        close_cleanup_residue(
+            world,
+            "hero",
+            saves,
+            ground_sessions,
+            shop_sessions,
+            sell_off_sessions,
+            displays,
+        );
+        let _ = world.disconnect("hero");
+    }
+
+    /// 给"已落区的玩家"补上会话侧两表（无 Server.conf 时 `finish_login` 不建；1c 的清理与
+    /// 存档只读这两张表）。actor 用落区后的真实 id。
+    fn seed_session_tables(state: &mut ZoneState, actor: i32) {
+        state
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        state.saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "acct".to_string(),
+                record: record_at(15, 5, "0"),
+                enter_map: "0".to_string(),
+                derived: None,
+            },
+        );
+    }
+
+    /// **硬要求 2 的用例（结果向量对拍版）**：同一断线场景在**区 0**（参考路径）与**区 1**
+    /// （`handle_zone_closed`）各跑一次，结果向量逐项相等；区 0 的局部表零残留。
+    ///
+    /// 红检（编译后实测）：删掉区 k 的存档块 ⇒ `save_count` 不等；删掉 `online_take` ⇒
+    /// `online` 不等；把 `world.disconnect` 换成 `soft_close` ⇒ `actor_id` 不等；
+    /// 删掉 `close_cleanup_residue` ⇒ 四容器/展示表不等。
+    #[test]
+    fn zone_one_disconnect_matches_zone_zero_outcome() {
+        let map_names = vec!["0".to_string()];
+
+        // ---- 区 0 参考 ----
+        let (mut zone0, actor0) = landed("parity0", zone::ZoneId::new(0));
+        seed_session_tables(&mut zone0, actor0);
+        assert!(
+            zone0.displays.get(actor0).is_some(),
+            "前置：登录应已登记同屏展示"
+        );
+        zone_zero_reference(&mut zone0, &map_names);
+        let out0 = DisconnectOutcome::of(&zone0, actor0);
+
+        // ---- 区 1（被测路径）----
+        let (mut zone1, actor1) = landed("parity1", zone::ZoneId::new(1));
+        seed_session_tables(&mut zone1, actor1);
+        assert!(
+            zone1.displays.get(actor1).is_some(),
+            "前置：登录应已登记同屏展示"
+        );
+        assert!(
+            handle_zone_closed(&mut zone1, "hero", 0, 7, &map_names),
+            "当前在线项的 Closed 必须走完整断线臂"
+        );
+        let out1 = DisconnectOutcome::of(&zone1, actor1);
+
+        // ① 向量逐项相等（= 「与区 0 同口径」的行为证据）。
+        assert_eq!(out0, out1, "区 1 断线结果向量必须与区 0 参考逐项相等");
+        // ② 硬编码的语义钉子（裁决后的口径，便于人读失败原因）。
+        assert!(out1.online.is_empty(), "在线表必须摘掉");
+        assert!(
+            out1.saves_empty && out1.ground_empty && out1.shop_empty && out1.selloff_empty,
+            "四容器必须清干净（含 saves）"
+        );
+        assert!(
+            zone1.displays.get(actor1).is_none(),
+            "展示表必须摘掉该 actor"
+        );
+        assert_eq!(out1.stage, mir2_world_bevy::WorldStage::Left);
+        assert_eq!(out1.actor_id, None, "disconnect = 移除门：actor_id 清空");
+        assert!(!out1.entity_present, "实体必须摘除");
+        assert_eq!(out1.save_count, 1, "断线必须恰好生成一条存档请求");
+        assert!(out1.save_all_non_empty, "存档载荷不得为空");
+    }
+
+    /// **区 0 零残留**：区 k 的处理结构上只收 `ZoneState`；这里再用一组区 0 局部表证明
+    /// 同一次断线不写区 0 的任何世界侧表。
+    #[test]
+    fn zone_one_disconnect_leaves_zone_zero_tables_untouched() {
+        let map_names = vec!["0".to_string()];
+        let (mut zone1, actor1) = landed("residue", zone::ZoneId::new(1));
+        seed_session_tables(&mut zone1, actor1);
+        let mut world0 = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let online0 = OnlineRegistry::new();
+        let ground0: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let saves0: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        assert!(handle_zone_closed(&mut zone1, "hero", 0, 7, &map_names));
+        assert!(world0.session("hero").is_none());
+        assert!(online0.iter().all(|e| e.chr_name != "hero"));
+        assert!(ground0.is_empty() && saves0.is_empty());
+        world0.open_session("probe");
+        assert!(world0.session("probe").is_some(), "区 0 世界必须可正常写");
+    }
+
+    /// 陈旧 `Closed`（重登后旧 socket）：整臂早退、什么都不清、计 `zone_disconnect_dropped`。
+    #[test]
+    fn stale_close_keeps_state_and_counts_dropped() {
+        let (mut state, actor) = landed("stale", zone::ZoneId::new(1));
+        perf_counters::reset_zone_login_counters_for_tests();
+        let map_names = vec!["0".to_string()];
+        assert!(
+            !handle_zone_closed(&mut state, "hero", 0, 999, &map_names),
+            "与在线项不匹配的 Closed 必须早退"
+        );
+        assert_eq!(perf_counters::zone_disconnect_dropped(), 1);
+        assert!(
+            state.online.iter().any(|e| e.chr_name == "hero"),
+            "陈旧 Closed 不得摘在线项"
+        );
+        let sess = state.world.session("hero").expect("会话仍在");
+        assert_eq!(sess.actor_id, Some(actor), "陈旧 Closed 不得摘实体");
+        assert!(state.save_outbox.is_empty(), "陈旧 Closed 不得生成存档");
+        perf_counters::reset_zone_login_counters_for_tests();
     }
 }

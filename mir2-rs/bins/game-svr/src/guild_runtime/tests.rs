@@ -1946,7 +1946,10 @@ fn g3_anchor_a1_four_disconnect_calls_and_order() {
 ///
 /// 只扫生产面（首处 `mod tests {` 之前）：测试夹具自己也调用该函数，不切会让计数变成 2。
 ///
-/// 牙：删掉 `sim_loop` 的调用行 ⇒ 本用例红。已知边界：把调用换成一层间接包装仍能绿
+/// **L2-5 ③ 段 1c 起两处**：区 0 的 `sim_loop` Closed 臂 + 区 k 的 `handle_zone_closed`
+/// （两处都要摘同一组容器）。锚按**所在函数**归位，不只数个数。
+///
+/// 牙：删掉任一处调用行 ⇒ 本用例红。已知边界：把调用换成一层间接包装仍能绿
 /// （源码文本锚的通用边界，登记在卡上）。
 #[test]
 fn closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view() {
@@ -1960,10 +1963,47 @@ fn closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view() 
         .collect();
     assert_eq!(
         calls.len(),
-        1,
-        "生产代码里必须恰好一处 `close_cleanup_residue(` 调用行；命中 {calls:?}         （0 = 调用点被删 ⇒ Cleaned 不过就不再清理；>1 = 重复调用）"
+        2,
+        "生产代码里必须恰好两处 `close_cleanup_residue(` 调用行（区 0 Closed 臂 + 区 k 断线）；命中 {calls:?}（少 = 某条断线路径不再清理；多 = 重复调用）"
     );
-    let call = calls[0];
+    // 按**所在函数**归位（1c 起两处调用合法，但必须各在其位）。
+    let fn_of = |call: usize| -> String {
+        (0..call)
+            .rev()
+            .find(|&i| code[i].starts_with("fn "))
+            .map(|i| code[i].trim().to_string())
+            .unwrap_or_default()
+    };
+    let call = calls
+        .iter()
+        .copied()
+        .find(|&c| fn_of(c).starts_with("fn sim_loop("))
+        .unwrap_or_else(|| panic!("区 0 `sim_loop` 的 Closed 臂调用缺失；命中 {calls:?}"));
+    let zonek = calls
+        .iter()
+        .copied()
+        .find(|&c| fn_of(c).starts_with("fn handle_zone_closed("))
+        .unwrap_or_else(|| panic!("区 k `handle_zone_closed` 的调用缺失；命中 {calls:?}"));
+    assert_ne!(call, zonek);
+    // 区 k 的调用必须在自己函数体内、且早于它自己的 `world.disconnect(chr_name)`。
+    let zonek_fn = (0..zonek)
+        .rev()
+        .find(|&i| code[i].starts_with("fn "))
+        .expect("区 k 所在函数");
+    let zonek_end = (zonek..code.len())
+        .find(|&i| code[i].starts_with("fn ") && i > zonek)
+        .unwrap_or(code.len());
+    let zonek_disc = (zonek..zonek_end)
+        .find(|&i| {
+            code[i]
+                .trim()
+                .starts_with("match world.disconnect(chr_name)")
+        })
+        .expect("区 k 的 `world.disconnect(chr_name)` 必须在同函数内");
+    assert!(
+        zonek_fn < zonek && zonek < zonek_disc,
+        "区 k 的清理必须在 `handle_zone_closed` 内、早于它自己的 disconnect（fn={zonek_fn} call={zonek} disc={zonek_disc}）"
+    );
     let arm = (0..call)
         .rev()
         .find(|&i| code[i].trim() == "GateEvent::Closed {")
@@ -2104,32 +2144,69 @@ fn g3_anchor_a5_prepare_closed_guild_and_flags() {
     let gs = exact(&l, "let guild_soft = guild_runtime::on_disconnect(")[0];
     assert!(b1[0] < gs && b2[0] < gs);
 
-    // ③ 臂内调用行与位置。
+    // ③ 臂内调用行与位置（**1c 起两处**：区 0 的 Closed 臂 + 区 k 的 `handle_zone_closed`）。
     // rustfmt（max_width=100）会把该调用折成多行；按折叠空白后的 token 串逐字匹配，
-    // token 序列与 v9 §A5③ 的锚点相同（改参数/改函数名 ⇒ 必红）。
+    // 两处**各自的实参形态**都必须保持（改参数/改函数名 ⇒ 必红）。
     let calls: Vec<usize> = l
         .iter()
         .enumerate()
         .filter(|(_, x)| x.trim_start().starts_with("if !prepare_closed_guild("))
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(calls.len(), 1, "Closed 臂内调用唯一");
-    let c = calls[0];
-    let bend = (c..=c + 12)
-        .find(|&i| l[i].trim() == ") {")
-        .expect("调用闭合行");
-    let normalized: String = l[c..=bend]
-        .join(" ")
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .replace(",)", ")");
-    let expected: String =
+    assert_eq!(
+        calls.len(),
+        2,
+        "prepare_closed_guild 生产调用两处（区 0 Closed 臂 + 区 k 断线处理）；命中 {calls:?}"
+    );
+    let normalize_at = |c: usize| -> (usize, String) {
+        // 区 0 的调用被 rustfmt 折成多行（尾行 `) {`）；区 k 的调用一行放得下（尾在同一行）。
+        let bend = if l[c].trim_end().ends_with(") {") {
+            c
+        } else {
+            (c..=c + 12)
+                .find(|&i| l[i].trim() == ") {")
+                .expect("调用闭合行")
+        };
+        let normalized: String = l[c..=bend]
+            .join(" ")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .replace(",)", ")");
+        (bend, normalized)
+    };
+    let zone0_expected: String =
         "if !prepare_closed_guild(&mut ground_sessions, &online, &chr_name, index, socket) {"
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-    assert_eq!(normalized, expected);
+    let zonek_expected: String =
+        "if !prepare_closed_guild(ground_sessions, online, chr_name, gate_idx, socket) {"
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+    let zonek_fn = exact(&l, "fn handle_zone_closed(")[0];
+    let zonek_fn_end = block_end(&l, zonek_fn);
+    let mut zone0_hit = None;
+    let mut zonek_hit = None;
+    for &c in &calls {
+        let (bend, normalized) = normalize_at(c);
+        if normalized == zone0_expected {
+            zone0_hit = Some((c, bend));
+        } else if normalized == zonek_expected {
+            assert!(
+                zonek_fn < c && c < zonek_fn_end,
+                "区 k 的 prepare_closed_guild 调用必须在 `handle_zone_closed` 体内（命中 {c}）"
+            );
+            zonek_hit = Some((c, bend));
+        }
+    }
+    assert!(
+        zone0_hit.is_some(),
+        "区 0 的 Closed 臂调用必须保持 token 串"
+    );
+    assert!(zonek_hit.is_some(), "区 k 的断线处理调用必须保持 token 串");
+    let (c, bend) = zone0_hit.expect("已断言");
     assert!(
         l[bend + 1..=bend + 3]
             .iter()
