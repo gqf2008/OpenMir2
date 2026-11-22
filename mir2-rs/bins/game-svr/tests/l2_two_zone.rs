@@ -150,62 +150,77 @@ fn run_split(stale: bool) -> Vec<ZoneVisible> {
     let b_barriers = Arc::clone(&barriers);
     let b_exchange = Arc::clone(&exchange);
     let handle_b = std::thread::spawn(move || {
-        let mut world = world_b();
-        for tick in 1..=TICKS {
-            if stale {
-                b_exchange.publish(
-                    ZoneId::new(1),
-                    snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
-                );
+        // **失败快传**：本线程 panic ⇒ 唤醒 A 区，避免测试挂死。
+        let abort = Arc::clone(&b_barriers);
+        let run = move || {
+            let mut world = world_b();
+            for tick in 1..=TICKS {
+                if stale {
+                    b_exchange.publish(
+                        ZoneId::new(1),
+                        snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
+                    );
+                }
+                if tick == MOVE_TICK {
+                    assert!(world.entities.set_xy(M_B_ID, 14, 7), "移动 M_B");
+                }
+                let mut record = world.tick_phase1();
+                if !stale {
+                    b_exchange.publish(
+                        ZoneId::new(1),
+                        snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
+                    );
+                }
+                b_barriers.wait_after_phase1();
+                let _ = b_exchange.read(ZoneId::new(0), tick);
+                world.tick_phase2(&mut record);
+                b_barriers.wait_after_phase2();
             }
-            if tick == MOVE_TICK {
-                assert!(world.entities.set_xy(M_B_ID, 14, 7), "移动 M_B");
-            }
-            let mut record = world.tick_phase1();
-            if !stale {
-                b_exchange.publish(
-                    ZoneId::new(1),
-                    snapshot_border(&world, 0, RECT_B, HALO, tick, &HaloFrameSource::none()),
-                );
-            }
-            b_barriers.wait_after_phase1();
-            let _ = b_exchange.read(ZoneId::new(0), tick);
-            world.tick_phase2(&mut record);
-            b_barriers.wait_after_phase2();
+        };
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+            abort.abort();
+            std::panic::resume_unwind(payload);
         }
     });
 
     let a_barriers = Arc::clone(&barriers);
     let a_exchange = Arc::clone(&exchange);
     let handle_a = std::thread::spawn(move || {
-        let mut world = world_a();
-        for tick in 1..=TICKS {
-            if stale {
-                a_exchange.publish(
-                    ZoneId::new(0),
-                    snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
-                );
-            }
-            let mut record = world.tick_phase1();
-            if !stale {
-                a_exchange.publish(
-                    ZoneId::new(0),
-                    snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
-                );
-            }
-            a_barriers.wait_after_phase1();
-            let halo_b = a_exchange
-                .read(ZoneId::new(1), tick)
-                .expect("B 区必须在本 tick 发布快照");
-            world.tick_phase2(&mut record);
-            a_barriers.wait_after_phase2();
+        let abort = Arc::clone(&a_barriers);
+        let run = move || {
+            let mut world = world_a();
+            for tick in 1..=TICKS {
+                if stale {
+                    a_exchange.publish(
+                        ZoneId::new(0),
+                        snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
+                    );
+                }
+                let mut record = world.tick_phase1();
+                if !stale {
+                    a_exchange.publish(
+                        ZoneId::new(0),
+                        snapshot_border(&world, 0, RECT_A, HALO, tick, &HaloFrameSource::none()),
+                    );
+                }
+                a_barriers.wait_after_phase1();
+                let halo_b = a_exchange
+                    .read(ZoneId::new(1), tick)
+                    .expect("B 区必须在本 tick 发布快照");
+                world.tick_phase2(&mut record);
+                a_barriers.wait_after_phase2();
 
-            let local = visible_local(&world);
-            let halo = visible_halo(observer_xy(&world), &halo_b);
-            let mut union: Vec<i32> = local.iter().chain(halo.iter()).copied().collect();
-            union.sort_unstable();
-            tx.send(ZoneVisible { union, local, halo })
-                .expect("主线程接收");
+                let local = visible_local(&world);
+                let halo = visible_halo(observer_xy(&world), &halo_b);
+                let mut union: Vec<i32> = local.iter().chain(halo.iter()).copied().collect();
+                union.sort_unstable();
+                tx.send(ZoneVisible { union, local, halo })
+                    .expect("主线程接收");
+            }
+        };
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+            abort.abort();
+            std::panic::resume_unwind(payload);
         }
     });
 
