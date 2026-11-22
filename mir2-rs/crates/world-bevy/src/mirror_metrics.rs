@@ -42,6 +42,23 @@ static HANDOFF_ALREADY_HELD: AtomicU64 = AtomicU64::new(0);
 /// 为 0 正常（重发从未迟到），>0 说明 ack 有延迟但去重生效。
 static HANDOFF_OFFER_DUP_DROPPED: AtomicU64 = AtomicU64::new(0);
 
+/// **L2-5 ③ 段 4（总监 2026-11-22 裁决）**：镜像**写失败**（`upsert_mirror` 落格失败 =
+/// `RefusedCell`）被**丢弃**的次数。**不再 abort 整机**；缺口不许静默 ⇒ 进 perf TSV +
+/// 限流 WRN（id/map/坐标/原因），跨界验收必须展示它。
+static MIRROR_WRITE_REFUSED_CELL: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 4**：镜像写失败的另一原因——该 id 在本区已是**真实体**（`RefusedOccupied`，
+/// 处理方式 = 跳过 + `mirror_shadowed_by_local`）。按原因分列便于 ④/⑤ 拆分
+/// 「handoff 窗口内」与「静态实体撞名」；本计数与 `mirror_shadowed_by_local` **同时自增**。
+static MIRROR_WRITE_REFUSED_OCCUPIED: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 4（容量冒烟读数）**：handoff **offer 发射**次数（源区每次向目标区邮箱 push 一条，
+/// 同一 pending epoch 的每 tick 重发各计一次）。与 `handoff_refused` 一起给 ④/⑤ 步定缺口基线。
+static HANDOFF_OFFERED: AtomicU64 = AtomicU64::new(0);
+
+/// **L2-5 ③ 段 4**：handoff **回滚/拒绝**次数（ack reject + 超时 + 落点不属任何区）。
+static HANDOFF_REFUSED: AtomicU64 = AtomicU64::new(0);
+
 /// **L2-5 ③ 段 2（兜底，防御不是牙）**：`apply_mirrors` 收到「该 id 已是本区**真实**实体」
 /// 而跳过的次数。时序正确时**恒 0**；>0 说明 handoff 时序被破坏（不要用人工变异把它当牙宣传）。
 static MIRROR_SHADOWED_BY_LOCAL: AtomicU64 = AtomicU64::new(0);
@@ -104,6 +121,70 @@ pub fn note_handoff_mirror_promoted() {
 #[must_use]
 pub fn handoff_mirror_promoted() -> u64 {
     HANDOFF_MIRROR_PROMOTED.load(Ordering::Relaxed)
+}
+
+/// 记一次镜像落格失败（RefusedCell；已丢弃，不 abort）。
+pub fn note_mirror_write_refused_cell() {
+    MIRROR_WRITE_REFUSED_CELL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 镜像落格失败次数（测试/诊断/容量读数）。
+#[must_use]
+pub fn mirror_write_refused_cell() -> u64 {
+    MIRROR_WRITE_REFUSED_CELL.load(Ordering::Relaxed)
+}
+
+/// 复位镜像落格失败计数（**只给测试**）。
+pub fn reset_mirror_write_refused_cell_for_tests() {
+    MIRROR_WRITE_REFUSED_CELL.store(0, Ordering::Relaxed);
+}
+
+/// 记一次镜像被本地真实体占位（与 `mirror_shadowed_by_local` 同事件）。
+pub fn note_mirror_write_refused_occupied() {
+    MIRROR_WRITE_REFUSED_OCCUPIED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 镜像被本地真实体占位的次数（与 `mirror_shadowed_by_local` 相同口径）。
+#[must_use]
+pub fn mirror_write_refused_occupied() -> u64 {
+    MIRROR_WRITE_REFUSED_OCCUPIED.load(Ordering::Relaxed)
+}
+
+/// 复位该计数（**只给测试**）。
+pub fn reset_mirror_write_refused_occupied_for_tests() {
+    MIRROR_WRITE_REFUSED_OCCUPIED.store(0, Ordering::Relaxed);
+}
+
+/// 记一次 handoff offer 发射。
+pub fn note_handoff_offered() {
+    HANDOFF_OFFERED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// offer 发射次数（测试/诊断）。
+#[must_use]
+pub fn handoff_offered() -> u64 {
+    HANDOFF_OFFERED.load(Ordering::Relaxed)
+}
+
+/// 复位 offer 发射计数（**只给测试**）。
+pub fn reset_handoff_offered_for_tests() {
+    HANDOFF_OFFERED.store(0, Ordering::Relaxed);
+}
+
+/// 记一次 handoff 回滚/拒绝。
+pub fn note_handoff_refused() {
+    HANDOFF_REFUSED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 回滚/拒绝次数（测试/诊断）。
+#[must_use]
+pub fn handoff_refused() -> u64 {
+    HANDOFF_REFUSED.load(Ordering::Relaxed)
+}
+
+/// 复位回滚/拒绝计数（**只给测试**）。
+pub fn reset_handoff_refused_for_tests() {
+    HANDOFF_REFUSED.store(0, Ordering::Relaxed);
 }
 
 /// 记一次 handoff「重发时目的地已是同 id 真实体 ⇒ 幂等收下」。

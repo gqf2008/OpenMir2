@@ -770,8 +770,11 @@ pub struct MirrorStats {
     pub updated: usize,
     /// 本 tick 消失并移除的镜像数。
     pub removed: usize,
-    /// **L2-5 ③ 段 2**：镜像被本区真实体遮蔽而跳过的条数（防御计数；时序正确时恒 0）。
+    /// **L2-5 ③ 段 2**：镜像被本区真实体占位而跳过的条数（**不区分** handoff 窗口内与静态图
+    /// 实体撞名；两区各装 322 张图时静态 NPC/怪同 id ⇒ 稳态也非 0，**不得**当红线）。
     pub shadowed_by_local: usize,
+    /// **L2-5 ③ 段 4（总监裁决）**：镜像落格失败（`RefusedCell`）**被丢弃**的条数（不再 abort）。
+    pub mirror_write_refused_cell: usize,
 }
 
 /// **L2-5 ②**：用 barrier1 之后读到的**邻区本 tick** 快照刷新本区镜像。
@@ -785,8 +788,10 @@ pub struct MirrorStats {
 /// - `displays` = **收件人区**的展示表：镜像条目逐字段取快照的 `display`；快照没有展示项
 ///   （owner 侧本来就没有）⇒ 摘掉（与基线「展示表缺项 ⇒ 跳过出帧」同口径）。
 ///
-/// # Errors
-/// `upsert_mirror` 返回 `Refused*` ⇒ [`ZoneTickError::MirrorRefused`]（fail-closed）。
+/// # 拒绝口径（L2-5 ③ 段 4，总监 2026-11-22 裁决）
+/// `upsert_mirror` 的两类拒绝**都不 abort 整机**：`RefusedOccupied` ⇒ 跳过 + `mirror_shadowed_by_local`；
+/// `RefusedCell` ⇒ **丢弃该条镜像** + `mirror_write_refused_cell` + 限流 WRN（缺口不许静默，
+/// 该计数进 perf TSV，跨界验收必须展示）。abort 只留给不可能状态。
 pub fn apply_mirrors(
     world: &mut World,
     neighbors: &[HaloSnapshot],
@@ -847,14 +852,34 @@ pub fn apply_mirrors(
                 // 的正常面（目标区先提升、源区快照里还有它一 tick 的残留）。**跳过 + 计数**，
                 // 不 abort、不删本地实体（§2.3 必带要求 3）。时序正确时该计数恒 0。
                 MirrorUpsert::RefusedOccupied => {
+                    // 该 id 在本区已是**真实体**（玩家 / 静态 NPC / 怪，均可能）⇒ 跳过。
+                    // 不区分「handoff 收敛窗口内」与「静态图实体撞名」（④/⑤ 再拆）。
                     mir2_world_bevy::mirror_metrics::note_mirror_shadowed_by_local();
+                    mir2_world_bevy::mirror_metrics::note_mirror_write_refused_occupied();
                     stats.shadowed_by_local += 1;
                 }
-                outcome => {
-                    return Err(ZoneTickError::MirrorRefused {
-                        id: e.actor_id,
-                        outcome,
-                    })
+                MirrorUpsert::RefusedCell => {
+                    // **段 4 裁决**：单条镜像写失败不 abort 整机 ⇒ 丢弃 + 计数 + 限流 WRN。
+                    // 原因通常是该条镜像的坐标在本区地图上不是可走格（`cell.valid()` 只认
+                    // `CellAttribute::Walk`）；实体本体不受影响。
+                    mir2_world_bevy::mirror_metrics::note_mirror_write_refused_cell();
+                    stats.mirror_write_refused_cell += 1;
+                    static REFUSED_CELL_LOGGED: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    let n =
+                        REFUSED_CELL_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if n <= 8 || n.is_multiple_of(1000) {
+                        crate::glog!(
+                            "WRN",
+                            "镜像写失败（已丢弃，不 abort）：id={} map={} ({},{}) cell_type={:?} 原因=cell（不可走/越界）；累计 {}",
+                            e.actor_id,
+                            e.map_id,
+                            e.x,
+                            e.y,
+                            e.cell_type,
+                            n
+                        );
+                    }
                 }
             }
             if let Some(d) = displays.as_deref_mut() {
