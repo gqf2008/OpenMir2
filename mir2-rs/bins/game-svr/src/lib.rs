@@ -25010,6 +25010,7 @@ impl std::ops::Deref for OnlineRegistry {
     }
 }
 
+#[cfg(test)]
 impl std::ops::DerefMut for OnlineRegistry {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entries
@@ -124293,5 +124294,90 @@ mod zone_statics_tests {
             .collect();
         full_merchants.sort();
         assert_eq!(plain, full_merchants, "商人落点集合逐项一致");
+    }
+}
+
+/// **卡 `perf-index` 迁移门禁**：生产侧禁止对 `OnlineRegistry` 做「不 rebuild 的可变写」。
+///
+/// 两道门：
+/// 1. `impl DerefMut for OnlineRegistry` 必须 `#[cfg(test)]` ⇒ 生产侧「可变 deref」编译期不可表达；
+/// 2. 生产源码（`mod tests {` 之前）不得出现 `online.<变异方法>(` / `&mut *online`（`online_set` 实参除外）。
+///
+/// 红检：`online.push(` 等出现在生产前缀 ⇒ 用例 2 红；去掉 DerefMut 的 `#[cfg(test)]` ⇒ 用例 1 红
+/// （此时生产代码可写 `online.get_mut(..)`，即本门禁要挡的旁路）。
+#[cfg(test)]
+mod online_immutability_gate {
+    fn source() -> &'static str {
+        include_str!("lib.rs")
+    }
+
+    /// 本仓约定：`mod tests {` 之后是测试代码；其前缀即生产代码（既有锚点用例同法）。
+    fn production() -> &'static str {
+        let src = source();
+        let cut = src
+            .find("mod tests {")
+            .expect("lib.rs 必须有 `mod tests {` 标记");
+        &src[..cut]
+    }
+
+    #[test]
+    fn deref_mut_is_test_only() {
+        let src = source();
+        let i = src
+            .find("impl std::ops::DerefMut for OnlineRegistry")
+            .expect("DerefMut impl 必须存在");
+        let before = src[..i].trim_end();
+        assert!(
+            before.ends_with("#[cfg(test)]"),
+            "OnlineRegistry 的 DerefMut 必须 #[cfg(test)]：生产侧禁止可变 deref（索引会陈旧）"
+        );
+    }
+
+    #[test]
+    fn production_has_no_online_mutation_calls() {
+        let banned = [
+            "push",
+            "clear",
+            "retain",
+            "sort",
+            "sort_by",
+            "sort_unstable",
+            "remove",
+            "insert",
+            "pop",
+            "truncate",
+            "extend",
+            "drain",
+            "iter_mut",
+            "as_mut_slice",
+            "get_mut",
+            "swap",
+            "reverse",
+        ];
+        let prod = production();
+        let lines: Vec<&str> = prod.lines().collect();
+        for (i, raw) in lines.iter().enumerate() {
+            // 去掉行内 `//` 注释，避免注释里提到被禁写法误报（字符串字面量不剥离，见下）。
+            let code = raw.split("//").next().unwrap_or("");
+            for m in banned {
+                let pat = format!("online.{m}(");
+                assert!(
+                    !code.contains(pat.as_str()),
+                    "生产代码禁止 `{pat}`（旁路写会让索引陈旧）：lib.rs:{}: {}",
+                    i + 1,
+                    raw.trim()
+                );
+            }
+            if code.contains("&mut *online") {
+                // 只允许作为 `online_set` 的实参：允许本行或前两行出现 `online_set(`。
+                let window: String = lines[i.saturating_sub(2)..=i].join("\n");
+                assert!(
+                    window.contains("online_set("),
+                    "生产代码禁止 `&mut *online`（online_set 实参除外）：lib.rs:{}: {}",
+                    i + 1,
+                    raw.trim()
+                );
+            }
+        }
     }
 }
