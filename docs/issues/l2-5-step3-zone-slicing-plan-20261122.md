@@ -128,6 +128,26 @@ appear/disappear**（不产生任何 `SM_TURN`/`SM_FEATURECHANGED`/`SM_DEATH`/`S
 新增或消失，也不出现"闪一下又回来"）；逐 tick `VisibleActors` 也必须连续。legacy 与增量两条 AOI
 路径（`MIR2_AOI_INCREMENTAL=0/1` 两个进程级窗口）各验一次。
 
+### 2.4 outgoing 带的四个后果（选 (a) 后必须现在定；不可留到实现时想）
+
+1. **同格序复活（C1–C3 的跨区形态）**：此前镜像恒在 owner 的 rect 内，与收件人**本地**真实体
+   **不可能同格**（C1–C3 只覆盖"多镜像同格"）；**outgoing 镜像落在收件人 rect 内** ⇒ 会与本地真实
+   体同格 ⇒ 格内序问题在跨区场景**重新可达**。
+   - 定序规则（写死）：基线里跨界那一步是 `move_object` 把移动者**追加到目标格尾部**
+     （`MapCellInfo::add` = push）⇒ 收件人区对 `outgoing: true` 的镜像**一律追加到格尾**（**忽略**
+     其 `cell_pos`——那个下标是在**源区**世界算的，混有源区的镜像，与收件人格内序无关）；
+     `outgoing: false` 的普通边界镜像仍按 `cell_pos` 定序（②的口径不变）。
+   - 必带夹具：**出带镜像 + 本地真实体同格**，逐帧顺序与单区基线一致（legacy + 增量各一条）。
+2. **阻挡变活（这一次"挡"是对的）**：outgoing 镜像在收件人 rect 内会**真挡路**（`is_blocking`
+   不看 `mirror`）——身体确实在那里。仍按 C7 口径量一次"**两侧阻挡者 id 一致**"；**不得**因为
+   "镜像不该挡"的旧直觉去改 `is_blocking`（C7 的裁决：测量到手前不改）。
+3. **提升不许重复登记格表**：同 id、同格的镜像提升为真身时，**只改标志与状态**（`mirror=false` +
+   全量状态覆盖 + 挂会话），**不得**再调 `add_map_object`——否则格内出现两条同 id 对象，
+   `cell_pos` 取第一个、AOI 扫描出双份。用例：提升后该格 `obj_list` 里该 id 恰一条。
+4. **带规模门的口径（二选一，选"算"）**：`MIR2_MAX_HALO_BAND_ENTITIES`（缺省 512，fail-closed）
+   **计入 outgoing 条目**——带门 = 「rect 内 + outgoing」的总数（更保守，单个门管全部）。
+   启动门（`check_band_gate`）与运行期上限都按这个总数判；不另设 `halo_outgoing_overflow`。
+
 ## 3. "收件人区发帧"（§7 `RecipientZone`）在切片后是否仍成立
 
 **成立的部分**：AOI 出现/消失帧由收件人区从**本区 World**（本地实体 + 镜像）发出；
