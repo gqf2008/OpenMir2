@@ -376,13 +376,80 @@ recipient, kind)` 的"唯一发射者 = 收件人区"直接成立。
   ack 才移除。两线程自由跑时 ack 可能晚 **1 tick** ⇒ 源区在自己的 T+1 快照里仍发布该 id
   （outgoing）、在 T+2 的顶才移除 ⇒ 目标区在 **T+1、T+2 这两 tick** 命中「已是真实体」的遮蔽
   兜底。故**一次跨界最多遮蔽 2 tick**；N 次跨界累计 ≤2N，且 `promoted == N`（每次跨界恰一次提升）。
-- **异常口径**：`shadowed > 2N`、或随跨界次数呈「非每次 ≤2」的增长 ⇒ 判定**时序设计破了**，要查
-  而不是庆祝兜底生效。
+- **计数口径是两区合计（2026-11-22 实测修正）**：`mirror_shadowed_by_local` 是**进程级**计数，
+  而 `pending` 期间**两区都持有该 id**（源区真实体未移除、目标区已提升），两区各自应用邻区快照
+  都会命中「本地已是真实体」⇒ **每次跨界两区各计一次**。实测分区读数恒等（5/5、6/6…），
+  证明旧推导「每次收下 ≤4、合计 ≤4N」只算了单区，是错的。
+- **代码里的断言上界是 ≤6N（超集上界，不是目标）**：对每个区，遮蔽窗口 = 目标区提升 tick P 到
+  源区移除 tick C-1，`P ≥ T+1`、`C ≤ T+4`（`HANDOFF_TIMEOUT_TICKS+1`）⇒ 每区每次 ≤3，两区
+  合计 ≤6N。测试同时断言「进程级计数 == 两区自记之和」（不等 ⇒ 被并发用例污染，读数不可引用）。
+- **异常口径（裁定 ③ 的两区版）**：**每区**每次收下实测 ≈0.5–0.7（合计 ≈1.0–1.4N）；每区接近
+  3/次（合计接近 6N）⇒ 判定**时序设计破了**，要查，不许拿上界掩盖。
 - **两条硬判据不松**：`refused == 0`；受害者（该 id）**全程无 appear/disappear**（收件人
   `visible_actors` 台账逐 tick 连续）。
 - **「恒 0」的正确范围**：**引擎级单 tick 显式定序夹具**恒 0（`l2_handoff_tests` 的断言保留）；
   自由运行的两区线程 ≤2/次（`l2_handoff_prod_tests::production_runtime_multi_crossing_bounded_shadow`
   用**多次跨界**断言 `promoted == N`、`shadowed ≤ 2N`、`refused == 0`、受害者台账连续）。
+
+**被证伪的假设：「目的地必有该 id 的镜像」（2026-11-22 合并门红原文）**
+
+```text
+[WRN] handoff 拒绝：区 0 收到实体 1 但镜像缺失或位置不符（NotMirror），来自区 1
+[WRN] handoff 被拒：区 1 实体 1 保留本区（回滚 1）tick=3
+assertion `left == right` failed: 每次跨界恰一次提升（累计 promoted=2 crossings=3）
+```
+现象：玩家跨过去后**立刻跨回**时，目的地（原区）此刻没有该 id 的镜像（它刚把真实体移除、邻区
+快照还没送到）⇒ 旧实现按 `NotMirror` 拒收、回滚 ⇒ **该走却被拒**（跨区边界的可走性被内部记账
+左右），这是口径 A 不能接受的。
+
+修正（总监裁决）：handoff 收下不得以「目的地已有镜像」为前提——
+1. 有镜像 ⇒ 原地提升（`handoff_mirror_promoted`）；
+2. **无该 id 实体 ⇒ 直接落真身**（`handoff_inserted_fresh`；落格一次、不建空镜像、不先插后升）；
+3. 该 id 已被**真实体**占用 ⇒ 才允许拒（`RefusedOccupied`；`NotMirror` 不再作为拒收理由）。
+判据：`promoted + inserted_fresh == 收下次数`（N 的口径 = 被收下的跨界），**`refused == 0` 仍是
+硬红线**；新增**同 tick 往返**用例（跨过去下一 tick 立刻跨回，两次都成功、台账连续、
+落点无重复实体）。**回滚路径本身保留且正确**（拒收后实体留在原区、无丢失无重复）。
+
+**幂等支（`AlreadyHeld`）的三点裁定（总监 2026-11-22）**：
+
+1. **必须计数** `handoff_already_held`（`World::handoff_accept` 唯一计数点，`mirror_metrics` 进程级）。
+   它是「源区拿到 ack 前每 tick 重发」的直接读数，也是「幂等支被删」的护栏：删掉该支 ⇒ 重发落
+   `RefusedOccupied` ⇒ 源区回滚 ⇒ `handoff_refused > 0`（硬红线），本计数同时掉回 0。
+   **为 0 正常**（ack 恰好不迟到）；每次跨界收下的结构性上界是 **3**（第一次 offer 被收下；
+   pending 寿命 ≤4 tick ⇒ 至多还有 3 次重发），远大于 3 的突变要查。用例
+   `l2_handoff_tests::handoff_accept_idempotent_resend_is_counted`（引擎级、确定性）与
+   `l2_handoff_prod_tests::production_runtime_multi_crossing_bounded_shadow`（`already_held ≤ 3N`）。
+2. **「位置不参与判断」的依据写死**：actor 业务 id **全局唯一**——`zone_id_base(z) = z ×
+   shard::ACTOR_ID_SEGMENT`，各区 id 段不相交（`zone_id_base_is_zero_for_zone_zero_and_linear`）
+   ⇒ 同 id 的真实体**就是**同一逻辑实体；重发携带的坐标必然旧（目标区已在走），拿旧坐标判
+   「位置不符」只会把幂等重发误判成拒收。
+   **反证**：若将来允许同一 id 跨代复用（死亡/下线后回池），旧实体的迟到重发会与新实体撞 id，
+   本幂等会把**不同实体**误判成同一 ⇒ 不变量须变成「id + 代际（generation）」，
+   届时必须按代际区分，不能沿用本支。
+3. **`≤6N` 是上界不是目标**（见上节「异常口径」，两区口径）：每区实测 ≈0.5–0.7 次/跨界，
+   `shadowed/N` 接近 6 同样判时序破了，不许用上界掩盖。修复前 spec 的 `≤4N`/`≤2N` 推导漏了
+   「两区各计一次」（这层是**推导错误**，与下面的迟到重发是两回事）；修复前实测最高 52（=5.2N）
+   则**同时**混入了迟到重发造成的「实体被传送一次、两区各多遮蔽若干 tick」——去重修复后同一
+   用例降到 10–14（=1.0–1.4N），两层原因都已消除/校正。
+
+**迟到重发必须按 offer 身份去重（2026-11-22 总监裁定；`flake_leg_1.log` 根因）**：
+
+- **证伪**：`AlreadyHeld` 只能挡「目标区此刻还持有该实体」的重复。目标区在提交后**移除**了实体
+  （回程已收下）时，一条**迟到的重发 offer** 会被当成新的跨界收下 ⇒ 实体被「传送」一次。
+  原始证据：往返用例 `accepted=3`（应为 2），事件序为「区 1 移除 tick=10 → 区 1 落真身（来自区 0，
+  应在 tick 8）」——同一次 pending epoch 的重发在移除后才被排水。
+- **修法**：offer 带**身份** `epoch`（= 源端该 id 这次 `pending` 的起始 tick；同一次跨界的所有
+  重发共享，下一次跨界必然更大）。目标区维护 `(源区, id) → 已处理的最大 epoch`，
+  `epoch <= 已处理` ⇒ **丢弃**（不 ack、不动作），按 `HANDOFF_DUP_TTL_TICKS = 2×4` 回收（有界）。
+  `AlreadyHeld` 保留作第二道幂等（去重后几乎恒 0）。
+- **计数**：`handoff_offer_dup_dropped`（每次跨界收下的重发 ≤3 ⇒ ≤3N）。实测 N=10 时 14–17，
+  即每轮都在拦真迟到重发。
+- **牙**：引擎级确定性用例 `l2_handoff_tests::tick_top_drops_late_duplicate_offer_epochs`
+  （同 epoch 迟到重发 ⇒ 丢弃 + 计数 +1；**新 epoch ⇒ 必须收下**，防去重过度）；
+  生产路径 `shadowed_by_zone`/`dup_dropped` 上界断言 + 进程级/分区对账。
+- **验证**：两个 AOI 窗口各 **20 轮**连跑 `cargo test -p game-svr --lib l2_handoff`，
+  **红=0**（40/40）；取证轮（`--nocapture`，`MIR2_HANDOFF_TEST_DIAG=1`）读数：`refused=0`、
+  `shadowed` 10–14（N=10）、分区恒等、`dup_dropped` 14–17、`already_held=0`。
 
 **仍未做（明确登记）**：真机 bot 过网关跨界的批量冒烟（`tools/botload`）——本段的生产证据是
 「两区真线程 + 真实移动命令」，尚未跑完整网关栈。
