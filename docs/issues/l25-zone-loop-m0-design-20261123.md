@@ -1,0 +1,164 @@
+# L2-5 P1 · M0 设计要点：每区 host 循环骨架（2026-11-23）
+
+> 依据：已入 master 的评估稿 [`l25-per-zone-host-loop-scope-20261123.md`](l25-per-zone-host-loop-scope-20261123.md)
+> §4（M0–M5）与 §12（今晚容量重估）。**本稿只覆盖 M0**（骨架），不写 M1 及以后。
+> 派工：opc-27（2026-11-23）；复核：0c（评估稿作者）；实现：本会话（`card/zone-loop-m0`，自 `05be6a65e`）。
+> 状态：**设计待审**（opc-27 审过再写码）。
+
+## 0. M0 的验收（原文）
+
+1. 把 `sim_loop` 的主循环体抽成「每区可实例化」的函数/结构，参数化 zone 局部态 + 借用进程服务；
+2. `slicing=0` / N=1 **逐字节不变**：两树 stdout 对拍（`order_sha=b78156a7…`、
+   `multiset_sha=bd4b13ba…`、86/86 行）——硬门；
+3. **区 k 空实例能跑通一个 tick 不 panic**（不是「能出帧」，那是 M1）；
+4. 全量门 `FMT/CLIPPY/TEST` 绿、`msgcodegen` 绿；不动既有行为。
+
+## 1. 现状事实（已核；用符号锚，不贴会漂的行号）
+
+| 事实 | 锚 |
+| --- | --- |
+| `sim_loop` 是一个**非 async** 的 `fn`，跑在 `std::thread::Builder::spawn` 里 | 生产调用点唯一：`sim_loop(` 在 spawn 闭包内 |
+| 结构 = 启动装载（约 600 行 `let` 初始化）+ 主 `loop { … }`（约 2,750 行） | `loop {` 在 `fn sim_loop(` 之内唯一 |
+| 主循环已被 `host_prof` 切成 17 段 | `host_prof.end("…")`：`HostShutdown`（关服支）+ 主循环 16 段：`HostInbound`、`HostDbPoll`、`HostPeriodic`、`HostWorldHead`、`HostPostHead`、`HostPlayerRun`、`HostWorldTail`、`HostPlanes`、`HostRecovery`、`HostFrames`、`HostDealTick`、`HostAoiDownlink`、`HostPersist`、`HostSwitch`、`HostDiag`、`HostSleep` |
+| 段与段之间还有**未计入**的代码（如 `drain_yedo_events`/`drain_skill_train_events`/`clear_status_changes` 在 `HostWorldHead` 的 `end` 与下一段 `begin` 之间） | 段归属只覆盖 `begin…end` 之间 |
+| 区 k 已有自己的世界侧状态 `ZoneState`（world/displays/online/ground_sessions/saves/login_tails/aoi_frames_total/shop_sessions/sell_off_sessions/save_outbox/alive/mon_gen） | `struct ZoneState`；被 `Arc<Mutex<ZoneState>>` 持有，区 0 线程按 tick 借锁写入 |
+| 区 k 的 tick 入口是 `region_loop::run_zone_tick`（phase1→快照→barrier1→apply_mirrors→phase2→barrier2），**丢弃 `TickRecord`** | `spawn_minimal_zone` 内 |
+| `World` 有 `owner_thread` 断言：只能在其构造线程 tick | `crates/world-bevy/src/world.rs` |
+| **约 18 处源码扫描用例以 `fn sim_loop(` 位置为锚**，断言某生产调用「在其之后」；其中 `drain_pk_flag_downlink` 那条要求 `sim_loop < call < pk`（夹逼） | 用例名：`*_in_sim_loop` / `*_is_wired_in_sim_loop` 等 |
+
+> 读法：第 8 行是本设计的**硬约束**——抽取出来的代码必须**文本上位于 `fn sim_loop(` 之后、
+> `mod tests {` 之前**，且正文里那些被扫描的字面行**各保持恰一处、相对顺序不变**。这不难满足
+> （把 `impl HostLoop` 紧贴 `fn sim_loop` 之后放），但必须当成设计前提，否则 18 条用例一起红。
+
+## 2. 结构切分（三层）
+
+```text
+sim_loop(...)                       // 薄驱动：启动装载 → 组两个结构 → loop { 收关闭信号 + tick }
+   ├─ struct HostLoop               // 区级状态（owned；本区私有，可每区一个实例）
+   ├─ struct HostServices<'a>       // 进程级服务（借用；区 0 线程持有，区 k 只读借/经通道）
+   └─ struct TickIo<'a>             // 本区输入/关闭信号（区 0 = ev_rx/ev_ctl_rx/shutdown；区 k = 自己的 rx/stop）
+
+impl HostLoop {
+    fn new_host(...) -> Self        // M0：不搬启动装载，只在 loop 前用字段简写把既有局部装进结构
+    fn for_zone(zone, map_sizes, rng_seed) -> Self   // 区 k 空实例（复用 ZoneState::new 的构造口径）
+    fn tick(&mut self, svc: &mut HostServices<'_>, io: &mut TickIo<'_>, phases: PhaseSet)
+}
+```
+
+### 2.1 `HostLoop`（区级，owned）
+
+`world`、`displays`、`online`、`ground_sessions`、`saves`、`login_tails`、`aoi_frames_total`、
+`shop_sessions`、`trade_sessions`、`sell_off_sessions`、`mon_gen`、`line_notice_states`、
+`monster_walk_seen`、`gates`（每区一份的 `SimToGate` 发送端表）、`handoff_runtime`、
+`ticks`、`aoi_frames_total`、`gm_filter_word` / `gm_mission` / `gm_spirit_mutiny_tick`（`Cell`/`RefCell`，
+本区命令路径用；始终同线程）。
+
+- 判据：**该状态只被本区会话/实体读写，或每区各有一份且由广播填充**（`gates`）。
+- `ZoneState` 改为持有 `host: HostLoop` + 区 k 专属的 `save_outbox`/`alive`（`mon_gen` 进 `host`，
+  区 0 的 `mon_gen_host` 也是 `HostLoop` 字段）；现 `st.*` 访问点只有 11 处（`st.world` 7、
+  `st.displays`/`st.online`/`st.save_outbox`/`st.alive` 各 1），改动面小。
+
+### 2.2 `HostServices<'a>`（进程级，借用）
+
+`db`、`engine`、`guilds` + `guild_run_tick`、`castle_gates`/`castle_store`/`castle_war_states`/
+`pending_gm_castle_broadcasts`、`npc_host`/`merchant_book`/`npc_vars_base`（`Rc` ⇒ `!Send`，但
+`sim_loop` 在独立 std 线程，无 `Send` 约束）、`sell_off_book`、`item_number`/`item_number_ex`、
+`planes`、`registry`、`enter_cfg`（含 `mon_gen.table`/`catalog`/`pet_cfg`）、`shard_runtime`、
+`shutdown`/`shutdown_done_tx`、`ids_online`/`ids_out`、`world_start`、`win_lottery`、`zone_host`、
+`server_table`、`colors`/`notice`/`party_cfg`、`pwd_sessions`/`reconnect_pending`/`kick_pending`/
+`soft_close_pending`、`state_log`、`host_prof`、`perf`（原子，无需借）。
+
+- 判据：**跨区共享/单点**（评估稿 §5.1 的七项 + 登录/踢/换服编排 + 只读配置）。
+
+### 2.3 `TickIo<'a>`（本区 I/O）
+
+区 0：`ev_rx`/`ev_ctl_rx`/`shutdown`（原样）。区 k：自己的 `rx`/`ctl_rx`/`stop`。
+`HostInbound` 段整体搬进 `phase_inbound(&mut self, svc, io)`——这是 M1「区 k 命令分发」的落点，
+M0 只把结构摆好（区 k 的 `PhaseSet` 暂不含它）。
+
+### 2.4 `PhaseSet`（要跑哪些段）
+
+```rust
+struct PhaseSet(u32);   // 位集：INBOUND | DB_POLL | PERIODIC | WORLD_HEAD | … | DIAG | SLEEP
+const HOST: PhaseSet = PhaseSet::ALL;          // 区 0：全集，顺序 = 现正文顺序
+const M0_MIN: PhaseSet = HANDOFF_TOP | WORLD_HEAD | WORLD_TAIL | PHASE2_GAP;  // 区 k 空实例
+```
+
+`HostLoop::tick` 按**固定顺序**逐段调用，`phases` 只决定「跳过哪些」，不改变其余段的相对顺序。
+区 0 传 `PhaseSet::ALL` ⇒ 与今天逐行同序。
+
+## 3. 段边界即方法边界（保住行为与 TICKPROF 口径）
+
+- 每个 `host_prof` 段 = 一个 `fn phase_xxx(&mut self, svc, io, scratch)`；**段内自带
+  `begin()`/`end("NAME", t)`**，段名、位置不变。
+- 段与段之间**未计入**的代码留在 `tick()` 里、原相对位置不变 ⇒ TICKPROF 段归属逐字节不变
+  （不是「行为」但同属不回归面）。
+- 跨段值（`rec: TickRecord`、`t: Instant`、以及逐段核对出的少数值）放进 `struct TickScratch`，
+  由 `tick()` 持有并传 `&mut`。**这是 M0 实现时最大的机械工作**：每段逐一核对「本段产出、
+  后续段消费」的局部值，全部走 scratch 或结构字段，不许改表达式顺序。
+
+## 4. N=1 / slicing=0 逐字节不变：怎么保
+
+1. **纯搬移**：只挪代码位置，不改任何表达式、分支、调用顺序、分配次数；`PhaseSet::ALL`
+   下方法调用序列 = 原正文顺序。
+2. **构造顺序不变**：`HostLoop`/`HostServices` 在 `loop {` 之前用字段简写从既有局部「装入」，
+   不重排启动装载（M0 不搬 `new_host`；`for_zone` 是另一条只给区 k 用的构造）。
+3. **不新增热路径开销**：无新克隆/新 `Vec`/新锁；`Cell`/`RefCell` 仍是原实例。
+4. 门（三条，缺一不合并）：
+   - N=1 两树 stdout 对拍（`n1_stdout_equivalence.ps1`，最终树，`order_sha`/`multiset_sha`/86 行）；
+     **真机窗口，由 a7 在最终合并树执行**——我不把结构论证当证据；
+   - `crates/world-bevy/tests/tick_phases.rs` 等价用例 + `cargo test --workspace` 全绿；
+   - 18 处 `fn sim_loop(` 源码锚用例不红（它们本身就是回归门）。
+
+## 5. 区 k 空实例跑一个 tick（M0 第 3 条）
+
+- `HostLoop::for_zone(zone, map_sizes, rng_seed)`：与 `ZoneState::new` 同口径（`World::with_maps`、
+  `seed ^ zone`、`set_id_base`、`set_id_segment`），其余表空。
+- `HostLoop::tick(…, PhaseSet::M0_MIN)`：handoff 顶 → `tick_world_head_with_specials`（空世界）→
+  `tick_tail` → `tick_phase2`；**不跑 inbound/db/persist/switch/diag/sleep**（无 I/O、无帧）。
+- 用例 `empty_zone_loop_runs_one_tick_without_panic`：
+  - 断言不 panic、`world.entities.len() == 0`、`ticks == 1`；
+  - 断言 `PhaseSet::M0_MIN` **之外**的段没有执行（用段计数器/`TickScratch` 里的段标记，不用日志）；
+  - 负例（变异）：把 `PhaseSet` 判定改成恒真 ⇒ 空实例会走 `phase_inbound` 且无 `ev_rx` ⇒
+    本用例要红（证明位集真的在起作用，不是装饰）。
+- **M0 不接线**：`spawn_minimal_zone` 仍按原样跑 `run_zone_tick`；不把区 k 切到 `HostLoop::tick`，
+  不产生任何帧（那是 M1）。
+
+## 6. 源码扫描用例的兼容约束（实现时逐条现场核）
+
+被扫描的字面行必须**恰一处**且顺序不变，例：`} else if movewire::is_move_command(cmd.ident) {`、
+`drain_deal_tick(`（含实参形状）、`drain_action_downlink(&rec, &world, &displays, &online, &gates);`、
+`drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);`、`drain_pk_flag_downlink(&mut world, &online, &gates);`、
+两处 `spawn_statics_for_zone(` 与区 0 商人装载、`event_carry/event_carry_ctl` 的预算排水分组等。
+**约束**：`struct HostLoop` 与 `impl` 放在 `fn sim_loop(` 之后、`mod tests {` 之前；正文逐行搬。
+若某条扫描用例因抽取而语义含糊（如按「`sim_loop` 体内」理解），**先报告再改用例**，不静默放宽。
+
+## 7. 风险与规避
+
+| 风险 | 规避 |
+| --- | --- |
+| 借用检查：段内要同时 `&mut` 多个字段 | 每段顶部 `let HostLoop { world, displays, online, ground_sessions, .. } = self;` 逐字段解构；`svc` 同样解构 |
+| `enter_cfg`/`registry` 同时被 `&` 与 `&mut` 借 | 段内只在需要处取，不跨段持有；必要时把 `&mut` 借用缩到最小作用域 |
+| 段间未计入代码被误并入某段 | 方法只含 `begin…end` 之间；gap 留在 `tick()`（§3） |
+| 跨段值遗漏 | 逐段核对清单（`rec`/`t`/…），M0 作为独立提交前先对每段做「产出-消费」表 |
+| `World.owner_thread` 断言 | `HostLoop` 只在其构造线程 tick；区 k 的实例只在区 k 线程构造 |
+| 源码扫描用例红 | §6 的放置规则；提交前跑全量测试 |
+| `perf_counters` 段语义漂移 | M0 不加任何列、不改 `write_tick`；分区计数列属后续（标注 additive） |
+
+## 8. M0 内部实施顺序（每步可编译、可测、可回滚）
+
+1. **A1 结构**：加 `HostLoop`/`HostServices`/`TickIo`/`PhaseSet` 类型 + 空实现；`loop {` 前装入
+   （`HostLoop::new_host` 用字段简写），`sim_loop` 仍跑原正文 ⇒ 编译 + 全量测试绿（此时零行为变化）。
+2. **A2 逐段搬移**：按 §3 一段一提交（或两段一提交），每段搬完跑 `cargo test -p game-svr --lib`
+   + 该段相关用例；`PhaseSet::ALL` 路径不变。
+3. **A3 区 k 构造**：`for_zone` + `ZoneState { host, … }` + `empty_zone_loop_runs_one_tick_without_panic`
+   用例；`spawn_minimal_zone` 行为不变（仍走 `run_zone_tick`）。
+4. **A4 收口**：`PhaseSet` 位集负例变异、18 处源码锚用例核对、全量门（FMT/CLIPPY/TEST/msgcodegen/
+   anchor/tool）、N=1 两树对拍由 a7 在最终树执行。
+
+## 9. 明确不做（属 M1+ 或另有卡）
+
+- 不接线区 k 的 drain/命令分发（M1/M2）；不改 `spawn_minimal_zone` 的循环。
+- 不动 `World.OutputAoi`/`AoiMonsterWalk` 算法、不动 `collect+sort` 顺序契约。
+- 不加分区计数列（后续标 additive）、不改日志/帧内容与计时。
+- 不搬启动装载（`new_host` 留在 `sim_loop` 内联；M1 之后再评估）。
