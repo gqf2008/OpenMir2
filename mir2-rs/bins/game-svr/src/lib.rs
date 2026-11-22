@@ -13204,10 +13204,12 @@ fn broadcast_feature_changed_except(
             continue;
         }
         let Some(e) = online.find_linear_actor(target_id) else {
-            // **L2-5 ③ 段 3**（只加计数）：候选是镜像 ⇒ 收件人在邻区（本区发不到）。
+            // **L2-5 ⑤ 面迁移**：候选是镜像 ⇒ 分类 + 入目标区邮箱。
             if world.entities.get(target_id).is_some_and(|e| e.mirror) {
-                perf_counters::note_cross_recipient_missing(
+                crate::cross_zone_frames::note_mirror_recipient(
                     perf_counters::CrossRecipientSurface::FeatureChanged,
+                    world.mirror_route(target_id),
+                    std::slice::from_ref(&body),
                 );
             }
             continue;
@@ -123605,6 +123607,23 @@ mod l2_s3_cross_recipient_tests {
             }
         }
         false
+    }
+
+    /// **L2-5 ⑤ 面迁移 `feature_changed`**：unroutable → delivered（走邮箱）。
+    #[test]
+    fn feature_changed_cross_zone_migrates_to_mailbox() {
+        let _g = arm();
+        let mut world = world_with_remote_mirror();
+        arm_cross(&mut world);
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        fire_feature_changed(&world, &online, &g);
+        assert_eq!(delivered() - d0, 1, "feature_changed 必须走邮箱");
+        assert_eq!(unroutable() - u0, 0, "不得再计 unroutable");
+        assert_eq!(drain_cross(&g), 1, "T+1 排水");
+        assert!(recv_socket(&mut rx, 900), "网关必须收到跨区帧");
+        crate::cross_zone_frames::uninstall();
     }
 
     /// **L2-5 ⑤ 面迁移 `run_frames`**：unroutable → delivered（走邮箱），收件区 T+1 排水到网关。
