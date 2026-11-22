@@ -327,7 +327,7 @@ cargo build --release -p mir2-world --bin tick_bench
 | `HostAoiDownlink` | `drain_run_downlinks_with_magic`：AOI 出现帧 + 52/53/体力下行 |
 | `HostPersist` | `use_items` 回写 + 周期存档（`DB_SAVEHUMANRCD`） |
 | `HostSwitch` | 换服轮询 + `SM_RECONNECT` 排水 |
-| `HostDiag` | 每 50 tick 的 `sim: tick` 诊断行 |
+| `HostDiag` | 每 50 tick 的 `sim: tick` 诊断行（2026-11-23 起计算也在 DBG 闸之后：`MIR2_LOG_LEVEL` 抑制 DBG 时不计算、不打印） |
 | `HostSleep` | 末尾节拍 `sleep`（凑 200ms；过载时为 0） |
 | `HostTickTotal` / `HostUnaccounted` | 整 tick 墙钟 / 整 tick 减各段之和的残差 |
 

@@ -62,6 +62,11 @@ pub fn enabled(severity: u8) -> bool {
     severity <= THRESHOLD.load(Ordering::Relaxed)
 }
 
+/// 测试期：所有改 `THRESHOLD` 的用例共用一把锁（`THRESHOLD` 是进程级全局，
+/// `cargo test` 的并行线程会互相串改阈值 ⇒ 断言时序性翻转）。
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 pub(crate) fn set_threshold_for_test(v: u8) {
     THRESHOLD.store(v, Ordering::Relaxed);
@@ -88,6 +93,7 @@ mod tests {
 
     #[test]
     fn enabled_gates_by_severity_and_default_is_all() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_threshold_for_test(4);
         for sev in 1..=4 {
             assert!(enabled(sev), "默认（全打）");
