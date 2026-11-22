@@ -32,6 +32,9 @@ param(
   [string]$Root = "E:\MirServer",
   [string]$ServerExe = "",
   [string]$RepoMir2Rs = "",
+  # **产物一律仓外**（总监 2026-11-22）：压测产物不进仓库工作树（避免被 `git add -A` 收进历史、
+  # 也避免污染 `git status`）。根目录可配置；实际目录 = <OutRoot>/<1z|2z>-<时间戳>。
+  [string]$OutRoot = "",
   [string]$OutDir = "",
   [string]$AccountPrefix = "loadbot",   # TODO(stack)：与现网账号前缀核对
   [int]$MemSampleSec = 2,
@@ -47,9 +50,23 @@ $ErrorActionPreference = 'Stop'
 function Fail([string]$msg) { Write-Output ("RED: " + $msg); exit 1 }
 function Prereq([string]$msg) { Write-Output ("PREREQ: " + $msg); exit 2 }
 
+# 用 Start-Process + 重定向文件跑一个 pwsh 子进程，只等**直接子进程**退出。
+# 不能用 `& pwsh ... 2>&1`：PowerShell 的捕获会等**孙进程**（常驻角色）退出才返回
+#（实测 8s probe：脚本立刻打印 DONE，捕获却等到孙进程睡醒）⇒ 起栈永远不返回。
+function Invoke-PwshToLog {
+  param([string[]]$PwshArgs, [string]$LogPath, [string]$ErrPath)
+  $sp = Start-Process -FilePath 'pwsh' -ArgumentList $PwshArgs `
+    -RedirectStandardOutput $LogPath -RedirectStandardError $ErrPath -WindowStyle Hidden -PassThru
+  $sp.WaitForExit()
+  return [int]$sp.ExitCode
+}
+
+if (-not $OutRoot) {
+  # 默认仓外（Windows 下 TEMP 通常是 E:\UserTemp；显式 -OutRoot 可覆盖）。
+  $OutRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mir2-l25-slice"
+}
 if (-not $OutDir) {
-  $OutDir = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "tests\loadgate") `
-    ("l25-slice-" + $Zones + "z-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+  $OutDir = Join-Path $OutRoot ($Zones.ToString() + "z-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $PerfTsv = Join-Path $OutDir "perf_counters.tsv"
@@ -124,11 +141,14 @@ foreach ($k in $childEnv.Keys) {
   Set-Item -Path ("Env:" + $k) -Value ([string]$childEnv[$k])
 }
 $pidFile = $null
+$rssProc = $null
 try {
-  $startOut = & pwsh -NoProfile -File $Starter -Root $Root -ServerExe $ServerExe -WaitSeconds $WaitSeconds 2>&1
-  $startOut | ForEach-Object { Write-Output $_ }
-  if ($LASTEXITCODE -ne 0) { Fail "start_mir2_server rc=$LASTEXITCODE（栈未就绪；见上面 START/RED 行）" }
-  $okLine = @($startOut | Where-Object { "$_" -match '^MIR2_SERVER_STACK_OK\s+(.+)$' })[-1]
+  $startLog = Join-Path $OutDir "stack-start.log"
+  $startErr = Join-Path $OutDir "stack-start.err.log"
+  $startRc = Invoke-PwshToLog -PwshArgs @('-NoProfile','-File',$Starter,'-Root',$Root,'-ServerExe',$ServerExe,'-WaitSeconds',([string]$WaitSeconds)) -LogPath $startLog -ErrPath $startErr
+  Get-Content -LiteralPath $startLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
+  if ($startRc -ne 0) { Fail "start_mir2_server rc=$startRc（栈未就绪；见 $startLog / $startErr）" }
+  $okLine = @(Get-Content -LiteralPath $startLog -ErrorAction SilentlyContinue | Where-Object { "$_" -match '^MIR2_SERVER_STACK_OK\s+(.+)$' })[-1]
   if (-not $okLine) { Fail "起栈输出缺 MIR2_SERVER_STACK_OK（fail-closed）" }
   $pidFile = ([regex]'^MIR2_SERVER_STACK_OK\s+(.+)$').Match("$okLine").Groups[1].Value.Trim()
   if (-not (Test-Path -LiteralPath $pidFile)) { Fail "pid 文件不存在：$pidFile" }
@@ -140,51 +160,35 @@ try {
   }
 }
 
-# ---- 4) RSS 采样（按 pid 文件里的 game-svr 角色；与压测并行） ----
+# ---- 4) RSS 采样（独立进程；按 pid 文件里的角色逐个采） ----
 $stopFile = Join-Path $OutDir "rss.stop"
 Remove-Item -LiteralPath $stopFile -ErrorAction SilentlyContinue
-$rssJob = Start-Job -ArgumentList $pidFile, $RssNdjson, $stopFile, $MemSampleSec -ScriptBlock {
-  param($PidFile, $Out, $StopFile, $EverySec)
-  $rows = New-Object System.Collections.Generic.List[string]
-  while (-not (Test-Path -LiteralPath $StopFile)) {
-    try {
-      $entries = @(Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json)
-      if ($entries -isnot [array]) { $entries = @($entries) }
-      foreach ($e in $entries) {
-        $proc = Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue
-        if ($null -eq $proc) { continue }
-        $row = [pscustomobject]@{
-          ts_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-          role = [string]$e.role
-          pid = [int]$e.pid
-          ws_bytes = [int64]$proc.WorkingSet64
-          priv_bytes = [int64]$proc.PrivateMemorySize64
-        }
-        $rows.Add(($row | ConvertTo-Json -Compress))
-        if ($rows.Count -ge 200) { Add-Content -LiteralPath $Out -Value $rows; $rows.Clear() }
-      }
-    } catch { }
-    Start-Sleep -Seconds $EverySec
-  }
-  if ($rows.Count -gt 0) { Add-Content -LiteralPath $Out -Value $rows }
-}
+Remove-Item -LiteralPath $RssNdjson -ErrorAction SilentlyContinue
+$sampler = Join-Path $PSScriptRoot "rss_sampler.ps1"
+if (-not (Test-Path -LiteralPath $sampler)) { Prereq "缺 RSS 采样器：$sampler" }
+$rssProc = Start-Process -FilePath 'pwsh' -ArgumentList @('-NoProfile','-File',$sampler,'-PidFile',$pidFile,'-Out',$RssNdjson,'-StopFile',$stopFile,'-EverySec',([string]$MemSampleSec)) -WindowStyle Hidden -PassThru
 
 # ---- 5) 压测档（load_gate；栈已在跑） ----
 $Gate = Join-Path $PSScriptRoot "load_gate.ps1"
 if (-not (Test-Path -LiteralPath $Gate)) { Prereq "缺 load_gate：$Gate" }
 $runStartMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 try {
-  & pwsh -NoProfile -File $Gate -Tiers ([string]$Bots) -HoldSec $HoldSec -OutDir $OutDir -SkipBuild
-  $gateRc = $LASTEXITCODE
+  $gateLog = Join-Path $OutDir "load_gate.log"
+  $gateErr = Join-Path $OutDir "load_gate.err.log"
+  $gateRc = Invoke-PwshToLog -PwshArgs @('-NoProfile','-File',$Gate,'-Tiers',([string]$Bots),'-HoldSec',([string]$HoldSec),'-OutDir',$OutDir,'-SkipBuild') -LogPath $gateLog -ErrPath $gateErr
+  Get-Content -LiteralPath $gateLog -ErrorAction SilentlyContinue | Select-Object -Last 40 | ForEach-Object { Write-Output $_ }
 } finally {
   $runEndMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   New-Item -ItemType File -Force -Path $stopFile | Out-Null
-  Wait-Job $rssJob -Timeout ([math]::Max(10, $MemSampleSec * 3)) | Out-Null
-  Receive-Job $rssJob | Out-Null
-  Remove-Job $rssJob -Force -ErrorAction SilentlyContinue
+  if ($null -ne $rssProc) {
+    $null = $rssProc.WaitForExit([math]::Max(15000, $MemSampleSec * 3000))
+    if (-not $rssProc.HasExited) { Stop-Process -Id $rssProc.Id -Force -ErrorAction SilentlyContinue }
+  }
   if (-not $KeepStack) {
-    & pwsh -NoProfile -File $Stopper -Root $Root 2>&1 | ForEach-Object { Write-Output $_ }
-    if ($LASTEXITCODE -ne 0) { Write-Output ("RED: stop_mir2_server rc=" + $LASTEXITCODE) }
+    $stopLog = Join-Path $OutDir "stack-stop.log"
+    $stopRc = Invoke-PwshToLog -PwshArgs @('-NoProfile','-File',$Stopper,'-Root',$Root) -LogPath $stopLog -ErrPath (Join-Path $OutDir "stack-stop.err.log")
+    Get-Content -LiteralPath $stopLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
+    if ($stopRc -ne 0) { Write-Output ("RED: stop_mir2_server rc=" + $stopRc) }
   }
 }
 
@@ -214,8 +218,17 @@ if (-not (Test-Path -LiteralPath $RssNdjson)) { Prereq "缺 RSS 采样：$RssNdj
 if ($LASTEXITCODE -ne 0) { Prereq "perf_tsv_summary rc=$LASTEXITCODE（输入不可判；见 stderr 的 PREREQ 行）" }
 
 # ---- 8) 若有 1 区基线摘要，直接给内存伸缩 ----
-$baseline = Join-Path (Join-Path $OutDir "..") ("l25-slice-1z\summary.json")
-if ($Zones -eq 2 -and (Test-Path -LiteralPath $baseline)) {
+# 基线 = <OutRoot> 下最新的 1z-*/summary.json（与本次无关的旧目录不会误用：只取最新且必须存在）。
+$baseline = $null
+if ($Zones -eq 2) {
+  $baseDir = Get-ChildItem -Path $OutRoot -Directory -Filter "1z-*" -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending | Select-Object -First 1
+  if ($baseDir) {
+    $candidate = Join-Path $baseDir.FullName "summary.json"
+    if (Test-Path -LiteralPath $candidate) { $baseline = $candidate }
+  }
+}
+if ($Zones -eq 2 -and $baseline -and (Test-Path -LiteralPath $baseline)) {
   & python -I -B $Summarizer --compare $SummaryJson $baseline --labels 2zone 1zone `
     --json (Join-Path $OutDir "rss_delta.json")
   if ($LASTEXITCODE -ne 0) { Prereq "RSS 对比 rc=$LASTEXITCODE（基线摘要不完整）" }

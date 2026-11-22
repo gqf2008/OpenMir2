@@ -525,3 +525,51 @@ RSS；③额外跑 **1 区基线**（同机同时长，`MIR2_ZONES`/`MIR2_ZONE_M
 RSS 单调增长则停下贴曲线；跑完栈停干净、game-svr 进程 0。
 
 **实测**：见 §12.1（本卡交付时回填）。
+
+### 12.1 实测（2026-11-22，窗口内单跑，Rust 栈 + BotSrv）
+
+**窗口口径**：一次只跑一个压测；起栈后不跑 cargo；跑完 graceful 停栈、`game-svr` 进程 0。
+两次运行同机同时长（`Bots=1000`、`HoldSec=120`）。产物**一律仓外**：
+`E:/UserTemp/l25-slice/1z-20261122-175230/`、`.../2z-20261122-175527/`（perf TSV、tier-1000/report.json、
+rss.ndjson、run.json、summary.json；2 区另有 load_gate.log / stack-start.log / stack-stop.log）。
+首次尝试（17:27）卡在编排 bug（见下），其 idle perf TSV 原样移到
+`E:/UserTemp/l25-slice/1z-20261122-1727-failed-startcapture/`（只作证据，不参与结论）。
+
+**编排 bug（已修，随段 4 第二提交）**：`& pwsh -File <起栈脚本> 2>&1` 的捕获会等**孙进程**退出才
+返回（常驻角色永不退）⇒ 起栈调用永不返回。修法：`Start-Process -PassThru` + 输出重定向到文件 +
+`WaitForExit()`（只等直接子进程）；RSS 采样改独立 `tools/botload/rss_sampler.ps1`（按 pid 文件
+`{roles:[…]}` 的 `role/pid` 采）；产物默认根 = `[IO.Path]::GetTempPath()/mir2-l25-slice`。
+
+**1 区基线（`-Zones 1`：`MIR2_ZONES`/`MIR2_ZONE_MIRROR`/`MIR2_ZONE_SLICING` 三开关一律 Remove）**
+
+| 项 | 值 |
+| --- | --- |
+| load_gate | tier=1000 **GREEN**（login=100%、conn_lost_steady=0、internal_errors=0、in_world=1000；`GREEN_SMOKE_ONLY`：HoldSec=120<360，`window_valid=false`） |
+| 有效 tick 率 | **5.02/s**（rows=725，144.4s） |
+| tick p50 / p99 / max | **16 / 47 / 78 ms**（p90=31） |
+| `cross_recipient_missing` | **0**（六面全 0；N=1 护栏） |
+| `region_barrier_us` | max 0 / mean 0（单区） |
+| RSS(game-svr) | ws max **714.33MB** / mean 688.69；priv max 713.50 |
+| RSS 斜率（0–144 / 60–144 / 90–144 / 110–144s） | +29.6 / +22.2 / +14.6 / **+3.2 MB/min**（假人 ramp 分配，末段趋平台） |
+
+**2 区（`-Zones 2`，布局 `0:0=0,0-349,699;1:0=350,0-699,699`，真图 700×700）**
+
+| 项 | 值 |
+| --- | --- |
+| 启动证据 | game-svr.out.log：`L2-4 多区装配：N=2 区…`、`L2-5 ② 镜像已启用…`、`L2-5 ③ 切片已启用…（322 张地图）` |
+| load_gate | tier=1000 **GREEN**（同上四项；`GREEN_SMOKE_ONLY`） |
+| 有效 tick 率 | **5.03/s**（rows=726，144.4s） |
+| tick p50 / p99 / max | **16 / 47 / 78 ms**（p90=31） |
+| `cross_recipient_missing` | **0**（六面全 0）——**本轮 1000 个假人全部落在区 0**（无边界带负载），六面未被打到；计数有效性由段 3 的六条牙 + 7 条变异承担 |
+| `region_barrier_us` | max **548,910µs** / mean **202,143.8µs**；`region_barrier_total_us` mean 202,168.2µs/tick |
+| RSS(game-svr) | ws max **1,076.75MB** / mean 1,051.90；priv max 1,075.88 |
+| RSS 斜率（同上四窗） | +29.6 / +19.5 / +10.5 / **+3.9 MB/min**（与 1 区同形：ramp 后趋平台） |
+
+**内存伸缩（`--compare`）**：`RSS(2区) − RSS(1区)` ws **Δ362.42MB**（priv Δ362.38MB）⇒
+**每区粗估 ≈362.42MB**。线性粗估（**仅供参考，不是结论**）：8 区 ≈ 714 + 7×362 ≈ **3.25GB**；
+1 万在线的真实瓶颈仍需 4/8 区窗口实测（地图网格/镜像带/假人分布都随布局变）。
+
+**屏障读数的口径**：本轮负载全在区 0 ⇒ 区 1 空转、每 tick 在屏障上等区 0 的整 tick 工作
+（max ≈ 548.9ms 是登录/进世界尖峰一次；mean ≈ 202ms ≈ tick 周期）——这是 **Amdahl 代价的真实
+读数**，不是"屏障有 bug"；tick 从假人视角仍是 p50 16ms / p99 47ms、有效 5.03/s。
+要压边界带，需按计划 §4.1 的「跨区行走（边界带集中）」另排窗口。
