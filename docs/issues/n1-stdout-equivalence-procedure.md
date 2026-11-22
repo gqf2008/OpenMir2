@@ -33,7 +33,7 @@
    **占位 `WorldMaps`**。脚本会**校验**该文件：必须有 `[Server]` 段、`GatePort` 存在且等于
    `-Port`、且**不得为 5000**。
 3. **同一启动命令**：两棵树都以「同一个 conf 路径」作为唯一参数启动 game-svr；脚本负责
-   固定时长（默认 20s）→ **优雅关服**（连 `\\.\pipe\openmir2-gamesvr-shutdown-<pid>` 写 8 字节）
+   固定时长（默认 20s）→ **优雅关服**（连 `\\.\pipe\openmir2-gamesvr-shutdown-<pid>` 写 **ASCII `SHUTDOWN`（8 字节；产品只认这一串，其它 8 字节会被 `WRN 未知请求` 忽略）**）
    → 等待退出（默认 30s 上界；超时判 2，不静默 kill 冒充通过）。
 4. 脚本输出：`baseline.normalized.txt`、`feature.normalized.txt`、`summary.json`
    （含两侧行数、两条 sha、结果）；红时打印 `FIRST_DIFF line=N baseline='…' feature='…'`。

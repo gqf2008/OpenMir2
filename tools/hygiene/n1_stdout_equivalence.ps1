@@ -101,6 +101,12 @@ function Get-N1MultisetSha {
   return Get-Sha256Hex ((($sorted -join "`n") + "`n"))
 }
 
+# 关服 payload：产品侧 `spawn_shutdown_pipe_listener` **只认 8 字节 ASCII `SHUTDOWN`**，
+# 其它 8 字节会被记 `WRN 关服命名管道收到未知请求（忽略）` 并继续运行 ⇒ 脚本必须发这一串。
+function Get-N1ShutdownPayload {
+  return ,[System.Text.Encoding]::ASCII.GetBytes('SHUTDOWN')
+}
+
 # 配置守卫：`[Server]` 段必须存在，`GatePort` 必须存在且 == 期望端口，且不得是 5000。
 function Test-N1Conf {
   param([string]$Path, [int]$ExpectedPort)
@@ -191,6 +197,18 @@ function Invoke-Selftest {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
 
+  # ④ 关服 payload：必须是 ASCII `SHUTDOWN`（8 字节），且**不是**旧的 0..7 字节模式
+  $payload = Get-N1ShutdownPayload
+  $expected = [System.Text.Encoding]::ASCII.GetBytes('SHUTDOWN')
+  Assert-True ($payload.Length -eq 8) 'shutdown payload is 8 bytes'
+  $same = $true
+  for ($i = 0; $i -lt 8; $i++) { if ($payload[$i] -ne $expected[$i]) { $same = $false } }
+  Assert-True $same 'shutdown payload equals ASCII SHUTDOWN'
+  $oldWrong = [byte[]](0, 1, 2, 3, 4, 5, 6, 7)
+  $equalsOld = $true
+  for ($i = 0; $i -lt 8; $i++) { if ($payload[$i] -ne $oldWrong[$i]) { $equalsOld = $false } }
+  Assert-True (-not $equalsOld) 'shutdown payload is not the old 0..7 byte pattern'
+
   if ($script:selftestFail -ne 0) {
     [Console]::WriteLine("SELFTEST_FAILED count=$($script:selftestFail)")
     return 1
@@ -209,6 +227,18 @@ if ($Selftest) {
 function Fail-Usage([string]$Why) {
   Write-Output "UNDECIDABLE $Why"
   exit 2
+}
+
+# 诊断：打印文件末尾 N 行到 stdout（本次定位「payload 错 ⇒ 服务端 30s 不退」就是靠 stdout 里那条
+# `WRN 关服命名管道收到未知请求（忽略）`）。
+function Show-Tail {
+  param([string]$Path, [string]$Label, [int]$Count = 5)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction SilentlyContinue)
+  $start = [Math]::Max(0, $lines.Count - $Count)
+  for ($i = $start; $i -lt $lines.Count; $i++) {
+    [Console]::WriteLine(("DIAG {0}[{1}] {2}" -f $Label, ($i + 1), $lines[$i]))
+  }
 }
 
 if (-not (Test-Path -LiteralPath $BaselineExe -PathType Leaf)) { Fail-Usage "基线 exe 不存在：$BaselineExe" }
@@ -242,7 +272,7 @@ function Invoke-N1Run {
   $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::Out)
   try {
     $pipe.Connect([Math]::Max(1000, $GracefulTimeoutSeconds * 1000))
-    $payload = [byte[]](0, 1, 2, 3, 4, 5, 6, 7)
+    $payload = Get-N1ShutdownPayload
     $pipe.Write($payload, 0, $payload.Length)
     $pipe.Flush()
   } catch {
@@ -252,7 +282,11 @@ function Invoke-N1Run {
   }
   if (-not $proc.WaitForExit($GracefulTimeoutSeconds * 1000)) {
     try { $proc.Kill() } catch { }
-    Fail-Usage "$Tag 优雅关服超时（${GracefulTimeoutSeconds}s）"
+    [Console]::WriteLine(
+      "DIAG $Tag 优雅关服超时：管道已连上，但服务端 ${GracefulTimeoutSeconds}s 未退出（先看末尾是否 `WRN 未知请求` ⇒ payload 不是 ASCII SHUTDOWN）")
+    Show-Tail $stdout 'stdout' 5
+    Show-Tail $stderr 'stderr' 5
+    Fail-Usage "$Tag 优雅关服超时（${GracefulTimeoutSeconds}s；stdout=$stdout）"
   }
   if ($proc.ExitCode -ne 0) {
     Fail-Usage "$Tag 退出码 $($proc.ExitCode)（要求 0）"
