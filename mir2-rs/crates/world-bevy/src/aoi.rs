@@ -99,12 +99,11 @@ pub struct DepartureMarks {
 }
 
 impl DepartureMarks {
-    /// 记一条标记（顺手清超硬上限项——store-free 的安全裁剪；正常的「无人持有」检查在 sweep 里做）。
+    /// 记一条标记。**不在插入时裁剪**：超硬上限/无人持有的判定必须统一由
+    /// [`AoiStore::sweep_departure_marks`] 做（带成员检查与计数）——在 insert 里顺手 `retain`
+    /// 会在「观察者冻结恰逢新删除」时静默丢标记且 `departure_mark_held_past_cap` 记不到，
+    /// 正是该计数要暴露的场景。
     pub fn insert(&mut self, id: i32, ghost: bool, fixed_hide_mode: bool, now_ms: i64) {
-        if !self.marks.is_empty() {
-            self.marks
-                .retain(|_, m| now_ms.saturating_sub(m.created_ms) <= DEPARTURE_MARK_HARD_CAP_MS);
-        }
         self.marks.insert(
             id,
             DepartureMark {
@@ -2864,6 +2863,37 @@ mod tests {
         );
         let again = search_view_range_with_updates(&mut map, &mut store, 1, delayed + 500);
         assert!(again.removed.is_empty(), "同一次离开只能发一条");
+    }
+
+    /// **insert 不得静默丢超上限标记**（裁剪统一交给 sweep，计数才看得见）。
+    ///
+    /// 场景：观察者冻结（仍持有）时恰有新删除插入标记 —— 旧实现在 `insert` 的 `retain` 里把
+    /// 超上限标记悄悄丢掉，`departure_mark_held_past_cap` 记不到。
+    ///
+    /// 红检：把 `insert` 的 `retain` 加回去 ⇒ 第一条断言红（标记已被静默丢弃）。
+    #[test]
+    fn insert_does_not_silently_drop_cap_exceeded_marks() {
+        reset_departure_mark_held_past_cap_for_tests();
+        let (mut map, mut store, t) = departure_fixture();
+        legacy_first_scan(&mut map, &mut store);
+        store.record_departure(t, false, false, 1100);
+        store.remove(t);
+        let past_cap = 1100 + DEPARTURE_MARK_HARD_CAP_MS + 1;
+        // 超上限时刻再插入一条新标记：旧实现会在这里静默丢掉 t。
+        store.record_departure(999, false, false, past_cap);
+        assert!(
+            store.departure_mark(t, 0).is_some(),
+            "insert 不得静默丢弃超上限标记（裁剪必须统一走 sweep）"
+        );
+        // 统一由 sweep 处理：t 仍被持有且超上限 ⇒ 丢弃 + 计数。
+        store.sweep_departure_marks(past_cap);
+        assert_eq!(
+            departure_mark_held_past_cap(),
+            1,
+            "超上限被强制丢弃必须计数到 1"
+        );
+        assert!(store.departure_mark(t, 0).is_none(), "sweep 必须丢弃它");
+        reset_departure_mark_held_past_cap_for_tests();
     }
 
     /// **硬上限**：超 `DEPARTURE_MARK_HARD_CAP_MS` 仍被持有 ⇒ 强制丢弃 + 计数（防脏数据永久留住）。
