@@ -262,7 +262,17 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 **动机（0c 实测）**：6 个进程-only 字段在 **M1a 段集内的使用 = 0**；全 tick 体共 **59 处**使用，只落在
 **SHUTDOWN 3 / INBOUND 26 / DB_POLL 12 / PERIODIC 5 / PERSIST 1**（其中 39 处 reborrow 敏感）。
 
-**为什么不是 b-1（`unwrap_or_default()`）**：`ProcessServices` 全集**无法廉价空构造**——
+**为什么不是 b-1+（手写 `impl Default` + `unwrap_or_default()`）**（opc-27 2026-11-23 最终裁决，
+掩码漂移是决定性理由）：b-2 的 fail-closed **不依赖掩码**——若将来给区 k 开新段而新位**漏加**进
+`PROCESS_ONLY`，b-1+ 会**静默读到默认值**（假 sender 发错被吞、`StateLog` 空转），b-2 则在该段入口的
+`proc_svc!` 直接 **panic**；"静默读默认值比 panic 更糟"。另：生产侧 `Default` 还缺 `EnterConfig`
+的构造（`EnterConfig::for_test` 是 `#[cfg(test)]`，探针 `cargo check` 实测报
+`no associated function ... for_test`）⇒ 需再写一份 ~80 字段的生产 `empty()`。本条线与
+`HostServices::for_test()`（`lib.rs` 的 `impl HostServices { fn for_test }`）都只作**构型参考**，
+**不采纳为生产 `Default`**。
+
+**b-2 的代价与兜底**：44 处机械改动 / 39 处 reborrow 敏感点——由全量门 + N=1 两树对拍 + 0c 复审
+兜底（opc-27 2026-11-23 裁决）。`ProcessServices` 全集**无法廉价空构造**——
 `shutdown_done_tx` / `ids_out`（`tokio::sync::mpsc::UnboundedSender`，tokio 不提供 `Default`）、
 `win_lottery`（`WinLotteryShared`，仅 `Clone, Debug`）、`line_notice_cfg`（`LineNoticeCfg`，同）、
 `online_hum_gate`（`OnlineHumGate`，`Debug, Clone, Copy`）、`state_log`（`StateLog`，无 derive）、
@@ -274,14 +284,18 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 
 **形态（b-2）**：
 ```rust
-fn tick(self, shared: SharedServices, process: Option<ProcessServices>, io: TickIo, phases: PhaseSet) -> TickOut
+fn tick(self, shared: SharedServices, mut process: Option<ProcessServices>, io: TickIo, phases: PhaseSet) -> TickOut
 ```
 - 区 0 传 `Some(process)`；区 k（M1 起）传 `None`。
+- **`TickOut` 必须把 `Option<ProcessServices>` 回传**：区 0 每 tick 供 `Some` 并拿回（channel/Arc 等
+  句柄不得在 tick 之间丢失）；区 k 供 `None`、丢弃回传。
 - `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | PERSIST_DB`（与 `M0_MIN`/`M1_MIN` **同处**，
   `PhaseSet` 定义旁；与 0c 的 59 处/5 段实测**互为交叉校验**）。
   **PERSIST 留缝（M1c 前瞻，0c 2026-11-23）**：`HostPersist` 段有 1 处用 `engine` ⇒ M1c 给区 k 开
   「仅 `save_outbox`」时会撞 fail-fast。⇒ 建常量时就把 PERSIST 拆成 `PERSIST_DB`（进程-only，
-  进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全）；M1a 不受影响，**缝现在留好**。
+  进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），并用**常量别名保持旧位等价**：
+  `const PERSIST: u32 = PERSIST_DB | PERSIST_OUTBOX;`（区 0 两位都开 ≡ 旧行为；同步更新
+  `RAN_SEGMENTS` 的精确相等断言与 `M0_MIN`/`M1_MIN` 的位集写法）。**函数体内真正的拆分留 M1c**。
 - **入口 fail-fast（`assert!`，release 也生效）**：
   ```rust
   if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
@@ -323,3 +337,21 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 - 三条顺序锚牙（`let mut rec = tick_world_head_with_specials(`）在方法化后需**重锚到 `tick` 内的
   `phase_*` 调用序列**（两层：段体内序 + 调用序），并按 opc-27 要求带两条变异红证。
 - `#[rustfmt::skip]` 已在 M1-0a 移除；若将来拆段，格式化由 rustfmt 正常接管。
+
+### 8.4 测试基建现状（**已落地的前置事实**，2026-11-23）
+
+> 由 `M1-0a` 修掉的测试脆弱点，**不要当成未结问题**。代码在分支 `card/m1-0a`，tip **`356c3ce7c`**
+> （`0a-5`；父链 `304f190d5`/`4f9e7e582`/`b9b809ef2`/`f5a9fae7f`，前者已随 master
+> `5db4689086e1` 合入；`0a-5` 待 opc-27 排期合并）。
+
+- **生产/测试切分（#3）**：`login_tail_production_call_is_wired_after_aoi` 不再裸 `find("mod tests {")`
+  ——改为**行级精确匹配**（断言 `trim()=="mod tests {"` 恰一行）+ 找不到即 `expect`（fail-closed），
+  并保留「全文件首个命中必须在生产区」两条断言（防注释漂移）。**这条现在的形态是防未来脆弱**，
+  不是补当时的错。
+- **字节切片（#1）**：`game-svr` 测试里两处窗口截取都改为字符边界安全——
+  `entry_telemetry_wiring::window()` **起点与终点都回退**、`aoi_shutdown_wiring::window()` 只回退终点
+  （起点来自 `find`）；其余 `SRC[i..]`/`SRC[i..next]` 的起点均来自 `find`，天然在字符边界。
+  **截至 `0a-5`，本仓 `game-svr` 测试无未处理的多字节裸切片**。
+- 同批修掉的既有脆弱点另两处：`g3_anchor_a5` 的折行字面量、`login_tail` 的缩进字面量（都不再钉某一种
+  折行/缩进）。
+- 零语义判据（0a-2）：去空白**并去掉 `,{}`** 后与 0a-1 逐字符相同（3,216,037 字符）。
