@@ -27284,6 +27284,109 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
     ZoneCmdClass::Unsupported
 }
 
+/// **M1c-2c**：`CM_EAT` 的**执行支归属**（纯函数结果；只由模板 + `dead` 决定）。
+///
+/// 变体集合即"分支穷举"的枚举：新增模板形态必须先落进这里（**没有 `_ => Local` 兜底**）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EatBranch {
+    /// 死亡：`SM_EAT_FAIL(636)`，本地。
+    Dead,
+    /// `StdMode 31 && AniCount == 0`：解包（只读 `unbind_list` + 2a 共享计数器），本地。
+    Unpack,
+    /// 其余只走本地 `use_item`/`readbook` 的消耗（含 `StdMode 4` 书、`StdMode 3` 经验等）。
+    OtherLocal,
+    /// `StdMode 31 && AniCount != 0`：`@StdModeFunc<N>` 脚本（`NpcHost`/`NpcVars`/`ScriptGmEnv`）⇒ 区 0。
+    StdModeFunScript,
+    /// `StdMode 3 && Shape == 11`：彩票（`win_lottery` 进程级计数）⇒ 区 0。
+    Lottery,
+    /// `StdMode 3 && Shape == 5`：行会回城（读进程级 `castle_war_states`）⇒ 区 0。
+    MoveFamily,
+    /// **安全默认**：`dead` 或模板不可判（实体不在世界 / 模板缺）⇒ 不得本地执行。
+    Unknown,
+}
+
+/// **M1c-2c**：`CM_EAT` 分支判定（纯函数）。
+///
+/// **安全默认（写死）**：`dead == None`（实体不在世界）或 `tpl == None`（模板缺/物品不在包）
+/// ⇒ [`EatBranch::Unknown`]——调用方（[`classify_local_event`]）必须把它当"不可本地判"处置，
+/// **禁止**"判不了就本地"。
+///
+/// 单源说明：`StdMode 3 && Shape ∈ {1,2,3}` 属 `eat_move` 的本地 move 支（不读进程态），
+/// 只有 **`Shape == 5`** 读 `castle_war_states` ⇒ 归 [`EatBranch::MoveFamily`]（区 0）。
+fn eat_branch(tpl: Option<&mir2_data::StdItem>, dead: Option<bool>) -> EatBranch {
+    let Some(dead) = dead else {
+        return EatBranch::Unknown;
+    };
+    if dead {
+        return EatBranch::Dead;
+    }
+    let Some(tpl) = tpl else {
+        return EatBranch::Unknown;
+    };
+    if tpl.std_mode == 31 {
+        return if tpl.ani_count == 0 {
+            EatBranch::Unpack
+        } else {
+            EatBranch::StdModeFunScript
+        };
+    }
+    if tpl.std_mode == 3 && tpl.shape == 11 {
+        return EatBranch::Lottery;
+    }
+    if tpl.std_mode == 3 && tpl.shape == 5 {
+        return EatBranch::MoveFamily;
+    }
+    EatBranch::OtherLocal
+}
+
+/// **M1c-2c**：LOCAL 段的**唯一判定函数**（规格 §2.1）。
+///
+/// 非 `CM_EAT` ⇒ 既有单源 [`zone_cmd_class`]（不变）；`CM_EAT` ⇒ [`eat_branch`]：
+/// `Dead`/`Unpack`/`OtherLocal` 归 `Local`，其余（脚本/彩票/城堡/不可判）**不得本地执行**。
+///
+/// **本段（段 1+2）的 interim**：`EatProcess` 邮箱尚未落地 ⇒ 非本地支归 `Unsupported`
+/// （不放行本地、也**不**误投 GM 邮箱，行为与 2c 前置状态相同：不执行 + 计数）；段 3
+/// （`ControlRequest::EatProcess`）落地时把这四支改成 `Process`，并同步翻转对应牙。
+fn classify_local_event(
+    ev: &GateEvent,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mir2_world_bevy::World,
+) -> ZoneCmdClass {
+    let GateEvent::Command {
+        chr_name,
+        cmd,
+        tail,
+        ..
+    } = ev
+    else {
+        // `INBOUND_LOCAL` 工作区只应含 `Command`（与拆分前同一断言）。
+        debug_assert!(false, "INBOUND_LOCAL 工作区只应含 Command");
+        return ZoneCmdClass::Unsupported;
+    };
+    if cmd.ident != game_svr::useitem::CM_EAT {
+        return zone_cmd_class(cmd.ident, tail.as_deref());
+    }
+    let Some(sg) = sessions.get(chr_name) else {
+        return ZoneCmdClass::Unsupported; // interim（段 3：Process）
+    };
+    let dead = world.entities.get(sg.actor_id).map(|e| e.death);
+    let tpl = sg
+        .state
+        .item_list
+        .iter()
+        .find(|it| it.make_index == cmd.recog)
+        .and_then(|it| catalog.get(it.index));
+    match eat_branch(tpl, dead) {
+        EatBranch::Dead | EatBranch::Unpack | EatBranch::OtherLocal => ZoneCmdClass::Local,
+        // **interim（见函数 doc）**：段 3 改为 `ZoneCmdClass::Process` + `EatProcess` 邮箱。
+        EatBranch::StdModeFunScript
+        | EatBranch::Lottery
+        | EatBranch::MoveFamily
+        | EatBranch::Unknown => ZoneCmdClass::Unsupported,
+    }
+}
+
 /// **族 X2 批 B（重 R 6 条）的目标侧副作用收口**（卡 `openmir2-gm-family-x2-target-control`）：
 /// 命令体只装 `pending_*`（纯函数），本函数在**同一事件内**落地：
 ///
@@ -36376,6 +36479,32 @@ impl HostLoop {
                     colors: &*colors,
                     registry: registry.as_ref(),
                 };
+                // **M1c-2c**：LOCAL 段的**唯一判定点**——执行前一次性预分类（只读扫描
+                // `buffer`+`pending_local`）；执行器只按 seq 查表。这样判定函数与执行回调不会
+                // 同时借用 `ground_sessions`（前者 `&`、后者 `&mut`，不能并存）。
+                let classes: std::collections::HashMap<u64, ZoneCmdClass> = buffer
+                    .iter()
+                    .map(|s| (s.seq, &s.ev))
+                    .chain(pending_local.values().map(|p| (p.seq, &p.ev)))
+                    .map(|(seq, ev)| {
+                        (
+                            seq,
+                            classify_local_event(
+                                ev,
+                                &*ground_sessions,
+                                &env.enter_cfg.catalog,
+                                &*world,
+                            ),
+                        )
+                    })
+                    .collect();
+                let classify = |item: &SeqEvent| {
+                    classes
+                        .get(&item.seq)
+                        .copied()
+                        // 表里必有（预分类覆盖工作区全部条目）；缺表 = 逻辑错误 ⇒ fail-closed。
+                        .unwrap_or(ZoneCmdClass::Unsupported)
+                };
                 let _ = execute_local_budget(
                     buffer,
                     pending_local,
@@ -36384,6 +36513,7 @@ impl HostLoop {
                     fill_hit,
                     outstanding.as_ref(),
                     limits,
+                    &classify,
                     |item, class, pending, batch_budget| {
                         // 执行体 = **同一路径** `handle_zone_command_on`；A6 的分类/暂缓/溢出/邮箱
                         // 分派在 [`a6_dispatch_local`]（可单测）。
@@ -39526,7 +39656,7 @@ fn fill_pending(
 ///   各自容器；`budget_hit = fill_hit || 截断且仍有待执行条目`（每 tick 至多 +1）。
 ///
 /// 返回是否 `budget_hit`。**不写 `clear()`**（剩余自然保留，tick 后由 driver swap 回 scratch）。
-#[allow(clippy::too_many_arguments)] // 8 参：缓冲/等待队列/水位/预算/计数/回调（对齐 handle_zone_command_on 的既有风格）
+#[allow(clippy::too_many_arguments)] // 9 参：缓冲/等待队列/水位/预算/计数/分类/回调
 fn execute_local_budget(
     buffer: &mut std::collections::VecDeque<SeqEvent>,
     pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
@@ -39535,6 +39665,9 @@ fn execute_local_budget(
     fill_hit: bool,
     outstanding: Option<&std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     limits: ZoneDrainLimits,
+    // **M1c-2c**：**唯一判定点**（生产 = [`classify_local_event`]，按 tick 预分类的 seq→类查表）。
+    // 执行器不再内联 `zone_cmd_class`：决策单点、这里只做机械取值。
+    classify: &dyn Fn(&SeqEvent) -> ZoneCmdClass,
     mut exec: impl FnMut(
         SeqEvent,
         ZoneCmdClass,
@@ -39580,13 +39713,13 @@ fn execute_local_budget(
             }
         }
         let from_carry = !take_pending && (buffer_idx - 1) < carry_prefix;
-        let class = match &item.ev {
-            GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
-            _ => {
-                debug_assert!(false, "INBOUND_LOCAL 工作区只应含 Command");
-                ZoneCmdClass::Unsupported
-            }
-        };
+        // **M1c-2c**：分类来自预分类表（唯一判定点在调用方）；非 `Command` 的断言在
+        // [`classify_local_event`] 内（同一处、同一句）。
+        debug_assert!(
+            matches!(item.ev, GateEvent::Command { .. }),
+            "INBOUND_LOCAL 工作区只应含 Command"
+        );
+        let class = classify(&item);
         if class == ZoneCmdClass::Unsupported {
             perf_counters::note_zonek_inbound_unsupported();
         }
@@ -127071,6 +127204,170 @@ mod zone_command_tests {
         assert!(rx.try_recv().is_err(), "限频窗口内不得回帧");
     }
 
+    /// **M1c-2c 牙 1【行为】`eat_branch_is_exhaustive_fail_closed`**：`CM_EAT` 分支穷举 + 安全默认。
+    ///
+    /// 安全默认（模板缺 / `dead` 不可判）⇒ `Unknown`（调用方不得本地）；本段 interim 由
+    /// `classify_local_event` 落 `Unsupported`（段 3 改 `Process` + `EatProcess` 邮箱）。
+    #[test]
+    fn eat_branch_is_exhaustive_fail_closed() {
+        let tpl = |std_mode: u8, ani_count: u8, shape: u8| mir2_data::StdItem {
+            std_mode,
+            ani_count,
+            shape,
+            ..Default::default()
+        };
+        assert_eq!(
+            eat_branch(None, Some(false)),
+            EatBranch::Unknown,
+            "模板缺 ⇒ Unknown（不得本地）"
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(31, 0, 0)), None),
+            EatBranch::Unknown,
+            "dead 不可判 ⇒ Unknown（不得本地）"
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(31, 0, 0)), Some(true)),
+            EatBranch::Dead
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(31, 0, 0)), Some(false)),
+            EatBranch::Unpack
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(31, 2, 0)), Some(false)),
+            EatBranch::StdModeFunScript
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(3, 0, 11)), Some(false)),
+            EatBranch::Lottery
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(3, 0, 5)), Some(false)),
+            EatBranch::MoveFamily
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(3, 0, 3)), Some(false)),
+            EatBranch::OtherLocal,
+            "Shape 1..=3 的 move 支不读进程态 ⇒ OtherLocal"
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(4, 0, 0)), Some(false)),
+            EatBranch::OtherLocal,
+            "书（StdMode 4）本地"
+        );
+        assert_eq!(
+            eat_branch(Some(&tpl(99, 0, 0)), Some(false)),
+            EatBranch::OtherLocal
+        );
+    }
+
+    /// **M1c-2c 牙 1b【行为】`classify_local_event_safe_default`**：`CM_EAT` 的模板/会话/实体
+    /// 任一不可判 ⇒ **不得本地执行**（本段 interim = `Unsupported`；段 3 改 `Process`，本牙按 doc
+    /// 翻转）。非 `CM_EAT` 仍走既有分类器（不变）。
+    #[test]
+    fn classify_local_event_safe_default() {
+        let mut world = mir2_world_bevy::World::new(8, 8);
+        // `dead` 可判 requires 实体在世界里（`classify_local_event` 的安全默认显式区分"实体缺"）。
+        let actor = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 3, 3));
+        let world = world;
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let ev_eat = |chr: &str| GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: chr.to_string(),
+            socket: 7,
+            cmd: cmd(game_svr::useitem::CM_EAT, 0, 0, 0),
+            tail: None,
+        };
+        // 会话缺。
+        let empty: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        assert_eq!(
+            classify_local_event(&ev_eat("hero"), &empty, &catalog, &world),
+            ZoneCmdClass::Unsupported,
+            "会话缺 ⇒ 不得本地"
+        );
+        // 模板缺（会话在、包内没有该 MakeIndex）。
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        assert_eq!(
+            classify_local_event(&ev_eat("hero"), &sessions, &catalog, &world),
+            ZoneCmdClass::Unsupported,
+            "模板缺 ⇒ 不得本地"
+        );
+        // 非 CM_EAT 走既有分类器（`CM_PICKUP` 在 2b 已接线 ⇒ Local）。
+        let ev_pick = GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "hero".to_string(),
+            socket: 7,
+            cmd: cmd(game_svr::ground::CM_PICKUP, 0, 0, 0),
+            tail: None,
+        };
+        assert_eq!(
+            classify_local_event(&ev_pick, &sessions, &catalog, &world),
+            ZoneCmdClass::Local,
+            "非 CM_EAT 必须继续走 zone_cmd_class"
+        );
+        // 解包支（StdMode31/AniCount==0）⇒ Local；脚本支（AniCount!=0）⇒ 本段 interim 非本地。
+        let mut catalog2 = game_svr::ability::StdItemCatalog::new();
+        catalog2.insert(
+            1,
+            mir2_data::StdItem {
+                std_mode: 31,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        catalog2.insert(
+            2,
+            mir2_data::StdItem {
+                std_mode: 31,
+                ani_count: 2,
+                ..Default::default()
+            },
+        );
+        let mut sg_box = crate::tests::test_session_ground(actor);
+        sg_box.state.item_list.push(game_svr::bag::BagItem {
+            make_index: 9001,
+            index: 1,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        });
+        let mut s_box = std::collections::HashMap::new();
+        s_box.insert("hero".to_string(), sg_box);
+        let mut ev_box = ev_eat("hero");
+        if let GateEvent::Command { cmd, .. } = &mut ev_box {
+            cmd.recog = 9001;
+        }
+        assert_eq!(
+            classify_local_event(&ev_box, &s_box, &catalog2, &world),
+            ZoneCmdClass::Local,
+            "解包支必须 Local（AniCount==0）"
+        );
+        let mut sg_script = crate::tests::test_session_ground(actor);
+        sg_script.state.item_list.push(game_svr::bag::BagItem {
+            make_index: 9002,
+            index: 2,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        });
+        let mut s_script = std::collections::HashMap::new();
+        s_script.insert("hero".to_string(), sg_script);
+        let mut ev_script = ev_eat("hero");
+        if let GateEvent::Command { cmd, .. } = &mut ev_script {
+            cmd.recog = 9002;
+        }
+        assert_eq!(
+            classify_local_event(&ev_script, &s_script, &catalog2, &world),
+            ZoneCmdClass::Unsupported,
+            "脚本支本段 interim 非本地（段 3 改 Process）"
+        );
+    }
+
     #[test]
     fn post_transfer_move_drop_is_counted() {
         let (mut state, actor) = landed("cmd_transfer", zone::ZoneId::new(1));
@@ -129305,9 +129602,19 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(
             prod.matches("zone_cmd_class(").count(),
             2,
-            "仅定义 + `execute_local_budget` 一处调用"
+            "仅定义 + `classify_local_event` 一处调用"
         );
-        let f = prod.find("fn execute_local_budget(").expect("执行器定义");
+        assert_eq!(
+            prod.matches("classify_local_event(").count(),
+            2,
+            "仅定义 + LOCAL 支预分类一处调用（唯一决策点）"
+        );
+        assert_eq!(
+            prod.matches("eat_branch(").count(),
+            2,
+            "仅定义 + `classify_local_event` 一处调用（M1c-2c 牙 1c）"
+        );
+        let f = prod.find("fn classify_local_event(").expect("判定函数定义");
         let f_end = prod[f..]
             .find(
                 "
@@ -129317,7 +129624,24 @@ mod l2_s3_cross_recipient_tests {
             .map_or(prod.len(), |k| f + k + 3);
         assert!(
             prod[f..f_end].contains("zone_cmd_class("),
-            "分类器只该在执行器里被调用"
+            "非 CM_EAT 必须走既有分类器（单源）"
+        );
+        assert!(
+            prod[f..f_end].contains("eat_branch("),
+            "CM_EAT 分支判定必须在唯一决策点内"
+        );
+        let ex = prod.find("fn execute_local_budget(").expect("执行器定义");
+        let ex_end = prod[ex..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| ex + k + 3);
+        assert!(
+            !prod[ex..ex_end].contains("zone_cmd_class(")
+                && !prod[ex..ex_end].contains("eat_branch("),
+            "执行器只做机械取值，不得内联判定"
         );
         let h = prod.find("fn handle_zone_command_on(").expect("处置实现");
         let h_end = prod[h..]
@@ -129328,8 +129652,8 @@ mod l2_s3_cross_recipient_tests {
             )
             .map_or(prod.len(), |k| h + k + 3);
         assert!(
-            !prod[h..h_end].contains("zone_cmd_class("),
-            "处置不得依赖分类（分类只用于计数）"
+            !prod[h..h_end].contains("zone_cmd_class(") && !prod[h..h_end].contains("eat_branch("),
+            "区 0 处置路径不得引用判定（牙 1c：区 0 不调用 eat_branch）"
         );
     }
 
@@ -129512,6 +129836,10 @@ mod l2_s3_cross_recipient_tests {
             fill_hit,
             Some(&outstanding),
             limits,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |_s, _c, _p, _b| {
                 executed += 1;
                 LocalDisposition::Drained
@@ -129574,6 +129902,10 @@ mod l2_s3_cross_recipient_tests {
             h1,
             Some(&outstanding),
             l1,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |s, _c, _p, _b| {
                 if let GateEvent::Command { cmd, .. } = &s.ev {
                     order.push(cmd.recog);
@@ -129606,6 +129938,10 @@ mod l2_s3_cross_recipient_tests {
             h2,
             Some(&outstanding),
             l2,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |s, _c, _p, _b| {
                 if let GateEvent::Command { cmd, .. } = &s.ev {
                     order.push(cmd.recog);
@@ -129833,6 +130169,12 @@ mod l2_s3_cross_recipient_tests {
                 fill_hit,
                 Some(outstanding),
                 limits,
+                &|s: &SeqEvent| match &s.ev {
+                    GateEvent::Command { cmd, tail, .. } => {
+                        zone_cmd_class(cmd.ident, tail.as_deref())
+                    }
+                    _ => ZoneCmdClass::Unsupported,
+                },
                 |_s, _c, _p, _b| {
                     executed += 1;
                     LocalDisposition::Drained
@@ -129873,6 +130215,10 @@ mod l2_s3_cross_recipient_tests {
             fill_hit,
             Some(&outstanding),
             limits,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |_s, _c, _p, _b| {
                 executed += 1;
                 LocalDisposition::Drained
@@ -129995,6 +130341,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130107,6 +130457,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130162,6 +130516,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130238,6 +130596,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130389,6 +130751,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130525,6 +130891,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             limits,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130606,6 +130976,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             limits,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
@@ -130656,6 +131030,10 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             l2,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+                _ => ZoneCmdClass::Unsupported,
+            },
             |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
