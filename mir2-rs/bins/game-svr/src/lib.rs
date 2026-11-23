@@ -2023,17 +2023,22 @@ fn spawn_minimal_zone(
                 };
                 // ---- 切片开：真 World + 本区展示/在线表 ----
                 let _alive = ZoneAliveOnDrop(Arc::clone(&state));
-                // **M1a**：handoff 运行时放进 `HostLoop`（A 的 `WORLD_HEAD` 排 ack/offer、
-                // 锁3 投 offer）。切片关（`state=None`）根本走不到这里。
-                if !handoff_boxes.is_empty() {
+                // **M1a**：镜像闸 + handoff 运行时放进 `HostLoop`（前者给 `drain_depart_frames`
+                // 的条件抑制；后者让 A 的 `WORLD_HEAD` 排 ack/offer、锁3 投 offer）。
+                // 切片关（`state=None`）根本走不到这里。
+                {
                     let mut st = state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    st.host.handoff_runtime = Some(handoff::HandoffRuntime::new(
-                        zone_id,
-                        Arc::clone(&layout),
-                        handoff_boxes.clone(),
-                    ));
+                    // 与区 0 同一来源：`run_inner` 的 `mirror_enabled`（`MIRROR=1` 才有镜像）。
+                    st.host.mirrors = mirrors;
+                    if !handoff_boxes.is_empty() {
+                        st.host.handoff_runtime = Some(handoff::HandoffRuntime::new(
+                            zone_id,
+                            Arc::clone(&layout),
+                            handoff_boxes.clone(),
+                        ));
+                    }
                 }
                 // **M1a**：区 k 的服务上下文与 `TickIo`（M1a 段集不含 INBOUND/SHUTDOWN，但**用真通道**
                 // ——将来给区 k 开 INBOUND 时不会静默读空）。
@@ -20627,10 +20632,15 @@ static DEPART_WRN_LIMITER: std::sync::Mutex<DepartWarnLimiter> =
 /// `SearchTime=1000` 节流，会把上次扫描后才进入 ±12 的玩家漏掉），由
 /// [`mir2_world_bevy::World::drain_departs`] 取走（`(观察者, 离开者)`，保序）；本函数按观察者的
 /// `[GateIdx, Socket]` 逐条路由回**观察者自己**。离世者自身不在集合里（格扫按 `ActorId` 排除；oracle 此时已 `Ghost=true`）。
+///
+/// **`mirror_enabled`（M1a finding 1 的条件抑制）**：镜像**开**时跳过「镜像观察者 ⇒ ⑤ 邮箱」这一支
+/// （原因见函数体内注释：收件区对镜像的 remove 会由本区 AOI 的 removed-filter 在 T 发同一帧）；
+/// 镜像**关**时保留该支（A1 第七面语义）。N=1（无镜像观察者）两条都不变。
 fn drain_depart_frames(
     world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mirror_enabled: bool,
 ) -> usize {
     let mut sent = 0usize;
     for (observer_id, target_id) in world.drain_departs() {
@@ -20650,7 +20660,25 @@ fn drain_depart_frames(
         }
         // **L2-5 ⑦ 第七面**：镜像观察者 ⇒ 目标区邮箱（收件区 barrier1 后排水，`src_tick`
         // 过滤保恰好 1 tick）。帧体与本地路径同一构造；`route=None/未登记/溢出` 计残差。
-        let outcome = if world.entities.get(observer_id).is_some_and(|e| e.mirror) {
+        let observer_is_mirror = world.entities.get(observer_id).is_some_and(|e| e.mirror);
+        // **M1a 修复（finding 1：两区「同一离开两帧」）——条件抑制**。
+        //
+        // 两条路径在「离开」点重叠（同一 `(观察者, 离开者)`）：
+        //  ① 源区（本函数，`HostWorldHead` 段）对**镜像观察者**走 ⑤ 邮箱 ⇒ 收件区 **T+1** 收
+        //     `SM_DISAPPEAR`（下文的 `note_mirror_recipient(DepartFrames, …)`）；
+        //  ② 收件区把**镜像 A 移除**时（`remove_mirror` ⇒ `record_departure_of(id)` +
+        //     `entities.remove(id)`，**非 ghost 删除**）⇒ 收件区 AOI 的 removed-filter 命中 ⇒
+        //     `drain_aoi_disappear_with_counts`（`AOI_DOWNLINK` 段）在 **T** 发同一 `SM_DISAPPEAR`。
+        // 不对称：N=1 单区离开者被 `MakeGhost` 变 **ghost** ⇒ AOI 静默 ⇒ 只由本函数同区直发 1 条；
+        // 镜像在收件区是**真实体**（不是 ghost）⇒ remove 就会发音 ⇒ 观察者收 2 条（seq46 有旁路标记
+        // 的 ⑤ 帧 + seq48 无标记的收件区 AOI 帧）。
+        //
+        // 抑制依据：`SLICING=1` 强制 `MIRROR=1`（`plan_slicing`）⇒ 切片部署下镜像路径**必然存在**、
+        // ② **必然**出帧 ⇒ ① 冗余。**镜像关闭时保留 ①**（无镜像配置下没有 ②，也保住 A1 第七面的定义）。
+        if observer_is_mirror && mirror_enabled {
+            continue;
+        }
+        let outcome = if observer_is_mirror {
             crate::cross_zone_frames::note_mirror_recipient(
                 perf_counters::CrossRecipientSurface::DepartFrames,
                 world.mirror_route(observer_id),
@@ -20692,10 +20720,11 @@ fn drain_depart_downlink(
     world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mirror_enabled: bool,
 ) -> usize {
     let mut sent = 0usize;
     // 生产发射点：离世广播（oracle `BaseObject.DisappearA` ⇒ `SendRefMsg(RM_DISAPPEAR)`）。
-    sent += drain_depart_frames(world, online, gates);
+    sent += drain_depart_frames(world, online, gates, mirror_enabled);
     sent
 }
 
@@ -34397,6 +34426,7 @@ fn sim_loop(
     // **L2-5 P1 · M0（A1）**：区级状态/进程级服务/本区 I/O 装进结构（纯搬移；字段与局部同名）。
     let mut host = HostLoop {
         zone: zone_router::HOST_ZONE,
+        mirrors: zone_host.as_deref().is_some_and(|h| h.mirror_enabled),
         world,
         displays,
         online,
@@ -34651,6 +34681,9 @@ struct HostLoop {
     /// **M1a**：本实例所属区（区 0 = `HOST_ZONE`，区 k = 自身）。用于按区分流的诊断行
     /// （非宿主区的 profiler 行带 `zone=<k>`）。
     zone: zone::ZoneId,
+    /// **M1a**：镜像闸（与 `ZoneHost.mirror_enabled` 同源；区 0 在构造时取、区 k 由驱动置入）。
+    /// `drain_depart_frames` 的**条件抑制**用它：镜像开 ⇒ 源区不再投 DepartFrames ⑤。
+    mirrors: bool,
     world: mir2_world_bevy::World,
     displays: downlink::DisplayTable,
     online: OnlineRegistry,
@@ -34935,6 +34968,7 @@ impl HostLoop {
         world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         Self {
             zone,
+            mirrors: false,
             world,
             displays: downlink::DisplayTable::new(),
             online: OnlineRegistry::new(),
@@ -37270,7 +37304,7 @@ impl HostLoop {
             // `[GateIdx, Socket]` 把 `SM_DISAPPEAR(30)` 路由回**观察者自己**（`Recog` = 离开者）。
             // 位置：在 `world.tick()` 之前（oracle 在离开者 `RunNotice`/`MakeGhost` 当轮即发，早于
             // 下一轮观察者的 `SearchViewRange`）。
-            let _departed = drain_depart_downlink(&mut world, &online, &gates);
+            let _departed = drain_depart_downlink(&mut world, &online, &gates, self.mirrors);
             // **M3④-实现 B 第 ③ 片**：MonGen regen 门 + 刷怪（单线程串行版的 `ProcessMonsters`，
             // `WorldServer.MonGen.cs:192-253`）。`dir`/`cool_eye`/构造抽已随生成结果写进
             // `Entity.ai`（卡 C 第 ② 片）；**怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED`）仍属后续分片。
@@ -47945,7 +47979,7 @@ mod tests {
         gates.insert(0, tx0);
 
         world.disconnect("b").expect("`b` 在世界上 ⇒ 离世成功");
-        let sent = drain_depart_frames(&mut world, &online, &gates);
+        let sent = drain_depart_frames(&mut world, &online, &gates, false);
         assert_eq!(sent, 1, "恰观察者 `a` 收 1 条离世广播");
 
         let mut to_a: Vec<Vec<u8>> = Vec::new();
@@ -48015,7 +48049,7 @@ mod tests {
         assert_eq!(world.session("b").unwrap().actor_id, Some(b));
 
         // ① DisappearA：观察者 a 恰 1 条，ghost 自身 0 条。
-        let sent = drain_depart_frames(&mut world, &online, &gates);
+        let sent = drain_depart_frames(&mut world, &online, &gates, false);
         assert_eq!(sent, 1, "恰观察者 `a` 收 1 条离世广播");
         let mut to_a: Vec<Vec<u8>> = Vec::new();
         let mut to_b: Vec<Vec<u8>> = Vec::new();
@@ -48031,7 +48065,7 @@ mod tests {
 
         // ② 之后不再产帧：再抽一次离世帧 = 0；本 tick 的 AOI 下行 = 0。
         assert_eq!(
-            drain_depart_frames(&mut world, &online, &gates),
+            drain_depart_frames(&mut world, &online, &gates, false),
             0,
             "离世帧只发一次（ghost 不重复 DisappearA）"
         );
@@ -48053,7 +48087,7 @@ mod tests {
             "重复 soft_close 不得再加计数"
         );
         assert_eq!(
-            drain_depart_frames(&mut world, &online, &gates),
+            drain_depart_frames(&mut world, &online, &gates, false),
             0,
             "重复 soft_close 不得再发离世帧"
         );
@@ -48063,7 +48097,7 @@ mod tests {
         world.disconnect("b").expect("移除门");
         assert!(world.entities.get(b).is_none(), "移除门必须摘掉遗留 ghost");
         assert_eq!(
-            drain_depart_frames(&mut world, &online, &gates),
+            drain_depart_frames(&mut world, &online, &gates, false),
             0,
             "disconnect（Left 上）不得重发 SM_DISAPPEAR"
         );
@@ -48130,7 +48164,7 @@ mod tests {
         gates.insert(0, tx0);
 
         world.disconnect("b").expect("`b` 在世界上 ⇒ 离世成功");
-        drain_depart_downlink(&mut world, &online, &gates);
+        drain_depart_downlink(&mut world, &online, &gates, false);
 
         let mut to_a: Vec<Vec<u8>> = Vec::new();
         let mut to_b: Vec<Vec<u8>> = Vec::new();
@@ -125556,7 +125590,7 @@ mod l2_s3_cross_recipient_tests {
         let (g, mut rx) = gates();
         let d0 = delivered();
         world.disconnect("b").expect("b 离世");
-        let sent = drain_depart_frames(&mut world, &online, &g);
+        let sent = drain_depart_frames(&mut world, &online, &g, false);
         assert_eq!(sent, 0, "本地无观察者（MIRROR 是镜像）");
         assert_eq!(delivered() - d0, 1, "第七面必须投递（delivered +1）");
         assert_eq!(drain_cross(&g), 1, "T+1 排水 1 帧");
@@ -125572,6 +125606,52 @@ mod l2_s3_cross_recipient_tests {
             expected,
             "跨区 body 必须与本地路径同一构造（逐字节）"
         );
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **M1a finding 1 牙（条件抑制）**：镜像**开** ⇒ 镜像观察者**不**投 DepartFrames ⑤
+    /// （收件区 AOI 的 removed-filter 自己出）；镜像**关** ⇒ 仍投
+    /// （见 `depart_frames_cross_zone_delivers_at_next_tick`）。
+    ///
+    /// 变异：条件写反（`mirror_enabled` 时仍投 / `!mirror_enabled` 时跳过）⇒ 本条或上条红。
+    #[test]
+    fn depart_frames_mirror_observer_suppressed_when_mirror_enabled() {
+        let _g = arm();
+        let mut world = mir2_world_bevy::World::new(200, 200);
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 10, 10)),
+            mir2_world_bevy::MirrorUpsert::Inserted,
+            "前置：镜像观察者插入"
+        );
+        arm_cross(&mut world);
+        let mut online = OnlineRegistry::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        let (g, mut rx) = gates();
+        let d0 = delivered();
+        world.disconnect("b").expect("b 离世");
+        let sent = drain_depart_frames(&mut world, &online, &g, true);
+        assert_eq!(sent, 0, "本地无观察者（MIRROR 是镜像）");
+        assert_eq!(
+            delivered() - d0,
+            0,
+            "镜像开 ⇒ 不得投 ⑤（否则与收件区 AOI 的 remove 帧重复）"
+        );
+        assert_eq!(drain_cross(&g), 0, "跨区邮箱必须为空");
+        assert!(rx.try_recv().is_err(), "不得有帧");
         crate::cross_zone_frames::uninstall();
     }
 
@@ -125613,7 +125693,7 @@ mod l2_s3_cross_recipient_tests {
         let (gates_map, _rx) = gates();
         let (d0, u0) = (delivered(), unroutable());
         world.disconnect("b").expect("b 离世");
-        let _ = drain_depart_frames(&mut world, &online, &gates_map);
+        let _ = drain_depart_frames(&mut world, &online, &gates_map, false);
         let (dd, du) = (delivered() - d0, unroutable() - u0);
         assert_eq!(
             (dd, du),
@@ -125703,7 +125783,7 @@ mod l2_s3_cross_recipient_tests {
             },
         );
         w2.disconnect("b").expect("b 离世");
-        let _ = drain_depart_frames(&mut w2, &online2, &g);
+        let _ = drain_depart_frames(&mut w2, &online2, &g, false);
         let six: u64 = ALL
             .iter()
             .map(|s| perf_counters::cross_recipient_by_surface(*s))
