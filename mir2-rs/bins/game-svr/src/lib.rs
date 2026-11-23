@@ -9320,7 +9320,7 @@ fn handle_click_npc_cmd(
             &mut script_broadcasts,
             script_world.is_some(),
         );
-        emit_script_add_items(
+        emit_script_item_frames(
             gates,
             online,
             chr_name,
@@ -10432,7 +10432,7 @@ fn handle_shop_cmd_inner(
                 &mut script_broadcasts,
                 script_world.is_some(),
             );
-            emit_script_add_items(
+            emit_script_item_frames(
                 gates,
                 online,
                 chr_name,
@@ -10530,7 +10530,7 @@ fn handle_shop_cmd_inner(
                         &mut script_broadcasts2,
                         script_world.is_some(),
                     );
-                emit_script_add_items(
+                emit_script_item_frames(
                     gates,
                     online,
                     chr_name,
@@ -10852,7 +10852,7 @@ fn handle_shop_cmd_inner(
                                     &mut script_broadcasts,
                                     script_world.is_some(),
                                 );
-                            emit_script_add_items(
+                            emit_script_item_frames(
                                 gates,
                                 online,
                                 chr_name,
@@ -10967,7 +10967,7 @@ fn handle_shop_cmd_inner(
                                     &mut script_broadcasts,
                                     script_world.is_some(),
                                 );
-                            emit_script_add_items(
+                            emit_script_item_frames(
                                 gates,
                                 online,
                                 chr_name,
@@ -11167,7 +11167,7 @@ fn handle_shop_cmd_inner(
                         &mut script_broadcasts,
                         script_world.is_some(),
                     );
-                emit_script_add_items(
+                emit_script_item_frames(
                     gates,
                     online,
                     chr_name,
@@ -11762,38 +11762,60 @@ fn write_back_player_gold_deal(
     sg.state.gold = p.gold;
 }
 
-/// **A27-1**：脚本 `GIVE` 入包件逐条直发 `SM_ADDITEM(200)`（`SendSocket` 直发，不经
-/// `pickwire::script_frame` 队列；oracle `PlayObject.SendAddItem`）。
+/// **A27-1/A27-2**：一次脚本执行产生、需**直发**（`SendSocket`，不经 `pickwire::script_frame`
+/// 队列）的物品帧载荷（写回序）：
+/// - `added` ⇒ `SM_ADDITEM(200)`（`SendAddItem`，尾 = `trade::add_item_tail`）；
+/// - `removed` ⇒ `SM_DELITEM(202)`（`TAKE` 摘包件，尾 = `trade::del_item_tail`）；
+/// - `removed_use` ⇒ `SM_DELITEM(202)`（`TAKEW`/`UPGRADEITEMSEX` 破碎支摘佩戴位，同上）。
 ///
-/// 调用点 = `write_back_player_bag` 的两个生产者（`run_std_mode_func_script` 直发、
-/// `run_merchant_goto` 由调用方在写回后立即直发）。**满包余件**走 `DropItemDown`，不在本表。
-fn emit_script_add_items(
+/// **202 尾不带** `StdModeMap` 的 `Desc[8]⇒Shape` 调整（`trade::del_item_tail` 与
+/// `smframe::sm_delitem` 的文档逐行对照 `PlayObject.Base.cs:1648-1665`）——不得复用 200 的尾。
+#[derive(Default)]
+struct ScriptItemFrames {
+    added: Vec<game_svr::bag::BagItem>,
+    removed: Vec<game_svr::bag::BagItem>,
+    removed_use: Vec<game_svr::bag::BagItem>,
+}
+
+fn emit_script_item_frames(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &OnlineRegistry,
     chr_name: &str,
     socket: i32,
     actor_id: i32,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    items: &[game_svr::bag::BagItem],
+    frames: &ScriptItemFrames,
 ) {
-    if items.is_empty() {
+    if frames.added.is_empty() && frames.removed.is_empty() && frames.removed_use.is_empty() {
         return;
     }
     let Some(entry) = online.find_by_chr(chr_name) else {
         return;
     };
     let gate_idx = entry.gate_idx;
-    for it in items {
-        let Some(body) = game_svr::trade::send_add_item_body(actor_id, it, catalog) else {
-            glog!(
+    let send = |body: Vec<u8>| {
+        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "脚本增删物品帧") {
+            let _ = tx.send(SimToGate::SendFrame { socket, body });
+        }
+    };
+    for it in &frames.added {
+        match game_svr::trade::send_add_item_body(actor_id, it, catalog) {
+            Some(body) => send(body),
+            None => glog!(
                 "WRN",
                 "脚本 GIVE：物模板缺失 ⇒ SM_ADDITEM 未编码（Index={}）",
                 it.index
-            );
-            continue;
-        };
-        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "脚本 GIVE SM_ADDITEM") {
-            let _ = tx.send(SimToGate::SendFrame { socket, body });
+            ),
+        }
+    }
+    for it in frames.removed.iter().chain(frames.removed_use.iter()) {
+        match game_svr::trade::del_item_tail(it, catalog) {
+            Some(tail) => send(game_svr::smframe::sm_delitem(actor_id, &tail)),
+            None => glog!(
+                "WRN",
+                "脚本 TAKE：物模板缺失 ⇒ SM_DELITEM 未编码（Index={}）",
+                it.index
+            ),
         }
     }
 }
@@ -11828,10 +11850,15 @@ fn write_back_player_bag(
     catalog: &dyn game_svr::ability::ItemCatalog,
     item_number: &std::sync::atomic::AtomicI32,
     rng: &mut mir2_shared::rng::RandomNumber,
-) -> (Vec<String>, Vec<game_svr::bag::BagItem>) {
-    // **A27-1**：返回**本次实际入包**的件（按写回序）——调用方据此逐件直发
-    // `SM_ADDITEM(200)`（oracle `SendAddItem` 是 `SendSocket` 直发；见 T-157/T-158 扩注）。
+) -> (
+    Vec<String>,
+    Vec<game_svr::bag::BagItem>,
+    Vec<game_svr::bag::BagItem>,
+) {
+    // **A27-1/A27-2**：返回**本次实际入包**的件（写回序，直发 `SM_ADDITEM(200)`）与
+    // **本次摘掉**的件（尾→头序，直发 `SM_DELITEM(202)`）——oracle 同为 `SendSocket` 直发。
     let mut added: Vec<game_svr::bag::BagItem> = Vec::new();
+    let mut removed: Vec<game_svr::bag::BagItem> = Vec::new();
     fn count_of(list: &[(String, i32)], name: &str) -> i32 {
         list.iter()
             .filter(|(n, _)| n.eq_ignore_ascii_case(name))
@@ -11873,7 +11900,7 @@ fn write_back_player_bag(
                 .name(sg.state.item_list[i].index)
                 .is_some_and(|n| n.eq_ignore_ascii_case(name));
             if hit {
-                sg.state.item_list.remove(i);
+                removed.push(sg.state.item_list.remove(i));
                 left -= 1;
             }
         }
@@ -11939,7 +11966,7 @@ fn write_back_player_bag(
         item_number,
         rng,
     ));
-    (warnings, added)
+    (warnings, added, removed)
 }
 
 /// `GotoLableGiveItem` 满包支（`ScriptEngine.cs:735-741`）的写回半边：
@@ -12324,7 +12351,7 @@ fn run_std_mode_func_script(
     // 会话 GM 态移出一次（理由见 [`run_merchant_goto`]）。
     let mut gm_sess = gm.map(|_| std::mem::take(&mut sg.gm));
     let label = format!("@StdModeFunc{ani_count}");
-    let (says, frames, direct, notes, bag_after, drops, use_slots, broadcasts) = {
+    let (says, frames, direct, notes, bag_after, drops, use_slots, broadcasts, del_use_items) = {
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
@@ -12354,6 +12381,8 @@ fn run_std_mode_func_script(
             // `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的**其余玩家**收件
             // 正文（本例玩家自己那份已在 `frames` 里）：脚本里出现的顺序即 oracle 的入队序。
             std::mem::take(&mut player.world_broadcasts),
+            // **A27-2**：TAKEW / 升级破碎支的摘佩戴位快照（动作序）。
+            std::mem::take(&mut player.del_use_items),
         );
         // `player` 的最后一次使用已过 ⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -12362,7 +12391,7 @@ fn run_std_mode_func_script(
         out
     };
     // 背包的脚本副作用（`GIVE`/`TAKE`）与满包余件（`DropItemDown`）。
-    let (warnings, added_items) = write_back_player_bag(
+    let (warnings, added_items, removed_items) = write_back_player_bag(
         &bag_after,
         &bag_before,
         &drops,
@@ -12379,16 +12408,20 @@ fn run_std_mode_func_script(
             warnings
         );
     }
-    // **A27-1**：`GIVE` 入包件在写回后**直发** `SM_ADDITEM(200)`（oracle `SendAddItem` 直发；
-    // 满包余件走 `DropItemDown`，不在本表）。
-    emit_script_add_items(
+    // **A27-1/A27-2**：写回后**直发**物品帧——入包件 `SM_ADDITEM(200)`、摘包件与摘佩戴位
+    // `SM_DELITEM(202)`（oracle 均为 `SendSocket` 直发；满包余件走 `DropItemDown`，不在本表）。
+    emit_script_item_frames(
         gates,
         online,
         chr_name,
         socket,
         sg.actor_id,
         catalog,
-        &added_items,
+        &ScriptItemFrames {
+            added: added_items,
+            removed: removed_items,
+            removed_use: del_use_items,
+        },
     );
     world.rng = rng;
     // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写装进
@@ -12726,8 +12759,9 @@ fn run_merchant_goto(
     Vec<game_svr::npc::SendMsg>,
     Vec<usize>,
     Vec<mir2_script::engine::WorldAction>,
-    // **A27-1**：`GIVE` 实际入包的件（写回序），供调用方直发 `SM_ADDITEM(200)`。
-    Vec<game_svr::bag::BagItem>,
+    // **A27-1/A27-2**：本次脚本产生的物品帧载荷（写回序：入包 / 摘包 / 摘佩戴位），
+    // 供调用方写回后立即直发（`SM_ADDITEM(200)` / `SM_DELITEM(202)`）。
+    ScriptItemFrames,
 ) {
     // oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem`（`ScriptEngine.cs:653-745`）与
     // `GotoLableTakeWItem`（`:748-790`）直接改**同一个** `PlayObject` 的 `ItemList`/`UseItems`；
@@ -12737,7 +12771,7 @@ fn run_merchant_goto(
     let use_before = sg.use_items.clone();
     // `NpcPlayer` 借走 `rng`（`rngf` 闭包）⇒ 收在块里，块结束才把 `rng` 交还，
     // 供满包 `DropItemDown` 的 `StdMode 45` 抽数（`T-159`）。
-    let (says, frames, bag_after, full_bag_drops, use_slots, world_actions) = {
+    let (says, frames, bag_after, full_bag_drops, use_slots, world_actions, del_use_items) = {
         // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线要 `&mut GmSession`，而下面的写回要
         // `&mut sg`（整表）——若把 `&mut sg.gm` 装进 `player`，它得活到 `player` 的**类型**不再
         // 使用为止（NLL 对结构体字段不做流敏），写回就借不到 `sg`。oracle 里是同一个
@@ -12834,6 +12868,8 @@ fn run_merchant_goto(
             std::mem::take(&mut player.full_bag_drops),
             use_slots,
             mir2_script::engine::ScriptPlayer::take_world_actions(&mut player),
+            // **A27-2**：TAKEW / 升级破碎支的摘佩戴位快照（动作序）。
+            std::mem::take(&mut player.del_use_items),
         );
         // `player` 的最后一次使用已过（`gm_sess` 的借用到此结束）⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -12843,7 +12879,7 @@ fn run_merchant_goto(
     };
     // 背包的脚本副作用（`GotoLableTakeItem`/`GotoLableGiveItem`）与上面同一位置回写；
     // 满包余件照 oracle 走 `DropItemDown`，落不地的（模板缺失）只记 WRN，不编造 `MakeIndex`。
-    let (bag_warnings, added_items) = write_back_player_bag(
+    let (bag_warnings, added_items, removed_items) = write_back_player_bag(
         &bag_after,
         &bag_before,
         &full_bag_drops,
@@ -12862,9 +12898,19 @@ fn run_merchant_goto(
     }
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝/金币帧的取值因此是本次脚本写回后的会话值。
-    // **A27-1**：第 5 项 = 本次 `GIVE` 实际入包的件（写回序）——调用方在写回后**立即**直发
-    // `SM_ADDITEM(200)`（本函数无路由句柄；固定 NPC 死路径/测试可丢弃）。
-    (says, frames, use_slots, world_actions, added_items)
+    // **A27-1/A27-2**：第 5 项 = 本次脚本产生的物品帧载荷（入包/摘包/摘佩戴位，写回序）——
+    // 调用方在写回后**立即**直发（本函数无路由句柄；固定 NPC 死路径/测试可丢弃）。
+    (
+        says,
+        frames,
+        use_slots,
+        world_actions,
+        ScriptItemFrames {
+            added: added_items,
+            removed: removed_items,
+            removed_use: del_use_items,
+        },
+    )
 }
 
 /// **统一入队版**：脚本帧按 `(byte)RM_*` 进 handler 队列（与 [`emit_script_frames_raw`] 同一
@@ -53366,6 +53412,181 @@ break
         );
         let mk: Vec<i32> = bag.iter().map(|it| it.make_index).collect();
         assert_eq!(mk, vec![1, 2], "计数器从 0 起（夹具）⇒ 逐件 +1");
+    }
+
+    /// **A27-2 牙 `script_take_emits_sm_delitem`**：脚本 `TAKE 木剑 1` ⇒ 写回后**直发** 1 条
+    /// `SM_DELITEM(202)`（`Recog=ActorId`、`Series=1`、尾逐字节 = `trade::del_item_tail`——
+    /// **202 尾不带** `StdModeMap` 的 `Desc[8]⇒Shape` 调整）；摘的是**尾件**（oracle 从尾摘）。
+    ///
+    /// 变异：删 202 发射 ⇒ 0 帧 ⇒ 红。
+    #[test]
+    fn script_take_emits_sm_delitem() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "收你一把 <交/@ya54>",
+            vec![t142_act_n2(2, "木剑", 1)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let removed_tail = {
+            let sg = rig.sessions.get_mut("hero").expect("hero 会话");
+            sg.state.item_list = vec![
+                game_svr::bag::BagItem {
+                    make_index: 5001,
+                    index: 1,
+                    dura: 10,
+                    dura_max: 10,
+                    desc: [0; 14],
+                },
+                game_svr::bag::BagItem {
+                    make_index: 5002,
+                    index: 1,
+                    dura: 20,
+                    dura_max: 20,
+                    desc: [0; 14],
+                },
+            ];
+            game_svr::trade::del_item_tail(&sg.state.item_list[1], &rig.catalog).expect("202 尾")
+        };
+        rig.dlg_select("@main");
+        let bag = &rig.sessions["hero"].state.item_list;
+        assert_eq!(bag.len(), 1, "TAKE 1 件 ⇒ 背包减一");
+        assert_eq!(bag[0].make_index, 5001, "oracle 从**尾**摘（留 5001）");
+        let actor = rig.online.find_by_chr("hero").expect("hero 在线").actor_id;
+        let mut dels: Vec<(i32, u16, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == mir2_protocol::messages::SM_DELITEM {
+                    dels.push((cm.recog, cm.series, body[12..].to_vec()));
+                }
+            }
+        }
+        assert_eq!(dels.len(), 1, "TAKE 1 件 ⇒ 1 条 SM_DELITEM(202)");
+        assert_eq!(dels[0].0, actor, "Recog = ActorId");
+        assert_eq!(dels[0].1, 1, "Series = 1");
+        assert_eq!(
+            dels[0].2, removed_tail,
+            "202 尾逐字节 = trade::del_item_tail"
+        );
+    }
+
+    /// **A27-2 牙 `script_takew_emits_sm_delitem_per_slot`**：`TAKEW [WEAPON]` ⇒ 摘佩戴位前的
+    /// 快照在 `set_use_item_index(…,0)` 之前捕获 ⇒ 写回后 1 条 `SM_DELITEM(202)`，尾 = 该槽原件。
+    ///
+    /// 变异：`send_del_use_item` 不抓快照（或删 202 发射）⇒ 0 帧 ⇒ 红。
+    #[test]
+    fn script_takew_emits_sm_delitem_per_slot() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "卸你武器 <交/@ya54>",
+            vec![t142_act_n2(4, "[WEAPON]", 1)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 6001,
+            index: 1,
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn.clone());
+        let want_tail = game_svr::trade::del_item_tail(&worn, &rig.catalog).expect("202 尾");
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .as_ref()
+            .expect("TAKEW 只清 Index，槽对象仍在");
+        assert_eq!(slot.index, 0, "TAKEW 后局槽 Index=0（oracle 语义）");
+        let mut dels = 0usize;
+        let mut got_tail: Vec<u8> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == mir2_protocol::messages::SM_DELITEM {
+                    dels += 1;
+                    got_tail = body[12..].to_vec();
+                }
+            }
+        }
+        assert_eq!(dels, 1, "TAKEW 一槽 ⇒ 1 条 SM_DELITEM(202)");
+        assert_eq!(got_tail, want_tail, "202 尾 = 摘下前的该槽原件");
+    }
+
+    /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
+    /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
+    ///
+    /// 变异：`send_del_use_item` 不抓快照（或删 202 发射）⇒ 0 帧 ⇒ 红。
+    #[test]
+    fn script_upgrade_broken_emits_sm_delitem() {
+        // `nRate=2` ⇒ `random(20)`；挑一个首抽 >10 的种子（脚本 RNG = `world.rng` 原种子）。
+        let mut seed = 0i32;
+        loop {
+            let mut probe = mir2_shared::rng::RandomNumber::with_seed(seed);
+            if probe.random_below(20) > 10 {
+                break;
+            }
+            seed += 1;
+            assert!(seed < 10_000, "找不到命中破碎支的种子");
+        }
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 213,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "2".to_string(),
+                s_param4: "1".to_string(),
+                s_param5: "1".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 7001,
+            index: 1,
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn.clone());
+        let want_tail = game_svr::trade::del_item_tail(&worn, &rig.catalog).expect("202 尾");
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .as_ref()
+            .expect("破碎只清 Index，槽对象仍在");
+        assert_eq!(slot.index, 0, "破碎支 Index=0（oracle 语义）");
+        let mut dels = 0usize;
+        let mut got_tail: Vec<u8> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == mir2_protocol::messages::SM_DELITEM {
+                    dels += 1;
+                    got_tail = body[12..].to_vec();
+                }
+            }
+        }
+        assert_eq!(dels, 1, "破碎支 ⇒ 1 条 SM_DELITEM(202)");
+        assert_eq!(got_tail, want_tail, "202 尾 = 破碎前的该槽原件");
     }
 
     /// **A27-1 牙 `script_give_emits_sm_additem`**：脚本 `GIVE` 入包件在写回后**直发**
