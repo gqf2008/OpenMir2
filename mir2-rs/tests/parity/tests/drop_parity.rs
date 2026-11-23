@@ -76,7 +76,7 @@ fn run_drops(
     let items = load_items(items_json);
     let catalog = VecItemCatalog { items: &items };
     let mut rng = RandomNumber::with_seed(seed);
-    let mut counter = ItemNumberCounter::default();
+    let counter = ItemNumberCounter::default();
     let mut outcomes = Vec::with_capacity(kills);
     for _ in 0..kills {
         let out = mon_get_random_items(
@@ -85,7 +85,7 @@ fn run_drops(
             &mut rng,
             mon_random_add_value,
             STRING_GOLD_NAME,
-            &mut counter,
+            &counter,
         );
         outcomes.push((out.gold, out.items));
     }
@@ -172,7 +172,7 @@ fn redcheck_tampered_drop_table_must_differ() {
     let items = load_items("items_jiangshi1.json");
     let catalog = VecItemCatalog { items: &items };
     let mut rng = RandomNumber::with_seed(42);
-    let mut counter = ItemNumberCounter::default();
+    let counter = ItemNumberCounter::default();
     let mut outcomes = Vec::new();
     for _ in 0..100 {
         let out = mon_get_random_items(
@@ -181,7 +181,7 @@ fn redcheck_tampered_drop_table_must_differ() {
             &mut rng,
             40,
             STRING_GOLD_NAME,
-            &mut counter,
+            &counter,
         );
         outcomes.push((out.gold, out.items));
     }

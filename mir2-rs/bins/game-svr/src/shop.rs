@@ -122,6 +122,7 @@
 
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
+use mir2_formula::drop::next_item_number;
 use mir2_formula::shop::{self, ItemPrice, PriceTables, ShopConfig, StdItemSource};
 use mir2_world_bevy::castle::UserCastle;
 use mir2_world_bevy::castle_tax::{
@@ -728,9 +729,7 @@ pub fn make_drug_item(
                 if let Some(ni) = catalog.find_by_name(s_item_name) {
                     if let Some(nt) = catalog.get(ni) {
                         user_item = BagItem {
-                            make_index: item_number
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                + 1,
+                            make_index: next_item_number(item_number),
                             index: ni,
                             dura: nt.dura_max,
                             dura_max: nt.dura_max,

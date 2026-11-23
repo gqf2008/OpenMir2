@@ -122,15 +122,16 @@ pub fn minimal_plan() -> CtorFoldPlan {
 /// `lib.rs::add_newbie_items`）。
 ///
 /// - **是 `+=` 不是 `=`**：`=` 会丢掉 `Server.conf` 里配的值 ⇒ 该进程**所有** `MakeIndex` 偏移；
-/// - **不是「抽了不用」**：抽出的值必须真的进计数器（`lib.rs` 的 `let mut item_number = …`）；
+/// - **不是「抽了不用」**：抽出的值必须真的进计数器（`lib.rs` 的 `let item_number = …`）；
 /// - **fail-closed**：账本必须**恰 1 条** [`CtorFoldSite::BarrierAItemNumber`]、且 `arg` 必须是
 ///   [`CTOR_FOLD_BARRIER_A_MOD`]——否则 `Err`（漏抽/多抽/站点错时**绝不静默按 0 加**）。
 ///
 /// C# 的 `+=` 是 unchecked `int` 加法 ⇒ 这里同样回绕（`wrapping_add`）。本函数只负责**初值**：
 /// `M2Share.GetItemNumber()`（`M2Share.cs:547-556`）自身的 `++` 与
-/// `> int.MaxValue / 2 - 1 ⇒ 1` 复位属**另一处**（宿主 `lib.rs` 的 `item_number` 计数器现为
-/// `*item_number += 1`，没有那条复位）——那一处**不在本片范围**；`MakeIndex` 本身的可对拍性
-/// （C# 含 `GetTickCount` ⇒ 两次运行都不一致）已由 `whitelist.md` D-1 登记。
+/// `> int.MaxValue / 2 - 1 ⇒ 1` 复位**已统一**到 `mir2_formula::drop::next_item_number`
+/// （M1c-2a：宿主 `lib.rs` 的分配点与 `ItemNumberCounter::next_value` 同一实现、同一原子）；
+/// `MakeIndex` 本身的可对拍性（C# 含 `GetTickCount`，本仓**有意不带** ⇒ T-72）已由
+/// `whitelist.md` T-72 登记。
 ///
 /// # Errors
 /// 账本条数不为 1、站点不是屏障 A、或 `arg` 不是 10000。

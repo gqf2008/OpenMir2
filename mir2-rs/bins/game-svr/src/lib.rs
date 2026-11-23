@@ -163,6 +163,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use game_svr::party as partywire;
+use mir2_formula::drop::next_item_number;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use mir2_world_bevy::magic;
@@ -1041,9 +1042,15 @@ impl ZoneState {
     ///
     /// 不装物品目录（`production_world` 的 `item_catalog` 是 `move` 进世界，且区 0 独占）：
     /// 段 1b 区 k 无掉落路径，登录也不读世界目录（新手物品走 `enter_cfg.catalog`）。
-    fn new(zone: zone::ZoneId, map_sizes: &[(i32, i32)], rng_seed: Option<i32>) -> Self {
+    fn new(
+        zone: zone::ZoneId,
+        map_sizes: &[(i32, i32)],
+        rng_seed: Option<i32>,
+        // **M1c-2a**：进程唯一的 `MakeIndex` 计数器（与区 0/宿主同一 `Arc`）。
+        counter: &std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ) -> Self {
         Self {
-            host: HostLoop::for_zone(zone, map_sizes, rng_seed),
+            host: HostLoop::for_zone(zone, map_sizes, rng_seed, counter),
             save_outbox: Vec::new(),
             alive: std::sync::atomic::AtomicBool::new(true),
         }
@@ -1090,6 +1097,9 @@ fn load_zone_map_data(
 ///
 /// 把「边界」与「地图数据装载」收敛到**一个构造点**：`slicing=0` 时本函数不被调用
 /// （建区循环只在 `if slicing` 里）⇒ 零参与；`MIR2_ZONES` 未设 ⇒ 整段不存在。
+// 构造点把「区级运行时的全部只读输入」收在一处（地图/布局/RNG/注册表/经验表/宠物配置/
+// 统一计数器）；参数多是这个构造点的目的，不是坏味道。
+#[allow(clippy::too_many_arguments)]
 fn new_zone_state(
     zone_id: zone::ZoneId,
     layout: &zone::RegionLayout,
@@ -1098,8 +1108,16 @@ fn new_zone_state(
     registry: Option<&mir2_envir::MapRegistry>,
     need_exps: &[i32],
     pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    // **M1c-2a**：进程唯一的 `MakeIndex` 计数器（与区 0/宿主同一 `Arc`；三→一）。
+    counter: &std::sync::Arc<std::sync::atomic::AtomicI32>,
 ) -> ZoneState {
-    let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
+    // **M1c-2a**：区 k 的 World 由 `ZoneState::new` → `HostLoop::for_zone` 注入**同一**计数器
+    // （掉落/商人 → 与商店/脚本/GM/使用物品共用号段；③ 不再 per-World 从 0 起）。
+    let mut state = ZoneState::new(zone_id, map_sizes, rng_seed, counter);
+    debug_assert!(
+        std::sync::Arc::ptr_eq(&state.host.world.item_number_shared(), counter),
+        "M1c-2a：区 k 的 World 必须与宿主共用同一个 MakeIndex 计数器"
+    );
     // **M1a 遗留修复（区 k 登录 `MaxExp=0`，卡 `openmir2-zone-k-need-exps-maxexp-zero`）**：
     // 区 k 的 `World` 必须与区 0 同源注入 `need_exps`（`Exps.conf` 的 NeedExps 表）。否则共享登录
     // 收尾 `refresh_login_max_exp`、`SM_ABILITY(52)` 帧、IT-08 升级重算都取到 `World` 默认全 0 表
@@ -2167,6 +2185,8 @@ fn spawn_minimal_zone(
             if let Some(mb) = cross_mailboxes.as_ref() {
                 cross_zone_frames::install(Arc::clone(mb), Arc::clone(&router), zone_id);
             }
+            // **M1c-2a**：本线程的 `MIR2_ITEMNUM_TRACE` 区号（旁路默认关 ⇒ 零参与）。
+            mir2_shared::itemnum_trace::set_thread_zone(zone_id.get());
             let mut tick = 0u64;
             // **失败快传**：本区 panic ⇒ 唤醒其余区（否则它们永久阻塞在 Barrier 上）。
             let abort_barriers = Arc::clone(&barriers);
@@ -3308,11 +3328,20 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // sim 线程按 `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
     // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
     let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
-    // **M1c-1**：`MakeIndex` 计数器进程级共享（单一全局原子；区 0 与区 k 共享同一 `Arc`）。
-    // 初值占位：`item_number` 真值由 zone 0 在 `sim_loop` 启动时 `store`（`[Setup]ItemNumber + 屏障A`）；
-    // `item_number_ex` 直接取 `[Setup]ItemNumberEx`。区 k 共享同一句柄（本片不造件、不读）。
+    // **M1c-2a**：`MakeIndex` 计数器——**全进程唯一一个** `Arc<AtomicI32>`（① 为基座，三→一）。
+    // 初值占位 0：真值由 zone 0 在 `sim_loop` 启动时 `store`（`[Setup]ItemNumber + 屏障A`）。
+    // 注入面（全部经这一个 `Arc`）：区 0 / 各区 k 的 `World.item_number`（③，经 `sim_loop` 与
+    // `new_zone_state`）、`SharedServices.item_number`（① 直调点）、GM-M 造物；② `item_number_ex`
+    // 已删（T-72 三项偏离之一：oracle 的第二个计数器 `ItemNumberEx` 未复现）。
     let item_number = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
-    let item_number_ex = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(cfg.item_number_ex));
+    debug_assert_eq!(
+        item_number.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "M1c-2a：唯一计数器的装配初值必须是 0（真值由 sim_loop 的 store 写入）"
+    );
+    // **M1c-2a**：`MIR2_ITEMNUM_TRACE` 旁路（env 未设 ⇒ 不建文件、不分配、零参与；见
+    // `mir2_shared::itemnum_trace`）。必须在任何造件路径（建区/装载/首 tick）之前开闸。
+    mir2_shared::itemnum_trace::enable_from_env();
     let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     // 进 sim 线程的句柄（move 闭包内 clone 会连原值一起 move 走，故先在闭包外克隆）。
     let sim_ids_online = std::sync::Arc::clone(&ids_online);
@@ -3672,6 +3701,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             registry.as_ref(),
                             &sim_enter_cfg.need_exps,
                             &sim_enter_cfg.pet_cfg,
+                            &item_number,
                         );
                         *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
@@ -3753,7 +3783,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             zone_host: Some(Arc::clone(&host)),
                             colors,
                             item_number: Arc::clone(&item_number),
-                            item_number_ex: Arc::clone(&item_number_ex),
                         },
                         rx,
                         ctl,
@@ -3957,7 +3986,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         let ids_online_i = std::sync::Arc::clone(&sim_ids_online);
         let item_number_i = std::sync::Arc::clone(&item_number);
-        let item_number_ex_i = std::sync::Arc::clone(&item_number_ex);
         let ids_out_i = sim_ids_out.clone();
         let world_start_i = std::sync::Arc::clone(&sim_world_start);
         let lottery_i = sim_win_lottery.clone();
@@ -3998,7 +4026,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     lottery_i,
                     zone_host_i,
                     item_number_i,
-                    item_number_ex_i,
                 )
             })
             .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
@@ -4592,7 +4619,6 @@ struct SayEnv<'a> {
     reconnect_pending: &'a mut Vec<ReconnectPending>,
     mon_gen_host: &'a mut Option<game_svr::mongen::MonGenHost>,
     item_number: &'a std::sync::atomic::AtomicI32,
-    item_number_ex: &'a std::sync::atomic::AtomicI32,
     registry: Option<&'a mir2_envir::MapRegistry>,
     party_cfg: &'a mir2_world_bevy::PartyConfig,
     gm_filter_word: &'a std::cell::Cell<bool>,
@@ -4778,7 +4804,6 @@ fn handle_say_event(env: SayEnv<'_>, chr_name: &str, socket: i32, tail: Option<&
             env.enter_cfg.test_server,
             env.enter_cfg.make_random_add_value,
             env.item_number,
-            env.item_number_ex,
         );
         // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
         // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
@@ -8016,9 +8041,7 @@ fn add_newbie_items(
                     let _ = game_svr::bag::add_item_to_bag(
                         item_list,
                         game_svr::bag::BagItem {
-                            make_index: item_number
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                + 1,
+                            make_index: next_item_number(item_number),
                             index,
                             dura: tpl.dura_max,
                             dura_max: tpl.dura_max,
@@ -11362,7 +11385,7 @@ fn write_back_player_bag(
             let _ = game_svr::bag::add_item_to_bag(
                 &mut sg.state.item_list,
                 game_svr::bag::BagItem {
-                    make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                    make_index: next_item_number(item_number),
                     index,
                     dura,
                     dura_max,
@@ -11414,7 +11437,7 @@ fn drop_full_bag_items(
         };
         // `CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）：`MakeIndex` 计数器照消费。
         let mut item = game_svr::bag::BagItem {
-            make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+            make_index: next_item_number(item_number),
             index,
             dura: tpl.dura_max,
             dura_max: tpl.dura_max,
@@ -27653,34 +27676,10 @@ fn apply_pending_gm_target_ops(
     }
 }
 
-/// `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器一步。
-///
-/// 逐行：`++` → `< int.MaxValue/2` 回到 `int.MaxValue/2` → `> int.MaxValue-1` 回到
-/// `int.MaxValue/2`。**登记**（与 `GetItemNumber` 同口径）：oracle 返回
-/// `Config.ItemNumberEx + HUtil32.GetTickCount()`，本宿主只返回计数器值（tick 项不可对拍，
-/// 既有 `item_number` 亦然；见 `config.rs` 的 `ItemNumber` 注）。
-fn next_item_number_ex(counter: &std::sync::atomic::AtomicI32) -> i32 {
-    // **M1c-1**：`item_number_ex` 原子化。clamp/reset 新值依赖旧值 ⇒ 不能纯 `fetch_add`，
-    // 必须 CAS 循环（阈值逐字同旧 `&mut i32` 版：`< MAX/2 ⇒ MAX/2`、`> MAX-1 ⇒ MAX/2`）。
-    // 无失败路径：`compare_exchange_weak` 的 spurious fail 由 loop 重试，争用上限=区数、必进展。
-    use std::sync::atomic::Ordering;
-    loop {
-        let old = counter.load(Ordering::Relaxed);
-        let mut v = old.wrapping_add(1);
-        if v < i32::MAX / 2 {
-            v = i32::MAX / 2;
-        }
-        if v > i32::MAX - 1 {
-            v = i32::MAX / 2;
-        }
-        if counter
-            .compare_exchange_weak(old, v, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return v;
-        }
-    }
-}
+// **M1c-2a / T-72**：`next_item_number_ex`（② `ItemNumberEx` 的 clamp 版）**已删**——
+// oracle 的 `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`，活调用者 = GM `@s` 的
+// `MakeItemCommand.cs:82`）在本仓**未复现**（T-72 偏离②）；GM-M 造物改走统一主计数器
+// `mir2_formula::drop::next_item_number`（oracle 主计数器语义 `> int.MaxValue/2-1 ⇒ 1`）。
 
 /// `WorldEngine.RegenMonsterByName(map, x, y, name)`（`WorldServer.MonGen.cs:382-438`）的宿主入口：
 /// 走与 `MONGENEX`/守卫同一条 `create_monster_oracle` 链，抽数用**世界同一条** `world.rng`
@@ -27816,7 +27815,6 @@ fn apply_pending_gm_m_commands(
     test_server: bool,
     make_random_add_value: u8,
     item_number: &std::sync::atomic::AtomicI32,
-    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     let Some(sg) = sessions.get_mut(chr_name) else {
         return;
@@ -27993,7 +27991,7 @@ fn apply_pending_gm_m_commands(
             };
             // `item.MakeIndex = M2Share.GetItemNumber()`：每件消费一次。
             let mut item = game_svr::bag::BagItem {
-                make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                make_index: next_item_number(item_number),
                 index,
                 dura: tpl.dura_max,
                 dura_max: tpl.dura_max,
@@ -28057,7 +28055,7 @@ fn apply_pending_gm_m_commands(
             };
             // `CopyToUserItemFromName`：每件消费一次 `GetItemNumber()`。
             let mut item = game_svr::bag::BagItem {
-                make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                make_index: next_item_number(item_number),
                 index,
                 dura: tpl.dura_max,
                 dura_max: tpl.dura_max,
@@ -28071,9 +28069,14 @@ fn apply_pending_gm_m_commands(
             // （`MakeItemCommand.cs:76`；每件一次）。
             let _ = world.rng.random_below(i32::from(make_random_add_value)); // gm-make-rng
 
-            // `Permission >= Command.PermissionMax(10)` ⇒ `GetItemNumberEx()` 重取 MakeIndex。
+            // `Permission >= Command.PermissionMax(10)` ⇒ oracle 用**第二个**计数器
+            // `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`）重取 MakeIndex；
+            // **M1c-2a**：② 未复现（T-72 偏离②③）⇒ 本仓走**同一个**主计数器（CAS 复位版，
+            // 没有 `MAX/2` 下限 clamp）。`CopyToUserItemFromName` 的那次主号消费照旧 ⇒
+            // perm>=10 每件消费两个号：**消费次数**与 oracle 一致（各 2 次），但**来源**不同
+            // （oracle = 1 主 + 1 Ex；本仓 = 主计数器 2 次）。`MakeIndex` 已掩 ⇒ 不影响对拍。
             if req.permission >= 10 {
-                item.make_index = next_item_number_ex(item_number_ex);
+                item.make_index = next_item_number(item_number);
             }
             sg.state.item_list.push(item.clone());
             if let Some(body) = game_svr::trade::send_add_item_body(entry.actor_id, &item, catalog)
@@ -28525,7 +28528,6 @@ fn drain_script_gm_pendings(
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
     item_number: &std::sync::atomic::AtomicI32,
-    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     // ① 权威 `Entity` 写（`@1/@2/@3/@Rest/@AttackMode`，`@允许天地合一` 同 pending 通道）。
     apply_pending_gm_entity(ground_sessions, chr_name, world);
@@ -28640,7 +28642,6 @@ fn drain_script_gm_pendings(
         enter_cfg.test_server,
         enter_cfg.make_random_add_value,
         item_number,
-        item_number_ex,
     );
     // ⑨ 族 C 城堡/赛事。
     apply_pending_gm_castle_commands(
@@ -28701,7 +28702,6 @@ fn command_event_tail_gm_drain(
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
     item_number: &std::sync::atomic::AtomicI32,
-    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     drain_script_gm_pendings(
         ground_sessions,
@@ -28724,7 +28724,6 @@ fn command_event_tail_gm_drain(
         reconnect_pending,
         castle_broadcasts,
         item_number,
-        item_number_ex,
     );
 }
 
@@ -28771,7 +28770,6 @@ fn execute_admin_gm_command(
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
     item_number: &std::sync::atomic::AtomicI32,
-    item_number_ex: &std::sync::atomic::AtomicI32,
 ) -> AdminGmReply {
     // ① 执行前提：`chr` 必须是在线会话（oracle 里命令对象就是那个 `PlayObject`）。
     let Some(session) = ground_sessions.get(chr) else {
@@ -28845,7 +28843,6 @@ fn execute_admin_gm_command(
         reconnect_pending,
         castle_broadcasts,
         item_number,
-        item_number_ex,
     );
     // ④ 回帧（与 `CM_SAY` 支同序）：SysMsg(100) → 未知命令回落 → 非 SysMsg 直发帧。
     let mut texts: Vec<String> = result.msgs.iter().map(|m| m.text.clone()).collect();
@@ -29334,8 +29331,12 @@ struct EnterConfig {
     /// **族 M**：`[Setup] MakeRandomAddValue`（部署 100）——`@s` 的
     /// `Random(Config.MakeRandomAddValue)`（每件一次）。
     make_random_add_value: u8,
-    /// **族 M**：`[Setup] ItemNumberEx`（部署 1073741872）——`@s` 的
-    /// `GetItemNumberEx()` 计数器初值。
+    /// **族 M · 死配置项**：`[Setup] ItemNumberEx`（部署 1073741872）。
+    ///
+    /// **M1c-2a**：② `item_number_ex` 计数器已删（T-72 偏离②：oracle 的 `Config.ItemNumberEx`
+    /// 未复现）；本字段只为**配置面对齐**保留解析（`config.rs` 同注），生产**不读**
+    /// （`#[allow(dead_code)]`）。
+    #[allow(dead_code)]
     item_number_ex: i32,
     /// `[Server] ServiceMode`（`ServerConf.cs:27`）：与 `TestServer` 一同覆盖 `PayMent=3`。
     service_mode: bool,
@@ -31587,9 +31588,16 @@ fn drain_run_state_expiries(
 /// ⇒ 玩家死亡 `DropUseItems` 的第一段（`ItemDesc & 8`）永不可达。
 fn production_world(
     map_sizes: Vec<(i32, i32)>,
+    // **M1c-2a**：进程唯一的 `MakeIndex` 计数器（放 `item_catalog` 的**可变借用之前**：两者互不
+    // 借用；调用方传 `&Arc::clone(&item_number)` 的独立局部，不从 `enter_cfg` 里借）。
+    counter: &std::sync::Arc<std::sync::atomic::AtomicI32>,
     item_catalog: &mut Vec<mir2_data::StdItem>,
 ) -> mir2_world_bevy::World {
     let mut world = mir2_world_bevy::World::with_maps(map_sizes);
+    // **M1c-2a 三→一**：区 0 的 World 接宿主同一个计数器（在任何装载/造件之前）。
+    world.set_item_number_counter(mir2_formula::drop::ItemNumberCounter::from_shared(
+        std::sync::Arc::clone(counter),
+    ));
     world.set_item_catalog(std::mem::take(item_catalog));
     world
 }
@@ -33807,9 +33815,8 @@ fn sim_loop(
     win_lottery: crate::winlottery::WinLotteryShared,
     // **L2-4 段 6a**：多区共享句柄（`MIR2_ZONES` 未设 ⇒ `None`，本函数逐字节走原路径）。
     zone_host: Option<Arc<ZoneHost>>,
-    // **M1c-1**：`MakeIndex` 计数器进程级共享句柄（单一全局原子；与区 k 同一 `Arc`）。
+    // **M1c-2a**：`MakeIndex` 计数器——进程唯一的 `Arc<AtomicI32>`（与区 k/宿主同一句柄；三→一）。
     item_number: std::sync::Arc<std::sync::atomic::AtomicI32>,
-    item_number_ex: std::sync::Arc<std::sync::atomic::AtomicI32>,
 ) {
     // **P2-3b**：本实例服务哪一片 + 是否宿主片（进程级服务只在片 0）。
     let local_shard = shard_runtime.local_shard();
@@ -33844,7 +33851,17 @@ fn sim_loop(
             );
         }
     }
-    let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **M1c-2a**：本线程（区 0）的 `MIR2_ITEMNUM_TRACE` 区号标记（旁路默认关 ⇒ 零参与）。
+    mir2_shared::itemnum_trace::set_thread_zone(0);
+    // **M1c-2a**：区 0 的 World 由 `production_world` 注入**同一个**计数器（三→一）；
+    // counter 是独立局部，不借 `enter_cfg`（与 `item_catalog` 的可变借用互不冲突）。
+    // 真初值由下面的 `store` 写入（早于 `mark_ready` 与首 tick）。
+    let counter = std::sync::Arc::clone(&item_number);
+    let mut world = production_world(map_sizes, &counter, &mut enter_cfg.world_item_catalog);
+    debug_assert!(
+        std::sync::Arc::ptr_eq(&world.item_number_shared(), &item_number),
+        "M1c-2a：区 0 的 World 必须与宿主共用同一个 MakeIndex 计数器"
+    );
     // **P2-3b**：N>1 时 `ActorId` 按片分段（全进程唯一）。N=1 不调用 ⇒ 首个 id 仍为 1。
     // 位置：`production_world` 之后、任何装载/建实体之前（`set_id_base` 会断言尚未分配）。
     if shard_count > 1 {
@@ -35243,12 +35260,17 @@ fn sim_loop(
     // **M1c-1**：写入进程级共享计数器（`Arc<AtomicI32>`，与区 k 同一句柄）。区 0 启动时定真初值；
     // 区 k 本片不造件、不读（M1c-2 族搬入 `INBOUND_LOCAL` 时须在 zone k 首次造件前完成本 store）。
     item_number.store(item_number_init, std::sync::atomic::Ordering::Relaxed);
-    // `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器：初值 = `[Setup] ItemNumberEx`
-    // （部署 1073741872；`GetItemNumberEx` 自身的复位/加法在 `next_item_number_ex` 内逐行复刻）。
-    item_number_ex.store(
-        enter_cfg.item_number_ex,
-        std::sync::atomic::Ordering::Relaxed,
+    // **M1c-2a**：store 之后任何造件（首 tick 的 `step_mon_gen`）都从真初值起。
+    debug_assert_eq!(
+        item_number.load(std::sync::atomic::Ordering::Relaxed),
+        item_number_init,
+        "M1c-2a：`store` 后计数器必须等于 `[Setup]ItemNumber + 屏障A` 初值"
     );
+    // **M1c-2a / T-72**：oracle 的**第二个**计数器 `Config.ItemNumberEx`
+    // （`SystemShare.GetItemNumberEx`；唯一活调用者 = GM `@s` 的 `MakeItemCommand.cs:82`）
+    // 本仓**未复现** ⇒ ② `item_number_ex` 计数器**已删**，GM-M 改走上面的统一主计数器
+    // （复位取 oracle 主计数器语义 `> int.MaxValue/2-1 ⇒ 1`）。`config.rs` 仍解析
+    // `[Setup] ItemNumberEx`（死配置项，保留配置面对齐）。
     // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
     // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
     // 见卡 `openmir2-ctor-barrier-a-draw` 的残余 ①）。
@@ -35423,7 +35445,6 @@ fn sim_loop(
         zone_host,
         colors,
         item_number: Arc::clone(&item_number),
-        item_number_ex: Arc::clone(&item_number_ex),
     };
     let mut process = Some(ProcessServices {
         db,
@@ -35701,11 +35722,10 @@ struct SharedServices {
     shard_runtime: shard::ShardRuntime,
     zone_host: Option<Arc<ZoneHost>>,
     colors: MsgColors,
-    // **M1c-1**：`MakeIndex` 会话计数器的进程级共享句柄（单一全局原子；区 0 与区 k 共享同一 `Arc`）。
-    // 区 0 在 `sim_loop` 启动时 `store` 真初值（`[Setup]ItemNumber + 屏障 A 抽数`）；区 k 共享同一句柄
-    // （本片 F-1：区 k 尚不造件、不读该值；M1c-2 族搬入 `INBOUND_LOCAL` 时必须在 zone k 首次造件前完成 store）。
+    // **M1c-2a**：`MakeIndex` 计数器的进程级共享句柄——**全进程唯一**的 `Arc<AtomicI32>`
+    // （区 0 在 `sim_loop` 启动时 `store` 真初值 `[Setup]ItemNumber + 屏障 A 抽数`；各区 k 的
+    // `World.item_number` 经 `new_zone_state` 接同一 `Arc`；② `item_number_ex` 已删）。
     item_number: Arc<std::sync::atomic::AtomicI32>,
-    item_number_ex: Arc<std::sync::atomic::AtomicI32>,
 }
 
 /// **M1-0c'**：进程-only 服务（`!Send` 脚本宿主、DB 链、行会/城堡/全局表等）。
@@ -35840,7 +35860,6 @@ impl SharedServices {
             zone_host: None,
             colors: MsgColors::default(),
             item_number: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
-            item_number_ex: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(i32::MAX / 2)),
         }
     }
 }
@@ -35948,8 +35967,18 @@ impl HostLoop {
     /// id 基址/段长）。M0 只用它验证「空实例能跑一个 tick」，**不接线** `spawn_minimal_zone`。
     // M0 不接线 spawn_minimal_zone ⇒ 目前只有单测用（M1 起为区 k 生产构造）。
     #[allow(dead_code)]
-    fn for_zone(zone: zone::ZoneId, map_sizes: &[(i32, i32)], rng_seed: Option<i32>) -> Self {
+    fn for_zone(
+        zone: zone::ZoneId,
+        map_sizes: &[(i32, i32)],
+        rng_seed: Option<i32>,
+        // **M1c-2a**：进程唯一的 `MakeIndex` 计数器（生产 = 宿主同一 `Arc`；单测可传临时 Arc）。
+        counter: &std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ) -> Self {
         let mut world = mir2_world_bevy::World::with_maps(map_sizes.to_vec());
+        // **M1c-2a 三→一**：注入在任何加载/造件之前（`ZoneState::new` → 本函数是唯一 World 构造）。
+        world.set_item_number_counter(mir2_formula::drop::ItemNumberCounter::from_shared(
+            std::sync::Arc::clone(counter),
+        ));
         if let Some(seed) = rng_seed {
             let zone_index = i32::try_from(zone.get()).expect("区号 <= i32::MAX");
             world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
@@ -36291,7 +36320,6 @@ impl HostLoop {
                 let npc_vars_base = &mut svc.npc_vars_base;
                 let mut sell_off_book = &mut svc.sell_off_book;
                 let item_number = &shared.item_number;
-                let item_number_ex = &shared.item_number_ex;
                 let world_start = &mut svc.world_start;
                 let win_lottery = &mut svc.win_lottery;
                 let party_cfg = &mut svc.party_cfg;
@@ -36390,7 +36418,6 @@ impl HostLoop {
                                         reconnect_pending: &mut *reconnect_pending,
                                         mon_gen_host: &mut *mon_gen_host,
                                         item_number,
-                                        item_number_ex,
                                         registry: registry.as_ref(),
                                         party_cfg: &*party_cfg,
                                         gm_filter_word: &*gm_filter_word,
@@ -37107,7 +37134,6 @@ impl HostLoop {
                                 &mut reconnect_pending,
                                 &mut pending_gm_castle_broadcasts,
                                 item_number,
-                                item_number_ex,
                             );
                         }
                         GateEvent::CertificationPending { index, ip, .. } => {
@@ -37383,7 +37409,6 @@ impl HostLoop {
                                 &mut reconnect_pending,
                                 &mut pending_gm_castle_broadcasts,
                                 item_number,
-                                item_number_ex,
                             );
                             let _ = reply.send(out);
                         }
@@ -37417,7 +37442,6 @@ impl HostLoop {
                 let pwd_sessions = &mut svc.pwd_sessions;
                 let reconnect_pending = &mut svc.reconnect_pending;
                 let item_number = &shared.item_number;
-                let item_number_ex = &shared.item_number_ex;
                 let gm_filter_word = &svc.gm_filter_word;
                 let gm_mission = &svc.gm_mission;
                 let gm_spirit_mutiny_tick = &svc.gm_spirit_mutiny_tick;
@@ -37511,7 +37535,6 @@ impl HostLoop {
                                         reconnect_pending: &mut *reconnect_pending,
                                         mon_gen_host,
                                         item_number,
-                                        item_number_ex,
                                         registry: registry.as_ref(),
                                         party_cfg: &*party_cfg,
                                         gm_filter_word: &*gm_filter_word,
@@ -47589,7 +47612,12 @@ mod tests {
     /// 红检：把 `PhaseSet::has` 改恒真（或 `M0_MIN` 换成 `ALL`）⇒ 事件被消费 ⇒ 本用例必红。
     #[test]
     fn empty_zone_loop_runs_one_tick_without_panic() {
-        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(100, 100)], Some(0));
+        let host = HostLoop::for_zone(
+            zone::ZoneId::new(3),
+            &[(100, 100)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctl_tx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -47659,7 +47687,12 @@ mod tests {
     /// 与空实例用例（`None` 分支）分开：那条证「区 k 不进进程段」，这条证「掩码与实现一致」。
     #[test]
     fn proc_svc_segments_equal_process_only() {
-        let host = HostLoop::for_zone(zone::ZoneId::new(5), &[(50, 50)], Some(0));
+        let host = HostLoop::for_zone(
+            zone::ZoneId::new(5),
+            &[(50, 50)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -47699,7 +47732,12 @@ mod tests {
     /// 提到分支外）⇒ `BARRIER_CALLS != 0` ⇒ 红。
     #[test]
     fn zone0_none_takes_zero_barrier_calls() {
-        let mut host = HostLoop::for_zone(zone::ZoneId::new(0), &[(10, 10)], Some(0));
+        let mut host = HostLoop::for_zone(
+            zone::ZoneId::new(0),
+            &[(10, 10)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (mut shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -47742,7 +47780,12 @@ mod tests {
     #[test]
     fn zonek_some_takes_three_distinct_barrier_calls() {
         let zone = zone::ZoneId::new(0);
-        let mut host = HostLoop::for_zone(zone, &[(10, 10)], Some(0));
+        let mut host = HostLoop::for_zone(
+            zone,
+            &[(10, 10)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (mut shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -47821,7 +47864,12 @@ mod tests {
     /// 变异：把 rest 里任一段漏调（删其 `phases.has` 块）⇒ `RAN_SEGMENTS != ALL` ⇒ 红。
     #[test]
     fn rest_runs_standalone_and_covers_all_phases() {
-        let mut host = HostLoop::for_zone(zone::ZoneId::new(0), &[(10, 10)], Some(0));
+        let mut host = HostLoop::for_zone(
+            zone::ZoneId::new(0),
+            &[(10, 10)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (mut shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -47917,7 +47965,12 @@ mod tests {
         );
 
         let zone = zone::ZoneId::new(0);
-        let mut host = HostLoop::for_zone(zone, &[(10, 10)], Some(0));
+        let mut host = HostLoop::for_zone(
+            zone,
+            &[(10, 10)],
+            Some(0),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (mut shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -48006,7 +48059,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "WORLD_HEAD")]
     fn zone_tick_without_world_head_panics() {
-        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(10, 10)], None);
+        let host = HostLoop::for_zone(
+            zone::ZoneId::new(3),
+            &[(10, 10)],
+            None,
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
@@ -60382,7 +60440,6 @@ break
         catalog: game_svr::ability::StdItemCatalog,
         pet_cfg: mir2_data::pet_slave::PetSlaveConfig,
         item_number: std::sync::atomic::AtomicI32,
-        item_number_ex: std::sync::atomic::AtomicI32,
         actor: i32,
     }
 
@@ -60446,7 +60503,6 @@ break
                 catalog: game_svr::ability::StdItemCatalog::new(),
                 pet_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
                 item_number: std::sync::atomic::AtomicI32::new(1000),
-                item_number_ex: std::sync::atomic::AtomicI32::new(1_073_741_872),
                 actor,
             }
         }
@@ -60479,7 +60535,6 @@ break
                 false,
                 100,
                 &self.item_number,
-                &self.item_number_ex,
             );
         }
 
@@ -60708,23 +60763,19 @@ break
             "Convert.ToUInt16 溢出 ⇒ 本件不落包"
         );
 
-        // ---- Make：3 件 ⇒ 3 抽 Random(100) + GetItemNumberEx 重取 MakeIndex ----
+        // ---- Make：3 件 ⇒ 3 抽 Random(100) + 统一计数器重取 MakeIndex（② 已删） ----
         rig.sessions
             .get_mut("hero")
             .unwrap()
             .state
             .item_list
             .clear();
-        rig.item_number_ex
-            .store(1_073_741_872, std::sync::atomic::Ordering::Relaxed);
         rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
             name: "木剑".into(),
             count: 3,
             permission: 10,
         });
-        let start_ex = rig
-            .item_number_ex
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let start = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         rig.apply();
         let frames = rig.drain();
         assert_eq!(frames.len(), 3, "三件木剑 ⇒ 三条 SM_ADDITEM");
@@ -60737,17 +60788,22 @@ break
                 .all(|(kind, arg)| kind == "Next(max)" && *arg == 100),
             "Random(MakeRandomAddValue=100)：{got:?}"
         );
+        // **M1c-2a**：`CopyToUserItemFromName` 消费一个主号，`perm>=10` 再用**同一个**主
+        // 计数器重取 ⇒ 每件消费两个号（make_index = start+2/4/6，计数器推进 6）。
+        // 与 oracle「`GetItemNumber` 一次 + `ItemNumberEx` 一次」的**消费次数**一致；差别在
+        // **来源**（oracle 是 1 主 + 1 Ex 两个计数器；本仓是主计数器 2 次）与 Ex 的 clamp
+        // 未复现（T-72 偏离②③）。
         for (i, it) in items.iter().enumerate() {
             assert_eq!(
                 it.make_index,
-                start_ex + 1 + i as i32,
-                "permission>=10 ⇒ MakeIndex=GetItemNumberEx"
+                start + 2 * (i as i32 + 1),
+                "permission>=10 ⇒ 统一计数器重取 MakeIndex"
             );
         }
         assert_eq!(
-            rig.item_number_ex
-                .load(std::sync::atomic::Ordering::Relaxed),
-            start_ex + 3
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed),
+            start + 6,
+            "perm>=10 三件 ⇒ 统一计数器消费 6 个号"
         );
         let draws_before = trace_lines(&trace, make_site).len();
 
@@ -60816,12 +60872,14 @@ break
             draws_before,
             "高价门不抽数"
         );
-        // TestServer=true 时门失效：抽数照消费，且 perm<10 ⇒ MakeIndex 用 GetItemNumber（非 Ex）。
+        // TestServer=true 时门失效：抽数照消费，且 perm<10 ⇒ MakeIndex 用 `CopyTo` 的那一次号
+        // （统一计数器，非二次重取）。
         rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
             name: "高价物".into(),
             count: 1,
             permission: 3,
         });
+        let perm3_start = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         apply_pending_gm_m_commands(
             &mut rig.sessions,
             "hero",
@@ -60849,16 +60907,19 @@ break
             true, // TestServer
             100,
             &rig.item_number,
-            &rig.item_number_ex,
         );
         let _ = rig.drain();
         assert_eq!(rig.sessions["hero"].state.item_list.len(), 1);
         assert_eq!(trace_lines(&trace, make_site).len(), draws_before + 1);
-        assert_ne!(
+        assert_eq!(
             rig.sessions["hero"].state.item_list[0].make_index,
-            rig.item_number_ex
-                .load(std::sync::atomic::Ordering::Relaxed),
-            "perm<10 ⇒ MakeIndex 取 GetItemNumber（已消费），不是 Ex 值"
+            perm3_start + 1,
+            "perm<10 ⇒ MakeIndex 取 `CopyToUserItemFromName` 的号（不再二次重取）"
+        );
+        assert_eq!(
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed),
+            perm3_start + 1,
+            "perm<10 ⇒ 每件只消费一个号"
         );
 
         std::fs::remove_file(&trace).ok();
@@ -66953,7 +67014,9 @@ SendRefMsgRange=15
             hs.push(std::thread::spawn(move || {
                 let mut vals = Vec::with_capacity(K as usize);
                 for _ in 0..K {
-                    vals.push(c.fetch_add(1, Ordering::Relaxed) + 1);
+                    // **M1c-2a 牙 11【行为】**：改走**统一 CAS 实现**（含复位语义），
+                    // 不再用裸 `fetch_add`——第三来源会绕过复位/旁路。
+                    vals.push(next_item_number(&c));
                 }
                 vals
             }));
@@ -66970,6 +67033,158 @@ SendRefMsgRange=15
             "并发 fetch_add 必须全局无重复（单一全局原子）"
         );
         assert_eq!(counter.load(Ordering::Relaxed), 2 * K, "计数器 == 2K");
+    }
+
+    /// **M1c-2a 牙 6【源码·接线提示】`item_number_store_before_mark_ready_static`**：`sim_loop`
+    /// 体内 `item_number.store(` 必须在 `world_start.mark_ready()` 之前，`mark_ready` 又在首个
+    /// tick 循环之前 ⇒ 任何 in-world 造件（`step_mon_gen`/商店/GM）都晚于 store（M1c-1 注释里
+    /// 「M1c-2 必须保证」的次序）。
+    ///
+    /// **不是行为证据**：配对行为牙 = 牙 5（`zone_k_first_allocation_after_store`）。
+    /// 变异：把 store 挪到首 tick 之后 ⇒ 红。
+    #[test]
+    fn item_number_store_before_mark_ready_static() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
+        let start = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
+        let body = &prod[start..];
+        let store = body
+            .find("item_number.store(")
+            .expect("sim_loop 内的 store");
+        let ready = body
+            .find("world_start.mark_ready()")
+            .expect("sim_loop 内的 mark_ready");
+        let tick = body.find("    loop {").expect("sim_loop 的 tick 循环");
+        assert!(
+            store < ready,
+            "item_number.store 必须在 mark_ready 之前（store@{store} ready@{ready}）"
+        );
+        assert!(
+            ready < tick,
+            "mark_ready 必须在首个 tick 循环之前（ready@{ready} tick@{tick}）"
+        );
+    }
+
+    /// **M1c-2a 牙 7【源码·接线提示，非行为证据】`single_make_index_alloc_source`**：全仓
+    /// `MakeIndex` 的**主号分配来源唯一** = `next_item_number`（oracle 主发号器
+    /// `Config.ItemNumber`；② `ItemNumberEx` 未复现——见 `mir2_formula::drop` 的三项偏离）。
+    ///
+    /// 静态枚举（生产段，测试夹具除外）：
+    /// - 造件分配点 = `lib.rs` 6 处（新手 1 / 脚本 give 2 / GM-M 2 / GM-M 重取 1）+ `shop.rs` 1 +
+    ///   `useitem.rs` 1，**都经 `next_item_number`**；任何 `item_number` + `fetch_add` 的行即红
+    ///   （第三发号来源）；
+    /// - 计数器创建点唯一 = `run_inner` 的 `Arc::new(AtomicI32::new(0))`；`World` 侧注入只有
+    ///   `set_item_number_counter` 两处（`production_world` 区 0 + `HostLoop::for_zone` 各区 k）
+    ///   + `Arc::ptr_eq` 断言；
+    /// - `item_number_ex` 只作为**死配置项**（`EnterConfig` 字段与其赋值）留在生产段；
+    /// - `world-bevy` 生产段不得自建计数器（`AtomicI32::new` 0 处），`ItemNumberCounter::default()`
+    ///   只允许 `World::new` 的缺省一处（测试/legacy 形态）。
+    ///
+    /// **这不是行为证据**（源码文本牙可被重构绕过）：配对行为证据 = 牙 1（同 Arc 交错）、
+    /// 牙 4（ptr_eq 接线）、牙 8（掉落+商人同流）、牙 13（窗口 trace 两区逐值无重复）。
+    /// 变异：新增第三条自造路径 ⇒ 计数不符 ⇒ 红；残留活的 `item_number_ex` ⇒ 子断言红。
+    #[test]
+    fn single_make_index_alloc_source() {
+        fn prod_of(src: &'static str) -> &'static str {
+            match src.find("mod tests {") {
+                Some(i) => &src[..i],
+                None => src,
+            }
+        }
+        let lib = prod_of(include_str!("lib.rs"));
+        let shop = prod_of(include_str!("shop.rs"));
+        let useitem = prod_of(include_str!("useitem.rs"));
+        // 1) 分配点：都经 next_item_number，数量钉死。
+        assert_eq!(
+            lib.matches("next_item_number(").count(),
+            6,
+            "lib.rs 生产段 6 处（5 分配 + GM-M 重取）"
+        );
+        assert_eq!(
+            shop.matches("next_item_number(").count(),
+            1,
+            "shop.rs 药物合成 1 处"
+        );
+        assert_eq!(
+            useitem.matches("next_item_number(").count(),
+            1,
+            "useitem.rs 解包 1 处"
+        );
+        for (name, src) in [("lib.rs", lib), ("shop.rs", shop), ("useitem.rs", useitem)] {
+            for (i, line) in src.lines().enumerate() {
+                let code = line.trim();
+                // 注释放行（`//` 起）：注释里提到 `fetch_add` 不是发号来源。
+                if code.starts_with("//") {
+                    continue;
+                }
+                assert!(
+                    !(code.contains("item_number") && code.contains("fetch_add")),
+                    "{name}:{} 出现 item_number.fetch_add（第二发号来源）: {line}",
+                    i + 1
+                );
+            }
+        }
+        // 2) 计数器创建点唯一（装配作用域只有一个 Arc）。
+        assert_eq!(
+            lib.matches(
+                "let item_number = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));"
+            )
+            .count(),
+            1,
+            "唯一计数器的创建点必须只有 run_inner 一处"
+        );
+        // 3) 死配置项之外不得再有 item_number_ex（非注释行）。
+        let mut leftovers: Vec<&str> = lib
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.starts_with("//") && s.contains("item_number_ex"))
+            .collect();
+        leftovers.sort_unstable();
+        assert_eq!(
+            leftovers,
+            vec![
+                // 死配置项：`EnterConfig` 字段、其赋值、以及 `EnterConfig` 的测试缺省值。
+                "item_number_ex: cfg.item_number_ex,",
+                "item_number_ex: i32,",
+                "item_number_ex: i32::MAX / 2,",
+            ],
+            "只允许 EnterConfig 的死配置字段/赋值/测试缺省"
+        );
+        // 4) World 侧：注入方式唯一（2 调用点 + ptr_eq 断言）。
+        assert_eq!(
+            lib.matches(".set_item_number_counter(").count(),
+            2,
+            "production_world（区 0）+ HostLoop::for_zone（各区 k）各一处注入"
+        );
+        assert_eq!(
+            lib.matches("item_number_shared()").count(),
+            2,
+            "两处 Arc::ptr_eq 断言（区 0 / 区 k）"
+        );
+        // 5) world-bevy：不得自建计数器。
+        let world = prod_of(include_str!("../../../crates/world-bevy/src/world.rs"));
+        assert_eq!(
+            world.matches("ItemNumberCounter::default()").count(),
+            1,
+            "World 默认计数器只允许构造缺省一处"
+        );
+        for (name, src) in [
+            ("world.rs", world),
+            (
+                "merchant.rs",
+                prod_of(include_str!("../../../crates/world-bevy/src/merchant.rs")),
+            ),
+            (
+                "combat.rs",
+                prod_of(include_str!("../../../crates/world-bevy/src/combat.rs")),
+            ),
+        ] {
+            assert!(
+                !src.contains("AtomicI32::new"),
+                "{name}: 不得自建 MakeIndex 计数器"
+            );
+            assert!(!src.contains("item_number_ex"), "{name}: 不得残留 ②");
+        }
     }
 
     /// **M1c-1 · PROCESS_ONLY 位值对照**：`item_number` 从 `ProcessServices` 搬到 `SharedServices`
@@ -100263,7 +100478,11 @@ SendRefMsgRange=15
             ..mir2_data::StdItem::default()
         }];
         // 与 `sim_loop` 同一条生产入口。
-        let mut world = production_world(vec![(32, 32)], &mut cfg.world_item_catalog);
+        let mut world = production_world(
+            vec![(32, 32)],
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            &mut cfg.world_item_catalog,
+        );
         assert!(
             cfg.world_item_catalog.is_empty(),
             "顺序表已移入世界（生产路径不复制、不手工设字段）"
@@ -113444,7 +113663,6 @@ fn ",
         actor: i32,
         victim: i32,
         item_number: std::sync::atomic::AtomicI32,
-        item_number_ex: std::sync::atomic::AtomicI32,
     }
 
     impl ScriptBridgeRig {
@@ -113520,7 +113738,6 @@ fn ",
                 actor,
                 victim,
                 item_number: std::sync::atomic::AtomicI32::new(1000),
-                item_number_ex: std::sync::atomic::AtomicI32::new(1_073_741_872),
             }
         }
 
@@ -113592,7 +113809,6 @@ fn ",
                 &mut reconnect_pending,
                 &mut castle_broadcasts,
                 &self.item_number,
-                &self.item_number_ex,
             );
             ScriptDrainOutcome {
                 reconnect: reconnect_pending,
@@ -119141,7 +119357,6 @@ mod admin_channel_tests {
             let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
             let mut castle_broadcasts: Vec<String> = Vec::new();
             let item_number = std::sync::atomic::AtomicI32::new(0);
-            let item_number_ex = std::sync::atomic::AtomicI32::new(0);
             let mon_table = &self.enter_cfg.mon_gen.table;
             execute_admin_gm_command(
                 &mut self.sessions,
@@ -119168,7 +119383,6 @@ mod admin_channel_tests {
                 &mut reconnect_pending,
                 &mut castle_broadcasts,
                 &item_number,
-                &item_number_ex,
             )
         }
     }
@@ -124865,7 +125079,12 @@ mod zone_login_landing_tests {
         let aoi0: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         // 目标区（区 1）的世界侧状态。
-        let mut state = ZoneState::new(zone::ZoneId::new(1), &[(20, 20)], None);
+        let mut state = ZoneState::new(
+            zone::ZoneId::new(1),
+            &[(20, 20)],
+            None,
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
 
         // 进程级句柄（登录落区由区 0 线程执行 ⇒ 全部是区 0 的局部）。
         let mut engine = load::FrontEngine::new();
@@ -125017,7 +125236,12 @@ mod zone_disconnect_tests {
         write_map_fixture(&base);
         let registry = fixture_registry(&base);
 
-        let mut state = ZoneState::new(zone_id, &[(20, 20)], None);
+        let mut state = ZoneState::new(
+            zone_id,
+            &[(20, 20)],
+            None,
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let mut engine = load::FrontEngine::new();
         let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
@@ -125369,6 +125593,8 @@ mod zone_map_data_tests {
             reg,
             &[],
             &mir2_data::pet_slave::PetSlaveConfig::default(),
+            // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
         )
     }
 
@@ -125392,6 +125618,8 @@ mod zone_map_data_tests {
             Some(&reg),
             &table,
             &mir2_data::pet_slave::PetSlaveConfig::default(),
+            // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
         );
         // 正例：注入生效。
         assert_eq!(
@@ -125420,6 +125648,8 @@ mod zone_map_data_tests {
             Some(&reg),
             &[],
             &mir2_data::pet_slave::PetSlaveConfig::default(),
+            // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
         );
         assert_eq!(
             st2.host.world.need_exps.len(),
@@ -125430,6 +125660,76 @@ mod zone_map_data_tests {
             st2.host.world.need_exps.iter().all(|&v| v == 0),
             "空表 ⇒ 默认全 0（与原区 k 构造一致）"
         );
+    }
+
+    /// **M1c-2a 牙 4【行为·接线】`zone_k_world_counter_shares_host_arc`**：`new_zone_state`
+    /// 产出的区 k `World` 必须持**宿主同一个**计数器 `Arc`（`Arc::ptr_eq`），且看到宿主 `store`
+    /// 的初值（不是 per-World 0）。
+    ///
+    /// 变异：`new_zone_state` 里改用 `ItemNumberCounter::default()` ⇒ ptr_eq 失败、`load()==0` ⇒ 红。
+    #[test]
+    fn zone_k_world_counter_shares_host_arc() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        let shared = std::sync::Arc::new(AtomicI32::new(412_071));
+        let st = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            None,
+            &[],
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+            &shared,
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&st.host.world.item_number_shared(), &shared),
+            "区 k 的 World 必须用宿主同一 Arc（三→一）"
+        );
+        assert_eq!(
+            st.host.world.item_number_shared().load(Ordering::Relaxed),
+            412_071,
+            "区 k 看到的是宿主 store 的初值（不是 per-World 0）"
+        );
+    }
+
+    /// **M1c-2a 牙 5【行为】`zone_k_first_allocation_after_store`**：按 `sim_loop` 的次序
+    /// （先 `store(init)`、后造件）构造区 k 世界 ⇒ **首个分配 = init + 1**（N=1 口径），
+    /// 不是 1（per-World 0 的旧行为）。
+    ///
+    /// 变异：store 挪到首分配之后（或不注入共享 Arc）⇒ 首值 = 1 ⇒ 红。
+    #[test]
+    fn zone_k_first_allocation_after_store() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        let shared = std::sync::Arc::new(AtomicI32::new(0));
+        let mut st = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            None,
+            &[],
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+            &shared,
+        );
+        // `sim_loop` 的 store（`[Setup]ItemNumber + 屏障A`）之后的任何造件。
+        let init = 412_071;
+        shared.store(init, Ordering::Relaxed);
+        st.host.world.set_item_catalog(vec![mir2_data::StdItem {
+            name: "铁剑".to_string(),
+            dura_max: 5,
+            ..Default::default()
+        }]);
+        let item = st
+            .host
+            .world
+            .make_merchant_item_by_name("铁剑")
+            .expect("模板存在");
+        assert_eq!(
+            item.make_index,
+            init + 1,
+            "区 k 首个分配必须 = init+1（与 N=1 同一号段；不是 1）"
+        );
+        assert_eq!(shared.load(Ordering::Relaxed), init + 1);
     }
 
     /// **区 k 生产开关牙（卡 `openmir2-zone-k-prod-switches`）**：`new_zone_state` 产出的区 k World
@@ -125447,6 +125747,8 @@ mod zone_map_data_tests {
             Some(&reg),
             &[],
             &mir2_data::pet_slave::PetSlaveConfig::default(),
+            // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
         );
         let w = &st.host.world;
         assert!(
@@ -125520,7 +125822,12 @@ mod zone_map_data_tests {
         assert_eq!(pos_of(&k.host.world, id), (BOUNDARY_X, 243));
 
         // 区 0 侧（同一注册表、区 0 自己的装载路径）：站在 (324,243) 向东走 ⇒ 同样被挡。
-        let mut z0 = ZoneState::new(zone::ZoneId::new(0), &[(i32::from(W), i32::from(H))], None);
+        let mut z0 = ZoneState::new(
+            zone::ZoneId::new(0),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let owned = vec![true; 1];
         mapwire::apply_map_cells_owned(&reg, &mut z0.host.world, &owned);
         let id0 = z0.host.world.add_entity(mir2_world_bevy::EntitySpawn::new(
@@ -130156,7 +130463,12 @@ mod zone_statics_tests {
         table: &game_svr::mongen::MonsterTable,
     ) -> Run {
         let loader = mir2_envir::MapLoader::new(base.to_path_buf(), "Map", "Envir");
-        let mut state = ZoneState::new(zone::ZoneId::new(zone), &[(20, 20), (10, 10)], Some(7));
+        let mut state = ZoneState::new(
+            zone::ZoneId::new(zone),
+            &[(20, 20), (10, 10)],
+            Some(7),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
         let mut book = game_svr::npc::MerchantScriptBook::new(30);
         let report = spawn_statics_for_zone(
             zone::ZoneId::new(zone),

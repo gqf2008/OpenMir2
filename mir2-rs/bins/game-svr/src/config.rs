@@ -442,8 +442,13 @@ pub struct GateConfig {
     /// 的 `Random(Config.MakeRandomAddValue)`（每件一次；升级逻辑整段注释，但**抽数仍消费**）。
     pub make_random_add_value: u8,
     /// `[Setup] ItemNumberEx`（oracle `GameSvrConf.cs:724/1700` 初值 `int.MaxValue/2`；
-    /// `ServerConf.cs:115` 的 `ReadWriteInteger`，部署件 = 1073741872）——`GetItemNumberEx()`
-    /// （`M2Share.cs:557-569`）的计数器；`MakeItemCommand.cs:82` 重取 `MakeItem.MakeIndex` 的源。
+    /// `ServerConf.cs:115` 的 `ReadWriteInteger`，部署件 = 1073741872）。
+    ///
+    /// **死配置项（M1c-2a）**：oracle 的 `Config.ItemNumberEx` 是**第二个活计数器**
+    /// （`SystemShare.GetItemNumberEx`，`src/Modules/SystemModule/SystemShare.cs:457-467`；
+    /// 唯一调用者 = GM `@s` 的 `src/Modules/GameCommand/Commands/MakeItemCommand.cs:82`），
+    /// 本仓**未复现**（T-72 偏离②③）⇒ ② `item_number_ex` 计数器已删、GM-M 造物走统一主计数器；
+    /// 本键仍解析只为**配置面对齐**（缺键不报错），生产不读其值。
     pub item_number_ex: i32,
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `10*60*1000`，**毫秒**；
     /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——

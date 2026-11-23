@@ -7,8 +7,12 @@
 //!
 //! 所有随机调用顺序与 C# 逐条一致——这是对拍成立的前提。
 
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+
 use mir2_data::models::{MonsterDropItem, StdItem, STD_MODE_MAP};
 use mir2_shared::hutil;
+use mir2_shared::itemnum_trace;
 use mir2_shared::rng::RandomSource;
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs` 的 `UserItem` 子集
@@ -27,20 +31,85 @@ pub struct UserItem {
     pub desc: [u8; 14],
 }
 
-/// C# `M2Share.GetItemNumber`（`M2Share.cs:547`）：
-/// 先自增，超过 `int.MaxValue / 2 - 1` 回绕到 1。
-#[derive(Clone, Copy, Debug, Default)]
+/// C# `M2Share.GetItemNumber`（`M2Share.cs:547`）的**唯一**计数器一步：CAS 版。
+///
+/// 逐字语义：`++ItemNumber` → `> int.MaxValue/2 - 1` 回绕到 `1`（`wrapping_add` 防溢出）。
+/// **返回计数值本身、不加 `GetTickCount()`**——这是偏差 `T-72` 的**有意确定性偏离**
+/// （oracle 返回 `ItemNumber + HUtil32.GetTickCount()`）：保留跨跑确定性，N=1 两树才能逐字节
+/// 比对。`0c` 已核 `MakeIndex` 无 glog/sort/TSV/排序/RNG 依赖，DB/帧面掩码。
+/// **若将来解 D-1 的 `MakeIndex` 掩码，必须先补 tick**（`mir2-rs/tests/parity/whitelist.md` T-72）。
+///
+/// **M1c-2a**：主发号器（oracle `Config.ItemNumber`）在本仓只有一个实现 `next_item_number`，
+/// 五类造件（掉落/商店/脚本/GM/使用物品）的**主号**共用它；`ItemNumberCounter::next_value`
+/// 与宿主直调点都走它，禁止第二份 CAS。
+///
+/// **三项偏离（T-72，归因更正 2026-11-23）**：
+/// ① 返回值不带 `HUtil32.GetTickCount()`（oracle 两个发号器都加）；
+/// ② oracle 的**第二个**计数器 `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`，
+///    `src/Modules/SystemModule/SystemShare.cs:457-467`）**未复现**——它是活代码：
+///    唯一调用者 = GM `@s` 的 `src/Modules/GameCommand/Commands/MakeItemCommand.cs:82`
+///    （`Permission >= Command.PermissionMax` 时覆盖 MakeIndex）；其 clamp 语义
+///    （`++` 后 `< MAX/2 ⇒ MAX/2`、`> MAX-1 ⇒ MAX/2`）本仓**不存在**；
+/// ③ GM `@s`（perm>=10）在 oracle 是「1 个主号（`CopyToUserItemFromName`）+ 1 个 Ex 号」两个
+///    **来源**，本仓从主计数器连取 2 号——**消费次数**一致（每件 2 次）、**来源**不同；
+///    `MakeIndex` 已掩（D-1 / DB `masked_columns`）⇒ 不影响唯一性/帧/DB 对拍。
+/// 若要逐值对齐 oracle 的 GM 造件，须另开片补第二个计数器（本片按裁定不做）。
+pub fn next_item_number(counter: &AtomicI32) -> i32 {
+    loop {
+        let old = counter.load(Ordering::Relaxed);
+        let mut v = old.wrapping_add(1);
+        if v > i32::MAX / 2 - 1 {
+            v = 1;
+        }
+        if counter
+            .compare_exchange_weak(old, v, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            // **M1c-2a 诊断旁路**：`MIR2_ITEMNUM_TRACE` 未设时只是一次 relaxed 原子读。
+            itemnum_trace::record(v);
+            return v;
+        }
+        // 竞争失败（另一区/另一线程先推进）：重读旧值再试，无失败路径。
+    }
+}
+
+/// 进程级共享的 `MakeIndex` 计数器句柄（**内部只是同一个 `Arc<AtomicI32>`**）。
+///
+/// **M1c-2a 三→一**：① 宿主 `item_number` 的 `Arc` 是**唯一**源；`World::item_number`
+/// 用 [`ItemNumberCounter::from_shared`] 接同一 `Arc` ⇒ 各区的掉落/商人与本进程的
+/// 商店/脚本/GM 造件共用一个号段，运行内逐值无重复（复位窗口之间例外，见 T-72）。
+#[derive(Clone, Debug)]
 pub struct ItemNumberCounter {
-    pub value: i32,
+    shared: Arc<AtomicI32>,
+}
+
+impl Default for ItemNumberCounter {
+    /// **测试 / legacy 专用**（新 `Arc(0)`）；**生产必须 [`ItemNumberCounter::from_shared`]**
+    /// 接 `run_inner` 装配的那一个 `Arc`（否则各区/各 World 各起一份，号段会撞）。
+    fn default() -> Self {
+        Self::from_shared(Arc::new(AtomicI32::new(0)))
+    }
 }
 
 impl ItemNumberCounter {
-    pub fn next_value(&mut self) -> i32 {
-        self.value = self.value.wrapping_add(1);
-        if self.value > i32::MAX / 2 - 1 {
-            self.value = 1;
-        }
-        self.value
+    /// 接一个已存在的共享原子（生产唯一注入形态）。
+    pub fn from_shared(shared: Arc<AtomicI32>) -> Self {
+        Self { shared }
+    }
+
+    /// 共享句柄（`Arc::ptr_eq` 断言「同一计数器」用）。
+    pub fn shared(&self) -> &Arc<AtomicI32> {
+        &self.shared
+    }
+
+    /// 当前计数值（诊断/测试）。
+    pub fn load(&self) -> i32 {
+        self.shared.load(Ordering::Relaxed)
+    }
+
+    /// `M2Share.GetItemNumber()` 的一步（[`next_item_number`] 的同实现）。
+    pub fn next_value(&self) -> i32 {
+        next_item_number(&self.shared)
     }
 }
 
@@ -580,7 +649,7 @@ pub fn mon_get_random_items<C: ItemCatalog>(
     rng: &mut impl RandomSource,
     mon_random_add_value: i32,
     gold_name: &str,
-    item_number: &mut ItemNumberCounter,
+    item_number: &ItemNumberCounter,
 ) -> DropOutcome {
     let mut item_name = String::new(); // BUG-REPLICA：C# 在循环外声明且只赋值一次
     let mut outcome = DropOutcome {
@@ -652,9 +721,8 @@ mod tests {
             count: 300,
         }];
         let mut rng = RandomNumber::with_seed(42);
-        let mut counter = ItemNumberCounter::default();
-        let out =
-            mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &mut counter);
+        let counter = ItemNumberCounter::default();
+        let out = mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &counter);
         // 固定种子下 C# 对拍验证具体值；这里验证结构：gold = 150 + Random(300) ∈ [150, 450)
         assert!(out.items.is_empty());
         assert!((150..450).contains(&out.gold));
@@ -682,9 +750,8 @@ mod tests {
             },
         ];
         let mut rng = RandomNumber::with_seed(1);
-        let mut counter = ItemNumberCounter::default();
-        let out =
-            mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &mut counter);
+        let counter = ItemNumberCounter::default();
+        let out = mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &counter);
         assert_eq!(out.items.len(), 2);
         // 两件都是 index=1（乌木剑）——第二件的名字被第一件覆盖
         assert_eq!(out.items[0].index, 1);
@@ -702,18 +769,97 @@ mod tests {
             count: 1,
         }];
         let mut rng = RandomNumber::with_seed(5);
-        let mut counter = ItemNumberCounter::default();
-        let out =
-            mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &mut counter);
+        let counter = ItemNumberCounter::default();
+        let out = mon_get_random_items(&drops, &catalog(&items), &mut rng, 10, "金币", &counter);
         assert_eq!(out.items.len(), 1);
         assert_eq!(out.items[0].desc[8], 1);
     }
 
     #[test]
     fn item_number_counter_wraps() {
-        let mut c = ItemNumberCounter {
-            value: i32::MAX / 2 - 1,
-        };
+        let c = ItemNumberCounter::from_shared(Arc::new(AtomicI32::new(i32::MAX / 2 - 1)));
         assert_eq!(c.next_value(), 1);
+    }
+
+    /// **M1c-2a 牙 1【行为】`unified_counter_shared_arc_interleaved`**：两个
+    /// `from_shared(同一 Arc)` 交错取号 ⇒ `[1,2]`、无重复。
+    ///
+    /// 红因：`from_shared` 各起一份新 `Arc` ⇒ 两边都从 1 起 ⇒ 相等断言红。
+    #[test]
+    fn unified_counter_shared_arc_interleaved() {
+        let shared = Arc::new(AtomicI32::new(0));
+        let a = ItemNumberCounter::from_shared(Arc::clone(&shared));
+        let b = ItemNumberCounter::from_shared(Arc::clone(&shared));
+        let first = a.next_value();
+        let second = b.next_value();
+        assert_eq!((first, second), (1, 2), "同一 Arc 交错取号必须连号");
+        assert_eq!(shared.load(Ordering::Relaxed), 2);
+        assert!(
+            Arc::ptr_eq(a.shared(), b.shared()),
+            "两个句柄必须指向同一 Arc"
+        );
+    }
+
+    /// **M1c-2a 牙 2【行为】`unified_counter_reset_semantics`**：置 `MAX/2-1` ⇒ 下一次 = 1；
+    /// `MAX/2` 也 = 1（**oracle 主计数器语义**：`> MAX/2-1 ⇒ 1`；② `ItemNumberEx` 的
+    /// `MAX/2` 下限 clamp **未复现**——见 [`ItemNumberCounter`] 的三项偏离，**不得**在本计数器里复活）。
+    #[test]
+    fn unified_counter_reset_semantics() {
+        for (start, expected) in [
+            (i32::MAX / 2 - 1, 1),
+            (i32::MAX / 2, 1),
+            (i32::MAX / 2 + 1, 1),
+        ] {
+            let counter = AtomicI32::new(start);
+            assert_eq!(
+                next_item_number(&counter),
+                expected,
+                "start={start} ⇒ 复位到 1（oracle 语义）"
+            );
+            assert_eq!(counter.load(Ordering::Relaxed), expected);
+        }
+        // 未到阈值 ⇒ 照常 +1（防止「无条件置 1」的过度复位）。
+        let counter = AtomicI32::new(i32::MAX / 2 - 2);
+        assert_eq!(next_item_number(&counter), i32::MAX / 2 - 1);
+    }
+
+    /// **M1c-2a 牙 3【行为】`unified_counter_no_tick`**：返回值 == CAS 后的计数值本身
+    /// （**不叠时钟**；oracle 返回 `ItemNumber + GetTickCount()`，T-72 有意偏离）。
+    ///
+    /// 红因：返回值里加 `good_tick_i32()`/`GetTickCount()` ⇒ 与 `load()` 不等 ⇒ 红。
+    #[test]
+    fn unified_counter_no_tick() {
+        let counter = AtomicI32::new(1_000);
+        for _ in 0..3 {
+            let v = next_item_number(&counter);
+            assert_eq!(
+                v,
+                counter.load(Ordering::Relaxed),
+                "返回的必须就是计数值（不带 tick）"
+            );
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 1_003);
+    }
+
+    /// **M1c-2a 牙 9【行为】`mir2_itemnum_trace_default_off`**：旁路默认关 ⇒ **跑过造件、
+    /// 写盘 0 行**、数值与未加旁路逐项相同（拿到的是 1,2,3，不是别的）。
+    ///
+    /// 红因：`record` 无条件写盘/默认开 ⇒ 写盘行数 > 0。
+    #[test]
+    fn mir2_itemnum_trace_default_off() {
+        // 以「写盘行数不增」为判据，不依赖全局是否曾被开启（开启类用例自带复位）。
+        let written_before = itemnum_trace::written();
+        let counter = ItemNumberCounter::default();
+        let got = [
+            counter.next_value(),
+            counter.next_value(),
+            counter.next_value(),
+        ];
+        assert_eq!(got, [1, 2, 3], "默认关时取号行为逐项不变");
+        assert_eq!(
+            itemnum_trace::written(),
+            written_before,
+            "旁路默认关：不得写盘（MIR2_ITEMNUM_TRACE 未设）"
+        );
     }
 }
