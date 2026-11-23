@@ -9298,7 +9298,7 @@ fn handle_click_npc_cmd(
         // 写回后的会话值，与商人路径一致）。
         let map_text = pmap.to_string();
         let mut script_broadcasts: Vec<String> = Vec::new();
-        let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
+        let (says, script_frames, use_slots, world_actions, added_items) = run_merchant_goto(
             merchant_book,
             npc_actor_id,
             "@main",
@@ -9319,6 +9319,15 @@ fn handle_click_npc_cmd(
             gm,
             &mut script_broadcasts,
             script_world.is_some(),
+        );
+        emit_script_add_items(
+            gates,
+            online,
+            chr_name,
+            socket,
+            sg.actor_id,
+            catalog,
+            &added_items,
         );
         world.rng = rng;
         // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用按**动作序**在同一队列上应用
@@ -10401,7 +10410,7 @@ fn handle_shop_cmd_inner(
             let mut rng =
                 std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
             let mut script_broadcasts: Vec<String> = Vec::new();
-            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
+            let (says, script_frames, use_slots, world_actions, added_items) = run_merchant_goto(
                 merchant_book,
                 merchant_id,
                 label,
@@ -10422,6 +10431,15 @@ fn handle_shop_cmd_inner(
                 gm,
                 &mut script_broadcasts,
                 script_world.is_some(),
+            );
+            emit_script_add_items(
+                gates,
+                online,
+                chr_name,
+                socket,
+                sg.actor_id,
+                catalog,
+                &added_items,
             );
             world.rng = rng;
             apply_script_world_actions(world, &mut script_world, world_actions);
@@ -10489,27 +10507,37 @@ fn handle_shop_cmd_inner(
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts2: Vec<String> = Vec::new();
-                let (says2, script_frames2, use_slots2, world_actions2) = run_merchant_goto(
-                    merchant_book,
-                    merchant_id,
-                    &target,
-                    false,
-                    &mut *sg,
+                let (says2, script_frames2, use_slots2, world_actions2, added_items2) =
+                    run_merchant_goto(
+                        merchant_book,
+                        merchant_id,
+                        &target,
+                        false,
+                        &mut *sg,
+                        chr_name,
+                        &map_text,
+                        catalog,
+                        item_number,
+                        npc_vars,
+                        session,
+                        sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                        // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                        now_ms() as i32,
+                        &mut rng,
+                        // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+                        Some(&*world),
+                        gm,
+                        &mut script_broadcasts2,
+                        script_world.is_some(),
+                    );
+                emit_script_add_items(
+                    gates,
+                    online,
                     chr_name,
-                    &map_text,
+                    socket,
+                    sg.actor_id,
                     catalog,
-                    item_number,
-                    npc_vars,
-                    session,
-                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
-                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
-                    now_ms() as i32,
-                    &mut rng,
-                    // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
-                    Some(&*world),
-                    gm,
-                    &mut script_broadcasts2,
-                    script_world.is_some(),
+                    &added_items2,
                 );
                 world.rng = rng;
                 apply_script_world_actions(world, &mut script_world, world_actions2);
@@ -10803,25 +10831,35 @@ fn handle_shop_cmd_inner(
                                 mir2_shared::rng::RandomNumber::with_seed(0),
                             );
                             let mut script_broadcasts: Vec<String> = Vec::new();
-                            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
-                                merchant_book,
-                                merchant_id,
-                                g,
-                                false,
-                                &mut *sg,
+                            let (says, script_frames, use_slots, world_actions, added_items) =
+                                run_merchant_goto(
+                                    merchant_book,
+                                    merchant_id,
+                                    g,
+                                    false,
+                                    &mut *sg,
+                                    chr_name,
+                                    &map_text,
+                                    catalog,
+                                    item_number,
+                                    npc_vars,
+                                    session,
+                                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                                    now_ms() as i32,
+                                    &mut rng,
+                                    Some(&*world),
+                                    gm,
+                                    &mut script_broadcasts,
+                                    script_world.is_some(),
+                                );
+                            emit_script_add_items(
+                                gates,
+                                online,
                                 chr_name,
-                                &map_text,
+                                socket,
+                                sg.actor_id,
                                 catalog,
-                                item_number,
-                                npc_vars,
-                                session,
-                                sell_off_sessions.entry(chr_name.to_string()).or_default(),
-                                now_ms() as i32,
-                                &mut rng,
-                                Some(&*world),
-                                gm,
-                                &mut script_broadcasts,
-                                script_world.is_some(),
+                                &added_items,
                             );
                             world.rng = rng;
                             apply_script_world_actions(world, &mut script_world, world_actions);
@@ -10908,25 +10946,35 @@ fn handle_shop_cmd_inner(
                                 mir2_shared::rng::RandomNumber::with_seed(0),
                             );
                             let mut script_broadcasts: Vec<String> = Vec::new();
-                            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
-                                merchant_book,
-                                merchant_id,
-                                g,
-                                false,
-                                &mut *sg,
+                            let (says, script_frames, use_slots, world_actions, added_items) =
+                                run_merchant_goto(
+                                    merchant_book,
+                                    merchant_id,
+                                    g,
+                                    false,
+                                    &mut *sg,
+                                    chr_name,
+                                    &map_text,
+                                    catalog,
+                                    item_number,
+                                    npc_vars,
+                                    session,
+                                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                                    now_ms() as i32,
+                                    &mut rng,
+                                    Some(&*world),
+                                    gm,
+                                    &mut script_broadcasts,
+                                    script_world.is_some(),
+                                );
+                            emit_script_add_items(
+                                gates,
+                                online,
                                 chr_name,
-                                &map_text,
+                                socket,
+                                sg.actor_id,
                                 catalog,
-                                item_number,
-                                npc_vars,
-                                session,
-                                sell_off_sessions.entry(chr_name.to_string()).or_default(),
-                                now_ms() as i32,
-                                &mut rng,
-                                Some(&*world),
-                                gm,
-                                &mut script_broadcasts,
-                                script_world.is_some(),
+                                &added_items,
                             );
                             world.rng = rng;
                             apply_script_world_actions(world, &mut script_world, world_actions);
@@ -11096,27 +11144,37 @@ fn handle_shop_cmd_inner(
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts: Vec<String> = Vec::new();
-                let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
-                    merchant_book,
-                    merchant_id,
-                    g,
-                    false,
-                    &mut *sg,
+                let (says, script_frames, use_slots, world_actions, added_items) =
+                    run_merchant_goto(
+                        merchant_book,
+                        merchant_id,
+                        g,
+                        false,
+                        &mut *sg,
+                        chr_name,
+                        &map_text,
+                        catalog,
+                        item_number,
+                        npc_vars,
+                        session,
+                        sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                        // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                        now_ms() as i32,
+                        &mut rng,
+                        // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+                        Some(&*world),
+                        gm,
+                        &mut script_broadcasts,
+                        script_world.is_some(),
+                    );
+                emit_script_add_items(
+                    gates,
+                    online,
                     chr_name,
-                    &map_text,
+                    socket,
+                    sg.actor_id,
                     catalog,
-                    item_number,
-                    npc_vars,
-                    session,
-                    sell_off_sessions.entry(chr_name.to_string()).or_default(),
-                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
-                    now_ms() as i32,
-                    &mut rng,
-                    // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
-                    Some(&*world),
-                    gm,
-                    &mut script_broadcasts,
-                    script_world.is_some(),
+                    &added_items,
                 );
                 world.rng = rng;
                 apply_script_world_actions(world, &mut script_world, world_actions);
@@ -11704,6 +11762,42 @@ fn write_back_player_gold_deal(
     sg.state.gold = p.gold;
 }
 
+/// **A27-1**：脚本 `GIVE` 入包件逐条直发 `SM_ADDITEM(200)`（`SendSocket` 直发，不经
+/// `pickwire::script_frame` 队列；oracle `PlayObject.SendAddItem`）。
+///
+/// 调用点 = `write_back_player_bag` 的两个生产者（`run_std_mode_func_script` 直发、
+/// `run_merchant_goto` 由调用方在写回后立即直发）。**满包余件**走 `DropItemDown`，不在本表。
+fn emit_script_add_items(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    online: &OnlineRegistry,
+    chr_name: &str,
+    socket: i32,
+    actor_id: i32,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    items: &[game_svr::bag::BagItem],
+) {
+    if items.is_empty() {
+        return;
+    }
+    let Some(entry) = online.find_by_chr(chr_name) else {
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    for it in items {
+        let Some(body) = game_svr::trade::send_add_item_body(actor_id, it, catalog) else {
+            glog!(
+                "WRN",
+                "脚本 GIVE：物模板缺失 ⇒ SM_ADDITEM 未编码（Index={}）",
+                it.index
+            );
+            continue;
+        };
+        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "脚本 GIVE SM_ADDITEM") {
+            let _ = tx.send(SimToGate::SendFrame { socket, body });
+        }
+    }
+}
+
 /// 脚本跑完把 `NpcPlayer.items` 的**净变化**对账回会话背包 `sg.state.item_list`
 /// （oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem` 直接改 `PlayObject.ItemList`，
 /// 存档 `MakeSaveRcd` 再逐件写回；见 `ScriptEngine.cs:653-745`）。
@@ -11734,7 +11828,10 @@ fn write_back_player_bag(
     catalog: &dyn game_svr::ability::ItemCatalog,
     item_number: &std::sync::atomic::AtomicI32,
     rng: &mut mir2_shared::rng::RandomNumber,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<game_svr::bag::BagItem>) {
+    // **A27-1**：返回**本次实际入包**的件（按写回序）——调用方据此逐件直发
+    // `SM_ADDITEM(200)`（oracle `SendAddItem` 是 `SendSocket` 直发；见 T-157/T-158 扩注）。
+    let mut added: Vec<game_svr::bag::BagItem> = Vec::new();
     fn count_of(list: &[(String, i32)], name: &str) -> i32 {
         list.iter()
             .filter(|(n, _)| n.eq_ignore_ascii_case(name))
@@ -11818,17 +11915,19 @@ fn write_back_player_bag(
                 break;
             }
             // 上面已过 `IsEnoughBag()` 等价门 ⇒ 单点必返回 true（返回值与 oracle 一样被忽略）。
+            let item = game_svr::bag::BagItem {
+                make_index: next_item_number(item_number),
+                index,
+                dura,
+                dura_max,
+                desc: [0; 14],
+            };
             let _ = game_svr::bag::add_item_to_bag(
                 &mut sg.state.item_list,
-                game_svr::bag::BagItem {
-                    make_index: next_item_number(item_number),
-                    index,
-                    dura,
-                    dura_max,
-                    desc: [0; 14],
-                },
+                item.clone(),
                 game_svr::bag::MAX_BAG_ITEM,
             );
+            added.push(item);
             left -= 1;
         }
     }
@@ -11840,7 +11939,7 @@ fn write_back_player_bag(
         item_number,
         rng,
     ));
-    warnings
+    (warnings, added)
 }
 
 /// `GotoLableGiveItem` 满包支（`ScriptEngine.cs:735-741`）的写回半边：
@@ -12263,7 +12362,7 @@ fn run_std_mode_func_script(
         out
     };
     // 背包的脚本副作用（`GIVE`/`TAKE`）与满包余件（`DropItemDown`）。
-    let warnings = write_back_player_bag(
+    let (warnings, added_items) = write_back_player_bag(
         &bag_after,
         &bag_before,
         &drops,
@@ -12280,6 +12379,17 @@ fn run_std_mode_func_script(
             warnings
         );
     }
+    // **A27-1**：`GIVE` 入包件在写回后**直发** `SM_ADDITEM(200)`（oracle `SendAddItem` 直发；
+    // 满包余件走 `DropItemDown`，不在本表）。
+    emit_script_add_items(
+        gates,
+        online,
+        chr_name,
+        socket,
+        sg.actor_id,
+        catalog,
+        &added_items,
+    );
     world.rng = rng;
     // **卡 `openmir2-gm-impl-smake`**：脚本里抬权执行的 `GMEXECUTE 改属性` 把佩戴位写装进
     // 会话 pending ⇒ 在脚本帧排水**之前**落地（oracle `SendUpdateItem` 立即、`SysMsg` 入队
@@ -12576,7 +12686,8 @@ fn apply_pending_space_moves(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+// 第 5 项（A27-1 的 `added_items`）把返回元组推到 clippy 的复杂度阈值之上。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_merchant_goto(
     book: &game_svr::npc::MerchantScriptBook,
     merchant_actor_id: i32,
@@ -12615,6 +12726,8 @@ fn run_merchant_goto(
     Vec<game_svr::npc::SendMsg>,
     Vec<usize>,
     Vec<mir2_script::engine::WorldAction>,
+    // **A27-1**：`GIVE` 实际入包的件（写回序），供调用方直发 `SM_ADDITEM(200)`。
+    Vec<game_svr::bag::BagItem>,
 ) {
     // oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem`（`ScriptEngine.cs:653-745`）与
     // `GotoLableTakeWItem`（`:748-790`）直接改**同一个** `PlayObject` 的 `ItemList`/`UseItems`；
@@ -12730,7 +12843,7 @@ fn run_merchant_goto(
     };
     // 背包的脚本副作用（`GotoLableTakeItem`/`GotoLableGiveItem`）与上面同一位置回写；
     // 满包余件照 oracle 走 `DropItemDown`，落不地的（模板缺失）只记 WRN，不编造 `MakeIndex`。
-    let bag_warnings = write_back_player_bag(
+    let (bag_warnings, added_items) = write_back_player_bag(
         &bag_after,
         &bag_before,
         &full_bag_drops,
@@ -12749,7 +12862,9 @@ fn run_merchant_goto(
     }
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝/金币帧的取值因此是本次脚本写回后的会话值。
-    (says, frames, use_slots, world_actions)
+    // **A27-1**：第 5 项 = 本次 `GIVE` 实际入包的件（写回序）——调用方在写回后**立即**直发
+    // `SM_ADDITEM(200)`（本函数无路由句柄；固定 NPC 死路径/测试可丢弃）。
+    (says, frames, use_slots, world_actions, added_items)
 }
 
 /// **统一入队版**：脚本帧按 `(byte)RM_*` 进 handler 队列（与 [`emit_script_frames_raw`] 同一
@@ -12915,7 +13030,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
     ) {
         // 卡 `openmir2-gm-script-exec-seams`：固定 NPC 路的 GM 跳线（与商人/点击同一桥）。
         let env = self.gm.as_ref().map(|p| p.with(guilds));
-        let (says, frames, slots, _actions) = run_merchant_goto(
+        let (says, frames, slots, _actions, _added) = run_merchant_goto(
             self.book,
             npc_actor_id,
             label,
@@ -53251,6 +53366,108 @@ break
         );
         let mk: Vec<i32> = bag.iter().map(|it| it.make_index).collect();
         assert_eq!(mk, vec![1, 2], "计数器从 0 起（夹具）⇒ 逐件 +1");
+    }
+
+    /// **A27-1 牙 `script_give_emits_sm_additem`**：脚本 `GIVE` 入包件在写回后**直发**
+    /// `SM_ADDITEM(200)`——条数 = 入包件数、`Recog=ActorId`、`Series=1`、
+    /// 尾逐字节 = `trade::add_item_tail`（oracle `PlayObject.SendAddItem` 是 `SendSocket` 直发）。
+    ///
+    /// 变异：`write_back_player_bag` 不收集 `added`（或删发射调用）⇒ 0 帧 ⇒ 红。
+    #[test]
+    fn script_give_emits_sm_additem() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "给你 <给/@ya54>",
+            vec![t142_act_n2(3, "木剑", 2)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.dlg_select("@main");
+        let bag = &rig.sessions["hero"].state.item_list;
+        assert_eq!(bag.len(), 2, "`GIVE 木剑 2` 必须两件入包");
+        let actor = rig.online.find_by_chr("hero").expect("hero 在线").actor_id;
+        let want_tails: Vec<Vec<u8>> = bag
+            .iter()
+            .map(|it| game_svr::trade::add_item_tail(it, &rig.catalog).expect("尾编码"))
+            .collect();
+        let mut got: Vec<(i32, u16, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == mir2_protocol::messages::SM_ADDITEM {
+                    got.push((cm.recog, cm.series, body[12..].to_vec()));
+                }
+            }
+        }
+        assert_eq!(got.len(), want_tails.len(), "SM_ADDITEM 条数 = 入包件数");
+        for ((recog, series, tail), want) in got.iter().zip(want_tails.iter()) {
+            assert_eq!(*recog, actor, "Recog = ActorId");
+            assert_eq!(*series, 1, "Series = 1");
+            assert_eq!(tail, want, "尾必须逐字节 = trade::add_item_tail");
+        }
+    }
+
+    /// **A27-1 牙 `script_give_full_bag_emits_nothing`**：满包 ⇒ 脚本层
+    /// `IsEnoughBag()==false` 走 `DropItemDown`（本树 T-19 恒落地失败）⇒ **不发** `SM_ADDITEM`、
+    /// 背包件数不变（不许把"掉落支"也发 200）。
+    #[test]
+    fn script_give_full_bag_emits_nothing() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![t142_act_n2(3, "木剑", 1)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.catalog.insert(
+            2,
+            mir2_data::StdItem {
+                name: "填充".to_string(),
+                dura_max: 1,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        {
+            let sg = rig.sessions.get_mut("hero").expect("hero 会话");
+            sg.state.item_list = (0..game_svr::bag::MAX_BAG_ITEM)
+                .map(|i| game_svr::bag::BagItem {
+                    make_index: 10_000 + i as i32,
+                    index: 2,
+                    dura: 1,
+                    dura_max: 1,
+                    desc: [0; 14],
+                })
+                .collect();
+        }
+        rig.dlg_select("@main");
+        assert_eq!(
+            rig.sessions["hero"].state.item_list.len(),
+            game_svr::bag::MAX_BAG_ITEM,
+            "满包支不改背包件数"
+        );
+        let mut additem = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if CommandMessage::from_bytes(&body)
+                .is_some_and(|m| m.ident == mir2_protocol::messages::SM_ADDITEM)
+            {
+                additem += 1;
+            }
+        }
+        assert_eq!(
+            additem, 0,
+            "满包支走 DropItemDown（T-19），不得发 SM_ADDITEM"
+        );
     }
 
     /// **Important-1（金币下界）**：`PlayObject.DecGold`（`PlayObject.Base.cs:754-763`）只在
@@ -108762,7 +108979,7 @@ GMEXECUTE f
                 mir2_shared::rng::RandomNumber::with_seed(0),
             );
             let mut broadcasts: Vec<String> = Vec::new();
-            let (says, _f, _s, _w) = run_merchant_goto(
+            let (says, _f, _s, _w, _added) = run_merchant_goto(
                 &self.book,
                 self.elder_id,
                 label,
