@@ -1742,6 +1742,29 @@ fn handle_zone_command_on(
         );
         return ZoneCmdOutcome::Dispatched;
     }
+    // **M1c-2b**：仓库存/取回——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_storage_cmd`）。
+    // `world` 传 `&mut`（取回支会改世界侧）；`storage_items` 是**本区会话**的 `sg.storage.items`。
+    if cmd.ident == game_svr::shop::CM_USERSTORAGEITEM
+        || cmd.ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
+    {
+        handle_storage_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            gates,
+            world,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.shop,
+            env.colors,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
     ZoneCmdOutcome::Unsupported
 }
@@ -126426,6 +126449,157 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
+    /// `handle_storage_cmd`；可观测副作用 = `SM_STORAGE_OK(701)` + 物品从 `item_list` 迁到
+    /// **本区会话** `storage.items`。
+    ///
+    /// 夹具：`landed()` 世界 + `spawn_merchant`（`is_storage`，同图 2 格内）。
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 701 ⇒ 红。
+    #[test]
+    fn zonek_storage_ok() {
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        let (mut state, actor) = landed("cmd_storage", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let (hx, hy) = pos_of(&state, actor);
+        let merchant_id = state
+            .host
+            .world
+            .spawn_merchant(MerchantSpawn {
+                name: "仓库管理员".to_string(),
+                x: hx - 2,
+                y: hy,
+                map_id: 0,
+                state: MerchantState::new(
+                    "storage".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags {
+                        is_storage: true,
+                        is_getback: true,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("仓库商人挂图成功");
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_store = cmd(game_svr::shop::CM_USERSTORAGEITEM, 0, 0, 0);
+        cmd_store.recog = merchant_id;
+        cmd_store.param = 9001; // MakeIndex 低 16 位
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_store,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_USERSTORAGEITEM 必须已接线"
+        );
+        let mut saw_ok = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_STORAGE_OK
+            {
+                saw_ok = true;
+            }
+        }
+        assert!(saw_ok, "存仓成功必须回 SM_STORAGE_OK(701)");
+        let sg = &state.host.ground_sessions["hero"];
+        assert!(sg.state.item_list.is_empty(), "背包减一");
+        assert_eq!(sg.storage.items.len(), 1, "仓库加一（本区会话）");
+    }
+
+    /// **M1c-2b 牙 `zonek_storage_absent_merchant_fails`**：无商人实体时 `CM_USERSTORAGEITEM`
+    /// **仍回 `SM_STORAGE_FAIL(703)`**（门在循环体内，oracle 原样）；而
+    /// `CM_USERTAKEBACKSTORAGEITEM` 无商人时**零帧**（oracle 直接 return）。
+    ///
+    /// 变异：删臂 ⇒ 前者 `Unsupported` 无 703、后者也断 ⇒ 红。
+    #[test]
+    fn zonek_storage_absent_merchant_fails() {
+        let (mut state, actor) = landed("cmd_storage_absent", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let shared = SharedServices::for_test();
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let mut cmd_store = cmd(game_svr::shop::CM_USERSTORAGEITEM, 0, 0, 0);
+        cmd_store.recog = 1_000_000; // 不存在的商人
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_store,
+                Some("x"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let mut saw_fail = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]])
+                    == mir2_protocol::messages::SM_STORAGE_FAIL
+            {
+                saw_fail = true;
+            }
+        }
+        assert!(saw_fail, "无商人存仓仍回 SM_STORAGE_FAIL(703)");
+        // 取回：无商人 ⇒ 零帧。
+        let mut cmd_back = cmd(game_svr::shop::CM_USERTAKEBACKSTORAGEITEM, 0, 0, 0);
+        cmd_back.recog = 1_000_000;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_back,
+                Some("x"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "无商人取回 ⇒ 零帧（oracle 直接 return）"
+        );
     }
 
     /// **M1c-2b 牙 `zonek_ground_drop_is_oracle_fail`**：区 k 的 `CM_DROPITEM` 派发到**与区 0 同一**
