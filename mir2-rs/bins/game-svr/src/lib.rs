@@ -24929,30 +24929,24 @@ mod perf_counters {
         ZONEK_INBOUND_UNSUPPORTED.load(Ordering::Relaxed)
     }
 
-    /// **M1b 第 3 步**：6 个派生列的**纯函数**（写行与单测共用同一份数学）。
+    /// **M1b 第 3 步（r6）**：**5 个**派生列的**纯函数**（写行与单测共用同一份数学）。
     ///
     /// `ib = [inbound_drained(全事件), inbound_carry, inbound_budget_hit]`（区 0；派生列**不用**全事件 drained）、
-    /// `dc` = 区 0 的**命令分量** `DRAINED_COMMAND`、`zk` = 6 个 `zonek_*`。返回 6 个 `*_all_zones`。
+    /// `dc` = 区 0 的**命令分量** `DRAINED_COMMAND`、`zk` = 6 个 `zonek_*`。返回 5 个 `*_all_zones`。
     ///
     /// **分母说明（写死）**：`inbound_drained_all_zones` = **区 0 命令分量 + Σ zonek**（区 k 只缓冲
-    /// Command）⇒ **与 `inbound_drained`（全事件）不同分母，禁止并列比较**；`carry` 同理（区 0 侧
-    /// 是全事件结转、无命令分量列，仅作总量参考）。
-    pub(crate) fn zonek_derived_columns(ib: [u64; 3], dc: u64, zk: [u64; 6]) -> [u64; 6] {
-        [
-            dc + zk[0],
-            ib[1] + zk[1],
-            ib[2] + zk[2],
-            zk[3],
-            zk[4],
-            zk[5],
-        ]
+    /// Command）⇒ **与 `inbound_drained`（全事件）不同分母，禁止并列比较**。
+    /// **`inbound_carry_all_zones` 已删（r6）**：区 0 的 `inbound_carry` 按**事件**计、无命令分量列，
+    /// 与区 k 的"只数命令"相加是**混合分母** ⇒ 不提供该派生列（单区 `inbound_carry` 原样保留）。
+    pub(crate) fn zonek_derived_columns(ib: [u64; 3], dc: u64, zk: [u64; 6]) -> [u64; 5] {
+        [dc + zk[0], ib[2] + zk[2], zk[3], zk[4], zk[5]]
     }
 
     pub(crate) fn init_with_path(path: &std::path::Path) -> std::io::Result<()> {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tinbound_drained_all_zones\tinbound_carry_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -25075,13 +25069,13 @@ mod perf_counters {
             zk[3],
             zk[4],
             zk[5],
-            // 6 个**派生列**（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
+            // **5 个**派生列（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
+            // `inbound_carry_all_zones` 按 r6 已删（混合分母：区 0 按事件、区 k 按命令）。
             dv[0],
             dv[1],
             dv[2],
             dv[3],
             dv[4],
-            dv[5],
             // handoff 11（hd[0..=10]；表头顺序 offered..write_refused_occupied）。
             hd[0],
             hd[1],
@@ -126951,7 +126945,6 @@ mod l2_s3_cross_recipient_tests {
             "zonek_inbound_pending_discarded",
             "zonek_inbound_unsupported",
             "inbound_drained_all_zones",
-            "inbound_carry_all_zones",
             "inbound_budget_hit_all_zones",
             "inbound_overflow_dropped_all_zones",
             "inbound_pending_discarded_all_zones",
@@ -126973,10 +126966,7 @@ mod l2_s3_cross_recipient_tests {
             let row: Vec<&str> = line.split('\t').collect();
             assert_eq!(row.len(), header.len(), "每行值列数必须 == 表头列数");
             // 派生恒等式（行内自洽；并发 swap 只会让两边同时为 0）。
-            assert_eq!(
-                col("inbound_carry_all_zones", &row),
-                col("inbound_carry", &row) + col("zonek_inbound_carry", &row)
-            );
+            // `inbound_carry_all_zones` 已按 r6 删除（混合分母）——不得再出现（表头断言已覆盖）。
             assert_eq!(
                 col("inbound_budget_hit_all_zones", &row),
                 col("inbound_budget_hit", &row) + col("zonek_inbound_budget_hit", &row)
@@ -127029,12 +127019,12 @@ mod l2_s3_cross_recipient_tests {
     fn zonek_derived_columns_math() {
         assert_eq!(
             perf_counters::zonek_derived_columns([3, 1, 0], 3, [2, 1, 1, 1, 1, 1]),
-            [5, 2, 1, 1, 1, 1],
-            "drained = 区0命令分量+zonek；carry = 区0+zonek；其余 zonek 直通"
+            [5, 1, 1, 1, 1],
+            "drained = 区0命令分量+zonek；budget_hit = 区0+zonek；其余 zonek 直通（carry 派生已删）"
         );
         assert_eq!(
             perf_counters::zonek_derived_columns([0, 0, 0], 0, [0, 0, 0, 0, 0, 0]),
-            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
             "N=1：zonek 全 0 ⇒ 派生 == 区 0"
         );
     }
