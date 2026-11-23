@@ -549,7 +549,7 @@ impl StageQueries {
     }
 
     /// **P5P-1**：段内结构变更后刷新**全部**已缓存的段侧 QueryState（只刷新已建条目）。
-    fn refresh_archetypes(&mut self, world: &World) {
+    pub(crate) fn refresh_archetypes(&mut self, world: &World) {
         for state in self.states.values_mut() {
             state.update_archetypes(world);
         }

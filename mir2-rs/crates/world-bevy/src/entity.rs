@@ -2234,6 +2234,14 @@ pub struct EntityStore {
     /// 收件人谓词的轻量读查询（`hear_targets_at` 热路径）：只取四组件，见
     /// [`EntityStore::iter_send_ref_targets`]。
     targets_state: SendRefTargetQuery,
+    /// **M1b-5b5**：**facade 结构变更脏标记**。`insert`/`remove` 置真；段入口
+    /// （[`crate::World::enter_stage_world`]）取走并同时刷新 facade 视图与**段侧**查询缓存。
+    ///
+    /// 契约缺口（修复前）：段内结构变更走 `StageEntities::insert/remove` 会自刷段侧缓存，
+    /// 但 **tick 之间的 facade `insert`（登录 `enter_map`/handoff/镜像）只刷 facade 视图** ⇒
+    /// 段侧 `QueryState` 对新 archetype 永久陈旧，`access.get` 返回 `None`（区 k 首玩家攻击
+    /// 无伤害的根因；N=1 被 MonGen 结构段的全量刷新掩盖）。
+    staging_dirty: bool,
 }
 
 impl std::fmt::Debug for EntityStore {
@@ -2355,6 +2363,7 @@ impl EntityStore {
             view3_state,
             mut_view_state,
             targets_state,
+            staging_dirty: false,
         }
     }
 
@@ -2446,6 +2455,8 @@ impl EntityStore {
     ///
     /// **整 bundle 插入**：任一可选组件缺失都立即 panic（半实体不得进入 AOI/重叠检查）。
     fn insert_parts_inner(&mut self, parts: SpawnParts, advance: bool) -> i32 {
+        // **M1b-5b5**：facade 结构变更 ⇒ 段入口必须刷新段侧查询缓存（见 `staging_dirty`）。
+        self.staging_dirty = true;
         let id = if advance {
             self.inner.insert(parts.entity.id, parts.entity)
         } else {
@@ -2742,9 +2753,16 @@ impl EntityStore {
     pub fn remove(&mut self, id: i32) -> Option<Entity> {
         let taken = self.inner.remove(id);
         if taken.is_some() {
+            // **M1b-5b5**：facade 结构变更 ⇒ 段入口刷新段侧缓存（见 `staging_dirty`）。
+            self.staging_dirty = true;
             self.refresh_view();
         }
         taken
+    }
+
+    /// **M1b-5b5**：取走 facade 结构变更脏标记（段入口用；取走即清零）。
+    pub(crate) fn take_staging_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.staging_dirty)
     }
 
     /// O(1) 查表（C# `ActorMgr.Get`），返回组件只读视图 [`EntityRef`]。

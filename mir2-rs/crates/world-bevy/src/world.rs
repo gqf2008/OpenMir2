@@ -3768,6 +3768,25 @@ impl World {
         self.sim_in_flight = true;
         let sim = std::mem::take(&mut self.sim);
         self.entities.world_mut().insert_resource(sim);
+        // **M1b-5b5（结构契约修复）**：**tick 之间的 facade 结构变更**（登录 `enter_map`、
+        // handoff 提升、镜像 upsert、`disconnect` 的 facade `remove`）之后，**段侧**查询缓存
+        // 同样必须在段边界刷新——否则段内 `access.get` 对新 archetype 永返 `None`（区 k 首玩家
+        // 攻击 `actor_in=false target_in=false` ⇒ 无伤害/无 31 的根因；N=1 被 MonGen 结构段的
+        // `refresh_archetypes` 全量刷新掩盖）。
+        // 恢复前是真实契约缺口：`StageEntities::insert/remove` 自刷段侧、而 facade 只刷
+        // `view*` 缓存 ⇒ 两套缓存分叉。这里把「facade 脏 ⇒ 下一个段边界双侧刷新」做成结构路径，
+        // 对 AOI 快照 / buff / slave / AI 等所有依赖段侧视图的段一并生效。
+        if self.entities.take_staging_dirty() {
+            self.entities.refresh_views();
+            let queries = self
+                .entities
+                .world_mut()
+                .remove_resource::<crate::tick::StageQueries>();
+            if let Some(mut queries) = queries {
+                queries.refresh_archetypes(self.entities.world());
+                self.entities.world_mut().insert_resource(queries);
+            }
+        }
     }
 
     /// **段边界（离开）**：把 `SimState` 从 bevy `World` 取回 facade，并清哨兵。
@@ -15590,6 +15609,36 @@ mod tests {
         let ids: Vec<i32> = w.player_hiter_snapshot.iter().map(|s| s.actor_id).collect();
         assert!(ids.contains(&live), "活玩家必须在快照里");
         assert!(!ids.contains(&ghost), "ghost 不得进 P32 快照");
+    }
+
+    /// **M1b-5b5 回归牙（区 k 首玩家攻击无伤害的根因）**：**facade 结构变更**（两 tick 之间
+    /// `add_entity`/`enter_map` 的 `EntityStore::insert`）之后，下一 tick 的**段侧查询缓存**
+    /// 必须刷新——否则 `attack_once_impl` 的 `access.get(actor/target)` 全 None ⇒ `record.attacks`
+    /// 为空（无 `RM_REFMESSAGE`/`SM_STRUCK`）。
+    ///
+    /// N=1 被「MonGen/刷怪的结构段 `insert` 会 `refresh_archetypes` 全量刷新」掩盖；区 k 的
+    /// 首玩家前没有任何结构段 ⇒ 暴露。
+    ///
+    /// 红：删阶段入口的段侧刷新（脏标记 + `StageQueries::refresh_archetypes`）⇒ `attacks` 为空。
+    #[test]
+    fn facade_insert_between_ticks_is_visible_to_stage_queries() {
+        let mut w = World::new(32, 32);
+        // 预热：跑一 tick 让各段建出缓存（此刻世界里还没有任何实体/玩家 archetype）。
+        w.tick();
+        // 两次 facade 结构变更**都发生在 tick 之间**（不走 `Command::SpawnMonster` 的结构段）。
+        let a = w.add_entity(player(1, "a", 10, 10, 10));
+        let mut m = player(2, "m", 11, 10, 10);
+        m.race = crate::ACTOR_RACE_MONSTER;
+        m.hp = 500;
+        m.max_hp = 500;
+        let b = w.add_entity(m);
+        w.attack_cmd(a, b);
+        let rec = w.tick();
+        assert_eq!(
+            rec.attacks.len(),
+            1,
+            "facade 插入的双方必须对段侧查询可见（access.get 不得 None）"
+        );
     }
 
     /// 战斗子集：固定种子下攻击结算可复现（判据①「可证伪」）。
