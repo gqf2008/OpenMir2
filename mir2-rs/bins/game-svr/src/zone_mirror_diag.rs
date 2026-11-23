@@ -151,8 +151,11 @@ mod tests {
     use crate::perf_counters::TEST_LOCK;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "mir2_zone_mirror_diag_{tag}_{}",
+            "mir2_zone_mirror_diag_{tag}_{}_{seq}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
