@@ -37,6 +37,7 @@
 """
 import argparse
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -152,11 +153,42 @@ def default_baseline_path(repo):
     return os.path.join(repo, *DEFAULT_BASELINE_REL)
 
 
-def load_baseline(path):
+DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+#: 所有条目都必须有的六个字段（历史口径）。
+BASELINE_BASE_FIELDS = ("principal", "thread", "entry_oid", "field", "value", "reason")
+#: 新条目（不在 `grandfathered_entry_oids` 里的）额外强制的两个字段（卡 C26）。
+BASELINE_STRICT_FIELDS = BASELINE_BASE_FIELDS + ("added_at", "added_by")
+#: reason 的最小长度（字符数，卡 C26）。
+REASON_MIN_CHARS = 40
+
+
+def _registered_principals(repo, git_cmd=("git",)):
+    """`refs/collab/meta/principals/<name>` 里已登记的 principal 名集合。"""
+    out = subprocess.run(
+        list(git_cmd) + ["-C", repo, "for-each-ref", "--format=%(refname)",
+                         "refs/collab/meta/principals/"],
+        capture_output=True)
+    if out.returncode != 0:
+        raise GitUnavailable("读不到 principals refs（判不了 added_by 是否已登记）：%s"
+                             % out.stderr.decode("utf-8", "replace").strip()[:120])
+    names = set()
+    for ref in out.stdout.decode("utf-8", "replace").split():
+        names.add(ref.rsplit("/", 1)[-1])
+    return names
+
+
+def load_baseline(path, repo=".", git_cmd=("git",)):
     """读 baseline 豁免清单（**逐条、可审计**）。
 
     缺失 / 读不了 / 空清单 ⇒ 抛 `GitUnavailable`（rc=2：**判不了**，不许静默全绿）；
     非法条目（通配 / 空值 / 缺字段）⇒ 抛 `ValueError`（rc=1：豁免必须带**具体** oid 与理由）。
+
+    卡 C26（`openmir2-oidgate-baseline-format`）：**新条目**必须带全八字段——
+    `added_at` 为 `YYYY-MM-DD` 且 ≤ 今天、`added_by` 已在
+    `refs/collab/meta/principals/` 登记、`reason` ≥ 40 字符且含日期；`entry_oid` 在对象库
+    不可达时**只 WARN**（`BASELINE_ENTRY_UNREACHABLE <oid>`），但要求 reason 写明"不可达"
+    （C24 正是 blob 已不可达的条目）。既有历史条目通过 `grandfathered_entry_oids`（按
+    entry_oid 列名）grandfather，只过基础六字段检查。
     """
     if not path:
         raise GitUnavailable("未给 baseline（历史坏条目无处登记，判不了）")
@@ -170,12 +202,21 @@ def load_baseline(path):
     entries = data.get("entries")
     if not isinstance(entries, list) or not entries:
         raise GitUnavailable("baseline 为空（不知道豁免什么 ⇒ 等于没校验）：%s" % path)
+    grandfathered = set()
+    gf = data.get("grandfathered_entry_oids")
+    if gf is not None:
+        if not isinstance(gf, list) or any(
+                not re.match(r"^[0-9a-f]{40}$", str(x)) for x in gf):
+            raise ValueError("grandfathered_entry_oids 必须是 40 位 hex blob oid 列表")
+        grandfathered = {str(x) for x in gf}
+    principals = None
+    today = datetime.date.today()
     out = []
     for e in entries:
         if not isinstance(e, dict):
             raise ValueError("baseline 条目不是对象：%r" % (e,))
-        missing = [k for k in ("principal", "thread", "entry_oid", "field", "value", "reason")
-                   if not e.get(k)]
+        eoid = str(e.get("entry_oid") or "")[:9]
+        missing = [k for k in BASELINE_BASE_FIELDS if not e.get(k)]
         if missing:
             raise ValueError("baseline 条目缺字段 %s（豁免必须逐条带 principal/thread/entry_oid/"
                              "field/value/reason）" % missing)
@@ -186,7 +227,46 @@ def load_baseline(path):
             raise ValueError("baseline 不许通配（%s）" % v)
         if not re.match(r"^[0-9a-fA-F]{7,40}$", v):
             raise ValueError("baseline 的 value 不是 hex oid（%r）" % v)
-        out.append((e["principal"], e["thread"], str(e["entry_oid"]), e["field"], v))
+        eo = str(e["entry_oid"])
+        if eo in grandfathered:
+            out.append((e["principal"], e["thread"], eo, e["field"], v))
+            continue
+        # ---- C26：新条目从严 ----
+        missing = [k for k in BASELINE_STRICT_FIELDS if not str(e.get(k) or "").strip()]
+        if missing:
+            raise ValueError("baseline 条目（%s）缺字段 %s（新条目必须带全八字段；历史条目请登记到"
+                             " grandfathered_entry_oids）" % (eoid, missing))
+        added_at = str(e["added_at"]).strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", added_at):
+            raise ValueError("baseline 条目（%s）的 added_at 必须是 YYYY-MM-DD（%r）"
+                             % (eoid, added_at))
+        try:
+            added_date = datetime.date.fromisoformat(added_at)
+        except ValueError:
+            raise ValueError("baseline 条目（%s）的 added_at 不是合法日期（%r）"
+                             % (eoid, added_at))
+        if added_date > today:
+            raise ValueError("baseline 条目（%s）的 added_at 不得晚于今天（%s > %s）"
+                             % (eoid, added_at, today.isoformat()))
+        reason = str(e["reason"]).strip()
+        if len(reason) < REASON_MIN_CHARS:
+            raise ValueError("baseline 条目（%s）的 reason 过短（%d < %d 字符）：豁免必须写清调查"
+                             "结论" % (eoid, len(reason), REASON_MIN_CHARS))
+        if not DATE_RE.search(reason):
+            raise ValueError("baseline 条目（%s）的 reason 必须含日期（YYYY-MM-DD）" % eoid)
+        added_by = str(e["added_by"]).strip()
+        if principals is None:
+            principals = _registered_principals(repo, git_cmd)
+        if added_by not in principals:
+            raise ValueError("baseline 条目（%s）的 added_by %r 未在 refs/collab/meta/principals/ "
+                             "登记" % (eoid, added_by))
+        if subprocess.run(list(git_cmd) + ["-C", repo, "cat-file", "-e", eo],
+                          capture_output=True).returncode != 0:
+            if "不可达" not in reason:
+                raise ValueError("baseline 条目（%s）的 entry_oid 在对象库不可达，reason 必须写明"
+                                 "「不可达」（现为 %r）" % (eoid, reason[:40]))
+            print("BASELINE_ENTRY_UNREACHABLE %s" % eo)
+        out.append((e["principal"], e["thread"], eo, e["field"], v))
     return out
 
 
@@ -357,7 +437,7 @@ def real_check(repo, limit=DEFAULT_LIMIT, baseline_path=None, since=None, git_cm
     try:
         entries, total = load_entries(repo, limit, git_cmd=git_cmd, since=since)
         ids = load_entry_ids(repo, git_cmd)
-        baseline = load_baseline(baseline_path) if baseline_path else []
+        baseline = load_baseline(baseline_path, repo=repo) if baseline_path else []
     except GitUnavailable as ex:
         return 2, "判不了：%s" % ex, {}
     except ValueError as ex:
@@ -531,8 +611,14 @@ def _audit_teeth():
         blob = json.dumps(entry).encode()
         h = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
                            input=blob, capture_output=True, check=True, env=env).stdout.decode().strip()
+        # C26：C1 牙里 `main` 审计后会继续跑真仓库 check ⇒ baseline 走严格校验 ⇒
+        # `added_by: "t"` 必须在 tmp 仓库的 principals 里登记。
+        subprocess.run(["git", "-C", tmp, "update-ref",
+                        "refs/collab/meta/principals/t", h], check=True, env=env)
         good = {"principal": "p", "thread": "card-a", "entry_oid": h, "field": "parent",
-                "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "reason": "r"}
+                "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                "reason": "2026-10-27 审计夹具：parent 为臆造 oid、对象不存在，只登记不回写。",
+                "added_at": "2026-10-27", "added_by": "t"}
 
         def run_with(entries):
             path = os.path.join(tmp, "baseline.json")
@@ -773,6 +859,16 @@ def _selfcheck_in(tmp):
                    check=True, env=env)
     real = _git(tmp, ["rev-parse", "HEAD"]).stdout.strip()
     missing = "0" * 40
+    # C26 夹具：tmp 仓库里登记两个 principal，并写一个**可达** blob 供 baseline 的 entry_oid 用。
+    for _p in ("t", "dev"):
+        subprocess.run(["git", "-C", tmp, "update-ref",
+                        "refs/collab/meta/principals/" + _p, real], check=True, env=env)
+    _blob = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                           input=b'{"fixture":1}', capture_output=True, check=True,
+                           env=env).stdout.decode().strip()
+    _blob2 = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                            input=b'{"fixture":2}', capture_output=True, check=True,
+                            env=env).stdout.decode().strip()
 
     def mk(refs, body, parent=None):
         e = {"id": "t", "ts": 1, "refs": refs, "body": body}
@@ -815,14 +911,16 @@ def _selfcheck_in(tmp):
     _bl_path = os.path.join(tmp, "baseline.json")
     with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(_json_b.dumps({"entries": [{
-            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40, "field": "refs.head",
-            "value": missing, "reason": "历史坏条目（夹具）", "added_at": "2026-10-27",
-            "added_by": "t"}]}))
+            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40,
+            "field": "refs.head", "value": missing,
+            "reason": "2026-10-27 夹具：条目 head 为臆造 oid、对象不存在，只登记不回写；"
+                      "该 entry_oid 不可达仅作测试。",
+            "added_at": "2026-10-27", "added_by": "t"}]}))
     rc_b, detail_b, stats_b = real_check(tmp, baseline_path=_bl_path)
     chk(rc_b == 2 and "判不了" in detail_b,
         "baseline 生效前：真仓库没有条目可读 ⇒ rc=2（不是绿；%r）" % (detail_b[:80],))
     # 直接喂条目：① baseline 命中 ⇒ 豁免可见；② 加一条不在 baseline 的 ⇒ 仍红
-    bl = load_baseline(_bl_path)
+    bl = load_baseline(_bl_path, repo=tmp)
     rc1, d1, st1 = check_entries([_bad_entry], tmp, baseline=bl)
     chk(rc1 == 0 and "豁免 1 处" in d1 and "baseline 共 1 条" in d1,
         "A3① baseline 里那条不存在 oid ⇒ 被豁免且审计输出可见（%r）" % (d1[:130],))
@@ -847,6 +945,70 @@ def _selfcheck_in(tmp):
         % (rc_p2, st_p2.get("baseline_total", 0) - st_p2.get("baseline_unused", 0),
            st_p2.get("baseline_unused", 0), d_p2[:120]))
 
+    # 卡 C26（openmir2-oidgate-baseline-format）：新条目强制八字段（added_at/added_by/reason 形态），
+    # 既有条目按 entry_oid grandfather；entry_oid 不可达只 WARN（且 reason 必须写明「不可达」）。
+    def _write_c26(name, entries, grandfather=None):
+        path = os.path.join(tmp, name)
+        data = {"format": "oid-gate-baseline/1", "entries": entries}
+        if grandfather is not None:
+            data["grandfathered_entry_oids"] = grandfather
+        with io.open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(json.dumps(data, ensure_ascii=False))
+        return path
+
+    _reason_ok = ("2026-10-27 夹具：parent 为臆造 oid、对象不存在，只登记不回写历史条目"
+                  "（不可达条目示例）。")
+    _good_new = {"principal": "dev", "thread": "th-good", "entry_oid": _blob,
+                 "field": "parent", "value": "9" * 40, "reason": _reason_ok,
+                 "added_at": "2026-10-27", "added_by": "dev"}
+
+    def _c26_err(entries, grandfather=None):
+        try:
+            load_baseline(_write_c26("c26.json", entries, grandfather), repo=tmp)
+            return None
+        except ValueError as ex:
+            return str(ex)
+
+    msg = _c26_err([{k: v for k, v in _good_new.items() if k != "added_by"}])
+    chk(msg is not None and "added_by" in msg,
+        "C26① 新条目缺 added_by ⇒ 红（%r）" % (msg and msg[:90],))
+    msg = _c26_err([dict(_good_new, added_at="2999-01-01")])
+    chk(msg is not None and "added_at" in msg and "今天" in msg,
+        "C26②a added_at 为未来日期 ⇒ 红（%r）" % (msg and msg[:90],))
+    msg = _c26_err([dict(_good_new, added_at="2026/10/27")])
+    chk(msg is not None and "YYYY-MM-DD" in msg,
+        "C26②b added_at 格式错 ⇒ 红（%r）" % (msg and msg[:90],))
+    msg = _c26_err([dict(_good_new, reason="短")])
+    chk(msg is not None and "reason" in msg and "40" in msg,
+        "C26③a reason 过短 ⇒ 红（%r）" % (msg and msg[:90],))
+    msg = _c26_err([dict(_good_new,
+                         reason="历史坏条目只登记不回写，parent 为臆造 oid、对象不存在，"
+                                "无需更正任何已发布条目内容。")])
+    chk(msg is not None and "日期" in msg,
+        "C26③b reason 缺日期 ⇒ 红（%r）" % (msg and msg[:90],))
+    _old_style = {"principal": "dev", "thread": "th-old", "entry_oid": "a" * 40,
+                  "field": "parent", "value": "9" * 40, "reason": "历史坏条目（夹具）"}
+    ok_gf = load_baseline(_write_c26("c26gf.json", [_old_style], ["a" * 40]), repo=tmp)
+    chk(len(ok_gf) == 1, "C26④ 既有条目（entry_oid 在 grandfather 列表）⇒ 放行（%r）"
+        % (ok_gf,))
+    _unreach = dict(_good_new, entry_oid="b" * 40)
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        ok_un = load_baseline(_write_c26("c26un.json", [_unreach]), repo=tmp)
+    chk(len(ok_un) == 1
+        and ("BASELINE_ENTRY_UNREACHABLE " + "b" * 40) in _buf.getvalue(),
+        "C26⑤a entry_oid 不可达 + reason 写明 ⇒ WARN 且不红（%r）"
+        % (_buf.getvalue().strip()[:90],))
+    msg = _c26_err([dict(_unreach,
+                         reason="2026-10-27 夹具：parent 为臆造 oid、对象不存在，只登记不回写。")])
+    chk(msg is not None and "不可达" in msg,
+        "C26⑤b entry_oid 不可达但 reason 未写明「不可达」⇒ 红（%r）" % (msg and msg[:90],))
+    _bad_new = {k: v for k, v in _good_new.items() if k != "added_by"}
+    _bad_new["entry_oid"] = _blob2
+    msg = _c26_err([_good_new, _bad_new])
+    chk(msg is not None and _blob2[:9] in msg and _blob[:9] not in msg,
+        "C26⑥ 坏条目夹在好条目里 ⇒ 只点坏的那条（%r）" % (msg and msg[:120],))
+
     try:
         load_baseline(os.path.join(tmp, "no-such-baseline.json"))
         _bl_missing = 0
@@ -856,7 +1018,7 @@ def _selfcheck_in(tmp):
     with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(_json_b.dumps({"entries": []}))
     try:
-        load_baseline(_bl_path)
+        load_baseline(_bl_path, repo=tmp)
         _bl_empty = 0
     except GitUnavailable:
         _bl_empty = 2
@@ -865,7 +1027,7 @@ def _selfcheck_in(tmp):
         fh.write(_json_b.dumps({"entries": [{"principal": "*", "thread": "*", "field": "parent",
                                             "value": "*", "reason": "x"}]}))
     try:
-        load_baseline(_bl_path)
+        load_baseline(_bl_path, repo=tmp)
         _bl_wild = 0
     except ValueError:
         _bl_wild = 1
@@ -981,7 +1143,10 @@ def _selfcheck_in(tmp):
     with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(_json_b.dumps({"entries": [{
             "principal": "dev", "thread": "th-fixture", "entry_oid": blob_oid, "field": "refs.head",
-            "value": missing, "reason": "历史坏条目（端到端夹具）", "added_at": "2026-10-27",
+            "value": missing,
+            "reason": "2026-10-27 端到端夹具：条目 head 为臆造 oid、对象不存在，"
+                      "只登记不回写历史条目。",
+            "added_at": "2026-10-27",
             "added_by": "t"}]}))
     rc_real3, d_real3, _ = real_check(tmp, baseline_path=_bl_path)
     chk(rc_real3 == 0 and "豁免 1 处" in d_real3,
@@ -992,9 +1157,11 @@ def _selfcheck_in(tmp):
     # 接线牙（规则 36）：`gate` 子命令**必须真的调用真仓库 check**，不是只跑自测。
     with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:   # 恢复成合法 baseline
         fh.write(_json_b.dumps({"entries": [{
-            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40, "field": "refs.head",
-            "value": missing, "reason": "历史坏条目（夹具）", "added_at": "2026-10-27",
-            "added_by": "t"}]}))
+            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40,
+            "field": "refs.head", "value": missing,
+            "reason": "2026-10-27 夹具：条目 head 为臆造 oid、对象不存在，只登记不回写；"
+                      "该 entry_oid 不可达仅作测试。",
+            "added_at": "2026-10-27", "added_by": "t"}]}))
     import contextlib as _cl_gate
     _orig_check = check_entries
     try:
@@ -1016,7 +1183,8 @@ def _selfcheck_in(tmp):
         fh.write(_json_b.dumps({"format": "oid-gate-baseline/1", "entries": [{
             "principal": "dev", "thread": "th-fixture", "entry_oid": blob_oid,
             "field": "refs.head", "value": missing,
-            "reason": "默认加载牙（夹具）", "added_at": "2026-11-01", "added_by": "t"}]}))
+            "reason": "2026-11-01 默认加载牙夹具：条目 head 为臆造 oid、对象不存在，只登记不回写。",
+            "added_at": "2026-11-01", "added_by": "t"}]}))
     _buf_d = io.StringIO()
     with _cl_gate.redirect_stdout(_buf_d):
         rc_def = main(["check", "--repo", tmp])

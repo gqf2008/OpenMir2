@@ -123,5 +123,16 @@
    "entry_oid": "1deab5921979810fca30c5455fee7919c6c9263f",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 同 principal/同字段/同坏值但不同条目仍判红。"
   }
+ ],
+ "grandfathered_entry_oids": [
+  "693aa1e55509953527decdb98c0b4f93aa480999",
+  "179e99da500bc36b2a6efc5e39c30382a869ae81",
+  "a1cef765774ac140e29e4beb6b2e482e0bb314e0",
+  "cba883b4b2713bbca1351a5703f844b8753ab78d",
+  "e367f5ed8e38d715a9ab4cf1007a09a2a7a03ee8",
+  "ecb06fabe4a07f6e8c6e38f1468e431a8375201f",
+  "6ab59a015b47ec165a61460aa5ec760c5dad7955",
+  "fa6d3e298c7e99badaa676ce3182a25ab8478c7e",
+  "d1e7214d89a026aee5746a8739e0f86e154ccee2"
  ]
 }
