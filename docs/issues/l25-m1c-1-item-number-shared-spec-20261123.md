@@ -7,7 +7,7 @@
 ---
 
 > **M1c-2a 覆盖声明（2026-11-23）**：本规格的 ② 段落**已被 M1c-2a 覆盖**——② `item_number_ex` **已删**
-> （oracle `GetItemNumberEx` 是死码），GM-M 改走统一计数器 `mir2_formula::drop::next_item_number`
+> （oracle 的 `Config.ItemNumberEx` 是**第二个活计数器**——`SystemShare.GetItemNumberEx`，活调用者 = GM `@s` 的 `src/Modules/GameCommand/Commands/MakeItemCommand.cs:82`；本仓**未复现**，属 T-72 偏离②③），GM-M 改走统一主计数器 `mir2_formula::drop::next_item_number`
 > （复位取 **oracle 主计数器语义** `> i32::MAX/2-1 ⇒ 1`，② 的 `MAX/2` 下限 clamp 不再存在）；
 > ③ `World.item_number` **已并入同一 `Arc`**（`ItemNumberCounter::from_shared`，经 `sim_loop` 与
 > `new_zone_state` 双注入）。计数器的**值不带 tick**（有意确定性偏离，T-72）。

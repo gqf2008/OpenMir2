@@ -3332,7 +3332,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // 初值占位 0：真值由 zone 0 在 `sim_loop` 启动时 `store`（`[Setup]ItemNumber + 屏障A`）。
     // 注入面（全部经这一个 `Arc`）：区 0 / 各区 k 的 `World.item_number`（③，经 `sim_loop` 与
     // `new_zone_state`）、`SharedServices.item_number`（① 直调点）、GM-M 造物；② `item_number_ex`
-    // 已删（oracle `GetItemNumberEx` 是死码，T-72）。
+    // 已删（T-72 三项偏离之一：oracle 的第二个计数器 `ItemNumberEx` 未复现）。
     let item_number = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     debug_assert_eq!(
         item_number.load(std::sync::atomic::Ordering::Relaxed),
@@ -27676,8 +27676,9 @@ fn apply_pending_gm_target_ops(
     }
 }
 
-// **M1c-2a / T-72**：`next_item_number_ex`（② `GetItemNumberEx` 的 clamp 版）**已删**——
-// oracle 的 `GetItemNumberEx`（`M2Share.cs:557`）全仓零调用 = 死码；造物改走统一计数器
+// **M1c-2a / T-72**：`next_item_number_ex`（② `ItemNumberEx` 的 clamp 版）**已删**——
+// oracle 的 `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`，活调用者 = GM `@s` 的
+// `MakeItemCommand.cs:82`）在本仓**未复现**（T-72 偏离②）；GM-M 造物改走统一主计数器
 // `mir2_formula::drop::next_item_number`（oracle 主计数器语义 `> int.MaxValue/2-1 ⇒ 1`）。
 
 /// `WorldEngine.RegenMonsterByName(map, x, y, name)`（`WorldServer.MonGen.cs:382-438`）的宿主入口：
@@ -28068,10 +28069,12 @@ fn apply_pending_gm_m_commands(
             // （`MakeItemCommand.cs:76`；每件一次）。
             let _ = world.rng.random_below(i32::from(make_random_add_value)); // gm-make-rng
 
-            // `Permission >= Command.PermissionMax(10)` ⇒ oracle 的 `GetItemNumberEx()` 重取
-            // MakeIndex；**M1c-2a**：② 已删（Ex 是死码）⇒ 走**同一个**统一计数器（CAS 复位版，
-            // **不再有 `MAX/2` 下限 clamp**；T-72）。`CopyToUserItemFromName` 的那次消费照旧
-            // ⇒ perm>=10 每件消费两个号（与 oracle 两计数器各自 ++ 的消费次数逐字一致）。
+            // `Permission >= Command.PermissionMax(10)` ⇒ oracle 用**第二个**计数器
+            // `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`）重取 MakeIndex；
+            // **M1c-2a**：② 未复现（T-72 偏离②③）⇒ 本仓走**同一个**主计数器（CAS 复位版，
+            // 没有 `MAX/2` 下限 clamp）。`CopyToUserItemFromName` 的那次主号消费照旧 ⇒
+            // perm>=10 每件消费两个号：**消费次数**与 oracle 一致（各 2 次），但**来源**不同
+            // （oracle = 1 主 + 1 Ex；本仓 = 主计数器 2 次）。`MakeIndex` 已掩 ⇒ 不影响对拍。
             if req.permission >= 10 {
                 item.make_index = next_item_number(item_number);
             }
@@ -29330,8 +29333,9 @@ struct EnterConfig {
     make_random_add_value: u8,
     /// **族 M · 死配置项**：`[Setup] ItemNumberEx`（部署 1073741872）。
     ///
-    /// **M1c-2a**：② `item_number_ex` 计数器已删（oracle `GetItemNumberEx` 是死码）；本字段
-    /// 只为**配置面对齐**保留解析（`config.rs` 同注），生产**不读**（`#[allow(dead_code)]`）。
+    /// **M1c-2a**：② `item_number_ex` 计数器已删（T-72 偏离②：oracle 的 `Config.ItemNumberEx`
+    /// 未复现）；本字段只为**配置面对齐**保留解析（`config.rs` 同注），生产**不读**
+    /// （`#[allow(dead_code)]`）。
     #[allow(dead_code)]
     item_number_ex: i32,
     /// `[Server] ServiceMode`（`ServerConf.cs:27`）：与 `TestServer` 一同覆盖 `PayMent=3`。
@@ -35262,9 +35266,10 @@ fn sim_loop(
         item_number_init,
         "M1c-2a：`store` 后计数器必须等于 `[Setup]ItemNumber + 屏障A` 初值"
     );
-    // **M1c-2a / T-72**：`GetItemNumberEx`（`M2Share.cs:557-569`）是 oracle 全仓零调用的死码
-    // ⇒ ② `item_number_ex` 计数器**已删**，GM-M 改走上面的统一计数器（复位取 oracle 主计数器
-    // 语义 `> int.MaxValue/2-1 ⇒ 1`，② 的 `MAX/2` clamp 一并消失）。`config.rs` 仍解析
+    // **M1c-2a / T-72**：oracle 的**第二个**计数器 `Config.ItemNumberEx`
+    // （`SystemShare.GetItemNumberEx`；唯一活调用者 = GM `@s` 的 `MakeItemCommand.cs:82`）
+    // 本仓**未复现** ⇒ ② `item_number_ex` 计数器**已删**，GM-M 改走上面的统一主计数器
+    // （复位取 oracle 主计数器语义 `> int.MaxValue/2-1 ⇒ 1`）。`config.rs` 仍解析
     // `[Setup] ItemNumberEx`（死配置项，保留配置面对齐）。
     // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
     // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
@@ -60783,10 +60788,11 @@ break
                 .all(|(kind, arg)| kind == "Next(max)" && *arg == 100),
             "Random(MakeRandomAddValue=100)：{got:?}"
         );
-        // **M1c-2a**：`CopyToUserItemFromName` 消费一个号，`perm>=10` 再用**同一个**统一
+        // **M1c-2a**：`CopyToUserItemFromName` 消费一个主号，`perm>=10` 再用**同一个**主
         // 计数器重取 ⇒ 每件消费两个号（make_index = start+2/4/6，计数器推进 6）。
-        // 与 oracle「`GetItemNumber` 一次 + `GetItemNumberEx` 一次」的**消费次数**逐字一致；
-        // 值上 ② 的 `MAX/2` clamp 已随死码删除（T-72）。
+        // 与 oracle「`GetItemNumber` 一次 + `ItemNumberEx` 一次」的**消费次数**一致；差别在
+        // **来源**（oracle 是 1 主 + 1 Ex 两个计数器；本仓是主计数器 2 次）与 Ex 的 clamp
+        // 未复现（T-72 偏离②③）。
         for (i, it) in items.iter().enumerate() {
             assert_eq!(
                 it.make_index,
@@ -67060,8 +67066,8 @@ SendRefMsgRange=15
     }
 
     /// **M1c-2a 牙 7【源码·接线提示，非行为证据】`single_make_index_alloc_source`**：全仓
-    /// `MakeIndex` 的**分配来源唯一** = `next_item_number`（oracle 唯一活发号器
-    /// `M2Share.GetItemNumber`；② `GetItemNumberEx` 是死码、已删）。
+    /// `MakeIndex` 的**主号分配来源唯一** = `next_item_number`（oracle 主发号器
+    /// `Config.ItemNumber`；② `ItemNumberEx` 未复现——见 `mir2_formula::drop` 的三项偏离）。
     ///
     /// 静态枚举（生产段，测试夹具除外）：
     /// - 造件分配点 = `lib.rs` 6 处（新手 1 / 脚本 give 2 / GM-M 2 / GM-M 重取 1）+ `shop.rs` 1 +

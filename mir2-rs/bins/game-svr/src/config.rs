@@ -444,9 +444,11 @@ pub struct GateConfig {
     /// `[Setup] ItemNumberEx`（oracle `GameSvrConf.cs:724/1700` 初值 `int.MaxValue/2`；
     /// `ServerConf.cs:115` 的 `ReadWriteInteger`，部署件 = 1073741872）。
     ///
-    /// **死配置项（M1c-2a）**：oracle 的 `GetItemNumberEx()`（`M2Share.cs:557-569`）**全仓零调用**
-    /// = 死码 ⇒ 本仓 ② `item_number_ex` 计数器已删、GM-M 造物走统一计数器；本键仍解析只为
-    /// **配置面对齐**（缺键不报错），生产不读其值。
+    /// **死配置项（M1c-2a）**：oracle 的 `Config.ItemNumberEx` 是**第二个活计数器**
+    /// （`SystemShare.GetItemNumberEx`，`src/Modules/SystemModule/SystemShare.cs:457-467`；
+    /// 唯一调用者 = GM `@s` 的 `src/Modules/GameCommand/Commands/MakeItemCommand.cs:82`），
+    /// 本仓**未复现**（T-72 偏离②③）⇒ ② `item_number_ex` 计数器已删、GM-M 造物走统一主计数器；
+    /// 本键仍解析只为**配置面对齐**（缺键不报错），生产不读其值。
     pub item_number_ex: i32,
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `10*60*1000`，**毫秒**；
     /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——

@@ -39,9 +39,21 @@ pub struct UserItem {
 /// 比对。`0c` 已核 `MakeIndex` 无 glog/sort/TSV/排序/RNG 依赖，DB/帧面掩码。
 /// **若将来解 D-1 的 `MakeIndex` 掩码，必须先补 tick**（`mir2-rs/tests/parity/whitelist.md` T-72）。
 ///
-/// **M1c-2a**：oracle 只有一个活发号器（`GetItemNumberEx` 是全仓零调用的死码）⇒ 本仓的
-/// 五类造件（掉落/商店/脚本/GM/使用物品）**共用同一个计数器**；`next_item_number` 是
-/// **唯一**实现（`ItemNumberCounter::next_value` 与宿主直调点都走它，禁止第二份 CAS）。
+/// **M1c-2a**：主发号器（oracle `Config.ItemNumber`）在本仓只有一个实现 `next_item_number`，
+/// 五类造件（掉落/商店/脚本/GM/使用物品）的**主号**共用它；`ItemNumberCounter::next_value`
+/// 与宿主直调点都走它，禁止第二份 CAS。
+///
+/// **三项偏离（T-72，归因更正 2026-11-23）**：
+/// ① 返回值不带 `HUtil32.GetTickCount()`（oracle 两个发号器都加）；
+/// ② oracle 的**第二个**计数器 `Config.ItemNumberEx`（`SystemShare.GetItemNumberEx`，
+///    `src/Modules/SystemModule/SystemShare.cs:457-467`）**未复现**——它是活代码：
+///    唯一调用者 = GM `@s` 的 `src/Modules/GameCommand/Commands/MakeItemCommand.cs:82`
+///    （`Permission >= Command.PermissionMax` 时覆盖 MakeIndex）；其 clamp 语义
+///    （`++` 后 `< MAX/2 ⇒ MAX/2`、`> MAX-1 ⇒ MAX/2`）本仓**不存在**；
+/// ③ GM `@s`（perm>=10）在 oracle 是「1 个主号（`CopyToUserItemFromName`）+ 1 个 Ex 号」两个
+///    **来源**，本仓从主计数器连取 2 号——**消费次数**一致（每件 2 次）、**来源**不同；
+///    `MakeIndex` 已掩（D-1 / DB `masked_columns`）⇒ 不影响唯一性/帧/DB 对拍。
+/// 若要逐值对齐 oracle 的 GM 造件，须另开片补第二个计数器（本片按裁定不做）。
 pub fn next_item_number(counter: &AtomicI32) -> i32 {
     loop {
         let old = counter.load(Ordering::Relaxed);
@@ -789,8 +801,8 @@ mod tests {
     }
 
     /// **M1c-2a 牙 2【行为】`unified_counter_reset_semantics`**：置 `MAX/2-1` ⇒ 下一次 = 1；
-    /// `MAX/2` 也 = 1（**oracle 主计数器语义**：`> MAX/2-1 ⇒ 1`；② 的 `MAX/2` 下限 clamp 已随
-    /// `GetItemNumberEx`（死码）删除，**不得**复活）。
+    /// `MAX/2` 也 = 1（**oracle 主计数器语义**：`> MAX/2-1 ⇒ 1`；② `ItemNumberEx` 的
+    /// `MAX/2` 下限 clamp **未复现**——见 [`ItemNumberCounter`] 的三项偏离，**不得**在本计数器里复活）。
     #[test]
     fn unified_counter_reset_semantics() {
         for (start, expected) in [
