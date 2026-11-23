@@ -1518,6 +1518,8 @@ fn handle_zone_command_with_tail_and_shared(
         enter_cfg: &shared.enter_cfg,
         colors: &shared.colors,
         registry: shared.registry.as_ref(),
+        unbind_list: &shared.unbind_list,
+        item_number: &shared.item_number,
     };
     handle_zone_command_on(
         world,
@@ -1544,6 +1546,10 @@ struct ZoneCmdEnv<'a> {
     enter_cfg: &'a EnterConfig,
     colors: &'a MsgColors,
     registry: Option<&'a mir2_envir::MapRegistry>,
+    /// **M1c-2c 段 5（P1）**：解包表（`SharedServices.unbind_list` 的只读借用；与区 0 同一份装载）。
+    unbind_list: &'a game_svr::unbindlist::UnbindList,
+    /// **M1c-2c 段 5**：`MakeIndex` 会话计数器的**进程唯一** `Arc` 的借用（解包 6 件用）。
+    item_number: &'a std::sync::atomic::AtomicI32,
 }
 
 /// **M1b 第 5b 步**：[`handle_zone_command_on`] 的**处置结果**（返回值，供单测**无竞态**断言）。
@@ -1762,6 +1768,38 @@ fn handle_zone_command_on(
             &env.enter_cfg.catalog,
             &env.enter_cfg.shop,
             env.colors,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-2c 段 5**：吃/用物品——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_eat_cmd`），
+    // 但 `proc=None`（区 k 无进程态）。分类器只把 `Dead`/`Unpack`/`OtherLocal` 放行到本地；
+    // 脚本/彩票/行会回城三支由分类器归 `Process`（区 0 `EatProcess` 邮箱），本地臂的
+    // `proc=None` 守卫再兜底（计数 + 不执行，绝不先 `use_item` 再补票）。
+    // 解包支（StdMode31/AniCount==0）在此**本地执行**：只读 `unbind_list` + 2a 共享计数器，
+    // 产物 `SM_ADDITEM(200)` 按本区会话写回（见 `handle_eat_cmd` 的 `added_items` 发帧）。
+    if cmd.ident == game_svr::useitem::CM_EAT {
+        handle_eat_cmd(
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            gates,
+            &env.enter_cfg.catalog,
+            world,
+            env.colors,
+            env.enter_cfg.repair_item_dec_dura,
+            &env.enter_cfg.string_conf,
+            env.registry,
+            env.unbind_list,
+            env.item_number,
+            None,
+            env.enter_cfg.win_lottery,
+            env.enter_cfg.shop.human_max_gold,
+            env.enter_cfg.weapon_make_luck,
         );
         return ZoneCmdOutcome::Dispatched;
     }
@@ -3302,26 +3340,30 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // （`PlayObject.Operate.cs:657-666`）。
     // 失败口径差异（登记）：oracle 终止起服；本宿主按其它名单装载同款记 ERR 后以**空表**继续
     // （部署件 `UnbindList.txt` 无非法行 ⇒ 该支不可达）。
-    let unbind_list = match game_svr::unbindlist::load_unbind_list_file(&envir_loader) {
-        Ok(Some(list)) => {
-            glog!("INF", "加载捆装物品信息成功...[{}]", list.len());
-            list
-        }
-        Ok(None) => {
-            glog!(
-                "INF",
-                "无 Envir/UnbindList.txt ⇒ 解包表为空（oracle File.Exists 门）"
-            );
-            game_svr::unbindlist::UnbindList::default()
-        }
-        Err(e) => {
-            glog!(
-                "ERR",
-                "{e} ⇒ 解包表为空（oracle GameApp.cs:175-179 终止起服；宿主登记后继续）"
-            );
-            game_svr::unbindlist::UnbindList::default()
-        }
-    };
+    // **M1c-2c 段 5（P1）**：`UnbindList` 以 `Arc` 形式**只读共享**——区 0 的
+    // `ProcessServices` 与各区 k 的 `SharedServices` 共用**同一份装载**（不得为区 k 再造第二份）。
+    let unbind_list = std::sync::Arc::new(
+        match game_svr::unbindlist::load_unbind_list_file(&envir_loader) {
+            Ok(Some(list)) => {
+                glog!("INF", "加载捆装物品信息成功...[{}]", list.len());
+                list
+            }
+            Ok(None) => {
+                glog!(
+                    "INF",
+                    "无 Envir/UnbindList.txt ⇒ 解包表为空（oracle File.Exists 门）"
+                );
+                game_svr::unbindlist::UnbindList::default()
+            }
+            Err(e) => {
+                glog!(
+                    "ERR",
+                    "{e} ⇒ 解包表为空（oracle GameApp.cs:175-179 终止起服；宿主登记后继续）"
+                );
+                game_svr::unbindlist::UnbindList::default()
+            }
+        },
+    );
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -3646,7 +3688,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
         minimap,
         make_items,
         admin_list,
-        unbind_list,
+        // `EnterConfig` 的字段仍是按值表；`Arc` 的这份克隆只给 `sim_loop` 取回（单份装载）。
+        unbind_list: (*unbind_list).clone(),
         line_notice,
         line_notice_cfg: line_notice::LineNoticeCfg {
             interval_ms: i64::from(cfg.show_line_notice_time),
@@ -3899,6 +3942,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             zone_host: Some(Arc::clone(&host)),
                             colors,
                             item_number: Arc::clone(&item_number),
+                            // **M1c-2c 段 5（P1）**：解包表只读共享（与区 0 同一份装载）。
+                            unbind_list: Arc::clone(&unbind_list),
                         },
                         rx,
                         ctl,
@@ -13215,6 +13260,25 @@ fn shape12_status_notice(status: i32, hitspeed_temp: u16) -> game_svr::useitem::
     }
 }
 
+/// **M1c-2c 段 5（P2）**：`handle_eat_cmd` 的**进程态**形态（区 0 传 `Some`、区 k 本地臂传 `None`）。
+///
+/// 进程态 = 区 k **拿不到**的那几项：`NpcHost`/`NpcVars`（`Rc<RefCell>`，`!Send`）、
+/// `ScriptGmEnv`（借进程表）、彩票进程级计数、`castle_war_states`（进程级 `HashMap`）。
+/// 它们只被 脚本（StdMode31/AniCount≠0）/彩票（Shape11）/行会回城（Shape5）三支消费；
+/// `None` 时这三支**先判后消费**：计数 + 直接返回，绝不先 `use_item` 再补票。
+struct EatProcessEnv<'a, 'gm> {
+    /// `SystemShare.FunctionNPC`（`QFunction` 装载表）；`None` = 无 FunctionNPC。
+    npc_host: Option<&'a game_svr::npc::NpcHost>,
+    /// `NpcVars`（脚本变量表；`Rc<RefCell>`，`!Send`）。
+    npc_vars: &'a game_svr::npc::NpcVars,
+    /// 脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&'gm ScriptGmEnv<'a>>,
+    /// IT-16 彩票：进程级计数句柄（`WinLotteryCount`/`NoWinLotteryCount`/`WinLotteryLevel*`）。
+    lottery: &'a crate::winlottery::WinLotteryShared,
+    /// IT-13：`PlayObject.InGuildWarArea` 的每 actor 会话位（只 Shape5 读）。
+    castle_war_states: &'a std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+}
+
 /// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
 ///
 /// **收包字段口径**（`WorldServer.cs:820` + `BaseObject.Message.cs:98`）：12B 头的 `Recog`(b0-3) = `nParam1`
@@ -13251,22 +13315,16 @@ fn handle_eat_cmd(
     unbind_list: &game_svr::unbindlist::UnbindList,
     // `M2Share.GetItemNumber()` 会话计数器：解包 6 件的 `MakeIndex` 与 `GIVE`/新手物品共用。
     item_number: &std::sync::atomic::AtomicI32,
-    // `SystemShare.FunctionNPC`（`QFunction` 装载表）：`UseStdModeFunItem` 的唯一判据。
-    npc_host: Option<&game_svr::npc::NpcHost>,
-    npc_vars: &game_svr::npc::NpcVars,
-    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
-    gm: Option<&ScriptGmEnv<'_>>,
+    // **M1c-2c 段 5（P2）**：进程态（区 0 = `Some`，区 k 本地臂 = `None`）。`None` 时
+    // 脚本/彩票/行会回城三支**先判后消费**（计数 + 返回，不执行 `use_item`）。
+    proc: Option<EatProcessEnv<'_, '_>>,
 
-    // **IT-16 彩票**：进程级计数句柄（`WinLotteryCount`/`NoWinLotteryCount`/`WinLotteryLevel*`）。
-    lottery: &crate::winlottery::WinLotteryShared,
     // **IT-16**：`[Setup]` 的 19 个彩票参数（`Rate`/`1..6 Min/Max`/`1..6 Gold`）。
     lottery_cfg: crate::config::WinLotteryCfg,
     // `Config.HumanMaxGold`（`PlayObject.IncGold` 的上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
     // **IT-12**：`[Setup]` 祝福油 6 键（`WeaptonMakeLuck`）。
     oil_cfg: crate::config::WeaponMakeLuckCfg,
-    // **IT-13**：`PlayObject.InGuildWarArea` 的每 actor 会话位（宿主 `castle_war_states`）。
-    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -13294,12 +13352,42 @@ fn handle_eat_cmd(
     // ⇒ 死亡后的下一轮命令排水里 `entity.hp=0` 而投影仍是上一 P21 的旧值；
     // 不接线 `dead` 时 `use_item` 照常回血，再经下方回写把假值写进实体（死体复活）。
     let dead = world.entities.get(actor_id).is_some_and(|e| e.death);
+    // **M1c-2c 段 5**：区 k 本地臂（`proc == None`）只放行**本地支**。脚本 / 彩票 / 行会回城
+    // （Shape5）三支需要进程态 ⇒ 到达即**先判后消费**：计数 + 直接返回（不跑 `use_item`、
+    // 零帧、会话不变）。生产不可达（分类器已把这三支归 `Process` → 区 0 `EatProcess` 邮箱）；
+    // 这是**安全默认**，不是可走路径。
+    if proc.is_none() && !dead {
+        let process_branch = sg
+            .state
+            .item_list
+            .iter()
+            .find(|it| it.make_index == recog)
+            .and_then(|it| catalog.get(it.index))
+            .and_then(|t| match (t.std_mode, t.shape, t.ani_count) {
+                (31, _, ani) if ani != 0 => Some("StdModeFunScript"),
+                (3, 11, _) => Some("Lottery"),
+                (3, 5, _) => Some("MoveFamily"),
+                _ => None,
+            });
+        if let Some(branch) = process_branch {
+            // 复用既有「区 k 命令未接线」计数（前端采样 WRN 自带：前 8 次 + 每 1000 次）。
+            perf_counters::note_zone_cmd_unsupported(game_svr::useitem::CM_EAT);
+            glog!(
+                "WRN",
+                "CM_EAT：区 k 本地臂遇到进程支 {branch}（proc=None）⇒ 计数不执行 ChrName={chr_name} make_index={recog}"
+            );
+            return;
+        }
+    }
+    let proc_state = proc.as_ref();
     // **卡 `openmir2-gm-script-exec-seams`**：`PlayObject.Base.cs:1072 UseStdModeFunItem`
     // ——`StdMode 31` 且 `AniCount != 0` 时先跑 `QFunction` 的 `@StdModeFunc<N>`（脚本里
     // 大批 `GMEXECUTE showeffect/MOBFIREBURN`），再按返回值决定是否吃（oracle
     // `Operate.cs:660-673` 的顺序）。`FunctionNPC == null` ⇒ 不吃（`use_item` 的
     // `function_npc_present` 同源）。
-    let function_npc_present = npc_host.is_some_and(|h| h.has_function_npc());
+    let function_npc_present = proc_state
+        .and_then(|p| p.npc_host)
+        .is_some_and(|h| h.has_function_npc());
     // 死亡 ⇒ oracle 的 item 循环整体不进入（见上 `dead`）⇒连 StdMode 31 的
     // `@StdModeFunc<N>` 脚本前置步也不跑；用 `dead` 短路 `std_mode_fun` 即可。
     let std_mode_fun = if dead {
@@ -13313,13 +13401,15 @@ fn handle_eat_cmd(
             .filter(|tpl| tpl.std_mode == 31 && tpl.ani_count != 0)
             .map(|tpl| tpl.ani_count)
     };
-    if let (Some(ani), true, Some(host)) = (std_mode_fun, function_npc_present, npc_host) {
+    if let (Some(ani), true, Some(proc_env)) = (std_mode_fun, function_npc_present, proc_state) {
         run_std_mode_func_script(
             i32::from(ani),
             chr_name,
             socket,
             gate_idx,
-            host,
+            proc_env
+                .npc_host
+                .expect("function_npc_present ⇒ npc_host 必在"),
             world,
             sg,
             // `PlayObject.Envir.MapName`：本骨架用 map_id 文本（与商人路同源）。
@@ -13328,14 +13418,14 @@ fn handle_eat_cmd(
                 .get(actor_id)
                 .map_or_else(String::new, |e| e.map_id.to_string()),
             catalog,
-            npc_vars,
+            proc_env.npc_vars,
             item_number,
             gates,
             // `SENDMSG 0-3` 的全服扇出清单（收件人取 `online`，色词取 `RedMsgFColor/BColor`）。
             online,
             (colors.red_f, colors.red_b),
             now_ms() as i32,
-            gm,
+            proc_env.gm,
         );
     }
     // `EatItems` 的首个守卫（`PlayObject.Base.cs:2048`）：`Envir.Flag.boNODRUG`。
@@ -13368,7 +13458,8 @@ fn handle_eat_cmd(
         registry,
         dead,
         no_drug,
-        castle_war_states,
+        // **M1c-2c 段 5**：区 k 本地臂无进程态 ⇒ `None`（只有 Shape5 读；Shape5 已被守卫拦下）。
+        proc_state.map(|p| p.castle_war_states),
         colors,
     ) {
         return;
@@ -13514,6 +13605,10 @@ fn handle_eat_cmd(
     // 触发条件 = 模板 StdMode3/Shape11 **且** `out.eaten`（死亡/禁药/物品不存在 ⇒ oracle
     // 不进 `EatUseItems`，不抽不计数）。
     if out.eaten && lottery_item {
+        // 守卫已保证进程支在 `proc == None` 时不进入本函数体（计数 + 早退）。
+        let lottery = proc_state
+            .expect("彩票支必须有进程态（守卫已拦 None）")
+            .lottery;
         let outcome =
             lottery.with(|st| crate::winlottery::win_lottery(&mut world.rng, &lottery_cfg, st));
         // oracle `PlayObject.cs:3873-3900`：**绿字先发**（`nGold > 0` 即报喜），再 `IncGold`。
@@ -35323,7 +35418,8 @@ fn sim_loop(
     // 在 `PlayObject.cs:1188-1194` 被注释 ⇒ 本表**不接**任何 `Permission` 写点（接上须另开 `D-*`）。
     // **UnbindList（卡 `openmir2-unbindlist-consumer`）**：`M2Share.UnbindList` 的 Rust 承载。
     // `CM_EAT` 的 StdMode 31 解包按 `StdItem.Shape` 查名（`PlayObject.Operate.cs:578-580`）。
-    let unbind_list = std::mem::take(&mut enter_cfg.unbind_list);
+    // **M1c-2c 段 5（P1）**：与各区 k 共享同一份解包表（`Arc`，只读）。
+    let unbind_list = std::sync::Arc::new(std::mem::take(&mut enter_cfg.unbind_list));
     if let Some(al) = enter_cfg.admin_list.take() {
         glog!(
             "INF",
@@ -35692,6 +35788,7 @@ fn sim_loop(
         zone_host,
         colors,
         item_number: Arc::clone(&item_number),
+        unbind_list: Arc::clone(&unbind_list),
     };
     let mut process = Some(ProcessServices {
         db,
@@ -35973,6 +36070,9 @@ struct SharedServices {
     // （区 0 在 `sim_loop` 启动时 `store` 真初值 `[Setup]ItemNumber + 屏障 A 抽数`；各区 k 的
     // `World.item_number` 经 `new_zone_state` 接同一 `Arc`；② `item_number_ex` 已删）。
     item_number: Arc<std::sync::atomic::AtomicI32>,
+    /// **M1c-2c 段 5（P1）**：`M2Share.UnbindList` 的**只读共享**句柄（与区 0
+    /// `ProcessServices.unbind_list` 同一份装载；区 k 本地解包按 `StdItem.Shape` 查名）。
+    unbind_list: Arc<game_svr::unbindlist::UnbindList>,
 }
 
 /// **M1-0c'**：进程-only 服务（`!Send` 脚本宿主、DB 链、行会/城堡/全局表等）。
@@ -36013,7 +36113,8 @@ struct ProcessServices {
     gm_spirit_mutiny_tick: std::cell::Cell<i64>,
     magic_table_arc: std::sync::Arc<magics::MagicTable>,
     minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
-    unbind_list: game_svr::unbindlist::UnbindList,
+    // **M1c-2c 段 5（P1）**：与各区 k 的 `SharedServices.unbind_list` 是同一份装载（`Arc`）。
+    unbind_list: Arc<game_svr::unbindlist::UnbindList>,
     make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
     line_notice_lines: Vec<String>,
     line_notice_cfg: line_notice::LineNoticeCfg,
@@ -36107,6 +36208,7 @@ impl SharedServices {
             zone_host: None,
             colors: MsgColors::default(),
             item_number: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            unbind_list: std::sync::Arc::new(game_svr::unbindlist::UnbindList::default()),
         }
     }
 }
@@ -36157,7 +36259,7 @@ impl ProcessServices {
             gm_spirit_mutiny_tick: std::cell::Cell::new(0i64),
             magic_table_arc: std::sync::Arc::new(magics::MagicTable::new(Vec::new())),
             minimap: None,
-            unbind_list: game_svr::unbindlist::UnbindList::default(),
+            unbind_list: std::sync::Arc::new(game_svr::unbindlist::UnbindList::default()),
             make_items: None,
             line_notice_lines: Vec::new(),
             line_notice_cfg: line_notice::LineNoticeCfg {
@@ -36496,6 +36598,9 @@ impl HostLoop {
                     enter_cfg: &*enter_cfg,
                     colors: &*colors,
                     registry: registry.as_ref(),
+                    // **M1c-2c 段 5（P1）**：`SharedServices` 的只读字段（与 `enter_cfg` 互不重叠）。
+                    unbind_list: &shared.unbind_list,
+                    item_number: &shared.item_number,
                 };
                 // **M1c-2c**：LOCAL 段的**唯一判定点**——执行前一次性预分类（只读扫描
                 // `buffer`+`pending_local`）；执行器只按 seq 查表。这样判定函数与执行回调不会
@@ -36864,14 +36969,17 @@ impl HostLoop {
                                     registry.as_ref(),
                                     &unbind_list,
                                     item_number,
-                                    npc_host.as_ref(),
-                                    &npc_vars_base,
-                                    Some(&script_gm),
-                                    &win_lottery,
+                                    // **M1c-2c 段 5（P2）**：进程态收进 `EatProcessEnv`（区 0 = Some）。
+                                    Some(EatProcessEnv {
+                                        npc_host: npc_host.as_ref(),
+                                        npc_vars: &npc_vars_base,
+                                        gm: Some(&script_gm),
+                                        lottery: &win_lottery,
+                                        castle_war_states: &castle_war_states,
+                                    }),
                                     enter_cfg.win_lottery,
                                     enter_cfg.shop.human_max_gold,
                                     enter_cfg.weapon_make_luck,
-                                    &castle_war_states,
                                 );
                             } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                                 // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -37870,14 +37978,17 @@ impl HostLoop {
                                             registry.as_ref(),
                                             unbind_list,
                                             item_number,
-                                            npc_host.as_ref(),
-                                            npc_vars_base,
-                                            Some(&script_gm),
-                                            win_lottery,
+                                            // **M1c-2c 段 5（P2）**：进程态收进 `EatProcessEnv`（区 0 = Some）。
+                                            Some(EatProcessEnv {
+                                                npc_host: npc_host.as_ref(),
+                                                npc_vars: npc_vars_base,
+                                                gm: Some(&script_gm),
+                                                lottery: win_lottery,
+                                                castle_war_states: &*castle_war_states,
+                                            }),
                                             enter_cfg.win_lottery,
                                             enter_cfg.shop.human_max_gold,
                                             enter_cfg.weapon_make_luck,
-                                            &*castle_war_states,
                                         );
                                     });
                                 }
@@ -64864,16 +64975,18 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            Some(&host),
-            &game_svr::npc::NpcVars::default(),
-            Some(&env),
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: Some(&host),
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: Some(&env),
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -64998,16 +65111,18 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 100,
@@ -65036,16 +65151,18 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         assert_eq!(
             sessions["hero"].equip.abil.exp, 200,
@@ -65181,16 +65298,18 @@ SendRefMsgRange=15
                 None,
                 &unbind,
                 &item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                None,
-                &crate::winlottery::WinLotteryShared::new(
-                    crate::config::WinLotteryCfg::default().init_state(),
-                ),
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: None,
+                    lottery: &crate::winlottery::WinLotteryShared::new(
+                        crate::config::WinLotteryCfg::default().init_state(),
+                    ),
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
             let sg = &sessions["hero"];
             assert_eq!(
@@ -65367,16 +65486,18 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
@@ -65614,17 +65735,19 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -65749,17 +65872,19 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -67035,17 +67160,19 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
-            None,
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -89062,16 +89189,18 @@ SendRefMsgRange=15
                 None,
                 &unbind,
                 item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                Some(&env),
-                &crate::winlottery::WinLotteryShared::new(
-                    crate::config::WinLotteryCfg::default().init_state(),
-                ),
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: Some(&env),
+                    lottery: &crate::winlottery::WinLotteryShared::new(
+                        crate::config::WinLotteryCfg::default().init_state(),
+                    ),
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
         };
         let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
@@ -89296,16 +89425,18 @@ SendRefMsgRange=15
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            Some(&env),
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: Some(&env),
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -109282,14 +109413,16 @@ GMEXECUTE f
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            Some(&env),
-            &lottery,
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: Some(&env),
+                lottery: &lottery,
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let per = take7c(&mut rx0);
         for s in [901, 902, 903, 904] {
@@ -112413,16 +112546,18 @@ GMEXECUTE f
             None,
             &unbind,
             &item_number,
-            Some(&host),
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: Some(&host),
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx0);
         let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
@@ -112969,16 +113104,18 @@ GMEXECUTE f
             None,
             &unbind,
             &item_number,
-            Some(&host),
-            &game_svr::npc::NpcVars::default(),
-            None,
-            &crate::winlottery::WinLotteryShared::new(
-                crate::config::WinLotteryCfg::default().init_state(),
-            ),
+            Some(EatProcessEnv {
+                npc_host: Some(&host),
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: None,
+                lottery: &crate::winlottery::WinLotteryShared::new(
+                    crate::config::WinLotteryCfg::default().init_state(),
+                ),
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             crate::config::WinLotteryCfg::default(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let frames = sendmsg_drain(&mut rx1);
         let other_sys: Vec<&Vec<u8>> = frames
@@ -116662,14 +116799,16 @@ fn ",
                 None,
                 unbind,
                 item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                Some(env),
-                lottery,
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: Some(env),
+                    lottery,
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 cfg,
                 human_max,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
             // 同一次 `handle_eat_cmd` 的原始帧（含 `SM_SYSMESSAGE` 的文本尾）与 ident 序列。
             let frames = drain_frames(rx);
@@ -116933,14 +117072,16 @@ fn ",
             None,
             &unbind,
             &item_number,
-            None,
-            &game_svr::npc::NpcVars::default(),
-            Some(&env),
-            &untouched,
+            Some(EatProcessEnv {
+                npc_host: None,
+                npc_vars: &game_svr::npc::NpcVars::default(),
+                gm: Some(&env),
+                lottery: &untouched,
+                castle_war_states: &std::collections::HashMap::new(),
+            }),
             forced_six(),
             10_000_000,
             crate::config::WeaponMakeLuckCfg::default(),
-            &std::collections::HashMap::new(),
         );
         let ids: Vec<u16> = drain_frames(&mut rx0)
             .iter()
@@ -117454,14 +117595,16 @@ fn ",
                 None,
                 &unbind,
                 &item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                Some(&env),
-                &lottery,
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: Some(&env),
+                    lottery: &lottery,
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
             let mut ids = Vec::new();
             while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -126793,7 +126936,8 @@ mod zone_command_tests {
             // "臂里直接 return"把命令静默吞掉）。
             mir2_protocol::messages::CM_CLICKNPC,
             mir2_protocol::messages::CM_MERCHANTDLGSELECT,
-            game_svr::useitem::CM_EAT,
+            // **M1c-2c**：`CM_EAT` 已接线（本地臂 `Dispatched`；分支门由 `zonek_eat_*` 四牙钉）
+            // ⇒ 从本「未接线守恒」清单移出（不是放宽：每形态的归属另有四牙）。
             mir2_protocol::messages::CM_DEALTRY,
             mir2_protocol::messages::CM_SELLOFFADDITEM,
         ] {
@@ -127415,6 +127559,429 @@ mod zone_command_tests {
             &shared,
         );
         assert!(rx.try_recv().is_err(), "限频窗口内不得回帧");
+    }
+
+    /// **M1c-2c 段 5** 测试用：enable perf 计数（与 `l2_s3_cross_recipient_tests::zonek_arm_counters`
+    /// 同款；本模块需要读 `zonek_*` 增量）。持有 `TEST_LOCK` ⇒ 与其它 armed 用例串行。
+    fn m1c2c_arm_counters(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
+        let g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "mir2_m1c2c_{tag}_{}_{}.tsv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        (g, path)
+    }
+
+    /// **M1c-2c 段 5 · 分支门负例公共体**：`item` 进包 ⇒ 分类器必须给 `Process`（回区 0），
+    /// 机械分派必须投 `ControlRequest::EatProcess`、置位 `control_pending`、**不调用执行体**。
+    ///
+    /// 变异：把该模板形态标成 `Local` ⇒ 分类断言红；Process 臂漏投邮箱 ⇒ 邮箱断言红；
+    /// 漏置位 ⇒ `control_pending` 断言红；执行体被调用 ⇒ `executed` 断言红。
+    fn assert_eat_process_not_local(tag: &str, item: mir2_data::StdItem, recog: i32) {
+        let (state, actor) = landed(tag, zone::ZoneId::new(1));
+        let world = &state.host.world;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(1, item);
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = crate::tests::test_session_ground(actor);
+        sg.state.item_list.push(game_svr::bag::BagItem {
+            make_index: recog,
+            index: 1,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        });
+        sessions.insert("hero".to_string(), sg);
+        let mut ev = GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "hero".to_string(),
+            socket: 7,
+            cmd: cmd(game_svr::useitem::CM_EAT, 0, 0, 0),
+            tail: None,
+        };
+        if let GateEvent::Command { cmd, .. } = &mut ev {
+            cmd.recog = recog;
+        }
+        let class = classify_local_event(&ev, &sessions, &catalog, world);
+        assert_eq!(
+            class,
+            ZoneCmdClass::Process,
+            "{tag}：进程支模板必须归 Process（不得本地执行）"
+        );
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let mut pending = std::collections::BTreeMap::new();
+        let mut executed = false;
+        let mut exec =
+            |_ev: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
+                executed = true;
+            };
+        let disp = a6_dispatch_local(
+            SeqEvent { seq: 1, ev },
+            class,
+            Some(&inbox),
+            &mut sessions,
+            &mut pending,
+            zone::ZoneId::new(1),
+            9,
+            A6BatchBudget {
+                remaining_events: 10,
+                wall_ok: true,
+            },
+            &mut exec,
+        );
+        assert_eq!(
+            disp,
+            LocalDisposition::Drained,
+            "{tag}：Process 入邮箱即已处置"
+        );
+        assert!(!executed, "{tag}：Process 支不得本地执行");
+        {
+            let q = inbox.lock().expect("inbox");
+            assert_eq!(q.len(), 1, "{tag}：必须投 1 条控制请求");
+            assert!(
+                matches!(q[0], ControlRequest::EatProcess { .. }),
+                "{tag}：非本地 CM_EAT 必须是 EatProcess 变体（不是 GmSay/`@`）"
+            );
+        }
+        assert_eq!(
+            sessions["hero"].a6.control_pending, 1,
+            "{tag}：入邮箱必须置位 control_pending"
+        );
+        assert_eq!(sessions["hero"].a6.control_first_tick, Some(9));
+    }
+
+    /// **M1c-2c 段 5 · 分支门【脚本】**：`StdMode 31 && AniCount != 0` ⇒ `Process`（@StdModeFunc
+    /// 需要 `NpcHost`/`NpcVars`/`ScriptGmEnv`）⇒ 区 k **不本地执行**（邮箱 +1、零帧、会话不变）。
+    #[test]
+    fn zonek_eat_script_not_executed_locally() {
+        assert_eat_process_not_local(
+            "eat_script",
+            mir2_data::StdItem {
+                std_mode: 31,
+                ani_count: 2,
+                ..Default::default()
+            },
+            9101,
+        );
+    }
+
+    /// **M1c-2c 段 5 · 分支门【彩票】**：`StdMode 3 && Shape 11` ⇒ `Process`（进程级 `win_lottery`
+    /// + `world.rng` 抽）⇒ 区 k **不本地执行**。
+    #[test]
+    fn zonek_eat_lottery_not_executed_locally() {
+        assert_eat_process_not_local(
+            "eat_lottery",
+            mir2_data::StdItem {
+                std_mode: 3,
+                shape: 11,
+                ..Default::default()
+            },
+            9102,
+        );
+    }
+
+    /// **M1c-2c 段 5 · 分支门【城堡/行会回城】**：`StdMode 3 && Shape 5` ⇒ `Process`
+    /// （只 Shape5 读进程级 `castle_war_states`）⇒ 区 k **不本地执行**。
+    #[test]
+    fn zonek_eat_castle_not_executed_locally() {
+        assert_eat_process_not_local(
+            "eat_castle",
+            mir2_data::StdItem {
+                std_mode: 3,
+                shape: 5,
+                ..Default::default()
+            },
+            9103,
+        );
+    }
+
+    /// **M1c-2c 段 5 · 分支门【解包】（端到端）**：`StdMode 31 / AniCount 0` 的捆装包在区 k
+    /// **本地执行** `handle_eat_cmd(proc=None)` ⇒ 6×`SM_ADDITEM(200)`（本区会话写回）
+    /// + `SM_EAT_OK(635)` + 计数器消费 6（2a 共享 `item_number`）。
+    ///
+    /// 走生产同一路径 `handle_zone_command_with_tail_and_shared`（→ `handle_zone_command_on`
+    /// 的 `CM_EAT` 本地臂），`unbind_list` 取自 `SharedServices`（P1）。
+    /// 变异：删本地臂 / 不给环境 `unbind_list` ⇒ 0 帧 ⇒ 红；`proc=None` 误拦解包支 ⇒ 红。
+    #[test]
+    fn zonek_eat_unpack_executes_locally() {
+        let (mut state, actor) = landed("eat_unpack", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            50,
+            mir2_data::StdItem {
+                name: "捆装包".into(),
+                std_mode: 31,
+                shape: 5,
+                weight: 1,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        shared.enter_cfg.catalog.insert(
+            60,
+            mir2_data::StdItem {
+                name: "解包物".into(),
+                std_mode: 0,
+                weight: 2,
+                dura_max: 7,
+                ..Default::default()
+            },
+        );
+        let mut unbind = game_svr::unbindlist::UnbindList::default();
+        unbind.map.insert(5, "解包物".to_string());
+        shared.unbind_list = std::sync::Arc::new(unbind);
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 29_033_300,
+                index: 50,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_eat = cmd(game_svr::useitem::CM_EAT, 0, 0, 0);
+        cmd_eat.recog = 29_033_300;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state, &gates, "hero", 7, &cmd_eat, None, &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_EAT 解包支必须在区 k 本地接线（Dispatched）"
+        );
+        let mut additem = 0usize;
+        let mut saw_ok = false;
+        let mut saw_weight = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            match cm.ident {
+                game_svr::bag::SM_ADDITEM => {
+                    additem += 1;
+                    assert_eq!(cm.recog, actor, "SM_ADDITEM.Recog = ActorId");
+                }
+                game_svr::useitem::SM_EAT_OK => saw_ok = true,
+                mir2_protocol::messages::SM_WEIGHTCHANGED => saw_weight = true,
+                _ => {}
+            }
+        }
+        assert_eq!(additem, 6, "解包必须本地出 6 条 SM_ADDITEM(200)");
+        assert!(saw_ok, "解包必须出 SM_EAT_OK(635)");
+        assert!(saw_weight, "解包必须出 SM_WEIGHTCHANGED(622)");
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(
+            sg.state.item_list.len(),
+            6,
+            "背包净增 6 件（捆装包已被移除）"
+        );
+        assert!(
+            sg.state.item_list.iter().all(|it| it.index == 60),
+            "解包产物必须是 UnbindList[Shape=5] 指向的模板（index 60）"
+        );
+        assert_eq!(
+            shared
+                .item_number
+                .load(std::sync::atomic::Ordering::Relaxed),
+            6,
+            "解包 6 件必须消费 2a 共享计数器 6 次"
+        );
+    }
+
+    /// **M1c-2c 段 5 · `proc=None`「先判后消费」牙 `eat_proc_none_does_not_execute_process_branches`**：
+    /// 区 k 本地臂以 `proc=None` 直调 `handle_eat_cmd` 时，脚本/彩票/行会回城三支必须**先判后消费**——
+    /// 计数（`zone_cmd_unsupported +1`）+ 直接返回：**零帧、背包不变**（不许先跑 `use_item` 再补票）。
+    ///
+    /// 变异：删 `proc=None` 守卫 ⇒ 脚本件会走进 `use_item`（帧/背包可能变）且计数消失 ⇒ 红。
+    #[test]
+    fn eat_proc_none_does_not_execute_process_branches() {
+        let (mut state, actor) = landed("eat_proc_none", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "脚本食".into(),
+                std_mode: 31,
+                ani_count: 2,
+                ..Default::default()
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9_201,
+                index: 1,
+                dura: 1,
+                dura_max: 1,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let u0 = perf_counters::zone_cmd_unsupported();
+        handle_eat_cmd(
+            9_201,
+            0,
+            0,
+            None,
+            "hero",
+            7,
+            &state.host.online,
+            &mut state.host.ground_sessions,
+            &gates,
+            &catalog,
+            &mut state.host.world,
+            &MsgColors::default(),
+            90,
+            &game_svr::strings::StringConf::defaults(),
+            None,
+            &unbind,
+            &item_number,
+            // **区 k 本地臂形态**：无进程态。
+            None,
+            crate::config::WinLotteryCfg::default(),
+            10_000_000,
+            crate::config::WeaponMakeLuckCfg::default(),
+        );
+        assert!(
+            perf_counters::zone_cmd_unsupported() > u0,
+            "proc=None 遇进程支必须先计数（zone_cmd_unsupported +1）"
+        );
+        assert!(rx.try_recv().is_err(), "proc=None 遇进程支必须零帧");
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 1, "背包不得变化（物品不被消费）");
+        assert_eq!(sg.state.item_list[0].make_index, 9_201);
+    }
+
+    /// **M1c-2c 段 5 · 牙 6 `bang_say_stays_unsupported`（A20 守恒）**：区 k 投 `!x` 的 `CM_SAY`
+    /// ⇒ ① 分类 `Unsupported`（`zonek_inbound_unsupported +1`）② **不进 A6 邮箱** ③
+    /// **不置 `control_pending`** ④ 本地执行体（真实 `handle_zone_command_on`）**零帧** +
+    /// `zone_cmd_unsupported +1`。
+    ///
+    /// **若将来实现 `!` 的邮箱变体，本牙按定义转红**（A20 防倒退提醒牙）。
+    #[test]
+    fn bang_say_stays_unsupported() {
+        let (_g, path) = m1c2c_arm_counters("bang_say");
+        let (mut state, actor) = landed("bang_say", zone::ZoneId::new(1));
+        let shared = SharedServices::for_test();
+        {
+            let sg = crate::tests::test_session_ground(actor);
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mk_ev = || GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "hero".to_string(),
+            socket: 7,
+            cmd: cmd(chat::CM_SAY, 0, 0, 0),
+            tail: Some("!x".to_string()),
+        };
+        // ① 分类面：`!` 支 = Unsupported（不属 Local，也不属 Process）。
+        let ev = mk_ev();
+        assert_eq!(
+            classify_local_event(
+                &ev,
+                &state.host.ground_sessions,
+                &shared.enter_cfg.catalog,
+                &state.host.world,
+            ),
+            ZoneCmdClass::Unsupported,
+            "`!` 频道族必须 Unsupported（A20：不实现邮箱变体）"
+        );
+        // ② 机械分派面：Unsupported ⇒ 交执行体，**不碰邮箱/不置位**；`zonek_inbound_unsupported +1`。
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let mut pending = std::collections::BTreeMap::new();
+        let mut exec_calls = 0usize;
+        let mut buffer = std::collections::VecDeque::from([SeqEvent { seq: 1, ev }]);
+        let u0 = perf_counters::zonek_inbound_unsupported();
+        let d0 = perf_counters::zonek_inbound_drained();
+        let _ = execute_local_budget(
+            &mut buffer,
+            &mut pending,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            &|s: &SeqEvent| match &s.ev {
+                GateEvent::Command { cmd, tail, .. } => {
+                    if cmd.ident == chat::CM_SAY && tail.as_deref() == Some("!x") {
+                        ZoneCmdClass::Unsupported
+                    } else {
+                        ZoneCmdClass::Local
+                    }
+                }
+                _ => ZoneCmdClass::Unsupported,
+            },
+            |item, class, pending, b| {
+                let mut exec =
+                    |_e: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
+                        exec_calls += 1;
+                    };
+                a6_dispatch_local(
+                    item,
+                    class,
+                    Some(&inbox),
+                    &mut state.host.ground_sessions,
+                    pending,
+                    zone::ZoneId::new(1),
+                    5,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(
+            perf_counters::zonek_inbound_unsupported() - u0,
+            1,
+            "`!` 支必须计入 zonek_inbound_unsupported（+1）"
+        );
+        assert!(
+            inbox.lock().expect("inbox").is_empty(),
+            "`!` 不得进 A6 邮箱"
+        );
+        assert_eq!(
+            state.host.ground_sessions["hero"].a6.control_pending, 0,
+            "`!` 不得置 control_pending"
+        );
+        assert!(pending.is_empty(), "`!` 不得进暂缓队列");
+        assert_eq!(exec_calls, 1, "Unsupported 仍交执行体（第 3 步口径）");
+        assert_eq!(
+            perf_counters::zonek_inbound_drained() - d0,
+            1,
+            "被消费并作出处置 ⇒ drained +1"
+        );
+        // ③ 零帧面：真实处置体不本地执行 `!`（`zone_cmd_unsupported +1`、零帧）。
+        let (gates, mut rx) = gates_and_rx();
+        let u_cmd0 = perf_counters::zone_cmd_unsupported();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!x"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Unsupported,
+            "`!` 在区 k 处置体必须 Unsupported"
+        );
+        assert!(
+            perf_counters::zone_cmd_unsupported() > u_cmd0,
+            "区 k 未接线计数必须 +1（zone_cmd_unsupported）"
+        );
+        assert!(rx.try_recv().is_err(), "`!` 不得本地出帧（零帧）");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// **M1c-2c 牙 1【行为】`eat_branch_is_exhaustive_fail_closed`**：`CM_EAT` 分支穷举 + 安全默认。

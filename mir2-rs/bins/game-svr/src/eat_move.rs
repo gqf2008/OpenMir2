@@ -119,7 +119,9 @@ pub(crate) fn maybe_eat_move(
     dead: bool,
     no_drug: bool,
     // **IT-13 行会回城**：`PlayObject.InGuildWarArea` 的每 actor 会话位（宿主 `castle_war_states`）。
-    castle_war_states: &HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    // **M1c-2c 段 5**：`None` = 区 k 的本地臂（无进程态）——只有 **Shape 5** 读它（Shape 1/2/3
+    // 不需要）；Shape 5 在 `None` 下不执行（交回 `use_item` 的失败帧，零副作用）。
+    castle_war_states: Option<&HashMap<i32, mir2_world_bevy::castle::CastleWarState>>,
     // 红字 `SM_SYSMESSAGE` 的颜色（`[Setup] RedMsgFColor/BColor`）。
     colors: &crate::MsgColors,
 ) -> bool {
@@ -188,6 +190,12 @@ pub(crate) fn maybe_eat_move(
         // 非战区但无 `MasterGuild == MyGuild` 的城 ⇒ 红字「无效」但**吃**（635，位置不变）；
         // 有效城堡 ⇒ `BaseObjectMove(castle.HomeMap, GetHomeX(), GetHomeY())`（先 X 后 Y 各抽 `Random(9)`）。
         5 => {
+            // **M1c-2c 段 5**：区 k 本地臂（`proc=None`）不持有进程态 ⇒ Shape 5 不本地执行：
+            // 交回 `use_item`（StdMode3/Shape5 无臂 ⇒ `SM_EAT_FAIL(636)`，零副作用）。
+            // 生产不可达（分类器已把 Shape5 归 `MoveFamily` → 区 0）；这是安全默认。
+            let Some(castle_war_states) = castle_war_states else {
+                return false;
+            };
             // `MyGuild == null` ⇒ `case 5` 整段不做、`result=false` ⇒ 交回 `use_item` 落 636。
             let Some(guild) = world.actor_guild(actor_id) else {
                 return false;
@@ -329,6 +337,7 @@ mod tests {
     use crate::ability::StdItemCatalog;
     use crate::bag::BagItem;
     use crate::handle_eat_cmd;
+    use crate::EatProcessEnv;
     use crate::{online_set, MsgColors, OnlineEntry, SessionGround};
     use mir2_protocol::frame::CommandMessage;
     use mir2_shared::rng::RandomNumber;
@@ -708,17 +717,19 @@ mod tests {
                 Some(&reg),
                 &unbind,
                 &item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                None,
-                // IT-16 尾参（本组用例不走彩票支；传进程级缺省句柄/配置，抽数不发生）。
-                &crate::winlottery::WinLotteryShared::new(
-                    crate::config::WinLotteryCfg::default().init_state(),
-                ),
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: None,
+                    // IT-16 尾参（本组用例不走彩票支；传进程级缺省句柄/配置，抽数不发生）。
+                    lottery: &crate::winlottery::WinLotteryShared::new(
+                        crate::config::WinLotteryCfg::default().init_state(),
+                    ),
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
 
             // ① 生产换图簇：与 world tick 同一条路径（`drain_map_change`），展示表给 Light=0/Feature=0/
@@ -1116,16 +1127,18 @@ mod tests {
                 Some(&reg),
                 &unbind,
                 &item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                None,
-                &crate::winlottery::WinLotteryShared::new(
-                    crate::config::WinLotteryCfg::default().init_state(),
-                ),
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: None,
+                    lottery: &crate::winlottery::WinLotteryShared::new(
+                        crate::config::WinLotteryCfg::default().init_state(),
+                    ),
+                    castle_war_states: &war_states,
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &war_states,
             );
 
             let mut displays = crate::downlink::DisplayTable::new();
