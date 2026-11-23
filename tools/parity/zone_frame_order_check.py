@@ -130,15 +130,19 @@ def _selftest():
     def ck(name, cond, detail=""):
         checks.append((name, bool(cond), detail))
 
+    A = 4194326
+
     def f_gm(actor, seq=1, recog=None):
         return {"seq": seq, "t_ms": seq, "phase": "gamegate", "conn": "gamegate",
                 "ident": GM_IDENT, "recog": actor if recog is None else recog,
                 "param": 4452, "tag": 0, "series": 1, "frame_class": "protocol",
                 "body_text": "当前日期时间: 2026-11-23 18:00:00"}
 
-    def f_notice(seq=0):
+    def f_notice(seq=0, recog=None):
+        # 实测形态：登录公告 ident=100、**recog=收件人 P 本人**、param=65499（与 GM 回复只差 param）
         return {"seq": seq, "t_ms": seq, "phase": "gamegate", "conn": "gamegate",
-                "ident": GM_IDENT, "recog": 0, "param": 65499, "tag": 0, "series": 1,
+                "ident": GM_IDENT, "recog": A if recog is None else recog,
+                "param": 65499, "tag": 0, "series": 1,
                 "frame_class": "protocol", "body_text": "欢迎进入"}
 
     def f_move(seq=2):
@@ -150,7 +154,6 @@ def _selftest():
         return {"seq": seq, "t_ms": seq, "phase": "login", "conn": "login",
                 "ident": 529, "recog": 0, "body_text": "热血传奇/Idle/"}
 
-    A = 4194326
     base = [f_notice(), f_gm(A, 3), f_gm(A, 4), f_move(5)]
     rc, rep = analyze_order(base, base, A, A, 2)
     ck("order_equal_green", rc == 0 and rep["golden_tags"] == ["gm#1", "gm#2", "move"],
