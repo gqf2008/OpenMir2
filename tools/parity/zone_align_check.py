@@ -25,10 +25,15 @@
   * 键 = `sha256(f"{side}|{ident}|{param}|{tag}|{series}|{body_hex}")`；`--side A|B` 必须显式给
     （golden A 对 test A、golden B 对 test B）。非 off 模式缺/错 `--side` ⇒ rc=2（fail-closed）。
   * 边界：只纳入 `recog==0`；`recog=-1/1/2000`（系统通告）与实体帧仍在 `other`。
+- **gate 死槽桶（`--dead-socket-bucket`，默认关）**：D 判据的窄归因。sidecar 行（同 socket）
+  **且**同 socket 的 gate 死槽 WRN（`下发 SM_* 帧时 socket=N 的槽不存在，丢弃 L 字节`，
+  字节数一致）两条证据同时命中，才把该行记为 `dropped_at_gate_dead_socket`（不计 unconsumed，
+  但计数与逐行明细必须打印）。缺任一证据 ⇒ 仍算 `unconsumed`。**禁止**用 dead-socket 计数
+  作为归因条件。启用时需 `--gate-log <本次 test 的 game-svr.out.log>`，缺失/不可读 ⇒ rc=2。
 - 自测：`--self-selftest`（离线、合成夹具、临时目录；不读仓库状态）。
 - 退出码：0 全过；1 A/C1/D 红（judge 模式下含 self 红）；2 判不了。
 """
-import argparse, json, sys, hashlib, collections, os, tempfile
+import argparse, json, sys, hashlib, collections, os, tempfile, re
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PROBE = os.environ.get("MIR2_PROBE_DIR", os.path.join(_REPO_ROOT, "tools", "probe"))
@@ -118,8 +123,31 @@ def _self_args_error(mode, side):
         return "--self-bucket 非 off 时 --side 必填（A|B）"
     return None
 
+_DEAD_SOCKET_WRN = re.compile(r"下发 SM_\* 帧时 socket=(\d+) 的槽不存在，丢弃 (\d+) 字节")
+
+def _gate_dead_socket_evidence(path, socket):
+    """读 gate 日志里的死槽 WRN，返回 Counter{丢弃字节数: 次数}（只收该 socket）。"""
+    ev = collections.Counter()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = _DEAD_SOCKET_WRN.search(line)
+            if m and int(m.group(1)) == socket:
+                ev[int(m.group(2))] += 1
+    return ev
+
+def _dead_bucket_error(bucket, gate_log):
+    """`--dead-socket-bucket` 的 fail-closed 校验。返回错误串或 None。"""
+    if not bucket:
+        return None
+    if not gate_log:
+        return "--dead-socket-bucket 需要 --gate-log（本次 test 跑的 game-svr.out.log）"
+    if not os.path.exists(gate_log):
+        return "gate 日志不存在：%s" % gate_log
+    return None
+
 def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys="",
-             ignore_idents="", trim_tail_ms=0, roles="", self_bucket="off", side=""):
+             ignore_idents="", trim_tail_ms=0, roles="", self_bucket="off", side="",
+             dead_socket_bucket=False, gate_log=""):
     """核心比较：返回 (out_dict, rc)。cli 与 --self-selftest 共用同一实现。"""
     def trim(seq):
         if trim_tail_ms <= 0 or not seq:
@@ -160,6 +188,27 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
                 W.append(f)
     unconsumed = sum(pool.values())
     judge_d_red = unconsumed > 0
+    # **gate 死槽桶（窄）**：sidecar 行 + 同 socket/同字节数的 gate WRN，两条证据齐全才归因。
+    dead_attr = []
+    if dead_socket_bucket:
+        ev = _gate_dead_socket_evidence(gate_log, socket)
+        for sha in sorted(pool):
+            if pool[sha] <= 0:
+                continue
+            lines_for_sha = [x for x in side_lines if x["sha256"] == sha]
+            per_len = collections.Counter(x["len"] for x in lines_for_sha)
+            for ln in sorted(per_len):
+                take = min(pool[sha], per_len[ln], ev.get(ln, 0))
+                for _ in range(take):
+                    pool[sha] -= 1
+                    ev[ln] -= 1
+                    hit = next(x for x in lines_for_sha if x["len"] == ln)
+                    dead_attr.append({"sha256": sha[:16], "socket": socket,
+                                      "len": ln, "tick": hit.get("tick")})
+                if pool[sha] <= 0:
+                    break
+        unconsumed = sum(pool.values())
+        judge_d_red = unconsumed > 0
 
     role_map = {}
     if roles:
@@ -250,6 +299,11 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
         "world_idents": dict(collections.Counter(f["ident"] for f in W)),
         "crosszone_idents": dict(collections.Counter(f["ident"] for f in X)),
     }
+    if dead_socket_bucket:
+        out["dead_socket_bucket"] = True
+        out["gate_log"] = gate_log
+        out["dead_socket_attributed_count"] = len(dead_attr)
+        out["dead_socket_attributed"] = dead_attr[:20]
     # self 桶：additive（`other_frames_*` 仍含 recog=0，self 是它的子集；不改旧字段）。
     self_red = 0
     if self_bucket in ("report", "judge"):
@@ -289,12 +343,25 @@ def _selftest():
     roles = "101,102,201,202"
 
     with tempfile.TemporaryDirectory(prefix="zone-align-selftest-") as tmp:
-        def case(name, gframes, tframes):
+        def case(name, gframes, tframes, sidecar_rows=None):
             g = write_dir(os.path.join(tmp, name, "golden"), gframes)
             t = write_dir(os.path.join(tmp, name, "test"), tframes)
             sc = os.path.join(tmp, name, "cross-src.jsonl")
-            open(sc, "w", encoding="utf-8").close()
+            with open(sc, "w", encoding="utf-8") as f:
+                for r in (sidecar_rows or []):
+                    f.write(json.dumps(r, ensure_ascii=False) + chr(10))
             return g, t, sc
+
+        def gate_log(name, lines):
+            p = os.path.join(tmp, name + ".gate.log")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(ln + chr(10))
+            return p
+
+        def wrn(sock, ln):
+            return ("09:47:37.230 [WRN] 下发 SM_* 帧时 socket=%d 的槽不存在，丢弃 %d 字节"
+                    "（该会话后续落空不再逐条告警）" % (sock, ln))
 
         g, t, sc = case("diff", [judged_g, self_ok], [judged_t, self_bad_t])
         out, rc = run_core(g, t, sc, 1000, roles=roles, self_bucket="off")
@@ -339,7 +406,44 @@ def _selftest():
         out, rc = run_core(g, t, sc, 1000, roles=roles, self_bucket="judge", side="B")
         ck("side_b_works", rc == 1 and out.get("self_side") == "B", f"rc={rc}")
 
-    expected = 10
+        # ---- gate 死槽桶（窄：sidecar 行 + 同 socket/同字节数 WRN 两条证据）----
+        gone = frame(11, 168, param=320, tag=268, series=6, body="aa")
+        gone2 = frame(11, 168, param=319, tag=268, series=6, body="aa")
+        one = [{"tick": 68, "socket": 1000, "len": 13, "sha256": sha12(gone),
+                "src": "CrossZone", "surface": "RefMsg"}]
+        two = one + [{"tick": 69, "socket": 1000, "len": 13, "sha256": sha12(gone2),
+                      "src": "CrossZone", "surface": "RefMsg"}]
+        gd, td, sd = case("dead", [judged_g], [judged_t], one)
+        w_ok = gate_log("dead_ok", [wrn(1000, 13)])
+        w_empty = gate_log("dead_empty", [])
+        w_len = gate_log("dead_len", [wrn(1000, 99)])
+        w_sock = gate_log("dead_sock", [wrn(999, 13)])
+        out, rc = run_core(gd, td, sd, 1000, roles=roles, dead_socket_bucket=True, gate_log=w_ok)
+        ck("dead_bucket_attributed", rc == 0 and out.get("sidecar_unconsumed") == 0
+           and out.get("dead_socket_attributed_count") == 1
+           and out.get("dead_socket_attributed", [{}])[0].get("len") == 13,
+           f"rc={rc} unconsumed={out.get('sidecar_unconsumed')} attributed={out.get('dead_socket_attributed_count')}")
+        out, rc = run_core(gd, td, sd, 1000, roles=roles, dead_socket_bucket=True, gate_log=w_empty)
+        ck("dead_bucket_no_wrn_red", rc == 1 and out.get("sidecar_unconsumed") == 1
+           and out.get("dead_socket_attributed_count") == 0, f"rc={rc}")
+        out, rc = run_core(gd, td, sd, 1000, roles=roles, dead_socket_bucket=True, gate_log=w_len)
+        ck("dead_bucket_len_mismatch_red", rc == 1 and out.get("sidecar_unconsumed") == 1,
+           f"rc={rc} unconsumed={out.get('sidecar_unconsumed')}")
+        out, rc = run_core(gd, td, sd, 1000, roles=roles, dead_socket_bucket=True, gate_log=w_sock)
+        ck("dead_bucket_socket_mismatch_red", rc == 1 and out.get("sidecar_unconsumed") == 1,
+           f"rc={rc}")
+        gd2, td2, sd2 = case("dead2", [judged_g], [judged_t], two)
+        out, rc = run_core(gd2, td2, sd2, 1000, roles=roles, dead_socket_bucket=True, gate_log=w_ok)
+        ck("dead_bucket_two_lines_one_wrn", rc == 1 and out.get("sidecar_unconsumed") == 1
+           and out.get("dead_socket_attributed_count") == 1, f"rc={rc} unconsumed={out.get('sidecar_unconsumed')}")
+        ck("dead_bucket_requires_log", _dead_bucket_error(True, "") is not None
+           and _dead_bucket_error(True, os.path.join(tmp, "nope.log")) is not None
+           and _dead_bucket_error(False, "") is None, "缺/不存在 ⇒ 错误；关 ⇒ 不要求")
+        out, rc = run_core(gd, td, sd, 1000, roles=roles)
+        ck("dead_bucket_off_unchanged", rc == 1 and out.get("sidecar_unconsumed") == 1
+           and "dead_socket_attributed_count" not in out, f"rc={rc}")
+
+    expected = 17
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print(f"SELFTEST {name} {'ok' if cond else 'FAIL'} {detail}")
@@ -365,6 +469,9 @@ def main():
                     help="recog==0 自我帧单独归桶：off=旧行为；report=只报告不改 rc；judge=计入 rc")
     ap.add_argument("--side", choices=("", "A", "B"), default="",
                     help="self 桶的收件人侧（非 off 时必填；显式给，不从目录名推断）")
+    ap.add_argument("--dead-socket-bucket", action="store_true",
+                    help="D 判据窄归因：sidecar 行 + 同 socket/同字节数 gate 死槽 WRN 才记归因丢弃")
+    ap.add_argument("--gate-log", default="", help="本次 test 跑的 game-svr.out.log（--dead-socket-bucket 时必填）")
     ap.add_argument("--self-selftest", action="store_true", help="离线自测（合成夹具）")
     a = ap.parse_args()
     if a.self_selftest:
@@ -376,10 +483,16 @@ def main():
     if err:
         print(json.dumps({"error": err, "self_bucket": a.self_bucket, "side": a.side}, ensure_ascii=False))
         sys.exit(2)
+    derr = _dead_bucket_error(a.dead_socket_bucket, a.gate_log)
+    if derr:
+        print(json.dumps({"error": derr, "dead_socket_bucket": a.dead_socket_bucket,
+                          "gate_log": a.gate_log}, ensure_ascii=False))
+        sys.exit(2)
     out, rc = run_core(a.golden_dir, a.test_dir, a.sidecar, a.socket,
                        mutant=a.mutant, entry_window_keys=a.entry_window_keys,
                        ignore_idents=a.ignore_idents, trim_tail_ms=a.trim_tail_ms,
-                       roles=a.roles, self_bucket=a.self_bucket, side=a.side)
+                       roles=a.roles, self_bucket=a.self_bucket, side=a.side,
+                       dead_socket_bucket=a.dead_socket_bucket, gate_log=a.gate_log)
     print(json.dumps(out, ensure_ascii=False, indent=1))
     sys.exit(rc)
 
