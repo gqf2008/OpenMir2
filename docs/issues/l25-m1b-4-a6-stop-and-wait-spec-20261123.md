@@ -18,8 +18,9 @@
 - `TickIo.inbound_local_buffer: VecDeque<GateEvent>` + `TickIo.inbound_local_carry_prefix: usize`
   （段的工作区，锁外交接、tick 后 swap 回）；段内消费顺序 **先 `pending_local` → 再
   `io.inbound_local_buffer`**（r4 §3.3，原句引用，不另立顺序）；
-- 计数（第 3 步 r5 已是 **6 列**）：`zonek_inbound_drained/carry/budget_hit/overflow_dropped/
-  pending_discarded/unsupported_dropped`；**A6 自身新增 2 列**（`zonek_control_defer_overflow` /
+- 计数（第 3 步 **r6** 仍是 **6 列**）：`zonek_inbound_drained/carry/budget_hit/overflow_dropped/
+  pending_discarded/unsupported`（**`unsupported` = 分类归属计数**，第 3 步不丢；第 5 步接管丢弃时
+  另加 `zonek_inbound_unsupported_dropped`）；**A6 自身新增 2 列**（`zonek_control_defer_overflow` /
   `zonek_control_wait_timeout`，见 §6 末结论；若实施后实际列名不同，只报差异清单）。
 
 **来自第 2 步（分类器）**：
@@ -76,7 +77,10 @@
 - `Local` 且 `control_in_flight.is_some()` ⇒ **不执行**，`deferred_local.push_back({ident, payload,
   at_tick: 段内 tick})`；
 - `Local` 且 `None` ⇒ 就地执行（正常路径）；
-- `Unsupported` ⇒ 记 `zone_cmd_unsupported`（既有），不涉及本机制。
+- `Unsupported` ⇒ **第 3 步**：`zone_cmd_class` 归属计 `zonek_inbound_unsupported`、**仍交
+  `handle_zone_command`**（handler 侧 `zone_cmd_unsupported` 照计，行为不变）；**第 5 步接管丢弃**
+  （届时本行改为「丢弃并计数、不进 `zonek_inbound_drained`」，并新增
+  `zonek_inbound_unsupported_dropped` 列）；**A6（第 4 步）不涉及本机制。**
 
 ### 3.3 决策（tick 顶、锁内、**不执行**）
 区 k 线程循环顶（`fill_pending` 之后、锁 1 之前）用**一次短锁**做决策（与现有 `closed/cmd` 的
@@ -138,8 +142,8 @@ stop-and-wait 让本地命令等在飞 `@`：`@` 在 T+1 执行、清位；延�
   `INBOUND_LOCAL` 段内；`zonek_control_*` 恒 0。
 - **失败可观测面（新列）**：`zonek_control_defer_overflow`、`zonek_control_wait_timeout`
   （每 tick 增量；TSV 同位置追加；**不设 `*_all_zones` 派生列**——区 0 无同名语义，派生只有在区 0
-  也接 A6 时才有意义）。⇒ 全部 `zonek_*` 合计 = 第 3 步 6 列 + 本步 2 列 = **8 列**（派生列第 3 步 6 个，
-  本步 0 个）。
+  也接 A6 时才有意义）。⇒ 全部 `zonek_*` 合计 = 第 3 步 6 列 + 本步 2 列 = **8 列**（派生列第 3 步
+  **5 个**——`inbound_carry_all_zones` 因混合分母已删，见第 3 步 r6 §4；本步 0 个）。
 - **A6 是否还需要新的计数列（一句话结论）**：**需要 2 个**（`zonek_control_defer_overflow` /
   `zonek_control_wait_timeout`，均仅区 k、无派生），其余复用第 3 步的 `zonek_inbound_*`。
 - **边界（写死）**：A6 只保证"同玩家跨类命令的相对帧序"；**不**保证同 tick 到达、不改帧内容；
