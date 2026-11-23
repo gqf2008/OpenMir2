@@ -239,7 +239,11 @@ mod tests {
     use super::*;
 
     fn base_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("dbsrv-route-{tag}-{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d =
+            std::env::temp_dir().join(format!("dbsrv-route-{tag}-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

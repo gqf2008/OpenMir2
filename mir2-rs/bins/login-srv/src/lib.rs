@@ -403,8 +403,13 @@ mod account_db_override_teeth {
     const DBSVR_CONN: &str = "server=10.0.0.9;port=13306;uid=dbuser;pwd=dbpw;database=mir2_db;";
 
     fn fixture(name: &str, dbsvr_conn: Option<&str>) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("lsrv-db-override-{}-{name}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "lsrv-db-override-{}-{name}-{seq}",
+            std::process::id()
+        ));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("LoginSrv")).unwrap();
         if let Some(conn) = dbsvr_conn {

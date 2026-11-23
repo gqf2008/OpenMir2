@@ -179,8 +179,13 @@ mod tests {
 
     /// 测试专用临时目录（跟随仓库既有写法：`std::env::temp_dir` + 进程号，无外部依赖）。
     fn temp_envir(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mir2-monitems-attach-{tag}-{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "mir2-monitems-attach-{tag}-{}-{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(MONITEMS_DIR)).unwrap();
         dir

@@ -319,8 +319,11 @@ mod tests {
     use super::*;
 
     fn write_conf(body: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("gg-cfg-{}-{}", std::process::id(), body.len()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固；
+        // 旧键用 `body.len()` 代身份，等长的两份 body 会撞同一目录）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("gg-cfg-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("config.conf");
         std::fs::write(&p, body).unwrap();
