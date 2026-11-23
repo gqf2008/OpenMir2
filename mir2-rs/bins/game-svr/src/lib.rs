@@ -13433,10 +13433,26 @@ fn push_charstatuschanged_except_self(
         if target_id == actor_id {
             continue;
         }
+        // `Series` = **收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）
+        // ⇒ **逐 target 造**，禁止拿第一个观察者的 body 复用（这是本函数不能改走
+        // `send_ref_msg_to_targets` 的原因）。
+        let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
         let Some(t) = online.find_linear_actor(target_id) else {
+            // **A14**：跨区观察者（镜像）在**本区** `online` 里查不到。此前直接 `continue`
+            // ⇒ 两区下 A 永远收不到 B 的 `SM_CHARSTATUSCHANGED(657)` 观察者帧（golden 单区有）。
+            // 改走 ⑤ 邮箱；**语义逐字照抄 `send_ref_msg_to_targets` 对 online miss 的处理**
+            // （`world.entities.get(id).is_some_and(|e| e.mirror)` ⇒ `note_mirror_recipient(surface,
+            // world.mirror_route(id), bodies)`；`route=None` ⇒ 记 Unroutable，不投递、不 panic）。
+            if world.entities.get(target_id).is_some_and(|e| e.mirror) {
+                let body = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, hit_speed);
+                let _ = crate::cross_zone_frames::note_mirror_recipient(
+                    perf_counters::CrossRecipientSurface::RefMsg,
+                    world.mirror_route(target_id),
+                    std::slice::from_ref(&body),
+                );
+            }
             continue;
         };
-        let hit_speed = world.entities.get(target_id).map_or(0, |e| e.hit_speed);
         q.push(
             t.gate_idx,
             t.socket,
@@ -125651,6 +125667,94 @@ mod l2_s3_cross_recipient_tests {
             "镜像开 ⇒ 不得投 ⑤（否则与收件区 AOI 的 remove 帧重复）"
         );
         assert_eq!(drain_cross(&g), 0, "跨区邮箱必须为空");
+        assert!(rx.try_recv().is_err(), "不得有帧");
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **A14 正向牙（仓内可见部分）**：657 广播的**跨区观察者**（镜像）必须**投 ⑤**
+    /// （此前 `continue` ⇒ 两区下永远收不到），且 **per-target body**：`Series` 各取自己的
+    /// `HitSpeed`（本地观察者 7 / 镜像 0 ⇒ 两条 body 不同；"复用第一个观察者 body" 会让两者相同）。
+    ///
+    /// 两区实跑才覆盖的命题（仓内给不了）：A 收 `657 recog=B` 且与 B 的出现包 `10/41/657` 同 t 成组
+    /// —— 由 a7 两区场景覆盖。
+    ///
+    /// 变异：把镜像分支改回 `continue` ⇒ delivered+0 / 邮箱空 ⇒ 本条红。
+    #[test]
+    fn charstatuschanged_cross_zone_mirror_gets_own_body() {
+        const LOCAL: i32 = 2;
+        let _g = arm();
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        let mut p = mir2_world_bevy::EntitySpawn::new(SENDER, "P".to_string(), 5, 5);
+        p.race = 0;
+        p.view_range = 12;
+        world.add_entity(p);
+        let mut l = mir2_world_bevy::EntitySpawn::new(LOCAL, "L".to_string(), 5, 4);
+        l.race = 0;
+        l.view_range = 12;
+        l.hit_speed = 7;
+        world.add_entity(l);
+        let _ = world.tick();
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorUpsert::Inserted,
+            "前置：镜像插入"
+        );
+        arm_cross(&mut world);
+        let mut online = OnlineRegistry::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ul".into(),
+                chr_name: "L".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: LOCAL,
+            },
+        );
+        let (g, mut rx) = gates();
+        let d0 = delivered();
+        broadcast_charstatuschanged_except_self(&world, &online, &g, SENDER, 0x0203, 12);
+        assert_eq!(delivered() - d0, 1, "跨区观察者必须投 ⑤（RefMsg 面）");
+        assert_eq!(drain_cross(&g), 1, "T+1 排水 1 帧");
+        let mut local_series = None;
+        let mut cross_series = None;
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("12B 头");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+            assert_eq!(cm.recog, SENDER);
+            match socket {
+                901 => local_series = Some(cm.series),
+                900 => cross_series = Some(cm.series),
+                other => panic!("意外收件 socket={other}"),
+            }
+        }
+        assert_eq!(local_series, Some(7), "本地观察者 Series = 自己的 HitSpeed");
+        assert_eq!(
+            cross_series,
+            Some(0),
+            "镜像观察者 Series = 自己的 HitSpeed（0），不是复用的 7"
+        );
+        crate::cross_zone_frames::uninstall();
+    }
+
+    /// **A14 / 要求 2**：镜像观察者 `mirror_route=None` ⇒ 与 `send_ref_msg_to_targets` 同语义：
+    /// `note_mirror_recipient` 记 **Unroutable**（+1）、不投递、不 panic。
+    #[test]
+    fn charstatuschanged_mirror_without_route_counts_unroutable() {
+        let _g = arm();
+        crate::cross_zone_frames::uninstall();
+        let world = world_with_remote_mirror();
+        let online = local_online();
+        let (g, mut rx) = gates();
+        let (d0, u0) = (delivered(), unroutable());
+        broadcast_charstatuschanged_except_self(&world, &online, &g, SENDER, 0x0203, 12);
+        let (dd, du) = (delivered() - d0, unroutable() - u0);
+        assert_eq!(
+            (dd, du),
+            (0, 1),
+            "route=None ⇒ delivered+0 / unroutable+1（实际 {dd}/{du}）"
+        );
         assert!(rx.try_recv().is_err(), "不得有帧");
         crate::cross_zone_frames::uninstall();
     }
