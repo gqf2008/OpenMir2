@@ -344,6 +344,12 @@ pub struct PickUpOutcome {
     /// 成功拾取并入包的物品（`SM_ADDITEM` 的 `ClientItem` 尾输入）。
     /// `None` = 非普通物品成功路径（金币/失败/放回）。
     pub added_item: Option<BagItem>,
+    /// **A24**：本次从地面**实际删掉**的那一件（金币或普通物品）。
+    ///
+    /// 供接线层把删除**写回** world 的格子对象表（oracle `ClientPickUpItem` 里
+    /// `Envir.DeleteFromMap(CurrX, CurrY, CellType.Item, mapItem.ItemId, null) == 1` 的等价位置）；
+    /// `None` = 未删格（无物/归属门拒绝/满包/负重不足/`IncGold` 失败已放回）。
+    pub picked: Option<GroundItem>,
     /// 进 `MsgQueue` 的延时通知（**按出队序**，见模块头）。
     pub notices: Vec<QueuedNotice>,
 }
@@ -491,12 +497,15 @@ pub fn pick_up(
     let mut notices: Vec<QueuedNotice> = Vec::new();
     let mut immediate_frames: Vec<Frame> = Vec::new();
     let mut added_item: Option<BagItem> = None;
+    // **A24**：本次实际删掉的地面件（接线层据此写回 world 的格子对象表）。
+    let mut picked: Option<GroundItem> = None;
 
     if ctx.dealing {
         return PickUpOutcome {
             immediate_frames,
             notices,
             added_item: None,
+            picked: None,
         };
     }
 
@@ -505,6 +514,7 @@ pub fn pick_up(
             immediate_frames,
             notices,
             added_item: None,
+            picked: None,
         };
     };
 
@@ -527,15 +537,19 @@ pub fn pick_up(
             immediate_frames,
             notices: dequeue_order(notices),
             added_item: None,
+            picked: None,
         };
     }
 
     if ground.name.eq_ignore_ascii_case(GOLD_NAME) {
+        let mut picked: Option<GroundItem> = None;
         if map.delete_item(ctx.curr_x, ctx.curr_y, ground.item_id) == 1 {
             if inc_gold(state.gold, ground.count, ctx.human_max_gold) {
                 state.gold += ground.count;
                 // `SendRefMsg(RM_ITEMHIDE, …)` 是广播（不含自己），留给接线层。
                 update(&mut notices, RM_GOLDCHANGED);
+                // **A24**：删格成功且金币真的入账 ⇒ 世界侧同步删格（放回支不算）。
+                picked = Some(ground);
             } else {
                 let _ = map.put_item(ctx.curr_x, ctx.curr_y, ground);
             }
@@ -544,6 +558,7 @@ pub fn pick_up(
             immediate_frames,
             notices: dequeue_order(notices),
             added_item: None,
+            picked,
         };
     }
 
@@ -587,6 +602,8 @@ pub fn pick_up(
                     series: 1,
                 });
             }
+            // **A24**：删格 + 入包成功 ⇒ 世界侧同步删格（放回支不算）。
+            picked = Some(ground);
         } else {
             let _ = map.put_item(ctx.curr_x, ctx.curr_y, ground);
         }
@@ -596,6 +613,7 @@ pub fn pick_up(
         immediate_frames,
         notices: dequeue_order(notices),
         added_item,
+        picked,
     }
 }
 
@@ -1431,7 +1449,17 @@ mod tests {
             red_msg_f_color: 255,
             red_msg_b_color: 56,
         };
+        let expect_item_id = map
+            .get_item(ctx.curr_x, ctx.curr_y)
+            .expect("夹具地面有成件")
+            .item_id;
         let out = pick_up(&ctx, &mut map, &mut state);
+        // **A24**：成功拾取必须回报「被删掉的那一件」，供接线层写回 world。
+        assert_eq!(
+            out.picked.as_ref().map(|p| p.item_id),
+            Some(expect_item_id),
+            "成功拾取必须上报被删的地面件（item_id）"
+        );
         let ids: Vec<i32> = out.notices.iter().map(|n| n.ident).collect();
         assert_eq!(ids, vec![RM_WEIGHTCHANGED, RM_ITEMHIDE]);
         assert!((RM_WEIGHTCHANGED as u8) < (RM_ITEMHIDE as u8));
@@ -1484,6 +1512,7 @@ mod tests {
         assert_eq!(state.item_list, before);
         assert_eq!(map.item_count(), 1, "超重 ⇒ 物品必须放回地面");
         assert_eq!(map.get_item(ctx.curr_x, ctx.curr_y).unwrap().item_id, 70007);
+        assert!(out.picked.is_none(), "放回支不得上报删格（world 不得删）");
     }
 
     /// 金币拾取：`IncGold` 成功 ⇒ 删格 + `RM_GOLDCHANGED`；失败（超 `HumanMaxGold`）⇒ 放回、金币不变。
@@ -1525,6 +1554,7 @@ mod tests {
         assert_eq!(out.notices.len(), 1);
         assert_eq!(out.notices[0].ident, RM_GOLDCHANGED);
         assert_eq!(map.item_count(), 0);
+        assert!(out.picked.is_some(), "金币入账成功必须上报删格");
 
         let fail = cases
             .iter()
@@ -1556,6 +1586,7 @@ mod tests {
         assert_eq!(state.gold, 1000);
         assert!(out.notices.is_empty());
         assert_eq!(map.item_count(), 1);
+        assert!(out.picked.is_none(), "超上限放回支不得上报删格");
     }
 
     /// **PL-1 / P21**：`drop_item_down_p21` 的 StdMode 40 耐久回绕 + 恒 false（T-19）。

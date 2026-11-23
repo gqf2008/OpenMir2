@@ -12381,6 +12381,21 @@ impl World {
         out
     }
 
+    /// **A24**：把一次**成功拾取**删掉的格子对象从本 World 的地面表里摘掉
+    /// （`handle_ground_cmd` 在 `ground::pick_up` 成功后调用；等价 oracle
+    /// `ClientPickUpItem` 的 `Envir.DeleteFromMap(CurrX, CurrY, CellType.Item, mapItem.ItemId, null)`）。
+    ///
+    /// 只动格子对象表，不改 `floor_items_view_sorted`/对拍投影的语义。非拥有图（stub）或
+    /// 键不存在 ⇒ `false`（fail-closed：调用方只记 WRN，不伪造删除）。
+    pub fn remove_floor_item(&mut self, map_id: usize, x: i32, y: i32, item_id: i32) -> bool {
+        if !self.is_map_owned(map_id) {
+            return false;
+        }
+        self.maps
+            .get_mut(map_id)
+            .is_some_and(|m| m.remove_floor_item(x, y, item_id))
+    }
+
     /// 对拍用快照：**在地图上的**实体的 `(id, map, x, y, hp, level, exp, 视野列表)`，**按 id 升序**。
     ///
     /// **过滤 `add_to_mapped == false` 的理由**（卡 `openmir2-makeghost-lifecycle-m3` 的 parity
@@ -16233,6 +16248,38 @@ mod tests {
         );
         // 可拾起时刻 = 落地时的虚拟时钟（非 None/占位 0 的构造口径）
         assert!(view.iter().all(|v| v.can_pick_up_tick >= 0));
+    }
+
+    /// **A24**：`World::remove_floor_item` —— 拥有图上按 `item_id` 删格且视图同步消失；
+    /// 非拥有图 **fail-closed**（`false` 且格子不动）。
+    ///
+    /// 变异：把 `is_map_owned` 门去掉 ⇒ 最后一条断言红（非拥有图被删格）。
+    #[test]
+    fn remove_floor_item_updates_view_and_fails_closed_on_unowned_map() {
+        use crate::map::FloorItemMeta;
+        let mut w = World::new(8, 8);
+        let meta = |item_id: i32| FloorItemMeta {
+            kind: FloorItemKind::Item,
+            index: 1,
+            count: 1,
+            item_id,
+            of_base_object: 0,
+        };
+        assert!(w.maps[0].add_floor_item(2, 3, 9, meta(55), 0));
+        assert_eq!(w.floor_items_view_sorted().len(), 1);
+        assert!(w.remove_floor_item(0, 2, 3, 55), "拥有图 + 键命中 ⇒ 删格");
+        assert!(w.floor_items_view_sorted().is_empty(), "视图必须同步消失");
+        assert!(!w.remove_floor_item(0, 2, 3, 55), "已删 ⇒ false");
+
+        // 非拥有图（stub）⇒ fail-closed，不得动格子。
+        assert!(w.maps[0].add_floor_item(2, 3, 10, meta(56), 0));
+        w.set_map_ownership(&[false]);
+        assert!(!w.remove_floor_item(0, 2, 3, 56), "非拥有图 ⇒ false");
+        assert_eq!(
+            w.maps[0].cell(2, 3).obj_list.len(),
+            1,
+            "fail-closed：非拥有图不得删格"
+        );
     }
 
     /// 攻击目标判定（`is_proper_target`）：F-K 修复后按 oracle `IsProperTarget` 忠实建模。

@@ -447,6 +447,34 @@ impl MapGrid {
         self.add_cell_object(x, y, CellType::Item, obj_id, Some(meta), add_time)
     }
 
+    /// **A24**：把**已成功拾取/删除**的地面物从格子对象表里摘掉——oracle
+    /// `Envir.DeleteFromMap(nX, nY, CellType.Item, itemId, null)`（`Envirnoment.cs:635`）的
+    /// 格子簿记半边。
+    ///
+    /// 键 = `FloorItemMeta.item_id`（与 `ground::GroundMap::delete_item` 同口径：
+    /// `item_id != 0 && meta.item_id == item_id`）。只删 `CellType::Item` 且携带 `FloorItemMeta`
+    /// 的对象；演员/事件/route 格对象一律不碰。返回是否真的删掉（`false` = 该格无此件 ⇒ 调用方留痕）。
+    ///
+    /// 红检：把 `position` 里的 `m.item_id == item_id` 比较删掉（见 `Item` 即删）⇒
+    /// `remove_floor_item_matches_item_id_only` 的「只删键匹配的那一件 / 键不存在 ⇒ false」
+    /// 断言红。
+    pub fn remove_floor_item(&mut self, x: i32, y: i32, item_id: i32) -> bool {
+        if item_id == 0 {
+            return false;
+        }
+        let (cell, success) = self.get_cell_info_mut(x, y);
+        if !success {
+            return false;
+        }
+        if let Some(pos) = cell.obj_list.iter().position(|o| {
+            o.cell_type == CellType::Item && o.item.is_some_and(|m| m.item_id == item_id)
+        }) {
+            cell.remove_at(pos);
+            return true;
+        }
+        false
+    }
+
     /// 对应 `Envirnoment.AddMapRoute(nX, nY, mapRoute)`（`Envirnoment.cs:169-193`）：
     /// `CellMatch` 且在界内 `cell.Valid` 时，往该格 `ObjList` 追加
     /// `CellObject{CellType=MapRoute, CellObjId=route_id}`，并把 `route_id → hop` 记进本图表。
@@ -1275,5 +1303,40 @@ mod tests {
         let g = MapGrid::new(8, 8);
         assert!(g.arround_door_opened(5, 5));
         assert!(g.arround_door_opened(0, 0));
+    }
+
+    /// **A24**：`remove_floor_item` 按 `FloorItemMeta.item_id` 删格——只删键匹配的那一件；
+    /// 键不存在 / `item_id == 0` / 越界一律 `false` 且不动格子。
+    ///
+    /// 变异：`position` 里去掉 `m.item_id == item_id`（见 Item 即删）⇒
+    /// 「键不存在 ⇒ false」与「失败调用不得动格子」两条断言红。
+    #[test]
+    fn remove_floor_item_matches_item_id_only() {
+        let mut g = MapGrid::new(8, 8);
+        let meta = |item_id: i32| FloorItemMeta {
+            kind: FloorItemKind::Item,
+            index: 1,
+            count: 1,
+            item_id,
+            of_base_object: 0,
+        };
+        assert!(g.add_floor_item(3, 3, 1, meta(1), 0));
+        assert!(g.add_floor_item(3, 3, 2, meta(2), 0));
+        assert!(g.remove_floor_item(3, 3, 2), "键命中 ⇒ 删除");
+        let left: Vec<i32> = g
+            .cell(3, 3)
+            .obj_list
+            .iter()
+            .filter(|o| o.cell_type == CellType::Item)
+            .map(|o| o.item.map_or(0, |m| m.item_id))
+            .collect();
+        assert_eq!(left, vec![1], "只删键匹配的那一件");
+        assert!(!g.remove_floor_item(3, 3, 2), "已删 ⇒ false");
+        assert!(!g.remove_floor_item(3, 3, 999), "键不存在 ⇒ false");
+        assert!(
+            !g.remove_floor_item(3, 3, 0),
+            "item_id == 0 ⇒ false（不得按 0 匹配）"
+        );
+        assert_eq!(g.cell(3, 3).obj_list.len(), 1, "失败调用不得动格子");
     }
 }

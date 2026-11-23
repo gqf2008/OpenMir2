@@ -1836,8 +1836,9 @@ fn handle_zone_command_on(
         return ZoneCmdOutcome::Dispatched;
     }
     // **M1c-2b**：地面拾取/丢弃——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_ground_cmd`）。
-    // `world` 传**只读分片**（handler 只读 `floor_items_view_sorted`；地面写回不在模型内，T-25）；
-    // `trade_sessions` 供 `Dealing`/`DealLastTick` 门；其余实参全部取区副本。
+    // **A24**：`world` 传 `&mut`——拾取成功后 handler 会把该件从本区 world 地面表删掉
+    // （`World::remove_floor_item`）；`trade_sessions` 供 `Dealing`/`DealLastTick` 门；
+    // 其余实参全部取区副本。
     if cmd.ident == game_svr::ground::CM_PICKUP || cmd.ident == game_svr::ground::CM_DROPITEM {
         handle_ground_cmd(
             cmd.ident,
@@ -1848,7 +1849,7 @@ fn handle_zone_command_on(
             chr_name,
             socket,
             trade_sessions,
-            &*world,
+            &mut *world,
             ground_sessions,
             &*online,
             gates,
@@ -7423,7 +7424,9 @@ fn handle_ground_cmd(
     // `PlayObject.Dealing` / `PlayObject.DealLastTick`（M3⑦-实现 3/4）的真值来源。
     // 传整表而非两个散值：取值固定在 `handle_ground_cmd` 内，调用点无法各自漏接/写死。
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
-    world: &mir2_world_bevy::World,
+    // **A24**：`&mut`——成功拾取后 handler 会把该件从本区 world 的地面表删除
+    // （`World::remove_floor_item`；不再是纯只读分片）。
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -7515,6 +7518,23 @@ fn handle_ground_cmd(
             red_msg_b_color: u16::from(colors.red_b),
         };
         let out = game_svr::ground::pick_up(&ctx, &mut map, &mut sg.state);
+        // **A24**：成功拾取后把该件**从本区 world 的地面表里删掉**——oracle
+        // `ClientPickUpItem`（`PlayObject.Base.cs:55-133`）在 `Envir.DeleteFromMap(...) == 1`
+        // 之后才入包/发帧。此前 `GroundMap` 每次从 world **只读分片**重建、删格不写回
+        // ⇒ 同一地面物可被重复拾取（真 dupe）。键 = `MapItem.ItemId`（`FloorItemView.item_id`），
+        // 位置 = 本次拾取的格（`ctx.curr_x/curr_y` = `cx/cy`，位置门已保证相等）。
+        // **通知帧解耦**：`SM_ITEMHIDE` 已由 `pick_up` 的 notices 产出（oracle 物品支
+        // `SendMsg(RM_ITEMHIDE, …)` 入 MsgQueue、`SendAddItem` 直发 ⇒ 线上 200 先、hide 后，
+        // 与 `pickwire::outcome_frames` 的 immediate→notices 顺序一致）；这里只补服务端世界状态。
+        if let Some(picked) = out.picked.as_ref() {
+            if !world.remove_floor_item(map_id, cx, cy, picked.item_id) {
+                glog!(
+                    "WRN",
+                    "CM_PICKUP：世界地面物与拾取模型不一致（map={map_id} ({cx},{cy}) item_id={}）⇒ 未删格",
+                    picked.item_id
+                );
+            }
+        }
         // G-1：`SM_ADDITEM` 的 `ClientItem` 尾需要实际入包的 `UserItem`。
         (
             out.immediate_frames,
@@ -37429,7 +37449,7 @@ impl HostLoop {
                                     // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
                                     // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
                                     &trade_sessions,
-                                    &world,
+                                    &mut world,
                                     &mut ground_sessions,
                                     &online,
                                     &gates,
@@ -58287,7 +58307,7 @@ break
             "hero",
             901,
             &std::collections::HashMap::new(),
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -58317,7 +58337,7 @@ break
             "hero",
             901,
             &std::collections::HashMap::new(),
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -58344,6 +58364,10 @@ break
             sessions.get("hero").unwrap().state.gold,
             expected_count,
             "金币必须写进会话态 GroundState"
+        );
+        assert!(
+            world.floor_items_view_sorted().is_empty(),
+            "A24：金币入账成功 ⇒ 地面格子对象必须被删（world 写回；放回支才保留）"
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -75086,7 +75110,7 @@ SendRefMsgRange=15
             "hero",
             901,
             &std::collections::HashMap::new(),
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -75116,7 +75140,7 @@ SendRefMsgRange=15
             "hero",
             901,
             &std::collections::HashMap::new(),
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -75450,7 +75474,7 @@ SendRefMsgRange=15
             "hero",
             901,
             &trade_sessions,
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -75477,7 +75501,7 @@ SendRefMsgRange=15
             "hero",
             901,
             &trade_sessions,
-            &world,
+            &mut world,
             &mut sessions,
             &online,
             &gates,
@@ -75694,7 +75718,7 @@ SendRefMsgRange=15
         /// 走生产派发入口（`sim_loop` 的同一条），只取回 600/601 帧体。
         #[allow(clippy::too_many_arguments)]
         fn run_drop(
-            world: &mir2_world_bevy::World,
+            world: &mut mir2_world_bevy::World,
             sessions: &mut HashMap<String, SessionGround>,
             online: &OnlineRegistry,
             gates: &HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -75784,7 +75808,7 @@ SendRefMsgRange=15
             let decoy = recog_u16.wrapping_add(1);
             let mut h = harness_from(case);
             let bodies = run_drop(
-                &h.world,
+                &mut h.world,
                 &mut h.sessions,
                 &h.online,
                 &h.gates,
@@ -75843,7 +75867,7 @@ SendRefMsgRange=15
             let same = u16::try_from(recog).unwrap();
             let mut h = harness_from(case);
             let bodies = run_drop(
-                &h.world,
+                &mut h.world,
                 &mut h.sessions,
                 &h.online,
                 &h.gates,
@@ -75911,7 +75935,7 @@ SendRefMsgRange=15
                 drop_item_rage: 3,
             };
             let bodies = run_drop(
-                &world,
+                &mut world,
                 &mut sessions,
                 &online,
                 &gates,
@@ -128694,9 +128718,9 @@ mod zone_command_tests {
     /// 玩家站同格 ⇒ 背包 +1、出 `pickwire::outcome_frames` 的实际产出帧（物品支为
     /// `SM_ADDITEM(200)` + `SM_ITEMHIDE` 通知）。
     ///
-    /// 注：拾取删格对 world 的**写回**尚未开（§25.1 (A) 只批只读分片）⇒ **不断言"地面 -1"**
-    /// （world 里不消失是已登记形态）；"地面被处理"由 `pick_up` 在本地 `GroundMap` 上的隐藏
-    /// 通知帧体现。
+    /// **A24 起**：拾取成功后 handler 把该件从本区 world 地面表删掉 ⇒ 本牙断言**地面 -1**
+    /// （`floor_items_view_sorted` 不再含该 `item_id`），与 oracle `ClientPickUpItem` 的
+    /// `Envir.DeleteFromMap` 同点。
     ///
     /// 变异：删 pickup 臂 ⇒ `Unsupported`、背包不变 ⇒ 红。
     #[test]
@@ -128767,21 +128791,30 @@ mod zone_command_tests {
             idents.contains(&mir2_protocol::messages::SM_ADDITEM),
             "拾取成功必须出 SM_ADDITEM(200)；实收 ident={idents:?}"
         );
+        assert!(
+            state
+                .host
+                .world
+                .floor_items_view_sorted()
+                .iter()
+                .all(|v| v.item_id != 4242),
+            "A24：拾取成功后该件必须从 world 地面表消失（地面 -1；实收 ident={idents:?}）"
+        );
     }
 
-    /// **CURRENT BUG — 不是期望行为**（A24 现状牙 `zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG`）：
-    /// `GroundMap` 每次按 world **只读视图**重建、拾取删格**不写回 world**（§25.1 (A) 只批只读
-    /// 分片；见 `handle_ground_cmd` 文档）⇒ 同一地面物可被**重复 `CM_PICKUP` 拿到多次**。
+    /// **A24 牙 `zonek_ground_pickup_same_item_twice_gets_one`**（原 `…_CURRENT_BUG` 的翻转）：
+    /// 拾取成功后 `handle_ground_cmd` 把该件从本区 world 的地面表**删掉**
+    /// （`World::remove_floor_item`；oracle `ClientPickUpItem` 的 `Envir.DeleteFromMap` 等价点）
+    /// ⇒ 同一地面物**第二次 `CM_PICKUP` 拿不到**：背包只 +1、第二次零帧、
+    /// `floor_items_view_sorted` 不再含该件。
     ///
-    /// 本牙把**现状**钉住（真 dupe ⇒ 背包 +2），供后续"开写回"的修法翻转：修法落地后本牙必须
-    /// 改成断言 +1（或删除）。**不**改生产写回（本片边界）。
+    /// 变异：删掉 `handle_ground_cmd` 里 `world.remove_floor_item(...)` 的调用 ⇒ 第二次仍可拾取
+    /// （背包 +2、两条 200）⇒ 红。
     #[test]
-    // 名字故意大写 `CURRENT_BUG`（警示后来人这不是期望行为；opc-27 要求），故显式豁免 snake_case。
-    #[allow(non_snake_case)]
-    fn zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG() {
+    fn zonek_ground_pickup_same_item_twice_gets_one() {
         use mir2_world_bevy::{FloorItemKind, FloorItemMeta};
         let (mut state, actor) = landed("cmd_pickup_dupe", zone::ZoneId::new(1));
-        let (gates, _rx) = gates_and_rx();
+        let (gates, mut rx) = gates_and_rx();
         let mut shared = SharedServices::for_test();
         shared.enter_cfg.catalog.insert(
             1,
@@ -128829,8 +128862,30 @@ mod zone_command_tests {
         let sg = &state.host.ground_sessions["hero"];
         assert_eq!(
             sg.state.item_list.len(),
-            2,
-            "A24 现状：同一地面物连拾 2 次可拿 2 件（真 dupe）；             若此处变 1 ⇒ 写回已开，请按新语义改本牙"
+            1,
+            "A24 修复后：同一地面物只能拾到 1 件（写回 world 后第二次无物可拾）"
+        );
+        assert_eq!(sg.state.item_list[0].index, 1, "入包的是该模板");
+        let mut add_frames = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_ADDITEM
+            {
+                add_frames += 1;
+            }
+        }
+        assert_eq!(
+            add_frames, 1,
+            "两次拾取只应出 1 条 SM_ADDITEM(200)（第二次地面已无该件）"
+        );
+        assert!(
+            state
+                .host
+                .world
+                .floor_items_view_sorted()
+                .iter()
+                .all(|v| v.item_id != 4242),
+            "A24：成功拾取的件必须从 world 地面表消失（真复制消除）"
         );
     }
 
