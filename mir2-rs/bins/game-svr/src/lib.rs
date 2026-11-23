@@ -1496,7 +1496,7 @@ fn handle_zone_command_on(
     displays: &mut downlink::DisplayTable,
     online: &mut OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
-    _saves: &mut std::collections::HashMap<String, SavedHuman>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
     socket: i32,
@@ -1540,6 +1540,37 @@ fn handle_zone_command_on(
             ground_sessions,
             gates,
             &env.enter_cfg.catalog,
+        );
+        return;
+    }
+    // **M1b 第 5b 步 · B2**：施法族——与区 0 `INBOUND_PROCESS` 支**同一实现**（实参逐项同源：
+    // 进程态一项不带，全部取 `enter_cfg`/`colors`/`registry` 的区副本）。
+    if magicwire::is_spell_ident(cmd.ident) {
+        handle_spell_cmd_with_magic(
+            cmd.recog,
+            cmd.tag,
+            cmd.param,
+            cmd.series,
+            chr_name,
+            socket,
+            &*online,
+            world,
+            saves,
+            ground_sessions,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.magic_table,
+            &env.enter_cfg.pet_cfg,
+            env.enter_cfg.magic_attack_rage,
+            env.registry,
+            &env.enter_cfg.mon_gen.table,
+            displays,
+            gates,
+            env.enter_cfg.fire_boom_rage,
+            env.enter_cfg.snow_wind_range,
+            env.enter_cfg.elec_blizzard_range,
+            Some(magic_cfg_of(env.enter_cfg)),
+            env.colors,
+            &env.enter_cfg.string_conf,
         );
         return;
     }
@@ -125623,6 +125654,72 @@ mod zone_command_tests {
         assert!(
             out.is_some_and(|o| o.hit && o.damage > 0 && !o.killed),
             "目标必须被选中并打实（hit && damage>0 && !killed）；实际 {out:?}"
+        );
+    }
+
+    /// **M1b 第 5b 步 · B2 牙 `zone_k_spell_command_is_dispatched_with_fail_frame`**：区 k 的
+    /// `CM_SPELL` 派发到区 0 **同一实现** `handle_spell_cmd_with_magic`；可观测副作用 =
+    /// 战士技（3：`default_arm && is_warr_skill` 块）在**未修炼**分支也回 `SM_MAGICFIRE_FAIL(639)`
+    /// 给自己（`broadcast_ref_msg_with_self`）——只断言"不再计 unsupported"会被直接 return 骗过。
+    #[test]
+    fn zone_k_spell_command_is_dispatched_with_fail_frame() {
+        let (mut state, actor) = landed("cmd_spell", zone::ZoneId::new(1));
+        // 夹具只补**单测需要的表**（不改被测分支）：`spell_reject` 需要 `has_magic`，
+        // 否则 NoMagic 早退、无帧（生产里由登录建表 + 修炼得到）。
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        // `landed()` 在无 `Server.conf` 时**不建** `saves`（与 `ground_sessions` 同）⇒ 夹具补一行。
+        state.host.saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "acct".to_string(),
+                record: crate::record::PlayerRecord::default(),
+                enter_map: "0".to_string(),
+                derived: None,
+            },
+        );
+        state
+            .host
+            .saves
+            .get_mut("hero")
+            .expect("刚插入")
+            .record
+            .data
+            .magic = Some(vec![Some(crate::record::MagicRcd {
+            mag_idx: 3,
+            level: 0,
+            magic_key: 0,
+            tran_point: 0,
+        })]);
+        let (gates, mut rx) = gates_and_rx();
+        let before = perf_counters::zone_cmd_unsupported();
+        // `CM_SPELL`：`Tag` = 魔法号（`parse_spell`）；`Recog` = 目标坐标。
+        handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(mir2_protocol::messages::CM_SPELL, 12, 10, 3),
+        );
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            before,
+            "施法族不得再计 zone_cmd_unsupported（已接线）"
+        );
+        let mut saw_639 = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                // 12B 命令头：`wIdent` 在字节 4..6（LE）。
+                if body.len() >= 6 && u16::from_le_bytes([body[4], body[5]]) == 639 {
+                    saw_639 = true;
+                }
+            }
+        }
+        assert!(
+            saw_639,
+            "施法派发必须有可观测副作用（`SM_MAGICFIRE_FAIL(639)` 帧；空断言会被直接 return 骗过）"
         );
     }
 
