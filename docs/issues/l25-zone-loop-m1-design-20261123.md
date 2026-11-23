@@ -302,6 +302,24 @@ fn tick(self, shared: SharedServices, process: Option<ProcessServices>, io: Tick
      断言消息关键字（与 `RAN_SEGMENTS` 段集断言互补：那条证「跑了的段对」，这条证「没跑不该跑的段」）。
 - `ZoneState { host: HostLoop, save_outbox, alive }` 的整理仍在 `M1-0c'` 内（零行为变化）。
 
+### 8.4 测试基建现状（**已落地的前置事实**，2026-11-23）
+
+> 由 `M1-0a` 修掉的测试脆弱点，**不要当成未结问题**。代码在分支 `card/m1-0a`，tip **`356c3ce7c`**
+> （`0a-5`；其父链 `304f190d5`/`4f9e7e582`/`b9b809ef2`/`f5a9fae7f`，前者已随 master
+> `5db4689086e1` 合入；`0a-5` 待 opc-27 排期合并）。
+
+- **生产/测试切分（#3）**：`login_tail_production_call_is_wired_after_aoi` 不再裸 `find("mod tests {")`
+  ——改为**行级精确匹配**（断言 `trim()=="mod tests {"` 恰一行）+ 找不到即 `expect`（fail-closed），
+  并保留「全文件首个命中必须在生产区」两条断言（防注释漂移）。**这条现在的形态是防未来脆弱**，
+  不是补当时的错。
+- **字节切片（#1）**：`game-svr` 测试里两处窗口截取都改为字符边界安全——
+  `entry_telemetry_wiring::window()` **起点与终点都回退**、`aoi_shutdown_wiring::window()` 只回退终点
+  （起点来自 `find`）；其余 `SRC[i..]`/`SRC[i..next]` 的起点均来自 `find`，天然在字符边界。
+  **截至 `0a-5`，本仓 `game-svr` 测试无未处理的多字节裸切片**。
+- 同批修掉的既有脆弱点另两处：`g3_anchor_a5` 的折行字面量、`login_tail` 的缩进字面量（都不再钉某一种
+  折行/缩进）。
+- 零语义判据（0a-2）：去空白**并去掉 `,{}`** 后与 0a-1 逐字符相同（3,216,037 字符）。
+
 ### 8.3 将来若做 0b（方法化）的既有约束（保留，供按需拆段时用）
 - 方法行是缩进行、不匹配 `starts_with("fn ")` ⇒ **方法化本身不截断扫描窗口**；风险只在新增**顶层**
   `fn`。但方法化会改**逐字行**（8.1 已列的 7 条 + 2 条 contains/count_seq 锚）⇒ 必须逐条同步牙。
