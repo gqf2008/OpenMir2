@@ -2650,6 +2650,29 @@ fn spawn_minimal_zone(
         .with_context(|| format!("起最小区线程 {zone_id} 失败"))?;
     Ok(())
 }
+/// **M1c-2a / A26**：`M2Share.GetItemNumber()` 计数器的**初值与唯一 store**。
+///
+/// 初值 = `[Setup] ItemNumber` + 屏障 A 抽数（oracle `ServerConf.cs:114` 的 `+=`）；
+/// `item_number_counter_init` 是这一加的**唯一**接线处（fail-closed：账本不恰 1 条即 panic）。
+///
+/// **调用点必须在任何启动期造件之前**（商人挂图时的 `RefillGoods()` 会从该 `Arc` 发号；
+/// store 晚于它 ⇒ 初始货从 `Arc` 的初始 0 起、随后被覆盖——旧缺陷 A26）。
+fn startup_item_number_store(
+    counter: &std::sync::atomic::AtomicI32,
+    setup_item_number: i32,
+    barrier_a: &mir2_world_bevy::CtorFoldLedger,
+) -> i32 {
+    let init = game_svr::ctor_fold::item_number_counter_init(setup_item_number, barrier_a)
+        .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
+    counter.store(init, std::sync::atomic::Ordering::Relaxed);
+    debug_assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        init,
+        "M1c-2a：`store` 后计数器必须等于 `[Setup]ItemNumber + 屏障A` 初值"
+    );
+    init
+}
+
 async fn run_inner(args: &[String]) -> Result<()> {
     // **DBG 级别闸**：未设 `MIR2_LOG_LEVEL` ⇒ 全打（与今天逐字节相同）。
     log_level::init_from_env();
@@ -34652,6 +34675,17 @@ fn sim_loop(
         barrier_a.len(),
         barrier_a.entries.first().map_or(0, |e| e.result)
     );
+    // **M1c-2a / A26**：`M2Share.GetItemNumber()` 的计数器初值 = `[Setup] ItemNumber` **加上**
+    // 屏障 A 的抽数（oracle `ServerConf.cs:114` 的 `+=`）。`item_number_counter_init` 是这一加的
+    // **唯一**接线处（fail-closed：账本不恰 1 条即 panic）。
+    //
+    // **必须在任何启动期造件之前 `store`**：商人挂图时的一次性 `RefillGoods()`
+    // （`spawn_merchants_with_scripts` → `merchant_refill_goods_now` →
+    // `make_merchant_item_by_name_impl` → 共享计数器的 `next_value`）会从 `Arc` 发号；
+    // store 晚于它 ⇒ 初始货从 `Arc` 的初始 0 起、随后被 store 覆盖（旧缺陷 A26：a7 的
+    // itemnum trace 出现过 `1..53951` 段；小 `[Setup] ItemNumber` 下会与运行期分配撞号）。
+    let item_number_init =
+        startup_item_number_store(&item_number, enter_cfg.newbie.item_number, &barrier_a);
     // **构造段 fold · 段②**（`GameApp.cs:124` `Map.LoadMapInfo()` 的 `CHECKQUEST` 行 ⇒
     // `Maps.cs:454` 的 `new Merchant`）—— **必须早于** `InitializeMonster`（`:155` = 下面的
     // `MonGenHost::start` 的 `Random(limit)`，屏障 B）。
@@ -35605,22 +35639,9 @@ fn sim_loop(
             state_log::STATE_LOG_ENV
         );
     }
-    // `M2Share.GetItemNumber()` 的计数器（`M2Share.cs:547`）—— 初值 = `[Setup] ItemNumber`
-    // **加上**屏障 A 的抽数（oracle `ServerConf.cs:114` 的 `+=`；屏障 A 已在段①之后落账，见上面的
-    // `barrier_a`）。`item_number_counter_init` 是这一加的**唯一**接线处（fail-closed：账本不恰 1 条
-    // 即 panic）。新角色四件新手物品的 `MakeIndex` 用它（`add_newbie_items`）。
-    let item_number_init =
-        game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
-            .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
-    // **M1c-1**：写入进程级共享计数器（`Arc<AtomicI32>`，与区 k 同一句柄）。区 0 启动时定真初值；
-    // 区 k 本片不造件、不读（M1c-2 族搬入 `INBOUND_LOCAL` 时须在 zone k 首次造件前完成本 store）。
-    item_number.store(item_number_init, std::sync::atomic::Ordering::Relaxed);
-    // **M1c-2a**：store 之后任何造件（首 tick 的 `step_mon_gen`）都从真初值起。
-    debug_assert_eq!(
-        item_number.load(std::sync::atomic::Ordering::Relaxed),
-        item_number_init,
-        "M1c-2a：`store` 后计数器必须等于 `[Setup]ItemNumber + 屏障A` 初值"
-    );
+    // **A26 修正**：`item_number_init` 的计算与 `store` **已提前到屏障 A 落账之后**（商人启动补货
+    // 之前，见该处同名块）——此处只保留结果日志。`[Setup] ItemNumber + 屏障 A 抽数` 仍是
+    // `M2Share.GetItemNumber()`（`M2Share.cs:547`）的初值。
     // **M1c-2a / T-72**：oracle 的**第二个**计数器 `Config.ItemNumberEx`
     // （`SystemShare.GetItemNumberEx`；唯一活调用者 = GM `@s` 的 `MakeItemCommand.cs:82`）
     // 本仓**未复现** ⇒ ② `item_number_ex` 计数器**已删**，GM-M 改走上面的统一主计数器
@@ -67669,9 +67690,11 @@ SendRefMsgRange=15
         let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
         let start = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
         let body = &prod[start..];
+        // **A26**：store 收进 `startup_item_number_store`（helper 定义在 `sim_loop` 之前、体内
+        // `counter.store(`）；`sim_loop` 内以调用点为准。
         let store = body
-            .find("item_number.store(")
-            .expect("sim_loop 内的 store");
+            .find("startup_item_number_store(")
+            .expect("sim_loop 内的 store 调用");
         let ready = body
             .find("world_start.mark_ready()")
             .expect("sim_loop 内的 mark_ready");
@@ -67874,6 +67897,139 @@ SendRefMsgRange=15
     /// **残余（如实登记）**：宿主那**一行**绑定（`let mut item_number = …`）本身没有进程级用例钉住
     /// —— 把它改回 `enter_cfg.newbie.item_number.load(std::sync::atomic::Ordering::Relaxed)`（抽数仍抽、但不用）**仓内无用例会红**；
     /// 要机判「登录后首包的 `SM_BAGITEMS.make_index`」需另开进程级用例（另立条目）。
+    /// **A26 修正 · 源码次序牙 `item_number_store_before_merchant_refill_static`**：`sim_loop` 的
+    /// `item_number.store(item_number_init` 必须出现在**商人启动补货之前**——区 0 商人装载
+    /// （`sim_loop` 内的 `spawn_merchants_with_scripts(`）与区 k 静态装载
+    /// （`let report = spawn_statics_for_zone(`，其内部会装商人并立即补货）两者都要晚于 store。
+    ///
+    /// **不是行为证据**：配对行为牙 = `merchant_startup_goods_use_stored_init`（两者对"删掉 store"
+    /// 都红；"仅把 store 挪回补货之后"只由本牙咬住——纯单测不执行 `sim_loop` 序言）。
+    #[test]
+    fn item_number_store_before_merchant_refill_static() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        let store = prod
+            .find("startup_item_number_store(")
+            .expect("`startup_item_number_store(` 调用");
+        let helper = prod
+            .find("fn startup_item_number_store(")
+            .expect("helper 定义");
+        let helper_end = prod[helper..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| helper + k + 3);
+        assert!(
+            prod[helper..helper_end].contains("counter.store(")
+                && prod[helper..helper_end].contains("item_number_counter_init("),
+            "helper 必须做 `item_number_counter_init` + `store`（A26 的唯一 store 点）"
+        );
+        let sim = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义");
+        let store = prod[sim..]
+            .find("startup_item_number_store(")
+            .map(|k| sim + k)
+            .unwrap_or(store);
+        let zone0_merchant = prod[sim..]
+            .find("spawn_merchants_with_scripts(")
+            .map(|k| sim + k)
+            .expect("sim_loop 内的区 0 商人装载");
+        let zonek_statics = prod[sim..]
+            .find("let report = spawn_statics_for_zone(")
+            .map(|k| sim + k)
+            .expect("sim_loop 内的区 k 静态装载");
+        assert!(
+            store < zone0_merchant,
+            "store@{store} 必须在区 0 商人装载@{zone0_merchant} 之前（A26）"
+        );
+        assert!(
+            store < zonek_statics,
+            "store@{store} 必须在区 k 静态装载@{zonek_statics} 之前（A26）"
+        );
+    }
+
+    /// **A26 修正 · 行为牙 `merchant_startup_goods_use_stored_init`**：小 `[Setup] ItemNumber`
+    /// （这里取 0 ⇒ init = 屏障 A 抽数，远小于部署值）下，商店**启动补货**的 `make_index`
+    /// 必须全部 **> init**（不得从 1 起），且随后运行期分配接在它们之后（无交集）。
+    ///
+    /// 变异：删 `store`（计数器留在 Arc 初始 0）⇒ 初始货变成 1..N ⇒ `> init` 断言红。
+    #[test]
+    fn merchant_startup_goods_use_stored_init() {
+        // 生产次序：段① → 屏障 A → `item_number_counter_init` → `store` → 商人补货。
+        let mut plan = mir2_world_bevy::CtorFoldPlan::new();
+        plan.push_robot_objects(1);
+        plan.push_orphan_merchants();
+        plan.push_barrier_a();
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
+        let _ = world.fold_ctor_draws_game_app_ctor(&plan);
+        let barrier_a = world.fold_ctor_draw_item_number_barrier_a(&plan);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        // 走**生产同一 helper**（计算 + store）：删掉 helper 内的 store ⇒ 本牙必须红。
+        let init = startup_item_number_store(&counter, 0, &barrier_a);
+        assert!(
+            (0..60_000).contains(&init),
+            "小配置（[Setup] ItemNumber=0）下 init 应远小于部署值 412071，实得 {init}"
+        );
+
+        let mut w = mir2_world_bevy::World::new(20, 20);
+        w.set_item_number_counter(mir2_formula::drop::ItemNumberCounter::from_shared(
+            std::sync::Arc::clone(&counter),
+        ));
+        w.set_item_catalog(vec![mir2_data::StdItem {
+            name: "金创药(小量)".to_string(),
+            price: 100,
+            dura_max: 10,
+            ..Default::default()
+        }]);
+        let mut sp = mir2_world_bevy::MerchantSpawn {
+            name: "药店".to_string(),
+            x: 3,
+            y: 4,
+            map_id: 0,
+            state: mir2_world_bevy::MerchantState::new(
+                "drug".to_string(),
+                "0".to_string(),
+                0,
+                0,
+                100,
+                false,
+                false,
+                0,
+                mir2_world_bevy::MerchantFlags::default(),
+                Vec::new(),
+                vec![mir2_world_bevy::MerchantGoods {
+                    item_name: "金创药(小量)".to_string(),
+                    count: 3,
+                    refill_time: 0,
+                    refill_tick: 0,
+                }],
+                0,
+            ),
+        };
+        sp.state.refill_goods[0].refill_tick = 0;
+        let id = w.spawn_merchant(sp).expect("可走格应挂图成功");
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        let goods: Vec<i32> = w
+            .merchant_goods_groups(id)
+            .expect("商人状态")
+            .iter()
+            .flatten()
+            .map(|g| g.make_index)
+            .collect();
+        assert_eq!(goods.len(), 3, "一件 [goods] × count 3");
+        assert!(
+            goods.iter().all(|&m| m > init),
+            "启动补货必须全部 > init（不得从 1 起；A26）：init={init} goods={goods:?}"
+        );
+        let next = next_item_number(&counter);
+        assert!(
+            next > *goods.iter().max().expect("非空"),
+            "运行期分配必须接在启动货之后（无交集）：next={next} goods={goods:?}"
+        );
+    }
+
     #[test]
     fn barrier_a_draw_moves_newbie_make_index() {
         // 生产位置与生产顺序：段①（1 Robot + 3 孤儿 = 16 抽）→ 屏障 A（1 抽）。
