@@ -11,11 +11,19 @@
 > ④预算/执行参数细分 & `budget_hit` 两处判据（§3.2）；⑤五条测试按确定性收紧（§5）；
 > ⑥shutdown 残留**丢弃并计数**（新增 `zonek_inbound_pending_discarded`；§1.4/§4）；
 > ⑦§6 补批/段持锁的两条传导与 p99.9 守门（无实测不伪造）；⑧plan §5.3 的 `> 2` 同步改 `>= 2`。
+>
+> **r4（2026-11-23，父 `7e54d4f9b`，0c 二轮 M0–M3 措辞定稿）**：
+> **M0 缓冲归属钉死**——`pending_inbound` 是**区 k 线程循环的局部 scratch**（**不进 `HostLoop`**）；
+> 交接走 **`TickIo` 新字段** `inbound_local_buffer: VecDeque<GateEvent>` +
+> `inbound_local_carry_prefix: usize`（driver **锁外** swap；N=1 常空、零参与）。
+> **M1** 删除 `clear()` 措辞，改显式 `pop_front` 执行循环（超界只停「下一条」，剩余自然保留）。
+> **M2** 写死计时分工：`tick_max_wall` 仅名义总上界、**执行以 `execute_wall` 为准**（不跨阶段累加）。
+> **M3** 守门补越界项 `execute_wall + (execute_check_every−1) × 单条 p99.9`。
 
 ## 0. 改动清单（一句话版）
 
 - `lib.rs`：①区 k 线程循环（`spawn_minimal_zone`）把**两段裸 `try_recv`** 换成**有预算的填充**
-  （锁外）→ 命令进 `HostLoop.inbound_local_buffer`；②`INBOUND_LOCAL` **段内**消费+分类+执行+记账；
+  （锁外）→ 命令进 `TickIo.inbound_local_buffer`；②`INBOUND_LOCAL` **段内**消费+分类+执行+记账；
   ③`spawn_zone_demux` 增加**每区 `outstanding` 计数 + `Command` 硬上限丢新**；
   ④`perf_counters` 增 **5 个 `zonek_*` 列 + 5 个 `*_all_zones` 派生列**（区 0 三列语义不动）。
 - 不新增 cargo feature；多区路径才有区 k ⇒ **N=1 零参与**（`zonek_*` 恒 0、派生列 == 区 0 列）。
@@ -121,11 +129,16 @@ if !cmd_events.is_empty()     { 锁一次、逐条 handle_zone_command }
 **r3 形态（执行落点按 plan §5.3）**：
 
 1. **循环顶（锁外）只做填充**：把两段裸 `try_recv` 换成 `fill_pending(...)`：按预算从两通道
-   `try_recv` **命令**进**跨 tick 缓冲**（`HostLoop.inbound_local_buffer`，见 §3.3）；`Closed/Register/
-   Unregister` 仍在循环顶就地处理（归集 `closed_events` / 更新 `gates`），**不动**。
-2. **`INBOUND_LOCAL` 段内执行**：进段时 driver 在**锁内**把缓冲 `mem::swap` 进 `HostLoop`；
-   段内**先消费 A6 的 `pending_local`（延迟队列）→ 再消费 `inbound_local_buffer`**，逐条
-   分类 / 执行 / 记账（`zonek_*`、`RAN_SEGMENTS |= INBOUND_LOCAL`；`HostInbound` 计时天然覆盖）。
+   `try_recv` **命令**，append 进**区线程循环的局部 scratch** `pending_inbound: VecDeque<GateEvent>`
+   （声明在 `while !stop` 之外，与 `gates`/`tick` 同级；**fill 全程不持 `state` 锁**，与今天
+   "锁外 `try_recv` 到局部"的锁形态一致）；`carry_prefix` 就在这块 scratch 上算（§3.3）。
+   `Closed/Register/Unregister` 仍在循环顶就地处理（归集 `closed_events` / 更新 `gates`），**不动**。
+2. **`INBOUND_LOCAL` 段内执行（锁 1 下）**：交接**走 `TickIo` 新增的两个字段**（§3.3 已选这一种并写死，
+   不用段函数入参）——driver 在**锁外**（`TickIo` 是 driver 局部，不持 `state` 锁）把 scratch
+   `mem::swap` 进 `zone_io.inbound_local_buffer` 并写入 `zone_io.inbound_local_carry_prefix`；
+   `tick_phase_a` 跑段；tick 结束后再 swap 回 scratch（剩余自然带回）。段内**先消费 A6 的
+   `pending_local`（延迟队列）→ 再消费 `io.inbound_local_buffer`**，逐条分类 / 执行 / 记账
+   （`zonek_*`、`RAN_SEGMENTS |= INBOUND_LOCAL`；`HostInbound` 计时天然覆盖）。
 3. **顺序不变性（写死）**：今天是"循环顶先 `Closed` 后 `Command`"；改后 `Closed` 仍在循环顶、
    `Command` 挪到段内 ⇒ **相对序不变（`Closed` 先于 `Command`）**，只是 `Command` 的**执行时刻**
    从"tick 前"变"tick 内 A 段"。**不得**据此认为顺序改变。
@@ -154,27 +167,37 @@ struct ZoneDrainLimits {
 ```
 
 - **fill**（循环顶、锁外）：每调用最多 pull `pull_cap_events` 条；**预算耗尽后探一次**：
-  `try_recv Ok` ⇒ **直接 push 进 `inbound_local_buffer`** 且 `fill_hit=true`；`Err(Empty)` ⇒ `fill_hit=false`。
+  `try_recv Ok` ⇒ **直接 push 进 `pending_inbound`（scratch）** 且 `fill_hit=true`；`Err(Empty)` ⇒ `fill_hit=false`。
   （**探针不另设 carry**——它进的就是同一缓冲。）
-- **段执行**（锁 1 内）：从 `pending_local` 起、再 `inbound_local_buffer`；每 `execute_check_every` 条
-  （及缓冲末条）查 `execute_wall`，超界 ⇒ **在一整条执行完之后**收手，剩余留在缓冲（保序）；
-  `execute_max_events` 到顶同理。**收手后 `pending_inbound` 非空 ⇒ `budget_hit=true`（不做探针）**。
-- **`budget_hit` 两处判据（写死）**：`fill_hit`（fill 探针取到事件并留在缓冲）**或** 段执行截断且缓冲非空。
+- **段执行**（锁 1 内）：从 `pending_local` 起、再 `io.inbound_local_buffer`；每 `execute_check_every` 条
+  （及工作区末条）查 `execute_wall`，超界 ⇒ **在一整条执行完之后**收手，剩余留在工作区（保序）；
+  `execute_max_events` 到顶同理。**收手后工作区非空 ⇒ `budget_hit=true`（不做探针）**。
+- **`budget_hit` 两处判据（写死）**：`fill_hit`（fill 探针取到事件并留在缓冲）**或** 段执行截断且工作区非空。
+- **计时分工（写死）**：**执行以 `execute_wall` 为准**；`tick_max_wall`（PRODUCTION 的 50ms）只作
+  **名义总上界**——fill 与段执行是分离阶段，**不在二者之间实测/累加墙钟**（避免实现者纠结跨阶段计时）；
+  fill 侧唯一硬上限是 `pull_cap_events`（条数）。
 
 ### 3.3 单缓冲、carry 水位与保序
 
-- **唯一的跨 tick 缓冲**：`HostLoop.inbound_local_buffer`（per-zone、zone-owned）：
-
-  ```text
-  struct InboundLocalBuffer { items: VecDeque<GateEvent>, carry_prefix: usize }
-  ```
-
-  - `carry_prefix` 在**每次 fill 追加之前**重算：`carry_prefix = items.len()`（= 上 tick 遗留条数）；
-    段内执行时按**缓冲下标**：`idx < carry_prefix` ⇒ `from_carry`（`zonek_inbound_carry += 1`），
-    否则普通 drained。**每条恰计一次**（执行才 `drained++`；未执行剩余不计，下一 tick 按新
-    `carry_prefix` 计 from_carry）。`pending_local`（A6 延迟队列）**不计入 carry**、走自己的计数。
-  - **容量复用**：driver 每 tick 在锁内用**一块常驻 scratch**（同 `HostLoop` 或 driver 局部）
-    `mem::swap` 进段；段 `clear()` 后把剩余 `extend` 回 scratch，下一 tick 再 swap——**不重建、不逐 tick 分配**。
+- **缓冲归属（钉死，二选一已定：走 `TickIo`，不用段函数入参）**：
+  - **跨 tick 缓冲 = 区 k 线程循环的局部 scratch** `pending_inbound: VecDeque<GateEvent>`
+    （声明在 `while !stop` 之外，与 `gates`/`tick` 同级）；**fill 锁外 append**、`carry_prefix`
+    在这块 scratch 上算。
+  - `TickIo` 新增 **`inbound_local_buffer: VecDeque<GateEvent>` + `inbound_local_carry_prefix: usize`**
+    （本 tick 的输入队列工作区）。driver 在**锁外**（`TickIo` 是 driver 局部，不持 `state` 锁）
+    `mem::swap` 进、tick 结束后 swap 回；`carry_prefix` 同步写入字段。**N=1 时该字段常空、零参与。**
+  - **为什么不放 `HostLoop`**：`HostLoop` 字段 = zone-owned 状态，改它必须持锁；而缓冲是
+    "**本 tick 的输入队列**"，本质属 `TickIo` 一类 ⇒ 放循环局部/`TickIo` 既不破 `HostLoop` 不变量，
+    也不需要锁外改 `HostLoop`（也不增加 `state` 锁次数）。
+- `carry_prefix` 在**每次 fill 追加之前**重算：`carry_prefix = pending_inbound.len()`（= 上 tick 遗留
+  条数），随 swap 写进 `inbound_local_carry_prefix`；段内按**工作区下标**：`idx < carry_prefix` ⇒
+  `from_carry`（`zonek_inbound_carry += 1`），否则普通 drained。**每条恰计一次**（执行才 `drained++`；
+  未执行剩余不计，下一 tick 按新 `carry_prefix` 计 from_carry）。`pending_local`（A6 延迟队列）
+  **不计入 carry**、走自己的计数。
+- **执行循环不写 `clear()`**（避免抹掉剩余）：段内写成
+  `while let Some(ev) = io.inbound_local_buffer.pop_front() { 取出即 -1；执行整条；每 execute_check_every
+  条（及末条）查 execute_wall，超界即停（不再 pop 下一条） }` ⇒ 未执行的自然留在工作区，tick 后
+  swap 回 scratch。**全程不重建、不逐 tick 分配**（`VecDeque` 容量随 swap 复用）。
 - **保序（到达序）**：段内顺序 = `pending_local`（已处理、缓执行，更早）→ `inbound_local_buffer`
   （未处理，次早；按 fill 追加序）→ 本 tick 尚未 fill 的新命令（更晚）。三类严格按到达序分段，
   不会乱序。`Closed/Register` 在循环顶先于任何 `Command`（§2-3 顺序不变性）。
@@ -249,6 +272,10 @@ struct ZoneDrainLimits {
   - 守门：`execute_wall = 10ms`（每 `execute_check_every` 条查、**一整条执行完后**收手，剩余留缓冲
     下一 tick）；**锁内/段内执行墙钟 p99.9 > 10ms ⇒ 下调 `execute_max_events`**（用 p99.9 不用均值，
     尾部才是持锁上界）。
+  - **越界项（写进守门注释）**：每 `execute_check_every`(=16) 条才查一次 ⇒ 段内/持锁上界 ≈
+    **`execute_wall + (execute_check_every − 1) × 单条 p99.9`**（= 10ms + 15×单条）。当前命令 µs 级，
+    远低于 `10ms / 15 ≈ 0.67ms` ⇒ 安全；**单条若逼近 0.67ms ⇒ 下调 `execute_check_every` 或
+    `execute_max_events`**（同一扩展门）。
 - **p99.9 校准（不伪造实测）**：`execute_max_events <= floor(execute_wall / p99.9_per_command)`；
   **当前没有 LOCAL 命令集的 p99.9 实测** ⇒ **先取 `execute_max_events = 2000`，由 `execute_wall`
   直接兜底**；首次有 LOCAL 命令集实测后再按公式校准并在常量旁写数值来源。
