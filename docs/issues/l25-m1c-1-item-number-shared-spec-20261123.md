@@ -53,6 +53,7 @@
 - **分配点**：`apply_pending_gm_m_commands`（`lib.rs:26911`）内 `item.make_index = next_item_number_ex(item_number_ex);`（`lib.rs:27186`）。`next_item_number_ex`（`lib.rs:26781`）语义：`v = counter.wrapping_add(1); if v < MAX/2 { v = MAX/2 } if v > MAX-1 { v = MAX/2 }; counter = v; 返回 v`（**先增后用 + clamp/reset**）。
 - **取触发/段**：GM-M 给件（与 ① 的 #4 #5 同函数），**待核**是否下放区；但**并入本片**与「M1c 该族是否入 LOCAL」解耦——只要它是 Host 计数、与 ① 同形态，就一起原子化。
 - **等价改写**：`fetch_add` 不能直接表达 clamp/reset，须 **CAS 循环**（见 §3），返回新值 `v` 即原 `next_item_number_ex` 返回值。
+  - **★ 澄清（防误写）**：现 `next_item_number_ex`（`lib.rs:26781`）是**普通 `&mut i32` 读-改-写**（`v = counter.wrapping_add(1); clamp; *counter = v`），**不是 CAS**；但它的**新值依赖旧值**（clamp/reset），所以**原子化不能是纯 `fetch_add`、必须是 CAS 循环**（`compare_exchange_weak`/`fetch_update`）。**写成纯 `fetch_add` 会静默丢掉 clamp 语义（不报错、只是行为变了）**——这是最难在测试里发现的一类。**① 才是纯 `fetch_add`，② 是 CAS**，两者有别。
 - **搬迁**：与 ① 一起去 `SharedServices`（两个独立 `Arc<AtomicI32>`）。
 
 ---
@@ -92,6 +93,7 @@
          let mut v = old.wrapping_add(1); if v < MAX/2 { v = MAX/2 } if v > MAX-1 { v = MAX/2 }
          if item_number_ex.compare_exchange_weak(old, v, Relaxed, Relaxed).is_ok() { break v } }
   ```
+  - **① vs ② 的形态别混**：① 是纯 `fetch_add(1)+1`（值语义与 `+=1` 逐条相等）；② **必须 CAS**——因 clamp/reset 依赖旧值，用纯 `fetch_add` 会**静默丢掉 clamp 语义**（不报错、只是行为变了），实施时不要为「统一成 fetch_add」而改错 ②。
 - ③ `World.item_number` 若共享（§0）：`next_value` 的 `wrapping_add(1)+复位` 同样改 CAS 循环；但它是 `World` 字段（`world.rs:1638`），改动面在 `World`/`generate_drops`/`merchant`，**不在本片**。
 
 ---
