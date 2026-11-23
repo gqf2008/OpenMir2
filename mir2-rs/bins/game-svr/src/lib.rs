@@ -26247,11 +26247,83 @@ fn process_switch_data(
 // 设计文档 §4.2.2「不得塞进 ECS：连接/会话/认证/限流」冲突 ⇒ 采用与
 // `soft_close_pending`（软关链，同一条登录/断线面）**同构**的宿主排水队列。
 
+/// **M1b 第 2 步**：`@` 命令体的**唯一共享判据**——**严格** `starts_with('@')`、**不 trim**
+///（oracle `PlayObject.Chat.cs:363` 对原始行判 `StartsWith("@")`；前导空格的「 @…」是普通聊天）。
+///
+/// `gm_drain_gate` 与 [`zone_cmd_class`] 都必须调用本函数，**禁止第二份 `@` 判据**
+///（两处漂移会让"是否 GM"在不同路径上不一致）。
+fn say_payload_is_at_command(line: &str) -> bool {
+    line.starts_with('@')
+}
+
 /// `@` 命令后的 GM `pending_reconnect` 排水门（review R1）：**严格** `line.starts_with('@')`
 /// ——与 `handle_say` 的 `@` 判别同一口径（oracle `PlayObject.Chat.cs:363` 对原始行判
 /// `StartsWith("@")`；**不做 trim_start**，前导空格的「 @…」是普通聊天，不得顺带排出陈旧帧）。
+/// **M1b**：判据与 [`zone_cmd_class`] 共用 [`say_payload_is_at_command`]（不得另写一份）。
 fn gm_drain_gate(line: Option<&str>) -> bool {
-    line.is_some_and(|t| t.starts_with('@'))
+    line.is_some_and(say_payload_is_at_command)
+}
+
+/// **M1b 第 2 步 · query 族**：4 条只读查询——`CM_QUERYUSERNAME(80)` / `CM_QUERYUSERSTATE(82)` /
+/// `CM_QUERYUSERSET(3040)` / `CM_QUERYVAL(1065)`。
+///
+/// **`CM_QUERYBAGITEMS(81)` 不在此列**——它属**物品族**（M1c：`eat` 的 Shape-31 会分配
+/// MakeIndex，计数器共享是 M1c 起手做），不得并入 query。
+#[allow(dead_code)] // 本步只有单测用它（M1b 接线片起生产面才引用）
+const QUERY_IDENTS: [u16; 4] = [
+    mir2_protocol::messages::CM_QUERYUSERNAME,
+    mir2_protocol::messages::CM_QUERYUSERSTATE,
+    mir2_protocol::messages::CM_QUERYUSERSET,
+    mir2_protocol::messages::CM_QUERYVAL,
+];
+
+/// **M1b 第 2 步**：`CM_*` 的**本地归属**（只建表 + 判定；**本步不接线**）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // 本步只有单测用它
+enum ZoneCmdClass {
+    /// 区 k 本区可执行（M1b 八族）。
+    Local,
+    /// 需进程级服务 ⇒ 回区 0 执行（对应 `INBOUND_PROCESS` 段）。
+    Process,
+    /// 不属 M1b 命令集；区 k 处置见第 3 步规格（丢弃 + 计数）。
+    Unsupported,
+}
+
+/// **M1b 八族**（设计 §12.1）的 ident 归属：move / hit / spell / **say（唯一 payload 例外）** /
+/// query / levelrank / login-notice / magic-key。
+///
+/// # payload 例外只此一条
+///
+/// `CM_SAY` 是**唯一** payload 级判定（非 `@` 起、含无 payload ⇒ 本区普通说话；`@` 起 ⇒ GM 命令体，
+/// 回区 0）；其余七族纯 ident 级、与 payload 无关
+///（牙 `zone_cmd_class_payload_exception_is_unique_to_cm_say`）。`@` 判据与 `gm_drain_gate`
+/// **同一份**（[`say_payload_is_at_command`]）。
+///
+/// **本步零行为**：区 0 仍走原处理路径，分类器此刻**只被单测调用**；区 k 仍未开 `INBOUND`。
+#[allow(dead_code)] // 本步只有单测用它（M1b 接线片起生产面才引用）
+fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
+    let ident_level = movewire::is_move_command(ident)
+        || movewire::is_horse_run(ident)
+        || attackwire::is_hit_ident(ident)
+        || magicwire::is_spell_ident(ident)
+        || QUERY_IDENTS.contains(&ident)
+        || ident == enter::CM_LEVELRANK
+        || ident == mir2_protocol::messages::CM_LOGINNOTICEOK
+        || magicwire::is_magic_key_ident(ident);
+    if ident_level {
+        return ZoneCmdClass::Local;
+    }
+    if ident == chat::CM_SAY {
+        // 非 `@` 起（含无 payload）⇒ 本区普通说话；`@` 起 ⇒ GM 命令体（回区 0，后续片走控制邮箱）。
+        return if payload.is_some_and(say_payload_is_at_command) {
+            ZoneCmdClass::Process
+        } else {
+            ZoneCmdClass::Local
+        };
+    }
+    // **表外一律 `Unsupported`**（含 `CM_QUERYBAGITEMS(81)`、`u16::MAX` 等）：它们**不属 M1b**；
+    // 塞进 `Process` 会让「区 0 收到 Process 命令」的分支误收不该管的命令。
+    ZoneCmdClass::Unsupported
 }
 
 /// **族 X2 批 B（重 R 6 条）的目标侧副作用收口**（卡 `openmir2-gm-family-x2-target-control`）：
@@ -125834,6 +125906,204 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(drain_cross(&g), 0, "跨区邮箱必须为空");
         assert!(rx.try_recv().is_err(), "不得有帧");
         crate::cross_zone_frames::uninstall();
+    }
+
+    /// **M1b 第 2 步**：八族代表 ident 全部 `Local`（族内 ident 来自既有 `const`/谓词）。
+    #[test]
+    fn zone_cmd_class_m1b_families_are_local() {
+        use mir2_protocol::messages as m;
+        let local = [
+            m::CM_TURN,                // move（is_move_command）
+            m::CM_HORSERUN,            // move（is_horse_run）
+            attackwire::HIT_IDENTS[0], // hit
+            m::CM_SPELL,               // spell
+            enter::CM_LEVELRANK,       // levelrank
+            m::CM_LOGINNOTICEOK,       // login-notice
+            m::CM_MAGICKEYCHANGE,      // magic-key
+        ];
+        for ident in local {
+            assert_eq!(
+                zone_cmd_class(ident, Some("x")),
+                ZoneCmdClass::Local,
+                "ident={ident} 必须本地"
+            );
+        }
+        for ident in QUERY_IDENTS {
+            assert_eq!(
+                zone_cmd_class(ident, None),
+                ZoneCmdClass::Local,
+                "query ident={ident} 必须本地"
+            );
+        }
+        // say：非 `@` 起（含无 payload）⇒ Local
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("hello")),
+            ZoneCmdClass::Local
+        );
+        assert_eq!(zone_cmd_class(chat::CM_SAY, None), ZoneCmdClass::Local);
+        // 表外 ⇒ Process（回区 0 / 暂不支持，后续片细分）
+        assert_eq!(
+            zone_cmd_class(m::CM_QUERYBAGITEMS, None),
+            ZoneCmdClass::Unsupported,
+            "CM_QUERYBAGITEMS 属物品族（不属 M1b）⇒ Unsupported"
+        );
+        assert_eq!(
+            zone_cmd_class(u16::MAX, None),
+            ZoneCmdClass::Unsupported,
+            "表外 ident ⇒ Unsupported"
+        );
+    }
+
+    /// **M1b 第 2 步 · payload 例外**：`CM_SAY` 用**严格** `starts_with('@')`、**不 trim**，
+    /// 且与 `gm_drain_gate` 用同一份判据（[`say_payload_is_at_command`]）。
+    #[test]
+    fn zone_cmd_class_cm_say_payload_exception_is_strict_at() {
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("@Reconnection x")),
+            ZoneCmdClass::Process,
+            "`@` 起 ⇒ GM 命令体（回区 0，不本地）"
+        );
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some(" @Reconnection x")),
+            ZoneCmdClass::Local,
+            "前导空格不是 GM（严格判据，不 trim）"
+        );
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("hello @")),
+            ZoneCmdClass::Local
+        );
+        // 共享判据与排水门同源
+        assert!(say_payload_is_at_command("@x"));
+        assert!(!say_payload_is_at_command(" @x"));
+        for line in ["@x", " @x", "hi", ""] {
+            assert_eq!(
+                gm_drain_gate(Some(line)),
+                say_payload_is_at_command(line),
+                "gm_drain_gate 必须与共享判据同源（line={line:?}）"
+            );
+        }
+        assert!(!gm_drain_gate(None));
+    }
+
+    /// **M1b 第 2 步 · payload 例外只此一条**：其余七族对 payload 完全不敏感。
+    #[test]
+    fn zone_cmd_class_payload_exception_is_unique_to_cm_say() {
+        use mir2_protocol::messages as m;
+        let mut idents: Vec<u16> = vec![
+            m::CM_TURN,
+            m::CM_HORSERUN,
+            m::CM_SPELL,
+            enter::CM_LEVELRANK,
+            m::CM_LOGINNOTICEOK,
+            m::CM_MAGICKEYCHANGE,
+        ];
+        idents.extend_from_slice(&attackwire::HIT_IDENTS);
+        idents.extend_from_slice(&QUERY_IDENTS);
+        for ident in idents {
+            let at = zone_cmd_class(ident, Some("@gm"));
+            let text = zone_cmd_class(ident, Some("hi"));
+            let none = zone_cmd_class(ident, None);
+            assert_eq!(at, text, "ident={ident} 不得随 payload 变");
+            assert_eq!(text, none, "ident={ident} 不得依赖 payload 是否存在");
+            assert_eq!(at, ZoneCmdClass::Local, "ident={ident} 必须本地");
+        }
+        // 只有 CM_SAY 会因 payload 改变归属
+        assert_ne!(
+            zone_cmd_class(chat::CM_SAY, Some("@gm")),
+            zone_cmd_class(chat::CM_SAY, Some("hi")),
+            "CM_SAY 是唯一 payload 例外"
+        );
+    }
+
+    /// **M1b 第 2 步 · query 族恰 4 条、且不含 `CM_QUERYBAGITEMS`**（后者属物品族/M1c）。
+    #[test]
+    fn query_idents_are_exactly_four_and_exclude_bag_items() {
+        use mir2_protocol::messages as m;
+        assert_eq!(
+            QUERY_IDENTS,
+            [
+                m::CM_QUERYUSERNAME,
+                m::CM_QUERYUSERSTATE,
+                m::CM_QUERYUSERSET,
+                m::CM_QUERYVAL
+            ]
+        );
+        assert_eq!(QUERY_IDENTS.len(), 4);
+        assert!(
+            !QUERY_IDENTS.contains(&m::CM_QUERYBAGITEMS),
+            "CM_QUERYBAGITEMS(81) 属物品族，不得并入 query"
+        );
+        // 数值锚（oracle ident 固定）
+        assert_eq!((m::CM_QUERYUSERNAME, m::CM_QUERYUSERSTATE), (80, 82));
+        assert_eq!((m::CM_QUERYUSERSET, m::CM_QUERYVAL), (3040, 1065));
+    }
+
+    /// **M1b 第 2 步 · 接线约定（`q a-charter §12`：接线提示，**非行为证据**）**：
+    /// 本步分类器**只被单测调用**——生产面（`mod tests` 之前）除定义外不得出现
+    /// `zone_cmd_class(`（M1b 接线片会显式改这条）。
+    #[test]
+    fn inbound_classifier_is_not_wired_in_production_yet() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        let hits = prod.matches("zone_cmd_class(").count();
+        assert_eq!(
+            hits, 1,
+            "分类器本步不得接线（生产面仅定义一处；实际 {hits}）"
+        );
+    }
+
+    /// **M1b 第 2 步 · 唯一 `@` 判据（接线提示，非行为证据）**：`gm_drain_gate` 与
+    /// `zone_cmd_class` 都必须走 [`say_payload_is_at_command`]，不得各写一份 `starts_with('@')`。
+    #[test]
+    fn at_predicate_is_shared_between_drain_gate_and_classifier() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        let shared_at = prod
+            .find("fn say_payload_is_at_command(")
+            .expect("共享判据定义");
+        let shared_end = prod[shared_at..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| shared_at + k + 3);
+        let shared_seg = &prod[shared_at..shared_end];
+        assert!(
+            shared_seg.contains("starts_with('@')"),
+            "共享判据必须严格 starts_with('@')"
+        );
+        assert!(!shared_seg.contains("trim"), "共享判据不得 trim");
+        let gate_at = prod.find("fn gm_drain_gate(").expect("gm_drain_gate 定义");
+        let gate_end = prod[gate_at..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| gate_at + k + 3);
+        let gate_seg = &prod[gate_at..gate_end];
+        assert!(
+            gate_seg.contains("say_payload_is_at_command"),
+            "gm_drain_gate 必须走共享判据"
+        );
+        assert!(
+            !gate_seg.contains("starts_with"),
+            "gm_drain_gate 不得含裸 starts_with"
+        );
+        let cls_at = prod.find("fn zone_cmd_class(").expect("分类器定义");
+        let cls_end = prod[cls_at..]
+            .find("\n}\n")
+            .map_or(prod.len(), |k| cls_at + k + 3);
+        let cls_seg = &prod[cls_at..cls_end];
+        assert!(
+            cls_seg.contains("say_payload_is_at_command"),
+            "分类器必须走共享判据"
+        );
+        assert!(
+            !cls_seg.contains("starts_with"),
+            "分类器不得含裸 starts_with"
+        );
     }
 
     /// **A13 牙**：镜像是本区实体、但**不在本区 `online`** ⇒ 走位**不得**由本区本地发
