@@ -270,6 +270,7 @@ mod tests {
     use crate::ability::StdItemCatalog;
     use crate::bag::BagItem;
     use crate::handle_eat_cmd;
+    use crate::EatProcessEnv;
     use crate::{online_set, MsgColors, OnlineEntry, SessionGround};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -486,16 +487,18 @@ mod tests {
                 None,
                 &unbind,
                 &item_number,
-                None,
-                &game_svr::npc::NpcVars::default(),
-                None,
-                &crate::winlottery::WinLotteryShared::new(
-                    crate::config::WinLotteryCfg::default().init_state(),
-                ),
+                Some(EatProcessEnv {
+                    npc_host: None,
+                    npc_vars: &game_svr::npc::NpcVars::default(),
+                    gm: None,
+                    lottery: &crate::winlottery::WinLotteryShared::new(
+                        crate::config::WinLotteryCfg::default().init_state(),
+                    ),
+                    castle_war_states: &std::collections::HashMap::new(),
+                }),
                 crate::config::WinLotteryCfg::default(),
                 10_000_000,
                 crate::config::WeaponMakeLuckCfg::default(),
-                &std::collections::HashMap::new(),
             );
 
             // ① 帧：golden immediate ++ pumped 的 `payload` 逐字节（`recog` 按夹具身份归一；
