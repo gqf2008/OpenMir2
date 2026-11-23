@@ -49,10 +49,14 @@
   `AddItemToMap` 恒 false ⇒ 普通丢弃**恒回 `SM_DROPITEM_FAIL(601)`、背包不动**（whitelist T-19）。
   ⇒ 产物只能**吃掉**（§2.3/§4）。
 - **启动期分配源（trace 里 `1..53951` 段的来源，`99` 已核）**：这一段**不是第二个计数器**，
-  而是 `sim_loop` 在 `item_number.store(item_number_init, …) **之前**执行的启动期造件——主要是
-  **商人启动补货**（`LoadMerchant` 逐商人建货），另有守卫/城堡的 drop 预算
-  （`place_guards` → `WorldMonsterSink` → `World::budget_monster_drops`）。此时共享计数器仍为
-  **0** ⇒ 这些行从 `1` 起。`store` 之后才是 `init+1..` 段（本跑 `412072..`）。
+  而是 `sim_loop` 在 `item_number.store(item_number_init, …) **之前**执行的启动期造件：
+  - **商人启动补货**（`a7` 只查了 `bins/game-svr/src/merchant.rs` 得出"不分配"是**错的**；
+    分配点在 `crates/world-bevy/src/merchant.rs`）：`spawn_merchants_with_scripts` →
+    `merchant_refill_goods_now` → `refill_goods` → `refill_goods_impl` →
+    `make_merchant_item_by_name_impl` 里的 `sim.item_number.next_value()`；
+  - **和/或** 守卫/城堡/怪物生成 drop 预算（`place_guards` → `WorldMonsterSink` →
+    `World::budget_monster_drops`）。两类可并存；归因**只需落到这两类之一**。
+  此时共享计数器仍为 **0** ⇒ 这些行从 `1` 起。`store` 之后才是 `init+1..` 段（本跑 `412072..`）。
   **A26 已立并派修**（把 init 计算 + store 提到商人装载之前）⇒ **修后**启动行从 `init+1` 起
   （仍非 0 行，只是 `> init`）。本计划按"修后"口径写（§5），并用探针期差分成样本。
 - **MonGen 文件夹具的语义**：`MonGen.txt` 存在但为空 ⇒ `MonGenHost::start` 仍建宿主
@@ -92,7 +96,8 @@
    **之前**读 trace：
    - `STARTUP_ROWS == 0`（GA0/D701 无商人、MonGen 已挪走时的预期），**或**
    - `STARTUP_ROWS > 0` **且**每行 `make_index > init`（`init` = 启动日志「本会话计数器初值」）
-     **且**能逐行归因到**商人启动补货 / 守卫·城堡启动货**（summary 记 `STARTUP_ROWS`、
+     **且**能归因到**商人启动补货 和/或 守卫/城堡/怪物生成 drop 预算**（两类之一即可，
+     **不要求逐行区分来源**；summary 记 `STARTUP_ROWS`、
      `STARTUP_FIRST/LAST`、按 zone 的行数，并附归因）；
    - 出现**任何 `make_index <= init` 的启动行** ⇒ 判废（说明 store 未前置或另有计数器面），
      停手排查，**不许**把这行减掉凑数。
@@ -224,13 +229,23 @@
   **初值取 `item_number_init` 本身（= `item_number_counter_init([Setup] ItemNumber, 本次屏障A抽数)`），
   不得硬编码**（真实值每跑不同；开跑后从启动日志的「本会话计数器初值」行核对）。此刻探针未起、
   启动期已无怪物生成（§3.3），各区 World 尚未分配 ⇒ 两区首个号都是 `init+1`。
-- **补丁 B（两个消费点都改）**：`handle_zone_command_on` 的 `CM_EAT` 本地臂把传给 `handle_eat_cmd`
-  的 `item_number` 从 `env.item_number`（共享 Arc）换成**本区 World 的**计数器：
+- **补丁 B（两个消费点都改，落实为真）**：
+  ① 区 k 本地臂——`handle_zone_command_on` 的 `CM_EAT` 分支把传给 `handle_eat_cmd` 的
+     `item_number` 从 `env.item_number`（共享 Arc）换成**本区 World 的**计数器；
+  ② **区 0 不走 `handle_zone_command_on`**——它在 `HostLoop::tick` 的 `INBOUND_PROCESS` 臂里
+     **直调** `handle_eat_cmd`（实参是共享的 `item_number`）⇒ **该调用点也必须换成
+     `world.item_number_shared()`**（不要只改措辞，否则区 0 仍走共享、两区起点不同）。
   ```text
+  // ① 区 k 本地臂（handle_zone_command_on）
   let zone_counter = world.item_number_shared();   // 补丁 A 重装后的本区 Arc
   … handle_eat_cmd(…, &zone_counter, …)
+
+  // ② 区 0 INBOUND_PROCESS 臂（直调点）
+  let zone_counter = world.item_number_shared();   // 区 0 world 亦被补丁 A 重装
+  … handle_eat_cmd(…, &zone_counter, …)
   ```
-  该函数在区 0 线程与各区 k 线程都执行 ⇒ 两区各自用各自的 `init` 起点。
+  两处都改后，区 0 与各区 k 各自用各自的 `init` 起点（`zone_counter` 持局部 `Arc` 再取
+  `&zone_counter`，避免与 `&mut world` 借用冲突）。
 - **release 构建必须在开窗前完成**（约 6–10 分钟、峰值内存 ~1.6G；窗口期禁 cargo）；
   产物 sha256 + 内嵌 40-hex（含 dirty 标记）记进 summary。
 - 用同一 runner 跑**一次起停**、每区 1 角色 × 5 盒（每区 30 件）：预期
