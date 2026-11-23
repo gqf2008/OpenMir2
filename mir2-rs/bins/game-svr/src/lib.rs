@@ -1013,21 +1013,9 @@ impl ZoneHost {
 ///   `world.disconnect`）；存档请求进 `save_outbox`，由区 0 的 [`drain_zone_saves`] 发进共享 DB 链。
 ///   区 k 仍不做：行会/交易/组队通知与 `shard_router` 目录（见该函数 doc）。
 struct ZoneState {
-    world: mir2_world_bevy::World,
-    displays: downlink::DisplayTable,
-    /// **L2-5 ④b-1**：本区的 MonGen 宿主（每区一份；entries 已按本区 rect 过滤、
-    /// `initialize_monster` 的抽数走本区 `seed ⊕ zone` 的 `world.rng`）。`None` = 无
-    /// `MonGen.txt` / 切片关 / 尚未装载。
-    mon_gen: Option<game_svr::mongen::MonGenHost>,
-    online: OnlineRegistry,
-    ground_sessions: std::collections::HashMap<String, SessionGround>,
-    saves: std::collections::HashMap<String, SavedHuman>,
-    login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
-    aoi_frames_total: std::collections::HashMap<String, usize>,
-    /// **L2-5 ③ 段 1c**：商店/元宝寄售会话（`close_cleanup_residue` 的四个容器之一；
-    /// 区 k 目前没有开店/寄售路径，保留空表只为与区 0 共用同一个清理收敛函数）。
-    shop_sessions: std::collections::HashMap<String, ShopSession>,
-    sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    /// **M1-0d**：区 k 的区级状态（与区 0 同一个 [`HostLoop`]；`ZoneState` 只包住它与区 k 专属
+    /// 的存档出队/存活旗标）。
+    host: HostLoop,
     /// **L2-5 ③ 段 1c**：区 k 断线存档出队（区线程写；区 0 每 tick `drain_zone_saves` 取走送 DB）。
     save_outbox: Vec<ZoneSaveRequest>,
     /// 区线程存活（线程退出/panic ⇒ 假）。登录落区前检真：线程已死 ⇒ 拒登（不回落区 0）。
@@ -1050,26 +1038,8 @@ impl ZoneState {
     /// 不装物品目录（`production_world` 的 `item_catalog` 是 `move` 进世界，且区 0 独占）：
     /// 段 1b 区 k 无掉落路径，登录也不读世界目录（新手物品走 `enter_cfg.catalog`）。
     fn new(zone: zone::ZoneId, map_sizes: &[(i32, i32)], rng_seed: Option<i32>) -> Self {
-        let mut world = mir2_world_bevy::World::with_maps(map_sizes.to_vec());
-        if let Some(seed) = rng_seed {
-            let zone_index = i32::try_from(zone.get()).expect("区号 <= i32::MAX");
-            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed ^ zone_index);
-        }
-        world.set_id_base(zone_id_base(zone));
-        // **L2-5 ④b-0 / own-segment 修正**：登记段长（供分配器越段断言；`bind_foreign`
-        // **不**断言段归属——id 段是分配来源，不是当前归属，跨区迁移的实体保留原段 id）。
-        world.entities.set_id_segment(shard::ACTOR_ID_SEGMENT);
         Self {
-            world,
-            displays: downlink::DisplayTable::new(),
-            mon_gen: None,
-            online: OnlineRegistry::new(),
-            ground_sessions: std::collections::HashMap::new(),
-            saves: std::collections::HashMap::new(),
-            login_tails: std::collections::HashMap::new(),
-            aoi_frames_total: std::collections::HashMap::new(),
-            shop_sessions: std::collections::HashMap::new(),
-            sell_off_sessions: std::collections::HashMap::new(),
+            host: HostLoop::for_zone(zone, map_sizes, rng_seed),
             save_outbox: Vec::new(),
             alive: std::sync::atomic::AtomicBool::new(true),
         }
@@ -1125,7 +1095,7 @@ fn new_zone_state(
 ) -> ZoneState {
     let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
     // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上（与区 0 同口径）。
-    if let Err(e) = check_zone_id_base(zone_id, &state.world) {
+    if let Err(e) = check_zone_id_base(zone_id, &state.host.world) {
         glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
         std::process::exit(2);
     }
@@ -1133,10 +1103,10 @@ fn new_zone_state(
         "INF",
         "ZONE_ID_BASE zone={zone_id} base={} next_id={}",
         zone_id_base(zone_id),
-        state.world.entities.next_actor_id()
+        state.host.world.entities.next_actor_id()
     );
     match handoff::bounds_for(layout, zone_id) {
-        Some(b) => state.world.set_zone_bounds(Some(b)),
+        Some(b) => state.host.world.set_zone_bounds(Some(b)),
         None => glog!(
             "WRN",
             "区 {zone_id} 多 span（或多段边界不明）⇒ 不设 handoff 边界（本区不发起跨界移动）"
@@ -1145,7 +1115,7 @@ fn new_zone_state(
     // **L2-5 ④a（产品缺陷修复）**：区 k 的 World 必须与区 0 是同一份静态地图数据
     // （格子属性/传送点/门）——否则区 k 玩家穿墙走，handoff 落到真墙格被目标区拒绝。
     if let Some(reg) = registry {
-        let (cells, routes, doors) = load_zone_map_data(reg, &mut state.world);
+        let (cells, routes, doors) = load_zone_map_data(reg, &mut state.host.world);
         glog!(
             "INF",
             "区 {zone_id} 静态地图数据已灌入（cells={cells} routes={routes} doors={doors}；与区 0 同源同函数）"
@@ -1237,12 +1207,12 @@ fn spawn_statics_for_zone(
             )
         });
         report.mon_gen_kept = entries.len();
-        state.mon_gen = Some(game_svr::mongen::MonGenHost::start(
+        state.host.mon_gen_host = Some(game_svr::mongen::MonGenHost::start(
             entries,
             table,
             true, // 部署件必有 MonGen.txt（与区 0 同口径：有文件 ⇒ 末尾哨兵已入 thread 0）
             src.mon_gen_config,
-            &mut state.world.rng,
+            &mut state.host.world.rng,
         ));
     }
 
@@ -1260,16 +1230,16 @@ fn spawn_statics_for_zone(
         loader,
         |n| registry.id_of(n),
         Some(&keep),
-        &mut state.world.rng,
+        &mut state.host.world.rng,
     ) {
         Ok((spawns, mreport, seeds)) => {
             report.merchants_total = mreport.records + mreport.zone_filtered;
             report.merchants_filtered = mreport.zone_filtered;
             let (kept, _failed, mut book) = game_svr::merchant::spawn_merchants_with_scripts(
-                &mut state.world,
+                &mut state.host.world,
                 spawns,
                 seeds,
-                &mut state.displays,
+                &mut state.host.displays,
             );
             report.merchants_kept = kept;
             book.goto_count_limit = goto_count_limit;
@@ -1295,12 +1265,12 @@ fn spawn_statics_for_zone(
         });
         report.npcs_kept = npcs.len();
         let placed = game_svr::npcs::place_fixed_npcs_with_scripts(
-            &mut state.world,
+            &mut state.host.world,
             &npcs,
             |n| registry.id_of(n),
             &envir_root,
             merchant_book,
-            &mut state.displays,
+            &mut state.host.displays,
         );
         report.npcs_placed = placed.placed;
     }
@@ -1318,15 +1288,15 @@ fn spawn_statics_for_zone(
             )
         });
         report.guards_kept = guards.len();
-        match state.mon_gen.as_mut() {
+        match state.host.mon_gen_host.as_mut() {
             Some(host) => {
                 let placed = game_svr::guardlist::place_guards(
                     &guards,
                     table,
                     host,
                     registry,
-                    &mut state.world,
-                    &mut state.displays,
+                    &mut state.host.world,
+                    &mut state.host.displays,
                 );
                 report.guards_placed = placed.placed;
             }
@@ -1380,6 +1350,9 @@ fn handle_zone_closed(
     map_names: &[String],
 ) -> bool {
     let ZoneState {
+        host, save_outbox, ..
+    } = state;
+    let HostLoop {
         world,
         displays,
         online,
@@ -1387,9 +1360,8 @@ fn handle_zone_closed(
         saves,
         shop_sessions,
         sell_off_sessions,
-        save_outbox,
         ..
-    } = state;
+    } = host;
     // 陈旧早退 + `CloseUser` 的 `bo_soft_close` 置位：与区 0 同一个 guard（T-101/M-12）。
     if !prepare_closed_guild(ground_sessions, online, chr_name, gate_idx, socket) {
         perf_counters::note_zone_disconnect_dropped();
@@ -1455,13 +1427,14 @@ fn handle_zone_command(
     socket: i32,
     cmd: &CommandMessage,
 ) {
-    let ZoneState {
+    let ZoneState { host, .. } = state;
+    let HostLoop {
         world,
         displays,
         online,
         ground_sessions,
         ..
-    } = state;
+    } = host;
     if !movewire::is_move_command(cmd.ident) {
         perf_counters::note_zone_cmd_unsupported(cmd.ident);
         return;
@@ -2159,19 +2132,15 @@ fn spawn_minimal_zone(
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         // tick 顶（phase1 之前）：排 ack/offer（handoff 两阶段）。
                         if let Some(h) = handoff_runtime.as_mut() {
-                            h.tick_top(&mut st.world, tick);
+                            h.tick_top(&mut st.host.world, tick);
                         }
                         // **L2-5 ④b-1**：本区 MonGen 首刷/周期刷（与区 0 同一个 `step_mon_gen`；
                         // 宿主/host 状态/RT 全是本区的，抽数走本区 `world.rng`）。
                         // `mon_gen == None`（切片关 / 无 MonGen.txt / 尚未装载）⇒ 不动。
                         {
-                            let ZoneState {
-                                world,
-                                displays,
-                                mon_gen,
-                                ..
-                            } = &mut *st;
-                            if let (Some(host), Some(view)) = (mon_gen.as_mut(), map_view.as_deref())
+                            let ZoneState { host, .. } = &mut *st;
+        let HostLoop { world, displays, mon_gen_host, .. } = host;
+                            if let (Some(host), Some(view)) = (mon_gen_host.as_mut(), map_view.as_deref())
                             {
                                 if let Some(table) = mon_table.as_deref() {
                                     let play = world.play_object_count();
@@ -2179,10 +2148,10 @@ fn spawn_minimal_zone(
                                 }
                             }
                         }
-                        let record = st.world.tick_phase1();
+                        let record = st.host.world.tick_phase1();
                         let source =
-                            region_loop::HaloFrameSource::new(&st.displays, &st.online);
-                        let border = runtime.snapshot_publish(&st.world, tick, &source);
+                            region_loop::HaloFrameSource::new(&st.host.displays, &st.host.online);
+                        let border = runtime.snapshot_publish(&st.host.world, tick, &source);
                         (record, border)
                     };
                     if let Err(e) = border {
@@ -2211,7 +2180,8 @@ fn spawn_minimal_zone(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if mirrors {
-                            let ZoneState { world, displays, .. } = &mut *st;
+                            let ZoneState { host, .. } = &mut *st;
+        let HostLoop { world, displays, .. } = host;
                             if let Err(e) = region_loop::apply_mirrors(world, &neighbors, Some(displays)) {
                                 glog!(
                                     "ERR",
@@ -2220,7 +2190,7 @@ fn spawn_minimal_zone(
                                 std::process::abort();
                             }
                         }
-                        st.world.tick_phase2(&mut record);
+                        st.host.world.tick_phase2(&mut record);
                     }
                     // 无锁段：心跳 + barrier2 + 探针记账。
                     runtime.after_phase2(
@@ -2232,7 +2202,7 @@ fn spawn_minimal_zone(
                         let mut st = state
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        h.after_phase2(&mut st.world, tick);
+                        h.after_phase2(&mut st.host.world, tick);
                     }
                     tick += 1;
                 }
@@ -32795,13 +32765,13 @@ fn finish_login_on_zone_state(
     sess: LoginSession<'_>,
 ) {
     finish_login(&mut LoginCtx {
-        world: &mut state.world,
-        displays: &mut state.displays,
-        online: &mut state.online,
-        ground_sessions: &mut state.ground_sessions,
-        saves: &mut state.saves,
-        login_tails: &mut state.login_tails,
-        aoi_frames_total: &mut state.aoi_frames_total,
+        world: &mut state.host.world,
+        displays: &mut state.host.displays,
+        online: &mut state.host.online,
+        ground_sessions: &mut state.host.ground_sessions,
+        saves: &mut state.host.saves,
+        login_tails: &mut state.host.login_tails,
+        aoi_frames_total: &mut state.host.aoi_frames_total,
         engine: &mut *proc.engine,
         gates: &mut *proc.gates,
         reconnect_pending: &mut *proc.reconnect_pending,
@@ -34782,8 +34752,6 @@ enum TickOutcome {
     Exited,
 }
 
-/// [`HostLoop::tick`] 的返回值：把三块状态原样交还（move，不分配）。
-
 impl HostLoop {
     /// **M0/A3**：区 k 的空实例（口径同 `ZoneState::new`：`with_maps` + `seed ^ zone` +
     /// id 基址/段长）。M0 只用它验证「空实例能跑一个 tick」，**不接线** `spawn_minimal_zone`。
@@ -34854,22 +34822,22 @@ impl HostLoop {
         let mut shop_sessions = &mut self.shop_sessions;
         let mut trade_sessions = &mut self.trade_sessions;
         let mut sell_off_sessions = &mut self.sell_off_sessions;
-        let mut mon_gen_host = &mut self.mon_gen_host;
+        let mon_gen_host = &mut self.mon_gen_host;
         let mut line_notice_states = &mut self.line_notice_states;
         let mut monster_walk_seen = &mut self.monster_walk_seen;
         let mut gates = &mut self.gates;
-        let mut handoff_runtime = &mut self.handoff_runtime;
-        let mut ticks = &mut self.ticks;
+        let handoff_runtime = &mut self.handoff_runtime;
+        let ticks = &mut self.ticks;
         let tick = self.tick;
         let mut event_carry = &mut self.event_carry;
         let mut event_carry_ctl = &mut self.event_carry_ctl;
-        let mut entry_telemetry_next_ms = &mut self.entry_telemetry_next_ms;
-        let mut entry_telemetry_last = &mut self.entry_telemetry_last;
+        let entry_telemetry_next_ms = &mut self.entry_telemetry_next_ms;
+        let entry_telemetry_last = &mut self.entry_telemetry_last;
         let mut host_prof = &mut self.host_prof;
         let mut world_prof_last = &mut self.world_prof_last;
         let local_shard = self.local_shard;
         let is_host = self.is_host;
-        let mut telemetry_prefix = &mut self.telemetry_prefix;
+        let telemetry_prefix = &mut self.telemetry_prefix;
         // **M1-0c'（b-2）**：进程-only 段入口 fail-fast + 唯一收敛点。先断言、后解构（见设计 §8.2）。
         if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
             assert!(
@@ -34887,14 +34855,14 @@ impl HostLoop {
                     .expect(concat!("区 k 不得进入进程-only 段: ", $seg))
             }};
         }
-        let mut registry = &mut shared.registry;
-        let mut enter_cfg = &mut shared.enter_cfg;
+        let registry = &mut shared.registry;
+        let enter_cfg = &mut shared.enter_cfg;
         let mut shard_runtime = &mut shared.shard_runtime;
-        let mut colors = &mut shared.colors;
-        let mut zone_host = &mut shared.zone_host;
-        let mut ev_rx = &mut io.ev_rx;
-        let mut ev_ctl_rx = &mut io.ev_ctl_rx;
-        let mut shutdown = &mut io.shutdown;
+        let colors = &mut shared.colors;
+        let zone_host = &mut shared.zone_host;
+        let ev_rx = &mut io.ev_rx;
+        let ev_ctl_rx = &mut io.ev_ctl_rx;
+        let shutdown = &mut io.shutdown;
         let mut scratch = TickScratch::default();
         // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
         // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
@@ -36626,16 +36594,20 @@ impl HostLoop {
                                                             item_number: &mut item_number,
                                                         },
                                                     );
-                                                    note_first_player_id(target_zone, &st.world);
+                                                    note_first_player_id(
+                                                        target_zone,
+                                                        &st.host.world,
+                                                    );
                                                     // 落点归属校验：边界 3 格内的墙格移位/死亡改写可能改归属 ⇒
                                                     // `zone_login_offzone` 计数 + WRN 暴露（不改判据）。
                                                     if let Some(actor) = st
+                                                        .host
                                                         .world
                                                         .session(&chr_name)
                                                         .and_then(|s| s.actor_id)
                                                     {
                                                         if let Some(e) =
-                                                            st.world.entities.get(actor)
+                                                            st.host.world.entities.get(actor)
                                                         {
                                                             if !host.layout.owns(
                                                                 target_zone,
@@ -122350,7 +122322,7 @@ mod zone_login_landing_tests {
         );
 
         // ① 区 1：进世界 + 在线 + 地面会话 + 存档体。
-        let sess = state.world.session("hero").expect("区 1 必须有该会话");
+        let sess = state.host.world.session("hero").expect("区 1 必须有该会话");
         assert_eq!(
             sess.stage,
             mir2_world_bevy::WorldStage::InWorld,
@@ -122363,7 +122335,7 @@ mod zone_login_landing_tests {
             shard::ACTOR_ID_SEGMENT
         );
         assert!(
-            state.online.iter().any(|e| e.chr_name == "hero"),
+            state.host.online.iter().any(|e| e.chr_name == "hero"),
             "区 1 在线表必须有该会话"
         );
         // `ground_sessions`/`saves` 只在**装配了 Server.conf（`game_conf`）**时插入
@@ -122371,7 +122343,7 @@ mod zone_login_landing_tests {
         // 所有权口径由结构保证：`LoginProc` 只携带进程级句柄，所有世界侧表都指向 `ZoneState`
         // （见其 doc 与提交信息）；区 0 的同名局部变量根本不出现在调用实参里。
         assert!(
-            state.ground_sessions.is_empty() && state.saves.is_empty(),
+            state.host.ground_sessions.is_empty() && state.host.saves.is_empty(),
             "无 Server.conf ⇒ 地面会话/存档体不插入（既有行为，不是本步改的）"
         );
         // 帧经该用户的网关线（gates 属进程，区 0 的 map 借用）下发。
@@ -122501,6 +122473,7 @@ mod zone_disconnect_tests {
         );
         let _ = std::fs::remove_dir_all(&base);
         let actor = state
+            .host
             .world
             .session("hero")
             .and_then(|s| s.actor_id)
@@ -122530,21 +122503,22 @@ mod zone_disconnect_tests {
     impl DisconnectOutcome {
         fn of(state: &ZoneState, actor: i32) -> Self {
             let mut online: Vec<String> = state
+                .host
                 .online
                 .iter()
                 .map(|e| format!("{}@{}:{}", e.chr_name, e.gate_idx, e.socket))
                 .collect();
             online.sort();
-            let sess = state.world.session("hero").expect("会话对象不删除");
+            let sess = state.host.world.session("hero").expect("会话对象不删除");
             Self {
                 online,
-                saves_empty: state.saves.is_empty(),
-                ground_empty: state.ground_sessions.is_empty(),
-                shop_empty: state.shop_sessions.is_empty(),
-                selloff_empty: state.sell_off_sessions.is_empty(),
+                saves_empty: state.host.saves.is_empty(),
+                ground_empty: state.host.ground_sessions.is_empty(),
+                shop_empty: state.host.shop_sessions.is_empty(),
+                selloff_empty: state.host.sell_off_sessions.is_empty(),
                 stage: sess.stage,
                 actor_id: sess.actor_id,
-                entity_present: state.world.entities.get(actor).is_some(),
+                entity_present: state.host.world.entities.get(actor).is_some(),
                 save_count: state.save_outbox.len(),
                 save_all_non_empty: state.save_outbox.iter().all(|r| !r.packet.is_empty()),
             }
@@ -122560,6 +122534,9 @@ mod zone_disconnect_tests {
     /// 存档载荷进 `save_outbox` 只为与区 k 用同一个观测面（区 0 生产路径在这里是直接发 DB）。
     fn zone_zero_reference(state: &mut ZoneState, map_names: &[String]) {
         let ZoneState {
+            host, save_outbox, ..
+        } = state;
+        let HostLoop {
             world,
             displays,
             online,
@@ -122567,9 +122544,8 @@ mod zone_disconnect_tests {
             saves,
             shop_sessions,
             sell_off_sessions,
-            save_outbox,
             ..
-        } = state;
+        } = host;
         assert!(prepare_closed_guild(ground_sessions, online, "hero", 0, 7));
         online_take(online, "hero");
         if let (Some(saved), Some(sg)) = (saves.get("hero"), ground_sessions.get("hero")) {
@@ -122599,9 +122575,10 @@ mod zone_disconnect_tests {
     /// 存档只读这两张表）。actor 用落区后的真实 id。
     fn seed_session_tables(state: &mut ZoneState, actor: i32) {
         state
+            .host
             .ground_sessions
             .insert("hero".to_string(), crate::tests::test_session_ground(actor));
-        state.saves.insert(
+        state.host.saves.insert(
             "hero".to_string(),
             SavedHuman {
                 account: "acct".to_string(),
@@ -122626,7 +122603,7 @@ mod zone_disconnect_tests {
         let (mut zone0, actor0) = landed("parity0", zone::ZoneId::new(0));
         seed_session_tables(&mut zone0, actor0);
         assert!(
-            zone0.displays.get(actor0).is_some(),
+            zone0.host.displays.get(actor0).is_some(),
             "前置：登录应已登记同屏展示"
         );
         zone_zero_reference(&mut zone0, &map_names);
@@ -122636,7 +122613,7 @@ mod zone_disconnect_tests {
         let (mut zone1, actor1) = landed("parity1", zone::ZoneId::new(1));
         seed_session_tables(&mut zone1, actor1);
         assert!(
-            zone1.displays.get(actor1).is_some(),
+            zone1.host.displays.get(actor1).is_some(),
             "前置：登录应已登记同屏展示"
         );
         assert!(
@@ -122654,7 +122631,7 @@ mod zone_disconnect_tests {
             "四容器必须清干净（含 saves）"
         );
         assert!(
-            zone1.displays.get(actor1).is_none(),
+            zone1.host.displays.get(actor1).is_none(),
             "展示表必须摘掉该 actor"
         );
         assert_eq!(out1.stage, mir2_world_bevy::WorldStage::Left);
@@ -122697,10 +122674,10 @@ mod zone_disconnect_tests {
         );
         assert_eq!(perf_counters::zone_disconnect_dropped(), 1);
         assert!(
-            state.online.iter().any(|e| e.chr_name == "hero"),
+            state.host.online.iter().any(|e| e.chr_name == "hero"),
             "陈旧 Closed 不得摘在线项"
         );
-        let sess = state.world.session("hero").expect("会话仍在");
+        let sess = state.host.world.session("hero").expect("会话仍在");
         assert_eq!(sess.actor_id, Some(actor), "陈旧 Closed 不得摘实体");
         assert!(state.save_outbox.is_empty(), "陈旧 Closed 不得生成存档");
         perf_counters::reset_zone_login_counters_for_tests();
@@ -122786,38 +122763,41 @@ mod zone_map_data_tests {
         let mut k = zone_state_with(Some(&reg));
 
         // 区 k 侧：站在 (326,243)，向墙格 (325,243) 走一步 ⇒ 不移动。
-        let id = k.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+        let id = k.host.world.add_entity(mir2_world_bevy::EntitySpawn::new(
             0, "hero", BOUNDARY_X, 243,
         ));
-        let out = k.world.step_with_route(id, -1, 0, 1);
+        let out = k.host.world.step_with_route(id, -1, 0, 1);
         assert!(!out.moved, "区 k：真墙格必须挡住走位（与区 0 同结论）");
-        assert_eq!(pos_of(&k.world, id), (BOUNDARY_X, 243));
+        assert_eq!(pos_of(&k.host.world, id), (BOUNDARY_X, 243));
 
         // 区 0 侧（同一注册表、区 0 自己的装载路径）：站在 (324,243) 向东走 ⇒ 同样被挡。
         let mut z0 = ZoneState::new(zone::ZoneId::new(0), &[(i32::from(W), i32::from(H))], None);
         let owned = vec![true; 1];
-        mapwire::apply_map_cells_owned(&reg, &mut z0.world, &owned);
-        let id0 = z0.world.add_entity(mir2_world_bevy::EntitySpawn::new(
+        mapwire::apply_map_cells_owned(&reg, &mut z0.host.world, &owned);
+        let id0 = z0.host.world.add_entity(mir2_world_bevy::EntitySpawn::new(
             0,
             "hero",
             WALL_X - 1,
             243,
         ));
-        let out0 = z0.world.step_with_route(id0, 1, 0, 1);
+        let out0 = z0.host.world.step_with_route(id0, 1, 0, 1);
         assert!(!out0.moved, "区 0：同一条真墙格同样被挡（两侧对拍）");
 
         // 属性面：区 k 的装载与区 0 的装载得到同一组计数（walk/low/high）。
-        assert_eq!(k.world.maps[0].walk_count(), z0.world.maps[0].walk_count());
         assert_eq!(
-            k.world.maps[0].low_wall_count(),
-            z0.world.maps[0].low_wall_count()
+            k.host.world.maps[0].walk_count(),
+            z0.host.world.maps[0].walk_count()
         );
         assert_eq!(
-            k.world.maps[0].high_wall_count(),
-            z0.world.maps[0].high_wall_count()
+            k.host.world.maps[0].low_wall_count(),
+            z0.host.world.maps[0].low_wall_count()
         );
         assert_eq!(
-            k.world.maps[0].high_wall_count(),
+            k.host.world.maps[0].high_wall_count(),
+            z0.host.world.maps[0].high_wall_count()
+        );
+        assert_eq!(
+            k.host.world.maps[0].high_wall_count(),
             WALL_YS.count(),
             "夹具只有 x=325,y=243..249 这 7 个墙格"
         );
@@ -122833,12 +122813,15 @@ mod zone_map_data_tests {
 
         // 修复后：区 1 的实体撞墙 ⇒ 不移动、不置 handoff_pending（不会 offer ⇒ 不会 refused）。
         let mut fixed = zone_state_with(Some(&reg));
-        let id = fixed.world.add_entity(mir2_world_bevy::EntitySpawn::new(
-            0, "hero", BOUNDARY_X, 243,
-        ));
-        let out = fixed.world.step_with_route(id, -1, 0, 1);
+        let id = fixed
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(
+                0, "hero", BOUNDARY_X, 243,
+            ));
+        let out = fixed.host.world.step_with_route(id, -1, 0, 1);
         assert!(!out.moved, "真墙格 ⇒ 不得走进去");
-        let e = fixed.world.entities.get(id).expect("实体仍在世界");
+        let e = fixed.host.world.entities.get(id).expect("实体仍在世界");
         assert_eq!((e.x, e.y), (BOUNDARY_X, 243));
         assert!(
             !e.handoff_pending,
@@ -122848,12 +122831,15 @@ mod zone_map_data_tests {
         // 反例（修复前的旧行为）：不灌地图数据 ⇒ 穿墙进 (325,243) 并置 handoff_pending
         // （诊断里的 RefusedCell 就由此产生）。
         let mut legacy = zone_state_with(None);
-        let id2 = legacy.world.add_entity(mir2_world_bevy::EntitySpawn::new(
-            0, "hero", BOUNDARY_X, 243,
-        ));
-        let out2 = legacy.world.step_with_route(id2, -1, 0, 1);
+        let id2 = legacy
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(
+                0, "hero", BOUNDARY_X, 243,
+            ));
+        let out2 = legacy.host.world.step_with_route(id2, -1, 0, 1);
         assert!(out2.moved, "无注册表（旧行为）⇒ 穿墙");
-        let e2 = legacy.world.entities.get(id2).expect("实体仍在世界");
+        let e2 = legacy.host.world.entities.get(id2).expect("实体仍在世界");
         assert_eq!((e2.x, e2.y), (WALL_X, 243));
         assert!(
             e2.handoff_pending,
@@ -122919,7 +122905,7 @@ mod zone_command_tests {
 
     /// 落区后的**实际**坐标（登录落点由 `enter_map` 裁决，夹具不假设输入值）。
     fn pos_of(state: &ZoneState, actor: i32) -> (i32, i32) {
-        let e = state.world.entities.get(actor).expect("实体仍在世界");
+        let e = state.host.world.entities.get(actor).expect("实体仍在世界");
         (e.x, e.y)
     }
 
@@ -122929,13 +122915,14 @@ mod zone_command_tests {
         let (x, y) = pos_of(&state, actor);
         // 同区观察者（真实玩家实体 + 在线表 + 展示表）：证明移动帧真的经**本区** gates 表
         // 发到网关线（`broadcast_ref_msg` 不含自己 ⇒ 没有观察者时本来就不出帧）。
-        state.world.open_session("peer");
+        state.host.world.open_session("peer");
         let peer = state
+            .host
             .world
             .enter_map("peer", new_player_entity("peer".to_string(), x + 2, y), 0)
             .expect("peer 进图");
         online_set(
-            &mut state.online,
+            &mut state.host.online,
             OnlineEntry {
                 account: "b".to_string(),
                 chr_name: "peer".to_string(),
@@ -122945,7 +122932,7 @@ mod zone_command_tests {
                 actor_id: peer,
             },
         );
-        state.displays.set(
+        state.host.displays.set(
             peer,
             downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"n".to_vec()),
         );
@@ -123006,7 +122993,7 @@ mod zone_command_tests {
         let (x, y) = pos_of(&state, actor);
         // 模拟「handoff 已提升、源区已释放实体」：在线表仍有条目（区域路由未随迁，④b）。
         assert!(
-            state.world.release_entity(actor),
+            state.host.world.release_entity(actor),
             "夹具先摘实体（模拟源区已 release）"
         );
         let before = perf_counters::handoff_move_after_transfer_dropped();
@@ -123022,7 +123009,7 @@ mod zone_command_tests {
             "提升后源区丢走位必须计入 handoff_move_after_transfer_dropped"
         );
         assert!(
-            state.world.entities.get(actor).is_none(),
+            state.host.world.entities.get(actor).is_none(),
             "丢弃后实体仍不在世界"
         );
     }
@@ -123078,7 +123065,10 @@ mod zone_command_tests {
         let (mut state, actor) = landed("cmd_handoff", zone::ZoneId::new(1));
         let (x, y) = pos_of(&state, actor);
         // 本区 rect = 落点左侧 5 格到落点本身 ⇒ 向右一格即出界（跨界判定只看 rect）。
-        state.world.set_zone_bounds(Some((0, (x - 5, 0, x, 19))));
+        state
+            .host
+            .world
+            .set_zone_bounds(Some((0, (x - 5, 0, x, 19))));
         let (gates, _rx) = gates_and_rx();
         handle_zone_command(
             &mut state,
@@ -123088,6 +123078,7 @@ mod zone_command_tests {
             &cmd(mir2_protocol::messages::CM_WALK, x + 1, y, 2),
         );
         let e = state
+            .host
             .world
             .entities
             .get(actor)
@@ -125420,6 +125411,7 @@ mod zone_statics_tests {
             30,
         );
         let statics = state
+            .host
             .world
             .entities
             .iter_ref()
@@ -125428,7 +125420,7 @@ mod zone_statics_tests {
         Run {
             report,
             statics,
-            draws: state.world.rng.draws(),
+            draws: state.host.world.rng.draws(),
         }
     }
 
