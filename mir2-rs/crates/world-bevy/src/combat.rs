@@ -1514,7 +1514,7 @@ pub fn generate_drops<C: ItemCatalog>(
     catalog: &C,
     mon_random_add_value: i32,
     gold_name: &str,
-    item_number: &mut ItemNumberCounter,
+    item_number: &ItemNumberCounter,
 ) -> (i32, Vec<UserItem>) {
     let out = mon_get_random_items(
         drop_list,

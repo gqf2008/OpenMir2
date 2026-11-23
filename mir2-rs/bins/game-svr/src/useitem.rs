@@ -104,6 +104,7 @@ use crate::bag::{BagItem, Frame, MAX_BAG_ITEM};
 use crate::unbindlist::UnbindList;
 // `ExtraAbil` 槽数用宿主/oracle 同名常量（`mir2_world_bevy::components::EXTRA_ABIL_SLOTS` = 7，
 // 含 `EABIL_PWRRATE(6)`）；slice 1 曾误写 6（会静默丢掉 PWRRATE），此处对齐并加维度牙。
+use mir2_formula::drop::next_item_number;
 use mir2_world_bevy::components::EXTRA_ABIL_SLOTS;
 
 /// `CM_EAT`（`src/OpenMir2/Messages.cs` 的 `CM_EAT = 1006`；
@@ -580,9 +581,7 @@ pub fn use_item(
                                         break;
                                     };
                                     added_items.push(BagItem {
-                                        make_index: item_number
-                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                            + 1,
+                                        make_index: next_item_number(item_number),
                                         index,
                                         dura: tpl_unbind.dura_max,
                                         dura_max: tpl_unbind.dura_max,

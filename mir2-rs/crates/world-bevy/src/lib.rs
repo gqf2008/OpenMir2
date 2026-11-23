@@ -121,7 +121,7 @@ pub fn drop_budget_system(
     catalog: Res<CatalogRes>,
     add_value: Res<MonRandomAddValue>,
     mut rng: ResMut<RngRes>,
-    mut item_number: ResMut<ItemNumberRes>,
+    item_number: Res<ItemNumberRes>,
     mut commands: Commands,
     tables: Query<(&MonsterId, &DropTable, Option<&DropBudget>)>,
 ) {
@@ -141,7 +141,7 @@ pub fn drop_budget_system(
             &mut rng.0,
             add_value.0,
             STRING_GOLD_NAME,
-            &mut item_number.0,
+            &item_number.0,
         );
         let budget = DropBudget {
             gold: result.gold,

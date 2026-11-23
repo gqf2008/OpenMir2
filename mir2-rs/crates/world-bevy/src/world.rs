@@ -1634,7 +1634,11 @@ pub struct SimState {
     pub(crate) pending_show_hp_health_changes: Vec<(i32, u16, u16)>,
     /// 判据③：tick 必须始终跑在同一个线程上
     owner_thread: Option<ThreadId>,
-    /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
+    /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）。
+    ///
+    /// **M1c-2a 三→一**：生产由宿主经 [`World::set_item_number_counter`] 注入
+    /// `ItemNumberCounter::from_shared(唯一 Arc)`（区 0 与各区 k 同一计数器）；
+    /// [`ItemNumberCounter::default`] 只是测试/legacy 形态（新 `Arc(0)`）。
     pub(crate) item_number: ItemNumberCounter,
     /// 最近一次 tick 的记录
     pub last_tick: TickRecord,
@@ -3651,6 +3655,24 @@ impl std::ops::Deref for World {
 impl std::ops::DerefMut for World {
     fn deref_mut(&mut self) -> &mut SimState {
         &mut self.sim
+    }
+}
+
+impl World {
+    /// **M1c-2a**：注入统一 `MakeIndex` 计数器（重设 `(deref)` 的 `SimState.item_number`）。
+    ///
+    /// **生产唯一注入形态** = `ItemNumberCounter::from_shared(Arc::clone(宿主唯一 Arc))`；
+    /// 区 0（`sim_loop` 的 `production_world` 之后）与各区 k（`new_zone_state`）都调它，
+    /// 于是掉落/商人（World 侧）与商店/脚本/GM/使用物品（宿主侧）共用同一个号段。
+    /// 残留 [`ItemNumberCounter::default`]（新 `Arc(0)`）⇒ 号段会撞：宿主注入处有
+    /// `Arc::ptr_eq` 的 `debug_assert`。
+    pub fn set_item_number_counter(&mut self, counter: ItemNumberCounter) {
+        self.item_number = counter;
+    }
+
+    /// **M1c-2a**：当前计数器的共享句柄（`Arc::ptr_eq` 断言「同一计数器」用）。
+    pub fn item_number_shared(&self) -> std::sync::Arc<std::sync::atomic::AtomicI32> {
+        std::sync::Arc::clone(self.item_number.shared())
     }
 }
 
@@ -10401,7 +10423,7 @@ impl World {
                 &catalog,
                 sim.mon_random_add_value,
                 STRING_GOLD_NAME,
-                &mut sim.item_number,
+                &sim.item_number,
             )
         };
         sim.item_catalog = catalog_items;
@@ -10502,7 +10524,7 @@ impl World {
                 &catalog,
                 self.mon_random_add_value,
                 STRING_GOLD_NAME,
-                &mut self.item_number,
+                &self.item_number,
             )
         };
         self.item_catalog = catalog_items;
@@ -17008,6 +17030,44 @@ mod tests {
                 false,
             )
             .is_none());
+    }
+
+    /// **M1c-2a 牙 8【行为】`unified_counter_drops_and_shop_same_stream`**：同一个世界先
+    /// `budget_monster_drops`（怪物掉落 → ③ `World.item_number`）再 `make_merchant_item_by_name`
+    /// （商人 → 同一计数器）⇒ 两值**差 1**、共用一个号段。
+    ///
+    /// 变异：商人（或掉落）改用 `ItemNumberCounter::default()` ⇒ 各从 0 起 ⇒ 差 1 不成立 ⇒ 红。
+    #[test]
+    fn unified_counter_drops_and_shop_same_stream() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        let shared = std::sync::Arc::new(AtomicI32::new(500));
+        let mut w = World::new(16, 16);
+        w.set_item_number_counter(ItemNumberCounter::from_shared(std::sync::Arc::clone(
+            &shared,
+        )));
+        assert!(std::sync::Arc::ptr_eq(&w.item_number_shared(), &shared));
+        w.set_item_catalog(vec![mir2_data::StdItem {
+            name: "铁剑".to_string(),
+            dura_max: 5,
+            ..Default::default()
+        }]);
+        let drop_list = vec![MonsterDropItem {
+            max_point: 100,
+            sel_point: 100, // 恒命中
+            item_name: "铁剑".to_string(),
+            count: 1,
+        }];
+        let mut rng = RandomNumber::with_seed(7);
+        let (_gold, items) = w.budget_monster_drops(&mut rng, &drop_list);
+        assert_eq!(items.len(), 1, "必掉一件");
+        assert_eq!(items[0].make_index, 501, "共享计数器 500 ⇒ 掉落 = 501");
+        let merchant = w.make_merchant_item_by_name("铁剑").expect("模板存在");
+        assert_eq!(
+            merchant.make_index,
+            items[0].make_index + 1,
+            "商人必须与掉落同一号段（差 1）"
+        );
+        assert_eq!(shared.load(Ordering::Relaxed), 502);
     }
 
     /// `budget_monster_drops`（新 API）的掉落预算与 `spawn_monster_now`（既有路径）逐字节相同。

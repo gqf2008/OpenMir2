@@ -93,7 +93,7 @@ fn direct_call(snap: &DropSnapshot) -> Vec<DropPlanOut> {
     let mut order: Vec<&MonsterSnap> = snap.monsters.iter().collect();
     order.sort_by_key(|m| m.id);
     let mut rng = RandomNumber::with_seed(snap.seed);
-    let mut counter = ItemNumberCounter::default();
+    let counter = ItemNumberCounter::default();
     let cat = VecItemCatalog {
         items: &snap.catalog,
     };
@@ -106,7 +106,7 @@ fn direct_call(snap: &DropSnapshot) -> Vec<DropPlanOut> {
                 &mut rng,
                 snap.mon_random_add_value,
                 STRING_GOLD_NAME,
-                &mut counter,
+                &counter,
             );
             DropPlanOut {
                 id: m.id,

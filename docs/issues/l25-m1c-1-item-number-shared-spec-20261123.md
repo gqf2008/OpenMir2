@@ -6,6 +6,14 @@
 
 ---
 
+> **M1c-2a 覆盖声明（2026-11-23）**：本规格的 ② 段落**已被 M1c-2a 覆盖**——② `item_number_ex` **已删**
+> （oracle `GetItemNumberEx` 是死码），GM-M 改走统一计数器 `mir2_formula::drop::next_item_number`
+> （复位取 **oracle 主计数器语义** `> i32::MAX/2-1 ⇒ 1`，② 的 `MAX/2` 下限 clamp 不再存在）；
+> ③ `World.item_number` **已并入同一 `Arc`**（`ItemNumberCounter::from_shared`，经 `sim_loop` 与
+> `new_zone_state` 双注入）。计数器的**值不带 tick**（有意确定性偏离，T-72）。
+> 下文「①② 必要非充分」「③ 未共享前不得称全局唯一」「7 处 fetch_add」均为 M1c-1 当时口径，
+> 现以 `docs/issues/l25-m1c-2-plan-20261123.md` §3/§8 为准。
+
 ## 0. 范围与缺口（**必读，先看这条**）
 
 `make_index` 的分配**不止一个计数器**。对着 `7e54d4f9b` 代码事实，至少有 **3 个独立计数器**在产 `make_index`：

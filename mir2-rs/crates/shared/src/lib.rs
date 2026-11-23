@@ -15,6 +15,8 @@ pub const DUE_MS_TOLERANCE_MS: i64 = 32;
 pub mod hutil;
 /// `src/OpenMir2/HUtil32.cs` 的 1:1 逐函数移植（含原实现缺陷，见各函数文档）。
 pub mod hutil32;
+/// **M1c-2a**：`MIR2_ITEMNUM_TRACE` —— 统一 `MakeIndex` 计数器的逐次分配旁路（默认关）。
+pub mod itemnum_trace;
 pub mod replay;
 pub mod rng;
 /// **M3②③ 决策片（owner 2026-10-12 18:00）**：opt-in 的逐次 RNG trace（与 C# `rng-hook` 同形）。

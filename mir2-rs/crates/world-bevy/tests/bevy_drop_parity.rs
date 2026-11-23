@@ -97,7 +97,7 @@ fn budget_matches_existing_implementation() {
     let mut rng = RandomNumber::with_seed(SEED);
     let cat = catalog();
     let catalog_ref = VecItemCatalog { items: &cat };
-    let mut item_number = ItemNumberCounter::default();
+    let item_number = ItemNumberCounter::default();
     let mut expected = Vec::new();
     for m in &snap.monsters {
         let out = mon_get_random_items(
@@ -106,7 +106,7 @@ fn budget_matches_existing_implementation() {
             &mut rng,
             MON_RANDOM_ADD_VALUE,
             STRING_GOLD_NAME,
-            &mut item_number,
+            &item_number,
         );
         expected.push((m.id, out.gold, out.items));
     }
