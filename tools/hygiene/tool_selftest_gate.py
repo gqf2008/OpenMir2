@@ -65,6 +65,9 @@ REGISTRY = [
     # 卡 openmir2-zonek-maxexp（区 k 登录 MaxExp=0 证据配套）：两区验收比较器。自测用合成
     # frames/空 sidecar，钉 self 桶四态（off 不看 / report 只报 / judge 计红 / 单侧 0）+ 空输入。
     ("zone_align_check", ["tools/parity/zone_align_check.py", "--self-selftest"], False),
+    # 卡 openmir2-cross-delivered-semantics / M1b 第 4 步 A6：同玩家跨类帧序判据（P 自接收面）。
+    # 自测钉四态（相等/换序/缺 @ 帧/空输入）+ precheck 三态（2/0/其它），header-only 标签。
+    ("zone_frame_order_check", ["tools/parity/zone_frame_order_check.py", "--self-selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
