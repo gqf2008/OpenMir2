@@ -422,3 +422,27 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 
 **处置**：本条列为 **M1c 放行条件**（M1c 才把 `PLAYER_RUN` 纳入区 k 的段集）；缺口清单登记 **A7**
 （「`registry` 可变共享的跨区分叉」）。
+
+### 10.1 `(c3)` 可实施验收清单（`0c` 2026-11-23；**不属 `M1-0c'` 范围**）
+
+**表示：`Arc<Mutex<HashMap<usize, MapInfoFlag>>>`（latest-per-map）**。理由：`Vec<Option<MapInfoFlag>>`
+按 `map_id` 索引等于**第二份全量 flag 表**（非 `Copy`、体积大），drain 还要 O(N) 扫；`Vec<(usize, ..)>`
+允许同图多条；`HashMap` 的 `insert` 覆写即**严格 latest-per-map**、内存只记已变更图、drain 用
+`std::mem::take` 一次取走。**单写者**（只有区 0 的 `map_mode::flush_map_mode_writes` push；
+区 k 的 flush 因无脚本是空写）⇒ 无写写竞争；push 侧 `MapInfoFlag::clone` 每次「变更」一次，非热路径。
+
+**drain 插入点：`PLAYER_RUN` 顶部、`flush_map_mode_writes` 之前**。依据：`flush_map_mode_writes`
+（含 push）在 `PLAYER_RUN` 内，**早于 `barrier1(T)` / `barrier2(T)`**；区 k 在 T+1 顶部 drain 时
+已过 `barrier2(T)` ⇒ **确定性 T+1 可见**。若放在 flush 之后在同 tick 并发执行，则**无屏障序、
+同 tick 可见性不确定**；放在之前则同 tick 只能看到 ≤T-1 的 push、T 的 push 必在 T+1 被看到
+（flag 每图幂等 ⇒ 契约取**下界 T+1**）。
+
+**三条牙（2 负 + 1 正，全部符号锚）**：
+1. **负 1（不 drain ⇒ 红）**：区 0 `MapRegistry::set_flag` 并 push 后，**跳过**区 k drain ⇒
+   断言 `MapRegistry::flag_of` 仍旧值 ⇒ 红（证「必须应用」）。
+2. **负 2（去 push ⇒ 红）**：`set_flag` 落库但不 push ⇒ 区 k drain 空 ⇒ 仍旧值 ⇒ 红（证「必须广播」）。
+3. **正（客户端面）**：区 0 改 `safe_area`/`fight_zone` 类 flag 并 push → 两区过 barrier 推进到 T+1 →
+   区 k 顶部 drain 应用 → 断言 (**a**) `MapRegistry::flag_of` 新字段生效；(**b**) 用区 k 的 registry
+   走**帧构造点**，帧内容随新 flag 变化——符号锚三选一：`castle::area_state` ⇒ `SM_AREASTATE`；
+   `enter::music_id` ⇒ `SM_MAPDESCRIPTION`；`flag.day_light` ⇒ `SM_DAYCHANGING`。drain 未生效则仍旧 Flag ⇒ 红。
+   **(b) 才是「客户端可见」的行为证据。**
