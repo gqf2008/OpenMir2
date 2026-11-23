@@ -126752,6 +126752,71 @@ mod zone_command_tests {
         );
     }
 
+    /// **CURRENT BUG — 不是期望行为**（A24 现状牙 `zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG`）：
+    /// `GroundMap` 每次按 world **只读视图**重建、拾取删格**不写回 world**（§25.1 (A) 只批只读
+    /// 分片；见 `handle_ground_cmd` 文档）⇒ 同一地面物可被**重复 `CM_PICKUP` 拿到多次**。
+    ///
+    /// 本牙把**现状**钉住（真 dupe ⇒ 背包 +2），供后续"开写回"的修法翻转：修法落地后本牙必须
+    /// 改成断言 +1（或删除）。**不**改生产写回（本片边界）。
+    #[test]
+    // 名字故意大写 `CURRENT_BUG`（警示后来人这不是期望行为；opc-27 要求），故显式豁免 snake_case。
+    #[allow(non_snake_case)]
+    fn zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG() {
+        use mir2_world_bevy::{FloorItemKind, FloorItemMeta};
+        let (mut state, actor) = landed("cmd_pickup_dupe", zone::ZoneId::new(1));
+        let (gates, _rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let (hx, hy) = pos_of(&state, actor);
+        assert!(state.host.world.maps[0].add_floor_item(
+            hx,
+            hy,
+            4242,
+            FloorItemMeta {
+                kind: FloorItemKind::Item,
+                index: 1,
+                count: 1,
+                item_id: 4242,
+                of_base_object: actor,
+            },
+            0,
+        ));
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.wabil.max_weight = 1000;
+            sg.state.wabil.max_hand_weight = 100;
+            sg.state.wabil.weight = 0;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_pick = cmd(game_svr::ground::CM_PICKUP, 0, 0, 0);
+        cmd_pick.param = u16::try_from(hx).unwrap();
+        cmd_pick.tag = u16::try_from(hy).unwrap();
+        for round in 1..=2 {
+            assert_eq!(
+                handle_zone_command_with_tail_and_shared(
+                    &mut state, &gates, "hero", 7, &cmd_pick, None, &shared,
+                ),
+                ZoneCmdOutcome::Dispatched,
+                "第 {round} 次 CM_PICKUP 必须已接线"
+            );
+        }
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(
+            sg.state.item_list.len(),
+            2,
+            "A24 现状：同一地面物连拾 2 次可拿 2 件（真 dupe）；             若此处变 1 ⇒ 写回已开，请按新语义改本牙"
+        );
+    }
+
     /// **M1c-2b 牙 `zonek_ground_pickup_empty_noop`**：区 k 的 `CM_PICKUP`（位置门成立、地面无物 =
     /// **生产可达形态**，T-25）必须**零帧、零状态变化、不 panic**（守恒：别把"不可达"当失败）。
     ///
