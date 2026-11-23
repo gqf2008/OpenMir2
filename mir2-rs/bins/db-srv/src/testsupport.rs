@@ -146,7 +146,10 @@ fn write_conf(dir: &Path, dsn: &LegacyDsn) {
 /// `ServerInfo.txt` 的行表构造为一条路由：`127.0.0.1 → 127.0.0.1:7200`
 /// （选角用例断言 `SM_STARTPLAY` 的路由体 `127.0.0.1/7200`，与 `live_querychr.rs` 同）。
 pub fn test_server(tag: &str, dsn: &LegacyDsn) -> Arc<Server> {
-    let dir = std::env::temp_dir().join(format!("a2-dbsrv-ut-{tag}-{}", std::process::id()));
+    // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+    static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("a2-dbsrv-ut-{tag}-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("建 temp 目录失败");
     write_conf(&dir, dsn);
     let cfg = config::load(&dir.join("dbsvr.conf")).expect("解析测试配置失败");

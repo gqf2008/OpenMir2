@@ -77,7 +77,10 @@ fn hex(b: &[u8]) -> String {
 
 /// 建 temp 目录（含 `AddrTable.txt` / `ServerInfo.txt`，与 C# DBSrv 的部署一致）。
 fn fixture_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("a2-dbsrv-{tag}-{}", std::process::id()));
+    // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+    static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("a2-dbsrv-{tag}-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&d).expect("建 temp 目录失败");
     std::fs::write(d.join("AddrTable.txt"), "127.0.0.1\n").expect("写 AddrTable.txt 失败");
     std::fs::write(d.join("ServerInfo.txt"), "127.0.0.1 127.0.0.1 7200\n")
