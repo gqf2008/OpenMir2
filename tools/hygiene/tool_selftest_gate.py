@@ -62,6 +62,9 @@ REGISTRY = [
     # 卡 shard-map-group-closure（P0-3）：MapInfo 出口图 → 弱连通分量/切分实验。自测用合成 GBK 夹具
     # （A->B->C + D/T9 孤立），断言 maps/edges/分量/跨前缀边；离线 <1s。
     ("map_group_closure", ["tools/parity/map_group_closure.py", "--selftest"], False),
+    # 卡 openmir2-zonek-maxexp（区 k 登录 MaxExp=0 证据配套）：两区验收比较器。自测用合成
+    # frames/空 sidecar，钉 self 桶四态（off 不看 / report 只报 / judge 计红 / 单侧 0）+ 空输入。
+    ("zone_align_check", ["tools/parity/zone_align_check.py", "--self-selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
