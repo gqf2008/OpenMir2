@@ -1511,6 +1511,7 @@ fn handle_zone_command_with_tail_and_shared(
         online,
         ground_sessions,
         saves,
+        trade_sessions,
         ..
     } = host;
     let env = ZoneCmdEnv {
@@ -1524,6 +1525,7 @@ fn handle_zone_command_with_tail_and_shared(
         online,
         ground_sessions,
         saves,
+        trade_sessions,
         gates,
         chr_name,
         socket,
@@ -1569,6 +1571,9 @@ fn handle_zone_command_on(
     online: &mut OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
+    // **M1c-2b（P1）**：`PlayObject.Dealing` 的真值来源（ground/bag 两族用）。**本区自己的**
+    // 交易表——与区 0 同一把 `state` 锁内取值，不引入新锁；区 0 调用点用同名字段（锁内局部）。
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
     socket: i32,
@@ -1675,6 +1680,88 @@ fn handle_zone_command_on(
             gates,
             &env.enter_cfg.catalog,
             &*world,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-2b**：穿/脱装备——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_bag_cmd_with_magic`）。
+    // `magic` 取**本区** `saves`（非本区落地的会话为 `None`：已知结构差异，登记不修）；
+    // `dealing` 取**本区** `trade_sessions`；`displays` 用本区展示表（handler 会读旧 light/写 feature）。
+    if cmd.ident == game_svr::bag::CM_TAKEONITEM || cmd.ident == game_svr::bag::CM_TAKEOFFITEM {
+        let flame_ring_in = online
+            .find_by_chr(chr_name)
+            .and_then(|e| world.entities.get(e.actor_id))
+            .is_some_and(|e| e.flame_ring);
+        let magic = saves.get_mut(chr_name).map(|saved| MagicRecalc {
+            saved,
+            cfg: magic_cfg_of(env.enter_cfg),
+            flame_ring_in,
+        });
+        handle_bag_cmd_with_magic(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            gates,
+            &env.enter_cfg.catalog,
+            world,
+            displays,
+            env.enter_cfg.ref_msg_range,
+            trade_sessions.get(chr_name).is_some_and(|s| s.dealing),
+            mir2_client_ability_layout(),
+            magic,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-2b**：地面拾取/丢弃——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_ground_cmd`）。
+    // `world` 传**只读分片**（handler 只读 `floor_items_view_sorted`；地面写回不在模型内，T-25）；
+    // `trade_sessions` 供 `Dealing`/`DealLastTick` 门；其余实参全部取区副本。
+    if cmd.ident == game_svr::ground::CM_PICKUP || cmd.ident == game_svr::ground::CM_DROPITEM {
+        handle_ground_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            trade_sessions,
+            &*world,
+            ground_sessions,
+            &*online,
+            gates,
+            &env.enter_cfg.ground,
+            env.colors,
+            &env.enter_cfg.catalog,
+            env.registry,
+            &env.enter_cfg.string_conf,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-2b**：仓库存/取回——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_storage_cmd`）。
+    // `world` 传 `&mut`（取回支会改世界侧）；`storage_items` 是**本区会话**的 `sg.storage.items`。
+    if cmd.ident == game_svr::shop::CM_USERSTORAGEITEM
+        || cmd.ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
+    {
+        handle_storage_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            gates,
+            world,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.shop,
+            env.colors,
         );
         return ZoneCmdOutcome::Dispatched;
     }
@@ -36319,6 +36406,8 @@ impl HostLoop {
                                     online,
                                     sessions,
                                     saves,
+                                    // **M1c-2b（P1）**：`&mut` → `&` 的逐次重借（闭包 FnMut 可重复调用）。
+                                    &*trade_sessions,
                                     gates,
                                     chr_name,
                                     *socket,
@@ -126368,6 +126457,477 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
+    /// `handle_storage_cmd`；可观测副作用 = `SM_STORAGE_OK(701)` + 物品从 `item_list` 迁到
+    /// **本区会话** `storage.items`。
+    ///
+    /// 夹具：`landed()` 世界 + `spawn_merchant`（`is_storage`，同图 2 格内）。
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 701 ⇒ 红。
+    #[test]
+    fn zonek_storage_ok() {
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        let (mut state, actor) = landed("cmd_storage", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let (hx, hy) = pos_of(&state, actor);
+        let merchant_id = state
+            .host
+            .world
+            .spawn_merchant(MerchantSpawn {
+                name: "仓库管理员".to_string(),
+                x: hx - 2,
+                y: hy,
+                map_id: 0,
+                state: MerchantState::new(
+                    "storage".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags {
+                        is_storage: true,
+                        is_getback: true,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("仓库商人挂图成功");
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_store = cmd(game_svr::shop::CM_USERSTORAGEITEM, 0, 0, 0);
+        cmd_store.recog = merchant_id;
+        cmd_store.param = 9001; // MakeIndex 低 16 位
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_store,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_USERSTORAGEITEM 必须已接线"
+        );
+        let mut saw_ok = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_STORAGE_OK
+            {
+                saw_ok = true;
+            }
+        }
+        assert!(saw_ok, "存仓成功必须回 SM_STORAGE_OK(701)");
+        let sg = &state.host.ground_sessions["hero"];
+        assert!(sg.state.item_list.is_empty(), "背包减一");
+        assert_eq!(sg.storage.items.len(), 1, "仓库加一（本区会话）");
+    }
+
+    /// **M1c-2b 牙 `zonek_storage_absent_merchant_fails`**：无商人实体时 `CM_USERSTORAGEITEM`
+    /// **仍回 `SM_STORAGE_FAIL(703)`**（门在循环体内，oracle 原样）；而
+    /// `CM_USERTAKEBACKSTORAGEITEM` 无商人时**零帧**（oracle 直接 return）。
+    ///
+    /// 变异：删臂 ⇒ 前者 `Unsupported` 无 703、后者也断 ⇒ 红。
+    #[test]
+    fn zonek_storage_absent_merchant_fails() {
+        let (mut state, actor) = landed("cmd_storage_absent", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let shared = SharedServices::for_test();
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let mut cmd_store = cmd(game_svr::shop::CM_USERSTORAGEITEM, 0, 0, 0);
+        cmd_store.recog = 1_000_000; // 不存在的商人
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_store,
+                Some("x"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let mut saw_fail = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]])
+                    == mir2_protocol::messages::SM_STORAGE_FAIL
+            {
+                saw_fail = true;
+            }
+        }
+        assert!(saw_fail, "无商人存仓仍回 SM_STORAGE_FAIL(703)");
+        // 取回：无商人 ⇒ 零帧。
+        let mut cmd_back = cmd(game_svr::shop::CM_USERTAKEBACKSTORAGEITEM, 0, 0, 0);
+        cmd_back.recog = 1_000_000;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_back,
+                Some("x"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "无商人取回 ⇒ 零帧（oracle 直接 return）"
+        );
+    }
+
+    /// **M1c-2b 牙 `zonek_ground_drop_is_oracle_fail`**：区 k 的 `CM_DROPITEM` 派发到**与区 0 同一**
+    /// `handle_ground_cmd`；oracle 既有形态（T-19：`MapItem.ItemId` 恒 0）⇒ 普通丢弃**恒回
+    /// `SM_DROPITEM_FAIL(601)`**、背包不动、地面不新增。
+    ///
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 601 ⇒ 红。**不得**断言 600/地面出现（不可达面）。
+    #[test]
+    fn zonek_ground_drop_is_oracle_fail() {
+        let (mut state, actor) = landed("cmd_drop", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_drop = cmd(game_svr::ground::CM_DROPITEM, 0, 0, 0);
+        cmd_drop.recog = 9001;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_drop,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_DROPITEM 必须已接线"
+        );
+        let mut saw_fail = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == game_svr::ground::SM_DROPITEM_FAIL
+            {
+                saw_fail = true;
+            }
+        }
+        assert!(
+            saw_fail,
+            "oracle 既有形态：普通丢弃恒回 SM_DROPITEM_FAIL(601)"
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 1, "丢弃失败 ⇒ 背包不动");
+    }
+
+    /// **M1c-2b 牙 `zonek_ground_pickup_adds_item`**：区 k 的 `CM_PICKUP` **成功分支**——
+    /// 直接插入一件 `ItemId != 0` 的地面物（`MapGrid::add_floor_item`；**不走**生产投放路径），
+    /// 玩家站同格 ⇒ 背包 +1、出 `pickwire::outcome_frames` 的实际产出帧（物品支为
+    /// `SM_ADDITEM(200)` + `SM_ITEMHIDE` 通知）。
+    ///
+    /// 注：拾取删格对 world 的**写回**尚未开（§25.1 (A) 只批只读分片）⇒ **不断言"地面 -1"**
+    /// （world 里不消失是已登记形态）；"地面被处理"由 `pick_up` 在本地 `GroundMap` 上的隐藏
+    /// 通知帧体现。
+    ///
+    /// 变异：删 pickup 臂 ⇒ `Unsupported`、背包不变 ⇒ 红。
+    #[test]
+    fn zonek_ground_pickup_adds_item() {
+        use mir2_world_bevy::{FloorItemKind, FloorItemMeta};
+        let (mut state, actor) = landed("cmd_pickup_add", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let (hx, hy) = pos_of(&state, actor);
+        assert!(
+            state.host.world.maps[0].add_floor_item(
+                hx,
+                hy,
+                4242,
+                FloorItemMeta {
+                    kind: FloorItemKind::Item,
+                    index: 1,
+                    count: 1,
+                    item_id: 4242,
+                    of_base_object: actor,
+                },
+                0,
+            ),
+            "夹具：地面物落格必须成功"
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            // 拾取负重门：`test_ability()` 的 `max_weight` 是 0。
+            sg.state.wabil.max_weight = 1000;
+            sg.state.wabil.max_hand_weight = 100;
+            sg.state.wabil.weight = 0;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_pick = cmd(game_svr::ground::CM_PICKUP, 0, 0, 0);
+        cmd_pick.param = u16::try_from(hx).unwrap();
+        cmd_pick.tag = u16::try_from(hy).unwrap();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state, &gates, "hero", 7, &cmd_pick, None, &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_PICKUP 必须已接线"
+        );
+        let mut idents: Vec<u16> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6 {
+                idents.push(u16::from_le_bytes([body[4], body[5]]));
+            }
+        }
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(
+            sg.state.item_list.len(),
+            1,
+            "拾取成功必须背包 +1（实收帧 ident={idents:?}）"
+        );
+        assert_eq!(sg.state.item_list[0].index, 1, "入包的是该模板");
+        assert!(
+            idents.contains(&mir2_protocol::messages::SM_ADDITEM),
+            "拾取成功必须出 SM_ADDITEM(200)；实收 ident={idents:?}"
+        );
+    }
+
+    /// **M1c-2b 牙 `zonek_ground_pickup_empty_noop`**：区 k 的 `CM_PICKUP`（位置门成立、地面无物 =
+    /// **生产可达形态**，T-25）必须**零帧、零状态变化、不 panic**（守恒：别把"不可达"当失败）。
+    ///
+    /// 变异：删臂 ⇒ 返回 `Unsupported` ⇒ 红；改坏位置门/凭空加帧 ⇒ 红。
+    #[test]
+    fn zonek_ground_pickup_empty_noop() {
+        let (mut state, actor) = landed("cmd_pickup_empty", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let shared = SharedServices::for_test();
+        let (x, y) = pos_of(&state, actor);
+        let mut cmd_pick = cmd(game_svr::ground::CM_PICKUP, 0, 0, 0);
+        cmd_pick.param = u16::try_from(x).unwrap();
+        cmd_pick.tag = u16::try_from(y).unwrap();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state, &gates, "hero", 7, &cmd_pick, None, &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_PICKUP 必须已接线"
+        );
+        assert!(rx.try_recv().is_err(), "地面无物 ⇒ 零帧（T-25）");
+    }
+
+    /// **M1c-2b 牙 `zonek_bag_takeon_ok`**：区 k 的 `CM_TAKEONITEM` 派发到**与区 0 同一**
+    /// `handle_bag_cmd_with_magic`；可观测副作用 = `SM_TAKEON_OK(615)` + `UseItems[0]` 迁移 +
+    /// `item_list` 减一。
+    ///
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 615 ⇒ 红。
+    #[test]
+    fn zonek_bag_takeon_ok() {
+        let (mut state, actor) = landed("cmd_takeon", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            // 穿戴门的负重/腕力输入（`test_ability()` 的三项上限都是 0 ⇒ 木剑必被拒）。
+            sg.state.wabil.max_hand_weight = 100;
+            sg.state.wabil.max_wear_weight = 100;
+            sg.state.wabil.max_weight = 1000;
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_takeon = cmd(game_svr::bag::CM_TAKEONITEM, 0, 0, 0);
+        cmd_takeon.recog = 9001;
+        cmd_takeon.param = 1; // 武器槽（`SLOT_WEAPON`；std_mode 5 只允许 1）
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_takeon,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_TAKEONITEM 必须已接线"
+        );
+        let mut saw_ok = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == game_svr::bag::SM_TAKEON_OK
+            {
+                saw_ok = true;
+            }
+        }
+        assert!(saw_ok, "穿装成功必须回 SM_TAKEON_OK(615)（可观测副作用）");
+        let sg = &state.host.ground_sessions["hero"];
+        assert!(
+            sg.use_items[1]
+                .as_ref()
+                .is_some_and(|it| it.make_index == 9001),
+            "物品必须进 UseItems[1]（武器槽）"
+        );
+        assert!(sg.state.item_list.is_empty(), "背包必须减一");
+    }
+
+    /// **M1c-2b 牙 `zonek_bag_takeoff_ok_and_reject`**：`CM_TAKEOFFITEM` 成功 ⇒ `SM_TAKEOFF_OK(619)`
+    /// + 槽位清空/回背包；空槽 ⇒ `SM_TAKEOFF_FAIL(620)`（失败面同族）。
+    ///
+    /// 变异：删臂 ⇒ 两向都无帧 ⇒ 红。
+    #[test]
+    fn zonek_bag_takeoff_ok_and_reject() {
+        let (mut state, actor) = landed("cmd_takeoff", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.use_items[0] = Some(game_svr::bag::BagItem {
+                make_index: 60001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_takeoff = cmd(game_svr::bag::CM_TAKEOFFITEM, 0, 0, 0);
+        cmd_takeoff.recog = 60001; // 成功：槽位 0（param=0）
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_takeoff,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let mut saw_ok = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == game_svr::bag::SM_TAKEOFF_OK
+            {
+                saw_ok = true;
+            }
+        }
+        assert!(saw_ok, "卸下成功必须回 SM_TAKEOFF_OK(619)");
+        {
+            let sg = &state.host.ground_sessions["hero"];
+            assert!(sg.use_items[0].is_none(), "槽位必须清空");
+            assert_eq!(sg.state.item_list.len(), 1, "物品回背包");
+        }
+        // 失败面：空槽 1 ⇒ 620。
+        let mut cmd_fail = cmd(game_svr::bag::CM_TAKEOFFITEM, 0, 0, 0);
+        cmd_fail.recog = 60001;
+        cmd_fail.param = 1;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_fail,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let mut saw_fail = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == game_svr::bag::SM_TAKEOFF_FAIL
+            {
+                saw_fail = true;
+            }
+        }
+        assert!(saw_fail, "空槽卸下必须回 SM_TAKEOFF_FAIL(620)");
     }
 
     /// **M1c-2b 牙 `zonek_querybag_bagitems`**：区 k 的 `CM_QUERYBAGITEMS` 派发到**与区 0 同一**
