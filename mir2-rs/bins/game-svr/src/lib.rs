@@ -26438,42 +26438,148 @@ mod perf_counters {
     /// ④b 补区 k 换图帧后应归零。
     pub(crate) static MOVE_MAP_CHANGE_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
 
+    // ---- 卡 C27（openmir2-perfcounter-test-isolation）：`#[cfg(test)]` 线程级计数器实例 ----
+    // 生产路径的 `note_zone_login_landed`/`note_zone_disconnect_dropped` 会从**其它并行用例**
+    // 的线程写全局原子；直接读写计数器的用例因此会被插队（全量红、单跑绿）。这里给测试提供
+    // 一个**本线程实例**：安装后本线程的读写/复位都走实例，全局原子不受影响、也看不到别人的写。
+    #[cfg(test)]
+    struct TestZoneCounters {
+        login_uncovered: AtomicU64,
+        target_unavailable: AtomicU64,
+        router_unassigned: AtomicU64,
+        login_offzone: AtomicU64,
+        disconnect_dropped: AtomicU64,
+        login_landed: [AtomicU64; 512],
+    }
+    #[cfg(test)]
+    impl TestZoneCounters {
+        fn new() -> Self {
+            Self {
+                login_uncovered: AtomicU64::new(0),
+                target_unavailable: AtomicU64::new(0),
+                router_unassigned: AtomicU64::new(0),
+                login_offzone: AtomicU64::new(0),
+                disconnect_dropped: AtomicU64::new(0),
+                login_landed: [const { AtomicU64::new(0) }; 512],
+            }
+        }
+    }
+    #[cfg(test)]
+    thread_local! {
+        static TEST_ZONE_COUNTERS: std::cell::RefCell<Option<TestZoneCounters>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    /// 安装本线程计数器实例；`Drop` 时卸载（panic 也走 Drop，线程结束即失效）。
+    #[cfg(test)]
+    pub(crate) struct TestZoneCountersGuard;
+    #[cfg(test)]
+    impl Drop for TestZoneCountersGuard {
+        fn drop(&mut self) {
+            TEST_ZONE_COUNTERS.with(|c| *c.borrow_mut() = None);
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_zone_counters_scope() -> TestZoneCountersGuard {
+        TEST_ZONE_COUNTERS.with(|c| *c.borrow_mut() = Some(TestZoneCounters::new()));
+        TestZoneCountersGuard
+    }
+    #[cfg(test)]
+    fn with_test_zone_counters<R>(f: impl FnOnce(&TestZoneCounters) -> R) -> Option<R> {
+        TEST_ZONE_COUNTERS.with(|c| c.borrow().as_ref().map(f))
+    }
+
     pub(crate) fn note_zone_login_uncovered() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.login_uncovered.fetch_add(1, Ordering::Relaxed)).is_some()
+        {
+            return;
+        }
         ZONE_LOGIN_UNCOVERED.fetch_add(1, Ordering::Relaxed);
     }
     #[cfg(test)]
     pub(crate) fn zone_login_uncovered() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.login_uncovered.load(Ordering::Relaxed)) {
+            return v;
+        }
         ZONE_LOGIN_UNCOVERED.load(Ordering::Relaxed)
     }
     pub(crate) fn note_zone_target_unavailable() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.target_unavailable.fetch_add(1, Ordering::Relaxed))
+            .is_some()
+        {
+            return;
+        }
         ZONE_TARGET_UNAVAILABLE.fetch_add(1, Ordering::Relaxed);
     }
     #[cfg(test)]
     pub(crate) fn zone_target_unavailable() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.target_unavailable.load(Ordering::Relaxed)) {
+            return v;
+        }
         ZONE_TARGET_UNAVAILABLE.load(Ordering::Relaxed)
     }
     pub(crate) fn note_zone_router_unassigned() -> u64 {
+        #[cfg(test)]
+        if let Some(n) =
+            with_test_zone_counters(|t| t.router_unassigned.fetch_add(1, Ordering::Relaxed) + 1)
+        {
+            return n;
+        }
         ZONE_ROUTER_UNASSIGNED.fetch_add(1, Ordering::Relaxed) + 1
     }
     #[cfg(test)]
     pub(crate) fn zone_router_unassigned() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.router_unassigned.load(Ordering::Relaxed)) {
+            return v;
+        }
         ZONE_ROUTER_UNASSIGNED.load(Ordering::Relaxed)
     }
     pub(crate) fn note_zone_login_landed(zone: u32) {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            if let Some(c) = t.login_landed.get(zone as usize) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .is_some()
+        {
+            return;
+        }
         if let Some(c) = ZONE_LOGIN_LANDED.get(zone as usize) {
             c.fetch_add(1, Ordering::Relaxed);
         }
     }
     #[cfg(test)]
     pub(crate) fn zone_login_landed(zone: u32) -> u64 {
+        if let Some(v) = with_test_zone_counters(|t| {
+            t.login_landed
+                .get(zone as usize)
+                .map_or(0, |c| c.load(Ordering::Relaxed))
+        }) {
+            return v;
+        }
         ZONE_LOGIN_LANDED
             .get(zone as usize)
             .map_or(0, |c| c.load(Ordering::Relaxed))
     }
     pub(crate) fn note_zone_login_offzone() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.login_offzone.fetch_add(1, Ordering::Relaxed)).is_some() {
+            return;
+        }
         ZONE_LOGIN_OFFZONE.fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn note_zone_disconnect_dropped() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.disconnect_dropped.fetch_add(1, Ordering::Relaxed))
+            .is_some()
+        {
+            return;
+        }
         ZONE_DISCONNECT_DROPPED.fetch_add(1, Ordering::Relaxed);
     }
     /// 区 k 的未接线非移动命令：计数 + 按 `ident` 采样（前 8 次 / 每 1000 次一行 WRN）。
@@ -26510,14 +26616,37 @@ mod perf_counters {
     }
     #[cfg(test)]
     pub(crate) fn zone_disconnect_dropped() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.disconnect_dropped.load(Ordering::Relaxed)) {
+            return v;
+        }
         ZONE_DISCONNECT_DROPPED.load(Ordering::Relaxed)
     }
     #[cfg(test)]
     pub(crate) fn zone_login_offzone() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.login_offzone.load(Ordering::Relaxed)) {
+            return v;
+        }
         ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed)
     }
     #[cfg(test)]
     pub(crate) fn reset_zone_login_counters_for_tests() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            t.login_uncovered.store(0, Ordering::Relaxed);
+            t.target_unavailable.store(0, Ordering::Relaxed);
+            t.router_unassigned.store(0, Ordering::Relaxed);
+            t.login_offzone.store(0, Ordering::Relaxed);
+            t.disconnect_dropped.store(0, Ordering::Relaxed);
+            for c in &t.login_landed {
+                c.store(0, Ordering::Relaxed);
+            }
+        })
+        .is_some()
+        {
+            return;
+        }
         ZONE_LOGIN_UNCOVERED.store(0, Ordering::Relaxed);
         ZONE_TARGET_UNAVAILABLE.store(0, Ordering::Relaxed);
         ZONE_ROUTER_UNASSIGNED.store(0, Ordering::Relaxed);
@@ -127050,6 +127179,8 @@ mod zone_login_landing_tests {
     /// 把 `note_zone_router_unassigned` 改成不加 1 ⇒ 断言红。
     #[test]
     fn zone_login_counters_note_and_reset() {
+        // 卡 C27：本用例直接读写计数器 ⇒ 用本线程实例隔离并行用例的插队。
+        let _counters = perf_counters::test_zone_counters_scope();
         perf_counters::reset_zone_login_counters_for_tests();
         perf_counters::note_zone_login_uncovered();
         perf_counters::note_zone_target_unavailable();
@@ -127533,6 +127664,8 @@ mod zone_disconnect_tests {
     /// 陈旧 `Closed`（重登后旧 socket）：整臂早退、什么都不清、计 `zone_disconnect_dropped`。
     #[test]
     fn stale_close_keeps_state_and_counts_dropped() {
+        // 卡 C27：同上——本用例断言 `zone_disconnect_dropped` 的精确值。
+        let _counters = perf_counters::test_zone_counters_scope();
         let (mut state, actor) = landed("stale", zone::ZoneId::new(1));
         perf_counters::reset_zone_login_counters_for_tests();
         let map_names = vec!["0".to_string()];
