@@ -499,11 +499,13 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 | move | `movewire::is_move_command`（`CM_TURN`/`CM_WALK`/`CM_RUN`）∪ `is_horse_run`（`CM_HORSERUN`+`_LEGACY`） | LOCAL |
 | hit | `attackwire::HIT_IDENTS: [u16; 9]` | LOCAL |
 | spell | `magicwire::is_spell_ident`（`CM_SPELL`） | LOCAL |
-| say（**非 GM**） | `CM_SAY` 文本不以 `@` 起 = 本区聊天；`@` 起 = **控制邮箱回区 0**（A6 顺序在 M1b 设计单列） | LOCAL / 转发 |
-| query | P0 批的 query 4 条：`CM_QUERYUSERNAME`/`CM_QUERYUSERSTATE`/`CM_QUERYUSERSET`/`CM_QUERYVAL` | 只读 |
+| say（**非 GM**） | ⚠ **分类在 payload 级、不是 ident 级**：`CM_SAY` 全体不能单独归 LOCAL；「文本不以 `@` 起」是 `handle_say_with_saves` 内的运行时判定，**代码无 `is_gm_say`/`GM_AT` 谓词**。`@` 起 ⇒ 控制邮箱回区 0（A6 顺序在 M1b 设计单列） | LOCAL（payload 级）/ 转发 |
+| query | ⚠ **代码目前没有组 const**：4 个 ident 散在 `dispatch_inbound_p0` 内逐个 match（`CM_QUERYUSERNAME=80`/`CM_QUERYUSERSTATE=82`/`CM_QUERYVAL=1065`/`CM_QUERYUSERSET=3040`）。**M1b 实施时须照 `HIT_IDENTS` 体例新增 `QUERY_IDENTS: [u16; 4]`**，分类器才有 artifact、分母才可对账 | 只读 |
 | levelrank | `CM_LEVELRANK` | 只读 |
 | login-notice | `CM_LOGINNOTICEOK` | 只写 `client_tick` |
 | **magic-key** | `CM_MAGICKEYCHANGE`（**opc-27 裁定入 M1b**：不造件、不需进程态） | LOCAL |
+
+> **代码 artifact 核验（`0c` 2026-11-23）**：7 族中 **5 族**代码有确权 const/谓词（`movewire::is_move_command`+`is_horse_run`、`attackwire::HIT_IDENTS`、`magicwire::is_spell_ident`、`magicwire::is_magic_key_ident`、`enter::CM_LEVELRANK`）；**2 族没有**——query 需补 `QUERY_IDENTS`、say 须按 payload 级分类。**实施 M1b 时必须先补这两处 artifact，否则分类器无从引用、分母无从对账。**
 
 **本集之外一律不在区 k 本地**：物品类（bag/eat/drop/drug/shop/selloff/click-npc）与 PROCESS 类
 （guild/kick/AdminGm，按 form (d)/广播）+ deal/storage/**party**（opc-27 裁定入 M1c）→ 后续片次。
