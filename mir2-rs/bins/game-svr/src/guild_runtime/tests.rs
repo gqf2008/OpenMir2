@@ -2227,7 +2227,14 @@ fn g3_anchor_a5_prepare_closed_guild_and_flags() {
     assert!(del < c && kickret < c && c < deal);
 
     // ④ 实参局部名 + 同臂作用域（`drain_soft_close` 也快照同名局部量，故只要求在 Closed 臂内）。
-    let letflags = exact(&l, "let (bo_reconnection, bo_soft_close) = ground_sessions");
+    // **折行鲁棒**（M1-0a-3）：区 0 是单行 `… = ground_sessions`，区 k 被 rustfmt 拆成 `= ` ⏎
+    // `ground_sessions…` ⇒ 用 trim 后的**前缀**匹配两种折行，语义仍是「这行 flags 快照存在」。
+    let letflags: Vec<usize> = (0..l.len())
+        .filter(|&i| {
+            l[i].trim()
+                .starts_with("let (bo_reconnection, bo_soft_close) =")
+        })
+        .collect();
     assert!(!letflags.is_empty(), "Closed 臂必须先快照 flags");
     let closed = exact(&l, "let guild_closed = guild_runtime::on_disconnect(")[0];
     let arm_start = (0..closed)

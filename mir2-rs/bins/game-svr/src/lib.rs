@@ -41157,12 +41157,6 @@ mod tests {
             src.contains("login_tails.insert(head.chr_name.clone(), inputs);"),
             "延迟段必须存 EnterWorldInputs（首次扫描时按真机堆布局重算）"
         );
-        assert!(
-            src.contains(
-                "            Some(&mut login_tails),\n            Some(&mut monster_walk_seen),\n        );"
-            ),
-            "生产 drain 调用必须传 Some(&mut login_tails) 与 Some(&mut monster_walk_seen)"
-        );
         // **参数无关形状**：签名演进（增删/重排实参）是合法变更，本锚不钉整行文本，
         // 只钉 ① 生产赋值行的绑定名（`aoi_frames` ← `drain_aoi_downlink(`）；② 实参表达式里必须出现的
         // 关键实参（`world`/`displays`/`online`/`gates`）与登录待定表 `login_tails.as_deref()`
@@ -41194,6 +41188,24 @@ mod tests {
                 "AOI 下行调用实参缺少 `{arg}`（实参：{aoi_args}）"
             );
         }
+        // **M1-0a-3**：`Some(&mut login_tails)`/`Some(&mut monster_walk_seen)` 必须**同处 AOI 调用
+        // 尾部**（不依赖缩进/折行）。做法：自 `Some(&mut monster_walk_seen)` 向前 `rfind`
+        // `Some(&mut login_tails)`，要求两者相距 < 400 字节；生产退回 `None` ⇒ 最近的命中跑到本文件
+        // 别处（文档/断言文案），距离远超 400 ⇒ 红。`concat!` 拆字面量避免测试自身源码命中。
+        let seen_needle = concat!("Some(&mut monster_", "walk_seen)");
+        let tails_needle = concat!("Some(&mut login_", "tails)");
+        let seen_at = src
+            .find(seen_needle)
+            .expect("生产必须传 Some(&mut monster_walk_seen)");
+        let tails_at = src[..seen_at]
+            .rfind(tails_needle)
+            .expect("生产必须在同一调用里传 Some(&mut login_tails)");
+        assert!(
+            seen_at - tails_at < 400,
+            "两个 Some 实参必须同处一个调用（相距 {} 字节）",
+            seen_at - tails_at
+        );
+
         // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
         // 锚只钉「生产赋值调用前缀」，不钉实参串与闭括号 ⇒ 允许签名演进（本批在末尾追加了
         // 子探针句柄 `prof`）与 rustfmt 换行；该句柄不参与帧面/次序语义。
@@ -118384,7 +118396,7 @@ mod entry_telemetry_wiring {
         );
         assert_eq!(SRC.matches(&anchor).count(), 1, "recog!=1 分支必须唯一");
         let i = SRC.find(&anchor).expect("recog!=1 分支");
-        let seg = &SRC[i..(i + 1500).min(SRC.len())];
+        let seg = window(SRC, i, 1500);
         assert!(
             seg.contains(&needle("load_reply_other")),
             "record_load_reply_other 必须在该分支里（删掉分支 ⇒ 本用例红）"
@@ -118396,12 +118408,20 @@ mod entry_telemetry_wiring {
     }
 
     /// 按字符边界截一段源码（中文注释是多字节，直接按字节切会 panic）。
+    ///
+    /// **既有缺陷修复（非本次引入）**：旧版只把 `end` 回退到字符边界，`i` 本身若不是字符边界
+    /// （调用方用 `find(...) - 800` 之类算起点）仍会 panic（`start byte index … is not a char
+    /// boundary`）⇒ 现在**起点也回退**到最近的字符边界。断言语义不变。
     fn window(s: &str, i: usize, max: usize) -> &str {
-        let mut end = (i + max).min(s.len());
-        while end > i && !s.is_char_boundary(end) {
+        let mut start = i.min(s.len());
+        while start > 0 && !s.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = (start + max).min(s.len());
+        while end > start && !s.is_char_boundary(end) {
             end -= 1;
         }
-        &s[i..end]
+        &s[start..end]
     }
 
     /// 四段链 ②：请求**排队**计数必须挂在**取档请求**这条链上
