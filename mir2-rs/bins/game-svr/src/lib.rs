@@ -78246,7 +78246,11 @@ SendRefMsgRange=15
             let table = game_svr::mongen::MonsterTable::new(monsters);
             // 召唤 spawner 需 MapRegistry 能 `name_of(map_id)`（`MonsterTableSpawner::spawn`）；
             // 写一张临时 0.map（200×200 全 0）供 `from_entries` 载入 name↔id（可行走性仍用 World 图）。
-            let base = std::env::temp_dir().join(format!("magic17-map-{}", std::process::id()));
+            // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C17 同型）。
+            static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let base =
+                std::env::temp_dir().join(format!("magic17-map-{}-{seq}", std::process::id()));
             let _ = std::fs::create_dir_all(base.join("Map"));
             let (mw, mh) = (200_i16, 200_i16);
             let mut map_bytes = vec![0u8; mir2_envir::HEADER_BYTES];
