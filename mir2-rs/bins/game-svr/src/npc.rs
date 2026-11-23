@@ -1144,6 +1144,10 @@ pub struct NpcPlayer<'r, 'g> {
     /// [`crate::ground::drop_item_down_give`]——oracle 的掉落路径在本 oracle 树上恒失败
     /// （`T-19`），但计数与 RNG 抽数必须补齐。
     pub full_bag_drops: Vec<String>,
+    /// **A27-2**：脚本动作里 `SendDelItems(UseItems[i])` 的**摘下前快照**（`TAKEW` /
+    /// `UPGRADEITEMSEX` 破碎支）。引擎在 `set_use_item_index(i, 0)` **之前**调用
+    /// `send_del_use_item` ⇒ 此处拷下原件，由宿主写回后直发 `SM_DELITEM(202)`（T-157/A27-2）。
+    pub del_use_items: Vec<crate::bag::BagItem>,
     /// `SystemShare.MapMgr` 已装载地图的逻辑名表（`map_exists` = `FindMap(name) != null`）。
     /// 宿主经 [`NpcVars::map_names`] 灌入；缺省空 ⇒ 恒 `false`（`SETMPAMODE` 因此走
     /// `ScriptActionError` 支，与「注册表未装载」同口径）。
@@ -1270,6 +1274,7 @@ impl NpcPlayer<'_, '_> {
             use_items: vec![None; crate::ability::USE_ITEMS_LEN],
             catalog: None,
             full_bag_drops: Vec::new(),
+            del_use_items: Vec::new(),
             map_names: Vec::new(),
             sys_msg_cfg: SysMsgCfg::default(),
             broadcast_cfg: BroadcastCfg::default(),
@@ -2598,10 +2603,16 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     }
     /// `playerActor.SendDelItems(UseItems[i])`（`ScriptEngine.cs:755` 等，摘佩戴位前的线上帧）。
     ///
-    /// **登记**：`SendDelItems` 的 `RM_DELITEM` → `SM_DELITEM` 线上帧在本宿主未建模
-    /// （与 `take`/`give` 的 `SendDelItems`/`SendAddItem` 同一残余，见 `T-157`）；
+    /// **A27-2**：摘下前的快照入 `del_use_items`（本函数在 `set_use_item_index(i, 0)` **之前**
+    /// 被引擎调用 ⇒ 此刻 `Index` 仍有效）。宿主写回后逐件直发 `SM_DELITEM(202)`；
     /// 持久化面不受影响（`UseItems` 槽在写回后落 `hum_items`）。
-    fn send_del_use_item(&mut self, _i: i32) {}
+    fn send_del_use_item(&mut self, i: i32) {
+        if let Ok(idx) = usize::try_from(i) {
+            if let Some(Some(it)) = self.use_items.get(idx) {
+                self.del_use_items.push(it.clone());
+            }
+        }
+    }
     /// `GotoLableGiveItem` 的入包支：`ItemList.Add(userItem)`——**每件一个 `UserItem`**
     /// （`ItemList.Count` 按件增长，`IsEnoughBag` 的判定依赖它）。
     fn give_item(&mut self, name: &str, count: i32) {
