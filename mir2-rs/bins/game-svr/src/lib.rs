@@ -1546,7 +1546,7 @@ struct ZoneCmdEnv<'a> {
     enter_cfg: &'a EnterConfig,
     colors: &'a MsgColors,
     registry: Option<&'a mir2_envir::MapRegistry>,
-    /// **M1c-2c 段 5（P1）**：解包表（`SharedServices.unbind_list` 的只读借用；与区 0 同一份装载）。
+    /// **M1c-2c 段 5（P1）/ 5-fix**：解包表（`SharedServices.unbind_list` 的只读借用；同一实例）。
     unbind_list: &'a game_svr::unbindlist::UnbindList,
     /// **M1c-2c 段 5**：`MakeIndex` 会话计数器的**进程唯一** `Arc` 的借用（解包 6 件用）。
     item_number: &'a std::sync::atomic::AtomicI32,
@@ -3340,8 +3340,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // （`PlayObject.Operate.cs:657-666`）。
     // 失败口径差异（登记）：oracle 终止起服；本宿主按其它名单装载同款记 ERR 后以**空表**继续
     // （部署件 `UnbindList.txt` 无非法行 ⇒ 该支不可达）。
-    // **M1c-2c 段 5（P1）**：`UnbindList` 以 `Arc` 形式**只读共享**——区 0 的
-    // `ProcessServices` 与各区 k 的 `SharedServices` 共用**同一份装载**（不得为区 k 再造第二份）。
+    // **M1c-2c 段 5（P1）/ 5-fix**：`UnbindList` 在此**装载一次**并包成 `Arc`；此后只以
+    // `Arc::clone` 流转——区 0 的 `ProcessServices`（经 `sim_loop` 形参）与各区 k 的
+    // `SharedServices` 都是**同一实例**（`Arc::ptr_eq`）。全文件与 unbind 相关的
+    // `Arc::new` 只允许出现在这一处（牙 `shared_and_process_unbind_list_is_single_instance`）。
     let unbind_list = std::sync::Arc::new(
         match game_svr::unbindlist::load_unbind_list_file(&envir_loader) {
             Ok(Some(list)) => {
@@ -3688,8 +3690,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
         minimap,
         make_items,
         admin_list,
-        // `EnterConfig` 的字段仍是按值表；`Arc` 的这份克隆只给 `sim_loop` 取回（单份装载）。
-        unbind_list: (*unbind_list).clone(),
         line_notice,
         line_notice_cfg: line_notice::LineNoticeCfg {
             interval_ms: i64::from(cfg.show_line_notice_time),
@@ -3942,7 +3942,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             zone_host: Some(Arc::clone(&host)),
                             colors,
                             item_number: Arc::clone(&item_number),
-                            // **M1c-2c 段 5（P1）**：解包表只读共享（与区 0 同一份装载）。
+                            // **M1c-2c 段 5（P1）/ 5-fix**：与区 0 的 `sim_loop` 同一 `Arc` 实例。
                             unbind_list: Arc::clone(&unbind_list),
                         },
                         rx,
@@ -4147,6 +4147,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         let ids_online_i = std::sync::Arc::clone(&sim_ids_online);
         let item_number_i = std::sync::Arc::clone(&item_number);
+        // **M1c-2c 段 5-fix（P1）**：解包表 `Arc` 直传 `sim_loop`（不经 `EnterConfig` 值拷贝）。
+        let unbind_list_i = std::sync::Arc::clone(&unbind_list);
         let ids_out_i = sim_ids_out.clone();
         let world_start_i = std::sync::Arc::clone(&sim_world_start);
         let lottery_i = sim_win_lottery.clone();
@@ -4187,6 +4189,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     lottery_i,
                     zone_host_i,
                     item_number_i,
+                    unbind_list_i,
                 )
             })
             .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
@@ -29745,10 +29748,9 @@ struct EnterConfig {
     /// 被注释（`PlayObject.cs:1188-1194`）⇒ 本表与 oracle 同形「装进来、不参与判定」；
     /// 查表半 [`adminlist::AdminList::get_hum_permission`] 已备但**不接**生产路径。
     admin_list: Option<game_svr::adminlist::AdminList>,
-    /// **UnbindList 消费点（卡 `openmir2-unbindlist-consumer`）**：`M2Share.UnbindList`
-    /// （`M2Share.cs:85`）的装载结果（主线程 `game_svr::unbindlist::load_unbind_list_file`），
-    /// 随 `EnterConfig` 到 sim 线程；`CM_EAT` 的 StdMode 31 解包按 `StdItem.Shape` 查名。
-    unbind_list: game_svr::unbindlist::UnbindList,
+    // **M1c-2c 段 5-fix**：`UnbindList`（`M2Share.UnbindList`，`M2Share.cs:85`）**不再经
+    // `EnterConfig` 值搬运**——`run_inner` 装载一次 `Arc<UnbindList>`，以形参直传 `sim_loop`
+    // 与各区 k（单份装载、**单实例**；见 `unbind_list_shared` 的启动断言）。
     /// **R0-4**：`Notice/LineNotice.txt` 解析出的逐行滚动公告（`notice::load_line_notice`）。
     /// 消费点 = `WorldServer.cs:669-696` 的逐玩家定时公告（**世界 tick 扩容首批（T3）· ③** 已接线）。
     line_notice: Vec<String>,
@@ -29893,7 +29895,6 @@ impl EnterConfig {
             minimap: None,
             make_items: None,
             admin_list: None,
-            unbind_list: game_svr::unbindlist::UnbindList::default(),
             line_notice: Vec::new(),
             line_notice_cfg: line_notice::LineNoticeCfg {
                 interval_ms: 300_000,
@@ -34126,6 +34127,13 @@ fn finish_login_on_zone_state(
     });
 }
 
+/// **M1c-2c 段 5-fix**：区 0 的 `SharedServices` 与 `ProcessServices` 是否持有**同一**
+/// `UnbindList` 实例（`Arc::ptr_eq`；不是"内容相等"）。`process == None`（理论不可达：
+/// `sim_loop` 恒建 `Some`）⇒ `true`。
+fn unbind_list_shared(shared: &SharedServices, process: Option<&ProcessServices>) -> bool {
+    process.is_none_or(|p| std::sync::Arc::ptr_eq(&shared.unbind_list, &p.unbind_list))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -34159,6 +34167,10 @@ fn sim_loop(
     zone_host: Option<Arc<ZoneHost>>,
     // **M1c-2a**：`MakeIndex` 计数器——进程唯一的 `Arc<AtomicI32>`（与区 k/宿主同一句柄；三→一）。
     item_number: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    // **M1c-2c 段 5-fix（P1）**：`UnbindList` 由 `run_inner` 装载一次、`Arc` 形参直传
+    // （不随 `EnterConfig` 值拷贝）——区 0 的 `SharedServices`/`ProcessServices` 与各区 k
+    // 拿的都是**同一实例**。
+    unbind_list: std::sync::Arc<game_svr::unbindlist::UnbindList>,
 ) {
     // **P2-3b**：本实例服务哪一片 + 是否宿主片（进程级服务只在片 0）。
     let local_shard = shard_runtime.local_shard();
@@ -35418,8 +35430,8 @@ fn sim_loop(
     // 在 `PlayObject.cs:1188-1194` 被注释 ⇒ 本表**不接**任何 `Permission` 写点（接上须另开 `D-*`）。
     // **UnbindList（卡 `openmir2-unbindlist-consumer`）**：`M2Share.UnbindList` 的 Rust 承载。
     // `CM_EAT` 的 StdMode 31 解包按 `StdItem.Shape` 查名（`PlayObject.Operate.cs:578-580`）。
-    // **M1c-2c 段 5（P1）**：与各区 k 共享同一份解包表（`Arc`，只读）。
-    let unbind_list = std::sync::Arc::new(std::mem::take(&mut enter_cfg.unbind_list));
+    // **M1c-2c 段 5-fix（P1）**：解包表是**形参**（`run_inner` 的同一 `Arc`）——此处不得再
+    // `Arc::new(...)`/值拷贝；区 0 两服务共用该实例（下方 `debug_assert!` 钉死）。
     if let Some(al) = enter_cfg.admin_list.take() {
         glog!(
             "INF",
@@ -35832,6 +35844,12 @@ fn sim_loop(
         line_notice_cfg,
         payment_mode,
     });
+    // **M1c-2c 段 5-fix**：启动断言——区 0 的 `SharedServices` 与 `ProcessServices` 必须持有
+    // **同一** `UnbindList` 实例（防"值拷贝再包 Arc"回潮；谓词有负例牙）。
+    debug_assert!(
+        unbind_list_shared(&shared, process.as_ref()),
+        "区 0 的 SharedServices 与 ProcessServices 必须共享同一 UnbindList 实例"
+    );
     let mut tick_io = TickIo {
         ev_rx,
         ev_ctl_rx,
@@ -36070,8 +36088,9 @@ struct SharedServices {
     // （区 0 在 `sim_loop` 启动时 `store` 真初值 `[Setup]ItemNumber + 屏障 A 抽数`；各区 k 的
     // `World.item_number` 经 `new_zone_state` 接同一 `Arc`；② `item_number_ex` 已删）。
     item_number: Arc<std::sync::atomic::AtomicI32>,
-    /// **M1c-2c 段 5（P1）**：`M2Share.UnbindList` 的**只读共享**句柄（与区 0
-    /// `ProcessServices.unbind_list` 同一份装载；区 k 本地解包按 `StdItem.Shape` 查名）。
+    /// **M1c-2c 段 5（P1）/ 5-fix**：`M2Share.UnbindList` 的**只读共享**句柄——与区 0
+    /// `ProcessServices.unbind_list` 是**同一 `Arc` 实例**（`Arc::ptr_eq`）；
+    /// 区 k 本地解包按 `StdItem.Shape` 查名。
     unbind_list: Arc<game_svr::unbindlist::UnbindList>,
 }
 
@@ -36113,7 +36132,8 @@ struct ProcessServices {
     gm_spirit_mutiny_tick: std::cell::Cell<i64>,
     magic_table_arc: std::sync::Arc<magics::MagicTable>,
     minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
-    // **M1c-2c 段 5（P1）**：与各区 k 的 `SharedServices.unbind_list` 是同一份装载（`Arc`）。
+    // **M1c-2c 段 5（P1）/ 5-fix**：与 `SharedServices.unbind_list` 及其各区 k 是**同一 `Arc`
+    // 实例**（`run_inner` 装载一次、经 `sim_loop` 形参直传）。
     unbind_list: Arc<game_svr::unbindlist::UnbindList>,
     make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
     line_notice_lines: Vec<String>,
@@ -127792,6 +127812,63 @@ mod zone_command_tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             6,
             "解包 6 件必须消费 2a 共享计数器 6 次"
+        );
+    }
+
+    /// **M1c-2c 段 5-fix 牙 `shared_and_process_unbind_list_is_single_instance`**：区 0 的
+    /// `SharedServices` 与 `ProcessServices` 必须持有**同一** `UnbindList` 实例（P1 修正：
+    /// 此前 `sim_loop` 把 `EnterConfig` 里的值拷贝再 `Arc::new` ⇒ 两个实例、表体 clone）。
+    ///
+    /// 行为面：谓词用 `Arc::ptr_eq`（不是内容相等）——独立装载 ⇒ false（负例，谓词有牙）；
+    /// 共用同一 `Arc` ⇒ true；换成第三个同内容实例 ⇒ 仍 false。
+    /// 静态面：与 unbind 相关的 `Arc::new` 只允许 `run_inner` 装载一处；`sim_loop` 的值拷贝
+    /// 形态必须删除；`sim_loop` 必须用该谓词做启动断言。
+    ///
+    /// 变异：把 `sim_loop` 的形参换回值拷贝（`Arc::new(...unbind...)`）⇒ 静态面红。
+    #[test]
+    fn shared_and_process_unbind_list_is_single_instance() {
+        let mut shared = SharedServices::for_test();
+        let mut process = ProcessServices::for_test();
+        // 负例（有牙）：两份**独立**装载 ⇒ 不同实例 ⇒ 谓词必须为 false。
+        assert!(
+            !unbind_list_shared(&shared, Some(&process)),
+            "独立装载必须是不同实例（负例 ⇒ 值拷贝形态可被识别）"
+        );
+        // 正例：两服务共用同一 `Arc` ⇒ true。
+        process.unbind_list = std::sync::Arc::clone(&shared.unbind_list);
+        assert!(
+            unbind_list_shared(&shared, Some(&process)),
+            "共用同一 Arc 实例 ⇒ 必须为 true"
+        );
+        // 同内容但第三个实例 ⇒ 仍 false（钉死 ptr_eq 语义，不是内容相等）。
+        shared.unbind_list = std::sync::Arc::new(game_svr::unbindlist::UnbindList::default());
+        assert!(
+            !unbind_list_shared(&shared, Some(&process)),
+            "同一份内容的新 Arc 仍是不同实例 ⇒ 必须为 false"
+        );
+        // 静态面：生产里 unbind 相关的 `Arc::new` 只允许 `run_inner` 装载一处。
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        assert!(
+            !prod.contains("std::mem::take(&mut enter_cfg.unbind_list)"),
+            "sim_loop 的值拷贝形态必须删除（改为形参直传）"
+        );
+        let arc_new_with_unbind = prod
+            .lines()
+            .filter(|l| {
+                l.contains("Arc::new(")
+                    && l.contains("unbind_list")
+                    && !l.contains("UnbindList::default()")
+            })
+            .count();
+        assert_eq!(
+            arc_new_with_unbind, 1,
+            "与 unbind 相关的 Arc::new 只允许 run_inner 装载一处（实得 {arc_new_with_unbind}）"
+        );
+        assert!(
+            prod.contains("fn unbind_list_shared(")
+                && prod.contains("unbind_list_shared(&shared, process.as_ref())"),
+            "sim_loop 必须用 ptr_eq 谓词做启动断言（防值拷贝再包 Arc 回潮）"
         );
     }
 
