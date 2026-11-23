@@ -19,13 +19,19 @@
 > **M1** 删除 `clear()` 措辞，改显式 `pop_front` 执行循环（超界只停「下一条」，剩余自然保留）。
 > **M2** 写死计时分工：`tick_max_wall` 仅名义总上界、**执行以 `execute_wall` 为准**（不跨阶段累加）。
 > **M3** 守门补越界项 `execute_wall + (execute_check_every−1) × 单条 p99.9`。
+>
+> **r5（2026-11-23，99 预读 5 歧义，opc-27 裁决）**：P1 swap 回点=承载段的那次 `tick_phase_*`
+> 返回后立即、`carry_prefix` 清零、tick 间缓冲必在 scratch（`debug_assert`）；P2 新增第 6 列
+> `zonek_inbound_unsupported_dropped`（+派生），丢弃必须计数；P3 shutdown 落在区 k 线程尾（先校正
+> P1 不变式、逐条 -1 计数、通道残留只按 demux 对账）；P4 `pending_local` 与缓冲共享
+> `execute_wall/execute_max_effective`；P5 单 tick 总条数 ≤2000（缓冲非空 ⇒ fill 减半、执行=2000−filled）。
 
 ## 0. 改动清单（一句话版）
 
 - `lib.rs`：①区 k 线程循环（`spawn_minimal_zone`）把**两段裸 `try_recv`** 换成**有预算的填充**
   （锁外）→ 命令进 `TickIo.inbound_local_buffer`；②`INBOUND_LOCAL` **段内**消费+分类+执行+记账；
   ③`spawn_zone_demux` 增加**每区 `outstanding` 计数 + `Command` 硬上限丢新**；
-  ④`perf_counters` 增 **5 个 `zonek_*` 列 + 5 个 `*_all_zones` 派生列**（区 0 三列语义不动）。
+  ④`perf_counters` 增 **6 个 `zonek_*` 列 + 6 个 `*_all_zones` 派生列**（区 0 三列语义不动；第 6 列为 `zonek_inbound_unsupported_dropped`，见 P2）。
 - 不新增 cargo feature；多区路径才有区 k ⇒ **N=1 零参与**（`zonek_*` 恒 0、派生列 == 区 0 列）。
 - **覆盖范围 = 仅 zone-slicing 拓扑（`MIR2_ZONES`）；`shard_total>1` 的分片拓扑不覆盖**（见 §1.5）。
 
@@ -82,9 +88,11 @@ if let Some(ev) = buffer.items.pop_front() {
 - **不变量（写死）**：
   1. **每条 `Command` 恰 `+1` 一次**——在 demux `send` 成功之后；
   2. **恰 `-1` 一次**——在从 `pending_inbound` 取出执行时；**丢新路径不 +1**；
-  3. **shutdown 时 `pending_inbound` 里残留的 `Command` 逐条 `-1` 并计 `zonek_inbound_pending_discarded`**
-     （不静默）；**通道里尚未 fill 的残留**无法 -1——退出路径打 WRN（zone + outstanding），不视为错误
-     （进程整体退出，`Arc` 释放）。
+  3. **shutdown 时**：区 k 线程 `while !stop` 退出**之后、线程尾**——先按 P1 不变式确认缓冲在 scratch
+     （若 `zone_io.inbound_local_buffer` 仍非空 ⇒ 先 swap 回 scratch 并打一条 WRN 记异常），再对该
+     scratch `pop_front` 逐条 `-1` 并把 `Command` 计入 `zonek_inbound_pending_discarded`，最后打一条
+     含总数的 WRN；**通道里尚未 fill 的残留不读、只按 demux 的 `outstanding` 计数对账**（WRN 含该值），
+     不视为错误（进程整体退出，`Arc` 释放）。
 
 ### 1.3 竞态、下界与泄漏面
 
@@ -100,8 +108,10 @@ if let Some(ev) = buffer.items.pop_front() {
 
 - `const ZONE_INBOUND_MAX_EVENTS: usize = 10_000;`（= 2000 条/tick × 5 拍）。注释写死：
   "软上限；正确性不依赖精确值；按窗口实测的区间到达率调整；**低估 ≤1**（消费时 -1）"。
-- 丢弃观测：`note_zonek_inbound_overflow_dropped()`（丢新）+ `note_zonek_inbound_pending_discarded()`
-  （shutdown 残留丢弃），各自**限速 WRN**（复用 `DepartWarnLimiter` 同型：每分钟 ≤1 条，字段含
+- 丢弃观测（**丢弃必须有计数、不许静默**）：`note_zonek_inbound_overflow_dropped()`（丢新）+
+  `note_zonek_inbound_pending_discarded()`（shutdown 残留丢弃）+ **`note_zonek_inbound_unsupported_dropped()`**
+  （P2：`INBOUND_LOCAL` 分类结果为 `Unsupported` 的命令——区 k 不执行、计数后丢弃，**不塞进
+  `zonek_inbound_drained`**），各自**限速 WRN**（复用 `DepartWarnLimiter` 同型：每分钟 ≤1 条，字段含
   zone/line/socket/ident）。
 - **生产应恒 0**；`overflow_dropped` 非 0 ⇒ 该窗口验收作废（v2.1 §3.5/§4 判据，测试见 §5-③）。
 
@@ -136,9 +146,13 @@ if !cmd_events.is_empty()     { 锁一次、逐条 handle_zone_command }
 2. **`INBOUND_LOCAL` 段内执行（锁 1 下）**：交接**走 `TickIo` 新增的两个字段**（§3.3 已选这一种并写死，
    不用段函数入参）——driver 在**锁外**（`TickIo` 是 driver 局部，不持 `state` 锁）把 scratch
    `mem::swap` 进 `zone_io.inbound_local_buffer` 并写入 `zone_io.inbound_local_carry_prefix`；
-   `tick_phase_a` 跑段；tick 结束后再 swap 回 scratch（剩余自然带回）。段内**先消费 A6 的
-   `pending_local`（延迟队列）→ 再消费 `io.inbound_local_buffer`**，逐条分类 / 执行 / 记账
-   （`zonek_*`、`RAN_SEGMENTS |= INBOUND_LOCAL`；`HostInbound` 计时天然覆盖）。
+   随后调 `tick_phase_a` 跑段。**swap 回点（P1 写死）：承载该段的那次 `tick_phase_*` 调用一返回
+   就立刻 swap 回 scratch（无论返回 `Continue`/`Exited`），并把 `inbound_local_carry_prefix` 清零。**
+   段现在在 `tick_phase_a`；**若将来把它移到 rest 段，swap 回点随段函数一起移动**（不得留在旧位）。
+   不变式：**tick 之间缓冲一定在 scratch**，`TickIo.inbound_local_buffer` 在 tick 之外应为空
+   （可加 `debug_assert!`）。段内**先消费 A6 的 `pending_local`（延迟队列）→ 再消费
+   `io.inbound_local_buffer`**，逐条分类 / 执行 / 记账（`zonek_*`、`RAN_SEGMENTS |= INBOUND_LOCAL`；
+   `HostInbound` 计时天然覆盖）。
 3. **顺序不变性（写死）**：今天是"循环顶先 `Closed` 后 `Command`"；改后 `Closed` 仍在循环顶、
    `Command` 挪到段内 ⇒ **相对序不变（`Closed` 先于 `Command`）**，只是 `Command` 的**执行时刻**
    从"tick 前"变"tick 内 A 段"。**不得**据此认为顺序改变。
@@ -157,25 +171,35 @@ if !cmd_events.is_empty()     { 锁一次、逐条 handle_zone_command }
 
 ```text
 struct ZoneDrainLimits {
-    tick_max_events: u64,       // 2000（PRODUCTION）：本 tick「fill + 执行」的**总条数**上限
-    tick_max_wall: Duration,    // 50ms（PRODUCTION）：本 tick 总墙钟上界（fill 已有 + 段执行）
-    pull_cap_events: u64,       // = tick_max_events（一次 fill 的上限；测试可设小值）
-    execute_max_events: u64,    // = tick_max_events（本 tick 段执行的条数上限；测试可设小值）
+    tick_max_events: u64,       // 2000（PRODUCTION）：**单 tick「fill + 执行」总条数上限**
+    tick_max_wall: Duration,    // PRODUCTION 的 50ms：**只作 `execute_wall` 的来源常量**，
+                                //   不表示"fill + 执行跨阶段累加"（见计时分工）
+    pull_cap_base: u64,         // = tick_max_events（fill 条数上限的基准；测试可设小值）
+    execute_max_events: u64,    // = tick_max_events（**上限参数**，实际值见公式；测试可注入）
     execute_wall: Duration,     // 10ms（**段内执行**的墙钟上界；加到 A 段/屏障1 到达，见 §6）
-    execute_check_every: usize, // 16（每 N 条查一次 execute_wall，批末必查）
+    execute_check_every: usize, // 16（每 N 条查一次 execute_wall，末条必查）
 }
 ```
 
-- **fill**（循环顶、锁外）：每调用最多 pull `pull_cap_events` 条；**预算耗尽后探一次**：
+- **单 tick 总预算（写死，消除"各自 2000"的矛盾）**：
+  - `pull_cap_effective = if 本 tick 开始时缓冲非空 { pull_cap_base / 2 } else { pull_cap_base }`
+    ⇒ **缓冲非空时 fill 上限减半**，保证执行至少拿到一半预算；
+  - `execute_max_effective = min(execute_max_events, tick_max_events − 本 tick 实际 filled)`
+    （saturating 减）；
+  - ⇒ **单 tick 总条数恒 ≤ `tick_max_events`（2000），与区 0 的 `PRODUCTION` 口径一致**；因此
+    `drained` 与区 0 列**可同分母比较**。**若将来改动本规则，必须同时改这句话与 TSV 口径说明。**
+- **fill**（循环顶、锁外）：每调用最多 pull `pull_cap_effective` 条；**预算耗尽后探一次**：
   `try_recv Ok` ⇒ **直接 push 进 `pending_inbound`（scratch）** 且 `fill_hit=true`；`Err(Empty)` ⇒ `fill_hit=false`。
   （**探针不另设 carry**——它进的就是同一缓冲。）
-- **段执行**（锁 1 内）：从 `pending_local` 起、再 `io.inbound_local_buffer`；每 `execute_check_every` 条
-  （及工作区末条）查 `execute_wall`，超界 ⇒ **在一整条执行完之后**收手，剩余留在工作区（保序）；
-  `execute_max_events` 到顶同理。**收手后工作区非空 ⇒ `budget_hit=true`（不做探针）**。
+- **段执行**（锁 1 内）：从 `pending_local` 起、再 `io.inbound_local_buffer`；**两者共享同一个
+  `execute_max_effective` 与 `execute_wall`**（都在锁内执行，理应同预算；`pending_local` 先消费、
+  不会被缓冲饿死，它自己的条数上限沿用 A6 的 8）。每 `execute_check_every` 条（及工作区末条）查
+  `execute_wall`，超界 ⇒ **在一整条执行完之后**收手，剩余留在工作区（保序）；`execute_max_effective`
+  到顶同理。**收手后工作区非空 ⇒ `budget_hit=true`（不做探针）**。
 - **`budget_hit` 两处判据（写死）**：`fill_hit`（fill 探针取到事件并留在缓冲）**或** 段执行截断且工作区非空。
-- **计时分工（写死）**：**执行以 `execute_wall` 为准**；`tick_max_wall`（PRODUCTION 的 50ms）只作
-  **名义总上界**——fill 与段执行是分离阶段，**不在二者之间实测/累加墙钟**（避免实现者纠结跨阶段计时）；
-  fill 侧唯一硬上限是 `pull_cap_events`（条数）。
+- **计时分工（写死）**：**执行以 `execute_wall` 为准**（取值 = `tick_max_wall` 的一部分，10ms）；
+  `tick_max_wall` **不参与任何跨阶段累加**（fill 与段执行是分离阶段）；fill 侧唯一硬上限是
+  `pull_cap_effective`（条数）。
 
 ### 3.3 单缓冲、carry 水位与保序
 
@@ -214,15 +238,16 @@ struct ZoneDrainLimits {
 
 - `perf_counters` 新增（区 k 聚合，全部区 k 实例求和）：
   `ZONEK_INBOUND_DRAINED / ZONEK_INBOUND_CARRY / ZONEK_INBOUND_BUDGET_HIT /
-  ZONEK_INBOUND_OVERFLOW_DROPPED / ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64`
+  ZONEK_INBOUND_OVERFLOW_DROPPED / ZONEK_INBOUND_PENDING_DISCARDED / ZONEK_INBOUND_UNSUPPORTED_DROPPED: AtomicU64`
 - note 函数（同形于 `note_inbound_drained`；**只写 `zonek_*`，禁止调 `note_inbound_drained`**）：
   `note_zonek_inbound_drained(from_carry, ev)`、`note_zonek_inbound_budget_hit()`、
-  `note_zonek_inbound_overflow_dropped()`、`note_zonek_inbound_pending_discarded()`；
-  `#[cfg(test)]` 读点各一。
-- TSV：`write_tick` 表头与 values **同位置**追加 5 列（紧跟 `depart_frames_mirror_suppressed` 之后）；
-  另加 **5 个派生列**（写行时显式求和、不独立采集、列文注 derived、不可与单区列混比）：
+  `note_zonek_inbound_overflow_dropped()`、`note_zonek_inbound_pending_discarded()`、
+  `note_zonek_inbound_unsupported_dropped()`；`#[cfg(test)]` 读点各一。
+- TSV：`write_tick` 表头与 values **同位置**追加 6 列（紧跟 `depart_frames_mirror_suppressed` 之后）；
+  另加 **6 个派生列**（写行时显式求和、不独立采集、列文注 derived、不可与单区列混比）：
   `inbound_drained_all_zones / inbound_carry_all_zones / inbound_budget_hit_all_zones /
-  inbound_overflow_dropped_all_zones / inbound_pending_discarded_all_zones`
+  inbound_overflow_dropped_all_zones / inbound_pending_discarded_all_zones /
+  inbound_unsupported_dropped_all_zones`
   = 区 0 列 + 对应 `zonek_*` 列（区 0 无同名时按 0 起算）。
 - 列文写死：`zonek_*` = "仅区 k 聚合（slicing）"；`*_all_zones` = derived。旧列语义不变
   （新旧两套并存、互不覆盖）。N=1：`zonek_*` 恒 0、派生 == 区 0 列。
@@ -234,11 +259,13 @@ struct ZoneDrainLimits {
 1. **`zonek_fill_honors_budget`**（fill 预算；墙钟只打印）
    - 构造：真 `mpsc::channel()` 注入 2500 条 `Command`（+ 少量 `Closed`）；`limits` 注入生产值，
      `execute_max_events` 设大（让执行不是瓶颈）；先 `fill_pending` 再执行。
-   - **硬断言**：`filled <= pull_cap_events`、`drained <= execute_max_events`、`budget_hit == true`、
+   - **硬断言**：`filled <= pull_cap_effective`、`drained <= execute_max_effective`、
+     **`filled + drained <= tick_max_events`（单 tick 总条数 ≤2000）**、`budget_hit == true`、
      **`zonek_inbound_drained` 增量 == drained**、**`outstanding == 通道残留 + 缓冲残留`**；
      墙钟 **只打印**（`elapsed_ms=…`）不判红。
+   - **半额规则子断言**：hold 一笔非空缓冲再跑一次 fill ⇒ `filled <= pull_cap_base / 2`（P5）。
 2. **`zonek_pending_remainder_and_carry_prefix`**（剩余保序 + 水位；limits **按调用**注入）
-   - 注入 A..H；call1：`pull_cap_events=8`、`execute_max_events=2`、`execute_wall=极大`、
+   - 注入 A..H；call1：`pull_cap_base=8`、`execute_max_events=2`、`execute_wall=极大`、
      `execute_check_every=1` ⇒ 执行 2、剩 6 留缓冲、`budget_hit=true`、`from_carry=0`；
      call2：**`execute_max_events=6`**（其余同）⇒ 执行剩余 6、**`from_carry=6`**、`budget_hit=false`。
    - 断言：两次合计顺序 A..H（不丢/不重/不乱序）；**call2 后 `outstanding == 0`**（通道空 + 缓冲空
@@ -248,9 +275,9 @@ struct ZoneDrainLimits {
      第 2 条被丢（`continue`）⇒ `zonek_inbound_overflow_dropped` +1 且 **`outstanding` 仍 = CAP（未 +1）**；
      `Closed`/`Broadcast` 永不丢（各发一条对照）。
 4. **`zonek_columns_aligned_and_derived`**（列不混比 + 派生恒等式）
-   - writer 温度同 `perf_tsv_header_matches_values_with_new_column`：bump 区 0 三列与 5 个 `zonek_*`；
+   - writer 温度同 `perf_tsv_header_matches_values_with_new_column`：bump 区 0 三列与 6 个 `zonek_*`；
      写一行；再写一行 **N=1 形态**（只 bump 区 0）。
-   - 断言：表头/值列数一致；5 个 `zonek_*` 落在同名列；5 个派生列 == 区 0 + zonek；
+   - 断言：表头/值列数一致；6 个 `zonek_*` 落在同名列；6 个派生列 == 区 0 + zonek；
      N=1 行 `zonek_*`==0 且派生 == 区 0；**旧列值未被污染**。
 5. **`zonek_wiring_behavior_primary`**（接线：行为为主、源码为提示）
    - **行为断言（主牙）**：驱动交付 seam（`fill_pending` + 段执行）后 **`zonek_inbound_drained` 必须增长**；
@@ -271,7 +298,8 @@ struct ZoneDrainLimits {
      的**双向等待窗**随段时长增大。
   - 守门：`execute_wall = 10ms`（每 `execute_check_every` 条查、**一整条执行完后**收手，剩余留缓冲
     下一 tick）；**锁内/段内执行墙钟 p99.9 > 10ms ⇒ 下调 `execute_max_events`**（用 p99.9 不用均值，
-    尾部才是持锁上界）。
+    尾部才是持锁上界）。**该上界对"整段"成立**：`pending_local`（A6 延迟队列）与缓冲**共享同一个
+    `execute_wall`/`execute_max_effective`**（P4），不是只有缓冲受约束。
   - **越界项（写进守门注释）**：每 `execute_check_every`(=16) 条才查一次 ⇒ 段内/持锁上界 ≈
     **`execute_wall + (execute_check_every − 1) × 单条 p99.9`**（= 10ms + 15×单条）。当前命令 µs 级，
     远低于 `10ms / 15 ≈ 0.67ms` ⇒ 安全；**单条若逼近 0.67ms ⇒ 下调 `execute_check_every` 或
@@ -293,10 +321,11 @@ struct ZoneDrainLimits {
 ## 7. 交付时报告什么
 
 - 改动文件与 `+/-` 行数；常量值（`ZONE_INBOUND_MAX_EVENTS`、`tick_max_events/wall`、
-  `pull_cap_events`、`execute_max_events`、`execute_wall`、`execute_check_every`）与取值理由
+  `pull_cap_base`、`execute_max_events`、`execute_wall`、`execute_check_every`，以及 P5 的两条
+  有效值公式）与取值理由
   （p99.9 未实测 ⇒ 先 2000 + `execute_wall` 兜底，见 §6）；
 - 覆盖范围声明：仅 zone-slicing（§1.5），`shard_total>1` 不覆盖；
 - 五条测试的原文输出（各自一行打印）+ 变异证据（删预算分支 ⇒ 测试 1 红；恢复后 sha 相等）；
-- TSV 表头新增列清单与一行样例值（含 5 个派生列恒等式）；
+- TSV 表头新增列清单与一行样例值（含 6 个派生列恒等式）；
 - N=1 零参与证据（区 k 不存在时 `zonek_*` 全 0，派生列 == 区 0 列）；
 - shutdown 残留路径证据（不静默：WRN + `zonek_inbound_pending_discarded`）。
