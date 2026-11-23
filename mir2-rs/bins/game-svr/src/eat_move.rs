@@ -686,7 +686,7 @@ mod tests {
                 blue_b: 0xFC,
             };
             let unbind = game_svr::unbindlist::UnbindList::default();
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             world.rng = RandomNumber::with_seed(seed);
 
             handle_eat_cmd(
@@ -707,7 +707,7 @@ mod tests {
                 &game_svr::strings::StringConf::default(),
                 Some(&reg),
                 &unbind,
-                &mut item_number,
+                &item_number,
                 None,
                 &game_svr::npc::NpcVars::default(),
                 None,
@@ -1095,7 +1095,7 @@ mod tests {
                 blue_b: 0xFC,
             };
             let unbind = game_svr::unbindlist::UnbindList::default();
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             world.rng = RandomNumber::with_seed(seed);
 
             handle_eat_cmd(
@@ -1115,7 +1115,7 @@ mod tests {
                 &game_svr::strings::StringConf::default(),
                 Some(&reg),
                 &unbind,
-                &mut item_number,
+                &item_number,
                 None,
                 &game_svr::npc::NpcVars::default(),
                 None,

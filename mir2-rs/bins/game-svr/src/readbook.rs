@@ -467,7 +467,7 @@ mod tests {
                 blue_b: 0xFC,
             };
             let unbind = game_svr::unbindlist::UnbindList::default();
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             handle_eat_cmd(
                 1,
                 0,
@@ -485,7 +485,7 @@ mod tests {
                 &game_svr::strings::StringConf::default(),
                 None,
                 &unbind,
-                &mut item_number,
+                &item_number,
                 None,
                 &game_svr::npc::NpcVars::default(),
                 None,

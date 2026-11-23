@@ -507,8 +507,8 @@ mod tests {
                 sysmsg: crate::useitem::SysMsgTexts::default(),
                 recalc: None,
             };
-            let mut item_number = 0;
-            let out: UseItemOutcome = use_item(&ctx, &mut state, &mut list, &mut item_number);
+            let item_number = std::sync::atomic::AtomicI32::new(0);
+            let out: UseItemOutcome = use_item(&ctx, &mut state, &mut list, &item_number);
             assert!(!out.eaten, "{name}: 同条件不得吃");
         }
     }

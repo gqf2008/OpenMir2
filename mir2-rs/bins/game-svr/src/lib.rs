@@ -3173,6 +3173,11 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // sim 线程按 `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
     // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
     let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    // **M1c-1**：`MakeIndex` 计数器进程级共享（单一全局原子；区 0 与区 k 共享同一 `Arc`）。
+    // 初值占位：`item_number` 真值由 zone 0 在 `sim_loop` 启动时 `store`（`[Setup]ItemNumber + 屏障A`）；
+    // `item_number_ex` 直接取 `[Setup]ItemNumberEx`。区 k 共享同一句柄（本片不造件、不读）。
+    let item_number = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let item_number_ex = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(cfg.item_number_ex));
     let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     // 进 sim 线程的句柄（move 闭包内 clone 会连原值一起 move 走，故先在闭包外克隆）。
     let sim_ids_online = std::sync::Arc::clone(&ids_online);
@@ -3611,6 +3616,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             ),
                             zone_host: Some(Arc::clone(&host)),
                             colors,
+                            item_number: Arc::clone(&item_number),
+                            item_number_ex: Arc::clone(&item_number_ex),
                         },
                         rx,
                         ctl,
@@ -3813,6 +3820,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
             None
         };
         let ids_online_i = std::sync::Arc::clone(&sim_ids_online);
+        let item_number_i = std::sync::Arc::clone(&item_number);
+        let item_number_ex_i = std::sync::Arc::clone(&item_number_ex);
         let ids_out_i = sim_ids_out.clone();
         let world_start_i = std::sync::Arc::clone(&sim_world_start);
         let lottery_i = sim_win_lottery.clone();
@@ -3852,6 +3861,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     world_start_i,
                     lottery_i,
                     zone_host_i,
+                    item_number_i,
+                    item_number_ex_i,
                 )
             })
             .with_context(|| format!("起 sim 线程（片 {shard_idx}）失败"))?;
@@ -4425,8 +4436,8 @@ struct SayEnv<'a> {
     pwd_sessions: &'a mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     reconnect_pending: &'a mut Vec<ReconnectPending>,
     mon_gen_host: &'a mut Option<game_svr::mongen::MonGenHost>,
-    item_number: &'a mut i32,
-    item_number_ex: &'a mut i32,
+    item_number: &'a std::sync::atomic::AtomicI32,
+    item_number_ex: &'a std::sync::atomic::AtomicI32,
     registry: Option<&'a mir2_envir::MapRegistry>,
     party_cfg: &'a mir2_world_bevy::PartyConfig,
     gm_filter_word: &'a std::cell::Cell<bool>,
@@ -7828,7 +7839,7 @@ fn add_newbie_items(
     catalog: &game_svr::ability::StdItemCatalog,
     newbie: &NewbieItems,
     gender: u8,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
 ) -> Vec<String> {
     let cloth = if gender == 0 {
         &newbie.cloths_man
@@ -7846,12 +7857,13 @@ fn add_newbie_items(
         match catalog.find_by_name(name) {
             Some(index) => {
                 if let Some(tpl) = game_svr::ability::ItemCatalog::get(catalog, index) {
-                    *item_number += 1;
                     // oracle `AddItemToBag`：满包 ⇒ `false`（构造期背包为空 ⇒ 门不可达；返回值被忽略）。
                     let _ = game_svr::bag::add_item_to_bag(
                         item_list,
                         game_svr::bag::BagItem {
-                            make_index: *item_number,
+                            make_index: item_number
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                + 1,
                             index,
                             dura: tpl.dura_max,
                             dura_max: tpl.dura_max,
@@ -7885,7 +7897,7 @@ fn merge_newbie_items_into_record(
     catalog: &game_svr::ability::StdItemCatalog,
     newbie: &NewbieItems,
     gender: u8,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
 ) -> Vec<String> {
     let mut items = Vec::new();
     let warns = add_newbie_items(&mut items, catalog, newbie, gender, item_number);
@@ -8499,7 +8511,7 @@ fn handle_click_npc_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
     // `M2Share.GetItemNumber()` 计数器（`GIVE` 新建件的 `MakeIndex`；与商人路径/新手物品
     // 共用**同一个**会话级计数器，见 [`run_merchant_goto`]）。
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
@@ -8907,7 +8919,7 @@ fn dispatch_inbound_p0(
     npc_vars: &game_svr::npc::NpcVars,
     // `M2Share.GetItemNumber()` 计数器（`CM_CLICKNPC` 的 `@main` 脚本 `GIVE` 件走它，
     // 见 [`handle_click_npc_cmd`]）。
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     // `CM_SOFTCLOSE` 要在 `world.soft_close` **之前**把实体派生快照写入 `SavedHuman.derived`
     //（卡 `openmir2-dir-persistence-writeback`）；其余命令不读。
     saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -9552,7 +9564,7 @@ fn handle_shop_cmd_inner(
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
     make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     npc_vars: &game_svr::npc::NpcVars,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
@@ -10621,7 +10633,7 @@ fn handle_shop_cmd(
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
     make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     npc_vars: &game_svr::npc::NpcVars,
     gm: Option<&ScriptGmEnv<'_>>,
@@ -11106,7 +11118,7 @@ fn write_back_player_bag(
     full_bag_drops: &[String],
     sg: &mut SessionGround,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> Vec<String> {
     fn count_of(list: &[(String, i32)], name: &str) -> i32 {
@@ -11191,12 +11203,11 @@ fn write_back_player_bag(
                 ));
                 break;
             }
-            *item_number += 1;
             // 上面已过 `IsEnoughBag()` 等价门 ⇒ 单点必返回 true（返回值与 oracle 一样被忽略）。
             let _ = game_svr::bag::add_item_to_bag(
                 &mut sg.state.item_list,
                 game_svr::bag::BagItem {
-                    make_index: *item_number,
+                    make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
                     index,
                     dura,
                     dura_max,
@@ -11229,7 +11240,7 @@ fn drop_full_bag_items(
     names: &[String],
     sg: &mut SessionGround,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -11247,9 +11258,8 @@ fn drop_full_bag_items(
             continue;
         };
         // `CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）：`MakeIndex` 计数器照消费。
-        *item_number += 1;
         let mut item = game_svr::bag::BagItem {
-            make_index: *item_number,
+            make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             index,
             dura: tpl.dura_max,
             dura_max: tpl.dura_max,
@@ -11586,7 +11596,7 @@ fn run_std_mode_func_script(
     map_text: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
     npc_vars: &game_svr::npc::NpcVars,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &OnlineRegistry,
     // `SystemShare.Config.RedMsgFColor/BColor`（全服广播帧的 `Param`）。
@@ -11964,7 +11974,7 @@ fn run_merchant_goto(
     catalog: &dyn game_svr::ability::ItemCatalog,
     // `M2Share.GetItemNumber()` 计数器（`GIVE` 新建件的 `MakeIndex`；生产 = sim 循环里那个
     // 与 `add_newbie_items` 共用的会话级 `item_number`）。
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     npc_vars: &game_svr::npc::NpcVars,
     session: &mut ShopSession,
     sell_off: &mut game_svr::selloff::SellOffState,
@@ -12257,7 +12267,7 @@ struct FixedNpcScriptCtx<'a> {
     npc_vars: &'a game_svr::npc::NpcVars,
     catalog: &'a dyn game_svr::ability::ItemCatalog,
     /// `M2Share.GetItemNumber()` 计数器（脚本 `GIVE` 件的 `MakeIndex`；见 [`run_merchant_goto`]）。
-    item_number: &'a mut i32,
+    item_number: &'a std::sync::atomic::AtomicI32,
     /// `SystemShare.RandomNumber`（世界同一条流；调用方取出/放回 `world.rng`）。
     rng: &'a mut mir2_shared::rng::RandomNumber,
     sell_off: &'a mut game_svr::selloff::SellOffState,
@@ -12946,7 +12956,7 @@ fn handle_eat_cmd(
     // `M2Share.UnbindList`（`M2Share.cs:85`）：StdMode 31 解包按 `StdItem.Shape` 查物品名。
     unbind_list: &game_svr::unbindlist::UnbindList,
     // `M2Share.GetItemNumber()` 会话计数器：解包 6 件的 `MakeIndex` 与 `GIVE`/新手物品共用。
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     // `SystemShare.FunctionNPC`（`QFunction` 装载表）：`UseStdModeFunItem` 的唯一判据。
     npc_host: Option<&game_svr::npc::NpcHost>,
     npc_vars: &game_svr::npc::NpcVars,
@@ -27480,16 +27490,27 @@ fn apply_pending_gm_target_ops(
 /// `int.MaxValue/2`。**登记**（与 `GetItemNumber` 同口径）：oracle 返回
 /// `Config.ItemNumberEx + HUtil32.GetTickCount()`，本宿主只返回计数器值（tick 项不可对拍，
 /// 既有 `item_number` 亦然；见 `config.rs` 的 `ItemNumber` 注）。
-fn next_item_number_ex(counter: &mut i32) -> i32 {
-    let mut v = counter.wrapping_add(1);
-    if v < i32::MAX / 2 {
-        v = i32::MAX / 2;
+fn next_item_number_ex(counter: &std::sync::atomic::AtomicI32) -> i32 {
+    // **M1c-1**：`item_number_ex` 原子化。clamp/reset 新值依赖旧值 ⇒ 不能纯 `fetch_add`，
+    // 必须 CAS 循环（阈值逐字同旧 `&mut i32` 版：`< MAX/2 ⇒ MAX/2`、`> MAX-1 ⇒ MAX/2`）。
+    // 无失败路径：`compare_exchange_weak` 的 spurious fail 由 loop 重试，争用上限=区数、必进展。
+    use std::sync::atomic::Ordering;
+    loop {
+        let old = counter.load(Ordering::Relaxed);
+        let mut v = old.wrapping_add(1);
+        if v < i32::MAX / 2 {
+            v = i32::MAX / 2;
+        }
+        if v > i32::MAX - 1 {
+            v = i32::MAX / 2;
+        }
+        if counter
+            .compare_exchange_weak(old, v, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return v;
+        }
     }
-    if v > i32::MAX - 1 {
-        v = i32::MAX / 2;
-    }
-    *counter = v;
-    v
 }
 
 /// `WorldEngine.RegenMonsterByName(map, x, y, name)`（`WorldServer.MonGen.cs:382-438`）的宿主入口：
@@ -27625,8 +27646,8 @@ fn apply_pending_gm_m_commands(
     colors: &MsgColors,
     test_server: bool,
     make_random_add_value: u8,
-    item_number: &mut i32,
-    item_number_ex: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
+    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     let Some(sg) = sessions.get_mut(chr_name) else {
         return;
@@ -27802,9 +27823,8 @@ fn apply_pending_gm_m_commands(
                 continue;
             };
             // `item.MakeIndex = M2Share.GetItemNumber()`：每件消费一次。
-            *item_number += 1;
             let mut item = game_svr::bag::BagItem {
-                make_index: *item_number,
+                make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
                 index,
                 dura: tpl.dura_max,
                 dura_max: tpl.dura_max,
@@ -27867,9 +27887,8 @@ fn apply_pending_gm_m_commands(
                 break;
             };
             // `CopyToUserItemFromName`：每件消费一次 `GetItemNumber()`。
-            *item_number += 1;
             let mut item = game_svr::bag::BagItem {
-                make_index: *item_number,
+                make_index: item_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
                 index,
                 dura: tpl.dura_max,
                 dura_max: tpl.dura_max,
@@ -28336,8 +28355,8 @@ fn drain_script_gm_pendings(
     chr_name: &str,
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
-    item_number: &mut i32,
-    item_number_ex: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
+    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     // ① 权威 `Entity` 写（`@1/@2/@3/@Rest/@AttackMode`，`@允许天地合一` 同 pending 通道）。
     apply_pending_gm_entity(ground_sessions, chr_name, world);
@@ -28512,8 +28531,8 @@ fn command_event_tail_gm_drain(
     chr_name: &str,
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
-    item_number: &mut i32,
-    item_number_ex: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
+    item_number_ex: &std::sync::atomic::AtomicI32,
 ) {
     drain_script_gm_pendings(
         ground_sessions,
@@ -28582,8 +28601,8 @@ fn execute_admin_gm_command(
     cmd: &str,
     reconnect_pending: &mut Vec<ReconnectPending>,
     castle_broadcasts: &mut Vec<String>,
-    item_number: &mut i32,
-    item_number_ex: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
+    item_number_ex: &std::sync::atomic::AtomicI32,
 ) -> AdminGmReply {
     // ① 执行前提：`chr` 必须是在线会话（oracle 里命令对象就是那个 `PlayObject`）。
     let Some(session) = ground_sessions.get(chr) else {
@@ -32138,7 +32157,7 @@ struct LoginCtx<'a> {
     session_id: i32,
     pay_ment: i32,
     account: &'a String,
-    item_number: &'a mut i32,
+    item_number: &'a std::sync::atomic::AtomicI32,
 }
 
 // 纯搬移：块内的 `&world` / `&gates` 等表达式在解构绑定（字段是引用）后成了
@@ -32182,7 +32201,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
         item_number,
     } = ctx;
     // Copy 标量：从 `&mut` 绑定拷出（纯搬移的显式化）；`item_number` 拷入 + 末尾写回，
-    // 因为原块以 `&mut item_number` 传参（不允许为抽取改行为）。
+    // 因为原块以 `&item_number` 传参（不允许为抽取改行为）。
     let local_shard = *local_shard;
     let reply = *reply;
     let socket = *socket;
@@ -32191,7 +32210,10 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
     let session_id = *session_id;
     let pay_ment = *pay_ment;
     let account = *account;
-    let mut item_number = **item_number;
+    // **M1c-1**：`item_number` 现为共享 `&AtomicI32`（`fetch_add` 就地自增），无需拷入/写回。
+    // 解构得 `&mut &'a AtomicI32`，`*` 是必需的（拿 `&'a AtomicI32`）；clippy 的 auto-deref 建议在此不适用。
+    #[allow(clippy::explicit_auto_deref)]
+    let item_number: &std::sync::atomic::AtomicI32 = *item_number;
     // 可变字段：解构出来的是 `&mut &'a mut T`；重新借用成 `&mut T`（纯搬移的显式化）。
     let world = &mut **world;
     let displays = &mut **displays;
@@ -32564,7 +32586,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                             &enter_cfg.catalog,
                                             &enter_cfg.newbie,
                                             gender,
-                                            &mut item_number,
+                                            item_number,
                                         );
                                         for w in warns {
                                             glog!(
@@ -33411,7 +33433,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
             )
         }
     }
-    *ctx.item_number = item_number;
+    // **M1c-1**：`item_number` 为共享原子，`fetch_add` 就地自增；无拷入/写回。
 }
 
 /// **L2-5 ③ 段 1b**：登录落区判定（纯函数：解回包 + 查表；不抽数、不碰世界）。
@@ -33538,7 +33560,7 @@ struct LoginSession<'a> {
     session_id: i32,
     pay_ment: i32,
     account: &'a String,
-    item_number: &'a mut i32,
+    item_number: &'a std::sync::atomic::AtomicI32,
 }
 
 /// **L2-5 ③ 段 1b**：用**目标区**的世界侧状态跑 `finish_login`（与区 0 路径同一份实现）。
@@ -33616,6 +33638,9 @@ fn sim_loop(
     win_lottery: crate::winlottery::WinLotteryShared,
     // **L2-4 段 6a**：多区共享句柄（`MIR2_ZONES` 未设 ⇒ `None`，本函数逐字节走原路径）。
     zone_host: Option<Arc<ZoneHost>>,
+    // **M1c-1**：`MakeIndex` 计数器进程级共享句柄（单一全局原子；与区 k 同一 `Arc`）。
+    item_number: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    item_number_ex: std::sync::Arc<std::sync::atomic::AtomicI32>,
 ) {
     // **P2-3b**：本实例服务哪一片 + 是否宿主片（进程级服务只在片 0）。
     let local_shard = shard_runtime.local_shard();
@@ -35043,18 +35068,24 @@ fn sim_loop(
     // **加上**屏障 A 的抽数（oracle `ServerConf.cs:114` 的 `+=`；屏障 A 已在段①之后落账，见上面的
     // `barrier_a`）。`item_number_counter_init` 是这一加的**唯一**接线处（fail-closed：账本不恰 1 条
     // 即 panic）。新角色四件新手物品的 `MakeIndex` 用它（`add_newbie_items`）。
-    let item_number =
+    let item_number_init =
         game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
             .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
+    // **M1c-1**：写入进程级共享计数器（`Arc<AtomicI32>`，与区 k 同一句柄）。区 0 启动时定真初值；
+    // 区 k 本片不造件、不读（M1c-2 族搬入 `INBOUND_LOCAL` 时须在 zone k 首次造件前完成本 store）。
+    item_number.store(item_number_init, std::sync::atomic::Ordering::Relaxed);
     // `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器：初值 = `[Setup] ItemNumberEx`
     // （部署 1073741872；`GetItemNumberEx` 自身的复位/加法在 `next_item_number_ex` 内逐行复刻）。
-    let item_number_ex = enter_cfg.item_number_ex;
+    item_number_ex.store(
+        enter_cfg.item_number_ex,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
     // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
     // 见卡 `openmir2-ctor-barrier-a-draw` 的残余 ①）。
     glog!(
         "INF",
-        "`[Setup] ItemNumber` {} + 屏障 A 抽数 ⇒ 本会话计数器初值 {item_number}（新角色 `MakeIndex` 起点）",
+        "`[Setup] ItemNumber` {} + 屏障 A 抽数 ⇒ 本会话计数器初值 {item_number_init}（新角色 `MakeIndex` 起点）",
         enter_cfg.newbie.item_number
     );
     // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
@@ -35222,6 +35253,8 @@ fn sim_loop(
         shard_runtime,
         zone_host,
         colors,
+        item_number: Arc::clone(&item_number),
+        item_number_ex: Arc::clone(&item_number_ex),
     };
     let mut process = Some(ProcessServices {
         db,
@@ -35239,8 +35272,6 @@ fn sim_loop(
         merchant_book,
         npc_vars_base,
         sell_off_book,
-        item_number,
-        item_number_ex,
         planes,
         shutdown_done_tx,
         ids_online,
@@ -35501,6 +35532,11 @@ struct SharedServices {
     shard_runtime: shard::ShardRuntime,
     zone_host: Option<Arc<ZoneHost>>,
     colors: MsgColors,
+    // **M1c-1**：`MakeIndex` 会话计数器的进程级共享句柄（单一全局原子；区 0 与区 k 共享同一 `Arc`）。
+    // 区 0 在 `sim_loop` 启动时 `store` 真初值（`[Setup]ItemNumber + 屏障 A 抽数`）；区 k 共享同一句柄
+    // （本片 F-1：区 k 尚不造件、不读该值；M1c-2 族搬入 `INBOUND_LOCAL` 时必须在 zone k 首次造件前完成 store）。
+    item_number: Arc<std::sync::atomic::AtomicI32>,
+    item_number_ex: Arc<std::sync::atomic::AtomicI32>,
 }
 
 /// **M1-0c'**：进程-only 服务（`!Send` 脚本宿主、DB 链、行会/城堡/全局表等）。
@@ -35521,8 +35557,6 @@ struct ProcessServices {
     merchant_book: game_svr::npc::MerchantScriptBook,
     npc_vars_base: game_svr::npc::NpcVars,
     sell_off_book: game_svr::selloff::SellOffBook,
-    item_number: i32,
-    item_number_ex: i32,
     planes: Option<planes::PlanesLink>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
@@ -35636,6 +35670,8 @@ impl SharedServices {
             shard_runtime: shard::ShardRuntime::new(shard::ShardLayout::single(0)),
             zone_host: None,
             colors: MsgColors::default(),
+            item_number: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            item_number_ex: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(i32::MAX / 2)),
         }
     }
 }
@@ -35666,8 +35702,6 @@ impl ProcessServices {
             sell_off_book: game_svr::selloff::SellOffBook {
                 entries: Vec::new(),
             },
-            item_number: 0,
-            item_number_ex: 0,
             planes: None,
             ids_online: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
             world_start: std::sync::Arc::new(WorldStartGate::new()),
@@ -36071,8 +36105,8 @@ impl HostLoop {
                 let merchant_book = &mut svc.merchant_book;
                 let npc_vars_base = &mut svc.npc_vars_base;
                 let mut sell_off_book = &mut svc.sell_off_book;
-                let mut item_number = &mut svc.item_number;
-                let mut item_number_ex = &mut svc.item_number_ex;
+                let item_number = &shared.item_number;
+                let item_number_ex = &shared.item_number_ex;
                 let world_start = &mut svc.world_start;
                 let win_lottery = &mut svc.win_lottery;
                 let party_cfg = &mut svc.party_cfg;
@@ -36170,8 +36204,8 @@ impl HostLoop {
                                         pwd_sessions: &mut *pwd_sessions,
                                         reconnect_pending: &mut *reconnect_pending,
                                         mon_gen_host: &mut *mon_gen_host,
-                                        item_number: &mut *item_number,
-                                        item_number_ex: &mut *item_number_ex,
+                                        item_number,
+                                        item_number_ex,
                                         registry: registry.as_ref(),
                                         party_cfg: &*party_cfg,
                                         gm_filter_word: &*gm_filter_word,
@@ -36341,7 +36375,7 @@ impl HostLoop {
                                     &enter_cfg.string_conf,
                                     registry.as_ref(),
                                     &unbind_list,
-                                    &mut item_number,
+                                    item_number,
                                     npc_host.as_ref(),
                                     &npc_vars_base,
                                     Some(&script_gm),
@@ -36417,7 +36451,7 @@ impl HostLoop {
                                     &mut sell_off_sessions,
                                     &npc_vars_base,
                                     &enter_cfg.catalog,
-                                    &mut item_number,
+                                    item_number,
                                     &gates,
                                     Some(&script_gm),
                                     script_world.as_mut(),
@@ -36445,7 +36479,7 @@ impl HostLoop {
                                 &mut shop_sessions,
                                 &mut sell_off_sessions,
                                 &npc_vars_base,
-                                &mut item_number,
+                                item_number,
                                 &mut saves,
                             ) {
                                 // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
@@ -36478,7 +36512,7 @@ impl HostLoop {
                                     book: &merchant_book,
                                     npc_vars: &npc_vars_base,
                                     catalog: &enter_cfg.catalog,
-                                    item_number: &mut item_number,
+                                    item_number,
                                     rng: &mut script_rng,
                                     sell_off,
                                     chr_name: &chr_name,
@@ -36620,7 +36654,7 @@ impl HostLoop {
                                     &enter_cfg.shop,
                                     &colors,
                                     make_items.as_ref(),
-                                    &mut item_number,
+                                    item_number,
                                     &merchant_book,
                                     &npc_vars_base,
                                     // **卡 `openmir2-gm-script-exec-seams`**：商人对话的 GM 跳线视图
@@ -36887,8 +36921,8 @@ impl HostLoop {
                                 &chr_name,
                                 &mut reconnect_pending,
                                 &mut pending_gm_castle_broadcasts,
-                                &mut item_number,
-                                &mut item_number_ex,
+                                item_number,
+                                item_number_ex,
                             );
                         }
                         GateEvent::CertificationPending { index, ip, .. } => {
@@ -37163,8 +37197,8 @@ impl HostLoop {
                                 &cmd,
                                 &mut reconnect_pending,
                                 &mut pending_gm_castle_broadcasts,
-                                &mut item_number,
-                                &mut item_number_ex,
+                                item_number,
+                                item_number_ex,
                             );
                             let _ = reply.send(out);
                         }
@@ -37197,8 +37231,8 @@ impl HostLoop {
                 let pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
                 let pwd_sessions = &mut svc.pwd_sessions;
                 let reconnect_pending = &mut svc.reconnect_pending;
-                let item_number = &mut svc.item_number;
-                let item_number_ex = &mut svc.item_number_ex;
+                let item_number = &shared.item_number;
+                let item_number_ex = &shared.item_number_ex;
                 let gm_filter_word = &svc.gm_filter_word;
                 let gm_mission = &svc.gm_mission;
                 let gm_spirit_mutiny_tick = &svc.gm_spirit_mutiny_tick;
@@ -37291,8 +37325,8 @@ impl HostLoop {
                                         pwd_sessions: &mut *pwd_sessions,
                                         reconnect_pending: &mut *reconnect_pending,
                                         mon_gen_host,
-                                        item_number: &mut *item_number,
-                                        item_number_ex: &mut *item_number_ex,
+                                        item_number,
+                                        item_number_ex,
                                         registry: registry.as_ref(),
                                         party_cfg: &*party_cfg,
                                         gm_filter_word: &*gm_filter_word,
@@ -37320,7 +37354,7 @@ impl HostLoop {
             let guild_store = &mut svc.guild_store;
             let mut npc_host = &mut svc.npc_host;
             let mut npc_vars_base = &mut svc.npc_vars_base;
-            let mut item_number = &mut svc.item_number;
+            let item_number = &shared.item_number;
             let server_table = &mut svc.server_table;
             let notice = &mut svc.notice;
             let shard_directory = &mut svc.shard_directory;
@@ -37509,7 +37543,7 @@ impl HostLoop {
                                             session_id,
                                             pay_ment,
                                             account: &account,
-                                            item_number: &mut item_number,
+                                            item_number,
                                         });
                                         if slicing_host.is_some() {
                                             note_first_player_id(zone_router::HOST_ZONE, &world);
@@ -37594,7 +37628,7 @@ impl HostLoop {
                                                             session_id,
                                                             pay_ment,
                                                             account: &account,
-                                                            item_number: &mut item_number,
+                                                            item_number,
                                                         },
                                                     );
                                                     note_first_player_id(
@@ -50069,7 +50103,7 @@ mod tests {
         catalog: game_svr::ability::StdItemCatalog,
         shop_cfg: ShopCfg,
         colors: MsgColors,
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
     }
 
     impl T142Rig {
@@ -50186,7 +50220,7 @@ mod tests {
                     blue_f: 0xFF,
                     blue_b: 0xFC,
                 },
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
             }
         }
 
@@ -50238,7 +50272,7 @@ mod tests {
                 &self.shop_cfg,
                 &self.colors,
                 None,
-                &mut self.item_number,
+                &self.item_number,
                 &self.book,
                 &self.npc_vars,
                 gm,
@@ -50279,7 +50313,7 @@ mod tests {
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.gates,
                 gm,
                 script_world,
@@ -50310,7 +50344,7 @@ mod tests {
                 &self.shop_cfg,
                 &self.colors,
                 None,
-                &mut self.item_number,
+                &self.item_number,
                 &self.book,
                 &self.npc_vars,
                 None,
@@ -51783,7 +51817,8 @@ break
             "满包 ⇒ 一件也不入包（余件走 DropItemDown，不许改背包形态）"
         );
         assert_eq!(
-            rig.item_number, 2,
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed),
+            2,
             "满包余件仍照 `CopyToUserItemFromName` 消费 `MakeIndex`（2 件 ⇒ +2）"
         );
     }
@@ -60161,8 +60196,8 @@ break
         rx: mpsc::UnboundedReceiver<SimToGate>,
         catalog: game_svr::ability::StdItemCatalog,
         pet_cfg: mir2_data::pet_slave::PetSlaveConfig,
-        item_number: i32,
-        item_number_ex: i32,
+        item_number: std::sync::atomic::AtomicI32,
+        item_number_ex: std::sync::atomic::AtomicI32,
         actor: i32,
     }
 
@@ -60225,8 +60260,8 @@ break
                 rx,
                 catalog: game_svr::ability::StdItemCatalog::new(),
                 pet_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
-                item_number: 1000,
-                item_number_ex: 1_073_741_872,
+                item_number: std::sync::atomic::AtomicI32::new(1000),
+                item_number_ex: std::sync::atomic::AtomicI32::new(1_073_741_872),
                 actor,
             }
         }
@@ -60258,8 +60293,8 @@ break
                 },
                 false,
                 100,
-                &mut self.item_number,
-                &mut self.item_number_ex,
+                &self.item_number,
+                &self.item_number_ex,
             );
         }
 
@@ -60397,7 +60432,7 @@ break
                 count: 2,
                 dura: 0,
             });
-        let start_number = rig.item_number;
+        let start_number = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         rig.apply();
         let frames = rig.drain();
         assert_eq!(frames.len(), 2, "两块矿石 ⇒ 两条 SM_ADDITEM");
@@ -60432,11 +60467,15 @@ break
                 count: 1,
                 dura: 1,
             });
-        let n0 = rig.item_number;
+        let n0 = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         rig.apply();
         assert!(rig.drain().is_empty());
         assert!(rig.sessions["hero"].state.item_list.is_empty());
-        assert_eq!(rig.item_number, n0 + 1, "CopyToUserItemFromName 仍消费一次");
+        assert_eq!(
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed),
+            n0 + 1,
+            "CopyToUserItemFromName 仍消费一次"
+        );
         // 负重门：max_weight 压到 0 ⇒ 两块重矿都不落包（item_number 仍 +2）。
         rig.sessions.get_mut("hero").unwrap().state.wabil.max_weight = 0;
         rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
@@ -60445,11 +60484,14 @@ break
                 count: 2,
                 dura: 5,
             });
-        let n1 = rig.item_number;
+        let n1 = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         rig.apply();
         assert!(rig.drain().is_empty());
         assert!(rig.sessions["hero"].state.item_list.is_empty());
-        assert_eq!(rig.item_number, n1 + 2);
+        assert_eq!(
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed),
+            n1 + 2
+        );
 
         // ---- GiveMine：Dura 钳 DuraMax（4000 > 100 ⇒ 100）；越界 100000 ⇒ 中止 ----
         rig.sessions.get_mut("hero").unwrap().state.wabil.max_weight = 1000;
@@ -60488,13 +60530,16 @@ break
             .state
             .item_list
             .clear();
-        rig.item_number_ex = 1_073_741_872;
+        rig.item_number_ex
+            .store(1_073_741_872, std::sync::atomic::Ordering::Relaxed);
         rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
             name: "木剑".into(),
             count: 3,
             permission: 10,
         });
-        let start_ex = rig.item_number_ex;
+        let start_ex = rig
+            .item_number_ex
+            .load(std::sync::atomic::Ordering::Relaxed);
         rig.apply();
         let frames = rig.drain();
         assert_eq!(frames.len(), 3, "三件木剑 ⇒ 三条 SM_ADDITEM");
@@ -60514,7 +60559,11 @@ break
                 "permission>=10 ⇒ MakeIndex=GetItemNumberEx"
             );
         }
-        assert_eq!(rig.item_number_ex, start_ex + 3);
+        assert_eq!(
+            rig.item_number_ex
+                .load(std::sync::atomic::Ordering::Relaxed),
+            start_ex + 3
+        );
         let draws_before = trace_lines(&trace, make_site).len();
 
         // ---- Make：满包 ⇒ 整条停（无抽数、无帧）；名字未命中 ⇒ 红且无抽数 ----
@@ -60614,14 +60663,16 @@ break
             },
             true, // TestServer
             100,
-            &mut rig.item_number,
-            &mut rig.item_number_ex,
+            &rig.item_number,
+            &rig.item_number_ex,
         );
         let _ = rig.drain();
         assert_eq!(rig.sessions["hero"].state.item_list.len(), 1);
         assert_eq!(trace_lines(&trace, make_site).len(), draws_before + 1);
         assert_ne!(
-            rig.sessions["hero"].state.item_list[0].make_index, rig.item_number_ex,
+            rig.sessions["hero"].state.item_list[0].make_index,
+            rig.item_number_ex
+                .load(std::sync::atomic::Ordering::Relaxed),
             "perm<10 ⇒ MakeIndex 取 GetItemNumber（已消费），不是 Ex 值"
         );
 
@@ -64063,7 +64114,7 @@ SendRefMsgRange=15
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -64092,7 +64143,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             Some(&env),
@@ -64207,7 +64258,7 @@ SendRefMsgRange=15
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         // ① 吃第一本（make_index=1）。
         handle_eat_cmd(
             1,
@@ -64226,7 +64277,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             None,
@@ -64264,7 +64315,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             None,
@@ -64391,7 +64442,7 @@ SendRefMsgRange=15
             let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
             gates.insert(0, tx0);
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             handle_eat_cmd(
                 1,
                 0,
@@ -64409,7 +64460,7 @@ SendRefMsgRange=15
                 &game_svr::strings::StringConf::defaults(),
                 None,
                 &unbind,
-                &mut item_number,
+                &item_number,
                 None,
                 &game_svr::npc::NpcVars::default(),
                 None,
@@ -64577,7 +64628,7 @@ SendRefMsgRange=15
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         handle_eat_cmd(
             1,
             0,
@@ -64595,7 +64646,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             None,
@@ -64824,7 +64875,7 @@ SendRefMsgRange=15
 
         // `recog` = `make_index`；`param`/`tag` 故意错位（4242）—— 读数位置错就必红。
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         handle_eat_cmd(
             make_index,
             4242,
@@ -64842,7 +64893,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
             None,
             &game_svr::npc::NpcVars::default(),
@@ -64959,7 +65010,7 @@ SendRefMsgRange=15
             blue_f: 0xFF,
             blue_b: 0xFC,
         };
-        let mut item_number = 400;
+        let item_number = std::sync::atomic::AtomicI32::new(400);
         handle_eat_cmd(
             make_index,
             0,
@@ -64977,7 +65028,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
             None,
             &game_svr::npc::NpcVars::default(),
@@ -65047,7 +65098,11 @@ SendRefMsgRange=15
             ],
             "背包写回：`MakeIndex` 逐件 +1、`Index/Dura` 照模板"
         );
-        assert_eq!(item_number, 406, "会话计数器被 6 件各消费一次");
+        assert_eq!(
+            item_number.load(std::sync::atomic::Ordering::Relaxed),
+            406,
+            "会话计数器被 6 件各消费一次"
+        );
         assert_eq!(sg.state.wabil.weight, 12, "`WeightChanged()`：6 × weight 2");
     }
 
@@ -66241,7 +66296,7 @@ SendRefMsgRange=15
 
         // 1) 吃药：池药形态只叠加 `IncHealth = 0 + 20`，尾只有 `SM_EAT_OK` + `RM_WEIGHTCHANGED`。
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         handle_eat_cmd(
             make_index,
             0,
@@ -66259,7 +66314,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             // 卡 `openmir2-gm-script-exec-seams`：`FunctionNPC` 未装 / 无 GM 跳线。
             None,
             &game_svr::npc::NpcVars::default(),
@@ -66699,6 +66754,53 @@ SendRefMsgRange=15
         c
     }
 
+    /// **M1c-1 C1 牙（合成双线程）**：`item_number` 进程级共享 = 单一 `Arc<AtomicI32>`；并发
+    /// `fetch_add` 不产生重复、计数正确。本片证明的是「计数器在并发下唯一」；**生产两区 2K 件
+    /// 的证据未做**（需造件族入 `INBOUND_LOCAL`，属 M1c-2），本片不得据此宣称生产路径全局唯一。
+    #[test]
+    fn shared_item_number_counter_no_dup_under_concurrency() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        const K: i32 = 1000;
+        let counter = std::sync::Arc::new(AtomicI32::new(0));
+        let mut hs = Vec::new();
+        for _ in 0..2 {
+            let c = std::sync::Arc::clone(&counter);
+            hs.push(std::thread::spawn(move || {
+                let mut vals = Vec::with_capacity(K as usize);
+                for _ in 0..K {
+                    vals.push(c.fetch_add(1, Ordering::Relaxed) + 1);
+                }
+                vals
+            }));
+        }
+        let mut all = Vec::new();
+        for h in hs {
+            all.extend(h.join().expect("thread join"));
+        }
+        assert_eq!(all.len(), (2 * K) as usize, "两线程各 K 次 ⇒ 2K 个值");
+        let set: std::collections::HashSet<i32> = all.iter().copied().collect();
+        assert_eq!(
+            set.len(),
+            all.len(),
+            "并发 fetch_add 必须全局无重复（单一全局原子）"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), 2 * K, "计数器 == 2K");
+    }
+
+    /// **M1c-1 · PROCESS_ONLY 位值对照**：`item_number` 从 `ProcessServices` 搬到 `SharedServices`
+    /// 不应改 `PROCESS_ONLY` 段位掩码（`PROCESS_ONLY` 是按段位的 `PhaseSet` 位集，与
+    /// `ProcessServices` 持哪些字段无关；`proc_svc!` 入口断言只查 `Option` 存在性）。此牙钉住
+    /// 改动前位值（`SHUTDOWN|INBOUND_PROCESS|DB_POLL|PERIODIC|PLANES|PERSIST|SWITCH` = `155_917`
+    /// = `0x2610d`）；若误改段位/掩码 ⇒ 红。
+    #[test]
+    fn process_only_mask_unchanged_after_item_number_move() {
+        assert_eq!(
+            PhaseSet::PROCESS_ONLY,
+            155_917,
+            "PROCESS_ONLY 位值必须与 item_number 搬迁前一致（=0x2610d）"
+        );
+    }
+
     fn newbie_names() -> NewbieItems {
         NewbieItems {
             candle: "蜡烛".into(),
@@ -66718,8 +66820,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut list = Vec::new();
-        let mut n = names.item_number;
-        let warns = add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        let warns = add_newbie_items(&mut list, &catalog, &names, 0, &n);
         assert!(warns.is_empty(), "模板都在：{warns:?}");
         assert_eq!(
             list.iter().map(|i| i.index).collect::<Vec<_>>(),
@@ -66735,8 +66837,8 @@ SendRefMsgRange=15
 
         // 女号取 `ClothsWoman`（`Gender != Man`）。
         let mut list_f = Vec::new();
-        let mut nf = 0;
-        add_newbie_items(&mut list_f, &catalog, &names, 1, &mut nf);
+        let nf = std::sync::atomic::AtomicI32::new(0);
+        add_newbie_items(&mut list_f, &catalog, &names, 1, &nf);
         assert_eq!(list_f[3].index, 5, "女号第 4 件 = 布衣(女)（index 5）");
     }
 
@@ -66749,7 +66851,7 @@ SendRefMsgRange=15
     /// 红检：把 `+=` 改成赋值（`=`）或丢掉抽数（只返回 conf 值）⇒ 下面的 `make_index` 断言必红
     /// （`bins/game-svr/src/ctor_fold.rs::barrier_a_counter_init_adds_not_assigns` 另有同口径牙）。
     /// **残余（如实登记）**：宿主那**一行**绑定（`let mut item_number = …`）本身没有进程级用例钉住
-    /// —— 把它改回 `enter_cfg.newbie.item_number`（抽数仍抽、但不用）**仓内无用例会红**；
+    /// —— 把它改回 `enter_cfg.newbie.item_number.load(std::sync::atomic::Ordering::Relaxed)`（抽数仍抽、但不用）**仓内无用例会红**；
     /// 要机判「登录后首包的 `SM_BAGITEMS.make_index`」需另开进程级用例（另立条目）。
     #[test]
     fn barrier_a_draw_moves_newbie_make_index() {
@@ -66778,8 +66880,8 @@ SendRefMsgRange=15
         assert_eq!(init, 100 + r, "oracle `ItemNumber += Random(10000)`");
 
         let mut list = Vec::new();
-        let mut n = init;
-        let warns = add_newbie_items(&mut list, &newbie_catalog(), &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(init);
+        let warns = add_newbie_items(&mut list, &newbie_catalog(), &names, 0, &n);
         assert!(warns.is_empty(), "模板都在：{warns:?}");
         assert_eq!(
             list.iter().map(|i| i.make_index).collect::<Vec<_>>(),
@@ -66800,8 +66902,8 @@ SendRefMsgRange=15
             sex: 0,
             ..record::CharacterData::default()
         };
-        let mut n = names.item_number;
-        let warns = merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        let warns = merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &n);
         assert!(warns.is_empty(), "模板都在：{warns:?}");
         let flat = bag_items_from(rec.bag_items.as_deref());
         assert_eq!(
@@ -66820,7 +66922,11 @@ SendRefMsgRange=15
             Some(50),
             "记录定长槽位 46 + 四件（存档编码形态）"
         );
-        assert_eq!(n, 104, "计数器恰好前进 4");
+        assert_eq!(
+            n.load(std::sync::atomic::Ordering::Relaxed),
+            104,
+            "计数器恰好前进 4"
+        );
     }
 
     /// **Lane A 缺口 1**：52/752 的 `WAbil.Weight` 必须含四件（重量 1+1+5+3=10）。
@@ -66830,8 +66936,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut rec = record::CharacterData::default();
-        let mut n = names.item_number;
-        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &n);
         let abil = new_human_ability();
         let bonus = game_svr::ability::NakedAbility {
             dc: 0,
@@ -66881,8 +66987,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut rec = record::CharacterData::default();
-        let mut n = names.item_number;
-        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        merge_newbie_items_into_record(&mut rec, &catalog, &names, 0, &n);
         let mut sg = test_session_ground(1);
         sg.state.item_list = bag_items_from(rec.bag_items.as_deref());
         assert_eq!(sg.state.item_list.len(), 4, "会话列表 = 记录非空件");
@@ -67399,8 +67505,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut list = Vec::new();
-        let mut n = names.item_number;
-        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        add_newbie_items(&mut list, &catalog, &names, 0, &n);
 
         let world = mir2_world_bevy::World::new(32, 32);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -67538,8 +67644,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut list = Vec::new();
-        let mut n = names.item_number;
-        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        add_newbie_items(&mut list, &catalog, &names, 0, &n);
 
         let mut world = mir2_world_bevy::World::new(32, 32);
         world.clock_ms = 40_000;
@@ -67805,8 +67911,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut list = Vec::new();
-        let mut n = names.item_number;
-        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        add_newbie_items(&mut list, &catalog, &names, 0, &n);
 
         // 世界：一个已进世界、且**本 tick 已扫**的玩家（登录尾段可排水）。
         let mut world = mir2_world_bevy::World::new(32, 32);
@@ -67898,8 +68004,8 @@ SendRefMsgRange=15
         let catalog = newbie_catalog();
         let names = newbie_names();
         let mut list = Vec::new();
-        let mut n = names.item_number;
-        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        let n = std::sync::atomic::AtomicI32::new(names.item_number);
+        add_newbie_items(&mut list, &catalog, &names, 0, &n);
 
         let mut world = mir2_world_bevy::World::new(32, 32);
         world.open_session("hero");
@@ -73915,7 +74021,7 @@ SendRefMsgRange=15
             human_max_gold: 10_000_000,
             ..ShopCfg::default()
         };
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -73958,7 +74064,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74002,7 +74108,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74035,7 +74141,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74143,7 +74249,7 @@ SendRefMsgRange=15
             human_max_gold: 10_000_000,
             ..ShopCfg::default()
         };
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -74179,7 +74285,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74239,7 +74345,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74294,7 +74400,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74452,7 +74558,7 @@ SendRefMsgRange=15
             human_max_gold: 10_000_000,
             ..ShopCfg::default()
         };
-        let mut item_number = 500i32;
+        let item_number = std::sync::atomic::AtomicI32::new(500);
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -74488,7 +74594,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             Some(&make_reg),
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74531,7 +74637,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             Some(&make_reg),
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -74607,7 +74713,7 @@ SendRefMsgRange=15
             &shop_cfg,
             &colors,
             Some(&make_reg),
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -75686,7 +75792,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &gates,
                 None,
                 None,
@@ -75709,7 +75815,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &gates,
                 None,
                 None,
@@ -75736,7 +75842,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &gates,
                 None,
                 None,
@@ -75764,7 +75870,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &gates,
                 None,
                 None,
@@ -75786,7 +75892,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &gates,
                 None,
                 None,
@@ -75872,7 +75978,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
@@ -75917,7 +76023,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
@@ -75995,7 +76101,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_QUERYUSERNAME 属 P0 批"
@@ -76036,7 +76142,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
-            &mut 0,
+            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         let frames = drain_frames(&mut rx0);
@@ -76123,7 +76229,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
@@ -76225,7 +76331,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
@@ -76283,7 +76389,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
-                &mut 0,
+                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "非 P0 ident ⇒ 返回 false"
@@ -76313,7 +76419,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
-            &mut 0,
+            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         assert_eq!(
@@ -76349,7 +76455,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
-            &mut 0,
+            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         let sg = sessions.get("hero").unwrap();
@@ -88040,7 +88146,7 @@ SendRefMsgRange=15
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -88055,7 +88161,7 @@ SendRefMsgRange=15
         let eat = |make_index: i32,
                    sessions: &mut HashMap<String, SessionGround>,
                    world: &mut mir2_world_bevy::World,
-                   item_number: &mut i32| {
+                   item_number: &std::sync::atomic::AtomicI32| {
             handle_eat_cmd(
                 make_index,
                 0,
@@ -88108,7 +88214,7 @@ SendRefMsgRange=15
         };
 
         // ① 太阳水 Shape 1：固定量 IncHealthSpell(30,40) ⇒ (40,60)。
-        eat(1001, &mut sessions, &mut world, &mut item_number);
+        eat(1001, &mut sessions, &mut world, &item_number);
         let f1 = drain(&mut rx0);
         assert_eq!(
             only_53(&f1),
@@ -88144,7 +88250,7 @@ SendRefMsgRange=15
         );
 
         // ③ Shape 3 百分比：Round(100/100*30)=30、Round(200/100*40)=80 ⇒ (70,140)。
-        eat(1002, &mut sessions, &mut world, &mut item_number);
+        eat(1002, &mut sessions, &mut world, &item_number);
         let f2 = drain(&mut rx0);
         assert_eq!(
             only_53(&f2),
@@ -88278,7 +88384,7 @@ SendRefMsgRange=15
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -88307,7 +88413,7 @@ SendRefMsgRange=15
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             Some(&env),
@@ -104092,7 +104198,7 @@ mod tests {",
             },
             ..ShopCfg::default()
         };
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let colors = MsgColors {
             red_f: 255,
             red_b: 56,
@@ -104128,7 +104234,7 @@ mod tests {",
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -104200,7 +104306,7 @@ mod tests {",
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -104396,7 +104502,7 @@ mod tests {",
             &shop_cfg,
             &colors,
             None,
-            &mut item_number,
+            &item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -104489,7 +104595,7 @@ mod tests {",
         npc_vars: game_svr::npc::NpcVars,
         sell_off: game_svr::selloff::SellOffState,
         /// `M2Share.GetItemNumber()` 计数器（脚本 `GIVE` 件的 `MakeIndex`；夹具起点 0）。
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
     }
 
     impl GuildNpcFixture {
@@ -104539,7 +104645,7 @@ mod tests {",
                 book: game_svr::npc::MerchantScriptBook::default(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 sell_off: game_svr::selloff::SellOffState::default(),
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
             };
             f.add_player("hero", 1, 10, 10, 901);
             // 固定 NPC 在玩家之后建：`EntityStore::alloc_id` 先到先得（避免与玩家 id 撞号）。
@@ -104700,7 +104806,7 @@ mod tests {",
                 book: &self.book,
                 npc_vars: &self.npc_vars,
                 catalog: &self.catalog,
-                item_number: &mut self.item_number,
+                item_number: &self.item_number,
                 rng: &mut script_rng,
                 sell_off: &mut self.sell_off,
                 chr_name: "hero",
@@ -106482,7 +106588,7 @@ GMEXECUTE f
         npc_vars: game_svr::npc::NpcVars,
         catalog: game_svr::ability::StdItemCatalog,
         /// `M2Share.GetItemNumber()` 计数器（click 路径的 `GIVE` 件走它）。
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
         dir: std::path::PathBuf,
     }
 
@@ -106635,7 +106741,7 @@ GMEXECUTE f
                 sell_off_sessions: HashMap::new(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 catalog: game_svr::ability::StdItemCatalog::new(),
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
                 dir,
             }
         }
@@ -106654,7 +106760,7 @@ GMEXECUTE f
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.gates,
                 None,
                 None,
@@ -106665,7 +106771,7 @@ GMEXECUTE f
         fn dlg_select(&mut self, npc_id: i32, label: &str) {
             let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
             let mut sell_off_book = game_svr::selloff::SellOffBook::default();
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             handle_shop_cmd(
                 game_svr::shop::CM_MERCHANTDLGSELECT,
                 npc_id,
@@ -106697,7 +106803,7 @@ GMEXECUTE f
                     blue_b: 0xFC,
                 },
                 None,
-                &mut item_number,
+                &item_number,
                 &self.book,
                 &self.npc_vars,
                 None,
@@ -106731,7 +106837,7 @@ GMEXECUTE f
                 "hero",
                 "0",
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.npc_vars,
                 session,
                 sell_off,
@@ -107313,7 +107419,7 @@ GMEXECUTE f
         sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
         npc_vars: game_svr::npc::NpcVars,
         catalog: game_svr::ability::StdItemCatalog,
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
         dir: std::path::PathBuf,
     }
 
@@ -107426,7 +107532,7 @@ GMEXECUTE f
                 sell_off_sessions: HashMap::new(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 catalog: game_svr::ability::StdItemCatalog::new(),
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
                 dir,
             }
         }
@@ -107444,7 +107550,7 @@ GMEXECUTE f
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.gates,
                 None,
                 None,
@@ -107454,7 +107560,7 @@ GMEXECUTE f
         fn dlg_select(&mut self, npc_id: i32, label: &str) {
             let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
             let mut sell_off_book = game_svr::selloff::SellOffBook::default();
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             handle_shop_cmd(
                 game_svr::shop::CM_MERCHANTDLGSELECT,
                 npc_id,
@@ -107486,7 +107592,7 @@ GMEXECUTE f
                     blue_b: 0xFC,
                 },
                 None,
-                &mut item_number,
+                &item_number,
                 &self.book,
                 &self.npc_vars,
                 None,
@@ -108255,7 +108361,7 @@ GMEXECUTE f
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let gmcfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -108286,7 +108392,7 @@ GMEXECUTE f
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             Some(&env),
@@ -108820,7 +108926,7 @@ GMEXECUTE f
         sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
         npc_vars: game_svr::npc::NpcVars,
         catalog: game_svr::ability::StdItemCatalog,
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
         dir: std::path::PathBuf,
     }
 
@@ -108909,7 +109015,7 @@ GMEXECUTE f
                 sell_off_sessions: HashMap::new(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 catalog: game_svr::ability::StdItemCatalog::new(),
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
                 dir,
             }
         }
@@ -108927,7 +109033,7 @@ GMEXECUTE f
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.gates,
                 None,
                 None,
@@ -111399,7 +111505,7 @@ GMEXECUTE f
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         handle_eat_cmd(
             make_index,
             0,
@@ -111417,7 +111523,7 @@ GMEXECUTE f
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -111950,7 +112056,7 @@ GMEXECUTE f
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         handle_eat_cmd(
             make_index,
             0,
@@ -111968,7 +112074,7 @@ GMEXECUTE f
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             Some(&host),
             &game_svr::npc::NpcVars::default(),
             None,
@@ -113152,8 +113258,8 @@ fn ",
         spirit_mutiny_tick: std::cell::Cell<i64>,
         actor: i32,
         victim: i32,
-        item_number: i32,
-        item_number_ex: i32,
+        item_number: std::sync::atomic::AtomicI32,
+        item_number_ex: std::sync::atomic::AtomicI32,
     }
 
     impl ScriptBridgeRig {
@@ -113228,8 +113334,8 @@ fn ",
                 spirit_mutiny_tick: std::cell::Cell::new(0),
                 actor,
                 victim,
-                item_number: 1000,
-                item_number_ex: 1_073_741_872,
+                item_number: std::sync::atomic::AtomicI32::new(1000),
+                item_number_ex: std::sync::atomic::AtomicI32::new(1_073_741_872),
             }
         }
 
@@ -113300,8 +113406,8 @@ fn ",
                 "hero",
                 &mut reconnect_pending,
                 &mut castle_broadcasts,
-                &mut self.item_number,
-                &mut self.item_number_ex,
+                &self.item_number,
+                &self.item_number_ex,
             );
             ScriptDrainOutcome {
                 reconnect: reconnect_pending,
@@ -115636,7 +115742,7 @@ fn ",
             catalog: &game_svr::ability::StdItemCatalog,
             colors: &MsgColors,
             unbind: &game_svr::unbindlist::UnbindList,
-            item_number: &mut i32,
+            item_number: &std::sync::atomic::AtomicI32,
             env: &ScriptGmEnv<'_>,
         ) -> (Vec<Vec<u8>>, Vec<u16>) {
             // 每相重放一张彩票（前一次已被吃掉）。
@@ -115729,7 +115835,7 @@ fn ",
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let gmcfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -115764,7 +115870,7 @@ fn ",
             &catalog,
             &colors,
             &unbind,
-            &mut item_number,
+            &item_number,
             &env,
         );
         // 635 直发先到；泵按 `(byte)ident` 升序：`SM_WEIGHTCHANGED(622←10115→131)`
@@ -115820,7 +115926,7 @@ fn ",
             &catalog,
             &colors,
             &unbind,
-            &mut item_number,
+            &item_number,
             &env,
         );
         assert_eq!(
@@ -115873,7 +115979,7 @@ fn ",
             &catalog,
             &colors,
             &unbind,
-            &mut item_number,
+            &item_number,
             &env,
         );
         assert_eq!(
@@ -115935,7 +116041,7 @@ fn ",
             &game_svr::strings::StringConf::defaults(),
             None,
             &unbind,
-            &mut item_number,
+            &item_number,
             None,
             &game_svr::npc::NpcVars::default(),
             Some(&env),
@@ -116078,7 +116184,7 @@ fn ",
                     &catalog,
                     &colors,
                     &unbind,
-                    &mut item_number,
+                    &item_number,
                     &env,
                 );
                 let frames_fx = c["frames"].as_array().expect("frames");
@@ -116408,7 +116514,7 @@ fn ",
             blue_b: 0xFC,
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let guilds = mir2_world_bevy::GuildManager::new();
         let gmcfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
@@ -116456,7 +116562,7 @@ fn ",
                 &game_svr::strings::StringConf::default(),
                 None,
                 &unbind,
-                &mut item_number,
+                &item_number,
                 None,
                 &game_svr::npc::NpcVars::default(),
                 Some(&env),
@@ -118849,8 +118955,8 @@ mod admin_channel_tests {
             let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
             let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
             let mut castle_broadcasts: Vec<String> = Vec::new();
-            let mut item_number = 0;
-            let mut item_number_ex = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
+            let item_number_ex = std::sync::atomic::AtomicI32::new(0);
             let mon_table = &self.enter_cfg.mon_gen.table;
             execute_admin_gm_command(
                 &mut self.sessions,
@@ -118876,8 +118982,8 @@ mod admin_channel_tests {
                 cmd,
                 &mut reconnect_pending,
                 &mut castle_broadcasts,
-                &mut item_number,
-                &mut item_number_ex,
+                &item_number,
+                &item_number_ex,
             )
         }
     }
@@ -120093,7 +120199,7 @@ mod t279_dress_eff_tests {
         catalog: game_svr::ability::StdItemCatalog,
         shop_cfg: ShopCfg,
         colors: MsgColors,
-        item_number: i32,
+        item_number: std::sync::atomic::AtomicI32,
     }
 
     impl TeleportRig {
@@ -120220,7 +120326,7 @@ mod t279_dress_eff_tests {
                     blue_f: 0xFF,
                     blue_b: 0xFC,
                 },
-                item_number: 0,
+                item_number: std::sync::atomic::AtomicI32::new(0),
             }
         }
 
@@ -120238,7 +120344,7 @@ mod t279_dress_eff_tests {
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
-                &mut self.item_number,
+                &self.item_number,
                 &self.gates,
                 None,
                 None,
@@ -120268,7 +120374,7 @@ mod t279_dress_eff_tests {
                 &self.shop_cfg,
                 &self.colors,
                 None,
-                &mut self.item_number,
+                &self.item_number,
                 &self.book,
                 &self.npc_vars,
                 None,
@@ -124281,7 +124387,7 @@ mod finish_login_tests {
         let gm_filter_word = std::cell::Cell::new(true);
         let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
         let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let account = "acct".to_string();
 
         // 合成角色记录：CurMap/Home 都是夹具图 "0"，坐标 (5,5) 可走。
@@ -124337,7 +124443,7 @@ mod finish_login_tests {
             session_id: 1,
             pay_ment: 0,
             account: &account,
-            item_number: &mut item_number,
+            item_number: &item_number,
         });
 
         // ① actor 进图。
@@ -124598,7 +124704,7 @@ mod zone_login_landing_tests {
         let gm_filter_word = std::cell::Cell::new(true);
         let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
         let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let account = "acct".to_string();
         let reply = dbclient::Reply {
             query_id: 1,
@@ -124638,7 +124744,7 @@ mod zone_login_landing_tests {
                 session_id: 1,
                 pay_ment: 0,
                 account: &account,
-                item_number: &mut item_number,
+                item_number: &item_number,
             },
         );
 
@@ -124748,7 +124854,7 @@ mod zone_disconnect_tests {
         let gm_filter_word = std::cell::Cell::new(true);
         let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
         let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
-        let mut item_number = 0i32;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
         let account = "acct".to_string();
         let reply = dbclient::Reply {
             query_id: 1,
@@ -124789,7 +124895,7 @@ mod zone_disconnect_tests {
                 session_id: 1,
                 pay_ment: 0,
                 account: &account,
-                item_number: &mut item_number,
+                item_number: &item_number,
             },
         );
         let _ = std::fs::remove_dir_all(&base);

@@ -704,7 +704,7 @@ pub fn make_drug_item(
     s_item_name: &str,
     catalog: &dyn ItemCatalog,
     make_items: &MakeItemRegistry,
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
     ctx: &ShopContext<'_>,
 ) -> MakeDrugResult {
     let mut frames: Vec<ShopFrame> = Vec::new();
@@ -727,9 +727,10 @@ pub fn make_drug_item(
                 let mut user_item = BagItem::new(0, 0);
                 if let Some(ni) = catalog.find_by_name(s_item_name) {
                     if let Some(nt) = catalog.get(ni) {
-                        *item_number += 1;
                         user_item = BagItem {
-                            make_index: *item_number,
+                            make_index: item_number
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                + 1,
                             index: ni,
                             dura: nt.dura_max,
                             dura_max: nt.dura_max,
@@ -3231,8 +3232,8 @@ mod tests {
         let reg = make_reg("[金创药]\n草药 2\n布衣 1\n");
         let mut st = ground(1000, vec![mbag(4, 71), mbag(4, 72), mbag(5, 73)]);
         let goods = goods_one(3);
-        let mut item_number = 500;
-        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut item_number, &c);
+        let item_number = std::sync::atomic::AtomicI32::new(500);
+        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &item_number, &c);
 
         assert!(r.ok);
         let idents: Vec<u16> = r.frames.iter().map(|f| f.ident).collect();
@@ -3336,21 +3337,45 @@ mod tests {
 
         // n14=1：请求名不在在售组（组首件名 != 请求名）。
         let mut st = ground(1000, vec![]);
-        let r = make_drug_item(&mut st, &goods, "别的药", &cat, &reg, &mut 0, &c);
+        let r = make_drug_item(
+            &mut st,
+            &goods,
+            "别的药",
+            &cat,
+            &reg,
+            &std::sync::atomic::AtomicI32::new(0),
+            &c,
+        );
         assert_eq!(r.frames.len(), 1);
         assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_MAKEDRUG_FAIL);
         assert_eq!(r.frames[0].recog, 1);
 
         // n14=3：金币不足（< 100）⇒ 不消耗、不发 DELITEMS。
         let mut st = ground(50, vec![mbag(4, 71), mbag(4, 72), mbag(5, 73)]);
-        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        let r = make_drug_item(
+            &mut st,
+            &goods,
+            "金创药",
+            &cat,
+            &reg,
+            &std::sync::atomic::AtomicI32::new(0),
+            &c,
+        );
         assert_eq!(r.frames.len(), 1);
         assert_eq!(r.frames[0].recog, 3);
         assert_eq!(st.item_list.len(), 3, "金币不足不得消耗材料");
 
         // n14=4：材料不足（只有 1 件草药 < 2）。
         let mut st = ground(1000, vec![mbag(4, 71)]);
-        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        let r = make_drug_item(
+            &mut st,
+            &goods,
+            "金创药",
+            &cat,
+            &reg,
+            &std::sync::atomic::AtomicI32::new(0),
+            &c,
+        );
         assert_eq!(r.frames.len(), 1);
         assert_eq!(r.frames[0].recog, 4);
         assert_eq!(st.item_list.len(), 1, "材料不足不得消耗");
@@ -3359,7 +3384,15 @@ mod tests {
         let empty_reg = make_reg("[金创药]\n");
         let full: Vec<BagItem> = (0..46).map(|i| mbag(2, 100 + i)).collect();
         let mut st = ground(1000, full);
-        let r = make_drug_item(&mut st, &goods, "金创药", &cat, &empty_reg, &mut 0, &c);
+        let r = make_drug_item(
+            &mut st,
+            &goods,
+            "金创药",
+            &cat,
+            &empty_reg,
+            &std::sync::atomic::AtomicI32::new(0),
+            &c,
+        );
         assert_eq!(r.frames.len(), 1, "无材料消耗 ⇒ 只发结果帧");
         assert_eq!(r.frames[0].recog, 2);
         assert_eq!(st.item_list.len(), 46);
@@ -3376,7 +3409,15 @@ mod tests {
             "入包失败不得发 622"
         );
         let mut short = ground(1000, vec![mbag(4, 71)]);
-        let r4 = make_drug_item(&mut short, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        let r4 = make_drug_item(
+            &mut short,
+            &goods,
+            "金创药",
+            &cat,
+            &reg,
+            &std::sync::atomic::AtomicI32::new(0),
+            &c,
+        );
         assert_eq!(r4.frames[0].recog, 4);
         assert!(
             r4.frames

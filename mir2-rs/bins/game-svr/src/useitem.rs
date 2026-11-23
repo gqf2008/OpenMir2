@@ -446,7 +446,7 @@ pub fn use_item(
     item_list: &mut Vec<BagItem>,
     // `M2Share.GetItemNumber()`（`M2Share.cs:547`）：`CopyToUserItemFromName` 每建一件就取一次
     // 新 `MakeIndex`。与宿主 `GIVE`/新手物品**共用同一个会话计数器**。
-    item_number: &mut i32,
+    item_number: &std::sync::atomic::AtomicI32,
 ) -> UseItemOutcome {
     let mut eaten = false;
     let mut exp_delta: Option<i32> = None;
@@ -579,9 +579,10 @@ pub fn use_item(
                                     let Some(tpl_unbind) = ctx.catalog.get(index) else {
                                         break;
                                     };
-                                    *item_number += 1;
                                     added_items.push(BagItem {
-                                        make_index: *item_number,
+                                        make_index: item_number
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                            + 1,
                                         index,
                                         dura: tpl_unbind.dura_max,
                                         dura_max: tpl_unbind.dura_max,
@@ -1108,8 +1109,8 @@ mod tests {
             dura_max: 0,
             desc: [0; 14],
         }];
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut list, &item_number);
         (out, state)
     }
 
@@ -1783,8 +1784,8 @@ mod tests {
             dura_max: 100,
             desc: [0; 14],
         }];
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten, "经验卷吃掉");
         assert_eq!(
             out.exp_delta,
@@ -1960,14 +1961,14 @@ mod tests {
                 hunger_status: i32v(&case["hunger_status_before"]),
             };
 
-            let mut item_number = 0;
+            let item_number = std::sync::atomic::AtomicI32::new(0);
             state.extra.body_luck = case["expect"]["body_luck_before"].as_f64().unwrap_or(0.0);
             state.extra.body_luck_level = case["expect"]["body_luck_level_before"]
                 .as_i64()
                 .unwrap_or(0) as i32;
             // IT-14：武器耐久输入（`weapon_before`）→ 比较器据夹具喂状态。
             state.extra.weapon = weapon_of(&case["weapon_before"]);
-            let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+            let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
             let expect = &case["expect"];
 
             // IT-08：基础 `Abil.Exp` 增量（fixture `abil_exp` vs 顶层 `abil_exp_before`）与 `BodyLuck` 终值（追加字段）。
@@ -2339,8 +2340,8 @@ mod tests {
             now_ms: 0,
             recalc: None,
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten);
         assert_eq!(state.wabil.hp, 12, "37/100*5 = 1.85 ⇒ +2");
         assert_eq!(
@@ -2392,8 +2393,8 @@ mod tests {
             now_ms: 0,
             recalc: None,
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(!out.eaten);
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert_eq!(out.notices.len(), 1);
@@ -2452,8 +2453,8 @@ mod tests {
             now_ms: 0,
             recalc: None,
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(!out.eaten);
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.notices.is_empty());
@@ -2502,8 +2503,8 @@ mod tests {
             hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten, "StdMode 2 必吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
@@ -2558,8 +2559,8 @@ mod tests {
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(!out.eaten, "禁药地图不许吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert_eq!(out.notices.len(), 1, "禁药只排一条 SysMsg");
@@ -2622,8 +2623,8 @@ mod tests {
             now_ms: 0,
             recalc: None,
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten, "FunctionNPC 存在 ⇒ StdMode 31/AniCount!=0 必吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
@@ -2646,8 +2647,8 @@ mod tests {
             unbind: &unbind,
             ..ctx
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(!out.eaten, "FunctionNPC 缺失 ⇒ 不吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.notices.is_empty());
@@ -2714,8 +2715,8 @@ mod tests {
             dura_max: 0,
             desc: [0; 14],
         }];
-        let mut item_number = 100;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(100);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten, "容量门通过 ⇒ 吃掉捆装包");
         assert_eq!(out.removed_index, Some(0));
         assert_eq!(
@@ -2737,7 +2738,11 @@ mod tests {
                 .all(|i| i.index == 60 && i.dura == 7 && i.dura_max == 7),
             "`Index = 表内位置+1`、`Dura = DuraMax = tpl.DuraMax`"
         );
-        assert_eq!(item_number, 106, "会话计数器被 6 件各消费一次");
+        assert_eq!(
+            item_number.load(std::sync::atomic::Ordering::Relaxed),
+            106,
+            "会话计数器被 6 件各消费一次"
+        );
         assert_eq!(item_list.len(), 6, "移除 1 件 + 生成 6 件");
         assert!(item_list.iter().all(|i| i.index == 60));
         assert_eq!(state.wabil.weight, 12, "重量按解包后的背包重算（6 × 2）");
@@ -2800,8 +2805,8 @@ mod tests {
             now_ms: 0,
             recalc: None,
         };
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         let expect = &case["expect"];
         assert!(out.eaten, "容量门通过 ⇒ 吃掉捆装包");
         let exp_added = expect["added_items"].as_array().unwrap();
@@ -2879,13 +2884,17 @@ mod tests {
             dura_max: 0,
             desc: [0; 14],
         }];
-        let mut item_number = 0;
-        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let item_number = std::sync::atomic::AtomicI32::new(0);
+        let out = use_item(&ctx, &mut state, &mut item_list, &item_number);
         assert!(out.eaten, "解包调用不改变 eatSuccess（Operate.cs:665）");
         assert!(out.added_items.is_empty(), "空名 ⇒ 0 件");
         assert!(item_list.is_empty(), "捆装包被吃掉");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
-        assert_eq!(item_number, 0, "没建件 ⇒ 计数器不动");
+        assert_eq!(
+            item_number.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "没建件 ⇒ 计数器不动"
+        );
 
         // 另一半：Shape 命中但**名字查不到模板** ⇒ 同样 0 件、照吃。
         let mut unbind2 = UnbindList::default();
@@ -2901,7 +2910,7 @@ mod tests {
             dura_max: 0,
             desc: [0; 14],
         }];
-        let out2 = use_item(&ctx2, &mut state, &mut item_list2, &mut item_number);
+        let out2 = use_item(&ctx2, &mut state, &mut item_list2, &item_number);
         assert!(out2.eaten);
         assert!(out2.added_items.is_empty());
         assert!(item_list2.is_empty());
@@ -2982,13 +2991,13 @@ mod tests {
             desc: [0; 14],
         };
         let mut state = UseItemActorState::default();
-        let mut item_number = 0;
+        let item_number = std::sync::atomic::AtomicI32::new(0);
 
         // 42 件：42 + 6 - 1 = 47 > 46 ⇒ 容量门不通过。
         let mut full: Vec<BagItem> = vec![pack.clone()];
         full.extend((0..41).map(filler));
         let before = full.clone();
-        let out = use_item(&ctx, &mut state, &mut full, &mut item_number);
+        let out = use_item(&ctx, &mut state, &mut full, &item_number);
         assert!(
             !out.eaten,
             "42 件超容量 ⇒ 不吃（与夹具 unbind_bag_full 同口径）"
@@ -2996,12 +3005,12 @@ mod tests {
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.added_items.is_empty());
         assert_eq!(full, before, "拒绝时不许动背包");
-        assert_eq!(item_number, 0);
+        assert_eq!(item_number.load(std::sync::atomic::Ordering::Relaxed), 0);
 
         // 41 件：41 + 6 - 1 = 46 ≤ 46 ⇒ 通过。
         let mut fits: Vec<BagItem> = vec![pack];
         fits.extend((0..40).map(filler));
-        let out = use_item(&ctx, &mut state, &mut fits, &mut item_number);
+        let out = use_item(&ctx, &mut state, &mut fits, &item_number);
         assert!(out.eaten, "41 件正好 46 ≤ MaxBagItem ⇒ 解包");
         assert_eq!(out.added_items.len(), 6);
         assert_eq!(fits.len(), 46, "移除 1 + 新增 6 ⇒ 46 件");
