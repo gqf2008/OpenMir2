@@ -19,8 +19,11 @@
 - 角色归一 `--roles gA,gB,tA,tB`：未命中 A/B 的帧（other）不计 A/C1/C2/D，只计数（装置文档 §3）。
 - **body 角色归一（窄白名单，2026-11-23 卡 `openmir2-hit-hp-fixture-ineffective` 配套）**：
   31 帧的判定面 = header（recog/param/tag/series）+ body 的 `MaxHP/Status/Mag` + **按角色归一的 Hitter**；
-  其它 body 字节原样比较。`MessageBodyWL.Tag1 = 命中者 ActorId` 是身份字段（依据见 `BODY_ROLE_FIELDS` 注释），
+  其它 body 字节原样比较。**只归一 ident=31、且只归一角色（`--roles` 命中）hitter**；未登记 ident
+  （638/41/22/23/1104 等）一律原样比较。`MessageBodyWL.Tag1 = 命中者 ActorId` 是身份字段（依据见
+  `BODY_ROLE_FIELDS` 注释），
   actor id 随区段变化是构造性的 ⇒ 按 `--roles` 映射成同一角色占位；**两侧映射到不同角色或映射不到 ⇒ 不归一 ⇒ 必红**。
+  EDCode 缺失/解码失败 ⇒ `degraded` 标记 + `normalized_frames` 计数 + WRN + **rc=2**（不得静默降级为原样比较）。
   只对登记过的 `(ident, 字段)` 生效，未登记 ident 一律不归一；**禁止**清空/忽略该字段。
 - **self 桶（卡「区 k MaxExp=0」证据配套）**：`recog==0` 的自我帧（如 `SM_ABILITY(52)`）不在
   `--roles` 映射里，旧口径整帧排除。`--self-bucket` 把该桶按**收件人侧**单独归键比较：
@@ -61,10 +64,10 @@ def sha12(f):
 # （ActorId）映射成角色占位再比较。
 #
 # 为什么 31 的 Tag1 是身份字段（符号锚 + 原文）：
-# - C# `MessageBodyWL`（`src/OpenMir2/Packets/ClientPackets/MessageBodyWL.cs`）：
+# - C# `MessageBodyWL`（`src/OpenMir2/Packets/ServerPackets/MessageBodyWL.cs`）：
 #   `public int Param1; public int Param2; public int Tag1; public int Tag2;`
 #   —— `Tag1` 是**命中者 ActorId**（SM_STRUCK 的 RM_STRUCK 支填 `processMsg.Tag1`）；
-# - `PlayObject.Message.cs:1601` 的 `RM_STRUCK` 支把 `wl.Tag1` 当作命中者；
+# - `PlayObject.Message.cs:1605` 的 `RM_STRUCK` 支把 `wl.Tag1` 当作命中者；
 # - 本仓同位置：`sm_struck` / `sm_struck_client`（`bins/game-svr/src/smframe.rs`）的
 #   `wl[8..12] = hitter_id`（两种布局都是 16B `MessageBodyWL`）。
 # ⇒ golden 的 201 与 test 的 4194327 都映射到角色 P 时，两侧应换成同一占位；映射后仍不等 ⇒ 真差异。
@@ -95,33 +98,63 @@ def _load_ed():
     return mod
 
 
-def normalized_body_hex(f, role_map):
-    """按窄白名单把 body 身份字段的角色映射成占位；任何一步判不了 ⇒ 返回原 body（fail-closed ≠ 放行）。"""
+def _role_sig(role_map):
+    """缓存键必须含 role_map（同一进程内多跑/单测会换角色映射）。"""
+    return tuple(sorted(role_map.items()))
+
+
+def body_role_norm(f, role_map):
+    """按窄白名单把 body 身份字段的角色映射成占位。
+
+    返回 `(hex|None, status)`；status ∈ `off`（未给 --roles）/`raw_unregistered`（ident 未登记）/
+    `normalized`（已按角色归一）/`raw_unmapped`（actor 不在 --roles）/`degraded`（EDCode 缺失或解码失败，
+    hex=None ⇒ 调用方不得把它当"原样比较"用；整跑按口径 rc=2）。
+    """
     if not role_map:
-        return f["body_hex"]
+        return f["body_hex"], "off"
     span = BODY_ROLE_FIELDS.get(f["ident"])
     if not span:
-        return f["body_hex"]
-    ck = (f["ident"], f["body_hex"])
+        return f["body_hex"], "raw_unregistered"
+    ck = (f["ident"], f["body_hex"], _role_sig(role_map))
     if ck in _BODY_NORM_CACHE:
         return _BODY_NORM_CACHE[ck]
-    out = f["body_hex"]
     ed = _load_ed()
-    if ed is not None:
-        try:
-            raw = ed.edcode_decode(bytes.fromhex(f["body_hex"]))
-            start, end = span
-            if len(raw) >= end:
-                actor = int.from_bytes(raw[start:end], "little", signed=False)
-                role = role_map.get(actor)
-                if role in _ROLE_PLACEHOLDER:
-                    raw = bytearray(raw)
-                    raw[start:end] = _ROLE_PLACEHOLDER[role].to_bytes(4, "little")
-                    out = ed.edcode_encode(bytes(raw)).hex()
-        except Exception:
-            out = f["body_hex"]
+    if ed is None:
+        out = (None, "degraded")
+        _BODY_NORM_CACHE[ck] = out
+        return out
+    try:
+        raw = ed.edcode_decode(bytes.fromhex(f["body_hex"]))
+    except Exception:
+        out = (None, "degraded")
+        _BODY_NORM_CACHE[ck] = out
+        return out
+    start, end = span
+    if len(raw) < end:
+        out = (None, "degraded")
+        _BODY_NORM_CACHE[ck] = out
+        return out
+    actor = int.from_bytes(raw[start:end], "little", signed=False)
+    role = role_map.get(actor)
+    if role in _ROLE_PLACEHOLDER:
+        raw = bytearray(raw)
+        raw[start:end] = _ROLE_PLACEHOLDER[role].to_bytes(4, "little")
+        out = (ed.edcode_encode(bytes(raw)).hex(), "normalized")
+    else:
+        out = (f["body_hex"], "raw_unmapped")
     _BODY_NORM_CACHE[ck] = out
     return out
+
+
+def attach_body_role_norm(frames, role_map):
+    """逐帧算一次归一结果并挂到帧上（键/self 键/计数共用同一结果，避免每次 key() 重解）。"""
+    counts = collections.Counter()
+    for f in frames:
+        hx, st = body_role_norm(f, role_map)
+        f["_bn_hex"] = hx if hx is not None else f["body_hex"]
+        f["_bn_status"] = st
+        counts[st] += 1
+    return counts
 
 def load_frames(path):
     out = []
@@ -157,7 +190,7 @@ def order_violations(G, T):
 
 def _self_key(side, f, role_map=None):
     """self 桶键：显式 side 进键，保证 A 侧与 B 侧永不互相配对。"""
-    body = normalized_body_hex(f, role_map or {})
+    body = f["_bn_hex"] if "_bn_hex" in f else f["body_hex"]
     h = f'{side}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{body}'
     return hashlib.sha256(h.encode()).hexdigest()
 
@@ -287,13 +320,17 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
     if roles:
         parts = [int(x) for x in roles.split(",")]
         role_map = {parts[0]: "A", parts[1]: "B", parts[2]: "A", parts[3]: "B"}
+    bn_counts = collections.Counter()
+    if role_map:
+        bn_counts.update(attach_body_role_norm(G, role_map))
+        bn_counts.update(attach_body_role_norm(T, role_map))
     def key(f):
         if not role_map:
             return sha12(f)
         role = role_map.get(f["recog"])
         if role is None:
             return None
-        body = normalized_body_hex(f, role_map)
+        body = f["_bn_hex"] if "_bn_hex" in f else f["body_hex"]
         hdr = f'{role}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{body}'
         return hashlib.sha256(hdr.encode()).hexdigest()
     ew_keys = set(k for k in entry_window_keys.split(",") if k.strip())
@@ -386,15 +423,26 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
         out["self_side"] = side
         out.update(sb)
         self_red = sb["self_red_count"]
+    degraded = bn_counts.get("degraded", 0) > 0
+    if degraded:
+        print("WRN body_role_norm degraded: 存在 ident=31 帧无法解码（EDCode 缺失或坏 body）⇒ 判不了，按口径 rc=2",
+              file=sys.stderr)
     out["body_role_norm"] = {
         "enabled": bool(role_map),
+        "degraded": degraded,
+        "normalized_frames": bn_counts.get("normalized", 0),
+        "raw_unmapped_frames": bn_counts.get("raw_unmapped", 0),
+        "raw_unregistered_frames": bn_counts.get("raw_unregistered", 0),
         "fields": [{"ident": i, "offset": [a, b], "name": "MessageBodyWL.Tag1(hitter ActorId)"}
                    for i, (a, b) in BODY_ROLE_FIELDS.items()],
-        "surface": "31 帧判定面 = header(recog/param/tag/series) + body MaxHP/Status/Mag + 按角色归一的 Hitter",
+        "surface": ("仅 ident=31、仅角色（--roles 命中）hitter 归一（替换为角色占位）；未登记 ident"
+                    "（638/41/22/23/1104 等）一律原样比较；EDCode 缺失/解码失败 ⇒ degraded + WRN + rc=2"),
     }
     rc = 1 if (reds or bad_order or judge_d_red) else 0
     if self_bucket == "judge" and self_red > 0:
         rc = 1
+    if degraded:
+        rc = 2
     return out, rc
 
 def _selftest():
@@ -552,7 +600,96 @@ def _selftest():
         ck("body_role_norm_unregistered_ident_red",
            rc_u == 1 and any(r[0] == 30 for r in out_u["multiset_reds"]), f"rc={rc_u}")
 
-    expected = 23
+        # ---- 未登记 ident 的「出现即红」（不许被悄悄归一）----
+        id4 = lambda v: ed.edcode_encode(struct.pack("<i", v)).hex()  # noqa: E731
+        g638 = [frame(638, 101, body=id4(102))]
+        out_638, rc_638 = run_core(*case("ident638", g638, [frame(638, 201, body=id4(202))]),
+                                   1000, roles=roles)
+        ck("unregistered_638_identity_change_red",
+           rc_638 == 1 and any(r[0] == 638 for r in out_638["multiset_reds"]), f"rc={rc_638}")
+        out_638c, rc_638c = run_core(*case("ident638c", g638, [frame(638, 201, body=id4(102))]),
+                                     1000, roles=roles)
+        ck("unregistered_638_same_identity_green", rc_638c == 0, f"rc={rc_638c}")
+
+        g41 = [frame(41, 101, param=102)]
+        out_41, rc_41 = run_core(*case("ident41", g41, [frame(41, 201, param=202)]),
+                                 1000, roles=roles)
+        ck("unregistered_41_identity_change_red",
+           rc_41 == 1 and any(r[0] == 41 for r in out_41["multiset_reds"]), f"rc={rc_41}")
+        out_41c, rc_41c = run_core(*case("ident41c", g41, [frame(41, 201, param=102)]),
+                                   1000, roles=roles)
+        ck("unregistered_41_same_identity_green", rc_41c == 0, f"rc={rc_41c}")
+
+        ok_more, det_more = True, []
+        for ident in (22, 23, 1104):
+            o, r = run_core(*case("ident%d" % ident,
+                                  [frame(ident, 101, body=id4(102))],
+                                  [frame(ident, 201, body=id4(202))]), 1000, roles=roles)
+            cond = r == 1 and any(x[0] == ident for x in o["multiset_reds"])
+            ok_more = ok_more and cond
+            det_more.append((ident, r))
+        ck("unregistered_22_23_1104_identity_change_red", ok_more, det_more)
+
+        # ---- 怪物 hitter 的 31 仍 raw ⇒ 红（只归一角色 hitter）----
+        g_mon = [frame(31, 101, param=15, series=1, body=wl(16, 0, 900001))]
+        out_mon, rc_mon = run_core(*case("monster31", g_mon,
+                                         [frame(31, 201, param=15, series=1, body=wl(16, 0, 900002))]),
+                                   1000, roles=roles)
+        ck("monster_hitter_31_raw_red",
+           rc_mon == 1 and any(r[0] == 31 for r in out_mon["multiset_reds"]), f"rc={rc_mon}")
+        out_monc, rc_monc = run_core(*case("monster31c", g_mon,
+                                           [frame(31, 201, param=15, series=1, body=wl(16, 0, 900001))]),
+                                     1000, roles=roles)
+        ck("monster_hitter_31_same_raw_green", rc_monc == 0, f"rc={rc_monc}")
+
+        # ---- EDCode 失败两条路径：模块缺失 / 解码长度不足 ⇒ degraded + WRN + rc=2 ----
+        import io as _io
+        import contextlib as _ctx
+
+        _BODY_NORM_CACHE.clear()
+        saved_mod = _ED_MOD.get("mod", "<absent>")
+        _ED_MOD["mod"] = None
+        try:
+            err = _io.StringIO()
+            with _ctx.redirect_stderr(err):
+                od, rd = run_core(*case("degraded_mod",
+                                        [frame(31, 101, param=15, series=1, body=wl(16, 0, 102))],
+                                        [frame(31, 201, param=15, series=1, body=wl(16, 0, 102))]),
+                                  1000, roles=roles)
+            ck("edcode_missing_degraded_rc2",
+               rd == 2 and od["body_role_norm"]["degraded"]
+               and od["body_role_norm"]["normalized_frames"] == 0
+               and "degraded" in err.getvalue(), f"rc={rd} bn={od['body_role_norm']}")
+        finally:
+            if saved_mod == "<absent>":
+                _ED_MOD.pop("mod", None)
+            else:
+                _ED_MOD["mod"] = saved_mod
+            _BODY_NORM_CACHE.clear()
+
+        _BODY_NORM_CACHE.clear()
+        short = id4(7)  # 解出 4B < 12 ⇒ 长度不足
+        err2 = _io.StringIO()
+        with _ctx.redirect_stderr(err2):
+            od2, rd2 = run_core(*case("degraded_short",
+                                      [frame(31, 101, param=15, series=1, body=short)],
+                                      [frame(31, 201, param=15, series=1, body=short)]),
+                                1000, roles=roles)
+        ck("edcode_short_body_degraded_rc2",
+           rd2 == 2 and od2["body_role_norm"]["degraded"] and "degraded" in err2.getvalue(),
+           f"rc={rd2} bn={od2['body_role_norm']}")
+        _BODY_NORM_CACHE.clear()
+
+        # ---- 缓存键必须含 role_map（同 body、不同 role_map ⇒ 结果各自正确）----
+        fr = {"ident": 31, "body_hex": wl(16, 0, 102)}
+        h1, s1 = body_role_norm(fr, {101: "A", 102: "B", 201: "A", 202: "B"})
+        h2, s2 = body_role_norm(fr, {102: "A"})
+        ck("body_role_norm_cache_key_includes_role_map",
+           s1 == "normalized" and s2 == "normalized" and h1 != h2,
+           f"s1={s1} s2={s2} same_hex={h1 == h2}")
+        _BODY_NORM_CACHE.clear()
+
+    expected = 33
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print(f"SELFTEST {name} {'ok' if cond else 'FAIL'} {detail}")
