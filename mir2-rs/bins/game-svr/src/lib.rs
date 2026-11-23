@@ -41194,7 +41194,25 @@ mod tests {
         // 别处（文档/断言文案），距离远超 400 ⇒ 红。`concat!` 拆字面量避免测试自身源码命中。
         // **只扫生产区**（`mod tests {` 之前）：本文件在 `mod tests` 里的文档注释含同样两个字面量
         // 且相距 <400 字节（`concat!` 只拆了下面两个变量、没有拆注释文本）⇒ 扫整文件仍会假绿。
-        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
+        // **切分必须 fail-closed（行级精确匹配）**：裸 `find` 会被注释/字符串里更早的 `mod tests {`
+        // 切错（全文件共 44 处提及该串）；这里按行 trim 精确匹配、找不到即 panic，并断言全文件
+        // **恰一行**该形状（切分点之前没有更早的同形行）。
+        assert_eq!(
+            src.lines().filter(|l| l.trim() == "mod tests {").count(),
+            1,
+            "行级 `mod tests {{` 必须恰一处（生产/测试切分点必须唯一）"
+        );
+        let mut prod_end = None;
+        let mut off = 0usize;
+        for line in src.split_inclusive('\n') {
+            if line.trim() == "mod tests {" {
+                prod_end = Some(off);
+                break;
+            }
+            off += line.len();
+        }
+        let prod_end = prod_end.expect("必须有行级 `mod tests {` 切分点（fail-closed）");
+        let prod = &src[..prod_end];
         let seen_needle = concat!("Some(&mut monster_", "walk_seen)");
         let tails_needle = concat!("Some(&mut login_", "tails)");
         let seen_at = prod
