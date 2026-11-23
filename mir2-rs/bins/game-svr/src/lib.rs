@@ -126664,6 +126664,86 @@ mod zone_command_tests {
         assert_eq!(sg.state.item_list.len(), 1, "丢弃失败 ⇒ 背包不动");
     }
 
+    /// **M1c-2b 牙 `zonek_ground_pickup_adds_item`**：区 k 的 `CM_PICKUP` **成功分支**——
+    /// 直接插入一件 `ItemId != 0` 的地面物（`MapGrid::add_floor_item`；**不走**生产投放路径），
+    /// 玩家站同格 ⇒ 背包 +1、出 `pickwire::outcome_frames` 的实际产出帧（物品支为
+    /// `SM_ADDITEM(200)` + `SM_ITEMHIDE` 通知）。
+    ///
+    /// 注：拾取删格对 world 的**写回**尚未开（§25.1 (A) 只批只读分片）⇒ **不断言"地面 -1"**
+    /// （world 里不消失是已登记形态）；"地面被处理"由 `pick_up` 在本地 `GroundMap` 上的隐藏
+    /// 通知帧体现。
+    ///
+    /// 变异：删 pickup 臂 ⇒ `Unsupported`、背包不变 ⇒ 红。
+    #[test]
+    fn zonek_ground_pickup_adds_item() {
+        use mir2_world_bevy::{FloorItemKind, FloorItemMeta};
+        let (mut state, actor) = landed("cmd_pickup_add", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let (hx, hy) = pos_of(&state, actor);
+        assert!(
+            state.host.world.maps[0].add_floor_item(
+                hx,
+                hy,
+                4242,
+                FloorItemMeta {
+                    kind: FloorItemKind::Item,
+                    index: 1,
+                    count: 1,
+                    item_id: 4242,
+                    of_base_object: actor,
+                },
+                0,
+            ),
+            "夹具：地面物落格必须成功"
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            // 拾取负重门：`test_ability()` 的 `max_weight` 是 0。
+            sg.state.wabil.max_weight = 1000;
+            sg.state.wabil.max_hand_weight = 100;
+            sg.state.wabil.weight = 0;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_pick = cmd(game_svr::ground::CM_PICKUP, 0, 0, 0);
+        cmd_pick.param = u16::try_from(hx).unwrap();
+        cmd_pick.tag = u16::try_from(hy).unwrap();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state, &gates, "hero", 7, &cmd_pick, None, &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_PICKUP 必须已接线"
+        );
+        let mut idents: Vec<u16> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6 {
+                idents.push(u16::from_le_bytes([body[4], body[5]]));
+            }
+        }
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(
+            sg.state.item_list.len(),
+            1,
+            "拾取成功必须背包 +1（实收帧 ident={idents:?}）"
+        );
+        assert_eq!(sg.state.item_list[0].index, 1, "入包的是该模板");
+        assert!(
+            idents.contains(&mir2_protocol::messages::SM_ADDITEM),
+            "拾取成功必须出 SM_ADDITEM(200)；实收 ident={idents:?}"
+        );
+    }
+
     /// **M1c-2b 牙 `zonek_ground_pickup_empty_noop`**：区 k 的 `CM_PICKUP`（位置门成立、地面无物 =
     /// **生产可达形态**，T-25）必须**零帧、零状态变化、不 panic**（守恒：别把"不可达"当失败）。
     ///
