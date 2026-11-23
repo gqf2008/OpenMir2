@@ -37710,6 +37710,24 @@ impl HostLoop {
         }
         // 区 0 生产路径（无锁）inline 调 after_phase2（保持段计时）；区 k 传 `false`。
         self.tick_phase_b(shared, &mut scratch, &mut barriers, true);
+        self.tick_phase_rest(shared, process, phases, &mut scratch, next, slot)
+    }
+
+    /// **M1-0e · 其余段**：`PLANES..SLEEP` + tick 尾收尾（`end_tick` / 慢 tick / `write_tick`）。
+    ///
+    /// **可单独调用**：区 k 在第三把锁内（`handoff` 之后）调它；不读 `WORLD_TAIL`/`barriers`，
+    /// 只按 `phases` 跑其余段。`next`/`slot` 由 driver 传入（**不要重算**：会改变节拍与计时起点）。
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_borrow)]
+    fn tick_phase_rest(
+        &mut self,
+        shared: &mut SharedServices,
+        process: &mut Option<ProcessServices>,
+        phases: PhaseSet,
+        scratch: &mut TickScratch,
+        next: std::time::Instant,
+        slot: Option<std::time::Instant>,
+    ) -> TickOutcome {
         // **M1-0e**：A/B 是 `&mut self` 方法 ⇒ 其余段的局部借用在此重新取（同字段、同形态；
         // 只取 PLANES..SLEEP 实际用到的）。
         let mut world = &mut self.world;
@@ -45951,6 +45969,62 @@ mod tests {
             BARRIER_CALLS.with(std::cell::Cell::get),
             3,
             "三方法各一次 ⇒ 总数 3"
+        );
+    }
+
+    /// **M1-0e 见证 ③**：`A → B(inline=false) → rest` 三段手工串起来跑一轮，全段集跑满。
+    ///
+    /// 证明「其余段（`PLANES..SLEEP` + 尾收尾）」可被 driver 单独调用（区 k 在第三把锁内用）。
+    /// 变异：把 rest 里任一段漏调（删其 `phases.has` 块）⇒ `RAN_SEGMENTS != ALL` ⇒ 红。
+    #[test]
+    fn rest_runs_standalone_and_covers_all_phases() {
+        let mut host = HostLoop::for_zone(zone::ZoneId::new(0), &[(10, 10)], Some(0));
+        let (mut shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        BARRIER_CALLS.with(|c| c.set(0));
+        RAN_SEGMENTS.with(|c| c.set(0));
+        let mut process = Some(process);
+        let mut scratch = TickScratch::default();
+        let mut barriers: Option<BarrierOps> = None;
+        let next = std::time::Instant::now() + host.tick;
+        let slot = host.host_prof.begin();
+        let outcome = host.tick_phase_a(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet::ALL,
+            &mut scratch,
+            &mut barriers,
+        );
+        assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
+        host.tick_phase_b(&mut shared, &mut scratch, &mut barriers, false);
+        let outcome = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            PhaseSet::ALL,
+            &mut scratch,
+            next,
+            slot,
+        );
+        assert_eq!(outcome, TickOutcome::Continue);
+        assert_eq!(
+            BARRIER_CALLS.with(std::cell::Cell::get),
+            0,
+            "非切片：零屏障"
+        );
+        assert_eq!(
+            RAN_SEGMENTS.with(std::cell::Cell::get),
+            PhaseSet::ALL.0,
+            "A + rest 必须覆盖全部 17 段（rest 漏调任一段 ⇒ 红）"
         );
     }
 
