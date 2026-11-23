@@ -205,10 +205,14 @@ mod tests {
 
     /// 一次性临时文件路径（各测试用不同后缀，避免并发/复用冲突）。
     fn temp_path(tag: &str) -> PathBuf {
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "noclear-montest-{}-{}.txt",
+            "noclear-montest-{}-{}-{}.txt",
             std::process::id(),
-            tag
+            tag,
+            seq
         ))
     }
 
