@@ -309,6 +309,9 @@ namespace BotSrv.Player
         /// <summary>服务端确认进世界（收到 SM_LOGON）——探针的武装条件。</summary>
         private volatile bool _inWorld;
         private bool _inWorldCounted;
+        /// <summary>**卡 `openmir2-botsrv-recv-null-leftworld-gate`**：本会话已软关（`AppLogout`）。
+        /// 置位后 `DecodeMessagePacket` 的世界段入口丢弃残留排队帧；登录/换图/动作包与 M3 钩子不受影响。</summary>
+        private bool _leftWorld;
         /// <summary>第一次 SM_LOGON 绑定的登录连接序号（`ScoketClient.ConnSeq`）。身份守卫用它区分
         /// 「同一会话收到别人的帧」与「新连接上的合法重登」：同一连接内 actor 不许换人。</summary>
         private int _logonConnSeq;
@@ -2743,6 +2746,10 @@ namespace BotSrv.Player
             _probeX = x;
             _probeY = y;
             _logonConnSeq = connSeq;
+            // 卡 `openmir2-botsrv-recv-null-leftworld-gate`：类级门禁的**复位点之一**。
+            // 必须在 `_inWorldCounted` 早退**之前**——重登录时 `MarkInWorld` 会因早退不再走下面的武装段，
+            // 若把复位放在早退之后，重登后门禁不会解除（L5 牙钉住这一点）。
+            _leftWorld = false;
             if (_inWorldCounted)
             {
                 return true;
@@ -2787,6 +2794,13 @@ namespace BotSrv.Player
         internal int ProbeXForTest => _probeX;
         internal int ProbeYForTest => _probeY;
         internal int MyActorIdForTest => _myActorId;
+        /// <summary>卡 `openmir2-botsrv-recv-null-leftworld-gate`：类级门禁的**场景复位点**（换场景/重登录）。
+        /// 生产只由 `ScreenManager.ChangeScene(Login/SelectChr)` 与 `MarkInWorldOnConnection` 调用。</summary>
+        internal void ResetLeftWorldForScene() => _leftWorld = false;
+
+        /// <summary>类级门禁的测试钩子（`--selftest-leftworld-gate`）；生产只由 `AppLogout`/复位点改动。</summary>
+        internal void SetLeftWorldForTest(bool v) => _leftWorld = v;
+
         internal void SetProbeForTest(int actorId, int x, int y)
         {
             _myActorId = actorId;
@@ -2846,6 +2860,9 @@ namespace BotSrv.Player
                 SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
                 CloseAllWindows();
                 PlayScene.ClearActors();
+                // 卡 `openmir2-botsrv-recv-null-leftworld-gate`：类级门禁的**置位点**。`_inWorld` 仍为 true，
+                // 残留排队帧会继续进世界分支——由 `DecodeMessagePacket` 的门禁整段丢弃（而非逐点补 null 门控）。
+                _leftWorld = true;
                 MShare.g_SoftClosed = true;
                 //ActiveCmdTimer(MShare.TTimerCommand.tcSoftClose);
                 MShare.SaveItemFilter();

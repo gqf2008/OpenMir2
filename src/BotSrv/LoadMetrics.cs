@@ -92,6 +92,8 @@ namespace BotSrv
         private static long _identOverflow;
         private static long _actFrames;          // 收到的动作短包（datablock[0]=='+'）次数
         private static long _goodTickFrames;     // 其中前缀为 "+GD/" 的次数（ack 已到达 BotSrv，先于解析）
+        // 卡 `openmir2-botsrv-recv-null-leftworld-gate`：被击触发小退的次数（`SM_STRUCK` 自己受击 → `AppLogout`）。
+        private static long _relogOnStruck;
         private static string _actFirstPayload = "";
         private static long _probePosFollowed;   // 探针坐标跟随服务端位移的次数（推挤/空间移动）
         private static long _logonMisdelivered;  // 同一会话收到**别的 actor** 的 SM_LOGON 并拒绝的次数（错投观测）
@@ -284,6 +286,26 @@ namespace BotSrv
             lock (Sync)
             {
                 if (_actFirstPayload.Length == 0) _actFirstPayload = payload ?? "";
+            }
+        }
+
+        /// <summary>**卡 `openmir2-botsrv-recv-null-leftworld-gate`**：被击触发小退的次数
+        /// （`SM_STRUCK` 自己受击 → `AppLogout`）。单调累计，只落 `load_stats.ndjson`；
+        /// `--selftest-leftworld-gate` 的 L6 直接读本计数。</summary>
+        public static void RelogOnStruck()
+        {
+            lock (Sync)
+            {
+                _relogOnStruck++;
+            }
+        }
+
+        /// <summary>读 `relog_on_struck` 当前值（自检用）。</summary>
+        public static long GetRelogOnStruck()
+        {
+            lock (Sync)
+            {
+                return _relogOnStruck;
             }
         }
 
@@ -1155,6 +1177,7 @@ namespace BotSrv
               .Append(",\"ident_counts\":").Append(IdentCountsJson())
               .Append(",\"act_frames\":").Append(_actFrames)
               .Append(",\"good_tick_frames\":").Append(_goodTickFrames)
+              .Append(",\"relog_on_struck\":").Append(_relogOnStruck)
               .Append(",\"act_first\":\"").Append(_actFirstPayload).Append("\"")
               .Append(",\"tick_samples\":").Append(_tickSamples)
               .Append(",\"tick_sum_ms\":").Append(_tickSumMs)

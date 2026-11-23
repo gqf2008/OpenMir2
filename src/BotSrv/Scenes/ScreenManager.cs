@@ -29,11 +29,14 @@ namespace BotSrv.Scenes
                     robotClient.IntroScene.m_dwStartTime = MShare.GetTickCount() + 2000;
                     break;
                 case SceneType.Login:
+                    // 卡 `openmir2-botsrv-recv-null-leftworld-gate`：类级门禁的**场景复位点**。
+                    robotClient.ResetLeftWorldForScene();
                     CurrentScene = robotClient.LoginScene;
                     break;
                 case SceneType.SelectCountry:
                     break;
                 case SceneType.SelectChr:
+                    robotClient.ResetLeftWorldForScene();
                     CurrentScene = robotClient.SelectChrScene;
                     break;
                 case SceneType.NewChr:

@@ -269,6 +269,16 @@ namespace BotSrv.Player
             SellOffOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             // M3④ 掉落/经验夹具单一收包钩子（T-22/T-29 家族扩展）：`g_boDropExpSequence` 关时是空操作。
             DropExpOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
+            // **卡 `openmir2-botsrv-recv-null-leftworld-gate`**：软关后的残留世界帧在这里整段丢弃。
+            // **位置约束（L7c，勿上移、勿下移）**：
+            //   ① 必须在 `if (!_inWorld)` 登录分支之后——将来若恢复重连并让 `_inWorld` 可复位，
+            //      登录/选角帧不会被吞；
+            //   ② 必须在 `if (MShare.g_boMapMoving)` 换图块与上面 5 个 M3 只读钩子之后——
+            //      换图帧（SM_CHANGEMAP）与诊断观察不被吞，否则「门禁生效」会与「观测面消失」混在一起。
+            if (_leftWorld)
+            {
+                return;
+            }
             string body2;
             switch (msg.Ident)
             {
@@ -747,6 +757,9 @@ namespace BotSrv.Player
                                     }
                                     MShare.AutoLastPoint2 = MShare.AutoLastPoint;
                                     MShare.g_APStep2 = MShare.AutoStep;
+                                    // 卡 `openmir2-botsrv-recv-null-leftworld-gate`：A3 的观测面——
+                                    // 「被击触发小退」的单调计数（只落 load_stats.ndjson，不改协议/帧面）。
+                                    LoadMetrics.RelogOnStruck();
                                     AppLogout();
                                     // SaveBagsData();
                                 }
