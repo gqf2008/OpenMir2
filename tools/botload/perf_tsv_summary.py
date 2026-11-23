@@ -52,6 +52,8 @@ TOTAL_COL = "cross_recipient_missing"
 DEPART_COL = "cross_recipient_depart_frames"
 SEVEN_COL = "cross_recipient_seven_total"
 WRN_SUPP_COL = "depart_wrn_suppressed"
+# **L2-5 follow-up**：镜像观察者被条件抑制的帧数（被抑制的帧不进 ⑤ 账）。
+MIRROR_SUPP_COL = "depart_frames_mirror_suppressed"
 # **L2-5 ⑤**：六面未命中的投递结果三桶（构造保证 delivered+unroutable+overflow == 六面合计）。
 OUTCOME_COLS = [
     "cross_recipient_delivered",
@@ -292,6 +294,8 @@ def summarize(perf_path, run_json=None, report=None, rss_path=None, bots=None, l
         "cross_recipient_outcome": outcome,
         "cross_frame_diag": ({c: sum(perf[c]) for c in present_diag} if present_diag else None),
         "depart_wrn_suppressed": (sum(perf[WRN_SUPP_COL]) if WRN_SUPP_COL in perf else None),
+        "depart_frames_mirror_suppressed": (
+            sum(perf[MIRROR_SUPP_COL]) if MIRROR_SUPP_COL in perf else None),
         "cross_enqueue": cost,
         "total_column_mismatch": total_mismatch,
         "region_barrier_us": {
@@ -387,9 +391,12 @@ def print_summary(s):
     dg = s.get("cross_frame_diag")
     if dg:
         supp = s.get("depart_wrn_suppressed") or 0
-        print("cross diag: dup=%d drop_closed=%d zone_unknown=%d | depart_wrn_suppressed=%d" % (
-            dg["cross_frame_dup"], dg["cross_frame_drop_closed"],
-            dg["cross_recipient_zone_unknown"], supp))
+        msupp = s.get("depart_frames_mirror_suppressed")
+        print("cross diag: dup=%d drop_closed=%d zone_unknown=%d | depart_wrn_suppressed=%d"
+              " | depart_frames_mirror_suppressed=%s" % (
+                  dg["cross_frame_dup"], dg["cross_frame_drop_closed"],
+                  dg["cross_recipient_zone_unknown"], supp,
+                  "absent" if msupp is None else msupp))
     ce = s.get("cross_enqueue")
     if ce:
         per = "%.3f" % ce["us_per_event"] if ce["us_per_event"] is not None else "n/a"
