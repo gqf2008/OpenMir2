@@ -28,6 +28,10 @@
 > **D5** 新增 A6 专属 `zonek_control_shutdown_discarded`（关服清点 `pending_local` + `deferred_local`，
 > **不作废**；不共用第 3 步 `pending_discarded`）。负例 7 → **9** 条；`zonek_control_*` **4 列**、合计
 > **10 列**。
+> **r4.1（2026-11-23，父 `49946cbba`，opc-27 R1/R2/R3 裁决）**：**R1** 推迟批次跨 tick 分批执行**属预期**
+> （不判红；跨 tick 原子须另卡）——写入 §5-9；**R2** `zonek_control_defer_overflow` 改**触发计数**
+> （组批完成即 +1，就地执行与推迟**都计**；测试 9 补断言；当前实现只在执行路径 +1，需补）——§3.1/§5-9/§6；
+> **R3** 并发前提的代码注释仍是交付要求（"没有注释 = 未交付"）；**a7 六跑读数口径注记**见 §6。
 
 ## 0. 一句话
 
@@ -129,15 +133,16 @@
   **`pending_local` 不是 `VecDeque`，语义等价于全局 FIFO、不是按玩家分桶**；取最小 =
   `iter().next()`（`BTreeMap` 按 `seq` 有序 ⇒ 省掉排序、也不需要按玩家遍历顺序执行）。
 - **每玩家上限 N = 8**（只约束 `deferred_local`）：`deferred_local.len() == 8` 再来 ⇒ 组批
-  **8 + 1 = 9 条**（按 `seq` 排序），**整批原子处置**（r4·D2）：
+  **8 + 1 = 9 条**（按 `seq` 排序）+ **`zonek_control_defer_overflow += 1`（触发点即计——就地执行与
+  推迟都计，r4.1·R2）** + 限速 WRN；随后按剩余预算二选一：
   - **装得下本 tick 剩余预算**（`remaining_events >= batch.len()` **且**墙钟仍在 `execute_wall` 内；
     `remaining_events = execute_cap − executed`，**含当前这条**）⇒ **就地整批执行**（按到达序、逐步
-    计 `zonek_inbound_drained`、**按 `batch.len()` 占执行预算**）+ `zonek_control_defer_overflow += 1`
-    + 限速 WRN；`control_pending` / `control_first_tick` 不动；
+    计 `zonek_inbound_drained`、**按 `batch.len()` 占执行预算**）；`control_pending` /
+    `control_first_tick` 不动；
   - **装不下 ⇒ 整批按 `seq` 移入 `pending_local`**、本 tick **零执行**、返回 `OverflowPostponed`
     ⇒ 驱动置 `budget_hit = true` 并**立即收手**（本段不再执行后续条目）——**不 partial、不丢、不越序**。
-    **载体 = `pending_local`**（实现选择的等价形态；不另设 `overflow_batch` 容器）。本路径**不计**
-    `defer_overflow`（实现口径：该列只计**已执行**的溢出批次）。
+    **载体 = `pending_local`**（实现选择的等价形态；不另设 `overflow_batch` 容器）。
+    （当前实现 `b5d123c24` 只在执行路径 +1、推迟路径漏计——r4.1 要求补到触发点；见 §6 注记。）
   - **原子性边界（写死）**：原子性保证在**触发 tick**；推迟后的批次成为 `pending_local` 的普通有序
     条目，下一 tick 起按 §3.4 合并**逐条受预算约束**（跨 tick 可能分批完成；若要求跨 tick 原子，
     须另加批次标记，另卡）。
@@ -260,8 +265,12 @@ stop-and-wait 让本地命令等在飞 `@`：`@` 在 T+1 执行、清位；延�
 9. **`a6_overflow_batch_postponed_when_budget_short`（装不下整批推迟）**
    - 构造：剩余预算 8 < 9；触发溢出。
    - 断言：本 tick **零执行**（`order` 空）、**整批 9 条按 `seq` 在 `pending_local`**、`deferred_local`
-     空、`drained +0`、`budget_hit`；下一 tick 预算充足 ⇒ 9 条按 `seq` 全部执行（不丢、不越序）。
-   - 非恒真：变异"partial 执行" ⇒ `order` 非空 ⇒ 红；变异"丢新" ⇒ `pending_local == 8` ⇒ 红。
+     空、`drained +0`、`budget_hit`、**`zonek_control_defer_overflow == 1`（推迟也计，r4.1·R2）**；
+     下一 tick 预算充足 ⇒ 9 条按 `seq` 全部执行（不丢、不越序）。
+   - **预期（r4.1·R1，不得据此判红）**：下 tick 预算**仍不足** ⇒ 这批按 `pending_local` 的普通有序
+     条目**分批执行属预期**（每条都记账、不越序）；若要断言跨 tick 原子，须另加批次标记（另卡）。
+   - 非恒真：变异"partial 执行" ⇒ `order` 非空 ⇒ 红；变异"丢新" ⇒ `pending_local == 8` ⇒ 红；
+     变异"推迟不计 `defer_overflow`" ⇒ 上式 0 ≠ 1 ⇒ 红。
 
 **共同要求**：每条断言都含 ①**行为量**（执行/未执行、顺序列表、计数是否变化）与 ②**计数 delta**
 （`zonek_control_*` / `zonek_inbound_drained`）；变异证据（删/改对应分支 ⇒ 本条红）作为"不是恒真"
@@ -277,8 +286,8 @@ stop-and-wait 让本地命令等在飞 `@`：`@` 在 T+1 执行、清位；延�
   决策/超时/计数 + 接缝元素的 `seq`）。
 - **N=1 零参与**：区 0 不走本套（不构造控制邮箱、不加分类、不分配序号）；A6 全部在区 k 路径与
   `INBOUND_LOCAL` 段内；`zonek_control_*` 恒 0。
-- **失败可观测面（A6 专属 4 列）**：`zonek_control_defer_overflow`（**已执行的溢出批次数**；推迟
-  未执行的批次**不计**——实现口径）、`zonek_control_wait_timeout`（**判定解除的次数**）、
+- **失败可观测面（A6 专属 4 列）**：`zonek_control_defer_overflow`（**溢出触发次数**——就地执行与
+  推迟**都计**，r4.1·R2）、`zonek_control_wait_timeout`（**判定解除的次数**）、
   `zonek_control_mailbox_rejected`（**邮箱满丢弃的条数**）、`zonek_control_shutdown_discarded`
   （**关服清点的 A6 残留条数**：`pending_local` + `deferred_local`——推迟批次已在 `pending_local`，
   天然覆盖）；**不共用**第 3 步 `pending_discarded`（那列非 0 会作废窗口，正常关服清 A6 队列不得
@@ -289,6 +298,10 @@ stop-and-wait 让本地命令等在飞 `@`：`@` 在 T+1 执行、清位；延�
 - **`zonek_inbound_drained` 口径（r4 覆盖第 3 步 r6 §4 的表述）**：= 段内**被消费并作出处置**的
   `Command` 条数——**含 `Unsupported` 归属、含邮箱满丢弃、含溢出就地执行**；**不是"成功执行条数"**，
   后续任何人不得用它当执行数。
+- **a7 六跑读数口径注记（r4.1）**：`a7` 在 `b5d123c24` 上的正式六跑**有效**——A6 场景只有 2 条 `@` +
+  1 条 move，`deferred_local ≤ 1`，**撞不到上限 8** ⇒ `zonek_control_defer_overflow` 在这六个场景
+  **恒为 0**，新旧口径读数相同。**若某跑 `zonek_control_defer_overflow > 0`，该读数属旧口径**（只计
+  已执行批次），不得与 r4.1 后的读数并列比较。
 - **作废口径（r4）**：`defer_overflow` / `mailbox_rejected` / `wait_timeout` / `shutdown_discarded`
   是**被观测到的降级/清理**，**不作废**该运行；**只有第 3 步的 `zonek_inbound_overflow_dropped` /
   `zonek_inbound_pending_discarded` 非 0 才作废**（该窗口作废 + 开缺陷卡，v2.1 判据）。
@@ -312,4 +325,5 @@ stop-and-wait 让本地命令等在飞 `@`：`@` 在 T+1 执行、清位；延�
 - **10 列**清单（`zonek_inbound_*` 6 + `zonek_control_*` 4）与 `drained` 覆盖口径的证据（邮箱满丢弃
   仍计 drained）；
 - **并发前提的代码注释落点**（`a6_enqueue_control` / 守卫 `Drop` 附近）；
-- 溢出批次的预算占用证据（测试 8：`executed == 18`）与推迟路径证据（测试 9）。
+- 溢出批次的预算占用证据（测试 8：`executed == 18`）与推迟路径证据（测试 9，含
+  `defer_overflow == 1` 的触发计数断言）。
