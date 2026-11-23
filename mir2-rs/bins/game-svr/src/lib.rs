@@ -34460,7 +34460,14 @@ fn sim_loop(
         is_host,
         telemetry_prefix,
     };
-    let mut services = HostServices {
+    let mut shared = SharedServices {
+        registry,
+        enter_cfg,
+        shard_runtime,
+        zone_host,
+        colors,
+    };
+    let mut process = Some(ProcessServices {
         db,
         engine,
         guilds,
@@ -34479,17 +34486,12 @@ fn sim_loop(
         item_number,
         item_number_ex,
         planes,
-        registry,
-        enter_cfg,
-        shard_runtime,
         shutdown_done_tx,
         ids_online,
         ids_out,
         world_start,
         win_lottery,
-        zone_host,
         server_table,
-        colors,
         notice,
         party_cfg,
         shard_directory,
@@ -34508,17 +34510,18 @@ fn sim_loop(
         line_notice_lines,
         line_notice_cfg,
         payment_mode,
-    };
+    });
     let mut tick_io = TickIo {
         ev_rx,
         ev_ctl_rx,
         shutdown,
     };
     loop {
-        let (host_next, services_next, tick_io_next, outcome) =
-            host.tick(services, tick_io, PhaseSet::ALL);
+        let (host_next, shared_next, process_next, tick_io_next, outcome) =
+            host.tick(shared, process, tick_io, PhaseSet::ALL);
         host = host_next;
-        services = services_next;
+        shared = shared_next;
+        process = Some(process_next.expect("区 0 必须回传 ProcessServices（进程-only 段依赖它）"));
         tick_io = tick_io_next;
         if outcome == TickOutcome::Exited {
             return;
@@ -34561,7 +34564,18 @@ struct HostLoop {
 
 /// **M0（A1）**：进程级服务（跨区单点/只读共享；判据见设计 §2.2）。
 /// `!Send` 的成员（`Rc` 脚本宿主等）可以在这里，因为 `sim_loop` 跑在独立的 std 线程、按 owner 借用。
-struct HostServices {
+/// **M1-0c'**：可被区 k 安全持有的服务（只读配置/`Arc`/区级运行时）。
+struct SharedServices {
+    registry: Option<mir2_envir::MapRegistry>,
+    enter_cfg: EnterConfig,
+    shard_runtime: shard::ShardRuntime,
+    zone_host: Option<Arc<ZoneHost>>,
+    colors: MsgColors,
+}
+
+/// **M1-0c'**：进程-only 服务（`!Send` 脚本宿主、DB 链、行会/城堡/全局表等）。
+/// 区 k 传 `None`；进入 `PROCESS_ONLY` 段前必须经 `proc_svc!` 取得，否则入口断言 panic。
+struct ProcessServices {
     db: Option<DbWiring>,
     engine: load::FrontEngine,
     guilds: mir2_world_bevy::GuildManager,
@@ -34580,17 +34594,12 @@ struct HostServices {
     item_number: i32,
     item_number_ex: i32,
     planes: Option<planes::PlanesLink>,
-    registry: Option<mir2_envir::MapRegistry>,
-    enter_cfg: EnterConfig,
-    shard_runtime: shard::ShardRuntime,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     world_start: std::sync::Arc<WorldStartGate>,
     win_lottery: crate::winlottery::WinLotteryShared,
-    zone_host: Option<Arc<ZoneHost>>,
     server_table: Vec<RouteInfo>,
-    colors: MsgColors,
     notice: Vec<u8>,
     party_cfg: mir2_world_bevy::PartyConfig,
     shard_directory: Option<shard_router::ShardDirectory>,
@@ -34642,11 +34651,26 @@ impl PhaseSet {
     const SLEEP: u32 = 1 << 16;
     /// 区 0：全集（执行序 = 原正文顺序）。
     const ALL: PhaseSet = PhaseSet((1 << 17) - 1);
+    /// **M1-0c'**：**实际使用 `ProcessServices` 字段的段集**（进入前 `process` 必须为 `Some`，
+    /// 否则入口断言 panic）。7 段：含 `PLANES`（用 `planes`）与 `SWITCH`（用 `server_table`/
+    /// `reconnect_pending`）——0c 的「5 段/59 处」只统计 6 个 `!Send` 字段，**不是**本集合。
+    const PROCESS_ONLY: u32 = Self::SHUTDOWN
+        | Self::INBOUND
+        | Self::DB_POLL
+        | Self::PERIODIC
+        | Self::PLANES
+        | Self::PERSIST
+        | Self::SWITCH;
     /// **区 k 空实例（M0）**：只跑世界头/世界尾（handoff 顶与 phase2 在它们体内）。
     /// 不含 INBOUND/DB/PERIODIC/…/SLEEP（无 I/O、无帧、无存档）。
     // M0 不接线 spawn_minimal_zone ⇒ 目前只有单测用（M1 起为区 k 生产入口）。
     #[allow(dead_code)]
     const M0_MIN: PhaseSet = PhaseSet(PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL);
+    /// **M1a 的区 k 生产段集**（设计 §5）：世界头/尾 + 战斗结算 + 帧面 + AOI 下行。
+    /// **牙必须引用本常量**（不是手抄位集）——将来给 M1a 加段时正向牙自动覆盖。
+    #[allow(dead_code)]
+    const M1A_PROD: PhaseSet =
+        PhaseSet(Self::M0_MIN.0 | Self::POST_HEAD | Self::FRAMES | Self::AOI_DOWNLINK);
     #[inline]
     fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
@@ -34663,12 +34687,28 @@ struct TickScratch {
 }
 
 #[cfg(test)]
-impl HostServices {
-    /// **M0/A3**：空世界 tick 用的最小服务集（全部空/默认；不触 DB/脚本/行会/城堡）。
+impl SharedServices {
+    /// 单测用：可被区 k 安全持有的服务（全部空/默认）。
+    fn for_test() -> Self {
+        Self {
+            registry: None,
+            enter_cfg: EnterConfig::for_test(crate::strings::StringConf::defaults()),
+            shard_runtime: shard::ShardRuntime::new(shard::ShardLayout::single(0)),
+            zone_host: None,
+            colors: MsgColors::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ProcessServices {
+    /// 单测用：进程-only 服务（全部空/默认；`!Send` 成员也在，仅测试构造）。
     fn for_test() -> Self {
         let (shutdown_done_tx, _) = tokio::sync::mpsc::unbounded_channel();
         let (ids_out, _) = tokio::sync::mpsc::unbounded_channel();
         Self {
+            shutdown_done_tx,
+            ids_out,
             db: None,
             engine: load::FrontEngine::new(),
             guilds: mir2_world_bevy::GuildManager::new(),
@@ -34689,19 +34729,12 @@ impl HostServices {
             item_number: 0,
             item_number_ex: 0,
             planes: None,
-            registry: None,
-            enter_cfg: EnterConfig::for_test(crate::strings::StringConf::defaults()),
-            shard_runtime: shard::ShardRuntime::new(shard::ShardLayout::single(0)),
-            shutdown_done_tx,
             ids_online: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
-            ids_out,
             world_start: std::sync::Arc::new(WorldStartGate::new()),
             win_lottery: crate::winlottery::WinLotteryShared::new(
                 crate::winlottery::WinLotteryState::default(),
             ),
-            zone_host: None,
             server_table: Vec::new(),
-            colors: MsgColors::default(),
             notice: Vec::new(),
             party_cfg: mir2_world_bevy::PartyConfig::default(),
             shard_directory: None,
@@ -34742,6 +34775,12 @@ thread_local! {
     static RAN_SEGMENTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+// **M1-0c' 行为见证**：实际经 `proc_svc!` 取过 `ProcessServices` 的段位（与 `RAN_SEGMENTS` 同款）。
+#[cfg(test)]
+thread_local! {
+    static PROC_SVC_SEGMENTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickOutcome {
     Continue,
@@ -34749,7 +34788,13 @@ enum TickOutcome {
 }
 
 /// [`HostLoop::tick`] 的返回值：把三块状态原样交还（move，不分配）。
-type TickOut = (HostLoop, HostServices, TickIo, TickOutcome);
+type TickOut = (
+    HostLoop,
+    SharedServices,
+    Option<ProcessServices>,
+    TickIo,
+    TickOutcome,
+);
 
 impl HostLoop {
     /// **M0/A3**：区 k 的空实例（口径同 `ZoneState::new`：`with_maps` + `seed ^ zone` +
@@ -34804,7 +34849,13 @@ impl HostLoop {
     #[allow(clippy::too_many_lines)]
     // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
     #[allow(clippy::needless_borrow)]
-    fn tick(self, services: HostServices, io: TickIo, phases: PhaseSet) -> TickOut {
+    fn tick(
+        self,
+        shared: SharedServices,
+        mut process: Option<ProcessServices>,
+        io: TickIo,
+        phases: PhaseSet,
+    ) -> TickOut {
         let HostLoop {
             mut world,
             mut displays,
@@ -34833,55 +34884,30 @@ impl HostLoop {
             is_host,
             telemetry_prefix,
         } = self;
-        let HostServices {
-            mut db,
-            mut engine,
-            mut guilds,
-            mut guild_run_tick,
-            guild_cfg,
-            guild_store,
-            mut castle_gates,
-            castle_store,
-            mut castle_war_states,
-            mut pending_gm_castle_broadcasts,
-            mut online_hum_gate,
-            mut npc_host,
-            merchant_book,
-            mut npc_vars_base,
-            mut sell_off_book,
-            mut item_number,
-            mut item_number_ex,
-            planes,
+        // **M1-0c'（b-2）**：进程-only 段入口 fail-fast + 唯一收敛点。先断言、后解构（见设计 §8.2）。
+        if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
+            assert!(
+                process.is_some(),
+                "区 k 不得进入进程-only 段（PhaseSet 位集=0x{:05x}）",
+                phases.0
+            );
+        }
+        macro_rules! proc_svc {
+            ($bit:expr, $seg:expr) => {{
+                #[cfg(test)]
+                PROC_SVC_SEGMENTS.with(|c| c.set(c.get() | $bit));
+                process
+                    .as_mut()
+                    .expect(concat!("区 k 不得进入进程-only 段: ", $seg))
+            }};
+        }
+        let SharedServices {
             mut registry,
             enter_cfg,
             mut shard_runtime,
-            shutdown_done_tx,
-            ids_online,
-            ids_out,
-            world_start,
-            win_lottery,
-            zone_host,
-            server_table,
             colors,
-            notice,
-            party_cfg,
-            shard_directory,
-            mut state_log,
-            mut pwd_sessions,
-            mut reconnect_pending,
-            mut kick_pending,
-            mut soft_close_pending,
-            gm_filter_word,
-            gm_mission,
-            gm_spirit_mutiny_tick,
-            magic_table_arc,
-            minimap,
-            unbind_list,
-            make_items,
-            line_notice_lines,
-            line_notice_cfg,
-            payment_mode,
-        } = services;
+            zone_host,
+        } = shared;
         let TickIo {
             ev_rx,
             ev_ctl_rx,
@@ -34890,13 +34916,13 @@ impl HostLoop {
         let mut scratch = TickScratch::default();
         // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
         // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
-        let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
         // 退出/正常收尾都把三块状态原样交还（move；同一批局部在两条路径上都在作用域内）。
         macro_rules! pack_tick_out {
             ($o:expr) => {
                 (
                     HostLoop { world, displays, online, ground_sessions, saves, login_tails, aoi_frames_total, shop_sessions, trade_sessions, sell_off_sessions, mon_gen_host, line_notice_states, monster_walk_seen, gates, handoff_runtime, ticks, tick, event_carry, event_carry_ctl, entry_telemetry_next_ms, entry_telemetry_last, host_prof, world_prof_last, local_shard, is_host, telemetry_prefix },
-                    HostServices { db, engine, guilds, guild_run_tick, guild_cfg, guild_store, castle_gates, castle_store, castle_war_states, pending_gm_castle_broadcasts, online_hum_gate, npc_host, merchant_book, npc_vars_base, sell_off_book, item_number, item_number_ex, planes, registry, enter_cfg, shard_runtime, shutdown_done_tx, ids_online, ids_out, world_start, win_lottery, zone_host, server_table, colors, notice, party_cfg, shard_directory, state_log, pwd_sessions, reconnect_pending, kick_pending, soft_close_pending, gm_filter_word, gm_mission, gm_spirit_mutiny_tick, magic_table_arc, minimap, unbind_list, make_items, line_notice_lines, line_notice_cfg, payment_mode },
+                    SharedServices { registry, enter_cfg, shard_runtime, colors, zone_host },
+                    process,
                     TickIo { ev_rx, ev_ctl_rx, shutdown },
                     $o,
                 )
@@ -34905,6 +34931,10 @@ impl HostLoop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
         if phases.has(PhaseSet::SHUTDOWN) {
+            let svc = proc_svc!(PhaseSet::SHUTDOWN, "SHUTDOWN");
+            let mut db = &mut svc.db;
+            let mut engine = &mut svc.engine;
+            let shutdown_done_tx = &mut svc.shutdown_done_tx;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::SHUTDOWN));
             // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
@@ -35008,7 +35038,7 @@ impl HostLoop {
         // `reply_table_max`（每轮开头表内条数峰值），不是 `reply_pending_max`——后者是「排水后
         // 残留」的旧语义，仍在应答排水块结束处采（见下面 `sample_reply_pending_after_drain`）。
         // 顶部读数保证「每轮必采」，事件排水被预算截断也不影响它。
-        if let Some(w) = db.as_ref() {
+        if let Some(w) = process.as_ref().and_then(|p| p.db.as_ref()) {
             let table_len = w.replies.lock().expect("DB 应答表锁被毒化").len() as u64;
             if let Some(line) = sample_reply_table_at_tick_top(table_len) {
                 glog!("WRN", "{}", line);
@@ -35016,6 +35046,35 @@ impl HostLoop {
         }
         let next = std::time::Instant::now() + tick;
         if phases.has(PhaseSet::INBOUND) {
+            let svc = proc_svc!(PhaseSet::INBOUND, "INBOUND");
+            let mut db = &mut svc.db;
+            let mut engine = &mut svc.engine;
+            let mut guilds = &mut svc.guilds;
+            let guild_cfg = &mut svc.guild_cfg;
+            let guild_store = &mut svc.guild_store;
+            let castle_war_states = &mut svc.castle_war_states;
+            let mut pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
+            let npc_host = &mut svc.npc_host;
+            let merchant_book = &mut svc.merchant_book;
+            let npc_vars_base = &mut svc.npc_vars_base;
+            let mut sell_off_book = &mut svc.sell_off_book;
+            let mut item_number = &mut svc.item_number;
+            let mut item_number_ex = &mut svc.item_number_ex;
+            let world_start = &mut svc.world_start;
+            let win_lottery = &mut svc.win_lottery;
+            let party_cfg = &mut svc.party_cfg;
+            let shard_directory = &mut svc.shard_directory;
+            let state_log = &mut svc.state_log;
+            let mut pwd_sessions = &mut svc.pwd_sessions;
+            let mut reconnect_pending = &mut svc.reconnect_pending;
+            let kick_pending = &mut svc.kick_pending;
+            let mut soft_close_pending = &mut svc.soft_close_pending;
+            let gm_filter_word = &mut svc.gm_filter_word;
+            let gm_mission = &mut svc.gm_mission;
+            let gm_spirit_mutiny_tick = &mut svc.gm_spirit_mutiny_tick;
+            let minimap = &mut svc.minimap;
+            let unbind_list = &mut svc.unbind_list;
+            let make_items = &mut svc.make_items;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND));
             let t = host_prof.begin();
@@ -36312,6 +36371,25 @@ impl HostLoop {
             host_prof.end("HostInbound", t);
         }
         if phases.has(PhaseSet::DB_POLL) {
+            let svc = proc_svc!(PhaseSet::DB_POLL, "DB_POLL");
+            let mut db = &mut svc.db;
+            let mut engine = &mut svc.engine;
+            let mut guilds = &mut svc.guilds;
+            let guild_store = &mut svc.guild_store;
+            let mut npc_host = &mut svc.npc_host;
+            let mut npc_vars_base = &mut svc.npc_vars_base;
+            let mut item_number = &mut svc.item_number;
+            let server_table = &mut svc.server_table;
+            let notice = &mut svc.notice;
+            let shard_directory = &mut svc.shard_directory;
+            let mut pwd_sessions = &mut svc.pwd_sessions;
+            let mut reconnect_pending = &mut svc.reconnect_pending;
+            let mut kick_pending = &mut svc.kick_pending;
+            let mut soft_close_pending = &mut svc.soft_close_pending;
+            let gm_filter_word = &mut svc.gm_filter_word;
+            let gm_mission = &mut svc.gm_mission;
+            let gm_spirit_mutiny_tick = &mut svc.gm_spirit_mutiny_tick;
+            let magic_table_arc = &mut svc.magic_table_arc;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DB_POLL));
             // **L2-5 ③ 段 1c**：各区线程的断线存档请求 → 进程级 DB 链
@@ -36830,6 +36908,21 @@ impl HostLoop {
             host_prof.end("HostDbPoll", t);
         }
         if phases.has(PhaseSet::PERIODIC) {
+            let svc = proc_svc!(PhaseSet::PERIODIC, "PERIODIC");
+            let mut guilds = &mut svc.guilds;
+            let mut guild_run_tick = &mut svc.guild_run_tick;
+            let guild_store = &mut svc.guild_store;
+            let castle_gates = &mut svc.castle_gates;
+            let castle_store = &mut svc.castle_store;
+            let mut castle_war_states = &mut svc.castle_war_states;
+            let mut pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
+            let online_hum_gate = &mut svc.online_hum_gate;
+            let ids_online = &mut svc.ids_online;
+            let ids_out = &mut svc.ids_out;
+            let line_notice_lines = &mut svc.line_notice_lines;
+            let line_notice_cfg = &mut svc.line_notice_cfg;
+            let payment_mode = &mut svc.payment_mode;
+            let guild_startup_store = if is_host { guild_store.as_ref() } else { None };
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERIODIC));
             let t = host_prof.begin();
@@ -36858,10 +36951,10 @@ impl HostLoop {
             // ⇒ 生产代码没有「把 world.clock_ms 送进这个门」的路（显式时钟版本是 `#[cfg(test)]`）。
             if is_host {
                 if let Some(frame) = game_svr::ids::periodic_serverinfo(
-                    &mut online_hum_gate,
+                    &mut *online_hum_gate,
                     &enter_cfg.server_name,
                     online_play_objects,
-                    payment_mode,
+                    *payment_mode,
                 ) {
                     if ids_out.send(frame).is_err() {
                         glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
@@ -37458,6 +37551,8 @@ impl HostLoop {
             host_prof.end("HostWorldTail", t);
         }
         if phases.has(PhaseSet::PLANES) {
+            let svc = proc_svc!(PhaseSet::PLANES, "PLANES");
+            let planes = &mut svc.planes;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PLANES));
             let t = host_prof.begin();
@@ -37676,6 +37771,9 @@ impl HostLoop {
             host_prof.end("HostAoiDownlink", t);
         }
         if phases.has(PhaseSet::PERSIST) {
+            let svc = proc_svc!(PhaseSet::PERSIST, "PERSIST");
+            let mut db = &mut svc.db;
+            let mut engine = &mut svc.engine;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERSIST));
             let t = host_prof.begin();
@@ -37702,6 +37800,9 @@ impl HostLoop {
             host_prof.end("HostPersist", t);
         }
         if phases.has(PhaseSet::SWITCH) {
+            let svc = proc_svc!(PhaseSet::SWITCH, "SWITCH");
+            let server_table = &mut svc.server_table;
+            let mut reconnect_pending = &mut svc.reconnect_pending;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::SWITCH));
             let t = host_prof.begin();
@@ -45470,7 +45571,7 @@ mod tests {
     #[test]
     fn empty_zone_loop_runs_one_tick_without_panic() {
         let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(100, 100)], Some(0));
-        let services = HostServices::for_test();
+        let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctl_tx, ev_ctl_rx) = std::sync::mpsc::channel();
         let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
@@ -45489,7 +45590,7 @@ mod tests {
             shutdown,
         };
         RAN_SEGMENTS.with(|c| c.set(0));
-        let (host, _services, io, outcome) = host.tick(services, io, PhaseSet::M0_MIN);
+        let (host, _shared, _process, io, outcome) = host.tick(shared, None, io, PhaseSet::M0_MIN);
         assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
         assert_eq!(
             PhaseSet::M0_MIN.0,
@@ -45510,12 +45611,27 @@ mod tests {
         );
     }
 
-    /// **M0/A3 负例**：取 `rec` 前必须已启用 `WORLD_HEAD`；缺位 ⇒ 依赖断言触发（文案带位集）。
+    /// **M1-0c' 正向牙**：M1a 的区 k 生产段集与 `PROCESS_ONLY` **交集为空**（引用常量，不抄位集）。
     #[test]
-    #[should_panic(expected = "WORLD_HEAD")]
-    fn zone_tick_without_world_head_panics() {
-        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(10, 10)], None);
-        let services = HostServices::for_test();
+    fn m1a_bits_do_not_intersect_process_only() {
+        assert_eq!(
+            PhaseSet::M1A_PROD.0 & PhaseSet::PROCESS_ONLY,
+            0,
+            "M1a 段集（0x{:05x}）不得与进程-only 段（0x{:05x}）相交",
+            PhaseSet::M1A_PROD.0,
+            PhaseSet::PROCESS_ONLY
+        );
+    }
+
+    /// **M1-0c' 行为牙**：`Some(process)` 跑 `PhaseSet::ALL` 一轮后，
+    /// `PROC_SVC_SEGMENTS`（实际经 `proc_svc!` 取过 ProcessServices 的段位）**必须等于**
+    /// `PROCESS_ONLY`：漏位（新段用进程字段但没进掩码）与虚位（掩码含不用进程字段的段）都红。
+    ///
+    /// 与空实例用例（`None` 分支）分开：那条证「区 k 不进进程段」，这条证「掩码与实现一致」。
+    #[test]
+    fn proc_svc_segments_equal_process_only() {
+        let host = HostLoop::for_zone(zone::ZoneId::new(5), &[(50, 50)], Some(0));
+        let (shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
         let (_tx, ev_rx) = std::sync::mpsc::channel();
         let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
         let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
@@ -45526,7 +45642,33 @@ mod tests {
             ev_ctl_rx,
             shutdown,
         };
-        let _ = host.tick(services, io, PhaseSet(PhaseSet::WORLD_TAIL));
+        PROC_SVC_SEGMENTS.with(|c| c.set(0));
+        let _ = host.tick(shared, Some(process), io, PhaseSet::ALL);
+        let got = PROC_SVC_SEGMENTS.with(std::cell::Cell::get);
+        assert_eq!(
+            got, PhaseSet::PROCESS_ONLY,
+            "实际取过 ProcessServices 的段位（0x{got:05x}）必须等于 PROCESS_ONLY（0x{:05x}）：             多一位=掩码虚位，少一位=新段漏掩码",
+            PhaseSet::PROCESS_ONLY
+        );
+    }
+
+    /// **M0/A3 负例**：取 `rec` 前必须已启用 `WORLD_HEAD`；缺位 ⇒ 依赖断言触发（文案带位集）。
+    #[test]
+    #[should_panic(expected = "WORLD_HEAD")]
+    fn zone_tick_without_world_head_panics() {
+        let host = HostLoop::for_zone(zone::ZoneId::new(3), &[(10, 10)], None);
+        let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        let _ = host.tick(shared, None, io, PhaseSet(PhaseSet::WORLD_TAIL));
     }
 
     /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
@@ -125614,11 +125756,50 @@ mod online_immutability_gate {
                 );
             }
             assert!(
-                !code.contains("&mut *online"),
+                !bans_mut_deref_online(code),
                 "生产代码禁止 `&mut *online`（可变 deref 的另一写法；online_set 也不再用 reborrow）：lib.rs:{}: {}",
                 i + 1,
                 raw.trim()
             );
+        }
+    }
+
+    /// **`&mut *online` 的命中判定（词边界精确）**：`&mut *online` 之后**紧跟标识符字符**
+    /// （字母/数字/下划线）即不算命中——`&mut *online_hum_gate`（`OnlineHumGate`，两个 i64）
+    /// 曾被旧的子串匹配误判（2026-11-23 合并门 TEST 段红）。
+    fn bans_mut_deref_online(code: &str) -> bool {
+        const NEEDLE: &str = "&mut *online";
+        let mut from = 0;
+        while let Some(rel) = code[from..].find(NEEDLE) {
+            let at = from + rel + NEEDLE.len();
+            let next = code[at..].chars().next();
+            let continues_ident = next.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            if !continues_ident {
+                return true;
+            }
+            from = at;
+        }
+        false
+    }
+
+    /// 自检（牙还能咬）：正例必须命中、反例必须不命中。
+    #[test]
+    fn bans_mut_deref_online_matches_real_online_only() {
+        for hit in [
+            "let x = &mut *online;",
+            "foo(&mut *online.entries);",
+            "&&mut *online",
+            "&mut *online)",
+        ] {
+            assert!(bans_mut_deref_online(hit), "正例必须命中：{hit}");
+        }
+        for miss in [
+            "&mut *online_hum_gate,",
+            "&mut *online_setw",
+            "let v = &mut online;",
+            "&mut *online_hum_gate.0",
+        ] {
+            assert!(!bans_mut_deref_online(miss), "反例不得命中：{miss}");
         }
     }
 }
