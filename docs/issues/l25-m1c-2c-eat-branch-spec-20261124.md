@@ -72,13 +72,40 @@
 
    - 判据只读**模板 + 本区会话**（`dead`、模板查表），**默认 `Process`**（`Unknown` 也落 `Process`，
      fail-closed；**无 `_ => Local` 兜底**）；
+   - **安全默认（写死）**：`tpl == None`（模板缺/物品不在包内）、`sessions.get(chr) == None`、
+     `dead` 不可判（实体不在世界）⇒ **一律 `Process`**（回区 0）；**禁止**任何"判不了就本地"的默认。
+     区 0 执行时按它自己的模板/会话查表得到同一失败帧（如 `SM_EAT_FAIL(636)`），行为等价、只是跨区；
    - `MoveFamily` 的判据用**单源谓词** `eat_move::is_move_family_shape(std: &StdItem) -> bool`
      （可从 `maybe_eat_move` 的 shape 判据反向抽出，禁止两处各写一份——参照 `movewire::is_move_command`）；
    - `StdMode 31 && AniCount != 0` **一律 `StdModeFunScript`**（不查 `FunctionNPC`：那是进程态；
      区 0 执行时若 `FunctionNPC == null`，`use_item` 自然回 636，与"本地也不知道"等价）；
-   - **覆写点**：`execute_local_budget` 里对 `GateEvent::Command` 取 `class = zone_cmd_class(...)` 后，
-     若 `ident == CM_EAT` 且 `eat_branch(...)` ∈ {`Dead`,`Unpack`,`OtherLocal`} ⇒ `class = Local`；
-     否则保持 `Process`（`a6_dispatch_local` 走邮箱）。覆写只发生在**区 k LOCAL 段**。
+### 2.1 唯一决策点（符号 + 调用链 + 源码断言）
+
+**唯一决策点 = `classify_local_event(ev: &GateEvent, sessions, catalog) -> ZoneCmdClass`**
+（新增、`fn` 级、非 `#[cfg(test)]`）。**只有它**决定一条命令在区 k LOCAL 段算什么类：
+
+```text
+tick_phase_a（区 k）
+  └─ execute_local_budget(..., classify = |ev| classify_local_event(ev, &sessions, &env.enter_cfg.catalog))
+        └─ classify_local_event
+              ├─ None / 非 Command            ⇒ zone_cmd_class 不可达 ⇒ Unsupported（保持第 3 步口径）
+              ├─ ident != CM_EAT              ⇒ zone_cmd_class(ident, tail)         // 既有单源，不变
+              └─ ident == CM_EAT              ⇒ eat_branch(tpl, dead)
+                    { Dead, Unpack, OtherLocal }        ⇒ Local
+                    { StdModeFunScript, Lottery,
+                      MoveFamily, Unknown }             ⇒ Process
+```
+
+- `execute_local_budget` 不再内联 `zone_cmd_class(...)`：它接收一个 `classify: &dyn Fn(&GateEvent) ->
+  ZoneCmdClass` 参数，**该参数只有一个生产构造点**（`tick_phase_a` 的 LOCAL 支）；
+- `eat_branch` 的**唯一生产调用者**是 `classify_local_event`；
+- **源码断言（与"区 0 不调用 classify"同型）**：production 段里 `eat_branch(` 的出现处只有
+  `classify_local_event` 体内一处； 区 0 的 `INBOUND_PROCESS` 臂与 `handle_say_event`/drain 的
+  `GmSay` 路径**零引用**（grep 断言 + 旁证：`classify_local_event` 的生产调用点在 LOCAL 支内）。
+
+**为什么不会有两个决策点**：`a6_dispatch_local` 收到的 `class` 已是 `classify_local_event` 的返回值，
+它只做"Process 入邮箱 / Local 执行/暂缓/溢出"的**机械分派**，不再看 `ident`、不查模板（单点决策、
+多点机械处置）。
 
 **为什么区 0 路径不受影响**：`zone_cmd_class` 的唯一生产调用点是 `execute_local_budget`（区 k LOCAL
 段）；区 0 的 `CM_EAT` 仍走 `INBOUND_PROCESS` 的**原臂**（一行未动）。分类器改动只改"区 k 把这条
@@ -135,16 +162,20 @@ epoch 减 `control_pending`（**2 拍超时语义沿用**，不改 `A6_TIMEOUT_T
 | # | §7 条目 | 用例名（建议） | 断言 | 删什么会红 |
 |---|---|---|---|---|
 | 1 | 分支穷举 | `eat_branch_is_exhaustive_fail_closed` | 枚举 `StdMode31/AniCount0`、`31/AniCount≠0`、`3/Shape11`、move 族 shape、`3/Shape13`、书、表外模板 ⇒ 每个落 **命名**变体；**表外/未知 = `Process`**；源码牙：`eat_branch` 无 `_ => Local`（源码锚） | 删 `Unpack` 臂 ⇒ 解包支落 `Unknown`/Process ⇒ 红；把默认改 `Local` ⇒ 表外断言红 |
+| 1b | **安全默认** | `eat_branch_safe_default_is_process` | 模板缺（`tpl=None`）/ 会话缺（`sessions.get==None`）/ 实体不在世界 ⇒ `classify_local_event` 返回 **`Process`**；端到端：投一件**模板不存在**的 `CM_EAT` ⇒ 控制邮箱 +1、**零出帧**、会话不变（区 0 侧再按自己的查表回 636） | 把任一 None 支改成 `Local` ⇒ 该牙红（本地会出 636 帧/动会话） |
+| 1c | **唯一决策点** | `eat_branch_single_decision_point_static` | 源码锚：`eat_branch(` 的生产出现处**只有** `classify_local_event` 体内一处；`execute_local_budget` 的 `classify` 参数只有一个生产构造点；区 0 `INBOUND_PROCESS` 臂/`handle_say_event`/drain 的 `GmSay` 支零引用 | 在区 0 臂里加 `eat_branch` 调用 ⇒ 红；内联第二处 `zone_cmd_class` 决策 ⇒ `classify` 参数断言红 |
 | 2 | `ControlRequest` 枚举化 | `control_request_gm_say_variant_keeps_fields` + 九条 A6 负例 | GM 变体字段逐个相等；九条负例全绿；源码牙：`ZoneCmdClass` 之外**无双邮箱** | 给 `GmSay` 少搬一个字段 ⇒ 编译/断言红 |
 | 3 | stop-and-wait | `eat_process_participates_in_stop_and_wait` | 入队后 `control_pending==1`/`first_tick==Some(t)`；本地 CM_EAT 被 `Deferred`；drain+guard 后 `==0`；超时 2 拍路径同 A6 | 删 `EatProcess` 的置位 ⇒ `pending` 恒 0、暂缓牙红 |
-| 4 | mailbox 满 / 区 0 不在 | `eat_process_mailbox_full_counts` / `eat_process_zone_state_missing_counts` | 满 ⇒ `zonek_control_mailbox_rejected +1` + 限速 WRN；**`zone_state` 缺失（现状静默 `continue`）** ⇒ 新列 **`zonek_control_zone_gone`** +1 + 限速 WRN | 删新列/删 WRN ⇒ 红；保留静默 ⇒ 该牙红（**现状缺口**） |
+| 4 | mailbox 满 / 区状态不在（**本片范围内**，非另卡） | `eat_process_mailbox_full_counts` / `eat_process_zone_state_missing_counts` | 满 ⇒ `zonek_control_mailbox_rejected +1` + 限速 WRN；**`zone_state` 缺失（现状静默 `continue`）** ⇒ 新列 **`zonek_control_zone_gone`** +1 + 限速 WRN；**派生合计列与断言同笔同步**（加列不许只加不加总） | 删新列/删 WRN ⇒ 红；保留静默 ⇒ 该牙红 |
 | 5 | 分支门（区 k） | `zonek_eat_script_not_executed_locally` / `zonek_eat_lottery_not_executed_locally` / `zonek_eat_castle_not_executed_locally` / `zonek_eat_unpack_executes_locally` | 前三：区 k 返回 `Process`（邮箱 +1、**零帧**、会话不变）；解包：`Dispatched` + `SM_ADDITEM(200)` ×N + 背包净增 + 计数器消费 N | 删覆写（全 `Process`）⇒ 解包正面牙红；把脚本支标 `Local` ⇒ 脚本牙红（本地执行 = 脚本副作用/零帧断言破） |
-| 6 | `!` 守恒 | `bang_say_stays_unsupported` | 区 k 投 `!x` 的 `CM_SAY` ⇒ `zonek_inbound_unsupported +1`、**不进 A6 邮箱**、**不置 `control_pending`**、不本地执行（零帧） | 把 `!` 归 `Process`/进邮箱 ⇒ 红（A20 防倒退） |
+| 6 | `!` 守恒（**本片范围内**） | `bang_say_stays_unsupported` | 区 k 投 `!x` 的 `CM_SAY` ⇒ `zonek_inbound_unsupported +1`、**不进 A6 邮箱**、**不置 `control_pending`**、不本地执行（零帧）；断言面 = 计数增量 + 邮箱长度 0 + `a6.control_pending == 0` + 零帧 | 把 `!` 归 `Process`/进邮箱/置位 ⇒ 红（A20 防倒退；**若将来实现 `!` 的邮箱变体，本牙按定义转红——这就是那一条提醒牙**） |
 
-**缺口（现状即缺，本片补）**：第 4 条的 `zone_state` 缺失路径**现在是静默 `continue`**（drain 里
-`zh.zone_state(zone_k)` 为 `None` ⇒ `continue`，不计数不告警）——2c 必须补计数列 + WRN 才算 §7 达标。
-第 6 条目前**无此牙**（B3 的 `zone_k_channel_say_is_not_executed_locally` 只覆盖"不执行"，未覆盖
-"不进邮箱/不置位"）。
+**两条现状缺口并入 2c 范围（不另开卡）**：
+- 第 4 条的 `zone_state` 缺失路径**现在是静默 `continue`**（drain 里 `zh.zone_state(zone_k)` 为
+  `None` ⇒ `continue`，不计数不告警）——2c **必须**补 `zonek_control_zone_gone` 列 + 限速 WRN，
+  且派生合计列/断言同笔同步，才算 §7 达标；
+- 第 6 条目前**无此牙**（B3 的 `zone_k_channel_say_is_not_executed_locally` 只覆盖"不执行"）——2c
+  **必须**补 `bang_say_stays_unsupported` 的"不进邮箱/不置 `control_pending`"两面。
 
 ## 6. 先决与风险
 
@@ -163,8 +194,9 @@ epoch 减 `control_pending`（**2 拍超时语义沿用**，不改 `A6_TIMEOUT_T
   按变体改（编译驱动）。
 - **P5 `zone_cmd_class` doc/牙**：`CM_EAT` 断言 `Process`；`zone_cmd_class_m1b_families_are_local`
   清单不加 `CM_EAT`。
-- **P6 分类覆写点单源**：`eat_branch` 与 `eat_move::is_move_family_shape` 单源；覆写只在
-  `execute_local_budget` 的 `CM_EAT` 分支，**不**进 `a6_dispatch_local` 的通用逻辑。
+- **P6 唯一决策点**：`classify_local_event` 是**唯一**判定函数（§2.1）；`execute_local_budget` 改收
+  `classify: &dyn Fn(&GateEvent) -> ZoneCmdClass`（生产构造点唯一）；`eat_branch` 与
+  `eat_move::is_move_family_shape` 单源；`a6_dispatch_local` **只做机械分派**，不查 ident/模板。
 
 **风险**：
 
@@ -174,6 +206,8 @@ epoch 减 `control_pending`（**2 拍超时语义沿用**，不改 `A6_TIMEOUT_T
   `SharedServices.registry` 是**副本**（M1a 既有形态），`None` 时 `no_drug=false` ⇒ 与区 0 分叉
   ——登记；`env.registry` 有值时一致。
 - **R3 `!` 边界（A20）**：`!` 仍 `Unsupported`；**不实现** `Say` 变体；频道消息不进邮箱。
+  **若将来实现 `!` 的邮箱变体** ⇒ `bang_say_stays_unsupported` 按定义转红（该牙即"实现倒退"提醒），
+  届时应连同 `zonek_inbound_unsupported` 计数口径一起重裁，不得静默改牙。
 - **R4 WRN 频控**：沿用 `DepartWarnLimiter` 口径（每分钟 ≤1 条）；新列与 WRN 同时落，不许只有其一。
 - **R5 A24 不受影响**：拾取写回是 ground 面，本片不碰；`…_CURRENT_BUG` 牙保持现状。
 - **R6 段序不变量**：`M1B_ZONE_PROD` 只给 A 段、LOCAL 支不调 `proc_svc!`；`PROC_SVC_SEGMENTS ==
@@ -182,11 +216,15 @@ epoch 减 `control_pending`（**2 拍超时语义沿用**，不改 `A6_TIMEOUT_T
 ## 7. 交付前自查（实施片）
 
 - [ ] `eat_branch` 穷举牙（默认 `Process`、无 `_ => Local`）+ 删解包臂 ⇒ 正面牙红；
+- [ ] **唯一决策点**：`classify_local_event` 单点（源码牙 1c）+ **安全默认**（模板缺/会话缺/实体缺 ⇒
+      `Process`，牙 1b）；区 0 路径零引用 `eat_branch`；
 - [ ] `CM_EAT` 分类 `Process`；覆写点只在区 k 执行侧；区 0 `INBOUND_PROCESS` 臂一行未动（报告签名）；
 - [ ] `ControlRequest` 枚举化：GM 变体字段/行为零变化、A6 九条负例全绿；只新增 `EatProcess`；不实现 `!` 变体；
 - [ ] `EatProcess` 参与 stop-and-wait（`control_pending`/`first_tick`/守卫减计数/2 拍超时/8 条暂缓）；
-- [ ] mailbox 满 ⇒ `zonek_control_mailbox_rejected` + WRN；**`zone_state` 缺失 ⇒ `zonek_control_zone_gone` + WRN**；
-- [ ] 分支门四牙（脚本/彩票/城堡不本地执行、解包本地执行）+ `bang_say_stays_unsupported`；
+- [ ] mailbox 满 ⇒ `zonek_control_mailbox_rejected` + WRN；**`zone_state` 缺失 ⇒ `zonek_control_zone_gone` + WRN**
+      （**本片范围内**；派生合计列与断言同笔同步）；
+- [ ] 分支门四牙（脚本/彩票/城堡不本地执行、解包本地执行）+ `bang_say_stays_unsupported`
+      （**本片范围内**：含"不进邮箱/不置 `control_pending`"两面；将来实现 `!` 变体则按定义转红）；
 - [ ] `unbind_list` 进 `SharedServices`（`Arc`，只读）；区 k 不持有任何进程态假实例；
 - [ ] 门禁：`cargo fmt --check` / `clippy -D warnings` / `cargo test --workspace` / `msgcodegen --check` /
       `docs_anchor_gate --prose`；R 级另需真机对拍（c2 场景另卡）；
