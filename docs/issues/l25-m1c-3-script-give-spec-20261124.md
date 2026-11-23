@@ -26,7 +26,7 @@
 | 族 | 入口（触发） | handler | 一层 callee（造件点） | 进程态依赖 |
 | --- | --- | --- | --- | --- |
 | **GM give**（`@s`/`@give`/脚本 `GMEXECUTE` 造物） | `CM_SAY` 的 `@` 支 → A6 邮箱 `ControlRequest::GmSay` → drain `handle_say_event` | `handle_gm_command`（`gmcmd` 纯决策）→ `collect_gm_use_item_pending` / `apply_gm_use_item_write` | `BagItem::new` + `next_item_number` + `trade::send_add_item_body` | **已是 `Process`**：`ScriptGmEnv`（`GMEXECUTE` 跳线）、`gm_filter_word`/`gm_mission`（`Cell`/`RefCell`）、`pwd_sessions`；**无 NpcVars** |
-| **脚本 give**（NPC/商人脚本里的 `GIVE`/`TAKEGOLD` 等） | `CM_CLICKNPC(1010)` → `handle_click_npc_cmd`；`CM_MERCHANTDLGSELECT(1011)` → `handle_shop_cmd_inner` | 二者都走 `run_merchant_goto`（NPC/商人脚本宿主） | 脚本引擎 `CodeDef{name:"GIVE"}` 动作 → `next_item_number` + `add_item_to_bag*` | **`MerchantScriptBook`（内部 `Rc<NpcDef>`）、`NpcVars`（`Rc<RefCell>`，**!Send**）、`ScriptGmEnv`、`SellOffBook`、`ScriptWorldCtx`（`MonGenHost`/`MapRegistry`/`MonsterTable`/`DisplayTable`，后四者区本地）** |
+| **脚本 give**（NPC/商人脚本里的 `GIVE`/`TAKEGOLD` 等） | `CM_CLICKNPC(1010)` → `handle_click_npc_cmd`；`CM_MERCHANTDLGSELECT(1011)` → `handle_shop_cmd_inner` | 二者都走 `run_merchant_goto`（NPC/商人脚本宿主） | 脚本引擎 `CodeDef{name:"GIVE"}` 动作 → `next_item_number` + `add_item_to_bag*` | **`MerchantScriptBook`（内部 `Rc<NpcDef>`）、`NpcVars`（`Rc<RefCell>`，**!Send**）、`ScriptGmEnv`、`SellOffBook`、`ScriptWorldCtx`（`MonGenHost`/`MapRegistry`/`MonsterTable`/`DisplayTable`，后四者区本地）**。注：1011 的 `type` 是**实体属性**（`merchant_dlgselect_route`/`dlgselect_route_for` 读 `MerchantLookup` + `npc_type`），**不在 12B 头** |
 | **药物合成** | `CM_USERMAKEDRUGITEM(1034)` → `handle_shop_cmd_inner` 的对应臂 | `handle_shop_cmd_inner`（同一大 match） | `game_svr::shop::make_drug_item` | **无**：`sg.state`（区会话）、`world.merchant_goods_groups`（区世界）、`shop_sessions`（区）、`shop_context`（`EnterConfig` 区副本）、`make_items: Option<&MakeItemRegistry>`（`EnterConfig` 区副本）、共享 `item_number` |
 | **开盒脚本** | `CM_EAT` 且模板 `StdMode 31 / AniCount != 0` | `handle_eat_cmd` → `run_std_mode_func_script`（`@StdModeFunc<N>`） | 脚本引擎 `GIVE` 等同 | **`NpcHost`（`defs: Vec<Rc<NpcDef>>`）、`NpcVars`（!Send）、`ScriptGmEnv`**——**2c 已收进 `EatProcessEnv`**（`Process` 回区 0） |
 
@@ -53,9 +53,16 @@
 - 形态：`ControlRequest` 增 **`ScriptProcess { zone, chr_name, ident, recog, param, tag, series,
   tail, at_tick, epoch }`**（与 `GmSay`/`EatProcess` 同一 drain、同一 `CONTROL_MAILBOX_CAP`、
   同一 `control_pending`/`first_tick`/超时/关服清理；**不开第二机制**）。
-- 区 k：`zone_cmd_class` 把 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 归 **`Process`**；
+- 区 k：`zone_cmd_class` 把 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` **整 ident 归 `Process`**
+  （不做 ident 级细分——1011 的 `type` 来自**世界实体**而非 12B 头，见 §3）；
   `handle_zone_command_on` 不加执行臂（执意本地 = 桩）。
-- 区 0 drain 执行支：`ScriptProcessEnv<'a>` 承载区 k **拿不到**的项——
+- 区 0 drain 执行支**首行保持既有派发门**（原样照抄，不重写）：
+  - `CM_CLICKNPC` ⇒ `handle_click_npc_cmd` 的 `IsCanDeal`/`Death·Ghost`/`ClickNpcTime`/`FindMerchant ?? FindNpc`/
+    ±15 格五道门全部在 **drain 持区 k 锁**时对**区 k 世界/会话**求值；
+  - `CM_MERCHANTDLGSELECT` ⇒ **`dlgselect_route_for(ident, 区 k 实体)`**：
+    `NotMerchant`（硬转失败/非 IMerchant）/`Absent`/`GuildOfficial`(`npc_type=1`) 按既有语义**零帧**处置；
+    仅 `Shop` 支进入 `handle_shop_cmd_inner`。**非 `Shop` 支不执行任何脚本/商店臂**。
+- `ScriptProcessEnv<'a>` 承载区 k **拿不到**的项——
   `npc_host: Option<&NpcHost>`、`npc_vars: &NpcVars`、`merchant_book: &MerchantScriptBook`、
   `sell_off_book: &mut SellOffBook`、`gm: Option<&ScriptGmEnv>`、`script_world: Option<&mut ScriptWorldCtx>`
   ——玩家态取 **区 k** 的 `ZoneState.host`（`world`/`sessions`/`shop_sessions`/`sell_off_sessions`/
@@ -102,8 +109,13 @@
   `handle_eat_cmd`。
 - 请求体要带**完整 12B 字段**（`ident/recog/param/tag/series` + `tail`），`EatProcess` 只有
   `recog/param/tag/tail`（ident 恒 1006）⇒ 变体字段不能照抄。
-- `CM_MERCHANTDLGSELECT` 有 **type=1 派发门**（`merchant_dlgselect_dispatch`）——分类与执行两侧都要
-  保持"只有 type=1 才走 Shop 派发"的口径，别把其它 type 塞进邮箱。
+- `CM_MERCHANTDLGSELECT` 的 `type` 是**实体属性**（`merchant_dlgselect_route` 用
+  `merchant_lookup` + `npc_type` 得出 `DlgSelectRoute`），**不是 12B 头字段** ⇒ **不能**在
+  `zone_cmd_class`（只拿 ident/payload）里做 type 级分类。**定案（一行）**：
+  `zone_cmd_class` 把 1011 **整 ident 判 `Process`**；drain 执行支第一行 `dlgselect_route_for(...)`，
+  **仅 `Shop` 支**执行 `handle_shop_cmd_inner`，其余 route 按既有零帧语义处置后照常清位。
+  ⇒ 非 type=1 的 dialog 也会走一次邮箱（零帧、不执行），这是可接受的既定成本；换来的好处是
+  分类器保持纯 ident 级、type 门只有**一处**（drain），不会两处各判一遍。
 - `CM_CLICKNPC` 的 `IsCanDeal/Death/Ghost/ClickNpcTime` 四道门在 zone 0 执行支里读**区 k 世界/会话**
   即可（都是区本地量），但 `ClickNpcTime` 是会话态 ⇒ 仍在区 k 会话上（drain 持区 k 锁）。
 
@@ -131,8 +143,11 @@
   `@main` 里 `GIVE 木剑 1` 生效：`SM_ADDITEM(200)` 发到**区 k 的** socket、背包 +1、`SM_MERCHANTSAY` 链出现；
   `item_number` +1；守卫清位后 `control_pending==0`。
   **口径记录**：脚本在区 0 线程执行 ⇒ 若开 `MIR2_ITEMNUM_TRACE`，这些行标 **zone 0**（**不得**当 A25 跨区证据）。
-- **同族负例 `merchant_dlgselect_type_gate_kept`**：非 type=1 的 `CM_MERCHANTDLGSELECT` ⇒ 仍按
-  `merchant_dlgselect_dispatch` 归非 Shop（或 `Unsupported`），**不得**被塞进 `ScriptProcess`。
+- **同族负例 `merchant_dlgselect_route_gate_kept_in_drain`**：区 k 玩家对**怪物/玩家 actor**
+  （`NotMerchant`）与 `npc_type=1` 的 `GuildOfficial` 发 `CM_MERCHANTDLGSELECT` ⇒ 两者仍是
+  **整 ident `Process`**（邮箱 +1、执行体不本地调用、`control_pending=1`），drain 后按既有 route
+  **零帧**处置、不执行 `handle_shop_cmd_inner`；对普通商人（`Shop`）则执行脚本。
+  变异：把 `dlgselect_route_for` 门删掉 ⇒ `NotMerchant` 也会进 Shop 臂 ⇒ 帧面/断言红。
 - **开盒复用证据**：引用 2c 既有牙 `zonek_eat_script_not_executed_locally` /
   `eat_process_enqueues_typed_request_not_gm_line`（脚本食 = `@StdModeFunc` 开盒），M1c-3 不重复造。
 
@@ -149,8 +164,9 @@
 - `win_lottery`/`castle_war_states`（2c 已进 `EatProcessEnv`，脚本族若也要用就复用同字段）。
 
 **先决（建议写进卡面）**：
-- P1：`MakeItemRegistry` 提升为 `Arc` 进 `SharedServices`（单份装载、区 k 只读借用；与 `unbind_list` 同款
-  启动断言 `ptr_eq`）。
+- P1（**已裁：不做**）：`MakeItemRegistry` **不**提升 `Arc`——它是只读静态模板表，区副本与进程副本
+  同源同内容；3a 最多加注释「区副本只读、与进程副本内容等价」，**不声称"同一实例"**。
+  （提升 + `ptr_eq` 降为可选后续。）
 - P2：`ScriptProcessEnv` 的字段面固定为 §2(a) 的六项；执行支**不得**跨区持第二把区锁（A9 边界沿用）。
 - P3：邮箱与暂缓上限**沿用**（`CONTROL_MAILBOX_CAP`/`A6_DEFER_CAP`/`A6_TIMEOUT_TICKS`），不加新列；
   满/超时/区不在复用既有 `zonek_control_*`（含 4③ 的 `zonek_control_zone_gone`）。
@@ -162,8 +178,9 @@
 - **R2 段序**：`Process` 在飞期间该玩家本地命令暂缓 ≤1 tick（与 `@` 同）——oracle 聊天/脚本不阻塞移动的
   边界维持不变（A6 既有契约）。
 - **R3 trace 区号**：脚本造件在区 0 线程 ⇒ trace zone 0；**A25 的跨区证据仍由 C1' 解包与 3a 药合并承担**。
-- **R4 `CM_MERCHANTDLGSELECT` type 门**：分类/执行两侧都要保留 type=1 口径，别把 dialog 里"打开商店/修理"
-  等非脚本路径一并搬（它们属商店族，另判）。
+- **R4 `CM_MERCHANTDLGSELECT` route 门**：`type` 来自实体（非 12B 头）⇒ 分类**整 ident `Process`**，
+  route 门只在 drain 一处（`dlgselect_route_for`）；非 `Shop` 支零帧。购买/出售/修理等**其它**商店 ident
+  仍 `Unsupported`（商店族另判），本片不接。
 - **R5 script_world 副作用**：`CLEARMAPMON`/`MONGENEX` 在 drain 里作用于**区 k 的** `mon_gen_host`/`displays`
   （`ZoneState.host` 字段），不是区 0 的；写错区 = 清错图。
 - **R6 与 M1c-2c 的分界**：`@StdModeFunc` 开盒已在 2c；M1c-3 不重接，只引用既有牙，避免双重派发。
@@ -174,15 +191,25 @@
    窄臂（抽 `make_drug_zone_local(...)` 复用 `shop::make_drug_item` 与 `emit_shop_frames_into`）+ P1 共享
    `MakeItemRegistry` + 牙 3 条（正/负/静态）+ 变异（删臂红）。
 2. **M1c-3b**（脚本回区 0）：`ControlRequest::ScriptProcess` + `ScriptProcessEnv` + drain 执行支 +
-   `zone_cmd_class` 两 ident 归 `Process` + type 门保持 + 牙 3 条（投递/执行/type 门）+ 变异
-   （分类改 Local/漏投邮箱红）。
+   `zone_cmd_class` 两 ident 整族归 `Process` + drain 侧 `dlgselect_route_for` 门 + 牙 3 条
+   （投递/执行/route 门）+ 变异（分类改 Local / 漏投邮箱 / 删 route 门 ⇒ 红）。
 3. **收尾**：两片各自 N=1 帧字节门 + 报告明写"区 0 `INBOUND_PROCESS` 臂保留不动 / 脚本执行仍在区 0 线程 /
    trace zone 口径"。
 
-## 7. 待裁问题（给 Leader）
+## 7. 已裁与不在本片
 
-1. **3a 是否要等 P1（`MakeItemRegistry` 提升 `Arc`）**？不提升也能跑（区副本已存在），但会多 N 份拷贝、
-   且"哪份是真源"不显式；建议先提升再做 3a。
-2. **3b 的 `ScriptProcess` 是否要覆盖 `CM_CLICKNPC` 之外的其他脚本入口**（如任务脚本 `CM_QUEST*`、
-   隐藏 `QManage` 触发）？本草案只列 click/dlgselect；其余入口建议先清点、再决定是否同片。
-3. **`CM_MERCHANTDLGSELECT` 的其它 type** 归商店族（M1c-4？）还是与 3b 同片，需 Leader 定边界。
+**已裁（2026-11-24 opc-27）**：
+1. **3a 不等 `MakeItemRegistry` 提升 `Arc`**：它是只读静态模板表，区副本与进程副本**同源同内容**；
+   3a 只加一句注释「区副本只读、与进程副本内容等价」，**不声称"同一实例"**，也不为此改装配。
+   提升为 `Arc` + `ptr_eq` 断言降为**可选后续**，不进 3a。
+2. **3b 只覆盖 `CM_CLICKNPC` 与 `CM_MERCHANTDLGSELECT`**；其它脚本入口见下。
+3. **`CM_MERCHANTDLGSELECT` 非 `Shop` 支不在本片**：分类整 ident `Process`，drain 侧
+   `dlgselect_route_for` 一处判 route；非 `Shop` 零帧（见 §2(a)/§3）。分类器**不做** type 级细分。
+
+**未清点 / 不在本片**（留后续卡）：
+- 隐藏脚本入口：`QManage`（`@Login` 等服务器事件触发）、`QFunction`（`CM_EAT` 脚本食已在 2c）、
+  `RobotManage`、`run_party_goto_label`——它们由**服务器事件**驱动，不经区 k 客户端命令，无跨线程问题；
+- 任务脚本（本仓无 `CM_QUEST*` 客户端 ident；任务状态经脚本/DB，不在命令派发面）；
+- 商店族其它 ident（`CM_USERBUYITEM`/`CM_USERSELLITEM`/`CM_USERREPAIRITEM`/`CM_TAKEGOODS` 等）——
+  仍 `Unsupported`，属商店族另卡；
+- `@StdModeFunc` 开盒：已在 M1c-2c，本片只引用既有牙。
