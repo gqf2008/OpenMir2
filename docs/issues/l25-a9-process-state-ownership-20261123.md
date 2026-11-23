@@ -25,33 +25,49 @@
 | 8 | **Closed/断线存档**：`handle_zone_closed`（`GateEvent::Closed`） | 玩家 `SessionGround`/world（玩家区）→ 编码存档 → `save_outbox` → 区 0 DB | **混合** | **(a)** 区 k 编码存档载荷 → `save_outbox` → 区 0 `drain_zone_saves`（**已存在**） | 低（既有） |
 | 9 | **LoadDbRequest/取档**：`GateEvent::LoadDbRequest` → `engine`/`db` | `engine`/`db`（进程 DB 链） | 进程 | **(a)** 数据经 login 落区路由送给目标区（**已存在**，段 1b） | 低（既有） |
 
-## 2. 【单列·给总监裁】kick / AdminGm：跨区目标的定位与加锁
+## 2. 【总裁裁】kick / AdminGm —— 广播 + 各区自查（不建全局索引）
 
-- **现状（host-only）**：`handle_kick_account` 用 **区本地 `online`**（区 0 的）；`execute_admin_gm_command` 用 **区本地 `ground_sessions`/`world`/`online`**。**不含区 k 的玩家**。
-- **"目标 actor 属于哪个区"的可判据**：进程级 **`ZoneRouter::lookup_registered(line, socket) -> Option<ZoneId>`**（`zone_router.rs:98`）——给定目标的 `(网关线, socket)` 即得区。**但**要拿到目标的 `(line,socket)`：kick 只有 `account`、AdminGm 只有 `chr`，`online` 是**每区一份、无全局 account/chr→(line,socket) 索引** ⇒ **仍须跨区搜**（各查本区 online，或广播）。
-- **不解决会怎样（今天 / M1c 前）**：
-  - **kick**：区 0 的 online 无区 k 账号 ⇒ **空踢（静默无效，玩家不被踢）**——**不是误踢/踢错区**（按 account 精确匹配），但**真要踢的跨区玩家踢不掉**。
-  - **AdminGm**：目标在区 k ⇒ 区 0 的 `ground_sessions`/`world` 无他 ⇒ **GM 命令静默空操作**（对区 k 玩家无效）。
-- **修法方向（(d) 变体）**：先**定位**目标区（`ZoneRouter` 若有 socket / 否则广播或建全局索引），再**区 0 持目标区锁**执行（form (d)，如登录）。**kick 我先前推荐"广播 + 各区自查"**（低频、幂等、不建全局索引）；AdminGm 同款定位。**这两族是"M1c 前必裁"项**。
+> 裁决（opc-27 2026-11-23）：**广播 + 各区自查，不建全局 `(account|chr)→(line,socket)` 索引**。理由：全局索引＝**第二份真相**、会与各区 `online` 漂移（同 A7 registry 风险）；广播代价＝每区一次查表，管理命令频率可忽略。
 
-## 3. 【单列·给总监裁】item_number 跨区撞号
+- **形态**：命令**发到各区** → **每区在自己锁内**按自己 `online`/`ground_sessions` 自查并执行 ⇒ **执行方＝状态持有方，不需要 form (d) 的跨区持锁**（比原稿简单，已改）。
+- **可判据（定位）**：仍是 `ZoneRouter::lookup_registered(line,socket)`（若有 `(line,socket)`）＋ 各区 `online` 自查；但**不需要建全局索引**。
+- **硬要求（防"静默空效"成永久盲区）**：
+  - 计 **`matched`（命中区数）/ `acted`（执行数）**；**0 命中单独计数 + 一条 WRN（限流）**。
+  - 判据：对**在线账号** kick ⇒ `matched=1, acted=1`；对**不存在账号** ⇒ `matched=0` 且 WRN **恰 1 条**、限流生效。
+  - **同一账号出现在 ≥2 区（本不该发生）**⇒ 计数 `matched>=2` + WRN；**不得**改成"只踢第一个"掩盖。
 
-- **分配点**：`*item_number += 1`（`lib.rs` add_newbie `~7442`、`drop_full_bag_items` `~10787/10843`、GM 给物 `~27103/27168`、`useitem.rs` 造药/拆包、shop 买）。`make_index: *item_number`。
-- **分配器住哪**：**`HostServices.item_number: i32`（每实例一份，`&mut i32` 逐 handler 传入）**——**非全局、非共享**。区 0/区 k 各持自己的 `item_number`，从**同一初值**（`cfg.item_number`）起 `++`。
-- **N 区后会不会两区发同一个号**：**会**。区 k 造件（drop/drug/shop，M1c 才会有）用区 k 计数、区 0 造件用区 0 计数 ⇒ **两件同 MakeIndex** ⇒ `bag.rs` `make_index` 身份匹配错 / 跨区引用/落库冲突。
-- **是否已有全局序列可用**：**无**。C# 是 `M2Share.GetItemNumber()` 全局 `++`；Rust 是 per-`HostServices` `i32`。**需改 `Arc<Mutex<i32>>` 共享**（我方 §11/M1c 第一件事已建议）——改后撞号消失、值随跨区分配序波动但落 **D-1 掩码**（`whitelist.md` D-1：MakeIndex 对拍不含、DB 列掩码；C# 含 GetTickCount 无对拍真值）⇒ **不破帧面**。
-- **是否单立卡**：**建议并入 M1c 第一件事（改共享计数器）**，不必单立；但若 M1c 先开物品前不共享 ⇒ 必红（撞号），故是 **M1c 放行条件**。
+## 3. 【总裁裁】item_number —— **M1c 第一件事，进程级共享计数器**
 
-## 4. 结论：哪几族能第一批分流、哪几族等方案
+> 裁决（opc-27 2026-11-23）：`Arc<AtomicI32>` 共享；**不单立卡**，并入 M1c 第一件事。
 
-- **第一批可分流（方案清楚）**：
-  - **form (d)**：`guild`(#1)、`shop`(#2)、`click-npc`(#3)、`selloff`(#4，同区)、`say-GM@`(#5) —— 区 0 持区 k 锁跑，受 **§3 三硬边界**（不重入 HostLoop / 不取进程锁 / 不阻塞 DB）+ A6 排水层约束。
-  - **form (a)**：`Closed`(#8)、`LoadDbRequest`(#9) —— 数据携带，**已存在**。
-- **必须等方案定（单列给总监裁）**：
-  - **kick / AdminGm**（#6/#7）—— 跨区目标定位（ZoneRouter/广播/全局索引）+ form (d)；
-  - **item_number 撞号** —— 改 `Arc<Mutex>` 共享（M1c 第一件事）。
+- **形态**：**`Arc<AtomicI32>`**（比 Mutex 少一层；`fetch_add(1)+1` 保"先增后用"旧语义）。C# 本为 `M2Share` 全局 ⇒ **向 oracle 对齐，非新设计**。
+- **M1c 放行条件**：任何"**区 k 可造物品**"路径开启之前，本改动必须**已在 master**。
+- **必须两条证据**：
+  1. **N=1 两树逐字节相同**（单区序列不变 ⇒ 帧面零变化）；
+  2. **并发行为牙**：两区各造 K 件、收集全部 `make_index`，断言**无重复且计数 == 2K**（行为证据，非文本牙）。
+- **接受一处偏离（明确记）**：N>1 下号码的**跨区交错序**每次运行可能不同（全局原子决定），属**数据而非顺序契约**，**不影响口径 A 三面**（同屏可见 / 帧内容取值 / 同收件人相对序）。
 
-## 5. 给总监裁（2 条）
-1. **kick / AdminGm 跨区定位方案**（§2）：广播+各区自查 vs 建全局 account/chr→(line,socket) 索引 vs 仅 ZoneRouter（需 socket）；未定则跨区踢/GM 静默失效。
-2. **item_number 共享**（§3）：M1c 第一件事改 `Arc<Mutex<i32>>`？抑或另立卡；不改则区 k 造件即撞号。
+## 4. 第一批可分流族：排序 + 依赖（**form (d) 三硬边界逐条**）
 
+第一批（不需等裁决）建议**排序**（状态耦合少→多 / 已存在→需新接）：
+1. **Closed / LoadDb**（form (a)，**已存在**，零新接）；
+2. **selloff**（form (d)，`book` 单点 + 玩家区会话；同区）；
+3. **guild**（form (d)，`guilds`/`cfg`/`sections` + 玩家区会话）；
+4. **shop**（form (d)，npc 宿主 `!Send` + `item_number` + 玩家区；**须 §3 已共享**）；
+5. **click-npc**（form (d)，脚本宿主 `!Send` 最重 + 玩家区）；
+6. **say-GM@**（form (d)+A6，M1b 已处置）。
+
+form (d) 族**必须逐条守三硬边界**（名字）：
+- **(1) 持目标区锁期间不重入、不跨区锁任何 `HostLoop`**（防自死锁 / ABBA）；
+- **(2) 不取进程锁**（进程态是区 0 线程局部 `&mut`，非锁）；
+- **(3) 不阻塞 DB**（存档 → `save_outbox` 异步出口）。
+
+（A6 另需排水层 stop-and-wait，见 M1b 方案 §1.2/§5.3。）
+
+## 5. 必须等方案：**阻塞哪一片**
+
+- **item_number**（§3）：**阻塞 M1c-1**——区 k 首条「可造物品」路径（drop / drug / shop）开启那一片，**M1c-1 放行前必须在 master**。
+- **kick / AdminGm**（§2）：**管理面**，不属某物品片；**阻塞"区 k 有真玩家后的管理命令片"（≈ M1c-1 或单列管理面）**——区 k 一有真玩家、踢人/管理就要跨区有效，否则空效。
+- 其余（§4 的 form (d)/(a) 族）不被上述阻塞，可随 M1c 各片推进。
+
+> 若 M1c-1 / M1c-2 的正式切片名与此不同，按实际片名替换。
