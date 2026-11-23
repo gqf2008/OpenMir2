@@ -171,6 +171,13 @@ def _selftest():
     ck("precheck_one_undecidable", rc == 2 and rep["verdict"] == "UNDECIDABLE",
        "rc=%d verdict=%s" % (rc, rep.get("verdict")))
     ck("login_notice_not_gm", label_frames([f_notice(), f_login()], A)["gm_frames"] == 0, "")
+    # **判据陷阱牙**：公告与 GM 回复同 ident=100、同 recog=P，只差 param=65499。
+    # 去掉 param 过滤时这里会数成 4 条 ⇒ 本条必须红。
+    trap = [f_notice(1), f_notice(2), f_gm(A, 3), f_gm(A, 4), f_move(5)]
+    rc, rep = analyze_order(base, trap, A, A, 2)
+    ck("notice_param_65499_excluded",
+       rc == 0 and rep["test_gm"] == 2 and rep["test_tags"] == ["gm#1", "gm#2", "move"],
+       "rc=%d gm=%s tags=%s" % (rc, rep.get("test_gm"), rep.get("test_tags")))
     noise = [f_login(), f_notice(), f_gm(A, 3),
              {"seq": 9, "t_ms": 9, "phase": "gamegate", "conn": "gamegate",
               "ident": 11, "recog": A, "param": 329, "tag": 268, "series": 6,
@@ -181,7 +188,7 @@ def _selftest():
        rc == 0 and rep["test_tags"] == ["gm#1", "gm#2", "move"],
        "rc=%d tags=%s" % (rc, rep.get("test_tags")))
 
-    expected = 9
+    expected = 10
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print("SELFTEST %s %s %s" % (name, "ok" if cond else "FAIL", detail))
