@@ -240,19 +240,137 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
    两区对拍钉住；不得用「重试/放宽断言」掩盖。
 7. **`spawn_minimal_zone` 接线**：M1 实施才动；接线本身要保留 `slicing=0` 的零构造（M0 §3.1 的构造闸）。
 
-## 8. 实施顺序与可审的提交序列（opc-27 2026-11-23 定稿）
+## 8. 实施顺序与可审的提交序列（opc-27 2026-11-23 定稿；同日修订）
 
-`M1-0`（结构）→ `M1a`（出帧）→ `M1b`（战斗/技能）→ `M1c`（物品/NPC）→ `收口`。
-每片：一提交序列 + 全量门 + **N=1 两树对拍（最终树）**。
+**顺序（修订）**：`M1-0a`（已完成）→ **`M1-0c'`（新前置：b-1 服务拆分 + fail-fast）** → `M1a`（出帧）→
+`M1b`（战斗/技能）→ `M1c`（物品/NPC）→ `收口`。每片：一提交序列 + 全量门 + **N=1 两树对拍（最终树）**。
 
-### 8.1 M1-0 的三个独立提交（缺一不可、顺序不可换）
+> **`0b`（方法化）已从「前置」移出**（opc-27 2026-11-23 裁决）：M1a 的四项能力全部经
+> `HostLoop::tick(services, io, phases)` 一个入口可达，**没有「某段需要不同 `&mut` 组合」的需求**
+> ⇒ 0b 是纯可读性重构、零功能收益，推到 M1a 之后；将来真出现「某段要单独调用」（唯一候选 =
+> M1c 控制邮箱），**按需只拆那一段**，不整函数 17 段全拆。届时再按 8.1 的 0b 清单执行。
 
-| 提交 | 内容 | 判据 |
-| --- | --- | --- |
-| **M1-0a 纯格式**（单独提交，**零语义**） | 移除 `#[rustfmt::skip]` + `cargo fmt --all`（一次性格式化 `HostLoop::tick` 与守卫块缩进） | **两条一起贴**：①`git diff --ignore-all-space <parent> <this>` **为空**；②**移除 skip 后** `cargo fmt --all -- --check` **仍全绿**（证明格式化稳定、不是"跑一次 fmt 就变"）；另 FMT/CLIPPY/TEST 绿、**不改任何字面行内容** |
-| **M1-0b 方法化 + 逐字字面量同步**（单独提交） | 段体拆成 `fn phase_*`；同时把被逐字扫描的字面行列出并同步给对应牙（`world.tick_tail(&mut rec);`、`drain_pk_flag_downlink(&mut world, &online, &gates);`、`let guild_run_tick = world.clock_ms as i32;`、`*_in_sim_loop`/`*_is_wired_in_sim_loop` 那批…） | **逐字字面量清单必须在 0b 开工前产出并经 opc-27 过目**（不许"实施时补"——否则 0a/0c 的「零行为变化」边界会被 0b 的意外字面量改动穿透）； **不许 `#[ignore]`、不许把「精确匹配」改成「包含即可」、不许删牙**；每条牙改前先跑一次**旧断言**证明其仍能红（负例），改后全量绿；两条 `allow` 仅在字面量已改后移除，并在提交信息点名 |
-| **M1-0c 结构** | `ZoneState { host: HostLoop, save_outbox, alive }` + `HostServices` 区位形态（零行为变化） | 全量门 + N=1 两树对拍 |
+### 8.1 M1-0a（已完成，保留）
+`M1-0a` 的成果 = 把 `HostLoop::tick` 交回 rustfmt（移除 `#[rustfmt::skip]`）+ 一次性格式化 + 修掉
+3 个**既有**测试脆弱点（字节切片多字节 panic、折行/缩进字面量各一）。提交序列：
+`f5a9fae7f`（移 skip）→ `b9b809ef2`（fmt）→ `4f9e7e582`（字面量同步）→ `304f190d5`（#3/#1 修复）→
+`356c3ce7c`（#3 切分 fail-closed 硬化 + #1 防御性留痕）。零语义判据 = 去空白**并去掉 `,{}`** 后
+0a-1↔0a-2 逐字符相同。
 
-- **方法化不会截断扫描窗口**（方法行是缩进行、不匹配 `starts_with("fn ")`），但**会改逐字行**；
-  这两件事在 M1-0a/M1-0b 里分开审。
-- **M1-0 完成前不得开始 M1a**（opc-27 2026-11-23 放行条件）。
+### 8.2 `M1-0c'` 设计（**b-2**：`Option<ProcessServices>` + 段内收敛 + fail-fast）
+
+**动机（0c 实测）**：6 个进程-only 字段在 **M1a 段集内的使用 = 0**；全 tick 体共 **59 处**使用，只落在
+**SHUTDOWN 3 / INBOUND 26 / DB_POLL 12 / PERIODIC 5 / PERSIST 1**（其中 39 处 reborrow 敏感）。
+
+**为什么不是 b-1+（手写 `impl Default` + `unwrap_or_default()`）**（opc-27 2026-11-23 最终裁决，
+掩码漂移是决定性理由）：b-2 的 fail-closed **不依赖掩码**——若将来给区 k 开新段而新位**漏加**进
+`PROCESS_ONLY`，b-1+ 会**静默读到默认值**（假 sender 发错被吞、`StateLog` 空转），b-2 则在该段入口的
+`proc_svc!` 直接 **panic**；"静默读默认值比 panic 更糟"。另：生产侧 `Default` 还缺 `EnterConfig`
+的构造（`EnterConfig::for_test` 是 `#[cfg(test)]`，探针 `cargo check` 实测报
+`no associated function ... for_test`）⇒ 需再写一份 ~80 字段的生产 `empty()`。本条线与
+`HostServices::for_test()`（`lib.rs` 的 `impl HostServices { fn for_test }`）都只作**构型参考**，
+**不采纳为生产 `Default`**。
+
+**b-2 的代价与兜底**：44 处机械改动 / 39 处 reborrow 敏感点——由全量门 + N=1 两树对拍 + 0c 复审
+兜底（opc-27 2026-11-23 裁决）。`ProcessServices` 全集**无法廉价空构造**——
+`shutdown_done_tx` / `ids_out`（`tokio::sync::mpsc::UnboundedSender`，tokio 不提供 `Default`）、
+`win_lottery`（`WinLotteryShared`，仅 `Clone, Debug`）、`line_notice_cfg`（`LineNoticeCfg`，同）、
+`online_hum_gate`（`OnlineHumGate`，`Debug, Clone, Copy`）、`state_log`（`StateLog`，无 derive）、
+`enter_cfg`（`EnterConfig`，无 `Default`）——手写 `Default` 就得造**没有接收端的假 channel**，
+往这种 sender 上发错误会被静默吞掉（正是 b-1 要避免的"空壳服务"）。
+> 订正两处易混点（2026-11-23 复核）：`NpcVars` **有** `impl Default`（`npc.rs` 的 `impl Default for NpcVars`）、
+> `Arc<WorldStartGate>` **可 Default**（`WorldStartGate` 有 `impl Default`）——
+> 但其余字段仍无 `Default`，结论不变。
+
+**形态（b-2）**：
+```rust
+fn tick(self, shared: SharedServices, mut process: Option<ProcessServices>, io: TickIo, phases: PhaseSet) -> TickOut
+```
+- 区 0 传 `Some(process)`；区 k（M1 起）传 `None`。
+- **`TickOut` 必须把 `Option<ProcessServices>` 回传**：区 0 每 tick 供 `Some` 并拿回（channel/Arc 等
+  句柄不得在 tick 之间丢失）；区 k 供 `None`、丢弃回传。
+- `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | PERSIST_DB`（与 `M0_MIN`/`M1_MIN` **同处**，
+  `PhaseSet` 定义旁；与 0c 的 59 处/5 段实测**互为交叉校验**）。
+  **PERSIST 留缝（M1c 前瞻，0c 2026-11-23）**：`HostPersist` 段有 1 处用 `engine` ⇒ M1c 给区 k 开
+  「仅 `save_outbox`」时会撞 fail-fast。⇒ 建常量时就把 PERSIST 拆成 `PERSIST_DB`（进程-only，
+  进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），并用**常量别名保持旧位等价**：
+  `const PERSIST: u32 = PERSIST_DB | PERSIST_OUTBOX;`（区 0 两位都开 ≡ 旧行为；同步更新
+  `RAN_SEGMENTS` 的精确相等断言与 `M0_MIN`/`M1_MIN` 的位集写法）。**函数体内真正的拆分留 M1c**。
+  **见证与期望集一律用别名 `PERSIST`（两位同置），禁止写半位**——否则 M1c 首次把 PERSIST 纳入区 k
+  时会出现「记两位、期望写半位」的假红；两位拆开后多一位或少一位仍必红。
+- **入口 fail-fast（`assert!`，release 也生效）**：
+  ```rust
+  if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
+      assert!(process.is_some(), "区 k 不得进入进程-only 段（PhaseSet 位集=0x{:05x}）", phases.0);
+  }
+  ```
+  理由：release 下静默读默认值比 panic 更糟。
+- **唯一收敛点 = 宏**（先断言、再解构，两条消息关键字一致）：
+  ```rust
+  macro_rules! proc_svc {
+      ($process:expr, $seg:expr) => {
+          $process.as_mut().expect(concat!("区 k 不得进入进程-only 段: ", $seg))
+      };
+  }
+  ```
+  5 个进程段入口各一行，且**每段只解构本段用到的字段**：
+  `let ProcessServices { db, engine, .. } = proc_svc!(process, "DB_POLL");`
+  ⇒ 39 处 reborrow 压到实际使用点；**禁止**为"少改"把字段从 Process 挪到 Shared——挪动必须重跑
+  0c 的用法统计，否则区 k 会拿到它不该有的状态。
+
+**两枚牙**（缺一不算）：
+1. **正向**：`M1a` 的位集与 `PROCESS_ONLY` 相交为空（`const` 断言或单测）——后续给区 k 加段时不会
+   误开进程段；
+2. **负向**：`phases` 含任一 `PROCESS_ONLY` 位且 `process = None` ⇒ **必须 panic**，`should_panic`
+   断言**入口断言的关键字**（与 `RAN_SEGMENTS` 段集断言互补：那条证「跑了的段对」，这条证「没跑
+   不该跑的段」）。
+- `ZoneState { host: HostLoop, save_outbox, alive }` 的整理仍在 `M1-0c'` 内（零行为变化）。
+- **六字段核验（保留为证据）**：`engine`/`guilds`/`merchant_book`/`castle_gates`/`castle_war_states`/
+  `sell_off_book` 的构造均无副作用（仅 Vec/BTreeMap/i64 字段）——这 6 个是「区 k 不碰的 !Send 状态」，
+  **不是** `ProcessServices` 全集可空构造的证据。
+
+**为什么不在 M1a 就做 0b（拆函数）**：方法化会把 5 个进程段变成 `fn phase_*(…, process: &mut
+ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` expect 全部消失**。⇒ b-2 是
+**过渡形态**，0b 的收益之一就是消除这 5 个 expect（已记入 §8.3）。
+
+### 8.3 将来若做 0b（方法化）的既有约束（保留，供按需拆段时用）
+- 方法行是缩进行、不匹配 `starts_with("fn ")` ⇒ **方法化本身不截断扫描窗口**；风险只在新增**顶层**
+  `fn`。但方法化会改**逐字行**（8.1 已列的 7 条 + 2 条 contains/count_seq 锚）⇒ 必须逐条同步牙。
+- 三条顺序锚牙（`let mut rec = tick_world_head_with_specials(`）在方法化后需**重锚到 `tick` 内的
+  `phase_*` 调用序列**（两层：段体内序 + 调用序），并按 opc-27 要求带两条变异红证。
+- `#[rustfmt::skip]` 已在 M1-0a 移除；若将来拆段，格式化由 rustfmt 正常接管。
+
+### 8.4 测试基建现状（**已落地的前置事实**，2026-11-23）
+
+> 由 `M1-0a` 修掉的测试脆弱点，**不要当成未结问题**。代码在分支 `card/m1-0a`，tip **`356c3ce7c`**
+> （`0a-5`；父链 `304f190d5`/`4f9e7e582`/`b9b809ef2`/`f5a9fae7f`，前者已随 master
+> `5db4689086e1` 合入；`0a-5` 待 opc-27 排期合并）。
+
+- **生产/测试切分（#3）**：`login_tail_production_call_is_wired_after_aoi` 不再裸 `find("mod tests {")`
+  ——改为**行级精确匹配**（断言 `trim()=="mod tests {"` 恰一行）+ 找不到即 `expect`（fail-closed），
+  并保留「全文件首个命中必须在生产区」两条断言（防注释漂移）。**这条现在的形态是防未来脆弱**，
+  不是补当时的错。
+- **字节切片（#1）**：`game-svr` 测试里两处窗口截取都改为字符边界安全——
+  `entry_telemetry_wiring::window()` **起点与终点都回退**、`aoi_shutdown_wiring::window()` 只回退终点
+  （起点来自 `find`）；其余 `SRC[i..]`/`SRC[i..next]` 的起点均来自 `find`，天然在字符边界。
+  **截至 `0a-5`，本仓 `game-svr` 测试无未处理的多字节裸切片**。
+- 同批修掉的既有脆弱点另两处：`g3_anchor_a5` 的折行字面量、`login_tail` 的缩进字面量（都不再钉某一种
+  折行/缩进）。
+- 零语义判据（0a-2）：去空白**并去掉 `,{}`** 后与 0a-1 逐字符相同（3,216,037 字符）。
+
+## 9. M1b 前置：`INBOUND` 拆段（A 方案，opc-27 2026-11-23 裁决；**不属 `M1-0c'` 范围**）
+
+`HostServices` 的进程-only 字段会在 `INBOUND` 段被大量使用（`guilds` 12、`npc_vars_base` 6、
+`merchant_book` 4、`gm_*` 各 7、`pwd_sessions` 9…）⇒ b-2 的「INBOUND 入口 `proc_svc!`」会让区 k
+一进 INBOUND 就 panic。**M1b 打开区 k 的 INBOUND 之前，必须先拆段**：
+
+1. `INBOUND` 原语义改名 **`INBOUND_PROCESS`**，新增 **`INBOUND_LOCAL`**；**保留别名
+   `INBOUND = INBOUND_LOCAL | INBOUND_PROCESS`**（区 0 两位同开 ≡ 旧行为，N=1 两树兜底）。
+2. **分类器唯一且穷尽**：命令种类用 `match` 显式归类，**禁止 `_ =>` 通配**——新增命令变体在归类前
+   编译不过（编译期 fail-closed，比任何清单都硬）。
+3. **分流点在区 k 排水口、派发前**：控制类（商店/点击 NPC/行会/城堡/GM/换服/handoff）转控制邮箱；
+   **不新造句柄**。
+4. **顺序契约（M1b 放行条件）**：按类分流会让同一玩家的后续**本地**命令越过先前已转发的**控制**
+   命令（两条队列）。M1b 设计必须先给出**每玩家 stop-and-wait**（有在飞控制命令时暂缓该玩家后续
+   本地命令直到回执），**或立 deviation 卡报 Owner**。
+5. `PROCESS_ONLY` 届时从 `INBOUND` 换成 `INBOUND_PROCESS`（同 `PERSIST` 别名手法，见证用别名）。
