@@ -423,7 +423,7 @@ impl CastleUnit {
     }
 }
 
-/// 复刻 `HUtil32.Round`（`src/OpenMir2/HUtil32.cs:131-134`）：
+/// 复刻 `HUtil32.Round`（`src/OpenMir2/HUtil32.cs:137-140`）：
 /// `(int)Math.Round(r, MidpointRounding.AwayFromZero)`。
 ///
 /// `Math.Round(NaN)` 返回 `NaN`，`(int)NaN` 在 .NET Core 未检查转换下为 `0`；Rust 的 `as` 同为 `0`。
@@ -479,7 +479,7 @@ pub fn door_state_text(door: &CastleUnit) -> &'static str {
     }
 }
 
-/// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:550-576`）：大小写不敏感的前缀匹配。
+/// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:556-582`）：大小写不敏感的前缀匹配。
 ///
 /// oracle 语义：`compn = targ.Length`（UTF-16 码元数）；`compn <= 0`（空 `targ`）⇒ `false`；
 /// `src.Length < compn` ⇒ `false`；否则对 `i in 0..compn` 逐码元
@@ -3331,7 +3331,7 @@ mod tests {
     }
 
     /// ⑧-8 reviewer-5 O-1：`compare_lstr` 必须与 oracle `HUtil32.CompareLStr`
-    /// （`src/OpenMir2/HUtil32.cs:550-576`）同语义，**且对任意 UTF-8 输入都不 panic**。
+    /// （`src/OpenMir2/HUtil32.cs:556-582`）同语义，**且对任意 UTF-8 输入都不 panic**。
     ///
     /// 旧实现 `src[..targ.len()].eq_ignore_ascii_case(targ)` 会对落在多字节 `char` 中间的
     /// 字节边界切片 ⇒ Rust panic；oracle 逐 UTF-16 码元比较不会抛 ⇒ 这是移植偏差，不是
