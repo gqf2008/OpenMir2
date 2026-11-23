@@ -71,7 +71,7 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B4 | `world.rs` `expire_player_run_state` | 玩家 RunState 过期 | ✅ | filter：`race==PLAY && !e.ghost` |
 | B5 | `world.rs` `check_dup_obj` | 顶号检测 | ✅ | filter：`race==PLAY && !e.ghost`（顶号检测不拿 ghost 当「在线」） |
 | B6 | `world.rs` `verify_players_map_time` | 玩家图时效 | ✅ | filter：`race==PLAY && !e.ghost` |
-| B7 | `world.rs` `expire_hitters` | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
+| B7 | `world.rs` `expire_hitters_stage_system`（`SimExpireHitters` 段；旧名 `World::expire_hitters`） | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
 | B8 | `world.rs` `settle_deaths` | 死亡结算 | **⚠️ 需补过滤** | filter 只有 `(hp==0 || die_called) && !death_settled && race 匹配`，**无 ghost 门** ⇒ M-3 后「ghost 且 `die_called`」会被结算（掉落/经验/退组），而 oracle 的 ghost 不 `Run` ⇒ 不会走到 `Die()` |
 | B9 | `monai.rs` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径。**M-3 落地后（F1 修复）**：ghost 由 ① 网关 `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost（窗口长度见 §6 的时间口径）；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
 | B10 | `monai.rs` `monster_ai_tick` | 怪物 AI | ✅ | filter：`race > PLAY && merchant.is_none() && npc.is_none() && !e.ghost` |
