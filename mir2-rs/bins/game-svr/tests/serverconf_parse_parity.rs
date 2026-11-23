@@ -69,10 +69,25 @@ fn build_probe() -> PathBuf {
     // **每次都调 `dotnet build`（增量）**：只要探针源变了（例如以后加键），MSBuild 会重编；
     // 不能 `if exe.exists() { return }`——那会在改了 `Program.cs` 却没删 exe 时拿**旧探针**验旧键集，
     // 测试照样绿（假绿）。增量构建通常 1 秒内，正确性优先。
+    //
+    // **C10（2026-11-23）**：`-nodeReuse:false` + `MSBUILDDISABLENODEREUSE=1` 只关 **MSBuild node**；
+    // Roslyn 的 **VBCSCompiler** 共享编译服务器仍会留下（实测 15:04 那次就剩它 1 个）⇒ 再加
+    // `-p:UseSharedCompilation=false` 关共享编译、`DOTNET_CLI_USE_MSBUILD_SERVER=0` 关 MSBuild
+    // server（dotnet 7+）。目标：跑完 `Get-Process dotnet` 计数为 0（C10 的核心判据）。
     let out = Command::new("dotnet")
         .arg("build")
         .arg(&csproj)
-        .args(["-c", "Release", "-v", "q", "--nologo"])
+        .args([
+            "-c",
+            "Release",
+            "-v",
+            "q",
+            "--nologo",
+            "-nodeReuse:false",
+            "-p:UseSharedCompilation=false",
+        ])
+        .env("MSBUILDDISABLENODEREUSE", "1")
+        .env("DOTNET_CLI_USE_MSBUILD_SERVER", "0")
         .output()
         .expect("启动 `dotnet build` 失败（需要 dotnet 在 PATH）");
     assert!(
@@ -86,6 +101,31 @@ fn build_probe() -> PathBuf {
         "dotnet build 后仍找不到探针 exe：{}",
         exe.display()
     );
+    // **C10（flake 根因）**：探针的 `SystemShare` 静态构造会对 `AppContext.BaseDirectory`
+    // （= 探针 exe 所在目录）下五个默认 conf 调 `ConfigFile.Load()`；文件**缺失**时它做
+    // **独占** `File.Create` ⇒ 两个探针进程并发时后者抛
+    // `IOException("used by another process")` → `TypeInitializationException`。
+    // 这里在单例构建（`OnceLock` 串行）里先把五个文件建好（空文件即可：`Load()` 对已存在文件
+    // 只按 `FileShare.ReadWrite` 读）；之后所有探针都走 `File.Exists == true` 分支，不再有
+    // 独占创建。（名字以 `ConfConst` 为准：server/string/exps/global/setting。）
+    //
+    // **等价性**：`Load()` 对「已存在但为空」是 `ReadLine()==null` → 直接 `Close/Dispose`，
+    // 缓存保持空；与「缺失 ⇒ `File.Create().Close()` 后 return」的**解析结果完全一致**（所有键
+    // 都回落缺省）。`LoadConfig()` 里的 `Write*` 只改内存缓存、**不调 `Save()`** ⇒ 不会改写任何
+    // 被传进来或预建的 conf 文件。
+    let exe_dir = exe.parent().expect("探针 exe 必有父目录");
+    for name in [
+        "server.conf",
+        "string.conf",
+        "exps.conf",
+        "global.conf",
+        "setting.conf",
+    ] {
+        let p = exe_dir.join(name);
+        if !p.exists() {
+            std::fs::File::create(&p).expect("预建探针默认 conf 失败（C10）");
+        }
+    }
     exe
 }
 
@@ -112,7 +152,12 @@ fn parse_probe_output(text: &str) -> Vec<i32> {
     v
 }
 
+/// **C10**：串行化探针进程——即便预建的默认 conf 被外部清理/构建目录被重置，也保证同一时刻
+/// 只有一个探针可能走 `File.Create` 分支（两个 `#[test]` 在同一测试进程内并行跑，共享这把锁）。
+static PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn csharp_values(conf: &Path) -> Vec<i32> {
+    let _guard = PROBE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let exe = ensure_probe();
     let out = Command::new(&exe)
         .arg(conf)
