@@ -125558,7 +125558,14 @@ mod zone_map_data_tests {
     }
 
     fn wall_fixture(tag: &str) -> (std::path::PathBuf, mir2_envir::MapRegistry) {
-        let base = std::env::temp_dir().join(format!("zone_map_data_{tag}_{}", std::process::id()));
+        // **夹具竞态修复**：三个用例共用 tag `block` ⇒ 同名临时目录；`cargo test` 并行时
+        // 一个用例的 `remove_dir_all` 会把另一个的 `Map/0.map` 删掉 ⇒ `cells=0` 假红
+        // （实测 `zone_k_world_blocks_real_wall_cells_like_zone_0` 全量跑红、单跑绿）。
+        // 每次调用取独立序号，目录不再互相覆盖。
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("zone_map_data_{tag}_{}_{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         write_wall_map_fixture(&base);
         let reg = fixture_registry(&base);
