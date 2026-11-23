@@ -1448,56 +1448,102 @@ fn handle_zone_command(
         displays,
         online,
         ground_sessions,
+        saves,
         ..
     } = host;
+    // 测试包装器：只读上下文取 `SharedServices::for_test()` 的区副本（与生产区 k 同源形态）。
+    let shared = SharedServices::for_test();
+    let env = ZoneCmdEnv {
+        enter_cfg: &shared.enter_cfg,
+        colors: &shared.colors,
+        registry: shared.registry.as_ref(),
+    };
     handle_zone_command_on(
         world,
         displays,
         online,
         ground_sessions,
+        saves,
         gates,
         chr_name,
         socket,
         cmd,
+        None,
+        &env,
     );
+}
+
+/// **M1b 第 5b 步**：区 k 命令处置的**只读上下文**。
+///
+/// 三样都是 `SharedServices` 的**区副本/同源只读借用**（与区 0 同一份语义）：
+/// `enter_cfg`（catalog/魔法表/配置）、`colors`、`registry`。**不含任何进程可变态**——
+/// 需要进程态的命令族不得在这里硬接（设计稿 §4 的 A9 类清单）。
+struct ZoneCmdEnv<'a> {
+    enter_cfg: &'a EnterConfig,
+    colors: &'a MsgColors,
+    registry: Option<&'a mir2_envir::MapRegistry>,
 }
 
 /// **M1b 第 3 步**：[`handle_zone_command`] 的**唯一处置实现**（区 k 循环顶与 `INBOUND_LOCAL`
 /// 段共用；**不得复刻**）。行为与拆段前逐字节相同。
+///
+/// **M1b 第 5b 步**：按族分派到**与区 0 同一函数**（hit 已接；spell/say 随本片后续提交接入）。
+/// `saves`/`tail`/`env` 是本片为三族接线新增的入参（`saves` 属**落地区**的存档表；
+/// `env` 只含只读上下文）。
 #[allow(clippy::too_many_arguments)]
 fn handle_zone_command_on(
     world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &mut OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    _saves: &mut std::collections::HashMap<String, SavedHuman>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
     socket: i32,
     cmd: &CommandMessage,
+    _tail: Option<&str>,
+    env: &ZoneCmdEnv<'_>,
 ) {
-    if !movewire::is_move_command(cmd.ident) {
-        perf_counters::note_zone_cmd_unsupported(cmd.ident);
+    if movewire::is_move_command(cmd.ident) {
+        if online
+            .find_by_chr(chr_name)
+            .is_some_and(|e| world.entities.get(e.actor_id).is_none())
+        {
+            perf_counters::note_handoff_move_after_transfer_dropped();
+        }
+        handle_move_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.tag,
+            chr_name,
+            socket,
+            online,
+            ground_sessions,
+            world,
+            displays,
+            gates,
+            None,
+        );
         return;
     }
-    if online
-        .find_by_chr(chr_name)
-        .is_some_and(|e| world.entities.get(e.actor_id).is_none())
-    {
-        perf_counters::note_handoff_move_after_transfer_dropped();
+    // **M1b 第 5b 步 · B1**：攻击族——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_hit_cmd`）。
+    if game_svr::attackwire::is_hit_ident(cmd.ident) {
+        let _ = handle_hit_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.tag,
+            chr_name,
+            socket,
+            online,
+            world,
+            displays,
+            ground_sessions,
+            gates,
+            &env.enter_cfg.catalog,
+        );
+        return;
     }
-    handle_move_cmd(
-        cmd.ident,
-        cmd.recog,
-        cmd.tag,
-        chr_name,
-        socket,
-        online,
-        ground_sessions,
-        world,
-        displays,
-        gates,
-        None,
-    );
+    perf_counters::note_zone_cmd_unsupported(cmd.ident);
 }
 
 /// **L2-5 ③ 段 1c**：把各区线程的断线存档请求发进进程级 DB 链（区 0 每 tick 调一次）。
@@ -36046,6 +36092,12 @@ impl HostLoop {
                 //（`tick_no` 就是本 tick 早先从 `*ticks` 读的同一值；`ticks` 要到 B 段的
                 // `HostFrames` 才自增）。**不要**把本段挪到 `zone_tick_top` 之前（那里是上一 tick）。
                 let a6_tick = tick_no;
+                // **M1b 第 5b 步**：区 k 命令处置的只读上下文（`SharedServices` 的区副本/同源借用）。
+                let env = ZoneCmdEnv {
+                    enter_cfg: &*enter_cfg,
+                    colors: &*colors,
+                    registry: registry.as_ref(),
+                };
                 let _ = execute_local_budget(
                     buffer,
                     pending_local,
@@ -36066,12 +36118,13 @@ impl HostLoop {
                                 chr_name,
                                 socket,
                                 cmd,
+                                tail,
                                 ..
                             } = ev
                             {
                                 handle_zone_command_on(
-                                    world, displays, online, sessions, gates, chr_name, *socket,
-                                    cmd,
+                                    world, displays, online, sessions, saves, gates, chr_name,
+                                    *socket, cmd, tail.as_deref(), &env,
                                 );
                             }
                         };
@@ -125508,6 +125561,69 @@ mod zone_command_tests {
             "非移动命令必须计入 zone_cmd_unsupported（④b 余量；只断言增量，避免并行测试的计数器互踩）"
         );
         assert_eq!(pos_of(&state, actor), before_pos, "非移动命令不得移动实体");
+    }
+
+    /// **M1b 第 5b 步 · B1 牙 `zone_k_hit_command_is_dispatched_with_gd_ack`**：区 k 的 `CM_HIT`
+    /// 必须派发到**与区 0 同一** `handle_hit_cmd`，并且**有可观测副作用**（只断言"不再计
+    /// unsupported"会被"分支里直接 return"骗过）：受理成功时回自身明文 `+GD/<tick>`。
+    #[test]
+    fn zone_k_hit_command_is_dispatched_with_gd_ack() {
+        let (mut state, actor) = landed("cmd_hit", zone::ZoneId::new(1));
+        // 夹具只补**单测需要的表**（不改变被测分支）：无 `Server.conf` 时 `finish_login` 不建
+        // 会话表；生产形态下这两表由登录建立，这里补表只为与生产一致（直击本身不读它们）。
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let (x, y) = pos_of(&state, actor);
+        // 目标：正东 1 格的怪物（AC=0、speed_point=0 ⇒ 护甲与闪避都无随机支）。
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), x + 1, y);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+        mon.hp = 500;
+        mon.max_hp = 500;
+        let target = state.host.world.add_entity(mon);
+        state.host.world.tick(); // 让怪物进图
+        {
+            let hero = state.host.world.entities.get_mut(actor).expect("hero");
+            hero.ai.dir = 2; // 正东（Direction：2 = East）
+            hero.vitals.dc = 5; // power 下界 5 ⇒ 对 AC 0 必伤害
+            hero.vitals.hit_point = 5; // ≥ 目标 speed_point(0) ⇒ 必命中
+        }
+        let (gates, mut rx) = gates_and_rx();
+        let before = perf_counters::zone_cmd_unsupported();
+        let hit_ident = game_svr::attackwire::HIT_IDENTS[0];
+        // `Recog` = **攻击者自身位置**（`at_self` 门）；`Tag` = 方向。
+        handle_zone_command(&mut state, &gates, "hero", 7, &cmd(hit_ident, x, y, 2));
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            before,
+            "攻击族不得再计 zone_cmd_unsupported（已接线）"
+        );
+        // `+GD/<tick>` 走**短包**支（`SimToGate::SendRaw`；`send_good_tick`），不是 12B 帧。
+        let mut saw_gd = false;
+        while let Ok(ev) = rx.try_recv() {
+            let payload = match ev {
+                SimToGate::SendRaw { payload, .. } => payload,
+                SimToGate::SendFrame { body, .. } => body,
+                _ => continue,
+            };
+            if payload.starts_with(b"+GD/") {
+                saw_gd = true;
+            }
+        }
+        assert!(saw_gd, "攻击受理必须回 `+GD/<tick>`（可观测副作用）");
+        // **强断言**：world tick 的攻击结算必须有 `(hero → 目标)` 且 `hit && damage>0 && !killed`
+        // ⇒ 目标被真正选中并打实——"空砍"与"接线成功"在这里分得开（`SM_STRUCK` 出自同一记录）。
+        let rec = state.host.world.tick();
+        let out = rec
+            .attacks
+            .iter()
+            .find(|(a, t, _)| *a == actor && *t == target)
+            .map(|(_, _, o)| *o);
+        assert!(
+            out.is_some_and(|o| o.hit && o.damage > 0 && !o.killed),
+            "目标必须被选中并打实（hit && damage>0 && !killed）；实际 {out:?}"
+        );
     }
 
     #[test]
