@@ -993,6 +993,9 @@ struct ZoneHost {
     handoff_boxes: Vec<handoff::HandoffMailbox>,
     /// **L2-5 ⑤**：跨区收件人帧邮箱（`slicing && mirror` 才构造；否则 `None` ⇒ 零参与）。
     cross_mailboxes: Option<Arc<cross_zone_frames::CrossZoneMailboxes>>,
+    /// **M1b 第 4 步（A6）**：每区一个**有界**控制邮箱（下标 = 区号；区 0/N=1 ⇒ 空表）。
+    /// 区 k 在 `INBOUND_LOCAL` 段内置位时推入（不持区锁），区 0 每 tick **按区号升序** drain。
+    control_inboxes: Vec<Arc<std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>>,
 }
 
 impl ZoneHost {
@@ -2010,6 +2013,8 @@ fn spawn_minimal_zone(
     map_names: Arc<Vec<String>>,
     // **L2-5 ③ 段 2（接线）**：handoff 邮箱（切片关 ⇒ 空表 ⇒ 不构造运行时）。
     handoff_boxes: Vec<handoff::HandoffMailbox>,
+    // **M1b 第 4 步（A6）**：本区控制邮箱（与 `ZoneHost.control_inboxes[zone]` 同一实例）。
+    control_inbox: Arc<std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>,
     // **M1a**：区 k 的服务上下文（由 `run_inner` 逐区构造：`registry`/`enter_cfg`/
     // `shard_runtime` 为副本、`zone_host` 共享 `Arc`；§10「其余各区副本相同、只读」）。
     zone_shared: SharedServices,
@@ -2093,6 +2098,7 @@ fn spawn_minimal_zone(
                     inbound_local_filled: 0,
                     inbound_local_fill_hit: false,
                     inbound_outstanding: Some(Arc::clone(&outstanding)),
+                    control_inbox: Some(Arc::clone(&control_inbox)),
                 };
                 // 区 k 的节拍（与区 0 同一 200ms；`HostLoop::for_zone` 已写同值）。
                 let tick_dur = std::time::Duration::from_millis(
@@ -2104,8 +2110,10 @@ fn spawn_minimal_zone(
                     std::collections::HashMap::new();
                 // **M1b 第 3 步（P1）**：跨 tick 的入站缓冲 —— **tick 之间必在 scratch**、
                 // `TickIo.inbound_local_buffer` 为空（两条 `debug_assert` 守）。
-                let mut pending_inbound: std::collections::VecDeque<GateEvent> =
+                // **第 4 步（A6）**：元素带**到达序号**（`fill` 时分配、本线程单调递增）。
+                let mut pending_inbound: std::collections::VecDeque<SeqEvent> =
                     std::collections::VecDeque::new();
+                let mut next_seq: u64 = 0;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     // **L2-5 ⑤**：本 tick 的跨区帧 `src_tick`/`seq` 起点（事件处理前先置；
                     // A 的 `WORLD_HEAD` 内还会按同一 tick_no 再置一次，值相同）。
@@ -2130,6 +2138,7 @@ fn spawn_minimal_zone(
                         &zone_io.ev_ctl_rx,
                         &mut pending_inbound,
                         pull_cap,
+                        &mut next_seq,
                         |ev| match ev {
                             GateEvent::Closed {
                                 index,
@@ -2166,6 +2175,24 @@ fn spawn_minimal_zone(
                                 map_names.as_slice(),
                             );
                         }
+                    }
+                    // **M1b 第 4 步（A6）· 决策**（tick 顶**一次短锁**：**只搬队列、不执行**）：
+                    // `control_pending == 0`（区 0 已执行完）**或**超时（`tick - first_tick >= 2`）⇒
+                    // 该玩家 `deferred_local` 整体搬入本区全局有序 FIFO `pending_local`
+                    //（执行序只看**到达序号**；遍历序/`chr_name` 序**不影响**执行序）。
+                    // 超时另做：`epoch += 1` + 计数清零（旧请求之后执行时 epoch 不匹配 ⇒ 不减计数）
+                    // + `zonek_control_wait_timeout +1`；**仍放行**（降级不永卡）。
+                    {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let ZoneState { host, .. } = &mut *st;
+                        let HostLoop {
+                            ground_sessions,
+                            pending_local,
+                            ..
+                        } = host;
+                        let _ = a6_decide(ground_sessions, pending_local, tick, zone_id);
                     }
                     // tick 顶（无锁）：节拍截止、段跨值、屏障编排。
                     let next = std::time::Instant::now() + tick_dur;
@@ -2264,11 +2291,37 @@ fn spawn_minimal_zone(
                 }
                 let mut discarded = 0u64;
                 while let Some(ev) = pending_inbound.pop_front() {
-                    if let GateEvent::Command { .. } = &ev {
+                    if let GateEvent::Command { .. } = &ev.ev {
                         outstanding.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                         perf_counters::note_zonek_inbound_pending_discarded();
                         discarded += 1;
                     }
+                }
+                // **M1b 第 4 步（A6）· P3**：`pending_local` / `deferred_local` 残留同样清点
+                //（不静默；与上面同一列 `zonek_inbound_pending_discarded`）。
+                let a6_left = {
+                    let mut st = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let ZoneState { host, .. } = &mut *st;
+                    let mut left = host.pending_local.len();
+                    for sg in host.ground_sessions.values_mut() {
+                        left += sg.a6.deferred_local.len();
+                    }
+                    host.pending_local.clear();
+                    for sg in host.ground_sessions.values_mut() {
+                        sg.a6.deferred_local.clear();
+                    }
+                    left
+                };
+                for _ in 0..a6_left {
+                    perf_counters::note_zonek_inbound_pending_discarded();
+                }
+                if a6_left > 0 {
+                    glog!(
+                        "WRN",
+                        "切片区 {zone_id} 关服残留：丢弃 {a6_left} 条 A6 暂缓命令（pending_local/deferred_local；zonek_inbound_pending_discarded）"
+                    );
                 }
                 let left = outstanding.load(std::sync::atomic::Ordering::Relaxed);
                 if discarded > 0 || left > 0 {
@@ -3502,6 +3555,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     zone_states,
                     handoff_boxes,
                     cross_mailboxes: cross_mailboxes.clone(),
+                    // **M1b 第 4 步（A6）**：每区一份控制邮箱（下标 = 区号），
+                    // `spawn_minimal_zone` 的调用点按区号取
+                    // （stub 区也取，故**无条件构造**；非切片形态的 stub 区不会推入任何请求）。
+                    control_inboxes: (0..zone_count)
+                        .map(|_| Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())))
+                        .collect(),
                 });
                 // demux：原两条 gate 入站通道 → 每区一对通道。
                 let template_normal = ev_rx_template.take().expect("多区时原普通通道只给 demux");
@@ -3537,6 +3596,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         map_sizes.len(),
                         Arc::clone(&zone_map_names),
                         host.handoff_boxes.clone(),
+                        // **M1b 第 4 步（A6）**：本区控制邮箱（`INBOUND_LOCAL` 段内在飞置位用）。
+                        Arc::clone(&host.control_inboxes[index]),
                         // **M1a**：区 k 的服务上下文（`registry`/`enter_cfg`/`shard_runtime`
                         // 为副本、`zone_host` 共享 `Arc`）。`shard_runtime` 的计数分叉按 A8 登记。
                         SharedServices {
@@ -4337,6 +4398,269 @@ fn handle_say_with_saves(
         line
     );
     (Vec::new(), Vec::new())
+}
+
+/// **M1b 第 4 步（A6）**：`handle_say_with_saves` 的完整宿主上下文（玩家侧 + 进程侧）。
+///
+/// 两条调用路径只是**字段来源**不同：
+/// - 区 0 `INBOUND_PROCESS` 的普通 `CM_SAY`：玩家侧取区 0 `HostLoop`、进程侧取 `proc_svc!`；
+/// - 区 0 tick 的**控制邮箱 drain**（GM `@` 的 T+1 执行）：玩家侧取**区 k** `ZoneState.host`
+///   （锁内）、进程侧仍取 `proc_svc!`。
+struct SayEnv<'a> {
+    world: &'a mut mir2_world_bevy::World,
+    displays: &'a mut downlink::DisplayTable,
+    online: &'a OnlineRegistry,
+    ground_sessions: &'a mut std::collections::HashMap<String, SessionGround>,
+    saves: &'a mut std::collections::HashMap<String, SavedHuman>,
+    gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    enter_cfg: &'a EnterConfig,
+    colors: &'a MsgColors,
+    guilds: &'a mut mir2_world_bevy::GuildManager,
+    guild_cfg: &'a mir2_world_bevy::GuildConfig,
+    guild_store: Option<&'a mir2_data::guild::GuildStore>,
+    castle_war_states: &'a std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    pending_gm_castle_broadcasts: &'a mut Vec<String>,
+    pwd_sessions: &'a mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    reconnect_pending: &'a mut Vec<ReconnectPending>,
+    mon_gen_host: &'a mut Option<game_svr::mongen::MonGenHost>,
+    item_number: &'a mut i32,
+    item_number_ex: &'a mut i32,
+    registry: Option<&'a mir2_envir::MapRegistry>,
+    party_cfg: &'a mir2_world_bevy::PartyConfig,
+    gm_filter_word: &'a std::cell::Cell<bool>,
+    gm_mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
+    gm_spirit_mutiny_tick: &'a std::cell::Cell<i64>,
+}
+
+/// **M1b 第 4 步（A6）**：`CM_SAY`（私聊/频道/普通说话/`@` GM 命令 + `pending_*` 落地）的
+/// **唯一实现**——原 `INBOUND_PROCESS` 支 `CM_SAY` 分支体逐行搬入，仅把裸上界换成 [`SayEnv`]。
+///
+/// **A9 `form (d)` 三条硬边界**（本函数**只碰入参**）：
+/// - 不读 `ZoneHost` 其他区、不回调区 0 `HostLoop`（入参里没有 `&HostLoop`）；
+/// - 进程级字段一律是调用方持有的 `&mut`/`&`（`proc_svc!` 线程局部），本函数不加任何互斥；
+/// - 不碰 DB：存档仍只由调用方/世界侧经 `save_outbox` 异步出口发出。
+fn handle_say_event(env: SayEnv<'_>, chr_name: &str, socket: i32, tail: Option<&str>) {
+    let host = ChatHost {
+        online: env.online,
+        world: &*env.world,
+        gates: env.gates,
+        guilds: &*env.guilds,
+        guild_msg_cfg: &env.enter_cfg.guild_msg_cfg,
+        party_cfg: env.party_cfg,
+        strings: &env.enter_cfg.string_conf,
+        colors: env.colors,
+        gm_cfg: gmcmd::GmConfig {
+            lock_human_login: env.enter_cfg.lock_human_login,
+            spirit_mutiny_time: env.enter_cfg.spirit_mutiny_time,
+            ..gmcmd::GmConfig::default()
+        },
+        can_shout_level: env.enter_cfg.can_shout_msg_level,
+        registry: env.registry,
+        filter_word: env.gm_filter_word,
+        mission: env.gm_mission,
+        spirit_mutiny_tick: env.gm_spirit_mutiny_tick,
+        displays: &*env.displays,
+        catalog: &env.enter_cfg.catalog,
+    };
+    // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
+    // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
+    // `MsgQueue` 命令后才排水 ⇒ 203 必须先于 100（复审 important-2）。
+    let (gm_deferred, gm_frames) = handle_say_with_saves(
+        &host,
+        env.ground_sessions,
+        env.saves,
+        chr_name,
+        socket,
+        tail,
+    );
+    // **GM 管理态写穿（卡 `openmir2-gm-admin-mode-entity-seam`）**：
+    // `@1/@2/@3/@Rest/@AttackMode` 在命令体里翻转的是 `GmSession` 镜像
+    // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
+    // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
+    // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
+    apply_pending_gm_entity(env.ground_sessions, chr_name, env.world);
+    // **卡 `openmir2-gm-target-state-write`**：`@Level0` 的 `HasLevelUp(1)`
+    // 语义（MaxExp + 重算 + `RM_LEVELUP` 三帧）在同一事件内落地。
+    apply_pending_level_up(
+        env.ground_sessions,
+        chr_name,
+        &env.enter_cfg.catalog,
+        &env.enter_cfg.need_exps,
+        env.world,
+        env.online,
+        env.gates,
+    );
+    // **卡 `openmir2-gm-impl-smake`**：`@改属性` 的佩戴位写 + 重算 +
+    // `SM_UPDATEITEM(203)`（oracle 命令体内当场发 ⇒ 先于蓝字 100）。
+    if let Some(body) = apply_pending_gm_use_item(
+        env.ground_sessions,
+        chr_name,
+        env.world,
+        &env.enter_cfg.catalog,
+        env.online,
+        env.gates,
+    ) {
+        if let Some(e) = env.online.find_by_chr(chr_name) {
+            if let Some(tx) =
+                route_to_gate(env.gates, e.gate_idx, e.socket, "GM 改属性 SM_UPDATEITEM")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
+    }
+    // **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 清目标背包 +
+    // `SM_DELITEMS(709)`（发给**目标**，oracle 同一事件内当场发）。
+    if let Some((target, body)) =
+        apply_pending_gm_clear_bag(env.ground_sessions, chr_name, &env.enter_cfg.catalog)
+    {
+        if let Some(e) = env.online.find_by_chr(&target) {
+            if let Some(tx) =
+                route_to_gate(env.gates, e.gate_idx, e.socket, "GM 清理垃圾 SM_DELITEMS")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
+    }
+    // **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OnHorse`/
+    // `@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`
+    // 在同一事件内落地（oracle `SendRefMsg` 立即 ⇒ 先于延后的 SysMsg）。
+    apply_pending_gm_feature_changed(
+        env.ground_sessions,
+        chr_name,
+        &env.enter_cfg.catalog,
+        env.world,
+        env.online,
+        env.gates,
+        env.enter_cfg.shop.send_ref_msg_range,
+    );
+    // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后）。
+    apply_pending_gm_mountride(
+        env.ground_sessions,
+        chr_name,
+        env.world,
+        env.online,
+        env.gates,
+        env.displays,
+        env.enter_cfg.shop.send_ref_msg_range,
+    );
+    // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
+    // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
+    // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
+    // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
+    // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
+    // drain 置位并发帧（与 oracle 同序）。
+    // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
+    // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
+    if gm_drain_gate(tail) {
+        if let Some(addr) = env
+            .ground_sessions
+            .get_mut(chr_name)
+            .and_then(|sg| sg.gm.pending_reconnect.take())
+        {
+            if let Some(e) = env.online.find_by_chr(chr_name) {
+                env.reconnect_pending.push(ReconnectPending {
+                    gate_idx: e.gate_idx,
+                    socket: e.socket,
+                    chr_name: e.chr_name.clone(),
+                    msg: addr.into_bytes(),
+                });
+            }
+        }
+    }
+    // **族 X2 批 B**：目标侧副作用收口（vv杀死/复活/VV给予权限/
+    // ClearCopyItem/清除仓库密码），命令体纯 + pending_* 同事件落地。
+    apply_pending_gm_target_ops(
+        env.ground_sessions,
+        env.pwd_sessions,
+        env.saves,
+        env.world,
+        &env.enter_cfg.catalog,
+        magic_cfg_of(env.enter_cfg),
+        env.displays,
+        env.online,
+        env.gates,
+        env.colors,
+        env.enter_cfg.shop.send_ref_msg_range,
+        chr_name,
+    );
+    // **族 M（卡 `openmir2-gm-family-m-spawn-make`）**：刷怪/造物落地
+    // （同事件内；`@怪`/`@ReCallMobEx`/`@MobPlace` 的 `RegenMonsterByName`
+    // 与世界同一条 RNG 流、`@GiveMine` 的 `Random(18)+3`、`@s` 的
+    // `Random(MakeRandomAddValue)` 与 `GetItemNumberEx`）。
+    if gm_drain_gate(tail) {
+        apply_pending_gm_m_commands(
+            env.ground_sessions,
+            chr_name,
+            env.world,
+            env.displays,
+            env.mon_gen_host.as_mut(),
+            env.registry,
+            &env.enter_cfg.mon_gen.table,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.pet_cfg,
+            env.online,
+            env.gates,
+            env.colors,
+            env.enter_cfg.test_server,
+            env.enter_cfg.make_random_add_value,
+            env.item_number,
+            env.item_number_ex,
+        );
+        // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
+        // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
+        apply_pending_gm_castle_commands(
+            env.ground_sessions,
+            chr_name,
+            env.world,
+            env.displays,
+            env.saves,
+            env.castle_war_states,
+            env.online,
+            env.gates,
+            env.pending_gm_castle_broadcasts,
+        );
+        // **族 W**：行会 4 条的宿主落地（GuildMgr 写 + 行会文件/列表落盘 +
+        // SS_205/206/207 单服登记 + 750/42/100 帧序）。
+        apply_pending_gm_guild_commands(
+            env.ground_sessions,
+            chr_name,
+            env.world,
+            env.guilds,
+            env.guild_cfg,
+            env.guild_store,
+            &env.enter_cfg.guild_sections,
+            i32::from(env.enter_cfg.server_index),
+            env.displays,
+            env.online,
+            env.gates,
+            env.colors,
+            env.world.clock_ms as i32,
+            env.enter_cfg.shop.send_ref_msg_range,
+        );
+    }
+    // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
+    // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
+    if !gm_deferred.is_empty() || !gm_frames.is_empty() {
+        if let Some(e) = env.online.find_by_chr(chr_name) {
+            for (f, b, text) in &gm_deferred {
+                send_gm_sysmsg(env.gates, e, *f, *b, text);
+            }
+            for body in gm_frames {
+                if let Some(tx) = route_to_gate(env.gates, e.gate_idx, e.socket, "GM 命令帧") {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: e.socket,
+                        body,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// `ProcessSayMsg` 的 `!` 支（`PlayObject.Chat.cs:163-208`）。
@@ -24432,6 +24756,12 @@ mod perf_counters {
     static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的三个**降级**计数——
+    // 只区 k、每 tick 增量、**不设 `*_all_zones` 派生列**（区 0 无同名语义）。
+    // 三者都是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）。
+    static ZONEK_CONTROL_DEFER_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_CONTROL_WAIT_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_CONTROL_MAILBOX_REJECTED: AtomicU64 = AtomicU64::new(0);
     /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
     /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
     pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
@@ -24867,9 +25197,11 @@ mod perf_counters {
 
     // ---- **M1b 第 3 步**：区 k（slicing）入站有界化计数（全部区 k 实例求和；区 0 三列一字不动）----
 
-    /// 区 k 段内执行条数（每条 Command 恰 +1；`ev` 只用于将来按类拆分，当前不读）。
+    /// 区 k 段内**被消费并作出处置**的 Command 条数（§6 覆盖口径：含 `Unsupported` 归属、
+    /// 含邮箱满丢弃、含溢出就地执行；**不是“成功执行条数”**）。`A6` 起不再收 `ev`
+    /// （原参数未读；处置分类由段内回调在取出前算好）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_drained(from_carry: bool, _ev: &super::GateEvent) {
+    pub(crate) fn note_zonek_inbound_drained(from_carry: bool) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
             if from_carry {
@@ -24911,6 +25243,32 @@ mod perf_counters {
         }
     }
 
+    // ---- **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的降级计数 ----
+
+    /// `deferred_local` 溢出事件次数（`== 上限 8` 再来 ⇒ **每次溢出 +1**，不是条数）。
+    #[inline]
+    pub(crate) fn note_zonek_control_defer_overflow() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CONTROL_DEFER_OVERFLOW.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 超时**判定解除**的次数（每次超时判定 +1；**不是**已执行条数）。
+    #[inline]
+    pub(crate) fn note_zonek_control_wait_timeout() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CONTROL_WAIT_TIMEOUT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 控制邮箱满 ⇒ 丢弃的**条数**。
+    #[inline]
+    pub(crate) fn note_zonek_control_mailbox_rejected() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CONTROL_MAILBOX_REJECTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// `#[cfg(test)]` 读点（各一）。
     #[cfg(test)]
     pub(crate) fn zonek_inbound_drained() -> u64 {
@@ -24940,6 +25298,18 @@ mod perf_counters {
     pub(crate) fn zonek_inbound_unsupported() -> u64 {
         ZONEK_INBOUND_UNSUPPORTED.load(Ordering::Relaxed)
     }
+    #[cfg(test)]
+    pub(crate) fn zonek_control_defer_overflow() -> u64 {
+        ZONEK_CONTROL_DEFER_OVERFLOW.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_control_wait_timeout() -> u64 {
+        ZONEK_CONTROL_WAIT_TIMEOUT.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_control_mailbox_rejected() -> u64 {
+        ZONEK_CONTROL_MAILBOX_REJECTED.load(Ordering::Relaxed)
+    }
 
     /// **M1b 第 3 步（r6）**：**5 个**派生列的**纯函数**（写行与单测共用同一份数学）。
     ///
@@ -24958,7 +25328,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -25081,6 +25451,10 @@ mod perf_counters {
             zk[3],
             zk[4],
             zk[5],
+            // **M1b 第 4 步（A6）**：3 个降级列（仅区 k；N=1 恒 0；无派生列）。
+            ZONEK_CONTROL_DEFER_OVERFLOW.swap(0, Ordering::Relaxed),
+            ZONEK_CONTROL_WAIT_TIMEOUT.swap(0, Ordering::Relaxed),
+            ZONEK_CONTROL_MAILBOX_REJECTED.swap(0, Ordering::Relaxed),
             // **5 个**派生列（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
             // `inbound_carry_all_zones` 按 r6 已删（混合分母：区 0 按事件、区 k 按命令）。
             dv[0],
@@ -26365,6 +26739,9 @@ struct SessionGround {
     /// `AllowGuild` / `BanGuildChat`）。管理器 `GuildManager` 才是真源，这里是每连接缓存；
     /// 生命周期与 `SessionGround` 相同（进世界建、断线删）。**不要**放到 `Entity` 上。
     guild: guild_cmd::GuildSession,
+    /// **M1b 第 4 步（A6）**：同玩家跨类顺序状态（`@` 在飞计数 + 本地命令暂缓队列）。
+    /// 与 `SessionGround` 同生命周期；N=1 恒默认值（零参与）。
+    a6: A6PlayerState,
 }
 
 /// oracle `IPlayerActor`/`PlayObject` 的换服字段（`WorldServer.cs:592-610`，卡 G11）。
@@ -31226,6 +31603,7 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
     let out = i.recalc;
     let a = i.ability;
     let mut sg = SessionGround {
+        a6: A6PlayerState::default(),
         // `GetHumData` 写进 `PlayObject` 的
         // 夫妻/性别/师徒/行会合一/组队传送冷却
         // （批次 3 传送/召唤族的读点）。
@@ -34791,6 +35169,7 @@ fn sim_loop(
         displays,
         online,
         ground_sessions,
+        pending_local: std::collections::BTreeMap::new(),
         saves,
         login_tails,
         aoi_frames_total,
@@ -34874,6 +35253,7 @@ fn sim_loop(
         inbound_local_filled: 0,
         inbound_local_fill_hit: false,
         inbound_outstanding: None,
+        control_inbox: None,
     };
     loop {
         let outcome = host.tick(&mut shared, &mut process, &mut tick_io, PhaseSet::ALL);
@@ -35061,6 +35441,10 @@ struct HostLoop {
     displays: downlink::DisplayTable,
     online: OnlineRegistry,
     ground_sessions: std::collections::HashMap<String, SessionGround>,
+    /// **M1b 第 4 步（A6）**：区 k **单份**、按**到达序号**有序的全局 FIFO（`BTreeMap` ⇒ 取最小
+    /// = `first_key_value()`；**不是按玩家分桶**）。tick 顶决策搬到这儿、段内与
+    /// `inbound_local_buffer` 按序号合并执行；N=1/区 0 恒空。
+    pending_local: std::collections::BTreeMap<u64, PendingLocalCmd>,
     saves: std::collections::HashMap<String, SavedHuman>,
     login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
     aoi_frames_total: std::collections::HashMap<String, usize>,
@@ -35353,6 +35737,7 @@ impl HostLoop {
             displays: downlink::DisplayTable::new(),
             online: OnlineRegistry::new(),
             ground_sessions: std::collections::HashMap::new(),
+            pending_local: std::collections::BTreeMap::new(),
             saves: std::collections::HashMap::new(),
             login_tails: std::collections::HashMap::new(),
             aoi_frames_total: std::collections::HashMap::new(),
@@ -35419,6 +35804,8 @@ impl HostLoop {
         let mut displays = &mut self.displays;
         let mut online = &mut self.online;
         let mut ground_sessions = &mut self.ground_sessions;
+        // **M1b 第 4 步（A6）**：区 k 全局有序 FIFO（tick 顶搬入、段内按序号合并执行）。
+        let pending_local = &mut self.pending_local;
         let mut saves = &mut self.saves;
         let mut login_tails = &mut self.login_tails;
         let mut aoi_frames_total = &mut self.aoi_frames_total;
@@ -35437,6 +35824,8 @@ impl HostLoop {
         let host_prof = &mut self.host_prof;
         let local_shard = self.local_shard;
         let is_host = self.is_host;
+        // **M1b 第 4 步（A6）**：本实例所属区（控制请求投递 + 告警字段）。
+        let zone = self.zone;
         let telemetry_prefix = &mut self.telemetry_prefix;
         // **M1-0c'（b-2）**：进程-only 段入口 fail-fast + 唯一收敛点。先断言、后解构（见设计 §8.2）。
         if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
@@ -35581,8 +35970,7 @@ impl HostLoop {
             // 逐条处理**交错**留在 PROCESS 支内；先整批取出再处理会把处理耗时移出预算 ⇒ 预算语义变。
             let inbound_t0 = perf_counters::enabled().then(std::time::Instant::now);
             let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
-            // **LOCAL 支（M1b 第 3 步：区 k 入站有界化/执行）**。
-            // 第 4 步的 A6 `pending_local`（释放就绪缓冲）**插在此处之前**（本步不实现 A6）。
+            // **LOCAL 支（M1b 第 3 步：区 k 入站有界化/执行；第 4 步起叠加 A6 stop-and-wait）**。
             //
             // 处置全权仍归 `handle_zone_command_on`（今天区 k 怎么处理、本步后还是怎么处理）；
             // `zone_cmd_class` 只用于计数（全部计 drained、`Unsupported` 另计一列），不参与处置。
@@ -35594,34 +35982,51 @@ impl HostLoop {
                 let filled = io.inbound_local_filled;
                 let fill_hit = io.inbound_local_fill_hit;
                 let carry_prefix = io.inbound_local_carry_prefix;
+                let inbox = io.control_inbox.clone();
                 let buffer = &mut io.inbound_local_buffer;
+                // **M1b 第 4 步（A6）**：段内 tick 号 —— 本段在 `zone_tick_top(tick)` 之后、
+                // 同一把 `state` 锁内 ⇒ **此处 `self.ticks` == 驱动循环的本地 `tick`**
+                //（`tick_no` 就是本 tick 早先从 `*ticks` 读的同一值；`ticks` 要到 B 段的
+                // `HostFrames` 才自增）。**不要**把本段挪到 `zone_tick_top` 之前（那里是上一 tick）。
+                let a6_tick = tick_no;
                 let _ = execute_local_budget(
                     buffer,
+                    pending_local,
                     carry_prefix,
                     filled,
                     fill_hit,
                     outstanding.as_ref(),
                     limits,
-                    |ev| {
-                        if let GateEvent::Command {
-                            chr_name,
-                            socket,
-                            cmd,
-                            ..
-                        } = ev
-                        {
-                            // 与今天区 k 循环顶**同一实现**（单一份；不得复刻未支持分支）。
-                            handle_zone_command_on(
-                                world,
-                                displays,
-                                online,
-                                ground_sessions,
-                                gates,
+                    |item, class| {
+                        // 执行体 = **同一路径** `handle_zone_command_on`；A6 的分类/暂缓/溢出/邮箱
+                        // 分派在 [`a6_dispatch_local`]（可单测）。
+                        let mut exec = |ev: &GateEvent,
+                                        sessions: &mut std::collections::HashMap<
+                            String,
+                            SessionGround,
+                        >| {
+                            if let GateEvent::Command {
                                 chr_name,
-                                *socket,
+                                socket,
                                 cmd,
-                            );
-                        }
+                                ..
+                            } = ev
+                            {
+                                handle_zone_command_on(
+                                    world, displays, online, sessions, gates, chr_name, *socket,
+                                    cmd,
+                                );
+                            }
+                        };
+                        a6_dispatch_local(
+                            item,
+                            class,
+                            inbox.as_deref(),
+                            ground_sessions,
+                            zone,
+                            a6_tick,
+                            &mut exec,
+                        )
                     },
                 );
             }
@@ -35718,243 +36123,40 @@ impl HostLoop {
                             let fixed_npc_dialog = select_route == DlgSelectRoute::GuildOfficial;
                             // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
                             if cmd.ident == chat::CM_SAY {
-                                let host = ChatHost {
-                                    online: &online,
-                                    world: &world,
-                                    gates: &gates,
-                                    guilds: &guilds,
-                                    guild_msg_cfg: &enter_cfg.guild_msg_cfg,
-                                    party_cfg: &party_cfg,
-                                    strings: &enter_cfg.string_conf,
-                                    colors: &colors,
-                                    gm_cfg: gmcmd::GmConfig {
-                                        lock_human_login: enter_cfg.lock_human_login,
-                                        spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                        ..gmcmd::GmConfig::default()
+                                // **M1b 第 4 步（A6）**：本分支体整体抽成 [`handle_say_event`]——
+                                // 普通 `@`（Process）在**区 0 tick** 里由控制邮箱 drain 走**同一入口**
+                                // 执行（玩家态取区 k），这里保留区 0 玩家态的调用形态。
+                                handle_say_event(
+                                    SayEnv {
+                                        world: &mut *world,
+                                        displays: &mut *displays,
+                                        online: &*online,
+                                        ground_sessions: &mut *ground_sessions,
+                                        saves: &mut *saves,
+                                        gates: &*gates,
+                                        enter_cfg: &*enter_cfg,
+                                        colors: &*colors,
+                                        guilds: &mut *guilds,
+                                        guild_cfg: &*guild_cfg,
+                                        guild_store: guild_store.as_ref(),
+                                        castle_war_states: &*castle_war_states,
+                                        pending_gm_castle_broadcasts:
+                                            &mut *pending_gm_castle_broadcasts,
+                                        pwd_sessions: &mut *pwd_sessions,
+                                        reconnect_pending: &mut *reconnect_pending,
+                                        mon_gen_host: &mut *mon_gen_host,
+                                        item_number: &mut *item_number,
+                                        item_number_ex: &mut *item_number_ex,
+                                        registry: registry.as_ref(),
+                                        party_cfg: &*party_cfg,
+                                        gm_filter_word: &*gm_filter_word,
+                                        gm_mission: &*gm_mission,
+                                        gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
                                     },
-                                    can_shout_level: enter_cfg.can_shout_msg_level,
-                                    registry: registry.as_ref(),
-                                    filter_word: &gm_filter_word,
-                                    mission: &gm_mission,
-                                    spirit_mutiny_tick: &gm_spirit_mutiny_tick,
-                                    displays: &displays,
-                                    catalog: &enter_cfg.catalog,
-                                };
-                                // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
-                                // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
-                                // `MsgQueue` 命令后才排水 ⇒ 203 必须先于 100（复审 important-2）。
-                                let (gm_deferred, gm_frames) = handle_say_with_saves(
-                                    &host,
-                                    &mut ground_sessions,
-                                    &saves,
                                     &chr_name,
                                     socket,
                                     tail.as_deref(),
                                 );
-                                // **GM 管理态写穿（卡 `openmir2-gm-admin-mode-entity-seam`）**：
-                                // `@1/@2/@3/@Rest/@AttackMode` 在命令体里翻转的是 `GmSession` 镜像
-                                // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
-                                // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
-                                // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
-                                apply_pending_gm_entity(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &mut world,
-                                );
-                                // **卡 `openmir2-gm-target-state-write`**：`@Level0` 的 `HasLevelUp(1)`
-                                // 语义（MaxExp + 重算 + `RM_LEVELUP` 三帧）在同一事件内落地。
-                                apply_pending_level_up(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &enter_cfg.catalog,
-                                    &enter_cfg.need_exps,
-                                    &mut world,
-                                    &online,
-                                    &gates,
-                                );
-                                // **卡 `openmir2-gm-impl-smake`**：`@改属性` 的佩戴位写 + 重算 +
-                                // `SM_UPDATEITEM(203)`（oracle 命令体内当场发 ⇒ 先于蓝字 100）。
-                                if let Some(body) = apply_pending_gm_use_item(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &mut world,
-                                    &enter_cfg.catalog,
-                                    &online,
-                                    &gates,
-                                ) {
-                                    if let Some(e) = online.find_by_chr(&chr_name) {
-                                        if let Some(tx) = route_to_gate(
-                                            &gates,
-                                            e.gate_idx,
-                                            e.socket,
-                                            "GM 改属性 SM_UPDATEITEM",
-                                        ) {
-                                            let _ = tx.send(SimToGate::SendFrame {
-                                                socket: e.socket,
-                                                body,
-                                            });
-                                        }
-                                    }
-                                }
-                                // **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 清目标背包 +
-                                // `SM_DELITEMS(709)`（发给**目标**，oracle 同一事件内当场发）。
-                                if let Some((target, body)) = apply_pending_gm_clear_bag(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &enter_cfg.catalog,
-                                ) {
-                                    if let Some(e) = online.find_by_chr(&target) {
-                                        if let Some(tx) = route_to_gate(
-                                            &gates,
-                                            e.gate_idx,
-                                            e.socket,
-                                            "GM 清理垃圾 SM_DELITEMS",
-                                        ) {
-                                            let _ = tx.send(SimToGate::SendFrame {
-                                                socket: e.socket,
-                                                body,
-                                            });
-                                        }
-                                    }
-                                }
-                                // **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OnHorse`/
-                                // `@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`
-                                // 在同一事件内落地（oracle `SendRefMsg` 立即 ⇒ 先于延后的 SysMsg）。
-                                apply_pending_gm_feature_changed(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &enter_cfg.catalog,
-                                    &world,
-                                    &online,
-                                    &gates,
-                                    enter_cfg.shop.send_ref_msg_range,
-                                );
-                                // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后）。
-                                apply_pending_gm_mountride(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &world,
-                                    &online,
-                                    &gates,
-                                    &mut displays,
-                                    enter_cfg.shop.send_ref_msg_range,
-                                );
-                                // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
-                                // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
-                                // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
-                                // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
-                                // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
-                                // drain 置位并发帧（与 oracle 同序）。
-                                // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
-                                // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
-                                if gm_drain_gate(tail.as_deref()) {
-                                    if let Some(addr) = ground_sessions
-                                        .get_mut(&chr_name)
-                                        .and_then(|sg| sg.gm.pending_reconnect.take())
-                                    {
-                                        if let Some(e) = online.find_by_chr(&chr_name) {
-                                            reconnect_pending.push(ReconnectPending {
-                                                gate_idx: e.gate_idx,
-                                                socket: e.socket,
-                                                chr_name: e.chr_name.clone(),
-                                                msg: addr.into_bytes(),
-                                            });
-                                        }
-                                    }
-                                }
-                                // **族 X2 批 B**：目标侧副作用收口（vv杀死/复活/VV给予权限/
-                                // ClearCopyItem/清除仓库密码），命令体纯 + pending_* 同事件落地。
-                                apply_pending_gm_target_ops(
-                                    &mut ground_sessions,
-                                    &mut pwd_sessions,
-                                    &mut saves,
-                                    &mut world,
-                                    &enter_cfg.catalog,
-                                    magic_cfg_of(&enter_cfg),
-                                    &displays,
-                                    &online,
-                                    &gates,
-                                    &colors,
-                                    enter_cfg.shop.send_ref_msg_range,
-                                    &chr_name,
-                                );
-                                // **族 M（卡 `openmir2-gm-family-m-spawn-make`）**：刷怪/造物落地
-                                // （同事件内；`@怪`/`@ReCallMobEx`/`@MobPlace` 的 `RegenMonsterByName`
-                                // 与世界同一条 RNG 流、`@GiveMine` 的 `Random(18)+3`、`@s` 的
-                                // `Random(MakeRandomAddValue)` 与 `GetItemNumberEx`）。
-                                if gm_drain_gate(tail.as_deref()) {
-                                    apply_pending_gm_m_commands(
-                                        &mut ground_sessions,
-                                        &chr_name,
-                                        &mut world,
-                                        &mut displays,
-                                        mon_gen_host.as_mut(),
-                                        registry.as_ref(),
-                                        &enter_cfg.mon_gen.table,
-                                        &enter_cfg.catalog,
-                                        &enter_cfg.pet_cfg,
-                                        &online,
-                                        &gates,
-                                        &colors,
-                                        enter_cfg.test_server,
-                                        enter_cfg.make_random_add_value,
-                                        &mut item_number,
-                                        &mut item_number_ex,
-                                    );
-                                    // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
-                                    // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
-                                    apply_pending_gm_castle_commands(
-                                        &mut ground_sessions,
-                                        &chr_name,
-                                        &mut world,
-                                        &mut displays,
-                                        &mut saves,
-                                        &castle_war_states,
-                                        &online,
-                                        &gates,
-                                        &mut pending_gm_castle_broadcasts,
-                                    );
-                                    // **族 W**：行会 4 条的宿主落地（GuildMgr 写 + 行会文件/列表落盘 +
-                                    // SS_205/206/207 单服登记 + 750/42/100 帧序）。
-                                    apply_pending_gm_guild_commands(
-                                        &mut ground_sessions,
-                                        &chr_name,
-                                        &world,
-                                        &mut guilds,
-                                        &guild_cfg,
-                                        guild_store.as_ref(),
-                                        &enter_cfg.guild_sections,
-                                        i32::from(enter_cfg.server_index),
-                                        &displays,
-                                        &online,
-                                        &gates,
-                                        &colors,
-                                        world.clock_ms as i32,
-                                        enter_cfg.shop.send_ref_msg_range,
-                                    );
-                                }
-                                // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
-                                // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
-                                if !gm_deferred.is_empty() || !gm_frames.is_empty() {
-                                    if let Some(e) = online.find_by_chr(&chr_name) {
-                                        for (f, b, text) in &gm_deferred {
-                                            send_gm_sysmsg(&gates, e, *f, *b, text);
-                                        }
-                                        for body in gm_frames {
-                                            if let Some(tx) = route_to_gate(
-                                                &gates,
-                                                e.gate_idx,
-                                                e.socket,
-                                                "GM 命令帧",
-                                            ) {
-                                                let _ = tx.send(SimToGate::SendFrame {
-                                                    socket: e.socket,
-                                                    body,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
                             } else if cmd.ident == game_svr::ground::CM_PICKUP
                                 || cmd.ident == game_svr::ground::CM_DROPITEM
                             {
@@ -36956,6 +37158,134 @@ impl HostLoop {
                 perf_counters::note_inbound_wall_us(us);
             }
             host_prof.end("HostInbound", t);
+            // **A6**：控制邮箱 drain —— **独立** profiler 槽 `HostControlDrain`（`HostInbound`
+            // 的既有语义不变：只含区 0 入站排水/处理）；只在 `INBOUND_PROCESS` 启用的调用里跑
+            // （区 0）；`process` 在该支入口已 `proc_svc!` 断言 `Some`，这里取同一实例的字段借用
+            // （PROCESS 支的借用已结束，不重叠）。
+            if phases.has(PhaseSet::INBOUND_PROCESS) {
+                let svc = proc_svc!(process, PhaseSet::INBOUND_PROCESS, "INBOUND_PROCESS");
+                let world_start = &svc.world_start;
+                let guilds = &mut svc.guilds;
+                let guild_cfg = &svc.guild_cfg;
+                let guild_store = &mut svc.guild_store;
+                let castle_war_states = &svc.castle_war_states;
+                let pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
+                let pwd_sessions = &mut svc.pwd_sessions;
+                let reconnect_pending = &mut svc.reconnect_pending;
+                let item_number = &mut svc.item_number;
+                let item_number_ex = &mut svc.item_number_ex;
+                let gm_filter_word = &svc.gm_filter_word;
+                let gm_mission = &svc.gm_mission;
+                let gm_spirit_mutiny_tick = &svc.gm_spirit_mutiny_tick;
+                let party_cfg = &svc.party_cfg;
+                let t_control = host_prof.begin();
+                // =====================================================================
+                // **M1b 第 4 步（A6）**：控制邮箱 drain（区 k → 区 0 的 GM `@`）。
+                //
+                // **独立 profiler 槽 `HostControlDrain`**：`HostInbound` 的既有语义（只含区 0
+                // 入站排水/处理）**不变**，跨区 GM 执行不塞进它；N=1 无控制邮箱 ⇒ 本槽恒 ~0。
+                //
+                // 执行线程 = 区 0 的 tick；**玩家态**取区 k 的 `ZoneState`（锁内借用），**进程态**
+                // 取本支已持有的 `&mut`（`proc_svc!`）。规格 §2 的“清位”就在这里。
+                //
+                // **A9 `form (d)` 三条硬边界**（逐条落点）：
+                // 1) **同一时刻只持一个区锁**：`state_arc.lock()` 只在处理**该区**的请求时持有，
+                //    每请求作用域结束即 drop；循环里**绝不**在持区 k 锁期间再锁区 0/其他区
+                //    （区 0 是当前线程自身，不进本循环）；`handle_say_event` 只碰入参——
+                //    区 k 的 `ZoneState.host` 字段 + 进程级 `&mut`——不碰 `ZoneHost` 其他区、
+                //    不回调区 0 `HostLoop`（该函数没有 `&HostLoop` 入参）。
+                // 2) **不取进程锁**：进程态是区 0 线程局部 `&mut`（本支入口已 `proc_svc!` 取得），
+                //    本段**零互斥**（`gm_filter_word`/`gm_mission` 等 `Cell/RefCell` 不加锁）。
+                // 3) **不阻塞 DB**：全部副作用写内存/文件；存档仍只经 `save_outbox` 异步出口
+                //    （本段不碰 `db`/`engine`）。
+                //
+                // **区号升序**（不依赖任何迭代序）：跨区执行序 = 区号序。
+                // 世界初始化中止（与 PROCESS 支同一条门）⇒ 不执行任何 GM 命令（邮箱留待退出）。
+                if let Some(zh) = zone_host.as_ref().filter(|_| !world_start.is_aborted()) {
+                    for z in 1..zh.control_inboxes.len() {
+                        // 先把该区邮箱**取空**（取空即释放邮箱锁）；随后逐条持区锁执行。
+                        let requests: Vec<ControlRequest> = {
+                            let inbox = Arc::clone(&zh.control_inboxes[z]);
+                            let mut q = inbox
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            q.drain(..).collect()
+                        };
+                        if requests.is_empty() {
+                            continue;
+                        }
+                        let Ok(zi) = u32::try_from(z) else { continue };
+                        let zone_k = zone::ZoneId::new(zi);
+                        let Some(state_arc) = zh.zone_state(zone_k) else {
+                            continue;
+                        };
+                        for req in requests {
+                            let mut st = state_arc
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let ZoneState { host, .. } = &mut *st;
+                            if !host.ground_sessions.contains_key(&req.chr_name) {
+                                // **会话缺失**：丢弃 + 限速 WRN、**不触碰任何计数**（无对象可减）。
+                                a6_control_missing_warn(req.zone, &req.chr_name, req.at_tick);
+                                continue;
+                            }
+                            let HostLoop {
+                                world,
+                                displays,
+                                online,
+                                ground_sessions,
+                                saves,
+                                gates,
+                                mon_gen_host,
+                                ..
+                            } = host;
+                            let socket = online.find_by_chr(&req.chr_name).map_or(0, |e| e.socket);
+                            // **RAII 清位守卫**（只借 `ground_sessions`；执行经 `run` 短借用）。
+                            let mut guard = A6ControlGuard::new(
+                                ground_sessions,
+                                req.chr_name.clone(),
+                                req.epoch,
+                            );
+                            guard.run(|sessions| {
+                                handle_say_event(
+                                    SayEnv {
+                                        world,
+                                        displays,
+                                        online: &*online,
+                                        ground_sessions: sessions,
+                                        saves,
+                                        gates: &*gates,
+                                        enter_cfg: &*enter_cfg,
+                                        colors: &*colors,
+                                        guilds: &mut *guilds,
+                                        guild_cfg: &*guild_cfg,
+                                        guild_store: guild_store.as_ref(),
+                                        castle_war_states: &*castle_war_states,
+                                        pending_gm_castle_broadcasts:
+                                            &mut *pending_gm_castle_broadcasts,
+                                        pwd_sessions: &mut *pwd_sessions,
+                                        reconnect_pending: &mut *reconnect_pending,
+                                        mon_gen_host,
+                                        item_number: &mut *item_number,
+                                        item_number_ex: &mut *item_number_ex,
+                                        registry: registry.as_ref(),
+                                        party_cfg: &*party_cfg,
+                                        gm_filter_word: &*gm_filter_word,
+                                        gm_mission: &*gm_mission,
+                                        gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
+                                    },
+                                    &req.chr_name,
+                                    socket,
+                                    Some(req.line.as_str()),
+                                );
+                            });
+                            // 守卫 drop ⇒ 按 epoch 减在飞计数（tick 顶据此放行 deferred）。
+                            drop(guard);
+                        }
+                    }
+                }
+                host_prof.end("HostControlDrain", t_control);
+            }
         }
         if phases.has(PhaseSet::DB_POLL) {
             let svc = proc_svc!(process, PhaseSet::DB_POLL, "DB_POLL");
@@ -38596,6 +38926,79 @@ impl HostLoop {
     }
 }
 
+// ============================================================================================
+// **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的类型与常量
+// ============================================================================================
+
+/// **A6**：控制邮箱上限（**区 k 每区一份**；按实测可调）。
+const CONTROL_MAILBOX_CAP: usize = 256;
+
+/// **A6**：每玩家 `deferred_local` 上限 N（`== N` 再来 ⇒ 溢出就地执行 N+1）。
+const A6_DEFER_CAP: usize = 8;
+
+/// **A6**：超时门——`tick - control_first_tick >= A6_TIMEOUT_TICKS` ⇒ 判定解除（放行 + 降级计数）。
+const A6_TIMEOUT_TICKS: u64 = 2;
+
+/// **A6**：接缝元素——入站命令 + **到达序号**（`fill` 时分配；每区线程单调递增、不跨线程比较）。
+#[derive(Debug)]
+struct SeqEvent {
+    seq: u64,
+    ev: GateEvent,
+}
+
+/// **A6**：单玩家同玩家跨类顺序状态（放 `SessionGround`；N=1 恒默认值 ⇒ 零参与）。
+///
+/// 字段名/语义 = 规格 §2（`control_pending` / `control_first_tick` / `control_epoch`）+
+/// §3.1（`deferred_local`）；聚成一个 `Default` 子结构只让 `SessionGround` 的既有字面量多一行。
+#[derive(Debug, Default)]
+struct A6PlayerState {
+    /// 该玩家**尚未执行完**的控制请求数（0 = 无在飞）。
+    control_pending: usize,
+    /// **最早一条**未执行控制命令的 tick（超时只按它算）。
+    control_first_tick: Option<u64>,
+    /// 代际：超时清零时 +1（作废旧请求的减法）。
+    control_epoch: u64,
+    /// `@` 在飞期间的本地命令暂缓队列（按到达序；上限 [`A6_DEFER_CAP`]）。
+    deferred_local: std::collections::VecDeque<PendingLocalCmd>,
+}
+
+/// **A6**：暂缓的本地命令（`deferred_local` 与 `pending_local` 共用）。
+///
+/// `ev` **原样保留**：放行时仍走 `handle_zone_command_on` 同一执行路径、**不重新分类**
+/// （规格 §3.2「不重新分类」）；因此不能只留 `(ident, payload)`——`recog/param/tag/series/tail`
+/// 都参与执行，丢了就不是同一路径（与规格 §3.1 的 `PendingLocalCmd{ident,payload}` 差异见交付报告）。
+#[derive(Debug)]
+struct PendingLocalCmd {
+    seq: u64,
+    ev: GateEvent,
+    at_tick: u64,
+}
+
+/// **A6**：区 k → 区 0 的控制请求（区 0 每 tick **按区号升序** drain 各区的邮箱）。
+#[derive(Debug)]
+struct ControlRequest {
+    /// 投递方区号（区 0 drain 时用于断言/告警；邮箱本身按区一份）。
+    zone: zone::ZoneId,
+    chr_name: String,
+    /// `@` 命令正文（`tail` 原文；分类为 `Process` 时必以 `@` 起）。
+    line: String,
+    /// 入队时的段内 tick（= 该 tick 的本地 tick 号）。
+    at_tick: u64,
+    /// 入队时的 `control_epoch`（守卫 Drop 里比对，超时作废的旧请求不减计数）。
+    epoch: u64,
+}
+
+/// **A6**：段内处置结果（驱动侧据此计 `zonek_inbound_drained`，§6 口径）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalDisposition {
+    /// 已执行/已处置（含邮箱满丢弃）：驱动计 **1 条** `zonek_inbound_drained`。
+    Drained,
+    /// **暂缓**（已移入 `deferred_local`）：本 tick **不计** drained（下次执行时再计）。
+    Deferred,
+    /// 已处置且**回调已自行逐条计数**（A6 溢出的 8+1 条）：驱动不再计。
+    CountedByExec,
+}
+
 /// **M1b 第 3 步**：区 k 的入站有界化参数（数值复用 `EventDrainBudget::PRODUCTION`；测试可注入）。
 #[derive(Clone, Copy, Debug)]
 struct ZoneDrainLimits {
@@ -38643,15 +39046,22 @@ const ZONE_INBOUND_MAX_EVENTS: usize = 10_000;
 fn fill_pending(
     ev_rx: &std::sync::mpsc::Receiver<GateEvent>,
     ev_ctl_rx: &std::sync::mpsc::Receiver<GateEvent>,
-    pending: &mut std::collections::VecDeque<GateEvent>,
+    pending: &mut std::collections::VecDeque<SeqEvent>,
     pull_cap: u64,
+    next_seq: &mut u64,
     mut on_other: impl FnMut(GateEvent),
 ) -> (u64, bool) {
     let mut filled = 0u64;
+    // **A6**：到达序号在 **fill 时**分配（每区线程单调递增；clone 出来避免借用冲突）。
+    let mut push_cmd = |ev: GateEvent, pending: &mut std::collections::VecDeque<SeqEvent>| {
+        let seq = *next_seq;
+        *next_seq = next_seq.saturating_add(1);
+        pending.push_back(SeqEvent { seq, ev });
+    };
     // 1) 优先通道：非命令不限量（控制事件必须当轮落地）。
     while let Ok(ev) = ev_ctl_rx.try_recv() {
         if matches!(ev, GateEvent::Command { .. }) {
-            pending.push_back(ev);
+            push_cmd(ev, pending);
             filled = filled.saturating_add(1);
         } else {
             on_other(ev);
@@ -38662,7 +39072,7 @@ fn fill_pending(
         match ev_rx.try_recv() {
             Ok(ev) => {
                 if matches!(ev, GateEvent::Command { .. }) {
-                    pending.push_back(ev);
+                    push_cmd(ev, pending);
                     filled = filled.saturating_add(1);
                 } else {
                     on_other(ev);
@@ -38676,7 +39086,7 @@ fn fill_pending(
         match ev_rx.try_recv() {
             Ok(ev) => {
                 match &ev {
-                    GateEvent::Command { .. } => pending.push_back(ev),
+                    GateEvent::Command { .. } => push_cmd(ev, pending),
                     _ => on_other(ev),
                 }
                 true
@@ -38689,25 +39099,33 @@ fn fill_pending(
     (filled, fill_hit)
 }
 
-/// **M1b 第 3 步**：`INBOUND_LOCAL` 段内的**执行器**（可注入预算；处置由 `exec` 回调给出——
-/// 生产回调 = [`handle_zone_command_on`]，测试回调可只记录到达序/计数）。
+/// **M1b 第 3 步 + 第 4 步（A6）**：`INBOUND_LOCAL` 段内的**执行器**（可注入预算；处置由 `exec`
+/// 回调给出——生产回调 = A6 分类/暂缓/溢出/邮箱分派 + [`handle_zone_command_on`]）。
 ///
-/// - 逐条 `pop_front`；**取出即 `outstanding -1`**（消费时；丢新路径从不 +1）；
-/// - `idx < carry_prefix` ⇒ `from_carry`（计 `zonek_inbound_carry`）；每条计 `zonek_inbound_drained`；
-/// - 分类为 `Unsupported` 的**纯追加计数**（不改变是否被 `exec` 处置——本步处置全权归
-///   `handle_zone_command_on`，与今天区 k 逐字节等价）；
-/// - 每 `execute_check_every` 条**整条执行完**后查 `execute_wall`；条数到顶同理收手，剩余留工作区；
-/// - `budget_hit = fill_hit || 截断且工作区非空`（每 tick 至多 +1）。
+/// - 工作区 = `buffer`（本 tick 新到 + 结转）与 `pending_local`（**区 k 全局有序 FIFO**，
+///   按到达序号）**双指针合并**：每步取两侧 `seq` 小者 ⇒ 两侧各自有序时即**全局到达序**
+///   （§3.4；「先 `pending_local` 再 buffer」是它的自然结果，不是独立规则）；
+/// - **取数即 `outstanding -1`（只 buffer 侧）**：`pending_local` 的条目在**首次取出**（暂缓）时
+///   已扣过，不得二次扣；
+/// - `buffer` 侧 `idx < carry_prefix` ⇒ `from_carry`（计 `zonek_inbound_carry`），`pending_local`
+///   侧恒 `from_carry=false`；
+/// - 分类 `Unsupported` 的**纯追加计数**（处置仍由 `exec` 全权完成，与第 3 步一致）；
+/// - `exec` 返回 [`LocalDisposition`]：`Drained` ⇒ 驱动计 1 条 `zonek_inbound_drained`；
+///   `Deferred` ⇒ 不计（下次执行时计）；`CountedByExec` ⇒ 回调已逐条计（A6 溢出 8+1）；
+/// - 每 `execute_check_every` 条**整条执行完**后查 `execute_wall`；条数到顶同理收手，剩余留在
+///   各自容器；`budget_hit = fill_hit || 截断且仍有待执行条目`（每 tick 至多 +1）。
 ///
 /// 返回是否 `budget_hit`。**不写 `clear()`**（剩余自然保留，tick 后由 driver swap 回 scratch）。
+#[allow(clippy::too_many_arguments)] // 8 参：缓冲/等待队列/水位/预算/计数/回调（对齐 handle_zone_command_on 的既有风格）
 fn execute_local_budget(
-    buffer: &mut std::collections::VecDeque<GateEvent>,
+    buffer: &mut std::collections::VecDeque<SeqEvent>,
+    pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
     carry_prefix: usize,
     filled: u64,
     fill_hit: bool,
     outstanding: Option<&std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     limits: ZoneDrainLimits,
-    mut exec: impl FnMut(&GateEvent),
+    mut exec: impl FnMut(SeqEvent, ZoneCmdClass) -> LocalDisposition,
 ) -> bool {
     use std::sync::atomic::Ordering;
     let execute_max =
@@ -38716,28 +39134,50 @@ fn execute_local_budget(
         execute_max.min(usize::try_from(limits.execute_max_events).unwrap_or(usize::MAX));
     let wall_start = std::time::Instant::now();
     let carry_prefix = carry_prefix.min(buffer.len());
-    let mut idx = 0usize;
+    let mut buffer_idx = 0usize;
     let mut executed = 0usize;
     let mut truncated = false;
     while executed < execute_cap {
-        let Some(ev) = buffer.pop_front() else { break };
-        if let Some(counter) = outstanding {
-            debug_assert!(
-                counter.load(Ordering::Relaxed) > 0,
-                "outstanding 不得下溢（-1 只对曾 +1 的 Command）"
-            );
-            counter.fetch_sub(1, Ordering::Relaxed);
-        }
-        let from_carry = idx < carry_prefix;
-        idx += 1;
-        exec(&ev);
-        perf_counters::note_zonek_inbound_drained(from_carry, &ev);
-        if let GateEvent::Command { cmd, tail, .. } = &ev {
-            if zone_cmd_class(cmd.ident, tail.as_deref()) == ZoneCmdClass::Unsupported {
-                perf_counters::note_zonek_inbound_unsupported();
+        // **按到达序号合并（§3.4）**：两侧都有 ⇒ 取 `seq` 小者；一侧空 ⇒ 取另一侧。
+        let take_pending = match (pending_local.first_key_value(), buffer.front()) {
+            (Some((k, _)), Some(b)) => *k < b.seq,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        let item = if take_pending {
+            let (_, p) = pending_local.pop_first().expect("存在性已判");
+            SeqEvent {
+                seq: p.seq,
+                ev: p.ev,
             }
         } else {
-            debug_assert!(false, "INBOUND_LOCAL 工作区只应含 Command");
+            let Some(s) = buffer.pop_front() else { break };
+            buffer_idx += 1;
+            s
+        };
+        if !take_pending {
+            if let Some(counter) = outstanding {
+                debug_assert!(
+                    counter.load(Ordering::Relaxed) > 0,
+                    "outstanding 不得下溢（-1 只对曾 +1 的 Command）"
+                );
+                counter.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let from_carry = !take_pending && (buffer_idx - 1) < carry_prefix;
+        let class = match &item.ev {
+            GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+            _ => {
+                debug_assert!(false, "INBOUND_LOCAL 工作区只应含 Command");
+                ZoneCmdClass::Unsupported
+            }
+        };
+        if class == ZoneCmdClass::Unsupported {
+            perf_counters::note_zonek_inbound_unsupported();
+        }
+        match exec(item, class) {
+            LocalDisposition::Drained => perf_counters::note_zonek_inbound_drained(from_carry),
+            LocalDisposition::Deferred | LocalDisposition::CountedByExec => {}
         }
         executed += 1;
         let every = limits.execute_check_every.max(1);
@@ -38746,7 +39186,7 @@ fn execute_local_budget(
             break;
         }
     }
-    if executed >= execute_cap && !buffer.is_empty() {
+    if executed >= execute_cap && (!buffer.is_empty() || !pending_local.is_empty()) {
         truncated = true;
     }
     let budget_hit = fill_hit || truncated;
@@ -38754,6 +39194,195 @@ fn execute_local_budget(
         perf_counters::note_zonek_inbound_budget_hit();
     }
     budget_hit
+}
+
+/// **A6**：tick 顶**决策**（区 k 线程循环、**一次短锁**、**只搬队列不执行**）。
+///
+/// 对每个 `deferred_local` 非空的玩家：`control_pending == 0` **或**超时
+///（`tick - control_first_tick >= A6_TIMEOUT_TICKS`）⇒ 整队搬入 `pending_local`
+///（`BTreeMap::insert(seq, _)`；**不按 `chr_name` 排序**——执行序只看 `seq`）。
+/// 超时另做：`epoch += 1`、`control_pending = 0`、`control_first_tick = None`（防重复触发；
+/// 旧请求之后执行时 epoch 不匹配 ⇒ 不动计数）+ `zonek_control_wait_timeout +1`。
+///
+/// 返回 `(搬入条数, 超时判定次数)`（供单测/诊断）。
+fn a6_decide(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
+    tick: u64,
+    zone: zone::ZoneId,
+) -> (usize, usize) {
+    let mut released = 0usize;
+    let mut timed_out = 0usize;
+    for (chr, sg) in ground_sessions.iter_mut() {
+        if sg.a6.deferred_local.is_empty() {
+            continue;
+        }
+        let timeout = sg
+            .a6
+            .control_first_tick
+            .is_some_and(|t0| tick.saturating_sub(t0) >= A6_TIMEOUT_TICKS);
+        if sg.a6.control_pending != 0 && !timeout {
+            continue;
+        }
+        if timeout && sg.a6.control_pending != 0 {
+            perf_counters::note_zonek_control_wait_timeout();
+            timed_out += 1;
+            sg.a6.control_epoch = sg.a6.control_epoch.wrapping_add(1);
+            sg.a6.control_pending = 0;
+            sg.a6.control_first_tick = None;
+            a6_wait_timeout_warn(zone, chr, sg.a6.deferred_local.len(), tick);
+        }
+        for p in sg.a6.deferred_local.drain(..) {
+            // 到达 tick 不得晚于当前 tick（暂缓只会发生在更早的段内 tick）。
+            debug_assert!(p.at_tick <= tick, "暂缓条目的到达 tick 晚于当前 tick");
+            released += 1;
+            pending_local.insert(p.seq, p);
+        }
+    }
+    (released, timed_out)
+}
+
+/// **A6 置位（规格 §2）**：邮箱锁的**同一临界区**内 判满 → 入队 → 置计数/首 tick。
+///
+/// 满 ⇒ **丢弃** + `zonek_control_mailbox_rejected +1` + 限速 WRN + **不置位**（绝不"先置位
+/// 后入队"）；返回 `false`。成功 ⇒ 返回 `true` 且 `control_pending += 1`（`first_tick` 只在
+/// `None` 时置 = **最早一条**）。
+fn a6_enqueue_control(
+    inbox: &std::sync::Mutex<std::collections::VecDeque<ControlRequest>>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    zone: zone::ZoneId,
+    chr_name: &str,
+    line: String,
+    ident: u16,
+    tick: u64,
+) -> bool {
+    // epoch 在**同一临界区之前**快照：`sessions` 的唯一写者就是本线程（持区锁）⇒ 与临界区内读等价。
+    let epoch = sessions.get(chr_name).map_or(0, |sg| sg.a6.control_epoch);
+    {
+        let mut q = inbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if q.len() >= CONTROL_MAILBOX_CAP {
+            let len = q.len();
+            drop(q);
+            perf_counters::note_zonek_control_mailbox_rejected();
+            a6_mailbox_full_warn(zone, chr_name, ident, len);
+            return false;
+        }
+        q.push_back(ControlRequest {
+            zone,
+            chr_name: chr_name.to_string(),
+            line,
+            at_tick: tick,
+            epoch,
+        });
+    }
+    if let Some(sg) = sessions.get_mut(chr_name) {
+        sg.a6.control_pending = sg.a6.control_pending.saturating_add(1);
+        if sg.a6.control_first_tick.is_none() {
+            sg.a6.control_first_tick = Some(tick);
+        }
+    }
+    true
+}
+
+/// **A6**：段内单条命令的分类/分派（**生产与单测同一实现**）。
+///
+/// - `Process` ⇒ 控制邮箱 + 置位（[`a6_enqueue_control`]）；
+/// - `Local` 且无在飞 ⇒ 立即执行；有在飞且未满 N ⇒ **暂缓**（`Deferred`，本 tick 不计 drained）；
+/// - `Local` 且已满 N ⇒ **溢出**：`N+1` 条按到达序**就地执行**（不动在飞、不搬 `pending_local`；
+///   `CountedByExec`——本函数已逐条计 drained）；
+/// - `Unsupported` ⇒ 仍交执行体（与第 3 步一致）。
+fn a6_dispatch_local(
+    item: SeqEvent,
+    class: ZoneCmdClass,
+    inbox: Option<&std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    zone: zone::ZoneId,
+    tick: u64,
+    exec: &mut dyn FnMut(&GateEvent, &mut std::collections::HashMap<String, SessionGround>),
+) -> LocalDisposition {
+    match class {
+        ZoneCmdClass::Process => {
+            let Some(inbox) = inbox else {
+                // N=1/区 0 不进 LOCAL 段 ⇒ 不可达；保守按已处置计（不静默）。
+                debug_assert!(false, "区 k LOCAL 段必须带控制邮箱");
+                return LocalDisposition::Drained;
+            };
+            let (chr_name, ident, tail) = match &item.ev {
+                GateEvent::Command {
+                    chr_name,
+                    cmd,
+                    tail,
+                    ..
+                } => (chr_name.clone(), cmd.ident, tail.clone()),
+                _ => return LocalDisposition::Drained,
+            };
+            let _ = a6_enqueue_control(
+                inbox,
+                sessions,
+                zone,
+                &chr_name,
+                tail.unwrap_or_default(),
+                ident,
+                tick,
+            );
+            LocalDisposition::Drained
+        }
+        ZoneCmdClass::Local => {
+            let inflight = match &item.ev {
+                GateEvent::Command { chr_name, .. } => sessions
+                    .get(chr_name)
+                    .is_some_and(|sg| sg.a6.control_pending > 0),
+                _ => false,
+            };
+            if !inflight {
+                exec(&item.ev, sessions);
+                return LocalDisposition::Drained;
+            }
+            // 暂缓 / 溢出都要**移动** `item.ev`（`GateEvent` 无 `Clone`）：先取玩家名。
+            let chr = match &item.ev {
+                GateEvent::Command { chr_name, .. } => chr_name.clone(),
+                _ => return LocalDisposition::Drained,
+            };
+            let full = match sessions.get(&chr) {
+                Some(sg) => sg.a6.deferred_local.len() >= A6_DEFER_CAP,
+                None => true,
+            };
+            if !full {
+                if let Some(sg) = sessions.get_mut(&chr) {
+                    sg.a6.deferred_local.push_back(PendingLocalCmd {
+                        seq: item.seq,
+                        ev: item.ev,
+                        at_tick: tick,
+                    });
+                    return LocalDisposition::Deferred;
+                }
+                return LocalDisposition::Drained;
+            }
+            let mut batch: Vec<PendingLocalCmd> = sessions
+                .get_mut(&chr)
+                .map(|sg| sg.a6.deferred_local.drain(..).collect())
+                .unwrap_or_default();
+            batch.push(PendingLocalCmd {
+                seq: item.seq,
+                ev: item.ev,
+                at_tick: tick,
+            });
+            batch.sort_by_key(|p| p.seq);
+            perf_counters::note_zonek_control_defer_overflow();
+            a6_defer_overflow_warn(zone, &chr, batch.len());
+            for p in &batch {
+                exec(&p.ev, sessions);
+                perf_counters::note_zonek_inbound_drained(false);
+            }
+            LocalDisposition::CountedByExec
+        }
+        ZoneCmdClass::Unsupported => {
+            exec(&item.ev, sessions);
+            LocalDisposition::Drained
+        }
+    }
 }
 
 /// **M1b 第 3 步**：demux 的 `Zone(z)` 转发（含 `outstanding` 上限 + 丢新）。抽成函数供单测。
@@ -38805,14 +39434,146 @@ fn zonek_overflow_warn(ev: &GateEvent, zone: usize, outstanding: usize) {
     );
 }
 
+/// **A6**：区 0 执行控制请求时的 **RAII 清位守卫**（规格 §2 清位）。
+///
+/// 持有区 k `ground_sessions` 的唯一 `&mut`；执行体经 [`Self::run`] 短借用（与执行期间无冲突）。
+/// **`Drop`（任何离开路径：正常返回 / `continue` / 早跳）**：仅当 `req.epoch == sg.a6.control_epoch`
+/// 时 `control_pending -= 1`；**只有减到 0 才清 `control_first_tick`**。epoch 不匹配（该请求已被
+/// 超时写掉）⇒ **不动计数** + 限速 WRN。**panic 不在守卫责任范围**（本仓失败即整机 abort）。
+struct A6ControlGuard<'a> {
+    sessions: &'a mut std::collections::HashMap<String, SessionGround>,
+    chr_name: String,
+    epoch: u64,
+}
+
+impl<'a> A6ControlGuard<'a> {
+    fn new(
+        sessions: &'a mut std::collections::HashMap<String, SessionGround>,
+        chr_name: String,
+        epoch: u64,
+    ) -> Self {
+        Self {
+            sessions,
+            chr_name,
+            epoch,
+        }
+    }
+
+    /// 借出会话表给执行体（同一 `&mut` 的短借用）。
+    fn run<R>(
+        &mut self,
+        f: impl FnOnce(&mut std::collections::HashMap<String, SessionGround>) -> R,
+    ) -> R {
+        f(&mut *self.sessions)
+    }
+}
+
+impl Drop for A6ControlGuard<'_> {
+    fn drop(&mut self) {
+        let Some(sg) = self.sessions.get_mut(&self.chr_name) else {
+            return;
+        };
+        if sg.a6.control_epoch != self.epoch {
+            a6_stale_clear_warn(&self.chr_name, self.epoch, sg.a6.control_epoch);
+            return;
+        }
+        if sg.a6.control_pending > 0 {
+            sg.a6.control_pending -= 1;
+        }
+        if sg.a6.control_pending == 0 {
+            sg.a6.control_first_tick = None;
+        }
+    }
+}
+
+/// **A6**：控制邮箱满 ⇒ 丢弃的限速 WRN（每分钟 ≤1 条）。
+fn a6_mailbox_full_warn(zone: zone::ZoneId, chr: &str, ident: u16, len: usize) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 控制邮箱满（CAP={CONTROL_MAILBOX_CAP}，len={len}）⇒ 丢弃 GM 命令 ChrName={chr} ident={ident}（zonek_control_mailbox_rejected）；上一分钟抑制 {suppressed} 条"
+    );
+}
+
+/// **A6**：`deferred_local` 溢出的限速 WRN（每分钟 ≤1 条）。
+fn a6_defer_overflow_warn(zone: zone::ZoneId, chr: &str, n: usize) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 玩家 ChrName={chr} 延迟队列溢出（上限 {A6_DEFER_CAP}）⇒ 就地按到达序执行 {n} 条（zonek_control_defer_overflow；越序只影响该玩家）；上一分钟抑制 {suppressed} 次"
+    );
+}
+
+/// **A6**：超时判定解除的限速 WRN（每分钟 ≤1 条）。
+fn a6_wait_timeout_warn(zone: zone::ZoneId, chr: &str, deferred: usize, tick: u64) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 玩家 ChrName={chr} 控制请求超时（tick={tick}，≥{A6_TIMEOUT_TICKS}）⇒ 降级放行 {deferred} 条本地命令（zonek_control_wait_timeout；旧 `@` 之后仍会执行，属已知代价）；上一分钟抑制 {suppressed} 次"
+    );
+}
+
+/// **A6**：超时作废后的旧请求执行完（epoch 不匹配）的限速 WRN（每分钟 ≤1 条）。
+fn a6_stale_clear_warn(chr: &str, req_epoch: u64, cur_epoch: u64) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "控制请求清位跳过：ChrName={chr} 请求 epoch={req_epoch} ≠ 当前 {cur_epoch}（已被超时写掉）⇒ 不动在飞计数；上一分钟抑制 {suppressed} 次"
+    );
+}
+
+/// **A6**：执行时玩家已离开该区（会话缺失）⇒ 请求丢弃的限速 WRN（每分钟 ≤1 条）。
+fn a6_control_missing_warn(zone: zone::ZoneId, chr: &str, at_tick: u64) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 控制请求丢弃：ChrName={chr} 已无地面会话（at_tick={at_tick}）⇒ 不执行、不触碰任何计数；上一分钟抑制 {suppressed} 条"
+    );
+}
+
 /// **M0（A1）**：本区 I/O（入站两条通道 + 关服信号）。
 struct TickIo {
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
     shutdown: ShutdownSignal,
     /// **M1b 第 3 步**：区 k 的 `INBOUND_LOCAL` 工作区（tick 内从 scratch `mem::swap` 进、
-    /// 段执行、**承载段一返回即 swap 回**）；N=1/区 0 恒空。
-    inbound_local_buffer: std::collections::VecDeque<GateEvent>,
+    /// 段执行、**承载段一返回即 swap 回**）；N=1/区 0 恒空。**第 4 步**起元素带到达序号。
+    inbound_local_buffer: std::collections::VecDeque<SeqEvent>,
     /// 工作区 `[0, carry_prefix)` 是本 tick 开始前就遗留的结转（计 `zonek_inbound_carry`）。
     inbound_local_carry_prefix: usize,
     /// 本 tick fill 到的命令条数（执行器据此算 `execute_max_effective = tick_max − filled`）。
@@ -38822,6 +39583,10 @@ struct TickIo {
     /// 区 k 的 `outstanding` 计数（取出执行时 `-1`）；区 0 = `None`。
     /// **规格未列、本步新增**：执行器需要它做「消费即 -1」。
     inbound_outstanding: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    /// **M1b 第 4 步（A6）**：区 k 的控制邮箱（与 `ZoneHost.control_inboxes[z]` 同一实例的
+    /// clone）；区 0/N=1 = `None`（N=1 不构造、区 0 无 `INBOUND_LOCAL` 段）。
+    control_inbox:
+        Option<std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>>,
 }
 
 /// `_gameGates = new ChannelMessageHandler[20]`（`TCPNetChannel.cs`）。
@@ -46528,6 +47293,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         RAN_SEGMENTS.with(|c| c.set(0));
         let mut host = host;
@@ -46590,6 +47356,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         PROC_SVC_SEGMENTS.with(|c| c.set(0));
         let mut host = host;
@@ -46629,6 +47396,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         BARRIER_CALLS.with(|c| c.set(0));
         RAN_SEGMENTS.with(|c| c.set(0));
@@ -46671,6 +47439,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         let layout = std::sync::Arc::new(
             zone::RegionLayout::from_zone_spans(
@@ -46749,6 +47518,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         BARRIER_CALLS.with(|c| c.set(0));
         RAN_SEGMENTS.with(|c| c.set(0));
@@ -46844,6 +47614,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         let layout = std::sync::Arc::new(
             zone::RegionLayout::from_zone_spans(
@@ -46932,6 +47703,7 @@ mod tests {
             inbound_local_filled: 0,
             inbound_local_fill_hit: false,
             inbound_outstanding: None,
+            control_inbox: None,
         };
         let mut host = host;
         let mut shared = shared;
@@ -48958,6 +49730,7 @@ mod tests {
     /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
+            a6: A6PlayerState::default(),
             magic: readbook::MagicState::default(),
             home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
@@ -51833,6 +52606,7 @@ break
         use_items[game_svr::ability::SLOT_NECKLACE] = Some(necklace);
         use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
         let sg = SessionGround {
+            a6: A6PlayerState::default(),
             magic: readbook::MagicState::default(),
             home: eat_move::HomeState::default(),
             gm: gmcmd::GmSession::default(),
@@ -55005,6 +55779,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -55214,6 +55989,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -55409,6 +56185,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -55566,6 +56343,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -55757,6 +56535,7 @@ break
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -58911,15 +59690,33 @@ break
             })
             .map(|(i, _)| i)
             .expect("`sim_loop` 的 world tick 入口行");
-        // **M1b**：rustfmt 会把长参数表折成多行（拆段后嵌套更深）⇒ 用**被调函数名**定位调用点
-        // （生产体内恰一处、非注释行），参数表在调用起点后的窗口里按「去空白」核。
+        // **M1b 第 4 步（A6）**：`CM_SAY` 分支体整体抽成 `handle_say_event`（区 0 控制邮箱 drain
+        // 复用**同一入口**）⇒ 写穿的生产接线点从 `sim_loop` 体内移到该函数体内。本牙锚到新落点，
+        // 并补两条同样可机械核的事实：
+        // ①`apply_pending_gm_entity(` 在 `handle_say_event` 生产体内**恰一处**（非注释），
+        //   实参是 `env.ground_sessions / chr_name / env.world`（去空白后核）；
+        // ②`handle_say_event(` 在**生产面**恰有**两个**入口调用（CM_SAY 支 + A6 控制邮箱 drain），
+        //   且 CM_SAY 支那处仍在 `world.tick_head()` 之前（oracle 命令体即时写同一对象）。
+        // 牙：删/注释该调用 ⇒ 红；删掉任一入口（含把 drain 改回不复用）⇒ 红；把 CM_SAY 支挪到
+        // tick 之后 ⇒ 红。
+        let fn_line = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("fn handle_say_event("))
+            .expect("`fn handle_say_event(` 定义行");
+        // 函数体边界：定义行之后**第一条顶格 `}`**（本仓顶层函数一律如此）。
+        let fn_end = lines
+            .iter()
+            .enumerate()
+            .find(|(i, l)| *i > fn_line && **l == "}")
+            .map(|(i, _)| i)
+            .expect("`handle_say_event` 的结束行");
         let callee = "apply_pending_gm_entity(";
         let hits: Vec<usize> = lines
             .iter()
             .enumerate()
             .filter(|(i, l)| {
-                *i > sim_loop
-                    && *i < tests_start
+                *i > fn_line
+                    && *i < fn_end
                     && l.contains(callee)
                     && !l.trim_start().starts_with("//")
             })
@@ -58928,20 +59725,33 @@ break
         assert_eq!(
             hits.len(),
             1,
-            "`{callee}` 必须在 `sim_loop` 生产体内恰好出现一次且未被注释；命中 {hits:?}             （0 = 被删/被注释/被抽走；>1 = 重复调用点）"
+            "`{callee}` 必须在 `handle_say_event` 生产体内恰好出现一次且未被注释；命中 {hits:?}             （0 = 被删/被注释/被抽走；>1 = 重复调用点）"
         );
         let args_tail: String = lines[hits[0]..(hits[0] + 8).min(tests_start)].join(" ");
         let args_squashed: String = args_tail.split_whitespace().collect();
-        for arg in ["&mutground_sessions", "&chr_name", "&mutworld"] {
+        for arg in ["env.ground_sessions", "chr_name", "env.world"] {
             assert!(
                 args_squashed.contains(arg),
                 "调用点 {callee} 的实参必须含 `{arg}`（去空白后）；实际窗口：{args_tail}"
             );
         }
+        let entries: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                *i > sim_loop && *i < tests_start && l.trim_start().starts_with("handle_say_event(")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            entries.len(),
+            2,
+            "`handle_say_event(` 在生产面必须恰有两个入口调用（CM_SAY 支 + A6 控制邮箱 drain）；命中 {entries:?}"
+        );
         assert!(
-            hits[0] < tick_head,
-            "GM 写穿必须在 `world.tick_head()` 之前（oracle 命令体即时写同一对象）：调用 {} vs tick {}",
-            hits[0],
+            entries[0] < tick_head,
+            "GM 写穿必须在 `world.tick_head()` 之前（oracle 命令体即时写同一对象）：入口 {} vs tick {}",
+            entries[0],
             tick_head
         );
     }
@@ -63810,6 +64620,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -65214,6 +66025,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -66495,6 +67307,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -71386,6 +72199,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -71579,6 +72393,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -71723,6 +72538,7 @@ SendRefMsgRange=15
         sessions.insert(
             "hero".into(),
             SessionGround {
+                a6: A6PlayerState::default(),
                 magic: readbook::MagicState::default(),
                 home: eat_move::HomeState::default(),
                 gm: gmcmd::GmSession::default(),
@@ -126849,8 +127665,11 @@ mod l2_s3_cross_recipient_tests {
         };
         let d0 = perf_counters::zonek_inbound_drained();
         let pull_cap = 500u64;
+        let mut seq = 0u64;
         let (filled, fill_hit) =
-            fill_pending(&rx, &ctl_rx, &mut pending, pull_cap, |_ev| closed_seen += 1);
+            fill_pending(&rx, &ctl_rx, &mut pending, pull_cap, &mut seq, |_ev| {
+                closed_seen += 1
+            });
         assert!(
             filled <= pull_cap,
             "filled={filled} 不得超 pull_cap={pull_cap}"
@@ -126859,15 +127678,21 @@ mod l2_s3_cross_recipient_tests {
         assert!(fill_hit, "2500 条 > cap ⇒ 预算耗尽且探到事件");
         let started = std::time::Instant::now();
         let mut executed = 0u64;
+        let mut pending_local = std::collections::BTreeMap::new();
         let budget_hit = execute_local_budget(
             &mut pending,
+            &mut pending_local,
             0,
             filled,
             fill_hit,
             Some(&outstanding),
             limits,
-            |_ev| executed += 1,
+            |_s, _c| {
+                executed += 1;
+                LocalDisposition::Drained
+            },
         );
+        assert!(pending_local.is_empty(), "A6 未参与 ⇒ pending_local 恒空");
         let elapsed_ms = started.elapsed().as_secs_f64() * 1e3;
         println!("zonek_fill_honors_budget: elapsed_ms={elapsed_ms:.3}");
         let alloc = usize::try_from(limits.tick_max_events.saturating_sub(filled))
@@ -126912,13 +127737,25 @@ mod l2_s3_cross_recipient_tests {
             execute_wall: std::time::Duration::from_secs(60),
             execute_check_every: 1,
         };
-        let (f1, h1) = fill_pending(&rx, &ctl_rx, &mut pending, 8, |_ev| {});
+        let mut seq = 0u64;
+        let mut pending_local = std::collections::BTreeMap::new();
+        let (f1, h1) = fill_pending(&rx, &ctl_rx, &mut pending, 8, &mut seq, |_ev| {});
         assert_eq!((f1, h1), (8, false));
-        let bh1 = execute_local_budget(&mut pending, 0, f1, h1, Some(&outstanding), l1, |ev| {
-            if let GateEvent::Command { cmd, .. } = ev {
-                order.push(cmd.recog);
-            }
-        });
+        let bh1 = execute_local_budget(
+            &mut pending,
+            &mut pending_local,
+            0,
+            f1,
+            h1,
+            Some(&outstanding),
+            l1,
+            |s, _c| {
+                if let GateEvent::Command { cmd, .. } = &s.ev {
+                    order.push(cmd.recog);
+                }
+                LocalDisposition::Drained
+            },
+        );
         assert_eq!(pending.len(), 6, "剩 6 留缓冲");
         assert!(bh1, "截断且工作区非空 ⇒ budget_hit");
         assert_eq!(
@@ -126931,22 +127768,24 @@ mod l2_s3_cross_recipient_tests {
             execute_max_events: 6,
             ..l1
         };
-        let (f2, h2) = fill_pending(&rx, &ctl_rx, &mut pending, 8, |_ev| {});
+        let (f2, h2) = fill_pending(&rx, &ctl_rx, &mut pending, 8, &mut seq, |_ev| {});
         assert_eq!((f2, h2), (0, false), "通道已空");
         let carry_prefix = pending.len();
         assert_eq!(carry_prefix, 6);
         let c0 = perf_counters::zonek_inbound_carry();
         let bh2 = execute_local_budget(
             &mut pending,
+            &mut pending_local,
             carry_prefix,
             f2,
             h2,
             Some(&outstanding),
             l2,
-            |ev| {
-                if let GateEvent::Command { cmd, .. } = ev {
+            |s, _c| {
+                if let GateEvent::Command { cmd, .. } = &s.ev {
                     order.push(cmd.recog);
                 }
+                LocalDisposition::Drained
             },
         );
         assert!(!bh2, "缓冲清空 ⇒ budget_hit=false");
@@ -127033,8 +127872,8 @@ mod l2_s3_cross_recipient_tests {
         let (_g, path) = zonek_arm_counters("columns");
         let ev = zonek_test_cmd(0);
         perf_counters::note_inbound_drained(false, &ev); // 区 0 命令分量
-        perf_counters::note_zonek_inbound_drained(false, &ev);
-        perf_counters::note_zonek_inbound_drained(true, &ev);
+        perf_counters::note_zonek_inbound_drained(false);
+        perf_counters::note_zonek_inbound_drained(true);
         perf_counters::note_zonek_inbound_budget_hit();
         perf_counters::note_zonek_inbound_overflow_dropped();
         perf_counters::note_zonek_inbound_pending_discarded();
@@ -127150,17 +127989,29 @@ mod l2_s3_cross_recipient_tests {
             let (_ctx, ctl_rx) = std::sync::mpsc::channel();
             let mut pending = std::collections::VecDeque::new();
             let d0 = perf_counters::zonek_inbound_drained();
-            let (filled, fill_hit) =
-                fill_pending(&rx, &ctl_rx, &mut pending, ZONEK_TICK_MAX_EVENTS, |_ev| {});
+            let mut seq = 0u64;
+            let mut pending_local = std::collections::BTreeMap::new();
+            let (filled, fill_hit) = fill_pending(
+                &rx,
+                &ctl_rx,
+                &mut pending,
+                ZONEK_TICK_MAX_EVENTS,
+                &mut seq,
+                |_ev| {},
+            );
             let mut executed = 0u64;
             let _ = execute_local_budget(
                 &mut pending,
+                &mut pending_local,
                 0,
                 filled,
                 fill_hit,
                 Some(outstanding),
                 limits,
-                |_ev| executed += 1,
+                |_s, _c| {
+                    executed += 1;
+                    LocalDisposition::Drained
+                },
             );
             drop(tx);
             (executed, perf_counters::zonek_inbound_drained() - d0)
@@ -127178,17 +128029,29 @@ mod l2_s3_cross_recipient_tests {
         drop(ctx);
         let mut pending = std::collections::VecDeque::new();
         let d1 = perf_counters::zonek_inbound_drained();
-        let (filled, fill_hit) =
-            fill_pending(&rx2, &ctl_rx, &mut pending, ZONEK_TICK_MAX_EVENTS, |_ev| {});
+        let mut seq = 0u64;
+        let mut pending_local = std::collections::BTreeMap::new();
+        let (filled, fill_hit) = fill_pending(
+            &rx2,
+            &ctl_rx,
+            &mut pending,
+            ZONEK_TICK_MAX_EVENTS,
+            &mut seq,
+            |_ev| {},
+        );
         let mut executed = 0u64;
         let _ = execute_local_budget(
             &mut pending,
+            &mut pending_local,
             0,
             filled,
             fill_hit,
             Some(&outstanding),
             limits,
-            |_ev| executed += 1,
+            |_s, _c| {
+                executed += 1;
+                LocalDisposition::Drained
+            },
         );
         assert_eq!(executed, 1);
         assert_eq!(
@@ -127238,6 +128101,422 @@ mod l2_s3_cross_recipient_tests {
             PhaseSet::M1B_ZONE_PROD.0 & PhaseSet::PROCESS_ONLY,
             0,
             "A 段段集仍不与 PROCESS_ONLY 相交"
+        );
+    }
+
+    // =====================================================================================
+    // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait，七条负例；§12：源码扫描类标「接线提示」）
+    // =====================================================================================
+
+    /// 测试夹具：一条 `CM_SAY`（`tail` 给定；`@` 起 ⇒ `Process`）。
+    fn zonek_test_say(at: &str) -> GateEvent {
+        GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "p".into(),
+            socket: 900,
+            cmd: CommandMessage {
+                recog: 1,
+                ident: chat::CM_SAY,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: Some(at.to_string()),
+        }
+    }
+
+    fn a6_sessions(chr: &str) -> std::collections::HashMap<String, SessionGround> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(chr.to_string(), crate::tests::test_session_ground(1));
+        m
+    }
+
+    type A6Sessions = std::collections::HashMap<String, SessionGround>;
+
+    /// **负例 1 `a6_no_inflight_executes_immediately`**（无在飞不暂缓）。
+    /// 非恒真：变异"无条件暂缓" ⇒ 本 tick 不执行、断言红。
+    #[test]
+    fn a6_no_inflight_executes_immediately() {
+        let (_g, path) = zonek_arm_counters("a6_no_inflight");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        let mut pending_local = std::collections::BTreeMap::new();
+        let mut buffer = std::collections::VecDeque::from([SeqEvent {
+            seq: 7,
+            ev: zonek_test_cmd(0),
+        }]);
+        let mut order: Vec<i32> = Vec::new();
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.push(cmd.recog);
+            }
+        };
+        let d0 = perf_counters::zonek_inbound_drained();
+        let hit = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 10, &mut exec),
+        );
+        assert!(!hit);
+        assert_eq!(order, vec![0], "无在飞 ⇒ **本 tick** 执行");
+        assert_eq!(perf_counters::zonek_inbound_drained() - d0, 1);
+        assert!(buffer.is_empty(), "buffer 已消费");
+        assert!(pending_local.is_empty(), "pending_local 增量 0");
+        assert!(sessions["p"].a6.deferred_local.is_empty(), "不得暂缓");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 2 `a6_timeout_releases`**（超时必放行；T+1 不放行、T+2 放行）。
+    /// 非恒真：变异"永不超时" ⇒ 红；变异"`>= 1` 即超时" ⇒ T+1 断言红。
+    #[test]
+    fn a6_timeout_releases() {
+        let (_g, path) = zonek_arm_counters("a6_timeout");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(100);
+            sg.a6.control_epoch = 3;
+            sg.a6.deferred_local.push_back(PendingLocalCmd {
+                seq: 5,
+                ev: zonek_test_cmd(5),
+                at_tick: 100,
+            });
+        }
+        let mut pending_local = std::collections::BTreeMap::new();
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 101, zone),
+            (0, 0),
+            "T+1 不得触发（`tick - t0 >= 2` 才超时）"
+        );
+        assert_eq!(sessions["p"].a6.deferred_local.len(), 1, "仍暂缓");
+        let w0 = perf_counters::zonek_control_wait_timeout();
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 102, zone),
+            (1, 1),
+            "T+2 放行 + 超时计数"
+        );
+        assert_eq!(perf_counters::zonek_control_wait_timeout() - w0, 1);
+        assert_eq!(sessions["p"].a6.control_pending, 0, "超时清零");
+        assert_eq!(sessions["p"].a6.control_first_tick, None);
+        assert_eq!(sessions["p"].a6.control_epoch, 4, "epoch +1");
+        assert_eq!(pending_local.len(), 1, "搬入待执行");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 3 `a6_clear_resumes_immediately`**（计数归零后立刻恢复；延迟条先于新缓冲）。
+    /// 非恒真：变异"执行时忽略 pending_local" ⇒ 顺序断言红；变异"决策不搬队列" ⇒ 增量 0 红。
+    #[test]
+    fn a6_clear_resumes_immediately() {
+        let (_g, path) = zonek_arm_counters("a6_clear");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(10);
+            sg.a6.deferred_local.push_back(PendingLocalCmd {
+                seq: 5,
+                ev: zonek_test_cmd(5),
+                at_tick: 10,
+            });
+        }
+        // 区 0 执行完唯一一条控制命令 ⇒ RAII 守卫 Drop 清位（计数 1→0、first_tick 清）。
+        {
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["p"].a6.control_pending, 0);
+        assert_eq!(sessions["p"].a6.control_first_tick, None);
+        let mut pending_local = std::collections::BTreeMap::new();
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 11, zone).0,
+            1,
+            "计数归零 ⇒ 下一次决策搬入"
+        );
+        // 段内：延迟条（seq=5）先于同 tick 新到的 buffer（seq=7）。
+        let mut buffer = std::collections::VecDeque::from([SeqEvent {
+            seq: 7,
+            ev: zonek_test_cmd(7),
+        }]);
+        let mut order: Vec<i32> = Vec::new();
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.push(cmd.recog);
+            }
+        };
+        let d0 = perf_counters::zonek_inbound_drained();
+        let _ = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 12, &mut exec),
+        );
+        assert_eq!(order, vec![5, 7], "延迟条（到达序号更小）先于新缓冲");
+        assert_eq!(perf_counters::zonek_inbound_drained() - d0, 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 4 `a6_mailbox_full_rejects_without_marking`**（邮箱满不置位）。
+    /// 非恒真：变异"删满判" ⇒ 入队成功、rejected 0 ⇒ 红；变异"先置位后入队" ⇒ pending≠0 ⇒ 红。
+    #[test]
+    fn a6_mailbox_full_rejects_without_marking() {
+        let (_g, path) = zonek_arm_counters("a6_mailbox");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        {
+            let mut q = inbox.lock().expect("inbox");
+            for i in 0..CONTROL_MAILBOX_CAP {
+                q.push_back(ControlRequest {
+                    zone,
+                    chr_name: format!("x{i}"),
+                    line: "@".into(),
+                    at_tick: 0,
+                    epoch: 0,
+                });
+            }
+        }
+        let r0 = perf_counters::zonek_control_mailbox_rejected();
+        let d0 = perf_counters::zonek_inbound_drained();
+        let mut buffer = std::collections::VecDeque::from([SeqEvent {
+            seq: 1,
+            ev: zonek_test_say("@1"),
+        }]);
+        let mut pending_local = std::collections::BTreeMap::new();
+        let mut exec = |_e: &GateEvent, _s: &mut A6Sessions| {};
+        let _ = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            |item, class| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    Some(&inbox),
+                    &mut sessions,
+                    zone,
+                    10,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(
+            perf_counters::zonek_control_mailbox_rejected() - r0,
+            1,
+            "满 ⇒ 丢弃计数 +1"
+        );
+        assert_eq!(sessions["p"].a6.control_pending, 0, "满 ⇒ **不置位**");
+        assert_eq!(
+            inbox.lock().expect("inbox").len(),
+            CONTROL_MAILBOX_CAP,
+            "该命令不得入队"
+        );
+        assert_eq!(
+            perf_counters::zonek_inbound_drained() - d0,
+            1,
+            "§6：被消费并作出处置 ⇒ drained +1（不是“成功执行条数”）"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 5 `a6_overflow_executes_in_place_in_arrival_order`**（溢出就地、不动在飞）。
+    /// 非恒真：变异"溢出改成搬 pending_local" ⇒ 本 tick <9 条/顺序红；变异"丢新" ⇒ 8 条红；
+    /// 变异"溢出顺手清在飞" ⇒ pending==0 红。
+    #[test]
+    fn a6_overflow_executes_in_place_in_arrival_order() {
+        let (_g, path) = zonek_arm_counters("a6_overflow");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(3);
+            for i in 0..A6_DEFER_CAP {
+                let i = i as i32;
+                sg.a6.deferred_local.push_back(PendingLocalCmd {
+                    seq: i as u64,
+                    ev: zonek_test_cmd(i),
+                    at_tick: 3,
+                });
+            }
+        }
+        let first_before = sessions["p"].a6.control_first_tick;
+        let o0 = perf_counters::zonek_control_defer_overflow();
+        let d0 = perf_counters::zonek_inbound_drained();
+        let mut buffer = std::collections::VecDeque::from([SeqEvent {
+            seq: 8,
+            ev: zonek_test_cmd(8),
+        }]);
+        let mut pending_local = std::collections::BTreeMap::new();
+        let mut order: Vec<i32> = Vec::new();
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.push(cmd.recog);
+            }
+        };
+        let _ = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 3, &mut exec),
+        );
+        assert_eq!(
+            order,
+            (0..9).collect::<Vec<i32>>(),
+            "9 条按到达序全部**本 tick** 执行"
+        );
+        assert!(sessions["p"].a6.deferred_local.is_empty());
+        assert!(pending_local.is_empty(), "不搬 pending_local");
+        assert_eq!(sessions["p"].a6.control_pending, 1, "不动在飞计数");
+        assert_eq!(
+            sessions["p"].a6.control_first_tick, first_before,
+            "不动 control_first_tick"
+        );
+        assert_eq!(perf_counters::zonek_control_defer_overflow() - o0, 1);
+        assert_eq!(perf_counters::zonek_inbound_drained() - d0, 9);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 6 `a6_two_control_commands_hold_until_both_done`**（同玩家多条 `@`）。
+    /// 非恒真：变异"只清最早一条" ⇒ move 提前放行 ⇒ 红；变异"永不减" ⇒ 永不执行 ⇒ 红。
+    #[test]
+    fn a6_two_control_commands_hold_until_both_done() {
+        let (_g, path) = zonek_arm_counters("a6_two_control");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 2;
+            sg.a6.control_first_tick = Some(20);
+            sg.a6.deferred_local.push_back(PendingLocalCmd {
+                seq: 5,
+                ev: zonek_test_cmd(5),
+                at_tick: 20,
+            });
+        }
+        let mut pending_local = std::collections::BTreeMap::new();
+        // 第一条 `@` 执行完：2→1，`first_tick` 不变 ⇒ 不得放行。
+        {
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["p"].a6.control_pending, 1);
+        assert_eq!(
+            sessions["p"].a6.control_first_tick,
+            Some(20),
+            "首 tick 不清"
+        );
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 21, zone),
+            (0, 0),
+            "还有在飞 ⇒ 不得放行"
+        );
+        // 第二条 `@` 执行完：1→0 ⇒ 清 first_tick、下一次决策放行。
+        {
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["p"].a6.control_pending, 0);
+        assert_eq!(sessions["p"].a6.control_first_tick, None);
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 21, zone).0,
+            1,
+            "两条都执行完 ⇒ move 才放行"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **负例 7 `a6_timeout_then_stale_clear_is_ignored`**（超时后的旧请求不污染新计数）。
+    /// 非恒真：变异"无条件减" ⇒ 旧请求执行后 pending==0 ⇒ 红。
+    #[test]
+    fn a6_timeout_then_stale_clear_is_ignored() {
+        let (_g, path) = zonek_arm_counters("a6_stale");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(30);
+            sg.a6.deferred_local.push_back(PendingLocalCmd {
+                seq: 5,
+                ev: zonek_test_cmd(5),
+                at_tick: 30,
+            });
+        }
+        let mut pending_local = std::collections::BTreeMap::new();
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 32, zone),
+            (1, 1),
+            "超时清零（epoch 1）"
+        );
+        assert_eq!(sessions["p"].a6.control_epoch, 1);
+        // 新 `@` 入队 ⇒ pending 1、first_tick = 新 tick。
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        assert!(a6_enqueue_control(
+            &inbox,
+            &mut sessions,
+            zone,
+            "p",
+            "@2".into(),
+            chat::CM_SAY,
+            40
+        ));
+        assert_eq!(sessions["p"].a6.control_pending, 1);
+        assert_eq!(sessions["p"].a6.control_first_tick, Some(40));
+        // **旧**请求（epoch=0 ≠ 1）执行完 ⇒ 不动计数。
+        {
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["p"].a6.control_pending, 1, "旧请求不得减计数");
+        assert_eq!(sessions["p"].a6.control_first_tick, Some(40));
+        // **新**请求（epoch=1）执行完 ⇒ 归零。
+        {
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 1);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["p"].a6.control_pending, 0);
+        assert_eq!(sessions["p"].a6.control_first_tick, None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A6 接线提示（§12：非行为证据）**：生产面必须真的调用分派器与决策器
+    /// （否则上面七条只证明纯函数对、不证明接上了）。
+    #[test]
+    fn a6_wiring_hints_production_calls_present() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        assert!(
+            prod.matches("a6_dispatch_local(").count() >= 1,
+            "LOCAL 段必须经 a6_dispatch_local 分派"
+        );
+        assert!(
+            prod.matches("a6_decide(").count() >= 1,
+            "tick 顶必须经 a6_decide 决策"
+        );
+        assert!(
+            prod.matches("A6ControlGuard::new(").count() >= 1,
+            "区 0 drain 必须用 RAII 清位守卫"
         );
     }
 
