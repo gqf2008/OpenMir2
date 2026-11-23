@@ -396,21 +396,27 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
     `flush_map_mode_writes_into_world` 变空操作或需回到区 0 执行（T+1），`PLAYER_RUN` 不能整体给区 k；
   - **(b) 像帧一样跨区路由**：map-mode 写入走控制邮箱回区 0 统一应用，其余区下一 tick 读到新值：
     代价 = 一条新的跨区写通道 + 顺序契约（与 §9 的 stop-and-wait 同一类问题）。
-  - **(c) 只把「每图 flag 表」抽成 `Arc` 共享**（`0c` 2026-11-23 复核补充，**推荐**）：`registry` 的
-    **唯一运行时可变态就是每图 `flag`**——`set_flag` 只由 `flush_map_mode` 在 `PLAYER_RUN` 调，
-    写源是区 0 脚本 `ActionOfSetMapMode`；区 k 的 `shop_sessions` 无脚本、flush 写空。其余
-    （terrain/desc/routes/gates）各区副本相同、只 `as_ref` 读 ⇒ 只把 flag 表换成 `Arc<…>`
-    （区 0 写、各区读 `flag_of`/`map_desc`，`MapInfoFlag` 按值可复制），**无新通道、无顺序契约**，
-    且 **`PLAYER_RUN` 可整体给区 k**。代价 = 改 `MapRegistry` 的 flag 存储与 `flag_of`/`set_flag` 两处路由。
-    **(a)/(b) 降为备选**（(c) 不成立时的退路）。
+  - **(c3) 共享「flag 变更队列」、各区 tick 内 apply**（`0c` 2026-11-23 复核定案，**采纳**）：
+    `registry` 的**唯一运行时可变态就是每图 `flag`**（`set_flag` 只由 `flush_map_mode` 在 `PLAYER_RUN`
+    调，写源是区 0 脚本 `ActionOfSetMapMode`；区 k 的 `shop_sessions` 无脚本、flush 写空）；
+    其余（terrain/desc/routes/gates）各区副本相同、只 `as_ref` 读。
+    形态：`SharedServices` 加 `flag_sync: Arc<Mutex<…>>`（latest-per-map）；区 0 的
+    `flush_map_mode_writes`（`map_mode.rs`）落库后 push；各区每 tick 在 `PLAYER_RUN` 顶部
+    drain 并调**本区自己**的 `registry.set_flag(map_id, flag)`。flag 每图幂等 ⇒ T+1 apply 安全、
+    **无顺序契约**；**`flag_of`/`set_flag` 签名与 ~25 个调用点零改**，**PLAYER_RUN 可整体给区 k**。
+  - **(c) naive：把整张 flag 表换成 `Arc` 直接共享——已否决**：`MapInfoFlag`（`mapinfo.rs`）
+    **非 `Copy`**（含 `String s_no_reconnect_map`），Arc 化后 `flag_of` 只能按值返回
+    （`Option<MapInfoFlag>`），**~25 处调用点要改，且帧 766/54/46 与 P25 DECHP/INCHP 等事件/热路径
+    每次多一次 `String` 分配**。(a)/(b) 同为备选。
 
   > **为什么不能"证否"**（`0c` 复核）：`zone.rs` 的 `ZoneSpan{zone,map_id,rect}` + `zone_of(map_id,x,y)`
   > 按**坐标**归区，且存在测试 `two_zone_of_map_zero()`（同一 `map 0` 切成两区）⇒ 同一 `map_id` 跨区持有
   > 实体；`flag_of` 的读者含帧 766/54/46（`Envir.Flag` 下发客户端）、P25 `DECHP`/`INCHP`、安全区、
   > 行会战图门 ⇒ 不共享则**客户端可见**的同图 flag 分叉。**A7 是真风险、不关**。
-- **`shard_runtime`**：按设计**每区一份、可接受**（`accept_map_change` 只做本片归属判定），
-  但 **M1b 必须核**：它的「跨片拒绝」计数是**进程级 `Arc<Atomic>` 共享**（非每实例），否则计数会分区、
-  与区 0 语义不一致。
+- **`shard_runtime`**：每区一份**不成立"无分叉"**（`0c` 2026-11-23 实测）——`ShardCounters`
+  （`shard.rs`）是 **plain `u64` 字段**，`counters()` 返回**拷贝**、`self.counters.x += 1` 是实例内递增
+  ⇒ 每区一份会让「跨片拒绝」计数**分区**。**M1b 放行条件**：计数改 `Arc<AtomicU64>` 共享，
+  或在 telemetry 读处**跨区求和**（先 grep `counters()` 读者定哪条更省）。
 - **`enter_cfg`/`colors`**：只读，无分叉。
 - **`zone_host`**：`Arc` 共享，语义即全局单点（守卫/停止），无分叉。
 
