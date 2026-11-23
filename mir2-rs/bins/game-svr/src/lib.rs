@@ -125238,8 +125238,13 @@ mod zone_disconnect_tests {
 
     /// 在指定区落一个玩家（沿用 1b 的登录落区路径），返回（区状态, actor id）。
     pub(super) fn landed(tag: &str, zone_id: zone::ZoneId) -> (ZoneState, i32) {
-        let base =
-            std::env::temp_dir().join(format!("zone_disconnect_{tag}_{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "zone_disconnect_{tag}_{}_{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         write_map_fixture(&base);
         let registry = fixture_registry(&base);
