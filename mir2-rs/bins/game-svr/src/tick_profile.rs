@@ -235,6 +235,16 @@ pub struct SlowTick {
 impl SlowTick {
     /// 打印成一行 `[TICKPROF] SLOW …`：段按耗时降序，百分比以**工作段**为分母。
     pub fn log(&self) {
+        self.log_with(None);
+    }
+
+    /// 非宿主区（区 k）：与 [`Self::log`] 同格式，行首加 `zone=<k>` 字段（宿主行格式不变）。
+    pub fn log_zone(&self, zone: u32) {
+        self.log_with(Some(zone));
+    }
+
+    fn log_with(&self, zone: Option<u32>) {
+        let zp = zone.map_or_else(String::new, |z| format!("zone={z} "));
         let work = self.work_ns.max(1) as f64;
         let mut segs: Vec<(&'static str, u64)> = self
             .segments
@@ -268,7 +278,7 @@ impl SlowTick {
         };
         crate::glog!(
             "INF",
-            "[TICKPROF] SLOW tick#{} work={:.3}ms total={:.3}ms sleep={:.3}ms unacct={:.3}ms ({:.1}%){}{}",
+            "[TICKPROF] {zp}SLOW tick#{} work={:.3}ms total={:.3}ms sleep={:.3}ms unacct={:.3}ms ({:.1}%){}{}",
             self.tick,
             self.work_ns as f64 / 1e6,
             self.total_ns as f64 / 1e6,
@@ -974,6 +984,57 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
                 calls / world.ticks.max(1)
             );
         }
+    }
+}
+
+/// 非宿主区（区 k）的窗口行：与 [`log_window`] 同口径的精简版，**每行**带 `zone=<k>` 前缀。
+///
+/// 区 k 不写进程级 TSV（`perf_counters::write_tick` 是单写者：`swap(0)` 清全局计数 + 行号自增），
+/// 验收侧从这些行读区 k 的 `work`。宿主（区 0/N=1）仍走 [`log_window`]，输出逐字节不变。
+pub fn log_window_zone(zone: u32, host: &HostWindow, world: Option<&WorldDelta>, entities: usize) {
+    let ticks = host.ticks.max(1) as f64;
+    let total_ms = host.total_ns as f64 / 1e6 / ticks;
+    crate::glog!(
+        "INF",
+        "[TICKPROF] zone={zone} 窗口 {} tick：整 tick 均值 {:.2} ms/tick（墙钟合计 {:.2}s，实体内 {}，门控 MIR2_TICK_PROFILE=1）",
+        host.ticks,
+        total_ms,
+        host.total_ns as f64 / 1e9,
+        entities
+    );
+    let mut rows = host.rows.clone();
+    rows.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
+    let sleep_ns = rows
+        .iter()
+        .find(|(n, _, _)| *n == "HostSleep")
+        .map_or(0, |(_, ns, _)| *ns);
+    let total_ns = host.total_ns.max(1) as f64;
+    for (name, ns, calls) in &rows {
+        crate::glog!(
+            "INF",
+            "[TICKPROF] zone={zone}   {:<22} {:>9.3} ms/tick {:>7.2}% tick  ({} 次)",
+            name,
+            *ns as f64 / 1e6 / ticks,
+            *ns as f64 / total_ns * 100.0,
+            calls / host.ticks.max(1)
+        );
+    }
+    let work_ns = host.total_ns.saturating_sub(sleep_ns);
+    crate::glog!(
+        "INF",
+        "[TICKPROF] zone={zone} 工作段合计（= HostTickTotal - HostSleep）= {:.2} ms/tick，占比 {:.2}%",
+        work_ns as f64 / 1e6 / ticks,
+        work_ns as f64 / total_ns * 100.0
+    );
+    log_quantiles(
+        &format!("zone={zone} HostTickTotal 工作段"),
+        &host.work_samples,
+    );
+    if world.is_none() {
+        crate::glog!(
+            "INF",
+            "[TICKPROF] zone={zone} World 探针未开启（world.tick_profile() = None）"
+        );
     }
 }
 
