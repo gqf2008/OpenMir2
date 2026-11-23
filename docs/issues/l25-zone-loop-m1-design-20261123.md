@@ -296,6 +296,8 @@ fn tick(self, shared: SharedServices, mut process: Option<ProcessServices>, io: 
   进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），并用**常量别名保持旧位等价**：
   `const PERSIST: u32 = PERSIST_DB | PERSIST_OUTBOX;`（区 0 两位都开 ≡ 旧行为；同步更新
   `RAN_SEGMENTS` 的精确相等断言与 `M0_MIN`/`M1_MIN` 的位集写法）。**函数体内真正的拆分留 M1c**。
+  **见证与期望集一律用别名 `PERSIST`（两位同置），禁止写半位**——否则 M1c 首次把 PERSIST 纳入区 k
+  时会出现「记两位、期望写半位」的假红；两位拆开后多一位或少一位仍必红。
 - **入口 fail-fast（`assert!`，release 也生效）**：
   ```rust
   if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
@@ -355,3 +357,20 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 - 同批修掉的既有脆弱点另两处：`g3_anchor_a5` 的折行字面量、`login_tail` 的缩进字面量（都不再钉某一种
   折行/缩进）。
 - 零语义判据（0a-2）：去空白**并去掉 `,{}`** 后与 0a-1 逐字符相同（3,216,037 字符）。
+
+## 9. M1b 前置：`INBOUND` 拆段（A 方案，opc-27 2026-11-23 裁决；**不属 `M1-0c'` 范围**）
+
+`HostServices` 的进程-only 字段会在 `INBOUND` 段被大量使用（`guilds` 12、`npc_vars_base` 6、
+`merchant_book` 4、`gm_*` 各 7、`pwd_sessions` 9…）⇒ b-2 的「INBOUND 入口 `proc_svc!`」会让区 k
+一进 INBOUND 就 panic。**M1b 打开区 k 的 INBOUND 之前，必须先拆段**：
+
+1. `INBOUND` 原语义改名 **`INBOUND_PROCESS`**，新增 **`INBOUND_LOCAL`**；**保留别名
+   `INBOUND = INBOUND_LOCAL | INBOUND_PROCESS`**（区 0 两位同开 ≡ 旧行为，N=1 两树兜底）。
+2. **分类器唯一且穷尽**：命令种类用 `match` 显式归类，**禁止 `_ =>` 通配**——新增命令变体在归类前
+   编译不过（编译期 fail-closed，比任何清单都硬）。
+3. **分流点在区 k 排水口、派发前**：控制类（商店/点击 NPC/行会/城堡/GM/换服/handoff）转控制邮箱；
+   **不新造句柄**。
+4. **顺序契约（M1b 放行条件）**：按类分流会让同一玩家的后续**本地**命令越过先前已转发的**控制**
+   命令（两条队列）。M1b 设计必须先给出**每玩家 stop-and-wait**（有在飞控制命令时暂缓该玩家后续
+   本地命令直到回执），**或立 deviation 卡报 Owner**。
+5. `PROCESS_ONLY` 届时从 `INBOUND` 换成 `INBOUND_PROCESS`（同 `PERSIST` 别名手法，见证用别名）。
