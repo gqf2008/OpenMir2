@@ -34517,12 +34517,7 @@ fn sim_loop(
         shutdown,
     };
     loop {
-        let (host_next, shared_next, process_next, tick_io_next, outcome) =
-            host.tick(shared, process, tick_io, PhaseSet::ALL);
-        host = host_next;
-        shared = shared_next;
-        process = Some(process_next.expect("区 0 必须回传 ProcessServices（进程-only 段依赖它）"));
-        tick_io = tick_io_next;
+        let outcome = host.tick(&mut shared, &mut process, &mut tick_io, PhaseSet::ALL);
         if outcome == TickOutcome::Exited {
             return;
         }
@@ -34788,13 +34783,6 @@ enum TickOutcome {
 }
 
 /// [`HostLoop::tick`] 的返回值：把三块状态原样交还（move，不分配）。
-type TickOut = (
-    HostLoop,
-    SharedServices,
-    Option<ProcessServices>,
-    TickIo,
-    TickOutcome,
-);
 
 impl HostLoop {
     /// **M0/A3**：区 k 的空实例（口径同 `ZoneState::new`：`with_maps` + `seed ^ zone` +
@@ -34850,40 +34838,38 @@ impl HostLoop {
     // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
     #[allow(clippy::needless_borrow)]
     fn tick(
-        self,
-        shared: SharedServices,
-        mut process: Option<ProcessServices>,
-        io: TickIo,
+        &mut self,
+        shared: &mut SharedServices,
+        process: &mut Option<ProcessServices>,
+        io: &mut TickIo,
         phases: PhaseSet,
-    ) -> TickOut {
-        let HostLoop {
-            mut world,
-            mut displays,
-            mut online,
-            mut ground_sessions,
-            mut saves,
-            mut login_tails,
-            mut aoi_frames_total,
-            mut shop_sessions,
-            mut trade_sessions,
-            mut sell_off_sessions,
-            mut mon_gen_host,
-            mut line_notice_states,
-            mut monster_walk_seen,
-            mut gates,
-            mut handoff_runtime,
-            mut ticks,
-            tick,
-            mut event_carry,
-            mut event_carry_ctl,
-            mut entry_telemetry_next_ms,
-            mut entry_telemetry_last,
-            mut host_prof,
-            mut world_prof_last,
-            local_shard,
-            is_host,
-            telemetry_prefix,
-        } = self;
+    ) -> TickOutcome {
+        let mut world = &mut self.world;
+        let mut displays = &mut self.displays;
+        let mut online = &mut self.online;
+        let mut ground_sessions = &mut self.ground_sessions;
+        let mut saves = &mut self.saves;
+        let mut login_tails = &mut self.login_tails;
+        let mut aoi_frames_total = &mut self.aoi_frames_total;
+        let mut shop_sessions = &mut self.shop_sessions;
+        let mut trade_sessions = &mut self.trade_sessions;
+        let mut sell_off_sessions = &mut self.sell_off_sessions;
+        let mut mon_gen_host = &mut self.mon_gen_host;
+        let mut line_notice_states = &mut self.line_notice_states;
+        let mut monster_walk_seen = &mut self.monster_walk_seen;
+        let mut gates = &mut self.gates;
+        let mut handoff_runtime = &mut self.handoff_runtime;
+        let mut ticks = &mut self.ticks;
+        let tick = self.tick;
+        let mut event_carry = &mut self.event_carry;
+        let mut event_carry_ctl = &mut self.event_carry_ctl;
+        let mut entry_telemetry_next_ms = &mut self.entry_telemetry_next_ms;
+        let mut entry_telemetry_last = &mut self.entry_telemetry_last;
+        let mut host_prof = &mut self.host_prof;
+        let mut world_prof_last = &mut self.world_prof_last;
+        let local_shard = self.local_shard;
+        let is_host = self.is_host;
+        let mut telemetry_prefix = &mut self.telemetry_prefix;
         // **M1-0c'（b-2）**：进程-only 段入口 fail-fast + 唯一收敛点。先断言、后解构（见设计 §8.2）。
         if phases.0 & PhaseSet::PROCESS_ONLY != 0 {
             assert!(
@@ -34901,33 +34887,18 @@ impl HostLoop {
                     .expect(concat!("区 k 不得进入进程-only 段: ", $seg))
             }};
         }
-        let SharedServices {
-            mut registry,
-            enter_cfg,
-            mut shard_runtime,
-            colors,
-            zone_host,
-        } = shared;
-        let TickIo {
-            ev_rx,
-            ev_ctl_rx,
-            shutdown,
-        } = io;
+        let mut registry = &mut shared.registry;
+        let mut enter_cfg = &mut shared.enter_cfg;
+        let mut shard_runtime = &mut shared.shard_runtime;
+        let mut colors = &mut shared.colors;
+        let mut zone_host = &mut shared.zone_host;
+        let mut ev_rx = &mut io.ev_rx;
+        let mut ev_ctl_rx = &mut io.ev_ctl_rx;
+        let mut shutdown = &mut io.shutdown;
         let mut scratch = TickScratch::default();
         // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
         // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
         // 退出/正常收尾都把三块状态原样交还（move；同一批局部在两条路径上都在作用域内）。
-        macro_rules! pack_tick_out {
-            ($o:expr) => {
-                (
-                    HostLoop { world, displays, online, ground_sessions, saves, login_tails, aoi_frames_total, shop_sessions, trade_sessions, sell_off_sessions, mon_gen_host, line_notice_states, monster_walk_seen, gates, handoff_runtime, ticks, tick, event_carry, event_carry_ctl, entry_telemetry_next_ms, entry_telemetry_last, host_prof, world_prof_last, local_shard, is_host, telemetry_prefix },
-                    SharedServices { registry, enter_cfg, shard_runtime, colors, zone_host },
-                    process,
-                    TickIo { ev_rx, ev_ctl_rx, shutdown },
-                    $o,
-                )
-            };
-        }
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
         if phases.has(PhaseSet::SHUTDOWN) {
@@ -35016,22 +34987,22 @@ impl HostLoop {
                     glog!("ERR", "{e}");
                     std::process::exit(2);
                 }
-                return pack_tick_out!(TickOutcome::Exited);
+                return TickOutcome::Exited;
             }
             host_prof.end("HostShutdown", t);
         }
         // **L2-4 段 6b**：本 tick 的**单源** tick 号（快照/屏障/账本共用）。`ticks` 在本 tick
         // 中段才自增（HostFrames）⇒ 下半段任何要 tick 号的地方一律读这里，不做偏移。
-        let tick_no = ticks;
+        let tick_no = *ticks;
         // **L2-5 ⑤**：本 tick 的跨区帧 `src_tick`/`seq` 起点。
         cross_zone_frames::begin_tick(tick_no);
         // **P2-3b (A)**：计数器跨片累加，汇总行只片 0 打；N>1 行首带 `shards=N aggregated`。
-        if is_host && world.clock_ms >= entry_telemetry_next_ms {
-            entry_telemetry_next_ms = world.clock_ms + 5_000;
+        if is_host && world.clock_ms >= *entry_telemetry_next_ms {
+            *entry_telemetry_next_ms = world.clock_ms + 5_000;
             let line = format!("{telemetry_prefix}{}", telemetry::summary_line());
             if entry_telemetry_last.as_deref() != Some(line.as_str()) {
                 glog!("INF", "{}", line);
-                entry_telemetry_last = Some(line);
+                *entry_telemetry_last = Some(line);
             }
         }
         // **到达积压每轮采样**（卡 `openmir2-tick-starvation` 复核分流）：这是 tick 循环顶部的
@@ -35976,7 +35947,7 @@ impl HostLoop {
                                 &displays,
                                 &mut guilds,
                                 &guild_cfg,
-                                &mut ground_sessions,
+                                &mut *ground_sessions,
                                 &gates,
                                 enter_cfg.ref_msg_range,
                                 (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
@@ -36146,7 +36117,7 @@ impl HostLoop {
                                 guild_store.as_ref(),
                                 &enter_cfg.guild_sections,
                                 &enter_cfg.guild_msg_cfg,
-                                &mut ground_sessions,
+                                &mut *ground_sessions,
                                 &guild_runtime::DisconnectCtx {
                                     chr_name: &chr_name,
                                     bo_reconnection: bo_reconnection,
@@ -36318,7 +36289,7 @@ impl HostLoop {
                             &gates,
                             &online,
                             &mut soft_close_pending,
-                            colors,
+                            *colors,
                             &account,
                             session_id,
                         );
@@ -37498,7 +37469,7 @@ impl HostLoop {
                     &host.barriers,
                 );
                 // **L2-5 ②**：快照的帧面来源 = 本区展示表 + 在线路由表（只在多区路径构造）。
-                let frame_source = region_loop::HaloFrameSource::new(&displays, &online);
+                let frame_source = region_loop::HaloFrameSource::new(&*displays, &*online);
                 let (_border, neighbors, wait_phase1_us) =
                     match runtime.after_phase1(&world, tick_no, &frame_source) {
                         Ok((border, neighbors, wait_us)) => (border, neighbors, wait_us),
@@ -37718,7 +37689,7 @@ impl HostLoop {
         if phases.has(PhaseSet::DEAL_TICK) {
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DEAL_TICK));
-            ticks += 1;
+            *ticks += 1;
             let t = host_prof.begin();
             // `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
             // `Dealing` 但 `GetPoseCreate() != DealCreat` / `DealCreat == this` / `DealCreat == null`。
@@ -37847,7 +37818,7 @@ impl HostLoop {
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::DIAG));
             let t = host_prof.begin();
-            if let Some(diag) = host_diag_maybe(ticks, &world, &displays, &aoi_frames_total) {
+            if let Some(diag) = host_diag_maybe(*ticks, &world, &displays, &aoi_frames_total) {
                 glog!(
                     "DBG",
                     "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
@@ -37885,7 +37856,7 @@ impl HostLoop {
         }
         // 探针：每 tick 尾落一行（关闭态零分配；见 perf_counters::write_tick）。
         perf_counters::write_tick();
-        pack_tick_out!(TickOutcome::Continue)
+        TickOutcome::Continue
     }
 }
 
@@ -45572,7 +45543,11 @@ mod tests {
             shutdown,
         };
         RAN_SEGMENTS.with(|c| c.set(0));
-        let (host, _shared, _process, io, outcome) = host.tick(shared, None, io, PhaseSet::M0_MIN);
+        let mut host = host;
+        let mut shared = shared;
+        let mut process = None;
+        let mut io = io;
+        let outcome = host.tick(&mut shared, &mut process, &mut io, PhaseSet::M0_MIN);
         assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
         assert_eq!(
             PhaseSet::M0_MIN.0,
@@ -45625,7 +45600,11 @@ mod tests {
             shutdown,
         };
         PROC_SVC_SEGMENTS.with(|c| c.set(0));
-        let _ = host.tick(shared, Some(process), io, PhaseSet::ALL);
+        let mut host = host;
+        let mut shared = shared;
+        let mut process = Some(process);
+        let mut io = io;
+        let _ = host.tick(&mut shared, &mut process, &mut io, PhaseSet::ALL);
         let got = PROC_SVC_SEGMENTS.with(std::cell::Cell::get);
         assert_eq!(
             got, PhaseSet::PROCESS_ONLY,
@@ -45650,7 +45629,16 @@ mod tests {
             ev_ctl_rx,
             shutdown,
         };
-        let _ = host.tick(shared, None, io, PhaseSet(PhaseSet::WORLD_TAIL));
+        let mut host = host;
+        let mut shared = shared;
+        let mut process = None;
+        let mut io = io;
+        let _ = host.tick(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet(PhaseSet::WORLD_TAIL),
+        );
     }
 
     /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
