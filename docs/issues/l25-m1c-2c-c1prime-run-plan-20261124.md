@@ -48,10 +48,15 @@
 - **`CM_DROPITEM` 不能用**：本仓 1:1 复刻 oracle 既有形态——`MapItem.ItemId` 恒 0 ⇒
   `AddItemToMap` 恒 false ⇒ 普通丢弃**恒回 `SM_DROPITEM_FAIL(601)`、背包不动**（whitelist T-19）。
   ⇒ 产物只能**吃掉**（§2.3/§4）。
-- **启动期分配源**：`generate_drops` 在**怪物生成**时预算掉落（`World::budget_monster_drops`）；
-  `GuardList.txt`（测试栈实有 77 行）经 `place_guards` → `regen_monster_by_name` 生成守卫 ⇒
-  **启动即分配**；`step_mon_gen` 对全图带 MonGen 条目的地图持续生成 ⇒ 持续分配。
-  ⇒ 两者都必须**关**（§3.3），否则 `STARTUP_ROWS==0` 不成立、trace 也不是"解包专属"。
+- **启动期分配源（含 `1..999` 段的来源）**：`generate_drops` 在**怪物生成**时预算掉落
+  （`World::budget_monster_drops`，`mongen.rs` 的 `WorldMonsterSink`）。`sim_loop` 的顺序是
+  `world = production_world(map_sizes, &counter, …)`（计数器值仍为 0）→ 商人/NPC/守卫装载 →
+  **`place_guards`（测试栈 `GuardList.txt` 77 行）** → … → 最后才
+  `item_number.store(item_number_init, …)`。⇒ **守卫/城堡/刷怪在 store 之前就已把 0 号计数器
+  推进**（drop 预算按逐守卫掉落表生成），trace 里 `1..999` 那一段就是这类"store 前的启动分配"；
+  `store` 之后才是 `412072..` 段。`step_mon_gen` 则对全图带 MonGen 条目的地图**持续**生成。
+  ⇒ 必须让**启动期无任何怪物生成**（§3.3）：`MonGen.txt` 存在但为空时，`MonGenHost` 仍会建
+  （守卫/城堡实体挂图仍跑）——**要让宿主不存在，必须把文件挪走**（`entries=None`）。
 
 ## 2. 装置与最小改动
 
@@ -127,12 +132,16 @@
 **File ID 不同、各自只有自身一条 hardlink、当前内容同 sha** ⇒ **独立拷贝**。
 ⇒ 夹具只动 teststack 这份；`E:/MirServer/...` **不碰**（N=1/真机口径）。
 
-| 文件 | 基线 sha256（2026-11-24 实测） | 动作 |
-| --- | --- | --- |
-| `E:/OPC/teststack/rust-root/M2GameSvr/Envir/MonGen.txt` | `E5C39FB7EDA66B70F82A61A5C2CEA25DF9CF0B6892B916FB6D579F88FF43748F`（126,292B） | 备份 `.c1prime.bak` → 写只含注释的空表 |
-| `E:/OPC/teststack/rust-root/M2GameSvr/Envir/GuardList.txt` | 77 行（实测行数；sha 开窗时现取并记入 summary） | 同法：备份 → 空表（守卫生成走 `generate_drops`，启动即分配） |
+**做法：把 `MonGen.txt` 改名挪走（不是置空）**——空文件会让 `MonGenHost::start` 仍建宿主
+（`entries=Some([])`），守卫放置与城堡实体挂图仍会跑、仍会分配；**文件不存在**才是
+`entries=None` ⇒ 无宿主 ⇒ `place_guards`、城堡挂图、`step_mon_gen` **三处整块跳过**：
 
-跑完**逐一还原**并断言 sha256 与备份相等；任一不等 ⇒ 整跑作废。
+| 文件（均 `E:/OPC/teststack/rust-root/M2GameSvr/Envir/` 下） | 基线（2026-11-24 实测） | 动作 |
+| --- | --- | --- |
+| `MonGen.txt` | sha256 `E5C39FB7EDA66B70F82A61A5C2CEA25DF9CF0B6892B916FB6D579F88FF43748F`，126,292B | **改名**为 `MonGen.txt.c1prime.bak`（恢复=改回原名；不删文件） |
+| `GuardList.txt` | 77 行（sha 开窗时现取，记入 summary） | **默认不动**（无 MonGen 宿主 ⇒ 跳过）；仅当 §2.2-6 的 `STARTUP_ROWS != 0` 时，按同法改名 `GuardList.txt.c1prime.bak` 后重跑该门 |
+
+跑完把改名文件**恢复原名**并断言 sha256 与基线相等；任一不等 ⇒ 整跑作废。
 
 ### 3.4 还原面（停栈后，整行读回相等才写 `RESTORE_OK=True`）
 
@@ -150,10 +159,12 @@
    - `sleep 900`。
 3. 无 GM、无丢弃、无商人、无手动移动。
 
-**动作间隔依据（`opc-27` 指定措辞）**：850/900ms 只是沿用 oracle 场景的口径**形式**；
-**本栈是 Rust-only，服务端对 `CM_EAT` 无间隔依赖**——`Server.conf` 未配 `CloseSpeedHackCheck`
-⇒ 取缺省 true（跳过限速），`movewire`/`attackwire` 模块头登记"限速/`CheckActionStatus` 未接"。
-报告必须写「**Rust-only，无服务端间隔依赖，不与 C# 场景等价**」。默认 900ms；窗口紧可 350ms。
+**动作间隔依据（`opc-27` 指定措辞）**：间隔**固定 900ms**，本次跑不做任何调整
+（正例与反例同一档；如需 350ms 属另一次跑，须在报告里重复同一句措辞）。
+850/900ms 只是沿用 oracle 场景的口径**形式**；**本栈是 Rust-only，服务端对 `CM_EAT`
+无间隔依赖**——`Server.conf` 未配 `CloseSpeedHackCheck` ⇒ 取缺省 true（跳过限速），
+`movewire`/`attackwire` 模块头登记"限速/`CheckActionStatus` 未接"。
+报告必须写「**Rust-only，无服务端间隔依赖，不与 C# 场景等价**」。
 
 ## 5. 断言（写进 `run_dir/summary.txt`，缺一不判绿）
 
@@ -170,8 +181,8 @@
 | `TRACE_TOTAL_ROWS >= 2004` | 是（样本量口径；容量案见 §1） |
 
 **探针/场景口径**：每角色 `BOX_EATS == 41`、`PRODUCT_EATS == 246`、`SM_EAT_FAIL(636) == 0`、
-`probe rc == 0`；10 个 probe 登录 `InWorld` 无踢线；`MONGEN_DISABLED=1` 与 `GUARDLIST_DISABLED=1`
-（两夹具 sha 前后核对）；无商人/丢弃动作。
+`probe rc == 0`；10 个 probe 登录 `InWorld` 无踢线；`MONGEN_ABSENT=1`（改名前后 sha 核对；
+若触发 §3.3 的条件支则 `GUARDLIST_ABSENT=1`，否则 `GUARDLIST_UNTOUCHED=1`）；无商人/丢弃动作。
 
 **运行身份**：`run_identity.json` 记 `run_id`、exe sha256 + 内嵌 40-hex（并断言
 `merge-base --is-ancestor c2fd48497 <head>`）、`start_wall/end_wall`（+0800）、布局/格位、盒与产物
@@ -179,16 +190,38 @@
 
 ## 6. 反例（必做；变异只在**临时树**，不入 master）
 
-- 临时树：`git clone --shared` 运行 head 到 `E:/UserTemp/c1prime-mut-<sha8>`；
-- 补丁（"每区独立计数器、同初值"的最小等价形态，绕开 init 时序）：
-  在 `handle_zone_command_on` 的 `CM_EAT` 本地臂里，把传给 `handle_eat_cmd` 的 `item_number`
-  从 `env.item_number` 换成**线程局部** `thread_local! { static MUT_COUNTER: AtomicI32 =
-  AtomicI32::new(412_071) }` 的引用（每个区线程各一份、同初值 ⇒ 两区序列相同）。
-  记补丁 diff。
-- **release 构建必须在开窗前完成**（约 6–10 分钟、峰值内存 ~1.6G，窗口期禁 cargo）；
+目标：证明"跨区不重复"不是恒真——把统一计数器拆成**每区一份、同初值**，跨区必然相撞。
+
+- 临时树：`git clone --shared` 运行 head 到 `E:/UserTemp/c1prime-mut-<sha8>`。
+- **补丁 A（构造处：两区各换一份 Arc，初值 = 该跑真实 `item_number_init`）**——
+  在 `sim_loop` 的 `item_number.store(item_number_init, …)` **之后、首个 tick 之前**，
+  给区 0 的 `world` 与 `zone_host.zone_states[k].host.world` 逐个重装计数器：
+  ```text
+  let mut reseat = |w: &mut World| w.set_item_number_counter(
+      ItemNumberCounter::from_shared(Arc::new(AtomicI32::new(item_number_init))));
+  reseat(&mut world);
+  if let Some(zh) = zone_host.as_ref() {
+      for st in zh.zone_states.iter().flatten() {
+          let mut g = st.lock().unwrap_or_else(PoisonError::into_inner);
+          reseat(&mut g.host.world);
+      }
+  }
+  ```
+  **初值取 `item_number_init` 本身（= `item_number_counter_init([Setup] ItemNumber, 本次屏障A抽数)`），
+  不得硬编码**（真实值每跑不同；开跑后从启动日志的「本会话计数器初值」行核对）。此刻探针未起、
+  启动期已无怪物生成（§3.3），各区 World 尚未分配 ⇒ 两区首个号都是 `init+1`。
+- **补丁 B（两个消费点都改）**：`handle_zone_command_on` 的 `CM_EAT` 本地臂把传给 `handle_eat_cmd`
+  的 `item_number` 从 `env.item_number`（共享 Arc）换成**本区 World 的**计数器：
+  ```text
+  let zone_counter = world.item_number_shared();   // 补丁 A 重装后的本区 Arc
+  … handle_eat_cmd(…, &zone_counter, …)
+  ```
+  该函数在区 0 线程与各区 k 线程都执行 ⇒ 两区各自用各自的 `init` 起点。
+- **release 构建必须在开窗前完成**（约 6–10 分钟、峰值内存 ~1.6G；窗口期禁 cargo）；
   产物 sha256 + 内嵌 40-hex（含 dirty 标记）记进 summary。
-- 用同一 runner 跑**一次起停**、每区 1 角色 × 5 盒（每区 30 件）：预期 `TRACE_DUP == 30`、
-  `CROSS_ZONE_DUP == 30` ⇒ 检查器红；红输出原文入档。跑完临时树 `git status` 空。
+- 用同一 runner 跑**一次起停**、每区 1 角色 × 5 盒（每区 30 件）：预期
+  `TRACE_DUP == 30`、`CROSS_ZONE_DUP == 30`（两区序列 `init+1..init+30` 完全相同）⇒ 检查器红；
+  红输出原文入档；`MUT_SEED` 必须等于启动日志初值（记进 summary）。跑完临时树 `git status` 空。
 
 ## 7. 收尾清单（每项进 `summary.txt`）
 
@@ -205,7 +238,7 @@
 
 `RUN_ID` / 正向 exe sha256 + 内嵌 head / `STARTUP_ROWS` / `TRACE_TOTAL_ROWS` /
 `TRACE_ZONE_{0,1}_ROWS` / `TRACE_DISTINCT_VALUES` / `TRACE_DUP` / `CROSS_ZONE_DUP` /
-每角色 `BOX_EATS`、`PRODUCT_EATS` / `RESTORE_OK` / `MONGEN_DISABLED`、`GUARDLIST_DISABLED` + 模板断言原文 /
+每角色 `BOX_EATS`、`PRODUCT_EATS` / `RESTORE_OK` / `MONGEN_ABSENT`（及条件支的 `GUARDLIST_ABSENT`）+ 模板断言原文 /
 反例 exe sha + `DUP/CROSS_ZONE_DUP` 红原文 / 收尾四项（进程/端口/仓/临时物）。
 
 ## 9. 风险与已知边界
