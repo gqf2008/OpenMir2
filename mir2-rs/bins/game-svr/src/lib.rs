@@ -34494,6 +34494,143 @@ fn sim_loop(
     }
 }
 
+// **M1-0e 见证**：`BarrierOps` 三方法各自被调用的次数（仅测试期）；区 0 非切片路径必须全 0。
+#[cfg(test)]
+thread_local! {
+    static BARRIER_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// **M1-0e**：区级屏障编排（切片模式专用）。区 0 非切片路径不构造 ⇒ 零参与。
+///
+/// 全自有（`Arc` 克隆），**不持 `world`/`displays`/`frame_source`**；`ZoneRuntime<'a>` 借用
+/// `Arc` 内容 ⇒ 每次方法调用**本地构造**（几个引用、零分配），避免自引用结构。
+struct BarrierOps {
+    zone: zone::ZoneId,
+    layout: Arc<zone::RegionLayout>,
+    exchange: Arc<region_loop::HaloExchange>,
+    barriers: Arc<region_loop::TickBarriers>,
+    halo_width: i32,
+    mirrors: bool,
+    /// `await_neighbors` 填；`before_phase2` 用
+    neighbors: Vec<region_loop::HaloSnapshot>,
+    /// `await_neighbors` 填；`after_phase2` 用（探针记账）
+    wait_phase1_us: u64,
+    /// 测试期逐方法计数（`publish/await/before` 各一）
+    #[cfg(test)]
+    method_calls: [u32; 3],
+}
+
+impl BarrierOps {
+    fn runtime(&self) -> region_loop::ZoneRuntime<'_> {
+        region_loop::ZoneRuntime::new(
+            self.zone,
+            self.layout.zone_spans(),
+            self.halo_width,
+            &self.exchange,
+            &self.barriers,
+        )
+    }
+
+    #[cfg(test)]
+    fn note_call(&mut self, idx: usize) {
+        self.method_calls[idx] += 1;
+        BARRIER_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// 失败文案前缀（**仅 fatal 路径**）：`HOST_ZONE` 打成「区 0」；其余区打成「切片区 {id}」。
+    ///
+    /// **不能**让区 k 的措辞替代区 0 的原文：线上排障按日志 grep「区 0 …（快照/屏障阶段失败）」
+    /// 找区 0 事故，前缀必须是区 0。
+    fn err_prefix(&self) -> String {
+        if self.zone == zone_router::HOST_ZONE {
+            "区 0".to_string()
+        } else {
+            format!("切片区 {}", self.zone.get())
+        }
+    }
+
+    /// A 段末（锁内）：快照 + 发布。失败 ⇒ abort 整机（前缀按区：区 0 / 切片区 k）。
+    fn publish_snapshot(
+        &mut self,
+        world: &mir2_world_bevy::World,
+        tick: u64,
+        source: &region_loop::HaloFrameSource<'_>,
+    ) {
+        #[cfg(test)]
+        self.note_call(0);
+        let runtime = self.runtime();
+        if let Err(e) = runtime.snapshot_publish(world, tick, source) {
+            let prefix = self.err_prefix();
+            glog!(
+                "ERR",
+                "{prefix} 在 tick {tick} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
+            );
+            std::process::abort();
+        }
+    }
+
+    /// driver（锁外）：等 barrier1 + 读邻居。失败 ⇒ abort 整机（前缀按区：区 0 / 切片区 k）。
+    fn await_neighbors(&mut self, tick: u64) {
+        #[cfg(test)]
+        self.note_call(1);
+        let runtime = self.runtime();
+        match runtime.await_neighbors(tick) {
+            Ok((neighbors, wait_us)) => {
+                self.neighbors = neighbors;
+                self.wait_phase1_us = wait_us;
+            }
+            Err(e) => {
+                let prefix = self.err_prefix();
+                glog!(
+                    "ERR",
+                    "{prefix} 在 tick {tick} 读邻区快照失败：{e} ⇒ abort 整机"
+                );
+                std::process::abort();
+            }
+        }
+    }
+
+    /// B 段首（锁内）：镜像刷新（`mirror_enabled` 才做）。失败 ⇒ abort 整机（前缀按区）。
+    fn before_phase2(
+        &mut self,
+        world: &mut mir2_world_bevy::World,
+        displays: &mut downlink::DisplayTable,
+        tick: u64,
+    ) {
+        #[cfg(test)]
+        self.note_call(2);
+        if !self.mirrors {
+            return;
+        }
+        if let Err(e) = region_loop::apply_mirrors(world, &self.neighbors, Some(displays)) {
+            let prefix = self.err_prefix();
+            glog!(
+                "ERR",
+                "{prefix} 在 tick {tick} 应用邻区镜像失败：{e} ⇒ abort 整机"
+            );
+            std::process::abort();
+        }
+    }
+
+    /// **`world_tail` 与 `inline_after_phase2` 的 4 种组合（压缩后照此核，别看记忆）**：
+    /// | `TickScratch.world_tail` | `inline_after_phase2` | 含义 |
+    /// | --- | --- | --- |
+    /// | `None` + `barriers=None` | 任意 | **N=1 非切片**：`WORLD_TAIL` 整段（含 `world.tick_tail`）在 A 内
+    ///   跑完；B 跳过 TAIL；driver **不**调 `after_phase2` |
+    /// | `Some(t)` | `true` | **区 0 切片**（无锁）：A 做 before_aoi+publish；B 做 ⑤/mirror/phase2
+    ///   并 **inline** 调 `after_phase2`（保持今天 `HostWorldTail` 的段计时） |
+    /// | `Some(t)` | `false` | **区 k**：B 做到 `tick_phase2` 为止（锁内）；`after_phase2` 由 driver **锁外**调
+    ///   ⇒ 区 k 的 `HostWorldTail` 含屏障等待、不含 `after_phase2`（不可当计算段） |
+    /// | `None` + `barriers=Some` | — | **非法**（切片 ⇒ TAIL 必开）⇒ **`assert!`（release 也生效）**，
+    ///   消息：「切片路径必须开 `WORLD_TAIL`（`world_tail` 缺失 ⇒ TAIL/phase2 会静默少跑）」；
+    ///   **位置 = A 段末尾**（构造 `world_tail` 之后、返回前），让错误归因到「决定阶段」而非 B |
+    /// 另：`WORLD_TAIL` 守卫**只在 A 判一次**；B 只 `take()` `world_tail`。
+    /// driver（锁外）：心跳 + barrier2 + 探针记账（**不计数**）。
+    fn after_phase2(&self, beat: Option<(&crate::tick_watchdog::ZoneHeartbeats, u64)>) {
+        self.runtime().after_phase2(self.wait_phase1_us, beat);
+    }
+}
+
 /// **L2-5 P1 · M0（A1）**：`sim_loop` 的区级状态（每个 host/区循环实例一份）。
 ///
 /// 纯搬移：字段就是原 `sim_loop` 的局部；A1 不改任何行为（[`HostLoop::tick`] 逐行是原循环体）。
@@ -34642,13 +34779,16 @@ impl PhaseSet {
     }
 }
 
-/// **M0/A2**：tick 内**真正跨段**的值（只放这两个；清单与「谁产出/谁消费」见设计稿）。
+/// **M0/A2**：tick 内**真正跨段**的值（只放这三个；清单与「谁产出/谁消费」见设计稿）。
 #[derive(Default)]
 struct TickScratch {
     /// 产出：`HostWorldHead`；消费：其后所有用到 `rec` 的段（`as_mut` 借用，保持原调用形状）。
     rec: Option<mir2_world_bevy::TickRecord>,
     /// 产出：`HostPeriodic`；消费：`HostPostHead`（同 tick 的 252 广播扇出）。
     castle_broadcast_texts: Vec<String>,
+    /// **M1-0e**：`HostWorldTail` 的段起点（A 段 `host_prof.begin()`）。切片路径由 A 置位、
+    /// B `take()` 收尾段计时；**计时关闭时是 `None`**（≠「A 没跑」——切片判定只看 `barriers`）。
+    world_tail: Option<std::time::Instant>,
 }
 
 #[cfg(test)]
@@ -34746,6 +34886,19 @@ thread_local! {
     static PROC_SVC_SEGMENTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+/// **M1-0c'/0e**：进程-only 段的**唯一收敛点**（先断言、后解构；两条消息关键字一致）。
+///
+/// `$process` 由调用点传入（A 段与 driver 的其余段各持一份 `&mut Option<ProcessServices>`）。
+macro_rules! proc_svc {
+    ($process:expr, $bit:expr, $seg:expr) => {{
+        #[cfg(test)]
+        PROC_SVC_SEGMENTS.with(|c| c.set(c.get() | $bit));
+        $process
+            .as_mut()
+            .expect(concat!("区 k 不得进入进程-only 段: ", $seg))
+    }};
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickOutcome {
     Continue,
@@ -34797,7 +34950,11 @@ impl HostLoop {
         }
     }
 
-    /// 跑一个 tick（与原 `sim_loop` 循环体**逐行**相同；A1 零行为变化）。
+    /// **M1-0e · A 段**：`tick` 的 A 半段 —— 从顶部（SHUTDOWN..PLAYER_RUN）到 `HostWorldTail`
+    /// 的 A 部分（切片路径止于 `publish_snapshot`；非切片路径整段 `tick_tail` 在此跑完）。
+    ///
+    /// `PhaseSet::WORLD_TAIL` 守卫**只在本方法判一次**；切片路径把 `HostWorldTail` 的段起点
+    /// 存进 `TickScratch::world_tail`，由 `HostLoop::tick_phase_b` 收尾（见 `HostLoop::tick` 的 driver）。
     ///
     /// **M0/A2**：段级 `PhaseSet` 内联守卫；守卫只包住段体的 `host_prof.begin()/end()` 与
     /// 归入本段的 gap 代码。`PhaseSet::ALL` 下执行序与 A1 逐字节一致。
@@ -34805,12 +34962,14 @@ impl HostLoop {
     #[allow(clippy::too_many_lines)]
     // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
     #[allow(clippy::needless_borrow)]
-    fn tick(
+    fn tick_phase_a(
         &mut self,
         shared: &mut SharedServices,
         process: &mut Option<ProcessServices>,
         io: &mut TickIo,
         phases: PhaseSet,
+        scratch: &mut TickScratch,
+        barriers: &mut Option<BarrierOps>,
     ) -> TickOutcome {
         let mut world = &mut self.world;
         let mut displays = &mut self.displays;
@@ -34824,17 +34983,14 @@ impl HostLoop {
         let mut sell_off_sessions = &mut self.sell_off_sessions;
         let mon_gen_host = &mut self.mon_gen_host;
         let mut line_notice_states = &mut self.line_notice_states;
-        let mut monster_walk_seen = &mut self.monster_walk_seen;
         let mut gates = &mut self.gates;
         let handoff_runtime = &mut self.handoff_runtime;
         let ticks = &mut self.ticks;
-        let tick = self.tick;
         let mut event_carry = &mut self.event_carry;
         let mut event_carry_ctl = &mut self.event_carry_ctl;
         let entry_telemetry_next_ms = &mut self.entry_telemetry_next_ms;
         let entry_telemetry_last = &mut self.entry_telemetry_last;
-        let mut host_prof = &mut self.host_prof;
-        let mut world_prof_last = &mut self.world_prof_last;
+        let host_prof = &mut self.host_prof;
         let local_shard = self.local_shard;
         let is_host = self.is_host;
         let telemetry_prefix = &mut self.telemetry_prefix;
@@ -34846,15 +35002,6 @@ impl HostLoop {
                 phases.0
             );
         }
-        macro_rules! proc_svc {
-            ($bit:expr, $seg:expr) => {{
-                #[cfg(test)]
-                PROC_SVC_SEGMENTS.with(|c| c.set(c.get() | $bit));
-                process
-                    .as_mut()
-                    .expect(concat!("区 k 不得进入进程-only 段: ", $seg))
-            }};
-        }
         let registry = &mut shared.registry;
         let enter_cfg = &mut shared.enter_cfg;
         let mut shard_runtime = &mut shared.shard_runtime;
@@ -34863,14 +35010,11 @@ impl HostLoop {
         let ev_rx = &mut io.ev_rx;
         let ev_ctl_rx = &mut io.ev_ctl_rx;
         let shutdown = &mut io.shutdown;
-        let mut scratch = TickScratch::default();
         // 原启动段的 `guild_startup_store` 借用了 `guild_store`，结构不能自引用 ⇒ 在 tick 内按同一表达式
         // 重建（`guild_store` 在全文件里只被 `.as_ref()` 读，值恒等）。
         // 退出/正常收尾都把三块状态原样交还（move；同一批局部在两条路径上都在作用域内）。
-        // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
-        let slot = host_prof.begin();
         if phases.has(PhaseSet::SHUTDOWN) {
-            let svc = proc_svc!(PhaseSet::SHUTDOWN, "SHUTDOWN");
+            let svc = proc_svc!(process, PhaseSet::SHUTDOWN, "SHUTDOWN");
             let mut db = &mut svc.db;
             let mut engine = &mut svc.engine;
             let shutdown_done_tx = &mut svc.shutdown_done_tx;
@@ -34983,9 +35127,8 @@ impl HostLoop {
                 glog!("WRN", "{}", line);
             }
         }
-        let next = std::time::Instant::now() + tick;
         if phases.has(PhaseSet::INBOUND) {
-            let svc = proc_svc!(PhaseSet::INBOUND, "INBOUND");
+            let svc = proc_svc!(process, PhaseSet::INBOUND, "INBOUND");
             let mut db = &mut svc.db;
             let mut engine = &mut svc.engine;
             let mut guilds = &mut svc.guilds;
@@ -36310,7 +36453,7 @@ impl HostLoop {
             host_prof.end("HostInbound", t);
         }
         if phases.has(PhaseSet::DB_POLL) {
-            let svc = proc_svc!(PhaseSet::DB_POLL, "DB_POLL");
+            let svc = proc_svc!(process, PhaseSet::DB_POLL, "DB_POLL");
             let mut db = &mut svc.db;
             let mut engine = &mut svc.engine;
             let mut guilds = &mut svc.guilds;
@@ -36851,7 +36994,7 @@ impl HostLoop {
             host_prof.end("HostDbPoll", t);
         }
         if phases.has(PhaseSet::PERIODIC) {
-            let svc = proc_svc!(PhaseSet::PERIODIC, "PERIODIC");
+            let svc = proc_svc!(process, PhaseSet::PERIODIC, "PERIODIC");
             let mut guilds = &mut svc.guilds;
             let mut guild_run_tick = &mut svc.guild_run_tick;
             let guild_store = &mut svc.guild_store;
@@ -37415,86 +37558,201 @@ impl HostLoop {
             let t = host_prof.begin();
             // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
             //
-            // **L2-4 段 6a**：多区模式把 `tick_tail` 在 AOI 前切开——
-            // `tick_tail_before_aoi → 快照/发布/barrier1/读邻居 → tick_phase2 → 心跳/barrier2`；
-            // 边界快照因此是本 tick 终态。N=1 保持原样一行（逐字节不变）。
-            if let Some(host) = zone_host.as_deref() {
-                if tick_no == 0 {
-                    // **启动门**（静态装载已完成；tick 0 的首个区 tick 之前）：每区边界带实体数
-                    // ≤ 上限，超限 ⇒ rc=2（与探针 fail-closed 同口径）。
-                    if let Err(e) = zone_wiring::check_band_gate(
-                        &world,
-                        &host.layout,
-                        host.halo_width,
-                        host.max_halo_band_entities,
-                    ) {
-                        glog!("ERR", "{e}");
-                        std::process::exit(2);
+            // **L2-4 段 6a / M1-0e**：切片模式把 `tick_tail` 在 AOI 前切开——
+            // A：`tick_tail_before_aoi → 快照/发布`；driver（锁外）：barrier1/读邻居；
+            // B：`⑤ → 镜像 → tick_phase2`（再心跳/barrier2）。边界快照因此是本 tick 终态。
+            if barriers.is_none() {
+                // **N=1 非切片**：整段 `tick_tail`（含 AOI）在本方法内跑完、begin/end 同段。
+                // ——这是 N=1 判据的分支：逐字节保持（不许在这里加任何东西）。
+                world.tick_tail(&mut rec);
+                host_prof.end("HostWorldTail", t);
+            } else {
+                // **切片**：A 只做 before_aoi + 快照/发布（止于 barrier1 之前）。
+                if let Some(host) = zone_host.as_deref() {
+                    if tick_no == 0 {
+                        // **启动门**（静态装载已完成；tick 0 的首个区 tick 之前）：每区边界带实体数
+                        // ≤ 上限，超限 ⇒ rc=2（与探针 fail-closed 同口径）。
+                        if let Err(e) = zone_wiring::check_band_gate(
+                            &world,
+                            &host.layout,
+                            host.halo_width,
+                            host.max_halo_band_entities,
+                        ) {
+                            glog!("ERR", "{e}");
+                            std::process::exit(2);
+                        }
                     }
                 }
                 world.tick_tail_before_aoi(&mut rec);
-                let runtime = region_loop::ZoneRuntime::new(
-                    zone_router::HOST_ZONE,
-                    host.layout.zone_spans(),
-                    host.halo_width,
-                    &host.exchange,
-                    &host.barriers,
-                );
                 // **L2-5 ②**：快照的帧面来源 = 本区展示表 + 在线路由表（只在多区路径构造）。
                 let frame_source = region_loop::HaloFrameSource::new(&*displays, &*online);
-                let (_border, neighbors, wait_phase1_us) =
-                    match runtime.after_phase1(&world, tick_no, &frame_source) {
-                        Ok((border, neighbors, wait_us)) => (border, neighbors, wait_us),
-                        Err(e) => {
-                            // `Barrier` 无超时：本区带错退出会让其余区永久阻塞 ⇒ abort 整机
-                            // （与「任一片失败整机 Abort」同口径；看门狗是第二道兜底）。
-                            glog!(
-                                "ERR",
-                                "区 0 在 tick {ticks} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
-                            );
-                            std::process::abort();
-                        }
-                    };
-                // **L2-5 ⑤（V2）**：barrier1 之后、phase2 之前排空跨区帧（`src_tick` 过滤
-                // 保恰好 1 tick；切片关 ⇒ 无 sink ⇒ 零参与）。
-                if host.cross_mailboxes.is_some() {
-                    let _ = cross_zone_frames::drain_zone(zone_router::HOST_ZONE, tick_no, &gates);
-                }
-                // **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
-                // 闸关 ⇒ 整段零参与（N≥2 + 闸关与段 6a 逐字节相同）。
-                if host.mirror_enabled {
-                    if let Err(e) =
-                        region_loop::apply_mirrors(&mut world, &neighbors, Some(&mut displays))
-                    {
-                        glog!(
-                            "ERR",
-                            "区 0 在 tick {ticks} 应用邻区镜像失败：{e} ⇒ abort 整机"
-                        );
-                        std::process::abort();
-                    }
-                } else {
-                    let _ = &neighbors;
-                }
-                world.tick_phase2(&mut rec);
-                runtime.after_phase2(
-                    wait_phase1_us,
-                    Some((&**host.watch.heartbeats(), host.watch.now_ms())),
-                );
-                // **barrier2 之后**：区 0 把 `handoff_pending` 实体投给目标区（offer）。
-                if let Some(h) = handoff_runtime.as_mut() {
-                    h.after_phase2(&mut world, tick_no);
-                }
-                if tick_no == 0 {
-                    // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
+                barriers
+                    .as_mut()
+                    .expect("barriers.is_some() 已判")
+                    .publish_snapshot(&*world, tick_no, &frame_source);
+                // 段起点留给 B 收尾（计时关闭时 `t == None`；切片判定只看 `barriers`）。
+                scratch.world_tail = t;
+            }
+        }
+        // **M1-0e 非法组合（release 也生效）**：`barriers=Some`（切片）⇒ `WORLD_TAIL` 必开；
+        // 否则 A 不跑 TAIL、B 又会接着跑 ⑤/phase2 ⇒ TAIL/phase2 会静默少跑。位置 = A 段末尾
+        // （`world_tail` 已决定之后），让错误归因到「决定阶段」而非 B。
+        // 判 `phases` 而非 `scratch.world_tail`：计时关闭时 `begin()` 恒 `None`，不能当「缺失」。
+        assert!(
+            barriers.is_none() || phases.has(PhaseSet::WORLD_TAIL),
+            "切片路径必须开 `WORLD_TAIL`（`world_tail` 缺失 ⇒ TAIL/phase2 会静默少跑）"
+        );
+        TickOutcome::Continue
+    }
+
+    /// **M1-0e · B 段**（切片专用）：`HostWorldTail` 的后半段，`WORLD_TAIL` 的守卫**不在这里**。
+    ///
+    /// 切片与否**只判 `barriers`**；`scratch.world_tail.take()` 仅用于收尾 `HostWorldTail`
+    /// 段计时（计时关闭时是 `None`，**不是**「A 没跑」）。`barriers == None` ⇒ 零参与
+    /// （A 已把 TAIL 整段跑完）。
+    ///
+    /// `inline_after_phase2`：区 0 生产路径（无锁）为 `true` ⇒ 在本段内 inline 调
+    /// `after_phase2`（保持今天 `HostWorldTail` 的段计时）；区 k 为 `false` ⇒ 本段止于
+    /// `tick_phase2`，`after_phase2` 由 driver 在**锁外**调。
+    fn tick_phase_b(
+        &mut self,
+        shared: &mut SharedServices,
+        scratch: &mut TickScratch,
+        barriers: &mut Option<BarrierOps>,
+        inline_after_phase2: bool,
+    ) {
+        let at = scratch.world_tail.take();
+        let Some(ops) = barriers.as_mut() else {
+            // 非切片：A 已把 `WORLD_TAIL` 整段跑完（含段计时），这里零参与。
+            return;
+        };
+        // ① **L2-5 ⑤（V2）**：barrier1 之后、phase2 之前排空跨区帧（`src_tick` 过滤保恰好
+        // 1 tick；切片关 ⇒ 无 sink ⇒ 零参与）。
+        if let Some(host) = shared.zone_host.as_deref() {
+            if host.cross_mailboxes.is_some() {
+                let _ =
+                    cross_zone_frames::drain_zone(zone_router::HOST_ZONE, self.ticks, &self.gates);
+            }
+        }
+        // ② **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
+        // 闸关 ⇒ 整段零参与。
+        ops.before_phase2(&mut self.world, &mut self.displays, self.ticks);
+        // ③ phase2（AOI）——B 的屏障批次到此为止（区 k：锁在此释放）。
+        self.world.tick_phase2(
+            scratch
+                .rec
+                .as_mut()
+                .expect("HostWorldHead 必须置位（M0_MIN 含它）"),
+        );
+        if inline_after_phase2 {
+            // 区 0（无锁）inline：`after_phase2` 的段计时仍留在 `HostWorldTail` 内（与旧 tick 同）。
+            let beat = shared
+                .zone_host
+                .as_deref()
+                .map(|host| (&**host.watch.heartbeats(), host.watch.now_ms()));
+            ops.after_phase2(beat);
+            // **第三段锁 = `handoff.after_phase2`（barrier2 之后；不是漏放）**：区 k 由 driver 在
+            // 锁外跑完 `after_phase2` 后再取第三把锁调它；区 0 无锁路径在此 inline 紧随其后。
+            if let Some(h) = self.handoff_runtime.as_mut() {
+                h.after_phase2(&mut self.world, self.ticks);
+            }
+            if self.ticks == 0 {
+                // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
+                if let Some(host) = shared.zone_host.as_deref() {
                     let _ = host.watch.arm();
                 }
-            } else {
-                world.tick_tail(&mut rec);
             }
-            host_prof.end("HostWorldTail", t);
         }
+        self.host_prof.end("HostWorldTail", at);
+    }
+
+    /// **M1-0e**：区 0 切片路径的屏障编排（`zone_host` 存在 ⇒ 切片；N=1 ⇒ `None`）。
+    fn build_barriers(&self, shared: &SharedServices) -> Option<BarrierOps> {
+        shared.zone_host.as_deref().map(|host| BarrierOps {
+            zone: zone_router::HOST_ZONE,
+            layout: Arc::clone(&host.layout),
+            exchange: Arc::clone(&host.exchange),
+            barriers: Arc::clone(&host.barriers),
+            halo_width: host.halo_width,
+            mirrors: host.mirror_enabled,
+            neighbors: Vec::new(),
+            wait_phase1_us: 0,
+            #[cfg(test)]
+            method_calls: [0; 3],
+        })
+    }
+
+    /// **M1-0e · driver**：`tick` 的入口（= 旧 `tick`）。A →（锁外）`await_neighbors` → B →
+    /// 其余段（PLANES..SLEEP）。
+    ///
+    /// `barriers`：`shared.zone_host` 存在（切片）⇒ `Some`；N=1 ⇒ `None`（A→B 背靠背、零屏障）。
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_borrow)]
+    fn tick(
+        &mut self,
+        shared: &mut SharedServices,
+        process: &mut Option<ProcessServices>,
+        io: &mut TickIo,
+        phases: PhaseSet,
+    ) -> TickOutcome {
+        // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
+        let slot = self.host_prof.begin();
+        let next = std::time::Instant::now() + self.tick;
+        let mut scratch = TickScratch::default();
+        let mut barriers = self.build_barriers(shared);
+        let outcome = self.tick_phase_a(shared, process, io, phases, &mut scratch, &mut barriers);
+        if outcome == TickOutcome::Exited {
+            return outcome;
+        }
+        // **driver（锁外）**：barrier1 + 读邻居。N=1 无屏障 ⇒ 跳过（A→B 背靠背）。
+        if let Some(ops) = barriers.as_mut() {
+            ops.await_neighbors(self.ticks);
+        }
+        // 区 0 生产路径（无锁）inline 调 after_phase2（保持段计时）；区 k 传 `false`。
+        self.tick_phase_b(shared, &mut scratch, &mut barriers, true);
+        self.tick_phase_rest(shared, process, phases, &mut scratch, next, slot)
+    }
+
+    /// **M1-0e · 其余段**：`PLANES..SLEEP` + tick 尾收尾（`end_tick` / 慢 tick / `write_tick`）。
+    ///
+    /// **可单独调用**：区 k 在第三把锁内（`handoff` 之后）调它；不读 `WORLD_TAIL`/`barriers`，
+    /// 只按 `phases` 跑其余段。`next`/`slot` 由 driver 传入（**不要重算**：会改变节拍与计时起点）。
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_borrow)]
+    fn tick_phase_rest(
+        &mut self,
+        shared: &mut SharedServices,
+        process: &mut Option<ProcessServices>,
+        phases: PhaseSet,
+        scratch: &mut TickScratch,
+        next: std::time::Instant,
+        slot: Option<std::time::Instant>,
+    ) -> TickOutcome {
+        // **M1-0e**：A/B 是 `&mut self` 方法 ⇒ 其余段的局部借用在此重新取（同字段、同形态；
+        // 只取 PLANES..SLEEP 实际用到的）。
+        let mut world = &mut self.world;
+        let mut displays = &mut self.displays;
+        let online = &mut self.online;
+        let mut ground_sessions = &mut self.ground_sessions;
+        let mut saves = &mut self.saves;
+        let mut login_tails = &mut self.login_tails;
+        let aoi_frames_total = &mut self.aoi_frames_total;
+        let mut trade_sessions = &mut self.trade_sessions;
+        let mut monster_walk_seen = &mut self.monster_walk_seen;
+        let gates = &mut self.gates;
+        let ticks = &mut self.ticks;
+        let mut host_prof = &mut self.host_prof;
+        let mut world_prof_last = &mut self.world_prof_last;
+        let registry = &mut shared.registry;
+        let enter_cfg = &mut shared.enter_cfg;
+        let shard_runtime = &mut shared.shard_runtime;
+        let colors = &mut shared.colors;
+        let rec = scratch
+            .rec
+            .as_mut()
+            .expect("HostWorldHead 必须置位（M0_MIN 含它）");
         if phases.has(PhaseSet::PLANES) {
-            let svc = proc_svc!(PhaseSet::PLANES, "PLANES");
+            let svc = proc_svc!(process, PhaseSet::PLANES, "PLANES");
             let planes = &mut svc.planes;
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PLANES));
@@ -37714,7 +37972,7 @@ impl HostLoop {
             host_prof.end("HostAoiDownlink", t);
         }
         if phases.has(PhaseSet::PERSIST) {
-            let svc = proc_svc!(PhaseSet::PERSIST, "PERSIST");
+            let svc = proc_svc!(process, PhaseSet::PERSIST, "PERSIST");
             let mut db = &mut svc.db;
             let mut engine = &mut svc.engine;
             #[cfg(test)]
@@ -37743,7 +38001,7 @@ impl HostLoop {
             host_prof.end("HostPersist", t);
         }
         if phases.has(PhaseSet::SWITCH) {
-            let svc = proc_svc!(PhaseSet::SWITCH, "SWITCH");
+            let svc = proc_svc!(process, PhaseSet::SWITCH, "SWITCH");
             let server_table = &mut svc.server_table;
             let mut reconnect_pending = &mut svc.reconnect_pending;
             #[cfg(test)]
@@ -45600,6 +45858,173 @@ mod tests {
             got, PhaseSet::PROCESS_ONLY,
             "实际取过 ProcessServices 的段位（0x{got:05x}）必须等于 PROCESS_ONLY（0x{:05x}）：             多一位=掩码虚位，少一位=新段漏掩码",
             PhaseSet::PROCESS_ONLY
+        );
+    }
+
+    /// **M1-0e 见证 ①**：区 0 非切片路径（`barriers=None`）**零屏障调用**，且全段集跑满。
+    ///
+    /// `Some(process)`：`PhaseSet::ALL` 含 `PROCESS_ONLY`，供 `None` 会先撞入口 `assert!`。
+    /// 变异①：删 `tick` 内任一段的 `RAN_SEGMENTS` 记录（**含 B 段之后的 PLANES..SLEEP**）⇒
+    /// `RAN_SEGMENTS != ALL` ⇒ 红；变异②：在 A 段里误调 `barriers`（例如把 `publish_snapshot`
+    /// 提到分支外）⇒ `BARRIER_CALLS != 0` ⇒ 红。
+    #[test]
+    fn zone0_none_takes_zero_barrier_calls() {
+        let mut host = HostLoop::for_zone(zone::ZoneId::new(0), &[(10, 10)], Some(0));
+        let (mut shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        BARRIER_CALLS.with(|c| c.set(0));
+        RAN_SEGMENTS.with(|c| c.set(0));
+        let mut process = Some(process);
+        let outcome = host.tick(&mut shared, &mut process, &mut io, PhaseSet::ALL);
+        assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
+        assert_eq!(
+            BARRIER_CALLS.with(std::cell::Cell::get),
+            0,
+            "非切片路径（barriers=None）不得触碰屏障编排（A 段误调 ⇒ 红）"
+        );
+        assert_eq!(
+            RAN_SEGMENTS.with(std::cell::Cell::get),
+            PhaseSet::ALL.0,
+            "ALL 下全段集必须跑满（删任一 RAN_SEGMENTS 记录 ⇒ 红）"
+        );
+    }
+
+    /// **M1-0e 见证 ②**：切片路径（`barriers=Some`）三个屏障方法**各恰好一次**。
+    ///
+    /// zone id 用**区 0**：1 区 runtime 只为计数，**不是**切片生产路径（生产由 `zone_host` 构造
+    /// `BarrierOps`）。变异：删 A 末的 `publish_snapshot` / driver 的 `await_neighbors` / B 首的
+    /// `before_phase2` 任一调用 ⇒ 对应计数不达 1 ⇒ 红。
+    #[test]
+    fn zonek_some_takes_three_distinct_barrier_calls() {
+        let zone = zone::ZoneId::new(0);
+        let mut host = HostLoop::for_zone(zone, &[(10, 10)], Some(0));
+        let (mut shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        let layout = std::sync::Arc::new(
+            zone::RegionLayout::from_zone_spans(
+                1,
+                &[(10, 10)],
+                vec![zone::ZoneSpan::new(
+                    zone,
+                    0,
+                    zone::ZoneRect::new(0, 0, 9, 9),
+                )],
+                zone,
+            )
+            .expect("单区整图布局"),
+        );
+        let exchange = std::sync::Arc::new(region_loop::HaloExchange::new(1));
+        let barrier_pair = std::sync::Arc::new(region_loop::TickBarriers::new(1));
+        let mut ops = Some(BarrierOps {
+            zone,
+            layout,
+            exchange,
+            barriers: barrier_pair,
+            halo_width: ZONE_HALO_WIDTH,
+            mirrors: false,
+            neighbors: Vec::new(),
+            wait_phase1_us: 0,
+            method_calls: [0; 3],
+        });
+        BARRIER_CALLS.with(|c| c.set(0));
+        let mut scratch = TickScratch::default();
+        let mut process = None;
+        // A：世界头（产出 rec / 推进 clock）+ 世界尾 A 半段（快照/发布）。
+        let outcome = host.tick_phase_a(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet(PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL),
+            &mut scratch,
+            &mut ops,
+        );
+        assert_eq!(outcome, TickOutcome::Continue);
+        // driver（锁外）：barrier1 + 读邻居。
+        ops.as_mut().expect("Some").await_neighbors(host.ticks);
+        // B：⑤/mirror/phase2（inline=false ⇒ after_phase2 由 driver 锁外调、不计数）。
+        host.tick_phase_b(&mut shared, &mut scratch, &mut ops, false);
+        let calls = ops.as_ref().expect("Some").method_calls;
+        assert_eq!(calls[0], 1, "publish_snapshot 必须恰好一次（A 段末）");
+        assert_eq!(calls[1], 1, "await_neighbors 必须恰好一次（driver 锁外）");
+        assert_eq!(calls[2], 1, "before_phase2 必须恰好一次（B 段首）");
+        assert_eq!(
+            BARRIER_CALLS.with(std::cell::Cell::get),
+            3,
+            "三方法各一次 ⇒ 总数 3"
+        );
+    }
+
+    /// **M1-0e 见证 ③**：`A → B(inline=false) → rest` 三段手工串起来跑一轮，全段集跑满。
+    ///
+    /// 证明「其余段（`PLANES..SLEEP` + 尾收尾）」可被 driver 单独调用（区 k 在第三把锁内用）。
+    /// 变异：把 rest 里任一段漏调（删其 `phases.has` 块）⇒ `RAN_SEGMENTS != ALL` ⇒ 红。
+    #[test]
+    fn rest_runs_standalone_and_covers_all_phases() {
+        let mut host = HostLoop::for_zone(zone::ZoneId::new(0), &[(10, 10)], Some(0));
+        let (mut shared, process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let shutdown = ShutdownSignal::Flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown,
+        };
+        BARRIER_CALLS.with(|c| c.set(0));
+        RAN_SEGMENTS.with(|c| c.set(0));
+        let mut process = Some(process);
+        let mut scratch = TickScratch::default();
+        let mut barriers: Option<BarrierOps> = None;
+        let next = std::time::Instant::now() + host.tick;
+        let slot = host.host_prof.begin();
+        let outcome = host.tick_phase_a(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet::ALL,
+            &mut scratch,
+            &mut barriers,
+        );
+        assert_eq!(outcome, TickOutcome::Continue, "空世界不得触发关服分支");
+        host.tick_phase_b(&mut shared, &mut scratch, &mut barriers, false);
+        let outcome = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            PhaseSet::ALL,
+            &mut scratch,
+            next,
+            slot,
+        );
+        assert_eq!(outcome, TickOutcome::Continue);
+        assert_eq!(
+            BARRIER_CALLS.with(std::cell::Cell::get),
+            0,
+            "非切片：零屏障"
+        );
+        assert_eq!(
+            RAN_SEGMENTS.with(std::cell::Cell::get),
+            PhaseSet::ALL.0,
+            "A + rest 必须覆盖全部 17 段（rest 漏调任一段 ⇒ 红）"
         );
     }
 
