@@ -126374,10 +126374,10 @@ mod zone_command_tests {
             },
         );
         // 夹具与 B 组同法：`landed()` 的登录不建会话表（无 Server.conf）⇒ 手工补一张空会话。
-        state.host.ground_sessions.insert(
-            "hero".to_string(),
-            crate::tests::test_session_ground(actor),
-        );
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
         {
             let sg = state
                 .host
