@@ -41192,18 +41192,33 @@ mod tests {
         // 尾部**（不依赖缩进/折行）。做法：自 `Some(&mut monster_walk_seen)` 向前 `rfind`
         // `Some(&mut login_tails)`，要求两者相距 < 400 字节；生产退回 `None` ⇒ 最近的命中跑到本文件
         // 别处（文档/断言文案），距离远超 400 ⇒ 红。`concat!` 拆字面量避免测试自身源码命中。
+        // **只扫生产区**（`mod tests {` 之前）：本文件在 `mod tests` 里的文档注释含同样两个字面量
+        // 且相距 <400 字节（`concat!` 只拆了下面两个变量、没有拆注释文本）⇒ 扫整文件仍会假绿。
+        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
         let seen_needle = concat!("Some(&mut monster_", "walk_seen)");
         let tails_needle = concat!("Some(&mut login_", "tails)");
-        let seen_at = src
+        let seen_at = prod
             .find(seen_needle)
             .expect("生产必须传 Some(&mut monster_walk_seen)");
-        let tails_at = src[..seen_at]
+        let tails_at = prod[..seen_at]
             .rfind(tails_needle)
             .expect("生产必须在同一调用里传 Some(&mut login_tails)");
         assert!(
             seen_at - tails_at < 400,
             "两个 Some 实参必须同处一个调用（相距 {} 字节）",
             seen_at - tails_at
+        );
+        // **防注释漂移**：全文件里这两个字面量的**首个命中**必须就是生产区那个（否则 `mod tests` 里
+        // 再出现同款注释会把本牙变回自满足）。
+        assert_eq!(
+            src.find(seen_needle),
+            Some(seen_at),
+            "`Some(&mut monster_walk_seen)` 的首个命中必须在生产区"
+        );
+        assert_eq!(
+            src.find(tails_needle),
+            Some(tails_at),
+            "`Some(&mut login_tails)` 的首个命中必须在生产区"
         );
 
         // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
@@ -119821,11 +119836,21 @@ mod aoi_shutdown_wiring {
         const SRC: &str = include_str!("lib.rs");
         let needle = concat!("aoi_stats_final", "_line(");
         let i = SRC.find(needle).expect("找不到 AOI 终值行调用点");
-        let seg = &SRC[i..(i + 300).min(SRC.len())];
+        let seg = window(SRC, i, 300);
         assert!(seg.contains("eprintln!"), "终值行必须打印（stderr）：{seg}");
         let shutdown = SRC.find("let _ = shutdown_done_tx.send(summary);");
         assert!(shutdown.is_some(), "关服分支标记缺失");
         assert!(i < shutdown.unwrap(), "终值行必须在关服收尾返回之前");
+    }
+
+    /// 按字符边界截一段源码（中文注释是多字节；`i` 来自 `find` 必是字符边界，只回退 `end`）。
+    /// 与 `entry_telemetry_wiring::window()` 同口径（既有缺陷修复：旧版此处直接按字节切 `i+300`）。
+    fn window(s: &str, i: usize, max: usize) -> &str {
+        let mut end = (i + max).min(s.len());
+        while end > i && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[i..end]
     }
 }
 
