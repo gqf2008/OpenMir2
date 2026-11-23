@@ -374,3 +374,45 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
    命令（两条队列）。M1b 设计必须先给出**每玩家 stop-and-wait**（有在飞控制命令时暂缓该玩家后续
    本地命令直到回执），**或立 deviation 卡报 Owner**。
 5. `PROCESS_ONLY` 届时从 `INBOUND` 换成 `INBOUND_PROCESS`（同 `PERSIST` 别名手法，见证用别名）。
+
+
+## 10. 共享字段的可变性审计（opc-27 2026-11-23；M1c 放行条件）
+
+`SharedServices` 五字段并非都只读，**可变共享字段在 N 区下会分叉**。逐个审计：
+
+| 字段 | tick 内可变？ | 证据（段） |
+| --- | --- | --- |
+| `registry` | **可变** | `PLAYER_RUN`：`flush_map_mode_writes_into_world(…, registry.as_mut(), …)` |
+| `shard_runtime` | **可变** | `FRAMES`：`accept_map_change(&mut self, map_id)` |
+| `enter_cfg` | 否（只读） | tick 内仅 `&enter_cfg…`；`&mut enter_cfg` 只出现在 pre-loop |
+| `colors` | 否（`Copy`） | 只读取色字段 |
+| `zone_host` | 内部可变（`Arc`） | 守卫/心跳/停止旗标；语义上本就是进程级共享 |
+
+**分叉风险（必须定案，M1c 前）**：
+- **`registry`**：`Option<MapRegistry>` 是 **owned**（非 `Arc`）⇒ N 区后每区各一份；区 k 里发生的
+  map-mode 写入**不会被区 0 或其他区看到**，而其他区对该地图仍持镜像 ⇒ **地图模式跨区分叉**。
+  二选一：
+  - **(a) 迁到 `ProcessServices`**（区 0 统一持有，区 k 只读镜像/快照）：代价 = 区 k 的
+    `flush_map_mode_writes_into_world` 变空操作或需回到区 0 执行（T+1），`PLAYER_RUN` 不能整体给区 k；
+  - **(b) 像帧一样跨区路由**：map-mode 写入走控制邮箱回区 0 统一应用，其余区下一 tick 读到新值：
+    代价 = 一条新的跨区写通道 + 顺序契约（与 §9 的 stop-and-wait 同一类问题）。
+  - **(c) 只把「每图 flag 表」抽成 `Arc` 共享**（`0c` 2026-11-23 复核补充，**推荐**）：`registry` 的
+    **唯一运行时可变态就是每图 `flag`**——`set_flag` 只由 `flush_map_mode` 在 `PLAYER_RUN` 调，
+    写源是区 0 脚本 `ActionOfSetMapMode`；区 k 的 `shop_sessions` 无脚本、flush 写空。其余
+    （terrain/desc/routes/gates）各区副本相同、只 `as_ref` 读 ⇒ 只把 flag 表换成 `Arc<…>`
+    （区 0 写、各区读 `flag_of`/`map_desc`，`MapInfoFlag` 按值可复制），**无新通道、无顺序契约**，
+    且 **`PLAYER_RUN` 可整体给区 k**。代价 = 改 `MapRegistry` 的 flag 存储与 `flag_of`/`set_flag` 两处路由。
+    **(a)/(b) 降为备选**（(c) 不成立时的退路）。
+
+  > **为什么不能"证否"**（`0c` 复核）：`zone.rs` 的 `ZoneSpan{zone,map_id,rect}` + `zone_of(map_id,x,y)`
+  > 按**坐标**归区，且存在测试 `two_zone_of_map_zero()`（同一 `map 0` 切成两区）⇒ 同一 `map_id` 跨区持有
+  > 实体；`flag_of` 的读者含帧 766/54/46（`Envir.Flag` 下发客户端）、P25 `DECHP`/`INCHP`、安全区、
+  > 行会战图门 ⇒ 不共享则**客户端可见**的同图 flag 分叉。**A7 是真风险、不关**。
+- **`shard_runtime`**：按设计**每区一份、可接受**（`accept_map_change` 只做本片归属判定），
+  但 **M1b 必须核**：它的「跨片拒绝」计数是**进程级 `Arc<Atomic>` 共享**（非每实例），否则计数会分区、
+  与区 0 语义不一致。
+- **`enter_cfg`/`colors`**：只读，无分叉。
+- **`zone_host`**：`Arc` 共享，语义即全局单点（守卫/停止），无分叉。
+
+**处置**：本条列为 **M1c 放行条件**（M1c 才把 `PLAYER_RUN` 纳入区 k 的段集）；缺口清单登记 **A7**
+（「`registry` 可变共享的跨区分叉」）。
