@@ -27344,9 +27344,8 @@ fn eat_branch(tpl: Option<&mir2_data::StdItem>, dead: Option<bool>) -> EatBranch
 /// 非 `CM_EAT` ⇒ 既有单源 [`zone_cmd_class`]（不变）；`CM_EAT` ⇒ [`eat_branch`]：
 /// `Dead`/`Unpack`/`OtherLocal` 归 `Local`，其余（脚本/彩票/城堡/不可判）**不得本地执行**。
 ///
-/// **本段（段 1+2）的 interim**：`EatProcess` 邮箱尚未落地 ⇒ 非本地支归 `Unsupported`
-/// （不放行本地、也**不**误投 GM 邮箱，行为与 2c 前置状态相同：不执行 + 计数）；段 3
-/// （`ControlRequest::EatProcess`）落地时把这四支改成 `Process`，并同步翻转对应牙。
+/// **段 3 起**：非本地四支（脚本/彩票/城堡/不可判）归 **`Process`** ⇒ 经类型化控制邮箱的
+/// `ControlRequest::EatProcess` 交区 0 执行（**不会**被当成 GM `@` 行——变体没有 `line` 字段）。
 fn classify_local_event(
     ev: &GateEvent,
     sessions: &std::collections::HashMap<String, SessionGround>,
@@ -27368,7 +27367,7 @@ fn classify_local_event(
         return zone_cmd_class(cmd.ident, tail.as_deref());
     }
     let Some(sg) = sessions.get(chr_name) else {
-        return ZoneCmdClass::Unsupported; // interim（段 3：Process）
+        return ZoneCmdClass::Process; // 安全默认：会话缺 ⇒ 回区 0
     };
     let dead = world.entities.get(sg.actor_id).map(|e| e.death);
     let tpl = sg
@@ -27379,11 +27378,11 @@ fn classify_local_event(
         .and_then(|it| catalog.get(it.index));
     match eat_branch(tpl, dead) {
         EatBranch::Dead | EatBranch::Unpack | EatBranch::OtherLocal => ZoneCmdClass::Local,
-        // **interim（见函数 doc）**：段 3 改为 `ZoneCmdClass::Process` + `EatProcess` 邮箱。
+        // 非本地四支 ⇒ `Process`（`ControlRequest::EatProcess`；类型化变体保证不会被当 GM 行）。
         EatBranch::StdModeFunScript
         | EatBranch::Lottery
         | EatBranch::MoveFamily
-        | EatBranch::Unknown => ZoneCmdClass::Unsupported,
+        | EatBranch::Unknown => ZoneCmdClass::Process,
     }
 }
 
@@ -37704,6 +37703,11 @@ impl HostLoop {
                 let gm_mission = &svc.gm_mission;
                 let gm_spirit_mutiny_tick = &svc.gm_spirit_mutiny_tick;
                 let party_cfg = &svc.party_cfg;
+                // **M1c-2c**：`EatProcess` 需要的进程态（只读/独占借用；字段互不重叠）。
+                let unbind_list = &svc.unbind_list;
+                let npc_host = &svc.npc_host;
+                let npc_vars_base = &svc.npc_vars_base;
+                let win_lottery = &svc.win_lottery;
                 let t_control = host_prof.begin();
                 // =====================================================================
                 // **M1b 第 4 步（A6）**：控制邮箱 drain（区 k → 区 0 的 GM `@`）。
@@ -37750,9 +37754,10 @@ impl HostLoop {
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             let ZoneState { host, .. } = &mut *st;
-                            if !host.ground_sessions.contains_key(&req.chr_name) {
+                            let chr_name = req.chr_name().to_string();
+                            if !host.ground_sessions.contains_key(&chr_name) {
                                 // **会话缺失**：丢弃 + 限速 WRN、**不触碰任何计数**（无对象可减）。
-                                a6_control_missing_warn(req.zone, &req.chr_name, req.at_tick);
+                                a6_control_missing_warn(req.zone(), &chr_name, req.at_tick());
                                 continue;
                             }
                             let HostLoop {
@@ -37765,45 +37770,103 @@ impl HostLoop {
                                 mon_gen_host,
                                 ..
                             } = host;
-                            let socket = online.find_by_chr(&req.chr_name).map_or(0, |e| e.socket);
+                            let socket = online.find_by_chr(&chr_name).map_or(0, |e| e.socket);
                             // **RAII 清位守卫**（只借 `ground_sessions`；执行经 `run` 短借用）。
-                            let mut guard = A6ControlGuard::new(
-                                ground_sessions,
-                                req.chr_name.clone(),
-                                req.epoch,
-                            );
-                            guard.run(|sessions| {
-                                handle_say_event(
-                                    SayEnv {
-                                        world,
-                                        displays,
-                                        online: &*online,
-                                        ground_sessions: sessions,
-                                        saves,
-                                        gates: &*gates,
-                                        enter_cfg: &*enter_cfg,
-                                        colors: &*colors,
-                                        guilds: &mut *guilds,
-                                        guild_cfg: &*guild_cfg,
-                                        guild_store: guild_store.as_ref(),
-                                        castle_war_states: &*castle_war_states,
-                                        pending_gm_castle_broadcasts:
-                                            &mut *pending_gm_castle_broadcasts,
-                                        pwd_sessions: &mut *pwd_sessions,
-                                        reconnect_pending: &mut *reconnect_pending,
-                                        mon_gen_host,
-                                        item_number,
-                                        registry: registry.as_ref(),
-                                        party_cfg: &*party_cfg,
-                                        gm_filter_word: &*gm_filter_word,
-                                        gm_mission: &*gm_mission,
-                                        gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
-                                    },
-                                    &req.chr_name,
-                                    socket,
-                                    Some(req.line.as_str()),
-                                );
-                            });
+                            let mut guard =
+                                A6ControlGuard::new(ground_sessions, chr_name.clone(), req.epoch());
+                            match req {
+                                ControlRequest::GmSay { line, .. } => guard.run(|sessions| {
+                                    handle_say_event(
+                                        SayEnv {
+                                            world,
+                                            displays,
+                                            online: &*online,
+                                            ground_sessions: sessions,
+                                            saves,
+                                            gates: &*gates,
+                                            enter_cfg: &*enter_cfg,
+                                            colors: &*colors,
+                                            guilds: &mut *guilds,
+                                            guild_cfg: &*guild_cfg,
+                                            guild_store: guild_store.as_ref(),
+                                            castle_war_states: &*castle_war_states,
+                                            pending_gm_castle_broadcasts:
+                                                &mut *pending_gm_castle_broadcasts,
+                                            pwd_sessions: &mut *pwd_sessions,
+                                            reconnect_pending: &mut *reconnect_pending,
+                                            mon_gen_host,
+                                            item_number,
+                                            registry: registry.as_ref(),
+                                            party_cfg: &*party_cfg,
+                                            gm_filter_word: &*gm_filter_word,
+                                            gm_mission: &*gm_mission,
+                                            gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
+                                        },
+                                        &chr_name,
+                                        socket,
+                                        Some(line.as_str()),
+                                    );
+                                }),
+                                ControlRequest::EatProcess {
+                                    recog,
+                                    param,
+                                    tag,
+                                    tail,
+                                    ..
+                                } => {
+                                    // **M1c-2c**：非本地 `CM_EAT`——玩家态取**区 k**，进程态取本支 `svc`。
+                                    // `@StdModeFunc*` 的 GM 跳线视图与区 0 侧同源（事件入口快照）。
+                                    let gm_cfg = gmcmd::GmConfig {
+                                        lock_human_login: enter_cfg.lock_human_login,
+                                        spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                        ..gmcmd::GmConfig::default()
+                                    };
+                                    guard.run(|sessions| {
+                                        let script_gm = ScriptGmEnv {
+                                            guilds: &*guilds,
+                                            maps: registry.as_ref(),
+                                            cfg: &gm_cfg,
+                                            pwd_sessions: &*pwd_sessions,
+                                            host: ScriptGmHost::for_event(
+                                                &gm_filter_word,
+                                                &gm_mission,
+                                                &gm_spirit_mutiny_tick,
+                                                &*saves,
+                                                &*sessions,
+                                                &*world,
+                                                &chr_name,
+                                            ),
+                                        };
+                                        handle_eat_cmd(
+                                            recog,
+                                            param,
+                                            tag,
+                                            tail.as_deref(),
+                                            &chr_name,
+                                            socket,
+                                            &*online,
+                                            sessions,
+                                            &*gates,
+                                            &enter_cfg.catalog,
+                                            world,
+                                            &*colors,
+                                            enter_cfg.repair_item_dec_dura,
+                                            &enter_cfg.string_conf,
+                                            registry.as_ref(),
+                                            unbind_list,
+                                            item_number,
+                                            npc_host.as_ref(),
+                                            npc_vars_base,
+                                            Some(&script_gm),
+                                            win_lottery,
+                                            enter_cfg.win_lottery,
+                                            enter_cfg.shop.human_max_gold,
+                                            enter_cfg.weapon_make_luck,
+                                            &*castle_war_states,
+                                        );
+                                    });
+                                }
+                            }
                             // 守卫 drop ⇒ 按 epoch 减在飞计数（tick 顶据此放行 deferred）。
                             drop(guard);
                         }
@@ -39499,18 +39562,82 @@ struct PendingLocalCmd {
     at_tick: u64,
 }
 
-/// **A6**：区 k → 区 0 的控制请求（区 0 每 tick **按区号升序** drain 各区的邮箱）。
+/// **A6 + M1c-2c**：区 k → 区 0 的控制请求（区 0 每 tick **按区号升序** drain 各区的邮箱）。
+///
+/// **M1c-2c 枚举化**：`GmSay` = 原 `@` 请求（字段逐个搬入，**语义零变化**）；`EatProcess` =
+/// 非本地 `CM_EAT`（脚本/彩票/城堡/不可判）。**执行机构（`a6_enqueue_control`/`A6ControlGuard`/
+/// 计数列/超时）全部不变**——只是投递体变成带类型的变体。
+///
+/// **A20**：**不实现** `!` 频道说的变体（频道消息不进邮箱，仍 `Unsupported`）。
 #[derive(Debug)]
-struct ControlRequest {
-    /// 投递方区号（区 0 drain 时用于断言/告警；邮箱本身按区一份）。
-    zone: zone::ZoneId,
-    chr_name: String,
-    /// `@` 命令正文（`tail` 原文；分类为 `Process` 时必以 `@` 起）。
-    line: String,
-    /// 入队时的段内 tick（= 该 tick 的本地 tick 号）。
-    at_tick: u64,
-    /// 入队时的 `control_epoch`（守卫 Drop 里比对，超时作废的旧请求不减计数）。
-    epoch: u64,
+enum ControlRequest {
+    GmSay {
+        /// 投递方区号（区 0 drain 时用于断言/告警；邮箱本身按区一份）。
+        zone: zone::ZoneId,
+        chr_name: String,
+        /// `@` 命令正文（`tail` 原文；分类为 `Process` 时必以 `@` 起）。
+        line: String,
+        /// 入队时的段内 tick（= 该 tick 的本地 tick 号）。
+        at_tick: u64,
+        /// 入队时的 `control_epoch`（守卫 Drop 里比对，超时作废的旧请求不减计数）。
+        epoch: u64,
+    },
+    /// **M1c-2c**：非本地 `CM_EAT`（区 0 用**区 k** 的玩家态 + 进程态执行 `handle_eat_cmd`）。
+    EatProcess {
+        zone: zone::ZoneId,
+        chr_name: String,
+        recog: i32,
+        param: u16,
+        tag: u16,
+        tail: Option<String>,
+        at_tick: u64,
+        epoch: u64,
+    },
+}
+
+impl ControlRequest {
+    /// 公共投递头（drain 里做会话缺失告警/计时用；不区分变体）。
+    fn zone(&self) -> zone::ZoneId {
+        match self {
+            ControlRequest::GmSay { zone, .. } | ControlRequest::EatProcess { zone, .. } => *zone,
+        }
+    }
+
+    fn chr_name(&self) -> &str {
+        match self {
+            ControlRequest::GmSay { chr_name, .. }
+            | ControlRequest::EatProcess { chr_name, .. } => chr_name,
+        }
+    }
+
+    fn at_tick(&self) -> u64 {
+        match self {
+            ControlRequest::GmSay { at_tick, .. } | ControlRequest::EatProcess { at_tick, .. } => {
+                *at_tick
+            }
+        }
+    }
+
+    fn epoch(&self) -> u64 {
+        match self {
+            ControlRequest::GmSay { epoch, .. } | ControlRequest::EatProcess { epoch, .. } => {
+                *epoch
+            }
+        }
+    }
+}
+
+/// **M1c-2c**：入队体（由 `a6_dispatch_local` 按 ident 构造；`a6_enqueue_control` 负责加
+/// `zone/chr/at_tick/epoch` 并做判满/置位——与 A6 完全同一条临界区）。
+#[derive(Debug)]
+enum ControlPayload {
+    GmSay(String),
+    EatProcess {
+        recog: i32,
+        param: u16,
+        tag: u16,
+        tail: Option<String>,
+    },
 }
 
 /// **A6**：段内处置结果（驱动侧据此计 `zonek_inbound_drained`，§6 口径）。
@@ -39814,7 +39941,7 @@ fn a6_enqueue_control(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     zone: zone::ZoneId,
     chr_name: &str,
-    line: String,
+    payload: ControlPayload,
     ident: u16,
     tick: u64,
 ) -> bool {
@@ -39836,13 +39963,31 @@ fn a6_enqueue_control(
             return false;
         }
         let epoch = sessions.get(chr_name).map_or(0, |sg| sg.a6.control_epoch);
-        q.push_back(ControlRequest {
-            zone,
-            chr_name: chr_name.to_string(),
-            line,
-            at_tick: tick,
-            epoch,
-        });
+        let req = match payload {
+            ControlPayload::GmSay(line) => ControlRequest::GmSay {
+                zone,
+                chr_name: chr_name.to_string(),
+                line,
+                at_tick: tick,
+                epoch,
+            },
+            ControlPayload::EatProcess {
+                recog,
+                param,
+                tag,
+                tail,
+            } => ControlRequest::EatProcess {
+                zone,
+                chr_name: chr_name.to_string(),
+                recog,
+                param,
+                tag,
+                tail,
+                at_tick: tick,
+                epoch,
+            },
+        };
+        q.push_back(req);
         // 置位与 push **同临界区**（理由见函数头注释）。
         if let Some(sg) = sessions.get_mut(chr_name) {
             sg.a6.control_pending = sg.a6.control_pending.saturating_add(1);
@@ -39882,24 +40027,30 @@ fn a6_dispatch_local(
                 debug_assert!(false, "区 k LOCAL 段必须带控制邮箱");
                 return LocalDisposition::Drained;
             };
-            let (chr_name, ident, tail) = match &item.ev {
+            let (chr_name, ident, payload) = match &item.ev {
                 GateEvent::Command {
                     chr_name,
                     cmd,
                     tail,
                     ..
-                } => (chr_name.clone(), cmd.ident, tail.clone()),
+                } => {
+                    // **M1c-2c**：`CM_EAT` 走**类型化**投递（`EatProcess`），其余仍 `GmSay`
+                    // （`@` 命令体）——两者共用同一邮箱/判满/置位/超时。
+                    let payload = if cmd.ident == game_svr::useitem::CM_EAT {
+                        ControlPayload::EatProcess {
+                            recog: cmd.recog,
+                            param: cmd.param,
+                            tag: cmd.tag,
+                            tail: tail.clone(),
+                        }
+                    } else {
+                        ControlPayload::GmSay(tail.clone().unwrap_or_default())
+                    };
+                    (chr_name.clone(), cmd.ident, payload)
+                }
                 _ => return LocalDisposition::Drained,
             };
-            let _ = a6_enqueue_control(
-                inbox,
-                sessions,
-                zone,
-                &chr_name,
-                tail.unwrap_or_default(),
-                ident,
-                tick,
-            );
+            let _ = a6_enqueue_control(inbox, sessions, zone, &chr_name, payload, ident, tick);
             LocalDisposition::Drained
         }
         ZoneCmdClass::Local => {
@@ -127285,16 +127436,16 @@ mod zone_command_tests {
             std::collections::HashMap::new();
         assert_eq!(
             classify_local_event(&ev_eat("hero"), &empty, &catalog, &world),
-            ZoneCmdClass::Unsupported,
-            "会话缺 ⇒ 不得本地"
+            ZoneCmdClass::Process,
+            "会话缺 ⇒ 安全默认 Process（回区 0）"
         );
         // 模板缺（会话在、包内没有该 MakeIndex）。
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), crate::tests::test_session_ground(actor));
         assert_eq!(
             classify_local_event(&ev_eat("hero"), &sessions, &catalog, &world),
-            ZoneCmdClass::Unsupported,
-            "模板缺 ⇒ 不得本地"
+            ZoneCmdClass::Process,
+            "模板缺 ⇒ 安全默认 Process（回区 0）"
         );
         // 非 CM_EAT 走既有分类器（`CM_PICKUP` 在 2b 已接线 ⇒ Local）。
         let ev_pick = GateEvent::Command {
@@ -127363,9 +127514,167 @@ mod zone_command_tests {
         }
         assert_eq!(
             classify_local_event(&ev_script, &s_script, &catalog2, &world),
-            ZoneCmdClass::Unsupported,
-            "脚本支本段 interim 非本地（段 3 改 Process）"
+            ZoneCmdClass::Process,
+            "脚本支 ⇒ Process（EatProcess 邮箱）"
         );
+        // 彩票支（StdMode3/Shape11）⇒ Process。
+        let mut catalog3 = game_svr::ability::StdItemCatalog::new();
+        catalog3.insert(
+            3,
+            mir2_data::StdItem {
+                std_mode: 3,
+                shape: 11,
+                ..Default::default()
+            },
+        );
+        let mut sg_lot = crate::tests::test_session_ground(actor);
+        sg_lot.state.item_list.push(game_svr::bag::BagItem {
+            make_index: 9003,
+            index: 3,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        });
+        let mut s_lot = std::collections::HashMap::new();
+        s_lot.insert("hero".to_string(), sg_lot);
+        let mut ev_lot = ev_eat("hero");
+        if let GateEvent::Command { cmd, .. } = &mut ev_lot {
+            cmd.recog = 9003;
+        }
+        assert_eq!(
+            classify_local_event(&ev_lot, &s_lot, &catalog3, &world),
+            ZoneCmdClass::Process,
+            "彩票支 ⇒ Process"
+        );
+    }
+
+    /// **M1c-2c 牙（段 3 · 正面证据）`eat_process_enqueues_typed_request_not_gm_line`**：
+    /// 非本地 `CM_EAT` 走 `Process` ⇒ `a6_dispatch_local` 投成 **`ControlRequest::EatProcess`**
+    /// 变体（**没有 `line` 字段 ⇒ 结构上不可能被区 0 当 `@` 命令执行**），置位
+    /// `control_pending`/`control_first_tick`，且执行体**不被调用**（不本地执行）。
+    ///
+    /// 变异：Process 臂把 payload 恒为 `GmSay` ⇒ 变体断言红；执行体被调用 ⇒ 红。
+    #[test]
+    fn eat_process_enqueues_typed_request_not_gm_line() {
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), crate::tests::test_session_ground(1));
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let mut pending = std::collections::BTreeMap::new();
+        let zone = zone::ZoneId::new(1);
+        let mut executed = false;
+        let mut exec =
+            |_ev: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
+                executed = true;
+            };
+        let item = SeqEvent {
+            seq: 1,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(game_svr::useitem::CM_EAT, 0, 0, 0),
+                tail: Some("木剑".to_string()),
+            },
+        };
+        let disp = a6_dispatch_local(
+            item,
+            ZoneCmdClass::Process,
+            Some(&inbox),
+            &mut sessions,
+            &mut pending,
+            zone,
+            9,
+            A6BatchBudget {
+                remaining_events: 10,
+                wall_ok: true,
+            },
+            &mut exec,
+        );
+        assert_eq!(disp, LocalDisposition::Drained, "Process 入邮箱即算已处置");
+        assert!(!executed, "Process 支不得本地执行");
+        {
+            let q = inbox.lock().unwrap();
+            assert_eq!(q.len(), 1, "邮箱应为 1 条");
+            match &q[0] {
+                ControlRequest::EatProcess { chr_name, tail, .. } => {
+                    assert_eq!(chr_name, "hero");
+                    assert_eq!(tail.as_deref(), Some("木剑"));
+                }
+                other => panic!(
+                    "非本地 CM_EAT 必须投 EatProcess 变体，实得 {other:?}（若是 GmSay 会被当 @ 执行）"
+                ),
+            }
+        }
+        assert_eq!(sessions["hero"].a6.control_pending, 1);
+        assert_eq!(sessions["hero"].a6.control_first_tick, Some(9));
+    }
+
+    /// **M1c-2c 牙 `eat_process_participates_in_stop_and_wait`**：`EatProcess` 在飞期间，同玩家的
+    /// **本地** `CM_EAT`（解包/其余）被暂缓（`Deferred`）；守卫 drop 清位后由 `a6_decide` 放行。
+    ///
+    /// 变异：删 `a6_enqueue_control` 的置位 ⇒ pending 恒 0、无 Deferred ⇒ 红。
+    #[test]
+    fn eat_process_participates_in_stop_and_wait() {
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), crate::tests::test_session_ground(1));
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let mut pending = std::collections::BTreeMap::new();
+        let zone = zone::ZoneId::new(1);
+        let mut noop =
+            |_ev: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {};
+        let mk = |seq: u64| SeqEvent {
+            seq,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(game_svr::useitem::CM_EAT, 0, 0, 0),
+                tail: None,
+            },
+        };
+        let budget = A6BatchBudget {
+            remaining_events: 10,
+            wall_ok: true,
+        };
+        // ① 投一条 Process：在飞 1。
+        let _ = a6_dispatch_local(
+            mk(1),
+            ZoneCmdClass::Process,
+            Some(&inbox),
+            &mut sessions,
+            &mut pending,
+            zone,
+            9,
+            budget,
+            &mut noop,
+        );
+        assert_eq!(sessions["hero"].a6.control_pending, 1);
+        // ② 同玩家的本地 CM_EAT ⇒ Deferred（本 tick 不执行、进 deferred_local）。
+        let disp = a6_dispatch_local(
+            mk(2),
+            ZoneCmdClass::Local,
+            Some(&inbox),
+            &mut sessions,
+            &mut pending,
+            zone,
+            10,
+            budget,
+            &mut noop,
+        );
+        assert_eq!(disp, LocalDisposition::Deferred, "在飞期间本地吃必须暂缓");
+        assert_eq!(sessions["hero"].a6.deferred_local.len(), 1);
+        // ③ 守卫 drop（模拟区 0 执行完）⇒ 清位；④ 下一 tick `a6_decide` 放行。
+        {
+            let epoch = sessions["hero"].a6.control_epoch;
+            let mut g = A6ControlGuard::new(&mut sessions, "hero".to_string(), epoch);
+            g.run(|_s| {});
+        }
+        assert_eq!(sessions["hero"].a6.control_pending, 0, "守卫 drop 必须清位");
+        let (released, _timeout) = a6_decide(&mut sessions, &mut pending, 11, zone);
+        assert_eq!(released, 1, "清位后暂缓队列必须放行");
+        assert!(sessions["hero"].a6.deferred_local.is_empty());
     }
 
     #[test]
@@ -130491,7 +130800,7 @@ mod l2_s3_cross_recipient_tests {
         {
             let mut q = inbox.lock().expect("inbox");
             for i in 0..CONTROL_MAILBOX_CAP {
-                q.push_back(ControlRequest {
+                q.push_back(ControlRequest::GmSay {
                     zone,
                     chr_name: format!("x{i}"),
                     line: "@".into(),
@@ -130808,7 +131117,7 @@ mod l2_s3_cross_recipient_tests {
             &mut sessions,
             zone,
             "p",
-            "@2".into(),
+            ControlPayload::GmSay("@2".into()),
             chat::CM_SAY,
             40
         ));
