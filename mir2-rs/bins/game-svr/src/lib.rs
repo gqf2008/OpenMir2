@@ -105738,7 +105738,10 @@ GMEXECUTE f
     /// `AccountList.txt`（名单 `  UA  `，`check_string_list` 的 Trim + OrdinalIgnoreCase）
     /// 决定 `MESSAGEBOX HIT` / `ELSESAY MISS`。返回 `(临时根目录, NpcHost)`。
     fn party_account_list_fixture(tag: &str) -> (std::path::PathBuf, game_svr::npc::NpcHost) {
-        let root = std::env::temp_dir().join(format!("gs-ua-{tag}-{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("gs-ua-{tag}-{}-{seq}", std::process::id()));
         let envir = root.join("Envir");
         let dir = envir.join("Market_Def");
         std::fs::create_dir_all(&dir).unwrap();
@@ -112039,8 +112042,13 @@ GMEXECUTE f
 
     /// 从 GBK 脚本建 `QManage` 宿主（真解析器，不手搓动作结构）。
     fn qmanage_host_for(script: &str, tag: &str) -> game_svr::npc::NpcHost {
-        let root =
-            std::env::temp_dir().join(format!("gs-sendmsg-login-{tag}-{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gs-sendmsg-login-{tag}-{}-{seq}",
+            std::process::id()
+        ));
         let dir = root.join("Envir").join("MapQuest_def");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("QManage.txt");
