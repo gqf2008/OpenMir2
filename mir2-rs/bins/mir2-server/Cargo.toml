@@ -11,6 +11,12 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "deny"
 
+[features]
+# 透传 `game-svr` 的 `frame-src`（M1a ⑤ 旁路打标的验收构建）：
+#   cargo build -p mir2-server --features frame-src
+# **默认关** ⇒ 常规构建/M1a 容量件/生产与今天逐字节同构。
+frame-src = ["game-svr/frame-src"]
+
 [dependencies]
 # 六个角色 crate 的 lib target（`run()` / `run_with_args()`）——旧 exe 保留，行为不变。
 game-svr = { path = "../game-svr" }
