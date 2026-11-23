@@ -186,7 +186,7 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   `note_mirror_recipient` 的 `src_zone/seq` 由 `begin_tick(tick_no)`（区 k 也是 tick_no）自动成立。
 - **分槽语义不变**：每 `(dst,src)` 槽单写者（区 k 只写自己的 src）；`src_tick < current tick` 的
   T+1 排空不变；`MAX_FRAMES_PER_SLOT` 拒绝新增不变。
-- **`PhaseSet` 在区 k 生产模式**（**17 位逐位表**，含排除位；opc-27/0c 2026-11-23 要求。**17 位 = M1a 基线**；`M1-0c'` 把 PERSIST 拆两位后 18 位（§8.2），M1b 再拆 INBOUND 后 19 位（§9））：
+- **`PhaseSet` 在区 k 生产模式**（**17 位逐位表**，含排除位；opc-27/0c 2026-11-23 要求。**17 位 = M1a 基线且 `M1-0c'` 后仍是 17 位**——PERSIST 两位拆分**推迟到 M1c**（§8.2，opc-27 2026-11-23 裁定）；M1b 拆 INBOUND 后 18 位、M1c 拆 PERSIST 后 19 位）：
 
   | 位 | 段 | M1 归属 | 「区 k 不跑它会坏什么」/ 为什么可以不含 |
   | --- | --- | --- | --- |
@@ -296,17 +296,18 @@ fn tick(self, shared: SharedServices, mut process: Option<ProcessServices>, io: 
 - 区 0 传 `Some(process)`；区 k（M1 起）传 `None`。
 - **`TickOut` 必须把 `Option<ProcessServices>` 回传**：区 0 每 tick 供 `Some` 并拿回（channel/Arc 等
   句柄不得在 tick 之间丢失）；区 k 供 `None`、丢弃回传。
-- `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | **PLANES** | PERSIST_DB | **SWITCH**`（**7 段**；与 `M0_MIN`/`M1_MIN` **同处**，
+- `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | **PLANES** | PERSIST | **SWITCH**`（**7 段**；与 `M0_MIN`/`M1_MIN` **同处**，
   `PhaseSet` 定义旁）。**7 段的依据**：`PLANES` 段用 `planes`（Process 字段）、`SWITCH` 段用
   `server_table`/`reconnect_pending`（Process 字段）——早前的「5 段/59 处」只统计了 6 个 `!Send` 字段，
   不是「全部 Process 字段的段集」。**掩码与段集必须相等，靠一条行为牙守**：`proc_svc!($bit,$seg)` 在
   `#[cfg(test)]` 记 `PROC_SVC_SEGMENTS`，用例跑 `tick(shared, Some(process), io, ALL)` 后断言
   **记录集 == `PROCESS_ONLY`**（同时抓漏掩码与虚位；`ALL` 有段走不到须报告、不许改子集）。
-  **PERSIST 留缝（M1c 前瞻，0c 2026-11-23）**：`HostPersist` 段有 1 处用 `engine` ⇒ M1c 给区 k 开
-  「仅 `save_outbox`」时会撞 fail-fast。⇒ 建常量时就把 PERSIST 拆成 `PERSIST_DB`（进程-only，
-  进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），并用**常量别名保持旧位等价**：
-  `const PERSIST: u32 = PERSIST_DB | PERSIST_OUTBOX;`（区 0 两位都开 ≡ 旧行为；同步更新
-  `RAN_SEGMENTS` 的精确相等断言与 `M0_MIN`/`M1_MIN` 的位集写法）。**函数体内真正的拆分留 M1c**。
+  **PERSIST 拆分推迟到 M1c（opc-27 2026-11-23 裁定，覆盖早前"建常量时就拆"）**：`HostPersist` 段有 1 处
+  用 `engine` ⇒ M1c 给区 k 开「仅 `save_outbox`」时会撞 fail-fast。**但现在拆只是加一对无牙死位**，
+  故 `M1-0c'` 里 `PROCESS_ONLY` 用**单个 `PERSIST` 位**、`PhaseSet` 仍是 17 位。**M1c 起手第一件事**：
+  把 `PERSIST` 拆成 `PERSIST_DB`（进程-only，进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），
+  用**常量别名保持旧位等价** `const PERSIST: u32 = PERSIST_DB | PERSIST_OUTBOX;`，同步
+  `RAN_SEGMENTS` 精确相等断言与 `M0_MIN`/`M1_MIN`/`M1A_PROD` 位集写法，并给"拆两位后多一位或少一位仍必红"的变异。
   **见证与期望集一律用别名 `PERSIST`（两位同置），禁止写半位**——否则 M1c 首次把 PERSIST 纳入区 k
   时会出现「记两位、期望写半位」的假红；两位拆开后多一位或少一位仍必红。
 - **入口 fail-fast（`assert!`，release 也生效）**：
