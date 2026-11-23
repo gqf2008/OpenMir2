@@ -1093,8 +1093,18 @@ fn new_zone_state(
     map_sizes: &[(i32, i32)],
     rng_seed: Option<i32>,
     registry: Option<&mir2_envir::MapRegistry>,
+    need_exps: &[i32],
 ) -> ZoneState {
     let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
+    // **M1a 遗留修复（区 k 登录 `MaxExp=0`，卡 `openmir2-zone-k-need-exps-maxexp-zero`）**：
+    // 区 k 的 `World` 必须与区 0 同源注入 `need_exps`（`Exps.conf` 的 NeedExps 表）。否则共享登录
+    // 收尾 `refresh_login_max_exp`、`SM_ABILITY(52)` 帧、IT-08 升级重算都取到 `World` 默认全 0 表
+    // ⇒ `MaxExp=0`，且升级判定 `exp >= max_exp(0)` 恒真 ⇒ 每次得经验即升一级。
+    // 空表**不覆盖**默认（`World` 默认 `vec![0; 1000]`）：防御 `get_level_exp` 越界/恒 0；
+    // 生产恒传 `sim_enter_cfg.need_exps`（非空 `Exps.conf`），故生产必覆盖。
+    if !need_exps.is_empty() {
+        state.host.world.need_exps = need_exps.to_vec();
+    }
     // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上（与区 0 同口径）。
     if let Err(e) = check_zone_id_base(zone_id, &state.host.world) {
         glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
@@ -3458,12 +3468,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         let zone_id =
                             zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
                         // **L2-5 ④a**：边界 + 静态地图数据（格子属性/传送点/门）一次构造。
+                        // `need_exps` 与区 0 同源（`sim_enter_cfg.need_exps`），修复区 k `MaxExp=0`。
                         let state = new_zone_state(
                             zone_id,
                             &layout,
                             &map_sizes,
                             rng_seed,
                             registry.as_ref(),
+                            &sim_enter_cfg.need_exps,
                         );
                         *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
@@ -124140,13 +124152,110 @@ mod zone_map_data_tests {
     }
 
     fn zone_state_with(reg: Option<&mir2_envir::MapRegistry>) -> ZoneState {
+        // 传空 `need_exps` ⇒ 保持 `World` 默认（`vec![0; 1000]`）；本夹具不依赖 `MaxExp`，
+        // 空表路径即被这些用例覆盖（见 `new_zone_state_injects_need_exps` 的正例）。
         new_zone_state(
             zone::ZoneId::new(1),
             &layout(),
             &[(i32::from(W), i32::from(H))],
             None,
             reg,
+            &[],
         )
+    }
+
+    /// **回归牙（卡 `openmir2-zone-k-need-exps-maxexp-zero`）**：`new_zone_state` 把
+    /// `need_exps` 注入区 k 的 `World`，且这条注入是区 k `MaxExp` 正确、升级不误触发的根。
+    ///
+    /// - 正例：传表 ⇒ `world.need_exps == 表`，`get_level_exp(level=1)` 取到非 0（= 表[1]）；
+    /// - 空表 ⇒ **保持 `World` 默认**（`len==1000`、全 0），不 panic、不越界（opc-27 要求的"防御性断言"）；
+    /// - **变异即红**：删掉 `new_zone_state` 里的注入 ⇒ 正例的 `world.need_exps` 退回默认全 0
+    ///   ⇒ `get_level_exp(..,1)==0` ⇒ 断言红（这正是 `MaxExp=0`、`exp>=0` 误升级的根）。
+    #[test]
+    fn new_zone_state_injects_need_exps() {
+        let (_base, reg) = wall_fixture("block");
+        // 表[1]=10（level 1 的升级门槛），其余也填 10；与 golden `MaxExp=10` 同口径。
+        let table = vec![10i32; mir2_data::models::MAX_LEVEL as usize + 1];
+        let st = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            Some(&reg),
+            &table,
+        );
+        // 正例：注入生效。
+        assert_eq!(
+            st.host.world.need_exps, table,
+            "区 k World.need_exps 必须等于注入表（根修：与区 0 同源）"
+        );
+        // 根效果：level 1 的 MaxExp 取到非 0（原缺陷下 = 0 ⇒ exp>=0 误升级）。
+        let max_exp = mir2_formula::exp::get_level_exp(
+            &st.host.world.need_exps,
+            mir2_data::models::MAX_LEVEL,
+            1,
+        );
+        assert_eq!(max_exp, 10, "level 1 MaxExp 必须 = 表[1] = 10（非 0）");
+        // exp < max_exp ⇒ 升级判定为假（`out.exp_delta.is_some() && exp >= max_exp`）。
+        assert!(
+            !(true && max_exp > 0 && 3 >= max_exp),
+            "exp=3 < max_exp=10 ⇒ 不应升级（原缺陷 max_exp=0 时 3>=0 恒真会误升）"
+        );
+
+        // 空表 ⇒ 保持 World 默认（防御：get_level_exp 不越界、恒 0 而非 panic）。
+        let st2 = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            Some(&reg),
+            &[],
+        );
+        assert_eq!(
+            st2.host.world.need_exps.len(),
+            1000,
+            "空表 ⇒ 保持 World 默认 vec![0;1000]（防御性：不覆盖、不越界）"
+        );
+        assert!(
+            st2.host.world.need_exps.iter().all(|&v| v == 0),
+            "空表 ⇒ 默认全 0（与原区 k 构造一致）"
+        );
+    }
+
+    /// **N=1 零参与证据（§12 结构证据：源码扫描、非行为）**：`new_zone_state` 的**生产调用**
+    /// 只在 `if slicing {`（区 k 构造）块内；单区（`slicing=0`）不进该块 ⇒ 不调用 `new_zone_state`
+    /// ⇒ 本修复不在 N=1 路径上执行（区 0 的 `world.need_exps`@sim 赋值点不变）。
+    #[test]
+    fn new_zone_state_only_called_in_slicing_block() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读 lib.rs");
+        let code = crate::strip_rust_comments(&src);
+        let prod = match code.find("mod tests {") {
+            Some(pos) => &code[..pos],
+            None => code.as_str(),
+        };
+        // `= new_zone_state(` 是**调用**（`fn new_zone_state(` 是定义，不命中该串）。
+        let calls: Vec<usize> = prod
+            .match_indices("= new_zone_state(")
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "new_zone_state 生产调用点须恰一处（区 k 构造）"
+        );
+        let call = calls[0];
+        let guard = prod[..call]
+            .rfind("if slicing {")
+            .expect("new_zone_state 调用前应有 `if slicing {` 守卫");
+        let block_end = prod[call..]
+            .find("let handoff_boxes = if slicing")
+            .map(|p| call + p)
+            .expect("`if slicing` 区构造块之后应有 `let handoff_boxes`");
+        assert!(
+            guard < call && call < block_end,
+            "new_zone_state 调用必须在 zone_states 的 `if slicing` 块内（单区不进 ⇒ N=1 零参与）"
+        );
     }
 
     /// 牙 ①：区 k 的实体走到真墙格 ⇒ 被拒；同一网格按区 0 的装载路径也同结论。
