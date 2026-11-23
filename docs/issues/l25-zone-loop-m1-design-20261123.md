@@ -453,3 +453,28 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
    走**帧构造点**，帧内容随新 flag 变化——符号锚三选一：`castle::area_state` ⇒ `SM_AREASTATE`；
    `enter::music_id` ⇒ `SM_MAPDESCRIPTION`；`flag.day_light` ⇒ `SM_DAYCHANGING`。drain 未生效则仍旧 Flag ⇒ 红。
    **(b) 才是「客户端可见」的行为证据。**
+
+## 11. `item_number`/MakeIndex 决定与 M1b 可行性小结（`0c` 2026-11-23；M1b/M1c 输入）
+
+### 11.1 `item_number`：**M1a/M1b 暂不共享，前提是"带 MakeIndex 的物品不跨区"**
+
+- `item_number` 是 MakeIndex 计数器（`*item_number += 1` → `make_index`）。
+- **共享**（`Arc<Mutex>` 跨区 `+=`）⇒ 分配序随调度 ⇒ MakeIndex 具体值 run-to-run 不定；**但**该值
+  **不进对拍**：`whitelist.md` 的 D-1 已把 `UserItem.MakeIndex`（及 `characters_bagitem.MakeIndex` 列）
+  列为掩码，依据是 C# `M2Share.GetItemNumber()` 含 `GetTickCount`、两次运行本就不一致。
+  ⇒ **共享不会破「帧内容/取值」硬面**（`itemwire` 里 MakeIndex 之外字节不动）。
+- **不共享**（每区一份、同初值各自 `++`）⇒ **撞号**：跨区出现相同 MakeIndex ⇒
+  `bag.rs` 的 `it.make_index != make_index` 身份匹配错、跨区引用/落库冲突。**D-1 只掩"值不比对"，
+  不解决"值重复"。**
+- **决定**：M1a/M1b **暂不共享**，安全前提写死为 **带 MakeIndex 的物品不跨区**；
+  **M1c 一旦物品跨区（handoff／交易／跨界掉落）⇒ 必须改共享**（值波动落在 D-1 豁免内，撞号被消除）。
+
+### 11.2 M1b 可行性三数（分母与依据，不下结论）
+
+① **热路径 7 族**（move/hit/spell/bag/eat/say/ground）中 **LOCAL = 5**（move/hit/spell/bag/eat），
+   **歧义 = 2**（say = 聊天 vs GM `@`；ground = 触 `item_number`）。分母 7，依据 = §9 分类表与谓词集。
+② **PROCESS 族合计 7**（命令 4：guild/shop/click-npc/selloff；事件 3：AdminGm/LoadDbRequest/KickAccount），
+   其中 **每 tick/每动作高频 = 0**——全为命令触发式，无每 move/hit 的进程态依赖。
+   **该数为按命令触发性质的定性判断，无可测频率数据**。
+③ **歧义族合计 8**（命令 6：say/ground/deal/storage/party/inbound-misc；事件 2：CertificationPending/Closed），
+   其中 **触 `item_number` = 2**（ground、inbound-misc）。
