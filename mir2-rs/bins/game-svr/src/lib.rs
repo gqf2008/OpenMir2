@@ -1097,6 +1097,7 @@ fn new_zone_state(
     rng_seed: Option<i32>,
     registry: Option<&mir2_envir::MapRegistry>,
     need_exps: &[i32],
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
 ) -> ZoneState {
     let mut state = ZoneState::new(zone_id, map_sizes, rng_seed);
     // **M1a 遗留修复（区 k 登录 `MaxExp=0`，卡 `openmir2-zone-k-need-exps-maxexp-zero`）**：
@@ -1108,6 +1109,18 @@ fn new_zone_state(
     if !need_exps.is_empty() {
         state.host.world.need_exps = need_exps.to_vec();
     }
+    // **区 k 生产开关补齐（卡 `openmir2-zone-k-prod-switches`）**：区 k 的 World 必须与 N=1 生产宿主
+    // 逐字镜像地开这**五个**生产 tick/延时层——否则区 k「有实体、没行为」（商人/NPC/buff 不 tick，
+    // 受击无 `RM_REFMESSAGE`→`SM_STRUCK(31)`）。口径/次序 = N=1 `sim_loop`（merchant→npc→buff→
+    // slave_self_delay→refmessage_delay）。
+    // **不开 `monster_ai`**：N=1 生产也未开（`World.ai_enabled` 缺省 false，`world.rs:1800`；host
+    // 接线属后续分片 `openmir2-m3-monster-ai-tick`，见 `world.rs:1246`）⇒ 区 k 与 N=1 一致、均不
+    // 开；若将来 N=1 接线 AI，本处同补（别在此单开）。
+    state.host.world.enable_merchant_tick();
+    state.host.world.enable_npc_tick();
+    state.host.world.enable_buff_tick();
+    state.host.world.enable_slave_self_delay(pet_cfg.clone());
+    state.host.world.enable_refmessage_delay();
     // **L2-5 ④b-0（启动门，fail-closed）**：id 段必须落到实际分配器上（与区 0 同口径）。
     if let Err(e) = check_zone_id_base(zone_id, &state.host.world) {
         glog!("ERR", "多区 ActorId 段自检失败：{e} ⇒ 拒绝启动");
@@ -3658,6 +3671,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             rng_seed,
                             registry.as_ref(),
                             &sim_enter_cfg.need_exps,
+                            &sim_enter_cfg.pet_cfg,
                         );
                         *slot = Some(Arc::new(std::sync::Mutex::new(state)));
                     }
@@ -125354,6 +125368,7 @@ mod zone_map_data_tests {
             None,
             reg,
             &[],
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
         )
     }
 
@@ -125376,6 +125391,7 @@ mod zone_map_data_tests {
             None,
             Some(&reg),
             &table,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
         );
         // 正例：注入生效。
         assert_eq!(
@@ -125403,6 +125419,7 @@ mod zone_map_data_tests {
             None,
             Some(&reg),
             &[],
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
         );
         assert_eq!(
             st2.host.world.need_exps.len(),
@@ -125412,6 +125429,43 @@ mod zone_map_data_tests {
         assert!(
             st2.host.world.need_exps.iter().all(|&v| v == 0),
             "空表 ⇒ 默认全 0（与原区 k 构造一致）"
+        );
+    }
+
+    /// **区 k 生产开关牙（卡 `openmir2-zone-k-prod-switches`）**：`new_zone_state` 产出的区 k World
+    /// 必须与 N=1 生产宿主**逐字段一致**地开五个生产 tick/延时层（断言**开关值**、非"调用过"）：
+    /// merchant/npc/buff/slave_self_delay/refmessage_delay。且 `monster_ai` 与 N=1 一致**保持关闭**
+    /// （N=1 生产也未开，`world.rs:1246` host 接线属后续分片）。
+    #[test]
+    fn zone_k_world_enables_match_n1_prod() {
+        let (_base, reg) = wall_fixture("block");
+        let st = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            Some(&reg),
+            &[],
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
+        let w = &st.host.world;
+        assert!(
+            w.merchant_tick_enabled(),
+            "merchant_tick 必须在区 k 开（镜像 N=1）"
+        );
+        assert!(w.npc_tick_enabled(), "npc_tick 必须在区 k 开");
+        assert!(w.buff_tick_enabled(), "buff_tick 必须在区 k 开");
+        assert!(
+            w.slave_self_delay_enabled(),
+            "slave_self_delay 必须在区 k 开"
+        );
+        assert!(
+            w.refmessage_delay_enabled(),
+            "refmessage_delay 必须在区 k 开（SM_STRUCK 根）"
+        );
+        assert!(
+            !w.monster_ai_enabled(),
+            "monster_ai 必须与 N=1 一致保持关闭（N=1 生产未开，非区 k 回归）"
         );
     }
 
