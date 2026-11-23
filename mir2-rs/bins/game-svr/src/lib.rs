@@ -1421,6 +1421,7 @@ fn handle_zone_closed(
 /// - **④b 缺口基线**：在线表有条目、世界里已无实体（handoff 提升后源区不随迁）⇒ 本条走位必被
 ///   `handle_move_cmd` 丢弃；在**调用前**计 `handoff_move_after_transfer_dropped`，
 ///   `handle_move_cmd` 自身行为不变。
+#[cfg(test)]
 fn handle_zone_command(
     state: &mut ZoneState,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -1436,6 +1437,31 @@ fn handle_zone_command(
         ground_sessions,
         ..
     } = host;
+    handle_zone_command_on(
+        world,
+        displays,
+        online,
+        ground_sessions,
+        gates,
+        chr_name,
+        socket,
+        cmd,
+    );
+}
+
+/// **M1b 第 3 步**：[`handle_zone_command`] 的**唯一处置实现**（区 k 循环顶与 `INBOUND_LOCAL`
+/// 段共用；**不得复刻**）。行为与拆段前逐字节相同。
+#[allow(clippy::too_many_arguments)]
+fn handle_zone_command_on(
+    world: &mut mir2_world_bevy::World,
+    displays: &mut downlink::DisplayTable,
+    online: &mut OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    cmd: &CommandMessage,
+) {
     if !movewire::is_move_command(cmd.ident) {
         perf_counters::note_zone_cmd_unsupported(cmd.ident);
         return;
@@ -1883,6 +1909,8 @@ fn spawn_zone_demux(
     router: Arc<zone_router::ZoneRouter>,
     // **L2-5 ③ 段 1b**：切片开才在回落现场计 `zone_router_unassigned`（slicing=0 ⇒ 行为逐字节不变）。
     count_unassigned: bool,
+    // **M1b 第 3 步**：每区 `Command` 的未处理积压（长度 = zone_count；z=0 不用）。
+    outstanding: ZoneOutstanding,
 ) -> Result<()> {
     std::thread::Builder::new()
         .name("m2-zone-demux".to_string())
@@ -1917,9 +1945,8 @@ fn spawn_zone_demux(
                                 other => panic!("Broadcast 只用于网关线事件，实得 {other:?}"),
                             },
                             ZoneTarget::Zone(z) => {
-                                let (normal, priority) = &senders[z];
-                                let target = if ev.is_priority() { priority } else { normal };
-                                let _ = target.send(ev);
+                                // **M1b 第 3 步**：`Zone(z)` 转发抽成 seam（单测覆盖上限/丢新/+1）。
+                                demux_forward_zone(z, ev, &senders, &outstanding);
                             }
                         }
                     }
@@ -1959,6 +1986,8 @@ fn spawn_minimal_zone(
     stop: Arc<std::sync::atomic::AtomicBool>,
     // **L2-5 ②**：镜像开关（`MIR2_ZONE_MIRROR`；关 ⇒ `run_zone_tick` 的 `mirrors` 为 false）。
     mirrors: bool,
+    // **M1b 第 3 步**：本区命令未处理积压（demux +1、本线程消费 -1）。
+    outstanding: Arc<std::sync::atomic::AtomicUsize>,
     // **L2-5 ⑤**：跨区收件人帧邮箱 + 路由（切片 + 镜像才 `Some`；否则零参与）。
     router: Arc<zone_router::ZoneRouter>,
     cross_mailboxes: Option<Arc<cross_zone_frames::CrossZoneMailboxes>>,
@@ -2049,6 +2078,11 @@ fn spawn_minimal_zone(
                     ev_rx: rx,
                     ev_ctl_rx: ctl_rx,
                     shutdown: ShutdownSignal::Flag(Arc::clone(&stop)),
+                    inbound_local_buffer: std::collections::VecDeque::new(),
+                    inbound_local_carry_prefix: 0,
+                    inbound_local_filled: 0,
+                    inbound_local_fill_hit: false,
+                    inbound_outstanding: Some(Arc::clone(&outstanding)),
                 };
                 // 区 k 的节拍（与区 0 同一 200ms；`HostLoop::for_zone` 已写同值）。
                 let tick_dur = std::time::Duration::from_millis(
@@ -2058,38 +2092,35 @@ fn spawn_minimal_zone(
                 // `HostLoop.gates`**，因为 A/B/rest 内部一律用 `self.gates` 发帧。
                 let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
                     std::collections::HashMap::new();
+                // **M1b 第 3 步（P1）**：跨 tick 的入站缓冲 —— **tick 之间必在 scratch**、
+                // `TickIo.inbound_local_buffer` 为空（两条 `debug_assert` 守）。
+                let mut pending_inbound: std::collections::VecDeque<GateEvent> =
+                    std::collections::VecDeque::new();
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     // **L2-5 ⑤**：本 tick 的跨区帧 `src_tick`/`seq` 起点（事件处理前先置；
                     // A 的 `WORLD_HEAD` 内还会按同一 tick_no 再置一次，值相同）。
                     cross_zone_frames::begin_tick(tick);
-                    // **L2-5 ③ 段 1c / ④a**：`Closed` 与移动类 `Command` 在 tick 顶、锁1 之前处理
-                    // （与区 0「先排事件再 tick」同序）；`RegisterGate/UnregisterGate` 两条通道都收。
+                    // **M1b 第 3 步（P1）**：循环顶的不变式——tick 之间缓冲只在 scratch。
+                    debug_assert!(
+                        zone_io.inbound_local_buffer.is_empty(),
+                        "P1：tick 之间 TickIo 缓冲必须为空"
+                    );
+                    // **M1b 第 3 步**：循环顶（锁外）= 有预算填充。命令进 scratch（A 段 `INBOUND_LOCAL`
+                    // 内执行）；`Closed/Register/Unregister` 与优先通道其它事件就地处理（与今天同序）。
                     let mut closed_events: Vec<(i32, String, i32)> = Vec::new();
-                    let mut cmd_events: Vec<(String, i32, CommandMessage)> = Vec::new();
-                    while let Ok(ev) = zone_io.ev_rx.try_recv() {
-                        match ev {
-                            GateEvent::Closed {
-                                index,
-                                chr_name,
-                                socket,
-                            } => closed_events.push((index, chr_name, socket)),
-                            GateEvent::Command {
-                                chr_name,
-                                socket,
-                                cmd,
-                                ..
-                            } => cmd_events.push((chr_name, socket, cmd)),
-                            GateEvent::RegisterGate { service_id, tx } => {
-                                gates.insert(service_id, tx);
-                            }
-                            GateEvent::UnregisterGate { service_id } => {
-                                gates.remove(&service_id);
-                            }
-                            _ => {}
-                        }
-                    }
-                    while let Ok(ev) = zone_io.ev_ctl_rx.try_recv() {
-                        match ev {
+                    let carry_prefix = pending_inbound.len();
+                    // 缓冲非空 ⇒ fill 上限减半（保证执行至少拿到一半预算）。
+                    let pull_cap = if carry_prefix == 0 {
+                        ZONEK_TICK_MAX_EVENTS
+                    } else {
+                        ZONEK_TICK_MAX_EVENTS / 2
+                    };
+                    let (filled, fill_hit) = fill_pending(
+                        &zone_io.ev_rx,
+                        &zone_io.ev_ctl_rx,
+                        &mut pending_inbound,
+                        pull_cap,
+                        |ev| match ev {
                             GateEvent::Closed {
                                 index,
                                 chr_name,
@@ -2102,8 +2133,8 @@ fn spawn_minimal_zone(
                                 gates.remove(&service_id);
                             }
                             _ => {}
-                        }
-                    }
+                        },
+                    );
                     if !closed_events.is_empty() {
                         let mut st = state
                             .lock()
@@ -2126,18 +2157,17 @@ fn spawn_minimal_zone(
                             );
                         }
                     }
-                    if !cmd_events.is_empty() {
-                        let mut st = state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        for (chr_name, socket, cmd) in cmd_events {
-                            handle_zone_command(&mut st, &gates, &chr_name, socket, &cmd);
-                        }
-                    }
                     // tick 顶（无锁）：节拍截止、段跨值、屏障编排。
                     let next = std::time::Instant::now() + tick_dur;
                     let mut scratch = TickScratch::default();
                     let mut barrier_ops = BarrierOps::from_shared(zone_id, &zone_shared);
+                    // **M1b 第 3 步（P1）**：scratch → TickIo（锁外）；`INBOUND_LOCAL` 段执行；
+                    // **承载段的那次 `tick_phase_a` 一返回就 swap 回**。
+                    zone_io.inbound_local_carry_prefix = carry_prefix;
+                    zone_io.inbound_local_filled = filled;
+                    zone_io.inbound_local_fill_hit = fill_hit;
+                    std::mem::swap(&mut pending_inbound, &mut zone_io.inbound_local_buffer);
+                    debug_assert!(pending_inbound.is_empty(), "P1：swap 后 scratch 必空");
                     // **锁1**：A 段（`WORLD_HEAD..WORLD_TAIL` A 半段）。
                     let slot = {
                         let mut st = state
@@ -2152,9 +2182,18 @@ fn spawn_minimal_zone(
                             &mut zone_shared,
                             &mut no_process,
                             &mut zone_io,
-                            PhaseSet::M1A_PROD,
+                            PhaseSet::M1B_ZONE_PROD,
                             &mut scratch,
                             &mut barrier_ops,
+                        );
+                        // **P1**：承载段一返回即 swap 回（无论 Continue/Exited）。
+                        std::mem::swap(&mut pending_inbound, &mut zone_io.inbound_local_buffer);
+                        zone_io.inbound_local_carry_prefix = 0;
+                        zone_io.inbound_local_filled = 0;
+                        zone_io.inbound_local_fill_hit = false;
+                        debug_assert!(
+                            zone_io.inbound_local_buffer.is_empty(),
+                            "P1：tick 之间 TickIo 缓冲必须为空"
                         );
                         debug_assert_eq!(
                             outcome,
@@ -2204,6 +2243,29 @@ fn spawn_minimal_zone(
                         );
                     }
                     tick += 1;
+                }
+                // **M1b 第 3 步 · P3**：线程尾清点（不静默；通道残留不读，只按 outstanding 对账）。
+                if !zone_io.inbound_local_buffer.is_empty() {
+                    glog!(
+                        "WRN",
+                        "切片区 {zone_id} 线程尾发现 TickIo 缓冲非空（P1 不变式破坏）⇒ 换回 scratch 清点"
+                    );
+                    std::mem::swap(&mut pending_inbound, &mut zone_io.inbound_local_buffer);
+                }
+                let mut discarded = 0u64;
+                while let Some(ev) = pending_inbound.pop_front() {
+                    if let GateEvent::Command { .. } = &ev {
+                        outstanding.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        perf_counters::note_zonek_inbound_pending_discarded();
+                        discarded += 1;
+                    }
+                }
+                let left = outstanding.load(std::sync::atomic::Ordering::Relaxed);
+                if discarded > 0 || left > 0 {
+                    glog!(
+                        "WRN",
+                        "切片区 {zone_id} 关服残留：丢弃 {discarded} 条未执行命令（zonek_inbound_pending_discarded）；通道未 fill 残留 outstanding={left}（进程退出，不读通道）"
+                    );
                 }
             };
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
@@ -3370,6 +3432,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     senders.push((normal_tx, priority_tx));
                     receivers.push((normal_rx, priority_rx));
                 }
+                // **M1b 第 3 步**：每区命令积压（demux +1、区线程消费 -1）。z=0 不用。
+                let outstanding: ZoneOutstanding = (0..zone_count)
+                    .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+                    .collect();
                 // 区 0 = 现 `m2-sim` 线程：它的两条通道直接放进 `per_shard_rx[0]`。
                 let (rx0, ctl0) = receivers.remove(0);
                 per_shard_rx[0] = Some((rx0, ctl0));
@@ -3436,6 +3502,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     senders,
                     Arc::clone(&router),
                     slicing,
+                    outstanding.clone(),
                 )?;
                 // 区 1..N−1 的区线程（区 0 在下面的 sim 线程里）。
                 for (offset, (rx, ctl)) in receivers.into_iter().enumerate() {
@@ -3450,6 +3517,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         Arc::clone(&watch),
                         Arc::clone(&stop),
                         mirror_enabled,
+                        // **M1b 第 3 步**：本区 outstanding（消费时 -1）。
+                        std::sync::Arc::clone(&outstanding[index]),
                         Arc::clone(&router),
                         cross_mailboxes.clone(),
                         host.zone_states[index].clone(),
@@ -24344,6 +24413,13 @@ mod perf_counters {
     pub(crate) static INBOUND_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
     /// 本轮 `HostInbound` 排水墙钟（微秒；每 tick 覆盖写，不累加）。
     pub(crate) static INBOUND_WALL_US: AtomicU64 = AtomicU64::new(0);
+    // **M1b 第 3 步**：区 k 入站有界化（只写 zonek_*；禁止调区 0 的 note_inbound_drained）。
+    static ZONEK_INBOUND_DRAINED: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_INBOUND_CARRY: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_INBOUND_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
     /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
     /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
     pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
@@ -24680,6 +24756,10 @@ mod perf_counters {
         DATA_LINES.store(0, Ordering::Relaxed);
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = None;
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        #[cfg(test)]
+        {
+            *TEST_WRITER_OWNER.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
     }
 
     /// 测试用：第七面 WRN 抑制数（本 tick 增量）。
@@ -24702,6 +24782,10 @@ mod perf_counters {
     pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     static DATA_LINES: AtomicU64 = AtomicU64::new(0);
+    /// **测试期写端归属**：并行 tick 用例会调 `write_tick`；若某计数器用例正用同一 `WRITER`
+    /// 做读数断言，其他线程的写会插行/swap 掉它刚 bump 的计数（假红）⇒ 只允许 init 线程写。
+    #[cfg(test)]
+    static TEST_WRITER_OWNER: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
     static WRITER: Mutex<Option<std::fs::File>> = Mutex::new(None);
     static PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
@@ -24769,16 +24853,116 @@ mod perf_counters {
         }
     }
 
+    // ---- **M1b 第 3 步**：区 k（slicing）入站有界化计数（全部区 k 实例求和；区 0 三列一字不动）----
+
+    /// 区 k 段内执行条数（每条 Command 恰 +1；`ev` 只用于将来按类拆分，当前不读）。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_drained(from_carry: bool, _ev: &super::GateEvent) {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
+            if from_carry {
+                ZONEK_INBOUND_CARRY.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// 本 tick 预算命中（`fill_hit || 段执行截断且工作区非空`；每 tick 至多 +1）。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_budget_hit() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_INBOUND_BUDGET_HIT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// demux 丢新（`outstanding` 到软上限）。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_overflow_dropped() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_INBOUND_OVERFLOW_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// shutdown 线程尾丢弃的未执行命令（不静默）。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_pending_discarded() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_INBOUND_PENDING_DISCARDED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 分类为 `Unsupported`（表外 ident）的**纯归属观测**——**本步不丢**（处置全权归
+    /// `handle_zone_command_on`）；第 5 步真正接管丢弃时再加 `_dropped` 列。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_unsupported() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_INBOUND_UNSUPPORTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// `#[cfg(test)]` 读点（各一）。
+    #[cfg(test)]
+    pub(crate) fn zonek_inbound_drained() -> u64 {
+        ZONEK_INBOUND_DRAINED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_inbound_carry() -> u64 {
+        ZONEK_INBOUND_CARRY.load(Ordering::Relaxed)
+    }
+    /// 读点（§4「各一」）：当前用例只用 drained/carry/overflow；其余三个供后续片/诊断。
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn zonek_inbound_budget_hit() -> u64 {
+        ZONEK_INBOUND_BUDGET_HIT.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_inbound_overflow_dropped() -> u64 {
+        ZONEK_INBOUND_OVERFLOW_DROPPED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn zonek_inbound_pending_discarded() -> u64 {
+        ZONEK_INBOUND_PENDING_DISCARDED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn zonek_inbound_unsupported() -> u64 {
+        ZONEK_INBOUND_UNSUPPORTED.load(Ordering::Relaxed)
+    }
+
+    /// **M1b 第 3 步**：6 个派生列的**纯函数**（写行与单测共用同一份数学）。
+    ///
+    /// `ib = [inbound_drained(全事件), inbound_carry, inbound_budget_hit]`（区 0；派生列**不用**全事件 drained）、
+    /// `dc` = 区 0 的**命令分量** `DRAINED_COMMAND`、`zk` = 6 个 `zonek_*`。返回 6 个 `*_all_zones`。
+    ///
+    /// **分母说明（写死）**：`inbound_drained_all_zones` = **区 0 命令分量 + Σ zonek**（区 k 只缓冲
+    /// Command）⇒ **与 `inbound_drained`（全事件）不同分母，禁止并列比较**；`carry` 同理（区 0 侧
+    /// 是全事件结转、无命令分量列，仅作总量参考）。
+    pub(crate) fn zonek_derived_columns(ib: [u64; 3], dc: u64, zk: [u64; 6]) -> [u64; 6] {
+        [
+            dc + zk[0],
+            ib[1] + zk[1],
+            ib[2] + zk[2],
+            zk[3],
+            zk[4],
+            zk[5],
+        ]
+    }
+
     pub(crate) fn init_with_path(path: &std::path::Path) -> std::io::Result<()> {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tinbound_drained_all_zones\tinbound_carry_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
         DATA_LINES.store(0, Ordering::Relaxed);
         ENABLED.store(true, Ordering::Relaxed);
+        #[cfg(test)]
+        {
+            *TEST_WRITER_OWNER.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some(std::thread::current().id());
+        }
         Ok(())
     }
 
@@ -24799,8 +24983,34 @@ mod perf_counters {
         if !ENABLED.load(Ordering::Relaxed) {
             return;
         }
+        #[cfg(test)]
+        {
+            // 测试期：非 init 线程的写跳过（见 `TEST_WRITER_OWNER`）。
+            let owner = *TEST_WRITER_OWNER.lock().unwrap_or_else(|p| p.into_inner());
+            if owner != Some(std::thread::current().id()) {
+                return;
+            }
+        }
         let tick = DATA_LINES.fetch_add(1, Ordering::Relaxed);
         let hd = handoff_deltas();
+        // **M1b 第 3 步**：区 0 三列先取（派生列要 `区 0 + zonek`）；zonek 6 列同取。
+        let ib = [
+            INBOUND_DRAINED.swap(0, Ordering::Relaxed),
+            INBOUND_CARRY.swap(0, Ordering::Relaxed),
+            INBOUND_BUDGET_HIT.swap(0, Ordering::Relaxed),
+        ];
+        // 区 0 的 `inbound_drained` 计**全部 GateEvent**；`zonek_inbound_drained` 只计 **Command**
+        // ⇒ 派生列用**区 0 的命令分量** `DRAINED_COMMAND`（不同分母，禁止与 `inbound_drained` 并列比较）。
+        let dc = DRAINED_COMMAND.swap(0, Ordering::Relaxed);
+        let zk = [
+            ZONEK_INBOUND_DRAINED.swap(0, Ordering::Relaxed),
+            ZONEK_INBOUND_CARRY.swap(0, Ordering::Relaxed),
+            ZONEK_INBOUND_BUDGET_HIT.swap(0, Ordering::Relaxed),
+            ZONEK_INBOUND_OVERFLOW_DROPPED.swap(0, Ordering::Relaxed),
+            ZONEK_INBOUND_PENDING_DISCARDED.swap(0, Ordering::Relaxed),
+            ZONEK_INBOUND_UNSUPPORTED.swap(0, Ordering::Relaxed),
+        ];
+        let dv = zonek_derived_columns(ib, dc, zk);
         let cr = [
             CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed),
@@ -24821,11 +25031,11 @@ mod perf_counters {
             SAY_RECIPIENTS.swap(0, Ordering::Relaxed),
             KICK_SCANS.swap(0, Ordering::Relaxed),
             INBOUND_ENQUEUED.swap(0, Ordering::Relaxed),
-            INBOUND_DRAINED.swap(0, Ordering::Relaxed),
-            INBOUND_CARRY.swap(0, Ordering::Relaxed),
-            INBOUND_BUDGET_HIT.swap(0, Ordering::Relaxed),
+            ib[0],
+            ib[1],
+            ib[2],
             INBOUND_WALL_US.swap(0, Ordering::Relaxed),
-            DRAINED_COMMAND.swap(0, Ordering::Relaxed),
+            dc,
             DRAINED_CLOSE.swap(0, Ordering::Relaxed),
             DRAINED_CONTROL.swap(0, Ordering::Relaxed),
             SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
@@ -24858,6 +25068,20 @@ mod perf_counters {
             DEPART_WRN_SUPPRESSED.swap(0, Ordering::Relaxed),
             // **L2-5 follow-up**：镜像观察者被条件抑制的帧数（本 tick 增量；不进 ⑤ 账）。
             DEPART_FRAMES_MIRROR_SUPPRESSED.swap(0, Ordering::Relaxed),
+            // **M1b 第 3 步**：区 k 6 列（仅 slicing；N=1 恒 0）。
+            zk[0],
+            zk[1],
+            zk[2],
+            zk[3],
+            zk[4],
+            zk[5],
+            // 6 个**派生列**（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
+            dv[0],
+            dv[1],
+            dv[2],
+            dv[3],
+            dv[4],
+            dv[5],
             // handoff 11（hd[0..=10]；表头顺序 offered..write_refused_occupied）。
             hd[0],
             hd[1],
@@ -34639,6 +34863,11 @@ fn sim_loop(
         ev_rx,
         ev_ctl_rx,
         shutdown,
+        inbound_local_buffer: std::collections::VecDeque::new(),
+        inbound_local_carry_prefix: 0,
+        inbound_local_filled: 0,
+        inbound_local_fill_hit: false,
+        inbound_outstanding: None,
     };
     loop {
         let outcome = host.tick(&mut shared, &mut process, &mut tick_io, PhaseSet::ALL);
@@ -34908,13 +35137,6 @@ struct ProcessServices {
     payment_mode: u8,
 }
 
-/// **M0（A1）**：本区 I/O（入站两条通道 + 关服信号）。
-struct TickIo {
-    ev_rx: std::sync::mpsc::Receiver<GateEvent>,
-    ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
-    shutdown: ShutdownSignal,
-}
-
 /// **M0/A2**：本 tick 允许执行哪些 host 段（`const` 位集：无分配、无锁；每段一次整型判断）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PhaseSet(u32);
@@ -34966,6 +35188,13 @@ impl PhaseSet {
     #[allow(dead_code)]
     const M1A_PROD: PhaseSet =
         PhaseSet(Self::M0_MIN.0 | Self::POST_HEAD | Self::FRAMES | Self::AOI_DOWNLINK);
+
+    /// **M1b 第 3 步**：区 k 的 **A 段**段集 = `M1A_PROD | INBOUND_LOCAL`（0x14B0 → **0x14B2**）。
+    /// **只给 `tick_phase_a`**；`tick_phase_rest` 仍用 `M1A_PROD`（不含 `INBOUND_LOCAL`）⇒
+    /// 「一个 tick 内 `INBOUND_LOCAL` 只跑一次」（若两处都含 ⇒ 命令双执行）。
+    /// 牙：`m1b_zone_prod_owns_inbound_local_only_in_phase_a`。
+    #[allow(dead_code)]
+    const M1B_ZONE_PROD: PhaseSet = PhaseSet(Self::M1A_PROD.0 | Self::INBOUND_LOCAL);
     #[inline]
     fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
@@ -35346,11 +35575,49 @@ impl HostLoop {
             // 逐条处理**交错**留在 PROCESS 支内；先整批取出再处理会把处理耗时移出预算 ⇒ 预算语义变。
             let inbound_t0 = perf_counters::enabled().then(std::time::Instant::now);
             let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
-            // **LOCAL 支（M1b 首片）**：空壳——本片不把任何命令搬进 LOCAL，且**不排空**
-            //（事件留在通道里保序；等 LOCAL 处理片接入后再按预算排空，并按 A6 顺序契约接入）。
+            // **LOCAL 支（M1b 第 3 步：区 k 入站有界化/执行）**。
+            // 第 4 步的 A6 `pending_local`（释放就绪缓冲）**插在此处之前**（本步不实现 A6）。
+            //
+            // 处置全权仍归 `handle_zone_command_on`（今天区 k 怎么处理、本步后还是怎么处理）；
+            // `zone_cmd_class` 只用于计数（全部计 drained、`Unsupported` 另计一列），不参与处置。
             if phases.has(PhaseSet::INBOUND_LOCAL) {
                 #[cfg(test)]
                 RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND_LOCAL));
+                let limits = ZoneDrainLimits::PRODUCTION;
+                let outstanding = io.inbound_outstanding.clone();
+                let filled = io.inbound_local_filled;
+                let fill_hit = io.inbound_local_fill_hit;
+                let carry_prefix = io.inbound_local_carry_prefix;
+                let buffer = &mut io.inbound_local_buffer;
+                let _ = execute_local_budget(
+                    buffer,
+                    carry_prefix,
+                    filled,
+                    fill_hit,
+                    outstanding.as_ref(),
+                    limits,
+                    |ev| {
+                        if let GateEvent::Command {
+                            chr_name,
+                            socket,
+                            cmd,
+                            ..
+                        } = ev
+                        {
+                            // 与今天区 k 循环顶**同一实现**（单一份；不得复刻未支持分支）。
+                            handle_zone_command_on(
+                                world,
+                                displays,
+                                online,
+                                ground_sessions,
+                                gates,
+                                chr_name,
+                                *socket,
+                                cmd,
+                            );
+                        }
+                    },
+                );
             }
             // **PROCESS 支**：现有全部命令处理（进入前 `proc_svc!`；`PROC_SVC_SEGMENTS` 只记这一位）。
             if phases.has(PhaseSet::INBOUND_PROCESS) {
@@ -38321,6 +38588,234 @@ impl HostLoop {
         }
         TickOutcome::Continue
     }
+}
+
+/// **M1b 第 3 步**：区 k 的入站有界化参数（数值复用 `EventDrainBudget::PRODUCTION`；测试可注入）。
+#[derive(Clone, Copy, Debug)]
+struct ZoneDrainLimits {
+    /// 单 tick「fill + 执行」**总条数**上限（= 2000，与区 0 的 `PRODUCTION` 同口径 ⇒ drained 可同分母比较）。
+    tick_max_events: u64,
+    /// `execute_max_events` 的**上限参数**（实际值 = `min(本值, tick_max_events − filled)`）。
+    execute_max_events: u64,
+    /// **段内执行**的墙钟上界（加到 A 段/屏障1 到达；每 `execute_check_every` 条整条执行完后查）。
+    execute_wall: std::time::Duration,
+    /// 每 N 条查一次 `execute_wall`（批末/条数到顶也收手）。
+    execute_check_every: usize,
+}
+
+impl ZoneDrainLimits {
+    const PRODUCTION: Self = Self {
+        tick_max_events: EventDrainBudget::PRODUCTION.max_events,
+        execute_max_events: EventDrainBudget::PRODUCTION.max_events,
+        execute_wall: std::time::Duration::from_millis(10),
+        execute_check_every: 16,
+    };
+}
+
+/// **M1b 第 3 步**：每区 `outstanding` 表（下标 = 区号；`z=0` 恒不用）。
+type ZoneOutstanding = Vec<std::sync::Arc<std::sync::atomic::AtomicUsize>>;
+
+/// **M1b 第 3 步**：单 tick 总条数口径（= `EventDrainBudget::PRODUCTION.max_events`，不手抄第二份）。
+const ZONEK_TICK_MAX_EVENTS: u64 = EventDrainBudget::PRODUCTION.max_events;
+
+/// **M1b 第 3 步**：每区通道 `Command` 的**软上限**（`outstanding` 到顶 ⇒ demux 丢新）。
+/// = 2000 条/tick × 5 拍；正确性不依赖精确值；**低估 ≤ 1**（`-1` 在消费时）。
+const ZONE_INBOUND_MAX_EVENTS: usize = 10_000;
+
+/// **M1b 第 3 步**：区 k 循环顶的**有预算填充**（锁外）。
+///
+/// 次序（保持区 k 今天的处理先后：**控制事件先在循环顶落地**）：
+/// 1. **优先通道不限量**（`Closed/Register/Unregister/LoadDbRequest/KickAccount` 不得被命令洪流饿死）；
+/// 2. 普通通道：`Command` 追加进 `pending`，直到 `pull_cap`；非命令交 `on_other` 就地处理（不限量）；
+/// 3. 预算耗尽后**探一条**：取到事件 ⇒ `fill_hit=true`（命令入缓冲、非命令就地处理）。
+///
+/// **不复用 `EventDrain`**：它的 `next` 会打区 0 的 `note_inbound_drained`/`telemetry`
+/// （区 k 不得污染区 0 三列，见规格 §1.4）；取数语义（结转/反饥饿）在本步的「单缓冲 + 水位」
+/// 模型下也不需要。
+///
+/// 返回 `(filled, fill_hit)`；`filled` = 追加的 `Command` 条数（≤ `pull_cap`，探针那条不计）。
+fn fill_pending(
+    ev_rx: &std::sync::mpsc::Receiver<GateEvent>,
+    ev_ctl_rx: &std::sync::mpsc::Receiver<GateEvent>,
+    pending: &mut std::collections::VecDeque<GateEvent>,
+    pull_cap: u64,
+    mut on_other: impl FnMut(GateEvent),
+) -> (u64, bool) {
+    let mut filled = 0u64;
+    // 1) 优先通道：非命令不限量（控制事件必须当轮落地）。
+    while let Ok(ev) = ev_ctl_rx.try_recv() {
+        if matches!(ev, GateEvent::Command { .. }) {
+            pending.push_back(ev);
+            filled = filled.saturating_add(1);
+        } else {
+            on_other(ev);
+        }
+    }
+    // 2) 普通通道：命令到 cap 停；非命令就地处理。
+    while filled < pull_cap {
+        match ev_rx.try_recv() {
+            Ok(ev) => {
+                if matches!(ev, GateEvent::Command { .. }) {
+                    pending.push_back(ev);
+                    filled = filled.saturating_add(1);
+                } else {
+                    on_other(ev);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    // 3) 预算耗尽后探一条：有事件 ⇒ fill_hit（命令入缓冲；非命令就地处理）。
+    let fill_hit = if filled >= pull_cap {
+        match ev_rx.try_recv() {
+            Ok(ev) => {
+                match &ev {
+                    GateEvent::Command { .. } => pending.push_back(ev),
+                    _ => on_other(ev),
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    (filled, fill_hit)
+}
+
+/// **M1b 第 3 步**：`INBOUND_LOCAL` 段内的**执行器**（可注入预算；处置由 `exec` 回调给出——
+/// 生产回调 = [`handle_zone_command_on`]，测试回调可只记录到达序/计数）。
+///
+/// - 逐条 `pop_front`；**取出即 `outstanding -1`**（消费时；丢新路径从不 +1）；
+/// - `idx < carry_prefix` ⇒ `from_carry`（计 `zonek_inbound_carry`）；每条计 `zonek_inbound_drained`；
+/// - 分类为 `Unsupported` 的**纯追加计数**（不改变是否被 `exec` 处置——本步处置全权归
+///   `handle_zone_command_on`，与今天区 k 逐字节等价）；
+/// - 每 `execute_check_every` 条**整条执行完**后查 `execute_wall`；条数到顶同理收手，剩余留工作区；
+/// - `budget_hit = fill_hit || 截断且工作区非空`（每 tick 至多 +1）。
+///
+/// 返回是否 `budget_hit`。**不写 `clear()`**（剩余自然保留，tick 后由 driver swap 回 scratch）。
+fn execute_local_budget(
+    buffer: &mut std::collections::VecDeque<GateEvent>,
+    carry_prefix: usize,
+    filled: u64,
+    fill_hit: bool,
+    outstanding: Option<&std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    limits: ZoneDrainLimits,
+    mut exec: impl FnMut(&GateEvent),
+) -> bool {
+    use std::sync::atomic::Ordering;
+    let execute_max =
+        usize::try_from(limits.tick_max_events.saturating_sub(filled)).unwrap_or(usize::MAX);
+    let execute_cap =
+        execute_max.min(usize::try_from(limits.execute_max_events).unwrap_or(usize::MAX));
+    let wall_start = std::time::Instant::now();
+    let carry_prefix = carry_prefix.min(buffer.len());
+    let mut idx = 0usize;
+    let mut executed = 0usize;
+    let mut truncated = false;
+    while executed < execute_cap {
+        let Some(ev) = buffer.pop_front() else { break };
+        if let Some(counter) = outstanding {
+            debug_assert!(
+                counter.load(Ordering::Relaxed) > 0,
+                "outstanding 不得下溢（-1 只对曾 +1 的 Command）"
+            );
+            counter.fetch_sub(1, Ordering::Relaxed);
+        }
+        let from_carry = idx < carry_prefix;
+        idx += 1;
+        exec(&ev);
+        perf_counters::note_zonek_inbound_drained(from_carry, &ev);
+        if let GateEvent::Command { cmd, tail, .. } = &ev {
+            if zone_cmd_class(cmd.ident, tail.as_deref()) == ZoneCmdClass::Unsupported {
+                perf_counters::note_zonek_inbound_unsupported();
+            }
+        } else {
+            debug_assert!(false, "INBOUND_LOCAL 工作区只应含 Command");
+        }
+        executed += 1;
+        let every = limits.execute_check_every.max(1);
+        if executed.is_multiple_of(every) && wall_start.elapsed() >= limits.execute_wall {
+            truncated = true;
+            break;
+        }
+    }
+    if executed >= execute_cap && !buffer.is_empty() {
+        truncated = true;
+    }
+    let budget_hit = fill_hit || truncated;
+    if budget_hit {
+        perf_counters::note_zonek_inbound_budget_hit();
+    }
+    budget_hit
+}
+
+/// **M1b 第 3 步**：demux 的 `Zone(z)` 转发（含 `outstanding` 上限 + 丢新）。抽成函数供单测。
+///
+/// **只有 `GateEvent::Command` 参与计数与上限**；`Closed/Opened/…`（含 `LoadDbRequest/KickAccount`，
+/// 它们走优先通道）**不限不丢**。`send` 失败（接收端已 drop）⇒ 不 +1（事件随区死整机 abort 消失）。
+fn demux_forward_zone(
+    z: usize,
+    ev: GateEvent,
+    senders: &[(
+        std::sync::mpsc::Sender<GateEvent>,
+        std::sync::mpsc::Sender<GateEvent>,
+    )],
+    outstanding: &[std::sync::Arc<std::sync::atomic::AtomicUsize>],
+) {
+    use std::sync::atomic::Ordering;
+    let is_cmd = matches!(ev, GateEvent::Command { .. });
+    if z >= 1 && is_cmd && outstanding[z].load(Ordering::Relaxed) >= ZONE_INBOUND_MAX_EVENTS {
+        perf_counters::note_zonek_inbound_overflow_dropped();
+        zonek_overflow_warn(&ev, z, outstanding[z].load(Ordering::Relaxed));
+        return;
+    }
+    let (normal, priority) = &senders[z];
+    let target = if ev.is_priority() { priority } else { normal };
+    if target.send(ev).is_ok() && z >= 1 && is_cmd {
+        outstanding[z].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// 区 k 通道丢新的**限速 WRN**（每分钟 ≤1 条；字段含 zone/line/socket/ident）。
+fn zonek_overflow_warn(ev: &GateEvent, zone: usize, outstanding: usize) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    let (line, socket, ident) = match ev {
+        GateEvent::Command {
+            line, socket, cmd, ..
+        } => (*line, *socket, cmd.ident),
+        _ => (0u8, 0i32, 0u16),
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 入站命令洪峰：outstanding={outstanding} ≥ 上限 {ZONE_INBOUND_MAX_EVENTS} ⇒ 丢新（zonek_inbound_overflow_dropped；line={line} socket={socket} ident={ident}）；上一分钟抑制 {suppressed} 条"
+    );
+}
+
+/// **M0（A1）**：本区 I/O（入站两条通道 + 关服信号）。
+struct TickIo {
+    ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
+    shutdown: ShutdownSignal,
+    /// **M1b 第 3 步**：区 k 的 `INBOUND_LOCAL` 工作区（tick 内从 scratch `mem::swap` 进、
+    /// 段执行、**承载段一返回即 swap 回**）；N=1/区 0 恒空。
+    inbound_local_buffer: std::collections::VecDeque<GateEvent>,
+    /// 工作区 `[0, carry_prefix)` 是本 tick 开始前就遗留的结转（计 `zonek_inbound_carry`）。
+    inbound_local_carry_prefix: usize,
+    /// 本 tick fill 到的命令条数（执行器据此算 `execute_max_effective = tick_max − filled`）。
+    inbound_local_filled: u64,
+    /// fill 侧探针是否取到额外事件（与段执行截断一起构成 `zonek_inbound_budget_hit`）。
+    inbound_local_fill_hit: bool,
+    /// 区 k 的 `outstanding` 计数（取出执行时 `-1`）；区 0 = `None`。
+    /// **规格未列、本步新增**：执行器需要它做「消费即 -1」。
+    inbound_outstanding: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 /// `_gameGates = new ChannelMessageHandler[20]`（`TCPNetChannel.cs`）。
@@ -46022,6 +46517,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         RAN_SEGMENTS.with(|c| c.set(0));
         let mut host = host;
@@ -46079,6 +46579,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         PROC_SVC_SEGMENTS.with(|c| c.set(0));
         let mut host = host;
@@ -46113,6 +46618,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         BARRIER_CALLS.with(|c| c.set(0));
         RAN_SEGMENTS.with(|c| c.set(0));
@@ -46150,6 +46660,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         let layout = std::sync::Arc::new(
             zone::RegionLayout::from_zone_spans(
@@ -46223,6 +46738,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         BARRIER_CALLS.with(|c| c.set(0));
         RAN_SEGMENTS.with(|c| c.set(0));
@@ -46313,6 +46833,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         let layout = std::sync::Arc::new(
             zone::RegionLayout::from_zone_spans(
@@ -46396,6 +46921,11 @@ mod tests {
             ev_rx,
             ev_ctl_rx,
             shutdown,
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
         };
         let mut host = host;
         let mut shared = shared;
@@ -126038,17 +126568,41 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!((m::CM_QUERYUSERSET, m::CM_QUERYVAL), (3040, 1065));
     }
 
-    /// **M1b 第 2 步 · 接线约定（`q a-charter §12`：接线提示，**非行为证据**）**：
-    /// 本步分类器**只被单测调用**——生产面（`mod tests` 之前）除定义外不得出现
-    /// `zone_cmd_class(`（M1b 接线片会显式改这条）。
+    /// **M1b 第 3 步（接线提示，非行为证据）**：`zone_cmd_class` 的**唯一生产调用点** =
+    /// `execute_local_budget`（**只用于计数**，不参与处置）；处置侧 `handle_zone_command_on`
+    /// 不得依赖分类。第 2 步的"区 0 不调用"约定在本步被替代（分类器已接线到执行器）。
     #[test]
-    fn inbound_classifier_is_not_wired_in_production_yet() {
+    fn zone_cmd_class_wired_only_in_execute_local_budget() {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("生产面边界")];
-        let hits = prod.matches("zone_cmd_class(").count();
         assert_eq!(
-            hits, 1,
-            "分类器本步不得接线（生产面仅定义一处；实际 {hits}）"
+            prod.matches("zone_cmd_class(").count(),
+            2,
+            "仅定义 + `execute_local_budget` 一处调用"
+        );
+        let f = prod.find("fn execute_local_budget(").expect("执行器定义");
+        let f_end = prod[f..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| f + k + 3);
+        assert!(
+            prod[f..f_end].contains("zone_cmd_class("),
+            "分类器只该在执行器里被调用"
+        );
+        let h = prod.find("fn handle_zone_command_on(").expect("处置实现");
+        let h_end = prod[h..]
+            .find(
+                "
+}
+",
+            )
+            .map_or(prod.len(), |k| h + k + 3);
+        assert!(
+            !prod[h..h_end].contains("zone_cmd_class("),
+            "处置不得依赖分类（分类只用于计数）"
         );
     }
 
@@ -126103,6 +126657,488 @@ mod l2_s3_cross_recipient_tests {
         assert!(
             !cls_seg.contains("starts_with"),
             "分类器不得含裸 starts_with"
+        );
+    }
+
+    // =====================================================================================
+    // **M1b 第 3 步**：区 k 入站有界化（五条放行测试；§12：源码窗口扫描类标「接线提示」）
+    // =====================================================================================
+
+    /// 测试夹具：一条 `Command`（`CM_TURN`，`recog` 作可辨识标记）。
+    fn zonek_test_cmd(recog: i32) -> GateEvent {
+        GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "p".into(),
+            socket: 900,
+            cmd: CommandMessage {
+                recog,
+                ident: mir2_protocol::messages::CM_TURN,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: None,
+        }
+    }
+
+    fn zonek_test_closed(index: i32) -> GateEvent {
+        GateEvent::Closed {
+            index,
+            chr_name: String::new(),
+            socket: 0,
+        }
+    }
+
+    /// 打开 perf 写端（`zonek_*` note 受 `ENABLED` 门控；TEST_LOCK 串行化）。
+    fn zonek_arm_counters(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
+        let g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "mir2_zonek_{tag}_{}_{}.tsv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        (g, path)
+    }
+
+    fn zonek_cmd_count2(
+        rx: &std::sync::mpsc::Receiver<GateEvent>,
+        ctl: &std::sync::mpsc::Receiver<GateEvent>,
+    ) -> (usize, usize) {
+        let (mut cmds, mut other) = (0usize, 0usize);
+        for ev in rx.try_iter().chain(ctl.try_iter()) {
+            if matches!(ev, GateEvent::Command { .. }) {
+                cmds += 1;
+            } else {
+                other += 1;
+            }
+        }
+        (cmds, other)
+    }
+
+    /// **测试 ① `zonek_fill_honors_budget`**（fill 预算；墙钟只打印）。
+    #[test]
+    fn zonek_fill_honors_budget() {
+        let (_g, path) = zonek_arm_counters("fill");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for i in 0..2500 {
+            tx.send(zonek_test_cmd(i)).expect("send");
+            outstanding.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        // `Closed` 走**优先通道**（生产里它是 priority）⇒ fill 第 1 步不限量处理。
+        for i in 0..3 {
+            ctl_tx.send(zonek_test_closed(i)).expect("send closed");
+        }
+        let mut pending = std::collections::VecDeque::new();
+        let mut closed_seen = 0usize;
+        let limits = ZoneDrainLimits {
+            tick_max_events: 2000,
+            execute_max_events: 2000,
+            execute_wall: std::time::Duration::from_secs(60),
+            execute_check_every: 16,
+        };
+        let d0 = perf_counters::zonek_inbound_drained();
+        let pull_cap = 500u64;
+        let (filled, fill_hit) =
+            fill_pending(&rx, &ctl_rx, &mut pending, pull_cap, |_ev| closed_seen += 1);
+        assert!(
+            filled <= pull_cap,
+            "filled={filled} 不得超 pull_cap={pull_cap}"
+        );
+        assert_eq!(closed_seen, 3, "非命令就地处理、不限量");
+        assert!(fill_hit, "2500 条 > cap ⇒ 预算耗尽且探到事件");
+        let started = std::time::Instant::now();
+        let mut executed = 0u64;
+        let budget_hit = execute_local_budget(
+            &mut pending,
+            0,
+            filled,
+            fill_hit,
+            Some(&outstanding),
+            limits,
+            |_ev| executed += 1,
+        );
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1e3;
+        println!("zonek_fill_honors_budget: elapsed_ms={elapsed_ms:.3}");
+        let alloc = usize::try_from(limits.tick_max_events.saturating_sub(filled))
+            .unwrap_or(usize::MAX)
+            .min(usize::try_from(limits.execute_max_events).unwrap_or(usize::MAX));
+        assert!(
+            executed as usize <= alloc,
+            "drained={executed} 不得超 execute_max_effective={alloc}"
+        );
+        assert!(budget_hit, "fill_hit ⇒ budget_hit");
+        assert_eq!(
+            perf_counters::zonek_inbound_drained() - d0,
+            executed,
+            "drained 增量必须 == 实际执行条数"
+        );
+        let (chan_cmds, _) = zonek_cmd_count2(&rx, &ctl_rx);
+        assert_eq!(
+            outstanding.load(std::sync::atomic::Ordering::Relaxed),
+            chan_cmds + pending.len(),
+            "outstanding 必须 == 通道残留 + 缓冲残留"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **测试 ② `zonek_pending_remainder_and_carry_prefix`**（剩余保序 + 水位；limits 按调用注入）。
+    #[test]
+    fn zonek_pending_remainder_and_carry_prefix() {
+        let (_g, path) = zonek_arm_counters("carry");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (_ctx, ctl_rx) = std::sync::mpsc::channel();
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for i in 0..8 {
+            tx.send(zonek_test_cmd(i)).expect("send");
+            outstanding.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        let mut pending = std::collections::VecDeque::new();
+        let mut order: Vec<i32> = Vec::new();
+        // call1：pull_cap=8、execute_max=2、wall 极大 ⇒ 执行 2、剩 6。
+        let l1 = ZoneDrainLimits {
+            tick_max_events: 2000,
+            execute_max_events: 2,
+            execute_wall: std::time::Duration::from_secs(60),
+            execute_check_every: 1,
+        };
+        let (f1, h1) = fill_pending(&rx, &ctl_rx, &mut pending, 8, |_ev| {});
+        assert_eq!((f1, h1), (8, false));
+        let bh1 = execute_local_budget(&mut pending, 0, f1, h1, Some(&outstanding), l1, |ev| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.push(cmd.recog);
+            }
+        });
+        assert_eq!(pending.len(), 6, "剩 6 留缓冲");
+        assert!(bh1, "截断且工作区非空 ⇒ budget_hit");
+        assert_eq!(
+            outstanding.load(std::sync::atomic::Ordering::Relaxed),
+            6,
+            "取 2 条即 -2"
+        );
+        // call2：execute_max=6 ⇒ 执行剩余 6（全部 from_carry）。
+        let l2 = ZoneDrainLimits {
+            execute_max_events: 6,
+            ..l1
+        };
+        let (f2, h2) = fill_pending(&rx, &ctl_rx, &mut pending, 8, |_ev| {});
+        assert_eq!((f2, h2), (0, false), "通道已空");
+        let carry_prefix = pending.len();
+        assert_eq!(carry_prefix, 6);
+        let c0 = perf_counters::zonek_inbound_carry();
+        let bh2 = execute_local_budget(
+            &mut pending,
+            carry_prefix,
+            f2,
+            h2,
+            Some(&outstanding),
+            l2,
+            |ev| {
+                if let GateEvent::Command { cmd, .. } = ev {
+                    order.push(cmd.recog);
+                }
+            },
+        );
+        assert!(!bh2, "缓冲清空 ⇒ budget_hit=false");
+        assert_eq!(
+            perf_counters::zonek_inbound_carry() - c0,
+            6,
+            "call2 的 6 条必须全部 from_carry"
+        );
+        assert_eq!(order, (0..8).collect::<Vec<_>>(), "A..H 不丢/不重/不乱序");
+        assert_eq!(
+            outstanding.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "两条 call 后每条 +1/-1 归零"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **测试 ③ `zonek_overflow_drops_new_and_counts`**（硬安全阀；直接测 demux 转发 seam）。
+    #[test]
+    fn zonek_overflow_drops_new_and_counts() {
+        let (_g, path) = zonek_arm_counters("overflow");
+        // 两个区（下标 0/1）；只测 z=1。
+        let mut senders = Vec::new();
+        let mut rx1 = None;
+        let mut prx1 = None;
+        for _ in 0..2 {
+            let (n_tx, n_rx) = std::sync::mpsc::channel();
+            let (p_tx, p_rx) = std::sync::mpsc::channel();
+            senders.push((n_tx, p_tx));
+            rx1 = Some(n_rx);
+            prx1 = Some(p_rx);
+        }
+        let rx1 = rx1.expect("rx");
+        let prx1 = prx1.expect("prx");
+        let outstanding: ZoneOutstanding = (0..2)
+            .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+            .collect();
+        outstanding[1].store(
+            ZONE_INBOUND_MAX_EVENTS - 1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let o0 = perf_counters::zonek_inbound_overflow_dropped();
+        // 第 1 条：send ok ⇒ +1（= CAP）。
+        demux_forward_zone(1, zonek_test_cmd(0), &senders, &outstanding);
+        assert_eq!(
+            outstanding[1].load(std::sync::atomic::Ordering::Relaxed),
+            ZONE_INBOUND_MAX_EVENTS
+        );
+        // 第 2 条：到顶 ⇒ 丢 + 计数，outstanding 不再涨。
+        demux_forward_zone(1, zonek_test_cmd(1), &senders, &outstanding);
+        assert_eq!(
+            perf_counters::zonek_inbound_overflow_dropped() - o0,
+            1,
+            "丢新必须计数"
+        );
+        assert_eq!(
+            outstanding[1].load(std::sync::atomic::Ordering::Relaxed),
+            ZONE_INBOUND_MAX_EVENTS,
+            "丢新不得 +1"
+        );
+        assert_eq!(rx1.try_iter().count(), 1, "被丢的那条不得入队");
+        // Closed：不限不丢、不计数。
+        let u0 = perf_counters::zonek_inbound_overflow_dropped();
+        demux_forward_zone(1, zonek_test_closed(9), &senders, &outstanding);
+        assert_eq!(
+            perf_counters::zonek_inbound_overflow_dropped(),
+            u0,
+            "非 Command 不计数"
+        );
+        // `Closed` 是 priority ⇒ 落**优先通道**（永不丢）。
+        assert_eq!(prx1.try_iter().count(), 1, "Closed 必须入队（优先通道）");
+        // Broadcast（注册/注销）不走本 seam（走 demux 的 Broadcast 分支，永不丢）——见 demux 注释。
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **测试 ④ `zonek_columns_aligned_and_derived`**（列对齐 + 派生恒等式 + N=1 行）。
+    ///
+    /// **确定性说明**：perf 写端/计数是**进程级全局**——tick 驱动类用例会在并行线程里调
+    /// `write_tick`（用同一 `WRITER`、并会 swap 我们的计数）。因此本用例只断言**行内自洽**
+    /// （表头/值列数、派生 = 各分量之和）与"存在 N=1 形态行"；派生列的**数学**由纯函数牙
+    /// [`zonek_derived_columns_math`] 钉死（不受并发影响）。
+    #[test]
+    fn zonek_columns_aligned_and_derived() {
+        let (_g, path) = zonek_arm_counters("columns");
+        let ev = zonek_test_cmd(0);
+        perf_counters::note_inbound_drained(false, &ev); // 区 0 命令分量
+        perf_counters::note_zonek_inbound_drained(false, &ev);
+        perf_counters::note_zonek_inbound_drained(true, &ev);
+        perf_counters::note_zonek_inbound_budget_hit();
+        perf_counters::note_zonek_inbound_overflow_dropped();
+        perf_counters::note_zonek_inbound_pending_discarded();
+        perf_counters::note_zonek_inbound_unsupported();
+        perf_counters::write_tick();
+        perf_counters::note_inbound_drained(false, &ev); // N=1 形态：只 bump 区 0
+        perf_counters::write_tick();
+        let text = std::fs::read_to_string(&path).expect("perf tsv");
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().expect("header").split('\t').collect();
+        // 12 个新列都在表头。
+        for name in [
+            "zonek_inbound_drained",
+            "zonek_inbound_carry",
+            "zonek_inbound_budget_hit",
+            "zonek_inbound_overflow_dropped",
+            "zonek_inbound_pending_discarded",
+            "zonek_inbound_unsupported",
+            "inbound_drained_all_zones",
+            "inbound_carry_all_zones",
+            "inbound_budget_hit_all_zones",
+            "inbound_overflow_dropped_all_zones",
+            "inbound_pending_discarded_all_zones",
+            "inbound_unsupported_all_zones",
+        ] {
+            assert!(header.contains(&name), "表头缺列 {name}");
+        }
+        let col = |name: &str, row: &[&str]| -> u64 {
+            let i = header
+                .iter()
+                .position(|h| *h == name)
+                .unwrap_or_else(|| panic!("缺列 {name}"));
+            row[i].parse().expect("u64")
+        };
+        let mut saw_n1_shape = false;
+        let mut rows = 0usize;
+        for line in lines {
+            rows += 1;
+            let row: Vec<&str> = line.split('\t').collect();
+            assert_eq!(row.len(), header.len(), "每行值列数必须 == 表头列数");
+            // 派生恒等式（行内自洽；并发 swap 只会让两边同时为 0）。
+            assert_eq!(
+                col("inbound_carry_all_zones", &row),
+                col("inbound_carry", &row) + col("zonek_inbound_carry", &row)
+            );
+            assert_eq!(
+                col("inbound_budget_hit_all_zones", &row),
+                col("inbound_budget_hit", &row) + col("zonek_inbound_budget_hit", &row)
+            );
+            assert_eq!(
+                col("inbound_overflow_dropped_all_zones", &row),
+                col("zonek_inbound_overflow_dropped", &row)
+            );
+            assert_eq!(
+                col("inbound_pending_discarded_all_zones", &row),
+                col("zonek_inbound_pending_discarded", &row)
+            );
+            assert_eq!(
+                col("inbound_unsupported_all_zones", &row),
+                col("zonek_inbound_unsupported", &row)
+            );
+            // drained 的基数是区 0 的**命令分量**（不是全事件列）⇒ 行内无法反推基数；
+            // 数学由 `zonek_derived_columns_math` 钉死。此处只钉「派生 >= zonek」。
+            assert!(
+                col("inbound_drained_all_zones", &row) >= col("zonek_inbound_drained", &row),
+                "派生 drained 必 >= zonek 分量"
+            );
+        }
+        assert!(rows >= 2, "至少写出两行（实际 {rows}）");
+        // N=1 形态：存在一行 zonek_* 全 0（区 0 列可非 0）。
+        let text2 = std::fs::read_to_string(&path).expect("perf tsv");
+        let all_rows: Vec<Vec<&str>> = text2
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        for row in &all_rows {
+            if [
+                "zonek_inbound_drained",
+                "zonek_inbound_carry",
+                "zonek_inbound_budget_hit",
+            ]
+            .iter()
+            .all(|n| col(n, row) == 0)
+            {
+                saw_n1_shape = true;
+            }
+        }
+        assert!(saw_n1_shape, "必须存在 N=1 形态行（zonek_* 全 0）");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **测试 ④b `zonek_derived_columns_math`**：派生列数学（纯函数；确定性）。
+    #[test]
+    fn zonek_derived_columns_math() {
+        assert_eq!(
+            perf_counters::zonek_derived_columns([3, 1, 0], 3, [2, 1, 1, 1, 1, 1]),
+            [5, 2, 1, 1, 1, 1],
+            "drained = 区0命令分量+zonek；carry = 区0+zonek；其余 zonek 直通"
+        );
+        assert_eq!(
+            perf_counters::zonek_derived_columns([0, 0, 0], 0, [0, 0, 0, 0, 0, 0]),
+            [0, 0, 0, 0, 0, 0],
+            "N=1：zonek 全 0 ⇒ 派生 == 区 0"
+        );
+    }
+
+    /// **测试 ⑤ `zonek_wiring_behavior_primary`**：行为主牙（经 seam 的排水必须让
+    /// `zonek_inbound_drained` 增长；空驱动 ⇒ 不增长）+ 源码窗口扫描（**接线提示、非行为证据**）。
+    #[test]
+    fn zonek_wiring_behavior_primary() {
+        let (_g, path) = zonek_arm_counters("wiring");
+        let limits = ZoneDrainLimits::PRODUCTION;
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drive = |outstanding: &std::sync::Arc<std::sync::atomic::AtomicUsize>| -> (u64, u64) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (_ctx, ctl_rx) = std::sync::mpsc::channel();
+            let mut pending = std::collections::VecDeque::new();
+            let d0 = perf_counters::zonek_inbound_drained();
+            let (filled, fill_hit) =
+                fill_pending(&rx, &ctl_rx, &mut pending, ZONEK_TICK_MAX_EVENTS, |_ev| {});
+            let mut executed = 0u64;
+            let _ = execute_local_budget(
+                &mut pending,
+                0,
+                filled,
+                fill_hit,
+                Some(outstanding),
+                limits,
+                |_ev| executed += 1,
+            );
+            drop(tx);
+            (executed, perf_counters::zonek_inbound_drained() - d0)
+        };
+        // 空驱动：不增长。
+        assert_eq!(drive(&outstanding), (0, 0), "空通道 ⇒ 零执行/零计数");
+        // 有驱动：必须增长。
+        let (tx, _rx) = std::sync::mpsc::channel::<GateEvent>();
+        let (tx2, rx2) = std::sync::mpsc::channel::<GateEvent>();
+        drop(tx);
+        tx2.send(zonek_test_cmd(7)).expect("send");
+        outstanding.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        drop(tx2);
+        let (ctx, ctl_rx) = std::sync::mpsc::channel();
+        drop(ctx);
+        let mut pending = std::collections::VecDeque::new();
+        let d1 = perf_counters::zonek_inbound_drained();
+        let (filled, fill_hit) =
+            fill_pending(&rx2, &ctl_rx, &mut pending, ZONEK_TICK_MAX_EVENTS, |_ev| {});
+        let mut executed = 0u64;
+        let _ = execute_local_budget(
+            &mut pending,
+            0,
+            filled,
+            fill_hit,
+            Some(&outstanding),
+            limits,
+            |_ev| executed += 1,
+        );
+        assert_eq!(executed, 1);
+        assert_eq!(
+            perf_counters::zonek_inbound_drained() - d1,
+            1,
+            "排水必须让计数增长"
+        );
+        // 源码窗口扫描（**接线提示，非行为证据**）：`begin_tick..zone_tick_top` 内
+        // `fill_pending(` 恰一次、且无裸 `ev_rx.try_recv()`。
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        let i = prod
+            .find("cross_zone_frames::begin_tick(tick);")
+            .expect("区 k 循环顶 begin_tick");
+        let j = prod[i..].find("zone_tick_top").expect("zone_tick_top") + i;
+        let win = &prod[i..j];
+        assert_eq!(
+            win.matches("fill_pending(").count(),
+            1,
+            "窗口内 fill_pending 恰一次"
+        );
+        assert!(
+            !win.contains("ev_rx.try_recv()"),
+            "窗口内不得有裸 ev_rx.try_recv()"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **M1b 第 3 步（相位集）**：`INBOUND_LOCAL` **只在 A 段段集**（`M1B_ZONE_PROD`）；`M1A_PROD`
+    /// （rest 用）**不含**它 ⇒ 一个 tick 内只跑一次（两处都含 ⇒ 命令双执行）。
+    #[test]
+    fn m1b_zone_prod_owns_inbound_local_only_in_phase_a() {
+        assert_eq!(
+            PhaseSet::M1B_ZONE_PROD.0,
+            PhaseSet::M1A_PROD.0 | PhaseSet::INBOUND_LOCAL,
+            "M1B_ZONE_PROD = M1A_PROD | INBOUND_LOCAL"
+        );
+        assert_ne!(PhaseSet::M1B_ZONE_PROD.0 & PhaseSet::INBOUND_LOCAL, 0);
+        assert_eq!(
+            PhaseSet::M1A_PROD.0 & PhaseSet::INBOUND_LOCAL,
+            0,
+            "rest 用的 M1A_PROD 不得含 INBOUND_LOCAL（否则同 tick 双跑 ⇒ 命令双执行）"
+        );
+        assert_eq!(PhaseSet::M1A_PROD.0, 0x14B0, "M1A_PROD 位值不变");
+        assert_eq!(PhaseSet::M1B_ZONE_PROD.0, 0x14B2);
+        assert_eq!(
+            PhaseSet::M1B_ZONE_PROD.0 & PhaseSet::PROCESS_ONLY,
+            0,
+            "A 段段集仍不与 PROCESS_ONLY 相交"
         );
     }
 
