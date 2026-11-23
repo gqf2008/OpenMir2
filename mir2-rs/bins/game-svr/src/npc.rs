@@ -1148,6 +1148,10 @@ pub struct NpcPlayer<'r, 'g> {
     /// `UPGRADEITEMSEX` 破碎支）。引擎在 `set_use_item_index(i, 0)` **之前**调用
     /// `send_del_use_item` ⇒ 此处拷下原件，由宿主写回后直发 `SM_DELITEM(202)`（T-157/A27-2）。
     pub del_use_items: Vec<crate::bag::BagItem>,
+    /// **A27-3**：`SendUpdateItem(UseItems[i])` 的**更新后快照**（`UPGRADEITEMSEX` 成功支）。
+    /// 引擎在改完 `Desc`/`DuraMax` 之后调用 `send_update_item` ⇒ 此处拷下成品，宿主写回后直发
+    /// `SM_UPDATEITEM(203)`（T-157/A27-3）。
+    pub update_use_items: Vec<crate::bag::BagItem>,
     /// `SystemShare.MapMgr` 已装载地图的逻辑名表（`map_exists` = `FindMap(name) != null`）。
     /// 宿主经 [`NpcVars::map_names`] 灌入；缺省空 ⇒ 恒 `false`（`SETMPAMODE` 因此走
     /// `ScriptActionError` 支，与「注册表未装载」同口径）。
@@ -1275,6 +1279,7 @@ impl NpcPlayer<'_, '_> {
             catalog: None,
             full_bag_drops: Vec::new(),
             del_use_items: Vec::new(),
+            update_use_items: Vec::new(),
             map_names: Vec::new(),
             sys_msg_cfg: SysMsgCfg::default(),
             broadcast_cfg: BroadcastCfg::default(),
@@ -2610,6 +2615,15 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
         if let Ok(idx) = usize::try_from(i) {
             if let Some(Some(it)) = self.use_items.get(idx) {
                 self.del_use_items.push(it.clone());
+            }
+        }
+    }
+    /// **A27-3**：`SendUpdateItem(UseItems[i])`（引擎在改完 `Desc`/`DuraMax` 之后调用）⇒
+    /// 快照成品入 `update_use_items`；宿主写回后直发 `SM_UPDATEITEM(203)`。
+    fn send_update_item(&mut self, i: i32) {
+        if let Ok(idx) = usize::try_from(i) {
+            if let Some(Some(it)) = self.use_items.get(idx) {
+                self.update_use_items.push(it.clone());
             }
         }
     }

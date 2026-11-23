@@ -1008,6 +1008,29 @@ pub fn del_item_tail(item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8
     Some(edcode::encode(&itemwire::encode_client_item(&ci)))
 }
 
+/// `PlayObject.SendUpdateItem(UserItem)`（`src/M2Server/Player/PlayObject.Base.cs` 的
+/// `SendUpdateItem`）的**已编码尾**。
+///
+/// 与 [`del_item_tail`] 的差别（逐行对照 oracle）：
+/// - 先 `GetUpgradeStdItem(stdItem, userItem, ref clientItem)` 叠 `Desc` 升级差量
+///   （`bag::upgrade_std_item`），编码用 `encode_client_item_prepared`（**防二次叠加差量**）；
+/// - **无** `M2Share.StdModeMap` 的 `Desc[8]`⇒`Shape` 0/130 改写（`SendUpdateItem` 不动 `Shape`）；
+/// - **无** `StdMode == 50` 的 `" #Dura"` 后缀（oracle `SendUpdateItem` /
+///   `SendUpdateItemWithLevel` / `SendUpdateItemByJob` **都没有**此后缀——与 `SendDelItems` 不同）。
+pub fn update_item_tail(item: &BagItem, catalog: &dyn ItemCatalog) -> Option<Vec<u8>> {
+    let tpl = catalog.get(item.index)?;
+    let (owned, _) = crate::bag::upgrade_std_item(tpl, &item.desc);
+    let ci = itemwire::ClientItem {
+        tpl: &owned,
+        name: item_display_name(catalog, item),
+        make_index: item.make_index,
+        dura: item.dura,
+        dura_max: item.dura_max,
+        desc: item.desc,
+    };
+    Some(edcode::encode(&itemwire::encode_client_item_prepared(&ci)))
+}
+
 /// `SendSocket(MakeMessage(SM_DEALREMOTEADDITEM/…, ActorId, 0, 0, 1), EncodeBuffer(clientItem))`。
 ///
 /// `clientItem.Item.Name = CustomItemSystem.GetItemName(userItem)`（**无** StdMode==50 后缀，
