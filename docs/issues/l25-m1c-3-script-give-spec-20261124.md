@@ -56,17 +56,44 @@
 - 区 k：`zone_cmd_class` 把 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` **整 ident 归 `Process`**
   （不做 ident 级细分——1011 的 `type` 来自**世界实体**而非 12B 头，见 §3）；
   `handle_zone_command_on` 不加执行臂（执意本地 = 桩）。
-- 区 0 drain 执行支**首行保持既有派发门**（原样照抄，不重写）：
-  - `CM_CLICKNPC` ⇒ `handle_click_npc_cmd` 的 `IsCanDeal`/`Death·Ghost`/`ClickNpcTime`/`FindMerchant ?? FindNpc`/
-    ±15 格五道门全部在 **drain 持区 k 锁**时对**区 k 世界/会话**求值；
-  - `CM_MERCHANTDLGSELECT` ⇒ **`dlgselect_route_for(ident, 区 k 实体)`**：
-    `NotMerchant`（硬转失败/非 IMerchant）/`Absent`/`GuildOfficial`(`npc_type=1`) 按既有语义**零帧**处置；
-    仅 `Shop` 支进入 `handle_shop_cmd_inner`。**非 `Shop` 支不执行任何脚本/商店臂**。
-- `ScriptProcessEnv<'a>` 承载区 k **拿不到**的项——
-  `npc_host: Option<&NpcHost>`、`npc_vars: &NpcVars`、`merchant_book: &MerchantScriptBook`、
-  `sell_off_book: &mut SellOffBook`、`gm: Option<&ScriptGmEnv>`、`script_world: Option<&mut ScriptWorldCtx>`
-  ——玩家态取 **区 k** 的 `ZoneState.host`（`world`/`sessions`/`shop_sessions`/`sell_off_sessions`/
-  `mon_gen_host`/`displays`），与 2c 的 `EatProcess` drain 同构。
+- 区 0 drain 执行支（**逐条照抄区 0 tick 的同函数、同实参**，不重写）：
+  - `CM_CLICKNPC` ⇒ **直调 `handle_click_npc_cmd`**（同 15 个实参），四道门
+    `IsCanDeal`/`Death·Ghost`/`ClickNpcTime`/`FindMerchant ?? FindNpc`/±15 格在 **drain 持区 k 锁**时
+    对**区 k 世界/会话**求值。**不得**改走 `dispatch_inbound_p0`——源码理由：p0 批要 `&mut guilds`
+    （`GuildDisconnect`），与 `ScriptGmEnv` 要借的 `&guilds` 冲突；区 0 tick 的 click 臂正是因此
+    单独接管，drain 必须维持同一入口。
+  - `CM_MERCHANTDLGSELECT` ⇒ **首行 `dlgselect_route_for(ident, world.entities.get(recog))`**（区 k 世界）：
+    - `Shop` ⇒ `handle_shop_cmd(ident=1011, …)`；
+    - `NotMerchant`（硬转失败/非 IMerchant）/ `Absent` ⇒ 既有**零帧 + DBG 日志**，照常清位；
+    - `GuildOfficial`(`npc_type=1`) ⇒ 按 **T-140 构造不可达**处置：**零帧 + DBG**。T-140 原文：
+      「type 1 在生产链路上**已不可达（死代码）**——`FindMerchant(nParam1)` 是
+      `ActorMgr.Get<IMerchant>` 的 `(T)actor` 硬转（`PlayObject.Operate.cs` 的
+      `ClientMerchantDlgSelect` + `ActorManager.cs` 的 `ActorMgr.Get<IMerchant>`），
+      而 `GuildOfficial : NormNpc` 只实现 `INormNpc` ⇒ 抛
+      `InvalidCastException` 被 `PlayObject.Run` 的 catch 吞掉 ⇒ 零帧、永不进 `UserSelect`；
+      `guild_official::handle_select` 现在**只有测试直调可达**」⇒ drain **不**搬 guild 状态、
+      **禁止**把 `guilds`/`guild_store`/`guild_cfg`/`guild_sections`/`guild_msg_cfg`/`guild_castle_cfg`
+      塞进 `ScriptProcessEnv`；**将来若可达另卡**。
+  - **只有 1011 判 `Process`**：区 0 tick 的同一 `matches!` 还覆盖另外 7 个商店 ident
+    （`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/`CM_USERGETDETAILITEM`/
+    `CM_USERREPAIRITEM`/`CM_MERCHANTQUERYREPAIRCOST`/`CM_USERMAKEDRUGITEM`）——它们**不在本片**：
+    除 3a 的 `CM_USERMAKEDRUGITEM` 走 `Local` 单独接线外，其余 6 个仍 `Unsupported`
+    （未接线、另卡）。
+- **`ScriptProcessEnv<'a>`（五项，drain 内构造）**：
+  `merchant_book: &MerchantScriptBook`、`npc_vars: &NpcVars`、
+  `sell_off_book: &mut SellOffBook`、`gm: Option<&ScriptGmEnv>`、
+  `script_world: Option<&mut ScriptWorldCtx>`。
+  - **删 `npc_host`**：click/shop 两函数都不接它；它只属 `@StdModeFunc`（2c 的 `EatProcessEnv`）。
+  - **`script_world` 在 drain 内构造、enqueue 侧不携带**：
+    `host: &mut 区 k 的 ZoneState.host.mon_gen_host`、`registry: 区 k 的 SharedServices.registry`、
+    `table: &enter_cfg.mon_gen.table`（区副本 `Arc<MonsterTable>`）、
+    `displays: &mut 区 k 的 ZoneState.host.displays`——全部取区 k。
+  - **`make_items`**：drain 用 `svc.make_items`（与区 0 臂**同源**）；与 3a 药合用的
+    `enter_cfg.make_items` 区副本**不同源、互不影响**（两处来源都要在注释里写明）。
+  - 其余玩家态取 **区 k** `ZoneState.host`：`world`/`ground_sessions`/`shop_sessions`/
+    `sell_off_sessions`/`trade_sessions`/`displays`/`mon_gen_host`；`script_gm` 的
+    `ScriptGmHost::for_event` 快照取区 k 的 `saves`/`ground_sessions`/`world`（2c drain 已有同款）；
+    `ClickNpcTime` 是会话态（drain 持区 k 锁时求值）；1011 的 route 查 `world.entities.get(cmd.recog)`。
 - **为什么建议 (a)**：
   1. **没有新的并发语义**：所有 `!Send` 留在区 0；区 k 只投递 12B 字段（`ident/recog/param/tag/series` + `tail`）。
   2. **与 oracle 执行序等价**：同一玩家的脚本串行执行，跨区只多 ≤1 tick 延迟——`@` 与 2c 脚本食
@@ -113,9 +140,12 @@
   `merchant_lookup` + `npc_type` 得出 `DlgSelectRoute`），**不是 12B 头字段** ⇒ **不能**在
   `zone_cmd_class`（只拿 ident/payload）里做 type 级分类。**定案（一行）**：
   `zone_cmd_class` 把 1011 **整 ident 判 `Process`**；drain 执行支第一行 `dlgselect_route_for(...)`，
-  **仅 `Shop` 支**执行 `handle_shop_cmd_inner`，其余 route 按既有零帧语义处置后照常清位。
+  **仅 `Shop` 支**执行 `handle_shop_cmd(ident=1011, …)`；`NotMerchant`/`Absent` 零帧 + DBG；
+  `GuildOfficial` 按 T-140 构造不可达 **零帧 + DBG**（不搬 guild 状态）后照常清位。
   ⇒ 非 type=1 的 dialog 也会走一次邮箱（零帧、不执行），这是可接受的既定成本；换来的好处是
-  分类器保持纯 ident 级、type 门只有**一处**（drain），不会两处各判一遍。
+  分类器保持纯 ident 级、route 门只有**一处**（drain），不会两处各判一遍。
+- **只有 1011 进本片**：区 0 tick 的同臂还含另外 7 个商店 ident（见 §2(a)）；除 3a 的
+  `CM_USERMAKEDRUGITEM` 外，其余 6 个仍 `Unsupported`（未接线、另卡）。
 - `CM_CLICKNPC` 的 `IsCanDeal/Death/Ghost/ClickNpcTime` 四道门在 zone 0 执行支里读**区 k 世界/会话**
   即可（都是区本地量），但 `ClickNpcTime` 是会话态 ⇒ 仍在区 k 会话上（drain 持区 k 锁）。
 
@@ -143,6 +173,8 @@
   `@main` 里 `GIVE 木剑 1` 生效：`SM_ADDITEM(200)` 发到**区 k 的** socket、背包 +1、`SM_MERCHANTSAY` 链出现；
   `item_number` +1；守卫清位后 `control_pending==0`。
   **口径记录**：脚本在区 0 线程执行 ⇒ 若开 `MIR2_ITEMNUM_TRACE`，这些行标 **zone 0**（**不得**当 A25 跨区证据）。
+- **静态面 `click_drain_calls_same_handler_not_p0`**：drain 执行支对 `CM_CLICKNPC` 必须出现
+  `handle_click_npc_cmd(`，且**不得**出现 `dispatch_inbound_p0(`（p0 的 `&mut guilds` 冲突理由见 §2(a)）。
 - **同族负例 `merchant_dlgselect_route_gate_kept_in_drain`**：区 k 玩家对**怪物/玩家 actor**
   （`NotMerchant`）与 `npc_type=1` 的 `GuildOfficial` 发 `CM_MERCHANTDLGSELECT` ⇒ 两者仍是
   **整 ident `Process`**（邮箱 +1、执行体不本地调用、`control_pending=1`），drain 后按既有 route
@@ -190,9 +222,10 @@
 1. **M1c-3a**（药合并本地）：`zone_cmd_class` 加 `CM_USERMAKEDRUGITEM`（`Local`）+ `handle_zone_command_on`
    窄臂（抽 `make_drug_zone_local(...)` 复用 `shop::make_drug_item` 与 `emit_shop_frames_into`）+ P1 共享
    `MakeItemRegistry` + 牙 3 条（正/负/静态）+ 变异（删臂红）。
-2. **M1c-3b**（脚本回区 0）：`ControlRequest::ScriptProcess` + `ScriptProcessEnv` + drain 执行支 +
-   `zone_cmd_class` 两 ident 整族归 `Process` + drain 侧 `dlgselect_route_for` 门 + 牙 3 条
-   （投递/执行/route 门）+ 变异（分类改 Local / 漏投邮箱 / 删 route 门 ⇒ 红）。
+2. **M1c-3b**（脚本回区 0）：`ControlRequest::ScriptProcess` + `ScriptProcessEnv`（五项）+ drain 执行支
+   （click 直调 `handle_click_npc_cmd`、不走 `dispatch_inbound_p0`；1011 首行 `dlgselect_route_for`，
+   GuildOfficial 按 T-140 零帧）+ `zone_cmd_class` 两 ident 整族归 `Process` + 牙 4 条
+   （投递/执行/route 门/静态 click 直调）+ 变异（分类改 Local / 漏投邮箱 / 删 route 门 ⇒ 红）。
 3. **收尾**：两片各自 N=1 帧字节门 + 报告明写"区 0 `INBOUND_PROCESS` 臂保留不动 / 脚本执行仍在区 0 线程 /
    trace zone 口径"。
 
