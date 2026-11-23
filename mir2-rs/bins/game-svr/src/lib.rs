@@ -21204,7 +21204,11 @@ fn collect_monster_walk_batch(
         }
         let prev = seen.insert(id, (e.map_id, e.x, e.y));
         // 在线玩家：走/跑帧由 `CM_WALK`/`CM_RUN` 路径下发，这里不得重复。
-        if online.iter().any(|o| o.actor_id == id) {
+        // **A13**：镜像（= 邻区玩家在**本区**的实体，**不在本区 `online`**）同理不得本地发
+        // `SM_WALK`——它的走位帧由**源区** ⑤ `RefMsg` 投；少了这个条件，两区下观察者每步
+        // 收两条（本地 SM_WALK + ⑤ RefMsg 转发的 SM_WALK）。`online.any` 半句**原样保留**
+        //（本地真实玩家的 skip 不变）。
+        if online.iter().any(|o| o.actor_id == id) || e.mirror {
             continue;
         }
         if e.death || e.ghost {
@@ -125669,6 +125673,47 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(drain_cross(&g), 0, "跨区邮箱必须为空");
         assert!(rx.try_recv().is_err(), "不得有帧");
         crate::cross_zone_frames::uninstall();
+    }
+
+    /// **A13 牙**：镜像是本区实体、但**不在本区 `online`** ⇒ 走位**不得**由本区本地发
+    /// `SM_WALK`（它由源区 ⑤ `RefMsg` 投递；否则两区下观察者每步收**两条**）。
+    ///
+    /// 变异：删 `|| e.mirror` ⇒ 本用例产出 1 条 ⇒ 红。
+    /// 两区正向判据（B 每步恰 1 条）由 a7 两区场景覆盖，仓内只钉"不本地发"。
+    #[test]
+    fn mirror_walk_is_not_emitted_locally() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 10)]);
+        let mut p = mir2_world_bevy::EntitySpawn::new(SENDER, "P".to_string(), 5, 5);
+        p.race = 0;
+        world.add_entity(p);
+        let _ = world.tick();
+        assert_eq!(
+            world.upsert_mirror(spec(MIRROR, 6, 5)),
+            mir2_world_bevy::MirrorUpsert::Inserted,
+            "前置：镜像插入"
+        );
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            MIRROR,
+            downlink::ActorDisplay::new(3, 2, 0, 0, 0, 255, b"R".to_vec()),
+        );
+        let online: OnlineRegistry = OnlineRegistry::new(); // 镜像不在本区 online
+        let mut seen = std::collections::HashMap::new();
+        let rec = mir2_world_bevy::TickRecord::default();
+        let run = |world: &mir2_world_bevy::World,
+                   seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>| {
+            collect_monster_walk_batch(&rec, world, &displays, &online, seen).1
+        };
+        assert!(
+            run(&world, &mut seen).is_empty(),
+            "建游标（首次见到不算走位）"
+        );
+        // `spec.dir = 0`（DIR_UP）⇒ 沿 (0, -1) 走一格。
+        world.entities.transform_mut(MIRROR).unwrap().y = 4;
+        assert!(
+            run(&world, &mut seen).is_empty(),
+            "镜像走一格不得本地出 SM_WALK（由源区 ⑤ 投递；否则两区双发）"
+        );
     }
 
     /// **A14 正向牙（仓内可见部分）**：657 广播的**跨区观察者**（镜像）必须**投 ⑤**
