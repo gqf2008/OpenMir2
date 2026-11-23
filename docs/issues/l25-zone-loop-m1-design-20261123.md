@@ -551,12 +551,19 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 
 ## 13. `M1a` 验收场景设计（`0c` 2026-11-23；可直接照做）
 
-> ⚠ **2026-11-23 09:30 起：§13.1/§13.3 的跨区时序判断待重推（缺口 A10）。**
-> 生产里跨区可见有**两条**都在接线的路径：⑤ 邮箱 `cross_zone_frames::drain_zone`
-> （`lib.rs` 生产区，`barrier1` 之后、`phase2` 之前，`src_tick` 过滤）**和** 镜像
-> `region_loop::apply_mirrors`（`barrier1` 之后、AOI 之前，注释称邻区快照为"本 tick 终态"）。
-> 二者同 tick 都在跑，**职责分界与是否对同一收件人重复发帧尚未查清**；在查清前，
-> 「跨区帧 = T+1」不能作为验收依据。**其余（场景构造、逐类位移方法、负例牙）不受影响。**
+> ⚠ **2026-11-23 09:33 修订：跨区可见有两条都在接线的路径，§13.1/§13.3 按两类拆分（缺口 A10）。**
+> - **镜像-AOI 帧**（`region_loop::apply_mirrors` 把邻区实体以 `Flags.mirror` 插进本区 World 并写
+>   `DisplayTable`；本区 AOI 照常对它发帧）= **T**，内容 = `barrier1` 快照（邻居 phase1 态，
+>   **不含 `POST_HEAD` 战斗结算**）⇒ **需专门核内容差，不是位移等价**。
+> - **⑤ 帧**（`cross_zone_frames::drain_zone`，`barrier1` 后 `phase2` 前，`src_tick` 过滤）= **T+1**，
+>   body 与源区本地广播同；七面均为**广播面**（RefMsg/RunFrames/NpcMerchant/FeatureChanged/
+>   MountRide/MerchantDisappear/DepartFrames），用于"actor 在 A 区、收件人在别区"的兜底。
+> - **共同风险**：生产 game-svr 里 `is_mirror` 调用 = 0 ⇒ 镜像**没有被任何一道过滤**从 AOI 排除
+>   ⇒ 同一 (收件人, 主体, 事件) 可能**收两次**（镜像-AOI 的 T 帧 + ⑤ 的 T+1 帧）。
+>   **是否冗余待定**（若镜像-AOI 已覆盖移动/出现，则 ⑤ 的 `RunFrames` 面可能是冗余）。
+> - **先决**：①**运行期双发探测**（现有冻结二进制即可，不改代码）②FRAME_SRC 打标后做
+>   `(收件人,主体,事件)` 帧计数 == 1 的断言。**两条都完成前，§13 只作方法稿、不作验收依据。**
+> 其余（场景构造、逐类位移方法、负例牙）不受影响。
 
 
 ### 13.1 时间轴事实：M1a 的帧流是**混合 tick 归属**，不是整体 +1
