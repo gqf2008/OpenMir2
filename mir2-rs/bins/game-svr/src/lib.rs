@@ -8937,6 +8937,121 @@ fn dlgselect_route_for(
     merchant_dlgselect_route(lookup, npc_type)
 }
 
+/// **M1c-3b**：`ScriptProcess` 请求的进程态（区 0 drain 内构造；五项，**无 `npc_host`**——
+/// 它只属 `@StdModeFunc`，见 2c 的 `EatProcessEnv`）。
+struct ScriptProcessEnv<'a> {
+    /// 商人/固定 NPC 脚本书（`Rc<NpcDef>`，`!Send`）。
+    merchant_book: &'a game_svr::npc::MerchantScriptBook,
+    /// 脚本动态变量表（`Rc<RefCell>`，`!Send`）。
+    npc_vars: &'a game_svr::npc::NpcVars,
+    /// 元宝寄售全局表（`&mut`，进程独占）。
+    sell_off_book: &'a mut game_svr::selloff::SellOffBook,
+    /// 脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&'a ScriptGmEnv<'a>>,
+    /// 脚本世界副作用上下文（`CLEARMAPMON`/`MONGENEX`）；**drain 内按区 k 构造**，enqueue 不携带。
+    script_world: Option<&'a mut ScriptWorldCtx<'a>>,
+}
+
+/// **M1c-3b**：`ScriptProcess` 请求的**唯一执行体**（drain 调用；与区 0 tick 的 click/1011 臂
+/// 同函数、同实参）。
+///
+/// - `CM_CLICKNPC` ⇒ **直调 `handle_click_npc_cmd`**。**不得**走 `dispatch_inbound_p0`：p0 批要
+///   `&mut guilds`（`GuildDisconnect`），与 `ScriptGmEnv` 要借的 `&guilds` 冲突；区 0 tick 的
+///   click 臂正是因此单独接管，本 seam 必须维持同一入口。
+/// - `CM_MERCHANTDLGSELECT` ⇒ **route 门只此一处**（`type` 来自世界实体、不在 12B 头）：
+///   `dlgselect_route_for(...)` 的 `Shop` 才执行 `handle_shop_cmd`；`NotMerchant`/`Absent` 零帧 +
+///   DBG；`GuildOfficial` 按 **T-140** 构造不可达（`FindMerchant` 的 `(T)actor` 硬转对
+///   `GuildOfficial : NormNpc` 抛 `InvalidCastException` 被 `PlayObject.Run` 吞 ⇒ 零帧、
+///   `handle_select` 仅测试可达）⇒ 零帧 + DBG，**不搬 guild 状态**；将来可达另卡。
+#[allow(clippy::too_many_arguments)]
+fn run_script_process_request(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
+    world: &mut mir2_world_bevy::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    shop_cfg: &ShopCfg,
+    colors: &MsgColors,
+    make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
+    item_number: &std::sync::atomic::AtomicI32,
+    proc: ScriptProcessEnv<'_>,
+) {
+    match ident {
+        mir2_protocol::messages::CM_CLICKNPC => {
+            handle_click_npc_cmd(
+                recog,
+                chr_name,
+                socket,
+                online,
+                sessions,
+                world,
+                proc.merchant_book,
+                shop_sessions,
+                sell_off_sessions,
+                proc.npc_vars,
+                catalog,
+                item_number,
+                gates,
+                proc.gm,
+                proc.script_world,
+            );
+        }
+        game_svr::shop::CM_MERCHANTDLGSELECT => {
+            match dlgselect_route_for(ident, world.entities.get(recog)) {
+                DlgSelectRoute::Shop => handle_shop_cmd(
+                    ident,
+                    recog,
+                    param,
+                    tag,
+                    tail,
+                    chr_name,
+                    socket,
+                    online,
+                    sessions,
+                    shop_sessions,
+                    sell_off_sessions,
+                    proc.sell_off_book,
+                    trade_sessions,
+                    gates,
+                    world,
+                    catalog,
+                    shop_cfg,
+                    colors,
+                    make_items,
+                    item_number,
+                    proc.merchant_book,
+                    proc.npc_vars,
+                    proc.gm,
+                    proc.script_world,
+                ),
+                DlgSelectRoute::NotMerchant => glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT（drain）：({recog}) 不是 IMerchant ⇒ oracle 硬转抛、被吞 ⇒ 零帧 ChrName={chr_name}"
+                ),
+                DlgSelectRoute::Absent => glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT（drain）：({recog}) 不在世界 ⇒ 零帧 ChrName={chr_name}"
+                ),
+                DlgSelectRoute::GuildOfficial => glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT（drain）：({recog}) npc_type=1 按 T-140 构造不可达 ⇒ 零帧 ChrName={chr_name}"
+                ),
+            }
+        }
+        other => debug_assert!(false, "ScriptProcess 只承载脚本入口 ident，实得 {other}"),
+    }
+}
+
 /// 固定 NPC（`Envir/Npcs.txt`）进入脚本虚调用（`Click` / `UserSelect`）的**类型门**。
 ///
 /// `LocalDB.LoadNpcs` 的 `switch`（`LocalDB.cs:688-698`）：`0` ⇒ `Merchant`、`1` ⇒
@@ -27544,6 +27659,13 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
     if ident_level {
         return ZoneCmdClass::Local;
     }
+    // **M1c-3b**：脚本入口两族——整 ident `Process`（执行体在区 0 drain；1011 的 type 门在
+    // drain 内 `dlgselect_route_for` 一处，见 `run_script_process_request`）。
+    if ident == mir2_protocol::messages::CM_CLICKNPC
+        || ident == game_svr::shop::CM_MERCHANTDLGSELECT
+    {
+        return ZoneCmdClass::Process;
+    }
     if ident == chat::CM_SAY {
         // 族内三态（见函数 doc）：`@` ⇒ Process、`!` ⇒ Unsupported、其余 ⇒ Local。
         if payload.is_some_and(say_payload_is_at_command) {
@@ -27554,9 +27676,9 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         }
         return ZoneCmdClass::Local;
     }
-    // **表外一律 `Unsupported`**（如 `CM_CLICKNPC`、`CM_MERCHANTDLGSELECT`、`u16::MAX` 等）：
-    // 它们**不属 M1b/M1c-2b**；
-    // 塞进 `Process` 会让「区 0 收到 Process 命令」的分支误收不该管的命令。
+    // **表外一律 `Unsupported`**（如 `CM_USERBUYITEM`、`CM_DEALTRY`、`u16::MAX` 等）：
+    // 它们**不属 M1b/M1c-2b/2c/3b**；塞进 `Process` 会让「区 0 收到 Process 命令」的分支
+    // 误收不该管的命令。（`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已在上方按 M1c-3b 归 `Process`。）
     ZoneCmdClass::Unsupported
 }
 
@@ -38014,6 +38136,10 @@ impl HostLoop {
                 let npc_host = &svc.npc_host;
                 let npc_vars_base = &svc.npc_vars_base;
                 let win_lottery = &svc.win_lottery;
+                // **M1c-3b**：`ScriptProcess` 需要的进程态（与区 0 tick 同源：`svc.*`）。
+                let merchant_book = &svc.merchant_book;
+                let sell_off_book = &mut svc.sell_off_book;
+                let make_items = &svc.make_items;
                 let t_control = host_prof.begin();
                 // =====================================================================
                 // **M1b 第 4 步（A6）**：控制邮箱 drain（区 k → 区 0 的 GM `@`）。
@@ -38070,6 +38196,9 @@ impl HostLoop {
                                 saves,
                                 gates,
                                 mon_gen_host,
+                                shop_sessions,
+                                sell_off_sessions,
+                                trade_sessions,
                                 ..
                             } = host;
                             let socket = online.find_by_chr(&chr_name).map_or(0, |e| e.socket);
@@ -38168,6 +38297,82 @@ impl HostLoop {
                                             enter_cfg.win_lottery,
                                             enter_cfg.shop.human_max_gold,
                                             enter_cfg.weapon_make_luck,
+                                        );
+                                    });
+                                }
+                                ControlRequest::ScriptProcess {
+                                    ident,
+                                    recog,
+                                    param,
+                                    tag,
+                                    series,
+                                    tail,
+                                    ..
+                                } => {
+                                    // 12B 全字段保留在请求里；执行体不读 `series`（与区 0 臂一致）。
+                                    let _ = series;
+                                    let gm_cfg = gmcmd::GmConfig {
+                                        lock_human_login: enter_cfg.lock_human_login,
+                                        spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                        ..gmcmd::GmConfig::default()
+                                    };
+                                    guard.run(|sessions| {
+                                        let script_gm = ScriptGmEnv {
+                                            guilds: &*guilds,
+                                            maps: registry.as_ref(),
+                                            cfg: &gm_cfg,
+                                            pwd_sessions: &*pwd_sessions,
+                                            host: ScriptGmHost::for_event(
+                                                &gm_filter_word,
+                                                &gm_mission,
+                                                &gm_spirit_mutiny_tick,
+                                                &*saves,
+                                                &*sessions,
+                                                &*world,
+                                                &chr_name,
+                                            ),
+                                        };
+                                        // **M1c-3b**：`script_world` 在 drain 内按**区 k**构造
+                                        // （`mon_gen_host`/`registry`/`mon_gen.table`/`displays`）。
+                                        let mut script_world = if let (Some(h), Some(reg)) =
+                                            (mon_gen_host.as_mut(), registry.as_ref())
+                                        {
+                                            Some(ScriptWorldCtx {
+                                                host: h,
+                                                registry: reg,
+                                                table: &enter_cfg.mon_gen.table,
+                                                displays: &mut *displays,
+                                            })
+                                        } else {
+                                            None
+                                        };
+                                        run_script_process_request(
+                                            ident,
+                                            recog,
+                                            param,
+                                            tag,
+                                            tail.as_deref(),
+                                            &chr_name,
+                                            socket,
+                                            &*online,
+                                            sessions,
+                                            shop_sessions,
+                                            sell_off_sessions,
+                                            trade_sessions,
+                                            world,
+                                            &*gates,
+                                            &enter_cfg.catalog,
+                                            &enter_cfg.shop,
+                                            &*colors,
+                                            make_items.as_ref(),
+                                            item_number,
+                                            ScriptProcessEnv {
+                                                merchant_book,
+                                                npc_vars: npc_vars_base,
+                                                sell_off_book,
+                                                gm: Some(&script_gm),
+                                                script_world: script_world.as_mut(),
+                                            },
                                         );
                                     });
                                 }
@@ -39898,36 +40103,54 @@ enum ControlRequest {
         at_tick: u64,
         epoch: u64,
     },
+    /// **M1c-3b**：脚本入口（`CM_CLICKNPC` / `CM_MERCHANTDLGSELECT`）——区 0 drain 用
+    /// **区 k** 玩家态 + 进程态执行 `handle_click_npc_cmd` / `handle_shop_cmd`（type 门见
+    /// [`run_script_process_request`] 的 `dlgselect_route_for` 一处）。带**完整 12B 字段**。
+    ScriptProcess {
+        zone: zone::ZoneId,
+        chr_name: String,
+        ident: u16,
+        recog: i32,
+        param: u16,
+        tag: u16,
+        series: u16,
+        tail: Option<String>,
+        at_tick: u64,
+        epoch: u64,
+    },
 }
 
 impl ControlRequest {
     /// 公共投递头（drain 里做会话缺失告警/计时用；不区分变体）。
     fn zone(&self) -> zone::ZoneId {
         match self {
-            ControlRequest::GmSay { zone, .. } | ControlRequest::EatProcess { zone, .. } => *zone,
+            ControlRequest::GmSay { zone, .. }
+            | ControlRequest::EatProcess { zone, .. }
+            | ControlRequest::ScriptProcess { zone, .. } => *zone,
         }
     }
 
     fn chr_name(&self) -> &str {
         match self {
             ControlRequest::GmSay { chr_name, .. }
-            | ControlRequest::EatProcess { chr_name, .. } => chr_name,
+            | ControlRequest::EatProcess { chr_name, .. }
+            | ControlRequest::ScriptProcess { chr_name, .. } => chr_name,
         }
     }
 
     fn at_tick(&self) -> u64 {
         match self {
-            ControlRequest::GmSay { at_tick, .. } | ControlRequest::EatProcess { at_tick, .. } => {
-                *at_tick
-            }
+            ControlRequest::GmSay { at_tick, .. }
+            | ControlRequest::EatProcess { at_tick, .. }
+            | ControlRequest::ScriptProcess { at_tick, .. } => *at_tick,
         }
     }
 
     fn epoch(&self) -> u64 {
         match self {
-            ControlRequest::GmSay { epoch, .. } | ControlRequest::EatProcess { epoch, .. } => {
-                *epoch
-            }
+            ControlRequest::GmSay { epoch, .. }
+            | ControlRequest::EatProcess { epoch, .. }
+            | ControlRequest::ScriptProcess { epoch, .. } => *epoch,
         }
     }
 }
@@ -39941,6 +40164,15 @@ enum ControlPayload {
         recog: i32,
         param: u16,
         tag: u16,
+        tail: Option<String>,
+    },
+    /// **M1c-3b**：脚本入口（`CM_CLICKNPC` / `CM_MERCHANTDLGSELECT`）。
+    ScriptProcess {
+        ident: u16,
+        recog: i32,
+        param: u16,
+        tag: u16,
+        series: u16,
         tail: Option<String>,
     },
 }
@@ -40291,6 +40523,25 @@ fn a6_enqueue_control(
                 at_tick: tick,
                 epoch,
             },
+            ControlPayload::ScriptProcess {
+                ident,
+                recog,
+                param,
+                tag,
+                series,
+                tail,
+            } => ControlRequest::ScriptProcess {
+                zone,
+                chr_name: chr_name.to_string(),
+                ident,
+                recog,
+                param,
+                tag,
+                series,
+                tail,
+                at_tick: tick,
+                epoch,
+            },
         };
         q.push_back(req);
         // 置位与 push **同临界区**（理由见函数头注释）。
@@ -40339,13 +40590,26 @@ fn a6_dispatch_local(
                     tail,
                     ..
                 } => {
-                    // **M1c-2c**：`CM_EAT` 走**类型化**投递（`EatProcess`），其余仍 `GmSay`
-                    // （`@` 命令体）——两者共用同一邮箱/判满/置位/超时。
+                    // **M1c-2c/3b**：`CM_EAT` → `EatProcess`；`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT`
+                    // → `ScriptProcess`（完整 12B 字段）；其余仍 `GmSay`（`@` 命令体）——同一邮箱/
+                    // 判满/置位/超时。
                     let payload = if cmd.ident == game_svr::useitem::CM_EAT {
                         ControlPayload::EatProcess {
                             recog: cmd.recog,
                             param: cmd.param,
                             tag: cmd.tag,
+                            tail: tail.clone(),
+                        }
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_CLICKNPC | game_svr::shop::CM_MERCHANTDLGSELECT
+                    ) {
+                        ControlPayload::ScriptProcess {
+                            ident: cmd.ident,
+                            recog: cmd.recog,
+                            param: cmd.param,
+                            tag: cmd.tag,
+                            series: cmd.series,
                             tail: tail.clone(),
                         }
                     } else {
@@ -52618,6 +52882,342 @@ break
     /// `MakeIndex = M2Share.GetItemNumber()`（生产 = sim 循环的 `item_number` 计数器）。
     ///
     /// 牙：删 `write_back_player_bag` 的「多出」分支 ⇒ 本用例红（背包 0 件）。
+    /// **M1c-3b 牙（投递负例）`script_process_routes_to_zone0_mailbox`**：区 k 的 `CM_CLICKNPC`
+    /// 与 `CM_MERCHANTDLGSELECT` 分类 **`Process`** ⇒ `a6_dispatch_local` 投
+    /// `ControlRequest::ScriptProcess`（**完整 12B 字段**逐个搬入），执行体**未被调用**、
+    /// `control_pending==1`、`first_tick` 置位。
+    ///
+    /// 变异：分类改回 `Unsupported`/`Local` ⇒ 分类断言红；投成 `GmSay` ⇒ 变体断言红。
+    #[test]
+    fn script_process_routes_to_zone0_mailbox() {
+        for (ident, recog, param, tag, series, tail) in [
+            (
+                mir2_protocol::messages::CM_CLICKNPC,
+                900_001,
+                0u16,
+                0u16,
+                0u16,
+                Some("x"),
+            ),
+            (
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                900_002,
+                7u16,
+                8u16,
+                9u16,
+                Some("@main"),
+            ),
+        ] {
+            assert_eq!(
+                zone_cmd_class(ident, tail),
+                ZoneCmdClass::Process,
+                "ident={ident} 必须整 ident Process（M1c-3b）"
+            );
+            let mut sessions = std::collections::HashMap::new();
+            sessions.insert("hero".to_string(), test_session_ground(1));
+            let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+            let mut pending = std::collections::BTreeMap::new();
+            let mut executed = false;
+            let mut exec =
+                |_ev: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
+                    executed = true;
+                };
+            let mut c = CommandMessage {
+                recog: 0,
+                ident,
+                param: 0,
+                tag: 0,
+                series: 0,
+            };
+            c.recog = recog;
+            c.param = param;
+            c.tag = tag;
+            c.series = series;
+            let disp = a6_dispatch_local(
+                SeqEvent {
+                    seq: 1,
+                    ev: GateEvent::Command {
+                        line: 0,
+                        index: 0,
+                        chr_name: "hero".to_string(),
+                        socket: 901,
+                        cmd: c,
+                        tail: tail.map(str::to_string),
+                    },
+                },
+                ZoneCmdClass::Process,
+                Some(&inbox),
+                &mut sessions,
+                &mut pending,
+                zone::ZoneId::new(1),
+                9,
+                A6BatchBudget {
+                    remaining_events: 10,
+                    wall_ok: true,
+                },
+                &mut exec,
+            );
+            assert_eq!(
+                disp,
+                LocalDisposition::Drained,
+                "ident={ident} 入邮箱即已处置"
+            );
+            assert!(!executed, "Process 支不得本地执行（ident={ident}）");
+            {
+                let q = inbox.lock().expect("inbox");
+                assert_eq!(q.len(), 1, "ident={ident} 必须投 1 条");
+                match &q[0] {
+                    ControlRequest::ScriptProcess {
+                        ident: got_ident,
+                        recog: got_recog,
+                        param: got_param,
+                        tag: got_tag,
+                        series: got_series,
+                        tail: got_tail,
+                        ..
+                    } => {
+                        assert_eq!(
+                            (*got_ident, *got_recog, *got_param, *got_tag, *got_series),
+                            (ident, recog, param, tag, series),
+                            "12B 字段必须逐个搬入（ident={ident}）"
+                        );
+                        assert_eq!(got_tail.as_deref(), tail, "tail 必须原样搬入");
+                    }
+                    other => panic!("必须投 ScriptProcess 变体，实得 {other:?}"),
+                }
+            }
+            assert_eq!(
+                sessions["hero"].a6.control_pending, 1,
+                "入邮箱必须置位 control_pending"
+            );
+            assert_eq!(sessions["hero"].a6.control_first_tick, Some(9));
+        }
+    }
+
+    /// **M1c-3b 牙（行为正例）`script_process_click_executes_give_in_drain_path`**：drain 执行体
+    /// `run_script_process_request` 对 `CM_CLICKNPC` **直调** `handle_click_npc_cmd`（同函数同实参）
+    /// ⇒ 区 k 玩家点击的 `@main` 里 `GIVE 筹码包 2` 落到**会话背包**（+2 件、`MakeIndex` 由共享
+    /// 计数器逐件分配）。
+    ///
+    /// **口径（whitelist T-157）**：脚本 `GIVE` 的 `SendAddItem` 线上帧在本宿主**未建模**
+    /// （T-157 登记）⇒ 本牙断言**会话/落库面**（`SessionGround.item_list` + 说词帧），
+    /// **不**断言 `SM_ADDITEM` 帧；不得把"没有 200 帧"当失败。
+    /// 变异：seam 的 click 分支不调用 handler ⇒ 背包 0 件 ⇒ 红。
+    #[test]
+    fn script_process_click_executes_give_in_drain_path() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "点我给筹码 <给/@ya54>",
+            vec![t142_act_n2(3, "筹码包", 2)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let trade: std::collections::HashMap<String, game_svr::trade::DealState> =
+            std::collections::HashMap::new();
+        run_script_process_request(
+            mir2_protocol::messages::CM_CLICKNPC,
+            rig.merchant_id,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &rig.online,
+            &mut rig.sessions,
+            &mut rig.shop_sessions,
+            &mut rig.sell_off_sessions,
+            &trade,
+            &mut rig.world,
+            &rig.gates,
+            &rig.catalog,
+            &rig.shop_cfg,
+            &rig.colors,
+            None,
+            &rig.item_number,
+            ScriptProcessEnv {
+                merchant_book: &rig.book,
+                npc_vars: &rig.npc_vars,
+                sell_off_book: &mut rig.sell_off_book,
+                gm: None,
+                script_world: None,
+            },
+        );
+        let bag = &rig.sessions["hero"].state.item_list;
+        assert_eq!(
+            bag.len(),
+            2,
+            "click 的 `@main` 里 `GIVE 筹码包 2` 必须落到会话背包"
+        );
+        assert!(
+            bag.iter().all(|it| it.index == 1 && it.make_index > 0),
+            "件模板与 MakeIndex 必须正确：{bag:?}"
+        );
+        let mk: Vec<i32> = bag.iter().map(|it| it.make_index).collect();
+        assert_eq!(mk, vec![1, 2], "MakeIndex 从夹具计数器 0 起逐件 +1");
+        let mut says = 0;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if CommandMessage::from_bytes(&body)
+                .is_some_and(|m| m.ident == mir2_protocol::messages::SM_MERCHANTSAY)
+            {
+                says += 1;
+            }
+        }
+        assert!(says > 0, "`@main` 的说词必须下发（SM_MERCHANTSAY）");
+    }
+
+    /// **M1c-3b 牙 `script_process_dlgselect_route_gate_kept`**：drain 执行体的 1011 route 门
+    /// （**只此一处**）——`NotMerchant`（recog 是玩家 actor）⇒ **零帧、零副作用**；
+    /// `Shop`（recog 是商人 actor + 脚本 label）⇒ 脚本执行（`@main` 的 `GIVE` 落包）。
+    /// `GuildOfficial` 按 **T-140** 构造不可达（seam 静态面钉 `DlgSelectRoute::GuildOfficial` 显式零帧）。
+    ///
+    /// 变异：删 route 门（直接进 `handle_shop_cmd`）⇒ 静态面红（`dlgselect_route_for(` 消失）。
+    #[test]
+    fn script_process_dlgselect_route_gate_kept() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "欢迎 <给/@ya54>",
+            vec![t142_act_n2(3, "筹码包", 2)],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.sessions
+            .get_mut("hero")
+            .expect("hero 会话")
+            .state
+            .item_list
+            .clear();
+        let trade: std::collections::HashMap<String, game_svr::trade::DealState> =
+            std::collections::HashMap::new();
+        let hero_actor = {
+            let e = rig.online.find_by_chr("hero").expect("hero 在线");
+            e.actor_id
+        };
+        let merchant_id = rig.merchant_id;
+        // ① NotMerchant（recog = 玩家自己）⇒ route 非 Shop ⇒ 零帧零副作用。
+        run_script_process_request(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            hero_actor,
+            0,
+            0,
+            Some("@main"),
+            "hero",
+            901,
+            &rig.online,
+            &mut rig.sessions,
+            &mut rig.shop_sessions,
+            &mut rig.sell_off_sessions,
+            &trade,
+            &mut rig.world,
+            &rig.gates,
+            &rig.catalog,
+            &rig.shop_cfg,
+            &rig.colors,
+            None,
+            &rig.item_number,
+            ScriptProcessEnv {
+                merchant_book: &rig.book,
+                npc_vars: &rig.npc_vars,
+                sell_off_book: &mut rig.sell_off_book,
+                gm: None,
+                script_world: None,
+            },
+        );
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "NotMerchant ⇒ 不得执行脚本（背包不变）"
+        );
+        assert!(rig.rx.try_recv().is_err(), "NotMerchant ⇒ 零帧");
+        // ② Shop（recog = 商人）⇒ 脚本执行。
+        run_script_process_request(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            merchant_id,
+            0,
+            0,
+            Some("@main"),
+            "hero",
+            901,
+            &rig.online,
+            &mut rig.sessions,
+            &mut rig.shop_sessions,
+            &mut rig.sell_off_sessions,
+            &trade,
+            &mut rig.world,
+            &rig.gates,
+            &rig.catalog,
+            &rig.shop_cfg,
+            &rig.colors,
+            None,
+            &rig.item_number,
+            ScriptProcessEnv {
+                merchant_book: &rig.book,
+                npc_vars: &rig.npc_vars,
+                sell_off_book: &mut rig.sell_off_book,
+                gm: None,
+                script_world: None,
+            },
+        );
+        assert_eq!(
+            rig.sessions["hero"].state.item_list.len(),
+            2,
+            "Shop ⇒ 脚本执行（`@main` 的 GIVE 落包）"
+        );
+        // ③ 静态面：route 门在 seam 内、且先于 `handle_shop_cmd`。
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn run_script_process_request(")
+            .expect("seam 定义");
+        let end = src[start..]
+            .find("\n}\n")
+            .map_or(src.len(), |k| start + k + 3);
+        let body = &src[start..end];
+        let gate = body
+            .find("dlgselect_route_for(")
+            .expect("route 门必须在 seam 内");
+        let shop = body
+            .find("handle_shop_cmd(")
+            .expect("Shop 支必须执行 handle_shop_cmd");
+        assert!(gate < shop, "route 门必须先于 handle_shop_cmd");
+        assert!(
+            body.contains("DlgSelectRoute::GuildOfficial"),
+            "GuildOfficial 支必须显式零帧（T-140）"
+        );
+    }
+
+    /// **M1c-3b 静态牙 `click_drain_calls_same_handler_not_p0`**：seam 对 `CM_CLICKNPC` 必须
+    /// 出现 `handle_click_npc_cmd(`，且**不得**出现 `dispatch_inbound_p0(`——p0 批要 `&mut guilds`
+    /// （`GuildDisconnect`），与 `ScriptGmEnv` 要借的 `&guilds` 冲突（区 0 tick click 臂因此单独接管）。
+    #[test]
+    fn click_drain_calls_same_handler_not_p0() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn run_script_process_request(")
+            .expect("seam 定义");
+        let end = src[start..]
+            .find("\n}\n")
+            .map_or(src.len(), |k| start + k + 3);
+        let body = &src[start..end];
+        assert!(
+            body.contains("handle_click_npc_cmd("),
+            "seam 必须直调 handle_click_npc_cmd（与区 0 click 臂同函数）"
+        );
+        assert!(
+            !body.contains("dispatch_inbound_p0("),
+            "seam 不得走 dispatch_inbound_p0（`&mut guilds` 冲突）"
+        );
+    }
+
     #[test]
     fn give_adds_allocated_item_to_session_bag_through_production_path() {
         let mut rig = T142Rig::new(vec![
@@ -127246,10 +127846,10 @@ mod zone_command_tests {
             mir2_protocol::messages::CM_MAGICKEYCHANGE,
             enter::CM_LEVELRANK,
             mir2_protocol::messages::CM_LOGINNOTICEOK,
+            // **M1c-3b**：`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已接线（整 ident `Process` ⇒ 区 0
+            // drain 执行；投递牙 `script_process_routes_to_zone0_mailbox`）⇒ 从本清单移出。
             // **M1c-2b**：本片**不接**的族必须继续计 `unsupported`（守恒：防"顺手扩大范围"或
             // "臂里直接 return"把命令静默吞掉）。
-            mir2_protocol::messages::CM_CLICKNPC,
-            mir2_protocol::messages::CM_MERCHANTDLGSELECT,
             // **M1c-2c**：`CM_EAT` 已接线（本地臂 `Dispatched`；分支门由 `zonek_eat_*` 四牙钉）
             // ⇒ 从本「未接线守恒」清单移出（不是放宽：每形态的归属另有四牙）。
             mir2_protocol::messages::CM_DEALTRY,
