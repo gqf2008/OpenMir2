@@ -34800,11 +34800,7 @@ impl HostLoop {
     ///
     /// **M0/A2**：段级 `PhaseSet` 内联守卫；守卫只包住段体的 `host_prof.begin()/end()` 与
     /// 归入本段的 gap 代码。`PhaseSet::ALL` 下执行序与 A1 逐字节一致。
-    /// 本 fn 关闭 rustfmt（**临时**）：给 2,800 行正文套 `if` 会让整段重排缩进、把「纯搬移」的
-    /// review 变成不可读的大 diff；新增/修改此 fn 内的代码请手工按现有排版。
-    /// **移除条件：M1 方法化把段体拆成 `fn phase_*` 时，同步移除本 `#[rustfmt::skip]` 并统一格式化**
-    /// （不得让这个函数永久脱离 rustfmt）。
-    #[rustfmt::skip]
+    /// **M1-0a 起本 fn 已交回 rustfmt 管理**（原 `#[rustfmt::skip]` 已移除并完成一次性格式化）。
     #[allow(clippy::too_many_lines)]
     // `&mut rec` / `&rec` 保持 A1 的原调用形状（`rec` 现在是 `&mut TickRecord`）⇒ 允许「多余借用」。
     #[allow(clippy::needless_borrow)]
