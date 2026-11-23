@@ -73,6 +73,8 @@ CM_SELECTSERVER = 104
 CM_CLICKNPC = 1010
 CM_MERCHANTDLGSELECT = 1011
 CM_TAKEONITEM = 1003
+CM_EAT = 1006                 # src/OpenMir2/Messages.cs:53 → PlayObject.Message.cs:827 ClientUseItems
+SM_ADDITEM = 200              # src/OpenMir2/Messages.cs（SendAddItem 的即时帧）
 CM_SOFTCLOSE = 1009
 CM_IDPASSWORD = 2001
 CM_LOGINNOTICEOK = 1018
@@ -467,7 +469,55 @@ class Conn:
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
                "say", "click_npc", "dlg_select", "dlg_select_any", "repeat", "newchr",
-               "kill", "relogin"}
+               "kill", "relogin", "eat_additems"}
+#: `ClientItem.WritePacket`（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs`）定长 124B：
+#: `Name`@0 = 1B 长度 + 14B 定长 GBK、`MakeIndex`@100 = i32 LE。
+#: **与 `tools/probe/param_discovery.py` 同一契约**；`--selftest` 的 `dsl-eat-additems`
+#: 断言两边常量相等（防两处各写一份漂移）。
+BAG_RECORD_LEN = 124
+BAG_NAME_LEN = 14
+BAG_RECORD_NAME_OFF = 0
+BAG_RECORD_MAKEINDEX_OFF = 100
+
+
+def decode_additem_client_item(frame):
+    """`SM_ADDITEM(200)` 帧 → `{name, make_index, raw}`（124B ClientItem，fail-closed）。
+
+    `SendAddItem` 的尾 = `EDCode.EncodeBuffer(ClientItem)`。坏帧（解码后长度 ≠124 /
+    Name 长度越界 / 非 GBK / 空名 / `MakeIndex <= 0`）一律 `StepFailure`——
+    **不跳过、不猜、不回落 0**（否则会把"解不出"伪装成"吃了个空号"）。
+    """
+    body = frame.body_decoded
+    if len(body) != BAG_RECORD_LEN:
+        try:
+            body = decode_bytes(frame.body, strict=True)
+        except FrameError:
+            body = frame.body_decoded
+    if len(body) != BAG_RECORD_LEN:
+        raise StepFailure(
+            "eat_additems: SM_ADDITEM(%s) body 解码后 %dB != %dB（EDCode(ClientItem) 契约不符；"
+            "body_hex=%s）"
+            % (frame.ident, len(body), BAG_RECORD_LEN, frame.body.hex()))
+    name_len = body[BAG_RECORD_NAME_OFF]
+    if name_len > BAG_NAME_LEN:
+        raise StepFailure(
+            "eat_additems: Name 长度 %d > %d（ClientItem 定长 14，fail-closed）"
+            % (name_len, BAG_NAME_LEN))
+    name_bytes = body[BAG_RECORD_NAME_OFF + 1:BAG_RECORD_NAME_OFF + 1 + name_len]
+    try:
+        name = name_bytes.decode("gbk")
+    except UnicodeDecodeError as ex:
+        raise StepFailure("eat_additems: Name 不是合法 GBK：%s" % ex)
+    if not name:
+        raise StepFailure("eat_additems: Name 为空（空槽不该出现在 SM_ADDITEM）")
+    make_index = int.from_bytes(
+        body[BAG_RECORD_MAKEINDEX_OFF:BAG_RECORD_MAKEINDEX_OFF + 4], "little", signed=True)
+    if make_index <= 0:
+        raise StepFailure(
+            "eat_additems: MakeIndex=%d <= 0（DBSvr 跳过 0；不许拿它发 CM_EAT）" % make_index)
+    return {"name": name, "make_index": make_index, "raw": body}
+
+
 # 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
 # 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
 REQUIRES_KNOWN = ("magic",)
@@ -1208,6 +1258,25 @@ def plan_step(step, index, params, depth=0):
                                       where + ".send." + name, lo, hi)
         out["body"] = (_encode_send_body(val, where + ".send", params)
                        if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
+    elif action == "eat_additems":
+        # **C1' 造件流水装置**：把最近 `count` 条 `SM_ADDITEM(200)` 解成 ClientItem
+        # （124B：`Name`@0 / `MakeIndex`@100），再逐件发 `CM_EAT(1006)`——
+        # **`recog = MakeIndex`、body = 物品名（GBK）**，与 `scenarios/eat_item.json` 的既有
+        # 线格式一致（服务端 `handle_eat_cmd` 读 `Recog` 当 `make_index`、`tail` 只做名字）。
+        _need_keys(val, where + ".eat_additems", required=(),
+                   optional=("count", "idents", "interval_ms", "timeout_ms"))
+        out["count"] = _need_int(val.get("count", 6), where + ".eat_additems.count", 1, 64)
+        idents = val.get("idents", [SM_ADDITEM])
+        if isinstance(idents, int) and not isinstance(idents, bool):
+            idents = [idents]
+        if not isinstance(idents, list) or not idents:
+            raise ScenarioError("%s.eat_additems.idents must be a non-empty list of ints" % where)
+        out["idents"] = [_need_int(x, where + ".eat_additems.idents[]", 0, 0xFFFF)
+                         for x in idents]
+        out["interval_ms"] = _need_int(val.get("interval_ms", 900),
+                                       where + ".eat_additems.interval_ms", 0, 60000)
+        out["timeout_ms"] = _need_int(val.get("timeout_ms", 4000),
+                                      where + ".eat_additems.timeout_ms", 1, 600000)
     elif action == "kill":
         # 击杀步（卡 `openmir2-probe-kill-step`）：把活体夹具刷出的目标打到死亡。
         # 语义关键（别写反）：`CM_HIT(3014)` 的 **recog 是自身坐标**（PlayObject.Attack.cs:883
@@ -2552,6 +2621,44 @@ class Run:
                 "steps[%s].repeat: stop_on_select %r not reached in %d attempt(s); "
                 "per-attempt pages (links/selected)=%r"
                 % (plan["index"], plan.get("stop_on_select"), plan["times"], attempts))
+        if kind == "eat_additems":
+            timeout = plan["timeout_ms"] if plan.get("timeout_ms") is not None else default_timeout
+            t0 = now_ms()
+            after = conn.recorder.seq
+            got_frames = []
+            while len(got_frames) < plan["count"]:
+                remain = timeout - (now_ms() - t0)
+                if remain <= 0:
+                    break
+                got = conn.wait_for(plan["idents"], remain, after, None, None)
+                if got is None:
+                    break
+                seq, fr = got
+                after = seq
+                got_frames.append((seq, fr))
+            if len(got_frames) < plan["count"]:
+                raise StepFailure(
+                    "steps[%s].eat_additems: 只收到 %d/%d 条 ident=%s 帧（%.0fms 内）；"
+                    "缺帧/坏帧一律失败，不跳过"
+                    % (idx, len(got_frames), plan["count"], plan["idents"], timeout))
+            items = [decode_additem_client_item(fr) for _seq, fr in got_frames]
+            sent = []
+            for j, item in enumerate(items):
+                body = item["name"].encode("gbk")
+                raw = conn.send(item["make_index"], CM_EAT, 0, 0, 0, body)
+                self._log_send(conn, raw, {
+                    "index": idx, "ident": CM_EAT, "recog": item["make_index"],
+                    "param": 0, "tag": 0, "series": 0, "body": body,
+                    "note": plan.get("note", ""),
+                }, now_ms() - self.t0_ms)
+                sent.append({"make_index": item["make_index"], "name": item["name"],
+                             "seq": got_frames[j][0]})
+                if j + 1 < len(items) and plan.get("interval_ms"):
+                    time.sleep(plan["interval_ms"] / 1000.0)
+            self.steps.append({"index": idx, "kind": "eat_additems",
+                               "count": plan["count"], "idents": plan["idents"],
+                               "items": sent, "note": plan.get("note", "")})
+            return
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
             def _resolve_token(name):
                 token = plan.get(name + "_token")
@@ -6781,6 +6888,75 @@ def _selftest_null_ident_steps():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _selftest_eat_additems():
+    """`eat_additems` 解析契约（124B ClientItem：Name@0 / MakeIndex@100）+ fail-closed 负例。
+
+    合成 `SM_ADDITEM(200)` 帧（`build_s2c_frame` + EDCode，与线上同路径）→ 断言解出的
+    Name/MakeIndex 正确；再断言截断 / 名字长度越界 / MakeIndex<=0 / 空名 一律 `StepFailure`
+    （不许静默跳过）。另断言 DSL 默认值与范围 fail-closed。
+    """
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    import param_discovery as _pd
+    assert (BAG_RECORD_LEN, BAG_NAME_LEN, BAG_RECORD_NAME_OFF, BAG_RECORD_MAKEINDEX_OFF) == (
+        _pd.BAG_RECORD_LEN, _pd.BAG_NAME_LEN, _pd.BAG_RECORD_NAME_OFF,
+        _pd.BAG_RECORD_MAKEINDEX_OFF), "与 param_discovery 的 ClientItem 契约漂移"
+
+    def record(name, make_index, name_len=None):
+        raw = bytearray(BAG_RECORD_LEN)
+        nb = name.encode("gbk")
+        assert len(nb) <= BAG_NAME_LEN, "夹具名字过长"
+        raw[BAG_RECORD_NAME_OFF] = len(nb) if name_len is None else name_len
+        raw[BAG_RECORD_NAME_OFF + 1:BAG_RECORD_NAME_OFF + 1 + len(nb)] = nb
+        raw[BAG_RECORD_MAKEINDEX_OFF:BAG_RECORD_MAKEINDEX_OFF + 4] = (
+            int(make_index).to_bytes(4, "little", signed=True))
+        return bytes(raw)
+
+    def frame(raw):
+        splitter = FrameSplitter()
+        # `build_s2c_frame` 自己会做 EDCode（body=原始字节，别先编码一遍）。
+        evs = [e for e in splitter.feed(build_s2c_frame(0, SM_ADDITEM, body=raw))
+               if e.kind == "frame"]
+        splitter.eof()
+        assert len(evs) == 1, "合成帧必须恰好切出 1 帧"
+        return evs[0].frame
+
+    # 正例：Name/MakeIndex 逐个对齐（值故意不连续，抓偏移错位）。
+    got = decode_additem_client_item(frame(record("随机传送卷", 412072)))
+    assert got["name"] == "随机传送卷", got
+    assert got["make_index"] == 412072, got
+    assert len(got["raw"]) == BAG_RECORD_LEN, got
+    got2 = decode_additem_client_item(frame(record("金创药", 99999991)))
+    assert (got2["name"], got2["make_index"]) == ("金创药", 99999991), got2
+
+    def expect_fail(raw_bytes, needle):
+        try:
+            decode_additem_client_item(frame(raw_bytes))
+        except StepFailure as ex:
+            assert needle in str(ex), "诊断缺 %r：%s" % (needle, ex)
+            return
+        raise AssertionError("坏帧被接受（应 fail-closed）：needle=%r" % (needle,))
+
+    expect_fail(record("随机传送卷", 1)[:123], "124")           # 截断 1B
+    expect_fail(record("随机传送卷", 1, name_len=15), "定长 14")  # 名字长度越界
+    expect_fail(record("随机传送卷", 0), "MakeIndex=0")         # 0 号不许发
+    expect_fail(record("", 7), "Name 为空")                    # 空名
+
+    # DSL：默认值与范围 / 未知键 fail-closed。
+    plan = plan_step({"eat_additems": {"count": 2, "interval_ms": 0}}, 0, {})
+    assert plan["kind"] == "eat_additems" and plan["count"] == 2, plan
+    assert plan["idents"] == [SM_ADDITEM] and plan["interval_ms"] == 0, plan
+    assert plan["timeout_ms"] == 4000, plan
+    for bad in ({"count": 0}, {"count": 65}, {"count": "6"}, {"idents": []}, {"bogus": 1}):
+        try:
+            plan_step({"eat_additems": dict(bad)}, 0, {})
+        except ScenarioError:
+            continue
+        raise AssertionError("eat_additems %r 未被拒（应 scenario-error）" % (bad,))
+    return "2 正例 + 4 负例 + DSL 默认/越界"
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -6807,6 +6983,7 @@ def run_selftest():
     check("scenario-requires", _selftest_scenario_requires)
     check("scenario-inventory", _selftest_scenario_inventory)
     check("scenario-assets", _selftest_scenario_assets)
+    check("dsl-eat-additems", _selftest_eat_additems)
     check("dsl-dlg-select-any", _selftest_dlg_select_any)
     check("dsl-newchr", _selftest_newchr)
     check("dsl-kill", _selftest_kill)
