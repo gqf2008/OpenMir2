@@ -372,43 +372,65 @@ struct Gate {
 }
 
 impl Gate {
+    /// 端口被占（`os error 10048`，典型是 TIME_WAIT）时的启动尝试上限；仍是 fail-closed。
+    const START_ATTEMPTS: u8 = 3;
+
     async fn start(tag: &str, srv_port: u16, gate_port: u16) -> Gate {
         Self::start_with_env(tag, srv_port, gate_port, &[]).await
     }
 
     /// 同 `start`，但给子进程注入环境变量（B-4/B-5 用小容量/短心跳做进程级判定）。
+    ///
+    /// **端口被占可重试**（卡 `openmir2-test-port-timewait-race`）：`support::next_port()` 的
+    /// 「探闲即释放」与子进程 `bind` 之间存在窗口；Windows 上撞上 TIME_WAIT / 瞬时占用时，
+    /// 子进程以 `os error 10048` 退出。此时换新端口重起（≤ [`Self::START_ATTEMPTS`] 次）。
+    /// 其它失败（缺配置、真正的端口冲突耗尽）**不重试**，照旧 fail-closed，panic 里带尝试次数。
     async fn start_with_env(
         tag: &str,
         srv_port: u16,
         gate_port: u16,
         envs: &[(&str, &str)],
     ) -> Gate {
-        let dir = support::unique_temp_dir(tag);
-        write_conf(&dir, srv_port, gate_port);
-        let log = dir.join("gate.out.log");
-        let out = std::fs::File::create(&log).unwrap();
-        let err = out.try_clone().unwrap();
-        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"));
-        cmd.arg(dir.join("config.conf"))
-            .stdout(out)
-            .stderr(err)
-            .kill_on_drop(true);
-        for (key, value) in envs {
-            cmd.env(key, value);
-        }
-        let mut proc = cmd.spawn().unwrap();
-        let text =
-            support::wait_child_ready(&mut proc, &log, gate_port, Duration::from_secs(15)).await;
-        if !text.contains(&format!(":{gate_port}]已启动")) {
+        let mut port = gate_port;
+        for attempt in 1..=Self::START_ATTEMPTS {
+            if attempt > 1 {
+                port = support::next_port();
+            }
+            let dir_tag = if attempt == 1 {
+                tag.to_string()
+            } else {
+                format!("{tag}-retry{attempt}")
+            };
+            let dir = support::unique_temp_dir(&dir_tag);
+            write_conf(&dir, srv_port, port);
+            let log = dir.join("gate.out.log");
+            let out = std::fs::File::create(&log).unwrap();
+            let err = out.try_clone().unwrap();
+            let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"));
+            cmd.arg(dir.join("config.conf"))
+                .stdout(out)
+                .stderr(err)
+                .kill_on_drop(true);
+            for (key, value) in envs {
+                cmd.env(key, value);
+            }
+            let mut proc = cmd.spawn().unwrap();
+            let text =
+                support::wait_child_ready(&mut proc, &log, port, Duration::from_secs(15)).await;
+            if text.contains(&format!(":{port}]已启动")) {
+                return Gate { proc, dir, port };
+            }
             proc.kill().await.ok();
             let _ = std::fs::remove_dir_all(&dir);
+            let port_taken = text.contains("os error 10048");
+            assert!(
+                port_taken && attempt < Self::START_ATTEMPTS,
+                "网关子进程未就绪（第 {attempt}/{} 次尝试，端口 {port}，可重试={port_taken}）⇒ fail-closed；子进程日志：
+{text}",
+                Self::START_ATTEMPTS
+            );
         }
-        support::require_ready(&text, gate_port);
-        Gate {
-            proc,
-            dir,
-            port: gate_port,
-        }
+        unreachable!("START_ATTEMPTS 循环必在 return 或 assert 中结束")
     }
 
     async fn connect(&self) -> TcpStream {
@@ -436,6 +458,27 @@ impl Gate {
         self.proc.kill().await.ok();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// 牙（卡 `openmir2-test-port-timewait-race`）：端口在「探闲」与子进程 `bind` 之间被占用
+/// （模拟 Windows 上的 TIME_WAIT ⇒ `os error 10048`）⇒ 测试侧换新端口重起、整体仍绿；
+/// 删掉重试逻辑 ⇒ 首次尝试即 fail-closed ⇒ 本用例红（不是恒绿）。
+#[tokio::test]
+async fn busy_gate_port_retries_with_a_fresh_port() {
+    let srv = FakeSvr::start().await;
+    let occupied = support::next_port();
+    let hold = std::net::TcpListener::bind(("127.0.0.1", occupied)).expect("占用端口构造失败");
+    let gate = Gate::start_with_env("gg-busy-port", srv.port, occupied, &[]).await;
+    drop(hold);
+    assert_ne!(gate.port, occupied, "端口被占后必须换新端口重起");
+    // 重试成功即拿到就绪的 Gate（`start_with_env` 只在看到子进程「已启动」行后才返回）；
+    // 若重试逻辑被删，首次尝试就会 fail-closed panic ⇒ 本用例红。
+    assert!(
+        gate.log_tail(4096)
+            .contains(&format!(":{}]已启动", gate.port)),
+        "重试后的子进程日志必须含新端口的就绪行"
+    );
+    gate.shutdown().await;
 }
 
 /// 等网关把上一帧处理完再发下一帧（只影响**测试**的节奏，不改被测算子的语义）。
