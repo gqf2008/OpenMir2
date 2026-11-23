@@ -634,3 +634,27 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 **已知未钉死项（`0c` 主动标注）**：⑤ 的**生产合成函数确切符号**未唯一确定（`CrossZoneOutbox` 是 region_loop
 的 test rig、`cross_recipient_*` 是诊断计数、非发射点）；但**客户端帧只有 `SendFrame` 一条出口**，
 实施时按"向 gates/`SendFrame` 送跨区帧的那一处"定位即可。**这一处必须在 M1a 开工前钉死并写进实施单。**
+
+### 13.7 双发探测（`0c` 2026-11-23；**不改代码，冻结二进制可跑**）
+
+**职责分界（代码结论，非推测）**：
+- **镜像-AOI 只发出现/消失**：`drain_aoi_downlink` 对 AOI 选中的**新出现**目标发 `downlink::appear_frames`；
+  消失另由 `drain_aoi_disappear` 发。**对已可见实体的逐 tick 位置/状态变化，AOI 不重发。**
+- **⑤ 七面是事件帧**：`RunFrames` = `flush_run_frames` 的 `SendRefMsg(53)` 观察者副本；其余为
+  refmsg/商人/feature/mountride/merchant_disappear/depart。
+- ⇒ 两者**帧型不相交**：出现/消失（镜像-AOI，T） vs 移动/状态/事件（⑤，T+1）。**⑤ 不冗余**。
+  若**同一 ident 同时出现在 T 与 T+1 两条路径**，那是**双发（bug）**，处置是修，不是删面。
+
+**运行期探测（现有二进制）**：
+- 启动：`MIR2_ZONES=2` + `MIR2_ZONE_MIRROR=1` + `MIR2_ZONE_SLICING=1`（slicing 强制要求 mirror=1；
+  启动被拒即参数错）。
+- 造场：同一张图在边界切两区；A 在区 0 侧、B 在区 k 侧，彼此在 `view_range` 内；**B 做动作序列**
+  （出现→走几步→转身→受一次击），A 只观察不动。
+- 采集：抓 **A 的 socket** 的 `frames.ndjson`（body hex + 顺序；有 tick 字段用 tick，否则用帧序+采集
+  时间近似"≤2 tick"，**须如实标注**）。
+- **判据**：
+  - 无重复（预期）：每个 ident 的帧只落在单一偏移类（appear/消失 → T；移动/53/feature/run/merchant → T+1），
+    且同一 body 字节 ≤2 tick 内不重复。
+  - 疑似双发：①同一 `(socket, body)` ≤2 tick 内出现两次；或 ②同一 ident 的帧同时出现在 T 与 T+1 两类。
+  - **合法重复的排除（关键）**：必须加"**同一逻辑事件**"这一条——`(socket, body)` + ≤2 tick + 同一事件
+    三者皆满足才判双发；不同事件各一次 = 合法重发。事件确认看 B 侧动作脚本与 tick。
