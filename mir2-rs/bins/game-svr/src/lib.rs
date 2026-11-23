@@ -11766,7 +11766,10 @@ fn write_back_player_gold_deal(
 /// 队列）的物品帧载荷（写回序）：
 /// - `added` ⇒ `SM_ADDITEM(200)`（`SendAddItem`，尾 = `trade::add_item_tail`）；
 /// - `removed` ⇒ `SM_DELITEM(202)`（`TAKE` 摘包件，尾 = `trade::del_item_tail`）；
-/// - `removed_use` ⇒ `SM_DELITEM(202)`（`TAKEW`/`UPGRADEITEMSEX` 破碎支摘佩戴位，同上）。
+/// - `removed_use` ⇒ `SM_DELITEM(202)`（`TAKEW`/`UPGRADEITEMSEX` 破碎支摘佩戴位，同上）；
+/// - `updated` ⇒ `SM_UPDATEITEM(203)`（`UPGRADEITEMSEX` 成功支，尾 = `trade::update_item_tail`：
+///   带 `Desc` 升级差量、**不带** `StdModeMap` 的 `Desc[8]⇒Shape` 改写、**不带** `StdMode==50`
+///   的 `" #Dura"` 后缀——逐行对照 oracle `PlayObject.SendUpdateItem`）。
 ///
 /// **202 尾不带** `StdModeMap` 的 `Desc[8]⇒Shape` 调整（`trade::del_item_tail` 与
 /// `smframe::sm_delitem` 的文档逐行对照 `PlayObject.Base.cs:1648-1665`）——不得复用 200 的尾。
@@ -11775,6 +11778,7 @@ struct ScriptItemFrames {
     added: Vec<game_svr::bag::BagItem>,
     removed: Vec<game_svr::bag::BagItem>,
     removed_use: Vec<game_svr::bag::BagItem>,
+    updated: Vec<game_svr::bag::BagItem>,
 }
 
 fn emit_script_item_frames(
@@ -11786,7 +11790,11 @@ fn emit_script_item_frames(
     catalog: &dyn game_svr::ability::ItemCatalog,
     frames: &ScriptItemFrames,
 ) {
-    if frames.added.is_empty() && frames.removed.is_empty() && frames.removed_use.is_empty() {
+    if frames.added.is_empty()
+        && frames.removed.is_empty()
+        && frames.removed_use.is_empty()
+        && frames.updated.is_empty()
+    {
         return;
     }
     let Some(entry) = online.find_by_chr(chr_name) else {
@@ -11814,6 +11822,16 @@ fn emit_script_item_frames(
             None => glog!(
                 "WRN",
                 "脚本 TAKE：物模板缺失 ⇒ SM_DELITEM 未编码（Index={}）",
+                it.index
+            ),
+        }
+    }
+    for it in &frames.updated {
+        match game_svr::trade::update_item_tail(it, catalog) {
+            Some(tail) => send(game_svr::smframe::sm_updateitem(actor_id, &tail)),
+            None => glog!(
+                "WRN",
+                "脚本升级：物模板缺失 ⇒ SM_UPDATEITEM 未编码（Index={}）",
                 it.index
             ),
         }
@@ -12351,7 +12369,18 @@ fn run_std_mode_func_script(
     // 会话 GM 态移出一次（理由见 [`run_merchant_goto`]）。
     let mut gm_sess = gm.map(|_| std::mem::take(&mut sg.gm));
     let label = format!("@StdModeFunc{ani_count}");
-    let (says, frames, direct, notes, bag_after, drops, use_slots, broadcasts, del_use_items) = {
+    let (
+        says,
+        frames,
+        direct,
+        notes,
+        bag_after,
+        drops,
+        use_slots,
+        broadcasts,
+        del_use_items,
+        update_use_items,
+    ) = {
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
@@ -12383,6 +12412,8 @@ fn run_std_mode_func_script(
             std::mem::take(&mut player.world_broadcasts),
             // **A27-2**：TAKEW / 升级破碎支的摘佩戴位快照（动作序）。
             std::mem::take(&mut player.del_use_items),
+            // **A27-3**：升级成功支的更新后佩戴位快照（动作序）。
+            std::mem::take(&mut player.update_use_items),
         );
         // `player` 的最后一次使用已过 ⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -12421,6 +12452,7 @@ fn run_std_mode_func_script(
             added: added_items,
             removed: removed_items,
             removed_use: del_use_items,
+            updated: update_use_items,
         },
     );
     world.rng = rng;
@@ -12771,7 +12803,16 @@ fn run_merchant_goto(
     let use_before = sg.use_items.clone();
     // `NpcPlayer` 借走 `rng`（`rngf` 闭包）⇒ 收在块里，块结束才把 `rng` 交还，
     // 供满包 `DropItemDown` 的 `StdMode 45` 抽数（`T-159`）。
-    let (says, frames, bag_after, full_bag_drops, use_slots, world_actions, del_use_items) = {
+    let (
+        says,
+        frames,
+        bag_after,
+        full_bag_drops,
+        use_slots,
+        world_actions,
+        del_use_items,
+        update_use_items,
+    ) = {
         // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线要 `&mut GmSession`，而下面的写回要
         // `&mut sg`（整表）——若把 `&mut sg.gm` 装进 `player`，它得活到 `player` 的**类型**不再
         // 使用为止（NLL 对结构体字段不做流敏），写回就借不到 `sg`。oracle 里是同一个
@@ -12870,6 +12911,8 @@ fn run_merchant_goto(
             mir2_script::engine::ScriptPlayer::take_world_actions(&mut player),
             // **A27-2**：TAKEW / 升级破碎支的摘佩戴位快照（动作序）。
             std::mem::take(&mut player.del_use_items),
+            // **A27-3**：升级成功支的更新后佩戴位快照（动作序）。
+            std::mem::take(&mut player.update_use_items),
         );
         // `player` 的最后一次使用已过（`gm_sess` 的借用到此结束）⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -12909,6 +12952,7 @@ fn run_merchant_goto(
             added: added_items,
             removed: removed_items,
             removed_use: del_use_items,
+            updated: update_use_items,
         },
     )
 }
@@ -53523,6 +53567,78 @@ break
         assert_eq!(got_tail, want_tail, "202 尾 = 摘下前的该槽原件");
     }
 
+    /// **A27-3 牙 `script_upgrade_success_emits_sm_updateitem`**：`UPGRADEITEMSEX` 成功支 ⇒ 写回后
+    /// 1 条 `SM_UPDATEITEM(203)`，尾 = `trade::update_item_tail`（带 `Desc` 升级差量、
+    /// **不带** `StdModeMap` 的 `Desc[8]⇒Shape` 改写、**不带** `StdMode==50` 的 `" #Dura"` 后缀
+    /// ——逐行对照 oracle `PlayObject.SendUpdateItem`）；成功支**不发** 202、槽 Index 不变。
+    ///
+    /// 变异：删 203 发射 ⇒ 红。
+    #[test]
+    fn script_upgrade_success_emits_sm_updateitem() {
+        let mut seed = 0i32;
+        loop {
+            let mut probe = mir2_shared::rng::RandomNumber::with_seed(seed);
+            if probe.random_below(20) <= 10 {
+                break;
+            }
+            seed += 1;
+            assert!(seed < 10_000, "找不到命中成功支的种子");
+        }
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 213,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "2".to_string(),
+                s_param4: "1".to_string(),
+                s_param5: "1".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 7001,
+            index: 1,
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("成功支槽仍在");
+        assert!(slot.index > 0, "成功支不清 Index");
+        let want_tail = game_svr::trade::update_item_tail(&slot, &rig.catalog).expect("203 尾");
+        let (mut up, mut del) = (0usize, 0usize);
+        let mut got: Vec<u8> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_UPDATEITEM => {
+                        up += 1;
+                        got = body[12..].to_vec();
+                    }
+                    mir2_protocol::messages::SM_DELITEM => del += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(up, 1, "成功支 ⇒ 1 条 SM_UPDATEITEM(203)");
+        assert_eq!(del, 0, "成功支不发 202");
+        assert_eq!(got, want_tail, "203 尾逐字节 = trade::update_item_tail");
+    }
+
     /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
     /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
     ///
@@ -53671,11 +53787,19 @@ break
                 })
                 .collect();
         }
+        let counter_before = rig.item_number.load(std::sync::atomic::Ordering::Relaxed);
         rig.dlg_select("@main");
         assert_eq!(
             rig.sessions["hero"].state.item_list.len(),
             game_svr::bag::MAX_BAG_ITEM,
             "满包支不改背包件数"
+        );
+        // **A27-3 补强**：满包支确实执行过——`drop_full_bag_items` 逐件
+        // `CopyToUserItemFromName`（消费 `MakeIndex`）⇒ 共享计数器必须前进；否则
+        // 「脚本根本没跑」也会让"零帧"断言假绿。
+        assert!(
+            rig.item_number.load(std::sync::atomic::Ordering::Relaxed) > counter_before,
+            "满包走 DropItemDown 也必须消费 item_number（证明该支真的执行过）"
         );
         let mut additem = 0usize;
         while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
