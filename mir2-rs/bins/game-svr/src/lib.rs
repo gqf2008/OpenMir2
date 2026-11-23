@@ -34849,7 +34849,13 @@ struct PhaseSet(u32);
 
 impl PhaseSet {
     const SHUTDOWN: u32 = 1 << 0;
-    const INBOUND: u32 = 1 << 1;
+    /// **M1b**：`INBOUND` 拆两位 —— `INBOUND_LOCAL`（本区可执行的命令；M1b 后续片接入）、
+    /// `INBOUND_PROCESS`（需要进程级服务 ⇒ 只能在区 0 执行）。**别名 `INBOUND` = 两位同开**：
+    /// 区 0 用 `PhaseSet::ALL`（两位都含）⇒ 与拆前逐字节一致；`has(INBOUND)` = 任一子位开。
+    const INBOUND_LOCAL: u32 = 1 << 1;
+    const INBOUND_PROCESS: u32 = 1 << 17;
+    /// **别名**（不是独立位）：`INBOUND_LOCAL | INBOUND_PROCESS`。
+    const INBOUND: u32 = Self::INBOUND_LOCAL | Self::INBOUND_PROCESS;
     const DB_POLL: u32 = 1 << 2;
     const PERIODIC: u32 = 1 << 3;
     const WORLD_HEAD: u32 = 1 << 4;
@@ -34865,13 +34871,14 @@ impl PhaseSet {
     const SWITCH: u32 = 1 << 14;
     const DIAG: u32 = 1 << 15;
     const SLEEP: u32 = 1 << 16;
-    /// 区 0：全集（执行序 = 原正文顺序）。
-    const ALL: PhaseSet = PhaseSet((1 << 17) - 1);
+    /// 区 0：全集（执行序 = 原正文顺序；**18 位** —— `INBOUND` 已拆 `_LOCAL`/`_PROCESS` 两位）。
+    const ALL: PhaseSet = PhaseSet((1 << 18) - 1);
     /// **M1-0c'**：**实际使用 `ProcessServices` 字段的段集**（进入前 `process` 必须为 `Some`，
     /// 否则入口断言 panic）。7 段：含 `PLANES`（用 `planes`）与 `SWITCH`（用 `server_table`/
     /// `reconnect_pending`）——0c 的「5 段/59 处」只统计 6 个 `!Send` 字段，**不是**本集合。
+    /// **M1b**：`INBOUND` 拆两位后本集合取 **`INBOUND_PROCESS`**（`_LOCAL` 不得进本集合）。
     const PROCESS_ONLY: u32 = Self::SHUTDOWN
-        | Self::INBOUND
+        | Self::INBOUND_PROCESS
         | Self::DB_POLL
         | Self::PERIODIC
         | Self::PLANES
@@ -35257,324 +35264,186 @@ impl HostLoop {
                 glog!("WRN", "{}", line);
             }
         }
+        // **M1b（首片）**：`INBOUND` 拆 `INBOUND_LOCAL` / `INBOUND_PROCESS`（别名 `INBOUND` 两位同开）。
+        // 区 0 用 `PhaseSet::ALL`（两位都含）⇒ 与拆前逐字节一致；区 k 仍**不**开 `INBOUND`。
         if phases.has(PhaseSet::INBOUND) {
-            let svc = proc_svc!(process, PhaseSet::INBOUND, "INBOUND");
-            let mut db = &mut svc.db;
-            let mut engine = &mut svc.engine;
-            let mut guilds = &mut svc.guilds;
-            let guild_cfg = &mut svc.guild_cfg;
-            let guild_store = &mut svc.guild_store;
-            let castle_war_states = &mut svc.castle_war_states;
-            let mut pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
-            let npc_host = &mut svc.npc_host;
-            let merchant_book = &mut svc.merchant_book;
-            let npc_vars_base = &mut svc.npc_vars_base;
-            let mut sell_off_book = &mut svc.sell_off_book;
-            let mut item_number = &mut svc.item_number;
-            let mut item_number_ex = &mut svc.item_number_ex;
-            let world_start = &mut svc.world_start;
-            let win_lottery = &mut svc.win_lottery;
-            let party_cfg = &mut svc.party_cfg;
-            let shard_directory = &mut svc.shard_directory;
-            let state_log = &mut svc.state_log;
-            let mut pwd_sessions = &mut svc.pwd_sessions;
-            let mut reconnect_pending = &mut svc.reconnect_pending;
-            let kick_pending = &mut svc.kick_pending;
-            let mut soft_close_pending = &mut svc.soft_close_pending;
-            let gm_filter_word = &mut svc.gm_filter_word;
-            let gm_mission = &mut svc.gm_mission;
-            let gm_spirit_mutiny_tick = &mut svc.gm_spirit_mutiny_tick;
-            let minimap = &mut svc.minimap;
-            let unbind_list = &mut svc.unbind_list;
-            let make_items = &mut svc.make_items;
-            #[cfg(test)]
-            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND));
             let t = host_prof.begin();
             // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
             // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
+            // **`max_wall` 的契约是「取事件 + 处理事件」**（见 `EventDrainBudget`）⇒ 排水循环必须与
+            // 逐条处理**交错**留在 PROCESS 支内；先整批取出再处理会把处理耗时移出预算 ⇒ 预算语义变。
             let inbound_t0 = perf_counters::enabled().then(std::time::Instant::now);
             let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
-            while let Some(ev) =
-                drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
-            {
-                // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
-                let _event_timer = perf_counters::EventTimer::start();
-                match ev {
-                    GateEvent::Opened { index, ip, .. } => {
-                        if world_start.is_aborted() {
+            // **LOCAL 支（M1b 首片）**：空壳——本片不把任何命令搬进 LOCAL，且**不排空**
+            //（事件留在通道里保序；等 LOCAL 处理片接入后再按预算排空，并按 A6 顺序契约接入）。
+            if phases.has(PhaseSet::INBOUND_LOCAL) {
+                #[cfg(test)]
+                RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND_LOCAL));
+            }
+            // **PROCESS 支**：现有全部命令处理（进入前 `proc_svc!`；`PROC_SVC_SEGMENTS` 只记这一位）。
+            if phases.has(PhaseSet::INBOUND_PROCESS) {
+                #[cfg(test)]
+                RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::INBOUND_PROCESS));
+                let svc = proc_svc!(process, PhaseSet::INBOUND_PROCESS, "INBOUND_PROCESS");
+                let mut db = &mut svc.db;
+                let mut engine = &mut svc.engine;
+                let mut guilds = &mut svc.guilds;
+                let guild_cfg = &mut svc.guild_cfg;
+                let guild_store = &mut svc.guild_store;
+                let castle_war_states = &mut svc.castle_war_states;
+                let mut pending_gm_castle_broadcasts = &mut svc.pending_gm_castle_broadcasts;
+                let npc_host = &mut svc.npc_host;
+                let merchant_book = &mut svc.merchant_book;
+                let npc_vars_base = &mut svc.npc_vars_base;
+                let mut sell_off_book = &mut svc.sell_off_book;
+                let mut item_number = &mut svc.item_number;
+                let mut item_number_ex = &mut svc.item_number_ex;
+                let world_start = &mut svc.world_start;
+                let win_lottery = &mut svc.win_lottery;
+                let party_cfg = &mut svc.party_cfg;
+                let shard_directory = &mut svc.shard_directory;
+                let state_log = &mut svc.state_log;
+                let mut pwd_sessions = &mut svc.pwd_sessions;
+                let mut reconnect_pending = &mut svc.reconnect_pending;
+                let kick_pending = &mut svc.kick_pending;
+                let mut soft_close_pending = &mut svc.soft_close_pending;
+                let gm_filter_word = &mut svc.gm_filter_word;
+                let gm_mission = &mut svc.gm_mission;
+                let gm_spirit_mutiny_tick = &mut svc.gm_spirit_mutiny_tick;
+                let minimap = &mut svc.minimap;
+                let unbind_list = &mut svc.unbind_list;
+                let make_items = &mut svc.make_items;
+
+                while let Some(ev) =
+                    drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
+                {
+                    // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
+                    let _event_timer = perf_counters::EventTimer::start();
+                    match ev {
+                        GateEvent::Opened { index, ip, .. } => {
+                            if world_start.is_aborted() {
+                                glog!(
+                                "ERR",
+                                "世界未就绪（初始化中止）：拒绝用户登记 index={index} ip={ip}（准入被拒）"
+                            );
+                                continue;
+                            }
                             glog!(
-                            "ERR",
-                            "世界未就绪（初始化中止）：拒绝用户登记 index={index} ip={ip}（准入被拒）"
-                        );
-                            continue;
+                                "DBG",
+                                "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
+                            );
                         }
-                        glog!(
+                        GateEvent::Command {
+                            index,
+                            chr_name,
+                            socket,
+                            cmd,
+                            tail,
+                            ..
+                        } => {
+                            if world_start.is_aborted() {
+                                glog!(
+                                "ERR",
+                                "世界未就绪（初始化中止）：拒绝命令 index={index} socket={socket}（准入被拒）"
+                            );
+                                continue;
+                            }
+                            glog!(
                             "DBG",
-                            "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
+                            "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}",
+                            cmd.recog,
+                            cmd.ident,
+                            cmd.param,
+                            cmd.tag,
+                            cmd.series,
+                            tail.as_deref().unwrap_or("")
                         );
-                    }
-                    GateEvent::Command {
-                        index,
-                        chr_name,
-                        socket,
-                        cmd,
-                        tail,
-                        ..
-                    } => {
-                        if world_start.is_aborted() {
-                            glog!(
-                            "ERR",
-                            "世界未就绪（初始化中止）：拒绝命令 index={index} socket={socket}（准入被拒）"
-                        );
-                            continue;
-                        }
-                        glog!(
-                        "DBG",
-                        "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}",
-                        cmd.recog,
-                        cmd.ident,
-                        cmd.param,
-                        cmd.tag,
-                        cmd.series,
-                        tail.as_deref().unwrap_or("")
-                    );
-                        // `ClientMerchantDlgSelect` 的 `FindMerchant(nParam1) ?? FindNpc(nParam1)`
-                        // （`PlayObject.Operate.cs:120`）：第二臂命中**固定 NPC**（`Npcs.txt`）。
-                        // `npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt` type 0/1/2 ⇒
-                        // Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）——所以只有
-                        // type 1（GuildOfficial）进 `bins/game-svr/src/guild_official.rs`；
-                        // type 0（Merchant）的脚本半走 `handle_shop_cmd` 的固定 NPC 臂（T-137）；
-                        // type 2（CastleOfficial）的 `Click`/`UserSelect` 门未移植（T-40/T-140），
-                        // 由两条臂的 `fixed_npc_script_allowed` 类型门拦下 ⇒ 零帧零副作用。
-                        // **卡 `openmir2-merchant-dlgselect-type1`**：按 `merchant_lookup`（与点击路径同一
-                        // 分类点）算出去向；`NotMerchant`/`Absent` 两臂**都零帧但路径不同**，不许合并。
-                        let select_route =
-                            dlgselect_route_for(cmd.ident, world.entities.get(cmd.recog));
-                        let fixed_npc_dialog = select_route == DlgSelectRoute::GuildOfficial;
-                        // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
-                        if cmd.ident == chat::CM_SAY {
-                            let host = ChatHost {
-                                online: &online,
-                                world: &world,
-                                gates: &gates,
-                                guilds: &guilds,
-                                guild_msg_cfg: &enter_cfg.guild_msg_cfg,
-                                party_cfg: &party_cfg,
-                                strings: &enter_cfg.string_conf,
-                                colors: &colors,
-                                gm_cfg: gmcmd::GmConfig {
-                                    lock_human_login: enter_cfg.lock_human_login,
-                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                    ..gmcmd::GmConfig::default()
-                                },
-                                can_shout_level: enter_cfg.can_shout_msg_level,
-                                registry: registry.as_ref(),
-                                filter_word: &gm_filter_word,
-                                mission: &gm_mission,
-                                spirit_mutiny_tick: &gm_spirit_mutiny_tick,
-                                displays: &displays,
-                                catalog: &enter_cfg.catalog,
-                            };
-                            // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
-                            // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
-                            // `MsgQueue` 命令后才排水 ⇒ 203 必须先于 100（复审 important-2）。
-                            let (gm_deferred, gm_frames) = handle_say_with_saves(
-                                &host,
-                                &mut ground_sessions,
-                                &saves,
-                                &chr_name,
-                                socket,
-                                tail.as_deref(),
-                            );
-                            // **GM 管理态写穿（卡 `openmir2-gm-admin-mode-entity-seam`）**：
-                            // `@1/@2/@3/@Rest/@AttackMode` 在命令体里翻转的是 `GmSession` 镜像
-                            // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
-                            // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
-                            // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
-                            apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);
-                            // **卡 `openmir2-gm-target-state-write`**：`@Level0` 的 `HasLevelUp(1)`
-                            // 语义（MaxExp + 重算 + `RM_LEVELUP` 三帧）在同一事件内落地。
-                            apply_pending_level_up(
-                                &mut ground_sessions,
-                                &chr_name,
-                                &enter_cfg.catalog,
-                                &enter_cfg.need_exps,
-                                &mut world,
-                                &online,
-                                &gates,
-                            );
-                            // **卡 `openmir2-gm-impl-smake`**：`@改属性` 的佩戴位写 + 重算 +
-                            // `SM_UPDATEITEM(203)`（oracle 命令体内当场发 ⇒ 先于蓝字 100）。
-                            if let Some(body) = apply_pending_gm_use_item(
-                                &mut ground_sessions,
-                                &chr_name,
-                                &mut world,
-                                &enter_cfg.catalog,
-                                &online,
-                                &gates,
-                            ) {
-                                if let Some(e) = online.find_by_chr(&chr_name) {
-                                    if let Some(tx) = route_to_gate(
-                                        &gates,
-                                        e.gate_idx,
-                                        e.socket,
-                                        "GM 改属性 SM_UPDATEITEM",
-                                    ) {
-                                        let _ = tx.send(SimToGate::SendFrame {
-                                            socket: e.socket,
-                                            body,
-                                        });
-                                    }
-                                }
-                            }
-                            // **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 清目标背包 +
-                            // `SM_DELITEMS(709)`（发给**目标**，oracle 同一事件内当场发）。
-                            if let Some((target, body)) = apply_pending_gm_clear_bag(
-                                &mut ground_sessions,
-                                &chr_name,
-                                &enter_cfg.catalog,
-                            ) {
-                                if let Some(e) = online.find_by_chr(&target) {
-                                    if let Some(tx) = route_to_gate(
-                                        &gates,
-                                        e.gate_idx,
-                                        e.socket,
-                                        "GM 清理垃圾 SM_DELITEMS",
-                                    ) {
-                                        let _ = tx.send(SimToGate::SendFrame {
-                                            socket: e.socket,
-                                            body,
-                                        });
-                                    }
-                                }
-                            }
-                            // **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OnHorse`/
-                            // `@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`
-                            // 在同一事件内落地（oracle `SendRefMsg` 立即 ⇒ 先于延后的 SysMsg）。
-                            apply_pending_gm_feature_changed(
-                                &mut ground_sessions,
-                                &chr_name,
-                                &enter_cfg.catalog,
-                                &world,
-                                &online,
-                                &gates,
-                                enter_cfg.shop.send_ref_msg_range,
-                            );
-                            // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后）。
-                            apply_pending_gm_mountride(
-                                &mut ground_sessions,
-                                &chr_name,
-                                &world,
-                                &online,
-                                &gates,
-                                &mut displays,
-                                enter_cfg.shop.send_ref_msg_range,
-                            );
-                            // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
-                            // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
-                            // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
-                            // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
-                            // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
-                            // drain 置位并发帧（与 oracle 同序）。
-                            // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
-                            // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
-                            if gm_drain_gate(tail.as_deref()) {
-                                if let Some(addr) = ground_sessions
-                                    .get_mut(&chr_name)
-                                    .and_then(|sg| sg.gm.pending_reconnect.take())
-                                {
-                                    if let Some(e) = online.find_by_chr(&chr_name) {
-                                        reconnect_pending.push(ReconnectPending {
-                                            gate_idx: e.gate_idx,
-                                            socket: e.socket,
-                                            chr_name: e.chr_name.clone(),
-                                            msg: addr.into_bytes(),
-                                        });
-                                    }
-                                }
-                            }
-                            // **族 X2 批 B**：目标侧副作用收口（vv杀死/复活/VV给予权限/
-                            // ClearCopyItem/清除仓库密码），命令体纯 + pending_* 同事件落地。
-                            apply_pending_gm_target_ops(
-                                &mut ground_sessions,
-                                &mut pwd_sessions,
-                                &mut saves,
-                                &mut world,
-                                &enter_cfg.catalog,
-                                magic_cfg_of(&enter_cfg),
-                                &displays,
-                                &online,
-                                &gates,
-                                &colors,
-                                enter_cfg.shop.send_ref_msg_range,
-                                &chr_name,
-                            );
-                            // **族 M（卡 `openmir2-gm-family-m-spawn-make`）**：刷怪/造物落地
-                            // （同事件内；`@怪`/`@ReCallMobEx`/`@MobPlace` 的 `RegenMonsterByName`
-                            // 与世界同一条 RNG 流、`@GiveMine` 的 `Random(18)+3`、`@s` 的
-                            // `Random(MakeRandomAddValue)` 与 `GetItemNumberEx`）。
-                            if gm_drain_gate(tail.as_deref()) {
-                                apply_pending_gm_m_commands(
+                            // `ClientMerchantDlgSelect` 的 `FindMerchant(nParam1) ?? FindNpc(nParam1)`
+                            // （`PlayObject.Operate.cs:120`）：第二臂命中**固定 NPC**（`Npcs.txt`）。
+                            // `npc.UserSelect` 是**按实际类**的虚调用——`Npcs.txt` type 0/1/2 ⇒
+                            // Merchant/GuildOfficial/CastleOfficial（`LocalDB.cs:688-698`）——所以只有
+                            // type 1（GuildOfficial）进 `bins/game-svr/src/guild_official.rs`；
+                            // type 0（Merchant）的脚本半走 `handle_shop_cmd` 的固定 NPC 臂（T-137）；
+                            // type 2（CastleOfficial）的 `Click`/`UserSelect` 门未移植（T-40/T-140），
+                            // 由两条臂的 `fixed_npc_script_allowed` 类型门拦下 ⇒ 零帧零副作用。
+                            // **卡 `openmir2-merchant-dlgselect-type1`**：按 `merchant_lookup`（与点击路径同一
+                            // 分类点）算出去向；`NotMerchant`/`Absent` 两臂**都零帧但路径不同**，不许合并。
+                            let select_route =
+                                dlgselect_route_for(cmd.ident, world.entities.get(cmd.recog));
+                            let fixed_npc_dialog = select_route == DlgSelectRoute::GuildOfficial;
+                            // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
+                            if cmd.ident == chat::CM_SAY {
+                                let host = ChatHost {
+                                    online: &online,
+                                    world: &world,
+                                    gates: &gates,
+                                    guilds: &guilds,
+                                    guild_msg_cfg: &enter_cfg.guild_msg_cfg,
+                                    party_cfg: &party_cfg,
+                                    strings: &enter_cfg.string_conf,
+                                    colors: &colors,
+                                    gm_cfg: gmcmd::GmConfig {
+                                        lock_human_login: enter_cfg.lock_human_login,
+                                        spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                        ..gmcmd::GmConfig::default()
+                                    },
+                                    can_shout_level: enter_cfg.can_shout_msg_level,
+                                    registry: registry.as_ref(),
+                                    filter_word: &gm_filter_word,
+                                    mission: &gm_mission,
+                                    spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                                    displays: &displays,
+                                    catalog: &enter_cfg.catalog,
+                                };
+                                // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
+                                // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
+                                // `MsgQueue` 命令后才排水 ⇒ 203 必须先于 100（复审 important-2）。
+                                let (gm_deferred, gm_frames) = handle_say_with_saves(
+                                    &host,
+                                    &mut ground_sessions,
+                                    &saves,
+                                    &chr_name,
+                                    socket,
+                                    tail.as_deref(),
+                                );
+                                // **GM 管理态写穿（卡 `openmir2-gm-admin-mode-entity-seam`）**：
+                                // `@1/@2/@3/@Rest/@AttackMode` 在命令体里翻转的是 `GmSession` 镜像
+                                // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
+                                // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
+                                // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
+                                apply_pending_gm_entity(
                                     &mut ground_sessions,
                                     &chr_name,
                                     &mut world,
-                                    &mut displays,
-                                    mon_gen_host.as_mut(),
-                                    registry.as_ref(),
-                                    &enter_cfg.mon_gen.table,
+                                );
+                                // **卡 `openmir2-gm-target-state-write`**：`@Level0` 的 `HasLevelUp(1)`
+                                // 语义（MaxExp + 重算 + `RM_LEVELUP` 三帧）在同一事件内落地。
+                                apply_pending_level_up(
+                                    &mut ground_sessions,
+                                    &chr_name,
                                     &enter_cfg.catalog,
-                                    &enter_cfg.pet_cfg,
+                                    &enter_cfg.need_exps,
+                                    &mut world,
                                     &online,
                                     &gates,
-                                    &colors,
-                                    enter_cfg.test_server,
-                                    enter_cfg.make_random_add_value,
-                                    &mut item_number,
-                                    &mut item_number_ex,
                                 );
-                                // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
-                                // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
-                                apply_pending_gm_castle_commands(
+                                // **卡 `openmir2-gm-impl-smake`**：`@改属性` 的佩戴位写 + 重算 +
+                                // `SM_UPDATEITEM(203)`（oracle 命令体内当场发 ⇒ 先于蓝字 100）。
+                                if let Some(body) = apply_pending_gm_use_item(
                                     &mut ground_sessions,
                                     &chr_name,
                                     &mut world,
-                                    &mut displays,
-                                    &mut saves,
-                                    &castle_war_states,
+                                    &enter_cfg.catalog,
                                     &online,
                                     &gates,
-                                    &mut pending_gm_castle_broadcasts,
-                                );
-                                // **族 W**：行会 4 条的宿主落地（GuildMgr 写 + 行会文件/列表落盘 +
-                                // SS_205/206/207 单服登记 + 750/42/100 帧序）。
-                                apply_pending_gm_guild_commands(
-                                    &mut ground_sessions,
-                                    &chr_name,
-                                    &world,
-                                    &mut guilds,
-                                    &guild_cfg,
-                                    guild_store.as_ref(),
-                                    &enter_cfg.guild_sections,
-                                    i32::from(enter_cfg.server_index),
-                                    &displays,
-                                    &online,
-                                    &gates,
-                                    &colors,
-                                    world.clock_ms as i32,
-                                    enter_cfg.shop.send_ref_msg_range,
-                                );
-                            }
-                            // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
-                            // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
-                            if !gm_deferred.is_empty() || !gm_frames.is_empty() {
-                                if let Some(e) = online.find_by_chr(&chr_name) {
-                                    for (f, b, text) in &gm_deferred {
-                                        send_gm_sysmsg(&gates, e, *f, *b, text);
-                                    }
-                                    for body in gm_frames {
-                                        if let Some(tx) =
-                                            route_to_gate(&gates, e.gate_idx, e.socket, "GM 命令帧")
-                                        {
+                                ) {
+                                    if let Some(e) = online.find_by_chr(&chr_name) {
+                                        if let Some(tx) = route_to_gate(
+                                            &gates,
+                                            e.gate_idx,
+                                            e.socket,
+                                            "GM 改属性 SM_UPDATEITEM",
+                                        ) {
                                             let _ = tx.send(SimToGate::SendFrame {
                                                 socket: e.socket,
                                                 body,
@@ -35582,318 +35451,297 @@ impl HostLoop {
                                         }
                                     }
                                 }
-                            }
-                        } else if cmd.ident == game_svr::ground::CM_PICKUP
-                            || cmd.ident == game_svr::ground::CM_DROPITEM
-                        {
-                            handle_ground_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
-                                // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
-                                &trade_sessions,
-                                &world,
-                                &mut ground_sessions,
-                                &online,
-                                &gates,
-                                &enter_cfg.ground,
-                                &colors,
-                                &enter_cfg.catalog,
-                                registry.as_ref(),
-                                &enter_cfg.string_conf,
-                            );
-                        } else if matches!(
-                            cmd.ident,
-                            mir2_protocol::messages::CM_DEALTRY
-                                | mir2_protocol::messages::CM_DEALADDITEM
-                                | mir2_protocol::messages::CM_DEALDELITEM
-                                | mir2_protocol::messages::CM_DEALCANCEL
-                                | mir2_protocol::messages::CM_DEALCHGGOLD
-                                | mir2_protocol::messages::CM_DEALEND
-                        ) {
-                            // `openmir2-m3-party-trade-state`：`CM_DEAL*` 派发
-                            // （oracle `PlayObject.Message.cs:946-960`）。
-                            handle_deal_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &world,
-                                &displays,
-                                &mut ground_sessions,
-                                &mut trade_sessions,
-                                &gates,
-                                &enter_cfg.trade,
-                                &enter_cfg.catalog,
-                            );
-                        } else if matches!(
-                            cmd.ident,
-                            mir2_protocol::messages::CM_SELLOFFADDITEM
-                                | mir2_protocol::messages::CM_SELLOFFDELITEM
-                                | mir2_protocol::messages::CM_SELLOFFCANCEL
-                                | mir2_protocol::messages::CM_SELLOFFEND
-                                | mir2_protocol::messages::CM_CANCELSELLOFFITEMING
-                                | mir2_protocol::messages::CM_SELLOFFBUYCANCEL
-                                | mir2_protocol::messages::CM_SELLOFFBUY
-                        ) {
-                            // `openmir2-m3-selloff-consignment-world`：7 条元宝寄售 `CM_*` 派发
-                            // （oracle `PlayObject.Message.cs:2057-2077`）。
-                            handle_selloff_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &world,
-                                &mut ground_sessions,
-                                &mut sell_off_sessions,
-                                &mut sell_off_book,
-                                &gates,
-                                &enter_cfg.sell_off,
-                                &enter_cfg.catalog,
-                            );
-                        } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
-                            || cmd.ident == game_svr::bag::CM_TAKEOFFITEM
-                        {
-                            // **Lane B**：`RecalcAbilitys()` 尾段的 210/212——戴/脱 115/116 戒指
-                            // 在同会话内立即生效（`Operate.cs:458/538`）。
-                            let flame_ring_in = online
-                                .iter()
-                                .find(|e| e.chr_name == chr_name)
-                                .and_then(|e| world.entities.get(e.actor_id))
-                                .is_some_and(|e| e.flame_ring);
-                            let magic = saves.get_mut(&chr_name).map(|saved| MagicRecalc {
-                                saved,
-                                cfg: magic_cfg_of(&enter_cfg),
-                                flame_ring_in,
-                            });
-                            handle_bag_cmd_with_magic(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &gates,
-                                &enter_cfg.catalog,
-                                &mut world,
-                                &mut displays,
-                                enter_cfg.ref_msg_range,
-                                // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
-                                trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
-                                // 52 的尾布局与入图/升级同源（`ability_tail`）。
-                                mir2_client_ability_layout(),
-                                magic,
-                            );
-                        } else if cmd.ident == game_svr::useitem::CM_EAT {
-                            // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
-                            // **卡 `openmir2-gm-script-exec-seams`**：`@StdModeFunc*` 脚本的
-                            // `GMEXECUTE` 跳线视图（与 `@Login`/商人/组队同源）。
-                            let gm_cfg = gmcmd::GmConfig {
-                                lock_human_login: enter_cfg.lock_human_login,
-                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                ..gmcmd::GmConfig::default()
-                            };
-                            let script_gm = ScriptGmEnv {
-                                guilds: &guilds,
-                                maps: registry.as_ref(),
-                                cfg: &gm_cfg,
-                                pwd_sessions: &pwd_sessions,
-                                // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
-                                // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
-                                // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
-                                host: ScriptGmHost::for_event(
-                                    &gm_filter_word,
-                                    &gm_mission,
-                                    &gm_spirit_mutiny_tick,
-                                    &saves,
-                                    &ground_sessions,
-                                    &world,
+                                // **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 清目标背包 +
+                                // `SM_DELITEMS(709)`（发给**目标**，oracle 同一事件内当场发）。
+                                if let Some((target, body)) = apply_pending_gm_clear_bag(
+                                    &mut ground_sessions,
                                     &chr_name,
-                                ),
-                            };
-                            handle_eat_cmd(
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &gates,
-                                &enter_cfg.catalog,
-                                &mut world,
-                                &colors,
-                                enter_cfg.repair_item_dec_dura,
-                                &enter_cfg.string_conf,
-                                registry.as_ref(),
-                                &unbind_list,
-                                &mut item_number,
-                                npc_host.as_ref(),
-                                &npc_vars_base,
-                                Some(&script_gm),
-                                &win_lottery,
-                                enter_cfg.win_lottery,
-                                enter_cfg.shop.human_max_gold,
-                                enter_cfg.weapon_make_luck,
-                                &castle_war_states,
-                            );
-                        } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
-                            // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
-                            handle_query_bag_cmd(
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &gates,
-                                &enter_cfg.catalog,
-                                &world,
-                            );
-                        } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
-                            // **卡 `openmir2-gm-script-exec-seams`**：点击 NPC 的 `@main` 与商人对框
-                            // 是同一路商人脚本（`PlayObject.Base.cs:676` → `FindNpc` → `GotoLable`）。
-                            // 必须在这里接管而不是走 `dispatch_inbound_p0`：那一路要传
-                            // `&mut guilds`（`GuildDisconnect`），与 GM 跳线要借的 `&guilds` 冲突。
-                            let gm_cfg = gmcmd::GmConfig {
-                                lock_human_login: enter_cfg.lock_human_login,
-                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                ..gmcmd::GmConfig::default()
-                            };
-                            let script_gm = ScriptGmEnv {
-                                guilds: &guilds,
-                                maps: registry.as_ref(),
-                                cfg: &gm_cfg,
-                                pwd_sessions: &pwd_sessions,
-                                // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
-                                // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
-                                // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
-                                host: ScriptGmHost::for_event(
-                                    &gm_filter_word,
-                                    &gm_mission,
-                                    &gm_spirit_mutiny_tick,
-                                    &saves,
-                                    &ground_sessions,
-                                    &world,
+                                    &enter_cfg.catalog,
+                                ) {
+                                    if let Some(e) = online.find_by_chr(&target) {
+                                        if let Some(tx) = route_to_gate(
+                                            &gates,
+                                            e.gate_idx,
+                                            e.socket,
+                                            "GM 清理垃圾 SM_DELITEMS",
+                                        ) {
+                                            let _ = tx.send(SimToGate::SendFrame {
+                                                socket: e.socket,
+                                                body,
+                                            });
+                                        }
+                                    }
+                                }
+                                // **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OnHorse`/
+                                // `@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`
+                                // 在同一事件内落地（oracle `SendRefMsg` 立即 ⇒ 先于延后的 SysMsg）。
+                                apply_pending_gm_feature_changed(
+                                    &mut ground_sessions,
                                     &chr_name,
-                                ),
-                            };
-                            // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
-                            // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
-                            // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
-                            let mut script_world = if let (Some(host), Some(reg)) =
-                                (mon_gen_host.as_mut(), registry.as_ref())
+                                    &enter_cfg.catalog,
+                                    &world,
+                                    &online,
+                                    &gates,
+                                    enter_cfg.shop.send_ref_msg_range,
+                                );
+                                // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后）。
+                                apply_pending_gm_mountride(
+                                    &mut ground_sessions,
+                                    &chr_name,
+                                    &world,
+                                    &online,
+                                    &gates,
+                                    &mut displays,
+                                    enter_cfg.shop.send_ref_msg_range,
+                                );
+                                // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
+                                // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
+                                // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
+                                // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
+                                // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
+                                // drain 置位并发帧（与 oracle 同序）。
+                                // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
+                                // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
+                                if gm_drain_gate(tail.as_deref()) {
+                                    if let Some(addr) = ground_sessions
+                                        .get_mut(&chr_name)
+                                        .and_then(|sg| sg.gm.pending_reconnect.take())
+                                    {
+                                        if let Some(e) = online.find_by_chr(&chr_name) {
+                                            reconnect_pending.push(ReconnectPending {
+                                                gate_idx: e.gate_idx,
+                                                socket: e.socket,
+                                                chr_name: e.chr_name.clone(),
+                                                msg: addr.into_bytes(),
+                                            });
+                                        }
+                                    }
+                                }
+                                // **族 X2 批 B**：目标侧副作用收口（vv杀死/复活/VV给予权限/
+                                // ClearCopyItem/清除仓库密码），命令体纯 + pending_* 同事件落地。
+                                apply_pending_gm_target_ops(
+                                    &mut ground_sessions,
+                                    &mut pwd_sessions,
+                                    &mut saves,
+                                    &mut world,
+                                    &enter_cfg.catalog,
+                                    magic_cfg_of(&enter_cfg),
+                                    &displays,
+                                    &online,
+                                    &gates,
+                                    &colors,
+                                    enter_cfg.shop.send_ref_msg_range,
+                                    &chr_name,
+                                );
+                                // **族 M（卡 `openmir2-gm-family-m-spawn-make`）**：刷怪/造物落地
+                                // （同事件内；`@怪`/`@ReCallMobEx`/`@MobPlace` 的 `RegenMonsterByName`
+                                // 与世界同一条 RNG 流、`@GiveMine` 的 `Random(18)+3`、`@s` 的
+                                // `Random(MakeRandomAddValue)` 与 `GetItemNumberEx`）。
+                                if gm_drain_gate(tail.as_deref()) {
+                                    apply_pending_gm_m_commands(
+                                        &mut ground_sessions,
+                                        &chr_name,
+                                        &mut world,
+                                        &mut displays,
+                                        mon_gen_host.as_mut(),
+                                        registry.as_ref(),
+                                        &enter_cfg.mon_gen.table,
+                                        &enter_cfg.catalog,
+                                        &enter_cfg.pet_cfg,
+                                        &online,
+                                        &gates,
+                                        &colors,
+                                        enter_cfg.test_server,
+                                        enter_cfg.make_random_add_value,
+                                        &mut item_number,
+                                        &mut item_number_ex,
+                                    );
+                                    // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
+                                    // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
+                                    apply_pending_gm_castle_commands(
+                                        &mut ground_sessions,
+                                        &chr_name,
+                                        &mut world,
+                                        &mut displays,
+                                        &mut saves,
+                                        &castle_war_states,
+                                        &online,
+                                        &gates,
+                                        &mut pending_gm_castle_broadcasts,
+                                    );
+                                    // **族 W**：行会 4 条的宿主落地（GuildMgr 写 + 行会文件/列表落盘 +
+                                    // SS_205/206/207 单服登记 + 750/42/100 帧序）。
+                                    apply_pending_gm_guild_commands(
+                                        &mut ground_sessions,
+                                        &chr_name,
+                                        &world,
+                                        &mut guilds,
+                                        &guild_cfg,
+                                        guild_store.as_ref(),
+                                        &enter_cfg.guild_sections,
+                                        i32::from(enter_cfg.server_index),
+                                        &displays,
+                                        &online,
+                                        &gates,
+                                        &colors,
+                                        world.clock_ms as i32,
+                                        enter_cfg.shop.send_ref_msg_range,
+                                    );
+                                }
+                                // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
+                                // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
+                                if !gm_deferred.is_empty() || !gm_frames.is_empty() {
+                                    if let Some(e) = online.find_by_chr(&chr_name) {
+                                        for (f, b, text) in &gm_deferred {
+                                            send_gm_sysmsg(&gates, e, *f, *b, text);
+                                        }
+                                        for body in gm_frames {
+                                            if let Some(tx) = route_to_gate(
+                                                &gates,
+                                                e.gate_idx,
+                                                e.socket,
+                                                "GM 命令帧",
+                                            ) {
+                                                let _ = tx.send(SimToGate::SendFrame {
+                                                    socket: e.socket,
+                                                    body,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if cmd.ident == game_svr::ground::CM_PICKUP
+                                || cmd.ident == game_svr::ground::CM_DROPITEM
                             {
-                                Some(ScriptWorldCtx {
-                                    host,
-                                    registry: reg,
-                                    table: &enter_cfg.mon_gen.table,
-                                    displays: &mut displays,
-                                })
-                            } else {
-                                None
-                            };
-                            handle_click_npc_cmd(
-                                cmd.recog,
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &mut world,
-                                &merchant_book,
-                                &mut shop_sessions,
-                                &mut sell_off_sessions,
-                                &npc_vars_base,
-                                &enter_cfg.catalog,
-                                &mut item_number,
-                                &gates,
-                                Some(&script_gm),
-                                script_world.as_mut(),
-                            );
-                        } else if dispatch_inbound_p0(
-                            &cmd,
-                            tail.as_deref(),
-                            &chr_name,
-                            socket,
-                            &online,
-                            &mut ground_sessions,
-                            &mut world,
-                            &displays,
-                            &gates,
-                            &enter_cfg.catalog,
-                            Some(&mut GuildDisconnect {
-                                guilds: &mut guilds,
-                                store: guild_store.as_ref(),
-                                sections: &enter_cfg.guild_sections,
-                                msg_cfg: &enter_cfg.guild_msg_cfg,
-                                server_index: i32::from(enter_cfg.server_index),
-                                gates: &gates,
-                            }),
-                            &merchant_book,
-                            &mut shop_sessions,
-                            &mut sell_off_sessions,
-                            &npc_vars_base,
-                            &mut item_number,
-                            &mut saves,
-                        ) {
-                            // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
-                            // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
-                            // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
-                        } else if fixed_npc_dialog {
-                            // 固定 NPC（`Envir/Npcs.txt`）的对话框：oracle `FindNpc` 臂 ⇒
-                            // `GuildOfficial.UserSelect`（`LableIsCanJmp` → `GotoLable` 统一入口 →
-                            // `@@buildguildnow`/`@@guildwar`/... 分支）。`GotoLable` 的脚本来自
-                            // `Npc_def/<ChrName>-<MapName>.txt`（T-137，宿主 `place_fixed_npcs_with_scripts`）。
-                            let now_tick = world.clock_ms as i32;
-                            let mut script_rng = std::mem::replace(
-                                &mut world.rng,
-                                mir2_shared::rng::RandomNumber::with_seed(0),
-                            );
-                            let map_text = online
-                                .iter()
-                                .find(|e| e.chr_name == chr_name)
-                                .and_then(|e| world.entities.get(e.actor_id))
-                                .map_or_else(String::new, |e| e.map_id.to_string());
-                            let sell_off = sell_off_sessions.entry(chr_name.clone()).or_default();
-                            // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图的配置半边（与 `@Login` 同源）。
-                            let gm_cfg = gmcmd::GmConfig {
-                                lock_human_login: enter_cfg.lock_human_login,
-                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                ..gmcmd::GmConfig::default()
-                            };
-                            let mut fixed_script = FixedNpcScriptCtx {
-                                book: &merchant_book,
-                                npc_vars: &npc_vars_base,
-                                catalog: &enter_cfg.catalog,
-                                item_number: &mut item_number,
-                                rng: &mut script_rng,
-                                sell_off,
-                                chr_name: &chr_name,
-                                map_text: &map_text,
-                                now_tick,
-                                // **卡 `openmir2-gm-script-exec-seams`**：固定 NPC（`Npc_Def/`，
-                                // 如 `比奇国王-0122` 的「改属性」）也走同一套商人 `GotoLable` ⇒
-                                // 装 GM 跳线；`guilds`/`world` 由 `handle_select` 在调用点重借。
-                                gm: Some(ScriptGmParts {
+                                handle_ground_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
+                                    // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
+                                    &trade_sessions,
+                                    &world,
+                                    &mut ground_sessions,
+                                    &online,
+                                    &gates,
+                                    &enter_cfg.ground,
+                                    &colors,
+                                    &enter_cfg.catalog,
+                                    registry.as_ref(),
+                                    &enter_cfg.string_conf,
+                                );
+                            } else if matches!(
+                                cmd.ident,
+                                mir2_protocol::messages::CM_DEALTRY
+                                    | mir2_protocol::messages::CM_DEALADDITEM
+                                    | mir2_protocol::messages::CM_DEALDELITEM
+                                    | mir2_protocol::messages::CM_DEALCANCEL
+                                    | mir2_protocol::messages::CM_DEALCHGGOLD
+                                    | mir2_protocol::messages::CM_DEALEND
+                            ) {
+                                // `openmir2-m3-party-trade-state`：`CM_DEAL*` 派发
+                                // （oracle `PlayObject.Message.cs:946-960`）。
+                                handle_deal_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &world,
+                                    &displays,
+                                    &mut ground_sessions,
+                                    &mut trade_sessions,
+                                    &gates,
+                                    &enter_cfg.trade,
+                                    &enter_cfg.catalog,
+                                );
+                            } else if matches!(
+                                cmd.ident,
+                                mir2_protocol::messages::CM_SELLOFFADDITEM
+                                    | mir2_protocol::messages::CM_SELLOFFDELITEM
+                                    | mir2_protocol::messages::CM_SELLOFFCANCEL
+                                    | mir2_protocol::messages::CM_SELLOFFEND
+                                    | mir2_protocol::messages::CM_CANCELSELLOFFITEMING
+                                    | mir2_protocol::messages::CM_SELLOFFBUYCANCEL
+                                    | mir2_protocol::messages::CM_SELLOFFBUY
+                            ) {
+                                // `openmir2-m3-selloff-consignment-world`：7 条元宝寄售 `CM_*` 派发
+                                // （oracle `PlayObject.Message.cs:2057-2077`）。
+                                handle_selloff_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &world,
+                                    &mut ground_sessions,
+                                    &mut sell_off_sessions,
+                                    &mut sell_off_book,
+                                    &gates,
+                                    &enter_cfg.sell_off,
+                                    &enter_cfg.catalog,
+                                );
+                            } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
+                                || cmd.ident == game_svr::bag::CM_TAKEOFFITEM
+                            {
+                                // **Lane B**：`RecalcAbilitys()` 尾段的 210/212——戴/脱 115/116 戒指
+                                // 在同会话内立即生效（`Operate.cs:458/538`）。
+                                let flame_ring_in = online
+                                    .iter()
+                                    .find(|e| e.chr_name == chr_name)
+                                    .and_then(|e| world.entities.get(e.actor_id))
+                                    .is_some_and(|e| e.flame_ring);
+                                let magic = saves.get_mut(&chr_name).map(|saved| MagicRecalc {
+                                    saved,
+                                    cfg: magic_cfg_of(&enter_cfg),
+                                    flame_ring_in,
+                                });
+                                handle_bag_cmd_with_magic(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    &enter_cfg.catalog,
+                                    &mut world,
+                                    &mut displays,
+                                    enter_cfg.ref_msg_range,
+                                    // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
+                                    trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
+                                    // 52 的尾布局与入图/升级同源（`ability_tail`）。
+                                    mir2_client_ability_layout(),
+                                    magic,
+                                );
+                            } else if cmd.ident == game_svr::useitem::CM_EAT {
+                                // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
+                                // **卡 `openmir2-gm-script-exec-seams`**：`@StdModeFunc*` 脚本的
+                                // `GMEXECUTE` 跳线视图（与 `@Login`/商人/组队同源）。
+                                let gm_cfg = gmcmd::GmConfig {
+                                    lock_human_login: enter_cfg.lock_human_login,
+                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                    ..gmcmd::GmConfig::default()
+                                };
+                                let script_gm = ScriptGmEnv {
+                                    guilds: &guilds,
                                     maps: registry.as_ref(),
                                     cfg: &gm_cfg,
                                     pwd_sessions: &pwd_sessions,
-                                    // **卡 `openmir2-gmexe-bridge-channels`**：固定 NPC 路与商人/
-                                    // 点击/组队同一份宿主通道快照（`guilds`/`world` 仍由
-                                    // `handle_select` 的形参在调用点重借）。
+                                    // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                                    // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                                    // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
                                     host: ScriptGmHost::for_event(
                                         &gm_filter_word,
                                         &gm_mission,
@@ -35903,669 +35751,851 @@ impl HostLoop {
                                         &world,
                                         &chr_name,
                                     ),
-                                }),
-                                // `SENDMSG 0-3` 的全服扇出正文（`handle_select` 排水后取走并扇出）。
-                                broadcasts: Vec::new(),
-                            };
-                            guild_official::handle_select(
-                                cmd.recog,
+                                };
+                                handle_eat_cmd(
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    &enter_cfg.catalog,
+                                    &mut world,
+                                    &colors,
+                                    enter_cfg.repair_item_dec_dura,
+                                    &enter_cfg.string_conf,
+                                    registry.as_ref(),
+                                    &unbind_list,
+                                    &mut item_number,
+                                    npc_host.as_ref(),
+                                    &npc_vars_base,
+                                    Some(&script_gm),
+                                    &win_lottery,
+                                    enter_cfg.win_lottery,
+                                    enter_cfg.shop.human_max_gold,
+                                    enter_cfg.weapon_make_luck,
+                                    &castle_war_states,
+                                );
+                            } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
+                                // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
+                                handle_query_bag_cmd(
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    &enter_cfg.catalog,
+                                    &world,
+                                );
+                            } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
+                                // **卡 `openmir2-gm-script-exec-seams`**：点击 NPC 的 `@main` 与商人对框
+                                // 是同一路商人脚本（`PlayObject.Base.cs:676` → `FindNpc` → `GotoLable`）。
+                                // 必须在这里接管而不是走 `dispatch_inbound_p0`：那一路要传
+                                // `&mut guilds`（`GuildDisconnect`），与 GM 跳线要借的 `&guilds` 冲突。
+                                let gm_cfg = gmcmd::GmConfig {
+                                    lock_human_login: enter_cfg.lock_human_login,
+                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                    ..gmcmd::GmConfig::default()
+                                };
+                                let script_gm = ScriptGmEnv {
+                                    guilds: &guilds,
+                                    maps: registry.as_ref(),
+                                    cfg: &gm_cfg,
+                                    pwd_sessions: &pwd_sessions,
+                                    // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                                    // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                                    // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                                    host: ScriptGmHost::for_event(
+                                        &gm_filter_word,
+                                        &gm_mission,
+                                        &gm_spirit_mutiny_tick,
+                                        &saves,
+                                        &ground_sessions,
+                                        &world,
+                                        &chr_name,
+                                    ),
+                                };
+                                // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
+                                // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
+                                // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
+                                let mut script_world = if let (Some(host), Some(reg)) =
+                                    (mon_gen_host.as_mut(), registry.as_ref())
+                                {
+                                    Some(ScriptWorldCtx {
+                                        host,
+                                        registry: reg,
+                                        table: &enter_cfg.mon_gen.table,
+                                        displays: &mut displays,
+                                    })
+                                } else {
+                                    None
+                                };
+                                handle_click_npc_cmd(
+                                    cmd.recog,
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &mut world,
+                                    &merchant_book,
+                                    &mut shop_sessions,
+                                    &mut sell_off_sessions,
+                                    &npc_vars_base,
+                                    &enter_cfg.catalog,
+                                    &mut item_number,
+                                    &gates,
+                                    Some(&script_gm),
+                                    script_world.as_mut(),
+                                );
+                            } else if dispatch_inbound_p0(
+                                &cmd,
                                 tail.as_deref(),
                                 &chr_name,
                                 socket,
                                 &online,
                                 &mut ground_sessions,
-                                &mut shop_sessions,
-                                &displays,
                                 &mut world,
-                                &mut guilds,
-                                guild_store.as_ref(),
-                                &enter_cfg.guild_sections,
-                                &guild_cfg,
-                                &enter_cfg.guild_msg_cfg,
-                                &enter_cfg.guild_castle_cfg,
-                                i32::from(enter_cfg.server_index),
-                                enter_cfg.ref_msg_range,
-                                (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                &displays,
                                 &gates,
                                 &enter_cfg.catalog,
-                                now_tick,
-                                &mut fixed_script,
-                            );
-                            world.rng = script_rng;
-                        } else if select_route == DlgSelectRoute::NotMerchant {
-                            // oracle `(IMerchant)actor` 硬转抛 ⇒ `PlayObject.Run` 吞掉 ⇒ 零帧、不进脚本。
-                            glog!(
-                            "DBG",
-                            "CM_MERCHANTDLGSELECT：({}) 不是 IMerchant ⇒ oracle 的 (IMerchant)actor 硬转抛 InvalidCastException、被 PlayObject.Run 吞掉 ⇒ 零帧 ChrName={}",
-                            cmd.recog,
-                            chr_name
-                        );
-                        } else if select_route == DlgSelectRoute::Absent {
-                            // id 不在世界 ⇒ `FindMerchant`/`FindNpc` 都 null ⇒ 静默零帧（C3）。
-                            glog!(
-                            "DBG",
-                            "CM_MERCHANTDLGSELECT：({}) 不在世界 ⇒ FindMerchant/FindNpc 都 null ⇒ 零帧 ChrName={}",
-                            cmd.recog,
-                            chr_name
-                        );
-                        } else if matches!(
-                            cmd.ident,
-                            game_svr::shop::CM_MERCHANTDLGSELECT
-                                | game_svr::shop::CM_MERCHANTQUERYSELLPRICE
-                                | game_svr::shop::CM_USERSELLITEM
-                                | game_svr::shop::CM_USERBUYITEM
-                                | game_svr::shop::CM_USERGETDETAILITEM
-                                | game_svr::shop::CM_USERREPAIRITEM
-                                | game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
-                                | game_svr::shop::CM_USERMAKEDRUGITEM
-                        ) {
-                            // M3⑤-实现 4：商店 `CM_*`（对话/售价/卖出/买入/详情/查修理价/修理）。
-                            // 制药片 WB：并入同一派发（`CM_USERMAKEDRUGITEM` 需商人上下文）。
-                            // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
-                            let gm_cfg = gmcmd::GmConfig {
-                                lock_human_login: enter_cfg.lock_human_login,
-                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                ..gmcmd::GmConfig::default()
-                            };
-                            let script_gm = ScriptGmEnv {
-                                guilds: &guilds,
-                                maps: registry.as_ref(),
-                                cfg: &gm_cfg,
-                                pwd_sessions: &pwd_sessions,
-                                // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
-                                // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
-                                // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
-                                host: ScriptGmHost::for_event(
-                                    &gm_filter_word,
-                                    &gm_mission,
-                                    &gm_spirit_mutiny_tick,
-                                    &saves,
-                                    &ground_sessions,
-                                    &world,
-                                    &chr_name,
-                                ),
-                            };
-                            // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
-                            // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
-                            // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
-                            let mut script_world = if let (Some(host), Some(reg)) =
-                                (mon_gen_host.as_mut(), registry.as_ref())
-                            {
-                                Some(ScriptWorldCtx {
-                                    host,
-                                    registry: reg,
-                                    table: &enter_cfg.mon_gen.table,
-                                    displays: &mut displays,
-                                })
-                            } else {
-                                None
-                            };
-                            handle_shop_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
+                                Some(&mut GuildDisconnect {
+                                    guilds: &mut guilds,
+                                    store: guild_store.as_ref(),
+                                    sections: &enter_cfg.guild_sections,
+                                    msg_cfg: &enter_cfg.guild_msg_cfg,
+                                    server_index: i32::from(enter_cfg.server_index),
+                                    gates: &gates,
+                                }),
+                                &merchant_book,
                                 &mut shop_sessions,
                                 &mut sell_off_sessions,
-                                &mut sell_off_book,
-                                &trade_sessions,
-                                &gates,
-                                &mut world,
-                                &enter_cfg.catalog,
-                                &enter_cfg.shop,
-                                &colors,
-                                make_items.as_ref(),
+                                &npc_vars_base,
                                 &mut item_number,
-                                &merchant_book,
-                                &npc_vars_base,
-                                // **卡 `openmir2-gm-script-exec-seams`**：商人对话的 GM 跳线视图
-                                //（`guilds`/`registry`/`GmConfig`/`pwd_sessions`，与 `@Login` 同源）。
-                                Some(&script_gm),
-                                script_world.as_mut(),
-                            );
-                        } else if matches!(
-                            cmd.ident,
-                            game_svr::shop::CM_USERSTORAGEITEM
-                                | game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
-                        ) {
-                            // M3⑤-实现 4 第②片：仓库两条（存/取回）。oracle `PlayObject.Message.cs:963-968`
-                            // → `PlayObject.Operate.cs:1607/1656`。
-                            handle_storage_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.param,
-                                cmd.tag,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &gates,
-                                &mut world,
-                                &enter_cfg.catalog,
-                                &enter_cfg.shop,
-                                &colors,
-                            );
-                        } else if movewire::is_move_command(cmd.ident) {
-                            // `openmir2-m3-move-wiring`：`CM_TURN/WALK/RUN/HORSERUN`（含 Grobal2
-                            // 别名 3009，卡 `openmir2-horserun-3009-not-routed`）派发
-                            // （oracle `PlayObject.Message.cs:1008-1210`）。
-                            handle_move_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.tag,
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut ground_sessions,
-                                &mut world,
-                                &mut displays,
-                                &gates,
-                                registry.as_ref(),
-                            );
-                        } else if matches!(
-                            cmd.ident,
-                            mir2_protocol::messages::CM_GROUPMODE
-                                | mir2_protocol::messages::CM_CREATEGROUP
-                                | mir2_protocol::messages::CM_ADDGROUPMEMBER
-                                | mir2_protocol::messages::CM_DELGROUPMEMBER
-                        ) {
-                            // `openmir2-m3-party-group-state`：4 条组队 `CM_*` 派发
-                            // （oracle `PlayObject.Message.cs:914-935`）。
-                            // **卡 `openmir2-gm-script-exec-seams`**：组队 `GotoLable` 的 GM 跳线视图
-                            //（与 `@Login`/商人路同源）。
-                            let gm_cfg = gmcmd::GmConfig {
-                                lock_human_login: enter_cfg.lock_human_login,
-                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
-                                ..gmcmd::GmConfig::default()
-                            };
-                            let script_gm = ScriptGmEnv {
-                                guilds: &guilds,
-                                maps: registry.as_ref(),
-                                cfg: &gm_cfg,
-                                pwd_sessions: &pwd_sessions,
-                                // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
-                                // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
-                                // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
-                                host: ScriptGmHost::for_event(
-                                    &gm_filter_word,
-                                    &gm_mission,
-                                    &gm_spirit_mutiny_tick,
-                                    &saves,
-                                    &ground_sessions,
-                                    &world,
-                                    &chr_name,
-                                ),
-                            };
-                            handle_party_cmd(
-                                cmd.ident,
-                                cmd.param,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut world,
-                                &gates,
-                                &party_cfg,
                                 &mut saves,
-                                &mut ground_sessions,
-                                npc_host.as_ref(),
-                                &enter_cfg.catalog,
-                                Some(&script_gm),
-                                &npc_vars_base,
-                            );
-                        } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
-                            // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
-                            // （oracle `PlayObject.Message.cs:1221-1230` → `ClientHitXY`）。
-                            // 返回 `true` = 本击进入了攻击路径（抽攻击力）⇒ 落一行服务端权威状态 dump
-                            // （owner 2026-10-12 23:50 第 ③ 条；与 `StartupHook.cs::DumpActors` 同形）。
-                            let attacked = handle_hit_cmd(
-                                cmd.ident,
-                                cmd.recog,
-                                cmd.tag,
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut world,
-                                &mut displays,
-                                &mut ground_sessions,
-                                &gates,
-                                &enter_cfg.catalog,
-                            );
-                            if attacked {
-                                state_log.record(&world, &displays, registry.as_ref());
-                            }
-                        } else if magicwire::is_magic_key_ident(cmd.ident) {
-                            // `openmir2-m3-attack-magic-wiring`（第二片）：`CM_MAGICKEYCHANGE(1008)`
-                            // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
-                            handle_magic_key_cmd(
-                                cmd.recog, cmd.param, &chr_name, socket, &mut saves,
-                            );
-                        } else if magicwire::is_spell_ident(cmd.ident) {
-                            // 同片 + ⑨-2 第②片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
-                            handle_spell_cmd_with_magic(
-                                cmd.recog,
-                                cmd.tag,
-                                cmd.param,
-                                cmd.series,
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut world,
-                                &mut saves,
-                                &mut ground_sessions,
-                                &enter_cfg.catalog,
-                                &enter_cfg.magic_table,
-                                &enter_cfg.pet_cfg,
-                                enter_cfg.magic_attack_rage,
-                                registry.as_ref(),
-                                &enter_cfg.mon_gen.table,
-                                &mut displays,
-                                &gates,
-                                enter_cfg.fire_boom_rage,
-                                enter_cfg.snow_wind_range,
-                                enter_cfg.elec_blizzard_range,
-                                // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
-                                Some(magic_cfg_of(&enter_cfg)),
-                                &colors,
-                                &enter_cfg.string_conf,
-                            );
-                        } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
-                            // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。
-                            // 显式 9 条、**不是** `1035..=1045`（1042/1043 由 inbound 兜底）。
-                            let events = guild_cmd::handle_guild_cmd(
-                                cmd.ident,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &world,
-                                &displays,
-                                &mut guilds,
-                                &guild_cfg,
-                                &mut *ground_sessions,
-                                &gates,
-                                enter_cfg.ref_msg_range,
-                                (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
-                                (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
-                                guild_store.as_ref(),
-                                &enter_cfg.guild_sections,
-                                &enter_cfg.guild_msg_cfg,
-                                i32::from(enter_cfg.server_index),
-                                world.clock_ms as i32,
-                            );
-                            for ev in &events {
-                                glog!("INF", "行会跨服事件：{}", ev.describe());
-                            }
-                        } else if handle_login_notice_ok_cmd(
-                            &cmd,
-                            &chr_name,
-                            &mut ground_sessions,
-                            &online,
-                            &gates,
-                        ) {
-                            // `CM_LOGINNOTICEOK(1018)`：只写 `SessionGround.client_tick`，
-                            // **零出帧**（设计件 §3.2 B1；oracle 的 SysMsg 被 RunNotice drain 吞掉）。
-                        } else if cmd.ident == enter::CM_LEVELRANK {
-                            // **T-275 扩展（卡 `openmir2-levelrank-1060-request`）**：客户端打开排行窗口
-                            // /点职业/翻页时发 `CM_LEVELRANK(1060)` 重新拉取（oracle 无此消息号）。
-                            // 仅当 `[Setup] LevelRankOnLogin != 0` 时给**请求者自己**回一帧
-                            // `SM_LEVELRANK(1108)`（`recog=page`、`param=kind`）；缺省 0 ⇒ 零帧。
-                            handle_level_rank_request_cmd(
-                                &cmd,
-                                &chr_name,
-                                socket,
-                                &online,
-                                &world,
-                                enter_cfg.level_rank_on_login,
-                                &gates,
-                            );
-                        } else if game_svr::inbound::INBOUND_IDENTS.contains(&cmd.ident) {
-                            // R1 入站派发余 10 条（Task C / 片 76）：`game_svr::inbound` 纯函数 + 接线臂。
-                            handle_inbound_cmd(
-                                &cmd,
-                                tail.as_deref(),
-                                &chr_name,
-                                socket,
-                                &online,
-                                &mut world,
-                                &mut ground_sessions,
-                                &gates,
-                                registry.as_ref(),
-                                minimap.as_ref(),
-                                &mut pwd_sessions,
-                                &enter_cfg.ground,
-                                &displays,
-                                // `CM_ADJUST_BONUS` 的重算/出帧面输入（其余入站命令不读）。
-                                &InboundFramesCtx {
-                                    catalog: &enter_cfg.catalog,
-                                    client_layout: mir2_client_ability_layout(),
-                                    red: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
-                                    ref_msg_range: enter_cfg.ref_msg_range,
-                                    msg: &game_svr::useitem::SysMsgTexts::from_conf(
-                                        &enter_cfg.string_conf,
-                                    ),
-                                },
-                            );
-                        }
-                        // **卡 `openmir2-gmexe-bridge-channels`**：脚本 `GMEXECUTE` 的 `pending_*`
-                        // 收口。三处脚本接缝（商人/QFunction/组队）与固定 NPC 路都把脚本期移出的
-                        // 会话 GM 态原样放回 `SessionGround.gm`；脚本桥注入六组通道后命令体与客户端
-                        // 直呼一样只装 `pending_*` ⇒ 在**每个命令事件末尾**对说话者做一次与
-                        // `CM_SAY` 支同序的落地。`apply_pending_*` 全是 `take()` 语义 ⇒ `CM_SAY`
-                        // 已在支内落地的项在此为 no-op（帧序不变）。
-                        //
-                        // **m2 不变式（与本支 CM_SAY 的 `gm_drain_gate` 同序）**：`CM_SAY` 支用
-                        // `gm_drain_gate` 只让 `@` 行排水，是为了不让**陈旧** pending 被一条普通聊天
-                        // 顺带发出。本调用对所有 `GateEvent::Command` 无条件跑，成立的前提是
-                        // **每条脚本接缝必须在同一事件内把移出的 `sg.gm` 原样放回**（商人/QFunction/
-                        // 组队/固定 NPC 均如此）且 `execute()` 入口清空全部 `pending_*` ⇒ 事件末不会
-                        // 出现跨事件的陈旧值。新增任何「取出 `sg.gm` 后提前 return / 不归还」的脚本
-                        // 路径都会破坏该前提，必须同时在这里补门控或归还（review m2）。
-                        command_event_tail_gm_drain(
-                            &mut ground_sessions,
-                            &mut pwd_sessions,
-                            &mut saves,
-                            &mut world,
-                            &mut displays,
-                            &online,
-                            &gates,
-                            mon_gen_host.as_mut(),
-                            registry.as_ref(),
-                            &enter_cfg.mon_gen.table,
-                            &castle_war_states,
-                            &mut guilds,
-                            &guild_cfg,
-                            guild_store.as_ref(),
-                            &colors,
-                            &enter_cfg,
-                            &chr_name,
-                            &mut reconnect_pending,
-                            &mut pending_gm_castle_broadcasts,
-                            &mut item_number,
-                            &mut item_number_ex,
-                        );
-                    }
-                    GateEvent::CertificationPending { index, ip, .. } => {
-                        if world_start.is_aborted() {
-                            glog!(
-                            "ERR",
-                            "世界未就绪（初始化中止）：拒绝认证 index={index} ip={ip}（准入被拒）"
-                        );
-                            continue;
-                        }
-                        glog!(
-                        "DBG",
-                        "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
-                    );
-                    }
-                    GateEvent::Closed {
-                        index,
-                        chr_name,
-                        socket,
-                    } => {
-                        // 卡 `openmir2-session-close-attribution`：拆除归因（本侧视角）。
-                        record_closed_event(index, &chr_name, socket);
-                        // oracle `ChannelMessageHandler.CloseUser`（`:363-...`）：先
-                        // `FrontEngine.DeleteHuman(i, socket)` 摘掉未完成的读档项；已进世界的 PlayObject
-                        // 走 `BoSoftClose` ⇒ `RunNotice`（`PlayObject.cs:1082-1090`）的 `MakeGhost()`
-                        // 离开世界（摘格子 + 移除实体）。
-                        engine.delete_human(socket);
-                        if chr_name.is_empty() {
-                            glog!(
-                                "DBG",
-                                "sim: index={index} 关闭（未认证/无角色，无需清世界）"
-                            );
-                        } else {
-                            kick_pending.retain(|n| n != &chr_name);
-                            // **T-101/M-12**：陈旧 `Closed`（重登后旧 socket）⇒ 整臂早退。
-                            // 位置：`engine.delete_human` 与 `kick_pending.retain` 之后、
-                            // `deal_cancel_between`/`online_take`/存档/移除之前。
-                            if !prepare_closed_guild(
-                                &mut ground_sessions,
-                                &online,
-                                &chr_name,
-                                index,
-                                socket,
                             ) {
-                                // 陈旧 Closed（重登后旧 socket）⇒ 整臂早退（T-101/M-12）。
-                                continue;
-                            }
-                            // **N-6**：flags 必须先复制到局部（直接写 `sg.*` 会与同一实参列表里的
-                            // `&mut ground_sessions` 重叠借用 E0502）。`bo_soft_close` 在此已被
-                            // `prepare_closed_guild` 置真（`CloseUser`），不得写死 `false`。
-                            let (bo_reconnection, bo_soft_close) =
-                                ground_sessions.get(&chr_name).map_or((false, false), |sg| {
-                                    (sg.bo_reconnection, sg.bo_soft_close)
-                                });
-                            // **G3/N-10**：104/SS_208/清槽必须在 `deal_cancel_between`（15409 对应）
-                            // 之前 ⇒ oracle 的 104（`Run()`）先于交易/party 帧。
-                            let guild_ban: std::collections::HashMap<String, bool> =
-                                ground_sessions
+                                // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
+                                // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
+                                // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
+                            } else if fixed_npc_dialog {
+                                // 固定 NPC（`Envir/Npcs.txt`）的对话框：oracle `FindNpc` 臂 ⇒
+                                // `GuildOfficial.UserSelect`（`LableIsCanJmp` → `GotoLable` 统一入口 →
+                                // `@@buildguildnow`/`@@guildwar`/... 分支）。`GotoLable` 的脚本来自
+                                // `Npc_def/<ChrName>-<MapName>.txt`（T-137，宿主 `place_fixed_npcs_with_scripts`）。
+                                let now_tick = world.clock_ms as i32;
+                                let mut script_rng = std::mem::replace(
+                                    &mut world.rng,
+                                    mir2_shared::rng::RandomNumber::with_seed(0),
+                                );
+                                let map_text = online
                                     .iter()
-                                    .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
-                                    .collect();
-                            #[allow(clippy::needless_borrow)]
-                            let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
-                            #[allow(clippy::redundant_field_names)]
-                            let guild_closed = guild_runtime::on_disconnect(
-                                &mut guilds,
-                                guild_store.as_ref(),
-                                &enter_cfg.guild_sections,
-                                &enter_cfg.guild_msg_cfg,
-                                &mut *ground_sessions,
-                                &guild_runtime::DisconnectCtx {
+                                    .find(|e| e.chr_name == chr_name)
+                                    .and_then(|e| world.entities.get(e.actor_id))
+                                    .map_or_else(String::new, |e| e.map_id.to_string());
+                                let sell_off =
+                                    sell_off_sessions.entry(chr_name.clone()).or_default();
+                                // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图的配置半边（与 `@Login` 同源）。
+                                let gm_cfg = gmcmd::GmConfig {
+                                    lock_human_login: enter_cfg.lock_human_login,
+                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                    ..gmcmd::GmConfig::default()
+                                };
+                                let mut fixed_script = FixedNpcScriptCtx {
+                                    book: &merchant_book,
+                                    npc_vars: &npc_vars_base,
+                                    catalog: &enter_cfg.catalog,
+                                    item_number: &mut item_number,
+                                    rng: &mut script_rng,
+                                    sell_off,
                                     chr_name: &chr_name,
-                                    bo_reconnection: bo_reconnection,
-                                    bo_soft_close: bo_soft_close,
-                                    now_tick: world.clock_ms as i32,
-                                    server_index: i32::from(enter_cfg.server_index),
-                                },
-                                &guild_rcpt,
-                            );
-                            send_guild_notices(&guild_closed.notices, &online, &gates);
-                            drop(guild_rcpt);
-                            log_guild_outcome(&guild_closed, &chr_name);
-                            // M3⑦-实现 3：断线中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
-                            // 须在 `online_take`/存档之前，交易栏物品退回本侧背包后再存档。
-                            deal_cancel_between(
-                                &chr_name,
-                                &online,
-                                &world,
-                                &displays,
-                                &mut ground_sessions,
-                                &mut trade_sessions,
-                                &gates,
-                                &enter_cfg.trade,
-                                &enter_cfg.catalog,
-                            );
-                            online_take(&mut online, &chr_name);
-                            // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
-                            //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
-                            // **必须留在清理之前**：`close_cleanup_residue` 会把 `saves`/
-                            // `ground_sessions` 的条目摘掉（顺序锚见
-                            // `g3_anchor_a1_four_disconnect_calls_and_order` 的 ①）。
-                            if let (Some(saved), Some(sg)) =
-                                (saves.get(&chr_name), ground_sessions.get(&chr_name))
-                            {
-                                save_human_rcd(
-                                    &mut db,
-                                    &mut engine,
-                                    saved,
+                                    map_text: &map_text,
+                                    now_tick,
+                                    // **卡 `openmir2-gm-script-exec-seams`**：固定 NPC（`Npc_Def/`，
+                                    // 如 `比奇国王-0122` 的「改属性」）也走同一套商人 `GotoLable` ⇒
+                                    // 装 GM 跳线；`guilds`/`world` 由 `handle_select` 在调用点重借。
+                                    gm: Some(ScriptGmParts {
+                                        maps: registry.as_ref(),
+                                        cfg: &gm_cfg,
+                                        pwd_sessions: &pwd_sessions,
+                                        // **卡 `openmir2-gmexe-bridge-channels`**：固定 NPC 路与商人/
+                                        // 点击/组队同一份宿主通道快照（`guilds`/`world` 仍由
+                                        // `handle_select` 的形参在调用点重借）。
+                                        host: ScriptGmHost::for_event(
+                                            &gm_filter_word,
+                                            &gm_mission,
+                                            &gm_spirit_mutiny_tick,
+                                            &saves,
+                                            &ground_sessions,
+                                            &world,
+                                            &chr_name,
+                                        ),
+                                    }),
+                                    // `SENDMSG 0-3` 的全服扇出正文（`handle_select` 排水后取走并扇出）。
+                                    broadcasts: Vec::new(),
+                                };
+                                guild_official::handle_select(
+                                    cmd.recog,
+                                    tail.as_deref(),
                                     &chr_name,
-                                    &world,
-                                    sg,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &mut shop_sessions,
+                                    &displays,
+                                    &mut world,
+                                    &mut guilds,
+                                    guild_store.as_ref(),
+                                    &enter_cfg.guild_sections,
+                                    &guild_cfg,
+                                    &enter_cfg.guild_msg_cfg,
+                                    &enter_cfg.guild_castle_cfg,
+                                    i32::from(enter_cfg.server_index),
+                                    enter_cfg.ref_msg_range,
+                                    (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                    &gates,
+                                    &enter_cfg.catalog,
+                                    now_tick,
+                                    &mut fixed_script,
+                                );
+                                world.rng = script_rng;
+                            } else if select_route == DlgSelectRoute::NotMerchant {
+                                // oracle `(IMerchant)actor` 硬转抛 ⇒ `PlayObject.Run` 吞掉 ⇒ 零帧、不进脚本。
+                                glog!(
+                                "DBG",
+                                "CM_MERCHANTDLGSELECT：({}) 不是 IMerchant ⇒ oracle 的 (IMerchant)actor 硬转抛 InvalidCastException、被 PlayObject.Run 吞掉 ⇒ 零帧 ChrName={}",
+                                cmd.recog,
+                                chr_name
+                            );
+                            } else if select_route == DlgSelectRoute::Absent {
+                                // id 不在世界 ⇒ `FindMerchant`/`FindNpc` 都 null ⇒ 静默零帧（C3）。
+                                glog!(
+                                "DBG",
+                                "CM_MERCHANTDLGSELECT：({}) 不在世界 ⇒ FindMerchant/FindNpc 都 null ⇒ 零帧 ChrName={}",
+                                cmd.recog,
+                                chr_name
+                            );
+                            } else if matches!(
+                                cmd.ident,
+                                game_svr::shop::CM_MERCHANTDLGSELECT
+                                    | game_svr::shop::CM_MERCHANTQUERYSELLPRICE
+                                    | game_svr::shop::CM_USERSELLITEM
+                                    | game_svr::shop::CM_USERBUYITEM
+                                    | game_svr::shop::CM_USERGETDETAILITEM
+                                    | game_svr::shop::CM_USERREPAIRITEM
+                                    | game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
+                                    | game_svr::shop::CM_USERMAKEDRUGITEM
+                            ) {
+                                // M3⑤-实现 4：商店 `CM_*`（对话/售价/卖出/买入/详情/查修理价/修理）。
+                                // 制药片 WB：并入同一派发（`CM_USERMAKEDRUGITEM` 需商人上下文）。
+                                // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
+                                let gm_cfg = gmcmd::GmConfig {
+                                    lock_human_login: enter_cfg.lock_human_login,
+                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                    ..gmcmd::GmConfig::default()
+                                };
+                                let script_gm = ScriptGmEnv {
+                                    guilds: &guilds,
+                                    maps: registry.as_ref(),
+                                    cfg: &gm_cfg,
+                                    pwd_sessions: &pwd_sessions,
+                                    // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                                    // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                                    // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                                    host: ScriptGmHost::for_event(
+                                        &gm_filter_word,
+                                        &gm_mission,
+                                        &gm_spirit_mutiny_tick,
+                                        &saves,
+                                        &ground_sessions,
+                                        &world,
+                                        &chr_name,
+                                    ),
+                                };
+                                // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
+                                // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
+                                // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
+                                let mut script_world = if let (Some(host), Some(reg)) =
+                                    (mon_gen_host.as_mut(), registry.as_ref())
+                                {
+                                    Some(ScriptWorldCtx {
+                                        host,
+                                        registry: reg,
+                                        table: &enter_cfg.mon_gen.table,
+                                        displays: &mut displays,
+                                    })
+                                } else {
+                                    None
+                                };
+                                handle_shop_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &mut shop_sessions,
+                                    &mut sell_off_sessions,
+                                    &mut sell_off_book,
+                                    &trade_sessions,
+                                    &gates,
+                                    &mut world,
+                                    &enter_cfg.catalog,
+                                    &enter_cfg.shop,
+                                    &colors,
+                                    make_items.as_ref(),
+                                    &mut item_number,
+                                    &merchant_book,
+                                    &npc_vars_base,
+                                    // **卡 `openmir2-gm-script-exec-seams`**：商人对话的 GM 跳线视图
+                                    //（`guilds`/`registry`/`GmConfig`/`pwd_sessions`，与 `@Login` 同源）。
+                                    Some(&script_gm),
+                                    script_world.as_mut(),
+                                );
+                            } else if matches!(
+                                cmd.ident,
+                                game_svr::shop::CM_USERSTORAGEITEM
+                                    | game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
+                            ) {
+                                // M3⑤-实现 4 第②片：仓库两条（存/取回）。oracle `PlayObject.Message.cs:963-968`
+                                // → `PlayObject.Operate.cs:1607/1656`。
+                                handle_storage_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.param,
+                                    cmd.tag,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    &mut world,
+                                    &enter_cfg.catalog,
+                                    &enter_cfg.shop,
+                                    &colors,
+                                );
+                            } else if movewire::is_move_command(cmd.ident) {
+                                // `openmir2-m3-move-wiring`：`CM_TURN/WALK/RUN/HORSERUN`（含 Grobal2
+                                // 别名 3009，卡 `openmir2-horserun-3009-not-routed`）派发
+                                // （oracle `PlayObject.Message.cs:1008-1210`）。
+                                handle_move_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.tag,
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &mut world,
+                                    &mut displays,
+                                    &gates,
                                     registry.as_ref(),
                                 );
-                            }
-                            // 卡 `openmir2-softclose-cleanup-residue`（返工）：断线清理尾段收敛成
-                            // [`close_cleanup_residue`] 一次调用（四个会话容器 + 同屏展示表）。
-                            // **host aid 只能来自该函数内 `ground_sessions.remove()` 的返回值**
-                            // ⇒「先 remove 后取值」在写法上不可能出现；`CM_SOFTCLOSE` 后 world 侧
-                            // `actor_id` 已 None 时由 host 兜底，普通断线与 soft-close 走同一条路。
-                            // 清理相对 `world.disconnect` 的先后**不承重**（`disconnect` 不碰
-                            // `ground_sessions`），真正的顺序约束只有「save 在清理之前」。
-                            close_cleanup_residue(
-                                &world,
+                            } else if matches!(
+                                cmd.ident,
+                                mir2_protocol::messages::CM_GROUPMODE
+                                    | mir2_protocol::messages::CM_CREATEGROUP
+                                    | mir2_protocol::messages::CM_ADDGROUPMEMBER
+                                    | mir2_protocol::messages::CM_DELGROUPMEMBER
+                            ) {
+                                // `openmir2-m3-party-group-state`：4 条组队 `CM_*` 派发
+                                // （oracle `PlayObject.Message.cs:914-935`）。
+                                // **卡 `openmir2-gm-script-exec-seams`**：组队 `GotoLable` 的 GM 跳线视图
+                                //（与 `@Login`/商人路同源）。
+                                let gm_cfg = gmcmd::GmConfig {
+                                    lock_human_login: enter_cfg.lock_human_login,
+                                    spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+                                    ..gmcmd::GmConfig::default()
+                                };
+                                let script_gm = ScriptGmEnv {
+                                    guilds: &guilds,
+                                    maps: registry.as_ref(),
+                                    cfg: &gm_cfg,
+                                    pwd_sessions: &pwd_sessions,
+                                    // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                                    // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                                    // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                                    host: ScriptGmHost::for_event(
+                                        &gm_filter_word,
+                                        &gm_mission,
+                                        &gm_spirit_mutiny_tick,
+                                        &saves,
+                                        &ground_sessions,
+                                        &world,
+                                        &chr_name,
+                                    ),
+                                };
+                                handle_party_cmd(
+                                    cmd.ident,
+                                    cmd.param,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut world,
+                                    &gates,
+                                    &party_cfg,
+                                    &mut saves,
+                                    &mut ground_sessions,
+                                    npc_host.as_ref(),
+                                    &enter_cfg.catalog,
+                                    Some(&script_gm),
+                                    &npc_vars_base,
+                                );
+                            } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
+                                // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
+                                // （oracle `PlayObject.Message.cs:1221-1230` → `ClientHitXY`）。
+                                // 返回 `true` = 本击进入了攻击路径（抽攻击力）⇒ 落一行服务端权威状态 dump
+                                // （owner 2026-10-12 23:50 第 ③ 条；与 `StartupHook.cs::DumpActors` 同形）。
+                                let attacked = handle_hit_cmd(
+                                    cmd.ident,
+                                    cmd.recog,
+                                    cmd.tag,
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut world,
+                                    &mut displays,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    &enter_cfg.catalog,
+                                );
+                                if attacked {
+                                    state_log.record(&world, &displays, registry.as_ref());
+                                }
+                            } else if magicwire::is_magic_key_ident(cmd.ident) {
+                                // `openmir2-m3-attack-magic-wiring`（第二片）：`CM_MAGICKEYCHANGE(1008)`
+                                // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
+                                handle_magic_key_cmd(
+                                    cmd.recog, cmd.param, &chr_name, socket, &mut saves,
+                                );
+                            } else if magicwire::is_spell_ident(cmd.ident) {
+                                // 同片 + ⑨-2 第②片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
+                                handle_spell_cmd_with_magic(
+                                    cmd.recog,
+                                    cmd.tag,
+                                    cmd.param,
+                                    cmd.series,
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut world,
+                                    &mut saves,
+                                    &mut ground_sessions,
+                                    &enter_cfg.catalog,
+                                    &enter_cfg.magic_table,
+                                    &enter_cfg.pet_cfg,
+                                    enter_cfg.magic_attack_rage,
+                                    registry.as_ref(),
+                                    &enter_cfg.mon_gen.table,
+                                    &mut displays,
+                                    &gates,
+                                    enter_cfg.fire_boom_rage,
+                                    enter_cfg.snow_wind_range,
+                                    enter_cfg.elec_blizzard_range,
+                                    // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
+                                    Some(magic_cfg_of(&enter_cfg)),
+                                    &colors,
+                                    &enter_cfg.string_conf,
+                                );
+                            } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
+                                // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。
+                                // 显式 9 条、**不是** `1035..=1045`（1042/1043 由 inbound 兜底）。
+                                let events = guild_cmd::handle_guild_cmd(
+                                    cmd.ident,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &world,
+                                    &displays,
+                                    &mut guilds,
+                                    &guild_cfg,
+                                    &mut *ground_sessions,
+                                    &gates,
+                                    enter_cfg.ref_msg_range,
+                                    (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
+                                    (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                    guild_store.as_ref(),
+                                    &enter_cfg.guild_sections,
+                                    &enter_cfg.guild_msg_cfg,
+                                    i32::from(enter_cfg.server_index),
+                                    world.clock_ms as i32,
+                                );
+                                for ev in &events {
+                                    glog!("INF", "行会跨服事件：{}", ev.describe());
+                                }
+                            } else if handle_login_notice_ok_cmd(
+                                &cmd,
                                 &chr_name,
-                                &mut saves,
                                 &mut ground_sessions,
-                                &mut shop_sessions,
-                                &mut sell_off_sessions,
+                                &online,
+                                &gates,
+                            ) {
+                                // `CM_LOGINNOTICEOK(1018)`：只写 `SessionGround.client_tick`，
+                                // **零出帧**（设计件 §3.2 B1；oracle 的 SysMsg 被 RunNotice drain 吞掉）。
+                            } else if cmd.ident == enter::CM_LEVELRANK {
+                                // **T-275 扩展（卡 `openmir2-levelrank-1060-request`）**：客户端打开排行窗口
+                                // /点职业/翻页时发 `CM_LEVELRANK(1060)` 重新拉取（oracle 无此消息号）。
+                                // 仅当 `[Setup] LevelRankOnLogin != 0` 时给**请求者自己**回一帧
+                                // `SM_LEVELRANK(1108)`（`recog=page`、`param=kind`）；缺省 0 ⇒ 零帧。
+                                handle_level_rank_request_cmd(
+                                    &cmd,
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &world,
+                                    enter_cfg.level_rank_on_login,
+                                    &gates,
+                                );
+                            } else if game_svr::inbound::INBOUND_IDENTS.contains(&cmd.ident) {
+                                // R1 入站派发余 10 条（Task C / 片 76）：`game_svr::inbound` 纯函数 + 接线臂。
+                                handle_inbound_cmd(
+                                    &cmd,
+                                    tail.as_deref(),
+                                    &chr_name,
+                                    socket,
+                                    &online,
+                                    &mut world,
+                                    &mut ground_sessions,
+                                    &gates,
+                                    registry.as_ref(),
+                                    minimap.as_ref(),
+                                    &mut pwd_sessions,
+                                    &enter_cfg.ground,
+                                    &displays,
+                                    // `CM_ADJUST_BONUS` 的重算/出帧面输入（其余入站命令不读）。
+                                    &InboundFramesCtx {
+                                        catalog: &enter_cfg.catalog,
+                                        client_layout: mir2_client_ability_layout(),
+                                        red: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                        ref_msg_range: enter_cfg.ref_msg_range,
+                                        msg: &game_svr::useitem::SysMsgTexts::from_conf(
+                                            &enter_cfg.string_conf,
+                                        ),
+                                    },
+                                );
+                            }
+                            // **卡 `openmir2-gmexe-bridge-channels`**：脚本 `GMEXECUTE` 的 `pending_*`
+                            // 收口。三处脚本接缝（商人/QFunction/组队）与固定 NPC 路都把脚本期移出的
+                            // 会话 GM 态原样放回 `SessionGround.gm`；脚本桥注入六组通道后命令体与客户端
+                            // 直呼一样只装 `pending_*` ⇒ 在**每个命令事件末尾**对说话者做一次与
+                            // `CM_SAY` 支同序的落地。`apply_pending_*` 全是 `take()` 语义 ⇒ `CM_SAY`
+                            // 已在支内落地的项在此为 no-op（帧序不变）。
+                            //
+                            // **m2 不变式（与本支 CM_SAY 的 `gm_drain_gate` 同序）**：`CM_SAY` 支用
+                            // `gm_drain_gate` 只让 `@` 行排水，是为了不让**陈旧** pending 被一条普通聊天
+                            // 顺带发出。本调用对所有 `GateEvent::Command` 无条件跑，成立的前提是
+                            // **每条脚本接缝必须在同一事件内把移出的 `sg.gm` 原样放回**（商人/QFunction/
+                            // 组队/固定 NPC 均如此）且 `execute()` 入口清空全部 `pending_*` ⇒ 事件末不会
+                            // 出现跨事件的陈旧值。新增任何「取出 `sg.gm` 后提前 return / 不归还」的脚本
+                            // 路径都会破坏该前提，必须同时在这里补门控或归还（review m2）。
+                            command_event_tail_gm_drain(
+                                &mut ground_sessions,
+                                &mut pwd_sessions,
+                                &mut saves,
+                                &mut world,
                                 &mut displays,
+                                &online,
+                                &gates,
+                                mon_gen_host.as_mut(),
+                                registry.as_ref(),
+                                &enter_cfg.mon_gen.table,
+                                &castle_war_states,
+                                &mut guilds,
+                                &guild_cfg,
+                                guild_store.as_ref(),
+                                &colors,
+                                &enter_cfg,
+                                &chr_name,
+                                &mut reconnect_pending,
+                                &mut pending_gm_castle_broadcasts,
+                                &mut item_number,
+                                &mut item_number_ex,
                             );
-                            // **P2-3b**：会话离开世界 ⇒ 清 `chr→片`（N=1 空操作）。
-                            shard_router::note_left(shard_directory.as_ref(), &chr_name);
-                            if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
-                                // `openmir2-m3-party-group-state`：oracle `Disappear()`
-                                // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
-                                // `groupOwnerPlay.DelMember(this)`（离线即退组 / 团长离线整组散）。
-                                // 断线者已从 `online` 摘除 ⇒ 它自己的回帧按 oracle `OffLineFlag`
-                                // 丢弃；其余成员正常收帧。
-                                let owner =
-                                    world.entities.get(aid).map(|e| e.group_owner).unwrap_or(0);
-                                if owner != 0 {
-                                    for ev in world.party_del_member(owner, aid, &party_cfg) {
-                                        let (to, body) = partywire::event_body(&ev)
-                                            .expect("断线退组路径不含 GotoLabel（无脚本触发）");
-                                        let Some(t) = online.find_linear_actor(to) else {
-                                            continue;
-                                        };
-                                        let Some(tx) = route_to_gate(
-                                            &gates,
-                                            t.gate_idx,
-                                            t.socket,
-                                            "断线组队清组",
-                                        ) else {
-                                            continue;
-                                        };
-                                        let _ = tx.send(SimToGate::SendFrame {
-                                            socket: t.socket,
-                                            body,
-                                        });
+                        }
+                        GateEvent::CertificationPending { index, ip, .. } => {
+                            if world_start.is_aborted() {
+                                glog!(
+                                "ERR",
+                                "世界未就绪（初始化中止）：拒绝认证 index={index} ip={ip}（准入被拒）"
+                            );
+                                continue;
+                            }
+                            glog!(
+                            "DBG",
+                            "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
+                        );
+                        }
+                        GateEvent::Closed {
+                            index,
+                            chr_name,
+                            socket,
+                        } => {
+                            // 卡 `openmir2-session-close-attribution`：拆除归因（本侧视角）。
+                            record_closed_event(index, &chr_name, socket);
+                            // oracle `ChannelMessageHandler.CloseUser`（`:363-...`）：先
+                            // `FrontEngine.DeleteHuman(i, socket)` 摘掉未完成的读档项；已进世界的 PlayObject
+                            // 走 `BoSoftClose` ⇒ `RunNotice`（`PlayObject.cs:1082-1090`）的 `MakeGhost()`
+                            // 离开世界（摘格子 + 移除实体）。
+                            engine.delete_human(socket);
+                            if chr_name.is_empty() {
+                                glog!(
+                                    "DBG",
+                                    "sim: index={index} 关闭（未认证/无角色，无需清世界）"
+                                );
+                            } else {
+                                kick_pending.retain(|n| n != &chr_name);
+                                // **T-101/M-12**：陈旧 `Closed`（重登后旧 socket）⇒ 整臂早退。
+                                // 位置：`engine.delete_human` 与 `kick_pending.retain` 之后、
+                                // `deal_cancel_between`/`online_take`/存档/移除之前。
+                                if !prepare_closed_guild(
+                                    &mut ground_sessions,
+                                    &online,
+                                    &chr_name,
+                                    index,
+                                    socket,
+                                ) {
+                                    // 陈旧 Closed（重登后旧 socket）⇒ 整臂早退（T-101/M-12）。
+                                    continue;
+                                }
+                                // **N-6**：flags 必须先复制到局部（直接写 `sg.*` 会与同一实参列表里的
+                                // `&mut ground_sessions` 重叠借用 E0502）。`bo_soft_close` 在此已被
+                                // `prepare_closed_guild` 置真（`CloseUser`），不得写死 `false`。
+                                let (bo_reconnection, bo_soft_close) =
+                                    ground_sessions.get(&chr_name).map_or((false, false), |sg| {
+                                        (sg.bo_reconnection, sg.bo_soft_close)
+                                    });
+                                // **G3/N-10**：104/SS_208/清槽必须在 `deal_cancel_between`（15409 对应）
+                                // 之前 ⇒ oracle 的 104（`Run()`）先于交易/party 帧。
+                                let guild_ban: std::collections::HashMap<String, bool> =
+                                    ground_sessions
+                                        .iter()
+                                        .map(|(k, sg)| (k.clone(), sg.guild.ban_guild_chat))
+                                        .collect();
+                                #[allow(clippy::needless_borrow)]
+                                let guild_rcpt = guild_recipients(&online, &world, &guild_ban);
+                                #[allow(clippy::redundant_field_names)]
+                                let guild_closed = guild_runtime::on_disconnect(
+                                    &mut guilds,
+                                    guild_store.as_ref(),
+                                    &enter_cfg.guild_sections,
+                                    &enter_cfg.guild_msg_cfg,
+                                    &mut *ground_sessions,
+                                    &guild_runtime::DisconnectCtx {
+                                        chr_name: &chr_name,
+                                        bo_reconnection: bo_reconnection,
+                                        bo_soft_close: bo_soft_close,
+                                        now_tick: world.clock_ms as i32,
+                                        server_index: i32::from(enter_cfg.server_index),
+                                    },
+                                    &guild_rcpt,
+                                );
+                                send_guild_notices(&guild_closed.notices, &online, &gates);
+                                drop(guild_rcpt);
+                                log_guild_outcome(&guild_closed, &chr_name);
+                                // M3⑦-实现 3：断线中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
+                                // 须在 `online_take`/存档之前，交易栏物品退回本侧背包后再存档。
+                                deal_cancel_between(
+                                    &chr_name,
+                                    &online,
+                                    &world,
+                                    &displays,
+                                    &mut ground_sessions,
+                                    &mut trade_sessions,
+                                    &gates,
+                                    &enter_cfg.trade,
+                                    &enter_cfg.catalog,
+                                );
+                                online_take(&mut online, &chr_name);
+                                // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
+                                //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
+                                // **必须留在清理之前**：`close_cleanup_residue` 会把 `saves`/
+                                // `ground_sessions` 的条目摘掉（顺序锚见
+                                // `g3_anchor_a1_four_disconnect_calls_and_order` 的 ①）。
+                                if let (Some(saved), Some(sg)) =
+                                    (saves.get(&chr_name), ground_sessions.get(&chr_name))
+                                {
+                                    save_human_rcd(
+                                        &mut db,
+                                        &mut engine,
+                                        saved,
+                                        &chr_name,
+                                        &world,
+                                        sg,
+                                        registry.as_ref(),
+                                    );
+                                }
+                                // 卡 `openmir2-softclose-cleanup-residue`（返工）：断线清理尾段收敛成
+                                // [`close_cleanup_residue`] 一次调用（四个会话容器 + 同屏展示表）。
+                                // **host aid 只能来自该函数内 `ground_sessions.remove()` 的返回值**
+                                // ⇒「先 remove 后取值」在写法上不可能出现；`CM_SOFTCLOSE` 后 world 侧
+                                // `actor_id` 已 None 时由 host 兜底，普通断线与 soft-close 走同一条路。
+                                // 清理相对 `world.disconnect` 的先后**不承重**（`disconnect` 不碰
+                                // `ground_sessions`），真正的顺序约束只有「save 在清理之前」。
+                                close_cleanup_residue(
+                                    &world,
+                                    &chr_name,
+                                    &mut saves,
+                                    &mut ground_sessions,
+                                    &mut shop_sessions,
+                                    &mut sell_off_sessions,
+                                    &mut displays,
+                                );
+                                // **P2-3b**：会话离开世界 ⇒ 清 `chr→片`（N=1 空操作）。
+                                shard_router::note_left(shard_directory.as_ref(), &chr_name);
+                                if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id)
+                                {
+                                    // `openmir2-m3-party-group-state`：oracle `Disappear()`
+                                    // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
+                                    // `groupOwnerPlay.DelMember(this)`（离线即退组 / 团长离线整组散）。
+                                    // 断线者已从 `online` 摘除 ⇒ 它自己的回帧按 oracle `OffLineFlag`
+                                    // 丢弃；其余成员正常收帧。
+                                    let owner =
+                                        world.entities.get(aid).map(|e| e.group_owner).unwrap_or(0);
+                                    if owner != 0 {
+                                        for ev in world.party_del_member(owner, aid, &party_cfg) {
+                                            let (to, body) = partywire::event_body(&ev)
+                                                .expect("断线退组路径不含 GotoLabel（无脚本触发）");
+                                            let Some(t) = online.find_linear_actor(to) else {
+                                                continue;
+                                            };
+                                            let Some(tx) = route_to_gate(
+                                                &gates,
+                                                t.gate_idx,
+                                                t.socket,
+                                                "断线组队清组",
+                                            ) else {
+                                                continue;
+                                            };
+                                            let _ = tx.send(SimToGate::SendFrame {
+                                                socket: t.socket,
+                                                body,
+                                            });
+                                        }
                                     }
                                 }
+                                match world.disconnect(&chr_name) {
+                                Ok(()) => glog!(
+                                    "INF",
+                                    "断线清世界 ChrName:{chr_name} socket={socket} index={index}（FrontEngine.DeleteHuman + WorldEngine 摘除）"
+                                ),
+                                Err(mir2_world_bevy::SessionError::NotInWorld) => glog!(
+                                    "DBG",
+                                    "sim: index={index} ChrName={chr_name} 关闭但未在世界（无需摘除）"
+                                ),
+                                Err(e) => {
+                                    glog!("WRN", "断线清世界失败 ChrName:{chr_name}：{e:?}");
+                                }
                             }
-                            match world.disconnect(&chr_name) {
-                            Ok(()) => glog!(
-                                "INF",
-                                "断线清世界 ChrName:{chr_name} socket={socket} index={index}（FrontEngine.DeleteHuman + WorldEngine 摘除）"
-                            ),
-                            Err(mir2_world_bevy::SessionError::NotInWorld) => glog!(
-                                "DBG",
-                                "sim: index={index} ChrName={chr_name} 关闭但未在世界（无需摘除）"
-                            ),
-                            Err(e) => {
-                                glog!("WRN", "断线清世界失败 ChrName:{chr_name}：{e:?}");
                             }
                         }
-                        }
-                    }
-                    GateEvent::LoadDbRequest(info) => {
-                        if world_start.is_aborted() {
-                            // 入世界必须 Ready（卡口径：登录/取档/进图都过这道门）。sim 序言结束前
-                            // 不处理事件 ⇒ 本处只可能看到 Ready/Aborted，Booting 不可达。
+                        GateEvent::LoadDbRequest(info) => {
+                            if world_start.is_aborted() {
+                                // 入世界必须 Ready（卡口径：登录/取档/进图都过这道门）。sim 序言结束前
+                                // 不处理事件 ⇒ 本处只可能看到 Ready/Aborted，Booting 不可达。
+                                glog!(
+                                "ERR",
+                                "世界未就绪（初始化中止）：拒绝取档进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{}（准入被拒）",
+                                info.account,
+                                info.chr_name,
+                                info.session_id,
+                                info.gate_idx
+                            );
+                                continue;
+                            }
+                            // **logon 处理入口**（卡 `openmir2-entry-gap-buckets`）：与「发出取档请求 + 各提前返回桶」
+                            // 构成恒等式 `enter == request_sent + Σ(no_request_*)`（无重排队时）。
+                            if let Some(line) = telemetry::record_logon_handler_enter() {
+                                glog!("INF", "{}", line);
+                            }
                             glog!(
-                            "ERR",
-                            "世界未就绪（初始化中止）：拒绝取档进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{}（准入被拒）",
+                            "INF",
+                            "sim: 认证通过 ⇒ 取角色进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{} \
+                             （读档控制流在 load.rs；DB 请求属 S2b-2b）",
                             info.account,
                             info.chr_name,
                             info.session_id,
                             info.gate_idx
                         );
-                            continue;
+                            engine.add_to_load_rcd_list(info);
+                            // **入口三段计数 ①**（卡 `openmir2-game-svr-entry-triple`）：只计数、不改分支。
+                            if let Some(line) = telemetry::record_logon(world.clock_ms) {
+                                glog!("INF", "{}", line);
+                            }
                         }
-                        // **logon 处理入口**（卡 `openmir2-entry-gap-buckets`）：与「发出取档请求 + 各提前返回桶」
-                        // 构成恒等式 `enter == request_sent + Σ(no_request_*)`（无重排队时）。
-                        if let Some(line) = telemetry::record_logon_handler_enter() {
-                            glog!("INF", "{}", line);
+                        GateEvent::RegisterGate { service_id, tx } => {
+                            // 卡 `openmir2-world-keeps-dead-session`：线号被**新连接**复用时，旧线留下的
+                            // 墓碑一律作废（新连接的 socket 号空间是全新的）。
+                            let _ = forget_tombstoned_gate_line(service_id);
+                            gates.insert(service_id, tx);
+                            glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
                         }
-                        glog!(
-                        "INF",
-                        "sim: 认证通过 ⇒ 取角色进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{} \
-                         （读档控制流在 load.rs；DB 请求属 S2b-2b）",
-                        info.account,
-                        info.chr_name,
-                        info.session_id,
-                        info.gate_idx
-                    );
-                        engine.add_to_load_rcd_list(info);
-                        // **入口三段计数 ①**（卡 `openmir2-game-svr-entry-triple`）：只计数、不改分支。
-                        if let Some(line) = telemetry::record_logon(world.clock_ms) {
-                            glog!("INF", "{}", line);
+                        GateEvent::UnregisterGate { service_id } => {
+                            // 卡 `openmir2-world-keeps-dead-session`：整条线注销 ⇒ 该线所有墓碑一起清。
+                            // 卡 `openmir2-session-close-attribution`：清扫同时记 `tombstone` 拆除。
+                            let forgotten = record_gate_line_sweep(service_id);
+                            if gates.remove(&service_id).is_some() {
+                                glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
+                            }
+                            if forgotten > 0 {
+                                glog!(
+                                    "DBG",
+                                    "sim: 网关线号 {service_id} 注销：清除 {forgotten} 个死槽墓碑"
+                                );
+                            }
                         }
-                    }
-                    GateEvent::RegisterGate { service_id, tx } => {
-                        // 卡 `openmir2-world-keeps-dead-session`：线号被**新连接**复用时，旧线留下的
-                        // 墓碑一律作废（新连接的 socket 号空间是全新的）。
-                        let _ = forget_tombstoned_gate_line(service_id);
-                        gates.insert(service_id, tx);
-                        glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
-                    }
-                    GateEvent::UnregisterGate { service_id } => {
-                        // 卡 `openmir2-world-keeps-dead-session`：整条线注销 ⇒ 该线所有墓碑一起清。
-                        // 卡 `openmir2-session-close-attribution`：清扫同时记 `tombstone` 拆除。
-                        let forgotten = record_gate_line_sweep(service_id);
-                        if gates.remove(&service_id).is_some() {
-                            glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
-                        }
-                        if forgotten > 0 {
-                            glog!(
-                                "DBG",
-                                "sim: 网关线号 {service_id} 注销：清除 {forgotten} 个死槽墓碑"
+                        GateEvent::KickAccount {
+                            account,
+                            session_id,
+                        } => {
+                            handle_kick_account(
+                                &mut engine,
+                                &gates,
+                                &online,
+                                &mut soft_close_pending,
+                                *colors,
+                                &account,
+                                session_id,
                             );
                         }
-                    }
-                    GateEvent::KickAccount {
-                        account,
-                        session_id,
-                    } => {
-                        handle_kick_account(
-                            &mut engine,
-                            &gates,
-                            &online,
-                            &mut soft_close_pending,
-                            *colors,
-                            &account,
-                            session_id,
-                        );
-                    }
-                    // 卡 `openmir2-mcp-gm-execute`（T-273）：本机 admin 通道的命令在**同一事件
-                    // 收口**里执行；`execute_admin_gm_command` 已含 execute + `pending_*` 落地。
-                    GateEvent::AdminGm { chr, cmd, reply } => {
-                        let out = execute_admin_gm_command(
-                            &mut ground_sessions,
-                            &mut pwd_sessions,
-                            &mut saves,
-                            &mut world,
-                            &mut displays,
-                            &online,
-                            &gates,
-                            &gm_filter_word,
-                            &gm_mission,
-                            &gm_spirit_mutiny_tick,
-                            mon_gen_host.as_mut(),
-                            registry.as_ref(),
-                            &enter_cfg.mon_gen.table,
-                            &castle_war_states,
-                            &mut guilds,
-                            &guild_cfg,
-                            guild_store.as_ref(),
-                            &colors,
-                            &enter_cfg,
-                            &chr,
-                            &cmd,
-                            &mut reconnect_pending,
-                            &mut pending_gm_castle_broadcasts,
-                            &mut item_number,
-                            &mut item_number_ex,
-                        );
-                        let _ = reply.send(out);
+                        // 卡 `openmir2-mcp-gm-execute`（T-273）：本机 admin 通道的命令在**同一事件
+                        // 收口**里执行；`execute_admin_gm_command` 已含 execute + `pending_*` 落地。
+                        GateEvent::AdminGm { chr, cmd, reply } => {
+                            let out = execute_admin_gm_command(
+                                &mut ground_sessions,
+                                &mut pwd_sessions,
+                                &mut saves,
+                                &mut world,
+                                &mut displays,
+                                &online,
+                                &gates,
+                                &gm_filter_word,
+                                &gm_mission,
+                                &gm_spirit_mutiny_tick,
+                                mon_gen_host.as_mut(),
+                                registry.as_ref(),
+                                &enter_cfg.mon_gen.table,
+                                &castle_war_states,
+                                &mut guilds,
+                                &guild_cfg,
+                                guild_store.as_ref(),
+                                &colors,
+                                &enter_cfg,
+                                &chr,
+                                &cmd,
+                                &mut reconnect_pending,
+                                &mut pending_gm_castle_broadcasts,
+                                &mut item_number,
+                                &mut item_number_ex,
+                            );
+                            let _ = reply.send(out);
+                        }
                     }
                 }
             }
@@ -46156,7 +46186,7 @@ mod tests {
         assert_eq!(
             RAN_SEGMENTS.with(std::cell::Cell::get),
             PhaseSet::ALL.0,
-            "A + rest 必须覆盖全部 17 段（rest 漏调任一段 ⇒ 红）"
+            "A + rest 必须覆盖全部 18 位（17 段；INBOUND 拆两位）（rest 漏调任一段 ⇒ 红）"
         );
     }
 
@@ -58273,18 +58303,33 @@ break
             })
             .map(|(i, _)| i)
             .expect("`sim_loop` 的 world tick 入口行");
-        let want = "apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);";
+        // **M1b**：rustfmt 会把长参数表折成多行（拆段后嵌套更深）⇒ 用**被调函数名**定位调用点
+        // （生产体内恰一处、非注释行），参数表在调用起点后的窗口里按「去空白」核。
+        let callee = "apply_pending_gm_entity(";
         let hits: Vec<usize> = lines
             .iter()
             .enumerate()
-            .filter(|(i, l)| *i > sim_loop && *i < tests_start && l.trim() == want)
+            .filter(|(i, l)| {
+                *i > sim_loop
+                    && *i < tests_start
+                    && l.contains(callee)
+                    && !l.trim_start().starts_with("//")
+            })
             .map(|(i, _)| i)
             .collect();
         assert_eq!(
             hits.len(),
             1,
-            "`{want}` 必须在 `sim_loop` 生产体内恰好出现一次且未被注释；命中 {hits:?}             （0 = 被删/被注释/被抽走；>1 = 重复调用点）"
+            "`{callee}` 必须在 `sim_loop` 生产体内恰好出现一次且未被注释；命中 {hits:?}             （0 = 被删/被注释/被抽走；>1 = 重复调用点）"
         );
+        let args_tail: String = lines[hits[0]..(hits[0] + 8).min(tests_start)].join(" ");
+        let args_squashed: String = args_tail.split_whitespace().collect();
+        for arg in ["&mutground_sessions", "&chr_name", "&mutworld"] {
+            assert!(
+                args_squashed.contains(arg),
+                "调用点 {callee} 的实参必须含 `{arg}`（去空白后）；实际窗口：{args_tail}"
+            );
+        }
         assert!(
             hits[0] < tick_head,
             "GM 写穿必须在 `world.tick_head()` 之前（oracle 命令体即时写同一对象）：调用 {} vs tick {}",
@@ -119204,7 +119249,12 @@ mod entry_telemetry_wiring {
         let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
         assert_eq!(SRC.matches(&anchor).count(), 1, "登录事件分支必须唯一");
         let i = SRC.find(&anchor).expect("登录事件分支");
-        let seg = window(SRC, i, 2000);
+        // **M1b**：固定 2000 字节窗口在嵌套更深/折行后会被推出臂外 ⇒ 用「到下一个同级
+        // `GateEvent::` 臂之前」界定本分支（比固定窗口更强：不会跨到别的分支）。
+        let end = SRC[i + anchor.len()..]
+            .find("GateEvent::")
+            .map_or(SRC.len(), |k| i + anchor.len() + k);
+        let seg = &SRC[i..end];
         assert!(
             seg.contains(&needle("logon")),
             "record_logon 必须在 GateEvent::LoadDbRequest 分支里（挪走或删掉 ⇒ 本用例红）"
@@ -120522,7 +120572,20 @@ mod tick_starvation {
             "{}.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)",
             "drain"
         );
-        let blk = |at: usize| &prod[at..(at + 512).min(prod.len())];
+        // **M1b**：拆段后 `begin` 与 `next` 之间隔了 LOCAL 空壳 + PROCESS 支入口（destructure），
+        // 固定窗口不再够；且 `prod` 是 UTF-8、固定字节窗口可能切到多字节字符中间。改用
+        // 「本处 `begin` 到**下一个** `EventDrain::begin` 之前」作为本分发层的块（三处 begin
+        // 分属三个不同函数/线程，块互不相交），末尾回退到字符边界。
+        let begin_needle = begin.clone();
+        let blk = |at: usize| {
+            let mut end = prod[at + begin_needle.len()..]
+                .find(&begin_needle)
+                .map_or(prod.len(), |k| at + begin_needle.len() + k);
+            while end > at && !prod.is_char_boundary(end) {
+                end -= 1;
+            }
+            &prod[at..end]
+        };
         let pre_router = before
             .iter()
             .filter(|at| blk(**at).contains(&router_pair))
