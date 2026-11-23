@@ -42,6 +42,10 @@ pub(crate) struct CrossZoneFrame {
     pub dst: MirrorRoute,
     /// 该次广播的全部帧体（逐字节转发，不重编码）。
     pub bodies: Vec<Vec<u8>>,
+    /// 产出该帧的面（**仅 `frame-src` 构建保留**）：验收件旁路行用它给 A13（WALK 双发）定责——
+    /// 「哪条带标记、标记的是哪个 face」⇒ 另一条（无标记）就是第二路。
+    #[cfg(feature = "frame-src")]
+    pub surface: CrossRecipientSurface,
 }
 
 /// 每区一个邮箱；内部按**源区**分槽（`slots[dst][src]`）。
@@ -188,6 +192,8 @@ pub(crate) fn note_mirror_recipient(
             seq: st.seq,
             dst: route,
             bodies: bodies.to_vec(),
+            #[cfg(feature = "frame-src")]
+            surface,
         };
         st.seq = st.seq.wrapping_add(1);
         if st.mailboxes.push(dst, frame) {
@@ -226,7 +232,13 @@ const ENV_CROSS_FRAME_SRC_LOG: &str = "MIR2_CROSS_FRAME_SRC_LOG";
 /// 外部联表：线上帧 = `'#' + ServerMessage(20B, 小端) + body + '!'`（可选尾部 `$`）
 /// ⇒ `body = inner[20..]`；按 `(socket, sha256(body))` 对齐 `frames.ndjson`（tick 只作辅助证据）。
 #[cfg(feature = "frame-src")]
-fn note_frame_src(tick: u64, socket: i32, body: &[u8], src: FrameSrc) {
+fn note_frame_src(
+    tick: u64,
+    socket: i32,
+    body: &[u8],
+    src: FrameSrc,
+    surface: Option<CrossRecipientSurface>,
+) {
     use sha2::Digest as _;
     use std::fmt::Write as _;
     use std::io::Write as _;
@@ -237,8 +249,9 @@ fn note_frame_src(tick: u64, socket: i32, body: &[u8], src: FrameSrc) {
     for b in sha2::Sha256::digest(body) {
         let _ = write!(sha, "{b:02x}");
     }
+    let surface = surface.map(CrossRecipientSurface::name).unwrap_or("-");
     let line = format!(
-        "{{\"tick\":{tick},\"socket\":{socket},\"len\":{},\"sha256\":\"{sha}\",\"src\":\"{src:?}\"}}\n",
+        "{{\"tick\":{tick},\"socket\":{socket},\"len\":{},\"sha256\":\"{sha}\",\"src\":\"{src:?}\",\"surface\":\"{surface}\"}}\n",
         body.len()
     );
     match std::fs::OpenOptions::new()
@@ -305,10 +318,13 @@ pub(crate) fn drain_zone(
             perf_counters::note_cross_frame_drop_closed();
             continue;
         };
+        #[cfg(feature = "frame-src")]
+        let surface = frame.surface;
         for body in frame.bodies {
             // **M1a ②**：⑤ 交付边界打标（`frame-src` 构建才有；默认构建零参与）。
+            // **follow-up**：行里带 `surface`（RefMsg/RunFrames/DepartFrames/…）⇒ A13 定责。
             #[cfg(feature = "frame-src")]
-            note_frame_src(tick, socket, &body, FrameSrc::CrossZone);
+            note_frame_src(tick, socket, &body, FrameSrc::CrossZone, Some(surface));
             let _ = tx.send(SimToGate::SendFrame { socket, body });
         }
         sent += 1;
@@ -443,6 +459,7 @@ mod tests {
             text.lines().any(|l| l.contains("\"tick\":1")
                 && l.contains("\"socket\":900")
                 && l.contains("\"src\":\"CrossZone\"")
+                && l.contains("\"surface\":\"RefMsg\"")
                 && l.contains(&sha)),
             "旁路行必须含 tick=1/socket=900/sha256({sha})；实际：{text}"
         );
@@ -559,6 +576,8 @@ mod tests {
                 socket: 900,
             },
             bodies: body(9),
+            #[cfg(feature = "frame-src")]
+            surface: CrossRecipientSurface::RefMsg,
         };
         assert!(mb.push(zone(1), f()));
         assert!(mb.push(zone(1), f()));
@@ -636,6 +655,8 @@ mod tests {
                 socket: 900,
             },
             bodies: body(9),
+            #[cfg(feature = "frame-src")]
+            surface: CrossRecipientSurface::RefMsg,
         };
         assert!(mb.push(zone(1), f()));
         assert!(mb.push(zone(1), f()));

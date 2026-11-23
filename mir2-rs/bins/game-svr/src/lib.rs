@@ -93,6 +93,7 @@ mod tick_profile;
 mod users;
 mod wepmake_luck;
 mod winlottery;
+mod zone_mirror_diag;
 
 // 编码层（无 I/O、无全局状态）：进程级集成测试直接引用 `game_svr::*`（见 `tests/relay.rs`）。
 // 仍留在同一 lib 里，是因为 bin 侧改为薄包装（`main.rs` 只有 `process::exit(game_svr::run())`）。
@@ -20692,6 +20693,8 @@ fn drain_depart_frames(
         // 抑制依据：`SLICING=1` 强制 `MIRROR=1`（`plan_slicing`）⇒ 切片部署下镜像路径**必然存在**、
         // ② **必然**出帧 ⇒ ① 冗余。**镜像关闭时保留 ①**（无镜像配置下没有 ②，也保住 A1 第七面的定义）。
         if observer_is_mirror && mirror_enabled {
+            // **L2-5 follow-up**：条件抑制必须可见（被抑制的帧不进 ⑤ 账 ⇒ Delivered 不虚增）。
+            perf_counters::note_depart_frames_mirror_suppressed();
             continue;
         }
         let outcome = if observer_is_mirror {
@@ -24450,6 +24453,22 @@ mod perf_counters {
         DepartFrames = 6,
     }
 
+    impl CrossRecipientSurface {
+        /// 面名（验收件旁路行/日志用；与 TSV 列名无关）。
+        #[allow(dead_code)] // 默认构建不写旁路行；`frame-src` 构建与测试用。
+        pub(crate) fn name(self) -> &'static str {
+            match self {
+                CrossRecipientSurface::RefMsg => "RefMsg",
+                CrossRecipientSurface::RunFrames => "RunFrames",
+                CrossRecipientSurface::NpcMerchant => "NpcMerchant",
+                CrossRecipientSurface::FeatureChanged => "FeatureChanged",
+                CrossRecipientSurface::MountRide => "MountRide",
+                CrossRecipientSurface::MerchantDisappear => "MerchantDisappear",
+                CrossRecipientSurface::DepartFrames => "DepartFrames",
+            }
+        }
+    }
+
     /// 七面计数（下标 = [`CrossRecipientSurface`] 的判别值；0..=5 = 历史六面，6 = `DepartFrames`）。
     static CROSS_RECIPIENT_BY_SURFACE: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
 
@@ -24492,6 +24511,16 @@ mod perf_counters {
     /// 门控——N=1 窗口也要能读出；与 `CROSS_RECIPIENT_BY_SURFACE` 的切片门控分开）。
     pub(crate) fn note_depart_wrn_suppressed() {
         DEPART_WRN_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// **L2-5 follow-up**：`drain_depart_frames` 在「镜像观察者 + 镜像开」处**条件抑制**的帧数
+    /// （本 tick 增量）。被抑制的帧**不进** ⑤ 账 ⇒ `Delivered` 不得因抑制虚增（牙见
+    /// `depart_frames_mirror_observer_suppressed_when_mirror_enabled`）。
+    static DEPART_FRAMES_MIRROR_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+
+    /// 记一次「镜像观察者被条件抑制」（`drain_depart_frames` 的 `continue` 之前）。
+    pub(crate) fn note_depart_frames_mirror_suppressed() {
+        DEPART_FRAMES_MIRROR_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
     }
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
@@ -24637,6 +24666,7 @@ mod perf_counters {
         CROSS_ENQUEUE_US.store(0, Ordering::Relaxed);
         CROSS_ENQUEUE_EVENTS.store(0, Ordering::Relaxed);
         DEPART_WRN_SUPPRESSED.store(0, Ordering::Relaxed);
+        DEPART_FRAMES_MIRROR_SUPPRESSED.store(0, Ordering::Relaxed);
     }
 
     /// 测试用：关掉 perf writer（`init_with_path` 之后复位；避免跨用例串味）。
@@ -24653,6 +24683,12 @@ mod perf_counters {
     #[allow(dead_code)] // 供后续用例/诊断；当前 TSV writer 用例按列名读，不直接调用。
     pub(crate) fn depart_wrn_suppressed() -> u64 {
         DEPART_WRN_SUPPRESSED.load(Ordering::Relaxed)
+    }
+
+    /// 测试用：镜像观察者被条件抑制的帧数（本 tick 增量）。
+    #[cfg(test)]
+    pub(crate) fn depart_frames_mirror_suppressed() -> u64 {
+        DEPART_FRAMES_MIRROR_SUPPRESSED.load(Ordering::Relaxed)
     }
 
     /// 测试用的全局锁：所有会开关 [`ENABLED`]（或复位计数）的用例必须共用一把，
@@ -24733,7 +24769,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -24816,6 +24852,8 @@ mod perf_counters {
             CROSS_ENQUEUE_EVENTS.swap(0, Ordering::Relaxed),
             // **L2-5 ⑦**：WRN 抑制数（本 tick 增量；与限流器同语义）。
             DEPART_WRN_SUPPRESSED.swap(0, Ordering::Relaxed),
+            // **L2-5 follow-up**：镜像观察者被条件抑制的帧数（本 tick 增量；不进 ⑤ 账）。
+            DEPART_FRAMES_MIRROR_SUPPRESSED.swap(0, Ordering::Relaxed),
             // handoff 11（hd[0..=10]；表头顺序 offered..write_refused_occupied）。
             hd[0],
             hd[1],
@@ -34555,6 +34593,8 @@ struct BarrierOps {
     neighbors: Vec<region_loop::HaloSnapshot>,
     /// `await_neighbors` 填；`after_phase2` 用（探针记账）
     wait_phase1_us: u64,
+    /// **`MIR2_ZONE_MIRROR_DIAG`** 的每区「上次写入的镜像 id 集合」（变化时才写；None = 还没写过）
+    diag_last: Option<Vec<i32>>,
     /// 测试期逐方法计数（`publish/await/before` 各一）
     #[cfg(test)]
     method_calls: [u32; 3],
@@ -34602,6 +34642,7 @@ impl BarrierOps {
             mirrors: host.mirror_enabled,
             neighbors: Vec::new(),
             wait_phase1_us: 0,
+            diag_last: None,
             #[cfg(test)]
             method_calls: [0; 3],
         })
@@ -34668,6 +34709,11 @@ impl BarrierOps {
             );
             std::process::abort();
         }
+        // **`MIR2_ZONE_MIRROR_DIAG`**（生产默认零参与）：变化时把本区镜像 id 集合写成状态证据。
+        // 放在 `apply_mirrors` 之后 ⇒ 看到的是本 tick 刷新/清扫后的**实际**集合；
+        // 「离开后镜像滞留」= 该集合里仍出现过期 id（直接状态，不靠行为推断）。
+        // 门禁在 `maybe_write_world` 内部：env 未设 ⇒ **不调 `world.mirror_ids()`**（有实测牙）。
+        zone_mirror_diag::maybe_write_world(self.zone, tick, world, &mut self.diag_last);
     }
 
     /// **`world_tail` 与 `inline_after_phase2` 的 4 种组合（压缩后照此核，别看记忆）**：
@@ -46023,6 +46069,7 @@ mod tests {
             mirrors: false,
             neighbors: Vec::new(),
             wait_phase1_us: 0,
+            diag_last: None,
             method_calls: [0; 3],
         });
         BARRIER_CALLS.with(|c| c.set(0));
@@ -46185,6 +46232,7 @@ mod tests {
             mirrors: false,
             neighbors: Vec::new(),
             wait_phase1_us: 0,
+            diag_last: None,
             method_calls: [0; 3],
         });
         let mut scratch = TickScratch::default();
@@ -60686,6 +60734,44 @@ break
         assert_eq!(text.lines().count(), 2, "表头 + 1 行 tick：{text:?}");
 
         std::env::remove_var("MIR2_PERF_COUNTERS");
+        crate::perf_counters::reset_for_tests();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// **follow-up 牙**：TSV 表头新增 `depart_frames_mirror_suppressed` 后，表头与每行的
+    /// **列数必须一致**，且计数落在**同名列**上（防「表头/值错位」复发；2026-11-23 之前踩过）。
+    ///
+    /// 变异：只加表头不加值（或反之）⇒ 列数不等 ⇒ 红；值写错位置 ⇒ 同名列断言红。
+    #[test]
+    fn perf_tsv_header_matches_values_with_new_column() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!("d8_perf_cols_{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        std::env::set_var("MIR2_PERF_COUNTERS", &p);
+        crate::perf_counters::init_from_env().expect("env 路径可建");
+        crate::perf_counters::note_depart_frames_mirror_suppressed();
+        crate::perf_counters::note_depart_frames_mirror_suppressed();
+        crate::perf_counters::write_tick();
+        crate::perf_counters::finish().expect("有 tick 行应通过");
+        std::env::remove_var("MIR2_PERF_COUNTERS");
+        let text = std::fs::read_to_string(&p).expect("探针文件可读");
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().expect("表头").split('\t').collect();
+        let values: Vec<&str> = lines.next().expect("tick 行").split('\t').collect();
+        assert_eq!(header.len(), values.len(), "表头/值列数必须相等：{text:?}");
+        let idx = header
+            .iter()
+            .position(|h| *h == "depart_frames_mirror_suppressed")
+            .expect("表头必须含新列 depart_frames_mirror_suppressed");
+        assert_eq!(
+            values[idx],
+            "2",
+            "新列值必须落在同名列上（bump 2 次）；实际列={:?}",
+            values.get(idx)
+        );
         crate::perf_counters::reset_for_tests();
         let _ = std::fs::remove_file(&p);
     }
@@ -125658,6 +125744,8 @@ mod l2_s3_cross_recipient_tests {
         );
         let (g, mut rx) = gates();
         let d0 = delivered();
+        let s0 = perf_counters::depart_frames_mirror_suppressed();
+        let df0 = perf_counters::cross_recipient_depart_frames();
         world.disconnect("b").expect("b 离世");
         let sent = drain_depart_frames(&mut world, &online, &g, true);
         assert_eq!(sent, 0, "本地无观察者（MIRROR 是镜像）");
@@ -125665,6 +125753,16 @@ mod l2_s3_cross_recipient_tests {
             delivered() - d0,
             0,
             "镜像开 ⇒ 不得投 ⑤（否则与收件区 AOI 的 remove 帧重复）"
+        );
+        assert_eq!(
+            perf_counters::depart_frames_mirror_suppressed() - s0,
+            1,
+            "条件抑制必须计数（本 tick +1；follow-up 牙）"
+        );
+        assert_eq!(
+            perf_counters::cross_recipient_depart_frames() - df0,
+            0,
+            "被抑制的帧不得进 ⑤ 账（Delivered 不因抑制虚增；follow-up 牙）"
         );
         assert_eq!(drain_cross(&g), 0, "跨区邮箱必须为空");
         assert!(rx.try_recv().is_err(), "不得有帧");
