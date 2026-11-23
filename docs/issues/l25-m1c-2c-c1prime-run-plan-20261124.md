@@ -48,15 +48,16 @@
 - **`CM_DROPITEM` 不能用**：本仓 1:1 复刻 oracle 既有形态——`MapItem.ItemId` 恒 0 ⇒
   `AddItemToMap` 恒 false ⇒ 普通丢弃**恒回 `SM_DROPITEM_FAIL(601)`、背包不动**（whitelist T-19）。
   ⇒ 产物只能**吃掉**（§2.3/§4）。
-- **启动期分配源（含 `1..999` 段的来源）**：`generate_drops` 在**怪物生成**时预算掉落
-  （`World::budget_monster_drops`，`mongen.rs` 的 `WorldMonsterSink`）。`sim_loop` 的顺序是
-  `world = production_world(map_sizes, &counter, …)`（计数器值仍为 0）→ 商人/NPC/守卫装载 →
-  **`place_guards`（测试栈 `GuardList.txt` 77 行）** → … → 最后才
-  `item_number.store(item_number_init, …)`。⇒ **守卫/城堡/刷怪在 store 之前就已把 0 号计数器
-  推进**（drop 预算按逐守卫掉落表生成），trace 里 `1..999` 那一段就是这类"store 前的启动分配"；
-  `store` 之后才是 `412072..` 段。`step_mon_gen` 则对全图带 MonGen 条目的地图**持续**生成。
-  ⇒ 必须让**启动期无任何怪物生成**（§3.3）：`MonGen.txt` 存在但为空时，`MonGenHost` 仍会建
-  （守卫/城堡实体挂图仍跑）——**要让宿主不存在，必须把文件挪走**（`entries=None`）。
+- **启动期分配源（trace 里 `1..53951` 段的来源，`99` 已核）**：这一段**不是第二个计数器**，
+  而是 `sim_loop` 在 `item_number.store(item_number_init, …) **之前**执行的启动期造件——主要是
+  **商人启动补货**（`LoadMerchant` 逐商人建货），另有守卫/城堡的 drop 预算
+  （`place_guards` → `WorldMonsterSink` → `World::budget_monster_drops`）。此时共享计数器仍为
+  **0** ⇒ 这些行从 `1` 起。`store` 之后才是 `init+1..` 段（本跑 `412072..`）。
+  **A26 已立并派修**（把 init 计算 + store 提到商人装载之前）⇒ **修后**启动行从 `init+1` 起
+  （仍非 0 行，只是 `> init`）。本计划按"修后"口径写（§5），并用探针期差分成样本。
+- **MonGen 文件夹具的语义**：`MonGen.txt` 存在但为空 ⇒ `MonGenHost::start` 仍建宿主
+  （`entries=Some([])`）⇒ 守卫放置与城堡实体挂图**仍跑、仍分配**；**文件不存在**
+  （`entries=None`）才让 `place_guards`/城堡挂图/`step_mon_gen` 三处整块跳过（§3.3）。
 
 ## 2. 装置与最小改动
 
@@ -87,9 +88,16 @@
 5. **起栈**：`MIR2_ZONES=<布局>`、`MIR2_ZONE_SLICING=1`、`MIR2_ZONE_MIRROR=1`、
    `MIR2_PERF_COUNTERS=<run_dir>/perf_counters.tsv`、`MIR2_LOGIN_DB=<测试账号库>`、
    `MIR2_ITEMNUM_TRACE=<run_dir>/itemnum_trace.tsv`；`MIR2_TEST_PERMISSION` **不设**。
-6. **STARTUP_ROWS 门**：栈就绪（端口 LISTENING、进世界闸 Ready）后、起 probe **之前**读 trace：
-   行数必须 **== 0**；非 0 ⇒ 停手逐源排查（守卫/MonGen/城堡等），给源做文件夹具后重跑；
-   **禁止**把启动行从 `TOTAL` 里减掉凑数。
+6. **STARTUP_ROWS 门（A26 修后口径）**：栈就绪（端口 LISTENING、进世界闸 Ready）后、起 probe
+   **之前**读 trace：
+   - `STARTUP_ROWS == 0`（GA0/D701 无商人、MonGen 已挪走时的预期），**或**
+   - `STARTUP_ROWS > 0` **且**每行 `make_index > init`（`init` = 启动日志「本会话计数器初值」）
+     **且**能逐行归因到**商人启动补货 / 守卫·城堡启动货**（summary 记 `STARTUP_ROWS`、
+     `STARTUP_FIRST/LAST`、按 zone 的行数，并附归因）；
+   - 出现**任何 `make_index <= init` 的启动行** ⇒ 判废（说明 store 未前置或另有计数器面），
+     停手排查，**不许**把这行减掉凑数。
+   - **样本口径**：`TOTAL/DISTINCT/DUP/CROSS_ZONE_DUP` 与 `ZONE_k_ROWS` 全部只算
+     **探针开始后的差分**（以本门读到的行数为基线）；启动行单列、不混入 2460。
 7. **跑 probe**：10 个 probe 并发（5 个在区 0/GA0，5 个在区 1/D701），动作流见 §4。
 8. **断言 + 收尾**（§5/§7）。
 
@@ -123,7 +131,10 @@
 - 区 0 = **GA0**（`Envir/MapInfo.txt`：`[GA0 庄园] SAFE DAY STALL`，150×150，**无 MonGen 条目**）；
 - 区 1 = **D701**（`[D701 秘密通道] DAY`，200×200，**无 MonGen 条目**；`y=100` 那排是墙，勿用）。
 - 布局串：`0:GA0=0,0-149,149;1:D701=0,0-199,199`；未提到的图由 `default_zone` 兜底（本跑 MonGen 已关，
-  无其它分配源，兜底不影响断言）。
+  无怪物分配源，兜底不影响断言）。
+- **两图无商人（已核，2026-11-24）**：teststack `Envir/MerChant.txt`（162 行）与 `Envir/Npcs.txt`
+  （6 行）在 `GA0`/`D701` 上**均无条目** ⇒ 按预期 `STARTUP_ROWS == 0`；若换图/换栈须重核，
+  有商人则按 §2.2-6 的 `>0 且 >init 且归因` 分支处理。
 
 ### 3.3 关启动期/持续分配源（文件夹具，**只在 teststack 副本**）
 
@@ -172,13 +183,16 @@
 
 | 断言 | 值 |
 | --- | --- |
-| `STARTUP_ROWS` | **== 0**（§2.2-6 的门；非 0 ⇒ 停手排源，不许减数） |
-| `TRACE_TOTAL_ROWS` | **== 2460**（10 角色 × 41 盒 × 6 件） |
+| `STARTUP_ROWS` | **== 0**，或 `>0` 且每行 `> init` 并可归因（§2.2-6；含 `<= init` 的行 ⇒ 判废） |
+| `TRACE_TOTAL_ROWS` | **== 2460**（10 角色 × 41 盒 × 6 件；**探针期差分**，不含启动行） |
 | `TRACE_ZONE_0_ROWS` / `TRACE_ZONE_1_ROWS` | **各 == 1230**，且均 **≥ 1002** |
 | `TRACE_DISTINCT_VALUES` | **== TRACE_TOTAL_ROWS** |
 | `TRACE_DUP` | **== 0** |
 | `CROSS_ZONE_DUP` | **== 0**（同一 value 同时出现在 zone 0 与 zone 1 的行数） |
 | `TRACE_TOTAL_ROWS >= 2004` | 是（样本量口径；容量案见 §1） |
+
+> **差分口径（写死）**：`BASE_ROWS` = §2.2-6 门读到的行数；上表全部指标按
+> `rows[BASE_ROWS..]` 计算；启动行只进 `STARTUP_*` 单列。
 
 **探针/场景口径**：每角色 `BOX_EATS == 41`、`PRODUCT_EATS == 246`、`SM_EAT_FAIL(636) == 0`、
 `probe rc == 0`；10 个 probe 登录 `InWorld` 无踢线；`MONGEN_ABSENT=1`（改名前后 sha 核对；
@@ -236,7 +250,8 @@
 
 ## 8. 报给 Leader 的字段
 
-`RUN_ID` / 正向 exe sha256 + 内嵌 head / `STARTUP_ROWS` / `TRACE_TOTAL_ROWS` /
+`RUN_ID` / 正向 exe sha256 + 内嵌 head / `BASE_ROWS`、`STARTUP_ROWS`、`STARTUP_FIRST/LAST`、
+归因 / `TRACE_TOTAL_ROWS`（差分） /
 `TRACE_ZONE_{0,1}_ROWS` / `TRACE_DISTINCT_VALUES` / `TRACE_DUP` / `CROSS_ZONE_DUP` /
 每角色 `BOX_EATS`、`PRODUCT_EATS` / `RESTORE_OK` / `MONGEN_ABSENT`（及条件支的 `GUARDLIST_ABSENT`）+ 模板断言原文 /
 反例 exe sha + `DUP/CROSS_ZONE_DUP` 红原文 / 收尾四项（进程/端口/仓/临时物）。
