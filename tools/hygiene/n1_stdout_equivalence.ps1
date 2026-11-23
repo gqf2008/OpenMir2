@@ -61,6 +61,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# C14：golden 时间桶（与 `mir2-rs/bins/game-svr/src/enter.rs` 的 `game_time_from_hour` 同口径）。
+# 桶值只由**本地小时**决定；N=1 的 `世界时钟变化` 行只在「世界初值 0 → 桶值 ≠ 0」时出现。
+function Get-N1GameTimeBucket {
+  param([int]$Hour = -1)
+  if ($Hour -lt 0) { $Hour = (Get-Date).Hour }
+  switch ($Hour) {
+    { $_ -in 5..10 } { return 1 }
+    { $_ -in 16..19 } { return 1 }
+    21 { return 1 }
+    { $_ -in 11, 20, 23 } { return 2 }
+    { $_ -in 4, 15 } { return 0 }
+    default { return 3 }
+  }
+}
+
+
 # ---------------------------------------------------------------------------
 # 纯函数（自测直接覆盖；判据本体）
 # ---------------------------------------------------------------------------
@@ -379,6 +395,16 @@ function Invoke-Selftest {
     [Console]::WriteLine("SELFTEST_FAILED count=$($script:selftestFail)")
     return 1
   }
+  # ⑦ C14：game_time 桶映射（与 enter::game_time_from_hour 同口径）
+  Assert-True ((Get-N1GameTimeBucket -Hour 4) -eq 0) 'bucket: hour 4 -> 0'
+  Assert-True ((Get-N1GameTimeBucket -Hour 15) -eq 0) 'bucket: hour 15 -> 0'
+  Assert-True ((Get-N1GameTimeBucket -Hour 5) -eq 1) 'bucket: hour 5 -> 1'
+  Assert-True ((Get-N1GameTimeBucket -Hour 21) -eq 1) 'bucket: hour 21 -> 1'
+  Assert-True ((Get-N1GameTimeBucket -Hour 11) -eq 2) 'bucket: hour 11 -> 2'
+  Assert-True ((Get-N1GameTimeBucket -Hour 23) -eq 2) 'bucket: hour 23 -> 2'
+  Assert-True ((Get-N1GameTimeBucket -Hour 3) -eq 3) 'bucket: hour 3 -> 3'
+  Assert-True ((Get-N1GameTimeBucket -Hour 12) -eq 3) 'bucket: hour 12 -> 3'
+
   [Console]::WriteLine('SELFTEST_OK')
   return 0
 }
@@ -516,7 +542,12 @@ $verdict = Get-N1Verdict -BaselineBytes $baseBytes -FeatureBytes $featBytes `
   -BaselineLines $baselineLines.Count -FeatureLines $featureLines.Count `
   -OrderOk $orderOk -MultisetOk $multiOk
 
+$startHour = (Get-Date).Hour
+$bucket = Get-N1GameTimeBucket -Hour $startHour
 $summary = [pscustomobject]@{
+  start_hour     = $startHour
+  game_time_bucket = $bucket
+  game_time_bucket_source = 'enter::game_time_from_hour 同口径（本地小时）'
   baseline_exe   = $BaselineExe
   feature_exe    = $FeatureExe
   conf           = $Conf
