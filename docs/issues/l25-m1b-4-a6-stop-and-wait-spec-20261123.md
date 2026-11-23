@@ -23,7 +23,7 @@
   `zonek_control_wait_timeout`，见 §6 末结论；若实施后实际列名不同，只报差异清单）。
 
 **来自第 2 步（分类器）**：
-- `classify_zone_command(ident, payload) -> ZoneCmdClass`，`ZoneCmdClass::{Local, Process, Unsupported}`；
+- `zone_cmd_class(ident, payload) -> ZoneCmdClass`，`ZoneCmdClass::{Local, Process, Unsupported}`；
   `Process` = `CM_SAY` 且 payload 以 `@` 起（复用 `gm_drain_gate` 的严格 `starts_with('@')`）。
   **若第 2 步落地后类名/函数名不同（如 `InboundOwnership::Process`），只报差异清单，不改本稿。**
 
@@ -39,7 +39,7 @@
 - **置位（区 k，`INBOUND_LOCAL` 段内、分类之后）**：分类结果为 `Process` ⇒ ①把 `(chr_name, line,
   local_tick)` 推入**控制邮箱**；②**入队成功后**置 `sg.control_in_flight = Some(tick)`
   （值为**段内 tick**——见 §2.1）。
-  - 位置描述（可验证）：在 `tick_phase_a` 的 `INBOUND_LOCAL` 分支内、`classify_zone_command(...)`
+  - 位置描述（可验证）：在 `tick_phase_a` 的 `INBOUND_LOCAL` 分支内、`zone_cmd_class(...)`
     返回 `Process` 的那个 `match` arm 里，紧随"控制邮箱 `push` 成功"的语句之后；同级异常/满
     处理不得跳过置位（满 ⇒ 丢弃该命令 + WRN + 计数，且**不置位**）。
 - **清位（区 0，执行完 P 的 GM 命令时）**：区 0 的**控制邮箱 drain**（M1b 新增，紧随区 0 的
