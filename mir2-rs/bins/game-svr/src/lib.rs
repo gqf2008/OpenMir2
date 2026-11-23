@@ -87160,7 +87160,11 @@ SendRefMsgRange=15
             train_level: [255; 4],
             ..mir2_data::MagicInfo::default()
         }]);
-        let dir = std::env::temp_dir().join(format!("mir2-m821-{}-{tag}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("mir2-m821-{}-{tag}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Envir")).expect("建 Envir");
         std::fs::create_dir_all(dir.join("Map")).expect("建 Map");
@@ -125273,8 +125277,13 @@ mod zone_disconnect_tests {
 
     /// 在指定区落一个玩家（沿用 1b 的登录落区路径），返回（区状态, actor id）。
     pub(super) fn landed(tag: &str, zone_id: zone::ZoneId) -> (ZoneState, i32) {
-        let base =
-            std::env::temp_dir().join(format!("zone_disconnect_{tag}_{}", std::process::id()));
+        // 每次调用取独立序号：多个用例并行跑同一 test binary 时不共享目录（C19 夹具键加固）。
+        static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "zone_disconnect_{tag}_{}_{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         write_map_fixture(&base);
         let registry = fixture_registry(&base);
