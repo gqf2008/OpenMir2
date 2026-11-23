@@ -2298,7 +2298,9 @@ fn spawn_minimal_zone(
                     }
                 }
                 // **M1b 第 4 步（A6）· P3**：`pending_local` / `deferred_local` 残留同样清点
-                //（不静默；与上面同一列 `zonek_inbound_pending_discarded`）。
+                //（不静默；记**A6 专属**列 `zonek_control_shutdown_discarded`——**不与**第 3 步
+                // `zonek_inbound_pending_discarded` 共用：后者含义是"入站缓冲异常残留 ⇒ 作废窗口"，
+                // 正常关服清 A6 队列不得把合格窗口判废）。
                 let a6_left = {
                     let mut st = state
                         .lock()
@@ -2315,12 +2317,12 @@ fn spawn_minimal_zone(
                     left
                 };
                 for _ in 0..a6_left {
-                    perf_counters::note_zonek_inbound_pending_discarded();
+                    perf_counters::note_zonek_control_shutdown_discarded();
                 }
                 if a6_left > 0 {
                     glog!(
                         "WRN",
-                        "切片区 {zone_id} 关服残留：丢弃 {a6_left} 条 A6 暂缓命令（pending_local/deferred_local；zonek_inbound_pending_discarded）"
+                        "切片区 {zone_id} 关服残留：丢弃 {a6_left} 条 A6 暂缓命令（pending_local/deferred_local；zonek_control_shutdown_discarded）"
                     );
                 }
                 let left = outstanding.load(std::sync::atomic::Ordering::Relaxed);
@@ -24756,12 +24758,15 @@ mod perf_counters {
     static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
-    // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的三个**降级**计数——
+    // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的四个**降级/清理**计数——
     // 只区 k、每 tick 增量、**不设 `*_all_zones` 派生列**（区 0 无同名语义）。
-    // 三者都是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）。
+    // 前三个是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）；
+    // 第四个 `shutdown_discarded` 是 **A6 专属关服残留**（**不共用**第 3 步 `pending_discarded`：
+    // 那列的含义是「入站缓冲异常残留 ⇒ 作废窗口」，正常关服清 A6 队列不得把合格窗口判废）。
     static ZONEK_CONTROL_DEFER_OVERFLOW: AtomicU64 = AtomicU64::new(0);
     static ZONEK_CONTROL_WAIT_TIMEOUT: AtomicU64 = AtomicU64::new(0);
     static ZONEK_CONTROL_MAILBOX_REJECTED: AtomicU64 = AtomicU64::new(0);
+    static ZONEK_CONTROL_SHUTDOWN_DISCARDED: AtomicU64 = AtomicU64::new(0);
     /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
     /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
     pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
@@ -25269,6 +25274,15 @@ mod perf_counters {
         }
     }
 
+    /// **A6 专属**：关服线程尾清掉的 `pending_local`/`deferred_local` 残留**条数**
+    ///（与第 3 步 `pending_discarded` 分列：后者是"入站缓冲异常残留 ⇒ 作废窗口"，本列**不作废**）。
+    #[inline]
+    pub(crate) fn note_zonek_control_shutdown_discarded() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CONTROL_SHUTDOWN_DISCARDED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// `#[cfg(test)]` 读点（各一）。
     #[cfg(test)]
     pub(crate) fn zonek_inbound_drained() -> u64 {
@@ -25310,6 +25324,13 @@ mod perf_counters {
     pub(crate) fn zonek_control_mailbox_rejected() -> u64 {
         ZONEK_CONTROL_MAILBOX_REJECTED.load(Ordering::Relaxed)
     }
+    /// 读点保留（与其余 `zonek_*` 读点同款；当前用例不直接读它——列对齐由
+    /// `zonek_columns_aligned_and_derived` 的表头/行自洽覆盖）。
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn zonek_control_shutdown_discarded() -> u64 {
+        ZONEK_CONTROL_SHUTDOWN_DISCARDED.load(Ordering::Relaxed)
+    }
 
     /// **M1b 第 3 步（r6）**：**5 个**派生列的**纯函数**（写行与单测共用同一份数学）。
     ///
@@ -25328,7 +25349,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -25451,10 +25472,11 @@ mod perf_counters {
             zk[3],
             zk[4],
             zk[5],
-            // **M1b 第 4 步（A6）**：3 个降级列（仅区 k；N=1 恒 0；无派生列）。
+            // **M1b 第 4 步（A6）**：4 列（前三个降级 + 关服残留；仅区 k；N=1 恒 0；无派生列）。
             ZONEK_CONTROL_DEFER_OVERFLOW.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_WAIT_TIMEOUT.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_MAILBOX_REJECTED.swap(0, Ordering::Relaxed),
+            ZONEK_CONTROL_SHUTDOWN_DISCARDED.swap(0, Ordering::Relaxed),
             // **5 个**派生列（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
             // `inbound_carry_all_zones` 按 r6 已删（混合分母：区 0 按事件、区 k 按命令）。
             dv[0],
@@ -35997,7 +36019,7 @@ impl HostLoop {
                     fill_hit,
                     outstanding.as_ref(),
                     limits,
-                    |item, class| {
+                    |item, class, pending, batch_budget| {
                         // 执行体 = **同一路径** `handle_zone_command_on`；A6 的分类/暂缓/溢出/邮箱
                         // 分派在 [`a6_dispatch_local`]（可单测）。
                         let mut exec = |ev: &GateEvent,
@@ -36023,8 +36045,10 @@ impl HostLoop {
                             class,
                             inbox.as_deref(),
                             ground_sessions,
+                            pending,
                             zone,
                             a6_tick,
+                            batch_budget,
                             &mut exec,
                         )
                     },
@@ -38995,8 +39019,21 @@ enum LocalDisposition {
     Drained,
     /// **暂缓**（已移入 `deferred_local`）：本 tick **不计** drained（下次执行时再计）。
     Deferred,
-    /// 已处置且**回调已自行逐条计数**（A6 溢出的 8+1 条）：驱动不再计。
-    CountedByExec,
+    /// 溢出批次（`batch` 条，**含本项**）已按批次整体执行：回调已逐条计 drained；
+    /// 驱动按 `batch` 计**执行预算**（D2：批次整体占预算，不是 "1 条"）。
+    CountedByExec { batch: usize },
+    /// 溢出批次**装不下本 tick 剩余预算**（条数或墙钟）⇒ 整批（8+1）按 seq 留在
+    /// `pending_local`、本 tick 不执行；驱动置 `budget_hit` 并收手（**不 partial、不丢、不越序**）。
+    OverflowPostponed,
+}
+
+/// **A6/D2**：交给段内分派的**预算视图**（溢出批次是否"装得下"的判定输入）。
+#[derive(Clone, Copy, Debug)]
+struct A6BatchBudget {
+    /// 本 tick 仍可执行的条数（`execute_cap − executed`，**含**当前这一条）。
+    remaining_events: usize,
+    /// 判定时刻段内墙钟是否仍在 `execute_wall` 之内。
+    wall_ok: bool,
 }
 
 /// **M1b 第 3 步**：区 k 的入站有界化参数（数值复用 `EventDrainBudget::PRODUCTION`；测试可注入）。
@@ -39111,7 +39148,9 @@ fn fill_pending(
 ///   侧恒 `from_carry=false`；
 /// - 分类 `Unsupported` 的**纯追加计数**（处置仍由 `exec` 全权完成，与第 3 步一致）；
 /// - `exec` 返回 [`LocalDisposition`]：`Drained` ⇒ 驱动计 1 条 `zonek_inbound_drained`；
-///   `Deferred` ⇒ 不计（下次执行时计）；`CountedByExec` ⇒ 回调已逐条计（A6 溢出 8+1）；
+///   `Deferred` ⇒ 不计（下次执行时计）；`CountedByExec { batch }` ⇒ 回调已逐条计 drained、
+///   驱动按 `batch` 计**执行预算**（A6 溢出批次整体占预算，D2）；`OverflowPostponed` ⇒ 整批
+///   推迟、驱动置 `budget_hit` 并收手；
 /// - 每 `execute_check_every` 条**整条执行完**后查 `execute_wall`；条数到顶同理收手，剩余留在
 ///   各自容器；`budget_hit = fill_hit || 截断且仍有待执行条目`（每 tick 至多 +1）。
 ///
@@ -39125,7 +39164,12 @@ fn execute_local_budget(
     fill_hit: bool,
     outstanding: Option<&std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     limits: ZoneDrainLimits,
-    mut exec: impl FnMut(SeqEvent, ZoneCmdClass) -> LocalDisposition,
+    mut exec: impl FnMut(
+        SeqEvent,
+        ZoneCmdClass,
+        &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
+        A6BatchBudget,
+    ) -> LocalDisposition,
 ) -> bool {
     use std::sync::atomic::Ordering;
     let execute_max =
@@ -39175,11 +39219,25 @@ fn execute_local_budget(
         if class == ZoneCmdClass::Unsupported {
             perf_counters::note_zonek_inbound_unsupported();
         }
-        match exec(item, class) {
+        let budget = A6BatchBudget {
+            remaining_events: execute_cap.saturating_sub(executed),
+            wall_ok: wall_start.elapsed() < limits.execute_wall,
+        };
+        let disp = exec(item, class, pending_local, budget);
+        match disp {
             LocalDisposition::Drained => perf_counters::note_zonek_inbound_drained(from_carry),
-            LocalDisposition::Deferred | LocalDisposition::CountedByExec => {}
+            LocalDisposition::Deferred | LocalDisposition::CountedByExec { .. } => {}
+            // **D2**：整批推迟 = 有活没干完 ⇒ 本 tick 记 `budget_hit` 并收手（不 partial）。
+            LocalDisposition::OverflowPostponed => truncated = true,
         }
-        executed += 1;
+        // **D2**：溢出批次整体占预算（`batch` 条，含本项）；其余处置各占 1 条。
+        executed += match disp {
+            LocalDisposition::CountedByExec { batch } => batch.max(1),
+            _ => 1,
+        };
+        if matches!(disp, LocalDisposition::OverflowPostponed) {
+            break;
+        }
         let every = limits.execute_check_every.max(1);
         if executed.is_multiple_of(every) && wall_start.elapsed() >= limits.execute_wall {
             truncated = true;
@@ -39256,8 +39314,11 @@ fn a6_enqueue_control(
     ident: u16,
     tick: u64,
 ) -> bool {
-    // epoch 在**同一临界区之前**快照：`sessions` 的唯一写者就是本线程（持区锁）⇒ 与临界区内读等价。
-    let epoch = sessions.get(chr_name).map_or(0, |sg| sg.a6.control_epoch);
+    // **并发前提（D1；单线程断言不覆盖）**：`epoch` 读取与 `control_pending`/`first_tick`
+    // 置位必须与 `push_back` 处在**同一个 `q` 临界区**——否则区 0 可能在本线程
+    // `control_pending += 1` **之前** drain 并执行该请求，其 RAII 守卫先减计数、本线程再 +1
+    // ⇒ 计数**粘 1 到超时**（本地命令白等、`zonek_control_wait_timeout` 假涨）。
+    // 七条负例都是单线程构造，抓不到这一点——这是**并发正确性前提**，不是可测行为。
     {
         let mut q = inbox
             .lock()
@@ -39269,6 +39330,7 @@ fn a6_enqueue_control(
             a6_mailbox_full_warn(zone, chr_name, ident, len);
             return false;
         }
+        let epoch = sessions.get(chr_name).map_or(0, |sg| sg.a6.control_epoch);
         q.push_back(ControlRequest {
             zone,
             chr_name: chr_name.to_string(),
@@ -39276,11 +39338,12 @@ fn a6_enqueue_control(
             at_tick: tick,
             epoch,
         });
-    }
-    if let Some(sg) = sessions.get_mut(chr_name) {
-        sg.a6.control_pending = sg.a6.control_pending.saturating_add(1);
-        if sg.a6.control_first_tick.is_none() {
-            sg.a6.control_first_tick = Some(tick);
+        // 置位与 push **同临界区**（理由见函数头注释）。
+        if let Some(sg) = sessions.get_mut(chr_name) {
+            sg.a6.control_pending = sg.a6.control_pending.saturating_add(1);
+            if sg.a6.control_first_tick.is_none() {
+                sg.a6.control_first_tick = Some(tick);
+            }
         }
     }
     true
@@ -39290,16 +39353,21 @@ fn a6_enqueue_control(
 ///
 /// - `Process` ⇒ 控制邮箱 + 置位（[`a6_enqueue_control`]）；
 /// - `Local` 且无在飞 ⇒ 立即执行；有在飞且未满 N ⇒ **暂缓**（`Deferred`，本 tick 不计 drained）；
-/// - `Local` 且已满 N ⇒ **溢出**：`N+1` 条按到达序**就地执行**（不动在飞、不搬 `pending_local`；
-///   `CountedByExec`——本函数已逐条计 drained）；
+/// - `Local` 且已满 N ⇒ **溢出**：`N+1` 条按到达序整体处置（不动在飞计数）——
+///   **装得下本 tick 剩余预算**（条数 + 墙钟快照）⇒ 整批就地执行（`CountedByExec{batch}`，
+///   本函数逐条计 drained，驱动按 `batch` 计预算）；**装不下** ⇒ 整批按 seq 留在
+///   `pending_local`、本 tick 不执行（`OverflowPostponed`，不 partial/不丢/不越序）；
 /// - `Unsupported` ⇒ 仍交执行体（与第 3 步一致）。
+#[allow(clippy::too_many_arguments)] // 9 参：命令/分类/邮箱/会话/等待队列/区/tick/预算视图/执行体
 fn a6_dispatch_local(
     item: SeqEvent,
     class: ZoneCmdClass,
     inbox: Option<&std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
     zone: zone::ZoneId,
     tick: u64,
+    budget: A6BatchBudget,
     exec: &mut dyn FnMut(&GateEvent, &mut std::collections::HashMap<String, SessionGround>),
 ) -> LocalDisposition {
     match class {
@@ -39360,6 +39428,29 @@ fn a6_dispatch_local(
                 }
                 return LocalDisposition::Drained;
             }
+            // **D2**：批次**整体**占预算。先看装不装得下（条数 + 墙钟快照）：
+            // 装得下 ⇒ 整批执行（`executed += batch`）；装不下 ⇒ 整批按 seq 留在
+            // `pending_local`、本 tick 不执行（**不 partial / 不丢 / 不越序**）。
+            let batch_len = sessions
+                .get(&chr)
+                .map_or(0, |sg| sg.a6.deferred_local.len())
+                + 1;
+            if !(budget.wall_ok && budget.remaining_events >= batch_len) {
+                let mut moved: Vec<PendingLocalCmd> = sessions
+                    .get_mut(&chr)
+                    .map(|sg| sg.a6.deferred_local.drain(..).collect())
+                    .unwrap_or_default();
+                moved.push(PendingLocalCmd {
+                    seq: item.seq,
+                    ev: item.ev,
+                    at_tick: tick,
+                });
+                moved.sort_by_key(|p| p.seq);
+                for p in moved {
+                    pending_local.insert(p.seq, p);
+                }
+                return LocalDisposition::OverflowPostponed;
+            }
             let mut batch: Vec<PendingLocalCmd> = sessions
                 .get_mut(&chr)
                 .map(|sg| sg.a6.deferred_local.drain(..).collect())
@@ -39370,13 +39461,14 @@ fn a6_dispatch_local(
                 at_tick: tick,
             });
             batch.sort_by_key(|p| p.seq);
+            let batch_len = batch.len();
             perf_counters::note_zonek_control_defer_overflow();
-            a6_defer_overflow_warn(zone, &chr, batch.len());
+            a6_defer_overflow_warn(zone, &chr, batch_len);
             for p in &batch {
                 exec(&p.ev, sessions);
                 perf_counters::note_zonek_inbound_drained(false);
             }
-            LocalDisposition::CountedByExec
+            LocalDisposition::CountedByExec { batch: batch_len }
         }
         ZoneCmdClass::Unsupported => {
             exec(&item.ev, sessions);
@@ -127687,7 +127779,7 @@ mod l2_s3_cross_recipient_tests {
             fill_hit,
             Some(&outstanding),
             limits,
-            |_s, _c| {
+            |_s, _c, _p, _b| {
                 executed += 1;
                 LocalDisposition::Drained
             },
@@ -127749,7 +127841,7 @@ mod l2_s3_cross_recipient_tests {
             h1,
             Some(&outstanding),
             l1,
-            |s, _c| {
+            |s, _c, _p, _b| {
                 if let GateEvent::Command { cmd, .. } = &s.ev {
                     order.push(cmd.recog);
                 }
@@ -127781,7 +127873,7 @@ mod l2_s3_cross_recipient_tests {
             h2,
             Some(&outstanding),
             l2,
-            |s, _c| {
+            |s, _c, _p, _b| {
                 if let GateEvent::Command { cmd, .. } = &s.ev {
                     order.push(cmd.recog);
                 }
@@ -128008,7 +128100,7 @@ mod l2_s3_cross_recipient_tests {
                 fill_hit,
                 Some(outstanding),
                 limits,
-                |_s, _c| {
+                |_s, _c, _p, _b| {
                     executed += 1;
                     LocalDisposition::Drained
                 },
@@ -128048,7 +128140,7 @@ mod l2_s3_cross_recipient_tests {
             fill_hit,
             Some(&outstanding),
             limits,
-            |_s, _c| {
+            |_s, _c, _p, _b| {
                 executed += 1;
                 LocalDisposition::Drained
             },
@@ -128126,6 +128218,15 @@ mod l2_s3_cross_recipient_tests {
         }
     }
 
+    /// 指定 `chr_name` 的命令（两玩家各触发一次溢出时用）。
+    fn zonek_test_cmd_on(chr: &str, recog: i32) -> GateEvent {
+        let mut ev = zonek_test_cmd(recog);
+        if let GateEvent::Command { chr_name, .. } = &mut ev {
+            *chr_name = chr.to_string();
+        }
+        ev
+    }
+
     fn a6_sessions(chr: &str) -> std::collections::HashMap<String, SessionGround> {
         let mut m = std::collections::HashMap::new();
         m.insert(chr.to_string(), crate::tests::test_session_ground(1));
@@ -128161,7 +128262,19 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
-            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 10, &mut exec),
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    10,
+                    b,
+                    &mut exec,
+                )
+            },
         );
         assert!(!hit);
         assert_eq!(order, vec![0], "无在飞 ⇒ **本 tick** 执行");
@@ -128261,7 +128374,19 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
-            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 12, &mut exec),
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    12,
+                    b,
+                    &mut exec,
+                )
+            },
         );
         assert_eq!(order, vec![5, 7], "延迟条（到达序号更小）先于新缓冲");
         assert_eq!(perf_counters::zonek_inbound_drained() - d0, 2);
@@ -128304,14 +128429,16 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
-            |item, class| {
+            |item, class, pending, b| {
                 a6_dispatch_local(
                     item,
                     class,
                     Some(&inbox),
                     &mut sessions,
+                    pending,
                     zone,
                     10,
+                    b,
                     &mut exec,
                 )
             },
@@ -128378,7 +128505,19 @@ mod l2_s3_cross_recipient_tests {
             false,
             None,
             ZoneDrainLimits::PRODUCTION,
-            |item, class| a6_dispatch_local(item, class, None, &mut sessions, zone, 3, &mut exec),
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    3,
+                    b,
+                    &mut exec,
+                )
+            },
         );
         assert_eq!(
             order,
@@ -128404,20 +128543,84 @@ mod l2_s3_cross_recipient_tests {
         let (_g, path) = zonek_arm_counters("a6_two_control");
         let zone = crate::zone::ZoneId::new(1);
         let mut sessions = a6_sessions("p");
-        {
-            let sg = sessions.get_mut("p").expect("session");
-            sg.a6.control_pending = 2;
-            sg.a6.control_first_tick = Some(20);
-            sg.a6.deferred_local.push_back(PendingLocalCmd {
-                seq: 5,
-                ev: zonek_test_cmd(5),
-                at_tick: 20,
-            });
-        }
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
         let mut pending_local = std::collections::BTreeMap::new();
-        // 第一条 `@` 执行完：2→1，`first_tick` 不变 ⇒ 不得放行。
+        let order = std::cell::RefCell::new(Vec::<i32>::new());
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.borrow_mut().push(cmd.recog);
+            }
+        };
+        let budget = A6BatchBudget {
+            remaining_events: usize::MAX,
+            wall_ok: true,
+        };
+        // 真实路径：`@`、`@`、move 依次到达（不手写 `control_pending`）。
+        assert_eq!(
+            a6_dispatch_local(
+                SeqEvent {
+                    seq: 1,
+                    ev: zonek_test_say("@1")
+                },
+                ZoneCmdClass::Process,
+                Some(&inbox),
+                &mut sessions,
+                &mut pending_local,
+                zone,
+                20,
+                budget,
+                &mut exec,
+            ),
+            LocalDisposition::Drained
+        );
+        assert_eq!(
+            a6_dispatch_local(
+                SeqEvent {
+                    seq: 2,
+                    ev: zonek_test_say("@1")
+                },
+                ZoneCmdClass::Process,
+                Some(&inbox),
+                &mut sessions,
+                &mut pending_local,
+                zone,
+                20,
+                budget,
+                &mut exec,
+            ),
+            LocalDisposition::Drained
+        );
+        assert_eq!(sessions["p"].a6.control_pending, 2, "两条 `@` 都在飞");
+        assert_eq!(
+            a6_dispatch_local(
+                SeqEvent {
+                    seq: 3,
+                    ev: zonek_test_cmd(200)
+                },
+                ZoneCmdClass::Local,
+                Some(&inbox),
+                &mut sessions,
+                &mut pending_local,
+                zone,
+                20,
+                budget,
+                &mut exec,
+            ),
+            LocalDisposition::Deferred,
+            "move 必须暂缓"
+        );
+        assert!(
+            order.borrow().is_empty(),
+            "两条 `@` 未执行完前 move 不得执行"
+        );
+        assert_eq!(
+            a6_decide(&mut sessions, &mut pending_local, 21, zone),
+            (0, 0)
+        );
+        // 第一条 `@` 执行完（epoch 匹配）：2→1、`first_tick` 不变 ⇒ move 仍不得放行。
+        let epoch = sessions["p"].a6.control_epoch;
         {
-            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), epoch);
             g.run(|_s| {});
         }
         assert_eq!(sessions["p"].a6.control_pending, 1);
@@ -128431,9 +128634,10 @@ mod l2_s3_cross_recipient_tests {
             (0, 0),
             "还有在飞 ⇒ 不得放行"
         );
-        // 第二条 `@` 执行完：1→0 ⇒ 清 first_tick、下一次决策放行。
+        assert!(order.borrow().is_empty());
+        // 第二条 `@` 执行完：1→0 ⇒ 下一次决策放行；执行后 **直接断言 order**。
         {
-            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), 0);
+            let mut g = A6ControlGuard::new(&mut sessions, "p".to_string(), epoch);
             g.run(|_s| {});
         }
         assert_eq!(sessions["p"].a6.control_pending, 0);
@@ -128442,6 +128646,34 @@ mod l2_s3_cross_recipient_tests {
             a6_decide(&mut sessions, &mut pending_local, 21, zone).0,
             1,
             "两条都执行完 ⇒ move 才放行"
+        );
+        let mut buffer = std::collections::VecDeque::new();
+        let _ = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            0,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    21,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(
+            *order.borrow(),
+            vec![200],
+            "move 在两条 `@` 都执行完之后才执行（直接 order 断言）"
         );
         let _ = std::fs::remove_file(&path);
     }
@@ -128497,6 +128729,215 @@ mod l2_s3_cross_recipient_tests {
         }
         assert_eq!(sessions["p"].a6.control_pending, 0);
         assert_eq!(sessions["p"].a6.control_first_tick, None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **D2 牙① `a6_overflow_batch_occupies_budget_as_a_whole`**：两玩家各触发一次溢出（9+9），
+    /// 预算恰 18 ⇒ 两批**整体**吃满预算（`executed` 18 而非 2），第三项**不得**执行。
+    /// 非恒真：变异"批次按 1 条计预算" ⇒ 第三项也会执行（order 19 / buffer 空）⇒ 红。
+    #[test]
+    fn a6_overflow_batch_occupies_budget_as_a_whole() {
+        let (_g, path) = zonek_arm_counters("a6_batch_budget");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        sessions.insert("q".to_string(), crate::tests::test_session_ground(2));
+        for (chr, base) in [("p", 0u64), ("q", 100u64)] {
+            let sg = sessions.get_mut(chr).expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(3);
+            for i in 0..A6_DEFER_CAP {
+                let i = i as i32;
+                sg.a6.deferred_local.push_back(PendingLocalCmd {
+                    seq: base + i as u64,
+                    ev: zonek_test_cmd_on(chr, i),
+                    at_tick: 3,
+                });
+            }
+        }
+        // 预算恰 18 条（两个 9 条批次），墙钟充裕。
+        let limits = ZoneDrainLimits {
+            tick_max_events: 18,
+            execute_max_events: 18,
+            execute_wall: std::time::Duration::from_secs(60),
+            execute_check_every: 1,
+        };
+        let mut buffer = std::collections::VecDeque::from([
+            SeqEvent {
+                seq: 10,
+                ev: zonek_test_cmd_on("p", 10),
+            },
+            SeqEvent {
+                seq: 110,
+                ev: zonek_test_cmd_on("q", 110),
+            },
+            SeqEvent {
+                seq: 200,
+                ev: zonek_test_cmd_on("p", 200),
+            },
+        ]);
+        let mut pending_local = std::collections::BTreeMap::new();
+        let mut order: Vec<i32> = Vec::new();
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.push(cmd.recog);
+            }
+        };
+        let o0 = perf_counters::zonek_control_defer_overflow();
+        let d0 = perf_counters::zonek_inbound_drained();
+        let hit = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            0,
+            false,
+            None,
+            limits,
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    3,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(order.len(), 18, "两批各 9 条整体执行；第三项不得执行");
+        assert_eq!(
+            order[..9].to_vec(),
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 10],
+            "p 的批次按到达序"
+        );
+        assert_eq!(
+            order[9..].to_vec(),
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 110],
+            "q 的批次按到达序"
+        );
+        assert_eq!(buffer.len(), 1, "预算被两批吃满 ⇒ 第三项留缓冲");
+        assert!(hit, "有活没干完 ⇒ budget_hit");
+        assert_eq!(perf_counters::zonek_control_defer_overflow() - o0, 2);
+        assert_eq!(perf_counters::zonek_inbound_drained() - d0, 18);
+        assert!(pending_local.is_empty(), "装得下就不搬 pending_local");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **D2 牙② `a6_overflow_batch_postponed_when_budget_short`**：剩余预算 < 9 ⇒ **整批不执行**
+    /// （不 partial、不丢），按 seq 留在 `pending_local` 且置 `budget_hit`；下一 tick 预算充足时
+    /// 按 seq 全部执行。非恒真：变异"partial 执行" ⇒ order 非空 ⇒ 红；变异"丢新" ⇒ pending 8 ⇒ 红。
+    #[test]
+    fn a6_overflow_batch_postponed_when_budget_short() {
+        let (_g, path) = zonek_arm_counters("a6_batch_postpone");
+        let zone = crate::zone::ZoneId::new(1);
+        let mut sessions = a6_sessions("p");
+        {
+            let sg = sessions.get_mut("p").expect("session");
+            sg.a6.control_pending = 1;
+            sg.a6.control_first_tick = Some(3);
+            for i in 0..A6_DEFER_CAP {
+                let i = i as i32;
+                sg.a6.deferred_local.push_back(PendingLocalCmd {
+                    seq: i as u64,
+                    ev: zonek_test_cmd(i),
+                    at_tick: 3,
+                });
+            }
+        }
+        let limits = ZoneDrainLimits {
+            tick_max_events: 8,
+            execute_max_events: 8,
+            execute_wall: std::time::Duration::from_secs(60),
+            execute_check_every: 1,
+        };
+        let mut buffer = std::collections::VecDeque::from([SeqEvent {
+            seq: 10,
+            ev: zonek_test_cmd(10),
+        }]);
+        let mut pending_local = std::collections::BTreeMap::new();
+        let order = std::cell::RefCell::new(Vec::<i32>::new());
+        let mut exec = |ev: &GateEvent, _s: &mut A6Sessions| {
+            if let GateEvent::Command { cmd, .. } = ev {
+                order.borrow_mut().push(cmd.recog);
+            }
+        };
+        let d0 = perf_counters::zonek_inbound_drained();
+        let hit = execute_local_budget(
+            &mut buffer,
+            &mut pending_local,
+            0,
+            1,
+            false,
+            None,
+            limits,
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    3,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert!(hit, "装不下 ⇒ budget_hit");
+        assert!(order.borrow().is_empty(), "整批推迟：不得 partial 执行");
+        assert_eq!(
+            pending_local.len(),
+            9,
+            "整批（8+1）按 seq 留在 pending_local"
+        );
+        assert!(
+            sessions["p"].a6.deferred_local.is_empty(),
+            "不得留在 deferred_local"
+        );
+        assert_eq!(
+            perf_counters::zonek_inbound_drained() - d0,
+            0,
+            "本 tick 不计 drained"
+        );
+        // 下一 tick 预算充足 ⇒ 按 seq 全部执行（不丢、不越序）。
+        let l2 = ZoneDrainLimits {
+            tick_max_events: 2000,
+            execute_max_events: 2000,
+            ..limits
+        };
+        let mut buffer2 = std::collections::VecDeque::new();
+        let _ = execute_local_budget(
+            &mut buffer2,
+            &mut pending_local,
+            0,
+            0,
+            false,
+            None,
+            l2,
+            |item, class, pending, b| {
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    &mut sessions,
+                    pending,
+                    zone,
+                    5,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(
+            *order.borrow(),
+            (0..8).chain(std::iter::once(10)).collect::<Vec<i32>>(),
+            "推迟的批次下一 tick 按 seq 全部执行"
+        );
+        assert!(pending_local.is_empty());
+        assert_eq!(perf_counters::zonek_inbound_drained() - d0, 9);
         let _ = std::fs::remove_file(&path);
     }
 
