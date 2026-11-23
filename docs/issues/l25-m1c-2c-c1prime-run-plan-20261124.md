@@ -30,9 +30,11 @@
   env 未设 ⇒ 不建文件、只多一次 relaxed 原子读（`mir2_itemnum_trace_default_off` 牙）。
 - 区 k 本地执行：分类器 `classify_local_event` 对 `StdMode 31 / AniCount 0` 给 `Local`；
   本地臂读 `SharedServices.unbind_list`（同一 `Arc`）与 `SharedServices.item_number`。
-- **运行 head 必须 ≥ `c2fd48497`**（区 k `CM_EAT` 本地臂是 2c 合并后才有的）：
-  开窗前对上窗 exe 的源码树做符号检查——`handle_zone_command_on` 体内存在
-  `if cmd.ident == game_svr::useitem::CM_EAT` 且其调用 `handle_eat_cmd` 的 `proc` 实参为 `None`；
+- **运行 head 必须 ≥ `c2fd48497`**（区 k `CM_EAT` 本地臂是 2c 合并后才有的）**且含 A26 修复**
+  （`item_number.store(item_number_init, …)` 在源码顺序上**先于**商人装载；否则启动行从 1 起、
+  §2.2-6 判废）。开窗前对上窗 exe 的源码树做符号检查：① `handle_zone_command_on` 体内存在
+  `if cmd.ident == game_svr::useitem::CM_EAT` 且其 `handle_eat_cmd` 的 `proc` 实参为 `None`；
+  ② `sim_loop` 体内 `item_number.store(item_number_init` 先于 `spawn_merchants_with_scripts`；
   exe 内嵌 40-hex 与 `git merge-base --is-ancestor c2fd48497 <head>` 双证。
 - **容量事实**：`game_svr::bag::MAX_BAG_ITEM`=46；解包门 `item_list.len()+6-1<=46` ⇒ 背包 ≤41 才能吃；
   DBSvr 槽数 `BAG_ITEM_SLOTS`=46、`STORAGE_ITEM_SLOTS`=50 ⇒ **单角色单登录最多 96 盒**。
@@ -94,11 +96,14 @@
    `MIR2_ITEMNUM_TRACE=<run_dir>/itemnum_trace.tsv`；`MIR2_TEST_PERMISSION` **不设**。
 6. **STARTUP_ROWS 门（A26 修后口径）**：栈就绪（端口 LISTENING、进世界闸 Ready）后、起 probe
    **之前**读 trace：
-   - `STARTUP_ROWS == 0`（GA0/D701 无商人、MonGen 已挪走时的预期），**或**
-   - `STARTUP_ROWS > 0` **且**每行 `make_index > init`（`init` = 启动日志「本会话计数器初值」）
-     **且**能归因到**商人启动补货 和/或 守卫/城堡/怪物生成 drop 预算**（两类之一即可，
-     **不要求逐行区分来源**；summary 记 `STARTUP_ROWS`、
-     `STARTUP_FIRST/LAST`、按 zone 的行数，并附归因）；
+   - `STARTUP_ROWS > 0`（**本跑常态**：GA0 两条、D701 一条商人条目 ⇒ 启动补货）**且**每行
+     `make_index > init`（`init` = 启动日志「本会话计数器初值」；**前提：运行 head 已含 A26
+     修复**，即 `item_number.store(item_number_init, …)` 在源码顺序上先于商人装载）**且**能归因到
+     **商人启动补货 和/或 守卫/城堡/怪物生成 drop 预算**（两类之一即可，**不要求逐行区分来源**；
+     summary 记 `STARTUP_ROWS`、`STARTUP_ZONE_0/1_ROWS`、`STARTUP_FIRST/LAST`，并附归因）；
+   - `STARTUP_ROWS == 0` 也接受（仅当换到无商人/无守卫的图时会出现）；
+   - **退出条件**：若 head 未含 A26（启动行从 1 起、即存在 `<= init` 的行）⇒ 按判废处理，
+     换到含 A26 的 head 重跑，**不许**减数；
    - 出现**任何 `make_index <= init` 的启动行** ⇒ 判废（说明 store 未前置或另有计数器面），
      停手排查，**不许**把这行减掉凑数。
    - **样本口径**：`TOTAL/DISTINCT/DUP/CROSS_ZONE_DUP` 与 `ZONE_k_ROWS` 全部只算
@@ -137,9 +142,10 @@
 - 区 1 = **D701**（`[D701 秘密通道] DAY`，200×200，**无 MonGen 条目**；`y=100` 那排是墙，勿用）。
 - 布局串：`0:GA0=0,0-149,149;1:D701=0,0-199,199`；未提到的图由 `default_zone` 兜底（本跑 MonGen 已关，
   无怪物分配源，兜底不影响断言）。
-- **两图无商人（已核，2026-11-24）**：teststack `Envir/MerChant.txt`（162 行）与 `Envir/Npcs.txt`
-  （6 行）在 `GA0`/`D701` 上**均无条目** ⇒ 按预期 `STARTUP_ROWS == 0`；若换图/换栈须重核，
-  有商人则按 §2.2-6 的 `>0 且 >init 且归因` 分支处理。
+- **两图都有商人（实核更正，2026-11-24）**：teststack `Envir/MerChant.txt`（162 行）里
+  **`ga0` 第 12 行、`GA0` 第 14 行、`D701` 第 24 行**各有一条商人条目（前一条我按大写+紧跟空白的
+  正则漏判了 `ga0`）⇒ **两图的商人启动补货必然发生，`STARTUP_ROWS > 0` 是常态**；按 §2.2-6 的
+  `>0 且 >init 且归因` 分支处理（**不是**"预期为 0"）。换图/换栈须重新数条目。
 
 ### 3.3 关启动期/持续分配源（文件夹具，**只在 teststack 副本**）
 
@@ -188,7 +194,8 @@
 
 | 断言 | 值 |
 | --- | --- |
-| `STARTUP_ROWS` | **== 0**，或 `>0` 且每行 `> init` 并可归因（§2.2-6；含 `<= init` 的行 ⇒ 判废） |
+| `STARTUP_ROWS` | 期望 `>0`（两图有商人）且每行 `> init` 并可归因（§2.2-6；`==0` 也接受；含 `<= init` 的行 ⇒ 判废） |
+| `STARTUP_ZONE_0_ROWS` / `STARTUP_ZONE_1_ROWS` | 记录（启动行按 zone 拆；两区的商人与守卫/怪物分别落在各自区线程） |
 | `TRACE_TOTAL_ROWS` | **== 2460**（10 角色 × 41 盒 × 6 件；**探针期差分**，不含启动行） |
 | `TRACE_ZONE_0_ROWS` / `TRACE_ZONE_1_ROWS` | **各 == 1230**，且均 **≥ 1002** |
 | `TRACE_DISTINCT_VALUES` | **== TRACE_TOTAL_ROWS** |
@@ -198,6 +205,8 @@
 
 > **差分口径（写死）**：`BASE_ROWS` = §2.2-6 门读到的行数；上表全部指标按
 > `rows[BASE_ROWS..]` 计算；启动行只进 `STARTUP_*` 单列。
+> **可选粗对账（不强求逐行区分）**：`STARTUP_ROWS` 与"两图商人条目数 × 每商人货数（条目末列）
+> + 守卫/怪物 drop 预算"量级对一次；差得离谱再查，不因对不上而判废（判废只看 `<= init`）。
 
 **探针/场景口径**：每角色 `BOX_EATS == 41`、`PRODUCT_EATS == 246`、`SM_EAT_FAIL(636) == 0`、
 `probe rc == 0`；10 个 probe 登录 `InWorld` 无踢线；`MONGEN_ABSENT=1`（改名前后 sha 核对；
@@ -265,8 +274,8 @@
 
 ## 8. 报给 Leader 的字段
 
-`RUN_ID` / 正向 exe sha256 + 内嵌 head / `BASE_ROWS`、`STARTUP_ROWS`、`STARTUP_FIRST/LAST`、
-归因 / `TRACE_TOTAL_ROWS`（差分） /
+`RUN_ID` / 正向 exe sha256 + 内嵌 head / `BASE_ROWS`、`STARTUP_ROWS`、`STARTUP_ZONE_{0,1}_ROWS`、
+`STARTUP_FIRST/LAST`、归因 / `TRACE_TOTAL_ROWS`（差分） /
 `TRACE_ZONE_{0,1}_ROWS` / `TRACE_DISTINCT_VALUES` / `TRACE_DUP` / `CROSS_ZONE_DUP` /
 每角色 `BOX_EATS`、`PRODUCT_EATS` / `RESTORE_OK` / `MONGEN_ABSENT`（及条件支的 `GUARDLIST_ABSENT`）+ 模板断言原文 /
 反例 exe sha + `DUP/CROSS_ZONE_DUP` 红原文 / 收尾四项（进程/端口/仓/临时物）。
