@@ -1441,7 +1441,20 @@ fn handle_zone_command(
     chr_name: &str,
     socket: i32,
     cmd: &CommandMessage,
-) {
+) -> ZoneCmdOutcome {
+    handle_zone_command_with_tail(state, gates, chr_name, socket, cmd, None)
+}
+
+/// [`handle_zone_command`] 的**带 `tail`** 版（`CM_SAY` 的正文在 `GateEvent::Command.tail`）。
+#[cfg(test)]
+fn handle_zone_command_with_tail(
+    state: &mut ZoneState,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    cmd: &CommandMessage,
+    tail: Option<&str>,
+) -> ZoneCmdOutcome {
     let ZoneState { host, .. } = state;
     let HostLoop {
         world,
@@ -1468,9 +1481,9 @@ fn handle_zone_command(
         chr_name,
         socket,
         cmd,
-        None,
+        tail,
         &env,
-    );
+    )
 }
 
 /// **M1b 第 5b 步**：区 k 命令处置的**只读上下文**。
@@ -1482,6 +1495,18 @@ struct ZoneCmdEnv<'a> {
     enter_cfg: &'a EnterConfig,
     colors: &'a MsgColors,
     registry: Option<&'a mir2_envir::MapRegistry>,
+}
+
+/// **M1b 第 5b 步**：[`handle_zone_command_on`] 的**处置结果**（返回值，供单测**无竞态**断言）。
+///
+/// 计数器 `zone_cmd_unsupported` 是进程级全局量、并行用例会互踩 ⇒ "是否接线"用返回值判，
+/// 计数只作生产观测。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZoneCmdOutcome {
+    /// 已交给该族实现（move / hit / spell / say plain+`/`）。
+    Dispatched,
+    /// 未接线 ⇒ 计 `zone_cmd_unsupported`（函数内自计）。
+    Unsupported,
 }
 
 /// **M1b 第 3 步**：[`handle_zone_command`] 的**唯一处置实现**（区 k 循环顶与 `INBOUND_LOCAL`
@@ -1501,9 +1526,9 @@ fn handle_zone_command_on(
     chr_name: &str,
     socket: i32,
     cmd: &CommandMessage,
-    _tail: Option<&str>,
+    tail: Option<&str>,
     env: &ZoneCmdEnv<'_>,
-) {
+) -> ZoneCmdOutcome {
     if movewire::is_move_command(cmd.ident) {
         if online
             .find_by_chr(chr_name)
@@ -1524,7 +1549,7 @@ fn handle_zone_command_on(
             gates,
             None,
         );
-        return;
+        return ZoneCmdOutcome::Dispatched;
     }
     // **M1b 第 5b 步 · B1**：攻击族——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_hit_cmd`）。
     if game_svr::attackwire::is_hit_ident(cmd.ident) {
@@ -1541,7 +1566,7 @@ fn handle_zone_command_on(
             gates,
             &env.enter_cfg.catalog,
         );
-        return;
+        return ZoneCmdOutcome::Dispatched;
     }
     // **M1b 第 5b 步 · B2**：施法族——与区 0 `INBOUND_PROCESS` 支**同一实现**（实参逐项同源：
     // 进程态一项不带，全部取 `enter_cfg`/`colors`/`registry` 的区副本）。
@@ -1572,9 +1597,29 @@ fn handle_zone_command_on(
             env.colors,
             &env.enter_cfg.string_conf,
         );
-        return;
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1b 第 5b 步 · B3**：普通说话 / `/` 私聊——与区 0 **同一份** [`handle_plain_or_whisper`]
+    // （`!`/`@` 不在此列：分类器已把 `!` 归 `Unsupported`、`@` 归 `Process`）。
+    if cmd.ident == chat::CM_SAY {
+        // **`!` 频道族**：分类器归 `Unsupported`（需进程态 `GuildManager`）⇒ 本函数**不执行**、
+        // 计 `zone_cmd_unsupported`（与表外 ident 同款处置）。`@` 归 `Process`（A6 邮箱），
+        // 正常不会到区 k 本地；若到达也按未接线处置（计数 + 丢弃），不静默。
+        if tail.is_some_and(|line| {
+            say_payload_is_channel_command(line) || say_payload_is_at_command(line)
+        }) {
+            perf_counters::note_zone_cmd_unsupported(cmd.ident);
+            return ZoneCmdOutcome::Unsupported;
+        }
+        if let Some(line) = tail {
+            if let Some(speaker) = online.find_by_chr(chr_name) {
+                handle_plain_or_whisper(&*online, &*world, gates, env.colors, speaker, line);
+            }
+        }
+        return ZoneCmdOutcome::Dispatched;
     }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
+    ZoneCmdOutcome::Unsupported
 }
 
 /// **L2-5 ③ 段 1c**：把各区线程的断线存档请求发进进程级 DB 链（区 0 每 tick 调一次）。
@@ -4396,6 +4441,71 @@ fn handle_say(
     handle_say_with_saves(host, sessions, &saves, chr_name, socket, tail)
 }
 
+/// **M1b 第 5b 步**：`CM_SAY` 的**普通说话 + `/` 私聊**支（**唯一实现**）。
+///
+/// 区 0 的 [`handle_say_with_saves`] 与**区 k** 共用本函数：两条路径只是数据来源不同
+/// （区 0 = `ChatHost` 的字段；区 k = 本区 `HostLoop` 的 `online/world/gates` + `colors`）。
+/// **不含任何进程态**（`GuildManager`/`party_cfg`/`filter_word`… 都不在这里）——
+/// `!` 频道与 `@` GM 分支留在 [`handle_say_with_saves`]（那里进程态就地可用）。
+///
+/// 行为与抽取前逐字相同：首字符 `/` ⇒ [`handle_whisper`]（`SM_WHISPER(103)`）；非普通说话
+/// （空白/异常行）⇒ DBG 丢弃；否则 `GBK(ChrName:Msg)` ⇒ `SM_HEAR(40)` 发给
+/// `ref_msg_cache::targets`（500ms 缓存口径不变）。
+fn handle_plain_or_whisper(
+    online: &OnlineRegistry,
+    world: &mir2_world_bevy::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    speaker: &OnlineEntry,
+    line: &str,
+) {
+    // **orphan 编码器接线首批**：`/` 私聊（oracle `PlayObject.Chat.cs:157-166` 的 `case '/'`）
+    // ⇒ `SM_WHISPER(103)`（见 [`handle_whisper`]）。首字符 `/` 时 `is_plain_say` 亦为 false。
+    if let Some((who, text)) = chat::parse_whisper(line) {
+        handle_whisper(online, world, gates, speaker, *colors, &who, &text);
+        return;
+    }
+    if !chat::is_plain_say(line) {
+        // 非 `@` 的非普通说话（当前只有首字符 `/`/`!` 两支之外的空白/异常行）：照旧丢弃并记日志。
+        glog!(
+            "DBG",
+            "CM_SAY：非普通说话（@命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
+            speaker.chr_name
+        );
+        return;
+    }
+    // `BaseObject.Base.cs:478` 的 `ChrName + ':' + sMsg`（GBK 字节；协议层不转 UTF-8）。
+    let text = chat::hear_text(&gbk_encode(&speaker.chr_name), &gbk_encode(line));
+    let body = smframe::sm_hear(speaker.actor_id, colors.hear_f, colors.hear_b, &text);
+    let mut delivered = 0usize;
+    // **T-287 残余站点 #7**：`RM_HEAR` 在 oracle 里走 `SendRefMsg`（`BaseObject.Base.cs`）⇒ 同走
+    // 500ms 缓存；连说两句时 12 格边界观察者只收首句。
+    let say_recipients =
+        ref_msg_cache::targets(world, speaker.actor_id, chat::send_ref_msg_range());
+    perf_counters::bump_by(&perf_counters::SAY_RECIPIENTS, say_recipients.len() as u64);
+    for target_id in say_recipients {
+        let Some(t) = online.find_by_actor(target_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "说话") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: t.socket,
+            body: body.clone(),
+        });
+        delivered += 1;
+    }
+    glog!(
+        "INF",
+        "说话 ChrName:{} ActorId:{} → {} 个收件人 tail={:?}",
+        speaker.chr_name,
+        speaker.actor_id,
+        delivered,
+        line
+    );
+}
+
 /// `CM_SAY` 的生产入口（含会话任务态读源）。
 fn handle_say_with_saves(
     host: &ChatHost<'_>,
@@ -4419,20 +4529,10 @@ fn handle_say_with_saves(
     let Some(line) = tail else {
         return (Vec::new(), Vec::new());
     };
-    // **orphan 编码器接线首批**：`/` 私聊（oracle `PlayObject.Chat.cs:157-166` 的 `case '/'`）
-    // ⇒ `SM_WHISPER(103)`（见 [`handle_whisper`]）。首字符 `/` 时 `is_plain_say` 亦为 false。
-    if let Some((who, text)) = chat::parse_whisper(line) {
-        handle_whisper(
-            host.online,
-            host.world,
-            host.gates,
-            speaker,
-            *host.colors,
-            &who,
-            &text,
-        );
-        return (Vec::new(), Vec::new());
-    }
+    // **M1b 第 5b 步**：`!`/`@` 分支**留在本函数**（需要进程态：`guilds`/`party_cfg`/GM 全量）；
+    // 普通说话与 `/` 私聊抽到 [`handle_plain_or_whisper`]，**区 k 共用同一份**。
+    // 顺序说明：`parse_whisper` 只认首字符 `/`，与 `!`/`@` 互斥 ⇒ 把 whisper 移到这两个分支之后
+    // 行为等价（`handle_plain_or_whisper` 内部仍是"whisper 优先于 plain"的原序）。
     // **openmir2-channel-chat**：`!` 支（`!!` 组队 / `!~` 行会 / `!` 喊话）。
     if line.starts_with('!') {
         handle_channel_say(host, sessions, speaker, line);
@@ -4443,49 +4543,13 @@ fn handle_say_with_saves(
     if line.starts_with('@') {
         return handle_gm_command(host, sessions, saves, speaker, line);
     }
-    if !chat::is_plain_say(line) {
-        // 非 `@` 的非普通说话（当前只有首字符 `/`/`!` 两支之外的空白/异常行）：照旧丢弃并记日志。
-        glog!(
-            "DBG",
-            "CM_SAY：非普通说话（@命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
-            speaker.chr_name
-        );
-        return (Vec::new(), Vec::new());
-    }
-    // `BaseObject.Base.cs:478` 的 `ChrName + ':' + sMsg`（GBK 字节；协议层不转 UTF-8）。
-    let text = chat::hear_text(&gbk_encode(&speaker.chr_name), &gbk_encode(line));
-    let body = smframe::sm_hear(
-        speaker.actor_id,
-        host.colors.hear_f,
-        host.colors.hear_b,
-        &text,
-    );
-    let mut delivered = 0usize;
-    // **T-287 残余站点 #7**：`RM_HEAR` 在 oracle 里走 `SendRefMsg`（`BaseObject.Base.cs`）⇒ 同走
-    // 500ms 缓存；连说两句时 12 格边界观察者只收首句。
-    let say_recipients =
-        ref_msg_cache::targets(host.world, speaker.actor_id, chat::send_ref_msg_range());
-    perf_counters::bump_by(&perf_counters::SAY_RECIPIENTS, say_recipients.len() as u64);
-    for target_id in say_recipients {
-        let Some(t) = host.online.find_by_actor(target_id) else {
-            continue;
-        };
-        let Some(tx) = route_to_gate(host.gates, t.gate_idx, t.socket, "说话") else {
-            continue;
-        };
-        let _ = tx.send(SimToGate::SendFrame {
-            socket: t.socket,
-            body: body.clone(),
-        });
-        delivered += 1;
-    }
-    glog!(
-        "INF",
-        "说话 ChrName:{} ActorId:{} → {} 个收件人 tail={:?}",
-        speaker.chr_name,
-        speaker.actor_id,
-        delivered,
-        line
+    handle_plain_or_whisper(
+        host.online,
+        host.world,
+        host.gates,
+        host.colors,
+        speaker,
+        line,
     );
     (Vec::new(), Vec::new())
 }
@@ -26973,6 +27037,16 @@ fn say_payload_is_at_command(line: &str) -> bool {
     line.starts_with('@')
 }
 
+/// **M1b 第 5b 步**：`!` 频道体的**唯一共享判据**——**严格** `starts_with('!')`、**不 trim**
+/// （`!!` 组队 / `!~` 行会 / `!` 喊话；前导空格的「 !…」是普通聊天）。
+///
+/// 分类器必须调用本函数，**禁止第二份 `!` 判据**。`!` 族需要 `GuildManager`（进程态），
+/// 区 k 拿不到 ⇒ 分类为 **`Unsupported`**（**不是 `Local`**：Local 会被区 k 本地执行，
+/// 那是被否决的语义回退）。
+fn say_payload_is_channel_command(line: &str) -> bool {
+    line.starts_with('!')
+}
+
 /// `@` 命令后的 GM `pending_reconnect` 排水门（review R1）：**严格** `line.starts_with('@')`
 /// ——与 `handle_say` 的 `@` 判别同一口径（oracle `PlayObject.Chat.cs:363` 对原始行判
 /// `StartsWith("@")`；**不做 trim_start**，前导空格的「 @…」是普通聊天，不得顺带排出陈旧帧）。
@@ -27006,17 +27080,19 @@ enum ZoneCmdClass {
     Unsupported,
 }
 
-/// **M1b 八族**（设计 §12.1）的 ident 归属：move / hit / spell / **say（唯一 payload 例外）** /
+/// **M1b 八族**（设计 §12.1）的 ident 归属：move / hit / spell / **say（唯一 payload 例外族）** /
 /// query / levelrank / login-notice / magic-key。
 ///
-/// # payload 例外只此一条
+/// # payload 例外只此一族、族内三态
 ///
-/// `CM_SAY` 是**唯一** payload 级判定（非 `@` 起、含无 payload ⇒ 本区普通说话；`@` 起 ⇒ GM 命令体，
-/// 回区 0）；其余七族纯 ident 级、与 payload 无关
-///（牙 `zone_cmd_class_payload_exception_is_unique_to_cm_say`）。`@` 判据与 `gm_drain_gate`
-/// **同一份**（[`say_payload_is_at_command`]）。
+/// `CM_SAY` 是**唯一** payload 级判定族；族内三态（其余七族纯 ident 级、与 payload 无关）：
+/// - `@` 起 ⇒ `Process`（GM 命令体，回区 0，A6 控制邮箱）；
+/// - `!` 起 ⇒ **`Unsupported`**（频道族需要进程态 `GuildManager`，区 k 拿不到；**不得**归
+///   `Local`——归 Local 会被区 k 本地执行，那是被否决的语义回退）；
+/// - 其余（含无 payload）⇒ `Local`（普通说话 / `/` 私聊）。
 ///
-/// **本步零行为**：区 0 仍走原处理路径，分类器此刻**只被单测调用**；区 k 仍未开 `INBOUND`。
+/// `@`/`!` 判据分别与 `gm_drain_gate`/本地 `!` 分派**同一份**（[`say_payload_is_at_command`] /
+/// [`say_payload_is_channel_command`]）；牙 `zone_cmd_class_payload_exception_is_unique_to_cm_say_family`。
 #[allow(dead_code)] // 本步只有单测用它（M1b 接线片起生产面才引用）
 fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
     let ident_level = movewire::is_move_command(ident)
@@ -27031,12 +27107,14 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         return ZoneCmdClass::Local;
     }
     if ident == chat::CM_SAY {
-        // 非 `@` 起（含无 payload）⇒ 本区普通说话；`@` 起 ⇒ GM 命令体（回区 0，后续片走控制邮箱）。
-        return if payload.is_some_and(say_payload_is_at_command) {
-            ZoneCmdClass::Process
-        } else {
-            ZoneCmdClass::Local
-        };
+        // 族内三态（见函数 doc）：`@` ⇒ Process、`!` ⇒ Unsupported、其余 ⇒ Local。
+        if payload.is_some_and(say_payload_is_at_command) {
+            return ZoneCmdClass::Process;
+        }
+        if payload.is_some_and(say_payload_is_channel_command) {
+            return ZoneCmdClass::Unsupported;
+        }
+        return ZoneCmdClass::Local;
     }
     // **表外一律 `Unsupported`**（含 `CM_QUERYBAGITEMS(81)`、`u16::MAX` 等）：它们**不属 M1b**；
     // 塞进 `Process` 会让「区 0 收到 Process 命令」的分支误收不该管的命令。
@@ -36153,9 +36231,18 @@ impl HostLoop {
                                 ..
                             } = ev
                             {
-                                handle_zone_command_on(
-                                    world, displays, online, sessions, saves, gates, chr_name,
-                                    *socket, cmd, tail.as_deref(), &env,
+                                let _ = handle_zone_command_on(
+                                    world,
+                                    displays,
+                                    online,
+                                    sessions,
+                                    saves,
+                                    gates,
+                                    chr_name,
+                                    *socket,
+                                    cmd,
+                                    tail.as_deref(),
+                                    &env,
                                 );
                             }
                         };
@@ -125580,8 +125667,10 @@ mod zone_command_tests {
             &gates,
             "hero",
             7,
+            // **M1b 第 5b 步**：原用 `CM_SAY` 当"非移动命令"；plain say 接线后会被**执行**，
+            // 必须换成真正仍未接线的 ident（`CM_QUERYBAGITEMS` 属物品族/M1c）。
             &cmd(
-                mir2_protocol::messages::CM_SAY,
+                mir2_protocol::messages::CM_QUERYBAGITEMS,
                 before_pos.0 + 1,
                 before_pos.1,
                 0,
@@ -125621,14 +125710,12 @@ mod zone_command_tests {
             hero.vitals.hit_point = 5; // ≥ 目标 speed_point(0) ⇒ 必命中
         }
         let (gates, mut rx) = gates_and_rx();
-        let before = perf_counters::zone_cmd_unsupported();
         let hit_ident = game_svr::attackwire::HIT_IDENTS[0];
         // `Recog` = **攻击者自身位置**（`at_self` 门）；`Tag` = 方向。
-        handle_zone_command(&mut state, &gates, "hero", 7, &cmd(hit_ident, x, y, 2));
         assert_eq!(
-            perf_counters::zone_cmd_unsupported(),
-            before,
-            "攻击族不得再计 zone_cmd_unsupported（已接线）"
+            handle_zone_command(&mut state, &gates, "hero", 7, &cmd(hit_ident, x, y, 2)),
+            ZoneCmdOutcome::Dispatched,
+            "攻击族必须派发（不得计 unsupported）"
         );
         // `+GD/<tick>` 走**短包**支（`SimToGate::SendRaw`；`send_good_tick`），不是 12B 帧。
         let mut saw_gd = false;
@@ -125694,19 +125781,17 @@ mod zone_command_tests {
             tran_point: 0,
         })]);
         let (gates, mut rx) = gates_and_rx();
-        let before = perf_counters::zone_cmd_unsupported();
         // `CM_SPELL`：`Tag` = 魔法号（`parse_spell`）；`Recog` = 目标坐标。
-        handle_zone_command(
-            &mut state,
-            &gates,
-            "hero",
-            7,
-            &cmd(mir2_protocol::messages::CM_SPELL, 12, 10, 3),
-        );
         assert_eq!(
-            perf_counters::zone_cmd_unsupported(),
-            before,
-            "施法族不得再计 zone_cmd_unsupported（已接线）"
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(mir2_protocol::messages::CM_SPELL, 12, 10, 3),
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "施法族必须派发（不得计 unsupported）"
         );
         let mut saw_639 = false;
         while let Ok(ev) = rx.try_recv() {
@@ -125721,6 +125806,131 @@ mod zone_command_tests {
             saw_639,
             "施法派发必须有可观测副作用（`SM_MAGICFIRE_FAIL(639)` 帧；空断言会被直接 return 骗过）"
         );
+    }
+
+    /// **M1b 第 5b 步 · B3 牙 `zone_k_say_command_is_dispatched_with_hear_frame`**：区 k 的
+    /// `CM_SAY` 普通说话派发到与区 0 **同一份** `handle_plain_or_whisper`；可观测副作用 =
+    /// `gates` 收到 `SM_HEAR(40)`（`ref_msg_cache::targets` 含自己）。
+    #[test]
+    fn zone_k_say_command_is_dispatched_with_hear_frame() {
+        let (mut state, actor) = landed("cmd_say", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let (gates, mut rx) = gates_and_rx();
+        // **返回值判"是否接线"**（全局计数器并行会互踩；计数只作生产观测）。
+        let outcome = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(chat::CM_SAY, 0, 0, 0),
+            Some("hello"),
+        );
+        assert_eq!(
+            outcome,
+            ZoneCmdOutcome::Dispatched,
+            "普通说话必须派发（不得计 unsupported）"
+        );
+        let mut saw_hear = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if body.len() >= 6 && u16::from_le_bytes([body[4], body[5]]) == 40 {
+                    saw_hear = true;
+                }
+            }
+        }
+        assert!(saw_hear, "普通说话必须出 `SM_HEAR(40)`（可观测副作用）");
+    }
+
+    /// **M1b 第 5b 步 · B3 牙 `zone_k_whisper_command_is_dispatched_with_whisper_frame`**：
+    /// `/` 私聊同走共享实现；可观测副作用 = 收件人收到 `SM_WHISPER(103)`（收件人 = 被私聊者一人）。
+    #[test]
+    fn zone_k_whisper_command_is_dispatched_with_whisper_frame() {
+        let (mut state, actor) = landed("cmd_whisper", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let (gates, mut rx) = gates_and_rx();
+        let outcome = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(chat::CM_SAY, 0, 0, 0),
+            Some("/hero hi"),
+        );
+        assert_eq!(
+            outcome,
+            ZoneCmdOutcome::Dispatched,
+            "私聊必须派发（不得计 unsupported）"
+        );
+        let mut whisper_frames = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if body.len() >= 6 && u16::from_le_bytes([body[4], body[5]]) == 103 {
+                    whisper_frames += 1;
+                }
+            }
+        }
+        assert_eq!(
+            whisper_frames, 1,
+            "`/hero hi` 必须给被私聊者恰一帧 `SM_WHISPER(103)`"
+        );
+    }
+
+    /// **M1b 第 5b 步 · B3 牙 `zone_k_channel_say_is_not_executed_locally`**：`!` 频道族**不**在区 k
+    /// 执行（需进程态）——分类为 `Unsupported`、处置计 `zone_cmd_unsupported`、**零出帧**。
+    #[test]
+    fn zone_k_channel_say_is_not_executed_locally() {
+        let (mut state, actor) = landed("cmd_channel", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let (gates, mut rx) = gates_and_rx();
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("!hello")),
+            ZoneCmdClass::Unsupported,
+            "前置：`!` 频道说分类为 Unsupported"
+        );
+        let outcome = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(chat::CM_SAY, 0, 0, 0),
+            Some("!hello"),
+        );
+        assert_eq!(
+            outcome,
+            ZoneCmdOutcome::Unsupported,
+            "`!` 频道说必须落 Unsupported（未接线）"
+        );
+        assert!(rx.try_recv().is_err(), "`!` 频道说在区 k 必须零出帧");
+    }
+
+    /// **M1b 第 5b 步 · 守恒牙 `zone_k_unwired_families_still_count_unsupported`**：本片只接
+    /// hit/spell/say(plain+`/`)；query4 / magic-key / levelrank / login-notice **仍未接线**，
+    /// 必须继续计 `zone_cmd_unsupported`（防"顺手扩大范围"或"静默吞命令"）。
+    #[test]
+    fn zone_k_unwired_families_still_count_unsupported() {
+        let (mut state, _actor) = landed("cmd_unwired", zone::ZoneId::new(1));
+        let (gates, _rx) = gates_and_rx();
+        for ident in [
+            mir2_protocol::messages::CM_QUERYUSERNAME,
+            mir2_protocol::messages::CM_MAGICKEYCHANGE,
+            enter::CM_LEVELRANK,
+            mir2_protocol::messages::CM_LOGINNOTICEOK,
+        ] {
+            assert_eq!(
+                handle_zone_command(&mut state, &gates, "hero", 7, &cmd(ident, 0, 0, 0)),
+                ZoneCmdOutcome::Unsupported,
+                "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
+            );
+        }
     }
 
     #[test]
@@ -127809,7 +128019,13 @@ mod l2_s3_cross_recipient_tests {
             ZoneCmdClass::Local
         );
         assert_eq!(zone_cmd_class(chat::CM_SAY, None), ZoneCmdClass::Local);
-        // 表外 ⇒ Process（回区 0 / 暂不支持，后续片细分）
+        // **M1b 第 5b 步**：`!` 频道说不属 Local 族（需进程态 ⇒ `Unsupported`，区 k 不得本地执行）。
+        assert_ne!(
+            zone_cmd_class(chat::CM_SAY, Some("!hello")),
+            ZoneCmdClass::Local,
+            "`!` 频道说不在 Local 族"
+        );
+        // 表外 ⇒ Unsupported（回区 0 / 暂不支持，后续片细分）
         assert_eq!(
             zone_cmd_class(m::CM_QUERYBAGITEMS, None),
             ZoneCmdClass::Unsupported,
@@ -127840,6 +128056,20 @@ mod l2_s3_cross_recipient_tests {
             zone_cmd_class(chat::CM_SAY, Some("hello @")),
             ZoneCmdClass::Local
         );
+        // **M1b 第 5b 步 · `!` 三态**：`!` 起 ⇒ Unsupported（频道族需进程态，区 k 不能本地执行）；
+        // `!!`/`!~` 同；前导空格的 ` !x` 是普通聊天 ⇒ Local（严格判据、不 trim）。
+        for line in ["!x", "!!x", "!~x"] {
+            assert_eq!(
+                zone_cmd_class(chat::CM_SAY, Some(line)),
+                ZoneCmdClass::Unsupported,
+                "`{line}` 必须 Unsupported"
+            );
+        }
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some(" !x")),
+            ZoneCmdClass::Local,
+            "前导空格的 `!` 是普通聊天（严格判据，不 trim）"
+        );
         // 共享判据与排水门同源
         assert!(say_payload_is_at_command("@x"));
         assert!(!say_payload_is_at_command(" @x"));
@@ -127853,9 +128083,10 @@ mod l2_s3_cross_recipient_tests {
         assert!(!gm_drain_gate(None));
     }
 
-    /// **M1b 第 2 步 · payload 例外只此一条**：其余七族对 payload 完全不敏感。
+    /// **M1b 第 2 步 + 第 5b 步 · payload 例外只此一族**：`CM_SAY` 是唯一 payload 判定族
+    /// （族内三态：`@`⇒Process、`!`⇒Unsupported、其余⇒Local）；其余七族对 payload 完全不敏感。
     #[test]
-    fn zone_cmd_class_payload_exception_is_unique_to_cm_say() {
+    fn zone_cmd_class_payload_exception_is_unique_to_cm_say_family() {
         use mir2_protocol::messages as m;
         let mut idents: Vec<u16> = vec![
             m::CM_TURN,
@@ -127875,11 +128106,21 @@ mod l2_s3_cross_recipient_tests {
             assert_eq!(text, none, "ident={ident} 不得依赖 payload 是否存在");
             assert_eq!(at, ZoneCmdClass::Local, "ident={ident} 必须本地");
         }
-        // 只有 CM_SAY 会因 payload 改变归属
+        // 只有 CM_SAY 会因 payload 改变归属——且是三态（`@` / `!` / 其余）。
         assert_ne!(
             zone_cmd_class(chat::CM_SAY, Some("@gm")),
             zone_cmd_class(chat::CM_SAY, Some("hi")),
-            "CM_SAY 是唯一 payload 例外"
+            "CM_SAY 是唯一 payload 例外族（`@` 支）"
+        );
+        assert_ne!(
+            zone_cmd_class(chat::CM_SAY, Some("!gm")),
+            zone_cmd_class(chat::CM_SAY, Some("hi")),
+            "CM_SAY 是唯一 payload 例外族（`!` 支）"
+        );
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("!gm")),
+            ZoneCmdClass::Unsupported,
+            "`!` 支 = Unsupported（进程态）"
         );
     }
 
@@ -127995,6 +128236,23 @@ mod l2_s3_cross_recipient_tests {
         assert!(
             !cls_seg.contains("starts_with"),
             "分类器不得含裸 starts_with"
+        );
+        // **M1b 第 5b 步**：`!` 判据同款——共享函数严格 `starts_with('!')`、不 trim；
+        // 分类器只调共享函数（`@`/`!` 都不许裸写）。
+        let shared_ch = prod
+            .find("fn say_payload_is_channel_command(")
+            .expect("`!` 共享判据定义");
+        let rest = &prod[shared_ch..];
+        let shared_ch_end = rest.find("\n}\n").map_or(rest.len(), |k| k + 3);
+        let shared_ch_seg = &rest[..shared_ch_end];
+        assert!(
+            shared_ch_seg.contains("starts_with('!')"),
+            "`!` 判据必须严格 starts_with('!')"
+        );
+        assert!(!shared_ch_seg.contains("trim"), "`!` 判据不得 trim");
+        assert!(
+            cls_seg.contains("say_payload_is_channel_command"),
+            "分类器必须走 `!` 共享判据"
         );
     }
 
