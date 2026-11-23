@@ -1486,6 +1486,24 @@ fn handle_zone_command_with_tail(
     cmd: &CommandMessage,
     tail: Option<&str>,
 ) -> ZoneCmdOutcome {
+    let shared = SharedServices::for_test();
+    handle_zone_command_with_tail_and_shared(state, gates, chr_name, socket, cmd, tail, &shared)
+}
+
+/// **M1c-2b**：[`handle_zone_command_with_tail`] 的**可注入区副本**形态。
+///
+/// 正例牙需要真实的 `enter_cfg.catalog`（`SharedServices::for_test()` 的目录是空的）⇒ 由用例
+/// 自建 `SharedServices` 并注入；其余路径与生产区 k 同源（`ZoneCmdEnv` 三样都取自 `shared`）。
+#[cfg(test)]
+fn handle_zone_command_with_tail_and_shared(
+    state: &mut ZoneState,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    cmd: &CommandMessage,
+    tail: Option<&str>,
+    shared: &SharedServices,
+) -> ZoneCmdOutcome {
     let ZoneState { host, .. } = state;
     let HostLoop {
         world,
@@ -1495,8 +1513,6 @@ fn handle_zone_command_with_tail(
         saves,
         ..
     } = host;
-    // 测试包装器：只读上下文取 `SharedServices::for_test()` 的区副本（与生产区 k 同源形态）。
-    let shared = SharedServices::for_test();
     let env = ZoneCmdEnv {
         enter_cfg: &shared.enter_cfg,
         colors: &shared.colors,
@@ -1647,6 +1663,19 @@ fn handle_zone_command_on(
                 handle_plain_or_whisper(&*online, &*world, gates, env.colors, speaker, line);
             }
         }
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-2b**：查询背包——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_query_bag_cmd`）。
+    if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
+        handle_query_bag_cmd(
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            gates,
+            &env.enter_cfg.catalog,
+            &*world,
+        );
         return ZoneCmdOutcome::Dispatched;
     }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
@@ -27118,7 +27147,8 @@ enum ZoneCmdClass {
 }
 
 /// **M1b 八族**（设计 §12.1）的 ident 归属：move / hit / spell / **say（唯一 payload 例外族）** /
-/// query / levelrank / login-notice / magic-key。
+/// query / levelrank / login-notice / magic-key。**M1c-2b** 起再加四族（ground / bag / querybag /
+/// storage；零进程态，见 `docs/issues/l25-m1c-2b-wiring-spec-20261123.md` §8）。
 ///
 /// # payload 例外只此一族、族内三态
 ///
@@ -27139,7 +27169,15 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || QUERY_IDENTS.contains(&ident)
         || ident == enter::CM_LEVELRANK
         || ident == mir2_protocol::messages::CM_LOGINNOTICEOK
-        || magicwire::is_magic_key_ident(ident);
+        || magicwire::is_magic_key_ident(ident)
+        // **M1c-2b 四族**（ground / bag / querybag / storage）：零进程态、区 k 本区可执行。
+        || ident == game_svr::ground::CM_PICKUP
+        || ident == game_svr::ground::CM_DROPITEM
+        || ident == game_svr::bag::CM_TAKEONITEM
+        || ident == game_svr::bag::CM_TAKEOFFITEM
+        || ident == mir2_protocol::messages::CM_QUERYBAGITEMS
+        || ident == game_svr::shop::CM_USERSTORAGEITEM
+        || ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -27153,7 +27191,8 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         }
         return ZoneCmdClass::Local;
     }
-    // **表外一律 `Unsupported`**（含 `CM_QUERYBAGITEMS(81)`、`u16::MAX` 等）：它们**不属 M1b**；
+    // **表外一律 `Unsupported`**（如 `CM_CLICKNPC`、`CM_MERCHANTDLGSELECT`、`u16::MAX` 等）：
+    // 它们**不属 M1b/M1c-2b**；
     // 塞进 `Process` 会让「区 0 收到 Process 命令」的分支误收不该管的命令。
     ZoneCmdClass::Unsupported
 }
@@ -126039,10 +126078,12 @@ mod zone_command_tests {
             &gates,
             "hero",
             7,
-            // **M1b 第 5b 步**：原用 `CM_SAY` 当"非移动命令"；plain say 接线后会被**执行**，
-            // 必须换成真正仍未接线的 ident（`CM_QUERYBAGITEMS` 属物品族/M1c）。
+            // **M1b 第 5b 步**：原用 `CM_SAY` 当"非移动命令"；plain say 接线后会被**执行**。
+            // **M1c-2b**：`CM_QUERYBAGITEMS` 也已接线（会被本地执行）⇒ 换成仍未接线的
+            // `CM_CLICKNPC(1010)`（shop 族，2b 明示不接）。**保留判据本身**（未接线命令"只计数
+            // 不执行"），只换代表 ident——删断言会让"非移动命令被静默执行"重新变成无人看守。
             &cmd(
-                mir2_protocol::messages::CM_QUERYBAGITEMS,
+                mir2_protocol::messages::CM_CLICKNPC,
                 before_pos.0 + 1,
                 before_pos.1,
                 0,
@@ -126296,6 +126337,13 @@ mod zone_command_tests {
             mir2_protocol::messages::CM_MAGICKEYCHANGE,
             enter::CM_LEVELRANK,
             mir2_protocol::messages::CM_LOGINNOTICEOK,
+            // **M1c-2b**：本片**不接**的族必须继续计 `unsupported`（守恒：防"顺手扩大范围"或
+            // "臂里直接 return"把命令静默吞掉）。
+            mir2_protocol::messages::CM_CLICKNPC,
+            mir2_protocol::messages::CM_MERCHANTDLGSELECT,
+            game_svr::useitem::CM_EAT,
+            mir2_protocol::messages::CM_DEALTRY,
+            mir2_protocol::messages::CM_SELLOFFADDITEM,
         ] {
             assert_eq!(
                 handle_zone_command(&mut state, &gates, "hero", 7, &cmd(ident, 0, 0, 0)),
@@ -126303,6 +126351,82 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    /// **M1c-2b 牙 `zonek_querybag_bagitems`**：区 k 的 `CM_QUERYBAGITEMS` 派发到**与区 0 同一**
+    /// `handle_query_bag_cmd`；可观测副作用 = `SM_BAGITEMS(201)`（`Recog=ActorId`、`Series=件数`、
+    /// 带尾），30s 内二次查询**回零帧**（oracle 限频臂）。
+    ///
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 201 ⇒ 红。
+    #[test]
+    fn zonek_querybag_bagitems() {
+        let (mut state, actor) = landed("cmd_querybag", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        // 区副本目录注入一件（`SharedServices::for_test()` 的目录是空的）；登录建的会话手工放一件。
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "蜡烛".to_string(),
+                weight: 1,
+                dura_max: 20,
+                ..Default::default()
+            },
+        );
+        // 夹具与 B 组同法：`landed()` 的登录不建会话表（无 Server.conf）⇒ 手工补一张空会话。
+        state.host.ground_sessions.insert(
+            "hero".to_string(),
+            crate::tests::test_session_ground(actor),
+        );
+        {
+            let sg = state
+                .host
+                .ground_sessions
+                .get_mut("hero")
+                .expect("刚插入的会话");
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 5,
+                dura_max: 20,
+                desc: [0; 14],
+            });
+            sg.query_bag_items_tick = None;
+        }
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(mir2_protocol::messages::CM_QUERYBAGITEMS, 0, 0, 0),
+                None,
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_QUERYBAGITEMS 必须已接线"
+        );
+        let SimToGate::SendFrame { socket, body } = rx.try_recv().expect("必须回 SM_BAGITEMS")
+        else {
+            panic!("应为 SendFrame")
+        };
+        assert_eq!(socket, 7);
+        let cm = CommandMessage::from_bytes(&body).expect("至少 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_BAGITEMS, "ident=201");
+        assert_eq!(cm.recog, actor, "recog=ActorId");
+        assert_eq!(cm.series, 1, "series=ItemList.Count=1");
+        assert!(body.len() > 12, "必须带尾");
+        // 30s 内二次查询 ⇒ 回零帧（oracle 限频臂；本仓只打 WRN）。
+        let _ = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            7,
+            &cmd(mir2_protocol::messages::CM_QUERYBAGITEMS, 0, 0, 0),
+            None,
+            &shared,
+        );
+        assert!(rx.try_recv().is_err(), "限频窗口内不得回帧");
     }
 
     #[test]
@@ -128370,6 +128494,14 @@ mod l2_s3_cross_recipient_tests {
             enter::CM_LEVELRANK,       // levelrank
             m::CM_LOGINNOTICEOK,       // login-notice
             m::CM_MAGICKEYCHANGE,      // magic-key
+            // **M1c-2b 四族**（ground / bag / querybag / storage）
+            game_svr::ground::CM_PICKUP,
+            game_svr::ground::CM_DROPITEM,
+            game_svr::bag::CM_TAKEONITEM,
+            game_svr::bag::CM_TAKEOFFITEM,
+            m::CM_QUERYBAGITEMS,
+            game_svr::shop::CM_USERSTORAGEITEM,
+            game_svr::shop::CM_USERTAKEBACKSTORAGEITEM,
         ];
         for ident in local {
             assert_eq!(
@@ -128397,11 +128529,13 @@ mod l2_s3_cross_recipient_tests {
             ZoneCmdClass::Local,
             "`!` 频道说不在 Local 族"
         );
-        // 表外 ⇒ Unsupported（回区 0 / 暂不支持，后续片细分）
+        // **M1c-2b**：`CM_QUERYBAGITEMS` 已接线 ⇒ 属 Local（上面 `local` 清单已含它）。
+        // 断言的是"家族接线后属哪类"的**现状**，接线即变——所以改断言而不是删（删除会失去
+        // "它不再是表外"的守卫）。
         assert_eq!(
             zone_cmd_class(m::CM_QUERYBAGITEMS, None),
-            ZoneCmdClass::Unsupported,
-            "CM_QUERYBAGITEMS 属物品族（不属 M1b）⇒ Unsupported"
+            ZoneCmdClass::Local,
+            "M1c-2b 接线后 CM_QUERYBAGITEMS 必须 Local"
         );
         assert_eq!(
             zone_cmd_class(u16::MAX, None),
