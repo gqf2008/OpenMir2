@@ -1512,6 +1512,7 @@ fn handle_zone_command_with_tail_and_shared(
         ground_sessions,
         saves,
         trade_sessions,
+        shop_sessions,
         ..
     } = host;
     let env = ZoneCmdEnv {
@@ -1528,6 +1529,7 @@ fn handle_zone_command_with_tail_and_shared(
         ground_sessions,
         saves,
         trade_sessions,
+        shop_sessions,
         gates,
         chr_name,
         socket,
@@ -1550,6 +1552,114 @@ struct ZoneCmdEnv<'a> {
     unbind_list: &'a game_svr::unbindlist::UnbindList,
     /// **M1c-2c 段 5**：`MakeIndex` 会话计数器的**进程唯一** `Arc` 的借用（解包 6 件用）。
     item_number: &'a std::sync::atomic::AtomicI32,
+}
+
+/// **M1c-3a**：区 k 的**药物合成**（`CM_USERMAKEDRUGITEM`）本地执行体。
+///
+/// 与区 0 的 `handle_shop_cmd_inner` 对应臂**同一**造件函数（`shop::make_drug_item`）；实参全部
+/// **区本地**：会话 `sg.state`（GroundState）、本区世界的商人货架（`merchant_goods_groups`）、
+/// `shop_sessions` 的 `script_lable`、`EnterConfig` 区副本（`catalog`/`shop`/`make_items`）、
+/// 共享 `item_number`（2a 的进程唯一 `Arc`）。**不碰** `NpcHost`/`NpcVars`/`MerchantScriptBook`/
+/// `ScriptGmEnv`/`proc_svc!`（静态牙钉住）。
+///
+/// 门（oracle `PlayObject.Operate.cs:1216-1226`，无 `Death/Ghost` 门）：
+/// `merchant.flags.is_make_drug && same_map && within_sight(<15)`；不满足 ⇒ 零帧、背包不变。
+#[allow(clippy::too_many_arguments)]
+fn make_drug_zone_local(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    merchant_id: i32,
+    tail: Option<&str>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    shop_cfg: &ShopCfg,
+    make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
+    item_number: &std::sync::atomic::AtomicI32,
+    colors: &MsgColors,
+) {
+    let Some(entry) = online.find_by_chr(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_USERMAKEDRUGITEM：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_USERMAKEDRUGITEM：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    let actor_id = sg.actor_id;
+    let Some(pe) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "CM_USERMAKEDRUGITEM：actor_id={actor_id} 不在世界 ⇒ 丢弃"
+        );
+        return;
+    };
+    let (px, py, pmap) = (pe.x, pe.y, pe.map_id);
+    let Some(me) = world
+        .entities
+        .get(merchant_id)
+        .filter(|e| e.merchant.is_some())
+    else {
+        return;
+    };
+    let st = me.merchant.as_ref().expect("已过滤 merchant.is_some()");
+    let same_map = me.map_id == pmap;
+    let within_sight = (me.x - px).abs() < 15 && (me.y - py).abs() < 15;
+    let item_name = tail.unwrap_or("");
+    if !(st.flags.is_make_drug && same_map && within_sight) {
+        glog!(
+            "DBG",
+            "CM_USERMAKEDRUGITEM：非制药/异图/超视距 ⇒ 无帧 ChrName={chr_name} item={item_name:?}"
+        );
+        return;
+    }
+    let sl = shop_script_lable(shop_sessions, chr_name);
+    let ctx = shop_context(
+        catalog,
+        st.price_rate,
+        st.castle_merchant,
+        shop_cfg,
+        &sl,
+        actor_id,
+        colors,
+    );
+    let Some(goods) = world.merchant_goods_groups(merchant_id) else {
+        return;
+    };
+    let empty_reg = mir2_envir::makeitem::MakeItemRegistry::default();
+    let reg = make_items.unwrap_or(&empty_reg);
+    let r = game_svr::shop::make_drug_item(
+        &mut sg.state,
+        goods,
+        item_name,
+        catalog,
+        reg,
+        item_number,
+        &ctx,
+    );
+    glog!(
+        "INF",
+        "CM_USERMAKEDRUGITEM（区 k 本地）：ChrName={chr_name} item={item_name:?} ok={} frames={}",
+        r.ok,
+        r.frames.len()
+    );
+    if r.frames.is_empty() {
+        return;
+    }
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, "药物合成回帧") else {
+        return;
+    };
+    emit_shop_frames(tx, socket, &r.frames);
 }
 
 /// **M1b 第 5b 步**：[`handle_zone_command_on`] 的**处置结果**（返回值，供单测**无竞态**断言）。
@@ -1580,6 +1690,8 @@ fn handle_zone_command_on(
     // **M1c-2b（P1）**：`PlayObject.Dealing` 的真值来源（ground/bag 两族用）。**本区自己的**
     // 交易表——与区 0 同一把 `state` 锁内取值，不引入新锁；区 0 调用点用同名字段（锁内局部）。
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
+    // **M1c-3a**：商店会话态（`ShopSession.script_lable` —— 药物合成的 `ShopContext` 输入；区本地）。
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
     socket: i32,
@@ -1800,6 +1912,28 @@ fn handle_zone_command_on(
             env.enter_cfg.win_lottery,
             env.enter_cfg.shop.human_max_gold,
             env.enter_cfg.weapon_make_luck,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **M1c-3a**：药物合成——与区 0 同一 `shop::make_drug_item`；全部实参区本地（会话 `sg.state`、
+    // 本区世界商人货架、`shop_sessions` 的 script_lable、`EnterConfig` 区副本、共享 `item_number`）；
+    // **不碰** `NpcHost`/`NpcVars`/`MerchantScriptBook`/`ScriptGmEnv` ⇒ 不需要控制邮箱。
+    if cmd.ident == game_svr::shop::CM_USERMAKEDRUGITEM {
+        make_drug_zone_local(
+            world,
+            &*online,
+            ground_sessions,
+            shop_sessions,
+            gates,
+            chr_name,
+            socket,
+            cmd.recog,
+            tail,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.shop,
+            env.enter_cfg.make_items.as_ref(),
+            env.item_number,
+            env.colors,
         );
         return ZoneCmdOutcome::Dispatched;
     }
@@ -27404,7 +27538,9 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || ident == game_svr::bag::CM_TAKEOFFITEM
         || ident == mir2_protocol::messages::CM_QUERYBAGITEMS
         || ident == game_svr::shop::CM_USERSTORAGEITEM
-        || ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM;
+        || ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
+        // **M1c-3a**：药物合成（`shop::make_drug_item` 只碰区本地状态 + 共享 `item_number`）。
+        || ident == game_svr::shop::CM_USERMAKEDRUGITEM;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -36702,6 +36838,8 @@ impl HostLoop {
                                     saves,
                                     // **M1c-2b（P1）**：`&mut` → `&` 的逐次重借（闭包 FnMut 可重复调用）。
                                     &*trade_sessions,
+                                    // **M1c-3a**：`&mut` 的逐次重借（同上）。
+                                    &mut *shop_sessions,
                                     gates,
                                     chr_name,
                                     *socket,
@@ -128537,6 +128675,268 @@ mod zone_command_tests {
         let (released, _timeout) = a6_decide(&mut sessions, &mut pending, 11, zone);
         assert_eq!(released, 1, "清位后暂缓队列必须放行");
         assert!(sessions["hero"].a6.deferred_local.is_empty());
+    }
+
+    /// **M1c-3a 牙 `zonek_make_drug_item_creates_locally`**（正例 · A25 第二造件路径）：
+    /// 区 k 玩家站在**本区** `is_make_drug` 商人 ±15 格内、背包备料 ⇒ `CM_USERMAKEDRUGITEM`
+    /// **本地**执行 `shop::make_drug_item`：`SM_ADDITEM(200)`+`SM_MAKEDRUG_SUCCESS(166)`、背包
+    /// 材料消耗/成品入包、**共享 `item_number` +1**（进程唯一 `Arc`；trace 在 zone k 由窗口跑承担）、
+    /// **不进 A6 邮箱**（`control_pending==0`）。
+    ///
+    /// 变异：删本地臂 ⇒ `Unsupported`、零帧、计数器不动 ⇒ 红。
+    #[test]
+    fn zonek_make_drug_item_creates_locally() {
+        use mir2_formula::drop::UserItem;
+        let (mut state, actor) = landed("make_drug", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            71,
+            mir2_data::StdItem {
+                name: "草药".to_string(),
+                weight: 1,
+                dura_max: 1,
+                ..Default::default()
+            },
+        );
+        shared.enter_cfg.catalog.insert(
+            3,
+            mir2_data::StdItem {
+                name: "金创药".to_string(),
+                weight: 1,
+                dura_max: 12,
+                ..Default::default()
+            },
+        );
+        shared.enter_cfg.make_items = Some(
+            mir2_envir::makeitem::parse_make_item_lines("[金创药]\n草药 2\n").expect("配方解析"),
+        );
+        shared
+            .item_number
+            .store(500, std::sync::atomic::Ordering::Relaxed);
+        let (hx, hy) = pos_of(&state, actor);
+        let merchant_id = state
+            .host
+            .world
+            .spawn_merchant(mir2_world_bevy::MerchantSpawn {
+                name: "药店".to_string(),
+                x: hx - 2,
+                y: hy,
+                map_id: 0,
+                state: mir2_world_bevy::MerchantState::new(
+                    "drug".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world_bevy::MerchantFlags {
+                        is_make_drug: true,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("制药商人挂图成功");
+        state.host.world.merchant_add_item_to_goods_list(
+            merchant_id,
+            UserItem {
+                make_index: 1,
+                index: 3,
+                dura: 12,
+                dura_max: 12,
+                desc: [0; 14],
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.gold = 1000;
+            for mi in [10, 11] {
+                sg.state.item_list.push(game_svr::bag::BagItem {
+                    make_index: mi,
+                    index: 71,
+                    dura: 1,
+                    dura_max: 1,
+                    desc: [0; 14],
+                });
+            }
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut c = cmd(game_svr::shop::CM_USERMAKEDRUGITEM, 0, 0, 0);
+        c.recog = merchant_id;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &c,
+                Some("金创药"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_USERMAKEDRUGITEM 必须已接线（Local）"
+        );
+        let mut idents = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6 {
+                idents.push(u16::from_le_bytes([body[4], body[5]]));
+            }
+        }
+        assert!(
+            idents.contains(&mir2_protocol::messages::SM_ADDITEM),
+            "必须出 SM_ADDITEM(200)；实收 {idents:?}"
+        );
+        assert!(
+            idents.contains(&mir2_protocol::messages::SM_MAKEDRUG_SUCCESS),
+            "必须出 SM_MAKEDRUG_SUCCESS(166)；实收 {idents:?}"
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 1, "两件材料消耗、成品入包");
+        assert_eq!(sg.state.item_list[0].index, 3);
+        assert_eq!(
+            sg.state.item_list[0].make_index, 501,
+            "成品 make_index 必须来自共享计数器（500+1）"
+        );
+        assert_eq!(
+            shared
+                .item_number
+                .load(std::sync::atomic::Ordering::Relaxed),
+            501,
+            "共享 item_number 必须 +1（A25 第二造件路径）"
+        );
+        assert_eq!(
+            sg.a6.control_pending, 0,
+            "区 k 药合不得进 A6 邮箱（本地执行）"
+        );
+    }
+
+    /// **M1c-3a 牙 `zonek_make_drug_requires_merchant`**（负例）：无制药商人 / 异图 / 超视距 ⇒
+    /// `Dispatched` 但**零帧、背包不变、计数器不动**，且仍**不投邮箱**。
+    ///
+    /// 变异：删门 ⇒ 会造件/出帧 ⇒ 红。
+    #[test]
+    fn zonek_make_drug_requires_merchant() {
+        let (mut state, actor) = landed("make_drug_neg", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            71,
+            mir2_data::StdItem {
+                name: "草药".to_string(),
+                weight: 1,
+                dura_max: 1,
+                ..Default::default()
+            },
+        );
+        shared.enter_cfg.catalog.insert(
+            3,
+            mir2_data::StdItem {
+                name: "金创药".to_string(),
+                weight: 1,
+                dura_max: 12,
+                ..Default::default()
+            },
+        );
+        shared.enter_cfg.make_items = Some(
+            mir2_envir::makeitem::parse_make_item_lines("[金创药]\n草药 2\n").expect("配方解析"),
+        );
+        shared
+            .item_number
+            .store(500, std::sync::atomic::Ordering::Relaxed);
+        let (hx, hy) = pos_of(&state, actor);
+        // 商人存在但 **is_make_drug=false**（非制药）。
+        let merchant_id = state
+            .host
+            .world
+            .spawn_merchant(mir2_world_bevy::MerchantSpawn {
+                name: "普通商店".to_string(),
+                x: hx - 2,
+                y: hy,
+                map_id: 0,
+                state: mir2_world_bevy::MerchantState::new(
+                    "plain".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    mir2_world_bevy::MerchantFlags::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("普通商人挂图成功");
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.gold = 1000;
+            for mi in [10, 11] {
+                sg.state.item_list.push(game_svr::bag::BagItem {
+                    make_index: mi,
+                    index: 71,
+                    dura: 1,
+                    dura_max: 1,
+                    desc: [0; 14],
+                });
+            }
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut c = cmd(game_svr::shop::CM_USERMAKEDRUGITEM, 0, 0, 0);
+        c.recog = merchant_id;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &c,
+                Some("金创药"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        assert!(rx.try_recv().is_err(), "非制药商人 ⇒ 零帧");
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 2, "材料不得消耗");
+        assert_eq!(
+            shared
+                .item_number
+                .load(std::sync::atomic::Ordering::Relaxed),
+            500,
+            "计数器不得动"
+        );
+        assert_eq!(sg.a6.control_pending, 0, "不得投邮箱");
+    }
+
+    /// **M1c-3a 静态牙 `make_drug_local_arm_has_no_process_state`**：本地臂/执行体**不得**出现
+    /// 进程态符号（`npc_vars`/`npc_host`/`merchant_book`/`script_world`/`sell_off_book`/`proc_svc!`）。
+    #[test]
+    fn make_drug_local_arm_has_no_process_state() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        let f = prod.find("fn make_drug_zone_local(").expect("执行体定义");
+        let f_end = prod[f..].find("\n}\n").map_or(prod.len(), |k| f + k + 3);
+        let body = &prod[f..f_end];
+        for sym in [
+            "npc_vars",
+            "npc_host",
+            "merchant_book",
+            "script_world",
+            "sell_off_book",
+            "proc_svc!",
+        ] {
+            assert!(
+                !body.contains(sym),
+                "药物合成执行体不得引用进程态符号 `{sym}`"
+            );
+        }
     }
 
     #[test]
