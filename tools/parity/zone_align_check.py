@@ -17,6 +17,11 @@
   * golden-perturb = 模拟"扰动 N=1 基线"：删 golden 首帧 ⇒ A 红。
   去掉区 k FRAMES/AOI_DOWNLINK 的产品变异牙需要变异构建窗口，不在本脚本模拟范围。
 - 角色归一 `--roles gA,gB,tA,tB`：未命中 A/B 的帧（other）不计 A/C1/C2/D，只计数（装置文档 §3）。
+- **body 角色归一（窄白名单，2026-11-23 卡 `openmir2-hit-hp-fixture-ineffective` 配套）**：
+  31 帧的判定面 = header（recog/param/tag/series）+ body 的 `MaxHP/Status/Mag` + **按角色归一的 Hitter**；
+  其它 body 字节原样比较。`MessageBodyWL.Tag1 = 命中者 ActorId` 是身份字段（依据见 `BODY_ROLE_FIELDS` 注释），
+  actor id 随区段变化是构造性的 ⇒ 按 `--roles` 映射成同一角色占位；**两侧映射到不同角色或映射不到 ⇒ 不归一 ⇒ 必红**。
+  只对登记过的 `(ident, 字段)` 生效，未登记 ident 一律不归一；**禁止**清空/忽略该字段。
 - **self 桶（卡「区 k MaxExp=0」证据配套）**：`recog==0` 的自我帧（如 `SM_ABILITY(52)`）不在
   `--roles` 映射里，旧口径整帧排除。`--self-bucket` 把该桶按**收件人侧**单独归键比较：
   * `off`（默认）⇒ 与旧版逐项一致（不输出 self_* 字段，rc 不变）；
@@ -33,7 +38,7 @@
 - 自测：`--self-selftest`（离线、合成夹具、临时目录；不读仓库状态）。
 - 退出码：0 全过；1 A/C1/D 红（judge 模式下含 self 红）；2 判不了。
 """
-import argparse, json, sys, hashlib, collections, os, tempfile, re
+import argparse, json, sys, hashlib, collections, os, tempfile, re, struct
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PROBE = os.environ.get("MIR2_PROBE_DIR", os.path.join(_REPO_ROOT, "tools", "probe"))
@@ -50,6 +55,73 @@ def sha12(f):
     hdr = pack_header(f["recog"], f["ident"], f["param"], f["tag"], f["series"])
     body = bytes.fromhex(f["body_hex"])
     return hashlib.sha256(hdr + body).hexdigest()
+
+# ---------------------------------------------------------------------------
+# **body 角色归一（窄白名单）**：只登记 `(ident, 字段)`，按 `--roles` 把 body 内的身份字段
+# （ActorId）映射成角色占位再比较。
+#
+# 为什么 31 的 Tag1 是身份字段（符号锚 + 原文）：
+# - C# `MessageBodyWL`（`src/OpenMir2/Packets/ClientPackets/MessageBodyWL.cs`）：
+#   `public int Param1; public int Param2; public int Tag1; public int Tag2;`
+#   —— `Tag1` 是**命中者 ActorId**（SM_STRUCK 的 RM_STRUCK 支填 `processMsg.Tag1`）；
+# - `PlayObject.Message.cs:1601` 的 `RM_STRUCK` 支把 `wl.Tag1` 当作命中者；
+# - 本仓同位置：`sm_struck` / `sm_struck_client`（`bins/game-svr/src/smframe.rs`）的
+#   `wl[8..12] = hitter_id`（两种布局都是 16B `MessageBodyWL`）。
+# ⇒ golden 的 201 与 test 的 4194327 都映射到角色 P 时，两侧应换成同一占位；映射后仍不等 ⇒ 真差异。
+#
+# 反面（禁止）：把该字段清空/忽略会把"命中者换成另一个角色"也判绿 —— 自测有双向牙覆盖。
+BODY_ROLE_FIELDS = {31: (8, 12)}  # ident -> (start, end) in decoded 16B MessageBodyWL
+_ROLE_PLACEHOLDER = {"A": 0x7FFF_0001, "B": 0x7FFF_0002}
+_ED_MOD = {}
+_BODY_NORM_CACHE = {}
+
+
+def _load_ed():
+    """复用既有 EDCode 实现（LoginSrv 金标准采集器里的 C# EncryptUtil 移植），不新写一套。"""
+    if "mod" in _ED_MOD:
+        return _ED_MOD["mod"]
+    path = os.path.join(_REPO_ROOT, "mir2-rs", "tests", "parity", "loginsrv", "oracle_capture.py")
+    mod = None
+    if os.path.isfile(path):
+        import importlib.util
+        try:
+            spec = importlib.util.spec_from_file_location("_zone_align_edcode", path)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            mod = m
+        except Exception:
+            mod = None
+    _ED_MOD["mod"] = mod
+    return mod
+
+
+def normalized_body_hex(f, role_map):
+    """按窄白名单把 body 身份字段的角色映射成占位；任何一步判不了 ⇒ 返回原 body（fail-closed ≠ 放行）。"""
+    if not role_map:
+        return f["body_hex"]
+    span = BODY_ROLE_FIELDS.get(f["ident"])
+    if not span:
+        return f["body_hex"]
+    ck = (f["ident"], f["body_hex"])
+    if ck in _BODY_NORM_CACHE:
+        return _BODY_NORM_CACHE[ck]
+    out = f["body_hex"]
+    ed = _load_ed()
+    if ed is not None:
+        try:
+            raw = ed.edcode_decode(bytes.fromhex(f["body_hex"]))
+            start, end = span
+            if len(raw) >= end:
+                actor = int.from_bytes(raw[start:end], "little", signed=False)
+                role = role_map.get(actor)
+                if role in _ROLE_PLACEHOLDER:
+                    raw = bytearray(raw)
+                    raw[start:end] = _ROLE_PLACEHOLDER[role].to_bytes(4, "little")
+                    out = ed.edcode_encode(bytes(raw)).hex()
+        except Exception:
+            out = f["body_hex"]
+    _BODY_NORM_CACHE[ck] = out
+    return out
 
 def load_frames(path):
     out = []
@@ -83,22 +155,23 @@ def order_violations(G, T):
                 if not max(posT[b]) < min(posT[a]): bad.append((b, a))
     return bad
 
-def _self_key(side, f):
+def _self_key(side, f, role_map=None):
     """self 桶键：显式 side 进键，保证 A 侧与 B 侧永不互相配对。"""
-    h = f'{side}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{f["body_hex"]}'
+    body = normalized_body_hex(f, role_map or {})
+    h = f'{side}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{body}'
     return hashlib.sha256(h.encode()).hexdigest()
 
-def _self_bucket(G, T, side):
+def _self_bucket(G, T, side, role_map=None):
     """`recog==0` 自我帧按收件人侧做多重集比较（G/T 已过 ignore/trim/entry-window）。"""
     sg = [f for f in G if f["recog"] == 0]
     st = [f for f in T if f["recog"] == 0]
-    cg = collections.Counter(_self_key(side, f) for f in sg)
-    ct = collections.Counter(_self_key(side, f) for f in st)
+    cg = collections.Counter(_self_key(side, f, role_map) for f in sg)
+    ct = collections.Counter(_self_key(side, f, role_map) for f in st)
     reds = []
     for k in sorted(set(cg) | set(ct)):
         if cg[k] == ct[k]:
             continue
-        sample = next((f for f in sg + st if _self_key(side, f) == k), None)
+        sample = next((f for f in sg + st if _self_key(side, f, role_map) == k), None)
         reds.append({
             "key": k[:16], "golden": cg[k], "test": ct[k],
             "ident": sample["ident"] if sample else None,
@@ -106,9 +179,9 @@ def _self_bucket(G, T, side):
             "tag": sample["tag"] if sample else None,
             "series": sample["series"] if sample else None,
             "body_hex_golden": next((f["body_hex"][:80] for f in sg
-                                     if _self_key(side, f) == k), ""),
+                                     if _self_key(side, f, role_map) == k), ""),
             "body_hex_test": next((f["body_hex"][:80] for f in st
-                                   if _self_key(side, f) == k), ""),
+                                   if _self_key(side, f, role_map) == k), ""),
         })
     return {"self_frames_golden": len(sg), "self_frames_test": len(st),
             "self_red_count": len(reds), "self_reds": reds}
@@ -220,7 +293,8 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
         role = role_map.get(f["recog"])
         if role is None:
             return None
-        hdr = f'{role}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{f["body_hex"]}'
+        body = normalized_body_hex(f, role_map)
+        hdr = f'{role}|{f["ident"]}|{f["param"]}|{f["tag"]}|{f["series"]}|{body}'
         return hashlib.sha256(hdr.encode()).hexdigest()
     ew_keys = set(k for k in entry_window_keys.split(",") if k.strip())
     ew_g = [f for f in G if key(f) in ew_keys]
@@ -307,11 +381,17 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
     # self 桶：additive（`other_frames_*` 仍含 recog=0，self 是它的子集；不改旧字段）。
     self_red = 0
     if self_bucket in ("report", "judge"):
-        sb = _self_bucket(G, T, side)
+        sb = _self_bucket(G, T, side, role_map)
         out["self_bucket"] = self_bucket
         out["self_side"] = side
         out.update(sb)
         self_red = sb["self_red_count"]
+    out["body_role_norm"] = {
+        "enabled": bool(role_map),
+        "fields": [{"ident": i, "offset": [a, b], "name": "MessageBodyWL.Tag1(hitter ActorId)"}
+                   for i, (a, b) in BODY_ROLE_FIELDS.items()],
+        "surface": "31 帧判定面 = header(recog/param/tag/series) + body MaxHP/Status/Mag + 按角色归一的 Hitter",
+    }
     rc = 1 if (reds or bad_order or judge_d_red) else 0
     if self_bucket == "judge" and self_red > 0:
         rc = 1
@@ -443,7 +523,36 @@ def _selftest():
         ck("dead_bucket_off_unchanged", rc == 1 and out.get("sidecar_unconsumed") == 1
            and "dead_socket_attributed_count" not in out, f"rc={rc}")
 
-    expected = 17
+    # ---- body 角色归一（31/Tag1）：按角色映射归一，不是抹字段；窄白名单 ----
+    ed = _load_ed()
+    ck("edcode_available_for_body_norm", ed is not None, "oracle_capture.py 缺失 ⇒ body 归一判不了")
+    if ed is not None:
+        def wl(max_hp=16, status=0, hitter=0, mag=0):
+            return ed.edcode_encode(struct.pack("<iiii", max_hp, status, hitter, mag)).hex()
+        g_ok = [frame(31, 101, param=15, series=1, body=wl(16, 0, 102))]      # golden hitter=B(102)
+        t_ok = [frame(31, 201, param=15, series=1, body=wl(16, 0, 202))]      # test   hitter=B(202)
+        t_rolebad = [frame(31, 201, param=15, series=1, body=wl(16, 0, 201))] # test hitter=A(201) ⇒ 角色不同
+        t_hpbad = [frame(31, 201, param=15, series=1, body=wl(17, 0, 202))]   # MaxHP 16→17（内容字段）
+        g_unmapped = [frame(31, 101, param=15, series=1, body=wl(16, 0, 999))] # golden hitter=未知 actor
+        g_u = [frame(30, 101, body=wl(16, 0, 102))]                           # 未登记 ident（30）
+        t_u = [frame(30, 201, body=wl(16, 0, 202))]
+        out_ok, rc_ok = run_core(*case("body_norm_ok", g_ok, t_ok), 1000, roles=roles)
+        ck("body_role_norm_same_role_green", rc_ok == 0 and out_ok["multiset_reds"] == [],
+           f"rc={rc_ok} reds={out_ok['multiset_reds']}")
+        out_rb, rc_rb = run_core(*case("body_norm_rolebad", g_ok, t_rolebad), 1000, roles=roles)
+        ck("body_role_norm_diff_role_red",
+           rc_rb == 1 and any(r[0] == 31 for r in out_rb["multiset_reds"]), f"rc={rc_rb}")
+        out_hb, rc_hb = run_core(*case("body_norm_hpbad", g_ok, t_hpbad), 1000, roles=roles)
+        ck("body_role_norm_content_field_red",
+           rc_hb == 1 and any(r[0] == 31 for r in out_hb["multiset_reds"]), f"rc={rc_hb}")
+        out_um, rc_um = run_core(*case("body_norm_unmapped", g_unmapped, t_ok), 1000, roles=roles)
+        ck("body_role_norm_one_side_unmapped_red",
+           rc_um == 1 and any(r[0] == 31 for r in out_um["multiset_reds"]), f"rc={rc_um}")
+        out_u, rc_u = run_core(*case("body_norm_unregistered", g_u, t_u), 1000, roles=roles)
+        ck("body_role_norm_unregistered_ident_red",
+           rc_u == 1 and any(r[0] == 30 for r in out_u["multiset_reds"]), f"rc={rc_u}")
+
+    expected = 23
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print(f"SELFTEST {name} {'ok' if cond else 'FAIL'} {detail}")
