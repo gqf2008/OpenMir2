@@ -478,3 +478,50 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
    **该数为按命令触发性质的定性判断，无可测频率数据**。
 ③ **歧义族合计 8**（命令 6：say/ground/deal/storage/party/inbound-misc；事件 2：CertificationPending/Closed），
    其中 **触 `item_number` = 2**（ground、inbound-misc）。
+
+## 12. M1b / M1c 放行条件清单（`0c` 2026-11-23 产出，opc-27 裁定）
+
+### 12.1 M1b 的区 k 命令集（**除此之外一律不在区 k 本地**）
+
+| 族 | ident 集来源（`const`/谓词，不手抄） | 类 |
+| --- | --- | --- |
+| move | `movewire::is_move_command`（`CM_TURN`/`CM_WALK`/`CM_RUN`）∪ `is_horse_run`（`CM_HORSERUN`+`_LEGACY`） | LOCAL |
+| hit | `attackwire::HIT_IDENTS: [u16; 9]` | LOCAL |
+| spell | `magicwire::is_spell_ident`（`CM_SPELL`） | LOCAL |
+| say（**非 GM**） | `CM_SAY` 文本不以 `@` 起 = 本区聊天；`@` 起 = **控制邮箱回区 0**（A6 顺序在 M1b 设计单列） | LOCAL / 转发 |
+| query | P0 批的 query 4 条：`CM_QUERYUSERNAME`/`CM_QUERYUSERSTATE`/`CM_QUERYUSERSET`/`CM_QUERYVAL` | 只读 |
+| levelrank | `CM_LEVELRANK` | 只读 |
+| login-notice | `CM_LOGINNOTICEOK` | 只写 `client_tick` |
+| **magic-key** | `CM_MAGICKEYCHANGE`（**opc-27 裁定入 M1b**：不造件、不需进程态） | LOCAL |
+
+**本集之外一律不在区 k 本地**：物品类（bag/eat/drop/drug/shop/selloff/click-npc）与 PROCESS 类
+（guild/kick/AdminGm，按 form (d)/广播）+ deal/storage/**party**（opc-27 裁定入 M1c）→ 后续片次。
+⇒ **M1b 无"排除清单例外"：切片边界本身就是"不造件"**。
+
+**P0 批必须逐条切**（`dispatch_inbound_p0` 的 6 条）：query 4 → M1b；`CM_SOFTCLOSE`、
+`CM_CLICKNPC` → M1c。**不许整批开。**
+
+### 12.2 M1c 起手顺序：先共享计数，再开物品族
+
+1. **第一件**：`item_number` 改共享（`Arc<AtomicI32>` 或等价句柄）。**N=1 下与今日一致**（单写者、
+   分配序不变）。验收两条：①N=1 两树 stdout **逐字节相等**（同 M0 口径）②**对照式**单测：同一初值跑
+   1000 次分配，新实现产出的序号序列 == 旧实现序列（不是"看起来递增"）。
+2. **然后**开物品族（bag/eat/drop/drug/shop/click-npc；selloff 跨区随后解锁）。
+   验收：区 k 造件 `MakeIndex` **全局唯一**（造 N 件后集合大小 == N）。
+
+### 12.3 (d) 的三条见证（用例名 + 期望）
+
+- **W1** `zone0_cannot_tick_zonek_world`：区 0 线程对区 k 的 `World` 调 `tick_*` ⇒ `should_panic`
+  （匹配 `owner_thread` 断言文案）。
+- **W2** `hold_target_lock_no_second_hostloop_lock`：持目标区锁期间 `target.try_lock()` ⇒
+  `Err(WouldBlock)`；`∀ z≠target: z.try_lock()` ⇒ `Ok`。
+- **W3** `d_path_takes_no_process_mutex`：运行期进程级 `Arc<Mutex>` **锁计数 == 0**（行为证据，
+  须写明计数来自哪个计数器/哪个 hook 才能复跑）；"handler 形参不含 `db`/`engine`/进程 `Arc<Mutex>`"
+  的静态牙**标注为接线提示、非行为证据**。
+
+### 12.4 `KickAccount`：广播 + 各区自查
+
+一条踢令**广播给全部 N 区**，各区在**自己**的 `online` 里查该 account，命中区本地踢；**不建全局索引**
+（理由：kick 低频幂等，索引把它换成常驻维护 + 陈旧项一致性面；kick 属系统事件，不属「同玩家玩家命令
+跨类顺序」的 A6 契约）。验收 `kick_broadcast_idempotent_and_single_zone`：account 在区 k 在线，
+广播 2 次 ⇒ **只踢一次**（其余区 no-op、计数不误增）；踢后区 k `online` 无该 account。
