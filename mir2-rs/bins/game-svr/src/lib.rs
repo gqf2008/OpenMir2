@@ -25071,6 +25071,10 @@ mod perf_counters {
     static ZONEK_CONTROL_WAIT_TIMEOUT: AtomicU64 = AtomicU64::new(0);
     static ZONEK_CONTROL_MAILBOX_REJECTED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_CONTROL_SHUTDOWN_DISCARDED: AtomicU64 = AtomicU64::new(0);
+    /// **M1c-2c 段 4**：drain 时目标区 `ZoneState` 已不在（`zh.zone_state(zone_k) == None`）⇒
+    /// 该区已取空的请求**无法落地**，按丢弃的**请求条数**计（与 `mailbox_rejected` 同口径）。
+    /// 旧行为是静默 `continue`（不计数不告警）。
+    static ZONEK_CONTROL_ZONE_GONE: AtomicU64 = AtomicU64::new(0);
     /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
     /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
     pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
@@ -25588,6 +25592,15 @@ mod perf_counters {
         }
     }
 
+    /// **M1c-2c 段 4**：drain 时目标区状态已不在 ⇒ 被丢弃的控制请求**条数**（`n`）。
+    /// 旧路径是静默 `continue`；本列与限速 WRN 成对（不许只有其一）。
+    #[inline]
+    pub(crate) fn note_zonek_control_zone_gone(n: u64) {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CONTROL_ZONE_GONE.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
     /// `#[cfg(test)]` 读点（各一）。
     #[cfg(test)]
     pub(crate) fn zonek_inbound_drained() -> u64 {
@@ -25636,6 +25649,10 @@ mod perf_counters {
     pub(crate) fn zonek_control_shutdown_discarded() -> u64 {
         ZONEK_CONTROL_SHUTDOWN_DISCARDED.load(Ordering::Relaxed)
     }
+    #[cfg(test)]
+    pub(crate) fn zonek_control_zone_gone() -> u64 {
+        ZONEK_CONTROL_ZONE_GONE.load(Ordering::Relaxed)
+    }
 
     /// **M1b 第 3 步（r6）**：**5 个**派生列的**纯函数**（写行与单测共用同一份数学）。
     ///
@@ -25654,7 +25671,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -25777,11 +25794,13 @@ mod perf_counters {
             zk[3],
             zk[4],
             zk[5],
-            // **M1b 第 4 步（A6）**：4 列（前三个降级 + 关服残留；仅区 k；N=1 恒 0；无派生列）。
+            // **M1b 第 4 步（A6）+ M1c-2c 段 4**：5 列（三个降级 + 关服残留 + 区状态不在；
+            // 仅区 k；N=1 恒 0；无派生列——按 A6 口径"区 0 无同名语义"）。
             ZONEK_CONTROL_DEFER_OVERFLOW.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_WAIT_TIMEOUT.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_MAILBOX_REJECTED.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_SHUTDOWN_DISCARDED.swap(0, Ordering::Relaxed),
+            ZONEK_CONTROL_ZONE_GONE.swap(0, Ordering::Relaxed),
             // **5 个**派生列（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
             // `inbound_carry_all_zones` 按 r6 已删（混合分母：区 0 按事件、区 k 按命令）。
             dv[0],
@@ -37733,20 +37752,16 @@ impl HostLoop {
                 // 世界初始化中止（与 PROCESS 支同一条门）⇒ 不执行任何 GM 命令（邮箱留待退出）。
                 if let Some(zh) = zone_host.as_ref().filter(|_| !world_start.is_aborted()) {
                     for z in 1..zh.control_inboxes.len() {
-                        // 先把该区邮箱**取空**（取空即释放邮箱锁）；随后逐条持区锁执行。
-                        let requests: Vec<ControlRequest> = {
-                            let inbox = Arc::clone(&zh.control_inboxes[z]);
-                            let mut q = inbox
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            q.drain(..).collect()
-                        };
-                        if requests.is_empty() {
-                            continue;
-                        }
                         let Ok(zi) = u32::try_from(z) else { continue };
                         let zone_k = zone::ZoneId::new(zi);
-                        let Some(state_arc) = zh.zone_state(zone_k) else {
+                        // 先把该区邮箱**取空**（取空即释放邮箱锁）；随后逐条持区锁执行。
+                        // **M1c-2c 段 4**：区状态缺失不再静默 `continue` ——
+                        // `zonek_control_zone_gone` 计数 + 限速 WRN（`a6_take_control_requests`）。
+                        let Some((requests, state_arc)) = a6_take_control_requests(
+                            &zh.control_inboxes[z],
+                            zh.zone_state(zone_k),
+                            zone_k,
+                        ) else {
                             continue;
                         };
                         for req in requests {
@@ -40238,6 +40253,53 @@ impl Drop for A6ControlGuard<'_> {
             sg.a6.control_first_tick = None;
         }
     }
+}
+
+/// **M1c-2c 段 4**：区 0 drain 的**取邮箱 + 解析区状态**（单一入口；行为测试点）。
+///
+/// - 邮箱**先取空**（取空即释放邮箱锁）；空 ⇒ `None`（本 tick 无活，不动任何计数）。
+/// - 区状态**不在**（`zh.zone_state(zone_k) == None`：区未切片/区线程已退出）⇒ 已取空的请求
+///   **无法落地**：按丢弃的**请求条数**计 `zonek_control_zone_gone`，并打**限速** WRN
+///   （每分钟 ≤1 条，口径同其余 A6 降级 WRN）⇒ `None`。**旧行为是静默 `continue`**。
+/// - 正常 ⇒ `Some((requests, 区状态 Arc))`，逐条持区锁执行（A9 边界不变）。
+fn a6_take_control_requests(
+    inbox: &std::sync::Mutex<std::collections::VecDeque<ControlRequest>>,
+    state_arc: Option<&Arc<std::sync::Mutex<ZoneState>>>,
+    zone_k: zone::ZoneId,
+) -> Option<(Vec<ControlRequest>, Arc<std::sync::Mutex<ZoneState>>)> {
+    let requests: Vec<ControlRequest> = {
+        let mut q = inbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.drain(..).collect()
+    };
+    if requests.is_empty() {
+        return None;
+    }
+    let Some(state_arc) = state_arc else {
+        perf_counters::note_zonek_control_zone_gone(
+            u64::try_from(requests.len()).unwrap_or(u64::MAX),
+        );
+        a6_control_zone_gone_warn(zone_k, requests.len());
+        return None;
+    };
+    Some((requests, Arc::clone(state_arc)))
+}
+
+/// **M1c-2c 段 4**：drain 时目标区状态已不在 ⇒ 请求丢弃的限速 WRN（每分钟 ≤1 条）。
+fn a6_control_zone_gone_warn(zone: zone::ZoneId, dropped: usize) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 控制邮箱已排空但区状态不在（zh.zone_state=None）⇒ 丢弃 {dropped} 条请求（zonek_control_zone_gone；不执行、不动在飞计数）；上一分钟抑制 {suppressed} 条"
+    );
 }
 
 /// **A6**：控制邮箱满 ⇒ 丢弃的限速 WRN（每分钟 ≤1 条）。
@@ -130083,6 +130145,79 @@ mod l2_s3_cross_recipient_tests {
         (g, path)
     }
 
+    /// **M1c-2c 牙（段 4）`eat_process_zone_state_missing_counts`**：drain 时目标区
+    /// `zh.zone_state(zone_k) == None`（区未切片/区线程已退出）⇒ ① `zonek_control_zone_gone`
+    /// 按**请求条数** +1；② 同一路径打**限速** WRN（`a6_control_zone_gone_warn`，每分钟 ≤1 条）；
+    /// ③ 命令**不落地**（邮箱已取空、返回 `None`、不执行）。对照：区状态在 ⇒ 原样交出、不计数。
+    ///
+    /// **旧行为是静默 `continue`**（不计数不告警）——本牙钉「不再静默」。
+    /// 变异：恢复静默（不调 `a6_take_control_requests` / 删计数）⇒ 计数断言红 / 静态面红；
+    /// 把 `None` 支当"正常"（返回 `Some`）⇒ "不落地"断言红。
+    #[test]
+    fn eat_process_zone_state_missing_counts() {
+        let (_g, path) = zonek_arm_counters("zone_gone");
+        let zone_k = zone::ZoneId::new(1);
+        let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let mk_req = || ControlRequest::EatProcess {
+            zone: zone_k,
+            chr_name: "hero".to_string(),
+            recog: 9001,
+            param: 0,
+            tag: 0,
+            tail: None,
+            at_tick: 3,
+            epoch: 0,
+        };
+        inbox.lock().expect("inbox").push_back(mk_req());
+        let g0 = perf_counters::zonek_control_zone_gone();
+        assert!(
+            a6_take_control_requests(&inbox, None, zone_k).is_none(),
+            "区状态缺失 ⇒ 请求不得落地（不执行）"
+        );
+        assert_eq!(
+            perf_counters::zonek_control_zone_gone() - g0,
+            1,
+            "一条请求丢弃 ⇒ zonek_control_zone_gone +1（按条数）"
+        );
+        assert!(
+            inbox.lock().expect("inbox").is_empty(),
+            "邮箱已取空（丢弃，不留待重试）"
+        );
+        // 对照：区状态在 ⇒ 原样交出（不计数、不丢弃）。
+        inbox.lock().expect("inbox").push_back(mk_req());
+        let state = std::sync::Arc::new(std::sync::Mutex::new(ZoneState::new(
+            zone_k,
+            &[(20, 20)],
+            None,
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        )));
+        let g1 = perf_counters::zonek_control_zone_gone();
+        let (taken, arc) = a6_take_control_requests(&inbox, Some(&state), zone_k)
+            .expect("区状态在 ⇒ 必须交出请求");
+        assert_eq!(taken.len(), 1, "请求原样交出");
+        assert!(
+            std::sync::Arc::ptr_eq(&arc, &state),
+            "交出的是同一区状态实例"
+        );
+        assert_eq!(
+            perf_counters::zonek_control_zone_gone() - g1,
+            0,
+            "正常路径不得计数（新列只在区状态缺失时 +1）"
+        );
+        // 静态面：drain 的旧「静默 continue」三行必须消失、接线走 helper（段 4 的两面同一笔）。
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        assert!(
+            !prod.contains("let Some(state_arc) = zh.zone_state(zone_k) else {"),
+            "静默 `continue` 必须删除（改走 a6_take_control_requests）"
+        );
+        assert!(
+            prod.contains("a6_take_control_requests("),
+            "drain 必须接线 a6_take_control_requests"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     fn zonek_cmd_count2(
         rx: &std::sync::mpsc::Receiver<GateEvent>,
         ctl: &std::sync::mpsc::Receiver<GateEvent>,
@@ -130362,6 +130497,7 @@ mod l2_s3_cross_recipient_tests {
             "zonek_inbound_overflow_dropped",
             "zonek_inbound_pending_discarded",
             "zonek_inbound_unsupported",
+            "zonek_control_zone_gone",
             "inbound_drained_all_zones",
             "inbound_budget_hit_all_zones",
             "inbound_overflow_dropped_all_zones",
