@@ -15,6 +15,7 @@
   * cross-as-local = 模拟"把跨区帧当本区帧（不 +1）"：不做扣减 ⇒ 旁路未消费 ⇒ D 红；
   * global-plus1   = 模拟"全局统一 +1"：分类按"前一帧"错位匹配 ⇒ 旁路未消费 ⇒ D 红；
   * golden-perturb = 模拟"扰动 N=1 基线"：删 golden 首帧 ⇒ A 红。
+  去掉区 k FRAMES/AOI_DOWNLINK 的产品变异牙需要变异构建窗口，不在本脚本模拟范围。
 - 角色归一 `--roles gA,gB,tA,tB`：未命中 A/B 的帧（other）不计 A/C1/C2/D，只计数（装置文档 §3）。
 - **self 桶（卡「区 k MaxExp=0」证据配套）**：`recog==0` 的自我帧（如 `SM_ABILITY(52)`）不在
   `--roles` 映射里，旧口径整帧排除。`--self-bucket` 把该桶按**收件人侧**单独归键比较：
