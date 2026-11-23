@@ -25250,7 +25250,8 @@ mod perf_counters {
 
     // ---- **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的降级计数 ----
 
-    /// `deferred_local` 溢出事件次数（`== 上限 8` 再来 ⇒ **每次溢出 +1**，不是条数）。
+    /// `deferred_local` 溢出**触发**次数（`== 上限 8` 再来 ⇒ 每次触发 +1；**就地执行与推迟
+    /// 两条路径都计**；不是条数）。
     #[inline]
     pub(crate) fn note_zonek_control_defer_overflow() {
         if ENABLED.load(Ordering::Relaxed) {
@@ -39319,6 +39320,7 @@ fn a6_enqueue_control(
     // `control_pending += 1` **之前** drain 并执行该请求，其 RAII 守卫先减计数、本线程再 +1
     // ⇒ 计数**粘 1 到超时**（本地命令白等、`zonek_control_wait_timeout` 假涨）。
     // 七条负例都是单线程构造，抓不到这一点——这是**并发正确性前提**，不是可测行为。
+    // **计数与 push 在同一临界区；七条负例为确定性单线程，不覆盖该并发窗口。**
     {
         let mut q = inbox
             .lock()
@@ -39435,6 +39437,11 @@ fn a6_dispatch_local(
                 .get(&chr)
                 .map_or(0, |sg| sg.a6.deferred_local.len())
                 + 1;
+            // **R2：在触发点 +1（就地执行与推迟两条路径都计，且只计一次）**——本列回答
+            // "多久撞一次上限"；推迟恰恰是最该被看见的降级形态。下面两个分支各自 `return`，
+            // 不会二次计数。
+            perf_counters::note_zonek_control_defer_overflow();
+            a6_defer_overflow_warn(zone, &chr, batch_len);
             if !(budget.wall_ok && budget.remaining_events >= batch_len) {
                 let mut moved: Vec<PendingLocalCmd> = sessions
                     .get_mut(&chr)
@@ -39462,8 +39469,6 @@ fn a6_dispatch_local(
             });
             batch.sort_by_key(|p| p.seq);
             let batch_len = batch.len();
-            perf_counters::note_zonek_control_defer_overflow();
-            a6_defer_overflow_warn(zone, &chr, batch_len);
             for p in &batch {
                 exec(&p.ev, sessions);
                 perf_counters::note_zonek_inbound_drained(false);
@@ -39565,6 +39570,9 @@ impl Drop for A6ControlGuard<'_> {
         let Some(sg) = self.sessions.get_mut(&self.chr_name) else {
             return;
         };
+        // **前提（R3）**：减计数只在 `req.epoch == sg.control_epoch` 时发生——epoch 不匹配
+        // = 该请求已被超时写掉（§3.3）；"守卫减计数"与"超时清零"的互斥由「区 0 持区 k 锁 +
+        // 区 k 单线程写 epoch」保证，不靠这里的比较兜底。
         if sg.a6.control_epoch != self.epoch {
             a6_stale_clear_warn(&self.chr_name, self.epoch, sg.a6.control_epoch);
             return;
@@ -39606,7 +39614,7 @@ fn a6_defer_overflow_warn(zone: zone::ZoneId, chr: &str, n: usize) {
     };
     glog!(
         "WRN",
-        "区 {zone} 玩家 ChrName={chr} 延迟队列溢出（上限 {A6_DEFER_CAP}）⇒ 就地按到达序执行 {n} 条（zonek_control_defer_overflow；越序只影响该玩家）；上一分钟抑制 {suppressed} 次"
+        "区 {zone} 玩家 ChrName={chr} 延迟队列溢出（上限 {A6_DEFER_CAP}）⇒ 触发批次 {n} 条（就地执行或整体推迟；zonek_control_defer_overflow 记触发次数；越序只影响该玩家）；上一分钟抑制 {suppressed} 次"
     );
 }
 
@@ -128864,6 +128872,7 @@ mod l2_s3_cross_recipient_tests {
             }
         };
         let d0 = perf_counters::zonek_inbound_drained();
+        let o0 = perf_counters::zonek_control_defer_overflow();
         let hit = execute_local_budget(
             &mut buffer,
             &mut pending_local,
@@ -128887,6 +128896,11 @@ mod l2_s3_cross_recipient_tests {
             },
         );
         assert!(hit, "装不下 ⇒ budget_hit");
+        assert_eq!(
+            perf_counters::zonek_control_defer_overflow() - o0,
+            1,
+            "R2：推迟路径也必须计溢出**触发**次数"
+        );
         assert!(order.borrow().is_empty(), "整批推迟：不得 partial 执行");
         assert_eq!(
             pending_local.len(),
@@ -128938,6 +128952,11 @@ mod l2_s3_cross_recipient_tests {
         );
         assert!(pending_local.is_empty());
         assert_eq!(perf_counters::zonek_inbound_drained() - d0, 9);
+        assert_eq!(
+            perf_counters::zonek_control_defer_overflow() - o0,
+            2,
+            "下一 tick 再触发一次（就地执行路径同样计）"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
