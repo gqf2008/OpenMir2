@@ -1,0 +1,293 @@
+# M1c-2c C1' 双区解包造件流水 —— 可执行运行计划（2026-11-24 · rev2）
+
+> **角色**：交给 `a7` 在独占窗口执行；**产品代码零改动**，只动探针与栈数据夹具。
+> **rev2 变更**（按 `a7` 评审 + `opc-27` 裁决）：盒模板定 **Id 41「随机传送卷包」**；产物用
+> `CM_EAT` **吃掉**（`CM_DROPITEM` 在本仓/oracle 恒失败，T-19，弃用）；两图分区（GA0 区 0 /
+> D701 区 1）；加 `STARTUP_ROWS==0` 门与 GuardList 夹具；`characters`/`characters_ablity` 整行备份；
+> 表名全限定 `mir2_test_data_r.stditems`；补 §3.3 MonGen/GuardList 独立拷贝事实。
+> **上游**：`docs/issues/l25-m1c-2-plan-20261123.md` §4.1/§4.2、
+> `docs/issues/l25-m1c-2c-eat-branch-spec-20261124.md` §5；A25 见 `E:/OPC/docs/myriad-gap-list.md`。
+> **锚点口径**：只用符号锚，不写行号（`bins/game-svr/**` 是高 churn 目录，prose 门对行号锚判红）。
+
+## 0. 一句话与它证明什么
+
+2c 已把 `CM_EAT` 的**解包支**接到区 k 本地臂（`handle_zone_command_on` 的 `CM_EAT` 臂 →
+`handle_eat_cmd(proc=None)` → `game_svr::useitem::use_item` 的 `StdMode 31 / AniCount 0` 支 →
+`next_item_number`）。每吃一盒造 **6 件**，走**进程唯一**的 `Arc<AtomicI32>`。
+
+⇒ **C1' 的双区解包流水 = A25 缺的"跨区 make_index 不重复"正面证据**：区 0 与区 k 的造件在
+同一计数器上交错，`itemnum_trace` 的 `zone` 列直接给出两区归属，`DISTINCT == TOTAL` 即运行内
+逐值无重复（复位窗口之间例外 = 既有语义，本跑远达不到复位点）。
+
+⚠ 措辞边界（同 2a）：只能写「**单计数器内全局唯一**」「**跨跑确定**」；
+**不得**写「与 oracle 值相等」（T-72：返回值不带 `HUtil32.GetTickCount()`）。
+
+## 1. 代码面事实（执行前自检，不改代码）
+
+- 发号单源：`mir2_formula::drop::next_item_number`（CAS 成功 → `mir2_shared::itemnum_trace::record(v)`）。
+- trace：`MIR2_ITEMNUM_TRACE=<path>` 时写 `<path>`；首行 `# itemnum_trace v1 zone<TAB>make_index`，
+  其后每行 `zone<TAB>make_index`（`zone` = 线程局部，区 0 线程与各区 k 线程各自 `set_thread_zone`）。
+  env 未设 ⇒ 不建文件、只多一次 relaxed 原子读（`mir2_itemnum_trace_default_off` 牙）。
+- 区 k 本地执行：分类器 `classify_local_event` 对 `StdMode 31 / AniCount 0` 给 `Local`；
+  本地臂读 `SharedServices.unbind_list`（同一 `Arc`）与 `SharedServices.item_number`。
+- **运行 head 必须 ≥ `c2fd48497`**（区 k `CM_EAT` 本地臂是 2c 合并后才有的）**且含 A26 修复**
+  （`item_number.store(item_number_init, …)` 在源码顺序上**先于**商人装载；否则启动行从 1 起、
+  §2.2-6 判废）。开窗前对上窗 exe 的源码树做符号检查：① `handle_zone_command_on` 体内存在
+  `if cmd.ident == game_svr::useitem::CM_EAT` 且其 `handle_eat_cmd` 的 `proc` 实参为 `None`；
+  ② `sim_loop` 体内 `item_number.store(item_number_init` 先于 `spawn_merchants_with_scripts`；
+  exe 内嵌 40-hex 与 `git merge-base --is-ancestor c2fd48497 <head>` 双证。
+- **容量事实**：`game_svr::bag::MAX_BAG_ITEM`=46；解包门 `item_list.len()+6-1<=46` ⇒ 背包 ≤41 才能吃；
+  DBSvr 槽数 `BAG_ITEM_SLOTS`=46、`STORAGE_ITEM_SLOTS`=50 ⇒ **单角色单登录最多 96 盒**。
+  本计划用**多角色**（§3.1）一轮跑完。
+- **模板事实**（`mir2_test_data_r.stditems` 实查；`StdMode=31 AND AniCount=0` 只有 5 个）：
+  | 盒 Id | 名字 | Shape | UnbindList[Shape] 产物 | 产物 Id / StdMode / Shape | 可用性 |
+  | --- | --- | --- | --- | --- | --- |
+  | 40 | 地牢逃脱卷包 | 106 | 地牢逃脱卷 | 37 / 3 / 1 | ✗（case1 回 HomeMap 随机点，可能换图） |
+  | **41** | **随机传送卷包** | **107** | **随机传送卷** | **36 / 3 / 2** | **✓ `OtherLocal`：当前图内随机移动，不跨区** |
+  | 42 | 回城卷包 | 108 | 回城卷 | 38 / 3 / 3 | ✗（case3 回 Home 精确点，可能换图） |
+  | 43 | 行会回城卷包 | 109 | 行会回城卷 | 39 / 3 / 5 | ✗（`MoveFamily` → `Process`，区 k 不执行） |
+  | 44 | 筹码包 | 164 | **UnbindList 无 164** | — | ✗（解包 0 件 ⇒ 零分配，无证据价值） |
+- **`CM_DROPITEM` 不能用**：本仓 1:1 复刻 oracle 既有形态——`MapItem.ItemId` 恒 0 ⇒
+  `AddItemToMap` 恒 false ⇒ 普通丢弃**恒回 `SM_DROPITEM_FAIL(601)`、背包不动**（whitelist T-19）。
+  ⇒ 产物只能**吃掉**（§2.3/§4）。
+- **启动期分配源（trace 里 `1..53951` 段的来源，`99` 已核）**：这一段**不是第二个计数器**，
+  而是 `sim_loop` 在 `item_number.store(item_number_init, …) **之前**执行的启动期造件：
+  - **商人启动补货**（`a7` 只查了 `bins/game-svr/src/merchant.rs` 得出"不分配"是**错的**；
+    分配点在 `crates/world-bevy/src/merchant.rs`）：`spawn_merchants_with_scripts` →
+    `merchant_refill_goods_now` → `refill_goods` → `refill_goods_impl` →
+    `make_merchant_item_by_name_impl` 里的 `sim.item_number.next_value()`；
+  - **和/或** 守卫/城堡/怪物生成 drop 预算（`place_guards` → `WorldMonsterSink` →
+    `World::budget_monster_drops`）。两类可并存；归因**只需落到这两类之一**。
+  此时共享计数器仍为 **0** ⇒ 这些行从 `1` 起。`store` 之后才是 `init+1..` 段（本跑 `412072..`）。
+  **A26 已立并派修**（把 init 计算 + store 提到商人装载之前）⇒ **修后**启动行从 `init+1` 起
+  （仍非 0 行，只是 `> init`）。本计划按"修后"口径写（§5），并用探针期差分成样本。
+- **MonGen 文件夹具的语义**：`MonGen.txt` 存在但为空 ⇒ `MonGenHost::start` 仍建宿主
+  （`entries=Some([])`）⇒ 守卫放置与城堡实体挂图**仍跑、仍分配**；**文件不存在**
+  （`entries=None`）才让 `place_guards`/城堡挂图/`step_mon_gen` 三处整块跳过（§3.3）。
+
+## 2. 装置与最小改动
+
+### 2.1 现有脚本的现实
+
+- `run_l25_slice.ps1` **不存在**（旧名）。双区装置范式 = `E:/OPC/tools/zone_double_send_run.ps1`
+  （一次起停 + probe）+ `E:/OPC/tools/run_gm_trace.ps1`（env/位置夹具/备份还原/driver 分离启动）。
+- 本跑**不用 GM**（`@s` 造盒是 `Process` ⇒ 分配记区 0，正是 A25 已证不可达形态）⇒ **不设**
+  `MIR2_TEST_PERMISSION`。
+
+### 2.2 新 runner（`E:/OPC/tools/run_c1prime_trace.ps1`，全部 fail-closed）
+
+1. **备份整行**：10 角色的 `characters`、`characters_ablity` **整行**（含 `HungerStatus`/`BodyLuck`/
+   `Weight` 等一切存档列）；`characters_bagitem`/`characters_storageitem` 全行；
+   `characters_item_attr` 中这些角色背包 `MakeIndex` 的相关行。逐表存 TSV + sha256 进 `db_backup.json`。
+2. **模板断言**（`mir2_test_data_r.stditems`，表名全限定）：
+   `Id=41` 行必须为 `Name=随机传送卷包, StdMode=31, AniCount=0, Shape=107`；
+   `UnbindList[107]` 必须解出 `随机传送卷`；产物 `Id=36` 必须 `StdMode=3, Shape=2`；
+   同时断言 §1 表里 40/42/43/44 的排除理由成立（形状/无 164），任一不符 ⇒ rc=2。
+3. **地图/格位预检**：布局 `0:GA0=0,0-149,149;1:D701=0,0-199,199`；
+   区 0 五格 `(70,70)..(74,70)`（GA0）、区 1 五格 `(14,10)..(18,10)`（D701）——已用与
+   `mir2_envir::mapfile::MapCell::attribute` 同判定（52B 头 + 12B/格、**列主序** `x*h+y`、`bk/fr` bit15）
+   实测全 `Walk`；runner 每次开跑**重验**。另断言两图 `MapInfo` 无 `NORANDOMMOVE`
+   （随机传送的 `case2` 门；有 ⇒ `SM_EAT_FAIL` 且**不消费** ⇒ 满包）。
+4. **背包夹具**：每角色 46 行：Position 0..40 = 盒（`StdIndex=41`；`MakeIndex` 预置段**每角色不重叠**，
+   如 `10_000_000 + i*100 + k`），41..45 = 空槽（`MakeIndex=0,StdIndex=0`）。写后逐行读回；
+   其它未声明槽位指纹不得变。
+5. **起栈**：`MIR2_ZONES=<布局>`、`MIR2_ZONE_SLICING=1`、`MIR2_ZONE_MIRROR=1`、
+   `MIR2_PERF_COUNTERS=<run_dir>/perf_counters.tsv`、`MIR2_LOGIN_DB=<测试账号库>`、
+   `MIR2_ITEMNUM_TRACE=<run_dir>/itemnum_trace.tsv`；`MIR2_TEST_PERMISSION` **不设**。
+6. **STARTUP_ROWS 门（A26 修后口径）**：栈就绪（端口 LISTENING、进世界闸 Ready）后、起 probe
+   **之前**读 trace：
+   - `STARTUP_ROWS > 0`（**本跑常态**：GA0 两条、D701 一条商人条目 ⇒ 启动补货）**且**每行
+     `make_index > init`（`init` = 启动日志「本会话计数器初值」；**前提：运行 head 已含 A26
+     修复**，即 `item_number.store(item_number_init, …)` 在源码顺序上先于商人装载）**且**能归因到
+     **商人启动补货 和/或 守卫/城堡/怪物生成 drop 预算**（两类之一即可，**不要求逐行区分来源**；
+     summary 记 `STARTUP_ROWS`、`STARTUP_ZONE_0/1_ROWS`、`STARTUP_FIRST/LAST`，并附归因）；
+   - `STARTUP_ROWS == 0` 也接受（仅当换到无商人/无守卫的图时会出现）；
+   - **退出条件**：若 head 未含 A26（启动行从 1 起、即存在 `<= init` 的行）⇒ 按判废处理，
+     换到含 A26 的 head 重跑，**不许**减数；
+   - 出现**任何 `make_index <= init` 的启动行** ⇒ 判废（说明 store 未前置或另有计数器面），
+     停手排查，**不许**把这行减掉凑数。
+   - **样本口径**：`TOTAL/DISTINCT/DUP/CROSS_ZONE_DUP` 与 `ZONE_k_ROWS` 全部只算
+     **探针开始后的差分**（以本门读到的行数为基线）；启动行单列、不混入 2460。
+7. **跑 probe**：10 个 probe 并发（5 个在区 0/GA0，5 个在区 1/D701），动作流见 §4。
+8. **断言 + 收尾**（§5/§7）。
+
+### 2.3 probe 最小改动（`tools/probe/mir2_probe.py`，先过工具门）
+
+新增动作 **`eat_additems`**（解包产物是新分配的 `make_index`，夹具无法预知；只能从
+`SM_ADDITEM(200)` body 尾部解出）：
+
+```json
+{ "eat_additems": { "count": 6, "idents": [200], "interval_ms": 900, "timeout_ms": 4000 } }
+```
+
+语义：自当前游标起（最多 `timeout_ms`）收集 `count` 条 `SM_ADDITEM`；逐条 `EDCode.Decode` body 尾部 →
+定长 124B `ClientItem`（`Name`@0、`MakeIndex`@100 i32 LE；布局见 `tools/probe/param_discovery.py`
+的 `BAG_RECORD_LEN`）→ 按序 `CM_EAT(1006, recog=<make_index>, param=0, tag=0)`，步间 `interval_ms`。
+**fail-closed（scenario-error ⇒ rc=2）**：条数不足、解码失败、`MakeIndex<=0`。
+**不要**实现任何 drop 逻辑（§1：恒失败）。装置改动带 selftest（合成 2 条 200 ⇒ 解出两个
+`make_index` 并按序发送；少一条 ⇒ 拒绝）。
+
+## 3. 夹具
+
+### 3.1 角色（10 个，5/区）
+
+- 预检：`mir2_test_db_r.characters` 取 `loadbot10..loadbot19`（未删除）且
+  `mir2_test_account_r.account.Account` 存在；缺失 ⇒ rc=2（不自建角色，避免建角造件面）。
+- 位置：区 0 五个放 GA0 `(70..74,70)`；区 1 五个放 D701 `(14..18,10)`。
+- 两图**整图各属一个区**（布局 ± 全图矩形）⇒ 随机传送只在当前图内 ⇒ **不跨区**（§1 表 41 行）。
+
+### 3.2 地图
+
+- 区 0 = **GA0**（`Envir/MapInfo.txt`：`[GA0 庄园] SAFE DAY STALL`，150×150，**无 MonGen 条目**）；
+- 区 1 = **D701**（`[D701 秘密通道] DAY`，200×200，**无 MonGen 条目**；`y=100` 那排是墙，勿用）。
+- 布局串：`0:GA0=0,0-149,149;1:D701=0,0-199,199`；未提到的图由 `default_zone` 兜底（本跑 MonGen 已关，
+  无怪物分配源，兜底不影响断言）。
+- **两图都有商人（实核更正，2026-11-24）**：teststack `Envir/MerChant.txt`（162 行）里
+  **`ga0` 第 12 行、`GA0` 第 14 行、`D701` 第 24 行**各有一条商人条目（前一条我按大写+紧跟空白的
+  正则漏判了 `ga0`）⇒ **两图的商人启动补货必然发生，`STARTUP_ROWS > 0` 是常态**；按 §2.2-6 的
+  `>0 且 >init 且归因` 分支处理（**不是**"预期为 0"）。换图/换栈须重新数条目。
+
+### 3.3 关启动期/持续分配源（文件夹具，**只在 teststack 副本**）
+
+**路径事实（只读实测，2026-11-24）**：`E:/OPC/teststack/rust-root/M2GameSvr/Envir` 是**真实目录**
+（非 reparse point/软链）；其 `MonGen.txt` 与 `E:/MirServer/M2GameSvr/Envir/MonGen.txt`
+**File ID 不同、各自只有自身一条 hardlink、当前内容同 sha** ⇒ **独立拷贝**。
+⇒ 夹具只动 teststack 这份；`E:/MirServer/...` **不碰**（N=1/真机口径）。
+
+**做法：把 `MonGen.txt` 改名挪走（不是置空）**——空文件会让 `MonGenHost::start` 仍建宿主
+（`entries=Some([])`），守卫放置与城堡实体挂图仍会跑、仍会分配；**文件不存在**才是
+`entries=None` ⇒ 无宿主 ⇒ `place_guards`、城堡挂图、`step_mon_gen` **三处整块跳过**：
+
+| 文件（均 `E:/OPC/teststack/rust-root/M2GameSvr/Envir/` 下） | 基线（2026-11-24 实测） | 动作 |
+| --- | --- | --- |
+| `MonGen.txt` | sha256 `E5C39FB7EDA66B70F82A61A5C2CEA25DF9CF0B6892B916FB6D579F88FF43748F`，126,292B | **改名**为 `MonGen.txt.c1prime.bak`（恢复=改回原名；不删文件） |
+| `GuardList.txt` | 77 行（sha 开窗时现取，记入 summary） | **默认不动**（无 MonGen 宿主 ⇒ 跳过）；仅当 §2.2-6 的 `STARTUP_ROWS != 0` 时，按同法改名 `GuardList.txt.c1prime.bak` 后重跑该门 |
+
+跑完把改名文件**恢复原名**并断言 sha256 与基线相等；任一不等 ⇒ 整跑作废。
+
+### 3.4 还原面（停栈后，整行读回相等才写 `RESTORE_OK=True`）
+
+`characters` 整行、`characters_ablity` 整行、`characters_bagitem` 全行、`characters_storageitem` 全行、
+`characters_item_attr`：先删**本次 trace 中出现过的 make_index** 对应的行（产物 attr），再按备份恢复。
+
+## 4. 每角色动作流（场景生成器产出，落 `run_dir/scen/`，不入仓）
+
+1. 登录 / 进世界 / settle。
+2. 重复 **41 轮**：
+   - `send {ident: 1006, recog: <盒的预置 make_index>}`（`CM_EAT`，12B 头 `Recog` = `make_index`）；
+   - `wait_for {idents: [635]}`（`SM_EAT_OK`；出现 `636` ⇒ 立即失败并报"解包门拒绝"）；
+   - `eat_additems {count: 6}`（吃掉 6 件「随机传送卷」；每次吃会把自己随机传送到当前图另一格，
+     包内净 −6）；
+   - `sleep 900`。
+3. 无 GM、无丢弃、无商人、无手动移动。
+
+**动作间隔依据（`opc-27` 指定措辞）**：间隔**固定 900ms**，本次跑不做任何调整
+（正例与反例同一档；如需 350ms 属另一次跑，须在报告里重复同一句措辞）。
+850/900ms 只是沿用 oracle 场景的口径**形式**；**本栈是 Rust-only，服务端对 `CM_EAT`
+无间隔依赖**——`Server.conf` 未配 `CloseSpeedHackCheck` ⇒ 取缺省 true（跳过限速），
+`movewire`/`attackwire` 模块头登记"限速/`CheckActionStatus` 未接"。
+报告必须写「**Rust-only，无服务端间隔依赖，不与 C# 场景等价**」。
+
+## 5. 断言（写进 `run_dir/summary.txt`，缺一不判绿）
+
+**trace 口径**（去首行注释；行 = `zone<TAB>value`）：
+
+| 断言 | 值 |
+| --- | --- |
+| `STARTUP_ROWS` | 期望 `>0`（两图有商人）且每行 `> init` 并可归因（§2.2-6；`==0` 也接受；含 `<= init` 的行 ⇒ 判废） |
+| `STARTUP_ZONE_0_ROWS` / `STARTUP_ZONE_1_ROWS` | 记录（启动行按 zone 拆；两区的商人与守卫/怪物分别落在各自区线程） |
+| `TRACE_TOTAL_ROWS` | **== 2460**（10 角色 × 41 盒 × 6 件；**探针期差分**，不含启动行） |
+| `TRACE_ZONE_0_ROWS` / `TRACE_ZONE_1_ROWS` | **各 == 1230**，且均 **≥ 1002** |
+| `TRACE_DISTINCT_VALUES` | **== TRACE_TOTAL_ROWS** |
+| `TRACE_DUP` | **== 0** |
+| `CROSS_ZONE_DUP` | **== 0**（同一 value 同时出现在 zone 0 与 zone 1 的行数） |
+| `TRACE_TOTAL_ROWS >= 2004` | 是（样本量口径；容量案见 §1） |
+
+> **差分口径（写死）**：`BASE_ROWS` = §2.2-6 门读到的行数；上表全部指标按
+> `rows[BASE_ROWS..]` 计算；启动行只进 `STARTUP_*` 单列。
+> **可选粗对账（不强求逐行区分）**：`STARTUP_ROWS` 与"两图商人条目数 × 每商人货数（条目末列）
+> + 守卫/怪物 drop 预算"量级对一次；差得离谱再查，不因对不上而判废（判废只看 `<= init`）。
+
+**探针/场景口径**：每角色 `BOX_EATS == 41`、`PRODUCT_EATS == 246`、`SM_EAT_FAIL(636) == 0`、
+`probe rc == 0`；10 个 probe 登录 `InWorld` 无踢线；`MONGEN_ABSENT=1`（改名前后 sha 核对；
+若触发 §3.3 的条件支则 `GUARDLIST_ABSENT=1`，否则 `GUARDLIST_UNTOUCHED=1`）；无商人/丢弃动作。
+
+**运行身份**：`run_identity.json` 记 `run_id`、exe sha256 + 内嵌 40-hex（并断言
+`merge-base --is-ancestor c2fd48497 <head>`）、`start_wall/end_wall`（+0800）、布局/格位、盒与产物
+`Id/Shape`、两夹具 sha（前后）、`ARM_BUCKETS`。
+
+## 6. 反例（必做；变异只在**临时树**，不入 master）
+
+目标：证明"跨区不重复"不是恒真——把统一计数器拆成**每区一份、同初值**，跨区必然相撞。
+
+- 临时树：`git clone --shared` 运行 head 到 `E:/UserTemp/c1prime-mut-<sha8>`。
+- **补丁 A（构造处：两区各换一份 Arc，初值 = 该跑真实 `item_number_init`）**——
+  在 `sim_loop` 的 `item_number.store(item_number_init, …)` **之后、首个 tick 之前**，
+  给区 0 的 `world` 与 `zone_host.zone_states[k].host.world` 逐个重装计数器：
+  ```text
+  let mut reseat = |w: &mut World| w.set_item_number_counter(
+      ItemNumberCounter::from_shared(Arc::new(AtomicI32::new(item_number_init))));
+  reseat(&mut world);
+  if let Some(zh) = zone_host.as_ref() {
+      for st in zh.zone_states.iter().flatten() {
+          let mut g = st.lock().unwrap_or_else(PoisonError::into_inner);
+          reseat(&mut g.host.world);
+      }
+  }
+  ```
+  **初值取 `item_number_init` 本身（= `item_number_counter_init([Setup] ItemNumber, 本次屏障A抽数)`），
+  不得硬编码**（真实值每跑不同；开跑后从启动日志的「本会话计数器初值」行核对）。此刻探针未起、
+  启动期已无怪物生成（§3.3），各区 World 尚未分配 ⇒ 两区首个号都是 `init+1`。
+- **补丁 B（两个消费点都改，落实为真）**：
+  ① 区 k 本地臂——`handle_zone_command_on` 的 `CM_EAT` 分支把传给 `handle_eat_cmd` 的
+     `item_number` 从 `env.item_number`（共享 Arc）换成**本区 World 的**计数器；
+  ② **区 0 不走 `handle_zone_command_on`**——它在 `HostLoop::tick` 的 `INBOUND_PROCESS` 臂里
+     **直调** `handle_eat_cmd`（实参是共享的 `item_number`）⇒ **该调用点也必须换成
+     `world.item_number_shared()`**（不要只改措辞，否则区 0 仍走共享、两区起点不同）。
+  ```text
+  // ① 区 k 本地臂（handle_zone_command_on）
+  let zone_counter = world.item_number_shared();   // 补丁 A 重装后的本区 Arc
+  … handle_eat_cmd(…, &zone_counter, …)
+
+  // ② 区 0 INBOUND_PROCESS 臂（直调点）
+  let zone_counter = world.item_number_shared();   // 区 0 world 亦被补丁 A 重装
+  … handle_eat_cmd(…, &zone_counter, …)
+  ```
+  两处都改后，区 0 与各区 k 各自用各自的 `init` 起点（`zone_counter` 持局部 `Arc` 再取
+  `&zone_counter`，避免与 `&mut world` 借用冲突）。
+- **release 构建必须在开窗前完成**（约 6–10 分钟、峰值内存 ~1.6G；窗口期禁 cargo）；
+  产物 sha256 + 内嵌 40-hex（含 dirty 标记）记进 summary。
+- 用同一 runner 跑**一次起停**、每区 1 角色 × 5 盒（每区 30 件）：预期
+  `TRACE_DUP == 30`、`CROSS_ZONE_DUP == 30`（两区序列 `init+1..init+30` 完全相同）⇒ 检查器红；
+  红输出原文入档；`MUT_SEED` 必须等于启动日志初值（记进 summary）。跑完临时树 `git status` 空。
+
+## 7. 收尾清单（每项进 `summary.txt`）
+
+- [ ] 停栈：`mir2-server`/`game-svr`/gate 进程 0；六端口 `LISTENING=0`；
+- [ ] `MonGen.txt`、`GuardList.txt` 已还原且 sha256 与备份相等，无 `c1prime` 残留；
+- [ ] 10 角色：`characters`/`characters_ablity` 整行、bag/storage/item_attr 按 §3.4 还原，
+      `RESTORE_OK=True`；
+- [ ] trace、`run_dir`、场景生成物、变异件全在 `E:/UserTemp/`（或 `E:/OPC`）下，**不入仓**；
+- [ ] 主检出与本 worktree `git status` 空；
+- [ ] 无窗口期 cargo 构建残留（正向/反例两个 exe 均开窗前构建，记 sha）；
+- [ ] 临时物清单（路径 + 大小）写进 `summary.txt`。
+
+## 8. 报给 Leader 的字段
+
+`RUN_ID` / 正向 exe sha256 + 内嵌 head / `BASE_ROWS`、`STARTUP_ROWS`、`STARTUP_ZONE_{0,1}_ROWS`、
+`STARTUP_FIRST/LAST`、归因 / `TRACE_TOTAL_ROWS`（差分） /
+`TRACE_ZONE_{0,1}_ROWS` / `TRACE_DISTINCT_VALUES` / `TRACE_DUP` / `CROSS_ZONE_DUP` /
+每角色 `BOX_EATS`、`PRODUCT_EATS` / `RESTORE_OK` / `MONGEN_ABSENT`（及条件支的 `GUARDLIST_ABSENT`）+ 模板断言原文 /
+反例 exe sha + `DUP/CROSS_ZONE_DUP` 红原文 / 收尾四项（进程/端口/仓/临时物）。
+
+## 9. 风险与已知边界
+
+- **覆盖面**：只覆盖**解包路径**（脚本/商店/GM 造件仍留区 0）；报告必须写清，不得外推"所有造件跨区唯一"。
+- **容量**：46 槽 + 解包门 ≤41 是硬事实；本跑用 5 角色/区绕开，**不改产品**。
+- **D-1 掩码**：帧/DB 对拍掩 `MakeIndex`；本跑的绿**不证**帧面编号，只证计数器流水唯一性。
+- **镜像**：`MIR2_ZONE_SLICING=1` 要求 `MIR2_ZONE_MIRROR=1`（`zone::ENV_ZONE_SLICING` 的 fail-closed）；
+  本跑不产生镜像收件人，不影响 trace。
+- **随机传送**：`case2` 需要当前图无 `NORANDOMMOVE`（§2.2-3 预检）；传送只改位置、不改会话所属区，
+  且两图整图各属一区 ⇒ 不跨区；若落点不可走，移动失败但**物品照常被吃掉**（`maybe_eat_move`
+  先吃后移），不影响流水。
+- **复位窗口**：run 内分配 ~2.5k 次，离 `i32::MAX/2-1` 极远；trace 出现回落值 ⇒ 判废。
