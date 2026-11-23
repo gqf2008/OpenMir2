@@ -32,6 +32,13 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 
 ## 2. 命令接管表（M1 归属）
 
+> **本表是「M1 全期」的归属结论，不是逐片次的命令集。** M1b 实际只开 combat 类
+> （move/hit/spell/say 非 GM/query/levelrank/login-notice/magic-key，见 **§12.1**）；
+> **所有物品类（bag/eat/drop/drug/shop/selloff/click-npc）延至 M1c**（理由：`eat` 的 Shape-31
+> 分支会分配 MakeIndex，而计数器共享在 M1c 起手做，见 §11/§12.2）。
+> 本表里的「查询」也要拆：`CM_QUERYUSERNAME/STATE/SET/VAL` 属 M1b；
+> **`CM_QUERYBAGITEMS` 属物品类 ⇒ M1c**。
+
 区 k 今天的入口是 `handle_zone_command`（**只认 `movewire::is_move_command`**，其余计入
 `zone_cmd_unsupported`）**【已核】**。M1 的三类归属：
 
@@ -179,7 +186,7 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   `note_mirror_recipient` 的 `src_zone/seq` 由 `begin_tick(tick_no)`（区 k 也是 tick_no）自动成立。
 - **分槽语义不变**：每 `(dst,src)` 槽单写者（区 k 只写自己的 src）；`src_tick < current tick` 的
   T+1 排空不变；`MAX_FRAMES_PER_SLOT` 拒绝新增不变。
-- **`PhaseSet` 在区 k 生产模式**（**17 位逐位表**，含排除位；opc-27/0c 2026-11-23 要求）：
+- **`PhaseSet` 在区 k 生产模式**（**17 位逐位表**，含排除位；opc-27/0c 2026-11-23 要求。**17 位 = M1a 基线**；`M1-0c'` 把 PERSIST 拆两位后 18 位（§8.2），M1b 再拆 INBOUND 后 19 位（§9））：
 
   | 位 | 段 | M1 归属 | 「区 k 不跑它会坏什么」/ 为什么可以不含 |
   | --- | --- | --- | --- |
@@ -289,8 +296,12 @@ fn tick(self, shared: SharedServices, mut process: Option<ProcessServices>, io: 
 - 区 0 传 `Some(process)`；区 k（M1 起）传 `None`。
 - **`TickOut` 必须把 `Option<ProcessServices>` 回传**：区 0 每 tick 供 `Some` 并拿回（channel/Arc 等
   句柄不得在 tick 之间丢失）；区 k 供 `None`、丢弃回传。
-- `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | PERSIST_DB`（与 `M0_MIN`/`M1_MIN` **同处**，
-  `PhaseSet` 定义旁；与 0c 的 59 处/5 段实测**互为交叉校验**）。
+- `PROCESS_ONLY = SHUTDOWN | INBOUND | DB_POLL | PERIODIC | **PLANES** | PERSIST_DB | **SWITCH**`（**7 段**；与 `M0_MIN`/`M1_MIN` **同处**，
+  `PhaseSet` 定义旁）。**7 段的依据**：`PLANES` 段用 `planes`（Process 字段）、`SWITCH` 段用
+  `server_table`/`reconnect_pending`（Process 字段）——早前的「5 段/59 处」只统计了 6 个 `!Send` 字段，
+  不是「全部 Process 字段的段集」。**掩码与段集必须相等，靠一条行为牙守**：`proc_svc!($bit,$seg)` 在
+  `#[cfg(test)]` 记 `PROC_SVC_SEGMENTS`，用例跑 `tick(shared, Some(process), io, ALL)` 后断言
+  **记录集 == `PROCESS_ONLY`**（同时抓漏掩码与虚位；`ALL` 有段走不到须报告、不许改子集）。
   **PERSIST 留缝（M1c 前瞻，0c 2026-11-23）**：`HostPersist` 段有 1 处用 `engine` ⇒ M1c 给区 k 开
   「仅 `save_outbox`」时会撞 fail-fast。⇒ 建常量时就把 PERSIST 拆成 `PERSIST_DB`（进程-only，
   进 `PROCESS_ONLY`）与 `PERSIST_OUTBOX`（区 k 安全），并用**常量别名保持旧位等价**：
@@ -514,10 +525,12 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 
 ### 12.3 (d) 的三条见证（用例名 + 期望）
 
-- **W1** `zone0_cannot_tick_zonek_world`：区 0 线程对区 k 的 `World` 调 `tick_*` ⇒ `should_panic`
-  （匹配 `owner_thread` 断言文案）。
-- **W2** `hold_target_lock_no_second_hostloop_lock`：持目标区锁期间 `target.try_lock()` ⇒
-  `Err(WouldBlock)`；`∀ z≠target: z.try_lock()` ⇒ `Ok`。
+- **W1** `zone0_cannot_tick_zonek_world`：复用 `spawn_minimal_zone`/`ZoneState` 造一个区 k `World`；
+  在**区 0 的测试线程**上直接调其 `tick_*` ⇒ `should_panic`（匹配 `World::owner_thread` 断言文案）。
+  不跨线程起区 k 线程，直接同线程违规调用即可触发。
+- **W2** `hold_target_lock_no_second_hostloop_lock`：测试线程手动 `let g = zone_k_state.lock()`
+  模拟「区 0 持目标区锁」；期间断言 `zone_k_state.try_lock().is_err()`（同锁不可重入）且对每
+  `z≠k` 的 `ZoneState` `try_lock().is_ok()`（未锁第二把）。**全在同一测试线程跑**，不依赖区线程调度。
 - **W3** `d_path_takes_no_process_mutex`，机制二选一（`0c` 建议 A，采纳）：
   **A（非侵入，主用）**：测试里先把**全部进程级 `Arc<Mutex>`**（auth `AdmissionStore`、gate slots、
   db replies 等）**持锁**，再在**工作线程**跑 (d) 路径、主线程 **带超时 `join`**（如 500ms）：若 (d)
