@@ -598,6 +598,24 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
   ②把跨区帧当本区帧（不 +1 对齐）⇒ ② 必红（证逐类位移必要）③用**全局 +1** 对齐 ⇒ ③ 必红
   （证"整体平"会掩盖）④把 ① 的 N=1 路径人为改一行 ⇒ ① 必红（证基线真在跑）。
 
-> **待补前提（opc-27 2026-11-23）**：13.3 依赖「**帧类可由发帧路径标记判定**」。若当前代码**没有**
-> 逐帧的来源标记，必须先加一个 `#[cfg(test)]` 的来源标记（同 `RAN_SEGMENTS`/`PROC_SVC_SEGMENTS` 体例），
-> 否则对齐键里的「帧类」无从取得、13.3–13.5 全部落不了地。**此项须在 M1a 实施开工前确认。**
+### 13.6 前提核实与方案：**当前无逐帧来源标记**，须补 test-only 标记（`0c` 2026-11-23 核）
+
+**事实**：客户端帧**唯一出口**是 `SimToGate::SendFrame { socket, body }`（只有 socket+body，**无 src/class**）；
+测试捕获（`frames.ndjson`）也只记 socket+body(+off/len)。⇒ 从产出点到捕获**判不出**帧类。
+
+**方案（照 `RAN_SEGMENTS`/`PROC_SVC_SEGMENTS` 体例，生产零成本）**：
+- 加 `enum FrameSrc { World, CrossZone, ControlReply }` + `#[cfg(test)] thread_local! FRAME_SRC: Cell<FrameSrc>`；
+- **在 4 个产出边界设位**（不是每个 enqueue 点）：①`HostFrames` 段顶 ②`HostAoiDownlink` 段顶
+  ③**⑤ 交付/合成边界**（把跨区帧送进 `SendFrame` 的那一处）④**控制邮箱回包执行处**（区 0 执行
+  回区0命令、结果帧经区 0 gates 发出）；
+- **帧捕获处读 `FRAME_SRC.get()`**，`frames.ndjson` 条目加 `src` 字段；
+- 生产构建：thread_local/set/read **全部 `#[cfg(test)]`**，`SimToGate::SendFrame` **一字不改**。
+- **改动点 = 4 个 set + 1 个 read**（不是几百个 enqueue 点）。
+
+**"只看 outbox/管道归属能否区分帧类" —— 不能（已证实）**：一个区（如区 k）的管道里**同时**有本区世界帧（T）
+与它为本区玩家交付的跨区⑤帧（T+1），同管道同线程不可分；且**回区0命令帧由区 0 经区 0 管道发给区 k 玩家**
+⇒ "管道 × 收件人区"也对不上类。**必须有 producer 标记。**
+
+**已知未钉死项（`0c` 主动标注）**：⑤ 的**生产合成函数确切符号**未唯一确定（`CrossZoneOutbox` 是 region_loop
+的 test rig、`cross_recipient_*` 是诊断计数、非发射点）；但**客户端帧只有 `SendFrame` 一条出口**，
+实施时按"向 gates/`SendFrame` 送跨区帧的那一处"定位即可。**这一处必须在 M1a 开工前钉死并写进实施单。**
