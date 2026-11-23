@@ -45,7 +45,14 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 | 说话（`handle_say_with_saves`） | **本区**扇出；跨区/全服/行会经 ⑤ | 本区收件人可本地算；跨区收件人已由 ⑤ 邮箱合成 | 跨区 = ⑤ 既有语义（T+1） |
 | 组队（`handle_party_cmd`/`world.party_run_tick`） | **本区**；跨区成员通知经 ⑤ | `party_run_tick` 在 World 内，区 k 已有 | 跨区 = ⑤ |
 | 行会 / 城堡 / GM / 换服 / 改图 handoff | **回区 0**（或暂不支持 + 计数） | 进程级单点（文件写/存档/全局状态机） | 控制邮箱；行会/城堡有 10s 门，T+1 可接受 |
-| 其余未列命令 | **暂不支持 + `zone_cmd_unsupported` 计数** | 未验证的命令不许静默丢；计数保证可观测 | 无 |
+| 说话里的 **GM `@` 支**（`@` 命令体触 guild/castle/gm_*） | **回区 0** | GM 命令体要读写进程级单点（行会/城堡/GM 状态） | 控制邮箱（T+1）；纯聊天文本仍本区扇出 |
+| 交易 `handle_deal_cmd` | **同区本区；跨区走 ⑤ 或 defer** | 双人可跨区：同区两人本区可完成；跨区须两边状态（暂不接） | 同区无；跨区 **defer + 计数**（M1c 评估） |
+| 寄售 `handle_selloff_cmd` | **回区 0** | `sell_off_book` 是进程级单点（全服共享报价，分区会分裂） | 控制邮箱（T+1） |
+| 其余未列命令 | **暂不支持 + `zone_cmd_unsupported` 计数**（逐条点名见下） | 未验证的命令不许静默丢；计数保证可观测 | 无 |
+
+**「暂不支持」逐条点名（M1 首批）**：`SS_*`/`ISM_*` 服务端到服务端消息、跨服/换服、改图 handoff、
+攻城相关的 GM 手动指令、以及任何**未在本表列举**的 `cmd.ident`（一律计 `zone_cmd_unsupported`，
+**不落入静默**）。
 
 - **控制邮箱形态（【推断】，实施时定稿）**：`ZoneHost` 增 `Vec<ControlInbox>`（每区一个
   `mpsc::Sender/Receiver`，与既有 `handoff_boxes`/`cross_mailboxes` 同构）；消息 =
@@ -66,7 +73,13 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 - **可证的界**：区 k 的入队（A 或 B 都在 `barrier2(T)` 之前）**先于** `barrier2(T)`（屏障会合）；
   而区 0 的 T+1 `HostInbound` 在 `barrier2(T)` 之后 ⇒ **区 k 在 tick T 入队的任何命令，必然在
   区 0 的 T+1 `HostInbound` 被看到**。
-- 结论：**回 0 命令的延迟恒为 T+1（200ms）**；"同 tick 靠 barriers 窗口"是**错误表述**，已删。
+- 结论：**按「被 drain 的 tick」计，延迟恒为 T+1（200ms）**；"同 tick 靠 barriers 窗口"是**错误
+  表述**，已删。**到达→被处理的最坏情形 ≈ 2 个 barrier 间隔**（命令在区 k 的 loop 顶 drain 之后
+  才到时，要等下一 tick 的 loop 顶才入队，再等区 0 的 T+1 inbound）——验收按「被 drain 的 tick」
+  计 T+1，最坏时延在窗口读数里单独看。
+- **结构不变式 + 牙**：控制邮箱的**入队只允许发生在 `barrier1` 之前**（区 k 的 loop 顶 → 入队 →
+  其后的 phase1/barrier1）。为此**禁止未来新增 post-`WorldTail`/post-barrier2 的收包点**；
+  用例：在 `HostWorldTail` 之后向控制邮箱入队必须被断言拒绝（红），防止有人加「晚到也能补发」的旁路。
 
 ### 2.2 偏差条目（具体条目，不是"待立"）
 
@@ -96,6 +109,13 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   `magic_table_arc`、`item_number`（**必须共享同一计数器**，见 §7-⑤）、`perf`（原子共享）。
 - **`gates`**：每区一份、demux 广播填充 **【已核】**——M1 直接复用；区 k 发帧只查本区表。
   需要新增的是**广播缺口检查**：区 k 上线时若 `gates` 为空而本区已有会话 ⇒ 报 WRN（防「帧发不出去了却没人知道」）。
+- **先纠正一个表述（0c 2026-11-23）**：区 0 的 `db`/`guilds`/`castle`/`engine` **不是锁，是
+  `sim_loop` 线程局部的 `&mut`**（`HostInbound` 的 AdminGm 支已直接 `&mut guilds`；
+  `finish_login` 也在**持有区 k 锁的同时**借用 `&mut guilds`——既有代码即证明该模式安全：同一线程、
+  借用检查器保证无别名）。真正的死锁面只有两条：
+  **(a) 同一区 k 的 `std::sync::Mutex` 重入（自死锁）；(b) 跨区 `HostLoop` 锁的 ABBA 序**。
+  约束写成：**持区 k 锁期间不得再取任何 `HostLoop` 锁（含同一把）**；进程级 `&mut` 借用不受限
+  （同线程、编译期保证）。
 - **持锁路径与锁序（逐路径，opc-27 2026-11-23 要求具体到「取哪把锁、何时取、持多久」）**：
   | 路径 | 取的锁 | 何时取 | 持多久 | 期间允许/禁止 |
   | --- | --- | --- | --- | --- |
@@ -104,12 +124,22 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   | 商店/点击 NPC（新） | 区 k `HostLoop` 锁 | 区 0 `HostInbound` 段首（drain 控制邮箱） | **每条命令一次**，不跨命令持有 | 允许：脚本执行 + world/会话修改 + 发帧；**禁止**：取区 0 的 `db`/`guilds`/`castle` 锁、调用会阻塞的 DB 操作 |
   | 行会/城堡/GM（新） | **只持区 0 自己的锁**（不取区 k） | 区 0 `HostPeriodic` 的 10s 门内 | 一个门周期 | 结果帧发给区 k 玩家时只查 `gates`，不动区 k 状态 |
   | 换服/改图 handoff | 既有 handoff 邮箱（无锁） | 既有相位 | — | 不改 |
-- **背压**：控制邮箱**有界**（每区 `sync_channel(K)` 或 `try_send` + 上限计数）。满了 ⇒ **拒绝入队
-  并计入 `zone_control_overflow`（新 perf 列，标 additive）**；区 k 侧对该命令回一条**可见失败**：
-  给该玩家发 **`SM_SYSMESSAGE(100)`**（`Recog` = 玩家自己的 `ActorId`、`Param = MakeWord(RedF,RedB)`、
-  `Series = 0`，只投自己），**文本取 oracle 既有背压提示串（实施时从 oracle 的同款提示里取，不得
-  新造文案）**；同时打一行 `WRN`（含 zone/命令 ident/队列长度）。**不静默丢**。
-  上限 K 由窗口实测定（先取 1024）。
+- **背压策略 = 停排，不丢、不造帧**（opc-27 2026-11-23 裁决；"同款文案"没有既有对应物——
+  区 0 普通背压 `INBOUND_BUDGET_HIT` 只把事件留到下一轮、不发帧；gate 背压溢出是 `GM_CLOSE` 断线，
+  两者都不适合）：
+  - 控制邮箱**有界**（初值 K=**1024**，以窗口实测峰值为准**上调**，长期 >0 的溢出/背压即上限不合理）；
+  - 满 ⇒ 区 k **不再从自己的入站排下一条控制命令**（命令留在 carry/通道里，与 `EventDrain` 的
+    carry 同款语义），计 **`zone_control_backpressure`**（新 perf 列，标 additive），并打一行
+    `WRN`（zone / 命令 ident / 队列长度）；
+  - **不丢命令、不发任何新帧、不新造文案**（保逐字节对拍）；
+  - **只许延后「控制类」命令，不许牵连「本地类」**（0c/opc-27 2026-11-23 硬条件）：
+    - 控制类（回 0：商店/点击 NPC/行会/城堡/GM/换服/handoff）⇒ 邮箱满时留在 **carry**（有界且可观测）
+      并计 `zone_control_backpressure`；
+    - 本地类（移动/攻击/技能/背包/地面/本区说话扇出/组队）⇒ **必须继续流动**；**一个满的控制箱
+      不许把区 k 的整条入站 stall 掉**（那等于给本地命令加隐藏背压）；
+    - 已转发的控制命令**保 FIFO**（回退 carry 不得乱序）。
+  - 用例（两条，缺一不算）：(a) 满 ⇒ 控制命令留 carry + 计数 +1 + **无新帧**；
+    (b) **同 tick 的下一条本地命令仍被处理**（防「过度回压」的负例，必须能红）。
 
 ## 4. N=1 与 N≥2（区 0 的「双角色」）
 
@@ -131,6 +161,15 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   4. `host_prof` 标区 ⇒ TICKPROF 行含区号（或仅区 0 打），用例解析输出行数/区号。
   5. perf 新列 additive ⇒ 摘要脚本对旧产物 fail-closed、对新列标 `additive`（单测）。
   6. `World.owner_thread` ⇒ 用例：控制邮箱路径在**非区 k 线程**尝试 tick 区 k World 时必须 panic（`should_panic`），证明没有旁路。
+- **N≥2-only 的三类行为差（0c 2026-11-23 要求显式列出并各给断言）**：
+  1. **④b-1 静态实体按区过滤**：区 0 的 World 只含自己 rects 的静态实体（未覆盖图归区 0）。
+     断言：2 区模式下区 0/区 k 的静态实体集合**交集为空、并集 == N=1 全量**（既有 `zone_statics_tests` 口径扩到生产接线）。
+  2. **跨边界实体不是同一个 World 对象**：边界两侧看到的同一 actor 分别是本区实体与对区的
+     镜像/快照（`apply_mirrors`），actor_id 相同但对象不同。断言：跨边界用例中两侧 `actor_id`
+     相同、`mirror` 标志符合预期、且**不会**在两侧同时被当作本地实体 tick。
+  3. **RNG 是 per-zone 流**（`seed ⊕ zone`），与 N=1 的单一流**不等价**——这是已知差异（④d 才解）。
+     断言：两区模式**不**与 N=1 比 RNG 流水；只比**确定性输出**（帧/快照），并在卡上登记「RNG 流
+     分区不等价」为已知偏差（不属回归）。
 - **判据**：N=1 两树对拍（a7）；N=2 时区 0 单跑与 N=1 的帧集合相同（多区不改变本区语义）。
 
 ## 5. 与 ⑤ 的接缝
@@ -140,22 +179,35 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
   `note_mirror_recipient` 的 `src_zone/seq` 由 `begin_tick(tick_no)`（区 k 也是 tick_no）自动成立。
 - **分槽语义不变**：每 `(dst,src)` 槽单写者（区 k 只写自己的 src）；`src_tick < current tick` 的
   T+1 排空不变；`MAX_FRAMES_PER_SLOT` 拒绝新增不变。
-- **`PhaseSet` 在区 k 生产模式**：`M1_MIN = M0_MIN | INBOUND | FRAMES | AOI_DOWNLINK | DEAL_TICK |
-  RECOVERY | PERSIST(仅写 save_outbox)`。**每位一句「区 k 不跑它会坏什么」**：
-  - `WORLD_HEAD`：不跑 ⇒ 本区无 tick head（怪物 AI/命令 FIFO/死亡结算全停）。
-  - `WORLD_TAIL`：不跑 ⇒ 无 phase2（AOI 扫描）/死亡结算尾部，玩家永远看不到别人。
-  - `INBOUND`：不跑 ⇒ 本区玩家的命令（移动/攻击/技能）无人执行。
-  - `FRAMES`：不跑 ⇒ 本区产生的事件（动作/屠宰/骨骼/buff）不出帧。
-  - `AOI_DOWNLINK`：不跑 ⇒ AOI 出现/消失与 52/53/体力帧不出（M1a 的核心）。
-  - `DEAL_TICK`：不跑 ⇒ 交易自动取消不生效（会话卡在 Dealing）。
-  - `RECOVERY`：不跑 ⇒ 恢复/体力/血量回复停摆。
-  - `PERSIST`（仅 `save_outbox` 分支）：不跑 ⇒ 区 k 断线存档不进队列（数据丢失）。
-  - **不含**：`DB_POLL`（进程级 DB 链在区 0）、`PERIODIC`（行会/城堡/公告是单点；**滚动公告**若
-    需要在区 k 显示，M1c 再单独评估，届时加 `LINE_NOTICE` 子段而不是整段 `PERIODIC`）、`SWITCH`
-    （换服单点）、`DIAG`（观测仅区 0）、`SLEEP`（区 k 节奏由 barriers 定，不 sleep）。
-  逐片扩展：M1a `+AOI_DOWNLINK +FRAMES`（`M0_MIN` 先加这两段），M1b `+INBOUND`（战斗/技能命令），
-  M1c `+DEAL_TICK +PERSIST`；每扩一位都要更新 `RAN_SEGMENTS` 的精确相等断言。
-- **段集见证**：`RAN_SEGMENTS` 用例继续用；区 k 生产模式的段集 = 上述位集的**精确相等**断言。
+- **`PhaseSet` 在区 k 生产模式**（**17 位逐位表**，含排除位；opc-27/0c 2026-11-23 要求）：
+
+  | 位 | 段 | M1 归属 | 「区 k 不跑它会坏什么」/ 为什么可以不含 |
+  | --- | --- | --- | --- |
+  | SHUTDOWN | `HostShutdown` | **M1a** | 不跑 ⇒ 区 k 线程收不到关服分支（进程关服由区 0 统一处理；区 k 线程由 `stop` 旗标退出）。**不含**：关服存档是区 0 的职责（`shutdown_save_all` 只扫区 0 会话；区 k 的断线存档走 `save_outbox`） |
+  | INBOUND | `HostInbound` | **M1b**（M1a 命令仍由区线程 loop 顶的 `handle_zone_command` 处理） | 不跑 ⇒ 本区玩家的战斗/技能命令无人执行（M1a 只做移动 + 出帧） |
+  | DB_POLL | `HostDbPoll` | **不含** | DB 链是进程级单点（区 0）；区 k 的存档请求走 `save_outbox` → 区 0 `drain_zone_saves` |
+  | PERIODIC | `HostPeriodic` | **不含** | 行会/城堡/滚动公告是单点；**刷怪不在这一段**（见下「mon_gen」注），不需要为刷怪开 PERIODIC |
+  | WORLD_HEAD | `HostWorldHead` | **M1a**（已在 `M0_MIN`） | 不跑 ⇒ 本区无 tick head（怪物 AI/命令 FIFO/死亡结算全停） |
+  | **POST_HEAD** | `HostPostHead` | **M1a（新增，必修）** | 不跑 ⇒ **战斗结算**全缺：`drain_yedo_events`（击杀计数/攻杀）、`drain_skill_train_events`（技能熟练）、`drain_attack_wear_then_monster_refs`（**怪物 RefMsg：转身/可见性**）、`apply_get_start_point_after_tick`（3s 回城点）。M1a 声称的「怪物转身」正是这一段的产出 |
+  | **PLAYER_RUN** | `HostPlayerRun` | **M1c** | 不跑 ⇒ 玩家逐 tick 停摆（hunger/复活 `revival`/gold/`auto_get_exp`/`run_rates`/`flush_run_frames`）。M1a/M1b 不需要：区 k 的移动帧由 `handle_move_cmd(…, None)` **直发**（不经 `run_frames` 收集器），`flush_run_frames` 只属区 0 的 `Some(collector)` 路径 |
+  | WORLD_TAIL | `HostWorldTail` | **M1a**（已在 `M0_MIN`） | 不跑 ⇒ 无 phase2（AOI 扫描）/死亡结算尾部，玩家永远看不到别人 |
+  | PLANES | `HostPlanes` | **不含** | G11 跨服在两端皆 inert（卡 `g11-cross-server-inert-oracle`），区 k 无 planes 链接 |
+  | RECOVERY | `HostRecovery` | **M1c** | 不跑 ⇒ 恢复/体力/血量回复停摆（与 `PLAYER_RUN` 的 hunger/revival 同批） |
+  | FRAMES | `HostFrames` | **M1a** | 不跑 ⇒ 本区事件（动作/屠宰/骨骼/buff/**53/657 的 B2–B5 自投递**）不出帧——**53/657 由本段产出**（`drain_b3_self_deliveries`/`drain_b4_with_enter_cfg`/`drain_b5_self_deliveries`），**不是** POST_HEAD |
+  | DEAL_TICK | `HostDealTick` | **M1c** | 不跑 ⇒ 交易自动取消不生效（会话卡在 Dealing） |
+  | AOI_DOWNLINK | `HostAoiDownlink` | **M1a** | 不跑 ⇒ AOI 出现/消失与 52/53/体力帧不出（M1a 的核心） |
+  | PERSIST | `HostPersist` | **M1c** | 不跑 ⇒ 区 k 断线存档不进 `save_outbox`（数据丢失）；只开 `save_outbox` 分支，不发 DB |
+  | SWITCH | `HostSwitch` | **不含** | 换服/重连是单点（依赖进程级 `server_table`） |
+  | DIAG | `HostDiag` | **不含** | 观测仅区 0（`host_prof` 每区一份但区 k 不打；见 §4-4） |
+  | SLEEP | `HostSleep` | **不含** | 区 k 节奏由 barriers 决定，不 sleep |
+
+  ⇒ **M1a 的段集** = `M0_MIN | POST_HEAD | FRAMES | AOI_DOWNLINK`；
+  **M1b** += `INBOUND`；**M1c** += `PLAYER_RUN | RECOVERY | DEAL_TICK | PERSIST`。
+  每扩一位都要更新 `RAN_SEGMENTS` 的精确相等断言。
+
+- **mon_gen（刷怪）的位置钉死（P2-4）**：区 k 的 `step_mon_gen` 现在在**区线程 loop 顶、
+  `tick_phase1` 之前**（不在 `PERIODIC` 段）。**M1 保持它在 loop 顶，不搬进 `HostLoop::tick` 的
+  `PERIODIC`**——若要搬，必须新增独立 `MON_GEN` 子段并入 `M1_MIN` 并给「不跑会坏什么」。
 
 ## 6. 验证装置
 
@@ -196,7 +248,7 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 | 提交 | 内容 | 判据 |
 | --- | --- | --- |
 | **M1-0a 纯格式**（单独提交，**零语义**） | 移除 `#[rustfmt::skip]` + `cargo fmt --all`（一次性格式化 `HostLoop::tick` 与守卫块缩进） | **两条一起贴**：①`git diff --ignore-all-space <parent> <this>` **为空**；②**移除 skip 后** `cargo fmt --all -- --check` **仍全绿**（证明格式化稳定、不是"跑一次 fmt 就变"）；另 FMT/CLIPPY/TEST 绿、**不改任何字面行内容** |
-| **M1-0b 方法化 + 逐字字面量同步**（单独提交） | 段体拆成 `fn phase_*`；同时把被逐字扫描的字面行列出并同步给对应牙（`world.tick_tail(&mut rec);`、`drain_pk_flag_downlink(&mut world, &online, &gates);`、`let guild_run_tick = world.clock_ms as i32;`、`*_in_sim_loop`/`*_is_wired_in_sim_loop` 那批…完整清单在该提交信息里逐条列） | **不许 `#[ignore]`、不许把「精确匹配」改成「包含即可」、不许删牙**；每条牙改前先跑一次**旧断言**证明其仍能红（负例），改后全量绿；两条 `allow` 仅在字面量已改后移除，并在提交信息点名 |
+| **M1-0b 方法化 + 逐字字面量同步**（单独提交） | 段体拆成 `fn phase_*`；同时把被逐字扫描的字面行列出并同步给对应牙（`world.tick_tail(&mut rec);`、`drain_pk_flag_downlink(&mut world, &online, &gates);`、`let guild_run_tick = world.clock_ms as i32;`、`*_in_sim_loop`/`*_is_wired_in_sim_loop` 那批…） | **逐字字面量清单必须在 0b 开工前产出并经 opc-27 过目**（不许"实施时补"——否则 0a/0c 的「零行为变化」边界会被 0b 的意外字面量改动穿透）； **不许 `#[ignore]`、不许把「精确匹配」改成「包含即可」、不许删牙**；每条牙改前先跑一次**旧断言**证明其仍能红（负例），改后全量绿；两条 `allow` 仅在字面量已改后移除，并在提交信息点名 |
 | **M1-0c 结构** | `ZoneState { host: HostLoop, save_outbox, alive }` + `HostServices` 区位形态（零行为变化） | 全量门 + N=1 两树对拍 |
 
 - **方法化不会截断扫描窗口**（方法行是缩进行、不匹配 `starts_with("fn ")`），但**会改逐字行**；
