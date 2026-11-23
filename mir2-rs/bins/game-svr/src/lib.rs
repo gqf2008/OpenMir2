@@ -1717,6 +1717,31 @@ fn handle_zone_command_on(
         );
         return ZoneCmdOutcome::Dispatched;
     }
+    // **M1c-2b**：地面拾取/丢弃——与区 0 `INBOUND_PROCESS` 支**同一实现**（`handle_ground_cmd`）。
+    // `world` 传**只读分片**（handler 只读 `floor_items_view_sorted`；地面写回不在模型内，T-25）；
+    // `trade_sessions` 供 `Dealing`/`DealLastTick` 门；其余实参全部取区副本。
+    if cmd.ident == game_svr::ground::CM_PICKUP || cmd.ident == game_svr::ground::CM_DROPITEM {
+        handle_ground_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            trade_sessions,
+            &*world,
+            ground_sessions,
+            &*online,
+            gates,
+            &env.enter_cfg.ground,
+            env.colors,
+            &env.enter_cfg.catalog,
+            env.registry,
+            &env.enter_cfg.string_conf,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
     ZoneCmdOutcome::Unsupported
 }
@@ -126401,6 +126426,91 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    /// **M1c-2b 牙 `zonek_ground_drop_is_oracle_fail`**：区 k 的 `CM_DROPITEM` 派发到**与区 0 同一**
+    /// `handle_ground_cmd`；oracle 既有形态（T-19：`MapItem.ItemId` 恒 0）⇒ 普通丢弃**恒回
+    /// `SM_DROPITEM_FAIL(601)`**、背包不动、地面不新增。
+    ///
+    /// 变异：删臂 / 臂内直接 `return Dispatched` ⇒ 无 601 ⇒ 红。**不得**断言 600/地面出现（不可达面）。
+    #[test]
+    fn zonek_ground_drop_is_oracle_fail() {
+        let (mut state, actor) = landed("cmd_drop", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                std_mode: 5,
+                dura_max: 10,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let mut cmd_drop = cmd(game_svr::ground::CM_DROPITEM, 0, 0, 0);
+        cmd_drop.recog = 9001;
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd_drop,
+                Some("木剑"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_DROPITEM 必须已接线"
+        );
+        let mut saw_fail = false;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            if body.len() >= 6
+                && u16::from_le_bytes([body[4], body[5]]) == game_svr::ground::SM_DROPITEM_FAIL
+            {
+                saw_fail = true;
+            }
+        }
+        assert!(
+            saw_fail,
+            "oracle 既有形态：普通丢弃恒回 SM_DROPITEM_FAIL(601)"
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 1, "丢弃失败 ⇒ 背包不动");
+    }
+
+    /// **M1c-2b 牙 `zonek_ground_pickup_empty_noop`**：区 k 的 `CM_PICKUP`（位置门成立、地面无物 =
+    /// **生产可达形态**，T-25）必须**零帧、零状态变化、不 panic**（守恒：别把"不可达"当失败）。
+    ///
+    /// 变异：删臂 ⇒ 返回 `Unsupported` ⇒ 红；改坏位置门/凭空加帧 ⇒ 红。
+    #[test]
+    fn zonek_ground_pickup_empty_noop() {
+        let (mut state, actor) = landed("cmd_pickup_empty", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let shared = SharedServices::for_test();
+        let (x, y) = pos_of(&state, actor);
+        let mut cmd_pick = cmd(game_svr::ground::CM_PICKUP, 0, 0, 0);
+        cmd_pick.param = u16::try_from(x).unwrap();
+        cmd_pick.tag = u16::try_from(y).unwrap();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state, &gates, "hero", 7, &cmd_pick, None, &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "CM_PICKUP 必须已接线"
+        );
+        assert!(rx.try_recv().is_err(), "地面无物 ⇒ 零帧（T-25）");
     }
 
     /// **M1c-2b 牙 `zonek_bag_takeon_ok`**：区 k 的 `CM_TAKEONITEM` 派发到**与区 0 同一**
