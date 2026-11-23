@@ -830,6 +830,23 @@ def _selfcheck_in(tmp):
     rc2, d2, _ = check_entries([_bad_entry, _new_bad], tmp, baseline=bl)
     chk(rc2 == 1 and ("th-new" in d2) and "1" * 40 in d2,
         "A3② 不在 baseline 的新坏条目 ⇒ 仍红并点名（%r）" % (d2[:130],))
+    # 卡 C24（openmir2-collab-oid-orphan-parent-zone-loop-m0-p1）：豁免键
+    # (principal, thread, entry_oid, field, value) ⇒ 同 principal、同字段 `parent`、同坏值，
+    # 但**不同 entry blob** ⇒ 仍判红（证明不是按 actor 或按值整批放行）。
+    _pbad = "9" * 40
+    _parent_hit = ("l25-step5-5b", "th-p", "c" * 40, mk({}, {}, parent=_pbad))
+    _parent_other = ("l25-step5-5b", "th-p", "d" * 40, mk({}, {}, parent=_pbad))
+    _parent_bl = {("l25-step5-5b", "th-p", "c" * 40, "parent", _pbad)}
+    rc_p1, d_p1, _ = check_entries([_parent_hit], tmp, baseline=_parent_bl)
+    chk(rc_p1 == 0 and "豁免 1 处" in d_p1,
+        "C24① 条目精确命中的坏 parent ⇒ 被豁免且审计输出可见（%r）" % (d_p1[:120],))
+    rc_p2, d_p2, st_p2 = check_entries([_parent_hit, _parent_other], tmp, baseline=_parent_bl)
+    chk(rc_p2 == 1 and ("条 ddddddddd" in d_p2) and st_p2.get("baseline_unused") == 0,
+        "C24② 同 principal/同字段/同坏 parent、不同 entry_oid ⇒ 仍红（非整批放行；rc=%d，"
+        "baseline 命中=%d 未命中=%d，%r）"
+        % (rc_p2, st_p2.get("baseline_total", 0) - st_p2.get("baseline_unused", 0),
+           st_p2.get("baseline_unused", 0), d_p2[:120]))
+
     try:
         load_baseline(os.path.join(tmp, "no-such-baseline.json"))
         _bl_missing = 0

@@ -111,6 +111,17 @@
    "added_by": "openmir2-dev-2",
    "entry_oid": "d1e7214d89a026aee5746a8739e0f86e154ccee2",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 parent 不再被豁免。"
+  },
+  {
+   "principal": "l25-step5-5b",
+   "thread": "zone-loop-m0-p1",
+   "field": "parent",
+   "value": "96ff19a43d4fc205d9227e9de92a5799",
+   "reason": "2026-11-24 C24 调查（只读）：该卡 status 条目 1deab592 的 parent 在本地对象库与 walgit 远端均不存在（git cat-file -e 失败；git fetch walgit <sha> 报 couldn't find remote ref），collab 的 parent 是条目 blob（非 commit）。真实链 aa31c99f→37fd3261→13c7e51e→1deab592→25f82397/5615417f→84f0cfbb，仅此一条链接悬空、下游父链均可达。历史条目只登记不回写；豁免只覆盖这一条，不构成对 parent 字段、该卡或该 actor 的整体豁免。",
+   "added_at": "2026-11-24",
+   "added_by": "l25-step5-5b",
+   "entry_oid": "1deab5921979810fca30c5455fee7919c6c9263f",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 同 principal/同字段/同坏值但不同条目仍判红。"
   }
  ]
 }
