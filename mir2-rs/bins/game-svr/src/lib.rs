@@ -9516,7 +9516,9 @@ fn handle_soft_close_cmd(
     }
 }
 
-/// 入站 P0 批（R1 前六条）的**派发臂**：把 `sim_loop` 的 6 条 `cmd.ident` 分支收敛到一处，
+/// 入站 P0 批（R1 前五条）的**派发臂**：把 `sim_loop` 的 5 条 `cmd.ident` 分支收敛到一处，
+/// **`CM_CLICKNPC` 不在本批**：生产由 `sim_loop` 在调本函数之前直调 `handle_click_npc_cmd`
+///（需要 `&mut guilds` 与脚本宿主，见卡 `openmir2-p0-clicknpc-unit-branch`），
 /// 使「ident → handler」与「线缆字段 → 形参」的映射可被**派发级单测**直接钉住
 /// （测试构造 12B 帧 → `CommandMessage::from_bytes` → 本函数 → 断言出帧/副作用）。
 ///
@@ -9536,13 +9538,6 @@ fn dispatch_inbound_p0(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     guild: Option<&mut GuildDisconnect<'_>>,
-    merchant_book: &game_svr::npc::MerchantScriptBook,
-    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
-    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
-    npc_vars: &game_svr::npc::NpcVars,
-    // `M2Share.GetItemNumber()` 计数器（`CM_CLICKNPC` 的 `@main` 脚本 `GIVE` 件走它，
-    // 见 [`handle_click_npc_cmd`]）。
-    item_number: &std::sync::atomic::AtomicI32,
     // `CM_SOFTCLOSE` 要在 `world.soft_close` **之前**把实体派生快照写入 `SavedHuman.derived`
     //（卡 `openmir2-dir-persistence-writeback`）；其余命令不读。
     saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -9573,30 +9568,6 @@ fn dispatch_inbound_p0(
         // `wParam`（= 线缆 `Series`）== 1 ⇒ `BoEmergencyClose`。
         handle_soft_close_cmd(
             cmd.series, chr_name, socket, online, sessions, world, guild, saves,
-        );
-        true
-    } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
-        // 线缆映射：`Recog=npcActorId`。
-        handle_click_npc_cmd(
-            cmd.recog,
-            chr_name,
-            socket,
-            online,
-            sessions,
-            world,
-            merchant_book,
-            shop_sessions,
-            sell_off_sessions,
-            npc_vars,
-            catalog,
-            item_number,
-            gates,
-            // **卡 `openmir2-gm-script-exec-seams`**：生产路径的 `CM_CLICKNPC` 由 sim 循环在
-            // 调本函数**之前**接管（那里才能同时借 `&guilds` 给 GM 跳线，而本函数的
-            // `guild: &mut GuildDisconnect` 与它冲突）⇒ 本分支只作单元级入口，不装桥。
-            None,
-            // **卡 `openmir2-clearmapmon-impl`**：同因，本分支也没有刷怪宿主 ⇒ 不接世界副作用。
-            None,
         );
         true
     } else {
@@ -37577,16 +37548,11 @@ impl HostLoop {
                                     server_index: i32::from(enter_cfg.server_index),
                                     gates: &gates,
                                 }),
-                                &merchant_book,
-                                &mut shop_sessions,
-                                &mut sell_off_sessions,
-                                &npc_vars_base,
-                                item_number,
                                 &mut saves,
                             ) {
-                                // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
-                                // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
-                                // [`dispatch_inbound_p0`] 的逐条 oracle 对照。
+                                // 入站 P0 批（R1 前五条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
+                                // CM_QUERYVAL/CM_SOFTCLOSE）：派发与线缆字段映射见
+                                // [`dispatch_inbound_p0`] 的逐条 oracle 对照。`CM_CLICKNPC` 不在此批。
                             } else if fixed_npc_dialog {
                                 // 固定 NPC（`Envir/Npcs.txt`）的对话框：oracle `FindNpc` 臂 ⇒
                                 // `GuildOfficial.UserSelect`（`LableIsCanJmp` → `GotoLable` 统一入口 →
@@ -76889,7 +76855,7 @@ SendRefMsgRange=15
         );
     }
 
-    // ===================== 入站派发 P0 批（R1 前六条）=====================
+    // ===================== 入站派发 P0 批（R1 前五条；CM_CLICKNPC 不在此批）=====================
 
     /// **制药片 WB：`@makedrug` 面板 + `CM_USERMAKEDRUGITEM` 全链端到端**（经 `handle_shop_cmd`）。
     ///
@@ -78451,11 +78417,6 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
@@ -78496,11 +78457,6 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
@@ -78574,11 +78530,6 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_QUERYUSERNAME 属 P0 批"
@@ -78615,11 +78566,6 @@ SendRefMsgRange=15
             &gates,
             &catalog,
             None,
-            &game_svr::npc::MerchantScriptBook::default(),
-            &mut HashMap::new(),
-            &mut HashMap::new(),
-            &game_svr::npc::NpcVars::default(),
-            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         let frames = drain_frames(&mut rx0);
@@ -78702,11 +78648,6 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
@@ -78730,18 +78671,17 @@ SendRefMsgRange=15
         assert_eq!(&user_state[5..8], b"tgt", "UserName 内容");
     }
 
-    /// **派发级**：`CM_CLICKNPC(1010)` 经 `dispatch_inbound_p0` —— 线缆 `Recog=npcActorId` 进
-    /// `handle_click_npc_cmd` 的 `FindMerchant` 解析；命中 ⇒ 派发返回 `true` 且**副作用**可见
-    /// （`ClickNpcTime` 置为当前 `clock`，`PlayObject.Base.cs:684` 在门外立即置位）。
-    /// oracle `PlayObject.Message.cs:885-887` → `ClientClickNpc(nParam1)`；线缆 `nParam1=Recog`。
+    /// **派发级契约（卡 `openmir2-p0-clicknpc-unit-branch`）**：`CM_CLICKNPC(1010)` **不属于 P0 批**
+    /// —— 生产路径由 `sim_loop` 在调 `dispatch_inbound_p0` **之前**直调 `handle_click_npc_cmd`
+    ///（那里能同时借 `&mut guilds` 给 GM 跳线与脚本宿主；p0 的 `guild` 参数与它冲突）。
+    /// 本用例钉住三条：① 派发返回 `false`（交后续分支，**不得静默兜底执行 click**）；
+    /// ② 会话侧 `click_npc_time` 保持 `None`（p0 确实没执行半截 click）；
+    /// ③ 若有人把 `CM_CLICKNPC` 臂加回 p0（返回 `true` / 置 `ClickNpcTime`）⇒ 本用例红。
     ///
-    /// 红检（实测见 fixtures）：删 `dispatch_inbound_p0` 的 `CM_CLICKNPC` 分支 ⇒ 派发返回 `false`
-    /// **登记（修复批复验 v1 第 4 条）**：本用例钉的是「派发臂存在 + 限频门外先置 ClickNpcTime」的侧效应；
-    /// **并未**钉住 recog→handler 的线缆字段映射——因取 npc id 之前侧效应已发生（换用 param/tag 亦绿）。
-    /// 该映射当前**不可观测**（点击后的 @main label 派发未接线，属后续片），接线后须补真牙。
-    /// 且 `click_npc_time` 不置位 ⇒ ①② 必红。
+    /// 点击语义本身（IsCanDeal/Death/限频/距离门）由 `click_npc_guards_and_reach_click_point`
+    /// 在 handler 级覆盖；生产直达路径由 M1c-3b 的 drain/seam 用例覆盖。
     #[test]
-    fn p0_dispatch_clicknpc_arm_and_rate_limit_side_effect() {
+    fn p0_dispatch_does_not_handle_clicknpc() {
         use std::collections::HashMap;
         let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
@@ -78784,7 +78724,6 @@ SendRefMsgRange=15
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         let catalog = game_svr::ability::StdItemCatalog::new();
 
-        let now = world.clock_ms;
         assert!(
             sessions.get("hero").unwrap().click_npc_time.is_none(),
             "前置：未点过（ClickNpcTime 空）"
@@ -78792,7 +78731,7 @@ SendRefMsgRange=15
         // 线缆 Recog=npcActorId=mid；商人在 (11,10)、hero 在 (10,10) ⇒ ±15 命中。
         let (cmd, tail) = p0_parse(p0_frame(mir2_protocol::messages::CM_CLICKNPC, mid, 0, 0, 0));
         assert!(
-            dispatch_inbound_p0(
+            !dispatch_inbound_p0(
                 &cmd,
                 tail.as_deref(),
                 "hero",
@@ -78804,19 +78743,13 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
-            "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
+            "CM_CLICKNPC 不属 P0 批 ⇒ 派发返回 false（生产由 sim_loop 直调 handler）"
         );
-        assert_eq!(
-            sessions.get("hero").unwrap().click_npc_time,
-            Some(now),
-            "命中 ⇒ 走过限频门，ClickNpcTime 置为当前 clock（副作用）"
+        assert!(
+            sessions.get("hero").unwrap().click_npc_time.is_none(),
+            "p0 不得执行 click 的任何副作用（ClickNpcTime 必须保持空）"
         );
     }
 
@@ -78862,11 +78795,6 @@ SendRefMsgRange=15
                 &gates,
                 &catalog,
                 None,
-                &game_svr::npc::MerchantScriptBook::default(),
-                &mut HashMap::new(),
-                &mut HashMap::new(),
-                &game_svr::npc::NpcVars::default(),
-                &std::sync::atomic::AtomicI32::new(0),
                 &mut HashMap::new(),
             ),
             "非 P0 ident ⇒ 返回 false"
@@ -78892,11 +78820,6 @@ SendRefMsgRange=15
             &gates,
             &catalog,
             None,
-            &game_svr::npc::MerchantScriptBook::default(),
-            &mut HashMap::new(),
-            &mut HashMap::new(),
-            &game_svr::npc::NpcVars::default(),
-            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         assert_eq!(
@@ -78928,11 +78851,6 @@ SendRefMsgRange=15
             &gates,
             &catalog,
             None,
-            &game_svr::npc::MerchantScriptBook::default(),
-            &mut HashMap::new(),
-            &mut HashMap::new(),
-            &game_svr::npc::NpcVars::default(),
-            &std::sync::atomic::AtomicI32::new(0),
             &mut HashMap::new(),
         ));
         let sg = sessions.get("hero").unwrap();
