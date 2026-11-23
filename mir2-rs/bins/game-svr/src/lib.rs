@@ -126744,14 +126744,16 @@ mod zone_command_tests {
         );
     }
 
-    /// **A24 现状牙 `zonek_ground_pickup_same_item_twice_dupes`**（缺口登记，**不是**期望行为）：
+    /// **CURRENT BUG — 不是期望行为**（A24 现状牙 `zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG`）：
     /// `GroundMap` 每次按 world **只读视图**重建、拾取删格**不写回 world**（§25.1 (A) 只批只读
     /// 分片；见 `handle_ground_cmd` 文档）⇒ 同一地面物可被**重复 `CM_PICKUP` 拿到多次**。
     ///
     /// 本牙把**现状**钉住（真 dupe ⇒ 背包 +2），供后续"开写回"的修法翻转：修法落地后本牙必须
     /// 改成断言 +1（或删除）。**不**改生产写回（本片边界）。
     #[test]
-    fn zonek_ground_pickup_same_item_twice_dupes() {
+    // 名字故意大写 `CURRENT_BUG`（警示后来人这不是期望行为；opc-27 要求），故显式豁免 snake_case。
+    #[allow(non_snake_case)]
+    fn zonek_ground_pickup_same_item_twice_dupes_CURRENT_BUG() {
         use mir2_world_bevy::{FloorItemKind, FloorItemMeta};
         let (mut state, actor) = landed("cmd_pickup_dupe", zone::ZoneId::new(1));
         let (gates, _rx) = gates_and_rx();
