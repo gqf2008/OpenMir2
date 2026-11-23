@@ -504,8 +504,11 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
 ### 12.2 M1c 起手顺序：先共享计数，再开物品族
 
 1. **第一件**：`item_number` 改共享（`Arc<AtomicI32>` 或等价句柄）。**N=1 下与今日一致**（单写者、
-   分配序不变）。验收两条：①N=1 两树 stdout **逐字节相等**（同 M0 口径）②**对照式**单测：同一初值跑
-   1000 次分配，新实现产出的序号序列 == 旧实现序列（不是"看起来递增"）。
+   分配序不变）。验收两条：①N=1 两树 stdout **逐字节相等**（同 M0 口径；N=1 单写者 ⇒ `fetch_add`
+   序列 ≡ 旧 `+=`）②**对照式**单测：旧实现 `old_next(&mut i32){ *c += 1; *c }` 与新实现
+   `new_next(&Arc<AtomicI32>){ c.fetch_add(1) + 1 }`，同一初值各跑 1000 次，**逐次
+   `assert_eq!(new_seq[i], old_seq[i])`**（断言两条序号序列相等，而非"看起来递增"）。
+   （N≥2 时分配序随调度变，属 D-1 掩码范围、不在本测内。）
 2. **然后**开物品族（bag/eat/drop/drug/shop/click-npc；selloff 跨区随后解锁）。
    验收：区 k 造件 `MakeIndex` **全局唯一**（造 N 件后集合大小 == N）。
 
@@ -515,9 +518,14 @@ ProcessServices, …)` ⇒ `process` 直接作参数，**b-2 的 `proc_svc!` exp
   （匹配 `owner_thread` 断言文案）。
 - **W2** `hold_target_lock_no_second_hostloop_lock`：持目标区锁期间 `target.try_lock()` ⇒
   `Err(WouldBlock)`；`∀ z≠target: z.try_lock()` ⇒ `Ok`。
-- **W3** `d_path_takes_no_process_mutex`：运行期进程级 `Arc<Mutex>` **锁计数 == 0**（行为证据，
-  须写明计数来自哪个计数器/哪个 hook 才能复跑）；"handler 形参不含 `db`/`engine`/进程 `Arc<Mutex>`"
-  的静态牙**标注为接线提示、非行为证据**。
+- **W3** `d_path_takes_no_process_mutex`，机制二选一（`0c` 建议 A，采纳）：
+  **A（非侵入，主用）**：测试里先把**全部进程级 `Arc<Mutex>`**（auth `AdmissionStore`、gate slots、
+  db replies 等）**持锁**，再在**工作线程**跑 (d) 路径、主线程 **带超时 `join`**（如 500ms）：若 (d)
+  试图取任一被持进程锁 ⇒ 阻塞 ⇒ 超时 ⇒ **红**；如期返回 ⇒ 不取进程锁。可复跑、不改生产码。
+  **B（备选，侵入式）**：进程级取锁点换成 `cfg(test)` 包装并 `PROCESS_LOCK_ACQUIRES.fetch_add(1)`，
+  断言 (d) 期间增量为 0。
+  "handler 形参不含 `db`/`engine`/进程 `Arc<Mutex>`"的静态牙**标注为接线提示、非行为证据**；
+  行为证据 = A（或 B）。
 
 ### 12.4 `KickAccount`：广播 + 各区自查
 
