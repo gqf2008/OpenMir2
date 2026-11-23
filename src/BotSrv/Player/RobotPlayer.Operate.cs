@@ -516,6 +516,14 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_MOVEFAIL:
+                    // 软关后 MyActor 已清空、残留排队帧仍进世界分支：`ActionFailed()` 第一行
+                    // `MShare.MySelf.m_boUseCboLib = false;` 会 NRE（被 RunPacketGuard 计成
+                    // `recv_packet_null`）。MySelf==null 时跳过本分支与「丢弃该帧」等价。
+                    // 改坏必红：--selftest-recv-null-context 的 movefail 用例。
+                    if (MShare.MySelf == null)
+                    {
+                        break;
+                    }
                     ActionFailed();
                     ActionLock = false;
                     RecalcAutoMovePath();

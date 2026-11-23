@@ -337,6 +337,34 @@ namespace BotSrv
                 CheckNullContext("daychanging-empty", (ushort)Messages.SM_DAYCHANGING, 5600, body, _ => { });
             }
 
+            // ⑥ SM_MOVEFAIL（ident 28）：null ⇒ `ActionFailed()` 的 `MySelf.m_boUseCboLib` 行 NRE；
+            //    非 null ⇒ 副作用（`TargetX/TargetY` 归 -1、`m_boUseCboLib` 置 false）与 SM_TURN 发送照旧。
+            {
+                int selfId = 5500, otherId = 5501;
+                CheckNullContext("movefail", (ushort)Messages.SM_MOVEFAIL, otherId, body, _ => { });
+                var bot = new RobotPlayer();
+                bot.MyActor = new THumActor(bot) { RecogId = selfId };
+                bot.MarkInWorldOnConnectionForTest(selfId, 10, 20, 1);
+                bot.PlayScene.NewActor(otherId, 5, 6, 0, 0, 0);
+                var cm = new ClientManager();
+                string sid = "recvnull2-movefail";
+                cm.AddClient(sid, bot);
+                MShare.TargetX = 7;
+                MShare.TargetY = 9;
+                bot.MyActor.m_boUseCboLib = true; // 置反值 ⇒ 断言「被 ActionFailed 置回 false」不是空转
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_MOVEFAIL, otherId, 0, 0, 0, body),
+                });
+                Actor other = bot.PlayScene.FindActor(otherId);
+                bool sentTurn = other != null && other.m_MsgList.Count >= 1
+                    && other.m_MsgList[0].Ident == Messages.SM_TURN;
+                bool sideEffects = MShare.TargetX == -1 && MShare.TargetY == -1 && !bot.MyActor.m_boUseCboLib;
+                Check("nonull-movefail-side-effects-and-send", sideEffects && sentTurn,
+                    $"tx={MShare.TargetX} ty={MShare.TargetY} cbolib={bot.MyActor.m_boUseCboLib} sent={sentTurn}");
+            }
+
             Console.WriteLine(failed == 0 ? "RECVNULL SELFTEST PASS" : $"RECVNULL SELFTEST FAIL ({failed})");
             return failed == 0 ? 0 : 1;
         }
