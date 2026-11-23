@@ -11,6 +11,11 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "deny"
 
+[features]
+# **M1a ②**：⑤ 跨区帧旁路打标（`(tick, socket, sha256(body))`）。**默认关** ⇒ 默认构建里
+# 一行都不编译（零成本）；验收专用构建用 `--features frame-src`，从同一棵树出二进制。
+frame-src = ["dep:sha2"]
+
 [dependencies]
 mir2-protocol = { path = "../../crates/protocol" }
 # 跨服（G11/A3）：PlanesMessage 分类 + PlanesClient/Server 状态机（见 docs/g11-planes-design-20261108.md）
@@ -38,6 +43,9 @@ base64 = "0.22"
 # `uptime_lib` 在 Windows 上就是 `GetTickCount64() -> Duration::from_millis` 的安全封装（MIT）。
 # 固定版本（=）以免补丁版漂移；供应链评估见卡面 patch body。
 uptime_lib = "=0.3.2"
+# 仅 `frame-src` 特性（M1a 验收构建）用：旁路日志的 sha256(body) 与外部 frames.ndjson 联表。
+# 默认构建不编译（optional + feature 门）；测试仍用下方 dev-dependency 的同名项。
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }

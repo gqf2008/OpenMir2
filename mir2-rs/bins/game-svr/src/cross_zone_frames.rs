@@ -201,6 +201,60 @@ pub(crate) fn note_mirror_recipient(
     outcome
 }
 
+/// **M1a（§13.6 的 lite 版）**：跨区帧旁路日志的来源标签。
+///
+/// M1a 只有 ⑤ 交付边界一处写 `CrossZone`；`ControlReply` 是 M1c 控制邮箱回包处的**预留落点**
+/// （M1a 该执行点还不存在，故 `#[allow(dead_code)]`）。
+#[cfg(feature = "frame-src")]
+#[derive(Clone, Copy, Debug)]
+enum FrameSrc {
+    CrossZone,
+    #[allow(dead_code)]
+    ControlReply,
+}
+
+/// 旁路日志的环境门（仅 `frame-src` 构建）：设了路径才写。
+#[cfg(feature = "frame-src")]
+const ENV_CROSS_FRAME_SRC_LOG: &str = "MIR2_CROSS_FRAME_SRC_LOG";
+
+/// **M1a ②**：⑤ 交付边界的 test-only 旁路——每帧一行 JSON `{tick,socket,len,sha256,src}`。
+///
+/// **默认构建一行不编译**（整段 `#[cfg(feature = "frame-src")]`；验收构建 `--features frame-src`）。
+/// `tick` 直接用 `drain_zone` 的参数
+/// （= B 段执行时的 `self.ticks`），**不另取** `Instant`/墙钟。
+///
+/// 外部联表：线上帧 = `'#' + ServerMessage(20B, 小端) + body + '!'`（可选尾部 `$`）
+/// ⇒ `body = inner[20..]`；按 `(socket, sha256(body))` 对齐 `frames.ndjson`（tick 只作辅助证据）。
+#[cfg(feature = "frame-src")]
+fn note_frame_src(tick: u64, socket: i32, body: &[u8], src: FrameSrc) {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    let Some(path) = std::env::var_os(ENV_CROSS_FRAME_SRC_LOG) else {
+        return;
+    };
+    let mut sha = String::with_capacity(64);
+    for b in sha2::Sha256::digest(body) {
+        let _ = write!(sha, "{b:02x}");
+    }
+    let line = format!(
+        "{{\"tick\":{tick},\"socket\":{socket},\"len\":{},\"sha256\":\"{sha}\",\"src\":\"{src:?}\"}}\n",
+        body.len()
+    );
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(line.as_bytes()) {
+                crate::glog!("WRN", "跨区帧旁路写失败（{path:?}）：{e}");
+            }
+        }
+        Err(e) => crate::glog!("WRN", "跨区帧旁路打不开（{path:?}）：{e}"),
+    }
+}
+
 /// 收件区在 `barrier1` 返回之后、`phase2` 之前调用：排空本区邮箱并写网关。
 ///
 /// 只排 `src_tick < tick` 的帧（本 tick pre-barrier1 产的帧留到下一轮）⇒ 恰好 1 tick 延迟。
@@ -252,6 +306,9 @@ pub(crate) fn drain_zone(
             continue;
         };
         for body in frame.bodies {
+            // **M1a ②**：⑤ 交付边界打标（`frame-src` 构建才有；默认构建零参与）。
+            #[cfg(feature = "frame-src")]
+            note_frame_src(tick, socket, &body, FrameSrc::CrossZone);
             let _ = tx.send(SimToGate::SendFrame { socket, body });
         }
         sent += 1;
@@ -344,6 +401,52 @@ mod tests {
             _ => panic!("意外消息：非 SendFrame"),
         }
         assert!(rx.try_recv().is_err(), "只应有一帧");
+    }
+
+    #[cfg(feature = "frame-src")]
+    fn sha_hex(bytes: &[u8]) -> String {
+        use sha2::Digest as _;
+        use std::fmt::Write as _;
+        let mut s = String::with_capacity(64);
+        for b in sha2::Sha256::digest(bytes) {
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    }
+
+    /// **M1a ② 见证**：⑤ 交付边界写旁路日志（`tick/socket/len/sha256/src`，一行一条）。
+    ///
+    /// 变异：删 `note_frame_src` 调用 ⇒ 文件不存在/无该行 ⇒ 红。
+    /// 只在验收构建跑：`cargo test -p game-svr --lib --features frame-src`。
+    #[cfg(feature = "frame-src")]
+    #[test]
+    fn drain_zone_writes_frame_src_side_log() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(true);
+        let dir = std::env::temp_dir().join(format!("mir2_frame_src_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("frame_src.ndjson");
+        std::env::set_var(ENV_CROSS_FRAME_SRC_LOG, &path);
+        let mb = Arc::new(CrossZoneMailboxes::new(2, 8));
+        let router = router_with(&[(900, 1)]);
+        let _sink = arm_src(&mb, &router, HOST_ZONE, 0);
+        note_mirror_recipient(CrossRecipientSurface::RefMsg, route(900), &body(7));
+        let (g, _rx) = gates();
+        assert_eq!(drain_zone(zone(1), 1, &g), 1);
+        std::env::remove_var(ENV_CROSS_FRAME_SRC_LOG);
+        let text = std::fs::read_to_string(&path).expect("旁路文件必须存在");
+        let sha = sha_hex(&[7, 7, 7]);
+        assert!(
+            text.lines().any(|l| l.contains("\"tick\":1")
+                && l.contains("\"socket\":900")
+                && l.contains("\"src\":\"CrossZone\"")
+                && l.contains(&sha)),
+            "旁路行必须含 tick=1/socket=900/sha256({sha})；实际：{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// src_tick 过滤：tick 1 pre-barrier1 产的帧留到 tick 2（不是 0 tick）。
