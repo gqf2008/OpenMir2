@@ -119,9 +119,9 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 - **持锁路径与锁序（逐路径，opc-27 2026-11-23 要求具体到「取哪把锁、何时取、持多久」）**：
   | 路径 | 取的锁 | 何时取 | 持多久 | 期间允许/禁止 |
   | --- | --- | --- | --- | --- |
-  | 登录落区（既有 1a） | 区 k `HostLoop` 锁 | 区 0 的 `HostInbound` 段内 | 单次登录处理 | 允许：建会话/写 world；禁止：取 `db`/`guilds` 锁（DB 请求走 `req_tx`） |
+  | 登录落区（既有 1a） | 区 k `HostLoop` 锁 | 区 0 的 `HostInbound` 段内 | 单次登录处理 | 允许：建会话/写 world，**并借用进程级 `&mut`（`finish_login` 已借 `&mut guilds`）**；禁止：调用会阻塞的 DB 操作（DB 请求走 `req_tx`） |
   | 断线（既有 1c） | 区 k `HostLoop` 锁 | 区 0 的 `HostDbPoll`/控制段内 | 单条 `Closed` | 同上；存档入 `save_outbox` |
-  | 商店/点击 NPC（新） | 区 k `HostLoop` 锁 | 区 0 `HostInbound` 段首（drain 控制邮箱） | **每条命令一次**，不跨命令持有 | 允许：脚本执行 + world/会话修改 + 发帧；**禁止**：取区 0 的 `db`/`guilds`/`castle` 锁、调用会阻塞的 DB 操作 |
+  | 商店/点击 NPC（新） | 区 k `HostLoop` 锁 | 区 0 `HostInbound` 段首（drain 控制邮箱） | **每条命令一次**，不跨命令持有 | 允许：脚本执行 + world/会话修改 + 发帧（进程级 `&mut` 同线程、编译期借用保证）；**禁止**：再取任何 `HostLoop` 锁、调用会阻塞的 DB 操作 |
   | 行会/城堡/GM（新） | **只持区 0 自己的锁**（不取区 k） | 区 0 `HostPeriodic` 的 10s 门内 | 一个门周期 | 结果帧发给区 k 玩家时只查 `gates`，不动区 k 状态 |
   | 换服/改图 handoff | 既有 handoff 邮箱（无锁） | 既有相位 | — | 不改 |
 - **背压策略 = 停排，不丢、不造帧**（opc-27 2026-11-23 裁决；"同款文案"没有既有对应物——
@@ -183,12 +183,12 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 
   | 位 | 段 | M1 归属 | 「区 k 不跑它会坏什么」/ 为什么可以不含 |
   | --- | --- | --- | --- |
-  | SHUTDOWN | `HostShutdown` | **M1a** | 不跑 ⇒ 区 k 线程收不到关服分支（进程关服由区 0 统一处理；区 k 线程由 `stop` 旗标退出）。**不含**：关服存档是区 0 的职责（`shutdown_save_all` 只扫区 0 会话；区 k 的断线存档走 `save_outbox`） |
+  | SHUTDOWN | `HostShutdown` | **不含** | 区 k 的退出由 `stop` 旗标负责；**关服存档是区 0 的职责**（`shutdown_save_all` 只扫区 0 会话，且有副作用）⇒ 区 k 不得进入该段；区 k 的断线存档走 `save_outbox` |
   | INBOUND | `HostInbound` | **M1b**（M1a 命令仍由区线程 loop 顶的 `handle_zone_command` 处理） | 不跑 ⇒ 本区玩家的战斗/技能命令无人执行（M1a 只做移动 + 出帧） |
   | DB_POLL | `HostDbPoll` | **不含** | DB 链是进程级单点（区 0）；区 k 的存档请求走 `save_outbox` → 区 0 `drain_zone_saves` |
   | PERIODIC | `HostPeriodic` | **不含** | 行会/城堡/滚动公告是单点；**刷怪不在这一段**（见下「mon_gen」注），不需要为刷怪开 PERIODIC |
   | WORLD_HEAD | `HostWorldHead` | **M1a**（已在 `M0_MIN`） | 不跑 ⇒ 本区无 tick head（怪物 AI/命令 FIFO/死亡结算全停） |
-  | **POST_HEAD** | `HostPostHead` | **M1a（新增，必修）** | 不跑 ⇒ **战斗结算**全缺：`drain_yedo_events`（击杀计数/攻杀）、`drain_skill_train_events`（技能熟练）、`drain_attack_wear_then_monster_refs`（**怪物 RefMsg：转身/可见性**）、`apply_get_start_point_after_tick`（3s 回城点）。M1a 声称的「怪物转身」正是这一段的产出 |
+  | **POST_HEAD** | `HostPostHead` | **M1a（新增，必修）** | 不跑 ⇒ **战斗结算**全缺：`drain_yedo_events`（击杀计数/攻杀）、`drain_skill_train_events`（技能熟练）、`drain_attack_wear_then_monster_refs`（= `drain_attack_weapon_wear` + **`drain_monster_ref_msgs`**，怪物侧 Ref 帧；函数内注释可见 656=目标 `BreakHolySeizeMode`——**具体帧面实施时以帧字节为准，不写死**）、`apply_get_start_point_after_tick`（3s 回城点）。M1a 声称的「怪物转身」正是这一段的产出 |
   | **PLAYER_RUN** | `HostPlayerRun` | **M1c** | 不跑 ⇒ 玩家逐 tick 停摆（hunger/复活 `revival`/gold/`auto_get_exp`/`run_rates`/`flush_run_frames`）。M1a/M1b 不需要：区 k 的移动帧由 `handle_move_cmd(…, None)` **直发**（不经 `run_frames` 收集器），`flush_run_frames` 只属区 0 的 `Some(collector)` 路径 |
   | WORLD_TAIL | `HostWorldTail` | **M1a**（已在 `M0_MIN`） | 不跑 ⇒ 无 phase2（AOI 扫描）/死亡结算尾部，玩家永远看不到别人 |
   | PLANES | `HostPlanes` | **不含** | G11 跨服在两端皆 inert（卡 `g11-cross-server-inert-oracle`），区 k 无 planes 链接 |
@@ -223,9 +223,11 @@ M0 已把区 0 的 host 循环抽成 `HostLoop::tick(..., PhaseSet)`，并给区
 ## 7. 风险清单
 
 1. **区 0 双角色**：任何把区 0 也包成 `ZoneState` 的"对称化"冲动都会给热路径加锁 ⇒ 明令禁止（§4-2）。
-2. **脚本宿主回 0 的锁序**：区 0 持区 k 锁 → 调用脚本 → 脚本可能递归调用世界操作 → 若再次取区 0
-   的锁（`db`/`guilds`）可能死锁。规则：**持区 k 锁期间只做世界/会话修改与发帧，不取进程级锁**；
-   需要 DB 的命令（存档类）走 `save_outbox` 的异步出口。用例：两线程互锁场景 `try_lock` 超时即红。
+2. **脚本宿主回 0 的锁序**：**真正的死锁面只有两条——(a) 同一区 k 的 `std::sync::Mutex` 重入
+   （自死锁）；(b) 跨区 `HostLoop` 锁的 ABBA 序**。进程级 `db`/`guilds`/`castle`/`engine` 是
+   `sim_loop` 线程局部 `&mut`，**同线程、编译期借用保证，不受锁约束**（`finish_login` 持区 k 锁
+   借 `&mut guilds` 即先例）。规则：**持区 k 锁期间不得再取任何 `HostLoop` 锁**；需要 DB 的命令
+   （存档类）走 `save_outbox` 的异步出口。用例：`try_lock` 重入场景与跨区 ABBA 场景各一条（超时即红）。
 3. **AOI 显示表生命周期**：区 k 的 `displays` 与 `apply_mirrors` 的交互（镜像展示项写入收件区表）
    在区 k 有真会话后语义变复杂（镜像 ↔ 本地同槽）；M1a 起每个 tick 后断言「display 表与
    World 实体集合一致」（`assert_mirror_routes_consistent` 的同款手法，仅测试期）。
