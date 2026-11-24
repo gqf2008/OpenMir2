@@ -1,6 +1,6 @@
 # openmir2-magic-parity
 
-> 状态：**进行中（2026-11-19，分支 `card/magic-parity`，base M9=`572a0b8a3`）**。
+> 状态（2026-11-19，分支 `card/magic-parity`，base M9=`572a0b8a3`）：**进行中**。
 > Owner 指示：性能线冻结，全力补玩法对齐；魔法是四块（技能/物品/任务/NPC 脚本）里先补的一块，
 > 且**必须按 ECS 实现**；对外的覆盖率口径是 `verified/65`（未验证的实现在覆盖率上等于 0）。
 
