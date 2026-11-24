@@ -8425,14 +8425,29 @@ fn handle_deal_cmd(
         }
     };
 
-    // 回写（对手缺席时 `other_sg`/`other_tr` 为 `None` ⇒ 不写）。
+    // 回写（对手缺席时 `other_chr` 为 `None` ⇒ 不写）。
     ground_sessions.insert(chr_name.to_string(), me_sg);
     trade_sessions.insert(chr_name.to_string(), me_tr);
-    if let (Some(c), Some(sg)) = (other_chr.clone(), other_sg) {
-        ground_sessions.insert(c, sg);
-    }
-    if let (Some(c), Some(tr)) = (other_chr.clone(), other_tr) {
-        trade_sessions.insert(c, tr);
+    if let Some(c) = other_chr.clone() {
+        // **A39-F1（缺陷修复）**：回写 handler **实际改过的那份**对手状态——
+        // 对手原本没有 `trade_sessions` 条目时，状态机改的是 `dummy_tr`（`deal_try` 的
+        // `open_deal_dlg(other)` 已把 `deal_creature/dealing` 写进去）。以前只在
+        // `other_tr.is_some()` 时回写 ⇒ **进程内首次作为被邀请方**的玩家状态被丢弃，
+        // 其后续 ADD/CHGGOLD/CANCEL/END 全部因 `deal_creature=None` 空转。
+        trade_sessions.insert(c.clone(), other_tr.unwrap_or(dummy_tr));
+        // `other_sg`（对手会话态）：**不用 `dummy_ground` 回写**，保留「Some 才写」。依据：
+        // ① `other_sg.is_none()` 的真实可达面只有 **`other_chr == Some(chr_name)`**（退化
+        //    自交易：`DealCreat == this`，此时 `me_sg` 已把同一键摘走）——回写 dummy 会把
+        //    本人会话覆盖成空；oracle 该支由状态机自身拒绝，本函数不得兜底写。
+        // ② 非自交易时「online 有该玩家但 ground 缺失」在生产不可达：登录在 `finish_login`
+        //    同一函数建两者；`Closed`/顶号/软关同一事件里先 `online_take` 后
+        //    `close_cleanup_residue` 摘 ground（中间不派发命令）；A35-b 迁移 detach/attach
+        //    同批搬移/回滚。
+        // ③ 既有用例 `drain_deal_tick_cancels_on_each_oracle_condition_one_shot` 的
+        //    `Case::SelfId` 正是 ① 的形态（在线项在、ground 被 me 摘走）。
+        if let Some(sg) = other_sg {
+            ground_sessions.insert(c, sg);
+        }
     }
 
     // 编码 + 逐帧按目标自己的 `[GateIdx, Socket]` 路由。
@@ -46110,6 +46125,166 @@ mod tests {
             drain_idents(&mut rx0),
             vec![mir2_protocol::messages::SM_DEALTRY_FAIL],
             "前置守卫全过 + 前排非玩家 ⇒ 只发 SM_DEALTRY_FAIL"
+        );
+    }
+
+    /// **A39-F1（区 0 主机路径）**：被邀请方**没有** `trade_sessions` 条目时的首次交易——
+    /// A 的 `CM_DEALTRY` 之后 B 的状态必须落地（`deal_creature == Some(a)`），B 的
+    /// `CM_DEALADDITEM` 收 `SM_DEALADDITEM_OK`；两次 `CM_DEALEND` 后双方各收 `SM_DEALSUCCESS`。
+    ///
+    /// 变异：回写尾改回 `if let (Some(c), Some(tr))`（只回写原本已有的对手条目）⇒
+    /// `trade_sessions["b"]` 不存在、ADDITEM 零帧 ⇒ 红。
+    #[test]
+    fn deal_first_trade_invitee_without_entry_lands_state() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        world.clock_ms = 100_000;
+        let a = world.add_entity({
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "a", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e
+        });
+        let b = world.add_entity({
+            let mut e = mir2_world_bevy::EntitySpawn::new(2, "b", 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e
+        });
+        world.entities.get_mut(a).unwrap().ai.dir = 2; // 右 ⇒ 前排 (11,10)
+        world.entities.get_mut(b).unwrap().ai.dir = 6; // 左 ⇒ 回指 a
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            a,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"a".to_vec()),
+        );
+        displays.set(
+            b,
+            downlink::ActorDisplay::new(6, 0, 0, 0, 0, 255, b"b".to_vec()),
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("a".into(), test_session_ground(a));
+        ground_sessions.insert("b".into(), test_session_ground(b));
+        ground_sessions
+            .get_mut("b")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(7777, 1));
+        // **不预置 `trade_sessions`**（= 进程内首次交易，被邀请方无条目）。
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "a".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: a,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                out.push((socket, u16::from_le_bytes([body[4], body[5]])));
+            }
+            out
+        };
+
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "a",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let _ = drain(&mut rx0);
+        assert_eq!(
+            trade_sessions.get("b").and_then(|s| s.deal_creature),
+            Some(a),
+            "F1：B 的交易状态必须落地（修复前 B 无条目 ⇒ None）"
+        );
+
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALADDITEM,
+            7777,
+            None,
+            "b",
+            902,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let frames = drain(&mut rx0);
+        assert!(
+            frames
+                .iter()
+                .any(|(s, id)| *s == 902 && *id == mir2_protocol::messages::SM_DEALADDITEM_OK),
+            "B 的 ADDITEM 必须落地并回 OK：{frames:?}"
+        );
+
+        world.clock_ms += i64::from(cfg.deal_ok_time) + 1;
+        for (who, sock, chr) in [("a", 901, "a"), ("b", 902, "b")] {
+            let _ = who;
+            handle_deal_cmd(
+                mir2_protocol::messages::CM_DEALEND,
+                0,
+                None,
+                chr,
+                sock,
+                &online,
+                &world,
+                &displays,
+                &mut ground_sessions,
+                &mut trade_sessions,
+                &gates,
+                &cfg,
+                &catalog,
+            );
+        }
+        let frames = drain(&mut rx0);
+        for sock in [901, 902] {
+            assert!(
+                frames
+                    .iter()
+                    .any(|(s, id)| *s == sock && *id == mir2_protocol::messages::SM_DEALSUCCESS),
+                "socket={sock} 必须收 SM_DEALSUCCESS：{frames:?}"
+            );
+        }
+        assert!(
+            !trade_sessions.get("a").is_some_and(|s| s.dealing)
+                && !trade_sessions.get("b").is_some_and(|s| s.dealing),
+            "双方 dealing 复位"
         );
     }
 
@@ -136119,6 +136294,89 @@ mod zone_command_tests {
             state.host.world.entities.group(peer).unwrap().group_owner,
             0,
             "成员 group_owner 清空"
+        );
+    }
+
+    /// **A39-F1（区 k 路径）**：清空 `trade_sessions`（进程内首次交易）后，
+    /// A 的 TRY → B 的 ADDITEM 必须落地（B 收 OK、`deal_creature == Some(A)`），
+    /// 两次 END 后双方各收 `SM_DEALSUCCESS`。
+    ///
+    /// 变异：回写尾改回“只在对手原本有条目时写” ⇒ B 无条目 ⇒ 红。
+    #[test]
+    fn a39_f1_zone_k_invitee_without_entry_lands_state() {
+        let (mut state, hero, _peer, gates, mut rx) = a34_slice3_ready("a39_f1");
+        // 关键：清空双方条目（夹具默认预置，这里还原「进程内首次交易」形态）。
+        state.host.trade_sessions.clear();
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx);
+        assert_eq!(
+            state.host.trade_sessions["peer"].deal_creature,
+            Some(hero),
+            "F1：被邀请方（peer）状态必须落地"
+        );
+        state
+            .host
+            .ground_sessions
+            .get_mut("peer")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(7777, 1));
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "peer",
+                902,
+                &a34_msg(mir2_protocol::messages::CM_DEALADDITEM, 7777, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALADDITEM_OK),
+            1,
+            "peer 的 ADDITEM 必须落地：{frames:?}"
+        );
+        state.host.world.clock_ms += 10_000;
+        for (chr, sock) in [("hero", 901), ("peer", 902)] {
+            assert_eq!(
+                handle_zone_command(
+                    &mut state,
+                    &gates,
+                    chr,
+                    sock,
+                    &a34_msg(mir2_protocol::messages::CM_DEALEND, 0, 0, 0)
+                ),
+                ZoneCmdOutcome::Dispatched
+            );
+        }
+        let frames = a34_frames(&mut rx);
+        assert!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALSUCCESS) >= 2,
+            "两次 END 后双方各收 SM_DEALSUCCESS：{frames:?}"
+        );
+        assert!(
+            !state
+                .host
+                .trade_sessions
+                .get("hero")
+                .is_some_and(|s| s.dealing)
+                && !state
+                    .host
+                    .trade_sessions
+                    .get("peer")
+                    .is_some_and(|s| s.dealing),
+            "双方 dealing 复位"
         );
     }
 }
