@@ -405,6 +405,75 @@ pub fn cry_hear_frame(chr_name: &[u8], say: &[u8], f_color: u8, b_color: u8) -> 
 /// ⇒ 这里用 `Race == Play` 过滤；`BanShout` 恒 true（见模块头登记）。**含说话者自己**。
 #[must_use]
 pub fn cry_targets(world: &World, speaker_id: i32, range: i32) -> Vec<i32> {
+    // **A43j**：按格查询（与 `hear_targets_at` 同法）——旧实现是 `iter_ref()` 全世界表扫
+    // （每条喊话 O(实体数)×重视图构造），而喊话只关心 `|dx| < range` 的格子。
+    // 谓词逐项不变（**严格 `<`**，与 oracle `CryCry` 的 `< nWide` 一致）；末尾 `sort_unstable`
+    // 保序（id 升序）。`map` 不在本 World ⇒ 退回 store 版，语义不丢。
+    let Some(speaker) = world.entities.get(speaker_id) else {
+        return Vec::new();
+    };
+    let (map_id, sx, sy) = (speaker.map_id, speaker.x, speaker.y);
+    let Some(map) = world.maps.get(map_id) else {
+        return cry_targets_store(world, speaker_id, range);
+    };
+    let mut out: Vec<i32> = Vec::new();
+    if range > 0 {
+        // `|dx| < range` ⇒ 偏移 `-(range-1)..=(range-1)`。
+        let x0 = (sx - range + 1).max(0);
+        let x1 = (sx + range - 1).min(map.width - 1);
+        let y0 = (sy - range + 1).max(0);
+        let y1 = (sy + range - 1).min(map.height - 1);
+        if x0 <= x1 && y0 <= y1 {
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    let cell = map.cell(cx, cy);
+                    if !cell.is_available() {
+                        continue;
+                    }
+                    for obj in &cell.obj_list {
+                        #[cfg(test)]
+                        HEAR_TARGETS_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let id = obj.cell_obj_id;
+                        let Some(e) = world.entities.get(id) else {
+                            continue;
+                        };
+                        if e.map_id == map_id
+                            && e.race == ACTOR_RACE_PLAY
+                            && !e.ghost
+                            && (e.x - sx).abs() < range
+                            && (e.y - sy).abs() < range
+                        {
+                            out.push(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // **A43j**：并上"已 `add_entity`、`Enter` 未处理"的实体（单 tick 窗口，同 `hear_targets_at`）。
+    for id in world.pending_enter_ids() {
+        #[cfg(test)]
+        HEAR_TARGETS_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(e) = world.entities.get(id) else {
+            continue;
+        };
+        if e.map_id == map_id
+            && e.race == ACTOR_RACE_PLAY
+            && !e.ghost
+            && (e.x - sx).abs() < range
+            && (e.y - sy).abs() < range
+        {
+            out.push(id);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// **旧实现的 production 版（store 全量扫）**：`map` 不在本 World 时的 fallback，也是测试差分牙
+/// [`cry_targets`] 的参照实现（同一份代码，防漂移）。
+fn cry_targets_store(world: &World, speaker_id: i32, range: i32) -> Vec<i32> {
     let Some(speaker) = world.entities.get(speaker_id) else {
         return Vec::new();
     };
@@ -825,6 +894,41 @@ mod tests {
             mir2_protocol::edcode::decode(&body[12..]),
             b"(!)aaa: hi".to_vec()
         );
+    }
+
+    /// **A43j 牙**：按格查与 store 全量版**逐元素相等**（多格/同格多人/半径边界/无图）。
+    /// 变异：把半径边界写成 `<= range`（或 `range+1`）⇒ 本牙红（严格 `<` 与 oracle 一致）。
+    #[test]
+    fn cry_targets_cell_scan_matches_store_scan() {
+        let mut world = World::new(80, 80);
+        let mut ids = Vec::new();
+        for i in 0..60i32 {
+            let mut e = mir2_world_bevy::EntitySpawn::new(
+                0,
+                format!("c{i}"),
+                20 + (i % 7) * 5,
+                20 + (i / 7) * 5,
+            );
+            e.race = if i % 6 == 0 {
+                mir2_world_bevy::ACTOR_RACE_MONSTER
+            } else {
+                ACTOR_RACE_PLAY
+            };
+            e.ghost = i % 9 == 0;
+            ids.push(world.add_entity(e));
+        }
+        // 先 tick 一次让 `Enter` 落格（否则实体全在待落格队列，格路径测不到）。
+        let _ = world.tick();
+        for (sx, sy) in [(20, 20), (25, 25), (45, 45), (10, 10)] {
+            for range in [1i32, 2, 5, 50] {
+                assert_eq!(
+                    cry_targets(&world, ids[0], range),
+                    cry_targets_store(&world, ids[0], range),
+                    "喊话收件人必须与全量版逐元素相等（pos=({sx},{sy}) range={range}）"
+                );
+            }
+        }
+        assert!(cry_targets(&world, 999_999, 50).is_empty());
     }
 
     /// `CryCry` 的半径是**严格 `< 50`**（与 [`hear_targets`] 的 `<= 12` 不同）；
