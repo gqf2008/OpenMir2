@@ -130884,7 +130884,7 @@ mod zone_command_tests {
             });
     }
 
-    /// **A34 片 2 · 买入**：`CM_USERBUYITEM(1004)` 区 k 派发 ⇒ 扣 100 金 + 背包 +1 + 库存清空。
+    /// **A34 片 2 · 买入**：`CM_USERBUYITEM(1014)` 区 k 派发 ⇒ 扣 100 金 + 背包 +1 + 库存清空。
     /// 变异：删分类器项/执行臂 ⇒ `Unsupported` 红；臂内直接 return ⇒ 金币仍 500 红。
     #[test]
     fn a34_slice2_buy_zone_k_deducts_gold_and_adds_item() {
@@ -130923,7 +130923,7 @@ mod zone_command_tests {
         );
     }
 
-    /// **A34 片 2 · 详情**：`CM_USERGETDETAILITEM(1022)` ⇒ 恰一帧 `SM_SENDDETAILGOODSLIST`
+    /// **A34 片 2 · 详情**：`CM_USERGETDETAILITEM(1015)` ⇒ 恰一帧 `SM_SENDDETAILGOODSLIST`
     /// （`Param` = 件数 1），金币/库存零变化。
     #[test]
     fn a34_slice2_detail_zone_k_emits_goods_list() {
@@ -130959,7 +130959,7 @@ mod zone_command_tests {
         );
     }
 
-    /// **A34 片 2 · 卖出**：`CM_USERSELLITEM(1005)` ⇒ 背包件移除 + 金 500 → 550（半价）
+    /// **A34 片 2 · 卖出**：`CM_USERSELLITEM(1013)` ⇒ 背包件移除 + 金 500 → 550（半价）
     /// + 该件回收进商人库存（1 → 2 件）。
     #[test]
     fn a34_slice2_sell_zone_k_removes_item_and_pays() {
@@ -130992,7 +130992,7 @@ mod zone_command_tests {
         assert_eq!(stock, 2, "回收件进商人库存");
     }
 
-    /// **A34 片 2 · 卖价查询**：`CM_MERCHANTQUERYSELLPRICE(1006)` ⇒ 恰一帧 `SM_SENDBUYPRICE`，
+    /// **A34 片 2 · 卖价查询**：`CM_MERCHANTQUERYSELLPRICE(1012)` ⇒ 恰一帧 `SM_SENDBUYPRICE`，
     /// `Recog` = 半价 50。
     #[test]
     fn a34_slice2_price_query_zone_k_emits_buy_price() {
