@@ -9594,6 +9594,55 @@ struct ScriptProcessEnv<'a> {
     script_world: Option<&'a mut ScriptWorldCtx<'a>>,
 }
 
+/// A34 片 4：行会 9 条命令的**唯一装配点**——区 0 `INBOUND_PROCESS` 与区 k 控制邮箱 drain
+/// 共用同一份实参装配（防两处逐字同形之后漂移）。
+///
+/// **只做装配 + 调用 + 返回事件**：行为/日志仍由调用方按原样处理（区 0 臂的
+/// `for ev ... glog!("INF", "行会跨服事件：{}", ev.describe())` 保持在调用方，逐字不变）。
+///
+/// 依赖的进程态：`GuildManager`（名册/排名/盟友）、`GuildConfig`、`GuildStore`（文件落盘）；
+/// 收件人解析只用执行区的 `online`/`world`（「同区可执行」语义，跨区成员视为离线——
+/// 见 A34 片 4 写集地图 §3/§5）。
+#[allow(clippy::too_many_arguments)]
+fn run_guild_command(
+    ident: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    enter_cfg: &EnterConfig,
+    now_tick: i32,
+) -> Vec<guild_cmd::GuildServerEvent> {
+    guild_cmd::handle_guild_cmd(
+        ident,
+        tail,
+        chr_name,
+        socket,
+        online,
+        world,
+        displays,
+        guilds,
+        guild_cfg,
+        ground_sessions,
+        gates,
+        enter_cfg.ref_msg_range,
+        (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
+        (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+        guild_store,
+        &enter_cfg.guild_sections,
+        &enter_cfg.guild_msg_cfg,
+        i32::from(enter_cfg.server_index),
+        now_tick,
+    )
+}
+
 /// **M1c-3b**：`ScriptProcess` 请求的**唯一执行体**（drain 调用；与区 0 tick 的 click/1011 臂
 /// 同函数、同实参）。
 ///
@@ -39486,25 +39535,21 @@ impl HostLoop {
                             } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
                                 // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。
                                 // 显式 9 条、**不是** `1035..=1045`（1042/1043 由 inbound 兜底）。
-                                let events = guild_cmd::handle_guild_cmd(
+                                // **A34 片 4**：实参装配抽到 [`run_guild_command`]（与区 k drain 共用）。
+                                let events = run_guild_command(
                                     cmd.ident,
                                     tail.as_deref(),
                                     &chr_name,
                                     socket,
-                                    &online,
                                     &world,
                                     &displays,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
                                     &mut guilds,
                                     &guild_cfg,
-                                    &mut *ground_sessions,
-                                    &gates,
-                                    enter_cfg.ref_msg_range,
-                                    (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
-                                    (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
                                     guild_store.as_ref(),
-                                    &enter_cfg.guild_sections,
-                                    &enter_cfg.guild_msg_cfg,
-                                    i32::from(enter_cfg.server_index),
+                                    &enter_cfg,
                                     world.clock_ms as i32,
                                 );
                                 for ev in &events {
