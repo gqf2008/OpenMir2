@@ -32108,7 +32108,10 @@ fn drain_player_revival_with_magic(
     frames: &mut game_svr::run_frames::RunFrames,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #13**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。直发面（`SM_DELITEM`，复活戒指破零）的跨会话序由此决定；
+    // 53/642/252 走 `RunFrames`（按 actor_id flush），与名字序无关。
+    names.sort_unstable();
     for name in names {
         let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
@@ -105609,6 +105612,94 @@ SendRefMsgRange=15
                 take_frame_idents(&mut rx),
                 expected,
                 "Dura {dura_in}: 精确帧序（SM_DELITEM 仅破零；642 恰一条；53 → 642 → 252 按 ident 优先级）"
+            );
+        }
+    }
+
+    /// **B4 #13（`drain_player_revival_with_magic` @32087）行为牙**：P32 的**直发面**
+    /// （复活戒指破零的 `SM_DELITEM`）跨会话发出序必须严格等于名字升序。
+    ///
+    /// 说明：53/642/252 走 `RunFrames`（`BTreeMap<i32,Slot>` 按 actor_id flush），**与名字序无关**；
+    /// 可观测的 name 序只在直发的 `SM_DELITEM`。
+    ///
+    /// 构造：8 会话 hp=0/revival=true/revival_tick=0，戒指 `dura=1000`（`n_dura=0` 破零）⇒ 每会话
+    /// 1 条直发 `SM_DELITEM`；名字按「升序 ≠ 插入序」插入。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@32114）⇒ delitem socket 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p32_delitem_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let catalog = p32_catalog();
+        let now = 3_000_000i64;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let mut ent = mir2_world_bevy::EntitySpawn::new(0, name, x, 10);
+            ent.hp = 0;
+            ent.max_hp = 100;
+            ent.revival = true;
+            ent.revival_tick = 0;
+            let id = world.enter_map(name, ent, 0).expect("进世界");
+            let mut sg = test_session_ground(id);
+            // shape=114 在 `ITEM_DAMAGE_REVIVAL_MAP`；dura=1000 ⇒ n_dura=0 破零 ⇒ SendDelItems。
+            sg.use_items[game_svr::ability::SLOT_RING_L] = Some(game_svr::bag::BagItem {
+                make_index: 77,
+                index: 1,
+                dura: 1000,
+                dura_max: 5000,
+                desc: [0; 14],
+            });
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+            actor_of.insert(name, id);
+        }
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            now,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_DELITEM {
+                got.push(socket);
+            }
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "P32 直发 SM_DELITEM 的跨会话序必须 = 名字升序（每会话恰一条）"
+        );
+        for (name, _) in &named_sockets {
+            // 破戒后的 `RecalcAbilitys()` 会用会话派生值覆盖实体（`apply_ability_to_entity`），
+            // 所以这里只钉「复活发生了」（HP > 0），不钉具体 MaxHP。
+            assert!(
+                world.entities.get(actor_of[name]).unwrap().hp > 0,
+                "每个会话都真的复活了 ChrName={name}"
             );
         }
     }
