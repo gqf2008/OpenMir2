@@ -136857,6 +136857,12 @@ mod zone_command_tests {
     /// （本地执行体、成功支零帧、写 `shout_msg_tick`）；单 `!` 仍 Local 零帧。
     #[test]
     fn bangbang_and_single_bang_after_a20() {
+        // **A43k**：本用例读**全局** `perf_counters::zone_cmd_unsupported()` 并断言 `u0 + 1`——
+        // 并行跑时其它用例也会加减这个全局原子 ⇒ 首轮偶红（2026-11-25 实测 `left: 2 right: 1`）。
+        // 与同族计数用例同法：整段持 `perf_counters::TEST_LOCK` 串行化（夹具本身很轻）。
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let (mut state, actor) = landed("a20_shout_keep", zone::ZoneId::new(1));
         let (gates, mut rx) = gates_and_rx();
         let mut shared = SharedServices::for_test();
