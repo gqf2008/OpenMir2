@@ -27896,7 +27896,10 @@ fn process_switch_data(
     mut send_change_server: impl FnMut(&mut SwitchDataState, &str),
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #6**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用（生产里
+    // `switch_data` 恒 false，循环本身无输出）⇒ 省每 tick 一次排序临时缓冲分配。遍历面不变
+    // （仍遍历全部会话；不做「只收集活跃会话」的预过滤——那会改遍历面，不在本卡授权内）。
+    names.sort_unstable();
     for name in names {
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
@@ -78880,6 +78883,87 @@ SendRefMsgRange=15
             "SendChangeServer 先置 BoReconnection 再发帧"
         );
         assert!(!sessions["other"].bo_reconnection, "旁观者不受影响");
+    }
+
+    /// **B4 #6（`process_switch_data` @27886）行为牙**：换服轮询的**跨会话推进序**必须严格等于
+    /// 名字升序——两段排水都要成立：① 循环内 `SendSwitchData` 回调的调用序；② 回调把待发项推进
+    /// `reconnect_pending: Vec` 后，`drain_reconnects` 按 Vec 序发出的 `SM_RECONNECT` 帧序。
+    ///
+    /// 构造：8 个会话全部 `switch_data=RcdSaved=true`，名字按「升序 ≠ 插入序」插入。
+    /// 第一轮（now=2000）进入 100ms 窗口；第二轮（now=2101）过严格 `>` 门，逐会话触发
+    /// `SendChangeServer`。断言 ①回调序、②帧 socket 序都 = 名字升序。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@27902）⇒ 两段都退化为 `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn switch_data_iteration_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut socket_by_name: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let mut sg = test_session_ground(i as i32 + 1);
+            sg.switch_state.switch_data = true;
+            sg.switch_state.rcd_saved = true;
+            sessions.insert(name.to_string(), sg);
+            socket_by_name.insert(name, 901 + i as i32);
+        }
+        let mut sorted_names: Vec<&str> = names.to_vec();
+        sorted_names.sort_unstable();
+
+        // ① 第一轮：SendSwitchData 的调用序。
+        let mut writes: Vec<String> = Vec::new();
+        process_switch_data(
+            &mut sessions,
+            2_000,
+            |_, name| {
+                writes.push(name.to_string());
+                true
+            },
+            |_, _| panic!("刚进入窗口（0ms）不得 SendChangeServer"),
+        );
+        let want_names: Vec<String> = sorted_names.iter().map(|n| (*n).to_string()).collect();
+        assert_eq!(
+            writes, want_names,
+            "SendSwitchData 的跨会话调用序必须 = 名字升序"
+        );
+
+        // ② 第二轮：SendChangeServer 推进 Vec，排水帧序也必须 = 名字升序。
+        let mut pending: Vec<ReconnectPending> = Vec::new();
+        process_switch_data(
+            &mut sessions,
+            2_101,
+            |_, _| true,
+            |_, name| {
+                pending.push(ReconnectPending {
+                    gate_idx: 0,
+                    socket: socket_by_name[name],
+                    chr_name: name.to_string(),
+                    msg: b"10.0.0.1/7000".to_vec(),
+                });
+            },
+        );
+        assert_eq!(pending.len(), names.len(), "101ms 后每会话恰一条");
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        drain_reconnects(&mut pending, &mut sessions, &gates);
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_RECONNECT,
+                "排水帧 = SM_RECONNECT"
+            );
+            got.push(socket);
+        }
+        let want_sockets: Vec<i32> = sorted_names.iter().map(|n| socket_by_name[n]).collect();
+        assert_eq!(
+            got, want_sockets,
+            "二次排水的 SM_RECONNECT 帧序必须 = 名字升序（两次排水之间契约成立）"
+        );
     }
 
     /// **T-202 牙①**：撤发射点 ⇒ 红。生产编排里的接线必须在位且在正确的段落：
