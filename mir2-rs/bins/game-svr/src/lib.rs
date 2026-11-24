@@ -90,6 +90,56 @@ mod host_aoi_bench;
 /// （`#[ignore]` + `MIR2_HOSTINBOUND_BENCH=1`；只观测，不是判据）。
 #[cfg(test)]
 mod hostinbound_bench;
+/// **A43 观测**：当前线程累计 CPU 时间（Windows `GetThreadTimes`；非 Windows 返回 `None`）。
+///
+/// **唯一的 `unsafe` 落点**（Leader 批准的最小落点）：crate 的 `unsafe_code` 从 `forbid` 调为
+/// `deny`（`forbid` 不允许模块级 `allow`），例外只在本模块：一次只读 `GetThreadTimes` 调用，
+/// 无指针保持、无内存写、失败返回 `None`。用途 = 与单条事件的**墙钟**并列，区分
+/// “真 CPU / 日志写盘 / 被 OS 抢占”。
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod thread_cpu {
+    /// 当前线程累计 CPU 时间（微秒；kernel+user，FILETIME 100ns ⇒ /10）。
+    pub(crate) fn now_us() -> Option<u64> {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+
+        fn to_u64(ft: FILETIME) -> u64 {
+            (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime)
+        }
+
+        // GetCurrentThread 返回当前线程伪句柄（对 GetThreadTimes 有效）。
+        unsafe {
+            let mut creation = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut exit = creation;
+            let mut kernel = creation;
+            let mut user = creation;
+            if GetThreadTimes(
+                GetCurrentThread(),
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            ) == 0
+            {
+                return None;
+            }
+            Some((to_u64(kernel) + to_u64(user)) / 10)
+        }
+    }
+}
+
+/// 非 Windows：API 不存在 ⇒ `None`（调用方按“无 CPU 读数”处理，不猜数）。
+#[cfg(not(windows))]
+mod thread_cpu {
+    pub(crate) fn now_us() -> Option<u64> {
+        None
+    }
+}
+
 mod hutil;
 mod ids;
 mod items;
@@ -2956,7 +3006,8 @@ fn spawn_zone_demux(
             loop {
                 let mut moved = 0usize;
                 {
-                    let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+                    // **A43**：路由线程只搬事件，不计区 0 的 drained（见 `begin_uncounted`）。
+                    let mut drain = EventDrain::begin_uncounted(EventDrainBudget::PRODUCTION);
                     while let Some(ev) =
                         drain.next(&ev_rx, &ev_ctl_rx, &mut zone_carry, &mut zone_ctl_carry)
                     {
@@ -4811,7 +4862,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 loop {
                     let mut moved = 0usize;
                     {
-                        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+                        // **A43**：shard router 同理（只搬，不计区 0 的 drained）。
+                        let mut drain = EventDrain::begin_uncounted(EventDrainBudget::PRODUCTION);
                         while let Some(ev) =
                             drain.next(&ev_rx, &ev_ctl_rx, &mut carry, &mut ctl_carry)
                         {
@@ -26769,28 +26821,48 @@ mod perf_counters {
     pub(crate) static DRAINED_CONTROL: AtomicU64 = AtomicU64::new(0);
     /// 本 tick 单条事件**处理**耗时的最大值（微秒；每 tick 取 max 后写行、清零）。
     pub(crate) static SINGLE_EVENT_MAX_US: AtomicU64 = AtomicU64::new(0);
+    /// **A43**：本 tick 单条事件**线程 CPU 时间**的最大值（微秒）。与
+    /// `SINGLE_EVENT_MAX_US`（墙钟）并列：wall − cpu 的差 = 日志写盘/被 OS 抢占的近似量。
+    /// 平台不支持（非 Windows）⇒ 恒 0。
+    pub(crate) static SINGLE_EVENT_MAX_CPU_US: AtomicU64 = AtomicU64::new(0);
 
     /// 单条事件处理计时守卫：只在 ENABLED 时取时钟；`Drop` 时记入本 tick 的 max。
     /// 放在 `while let Some(ev) = drain.next(..) { ... }` 的 body 首行 ⇒ 任何 `continue`
     /// 也会在 drop 时结算。**不包 `next()` 之外的语义**，不改事件处理。
-    pub(crate) struct EventTimer(Option<std::time::Instant>);
+    pub(crate) struct EventTimer {
+        /// 墙钟起点（`ENABLED` 关 ⇒ `None`，不取钟）。
+        wall: Option<std::time::Instant>,
+        /// 线程 CPU 起点（`ENABLED` 关或平台不支持 ⇒ `None`）。
+        cpu: Option<u64>,
+    }
 
     impl EventTimer {
         #[inline]
         pub(crate) fn start() -> Self {
-            Self(
-                ENABLED
-                    .load(Ordering::Relaxed)
-                    .then(std::time::Instant::now),
-            )
+            let on = ENABLED.load(Ordering::Relaxed);
+            Self {
+                wall: on.then(std::time::Instant::now),
+                // **A43**：墙钟与线程 CPU 同一接缝取起点；GET 失败 ⇒ None（不猜数）。
+                cpu: if on {
+                    crate::thread_cpu::now_us()
+                } else {
+                    None
+                },
+            }
         }
     }
 
     impl Drop for EventTimer {
         fn drop(&mut self) {
-            if let Some(t0) = self.0 {
+            if let Some(t0) = self.wall {
                 let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
                 SINGLE_EVENT_MAX_US.fetch_max(us, Ordering::Relaxed);
+            }
+            if let Some(c0) = self.cpu {
+                if let Some(c1) = crate::thread_cpu::now_us() {
+                    let us = c1.saturating_sub(c0);
+                    SINGLE_EVENT_MAX_CPU_US.fetch_max(us, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -27470,7 +27542,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27558,6 +27630,7 @@ mod perf_counters {
             DRAINED_CLOSE.swap(0, Ordering::Relaxed),
             DRAINED_CONTROL.swap(0, Ordering::Relaxed),
             SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
+            SINGLE_EVENT_MAX_CPU_US.swap(0, Ordering::Relaxed),
             ZONE_ROUTER_OVERWRITES.swap(0, Ordering::Relaxed),
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
             REGION_BARRIER_US.swap(0, Ordering::Relaxed),
@@ -28301,6 +28374,7 @@ mod perf_counters {
             &DRAINED_CLOSE,
             &DRAINED_CONTROL,
             &SINGLE_EVENT_MAX_US,
+            &SINGLE_EVENT_MAX_CPU_US,
             &ZONE_ROUTER_OVERWRITES,
             &ZONE_ROUTER_REJECTED_SOCKET,
             &REGION_BARRIER_US,
@@ -34844,6 +34918,16 @@ pub(crate) struct EventDrain {
     started: std::time::Instant,
     /// 本轮因条数/墙钟预算被截断（通道里仍有事件被延后到下一轮）。
     pub(crate) hit_budget: bool,
+    /// **A43**：是否把本 drain 的消费计入**区 0** 的 `inbound_drained/carry/drained_*` 与
+    /// entry telemetry。`true` = 区 0 自己的 tick 排水；`false` = **路由线程**（demux/shard router）
+    /// 复用同一 `next` 时的搬运计数——搬运不是区 0 的消费，计入会造成 drained 双计。
+    count_host: bool,
+}
+
+/// **A43**：`HostInbound` 段墙钟计时的启用判据（只给区 0；`perf_counters` 关时不取钟）。
+#[must_use]
+fn inbound_wall_start(is_host: bool) -> Option<std::time::Instant> {
+    (is_host && perf_counters::enabled()).then(std::time::Instant::now)
 }
 
 impl EventDrain {
@@ -34854,6 +34938,16 @@ impl EventDrain {
             priority_used: 0,
             started: std::time::Instant::now(),
             hit_budget: false,
+            count_host: true,
+        }
+    }
+
+    /// **A43**：路由线程（`spawn_zone_demux` / shard router）用的版本——**不计区 0 的
+    /// `inbound_drained/carry/drained_*` 与 entry telemetry**。事件条数/预算/结转语义逐字相同。
+    pub(crate) fn begin_uncounted(budget: EventDrainBudget) -> Self {
+        Self {
+            count_host: false,
+            ..Self::begin(budget)
         }
     }
 
@@ -34868,13 +34962,17 @@ impl EventDrain {
         // 优先通道的结转先消耗（否则「控制事件先取」会被一条普通结转破坏）。
         if let Some(ev) = priority_carry.take() {
             self.processed += 1;
-            perf_counters::note_inbound_drained(true, &ev);
+            if self.count_host {
+                perf_counters::note_inbound_drained(true, &ev);
+            }
             return Some(ev);
         }
         // 结转：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
         if let Some(ev) = carry.take() {
             self.processed += 1;
-            perf_counters::note_inbound_drained(true, &ev);
+            if self.count_host {
+                perf_counters::note_inbound_drained(true, &ev);
+            }
             return Some(ev);
         }
         if self.processed >= self.budget.max_events
@@ -34884,13 +34982,17 @@ impl EventDrain {
             // 优先通道先探：被截断的控制事件下一轮仍是第一顺位。
             if let Ok(ev) = ctl_rx.try_recv() {
                 // 它已经从通道取走 ⇒ 在这里计入累计排水数（下一轮消耗结转时不重复计）。
-                telemetry::record_drain_event_drained();
+                if self.count_host {
+                    telemetry::record_drain_event_drained();
+                }
                 *priority_carry = Some(ev);
                 self.hit_budget = true;
                 return None;
             }
             if let Ok(ev) = rx.try_recv() {
-                telemetry::record_drain_event_drained();
+                if self.count_host {
+                    telemetry::record_drain_event_drained();
+                }
                 *carry = Some(ev);
                 self.hit_budget = true;
             }
@@ -34900,18 +35002,22 @@ impl EventDrain {
         let priority_cap = (self.budget.max_events / 2).max(1);
         if self.priority_used < priority_cap {
             if let Ok(ev) = ctl_rx.try_recv() {
-                telemetry::record_drain_event_drained();
+                if self.count_host {
+                    telemetry::record_drain_event_drained();
+                    perf_counters::note_inbound_drained(false, &ev);
+                }
                 self.processed += 1;
                 self.priority_used += 1;
-                perf_counters::note_inbound_drained(false, &ev);
                 return Some(ev);
             }
         }
         match rx.try_recv() {
             Ok(ev) => {
-                telemetry::record_drain_event_drained();
+                if self.count_host {
+                    telemetry::record_drain_event_drained();
+                    perf_counters::note_inbound_drained(false, &ev);
+                }
                 self.processed += 1;
-                perf_counters::note_inbound_drained(false, &ev);
                 Some(ev)
             }
             Err(_) => None,
@@ -39211,7 +39317,9 @@ impl HostLoop {
             // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
             // **`max_wall` 的契约是「取事件 + 处理事件」**（见 `EventDrainBudget`）⇒ 排水循环必须与
             // 逐条处理**交错**留在 PROCESS 支内；先整批取出再处理会把处理耗时移出预算 ⇒ 预算语义变。
-            let inbound_t0 = perf_counters::enabled().then(std::time::Instant::now);
+            // **A43**：本块在区 k 也会进入（`PhaseSet::has` 任一子位），但
+            // `INBOUND_WALL_US` 是**区 0 的单槽**——只让区 0 写，避免区 k 覆盖。
+            let inbound_t0 = inbound_wall_start(is_host);
             let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
             // **LOCAL 支（M1b 第 3 步：区 k 入站有界化/执行；第 4 步起叠加 A6 stop-and-wait）**。
             //
@@ -129716,28 +129824,35 @@ mod tick_starvation {
             "生产排水必须经过预算器且同时取两条通道（唯一一处：{head}）"
         );
         let begin = format!("{}(EventDrainBudget::PRODUCTION)", "EventDrain::begin");
-        // **P2-3b：期望集合，不是计数**。每个分发层各一处，身份由「位置 + 配对的结转变量」
-        // 钉死（片路由 `carry/ctl_carry`、sim 头 `event_carry/event_carry_ctl`；段 6a 又加了
-        // 区 demux `zone_carry/zone_ctl_carry`，见下）。挪位 / 多一处 / 交叉借用对方的结转
-        // 变量名 ⇒ 全部红。**不允许**只把数字调大：新增预算排水是架构变更（新的分发层），
-        // 必须显式改成本用例的期望集合并说明理由。
+        let begin_uncounted = format!(
+            "{}(EventDrainBudget::PRODUCTION)",
+            "EventDrain::begin_uncounted"
+        );
+        // **A43**：三处分发层里，区 demux 与片路由是**搬运线程**（`begin_uncounted`：只搬事件，
+        // 不计区 0 的 drained/分类列与 telemetry），sim 循环头仍是 `begin`（计区 0 消费）。
+        // 身份仍按「位置 + 配对结转变量」钉死；`begin` 的计数版必须恰 1 处（sim 头）。
         let mut begin_at = Vec::new();
-        let mut from = 0usize;
-        while let Some(rel) = prod[from..].find(&begin) {
-            begin_at.push(from + rel);
-            from += rel + begin.len();
+        for needle in [&begin, &begin_uncounted] {
+            let mut from = 0usize;
+            while let Some(rel) = prod[from..].find(needle.as_str()) {
+                begin_at.push(from + rel);
+                from += rel + needle.len();
+            }
         }
-        // **L2-4 段 6a：期望集合 2 → 3**。新增的是「区 demux」分发层（`MIR2_ZONES` 时把
-        // gate 入站搬进每区），与片路由同构且必须复用同一预算/反饥饿语义 ⇒ 生产面第三处
-        // 预算排水。身份仍钉死为「位置 + 配对结转变量」，三处互不借用：
-        //   ① 区 demux（`run_inner`，`zone_carry/zone_ctl_carry`）
-        //   ② 事件路由线程（`run_inner`，`carry/ctl_carry`）
-        //   ③ sim 循环头（`fn sim_loop(` 之内，`event_carry/event_carry_ctl`）
+        begin_at.sort_unstable();
         assert_eq!(
             begin_at.len(),
             3,
-            "生产预算排水必须恰为期望集合三处（sim 头 + 片路由 + 区 demux），实得 {}",
+            "生产预算排水必须恰为三处（sim 头 + 片路由 + 区 demux），实得 {}",
             begin_at.len()
+        );
+        let counted = begin_at
+            .iter()
+            .filter(|at| prod[**at..].starts_with(begin.as_str()))
+            .count();
+        assert_eq!(
+            counted, 1,
+            "只有 sim 循环头可用计数版 `begin`（区 0 消费）；搬运线程必须 `begin_uncounted`"
         );
         let sim_loop_at = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
         let mut before = Vec::new();
@@ -129771,11 +129886,12 @@ mod tick_starvation {
         // 固定窗口不再够；且 `prod` 是 UTF-8、固定字节窗口可能切到多字节字符中间。改用
         // 「本处 `begin` 到**下一个** `EventDrain::begin` 之前」作为本分发层的块（三处 begin
         // 分属三个不同函数/线程，块互不相交），末尾回退到字符边界。
-        let begin_needle = begin.clone();
         let blk = |at: usize| {
-            let mut end = prod[at + begin_needle.len()..]
-                .find(&begin_needle)
-                .map_or(prod.len(), |k| at + begin_needle.len() + k);
+            let mut end = begin_at
+                .iter()
+                .copied()
+                .find(|p| *p > at)
+                .unwrap_or(prod.len());
             while end > at && !prod.is_char_boundary(end) {
                 end -= 1;
             }
@@ -145053,5 +145169,144 @@ mod online_immutability_gate {
         ] {
             assert!(!bans_mut_deref_online(miss), "反例不得命中：{miss}");
         }
+    }
+}
+
+#[cfg(test)]
+mod a43_inbound_obs_tests {
+    //! **A43 观测面牙**：①路由线程的 drain 不计区 0 计数器；②`inbound_wall_us` 只区 0 写；
+    //! ③单条事件的 CPU 时间 ≤ 墙钟（忙等有明显 CPU，睡眠没有）。
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn opened(index: i32) -> GateEvent {
+        GateEvent::Opened {
+            line: 1,
+            index,
+            socket: index + 1,
+            ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn reset_inbound_counters() {
+        perf_counters::INBOUND_DRAINED.store(0, Ordering::Relaxed);
+        perf_counters::INBOUND_CARRY.store(0, Ordering::Relaxed);
+        perf_counters::INBOUND_BUDGET_HIT.store(0, Ordering::Relaxed);
+        perf_counters::DRAINED_COMMAND.store(0, Ordering::Relaxed);
+        perf_counters::DRAINED_CLOSE.store(0, Ordering::Relaxed);
+        perf_counters::DRAINED_CONTROL.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn router_drain_is_uncounted_and_host_drain_counts() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        reset_inbound_counters();
+        let ctl_rx = {
+            let (_tx, rx) = std::sync::mpsc::channel::<GateEvent>();
+            rx
+        };
+
+        // ① 路由（uncounted）：事件被搬走，但区 0 的 drained/分类列**不动**。
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(opened(1)).expect("send");
+        let mut carry = None;
+        let mut ctl_carry = None;
+        let mut drain = EventDrain::begin_uncounted(EventDrainBudget::PRODUCTION);
+        assert!(drain
+            .next(&rx, &ctl_rx, &mut carry, &mut ctl_carry)
+            .is_some());
+        assert_eq!(
+            perf_counters::INBOUND_DRAINED.load(Ordering::Relaxed),
+            0,
+            "路由线程搬运不得计区 0 drained"
+        );
+        assert_eq!(
+            perf_counters::DRAINED_CONTROL.load(Ordering::Relaxed),
+            0,
+            "路由线程搬运不得计区 0 分类列"
+        );
+
+        // ② 区 0 自己的 drain：同一事件 ⇒ drained/分类列各 +1。
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        tx2.send(opened(2)).expect("send");
+        let mut drain2 = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        assert!(drain2
+            .next(&rx2, &ctl_rx, &mut None, &mut ctl_carry)
+            .is_some());
+        assert_eq!(
+            perf_counters::INBOUND_DRAINED.load(Ordering::Relaxed),
+            1,
+            "区 0 drain 必须 drained +1"
+        );
+        assert_eq!(
+            perf_counters::DRAINED_CONTROL.load(Ordering::Relaxed),
+            1,
+            "Opened 属控制类 ⇒ DRAINED_CONTROL +1"
+        );
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        reset_inbound_counters();
+    }
+
+    #[test]
+    fn inbound_wall_timer_is_host_only() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        assert!(
+            inbound_wall_start(true).is_none(),
+            "probe 关闭时不取钟（N=1 默认）"
+        );
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        assert!(
+            inbound_wall_start(false).is_none(),
+            "区 k 不得写区 0 的 inbound_wall_us（多写者覆盖）"
+        );
+        assert!(
+            inbound_wall_start(true).is_some(),
+            "区 0 + probe 开时必须计时"
+        );
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+    }
+    /// **A43 牙（卡 2）**：线程 CPU 读数与墙钟的关系——忙等 5ms 的 CPU >0 且 ≤ 墙钟；
+    /// 睡眠 20ms 的 CPU 接近 0。非 Windows 平台 API 返回 `None`，本牙断言并按平台跳过。
+    ///
+    /// 用 `crate::thread_cpu::now_us` 的**直接读数**（不经全局计数器），避免与并行用例
+    /// `reset_for_tests()` 对 `SINGLE_EVENT_MAX_US` 的竞争。
+    #[test]
+    fn thread_cpu_reading_separates_busy_from_sleep_and_is_le_wall() {
+        // 非 Windows：API 不存在（恒 None），本牙按平台跳过；Windows 上 None = 读取失败 ⇒ 红。
+        #[cfg(not(windows))]
+        if crate::thread_cpu::now_us().is_none() {
+            return;
+        }
+        let busy0 = crate::thread_cpu::now_us().expect("Windows 上 GetThreadTimes 必须可读");
+        let wall_start = std::time::Instant::now();
+        let mut acc = 0u64;
+        while wall_start.elapsed() < std::time::Duration::from_millis(50) {
+            acc = acc.wrapping_add(1);
+        }
+        std::hint::black_box(acc);
+        let wall_us = u64::try_from(wall_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let busy1 = crate::thread_cpu::now_us().expect("Windows 上必须可读");
+        let busy_cpu = busy1.saturating_sub(busy0);
+        assert!(wall_us >= 50_000, "忙等墙钟必须 ≥50ms（实得 {wall_us}µs）");
+        assert!(
+            busy_cpu <= wall_us + 20_000,
+            "单条 CPU 时间不得明显大于墙钟（允许 GetThreadTimes 一个 15.6ms 调度粒度的量化；cpu={busy_cpu} wall={wall_us}）"
+        );
+        assert!(busy_cpu > 0, "忙等必须读到非零 CPU（实得 {busy_cpu}µs）");
+
+        let sleep0 = crate::thread_cpu::now_us().expect("Windows 上必须可读");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let sleep1 = crate::thread_cpu::now_us().expect("Windows 上必须可读");
+        let sleep_cpu = sleep1.saturating_sub(sleep0);
+        assert!(
+            sleep_cpu < 5_000,
+            "睡眠 50ms 的 CPU 必须很小（实得 {sleep_cpu}µs）"
+        );
     }
 }
