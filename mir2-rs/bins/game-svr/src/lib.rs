@@ -7907,7 +7907,10 @@ fn drain_deal_tick(
         .filter(|(_, s)| s.dealing)
         .map(|(c, _)| c.clone())
         .collect();
-    names.sort();
+    // **B4 #14**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用（且已按
+    // `dealing` 过滤）⇒ 省每 tick 一次排序临时缓冲分配。序 = 取消帧（681/100，循环内直发）
+    // 的跨会话发出序。
+    names.sort_unstable();
     for chr in names {
         if !trade_sessions.get(&chr).is_some_and(|s| s.dealing) {
             continue;
@@ -44579,6 +44582,84 @@ mod tests {
         );
         assert!(dealing, "仍 Dealing（不得误取消）");
         assert!(deal_creature.is_some(), "DealCreat 保持不变");
+    }
+
+    /// **B4 #14（`drain_deal_tick` @7895）行为牙**：Run 内交易自动取消的**跨会话发出序**必须
+    /// 严格等于名字升序（取消帧 681/100 在循环内直发）。
+    ///
+    /// 构造：8 会话 `dealing=true`、`deal_creature=None`（oracle 取消条件成立），名字按
+    /// 「升序 ≠ 插入序」插入，彼此 20 格。断言 `SM_DEALCANCEL(681)` 的 socket 序 = 名字升序。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@7913）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn deal_tick_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::new(400, 400);
+        world.clock_ms = 100_000;
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let id = world.add_entity({
+                let mut e = mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 20, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+                e
+            });
+            displays.set(
+                id,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, name.as_bytes().to_vec()),
+            );
+            ground_sessions.insert(name.to_string(), test_session_ground(id));
+            trade_sessions.insert(
+                name.to_string(),
+                game_svr::trade::DealState {
+                    dealing: true,
+                    deal_creature: None,
+                    ..Default::default()
+                },
+            );
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_DEALCANCEL {
+                got.push(socket);
+            }
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "交易取消帧的跨会话序必须 = 名字升序（每会话恰一条 681）"
+        );
+        for (name, _) in &named_sockets {
+            assert!(!trade_sessions[*name].dealing, "取消已生效 ChrName={name}");
+        }
     }
 
     /// **lane654 判据⑤（延迟段补发点行为）**：`drain_login_tail` 只在该会话**本 tick 实际扫描**
