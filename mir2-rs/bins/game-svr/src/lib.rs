@@ -54,6 +54,33 @@ mod guild_frames;
 mod guild_official;
 mod guild_runtime;
 mod handoff;
+
+/// **A35-b · D2 测试缝**（`cfg(test)` 专用）：记录「取消阶段完成」与「detach 完成」的相对序，
+/// 供帧序牙断言 `SM_DEALCANCEL`/`SM_SellOffCANCEL` 的 emit 早于会话搬迁。
+///
+/// 为什么需要缝：帧进的是同一 `mpsc`（`gates`），只断计数/最终态**无法**区分
+/// 「先取消后搬」与「先搬后取消」。本缝只在 `tick_phase_a` 的两个真实调用点各记一标签，
+/// 不参与生产逻辑（`cfg(test)` 编译期剔除）。
+#[cfg(test)]
+mod a35b_order {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SEQ: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn reset() {
+        SEQ.with(|s| s.borrow_mut().clear());
+    }
+
+    pub(crate) fn note(mark: &'static str) {
+        SEQ.with(|s| s.borrow_mut().push(mark));
+    }
+
+    pub(crate) fn taken() -> Vec<&'static str> {
+        SEQ.with(|s| s.borrow().clone())
+    }
+}
 mod homemap;
 /// 卡 `openmir2-host-aoi-downlink-profile`：`HostAoiDownlink` 子探针的测量 harness
 /// （`#[ignore]` + `MIR2_HOST_AOI_BENCH=1`；只观测，不是判据）。
@@ -38809,18 +38836,26 @@ impl HostLoop {
             // 搬迁包很大（clippy::result_large_err）⇒ 错误臂装箱。
             return Err(Box::new(m));
         }
-        self.adopt_world_session(&m);
+        // **A35-b / D3（2026-11-24 裁决：防线性检查 + 拒收回滚）**：目标区展示项由镜像路径
+        // 保证——实体先以 mirror 存在于目标区，`apply_mirrors` 的 `upsert_mirror` 成功后同步写入
+        // `displays`（`region_loop::apply_mirrors` 的 `sync_displays` 支，单测
+        // `apply_mirrors_inserts_refreshes_removes_and_syncs_displays` 钉住插入/移除）。
+        // `promote_mirror_to_real` **不写** `displays` ⇒ 此处若缺失即不变量被破：**fail-loud**，
+        // 记 `zone_handoff_target_display_missing` + WRN 并**拒收整包回滚**（不半搬；不退化为
+        // 「带着缺项继续搬」）。检查必须在 `adopt_world_session`/任何表插入之前（Err 路径无副作用；
+        // 组关系例外——它属目标区实体，A38 语义）。
         if self.displays.get(m.id).is_none() {
-            // **fail-loud，不重建**：缺少镜像快照带来的展示项 ⇒ 目标区 AOI 出现帧可能缺项。
             perf_counters::note_zone_handoff_target_display_missing();
             glog!(
                 "WRN",
-                "跨区会话搬迁：区 {} 缺 ChrName:{}（entity {}）的展示项 ⇒ 出现帧可能缺项（不重建，fail-loud）",
+                "跨区会话搬迁：区 {} 缺 ChrName:{}（entity {}）的展示项（镜像路径未同步）⇒ 拒收并回滚源区（不重建、不半搬）",
                 self.zone,
                 m.chr_name,
                 m.id
             );
+            return Err(Box::new(m));
         }
+        self.adopt_world_session(&m);
         let (chr, id, line, socket) = (m.chr_name.clone(), m.id, m.line, m.socket);
         self.ground_sessions.insert(m.chr_name.clone(), m.ground);
         self.online.set(m.online);
@@ -41735,6 +41770,8 @@ impl HostLoop {
                     ) {
                         perf_counters::note_zone_handoff_canceled_trades();
                     }
+                    #[cfg(test)]
+                    a35b_order::note("cancel");
                     match detach_session_for_migration(
                         &mut world,
                         &mut displays,
@@ -41756,6 +41793,8 @@ impl HostLoop {
                             mir2_world_bevy::mirror_metrics::note_handoff_refused();
                         }
                     }
+                    #[cfg(test)]
+                    a35b_order::note("detach");
                 }
             }
             #[allow(unused_mut)] // 字面量是 3 处源码扫描牙的锚点（`sim_loop` 顺序判定），保留 `mut`
@@ -139684,6 +139723,246 @@ mod l2_handoff_tests {
         assert_eq!(mirror_world_refused(), 2);
         check_source_intact(&src);
         assert_eq!(router.len(), 0);
+    }
+
+    /// **A35-b · D1（2026-11-24 裁决二）**：`router.assign` 失败（`socket <= 0` ⇒
+    /// `SocketRejected`）⇒ 目标区已插会话被 `take_session_for_migration` 撤掉、源区七表
+    /// **逐项**恢复、`zone_handoff_session_failed` 与 `handoff_refused` 各 +1、
+    /// `zone_router_rejected_socket` +1、router 不登记。
+    ///
+    /// 变异：把 assign 的 `else` 分支改成「只计数不撤」⇒ 目标区留半份 / 源区缺 ⇒ 红。
+    #[test]
+    fn a35b_router_assign_failure_rolls_back_whole_session() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // `zone_router_rejected_socket` 走全局 TSV 闸（`perf_counters::bump` 需 `ENABLED`）
+        // ⇒ 本用例临时开 writer（与 `zone_router` 的 Probe 同款，drop 前复位）。
+        let _perf_guard = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let perf_path =
+            std::env::temp_dir().join(format!("a35b_d1_router_reject_{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&perf_path);
+        perf_counters::init_with_path(&perf_path).expect("perf writer 可建");
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let chr = "mover";
+        let mut src = two_zone_state(1, &counter);
+        let id = seed_full_session(&mut src, chr, 901);
+        // 把在线项 socket 改成 0 ⇒ `ZoneRouter::assign` 必返 `SocketRejected`（只影响分配）。
+        let mut entry = src.host.online.find_by_chr(chr).cloned().expect("在线项在");
+        entry.socket = 0;
+        src.host.online.set(entry);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, chr);
+        let dst = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let router = zone_router::ZoneRouter::new();
+        let rejected0 =
+            perf_counters::ZONE_ROUTER_REJECTED_SOCKET.load(std::sync::atomic::Ordering::Relaxed);
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&dst)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(mirror_world_refused(), 1);
+        assert!(
+            perf_counters::ZONE_ROUTER_REJECTED_SOCKET.load(std::sync::atomic::Ordering::Relaxed)
+                > rejected0,
+            "assign 被拒必须计 zone_router_rejected_socket"
+        );
+        assert_eq!(router.len(), 0, "失败路径不得登记路由");
+        // 源区七表逐项恢复。
+        assert!(
+            src.host.ground_sessions.contains_key(chr),
+            "源区 ground 恢复"
+        );
+        assert!(
+            src.host.online.find_by_chr(chr).is_some(),
+            "源区 online 恢复"
+        );
+        assert!(src.host.saves.contains_key(chr), "源区 saves 恢复");
+        assert!(
+            src.host.login_tails.contains_key(chr),
+            "源区 login_tails 恢复"
+        );
+        assert_eq!(src.host.aoi_frames_total.get(chr), Some(&7));
+        assert!(src.host.shop_sessions.contains_key(chr), "源区 shop 恢复");
+        // 目标区不得留半份（attach 成功后已被 take 撤回）。
+        {
+            let dst = dst.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !dst.host.ground_sessions.contains_key(chr),
+                "目标区不得留半份会话"
+            );
+            assert!(dst.host.online.find_by_chr(chr).is_none());
+        }
+        perf_counters::reset_writer_for_tests();
+        let _ = std::fs::remove_file(&perf_path);
+    }
+
+    /// **A35-b · D2（2026-11-24 裁决二）**：交易取消帧 `SM_DEALCANCEL` **先于**会话 detach
+    /// （设计 §2.1「帧先发」）。用 `cfg(test)` 测试缝 `a35b_order` 记录两个真实调用点的相对序，
+    /// 断言 `["cancel", "detach"]`，且 tick 返回时 `gates` 里已有恰一条 `SM_DEALCANCEL`。
+    ///
+    /// 变异：把取消调用挪到 detach **之后** ⇒ 序变 `["detach","cancel"]` ⇒ 红。
+    #[test]
+    fn a35b_cancel_frames_precede_session_detach() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        crate::a35b_order::reset();
+        let layout = std::sync::Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut host = HostLoop::for_zone(zone(1), &[(20, 10)], Some(0), &counter);
+        host.handoff_runtime = Some(crate::handoff::HandoffRuntime::new(
+            zone(1),
+            std::sync::Arc::clone(&layout),
+            boxes.clone(),
+        ));
+        let chr = "mover";
+        let id = seed_full_session_for_host(&mut host, chr, 901);
+        host.trade_sessions.insert(
+            chr.to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        let (g_tx, mut g_rx) = mpsc::unbounded_channel::<SimToGate>();
+        host.gates.insert(0, g_tx);
+        host.world
+            .entities
+            .get_mut(id)
+            .expect("实体在")
+            .flags
+            .handoff_pending = true;
+        host.handoff_runtime
+            .as_mut()
+            .expect("运行时在")
+            .after_phase2(&mut host.world, 0);
+        {
+            let mut m = boxes[1].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(1),
+                from: zone(0),
+                id,
+                ok: true,
+            });
+        }
+        let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown: ShutdownSignal::Flag(std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            )),
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
+            control_inbox: None,
+        };
+        let mut shared = shared;
+        let mut process = None;
+        let mut scratch = TickScratch::default();
+        let outcome = host.tick_phase_a(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet(PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL),
+            &mut scratch,
+            &mut None,
+        );
+        assert_eq!(outcome, TickOutcome::Continue);
+        assert_eq!(
+            crate::a35b_order::taken(),
+            vec!["cancel", "detach"],
+            "取消阶段必须在 detach 之前（帧先发）"
+        );
+        let mut cancels = 0u32;
+        while let Ok(SimToGate::SendFrame { body, .. }) = g_rx.try_recv() {
+            if CommandMessage::from_bytes(&body)
+                .is_some_and(|cm| cm.ident == mir2_protocol::messages::SM_DEALCANCEL)
+            {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 1, "tick 返回时取消帧已发出（恰一条）");
+    }
+
+    /// **A35-b · D3（2026-11-24 裁决二）**：目标区展示项由**镜像路径**保证
+    /// （`region_loop::apply_mirrors` 的 display 同步；`promote_mirror_to_real` 不写 displays）
+    /// ⇒ `attach_session` 的 `is_none()` 是**防御性检查**：缺失 ⇒ 计数 + WRN + **拒收整包回滚**。
+    ///
+    /// 本牙造"实体已提升但展示项缺失"⇒ 断言失败计数、source 逐表恢复、目标区无会话。
+    /// 变异：把拒收改回「计数后继续搬」⇒ 目标区有会话 / failed==0 ⇒ 红。
+    #[test]
+    fn a35b_missing_target_display_rejects_and_rolls_back() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let chr = "mover";
+        let mut src = two_zone_state(1, &counter);
+        let id = seed_full_session(&mut src, chr, 901);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, chr);
+        dst.host.displays.remove(id); // 造「实体已提升但展示项缺失」
+        let dst = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let router = zone_router::ZoneRouter::new();
+        let missing0 = perf_counters::zone_handoff_target_display_missing();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&dst)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(
+            perf_counters::zone_handoff_target_display_missing() - missing0,
+            1,
+            "缺失必须计 zone_handoff_target_display_missing +1"
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(mirror_world_refused(), 1);
+        assert!(src.host.ground_sessions.contains_key(chr), "源区整包恢复");
+        assert!(
+            src.host
+                .world
+                .session(chr)
+                .is_some_and(|s| s.stage == mir2_world_bevy::WorldStage::InWorld),
+            "源区 World 会话写回 InWorld"
+        );
+        {
+            let dst = dst.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !dst.host.ground_sessions.contains_key(chr),
+                "目标区不得留半份（拒收）"
+            );
+        }
     }
 
     /// `handoff_refused` 的读取缝（`mirror_metrics` 的模块名较长，集中一处）。
