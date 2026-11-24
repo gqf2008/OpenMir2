@@ -1412,6 +1412,7 @@ fn handle_zone_closed(
         saves,
         shop_sessions,
         sell_off_sessions,
+        trade_sessions,
         ..
     } = host;
     // 陈旧早退 + `CloseUser` 的 `bo_soft_close` 置位：与区 0 同一个 guard（T-101/M-12）。
@@ -1445,6 +1446,7 @@ fn handle_zone_closed(
         ground_sessions,
         shop_sessions,
         sell_off_sessions,
+        trade_sessions,
         displays,
     );
     match world.disconnect(chr_name) {
@@ -6183,6 +6185,7 @@ fn cleanup_closed_display(displays: &mut downlink::DisplayTable, aid: Option<i32
 /// **`save_human_rcd` 必须在本函数之前**（存档要拿实时态；见 Closed 臂的调用点）。
 ///
 /// 返回摘掉的 actor id（`None` = 两侧都没有 id ⇒ 展示表没动）。
+#[allow(clippy::too_many_arguments)] // A40② 增 trade_sessions（8 个容器）
 fn close_cleanup_residue(
     world: &mir2_world_bevy::World,
     chr_name: &str,
@@ -6190,6 +6193,9 @@ fn close_cleanup_residue(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    // **A40②**：交易会话表——断线必须清（残留 `dealing=true` 会让 `drain_deal_tick`
+    // 对已下线者尝试取消、产生迟到帧）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     displays: &mut downlink::DisplayTable,
 ) -> Option<i32> {
     // host aid **只能**来自 remove 的返回值（取下即用，见 [`cleanup_display_for_closed`]）。
@@ -6200,6 +6206,8 @@ fn close_cleanup_residue(
     saves.remove(chr_name);
     shop_sessions.remove(chr_name);
     sell_off_sessions.remove(chr_name);
+    // **A40②**：交易条目随断线清除（A39 核查的残留来源）。
+    trade_sessions.remove(chr_name);
     closed_aid
 }
 
@@ -34536,6 +34544,9 @@ struct LoginCtx<'a> {
     displays: &'a mut downlink::DisplayTable,
     online: &'a mut OnlineRegistry,
     ground_sessions: &'a mut std::collections::HashMap<String, SessionGround>,
+    /// **A40①**：交易会话表（与 `ground_sessions` 同生命周期——登录即建 `DealState::default()`，
+    /// 对齐 oracle `PlayObject` ctor 的字段恒存在）。
+    trade_sessions: &'a mut std::collections::HashMap<String, game_svr::trade::DealState>,
     saves: &'a mut std::collections::HashMap<String, SavedHuman>,
     engine: &'a mut load::FrontEngine,
     gates: &'a mut std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -34577,6 +34588,7 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
         displays,
         online,
         ground_sessions,
+        trade_sessions,
         saves,
         engine,
         gates,
@@ -34916,6 +34928,15 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                         socket,
                                         actor_id: id,
                                     },
+                                );
+                                // **A40①**：与在线登记同点建立交易会话条目——「表里没有该
+                                // 在线会话」成为不可能（oracle `PlayObject` ctor 的
+                                // DealCreat/Dealing/… 字段恒存在）。**用 insert 而不是
+                                // `entry().or_default()`**：重登等价于新 PlayObject（顺带清掉
+                                // 顶号/软关路径遗留的 `dealing=true` 残条）。
+                                trade_sessions.insert(
+                                    head.chr_name.clone(),
+                                    game_svr::trade::DealState::default(),
                                 );
                                 glog!(
                                     "INF",
@@ -35982,6 +36003,7 @@ fn finish_login_on_zone_state(
         displays: &mut state.host.displays,
         online: &mut state.host.online,
         ground_sessions: &mut state.host.ground_sessions,
+        trade_sessions: &mut state.host.trade_sessions,
         saves: &mut state.host.saves,
         login_tails: &mut state.host.login_tails,
         aoi_frames_total: &mut state.host.aoi_frames_total,
@@ -38419,6 +38441,10 @@ impl HostLoop {
         for p in m.pending_cmds {
             self.pending_local.insert(p.seq, p);
         }
+        // **A40①**：迁移落地同样建默认交易条目（A35-b 跨区前已取消交易、不搬该表 ⇒
+        // 目标区必须给「表里没有该会话」关门）。回滚路径见 `restore_session`/`take_session_for_migration`。
+        self.trade_sessions
+            .insert(chr.clone(), game_svr::trade::DealState::default());
         Ok((chr, id, line, socket))
     }
 
@@ -38438,6 +38464,10 @@ impl HostLoop {
         }
         self.adopt_world_session(&m);
         let _ = self.ground_sessions.insert(m.chr_name.clone(), m.ground);
+        // **A40①**：回滚把「表里没有该会话」一并关掉（源区条目在迁移前已按“跨区=离开范围”
+        // 取消并删除；回滚不是恢复旧交易，而是恢复 oracle ctor 的默认空态）。
+        self.trade_sessions
+            .insert(m.chr_name.clone(), game_svr::trade::DealState::default());
         self.online.set(m.online);
         if let Some(v) = m.save {
             self.saves.insert(m.chr_name.clone(), v);
@@ -38486,7 +38516,7 @@ impl HostLoop {
         // **A38**：本路径只用于「撤回刚插入的目标区会话」（router 失败）——实体仍在
         // 目标区世界，组关系直接从当前组件取（前向路径的捕获点在 `tick_top`）。
         let group = self.world.entities.group(id).cloned().unwrap_or_default();
-        detach_session_for_migration(
+        let taken = detach_session_for_migration(
             &mut self.world,
             &mut self.displays,
             &mut self.online,
@@ -38500,7 +38530,12 @@ impl HostLoop {
             target,
             id,
             group,
-        )
+        );
+        if let Some(m) = taken.as_ref() {
+            // **A40①**：撤掉 attach 时建立的默认交易条目（回滚不留孤儿）。
+            self.trade_sessions.remove(&m.chr_name);
+        }
+        taken
     }
 
     /// **M1-0e · A 段**：`tick` 的 A 半段 —— 从顶部（SHUTDOWN..PLAYER_RUN）到 `HostWorldTail`
@@ -39790,6 +39825,7 @@ impl HostLoop {
                                     &mut ground_sessions,
                                     &mut shop_sessions,
                                     &mut sell_off_sessions,
+                                    &mut trade_sessions,
                                     &mut displays,
                                 );
                                 // **P2-3b**：会话离开世界 ⇒ 清 `chr→片`（N=1 空操作）。
@@ -40423,6 +40459,7 @@ impl HostLoop {
                                             displays: &mut displays,
                                             online: &mut online,
                                             ground_sessions: &mut ground_sessions,
+                                            trade_sessions: &mut trade_sessions,
                                             saves: &mut saves,
                                             engine: &mut engine,
                                             gates: &mut gates,
@@ -53070,6 +53107,7 @@ mod tests {
         ground: HashMap<String, SessionGround>,
         shop: HashMap<String, ShopSession>,
         sell_off: HashMap<String, game_svr::selloff::SellOffState>,
+        trade: HashMap<String, game_svr::trade::DealState>,
         displays: downlink::DisplayTable,
     }
 
@@ -53119,12 +53157,15 @@ mod tests {
                     ),
                 );
             }
+            let mut trade = HashMap::new();
+            trade.insert("hero".to_string(), game_svr::trade::DealState::default());
             Self {
                 world,
                 saves,
                 ground,
                 shop,
                 sell_off,
+                trade,
                 displays,
             }
         }
@@ -53137,6 +53178,7 @@ mod tests {
                 &mut self.ground,
                 &mut self.shop,
                 &mut self.sell_off,
+                &mut self.trade,
                 &mut self.displays,
             )
         }
@@ -53146,6 +53188,7 @@ mod tests {
                 && !self.ground.contains_key("hero")
                 && !self.shop.contains_key("hero")
                 && !self.sell_off.contains_key("hero")
+                && !self.trade.contains_key("hero")
         }
     }
 
@@ -130757,11 +130800,15 @@ mod finish_login_tests {
             sign: Vec::new(),
         };
 
+        // **A40①**：登录必须给会话建交易条目（本用例同时是区 0 的行为牙）。
+        let mut trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState> =
+            std::collections::HashMap::new();
         finish_login(&mut LoginCtx {
             world: &mut world,
             displays: &mut displays,
             online: &mut online,
             ground_sessions: &mut ground_sessions,
+            trade_sessions: &mut trade_sessions,
             saves: &mut saves,
             engine: &mut engine,
             gates: &mut gates,
@@ -130804,6 +130851,10 @@ mod finish_login_tests {
         assert!(
             online.iter().any(|e| e.chr_name == "hero"),
             "在线表必须有该会话"
+        );
+        assert!(
+            trade_sessions.contains_key("hero"),
+            "A40①：登录必须建交易会话条目（删初始化 ⇒ 红）"
         );
         // ③ 出现/进图帧已发到网关通道。
         let mut frames = 0usize;
@@ -131336,6 +131387,7 @@ mod zone_disconnect_tests {
             saves,
             shop_sessions,
             sell_off_sessions,
+            trade_sessions,
             ..
         } = host;
         assert!(prepare_closed_guild(ground_sessions, online, "hero", 0, 7));
@@ -131358,6 +131410,7 @@ mod zone_disconnect_tests {
             ground_sessions,
             shop_sessions,
             sell_off_sessions,
+            trade_sessions,
             displays,
         );
         let _ = world.disconnect("hero");
@@ -136379,6 +136432,74 @@ mod zone_command_tests {
             "双方 dealing 复位"
         );
     }
+
+    // ============ A40：`trade_sessions` 生命周期（登录建 / 断线清） ============
+
+    /// **A40①（区 k 登录）**：`finish_login_on_zone_state` 之后必须有交易会话条目
+    /// （与 ground 同点、oracle ctor 字段恒存在）。
+    ///
+    /// 变异：删 `finish_login` 里的 `trade_sessions.entry(..).or_default()` ⇒ 红。
+    #[test]
+    fn a40_zone_k_login_creates_trade_entry() {
+        let (state, _actor) = landed("a40_login", zone::ZoneId::new(1));
+        assert!(
+            state.host.trade_sessions.contains_key("hero"),
+            "区 k 登录必须建交易会话条目"
+        );
+        assert!(
+            !state.host.trade_sessions["hero"].dealing,
+            "默认条目必须是非交易态"
+        );
+    }
+
+    /// **A40②**：断线（`handle_zone_closed` ⇒ `close_cleanup_residue`）必须清 `trade_sessions`；
+    /// 之后 `drain_deal_tick` 不得再对已下线者产生取消帧。
+    ///
+    /// 变异：删 `close_cleanup_residue` 的 `trade_sessions.remove` ⇒ 条目仍在、drain 会发
+    /// `SM_DEALCANCEL` ⇒ 两条断言各自红。
+    #[test]
+    fn a40_disconnect_clears_trade_session_and_drain_is_silent() {
+        let (mut state, _actor) = landed("a40_close", zone::ZoneId::new(1));
+        let (gate_idx, socket) = state
+            .host
+            .online
+            .find_by_chr("hero")
+            .map_or((0, 7), |e| (e.gate_idx, e.socket));
+        state.host.trade_sessions.insert(
+            "hero".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        let (gates, mut rx) = gates_and_rx();
+        let map_names = vec!["0".to_string()];
+        assert!(
+            handle_zone_closed(&mut state, "hero", gate_idx, socket, &map_names),
+            "在线项匹配 ⇒ Closed 必须被处理"
+        );
+        assert!(
+            !state.host.trade_sessions.contains_key("hero"),
+            "断线必须清交易会话条目（删清理 ⇒ 红）"
+        );
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &state.host.world,
+            &state.host.displays,
+            &state.host.online,
+            &mut state.host.ground_sessions,
+            &mut state.host.trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let frames = a34_frames(&mut rx);
+        assert!(
+            frames.is_empty(),
+            "已下线者不得再产生交易取消帧：{frames:?}"
+        );
+    }
 }
 
 /// 未覆盖（明确登记）：appear/disappear **帧流**（legacy/增量两个 AOI 窗口）需要按帧路径捕获；
@@ -137833,6 +137954,65 @@ mod l2_handoff_tests {
         );
         assert_eq!(expected.group_owner, 9001);
         assert!(src.host.world.entities.get(id).is_none());
+    }
+
+    /// **A40①（迁移）**：`attach_session` 在目标区建默认交易条目；被拒回滚时源区恢复条目、
+    /// 目标区不留孤儿。
+    ///
+    /// 变异：删 attach 的 `trade_sessions.insert` ⇒ 目标区缺条目红；删 restore/take 的
+    /// 配套清理 ⇒ 源区缺条目或目标区孤儿 ⇒ 红。
+    #[test]
+    fn a40_migration_attach_creates_trade_entry_and_rollback_no_orphan() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        // (a) 成功 attach：目标区有默认条目。
+        let (src, m, _g) = committed_group_migration("a40mig", 9001, Vec::new());
+        let id = m.id;
+        let chr = m.chr_name.clone();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, &chr);
+        dst.host
+            .attach_session(m)
+            .unwrap_or_else(|_| panic!("attach"));
+        assert!(
+            dst.host.trade_sessions.contains_key(&chr),
+            "目标区必须有默认交易条目（删 attach 初始化 ⇒ 红）"
+        );
+        assert!(!dst.host.trade_sessions[&chr].dealing);
+        assert!(!src.host.trade_sessions.contains_key(&chr));
+        // (b) 被拒回滚：源区恢复默认条目；目标区不留 attach 之前不存在的孤儿。
+        let (mut src2, m2, _g2) = committed_group_migration("a40rb", 9001, Vec::new());
+        let chr2 = m2.chr_name.clone();
+        let id2 = m2.id;
+        let counter2 = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst2 = two_zone_state(0, &counter2);
+        let _ = seed_full_session(&mut dst2, &chr2, 902); // 冲突源（目标区自己的同名会话）
+        seed_target_world(&mut dst2, id2, &chr2);
+        let dst2_arc = std::sync::Arc::new(std::sync::Mutex::new(dst2));
+        let lookup = std::sync::Arc::clone(&dst2_arc);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m2],
+            |m| src2.host.restore_session(m),
+        );
+        assert!(
+            src2.host.trade_sessions.contains_key(&chr2),
+            "回滚必须恢复源区的默认交易条目"
+        );
+        {
+            let dst2 = dst2_arc.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !dst2.host.trade_sessions.contains_key(&chr2),
+                "被拒路径不得在目标区留下孤儿条目"
+            );
+        }
     }
 
     /// **A38 · 牙②**：attach 被拒（同 chr 冲突）⇒ 会话整包回源，但组关系**仍**落在目标区
