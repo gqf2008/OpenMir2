@@ -671,7 +671,11 @@ impl<'a> ZoneRuntime<'a> {
             heartbeats.completed(self.zone, now_ms);
         }
         let wait_phase2_us = self.barriers.wait_after_phase2();
-        perf_counters::note_region_barrier_us(wait_phase1_us + wait_phase2_us);
+        // **A36**：同时记 per-zone（诊断用，定位是哪一区慢；判据仍看进程列 max）。
+        perf_counters::note_region_barrier_us_for_zone(
+            self.zone.index(),
+            wait_phase1_us + wait_phase2_us,
+        );
     }
 }
 
@@ -1681,9 +1685,9 @@ mod tests {
     fn region_barrier_probe_keeps_max_and_total() {
         let _probe = Probe::on("barrier-max");
         use std::sync::atomic::Ordering;
-        perf_counters::note_region_barrier_us(100);
-        perf_counters::note_region_barrier_us(300);
-        perf_counters::note_region_barrier_us(200);
+        perf_counters::note_region_barrier_us_for_zone(0, 100);
+        perf_counters::note_region_barrier_us_for_zone(0, 300);
+        perf_counters::note_region_barrier_us_for_zone(0, 200);
         assert_eq!(
             perf_counters::REGION_BARRIER_US.load(Ordering::Relaxed),
             300,

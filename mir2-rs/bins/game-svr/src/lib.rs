@@ -3145,7 +3145,7 @@ fn spawn_minimal_zone(
                 while let Some(ev) = pending_inbound.pop_front() {
                     if let GateEvent::Command { .. } = &ev.ev {
                         outstanding.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        perf_counters::note_zonek_inbound_pending_discarded();
+                        perf_counters::note_zonek_inbound_pending_discarded(zone_id.index());
                         discarded += 1;
                     }
                 }
@@ -4375,6 +4375,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .map_err(anyhow::Error::msg)?;
         // **L2-5 ③ 段 3**：跨区收件人缺失计数的闸——切片关 ⇒ 六面全不计数（N=1 逐字节不变）。
         perf_counters::set_slicing_enabled(slicing);
+        // **A36**：per-zone 仪表枚举的区数（切片关 ⇒ 0 ⇒ 表为空；切片开 ⇒ 布局区数）。
+        perf_counters::set_zone_count(if slicing {
+            mode.as_ref().map_or(0, |m| m.layout.zone_count())
+        } else {
+            0
+        });
         match mode {
             None => None,
             Some(mode) => {
@@ -26141,7 +26147,7 @@ fn drain_b4_self_deliveries(
 /// （只有表头）⇒ rc≠0 —— 不允许"探针以为在跑、其实没数据"。
 mod perf_counters {
     use std::io::Write as _;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -26372,6 +26378,11 @@ mod perf_counters {
     /// 记一次「镜像观察者被条件抑制」（`drain_depart_frames` 的 `continue` 之前）。
     pub(crate) fn note_depart_frames_mirror_suppressed() {
         DEPART_FRAMES_MIRROR_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// **A36**：运行时区数（切片初始化时写；per-zone 表按此枚举，避免出现布局外区号）。
+    pub(crate) fn set_zone_count(n: usize) {
+        ZONE_COUNT.store(n, Ordering::Relaxed);
     }
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
@@ -26636,11 +26647,16 @@ mod perf_counters {
     ///
     /// 关闭态纯 no-op；启用时 `region_barrier_us = max(各区的值)`、
     /// `region_barrier_total_us = Σ(各区的值)`（后者只对账）。
+    ///
+    /// **A36**：另记该区的区侧和（`zone_metrics.barrier_us[z]`，诊断用——判据仍看 max）。
     #[inline]
-    pub(crate) fn note_region_barrier_us(us: u64) {
+    pub(crate) fn note_region_barrier_us_for_zone(zone: usize, us: u64) {
         if ENABLED.load(Ordering::Relaxed) {
             REGION_BARRIER_US.fetch_max(us, Ordering::Relaxed);
             REGION_BARRIER_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+            if let Some(c) = REGION_BARRIER_US_BY_ZONE.get(zone) {
+                c.fetch_max(us, Ordering::Relaxed);
+            }
         }
     }
 
@@ -26658,36 +26674,65 @@ mod perf_counters {
     /// 含邮箱满丢弃、含溢出就地执行；**不是“成功执行条数”**）。`A6` 起不再收 `ev`
     /// （原参数未读；处置分类由段内回调在取出前算好）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_drained(from_carry: bool) {
+    pub(crate) fn note_zonek_inbound_drained(zone: usize, from_carry: bool) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
             if from_carry {
                 ZONEK_INBOUND_CARRY.fetch_add(1, Ordering::Relaxed);
+            }
+            if let Some(c) = ZONEK_DRAINED_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+            if from_carry {
+                if let Some(c) = ZONEK_CARRY_BY_ZONE.get(zone) {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
 
     /// 本 tick 预算命中（`fill_hit || 段执行截断且工作区非空`；每 tick 至多 +1）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_budget_hit() {
+    pub(crate) fn note_zonek_inbound_budget_hit(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_BUDGET_HIT.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_BUDGET_HIT_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
     /// demux 丢新（`outstanding` 到软上限）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_overflow_dropped() {
+    pub(crate) fn note_zonek_inbound_overflow_dropped(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_OVERFLOW_DROPPED.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_OVERFLOW_DROP_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
     /// shutdown 线程尾丢弃的未执行命令（不静默）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_pending_discarded() {
+    pub(crate) fn note_zonek_inbound_pending_discarded(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_PENDING_DISCARDED.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_PENDING_DISCARD_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// **A36**：区 k 入站「投递成功」条数（`demux_forward_zone` 目标区 `send` 成功 + `Command`
+    /// 才计，与 `drained/carry` 同宇宙；发送失败**不**计（另在 `demux` 侧按现有 `Continue` 口径
+    /// 不增 `outstanding`，也不设新失败列——区线程死亡即整机 abort，不是可继续的失败面））。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_enqueued(zone: usize) {
+        if ENABLED.load(Ordering::Relaxed) {
+            if let Some(c) = ZONEK_ENQ_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -26815,7 +26860,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -26857,6 +26902,7 @@ mod perf_counters {
         let tick = DATA_LINES.fetch_add(1, Ordering::Relaxed);
         let hd = handoff_deltas();
         // **M1b 第 3 步**：区 0 三列先取（派生列要 `区 0 + zonek`）；zonek 6 列同取。
+        let host_enq = INBOUND_ENQUEUED.swap(0, Ordering::Relaxed);
         let ib = [
             INBOUND_DRAINED.swap(0, Ordering::Relaxed),
             INBOUND_CARRY.swap(0, Ordering::Relaxed),
@@ -26893,7 +26939,7 @@ mod perf_counters {
             SAY_CALLS.swap(0, Ordering::Relaxed),
             SAY_RECIPIENTS.swap(0, Ordering::Relaxed),
             KICK_SCANS.swap(0, Ordering::Relaxed),
-            INBOUND_ENQUEUED.swap(0, Ordering::Relaxed),
+            host_enq,
             ib[0],
             ib[1],
             ib[2],
@@ -26974,10 +27020,12 @@ mod perf_counters {
             // **卡 A29**：脚本动作未实现错误次数（本 tick 增量）。
             SCRIPT_ACTION_ERRORS.swap(0, Ordering::Relaxed),
         ];
+        // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
+        let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
             let line = format!(
-                "{tick}\t{}\n",
+                "{tick}\t{}\t{zm}\n",
                 vals.iter()
                     .map(u64::to_string)
                     .collect::<Vec<_>>()
@@ -26985,6 +27033,119 @@ mod perf_counters {
             );
             let _ = f.write_all(line.as_bytes());
         }
+    }
+
+    /// **A36**：`zone_metrics` 列的紧凑 JSON。
+    ///
+    /// - 无 tab/换行（TSV 单列；`zone_perf_parse.py` 的参差行判定依赖这一点）；
+    /// - 键序固定（与 A36 契约示例一致：`v` → `barrier_us` → `inbound` → `landed` → `failures`；
+    ///   内层按字典序）；
+    /// - 每 tick 增量字段（barrier/inbound）在这里 `swap(0)`；累计字段（landed/failures）只读；
+    /// - 区 0 的 inbound 用宿主列（`inbound_*` 口径，入参传入以免二次 swap）；区 k 用 per-zone
+    ///   分桶（与 `zonek_inbound_*` 同宇宙：只计 Command）；
+    /// - `failures.sampled` 按**代码事实**：只有 `router_unassigned` 的日志站点限流
+    ///   （`n<=8 || n%1000`），其余三条逐次 glog ⇒ false。
+    fn zone_metrics_json(
+        host_enq: u64,
+        host_drained: u64,
+        host_carry: u64,
+        host_budget_hit: u64,
+    ) -> String {
+        let zone_count = ZONE_COUNT.load(Ordering::Relaxed).min(ZONE_METRICS_CAP);
+        let mut out = String::with_capacity(96 + zone_count * 96);
+        out.push_str("{\"v\":1,\"barrier_us\":{");
+        for (z, cell) in REGION_BARRIER_US_BY_ZONE
+            .iter()
+            .take(zone_count)
+            .enumerate()
+        {
+            if z > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":");
+            out.push_str(&cell.swap(0, Ordering::Relaxed).to_string());
+        }
+        out.push_str("},\"inbound\":{");
+        for z in 0..zone_count {
+            if z > 0 {
+                out.push(',');
+            }
+            let (enq, drained, carry, budget_hit, overflow_drop, pending_discard) = if z == 0 {
+                (host_enq, host_drained, host_carry, host_budget_hit, 0, 0)
+            } else {
+                (
+                    ZONEK_ENQ_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_DRAINED_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_CARRY_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_BUDGET_HIT_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_OVERFLOW_DROP_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_PENDING_DISCARD_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                )
+            };
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":{\"budget_hit\":");
+            out.push_str(&budget_hit.to_string());
+            out.push_str(",\"carry\":");
+            out.push_str(&carry.to_string());
+            out.push_str(",\"drain\":");
+            out.push_str(&drained.to_string());
+            out.push_str(",\"enq\":");
+            out.push_str(&enq.to_string());
+            out.push_str(",\"overflow_drop\":");
+            out.push_str(&overflow_drop.to_string());
+            out.push_str(",\"pending_discard\":");
+            out.push_str(&pending_discard.to_string());
+            out.push('}');
+        }
+        out.push_str("},\"landed\":{");
+        for (z, cell) in ZONE_LOGIN_LANDED.iter().take(zone_count).enumerate() {
+            if z > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":");
+            out.push_str(&cell.load(Ordering::Relaxed).to_string());
+        }
+        out.push_str("},\"failures\":{\"offzone\":");
+        out.push_str(&ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"router_unassigned\":");
+        out.push_str(&ZONE_ROUTER_UNASSIGNED.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"sampled\":{\"offzone\":false,\"router_unassigned\":true,\"target_unavailable\":false,\"uncovered\":false}");
+        out.push_str(",\"target_unavailable\":");
+        out.push_str(&ZONE_TARGET_UNAVAILABLE.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"uncovered\":");
+        out.push_str(&ZONE_LOGIN_UNCOVERED.load(Ordering::Relaxed).to_string());
+        // **A35-b 导出（A36 接线）**：搬迁计数是**累计**值、与 failures 平级（不是失败语义）。
+        out.push_str("},\"handoff\":{\"canceled_trades\":");
+        out.push_str(
+            &ZONE_HANDOFF_CANCELED_TRADES
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"session_failed\":");
+        out.push_str(
+            &ZONE_HANDOFF_SESSION_FAILED
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"session_moved\":");
+        out.push_str(
+            &ZONE_HANDOFF_SESSION_MOVED
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"target_display_missing\":");
+        out.push_str(
+            &ZONE_HANDOFF_TARGET_DISPLAY_MISSING
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str("}}");
+        out
     }
 
     /// 收尾：启用却一条 tick 行都没有 ⇒ Err（调用方转 rc≠0）。
@@ -27018,6 +27179,35 @@ mod perf_counters {
     /// 「切片模式下按原路径处理完」的次数。世界进入是否成功不在此计（那是
     /// `telemetry::record_ok`/`record_attempt` 的口径）。
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
+    // ---- **A36**：每区仪表（perf TSV 末列 `zone_metrics`）----
+    /// 运行时区数（切片初始化时由 [`set_zone_count`] 写入；0 = 非切片 ⇒ per-zone 表为空）。
+    static ZONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+    /// per-zone 表的固定上限（与 [`ZONE_LOGIN_LANDED`] 同口径；越界不记）。
+    const ZONE_METRICS_CAP: usize = 512;
+    /// 本 tick 各区「两道屏障等待之和」的**区侧和**（µs，`fetch_max`；写行即清零）。
+    ///
+    /// **诊断用，不是判据**：判据仍看进程列 `region_barrier_us` 的 **max**（各区 ≤ max ⇒
+    /// max ≤20% 即各区 ≤20%）；本表只用于定位是哪一区慢。
+    static REGION_BARRIER_US_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 投递成功（demux 目标区 `send` 成功；只计 `Command`，与 drained 同宇宙）。
+    static ZONEK_ENQ_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 被消费并处置的 Command 条数（同 `zonek_inbound_drained` 口径）。
+    static ZONEK_DRAINED_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：其中来自结转槽的条数。
+    static ZONEK_CARRY_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 预算命中（每 tick ≤1）。
+    static ZONEK_BUDGET_HIT_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：demux 丢新（`outstanding` 软上限）。
+    static ZONEK_OVERFLOW_DROP_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：线程尾丢弃的未执行命令（M1b 第 3 步「作废窗口」口径）。
+    static ZONEK_PENDING_DISCARD_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
     /// **卡 A29**：脚本动作 `EngineError::NotImplemented`（`kind` 以 `action` 开头）被触发的次数。
     /// 进 perf TSV（表头末列 `script_action_errors`），每 tick 增量。
     static SCRIPT_ACTION_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -38237,6 +38427,7 @@ impl HostLoop {
                         .unwrap_or(ZoneCmdClass::Unsupported)
                 };
                 let _ = execute_local_budget(
+                    zone.index(),
                     buffer,
                     pending_local,
                     carry_prefix,
@@ -41726,6 +41917,8 @@ fn fill_pending(
 /// 返回是否 `budget_hit`。**不写 `clear()`**（剩余自然保留，tick 后由 driver swap 回 scratch）。
 #[allow(clippy::too_many_arguments)] // 9 参：缓冲/等待队列/水位/预算/计数/分类/回调
 fn execute_local_budget(
+    // **A36**：本批所属区号（per-zone 入站仪表用；不改任何判定）。
+    zone: usize,
     buffer: &mut std::collections::VecDeque<SeqEvent>,
     pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
     carry_prefix: usize,
@@ -41797,7 +41990,9 @@ fn execute_local_budget(
         };
         let disp = exec(item, class, pending_local, budget);
         match disp {
-            LocalDisposition::Drained => perf_counters::note_zonek_inbound_drained(from_carry),
+            LocalDisposition::Drained => {
+                perf_counters::note_zonek_inbound_drained(zone, from_carry)
+            }
             LocalDisposition::Deferred | LocalDisposition::CountedByExec { .. } => {}
             // **D2**：整批推迟 = 有活没干完 ⇒ 本 tick 记 `budget_hit` 并收手（不 partial）。
             LocalDisposition::OverflowPostponed => truncated = true,
@@ -41821,7 +42016,7 @@ fn execute_local_budget(
     }
     let budget_hit = fill_hit || truncated;
     if budget_hit {
-        perf_counters::note_zonek_inbound_budget_hit();
+        perf_counters::note_zonek_inbound_budget_hit(zone);
     }
     budget_hit
 }
@@ -42098,7 +42293,7 @@ fn a6_dispatch_local(
             let batch_len = batch.len();
             for p in &batch {
                 exec(&p.ev, sessions);
-                perf_counters::note_zonek_inbound_drained(false);
+                perf_counters::note_zonek_inbound_drained(zone.index(), false);
             }
             LocalDisposition::CountedByExec { batch: batch_len }
         }
@@ -42125,7 +42320,7 @@ fn demux_forward_zone(
     use std::sync::atomic::Ordering;
     let is_cmd = matches!(ev, GateEvent::Command { .. });
     if z >= 1 && is_cmd && outstanding[z].load(Ordering::Relaxed) >= ZONE_INBOUND_MAX_EVENTS {
-        perf_counters::note_zonek_inbound_overflow_dropped();
+        perf_counters::note_zonek_inbound_overflow_dropped(z);
         zonek_overflow_warn(&ev, z, outstanding[z].load(Ordering::Relaxed));
         return;
     }
@@ -42133,6 +42328,8 @@ fn demux_forward_zone(
     let target = if ev.is_priority() { priority } else { normal };
     if target.send(ev).is_ok() && z >= 1 && is_cmd {
         outstanding[z].fetch_add(1, Ordering::Relaxed);
+        // **A36**：区 k 入站「投递成功」（与 drained/carry 同宇宙：只计 Command）。
+        perf_counters::note_zonek_inbound_enqueued(z);
     }
 }
 
@@ -132816,6 +133013,7 @@ mod zone_command_tests {
         let u0 = perf_counters::zonek_inbound_unsupported();
         let d0 = perf_counters::zonek_inbound_drained();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending,
             0,
@@ -136868,6 +137066,7 @@ mod l2_s3_cross_recipient_tests {
         let mut executed = 0u64;
         let mut pending_local = std::collections::BTreeMap::new();
         let budget_hit = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -136934,6 +137133,7 @@ mod l2_s3_cross_recipient_tests {
         let (f1, h1) = fill_pending(&rx, &ctl_rx, &mut pending, 8, &mut seq, |_ev| {});
         assert_eq!((f1, h1), (8, false));
         let bh1 = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -136970,6 +137170,7 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(carry_prefix, 6);
         let c0 = perf_counters::zonek_inbound_carry();
         let bh2 = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             carry_prefix,
@@ -137072,11 +137273,11 @@ mod l2_s3_cross_recipient_tests {
         let (_g, path) = zonek_arm_counters("columns");
         let ev = zonek_test_cmd(0);
         perf_counters::note_inbound_drained(false, &ev); // 区 0 命令分量
-        perf_counters::note_zonek_inbound_drained(false);
-        perf_counters::note_zonek_inbound_drained(true);
-        perf_counters::note_zonek_inbound_budget_hit();
-        perf_counters::note_zonek_inbound_overflow_dropped();
-        perf_counters::note_zonek_inbound_pending_discarded();
+        perf_counters::note_zonek_inbound_drained(1, false);
+        perf_counters::note_zonek_inbound_drained(1, true);
+        perf_counters::note_zonek_inbound_budget_hit(1);
+        perf_counters::note_zonek_inbound_overflow_dropped(1);
+        perf_counters::note_zonek_inbound_pending_discarded(1);
         perf_counters::note_zonek_inbound_unsupported();
         perf_counters::write_tick();
         perf_counters::note_inbound_drained(false, &ev); // N=1 形态：只 bump 区 0
@@ -137202,6 +137403,7 @@ mod l2_s3_cross_recipient_tests {
             );
             let mut executed = 0u64;
             let _ = execute_local_budget(
+                0,
                 &mut pending,
                 &mut pending_local,
                 0,
@@ -137248,6 +137450,7 @@ mod l2_s3_cross_recipient_tests {
         );
         let mut executed = 0u64;
         let _ = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -137374,6 +137577,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let d0 = perf_counters::zonek_inbound_drained();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -137490,6 +137694,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let d0 = perf_counters::zonek_inbound_drained();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -137549,6 +137754,7 @@ mod l2_s3_cross_recipient_tests {
         let mut pending_local = std::collections::BTreeMap::new();
         let mut exec = |_e: &GateEvent, _s: &mut A6Sessions| {};
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -137629,6 +137835,7 @@ mod l2_s3_cross_recipient_tests {
             }
         };
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -137784,6 +137991,7 @@ mod l2_s3_cross_recipient_tests {
         );
         let mut buffer = std::collections::VecDeque::new();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -137924,6 +138132,7 @@ mod l2_s3_cross_recipient_tests {
         let o0 = perf_counters::zonek_control_defer_overflow();
         let d0 = perf_counters::zonek_inbound_drained();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -138009,6 +138218,7 @@ mod l2_s3_cross_recipient_tests {
         let d0 = perf_counters::zonek_inbound_drained();
         let o0 = perf_counters::zonek_control_defer_overflow();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -138063,6 +138273,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let mut buffer2 = std::collections::VecDeque::new();
         let _ = execute_local_budget(
+            0,
             &mut buffer2,
             &mut pending_local,
             0,
@@ -138407,6 +138618,96 @@ mod perf_writer_alignment_tests {
     use super::*;
     use perf_counters::CrossRecipientOutcome as O;
     use perf_counters::CrossRecipientSurface as S;
+
+    /// **A36 序列化牙**：`zone_metrics` 末列 —— ① 表头列数 = 每行字段数；② 每行可解析且 `v==1`；
+    /// ③ JSON 内无 tab（参差行判定会判 rc=2，正好抓）；④ 漏一列 ⇒ ① 红（变异实测）。
+    #[test]
+    fn zone_metrics_column_is_valid_compact_json_with_matching_columns() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(true);
+        perf_counters::set_zone_count(2);
+        let path =
+            std::env::temp_dir().join(format!("mir2_perf_zone_metrics_{}.tsv", std::process::id()));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        // 基线行：把各 `swap(0)` 计数清零；累计计数取基线值后按增量断言。
+        perf_counters::write_tick();
+        let landed1_before = perf_counters::zone_login_landed(1);
+        let uncovered_before = perf_counters::zone_login_uncovered();
+        let target_before = perf_counters::zone_target_unavailable();
+        let offzone_before = perf_counters::zone_login_offzone();
+        let unassigned_before = perf_counters::zone_router_unassigned();
+        let moved_before = perf_counters::zone_handoff_session_moved();
+        let failed_before = perf_counters::zone_handoff_session_failed();
+        let canceled_before = perf_counters::zone_handoff_canceled_trades();
+        let missing_before = perf_counters::zone_handoff_target_display_missing();
+        perf_counters::note_region_barrier_us_for_zone(0, 120);
+        perf_counters::note_region_barrier_us_for_zone(1, 450);
+        perf_counters::note_zonek_inbound_enqueued(1);
+        perf_counters::note_zonek_inbound_enqueued(1);
+        perf_counters::note_zonek_inbound_drained(1, false);
+        perf_counters::note_zonek_inbound_drained(1, true);
+        perf_counters::note_zonek_inbound_budget_hit(1);
+        perf_counters::note_zonek_inbound_overflow_dropped(1);
+        perf_counters::note_zonek_inbound_pending_discarded(1);
+        perf_counters::note_zone_login_landed(1);
+        perf_counters::note_zone_login_uncovered();
+        perf_counters::note_zone_target_unavailable();
+        perf_counters::note_zone_login_offzone();
+        perf_counters::note_zone_router_unassigned();
+        perf_counters::note_zone_handoff_session_moved();
+        perf_counters::note_zone_handoff_session_failed();
+        perf_counters::note_zone_handoff_canceled_trades();
+        perf_counters::note_zone_handoff_target_display_missing();
+        perf_counters::write_tick();
+        let text = std::fs::read_to_string(&path).expect("read tsv");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= 2, "表头 + 至少一行数据");
+        let header_cols = lines[0].split('\t').count();
+        assert_eq!(
+            lines[0].split('\t').next_back(),
+            Some("zone_metrics"),
+            "表头末列必须是 zone_metrics"
+        );
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(
+                line.split('\t').count(),
+                header_cols,
+                "第 {i} 行的字段数必须 = 表头列数"
+            );
+        }
+        let zm = lines.last().unwrap().split('\t').next_back().unwrap();
+        assert!(!zm.contains('\t'), "zone_metrics 内不得含 tab");
+        assert!(!zm.contains('\n'), "zone_metrics 内不得含换行");
+        let v: serde_json::Value = serde_json::from_str(zm).expect("zone_metrics 必须可解析");
+        assert_eq!(v["v"], 1, "v==1");
+        assert_eq!(v["barrier_us"]["0"], 120);
+        assert_eq!(v["barrier_us"]["1"], 450);
+        assert_eq!(v["inbound"]["1"]["enq"], 2);
+        assert_eq!(v["inbound"]["1"]["drain"], 2);
+        assert_eq!(v["inbound"]["1"]["carry"], 1);
+        assert_eq!(v["inbound"]["1"]["budget_hit"], 1);
+        assert_eq!(v["inbound"]["1"]["overflow_drop"], 1);
+        assert_eq!(v["inbound"]["1"]["pending_discard"], 1);
+        assert_eq!(v["landed"]["1"], landed1_before + 1);
+        assert_eq!(v["failures"]["uncovered"], uncovered_before + 1);
+        assert_eq!(v["failures"]["target_unavailable"], target_before + 1);
+        assert_eq!(v["failures"]["offzone"], offzone_before + 1);
+        assert_eq!(v["failures"]["router_unassigned"], unassigned_before + 1);
+        assert_eq!(v["failures"]["sampled"]["router_unassigned"], true);
+        assert_eq!(v["failures"]["sampled"]["uncovered"], false);
+        // **A35-b 导出**：顶层 `handoff`（累计值，键序 canceled_trades → session_failed →
+        // session_moved → target_display_missing）。
+        assert_eq!(v["handoff"]["session_moved"], moved_before + 1);
+        assert_eq!(v["handoff"]["session_failed"], failed_before + 1);
+        assert_eq!(v["handoff"]["canceled_trades"], canceled_before + 1);
+        assert_eq!(v["handoff"]["target_display_missing"], missing_before + 1);
+        perf_counters::reset_writer_for_tests();
+        perf_counters::set_zone_count(0);
+        perf_counters::set_slicing_enabled(false);
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn write_tick_columns_align_with_header() {
