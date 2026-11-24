@@ -203,17 +203,20 @@ impl GroundItem {
 pub struct GroundMap {
     pub width: i32,
     pub height: i32,
-    cells: Vec<Vec<GroundItem>>,
+    /// **A43i**：**稀疏**格子表（`idx → 该格物品`）。原来是 `vec![Vec::new(); w*h]`，
+    /// 一张 700×700 的图每建一次就是 **49 万个空 `Vec`（≈12 MB）**——`CM_PICKUP`/
+    /// `CM_DROPITEM` 每条事件都建 ⇒ 单条 ~40 ms 的主因。稀疏后只为本图真有物品的格子分配。
+    /// 语义不变：越界仍由 [`Self::idx`] 判；在界内但无物品的格子 == 空 `Vec`。
+    cells: std::collections::HashMap<usize, Vec<GroundItem>>,
 }
 
 impl GroundMap {
     #[must_use]
     pub fn new(width: i32, height: i32) -> Self {
-        let n = (width.max(0) * height.max(0)) as usize;
         Self {
             width,
             height,
-            cells: vec![Vec::new(); n],
+            cells: std::collections::HashMap::new(),
         }
     }
 
@@ -235,7 +238,7 @@ impl GroundMap {
     #[must_use]
     pub fn get_item(&self, x: i32, y: i32) -> Option<&GroundItem> {
         let i = self.idx(x, y)?;
-        self.cells[i].first()
+        self.cells.get(&i)?.first()
     }
 
     /// `Envirnoment.GetItemEx`（`:723`）→ `(CellObjId, Count, ChFlag)`。
@@ -246,7 +249,10 @@ impl GroundMap {
         match self.idx(x, y) {
             None => (0, 0, false),
             Some(i) => {
-                let cell = &self.cells[i];
+                // 在界内但无物品 == 空格（与密集实现一致：`(0, 0, true)`）。
+                let Some(cell) = self.cells.get(&i) else {
+                    return (0, 0, true);
+                };
                 let mut id = 0;
                 for it in cell {
                     id = it.item_id;
@@ -259,12 +265,17 @@ impl GroundMap {
     /// `Envirnoment.DeleteFromMap(..., CellType.Item, itemId, null)`（`:635`）——返回值只有 `==1` 有意义。
     pub fn delete_item(&mut self, x: i32, y: i32, item_id: i32) -> i32 {
         if let Some(i) = self.idx(x, y) {
-            if let Some(pos) = self.cells[i]
-                .iter()
-                .position(|it| it.item_id != 0 && it.item_id == item_id)
-            {
-                self.cells[i].remove(pos);
-                return 1;
+            if let Some(cell) = self.cells.get_mut(&i) {
+                if let Some(pos) = cell
+                    .iter()
+                    .position(|it| it.item_id != 0 && it.item_id == item_id)
+                {
+                    cell.remove(pos);
+                    if cell.is_empty() {
+                        self.cells.remove(&i);
+                    }
+                    return 1;
+                }
             }
         }
         0
@@ -281,7 +292,7 @@ impl GroundMap {
         match self.idx(x, y) {
             None => false,
             Some(i) => {
-                self.cells[i].push(item);
+                self.cells.entry(i).or_default().push(item);
                 true
             }
         }
@@ -290,7 +301,7 @@ impl GroundMap {
     /// 全图物品数（判据用：证明丢弃没有凭空进地图、拾取放回/删除的净效果）。
     #[must_use]
     pub fn item_count(&self) -> usize {
-        self.cells.iter().map(Vec::len).sum()
+        self.cells.values().map(Vec::len).sum()
     }
 }
 

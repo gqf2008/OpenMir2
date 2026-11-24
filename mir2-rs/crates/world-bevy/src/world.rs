@@ -12587,6 +12587,47 @@ impl World {
         out
     }
 
+    /// **A43i**：只取**单格**的地面物品视图（`CM_PICKUP` 热路径专用）。
+    ///
+    /// [`Self::floor_items_view_sorted`] 会遍历**拥有图的每一格**（700×700 = 49 万格），
+    /// 而 `ground::pick_up` 只读 `(x, y)` 这一格 ⇒ 拾取路径改用它。字段、过滤
+    ///（`CellType::Item` + `item.is_some()`）与排序键与全量版**逐项相同**。
+    pub fn floor_items_view_at(&self, map_id: usize, x: i32, y: i32) -> Vec<FloorItemView> {
+        if !self.is_map_owned(map_id) {
+            return Vec::new();
+        }
+        let Some(map) = self.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let (cell, ok) = map.get_cell_info(x, y);
+        if !ok {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for o in &cell.obj_list {
+            if o.cell_type != CellType::Item {
+                continue;
+            }
+            let Some(meta) = o.item else {
+                continue;
+            };
+            out.push(FloorItemView {
+                map_id,
+                x,
+                y,
+                obj_id: o.cell_obj_id,
+                kind: meta.kind,
+                index: meta.index,
+                count: meta.count,
+                item_id: meta.item_id,
+                of_base_object: meta.of_base_object,
+                can_pick_up_tick: o.add_time as i32,
+            });
+        }
+        out.sort_unstable_by_key(|v| (v.map_id, v.x, v.y, v.obj_id, v.item_id));
+        out
+    }
+
     /// **A24**：把一次**成功拾取**删掉的格子对象从本 World 的地面表里摘掉
     /// （`handle_ground_cmd` 在 `ground::pick_up` 成功后调用；等价 oracle
     /// `ClientPickUpItem` 的 `Envir.DeleteFromMap(CurrX, CurrY, CellType.Item, mapItem.ItemId, null)`）。
@@ -22103,5 +22144,51 @@ mod a43_kind_index_tests {
             .player_run
             .fire_hit_skill;
         assert!(!fire_hit_skill, "烈火到期必须被 SimPlayerRunExpiry 清掉");
+    }
+}
+
+/// **A43i 牙**：单格视图 `floor_items_view_at` 必须与全量视图 `floor_items_view_sorted`
+/// 在同一格上的子集**逐元素相等**（字段 + 顺序）；越界/非拥有图 ⇒ 空。
+#[cfg(test)]
+mod a43i_floor_view_at_tests {
+    use super::*;
+
+    #[test]
+    fn cell_view_equals_sorted_view_filtered_to_that_cell() {
+        let mut w = World::new(60, 60);
+        // 三个格子放地面物（含同格两件）+ 一个演员（非 Item，不得进视图）。
+        for (x, y, id) in [(10, 10, 101), (10, 10, 102), (11, 10, 103), (40, 40, 104)] {
+            assert!(w.maps[0].add_floor_item(
+                x,
+                y,
+                id,
+                crate::map::FloorItemMeta {
+                    kind: crate::map::FloorItemKind::Item,
+                    index: 7,
+                    count: 1,
+                    item_id: id,
+                    of_base_object: 0,
+                },
+                0,
+            ));
+        }
+        let mut e = crate::EntitySpawn::new(0, "p".to_string(), 10, 12);
+        e.race = 0;
+        w.add_entity(e);
+
+        let sorted = w.floor_items_view_sorted();
+        for (x, y) in [(10, 10), (11, 10), (40, 40), (12, 12)] {
+            let want: Vec<FloorItemView> = sorted
+                .iter()
+                .filter(|v| v.x == x && v.y == y)
+                .cloned()
+                .collect();
+            assert_eq!(
+                w.floor_items_view_at(0, x, y),
+                want,
+                "单格视图必须等于全量视图在 ({x},{y}) 的子集"
+            );
+        }
+        assert!(w.floor_items_view_at(99, 10, 10).is_empty(), "图越界 ⇒ 空");
     }
 }

@@ -8200,12 +8200,28 @@ fn handle_ground_cmd(
         return;
     };
     let (cx, cy, map_id) = (actor.x, actor.y, actor.map_id);
+    // **A43i**：`CM_PICKUP` 的位置门**前移**到建地面图之前——位置不符/无物的拒绝路径
+    // 不再付"全量地面视图 + 建图"的成本（旧实现每条事件都付，实测单条 ~40 ms）。
+    if ident == game_svr::ground::CM_PICKUP
+        && !game_svr::pickwire::pickup_position_ok(cx, cy, i32::from(param), i32::from(tag))
+    {
+        glog!(
+            "DBG",
+            "CM_PICKUP：位置门不成立 ChrName={chr_name} Curr=({cx},{cy}) 请求=({param},{tag}) ⇒ 忽略"
+        );
+        return;
+    }
     let Some(grid) = world.maps.get(map_id) else {
         glog!("WRN", "CM_PICKUP/DROP：map_id={map_id} 越界 ⇒ 丢弃");
         return;
     };
-    // 地面视图 = world 的**只读分片**（`floor_items_view_sorted`，owner §25.1 (A)）。
-    let view = world.floor_items_view_sorted();
+    // 地面视图 = world 的**只读分片**：拾取只要 `(cx,cy)` 一格（`pick_up` 只读该格）；
+    // 丢弃仍走全量（不在热路径）。两者字段/过滤/排序键逐项相同。
+    let view = if ident == game_svr::ground::CM_PICKUP {
+        world.floor_items_view_at(map_id, cx, cy)
+    } else {
+        world.floor_items_view_sorted()
+    };
     let mut map =
         game_svr::pickwire::build_ground_map(&view, map_id, grid.width, grid.height, catalog);
     let now_tick = world.clock_ms as i32;
@@ -8221,14 +8237,6 @@ fn handle_ground_cmd(
     // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
     // （`PlayObject.Base.cs:79-84`），故 `SM_GOLDCHANGED`/`SM_WEIGHTCHANGED` 用新值。
     let (immediate, notices, drop_msg, added_item) = if ident == game_svr::ground::CM_PICKUP {
-        // oracle 位置门：不满足 ⇒ 不进 `ClientPickUpItem`。
-        if !game_svr::pickwire::pickup_position_ok(cx, cy, i32::from(param), i32::from(tag)) {
-            glog!(
-                "DBG",
-                "CM_PICKUP：位置门不成立 ChrName={chr_name} Curr=({cx},{cy}) 请求=({param},{tag}) ⇒ 忽略"
-            );
-            return;
-        }
         // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
         let group_owner = world.entities.get(actor_id).map_or(0, |e| e.group_owner);
         let group_member_actor_ids: Vec<i32> = if group_owner != 0 {
@@ -26817,7 +26825,20 @@ mod perf_counters {
     /// **为什么用墙钟而不是线程 CPU**：`GetThreadTimes` 只有 15.625 ms 量化——单条 1.3 ms 的
     /// 事件读数是 0 或 15,625，**无法排序**；墙钟（`Instant`）µs 级可用（代价：含被抢占）。
     /// CPU 的段级读数已有 `zonek_exec_cpu_us` 对照。只在比第 3 名更贵时才加锁 ⇒ 竞争极低。
-    static ZONEK_TOP_SLOW: Mutex<[(u16, u64); 3]> = Mutex::new([(u16::MAX, 0); 3]);
+    static ZONEK_TOP_SLOW: Mutex<SlowWatch> = Mutex::new(SlowWatch {
+        top: [(u16::MAX, 0); 3],
+        by_ident: Vec::new(),
+    });
+
+    /// **A43h** 的榜单体：①`top` = **最慢的三条事件**（同一 ident 可重复出现——按事件排，
+    /// 不是按命令种类）；②`by_ident` = **按 ident 去重**（每类只留最贵的一条），
+    /// 写行时序列化成 `ident:us,…`（按 us 降序取前 5）供"哪类命令最贵"判定。
+    struct SlowWatch {
+        top: [(u16, u64); 3],
+        /// 按 ident 去重的最贵一条（用 `Vec` 而不是 `HashMap`：`HashMap::new()` 不是 const，
+        /// 而 ident 种类只有几十 ⇒ 线性更新足够）。
+        by_ident: Vec<(u16, u64)>,
+    }
     // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的四个**降级/清理**计数——
     // 只区 k、每 tick 增量、**不设 `*_all_zones` 派生列**（区 0 无同名语义）。
     // 前三个是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）；
@@ -27441,35 +27462,69 @@ mod perf_counters {
         if wall_us == 0 || !ENABLED.load(Ordering::Relaxed) {
             return;
         }
-        let mut top = ZONEK_TOP_SLOW
+        let mut w = ZONEK_TOP_SLOW
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if wall_us <= top[2].1 {
+        // 按 ident 去重：每类只留最贵一条。
+        match w.by_ident.iter_mut().find(|(id, _)| *id == ident) {
+            Some((_, slot)) => {
+                if wall_us > *slot {
+                    *slot = wall_us;
+                }
+            }
+            None => w.by_ident.push((ident, wall_us)),
+        }
+        // 最慢三条**事件**（同 ident 可重复）。
+        if wall_us <= w.top[2].1 {
             return;
         }
         let mut i = 2;
-        while i > 0 && top[i - 1].1 < wall_us {
-            top[i] = top[i - 1];
+        while i > 0 && w.top[i - 1].1 < wall_us {
+            w.top[i] = w.top[i - 1];
             i -= 1;
         }
-        top[i] = (ident, wall_us);
+        w.top[i] = (ident, wall_us);
     }
 
     /// **A43h**：取走本 tick 的 top-3 并清零（写行时调用）。
     fn take_zonek_top_slow() -> [(u16, u64); 3] {
-        let mut top = ZONEK_TOP_SLOW
+        let mut w = ZONEK_TOP_SLOW
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let out = *top;
-        *top = [(u16::MAX, 0); 3];
+        let out = w.top;
+        w.top = [(u16::MAX, 0); 3];
         out
+    }
+
+    /// **A43h**：取走"按 ident 去重的最贵一条"表并序列化成 `ident:us,…`（us 降序前 5）。
+    /// 空 ⇒ `"-"`（保持单列、无 tab/换行）。
+    fn take_zonek_ident_slow() -> String {
+        let mut w = ZONEK_TOP_SLOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut rows: Vec<(u16, u64)> = std::mem::take(&mut w.by_ident);
+        rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        rows.truncate(5);
+        if rows.is_empty() {
+            return "-".to_string();
+        }
+        rows.iter()
+            .map(|(id, us)| format!("{id}:{us}"))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     #[cfg(test)]
     pub(crate) fn zonek_top_slow() -> [(u16, u64); 3] {
-        *ZONEK_TOP_SLOW
+        ZONEK_TOP_SLOW
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .top
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zonek_ident_slow() -> String {
+        take_zonek_ident_slow()
     }
 
     /// demux 丢新（`outstanding` 到软上限）。
@@ -27669,7 +27724,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzonek_exec_wall_hit\tzonek_exec_us_max\tzonek_exec_cpu_us\tzonek_top1_ident\tzonek_top1_us\tzonek_top2_ident\tzonek_top2_us\tzonek_top3_ident\tzonek_top3_us\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzonek_exec_wall_hit\tzonek_exec_us_max\tzonek_exec_cpu_us\tzonek_top1_ident\tzonek_top1_us\tzonek_top2_ident\tzonek_top2_us\tzonek_top3_ident\tzonek_top3_us\tzonek_top_ident_slowest_us\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27856,11 +27911,12 @@ mod perf_counters {
             top_slow[2].1,
         ];
         // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
+        let ident_slow = take_zonek_ident_slow();
         let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
             let line = format!(
-                "{tick}\t{}\t{zm}\n",
+                "{tick}\t{}\t{ident_slow}\t{zm}\n",
                 vals.iter()
                     .map(u64::to_string)
                     .collect::<Vec<_>>()
@@ -28529,9 +28585,13 @@ mod perf_counters {
             c.store(0, Ordering::Relaxed);
         }
         SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
-        *ZONEK_TOP_SLOW
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = [(u16::MAX, 0); 3];
+        {
+            let mut w = ZONEK_TOP_SLOW
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            w.top = [(u16::MAX, 0); 3];
+            w.by_ident.clear();
+        }
         DATA_LINES.store(0, Ordering::Relaxed);
         *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *PATH.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -145982,6 +146042,12 @@ mod a43h_top_slow_tests {
         let top = run(6, 0);
         assert_eq!(top[0].0, 3001, "第 1 名必须是慢的那条（实得 {top:?}）");
         assert!(top[0].1 >= 5_000, "第 1 名墙钟必须 ≥5ms（实得 {top:?}）");
+        // 去重列：按 ident 只留最贵一条 ⇒ 只有真花时间的 3001 上榜（3002 墙钟≈0 不入榜）。
+        let ident_slow = perf_counters::zonek_ident_slow();
+        assert!(
+            ident_slow.starts_with("3001:"),
+            "按 ident 去重列必须列出真花时间的 ident（实得 {ident_slow}）"
+        );
 
         // 反过来：B 慢 8ms、A 立即 ⇒ 第 1 名 = B(3002)。
         perf_counters::reset_for_tests();
@@ -145991,5 +146057,30 @@ mod a43h_top_slow_tests {
 
         perf_counters::ENABLED.store(false, Ordering::Relaxed);
         perf_counters::reset_for_tests();
+    }
+}
+
+/// **A43i 牙（接线序）**：`handle_ground_cmd` 里 `CM_PICKUP` 的**位置门必须早于**建地面图——
+/// 拒绝路径（位置不符/无物）不得付"全量地面视图 + 建图"的成本。
+/// 变异：把位置门挪回建图之后 ⇒ 本牙红。
+#[cfg(test)]
+mod a43i_pickup_gate_order_tests {
+    #[test]
+    fn pickup_position_gate_precedes_ground_view_build() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn handle_ground_cmd(")
+            .expect("handle_ground_cmd 必须存在");
+        let body = &src[start..(start + 24_000).min(src.len())];
+        let gate = body
+            .find("pickup_position_ok(")
+            .expect("位置门必须在 handle_ground_cmd 内");
+        let view = body
+            .find("floor_items_view_at(")
+            .expect("按格视图必须在 handle_ground_cmd 内");
+        assert!(
+            gate < view,
+            "位置门必须前移到建地面图之前（gate@{gate} view@{view}）"
+        );
     }
 }
