@@ -1938,6 +1938,98 @@ fn handle_zone_command_on(
         );
         return ZoneCmdOutcome::Dispatched;
     }
+    // **A34 片 1（基础动作六条）**：与区 0 [`handle_inbound_cmd`] **同一实现**（不是复制体）——
+    // 实参逐项区本地：world/会话/`enter_cfg` 区副本（`catalog`/`ground`/`minimap`/颜色/文案）；
+    // `pwd_sessions` 只有密码族会读，本分组不含密码 ⇒ 传空 scratch（下面 `matches!` 写死分组）。
+    if matches!(
+        cmd.ident,
+        mir2_protocol::messages::CM_SITDOWN
+            | mir2_protocol::messages::CM_BUTCH
+            | mir2_protocol::messages::CM_DROPGOLD
+            | mir2_protocol::messages::CM_ADJUST_BONUS
+            | mir2_protocol::messages::CM_WANTMINIMAP
+            | mir2_protocol::messages::CM_OPENDOOR
+    ) {
+        let msg_texts = game_svr::useitem::SysMsgTexts::from_conf(&env.enter_cfg.string_conf);
+        let frames_ctx = InboundFramesCtx {
+            catalog: &env.enter_cfg.catalog,
+            client_layout: mir2_client_ability_layout(),
+            red: (env.enter_cfg.red_msg_f_color, env.enter_cfg.red_msg_b_color),
+            ref_msg_range: env.enter_cfg.ref_msg_range,
+            msg: &msg_texts,
+        };
+        // 本分组不含 `CM_PASSWORD`（见上）；scratch 只为满足签名。
+        let mut pwd_scratch: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        handle_inbound_cmd(
+            cmd,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            world,
+            ground_sessions,
+            gates,
+            env.registry,
+            env.enter_cfg.minimap.as_ref(),
+            &mut pwd_scratch,
+            &env.enter_cfg.ground,
+            &*displays,
+            &frames_ctx,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **A34 片 1（Local 补臂 5）**：query4 + magic-key——与区 0 同一 handler（无进程态）。
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
+        handle_query_user_name_cmd(
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            chr_name,
+            socket,
+            &*online,
+            &*ground_sessions,
+            world,
+            &*displays,
+            gates,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSTATE {
+        handle_query_user_state_cmd(
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            chr_name,
+            socket,
+            &*online,
+            &*ground_sessions,
+            world,
+            gates,
+            &env.enter_cfg.catalog,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSET {
+        handle_query_user_set_cmd(chr_name, socket, &*online);
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYVAL {
+        handle_query_val_cmd(
+            cmd.recog,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            world,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if magicwire::is_magic_key_ident(cmd.ident) {
+        handle_magic_key_cmd(cmd.recog, cmd.param, chr_name, socket, saves);
+        return ZoneCmdOutcome::Dispatched;
+    }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
     ZoneCmdOutcome::Unsupported
 }
@@ -28051,7 +28143,15 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || ident == game_svr::shop::CM_USERSTORAGEITEM
         || ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
         // **M1c-3a**：药物合成（`shop::make_drug_item` 只碰区本地状态 + 共享 `item_number`）。
-        || ident == game_svr::shop::CM_USERMAKEDRUGITEM;
+        || ident == game_svr::shop::CM_USERMAKEDRUGITEM
+        // **A34 片 1**：基础动作六条（区 k 本地可执行：只读/写区本地 world/会话；
+        // `CM_WANTMINIMAP` 读 `enter_cfg.minimap` 的区副本，`CM_ADJUST_BONUS` 用区本地 catalog）。
+        || ident == mir2_protocol::messages::CM_SITDOWN
+        || ident == mir2_protocol::messages::CM_BUTCH
+        || ident == mir2_protocol::messages::CM_DROPGOLD
+        || ident == mir2_protocol::messages::CM_ADJUST_BONUS
+        || ident == mir2_protocol::messages::CM_WANTMINIMAP
+        || ident == mir2_protocol::messages::CM_OPENDOOR;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -129887,6 +129987,7 @@ mod zone_map_data_tests {
 mod zone_command_tests {
     use super::zone_disconnect_tests::landed;
     use super::*;
+    use crate::tests::test_session_ground;
 
     fn gates_and_rx() -> (
         std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -130236,8 +130337,11 @@ mod zone_command_tests {
         let (mut state, _actor) = landed("cmd_unwired", zone::ZoneId::new(1));
         let (gates, _rx) = gates_and_rx();
         for ident in [
-            mir2_protocol::messages::CM_QUERYUSERNAME,
-            mir2_protocol::messages::CM_MAGICKEYCHANGE,
+            // **A34 片 1**：`CM_QUERYUSERNAME`/`CM_MAGICKEYCHANGE`（以及 `CM_QUERYUSERSTATE`/
+            // `CM_QUERYUSERSET`/`CM_QUERYVAL`）已补本地臂 ⇒ 从本「未接线守恒」清单移出（每族另有
+            // 行为牙 `a34_slice1_*`，不是放宽）。
+            // **不补（oracle 无对应行为，opc-27 裁决）**：`CM_LEVELRANK`（oracle `src/` 零引用）
+            // 与 `CM_LOGINNOTICEOK`（M2Server 无 case）⇒ 必须继续计 Unsupported。
             enter::CM_LEVELRANK,
             mir2_protocol::messages::CM_LOGINNOTICEOK,
             // **M1c-3b**：`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已接线（整 ident `Process` ⇒ 区 0
@@ -130255,6 +130359,358 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    // ===================== A34 片 1：基础动作 6 + Local 补臂 5（区 k 行为牙） =====================
+
+    /// A34 片 1 夹具：落区 + 会话 + 在线项 + gates。
+    #[allow(clippy::type_complexity)]
+    fn a34_ready(
+        tag: &str,
+    ) -> (
+        ZoneState,
+        i32,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let (mut state, actor) = landed(tag, zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), test_session_ground(actor));
+        online_set(
+            &mut state.host.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (gates, rx) = gates_and_rx();
+        (state, actor, gates, rx)
+    }
+
+    fn a34_msg(ident: u16, recog: i32, param: u16, tag: u16) -> CommandMessage {
+        CommandMessage {
+            recog,
+            ident,
+            param,
+            tag,
+            series: 0,
+        }
+    }
+
+    fn a34_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                out.push(body);
+            }
+        }
+        out
+    }
+
+    fn a34_id(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    fn a34_param(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[6], body[7]])
+    }
+
+    /// **A34 片 1**：`CM_SITDOWN(3012)` 区 k 本地派发 ⇒ 成功支一条 `+GD/<tick>` 短包。
+    /// 变异：删执行臂 ⇒ 落 `Unsupported`（`assert_eq!(Dispatched)` 红）。
+    #[test]
+    fn a34_slice1_sitdown_zone_k_sends_good_tick() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_sit");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_SITDOWN, 0, 10, 10),
+        );
+        assert_eq!(
+            out,
+            ZoneCmdOutcome::Dispatched,
+            "片 1：SITDOWN 必须区 k 本地派发"
+        );
+        let (mut raws, mut frames) = (0, 0);
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                SimToGate::SendRaw { ref payload, .. } => {
+                    assert!(payload.starts_with(b"+GD/"), "+GD 短包原文：{payload:?}");
+                    raws += 1;
+                }
+                SimToGate::SendFrame { .. } => frames += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            (raws, frames),
+            (1, 0),
+            "坐下成功 ⇒ 恰一条 +GD、无 SM_MOVEFAIL"
+        );
+    }
+
+    /// **A34 片 1**：`CM_DROPGOLD(1016)` ⇒ BUG-REPLICA 2 净金币不变、一条 `SM_GOLDCHANGED`。
+    #[test]
+    fn a34_slice1_dropgold_zone_k_emits_gold_changed() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_drop");
+        state
+            .host
+            .ground_sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .gold = 5_000;
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DROPGOLD, 1_500, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "Dropped ⇒ 一条 SM_GOLDCHANGED：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_GOLDCHANGED,
+            "ident 必须是 SM_GOLDCHANGED"
+        );
+    }
+
+    /// **A34 片 1**：`CM_ADJUST_BONUS(1043)` ⇒ 752/52/657 三帧（657 仅 1 条）。
+    #[test]
+    fn a34_slice1_adjust_bonus_zone_k_emits_752_52_657() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_bonus");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_ADJUST_BONUS, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "oracle 出队序 752 → 52 → 657"
+        );
+    }
+
+    /// **A34 片 1**：`CM_WANTMINIMAP(1033)` ⇒ 读区副本 `enter_cfg.minimap` ⇒ `SM_READMINIMAP_OK(710)`。
+    #[test]
+    fn a34_slice1_wantminimap_zone_k_emits_ok() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_map");
+        let mut shared = SharedServices::for_test();
+        // `name_of` 只对**已成功装载**的图生效（`registry.loaded`）⇒ 必须有真实 `Map/0.map`。
+        let base = std::env::temp_dir().join(format!("a34-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        zone_login_landing_tests::write_map_fixture(&base);
+        shared.registry = Some(zone_login_landing_tests::fixture_registry(&base));
+        let (minimap, _dups) = mir2_envir::load_minimap("0 7\n");
+        shared.enter_cfg.minimap = Some(minimap);
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_WANTMINIMAP, 0, 0, 0),
+            None,
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "OK 支恰好一帧：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_READMINIMAP_OK
+        );
+        assert_eq!(a34_param(&frames[0]), 7, "Param = MiniMap 值");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A34 片 1**：`CM_OPENDOOR(1002)` ⇒ BUG-REPLICA 1 **恒零出帧**，但必须本地派发。
+    #[test]
+    fn a34_slice1_opendoor_zone_k_dispatched_zero_frames() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_door");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_OPENDOOR, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        assert!(a34_frames(&mut rx).is_empty(), "OPENDOOR 恒零出帧");
+    }
+
+    /// **A34 片 1**：`CM_BUTCH(1007)` 无目标也必须本地派发（不得落 Unsupported）。
+    #[test]
+    fn a34_slice1_butch_zone_k_dispatched() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_butch");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_BUTCH, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERNAME(80)` 出窗目标 ⇒ `SM_GHOST`（本地补臂）。
+    #[test]
+    fn a34_slice1_queryusername_zone_k_ghost_frame() {
+        let (mut state, actor, gates, mut rx) = a34_ready("a34_qname");
+        let (hx, hy) = pos_of(&state, actor);
+        let target = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(2, "tgt", hx + 8, hy));
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_QUERYUSERNAME,
+                target,
+                u16::try_from(hx + 8).unwrap(),
+                u16::try_from(hy).unwrap(),
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "出窗 ⇒ 一条 SM_GHOST：{frames:?}");
+        assert_eq!(a34_id(&frames[0]), mir2_protocol::messages::SM_GHOST);
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERSTATE(82)` 近窗目标 ⇒ `SM_SENDUSERSTATE`。
+    #[test]
+    fn a34_slice1_queryuserstate_zone_k_emits_userstate() {
+        let (mut state, actor, gates, mut rx) = a34_ready("a34_qstate");
+        let (hx, hy) = pos_of(&state, actor);
+        state.host.world.open_session("tgt");
+        let target = state
+            .host
+            .world
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(2, "tgt", hx + 1, hy),
+                0,
+            )
+            .expect("目标进图");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_QUERYUSERSTATE,
+                target,
+                u16::try_from(hx + 1).unwrap(),
+                u16::try_from(hy).unwrap(),
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "近窗 ⇒ 一条 SM_SENDUSERSTATE：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_SENDUSERSTATE
+        );
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERSET(3040)` oracle 函数体为空 ⇒ Dispatched + 零帧。
+    #[test]
+    fn a34_slice1_queryuserset_zone_k_dispatched_zero_frames() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_qset");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_QUERYUSERSET, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        assert!(a34_frames(&mut rx).is_empty(), "oracle 体为空 ⇒ 零帧");
+    }
+
+    /// **A34 片 1**：`CM_QUERYVAL(1065)` 尾落 `MNSval[label]` 并清 `GotoNpcLabel`。
+    #[test]
+    fn a34_slice1_queryval_zone_k_sets_mnsval() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_qval");
+        {
+            let sg = state.host.ground_sessions.get_mut("hero").unwrap();
+            sg.val_type = 0;
+            sg.val_label = 3;
+            sg.goto_npc_label = "@ask".to_string();
+        }
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_QUERYVAL, 0, 0, 0),
+            Some("hello"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.mns_val[3], "hello", "尾经派发落 MNSval[3]");
+        assert!(sg.goto_npc_label.is_empty(), "末尾清空 GotoNpcLabel");
+    }
+
+    /// **A34 片 1**：`CM_MAGICKEYCHANGE(1008)` 改 `SavedHuman.record.data.magic` 的键。
+    #[test]
+    fn a34_slice1_magickey_zone_k_updates_saved_magic_key() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_mkey");
+        {
+            let mut rec = record::PlayerRecord::default();
+            rec.data.magic = Some(vec![Some(record::MagicRcd {
+                mag_idx: 7,
+                level: 3,
+                magic_key: u16::from(b'a'),
+                tran_point: 0,
+            })]);
+            state.host.saves.insert(
+                "hero".to_string(),
+                SavedHuman {
+                    account: "ua".to_string(),
+                    record: rec,
+                    enter_map: "0".to_string(),
+                    derived: None,
+                },
+            );
+        }
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_MAGICKEYCHANGE,
+                7,
+                u16::from(b'f'),
+                0,
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let saved = &state.host.saves["hero"];
+        let magic = saved.record.data.magic.as_ref().expect("MagicList 仍在");
+        let m = magic[0].as_ref().expect("第一项仍在");
+        assert_eq!(m.magic_key, u16::from(b'f'), "键已改为 f");
     }
 
     /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
@@ -134037,6 +134493,13 @@ mod l2_s3_cross_recipient_tests {
             m::CM_QUERYBAGITEMS,
             game_svr::shop::CM_USERSTORAGEITEM,
             game_svr::shop::CM_USERTAKEBACKSTORAGEITEM,
+            // **A34 片 1**：基础动作六条
+            m::CM_SITDOWN,
+            m::CM_BUTCH,
+            m::CM_DROPGOLD,
+            m::CM_ADJUST_BONUS,
+            m::CM_WANTMINIMAP,
+            m::CM_OPENDOOR,
         ];
         for ident in local {
             assert_eq!(
