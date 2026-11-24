@@ -1476,6 +1476,8 @@ fn detach_session_for_migration(
     source: zone::ZoneId,
     target: zone::ZoneId,
     id: i32,
+    // **A38**：组关系（调用方从 `CommittedHandoff` 传入；回滚路径由方法自己从实体取）。
+    group: mir2_world_bevy::GroupState,
 ) -> Option<PendingSessionMigration> {
     let Some((chr_name, gate_idx, socket)) = online
         .find_by_actor(id)
@@ -1544,6 +1546,7 @@ fn detach_session_for_migration(
         pending_cmds,
         world_map_id,
         world_soft_version_date,
+        group,
     })
 }
 
@@ -37788,6 +37791,12 @@ struct PendingSessionMigration {
     world_map_id: usize,
     /// **Q1**：`PlayObject.SoftVersionDateEx`（World 会话的 `soft_version_date`）。
     world_soft_version_date: i32,
+    /// **A38**：实体在源区被释放**之前**的组关系（`GroupState`）。
+    ///
+    /// 组关系挂**实体**（不是会话）⇒ attach 时写到目标区实体上；失败回滚**不回退**它
+    /// （实体在目标区，回退 = 从唯一活着的实体上抹掉关系）。捕获点 = `tick_top` 的
+    /// `release_entity` 之前。
+    group: mir2_world_bevy::GroupState,
 }
 
 struct HostLoop {
@@ -38184,6 +38193,21 @@ impl HostLoop {
         &mut self,
         m: PendingSessionMigration,
     ) -> Result<(String, i32, u8, i32), Box<PendingSessionMigration>> {
+        // **A38**：组关系跟**实体**走——实体在提交时已落在本区（`promote_mirror_to_real`）。
+        // 先于会话冲突检查写入：即使会话被拒（回滚），组关系也必须留在本区实体上（恰一次；
+        // 抹掉 = 人为制造丢失）。`clone` 是为了让下面的 `Err(m)` 仍能整包退回。
+        if let Some(g) = self.world.entities.group_mut(m.id) {
+            *g = m.group.clone();
+        }
+        glog!(
+            "INF",
+            "组关系随迁：entity {} → 区 {}（owner={} members={} allow_group={}）",
+            m.id,
+            self.zone,
+            m.group.group_owner,
+            m.group.group_members.len(),
+            m.group.allow_group
+        );
         if self.ground_sessions.contains_key(&m.chr_name)
             || self.online.find_by_chr(&m.chr_name).is_some()
         {
@@ -38227,6 +38251,8 @@ impl HostLoop {
     ///
     /// 正常路径下本区已无同 chr 项（detach 已摘空）；若仍有 ⇒ WRN + 覆盖（不丢包优先）。
     fn restore_session(&mut self, m: PendingSessionMigration) {
+        // **A38（显式）**：组关系**不在这里回写**——它属于目标区实体（提交时实体已过去），
+        // 回退只会从唯一活着的实体上抹掉关系；`m.group` 随包丢弃是有意的。
         if self.ground_sessions.contains_key(&m.chr_name) {
             glog!(
                 "WRN",
@@ -38282,6 +38308,9 @@ impl HostLoop {
         source: zone::ZoneId,
         target: zone::ZoneId,
     ) -> Option<PendingSessionMigration> {
+        // **A38**：本路径只用于「撤回刚插入的目标区会话」（router 失败）——实体仍在
+        // 目标区世界，组关系直接从当前组件取（前向路径的捕获点在 `tick_top`）。
+        let group = self.world.entities.group(id).cloned().unwrap_or_default();
         detach_session_for_migration(
             &mut self.world,
             &mut self.displays,
@@ -38295,6 +38324,7 @@ impl HostLoop {
             source,
             target,
             id,
+            group,
         )
     }
 
@@ -40938,7 +40968,8 @@ impl HostLoop {
             // 「离开范围」取消交易/寄售（帧**先发**），再把七表 + World 会话 detach 成搬迁包。
             // attach 由驱动在**锁外**用目标区单锁完成（见 `deliver_session_migrations` 的调用点）。
             if let Some(h) = handoff_runtime.as_mut() {
-                for (id, target) in h.tick_top(&mut world, tick_no) {
+                for committed in h.tick_top(&mut world, tick_no) {
+                    let (id, target) = (committed.id, committed.from);
                     let Some(chr_name) = online.find_by_actor(id).map(|e| e.chr_name.clone())
                     else {
                         perf_counters::note_zone_handoff_session_failed();
@@ -40980,6 +41011,7 @@ impl HostLoop {
                         zone,
                         target,
                         id,
+                        committed.group,
                     ) {
                         Some(m) => pending_session_migrations.push(m),
                         None => {
@@ -135196,10 +135228,11 @@ mod l2_handoff_tests {
             m.1.push(ack(true));
         }
         let committed = rt.tick_top(&mut world, 1);
+        assert_eq!(committed.len(), 1, "只认第一份 ack（重复 ack 不得再提交）");
         assert_eq!(
-            committed,
-            vec![(id, zone(1))],
-            "只认第一份 ack；接受方区 = ack.from（区 1），不是 to（区 0）"
+            (committed[0].id, committed[0].from),
+            (id, zone(1)),
+            "接受方区 = ack.from（区 1），不是 to（区 0）"
         );
         assert!(world.entities.get(id).is_none(), "提交后实体必须从源区移除");
         // 拒绝支：不提交、实体留在源区。
@@ -135819,6 +135852,12 @@ mod l2_handoff_tests {
         ));
         let chr = "mover";
         let id = seed_full_session_for_host(&mut host, chr, 901);
+        {
+            let e = host.world.entities.get_mut(id).expect("实体在");
+            e.group.allow_group = true;
+            e.group.group_owner = id;
+            e.group.group_members = vec![id, id + 1];
+        }
         // 跨界时正在交易 ⇒ WORLD_HEAD 必须先取消（帧先发）再 detach。
         host.trade_sessions.insert(
             chr.to_string(),
@@ -135889,6 +135928,15 @@ mod l2_handoff_tests {
             (m.chr_name.as_str(), m.id, m.line, m.socket, m.target),
             (chr, id, 0, 901, zone(0))
         );
+        assert_eq!(
+            (
+                m.group.allow_group,
+                m.group.group_owner,
+                m.group.group_members.clone()
+            ),
+            (true, id, vec![id, id + 1]),
+            "A38：组关系必须随搬迁包带走（接线路径）"
+        );
         assert!(host.ground_sessions.is_empty(), "源区 ground 必须当场摘空");
         assert!(host.online.find_by_chr(chr).is_none());
         assert!(host.saves.is_empty() && host.login_tails.is_empty());
@@ -135905,6 +135953,219 @@ mod l2_handoff_tests {
             }
         }
         assert_eq!(cancels, 1, "接线路径恰好一条 SM_DEALCANCEL");
+    }
+
+    /// **A38**：捕获点必须在 `release_entity` **之前**——实体释放后 `GroupState` 组件随之消失。
+    ///
+    /// 红检：把 `handoff.rs` 的捕获行挪到 `release_entity` 之后 ⇒ 拿到 `default()`（空组）⇒ 红。
+    #[test]
+    fn handoff_tick_top_captures_group_state_before_release() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let layout = Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut rt =
+            crate::handoff::HandoffRuntime::new(zone(0), Arc::clone(&layout), boxes.clone());
+        let mut spawn = mir2_world_bevy::EntitySpawn::new(0, "P", 12, 5);
+        spawn.race = 0;
+        let id = world.add_entity(spawn);
+        {
+            let e = world.entities.get_mut(id).expect("刚插入");
+            e.flags.handoff_pending = true;
+            e.group.allow_group = true;
+            e.group.group_owner = id;
+            e.group.group_members = vec![id, id + 1];
+        }
+        rt.after_phase2(&mut world, 0);
+        {
+            let mut m = boxes[0].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(0),
+                from: zone(1),
+                id,
+                ok: true,
+            });
+        }
+        let committed = rt.tick_top(&mut world, 1);
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].id, id);
+        assert!(
+            committed[0].group.allow_group,
+            "allow_group 必须随实体捕获（放到 release 之后 ⇒ default ⇒ 红）"
+        );
+        assert_eq!(committed[0].group.group_owner, id);
+        assert_eq!(committed[0].group.group_members, vec![id, id + 1]);
+        assert!(world.entities.get(id).is_none(), "捕获之后实体才被释放");
+    }
+
+    /// A38 公共夹具：源区种好带组关系的实体并走到「已提交 + 已 detach」，
+    /// 返回 `(源区, 搬迁包, 期望的 GroupState)`。
+    fn committed_group_migration(
+        chr: &str,
+        group_owner: i32,
+        members: Vec<i32>,
+    ) -> (
+        ZoneState,
+        PendingSessionMigration,
+        mir2_world_bevy::GroupState,
+    ) {
+        let layout = std::sync::Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut src = two_zone_state(1, &counter);
+        let id = seed_full_session(&mut src, chr, 901);
+        {
+            let e = src.host.world.entities.get_mut(id).expect("实体在");
+            e.flags.handoff_pending = true;
+            e.group.allow_group = true;
+            e.group.group_owner = group_owner;
+            e.group.group_members = members;
+        }
+        let mut rt = crate::handoff::HandoffRuntime::new(
+            zone(1),
+            std::sync::Arc::clone(&layout),
+            boxes.clone(),
+        );
+        rt.after_phase2(&mut src.host.world, 0);
+        {
+            let mut m = boxes[1].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(1),
+                from: zone(0),
+                id,
+                ok: true,
+            });
+        }
+        let committed = rt.tick_top(&mut src.host.world, 1);
+        assert_eq!(committed.len(), 1, "前置：恰一条已提交");
+        let expected = committed[0].group.clone();
+        let tail = committed.into_iter().next().expect("一条");
+        let m = detach_session_for_migration(
+            &mut src.host.world,
+            &mut src.host.displays,
+            &mut src.host.online,
+            &mut src.host.ground_sessions,
+            &mut src.host.saves,
+            &mut src.host.login_tails,
+            &mut src.host.aoi_frames_total,
+            &mut src.host.shop_sessions,
+            &mut src.host.pending_local,
+            zone(1),
+            zone(0),
+            id,
+            tail.group,
+        )
+        .expect("detach");
+        (src, m, expected)
+    }
+
+    /// **A38 · 牙①（团长跨区）**：目标区实体带同一份组关系（owner + 成员列表）；
+    /// 源区实体已释放 ⇒ 源区不再有该组项。
+    ///
+    /// 变异：① attach 不写 `GroupState` ⇒ 目标区空组 ⇒ 红；② 只写 owner 不写 members ⇒ 红。
+    #[test]
+    fn party_group_survives_leader_crossing() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (src, m, expected) = committed_group_migration("leader", 9001, vec![9001, 9002]);
+        let id = m.id;
+        assert_eq!(m.group, expected, "搬迁包必须携带捕获到的组关系");
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, "leader");
+        dst.host
+            .attach_session(m)
+            .unwrap_or_else(|_| panic!("attach 必须成功"));
+        assert_eq!(
+            dst.host.world.entities.group(id),
+            Some(&expected),
+            "目标区实体必须带同一份组关系（不搬 ⇒ 空组 ⇒ 红）"
+        );
+        assert_eq!(
+            expected.group_members.len(),
+            2,
+            "成员表完整随迁（只搬 owner ⇒ 红）"
+        );
+        assert!(
+            src.host.world.entities.get(id).is_none(),
+            "源区实体已释放 ⇒ 无该组项"
+        );
+        assert!(
+            src.host.ground_sessions.is_empty(),
+            "会话已摘（A35-b 语义不变）"
+        );
+    }
+
+    /// **A38 · 牙①（成员跨区）**：成员侧的 `group_owner` 必须随迁（成员自己的
+    /// `group_members` 本来为空）。
+    ///
+    /// 变异：只搬 `group_members` 不搬 `group_owner` ⇒ 目标区 owner=0 ⇒ 红。
+    #[test]
+    fn party_group_survives_member_crossing() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (src, m, expected) = committed_group_migration("member", 9001, Vec::new());
+        let id = m.id;
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, "member");
+        dst.host
+            .attach_session(m)
+            .unwrap_or_else(|_| panic!("attach 必须成功"));
+        assert_eq!(
+            dst.host.world.entities.group(id),
+            Some(&expected),
+            "成员的 owner=9001 必须随迁（不搬 owner ⇒ 0 ⇒ 红）"
+        );
+        assert_eq!(expected.group_owner, 9001);
+        assert!(src.host.world.entities.get(id).is_none());
+    }
+
+    /// **A38 · 牙②**：attach 被拒（同 chr 冲突）⇒ 会话整包回源，但组关系**仍**落在目标区
+    /// 实体上、**恰一份**（实体在目标区，回退 = 抹掉 = 丢数据）。
+    ///
+    /// 变异：冲突分支先抹/不写 `GroupState` ⇒ 目标区实体空组 ⇒ 红。
+    #[test]
+    fn refused_attach_keeps_group_exactly_once() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let (mut src, m, expected) = committed_group_migration("leader", 9001, vec![9001, 9002]);
+        let id = m.id;
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        // 目标区自己的同名会话（冲突源）+ 实体已晋升。
+        let _ = seed_full_session(&mut dst, "leader", 902);
+        seed_target_world(&mut dst, id, "leader");
+        let dst_arc = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let lookup = std::sync::Arc::clone(&dst_arc);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(mirror_world_refused(), 1);
+        assert!(
+            src.host.ground_sessions.contains_key("leader"),
+            "会话七表必须整包回源"
+        );
+        assert_eq!(router.len(), 0, "失败路径不得 assign");
+        let dst = dst_arc.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            dst.host.world.entities.group(id),
+            Some(&expected),
+            "组关系必须留在目标区实体（恰一份；冲突分支抹掉 ⇒ 红）"
+        );
     }
 
     /// **A35-b · 静态牙（接线提示，非行为证据）**：两个驱动点必须夹在「A 段之后、barrier1
