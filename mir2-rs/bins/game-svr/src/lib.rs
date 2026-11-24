@@ -31898,7 +31898,9 @@ fn drain_player_game_gold(
     now: i64,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #12**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。序 = 653 帧的跨会话发出序（每会话直发自己的网关线）。
+    names.sort_unstable();
     for name in names {
         let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
@@ -107015,6 +107017,75 @@ mod tests {",
             enter_map: home_map.to_string(),
             derived: None,
         }
+    }
+
+    /// **B4 #12（`drain_player_game_gold` @31888）行为牙**：P22 的 653 帧**跨会话发出序**必须
+    /// 严格等于名字升序（帧在循环内直发各自网关线）。
+    ///
+    /// 构造：8 会话 `game_gold=100 / state.gold=50`，玩家级 INC 到期（+5）⇒ 每会话一条 653
+    /// （`Recog=50, Param=105`），名字按「升序 ≠ 插入序」插入；断言 `(socket, ident, param)` 序。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@31903）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p22_gold_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.game_gold = 100;
+            sg.state.gold = 50;
+            sg.p22.bo_inc_game_gold = true;
+            sg.p22.inc_game_gold = 5;
+            sg.p22.inc_game_gold_time = 1_000;
+            sg.p22.inc_game_gold_tick = 0;
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let saves: HashMap<String, SavedHuman> = HashMap::new();
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1_001,
+        );
+        let mut got: Vec<(i32, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident, cm.param));
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, u16, u16)> = named_sockets
+            .iter()
+            .map(|(_, sock)| (*sock, mir2_protocol::messages::SM_GOLDCHANGED, 105))
+            .collect();
+        assert_eq!(
+            got, want,
+            "P22 653 帧序必须 = 名字升序（每会话一条，Param=105）"
+        );
+        assert_eq!(sessions["kilo"].game_gold, 105, "INC 生效（100+5）");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// 判据 6（R）：`GameGold` 变化 ⇒ 恰一条 `SM_GOLDCHANGED(653)`，
