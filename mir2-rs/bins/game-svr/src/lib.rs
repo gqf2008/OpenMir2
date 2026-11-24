@@ -24877,7 +24877,10 @@ fn drain_periodic_save(
         return 0;
     }
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #5**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数虽只每 10 分钟真正存档一次，
+    // 但**每个 tick 都会被调用**并做一次键收集+排序（`periodic_save_due` 在循环内）⇒ 省掉每 tick
+    // 一次排序临时缓冲分配（N > 20 时）。N 次克隆保留（循环体要 `get_mut`）。
+    names.sort_unstable();
     let mut fired = 0usize;
     for name in names {
         // **F2**：oracle `WorldServer.cs:698-703` 的逐角色周期存档**不查** `InSaveRcdList`
@@ -68675,6 +68678,72 @@ SendRefMsgRange=15
             &catalog,
         );
         assert!(!trade["sc_deal"].dealing, "正常会话照常自动取消");
+    }
+
+    /// **B4 #5（`drain_periodic_save` @24861）行为牙**：周期存档请求的**跨会话发出序**必须严格
+    /// 等于名字升序（现状可观测序 = 契约；函数每个 tick 都被调用，循环内的 `periodic_save_due`
+    /// 才决定谁真正发起）。
+    ///
+    /// 构造：8 个会话全部到期（`save_rcd_tick=1000`、`save_time=5000`、`now=6001`），名字按
+    /// 「升序 ≠ 插入序」插入；断言 DB 请求帧到达序（`chr_name`）逐项 = 名字升序。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@24883）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn periodic_save_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            world.open_session(name);
+            let actor_id = world
+                .enter_map(
+                    name,
+                    mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 4, 10),
+                    0,
+                )
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.save_rcd_tick = 1_000;
+            sessions.insert(name.to_string(), sg);
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: format!("acct-{name}"),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+        }
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let fired = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            5_000,
+            6_001,
+        );
+        assert_eq!(fired, names.len(), "8 个到期会话各发起一次周期存档");
+        let mut got: Vec<String> = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            got.push(save_record_of(&frame).0);
+        }
+        let mut want: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "周期存档请求序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
     }
 
     /// **M-2 C3（矩阵 A5，取代早先的反向牙）**：`drain_periodic_save` 必须按
