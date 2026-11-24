@@ -10,8 +10,9 @@
 //!    扫描序的期望值逐项一致；
 //! 3. `output_does_not_depend_on_query_order`：把实体按**反序** spawn、只把 [`OrderIndex`]
 //!    按 id 升序给系统，输出必须不变 —— 这条直接证明"顺序来自我们自己的索引，不来自 Query 迭代序"；
-//! 4. `no_parallel_guard`：直接依赖白名单 + 源码扫描（禁 `MultiThreadedExecutor`/`bevy_tasks`/
-//!    rayon/crossbeam 的并行 API）。
+//! 4. `no_parallel_guard`：直接依赖白名单 + 源码扫描（源码扫描**允许** `MultiThreadedExecutor`
+//!    与 bevy 自带 task pool 的使用；直接依赖仍不许 `bevy_tasks`，且禁 rayon/crossbeam/裸
+//!    `thread::spawn`）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
