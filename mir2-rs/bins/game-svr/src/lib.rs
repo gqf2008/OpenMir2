@@ -26761,7 +26761,7 @@ fn drain_b4_self_deliveries(
 /// （只有表头）⇒ rc≠0 —— 不允许"探针以为在跑、其实没数据"。
 mod perf_counters {
     use std::io::Write as _;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -26825,6 +26825,13 @@ mod perf_counters {
     /// `SINGLE_EVENT_MAX_US`（墙钟）并列：wall − cpu 的差 = 日志写盘/被 OS 抢占的近似量。
     /// 平台不支持（非 Windows）⇒ 恒 0。
     pub(crate) static SINGLE_EVENT_MAX_CPU_US: AtomicU64 = AtomicU64::new(0);
+    /// **A43**：非 `Command` 事件在 `max_single_event_ident` 列里的哨兵（十进制 `65535`）。
+    pub(crate) const NON_COMMAND_EVENT_IDENT: u16 = u16::MAX;
+    /// **A43**：与本 tick `SINGLE_EVENT_MAX_US`（墙钟最大值）**同一事件**的 `Command.ident`；
+    /// `Command` 以外记哨兵 [`NON_COMMAND_EVENT_IDENT`]，`0` = 本 tick 没有事件刷新过。
+    /// 只在本次事件**刷新**墙钟最大值时写入 ⇒ 与 `max_single_event_us` 同口径；**不保证**
+    /// 与 `max_single_event_cpu_us` 是同一事件（两列各自取 max）。
+    pub(crate) static SINGLE_EVENT_MAX_IDENT: AtomicU16 = AtomicU16::new(0);
 
     /// 单条事件处理计时守卫：只在 ENABLED 时取时钟；`Drop` 时记入本 tick 的 max。
     /// 放在 `while let Some(ev) = drain.next(..) { ... }` 的 body 首行 ⇒ 任何 `continue`
@@ -26834,11 +26841,22 @@ mod perf_counters {
         wall: Option<std::time::Instant>,
         /// 线程 CPU 起点（`ENABLED` 关或平台不支持 ⇒ `None`）。
         cpu: Option<u64>,
+        /// 本事件在 `max_single_event_ident` 列里的取值（见 [`event_ident`]）。
+        ident: u16,
+    }
+
+    /// **A43**：`max_single_event_ident` 列的取值——`Command` 取 `cmd.ident`，其余取哨兵。
+    #[inline]
+    pub(crate) fn event_ident(ev: &super::GateEvent) -> u16 {
+        match ev {
+            super::GateEvent::Command { cmd, .. } => cmd.ident,
+            _ => NON_COMMAND_EVENT_IDENT,
+        }
     }
 
     impl EventTimer {
         #[inline]
-        pub(crate) fn start() -> Self {
+        pub(crate) fn start(ev: &super::GateEvent) -> Self {
             let on = ENABLED.load(Ordering::Relaxed);
             Self {
                 wall: on.then(std::time::Instant::now),
@@ -26848,6 +26866,7 @@ mod perf_counters {
                 } else {
                     None
                 },
+                ident: event_ident(ev),
             }
         }
     }
@@ -26856,7 +26875,12 @@ mod perf_counters {
         fn drop(&mut self) {
             if let Some(t0) = self.wall {
                 let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
-                SINGLE_EVENT_MAX_US.fetch_max(us, Ordering::Relaxed);
+                let prev = SINGLE_EVENT_MAX_US.fetch_max(us, Ordering::Relaxed);
+                // **A43**：只有**刷新**了墙钟最大值的事件才写 ident（与 `max_single_event_us`
+                // 同一口径；不刷新就不覆盖，否则会记成"最后一个事件"而不是最慢的那个）。
+                if us > prev {
+                    SINGLE_EVENT_MAX_IDENT.store(self.ident, Ordering::Relaxed);
+                }
             }
             if let Some(c0) = self.cpu {
                 if let Some(c1) = crate::thread_cpu::now_us() {
@@ -27542,7 +27566,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27631,6 +27655,7 @@ mod perf_counters {
             DRAINED_CONTROL.swap(0, Ordering::Relaxed),
             SINGLE_EVENT_MAX_US.swap(0, Ordering::Relaxed),
             SINGLE_EVENT_MAX_CPU_US.swap(0, Ordering::Relaxed),
+            u64::from(SINGLE_EVENT_MAX_IDENT.swap(0, Ordering::Relaxed)),
             ZONE_ROUTER_OVERWRITES.swap(0, Ordering::Relaxed),
             ZONE_ROUTER_REJECTED_SOCKET.swap(0, Ordering::Relaxed),
             REGION_BARRIER_US.swap(0, Ordering::Relaxed),
@@ -28385,6 +28410,7 @@ mod perf_counters {
         ] {
             c.store(0, Ordering::Relaxed);
         }
+        SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
         DATA_LINES.store(0, Ordering::Relaxed);
         *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *PATH.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -39480,7 +39506,7 @@ impl HostLoop {
                     drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
                 {
                     // 单条**处理**耗时（只在探针开启时取钟；`continue` 也会在 drop 时结算）。
-                    let _event_timer = perf_counters::EventTimer::start();
+                    let _event_timer = perf_counters::EventTimer::start(&ev);
                     match ev {
                         GateEvent::Opened { index, ip, .. } => {
                             if world_start.is_aborted() {
@@ -145270,6 +145296,123 @@ mod a43_inbound_obs_tests {
             "区 0 + probe 开时必须计时"
         );
         perf_counters::ENABLED.store(false, Ordering::Relaxed);
+    }
+
+    /// 一条 `Command`（`ident` 是唯一标记；其余字段与 `zonek_test_cmd` 同形）。
+    fn cmd_ev(ident: u16) -> GateEvent {
+        GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "p".into(),
+            socket: 900,
+            cmd: CommandMessage {
+                recog: 0,
+                ident,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: None,
+        }
+    }
+
+    fn busy_ms(ms: u64) {
+        let t = std::time::Instant::now();
+        let mut acc = 0u64;
+        while t.elapsed() < std::time::Duration::from_millis(ms) {
+            acc = acc.wrapping_add(1);
+        }
+        std::hint::black_box(acc);
+    }
+
+    /// **A43 牙（ident 列）**：`max_single_event_ident` 必须记**刷新墙钟最大值**的那条事件。
+    /// ① A（ident=101，慢 5ms）⇒ 列 = 101；② B（ident=202，立即结束、不刷新）⇒ 列仍 = 101；
+    /// ③ B 再慢 8ms（刷新）⇒ 列 = 202；④ 非 `Command`（`Opened`）慢事件 ⇒ 哨兵 65535。
+    /// 变异：把 `SINGLE_EVENT_MAX_IDENT.store` 挪到"未刷新"分支 ⇒ ② 之后列变 202 ⇒ 红。
+    #[test]
+    fn max_single_event_ident_follows_the_slowest_event() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_US.store(0, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_CPU_US.store(0, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
+
+        // ① A 慢 20ms ⇒ 刷新 ⇒ 101（20ms 的边距远大于调度抖动，避免 C 档机器上的假红）。
+        {
+            let _t = perf_counters::EventTimer::start(&cmd_ev(101));
+            busy_ms(20);
+        }
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_IDENT.load(Ordering::Relaxed),
+            101,
+            "慢事件（ident=101）刷新 max ⇒ ident 列必须是 101"
+        );
+
+        // ② B 立即结束（不刷新）⇒ 仍是 101（"最后一个事件"不是答案）。
+        {
+            let _t = perf_counters::EventTimer::start(&cmd_ev(202));
+        }
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_IDENT.load(Ordering::Relaxed),
+            101,
+            "快事件不得覆盖慢事件的 ident（只有刷新 max 才写）"
+        );
+
+        // ③ B 再慢 30ms ⇒ 刷新 ⇒ 202。
+        {
+            let _t = perf_counters::EventTimer::start(&cmd_ev(202));
+            busy_ms(30);
+        }
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_IDENT.load(Ordering::Relaxed),
+            202,
+            "更慢的事件（ident=202）刷新 max ⇒ ident 列改 202"
+        );
+
+        // ④ 非 Command 的慢事件（40ms > 30ms）⇒ 哨兵 65535（不是 0、不是上一条的 202）。
+        {
+            let _t = perf_counters::EventTimer::start(&opened(7));
+            busy_ms(40);
+        }
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_IDENT.load(Ordering::Relaxed),
+            perf_counters::NON_COMMAND_EVENT_IDENT,
+            "非 Command 事件必须记哨兵 65535（max={}）",
+            perf_counters::SINGLE_EVENT_MAX_US.load(Ordering::Relaxed)
+        );
+        assert_eq!(perf_counters::NON_COMMAND_EVENT_IDENT, 65535, "哨兵值固定");
+
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_US.store(0, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_CPU_US.store(0, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
+    }
+
+    /// **A43 牙（零成本，探针关）**：`ENABLED=false` 时不取钟、不写 ident 列。
+    #[test]
+    fn max_single_event_ident_is_silent_when_probe_disabled() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_US.store(0, Ordering::Relaxed);
+        perf_counters::SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
+        {
+            let _t = perf_counters::EventTimer::start(&cmd_ev(101));
+            busy_ms(2);
+        }
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_US.load(Ordering::Relaxed),
+            0,
+            "探针关 ⇒ 不取墙钟"
+        );
+        assert_eq!(
+            perf_counters::SINGLE_EVENT_MAX_IDENT.load(Ordering::Relaxed),
+            0,
+            "探针关 ⇒ 不写 ident 列"
+        );
     }
     /// **A43 牙（卡 2）**：线程 CPU 读数与墙钟的关系——忙等 5ms 的 CPU >0 且 ≤ 墙钟；
     /// 睡眠 20ms 的 CPU 接近 0。非 Windows 平台 API 返回 `None`，本牙断言并按平台跳过。
