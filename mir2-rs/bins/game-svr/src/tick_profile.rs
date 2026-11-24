@@ -211,8 +211,8 @@ pub struct HostTickProfile {
     /// `[snapshot(spans), mirror_ids, handoff]`。只在 `enabled` 时累加。
     win_scans: [u64; 3],
     /// **A43**：本窗口末端采样的规模量
-    /// `[entities_total, halo_entities, mirror_count, handoff_pending_count]`。
-    win_sizes: [u64; 4],
+    /// `[entities_total, halo_entities, mirror_count, handoff_pending_count, snapshot_entity_visits]`。
+    win_sizes: [u64; 5],
 }
 
 /// 单个慢 tick 的段快照（由 [`HostTickProfile::end_tick`] 在工作段 ≥ 阈值时生成，
@@ -313,8 +313,9 @@ pub struct HostWindow {
     pub work_samples: Vec<u64>,
     /// **A43**：本窗口三个全实体扫描的调用次数 `[snapshot(spans), mirror_ids, handoff]`。
     pub scans: [u64; 3],
-    /// **A43**：本窗口末次规模采样 `[entities_total, halo_entities, mirror_count, handoff_pending_count]`。
-    pub sizes: [u64; 4],
+    /// **A43**：本窗口末次规模采样
+    /// `[entities_total, halo_entities, mirror_count, handoff_pending_count, snapshot_entity_visits]`。
+    pub sizes: [u64; 5],
 }
 
 /// World 探针的**增量**快照（累计值之差）。字段与 `TickProfile` 同序同名。
@@ -702,20 +703,27 @@ impl HostTickProfile {
             sizes: self.win_sizes,
         };
         self.win_scans = [0; 3];
-        self.win_sizes = [0; 4];
+        self.win_sizes = [0; 5];
         self.window_ticks = 0;
         self.window_ns = 0;
         Some(window)
     }
 
-    /// **A43**：记一次边界快照扫描（`snapshot_border` 每 span 一次）。
-    pub fn note_snapshot_scan(&mut self, scans: u64, entities_total: u64, halo_entities: u64) {
+    /// **A43**：记一次边界快照发布（`scans` = span 数；`visits` = 分桶后的实体访问次数）。
+    pub fn note_snapshot_scan(
+        &mut self,
+        scans: u64,
+        entities_total: u64,
+        halo_entities: u64,
+        visits: u64,
+    ) {
         if !self.enabled {
             return;
         }
         self.win_scans[0] = self.win_scans[0].saturating_add(scans);
         self.win_sizes[0] = entities_total;
         self.win_sizes[1] = halo_entities;
+        self.win_sizes[4] = visits;
     }
 
     /// **A43**：记一次 `mirror_ids()` 全表扫（`apply_mirrors` 陈旧镜像清扫）与该区真实镜像数。
@@ -888,14 +896,15 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
     );
     crate::glog!(
         "INF",
-        "[TICKPROF]   扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={}",
+        "[TICKPROF]   扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={} snapshot_entity_visits={}",
         host.scans[0],
         host.scans[1],
         host.scans[2],
         host.sizes[0],
         host.sizes[1],
         host.sizes[2],
-        host.sizes[3]
+        host.sizes[3],
+        host.sizes[4]
     );
     let mut rows = host.rows.clone();
     rows.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
@@ -1059,14 +1068,15 @@ pub fn log_window_zone(zone: u32, host: &HostWindow, world: Option<&WorldDelta>,
     );
     crate::glog!(
         "INF",
-        "[TICKPROF]zone={zone}    扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={}",
+        "[TICKPROF]zone={zone}    扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={} snapshot_entity_visits={}",
         host.scans[0],
         host.scans[1],
         host.scans[2],
         host.sizes[0],
         host.sizes[1],
         host.sizes[2],
-        host.sizes[3]
+        host.sizes[3],
+        host.sizes[4]
     );
     let mut rows = host.rows.clone();
     rows.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
@@ -1124,7 +1134,7 @@ mod tests {
         for name in names {
             p.probe(name, Some(Instant::now()));
         }
-        p.note_snapshot_scan(1, 6635, 17);
+        p.note_snapshot_scan(1, 6635, 17, 1234);
         p.note_mirror_ids_scan(6635, 0);
         p.note_handoff_scan(1, 6635, 0);
         p.end_tick(Some(Instant::now()));
@@ -1139,8 +1149,8 @@ mod tests {
         assert_eq!(w.scans, [1, 1, 1], "三个扫描各 1 次");
         assert_eq!(
             w.sizes,
-            [6635, 17, 0, 0],
-            "规模量 = entities_total/halo/mirror/handoff_pending"
+            [6635, 17, 0, 0, 1234],
+            "规模量 = entities_total/halo/mirror/handoff_pending/visits"
         );
     }
 
@@ -1160,7 +1170,7 @@ mod tests {
         ] {
             p.probe(name, None);
         }
-        p.note_snapshot_scan(1, 100, 5);
+        p.note_snapshot_scan(1, 100, 5, 77);
         p.note_mirror_ids_scan(100, 3);
         p.note_handoff_scan(1, 100, 2);
         p.end_tick(None);

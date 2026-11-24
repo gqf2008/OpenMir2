@@ -2812,7 +2812,7 @@ mod zone_wiring {
         for index in 0..layout.zone_count() {
             let zone_id = zone::ZoneId::new(u32::try_from(index).expect("区数 <= u32::MAX"));
             // tick 号只写进快照（本门不发布、不比较）⇒ 取 0。
-            let border = region_loop::snapshot_zone_border(
+            let (border, _visits) = region_loop::snapshot_zone_border(
                 world,
                 zone_id,
                 layout.zone_spans(),
@@ -38294,18 +38294,18 @@ impl BarrierOps {
     }
 
     /// A 段末（锁内）：快照 + 发布。失败 ⇒ abort 整机（前缀按区：区 0 / 切片区 k）。
-    /// **A43**：返回 `(扫描次数, 边界带实体数)`——真实计数，供 `HostTickProfile` 窗口行统计。
+    /// **A43**：返回 `(扫描次数, 边界带实体数, 实体访问次数)`——真实计数，供窗口行统计。
     fn publish_snapshot(
         &mut self,
         world: &mir2_world_bevy::World,
         tick: u64,
         source: &region_loop::HaloFrameSource<'_>,
-    ) -> (u64, u64) {
+    ) -> (u64, u64, u64) {
         #[cfg(test)]
         self.note_call(0);
         let runtime = self.runtime();
         match runtime.snapshot_publish(world, tick, source) {
-            Ok((_border, scans, halo)) => (scans, halo),
+            Ok((_border, scans, halo, visits)) => (scans, halo, visits),
             Err(e) => {
                 let prefix = self.err_prefix();
                 glog!(
@@ -42044,7 +42044,7 @@ impl HostLoop {
                 // **L2-5 ②**：快照的帧面来源 = 本区展示表 + 在线路由表（只在多区路径构造）。
                 let frame_source = region_loop::HaloFrameSource::new(&*displays, &*online);
                 let pr_snap = host_prof.begin();
-                let (snap_scans, halo_entities) = barriers
+                let (snap_scans, halo_entities, snap_visits) = barriers
                     .as_mut()
                     .expect("barriers.is_some() 已判")
                     .publish_snapshot(&*world, tick_no, &frame_source);
@@ -42054,6 +42054,7 @@ impl HostLoop {
                         snap_scans,
                         u64::try_from(world.entities.len()).unwrap_or(u64::MAX),
                         halo_entities,
+                        snap_visits,
                     );
                 }
                 // 段起点留给 B 收尾（计时关闭时 `t == None`；切片判定只看 `barriers`）。

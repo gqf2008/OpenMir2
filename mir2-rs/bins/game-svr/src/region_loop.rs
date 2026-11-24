@@ -221,6 +221,64 @@ pub struct HaloSnapshot {
 /// **`!mirror`**（镜像不得被当成 owner 实体再次发布——否则会形成镜像的镜像）。
 /// 入队序 = `iter_ref` 槽位序（确定性）。**必须在 phase1 之后调用**（此时实体状态是本 tick 终态）。
 #[must_use]
+/// **A43**：单实体是否落本 span 的「边界带 ∪ outgoing 带」——**两条快照路径共用的唯一判据**。
+///
+/// outgoing：实体 `handoff_pending`（已挪进邻区 rect、仍归本区）且距本区 rect **≤ HALO**
+/// （`within_distance` 把 rect 内部也算进来，两者并集不会漏）。
+fn halo_band_contains(rect: ZoneRect, e: &mir2_world_bevy::EntityRef<'_>, halo_width: i32) -> bool {
+    rect.border_contains(e.x, e.y, halo_width)
+        || (e.handoff_pending && rect.within_distance(e.x, e.y, halo_width))
+}
+
+/// **A43**：单实体 → `HaloEntity`（字段口径的唯一来源；`cell_pos` 用**实体自己的图**查格）。
+fn halo_entity_from(
+    world: &World,
+    e: &mir2_world_bevy::EntityRef<'_>,
+    source: &HaloFrameSource<'_>,
+) -> HaloEntity {
+    // **合法中间态**：`add_to_mapped` 在生成/登录时置真，进格要等 `Command::Enter` 被
+    // 消费（`session.rs`/`monai.rs` 的落图前状态）⇒ 本 tick 的 AOI 也看不见它。
+    // 查不到 ⇒ 计数（`mirror_cell_pos_unknown`）+ `usize::MAX` 兜底；②夹具断言计数恒 0。
+    let cell_pos = world
+        .map(e.map_id)
+        .get_cell_info(e.x, e.y)
+        .0
+        .obj_list
+        .iter()
+        .position(|o| o.actor_object && o.cell_obj_id == e.id);
+    if cell_pos.is_none() {
+        mir2_world_bevy::mirror_metrics::note_mirror_cell_pos_unknown();
+    }
+    HaloEntity {
+        actor_id: e.id,
+        map_id: e.map_id,
+        x: e.x,
+        y: e.y,
+        view_range: e.view_range,
+        name: e.name.clone(),
+        race: e.race,
+        race_img: e.race_img,
+        appr: e.appr,
+        light: e.light,
+        name_color: e.name_color,
+        cell_type: halo_cell_type(e),
+        dir: e.ai.dir,
+        death: e.death,
+        invisible: e.invisible,
+        ghost: e.ghost,
+        fixed_hide_mode: e.fixed_hide_mode,
+        ob_mode: e.ob_mode,
+        master: e.master,
+        cell_pos: cell_pos.unwrap_or(usize::MAX),
+        display: source
+            .displays
+            .and_then(|d| d.get(e.id))
+            .map(HaloDisplay::from_display),
+        route: halo_route(source, e),
+        outgoing: e.handoff_pending,
+    }
+}
+
 pub fn snapshot_border(
     world: &World,
     map_id: usize,
@@ -233,56 +291,12 @@ pub fn snapshot_border(
         .entities
         .iter_ref()
         .filter(|e| {
-            // **L2-5 ③ 段 2**：过滤 = rect 边界带 ∪ outgoing 带。
-            // outgoing：实体 `handoff_pending`（已挪进邻区 rect、仍归本区）且距本区 rect
-            // **≤ HALO**（`within_distance` 把 rect 内部也算进来，两者并集不会漏）。
-            let in_band = rect.border_contains(e.x, e.y, halo_width)
-                || (e.handoff_pending && rect.within_distance(e.x, e.y, halo_width));
-            e.add_to_mapped && !e.mirror && e.map_id == map_id && in_band
+            e.add_to_mapped
+                && !e.mirror
+                && e.map_id == map_id
+                && halo_band_contains(rect, e, halo_width)
         })
-        .map(|e| {
-            // **合法中间态**：`add_to_mapped` 在生成/登录时置真，进格要等 `Command::Enter` 被
-            // 消费（`session.rs`/`monai.rs` 的落图前状态）⇒ 本 tick 的 AOI 也看不见它。
-            // 查不到 ⇒ 计数（`mirror_cell_pos_unknown`）+ `usize::MAX` 兜底；②夹具断言计数恒 0。
-            let cell_pos = world
-                .map(map_id)
-                .get_cell_info(e.x, e.y)
-                .0
-                .obj_list
-                .iter()
-                .position(|o| o.actor_object && o.cell_obj_id == e.id);
-            if cell_pos.is_none() {
-                mir2_world_bevy::mirror_metrics::note_mirror_cell_pos_unknown();
-            }
-            HaloEntity {
-                actor_id: e.id,
-                map_id: e.map_id,
-                x: e.x,
-                y: e.y,
-                view_range: e.view_range,
-                name: e.name.clone(),
-                race: e.race,
-                race_img: e.race_img,
-                appr: e.appr,
-                light: e.light,
-                name_color: e.name_color,
-                cell_type: halo_cell_type(&e),
-                dir: e.ai.dir,
-                death: e.death,
-                invisible: e.invisible,
-                ghost: e.ghost,
-                fixed_hide_mode: e.fixed_hide_mode,
-                ob_mode: e.ob_mode,
-                master: e.master,
-                cell_pos: cell_pos.unwrap_or(usize::MAX),
-                display: source
-                    .displays
-                    .and_then(|d| d.get(e.id))
-                    .map(HaloDisplay::from_display),
-                route: halo_route(source, &e),
-                outgoing: e.handoff_pending,
-            }
-        })
+        .map(|e| halo_entity_from(world, &e, source))
         .collect();
     HaloSnapshot { tick, entities }
 }
@@ -619,7 +633,7 @@ impl<'a> ZoneRuntime<'a> {
         tick: u64,
         source: &HaloFrameSource<'_>,
     ) -> Result<(HaloSnapshot, Vec<HaloSnapshot>, u64), ZoneTickError> {
-        let (border, _scans, _halo) = self.snapshot_publish(world, tick, source)?;
+        let (border, _scans, _halo, _visits) = self.snapshot_publish(world, tick, source)?;
         let (neighbors, wait_phase1_us) = self.await_neighbors(tick)?;
         Ok((border, neighbors, wait_phase1_us))
     }
@@ -637,15 +651,16 @@ impl<'a> ZoneRuntime<'a> {
         world: &World,
         tick: u64,
         source: &HaloFrameSource<'_>,
-    ) -> Result<(HaloSnapshot, u64, u64), ZoneTickError> {
-        // **A43**：返回 `(快照, 扫描次数, 边界带实体数)`——扫描次数 = 本区 span 数
-        // （`snapshot_zone_border` 对每个 span 调一次 `snapshot_border` 全表扫）。
+    ) -> Result<(HaloSnapshot, u64, u64, u64), ZoneTickError> {
+        // **A43**：返回 `(快照, span 数, 边界带实体数, 实体访问次数)`——后三项是真实计数；
+        // `scans` 语义保持不变（= 本区 span 数），`visits` 是分桶后的实体访问量（见
+        // [`snapshot_zone_border`]）。
         let scans = self
             .spans
             .iter()
             .filter(|span| span.zone == self.zone)
             .count();
-        let border =
+        let (border, visits) =
             snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick, source)?;
         let halo_entities = border.entities.len();
         self.exchange.publish(self.zone, border.clone());
@@ -653,6 +668,7 @@ impl<'a> ZoneRuntime<'a> {
             border,
             u64::try_from(scans).unwrap_or(u64::MAX),
             u64::try_from(halo_entities).unwrap_or(u64::MAX),
+            visits,
         ))
     }
 
@@ -695,6 +711,18 @@ impl<'a> ZoneRuntime<'a> {
 ///
 /// # Errors
 /// 该区在 `spans` 里一个 span 都没有 ⇒ [`ZoneTickError::NoSpans`]。
+/// **A43**：按 `map_id` 单遍分桶后的边界快照——**语义与逐 span 全表扫逐项等价**。
+///
+/// 旧实现每个 span 都对 `world.entities.iter_ref()` 做一次全表扫（N 个 span ⇒ N × 实体数）；
+/// 本实现只扫一遍把已落格、非镜像实体按 `map_id` 入桶（保持**槽位序**），每 span 只遍历
+/// 自己那张图的桶并施加**同一套**过滤（[`halo_band_contains`]）与构造（[`halo_entity_from`]）。
+/// span 拼接顺序不变、桶内顺序 = 槽位序 ⇒ `HaloSnapshot.entities` 与旧实现逐项相同。
+///
+/// 返回 `(快照, 实体访问次数)`：`visits` = 各 span 对本图桶的逐实体过滤次数
+/// （旧实现 = span 数 × 实体总数；新实现 = Σ 本图实体数）——只用于仪表与访问量牙。
+///
+/// # Errors
+/// 该区在 `spans` 里一个 span 都没有 ⇒ [`ZoneTickError::NoSpans`]。
 pub fn snapshot_zone_border(
     world: &World,
     zone: ZoneId,
@@ -702,19 +730,32 @@ pub fn snapshot_zone_border(
     halo_width: i32,
     tick: u64,
     source: &HaloFrameSource<'_>,
-) -> Result<HaloSnapshot, ZoneTickError> {
+) -> Result<(HaloSnapshot, u64), ZoneTickError> {
+    let mut buckets: HashMap<usize, Vec<mir2_world_bevy::EntityRef<'_>>> = HashMap::new();
+    for e in world.entities.iter_ref() {
+        if e.add_to_mapped && !e.mirror {
+            buckets.entry(e.map_id).or_default().push(e);
+        }
+    }
     let mut entities = Vec::new();
     let mut span_count = 0usize;
+    let mut visits = 0u64;
     for span in spans.iter().filter(|s| s.zone == zone) {
         span_count += 1;
-        entities.extend(
-            snapshot_border(world, span.map_id, span.rect, halo_width, tick, source).entities,
-        );
+        let Some(bucket) = buckets.get(&span.map_id) else {
+            continue;
+        };
+        for e in bucket {
+            visits = visits.saturating_add(1);
+            if halo_band_contains(span.rect, e, halo_width) {
+                entities.push(halo_entity_from(world, e, source));
+            }
+        }
     }
     if span_count == 0 {
         return Err(ZoneTickError::NoSpans(zone));
     }
-    Ok(HaloSnapshot { tick, entities })
+    Ok((HaloSnapshot { tick, entities }, visits))
 }
 
 /// 一区一个 tick 的完整阶段序列（段 5 的构造级入口；段 6 的生产 `sim_loop` 用
@@ -1555,14 +1596,135 @@ mod tests {
             .map_binding_mut(id)
             .expect("刚插入")
             .add_to_mapped = true;
-        let (_border, scans, halo) = rt
+        let (_border, scans, halo, visits) = rt
             .snapshot_publish(&world, 2, &HaloFrameSource::none())
             .expect("publish");
-        assert_eq!(scans, 1, "A43：一个 span ⇒ 一次全表扫");
+        assert_eq!(scans, 1, "A43：一个 span ⇒ scans=1（语义不变）");
         assert_eq!(halo, 1, "A43：边界带实体真实计数");
+        assert_eq!(visits, 1, "A43：分桶后本图只有 1 个实体可访问");
         let stats = apply_mirrors(&mut world, &[], None).expect("apply empty");
         assert_eq!(stats.mirror_ids_scans, 1, "A43：mirror_ids 扫 1 次");
         assert_eq!(stats.mirror_count, 0, "A43：空载镜像真实计数为 0");
+    }
+
+    /// **A43 等价性牙（手写期望）**：单遍分桶后的 `snapshot_zone_border` 与「逐 span 全表扫 +
+    /// `map_id`/边界带/outgoing 过滤」的期望**逐项相同**（含槽位序与 span 拼接顺序）。
+    ///
+    /// 夹具：3 张图（10×10）、halo=2。
+    /// zone0 span：map0 rect(0,0,7,7)、map1 rect(0,0,4,4)、map2 rect(0,0,7,7)；
+    /// zone1 span：map2 rect(8,0,9,9)（与 zone0 不重叠）。
+    /// 实体（槽位序 = 插入序）：1 map0(0,0) 带内；2 map0(4,4) 深处；4 map0(9,5) outgoing
+    /// （handoff_pending 且距 rect ≤ 2）；5 map1(0,0) 未落格；6 map1(0,0) 带内；3 map2(0,0) 带内。
+    #[test]
+    fn a43_zone_border_bucketing_matches_handwritten_span_expectations() {
+        let mut world = World::with_maps(vec![(10, 10), (10, 10), (10, 10)]);
+        let spawn = |id: i32, name: &str, map_id: usize, x: i32, y: i32| {
+            let mut e = entity(id, name, x, y);
+            e.map_id = map_id;
+            e
+        };
+        for e in [
+            spawn(1, "a", 0, 0, 0),
+            spawn(2, "b", 0, 4, 4),
+            spawn(4, "d", 0, 9, 5),
+            spawn(5, "e", 1, 0, 0),
+            spawn(6, "f", 1, 0, 0),
+            spawn(3, "c", 2, 0, 0),
+        ] {
+            world.add_entity(e);
+        }
+        world.tick();
+        // outgoing 带：实体的 `handoff_pending`（已在邻区 rect、仍归本区）。
+        world
+            .entities
+            .get_mut(4)
+            .expect("id4")
+            .flags
+            .handoff_pending = true;
+        // 未落格实体：`add_to_mapped=false` ⇒ 不得进任何 span。
+        world
+            .entities
+            .map_binding_mut(5)
+            .expect("id5")
+            .add_to_mapped = false;
+        let spans = vec![
+            ZoneSpan::new(ZoneId::new(0), 0, ZoneRect::new(0, 0, 7, 7)),
+            ZoneSpan::new(ZoneId::new(0), 1, ZoneRect::new(0, 0, 4, 4)),
+            ZoneSpan::new(ZoneId::new(0), 2, ZoneRect::new(0, 0, 7, 7)),
+            ZoneSpan::new(ZoneId::new(1), 2, ZoneRect::new(8, 0, 9, 9)),
+        ];
+        let (snap, visits) = snapshot_zone_border(
+            &world,
+            ZoneId::new(0),
+            &spans,
+            2,
+            7,
+            &HaloFrameSource::none(),
+        )
+        .expect("zone0 快照");
+        assert_eq!(snap.tick, 7);
+        assert_eq!(
+            snap.entities.iter().map(|e| e.actor_id).collect::<Vec<_>>(),
+            vec![1, 4, 6, 3],
+            "手写期望：map0 桶[1,4]（槽位序；4=outgoing 带）→ map1 桶[6] → map2 桶[3]；2=深处、5=未落格"
+        );
+        let outgoing: Vec<i32> = snap
+            .entities
+            .iter()
+            .filter(|e| e.outgoing)
+            .map(|e| e.actor_id)
+            .collect();
+        assert_eq!(outgoing, vec![4], "outgoing 带必须照旧收入并标记");
+        assert_eq!(
+            visits, 5,
+            "访问量 = 各 span 本图桶实体数 3+1+1=5（未落格的 5 不入桶）"
+        );
+        let (zone1, _) = snapshot_zone_border(
+            &world,
+            ZoneId::new(1),
+            &spans,
+            2,
+            7,
+            &HaloFrameSource::none(),
+        )
+        .expect("zone1 快照");
+        assert!(
+            zone1.entities.is_empty(),
+            "区过滤必须生效：zone1 的 map2 span(8..9) 内无带内实体"
+        );
+    }
+
+    /// **A43 访问量牙（变异敏感）**：2 个 span、1 个实体 ⇒ `visits == 1`。
+    ///
+    /// 变异：把实现退回「每 span 全表扫」⇒ 该实体被两个 span 各扫一次 ⇒ `visits == 2` ⇒ 红。
+    #[test]
+    fn a43_zone_border_visits_count_only_own_map() {
+        let mut world = World::with_maps(vec![(10, 10), (10, 10)]);
+        let mut e = entity(1, "hero", 0, 0);
+        e.map_id = 0;
+        world.add_entity(e);
+        world.tick();
+        let spans = vec![
+            ZoneSpan::new(ZoneId::new(0), 0, ZoneRect::new(0, 0, 9, 9)),
+            ZoneSpan::new(ZoneId::new(0), 1, ZoneRect::new(0, 0, 9, 9)),
+        ];
+        let (snap, visits) = snapshot_zone_border(
+            &world,
+            ZoneId::new(0),
+            &spans,
+            1,
+            3,
+            &HaloFrameSource::none(),
+        )
+        .expect("快照");
+        assert_eq!(
+            snap.entities.iter().map(|e| e.actor_id).collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            visits, 1,
+            "单遍分桶：2 个 span 只访问实体一次；退回每 span 全表扫 ⇒ visits=2 ⇒ 本牙红"
+        );
     }
 
     /// **阶段牙**：两个区各跑一 tick（各自线程），barrier1 之后互相读到**本 tick**的边界快照。
