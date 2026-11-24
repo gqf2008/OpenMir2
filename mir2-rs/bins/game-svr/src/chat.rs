@@ -226,7 +226,7 @@ fn hear_targets_at_scan(
     }
     let mut out: Vec<i32> = world
         .entities
-        .iter_send_ref_targets()
+        .iter_send_ref_play_targets()
         .filter(|t| {
             t.map_id == map_id
                 && t.race == ACTOR_RACE_PLAY
@@ -610,6 +610,61 @@ mod tests {
         let reused_id = world.add_entity(reused);
         assert!(reused_id > 0, "复用槽位后的业务 id 必须是新的正 id");
         check(&world, speaker0, "删除+槽位复用");
+    }
+
+    /// **A43f 牙**：①扫描面只含 PLAY（1 万怪物 + 20 名玩家 ⇒ 桶上迭代 ≤ 40 条，全量版 1 万条）；
+    /// ②结果仍与旧基线逐元素相等；③接线：生产路径必须用 `iter_send_ref_play_targets`
+    /// （把 `chat.rs` 的生产正文改回全量版 ⇒ 本牙红；用源码窗口扫描，与既有接线牙同法）。
+    #[test]
+    fn hear_targets_scans_play_bucket_only_and_wiring_is_pinned() {
+        let mut world = World::new(200, 200);
+        // 1 万只怪物（非 PLAY）+ 说话者周围 20 名玩家。
+        for i in 0..10_000i32 {
+            let mut e = mir2_world_bevy::EntitySpawn::new(
+                0,
+                format!("m{i}"),
+                (i % 200) as i32,
+                (i / 200) as i32,
+            );
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
+            world.add_entity(e);
+        }
+        let mut speaker = mir2_world_bevy::EntitySpawn::new(0, "spk".to_string(), 50, 50);
+        speaker.race = ACTOR_RACE_PLAY;
+        let speaker_id = world.add_entity(speaker);
+        for i in 0..20i32 {
+            let mut e =
+                mir2_world_bevy::EntitySpawn::new(0, format!("p{i}"), 50 + i % 5, 50 + i / 5);
+            e.race = ACTOR_RACE_PLAY;
+            world.add_entity(e);
+        }
+        // ① 扫描面：桶上只应有 21 条（说话者 + 20 名玩家），全量版是 10_021 条。
+        let bucket = world.entities.iter_send_ref_play_targets().count();
+        let full = world.entities.iter_send_ref_targets().count();
+        assert_eq!(full, 10_021, "全量版必须看到全部实体（实得 {full}）");
+        assert!(
+            bucket <= 40,
+            "PLAY 桶必须只含 PLAY 实体（实得 {bucket}，全量 {full}）"
+        );
+        // ② 语义：与旧基线逐元素相等（含自身）。
+        assert_eq!(
+            hear_targets_at(&world, speaker_id, 0, 50, 50, 12),
+            hear_targets_at_legacy(&world, speaker_id, 0, 50, 50, 12),
+            "桶上扫描的结果必须与全量版逐元素相等"
+        );
+        // ③ 接线：生产正文必须调用桶版（改回全量版 ⇒ 红）。
+        let prod = include_str!("chat.rs")
+            .split("hear_targets_at_legacy")
+            .next()
+            .unwrap_or("");
+        assert!(
+            prod.contains("iter_send_ref_play_targets()"),
+            "hear_targets_at 的生产扫描必须走 PLAY 桶（iter_send_ref_play_targets）"
+        );
+        assert!(
+            !prod.contains(".iter_send_ref_targets()"),
+            "hear_targets_at 的生产扫描不得回退到全量版（iter_send_ref_targets）"
+        );
     }
 
     /// **P1-3 牙**：`hear_targets_at` 的真实调用被慢 tick 子探针累计（关闭态零采集）。
