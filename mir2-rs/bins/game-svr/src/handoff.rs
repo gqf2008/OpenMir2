@@ -373,7 +373,10 @@ impl HandoffRuntime {
 
     /// **barrier2 之后**：把本区所有 `handoff_pending` 实体投给目标区；
     /// 同时把超过 [`HANDOFF_TIMEOUT_TICKS`] 未回执的回滚。
-    pub(crate) fn after_phase2(&mut self, world: &mut World, tick: u64) {
+    ///
+    /// **A43**：返回本次 `iter_ref` 全表扫的**真实计数**（`scans ≡ 1`、`pending` = 扫前
+    /// `handoff_pending` 实体数），供 `HostTickProfile` 的窗口行统计空载浪费。
+    pub(crate) fn after_phase2(&mut self, world: &mut World, tick: u64) -> HandoffAfterStats {
         // 超时回滚（目标区已死/邮箱丢失）。
         let expired: Vec<i32> = self
             .pending_since
@@ -404,6 +407,10 @@ impl HandoffRuntime {
             .filter(|e| !e.mirror && e.handoff_pending)
             .map(|e| e.id)
             .collect();
+        let stats = HandoffAfterStats {
+            scans: 1,
+            pending: ids.len(),
+        };
         for id in ids {
             let Some(spec) = crate::region_loop::mirror_spec_for(world, id) else {
                 continue;
@@ -444,5 +451,15 @@ impl HandoffRuntime {
                 mir2_world_bevy::mirror_metrics::note_handoff_offered();
             }
         }
+        stats
     }
+}
+
+/// **A43**：`HandoffRuntime::after_phase2` 的扫描统计（真实计数）。
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HandoffAfterStats {
+    /// 本 tick 的全表扫次数（`iter_ref` 一次 ⇒ 恒 1；空载也有）。
+    pub scans: u64,
+    /// 扫到的 `handoff_pending` 实体数（空载恒 0）。
+    pub pending: usize,
 }
