@@ -28409,6 +28409,8 @@ fn drain_kicks(
     // 卡 `openmir2-kick-sessions-residue`：这两张宿主会话表必须与 `ground_sessions` **同处**清。
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    // **A41**：交易会话表——顶号/软关与 `close_cleanup_residue` 同语义清理（A40 残余）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     // 卡 `openmir2-kick-display-residue`：顶号路径也必须能摘展示表（见函数尾部）。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -28489,6 +28491,9 @@ fn drain_kicks(
         // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
         shop_sessions.remove(&chr);
         sell_off_sessions.remove(&chr);
+        // **A41**：交易条目同处清除（残留 `dealing=true` 会让 `drain_deal_tick`
+        // 对已下线者尝试取消；与 `close_cleanup_residue` 同语义）。
+        trade_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -28616,6 +28621,8 @@ fn drain_soft_close(
     // 卡 `openmir2-kick-sessions-residue`：与 `drain_kicks` 同一口径（两条路径各一颗牙）。
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    // **A41**：交易会话表——顶号/软关与 `close_cleanup_residue` 同语义清理（A40 残余）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     // 卡 `openmir2-kick-display-residue`：账号级顶号（`BoSoftClose` 支）同样要摘展示表。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -28697,6 +28704,9 @@ fn drain_soft_close(
         // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
         shop_sessions.remove(&chr);
         sell_off_sessions.remove(&chr);
+        // **A41**：交易条目同处清除（残留 `dealing=true` 会让 `drain_deal_tick`
+        // 对已下线者尝试取消；与 `close_cleanup_residue` 同语义）。
+        trade_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -40764,6 +40774,7 @@ impl HostLoop {
                 &mut ground_sessions,
                 &mut shop_sessions,
                 &mut sell_off_sessions,
+                &mut trade_sessions,
                 &mut displays,
                 registry.as_ref(),
                 &mut guilds,
@@ -40823,6 +40834,7 @@ impl HostLoop {
                 &mut ground_sessions,
                 &mut shop_sessions,
                 &mut sell_off_sessions,
+                &mut trade_sessions,
                 &mut displays,
                 registry.as_ref(),
                 &mut guilds,
@@ -52925,7 +52937,7 @@ mod tests {
     #[test]
     fn drain_kicks_clears_shop_and_selloff_for_kicked_role_only() {
         use std::collections::HashMap;
-        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
@@ -52967,6 +52979,19 @@ mod tests {
         );
         let mut displays = downlink::DisplayTable::new();
         let mut kick_pending = vec!["lb1a".to_string()];
+        // **A41**：顶号前该角色正在交易；旁观者条目须保留。
+        let mut trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade.insert(
+            "lb1a".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        trade.insert(
+            "bystander".to_string(),
+            game_svr::trade::DealState::default(),
+        );
 
         drain_kicks(
             &mut world,
@@ -52979,6 +53004,7 @@ mod tests {
             &mut ground,
             &mut shop,
             &mut sell_off,
+            &mut trade,
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -53010,6 +53036,34 @@ mod tests {
             "误删负例：旁观者的 SellOff 会话态必须留着"
         );
         assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+        // **A41**：交易条目同处清；旁观者保留；随后 `drain_deal_tick` 不得再对已下线者出帧。
+        assert!(
+            !trade.contains_key("lb1a"),
+            "A41：顶号必须清掉交易条目（删清理 ⇒ 红）"
+        );
+        assert!(
+            trade.contains_key("bystander"),
+            "误删负例：旁观者的交易条目必须留着"
+        );
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut cancels = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_DEALCANCEL {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 0, "已下线者不得再产生交易取消帧");
     }
 
     /// **卡 `openmir2-kick-sessions-residue` A1/A2（账号级顶号 `BoSoftClose` 支）**：
@@ -53020,7 +53074,7 @@ mod tests {
     #[test]
     fn drain_soft_close_clears_shop_and_selloff_for_kicked_role_only() {
         use std::collections::HashMap;
-        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
@@ -53056,6 +53110,19 @@ mod tests {
         );
         let mut displays = downlink::DisplayTable::new();
         let mut soft_close_pending = vec!["lb1b".to_string()];
+        // **A41**：软关前该角色正在交易；旁观者条目须保留。
+        let mut trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade.insert(
+            "lb1b".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        trade.insert(
+            "bystander".to_string(),
+            game_svr::trade::DealState::default(),
+        );
 
         drain_soft_close(
             &mut world,
@@ -53068,6 +53135,7 @@ mod tests {
             &mut ground,
             &mut shop,
             &mut sell_off,
+            &mut trade,
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -53094,6 +53162,34 @@ mod tests {
             "误删负例：旁观者的两张表都必须留着"
         );
         assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+        // **A41**：交易条目同处清；旁观者保留；随后 `drain_deal_tick` 不得再对已下线者出帧。
+        assert!(
+            !trade.contains_key("lb1b"),
+            "A41：软关必须清掉交易条目（删清理 ⇒ 红）"
+        );
+        assert!(
+            trade.contains_key("bystander"),
+            "误删负例：旁观者的交易条目必须留着"
+        );
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut cancels = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_DEALCANCEL {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 0, "已下线者不得再产生交易取消帧");
     }
 
     /// 卡 `openmir2-softclose-cleanup-residue` 返工牙的夹具：世界 + 四个会话容器 + 展示表。
@@ -62207,6 +62303,7 @@ break
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -62262,6 +62359,7 @@ break
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
@@ -62332,6 +62430,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut ground,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut displays,
@@ -62406,6 +62505,7 @@ break
             &mut ground,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -62471,6 +62571,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -62552,6 +62653,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -69041,6 +69143,7 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -69123,6 +69226,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -69235,6 +69339,7 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -69304,6 +69409,7 @@ SendRefMsgRange=15
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
@@ -71580,6 +71686,7 @@ SendRefMsgRange=15
                 &mut sessions,
                 &mut HashMap::new(),
                 &mut HashMap::new(),
+                &mut std::collections::HashMap::new(),
                 &mut downlink::DisplayTable::new(),
                 None,
                 &mut mir2_world_bevy::GuildManager::new(),
