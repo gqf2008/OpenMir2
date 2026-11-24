@@ -2648,6 +2648,14 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             it.index = u16::try_from(v).unwrap_or(0);
         }
     }
+    /// `UseItems[i] != null`（`UseItems = new UserItem[13]` 全 null 数组；oracle 直接解引用
+    /// 空槽会抛 `NullReferenceException`）。
+    fn use_item_slot_present(&self, i: i32) -> bool {
+        usize::try_from(i)
+            .ok()
+            .and_then(|idx| self.use_items.get(idx))
+            .is_some_and(Option::is_some)
+    }
     /// `UseItems[i].Desc[attr]`（oracle `UserItem.Desc` 是 `byte[14]`）。空槽/越界 ⇒ 0。
     ///
     /// **A27 P1**：此前未覆写 ⇒ 继承 trait 缺省 0 ⇒ `UPGRADEITEM` 的 Desc 增量读不到槽对象。

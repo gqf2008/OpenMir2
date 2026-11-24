@@ -684,6 +684,15 @@ pub trait ScriptPlayer {
     fn use_item_std_name(&self, _i: i32) -> String {
         String::new()
     }
+    /// `playerActor.UseItems[i] != null`（`UseItems = new UserItem[13]`，`CharacterObject.cs:89`
+    /// 是**全 null 数组**；oracle 直接解引用 `UseItems[i]` 的代码在空槽上抛
+    /// `NullReferenceException` 穿出 `GotoLable`）。
+    ///
+    /// 缺省 `true` = 宿主未建模槽对象（视为「有槽」），与既有实现口径一致；
+    /// 真实宿主（`NpcPlayer`）覆写为按槽对象判空。
+    fn use_item_slot_present(&self, _i: i32) -> bool {
+        true
+    }
     /// `SystemShare.ItemSystem.GetStdItem(UseItems[i].Index) != null`
     fn use_item_std_item_present(&self, i: i32) -> bool {
         self.use_item_index(i) > 0

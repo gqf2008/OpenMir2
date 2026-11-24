@@ -2079,7 +2079,15 @@ impl Engine<'_, '_> {
             self.abort_goto = true;
             return;
         }
-        // oracle：`Index <= 0 || stdItem == null` ⇒ 红字后 return（**这里也不抽 RNG**）。
+        // oracle 先**直接解引用** `UseItems[nWhere]` 取 `Index`/`GetStdItem`：槽为 null 时抛
+        // `NullReferenceException` 穿出 `GotoLable` ⇒ 与 `nWhere == Length` 同档：
+        // `script_action_error` + `abort_goto`（零帧、零抽取、后续动作不执行）。
+        if !self.player.use_item_slot_present(n_where) {
+            self.script_action_error("UpgradeItems", info);
+            self.abort_goto = true;
+            return;
+        }
+        // 槽非 null、但 `Index <= 0 || stdItem == null` ⇒ 红字后 return（**这里也不抽 RNG**）。
         if self.player.use_item_index(n_where) <= 0
             || !self.player.use_item_std_item_present(n_where)
         {
