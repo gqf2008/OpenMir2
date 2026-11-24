@@ -707,8 +707,8 @@ pub fn feature_shapes(
     // **A31②（可观测性，不改玩法）**：同一「有装备但 stditems 无记录」检查扩到其余 11 槽。
     // 返回值只消费 Dress/Weapon 的 `Shape`，其余槽仅产 WRN（可发现 DB 脏数据/模板缺失）；
     // 干净库（槽空或模板可查）不产任何新 WRN。
-    for slot in 2..USE_ITEM_SLOT_NAMES.len() {
-        let _ = resolve(slot, USE_ITEM_SLOT_NAMES[slot]);
+    for (slot, label) in USE_ITEM_SLOT_NAMES.iter().enumerate().skip(2) {
+        let _ = resolve(slot, label);
     }
     (dress, weapon, warns)
 }
