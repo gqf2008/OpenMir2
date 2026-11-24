@@ -10786,6 +10786,48 @@ fn handle_selloff_cmd(
     }
 }
 
+/// A34 片 5：7 条寄售命令的**唯一装配点**——区 0 `INBOUND_PROCESS` 与区 k 控制邮箱 drain
+/// 共用同一份实参装配（与 [`run_guild_command`] 同模板；防两处逐字同形之后漂移）。
+///
+/// 只做「取 `enter_cfg.sell_off` + 调用」；行为/日志仍由 [`handle_selloff_cmd`] 原样产出。
+/// `book` 是进程级 `SellOffBook`（`M2Share.SellOffItemList` 等价物），`sell_off_sessions` 是区本地。
+#[allow(clippy::too_many_arguments)]
+fn run_selloff_command(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world_bevy::World,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    book: &mut game_svr::selloff::SellOffBook,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    enter_cfg: &EnterConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    handle_selloff_cmd(
+        ident,
+        recog,
+        param,
+        tag,
+        tail,
+        chr_name,
+        socket,
+        online,
+        world,
+        ground_sessions,
+        sell_off_sessions,
+        book,
+        gates,
+        &enter_cfg.sell_off,
+        catalog,
+    );
+}
+
 /// `ShopCfg` → `CastleTaxConfig`（税/金库配置视图）。
 ///
 /// `UpgradeWeaponPrice` 取 `shop_cfg.upgrade.price`（与 `Merchant.cs:552/1265/1400/1652` 的
@@ -39059,7 +39101,8 @@ impl HostLoop {
                             ) {
                                 // `openmir2-m3-selloff-consignment-world`：7 条元宝寄售 `CM_*` 派发
                                 // （oracle `PlayObject.Message.cs:2057-2077`）。
-                                handle_selloff_cmd(
+                                // **A34 片 5**：实参装配抽到 [`run_selloff_command`]（与区 k drain 共用）。
+                                run_selloff_command(
                                     cmd.ident,
                                     cmd.recog,
                                     cmd.param,
@@ -39073,7 +39116,7 @@ impl HostLoop {
                                     &mut sell_off_sessions,
                                     &mut sell_off_book,
                                     &gates,
-                                    &enter_cfg.sell_off,
+                                    &enter_cfg,
                                     &enter_cfg.catalog,
                                 );
                             } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
