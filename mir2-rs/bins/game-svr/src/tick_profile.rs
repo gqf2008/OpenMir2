@@ -207,6 +207,12 @@ pub struct HostTickProfile {
     tick_probe_rows: Vec<(&'static str, u64)>,
     /// 最近一个慢 tick 的快照（`end_tick` 生成，`sim_loop` 每 tick 用 [`Self::take_slow_tick`] 取走）。
     pending_slow: Option<SlowTick>,
+    /// **A43 `HostWorldTail` 仪表**：本窗口三个「全实体扫描」的调用次数
+    /// `[snapshot(spans), mirror_ids, handoff]`。只在 `enabled` 时累加。
+    win_scans: [u64; 3],
+    /// **A43**：本窗口末端采样的规模量
+    /// `[entities_total, halo_entities, mirror_count, handoff_pending_count]`。
+    win_sizes: [u64; 4],
 }
 
 /// 单个慢 tick 的段快照（由 [`HostTickProfile::end_tick`] 在工作段 ≥ 阈值时生成，
@@ -305,6 +311,10 @@ pub struct HostWindow {
     pub probes: Vec<(&'static str, u64, u64)>,
     /// **卡 `openmir2-simmonsterai-profile`**：本窗口的逐 tick 工作段 ns 样本（tick 级分位数用）。
     pub work_samples: Vec<u64>,
+    /// **A43**：本窗口三个全实体扫描的调用次数 `[snapshot(spans), mirror_ids, handoff]`。
+    pub scans: [u64; 3],
+    /// **A43**：本窗口末次规模采样 `[entities_total, halo_entities, mirror_count, handoff_pending_count]`。
+    pub sizes: [u64; 4],
 }
 
 /// World 探针的**增量**快照（累计值之差）。字段与 `TickProfile` 同序同名。
@@ -688,10 +698,44 @@ impl HostTickProfile {
             rows: std::mem::take(&mut self.rows),
             probes: std::mem::take(&mut self.probes),
             work_samples: std::mem::take(&mut self.work_samples),
+            scans: self.win_scans,
+            sizes: self.win_sizes,
         };
+        self.win_scans = [0; 3];
+        self.win_sizes = [0; 4];
         self.window_ticks = 0;
         self.window_ns = 0;
         Some(window)
+    }
+
+    /// **A43**：记一次边界快照扫描（`snapshot_border` 每 span 一次）。
+    pub fn note_snapshot_scan(&mut self, scans: u64, entities_total: u64, halo_entities: u64) {
+        if !self.enabled {
+            return;
+        }
+        self.win_scans[0] = self.win_scans[0].saturating_add(scans);
+        self.win_sizes[0] = entities_total;
+        self.win_sizes[1] = halo_entities;
+    }
+
+    /// **A43**：记一次 `mirror_ids()` 全表扫（`apply_mirrors` 陈旧镜像清扫）与该区真实镜像数。
+    pub fn note_mirror_ids_scan(&mut self, entities_total: u64, mirror_count: u64) {
+        if !self.enabled {
+            return;
+        }
+        self.win_scans[1] = self.win_scans[1].saturating_add(1);
+        self.win_sizes[0] = entities_total;
+        self.win_sizes[2] = mirror_count;
+    }
+
+    /// **A43**：记 `handoff::after_phase2` 的全表扫（次数由被调方回报，恒 1）与该区真实 pending 数。
+    pub fn note_handoff_scan(&mut self, scans: u64, entities_total: u64, handoff_pending: u64) {
+        if !self.enabled {
+            return;
+        }
+        self.win_scans[2] = self.win_scans[2].saturating_add(scans);
+        self.win_sizes[0] = entities_total;
+        self.win_sizes[3] = handoff_pending;
     }
 
     fn add(&mut self, name: &'static str, ns: u64) {
@@ -841,6 +885,17 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         total_ms,
         host.total_ns as f64 / 1e9,
         entities
+    );
+    crate::glog!(
+        "INF",
+        "[TICKPROF]   扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={}",
+        host.scans[0],
+        host.scans[1],
+        host.scans[2],
+        host.sizes[0],
+        host.sizes[1],
+        host.sizes[2],
+        host.sizes[3]
     );
     let mut rows = host.rows.clone();
     rows.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
@@ -1002,6 +1057,17 @@ pub fn log_window_zone(zone: u32, host: &HostWindow, world: Option<&WorldDelta>,
         host.total_ns as f64 / 1e9,
         entities
     );
+    crate::glog!(
+        "INF",
+        "[TICKPROF]zone={zone}    扫描/规模（窗口末次采样）：snapshot_scans={} mirror_ids_scans={} handoff_scans={} entities_total={} halo_entities={} mirror_count={} handoff_pending_count={}",
+        host.scans[0],
+        host.scans[1],
+        host.scans[2],
+        host.sizes[0],
+        host.sizes[1],
+        host.sizes[2],
+        host.sizes[3]
+    );
     let mut rows = host.rows.clone();
     rows.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
     let sleep_ns = rows
@@ -1041,6 +1107,67 @@ pub fn log_window_zone(zone: u32, host: &HostWindow, world: Option<&WorldDelta>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A43**：`HostWorldTail` 的 7 个子探针 + 3 个扫描计数 / 4 个规模量在开启时被记录。
+    #[test]
+    fn a43_worldtail_probes_and_scan_counters_recorded_when_enabled() {
+        let mut p = HostTickProfile::with_enabled(true);
+        let names = [
+            "HostTailBeforeAoi",
+            "HostHaloSnapshot",
+            "HostBarrier1",
+            "HostMirrorApply",
+            "HostAoiPhase2",
+            "HostAfterPhase2",
+            "HostHandoffAfter",
+        ];
+        for name in names {
+            p.probe(name, Some(Instant::now()));
+        }
+        p.note_snapshot_scan(1, 6635, 17);
+        p.note_mirror_ids_scan(6635, 0);
+        p.note_handoff_scan(1, 6635, 0);
+        p.end_tick(Some(Instant::now()));
+        let w = p.take_window().expect("窗口必须产出");
+        for name in names {
+            assert!(
+                w.probes.iter().any(|(n, _, _)| *n == name),
+                "缺子探针 {name}；实得 {:?}",
+                w.probes
+            );
+        }
+        assert_eq!(w.scans, [1, 1, 1], "三个扫描各 1 次");
+        assert_eq!(
+            w.sizes,
+            [6635, 17, 0, 0],
+            "规模量 = entities_total/halo/mirror/handoff_pending"
+        );
+    }
+
+    /// **A43**：关闭 profiling 时 7 段与计数**完全无输出、无状态写**（不取时钟）。
+    #[test]
+    fn a43_worldtail_instrumentation_is_silent_when_disabled() {
+        let mut p = HostTickProfile::with_enabled(false);
+        assert!(p.begin().is_none(), "关闭态 begin 必须 None（不取时钟）");
+        for name in [
+            "HostTailBeforeAoi",
+            "HostHaloSnapshot",
+            "HostBarrier1",
+            "HostMirrorApply",
+            "HostAoiPhase2",
+            "HostAfterPhase2",
+            "HostHandoffAfter",
+        ] {
+            p.probe(name, None);
+        }
+        p.note_snapshot_scan(1, 100, 5);
+        p.note_mirror_ids_scan(100, 3);
+        p.note_handoff_scan(1, 100, 2);
+        p.end_tick(None);
+        assert!(p.take_window().is_none(), "关闭态窗口必须为空");
+        assert!(p.probes().is_empty(), "关闭态不得记录任何子探针");
+    }
+
     use std::time::Duration;
 
     /// **A1 牙（关闭即零工作）**：缺省 `enabled == false`；`begin` 不取时钟（恒 `None`）；

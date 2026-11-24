@@ -619,7 +619,7 @@ impl<'a> ZoneRuntime<'a> {
         tick: u64,
         source: &HaloFrameSource<'_>,
     ) -> Result<(HaloSnapshot, Vec<HaloSnapshot>, u64), ZoneTickError> {
-        let border = self.snapshot_publish(world, tick, source)?;
+        let (border, _scans, _halo) = self.snapshot_publish(world, tick, source)?;
         let (neighbors, wait_phase1_us) = self.await_neighbors(tick)?;
         Ok((border, neighbors, wait_phase1_us))
     }
@@ -637,11 +637,23 @@ impl<'a> ZoneRuntime<'a> {
         world: &World,
         tick: u64,
         source: &HaloFrameSource<'_>,
-    ) -> Result<HaloSnapshot, ZoneTickError> {
+    ) -> Result<(HaloSnapshot, u64, u64), ZoneTickError> {
+        // **A43**：返回 `(快照, 扫描次数, 边界带实体数)`——扫描次数 = 本区 span 数
+        // （`snapshot_zone_border` 对每个 span 调一次 `snapshot_border` 全表扫）。
+        let scans = self
+            .spans
+            .iter()
+            .filter(|span| span.zone == self.zone)
+            .count();
         let border =
             snapshot_zone_border(world, self.zone, self.spans, self.halo_width, tick, source)?;
+        let halo_entities = border.entities.len();
         self.exchange.publish(self.zone, border.clone());
-        Ok(border)
+        Ok((
+            border,
+            u64::try_from(scans).unwrap_or(u64::MAX),
+            u64::try_from(halo_entities).unwrap_or(u64::MAX),
+        ))
     }
 
     /// `after_phase1` 的**后半**：barrier1 → 读邻居。返回（邻区快照, barrier1 等待 µs）。
@@ -776,6 +788,10 @@ pub struct MirrorStats {
     pub shadowed_by_local: usize,
     /// **L2-5 ③ 段 4（总监裁决）**：镜像落格失败（`RefusedCell`）**被丢弃**的条数（不再 abort）。
     pub mirror_write_refused_cell: usize,
+    /// **A43**：本 tick 执行 `mirror_ids()` 全表扫的次数（真实计数；清扫必执行 ⇒ 恒 1）。
+    pub mirror_ids_scans: u64,
+    /// **A43**：`mirror_ids()` 返回的**真实镜像数**（清扫前；空载恒 0）。
+    pub mirror_count: usize,
 }
 
 /// **L2-5 ②**：用 barrier1 之后读到的**邻区本 tick** 快照刷新本区镜像。
@@ -964,7 +980,12 @@ pub fn apply_mirrors(
         }
     }
     // 陈旧镜像清扫：`mirror_ids` 是槽位序（确定性），不在本 tick 任何邻区快照里 ⇒ 移除。
-    for id in world.mirror_ids() {
+    // **A43**：把这次全表扫的**真实计数**回报给调用方（`mirror_ids_scans` ≡ 1；`mirror_count`
+    // = 清扫前的镜像数——空载恒 0，是「这次扫是否纯浪费」的直接证据）。
+    let mirror_ids = world.mirror_ids();
+    stats.mirror_ids_scans = 1;
+    stats.mirror_count = mirror_ids.len();
+    for id in mirror_ids {
         if !seen.contains(&id) {
             if world.remove_mirror(id) {
                 stats.removed += 1;
@@ -1515,6 +1536,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1]
         );
+    }
+
+    /// **A43 牙**：快照与镜像清扫的**真实计数**（不是代理）——
+    /// 一个 span ⇒ `snapshot_publish` 的 scans=1、halo 实体数真实；`apply_mirrors` 每次
+    /// `mirror_ids_scans=1`、`mirror_count` 为清扫前的真实镜像数（空载 0）。
+    #[test]
+    fn a43_snapshot_and_mirror_scan_counters_report_real_counts() {
+        let spans = vec![ZoneSpan::new(ZoneId::new(0), 0, ZoneRect::new(0, 0, 9, 9))];
+        let exchange = HaloExchange::new(1);
+        let barriers = TickBarriers::new(1);
+        let rt = ZoneRuntime::new(ZoneId::new(0), &spans, 1, &exchange, &barriers);
+        let mut world = World::new(20, 20);
+        // 放**边界格**并置 `add_to_mapped`（快照只收已落格、非镜像、本图实体）。
+        let id = world.add_entity(entity(1, "hero", 0, 0));
+        world
+            .entities
+            .map_binding_mut(id)
+            .expect("刚插入")
+            .add_to_mapped = true;
+        let (_border, scans, halo) = rt
+            .snapshot_publish(&world, 2, &HaloFrameSource::none())
+            .expect("publish");
+        assert_eq!(scans, 1, "A43：一个 span ⇒ 一次全表扫");
+        assert_eq!(halo, 1, "A43：边界带实体真实计数");
+        let stats = apply_mirrors(&mut world, &[], None).expect("apply empty");
+        assert_eq!(stats.mirror_ids_scans, 1, "A43：mirror_ids 扫 1 次");
+        assert_eq!(stats.mirror_count, 0, "A43：空载镜像真实计数为 0");
     }
 
     /// **阶段牙**：两个区各跑一 tick（各自线程），barrier1 之后互相读到**本 tick**的边界快照。

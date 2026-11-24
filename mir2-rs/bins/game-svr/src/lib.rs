@@ -3291,6 +3291,9 @@ fn spawn_minimal_zone(
                         }
                     }
                     // **锁外**：barrier1 + 读邻居（屏障等待绝不持锁）。
+                    // **A43**：`HostBarrier1` 子探针只在区 0（宿主）加——区 k 的 `host_prof`
+                    // 在 `ZoneState` 锁内，为了计时去取一次锁会改变被观测行为；区 k 的等待已有
+                    // `zone_metrics.barrier_us[z]`（A36）可用。
                     if let Some(ops) = barrier_ops.as_mut() {
                         ops.await_neighbors(tick);
                     }
@@ -3319,7 +3322,16 @@ fn spawn_minimal_zone(
                         // 经 guard 的 Deref 不能分别借，故先 destructure 再各自取。
                         let ZoneState { host, .. } = &mut *st;
                         if let Some(h) = host.handoff_runtime.as_mut() {
-                            h.after_phase2(&mut host.world, tick);
+                            let pr_handoff = host.host_prof.begin();
+                            let hs = h.after_phase2(&mut host.world, tick);
+                            host.host_prof.probe("HostHandoffAfter", pr_handoff);
+                            if host.host_prof.enabled() {
+                                host.host_prof.note_handoff_scan(
+                                    hs.scans,
+                                    u64::try_from(host.world.entities.len()).unwrap_or(u64::MAX),
+                                    u64::try_from(hs.pending).unwrap_or(u64::MAX),
+                                );
+                            }
                         }
                         host.tick_phase_rest(
                             &mut zone_shared,
@@ -38282,22 +38294,26 @@ impl BarrierOps {
     }
 
     /// A 段末（锁内）：快照 + 发布。失败 ⇒ abort 整机（前缀按区：区 0 / 切片区 k）。
+    /// **A43**：返回 `(扫描次数, 边界带实体数)`——真实计数，供 `HostTickProfile` 窗口行统计。
     fn publish_snapshot(
         &mut self,
         world: &mir2_world_bevy::World,
         tick: u64,
         source: &region_loop::HaloFrameSource<'_>,
-    ) {
+    ) -> (u64, u64) {
         #[cfg(test)]
         self.note_call(0);
         let runtime = self.runtime();
-        if let Err(e) = runtime.snapshot_publish(world, tick, source) {
-            let prefix = self.err_prefix();
-            glog!(
-                "ERR",
-                "{prefix} 在 tick {tick} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
-            );
-            std::process::abort();
+        match runtime.snapshot_publish(world, tick, source) {
+            Ok((_border, scans, halo)) => (scans, halo),
+            Err(e) => {
+                let prefix = self.err_prefix();
+                glog!(
+                    "ERR",
+                    "{prefix} 在 tick {tick} 的快照/屏障阶段失败：{e} ⇒ abort 整机"
+                );
+                std::process::abort();
+            }
         }
     }
 
@@ -38323,30 +38339,36 @@ impl BarrierOps {
     }
 
     /// B 段首（锁内）：镜像刷新（`mirror_enabled` 才做）。失败 ⇒ abort 整机（前缀按区）。
+    /// **A43**：返回 `MirrorStats`（含 `mirror_ids_scans` / `mirror_count` 真实计数）；
+    /// 闸关 ⇒ `None`（零参与）。
     fn before_phase2(
         &mut self,
         world: &mut mir2_world_bevy::World,
         displays: &mut downlink::DisplayTable,
         tick: u64,
-    ) {
+    ) -> Option<region_loop::MirrorStats> {
         #[cfg(test)]
         self.note_call(2);
         if !self.mirrors {
-            return;
+            return None;
         }
-        if let Err(e) = region_loop::apply_mirrors(world, &self.neighbors, Some(displays)) {
-            let prefix = self.err_prefix();
-            glog!(
-                "ERR",
-                "{prefix} 在 tick {tick} 应用邻区镜像失败：{e} ⇒ abort 整机"
-            );
-            std::process::abort();
-        }
+        let stats = match region_loop::apply_mirrors(world, &self.neighbors, Some(displays)) {
+            Ok(stats) => stats,
+            Err(e) => {
+                let prefix = self.err_prefix();
+                glog!(
+                    "ERR",
+                    "{prefix} 在 tick {tick} 应用邻区镜像失败：{e} ⇒ abort 整机"
+                );
+                std::process::abort();
+            }
+        };
         // **`MIR2_ZONE_MIRROR_DIAG`**（生产默认零参与）：变化时把本区镜像 id 集合写成状态证据。
         // 放在 `apply_mirrors` 之后 ⇒ 看到的是本 tick 刷新/清扫后的**实际**集合；
         // 「离开后镜像滞留」= 该集合里仍出现过期 id（直接状态，不靠行为推断）。
         // 门禁在 `maybe_write_world` 内部：env 未设 ⇒ **不调 `world.mirror_ids()`**（有实测牙）。
         zone_mirror_diag::maybe_write_world(self.zone, tick, world, &mut self.diag_last);
+        Some(stats)
     }
 
     /// **`world_tail` 与 `inline_after_phase2` 的 4 种组合（压缩后照此核，别看记忆）**：
@@ -42015,13 +42037,25 @@ impl HostLoop {
                         }
                     }
                 }
+                // **A43**：`HostWorldTail` 内的嵌套子探针（不进 `tick_sum_ns`，不破坏残差对账）。
+                let pr_tail = host_prof.begin();
                 world.tick_tail_before_aoi(&mut rec);
+                host_prof.probe("HostTailBeforeAoi", pr_tail);
                 // **L2-5 ②**：快照的帧面来源 = 本区展示表 + 在线路由表（只在多区路径构造）。
                 let frame_source = region_loop::HaloFrameSource::new(&*displays, &*online);
-                barriers
+                let pr_snap = host_prof.begin();
+                let (snap_scans, halo_entities) = barriers
                     .as_mut()
                     .expect("barriers.is_some() 已判")
                     .publish_snapshot(&*world, tick_no, &frame_source);
+                host_prof.probe("HostHaloSnapshot", pr_snap);
+                if host_prof.enabled() {
+                    host_prof.note_snapshot_scan(
+                        snap_scans,
+                        u64::try_from(world.entities.len()).unwrap_or(u64::MAX),
+                        halo_entities,
+                    );
+                }
                 // 段起点留给 B 收尾（计时关闭时 `t == None`；切片判定只看 `barriers`）。
                 scratch.world_tail = t;
             }
@@ -42073,25 +42107,48 @@ impl HostLoop {
         );
         // ② **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
         // 闸关 ⇒ 整段零参与。
-        ops.before_phase2(&mut self.world, &mut self.displays, self.ticks);
+        let pr_mirror = self.host_prof.begin();
+        let mirror_stats = ops.before_phase2(&mut self.world, &mut self.displays, self.ticks);
+        self.host_prof.probe("HostMirrorApply", pr_mirror);
+        if let Some(stats) = mirror_stats {
+            if self.host_prof.enabled() {
+                self.host_prof.note_mirror_ids_scan(
+                    u64::try_from(self.world.entities.len()).unwrap_or(u64::MAX),
+                    u64::try_from(stats.mirror_count).unwrap_or(u64::MAX),
+                );
+            }
+        }
         // ③ phase2（AOI）——B 的屏障批次到此为止（区 k：锁在此释放）。
+        let pr_aoi = self.host_prof.begin();
         self.world.tick_phase2(
             scratch
                 .rec
                 .as_mut()
                 .expect("HostWorldHead 必须置位（M0_MIN 含它）"),
         );
+        self.host_prof.probe("HostAoiPhase2", pr_aoi);
         if inline_after_phase2 {
             // 区 0（无锁）inline：`after_phase2` 的段计时仍留在 `HostWorldTail` 内（与旧 tick 同）。
             let beat = shared
                 .zone_host
                 .as_deref()
                 .map(|host| (&**host.watch.heartbeats(), host.watch.now_ms()));
+            let pr_after = self.host_prof.begin();
             ops.after_phase2(beat);
+            self.host_prof.probe("HostAfterPhase2", pr_after);
             // **第三段锁 = `handoff.after_phase2`（barrier2 之后；不是漏放）**：区 k 由 driver 在
             // 锁外跑完 `after_phase2` 后再取第三把锁调它；区 0 无锁路径在此 inline 紧随其后。
             if let Some(h) = self.handoff_runtime.as_mut() {
-                h.after_phase2(&mut self.world, self.ticks);
+                let pr_handoff = self.host_prof.begin();
+                let hs = h.after_phase2(&mut self.world, self.ticks);
+                self.host_prof.probe("HostHandoffAfter", pr_handoff);
+                if self.host_prof.enabled() {
+                    self.host_prof.note_handoff_scan(
+                        hs.scans,
+                        u64::try_from(self.world.entities.len()).unwrap_or(u64::MAX),
+                        u64::try_from(hs.pending).unwrap_or(u64::MAX),
+                    );
+                }
             }
             if self.ticks == 0 {
                 // 第一轮 barrier2 之后才 arm：装载/首 tick 常超阈值，提前 arm 会误 abort。
@@ -42143,7 +42200,9 @@ impl HostLoop {
         }
         // **driver（锁外）**：barrier1 + 读邻居。N=1 无屏障 ⇒ 跳过（A→B 背靠背）。
         if let Some(ops) = barriers.as_mut() {
+            let pr_barrier = self.host_prof.begin();
             ops.await_neighbors(self.ticks);
+            self.host_prof.probe("HostBarrier1", pr_barrier);
         }
         // 区 0 生产路径（无锁）inline 调 after_phase2（保持段计时）；区 k 传 `false`。
         self.tick_phase_b(shared, &mut scratch, &mut barriers, true);
@@ -139304,7 +139363,9 @@ mod l2_handoff_tests {
             .flags
             .handoff_pending = true;
         // 源区（区 0）投 offer 给区 1 ⇒ `pending_since` 有该 id。
-        rt.after_phase2(&mut world, 0);
+        let hs = rt.after_phase2(&mut world, 0);
+        assert_eq!(hs.scans, 1, "A43：after_phase2 必须回报一次全表扫");
+        assert_eq!(hs.pending, 1, "A43：真实 pending 数（上面刚置位）");
         assert_eq!(rt.refused(), 0, "前置：offer 已投出、未回滚");
         let ack = |ok: bool| crate::handoff::HandoffAck {
             to: zone(0),
