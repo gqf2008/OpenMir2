@@ -2460,6 +2460,15 @@ fn handle_zone_command_on(
         handle_magic_key_cmd(cmd.recog, cmd.param, chr_name, socket, saves);
         return ZoneCmdOutcome::Dispatched;
     }
+    // **C25 后续卡**：`CM_LOGINNOTICEOK(1018)` 与区 0 **同一实现**（[`handle_login_notice_ok_cmd`]：
+    // 只写本区 `SessionGround.client_tick = (short)Recog`，**零出帧**）。oracle
+    // `src/M2Server/Player/PlayObject.cs:1109-1113` 的 `SysMsg(ClientTick…)` 被 `RunNotice`
+    // 自身的 `while (GetMessage)` 下一轮排空吞掉 ⇒ 线上不存在该帧（与宿主臂同一理由）。
+    // A34 曾以「oracle 无对应行为」把 1018 留在未接登记表；该前提与代码自证矛盾，已更正。
+    if cmd.ident == mir2_protocol::messages::CM_LOGINNOTICEOK {
+        handle_login_notice_ok_cmd(cmd, chr_name, ground_sessions, &*online, gates);
+        return ZoneCmdOutcome::Dispatched;
+    }
     // **A34 片 2（商店五条）**：与区 0 [`handle_shop_cmd`] **同一实现**；`CM_USERREPAIRITEM` 延后
     // （成功支走 `run_merchant_goto`，需 `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx`
     // 等进程态 ⇒ 归 Process 片，本片不接）。
@@ -29971,9 +29980,12 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || attackwire::is_hit_ident(ident)
         || magicwire::is_spell_ident(ident)
         || QUERY_IDENTS.contains(&ident)
-        // **A34 裁决**：`CM_LEVELRANK`/`CM_LOGINNOTICEOK` **分类 Local 但区 k 无执行臂**
-        // （oracle 无对应派发面，不补）⇒ 事件仍落 `note_zone_cmd_unsupported` 计数；
-        // 登记牙 `zone_k_unwired_families_are_registered_not_wired` 保留这两条（只断言分类口径）。
+        // **A34 裁决（部分更正）**：`CM_LEVELRANK` **分类 Local 但区 k 无执行臂**
+        // （oracle `src/` 零引用，不补）⇒ 事件仍落 `note_zone_cmd_unsupported` 计数；
+        // 登记牙 `zone_k_unwired_families_are_registered_not_wired` 保留这条（只断言分类口径）。
+        // `CM_LOGINNOTICEOK` 已接线：oracle `PlayObject.cs:1109-1113` 有 case，A34 的
+        // 「oracle 无对应行为」前提与代码自证矛盾 ⇒ 区 k 臂见
+        // `zone_k_login_notice_ok_writes_client_tick_with_zero_frames`。
         // **分类归属 ≠ 已接线**，两件事分开读。
         || ident == enter::CM_LEVELRANK
         || ident == mir2_protocol::messages::CM_LOGINNOTICEOK
@@ -134799,16 +134811,15 @@ mod zone_command_tests {
                 ZoneCmdClass::Unsupported,
                 "表外 ident ⇒ 生产经分类器兜底计 Unsupported",
             ),
-            // **不补（oracle 无对应行为，opc-27 裁决）**：`CM_LEVELRANK`（oracle `src/` 零引用）
-            // 与 `CM_LOGINNOTICEOK`（M2Server 无 case）⇒ 分类 `Local` 但区 k **无执行臂**，
-            // 生产仍经执行体兜底计 Unsupported。**分类归属 ≠ 已接线**，两件事分开读。
+            // **不补（oracle `src/` 零引用，opc-27 裁决）**：`CM_LEVELRANK` 分类 `Local`
+            // 但区 k **无执行臂**，生产仍经执行体兜底计 Unsupported。**分类归属 ≠ 已接线**。
+            //
+            // `CM_LOGINNOTICEOK` 已从这里移出：A34 的「oracle 无对应行为」前提与代码自证矛盾
+            // （oracle `src/M2Server/Player/PlayObject.cs:1109-1113` 有 case；宿主臂
+            // `handle_login_notice_ok_cmd` 早已按它实现），区 k 臂已接线（C25 后续卡），
+            // 行为牙 `zone_k_login_notice_ok_writes_client_tick_with_zero_frames`。
             (
                 enter::CM_LEVELRANK,
-                ZoneCmdClass::Local,
-                "分类 Local 但无执行臂 ⇒ 生产经执行体兜底计 Unsupported",
-            ),
-            (
-                mir2_protocol::messages::CM_LOGINNOTICEOK,
                 ZoneCmdClass::Local,
                 "分类 Local 但无执行臂 ⇒ 生产经执行体兜底计 Unsupported",
             ),
@@ -134827,11 +134838,7 @@ mod zone_command_tests {
             .ground_sessions
             .insert("hero".to_string(), crate::tests::test_session_ground(actor));
         let (gates, mut rx) = gates_and_rx();
-        for ident in [
-            game_svr::shop::CM_USERREPAIRITEM,
-            enter::CM_LEVELRANK,
-            mir2_protocol::messages::CM_LOGINNOTICEOK,
-        ] {
+        for ident in [game_svr::shop::CM_USERREPAIRITEM, enter::CM_LEVELRANK] {
             let u0 = perf_counters::zone_cmd_unsupported();
             let outcome = handle_zone_command_with_tail(
                 &mut state,
@@ -134852,6 +134859,38 @@ mod zone_command_tests {
             );
             assert!(rx.try_recv().is_err(), "ident={ident} 兜底不得出帧");
         }
+    }
+
+    /// **C25 后续卡**：`CM_LOGINNOTICEOK(1018)` 的区 k 执行臂与区 0 **逐字同语义**
+    /// （[`handle_login_notice_ok_cmd`]）：写 `(short)Recog` 进本区 `SessionGround.client_tick`，
+    /// **零出帧 / 零 RNG / 零跨区**（oracle `src/M2Server/Player/PlayObject.cs:1109-1113`；
+    /// `SysMsg(ClientTick…)` 被 `RunNotice` 自身的 `while (GetMessage)` 下一轮排空吞掉）。
+    ///
+    /// 变异：删区 k 臂 ⇒ 执行体落兜底，`Dispatched` 断言先红（`client_tick` 不进位）。
+    #[test]
+    fn zone_k_login_notice_ok_writes_client_tick_with_zero_frames() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("zonek_1018");
+        assert_eq!(
+            state.host.ground_sessions.get("hero").unwrap().client_tick,
+            0,
+            "前置：B1 窗口内 client_tick 恒 0"
+        );
+        // 65541 = 0x1_0005：`(short)` 截断后才等于 5（原值 65541 != 5），这条数值差是
+        // 「按 oracle 取值/截断」与「顺手写原值」的判据。
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_LOGINNOTICEOK, 65_541, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched, "区 k 必须有 1018 执行臂");
+        assert_eq!(
+            state.host.ground_sessions.get("hero").unwrap().client_tick,
+            5,
+            "`(short)65541 = 5`（oracle PlayObject.cs:1112）"
+        );
+        assert!(rx.try_recv().is_err(), "1018 必须零出帧");
     }
 
     // ===================== A34 片 1：基础动作 6 + Local 补臂 5（区 k 行为牙） =====================
