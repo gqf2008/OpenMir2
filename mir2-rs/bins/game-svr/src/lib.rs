@@ -26812,6 +26812,12 @@ mod perf_counters {
     /// 与 `zonek_exec_us_max`（墙钟）同段、同口径：`wall − cpu` = 该段里的**等待/被抢占**。
     /// 平台不支持（非 Windows）或探针关 ⇒ 恒 0。
     static ZONEK_EXEC_CPU_US_MAX: AtomicU64 = AtomicU64::new(0);
+    /// **A43h**：本 tick **单条事件墙钟最贵的前 3 名**（ident, us），跨区竞争、写行即清零。
+    ///
+    /// **为什么用墙钟而不是线程 CPU**：`GetThreadTimes` 只有 15.625 ms 量化——单条 1.3 ms 的
+    /// 事件读数是 0 或 15,625，**无法排序**；墙钟（`Instant`）µs 级可用（代价：含被抢占）。
+    /// CPU 的段级读数已有 `zonek_exec_cpu_us` 对照。只在比第 3 名更贵时才加锁 ⇒ 竞争极低。
+    static ZONEK_TOP_SLOW: Mutex<[(u16, u64); 3]> = Mutex::new([(u16::MAX, 0); 3]);
     // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的四个**降级/清理**计数——
     // 只区 k、每 tick 增量、**不设 `*_all_zones` 派生列**（区 0 无同名语义）。
     // 前三个是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）；
@@ -27429,6 +27435,43 @@ mod perf_counters {
         ZONEK_EXEC_CPU_US_MAX.load(Ordering::Relaxed)
     }
 
+    /// **A43h**：记一条事件的墙钟；只有比当前第 3 名更贵才进榜（插入排序，榜长 3）。
+    #[inline]
+    pub(crate) fn note_zonek_slow_ident(ident: u16, wall_us: u64) {
+        if wall_us == 0 || !ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut top = ZONEK_TOP_SLOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if wall_us <= top[2].1 {
+            return;
+        }
+        let mut i = 2;
+        while i > 0 && top[i - 1].1 < wall_us {
+            top[i] = top[i - 1];
+            i -= 1;
+        }
+        top[i] = (ident, wall_us);
+    }
+
+    /// **A43h**：取走本 tick 的 top-3 并清零（写行时调用）。
+    fn take_zonek_top_slow() -> [(u16, u64); 3] {
+        let mut top = ZONEK_TOP_SLOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let out = *top;
+        *top = [(u16::MAX, 0); 3];
+        out
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zonek_top_slow() -> [(u16, u64); 3] {
+        *ZONEK_TOP_SLOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// demux 丢新（`outstanding` 到软上限）。
     #[inline]
     pub(crate) fn note_zonek_inbound_overflow_dropped(zone: usize) {
@@ -27626,7 +27669,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzonek_exec_wall_hit\tzonek_exec_us_max\tzonek_exec_cpu_us\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzonek_exec_wall_hit\tzonek_exec_us_max\tzonek_exec_cpu_us\tzonek_top1_ident\tzonek_top1_us\tzonek_top2_ident\tzonek_top2_us\tzonek_top3_ident\tzonek_top3_us\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27686,6 +27729,7 @@ mod perf_counters {
             ZONEK_INBOUND_UNSUPPORTED.swap(0, Ordering::Relaxed),
         ];
         let dv = zonek_derived_columns(ib, dc, zk);
+        let top_slow = take_zonek_top_slow();
         let cr = [
             CROSS_RECIPIENT_BY_SURFACE[0].swap(0, Ordering::Relaxed),
             CROSS_RECIPIENT_BY_SURFACE[1].swap(0, Ordering::Relaxed),
@@ -27803,6 +27847,13 @@ mod perf_counters {
             ZONEK_EXEC_WALL_HIT.swap(0, Ordering::Relaxed),
             ZONEK_EXEC_US_MAX.swap(0, Ordering::Relaxed),
             ZONEK_EXEC_CPU_US_MAX.swap(0, Ordering::Relaxed),
+            // **A43h**：单条事件墙钟最贵 top-3（ident, us）；本列组是**跨区竞争**结果。
+            u64::from(top_slow[0].0),
+            top_slow[0].1,
+            u64::from(top_slow[1].0),
+            top_slow[1].1,
+            u64::from(top_slow[2].0),
+            top_slow[2].1,
         ];
         // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
         let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
@@ -28478,6 +28529,9 @@ mod perf_counters {
             c.store(0, Ordering::Relaxed);
         }
         SINGLE_EVENT_MAX_IDENT.store(0, Ordering::Relaxed);
+        *ZONEK_TOP_SLOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = [(u16::MAX, 0); 3];
         DATA_LINES.store(0, Ordering::Relaxed);
         *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *PATH.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -43292,6 +43346,10 @@ fn execute_local_budget(
             "INBOUND_LOCAL 工作区只应含 Command"
         );
         let class = classify(&item);
+        // **A43h**：逐条墙钟（ENABLED 关 ⇒ `None`，不取钟）。用于"哪条 ident 在吃 CPU"。
+        // `item` 随后被 `exec` 消费 ⇒ ident 必须先取。
+        let slow_ident = perf_counters::event_ident(&item.ev);
+        let slow_t0 = perf_counters::enabled().then(std::time::Instant::now);
         if class == ZoneCmdClass::Unsupported {
             perf_counters::note_zonek_inbound_unsupported();
         }
@@ -43300,6 +43358,12 @@ fn execute_local_budget(
             wall_ok: wall_start.elapsed() < limits.execute_wall,
         };
         let disp = exec(item, class, pending_local, budget);
+        if let Some(t0) = slow_t0 {
+            perf_counters::note_zonek_slow_ident(
+                slow_ident,
+                u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
+            );
+        }
         match disp {
             LocalDisposition::Drained => {
                 perf_counters::note_zonek_inbound_drained(zone, from_carry)
@@ -145829,6 +145893,101 @@ mod a43d_exec_cpu_tests {
             wall - cpu > 40_000,
             "睡眠段的 wall − cpu 必须 >40 ms（等待不得计入 CPU；cpu={cpu} wall={wall}）"
         );
+
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        perf_counters::reset_for_tests();
+    }
+}
+
+/// **A43h 牙**：`zonek_top1_ident` 必须指向**最贵的那条事件**——同一批里 A（忙等）比 B 贵，
+/// 榜单第 1 名必须是 A；换成长短再跑，第 1 名跟着换。
+/// 变异：把逐条计时挪到循环外（整段一个样本）⇒ 榜单里只剩最后一条 ⇒ 红。
+#[cfg(test)]
+mod a43h_top_slow_tests {
+    use super::*;
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    fn spin_ms(ms: u64) {
+        let t = Instant::now();
+        let mut acc = 0u64;
+        while t.elapsed() < Duration::from_millis(ms) {
+            acc = acc.wrapping_add(1);
+        }
+        std::hint::black_box(acc);
+    }
+
+    fn cmd_of(seq: u64, ident: u16) -> SeqEvent {
+        SeqEvent {
+            seq,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: format!("p{seq}"),
+                socket: 900 + seq as i32,
+                cmd: CommandMessage {
+                    recog: 0,
+                    ident,
+                    param: 0,
+                    tag: 0,
+                    series: 0,
+                },
+                tail: None,
+            },
+        }
+    }
+
+    /// 跑两条：ident 3001 忙等 6ms，ident 3002 立即返回；返回榜单。
+    fn run(a_ms: u64, b_ms: u64) -> [(u16, u64); 3] {
+        let mut buffer: VecDeque<SeqEvent> = VecDeque::new();
+        buffer.push_back(cmd_of(0, 3001));
+        buffer.push_back(cmd_of(1, 3002));
+        let mut pending: BTreeMap<u64, PendingLocalCmd> = BTreeMap::new();
+        let _ = execute_local_budget(
+            1,
+            &mut buffer,
+            &mut pending,
+            0,
+            2,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            &|_| ZoneCmdClass::Local,
+            move |item: SeqEvent, _c, _p, _b| {
+                let ident = match &item.ev {
+                    GateEvent::Command { cmd, .. } => cmd.ident,
+                    _ => 0,
+                };
+                if ident == 3001 {
+                    spin_ms(a_ms);
+                } else {
+                    spin_ms(b_ms);
+                }
+                LocalDisposition::Drained
+            },
+        );
+        perf_counters::zonek_top_slow()
+    }
+
+    #[test]
+    fn top1_follows_the_slowest_ident() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+
+        // A 慢 6ms、B 立即 ⇒ 第 1 名 = A(3001)。
+        let top = run(6, 0);
+        assert_eq!(top[0].0, 3001, "第 1 名必须是慢的那条（实得 {top:?}）");
+        assert!(top[0].1 >= 5_000, "第 1 名墙钟必须 ≥5ms（实得 {top:?}）");
+
+        // 反过来：B 慢 8ms、A 立即 ⇒ 第 1 名 = B(3002)。
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        let top2 = run(0, 8);
+        assert_eq!(top2[0].0, 3002, "换谁慢第 1 名就跟谁（实得 {top2:?}）");
 
         perf_counters::ENABLED.store(false, Ordering::Relaxed);
         perf_counters::reset_for_tests();
