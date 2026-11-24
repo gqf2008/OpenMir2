@@ -10689,6 +10689,20 @@ fn handle_selloff_cmd(
     } else {
         None
     };
+    // **A34 片 5**：卖方缺席（`online` 无此人 = 离线 **或** 在别区）+ 库中有匹配条目 ⇒ 照抄
+    // oracle 的 `Flag=1` 延期结算形态（买方照扣、物品照发、卖方未得），并计数 + 限速 WRN。
+    // 补偿由登录点 [`pay_selloff_on_login`] 接线（oracle 单世界只有"离线"一种原因；"别区"是本仓
+    // 新增可见面，登记）。
+    if ident == messages::CM_SELLOFFBUY
+        && seller_chr.is_none()
+        && book.entries.iter().any(|e| {
+            e.deal_chr_name.eq_ignore_ascii_case(tail)
+                && e.buy_chr_name.eq_ignore_ascii_case(chr_name)
+                && e.flag == 0
+        })
+    {
+        perf_counters::note_zone_selloff_sold_offline_seller();
+    }
 
     let mut me_sg = ground_sessions.remove(chr_name).expect("上面已确认存在");
     let mut me_so = sell_off_sessions.remove(chr_name).unwrap_or_default();
@@ -10810,6 +10824,101 @@ fn handle_selloff_cmd(
                 socket: t.socket,
                 body,
             });
+        }
+    }
+}
+
+/// A34 片 5：7 条寄售命令的**唯一装配点**——区 0 `INBOUND_PROCESS` 与区 k 控制邮箱 drain
+/// 共用同一份实参装配（与 [`run_guild_command`] 同模板；防两处逐字同形之后漂移）。
+///
+/// 只做「取 `enter_cfg.sell_off` + 调用」；行为/日志仍由 [`handle_selloff_cmd`] 原样产出。
+/// `book` 是进程级 `SellOffBook`（`M2Share.SellOffItemList` 等价物），`sell_off_sessions` 是区本地。
+#[allow(clippy::too_many_arguments)]
+fn run_selloff_command(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world_bevy::World,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    book: &mut game_svr::selloff::SellOffBook,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    enter_cfg: &EnterConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    handle_selloff_cmd(
+        ident,
+        recog,
+        param,
+        tag,
+        tail,
+        chr_name,
+        socket,
+        online,
+        world,
+        ground_sessions,
+        sell_off_sessions,
+        book,
+        gates,
+        &enter_cfg.sell_off,
+        catalog,
+    );
+}
+
+/// A34 片 5：登录时的寄售延期结算（oracle `PlayObject.Sale.cs:387-429` `GetSellOffGlod`，
+/// 接线点 = `PlayObject.cs:1486` 的登录调用）。
+///
+/// **付费路径不读 `SaleDeal`**（只有 `update_sell_off_info(0)` 的清理段按它早退）⇒ 接线无需
+/// `SaleDeal` setter；`sale_deal=false` 时仅 `flag==2` 旧条目不清理（与 oracle 同形，登记）。
+/// 一个登录只结算**一条**（oracle `break` 语义，`get_sell_off_gold` 已 1:1）。
+/// 卖方在**登录所在区**结算（本函数由登录完成点调用，拿到的就是该区会话表）。
+#[allow(clippy::too_many_arguments)]
+fn pay_selloff_on_login(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    book: &mut game_svr::selloff::SellOffBook,
+    chr_name: &str,
+    gate_idx: i32,
+    socket: i32,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &game_svr::selloff::SellOffConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    let Some(sg) = ground_sessions.get_mut(chr_name) else {
+        return;
+    };
+    let mut state = sell_off_sessions.remove(chr_name).unwrap_or_default();
+    let events = {
+        let mut side = game_svr::selloff::SellOffSide {
+            id: sg.actor_id,
+            name: chr_name.to_string(),
+            offline: false,
+            items: &mut sg.state.item_list,
+            gold: &mut sg.state.gold,
+            game_gold: &mut sg.game_gold,
+            game_point: sg.game_point,
+            weight: sg.state.wabil.weight,
+            wear_weight: sg.state.wabil.wear_weight,
+            hand_weight: sg.state.wabil.hand_weight,
+            max_weight: sg.state.wabil.max_weight,
+            send_game_gold_info: sg.soft_version_date != 0,
+            state: &mut state,
+        };
+        game_svr::selloff::get_sell_off_gold(&mut side, book)
+    };
+    sell_off_sessions.insert(chr_name.to_string(), state);
+    let _ = cfg;
+    for ev in &events {
+        let Some((_target, body)) = game_svr::selloff::selloff_event_body(ev, catalog) else {
+            continue;
+        };
+        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "寄售登录补发") {
+            let _ = tx.send(SimToGate::SendFrame { socket, body });
         }
     }
 }
@@ -27213,7 +27322,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27377,6 +27486,9 @@ mod perf_counters {
             hd[12],
             // **卡 A29**：脚本动作未实现错误次数（本 tick 增量）。
             SCRIPT_ACTION_ERRORS.swap(0, Ordering::Relaxed),
+            // **A34 片 5**：卖方缺席（离线/别区）时成交数（oracle Flag=1 延期结算形态；
+            // 本 tick 增量；**在 `zone_metrics` 之前**，A36 的末列契约不动）。
+            ZONE_SELLOFF_SOLD_OFFLINE_SELLER.swap(0, Ordering::Relaxed),
         ];
         // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
         let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
@@ -27537,6 +27649,26 @@ mod perf_counters {
     /// 「切片模式下按原路径处理完」的次数。世界进入是否成功不在此计（那是
     /// `telemetry::record_ok`/`record_attempt` 的口径）。
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
+    /// **A34 片 5**：卖方缺席（离线/别区）时**成交**发生数（oracle `Sale.cs:303-317` 的 `Flag=1`
+    /// 形态：买方照扣、物品照发、卖方未得元宝；oracle 单世界只可能是"离线"，本仓另含"别区"）。
+    /// 每 tick 增量进 TSV；登录补偿见 `pay_selloff_on_login`。
+    static ZONE_SELLOFF_SOLD_OFFLINE_SELLER: AtomicU64 = AtomicU64::new(0);
+    /// 记一次「卖方缺席成交」；返回累计值（供 WRN 限速）。
+    #[cfg(test)]
+    pub(crate) fn zone_selloff_sold_offline_seller() -> u64 {
+        ZONE_SELLOFF_SOLD_OFFLINE_SELLER.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn note_zone_selloff_sold_offline_seller() -> u64 {
+        let n = ZONE_SELLOFF_SOLD_OFFLINE_SELLER.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 8 || n.is_multiple_of(1000) {
+            glog!(
+                "WRN",
+                "元宝寄售：卖方缺席（离线/别区）成交 ⇒ 延期结算 flag=1 次数={n}（登录时补发，A34 片 5 登记）"
+            );
+        }
+        n
+    }
     // ---- **A36**：每区仪表（perf TSV 末列 `zone_metrics`）----
     /// 运行时区数（切片初始化时由 [`set_zone_count`] 写入；0 = 非切片 ⇒ per-zone 表为空）。
     static ZONE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -28490,6 +28622,8 @@ fn drain_kicks(
     // 卡 `openmir2-kick-sessions-residue`：这两张宿主会话表必须与 `ground_sessions` **同处**清。
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    // **A41**：交易会话表——顶号/软关与 `close_cleanup_residue` 同语义清理（A40 残余）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     // 卡 `openmir2-kick-display-residue`：顶号路径也必须能摘展示表（见函数尾部）。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -28570,6 +28704,9 @@ fn drain_kicks(
         // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
         shop_sessions.remove(&chr);
         sell_off_sessions.remove(&chr);
+        // **A41**：交易条目同处清除（残留 `dealing=true` 会让 `drain_deal_tick`
+        // 对已下线者尝试取消；与 `close_cleanup_residue` 同语义）。
+        trade_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -28697,6 +28834,8 @@ fn drain_soft_close(
     // 卡 `openmir2-kick-sessions-residue`：与 `drain_kicks` 同一口径（两条路径各一颗牙）。
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    // **A41**：交易会话表——顶号/软关与 `close_cleanup_residue` 同语义清理（A40 残余）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     // 卡 `openmir2-kick-display-residue`：账号级顶号（`BoSoftClose` 支）同样要摘展示表。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -28778,6 +28917,9 @@ fn drain_soft_close(
         // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
         shop_sessions.remove(&chr);
         sell_off_sessions.remove(&chr);
+        // **A41**：交易条目同处清除（残留 `dealing=true` 会让 `drain_deal_tick`
+        // 对已下线者尝试取消；与 `close_cleanup_residue` 同语义）。
+        trade_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -29351,6 +29493,21 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
     // `GuildManager`/`GuildStore` ⇒ 整 ident `Process`（A6 控制邮箱；区 0 drain 用目标区 k 的
     // 玩家态执行 [`run_guild_command`]）。**无执行臂的 Local 分类另论**——这 9 条是**有臂**的 Process。
     if guild_cmd::GUILD_IDENTS.contains(&ident) {
+        return ZoneCmdClass::Process;
+    }
+    // **A34 片 5**：元宝寄售 7 条（`SellOffBook` 进程级；`sell_off_sessions` 区本地）⇒ 整 ident
+    // `Process`（A6 控制邮箱；区 0 drain 用目标区 k 的玩家态 + 进程级 book 执行
+    // [`run_selloff_command`]）。**有臂**的 Process，不是"Local 无臂"。
+    if matches!(
+        ident,
+        mir2_protocol::messages::CM_SELLOFFADDITEM
+            | mir2_protocol::messages::CM_SELLOFFDELITEM
+            | mir2_protocol::messages::CM_SELLOFFCANCEL
+            | mir2_protocol::messages::CM_SELLOFFEND
+            | mir2_protocol::messages::CM_CANCELSELLOFFITEMING
+            | mir2_protocol::messages::CM_SELLOFFBUYCANCEL
+            | mir2_protocol::messages::CM_SELLOFFBUY
+    ) {
         return ZoneCmdClass::Process;
     }
     if ident == chat::CM_SAY {
@@ -39162,7 +39319,8 @@ impl HostLoop {
                             ) {
                                 // `openmir2-m3-selloff-consignment-world`：7 条元宝寄售 `CM_*` 派发
                                 // （oracle `PlayObject.Message.cs:2057-2077`）。
-                                handle_selloff_cmd(
+                                // **A34 片 5**：实参装配抽到 [`run_selloff_command`]（与区 k drain 共用）。
+                                run_selloff_command(
                                     cmd.ident,
                                     cmd.recog,
                                     cmd.param,
@@ -39176,7 +39334,7 @@ impl HostLoop {
                                     &mut sell_off_sessions,
                                     &mut sell_off_book,
                                     &gates,
-                                    &enter_cfg.sell_off,
+                                    &enter_cfg,
                                     &enter_cfg.catalog,
                                 );
                             } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
@@ -40404,6 +40562,37 @@ impl HostLoop {
                                         }
                                     });
                                 }
+                                ControlRequest::SellOffProcess {
+                                    ident,
+                                    recog,
+                                    param,
+                                    tag,
+                                    tail,
+                                    ..
+                                } => {
+                                    // **A34 片 5**：寄售 7 条——与区 0 `INBOUND_PROCESS` 共用
+                                    // [`run_selloff_command`]；持**目标区 k** 的 `ZoneState` 锁，
+                                    // 进程级 `sell_off_book` 照常（book 在进程态，会话表在区 k）。
+                                    guard.run(|sessions| {
+                                        run_selloff_command(
+                                            ident,
+                                            recog,
+                                            param,
+                                            tag,
+                                            tail.as_deref(),
+                                            &chr_name,
+                                            socket,
+                                            &*online,
+                                            &*world,
+                                            sessions,
+                                            sell_off_sessions,
+                                            sell_off_book,
+                                            &*gates,
+                                            &*enter_cfg,
+                                            &enter_cfg.catalog,
+                                        );
+                                    });
+                                }
                             }
                             // 守卫 drop ⇒ 按 epoch 减在飞计数（tick 顶据此放行 deferred）。
                             drop(guard);
@@ -40419,6 +40608,8 @@ impl HostLoop {
             let mut engine = &mut svc.engine;
             let mut guilds = &mut svc.guilds;
             let guild_store = &mut svc.guild_store;
+            // **A34 片 5**：登录补偿要读进程级寄售列表（与 `sell_off_sessions` 区本地表配合）。
+            let sell_off_book = &mut svc.sell_off_book;
             let mut npc_host = &mut svc.npc_host;
             let mut npc_vars_base = &mut svc.npc_vars_base;
             let item_number = &shared.item_number;
@@ -40619,6 +40810,28 @@ impl HostLoop {
                                                 zone_router::HOST_ZONE.get(),
                                             );
                                         }
+                                        // **A34 片 5**：寄售延期结算（oracle `GetSellOffGlod` 登录点）。
+                                        // 名字用同一解析器从回包取（`finish_login` 内部也这样解）；
+                                        // 解不出则不补偿（与 `finish_login` 的 WRN 同形）。
+                                        let login_chr = {
+                                            let payload =
+                                                mir2_protocol::edcode::decode(&reply.packet);
+                                            record::parse_player_data_head(&payload)
+                                                .map(|h| h.chr_name)
+                                        };
+                                        if let Some(name) = login_chr.as_deref() {
+                                            pay_selloff_on_login(
+                                                &mut ground_sessions,
+                                                &mut sell_off_sessions,
+                                                sell_off_book,
+                                                name,
+                                                gate_idx,
+                                                socket,
+                                                &gates,
+                                                &enter_cfg.sell_off,
+                                                &enter_cfg.catalog,
+                                            );
+                                        }
                                     }
                                     Some(LoginLanding::Uncovered { chr_name, reason }) => {
                                         perf_counters::note_zone_login_uncovered();
@@ -40699,6 +40912,22 @@ impl HostLoop {
                                                             item_number,
                                                         },
                                                     );
+                                                    // **A34 片 5**：寄售延期结算——在**卖方登录所在区**做
+                                                    // （与 host 路径同一助手 `pay_selloff_on_login`）。
+                                                    {
+                                                        let ZoneState { host, .. } = &mut *st;
+                                                        pay_selloff_on_login(
+                                                            &mut host.ground_sessions,
+                                                            &mut host.sell_off_sessions,
+                                                            sell_off_book,
+                                                            &chr_name,
+                                                            gate_idx,
+                                                            socket,
+                                                            &gates,
+                                                            &enter_cfg.sell_off,
+                                                            &enter_cfg.catalog,
+                                                        );
+                                                    }
                                                     note_first_player_id(
                                                         target_zone,
                                                         &st.host.world,
@@ -40886,6 +41115,7 @@ impl HostLoop {
                 &mut ground_sessions,
                 &mut shop_sessions,
                 &mut sell_off_sessions,
+                &mut trade_sessions,
                 &mut displays,
                 registry.as_ref(),
                 &mut guilds,
@@ -40945,6 +41175,7 @@ impl HostLoop {
                 &mut ground_sessions,
                 &mut shop_sessions,
                 &mut sell_off_sessions,
+                &mut trade_sessions,
                 &mut displays,
                 registry.as_ref(),
                 &mut guilds,
@@ -42271,6 +42502,19 @@ enum ControlRequest {
         at_tick: u64,
         epoch: u64,
     },
+    /// **A34 片 5**：元宝寄售 7 条（`CM_SELLOFF*`）——区 0 drain 用**区 k** 玩家态 + 进程级
+    /// `SellOffBook` 执行 [`run_selloff_command`]（与区 0 `INBOUND_PROCESS` 共用）。
+    SellOffProcess {
+        zone: zone::ZoneId,
+        chr_name: String,
+        ident: u16,
+        recog: i32,
+        param: u16,
+        tag: u16,
+        tail: Option<String>,
+        at_tick: u64,
+        epoch: u64,
+    },
     /// **A34 片 4**：行会 9 条（`CM_GUILD*`）——区 0 drain 用**区 k** 玩家态 + 进程级
     /// `GuildManager`/`GuildStore` 执行 [`run_guild_command`]（与区 0 `INBOUND_PROCESS` 共用）。
     GuildProcess {
@@ -42305,7 +42549,8 @@ impl ControlRequest {
             ControlRequest::GmSay { zone, .. }
             | ControlRequest::EatProcess { zone, .. }
             | ControlRequest::ScriptProcess { zone, .. }
-            | ControlRequest::GuildProcess { zone, .. } => *zone,
+            | ControlRequest::GuildProcess { zone, .. }
+            | ControlRequest::SellOffProcess { zone, .. } => *zone,
         }
     }
 
@@ -42314,7 +42559,8 @@ impl ControlRequest {
             ControlRequest::GmSay { chr_name, .. }
             | ControlRequest::EatProcess { chr_name, .. }
             | ControlRequest::ScriptProcess { chr_name, .. }
-            | ControlRequest::GuildProcess { chr_name, .. } => chr_name,
+            | ControlRequest::GuildProcess { chr_name, .. }
+            | ControlRequest::SellOffProcess { chr_name, .. } => chr_name,
         }
     }
 
@@ -42323,7 +42569,8 @@ impl ControlRequest {
             ControlRequest::GmSay { at_tick, .. }
             | ControlRequest::EatProcess { at_tick, .. }
             | ControlRequest::ScriptProcess { at_tick, .. }
-            | ControlRequest::GuildProcess { at_tick, .. } => *at_tick,
+            | ControlRequest::GuildProcess { at_tick, .. }
+            | ControlRequest::SellOffProcess { at_tick, .. } => *at_tick,
         }
     }
 
@@ -42332,7 +42579,8 @@ impl ControlRequest {
             ControlRequest::GmSay { epoch, .. }
             | ControlRequest::EatProcess { epoch, .. }
             | ControlRequest::ScriptProcess { epoch, .. }
-            | ControlRequest::GuildProcess { epoch, .. } => *epoch,
+            | ControlRequest::GuildProcess { epoch, .. }
+            | ControlRequest::SellOffProcess { epoch, .. } => *epoch,
         }
     }
 }
@@ -42361,6 +42609,15 @@ enum ControlPayload {
     /// `GuildManager`/`GuildStore` 执行 [`run_guild_command`]（只带 ident 与尾文本）。
     GuildProcess {
         ident: u16,
+        tail: Option<String>,
+    },
+    /// **A34 片 5**：元宝寄售 7 条（`CM_SELLOFF*`）——区 0 drain 用**区 k** 玩家态 + 进程级
+    /// `SellOffBook` 执行 [`run_selloff_command`]（12B 头四字段 + 尾文本，与 `handle_selloff_cmd` 同参）。
+    SellOffProcess {
+        ident: u16,
+        recog: i32,
+        param: u16,
+        tag: u16,
         tail: Option<String>,
     },
 }
@@ -42742,6 +42999,23 @@ fn a6_enqueue_control(
                 at_tick: tick,
                 epoch,
             },
+            ControlPayload::SellOffProcess {
+                ident,
+                recog,
+                param,
+                tag,
+                tail,
+            } => ControlRequest::SellOffProcess {
+                zone,
+                chr_name: chr_name.to_string(),
+                ident,
+                recog,
+                param,
+                tag,
+                tail,
+                at_tick: tick,
+                epoch,
+            },
         };
         q.push_back(req);
         // 置位与 push **同临界区**（理由见函数头注释）。
@@ -42821,6 +43095,25 @@ fn a6_dispatch_local(
                         // **必须在默认 `GmSay` 之前**：落进 GmSay 会被当成 `@` 命令正文。
                         ControlPayload::GuildProcess {
                             ident: cmd.ident,
+                            tail: tail.clone(),
+                        }
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_SELLOFFADDITEM
+                            | mir2_protocol::messages::CM_SELLOFFDELITEM
+                            | mir2_protocol::messages::CM_SELLOFFCANCEL
+                            | mir2_protocol::messages::CM_SELLOFFEND
+                            | mir2_protocol::messages::CM_CANCELSELLOFFITEMING
+                            | mir2_protocol::messages::CM_SELLOFFBUYCANCEL
+                            | mir2_protocol::messages::CM_SELLOFFBUY
+                    ) {
+                        // **A34 片 5**：寄售 7 条 ⇒ 进程态（区 0 drain 用目标区 k 的玩家态 + 进程 book）。
+                        // **必须在默认 `GmSay` 之前**。
+                        ControlPayload::SellOffProcess {
+                            ident: cmd.ident,
+                            recog: cmd.recog,
+                            param: cmd.param,
+                            tag: cmd.tag,
                             tail: tail.clone(),
                         }
                     } else {
@@ -53451,7 +53744,7 @@ mod tests {
     #[test]
     fn drain_kicks_clears_shop_and_selloff_for_kicked_role_only() {
         use std::collections::HashMap;
-        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
@@ -53493,6 +53786,19 @@ mod tests {
         );
         let mut displays = downlink::DisplayTable::new();
         let mut kick_pending = vec!["lb1a".to_string()];
+        // **A41**：顶号前该角色正在交易；旁观者条目须保留。
+        let mut trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade.insert(
+            "lb1a".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        trade.insert(
+            "bystander".to_string(),
+            game_svr::trade::DealState::default(),
+        );
 
         drain_kicks(
             &mut world,
@@ -53505,6 +53811,7 @@ mod tests {
             &mut ground,
             &mut shop,
             &mut sell_off,
+            &mut trade,
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -53536,6 +53843,34 @@ mod tests {
             "误删负例：旁观者的 SellOff 会话态必须留着"
         );
         assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+        // **A41**：交易条目同处清；旁观者保留；随后 `drain_deal_tick` 不得再对已下线者出帧。
+        assert!(
+            !trade.contains_key("lb1a"),
+            "A41：顶号必须清掉交易条目（删清理 ⇒ 红）"
+        );
+        assert!(
+            trade.contains_key("bystander"),
+            "误删负例：旁观者的交易条目必须留着"
+        );
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut cancels = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_DEALCANCEL {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 0, "已下线者不得再产生交易取消帧");
     }
 
     /// **卡 `openmir2-kick-sessions-residue` A1/A2（账号级顶号 `BoSoftClose` 支）**：
@@ -53546,7 +53881,7 @@ mod tests {
     #[test]
     fn drain_soft_close_clears_shop_and_selloff_for_kicked_role_only() {
         use std::collections::HashMap;
-        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
         let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
@@ -53582,6 +53917,19 @@ mod tests {
         );
         let mut displays = downlink::DisplayTable::new();
         let mut soft_close_pending = vec!["lb1b".to_string()];
+        // **A41**：软关前该角色正在交易；旁观者条目须保留。
+        let mut trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade.insert(
+            "lb1b".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        trade.insert(
+            "bystander".to_string(),
+            game_svr::trade::DealState::default(),
+        );
 
         drain_soft_close(
             &mut world,
@@ -53594,6 +53942,7 @@ mod tests {
             &mut ground,
             &mut shop,
             &mut sell_off,
+            &mut trade,
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -53620,6 +53969,34 @@ mod tests {
             "误删负例：旁观者的两张表都必须留着"
         );
         assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+        // **A41**：交易条目同处清；旁观者保留；随后 `drain_deal_tick` 不得再对已下线者出帧。
+        assert!(
+            !trade.contains_key("lb1b"),
+            "A41：软关必须清掉交易条目（删清理 ⇒ 红）"
+        );
+        assert!(
+            trade.contains_key("bystander"),
+            "误删负例：旁观者的交易条目必须留着"
+        );
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut cancels = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_DEALCANCEL {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 0, "已下线者不得再产生交易取消帧");
     }
 
     /// 卡 `openmir2-softclose-cleanup-residue` 返工牙的夹具：世界 + 四个会话容器 + 展示表。
@@ -62733,6 +63110,7 @@ break
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -62788,6 +63166,7 @@ break
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
@@ -62858,6 +63237,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut ground,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut displays,
@@ -62932,6 +63312,7 @@ break
             &mut ground,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut displays,
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -62997,6 +63378,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -63078,6 +63460,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -69567,6 +69950,7 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -69649,6 +70033,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -69761,6 +70146,7 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world_bevy::GuildManager::new(),
@@ -69830,6 +70216,7 @@ SendRefMsgRange=15
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
@@ -72106,6 +72493,7 @@ SendRefMsgRange=15
                 &mut sessions,
                 &mut HashMap::new(),
                 &mut HashMap::new(),
+                &mut std::collections::HashMap::new(),
                 &mut downlink::DisplayTable::new(),
                 None,
                 &mut mir2_world_bevy::GuildManager::new(),
@@ -136030,6 +136418,321 @@ mod zone_command_tests {
             "邮箱满也不得计 zone_cmd_unsupported（归属是 Process）"
         );
         state.host.ground_sessions = sessions;
+    }
+
+    // ===================== A34 片 5：元宝寄售 7 条（Process 族） =====================
+
+    /// 寄售测试用目录（`landed` + 买家会话 + 单件目录）。
+    fn selloff_ready(tag: &str) -> (ZoneState, i32, game_svr::ability::StdItemCatalog) {
+        let (mut state, actor) = landed(tag, zone::ZoneId::new(1));
+        state.host.world.clock_ms = 12_345;
+        let mut sg = crate::tests::test_session_ground(actor);
+        sg.game_gold = 20_000;
+        sg.soft_version_date = 1; // 允许 SM_GAMEGOLDNAME（`SendGoldInfo(false)` 门）
+        state.host.ground_sessions.insert("hero".to_string(), sg);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "戒指".to_string(),
+                std_mode: 22,
+                weight: 1,
+                dura_max: 1000,
+                ..Default::default()
+            },
+        );
+        (state, actor, catalog)
+    }
+
+    fn selloff_idents(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<u16> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            out.push(u16::from_le_bytes([body[4], body[5]]));
+        }
+        out
+    }
+
+    /// **A34 片 5 · 路由牙**：7 条 `CM_SELLOFF*` ident 级 `Process`；`a6_dispatch_local` 装
+    /// `ControlPayload::SellOffProcess`（**不是** 默认 `GmSay`）、置 `control_pending`、且**不**计
+    /// `zone_cmd_unsupported`。
+    #[test]
+    fn zonek_selloff_idents_are_process_and_route_to_selloff_mailbox() {
+        use std::collections::{BTreeMap, VecDeque};
+        for ident in [
+            mir2_protocol::messages::CM_SELLOFFADDITEM,
+            mir2_protocol::messages::CM_SELLOFFDELITEM,
+            mir2_protocol::messages::CM_SELLOFFCANCEL,
+            mir2_protocol::messages::CM_SELLOFFEND,
+            mir2_protocol::messages::CM_CANCELSELLOFFITEMING,
+            mir2_protocol::messages::CM_SELLOFFBUYCANCEL,
+            mir2_protocol::messages::CM_SELLOFFBUY,
+        ] {
+            assert_eq!(
+                zone_cmd_class(ident, None),
+                ZoneCmdClass::Process,
+                "ident={ident} 必须 Process（寄售读进程 book）"
+            );
+        }
+        let (mut state, actor, _catalog) = selloff_ready("selloff_route");
+        let inbox = std::sync::Mutex::new(VecDeque::new());
+        let mut pending = BTreeMap::new();
+        let mut buffer = VecDeque::from([SeqEvent {
+            seq: 1,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(mir2_protocol::messages::CM_SELLOFFEND, 0, 0, 0),
+                tail: Some("买家".to_string()),
+            },
+        }]);
+        let u0 = perf_counters::zone_cmd_unsupported();
+        let _ = execute_local_budget(
+            0,
+            &mut buffer,
+            &mut pending,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            &|_s: &SeqEvent| ZoneCmdClass::Process,
+            |item, class, p, b| {
+                let mut exec =
+                    |_e: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {};
+                a6_dispatch_local_test(
+                    item,
+                    class,
+                    Some(&inbox),
+                    &mut state.host.ground_sessions,
+                    p,
+                    zone::ZoneId::new(1),
+                    5,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        let _ = actor;
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0,
+            "Process 归属不得计 zone_cmd_unsupported"
+        );
+        let q = inbox.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(q.len(), 1);
+        match &q[0] {
+            ControlRequest::SellOffProcess { ident, tail, .. } => {
+                assert_eq!(*ident, mir2_protocol::messages::CM_SELLOFFEND);
+                assert_eq!(tail.as_deref(), Some("买家"));
+            }
+            other => panic!("必须装 SellOffProcess 变体（落 GmSay 即错），实得 {other:?}"),
+        }
+        drop(q);
+        assert_eq!(
+            state.host.ground_sessions["hero"].a6.control_pending, 1,
+            "A6 置位"
+        );
+    }
+
+    /// **A34 片 5 · S7 离线卖方照抄 + 计数**：卖方不在执行区 `online` ⇒ oracle `Flag=1` 形态
+    /// （买方扣元宝、物品入包、条目 flag=1、**零 BUY_OK**），计数 +1；登录补偿另有用例。
+    #[test]
+    fn zonek_selloff_buy_offline_seller_keeps_oracle_flag1_and_counts() {
+        let (mut state, _actor, catalog) = selloff_ready("selloff_offline");
+        let (gates, mut rx) = gates_and_rx();
+        let mut book = game_svr::selloff::SellOffBook::default();
+        book.entries.push(game_svr::selloff::DealOffInfo {
+            deal_chr_name: "别区卖方".to_string(),
+            buy_chr_name: "hero".to_string(),
+            sell_datetime_ms: 0,
+            sell_gold: 100,
+            use_items: vec![Some(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 500,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            })],
+            flag: 0,
+        });
+        let mut so = std::collections::HashMap::new();
+        let cfg = game_svr::selloff::SellOffConfig::default();
+        let n0 = perf_counters::zone_selloff_sold_offline_seller();
+        handle_selloff_cmd(
+            mir2_protocol::messages::CM_SELLOFFBUY,
+            0,
+            0,
+            0,
+            Some("别区卖方"),
+            "hero",
+            7,
+            &state.host.online,
+            &state.host.world,
+            &mut state.host.ground_sessions,
+            &mut so,
+            &mut book,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(
+            sg.game_gold,
+            20_000 - (100 + cfg.dec_user_game_gold),
+            "买方扣元宝（oracle Flag=1 形态）"
+        );
+        assert_eq!(book.entries[0].flag, 1, "条目 flag=1（已售、卖方未得）");
+        assert!(
+            sg.state.item_list.iter().any(|it| it.index == 500),
+            "物品入买方包"
+        );
+        let idents = selloff_idents(&mut rx);
+        assert!(
+            !idents.contains(&mir2_protocol::messages::SM_SELLOFFBUY_OK),
+            "BUY_OK 必须不可达（oracle j<=9 越界 bug 照抄）；实得 {idents:?}"
+        );
+        assert!(
+            idents.contains(&mir2_protocol::messages::SM_ADDITEM),
+            "立即 SM_ADDITEM 必须先于中止（物品已入包）；实得 {idents:?}"
+        );
+        assert_eq!(
+            perf_counters::zone_selloff_sold_offline_seller(),
+            n0 + 1,
+            "卖方缺席成交必须计数 +1"
+        );
+    }
+
+    /// **A34 片 5 · 登录补偿**：`flag==1` 条目在卖方登录时结算一次（元宝 +、`flag→2`、
+    /// `SM_GAMEGOLDNAME` 一条），二次调用不再付（无帧、元宝不变）。
+    #[test]
+    fn zonek_selloff_login_pays_flag1_once() {
+        let (mut state, _actor, catalog) = selloff_ready("selloff_pay");
+        let (gates, mut rx) = gates_and_rx();
+        let mut book = game_svr::selloff::SellOffBook::default();
+        book.entries.push(game_svr::selloff::DealOffInfo {
+            deal_chr_name: "hero".to_string(),
+            buy_chr_name: "买家".to_string(),
+            sell_datetime_ms: 0,
+            sell_gold: 777,
+            use_items: Vec::new(),
+            flag: 1,
+        });
+        let cfg = game_svr::selloff::SellOffConfig::default();
+        {
+            let sg = state.host.ground_sessions.get_mut("hero").unwrap();
+            sg.game_gold = 0;
+        }
+        pay_selloff_on_login(
+            &mut state.host.ground_sessions,
+            &mut state.host.sell_off_sessions,
+            &mut book,
+            "hero",
+            0,
+            7,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            state.host.ground_sessions["hero"].game_gold, 777,
+            "登录补偿：元宝 += 寄售所得"
+        );
+        assert_eq!(book.entries[0].flag, 2, "结算后 flag=2（交易结束）");
+        assert_eq!(
+            selloff_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_GAMEGOLDNAME],
+            "一次 GameGoldChanged（SM_GAMEGOLDNAME 5008）"
+        );
+        // 二次登录：不得重复补
+        pay_selloff_on_login(
+            &mut state.host.ground_sessions,
+            &mut state.host.sell_off_sessions,
+            &mut book,
+            "hero",
+            0,
+            7,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            state.host.ground_sessions["hero"].game_gold, 777,
+            "二次登录不得再付"
+        );
+        assert!(rx.try_recv().is_err(), "二次登录不得再发帧");
+    }
+
+    /// **A34 片 5 · 邮箱满守恒**：`CONTROL_MAILBOX_CAP` 预填后，寄售命令被丢新（返回 false），
+    /// `control_pending` 不变、`zone_cmd_unsupported` 不增（Process 归属证据；与片 4 同机制）。
+    #[test]
+    fn zonek_selloff_mailbox_full_drops_new_without_unsupported() {
+        use std::collections::VecDeque;
+        let (mut state, actor, _catalog) = selloff_ready("selloff_mbfull");
+        let _ = actor;
+        let inbox = std::sync::Mutex::new(VecDeque::new());
+        let mut sessions = std::mem::take(&mut state.host.ground_sessions);
+        for _ in 0..CONTROL_MAILBOX_CAP {
+            assert!(a6_enqueue_control(
+                &inbox,
+                &mut sessions,
+                zone::ZoneId::new(1),
+                "hero",
+                ControlPayload::SellOffProcess {
+                    ident: mir2_protocol::messages::CM_SELLOFFEND,
+                    recog: 0,
+                    param: 0,
+                    tag: 0,
+                    tail: None,
+                },
+                mir2_protocol::messages::CM_SELLOFFEND,
+                5,
+            ));
+        }
+        let pending_before = sessions["hero"].a6.control_pending;
+        let u0 = perf_counters::zone_cmd_unsupported();
+        assert!(
+            !a6_enqueue_control(
+                &inbox,
+                &mut sessions,
+                zone::ZoneId::new(1),
+                "hero",
+                ControlPayload::SellOffProcess {
+                    ident: mir2_protocol::messages::CM_SELLOFFEND,
+                    recog: 0,
+                    param: 0,
+                    tag: 0,
+                    tail: None,
+                },
+                mir2_protocol::messages::CM_SELLOFFEND,
+                5,
+            ),
+            "邮箱满 ⇒ 丢新"
+        );
+        assert_eq!(
+            sessions["hero"].a6.control_pending, pending_before,
+            "丢新不得改在飞计数"
+        );
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0,
+            "邮箱满也不得计 zone_cmd_unsupported（归属是 Process）"
+        );
+        state.host.ground_sessions = sessions;
+    }
+
+    /// **A34 片 5 · 接线锚（辅助）**：`pay_selloff_on_login(` 在生产面 = 定义 1 + 调用 2
+    /// （host 登录与区 k 登录两处）；行为牙见上一条。
+    #[test]
+    fn selloff_login_compensation_is_wired_at_both_login_paths() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("生产面边界")];
+        assert_eq!(
+            prod.matches("pay_selloff_on_login(").count(),
+            3,
+            "定义 1 + host/区 k 两处调用"
+        );
     }
 
     /// **M1c-2c 牙 1【行为】`eat_branch_is_exhaustive_fail_closed`**：`CM_EAT` 分支穷举 + 安全默认。
