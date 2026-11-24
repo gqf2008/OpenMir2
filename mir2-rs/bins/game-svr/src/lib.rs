@@ -131075,6 +131075,54 @@ mod zone_command_tests {
         }
     }
 
+    /// **A34 片 2 · 生产路由判据**：区 k `INBOUND_LOCAL` 用 `classify_local_event` 决定本地/Process
+    /// （上面五条行为牙直接调 handler，**不经过分类器**）。这里钉分类器入口：五条商店命令 ⇒ `Local`，
+    /// 延后的 `CM_USERREPAIRITEM` ⇒ `Unsupported`（不得本地执行）。
+    /// 变异：从 `zone_cmd_class` 删任一条 ⇒ 对应断言红。
+    #[test]
+    fn a34_slice2_shop_five_route_local_via_classify_event() {
+        let (state, _actor) = landed("a34s2_route", zone::ZoneId::new(1));
+        let sessions = std::collections::HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let ev_for = |ident: u16| GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "hero".to_string(),
+            socket: 901,
+            cmd: CommandMessage {
+                recog: 0,
+                ident,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: Some("金创药(小量)".to_string()),
+        };
+        for ident in [
+            game_svr::shop::CM_MERCHANTQUERYSELLPRICE,
+            game_svr::shop::CM_USERSELLITEM,
+            game_svr::shop::CM_USERBUYITEM,
+            game_svr::shop::CM_USERGETDETAILITEM,
+            game_svr::shop::CM_MERCHANTQUERYREPAIRCOST,
+        ] {
+            assert_eq!(
+                classify_local_event(&ev_for(ident), &sessions, &catalog, &state.host.world),
+                ZoneCmdClass::Local,
+                "ident={ident} 必须经分类器落 Local（否则区 k 永不执行）"
+            );
+        }
+        assert_eq!(
+            classify_local_event(
+                &ev_for(game_svr::shop::CM_USERREPAIRITEM),
+                &sessions,
+                &catalog,
+                &state.host.world
+            ),
+            ZoneCmdClass::Unsupported,
+            "CM_USERREPAIRITEM 延后到 Process 片 ⇒ 必须仍落 Unsupported"
+        );
+    }
+
     /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
     /// `handle_storage_cmd`；可观测副作用 = `SM_STORAGE_OK(701)` + 物品从 `item_list` 迁到
     /// **本区会话** `storage.items`。
@@ -134862,6 +134910,12 @@ mod l2_s3_cross_recipient_tests {
             m::CM_ADJUST_BONUS,
             m::CM_WANTMINIMAP,
             m::CM_OPENDOOR,
+            // **A34 片 2**：商店五条（`CM_USERREPAIRITEM` 延后，见下）
+            game_svr::shop::CM_MERCHANTQUERYSELLPRICE,
+            game_svr::shop::CM_USERSELLITEM,
+            game_svr::shop::CM_USERBUYITEM,
+            game_svr::shop::CM_USERGETDETAILITEM,
+            game_svr::shop::CM_MERCHANTQUERYREPAIRCOST,
         ];
         for ident in local {
             assert_eq!(
@@ -134901,6 +134955,12 @@ mod l2_s3_cross_recipient_tests {
             zone_cmd_class(u16::MAX, None),
             ZoneCmdClass::Unsupported,
             "表外 ident ⇒ Unsupported"
+        );
+        // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支需进程态脚本宿主 ⇒ 仍表外。
+        assert_eq!(
+            zone_cmd_class(game_svr::shop::CM_USERREPAIRITEM, None),
+            ZoneCmdClass::Unsupported,
+            "CM_USERREPAIRITEM 延后到 Process 片 ⇒ 必须仍 Unsupported"
         );
     }
 
