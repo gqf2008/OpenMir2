@@ -645,6 +645,24 @@ pub fn conf_naked(n: &NakedAbility) -> ConfNakedAbility {
 pub const ITEM_LOCATION_DRESS: usize = 0;
 pub const ITEM_LOCATION_WEAPON: usize = 1;
 
+/// 13 个佩戴位的槽名（`src/OpenMir2/Enums/ItemLocation.cs` 同序：`Dress`=0 … `Charm`=12）。
+/// 仅供 WRN 措辞；前两槽的既有 WRN 标签保持 `Dress`/`Weapon` 原文不变。
+pub const USE_ITEM_SLOT_NAMES: [&str; 13] = [
+    "Dress",
+    "Weapon",
+    "RighThand",
+    "Necklace",
+    "Helmet",
+    "ArmRingl",
+    "ArmRingr",
+    "Ringl",
+    "Ringr",
+    "Bujuk",
+    "Belt",
+    "Boots",
+    "Charm",
+];
+
 /// `UseItems[ItemLocation::Dress/Weapon]` 的 `StdItem.Shape`——`PlayObject.GetFeature()`
 /// （`PlayObject.cs:3393-3423`）的两段输入。
 ///
@@ -686,6 +704,12 @@ pub fn feature_shapes(
     };
     let dress = resolve(ITEM_LOCATION_DRESS, "Dress");
     let weapon = resolve(ITEM_LOCATION_WEAPON, "Weapon");
+    // **A31②（可观测性，不改玩法）**：同一「有装备但 stditems 无记录」检查扩到其余 11 槽。
+    // 返回值只消费 Dress/Weapon 的 `Shape`，其余槽仅产 WRN（可发现 DB 脏数据/模板缺失）；
+    // 干净库（槽空或模板可查）不产任何新 WRN。
+    for slot in 2..USE_ITEM_SLOT_NAMES.len() {
+        let _ = resolve(slot, USE_ITEM_SLOT_NAMES[slot]);
+    }
     (dress, weapon, warns)
 }
 
@@ -1772,7 +1796,7 @@ mod tests {
             },
         ];
         // Dress 槽 Index=2（布衣 shape=3）、Weapon 槽空。
-        let items = vec![Some(worn), Some(empty.clone())];
+        let items = vec![Some(worn.clone()), Some(empty.clone())];
         let catalog = crate::items::catalog_from(&table);
         let (dress, weapon, warns) = feature_shapes(Some(&items), &catalog);
         assert_eq!(
@@ -1792,6 +1816,20 @@ mod tests {
         let (_, _, warns) = feature_shapes(Some(&all_empty), &catalog);
         assert!(warns.is_empty(), "空槽不 WRN：{warns:?}");
         assert!(feature_shapes(None, &catalog).2.is_empty());
+        // **A31②**：其余 11 槽同检查——空目录 + 手镯左槽（5）带装备 ⇒ 只该槽 1 条 WRN 且带槽名；
+        // 干净库（13 槽全是可查模板）⇒ 零 WRN（新 WRN 不得污染干净库）。
+        let mut dirty = vec![None; 13];
+        dirty[5] = Some(worn.clone());
+        let (_, _, warns) = feature_shapes(Some(&dirty), &empty_catalog);
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].contains("ArmRingl 槽"), "{warns:?}");
+        assert!(warns[0].contains("Index=2"), "{warns:?}");
+        let mut clean = vec![None; 13];
+        for slot in clean.iter_mut() {
+            *slot = Some(worn.clone());
+        }
+        let (_, _, warns) = feature_shapes(Some(&clean), &catalog);
+        assert!(warns.is_empty(), "干净库 13 槽零 WRN：{warns:?}");
     }
 
     /// 帧 52/752 的生产路径接线（`brief-m2svr-next.md` §18）：`apply` 必须用**已合入的**

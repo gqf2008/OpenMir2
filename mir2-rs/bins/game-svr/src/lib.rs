@@ -54046,6 +54046,108 @@ break
         );
     }
 
+    /// **A31② 牙 `upgrade_item_missing_std_item_red_and_no_draws`**：槽 `Index>0` 但 `catalog`
+    /// **无该模板** ⇒ oracle `GetStdItem == null` ⇒ 红字一条、**RNG 零抽**、不中止（说词照发）、
+    /// 零 203、Desc 不变。
+    ///
+    /// RNG 零抽用**见证法**：跑前把 `world.rng` 重置为固定种子，跑后取下一抽与同种子新发生器
+    /// 首抽比较；本用例第二段（模板存在）证明该见证对"真抽过"敏感（对照）。
+    ///
+    /// **可达性口径**：脚本路径造不出未知 `Index`（`catalog_from` 把空名行过滤成洞、
+    /// `use_items_from` 拷 `hum_items` 时**无 catalog 校验**）⇒ 本牙的入口是 **DB 脏数据**
+    /// （`hum_items` 里 `Index>0` 但模板缺失），非脚本可达；牙直接构造该脏槽。
+    ///
+    /// 变异：回退 `NpcPlayer::use_item_std_item_present` 覆写 ⇒ 走成功支（3 抽 + 203）⇒ 红。
+    #[test]
+    fn upgrade_item_missing_std_item_red_and_no_draws() {
+        let seed = 12345;
+        let first_draw = |s: i32| mir2_shared::rng::RandomNumber::with_seed(s).random_below(1000);
+        let worn = game_svr::bag::BagItem {
+            make_index: 9201,
+            index: 99, // catalog 无 99
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升一升 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 212,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "10".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1].clone().expect("槽仍在");
+        assert_eq!(slot.desc, [0u8; 14], "模板缺失 ⇒ 不得写 Desc");
+        let (mut up, mut says) = (0usize, 0usize);
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_UPDATEITEM => up += 1,
+                    mir2_protocol::messages::SM_MERCHANTSAY => says += 1,
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(up, 0, "模板缺失 ⇒ 零 203");
+        assert!(
+            texts.iter().any(|t| t == "你身上没有戴指定物品!!!"),
+            "必须红字：{texts:?}"
+        );
+        assert!(says > 0, "红字支不中止 ⇒ 说词照发");
+        assert_eq!(
+            rig.world.rng.random_below(1000),
+            first_draw(seed),
+            "模板缺失支 RNG 零抽（见证法）"
+        );
+        // 对照：模板存在 ⇒ 同一夹具真抽 3 次 ⇒ 见证必须偏离，证明见证对"抽过"敏感。
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升一升 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 212,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "10".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.catalog.insert(
+            99,
+            mir2_data::StdItem {
+                name: "棍".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] =
+            Some(game_svr::bag::BagItem {
+                make_index: 9202,
+                index: 99,
+                dura: 30,
+                dura_max: 40,
+                desc: [0; 14],
+            });
+        rig.dlg_select("@main");
+        assert_ne!(
+            rig.world.rng.random_below(1000),
+            first_draw(seed),
+            "对照段：模板存在 ⇒ 成功支抽数 ⇒ 见证偏离"
+        );
+    }
+
     /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
     /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
     ///

@@ -2744,6 +2744,20 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             it.dura_max = u16::try_from(v & 0xFFFF).unwrap_or(0);
         }
     }
+    /// `SystemShare.ItemSystem.GetStdItem(UseItems[i].Index) != null`。
+    ///
+    /// **A31②**：此前未覆写 ⇒ trait 缺省 `use_item_index(i) > 0` ⇒ 槽 `Index>0` 但 `catalog`
+    /// 无该模板时误判"模板存在"；oracle 此支是红字 + **零抽**，Rust 会 3 抽 + 写 `Desc` +
+    /// 发 203 + 空名蓝字。覆写 = 槽存在且 `catalog` 查得到该 `Index`（`GetStdItem` 的非 null 面）。
+    fn use_item_std_item_present(&self, i: i32) -> bool {
+        let Ok(idx) = usize::try_from(i) else {
+            return false;
+        };
+        let Some(it) = self.use_items.get(idx).and_then(Option::as_ref) else {
+            return false;
+        };
+        self.catalog.is_some_and(|c| c.name(it.index).is_some())
+    }
     /// `SystemShare.ItemSystem.GetStdItemName(UseItems[i].Index)`。
     fn use_item_std_name(&self, i: i32) -> String {
         let Ok(idx) = usize::try_from(i) else {
