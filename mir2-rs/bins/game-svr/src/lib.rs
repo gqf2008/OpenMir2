@@ -44668,13 +44668,13 @@ mod tests {
         assert!(deal_creature.is_some(), "DealCreat 保持不变");
     }
 
-    /// **B4 #14（`drain_deal_tick` @7895）行为牙**：Run 内交易自动取消的**跨会话发出序**必须
+    /// **B4 #14（`drain_deal_tick`）行为牙**：Run 内交易自动取消的**跨会话发出序**必须
     /// 严格等于名字升序（取消帧 681/100 在循环内直发）。
     ///
     /// 构造：8 会话 `dealing=true`、`deal_creature=None`（oracle 取消条件成立），名字按
     /// 「升序 ≠ 插入序」插入，彼此 20 格。断言 `SM_DEALCANCEL(681)` 的 socket 序 = 名字升序。
     ///
-    /// 牙：删 `names.sort_unstable();`（@7913）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_deal_tick` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn deal_tick_frame_order_is_name_ascending_with_unordered_sessions() {
         use mir2_protocol::frame::CommandMessage;
@@ -44832,14 +44832,14 @@ mod tests {
         assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
     }
 
-    /// **B4 #2（`drain_login_tail` @22842）行为牙**：登录延迟段的下行帧**发出序**必须严格等于
+    /// **B4 #2（`drain_login_tail`）行为牙**：登录延迟段的下行帧**发出序**必须严格等于
     /// **名字升序**（现状可观测序 = 契约），与 `pending` 的 `HashMap` 迭代序无关。
     ///
     /// 构造：8 个已进世界且本 tick 已扫描的玩家，按「名字升序 ≠ 插入序」插入 `pending`；每人一份
     /// 最小 `EnterWorldInputs`（只有 `changelight` ⇒ `after` 恰一帧 654），相邻 20 格（> range 12）
     /// ⇒ AOI 互不可见。断言网关收到的 socket 序列 = 名字升序对应的 socket 序列。
     ///
-    /// 牙：删 `keys.sort();`（@22853）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_login_tail` 里的 `keys.sort();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn drain_login_tail_frame_order_is_name_ascending_with_unordered_pending() {
         let names = [
@@ -58195,13 +58195,13 @@ break
         }
     }
 
-    /// **B4 #1（`shutdown_save_all` @15519）行为牙**：关服存档的**请求发出序**必须严格等于
+    /// **B4 #1（`shutdown_save_all`）行为牙**：关服存档的**请求发出序**必须严格等于
     /// **名字升序**——这是现状可观测序（契约），与 `HashMap` 迭代序无关。
     ///
     /// 构造：8 个会话按「名字升序 ≠ 插入序」插入 `sessions`（`HashMap` 迭代序本身不受控，
     /// n=8 时恰好升序的概率可忽略）⇒ 断言 DB 请求帧的到达序（= `req_tx.send` 序）逐项相等。
     ///
-    /// 牙：删 `shutdown_save_all` 的 `names.sort();`（@15532）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `shutdown_save_all` 里的 `names.sort();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn shutdown_save_order_is_name_ascending_with_unordered_sessions() {
         let names = [
@@ -68881,7 +68881,7 @@ SendRefMsgRange=15
         );
     }
 
-    /// **B4 #7（`drain_player_need_recheck_with_magic` @31140）行为牙**：P21 的跨会话序必须严格
+    /// **B4 #7（`drain_player_need_recheck_with_magic`）行为牙**：P21 的跨会话序必须严格
     /// 等于名字升序——**帧序**与 **RNG 消耗序**两条都钉：
     /// ① 帧：每条网关线 200 → 202 → 622 → 657，跨会话按名字升序；
     /// ② RNG：每会话一次攻杀 `RandomByte(7-L)`，抽值按名字升序分配给各会话 `magic.passives`。
@@ -68890,7 +68890,7 @@ SendRefMsgRange=15
     /// 「升序 ≠ 插入序」插入。断言帧 socket/ident 序、`draws_between == 8`、终态 = 重放 8 抽、
     /// 各会话 `attack_skill_point_count` = 按名字升序的第 k 个抽值。
     ///
-    /// 牙：删 `names.sort_unstable();`（@31164）⇒ 帧序与 RNG 分配都随 `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_player_need_recheck_with_magic` 里的 `names.sort_unstable();` ⇒ 帧序与 RNG 分配都随 `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn p21_iteration_order_is_name_ascending_with_unordered_sessions() {
         use mir2_protocol::frame::CommandMessage;
@@ -69298,14 +69298,14 @@ SendRefMsgRange=15
         assert!(!trade["sc_deal"].dealing, "正常会话照常自动取消");
     }
 
-    /// **B4 #5（`drain_periodic_save` @24861）行为牙**：周期存档请求的**跨会话发出序**必须严格
+    /// **B4 #5（`drain_periodic_save`）行为牙**：周期存档请求的**跨会话发出序**必须严格
     /// 等于名字升序（现状可观测序 = 契约；函数每个 tick 都被调用，循环内的 `periodic_save_due`
     /// 才决定谁真正发起）。
     ///
     /// 构造：8 个会话全部到期（`save_rcd_tick=1000`、`save_time=5000`、`now=6001`），名字按
     /// 「升序 ≠ 插入序」插入；断言 DB 请求帧到达序（`chr_name`）逐项 = 名字升序。
     ///
-    /// 牙：删 `names.sort_unstable();`（@24883）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_periodic_save` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn periodic_save_order_is_name_ascending_with_unordered_sessions() {
         use std::collections::HashMap;
@@ -69978,14 +69978,14 @@ SendRefMsgRange=15
         assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
     }
 
-    /// **B4 #4（`drain_stamina` @24386）行为牙**：体力段 53 的**跨会话发出序**必须严格等于
+    /// **B4 #4（`drain_stamina`）行为牙**：体力段 53 的**跨会话发出序**必须严格等于
     /// 名字升序（现状可观测序 = 契约，帧在本函数内逐会话直发）。
     ///
     /// 构造：8 个会话各自体力点已到阈值（`health_tick=-400`、`replay_cursor` 落后 60ms），名字按
     /// 「升序 ≠ 插入序」插入；每人恰一条自见 53（`show_hp=false`，彼此 20 格无观察者副本）。
     /// 断言网关收到的 `(socket, ident, param)` 序列 = 名字升序、每会话一条 HP=999。
     ///
-    /// 牙：删 `names.sort_unstable();`（@24404）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_stamina` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn drain_stamina_frame_order_is_name_ascending_with_unordered_sessions() {
         use mir2_protocol::frame::CommandMessage;
@@ -79500,7 +79500,7 @@ SendRefMsgRange=15
         assert!(!sessions["other"].bo_reconnection, "旁观者不受影响");
     }
 
-    /// **B4 #6（`process_switch_data` @27886）行为牙**：换服轮询的**跨会话推进序**必须严格等于
+    /// **B4 #6（`process_switch_data`）行为牙**：换服轮询的**跨会话推进序**必须严格等于
     /// 名字升序——两段排水都要成立：① 循环内 `SendSwitchData` 回调的调用序；② 回调把待发项推进
     /// `reconnect_pending: Vec` 后，`drain_reconnects` 按 Vec 序发出的 `SM_RECONNECT` 帧序。
     ///
@@ -79508,7 +79508,7 @@ SendRefMsgRange=15
     /// 第一轮（now=2000）进入 100ms 窗口；第二轮（now=2101）过严格 `>` 门，逐会话触发
     /// `SendChangeServer`。断言 ①回调序、②帧 socket 序都 = 名字升序。
     ///
-    /// 牙：删 `names.sort_unstable();`（@27902）⇒ 两段都退化为 `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `process_switch_data` 里的 `names.sort_unstable();` ⇒ 两段都退化为 `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn switch_data_iteration_order_is_name_ascending_with_unordered_sessions() {
         use std::collections::HashMap;
@@ -105987,7 +105987,7 @@ SendRefMsgRange=15
         }
     }
 
-    /// **B4 #13（`drain_player_revival_with_magic` @32087）行为牙**：P32 的**直发面**
+    /// **B4 #13（`drain_player_revival_with_magic`）行为牙**：P32 的**直发面**
     /// （复活戒指破零的 `SM_DELITEM`）跨会话发出序必须严格等于名字升序。
     ///
     /// 说明：53/642/252 走 `RunFrames`（`BTreeMap<i32,Slot>` 按 actor_id flush），**与名字序无关**；
@@ -105996,7 +105996,7 @@ SendRefMsgRange=15
     /// 构造：8 会话 hp=0/revival=true/revival_tick=0，戒指 `dura=1000`（`n_dura=0` 破零）⇒ 每会话
     /// 1 条直发 `SM_DELITEM`；名字按「升序 ≠ 插入序」插入。
     ///
-    /// 牙：删 `names.sort_unstable();`（@32114）⇒ delitem socket 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_player_revival_with_magic` 里的 `names.sort_unstable();` ⇒ delitem socket 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn p32_delitem_frame_order_is_name_ascending_with_unordered_sessions() {
         use mir2_protocol::frame::CommandMessage;
@@ -106466,14 +106466,14 @@ SendRefMsgRange=15
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// **B4 #11（`drain_player_auto_get_exp` @31803）行为牙**：P31 的**结果序**（`TickRecord.exp_awards`
+    /// **B4 #11（`drain_player_auto_get_exp`）行为牙**：P31 的**结果序**（`TickRecord.exp_awards`
     /// 的 Vec 追加序，后续经 `drain_kill_exp_chain` 传导成 44/45 帧序）必须严格等于名字升序。
     ///
     /// 构造：8 会话全部到期（`auto_get_exp_tick=0, time=1000, point=10, envir="A"`），名字按
     /// 「升序 ≠ 插入序」插入；`pl3_registry("")` ⇒ 图 A = id 0。断言 `exp_awards` 逐项等于
     /// 「名字升序 → (actor, 10, false, 1)」。
     ///
-    /// 牙：删 `names.sort_unstable();`（@31815）⇒ Vec 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_player_auto_get_exp` 里的 `names.sort_unstable();` ⇒ Vec 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn p31_exp_awards_order_is_name_ascending_with_unordered_sessions() {
         use std::collections::HashMap;
@@ -107481,13 +107481,13 @@ mod tests {",
         }
     }
 
-    /// **B4 #12（`drain_player_game_gold` @31888）行为牙**：P22 的 653 帧**跨会话发出序**必须
+    /// **B4 #12（`drain_player_game_gold`）行为牙**：P22 的 653 帧**跨会话发出序**必须
     /// 严格等于名字升序（帧在循环内直发各自网关线）。
     ///
     /// 构造：8 会话 `game_gold=100 / state.gold=50`，玩家级 INC 到期（+5）⇒ 每会话一条 653
     /// （`Recog=50, Param=105`），名字按「升序 ≠ 插入序」插入；断言 `(socket, ident, param)` 序。
     ///
-    /// 牙：删 `names.sort_unstable();`（@31903）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    /// 牙：删 `drain_player_game_gold` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
     #[test]
     fn p22_gold_frame_order_is_name_ascending_with_unordered_sessions() {
         use mir2_protocol::frame::CommandMessage;
