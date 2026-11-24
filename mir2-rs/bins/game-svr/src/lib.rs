@@ -5700,77 +5700,121 @@ fn handle_channel_say(
             );
         }
         chat::ChannelSay::Shout(_text) => {
-            let (last_tick, level) = sessions
-                .get(&speaker.chr_name)
-                .map_or((0, 0), |sg| (sg.shout_msg_tick, sg.equip.abil.level));
-            let map_quiz = host
-                .registry
-                .and_then(|reg| {
-                    host.world
-                        .entities
-                        .get(speaker.actor_id)
-                        .and_then(|e| reg.flag_of(e.map_id))
-                })
-                .is_some_and(|flag| flag.bo_quiz);
-            match chat::shout_decision(
-                host.world.clock_ms,
-                last_tick,
-                level,
+            // 抽到 [`handle_local_shout`]：区 0 与区 k 共用同一份执行体（行为/日志逐字不变）。
+            handle_local_shout(
+                host.world,
+                sessions,
+                host.gates,
+                host.colors,
+                host.strings,
                 host.can_shout_level,
-                map_quiz,
-            ) {
-                chat::ShoutDecision::Send => {}
-                chat::ShoutDecision::TooSoon(secs) => {
-                    let msg = chat::format_int(host.strings.you_can_send_cycy_later_msg(), secs);
-                    send_self_sysmsg(host, speaker, &msg);
-                    return;
-                }
-                chat::ShoutDecision::LevelTooLow(need) => {
-                    let msg = chat::format_int(host.strings.you_need_level_msg(), need);
-                    send_self_sysmsg(host, speaker, &msg);
-                    return;
-                }
-                chat::ShoutDecision::MapDisable => {
-                    let msg = host.strings.this_map_disable_send_cycy_msg().to_string();
-                    send_self_sysmsg(host, speaker, &msg);
-                    return;
-                }
-            }
-            // oracle 在发帧**之前**写 `ShoutMsgTick`（`PlayObject.Chat.cs:190`）。
-            if let Some(sg) = sessions.get_mut(&speaker.chr_name) {
-                sg.shout_msg_tick = host.world.clock_ms;
-            }
-            // **oracle NRE 的 1:1 搬运（硬约束③，T-118）**：`CryCry` 对每个收件人调
-            // `SendMsg(null, RM_CRY, …)`，`BaseObject.SendMsg` 在
-            // `ActorId = baseObject.ActorId`（`BaseObject.Message.cs:154`）抛 NRE，被
-            // `ProcessSayMsg` 的 catch（`PlayObject.Chat.cs:222-226`）吞掉并记
-            // `LogService.Error` ⇒ **成功喊话不投递任何帧**。只有进入收件人循环才会抛 ⇒
-            // 收件人为空时不记日志。
-            // 帧形状（`SM_HEAR(40)`/`Recog=0`/CryMsg 颜色）保留在 `chat::cry_hear_frame` 的
-            // 单测里，供将来 bug-fix 批次（意图投递，需 owner 批准后单开卡）复用。
-            let targets = chat::cry_targets(host.world, speaker.actor_id, chat::SEND_CRY_RANGE);
-            if !targets.is_empty() {
-                glog!(
-                    "ERR",
-                    "[Exception] PlayObject.ProcessSayMsg Msg = {line}（CryCry 的 SendMsg(null, RM_CRY, …) 在 BaseObject.Message.cs:154 抛 NRE ⇒ 零帧；收件人 {} 个）",
-                    targets.len()
-                );
-            }
+                host.registry,
+                speaker,
+                line,
+            );
         }
+    }
+}
+
+/// 喊话（`!`）的**本地执行体**（oracle `ProcessSayMsg` 的 CryCry 段 1:1）。
+///
+/// 区 0（[`handle_channel_say`] 的 `ChannelSay::Shout` 臂）与区 k
+/// （[`handle_zone_command_on`] 的 `CM_SAY` 本地臂）共用**同一份**实现：
+/// 三门 `!boQUIZ` → `now - ShoutMsgTick > 10_000`（严格 `>`）→ `Abil.Level > CanShoutMsgLevel`；
+/// 失败各回**自己**一条 `SM_SYSMESSAGE(100)`（红字、`Recog` = 自己），且**不写** `ShoutMsgTick`；
+/// 全过后在发帧**之前**写 `shout_msg_tick`（`PlayObject.Chat.cs:190`），随后按 oracle NRE 1:1
+/// **零帧**（T-118）——收件人非空时记同一条 ERR 日志（`CryCry` 的 `SendMsg(null, RM_CRY, …)` NRE）。
+///
+/// `line` = 完整 `!` 行。单字符 `!`（`parse_channel` 返回 `None`：`sData[1]` 越界被 catch）
+/// 在这里只打一条 DBG 日志并返回：**零帧、零状态变更**。该日志是仓内诊断，不是线上行为。
+#[allow(clippy::too_many_arguments)]
+fn handle_local_shout(
+    world: &mir2_world_bevy::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    strings: &strings::StringConf,
+    can_shout_level: i32,
+    registry: Option<&mir2_envir::MapRegistry>,
+    speaker: &OnlineEntry,
+    line: &str,
+) {
+    if line == "!" {
+        glog!(
+            "DBG",
+            "CM_SAY：单个 `!`（oracle `sData[1]` 越界被 catch）⇒ 无输出 ChrName={}",
+            speaker.chr_name
+        );
+        return;
+    }
+    let (last_tick, level) = sessions
+        .get(&speaker.chr_name)
+        .map_or((0, 0), |sg| (sg.shout_msg_tick, sg.equip.abil.level));
+    let map_quiz = registry
+        .and_then(|reg| {
+            world
+                .entities
+                .get(speaker.actor_id)
+                .and_then(|e| reg.flag_of(e.map_id))
+        })
+        .is_some_and(|flag| flag.bo_quiz);
+    match chat::shout_decision(world.clock_ms, last_tick, level, can_shout_level, map_quiz) {
+        chat::ShoutDecision::Send => {}
+        chat::ShoutDecision::TooSoon(secs) => {
+            let msg = chat::format_int(strings.you_can_send_cycy_later_msg(), secs);
+            send_self_sysmsg(gates, colors, speaker, &msg);
+            return;
+        }
+        chat::ShoutDecision::LevelTooLow(need) => {
+            let msg = chat::format_int(strings.you_need_level_msg(), need);
+            send_self_sysmsg(gates, colors, speaker, &msg);
+            return;
+        }
+        chat::ShoutDecision::MapDisable => {
+            let msg = strings.this_map_disable_send_cycy_msg().to_string();
+            send_self_sysmsg(gates, colors, speaker, &msg);
+            return;
+        }
+    }
+    // oracle 在发帧**之前**写 `ShoutMsgTick`（`PlayObject.Chat.cs:190`）。
+    if let Some(sg) = sessions.get_mut(&speaker.chr_name) {
+        sg.shout_msg_tick = world.clock_ms;
+    }
+    // **oracle NRE 的 1:1 搬运（硬约束③，T-118）**：`CryCry` 对每个收件人调
+    // `SendMsg(null, RM_CRY, …)`，`BaseObject.SendMsg` 在
+    // `ActorId = baseObject.ActorId`（`BaseObject.Message.cs:154`）抛 NRE，被
+    // `ProcessSayMsg` 的 catch（`PlayObject.Chat.cs:222-226`）吞掉并记
+    // `LogService.Error` ⇒ **成功喊话不投递任何帧**。只有进入收件人循环才会抛 ⇒
+    // 收件人为空时不记日志。
+    // 帧形状（`SM_HEAR(40)`/`Recog=0`/CryMsg 颜色）保留在 `chat::cry_hear_frame` 的
+    // 单测里，供将来 bug-fix 批次（意图投递，需 owner 批准后单开卡）复用。
+    let targets = chat::cry_targets(world, speaker.actor_id, chat::SEND_CRY_RANGE);
+    if !targets.is_empty() {
+        glog!(
+            "ERR",
+            "[Exception] PlayObject.ProcessSayMsg Msg = {line}（CryCry 的 SendMsg(null, RM_CRY, …) 在 BaseObject.Message.cs:154 抛 NRE ⇒ 零帧；收件人 {} 个）",
+            targets.len()
+        );
     }
 }
 
 /// `SysMsg(msg, Red, Hint)`（`BaseObject.cs:1588-1690` 的 Hint 支）⇒ `RM_SYSMESSAGE` ⇒
 /// `SM_SYSMESSAGE(100)`，`Recog` = 收件人（说话者）自己的 `ActorId`、`Param=MakeWord(RedF,RedB)`、
 /// `Series=1`、尾 `EncodeString(msg)`。
-fn send_self_sysmsg(host: &ChatHost<'_>, speaker: &OnlineEntry, msg: &str) {
+/// 只依赖 `gates/colors` 的形态（区 0 与区 k 都手边有这两样；区 k 没有 `ChatHost`）。
+fn send_self_sysmsg(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    speaker: &OnlineEntry,
+    msg: &str,
+) {
     let body = smframe::sm_sysmessage(
         speaker.actor_id,
-        u16::from(host.colors.red_f),
-        u16::from(host.colors.red_b),
+        u16::from(colors.red_f),
+        u16::from(colors.red_b),
         &gbk_encode(msg),
     );
-    if let Some(tx) = route_to_gate(host.gates, speaker.gate_idx, speaker.socket, "说话提示") {
+    if let Some(tx) = route_to_gate(gates, speaker.gate_idx, speaker.socket, "说话提示") {
         let _ = tx.send(SimToGate::SendFrame {
             socket: speaker.socket,
             body,
@@ -61914,6 +61958,8 @@ break
         displays: downlink::DisplayTable,
         /// **T-277**：物品目录（`@OnHorse` 把背包 `StdIndex` 解析成 `mount_id`）。
         catalog: game_svr::ability::StdItemCatalog,
+        /// **A20 重构回归**：`Envir.Flag` 来源（`boQUIZ` 喊话门；`None` ⇒ false，与生产 S1 同）。
+        registry: Option<mir2_envir::MapRegistry>,
     }
 
     impl TestChatCtx {
@@ -61934,6 +61980,7 @@ break
                 spirit_mutiny_tick: std::cell::Cell::new(0),
                 displays: downlink::DisplayTable::new(),
                 catalog: game_svr::ability::StdItemCatalog::new(),
+                registry: None,
             }
         }
 
@@ -61955,7 +62002,7 @@ break
                 colors,
                 gm_cfg: gmcmd::GmConfig::default(),
                 can_shout_level: self.can_shout_level,
-                registry: None,
+                registry: self.registry.as_ref(),
                 filter_word: &self.filter_word,
                 mission: &self.mission,
                 spirit_mutiny_tick: &self.spirit_mutiny_tick,
@@ -67937,6 +67984,87 @@ SendRefMsgRange=15
             "10.001s 后允许再喊 = 写 tick（成功路径仍零帧，NRE 搬运）"
         );
         assert_eq!(sessions["aaa"].shout_msg_tick, 30_001);
+    }
+
+    /// **A20 重构回归（区 0）**：地图 `boQUIZ` 门在 `handle_say` 级——送 `!hi` ⇒ 自己一条
+    /// `SM_SYSMESSAGE(100)`（`ThisMapDisableSendCyCyMsg`、红字、`Recog`=自己），`shout_msg_tick`
+    /// 不变（门在写 tick 之前）。
+    ///
+    /// 其余三门/成功支的区 0 覆盖见：`shout` 成功支零帧+tick（本文件 `shout_*` 首个用例）、
+    /// `shout_second_within_10s_sends_hint_and_no_hear`（TooSoon）、
+    /// `shout_level_gate_is_inclusive_at_configured_level`（等级门）。
+    ///
+    /// 牙：删 `ShoutDecision::MapDisable` 支的 `send_self_sysmsg_parts` ⇒ 零帧 ⇒ 必红。
+    #[test]
+    fn shout_map_quiz_gate_sends_hint_and_no_tick() {
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("QUIZ");
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
+        world.open_session("aaa");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "aaa", 3, 3);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let a = world.enter_map("aaa", ent, 0).expect("进图 0 = A");
+        world.clock_ms = 20_000;
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0,
+            hear_b: 0,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let mut sg = test_session_ground(a);
+        sg.equip.abil.level = 40;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("aaa".into(), sg);
+        let mut ctx = TestChatCtx::new();
+        ctx.can_shout_level = 34;
+        ctx.registry = Some(registry);
+        let expect_text = ctx.strings.this_map_disable_send_cycy_msg().to_string();
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say(&host, &mut sessions, "aaa", 901, Some("!hi"));
+        }
+        match rx0.try_recv().expect("boQUIZ 图应收到提示帧") {
+            SimToGate::SendFrame { body, .. } => {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_SYSMESSAGE,
+                    "提示 = SM_SYSMESSAGE(100)"
+                );
+                assert_eq!(
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                    a,
+                    "Recog = 说话者自己 ActorId"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([body[6], body[7]]),
+                    0x38FF,
+                    "Param = MakeWord(RedMsgFColor, RedMsgBColor)"
+                );
+                assert_eq!(
+                    mir2_protocol::edcode::decode(&body[12..]),
+                    encoding_rs::GBK.encode(&expect_text).0.to_vec(),
+                    "文本 = ThisMapDisableSendCyCyMsg"
+                );
+            }
+            other => panic!("boQUIZ 图必须回提示帧，实收 {other:?}"),
+        }
+        assert!(rx0.try_recv().is_err(), "提示之外不得有帧");
+        assert_eq!(
+            sessions["aaa"].shout_msg_tick, 0,
+            "被 boQUIZ 门拒绝不写 ShoutMsgTick"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// **判据⑥**：等级门 `Abil.Level <= CanShoutMsgLevel`（`<=`，不是 `<`）——等于也拒，
