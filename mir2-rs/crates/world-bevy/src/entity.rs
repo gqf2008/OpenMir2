@@ -2234,12 +2234,6 @@ pub struct EntityStore {
     /// 收件人谓词的轻量读查询（`hear_targets_at` 热路径）：只取四组件，见
     /// [`EntityStore::iter_send_ref_targets`]。
     targets_state: SendRefTargetQuery,
-    /// **A43f**：`iter_send_ref_targets` 的 **PLAY 桶**（只存 `race == ACTOR_RACE_PLAY` 的实体 id，
-    /// 插入序）。WHY：`hear_targets_at` 的谓词只收 PLAY 实体，而全表扫会随**镜像**膨胀成
-    /// O(世界实体)（K=8 时镜像约占 2/3）⇒ 每条 ref-msg 的扫描量直接决定区线程吞吐。
-    /// **语义不变的前提**：`race` 只在 `insert` 之前设定（`appearance_mut` 无生产调用点）⇒
-    /// 桶只在 `insert`/`remove` 维护，集合与旧全表扫**逐项相同**（顺序由调用方排序吸收）。
-    send_ref_play_ids: Vec<i32>,
     /// **M1b-5b5**：**facade 结构变更脏标记**。`insert`/`remove` 置真；段入口
     /// （[`crate::World::enter_stage_world`]）取走并同时刷新 facade 视图与**段侧**查询缓存。
     ///
@@ -2369,7 +2363,6 @@ impl EntityStore {
             view3_state,
             mut_view_state,
             targets_state,
-            send_ref_play_ids: Vec::new(),
             staging_dirty: false,
         }
     }
@@ -2521,15 +2514,10 @@ impl EntityStore {
             self.inner.insert_component(id, parts.life_cycle),
             "刚插入的实体必须能挂 LifeCycle 组件（id={id}）"
         );
-        // **A43f**：PLAY 桶（race 只在 insert 前设定 ⇒ 这里判一次即可，之后不变）。
-        let is_play_target = parts.appearance.race == ACTOR_RACE_PLAY;
         assert!(
             self.inner.insert_component(id, parts.appearance),
             "刚插入的实体必须能挂 Appearance 组件（id={id}）"
         );
-        if is_play_target {
-            self.send_ref_play_ids.push(id);
-        }
         assert!(
             self.inner.insert_component(id, parts.monster_class),
             "刚插入的实体必须能挂 MonsterClassState 组件（id={id}）"
@@ -2765,10 +2753,6 @@ impl EntityStore {
     pub fn remove(&mut self, id: i32) -> Option<Entity> {
         let taken = self.inner.remove(id);
         if taken.is_some() {
-            // **A43f**：PLAY 桶同步摘除（`swap_remove` 保序无关——调用方会排序）。
-            if let Some(pos) = self.send_ref_play_ids.iter().position(|&x| x == id) {
-                self.send_ref_play_ids.swap_remove(pos);
-            }
             // **M1b-5b5**：facade 结构变更 ⇒ 段入口刷新段侧缓存（见 `staging_dirty`）。
             self.staging_dirty = true;
             self.refresh_view();
@@ -3526,30 +3510,6 @@ impl EntityStore {
                 ghost: life_cycle.ghost,
             },
         )
-    }
-
-    /// **A43f**：**只含 `race == ACTOR_RACE_PLAY`** 的收件人迭代（`hear_targets_at` 专用）。
-    ///
-    /// 与 [`Self::iter_send_ref_targets`] **同字段、同构建方式**，唯一区别是候选集来自
-    /// `send_ref_play_ids` 桶（`insert`/`remove` 维护；race 只在 insert 前设定 ⇒ 桶恒准）。
-    /// **WHY**：`hear_targets_at` 的谓词本来就把非 PLAY 全部滤掉，而全表扫会随**镜像**膨胀成
-    /// O(世界实体)（K=8 时镜像约占 2/3）⇒ 每条 ref-msg 的扫描量 = 区线程吞吐的上限。
-    /// 别的调用方（`warrskill` 的前格探测等）**仍用全量版**，语义不动。
-    pub fn iter_send_ref_play_targets(&self) -> impl Iterator<Item = SendRefTarget> + '_ {
-        let world = self.inner.world();
-        self.send_ref_play_ids.iter().filter_map(move |&id| {
-            let entity = self.inner.entity_of(id)?;
-            let (entity, transform, appearance, life_cycle) =
-                self.targets_state.get_manual(world, entity).ok()?;
-            Some(SendRefTarget {
-                id: entity.id,
-                map_id: transform.map_id,
-                x: transform.x,
-                y: transform.y,
-                race: appearance.race,
-                ghost: life_cycle.ghost,
-            })
-        })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> + '_ {

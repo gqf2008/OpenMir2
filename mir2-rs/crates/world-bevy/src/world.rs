@@ -8301,6 +8301,19 @@ impl World {
         self.pending.push_back(cmd);
     }
 
+    /// **A43g**：**尚未落格**的实体 id（`pending` 队列里的 `Command::Enter`）。
+    ///
+    /// `World::add_entity` 只把 `Enter` 入队，真正的 `add_map_object` 在下一 tick 的
+    /// `enter_world_impl` 里 —— 这留下一个"在 store、不在格"的单 tick 窗口。按格查询
+    /// （`hear_targets_at`）必须把这段窗口并回来，才能与旧的 store 全表扫**逐元素相等**。
+    /// 队列长度每 tick 通常个位数（登录/刷怪），成本可忽略。
+    pub fn pending_enter_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.pending.iter().filter_map(|c| match c {
+            Command::Enter { actor_id } => Some(*actor_id),
+            _ => None,
+        })
+    }
+
     /// **P7**：命令 FIFO 的**单条处理体**（`TickStage::Command` 段逐条调用；`tick_head` 不再内联
     /// `match cmd`）。
     ///

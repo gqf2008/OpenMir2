@@ -80,6 +80,10 @@ pub fn install_send_ref_msg_range(range: i32) {
 #[cfg(test)]
 use std::cell::Cell;
 
+/// **A43g**：按格查询在测试里**访问的格内条目数**（生产零成本；扫描面牙用）。
+#[cfg(test)]
+static HEAR_TARGETS_VISITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[cfg(test)]
 thread_local! {
     /// 单测线程内的生效值覆盖（`with_send_ref_msg_range` 用；并行测试互不干扰）。
@@ -224,19 +228,63 @@ fn hear_targets_at_scan(
     if speaker.ob_mode || speaker.fixed_hide_mode {
         return vec![speaker_id];
     }
-    let mut out: Vec<i32> = world
-        .entities
-        .iter_send_ref_play_targets()
-        .filter(|t| {
-            t.map_id == map_id
-                && t.race == ACTOR_RACE_PLAY
-                && !t.ghost
-                && (t.x - x).abs() <= range
-                && (t.y - y).abs() <= range
-        })
-        .map(|t| t.id)
-        .collect();
+    // **A43g**：**按格查询**（半径内格子）——旧实现是全世界表扫，成本 O(世界实体)（含全部镜像）。
+    // 谓词逐项不变（map/race/ghost/±range）；末尾 `sort_unstable` 保序（id 升序）⇒ 结果与
+    // store 版**逐元素相同**（由"insert 即挂格 + Enter 幂等"保证：见 `World::add_entity`）。
+    let Some(map) = world.maps.get(map_id) else {
+        // 图不在本 World（不该发生；stub/未拥有图）⇒ 退回 store 扫描，保持旧语义不丢实体。
+        return hear_targets_at_store(world, speaker_id, map_id, x, y, range);
+    };
+    let mut out: Vec<i32> = Vec::new();
+    let x0 = (x - range).max(0);
+    let x1 = (x + range).min(map.width - 1);
+    let y0 = (y - range).max(0);
+    let y1 = (y + range).min(map.height - 1);
+    if x0 <= x1 && y0 <= y1 {
+        for cx in x0..=x1 {
+            for cy in y0..=y1 {
+                let cell = map.cell(cx, cy);
+                if !cell.is_available() {
+                    continue;
+                }
+                for obj in &cell.obj_list {
+                    #[cfg(test)]
+                    HEAR_TARGETS_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let id = obj.cell_obj_id;
+                    let Some(t) = world.entities.get(id) else {
+                        continue;
+                    };
+                    if t.map_id == map_id
+                        && t.race == ACTOR_RACE_PLAY
+                        && !t.ghost
+                        && (t.x - x).abs() <= range
+                        && (t.y - y).abs() <= range
+                    {
+                        out.push(id);
+                    }
+                }
+            }
+        }
+    }
+    // **A43g**：并上"已 `add_entity`、`Enter` 尚未处理"的实体（单 tick 窗口）。
+    // 旧 store 全扫天然含它们；按格查不并就会与旧实现差一个 tick ⇒ 差分牙会红。
+    for id in world.pending_enter_ids() {
+        #[cfg(test)]
+        HEAR_TARGETS_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(t) = world.entities.get(id) else {
+            continue;
+        };
+        if t.map_id == map_id
+            && t.race == ACTOR_RACE_PLAY
+            && !t.ghost
+            && (t.x - x).abs() <= range
+            && (t.y - y).abs() <= range
+        {
+            out.push(id);
+        }
+    }
     out.sort_unstable();
+    out.dedup();
     out
 }
 
@@ -244,8 +292,9 @@ fn hear_targets_at_scan(
 ///
 /// 只在测试构建里存在。保留它（而不是在 bench 里另抄一份谓词）是为了让旧路径也用同一
 /// 生产类型、同一形参，并让「新旧输出逐元素相等」成为可机判断言（广播帧序可观测）。
-#[cfg(test)]
-pub(crate) fn hear_targets_at_legacy(
+/// **旧实现的 production 版（store 全量扫）**：`map_id` 不在本 World 时的 fallback，也是
+/// 测试差分牙 [`hear_targets_at_legacy`] 的参照实现（两处同一份代码，防漂移）。
+fn hear_targets_at_store(
     world: &World,
     speaker_id: i32,
     map_id: usize,
@@ -273,6 +322,18 @@ pub(crate) fn hear_targets_at_legacy(
         .collect();
     out.sort_unstable();
     out
+}
+
+#[cfg(test)]
+pub(crate) fn hear_targets_at_legacy(
+    world: &World,
+    speaker_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
+    hear_targets_at_store(world, speaker_id, map_id, x, y, range)
 }
 
 /// 喊话的 10s 门（`PlayObject.Chat.cs:183`：`(GetTickCount() - ShoutMsgTick) > 10 * 1000`，**严格大于**）。
@@ -612,20 +673,16 @@ mod tests {
         check(&world, speaker0, "删除+槽位复用");
     }
 
-    /// **A43f 牙**：①扫描面只含 PLAY（1 万怪物 + 20 名玩家 ⇒ 桶上迭代 ≤ 40 条，全量版 1 万条）；
-    /// ②结果仍与旧基线逐元素相等；③接线：生产路径必须用 `iter_send_ref_play_targets`
-    /// （把 `chat.rs` 的生产正文改回全量版 ⇒ 本牙红；用源码窗口扫描，与既有接线牙同法）。
+    /// **A43g 牙一（扫描面）**：按格查询只访问半径内格子的条目。
+    /// 1 万怪物铺满全图 + 说话者周围 20 名玩家 ⇒ 访问数 ≪ 10_021；
+    /// 且结果与 store 全量版（`hear_targets_at_legacy`）**逐元素相等**。
+    /// 变异：把 `hear_targets_at_scan` 改回 `hear_targets_at_store` ⇒ 访问计数为 0 ⇒ 红。
     #[test]
-    fn hear_targets_scans_play_bucket_only_and_wiring_is_pinned() {
+    fn hear_targets_scans_cells_only_and_matches_store_scan() {
+        use std::sync::atomic::Ordering;
         let mut world = World::new(200, 200);
-        // 1 万只怪物（非 PLAY）+ 说话者周围 20 名玩家。
         for i in 0..10_000i32 {
-            let mut e = mir2_world_bevy::EntitySpawn::new(
-                0,
-                format!("m{i}"),
-                (i % 200) as i32,
-                (i / 200) as i32,
-            );
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("m{i}"), i % 200, i / 200);
             e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             world.add_entity(e);
         }
@@ -638,32 +695,20 @@ mod tests {
             e.race = ACTOR_RACE_PLAY;
             world.add_entity(e);
         }
-        // ① 扫描面：桶上只应有 21 条（说话者 + 20 名玩家），全量版是 10_021 条。
-        let bucket = world.entities.iter_send_ref_play_targets().count();
-        let full = world.entities.iter_send_ref_targets().count();
-        assert_eq!(full, 10_021, "全量版必须看到全部实体（实得 {full}）");
+        // 先 tick 一次：让 `Enter` 落格（否则 1 万实体全在待落格队列里，扫描面不具代表性）。
+        let _ = world.tick();
+        let before = HEAR_TARGETS_VISITS.load(Ordering::Relaxed);
+        let got = hear_targets_at(&world, speaker_id, 0, 50, 50, 12);
+        let visits = HEAR_TARGETS_VISITS.load(Ordering::Relaxed) - before;
+        assert!(visits >= 1, "按格查必须真的访问格内条目（实得 {visits}）");
         assert!(
-            bucket <= 40,
-            "PLAY 桶必须只含 PLAY 实体（实得 {bucket}，全量 {full}）"
+            visits <= 2_000,
+            "扫描面必须是半径内格子（实得 {visits}；store 全量版是 10_021）"
         );
-        // ② 语义：与旧基线逐元素相等（含自身）。
         assert_eq!(
-            hear_targets_at(&world, speaker_id, 0, 50, 50, 12),
+            got,
             hear_targets_at_legacy(&world, speaker_id, 0, 50, 50, 12),
-            "桶上扫描的结果必须与全量版逐元素相等"
-        );
-        // ③ 接线：生产正文必须调用桶版（改回全量版 ⇒ 红）。
-        let prod = include_str!("chat.rs")
-            .split("hear_targets_at_legacy")
-            .next()
-            .unwrap_or("");
-        assert!(
-            prod.contains("iter_send_ref_play_targets()"),
-            "hear_targets_at 的生产扫描必须走 PLAY 桶（iter_send_ref_play_targets）"
-        );
-        assert!(
-            !prod.contains(".iter_send_ref_targets()"),
-            "hear_targets_at 的生产扫描不得回退到全量版（iter_send_ref_targets）"
+            "按格查必须与 store 全量扫逐元素相等"
         );
     }
 
