@@ -1,5 +1,7 @@
 > 原路径 E:/UserTemp/a39-trade-sessions-init.md（2026-11-24 入仓，内容未改）
 > 入仓时锚已规范化（oracle `src/**` 行号保留、本仓高 churn 文件改符号锚），结论与事实未改；原文锚对应 `250c8a97d`。
+> 本件写于实施前（当时 `trade_sessions` 无登录初始化）；§1/§5 的"现状"是当时的快照，不是当前状态。
+> 本文所述缺陷已修复：A40（登录/迁移建 `DealState`、`close_cleanup_residue` 清理，merge `e4ad16f8e`）+ A41（顶号/软关路径清理，merge `ed044afc4`）。§3 的"缺陷"结论为修复前结论，保留作历史。
 # A39 只读核查：`trade_sessions` 的生产初始化与完整交易写回面
 
 > 只读、未编译、未写码。证据取自 `a34-slice3` 工作树（= master `2798afde1` + A34 片 3），
