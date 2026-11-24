@@ -418,7 +418,11 @@ impl World {
 ///
 /// **结构变更**：Ghost 支的 `QuestNpcList.RemoveAt(i)` 等价物是 `access.remove(id)`
 /// （`StructuralAccess`）；段内删实体后 facade 在段边界 `refresh_views()`。
-pub(crate) fn npc_tick_impl<A>(access: &mut A, sim: &mut SimState) -> NpcTickOutcome
+pub(crate) fn npc_tick_impl<A>(
+    access: &mut A,
+    sim: &mut SimState,
+    candidates: Option<&[i32]>,
+) -> NpcTickOutcome
 where
     A: EntityAccess + StructuralAccess,
 {
@@ -430,11 +434,19 @@ where
     }
     sim.npc_pass_tick = now;
     // `npc_ids_sorted` 的访问器形态：槽位序（= 插入序）里 `npc` 身份门为真的实体。
-    let ids: Vec<i32> = access
-        .order_ids()
-        .into_iter()
-        .filter(|id| access.get(*id).is_some_and(|e| e.npc.is_some()))
-        .collect();
+    // **A43**：索引可用 ⇒ 只复核 `npcs` 候选（仍按同一谓词 live 复核）；`None` ⇒ 原全表扫。
+    let ids: Vec<i32> = match candidates {
+        Some(list) => list
+            .iter()
+            .copied()
+            .filter(|id| access.get(*id).is_some_and(|e| e.npc.is_some()))
+            .collect(),
+        None => access
+            .order_ids()
+            .into_iter()
+            .filter(|id| access.get(*id).is_some_and(|e| e.npc.is_some()))
+            .collect(),
+    };
     let mut i = sim.npc_position;
     while i < ids.len() {
         let id = ids[i];

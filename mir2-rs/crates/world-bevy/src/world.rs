@@ -2106,6 +2106,81 @@ pub fn output_drain_system(
 /// 挤到一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
 /// `SimMapEvents` 必须在 `SimExtraAbil` 之后且 `SimSlaveCleanup` 之前、`OutputDrain` 必须在
 /// `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
+/// **A43**：一份 tick 内、按「实体种类」分好的槽位序 id 表。
+///
+/// **唯一构建点** = `World::tick_head` 的 `Command` 段之后（head 内唯一的结构增删段），
+/// 由一次 `entities.iter_ref()` 建好；8 个 head 段改迭代对应表，省掉各自的全表扫。
+///
+/// 语义约束：
+/// - **桶内顺序 = 槽位序**（构建时按 `iter_ref` 追加），与旧「`order_ids` + 过滤」同序；
+/// - 桶只是「先看谁」：各段仍做**迭代时的 live 复核**（`get` 存在性、`death/ghost`、计时门）；
+/// - 构建点在 `Command` 之后 ⇒ head 内不会新增实体；`SimSlaveCleanup`/`SimNpc` 等段删除的
+///   实体在后续桶里仍可能出现，由各段既有的 `get → None continue` 跳过。
+#[derive(Debug, Default)]
+pub(crate) struct KindIndex {
+    /// `Race == Play && !ghost`（`SimDup` 用）。
+    pub plays: Vec<i32>,
+    /// `npc.is_some()`（`SimNpc`）。
+    pub npcs: Vec<i32>,
+    /// `merchant.is_some()`（`SimMerchant`）。
+    pub merchants: Vec<i32>,
+    /// `!slave_list.is_empty() && !ghost`（`SimSlaveCleanup`）。
+    pub slave_lists: Vec<i32>,
+    /// `(hp==0 || die_called) && !death_settled && !ghost && !mirror && race != Play`
+    /// （`SimSettleDeaths` 候选）。
+    pub dead_nonplayer: Vec<i32>,
+    /// `death || ghost`（`SimExpireHitters` 的 `gone` 集合）。
+    pub dead_or_ghost: Vec<i32>,
+    /// `last_hiter.is_some() || exp_hitter.is_some()`（`SimExpireHitters`）。
+    pub hitters: Vec<i32>,
+    /// 任一 `extra_abil` 槽非 0（`SimExtraAbil`）。
+    pub extra_abil: Vec<i32>,
+    /// `Race == Play && !ghost`（`SimPlayerRunExpiry`）。
+    pub run_states: Vec<i32>,
+}
+
+/// `KindIndex` 的 bevy 资源包装（`Arc` 便于各段克隆后释放 `&World` 借用）。
+#[derive(bevy_ecs::prelude::Resource, Debug)]
+pub(crate) struct KindIndexRes(pub std::sync::Arc<KindIndex>);
+
+/// **A43**：一次 `iter_ref` 建「实体种类索引」（槽位序）。
+fn build_kind_index(entities: &crate::entity::EntityStore) -> KindIndex {
+    let mut idx = KindIndex::default();
+    for e in entities.iter_ref() {
+        if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
+            idx.plays.push(e.id);
+            idx.run_states.push(e.id);
+        }
+        if e.npc.is_some() {
+            idx.npcs.push(e.id);
+        }
+        if e.merchant.is_some() {
+            idx.merchants.push(e.id);
+        }
+        if !e.slave_list.is_empty() && !e.ghost {
+            idx.slave_lists.push(e.id);
+        }
+        if (e.hp == 0 || e.die_called)
+            && !e.death_settled
+            && !e.ghost
+            && !e.mirror
+            && e.race != crate::entity::ACTOR_RACE_PLAY
+        {
+            idx.dead_nonplayer.push(e.id);
+        }
+        if e.death || e.ghost {
+            idx.dead_or_ghost.push(e.id);
+        }
+        if e.last_hiter.is_some() || e.exp_hitter.is_some() {
+            idx.hitters.push(e.id);
+        }
+        if e.extra_abil.iter().any(|v| *v != 0) {
+            idx.extra_abil.push(e.id);
+        }
+    }
+    idx
+}
+
 pub struct HeadRunner {
     /// 段 -> 该段的 `TickRunner`（每段一个 schedule，段之间仍由 facade 的内联段分隔）。
     runners: Vec<(TickStage, TickRunner)>,
@@ -2264,25 +2339,52 @@ crate::stage_spec!(
 pub fn expire_hitters_stage_system(world: &mut bevy_ecs::world::World) {
     StageTrace::record(world, TickStage::SimExpireHitters);
     let now = world.resource::<SimState>().clock_ms;
+    // **A43**：head 内索引可用时，只遍历「带 hitter 的实体」，`gone` 集合也直接用索引，
+    // 省掉两趟全表；索引缺失（段被单独驱动/测试）⇒ 退回原实现（逐字相同）。
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     let mut ad = crate::tick::StageEntities::<SimExpireHitters>::new(world);
-    let gone: Vec<i32> = ad
-        .order()
-        .into_iter()
-        .filter(|(id, _)| ad.get::<LifeCycle>(*id).is_some_and(|l| l.death || l.ghost))
-        .map(|(id, _)| id)
-        .collect();
-    for (id, _) in ad.order() {
-        let Some(attr) = ad.get_mut::<CombatAttribution>(id) else {
-            continue;
-        };
-        if let Some(h) = attr.last_hiter {
-            if (now - attr.last_hiter_tick) > 30_000 || gone.contains(&h) {
-                attr.last_hiter = None;
+    match kind {
+        Some(kind) => {
+            let gone: std::collections::HashSet<i32> = kind.dead_or_ghost.iter().copied().collect();
+            for &id in &kind.hitters {
+                let Some(attr) = ad.get_mut::<CombatAttribution>(id) else {
+                    continue;
+                };
+                if let Some(h) = attr.last_hiter {
+                    if (now - attr.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                        attr.last_hiter = None;
+                    }
+                }
+                if let Some(h) = attr.exp_hitter {
+                    if (now - attr.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                        attr.exp_hitter = None;
+                    }
+                }
             }
         }
-        if let Some(h) = attr.exp_hitter {
-            if (now - attr.exp_hitter_tick) > 6_000 || gone.contains(&h) {
-                attr.exp_hitter = None;
+        None => {
+            let gone: Vec<i32> = ad
+                .order()
+                .into_iter()
+                .filter(|(id, _)| ad.get::<LifeCycle>(*id).is_some_and(|l| l.death || l.ghost))
+                .map(|(id, _)| id)
+                .collect();
+            for (id, _) in ad.order() {
+                let Some(attr) = ad.get_mut::<CombatAttribution>(id) else {
+                    continue;
+                };
+                if let Some(h) = attr.last_hiter {
+                    if (now - attr.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                        attr.last_hiter = None;
+                    }
+                }
+                if let Some(h) = attr.exp_hitter {
+                    if (now - attr.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                        attr.exp_hitter = None;
+                    }
+                }
             }
         }
     }
@@ -2305,9 +2407,17 @@ pub fn expire_extra_abil_stage_system(world: &mut bevy_ecs::world::World) {
     StageTrace::record(world, TickStage::SimExtraAbil);
     let now = world.resource::<SimState>().clock_ms;
     let mut out = Vec::new();
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     {
         let mut ad = crate::tick::StageEntities::<SimExtraAbil>::new(world);
-        for (id, _) in ad.order() {
+        // **A43**：索引可用 ⇒ 只遍历「任一 extra_abil 槽非 0」的实体（旧实现扫全表）。
+        let candidates: Vec<i32> = match kind {
+            Some(kind) => kind.extra_abil.clone(),
+            None => ad.order().into_iter().map(|(id, _)| id).collect(),
+        };
+        for id in candidates {
             let Some(buff) = ad.get_mut::<BuffState>(id) else {
                 continue;
             };
@@ -2357,18 +2467,25 @@ pub fn expire_player_run_state_stage_system(world: &mut bevy_ecs::world::World) 
     StageTrace::record(world, TickStage::SimPlayerRunExpiry);
     let now = world.resource::<SimState>().clock_ms;
     let mut events = Vec::new();
+    // **A43**：索引可用 ⇒ 直接用 `run_states`（零玩家时为空，旧实现扫全表）。
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     {
         let mut ad = crate::tick::StageEntities::<SimPlayerRunExpiry>::new(world);
-        let ids: Vec<i32> = ad
-            .order()
-            .into_iter()
-            .filter(|(id, _)| {
-                ad.get::<Appearance>(*id)
-                    .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY)
-                    && ad.get::<LifeCycle>(*id).is_some_and(|l| !l.ghost)
-            })
-            .map(|(id, _)| id)
-            .collect();
+        let ids: Vec<i32> = match kind {
+            Some(kind) => kind.run_states.clone(),
+            None => ad
+                .order()
+                .into_iter()
+                .filter(|(id, _)| {
+                    ad.get::<Appearance>(*id)
+                        .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY)
+                        && ad.get::<LifeCycle>(*id).is_some_and(|l| !l.ghost)
+                })
+                .map(|(id, _)| id)
+                .collect(),
+        };
         for id in ids {
             let Some(pr) = ad.get_mut::<PlayerRunState>(id) else {
                 continue;
@@ -2705,9 +2822,16 @@ pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
         .remove_resource::<SimState>()
         .expect("SimState 必须在段窗口内（段边界契约）");
     let pushes = {
+        let kind = world
+            .get_resource::<KindIndexRes>()
+            .map(|r| std::sync::Arc::clone(&r.0));
         let mut ad = StageEntities::<SimDup>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        World::check_dup_obj_core(&mut access, &mut sim)
+        World::check_dup_obj_core(
+            &mut access,
+            &mut sim,
+            kind.as_ref().map(|k| k.plays.as_slice()),
+        )
     };
     world.insert_resource(sim);
     world.resource_mut::<StageOut>().pushes = pushes;
@@ -2903,9 +3027,17 @@ fn settle_deaths_stage_core<S: FullAccessSpec>(
         .remove_resource::<TickRecordRes>()
         .expect("TickRecordRes 必须由段边界插入（结算段契约）");
     {
+        let kind = world
+            .get_resource::<KindIndexRes>()
+            .map(|r| std::sync::Arc::clone(&r.0));
+        let ids = if only_players {
+            None
+        } else {
+            kind.as_ref().map(|k| k.dead_nonplayer.as_slice())
+        };
         let mut ad = StageEntities::<S>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players);
+        World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players, ids);
     }
     world.insert_resource(record);
     world.insert_resource(sim);
@@ -2980,9 +3112,15 @@ crate::stage_spec!(
 /// 处理顺序 = 槽位序（`order_ids`）+ 表内**倒序**删除（`slave_list_cleanup_impl`）。不抽 RNG。
 pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
     StageTrace::record(world, TickStage::SimSlaveCleanup);
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
     let mut access = crate::entity::StageAccess::new(&mut ad);
-    crate::slave::slave_list_cleanup_all_impl(&mut access);
+    crate::slave::slave_list_cleanup_all_impl(
+        &mut access,
+        kind.as_ref().map(|k| k.slave_lists.as_slice()),
+    );
 }
 
 crate::stage_spec!(
@@ -3245,10 +3383,17 @@ pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
     let mut sim = world
         .remove_resource::<SimState>()
         .expect("段边界：SimState 必须已在 bevy World（SimNpc）");
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     let out = {
         let mut ad = StageEntities::<SimNpc>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        crate::npc::npc_tick_impl(&mut access, &mut sim)
+        crate::npc::npc_tick_impl(
+            &mut access,
+            &mut sim,
+            kind.as_ref().map(|k| k.npcs.as_slice()),
+        )
     };
     world.insert_resource(sim);
     world.resource_mut::<StageOut>().npc = Some(out);
@@ -3433,10 +3578,17 @@ pub fn sim_merchant_stage_system(world: &mut bevy_ecs::world::World) {
     let mut sim = world
         .remove_resource::<SimState>()
         .expect("段边界：SimState 必须已在 bevy World（SimMerchant）");
+    let kind = world
+        .get_resource::<KindIndexRes>()
+        .map(|r| std::sync::Arc::clone(&r.0));
     let out = {
         let mut ad = StageEntities::<SimMerchant>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        crate::merchant::merchant_tick_impl(&mut access, &mut sim)
+        crate::merchant::merchant_tick_impl(
+            &mut access,
+            &mut sim,
+            kind.as_ref().map(|k| k.merchants.as_slice()),
+        )
     };
     world.insert_resource(sim);
     world.resource_mut::<StageOut>().merchant = Some(out);
@@ -9020,6 +9172,13 @@ impl World {
         self.entities.refresh_views();
         self.prof_end(TickStage::Command, __prof_cmd);
 
+        // **A43**：`Command` 之后建一次实体种类索引（head 内唯一的结构增删段已过）。
+        // 各段克隆 `Arc` 使用；`tick_head` 末尾移除（tail 段仍走各自的全表扫）。
+        let kind_index = build_kind_index(&self.entities);
+        self.entities
+            .world_mut()
+            .insert_resource(KindIndexRes(std::sync::Arc::new(kind_index)));
+
         // **PL-1 硬前置（spike §4.3-3 / §5.5-1）**：oracle 的 P32（`PlayObject.Message.cs:747-763`）
         // 在 `base.Run()` 的 LastHiter 清理（`BaseObject.Base.cs:119-132`）**之前**读 `LastHiter`；
         // 本骨架的 `expire_hitters()` 在 tick 开头统一清 ⇒ 必须在**清理之前**给每个玩家留快照，
@@ -9222,6 +9381,8 @@ impl World {
             });
             self.prof_end(TickStage::OutputDrain, __prof_od);
         }
+        // **A43**：head 结束，索引资源移除（tail 不使用；防跨 tick 陈旧）。
+        let _ = self.entities.world_mut().remove_resource::<KindIndexRes>();
         // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
         // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
         // `bins/game-svr` 驱动。直接调用 [`World::tick`] 时该段为空。
@@ -9639,13 +9800,28 @@ impl World {
     fn check_dup_obj_core<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
+        candidates: Option<&[i32]>,
     ) -> Vec<crate::action::PushEvent> {
         let now = sim.clock_ms;
         let mut ids: Vec<i32> = Vec::new();
-        for id in access.order_ids() {
+        // **A43**：索引可用 ⇒ 只复核 `plays` 候选（0 玩家时为空，旧实现扫全表）；
+        // 每个候选仍按同一谓词 live 复核。
+        let mut push_if_play = |access: &A, id: i32| {
             if let Some(e) = access.get(id) {
                 if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
                     ids.push(id);
+                }
+            }
+        };
+        match candidates {
+            Some(list) => {
+                for &id in list {
+                    push_if_play(&*access, id);
+                }
+            }
+            None => {
+                for id in access.order_ids() {
+                    push_if_play(&*access, id);
                 }
             }
         }
@@ -10843,20 +11019,19 @@ impl World {
         sim: &mut SimState,
         record: &mut TickRecord,
         only_players: bool,
+        ids: Option<&[i32]>,
     ) {
         // **PL-1 硬前置（spike §4.3）**：玩家死亡必须晚于 P32 复活门（oracle 的 Die 在
         // `base.Run:70-73`，P32 在 `PlayObject.Run:747-763`）⇒ 本函数按 `only_players` 分两段调用：
         // `tick_head` 结算非玩家、`tick_tail` 结算玩家。既有 golden 的死亡行全是怪物 ⇒ 不变。
         let mut dead: Vec<i32> = Vec::new();
-        for id in access.order_ids() {
+        // **A43**：索引提供候选（`dead_nonplayer`）；每个候选仍按**同一套 live 谓词**复核。
+        // `ids == None`（tail 段 / façade / 测试）⇒ 原全表扫，逐字相同。
+        let mut push_if_dead = |access: &A, id: i32| {
             let Some(e) = access.get(id) else {
-                continue;
+                return;
             };
-            {}
-            // **L2-5 ② 段 6**：镜像不参与死亡结算。**当前代码下这条本来恒成立**（镜像 hp 取
-            // 构造缺省 100、`die_called=false`），本守卫是**把不变量写成判据**：将来若镜像开始
-            // 复制 hp（帧 53/100 面）或任何路径把镜像 hp 置 0，不得触发 `Die()` 的掉落/经验/
-            // 尸体链。牙由「用例把镜像 hp 置 0」的变异造出（见 `step2_mirror_isolation_death`）。
+            // **L2-5 ② 段 6**：镜像不参与死亡结算（守卫原文见下）。
             if (e.hp == 0 || e.die_called)
                 && !e.death_settled
                 && !e.ghost
@@ -10864,6 +11039,18 @@ impl World {
                 && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
             {
                 dead.push(id);
+            }
+        };
+        match ids {
+            Some(ids) => {
+                for &id in ids {
+                    push_if_dead(&*access, id);
+                }
+            }
+            None => {
+                for id in access.order_ids() {
+                    push_if_dead(&*access, id);
+                }
             }
         }
         for id in dead {
@@ -11113,7 +11300,13 @@ impl World {
     /// 旧 facade 入口（测试/内部调用）：委托 [`Self::settle_deaths_impl`]。
     #[allow(dead_code)] // tick 走两段系统；本入口保留给测试与 P5 清理前的旧调用面
     fn settle_deaths(&mut self, record: &mut TickRecord, only_players: bool) {
-        Self::settle_deaths_impl(&mut self.entities, &mut self.sim, record, only_players)
+        Self::settle_deaths_impl(
+            &mut self.entities,
+            &mut self.sim,
+            record,
+            only_players,
+            None,
+        )
     }
 
     /// 一次攻击结算（`_Attack`）。
@@ -21778,5 +21971,124 @@ impl World {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+    }
+}
+
+#[cfg(test)]
+mod a43_kind_index_tests {
+    //! **A43 牙**：`KindIndex` 的桶 = 槽位序 + 谓词过滤（独立手写期望）；空世界全空；
+    //! 混合夹具下 `tick_head` 走索引后各段效果仍在。
+    use super::*;
+
+    #[test]
+    fn a43_kind_index_buckets_are_slot_ordered_and_filtered() {
+        let mut w = World::new(16, 16);
+        let play = w.add_entity({
+            let mut e = crate::entity::EntitySpawn::new(0, "p", 1, 1);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e
+        });
+        // 默认 `EntitySpawn.race` 是玩家；本夹具的怪/NPC 类实体显式置 80（怪）。
+        let spawn_mon = |name: &str, x: i32, y: i32| {
+            let mut e = crate::entity::EntitySpawn::new(0, name, x, y);
+            e.race = 80;
+            e
+        };
+        let mon = w.add_entity(spawn_mon("m", 2, 2));
+        let dead = w.add_entity(spawn_mon("d", 3, 3));
+        let owner = w.add_entity(spawn_mon("o", 4, 4));
+        let hitter = w.add_entity(spawn_mon("h", 5, 5));
+        let extra = w.add_entity(spawn_mon("x", 6, 6));
+        w.tick();
+        w.entities.get_mut(dead).expect("dead").vitals.hp = 0;
+        w.entities
+            .get_mut(owner)
+            .expect("owner")
+            .slave
+            .slave_list
+            .push(mon);
+        w.entities
+            .get_mut(hitter)
+            .expect("hitter")
+            .set_last_hiter(play, 1);
+        w.entities.get_mut(extra).expect("extra").buff.extra_abil[0] = 1;
+        let idx = build_kind_index(&w.entities);
+        assert_eq!(idx.plays, vec![play], "plays = 槽位序的玩家（仅 1）");
+        assert_eq!(idx.run_states, vec![play], "run_states 与 plays 同判据");
+        assert_eq!(
+            idx.dead_nonplayer,
+            vec![dead],
+            "dead_nonplayer = hp==0 的非玩家"
+        );
+        assert_eq!(
+            idx.slave_lists,
+            vec![owner],
+            "slave_lists = 非空 slave_list 的主人"
+        );
+        assert_eq!(idx.hitters, vec![hitter], "hitters = last_hiter 非空");
+        assert_eq!(idx.extra_abil, vec![extra], "extra_abil = 任一槽非 0");
+        let empty = World::new(8, 8);
+        let e = build_kind_index(&empty.entities);
+        assert!(
+            e.plays.is_empty()
+                && e.npcs.is_empty()
+                && e.merchants.is_empty()
+                && e.slave_lists.is_empty()
+                && e.dead_nonplayer.is_empty()
+                && e.dead_or_ghost.is_empty()
+                && e.hitters.is_empty()
+                && e.extra_abil.is_empty()
+                && e.run_states.is_empty(),
+            "空世界：所有桶为空（空集正例）"
+        );
+    }
+
+    #[test]
+    fn a43_head_stages_still_act_with_kind_index() {
+        let mut w = World::new(16, 16);
+        let play = w.add_entity({
+            let mut e = crate::entity::EntitySpawn::new(0, "p", 1, 1);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e
+        });
+        let dead = w.add_entity({
+            let mut e = crate::entity::EntitySpawn::new(0, "d", 3, 3);
+            e.race = 80;
+            e
+        });
+        w.tick();
+        w.entities.get_mut(dead).expect("dead").vitals.hp = 0;
+        {
+            let mut p = w.entities.get_mut(play).expect("play");
+            p.set_last_hiter(dead, 0);
+            p.player_run.fire_hit_skill = true;
+            p.player_run.latest_fire_hit_tick = 0;
+            p.buff.extra_abil[0] = 1;
+            p.buff.extra_abil_times[0] = 0;
+        }
+        // 时钟推进到超阈值（30s/20s 门）。
+        w.sim.clock_ms = 100_000;
+        let _ = w.tick_head();
+        let d = w.entities.get(dead).expect("dead still");
+        assert!(
+            d.death || d.death_settled,
+            "死怪必须被 SimSettleDeaths 结算（索引候选仍生效）"
+        );
+        let p = w.entities.get(play).expect("play");
+        assert_eq!(
+            p.last_hiter, None,
+            "过期 hitter 必须被 SimExpireHitters 清掉"
+        );
+        assert_eq!(
+            p.extra_abil[0], 0,
+            "过期 extra_abil 必须被 SimExtraAbil 清掉"
+        );
+        let fire_hit_skill = w
+            .entities
+            .get_mut(play)
+            .expect("play")
+            .player_run
+            .fire_hit_skill;
+        assert!(!fire_hit_skill, "烈火到期必须被 SimPlayerRunExpiry 清掉");
     }
 }

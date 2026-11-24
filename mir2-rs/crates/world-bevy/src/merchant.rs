@@ -680,6 +680,7 @@ impl World {
 pub(crate) fn merchant_tick_impl<A>(
     access: &mut A,
     sim: &mut crate::world::SimState,
+    candidates: Option<&[i32]>,
 ) -> MerchantTickOutcome
 where
     A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
@@ -692,11 +693,19 @@ where
     }
     sim.merchant_pass_tick = now;
     // `merchant_ids_sorted` 的访问器形态：槽位序（= 插入序）里 `merchant` 身份门为真的实体。
-    let ids: Vec<i32> = access
-        .order_ids()
-        .into_iter()
-        .filter(|id| access.get(*id).is_some_and(|e| e.merchant.is_some()))
-        .collect();
+    // **A43**：索引可用 ⇒ 只复核 `merchants` 候选（仍按同一谓词 live 复核）；`None` ⇒ 原全表扫。
+    let ids: Vec<i32> = match candidates {
+        Some(list) => list
+            .iter()
+            .copied()
+            .filter(|id| access.get(*id).is_some_and(|e| e.merchant.is_some()))
+            .collect(),
+        None => access
+            .order_ids()
+            .into_iter()
+            .filter(|id| access.get(*id).is_some_and(|e| e.merchant.is_some()))
+            .collect(),
+    };
     let mut i = sim.merchant_position;
     while i < ids.len() {
         let id = ids[i];
