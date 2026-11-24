@@ -133784,6 +133784,33 @@ mod zone_command_tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// **A20 静态接线牙 `a20_channel_drain_is_wired_before_a6`**：区 0 的 `INBOUND_PROCESS`
+    /// 块内，`HostChannelDrain` 段必须**先于** A6 的 `HostControlDrain`，且该段内真的调用
+    /// `drain_channel_says(`（通道接线点不被 "函数写了但没接" 骗过）。
+    ///
+    /// 变异：删接线块（或把频道 drain 挪到 A6 之后）⇒ 红。
+    #[test]
+    fn a20_channel_drain_is_wired_before_a6() {
+        let src = include_str!("lib.rs");
+        let wiring = src
+            .find("drain_channel_says(&ctx")
+            .expect("区 0 必须调用 drain_channel_says");
+        let ch = src
+            .find("host_prof.end(\"HostChannelDrain\"")
+            .expect("HostChannelDrain 段尾");
+        let a6 = src
+            .find("host_prof.end(\"HostControlDrain\"")
+            .expect("HostControlDrain 段尾");
+        assert!(
+            wiring < ch,
+            "drain_channel_says 必须在 HostChannelDrain 段内"
+        );
+        assert!(
+            ch < a6,
+            "HostChannelDrain 必须先于 HostControlDrain（频道先排、A6 后跑）"
+        );
+    }
+
     /// **A20 静态辅助牙 `a20_channel_enqueue_never_touches_a6`**：`channel_enqueue` 函数体
     /// （源码切片）**不得**出现 `control_pending` / `deferred_local`（与 T1 行为牙并存）。
     ///
