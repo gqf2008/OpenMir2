@@ -1,6 +1,6 @@
 # openmir2-recalc-skill-passives-17b
 
-> 状态：**待认领（2026-11-20 立卡，来源 = IT-17a ReadBook 交付时切出的能力层缺口）**。
+> 状态（2026-11-20 立卡，来源 = IT-17a ReadBook 交付时切出的能力层缺口）：**待认领**。
 > 本卡是 items 线 **IT-17b**：`PlayObject.RecalcAbilitys` 的**技能被动**建模。IT-17a（读书/学技能）
 > 已交付学习面（见 `docs/issues/openmir2-items-parity.md` §9.15），**本卡只补被动的重算与战斗效果**。
 

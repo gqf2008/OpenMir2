@@ -172,7 +172,7 @@ grep -rniE '(^|[^A-Z])UPGRADEITEMEX([^A-Z]|$)' .  | wc -l   # 34（已实现的 
 
 ## 4. 实现切片建议（按影响面 + 是否碰进程态分组）
 
-### P1 `UPGRADEITEM`(212) —— 引擎内可完成，零新钩子（**推荐先做**）（**已完成**：`aa27e6614`，master `7dac369d5`）
+### P1 `UPGRADEITEM`(212) —— 引擎内可完成，零新钩子（**推荐先做**）（**已完成**，见 `aa27e6614`，master `7dac369d5`）
 
 - 影响面：本会话 `UseItems[nWhere]` 的 `Desc`（写回 `write_back_player_use_items` 落 `hum_items`）+
   `SendUpdateItem`（203 已有通道）+ 会话 RNG（3 次）+ 两条 `SysMsg`。
