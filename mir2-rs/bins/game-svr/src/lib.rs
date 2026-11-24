@@ -53807,6 +53807,112 @@ break
         assert_eq!(got, want_tail, "203 尾逐字节 = trade::update_item_tail");
     }
 
+    /// **A27 P1 牙 `script_upgrade_item_emits_sm_updateitem_and_texts`**：脚本 `UPGRADEITEM 1 0 5`
+    /// （code 212）成功支 ⇒ 写回后 1 条 `SM_UPDATEITEM(203)`（尾逐字节 = `trade::update_item_tail`，
+    /// `MakeIndex` 不变、槽 Index 不变），**不发** 200/202；绿字「装备升级成功」+ 蓝字
+    /// `名称: Dura/DuraMax/Desc[0]/…/Desc[13]`（分隔符全 `/`）；`Desc[nValType]` 增量 = 第二次抽取值。
+    ///
+    /// 变异：删 203 发射 / 改三次抽取顺序（点值落错 Desc 槽）/ 蓝字分隔符改别的 ⇒ 红。
+    #[test]
+    fn script_upgrade_item_emits_sm_updateitem_and_texts() {
+        // 种子：首抽 `Next(0)`（成功）之后，`Next(5)` 的 Point ≥ 1（保证 Desc 增量为正）。
+        let mut seed = 0i32;
+        let (want_point, want_vt) = loop {
+            let mut p = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let _rate = p.random_below(0);
+            let point = p.random_below(5);
+            let vt = p.random_below(14);
+            if point >= 1 {
+                break (point, vt);
+            }
+            seed += 1;
+            assert!(seed < 10_000, "找不到 Point≥1 的种子");
+        };
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 212,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "5".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 8001,
+            index: 1,
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("UPGRADEITEM 成功支不清槽");
+        assert_eq!(slot.index, 1, "成功支不改 Index");
+        assert_eq!(slot.make_index, 8001, "MakeIndex 不变");
+        assert_eq!(
+            i32::from(slot.desc[usize::try_from(want_vt).expect("vt")]),
+            want_point,
+            "Desc[nValType] 增量 = 第二次抽取值（抽取顺序 Next(nRate)→Next(nPoint)→Next(14)）"
+        );
+        assert_eq!(
+            slot.desc.iter().filter(|d| **d != 0).count(),
+            1,
+            "只写 Desc[nValType] 一个槽：{:?}",
+            slot.desc
+        );
+        let want_tail = game_svr::trade::update_item_tail(&slot, &rig.catalog).expect("203 尾");
+        let (mut up, mut add, mut del) = (0usize, 0usize, 0usize);
+        let mut got: Vec<u8> = Vec::new();
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_UPDATEITEM => {
+                        up += 1;
+                        got = body[12..].to_vec();
+                    }
+                    mir2_protocol::messages::SM_ADDITEM => add += 1,
+                    mir2_protocol::messages::SM_DELITEM => del += 1,
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(up, 1, "成功支 ⇒ 1 条 SM_UPDATEITEM(203)");
+        assert_eq!(add, 0, "UPGRADEITEM 不发 200");
+        assert_eq!(del, 0, "成功支不发 202");
+        assert_eq!(got, want_tail, "203 尾逐字节 = trade::update_item_tail");
+        assert!(
+            texts.iter().any(|t| t == "装备升级成功"),
+            "绿字「装备升级成功」必须下发：{texts:?}"
+        );
+        let mut want_line = format!("木剑: {}/{}", slot.dura, slot.dura_max);
+        for d in slot.desc {
+            want_line.push('/');
+            want_line.push_str(&d.to_string());
+        }
+        assert!(
+            texts.contains(&want_line),
+            "蓝字必须逐字节 = `名称: Dura/DuraMax/Desc[0]/…/Desc[13]`（全 `/`）：want={want_line} got={texts:?}"
+        );
+    }
+
     /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
     /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
     ///
