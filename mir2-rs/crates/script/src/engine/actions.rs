@@ -976,6 +976,7 @@ impl Engine<'_, '_> {
             "ActionOfLoadVar" => self.action_of_load_var(info),
             "ActionOfSaveVar" => self.action_of_save_var(info),
             "ActionOfCalcVar" => self.action_of_calc_var(info),
+            "ActionOfUpgradeItems" => self.action_of_upgrade_items(info),
             "ActionOfUpgradeItemsEx" => self.action_of_upgrade_items_ex(info),
             "ActionOfMarry" => self.action_of_marry(info),
             "ActionOfUnMarry" => self.action_of_un_marry(info),
@@ -2048,6 +2049,86 @@ impl Engine<'_, '_> {
                 break;
             }
         }
+    }
+
+    /// `ActionOfUpgradeItems`（`UPGRADEITEM`，`ExecutionProcessingSys.cs:3979`）。
+    ///
+    /// **A27 P1**：逐行照抄 oracle，含两个怪癖——
+    /// 1. **门用 `>` 而非 `>=`**（`nWhere > UseItems.Length`）：`nWhere == Length` 过门后
+    ///    oracle 的 `UseItems[nWhere]` 抛 `IndexOutOfRangeException` 穿出 `GotoLable` ⇒ 本仓
+    ///    等价物 = 记动作错误 + `abort_goto`（零帧、后续动作不执行；同 `CalcVar` 除零先例）。
+    ///    **不得**把门改成 `>=`。
+    /// 2. **`nValType = Next(14) ∈ [0,13]` ⇒ `if (nValType == 14)` 的 `DuraMax` 分支永不命中**
+    ///    （oracle 死分支）⇒ **照抄**，不得改成 `Next(15)`。
+    ///
+    /// RNG 固定 **3 次、顺序敏感**：`Next(nRate)` → `Next(nPoint)` → `Next(14)`；
+    /// `Next(0)` 仍消耗一次采样（`player.random` → `DotNetRandom::next_max`）。失败支
+    /// （`nRate != 0`）已抽 3 次、零帧；空槽/门内早退**零抽取**。
+    fn action_of_upgrade_items(&mut self, info: &QuestActionInfo) {
+        let n_where = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);
+        let n_rate_in = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+        let n_point_in = mir2_shared::hutil32::str_to_int(&info.s_param3, -1);
+        let upper = self.player.use_items_len();
+        if n_where < 0 || n_where > upper || n_rate_in < 0 || !(0..=255).contains(&n_point_in) {
+            self.script_action_error("UpgradeItems", info);
+            return;
+        }
+        // oracle 怪癖①：门是 `>` ⇒ `nWhere == Length` 经门后越界抛异常 ⇒ `abort_goto`。
+        if n_where == upper {
+            self.script_action_error("UpgradeItems", info);
+            self.abort_goto = true;
+            return;
+        }
+        // oracle：`Index <= 0 || stdItem == null` ⇒ 红字后 return（**这里也不抽 RNG**）。
+        if self.player.use_item_index(n_where) <= 0
+            || !self.player.use_item_std_item_present(n_where)
+        {
+            self.player
+                .sys_msg("你身上没有戴指定物品!!!", MSG_COLOR_RED, MSG_TYPE_HINT);
+            return;
+        }
+        // RNG：固定 3 次、顺序敏感（`Next(0)` 也消耗一次采样）。
+        let n_rate = self.player.random(n_rate_in);
+        let n_point = self.player.random(n_point_in);
+        let n_val_type = self.player.random(14);
+        if n_rate != 0 {
+            self.player
+                .sys_msg("装备升级失败!!!", MSG_COLOR_RED, MSG_TYPE_HINT);
+            return;
+        }
+        if n_val_type == 14 {
+            // oracle 怪癖②：死分支（`Next(14)` 不可能等于 14）⇒ 照抄，不得改 15。
+            let n_add_point = n_point.wrapping_mul(1000);
+            let dura_max = self.player.use_item_dura_max(n_where);
+            let add = if dura_max + n_add_point > i32::from(u16::MAX) {
+                i32::from(u16::MAX) - dura_max
+            } else {
+                n_add_point
+            };
+            self.player.set_use_item_dura_max(n_where, dura_max + add);
+        } else {
+            let cur = self.player.use_item_desc(n_where, n_val_type);
+            let add = if cur + n_point > i32::from(u8::MAX) {
+                i32::from(u8::MAX) - cur
+            } else {
+                n_point
+            };
+            self.player
+                .set_use_item_desc(n_where, n_val_type, cur + add);
+        }
+        self.player.send_update_item(n_where);
+        self.player
+            .sys_msg("装备升级成功", MSG_COLOR_GREEN, MSG_TYPE_HINT);
+        // oracle 蓝字：`名称: Dura/DuraMax/Desc[0]/…/Desc[13]`（**分隔符全 `/`**，与 Ex 不同）。
+        let name = self.player.use_item_std_name(n_where);
+        let dura = self.player.use_item_dura(n_where);
+        let dura_max = self.player.use_item_dura_max(n_where);
+        let mut line = format!("{name}: {dura}/{dura_max}");
+        for i in 0..14 {
+            line.push('/');
+            line.push_str(&self.player.use_item_desc(n_where, i).to_string());
+        }
+        self.player.sys_msg(&line, MSG_COLOR_BLUE, MSG_TYPE_HINT);
     }
 
     /// `ActionOfUpgradeItemsEx`（`UPGRADEITEMSEX`）。

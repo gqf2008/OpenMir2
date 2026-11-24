@@ -15,6 +15,12 @@ struct MockPlayer {
     /// `send_msg` 的完整行（含 5 个数值参数，与 flow 夹具同格式）
     msgs_full: Vec<String>,
     rng_value: i32,
+    /// 逐次抽取的脚本 RNG（`Some` 时按序消费；耗尽回落到 `rng_value`）。
+    rng_script: Vec<i32>,
+    /// `random()` 被调用的次数（A27 P1 牙的抽取面判据）。
+    rng_calls: usize,
+    /// 每次 `random()` 的**上界实参**（A27 P1：`Next(nRate)→Next(nPoint)→Next(14)` 顺序面判据）。
+    rng_bounds: Vec<i32>,
     unit_status: std::collections::HashMap<i32, i32>,
     unit_open_status: std::collections::HashMap<i32, i32>,
     items: Vec<(String, i32)>,
@@ -153,6 +159,9 @@ impl MockPlayer {
             msgs: Vec::new(),
             msgs_full: Vec::new(),
             rng_value: 0,
+            rng_script: Vec::new(),
+            rng_calls: 0,
+            rng_bounds: Vec::new(),
             unit_status: std::collections::HashMap::new(),
             unit_open_status: std::collections::HashMap::new(),
             items: Vec::new(),
@@ -317,8 +326,14 @@ impl ScriptPlayer for MockPlayer {
     fn level(&self) -> i32 {
         self.level
     }
-    fn random(&mut self, _value: i32) -> i32 {
-        self.rng_value
+    fn random(&mut self, value: i32) -> i32 {
+        self.rng_calls += 1;
+        self.rng_bounds.push(value);
+        if self.rng_script.is_empty() {
+            self.rng_value
+        } else {
+            self.rng_script.remove(0)
+        }
     }
     fn send_msg(
         &mut self,
@@ -2524,6 +2539,197 @@ fn check_name_date_list_writes_day_vars() {
     assert_eq!(player.global_val(0), i32::MAX);
     assert_eq!(player.global_val(1), 30i32.wrapping_sub(i32::MAX));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A27 P1 正例**：`UPGRADEITEM 1 0 10`（`nRate=0`、`nPoint=5` 由 mock 注入、`nValType=3`）
+/// ⇒ Desc[3] 0→5、`send_update_item` 一次、绿字「装备升级成功」+ 蓝字
+/// `名称: Dura/DuraMax/Desc[0]/…/Desc[13]`（分隔符全 `/`）；RNG **恰 3 次**、顺序
+/// `Next(0)→Next(10)→Next(14)`；未选中的 Desc[0] 不动。
+///
+/// 变异：三次抽取的第三处 `Next(14)`→`Next(15)` ⇒ 上界断言红（死分支牙）。
+#[test]
+fn upgrade_item_success_updates_desc_and_messages() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    player.use_items[1] = Some(5);
+    player.worn_names.insert(1, "屠龙".into());
+    player.worn_present.insert(1, true);
+    player.worn_dura.insert(1, 10);
+    player.worn_dura_max.insert(1, 100);
+    player.worn_desc.insert((1, 0), 7);
+    player.rng_script = vec![0, 5, 3]; // Next(0)=0（成功）、Next(10)=5、Next(14)=3
+    let e = run_act(&mut npc, &mut player, act_full(212, &["1", "0", "10"], &[]));
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(
+        player.rng_calls, 3,
+        "固定 3 次抽取（Next(0) 也消耗一次采样）"
+    );
+    assert_eq!(
+        player.rng_bounds,
+        vec![0, 10, 14],
+        "顺序 Next(nRate)→Next(nPoint)→Next(14)"
+    );
+    assert_eq!(player.use_item_desc(1, 3), 5, "Desc[3] 0→5");
+    assert_eq!(player.use_item_desc(1, 0), 7, "未选中的 Desc[0] 不动");
+    assert_eq!(
+        player.use_item_dura_max(1),
+        100,
+        "ValType≠14 ⇒ DuraMax 不动"
+    );
+    assert_eq!(
+        player.updated_items,
+        vec![1],
+        "成功后必须 SendUpdateItem 一次"
+    );
+    assert!(
+        player.events.iter().any(|ev| ev.contains("装备升级成功")),
+        "绿字成功提示：{:?}",
+        player.events
+    );
+    let blue = player
+        .events
+        .iter()
+        .find(|ev| ev.contains("屠龙: 10/100/"))
+        .expect("蓝字必须含 `名称: Dura/DuraMax/Desc[...]`");
+    assert_eq!(
+        blue.matches('/').count(),
+        15,
+        "蓝字分隔符全 `/`：Dura/DuraMax 1 个 + Desc[0..13] 14 个：{blue}"
+    );
+}
+
+/// **A27 P1 Desc 钳位**：Desc[3]=253、`nPoint=5` ⇒ `253+5 > 255` ⇒ 钳到 **255**（不是越界回绕）。
+#[test]
+fn upgrade_item_desc_clamps_at_255() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    player.use_items[1] = Some(5);
+    player.worn_present.insert(1, true);
+    player.worn_desc.insert((1, 3), 253);
+    player.rng_script = vec![0, 5, 3];
+    let e = run_act(&mut npc, &mut player, act_full(212, &["1", "0", "10"], &[]));
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.use_item_desc(1, 3), 255, "Desc 钳 255（§1.1(7)）");
+    assert_eq!(player.updated_items, vec![1]);
+}
+
+/// **A27 P1 负例③**：`nRate != 0`（失败支）⇒ 红字、零帧（无 `send_update_item`）、
+/// **RNG 恰 3 次**（抽取发生在判定**之前**）。
+///
+/// 变异：把 nRate 抽取挪到判定后 ⇒ rng_calls 少 1 ⇒ 红。
+#[test]
+fn upgrade_item_fail_still_draws_three_and_updates_nothing() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    player.use_items[1] = Some(5);
+    player.worn_present.insert(1, true);
+    player.worn_desc.insert((1, 3), 1);
+    player.rng_script = vec![1, 5, 3]; // Next(1)=1 ⇒ 失败
+    let e = run_act(&mut npc, &mut player, act_full(212, &["1", "1", "10"], &[]));
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.rng_calls, 3, "失败支必须先抽满 3 次");
+    assert_eq!(player.use_item_desc(1, 3), 1, "失败不得改 Desc");
+    assert!(player.updated_items.is_empty(), "失败支零帧");
+    assert!(
+        player.events.iter().any(|ev| ev.contains("装备升级失败")),
+        "{:?}",
+        player.events
+    );
+    assert!(!player.events.iter().any(|ev| ev.contains("装备升级成功")));
+}
+
+/// **A27 P1 负例②**：空槽（`UseItems[1].Index == 0` 或 std 缺失）⇒ 红字一条、**零抽取**、零帧。
+#[test]
+fn upgrade_item_empty_slot_sends_red_and_draws_no_rng() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    player.worn_present.insert(1, true); // Index=0 ⇒ 走空槽支
+    let e = run_act(&mut npc, &mut player, act_full(212, &["1", "0", "10"], &[]));
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.rng_calls, 0, "空槽支不得抽 RNG");
+    assert!(player.updated_items.is_empty());
+    assert!(
+        player
+            .events
+            .iter()
+            .any(|ev| ev.contains("你身上没有戴指定物品")),
+        "{:?}",
+        player.events
+    );
+}
+
+/// **A27 P1 参数面**：`nWhere < 0` ⇒ `ScriptActionError(UpgradeItems)`、零抽取、零帧。
+#[test]
+fn upgrade_item_bad_params_error_and_no_draws() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(212, &["-1", "0", "10"], &[]),
+    );
+    assert!(
+        first_script_error(&e).contains("脚本命令:UpgradeItems"),
+        "{e:?}"
+    );
+    assert_eq!(player.rng_calls, 0);
+    assert!(player.updated_items.is_empty());
+}
+
+/// **A27 P1 负例①（门怪癖）**：`nWhere == UseItems.Length`（13）**过门**（门是 `>`）⇒ 等价物
+/// `ScriptActionError(UpgradeItems)` + `abort_goto`：**零帧、零抽取、后续动作不执行**。
+///
+/// 变异：门 `>`→`>=` ⇒ 走「参数错误但**不** abort」支 ⇒ 后续 `GIVE` 执行 ⇒ 红。
+#[test]
+fn upgrade_item_nwhere_equals_len_aborts_following_actions() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    let errors = {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        engine.run_actions(&[
+            act_full(212, &["13", "0", "10"], &[]),
+            act(3, "金币", "", 1, 0),
+        ]);
+        engine.errors
+    };
+    let texts = script_errors(&errors);
+    assert_eq!(texts.len(), 1, "{errors:?}");
+    assert!(texts[0].contains("脚本命令:UpgradeItems"), "{texts:?}");
+    assert_eq!(player.rng_calls, 0, "门内早退不得抽 RNG");
+    assert!(player.items.is_empty(), "abort_goto ⇒ 后续 GIVE 不得执行");
+    assert!(player.updated_items.is_empty());
+}
+
+/// **A27 P1 死分支牙（oracle 怪癖②照抄）**：mock 让第三次抽返回 **14**（真实 `Next(14)` 不可能）
+/// ⇒ 代码**按 oracle 保留** `if nValType == 14 { DuraMax += nPoint*1000 } else { Desc }`：
+/// 14 才进 DuraMax 支、Desc 不动。真实运行下该支**不可达**；本牙 + 上界断言
+/// `rng_bounds[2]==14` 共同钉住「`Next(14)` 且 `==14` 判定照抄」，抓 `Next(14)`→`Next(15)` 变异。
+#[test]
+fn upgrade_item_valtype_14_branch_is_dead_by_next14() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#SAY
+x
+",
+    );
+    player.use_items = vec![None; 13];
+    player.use_items[1] = Some(5);
+    player.worn_present.insert(1, true);
+    player.worn_dura_max.insert(1, 100);
+    player.rng_script = vec![0, 5, 14]; // 第三次返回 14（真实 Next(14) 不可能）
+    let e = run_act(&mut npc, &mut player, act_full(212, &["1", "0", "10"], &[]));
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(
+        player.rng_bounds,
+        vec![0, 10, 14],
+        "第三次上界必须是 14（改 15 即变异）"
+    );
+    assert_eq!(
+        player.use_item_dura_max(1),
+        5100,
+        "结构照抄 oracle：==14 才进 DuraMax 支（100+5*1000），真实 RNG 不可达"
+    );
+    assert_eq!(player.use_item_desc(1, 3), 0, "DuraMax 支不动 Desc");
 }
 
 #[test]

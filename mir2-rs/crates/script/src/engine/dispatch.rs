@@ -94,6 +94,7 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfLoadVar",
     "ActionOfSaveVar",
     "ActionOfCalcVar",
+    "ActionOfUpgradeItems",
     "ActionOfUpgradeItemsEx",
     "ActionOfMarry",
     "ActionOfUnMarry",
