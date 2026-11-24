@@ -25,6 +25,9 @@
   actor id 随区段变化是构造性的 ⇒ 按 `--roles` 映射成同一角色占位；**两侧映射到不同角色或映射不到 ⇒ 不归一 ⇒ 必红**。
   EDCode 缺失/解码失败 ⇒ `degraded` 标记 + `normalized_frames` 计数 + WRN + **rc=2**（不得静默降级为原样比较）。
   只对登记过的 `(ident, 字段)` 生效，未登记 ident 一律不归一；**禁止**清空/忽略该字段。
+  **覆盖边界（A23，与报告 `body_role_norm.surface` 同文）**：仅 ident=31、仅角色 hitter 归一；
+  怪物 hitter 的 31 仍 raw；638/41/22/23/1104 未归一（出现且 recog 映射到角色即红）；
+  22/23 当前场景未产生（探针侧事实）、1104 无生产调用点。
 - **self 桶（卡「区 k MaxExp=0」证据配套）**：`recog==0` 的自我帧（如 `SM_ABILITY(52)`）不在
   `--roles` 映射里，旧口径整帧排除。`--self-bucket` 把该桶按**收件人侧**单独归键比较：
   * `off`（默认）⇒ 与旧版逐项一致（不输出 self_* 字段，rc 不变）；
@@ -435,8 +438,11 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
         "raw_unregistered_frames": bn_counts.get("raw_unregistered", 0),
         "fields": [{"ident": i, "offset": [a, b], "name": "MessageBodyWL.Tag1(hitter ActorId)"}
                    for i, (a, b) in BODY_ROLE_FIELDS.items()],
-        "surface": ("仅 ident=31、仅角色（--roles 命中）hitter 归一（替换为角色占位）；未登记 ident"
-                    "（638/41/22/23/1104 等）一律原样比较；EDCode 缺失/解码失败 ⇒ degraded + WRN + rc=2"),
+        "surface": ("仅 ident=31、仅角色（--roles 命中）hitter 归一（替换为角色占位）；"
+                    "怪物 hitter 的 31 仍 raw（映射不到角色 ⇒ 原样比较，两侧不同即红）；"
+                    "未登记 ident（638/41/22/23/1104 等）一律原样比较（出现且 recog 映射到角色即红）；"
+                    "22/23 当前场景未产生（探针侧事实，不是比较器过滤）；1104 无生产调用点；"
+                    "EDCode 缺失/解码失败 ⇒ degraded + WRN + rc=2"),
     }
     rc = 1 if (reds or bad_order or judge_d_red) else 0
     if self_bucket == "judge" and self_red > 0:
@@ -620,6 +626,45 @@ def _selftest():
                                    1000, roles=roles)
         ck("unregistered_41_same_identity_green", rc_41c == 0, f"rc={rc_41c}")
 
+        # ---- A23 方向②：未登记 ident 的**语义差异**方向——id 相同也必须红 ----
+        # 638 的身份位 = body 的 4B target ActorId；param/tag/series 是语义字段（本用例改 param）。
+        out_638s, rc_638s = run_core(*case("ident638_sem",
+                                           [frame(638, 101, param=2001, body=id4(102))],
+                                           [frame(638, 201, param=2002, body=id4(102))]),
+                                     1000, roles=roles)
+        ck("unregistered_638_same_id_semantic_change_red",
+           rc_638s == 1 and any(r[0] == 638 for r in out_638s["multiset_reds"]),
+           f"rc={rc_638s}")
+        # 41 的 param = LoWord(GetFeatureToLong())（**外观特征**，不是 ActorId；见文件头）；
+        # tag/series/body 是语义字段——本用例只改 tag。
+        out_41s, rc_41s = run_core(*case("ident41_sem",
+                                         [frame(41, 101, param=102, tag=7)],
+                                         [frame(41, 201, param=102, tag=8)]),
+                                   1000, roles=roles)
+        ck("unregistered_41_same_param_semantic_change_red",
+           rc_41s == 1 and any(r[0] == 41 for r in out_41s["multiset_reds"]),
+           f"rc={rc_41s}")
+
+        # ---- A23：「出现即红」的前提 = 帧的 recog 必须映射到角色 ----
+        # recog 不在 `--roles` ⇒ key() 为 None ⇒ 进 other 桶、不参与 A/C1/C2/D（只计数）。
+        out_other, rc_other = run_core(*case("ident638_other",
+                                             [frame(638, 777, body=id4(102))],
+                                             [frame(638, 778, body=id4(202))]),
+                                       1000, roles=roles)
+        ck("unregistered_638_unmapped_recog_not_judged",
+           rc_other == 0 and out_other["multiset_reds"] == []
+           and out_other["other_frames_golden"] == 1
+           and out_other["other_frames_test"] == 1,
+           f"rc={rc_other} other=({out_other.get('other_frames_golden')},"
+           f"{out_other.get('other_frames_test')})")
+
+        # ---- A23：surface 覆盖边界必须自述（meta 牙，防文本漂移）----
+        surface = ((out_638.get("body_role_norm") or {}).get("surface")) or ""
+        need = ["31", "角色", "怪物 hitter", "638", "41", "22", "23", "1104"]
+        missing = [w for w in need if w not in surface]
+        ck("body_role_norm_surface_lists_boundaries", not missing,
+           f"missing={missing} surface={surface[:160]}")
+
         ok_more, det_more = True, []
         for ident in (22, 23, 1104):
             o, r = run_core(*case("ident%d" % ident,
@@ -689,7 +734,7 @@ def _selftest():
            f"s1={s1} s2={s2} same_hex={h1 == h2}")
         _BODY_NORM_CACHE.clear()
 
-    expected = 33
+    expected = 37
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print(f"SELFTEST {name} {'ok' if cond else 'FAIL'} {detail}")
