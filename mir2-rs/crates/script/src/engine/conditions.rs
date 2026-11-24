@@ -566,8 +566,10 @@ impl Engine<'_, '_> {
     /// `ConditionOfCheckItem`：`success = true;` 变量替换后
     /// `playerActor.QuestCheckItem(s01, ref n1C, ...)`，`n1C < nParam2 → false`。
     ///
-    /// 待核对：C# `PlayObject.QuestCheckItem` 的计数范围（背包/佩戴位）与耐久统计——
-    /// 本实现按背包件数（`item_count`）计；若某些脚本依赖佩戴位计数，flow-diff 会暴露差异。
+    /// 核定（A30）：C# `PlayObject.QuestCheckItem`（`PlayObject.Base.cs:2600`）只扫**背包
+    /// `ItemList`**（不扫佩戴位）⇒ 本实现按背包件数（`item_count`）计与 oracle 同表；
+    /// `CHECKITEMW` 的名字型兜底才是佩戴位面（`CheckItemCount`，见
+    /// `ScriptPlayer::use_item_name_count`）。
     fn cond_check_item(&mut self, info: &QuestConditionInfo, result: &mut bool) {
         *result = true;
         // C#: GetVarValue(playerActor, sParam1, ref s01)（变量替换；无变量层时原样）

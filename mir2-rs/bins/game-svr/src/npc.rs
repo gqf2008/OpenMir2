@@ -2606,6 +2606,18 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             .map(|(_, c)| *c)
             .sum()
     }
+    /// **A30**：`PlayObject.CheckItemCount`（`PlayObject.cs:5332`）——**只扫佩戴位 `UseItems`**；
+    /// 逐槽 `GetStdItemName(Index)`（空槽/`Index == 0`/未知模板取空名）与 `name`
+    /// `OrdinalIgnoreCase` 比较。`CHECKITEMW` 的名字型兜底用它，**不是**背包件数。
+    fn use_item_name_count(&self, name: &str) -> i32 {
+        let mut n = 0;
+        for i in 0..self.use_items_len() {
+            if self.use_item_std_name(i).eq_ignore_ascii_case(name) {
+                n += 1;
+            }
+        }
+        n
+    }
     fn slave_count(&self) -> i32 {
         self.slaves
     }
