@@ -3488,6 +3488,8 @@ fn startup_item_number_store(
 async fn run_inner(args: &[String]) -> Result<()> {
     // **DBG 级别闸**：未设 `MIR2_LOG_LEVEL` ⇒ 全打（与今天逐字节相同）。
     log_level::init_from_env();
+    // **A43j**：慢事件日志阈值（`MIR2_SLOW_EVENT_LOG_US`，缺省关）。
+    perf_counters::set_slow_event_us_from_env();
     let conf = args
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
@@ -26825,6 +26827,13 @@ mod perf_counters {
     /// **为什么用墙钟而不是线程 CPU**：`GetThreadTimes` 只有 15.625 ms 量化——单条 1.3 ms 的
     /// 事件读数是 0 或 15,625，**无法排序**；墙钟（`Instant`）µs 级可用（代价：含被抢占）。
     /// CPU 的段级读数已有 `zonek_exec_cpu_us` 对照。只在比第 3 名更贵时才加锁 ⇒ 竞争极低。
+    /// **A43j**：慢事件日志阈值（µs；`0` = 关，默认关）。由 `MIR2_SLOW_EVENT_LOG_US` 设置。
+    /// 触发点：`execute_local_budget` 单条事件墙钟 ≥ 阈值 ⇒ 打一行 WRN（限速 ≤1 条/100ms）。
+    static SLOW_EVENT_US: AtomicU64 = AtomicU64::new(0);
+
+    /// **A43j**：慢事件限速器（上次打日志的时刻；`Mutex<Option<Instant>>`）。
+    static SLOW_EVENT_LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
     static ZONEK_TOP_SLOW: Mutex<SlowWatch> = Mutex::new(SlowWatch {
         top: [(u16::MAX, 0); 3],
         by_ident: Vec::new(),
@@ -27512,6 +27521,76 @@ mod perf_counters {
             .map(|(id, us)| format!("{id}:{us}"))
             .collect::<Vec<_>>()
             .join(",")
+    }
+
+    /// **A43j**：由进程启动段调用一次（`MIR2_SLOW_EVENT_LOG_US`，缺省/非法 ⇒ 关）。
+    pub(crate) fn set_slow_event_us_from_env() {
+        let us = std::env::var("MIR2_SLOW_EVENT_LOG_US")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        SLOW_EVENT_US.store(us, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_slow_event_us(us: u64) {
+        SLOW_EVENT_US.store(us, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn slow_event_enabled() -> bool {
+        SLOW_EVENT_US.load(Ordering::Relaxed) > 0
+    }
+
+    /// **A43j**：慢事件日志行的**纯**格式化（可单测；不打日志）。
+    pub(crate) fn slow_event_line(
+        ident: u16,
+        chr: &str,
+        line: u8,
+        socket: i32,
+        wall_us: u64,
+    ) -> String {
+        format!(
+            "慢事件 ident={ident} chr={chr} gate={line} socket={socket} wall_us={wall_us}（阈值 MIR2_SLOW_EVENT_LOG_US）"
+        )
+    }
+
+    /// **A43j**：墙钟 ≥ 阈值 ⇒ 限速打一行（≤1 条/100ms）。返回是否真的打了（测试用）。
+    pub(crate) fn maybe_log_slow_event(
+        ident: u16,
+        chr: &str,
+        line: u8,
+        socket: i32,
+        wall_us: u64,
+    ) -> bool {
+        let threshold = SLOW_EVENT_US.load(Ordering::Relaxed);
+        if threshold == 0 || wall_us < threshold {
+            return false;
+        }
+        let mut last = SLOW_EVENT_LAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        if let Some(prev) = *last {
+            if now.duration_since(prev) < std::time::Duration::from_millis(100) {
+                return false;
+            }
+        }
+        *last = Some(now);
+        drop(last);
+        glog!(
+            "WRN",
+            "{}",
+            slow_event_line(ident, chr, line, socket, wall_us)
+        );
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_slow_event_limiter() {
+        *SLOW_EVENT_LAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     #[cfg(test)]
@@ -43410,6 +43489,24 @@ fn execute_local_budget(
         // `item` 随后被 `exec` 消费 ⇒ ident 必须先取。
         let slow_ident = perf_counters::event_ident(&item.ev);
         let slow_t0 = perf_counters::enabled().then(std::time::Instant::now);
+        // **A43j**：慢事件日志的定位字段（`chr` 只在开关打开时克隆 ⇒ 默认零成本）。
+        let slow_spot = match &item.ev {
+            GateEvent::Command {
+                chr_name,
+                socket,
+                line,
+                ..
+            } => Some((
+                if perf_counters::slow_event_enabled() {
+                    chr_name.clone()
+                } else {
+                    String::new()
+                },
+                *line,
+                *socket,
+            )),
+            _ => None,
+        };
         if class == ZoneCmdClass::Unsupported {
             perf_counters::note_zonek_inbound_unsupported();
         }
@@ -43419,10 +43516,11 @@ fn execute_local_budget(
         };
         let disp = exec(item, class, pending_local, budget);
         if let Some(t0) = slow_t0 {
-            perf_counters::note_zonek_slow_ident(
-                slow_ident,
-                u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
-            );
+            let wall_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+            perf_counters::note_zonek_slow_ident(slow_ident, wall_us);
+            if let Some((chr, line, socket)) = slow_spot.as_ref() {
+                perf_counters::maybe_log_slow_event(slow_ident, chr, *line, *socket, wall_us);
+            }
         }
         match disp {
             LocalDisposition::Drained => {
@@ -146082,5 +146180,45 @@ mod a43i_pickup_gate_order_tests {
             gate < view,
             "位置门必须前移到建地面图之前（gate@{gate} view@{view}）"
         );
+    }
+}
+
+/// **A43j 牙（慢事件日志）**：只在墙钟 ≥ 阈值时打，且 100 ms 内至多一条；行内容含
+/// ident/chr/gate/socket/wall_us。阈值 0（默认）= 关。
+#[cfg(test)]
+mod a43j_slow_event_log_tests {
+    use super::*;
+
+    #[test]
+    fn slow_event_log_threshold_and_rate_limit() {
+        // 纯格式化（不打日志）。
+        let line = perf_counters::slow_event_line(3030, "pchr", 1, 900, 1500);
+        assert!(line.contains("ident=3030"), "{line}");
+        assert!(line.contains("chr=pchr"), "{line}");
+        assert!(line.contains("gate=1"), "{line}");
+        assert!(line.contains("socket=900"), "{line}");
+        assert!(line.contains("wall_us=1500"), "{line}");
+
+        // 阈值 0 ⇒ 关。
+        perf_counters::set_slow_event_us(0);
+        perf_counters::reset_slow_event_limiter();
+        assert!(!perf_counters::maybe_log_slow_event(
+            3030, "p", 0, 900, 10_000
+        ));
+
+        // 阈值 1000 ⇒ 1500 触发一次；紧接着同一 100ms 窗口内再触发被限速。
+        perf_counters::set_slow_event_us(1_000);
+        perf_counters::reset_slow_event_limiter();
+        assert!(perf_counters::maybe_log_slow_event(
+            3030, "p", 0, 900, 1_500
+        ));
+        assert!(
+            !perf_counters::maybe_log_slow_event(3030, "p", 0, 900, 1_500),
+            "100ms 内必须限速"
+        );
+        // 低于阈值 ⇒ 不打。
+        perf_counters::reset_slow_event_limiter();
+        assert!(!perf_counters::maybe_log_slow_event(3030, "p", 0, 900, 999));
+        perf_counters::set_slow_event_us(0);
     }
 }
