@@ -2096,14 +2096,24 @@ fn g3_anchor_a4_production_wiring() {
     let stepblk = l[step..step + 16].join("\n");
     assert!(stepblk.contains("&mut guild_run_tick,"));
 
-    assert_eq!(count_contains(&l, "guild_cmd::handle_guild_cmd("), 1);
-    let cmd = (0..l.len())
-        .find(|&i| l[i].contains("guild_cmd::handle_guild_cmd("))
-        .unwrap();
-    let cend = (cmd..l.len()).find(|&i| l[i].trim() == ");").unwrap();
-    let cblk = l[cmd..=cend].join("\n");
-    assert!(cblk.contains("world.clock_ms as i32,"));
-    assert!(!cblk.contains("now_ms(),"));
+    // **A34 片 4**：实参装配抽到 `run_guild_command(...)` 单一装配点（区 0 与区 k drain 共用）；
+    // 断言意图不变：`guild_cmd::handle_guild_cmd(` **恰一处**，且**生产调用点**把时钟从
+    // `world.clock_ms` 传入（不得用 `now_ms()`）。
+    assert_eq!(
+        count_contains(&l, "guild_cmd::handle_guild_cmd("),
+        1,
+        "handle_guild_cmd 必须只有唯一装配点"
+    );
+    let site = (0..l.len())
+        .find(|&i| l[i].contains("run_guild_command(") && !l[i].contains("fn run_guild_command("))
+        .expect("生产调用点 run_guild_command(");
+    let send = (site..l.len()).find(|&i| l[i].trim() == ");").unwrap();
+    let sblk = l[site..=send].join("\n");
+    assert!(
+        sblk.contains("world.clock_ms as i32,"),
+        "时钟必须来自 world.clock_ms"
+    );
+    assert!(!sblk.contains("now_ms(),"), "不得用 now_ms()");
 }
 
 #[test]
