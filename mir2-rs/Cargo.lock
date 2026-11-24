@@ -908,6 +908,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "uptime_lib",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

@@ -6,7 +6,10 @@ description = "Rust 版 GameSvr 世界宿主（M2 主体）：网关 5000 侧 20
 license = "MIT"
 
 [lints.rust]
-unsafe_code = "forbid"
+# **A43 例外（Leader 批准，最小落点）**：原 `forbid` 无法被模块级 `#[allow(unsafe_code)]` 覆盖；
+# 这里把 crate 默认改为 `deny`（默认仍拒绝），唯一例外是 `lib.rs` 的 `thread_cpu` 观测模块
+# （一次只读 `GetThreadTimes` 调用，无指针保持/无内存写）。
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "deny"
@@ -55,3 +58,8 @@ sha2 = "0.10"      # 卡 openmir2-magic-serverconf-batch-plan §6.7：真实部�
 
 [build-dependencies]
 mir2-build-meta = { path = "../../crates/build-meta" }
+
+[target.'cfg(windows)'.dependencies]
+# **A43**：线程 CPU 时间（`GetThreadTimes`）。固定 0.48.0——workspace Cargo.lock 已含该版本
+# （经其他依赖），不引入新版本供应链。
+windows-sys = { version = "0.48.0", features = ["Win32_Foundation", "Win32_System_Threading"] }
