@@ -67,6 +67,22 @@ pub(crate) struct HandoffAck {
     pub ok: bool,
 }
 
+/// **A38**：一次已提交的 handoff（`ack.ok` 且源区实体已移除）的随迁载荷。
+///
+/// `group` 必须在 `release_entity` **之前**捕获——实体释放后 `GroupState` 组件随之消失
+/// （它是组关系在源区唯一的存在处）。捕获顺序由
+/// `handoff_tick_top_captures_group_state_before_release` 直接钉住。
+#[derive(Debug)]
+pub(crate) struct CommittedHandoff {
+    /// 实体 id。
+    pub id: i32,
+    /// 接受方区（= [`HandoffAck::from`]，真正执行提升的区）。
+    pub from: ZoneId,
+    /// 实体在源区被释放**之前**的组关系（`allow_group`/`allow_group_re_call`/`group_owner`/
+    /// `group_members`；`GroupState::default()` = 无组）。
+    pub group: mir2_world_bevy::GroupState,
+}
+
 /// 一个区的邮箱（offer / ack 各一条队列；区线程互相 push、各自 tick 顶排水）。
 pub(crate) type HandoffMailbox = Arc<Mutex<(Vec<HandoffOffer>, Vec<HandoffAck>)>>;
 
@@ -168,13 +184,12 @@ impl HandoffRuntime {
 
     /// **tick 顶（phase1 之前）**：排 ack（源侧提交/回滚）+ 排 offer（目标侧提升+回执）。
     ///
-    /// 返回本 tick **已提交**（`ack.ok` 且实体已从本区移除）的 `(实体 id, 接受方区)`：
-    /// 接受方区 = [`HandoffAck::from`]（真正执行提升的区），**不是** ack 的收件人 `to`。
-    /// A35-b 的会话搬迁以它为目标区；本次提交的调用点先忽略返回值（零行为变化），
-    /// 下一片接线。
-    pub(crate) fn tick_top(&mut self, world: &mut World, tick: u64) -> Vec<(i32, ZoneId)> {
+    /// 返回本 tick **已提交**（`ack.ok` 且实体已从本区移除）的 [`CommittedHandoff`]：
+    /// 接受方区 = [`HandoffAck::from`]（真正执行提升的区），**不是** ack 的收件人 `to`；
+    /// `group` = 实体被释放前的组关系（**A38**：跨区的只是位置，组关系跟着人走）。
+    pub(crate) fn tick_top(&mut self, world: &mut World, tick: u64) -> Vec<CommittedHandoff> {
         let (offers, acks) = self.take_mail();
-        let mut committed: Vec<(i32, ZoneId)> = Vec::new();
+        let mut committed: Vec<CommittedHandoff> = Vec::new();
         // 1) acks（本区是源区）。
         for ack in acks {
             if ack.to != self.zone {
@@ -185,6 +200,10 @@ impl HandoffRuntime {
                 continue;
             }
             if ack.ok {
+                // **A38**：组关系必须在 `release_entity` **之前**取——释放后 `GroupState` 组件
+                // 随实体消失。捕获顺序由 `handoff_tick_top_captures_group_state_before_release`
+                // 钉住（把本行挪到 release 之后 ⇒ 拿到 default() ⇒ 该用例红）。
+                let group = world.entities.group(ack.id).cloned().unwrap_or_default();
                 let removed = world.release_entity(ack.id);
                 glog!(
                     "INF",
@@ -192,7 +211,11 @@ impl HandoffRuntime {
                     self.zone,
                     ack.id
                 );
-                committed.push((ack.id, ack.from));
+                committed.push(CommittedHandoff {
+                    id: ack.id,
+                    from: ack.from,
+                    group,
+                });
             } else {
                 self.refused += 1;
                 mir2_world_bevy::mirror_metrics::note_handoff_refused();
