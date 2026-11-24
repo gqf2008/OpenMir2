@@ -31809,7 +31809,10 @@ fn drain_player_auto_get_exp(
     record: &mut mir2_world_bevy::TickRecord,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #11**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。本处的序是**结果序**：`record.exp_awards` 的 Vec 追加序由此决定，
+    // 后续 `drain_kill_exp_chain` 再按该序出 44/45 帧。
+    names.sort_unstable();
     for name in names {
         // `AutoGetExp*` 是 `PlayObject` 字段 ⇒ 只对在线玩家结算。
         if online.iter().all(|e| e.chr_name != name) {
@@ -105996,6 +105999,61 @@ SendRefMsgRange=15
             &mut rec,
         );
         assert_eq!(rec.exp_awards.len(), 2, "未解析名 = null 语义");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **B4 #11（`drain_player_auto_get_exp` @31803）行为牙**：P31 的**结果序**（`TickRecord.exp_awards`
+    /// 的 Vec 追加序，后续经 `drain_kill_exp_chain` 传导成 44/45 帧序）必须严格等于名字升序。
+    ///
+    /// 构造：8 会话全部到期（`auto_get_exp_tick=0, time=1000, point=10, envir="A"`），名字按
+    /// 「升序 ≠ 插入序」插入；`pl3_registry("")` ⇒ 图 A = id 0。断言 `exp_awards` 逐项等于
+    /// 「名字升序 → (actor, 10, false, 1)」。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@31815）⇒ Vec 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p31_exp_awards_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let mut by_name: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().progression.max_exp = 1_000_000;
+            let mut sg = test_session_ground(id);
+            sg.auto_get_exp_tick = 0;
+            sg.auto_get_exp_time = 1_000;
+            sg.auto_get_exp_point = 10;
+            sg.auto_get_exp_envir = Some("A".to_string());
+            sessions.insert(name.to_string(), sg);
+            online_set(&mut online, entry("acct", name, 1, 0, 901 + i as i32, id));
+            by_name.push((name, id));
+        }
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1_001,
+            &mut rec,
+        );
+        by_name.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, i32, bool, u8)> =
+            by_name.iter().map(|(_, id)| (*id, 10, false, 1)).collect();
+        assert_eq!(
+            rec.exp_awards, want,
+            "P31 结果序（exp_awards Vec 序）= 名字升序"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
