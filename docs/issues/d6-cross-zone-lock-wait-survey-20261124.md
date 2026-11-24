@@ -105,6 +105,22 @@ L1（两个线程）、L3、L4、L5、L6、L7、L8：目标区卡死并持锁时
 2. **应同时改（P1，统一底座）**：L1/L3/L4/L5/L6/L7/L8 全部改成有界获取 + `zone_lock_wait_timeout` + 按路径 fail-closed；否则「目标区卡死」只能以整机 abort 收场，且 `barrier_us` 无法归因。
 3. **可延后（P2）**：毒化回收后的 `alive` 一致性语义、L4 锁内文件 I/O 的拆分、邮箱↔区锁方向不变量入牙。
 
+## 7. 观测契约（P0 两处实现后）
+
+perf tick TSV 在 `zone_metrics` **之前**新增两列（A36 的末列契约不变；表头/值同改，
+「表头列数 = 每行字段数」既有牙覆盖）：
+
+| 列 | 语义 | 何时非 0 | N=1 |
+|---|---|---|---|
+| `zone_startup_lock_timeout` | 启动期静态装载「区状态锁有界获取超时」次数（本 tick 增量） | 超时即 fail-closed 退出（`exit(2)`），正常启动恒 0；计数器主要供测试/证据 | 恒 0 |
+| `zone_shutdown_lock_timeout` | 关服存档收集「锁超时 ⇒ 跳过该区」次数（本 tick 增量） | 关服时若某区锁在 `SHUTDOWN_LOCK_WAIT` 内不可得 | 恒 0 |
+
+常量（与 DB 等待分开）：`SHUTDOWN_LOCK_WAIT` = 2s/区（超时跳过该区 + WRN + 进程继续退出）；
+`STARTUP_LOCK_WAIT` = 5s/区（超时 ERR + `exit(2)`，原因含区号）。
+实现符号：`lib.rs` `try_lock_zone_state_until` / `collect_shutdown_zone_saves_bounded` /
+`require_startup_zone_lock` / `startup_lock_failure_message` / `shutdown_lock_skip_warn`。
+牙：`lib.rs` `d6_lock_wait_tests`（持锁线程 + `recv_timeout` 兜底；改回阻塞 `lock()` ⇒ 红）。
+
 ## 6. 本勘察的边界
 
 - 无运行时实验、无变异；未测「锁等待」实测分布（需要注入持有者线程的测试或故障注入窗口）。
