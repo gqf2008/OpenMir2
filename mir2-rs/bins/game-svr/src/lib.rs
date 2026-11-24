@@ -57632,6 +57632,69 @@ break
         }
     }
 
+    /// **B4 #1（`shutdown_save_all` @15519）行为牙**：关服存档的**请求发出序**必须严格等于
+    /// **名字升序**——这是现状可观测序（契约），与 `HashMap` 迭代序无关。
+    ///
+    /// 构造：8 个会话按「名字升序 ≠ 插入序」插入 `sessions`（`HashMap` 迭代序本身不受控，
+    /// n=8 时恰好升序的概率可忽略）⇒ 断言 DB 请求帧的到达序（= `req_tx.send` 序）逐项相等。
+    ///
+    /// 牙：删 `shutdown_save_all` 的 `names.sort();`（@15532）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn shutdown_save_order_is_name_ascending_with_unordered_sessions() {
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
+        let mut sessions = std::collections::HashMap::new();
+        let mut saves = std::collections::HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            world.open_session(name);
+            let actor_id = world
+                .enter_map(
+                    name,
+                    mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 4, 10),
+                    0,
+                )
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.state.gold = 100 + i as i32;
+            sessions.insert(name.to_string(), sg);
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: format!("acct-{name}"),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+        }
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let summary = shutdown_save_all(
+            &sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(summary.fired, names.len(), "每个在册会话各发起一次");
+        let mut got: Vec<String> = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            got.push(save_record_of(&frame).0);
+        }
+        let mut want: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "关服存档请求序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
+    }
+
     /// **判据 c（无玩家时不发起）**：空会话表 ⇒ 0 次请求、不等待、不走超时支；in-save 表不变。
     #[test]
     fn shutdown_with_no_sessions_fires_nothing() {
