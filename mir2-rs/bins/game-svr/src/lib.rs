@@ -2335,6 +2335,56 @@ fn handle_zone_command_on(
         handle_magic_key_cmd(cmd.recog, cmd.param, chr_name, socket, saves);
         return ZoneCmdOutcome::Dispatched;
     }
+    // **A34 片 2（商店五条）**：与区 0 [`handle_shop_cmd`] **同一实现**；`CM_USERREPAIRITEM` 延后
+    // （成功支走 `run_merchant_goto`，需 `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx`
+    // 等进程态 ⇒ 归 Process 片，本片不接）。
+    //
+    // **占位约束**：这五条分支不读 `merchant_book`/`npc_vars`/`sell_off_book`/`sell_off_sessions`/
+    // `gm`/`script_world`（读它们的只有 1011/1023/makedrug 分支）；源码扫描牙
+    // `a34_slice2_shop_arms_ignore_process_args` 钉住该不变量（证据级别：源码·接线提示）。
+    if matches!(
+        cmd.ident,
+        game_svr::shop::CM_MERCHANTQUERYSELLPRICE
+            | game_svr::shop::CM_USERSELLITEM
+            | game_svr::shop::CM_USERBUYITEM
+            | game_svr::shop::CM_USERGETDETAILITEM
+            | game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
+    ) {
+        let merchant_book = game_svr::npc::MerchantScriptBook::default();
+        let npc_vars = game_svr::npc::NpcVars::default();
+        let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+        let mut sell_off_scratch: std::collections::HashMap<
+            String,
+            game_svr::selloff::SellOffState,
+        > = std::collections::HashMap::new();
+        handle_shop_cmd(
+            cmd.ident,
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            shop_sessions,
+            &mut sell_off_scratch,
+            &mut sell_off_book,
+            trade_sessions,
+            gates,
+            world,
+            &env.enter_cfg.catalog,
+            &env.enter_cfg.shop,
+            env.colors,
+            env.enter_cfg.make_items.as_ref(),
+            env.item_number,
+            &merchant_book,
+            &npc_vars,
+            None,
+            None,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
     ZoneCmdOutcome::Unsupported
 }
@@ -29004,7 +29054,14 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || ident == mir2_protocol::messages::CM_DROPGOLD
         || ident == mir2_protocol::messages::CM_ADJUST_BONUS
         || ident == mir2_protocol::messages::CM_WANTMINIMAP
-        || ident == mir2_protocol::messages::CM_OPENDOOR;
+        || ident == mir2_protocol::messages::CM_OPENDOOR
+        // **A34 片 2（商店五条）**：只碰区本地 world/会话 + `enter_cfg` 区副本
+        // （`CM_USERREPAIRITEM` 成功支要脚本宿主 ⇒ 不在本集，延后到 Process 片）。
+        || ident == game_svr::shop::CM_MERCHANTQUERYSELLPRICE
+        || ident == game_svr::shop::CM_USERSELLITEM
+        || ident == game_svr::shop::CM_USERBUYITEM
+        || ident == game_svr::shop::CM_USERGETDETAILITEM
+        || ident == game_svr::shop::CM_MERCHANTQUERYREPAIRCOST;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -29030,7 +29087,8 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         }
         return ZoneCmdClass::Local;
     }
-    // **表外一律 `Unsupported`**（如 `CM_USERBUYITEM`、`CM_DEALTRY`、`u16::MAX` 等）：
+    // **表外一律 `Unsupported`**（如 `CM_DEALTRY`、`u16::MAX` 等；`CM_USERBUYITEM` 已随 A34
+    // 片 2 归 Local）：
     // 它们**不属 M1b/M1c-2b/2c/3b**；塞进 `Process` 会让「区 0 收到 Process 命令」的分支
     // 误收不该管的命令。（`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已在上方按 M1c-3b 归 `Process`。）
     ZoneCmdClass::Unsupported
@@ -131786,6 +131844,10 @@ mod zone_command_tests {
             // ⇒ 从本「未接线守恒」清单移出（不是放宽：每形态的归属另有四牙）。
             mir2_protocol::messages::CM_DEALTRY,
             mir2_protocol::messages::CM_SELLOFFADDITEM,
+            // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支走 `run_merchant_goto`（脚本宿主
+            // `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx` 全为进程态）⇒ 本片不接，
+            // 保持 `Unsupported`，延后到 Process 片。
+            game_svr::shop::CM_USERREPAIRITEM,
         ] {
             assert_eq!(
                 handle_zone_command(&mut state, &gates, "hero", 7, &cmd(ident, 0, 0, 0)),
@@ -132145,6 +132207,355 @@ mod zone_command_tests {
         let magic = saved.record.data.magic.as_ref().expect("MagicList 仍在");
         let m = magic[0].as_ref().expect("第一项仍在");
         assert_eq!(m.magic_key, u16::from(b'f'), "键已改为 f");
+    }
+
+    // ===================== A34 片 2：商店五条（区 k 行为牙） =====================
+
+    /// A34 片 2 夹具：`a34_ready` + 区本地商店配置 + 在售 1 件 `Index=1` 的货 + 买/卖/修商人。
+    ///
+    /// 商店臂的门（`Operate.cs:131/162/192/1558`）：`IsBuy`/`IsSell` + 同图 + 格子距离
+    /// （买入/详情 `<=15`，查询/卖出 `<15`）⇒ 商人必须**同图相邻格**。城堡税面本夹具按部署口径
+    /// `CastleGetAllNpcTax=0` 且区 world `castles` 为空 ⇒ 无税（见 `merchant_tax_target`）。
+    #[allow(clippy::type_complexity)]
+    fn a34s2_ready(
+        tag: &str,
+    ) -> (
+        ZoneState,
+        i32,
+        i32,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        SharedServices,
+    ) {
+        use mir2_world_bevy::merchant::{
+            MerchantFlags, MerchantItem, MerchantSpawn, MerchantState,
+        };
+        let (mut state, actor, gates, rx) = a34_ready(tag);
+        {
+            let sg = state.host.ground_sessions.get_mut("hero").unwrap();
+            sg.state.gold = 500;
+            sg.state.wabil.weight = 0;
+            sg.state.wabil.max_weight = 100;
+        }
+        let (hx, hy) = pos_of(&state, actor);
+        let merchant_id = state
+            .host
+            .world
+            .spawn_merchant(MerchantSpawn {
+                name: "商店老板".to_string(),
+                x: hx + 1,
+                y: hy,
+                map_id: 0,
+                state: MerchantState::new(
+                    "shop".to_string(),
+                    "0".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags {
+                        is_buy: true,
+                        is_sell: true,
+                        is_repair: true,
+                        ..Default::default()
+                    },
+                    vec![0, 5],
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商店商人挂图成功");
+        state.host.world.merchant_add_item_to_goods_list(
+            merchant_id,
+            MerchantItem {
+                make_index: 7,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            },
+        );
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                weight: 3,
+                std_mode: 0,
+                dura_max: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        shared.enter_cfg.shop = ShopCfg {
+            castle_member_price_rate: 100,
+            super_repair_price_rate: 100,
+            repair_item_dec_dura: 0,
+            make_durg_price: 100,
+            get_all_npc_tax: false,
+            human_max_gold: 10_000_000,
+            ..ShopCfg::default()
+        };
+        (state, actor, merchant_id, gates, rx, shared)
+    }
+
+    /// 背包里放一件 `Index=1`/`MakeIndex=300` 的货（卖价/修价查询的对象）。
+    fn a34s2_bag_item(state: &mut ZoneState) {
+        state
+            .host
+            .ground_sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem {
+                make_index: 300,
+                index: 1,
+                dura: 5,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+    }
+
+    /// **A34 片 2 · 买入**：`CM_USERBUYITEM(1014)` 区 k 派发 ⇒ 扣 100 金 + 背包 +1 + 库存清空。
+    /// 变异：删分类器项/执行臂 ⇒ `Unsupported` 红；臂内直接 return ⇒ 金币仍 500 红。
+    #[test]
+    fn a34_slice2_buy_zone_k_deducts_gold_and_adds_item() {
+        let (mut state, _actor, merchant, gates, mut rx, shared) = a34s2_ready("a34s2_buy");
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(game_svr::shop::CM_USERBUYITEM, merchant, 0, 0),
+            Some("金创药(小量)"),
+            &shared,
+        );
+        assert_eq!(
+            out,
+            ZoneCmdOutcome::Dispatched,
+            "片 2：商店五条必须区 k 本地派发"
+        );
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert!(
+            ids.contains(&mir2_protocol::messages::SM_BUYITEM_SUCCESS),
+            "买入成功必回 SM_BUYITEM_SUCCESS：{ids:?}"
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.gold, 400, "扣 100 金（500 → 400）");
+        assert_eq!(sg.state.item_list.len(), 1, "背包 +1");
+        assert_eq!(
+            state
+                .host
+                .world
+                .merchant_goods_groups(merchant)
+                .map(|g| g.len()),
+            Some(0),
+            "唯一在售组买空后整组移除"
+        );
+    }
+
+    /// **A34 片 2 · 详情**：`CM_USERGETDETAILITEM(1015)` ⇒ 恰一帧 `SM_SENDDETAILGOODSLIST`
+    /// （`Param` = 件数 1），金币/库存零变化。
+    #[test]
+    fn a34_slice2_detail_zone_k_emits_goods_list() {
+        let (mut state, _actor, merchant, gates, mut rx, shared) = a34s2_ready("a34s2_detail");
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(game_svr::shop::CM_USERGETDETAILITEM, merchant, 1, 0),
+            Some("金创药(小量)"),
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert_eq!(
+            ids,
+            vec![mir2_protocol::messages::SM_SENDDETAILGOODSLIST],
+            "详情恰一帧"
+        );
+        assert_eq!(a34_param(&frames[0]), 1, "Param = 明细件数");
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.state.gold, 500, "详情不扣金");
+        assert_eq!(
+            state
+                .host
+                .world
+                .merchant_goods_groups(merchant)
+                .map(|g| g.len()),
+            Some(1),
+            "详情不动库存"
+        );
+    }
+
+    /// **A34 片 2 · 卖出**：`CM_USERSELLITEM(1013)` ⇒ 背包件移除 + 金 500 → 550（半价）
+    /// + 该件回收进商人库存（1 → 2 件）。
+    #[test]
+    fn a34_slice2_sell_zone_k_removes_item_and_pays() {
+        let (mut state, _actor, merchant, gates, mut rx, shared) = a34s2_ready("a34s2_sell");
+        a34s2_bag_item(&mut state);
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(game_svr::shop::CM_USERSELLITEM, merchant, 300, 0),
+            Some("金创药(小量)"),
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert!(
+            ids.contains(&mir2_protocol::messages::SM_USERSELLITEM_OK),
+            "卖出成功帧：{ids:?}"
+        );
+        let sg = &state.host.ground_sessions["hero"];
+        assert!(sg.state.item_list.is_empty(), "背包件已移除");
+        assert_eq!(sg.state.gold, 550, "半价 50 入账（500 → 550）");
+        let stock: usize = state
+            .host
+            .world
+            .merchant_goods_groups(merchant)
+            .map_or(0, |g| g.iter().map(Vec::len).sum());
+        assert_eq!(stock, 2, "回收件进商人库存");
+    }
+
+    /// **A34 片 2 · 卖价查询**：`CM_MERCHANTQUERYSELLPRICE(1012)` ⇒ 恰一帧 `SM_SENDBUYPRICE`，
+    /// `Recog` = 半价 50。
+    #[test]
+    fn a34_slice2_price_query_zone_k_emits_buy_price() {
+        let (mut state, _actor, merchant, gates, mut rx, shared) = a34s2_ready("a34s2_price");
+        a34s2_bag_item(&mut state);
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(game_svr::shop::CM_MERCHANTQUERYSELLPRICE, merchant, 300, 0),
+            Some("金创药(小量)"),
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert_eq!(ids, vec![mir2_protocol::messages::SM_SENDBUYPRICE]);
+        assert_eq!(
+            i32::from_le_bytes([frames[0][0], frames[0][1], frames[0][2], frames[0][3]]),
+            50,
+            "Recog = 卖价 50"
+        );
+    }
+
+    /// **A34 片 2 · 修价查询**：`CM_MERCHANTQUERYREPAIRCOST(1024)` ⇒ 恰一帧 `SM_SENDREPAIRCOST`，
+    /// `Recog` > 0（可修；`dura 5 / dura_max 10`）。
+    #[test]
+    fn a34_slice2_repair_cost_query_zone_k_emits_cost() {
+        let (mut state, _actor, merchant, gates, mut rx, shared) = a34s2_ready("a34s2_repair");
+        a34s2_bag_item(&mut state);
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(game_svr::shop::CM_MERCHANTQUERYREPAIRCOST, merchant, 300, 0),
+            Some("金创药(小量)"),
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert_eq!(ids, vec![mir2_protocol::messages::SM_SENDREPAIRCOST]);
+        let recog = i32::from_le_bytes([frames[0][0], frames[0][1], frames[0][2], frames[0][3]]);
+        assert!(recog > 0, "可修 ⇒ 修价 > 0（实得 {recog}）");
+    }
+
+    /// **A34 片 2 · 占位不变量（源码扫描）**：区 k 臂传给 `handle_shop_cmd` 的进程态参数
+    /// （`merchant_book`/`npc_vars`/`sell_off_*`/`gm`/`script_world`）只能被 **repair/其他** 分支读，
+    /// 本片接的五条臂一个都不读 ⇒ 占位 `Default`/`None` 不可能改变行为。
+    ///
+    /// 证据级别：**源码·接线提示**（不是运行时判据；行为面由上面五条牙各自钉住）。
+    /// 变异：把任一条臂改成读 `npc_vars`/`sell_off_sessions` ⇒ 红。
+    #[test]
+    fn a34_slice2_shop_arms_ignore_process_args() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("game_svr::shop::CM_MERCHANTQUERYSELLPRICE => {")
+            .expect("卖价臂在源码中");
+        let end = src
+            .find("game_svr::shop::CM_USERREPAIRITEM => {")
+            .expect("修件臂在源码中");
+        assert!(
+            start < end,
+            "臂顺序：卖价 → 卖出 → 买入 → 详情 → 修价 → 修件"
+        );
+        let region = &src[start..end];
+        for token in [
+            "merchant_book",
+            "npc_vars",
+            "sell_off_book",
+            "sell_off_sessions",
+            "script_world",
+        ] {
+            assert!(
+                !region.contains(token),
+                "商店五条臂不得读进程态参数 `{token}`（否则区 k 占位不成立）"
+            );
+        }
+    }
+
+    /// **A34 片 2 · 生产路由判据**：区 k `INBOUND_LOCAL` 用 `classify_local_event` 决定本地/Process
+    /// （上面五条行为牙直接调 handler，**不经过分类器**）。这里钉分类器入口：五条商店命令 ⇒ `Local`，
+    /// 延后的 `CM_USERREPAIRITEM` ⇒ `Unsupported`（不得本地执行）。
+    /// 变异：从 `zone_cmd_class` 删任一条 ⇒ 对应断言红。
+    #[test]
+    fn a34_slice2_shop_five_route_local_via_classify_event() {
+        let (state, _actor) = landed("a34s2_route", zone::ZoneId::new(1));
+        let sessions = std::collections::HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let ev_for = |ident: u16| GateEvent::Command {
+            line: 0,
+            index: 0,
+            chr_name: "hero".to_string(),
+            socket: 901,
+            cmd: CommandMessage {
+                recog: 0,
+                ident,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: Some("金创药(小量)".to_string()),
+        };
+        for ident in [
+            game_svr::shop::CM_MERCHANTQUERYSELLPRICE,
+            game_svr::shop::CM_USERSELLITEM,
+            game_svr::shop::CM_USERBUYITEM,
+            game_svr::shop::CM_USERGETDETAILITEM,
+            game_svr::shop::CM_MERCHANTQUERYREPAIRCOST,
+        ] {
+            assert_eq!(
+                classify_local_event(&ev_for(ident), &sessions, &catalog, &state.host.world),
+                ZoneCmdClass::Local,
+                "ident={ident} 必须经分类器落 Local（否则区 k 永不执行）"
+            );
+        }
+        assert_eq!(
+            classify_local_event(
+                &ev_for(game_svr::shop::CM_USERREPAIRITEM),
+                &sessions,
+                &catalog,
+                &state.host.world
+            ),
+            ZoneCmdClass::Unsupported,
+            "CM_USERREPAIRITEM 延后到 Process 片 ⇒ 必须仍落 Unsupported"
+        );
     }
 
     /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
@@ -137047,6 +137458,12 @@ mod l2_s3_cross_recipient_tests {
             m::CM_ADJUST_BONUS,
             m::CM_WANTMINIMAP,
             m::CM_OPENDOOR,
+            // **A34 片 2**：商店五条（`CM_USERREPAIRITEM` 延后，见下）
+            game_svr::shop::CM_MERCHANTQUERYSELLPRICE,
+            game_svr::shop::CM_USERSELLITEM,
+            game_svr::shop::CM_USERBUYITEM,
+            game_svr::shop::CM_USERGETDETAILITEM,
+            game_svr::shop::CM_MERCHANTQUERYREPAIRCOST,
         ];
         for ident in local {
             assert_eq!(
@@ -137087,6 +137504,12 @@ mod l2_s3_cross_recipient_tests {
             zone_cmd_class(u16::MAX, None),
             ZoneCmdClass::Unsupported,
             "表外 ident ⇒ Unsupported"
+        );
+        // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支需进程态脚本宿主 ⇒ 仍表外。
+        assert_eq!(
+            zone_cmd_class(game_svr::shop::CM_USERREPAIRITEM, None),
+            ZoneCmdClass::Unsupported,
+            "CM_USERREPAIRITEM 延后到 Process 片 ⇒ 必须仍 Unsupported"
         );
     }
 
