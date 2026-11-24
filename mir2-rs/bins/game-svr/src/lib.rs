@@ -24398,7 +24398,10 @@ fn drain_stamina(
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #4**：`sort_unstable` 与 `sort` 对互异键逐项同序（`HashMap` 键必互异 ⇒ 稳定性无意义），
+    // 省掉每 tick 排序的临时缓冲分配（N > 20 时 driftsort 会分配 ~N/2 元素）；N 次克隆保留
+    // （循环体要 `get_mut`，不能用借用键）。
+    names.sort_unstable();
     for name in names {
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
@@ -69286,6 +69289,85 @@ SendRefMsgRange=15
             &[],
         );
         assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
+    }
+
+    /// **B4 #4（`drain_stamina` @24386）行为牙**：体力段 53 的**跨会话发出序**必须严格等于
+    /// 名字升序（现状可观测序 = 契约，帧在本函数内逐会话直发）。
+    ///
+    /// 构造：8 个会话各自体力点已到阈值（`health_tick=-400`、`replay_cursor` 落后 60ms），名字按
+    /// 「升序 ≠ 插入序」插入；每人恰一条自见 53（`show_hp=false`，彼此 20 格无观察者副本）。
+    /// 断言网关收到的 `(socket, ident, param)` 序列 = 名字升序、每会话一条 HP=999。
+    ///
+    /// 牙：删 `names.sort_unstable();`（@24404）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn drain_stamina_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        let base = now_ms() - 60;
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20; // 相邻 20 格 > range 12 ⇒ 无观察者副本
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 1_000;
+            sg.state.wabil.max_hp = 1_000;
+            sg.state.wabil.mp = 500;
+            sg.state.wabil.max_mp = 500;
+            sg.stamina.health_tick = -400;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "acct".into(),
+                    chr_name: name.into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+            named_sockets.push((name, sock));
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+        let mut got: Vec<(i32, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident, cm.param));
+        }
+        named_sockets.sort_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, u16, u16)> = named_sockets
+            .iter()
+            .map(|(_, sock)| (*sock, mir2_protocol::messages::SM_HEALTHSPELLCHANGED, 999))
+            .collect();
+        assert_eq!(
+            got, want,
+            "体力段 53 的跨会话序必须 = 名字升序（每会话恰一条，HP=999）"
+        );
     }
 
     /// **reviewer-5 O-1 收口（同 tick 帧序）**：同 tick 内既走**击杀经验/升级链**又走
