@@ -1107,6 +1107,10 @@ fn new_zone_state(
     rng_seed: Option<i32>,
     registry: Option<&mir2_envir::MapRegistry>,
     need_exps: &[i32],
+    // **A34 片 3**：组队配置（与区 0 `SharedServices.party_cfg` **同源**；区 k 的
+    // `World.party_cfg` 决定组队帧的前缀/颜色/成员上限——不注入会回落 `PartyConfig::default()`
+    // ⇒ 区 k 与区 0 的组队帧字节漂移）。
+    party_cfg: &mir2_world_bevy::PartyConfig,
     pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
     // **M1c-2a**：进程唯一的 `MakeIndex` 计数器（与区 0/宿主同一 `Arc`；三→一）。
     counter: &std::sync::Arc<std::sync::atomic::AtomicI32>,
@@ -1127,6 +1131,9 @@ fn new_zone_state(
     if !need_exps.is_empty() {
         state.host.world.need_exps = need_exps.to_vec();
     }
+    // **A34 片 3（同源注入，与 `need_exps` 同一位置）**：区 k 的 `World.party_cfg` 必须与区 0
+    // **同一份**，否则组队帧（前缀/颜色/成员上限）在区 k 与区 0 不一致。
+    state.host.world.party_cfg = party_cfg.clone();
     // **区 k 生产开关补齐（卡 `openmir2-zone-k-prod-switches`）**：区 k 的 World 必须与 N=1 生产宿主
     // 逐字镜像地开这**五个**生产 tick/延时层——否则区 k「有实体、没行为」（商人/NPC/buff 不 tick，
     // 受击无 `RM_REFMESSAGE`→`SM_STRUCK(31)`）。口径/次序 = N=1 `sim_loop`（merchant→npc→buff→
@@ -1810,6 +1817,8 @@ fn handle_zone_command_with_tail_and_shared(
         registry: shared.registry.as_ref(),
         unbind_list: &shared.unbind_list,
         item_number: &shared.item_number,
+        // **A34 片 3**：组队配置（与区 0 同一份）。
+        party_cfg: &shared.party_cfg,
     };
     handle_zone_command_on(
         world,
@@ -1841,6 +1850,8 @@ struct ZoneCmdEnv<'a> {
     unbind_list: &'a game_svr::unbindlist::UnbindList,
     /// **M1c-2c 段 5**：`MakeIndex` 会话计数器的**进程唯一** `Arc` 的借用（解包 6 件用）。
     item_number: &'a std::sync::atomic::AtomicI32,
+    /// **A34 片 3**：组队配置（`SharedServices.party_cfg` 的只读借用，区 0/区 k 同一份）。
+    party_cfg: &'a mir2_world_bevy::PartyConfig,
 }
 
 /// **M1c-3a**：区 k 的**药物合成**（`CM_USERMAKEDRUGITEM`）本地执行体。
@@ -1978,7 +1989,8 @@ fn handle_zone_command_on(
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     // **M1c-2b（P1）**：`PlayObject.Dealing` 的真值来源（ground/bag 两族用）。**本区自己的**
     // 交易表——与区 0 同一把 `state` 锁内取值，不引入新锁；区 0 调用点用同名字段（锁内局部）。
-    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
+    // **A34 片 3**：交易 6 条在本区执行 ⇒ 需要 `&mut`（移除/回写双方会话态）。
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
     // **M1c-3a**：商店会话态（`ShopSession.script_lable` —— 药物合成的 `ShopContext` 输入；区本地）。
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -2373,7 +2385,8 @@ fn handle_zone_command_on(
             shop_sessions,
             &mut sell_off_scratch,
             &mut sell_off_book,
-            trade_sessions,
+            // **A34 片 3**：本函数参数已是 `&mut` ⇒ 商店/地面支只读，显式重借。
+            &*trade_sessions,
             gates,
             world,
             &env.enter_cfg.catalog,
@@ -2385,6 +2398,67 @@ fn handle_zone_command_on(
             &npc_vars,
             None,
             None,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **A34 片 3（组队 4 条）**：与区 0 [`handle_party_cmd`] **同一实现**。区 k 无进程态：
+    // `npc_host=None`（oracle `FunctionNPC != null` 支在区 k 无对应物 ⇒ `@Group*` GotoLable
+    // 不执行）、`gm=None`；`npc_vars` 传空（`run_party_goto_label` 在 `npc_host=None` 时早退，
+    // 不读）。**仅同区**：按名只在本区世界找真实玩家（`party_play_object_by_name` 已排除镜像）
+    // ⇒ 找不到 ⇒ 与 oracle `GetPlayObject` null 同形的 `-2` 失败帧。
+    if matches!(
+        cmd.ident,
+        mir2_protocol::messages::CM_GROUPMODE
+            | mir2_protocol::messages::CM_CREATEGROUP
+            | mir2_protocol::messages::CM_ADDGROUPMEMBER
+            | mir2_protocol::messages::CM_DELGROUPMEMBER
+    ) {
+        let npc_vars = game_svr::npc::NpcVars::default();
+        handle_party_cmd(
+            cmd.ident,
+            cmd.param,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            world,
+            gates,
+            env.party_cfg,
+            saves,
+            ground_sessions,
+            None,
+            &env.enter_cfg.catalog,
+            None,
+            &npc_vars,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **A34 片 3（交易 6 条）**：与区 0 [`handle_deal_cmd`] **同一实现**（实参全部区本地）。
+    // **仅同区**：前排是镜像/他区玩家时 `handle_deal_cmd` 的 local-online 守卫按 `NotPlayer`
+    // 回 `SM_DEALTRY_FAIL`（不发请求、不开窗）。
+    if matches!(
+        cmd.ident,
+        mir2_protocol::messages::CM_DEALTRY
+            | mir2_protocol::messages::CM_DEALADDITEM
+            | mir2_protocol::messages::CM_DEALDELITEM
+            | mir2_protocol::messages::CM_DEALCANCEL
+            | mir2_protocol::messages::CM_DEALCHGGOLD
+            | mir2_protocol::messages::CM_DEALEND
+    ) {
+        handle_deal_cmd(
+            cmd.ident,
+            cmd.recog,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            &*world,
+            &*displays,
+            ground_sessions,
+            &mut *trade_sessions,
+            gates,
+            &env.enter_cfg.trade,
+            &env.enter_cfg.catalog,
         );
         return ZoneCmdOutcome::Dispatched;
     }
@@ -4503,6 +4577,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             rng_seed,
                             registry.as_ref(),
                             &sim_enter_cfg.need_exps,
+                            &sim_party_cfg,
                             &sim_enter_cfg.pet_cfg,
                             &item_number,
                         );
@@ -4588,6 +4663,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                             item_number: Arc::clone(&item_number),
                             // **M1c-2c 段 5（P1）/ 5-fix**：与区 0 的 `sim_loop` 同一 `Arc` 实例。
                             unbind_list: Arc::clone(&unbind_list),
+                            // **A34 片 3**：组队配置与区 0 同源（值拷贝，同一次启动快照）。
+                            party_cfg: sim_party_cfg.clone(),
                         },
                         rx,
                         ctl,
@@ -8264,6 +8341,18 @@ fn handle_deal_cmd(
             .find(|e| e.actor_id == oid)
             .map(|e| e.chr_name.clone())
     });
+    // **A34 片 3（仅同区）**：前排是**玩家实体但不在本区在线表**（镜像/他区玩家）⇒ 按
+    // 「前排不是可交易的本区玩家」处理（oracle 单世界里 `GetPoseCreate()` 命中的 Play 必然
+    // 在 `PlayObjectList`；镜像在本仓只是世界侧投影，不得进入交易）。
+    // 只影响 `CM_DEALTRY` 的目标判定；其余 5 条以 `DealCreat` 为准，没有成功的 TRY 就不会建立。
+    let (other_id, try_target) = if ident == mir2_protocol::messages::CM_DEALTRY
+        && other_id.is_some()
+        && other_chr.is_none()
+    {
+        (None, game_svr::trade::DealTryTarget::NotPlayer)
+    } else {
+        (other_id, try_target)
+    };
     let other_is_pose = other_id.is_some() && pose_id == other_id;
 
     // 双方会话态取出（对手缺席 ⇒ 用哑元；`trade` 的每个操作都先查本侧 `DealCreat` 门）。
@@ -29068,7 +29157,19 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || ident == game_svr::shop::CM_USERSELLITEM
         || ident == game_svr::shop::CM_USERBUYITEM
         || ident == game_svr::shop::CM_USERGETDETAILITEM
-        || ident == game_svr::shop::CM_MERCHANTQUERYREPAIRCOST;
+        || ident == game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
+        // **A34 片 3**：交易 6 + 组队 4（区 k 本区可执行；「仅同区」语义由 handler 内的
+        // local-online 守卫 / `party_play_object_by_name` 的 `!e.mirror` 落地）。
+        || ident == mir2_protocol::messages::CM_DEALTRY
+        || ident == mir2_protocol::messages::CM_DEALADDITEM
+        || ident == mir2_protocol::messages::CM_DEALDELITEM
+        || ident == mir2_protocol::messages::CM_DEALCANCEL
+        || ident == mir2_protocol::messages::CM_DEALCHGGOLD
+        || ident == mir2_protocol::messages::CM_DEALEND
+        || ident == mir2_protocol::messages::CM_GROUPMODE
+        || ident == mir2_protocol::messages::CM_CREATEGROUP
+        || ident == mir2_protocol::messages::CM_ADDGROUPMEMBER
+        || ident == mir2_protocol::messages::CM_DELGROUPMEMBER;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -37518,6 +37619,8 @@ fn sim_loop(
         colors,
         item_number: Arc::clone(&item_number),
         unbind_list: Arc::clone(&unbind_list),
+        // **A34 片 3**：组队配置单一来源（区 0 原 `ProcessServices.party_cfg` 迁入；取值不变）。
+        party_cfg,
     };
     let mut process = Some(ProcessServices {
         db,
@@ -37543,7 +37646,6 @@ fn sim_loop(
         win_lottery,
         server_table,
         notice,
-        party_cfg,
         shard_directory,
         state_log,
         pwd_sessions,
@@ -37862,6 +37964,10 @@ struct SharedServices {
     /// `ProcessServices.unbind_list` 是**同一 `Arc` 实例**（`Arc::ptr_eq`）；
     /// 区 k 本地解包按 `StdItem.Shape` 查名。
     unbind_list: Arc<game_svr::unbindlist::UnbindList>,
+    /// **A34 片 3**：组队配置（纯数据：`u8`/`String`）。**单一来源**——区 0 原 `ProcessServices`
+    /// 的 `party_cfg` 迁到这里；区 0 取值逐字节不变（只是搬位置），区 k 经 `ZoneCmdEnv` 读同一份。
+    /// 区 k 的 `World.party_cfg` 由 `new_zone_state` 同源注入（见该函数注释）。
+    party_cfg: mir2_world_bevy::PartyConfig,
 }
 
 /// **M1-0c'**：进程-only 服务（`!Send` 脚本宿主、DB 链、行会/城堡/全局表等）。
@@ -37890,7 +37996,6 @@ struct ProcessServices {
     win_lottery: crate::winlottery::WinLotteryShared,
     server_table: Vec<RouteInfo>,
     notice: Vec<u8>,
-    party_cfg: mir2_world_bevy::PartyConfig,
     shard_directory: Option<shard_router::ShardDirectory>,
     state_log: state_log::StateLog,
     pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession>,
@@ -38009,6 +38114,7 @@ impl SharedServices {
             colors: MsgColors::default(),
             item_number: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
             unbind_list: std::sync::Arc::new(game_svr::unbindlist::UnbindList::default()),
+            party_cfg: mir2_world_bevy::PartyConfig::default(),
         }
     }
 }
@@ -38047,7 +38153,6 @@ impl ProcessServices {
             ),
             server_table: Vec::new(),
             notice: Vec::new(),
-            party_cfg: mir2_world_bevy::PartyConfig::default(),
             shard_directory: None,
             state_log: state_log::StateLog::from_env(),
             pwd_sessions: std::collections::HashMap::new(),
@@ -38573,6 +38678,8 @@ impl HostLoop {
                     // **M1c-2c 段 5（P1）**：`SharedServices` 的只读字段（与 `enter_cfg` 互不重叠）。
                     unbind_list: &shared.unbind_list,
                     item_number: &shared.item_number,
+                    // **A34 片 3**：组队配置（`SharedServices` 单一来源）。
+                    party_cfg: &shared.party_cfg,
                 };
                 // **M1c-2c**：LOCAL 段的**唯一判定点**——执行前一次性预分类（只读扫描
                 // `buffer`+`pending_local`）；执行器只按 seq 查表。这样判定函数与执行回调不会
@@ -38632,8 +38739,8 @@ impl HostLoop {
                                     online,
                                     sessions,
                                     saves,
-                                    // **M1c-2b（P1）**：`&mut` → `&` 的逐次重借（闭包 FnMut 可重复调用）。
-                                    &*trade_sessions,
+                                    // **A34 片 3**：交易 6 条在本区执行 ⇒ 逐次 `&mut` 重借。
+                                    &mut *trade_sessions,
                                     // **M1c-3a**：`&mut` 的逐次重借（同上）。
                                     &mut *shop_sessions,
                                     gates,
@@ -38678,7 +38785,8 @@ impl HostLoop {
                 let item_number = &shared.item_number;
                 let world_start = &mut svc.world_start;
                 let win_lottery = &mut svc.win_lottery;
-                let party_cfg = &mut svc.party_cfg;
+                // **A34 片 3**：`party_cfg` 已迁 `SharedServices`（单一来源）；只读借用。
+                let party_cfg = &shared.party_cfg;
                 let shard_directory = &mut svc.shard_directory;
                 let state_log = &mut svc.state_log;
                 let mut pwd_sessions = &mut svc.pwd_sessions;
@@ -38775,7 +38883,7 @@ impl HostLoop {
                                         mon_gen_host: &mut *mon_gen_host,
                                         item_number,
                                         registry: registry.as_ref(),
-                                        party_cfg: &*party_cfg,
+                                        party_cfg,
                                         gm_filter_word: &*gm_filter_word,
                                         gm_mission: &*gm_mission,
                                         gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
@@ -39799,7 +39907,8 @@ impl HostLoop {
                 let gm_filter_word = &svc.gm_filter_word;
                 let gm_mission = &svc.gm_mission;
                 let gm_spirit_mutiny_tick = &svc.gm_spirit_mutiny_tick;
-                let party_cfg = &svc.party_cfg;
+                // **A34 片 3**：`party_cfg` 已迁 `SharedServices`（单一来源）；只读借用。
+                let party_cfg = &shared.party_cfg;
                 // **M1c-2c**：`EatProcess` 需要的进程态（只读/独占借用；字段互不重叠）。
                 let unbind_list = &svc.unbind_list;
                 let npc_host = &svc.npc_host;
@@ -39897,7 +40006,7 @@ impl HostLoop {
                                             mon_gen_host,
                                             item_number,
                                             registry: registry.as_ref(),
-                                            party_cfg: &*party_cfg,
+                                            party_cfg,
                                             gm_filter_word: &*gm_filter_word,
                                             gm_mission: &*gm_mission,
                                             gm_spirit_mutiny_tick: &*gm_spirit_mutiny_tick,
@@ -131161,6 +131270,7 @@ mod zone_map_data_tests {
             None,
             reg,
             &[],
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
             &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
@@ -131186,6 +131296,7 @@ mod zone_map_data_tests {
             None,
             Some(&reg),
             &table,
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
             &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
@@ -131216,6 +131327,7 @@ mod zone_map_data_tests {
             None,
             Some(&reg),
             &[],
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
             &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
@@ -131229,6 +131341,33 @@ mod zone_map_data_tests {
             st2.host.world.need_exps.iter().all(|&v| v == 0),
             "空表 ⇒ 默认全 0（与原区 k 构造一致）"
         );
+    }
+
+    /// **A34 片 3**：`new_zone_state` 必须把 `PartyConfig` 同源注入区 k 的 `World`
+    /// （组队帧的前缀/颜色/成员上限都读 `World.party_cfg`）；与 `need_exps` 同一注入点。
+    ///
+    /// 变异：删 `state.host.world.party_cfg = party_cfg.clone();` ⇒ 区 k 回落
+    /// `PartyConfig::default()` ⇒ 本用例红。
+    #[test]
+    fn new_zone_state_injects_party_cfg() {
+        let cfg = mir2_world_bevy::PartyConfig {
+            group_members_max: 7,
+            group_msg_prefix: "组:".to_string(),
+            ..mir2_world_bevy::PartyConfig::default()
+        };
+        let st = new_zone_state(
+            zone::ZoneId::new(1),
+            &layout(),
+            &[(i32::from(W), i32::from(H))],
+            None,
+            None,
+            &[],
+            &cfg,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+            &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        );
+        assert_eq!(st.host.world.party_cfg.group_members_max, 7);
+        assert_eq!(st.host.world.party_cfg.group_msg_prefix, "组:");
     }
 
     /// **M1c-2a 牙 4【行为·接线】`zone_k_world_counter_shares_host_arc`**：`new_zone_state`
@@ -131247,6 +131386,7 @@ mod zone_map_data_tests {
             None,
             None,
             &[],
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             &shared,
         );
@@ -131277,6 +131417,7 @@ mod zone_map_data_tests {
             None,
             None,
             &[],
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             &shared,
         );
@@ -131315,6 +131456,7 @@ mod zone_map_data_tests {
             None,
             Some(&reg),
             &[],
+            &mir2_world_bevy::PartyConfig::default(),
             &mir2_data::pet_slave::PetSlaveConfig::default(),
             // **M1c-2a**：本用例不关心号段 ⇒ 一次性空计数器。
             &std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
@@ -131878,7 +132020,7 @@ mod zone_command_tests {
             // "臂里直接 return"把命令静默吞掉）。
             // **M1c-2c**：`CM_EAT` 已接线（本地臂 `Dispatched`；分支门由 `zonek_eat_*` 四牙钉）
             // ⇒ 从本「未接线守恒」清单移出（不是放宽：每形态的归属另有四牙）。
-            mir2_protocol::messages::CM_DEALTRY,
+            // **A34 片 3**：`CM_DEALTRY` 已接线（区 k 本地）⇒ 移出本清单。
             mir2_protocol::messages::CM_SELLOFFADDITEM,
             // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支走 `run_merchant_goto`（脚本宿主
             // `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx` 全为进程态）⇒ 本片不接，
@@ -134667,6 +134809,700 @@ mod zone_command_tests {
         assert!(
             e.handoff_pending,
             "跨出本区 rect 必须置 handoff_pending（④a 的命令 ⇒ ③ 的 handoff 衔接）"
+        );
+    }
+
+    // ============ A34 片 3：交易 6 + 组队 4（区 k 本地、仅同区） ============
+
+    /// 片 3 夹具：`a34_ready` 之上放一个同区玩家 `peer` 在 hero **正前方**并回指（dir=6 左）。
+    /// 世界时钟抬到 1e6（越过 `try_deal_time` 门）。
+    #[allow(clippy::type_complexity)]
+    fn a34_slice3_ready(
+        tag: &str,
+    ) -> (
+        ZoneState,
+        i32,
+        i32,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let (mut state, hero, gates, rx) = a34_ready(tag);
+        state.host.world.clock_ms = 1_000_000;
+        let (hx, hy) = pos_of(&state, hero);
+        let (fx, fy) = game_svr::attackwire::front_position(2, hx, hy, 20, 20);
+        let peer = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, "peer", fx, fy));
+        state.host.world.entities.get_mut(hero).unwrap().ai.dir = 2; // 右
+        state.host.world.entities.get_mut(peer).unwrap().ai.dir = 6; // 左（回指 hero）
+        state
+            .host
+            .ground_sessions
+            .insert("peer".to_string(), test_session_ground(peer));
+        online_set(
+            &mut state.host.online,
+            OnlineEntry {
+                account: "ub".to_string(),
+                chr_name: "peer".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: peer,
+            },
+        );
+        // 双方各一条交易会话态（生产按玩家惰性建立；`handle_deal_cmd` 只回写已有条目，
+        // 缺条目的一方状态不落地 ⇒ 夹具按真实会话表形态预置两条）。
+        state
+            .host
+            .trade_sessions
+            .insert("hero".to_string(), game_svr::trade::DealState::default());
+        state
+            .host
+            .trade_sessions
+            .insert("peer".to_string(), game_svr::trade::DealState::default());
+        (state, hero, peer, gates, rx)
+    }
+
+    fn a34_recog(body: &[u8]) -> i32 {
+        i32::from_le_bytes([body[0], body[1], body[2], body[3]])
+    }
+
+    fn a34_count(frames: &[Vec<u8>], ident: u16) -> usize {
+        frames.iter().filter(|b| a34_id(b) == ident).count()
+    }
+
+    /// **A34 片 3 · 分类器**：10 个 ident 必须归 `Local`（区 k 本区执行）。
+    ///
+    /// 变异：从 `zone_cmd_class` 删任一 ident ⇒ 该 ident 落 `Unsupported` ⇒ 红。
+    #[test]
+    fn a34_slice3_classifier_marks_ten_idents_local() {
+        use mir2_protocol::messages as m;
+        for ident in [
+            m::CM_DEALTRY,
+            m::CM_DEALADDITEM,
+            m::CM_DEALDELITEM,
+            m::CM_DEALCANCEL,
+            m::CM_DEALCHGGOLD,
+            m::CM_DEALEND,
+            m::CM_GROUPMODE,
+            m::CM_CREATEGROUP,
+            m::CM_ADDGROUPMEMBER,
+            m::CM_DELGROUPMEMBER,
+        ] {
+            assert_eq!(
+                zone_cmd_class(ident, None),
+                ZoneCmdClass::Local,
+                "ident={ident} 必须归 Local（区 k 本区执行）"
+            );
+        }
+    }
+
+    /// **A34 片 3 · 交易 TRY（同区成功）**：互指的前排 ⇒ 双方各一条 `SM_DEALMENU`、双向 dealing。
+    #[test]
+    fn a34_slice3_deal_try_same_zone_opens_both() {
+        let (mut state, _hero, _peer, gates, mut rx) = a34_slice3_ready("s3_try");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        assert!(
+            state
+                .host
+                .trade_sessions
+                .get("hero")
+                .is_some_and(|s| s.dealing),
+            "同区互指 ⇒ hero 进入交易"
+        );
+        assert!(
+            state
+                .host
+                .trade_sessions
+                .get("peer")
+                .is_some_and(|s| s.dealing),
+            "同区互指 ⇒ peer 进入交易"
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALMENU),
+            2,
+            "双方各一条 SM_DEALMENU：{frames:?}"
+        );
+    }
+
+    /// **A34 片 3 · 交易 TRY（对方不在本区 ⇒ 拒）**：前排是他区玩家的**镜像** ⇒ 恰一条
+    /// `SM_DEALTRY_FAIL`、不建交易（**不**用默认 DealState 误开窗）。
+    ///
+    /// 变异：删 `handle_deal_cmd` 的 local-online 守卫 ⇒ 镜像被当普通玩家开窗 ⇒ 红。
+    #[test]
+    fn a34_slice3_deal_try_facing_mirror_refused() {
+        let (mut state, hero, peer, gates, mut rx) = a34_slice3_ready("s3_mirror");
+        let (hx, hy) = pos_of(&state, hero);
+        let (fx, fy) = game_svr::attackwire::front_position(2, hx, hy, 20, 20);
+        // 前排只能有镜像（把夹具的 peer 挪开，否则 `front_target` 先命中真实玩家）。
+        let peer_off = (hx, hy + 3);
+        if let Some(t) = state.host.world.entities.transform_mut(peer) {
+            t.x = peer_off.0;
+            t.y = peer_off.1;
+        }
+        let mirror = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, "faraway", fx, fy));
+        {
+            let e = state.host.world.entities.get_mut(mirror).unwrap();
+            e.ai.dir = 6;
+            e.flags.mirror = true; // 他区玩家的世界侧投影（无本区 online 项）
+        }
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALTRY_FAIL),
+            1,
+            "前排是镜像 ⇒ 恰一条 SM_DEALTRY_FAIL：{frames:?}"
+        );
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALMENU),
+            0,
+            "不得开窗"
+        );
+        assert!(
+            !state
+                .host
+                .trade_sessions
+                .get("hero")
+                .is_some_and(|s| s.dealing),
+            "不得建立交易（删 local-online 守卫 ⇒ 本断言红）"
+        );
+    }
+
+    /// **A34 片 3 · 交易 ADD/DEL（同区）**：入交易栏 ⇒ 回包；退回 ⇒ 物品回包。
+    #[test]
+    fn a34_slice3_deal_add_and_del_item_roundtrip() {
+        // 现网 `CanNotGetBackDeal=1` 时退回会被拒（oracle 原样）；本条测「允许退回」配置。
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.trade.can_not_get_back_deal = false;
+        let (mut state, hero, _peer, gates, mut rx) = a34_slice3_ready("s3_additem");
+        state
+            .host
+            .ground_sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(4242, 1));
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0),
+                None,
+                &shared
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx); // 丢弃 TRY 帧
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALADDITEM, 4242, 0, 0),
+                None,
+                &shared
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALADDITEM_OK),
+            1,
+            "ADD 成功恰一条 OK：{frames:?}"
+        );
+        assert!(
+            state.host.ground_sessions["hero"]
+                .state
+                .item_list
+                .is_empty(),
+            "物品已移入交易栏"
+        );
+        assert_eq!(
+            state.host.trade_sessions["hero"].deal_item_list.len(),
+            1,
+            "交易栏 1 件"
+        );
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALDELITEM, 4242, 0, 0),
+                None,
+                &shared
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALDELITEM_OK),
+            1,
+            "DEL 成功恰一条 OK：{frames:?}"
+        );
+        assert_eq!(
+            state.host.ground_sessions["hero"].state.item_list.len(),
+            1,
+            "物品退回背包"
+        );
+        assert!(state.host.trade_sessions["hero"].deal_item_list.is_empty());
+        let _ = hero;
+    }
+
+    /// **A34 片 3 · 交易 CANCEL（同区）**：恰两条 `SM_DEALCANCEL`（每侧一条），双方 dealing 复位。
+    #[test]
+    fn a34_slice3_deal_cancel_emits_one_each_side() {
+        let (mut state, _hero, _peer, gates, mut rx) = a34_slice3_ready("s3_cancel");
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx);
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALCANCEL, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALCANCEL),
+            2,
+            "每侧恰一条 SM_DEALCANCEL：{frames:?}"
+        );
+        assert!(!state
+            .host
+            .trade_sessions
+            .get("hero")
+            .is_some_and(|s| s.dealing));
+        assert!(!state
+            .host
+            .trade_sessions
+            .get("peer")
+            .is_some_and(|s| s.dealing));
+    }
+
+    /// **A34 片 3 · 交易 CHGGOLD（同区）**：双方 `deal_golds` 同步。
+    #[test]
+    fn a34_slice3_deal_change_gold_sync() {
+        let (mut state, _hero, _peer, gates, mut rx) = a34_slice3_ready("s3_gold");
+        state
+            .host
+            .ground_sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .gold = 10_000;
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx);
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALCHGGOLD, 500, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            state.host.trade_sessions["hero"].deal_golds, 500,
+            "本侧 DealGolds = 500"
+        );
+        assert_eq!(
+            state.host.trade_sessions["peer"].deal_golds, 0,
+            "对方 DealGolds 只由对方自己改（oracle 语义）"
+        );
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALCHGGOLD_OK),
+            1,
+            "改金币成功恰一条 OK：{frames:?}"
+        );
+    }
+
+    /// **A34 片 3 · 交易 END（同区，两阶段确认）**：两次 END（hero 先、peer 后）⇒ 双方各收
+    /// `SM_DEALSUCCESS` 且交易复位。
+    #[test]
+    fn a34_slice3_deal_end_confirm_twice() {
+        let (mut state, _hero, _peer, gates, mut rx) = a34_slice3_ready("s3_end");
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALTRY, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx);
+        state.host.world.clock_ms += 10_000; // 越过 deal_ok_time 门
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_DEALEND, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let _ = a34_frames(&mut rx);
+        assert!(
+            state.host.trade_sessions["hero"].deal_success,
+            "hero 已锁定"
+        );
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "peer",
+                902,
+                &a34_msg(mir2_protocol::messages::CM_DEALEND, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert!(
+            a34_count(&frames, mir2_protocol::messages::SM_DEALSUCCESS) >= 1,
+            "二次确认 ⇒ SM_DEALSUCCESS：{frames:?}"
+        );
+        assert!(!state
+            .host
+            .trade_sessions
+            .get("hero")
+            .is_some_and(|s| s.dealing));
+        assert!(!state
+            .host
+            .trade_sessions
+            .get("peer")
+            .is_some_and(|s| s.dealing));
+    }
+
+    /// **A34 片 3 · 组队 GROUPMODE**：param=1 ⇒ 开组 + 恰一条 `SM_GROUPMODECHANGED(param=1)`；
+    /// param=0 且无组 ⇒ param=0。
+    #[test]
+    fn a34_slice3_groupmode_toggle() {
+        let (mut state, hero, _peer, gates, mut rx) = a34_slice3_ready("s3_gmode");
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_GROUPMODE, 0, 1, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPMODECHANGED),
+            1
+        );
+        assert_eq!(a34_param(&frames[0]), 1, "allow_group=true ⇒ param=1");
+        assert!(
+            state.host.world.entities.group(hero).unwrap().allow_group,
+            "CM_GROUPMODE(param=1) ⇒ allow_group=true"
+        );
+        assert_eq!(
+            handle_zone_command(
+                &mut state,
+                &gates,
+                "hero",
+                901,
+                &a34_msg(mir2_protocol::messages::CM_GROUPMODE, 0, 0, 0)
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        let frames = a34_frames(&mut rx);
+        assert_eq!(a34_param(&frames[0]), 0, "关闭 ⇒ param=0");
+    }
+
+    /// **A34 片 3 · 组队 CREATEGROUP（同区成功 / 不在本区 -2）**：`allow_group=true` 的同区玩家
+    /// ⇒ OK + 双份成员表；名字不存在 **或只命中镜像** ⇒ `SM_CREATEGROUP_FAIL(-2)`。
+    ///
+    /// 变异：删 `party_play_object_by_name` 的 `!e.mirror` ⇒ 镜像被命中 ⇒ 帧不是 -2 ⇒ 红。
+    #[test]
+    fn a34_slice3_create_group_same_zone_and_missing() {
+        let (mut state, _hero, peer, gates, mut rx) = a34_slice3_ready("s3_create");
+        state
+            .host
+            .world
+            .entities
+            .get_mut(peer)
+            .unwrap()
+            .group
+            .allow_group = true;
+        // 镜像（他区玩家的世界侧投影，同名、`allow_group=true`）不得被按名命中。
+        let (hx, hy) = pos_of(&state, _hero);
+        let mirror = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, "ghostly", hx + 2, hy));
+        {
+            let e = state.host.world.entities.get_mut(mirror).unwrap();
+            e.flags.mirror = true;
+            e.group.allow_group = true;
+        }
+        // 先测「名字不存在 ⇒ -2」（此时还没有组，第一道门不是 -1）。
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("nobody"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_CREATEGROUP_FAIL),
+            1
+        );
+        assert_eq!(a34_recog(&frames[0]), -2, "名字不存在 ⇒ oracle 同形 -2");
+        // 只命中镜像 ⇒ 同样 -2（`party_play_object_by_name` 必须排除镜像）。
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("ghostly"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_CREATEGROUP_FAIL),
+            1
+        );
+        assert_eq!(
+            a34_recog(&frames[0]),
+            -2,
+            "只命中镜像 ⇒ 与 oracle GetPlayObject null 同形 -2（删 !e.mirror ⇒ 红）"
+        );
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("peer"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_CREATEGROUP_OK),
+            1,
+            "同区建成 ⇒ OK：{frames:?}"
+        );
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPMEMBERS),
+            2,
+            "双方各一份成员表"
+        );
+        // 缺失名 ⇒ -2
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("nobody"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_CREATEGROUP_FAIL),
+            1
+        );
+        assert_eq!(
+            a34_recog(&frames[0]),
+            -1,
+            "已在组 ⇒ 第一道门 -1（本组队已建立）"
+        );
+    }
+
+    /// **A34 片 3 · 组队 ADDGROUPMEMBER（同区成功 / 缺失 -2）**。
+    #[test]
+    fn a34_slice3_add_member_same_zone_and_missing() {
+        let (mut state, _hero, peer, gates, mut rx) = a34_slice3_ready("s3_add");
+        state
+            .host
+            .world
+            .entities
+            .get_mut(peer)
+            .unwrap()
+            .group
+            .allow_group = true;
+        let _ = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("peer"),
+        );
+        let _ = a34_frames(&mut rx);
+        // 第三名同区玩家
+        let (hx, hy) = pos_of(&state, peer);
+        let p2 = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, "peer2", hx + 1, hy));
+        state
+            .host
+            .world
+            .entities
+            .get_mut(p2)
+            .unwrap()
+            .group
+            .allow_group = true;
+        state
+            .host
+            .ground_sessions
+            .insert("peer2".to_string(), test_session_ground(p2));
+        online_set(
+            &mut state.host.online,
+            OnlineEntry {
+                account: "uc".to_string(),
+                chr_name: "peer2".to_string(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: p2,
+            },
+        );
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_ADDGROUPMEMBER, 0, 0, 0),
+            Some("peer2"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPADDMEM_OK),
+            1,
+            "加入成功 ⇒ OK：{frames:?}"
+        );
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_ADDGROUPMEMBER, 0, 0, 0),
+            Some("nobody"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPADDMEM_FAIL),
+            1
+        );
+        assert_eq!(a34_recog(&frames[0]), -2, "名字不存在 ⇒ oracle 同形 -2");
+    }
+
+    /// **A34 片 3 · 组队 DELGROUPMEMBER（同区成功 / 缺失 -2）**。
+    #[test]
+    fn a34_slice3_del_member_same_zone_and_missing() {
+        let (mut state, _hero, peer, gates, mut rx) = a34_slice3_ready("s3_del");
+        state
+            .host
+            .world
+            .entities
+            .get_mut(peer)
+            .unwrap()
+            .group
+            .allow_group = true;
+        let _ = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_CREATEGROUP, 0, 0, 0),
+            Some("peer"),
+        );
+        let _ = a34_frames(&mut rx);
+        // 先测「名字不存在 ⇒ -2」（此时组还在、hero 仍是团长）。
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DELGROUPMEMBER, 0, 0, 0),
+            Some("nobody"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPDELMEM_FAIL),
+            1
+        );
+        assert_eq!(a34_recog(&frames[0]), -2, "名字不存在 ⇒ -2");
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DELGROUPMEMBER, 0, 0, 0),
+            Some("peer"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(
+            a34_count(&frames, mir2_protocol::messages::SM_GROUPDELMEM_OK),
+            1,
+            "移出成功 ⇒ OK：{frames:?}"
+        );
+        assert_eq!(
+            state.host.world.entities.group(peer).unwrap().group_owner,
+            0,
+            "成员 group_owner 清空"
         );
     }
 }
