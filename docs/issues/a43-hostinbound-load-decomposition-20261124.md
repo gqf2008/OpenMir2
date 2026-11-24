@@ -112,3 +112,28 @@ tier-1000 测得 **59.17 ms > 50 ms**，说明两件事之一（或同时）：
 - 计数：每类事件条数、`refmsg_targets` 的**逐事件分布（sum/max）**、缓存刷新次数、每事件 `EntityRef` 构造次数。
 
 优先级建议：**先读 TSV 判定扇出**；若 `refmsg_targets/event` 高，直接做候选 A（低风险、收益与 T 成正比）；B 排第二；C 需语义裁决后再议。
+
+
+## 6. 附：三处 tier-1000 读数的对账（2026-11-24 追加）
+
+拿到的原列：`inbound_budget_hit` 95.6% 非零、但 `inbound_wall_us` 中位 20.5ms（<50ms）；
+`max_single_event_us` 中位 18.9ms；`drained/enqueued = 1.34`。三处都有代码级解释，**其中两处是观测面缺陷**：
+
+1. **`inbound_wall_us` 是单槽全局量、多区共写**：`PhaseSet::INBOUND` 是
+   `INBOUND_LOCAL | INBOUND_PROCESS` 的别名，`PhaseSet::has` 是**任一子位**；区 k 的
+   `M1B_ZONE_PROD` 含 `INBOUND_LOCAL` ⇒ 区 k 也进入 `if phases.has(PhaseSet::INBOUND)` 块，
+   跑完 `INBOUND_LOCAL` 支后**无条件** `note_inbound_wall_us(...)`（`INBOUND_WALL_US.store` 覆盖写）。
+   同一 tick「区 0 写 ~50ms+尾、区 k 写它 LOCAL 段 ~20ms」，最后写者赢 ⇒ 中位 20.5ms 与
+   `budget_hit`（只有区 0 bump）同时成立。`HostInbound 59.17` 来自 `host_prof`（区 0 单写），仍可信。
+2. **`EventTimer` 是墙钟**：起于 `while` 体首行、止于迭代末（含 `continue`），**不含** `drain.next`
+   的通道等待；19ms 可能是**日志同步写**、**OS 抢占**（BotSrv/gate/DB 同机）或 say 路径的
+   `apply_pending_gm_*` 链，现有列分不出 CPU vs off-CPU；需 CPU 时间或隔离环境对照。
+3. **demux 线程复用 `EventDrain::next` ⇒ drained 双计**：`INBOUND_ENQUEUED` 只在
+   `emit_gate_event` bump 一次，而 `INBOUND_DRAINED`/`drained_*`/`carry` 在 `EventDrain::next`
+   内部无条件记；切片 run 的 `spawn_zone_demux` 路由线程也 `EventDrain::begin/next` ⇒ 全部入站先计
+   一次，区 0 再对本区份额计第二次（871k ≈ 651k + 220k）。`RegisterGate/UnregisterGate`、
+   `KickAccount`、`AdminGm` 等旁路只进 drained 不进 enqueued。
+
+**影响**：切片 run 的 `inbound_wall_us / drained / carry / drained_*` 不能当区 0 容量证据；可用的是
+`HostInbound` 段墙钟与 `max_single_event_us`（均 host 单写）。**应先修这两处观测缺陷**（不改产品语义），
+再谈候选 A/B/C 的排序；`refmsg_targets/calls=79` 下「共享帧体」收益有限，不是第一优先。
