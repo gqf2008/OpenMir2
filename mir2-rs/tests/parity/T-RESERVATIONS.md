@@ -329,3 +329,4 @@
 | T-294 | openmir2-charstatuschanged-wiring | 2026-11-21T04:40:01Z | 已落地 |
 | T-295 | openmir2-tick-frame-priority-queue | 2026-11-21T04:40:01Z | 已落地 |
 | T-296 | openmir2-tick-frame-priority-queue | 2026-11-21T04:40:01Z | 已落地 |
+| T-297 | A37 | 2026-11-24T03:50:31Z | 已落地 |

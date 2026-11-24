@@ -54,6 +54,13 @@ pub(crate) struct HandoffOffer {
 pub(crate) struct HandoffAck {
     /// 回执面向的源区。
     pub to: ZoneId,
+    /// **接受方区**：真正执行提升/落真身的区（= 发回执的那个区）。
+    ///
+    /// 与 [`Self::to`] 方向相反，**不是**同一个值：`to` 是源区（收件人），本字段是目标区
+    /// （A35-b 会话搬迁要按它把会话/路由迁到实体实际所在的区）。把 `to` 当目标区就是
+    /// 「区号语义写反」，由 `handoff_tick_top_returns_committed_ids_from_accepting_zone`
+    /// 的变异②直接抓。
+    pub from: ZoneId,
     /// 实体 id。
     pub id: i32,
     /// `true` = 目标区已提升（源区可移除）。
@@ -150,13 +157,24 @@ impl HandoffRuntime {
     fn send_ack(&self, to: ZoneId, id: i32, ok: bool) {
         if let Some(b) = self.boxes.get(to.index()) {
             let mut m = b.lock().unwrap_or_else(PoisonError::into_inner);
-            m.1.push(HandoffAck { to, id, ok });
+            m.1.push(HandoffAck {
+                to,
+                from: self.zone,
+                id,
+                ok,
+            });
         }
     }
 
     /// **tick 顶（phase1 之前）**：排 ack（源侧提交/回滚）+ 排 offer（目标侧提升+回执）。
-    pub(crate) fn tick_top(&mut self, world: &mut World, tick: u64) {
+    ///
+    /// 返回本 tick **已提交**（`ack.ok` 且实体已从本区移除）的 `(实体 id, 接受方区)`：
+    /// 接受方区 = [`HandoffAck::from`]（真正执行提升的区），**不是** ack 的收件人 `to`。
+    /// A35-b 的会话搬迁以它为目标区；本次提交的调用点先忽略返回值（零行为变化），
+    /// 下一片接线。
+    pub(crate) fn tick_top(&mut self, world: &mut World, tick: u64) -> Vec<(i32, ZoneId)> {
         let (offers, acks) = self.take_mail();
+        let mut committed: Vec<(i32, ZoneId)> = Vec::new();
         // 1) acks（本区是源区）。
         for ack in acks {
             if ack.to != self.zone {
@@ -174,6 +192,7 @@ impl HandoffRuntime {
                     self.zone,
                     ack.id
                 );
+                committed.push((ack.id, ack.from));
             } else {
                 self.refused += 1;
                 mir2_world_bevy::mirror_metrics::note_handoff_refused();
@@ -326,6 +345,7 @@ impl HandoffRuntime {
             self.last_offer_epoch.insert(key, (offer.epoch, tick));
             self.send_ack(offer.from, offer.spec.id, ok);
         }
+        committed
     }
 
     /// **barrier2 之后**：把本区所有 `handoff_pending` 实体投给目标区；

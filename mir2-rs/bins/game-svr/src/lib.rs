@@ -1454,6 +1454,292 @@ fn handle_zone_closed(
     true
 }
 
+/// **A35-b**：把 `id` 的会话从**本区**（调用方持本区锁）摘成搬迁包。
+///
+/// 顺序：解析 chr（`online` 按 actor）→ 线号转换 → `ground_sessions` 取走 → 其余表逐个取
+/// → World 会话置 `Left`/`actor_id=None`（Q1；entity/departs 已由 `release_entity` 处理）
+/// → 源区展示项摘除。前三步任一失败都**尚未摘任何表** ⇒ 不会留下半摘状态；之后各表都是
+/// `Option` 取（缺项 = 本来就没有，不阻止搬迁）。
+///
+/// 返回值 = 搬迁包；`None` = 不搬（会话原样留在本区，调用方计 `zone_handoff_session_failed`）。
+#[allow(clippy::too_many_arguments)]
+fn detach_session_for_migration(
+    world: &mut mir2_world_bevy::World,
+    displays: &mut downlink::DisplayTable,
+    online: &mut OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    login_tails: &mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
+    aoi_frames_total: &mut std::collections::HashMap<String, usize>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
+    source: zone::ZoneId,
+    target: zone::ZoneId,
+    id: i32,
+) -> Option<PendingSessionMigration> {
+    let Some((chr_name, gate_idx, socket)) = online
+        .find_by_actor(id)
+        .map(|e| (e.chr_name.clone(), e.gate_idx, e.socket))
+    else {
+        glog!(
+            "WRN",
+            "跨区会话搬迁：区 {source} 实体 {id} 不在在线登记表 ⇒ 不搬（会话留在本区）"
+        );
+        return None;
+    };
+    let Ok(line) = u8::try_from(gate_idx) else {
+        glog!(
+            "WRN",
+            "跨区会话搬迁：ChrName:{chr_name} gate_idx={gate_idx} 超出 u8 ⇒ 无法路由，不搬（会话留在本区）"
+        );
+        return None;
+    };
+    // ground 在其余表之前取：它取不到时前面也还没摘任何表（不半摘）。
+    let Some(ground) = ground_sessions.remove(&chr_name) else {
+        glog!(
+            "WRN",
+            "跨区会话搬迁：区 {source} ChrName:{chr_name} 无会话态（未进世界/已断线）⇒ 不搬"
+        );
+        return None;
+    };
+    let online_entry = online.take(&chr_name).expect("上面已确认在册");
+    let save = saves.remove(&chr_name);
+    let login_tail = login_tails.remove(&chr_name);
+    let aoi_total = aoi_frames_total.remove(&chr_name);
+    let shop = shop_sessions.remove(&chr_name);
+    // A6 在飞命令：只搬**本 chr** 的（别人的命令留在源区全局 FIFO，保序）。
+    let keys: Vec<u64> = pending_local
+        .iter()
+        .filter(|(_, p)| matches!(&p.ev, GateEvent::Command { chr_name: c, .. } if *c == chr_name))
+        .map(|(k, _)| *k)
+        .collect();
+    let pending_cmds: Vec<PendingLocalCmd> = keys
+        .into_iter()
+        .filter_map(|k| pending_local.remove(&k))
+        .collect();
+    // **Q1**：World 会话随迁——源区置 `Left/actor_id=None`（与 `leave_world_inner` 的硬移除
+    // 尾部同形；实体与离场广播已由 `release_entity` 完成）。快照 map_id/soft_version_date 供
+    // 目标区写回；`SessionRegistry` 的「会话从不删除」不变式保持。
+    let (world_map_id, world_soft_version_date) = world
+        .session(&chr_name)
+        .map_or((0, 0), |sess| (sess.map_id, sess.soft_version_date));
+    if let Some(sess) = world.sessions.get_mut(&chr_name) {
+        sess.stage = mir2_world_bevy::WorldStage::Left;
+        sess.actor_id = None;
+    }
+    cleanup_closed_display(displays, Some(id));
+    Some(PendingSessionMigration {
+        source,
+        target,
+        id,
+        chr_name,
+        line,
+        socket,
+        ground,
+        online: online_entry,
+        save,
+        login_tail,
+        aoi_total,
+        shop,
+        pending_cmds,
+        world_map_id,
+        world_soft_version_date,
+    })
+}
+
+/// **A35-b**：跨界前取消交易/寄售（帧**先发**，两张表**不搬**）。
+///
+/// 语义依据（设计 §2.1）：区界对玩家不可见，交易/寄售的 oracle 语义本就是「离开范围即取消」，
+/// 跨区 = 离开范围 ⇒ 先按既有路径取消，再搬迁会话。返回 `true` = 确实发生了取消（调用方计
+/// `zone_handoff_canceled_trades`）。
+///
+/// `book`：`SellOffBook` 是**进程态**，只有区 0 有 ⇒ 区 0 传 `Some(&mut sell_off_book)`、
+/// 区 k 传 `None`（区 k 的 `CM_SELLOFF*` 全 `Unsupported` ⇒ 两张表正常恒空；非空时丢弃并
+/// WRN，fail-loud）。
+#[allow(clippy::too_many_arguments)]
+fn cancel_cross_zone_trade_and_selloff(
+    chr_name: &str,
+    online: &OnlineRegistry,
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    trade_cfg: &game_svr::trade::DealConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    sell_off_cfg: &game_svr::selloff::SellOffConfig,
+    book: Option<&mut game_svr::selloff::SellOffBook>,
+) -> bool {
+    let mut canceled = false;
+    // ① 交易：`dealing` ⇒ 走既有 `deal_cancel_between`（`SM_DEALCANCEL` 等帧先发；对手
+    // 同区一起取消）。取消后的残条**不搬**（跨区 = 离开范围）。
+    if trade_sessions.get(chr_name).is_some_and(|s| s.dealing) {
+        deal_cancel_between(
+            chr_name,
+            online,
+            world,
+            displays,
+            ground_sessions,
+            trade_sessions,
+            gates,
+            trade_cfg,
+            catalog,
+        );
+        canceled = true;
+    }
+    trade_sessions.remove(chr_name);
+    // ② 寄售。
+    match book {
+        Some(book) => {
+            let mut so = sell_off_sessions.remove(chr_name).unwrap_or_default();
+            let has_ui = so.sell_off_confirm || !so.sell_off_item_list.is_empty();
+            let has_book = book
+                .entries
+                .iter()
+                .any(|e| e.deal_chr_name.eq_ignore_ascii_case(chr_name) && e.flag == 0);
+            if (has_ui || has_book) && ground_sessions.contains_key(chr_name) {
+                if let Some(sg) = ground_sessions.get_mut(chr_name) {
+                    let (weight, wear_weight, hand_weight, max_weight) = (
+                        sg.state.wabil.weight,
+                        sg.state.wabil.wear_weight,
+                        sg.state.wabil.hand_weight,
+                        sg.state.wabil.max_weight,
+                    );
+                    let (game_point, send_gold) = (sg.game_point, sg.soft_version_date != 0);
+                    let mut me = game_svr::selloff::SellOffSide {
+                        id: sg.actor_id,
+                        name: chr_name.to_string(),
+                        // 在线会话（`PlayObject.OffLineFlag` 未建模 ⇒ 恒 false，与既有入口一致）。
+                        offline: false,
+                        items: &mut sg.state.item_list,
+                        gold: &mut sg.state.gold,
+                        game_gold: &mut sg.game_gold,
+                        game_point,
+                        weight,
+                        wear_weight,
+                        hand_weight,
+                        max_weight,
+                        send_game_gold_info: send_gold,
+                        state: &mut so,
+                    };
+                    let mut events = game_svr::selloff::client_cancel_sell_off(&mut me);
+                    events.extend(game_svr::selloff::client_cancel_sell_off_ing(
+                        &mut me,
+                        book,
+                        catalog,
+                        sell_off_cfg,
+                    ));
+                    canceled = true;
+                    for ev in &events {
+                        let Some((target, body)) =
+                            game_svr::selloff::selloff_event_body(ev, catalog)
+                        else {
+                            continue;
+                        };
+                        let Some(t) = online.find_linear_actor(target) else {
+                            continue;
+                        };
+                        if let Some(tx) =
+                            route_to_gate(gates, t.gate_idx, t.socket, "跨区寄售取消回帧")
+                        {
+                            let _ = tx.send(SimToGate::SendFrame {
+                                socket: t.socket,
+                                body,
+                            });
+                        }
+                    }
+                }
+            }
+            sell_off_sessions.remove(chr_name);
+        }
+        None => {
+            if sell_off_sessions.remove(chr_name).is_some() {
+                glog!(
+                    "WRN",
+                    "跨区会话搬迁：区 k 出现寄售会话态（生产恒空）⇒ 无进程态 SellOffBook，直接丢弃 ChrName:{chr_name}"
+                );
+                canceled = true;
+            }
+        }
+    }
+    canceled
+}
+
+/// **A35-b**：把源区摘下的会话包搬到目标区（**只在持目标区一把锁**时工作）。
+///
+/// 三阶段一次一区锁的中间段：源区 detach 已在 `tick_phase_a` 的 WORLD_HEAD 完成（持源锁）；
+/// 本函数只取目标锁。失败（目标区不可用 / 线程已退出 / 同 chr 冲突 / `router.assign` 失败）
+/// ⇒ 调 `restore` 原样塞回源区（调用方闭包在源区锁内执行），并计
+/// `handoff_refused` + `zone_handoff_session_failed`；**不半搬**。
+fn deliver_session_migrations(
+    lookup: impl Fn(zone::ZoneId) -> Option<Arc<std::sync::Mutex<ZoneState>>>,
+    router: Option<&zone_router::ZoneRouter>,
+    pending: Vec<PendingSessionMigration>,
+    mut restore: impl FnMut(PendingSessionMigration),
+) {
+    for m in pending {
+        let (chr, source, target) = (m.chr_name.clone(), m.source, m.target);
+        let Some(state) = lookup(target) else {
+            perf_counters::note_zone_handoff_session_failed();
+            mir2_world_bevy::mirror_metrics::note_handoff_refused();
+            glog!(
+                "WRN",
+                "跨区会话搬迁失败：目标区 {target} 无状态（切片关/区线程已退出）ChrName:{chr} ⇒ 回滚源区 {source}"
+            );
+            restore(m);
+            continue;
+        };
+        let attached = {
+            let mut st = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if st.alive.load(std::sync::atomic::Ordering::Relaxed) {
+                st.host.attach_session(m)
+            } else {
+                Err(Box::new(m))
+            }
+        };
+        let (chr, id, line, socket) = match attached {
+            Ok(v) => v,
+            Err(m) => {
+                perf_counters::note_zone_handoff_session_failed();
+                mir2_world_bevy::mirror_metrics::note_handoff_refused();
+                glog!(
+                    "WRN",
+                    "跨区会话搬迁失败：目标区 {target} 拒收（线程已退出/同 chr 冲突）ChrName:{chr} ⇒ 回滚源区 {source}"
+                );
+                restore(*m);
+                continue;
+            }
+        };
+        if router.is_some_and(|r| r.assign(line, socket, target).is_ok()) {
+            perf_counters::note_zone_handoff_session_moved();
+            glog!(
+                "INF",
+                "跨区会话搬迁：ChrName:{chr} gate={line} socket={socket} 源区 {source} → 区 {target}（entity {id}）"
+            );
+        } else {
+            // router 失败 ⇒ 撤掉刚插入的目标区会话，回滚源区（会话只在一个区里）。
+            let back = {
+                let mut st = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                st.host.take_session_for_migration(id, target, source)
+            };
+            perf_counters::note_zone_handoff_session_failed();
+            mir2_world_bevy::mirror_metrics::note_handoff_refused();
+            glog!(
+                "WRN",
+                "跨区会话搬迁失败：router.assign 失败 ChrName:{chr} gate={line} socket={socket} ⇒ 回滚源区 {source}"
+            );
+            if let Some(m) = back {
+                restore(m);
+            }
+        }
+    }
+}
+
 /// **L2-5 ④a**：区 k 的 `Command` 派发——**只接移动类**（`CM_TURN/WALK/RUN/HORSERUN`），
 /// 与区 0 共用同一条 [`handle_move_cmd`]（不抄第二份）。其余命令仍丢弃，但计入
 /// [`perf_counters::note_zone_cmd_unsupported`]（按 `ident` 采样日志；④b 的余量清单）。
@@ -2100,7 +2386,11 @@ fn drain_zone_saves(
             let mut st = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut st.save_outbox)
+            // **A32**：断线存档（`save_outbox`）+ 区 k 周期存档（`host.zone_save_outbox`）同一条
+            // 发送路径；两者各自保序，合并序不影响落库结果（请求彼此独立）。
+            let mut reqs = std::mem::take(&mut st.save_outbox);
+            reqs.append(&mut st.host.zone_save_outbox);
+            reqs
         };
         for req in reqs {
             let Some(w) = db.as_mut() else {
@@ -2825,6 +3115,32 @@ fn spawn_minimal_zone(
                         );
                         slot
                     };
+                    // **A35-b 驱动点（区 k）**：位置约束同区 0 的 `HostLoop::tick`——必须在
+                    // **锁1（A 段）之后、barrier1 之前**：源区 detach 在 A 的 WORLD_HEAD 持本区锁
+                    // 完成，attach 只能持目标区一把锁（A9）⇒ 必须等锁1 释放；又不得跨过 barrier1，
+                    // 否则迁移窗口从亚 tick 级扩到跨屏障/跨 tick（命令按无会话丢弃）。
+                    {
+                        let pending = {
+                            let mut st = state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            std::mem::take(&mut st.host.pending_session_migrations)
+                        };
+                        if !pending.is_empty() {
+                            let host = zone_shared.zone_host.as_deref();
+                            deliver_session_migrations(
+                                |z| host.and_then(|h| h.zone_state(z)).cloned(),
+                                host.map(|h| &*h.router),
+                                pending,
+                                |m| {
+                                    let mut st = state
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    st.host.restore_session(m);
+                                },
+                            );
+                        }
+                    }
                     // **锁外**：barrier1 + 读邻居（屏障等待绝不持锁）。
                     if let Some(ops) = barrier_ops.as_mut() {
                         ops.await_neighbors(tick);
@@ -2859,7 +3175,7 @@ fn spawn_minimal_zone(
                         host.tick_phase_rest(
                             &mut zone_shared,
                             &mut no_process,
-                            PhaseSet::M1A_PROD,
+                            PhaseSet::M1A_ZONE_REST,
                             &mut scratch,
                             next,
                             slot,
@@ -2879,7 +3195,7 @@ fn spawn_minimal_zone(
                 while let Some(ev) = pending_inbound.pop_front() {
                     if let GateEvent::Command { .. } = &ev.ev {
                         outstanding.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        perf_counters::note_zonek_inbound_pending_discarded();
+                        perf_counters::note_zonek_inbound_pending_discarded(zone_id.index());
                         discarded += 1;
                     }
                 }
@@ -4109,6 +4425,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .map_err(anyhow::Error::msg)?;
         // **L2-5 ③ 段 3**：跨区收件人缺失计数的闸——切片关 ⇒ 六面全不计数（N=1 逐字节不变）。
         perf_counters::set_slicing_enabled(slicing);
+        // **A36**：per-zone 仪表枚举的区数（切片关 ⇒ 0 ⇒ 表为空；切片开 ⇒ 布局区数）。
+        perf_counters::set_zone_count(if slicing {
+            mode.as_ref().map_or(0, |m| m.layout.zone_count())
+        } else {
+            0
+        });
         match mode {
             None => None,
             Some(mode) => {
@@ -15581,14 +15903,35 @@ fn apply_save_reply(engine: &mut load::FrontEngine, chr_name: &str, ident: u16, 
 /// 支与 `CloseUser` 断线支都会走到），所以调用点必须在 `world.disconnect` **之前**；
 /// **周期存档**（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-703`）复用本函数
 /// （见 [`drain_periodic_save`]，卡 `openmir2-m3-periodic-save`）。
-fn save_human_rcd(
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
+/// 存档体的**唯一编码器**（周期/关服/断线/区 k 同一路径）：`build_save_record` +
+/// `encode_save_character_data`。调用方拿 [`ZoneSaveRequest`]，发送走 [`send_save_packet`]。
+///
+/// **A32**：区 k 只在**本区线程**调用本函数（读本区 World/会话，零 DB/零 `!Send`），
+/// 产出的请求进 `zone_save_outbox`，由区 0 的 [`drain_zone_saves`] 统一发送。
+fn encode_zone_save(
     saved: &SavedHuman,
     chr_name: &str,
     world: &mir2_world_bevy::World,
     sg: &SessionGround,
     registry: Option<&mir2_envir::MapRegistry>,
+) -> ZoneSaveRequest {
+    let rec = build_save_record(saved, chr_name, world, sg, registry);
+    let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
+    ZoneSaveRequest {
+        chr_name: chr_name.to_string(),
+        packet,
+    }
+}
+
+/// 发一条**已编码**的存档（qid / 连接门 / in-save / outstanding 记账）；成功返回 qid。
+///
+/// **A32**：从 [`save_human_rcd`] 拆出——区 k 只编码，发送仍由区 0 这一条路径完成
+/// （[`drain_zone_saves`] / [`shutdown_save_requests`]），不新开写库路。
+fn send_save_packet(
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    chr_name: &str,
+    packet: &[u8],
 ) -> Option<i32> {
     let w = db.as_mut()?;
     if !w.state.is_connected() {
@@ -15598,10 +15941,8 @@ fn save_human_rcd(
         );
         return None;
     }
-    let rec = build_save_record(saved, chr_name, world, sg, registry);
-    let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
     let qid = w.next_query_id();
-    let frame = dbclient::save_human_rcd_request(qid, &packet);
+    let frame = dbclient::save_human_rcd_request(qid, packet);
     match w.req_tx.send(frame) {
         Ok(()) => {
             // oracle `SaveHumanRcd` 先 `AddToSaveRcdList`（`WorldServer.cs:1091`）；进世界守卫读
@@ -15623,6 +15964,21 @@ fn save_human_rcd(
             None
         }
     }
+}
+
+fn save_human_rcd(
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saved: &SavedHuman,
+    chr_name: &str,
+    world: &mir2_world_bevy::World,
+    sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> Option<i32> {
+    // 保持原口径：DB 未装配 ⇒ 不编码、不记日志。
+    db.as_ref()?;
+    let req = encode_zone_save(saved, chr_name, world, sg, registry);
+    send_save_packet(db, engine, chr_name, &req.packet)
 }
 
 /// 关服存档的**有界等待**上限。
@@ -15661,22 +16017,17 @@ struct ShutdownSaveSummary {
 ///
 /// 与断线路径的差异（照 oracle）：关服**不**做 `DealCancelA`、不 `MakeGhost`、不关用户——
 /// 只是把在线角色的当前实时态写进库，随后进程退出。
-fn shutdown_save_all(
+/// **A32**：关服存档的**收集面**（区 0 与各区 k 共用）。口径同关口函数：按名排序、
+/// 无登入记录底稿跳过并 WRN、**不重置** `save_rcd_tick`、**不查** `InSaveRcdList`。
+fn collect_shutdown_zone_saves(
     sessions: &std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
     world: &mir2_world_bevy::World,
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
-    timeout: std::time::Duration,
-) -> ShutdownSaveSummary {
-    let started = std::time::Instant::now();
-    // 排序只为请求/日志顺序可复现（oracle 的 `PlayObjectList` 是插入序；各存档请求彼此独立，
-    // 落库结果与次序无关）。周期存档同样按名字排序。
+) -> Vec<ZoneSaveRequest> {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
-    let total = names.len();
-    let mut fired_qids = std::collections::HashSet::new();
+    let mut out = Vec::new();
     for name in names {
         let Some(sg) = sessions.get(&name) else {
             continue;
@@ -15689,9 +16040,27 @@ fn shutdown_save_all(
             );
             continue;
         };
-        if let Some(qid) = save_human_rcd(db, engine, saved, &name, world, sg, registry) {
+        out.push(encode_zone_save(saved, &name, world, sg, registry));
+    }
+    out
+}
+
+/// **A32**：关服存档的**发送 + 有界等待**（多区合并后的唯一发送点）。
+///
+/// `registered` = 参与本次关服的**在册会话总数**（含无底稿跳过者），只用于读数。
+fn shutdown_save_requests(
+    requests: Vec<ZoneSaveRequest>,
+    registered: usize,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    timeout: std::time::Duration,
+) -> ShutdownSaveSummary {
+    let started = std::time::Instant::now();
+    let mut fired_qids = std::collections::HashSet::new();
+    for req in &requests {
+        if let Some(qid) = send_save_packet(db, engine, &req.chr_name, &req.packet) {
             fired_qids.insert(qid);
-            glog!("INF", "关服存档触发 ChrName:{name} queryId={qid}");
+            glog!("INF", "关服存档触发 ChrName:{} queryId={qid}", req.chr_name);
         }
     }
     let fired = fired_qids.len();
@@ -15736,12 +16105,26 @@ fn shutdown_save_all(
         }
     }
     ShutdownSaveSummary {
-        sessions: total,
+        sessions: registered,
         fired,
         replied,
         timed_out,
         elapsed: started.elapsed(),
     }
+}
+
+#[cfg(test)]
+fn shutdown_save_all(
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world_bevy::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    timeout: std::time::Duration,
+) -> ShutdownSaveSummary {
+    let requests = collect_shutdown_zone_saves(sessions, saves, world, registry);
+    shutdown_save_requests(requests, sessions.len(), db, engine, timeout)
 }
 
 /// **卡 `openmir2-movefail-log-reason`**：`StepOutcome` → 日志里的 `reason=` 字面量。
@@ -25007,29 +25390,23 @@ fn drain_mag_healing_delivery(
 ///   交易层未移植，且 `MakeSaveRcd` 读的是 `WAbil.HP`（`WorldServer.cs:1247`）⇒ 对存档体无影响。
 /// - oracle 的 `SaveHumanRcd` 里 `IsRobot` 早返回：本宿主不建机器人会话（`RobotProcessor` 未移植）。
 ///
-/// 返回**本轮发起的请求数**（DB 未连接时计时仍已重置——照 oracle 先重置再调用；计数为 0）。
-#[allow(clippy::too_many_arguments)]
-fn drain_periodic_save(
+/// **A32**：周期存档的**收集面**（区 0 与区 k 共用）。语义逐条来自原
+/// [`drain_periodic_save`]：`!playObject.Ghost` 主干、`periodic_save_due` 先重置 tick、
+/// 无登入记录底稿跳过并 WRN。**不含** `engine.is_full()`（DB 侧门，区 k 无 `engine`）。
+fn collect_due_zone_saves(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
     world: &mir2_world_bevy::World,
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
     save_time: i64,
     now: i64,
-) -> usize {
-    // oracle `:698` 的 `!FrontEngine.IsFull()`：`m_SaveRcdList.Count >= int.MaxValue`
-    // （`FrnEngn.cs:120-133`）⇒ 恒 false。查一次与逐角色查等价（本宿主每 tick 调用一次）。
-    if engine.is_full() {
-        return 0;
-    }
+) -> Vec<ZoneSaveRequest> {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     // **B4 #5**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数虽只每 10 分钟真正存档一次，
     // 但**每个 tick 都会被调用**并做一次键收集+排序（`periodic_save_due` 在循环内）⇒ 省掉每 tick
     // 一次排序临时缓冲分配（N > 20 时）。N 次克隆保留（循环体要 `get_mut`）。
     names.sort_unstable();
-    let mut fired = 0usize;
+    let mut out = Vec::new();
     for name in names {
         // **F2**：oracle `WorldServer.cs:698-703` 的逐角色周期存档**不查** `InSaveRcdList`
         // （那是 `TimedService.cs:234-237` 另一个全局触发器的门）。到点就「先重置 tick、
@@ -25060,15 +25437,42 @@ fn drain_periodic_save(
             );
             continue;
         };
-        if save_human_rcd(db, engine, saved, &name, world, sg, registry).is_some() {
+        out.push(encode_zone_save(saved, &name, world, sg, registry));
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_periodic_save(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world_bevy::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    save_time: i64,
+    now: i64,
+) -> usize {
+    // oracle `:698` 的 `!FrontEngine.IsFull()`：`m_SaveRcdList.Count >= int.MaxValue`
+    // （`FrnEngn.cs:120-133`）⇒ 恒 false。查一次与逐角色查等价（本宿主每 tick 调用一次）。
+    if engine.is_full() {
+        return 0;
+    }
+    let reqs = collect_due_zone_saves(sessions, saves, world, registry, save_time, now);
+    let mut fired = 0usize;
+    for req in reqs {
+        if send_save_packet(db, engine, &req.chr_name, &req.packet).is_some() {
             // oracle `CharacterDataProcessor.cs:85-88`：`SendRequest` 成功后 `RcdSaved = true`
             // ⇒ `WorldServer.cs:592` 的换服门（G11）。周期存档是唯一会保留会话的成功发送路径
             // （断线/小退/顶号随后即删会话）。
-            sg.switch_state.rcd_saved = true;
+            if let Some(sg) = sessions.get_mut(&req.chr_name) {
+                sg.switch_state.rcd_saved = true;
+            }
             fired += 1;
             glog!(
                 "INF",
-                "周期存档触发（SaveHumanRcdTime={save_time}ms）ChrName={name}"
+                "周期存档触发（SaveHumanRcdTime={save_time}ms）ChrName={}",
+                req.chr_name
             );
         }
     }
@@ -25754,7 +26158,7 @@ fn drain_b4_self_deliveries(
 /// （只有表头）⇒ rc≠0 —— 不允许"探针以为在跑、其实没数据"。
 mod perf_counters {
     use std::io::Write as _;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -25979,6 +26383,11 @@ mod perf_counters {
     /// 记一次「镜像观察者被条件抑制」（`drain_depart_frames` 的 `continue` 之前）。
     pub(crate) fn note_depart_frames_mirror_suppressed() {
         DEPART_FRAMES_MIRROR_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// **A36**：运行时区数（切片初始化时写；per-zone 表按此枚举，避免出现布局外区号）。
+    pub(crate) fn set_zone_count(n: usize) {
+        ZONE_COUNT.store(n, Ordering::Relaxed);
     }
 
     /// 启动时由 `slicing` 的解析结果打开/关闭计数闸。
@@ -26215,11 +26624,16 @@ mod perf_counters {
     ///
     /// 关闭态纯 no-op；启用时 `region_barrier_us = max(各区的值)`、
     /// `region_barrier_total_us = Σ(各区的值)`（后者只对账）。
+    ///
+    /// **A36**：另记该区的区侧和（`zone_metrics.barrier_us[z]`，诊断用——判据仍看 max）。
     #[inline]
-    pub(crate) fn note_region_barrier_us(us: u64) {
+    pub(crate) fn note_region_barrier_us_for_zone(zone: usize, us: u64) {
         if ENABLED.load(Ordering::Relaxed) {
             REGION_BARRIER_US.fetch_max(us, Ordering::Relaxed);
             REGION_BARRIER_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+            if let Some(c) = REGION_BARRIER_US_BY_ZONE.get(zone) {
+                c.fetch_max(us, Ordering::Relaxed);
+            }
         }
     }
 
@@ -26237,36 +26651,65 @@ mod perf_counters {
     /// 含邮箱满丢弃、含溢出就地执行；**不是“成功执行条数”**）。`A6` 起不再收 `ev`
     /// （原参数未读；处置分类由段内回调在取出前算好）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_drained(from_carry: bool) {
+    pub(crate) fn note_zonek_inbound_drained(zone: usize, from_carry: bool) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_DRAINED.fetch_add(1, Ordering::Relaxed);
             if from_carry {
                 ZONEK_INBOUND_CARRY.fetch_add(1, Ordering::Relaxed);
+            }
+            if let Some(c) = ZONEK_DRAINED_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+            if from_carry {
+                if let Some(c) = ZONEK_CARRY_BY_ZONE.get(zone) {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
 
     /// 本 tick 预算命中（`fill_hit || 段执行截断且工作区非空`；每 tick 至多 +1）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_budget_hit() {
+    pub(crate) fn note_zonek_inbound_budget_hit(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_BUDGET_HIT.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_BUDGET_HIT_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
     /// demux 丢新（`outstanding` 到软上限）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_overflow_dropped() {
+    pub(crate) fn note_zonek_inbound_overflow_dropped(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_OVERFLOW_DROPPED.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_OVERFLOW_DROP_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
     /// shutdown 线程尾丢弃的未执行命令（不静默）。
     #[inline]
-    pub(crate) fn note_zonek_inbound_pending_discarded() {
+    pub(crate) fn note_zonek_inbound_pending_discarded(zone: usize) {
         if ENABLED.load(Ordering::Relaxed) {
             ZONEK_INBOUND_PENDING_DISCARDED.fetch_add(1, Ordering::Relaxed);
+            if let Some(c) = ZONEK_PENDING_DISCARD_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// **A36**：区 k 入站「投递成功」条数（`demux_forward_zone` 目标区 `send` 成功 + `Command`
+    /// 才计，与 `drained/carry` 同宇宙；发送失败**不**计（另在 `demux` 侧按现有 `Continue` 口径
+    /// 不增 `outstanding`，也不设新失败列——区线程死亡即整机 abort，不是可继续的失败面））。
+    #[inline]
+    pub(crate) fn note_zonek_inbound_enqueued(zone: usize) {
+        if ENABLED.load(Ordering::Relaxed) {
+            if let Some(c) = ZONEK_ENQ_BY_ZONE.get(zone) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -26394,7 +26837,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -26436,6 +26879,7 @@ mod perf_counters {
         let tick = DATA_LINES.fetch_add(1, Ordering::Relaxed);
         let hd = handoff_deltas();
         // **M1b 第 3 步**：区 0 三列先取（派生列要 `区 0 + zonek`）；zonek 6 列同取。
+        let host_enq = INBOUND_ENQUEUED.swap(0, Ordering::Relaxed);
         let ib = [
             INBOUND_DRAINED.swap(0, Ordering::Relaxed),
             INBOUND_CARRY.swap(0, Ordering::Relaxed),
@@ -26472,7 +26916,7 @@ mod perf_counters {
             SAY_CALLS.swap(0, Ordering::Relaxed),
             SAY_RECIPIENTS.swap(0, Ordering::Relaxed),
             KICK_SCANS.swap(0, Ordering::Relaxed),
-            INBOUND_ENQUEUED.swap(0, Ordering::Relaxed),
+            host_enq,
             ib[0],
             ib[1],
             ib[2],
@@ -26553,10 +26997,12 @@ mod perf_counters {
             // **卡 A29**：脚本动作未实现错误次数（本 tick 增量）。
             SCRIPT_ACTION_ERRORS.swap(0, Ordering::Relaxed),
         ];
+        // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
+        let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
             let line = format!(
-                "{tick}\t{}\n",
+                "{tick}\t{}\t{zm}\n",
                 vals.iter()
                     .map(u64::to_string)
                     .collect::<Vec<_>>()
@@ -26564,6 +27010,119 @@ mod perf_counters {
             );
             let _ = f.write_all(line.as_bytes());
         }
+    }
+
+    /// **A36**：`zone_metrics` 列的紧凑 JSON。
+    ///
+    /// - 无 tab/换行（TSV 单列；`zone_perf_parse.py` 的参差行判定依赖这一点）；
+    /// - 键序固定（与 A36 契约示例一致：`v` → `barrier_us` → `inbound` → `landed` → `failures`；
+    ///   内层按字典序）；
+    /// - 每 tick 增量字段（barrier/inbound）在这里 `swap(0)`；累计字段（landed/failures）只读；
+    /// - 区 0 的 inbound 用宿主列（`inbound_*` 口径，入参传入以免二次 swap）；区 k 用 per-zone
+    ///   分桶（与 `zonek_inbound_*` 同宇宙：只计 Command）；
+    /// - `failures.sampled` 按**代码事实**：只有 `router_unassigned` 的日志站点限流
+    ///   （`n<=8 || n%1000`），其余三条逐次 glog ⇒ false。
+    fn zone_metrics_json(
+        host_enq: u64,
+        host_drained: u64,
+        host_carry: u64,
+        host_budget_hit: u64,
+    ) -> String {
+        let zone_count = ZONE_COUNT.load(Ordering::Relaxed).min(ZONE_METRICS_CAP);
+        let mut out = String::with_capacity(96 + zone_count * 96);
+        out.push_str("{\"v\":1,\"barrier_us\":{");
+        for (z, cell) in REGION_BARRIER_US_BY_ZONE
+            .iter()
+            .take(zone_count)
+            .enumerate()
+        {
+            if z > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":");
+            out.push_str(&cell.swap(0, Ordering::Relaxed).to_string());
+        }
+        out.push_str("},\"inbound\":{");
+        for z in 0..zone_count {
+            if z > 0 {
+                out.push(',');
+            }
+            let (enq, drained, carry, budget_hit, overflow_drop, pending_discard) = if z == 0 {
+                (host_enq, host_drained, host_carry, host_budget_hit, 0, 0)
+            } else {
+                (
+                    ZONEK_ENQ_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_DRAINED_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_CARRY_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_BUDGET_HIT_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_OVERFLOW_DROP_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                    ZONEK_PENDING_DISCARD_BY_ZONE[z].swap(0, Ordering::Relaxed),
+                )
+            };
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":{\"budget_hit\":");
+            out.push_str(&budget_hit.to_string());
+            out.push_str(",\"carry\":");
+            out.push_str(&carry.to_string());
+            out.push_str(",\"drain\":");
+            out.push_str(&drained.to_string());
+            out.push_str(",\"enq\":");
+            out.push_str(&enq.to_string());
+            out.push_str(",\"overflow_drop\":");
+            out.push_str(&overflow_drop.to_string());
+            out.push_str(",\"pending_discard\":");
+            out.push_str(&pending_discard.to_string());
+            out.push('}');
+        }
+        out.push_str("},\"landed\":{");
+        for (z, cell) in ZONE_LOGIN_LANDED.iter().take(zone_count).enumerate() {
+            if z > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&z.to_string());
+            out.push_str("\":");
+            out.push_str(&cell.load(Ordering::Relaxed).to_string());
+        }
+        out.push_str("},\"failures\":{\"offzone\":");
+        out.push_str(&ZONE_LOGIN_OFFZONE.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"router_unassigned\":");
+        out.push_str(&ZONE_ROUTER_UNASSIGNED.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"sampled\":{\"offzone\":false,\"router_unassigned\":true,\"target_unavailable\":false,\"uncovered\":false}");
+        out.push_str(",\"target_unavailable\":");
+        out.push_str(&ZONE_TARGET_UNAVAILABLE.load(Ordering::Relaxed).to_string());
+        out.push_str(",\"uncovered\":");
+        out.push_str(&ZONE_LOGIN_UNCOVERED.load(Ordering::Relaxed).to_string());
+        // **A35-b 导出（A36 接线）**：搬迁计数是**累计**值、与 failures 平级（不是失败语义）。
+        out.push_str("},\"handoff\":{\"canceled_trades\":");
+        out.push_str(
+            &ZONE_HANDOFF_CANCELED_TRADES
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"session_failed\":");
+        out.push_str(
+            &ZONE_HANDOFF_SESSION_FAILED
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"session_moved\":");
+        out.push_str(
+            &ZONE_HANDOFF_SESSION_MOVED
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str(",\"target_display_missing\":");
+        out.push_str(
+            &ZONE_HANDOFF_TARGET_DISPLAY_MISSING
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        out.push_str("}}");
+        out
     }
 
     /// 收尾：启用却一条 tick 行都没有 ⇒ Err（调用方转 rc≠0）。
@@ -26597,6 +27156,35 @@ mod perf_counters {
     /// 「切片模式下按原路径处理完」的次数。世界进入是否成功不在此计（那是
     /// `telemetry::record_ok`/`record_attempt` 的口径）。
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
+    // ---- **A36**：每区仪表（perf TSV 末列 `zone_metrics`）----
+    /// 运行时区数（切片初始化时由 [`set_zone_count`] 写入；0 = 非切片 ⇒ per-zone 表为空）。
+    static ZONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+    /// per-zone 表的固定上限（与 [`ZONE_LOGIN_LANDED`] 同口径；越界不记）。
+    const ZONE_METRICS_CAP: usize = 512;
+    /// 本 tick 各区「两道屏障等待之和」的**区侧和**（µs，`fetch_max`；写行即清零）。
+    ///
+    /// **诊断用，不是判据**：判据仍看进程列 `region_barrier_us` 的 **max**（各区 ≤ max ⇒
+    /// max ≤20% 即各区 ≤20%）；本表只用于定位是哪一区慢。
+    static REGION_BARRIER_US_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 投递成功（demux 目标区 `send` 成功；只计 `Command`，与 drained 同宇宙）。
+    static ZONEK_ENQ_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 被消费并处置的 Command 条数（同 `zonek_inbound_drained` 口径）。
+    static ZONEK_DRAINED_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：其中来自结转槽的条数。
+    static ZONEK_CARRY_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：本 tick 预算命中（每 tick ≤1）。
+    static ZONEK_BUDGET_HIT_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：demux 丢新（`outstanding` 软上限）。
+    static ZONEK_OVERFLOW_DROP_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
+    /// 区 k 入站：线程尾丢弃的未执行命令（M1b 第 3 步「作废窗口」口径）。
+    static ZONEK_PENDING_DISCARD_BY_ZONE: [AtomicU64; ZONE_METRICS_CAP] =
+        [const { AtomicU64::new(0) }; ZONE_METRICS_CAP];
     /// **卡 A29**：脚本动作 `EngineError::NotImplemented`（`kind` 以 `action` 开头）被触发的次数。
     /// 进 perf TSV（表头末列 `script_action_errors`），每 tick 增量。
     static SCRIPT_ACTION_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -26621,6 +27209,14 @@ mod perf_counters {
     /// 帧仍发但降级——图名空 / flag 0 / 无 766·54）。区 0 有注册表 ⇒ 正常恒 0；
     /// ④b 补区 k 换图帧后应归零。
     pub(crate) static MOVE_MAP_CHANGE_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    /// **A35-b**：跨区会话搬迁**成功**次数（源区摘 → 目标区插 → `router` 改指，三步都成）。
+    pub(crate) static ZONE_HANDOFF_SESSION_MOVED: AtomicU64 = AtomicU64::new(0);
+    /// **A35-b**：搬迁**失败并回滚**次数（目标区不可用/线程已退出/同 chr 冲突/router 失败）。
+    pub(crate) static ZONE_HANDOFF_SESSION_FAILED: AtomicU64 = AtomicU64::new(0);
+    /// **A35-b**：跨界前取消的交易/寄售次数（两族合计；跨区 = 离开范围 ⇒ 先取消）。
+    pub(crate) static ZONE_HANDOFF_CANCELED_TRADES: AtomicU64 = AtomicU64::new(0);
+    /// **A35-b**：目标区**缺该玩家展示项**的次数（fail-loud；不重建，出现帧可能缺项）。
+    pub(crate) static ZONE_HANDOFF_TARGET_DISPLAY_MISSING: AtomicU64 = AtomicU64::new(0);
 
     // ---- 卡 C27（openmir2-perfcounter-test-isolation）：`#[cfg(test)]` 线程级计数器实例 ----
     // 生产路径的 `note_zone_login_landed`/`note_zone_disconnect_dropped` 会从**其它并行用例**
@@ -26636,6 +27232,10 @@ mod perf_counters {
         login_landed: [AtomicU64; 512],
         script_action_errors: AtomicU64,
         script_action_error_wrns: AtomicU64,
+        handoff_session_moved: AtomicU64,
+        handoff_session_failed: AtomicU64,
+        handoff_canceled_trades: AtomicU64,
+        handoff_target_display_missing: AtomicU64,
     }
     #[cfg(test)]
     impl TestZoneCounters {
@@ -26649,6 +27249,10 @@ mod perf_counters {
                 login_landed: [const { AtomicU64::new(0) }; 512],
                 script_action_errors: AtomicU64::new(0),
                 script_action_error_wrns: AtomicU64::new(0),
+                handoff_session_moved: AtomicU64::new(0),
+                handoff_session_failed: AtomicU64::new(0),
+                handoff_canceled_trades: AtomicU64::new(0),
+                handoff_target_display_missing: AtomicU64::new(0),
             }
         }
     }
@@ -26801,6 +27405,105 @@ mod perf_counters {
     #[cfg(test)]
     pub(crate) fn move_map_change_unsupported() -> u64 {
         MOVE_MAP_CHANGE_UNSUPPORTED.load(Ordering::Relaxed)
+    }
+
+    /// **A35-b**：迁移成功 +1（返回累计值）。只定义 + 测试读数；perf TSV 列归 A36。
+    pub(crate) fn note_zone_handoff_session_moved() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.handoff_session_moved.fetch_add(1, Ordering::Relaxed))
+            .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_SESSION_MOVED.fetch_add(1, Ordering::Relaxed);
+    }
+    /// **A35-b**：迁移失败回滚 +1。
+    pub(crate) fn note_zone_handoff_session_failed() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.handoff_session_failed.fetch_add(1, Ordering::Relaxed))
+            .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_SESSION_FAILED.fetch_add(1, Ordering::Relaxed);
+    }
+    /// **A35-b**：跨界前取消交易/寄售 +1。
+    pub(crate) fn note_zone_handoff_canceled_trades() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| t.handoff_canceled_trades.fetch_add(1, Ordering::Relaxed))
+            .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_CANCELED_TRADES.fetch_add(1, Ordering::Relaxed);
+    }
+    /// **A35-b**：目标区缺展示项 +1（fail-loud）。
+    pub(crate) fn note_zone_handoff_target_display_missing() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            t.handoff_target_display_missing
+                .fetch_add(1, Ordering::Relaxed)
+        })
+        .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_TARGET_DISPLAY_MISSING.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_handoff_session_moved() -> u64 {
+        if let Some(v) =
+            with_test_zone_counters(|t| t.handoff_session_moved.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        ZONE_HANDOFF_SESSION_MOVED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_handoff_session_failed() -> u64 {
+        if let Some(v) =
+            with_test_zone_counters(|t| t.handoff_session_failed.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        ZONE_HANDOFF_SESSION_FAILED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_handoff_canceled_trades() -> u64 {
+        if let Some(v) =
+            with_test_zone_counters(|t| t.handoff_canceled_trades.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        ZONE_HANDOFF_CANCELED_TRADES.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_handoff_target_display_missing() -> u64 {
+        if let Some(v) =
+            with_test_zone_counters(|t| t.handoff_target_display_missing.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        ZONE_HANDOFF_TARGET_DISPLAY_MISSING.load(Ordering::Relaxed)
+    }
+    /// **A35-b**：把四个 handoff 计数清零（测试用；与 login 计数分开，避免互相干扰）。
+    #[cfg(test)]
+    pub(crate) fn reset_zone_handoff_counters_for_tests() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            t.handoff_session_moved.store(0, Ordering::Relaxed);
+            t.handoff_session_failed.store(0, Ordering::Relaxed);
+            t.handoff_canceled_trades.store(0, Ordering::Relaxed);
+            t.handoff_target_display_missing.store(0, Ordering::Relaxed);
+        })
+        .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_SESSION_MOVED.store(0, Ordering::Relaxed);
+        ZONE_HANDOFF_SESSION_FAILED.store(0, Ordering::Relaxed);
+        ZONE_HANDOFF_CANCELED_TRADES.store(0, Ordering::Relaxed);
+        ZONE_HANDOFF_TARGET_DISPLAY_MISSING.store(0, Ordering::Relaxed);
     }
     #[cfg(test)]
     pub(crate) fn zone_disconnect_dropped() -> u64 {
@@ -36620,6 +37323,7 @@ fn sim_loop(
         ground_sessions,
         pending_local: std::collections::BTreeMap::new(),
         saves,
+        zone_save_outbox: Vec::new(),
         login_tails,
         aoi_frames_total,
         shop_sessions,
@@ -36630,6 +37334,7 @@ fn sim_loop(
         monster_walk_seen,
         gates,
         handoff_runtime,
+        pending_session_migrations: Vec::new(),
         ticks,
         tick,
         event_carry,
@@ -36885,6 +37590,46 @@ impl BarrierOps {
 ///
 /// 纯搬移：字段就是原 `sim_loop` 的局部；A1 不改任何行为（[`HostLoop::tick`] 逐行是原循环体）。
 /// 归属判据见 `docs/issues/l25-zone-loop-m0-design-20261123.md` §2.1。
+/// **A35-b**：一次跨区移动的**会话搬迁包**——源区 detach 后、目标区 attach 前由
+/// [`HostLoop::pending_session_migrations`] 暂存。
+///
+/// `SessionGround` **不是 `Clone`** ⇒ 只能「先摘后插 + 失败回滚」；本结构就是被摘下的那一份
+/// 全部玩家态。`trade_sessions`/`sell_off_sessions` **不在包内**：跨区 = 离开范围 ⇒ 搬迁前
+/// 已按既有路径取消（见 [`cancel_cross_zone_trade_and_selloff`]）。
+struct PendingSessionMigration {
+    /// 源区（日志/回滚定位用）。
+    source: zone::ZoneId,
+    /// 目标区（= `HandoffAck::from`，真正执行提升的区）。
+    target: zone::ZoneId,
+    /// 实体 id（= `ActorId`；跨区全局唯一）。
+    id: i32,
+    /// 角色名（七表的键 + World 会话的键）。
+    chr_name: String,
+    /// 网关线号（`u8::try_from(gate_idx)`；转换失败 ⇒ 不搬，会话留源区）。
+    line: u8,
+    /// 客户端句柄。
+    socket: i32,
+    /// `ground_sessions` 的项（玩家态核心）。
+    ground: SessionGround,
+    /// `online` 的项（目标区 handler 解析说话者/收件人）。
+    online: OnlineEntry,
+    /// `saves` 的项（目标区存档合成的底稿）。
+    save: Option<SavedHuman>,
+    /// `login_tails` 的项（登录尾帧未发完的情形）。
+    login_tail: Option<smframe::EnterWorldInputs>,
+    /// `aoi_frames_total` 的项（AOI 计量连续性）。
+    aoi_total: Option<usize>,
+    /// `shop_sessions` 的项（对话/脚本标签/骰子标签）。
+    shop: Option<ShopSession>,
+    /// `pending_local` 里**本 chr** 的在飞命令（按 `GateEvent::Command{chr_name}` 过滤）。
+    pending_cmds: Vec<PendingLocalCmd>,
+    /// **Q1**：World 会话快照（源区摘不到/无会话时取缺省）。`map_id` 兜底用——目标区实体
+    /// 在时以实体地图为准。
+    world_map_id: usize,
+    /// **Q1**：`PlayObject.SoftVersionDateEx`（World 会话的 `soft_version_date`）。
+    world_soft_version_date: i32,
+}
+
 struct HostLoop {
     /// **M1a**：本实例所属区（区 0 = `HOST_ZONE`，区 k = 自身）。用于按区分流的诊断行
     /// （非宿主区的 profiler 行带 `zone=<k>`）。
@@ -36901,6 +37646,9 @@ struct HostLoop {
     /// `inbound_local_buffer` 按序号合并执行；N=1/区 0 恒空。
     pending_local: std::collections::BTreeMap<u64, PendingLocalCmd>,
     saves: std::collections::HashMap<String, SavedHuman>,
+    /// **A32**：区 k 的周期存档出队（`PERSIST_LOCAL` 段写；区 0 的
+    /// [`drain_zone_saves`] 取走送进程级 DB 链）。区 0 的实例恒空（`ALL` 不含该段）。
+    zone_save_outbox: Vec<ZoneSaveRequest>,
     login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
     aoi_frames_total: std::collections::HashMap<String, usize>,
     shop_sessions: std::collections::HashMap<String, ShopSession>,
@@ -36911,6 +37659,10 @@ struct HostLoop {
     monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)>,
     gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     handoff_runtime: Option<handoff::HandoffRuntime>,
+    /// **A35-b**：已 committed（`ack.ok`、实体已移除）但**尚未在目标区 attach** 的搬迁包。
+    /// 源区七表已摘空；由驱动在**锁外**用目标区单锁完成 attach（`deliver_session_migrations`）。
+    /// 正常恒空（同 tick 内排空）；残留 ⇒ 该玩家在两区都无会话（驱动故障）。
+    pending_session_migrations: Vec<PendingSessionMigration>,
     ticks: u64,
     tick: std::time::Duration,
     event_carry: Option<GateEvent>,
@@ -37048,6 +37800,16 @@ impl PhaseSet {
     /// 牙：`m1b_zone_prod_owns_inbound_local_only_in_phase_a`。
     #[allow(dead_code)]
     const M1B_ZONE_PROD: PhaseSet = PhaseSet(Self::M1A_PROD.0 | Self::INBOUND_LOCAL);
+
+    /// **A32**：区 k 的**周期存档**段（只读本区 World/会话 + 编码，零 DB、零 `!Send`）——
+    /// 产出 [`ZoneSaveRequest`] 进 `HostLoop.zone_save_outbox`，由区 0 的
+    /// [`drain_zone_saves`] 统一发送（**不新开写库路**）。区 0（`ALL`）不含本段。
+    const PERSIST_LOCAL: u32 = 1 << 18;
+
+    /// **A32**：区 k 的 rest 段集 = `M1A_PROD | PERSIST_LOCAL`（`M1A_PROD` 的位值本身不变）。
+    /// 只给 [`HostLoop::tick_phase_rest`]；牙 `a32_production_wiring_is_pinned` 钉住驱动侧。
+    #[allow(dead_code)]
+    const M1A_ZONE_REST: PhaseSet = PhaseSet(Self::M1A_PROD.0 | Self::PERSIST_LOCAL);
     #[inline]
     fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
@@ -37212,6 +37974,7 @@ impl HostLoop {
             ground_sessions: std::collections::HashMap::new(),
             pending_local: std::collections::BTreeMap::new(),
             saves: std::collections::HashMap::new(),
+            zone_save_outbox: Vec::new(),
             login_tails: std::collections::HashMap::new(),
             aoi_frames_total: std::collections::HashMap::new(),
             shop_sessions: std::collections::HashMap::new(),
@@ -37222,6 +37985,7 @@ impl HostLoop {
             monster_walk_seen: std::collections::HashMap::new(),
             gates: std::collections::HashMap::new(),
             handoff_runtime: None,
+            pending_session_migrations: Vec::new(),
             ticks: 0,
             tick: std::time::Duration::from_millis(
                 u64::try_from(mir2_world_bevy::TICK_INTERVAL_MS).unwrap_or(200),
@@ -37250,6 +38014,128 @@ impl HostLoop {
     ) {
         self.ticks = tick;
         self.gates = gates.clone();
+    }
+
+    /// **A35-b（目标区锁内）**：把搬迁包写进本区七表 + World 会话（Q1）。
+    ///
+    /// 冲突（本区已有同 chr 的会话/在线项）⇒ `Err(包)` 原样退回、**不插入半份**。返回
+    /// `(chr_name, 实体 id, 线号, socket)` 供调用方 `router.assign`。
+    fn attach_session(
+        &mut self,
+        m: PendingSessionMigration,
+    ) -> Result<(String, i32, u8, i32), Box<PendingSessionMigration>> {
+        if self.ground_sessions.contains_key(&m.chr_name)
+            || self.online.find_by_chr(&m.chr_name).is_some()
+        {
+            // 搬迁包很大（clippy::result_large_err）⇒ 错误臂装箱。
+            return Err(Box::new(m));
+        }
+        self.adopt_world_session(&m);
+        if self.displays.get(m.id).is_none() {
+            // **fail-loud，不重建**：缺少镜像快照带来的展示项 ⇒ 目标区 AOI 出现帧可能缺项。
+            perf_counters::note_zone_handoff_target_display_missing();
+            glog!(
+                "WRN",
+                "跨区会话搬迁：区 {} 缺 ChrName:{}（entity {}）的展示项 ⇒ 出现帧可能缺项（不重建，fail-loud）",
+                self.zone,
+                m.chr_name,
+                m.id
+            );
+        }
+        let (chr, id, line, socket) = (m.chr_name.clone(), m.id, m.line, m.socket);
+        self.ground_sessions.insert(m.chr_name.clone(), m.ground);
+        self.online.set(m.online);
+        if let Some(v) = m.save {
+            self.saves.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.login_tail {
+            self.login_tails.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.aoi_total {
+            self.aoi_frames_total.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.shop {
+            self.shop_sessions.insert(m.chr_name.clone(), v);
+        }
+        for p in m.pending_cmds {
+            self.pending_local.insert(p.seq, p);
+        }
+        Ok((chr, id, line, socket))
+    }
+
+    /// **A35-b（源区锁内）**：把搬迁包原样塞回本区（回滚；attach 失败 / router 失败）。
+    ///
+    /// 正常路径下本区已无同 chr 项（detach 已摘空）；若仍有 ⇒ WRN + 覆盖（不丢包优先）。
+    fn restore_session(&mut self, m: PendingSessionMigration) {
+        if self.ground_sessions.contains_key(&m.chr_name) {
+            glog!(
+                "WRN",
+                "跨区会话搬迁回滚：区 {} 已有同 ChrName:{} 的会话态（不应发生）⇒ 覆盖",
+                self.zone,
+                m.chr_name
+            );
+        }
+        self.adopt_world_session(&m);
+        let _ = self.ground_sessions.insert(m.chr_name.clone(), m.ground);
+        self.online.set(m.online);
+        if let Some(v) = m.save {
+            self.saves.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.login_tail {
+            self.login_tails.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.aoi_total {
+            self.aoi_frames_total.insert(m.chr_name.clone(), v);
+        }
+        if let Some(v) = m.shop {
+            self.shop_sessions.insert(m.chr_name.clone(), v);
+        }
+        for p in m.pending_cmds {
+            self.pending_local.insert(p.seq, p);
+        }
+    }
+
+    /// **A35-b（Q1）**：World 会话写回（attach 与回滚共用）。
+    ///
+    /// `open_session` 复用同 chr 的旧会话（`Left`，会话从不删除）或新建；随后把实体/地图/
+    /// 阶段写实。`map_id` 以**本区实体**为准（提升后实体已在目标区），缺实体时用源区快照兜底。
+    fn adopt_world_session(&mut self, m: &PendingSessionMigration) {
+        let _ = self.world.open_session(&m.chr_name);
+        let map_id = self
+            .world
+            .entities
+            .get(m.id)
+            .map_or(m.world_map_id, |e| e.map_id);
+        if let Some(sess) = self.world.sessions.get_mut(&m.chr_name) {
+            sess.actor_id = Some(m.id);
+            sess.map_id = map_id;
+            sess.stage = mir2_world_bevy::WorldStage::InWorld;
+            sess.soft_version_date = m.world_soft_version_date;
+        }
+    }
+
+    /// **A35-b**：从**本区**按 `id` 摘下搬迁包（与源区 detach 同一函数；用于 router 失败后
+    /// 撤掉刚插入的目标区会话）。
+    fn take_session_for_migration(
+        &mut self,
+        id: i32,
+        source: zone::ZoneId,
+        target: zone::ZoneId,
+    ) -> Option<PendingSessionMigration> {
+        detach_session_for_migration(
+            &mut self.world,
+            &mut self.displays,
+            &mut self.online,
+            &mut self.ground_sessions,
+            &mut self.saves,
+            &mut self.login_tails,
+            &mut self.aoi_frames_total,
+            &mut self.shop_sessions,
+            &mut self.pending_local,
+            source,
+            target,
+            id,
+        )
     }
 
     /// **M1-0e · A 段**：`tick` 的 A 半段 —— 从顶部（SHUTDOWN..PLAYER_RUN）到 `HostWorldTail`
@@ -37289,6 +38175,8 @@ impl HostLoop {
         let mut line_notice_states = &mut self.line_notice_states;
         let mut gates = &mut self.gates;
         let handoff_runtime = &mut self.handoff_runtime;
+        // **A35-b**：本 tick 在源区摘下的搬迁包（attach 由驱动在锁外完成）。
+        let pending_session_migrations = &mut self.pending_session_migrations;
         let ticks = &mut self.ticks;
         let mut event_carry = &mut self.event_carry;
         let mut event_carry_ctl = &mut self.event_carry_ctl;
@@ -37343,13 +38231,38 @@ impl HostLoop {
                     host.watch.disarm();
                     host.stop.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
-                let summary = shutdown_save_all(
+                // **A32**：关服存档覆盖**全部区**（区 k 的会话在各自 `ZoneState.host` 里）。
+                // 区 k 的 World/会话由区 0 在**其状态锁内**只读编码（owner-thread 断言只管 tick，
+                // 只读安全）；编码后并入同一条发送 + 有界等待路径（不新开写库路）。
+                let mut shutdown_requests = collect_shutdown_zone_saves(
                     &ground_sessions,
                     &saves,
                     &world,
+                    registry.as_ref(),
+                );
+                let mut shutdown_registered = ground_sessions.len();
+                if let Some(zh) = zone_host.as_ref() {
+                    for state in zh.zone_states.iter().flatten() {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let ZoneState {
+                            host: zone_loop, ..
+                        } = &mut *st;
+                        shutdown_registered += zone_loop.ground_sessions.len();
+                        shutdown_requests.extend(collect_shutdown_zone_saves(
+                            &zone_loop.ground_sessions,
+                            &zone_loop.saves,
+                            &zone_loop.world,
+                            registry.as_ref(),
+                        ));
+                    }
+                }
+                let summary = shutdown_save_requests(
+                    shutdown_requests,
+                    shutdown_registered,
                     &mut db,
                     &mut engine,
-                    registry.as_ref(),
                     SHUTDOWN_SAVE_TIMEOUT,
                 );
                 glog!(
@@ -37498,6 +38411,7 @@ impl HostLoop {
                         .unwrap_or(ZoneCmdClass::Unsupported)
                 };
                 let _ = execute_local_budget(
+                    zone.index(),
                     buffer,
                     pending_local,
                     carry_prefix,
@@ -39860,8 +40774,60 @@ impl HostLoop {
             let t = host_prof.begin();
             // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None，零参与）。
             // **tick 顶（phase1 之前）**：区 0 排 ack/offer（handoff 两阶段）。
+            // **A35-b**：本 tick 已提交（`ack.ok`、实体已移除）的跨界 ⇒ 源区（持本区锁）先按
+            // 「离开范围」取消交易/寄售（帧**先发**），再把七表 + World 会话 detach 成搬迁包。
+            // attach 由驱动在**锁外**用目标区单锁完成（见 `deliver_session_migrations` 的调用点）。
             if let Some(h) = handoff_runtime.as_mut() {
-                h.tick_top(&mut world, tick_no);
+                for (id, target) in h.tick_top(&mut world, tick_no) {
+                    let Some(chr_name) = online.find_by_actor(id).map(|e| e.chr_name.clone())
+                    else {
+                        perf_counters::note_zone_handoff_session_failed();
+                        mir2_world_bevy::mirror_metrics::note_handoff_refused();
+                        glog!(
+                            "WRN",
+                            "跨区会话搬迁：区 {zone} 实体 {id} 不在在线登记表 ⇒ 无法搬迁（该玩家命令将按无会话丢弃）"
+                        );
+                        continue;
+                    };
+                    // 进程态 `SellOffBook` 只有区 0 有（区 k 的 `process` 恒 `None`）。
+                    let book = process.as_mut().map(|p| &mut p.sell_off_book);
+                    if cancel_cross_zone_trade_and_selloff(
+                        &chr_name,
+                        &*online,
+                        &*world,
+                        &*displays,
+                        &mut ground_sessions,
+                        &mut trade_sessions,
+                        &mut sell_off_sessions,
+                        &*gates,
+                        &enter_cfg.trade,
+                        &enter_cfg.catalog,
+                        &enter_cfg.sell_off,
+                        book,
+                    ) {
+                        perf_counters::note_zone_handoff_canceled_trades();
+                    }
+                    match detach_session_for_migration(
+                        &mut world,
+                        &mut displays,
+                        &mut online,
+                        &mut ground_sessions,
+                        &mut saves,
+                        &mut login_tails,
+                        &mut aoi_frames_total,
+                        &mut shop_sessions,
+                        pending_local,
+                        zone,
+                        target,
+                        id,
+                    ) {
+                        Some(m) => pending_session_migrations.push(m),
+                        None => {
+                            perf_counters::note_zone_handoff_session_failed();
+                            mir2_world_bevy::mirror_metrics::note_handoff_refused();
+                        }
+                    }
+                }
             }
             #[allow(unused_mut)] // 字面量是 3 处源码扫描牙的锚点（`sim_loop` 顺序判定），保留 `mut`
             let mut rec = tick_world_head_with_specials(
@@ -40182,6 +41148,22 @@ impl HostLoop {
         if outcome == TickOutcome::Exited {
             return outcome;
         }
+        // **A35-b 驱动点（区 0）**：会话搬迁必须在 **A 段之后、barrier1 之前**完成。
+        // 为什么是这里：① 源区 detach 发生在 A 的 WORLD_HEAD（持本区锁），attach 只能持
+        // **目标区**一把锁（A9：禁止同时持两把区锁）⇒ 只能在 A 返回、源锁释放后做；
+        // ② 挪到 barrier1 之后（或下一 tick）会把「源无会话 / 目标无会话 / router 仍指源区」
+        // 的窗口从亚 tick 级扩大到跨屏障/跨 tick，那些窗口里到达的命令会被按无会话丢弃。
+        // 区 k 的同名驱动点在 `spawn_zone` 的锁1 之后、`await_neighbors` 之前，位置约束相同。
+        if !self.pending_session_migrations.is_empty() {
+            let pending = std::mem::take(&mut self.pending_session_migrations);
+            let host = shared.zone_host.as_deref();
+            deliver_session_migrations(
+                |z| host.and_then(|h| h.zone_state(z)).cloned(),
+                host.map(|h| &*h.router),
+                pending,
+                |m| self.restore_session(m),
+            );
+        }
         // **driver（锁外）**：barrier1 + 读邻居。N=1 无屏障 ⇒ 跳过（A→B 背靠背）。
         if let Some(ops) = barriers.as_mut() {
             ops.await_neighbors(self.ticks);
@@ -40477,6 +41459,29 @@ impl HostLoop {
                 now_ms(),
             );
             host_prof.end("HostPersist", t);
+        }
+        // **A32**：区 k 周期存档（只编码、不碰 DB）。产出进 `zone_save_outbox`，由区 0 的
+        // [`drain_zone_saves`] 统一发送；`rcd_saved` 在入队时置位（发送下一 tick 才发生，
+        // 该旗标只服务 G11 换服门，生产 inert）。
+        if phases.has(PhaseSet::PERSIST_LOCAL) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERSIST_LOCAL));
+            let t = host_prof.begin();
+            let reqs = collect_due_zone_saves(
+                &mut ground_sessions,
+                saves,
+                world,
+                registry.as_ref(),
+                enter_cfg.save_human_rcd_time,
+                now_ms(),
+            );
+            for req in &reqs {
+                if let Some(sg) = ground_sessions.get_mut(&req.chr_name) {
+                    sg.switch_state.rcd_saved = true;
+                }
+            }
+            self.zone_save_outbox.extend(reqs);
+            host_prof.end("HostPersistLocal", t);
         }
         if phases.has(PhaseSet::SWITCH) {
             let svc = proc_svc!(process, PhaseSet::SWITCH, "SWITCH");
@@ -40887,6 +41892,8 @@ fn fill_pending(
 /// 返回是否 `budget_hit`。**不写 `clear()`**（剩余自然保留，tick 后由 driver swap 回 scratch）。
 #[allow(clippy::too_many_arguments)] // 9 参：缓冲/等待队列/水位/预算/计数/分类/回调
 fn execute_local_budget(
+    // **A36**：本批所属区号（per-zone 入站仪表用；不改任何判定）。
+    zone: usize,
     buffer: &mut std::collections::VecDeque<SeqEvent>,
     pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
     carry_prefix: usize,
@@ -40958,7 +41965,9 @@ fn execute_local_budget(
         };
         let disp = exec(item, class, pending_local, budget);
         match disp {
-            LocalDisposition::Drained => perf_counters::note_zonek_inbound_drained(from_carry),
+            LocalDisposition::Drained => {
+                perf_counters::note_zonek_inbound_drained(zone, from_carry)
+            }
             LocalDisposition::Deferred | LocalDisposition::CountedByExec { .. } => {}
             // **D2**：整批推迟 = 有活没干完 ⇒ 本 tick 记 `budget_hit` 并收手（不 partial）。
             LocalDisposition::OverflowPostponed => truncated = true,
@@ -40982,7 +41991,7 @@ fn execute_local_budget(
     }
     let budget_hit = fill_hit || truncated;
     if budget_hit {
-        perf_counters::note_zonek_inbound_budget_hit();
+        perf_counters::note_zonek_inbound_budget_hit(zone);
     }
     budget_hit
 }
@@ -41259,7 +42268,7 @@ fn a6_dispatch_local(
             let batch_len = batch.len();
             for p in &batch {
                 exec(&p.ev, sessions);
-                perf_counters::note_zonek_inbound_drained(false);
+                perf_counters::note_zonek_inbound_drained(zone.index(), false);
             }
             LocalDisposition::CountedByExec { batch: batch_len }
         }
@@ -41286,7 +42295,7 @@ fn demux_forward_zone(
     use std::sync::atomic::Ordering;
     let is_cmd = matches!(ev, GateEvent::Command { .. });
     if z >= 1 && is_cmd && outstanding[z].load(Ordering::Relaxed) >= ZONE_INBOUND_MAX_EVENTS {
-        perf_counters::note_zonek_inbound_overflow_dropped();
+        perf_counters::note_zonek_inbound_overflow_dropped(z);
         zonek_overflow_warn(&ev, z, outstanding[z].load(Ordering::Relaxed));
         return;
     }
@@ -41294,6 +42303,8 @@ fn demux_forward_zone(
     let target = if ev.is_priority() { priority } else { normal };
     if target.send(ev).is_ok() && z >= 1 && is_cmd {
         outstanding[z].fetch_add(1, Ordering::Relaxed);
+        // **A36**：区 k 入站「投递成功」（与 drained/carry 同宇宙：只计 Command）。
+        perf_counters::note_zonek_inbound_enqueued(z);
     }
 }
 
@@ -58352,6 +59363,170 @@ break
         }
     }
 
+    /// **A32 牙 ①（区 k 周期存档）**：区 k 的 rest 段集 `M1A_ZONE_REST`（`M1A_PROD | PERSIST_LOCAL`）
+    /// 跑一个 tick ⇒ 到期的本区会话各产**一条** `ZoneSaveRequest` 进 `HostLoop.zone_save_outbox`
+    /// （chr 名正确、载荷可被 DBSvr 侧类型解回）；再跑一个 tick ⇒ **不重复**（tick 已重置）。
+    ///
+    /// 变异（实测）：把 `collect_due_zone_saves` 的 `periodic_save_due` 判定改恒 false（或把
+    /// `PERSIST_LOCAL` 从段集删掉）⇒ 首 tick outbox 0 条 ⇒ 红。
+    #[test]
+    fn zone_periodic_save_enqueues_due_sessions_on_zone_rest() {
+        use mir2_storage::MemPack;
+        let (world, sessions, saves) = two_player_world();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut host = HostLoop::for_zone(zone::ZoneId::new(3), &[(100, 100)], Some(0), &counter);
+        host.world = world;
+        host.ground_sessions = sessions;
+        host.saves = saves;
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.save_human_rcd_time = 5_000;
+        let mut process = None;
+        // 只跑 `PERSIST_LOCAL` 段（+ `WORLD_HEAD` 满足 rest 的 rec 契约）。A/B 与其余 rest 段
+        // 不在本牙判据面内：夹具的会话没有真实登录时刻，跑 `AOI_DOWNLINK` 的体力补帧会按
+        // 「现在 − 会话起始」追帧（`two_player_world` 的 `stamina` 基线为 0），与本牙无关。
+        // 生产 phase 组合由静态牙 `a32_production_wiring_is_pinned` 钉住。
+        let phases = PhaseSet(PhaseSet::PERSIST_LOCAL | PhaseSet::WORLD_HEAD);
+        let mut scratch = TickScratch {
+            rec: Some(mir2_world_bevy::TickRecord::default()),
+            ..TickScratch::default()
+        };
+        let _ = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            phases,
+            &mut scratch,
+            std::time::Instant::now(),
+            None,
+        );
+        let mut names: Vec<String> = host
+            .zone_save_outbox
+            .iter()
+            .map(|r| r.chr_name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"], "到期会话各一条（chr 正确）");
+        for req in &host.zone_save_outbox {
+            let rec = mir2_storage::SaveCharacterData::from_bytes(&req.packet)
+                .expect("区 k 周期存档载荷必须可被 DBSvr 侧类型解回");
+            let d = rec
+                .character_data
+                .expect("character_data")
+                .data
+                .expect("data");
+            let want = if req.chr_name == "alpha" {
+                (11, 22, 649)
+            } else {
+                (33, 44, 1300)
+            };
+            assert_eq!(
+                (d.cur_x, d.cur_y, d.gold),
+                want,
+                "实时态 ChrName={}",
+                req.chr_name
+            );
+        }
+        // 第二轮：tick 已重置 ⇒ 不得重复入队。
+        let mut scratch = TickScratch {
+            rec: Some(mir2_world_bevy::TickRecord::default()),
+            ..TickScratch::default()
+        };
+        let _ = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            phases,
+            &mut scratch,
+            std::time::Instant::now(),
+            None,
+        );
+        assert_eq!(host.zone_save_outbox.len(), 2, "未到期不得再入队");
+    }
+
+    /// **A32 牙 ②（关服覆盖全部区）**：区 0 会话（alpha/beta）+ 区 k `ZoneState` 里的一条会话
+    /// （gamma）⇒ `collect_shutdown_zone_saves` 各收集一次，`shutdown_save_requests` 对 **3 条**
+    /// 在册会话各发起一次 `DB_SAVEHUMANRCD`（chr 集合含全部三区来源）。
+    ///
+    /// 变异（实测）：生产关服分支只收集区 0（去掉 `zone_states` 循环）⇒ 静态牙
+    /// `a32_production_wiring_is_pinned` 红；本牙保留「多来源合并」的行为面。
+    #[test]
+    fn shutdown_save_requests_covers_zone_k_sessions() {
+        let (world, sessions, saves) = two_player_world();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut state = ZoneState::new(zone::ZoneId::new(3), &[(100, 100)], Some(0), &counter);
+        state
+            .host
+            .ground_sessions
+            .insert("gamma".to_string(), test_session_ground(999));
+        state.host.saves.insert(
+            "gamma".to_string(),
+            SavedHuman {
+                account: "acct-g".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let mut requests = collect_shutdown_zone_saves(&sessions, &saves, &world, None);
+        requests.extend(collect_shutdown_zone_saves(
+            &state.host.ground_sessions,
+            &state.host.saves,
+            &state.host.world,
+            None,
+        ));
+        let summary = shutdown_save_requests(
+            requests,
+            3,
+            &mut db,
+            &mut engine,
+            std::time::Duration::from_millis(30),
+        );
+        assert_eq!(summary.sessions, 3, "在册会话数含区 0 与区 k");
+        assert_eq!(summary.fired, 3, "每条在册会话各发起一次");
+        let mut chrs = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            chrs.push(save_record_of(&frame).0);
+        }
+        chrs.sort();
+        assert_eq!(chrs, vec!["alpha", "beta", "gamma"], "chr 集合覆盖全部区");
+    }
+
+    /// **A32 静态牙**：生产接缝钉住（改回「只吃区 0」或删区 k 周期段 ⇒ 红）——
+    /// ① 区 k 驱动的 rest 调用必须是 `M1A_ZONE_REST`；② 关服 A32 块必须遍历
+    /// `zone_states.iter().flatten()` 并走 `collect_shutdown_zone_saves` + `shutdown_save_requests`；
+    /// ③ `drain_zone_saves` 必须合并 `host.zone_save_outbox`。
+    #[test]
+    fn a32_production_wiring_is_pinned() {
+        let src = include_str!("lib.rs");
+        let drv = src.find("fn spawn_minimal_zone(").expect("区 k 驱动定义");
+        let drv_end = src[drv..].find("\n}\n").map_or(src.len(), |k| drv + k + 3);
+        let drv_body = &src[drv..drv_end];
+        assert!(
+            drv_body.contains("PhaseSet::M1A_ZONE_REST"),
+            "区 k 的 rest 段集必须含 PERSIST_LOCAL（M1A_ZONE_REST）"
+        );
+        let mark = src.find("// **A32**：关服存档覆盖").expect("关服 A32 标记");
+        let mark_end = src[mark..]
+            .find("SHUTDOWN_SAVE_TIMEOUT,")
+            .map_or(src.len(), |k| mark + k);
+        let sb = &src[mark..mark_end];
+        assert!(sb.contains("collect_shutdown_zone_saves("));
+        assert!(
+            sb.contains("zone_states.iter().flatten()"),
+            "关服必须遍历全部区状态"
+        );
+        assert!(sb.contains("shutdown_save_requests("));
+        let dz = src
+            .find("fn drain_zone_saves(")
+            .expect("drain_zone_saves 定义");
+        let dz_end = src[dz..].find("\n}\n").map_or(src.len(), |k| dz + k + 3);
+        assert!(
+            src[dz..dz_end].contains("zone_save_outbox"),
+            "区 0 排水必须取区 k 的周期存档出队"
+        );
+    }
+
     /// **B4 #1（`shutdown_save_all`）行为牙**：关服存档的**请求发出序**必须严格等于
     /// **名字升序**——这是现状可观测序（契约），与 `HashMap` 迭代序无关。
     ///
@@ -58556,15 +59731,16 @@ break
             .iter()
             .position(|l| l.trim() == "if shutdown.requested() {")
             .expect("sim 循环里的关服守卫行");
+        // **A32**：生产调用点改为多区合并后的唯一发送点 `shutdown_save_requests(`。
         let call = lines
             .iter()
-            .position(|l| l.trim() == "let summary = shutdown_save_all(")
+            .position(|l| l.trim() == "let summary = shutdown_save_requests(")
             .expect("关服存档调用行");
         assert!(
             call > guard,
             "关服存档调用必须在 `shutdown.requested()` 守卫支内"
         );
-        // 生产代码里 `shutdown_save_all(` 的**调用**（非定义/注释）只此一处；
+        // 生产代码里 `shutdown_save_requests(` 的**调用**（非定义/注释）只此一处；
         // 扫描范围截止 `mod tests {`（用例自身也调用它，不能计入生产面）。
         let tests_start = lines
             .iter()
@@ -58574,10 +59750,7 @@ break
             .iter()
             .enumerate()
             .filter(|(i, l)| {
-                *i < tests_start
-                    && (l.trim() == "let summary = shutdown_save_all("
-                        || (l.trim().starts_with("shutdown_save_all(")
-                            && !l.trim_start().starts_with("fn ")))
+                *i < tests_start && l.trim() == "let summary = shutdown_save_requests("
             })
             .map(|(i, _)| i)
             .collect::<Vec<_>>();
@@ -132167,6 +133340,7 @@ mod zone_command_tests {
         let u0 = perf_counters::zonek_inbound_unsupported();
         let d0 = perf_counters::zonek_inbound_drained();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending,
             0,
@@ -133446,6 +134620,839 @@ mod l2_handoff_tests {
         );
         assert_eq!(rt.dup_dropped(), 1, "新 epoch 不得计入丢弃");
         assert_eq!(rt.promoted(), 2);
+    }
+
+    /// **A35-b 片 1**：`tick_top` 返回本 tick **已提交**的 `(实体 id, 接受方区)`。
+    ///
+    /// 「接受方区」= [`crate::handoff::HandoffAck::from`]（真正执行提升的区），**不是**回执的
+    /// 收件人 `to`（源区）。A35-b 的会话搬迁按它选目标区 ⇒ 区号语义写反会搬到错误区。
+    ///
+    /// 红检：①把 `committed.push` 挪进 `ok=false` 支 ⇒ 正例返回空 ⇒ 红；②`ack.from` 写成
+    /// `ack.to` ⇒ 目标区断言（区 1）变区 0 ⇒ 红；③删 `pending_since.remove(..).is_none()`
+    /// 判空 ⇒ 重复 ack 再返回一条 ⇒ 红；④`ok=false` 也收 ⇒ 拒绝支红。
+    #[test]
+    fn handoff_tick_top_returns_committed_ids_from_accepting_zone() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let layout = Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut rt =
+            crate::handoff::HandoffRuntime::new(zone(0), Arc::clone(&layout), boxes.clone());
+        let mut spawn = mir2_world_bevy::EntitySpawn::new(0, "P", 12, 5);
+        spawn.race = 0;
+        let id = world.add_entity(spawn);
+        world
+            .entities
+            .get_mut(id)
+            .expect("刚插入")
+            .flags
+            .handoff_pending = true;
+        // 源区（区 0）投 offer 给区 1 ⇒ `pending_since` 有该 id。
+        rt.after_phase2(&mut world, 0);
+        assert_eq!(rt.refused(), 0, "前置：offer 已投出、未回滚");
+        let ack = |ok: bool| crate::handoff::HandoffAck {
+            to: zone(0),
+            from: zone(1),
+            id,
+            ok,
+        };
+        {
+            let mut m = boxes[0].lock().unwrap_or_else(|e| e.into_inner());
+            // 同一提交的重复 ack（每 tick 重发 + 目标区逐条回执）⇒ 只认第一份。
+            m.1.push(ack(true));
+            m.1.push(ack(true));
+        }
+        let committed = rt.tick_top(&mut world, 1);
+        assert_eq!(
+            committed,
+            vec![(id, zone(1))],
+            "只认第一份 ack；接受方区 = ack.from（区 1），不是 to（区 0）"
+        );
+        assert!(world.entities.get(id).is_none(), "提交后实体必须从源区移除");
+        // 拒绝支：不提交、实体留在源区。
+        let mut spawn_q = mir2_world_bevy::EntitySpawn::new(0, "Q", 12, 6);
+        spawn_q.race = 0;
+        let qid = world.add_entity(spawn_q);
+        world
+            .entities
+            .get_mut(qid)
+            .expect("刚插入")
+            .flags
+            .handoff_pending = true;
+        rt.after_phase2(&mut world, 2);
+        {
+            let mut m = boxes[0].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(0),
+                from: zone(1),
+                id: qid,
+                ok: false,
+            });
+        }
+        assert!(rt.tick_top(&mut world, 3).is_empty(), "拒绝不得算已提交");
+        assert_eq!(rt.refused(), 1, "拒绝必须计入回滚");
+        assert!(
+            world.entities.get(qid).is_some_and(|e| !e.handoff_pending),
+            "拒绝后实体保留源区且清 pending"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // A35-b：跨区会话搬迁（机制 + Q1 World 会话 + 交易/寄售取消 + 驱动接线）
+    // ------------------------------------------------------------------
+
+    /// 两区夹具：整张图 20x10，区 0 = x 0..=9、区 1 = x 10..=19（与 `layout()` 同形）。
+    fn two_zone_state(z: u32, counter: &std::sync::Arc<std::sync::atomic::AtomicI32>) -> ZoneState {
+        ZoneState::new(zone(z), &[(20, 10)], Some(0), counter)
+    }
+
+    /// 在 `st` 里种一份完整会话（七表 + World 会话），返回**实体 id**。
+    ///
+    /// **这是裸会话夹具**（`super::tests::test_session_ground`：`stamina`/恢复基线为 0）。
+    /// 使用它的测试只跑**纯机制函数**，或 `tick_phase_a` 的 `WORLD_HEAD|WORLD_TAIL` 组合，
+    /// **不跑 rest 段**（`drain_stamina` 等会按「现在 − 起始」追帧长时间空转——A32 `e0` 在
+    /// 区 k 实测踩到）。要接 rest 段必须先改成带真实登录时刻/起始值的会话。生产驱动组合由
+    /// `session_migration_drivers_sit_between_phase_a_and_barrier1` 静态牙钉住。
+    fn seed_full_session(st: &mut ZoneState, chr: &str, socket: i32) -> i32 {
+        let id = st
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, chr, 5, 5));
+        st.host
+            .ground_sessions
+            .insert(chr.to_string(), super::tests::test_session_ground(id));
+        st.host.online.set(OnlineEntry {
+            account: "acct".into(),
+            chr_name: chr.to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket,
+            actor_id: id,
+        });
+        st.host.saves.insert(
+            chr.to_string(),
+            SavedHuman {
+                account: "acct".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        st.host
+            .login_tails
+            .insert(chr.to_string(), smframe::EnterWorldInputs::default());
+        st.host.aoi_frames_total.insert(chr.to_string(), 7);
+        st.host
+            .shop_sessions
+            .insert(chr.to_string(), ShopSession::default());
+        let _ = st.host.world.open_session(chr);
+        if let Some(sess) = st.host.world.sessions.get_mut(chr) {
+            sess.actor_id = Some(id);
+            sess.map_id = 0;
+            sess.stage = mir2_world_bevy::WorldStage::InWorld;
+        }
+        id
+    }
+
+    /// 目标区侧：把 `id` 的实体「提升」进目标区世界（模拟 `promote_mirror_to_real`）并登记
+    /// 展示项（镜像快照会带来它）。
+    fn seed_target_world(st: &mut ZoneState, id: i32, chr: &str) {
+        let spec = mir2_world_bevy::MirrorSpec {
+            id,
+            name: chr.to_string(),
+            map_id: 0,
+            x: 5,
+            y: 5,
+            view_range: 12,
+            race: 0,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: mir2_world_bevy::CellType::Play,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        assert_eq!(
+            st.host.world.handoff_accept(&spec),
+            mir2_world_bevy::HandoffAccept::Inserted,
+            "前置：目标区实体落真身"
+        );
+        st.host.displays.set(
+            id,
+            downlink::ActorDisplay {
+                dir: 0,
+                light: 0,
+                feature: 0,
+                feature_ex: 0,
+                status: 0,
+                name_color: 255,
+                show_name: chr.as_bytes().to_vec(),
+                mount_id: 0,
+            },
+        );
+    }
+
+    fn a6_cmd(chr: &str, socket: i32, seq: u64) -> PendingLocalCmd {
+        PendingLocalCmd {
+            seq,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: chr.to_string(),
+                socket,
+                cmd: CommandMessage {
+                    recog: 0,
+                    ident: 1,
+                    param: 0,
+                    tag: 0,
+                    series: 0,
+                },
+                tail: None,
+            },
+            at_tick: 0,
+        }
+    }
+
+    /// **A35-b · T1**：detach → attach 之后，七表 + World 会话**只在目标区**，两区会话计数和恒 1。
+    ///
+    /// 变异：①「只插不删」（删 `detach` 的 `ground_sessions.remove`）⇒ 源区仍有会话 ⇒ 计数和 2
+    /// 且「源区空」断言红；②「只删不插」（删 `attach` 的 `ground_sessions.insert`）⇒ 计数和 0 红。
+    #[test]
+    fn cross_zone_session_migration_keeps_exactly_one_session() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut src = two_zone_state(1, &counter);
+        let mut dst = two_zone_state(0, &counter);
+        let chr = "mover";
+        let id = seed_full_session(&mut src, chr, 901);
+        // 别人的在飞命令：必须留在源区。
+        src.host.pending_local.insert(1, a6_cmd("other", 902, 1));
+        src.host.pending_local.insert(2, a6_cmd(chr, 901, 2));
+        seed_target_world(&mut dst, id, chr);
+        // 模拟 tick_top 已完成提交：源区实体已移除。
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下完整会话");
+        // 源区：七表空、World 会话 Left、别人的命令仍在。
+        assert!(src.host.ground_sessions.is_empty(), "源区 ground 必须摘空");
+        assert!(
+            src.host.online.find_by_chr(chr).is_none(),
+            "源区 online 必须摘空"
+        );
+        assert!(src.host.saves.is_empty());
+        assert!(src.host.login_tails.is_empty());
+        assert!(src.host.aoi_frames_total.is_empty());
+        assert!(src.host.shop_sessions.is_empty());
+        assert_eq!(src.host.pending_local.len(), 1, "别人的在飞命令留在源区");
+        assert_eq!(
+            src.host
+                .world
+                .session(chr)
+                .map(|sess| (sess.stage, sess.actor_id)),
+            Some((mir2_world_bevy::WorldStage::Left, None)),
+            "Q1：源区 World 会话必须置 Left/None"
+        );
+        let (got_chr, got_id, got_line, got_socket) = dst
+            .host
+            .attach_session(m)
+            .unwrap_or_else(|_| panic!("目标区无冲突 ⇒ 必须插入"));
+        assert_eq!(
+            (got_chr.as_str(), got_id, got_line, got_socket),
+            (chr, id, 0, 901)
+        );
+        // 目标区：七表齐。
+        assert!(dst.host.ground_sessions.contains_key(chr));
+        assert_eq!(
+            dst.host.online.find_by_chr(chr).map(|e| e.actor_id),
+            Some(id)
+        );
+        assert!(dst.host.saves.contains_key(chr));
+        assert!(dst.host.login_tails.contains_key(chr));
+        assert_eq!(dst.host.aoi_frames_total.get(chr), Some(&7));
+        assert!(dst.host.shop_sessions.contains_key(chr));
+        assert_eq!(
+            dst.host.pending_local.len(),
+            1,
+            "本 chr 的在飞命令跟到目标区"
+        );
+        assert!(
+            dst.host
+                .pending_local
+                .values()
+                .all(|p| matches!(&p.ev, GateEvent::Command { chr_name, .. } if chr_name == chr)),
+            "跟过去的只能是本 chr 的命令"
+        );
+        // 不变量：两区会话计数和恒 1（ground 与 online 两侧都查）。
+        assert_eq!(
+            src.host.ground_sessions.len() + dst.host.ground_sessions.len(),
+            1,
+            "同 chr 在两区的会话计数和必须恒 1"
+        );
+        assert_eq!(src.host.online.len() + dst.host.online.len(), 1);
+        assert_eq!(
+            dst.host
+                .world
+                .session(chr)
+                .map(|sess| (sess.stage, sess.actor_id)),
+            Some((mir2_world_bevy::WorldStage::InWorld, Some(id))),
+            "Q1：目标区 World 会话必须写回 InWorld/actor"
+        );
+        assert_eq!(perf_counters::zone_handoff_target_display_missing(), 0);
+    }
+
+    /// **A35-b · 成功面**：`deliver` 成功 ⇒ `router.assign` 改指目标区、`zone_handoff_session_moved`
+    /// +1、`handoff_refused` 不增；源区不回滚。
+    #[test]
+    fn deliver_session_migrations_assigns_router_and_counts_moved() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut src = two_zone_state(1, &counter);
+        let chr = "mover";
+        let id = seed_full_session(&mut src, chr, 901);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, chr);
+        let dst = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let lookup = std::sync::Arc::clone(&dst);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_moved(), 1);
+        assert_eq!(mirror_world_refused(), 0, "成功路径不得计回滚");
+        assert_eq!(router.lookup(0, 901), zone(0), "router 必须改指目标区");
+        assert!(
+            dst.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .host
+                .ground_sessions
+                .contains_key(chr),
+            "目标区必须有会话"
+        );
+        assert!(
+            src.host.ground_sessions.is_empty(),
+            "成功路径不得回滚到源区"
+        );
+    }
+
+    /// **A35-b · T2**：目标冲突 / 目标不可用 ⇒ `deliver` 计失败 + `handoff_refused` 并**整包
+    /// 回滚**（七表逐项完整），目标区不被改动，router 不 assign。
+    ///
+    /// 变异：`restore_session` 只回滚 `ground_sessions` ⇒ online/saves/… 缺失 ⇒ 红。
+    #[test]
+    fn cross_zone_migration_refused_rolls_back_whole_session() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let chr = "mover";
+        let id;
+        let mut src;
+        let dst_arc;
+        let router = zone_router::ZoneRouter::new();
+        // 场景 A：目标区已有同 chr（冲突 ⇒ 拒收）。
+        {
+            src = two_zone_state(1, &counter);
+            id = seed_full_session(&mut src, chr, 901);
+            assert!(src.host.world.release_entity(id));
+            let mut dst = two_zone_state(0, &counter);
+            let _ = seed_full_session(&mut dst, chr, 902);
+            dst_arc = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        }
+        let check_source_intact = |src: &ZoneState| {
+            assert!(
+                src.host.ground_sessions.contains_key(chr),
+                "回滚必须恢复 ground"
+            );
+            assert!(
+                src.host.online.find_by_chr(chr).is_some(),
+                "回滚必须恢复 online"
+            );
+            assert!(src.host.saves.contains_key(chr), "回滚必须恢复 saves");
+            assert!(
+                src.host.login_tails.contains_key(chr),
+                "回滚必须恢复 login_tails"
+            );
+            assert_eq!(src.host.aoi_frames_total.get(chr), Some(&7));
+            assert!(
+                src.host.shop_sessions.contains_key(chr),
+                "回滚必须恢复 shop"
+            );
+            assert_eq!(src.host.pending_local.len(), 1, "回滚必须恢复在飞命令");
+            assert_eq!(
+                src.host
+                    .world
+                    .session(chr)
+                    .map(|sess| (sess.stage, sess.actor_id)),
+                Some((mir2_world_bevy::WorldStage::InWorld, Some(id))),
+                "回滚必须把 World 会话写回 InWorld"
+            );
+        };
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        src.host.pending_local.insert(9, a6_cmd(chr, 901, 9));
+        let dst_for_lookup = std::sync::Arc::clone(&dst_arc);
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&dst_for_lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(mir2_world_bevy::mirror_metrics::handoff_refused(), 1);
+        check_source_intact(&src);
+        assert_eq!(router.len(), 0, "失败路径不得 assign");
+        {
+            let dst = dst_arc.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(
+                dst.host.ground_sessions.len(),
+                1,
+                "目标区原有会话不得被改动"
+            );
+            let dst_own = dst
+                .host
+                .world
+                .session(chr)
+                .and_then(|sess| sess.actor_id)
+                .expect("目标区自己那份的 actor");
+            assert_ne!(dst_own, id, "两区 id 段不同 ⇒ 冲突源不是同一实体");
+            assert_eq!(
+                dst.host.online.find_by_chr(chr).map(|e| e.actor_id),
+                Some(dst_own),
+                "目标区仍是它自己那份（冲突源），不得被迁移改动"
+            );
+        }
+        // 场景 B：目标区不可用（lookup 返回 None）。
+        let m2 = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(9))
+            .expect("再次摘下");
+        deliver_session_migrations(
+            |_| None,
+            Some(&router),
+            vec![m2],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 2);
+        assert_eq!(mirror_world_refused(), 2);
+        check_source_intact(&src);
+        assert_eq!(router.len(), 0);
+    }
+
+    /// `handoff_refused` 的读取缝（`mirror_metrics` 的模块名较长，集中一处）。
+    fn mirror_world_refused() -> u64 {
+        mir2_world_bevy::mirror_metrics::handoff_refused()
+    }
+
+    /// **A35-b · T3**：交易中跨区 ⇒ 走既有 `deal_cancel_between`，**恰好一条** `SM_DEALCANCEL`
+    /// （不丢不重）；两表不搬（条目在源区清掉）。
+    ///
+    /// 变异：不取消直接搬 ⇒ 0 帧红；取消两遍 ⇒ 2 帧红。
+    #[test]
+    fn cross_zone_trade_cancel_emits_exactly_one_dealcancel() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut st = two_zone_state(1, &counter);
+        let _id = seed_full_session(&mut st, "dealer", 901);
+        st.host.trade_sessions.insert(
+            "dealer".into(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        let shared = SharedServices::for_test();
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0u8, tx);
+        let displays = downlink::DisplayTable::new();
+        let mut sell_off = std::collections::HashMap::new();
+        let canceled = cancel_cross_zone_trade_and_selloff(
+            "dealer",
+            &st.host.online,
+            &st.host.world,
+            &displays,
+            &mut st.host.ground_sessions,
+            &mut st.host.trade_sessions,
+            &mut sell_off,
+            &gates,
+            &shared.enter_cfg.trade,
+            &shared.enter_cfg.catalog,
+            &shared.enter_cfg.sell_off,
+            None,
+        );
+        assert!(canceled, "dealing ⇒ 必须发生取消");
+        assert!(
+            !st.host.trade_sessions.contains_key("dealer"),
+            "交易表不搬（残条在源区清掉）"
+        );
+        let mut dealcancel = 0u32;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_DEALCANCEL {
+                dealcancel += 1;
+            }
+        }
+        assert_eq!(dealcancel, 1, "恰好一条 SM_DEALCANCEL（不丢不重）");
+    }
+
+    /// **A35-b · T3b**：寄售中跨区 ⇒ 取消帧先发，**恰好一条** `SM_SellOffCANCEL`；`SellOffBook`
+    /// 的该卖家条目被取消（不搬）。区 k（`book=None`）只丢弃空表、不产帧。
+    #[test]
+    fn cross_zone_selloff_cancel_emits_one_selloffcancel() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut st = two_zone_state(1, &counter);
+        let _id = seed_full_session(&mut st, "seller", 901);
+        st.host.sell_off_sessions.insert(
+            "seller".into(),
+            game_svr::selloff::SellOffState {
+                sell_off_confirm: true,
+                ..game_svr::selloff::SellOffState::default()
+            },
+        );
+        let mut book = game_svr::selloff::SellOffBook {
+            entries: vec![game_svr::selloff::DealOffInfo {
+                deal_chr_name: "seller".into(),
+                flag: 0,
+                ..game_svr::selloff::DealOffInfo::new_with_slots()
+            }],
+        };
+        let shared = SharedServices::for_test();
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0u8, tx);
+        let displays = downlink::DisplayTable::new();
+        let mut trade = std::collections::HashMap::new();
+        let canceled = cancel_cross_zone_trade_and_selloff(
+            "seller",
+            &st.host.online,
+            &st.host.world,
+            &displays,
+            &mut st.host.ground_sessions,
+            &mut trade,
+            &mut st.host.sell_off_sessions,
+            &gates,
+            &shared.enter_cfg.trade,
+            &shared.enter_cfg.catalog,
+            &shared.enter_cfg.sell_off,
+            Some(&mut book),
+        );
+        assert!(canceled, "寄售中 ⇒ 必须发生取消");
+        assert!(
+            book.entries.is_empty(),
+            "该卖家的寄售条目必须被取消（不搬）"
+        );
+        assert!(!st.host.sell_off_sessions.contains_key("seller"));
+        let mut cancel_frames = 0u32;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_SellOffCANCEL {
+                cancel_frames += 1;
+            }
+        }
+        assert_eq!(cancel_frames, 1, "恰好一条 SM_SellOffCANCEL");
+        // 区 k（无进程态 book）：空态 no-op、不产帧、不报 canceled。
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates2 = std::collections::HashMap::new();
+        gates2.insert(0u8, tx2);
+        let canceled_k = cancel_cross_zone_trade_and_selloff(
+            "seller",
+            &st.host.online,
+            &st.host.world,
+            &displays,
+            &mut st.host.ground_sessions,
+            &mut trade,
+            &mut st.host.sell_off_sessions,
+            &gates2,
+            &shared.enter_cfg.trade,
+            &shared.enter_cfg.catalog,
+            &shared.enter_cfg.sell_off,
+            None,
+        );
+        assert!(!canceled_k, "区 k 空态 ⇒ 不取消");
+        assert!(rx2.try_recv().is_err(), "区 k 不得产帧");
+    }
+
+    /// **A35-b · Q1「活尸牙」**：迁移后目标区收到 `Closed` ⇒ `world.disconnect` 能摘掉实体
+    /// （不出现活尸），且源区 World 会话为 `Left`。
+    ///
+    /// 变异：`attach_session` 不写回 `world.session` ⇒ 目标区 `disconnect` 命中 `NoSession` ⇒
+    /// 实体仍在 ⇒ 红。
+    #[test]
+    fn migrated_session_disconnects_on_target_without_entity_leak() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut src = two_zone_state(1, &counter);
+        let chr = "mover";
+        let id = seed_full_session(&mut src, chr, 901);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, chr);
+        dst.host
+            .attach_session(m)
+            .unwrap_or_else(|_| panic!("attach 必须成功"));
+        assert!(
+            dst.host
+                .world
+                .session(chr)
+                .is_some_and(|s| s.stage == mir2_world_bevy::WorldStage::InWorld),
+            "前置：目标区 World 会话在"
+        );
+        let handled = handle_zone_closed(&mut dst, chr, 0, 901, &[]);
+        assert!(handled, "目标区在线项在 ⇒ Closed 必须被处理");
+        assert!(
+            dst.host.world.entities.get(id).is_none(),
+            "迁移后断线必须摘实体（活尸牙：World 会话没随迁时本断言红）"
+        );
+        assert!(
+            dst.host
+                .world
+                .session(chr)
+                .is_some_and(|s| s.stage == mir2_world_bevy::WorldStage::Left),
+            "目标区会话应置 Left"
+        );
+        assert!(
+            src.host
+                .world
+                .session(chr)
+                .is_some_and(|s| s.stage == mir2_world_bevy::WorldStage::Left),
+            "源区会话应保持 Left"
+        );
+    }
+
+    /// **A35-b · 接线牙**：`tick_phase_a` 的 WORLD_HEAD 消费 `tick_top` 的 committed ids ⇒
+    /// （夹具是裸会话：本用例只跑 `WORLD_HEAD|WORLD_TAIL`，**不跑 rest 段**——理由见
+    /// [`seed_full_session`] 的注释。）
+    /// 源区七表当场摘空、搬迁包进入 `pending_session_migrations`（供驱动锁外 attach）。
+    ///
+    /// 变异：删 WORLD_HEAD 里的消费循环 ⇒ 包为空、源区仍有会话 ⇒ 红。
+    #[test]
+    fn tick_phase_a_detaches_committed_session_into_pending() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        let layout = Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut host = HostLoop::for_zone(zone(1), &[(20, 10)], Some(0), &counter);
+        host.handoff_runtime = Some(crate::handoff::HandoffRuntime::new(
+            zone(1),
+            Arc::clone(&layout),
+            boxes.clone(),
+        ));
+        let chr = "mover";
+        let id = seed_full_session_for_host(&mut host, chr, 901);
+        // 跨界时正在交易 ⇒ WORLD_HEAD 必须先取消（帧先发）再 detach。
+        host.trade_sessions.insert(
+            chr.to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..game_svr::trade::DealState::default()
+            },
+        );
+        let (g_tx, mut g_rx) = mpsc::unbounded_channel::<SimToGate>();
+        host.gates.insert(0, g_tx);
+        // 实体跨到区 0 的 rect ⇒ 标记 pending，after_phase2 投 offer 给区 0。
+        host.world
+            .entities
+            .get_mut(id)
+            .expect("实体在")
+            .flags
+            .handoff_pending = true;
+        host.handoff_runtime
+            .as_mut()
+            .expect("运行时在")
+            .after_phase2(&mut host.world, 0);
+        // 目标区（区 0）收下并回执。
+        {
+            let mut m = boxes[1].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(1),
+                from: zone(0),
+                id,
+                ok: true,
+            });
+        }
+        let (shared, _process) = (SharedServices::for_test(), ProcessServices::for_test());
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown: ShutdownSignal::Flag(std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            )),
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
+            control_inbox: None,
+        };
+        let mut shared = shared;
+        let mut process = None;
+        let mut io = io;
+        let mut scratch = TickScratch::default();
+        let outcome = host.tick_phase_a(
+            &mut shared,
+            &mut process,
+            &mut io,
+            PhaseSet(PhaseSet::WORLD_HEAD | PhaseSet::WORLD_TAIL),
+            &mut scratch,
+            &mut None,
+        );
+        assert_eq!(outcome, TickOutcome::Continue);
+        assert_eq!(
+            host.pending_session_migrations.len(),
+            1,
+            "已提交的跨界必须摘成搬迁包（WORLD_HEAD 消费循环被删 ⇒ 本断言红）"
+        );
+        let m = &host.pending_session_migrations[0];
+        assert_eq!(
+            (m.chr_name.as_str(), m.id, m.line, m.socket, m.target),
+            (chr, id, 0, 901, zone(0))
+        );
+        assert!(host.ground_sessions.is_empty(), "源区 ground 必须当场摘空");
+        assert!(host.online.find_by_chr(chr).is_none());
+        assert!(host.saves.is_empty() && host.login_tails.is_empty());
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 0);
+        // 取消接线：dealing ⇒ 计数 1、交易表不搬、恰一条 SM_DEALCANCEL。
+        assert_eq!(perf_counters::zone_handoff_canceled_trades(), 1);
+        assert!(!host.trade_sessions.contains_key(chr), "交易表不搬");
+        let mut cancels = 0u32;
+        while let Ok(SimToGate::SendFrame { body, .. }) = g_rx.try_recv() {
+            if CommandMessage::from_bytes(&body)
+                .is_some_and(|cm| cm.ident == mir2_protocol::messages::SM_DEALCANCEL)
+            {
+                cancels += 1;
+            }
+        }
+        assert_eq!(cancels, 1, "接线路径恰好一条 SM_DEALCANCEL");
+    }
+
+    /// **A35-b · 静态牙（接线提示，非行为证据）**：两个驱动点必须夹在「A 段之后、barrier1
+    /// 之前」——区 0：`tick_phase_a(` < `A35-b 驱动点（区 0）` < `await_neighbors(self.ticks)`；
+    /// 区 k：`tick_phase_a(` < `A35-b 驱动点（区 k）` < `await_neighbors(tick)`。
+    ///
+    /// 为什么钉顺序：源区 detach 在 A 的 WORLD_HEAD（持本区锁）完成，attach 只能持目标区一把锁
+    /// （A9）⇒ 必须等 A 返回；又不得跨过 barrier1，否则迁移窗口从亚 tick 级扩到跨屏障/跨 tick。
+    ///
+    /// 红检：把区 0 的搬迁块整体挪到 `await_neighbors` 之后 ⇒ 断言红。
+    #[test]
+    fn session_migration_drivers_sit_between_phase_a_and_barrier1() {
+        let src = include_str!("lib.rs");
+        let d0 = src
+            .find("A35-b 驱动点（区 0）")
+            .expect("区 0 驱动点标记必须在源码里");
+        let a0 = src[..d0]
+            .rfind("let outcome = self.tick_phase_a(")
+            .expect("区 0 的 tick_phase_a 调用");
+        // **从 `a0` 起找**（不是从 `d0`）：本测试自身的源码文本里也含该字面量，从 `d0` 起找
+        // 会变成自指（『源码文本牙可绕过』）；`a0` 起的第一处就是真实的 barrier1。
+        let b0 = a0
+            + src[a0..]
+                .find("ops.await_neighbors(self.ticks)")
+                .expect("区 0 的 barrier1");
+        assert!(a0 < d0, "区 0 驱动点必须在 A 段之后");
+        assert!(d0 < b0, "区 0 驱动点必须在 barrier1 之前");
+        let dk = src
+            .find("A35-b 驱动点（区 k）")
+            .expect("区 k 驱动点标记必须在源码里");
+        let ak = src[..dk]
+            .rfind("st.host.tick_phase_a(")
+            .expect("区 k 的 tick_phase_a 调用");
+        // 同区 0：从 `ak` 起找，避开本测试源码里的字面量。
+        let bk = ak
+            + src[ak..]
+                .find("ops.await_neighbors(tick)")
+                .expect("区 k 的 barrier1");
+        assert!(ak < dk, "区 k 驱动点必须在锁1（A 段）之后");
+        assert!(dk < bk, "区 k 驱动点必须在 barrier1 之前");
+    }
+
+    /// [`seed_full_session`] 的 `HostLoop` 版（接线牙在 `HostLoop` 上跑 `tick_phase_a`）。
+    fn seed_full_session_for_host(host: &mut HostLoop, chr: &str, socket: i32) -> i32 {
+        let id = host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(0, chr, 5, 5));
+        host.ground_sessions
+            .insert(chr.to_string(), super::tests::test_session_ground(id));
+        host.online.set(OnlineEntry {
+            account: "acct".into(),
+            chr_name: chr.to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket,
+            actor_id: id,
+        });
+        host.saves.insert(
+            chr.to_string(),
+            SavedHuman {
+                account: "acct".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        host.login_tails
+            .insert(chr.to_string(), smframe::EnterWorldInputs::default());
+        host.aoi_frames_total.insert(chr.to_string(), 7);
+        host.shop_sessions
+            .insert(chr.to_string(), ShopSession::default());
+        let _ = host.world.open_session(chr);
+        if let Some(sess) = host.world.sessions.get_mut(chr) {
+            sess.actor_id = Some(id);
+            sess.map_id = 0;
+            sess.stage = mir2_world_bevy::WorldStage::InWorld;
+        }
+        id
     }
 
     // ------------------------------------------------------------------
@@ -135383,6 +137390,7 @@ mod l2_s3_cross_recipient_tests {
         let mut executed = 0u64;
         let mut pending_local = std::collections::BTreeMap::new();
         let budget_hit = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -135449,6 +137457,7 @@ mod l2_s3_cross_recipient_tests {
         let (f1, h1) = fill_pending(&rx, &ctl_rx, &mut pending, 8, &mut seq, |_ev| {});
         assert_eq!((f1, h1), (8, false));
         let bh1 = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -135485,6 +137494,7 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(carry_prefix, 6);
         let c0 = perf_counters::zonek_inbound_carry();
         let bh2 = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             carry_prefix,
@@ -135587,11 +137597,11 @@ mod l2_s3_cross_recipient_tests {
         let (_g, path) = zonek_arm_counters("columns");
         let ev = zonek_test_cmd(0);
         perf_counters::note_inbound_drained(false, &ev); // 区 0 命令分量
-        perf_counters::note_zonek_inbound_drained(false);
-        perf_counters::note_zonek_inbound_drained(true);
-        perf_counters::note_zonek_inbound_budget_hit();
-        perf_counters::note_zonek_inbound_overflow_dropped();
-        perf_counters::note_zonek_inbound_pending_discarded();
+        perf_counters::note_zonek_inbound_drained(1, false);
+        perf_counters::note_zonek_inbound_drained(1, true);
+        perf_counters::note_zonek_inbound_budget_hit(1);
+        perf_counters::note_zonek_inbound_overflow_dropped(1);
+        perf_counters::note_zonek_inbound_pending_discarded(1);
         perf_counters::note_zonek_inbound_unsupported();
         perf_counters::write_tick();
         perf_counters::note_inbound_drained(false, &ev); // N=1 形态：只 bump 区 0
@@ -135717,6 +137727,7 @@ mod l2_s3_cross_recipient_tests {
             );
             let mut executed = 0u64;
             let _ = execute_local_budget(
+                0,
                 &mut pending,
                 &mut pending_local,
                 0,
@@ -135763,6 +137774,7 @@ mod l2_s3_cross_recipient_tests {
         );
         let mut executed = 0u64;
         let _ = execute_local_budget(
+            0,
             &mut pending,
             &mut pending_local,
             0,
@@ -135889,6 +137901,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let d0 = perf_counters::zonek_inbound_drained();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136005,6 +138018,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let d0 = perf_counters::zonek_inbound_drained();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136064,6 +138078,7 @@ mod l2_s3_cross_recipient_tests {
         let mut pending_local = std::collections::BTreeMap::new();
         let mut exec = |_e: &GateEvent, _s: &mut A6Sessions| {};
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136144,6 +138159,7 @@ mod l2_s3_cross_recipient_tests {
             }
         };
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136299,6 +138315,7 @@ mod l2_s3_cross_recipient_tests {
         );
         let mut buffer = std::collections::VecDeque::new();
         let _ = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136439,6 +138456,7 @@ mod l2_s3_cross_recipient_tests {
         let o0 = perf_counters::zonek_control_defer_overflow();
         let d0 = perf_counters::zonek_inbound_drained();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136524,6 +138542,7 @@ mod l2_s3_cross_recipient_tests {
         let d0 = perf_counters::zonek_inbound_drained();
         let o0 = perf_counters::zonek_control_defer_overflow();
         let hit = execute_local_budget(
+            0,
             &mut buffer,
             &mut pending_local,
             0,
@@ -136578,6 +138597,7 @@ mod l2_s3_cross_recipient_tests {
         };
         let mut buffer2 = std::collections::VecDeque::new();
         let _ = execute_local_budget(
+            0,
             &mut buffer2,
             &mut pending_local,
             0,
@@ -136922,6 +138942,96 @@ mod perf_writer_alignment_tests {
     use super::*;
     use perf_counters::CrossRecipientOutcome as O;
     use perf_counters::CrossRecipientSurface as S;
+
+    /// **A36 序列化牙**：`zone_metrics` 末列 —— ① 表头列数 = 每行字段数；② 每行可解析且 `v==1`；
+    /// ③ JSON 内无 tab（参差行判定会判 rc=2，正好抓）；④ 漏一列 ⇒ ① 红（变异实测）。
+    #[test]
+    fn zone_metrics_column_is_valid_compact_json_with_matching_columns() {
+        let _g = perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        perf_counters::set_slicing_enabled(true);
+        perf_counters::set_zone_count(2);
+        let path =
+            std::env::temp_dir().join(format!("mir2_perf_zone_metrics_{}.tsv", std::process::id()));
+        perf_counters::init_with_path(&path).expect("init perf tsv");
+        // 基线行：把各 `swap(0)` 计数清零；累计计数取基线值后按增量断言。
+        perf_counters::write_tick();
+        let landed1_before = perf_counters::zone_login_landed(1);
+        let uncovered_before = perf_counters::zone_login_uncovered();
+        let target_before = perf_counters::zone_target_unavailable();
+        let offzone_before = perf_counters::zone_login_offzone();
+        let unassigned_before = perf_counters::zone_router_unassigned();
+        let moved_before = perf_counters::zone_handoff_session_moved();
+        let failed_before = perf_counters::zone_handoff_session_failed();
+        let canceled_before = perf_counters::zone_handoff_canceled_trades();
+        let missing_before = perf_counters::zone_handoff_target_display_missing();
+        perf_counters::note_region_barrier_us_for_zone(0, 120);
+        perf_counters::note_region_barrier_us_for_zone(1, 450);
+        perf_counters::note_zonek_inbound_enqueued(1);
+        perf_counters::note_zonek_inbound_enqueued(1);
+        perf_counters::note_zonek_inbound_drained(1, false);
+        perf_counters::note_zonek_inbound_drained(1, true);
+        perf_counters::note_zonek_inbound_budget_hit(1);
+        perf_counters::note_zonek_inbound_overflow_dropped(1);
+        perf_counters::note_zonek_inbound_pending_discarded(1);
+        perf_counters::note_zone_login_landed(1);
+        perf_counters::note_zone_login_uncovered();
+        perf_counters::note_zone_target_unavailable();
+        perf_counters::note_zone_login_offzone();
+        perf_counters::note_zone_router_unassigned();
+        perf_counters::note_zone_handoff_session_moved();
+        perf_counters::note_zone_handoff_session_failed();
+        perf_counters::note_zone_handoff_canceled_trades();
+        perf_counters::note_zone_handoff_target_display_missing();
+        perf_counters::write_tick();
+        let text = std::fs::read_to_string(&path).expect("read tsv");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= 2, "表头 + 至少一行数据");
+        let header_cols = lines[0].split('\t').count();
+        assert_eq!(
+            lines[0].split('\t').next_back(),
+            Some("zone_metrics"),
+            "表头末列必须是 zone_metrics"
+        );
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(
+                line.split('\t').count(),
+                header_cols,
+                "第 {i} 行的字段数必须 = 表头列数"
+            );
+        }
+        let zm = lines.last().unwrap().split('\t').next_back().unwrap();
+        assert!(!zm.contains('\t'), "zone_metrics 内不得含 tab");
+        assert!(!zm.contains('\n'), "zone_metrics 内不得含换行");
+        let v: serde_json::Value = serde_json::from_str(zm).expect("zone_metrics 必须可解析");
+        assert_eq!(v["v"], 1, "v==1");
+        assert_eq!(v["barrier_us"]["0"], 120);
+        assert_eq!(v["barrier_us"]["1"], 450);
+        assert_eq!(v["inbound"]["1"]["enq"], 2);
+        assert_eq!(v["inbound"]["1"]["drain"], 2);
+        assert_eq!(v["inbound"]["1"]["carry"], 1);
+        assert_eq!(v["inbound"]["1"]["budget_hit"], 1);
+        assert_eq!(v["inbound"]["1"]["overflow_drop"], 1);
+        assert_eq!(v["inbound"]["1"]["pending_discard"], 1);
+        assert_eq!(v["landed"]["1"], landed1_before + 1);
+        assert_eq!(v["failures"]["uncovered"], uncovered_before + 1);
+        assert_eq!(v["failures"]["target_unavailable"], target_before + 1);
+        assert_eq!(v["failures"]["offzone"], offzone_before + 1);
+        assert_eq!(v["failures"]["router_unassigned"], unassigned_before + 1);
+        assert_eq!(v["failures"]["sampled"]["router_unassigned"], true);
+        assert_eq!(v["failures"]["sampled"]["uncovered"], false);
+        // **A35-b 导出**：顶层 `handoff`（累计值，键序 canceled_trades → session_failed →
+        // session_moved → target_display_missing）。
+        assert_eq!(v["handoff"]["session_moved"], moved_before + 1);
+        assert_eq!(v["handoff"]["session_failed"], failed_before + 1);
+        assert_eq!(v["handoff"]["canceled_trades"], canceled_before + 1);
+        assert_eq!(v["handoff"]["target_display_missing"], missing_before + 1);
+        perf_counters::reset_writer_for_tests();
+        perf_counters::set_zone_count(0);
+        perf_counters::set_slicing_enabled(false);
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn write_tick_columns_align_with_header() {
