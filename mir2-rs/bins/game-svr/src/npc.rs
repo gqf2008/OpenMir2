@@ -2671,6 +2671,66 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             it.index = u16::try_from(v).unwrap_or(0);
         }
     }
+    /// `UseItems[i] != null`（`UseItems = new UserItem[13]` 全 null 数组；oracle 直接解引用
+    /// 空槽会抛 `NullReferenceException`）。
+    fn use_item_slot_present(&self, i: i32) -> bool {
+        usize::try_from(i)
+            .ok()
+            .and_then(|idx| self.use_items.get(idx))
+            .is_some_and(Option::is_some)
+    }
+    /// `UseItems[i].Desc[attr]`（oracle `UserItem.Desc` 是 `byte[14]`）。空槽/越界 ⇒ 0。
+    ///
+    /// **A27 P1**：此前未覆写 ⇒ 继承 trait 缺省 0 ⇒ `UPGRADEITEM` 的 Desc 增量读不到槽对象。
+    fn use_item_desc(&self, i: i32, attr: i32) -> i32 {
+        let (Ok(idx), Ok(a)) = (usize::try_from(i), usize::try_from(attr)) else {
+            return 0;
+        };
+        self.use_items
+            .get(idx)
+            .and_then(Option::as_ref)
+            .map_or(0, |it| i32::from(it.desc.get(a).copied().unwrap_or(0)))
+    }
+    /// `UseItems[i].Desc[attr] = v`（C# `(byte)` 赋值 ⇒ 取低 8 位；引擎侧已钳 255）。
+    fn set_use_item_desc(&mut self, i: i32, attr: i32, v: i32) {
+        let (Ok(idx), Ok(a)) = (usize::try_from(i), usize::try_from(attr)) else {
+            return;
+        };
+        if let Some(Some(it)) = self.use_items.get_mut(idx) {
+            if let Some(cell) = it.desc.get_mut(a) {
+                *cell = u8::try_from(v & 0xFF).unwrap_or(0);
+            }
+        }
+    }
+    /// `UseItems[i].Dura`（`ushort`）。
+    fn use_item_dura(&self, i: i32) -> i32 {
+        let Ok(idx) = usize::try_from(i) else {
+            return 0;
+        };
+        self.use_items
+            .get(idx)
+            .and_then(Option::as_ref)
+            .map_or(0, |it| i32::from(it.dura))
+    }
+    /// `UseItems[i].DuraMax`（`ushort`）。
+    fn use_item_dura_max(&self, i: i32) -> i32 {
+        let Ok(idx) = usize::try_from(i) else {
+            return 0;
+        };
+        self.use_items
+            .get(idx)
+            .and_then(Option::as_ref)
+            .map_or(0, |it| i32::from(it.dura_max))
+    }
+    /// `UseItems[i].DuraMax = v`（C# `ushort` 赋值 ⇒ 取低 16 位；引擎侧已钳 `u16::MAX`）。
+    fn set_use_item_dura_max(&mut self, i: i32, v: i32) {
+        let Ok(idx) = usize::try_from(i) else {
+            return;
+        };
+        if let Some(Some(it)) = self.use_items.get_mut(idx) {
+            it.dura_max = u16::try_from(v & 0xFFFF).unwrap_or(0);
+        }
+    }
     /// `SystemShare.ItemSystem.GetStdItemName(UseItems[i].Index)`。
     fn use_item_std_name(&self, i: i32) -> String {
         let Ok(idx) = usize::try_from(i) else {
@@ -2876,16 +2936,16 @@ mod tests {
     fn unimplemented_action_is_counted_and_warned_once() {
         let _c = crate::perf_counters::test_zone_counters_scope();
         assert!(
-            mir2_script::engine::dispatch::execution_registered(212),
-            "前置：212（UPGRADEITEM）在 C# 注册表内"
+            mir2_script::engine::dispatch::execution_registered(209),
+            "前置：209（CLEARNEEDITEMS）在 C# 注册表内"
         );
         assert!(
-            !mir2_script::engine::dispatch::execution_implemented(212),
-            "前置：212 在 Rust 侧仍未实现（本卡不实现它）"
+            !mir2_script::engine::dispatch::execution_implemented(209),
+            "前置：209 在 Rust 侧仍未实现（A27 P1 明确不动 209/210/19）"
         );
         let mut d = def("QManage", "@A29Once", "说词");
         d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
-            n_cmd_code: 212,
+            n_cmd_code: 209,
             ..Default::default()
         }];
         let host = host_with(vec![d]);
@@ -2929,13 +2989,41 @@ mod tests {
         );
     }
 
+    /// **A27 P1 对 A29 的回归牙**：同一 `label` 用 **212**（`UPGRADEITEM`）——
+    /// 实现**前**该夹具计数 `+1`（旧 `unimplemented_action_is_counted_and_warned_once`
+    /// 即以 212 为例）；P1 把 212 放进 `IMPLEMENTED_EXECUTIONS` 后，同一夹具必须 **`+0`**。
+    #[test]
+    fn implemented_upgrade_item_212_no_longer_counts() {
+        let _c = crate::perf_counters::test_zone_counters_scope();
+        assert!(
+            mir2_script::engine::dispatch::execution_implemented(212),
+            "前置：A27 P1 后 212 必须已实现"
+        );
+        let mut d = def("QManage", "@A29P1", "说词");
+        d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
+            n_cmd_code: 212,
+            ..Default::default()
+        }];
+        let host = host_with(vec![d]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = host.goto_label("QManage", &mut player, "@A29P1", false);
+        assert_eq!(
+            crate::perf_counters::script_action_errors(),
+            0,
+            "212 已实现 ⇒ 不得再计入未实现动作错误（实现前为 +1）"
+        );
+        assert_eq!(crate::perf_counters::script_action_error_wrns(), 0);
+    }
+
     /// **卡 A29 限速**：同一 `label+动作` 连触发 5 次 ⇒ 计数 5、WRN 仍只有 1 条。
     #[test]
     fn repeated_unimplemented_action_counts_five_but_warns_once() {
         let _c = crate::perf_counters::test_zone_counters_scope();
         let mut d = def("QManage", "@A29Rate", "说词");
         d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
-            n_cmd_code: 212,
+            n_cmd_code: 209,
             ..Default::default()
         }];
         let host = host_with(vec![d]);
