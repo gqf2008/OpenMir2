@@ -1075,13 +1075,29 @@ impl World {
 ///
 /// oracle 里清表在各自主人的 `Run()` 里跑；本骨架玩家无 `Run` ⇒ 在 [`World`] 的 tick 里集中跑。
 /// 空表零动作（既有 golden 逐字节不变；无随机数）。
-pub(crate) fn slave_list_cleanup_all_impl<A: crate::entity::EntityAccess>(access: &mut A) {
+pub(crate) fn slave_list_cleanup_all_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    candidates: Option<&[i32]>,
+) {
     // 槽位顺序收集（与旧 `iter_ref` 同序）；ghost 主人不替它清表（makeghost-lifecycle M-2/B14）。
+    // **A43**：索引可用 ⇒ 只复核 `slave_lists` 候选（同一谓词 live 复核）；`None` ⇒ 原全表扫。
     let mut ids: Vec<i32> = Vec::new();
-    for id in access.order_ids() {
+    let mut push_if_owner = |access: &A, id: i32| {
         if let Some(e) = access.get(id) {
             if !e.slave_list.is_empty() && !e.ghost {
                 ids.push(id);
+            }
+        }
+    };
+    match candidates {
+        Some(list) => {
+            for &id in list {
+                push_if_owner(&*access, id);
+            }
+        }
+        None => {
+            for id in access.order_ids() {
+                push_if_owner(&*access, id);
             }
         }
     }
@@ -1092,7 +1108,7 @@ pub(crate) fn slave_list_cleanup_all_impl<A: crate::entity::EntityAccess>(access
 
 /// 旧入口（facade）：委托 [`slave_list_cleanup_all_impl`]。
 pub fn slave_list_cleanup_all(world: &mut World) {
-    slave_list_cleanup_all_impl(&mut world.entities);
+    slave_list_cleanup_all_impl(&mut world.entities, None);
 }
 
 /// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:363-397`）。
