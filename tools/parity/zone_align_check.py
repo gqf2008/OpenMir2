@@ -442,6 +442,9 @@ def run_core(golden_dir, test_dir, sidecar, socket, mutant="", entry_window_keys
                     "怪物 hitter 的 31 仍 raw（映射不到角色 ⇒ 原样比较，两侧不同即红）；"
                     "未登记 ident（638/41/22/23/1104 等）一律原样比较（出现且 recog 映射到角色即红）；"
                     "22/23 当前场景未产生（探针侧事实，不是比较器过滤）；1104 无生产调用点；"
+                    "怪物方向类帧（10/11/13/14/15/22/23/26/28/30/5010/1102）未参与比较"
+                    "（recog 未映射 ⇒ other 桶）；642/653/622/600/601/52 的 recog=数值字段 ⇒ "
+                    "当前落 other 桶、不判（recog 语义分层未实施，见 A19）；"
                     "EDCode 缺失/解码失败 ⇒ degraded + WRN + rc=2"),
     }
     rc = 1 if (reds or bad_order or judge_d_red) else 0
@@ -660,7 +663,8 @@ def _selftest():
 
         # ---- A23：surface 覆盖边界必须自述（meta 牙，防文本漂移）----
         surface = ((out_638.get("body_role_norm") or {}).get("surface")) or ""
-        need = ["31", "角色", "怪物 hitter", "638", "41", "22", "23", "1104"]
+        need = ["31", "角色", "怪物 hitter", "638", "41", "22", "23", "1104",
+                "方向类帧", "642"]
         missing = [w for w in need if w not in surface]
         ck("body_role_norm_surface_lists_boundaries", not missing,
            f"missing={missing} surface={surface[:160]}")
@@ -725,6 +729,23 @@ def _selftest():
            f"rc={rd2} bn={od2['body_role_norm']}")
         _BODY_NORM_CACHE.clear()
 
+        # ---- A19 盲区元牙（opc-27 裁决 2②）：recog=数值字段的 6 个 ident 当前**不进入判据** ----
+        # 642(dura)/653(gold)/622(weight)/600/601(make_index)/52(gold) 的 recog 是数值而不是
+        # ActorId ⇒ `key()` 映射不到角色 ⇒ other 桶、不参与 A/C1/C2/D。本牙钉住"现状是没比"，
+        # 防止将来有人把这些 ident 移进判据却没做字段级数值处理时静默假红/假绿。
+        blind_idents = [642, 653, 622, 600, 601, 52]
+        out_bl, rc_bl = run_core(
+            *case("a19_blind",
+                  [frame(i, 9001, param=1) for i in blind_idents],
+                  [frame(i, 9002, param=1) for i in blind_idents]),
+            1000, roles=roles)
+        ck("recog_numeric_idents_stay_outside_judgement",
+           rc_bl == 0 and out_bl["multiset_reds"] == []
+           and out_bl["other_frames_golden"] == len(blind_idents)
+           and out_bl["other_frames_test"] == len(blind_idents),
+           f"rc={rc_bl} reds={out_bl['multiset_reds'][:3]} "
+           f"other=({out_bl.get('other_frames_golden')},{out_bl.get('other_frames_test')})")
+
         # ---- 缓存键必须含 role_map（同 body、不同 role_map ⇒ 结果各自正确）----
         fr = {"ident": 31, "body_hex": wl(16, 0, 102)}
         h1, s1 = body_role_norm(fr, {101: "A", 102: "B", 201: "A", 202: "B"})
@@ -734,7 +755,7 @@ def _selftest():
            f"s1={s1} s2={s2} same_hex={h1 == h2}")
         _BODY_NORM_CACHE.clear()
 
-    expected = 37
+    expected = 38
     ok = all(c for _, c, _ in checks) and len(checks) == expected
     for name, cond, detail in checks:
         print(f"SELFTEST {name} {'ok' if cond else 'FAIL'} {detail}")
