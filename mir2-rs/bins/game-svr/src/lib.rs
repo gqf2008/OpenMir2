@@ -31551,7 +31551,10 @@ fn drain_player_hunger(
         return;
     }
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #9**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。序不只影响帧（帧走 `RunFrames` 按 actor_id flush）：`StatusChanged`
+    // 支的攻杀 `RandomByte(7-L)` 抽值按本循环序分配到各会话 ⇒ 本行同时钉住 RNG 分配序。
+    names.sort_unstable();
     for name in names {
         if online.iter().all(|e| e.chr_name != name) {
             continue;
@@ -105091,6 +105094,130 @@ SendRefMsgRange=15
 
     fn p26_catalog() -> game_svr::ability::StdItemCatalog {
         game_svr::ability::StdItemCatalog::new()
+    }
+
+    /// **B4 #9（`drain_player_hunger`）行为牙**：P26 的**RNG 分配序**必须严格等于名字升序。
+    ///
+    /// 帧面说明：`MyStatus(708)` 经 `RunFrames`（`BTreeMap<i32,Slot>` 按 **actor_id** flush）发出，
+    /// **帧序由 actor_id 决定、与名字序无关**；本用例让 actor_id 按名字升序分配，只为让读数可读，
+    /// **不构成顺序证据**。真正的顺序牙 = 攻杀 `RandomByte(7-L)` 的抽值按名字升序分配到各会话。
+    ///
+    /// 构造：8 会话 `hunger_status=1000`（now=1001 ⇒ 跨到 999 命中 `StatusChanged` 支，该支才调
+    /// `recalc_session_ability`）+ `SKILL_YEDO(L=0)`（每会话恰 1 抽）；名字按「升序 ≠ 插入序」插入。
+    /// 断言：① 每会话一条 708（socket 序按升序，归因 actor_id）；② `draws_between == 8`、终态 =
+    /// 重放 8 抽（钉「不许多抽/少抽」）；③ 各会话 `attack_skill_point_count` = 名字升序第 k 抽。
+    ///
+    /// 牙：删 `drain_player_hunger` 里的 `names.sort_unstable();` ⇒ ③ 红（② 终态仍绿——终态只取决于
+    /// 总抽数，如实说明）。
+    #[test]
+    fn p26_rng_assignment_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut sorted: Vec<&str> = names.to_vec();
+        sorted.sort_unstable();
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        // ① actor_id 按名字升序分配（只为读数可读；帧序归因 actor_id）。
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in sorted.iter().copied().enumerate() {
+            world.open_session(name);
+            let id = world
+                .enter_map(
+                    name,
+                    new_player_entity(name.to_string(), 10 + i as i32 * 20, 10),
+                    0,
+                )
+                .expect("进世界");
+            actor_of.insert(name, id);
+        }
+        // ② sessions 按插入序（乱序）构造。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let id = actor_of[name];
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.hunger_status = 1000;
+            sg.dec_hunger_point_tick = 0;
+            sg.stamina.health_tick = 0;
+            sg.stamina.spell_tick = 5;
+            sg.recovery.per_health = 5;
+            sg.recovery.per_spell = 5;
+            sg.magic.list = vec![Some(record::MagicRcd {
+                mag_idx: game_svr::skill_ability::SKILL_YEDO,
+                level: 0,
+                magic_key: 0,
+                tran_point: 0,
+            })];
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let before = world.rng.clone();
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1_001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+
+        // ① 帧面：每会话一条 708（socket 序 = 名字升序，**由 actor_id flush 决定**）。
+        let mut got: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident));
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want_sockets: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            want_sockets,
+            "708 的 socket 序 = 名字升序（归因 actor_id flush，非 name 序证据）"
+        );
+        assert!(
+            got.iter()
+                .all(|(_, ident)| *ident == mir2_protocol::messages::SM_MYSTATUS),
+            "每会话恰一条 708"
+        );
+
+        // ② RNG：8 抽，终态 = 重放 8 抽（钉不许多抽/少抽）。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            names.len(),
+            "每会话恰 1 抽（SKILL_YEDO ⇒ RandomByte(7)）"
+        );
+        let mut probe = before.clone();
+        let expected: Vec<u8> = (0..names.len())
+            .map(|_| probe.random_below(7) as u8)
+            .collect();
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{:?}", probe),
+            "RNG 终态必须 = 重放 8 抽"
+        );
+
+        // ③ 真正的顺序牙：抽值按名字升序分配。
+        for (k, (name, _)) in named_sockets.iter().enumerate() {
+            assert_eq!(
+                sessions[*name].magic.passives.attack_skill_point_count, expected[k],
+                "RNG 抽值必须按名字升序分配给 ChrName={name}"
+            );
+        }
     }
 
     /// P26-3：`HungerSystem=false` ⇒ 推进 10s 全不变（生产回归门：部署 `Server.conf:396=0`）。
