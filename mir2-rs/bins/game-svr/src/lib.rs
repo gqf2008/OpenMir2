@@ -6995,7 +6995,7 @@ fn run_party_goto_label(
     // 卡 `openmir2-script-sendmsg-host`：`SENDMSG 0-3` 的全服扇出
     //（QFunction 是隐藏 NPC => 没有 `SENDMSG 4`）；本例玩家自己那份在 `frames` 里。
     if !party_broadcasts.is_empty() {
-        fan_out_world_sysmessage(
+        fan_out_world_sysmessage_all_zones(
             online,
             &*world,
             gates,
@@ -11809,7 +11809,7 @@ fn handle_shop_cmd(
                 broadcasts,
                 hear,
             } => {
-                fan_out_world_sysmessage(
+                fan_out_world_sysmessage_all_zones(
                     online,
                     &*world,
                     gates,
@@ -12963,8 +12963,15 @@ fn run_std_mode_func_script(
     // `world_broadcasts` 随 `player` 丢弃 ⇒ QFunction 路触发者收到、其余玩家 0 帧）。
     // QFunction 是**隐藏 NPC**（`Envir == null`）⇒ `SENDMSG 4` 的 `SendSayMsg` 本就零帧，
     // 本路不扇 `SM_HEAR`（与本路 `frames` 里不会出现 `RM_HEAR` 一致）。
-    let fanned =
-        fan_out_world_sysmessage(online, world, gates, sg.actor_id, &broadcasts, red.0, red.1);
+    let fanned = fan_out_world_sysmessage_all_zones(
+        online,
+        world,
+        gates,
+        sg.actor_id,
+        &broadcasts,
+        red.0,
+        red.1,
+    );
     glog!(
         "INF",
         "QFunction {label} 已执行 ChrName={chr_name} 说词 {} 条 / 脚本帧 {} 条 / 佩戴改动 {} 槽 / 全服广播 {} 帧",
@@ -13786,6 +13793,38 @@ fn fan_out_world_sysmessage(
     sent
 }
 
+/// **A33**：[`fan_out_world_sysmessage`] 的**全区分发**包装——本地扇出**一行不改**，随后把同一条
+/// 广播中继给每个其它区（[`cross_zone_frames::note_world_broadcast`]）。
+///
+/// - 无 sink（N=1 / 切片关）⇒ 中继**零动作** ⇒ 单区字节面与改前逐字节相同；
+/// - 收件区在 `drain_zone` 里用 **plain 版**展开（`Recog` = 该区收件人自己的 actor），
+///   **不**回调本包装 ⇒ 不会跨区二次中继；
+/// - 六个调用点统一走本包装（SENDMSG 0-3 / 婚礼广播的唯一漏斗）。
+#[allow(clippy::too_many_arguments)]
+fn fan_out_world_sysmessage_all_zones(
+    online: &OnlineRegistry,
+    world: &mir2_world_bevy::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    caller_actor_id: i32,
+    texts: &[String],
+    f_color: u8,
+    b_color: u8,
+) -> usize {
+    let sent = fan_out_world_sysmessage(
+        online,
+        world,
+        gates,
+        caller_actor_id,
+        texts,
+        f_color,
+        b_color,
+    );
+    if !texts.is_empty() {
+        cross_zone_frames::note_world_broadcast(texts, f_color, b_color, caller_actor_id);
+    }
+    sent
+}
+
 /// 从脚本帧表里摘出 `SENDMSG 4` 的帧（`RM_HEAR`，**唯一**发点 = `ActionOfLineMsg` case 4）。
 ///
 /// 返回 `(线缆文本, F 色, B 色)`（= `sChrName + ':' + sMsg` 与 `btHearMsgFColor/BColor`）。
@@ -13928,7 +13967,7 @@ fn drain_script_frames_with_host(
         emit_script_frames(tx, socket, npc_actor_id, sg, frames)
     });
     let mut fanned = 0usize;
-    fanned += fan_out_world_sysmessage(
+    fanned += fan_out_world_sysmessage_all_zones(
         online,
         world,
         gates,
@@ -14110,7 +14149,7 @@ fn drain_login_script_batch(
     });
     // 复用既有扇出（**不另写一份**）：`fan_out_world_sysmessage` 跳过 `player_actor_id`，
     // 只发其余 `!Ghost` 在线玩家，逐收件人各一个 `NetPriorityQueue`。
-    let fanned = fan_out_world_sysmessage(
+    let fanned = fan_out_world_sysmessage_all_zones(
         online,
         world,
         gates,
@@ -26355,6 +26394,12 @@ mod perf_counters {
     static CROSS_FRAME_DUP: AtomicU64 = AtomicU64::new(0);
     /// 排空时 gate 线/socket 已不在（已计 delivered 的子集；诊断）。
     static CROSS_FRAME_DROP_CLOSED: AtomicU64 = AtomicU64::new(0);
+    /// **A33**：跨区世界广播（`SENDMSG 0-3`/婚礼广播）——源区**入队**次数（每目标区一条）。
+    static CROSS_WORLD_BROADCAST_QUEUED: AtomicU64 = AtomicU64::new(0);
+    /// **A33**：收件区**展开投递**次数（每条广播每区展开一次，展开内部逐收件人出帧）。
+    static CROSS_WORLD_BROADCAST_DELIVERED: AtomicU64 = AtomicU64::new(0);
+    /// **A33**：广播槽满**拒新**次数（与帧槽同 `max_per_slot` 口径）。
+    static CROSS_WORLD_BROADCAST_OVERFLOW: AtomicU64 = AtomicU64::new(0);
     /// route=Some 但 `ZoneRouter::lookup_registered == None`（未 assign；缺陷信号，应恒 0）。
     static CROSS_RECIPIENT_ZONE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
     /// dst == 本区（本地会话表却未命中；一致性缺陷信号，应恒 0）。
@@ -26483,6 +26528,31 @@ mod perf_counters {
         CROSS_FRAME_DROP_CLOSED.load(Ordering::Relaxed)
     }
 
+    /// **A33**：跨区世界广播入队 +1（源区每目标区一条）。
+    pub(crate) fn note_cross_world_broadcast_queued() {
+        CROSS_WORLD_BROADCAST_QUEUED.fetch_add(1, Ordering::Relaxed);
+    }
+    /// **A33**：跨区世界广播展开投递 +1（收件区每条广播一次）。
+    pub(crate) fn note_cross_world_broadcast_delivered() {
+        CROSS_WORLD_BROADCAST_DELIVERED.fetch_add(1, Ordering::Relaxed);
+    }
+    /// **A33**：跨区世界广播槽满拒新 +1。
+    pub(crate) fn note_cross_world_broadcast_overflow() {
+        CROSS_WORLD_BROADCAST_OVERFLOW.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn cross_world_broadcast_queued() -> u64 {
+        CROSS_WORLD_BROADCAST_QUEUED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn cross_world_broadcast_delivered() -> u64 {
+        CROSS_WORLD_BROADCAST_DELIVERED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn cross_world_broadcast_overflow() -> u64 {
+        CROSS_WORLD_BROADCAST_OVERFLOW.load(Ordering::Relaxed)
+    }
+
     #[allow(dead_code)] // 诊断列（perf TSV 是生产读点）；测试用。
     pub(crate) fn cross_recipient_zone_unknown() -> u64 {
         CROSS_RECIPIENT_ZONE_UNKNOWN.load(Ordering::Relaxed)
@@ -26528,6 +26598,9 @@ mod perf_counters {
         }
         CROSS_FRAME_DUP.store(0, Ordering::Relaxed);
         CROSS_FRAME_DROP_CLOSED.store(0, Ordering::Relaxed);
+        CROSS_WORLD_BROADCAST_QUEUED.store(0, Ordering::Relaxed);
+        CROSS_WORLD_BROADCAST_DELIVERED.store(0, Ordering::Relaxed);
+        CROSS_WORLD_BROADCAST_OVERFLOW.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_ZONE_UNKNOWN.store(0, Ordering::Relaxed);
         CROSS_RECIPIENT_SELF_ZONE_MISS.store(0, Ordering::Relaxed);
         CROSS_ENQUEUE_US.store(0, Ordering::Relaxed);
@@ -41093,7 +41166,16 @@ impl HostLoop {
         // ① **L2-5 ⑤（V2）**：barrier1 之后、phase2 之前排空**本区**邮箱（`src_tick` 过滤保
         // 恰好 1 tick）。收件区 = `self.zone`（区 0 与区 k 同一段代码）；切片关/未装 sink ⇒
         // `drain_zone` 自身返回 0（零参与）。
-        let _ = cross_zone_frames::drain_zone(self.zone, self.ticks, &self.gates);
+        // **A33**：`drain_zone` 也要能在收件区就地展开世界广播 ⇒ 传入本区的只读
+        // `online`/`world`（三者同为只读借用；语句结束即释放，后面才有
+        // `ops.before_phase2(&mut self.world, …)`）。
+        let _ = cross_zone_frames::drain_zone(
+            self.zone,
+            self.ticks,
+            &self.online,
+            &self.world,
+            &self.gates,
+        );
         // ② **L2-5 ②**：镜像刷新在 barrier1 之后（邻区快照已是本 tick 终态）、AOI 之前。
         // 闸关 ⇒ 整段零参与。
         ops.before_phase2(&mut self.world, &mut self.displays, self.ticks);
@@ -122759,7 +122841,7 @@ mod castle_insertion_tests {
 /// 行为门仍然全绿**，bug 会静默复活。本模块读 `lib.rs` 源码，钉住两件事：
 ///
 /// 1. `drain_login_script_batch(` 的**每个**调用点都不在 `if let Some(tx)` 块内；
-/// 2. `drain_login_script_batch` 体内的 `fan_out_world_sysmessage(` 调用在 `tx.map_or(…)`
+/// 2. `drain_login_script_batch` 体内的 `fan_out_world_sysmessage_all_zones(` 调用在 `tx.map_or(…)`
 ///    **之外**（不在闭包体内）——`tx == None`（触发者网关线不可达）时也必须照常扇出。
 ///
 /// 手法：先把源码的**注释与字符串/字符字面量**整段涂白（保留换行 ⇒ 字节偏移与行号不变），
@@ -123025,7 +123107,8 @@ mod broadcast_tx_source_order_tests {
         let body = &code[body_open..=body_close];
 
         // 扇出调用点：体内必须恰好一处（删掉扇出或复制一份都会红）。
-        let fan_needle = "fan_out_world_sysmessage(";
+        // **A33**：生产扇出统一走全区分发包装；本牙钉的是「扇出在 `tx.map_or` 之外」。
+        let fan_needle = "fan_out_world_sysmessage_all_zones(";
         let fan_positions: Vec<usize> = body
             .match_indices(fan_needle)
             .map(|(p, _)| body_open + p)
@@ -123033,7 +123116,7 @@ mod broadcast_tx_source_order_tests {
         assert_eq!(
             fan_positions.len(),
             1,
-            "`drain_login_script_batch` 体内必须恰好一处 `fan_out_world_sysmessage(`（实际 {}）",
+            "`drain_login_script_batch` 体内必须恰好一处 `fan_out_world_sysmessage_all_zones(`（实际 {}）",
             fan_positions.len()
         );
 
@@ -123058,7 +123141,7 @@ mod broadcast_tx_source_order_tests {
         let fan_line = line_of(&code, fan);
         assert!(
             !(map_or <= fan && fan <= map_or_close),
-            "lib.rs:{fan_line} 的 `fan_out_world_sysmessage(` 落在 `tx.map_or(…)` 内（闭包体）：\
+            "lib.rs:{fan_line} 的 `fan_out_world_sysmessage_all_zones(` 落在 `tx.map_or(…)` 内（闭包体）：\
              触发者网关线不可达（`tx == None`）时全服广播会被一并跳过——扇出必须在 `map_or` 之外。"
         );
 
@@ -136478,7 +136561,10 @@ mod l2_s3_cross_recipient_tests {
     }
 
     fn drain_cross(g: &Gates) -> usize {
-        crate::cross_zone_frames::drain_zone(zone1(), 1, g)
+        // **A33**：广播展开需要 online/world；本组用例不含广播 ⇒ 给空世界即可。
+        let online = crate::OnlineRegistry::new();
+        let world = mir2_world_bevy::World::with_maps(vec![(10, 10)]);
+        crate::cross_zone_frames::drain_zone(zone1(), 1, &online, &world, g)
     }
 
     fn recv_socket(rx: &mut mpsc::UnboundedReceiver<SimToGate>, socket: i32) -> bool {
@@ -136720,12 +136806,24 @@ mod l2_s3_cross_recipient_tests {
         );
         // V2：src_tick=0 不得在 tick 0 排出；tick 1 才排。
         assert_eq!(
-            crate::cross_zone_frames::drain_zone(crate::zone::ZoneId::new(1), 0, &g),
+            crate::cross_zone_frames::drain_zone(
+                crate::zone::ZoneId::new(1),
+                0,
+                &online,
+                &world,
+                &g
+            ),
             0,
             "src_tick == tick 不得本轮排出"
         );
         assert_eq!(
-            crate::cross_zone_frames::drain_zone(crate::zone::ZoneId::new(1), 1, &g),
+            crate::cross_zone_frames::drain_zone(
+                crate::zone::ZoneId::new(1),
+                1,
+                &online,
+                &world,
+                &g
+            ),
             1,
             "tick 1（barrier1 之后）必须排出"
         );

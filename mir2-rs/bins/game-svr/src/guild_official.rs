@@ -590,7 +590,7 @@ pub(crate) fn handle_select(
     // 实体 NPC，但它自己的 `SendSayMsg`（`SENDMSG 4`）语料里没有调用点 ⇒ 本路不扇 `SM_HEAR`）。
     let broadcast_texts = script.take_script_broadcasts();
     if !broadcast_texts.is_empty() {
-        crate::fan_out_world_sysmessage(
+        crate::fan_out_world_sysmessage_all_zones(
             online,
             &*world,
             gates,
