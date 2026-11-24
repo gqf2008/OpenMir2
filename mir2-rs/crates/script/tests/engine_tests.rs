@@ -2676,27 +2676,46 @@ fn upgrade_item_bad_params_error_and_no_draws() {
     assert!(player.updated_items.is_empty());
 }
 
-/// **A27 P1 负例①（门怪癖）**：`nWhere == UseItems.Length`（13）**过门**（门是 `>`）⇒ 等价物
-/// `ScriptActionError(UpgradeItems)` + `abort_goto`：**零帧、零抽取、后续动作不执行**。
+/// **A27 P1 负例①（门怪癖，label 级）**：`nWhere == UseItems.Length`（13）**过门**（门是 `>`）⇒
+/// oracle 的 `UseItems[nWhere]` 抛 `IndexOutOfRangeException` 穿出 `GotoLable` ⇒ 等价物
+/// `ScriptActionError(UpgradeItems)` + `abort_goto`：**零帧、零抽取、本 procedure 与后续
+/// procedure 的说词、后续 `close` 全不执行**（同 [`var_calcvar_div_by_zero_aborts_whole_goto_label`]）。
 ///
-/// 变异：门 `>`→`>=` ⇒ 走「参数错误但**不** abort」支 ⇒ 后续 `GIVE` 执行 ⇒ 红。
+/// 变异：门 `>`→`>=` ⇒ 走「参数错误但**不** abort」支 ⇒ `close` 执行、两段说词都发 ⇒ 红。
 #[test]
-fn upgrade_item_nwhere_equals_len_aborts_following_actions() {
-    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+fn upgrade_item_nwhere_equals_len_aborts_whole_goto_label() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#IF
+checkgold 0
+#ACT
+UPGRADEITEM 13 0 10
+#SAY
+第一段
+#IF
+checkgold 0
+#ACT
+close
+#SAY
+第二段
+",
+    );
     player.use_items = vec![None; 13];
-    let errors = {
-        let mut engine = Engine::new(&mut npc, &mut player);
-        engine.run_actions(&[
-            act_full(212, &["13", "0", "10"], &[]),
-            act(3, "金币", "", 1, 0),
-        ]);
-        engine.errors
-    };
+    let errors = run(&mut npc, &mut player, "@main");
     let texts = script_errors(&errors);
     assert_eq!(texts.len(), 1, "{errors:?}");
     assert!(texts[0].contains("脚本命令:UpgradeItems"), "{texts:?}");
     assert_eq!(player.rng_calls, 0, "门内早退不得抽 RNG");
-    assert!(player.items.is_empty(), "abort_goto ⇒ 后续 GIVE 不得执行");
+    assert!(
+        !player.msgs.iter().any(|(m, _)| *m == 10127),
+        "abort_goto ⇒ 后续 procedure 的 close 不得执行：{:?}",
+        player.msgs
+    );
+    assert!(
+        npc.says.is_empty(),
+        "abort ⇒ 两段说词都不发：{:?}",
+        npc.says
+    );
     assert!(player.updated_items.is_empty());
 }
 
