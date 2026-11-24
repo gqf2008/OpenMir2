@@ -2058,16 +2058,35 @@ fn handle_zone_command_on(
     // **M1b 第 5b 步 · B3**：普通说话 / `/` 私聊——与区 0 **同一份** [`handle_plain_or_whisper`]
     // （`!`/`@` 不在此列：分类器已把 `!` 归 `Unsupported`、`@` 归 `Process`）。
     if cmd.ident == chat::CM_SAY {
-        // **`!` 频道族**：分类器归 `Unsupported`（需进程态 `GuildManager`）⇒ 本函数**不执行**、
-        // 计 `zone_cmd_unsupported`（与表外 ident 同款处置）。`@` 归 `Process`（A6 邮箱），
-        // 正常不会到区 k 本地；若到达也按未接线处置（计数 + 丢弃），不静默。
-        if tail.is_some_and(|line| {
-            say_payload_is_channel_command(line) || say_payload_is_at_command(line)
-        }) {
-            perf_counters::note_zone_cmd_unsupported(cmd.ident);
-            return ZoneCmdOutcome::Unsupported;
-        }
         if let Some(line) = tail {
+            // `@` 归 `Process`（A6 邮箱），正常不会到区 k 本地；若到达按未接线处置（计数 + 丢弃）。
+            if say_payload_is_at_command(line) {
+                perf_counters::note_zone_cmd_unsupported(cmd.ident);
+                return ZoneCmdOutcome::Unsupported;
+            }
+            // **`!!`/`!~`**：仍需进程态（`GuildManager`/跨区名册）⇒ 未接线处置（计数 + 丢弃）。
+            if say_payload_is_channel_command(line) && !say_payload_is_shout(line) {
+                perf_counters::note_zone_cmd_unsupported(cmd.ident);
+                return ZoneCmdOutcome::Unsupported;
+            }
+            // **A20 片 1**：`!` 喊话——区 k 本地执行（与区 0 同一份 `handle_local_shout`；
+            // 成功支零帧，失败三门回自己一条 100；单 `!` 只打诊断日志、零帧零状态变更）。
+            if say_payload_is_shout(line) {
+                if let Some(speaker) = online.find_by_chr(chr_name) {
+                    handle_local_shout(
+                        &*world,
+                        ground_sessions,
+                        gates,
+                        env.colors,
+                        &env.enter_cfg.string_conf,
+                        env.enter_cfg.can_shout_msg_level,
+                        env.registry,
+                        speaker,
+                        line,
+                    );
+                }
+                return ZoneCmdOutcome::Dispatched;
+            }
             if let Some(speaker) = online.find_by_chr(chr_name) {
                 handle_plain_or_whisper(&*online, &*world, gates, env.colors, speaker, line);
             }
@@ -28817,11 +28836,24 @@ fn say_payload_is_at_command(line: &str) -> bool {
 /// **M1b 第 5b 步**：`!` 频道体的**唯一共享判据**——**严格** `starts_with('!')`、**不 trim**
 /// （`!!` 组队 / `!~` 行会 / `!` 喊话；前导空格的「 !…」是普通聊天）。
 ///
-/// 分类器必须调用本函数，**禁止第二份 `!` 判据**。`!` 族需要 `GuildManager`（进程态），
-/// 区 k 拿不到 ⇒ 分类为 **`Unsupported`**（**不是 `Local`**：Local 会被区 k 本地执行，
-/// 那是被否决的语义回退）。
+/// 分类器必须调用本函数，**禁止第二份 `!` 判据**。本判据只区分"是不是 `!` 族"；
+/// 族内再由 [`say_payload_is_shout`] 分喊话（区 k 本地）与 `!!`/`!~`（需进程态 ⇒ `Unsupported`）。
 fn say_payload_is_channel_command(line: &str) -> bool {
     line.starts_with('!')
+}
+
+/// **A20 片 1**：`!` 族里**喊话**的共享判据——`!` 起、但**不是** `!!`（组队）或 `!~`（行会）。
+///
+/// oracle `chat::parse_channel` 的三分流：`!!` ⇒ 组队、`!~`（有行会）⇒ 行会（两者都需要进程态
+/// `GuildManager`/跨区名册，本片仍 `Unsupported`）；其余 `!` ⇒ 喊话（只读本会话
+/// `shout_msg_tick`/等级 + 本区 registry `boQUIZ` + 配置 ⇒ 区 k 本地，见
+/// [`handle_local_shout`]）。单字符 `!` 在 oracle 里 `sData[1]` 越界被 catch（无输出）⇒
+/// 同样归本地路径（执行体只打诊断日志）。
+///
+/// 已知登记：oracle 的 `!~` 在**无行会**时会落到喊话；本片按契约仍把 `!~` 归 `Unsupported`，
+/// 等新通道片（A20 后续）处理。
+fn say_payload_is_shout(line: &str) -> bool {
+    line.starts_with('!') && !line.starts_with("!!") && !line.starts_with("!~")
 }
 
 /// `@` 命令后的 GM `pending_reconnect` 排水门（review R1）：**严格** `line.starts_with('@')`
@@ -28863,10 +28895,11 @@ enum ZoneCmdClass {
 ///
 /// # payload 例外只此一族、族内三态
 ///
-/// `CM_SAY` 是**唯一** payload 级判定族；族内三态（其余七族纯 ident 级、与 payload 无关）：
+/// `CM_SAY` 是**唯一** payload 级判定族；族内判定（其余七族纯 ident 级、与 payload 无关）：
 /// - `@` 起 ⇒ `Process`（GM 命令体，回区 0，A6 控制邮箱）；
-/// - `!` 起 ⇒ **`Unsupported`**（频道族需要进程态 `GuildManager`，区 k 拿不到；**不得**归
-///   `Local`——归 Local 会被区 k 本地执行，那是被否决的语义回退）；
+/// - `!` 起 ⇒ 再分：`!!`（组队）/`!~`（行会）⇒ **`Unsupported`**（需进程态 `GuildManager`，
+///   区 k 拿不到）；其余 `!`（喊话，含单字符 `!`）⇒ **`Local`**（A20 片 1：只读本会话 +
+///   本区 registry `boQUIZ` + 配置，成功支零帧）；
 /// - 其余（含无 payload）⇒ `Local`（普通说话 / `/` 私聊）。
 ///
 /// `@`/`!` 判据分别与 `gm_drain_gate`/本地 `!` 分派**同一份**（[`say_payload_is_at_command`] /
@@ -28915,6 +28948,10 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
             return ZoneCmdClass::Process;
         }
         if payload.is_some_and(say_payload_is_channel_command) {
+            // **A20 片 1**：`!!`/`!~` 仍 `Unsupported`；其余 `!`（喊话）区 k 本地执行。
+            if payload.is_some_and(say_payload_is_shout) {
+                return ZoneCmdClass::Local;
+            }
             return ZoneCmdClass::Unsupported;
         }
         return ZoneCmdClass::Local;
@@ -106271,7 +106308,7 @@ SendRefMsgRange=15
     // ───────────────────────── PL-3（P25/P26/P27）─────────────────────────
 
     /// PL-3 地图夹具：临时 `Envir/MapInfo.txt` + `Map/fa.map`（16×16），注册表 id 0 = `A`。
-    fn pl3_registry(flag_line: &str) -> (mir2_envir::MapRegistry, std::path::PathBuf) {
+    pub(crate) fn pl3_registry(flag_line: &str) -> (mir2_envir::MapRegistry, std::path::PathBuf) {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
@@ -131599,8 +131636,12 @@ mod zone_command_tests {
         );
     }
 
-    /// **M1b 第 5b 步 · B3 牙 `zone_k_channel_say_is_not_executed_locally`**：`!` 频道族**不**在区 k
-    /// 执行（需进程态）——分类为 `Unsupported`、处置计 `zone_cmd_unsupported`、**零出帧**。
+    /// **M1b 第 5b 步 · B3 牙（A20 片 1 收窄）`zone_k_channel_say_is_not_executed_locally`**：
+    /// **`!~`（行会）/`!!`（组队）**不在区 k 执行（需进程态 `GuildManager`/跨区名册）——
+    /// 分类为 `Unsupported`、处置计 `zone_cmd_unsupported`、**零出帧**。
+    ///
+    /// **A20 片 1**：`!`（喊话）已改为区 k 本地执行（见 `zonek_shout_*` 与
+    /// `bangbang_and_single_bang_after_a20`）；本牙只钉 `!~`/`!!` 的守恒。
     #[test]
     fn zone_k_channel_say_is_not_executed_locally() {
         let (mut state, actor) = landed("cmd_channel", zone::ZoneId::new(1));
@@ -131609,25 +131650,33 @@ mod zone_command_tests {
             .ground_sessions
             .insert("hero".to_string(), crate::tests::test_session_ground(actor));
         let (gates, mut rx) = gates_and_rx();
-        assert_eq!(
-            zone_cmd_class(chat::CM_SAY, Some("!hello")),
-            ZoneCmdClass::Unsupported,
-            "前置：`!` 频道说分类为 Unsupported"
-        );
-        let outcome = handle_zone_command_with_tail(
-            &mut state,
-            &gates,
-            "hero",
-            7,
-            &cmd(chat::CM_SAY, 0, 0, 0),
-            Some("!hello"),
-        );
-        assert_eq!(
-            outcome,
-            ZoneCmdOutcome::Unsupported,
-            "`!` 频道说必须落 Unsupported（未接线）"
-        );
-        assert!(rx.try_recv().is_err(), "`!` 频道说在区 k 必须零出帧");
+        for line in ["!~hello", "!!hello"] {
+            assert_eq!(
+                zone_cmd_class(chat::CM_SAY, Some(line)),
+                ZoneCmdClass::Unsupported,
+                "前置：`{line}` 分类为 Unsupported"
+            );
+            let u0 = perf_counters::zone_cmd_unsupported();
+            let outcome = handle_zone_command_with_tail(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some(line),
+            );
+            assert_eq!(
+                outcome,
+                ZoneCmdOutcome::Unsupported,
+                "`{line}` 必须落 Unsupported（未接线）"
+            );
+            assert_eq!(
+                perf_counters::zone_cmd_unsupported(),
+                u0 + 1,
+                "`{line}` 必须计 zone_cmd_unsupported +1"
+            );
+            assert!(rx.try_recv().is_err(), "`{line}` 在区 k 必须零出帧");
+        }
     }
 
     /// **M1b 第 5b 步 · 守恒牙 `zone_k_unwired_families_still_count_unsupported`**：本片只接
@@ -133015,12 +133064,14 @@ mod zone_command_tests {
         assert_eq!(sg.state.item_list[0].make_index, 9_201);
     }
 
-    /// **M1c-2c 段 5 · 牙 6 `bang_say_stays_unsupported`（A20 守恒）**：区 k 投 `!x` 的 `CM_SAY`
-    /// ⇒ ① 分类 `Unsupported`（`zonek_inbound_unsupported +1`）② **不进 A6 邮箱** ③
-    /// **不置 `control_pending`** ④ 本地执行体（真实 `handle_zone_command_on`）**零帧** +
-    /// `zone_cmd_unsupported +1`。
+    /// **M1c-2c 段 5 · 牙 6 `bang_say_stays_unsupported`（A20 守恒）**：区 k 投 **`!!x`** 的
+    /// `CM_SAY`（组队，需进程态）⇒ ① 分类 `Unsupported`（`zonek_inbound_unsupported +1`）
+    /// ② **不进 A6 邮箱** ③ **不置 `control_pending`** ④ 本地执行体（真实
+    /// `handle_zone_command_on`）**零帧** + `zone_cmd_unsupported +1`。
     ///
-    /// **若将来实现 `!` 的邮箱变体，本牙按定义转红**（A20 防倒退提醒牙）。
+    /// **A20 片 1 收窄**：`!`（喊话）已改为区 k 本地执行；本守恒牙只钉 `!!`/`!~` 仍
+    /// Unsupported（见 `bangbang_and_guild_say_stay_unsupported_after_a20` 的逐条断言）。
+    /// **若将来实现 `!!`/`!~` 的通道变体，本牙按定义转红**（A20 防倒退提醒牙）。
     #[test]
     fn bang_say_stays_unsupported() {
         let (_g, path) = m1c2c_arm_counters("bang_say");
@@ -133036,7 +133087,7 @@ mod zone_command_tests {
             chr_name: "hero".to_string(),
             socket: 7,
             cmd: cmd(chat::CM_SAY, 0, 0, 0),
-            tail: Some("!x".to_string()),
+            tail: Some("!!x".to_string()),
         };
         // ① 分类面：`!` 支 = Unsupported（不属 Local，也不属 Process）。
         let ev = mk_ev();
@@ -133068,7 +133119,7 @@ mod zone_command_tests {
             ZoneDrainLimits::PRODUCTION,
             &|s: &SeqEvent| match &s.ev {
                 GateEvent::Command { cmd, tail, .. } => {
-                    if cmd.ident == chat::CM_SAY && tail.as_deref() == Some("!x") {
+                    if cmd.ident == chat::CM_SAY && tail.as_deref() == Some("!!x") {
                         ZoneCmdClass::Unsupported
                     } else {
                         ZoneCmdClass::Local
@@ -133124,11 +133175,11 @@ mod zone_command_tests {
                 "hero",
                 7,
                 &cmd(chat::CM_SAY, 0, 0, 0),
-                Some("!x"),
+                Some("!!x"),
                 &shared,
             ),
             ZoneCmdOutcome::Unsupported,
-            "`!` 在区 k 处置体必须 Unsupported"
+            "`!!` 在区 k 处置体必须 Unsupported"
         );
         assert!(
             perf_counters::zone_cmd_unsupported() > u_cmd0,
@@ -133136,6 +133187,268 @@ mod zone_command_tests {
         );
         assert!(rx.try_recv().is_err(), "`!` 不得本地出帧（零帧）");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 片 1 · T1（区 k 喊话成功 ⇒ 零帧）**：会话过三门（等级 40 > 34、`tick=0`、
+    /// 无 `boQUIZ`）⇒ 真实 `handle_zone_command_on` 返回 `Dispatched`、**零帧**、
+    /// `shout_msg_tick = world.clock_ms`、`zone_cmd_unsupported` 不增。
+    ///
+    /// 变异：把 shout 改回 `Unsupported`（分类器/执行臂任一）⇒ 本用例红。
+    #[test]
+    fn zonek_shout_success_path_is_zero_frames() {
+        let (mut state, actor) = landed("a20_shout_ok", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.can_shout_msg_level = 34;
+        state.host.world.clock_ms = 20_000;
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.equip.abil.level = 40;
+            sg.shout_msg_tick = 0;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        let u0 = perf_counters::zone_cmd_unsupported();
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!hi"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "区 k 喊话成功支应本地执行（Dispatched）"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "成功喊话必须零帧（oracle NRE 1:1，T-118）"
+        );
+        assert_eq!(
+            state.host.ground_sessions["hero"].shout_msg_tick, 20_000,
+            "成功支在发帧前写 ShoutMsgTick（oracle PlayObject.Chat.cs:190）"
+        );
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0,
+            "本地执行不得计 zone_cmd_unsupported"
+        );
+    }
+
+    /// **A20 片 1 · T2（失败三门各回自己一条 100）**：TooSoon / 等级不足 / `boQUIZ` 各钉一条
+    /// `SM_SYSMESSAGE(100)`（`Recog`=自己、`Param=MakeWord(RedF,RedB)`、文本按配置），且都不写 tick。
+    #[test]
+    fn zonek_shout_gates_send_self_sysmsg_and_keep_tick() {
+        let expect_frame = |shared: &SharedServices, actor: i32, text: &str| {
+            game_svr::smframe::sm_sysmessage(
+                actor,
+                u16::from(shared.colors.red_f),
+                u16::from(shared.colors.red_b),
+                &encoding_rs::GBK.encode(text).0,
+            )
+        };
+        // (a) TooSoon
+        {
+            let (mut state, actor) = landed("a20_shout_toosoon", zone::ZoneId::new(1));
+            let (gates, mut rx) = gates_and_rx();
+            let mut shared = SharedServices::for_test();
+            shared.enter_cfg.can_shout_msg_level = 34;
+            state.host.world.clock_ms = 20_000;
+            {
+                let mut sg = crate::tests::test_session_ground(actor);
+                sg.equip.abil.level = 40;
+                sg.shout_msg_tick = 20_000; // 刚喊过
+                state.host.ground_sessions.insert("hero".to_string(), sg);
+            }
+            let want_text = chat::format_int(
+                shared.enter_cfg.string_conf.you_can_send_cycy_later_msg(),
+                10,
+            );
+            let want = expect_frame(&shared, actor, &want_text);
+            assert_eq!(
+                handle_zone_command_with_tail_and_shared(
+                    &mut state,
+                    &gates,
+                    "hero",
+                    7,
+                    &cmd(chat::CM_SAY, 0, 0, 0),
+                    Some("!hi"),
+                    &shared,
+                ),
+                ZoneCmdOutcome::Dispatched
+            );
+            match rx.try_recv().expect("TooSoon 应回一条提示") {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 7);
+                    assert_eq!(body, want, "TooSoon 提示逐字节 = SM_SYSMESSAGE(红字)");
+                }
+                other => panic!("期望 SendFrame，得到 {other:?}"),
+            }
+            assert!(rx.try_recv().is_err(), "提示之外不得有帧");
+            assert_eq!(
+                state.host.ground_sessions["hero"].shout_msg_tick, 20_000,
+                "被时间门拒绝不写 tick"
+            );
+        }
+        // (b) 等级不足（== CanShoutMsgLevel 也拒，提示 need=CanShoutMsgLevel+1）
+        {
+            let (mut state, actor) = landed("a20_shout_level", zone::ZoneId::new(1));
+            let (gates, mut rx) = gates_and_rx();
+            let mut shared = SharedServices::for_test();
+            shared.enter_cfg.can_shout_msg_level = 34;
+            state.host.world.clock_ms = 20_000;
+            {
+                let mut sg = crate::tests::test_session_ground(actor);
+                sg.equip.abil.level = 34;
+                sg.shout_msg_tick = 0;
+                state.host.ground_sessions.insert("hero".to_string(), sg);
+            }
+            let want_text = chat::format_int(shared.enter_cfg.string_conf.you_need_level_msg(), 35);
+            let want = expect_frame(&shared, actor, &want_text);
+            assert_eq!(
+                handle_zone_command_with_tail_and_shared(
+                    &mut state,
+                    &gates,
+                    "hero",
+                    7,
+                    &cmd(chat::CM_SAY, 0, 0, 0),
+                    Some("!hi"),
+                    &shared,
+                ),
+                ZoneCmdOutcome::Dispatched
+            );
+            match rx.try_recv().expect("等级门应回一条提示") {
+                SimToGate::SendFrame { body, .. } => {
+                    assert_eq!(body, want, "等级提示逐字节 = SM_SYSMESSAGE(红字)");
+                }
+                other => panic!("期望 SendFrame，得到 {other:?}"),
+            }
+            assert!(rx.try_recv().is_err());
+            assert_eq!(state.host.ground_sessions["hero"].shout_msg_tick, 0);
+        }
+        // (c) boQUIZ 图
+        {
+            let (registry, dir) = crate::tests::pl3_registry("QUIZ");
+            let (mut state, actor) = landed("a20_shout_quiz", zone::ZoneId::new(1));
+            let (gates, mut rx) = gates_and_rx();
+            let mut shared = SharedServices::for_test();
+            shared.enter_cfg.can_shout_msg_level = 34;
+            shared.registry = Some(registry);
+            state.host.world.clock_ms = 20_000;
+            {
+                let mut sg = crate::tests::test_session_ground(actor);
+                sg.equip.abil.level = 40;
+                sg.shout_msg_tick = 0;
+                state.host.ground_sessions.insert("hero".to_string(), sg);
+            }
+            let want_text = shared
+                .enter_cfg
+                .string_conf
+                .this_map_disable_send_cycy_msg()
+                .to_string();
+            let want = expect_frame(&shared, actor, &want_text);
+            assert_eq!(
+                handle_zone_command_with_tail_and_shared(
+                    &mut state,
+                    &gates,
+                    "hero",
+                    7,
+                    &cmd(chat::CM_SAY, 0, 0, 0),
+                    Some("!hi"),
+                    &shared,
+                ),
+                ZoneCmdOutcome::Dispatched
+            );
+            match rx.try_recv().expect("boQUIZ 应回一条提示") {
+                SimToGate::SendFrame { body, .. } => {
+                    assert_eq!(body, want, "boQUIZ 提示逐字节 = SM_SYSMESSAGE(红字)");
+                }
+                other => panic!("期望 SendFrame，得到 {other:?}"),
+            }
+            assert!(rx.try_recv().is_err());
+            assert_eq!(state.host.ground_sessions["hero"].shout_msg_tick, 0);
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    /// **A20 片 1 · T3（守恒）**：`!!`/`!~` 仍 `Unsupported`（计数 +1、零帧、tick 不变）；
+    /// 单字符 `!` 归 Local 但**零帧、零状态变更**（oracle `sData[1]` 越界被 catch，只有诊断日志）。
+    #[test]
+    fn bangbang_and_single_bang_after_a20() {
+        let (mut state, actor) = landed("a20_shout_keep", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.can_shout_msg_level = 34;
+        state.host.world.clock_ms = 20_000;
+        {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.equip.abil.level = 40;
+            sg.shout_msg_tick = 0;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        // 分类面
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("!!hi")),
+            ZoneCmdClass::Unsupported,
+            "`!!`（组队）仍 Unsupported"
+        );
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("!~hi")),
+            ZoneCmdClass::Unsupported,
+            "`!~`（行会）仍 Unsupported"
+        );
+        assert_eq!(
+            zone_cmd_class(chat::CM_SAY, Some("!")),
+            ZoneCmdClass::Local,
+            "单 `!` 归本地（只打诊断日志）"
+        );
+        // 处置面：`!!` / `!~` 计数 + 零帧 + tick 不变
+        for line in ["!!hi", "!~hi"] {
+            let u0 = perf_counters::zone_cmd_unsupported();
+            assert_eq!(
+                handle_zone_command_with_tail_and_shared(
+                    &mut state,
+                    &gates,
+                    "hero",
+                    7,
+                    &cmd(chat::CM_SAY, 0, 0, 0),
+                    Some(line),
+                    &shared,
+                ),
+                ZoneCmdOutcome::Unsupported,
+                "`{line}` 在区 k 必须仍 Unsupported"
+            );
+            assert_eq!(
+                perf_counters::zone_cmd_unsupported(),
+                u0 + 1,
+                "`{line}` 必须计 zone_cmd_unsupported +1（守恒）"
+            );
+            assert!(rx.try_recv().is_err(), "`{line}` 不得出帧");
+            assert_eq!(
+                state.host.ground_sessions["hero"].shout_msg_tick, 0,
+                "`{line}` 不得动 shout_msg_tick"
+            );
+        }
+        // 单 `!`：Local 执行但零帧、tick 不变
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "单 `!` 归本地路径"
+        );
+        assert!(rx.try_recv().is_err(), "单 `!` 零帧");
+        assert_eq!(
+            state.host.ground_sessions["hero"].shout_msg_tick, 0,
+            "单 `!` 零状态变更"
+        );
     }
 
     /// **M1c-2c 牙 1【行为】`eat_branch_is_exhaustive_fail_closed`**：`CM_EAT` 分支穷举 + 安全默认。
@@ -136656,11 +136969,12 @@ mod l2_s3_cross_recipient_tests {
             ZoneCmdClass::Local
         );
         assert_eq!(zone_cmd_class(chat::CM_SAY, None), ZoneCmdClass::Local);
-        // **M1b 第 5b 步**：`!` 频道说不属 Local 族（需进程态 ⇒ `Unsupported`，区 k 不得本地执行）。
-        assert_ne!(
+        // **A20 片 1**：`!` 喊话属 Local 族（只读会话/本区 registry/配置）；`!!`/`!~` 仍
+        // Unsupported（需进程态 ⇒ 区 k 不得本地执行，见 `zone_cmd_class_cm_say_payload_...`）。
+        assert_eq!(
             zone_cmd_class(chat::CM_SAY, Some("!hello")),
             ZoneCmdClass::Local,
-            "`!` 频道说不在 Local 族"
+            "A20 片 1：`!` 喊话区 k 本地执行"
         );
         // **M1c-2b**：`CM_QUERYBAGITEMS` 已接线 ⇒ 属 Local（上面 `local` 清单已含它）。
         // 断言的是"家族接线后属哪类"的**现状**，接线即变——所以改断言而不是删（删除会失去
@@ -136695,13 +137009,20 @@ mod l2_s3_cross_recipient_tests {
             zone_cmd_class(chat::CM_SAY, Some("hello @")),
             ZoneCmdClass::Local
         );
-        // **M1b 第 5b 步 · `!` 三态**：`!` 起 ⇒ Unsupported（频道族需进程态，区 k 不能本地执行）；
-        // `!!`/`!~` 同；前导空格的 ` !x` 是普通聊天 ⇒ Local（严格判据、不 trim）。
-        for line in ["!x", "!!x", "!~x"] {
+        // **M1b 第 5b 步 + A20 片 1**：`!!`/`!~`（组队/行会）需进程态 ⇒ Unsupported；
+        // 其余 `!`（喊话）区 k 本地 ⇒ Local；前导空格的 ` !x` 是普通聊天 ⇒ Local（不 trim）。
+        for line in ["!!x", "!~x"] {
             assert_eq!(
                 zone_cmd_class(chat::CM_SAY, Some(line)),
                 ZoneCmdClass::Unsupported,
-                "`{line}` 必须 Unsupported"
+                "`{line}` 必须 Unsupported（需进程态）"
+            );
+        }
+        for line in ["!x", "!", "!hello world"] {
+            assert_eq!(
+                zone_cmd_class(chat::CM_SAY, Some(line)),
+                ZoneCmdClass::Local,
+                "`{line}`（喊话/单叹）必须 Local"
             );
         }
         assert_eq!(
@@ -136745,21 +137066,29 @@ mod l2_s3_cross_recipient_tests {
             assert_eq!(text, none, "ident={ident} 不得依赖 payload 是否存在");
             assert_eq!(at, ZoneCmdClass::Local, "ident={ident} 必须本地");
         }
-        // 只有 CM_SAY 会因 payload 改变归属——且是三态（`@` / `!` / 其余）。
+        // 只有 CM_SAY 会因 payload 改变归属——`@` / `!!` / `!~` 三支改变归属；
+        // **A20 片 1**：其余 `!`（喊话）已与普通说话同属 Local（不再改变归属）。
         assert_ne!(
             zone_cmd_class(chat::CM_SAY, Some("@gm")),
             zone_cmd_class(chat::CM_SAY, Some("hi")),
             "CM_SAY 是唯一 payload 例外族（`@` 支）"
         );
-        assert_ne!(
-            zone_cmd_class(chat::CM_SAY, Some("!gm")),
-            zone_cmd_class(chat::CM_SAY, Some("hi")),
-            "CM_SAY 是唯一 payload 例外族（`!` 支）"
-        );
+        for line in ["!!gm", "!~gm"] {
+            assert_ne!(
+                zone_cmd_class(chat::CM_SAY, Some(line)),
+                zone_cmd_class(chat::CM_SAY, Some("hi")),
+                "CM_SAY 是唯一 payload 例外族（`{line}` 支）"
+            );
+            assert_eq!(
+                zone_cmd_class(chat::CM_SAY, Some(line)),
+                ZoneCmdClass::Unsupported,
+                "`{line}` 支 = Unsupported（进程态）"
+            );
+        }
         assert_eq!(
             zone_cmd_class(chat::CM_SAY, Some("!gm")),
-            ZoneCmdClass::Unsupported,
-            "`!` 支 = Unsupported（进程态）"
+            ZoneCmdClass::Local,
+            "A20 片 1：`!` 喊话与普通说话同属 Local"
         );
     }
 
