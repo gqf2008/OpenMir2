@@ -53977,6 +53977,323 @@ break
         );
     }
 
+    // ==== A31：UPGRADEITEM 家族宿主层缺口（帧/状态不一致 + 未覆写访问器 + Ex 宿主牙）====
+
+    /// **A31① 牙 `repair_all_item_writes_dura_back_and_emits_642`**：真实 `REPAIRALLITEM`（338）
+    /// 经 `dlg_select` 跑完 ⇒ ① `SM_DURACHANGE(642)` 载荷 = 写回后的 Dura/DuraMax
+    /// （`Recog=Dura`、`Param=槽位`、`Tag/Series=DuraMax`）；② 会话 `use_items[1].dura == dura_max`
+    /// （写回生效，此前 `set_use_item_dura` 是 trait no-op ⇒ 快照不变 ⇒ `write_back_player_use_items`
+    /// 见 `prev == slot` 直接跳过：客户端显示已修、会话/DB 仍旧）；③ 蓝字成功提示。
+    ///
+    /// 变异：撤 `NpcPlayer::set_use_item_dura` 覆写 ⇒ 会话 Dura 仍 10 ⇒ ②红。
+    #[test]
+    fn repair_all_item_writes_dura_back_and_emits_642() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "修一修 <修/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 338,
+                ..Default::default()
+            }],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 9101,
+            index: 1,
+            dura: 10,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("REPAIRALLITEM 不清槽");
+        assert_eq!(slot.dura, 40, "Dura 必须写回 dura_max（会话/DB 面）");
+        assert_eq!(slot.dura_max, 40);
+        assert_eq!(slot.index, 1, "修耐久不改 Index");
+        let mut dura_frames: Vec<(i32, u16, u16, u16)> = Vec::new();
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_DURACHANGE => {
+                        dura_frames.push((cm.recog, cm.param, cm.tag, cm.series));
+                    }
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            dura_frames,
+            vec![(40, 1, 40, 0)],
+            "642 载荷：Recog=Dura、Param=槽位、Tag/Series=DuraMax（ushort ⇒ Hi=0）"
+        );
+        assert!(
+            texts.iter().any(|t| t == "您身上的的装备修复成功了..."),
+            "蓝字成功提示（原文“身上的的”）：{texts:?}"
+        );
+    }
+
+    /// **A31② 牙 `upgrade_item_missing_std_item_red_and_no_draws`**：槽 `Index>0` 但 `catalog`
+    /// **无该模板** ⇒ oracle `GetStdItem == null` ⇒ 红字一条、**RNG 零抽**、不中止（说词照发）、
+    /// 零 203、Desc 不变。
+    ///
+    /// RNG 零抽用**见证法**：跑前把 `world.rng` 重置为固定种子，跑后取下一抽与同种子新发生器
+    /// 首抽比较；本用例第二段（模板存在）证明该见证对"真抽过"敏感（对照）。
+    ///
+    /// **可达性口径**：脚本路径造不出未知 `Index`（`catalog_from` 把空名行过滤成洞、
+    /// `use_items_from` 拷 `hum_items` 时**无 catalog 校验**）⇒ 本牙的入口是 **DB 脏数据**
+    /// （`hum_items` 里 `Index>0` 但模板缺失），非脚本可达；牙直接构造该脏槽。
+    ///
+    /// 变异：回退 `NpcPlayer::use_item_std_item_present` 覆写 ⇒ 走成功支（3 抽 + 203）⇒ 红。
+    #[test]
+    fn upgrade_item_missing_std_item_red_and_no_draws() {
+        let seed = 12345;
+        let first_draw = |s: i32| mir2_shared::rng::RandomNumber::with_seed(s).random_below(1000);
+        let worn = game_svr::bag::BagItem {
+            make_index: 9201,
+            index: 99, // catalog 无 99
+            dura: 30,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升一升 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 212,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "10".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1].clone().expect("槽仍在");
+        assert_eq!(slot.desc, [0u8; 14], "模板缺失 ⇒ 不得写 Desc");
+        let (mut up, mut says) = (0usize, 0usize);
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_UPDATEITEM => up += 1,
+                    mir2_protocol::messages::SM_MERCHANTSAY => says += 1,
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(up, 0, "模板缺失 ⇒ 零 203");
+        assert!(
+            texts.iter().any(|t| t == "你身上没有戴指定物品!!!"),
+            "必须红字：{texts:?}"
+        );
+        assert!(says > 0, "红字支不中止 ⇒ 说词照发");
+        assert_eq!(
+            rig.world.rng.random_below(1000),
+            first_draw(seed),
+            "模板缺失支 RNG 零抽（见证法）"
+        );
+        // 对照：模板存在 ⇒ 同一夹具真抽 3 次 ⇒ 见证必须偏离，证明见证对"抽过"敏感。
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升一升 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 212,
+                s_param1: "1".to_string(),
+                s_param2: "0".to_string(),
+                s_param3: "10".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.catalog.insert(
+            99,
+            mir2_data::StdItem {
+                name: "棍".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] =
+            Some(game_svr::bag::BagItem {
+                make_index: 9202,
+                index: 99,
+                dura: 30,
+                dura_max: 40,
+                desc: [0; 14],
+            });
+        rig.dlg_select("@main");
+        assert_ne!(
+            rig.world.rng.random_below(1000),
+            first_draw(seed),
+            "对照段：模板存在 ⇒ 成功支抽数 ⇒ 见证偏离"
+        );
+    }
+
+    /// **A31③a 牙 `upgrade_items_ex_status2_resets_desc`**：`UPGRADEITEMEX` 的 `status=2`
+    /// （装备属性恢复默认）宿主级行为：失手 ⇒ 红字 `装备升级失败，装备属性恢复默认!!!`、
+    /// `Desc[nValType]` 清 0、槽 Index 不清、**零 202/203**。
+    ///
+    /// 变异：`status=2` 支不写 Desc（或误发 202/203）⇒ 红。
+    #[test]
+    fn upgrade_items_ex_status2_resets_desc() {
+        // `nRate=2` ⇒ `random(20)`；挑首抽 >10（失手支）的种子。
+        let mut seed = 0i32;
+        loop {
+            let mut probe = mir2_shared::rng::RandomNumber::with_seed(seed);
+            if probe.random_below(20) > 10 {
+                break;
+            }
+            seed += 1;
+            assert!(seed < 10_000, "找不到命中失手支的种子");
+        }
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 213,
+                s_param1: "1".to_string(),
+                s_param2: "3".to_string(),
+                s_param3: "2".to_string(),
+                s_param4: "10".to_string(),
+                s_param5: "2".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let mut desc = [0u8; 14];
+        desc[3] = 7;
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] =
+            Some(game_svr::bag::BagItem {
+                make_index: 9301,
+                index: 1,
+                dura: 30,
+                dura_max: 40,
+                desc,
+            });
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("status=2 不清槽");
+        assert_eq!(slot.index, 1, "status=2 不清 Index");
+        assert_eq!(slot.desc[3], 0, "status=2 ⇒ Desc[nValType] 清 0");
+        let (mut up, mut del, mut texts) = (0usize, 0usize, Vec::new());
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_UPDATEITEM => up += 1,
+                    mir2_protocol::messages::SM_DELITEM => del += 1,
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(up, 0, "status=2 ⇒ 零 203");
+        assert_eq!(del, 0, "status=2 ⇒ 零 202");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "装备升级失败，装备属性恢复默认!!!"),
+            "{texts:?}"
+        );
+    }
+
+    /// **A31③b 牙 `upgrade_items_ex_valtype14_bumps_dura_max`**：`UPGRADEITEMEX` 的
+    /// `nValType == 14`（DuraMax 支）宿主级行为：成功 ⇒ `DuraMax += Point*1000`
+    /// （Point = max(1, 抽值)）、Desc 不动、1 条 `SM_UPDATEITEM(203)`（尾 = `trade::update_item_tail`）。
+    ///
+    /// 变异：ValType 14 误走 Desc 支（或 `*1000` 丢失）⇒ 红。
+    #[test]
+    fn upgrade_items_ex_valtype14_bumps_dura_max() {
+        // `nRate=1` ⇒ `random(10)` ∈0..9 ≤10 恒成功；`nPoint=10` ⇒ 第二抽 0..9。
+        let seed = 4242;
+        let mut probe = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let _rate_point = probe.random_below(10);
+        let point = std::cmp::max(1, probe.random_below(10));
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 213,
+                s_param1: "1".to_string(),
+                s_param2: "14".to_string(),
+                s_param3: "1".to_string(),
+                s_param4: "10".to_string(),
+                s_param5: "0".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] =
+            Some(game_svr::bag::BagItem {
+                make_index: 9401,
+                index: 1,
+                dura: 30,
+                dura_max: 100,
+                desc: [0; 14],
+            });
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("ValType=14 成功支不清槽");
+        assert_eq!(
+            i32::from(slot.dura_max),
+            100 + point * 1000,
+            "DuraMax += Point({point})*1000"
+        );
+        assert_eq!(slot.desc, [0u8; 14], "ValType=14 不动 Desc");
+        let want_tail = game_svr::trade::update_item_tail(&slot, &rig.catalog).expect("203 尾");
+        let mut got: Vec<u8> = Vec::new();
+        let mut up = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                if cm.ident == mir2_protocol::messages::SM_UPDATEITEM {
+                    up += 1;
+                    got = body[12..].to_vec();
+                }
+            }
+        }
+        assert_eq!(up, 1, "成功支 1 条 203");
+        assert_eq!(got, want_tail, "203 尾逐字节 = trade::update_item_tail");
+    }
+
     /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
     /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
     ///
