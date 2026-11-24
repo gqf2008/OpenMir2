@@ -9617,6 +9617,55 @@ struct ScriptProcessEnv<'a> {
     script_world: Option<&'a mut ScriptWorldCtx<'a>>,
 }
 
+/// A34 片 4：行会 9 条命令的**唯一装配点**——区 0 `INBOUND_PROCESS` 与区 k 控制邮箱 drain
+/// 共用同一份实参装配（防两处逐字同形之后漂移）。
+///
+/// **只做装配 + 调用 + 返回事件**：行为/日志仍由调用方按原样处理（区 0 臂的
+/// `for ev ... glog!("INF", "行会跨服事件：{}", ev.describe())` 保持在调用方，逐字不变）。
+///
+/// 依赖的进程态：`GuildManager`（名册/排名/盟友）、`GuildConfig`、`GuildStore`（文件落盘）；
+/// 收件人解析只用执行区的 `online`/`world`（「同区可执行」语义，跨区成员视为离线——
+/// 见 A34 片 4 写集地图 §3/§5）。
+#[allow(clippy::too_many_arguments)]
+fn run_guild_command(
+    ident: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    enter_cfg: &EnterConfig,
+    now_tick: i32,
+) -> Vec<guild_cmd::GuildServerEvent> {
+    guild_cmd::handle_guild_cmd(
+        ident,
+        tail,
+        chr_name,
+        socket,
+        online,
+        world,
+        displays,
+        guilds,
+        guild_cfg,
+        ground_sessions,
+        gates,
+        enter_cfg.ref_msg_range,
+        (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
+        (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+        guild_store,
+        &enter_cfg.guild_sections,
+        &enter_cfg.guild_msg_cfg,
+        i32::from(enter_cfg.server_index),
+        now_tick,
+    )
+}
+
 /// **M1c-3b**：`ScriptProcess` 请求的**唯一执行体**（drain 调用；与区 0 tick 的 click/1011 臂
 /// 同函数、同实参）。
 ///
@@ -29203,6 +29252,12 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
     {
         return ZoneCmdClass::Process;
     }
+    // **A34 片 4**：行会 9 条（`GUILD_IDENTS`，显式 9 条不是 1035..=1045）读写进程级
+    // `GuildManager`/`GuildStore` ⇒ 整 ident `Process`（A6 控制邮箱；区 0 drain 用目标区 k 的
+    // 玩家态执行 [`run_guild_command`]）。**无执行臂的 Local 分类另论**——这 9 条是**有臂**的 Process。
+    if guild_cmd::GUILD_IDENTS.contains(&ident) {
+        return ZoneCmdClass::Process;
+    }
     if ident == chat::CM_SAY {
         // 族内判定（见函数 doc）：`@` ⇒ Process；`!!`/`!~` ⇒ Unsupported；其余（含喊话 `!`）
         // ⇒ Local。
@@ -39536,25 +39591,21 @@ impl HostLoop {
                             } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
                                 // **G2**：9 条 `CM_GUILD*` 派发（oracle `PlayObject.Operate.cs:1229-1560`）。
                                 // 显式 9 条、**不是** `1035..=1045`（1042/1043 由 inbound 兜底）。
-                                let events = guild_cmd::handle_guild_cmd(
+                                // **A34 片 4**：实参装配抽到 [`run_guild_command`]（与区 k drain 共用）。
+                                let events = run_guild_command(
                                     cmd.ident,
                                     tail.as_deref(),
                                     &chr_name,
                                     socket,
-                                    &online,
                                     &world,
                                     &displays,
+                                    &online,
+                                    &mut ground_sessions,
+                                    &gates,
                                     &mut guilds,
                                     &guild_cfg,
-                                    &mut *ground_sessions,
-                                    &gates,
-                                    enter_cfg.ref_msg_range,
-                                    (enter_cfg.green_msg_f_color, enter_cfg.green_msg_b_color),
-                                    (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
                                     guild_store.as_ref(),
-                                    &enter_cfg.guild_sections,
-                                    &enter_cfg.guild_msg_cfg,
-                                    i32::from(enter_cfg.server_index),
+                                    &enter_cfg,
                                     world.clock_ms as i32,
                                 );
                                 for ev in &events {
@@ -40203,6 +40254,32 @@ impl HostLoop {
                                                 script_world: script_world.as_mut(),
                                             },
                                         );
+                                    });
+                                }
+                                ControlRequest::GuildProcess { ident, tail, .. } => {
+                                    // **A34 片 4**：行会 9 条——与区 0 `INBOUND_PROCESS` 共用
+                                    // [`run_guild_command`]；此时持的是**目标区 k** 的 `ZoneState`
+                                    // 锁（与 `GmSay` 同机制），进程级 `guilds`/`guild_store` 照常。
+                                    guard.run(|sessions| {
+                                        let events = run_guild_command(
+                                            ident,
+                                            tail.as_deref(),
+                                            &chr_name,
+                                            socket,
+                                            &*world,
+                                            &*displays,
+                                            &*online,
+                                            sessions,
+                                            &*gates,
+                                            &mut *guilds,
+                                            &*guild_cfg,
+                                            guild_store.as_ref(),
+                                            &*enter_cfg,
+                                            world.clock_ms as i32,
+                                        );
+                                        for ev in &events {
+                                            glog!("INF", "行会跨服事件：{}", ev.describe());
+                                        }
                                     });
                                 }
                             }
@@ -42010,7 +42087,7 @@ struct PendingLocalCmd {
 /// 非本地 `CM_EAT`（脚本/彩票/城堡/不可判）。**执行机构（`a6_enqueue_control`/`A6ControlGuard`/
 /// 计数列/超时）全部不变**——只是投递体变成带类型的变体。
 ///
-/// **A20**：**不实现** `!` 频道说的变体（频道消息不进邮箱，仍 `Unsupported`）。
+/// **A20 片 1**：`!` 喊话为区 k **本地**执行（不进邮箱）；`!!`/`!~` 仍 `Unsupported`（通道片另做）。
 #[derive(Debug)]
 enum ControlRequest {
     GmSay {
@@ -42031,6 +42108,16 @@ enum ControlRequest {
         recog: i32,
         param: u16,
         tag: u16,
+        tail: Option<String>,
+        at_tick: u64,
+        epoch: u64,
+    },
+    /// **A34 片 4**：行会 9 条（`CM_GUILD*`）——区 0 drain 用**区 k** 玩家态 + 进程级
+    /// `GuildManager`/`GuildStore` 执行 [`run_guild_command`]（与区 0 `INBOUND_PROCESS` 共用）。
+    GuildProcess {
+        zone: zone::ZoneId,
+        chr_name: String,
+        ident: u16,
         tail: Option<String>,
         at_tick: u64,
         epoch: u64,
@@ -42058,7 +42145,8 @@ impl ControlRequest {
         match self {
             ControlRequest::GmSay { zone, .. }
             | ControlRequest::EatProcess { zone, .. }
-            | ControlRequest::ScriptProcess { zone, .. } => *zone,
+            | ControlRequest::ScriptProcess { zone, .. }
+            | ControlRequest::GuildProcess { zone, .. } => *zone,
         }
     }
 
@@ -42066,7 +42154,8 @@ impl ControlRequest {
         match self {
             ControlRequest::GmSay { chr_name, .. }
             | ControlRequest::EatProcess { chr_name, .. }
-            | ControlRequest::ScriptProcess { chr_name, .. } => chr_name,
+            | ControlRequest::ScriptProcess { chr_name, .. }
+            | ControlRequest::GuildProcess { chr_name, .. } => chr_name,
         }
     }
 
@@ -42074,7 +42163,8 @@ impl ControlRequest {
         match self {
             ControlRequest::GmSay { at_tick, .. }
             | ControlRequest::EatProcess { at_tick, .. }
-            | ControlRequest::ScriptProcess { at_tick, .. } => *at_tick,
+            | ControlRequest::ScriptProcess { at_tick, .. }
+            | ControlRequest::GuildProcess { at_tick, .. } => *at_tick,
         }
     }
 
@@ -42082,7 +42172,8 @@ impl ControlRequest {
         match self {
             ControlRequest::GmSay { epoch, .. }
             | ControlRequest::EatProcess { epoch, .. }
-            | ControlRequest::ScriptProcess { epoch, .. } => *epoch,
+            | ControlRequest::ScriptProcess { epoch, .. }
+            | ControlRequest::GuildProcess { epoch, .. } => *epoch,
         }
     }
 }
@@ -42105,6 +42196,12 @@ enum ControlPayload {
         param: u16,
         tag: u16,
         series: u16,
+        tail: Option<String>,
+    },
+    /// **A34 片 4**：行会 9 条（`CM_GUILD*`）——区 0 drain 用**区 k** 玩家态 + 进程级
+    /// `GuildManager`/`GuildStore` 执行 [`run_guild_command`]（只带 ident 与尾文本）。
+    GuildProcess {
+        ident: u16,
         tail: Option<String>,
     },
 }
@@ -42478,6 +42575,14 @@ fn a6_enqueue_control(
                 at_tick: tick,
                 epoch,
             },
+            ControlPayload::GuildProcess { ident, tail } => ControlRequest::GuildProcess {
+                zone,
+                chr_name: chr_name.to_string(),
+                ident,
+                tail,
+                at_tick: tick,
+                epoch,
+            },
         };
         q.push_back(req);
         // 置位与 push **同临界区**（理由见函数头注释）。
@@ -42546,6 +42651,13 @@ fn a6_dispatch_local(
                             param: cmd.param,
                             tag: cmd.tag,
                             series: cmd.series,
+                            tail: tail.clone(),
+                        }
+                    } else if guild_cmd::GUILD_IDENTS.contains(&cmd.ident) {
+                        // **A34 片 4**：行会 9 条 ⇒ 进程态（区 0 drain 用目标区 k 的玩家态执行）。
+                        // **必须在默认 `GmSay` 之前**：落进 GmSay 会被当成 `@` 命令正文。
+                        ControlPayload::GuildProcess {
+                            ident: cmd.ident,
                             tail: tail.clone(),
                         }
                     } else {
@@ -134350,6 +134462,510 @@ mod zone_command_tests {
             state.host.ground_sessions["hero"].shout_msg_tick, 0,
             "单 `!` 零状态变更"
         );
+    }
+
+    // ===================== A34 片 4：行会 9 条（Process 族） =====================
+
+    /// 行会测试夹具：区 k（`landed` 的 hero 在 (15,5)）+ 同区 B 在 (16,5)，掌门/成员会话在建会后就位；
+    /// `GuildStore` 指向临时目录（`server_index=0` 时 `save_one` 写 `<dir>/<会>.txt`，文件须预先存在）。
+    struct GuildRig {
+        state: ZoneState,
+        guilds: mir2_world_bevy::GuildManager,
+        cfg: mir2_world_bevy::GuildConfig,
+        shared: SharedServices,
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        store: mir2_data::guild::GuildStore,
+        dir: std::path::PathBuf,
+        hero: i32,
+        b: i32,
+    }
+
+    const GUILD_NAME: &str = "测试会";
+
+    fn guild_rig(tag: &str) -> GuildRig {
+        let (mut state, hero) = landed(tag, zone::ZoneId::new(1));
+        state.host.world.clock_ms = 12_345;
+        // 掌门面右（dir=2 ⇒ 面前 = (hx+1, hy)）；B 放在掌门面前、面左（dir=6 ⇒ 面前 = 掌门）。
+        // 坐标从实体读（`landed` 的世界坐标由登录记录决定，不硬编码）。
+        let (hx, hy) = {
+            let e = state.host.world.entities.get(hero).expect("hero 实体");
+            (e.x, e.y)
+        };
+        {
+            let e = state.host.world.entities.get_mut(hero).expect("hero 实体");
+            e.ai.dir = 2;
+        }
+        let b = state.host.world.add_entity({
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "B", hx + 1, hy);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e.ai.dir = 6;
+            e
+        });
+        state.host.displays.set(
+            hero,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, downlink::gbk("hero")),
+        );
+        state.host.displays.set(
+            b,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, downlink::gbk("B")),
+        );
+        state.host.online.push(OnlineEntry {
+            account: "acctB".to_string(),
+            chr_name: "B".to_string(),
+            session_id: 2,
+            gate_idx: 0,
+            socket: 8,
+            actor_id: b,
+        });
+        let cfg = mir2_world_bevy::GuildConfig::default();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild(GUILD_NAME, "hero", &cfg), "建会");
+        {
+            let mut sg = crate::tests::test_session_ground(hero);
+            sg.guild.guild_name = Some(GUILD_NAME.to_string());
+            sg.guild.rank_no = 1;
+            sg.guild.rank_name = cfg.guild_chief.clone();
+            sg.guild.allow_guild = true;
+            state.host.ground_sessions.insert("hero".to_string(), sg);
+        }
+        {
+            let mut sg = crate::tests::test_session_ground(b);
+            sg.guild.allow_guild = true; // 目标 AllowGuild=true（生产恒 false，夹具按 oracle 成功路径置位）
+            state.host.ground_sessions.insert("B".to_string(), sg);
+        }
+        let dir = std::env::temp_dir().join(format!("a34s4-guild-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // `save_*` 只写**已存在**文件（`MissingSaveTarget` 否则）。
+        std::fs::write(dir.join(format!("{GUILD_NAME}.txt")), b"").unwrap();
+        std::fs::write(dir.join("GuildList.txt"), b"").unwrap();
+        let store = mir2_data::guild::GuildStore::new(dir.clone(), dir.join("GuildList.txt"));
+        let (gates, rx) = gates_and_rx();
+        GuildRig {
+            state,
+            guilds,
+            cfg,
+            shared: SharedServices::for_test(),
+            gates,
+            rx,
+            store,
+            dir,
+            hero,
+            b,
+        }
+    }
+
+    impl GuildRig {
+        fn run(&mut self, ident: u16, tail: &str) {
+            let GuildRig {
+                state,
+                guilds,
+                cfg,
+                shared,
+                gates,
+                store,
+                hero,
+                ..
+            } = self;
+            let hero = *hero;
+            let socket = state
+                .host
+                .online
+                .find_by_chr("hero")
+                .map_or(0, |e| e.socket);
+            let _ = crate::run_guild_command(
+                ident,
+                Some(tail),
+                "hero",
+                socket,
+                &state.host.world,
+                &state.host.displays,
+                &state.host.online,
+                &mut state.host.ground_sessions,
+                gates,
+                guilds,
+                cfg,
+                Some(store),
+                &shared.enter_cfg,
+                12_345,
+            );
+            let _ = hero;
+        }
+
+        fn frames(&mut self) -> Vec<(i32, u16, i32)> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = self.rx.try_recv() {
+                out.push((
+                    socket,
+                    u16::from_le_bytes([body[4], body[5]]),
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                ));
+            }
+            out
+        }
+    }
+
+    /// **A34 片 4 · 路由牙**：9 条 `CM_GUILD*` ident 级 `Process`；`a6_dispatch_local` 必须把它们装进
+    /// `ControlPayload::GuildProcess`（**不是** 默认 `GmSay`）、置 `control_pending`、且**不**计
+    /// `zone_cmd_unsupported`。
+    #[test]
+    fn zonek_guild_idents_are_process_and_route_to_guild_mailbox() {
+        use std::collections::{BTreeMap, VecDeque};
+        for ident in guild_cmd::GUILD_IDENTS {
+            assert_eq!(
+                zone_cmd_class(ident, None),
+                ZoneCmdClass::Process,
+                "ident={ident} 必须 Process（行会 9 条读写进程态）"
+            );
+        }
+        let (mut state, actor) = landed("guild_route", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let inbox = std::sync::Mutex::new(VecDeque::new());
+        let mut pending = BTreeMap::new();
+        let mut buffer = VecDeque::from([SeqEvent {
+            seq: 1,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(mir2_protocol::messages::CM_GUILDHOME, 0, 0, 0),
+                tail: Some(String::new()),
+            },
+        }]);
+        let u0 = perf_counters::zone_cmd_unsupported();
+        let mut exec_calls = 0usize;
+        let _ = execute_local_budget(
+            0,
+            &mut buffer,
+            &mut pending,
+            0,
+            1,
+            false,
+            None,
+            ZoneDrainLimits::PRODUCTION,
+            &|_s: &SeqEvent| ZoneCmdClass::Process,
+            |item, class, p, b| {
+                let mut exec =
+                    |_e: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
+                        exec_calls += 1;
+                    };
+                a6_dispatch_local(
+                    item,
+                    class,
+                    Some(&inbox),
+                    &mut state.host.ground_sessions,
+                    p,
+                    zone::ZoneId::new(1),
+                    5,
+                    b,
+                    &mut exec,
+                )
+            },
+        );
+        assert_eq!(exec_calls, 0, "Process 不得本地执行");
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0,
+            "Process 归属不得计 zone_cmd_unsupported"
+        );
+        let q = inbox.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(q.len(), 1, "必须入控制邮箱恰一条");
+        match &q[0] {
+            ControlRequest::GuildProcess { ident, tail, .. } => {
+                assert_eq!(*ident, mir2_protocol::messages::CM_GUILDHOME);
+                assert_eq!(tail.as_deref(), Some(""));
+            }
+            other => panic!("必须装 GuildProcess 变体（落 GmSay 即错），实得 {other:?}"),
+        }
+        drop(q);
+        assert_eq!(
+            state.host.ground_sessions["hero"].a6.control_pending, 1,
+            "A6 置位（stop-and-wait）"
+        );
+    }
+
+    /// **A34 片 4 · G4 同区成功 + 目标离线（镜像语义）**：
+    /// ① 掌门对同区 B（面朝 + `AllowGuild=true`）⇒ A 收 757、B 收 750/42/100（绿）、名册/会话/文件写；
+    /// ② 目标只以镜像存在（无 online）⇒ `758/Recog=2`（oracle `GetPlayObject==null` 同形），不写镜像。
+    #[test]
+    fn zonek_guild_add_member_success_and_offline_target() {
+        let mut rig = guild_rig("addmem");
+        rig.run(mir2_protocol::messages::CM_GUILDADDMEMBER, "B");
+        let frames = rig.frames();
+        // 掌门（socket 7）：757 + 42（B 的 RefShowName 观察者）
+        assert!(
+            frames
+                .iter()
+                .any(|(s, i, _)| *s == 7 && *i == mir2_protocol::messages::SM_GUILDADDMEMBER_OK),
+            "掌门应收到 757；实得 {frames:?}"
+        );
+        // B（socket 8）：750 → 42 → 100（同一 socket 的排队序 750 < 42 < 100）
+        let b_idents: Vec<u16> = frames
+            .iter()
+            .filter(|(s, _, _)| *s == 8)
+            .map(|(_, i, _)| *i)
+            .collect();
+        assert_eq!(
+            b_idents,
+            vec![
+                mir2_protocol::messages::SM_CHANGEGUILDNAME,
+                42,
+                mir2_protocol::messages::SM_SYSMESSAGE
+            ],
+            "目标帧序必须 750 → 42 → 100；实得 {b_idents:?}"
+        );
+        // 名册 + 会话 + 落盘
+        let g = rig.guilds.find_guild(GUILD_NAME).expect("会仍在");
+        assert!(g.is_member("B"), "名册写 B");
+        assert_eq!(
+            rig.state.host.ground_sessions["B"]
+                .guild
+                .guild_name
+                .as_deref(),
+            Some(GUILD_NAME),
+            "目标会话写 MyGuild"
+        );
+        let raw = std::fs::read(rig.dir.join(format!("{GUILD_NAME}.txt"))).unwrap();
+        let text = encoding_rs::GBK.decode(&raw).0.into_owned();
+        assert!(text.contains("B"), "落盘文件必须含新成员；实得 {text:?}");
+        std::fs::remove_dir_all(&rig.dir).ok();
+
+        // ② 目标只在 world 里（镜像语义：race=PLAY、面朝掌门、**无 online 项**）
+        let mut rig = guild_rig("mirror");
+        // 摘掉 B 的 online 项（实体仍在本区 world、仍面朝掌门）⇒ 与「人在别区、本区只有镜像」同形。
+        assert!(
+            rig.state.host.online.take("B").is_some(),
+            "夹具：先移除 B 的 online 项"
+        );
+        let b_entity = rig.b;
+        let before_len = rig.state.host.ground_sessions.len();
+        rig.run(mir2_protocol::messages::CM_GUILDADDMEMBER, "B");
+        let frames = rig.frames();
+        let fails: Vec<(i32, u16, i32)> = frames
+            .iter()
+            .copied()
+            .filter(|(_, i, _)| *i == mir2_protocol::messages::SM_GUILDADDMEMBER_FAIL)
+            .collect();
+        assert_eq!(
+            fails.len(),
+            1,
+            "离线/镜像目标 ⇒ 恰一条 758；实得 {frames:?}"
+        );
+        assert_eq!(
+            fails[0].2, 2,
+            "758 的 Recog = nC = 2（GetPlayObject null 同形）"
+        );
+        assert_eq!(
+            rig.state.host.ground_sessions.len(),
+            before_len,
+            "不得增删会话"
+        );
+        assert!(
+            !rig.guilds
+                .find_guild(GUILD_NAME)
+                .expect("会仍在")
+                .is_member("B"),
+            "镜像目标不得进名册"
+        );
+        assert!(
+            rig.state.host.world.entities.get(b_entity).is_some(),
+            "镜像实体原样保留"
+        );
+        std::fs::remove_dir_all(&rig.dir).ok();
+    }
+
+    /// **A34 片 4 · G5/G8/G9 形态**：删成员（759 + 目标 750/42）；自删（759 + 自己 750/42/100 红 +
+    /// 会解散）；1044 ⇒ 769/-4；1045 掌门 ⇒ 769/0、非掌门零帧。
+    #[test]
+    fn zonek_guild_del_member_self_delete_and_ally_forms() {
+        // 删成员
+        let mut rig = guild_rig("delmem");
+        {
+            let cfg = rig.cfg.clone();
+            rig.guilds
+                .find_guild_mut(GUILD_NAME)
+                .expect("会")
+                .add_member("B", &cfg, 0);
+            let sg = rig.state.host.ground_sessions.get_mut("B").expect("B 会话");
+            sg.guild.guild_name = Some(GUILD_NAME.to_string());
+            sg.guild.rank_no = mir2_world_bevy::guild::GUILD_RANK_NO_MEMBER;
+        }
+        rig.run(mir2_protocol::messages::CM_GUILDDELMEMBER, "B");
+        let frames = rig.frames();
+        assert!(
+            frames
+                .iter()
+                .any(|(s, i, _)| *s == 7 && *i == mir2_protocol::messages::SM_GUILDDELMEMBER_OK),
+            "掌门应收到 759；实得 {frames:?}"
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|(s, i, _)| *s == 8 && *i == mir2_protocol::messages::SM_CHANGEGUILDNAME),
+            "被删目标应收到 750；实得 {frames:?}"
+        );
+        assert!(
+            !rig.guilds
+                .find_guild(GUILD_NAME)
+                .expect("会")
+                .is_member("B"),
+            "名册移除 B"
+        );
+        std::fs::remove_dir_all(&rig.dir).ok();
+
+        // 自删（单人会）⇒ 会解散 + 自己 750/42/100（红）
+        let mut rig = guild_rig("selfdel");
+        rig.run(mir2_protocol::messages::CM_GUILDDELMEMBER, "hero");
+        let frames = rig.frames();
+        assert!(
+            frames
+                .iter()
+                .any(|(s, i, _)| *s == 7 && *i == mir2_protocol::messages::SM_GUILDDELMEMBER_OK),
+            "自删成功应回 759；实得 {frames:?}"
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|(s, i, _)| *s == 7 && *i == mir2_protocol::messages::SM_CHANGEGUILDNAME),
+            "自删应收到 750(None)；实得 {frames:?}"
+        );
+        assert!(
+            rig.guilds.find_guild(GUILD_NAME).is_none(),
+            "单人会自删 ⇒ DelGuild"
+        );
+        assert_eq!(
+            rig.state.host.ground_sessions["hero"].guild.guild_name, None,
+            "自己会话清 MyGuild"
+        );
+        std::fs::remove_dir_all(&rig.dir).ok();
+
+        // 1044 联盟（生产恒 769/-4）：需面前对象**有行会**且面朝掌门；`EnableAuthAlly` 恒 false。
+        let mut rig = guild_rig("ally");
+        rig.state
+            .host
+            .ground_sessions
+            .get_mut("B")
+            .expect("B 会话")
+            .guild
+            .guild_name = Some("另一会".to_string());
+        rig.run(mir2_protocol::messages::CM_GUILDALLY, "");
+        let frames = rig.frames();
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, i, _)| *i == mir2_protocol::messages::SM_GUILDMAKEALLY_FAIL)
+                .map(|(_, _, r)| *r)
+                .collect::<Vec<_>>(),
+            vec![-4],
+            "1044 生产形态 = 769/-4；实得 {frames:?}"
+        );
+        std::fs::remove_dir_all(&rig.dir).ok();
+
+        // 1045 断盟：掌门 ⇒ 769/0；非掌门 ⇒ 零帧
+        let mut rig = guild_rig("breakally");
+        rig.run(mir2_protocol::messages::CM_GUILDBREAKALLY, "");
+        let frames = rig.frames();
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|(_, i, _)| *i == mir2_protocol::messages::SM_GUILDMAKEALLY_FAIL)
+                .map(|(_, _, r)| *r)
+                .collect::<Vec<_>>(),
+            vec![0],
+            "1045 掌门形态 = 769/0；实得 {frames:?}"
+        );
+        // 非掌门（B 无会、rank 0）⇒ 零帧
+        {
+            let GuildRig {
+                state,
+                guilds,
+                cfg,
+                shared,
+                gates,
+                store,
+                b,
+                ..
+            } = &mut rig;
+            let _ = crate::run_guild_command(
+                mir2_protocol::messages::CM_GUILDBREAKALLY,
+                Some(""),
+                "B",
+                8,
+                &state.host.world,
+                &state.host.displays,
+                &state.host.online,
+                &mut state.host.ground_sessions,
+                gates,
+                guilds,
+                cfg,
+                Some(store),
+                &shared.enter_cfg,
+                12_345,
+            );
+            let _ = b;
+        }
+        assert!(rig.frames().is_empty(), "非掌门断盟必须零帧");
+        std::fs::remove_dir_all(&rig.dir).ok();
+    }
+
+    /// **A34 片 4 · 邮箱满守恒**：`CONTROL_MAILBOX_CAP` 预填后，行会命令被丢新（返回 false），
+    /// `control_pending` 不变、`zone_cmd_unsupported` 不增（Process 归属证据）。
+    #[test]
+    fn zonek_guild_mailbox_full_drops_new_without_unsupported() {
+        use std::collections::VecDeque;
+        let (mut state, actor) = landed("guild_mbfull", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let inbox = std::sync::Mutex::new(VecDeque::new());
+        let mut sessions = std::mem::take(&mut state.host.ground_sessions);
+        for _ in 0..CONTROL_MAILBOX_CAP {
+            assert!(a6_enqueue_control(
+                &inbox,
+                &mut sessions,
+                zone::ZoneId::new(1),
+                "hero",
+                ControlPayload::GuildProcess {
+                    ident: mir2_protocol::messages::CM_GUILDHOME,
+                    tail: Some(String::new()),
+                },
+                mir2_protocol::messages::CM_GUILDHOME,
+                5,
+            ));
+        }
+        let pending_before = sessions["hero"].a6.control_pending;
+        let u0 = perf_counters::zone_cmd_unsupported();
+        assert!(
+            !a6_enqueue_control(
+                &inbox,
+                &mut sessions,
+                zone::ZoneId::new(1),
+                "hero",
+                ControlPayload::GuildProcess {
+                    ident: mir2_protocol::messages::CM_GUILDHOME,
+                    tail: Some(String::new()),
+                },
+                mir2_protocol::messages::CM_GUILDHOME,
+                5,
+            ),
+            "邮箱满 ⇒ 丢新（返回 false）"
+        );
+        assert_eq!(
+            sessions["hero"].a6.control_pending, pending_before,
+            "丢新不得改在飞计数"
+        );
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0,
+            "邮箱满也不得计 zone_cmd_unsupported（归属是 Process）"
+        );
+        state.host.ground_sessions = sessions;
     }
 
     /// **M1c-2c 牙 1【行为】`eat_branch_is_exhaustive_fail_closed`**：`CM_EAT` 分支穷举 + 安全默认。
