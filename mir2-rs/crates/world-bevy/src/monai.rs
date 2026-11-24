@@ -26,7 +26,8 @@
 //! ## 与 oracle 的建模差异（登记，不在本片修）
 //!
 //! - **线程模型**：oracle 的 `ProcessMonsters` 跑在独立线程（`WorldServer.MonGen.cs:192`），
-//!   本 crate 单线程 tick 串行（设计文档 §4.2 硬约束①）。本片把「每 tick 对每只怪跑一次
+//!   本 crate 的 `TickRunner` 串行推进段（系统调度由 bevy 冲突检测保证不重叠，设计文档
+//!   §4.2 硬约束①）。本片把「每 tick 对每只怪跑一次
 //!   `Run()`」按**实体槽位顺序**串行执行（顺序来自 `EntityStore` 的显式槽位索引）。
 //! - **`BaseObject.Run` 的公共段已分归两处**（`BaseObject.Base.cs:24-316`）：
 //!   - [`base_object_run_monster`]：恢复 `HealthTick/SpellTick`（`:39-66`）、体力点段（`:105-110`）、

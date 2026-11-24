@@ -1,15 +1,17 @@
-//! S1：**单线程 tick 骨架**（`crates/world-bevy` 的世界 tick 迁入 `bevy_ecs` 的第一批）。
+//! S1：**tick 骨架**（`crates/world-bevy` 的世界 tick 迁入 `bevy_ecs` 的第一批）。
 //!
 //! 形态：[`TickRunner`] 包一个 [`Schedule`]，**显式**装上
-//! [`SingleThreadedExecutor`]——世界 tick 仍由调用方（`crates/world-bevy` 的 `World::tick`）驱动，
-//! 只是时钟推进/顺序收集等骨架步骤改由 ECS 系统完成。
+//! [`MultiThreadedExecutor`]（bevy 自己的 task pool，首次调度时懒初始化；不引
+//! rayon/crossbeam/tokio）——世界 tick 仍由调用方（`crates/world-bevy` 的 `World::tick`）驱动，
+//! 只是时钟推进/顺序收集等骨架步骤改由 ECS 系统完成。并行度受同阶段读写冲突限制
+//! （冲突 system 串行、无冲突才并行）；确定性由 `tests/no_parallel.rs::replay_determinism_8x` 守。
 //!
 //! ## 系统执行顺序：显式契约（本文件是唯一权威）
 //!
 //! `Query` 的迭代序、bevy 的注册序、系统之间的参数依赖**都不是**本项目的顺序契约
 //! （AGENTS.md §4.2.2 第 2 条）。`TickRunner` 的执行顺序**只**由下面这条阶段链决定
 //! （S3a 起：与 `crates/world-bevy` 的 `tick_head` / 宿主段 / `tick_tail` oracle 段序一一对应，
-//! 每段一个阶段，**仍然只有单线程 executor**）：
+//! 每段一个阶段；阶段之间的先后固定，段内有读写冲突的 system 由 bevy 串行化）：
 //!
 //! ```text
 //! Clock -> Command -> SimHiterSnapshot -> SimExpireHitters -> SimSettleDeaths
@@ -1036,10 +1038,11 @@ macro_rules! stage_spec {
     };
 }
 
-/// 单线程 tick 骨架：`Schedule` + [`SingleThreadedExecutor`] + 显式阶段顺序契约。
+/// tick 骨架：`Schedule` + [`MultiThreadedExecutor`] + 显式阶段顺序契约。
 ///
-/// 只暴露「带阶段地加系统 / 跑一次」，**不提供**无阶段注册入口；也**不提供**多线程执行器入口
-/// （守卫会正面断言本文件出现 `SingleThreadedExecutor`，且源码扫描禁 `MultiThreadedExecutor`）。
+/// 只暴露「带阶段地加系统 / 跑一次」，**不提供**无阶段注册入口；执行器选择只在本文件落点
+/// （守卫正面断言出现 `set_executor(`；`tests/no_parallel.rs` 的源码扫描允许
+/// `MultiThreadedExecutor`/`bevy_tasks`，禁 rayon/crossbeam/裸 `thread::spawn`）。
 pub struct TickRunner {
     schedule: Schedule,
 }

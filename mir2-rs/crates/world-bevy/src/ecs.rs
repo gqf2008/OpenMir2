@@ -14,8 +14,8 @@
 //!
 //! ## 四条硬约束怎么落实（设计文档 §4.2.2）
 //!
-//! 1. **单线程**：本内核不建线程、不用并行 API；tick 骨架见 [`crate::tick`]（显式
-//!    [`bevy_ecs::schedule::SingleThreadedExecutor`]）；
+//! 1. **本内核不建线程**：`EcsStore` 自身不 spawn 线程、不用并行 API；tick 骨架见
+//!    [`crate::tick`]（`TickRunner` 用 bevy [`bevy_ecs::schedule::MultiThreadedExecutor`]）；
 //! 2. **遍历顺序显式化**：`EcsStore` **一次都不迭代 `Query` 求顺序**——`iter` / `iter_mut` /
 //!    `order_index` 全部走 `SlotTable`（槽位顺序 = 插入顺序 + 空闲槽复用）。`Query`（或 `World::get`）
 //!    只用于「按显式句柄取组件」。这一点由内核单测 `src/ecs.rs::tests::

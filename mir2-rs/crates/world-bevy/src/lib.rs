@@ -8,14 +8,18 @@
 //!
 //! ## 四条硬约束怎么落实（§4.2.2）
 //!
-//! 1. **单线程 executor**：显式用 [`bevy_ecs::schedule::SingleThreadedExecutor`]，
-//!    绝不使用 `MultiThreadedExecutor`/`bevy_tasks` 并行（守卫：`tests/bevy_drop_parity.rs::no_parallel_guard`）；
+//! 1. **执行器**：tick 骨架 [`tick::TickRunner`] 显式装 bevy
+//!    [`bevy_ecs::schedule::MultiThreadedExecutor`]（`src/tick.rs`）；任务池由 bevy 懒初始化
+//!    （首次调度时 `ComputeTaskPool::get_or_init(TaskPool::default)`），本 crate 不直接引用
+//!    `bevy_tasks` 的显式 API；并行度受同阶段读写冲突限制（冲突 system 串行、无冲突才并行），
+//!    确定性由 `tests/no_parallel.rs::replay_determinism_8x` 逐字节守；
 //! 2. **遍历顺序显式化**：系统**不迭代任何 `Query`**——处理顺序来自我们自己的
 //!    [`OrderIndex`] 资源（实体 id 升序，由调用方给出）。`Query` 迭代序在 bevy 里不是契约
 //!    （archetype/table 顺序），本 crate 一处都不用；
 //! 3. **确定性守卫升级**：本 crate 自己的 `bevy_drop_parity.rs::no_parallel_guard` 把白名单放宽为
-//!    "只允许 `bevy_ecs`/`bevy_app`"（仍旧禁 rayon/crossbeam/bevy_tasks 并行 API），
-//!    并保留"tick 必须在同一线程"的运行期断言思路（见测试）；
+//!    "只允许 `bevy_ecs`/`bevy_app` + 本仓数据/公式 crate"；`tests/no_parallel.rs` 的源码扫描
+//!    **允许** `MultiThreadedExecutor`/`bevy_tasks` 的使用，仍**禁** rayon/crossbeam/裸
+//!    `thread::spawn`，并保留"tick 必须在同一线程"的运行期断言思路（见测试）；
 //! 4. **迁移验收＝原判据不降级**：S1 的实体存储/tick 骨架与原 `EntityStore`/`World::tick` 语义
 //!    逐条一致（槽位顺序、空闲槽复用、代际号、时钟/线程断言），三个 golden（basic/session/combat）
 //!    逐行不变；D3 的对拍断言「同一输入下，本系统输出的命令与既有实现逐项相同」也保持。
@@ -35,7 +39,8 @@ use mir2_shared::rng::RandomNumber;
 // ============================ S1 迁移内核（实体存储 + tick 骨架） ============================
 //
 // 卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world-bevy` 的**实体存储**与**tick 骨架**
-// 迁到 `bevy_ecs`。内核与 D3 的掉落系统同 crate、同约束：单线程 executor + 自有序索引。
+// 迁到 `bevy_ecs`。内核与 D3 的掉落系统同 crate、同约束：bevy 调度器（`tick.rs` 的
+// `TickRunner`）+ 自有序索引。
 pub mod components;
 pub mod ecs;
 pub mod tick;
@@ -364,7 +369,7 @@ pub fn plan_floor_placement(snapshot: &PlaceSnapshot) -> Vec<FloorPlaceOut> {
 // S5 起模拟层与 ECS 内核同 crate，适配层不再跨 crate，函数签名与行为不变。
 
 // ============================ 自 crates/world-bevy 并入的模拟层（S5） ============================
-// M2 世界模拟骨架（单线程 tick + 实体存储 + 地图/AOI + 会话进出）。
+// M2 世界模拟骨架（tick 骨架 + 实体存储 + 地图/AOI + 会话进出）。
 //
 // 行为基准：`src/GameSvr/Word/WorldServer.cs`（`ProcessHumans` 的 200ms 节拍）与
 // `src/M2Server/Maps/Envirnoment.cs`、`src/M2Server/Actor/BaseObject.ViewRange.cs`。
@@ -373,11 +378,12 @@ pub fn plan_floor_placement(snapshot: &PlaceSnapshot) -> Vec<FloorPlaceOut> {
 // 协议编解码见 `crates/protocol`（A 线）。
 //
 // 三条纪律：
-// 1. **单线程串行**：`World::tick` 每次校验线程 id（见 `world.rs` 的测试）；
+// 1. **线程归属**：`World` 只在创建它的线程上推进（`tick_head`/`tick_tail` 记录并校验
+//    owner thread；`TickRunner::run` 另有调用线程断言，见 `tick.rs` 与 `world.rs` 的测试）；
 // 2. **确定性**：虚拟时钟 + 固定遍历顺序（S1 起遍历顺序来自本 crate 的显式槽位索引
 //    `EcsStore`），模拟逻辑不读墙钟、不用 HashMap 迭代序；
-// 3. **零并行依赖**：本 crate 只依赖 `bevy_ecs`（单线程 executor）与数据/公式 crate，
-//    不引入任何线程/异步运行时（`tests/no_parallel.rs` 钉住）。
+// 3. **零外部并行依赖**：本 crate 只依赖 `bevy_ecs`（含 bevy 自带的执行器与 task pool）
+//    与数据/公式 crate，不引入任何外部线程库/异步运行时（`tests/no_parallel.rs` 钉住）。
 
 pub mod action;
 pub mod aoi;
