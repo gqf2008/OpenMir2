@@ -29437,7 +29437,7 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || QUERY_IDENTS.contains(&ident)
         // **A34 裁决**：`CM_LEVELRANK`/`CM_LOGINNOTICEOK` **分类 Local 但区 k 无执行臂**
         // （oracle 无对应派发面，不补）⇒ 事件仍落 `note_zone_cmd_unsupported` 计数；
-        // 守恒牙 `zone_k_unwired_families_still_count_unsupported` 保留这两条。
+        // 登记牙 `zone_k_unwired_families_are_registered_not_wired` 保留这两条（只断言分类口径）。
         // **分类归属 ≠ 已接线**，两件事分开读。
         || ident == enter::CM_LEVELRANK
         || ident == mir2_protocol::messages::CM_LOGINNOTICEOK
@@ -134058,36 +134058,84 @@ mod zone_command_tests {
     /// **M1b 第 5b 步 · 守恒牙 `zone_k_unwired_families_still_count_unsupported`**：本片只接
     /// hit/spell/say(plain+`/`)；query4 / magic-key / levelrank / login-notice **仍未接线**，
     /// 必须继续计 `zone_cmd_unsupported`（防"顺手扩大范围"或"静默吞命令"）。
+    /// **M1b 第 5b 步 · 「尚未接线族」登记牙（C22 语义修正）**：本清单只是**登记表**——
+    /// 记录哪些族还没接线，**不是**「生产计 `zone_cmd_unsupported`」的事实断言。生产计数
+    /// 口径分两条路：`Process`/`Channel` 走各自邮箱、根本不进执行体兜底；`Local` 与表外
+    /// ident 才进 `handle_zone_command_on` 尾部 `note_zone_cmd_unsupported`。族接线后的证据
+    /// 必须来自分类/路由牙——例如 A34 片 5 的寄售 7 条：路由牙
+    /// `zonek_selloff_idents_are_process_and_route_to_selloff_mailbox` 断言 `Process` +
+    /// 入 selloff 信箱 + **不**计 `zone_cmd_unsupported`，本清单则把该族**移出**。
+    ///
+    /// **教训（C22）**：旧牙只用 `handle_zone_command`（`#[cfg(test)]` 包装，**绕过分类器**
+    /// 直调执行体）就宣称「仍在计 Unsupported」。`CM_SELLOFFADDITEM` 接成 `Process` 后，
+    /// 生产上它已被 `a6_dispatch_local` 截走、永不到执行体兜底，而直调路径仍返回
+    /// `Unsupported` ⇒ **假绿**。因此本牙拆成两半：**分类归属**由 `zone_cmd_class` 断言
+    /// （回归守卫），**兜底计数**由直调执行体断言；两半对同一 ident 同时成立，才算「未接线
+    /// 且仍被计数」的证据——`Process`/`Channel` 族在生产上不经过第二半（分类断言先不成立）。
     #[test]
-    fn zone_k_unwired_families_still_count_unsupported() {
-        let (mut state, _actor) = landed("cmd_unwired", zone::ZoneId::new(1));
-        let (gates, _rx) = gates_and_rx();
-        for ident in [
-            // **A34 片 1**：`CM_QUERYUSERNAME`/`CM_MAGICKEYCHANGE`（以及 `CM_QUERYUSERSTATE`/
-            // `CM_QUERYUSERSET`/`CM_QUERYVAL`）已补本地臂 ⇒ 从本「未接线守恒」清单移出（每族另有
-            // 行为牙 `a34_slice1_*`，不是放宽）。
+    fn zone_k_unwired_families_are_registered_not_wired() {
+        // 断言的是**分类器现状**（不是执行结果）：元组第三项说明生产上「仍未接线」的落点口径。
+        for (ident, expect, why) in [
+            // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支走 `run_merchant_goto`（脚本宿主
+            // `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx` 全为进程态）⇒ 不接，
+            // 保持表外 `Unsupported`，延后到 Process 片。
+            (
+                game_svr::shop::CM_USERREPAIRITEM,
+                ZoneCmdClass::Unsupported,
+                "表外 ident ⇒ 生产经分类器兜底计 Unsupported",
+            ),
             // **不补（oracle 无对应行为，opc-27 裁决）**：`CM_LEVELRANK`（oracle `src/` 零引用）
-            // 与 `CM_LOGINNOTICEOK`（M2Server 无 case）⇒ 必须继续计 Unsupported。
+            // 与 `CM_LOGINNOTICEOK`（M2Server 无 case）⇒ 分类 `Local` 但区 k **无执行臂**，
+            // 生产仍经执行体兜底计 Unsupported。**分类归属 ≠ 已接线**，两件事分开读。
+            (
+                enter::CM_LEVELRANK,
+                ZoneCmdClass::Local,
+                "分类 Local 但无执行臂 ⇒ 生产经执行体兜底计 Unsupported",
+            ),
+            (
+                mir2_protocol::messages::CM_LOGINNOTICEOK,
+                ZoneCmdClass::Local,
+                "分类 Local 但无执行臂 ⇒ 生产经执行体兜底计 Unsupported",
+            ),
+        ] {
+            assert_eq!(zone_cmd_class(ident, None), expect, "ident={ident}: {why}");
+        }
+
+        // ---- 生产兜底行为（§12）：分类归属 ≠ 接线 ----
+        // 生产链路 `classify_local_event` → `a6_dispatch_local`：`Local` 与 `Unsupported` 两支都
+        // 进 `exec`（执行体 `handle_zone_command_on`）；没有臂的 ident 落尾部
+        // `note_zone_cmd_unsupported`。这里直调执行体只钉**兜底计数**这一半（分类归属由上面
+        // 钉住）；只断增量，容忍并行用例对全局计数的扰动。
+        let (mut state, actor) = landed("cmd_unwired", zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let (gates, mut rx) = gates_and_rx();
+        for ident in [
+            game_svr::shop::CM_USERREPAIRITEM,
             enter::CM_LEVELRANK,
             mir2_protocol::messages::CM_LOGINNOTICEOK,
-            // **M1c-3b**：`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已接线（整 ident `Process` ⇒ 区 0
-            // drain 执行；投递牙 `script_process_routes_to_zone0_mailbox`）⇒ 从本清单移出。
-            // **M1c-2b**：本片**不接**的族必须继续计 `unsupported`（守恒：防"顺手扩大范围"或
-            // "臂里直接 return"把命令静默吞掉）。
-            // **M1c-2c**：`CM_EAT` 已接线（本地臂 `Dispatched`；分支门由 `zonek_eat_*` 四牙钉）
-            // ⇒ 从本「未接线守恒」清单移出（不是放宽：每形态的归属另有四牙）。
-            // **A34 片 3**：`CM_DEALTRY` 已接线（区 k 本地）⇒ 移出本清单。
-            mir2_protocol::messages::CM_SELLOFFADDITEM,
-            // **A34 片 2 延后**：`CM_USERREPAIRITEM` 成功支走 `run_merchant_goto`（脚本宿主
-            // `MerchantScriptBook`/`NpcVars`/`ScriptGmEnv`/`ScriptWorldCtx` 全为进程态）⇒ 本片不接，
-            // 保持 `Unsupported`，延后到 Process 片。
-            game_svr::shop::CM_USERREPAIRITEM,
         ] {
-            assert_eq!(
-                handle_zone_command(&mut state, &gates, "hero", 7, &cmd(ident, 0, 0, 0)),
-                ZoneCmdOutcome::Unsupported,
-                "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
+            let u0 = perf_counters::zone_cmd_unsupported();
+            let outcome = handle_zone_command_with_tail(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(ident, 0, 0, 0),
+                None,
             );
+            assert_eq!(
+                outcome,
+                ZoneCmdOutcome::Unsupported,
+                "ident={ident} 无执行臂 ⇒ 必须落执行体兜底"
+            );
+            assert!(
+                perf_counters::zone_cmd_unsupported() > u0,
+                "ident={ident} 必须使 zone_cmd_unsupported 增量 > 0（兜底计数）"
+            );
+            assert!(rx.try_recv().is_err(), "ident={ident} 兜底不得出帧");
         }
     }
 
