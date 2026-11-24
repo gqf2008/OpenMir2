@@ -26,7 +26,7 @@
 | ECS 迁移 S1–S5 | 151 字段 → 25 组件；20 `TickStage`；`crates/world` 退役 | `docs/world-ecs-migration-20261113.md`、`docs/world-ecs-s4d3-entitymut-20261113.md`、`docs/s5-execution-20261114.md` |
 | 容量模型 | 10k 场景 39.5k 实体的分段账 + 外推模型 | `docs/capacity-model-20261114.md` |
 | AOI 扇出优化 | 走位帧收件人候选集，bench 71–79×，真栈 0.35–0.45µs/走位者 | `docs/host-aoi-profile-20261114.md` §11 |
-| SimMonsterAi 探针 | 段内切分 + O(dead×N) 死亡支定位（**尚未合并**，见 §7） | 卡 `openmir2-simmonsterai-profile`，head `a76958c9` |
+| SimMonsterAi 探针 | 段内切分 + O(dead×N) 死亡支定位（**已合入 `a680b01f6`**，见 §7） | 卡 `openmir2-simmonsterai-profile`，head `a76958c9` |
 | 联调车道 | bot 侧走位阻塞消除（地形 + actor 避让） | `E:/UserFleet/archive/movefail-annotated.csv`、`run-mf3b/`、`run-mf5/` |
 
 里程碑提交：

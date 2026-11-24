@@ -13,7 +13,7 @@
 | --- | --- | --- | --- |
 | ① BotSrv 4GiB 堆上限 OOM | 修复前：OOM 实证（`supp-hold360` 峰值 WS 4410.1MB / priv 4409.4MB，`bots.err.log` = `Out of memory.`）；修复后：**1000 档无实测**，只有 500 档平坦（WS 852–1215MB，OOM=0） | `OOM=0` 且 `bots.err.log` 无 `OutOfMemory` | **未解除**（修复后 1000 档未测；4GiB 是否够未证——按修复后 500 档外推约 2–2.5GB，推算上可能够） |
 | ② 网关背压丢帧 | **无 1000 档后修复归档**。唯一 1000 档网关归档（`botsrv-inworld-plateau-20261115-094127`）早于关键性两通道补丁，且 schema 里没有 `close_inworld` / `reject_login` / `degrade_inworld`；其 `in_world` 只有 327/1000 | `in_world ≥95%`、`close_inworld=0`、`reject_login`/`degrade_inworld` 有数且可解释 | **未解除**（500 档全过；1000 档未测；单线吞吐在 500 已接近上界） |
-| ③ 进世界串行载入 | 1000 档 `in_world` 在 **327–425 处硬平台**，从未达到 95%（950）；旧树 1000 档进世界速率 ≈5.3/s | 窗口内 `in_world ≥95%` | **未解除**（平台未归因；`openmir2-world-entry-serial-saves` 仍待认领） |
+| ③ 进世界串行载入 | 1000 档 `in_world` 在 **327–425 处硬平台**，从未达到 95%（950）；旧树 1000 档进世界速率 ≈5.3/s | 窗口内 `in_world ≥95%` | **未解除**（平台未归因；`openmir2-world-entry-serial-saves` 已交付分析文档并合并（needs-review），仍无修复后 1000 档实测） |
 
 **结论：现在不能开 1000 档窗口。** 三项里没有一项拿到「1000 档 + 后修复树」的可机检证据；
 即使把窗口拉长到 360s，第 ③ 项的平台仍会让 `in_world ≥95%` 直接失败。开窗会怎样失败、解除顺序见 §4。
@@ -200,8 +200,9 @@
 
 **两张卡的状态：**
 
-- `openmir2-world-entry-serial-saves`：**待认领**（board 显示候选 1 条 issue，无 claim），验收 A1–A4
-  （分段耗时、对照 oracle、评估批量/并发读存档、把 ramp 判据写进 runbook）全部未做。
+- `openmir2-world-entry-serial-saves`：**已合并（needs-review）**，交付 `docs/world-entry-serial-plateau-analysis-20261116.md`
+  （13 处串行点清单 + ①/②/③ 判据与排序 + 2 臂诊断探针轮设计）；验收 A1–A4 的判据与探针设计见该文档，
+  修复后 1000 档实测仍无（本节归档为修复前）。
 - 它引用的背景（「执行任务Id ~5–7/s，02:52:40 才处理到 loadbot455」）与本次重算方向一致；
   `02:52:40` 那个具体时刻来自当时现场日志，本归档的 `tier-1000/bots.log` 在 02:51:29 结束
   （全 1000 人只到「准备进入游戏」，无 `SM_LOGON`），无法在归档里复现该行。
@@ -308,7 +309,7 @@
 | ③ 官方速率口径 | `docs/loadgate-criteria-runbook-20261115.md` | §1.3「~5–7/s；5s 56 → 75s 425（≈5.3/s）后平台」 |
 | ③ DB 应答速率 | `archive/load-tiers-20261115-0245/stack-logs-v1/game-svr.out.log`（tier-1000 窗 `18:51:08.072–18:52:32.935`，363 条 / 84.863s = 4.277/s）与 `stack-logs-v2/game-svr.out.log`（共 1312 条；前 1000 条约 14.4/s，尾部 312 条约 4.2–4.4/s） | `执行任务Id:N成功`（**全量 DB 应答计数**，UTC 时间戳，按 +8h 对齐本地） |
 | ③ 进世界时延 | `archive/load-tiers-20261115-0245/supp-hold360/tier-1000/bots.log` | **按 bot 名配对**：`机器人:[x] 进入游戏` → `机器人:[x] 成功进入游戏`；425/425 配对；分位用 nearest-rank |
-| ③ 待认领卡 | 看板 `openmir2-world-entry-serial-saves` | issue body 的验收 A1–A4 |
+| ③ 来源卡 | 看板 `openmir2-world-entry-serial-saves`（已合并，needs-review） | issue body 的验收 A1–A4 |
 
 ## 6. 未找到 / 明确为「无」的数据
 

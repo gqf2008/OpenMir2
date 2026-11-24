@@ -138,7 +138,7 @@ golden：`mir2-rs/tests/parity/golden/magic/mabmabe-nondefault.json`。
 
 ## 4. 结论与建议顺序
 
-0. **形态判定已完成**（§0）：`8103` 与第二条 `8021` 都是**装置缺口/驱动装配**，产品逐条逻辑正确；
+0. **已完成形态判定**（§0）：`8103` 与第二条 `8021` 都是**装置缺口/驱动装配**，产品逐条逻辑正确；
    **不得**按"产品合并"改 `deliver_mag_struck`。
 1. **时序（a/e）已判定为装置缺口 B17**（golden 装置 `DrainOnce` 偏离生产；Rust 泵无缺陷），
    见 `golden-harness-blind-spots.md`；本批不动产品、不放宽任何比较口径，

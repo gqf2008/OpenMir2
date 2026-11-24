@@ -1,6 +1,6 @@
 # openmir2-npc-parity
 
-> 状态：**进行中（2026-11-20，分支 `card/npc-parity`，base `9c84ea226`）**。
+> 状态（2026-11-20，分支 `card/npc-parity`，base `9c84ea226`）：**进行中**。
 > 任务：NPC 线 **1/11 → 11/11**（分母固定 11，唯一事实源 `docs/issues/parity-gap-npc.json`）。
 > 本文件是**判定面清单**（开工前交 opc-07 过审）；未过审前不铺实现。
 > 对拍母版：`E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\magic-parity\docs\issues\openmir2-magic-parity.md`（§2 装置 / §19 记录面 vs 判定面 / §19b 落地形态 / §19c 咬合证明）。
