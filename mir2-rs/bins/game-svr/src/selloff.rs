@@ -74,9 +74,13 @@
 //!   `crate::bag`（与 [`crate::trade`] 同口径 ⇒ 帧值可能与 oracle 不同，登记）。
 //! - `DropItemDown`（`Base.cs:529`）：oracle 因 `MapItem.ItemId` 恒 0 而**恒落地失败**（`T-19`/`T-25`）
 //!   ⇒ 本模块的 [`drop_item_down`] 只「消耗」物品、不产帧（1:1 的可见面）。
-//! - `GetSellOffGlod()` 的登录调用点（`PlayObject.cs:1486`）：`SaleDeal` 在 Rust 无 setter
-//!   （脚本 `OPENYBDEAL`/`ActionOfOpenSaleDeal` 未移植，见 `crates/script/src/handlers.rs:250`）
-//!   ⇒ 恒 `false` ⇒ 该函数恒 no-op，登录路径**不接线**（行为等价：都不动）。见证据 README 登记。
+//! - **`GetSellOffGlod()` 的登录调用点（A34 片 5 已接线）**：oracle 在 `PlayObject.cs:1486`
+//!   进入世界时结算 `Flag == 1`（已售未取款）条目。**此前本文写"`SaleDeal` 无 setter ⇒ 该函数
+//!   恒 no-op"是不准确的**：`Sale.cs:387-429` 的**付费路径不读 `SaleDeal`**（被注释掉的是
+//!   `m_boNotOnlineAddExp`）；只有 `UpdateSellOffInfo(0)` 的**清理段**按 `SaleDeal` 早退。
+//!   ⇒ 登录补偿不需要 `SaleDeal` setter，本仓已在 [`crate::pay_selloff_on_login`] 接线（host 与
+//!   区 k 两条登录完成路径各一处；卖方在登录所在区结算）。`sale_deal == false` 时只有
+//!   `flag == 2` 的旧条目不清理——与 oracle 在 `SaleDeal == false` 时**同形**（残余登记，不顺手改）。
 
 use crate::ability::ItemCatalog;
 use crate::bag::{BagItem, MAX_BAG_ITEM};
@@ -1033,7 +1037,8 @@ pub fn client_sell_off_end(
 ///
 /// 注意 oracle 先 `UpdateSellOffInfo(0)`（可能移除 `flag==2` 条目）再改当前条目 ⇒ 本函数用
 /// 移除下标平移当前下标（等价于 oracle 的对象引用）。
-#[cfg(test)]
+///
+/// **A34 片 5 起为生产可见**（原 `#[cfg(test)]` 已摘）：登录补偿 `pay_selloff_on_login` 调用。
 pub fn get_sell_off_gold(me: &mut SellOffSide<'_>, book: &mut SellOffBook) -> Vec<SellOffEvent> {
     let mut em = Emitter::new();
     let Some(mut i) = book
