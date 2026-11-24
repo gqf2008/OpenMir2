@@ -39703,8 +39703,10 @@ impl HostLoop {
             let t = host_prof.begin();
             // **L2-5 ③ 段 2（接线）**：区 0 的 handoff 运行时（切片关 ⇒ None，零参与）。
             // **tick 顶（phase1 之前）**：区 0 排 ack/offer（handoff 两阶段）。
+            // **A35-b 片 1**：`tick_top` 现在返回本 tick 已提交的 `(id, 接受方区)`；本片不消费
+            //（零行为变化），下一片用它驱动会话搬迁。
             if let Some(h) = handoff_runtime.as_mut() {
-                h.tick_top(&mut world, tick_no);
+                let _committed = h.tick_top(&mut world, tick_no);
             }
             #[allow(unused_mut)] // 字面量是 3 处源码扫描牙的锚点（`sim_loop` 顺序判定），保留 `mut`
             let mut rec = tick_world_head_with_specials(
@@ -132580,6 +132582,84 @@ mod l2_handoff_tests {
         );
         assert_eq!(rt.dup_dropped(), 1, "新 epoch 不得计入丢弃");
         assert_eq!(rt.promoted(), 2);
+    }
+
+    /// **A35-b 片 1**：`tick_top` 返回本 tick **已提交**的 `(实体 id, 接受方区)`。
+    ///
+    /// 「接受方区」= [`crate::handoff::HandoffAck::from`]（真正执行提升的区），**不是**回执的
+    /// 收件人 `to`（源区）。A35-b 的会话搬迁按它选目标区 ⇒ 区号语义写反会搬到错误区。
+    ///
+    /// 红检：①把 `committed.push` 挪进 `ok=false` 支 ⇒ 正例返回空 ⇒ 红；②`ack.from` 写成
+    /// `ack.to` ⇒ 目标区断言（区 1）变区 0 ⇒ 红；③删 `pending_since.remove(..).is_none()`
+    /// 判空 ⇒ 重复 ack 再返回一条 ⇒ 红；④`ok=false` 也收 ⇒ 拒绝支红。
+    #[test]
+    fn handoff_tick_top_returns_committed_ids_from_accepting_zone() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let layout = Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let mut world = World::with_maps(vec![(20, 10)]);
+        let mut rt =
+            crate::handoff::HandoffRuntime::new(zone(0), Arc::clone(&layout), boxes.clone());
+        let mut spawn = mir2_world_bevy::EntitySpawn::new(0, "P", 12, 5);
+        spawn.race = 0;
+        let id = world.add_entity(spawn);
+        world
+            .entities
+            .get_mut(id)
+            .expect("刚插入")
+            .flags
+            .handoff_pending = true;
+        // 源区（区 0）投 offer 给区 1 ⇒ `pending_since` 有该 id。
+        rt.after_phase2(&mut world, 0);
+        assert_eq!(rt.refused(), 0, "前置：offer 已投出、未回滚");
+        let ack = |ok: bool| crate::handoff::HandoffAck {
+            to: zone(0),
+            from: zone(1),
+            id,
+            ok,
+        };
+        {
+            let mut m = boxes[0].lock().unwrap_or_else(|e| e.into_inner());
+            // 同一提交的重复 ack（每 tick 重发 + 目标区逐条回执）⇒ 只认第一份。
+            m.1.push(ack(true));
+            m.1.push(ack(true));
+        }
+        let committed = rt.tick_top(&mut world, 1);
+        assert_eq!(
+            committed,
+            vec![(id, zone(1))],
+            "只认第一份 ack；接受方区 = ack.from（区 1），不是 to（区 0）"
+        );
+        assert!(world.entities.get(id).is_none(), "提交后实体必须从源区移除");
+        // 拒绝支：不提交、实体留在源区。
+        let mut spawn_q = mir2_world_bevy::EntitySpawn::new(0, "Q", 12, 6);
+        spawn_q.race = 0;
+        let qid = world.add_entity(spawn_q);
+        world
+            .entities
+            .get_mut(qid)
+            .expect("刚插入")
+            .flags
+            .handoff_pending = true;
+        rt.after_phase2(&mut world, 2);
+        {
+            let mut m = boxes[0].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(0),
+                from: zone(1),
+                id: qid,
+                ok: false,
+            });
+        }
+        assert!(rt.tick_top(&mut world, 3).is_empty(), "拒绝不得算已提交");
+        assert_eq!(rt.refused(), 1, "拒绝必须计入回滚");
+        assert!(
+            world.entities.get(qid).is_some_and(|e| !e.handoff_pending),
+            "拒绝后实体保留源区且清 pending"
+        );
     }
 
     // ------------------------------------------------------------------
