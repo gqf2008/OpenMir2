@@ -29421,9 +29421,9 @@ enum ZoneCmdClass {
 ///
 /// `CM_SAY` 是**唯一** payload 级判定族；族内判定（其余七族纯 ident 级、与 payload 无关）：
 /// - `@` 起 ⇒ `Process`（GM 命令体，回区 0，A6 控制邮箱）；
-/// - `!` 起 ⇒ 再分：`!!`（组队）/`!~`（行会）⇒ **`Unsupported`**（需进程态 `GuildManager`，
-///   区 k 拿不到）；其余 `!`（喊话，含单字符 `!`）⇒ **`Local`**（A20 片 1：只读本会话 +
-///   本区 registry `boQUIZ` + 配置，成功支零帧）；
+/// - `!` 起 ⇒ 再分：`!!`（组队）/`!~`（行会）⇒ **`Channel`**（A20 片 2：独立非阻塞频道队列，
+///   **不**置 `control_pending`；`!~` 无行会的回落由执行臂按会话判）；其余 `!`（喊话，含单字符
+///   `!`）⇒ **`Local`**（A20 片 1：只读本会话 + 本区 registry `boQUIZ` + 配置，成功支零帧）；
 /// - 其余（含无 payload）⇒ `Local`（普通说话 / `/` 私聊）。
 ///
 /// `@`/`!` 判据分别与 `gm_drain_gate`/本地 `!` 分派**同一份**（[`say_payload_is_at_command`] /
@@ -29511,8 +29511,8 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         return ZoneCmdClass::Process;
     }
     if ident == chat::CM_SAY {
-        // 族内判定（见函数 doc）：`@` ⇒ Process；`!!`/`!~` ⇒ Unsupported；其余（含喊话 `!`）
-        // ⇒ Local。
+        // 族内判定（见函数 doc）：`@` ⇒ Process；`!!`/`!~` ⇒ Channel（A20 片 2 独立频道队列）；
+        // 其余（含喊话 `!`）⇒ Local。
         if payload.is_some_and(say_payload_is_at_command) {
             return ZoneCmdClass::Process;
         }
@@ -43514,8 +43514,10 @@ fn channel_send(
 ///
 /// # 锁序（写死，禁反向）
 /// - 区号**升序**；同一次解析**一次只持一把** `ZoneState` 锁（禁嵌套/禁双持）；
-/// - `GuildManager` 是区 0 线程局部 `&mut`（**无互斥**）⇒ 本函数不取任何进程态锁；
-///   与 A34 片 4 的 `run_guild_command` 同序：**先目标区锁、再读 GuildManager**，不得反序；
+/// - `GuildManager` 是区 0 线程局部的 `&mut`（**无互斥**）⇒ 可**先读 guilds、再取区锁**
+///   （现状即如此：先 `find_guild` 取名册，再逐区加锁解析成员）；本函数不取任何进程态锁；
+/// - **若将来给 `guilds` 加上互斥**（例如跨区共享行会表），锁序**必须改为先区锁、后 guilds**
+///   （与 A34 片 4 `run_guild_command` 同序），否则可与"先区锁再读 guilds"的路径互等；
 /// - **持锁期间只拷快照**（actor / gate / socket / ban / 帧体），**不发帧**；发帧一律在锁外。
 fn drain_channel_says(
     ctx: &ChannelDrainCtx<'_>,
@@ -43545,6 +43547,9 @@ fn drain_channel_says(
                 continue;
             }
             // **陈旧判定**：会话缺 / `control_epoch` 变 / 行会名变（只读快照，不写 A6）。
+            // **已知限制（A20 片 2 登记，本片不改）**：判据复用 `sg.a6.control_epoch` ⇒ 同会话若
+            // 有无关的 `@` 超时把 epoch 推进，**同 tick 的频道消息会被当陈旧丢弃**（≤1 tick、
+            // 影响仅"这条聊天不投递"）。独立频道 epoch 需另裁，届时改这里即可。
             let stale = {
                 let st = state
                     .lock()
@@ -133784,9 +133789,227 @@ mod zone_command_tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// **A20 T3-e2e 牙（必修 1）`a20_guild_channel_without_guild_via_dispatch_arm`**：**无行会**会话
+    /// 发 `!~x` 经**真 `a6_dispatch_local` 的 `Channel` 臂**：① `zonek_channel_enqueued +0`
+    /// （不进频道队列）；② 走 shout——`shout_msg_tick` 写 `world.clock_ms`、无 104；③ 同 tick 再发
+    /// 一条仍不入队（回落语义在**分派臂**也有牙，不只测试 exec 面）。
+    ///
+    /// 变异：删 `ChannelSay::Shout => exec(...)` 分支（无行会也入 Guild 队）⇒ 入队计数/队列红。
+    #[test]
+    fn a20_guild_channel_without_guild_via_dispatch_arm() {
+        let (_g, path) = m1c2c_arm_counters("a20t3e2e");
+        let (mut state, actor) = landed("a20_t3e2e", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.can_shout_msg_level = 34;
+        state.host.world.clock_ms = 20_000;
+        let mut sg = crate::tests::test_session_ground(actor);
+        sg.equip.abil.level = 40;
+        sg.shout_msg_tick = 0; // 无行会（guild_name = None）
+        state.host.ground_sessions.insert("hero".to_string(), sg);
+        let chan = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let enq0 = perf_counters::zonek_channel_enqueued();
+        let env = ZoneCmdEnv {
+            enter_cfg: &shared.enter_cfg,
+            colors: &shared.colors,
+            registry: shared.registry.as_ref(),
+            unbind_list: &shared.unbind_list,
+            item_number: &shared.item_number,
+            party_cfg: &shared.party_cfg,
+        };
+        let ZoneState { host, .. } = &mut state;
+        let HostLoop {
+            world,
+            displays,
+            online,
+            ground_sessions,
+            saves,
+            trade_sessions,
+            shop_sessions,
+            ..
+        } = host;
+        for seq in 1..=2u64 {
+            let ev = GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(chat::CM_SAY, 0, 0, 0),
+                tail: Some("!~x".to_string()),
+            };
+            let mut pending = std::collections::BTreeMap::new();
+            let mut buffer = std::collections::VecDeque::from([SeqEvent { seq, ev }]);
+            let _ = execute_local_budget(
+                zone::ZoneId::new(1).index(),
+                &mut buffer,
+                &mut pending,
+                0,
+                1,
+                false,
+                None,
+                ZoneDrainLimits::PRODUCTION,
+                &|s: &SeqEvent| match &s.ev {
+                    GateEvent::Command { cmd, tail, .. } => {
+                        zone_cmd_class(cmd.ident, tail.as_deref())
+                    }
+                    _ => ZoneCmdClass::Unsupported,
+                },
+                |item, class, pending, b| {
+                    let mut exec = |ev: &GateEvent,
+                                    sessions: &mut std::collections::HashMap<
+                        String,
+                        SessionGround,
+                    >| {
+                        if let GateEvent::Command {
+                            chr_name,
+                            socket,
+                            cmd,
+                            tail,
+                            ..
+                        } = ev
+                        {
+                            let _ = handle_zone_command_on(
+                                &mut *world,
+                                &mut *displays,
+                                &mut *online,
+                                sessions,
+                                &mut *saves,
+                                &mut *trade_sessions,
+                                &mut *shop_sessions,
+                                &gates,
+                                chr_name,
+                                *socket,
+                                cmd,
+                                tail.as_deref(),
+                                &env,
+                            );
+                        }
+                    };
+                    a6_dispatch_local(
+                        item,
+                        class,
+                        None,
+                        Some(&chan),
+                        &mut *ground_sessions,
+                        pending,
+                        zone::ZoneId::new(1),
+                        9,
+                        b,
+                        &mut exec,
+                    )
+                },
+            );
+        }
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            0,
+            "无行会 `!~` 经分派臂不得入频道队列"
+        );
+        assert_eq!(chan.lock().unwrap().len(), 0, "频道队列必须为空");
+        assert_eq!(
+            ground_sessions["hero"].shout_msg_tick, 20_000,
+            "必须走 shout（写 shout_msg_tick）"
+        );
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_ne!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE,
+                    "回落喊话不得发 104"
+                );
+            }
+        }
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            0,
+            "第二条仍不得入频道队列（同 tick 两次经分派臂）"
+        );
+        assert_eq!(chan.lock().unwrap().len(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T4-neg 牙（必修 3）`a20_guild_channel_ban_excludes_member`**：同一跨区行会场景，
+    /// 把 **A** 的 `ban_guild_chat` 置 false（= 禁止）⇒ A **零帧**、B（说话者自己）仍收 1 条；
+    /// `zonek_channel_recipients +1`。
+    ///
+    /// 变异：把 `BanGuildChat` 门删成恒真 ⇒ A 也收帧 ⇒ 红。
+    #[test]
+    fn a20_guild_channel_ban_excludes_member() {
+        let (_g, path) = m1c2c_arm_counters("a20ban");
+        let (mut z0, zk, guilds, gates, mut rx, _actor_a, actor_b) = a20_guild_rig();
+        z0.host
+            .ground_sessions
+            .get_mut("A")
+            .expect("A 会话")
+            .guild
+            .ban_guild_chat = false; // false = 禁止（oracle 反向门）
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let zone_states = vec![None, Some(std::sync::Arc::clone(&zk))];
+        let inboxes = vec![
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            chan,
+        ];
+        let epoch = zk.lock().unwrap().host.ground_sessions["B"]
+            .a6
+            .control_epoch;
+        assert!(channel_enqueue(
+            &inboxes[1],
+            zone::ZoneId::new(1),
+            "B",
+            ChannelKind::Guild {
+                guild_name: "G".to_string()
+            },
+            "hi".to_string(),
+            9,
+            epoch,
+        ));
+        let msg_cfg = guild_runtime::GuildMsgCfg::from_config(
+            &mir2_world_bevy::GuildConfig::default(),
+            false,
+            "",
+        );
+        let party_cfg = mir2_world_bevy::PartyConfig::default();
+        let ctx = ChannelDrainCtx {
+            world: &z0.host.world,
+            online: &z0.host.online,
+            ground_sessions: &z0.host.ground_sessions,
+            gates: &gates,
+            guilds: &guilds,
+            guild_msg_cfg: &msg_cfg,
+            party_cfg: &party_cfg,
+        };
+        let rc0 = perf_counters::zonek_channel_recipients();
+        drain_channel_says(&ctx, &inboxes, &zone_states);
+        let mut recogs = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE
+                );
+                recogs.push(CommandMessage::from_bytes(&body).expect("12B 头").recog);
+            }
+        }
+        assert_eq!(
+            recogs,
+            vec![actor_b],
+            "仅说话者自己（B）收帧；被禁的 A 零帧"
+        );
+        assert_eq!(
+            perf_counters::zonek_channel_recipients() - rc0,
+            1,
+            "recipients 只 +1"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// **A20 静态接线牙 `a20_channel_drain_is_wired_before_a6`**：区 0 的 `INBOUND_PROCESS`
     /// 块内，`HostChannelDrain` 段必须**先于** A6 的 `HostControlDrain`，且该段内真的调用
     /// `drain_channel_says(`（通道接线点不被 "函数写了但没接" 骗过）。
+    ///
+    /// **范围（已知次级）**：只防「删调用」与「挪到 A6 之后」；把调用挪出
+    /// `if let Some(zh)` 守卫（或挪出 `INBOUND_PROCESS` 块）仍可能假绿——现行实现里前者会
+    /// 编译错（`zh` 越界）、后者无行为差异，故接受现状，不扩成结构扫描。
     ///
     /// 变异：删接线块（或把频道 drain 挪到 A6 之后）⇒ 红。
     #[test]
@@ -141515,7 +141738,7 @@ mod l2_s3_cross_recipient_tests {
     }
 
     /// **M1b 第 2 步 + 第 5b 步 · payload 例外只此一族**：`CM_SAY` 是唯一 payload 判定族
-    /// （族内三态：`@`⇒Process、`!`⇒Unsupported、其余⇒Local）；其余七族对 payload 完全不敏感。
+    /// （族内三态：`@`⇒Process、`!!`/`!~`⇒Channel、其余⇒Local）；其余七族对 payload 完全不敏感。
     #[test]
     fn zone_cmd_class_payload_exception_is_unique_to_cm_say_family() {
         use mir2_protocol::messages as m;
