@@ -26792,6 +26792,15 @@ mod perf_counters {
     static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    /// **A43c**：本 tick **各跨区之和**——「**仅因 `execute_wall`** 被截断」的次数
+    ///（每区每 tick ≤1 ⇒ 上限 = 区数）。与并集列 `zonek_inbound_budget_hit`
+    ///（fill 命中 ∥ 墙 ∥ 条数上限 ∥ A6 整批推迟）分开，直接回答「执行段墙钟够不够」。
+    /// **口径 = 跨区聚合**；逐区细分留给后续卡（届时随 `zone_metrics` 版本一起做，本文不动该 JSON）。
+    static ZONEK_EXEC_WALL_HIT: AtomicU64 = AtomicU64::new(0);
+    /// **A43c**：本 tick **跨区最大值**——各区执行段墙钟的 max（µs；`fetch_max`，写行即清零）。
+    /// 与 `execute_wall` 对读：接近预算 ⇒ 墙仍在约束；远低于预算 ⇒ 墙已不是约束。
+    /// **口径 = 跨区聚合**（逐区细分见上）。
+    static ZONEK_EXEC_US_MAX: AtomicU64 = AtomicU64::new(0);
     // **M1b 第 4 步（A6）**：同玩家跨类顺序（stop-and-wait）的四个**降级/清理**计数——
     // 只区 k、每 tick 增量、**不设 `*_all_zones` 派生列**（区 0 无同名语义）。
     // 前三个是「被观测到的降级、不作废运行」（作废只看第 3 步 `overflow_dropped`/`pending_discarded`）；
@@ -27369,6 +27378,33 @@ mod perf_counters {
         }
     }
 
+    /// **A43c**：某区执行段**仅因 `execute_wall`** 被截断 ⇒ 跨区和的 +1（每区每 tick ≤1）。
+    /// **口径 = 跨区聚合**：TSV 列 `zonek_exec_wall_hit` 是各区之和，不是"命中的区数"。
+    #[inline]
+    pub(crate) fn note_zonek_exec_wall_hit() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_EXEC_WALL_HIT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// **A43c**：某区本 tick 执行段墙钟（µs）⇒ 跨区取 max（`fetch_max`）。
+    #[inline]
+    pub(crate) fn note_zonek_exec_us(us: u64) {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_EXEC_US_MAX.fetch_max(us, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zonek_exec_wall_hit() -> u64 {
+        ZONEK_EXEC_WALL_HIT.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zonek_exec_us_max() -> u64 {
+        ZONEK_EXEC_US_MAX.load(Ordering::Relaxed)
+    }
+
     /// demux 丢新（`outstanding` 到软上限）。
     #[inline]
     pub(crate) fn note_zonek_inbound_overflow_dropped(zone: usize) {
@@ -27566,7 +27602,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tmax_single_event_cpu_us\tmax_single_event_ident\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzonek_exec_wall_hit\tzonek_exec_us_max\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27739,6 +27775,9 @@ mod perf_counters {
             // 启动列在正常启动下恒 0（超时即 fail-closed 退出，写不到 TSV；计数器供测试）。
             ZONE_STARTUP_LOCK_TIMEOUT.swap(0, Ordering::Relaxed),
             ZONE_SHUTDOWN_LOCK_TIMEOUT.swap(0, Ordering::Relaxed),
+            // **A43c**：执行段墙截断（仅墙）+ 执行段墙钟 max（**仍在 `zone_metrics` 之前**）。
+            ZONEK_EXEC_WALL_HIT.swap(0, Ordering::Relaxed),
+            ZONEK_EXEC_US_MAX.swap(0, Ordering::Relaxed),
         ];
         // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
         let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
@@ -28407,6 +28446,8 @@ mod perf_counters {
             &ZONE_CMD_UNSUPPORTED,
             &HANDOFF_MOVE_AFTER_TRANSFER_DROPPED,
             &MOVE_MAP_CHANGE_UNSUPPORTED,
+            &ZONEK_EXEC_WALL_HIT,
+            &ZONEK_EXEC_US_MAX,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -43039,10 +43080,21 @@ struct ZoneDrainLimits {
 }
 
 impl ZoneDrainLimits {
+    /// 生产预算。
+    ///
+    /// **A43c（2026-11-25）**：`execute_wall` 由 10 ms 抬到 **80 ms**。依据（4 区 / 1000 人实测，
+    /// run `zone-slice-20261125-011600`）：区 tick 200 ms，但区自身计算只 ~39 ms
+    ///（`HostWorldTail` 内探针合计 ~0.5 ms，其余是 barrier 等待）；10 ms 的段内预算每 tick
+    /// 只排得动 ≈47 条（平均 ≈210 µs/条，队列 `drained/carry = 99.4%` 恒满）⇒ 入站丢 ~65%。
+    /// 80 ms 仍给 tick 留 ≥80 ms 余量；`execute_check_every = 16` 的检查粒度语义不变。
+    /// **旁证（ident 档，4 区 / 1000 人）**：`max_single_event_ident` 只出 65535（非 Command 哨兵）、
+    /// `max_single_event_us` 中位 0 ⇒ 宿主侧 `EventTimer`（只包 `INBOUND_PROCESS`）基本没干活，贵的都在区线程；
+    /// 区侧反推 ≈190–215 µs/条，与本处 210 µs 同量级。
+    /// **运维**：若某区 `work_p99` 持续 > 160 ms，应把 `execute_wall` 回落 40 ms（改常量重编）。
     const PRODUCTION: Self = Self {
         tick_max_events: EventDrainBudget::PRODUCTION.max_events,
         execute_max_events: EventDrainBudget::PRODUCTION.max_events,
-        execute_wall: std::time::Duration::from_millis(10),
+        execute_wall: std::time::Duration::from_millis(80),
         execute_check_every: 16,
     };
 }
@@ -43175,6 +43227,8 @@ fn execute_local_budget(
     let mut buffer_idx = 0usize;
     let mut executed = 0usize;
     let mut truncated = false;
+    // **A43c**：墙截断单列（与条数上限 / A6 整批推迟分开），并单独记执行段墙钟。
+    let mut wall_truncated = false;
     while executed < execute_cap {
         // **按到达序号合并（§3.4）**：两侧都有 ⇒ 取 `seq` 小者；一侧空 ⇒ 取另一侧。
         let take_pending = match (pending_local.first_key_value(), buffer.front()) {
@@ -43237,6 +43291,7 @@ fn execute_local_budget(
         let every = limits.execute_check_every.max(1);
         if executed.is_multiple_of(every) && wall_start.elapsed() >= limits.execute_wall {
             truncated = true;
+            wall_truncated = true;
             break;
         }
     }
@@ -43247,6 +43302,13 @@ fn execute_local_budget(
     if budget_hit {
         perf_counters::note_zonek_inbound_budget_hit(zone);
     }
+    if wall_truncated {
+        perf_counters::note_zonek_exec_wall_hit();
+    }
+    // 执行段墙钟：本 tick 该区从进循环到收手的实际耗时（探针关时 `note_*` 自身 no-op）。
+    perf_counters::note_zonek_exec_us(
+        u64::try_from(wall_start.elapsed().as_micros()).unwrap_or(u64::MAX),
+    );
     budget_hit
 }
 
@@ -145451,5 +145513,168 @@ mod a43_inbound_obs_tests {
             sleep_cpu < 5_000,
             "睡眠 50ms 的 CPU 必须很小（实得 {sleep_cpu}µs）"
         );
+    }
+}
+
+/// **A43c 牙**：区 k 执行段 `execute_wall`（10 ms → 80 ms）的**可判行为**。
+///
+/// ① 积压夹具（60 条 × ~300 µs ≈ 18 ms）：10 ms 预算必截断（`exec_wall_hit` +1、排水不满），
+///    `ZoneDrainLimits::PRODUCTION`（80 ms）必须全排完且不再记墙截断 ⇒ 排水条数严格上升。
+/// ② 空闲夹具（10 条 × 1 µs）：两种预算都必须全排完、都不记墙截断（预算大小不改变小负载行为）。
+/// ③ 变异：把 `ZoneDrainLimits::PRODUCTION.execute_wall` 改回 10 ms ⇒ ① 的 `new_*` 断言变红
+///    （夹具用的是生产常量本身，不是手抄的 80 ms）。
+#[cfg(test)]
+mod a43c_exec_wall_tests {
+    use super::*;
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    /// 忙碌等待（不用 `sleep`：Windows 睡眠粒度 ~15.6 ms，会把 100 µs 变成 15 ms）。
+    fn spin_us(us: u64) {
+        let t = Instant::now();
+        let mut acc = 0u64;
+        while u64::try_from(t.elapsed().as_micros()).unwrap_or(u64::MAX) < us {
+            acc = acc.wrapping_add(1);
+        }
+        std::hint::black_box(acc);
+    }
+
+    fn cmd(seq: u64) -> SeqEvent {
+        SeqEvent {
+            seq,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: format!("p{seq}"),
+                socket: 900,
+                cmd: CommandMessage {
+                    recog: 0,
+                    ident: mir2_protocol::messages::CM_TURN,
+                    param: 0,
+                    tag: 0,
+                    series: 0,
+                },
+                tail: None,
+            },
+        }
+    }
+
+    fn limits_with(wall: Duration) -> ZoneDrainLimits {
+        ZoneDrainLimits {
+            tick_max_events: 2000,
+            execute_max_events: 2000,
+            execute_wall: wall,
+            execute_check_every: 16,
+        }
+    }
+
+    /// 跑一轮执行段，返回 (实际执行条数, budget_hit, 墙截断增量, 执行段墙钟 µs)。
+    fn run(n: u64, cost_us: u64, limits: ZoneDrainLimits) -> (u64, bool, u64, u64) {
+        let wall_before = perf_counters::zonek_exec_wall_hit();
+        let mut buffer: VecDeque<SeqEvent> = (0..n).map(cmd).collect();
+        let mut pending: BTreeMap<u64, PendingLocalCmd> = BTreeMap::new();
+        let hit = execute_local_budget(
+            1,
+            &mut buffer,
+            &mut pending,
+            0,
+            n,
+            false,
+            None,
+            limits,
+            &|_| ZoneCmdClass::Local,
+            |_item, _class, _pending, _budget| {
+                spin_us(cost_us);
+                LocalDisposition::Drained
+            },
+        );
+        let executed = n - u64::try_from(buffer.len() + pending.len()).unwrap_or(u64::MAX);
+        (
+            executed,
+            hit,
+            perf_counters::zonek_exec_wall_hit() - wall_before,
+            perf_counters::zonek_exec_us_max(),
+        )
+    }
+
+    #[test]
+    fn backlog_drains_more_and_clears_wall_hit_under_production_budget() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+
+        // ① 旧预算 10 ms：60 条 × ~300 µs ≈ 18 ms ⇒ 必在墙处截断。
+        let (old_exec, _, old_wall, old_us) = run(60, 300, limits_with(Duration::from_millis(10)));
+        assert!(
+            old_wall >= 1,
+            "10 ms 预算下必须记一次墙截断（实得 {old_wall}）"
+        );
+        assert!(
+            old_exec < 60,
+            "10 ms 预算下不得排完 60 条（实得 {old_exec}）"
+        );
+        assert!(
+            old_exec > 0,
+            "10 ms 预算下必须至少排掉一批（实得 {old_exec}）"
+        );
+        assert!(
+            old_us >= 10_000,
+            "执行段墙钟必须 ≥ 预算才可能截断（实得 {old_us} µs）"
+        );
+
+        // ② 生产预算（80 ms）：同夹具必须全排完、且不再记墙截断。
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        let (new_exec, new_hit, new_wall, new_us) = run(60, 300, ZoneDrainLimits::PRODUCTION);
+        assert_eq!(
+            new_wall, 0,
+            "PRODUCTION 预算下不得再记墙截断（实得 {new_wall}，exec={new_exec}）"
+        );
+        assert_eq!(
+            new_exec, 60,
+            "PRODUCTION 预算下必须全排完（实得 {new_exec}）"
+        );
+        assert!(
+            new_exec > old_exec,
+            "抬预算后排水条数必须上升（old={old_exec} new={new_exec}）"
+        );
+        assert!(!new_hit, "全排完且未 fill 命中 ⇒ budget_hit 必须为假");
+        assert!(new_us > 0, "执行段墙钟列必须被写入（实得 {new_us}）");
+
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        perf_counters::reset_for_tests();
+    }
+
+    #[test]
+    fn idle_fixture_is_unchanged_by_budget_size() {
+        let _g = crate::perf_counters::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+
+        let (exec_old, hit_old, wall_old, _) = run(10, 1, limits_with(Duration::from_millis(10)));
+        perf_counters::reset_for_tests();
+        perf_counters::ENABLED.store(true, Ordering::Relaxed);
+        let (exec_new, hit_new, wall_new, _) = run(10, 1, ZoneDrainLimits::PRODUCTION);
+
+        assert_eq!(exec_old, 10, "空闲夹具：10 ms 预算也必须全排完");
+        assert_eq!(exec_new, 10, "空闲夹具：80 ms 预算也必须全排完");
+        assert_eq!(
+            (hit_old, wall_old),
+            (false, 0),
+            "空闲夹具：不得记预算/墙命中"
+        );
+        assert_eq!(
+            (hit_new, wall_new),
+            (false, 0),
+            "空闲夹具：不得记预算/墙命中"
+        );
+
+        perf_counters::ENABLED.store(false, Ordering::Relaxed);
+        perf_counters::reset_for_tests();
     }
 }
