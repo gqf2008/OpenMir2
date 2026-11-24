@@ -24245,7 +24245,10 @@ fn drain_recovery(
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #3**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。出口只有 `HealthSpellSlots`（flush 按 actor_id）⇒ 本行不影响
+    // 跨会话输出序（表征测试见 `recovery_outputs_are_stable_characterization_no_tooth`）。
+    names.sort_unstable();
     for name in names {
         // **CM_SOFTCLOSE 后的 P1 不得再跑**：oracle 在 `PlayObject.Run()` 的
         // `:70-141`（P1）之后才处理 `CM_SOFTCLOSE`（`:874-884`），随后同一 Run 的
@@ -44143,6 +44146,81 @@ mod tests {
             rx0.try_recv().is_err(),
             "回满后 `HP < MaxHP` 门恒假 ⇒ 零 53（复现：旧投影 ⇒ 1 条 (2,0,100)）"
         );
+    }
+
+    /// **B4 #3（`drain_recovery`）表征测试 —— 无牙（当前不可观测）**：
+    /// 该函数唯一出口是 `HealthSpellSlots`（`BTreeMap<i32,Slot>`，flush 按 **actor_id** 升序），
+    /// **跨会话输出与 `names` 遍历序无关** ⇒ 删 sort 不会让本用例变红。本用例把「优化前」的产出
+    /// （帧逐字段 + 会话/实体状态）固化成字面量，供 `sort`→`sort_unstable` 的前后差分比对：
+    /// 同一组期望值在改动前后都必须绿。
+    #[test]
+    fn recovery_outputs_are_stable_characterization_no_tooth() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        let mut socket_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 10;
+            sg.state.wabil.max_hp = 100;
+            sg.state.wabil.mp = 10;
+            sg.state.wabil.max_mp = 100;
+            sg.state.wabil.level = 1;
+            sg.recovery = game_svr::recover::Recovery {
+                inc_health: 20,
+                inc_spell: 0,
+                inc_healing: 0,
+                per_health: 5,
+                per_spell: 5,
+                per_healing: 5,
+                inc_health_spell_tick: now_ms() - 10_000,
+            };
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            actor_of.insert(name, id);
+            socket_of.insert(name, sock);
+        }
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &mut world, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+
+        // 参考值（优化前实测固化）：每会话一条 53，载荷 (HP=15, MP=10, MaxHP=100)；
+        // 顺序 = actor_id 升序 = 本构造的插入序（= `names` 数组序）。
+        let mut got: Vec<(i32, u16, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            got.push((socket, cm.param, cm.tag, cm.series));
+        }
+        let want: Vec<(i32, u16, u16, u16)> =
+            names.iter().map(|n| (socket_of[n], 15, 10, 100)).collect();
+        assert_eq!(got, want, "drain_recovery 的表征产出（帧逐字段）");
+        for name in names {
+            let sg = &sessions[name];
+            assert_eq!(sg.recovery.inc_health, 15, "药池消费 5 ChrName={name}");
+            assert_eq!(sg.state.wabil.hp, 15, "投影 HP=15 ChrName={name}");
+            assert_eq!(
+                world.entities.get(actor_of[name]).unwrap().hp,
+                15,
+                "实体镜像 HP=15 ChrName={name}"
+            );
+        }
     }
 
     /// **卡 `openmir2-monster-showhp-53-broadcast` R3-2**：±12 广播面的边界机器判据。
