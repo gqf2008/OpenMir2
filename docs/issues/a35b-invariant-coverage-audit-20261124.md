@@ -101,7 +101,7 @@
 | 14 | `router.assign` **失败** ⇒ 撤目标项 + 回滚 | 无 | **missing**（①） |
 | 15 | 不变量：同 chr 恰在一个区 | T1：两区 ground/online 计数和恒 1；回滚牙目标区不被改动 | covered |
 | 16 | 不变量：**禁同时持两把区锁**（A9） | 仅驱动窗口静态牙 `session_migration_drivers_sit_between_phase_a_and_barrier1`（锁外窗口）；锁本身无双持牙 | **partial**（结构靠 code review） |
-| 17 | 顺序：目标先插 → 确认 → 源删 → assign | 实现为源先摘（见 §0-1）；T1/T2 只断言最终态与回滚 | **deviation（须裁定）** |
+| 17 | 顺序：目标先插 → 确认 → 源删 → assign | **2026-11-24 裁决：实现口径保留（源先摘 → attach → assign；失败整包回滚），设计 §2「目标先插」不适用**——理由：双存在（两区各一份）比短暂零份更危险，两端内存态、panic 即 abort。登记 **T-299**；验收面 = `cross_zone_session_migration_keeps_exactly_one_session` + `a35b_router_assign_failure_rolls_back_whole_session` | **已裁决（T-299）** |
 | 18 | 回滚顺序：router 留源 → 删目标 → 源保留 | 回滚牙：`router.len()==0`、目标区原会话不被改动、源区七表逐项恢复 | covered（除 router 失败支，①） |
 | 19 | §4 fail-closed：目标不可用/poison ⇒ 不搬不 assign + 计数 | 回滚牙覆盖"lookup None"与"同 chr 冲突"；**poison/超时无牙**，实现无锁超时（阻塞锁） | **partial** |
 | 20 | §5 搬迁面读数（源无/目标有/router 指目标/refused==0/两区和 1） | 同上 T1 + 成功牙 | covered |
@@ -177,3 +177,11 @@
   `adopt_world_session` 与 A35-b 牙块；阅读 `handoff.rs` 的 `CommittedHandoff`/`HandoffAck`；
   `zone_router::SocketRejected`；`perf_counters` 的 handoff 四计数与 `zone_metrics_json` 的 `handoff` 段。
 - 未改任何文件（除本审计文档）、未跑构建/测试。
+
+## 6. 裁决落实（2026-11-24 补牙后）
+
+- **裁决一（顺序偏差）**：保留实现、改文字 + 登记 **T-299**（见 §2 第 17 行与 whitelist）。理由=双存在窗口比短暂零份更危险。
+- **D1 已补**：`a35b_router_assign_failure_rolls_back_whole_session`——`socket<=0` 造 `SocketRejected` 进 `deliver_session_migrations` 的 `else` 支；断言目标区该 chr 已撤、源区七表逐项恢复、`zone_handoff_session_failed`/`handoff_refused` 各 +1、`zone_router_rejected_socket` +1、router 不登记。变异：else 支改「只计数不撤」⇒ 红。
+- **D2 已补**：`a35b_cancel_frames_precede_session_detach`——用 `cfg(test)` 测试缝 `a35b_order` 在 `tick_phase_a` 的两个真实调用点记录 `"cancel"`/`"detach"` 相对序，断言 `["cancel","detach"]` 且 tick 返回时 `SM_DEALCANCEL` 恰一条已在 `gates`。变异：取消调用挪到 detach 之后 ⇒ 序反 ⇒ 红。
+- **D3 已裁决并补**：目标区展示项由镜像路径保证（`region_loop::apply_mirrors` 同步 displays；`promote_mirror_to_real` 不写）⇒ `attach_session` 的 `is_none()` 定性为**防御性检查**：缺失 ⇒ `zone_handoff_target_display_missing` +1 + WRN + **拒收整包回滚**（已实现；检查前移到 `adopt_world_session` 之前，Err 路径零副作用）。登记 **T-300**；牙 `a35b_missing_target_display_rejects_and_rolls_back`；变异：改回「计数后继续搬」⇒ 红。
+- **仍带窗口**：D4（"不搬"表负向牙）、D5（A9 双持静态牙）、D6（无锁超时——**另立卡**，不在本卡修）。

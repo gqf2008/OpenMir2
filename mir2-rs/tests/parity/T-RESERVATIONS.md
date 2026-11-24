@@ -331,3 +331,5 @@
 | T-296 | openmir2-tick-frame-priority-queue | 2026-11-21T04:40:01Z | 已落地 |
 | T-297 | A37 | 2026-11-24T03:50:31Z | 已落地 |
 | T-298 | A20-slice2 | 2026-11-24T07:51:55Z | 已落地 |
+| T-299 | a35b-source-first-order | 2026-11-24T11:03:09Z | 已落地 |
+| T-300 | a35b-display-defensive | 2026-11-24T11:03:10Z | 已落地 |
