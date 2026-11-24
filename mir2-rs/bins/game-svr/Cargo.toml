@@ -20,6 +20,11 @@ all = "deny"
 frame-src = ["dep:sha2"]
 
 [dependencies]
+# **A43e**：全局分配器换成 mimalloc。依据（2026-11-25 8 区/1000 人）：区线程执行段
+# `cpu ≈ wall`（93.75 vs 96.7 ms）而总量恒定 ≈370 事件/tick，单价随**线程数**上升 ⇒
+# Windows 默认堆（进程堆临界区）的跨线程争用是本次容量瓶颈；换分配器**不改任何语义**。
+# 版本钉死；离线缓存已核（mimalloc 0.1.52 + libmimalloc-sys 0.1.49 + cc）。
+mimalloc = "=0.1.52"
 mir2-protocol = { path = "../../crates/protocol" }
 # 跨服（G11/A3）：PlanesMessage 分类 + PlanesClient/Server 状态机（见 docs/g11-planes-design-20261108.md）
 mir2-planes = { path = "../../crates/planes" }
