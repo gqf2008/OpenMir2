@@ -160,11 +160,17 @@ file = "docs/delivery-report-20261025-final.md"
 # 2026-11-05：T-277 坐骑卡新增两份**登记**迁移脚本（sql/migrations/T-277-mount-plates.sql 与
 # rollback），原「src/ sql/ 均为空」不再成立。冻结面收缩为 `src/`（C# oracle 未动），
 # sql/ 侧的例外以 T-277 登记为准（卡 openmir2-t282-mount-server）。
+# 2026-11-24（C23）：判决口径**钉在交付时点**。原 `head = "HEAD"` 把**移动的 HEAD** 当判据，
+# 交付后 `src/` 已有变化 ⇒ claim 永久为假（门没错、错在判据）。现 head 固定为
+# `1d2455448908085e503da2ee40d01dfb5e6b052f`——该报告文件的**最后一次修订**提交
+# （2026-11-05「冻结基线声明收缩到 src/」），且 `6b3aee870..1d2455448` 的 `src/` diff = **0 文件**
+# ⇒ claim 变成「可复算的历史事实」。门逻辑与判据强度均未放宽；`anchor` 仍保留文档里的
+# 历史命令原文（当时跑的确实是当时的 HEAD）。
 anchor = "git diff --name-only 6b3aee870 HEAD -- src/"
 title = "条件⑥ 冻结基线：src/ 为空；sql/ 仅登记例外（T-277 坐骑迁移脚本）"
 kind = "diff_empty"
 base = "6b3aee870"
-head = "HEAD"
+head = "1d2455448908085e503da2ee40d01dfb5e6b052f"
 paths = ["src/"]
 
 [[claims]]
