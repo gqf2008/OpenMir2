@@ -270,6 +270,18 @@ pub(crate) fn on_disconnect(
     out
 }
 
+/// **A20 片 2**：104 文本的**单源前缀拼接**（`ShowPreFixMsg` 为真时**无空格**拼接）。
+///
+/// `guild_broadcast_104`（区 0 聚合路径）与 A20 区 0 频道 drain（跨区逐人 104）共用同一份，
+/// **禁止第二份前缀判断**；纯搬移，行为逐字不变。
+pub(crate) fn guild_104_text(cfg: &GuildMsgCfg, text: &str) -> String {
+    if cfg.show_pre_fix_msg {
+        format!("{}{}", cfg.prefix, text)
+    } else {
+        text.to_string()
+    }
+}
+
 /// `SendGuildMsg` 的 104 扇出（`GuildInfo.cs:431-456`）。
 ///
 /// 逐 rank/逐 member：空名跳过（oracle `PlayObject == null`）→ 显式排除离场者（C2，
@@ -286,11 +298,7 @@ pub(crate) fn guild_broadcast_104(
     let Some(guild) = guilds.find_guild(guild_name) else {
         return Vec::new();
     };
-    let text = if cfg.show_pre_fix_msg {
-        format!("{}{}", cfg.prefix, text)
-    } else {
-        text.to_string()
-    };
+    let text = guild_104_text(cfg, text);
     let mut out = Vec::new();
     for rank in &guild.ranks {
         for m in &rank.members {

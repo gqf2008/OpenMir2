@@ -997,6 +997,9 @@ struct ZoneHost {
     /// **M1b 第 4 步（A6）**：每区一个**有界**控制邮箱（下标 = 区号；区 0/N=1 ⇒ 空表）。
     /// 区 k 在 `INBOUND_LOCAL` 段内置位时推入（不持区锁），区 0 每 tick **按区号升序** drain。
     control_inboxes: Vec<Arc<std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>>,
+    /// **A20 片 2**：每区一个**独立**频道邮箱（下标 = 区号；区 0/N=1 ⇒ 空表；不与 A6 控制邮箱
+    /// 共用——见 [`ChannelSayRequest`] 的类型级理由）。
+    channel_inboxes: Vec<Arc<std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>>>,
 }
 
 impl ZoneHost {
@@ -2081,8 +2084,29 @@ fn handle_zone_command_on(
                 perf_counters::note_zone_cmd_unsupported(cmd.ident);
                 return ZoneCmdOutcome::Unsupported;
             }
-            // **`!!`/`!~`**：仍需进程态（`GuildManager`/跨区名册）⇒ 未接线处置（计数 + 丢弃）。
+            // **A20 片 2**：`!~` **无行会** ⇒ oracle `parse_channel(has_guild=false)` 落**喊话**
+            // （与 `!` 同一执行体）。有行会的 `!~` 与 `!!` 由分类器归 `Channel`，正常不会到
+            // 本地；若到达按未接线处置（计数 + 丢弃，防御路径）。
             if say_payload_is_channel_command(line) && !say_payload_is_shout(line) {
+                let has_guild = ground_sessions
+                    .get(chr_name)
+                    .is_some_and(|sg| sg.guild.guild_name.is_some());
+                if say_payload_is_guild_channel(line) && !has_guild {
+                    if let Some(speaker) = online.find_by_chr(chr_name) {
+                        handle_local_shout(
+                            &*world,
+                            ground_sessions,
+                            gates,
+                            env.colors,
+                            &env.enter_cfg.string_conf,
+                            env.enter_cfg.can_shout_msg_level,
+                            env.registry,
+                            speaker,
+                            line,
+                        );
+                    }
+                    return ZoneCmdOutcome::Dispatched;
+                }
                 perf_counters::note_zone_cmd_unsupported(cmd.ident);
                 return ZoneCmdOutcome::Unsupported;
             }
@@ -4612,6 +4636,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     // `spawn_minimal_zone` 的调用点按区号取
                     // （stub 区也取，故**无条件构造**；非切片形态的 stub 区不会推入任何请求）。
                     control_inboxes: (0..zone_count)
+                        .map(|_| Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())))
+                        .collect(),
+                    // **A20 片 2**：频道邮箱（同一次构造、下标 = 区号；非切片 stub 区不会推入）。
+                    channel_inboxes: (0..zone_count)
                         .map(|_| Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())))
                         .collect(),
                 });
@@ -26577,6 +26605,15 @@ mod perf_counters {
     /// 该区已取空的请求**无法落地**，按丢弃的**请求条数**计（与 `mailbox_rejected` 同口径）。
     /// 旧行为是静默 `continue`（不计数不告警）。
     static ZONEK_CONTROL_ZONE_GONE: AtomicU64 = AtomicU64::new(0);
+    // **A20 片 2**：频道通道四列（`!!`/`!~`；与 A6 控制邮箱**分离**；仅区 k 语义）。
+    /// 入队成功条数（区 k 线程；不含被丢的）。
+    static ZONEK_CHANNEL_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+    /// 入队被拒（满=丢新 / 区状态不在 / 陈旧）条数。
+    static ZONEK_CHANNEL_REJECTED: AtomicU64 = AtomicU64::new(0);
+    /// 区 0 已处理（解析并执行）的请求条数。
+    static ZONEK_CHANNEL_DRAINED: AtomicU64 = AtomicU64::new(0);
+    /// 已发出的收件人帧数（104 逐人 / 组队 sysmessage 逐人）。
+    static ZONEK_CHANNEL_RECIPIENTS: AtomicU64 = AtomicU64::new(0);
     /// `drained` 按类拆（只加计数，用于回答"谁在吃 50ms 预算"）：
     /// `Command` / `Closed`+`CertificationPending` / `LoadDbRequest`+控制（其余变体）。
     pub(crate) static DRAINED_COMMAND: AtomicU64 = AtomicU64::new(0);
@@ -27176,6 +27213,28 @@ mod perf_counters {
         }
     }
 
+    /// **A20 片 2**：频道四列的写点（只在 `ENABLED` 时累加，与其余 `zonek_*` 同款）。
+    pub(crate) fn note_zonek_channel_enqueued() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CHANNEL_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub(crate) fn note_zonek_channel_rejected() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CHANNEL_REJECTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub(crate) fn note_zonek_channel_drained() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CHANNEL_DRAINED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub(crate) fn note_zonek_channel_recipient() {
+        if ENABLED.load(Ordering::Relaxed) {
+            ZONEK_CHANNEL_RECIPIENTS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// `#[cfg(test)]` 读点（各一）。
     #[cfg(test)]
     pub(crate) fn zonek_inbound_drained() -> u64 {
@@ -27229,6 +27288,23 @@ mod perf_counters {
         ZONEK_CONTROL_ZONE_GONE.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
+    pub(crate) fn zonek_channel_enqueued() -> u64 {
+        ZONEK_CHANNEL_ENQUEUED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_channel_rejected() -> u64 {
+        ZONEK_CHANNEL_REJECTED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_channel_drained() -> u64 {
+        ZONEK_CHANNEL_DRAINED.load(Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) fn zonek_channel_recipients() -> u64 {
+        ZONEK_CHANNEL_RECIPIENTS.load(Ordering::Relaxed)
+    }
+
     /// **M1b 第 3 步（r6）**：**5 个**派生列的**纯函数**（写行与单测共用同一份数学）。
     ///
     /// `ib = [inbound_drained(全事件), inbound_carry, inbound_budget_hit]`（区 0；派生列**不用**全事件 drained）、
@@ -27246,7 +27322,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27377,6 +27453,11 @@ mod perf_counters {
             ZONEK_CONTROL_MAILBOX_REJECTED.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_SHUTDOWN_DISCARDED.swap(0, Ordering::Relaxed),
             ZONEK_CONTROL_ZONE_GONE.swap(0, Ordering::Relaxed),
+            // **A20 片 2**：频道四列（本 tick 增量；仅区 k 语义，N=1 恒 0）。
+            ZONEK_CHANNEL_ENQUEUED.swap(0, Ordering::Relaxed),
+            ZONEK_CHANNEL_REJECTED.swap(0, Ordering::Relaxed),
+            ZONEK_CHANNEL_DRAINED.swap(0, Ordering::Relaxed),
+            ZONEK_CHANNEL_RECIPIENTS.swap(0, Ordering::Relaxed),
             // **5 个**派生列（derived；数学见 [`zonek_derived_columns`]；不可与单区列混比）。
             // `inbound_carry_all_zones` 按 r6 已删（混合分母：区 0 按事件、区 k 按命令）。
             dv[0],
@@ -29285,6 +29366,17 @@ fn say_payload_is_shout(line: &str) -> bool {
     line.starts_with('!') && !line.starts_with("!!") && !line.starts_with("!~")
 }
 
+/// **A20 片 2**：`!!`（组队）的共享判据——`say_payload_is_channel_command` 之下的细分，
+/// 与 `chat::parse_channel` 的分支一一对应（**禁止第三份字面量判断**）。
+fn say_payload_is_group_channel(line: &str) -> bool {
+    line.starts_with("!!")
+}
+
+/// **A20 片 2**：`!~`（行会）的共享判据（同上；**无行会时 oracle 落喊话**，由调用方按会话判）。
+fn say_payload_is_guild_channel(line: &str) -> bool {
+    line.starts_with("!~")
+}
+
 /// `@` 命令后的 GM `pending_reconnect` 排水门（review R1）：**严格** `line.starts_with('@')`
 /// ——与 `handle_say` 的 `@` 判别同一口径（oracle `PlayObject.Chat.cs:363` 对原始行判
 /// `StartsWith("@")`；**不做 trim_start**，前导空格的「 @…」是普通聊天，不得顺带排出陈旧帧）。
@@ -29314,6 +29406,9 @@ enum ZoneCmdClass {
     Local,
     /// 需进程级服务 ⇒ 回区 0 执行（对应 `INBOUND_PROCESS` 段）。
     Process,
+    /// **A20 片 2**：`!!`/`!~` ⇒ **独立非阻塞频道队列**（`channel_inboxes`；不置
+    /// `control_pending`、不暂缓本地命令）。区 0 在 A6 drain 之前排空。
+    Channel,
     /// 不属 M1b 命令集；区 k 处置见第 3 步规格（丢弃 + 计数）。
     Unsupported,
 }
@@ -29326,9 +29421,9 @@ enum ZoneCmdClass {
 ///
 /// `CM_SAY` 是**唯一** payload 级判定族；族内判定（其余七族纯 ident 级、与 payload 无关）：
 /// - `@` 起 ⇒ `Process`（GM 命令体，回区 0，A6 控制邮箱）；
-/// - `!` 起 ⇒ 再分：`!!`（组队）/`!~`（行会）⇒ **`Unsupported`**（需进程态 `GuildManager`，
-///   区 k 拿不到）；其余 `!`（喊话，含单字符 `!`）⇒ **`Local`**（A20 片 1：只读本会话 +
-///   本区 registry `boQUIZ` + 配置，成功支零帧）；
+/// - `!` 起 ⇒ 再分：`!!`（组队）/`!~`（行会）⇒ **`Channel`**（A20 片 2：独立非阻塞频道队列，
+///   **不**置 `control_pending`；`!~` 无行会的回落由执行臂按会话判）；其余 `!`（喊话，含单字符
+///   `!`）⇒ **`Local`**（A20 片 1：只读本会话 + 本区 registry `boQUIZ` + 配置，成功支零帧）；
 /// - 其余（含无 payload）⇒ `Local`（普通说话 / `/` 私聊）。
 ///
 /// `@`/`!` 判据分别与 `gm_drain_gate`/本地 `!` 分派**同一份**（[`say_payload_is_at_command`] /
@@ -29416,17 +29511,19 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         return ZoneCmdClass::Process;
     }
     if ident == chat::CM_SAY {
-        // 族内判定（见函数 doc）：`@` ⇒ Process；`!!`/`!~` ⇒ Unsupported；其余（含喊话 `!`）
-        // ⇒ Local。
+        // 族内判定（见函数 doc）：`@` ⇒ Process；`!!`/`!~` ⇒ Channel（A20 片 2 独立频道队列）；
+        // 其余（含喊话 `!`）⇒ Local。
         if payload.is_some_and(say_payload_is_at_command) {
             return ZoneCmdClass::Process;
         }
         if payload.is_some_and(say_payload_is_channel_command) {
-            // **A20 片 1**：`!!`/`!~` 仍 `Unsupported`；其余 `!`（喊话）区 k 本地执行。
+            // **A20 片 1**：`!`（喊话）区 k 本地执行（成功支零帧）。
             if payload.is_some_and(say_payload_is_shout) {
                 return ZoneCmdClass::Local;
             }
-            return ZoneCmdClass::Unsupported;
+            // **A20 片 2**：`!!`/`!~` ⇒ **独立非阻塞频道通道**（`ChannelSayRequest`；
+            // 入队点不触碰 A6 的两张表）。`!~` 无行会的回落由执行臂按会话判（oracle 落喊话）。
+            return ZoneCmdClass::Channel;
         }
         return ZoneCmdClass::Local;
     }
@@ -38926,6 +39023,11 @@ impl HostLoop {
                 let fill_hit = io.inbound_local_fill_hit;
                 let carry_prefix = io.inbound_local_carry_prefix;
                 let inbox = io.control_inbox.clone();
+                // **A20 片 2**：本区频道邮箱（`ZoneHost.channel_inboxes[zone]` 的 clone）；
+                // 区 0/N=1 ⇒ `None`（不进本 LOCAL 段）。
+                let channel_inbox = zone_host
+                    .as_ref()
+                    .and_then(|zh| zh.channel_inboxes.get(zone.index()).cloned());
                 let buffer = &mut io.inbound_local_buffer;
                 // **M1b 第 4 步（A6）**：段内 tick 号 —— 本段在 `zone_tick_top(tick)` 之后、
                 // 同一把 `state` 锁内 ⇒ **此处 `self.ticks` == 驱动循环的本地 `tick`**
@@ -39018,6 +39120,7 @@ impl HostLoop {
                             item,
                             class,
                             inbox.as_deref(),
+                            channel_inbox.as_deref(),
                             ground_sessions,
                             pending,
                             zone,
@@ -40149,6 +40252,25 @@ impl HostLoop {
                 perf_counters::note_inbound_wall_us(us);
             }
             host_prof.end("HostInbound", t);
+            // **A20 片 2**：频道邮箱 drain（独立 profiler 槽 `HostChannelDrain`；**在 A6 drain
+            // 之前**——频道低延迟，A6 的 stop-and-wait 语义零改动）。锁序见 `drain_channel_says`。
+            if phases.has(PhaseSet::INBOUND_PROCESS) {
+                let t_channel = host_prof.begin();
+                let svc = proc_svc!(process, PhaseSet::INBOUND_PROCESS, "INBOUND_PROCESS");
+                if let Some(zh) = zone_host.as_ref().filter(|_| !svc.world_start.is_aborted()) {
+                    let ctx = ChannelDrainCtx {
+                        world: &world,
+                        online: &online,
+                        ground_sessions: &ground_sessions,
+                        gates: &gates,
+                        guilds: &svc.guilds,
+                        guild_msg_cfg: &enter_cfg.guild_msg_cfg,
+                        party_cfg: &shared.party_cfg,
+                    };
+                    drain_channel_says(&ctx, &zh.channel_inboxes, &zh.zone_states);
+                }
+                host_prof.end("HostChannelDrain", t_channel);
+            }
             // **A6**：控制邮箱 drain —— **独立** profiler 槽 `HostControlDrain`（`HostInbound`
             // 的既有语义不变：只含区 0 入站排水/处理）；只在 `INBOUND_PROCESS` 启用的调用里跑
             // （区 0）；`process` 在该支入口已 `proc_svc!` 断言 `Some`，这里取同一实例的字段借用
@@ -42271,6 +42393,17 @@ impl HostLoop {
 /// **A6**：控制邮箱上限（**区 k 每区一份**；按实测可调）。
 const CONTROL_MAILBOX_CAP: usize = 256;
 
+/// **A20 片 2**：每区**频道**邮箱上限（独立于 A6 控制邮箱）。
+///
+/// **初值（未测）**：待容量窗口后按实测调整；这是初值，不是结论。满 ⇒ 丢新 + 计数 + 限速 WRN
+/// （不合并、不阻塞：聊天是"每次一句"，合并会改条数/文本）。
+const CHANNEL_MAILBOX_CAP: usize = 256;
+
+/// **A20 片 2**：区 0 每 tick 每区最多处理的频道请求数（余量留在队列，下一 tick 继续）。
+///
+/// **初值（未测）**：同上；本轮不冒充 oracle 的 `SayMsgTime/SayMsgCount` 频率限制。
+const CHANNEL_DRAIN_BUDGET: usize = 64;
+
 /// **A6**：每玩家 `deferred_local` 上限 N（`== N` 再来 ⇒ 溢出就地执行 N+1）。
 const A6_DEFER_CAP: usize = 8;
 
@@ -42310,6 +42443,32 @@ struct PendingLocalCmd {
     seq: u64,
     ev: GateEvent,
     at_tick: u64,
+}
+
+/// **A20 片 2**：`!!`（组队）/`!~`（行会）的频道种类。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ChannelKind {
+    /// `!~`：行会（`guild_name` = 入队时会话里的会名；drain 时仍须同名，否则当陈旧丢弃）。
+    Guild { guild_name: String },
+    /// `!!`：组队（只看说话者所在区的 World，跨区组队本片不做）。
+    Group,
+}
+
+/// **A20 片 2**：区 k → 区 0 的**非阻塞**频道请求（与 `ControlRequest` **并列、不并入**）。
+///
+/// 为什么必须是新类型：`ControlRequest` 的入队与 A6 的 `control_pending += 1` 同临界区
+/// （`a6_enqueue_control`），语义是"该玩家本地命令暂缓 ≤1 tick"；oracle 聊天**不阻塞移动**。
+/// 本类型的入队点（[`channel_enqueue`]）从类型上就没有 A6 字段可写——"忘记跳过置位"不可能发生。
+struct ChannelSayRequest {
+    /// 投递方区号（= 邮箱下标；drain 时校验）。
+    zone: zone::ZoneId,
+    chr_name: String,
+    kind: ChannelKind,
+    /// 正文：`chat::parse_channel` 的 `Group(&line[2..])` / `Guild(&line[2..])`（逐字同源）。
+    text: String,
+    at_tick: u64,
+    /// 入队时 `sg.a6.control_epoch` 的**只读**快照；drain 时不一致 ⇒ 陈旧丢弃（不写 A6）。
+    epoch: u64,
 }
 
 /// **A6 + M1c-2c**：区 k → 区 0 的控制请求（区 0 每 tick **按区号升序** drain 各区的邮箱）。
@@ -42878,12 +43037,16 @@ fn a6_enqueue_control(
 ///   **装得下本 tick 剩余预算**（条数 + 墙钟快照）⇒ 整批就地执行（`CountedByExec{batch}`，
 ///   本函数逐条计 drained，驱动按 `batch` 计预算）；**装不下** ⇒ 整批按 seq 留在
 ///   `pending_local`、本 tick 不执行（`OverflowPostponed`，不 partial/不丢/不越序）；
+/// - `Channel`（A20 片 2）⇒ 入**独立频道队列**（`channel_enqueue`）：**不**置 `control_pending`、
+///   **不**碰 `deferred_local`；`!~` 无行会 ⇒ 交执行体（本地喊话，oracle 回落）；
 /// - `Unsupported` ⇒ 仍交执行体（与第 3 步一致）。
-#[allow(clippy::too_many_arguments)] // 9 参：命令/分类/邮箱/会话/等待队列/区/tick/预算视图/执行体
+#[allow(clippy::too_many_arguments)] // 10 参：命令/分类/邮箱/频道邮箱/会话/等待队列/区/tick/预算视图/执行体
 fn a6_dispatch_local(
     item: SeqEvent,
     class: ZoneCmdClass,
     inbox: Option<&std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>,
+    // **A20 片 2**：本区频道邮箱（与 A6 控制邮箱**分开**；`None` = 区 0/N=1/测试缺省）。
+    channel_inbox: Option<&std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
     zone: zone::ZoneId,
@@ -42961,6 +43124,53 @@ fn a6_dispatch_local(
                 _ => return LocalDisposition::Drained,
             };
             let _ = a6_enqueue_control(inbox, sessions, zone, &chr_name, payload, ident, tick);
+            LocalDisposition::Drained
+        }
+        ZoneCmdClass::Channel => {
+            // 正文与会话派生物先取（结束对 `item.ev` 的借用，`exec` 分支要整体移动它）。
+            let (chr_name, line) = match &item.ev {
+                GateEvent::Command {
+                    chr_name,
+                    tail: Some(tail),
+                    ..
+                } => (chr_name.clone(), tail.clone()),
+                _ => return LocalDisposition::Drained,
+            };
+            let has_guild = sessions
+                .get(&chr_name)
+                .and_then(|sg| sg.guild.guild_name.clone());
+            let Some(parsed) = chat::parse_channel(&line, has_guild.is_some()) else {
+                // 单 `!`（oracle `sData[1]` 越界）——按本地路径处置（日志 + 零帧）。
+                exec(&item.ev, sessions);
+                return LocalDisposition::Drained;
+            };
+            let (kind, text) = match parsed {
+                chat::ChannelSay::Group(text) => {
+                    debug_assert!(say_payload_is_group_channel(&line));
+                    (ChannelKind::Group, text.to_string())
+                }
+                chat::ChannelSay::Guild(text) => {
+                    debug_assert!(say_payload_is_guild_channel(&line));
+                    (
+                        ChannelKind::Guild {
+                            guild_name: has_guild.expect("parse_channel 只在 has_guild 时给 Guild"),
+                        },
+                        text.to_string(),
+                    )
+                }
+                chat::ChannelSay::Shout(_) => {
+                    // `!~` 无行会（或其它 `!` 子形态）⇒ 本地喊话（oracle 回落）。
+                    exec(&item.ev, sessions);
+                    return LocalDisposition::Drained;
+                }
+            };
+            let Some(channel_inbox) = channel_inbox else {
+                // 区 0/N=1 不进 LOCAL 段 ⇒ 不可达；保守按已处置计（不静默）。
+                debug_assert!(false, "区 k LOCAL 段必须带频道邮箱");
+                return LocalDisposition::Drained;
+            };
+            let epoch = sessions.get(&chr_name).map_or(0, |sg| sg.a6.control_epoch);
+            let _ = channel_enqueue(channel_inbox, zone, &chr_name, kind, text, tick, epoch);
             LocalDisposition::Drained
         }
         ZoneCmdClass::Local => {
@@ -43044,6 +43254,35 @@ fn a6_dispatch_local(
             LocalDisposition::Drained
         }
     }
+}
+
+/// **A20 片 2**：测试用 9 参薄封装（频道邮箱缺省 `None`；生产调用点一律直接用
+/// [`a6_dispatch_local`] 并显式传频道邮箱）。
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn a6_dispatch_local_test(
+    item: SeqEvent,
+    class: ZoneCmdClass,
+    inbox: Option<&std::sync::Mutex<std::collections::VecDeque<ControlRequest>>>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pending_local: &mut std::collections::BTreeMap<u64, PendingLocalCmd>,
+    zone: zone::ZoneId,
+    tick: u64,
+    budget: A6BatchBudget,
+    exec: &mut dyn FnMut(&GateEvent, &mut std::collections::HashMap<String, SessionGround>),
+) -> LocalDisposition {
+    a6_dispatch_local(
+        item,
+        class,
+        inbox,
+        None,
+        sessions,
+        pending_local,
+        zone,
+        tick,
+        budget,
+        exec,
+    )
 }
 
 /// **M1b 第 3 步**：demux 的 `Zone(z)` 转发（含 `outstanding` 上限 + 丢新）。抽成函数供单测。
@@ -43181,6 +43420,298 @@ fn a6_take_control_requests(
         return None;
     };
     Some((requests, Arc::clone(state_arc)))
+}
+
+/// **A20 片 2**：频道邮箱满 ⇒ 丢弃的限速 WRN（每分钟 ≤1 条）。
+fn channel_mailbox_full_warn(zone: zone::ZoneId, chr: &str, len: usize) {
+    static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+        std::sync::Mutex::new(DepartWarnLimiter::new());
+    let mut limiter = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(suppressed) = limiter.should_log(now_ms()) else {
+        return;
+    };
+    glog!(
+        "WRN",
+        "区 {zone} 频道邮箱满（CAP={CHANNEL_MAILBOX_CAP}，len={len}）⇒ 丢弃 ChrName={chr} 的这条频道消息（zonek_channel_rejected；不合并、不阻塞）；上一分钟抑制 {suppressed} 条"
+    );
+}
+
+/// **A20 片 2**：频道入队（区 k 线程；**只判满 / push / 计数**）。
+///
+/// 硬约束：函数体**不得**出现 A6 的两张表（`control_pending` / `deferred_local`）——
+/// oracle 聊天不阻塞移动（静态辅助牙钉住，须与 T1 行为牙并存）。
+fn channel_enqueue(
+    inbox: &std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>,
+    zone: zone::ZoneId,
+    chr_name: &str,
+    kind: ChannelKind,
+    text: String,
+    at_tick: u64,
+    epoch: u64,
+) -> bool {
+    let mut q = inbox
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if q.len() >= CHANNEL_MAILBOX_CAP {
+        let len = q.len();
+        drop(q);
+        perf_counters::note_zonek_channel_rejected();
+        channel_mailbox_full_warn(zone, chr_name, len);
+        return false;
+    }
+    q.push_back(ChannelSayRequest {
+        zone,
+        chr_name: chr_name.to_string(),
+        kind,
+        text,
+        at_tick,
+        epoch,
+    });
+    perf_counters::note_zonek_channel_enqueued();
+    true
+}
+
+/// **A20 片 2**：取本 tick 的频道请求（每区最多 `budget` 条；余量留在队列，下一 tick 继续）。
+fn channel_take_requests(
+    inbox: &std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>,
+    budget: usize,
+) -> Vec<ChannelSayRequest> {
+    let mut q = inbox
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let n = q.len().min(budget);
+    q.drain(..n).collect()
+}
+
+/// **A20 片 2**：区 0 频道排水的**区 0 侧只读上下文**（进程态 `GuildManager` 由调用方借入）。
+struct ChannelDrainCtx<'a> {
+    world: &'a mir2_world_bevy::World,
+    online: &'a OnlineRegistry,
+    ground_sessions: &'a std::collections::HashMap<String, SessionGround>,
+    gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    guilds: &'a mir2_world_bevy::GuildManager,
+    guild_msg_cfg: &'a guild_runtime::GuildMsgCfg,
+    party_cfg: &'a mir2_world_bevy::PartyConfig,
+}
+
+/// 频道帧发出（锁外调用）；`true` = 已入网关通道。
+fn channel_send(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    gate_idx: i32,
+    socket: i32,
+    body: Vec<u8>,
+) -> bool {
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, "频道") else {
+        return false;
+    };
+    tx.send(SimToGate::SendFrame { socket, body }).is_ok()
+}
+
+/// **A20 片 2**：区 0 的频道排水（在 A6 `HostControlDrain` **之前**；独立 profiler 槽
+/// `HostChannelDrain`）。
+///
+/// # 锁序（写死，禁反向）
+/// - 区号**升序**；同一次解析**一次只持一把** `ZoneState` 锁（禁嵌套/禁双持）；
+/// - `GuildManager` 是区 0 线程局部的 `&mut`（**无互斥**）⇒ 可**先读 guilds、再取区锁**
+///   （现状即如此：先 `find_guild` 取名册，再逐区加锁解析成员）；本函数不取任何进程态锁；
+/// - **若将来给 `guilds` 加上互斥**（例如跨区共享行会表），锁序**必须改为先区锁、后 guilds**
+///   （与 A34 片 4 `run_guild_command` 同序），否则可与"先区锁再读 guilds"的路径互等；
+/// - **持锁期间只拷快照**（actor / gate / socket / ban / 帧体），**不发帧**；发帧一律在锁外。
+fn drain_channel_says(
+    ctx: &ChannelDrainCtx<'_>,
+    inboxes: &[Arc<std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>>],
+    zone_states: &[Option<Arc<std::sync::Mutex<ZoneState>>>],
+) {
+    for (z, inbox) in inboxes.iter().enumerate().skip(1) {
+        let reqs = channel_take_requests(inbox, CHANNEL_DRAIN_BUDGET);
+        if reqs.is_empty() {
+            continue;
+        }
+        let zone_k = match u32::try_from(z) {
+            Ok(v) => zone::ZoneId::new(v),
+            Err(_) => continue,
+        };
+        let Some(state) = zone_states.get(z).and_then(Option::as_ref) else {
+            // 区状态不在（区未切片/线程已退出）⇒ 丢弃 + 计数 + 限速 WRN（不静默）。
+            for _ in 0..reqs.len() {
+                perf_counters::note_zonek_channel_rejected();
+            }
+            channel_mailbox_full_warn(zone_k, "(zone-gone)", reqs.len());
+            continue;
+        };
+        for req in reqs {
+            if req.zone != zone_k {
+                perf_counters::note_zonek_channel_rejected();
+                continue;
+            }
+            // **陈旧判定**：会话缺 / `control_epoch` 变 / 行会名变（只读快照，不写 A6）。
+            // **已知限制（A20 片 2 登记，本片不改）**：判据复用 `sg.a6.control_epoch` ⇒ 同会话若
+            // 有无关的 `@` 超时把 epoch 推进，**同 tick 的频道消息会被当陈旧丢弃**（≤1 tick、
+            // 影响仅"这条聊天不投递"）。独立频道 epoch 需另裁，届时改这里即可。
+            let stale = {
+                let st = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match st.host.ground_sessions.get(&req.chr_name) {
+                    None => true,
+                    Some(sg) => {
+                        if sg.a6.control_epoch != req.epoch {
+                            true
+                        } else {
+                            match &req.kind {
+                                ChannelKind::Guild { guild_name } => {
+                                    sg.guild.guild_name.as_deref() != Some(guild_name.as_str())
+                                }
+                                ChannelKind::Group => false,
+                            }
+                        }
+                    }
+                }
+            };
+            if stale {
+                glog!(
+                    "DBG",
+                    "区 {zone_k} 频道请求陈旧丢弃 ChrName={} at_tick={}（会话缺/epoch 变/行会名变；zonek_channel_rejected）",
+                    req.chr_name,
+                    req.at_tick
+                );
+                perf_counters::note_zonek_channel_rejected();
+                continue;
+            }
+            match &req.kind {
+                ChannelKind::Group => drain_group_say(ctx, state, &req),
+                ChannelKind::Guild { guild_name } => {
+                    drain_guild_say(ctx, zone_states, &req, guild_name);
+                }
+            }
+            perf_counters::note_zonek_channel_drained();
+        }
+    }
+}
+
+/// **A20 片 2**：组队说词（`!!`）——在**说话者区**锁内算事件与路由快照，锁外发帧。
+fn drain_group_say(
+    ctx: &ChannelDrainCtx<'_>,
+    state: &Arc<std::sync::Mutex<ZoneState>>,
+    req: &ChannelSayRequest,
+) {
+    let sends: Vec<(i32, i32, Vec<u8>)> = {
+        let mut st = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ZoneState { host, .. } = &mut *st;
+        let Some(sender) = host.online.find_by_chr(&req.chr_name) else {
+            return;
+        };
+        let body = format!("{}: {}", req.chr_name, req.text);
+        let events = host
+            .world
+            .party_send_group_text(sender.actor_id, ctx.party_cfg, &body);
+        let mut sends = Vec::new();
+        for (_, ev) in &events {
+            let Some((to, frame)) = partywire::event_body(ev) else {
+                continue;
+            };
+            if let Some(t) = host.online.find_linear_actor(to) {
+                sends.push((t.gate_idx, t.socket, frame));
+            }
+        }
+        sends
+    };
+    for (gate_idx, socket, body) in sends {
+        if channel_send(ctx.gates, gate_idx, socket, body) {
+            perf_counters::note_zonek_channel_recipient();
+        }
+    }
+}
+
+/// **A20 片 2**：行会说话（`!~`）——逐成员跨区解析（区 0 先、再按区号升序逐个锁），
+/// 每命中一人**单独构造**一帧（`recog` = 收件人自己的 `ActorId`，A33 教训）；含说话者自己
+/// （oracle `SendGuildMsg` 逐成员 `SendMsg`、`exclude=None`），`BanGuildChat` 反向门。
+fn drain_guild_say(
+    ctx: &ChannelDrainCtx<'_>,
+    zone_states: &[Option<Arc<std::sync::Mutex<ZoneState>>>],
+    req: &ChannelSayRequest,
+    guild_name: &str,
+) {
+    let Some(guild) = ctx.guilds.find_guild(guild_name) else {
+        return;
+    };
+    let mut names: Vec<String> = Vec::new();
+    for rank in &guild.ranks {
+        for m in &rank.members {
+            if !m.is_empty() {
+                names.push(m.clone());
+            }
+        }
+    }
+    // `(actor_id, gate_idx, socket)`（锁内只拷快照）。
+    let mut routes: Vec<(i32, i32, i32)> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    // 区 0 本区先（无锁）。
+    for name in names {
+        match guild_cmd::find_play_object(ctx.online, ctx.world, &name) {
+            Some(e) => {
+                let allow = ctx
+                    .ground_sessions
+                    .get(&e.chr_name)
+                    .is_some_and(|sg| sg.guild.ban_guild_chat);
+                if allow {
+                    routes.push((e.actor_id, e.gate_idx, e.socket));
+                }
+            }
+            None => pending.push(name),
+        }
+    }
+    // 其余区：按区号升序，一次只持一把锁；锁内只拷快照。
+    for state in zone_states.iter().skip(1) {
+        if pending.is_empty() {
+            break;
+        }
+        let Some(state) = state.as_ref() else {
+            continue;
+        };
+        let mut st = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ZoneState { host, .. } = &mut *st;
+        let mut still = Vec::new();
+        for name in pending.drain(..) {
+            match guild_cmd::find_play_object(&host.online, &host.world, &name) {
+                Some(e) => {
+                    let allow = host
+                        .ground_sessions
+                        .get(&e.chr_name)
+                        .is_some_and(|sg| sg.guild.ban_guild_chat);
+                    if allow {
+                        routes.push((e.actor_id, e.gate_idx, e.socket));
+                    }
+                }
+                None => still.push(name),
+            }
+        }
+        pending = still;
+        drop(st);
+    }
+    // 锁外逐人构造 104（`recog` = 收件人自己）。
+    let text = guild_runtime::guild_104_text(
+        ctx.guild_msg_cfg,
+        &format!("{}: {}", req.chr_name, req.text),
+    );
+    for (actor_id, gate_idx, socket) in routes {
+        if let Some(body) = guild_frames::sm_guild_message_104(
+            actor_id,
+            ctx.guild_msg_cfg.f_color,
+            ctx.guild_msg_cfg.b_color,
+            &text,
+        ) {
+            if channel_send(ctx.gates, gate_idx, socket, body) {
+                perf_counters::note_zonek_channel_recipient();
+            }
+        }
+    }
 }
 
 /// **M1c-2c 段 4**：drain 时目标区状态已不在 ⇒ 请求丢弃的限速 WRN（每分钟 ≤1 条）。
@@ -55737,7 +56268,7 @@ break
             c.param = param;
             c.tag = tag;
             c.series = series;
-            let disp = a6_dispatch_local(
+            let disp = a6_dispatch_local_test(
                 SeqEvent {
                     seq: 1,
                     ev: GateEvent::Command {
@@ -132684,12 +133215,9 @@ mod zone_command_tests {
         );
     }
 
-    /// **M1b 第 5b 步 · B3 牙（A20 片 1 收窄）`zone_k_channel_say_is_not_executed_locally`**：
-    /// **`!~`（行会）/`!!`（组队）**不在区 k 执行（需进程态 `GuildManager`/跨区名册）——
-    /// 分类为 `Unsupported`、处置计 `zone_cmd_unsupported`、**零出帧**。
-    ///
-    /// **A20 片 1**：`!`（喊话）已改为区 k 本地执行（见 `zonek_shout_*` 与
-    /// `bangbang_and_single_bang_after_a20`）；本牙只钉 `!~`/`!!` 的守恒。
+    /// **B3 牙（A20 片 2 收窄）`zone_k_channel_say_is_not_executed_locally`**：`!!`/`!~`
+    /// **不在区 k 本地执行**——分类为 **`Channel`**；本地处置面：`!!` 防御路径 `Unsupported`
+    /// （计数 +1、零帧），`!~` 无行会回落本地喊话（`Dispatched`、零 104 帧）。
     #[test]
     fn zone_k_channel_say_is_not_executed_locally() {
         let (mut state, actor) = landed("cmd_channel", zone::ZoneId::new(1));
@@ -132701,32 +133229,835 @@ mod zone_command_tests {
         for line in ["!~hello", "!!hello"] {
             assert_eq!(
                 zone_cmd_class(chat::CM_SAY, Some(line)),
-                ZoneCmdClass::Unsupported,
-                "前置：`{line}` 分类为 Unsupported"
+                ZoneCmdClass::Channel,
+                "前置：`{line}` 分类为 Channel（A20 片 2）"
             );
-            let u0 = perf_counters::zone_cmd_unsupported();
-            let outcome = handle_zone_command_with_tail(
+        }
+        let u0 = perf_counters::zone_cmd_unsupported();
+        assert_eq!(
+            handle_zone_command_with_tail(
                 &mut state,
                 &gates,
                 "hero",
                 7,
                 &cmd(chat::CM_SAY, 0, 0, 0),
-                Some(line),
-            );
-            assert_eq!(
-                outcome,
-                ZoneCmdOutcome::Unsupported,
-                "`{line}` 必须落 Unsupported（未接线）"
-            );
-            assert_eq!(
-                perf_counters::zone_cmd_unsupported(),
-                u0 + 1,
-                "`{line}` 必须计 zone_cmd_unsupported +1"
-            );
-            assert!(rx.try_recv().is_err(), "`{line}` 在区 k 必须零出帧");
+                Some("!!hello"),
+            ),
+            ZoneCmdOutcome::Unsupported,
+            "`!!` 落到本地必须是防御路径"
+        );
+        assert_eq!(
+            perf_counters::zone_cmd_unsupported(),
+            u0 + 1,
+            "`!!` 防御路径计 zone_cmd_unsupported +1"
+        );
+        assert!(rx.try_recv().is_err(), "`!!` 本地零出帧");
+        assert_eq!(
+            handle_zone_command_with_tail(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!~hello"),
+            ),
+            ZoneCmdOutcome::Dispatched,
+            "`!~` 无行会回落本地喊话"
+        );
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_ne!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE,
+                    "区 k 本地不得发 104"
+                );
+            }
         }
     }
 
+    // ===================== A20 片 2：`!!`/`!~` 非阻塞频道通道 =====================
+
+    fn a20_seq(seq: u64, chr: &str, ident: u16, tail: Option<&str>) -> SeqEvent {
+        SeqEvent {
+            seq,
+            ev: GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: chr.to_string(),
+                socket: 7,
+                cmd: cmd(ident, 0, 0, 0),
+                tail: tail.map(str::to_string),
+            },
+        }
+    }
+
+    /// 跑一条 `execute_local_budget`：`say` 走 `Channel`（真 `a6_dispatch_local`），走位走 `Local`（只记录）。
+    /// 返回执行序里的走位 recog 序列。`with_say=false` 是对照组。
+    fn a20_run_budget(
+        sessions: &mut std::collections::HashMap<String, SessionGround>,
+        chan: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>>,
+        with_say: bool,
+    ) -> Vec<i32> {
+        let mut buffer = std::collections::VecDeque::new();
+        let mut seq = 1u64;
+        if with_say {
+            buffer.push_back(a20_seq(seq, "hero", chat::CM_SAY, Some("!~hi")));
+            seq += 1;
+        }
+        for _ in 0..3 {
+            buffer.push_back(a20_seq(seq, "hero", mir2_protocol::messages::CM_WALK, None));
+            seq += 1;
+        }
+        let mut pending_local = std::collections::BTreeMap::new();
+        let mut walks: Vec<i32> = Vec::new();
+        let mut exec =
+            |ev: &GateEvent, _sessions: &mut std::collections::HashMap<String, SessionGround>| {
+                if let GateEvent::Command { cmd, .. } = ev {
+                    walks.push(cmd.recog);
+                }
+            };
+        let classify = |s: &SeqEvent| match &s.ev {
+            GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
+            _ => ZoneCmdClass::Unsupported,
+        };
+        let limits = ZoneDrainLimits {
+            tick_max_events: 2000,
+            execute_max_events: 2000,
+            execute_wall: std::time::Duration::from_secs(60),
+            execute_check_every: 16,
+        };
+        let _ = execute_local_budget(
+            zone::ZoneId::new(1).index(),
+            &mut buffer,
+            &mut pending_local,
+            0,
+            0,
+            false,
+            None,
+            limits,
+            &classify,
+            |item, class, pending, budget| {
+                let mut walk_exec = |ev: &GateEvent,
+                                     sessions: &mut std::collections::HashMap<
+                    String,
+                    SessionGround,
+                >| {
+                    exec(ev, sessions);
+                };
+                a6_dispatch_local(
+                    item,
+                    class,
+                    None,
+                    Some(&**chan),
+                    sessions,
+                    pending,
+                    zone::ZoneId::new(1),
+                    9,
+                    budget,
+                    &mut walk_exec,
+                )
+            },
+        );
+        walks
+    }
+
+    /// **A20 T1 牙 `a20_channel_say_does_not_block_local_commands`**：区 k 一条 `!~` 入队的同时
+    /// 3 条 `CM_WALK` ⇒ **两次跑**（插话 / 不插）走位序列**逐帧相等**；`control_pending` 恒 0、
+    /// `deferred_local` 为空、频道恰入队 1 条（`zonek_channel_enqueued +1`）。
+    ///
+    /// 变异：`Channel` 臂改走 A6 置位（`control_pending += 1`）⇒ 走位被暂缓/序列变 ⇒ 红。
+    #[test]
+    fn a20_channel_say_does_not_block_local_commands() {
+        let (_g, path) = m1c2c_arm_counters("a20t1");
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let mut sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = crate::tests::test_session_ground(42);
+        sg.guild.guild_name = Some("G".to_string());
+        sessions.insert("hero".to_string(), sg);
+
+        let enq0 = perf_counters::zonek_channel_enqueued();
+        let walks_with = a20_run_budget(&mut sessions, &chan, true);
+        let walks_without = a20_run_budget(&mut sessions, &chan, false);
+        assert_eq!(
+            walks_with, walks_without,
+            "走位序列必须逐帧相等（插话不改变本地命令）"
+        );
+        assert_eq!(walks_with.len(), 3, "3 条走位全出");
+        assert_eq!(chan.lock().unwrap().len(), 1, "频道恰入队 1 条");
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            1,
+            "zonek_channel_enqueued +1"
+        );
+        assert_eq!(
+            sessions["hero"].a6.control_pending, 0,
+            "频道入队不得置 control_pending"
+        );
+        assert!(
+            sessions["hero"].a6.deferred_local.is_empty(),
+            "频道入队不得写 deferred_local"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T2 牙 `a20_channel_full_drops_new_without_blocking`**：预填 `CHANNEL_MAILBOX_CAP`
+    /// 条后，再送 1 条 `!~` + 1 条 `CM_WALK` ⇒ 走位照出；`zonek_channel_rejected +1`；
+    /// 队列长度仍 = CAP 且**队首仍是旧条目**（丢新，不丢旧/不合并/不阻塞）。
+    ///
+    /// 变异：改「丢旧」或阻塞等待 ⇒ 队首/计数断言红。
+    #[test]
+    fn a20_channel_full_drops_new_without_blocking() {
+        let (_g, path) = m1c2c_arm_counters("a20t2");
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        {
+            let mut q = chan.lock().unwrap();
+            for i in 0..CHANNEL_MAILBOX_CAP {
+                q.push_back(ChannelSayRequest {
+                    zone: zone::ZoneId::new(1),
+                    chr_name: format!("filler{i}"),
+                    kind: ChannelKind::Group,
+                    text: "x".to_string(),
+                    at_tick: 0,
+                    epoch: 0,
+                });
+            }
+        }
+        let mut sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut sg = crate::tests::test_session_ground(42);
+        sg.guild.guild_name = Some("G".to_string());
+        sessions.insert("hero".to_string(), sg);
+        let rej0 = perf_counters::zonek_channel_rejected();
+        let walks = a20_run_budget(&mut sessions, &chan, true);
+        assert_eq!(walks.len(), 3, "满队时走位仍全出（不阻塞）");
+        assert_eq!(
+            perf_counters::zonek_channel_rejected() - rej0,
+            1,
+            "第 N+1 条必须被丢新并计 zonek_channel_rejected +1"
+        );
+        {
+            let q = chan.lock().unwrap();
+            assert_eq!(
+                q.len(),
+                CHANNEL_MAILBOX_CAP,
+                "丢新：队列长度仍 = CAP（旧条目未被挤掉）"
+            );
+            assert_eq!(
+                q.front().map(|r| r.chr_name.as_str()),
+                Some("filler0"),
+                "丢新：队首必须仍是旧条目（丢旧/合并会挤掉它）"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T3 牙 `a20_guild_channel_without_guild_falls_back_to_shout`**：无行会 `!~hi` ⇒
+    /// oracle 回落喊话：第一次成功（零帧、写 `shout_msg_tick`）、第二次立即再发 ⇒ 自己一条
+    /// `SM_SYSMESSAGE(100)`（TooSoon 文案）；**零频道入队**。
+    ///
+    /// 变异：无行会也入 Guild 通道 ⇒ 第二次无 TooSoon 帧、`enqueued` 增 ⇒ 红。
+    #[test]
+    fn a20_guild_channel_without_guild_falls_back_to_shout() {
+        let (_g, path) = m1c2c_arm_counters("a20t3");
+        let (mut state, actor) = landed("a20_t3", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.can_shout_msg_level = 34;
+        state.host.world.clock_ms = 20_000;
+        let mut sg = crate::tests::test_session_ground(actor);
+        sg.equip.abil.level = 40;
+        sg.shout_msg_tick = 0;
+        state.host.ground_sessions.insert("hero".to_string(), sg);
+        let enq0 = perf_counters::zonek_channel_enqueued();
+        let expect_frame = |shared: &SharedServices, actor: i32, text: &str| {
+            game_svr::smframe::sm_sysmessage(
+                actor,
+                u16::from(shared.colors.red_f),
+                u16::from(shared.colors.red_b),
+                &encoding_rs::GBK.encode(text).0,
+            )
+        };
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!~hi"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        assert!(rx.try_recv().is_err(), "第一次成功喊话零帧");
+        assert_eq!(state.host.ground_sessions["hero"].shout_msg_tick, 20_000);
+        let want_text = chat::format_int(
+            shared.enter_cfg.string_conf.you_can_send_cycy_later_msg(),
+            10,
+        );
+        let want = expect_frame(&shared, actor, &want_text);
+        assert_eq!(
+            handle_zone_command_with_tail_and_shared(
+                &mut state,
+                &gates,
+                "hero",
+                7,
+                &cmd(chat::CM_SAY, 0, 0, 0),
+                Some("!~hi"),
+                &shared,
+            ),
+            ZoneCmdOutcome::Dispatched
+        );
+        match rx.try_recv().expect("第二次必须回 TooSoon 帧") {
+            SimToGate::SendFrame { body, .. } => {
+                assert_eq!(body, want, "TooSoon 文案逐字节 = SM_SYSMESSAGE(红字)");
+            }
+            other => panic!("期望 SendFrame，得到 {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            0,
+            "无行会 `!~` 不得进频道通道"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 行会夹具：区 0 的 `A` + 区 k 的 `B`（同会 `G`），`GuildManager` 名册含两名；
+    /// 返回 (zone0 state, zone k state Arc, guilds, gates, rx, actorA, actorB)。
+    #[allow(clippy::type_complexity)]
+    fn a20_guild_rig() -> (
+        ZoneState,
+        std::sync::Arc<std::sync::Mutex<ZoneState>>,
+        mir2_world_bevy::GuildManager,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+        i32,
+    ) {
+        let (mut z0, _) = landed("a20_t4_z0", zone::ZoneId::new(0));
+        let (mut zk, actor_b) = landed("a20_t4_zk", zone::ZoneId::new(1));
+        let (bx, by) = pos_of(&zk, actor_b);
+        let actor_a =
+            z0.host
+                .world
+                .add_entity(mir2_world_bevy::EntitySpawn::new(0, "A", bx + 1, by));
+        online_set(
+            &mut z0.host.online,
+            OnlineEntry {
+                account: "acctA".to_string(),
+                chr_name: "A".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 801,
+                actor_id: actor_a,
+            },
+        );
+        online_set(
+            &mut zk.host.online,
+            OnlineEntry {
+                account: "acctB".to_string(),
+                chr_name: "B".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 802,
+                actor_id: actor_b,
+            },
+        );
+        for (actor, name) in [(actor_a, "A"), (actor_b, "B")] {
+            let mut sg = crate::tests::test_session_ground(actor);
+            sg.guild.guild_name = Some("G".to_string());
+            sg.guild.allow_guild = true;
+            sg.guild.ban_guild_chat = true; // true = 允许（oracle 反向门）
+            if name == "A" {
+                z0.host.ground_sessions.insert("A".to_string(), sg);
+            } else {
+                zk.host.ground_sessions.insert("B".to_string(), sg);
+            }
+        }
+        let cfg = mir2_world_bevy::GuildConfig::default();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild("G", "A", &cfg), "建会");
+        guilds
+            .find_guild_mut("G")
+            .expect("刚建的会")
+            .add_member("B", &cfg, 0);
+        let (gates, rx) = gates_and_rx();
+        (
+            z0,
+            std::sync::Arc::new(std::sync::Mutex::new(zk)),
+            guilds,
+            gates,
+            rx,
+            actor_a,
+            actor_b,
+        )
+    }
+
+    /// **A20 T4 牙 `a20_guild_channel_cross_zone_per_recipient_recog`**：区 0 的 A 与区 k 的 B
+    /// 同会，B 说 `!~hi` ⇒ A 收 1 条 `SM_GUILDMESSAGE(104)`（`recog=A`）、**B 自己也收 1 条**
+    /// （`recog=B`）；两帧 **body 不同**（逐人构造）；尾逐字节 = 前缀 + `B: hi`。
+    /// 第二次 drain（下一 tick）⇒ **零新增**（同请求不重复投递）。
+    ///
+    /// 变异：解析只扫区 0（跳过 `zone_states`）⇒ A 零帧 ⇒ 红。
+    #[test]
+    fn a20_guild_channel_cross_zone_per_recipient_recog() {
+        let (_g, path) = m1c2c_arm_counters("a20t4");
+        let (z0, zk, guilds, gates, mut rx, actor_a, actor_b) = a20_guild_rig();
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let zone_states = vec![None, Some(std::sync::Arc::clone(&zk))];
+        let inboxes = vec![
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            chan,
+        ];
+        let epoch = zk.lock().unwrap().host.ground_sessions["B"]
+            .a6
+            .control_epoch;
+        assert!(channel_enqueue(
+            &inboxes[1],
+            zone::ZoneId::new(1),
+            "B",
+            ChannelKind::Guild {
+                guild_name: "G".to_string()
+            },
+            "hi".to_string(),
+            9,
+            epoch,
+        ));
+        let msg_cfg = guild_runtime::GuildMsgCfg::from_config(
+            &mir2_world_bevy::GuildConfig::default(),
+            false,
+            "",
+        );
+        let party_cfg = mir2_world_bevy::PartyConfig::default();
+        let run = |inboxes: &Vec<
+            std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<ChannelSayRequest>>>,
+        >| {
+            let ctx = ChannelDrainCtx {
+                world: &z0.host.world,
+                online: &z0.host.online,
+                ground_sessions: &z0.host.ground_sessions,
+                gates: &gates,
+                guilds: &guilds,
+                guild_msg_cfg: &msg_cfg,
+                party_cfg: &party_cfg,
+            };
+            drain_channel_says(&ctx, inboxes, &zone_states);
+        };
+        let dr0 = perf_counters::zonek_channel_drained();
+        let rc0 = perf_counters::zonek_channel_recipients();
+        run(&inboxes);
+        assert_eq!(
+            perf_counters::zonek_channel_drained() - dr0,
+            1,
+            "一条请求 = drained +1"
+        );
+        assert_eq!(
+            perf_counters::zonek_channel_recipients() - rc0,
+            2,
+            "两名成员 = recipients +2"
+        );
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE,
+                    "只应有 104 帧"
+                );
+                frames.push(body);
+            }
+        }
+        assert_eq!(frames.len(), 2, "A + B（说话者自己）各一条 104");
+        let recogs: Vec<i32> = frames
+            .iter()
+            .map(|body| CommandMessage::from_bytes(body).expect("12B 头").recog)
+            .collect();
+        assert!(
+            recogs.contains(&actor_a) && recogs.contains(&actor_b),
+            "recog 必须分别是 A/B 自己的 actor id：{recogs:?}"
+        );
+        assert_ne!(
+            frames[0], frames[1],
+            "逐人构造：两帧 body 必须不同（recog 不同）"
+        );
+        run(&inboxes);
+        assert!(rx.try_recv().is_err(), "跨 tick 不得重复投递同一请求");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T5 牙 `a20_group_channel_emits_sysmessage_to_members`**：同区队友 A/B，B 说 `!!hi`
+    /// ⇒ A 收 `SM_SYSMESSAGE(100)`（`recog=B`）；B 自己也收到一条（组员含自己）。
+    #[test]
+    fn a20_group_channel_emits_sysmessage_to_members() {
+        let (_g, path) = m1c2c_arm_counters("a20t5");
+        let (mut zk, actor_b) = landed("a20_t5", zone::ZoneId::new(1));
+        let (bx, by) = pos_of(&zk, actor_b);
+        let actor_a =
+            zk.host
+                .world
+                .add_entity(mir2_world_bevy::EntitySpawn::new(0, "A", bx + 1, by));
+        online_set(
+            &mut zk.host.online,
+            OnlineEntry {
+                account: "acctA".to_string(),
+                chr_name: "A".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 801,
+                actor_id: actor_a,
+            },
+        );
+        online_set(
+            &mut zk.host.online,
+            OnlineEntry {
+                account: "acctB".to_string(),
+                chr_name: "B".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 802,
+                actor_id: actor_b,
+            },
+        );
+        zk.host
+            .ground_sessions
+            .insert("B".to_string(), crate::tests::test_session_ground(actor_b));
+        {
+            let ea = zk.host.world.entities.get_mut(actor_a).expect("A");
+            ea.group.group_owner = actor_a;
+            ea.group.group_members = vec![actor_a, actor_b];
+        }
+        zk.host
+            .world
+            .entities
+            .get_mut(actor_b)
+            .expect("B")
+            .group
+            .group_owner = actor_a;
+        let (gates, mut rx) = gates_and_rx();
+        let (z0, _) = landed("a20_t5_z0", zone::ZoneId::new(0));
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let zone_states = vec![None, Some(std::sync::Arc::new(std::sync::Mutex::new(zk)))];
+        let inboxes = vec![
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            chan,
+        ];
+        assert!(channel_enqueue(
+            &inboxes[1],
+            zone::ZoneId::new(1),
+            "B",
+            ChannelKind::Group,
+            "hi".to_string(),
+            9,
+            0,
+        ));
+        let msg_cfg = guild_runtime::GuildMsgCfg::from_config(
+            &mir2_world_bevy::GuildConfig::default(),
+            false,
+            "",
+        );
+        let party_cfg = mir2_world_bevy::PartyConfig::default();
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let ctx = ChannelDrainCtx {
+            world: &z0.host.world,
+            online: &z0.host.online,
+            ground_sessions: &z0.host.ground_sessions,
+            gates: &gates,
+            guilds: &guilds,
+            guild_msg_cfg: &msg_cfg,
+            party_cfg: &party_cfg,
+        };
+        let rc0 = perf_counters::zonek_channel_recipients();
+        drain_channel_says(&ctx, &inboxes, &zone_states);
+        let mut got = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                let cm = CommandMessage::from_bytes(&body).expect("12B 头");
+                if cm.ident == mir2_protocol::messages::SM_SYSMESSAGE {
+                    assert_eq!(cm.recog, actor_b, "组队说词 recog = 说话者 B");
+                    got += 1;
+                }
+            }
+        }
+        assert_eq!(got, 2, "A 与 B 自己各一条组队说词");
+        assert_eq!(
+            perf_counters::zonek_channel_recipients() - rc0,
+            2,
+            "组队两帧 = recipients +2"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T3-e2e 牙（必修 1）`a20_guild_channel_without_guild_via_dispatch_arm`**：**无行会**会话
+    /// 发 `!~x` 经**真 `a6_dispatch_local` 的 `Channel` 臂**：① `zonek_channel_enqueued +0`
+    /// （不进频道队列）；② 走 shout——`shout_msg_tick` 写 `world.clock_ms`、无 104；③ 同 tick 再发
+    /// 一条仍不入队（回落语义在**分派臂**也有牙，不只测试 exec 面）。
+    ///
+    /// 变异：删 `ChannelSay::Shout => exec(...)` 分支（无行会也入 Guild 队）⇒ 入队计数/队列红。
+    #[test]
+    fn a20_guild_channel_without_guild_via_dispatch_arm() {
+        let (_g, path) = m1c2c_arm_counters("a20t3e2e");
+        let (mut state, actor) = landed("a20_t3e2e", zone::ZoneId::new(1));
+        let (gates, mut rx) = gates_and_rx();
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.can_shout_msg_level = 34;
+        state.host.world.clock_ms = 20_000;
+        let mut sg = crate::tests::test_session_ground(actor);
+        sg.equip.abil.level = 40;
+        sg.shout_msg_tick = 0; // 无行会（guild_name = None）
+        state.host.ground_sessions.insert("hero".to_string(), sg);
+        let chan = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let enq0 = perf_counters::zonek_channel_enqueued();
+        let env = ZoneCmdEnv {
+            enter_cfg: &shared.enter_cfg,
+            colors: &shared.colors,
+            registry: shared.registry.as_ref(),
+            unbind_list: &shared.unbind_list,
+            item_number: &shared.item_number,
+            party_cfg: &shared.party_cfg,
+        };
+        let ZoneState { host, .. } = &mut state;
+        let HostLoop {
+            world,
+            displays,
+            online,
+            ground_sessions,
+            saves,
+            trade_sessions,
+            shop_sessions,
+            ..
+        } = host;
+        for seq in 1..=2u64 {
+            let ev = GateEvent::Command {
+                line: 0,
+                index: 0,
+                chr_name: "hero".to_string(),
+                socket: 7,
+                cmd: cmd(chat::CM_SAY, 0, 0, 0),
+                tail: Some("!~x".to_string()),
+            };
+            let mut pending = std::collections::BTreeMap::new();
+            let mut buffer = std::collections::VecDeque::from([SeqEvent { seq, ev }]);
+            let _ = execute_local_budget(
+                zone::ZoneId::new(1).index(),
+                &mut buffer,
+                &mut pending,
+                0,
+                1,
+                false,
+                None,
+                ZoneDrainLimits::PRODUCTION,
+                &|s: &SeqEvent| match &s.ev {
+                    GateEvent::Command { cmd, tail, .. } => {
+                        zone_cmd_class(cmd.ident, tail.as_deref())
+                    }
+                    _ => ZoneCmdClass::Unsupported,
+                },
+                |item, class, pending, b| {
+                    let mut exec = |ev: &GateEvent,
+                                    sessions: &mut std::collections::HashMap<
+                        String,
+                        SessionGround,
+                    >| {
+                        if let GateEvent::Command {
+                            chr_name,
+                            socket,
+                            cmd,
+                            tail,
+                            ..
+                        } = ev
+                        {
+                            let _ = handle_zone_command_on(
+                                &mut *world,
+                                &mut *displays,
+                                &mut *online,
+                                sessions,
+                                &mut *saves,
+                                &mut *trade_sessions,
+                                &mut *shop_sessions,
+                                &gates,
+                                chr_name,
+                                *socket,
+                                cmd,
+                                tail.as_deref(),
+                                &env,
+                            );
+                        }
+                    };
+                    a6_dispatch_local(
+                        item,
+                        class,
+                        None,
+                        Some(&chan),
+                        &mut *ground_sessions,
+                        pending,
+                        zone::ZoneId::new(1),
+                        9,
+                        b,
+                        &mut exec,
+                    )
+                },
+            );
+        }
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            0,
+            "无行会 `!~` 经分派臂不得入频道队列"
+        );
+        assert_eq!(chan.lock().unwrap().len(), 0, "频道队列必须为空");
+        assert_eq!(
+            ground_sessions["hero"].shout_msg_tick, 20_000,
+            "必须走 shout（写 shout_msg_tick）"
+        );
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_ne!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE,
+                    "回落喊话不得发 104"
+                );
+            }
+        }
+        assert_eq!(
+            perf_counters::zonek_channel_enqueued() - enq0,
+            0,
+            "第二条仍不得入频道队列（同 tick 两次经分派臂）"
+        );
+        assert_eq!(chan.lock().unwrap().len(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 T4-neg 牙（必修 3）`a20_guild_channel_ban_excludes_member`**：同一跨区行会场景，
+    /// 把 **A** 的 `ban_guild_chat` 置 false（= 禁止）⇒ A **零帧**、B（说话者自己）仍收 1 条；
+    /// `zonek_channel_recipients +1`。
+    ///
+    /// 变异：把 `BanGuildChat` 门删成恒真 ⇒ A 也收帧 ⇒ 红。
+    #[test]
+    fn a20_guild_channel_ban_excludes_member() {
+        let (_g, path) = m1c2c_arm_counters("a20ban");
+        let (mut z0, zk, guilds, gates, mut rx, _actor_a, actor_b) = a20_guild_rig();
+        z0.host
+            .ground_sessions
+            .get_mut("A")
+            .expect("A 会话")
+            .guild
+            .ban_guild_chat = false; // false = 禁止（oracle 反向门）
+        let chan = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let zone_states = vec![None, Some(std::sync::Arc::clone(&zk))];
+        let inboxes = vec![
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            chan,
+        ];
+        let epoch = zk.lock().unwrap().host.ground_sessions["B"]
+            .a6
+            .control_epoch;
+        assert!(channel_enqueue(
+            &inboxes[1],
+            zone::ZoneId::new(1),
+            "B",
+            ChannelKind::Guild {
+                guild_name: "G".to_string()
+            },
+            "hi".to_string(),
+            9,
+            epoch,
+        ));
+        let msg_cfg = guild_runtime::GuildMsgCfg::from_config(
+            &mir2_world_bevy::GuildConfig::default(),
+            false,
+            "",
+        );
+        let party_cfg = mir2_world_bevy::PartyConfig::default();
+        let ctx = ChannelDrainCtx {
+            world: &z0.host.world,
+            online: &z0.host.online,
+            ground_sessions: &z0.host.ground_sessions,
+            gates: &gates,
+            guilds: &guilds,
+            guild_msg_cfg: &msg_cfg,
+            party_cfg: &party_cfg,
+        };
+        let rc0 = perf_counters::zonek_channel_recipients();
+        drain_channel_says(&ctx, &inboxes, &zone_states);
+        let mut recogs = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    mir2_protocol::messages::SM_GUILDMESSAGE
+                );
+                recogs.push(CommandMessage::from_bytes(&body).expect("12B 头").recog);
+            }
+        }
+        assert_eq!(
+            recogs,
+            vec![actor_b],
+            "仅说话者自己（B）收帧；被禁的 A 零帧"
+        );
+        assert_eq!(
+            perf_counters::zonek_channel_recipients() - rc0,
+            1,
+            "recipients 只 +1"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A20 静态接线牙 `a20_channel_drain_is_wired_before_a6`**：区 0 的 `INBOUND_PROCESS`
+    /// 块内，`HostChannelDrain` 段必须**先于** A6 的 `HostControlDrain`，且该段内真的调用
+    /// `drain_channel_says(`（通道接线点不被 "函数写了但没接" 骗过）。
+    ///
+    /// **范围（已知次级）**：只防「删调用」与「挪到 A6 之后」；把调用挪出
+    /// `if let Some(zh)` 守卫（或挪出 `INBOUND_PROCESS` 块）仍可能假绿——现行实现里前者会
+    /// 编译错（`zh` 越界）、后者无行为差异，故接受现状，不扩成结构扫描。
+    ///
+    /// 变异：删接线块（或把频道 drain 挪到 A6 之后）⇒ 红。
+    #[test]
+    fn a20_channel_drain_is_wired_before_a6() {
+        let src = include_str!("lib.rs");
+        let wiring = src
+            .find("drain_channel_says(&ctx")
+            .expect("区 0 必须调用 drain_channel_says");
+        let ch = src
+            .find("host_prof.end(\"HostChannelDrain\"")
+            .expect("HostChannelDrain 段尾");
+        let a6 = src
+            .find("host_prof.end(\"HostControlDrain\"")
+            .expect("HostControlDrain 段尾");
+        assert!(
+            wiring < ch,
+            "drain_channel_says 必须在 HostChannelDrain 段内"
+        );
+        assert!(
+            ch < a6,
+            "HostChannelDrain 必须先于 HostControlDrain（频道先排、A6 后跑）"
+        );
+    }
+
+    /// **A20 静态辅助牙 `a20_channel_enqueue_never_touches_a6`**：`channel_enqueue` 函数体
+    /// （源码切片）**不得**出现 `control_pending` / `deferred_local`（与 T1 行为牙并存）。
+    ///
+    /// 变异：在入队点写 A6 置位 ⇒ 本牙红。
+    #[test]
+    fn a20_channel_enqueue_never_touches_a6() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn channel_enqueue(")
+            .expect("channel_enqueue 定义");
+        let end = src[start..]
+            .find("\n}\n")
+            .map_or(src.len(), |k| start + k + 3);
+        let body = &src[start..end];
+        assert!(
+            !body.contains("control_pending") && !body.contains("deferred_local"),
+            "频道入队点不得触碰 A6 两张表：{body}"
+        );
+        assert!(body.contains("CHANNEL_MAILBOX_CAP"), "必须判满");
+    }
+
+    /// **M1b 第 5b 步 · 守恒牙 `zone_k_unwired_families_still_count_unsupported`**：本片只接
+    /// hit/spell/say(plain+`/`)；query4 / magic-key / levelrank / login-notice **仍未接线**，
+    /// 必须继续计 `zone_cmd_unsupported`（防"顺手扩大范围"或"静默吞命令"）。
     /// **M1b 第 5b 步 · 「尚未接线族」登记牙（C22 语义修正）**：本清单只是**登记表**——
     /// 记录哪些族还没接线，**不是**「生产计 `zone_cmd_unsupported`」的事实断言。生产计数
     /// 口径分两条路：`Process`/`Channel` 走各自邮箱、根本不进执行体兜底；`Local` 与表外
@@ -134213,7 +135544,7 @@ mod zone_command_tests {
             |_ev: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
                 executed = true;
             };
-        let disp = a6_dispatch_local(
+        let disp = a6_dispatch_local_test(
             SeqEvent { seq: 1, ev },
             class,
             Some(&inbox),
@@ -134517,17 +135848,19 @@ mod zone_command_tests {
     ///
     /// **A20 片 1 收窄**：`!`（喊话）已改为区 k 本地执行；本守恒牙只钉 `!!`/`!~` 仍
     /// Unsupported（见 `bangbang_and_guild_say_stay_unsupported_after_a20` 的逐条断言）。
-    /// **若将来实现 `!!`/`!~` 的通道变体，本牙按定义转红**（A20 防倒退提醒牙）。
+    /// **A20 片 2 · 守恒牙 `bang_say_goes_to_channel_not_mailbox`**：`!!`/`!~` 分类 = `Channel`，
+    /// 处置面**只进独立频道队列**——A6 控制邮箱 0 条、`control_pending` 恒 0、`deferred_local` 空、
+    /// `zonek_inbound_unsupported` 不增；本地处置体（防御路径）仍 `Unsupported` + 零帧。
     #[test]
-    fn bang_say_stays_unsupported() {
+    fn bang_say_goes_to_channel_not_mailbox() {
         let (_g, path) = m1c2c_arm_counters("bang_say");
         let (mut state, actor) = landed("bang_say", zone::ZoneId::new(1));
         let shared = SharedServices::for_test();
-        {
-            let sg = crate::tests::test_session_ground(actor);
-            state.host.ground_sessions.insert("hero".to_string(), sg);
-        }
-        let mk_ev = || GateEvent::Command {
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), crate::tests::test_session_ground(actor));
+        let ev = GateEvent::Command {
             line: 0,
             index: 0,
             chr_name: "hero".to_string(),
@@ -134535,8 +135868,6 @@ mod zone_command_tests {
             cmd: cmd(chat::CM_SAY, 0, 0, 0),
             tail: Some("!!x".to_string()),
         };
-        // ① 分类面：`!` 支 = Unsupported（不属 Local，也不属 Process）。
-        let ev = mk_ev();
         assert_eq!(
             classify_local_event(
                 &ev,
@@ -134544,16 +135875,15 @@ mod zone_command_tests {
                 &shared.enter_cfg.catalog,
                 &state.host.world,
             ),
-            ZoneCmdClass::Unsupported,
-            "`!` 频道族必须 Unsupported（A20：不实现邮箱变体）"
+            ZoneCmdClass::Channel,
+            "`!!` 频道族必须 Channel（A20 片 2）"
         );
-        // ② 机械分派面：Unsupported ⇒ 交执行体，**不碰邮箱/不置位**；`zonek_inbound_unsupported +1`。
         let inbox = std::sync::Mutex::new(std::collections::VecDeque::new());
+        let chan = std::sync::Mutex::new(std::collections::VecDeque::new());
         let mut pending = std::collections::BTreeMap::new();
         let mut exec_calls = 0usize;
         let mut buffer = std::collections::VecDeque::from([SeqEvent { seq: 1, ev }]);
         let u0 = perf_counters::zonek_inbound_unsupported();
-        let d0 = perf_counters::zonek_inbound_drained();
         let _ = execute_local_budget(
             0,
             &mut buffer,
@@ -134564,13 +135894,7 @@ mod zone_command_tests {
             None,
             ZoneDrainLimits::PRODUCTION,
             &|s: &SeqEvent| match &s.ev {
-                GateEvent::Command { cmd, tail, .. } => {
-                    if cmd.ident == chat::CM_SAY && tail.as_deref() == Some("!!x") {
-                        ZoneCmdClass::Unsupported
-                    } else {
-                        ZoneCmdClass::Local
-                    }
-                }
+                GateEvent::Command { cmd, tail, .. } => zone_cmd_class(cmd.ident, tail.as_deref()),
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
@@ -134582,6 +135906,7 @@ mod zone_command_tests {
                     item,
                     class,
                     Some(&inbox),
+                    Some(&chan),
                     &mut state.host.ground_sessions,
                     pending,
                     zone::ZoneId::new(1),
@@ -134593,27 +135918,25 @@ mod zone_command_tests {
         );
         assert_eq!(
             perf_counters::zonek_inbound_unsupported() - u0,
+            0,
+            "频道支不得计入未接线"
+        );
+        assert_eq!(
+            chan.lock().expect("chan").len(),
             1,
-            "`!` 支必须计入 zonek_inbound_unsupported（+1）"
+            "`!!` 必须进独立频道队列 1 条"
         );
         assert!(
             inbox.lock().expect("inbox").is_empty(),
-            "`!` 不得进 A6 邮箱"
+            "`!!` 不得进 A6 控制邮箱"
         );
         assert_eq!(
             state.host.ground_sessions["hero"].a6.control_pending, 0,
-            "`!` 不得置 control_pending"
+            "`!!` 不得置 control_pending"
         );
-        assert!(pending.is_empty(), "`!` 不得进暂缓队列");
-        assert_eq!(exec_calls, 1, "Unsupported 仍交执行体（第 3 步口径）");
-        assert_eq!(
-            perf_counters::zonek_inbound_drained() - d0,
-            1,
-            "被消费并作出处置 ⇒ drained +1"
-        );
-        // ③ 零帧面：真实处置体不本地执行 `!`（`zone_cmd_unsupported +1`、零帧）。
+        assert!(pending.is_empty(), "`!!` 不得进暂缓队列");
+        assert_eq!(exec_calls, 0, "Channel 臂不得调用本地执行体");
         let (gates, mut rx) = gates_and_rx();
-        let u_cmd0 = perf_counters::zone_cmd_unsupported();
         assert_eq!(
             handle_zone_command_with_tail_and_shared(
                 &mut state,
@@ -134625,13 +135948,9 @@ mod zone_command_tests {
                 &shared,
             ),
             ZoneCmdOutcome::Unsupported,
-            "`!!` 在区 k 处置体必须 Unsupported"
+            "`!!` 在区 k 处置体必须 Unsupported（防御路径）"
         );
-        assert!(
-            perf_counters::zone_cmd_unsupported() > u_cmd0,
-            "区 k 未接线计数必须 +1（zone_cmd_unsupported）"
-        );
-        assert!(rx.try_recv().is_err(), "`!` 不得本地出帧（零帧）");
+        assert!(rx.try_recv().is_err(), "`!!` 不得本地出帧（零帧）");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -134818,8 +136137,9 @@ mod zone_command_tests {
         }
     }
 
-    /// **A20 片 1 · T3（守恒）**：`!!`/`!~` 仍 `Unsupported`（计数 +1、零帧、tick 不变）；
-    /// 单字符 `!` 归 Local 但**零帧、零状态变更**（oracle `sData[1]` 越界被 catch，只有诊断日志）。
+    /// **A20 片 2 · 分类守恒**：`!!`/`!~` 分类 = **`Channel`**（独立非阻塞队列）；处置面：
+    /// `!!` 走防御路径（`Unsupported` + 计数 + 零帧）；`!~` **无行会** ⇒ oracle 回落喊话
+    /// （本地执行体、成功支零帧、写 `shout_msg_tick`）；单 `!` 仍 Local 零帧。
     #[test]
     fn bangbang_and_single_bang_after_a20() {
         let (mut state, actor) = landed("a20_shout_keep", zone::ZoneId::new(1));
@@ -134833,24 +136153,22 @@ mod zone_command_tests {
             sg.shout_msg_tick = 0;
             state.host.ground_sessions.insert("hero".to_string(), sg);
         }
-        // 分类面
         assert_eq!(
             zone_cmd_class(chat::CM_SAY, Some("!!hi")),
-            ZoneCmdClass::Unsupported,
-            "`!!`（组队）仍 Unsupported"
+            ZoneCmdClass::Channel,
+            "`!!`（组队）⇒ Channel"
         );
         assert_eq!(
             zone_cmd_class(chat::CM_SAY, Some("!~hi")),
-            ZoneCmdClass::Unsupported,
-            "`!~`（行会）仍 Unsupported"
+            ZoneCmdClass::Channel,
+            "`!~`（行会）⇒ Channel"
         );
         assert_eq!(
             zone_cmd_class(chat::CM_SAY, Some("!")),
             ZoneCmdClass::Local,
             "单 `!` 归本地（只打诊断日志）"
         );
-        // 处置面：`!!` / `!~` 计数 + 零帧 + tick 不变
-        for line in ["!!hi", "!~hi"] {
+        {
             let u0 = perf_counters::zone_cmd_unsupported();
             assert_eq!(
                 handle_zone_command_with_tail_and_shared(
@@ -134859,24 +136177,23 @@ mod zone_command_tests {
                     "hero",
                     7,
                     &cmd(chat::CM_SAY, 0, 0, 0),
-                    Some(line),
+                    Some("!!hi"),
                     &shared,
                 ),
                 ZoneCmdOutcome::Unsupported,
-                "`{line}` 在区 k 必须仍 Unsupported"
+                "`!!` 落到本地必须是防御路径（Unsupported）"
             );
             assert_eq!(
                 perf_counters::zone_cmd_unsupported(),
                 u0 + 1,
-                "`{line}` 必须计 zone_cmd_unsupported +1（守恒）"
+                "`!!` 防御路径计 zone_cmd_unsupported +1"
             );
-            assert!(rx.try_recv().is_err(), "`{line}` 不得出帧");
+            assert!(rx.try_recv().is_err(), "`!!` 防御路径零出帧");
             assert_eq!(
                 state.host.ground_sessions["hero"].shout_msg_tick, 0,
-                "`{line}` 不得动 shout_msg_tick"
+                "`!!` 不动 shout_msg_tick"
             );
         }
-        // 单 `!`：Local 执行但零帧、tick 不变
         assert_eq!(
             handle_zone_command_with_tail_and_shared(
                 &mut state,
@@ -134884,16 +136201,16 @@ mod zone_command_tests {
                 "hero",
                 7,
                 &cmd(chat::CM_SAY, 0, 0, 0),
-                Some("!"),
+                Some("!~hi"),
                 &shared,
             ),
             ZoneCmdOutcome::Dispatched,
-            "单 `!` 归本地路径"
+            "`!~` 无行会必须落本地喊话（oracle parse_channel(has_guild=false)）"
         );
-        assert!(rx.try_recv().is_err(), "单 `!` 零帧");
+        assert!(rx.try_recv().is_err(), "喊话成功支零帧");
         assert_eq!(
-            state.host.ground_sessions["hero"].shout_msg_tick, 0,
-            "单 `!` 零状态变更"
+            state.host.ground_sessions["hero"].shout_msg_tick, 20_000,
+            "`!~` 回落喊话成功 ⇒ 写 shout_msg_tick"
         );
     }
 
@@ -135087,7 +136404,7 @@ mod zone_command_tests {
                     |_e: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {
                         exec_calls += 1;
                     };
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     Some(&inbox),
@@ -135482,7 +136799,7 @@ mod zone_command_tests {
             |item, class, p, b| {
                 let mut exec =
                     |_e: &GateEvent, _s: &mut std::collections::HashMap<String, SessionGround>| {};
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     Some(&inbox),
@@ -135938,7 +137255,7 @@ mod zone_command_tests {
                 tail: Some("木剑".to_string()),
             },
         };
-        let disp = a6_dispatch_local(
+        let disp = a6_dispatch_local_test(
             item,
             ZoneCmdClass::Process,
             Some(&inbox),
@@ -136000,7 +137317,7 @@ mod zone_command_tests {
             wall_ok: true,
         };
         // ① 投一条 Process：在飞 1。
-        let _ = a6_dispatch_local(
+        let _ = a6_dispatch_local_test(
             mk(1),
             ZoneCmdClass::Process,
             Some(&inbox),
@@ -136013,7 +137330,7 @@ mod zone_command_tests {
         );
         assert_eq!(sessions["hero"].a6.control_pending, 1);
         // ② 同玩家的本地 CM_EAT ⇒ Deferred（本 tick 不执行、进 deferred_local）。
-        let disp = a6_dispatch_local(
+        let disp = a6_dispatch_local_test(
             mk(2),
             ZoneCmdClass::Local,
             Some(&inbox),
@@ -140434,13 +141751,13 @@ mod l2_s3_cross_recipient_tests {
             zone_cmd_class(chat::CM_SAY, Some("hello @")),
             ZoneCmdClass::Local
         );
-        // **M1b 第 5b 步 + A20 片 1**：`!!`/`!~`（组队/行会）需进程态 ⇒ Unsupported；
+        // **M1b 第 5b 步 + A20 片 2**：`!!`/`!~` ⇒ 独立非阻塞频道通道（`Channel`）；
         // 其余 `!`（喊话）区 k 本地 ⇒ Local；前导空格的 ` !x` 是普通聊天 ⇒ Local（不 trim）。
         for line in ["!!x", "!~x"] {
             assert_eq!(
                 zone_cmd_class(chat::CM_SAY, Some(line)),
-                ZoneCmdClass::Unsupported,
-                "`{line}` 必须 Unsupported（需进程态）"
+                ZoneCmdClass::Channel,
+                "`{line}` 必须 Channel（A20 片 2 独立频道队列）"
             );
         }
         for line in ["!x", "!", "!hello world"] {
@@ -140469,7 +141786,7 @@ mod l2_s3_cross_recipient_tests {
     }
 
     /// **M1b 第 2 步 + 第 5b 步 · payload 例外只此一族**：`CM_SAY` 是唯一 payload 判定族
-    /// （族内三态：`@`⇒Process、`!`⇒Unsupported、其余⇒Local）；其余七族对 payload 完全不敏感。
+    /// （族内三态：`@`⇒Process、`!!`/`!~`⇒Channel、其余⇒Local）；其余七族对 payload 完全不敏感。
     #[test]
     fn zone_cmd_class_payload_exception_is_unique_to_cm_say_family() {
         use mir2_protocol::messages as m;
@@ -140506,8 +141823,8 @@ mod l2_s3_cross_recipient_tests {
             );
             assert_eq!(
                 zone_cmd_class(chat::CM_SAY, Some(line)),
-                ZoneCmdClass::Unsupported,
-                "`{line}` 支 = Unsupported（进程态）"
+                ZoneCmdClass::Channel,
+                "`{line}` 支 = Channel（A20 片 2 独立频道队列）"
             );
         }
         assert_eq!(
@@ -141374,7 +142691,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -141491,7 +142808,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -141551,7 +142868,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     Some(&inbox),
@@ -141632,7 +142949,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -141683,7 +143000,7 @@ mod l2_s3_cross_recipient_tests {
         };
         // 真实路径：`@`、`@`、move 依次到达（不手写 `control_pending`）。
         assert_eq!(
-            a6_dispatch_local(
+            a6_dispatch_local_test(
                 SeqEvent {
                     seq: 1,
                     ev: zonek_test_say("@1")
@@ -141700,7 +143017,7 @@ mod l2_s3_cross_recipient_tests {
             LocalDisposition::Drained
         );
         assert_eq!(
-            a6_dispatch_local(
+            a6_dispatch_local_test(
                 SeqEvent {
                     seq: 2,
                     ev: zonek_test_say("@1")
@@ -141718,7 +143035,7 @@ mod l2_s3_cross_recipient_tests {
         );
         assert_eq!(sessions["p"].a6.control_pending, 2, "两条 `@` 都在飞");
         assert_eq!(
-            a6_dispatch_local(
+            a6_dispatch_local_test(
                 SeqEvent {
                     seq: 3,
                     ev: zonek_test_cmd(200)
@@ -141788,7 +143105,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -141929,7 +143246,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -142015,7 +143332,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -142070,7 +143387,7 @@ mod l2_s3_cross_recipient_tests {
                 _ => ZoneCmdClass::Unsupported,
             },
             |item, class, pending, b| {
-                a6_dispatch_local(
+                a6_dispatch_local_test(
                     item,
                     class,
                     None,
@@ -142105,7 +143422,7 @@ mod l2_s3_cross_recipient_tests {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("生产面边界")];
         assert!(
-            prod.matches("a6_dispatch_local(").count() >= 1,
+            prod.matches("a6_dispatch_local_test(").count() >= 1,
             "LOCAL 段必须经 a6_dispatch_local 分派"
         );
         assert!(
