@@ -22849,16 +22849,19 @@ fn drain_login_tail(
     let mut sent = 0usize;
     let mut finished: Vec<String> = Vec::new();
     // 按键排序：不让 `HashMap` 迭代序参与帧叙（同 `drain_periodic_save` 的确定性口径）。
-    let mut keys: Vec<String> = pending.keys().cloned().collect();
+    // **B4 #2**：键按**借用**收集后排序（`Ord for &T` 与 `String` 同序 ⇒ 序完全不变），
+    // 只在「缓冲作废」支才克隆；省掉每 tick 每个待补发名字的一次 `String` 堆分配。
+    let mut keys: Vec<&String> = pending.keys().collect();
     keys.sort();
     for chr in keys {
-        let Some(entry) = online.find_by_chr(&chr) else {
+        let chr = chr.as_str();
+        let Some(entry) = online.find_by_chr(chr) else {
             // 首次扫描前掉线：缓冲作废（不静默留给下一次登录）。
-            finished.push(chr);
+            finished.push(chr.to_string());
             continue;
         };
         let Some(sess) = world.sessions.iter().find(|s| s.chr_name == chr) else {
-            finished.push(chr);
+            finished.push(chr.to_string());
             continue;
         };
         if sess.stage != mir2_world_bevy::WorldStage::InWorld {
@@ -22885,7 +22888,7 @@ fn drain_login_tail(
         // 与 [`drain_aoi_downlink`] **同一份**出现槽（同序同形），保证「出现帧序」与
         // 「`after` 的堆形」出自同一个队列模型。
         let others = aoi_appearance_slots(world, &aoi_show_targets(entity, actor_id));
-        if let Some(inputs) = pending.get(&chr) {
+        if let Some(inputs) = pending.get(chr) {
             let (_, after) = inputs.frames_split_with_others(&others);
             let char_status = inputs.char_status.map(|(status, _)| status);
             for body in after {
@@ -22906,7 +22909,7 @@ fn drain_login_tail(
                 );
             }
         }
-        finished.push(chr);
+        finished.push(chr.to_string());
     }
     for chr in finished {
         pending.remove(&chr);
@@ -44642,6 +44645,64 @@ mod tests {
             0
         );
         assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
+    }
+
+    /// **B4 #2（`drain_login_tail` @22842）行为牙**：登录延迟段的下行帧**发出序**必须严格等于
+    /// **名字升序**（现状可观测序 = 契约），与 `pending` 的 `HashMap` 迭代序无关。
+    ///
+    /// 构造：8 个已进世界且本 tick 已扫描的玩家，按「名字升序 ≠ 插入序」插入 `pending`；每人一份
+    /// 最小 `EnterWorldInputs`（只有 `changelight` ⇒ `after` 恰一帧 654），相邻 20 格（> range 12）
+    /// ⇒ AOI 互不可见。断言网关收到的 socket 序列 = 名字升序对应的 socket 序列。
+    ///
+    /// 牙：删 `keys.sort();`（@22853）⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn drain_login_tail_frame_order_is_name_ascending_with_unordered_pending() {
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::new(400, 400);
+        let mut online = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20; // 相邻 20 格 > range 12 ⇒ AOI 互不可见
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            let mut inputs = smframe::EnterWorldInputs {
+                actor_id: id,
+                ..Default::default()
+            };
+            inputs.changelight = Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT));
+            pending.insert(name.to_string(), inputs);
+            named_sockets.push((name, sock));
+        }
+        let sent = drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        assert_eq!(sent, names.len(), "每个待补发会话恰一帧 654");
+        assert!(pending.is_empty(), "补发后必须清缓冲");
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_CHANGELIGHT,
+                "最小 after 段只剩 654"
+            );
+            got.push(socket);
+        }
+        named_sockets.sort_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "登录延迟段帧序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
     }
 
     /// **卡 `openmir2-searchtick-origin-parity` 接线点保鲜门**：生产登录路径必须
