@@ -31486,7 +31486,10 @@ fn drain_player_map_hp(
         return;
     };
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #8**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。出口只进 `RunFrames`（flush 按 actor_id）⇒ 本行不影响跨会话
+    // 输出序（表征测试见 `map_hp_outputs_are_stable_characterization_no_tooth`）。
+    names.sort_unstable();
     for name in names {
         if online.iter().all(|e| e.chr_name != name) {
             continue;
@@ -104935,6 +104938,88 @@ SendRefMsgRange=15
         let mut gates = HashMap::new();
         gates.insert(0u8, tx);
         (world, sessions, online, gates, rx, actor, registry, dir)
+    }
+
+    /// **B4 #8（`drain_player_map_hp`）表征测试 —— 无牙（当前不可观测）**：
+    /// 出口只进 `RunFrames`（`BTreeMap<i32,Slot>`，flush 按 **actor_id** 升序）⇒ 跨会话输出与
+    /// `names` 遍历序无关，删 sort 不会让本用例变红。按 opc-27 裁决走 (b)：把「优化前」的产出
+    /// （帧逐字段 + 实体/会话状态）固化成字面量，供 `sort`→`sort_unstable` 的前后差分比对。
+    #[test]
+    fn map_hp_outputs_are_stable_characterization_no_tooth() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("DECHP(1/10)");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().vitals.hp = 100;
+            world.entities.get_mut(id).unwrap().vitals.max_hp = 100;
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.state.wabil.mp = 0;
+            sg.state.wabil.max_mp = 0;
+            sg.dec_hp_tick = 0;
+            sg.inc_hp_tick = 0;
+            sessions.insert(name.to_string(), sg);
+            online_set(&mut online, entry("acct", name, 1, 0, 901 + i as i32, id));
+            actor_of.insert(name, id);
+        }
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1_001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+
+        // 参考值（优化前实测固化）：每会话一条 53，载荷 (HP=90, MP=0, MaxHP=100)；
+        // 顺序 = actor_id 升序 = 本构造的插入序（= `names` 数组序）。
+        let mut got: Vec<(i32, u16, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            got.push((socket, cm.param, cm.tag, cm.series));
+        }
+        let want: Vec<(i32, u16, u16, u16)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, _)| (901 + i as i32, 90, 0, 100))
+            .collect();
+        assert_eq!(got, want, "drain_player_map_hp 的表征产出（帧逐字段）");
+        for name in names {
+            assert_eq!(
+                world.entities.get(actor_of[name]).unwrap().hp,
+                90,
+                "实体 HP=90 ChrName={name}"
+            );
+            assert_eq!(
+                sessions[name].state.wabil.hp, 90,
+                "投影 HP=90 ChrName={name}"
+            );
+            assert_eq!(
+                sessions[name].dec_hp_tick, 1_001,
+                "DecHpTick 刷新 ChrName={name}"
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// P25-1：`DECHP(1/10)`、HP=100 ⇒ `now=1001` 后 HP=90、一条 53；`==1000` 不触发。
