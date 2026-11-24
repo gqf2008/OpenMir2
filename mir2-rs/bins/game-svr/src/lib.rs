@@ -1938,6 +1938,98 @@ fn handle_zone_command_on(
         );
         return ZoneCmdOutcome::Dispatched;
     }
+    // **A34 片 1（基础动作六条）**：与区 0 [`handle_inbound_cmd`] **同一实现**（不是复制体）——
+    // 实参逐项区本地：world/会话/`enter_cfg` 区副本（`catalog`/`ground`/`minimap`/颜色/文案）；
+    // `pwd_sessions` 只有密码族会读，本分组不含密码 ⇒ 传空 scratch（下面 `matches!` 写死分组）。
+    if matches!(
+        cmd.ident,
+        mir2_protocol::messages::CM_SITDOWN
+            | mir2_protocol::messages::CM_BUTCH
+            | mir2_protocol::messages::CM_DROPGOLD
+            | mir2_protocol::messages::CM_ADJUST_BONUS
+            | mir2_protocol::messages::CM_WANTMINIMAP
+            | mir2_protocol::messages::CM_OPENDOOR
+    ) {
+        let msg_texts = game_svr::useitem::SysMsgTexts::from_conf(&env.enter_cfg.string_conf);
+        let frames_ctx = InboundFramesCtx {
+            catalog: &env.enter_cfg.catalog,
+            client_layout: mir2_client_ability_layout(),
+            red: (env.enter_cfg.red_msg_f_color, env.enter_cfg.red_msg_b_color),
+            ref_msg_range: env.enter_cfg.ref_msg_range,
+            msg: &msg_texts,
+        };
+        // 本分组不含 `CM_PASSWORD`（见上）；scratch 只为满足签名。
+        let mut pwd_scratch: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        handle_inbound_cmd(
+            cmd,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            world,
+            ground_sessions,
+            gates,
+            env.registry,
+            env.enter_cfg.minimap.as_ref(),
+            &mut pwd_scratch,
+            &env.enter_cfg.ground,
+            &*displays,
+            &frames_ctx,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    // **A34 片 1（Local 补臂 5）**：query4 + magic-key——与区 0 同一 handler（无进程态）。
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
+        handle_query_user_name_cmd(
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            chr_name,
+            socket,
+            &*online,
+            &*ground_sessions,
+            world,
+            &*displays,
+            gates,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSTATE {
+        handle_query_user_state_cmd(
+            cmd.recog,
+            cmd.param,
+            cmd.tag,
+            chr_name,
+            socket,
+            &*online,
+            &*ground_sessions,
+            world,
+            gates,
+            &env.enter_cfg.catalog,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYUSERSET {
+        handle_query_user_set_cmd(chr_name, socket, &*online);
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if cmd.ident == mir2_protocol::messages::CM_QUERYVAL {
+        handle_query_val_cmd(
+            cmd.recog,
+            tail,
+            chr_name,
+            socket,
+            &*online,
+            ground_sessions,
+            world,
+        );
+        return ZoneCmdOutcome::Dispatched;
+    }
+    if magicwire::is_magic_key_ident(cmd.ident) {
+        handle_magic_key_cmd(cmd.recog, cmd.param, chr_name, socket, saves);
+        return ZoneCmdOutcome::Dispatched;
+    }
     perf_counters::note_zone_cmd_unsupported(cmd.ident);
     ZoneCmdOutcome::Unsupported
 }
@@ -7911,7 +8003,10 @@ fn drain_deal_tick(
         .filter(|(_, s)| s.dealing)
         .map(|(c, _)| c.clone())
         .collect();
-    names.sort();
+    // **B4 #14**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用（且已按
+    // `dealing` 过滤）⇒ 省每 tick 一次排序临时缓冲分配。序 = 取消帧（681/100，循环内直发）
+    // 的跨会话发出序。
+    names.sort_unstable();
     for chr in names {
         if !trade_sessions.get(&chr).is_some_and(|s| s.dealing) {
             continue;
@@ -22914,16 +23009,19 @@ fn drain_login_tail(
     let mut sent = 0usize;
     let mut finished: Vec<String> = Vec::new();
     // 按键排序：不让 `HashMap` 迭代序参与帧叙（同 `drain_periodic_save` 的确定性口径）。
-    let mut keys: Vec<String> = pending.keys().cloned().collect();
+    // **B4 #2**：键按**借用**收集后排序（`Ord for &T` 与 `String` 同序 ⇒ 序完全不变），
+    // 只在「缓冲作废」支才克隆；省掉每 tick 每个待补发名字的一次 `String` 堆分配。
+    let mut keys: Vec<&String> = pending.keys().collect();
     keys.sort();
     for chr in keys {
-        let Some(entry) = online.find_by_chr(&chr) else {
+        let chr = chr.as_str();
+        let Some(entry) = online.find_by_chr(chr) else {
             // 首次扫描前掉线：缓冲作废（不静默留给下一次登录）。
-            finished.push(chr);
+            finished.push(chr.to_string());
             continue;
         };
         let Some(sess) = world.sessions.iter().find(|s| s.chr_name == chr) else {
-            finished.push(chr);
+            finished.push(chr.to_string());
             continue;
         };
         if sess.stage != mir2_world_bevy::WorldStage::InWorld {
@@ -22950,7 +23048,7 @@ fn drain_login_tail(
         // 与 [`drain_aoi_downlink`] **同一份**出现槽（同序同形），保证「出现帧序」与
         // 「`after` 的堆形」出自同一个队列模型。
         let others = aoi_appearance_slots(world, &aoi_show_targets(entity, actor_id));
-        if let Some(inputs) = pending.get(&chr) {
+        if let Some(inputs) = pending.get(chr) {
             let (_, after) = inputs.frames_split_with_others(&others);
             let char_status = inputs.char_status.map(|(status, _)| status);
             for body in after {
@@ -22971,7 +23069,7 @@ fn drain_login_tail(
                 );
             }
         }
-        finished.push(chr);
+        finished.push(chr.to_string());
     }
     for chr in finished {
         pending.remove(&chr);
@@ -24304,7 +24402,10 @@ fn drain_recovery(
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #3**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。出口只有 `HealthSpellSlots`（flush 按 actor_id）⇒ 本行不影响
+    // 跨会话输出序（表征测试见 `recovery_outputs_are_stable_characterization_no_tooth`）。
+    names.sort_unstable();
     for name in names {
         // **CM_SOFTCLOSE 后的 P1 不得再跑**：oracle 在 `PlayObject.Run()` 的
         // `:70-141`（P1）之后才处理 `CM_SOFTCLOSE`（`:874-884`），随后同一 Run 的
@@ -24460,7 +24561,10 @@ fn drain_stamina(
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #4**：`sort_unstable` 与 `sort` 对互异键逐项同序（`HashMap` 键必互异 ⇒ 稳定性无意义），
+    // 省掉每 tick 排序的临时缓冲分配（N > 20 时 driftsort 会分配 ~N/2 元素）；N 次克隆保留
+    // （循环体要 `get_mut`，不能用借用键）。
+    names.sort_unstable();
     for name in names {
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
@@ -24918,8 +25022,6 @@ fn drain_mag_healing_delivery(
 ///   交易层未移植，且 `MakeSaveRcd` 读的是 `WAbil.HP`（`WorldServer.cs:1247`）⇒ 对存档体无影响。
 /// - oracle 的 `SaveHumanRcd` 里 `IsRobot` 早返回：本宿主不建机器人会话（`RobotProcessor` 未移植）。
 ///
-/// 返回**本轮发起的请求数**（DB 未连接时计时仍已重置——照 oracle 先重置再调用；计数为 0）。
-#[allow(clippy::too_many_arguments)]
 /// **A32**：周期存档的**收集面**（区 0 与区 k 共用）。语义逐条来自原
 /// [`drain_periodic_save`]：`!playObject.Ghost` 主干、`periodic_save_due` 先重置 tick、
 /// 无登入记录底稿跳过并 WRN。**不含** `engine.is_full()`（DB 侧门，区 k 无 `engine`）。
@@ -24932,7 +25034,10 @@ fn collect_due_zone_saves(
     now: i64,
 ) -> Vec<ZoneSaveRequest> {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #5**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数虽只每 10 分钟真正存档一次，
+    // 但**每个 tick 都会被调用**并做一次键收集+排序（`periodic_save_due` 在循环内）⇒ 省掉每 tick
+    // 一次排序临时缓冲分配（N > 20 时）。N 次克隆保留（循环体要 `get_mut`）。
+    names.sort_unstable();
     let mut out = Vec::new();
     for name in names {
         // **F2**：oracle `WorldServer.cs:698-703` 的逐角色周期存档**不查** `InSaveRcdList`
@@ -27975,7 +28080,10 @@ fn process_switch_data(
     mut send_change_server: impl FnMut(&mut SwitchDataState, &str),
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #6**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用（生产里
+    // `switch_data` 恒 false，循环本身无输出）⇒ 省每 tick 一次排序临时缓冲分配。遍历面不变
+    // （仍遍历全部会话；不做「只收集活跃会话」的预过滤——那会改遍历面，不在本卡授权内）。
+    names.sort_unstable();
     for name in names {
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
@@ -28121,7 +28229,15 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || ident == game_svr::shop::CM_USERSTORAGEITEM
         || ident == game_svr::shop::CM_USERTAKEBACKSTORAGEITEM
         // **M1c-3a**：药物合成（`shop::make_drug_item` 只碰区本地状态 + 共享 `item_number`）。
-        || ident == game_svr::shop::CM_USERMAKEDRUGITEM;
+        || ident == game_svr::shop::CM_USERMAKEDRUGITEM
+        // **A34 片 1**：基础动作六条（区 k 本地可执行：只读/写区本地 world/会话；
+        // `CM_WANTMINIMAP` 读 `enter_cfg.minimap` 的区副本，`CM_ADJUST_BONUS` 用区本地 catalog）。
+        || ident == mir2_protocol::messages::CM_SITDOWN
+        || ident == mir2_protocol::messages::CM_BUTCH
+        || ident == mir2_protocol::messages::CM_DROPGOLD
+        || ident == mir2_protocol::messages::CM_ADJUST_BONUS
+        || ident == mir2_protocol::messages::CM_WANTMINIMAP
+        || ident == mir2_protocol::messages::CM_OPENDOOR;
     if ident_level {
         return ZoneCmdClass::Local;
     }
@@ -31234,7 +31350,10 @@ fn drain_player_need_recheck_with_magic(
     mut magic: Option<MagicSource<'_>>,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #7**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。**序不止影响帧**：`recalc_session_ability(..., Some(&mut world.rng))`
+    // 的攻杀抽值按循环序分配 ⇒ 帧序与 RNG 分配序都由这行排序钉住（牙同时断言两者）。
+    names.sort_unstable();
     for name in names {
         let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
@@ -31553,7 +31672,10 @@ fn drain_player_map_hp(
         return;
     };
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #8**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。出口只进 `RunFrames`（flush 按 actor_id）⇒ 本行不影响跨会话
+    // 输出序（表征测试见 `map_hp_outputs_are_stable_characterization_no_tooth`）。
+    names.sort_unstable();
     for name in names {
         if online.iter().all(|e| e.chr_name != name) {
             continue;
@@ -31621,7 +31743,10 @@ fn drain_player_hunger(
         return;
     }
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #9**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。序不只影响帧（帧走 `RunFrames` 按 actor_id flush）：`StatusChanged`
+    // 支的攻杀 `RandomByte(7-L)` 抽值按本循环序分配到各会话 ⇒ 本行同时钉住 RNG 分配序。
+    names.sort_unstable();
     for name in names {
         if online.iter().all(|e| e.chr_name != name) {
             continue;
@@ -31882,7 +32007,10 @@ fn drain_player_auto_get_exp(
     record: &mut mir2_world_bevy::TickRecord,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #11**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。本处的序是**结果序**：`record.exp_awards` 的 Vec 追加序由此决定，
+    // 后续 `drain_kill_exp_chain` 再按该序出 44/45 帧。
+    names.sort_unstable();
     for name in names {
         // `AutoGetExp*` 是 `PlayObject` 字段 ⇒ 只对在线玩家结算。
         if online.iter().all(|e| e.chr_name != name) {
@@ -31968,7 +32096,9 @@ fn drain_player_game_gold(
     now: i64,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #12**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。序 = 653 帧的跨会话发出序（每会话直发自己的网关线）。
+    names.sort_unstable();
     for name in names {
         let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
@@ -32176,7 +32306,10 @@ fn drain_player_revival_with_magic(
     frames: &mut game_svr::run_frames::RunFrames,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
-    names.sort();
+    // **B4 #13**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数每 tick 被调用 ⇒ 省每 tick
+    // 一次排序临时缓冲分配。直发面（`SM_DELITEM`，复活戒指破零）的跨会话序由此决定；
+    // 53/642/252 走 `RunFrames`（按 actor_id flush），与名字序无关。
+    names.sort_unstable();
     for name in names {
         let Some(entry) = online.find_by_chr(&name).cloned() else {
             continue;
@@ -44267,6 +44400,81 @@ mod tests {
         );
     }
 
+    /// **B4 #3（`drain_recovery`）表征测试 —— 无牙（当前不可观测）**：
+    /// 该函数唯一出口是 `HealthSpellSlots`（`BTreeMap<i32,Slot>`，flush 按 **actor_id** 升序），
+    /// **跨会话输出与 `names` 遍历序无关** ⇒ 删 sort 不会让本用例变红。本用例把「优化前」的产出
+    /// （帧逐字段 + 会话/实体状态）固化成字面量，供 `sort`→`sort_unstable` 的前后差分比对：
+    /// 同一组期望值在改动前后都必须绿。
+    #[test]
+    fn recovery_outputs_are_stable_characterization_no_tooth() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        let mut socket_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 10;
+            sg.state.wabil.max_hp = 100;
+            sg.state.wabil.mp = 10;
+            sg.state.wabil.max_mp = 100;
+            sg.state.wabil.level = 1;
+            sg.recovery = game_svr::recover::Recovery {
+                inc_health: 20,
+                inc_spell: 0,
+                inc_healing: 0,
+                per_health: 5,
+                per_spell: 5,
+                per_healing: 5,
+                inc_health_spell_tick: now_ms() - 10_000,
+            };
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            actor_of.insert(name, id);
+            socket_of.insert(name, sock);
+        }
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &mut world, &mut slots);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+
+        // 参考值（优化前实测固化）：每会话一条 53，载荷 (HP=15, MP=10, MaxHP=100)；
+        // 顺序 = actor_id 升序 = 本构造的插入序（= `names` 数组序）。
+        let mut got: Vec<(i32, u16, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            got.push((socket, cm.param, cm.tag, cm.series));
+        }
+        let want: Vec<(i32, u16, u16, u16)> =
+            names.iter().map(|n| (socket_of[n], 15, 10, 100)).collect();
+        assert_eq!(got, want, "drain_recovery 的表征产出（帧逐字段）");
+        for name in names {
+            let sg = &sessions[name];
+            assert_eq!(sg.recovery.inc_health, 15, "药池消费 5 ChrName={name}");
+            assert_eq!(sg.state.wabil.hp, 15, "投影 HP=15 ChrName={name}");
+            assert_eq!(
+                world.entities.get(actor_of[name]).unwrap().hp,
+                15,
+                "实体镜像 HP=15 ChrName={name}"
+            );
+        }
+    }
+
     /// **卡 `openmir2-monster-showhp-53-broadcast` R3-2**：±12 广播面的边界机器判据。
     /// `broadcast_healthspellchanged` 是自带 ±range 的手写循环（不走 `chat::hear_targets`，
     /// 后者的 12/13 边界由 chat.rs 用例钉住）：oracle `SendRefMsg` 收件人 = **闭区间**
@@ -44709,6 +44917,84 @@ mod tests {
         assert!(deal_creature.is_some(), "DealCreat 保持不变");
     }
 
+    /// **B4 #14（`drain_deal_tick`）行为牙**：Run 内交易自动取消的**跨会话发出序**必须
+    /// 严格等于名字升序（取消帧 681/100 在循环内直发）。
+    ///
+    /// 构造：8 会话 `dealing=true`、`deal_creature=None`（oracle 取消条件成立），名字按
+    /// 「升序 ≠ 插入序」插入，彼此 20 格。断言 `SM_DEALCANCEL(681)` 的 socket 序 = 名字升序。
+    ///
+    /// 牙：删 `drain_deal_tick` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn deal_tick_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::new(400, 400);
+        world.clock_ms = 100_000;
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let id = world.add_entity({
+                let mut e = mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 20, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+                e
+            });
+            displays.set(
+                id,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, name.as_bytes().to_vec()),
+            );
+            ground_sessions.insert(name.to_string(), test_session_ground(id));
+            trade_sessions.insert(
+                name.to_string(),
+                game_svr::trade::DealState {
+                    dealing: true,
+                    deal_creature: None,
+                    ..Default::default()
+                },
+            );
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_DEALCANCEL {
+                got.push(socket);
+            }
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "交易取消帧的跨会话序必须 = 名字升序（每会话恰一条 681）"
+        );
+        for (name, _) in &named_sockets {
+            assert!(!trade_sessions[*name].dealing, "取消已生效 ChrName={name}");
+        }
+    }
+
     /// **lane654 判据⑤（延迟段补发点行为）**：`drain_login_tail` 只在该会话**本 tick 实际扫描**
     /// （`ai.search_tick == world.clock_ms`）时补发 `after`（654/第二 42/100×4），补发后清缓冲；
     /// 未扫描 ⇒ 不发、缓冲保留；扫描前已掉线（无在线表项）⇒ 缓冲作废。
@@ -44793,6 +45079,64 @@ mod tests {
             0
         );
         assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
+    }
+
+    /// **B4 #2（`drain_login_tail`）行为牙**：登录延迟段的下行帧**发出序**必须严格等于
+    /// **名字升序**（现状可观测序 = 契约），与 `pending` 的 `HashMap` 迭代序无关。
+    ///
+    /// 构造：8 个已进世界且本 tick 已扫描的玩家，按「名字升序 ≠ 插入序」插入 `pending`；每人一份
+    /// 最小 `EnterWorldInputs`（只有 `changelight` ⇒ `after` 恰一帧 654），相邻 20 格（> range 12）
+    /// ⇒ AOI 互不可见。断言网关收到的 socket 序列 = 名字升序对应的 socket 序列。
+    ///
+    /// 牙：删 `drain_login_tail` 里的 `keys.sort();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn drain_login_tail_frame_order_is_name_ascending_with_unordered_pending() {
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::new(400, 400);
+        let mut online = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20; // 相邻 20 格 > range 12 ⇒ AOI 互不可见
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            let mut inputs = smframe::EnterWorldInputs {
+                actor_id: id,
+                ..Default::default()
+            };
+            inputs.changelight = Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT));
+            pending.insert(name.to_string(), inputs);
+            named_sockets.push((name, sock));
+        }
+        let sent = drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        assert_eq!(sent, names.len(), "每个待补发会话恰一帧 654");
+        assert!(pending.is_empty(), "补发后必须清缓冲");
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_CHANGELIGHT,
+                "最小 after 段只剩 654"
+            );
+            got.push(socket);
+        }
+        named_sockets.sort_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "登录延迟段帧序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
     }
 
     /// **卡 `openmir2-searchtick-origin-parity` 接线点保鲜门**：生产登录路径必须
@@ -58264,6 +58608,69 @@ break
         );
     }
 
+    /// **B4 #1（`shutdown_save_all`）行为牙**：关服存档的**请求发出序**必须严格等于
+    /// **名字升序**——这是现状可观测序（契约），与 `HashMap` 迭代序无关。
+    ///
+    /// 构造：8 个会话按「名字升序 ≠ 插入序」插入 `sessions`（`HashMap` 迭代序本身不受控，
+    /// n=8 时恰好升序的概率可忽略）⇒ 断言 DB 请求帧的到达序（= `req_tx.send` 序）逐项相等。
+    ///
+    /// 牙：删 `shutdown_save_all` 里的 `names.sort();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn shutdown_save_order_is_name_ascending_with_unordered_sessions() {
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
+        let mut sessions = std::collections::HashMap::new();
+        let mut saves = std::collections::HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            world.open_session(name);
+            let actor_id = world
+                .enter_map(
+                    name,
+                    mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 4, 10),
+                    0,
+                )
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.state.gold = 100 + i as i32;
+            sessions.insert(name.to_string(), sg);
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: format!("acct-{name}"),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+        }
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let summary = shutdown_save_all(
+            &sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(summary.fired, names.len(), "每个在册会话各发起一次");
+        let mut got: Vec<String> = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            got.push(save_record_of(&frame).0);
+        }
+        let mut want: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "关服存档请求序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
+    }
+
     /// **判据 c（无玩家时不发起）**：空会话表 ⇒ 0 次请求、不等待、不走超时支；in-save 表不变。
     #[test]
     fn shutdown_with_no_sessions_fires_nothing() {
@@ -68885,6 +69292,128 @@ SendRefMsgRange=15
         );
     }
 
+    /// **B4 #7（`drain_player_need_recheck_with_magic`）行为牙**：P21 的跨会话序必须严格
+    /// 等于名字升序——**帧序**与 **RNG 消耗序**两条都钉：
+    /// ① 帧：每条网关线 200 → 202 → 622 → 657，跨会话按名字升序；
+    /// ② RNG：每会话一次攻杀 `RandomByte(7-L)`，抽值按名字升序分配给各会话 `magic.passives`。
+    ///
+    /// 构造：8 个会话各带 1 件可入包装备 + 1 条 `SKILL_YEDO`(L=0)（recalc 恰 1 抽），名字按
+    /// 「升序 ≠ 插入序」插入。断言帧 socket/ident 序、`draws_between == 8`、终态 = 重放 8 抽、
+    /// 各会话 `attack_skill_point_count` = 按名字升序的第 k 个抽值。
+    ///
+    /// 牙：删 `drain_player_need_recheck_with_magic` 里的 `names.sort_unstable();` ⇒ 帧序与 RNG 分配都随 `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p21_iteration_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use mir2_protocol::messages::{
+            SM_ADDITEM, SM_CHARSTATUSCHANGED, SM_DELITEM, SM_WEIGHTCHANGED,
+        };
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "guild-only".into(),
+                std_mode: 5,
+                need: 6,
+                ..Default::default()
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20; // 相邻 20 格 > ±12 ⇒ 无观察者副本
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 1 + i as i32,
+                index: 500,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+            // 攻杀剑法 L=0：`AttackSkillCount = 7`、`RandomByte(7)` 在 Level 门外也抽（每会话 1 抽）。
+            sg.magic.list = vec![Some(record::MagicRcd {
+                mag_idx: game_svr::skill_ability::SKILL_YEDO,
+                level: 0,
+                magic_key: 0,
+                tran_point: 0,
+            })];
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "acct".into(),
+                    chr_name: name.into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+            named_sockets.push((name, sock));
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let before = world.rng.clone();
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+
+        // ① 帧序：每会话 200 → 202 → 622 → 657，跨会话 = 名字升序。
+        let mut got: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident));
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut want: Vec<(i32, u16)> = Vec::new();
+        for (_, sock) in &named_sockets {
+            want.extend([
+                (*sock, SM_ADDITEM),
+                (*sock, SM_DELITEM),
+                (*sock, SM_WEIGHTCHANGED),
+                (*sock, SM_CHARSTATUSCHANGED),
+            ]);
+        }
+        assert_eq!(
+            got, want,
+            "P21 每会话帧序 200→202→622→657，跨会话 = 名字升序"
+        );
+
+        // ② RNG：8 会话各 1 抽（攻杀 `RandomByte(7)`）；终态 = 重放 8 抽；抽值按名字升序分配。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            names.len(),
+            "每会话恰 1 抽（SKILL_YEDO ⇒ RandomByte(7)）"
+        );
+        let mut probe = before.clone();
+        let expected: Vec<u8> = (0..names.len())
+            .map(|_| probe.random_below(7) as u8)
+            .collect();
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{:?}", probe),
+            "RNG 终态必须 = 重放 8 抽（不许多抽/少抽）"
+        );
+        for (k, (name, _)) in named_sockets.iter().enumerate() {
+            assert_eq!(
+                sessions[*name].magic.passives.attack_skill_point_count, expected[k],
+                "RNG 抽值必须按名字升序分配给 ChrName={name}"
+            );
+        }
+    }
+
     /// **牙（`drain_player_game_gold`，P22）**：`bo_emergency_close` 支同样必须挡住。
     ///
     /// 变异：删 P22 的门 ⇒ 前半段元宝 100→105 且收到 653 ⇒ 必红。
@@ -69178,6 +69707,72 @@ SendRefMsgRange=15
             &catalog,
         );
         assert!(!trade["sc_deal"].dealing, "正常会话照常自动取消");
+    }
+
+    /// **B4 #5（`drain_periodic_save`）行为牙**：周期存档请求的**跨会话发出序**必须严格
+    /// 等于名字升序（现状可观测序 = 契约；函数每个 tick 都被调用，循环内的 `periodic_save_due`
+    /// 才决定谁真正发起）。
+    ///
+    /// 构造：8 个会话全部到期（`save_rcd_tick=1000`、`save_time=5000`、`now=6001`），名字按
+    /// 「升序 ≠ 插入序」插入；断言 DB 请求帧到达序（`chr_name`）逐项 = 名字升序。
+    ///
+    /// 牙：删 `drain_periodic_save` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn periodic_save_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            world.open_session(name);
+            let actor_id = world
+                .enter_map(
+                    name,
+                    mir2_world_bevy::EntitySpawn::new(0, name, 10 + i as i32 * 4, 10),
+                    0,
+                )
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.save_rcd_tick = 1_000;
+            sessions.insert(name.to_string(), sg);
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: format!("acct-{name}"),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+        }
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let fired = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            5_000,
+            6_001,
+        );
+        assert_eq!(fired, names.len(), "8 个到期会话各发起一次周期存档");
+        let mut got: Vec<String> = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            got.push(save_record_of(&frame).0);
+        }
+        let mut want: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "周期存档请求序必须 = 名字升序（与 HashMap 迭代序无关）"
+        );
     }
 
     /// **M-2 C3（矩阵 A5，取代早先的反向牙）**：`drain_periodic_save` 必须按
@@ -69792,6 +70387,85 @@ SendRefMsgRange=15
             &[],
         );
         assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
+    }
+
+    /// **B4 #4（`drain_stamina`）行为牙**：体力段 53 的**跨会话发出序**必须严格等于
+    /// 名字升序（现状可观测序 = 契约，帧在本函数内逐会话直发）。
+    ///
+    /// 构造：8 个会话各自体力点已到阈值（`health_tick=-400`、`replay_cursor` 落后 60ms），名字按
+    /// 「升序 ≠ 插入序」插入；每人恰一条自见 53（`show_hp=false`，彼此 20 格无观察者副本）。
+    /// 断言网关收到的 `(socket, ident, param)` 序列 = 名字升序、每会话一条 HP=999。
+    ///
+    /// 牙：删 `drain_stamina` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn drain_stamina_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        let base = now_ms() - 60;
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20; // 相邻 20 格 > range 12 ⇒ 无观察者副本
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 1_000;
+            sg.state.wabil.max_hp = 1_000;
+            sg.state.wabil.mp = 500;
+            sg.state.wabil.max_mp = 500;
+            sg.stamina.health_tick = -400;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "acct".into(),
+                    chr_name: name.into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: id,
+                },
+            );
+            named_sockets.push((name, sock));
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+        let mut got: Vec<(i32, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident, cm.param));
+        }
+        named_sockets.sort_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, u16, u16)> = named_sockets
+            .iter()
+            .map(|(_, sock)| (*sock, mir2_protocol::messages::SM_HEALTHSPELLCHANGED, 999))
+            .collect();
+        assert_eq!(
+            got, want,
+            "体力段 53 的跨会话序必须 = 名字升序（每会话恰一条，HP=999）"
+        );
     }
 
     /// **reviewer-5 O-1 收口（同 tick 帧序）**：同 tick 内既走**击杀经验/升级链**又走
@@ -79235,6 +79909,87 @@ SendRefMsgRange=15
             "SendChangeServer 先置 BoReconnection 再发帧"
         );
         assert!(!sessions["other"].bo_reconnection, "旁观者不受影响");
+    }
+
+    /// **B4 #6（`process_switch_data`）行为牙**：换服轮询的**跨会话推进序**必须严格等于
+    /// 名字升序——两段排水都要成立：① 循环内 `SendSwitchData` 回调的调用序；② 回调把待发项推进
+    /// `reconnect_pending: Vec` 后，`drain_reconnects` 按 Vec 序发出的 `SM_RECONNECT` 帧序。
+    ///
+    /// 构造：8 个会话全部 `switch_data=RcdSaved=true`，名字按「升序 ≠ 插入序」插入。
+    /// 第一轮（now=2000）进入 100ms 窗口；第二轮（now=2101）过严格 `>` 门，逐会话触发
+    /// `SendChangeServer`。断言 ①回调序、②帧 socket 序都 = 名字升序。
+    ///
+    /// 牙：删 `process_switch_data` 里的 `names.sort_unstable();` ⇒ 两段都退化为 `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn switch_data_iteration_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut socket_by_name: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let mut sg = test_session_ground(i as i32 + 1);
+            sg.switch_state.switch_data = true;
+            sg.switch_state.rcd_saved = true;
+            sessions.insert(name.to_string(), sg);
+            socket_by_name.insert(name, 901 + i as i32);
+        }
+        let mut sorted_names: Vec<&str> = names.to_vec();
+        sorted_names.sort_unstable();
+
+        // ① 第一轮：SendSwitchData 的调用序。
+        let mut writes: Vec<String> = Vec::new();
+        process_switch_data(
+            &mut sessions,
+            2_000,
+            |_, name| {
+                writes.push(name.to_string());
+                true
+            },
+            |_, _| panic!("刚进入窗口（0ms）不得 SendChangeServer"),
+        );
+        let want_names: Vec<String> = sorted_names.iter().map(|n| (*n).to_string()).collect();
+        assert_eq!(
+            writes, want_names,
+            "SendSwitchData 的跨会话调用序必须 = 名字升序"
+        );
+
+        // ② 第二轮：SendChangeServer 推进 Vec，排水帧序也必须 = 名字升序。
+        let mut pending: Vec<ReconnectPending> = Vec::new();
+        process_switch_data(
+            &mut sessions,
+            2_101,
+            |_, _| true,
+            |_, name| {
+                pending.push(ReconnectPending {
+                    gate_idx: 0,
+                    socket: socket_by_name[name],
+                    chr_name: name.to_string(),
+                    msg: b"10.0.0.1/7000".to_vec(),
+                });
+            },
+        );
+        assert_eq!(pending.len(), names.len(), "101ms 后每会话恰一条");
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        drain_reconnects(&mut pending, &mut sessions, &gates);
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_RECONNECT,
+                "排水帧 = SM_RECONNECT"
+            );
+            got.push(socket);
+        }
+        let want_sockets: Vec<i32> = sorted_names.iter().map(|n| socket_by_name[n]).collect();
+        assert_eq!(
+            got, want_sockets,
+            "二次排水的 SM_RECONNECT 帧序必须 = 名字升序（两次排水之间契约成立）"
+        );
     }
 
     /// **T-202 牙①**：撤发射点 ⇒ 红。生产编排里的接线必须在位且在正确的段落：
@@ -104596,6 +105351,88 @@ SendRefMsgRange=15
         (world, sessions, online, gates, rx, actor, registry, dir)
     }
 
+    /// **B4 #8（`drain_player_map_hp`）表征测试 —— 无牙（当前不可观测）**：
+    /// 出口只进 `RunFrames`（`BTreeMap<i32,Slot>`，flush 按 **actor_id** 升序）⇒ 跨会话输出与
+    /// `names` 遍历序无关，删 sort 不会让本用例变红。按 opc-27 裁决走 (b)：把「优化前」的产出
+    /// （帧逐字段 + 实体/会话状态）固化成字面量，供 `sort`→`sort_unstable` 的前后差分比对。
+    #[test]
+    fn map_hp_outputs_are_stable_characterization_no_tooth() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("DECHP(1/10)");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().vitals.hp = 100;
+            world.entities.get_mut(id).unwrap().vitals.max_hp = 100;
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.state.wabil.mp = 0;
+            sg.state.wabil.max_mp = 0;
+            sg.dec_hp_tick = 0;
+            sg.inc_hp_tick = 0;
+            sessions.insert(name.to_string(), sg);
+            online_set(&mut online, entry("acct", name, 1, 0, 901 + i as i32, id));
+            actor_of.insert(name, id);
+        }
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1_001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+
+        // 参考值（优化前实测固化）：每会话一条 53，载荷 (HP=90, MP=0, MaxHP=100)；
+        // 顺序 = actor_id 升序 = 本构造的插入序（= `names` 数组序）。
+        let mut got: Vec<(i32, u16, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            got.push((socket, cm.param, cm.tag, cm.series));
+        }
+        let want: Vec<(i32, u16, u16, u16)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, _)| (901 + i as i32, 90, 0, 100))
+            .collect();
+        assert_eq!(got, want, "drain_player_map_hp 的表征产出（帧逐字段）");
+        for name in names {
+            assert_eq!(
+                world.entities.get(actor_of[name]).unwrap().hp,
+                90,
+                "实体 HP=90 ChrName={name}"
+            );
+            assert_eq!(
+                sessions[name].state.wabil.hp, 90,
+                "投影 HP=90 ChrName={name}"
+            );
+            assert_eq!(
+                sessions[name].dec_hp_tick, 1_001,
+                "DecHpTick 刷新 ChrName={name}"
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     /// P25-1：`DECHP(1/10)`、HP=100 ⇒ `now=1001` 后 HP=90、一条 53；`==1000` 不触发。
     #[test]
     fn p25_dechp_updates_entity_and_emits_one_frame() {
@@ -104831,6 +105668,130 @@ SendRefMsgRange=15
 
     fn p26_catalog() -> game_svr::ability::StdItemCatalog {
         game_svr::ability::StdItemCatalog::new()
+    }
+
+    /// **B4 #9（`drain_player_hunger`）行为牙**：P26 的**RNG 分配序**必须严格等于名字升序。
+    ///
+    /// 帧面说明：`MyStatus(708)` 经 `RunFrames`（`BTreeMap<i32,Slot>` 按 **actor_id** flush）发出，
+    /// **帧序由 actor_id 决定、与名字序无关**；本用例让 actor_id 按名字升序分配，只为让读数可读，
+    /// **不构成顺序证据**。真正的顺序牙 = 攻杀 `RandomByte(7-L)` 的抽值按名字升序分配到各会话。
+    ///
+    /// 构造：8 会话 `hunger_status=1000`（now=1001 ⇒ 跨到 999 命中 `StatusChanged` 支，该支才调
+    /// `recalc_session_ability`）+ `SKILL_YEDO(L=0)`（每会话恰 1 抽）；名字按「升序 ≠ 插入序」插入。
+    /// 断言：① 每会话一条 708（socket 序按升序，归因 actor_id）；② `draws_between == 8`、终态 =
+    /// 重放 8 抽（钉「不许多抽/少抽」）；③ 各会话 `attack_skill_point_count` = 名字升序第 k 抽。
+    ///
+    /// 牙：删 `drain_player_hunger` 里的 `names.sort_unstable();` ⇒ ③ 红（② 终态仍绿——终态只取决于
+    /// 总抽数，如实说明）。
+    #[test]
+    fn p26_rng_assignment_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut sorted: Vec<&str> = names.to_vec();
+        sorted.sort_unstable();
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        // ① actor_id 按名字升序分配（只为读数可读；帧序归因 actor_id）。
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in sorted.iter().copied().enumerate() {
+            world.open_session(name);
+            let id = world
+                .enter_map(
+                    name,
+                    new_player_entity(name.to_string(), 10 + i as i32 * 20, 10),
+                    0,
+                )
+                .expect("进世界");
+            actor_of.insert(name, id);
+        }
+        // ② sessions 按插入序（乱序）构造。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let id = actor_of[name];
+            let mut sg = test_session_ground(id);
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.hunger_status = 1000;
+            sg.dec_hunger_point_tick = 0;
+            sg.stamina.health_tick = 0;
+            sg.stamina.spell_tick = 5;
+            sg.recovery.per_health = 5;
+            sg.recovery.per_spell = 5;
+            sg.magic.list = vec![Some(record::MagicRcd {
+                mag_idx: game_svr::skill_ability::SKILL_YEDO,
+                level: 0,
+                magic_key: 0,
+                tran_point: 0,
+            })];
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let before = world.rng.clone();
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            false,
+            1_001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+
+        // ① 帧面：每会话一条 708（socket 序 = 名字升序，**由 actor_id flush 决定**）。
+        let mut got: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident));
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want_sockets: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            want_sockets,
+            "708 的 socket 序 = 名字升序（归因 actor_id flush，非 name 序证据）"
+        );
+        assert!(
+            got.iter()
+                .all(|(_, ident)| *ident == mir2_protocol::messages::SM_MYSTATUS),
+            "每会话恰一条 708"
+        );
+
+        // ② RNG：8 抽，终态 = 重放 8 抽（钉不许多抽/少抽）。
+        assert_eq!(
+            draws_between(&before, &world.rng),
+            names.len(),
+            "每会话恰 1 抽（SKILL_YEDO ⇒ RandomByte(7)）"
+        );
+        let mut probe = before.clone();
+        let expected: Vec<u8> = (0..names.len())
+            .map(|_| probe.random_below(7) as u8)
+            .collect();
+        assert_eq!(
+            format!("{:?}", world.rng),
+            format!("{:?}", probe),
+            "RNG 终态必须 = 重放 8 抽"
+        );
+
+        // ③ 真正的顺序牙：抽值按名字升序分配。
+        for (k, (name, _)) in named_sockets.iter().enumerate() {
+            assert_eq!(
+                sessions[*name].magic.passives.attack_skill_point_count, expected[k],
+                "RNG 抽值必须按名字升序分配给 ChrName={name}"
+            );
+        }
     }
 
     /// P26-3：`HungerSystem=false` ⇒ 推进 10s 全不变（生产回归门：部署 `Server.conf:396=0`）。
@@ -105437,6 +106398,94 @@ SendRefMsgRange=15
         }
     }
 
+    /// **B4 #13（`drain_player_revival_with_magic`）行为牙**：P32 的**直发面**
+    /// （复活戒指破零的 `SM_DELITEM`）跨会话发出序必须严格等于名字升序。
+    ///
+    /// 说明：53/642/252 走 `RunFrames`（`BTreeMap<i32,Slot>` 按 actor_id flush），**与名字序无关**；
+    /// 可观测的 name 序只在直发的 `SM_DELITEM`。
+    ///
+    /// 构造：8 会话 hp=0/revival=true/revival_tick=0，戒指 `dura=1000`（`n_dura=0` 破零）⇒ 每会话
+    /// 1 条直发 `SM_DELITEM`；名字按「升序 ≠ 插入序」插入。
+    ///
+    /// 牙：删 `drain_player_revival_with_magic` 里的 `names.sort_unstable();` ⇒ delitem socket 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p32_delitem_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let catalog = p32_catalog();
+        let now = 3_000_000i64;
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        let mut actor_of: HashMap<&str, i32> = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let mut ent = mir2_world_bevy::EntitySpawn::new(0, name, x, 10);
+            ent.hp = 0;
+            ent.max_hp = 100;
+            ent.revival = true;
+            ent.revival_tick = 0;
+            let id = world.enter_map(name, ent, 0).expect("进世界");
+            let mut sg = test_session_ground(id);
+            // shape=114 在 `ITEM_DAMAGE_REVIVAL_MAP`；dura=1000 ⇒ n_dura=0 破零 ⇒ SendDelItems。
+            sg.use_items[game_svr::ability::SLOT_RING_L] = Some(game_svr::bag::BagItem {
+                make_index: 77,
+                index: 1,
+                dura: 1000,
+                dura_max: 5000,
+                desc: [0; 14],
+            });
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+            actor_of.insert(name, id);
+        }
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            now,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let mut got: Vec<i32> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            if cm.ident == mir2_protocol::messages::SM_DELITEM {
+                got.push(socket);
+            }
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<i32> = named_sockets.iter().map(|(_, sock)| *sock).collect();
+        assert_eq!(
+            got, want,
+            "P32 直发 SM_DELITEM 的跨会话序必须 = 名字升序（每会话恰一条）"
+        );
+        for (name, _) in &named_sockets {
+            // 破戒后的 `RecalcAbilitys()` 会用会话派生值覆盖实体（`apply_ability_to_entity`），
+            // 所以这里只钉「复活发生了」（HP > 0），不钉具体 MaxHP。
+            assert!(
+                world.entities.get(actor_of[name]).unwrap().hp > 0,
+                "每个会话都真的复活了 ChrName={name}"
+            );
+        }
+    }
+
     /// **PL-1 / P32 判据 3（门）**：严格 `>`、`Death`、`LastHiter` 三态。
     ///
     /// 红检：`>`→`>=` ⇒ 「恰好 60s」必红；去掉 `un_revival` 门 ⇒ 玩家命中者用例必红。
@@ -105825,6 +106874,61 @@ SendRefMsgRange=15
             &mut rec,
         );
         assert_eq!(rec.exp_awards.len(), 2, "未解析名 = null 语义");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **B4 #11（`drain_player_auto_get_exp`）行为牙**：P31 的**结果序**（`TickRecord.exp_awards`
+    /// 的 Vec 追加序，后续经 `drain_kill_exp_chain` 传导成 44/45 帧序）必须严格等于名字升序。
+    ///
+    /// 构造：8 会话全部到期（`auto_get_exp_tick=0, time=1000, point=10, envir="A"`），名字按
+    /// 「升序 ≠ 插入序」插入；`pl3_registry("")` ⇒ 图 A = id 0。断言 `exp_awards` 逐项等于
+    /// 「名字升序 → (actor, 10, false, 1)」。
+    ///
+    /// 牙：删 `drain_player_auto_get_exp` 里的 `names.sort_unstable();` ⇒ Vec 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p31_exp_awards_order_is_name_ascending_with_unordered_sessions() {
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let mut by_name: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            world.entities.get_mut(id).unwrap().progression.max_exp = 1_000_000;
+            let mut sg = test_session_ground(id);
+            sg.auto_get_exp_tick = 0;
+            sg.auto_get_exp_time = 1_000;
+            sg.auto_get_exp_point = 10;
+            sg.auto_get_exp_envir = Some("A".to_string());
+            sessions.insert(name.to_string(), sg);
+            online_set(&mut online, entry("acct", name, 1, 0, 901 + i as i32, id));
+            by_name.push((name, id));
+        }
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        drain_player_auto_get_exp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1_001,
+            &mut rec,
+        );
+        by_name.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, i32, bool, u8)> =
+            by_name.iter().map(|(_, id)| (*id, 10, false, 1)).collect();
+        assert_eq!(
+            rec.exp_awards, want,
+            "P31 结果序（exp_awards Vec 序）= 名字升序"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -106786,6 +107890,75 @@ mod tests {",
             enter_map: home_map.to_string(),
             derived: None,
         }
+    }
+
+    /// **B4 #12（`drain_player_game_gold`）行为牙**：P22 的 653 帧**跨会话发出序**必须
+    /// 严格等于名字升序（帧在循环内直发各自网关线）。
+    ///
+    /// 构造：8 会话 `game_gold=100 / state.gold=50`，玩家级 INC 到期（+5）⇒ 每会话一条 653
+    /// （`Recog=50, Param=105`），名字按「升序 ≠ 插入序」插入；断言 `(socket, ident, param)` 序。
+    ///
+    /// 牙：删 `drain_player_game_gold` 里的 `names.sort_unstable();` ⇒ 序 = `HashMap` 迭代序 ⇒ 必红。
+    #[test]
+    fn p22_gold_frame_order_is_name_ascending_with_unordered_sessions() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let (registry, dir) = pl3_registry("");
+        let names = [
+            "kilo", "alpha", "mike", "bravo", "november", "charlie", "oscar", "delta",
+        ];
+        let mut world = mir2_world_bevy::World::with_maps(vec![(400, 400)]);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut online: OnlineRegistry = OnlineRegistry::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut named_sockets: Vec<(&str, i32)> = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let name: &str = name;
+            let x = 10 + i as i32 * 20;
+            world.open_session(name);
+            let id = world
+                .enter_map(name, new_player_entity(name.to_string(), x, 10), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(id);
+            sg.game_gold = 100;
+            sg.state.gold = 50;
+            sg.p22.bo_inc_game_gold = true;
+            sg.p22.inc_game_gold = 5;
+            sg.p22.inc_game_gold_time = 1_000;
+            sg.p22.inc_game_gold_tick = 0;
+            sessions.insert(name.to_string(), sg);
+            let sock = 901 + i as i32;
+            online_set(&mut online, entry("acct", name, 1, 0, sock, id));
+            named_sockets.push((name, sock));
+        }
+        let saves: HashMap<String, SavedHuman> = HashMap::new();
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            Some(&registry),
+            &saves,
+            1_001,
+        );
+        let mut got: Vec<(i32, u16, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            got.push((socket, cm.ident, cm.param));
+        }
+        named_sockets.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let want: Vec<(i32, u16, u16)> = named_sockets
+            .iter()
+            .map(|(_, sock)| (*sock, mir2_protocol::messages::SM_GOLDCHANGED, 105))
+            .collect();
+        assert_eq!(
+            got, want,
+            "P22 653 帧序必须 = 名字升序（每会话一条，Param=105）"
+        );
+        assert_eq!(sessions["kilo"].game_gold, 105, "INC 生效（100+5）");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// 判据 6（R）：`GameGold` 变化 ⇒ 恰一条 `SM_GOLDCHANGED(653)`，
@@ -129125,6 +130298,7 @@ mod zone_map_data_tests {
 mod zone_command_tests {
     use super::zone_disconnect_tests::landed;
     use super::*;
+    use crate::tests::test_session_ground;
 
     fn gates_and_rx() -> (
         std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -129474,8 +130648,11 @@ mod zone_command_tests {
         let (mut state, _actor) = landed("cmd_unwired", zone::ZoneId::new(1));
         let (gates, _rx) = gates_and_rx();
         for ident in [
-            mir2_protocol::messages::CM_QUERYUSERNAME,
-            mir2_protocol::messages::CM_MAGICKEYCHANGE,
+            // **A34 片 1**：`CM_QUERYUSERNAME`/`CM_MAGICKEYCHANGE`（以及 `CM_QUERYUSERSTATE`/
+            // `CM_QUERYUSERSET`/`CM_QUERYVAL`）已补本地臂 ⇒ 从本「未接线守恒」清单移出（每族另有
+            // 行为牙 `a34_slice1_*`，不是放宽）。
+            // **不补（oracle 无对应行为，opc-27 裁决）**：`CM_LEVELRANK`（oracle `src/` 零引用）
+            // 与 `CM_LOGINNOTICEOK`（M2Server 无 case）⇒ 必须继续计 Unsupported。
             enter::CM_LEVELRANK,
             mir2_protocol::messages::CM_LOGINNOTICEOK,
             // **M1c-3b**：`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 已接线（整 ident `Process` ⇒ 区 0
@@ -129493,6 +130670,358 @@ mod zone_command_tests {
                 "ident={ident} 仍未接线 ⇒ 必须落 Unsupported"
             );
         }
+    }
+
+    // ===================== A34 片 1：基础动作 6 + Local 补臂 5（区 k 行为牙） =====================
+
+    /// A34 片 1 夹具：落区 + 会话 + 在线项 + gates。
+    #[allow(clippy::type_complexity)]
+    fn a34_ready(
+        tag: &str,
+    ) -> (
+        ZoneState,
+        i32,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let (mut state, actor) = landed(tag, zone::ZoneId::new(1));
+        state
+            .host
+            .ground_sessions
+            .insert("hero".to_string(), test_session_ground(actor));
+        online_set(
+            &mut state.host.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (gates, rx) = gates_and_rx();
+        (state, actor, gates, rx)
+    }
+
+    fn a34_msg(ident: u16, recog: i32, param: u16, tag: u16) -> CommandMessage {
+        CommandMessage {
+            recog,
+            ident,
+            param,
+            tag,
+            series: 0,
+        }
+    }
+
+    fn a34_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                out.push(body);
+            }
+        }
+        out
+    }
+
+    fn a34_id(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    fn a34_param(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[6], body[7]])
+    }
+
+    /// **A34 片 1**：`CM_SITDOWN(3012)` 区 k 本地派发 ⇒ 成功支一条 `+GD/<tick>` 短包。
+    /// 变异：删执行臂 ⇒ 落 `Unsupported`（`assert_eq!(Dispatched)` 红）。
+    #[test]
+    fn a34_slice1_sitdown_zone_k_sends_good_tick() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_sit");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_SITDOWN, 0, 10, 10),
+        );
+        assert_eq!(
+            out,
+            ZoneCmdOutcome::Dispatched,
+            "片 1：SITDOWN 必须区 k 本地派发"
+        );
+        let (mut raws, mut frames) = (0, 0);
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                SimToGate::SendRaw { ref payload, .. } => {
+                    assert!(payload.starts_with(b"+GD/"), "+GD 短包原文：{payload:?}");
+                    raws += 1;
+                }
+                SimToGate::SendFrame { .. } => frames += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            (raws, frames),
+            (1, 0),
+            "坐下成功 ⇒ 恰一条 +GD、无 SM_MOVEFAIL"
+        );
+    }
+
+    /// **A34 片 1**：`CM_DROPGOLD(1016)` ⇒ BUG-REPLICA 2 净金币不变、一条 `SM_GOLDCHANGED`。
+    #[test]
+    fn a34_slice1_dropgold_zone_k_emits_gold_changed() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_drop");
+        state
+            .host
+            .ground_sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .gold = 5_000;
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_DROPGOLD, 1_500, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "Dropped ⇒ 一条 SM_GOLDCHANGED：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_GOLDCHANGED,
+            "ident 必须是 SM_GOLDCHANGED"
+        );
+    }
+
+    /// **A34 片 1**：`CM_ADJUST_BONUS(1043)` ⇒ 752/52/657 三帧（657 仅 1 条）。
+    #[test]
+    fn a34_slice1_adjust_bonus_zone_k_emits_752_52_657() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_bonus");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_ADJUST_BONUS, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        let ids: Vec<u16> = frames.iter().map(|b| a34_id(b)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "oracle 出队序 752 → 52 → 657"
+        );
+    }
+
+    /// **A34 片 1**：`CM_WANTMINIMAP(1033)` ⇒ 读区副本 `enter_cfg.minimap` ⇒ `SM_READMINIMAP_OK(710)`。
+    #[test]
+    fn a34_slice1_wantminimap_zone_k_emits_ok() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_map");
+        let mut shared = SharedServices::for_test();
+        // `name_of` 只对**已成功装载**的图生效（`registry.loaded`）⇒ 必须有真实 `Map/0.map`。
+        let base = std::env::temp_dir().join(format!("a34-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        zone_login_landing_tests::write_map_fixture(&base);
+        shared.registry = Some(zone_login_landing_tests::fixture_registry(&base));
+        let (minimap, _dups) = mir2_envir::load_minimap("0 7\n");
+        shared.enter_cfg.minimap = Some(minimap);
+        let out = handle_zone_command_with_tail_and_shared(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_WANTMINIMAP, 0, 0, 0),
+            None,
+            &shared,
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "OK 支恰好一帧：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_READMINIMAP_OK
+        );
+        assert_eq!(a34_param(&frames[0]), 7, "Param = MiniMap 值");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **A34 片 1**：`CM_OPENDOOR(1002)` ⇒ BUG-REPLICA 1 **恒零出帧**，但必须本地派发。
+    #[test]
+    fn a34_slice1_opendoor_zone_k_dispatched_zero_frames() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_door");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_OPENDOOR, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        assert!(a34_frames(&mut rx).is_empty(), "OPENDOOR 恒零出帧");
+    }
+
+    /// **A34 片 1**：`CM_BUTCH(1007)` 无目标也必须本地派发（不得落 Unsupported）。
+    #[test]
+    fn a34_slice1_butch_zone_k_dispatched() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_butch");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_BUTCH, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERNAME(80)` 出窗目标 ⇒ `SM_GHOST`（本地补臂）。
+    #[test]
+    fn a34_slice1_queryusername_zone_k_ghost_frame() {
+        let (mut state, actor, gates, mut rx) = a34_ready("a34_qname");
+        let (hx, hy) = pos_of(&state, actor);
+        let target = state
+            .host
+            .world
+            .add_entity(mir2_world_bevy::EntitySpawn::new(2, "tgt", hx + 8, hy));
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_QUERYUSERNAME,
+                target,
+                u16::try_from(hx + 8).unwrap(),
+                u16::try_from(hy).unwrap(),
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "出窗 ⇒ 一条 SM_GHOST：{frames:?}");
+        assert_eq!(a34_id(&frames[0]), mir2_protocol::messages::SM_GHOST);
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERSTATE(82)` 近窗目标 ⇒ `SM_SENDUSERSTATE`。
+    #[test]
+    fn a34_slice1_queryuserstate_zone_k_emits_userstate() {
+        let (mut state, actor, gates, mut rx) = a34_ready("a34_qstate");
+        let (hx, hy) = pos_of(&state, actor);
+        state.host.world.open_session("tgt");
+        let target = state
+            .host
+            .world
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(2, "tgt", hx + 1, hy),
+                0,
+            )
+            .expect("目标进图");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_QUERYUSERSTATE,
+                target,
+                u16::try_from(hx + 1).unwrap(),
+                u16::try_from(hy).unwrap(),
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let frames = a34_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "近窗 ⇒ 一条 SM_SENDUSERSTATE：{frames:?}");
+        assert_eq!(
+            a34_id(&frames[0]),
+            mir2_protocol::messages::SM_SENDUSERSTATE
+        );
+    }
+
+    /// **A34 片 1**：`CM_QUERYUSERSET(3040)` oracle 函数体为空 ⇒ Dispatched + 零帧。
+    #[test]
+    fn a34_slice1_queryuserset_zone_k_dispatched_zero_frames() {
+        let (mut state, _actor, gates, mut rx) = a34_ready("a34_qset");
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_QUERYUSERSET, 0, 0, 0),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        assert!(a34_frames(&mut rx).is_empty(), "oracle 体为空 ⇒ 零帧");
+    }
+
+    /// **A34 片 1**：`CM_QUERYVAL(1065)` 尾落 `MNSval[label]` 并清 `GotoNpcLabel`。
+    #[test]
+    fn a34_slice1_queryval_zone_k_sets_mnsval() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_qval");
+        {
+            let sg = state.host.ground_sessions.get_mut("hero").unwrap();
+            sg.val_type = 0;
+            sg.val_label = 3;
+            sg.goto_npc_label = "@ask".to_string();
+        }
+        let out = handle_zone_command_with_tail(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(mir2_protocol::messages::CM_QUERYVAL, 0, 0, 0),
+            Some("hello"),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let sg = &state.host.ground_sessions["hero"];
+        assert_eq!(sg.mns_val[3], "hello", "尾经派发落 MNSval[3]");
+        assert!(sg.goto_npc_label.is_empty(), "末尾清空 GotoNpcLabel");
+    }
+
+    /// **A34 片 1**：`CM_MAGICKEYCHANGE(1008)` 改 `SavedHuman.record.data.magic` 的键。
+    #[test]
+    fn a34_slice1_magickey_zone_k_updates_saved_magic_key() {
+        let (mut state, _actor, gates, _rx) = a34_ready("a34_mkey");
+        {
+            let mut rec = record::PlayerRecord::default();
+            rec.data.magic = Some(vec![Some(record::MagicRcd {
+                mag_idx: 7,
+                level: 3,
+                magic_key: u16::from(b'a'),
+                tran_point: 0,
+            })]);
+            state.host.saves.insert(
+                "hero".to_string(),
+                SavedHuman {
+                    account: "ua".to_string(),
+                    record: rec,
+                    enter_map: "0".to_string(),
+                    derived: None,
+                },
+            );
+        }
+        let out = handle_zone_command(
+            &mut state,
+            &gates,
+            "hero",
+            901,
+            &a34_msg(
+                mir2_protocol::messages::CM_MAGICKEYCHANGE,
+                7,
+                u16::from(b'f'),
+                0,
+            ),
+        );
+        assert_eq!(out, ZoneCmdOutcome::Dispatched);
+        let saved = &state.host.saves["hero"];
+        let magic = saved.record.data.magic.as_ref().expect("MagicList 仍在");
+        let m = magic[0].as_ref().expect("第一项仍在");
+        assert_eq!(m.magic_key, u16::from(b'f'), "键已改为 f");
     }
 
     /// **M1c-2b 牙 `zonek_storage_ok`**：区 k 的 `CM_USERSTORAGEITEM` 派发到**与区 0 同一**
@@ -133275,6 +134804,13 @@ mod l2_s3_cross_recipient_tests {
             m::CM_QUERYBAGITEMS,
             game_svr::shop::CM_USERSTORAGEITEM,
             game_svr::shop::CM_USERTAKEBACKSTORAGEITEM,
+            // **A34 片 1**：基础动作六条
+            m::CM_SITDOWN,
+            m::CM_BUTCH,
+            m::CM_DROPGOLD,
+            m::CM_ADJUST_BONUS,
+            m::CM_WANTMINIMAP,
+            m::CM_OPENDOOR,
         ];
         for ident in local {
             assert_eq!(
