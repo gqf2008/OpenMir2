@@ -53807,6 +53807,70 @@ break
         assert_eq!(got, want_tail, "203 尾逐字节 = trade::update_item_tail");
     }
 
+    /// **A27 P1 影响面牙 `script_upgrade_items_ex_reads_real_desc_and_clamps`**：`NpcPlayer` 的
+    /// `use_item_desc/set_use_item_desc` 覆写（A27 P1 前走 trait 缺省 0）**同时改变已部署
+    /// `UPGRADEITEMEX(213)` 的行为面**——oracle Ex 也读 `userItem.Desc[nValType]` 再钳
+    /// `byte.MaxValue`。本牙：槽 `Desc[3]=250`、本次 Point ∈ [6,9] ⇒ `250+Point > 255` ⇒
+    /// 必须写成 **255**；若仍读缺省 0 则会写成 Point（6..9）⇒ 红。
+    ///
+    /// 变异：删 `NpcPlayer::use_item_desc` 覆写 ⇒ 本牙红。
+    #[test]
+    fn script_upgrade_items_ex_reads_real_desc_and_clamps() {
+        // 种子：首抽 `Next(10)`（RatePoint，0..9 ≤10 必成功）、次抽 `Next(10)`（Point）≥ 6。
+        let mut seed = 0i32;
+        let want_point = loop {
+            let mut p = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let _rate_point = p.random_below(10);
+            let point = p.random_below(10);
+            if point >= 6 {
+                break point;
+            }
+            seed += 1;
+            assert!(seed < 10_000, "找不到 Point≥6 的种子");
+        };
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "升个级 <升/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 213,
+                s_param1: "1".to_string(),
+                s_param2: "3".to_string(),
+                s_param3: "1".to_string(),
+                s_param4: "10".to_string(),
+                s_param5: "0".to_string(),
+                ..Default::default()
+            }],
+        )]);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let mut desc = [0u8; 14];
+        desc[3] = 250;
+        let worn = game_svr::bag::BagItem {
+            make_index: 9001,
+            index: 1,
+            dura: 30,
+            dura_max: 40,
+            desc,
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("Ex 成功支不清槽");
+        assert_eq!(
+            i32::from(slot.desc[3]),
+            255,
+            "Ex 成功支：Desc[3] = 250 + Point({want_point}) 钳到 255（读缺省 0 会写成 {want_point}）"
+        );
+    }
+
     /// **A27 P1 牙 `script_upgrade_item_emits_sm_updateitem_and_texts`**：脚本 `UPGRADEITEM 1 0 5`
     /// （code 212）成功支 ⇒ 写回后 1 条 `SM_UPDATEITEM(203)`（尾逐字节 = `trade::update_item_tail`，
     /// `MakeIndex` 不变、槽 Index 不变），**不发** 200/202；绿字「装备升级成功」+ 蓝字
