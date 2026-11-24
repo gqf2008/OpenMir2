@@ -846,6 +846,59 @@ struct HostNpc<'a> {
     envir_root: Option<String>,
 }
 
+/// **卡 A29**：脚本动作未实现错误的限速器（同一 `label+动作` 每分钟 ≤1 条 WRN）。
+static SCRIPT_ERR_WRN_LIMITER: std::sync::Mutex<
+    Option<HashMap<(String, String), std::time::Instant>>,
+> = std::sync::Mutex::new(None);
+
+fn script_err_wrn_allowed(label: &str, action: &str) -> bool {
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut guard = SCRIPT_ERR_WRN_LIMITER
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    let key = (label.to_string(), action.to_string());
+    let now = std::time::Instant::now();
+    match map.get(&key) {
+        Some(last) if now.duration_since(*last) < WINDOW => false,
+        _ => {
+            map.insert(key, now);
+            true
+        }
+    }
+}
+
+/// **卡 A29**：把 `Engine::errors` 里**动作类** `NotImplemented` 消费成计数 + 限速 WRN。
+///
+/// 以前 `run_goto_label` 直接丢弃 `Engine::errors` ⇒ `UPGRADEITEM` 等未实现动作在生产脚本里
+/// 完全静默（无日志、无计数）。这里只做"让错误可见"：不改动作语义、不实现那些动作。
+fn surface_script_action_errors(
+    errors: &[mir2_script::engine::EngineError],
+    chr_name: &str,
+    label: &str,
+) {
+    for e in errors {
+        if let mir2_script::engine::EngineError::NotImplemented {
+            kind,
+            code,
+            handler,
+        } = e
+        {
+            if !kind.starts_with("action") {
+                continue;
+            }
+            let n = crate::perf_counters::note_script_action_error();
+            if script_err_wrn_allowed(label, handler) {
+                crate::perf_counters::note_script_action_error_wrn();
+                crate::glog!(
+                    "WRN",
+                    "脚本动作未实现：ChrName={chr_name} label={label} 动作={handler} code={code}（script_action_errors={n}；同一 label+动作每分钟最多 1 条）"
+                );
+            }
+        }
+    }
+}
+
 /// 跑一次 `ScriptEngine.GotoLable` 并收说词（[`NpcHost`] 与 [`MerchantScriptBook`] 共用）。
 #[allow(clippy::too_many_arguments)]
 fn run_goto_label(
@@ -881,6 +934,7 @@ fn run_goto_label(
     {
         let mut engine = Engine::new(&mut npc, player);
         engine.goto_label(label, bo_ext_jmp);
+        surface_script_action_errors(&engine.errors, &def.chr_name, label);
     }
     npc.says
 }
@@ -2745,6 +2799,93 @@ mod tests {
         assert!(!says[0].priority, "`@Login` 走 SendMsg（非优先）");
         // 引擎把 LastNpc 指向该 NPC（`ScriptEngine.GotoLable` 的 `SetLastNpc`）。
         assert_eq!(player.last_npc, 0, "隐藏 NPC ActorId 恒 0");
+    }
+
+    /// **卡 A29**：未实现动作（`UPGRADEITEM` = 212；C# 已注册、Rust 未实现）⇒
+    /// `script_action_errors` +1 且打出 1 条限速 WRN（`--nocapture` 可见原文）。
+    #[test]
+    fn unimplemented_action_is_counted_and_warned_once() {
+        let _c = crate::perf_counters::test_zone_counters_scope();
+        assert!(
+            mir2_script::engine::dispatch::execution_registered(212),
+            "前置：212（UPGRADEITEM）在 C# 注册表内"
+        );
+        assert!(
+            !mir2_script::engine::dispatch::execution_implemented(212),
+            "前置：212 在 Rust 侧仍未实现（本卡不实现它）"
+        );
+        let mut d = def("QManage", "@A29Once", "说词");
+        d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
+            n_cmd_code: 212,
+            ..Default::default()
+        }];
+        let host = host_with(vec![d]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = host.goto_label("QManage", &mut player, "@A29Once", false);
+        assert_eq!(
+            crate::perf_counters::script_action_errors(),
+            1,
+            "未实现动作必须计数（以前 errors 被丢弃 ⇒ 0）"
+        );
+        assert_eq!(
+            crate::perf_counters::script_action_error_wrns(),
+            1,
+            "首次触发必须打出 1 条限速 WRN"
+        );
+    }
+
+    /// **卡 A29 负例**：已实现动作（`GIVE` = 3）⇒ `script_action_errors` 不增。
+    #[test]
+    fn implemented_action_does_not_count_as_script_action_error() {
+        let _c = crate::perf_counters::test_zone_counters_scope();
+        assert!(mir2_script::engine::dispatch::execution_implemented(3));
+        let mut d = def("QManage", "@A29Give", "说词");
+        d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
+            n_cmd_code: 3,
+            s_param1: "金币".to_string(),
+            n_param1: 1,
+            ..Default::default()
+        }];
+        let host = host_with(vec![d]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = host.goto_label("QManage", &mut player, "@A29Give", false);
+        assert_eq!(
+            crate::perf_counters::script_action_errors(),
+            0,
+            "已实现动作不得计入未实现动作错误"
+        );
+    }
+
+    /// **卡 A29 限速**：同一 `label+动作` 连触发 5 次 ⇒ 计数 5、WRN 仍只有 1 条。
+    #[test]
+    fn repeated_unimplemented_action_counts_five_but_warns_once() {
+        let _c = crate::perf_counters::test_zone_counters_scope();
+        let mut d = def("QManage", "@A29Rate", "说词");
+        d.scripts[0].record_list[0].procedure_list[0].action_list = vec![QuestActionInfo {
+            n_cmd_code: 212,
+            ..Default::default()
+        }];
+        let host = host_with(vec![d]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        for _ in 0..5 {
+            let _ = host.goto_label("QManage", &mut player, "@A29Rate", false);
+        }
+        assert_eq!(
+            crate::perf_counters::script_action_errors(),
+            5,
+            "每次触发都计数"
+        );
+        assert_eq!(
+            crate::perf_counters::script_action_error_wrns(),
+            1,
+            "同一 label+动作每分钟最多 1 条 WRN"
+        );
     }
 
     /// `@StdModeFunc<N>` 经 `QFunction`（`PlayObject.Base.cs:1072`）。

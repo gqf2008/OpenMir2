@@ -26237,7 +26237,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -26393,6 +26393,8 @@ mod perf_counters {
             // **L2-5 own-segment 修正**：信息性两列（表头在 zone-k 之后）。
             hd[11],
             hd[12],
+            // **卡 A29**：脚本动作未实现错误次数（本 tick 增量）。
+            SCRIPT_ACTION_ERRORS.swap(0, Ordering::Relaxed),
         ];
         let mut guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(f) = guard.as_mut() {
@@ -26438,6 +26440,11 @@ mod perf_counters {
     /// 「切片模式下按原路径处理完」的次数。世界进入是否成功不在此计（那是
     /// `telemetry::record_ok`/`record_attempt` 的口径）。
     static ZONE_LOGIN_LANDED: [AtomicU64; 512] = [const { AtomicU64::new(0) }; 512];
+    /// **卡 A29**：脚本动作 `EngineError::NotImplemented`（`kind` 以 `action` 开头）被触发的次数。
+    /// 进 perf TSV（表头末列 `script_action_errors`），每 tick 增量。
+    static SCRIPT_ACTION_ERRORS: AtomicU64 = AtomicU64::new(0);
+    /// 其中**实际打出**限速 WRN 的次数（同一 label+动作每分钟 ≤1 条；测试断言用，不进 TSV）。
+    static SCRIPT_ACTION_ERROR_WRNS: AtomicU64 = AtomicU64::new(0);
     /// 落区后落点**不属于**判定区（墙格移位/死亡改写越过边界；只在切片模式计）。
     pub(crate) static ZONE_LOGIN_OFFZONE: AtomicU64 = AtomicU64::new(0);
     /// **L2-5 ③ 段 1c**：`Closed` 投到区 k 但**没有匹配在线项**（陈旧 `Closed` /
@@ -26470,6 +26477,8 @@ mod perf_counters {
         login_offzone: AtomicU64,
         disconnect_dropped: AtomicU64,
         login_landed: [AtomicU64; 512],
+        script_action_errors: AtomicU64,
+        script_action_error_wrns: AtomicU64,
     }
     #[cfg(test)]
     impl TestZoneCounters {
@@ -26481,6 +26490,8 @@ mod perf_counters {
                 login_offzone: AtomicU64::new(0),
                 disconnect_dropped: AtomicU64::new(0),
                 login_landed: [const { AtomicU64::new(0) }; 512],
+                script_action_errors: AtomicU64::new(0),
+                script_action_error_wrns: AtomicU64::new(0),
             }
         }
     }
@@ -26675,6 +26686,48 @@ mod perf_counters {
         for c in &ZONE_LOGIN_LANDED {
             c.store(0, Ordering::Relaxed);
         }
+    }
+
+    /// 卡 A29：一条脚本动作未实现错误 ⇒ 计数 +1（返回累计值，供 WRN 摘要）。
+    pub(crate) fn note_script_action_error() -> u64 {
+        #[cfg(test)]
+        if let Some(n) =
+            with_test_zone_counters(|t| t.script_action_errors.fetch_add(1, Ordering::Relaxed) + 1)
+        {
+            return n;
+        }
+        SCRIPT_ACTION_ERRORS.fetch_add(1, Ordering::Relaxed) + 1
+    }
+    #[cfg(test)]
+    pub(crate) fn script_action_errors() -> u64 {
+        #[cfg(test)]
+        if let Some(v) = with_test_zone_counters(|t| t.script_action_errors.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        SCRIPT_ACTION_ERRORS.load(Ordering::Relaxed)
+    }
+    /// 限速 WRN 实际打出的次数（只用于测试断言"≤1"）。
+    pub(crate) fn note_script_action_error_wrn() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            t.script_action_error_wrns.fetch_add(1, Ordering::Relaxed);
+        })
+        .is_some()
+        {
+            return;
+        }
+        SCRIPT_ACTION_ERROR_WRNS.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn script_action_error_wrns() -> u64 {
+        #[cfg(test)]
+        if let Some(v) =
+            with_test_zone_counters(|t| t.script_action_error_wrns.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        SCRIPT_ACTION_ERROR_WRNS.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
