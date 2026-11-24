@@ -1122,7 +1122,9 @@ impl Engine<'_, '_> {
         };
         match case {
             // CheckGotoLableItemW(playerActor, sParam1, nParam2)：先判佩戴位（前缀比较，
-            // 对应 C# `HUtil32.CompareLStr(sItemType, "[NECKLACE]", 4)`），否则查背包件数。
+            // 对应 C# `HUtil32.CompareLStr(sItemType, "[NECKLACE]", 4)`），否则调
+            // `playerActor.CheckItemCount`——**只扫佩戴位 `UseItems`**（`PlayObject.cs:5332`），
+            // 不是背包（A30；背包计数属 `CHECKITEM` → `QuestCheckItem`）。
             "CHECKITEMW" => {
                 let name = info.s_param1.as_str();
                 let worn = worn_location_of(name).map(|loc| self.player.has_worn(loc));
@@ -1130,7 +1132,9 @@ impl Engine<'_, '_> {
                     // 佩戴位分支在 C# 里直接 return，不再做件数判断
                     Some(v) => v,
                     None => {
-                        let cnt = self.player.item_count(name);
+                        let cnt = self.player.use_item_name_count(name);
+                        // C#：`result == null`（没有同名佩戴件）⇒ 条件假；有件但 `nCount < nParam`
+                        // 也置 null ⇒ 假。
                         cnt > 0 && cnt >= info.n_param2
                     }
                 };

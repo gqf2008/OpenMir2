@@ -146,8 +146,26 @@ pub trait ScriptPlayer {
     fn set_quest_flag_status(&mut self, flag: i32, value: i32);
     /// `playerActor.SetQuestUnitOpenStatus(index, value)`
     fn set_quest_unit_open_status(&mut self, index: i32, value: i32);
-    /// 背包中该名字的物品件数（`CheckItemCount` 的 `ref nCount`）
+    /// **背包**中该名字的物品件数——`PlayObject.QuestCheckItem`（`PlayObject.Base.cs:2600`）的
+    /// `ref nCount`；`CHECKITEM` 条件用它（A30 核定：`QuestCheckItem` 只扫 `ItemList`）。
+    ///
+    /// 注意：`PlayObject.CheckItemCount`（`PlayObject.cs:5332`）**同名但不同表**（只扫佩戴位
+    /// `UseItems`）——那个语义见 [`ScriptPlayer::use_item_name_count`]（`CHECKITEMW` 名字型）。
     fn item_count(&self, name: &str) -> i32;
+    /// `playerActor.CheckItemCount(sItemName, ref nCount)`（`PlayObject.cs:5332`）：
+    /// **只扫佩戴位 `UseItems`**（13 槽）——oracle 首行 `if (UseItems[i] == null) continue;`
+    /// ⇒ **空槽跳过、不参与比较**；非空槽按 `GetStdItemName(UseItems[i].Index)` 比较计数。
+    /// `GetStdItemName`（`GameItemSystem.cs:82`）对 `Index == 0`/越界返回 `""`
+    /// ⇒ **空槽跳过；非空但名解析为空（`Index 0`/未知模板）的槽会被空参数命中**（oracle 同形，照抄）。
+    ///
+    /// 比较口径：`eq_ignore_ascii_case` ≡ `OrdinalIgnoreCase` 的**前提**是物品名只含 ASCII/CJK
+    /// （CJK 无大小写折叠）；不是"任意文化的忽略大小写"。
+    ///
+    /// `CheckGotoLableItemW`（`ScriptEngine.cs:175`）的**名字型兜底**用它；槽位前缀
+    /// （`[WEAPON]` 等）走各自分支、不计数。默认 0（flow 夹具无佩戴态）。
+    fn use_item_name_count(&self, _name: &str) -> i32 {
+        0
+    }
     /// `playerActor.SlaveList.Count`（宝宝/随从数量）
     fn slave_count(&self) -> i32;
     /// `playerActor.ItemList.Count`（背包件数上限判定用）
