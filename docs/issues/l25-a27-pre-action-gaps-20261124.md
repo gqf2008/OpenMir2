@@ -1,6 +1,7 @@
 # A27 前置动作缺口规格：`UPGRADEITEM` / `CLEARNEEDITEMS` / `CLEARMAKEITEMS` / `TAKECHECKITEM`（2026-11-24）
 
 > **状态**：只读规格草案（分支 `card/a27-pre-spec`，父 `87afc3080`）。**不写码、不跑构建。**
+> 2026-11-24 更新：P1（212）已实现并合并（`aa27e6614`，master `7dac369d5`）；本表其余行仍为当时结论，不改写。
 > **上游**：`docs/issues/l25-a27-t157-frame-audit-20261124.md` §0「应发未发」与 §2 的 #7/#8/#9/#10
 > 行（动作本身未实现，帧随动作）；`mir2-rs/tests/parity/whitelist.md` 的 T-157「仍缺 ①」四点；
 > `mir2-rs/tests/parity/m3/audit-script-actions-20261018.md` 的 #74/#234/#235/#236 行。
@@ -11,7 +12,7 @@
 
 | # | 脚本 token（`ScriptDefName`） | 枚举值 | oracle 处理器 | 部署引用 | Rust 现状 | 建议 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `UPGRADEITEM` | 212 | `ActionOfUpgradeItems` | **0** | 有注册、未实现（`IMPLEMENTED_EXECUTIONS` 缺名） | **可做（P1，低成本）** |
+| 1 | `UPGRADEITEM` | 212 | `ActionOfUpgradeItems` | **0** | **已实现并合并（`7dac369d5`，合并提交 `aa27e6614`；A27-P1）** | **可做（P1，低成本）** |
 | 2 | `CLEARNEEDITEMS` | 209 | `ActionOfClearNeedItems` | **0** | 同上 | 低优先（P2） |
 | 3 | `CLEARMAKEITEMS` | 210 | `ActionOfClearMakeItems` | **0** | 同上 | 低优先（P2） |
 | 4 | `TAKECHECKITEM` | 19 | `ScriptEngine` switch 分支（无独立处理器） | **0** | switch 分支显式 `NotImplemented`（`IMPLEMENTED_SWITCH_EXECUTIONS` 缺名） | **可不做（P3，需扩模型）** |
@@ -171,7 +172,7 @@ grep -rniE '(^|[^A-Z])UPGRADEITEMEX([^A-Z]|$)' .  | wc -l   # 34（已实现的 
 
 ## 4. 实现切片建议（按影响面 + 是否碰进程态分组）
 
-### P1 `UPGRADEITEM`(212) —— 引擎内可完成，零新钩子（**推荐先做**）
+### P1 `UPGRADEITEM`(212) —— 引擎内可完成，零新钩子（**推荐先做**）（**已完成**：`aa27e6614`，master `7dac369d5`）
 
 - 影响面：本会话 `UseItems[nWhere]` 的 `Desc`（写回 `write_back_player_use_items` 落 `hum_items`）+
   `SendUpdateItem`（203 已有通道）+ 会话 RNG（3 次）+ 两条 `SysMsg`。
@@ -180,6 +181,14 @@ grep -rniE '(^|[^A-Z])UPGRADEITEMEX([^A-Z]|$)' .  | wc -l   # 34（已实现的 
   的 `abort_goto` 复刻）。
 - 先决：**无**（A27-3 已合，`send_update_item`/`set_use_item_desc` 等已在父提交里）。
 - 风险：RNG 抽数顺序（3 次，含 `Next(0)` 也消耗）与失败支不发帧这两点最容易被"优化"掉，需牙钉住。
+- **review 订正①（空槽是 NRE，不是红字）**：`UseItems = new UserItem[13]` 是全 null 数组，oracle 直接
+  解引用 `UseItems[nWhere]` ⇒ 槽为 null 时 `NullReferenceException` 穿出 `GotoLable`，等价物
+  = `script_action_error` + `abort_goto`（零帧、零抽取、跨 procedure 中止）；红字只属于"槽非 null
+  但 `Index <= 0`/模板取不到"。实现侧为此新增 `use_item_slot_present` 访问器（缺省 `true`）。
+- **review 订正②（Ex 行为面顺带变化）**：五个 `use_item_*`（`Desc`/`Dura`/`DuraMax`）override
+  此前走 trait 缺省 0，已部署的 `UPGRADEITEMEX` 路径同样读它们 ⇒ 本笔之后 Ex 读到**真实槽值**
+  （对齐 oracle，属行为变化，非纯重构）；已补宿主级 Ex 真实值钳位牙（`Desc[3]=250` + Point 使
+  `250+Point > 255` ⇒ 写 255；撤 override 即红）。
 
 ### P2 `CLEARNEEDITEMS`(209) / `CLEARMAKEITEMS`(210) —— 会话物品面 + 一条新宿主请求钩子
 
