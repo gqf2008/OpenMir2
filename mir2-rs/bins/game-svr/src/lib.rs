@@ -53977,6 +53977,75 @@ break
         );
     }
 
+    // ==== A31：UPGRADEITEM 家族宿主层缺口（帧/状态不一致 + 未覆写访问器 + Ex 宿主牙）====
+
+    /// **A31① 牙 `repair_all_item_writes_dura_back_and_emits_642`**：真实 `REPAIRALLITEM`（338）
+    /// 经 `dlg_select` 跑完 ⇒ ① `SM_DURACHANGE(642)` 载荷 = 写回后的 Dura/DuraMax
+    /// （`Recog=Dura`、`Param=槽位`、`Tag/Series=DuraMax`）；② 会话 `use_items[1].dura == dura_max`
+    /// （写回生效，此前 `set_use_item_dura` 是 trait no-op ⇒ 快照不变 ⇒ `write_back_player_use_items`
+    /// 见 `prev == slot` 直接跳过：客户端显示已修、会话/DB 仍旧）；③ 蓝字成功提示。
+    ///
+    /// 变异：撤 `NpcPlayer::set_use_item_dura` 覆写 ⇒ 会话 Dura 仍 10 ⇒ ②红。
+    #[test]
+    fn repair_all_item_writes_dura_back_and_emits_642() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "修一修 <修/@ya54>",
+            vec![mir2_script::QuestActionInfo {
+                n_cmd_code: 338,
+                ..Default::default()
+            }],
+        )]);
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let worn = game_svr::bag::BagItem {
+            make_index: 9101,
+            index: 1,
+            dura: 10,
+            dura_max: 40,
+            desc: [0; 14],
+        };
+        rig.sessions.get_mut("hero").expect("hero 会话").use_items[1] = Some(worn);
+        rig.dlg_select("@main");
+        let slot = rig.sessions["hero"].use_items[1]
+            .clone()
+            .expect("REPAIRALLITEM 不清槽");
+        assert_eq!(slot.dura, 40, "Dura 必须写回 dura_max（会话/DB 面）");
+        assert_eq!(slot.dura_max, 40);
+        assert_eq!(slot.index, 1, "修耐久不改 Index");
+        let mut dura_frames: Vec<(i32, u16, u16, u16)> = Vec::new();
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rig.rx.try_recv() {
+            if let Some(cm) = CommandMessage::from_bytes(&body) {
+                match cm.ident {
+                    mir2_protocol::messages::SM_DURACHANGE => {
+                        dura_frames.push((cm.recog, cm.param, cm.tag, cm.series));
+                    }
+                    mir2_protocol::messages::SM_SYSMESSAGE => {
+                        let raw = mir2_protocol::edcode::decode(&body[12..]);
+                        texts.push(encoding_rs::GBK.decode(&raw).0.into_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            dura_frames,
+            vec![(40, 1, 40, 0)],
+            "642 载荷：Recog=Dura、Param=槽位、Tag/Series=DuraMax（ushort ⇒ Hi=0）"
+        );
+        assert!(
+            texts.iter().any(|t| t == "您身上的的装备修复成功了..."),
+            "蓝字成功提示（原文“身上的的”）：{texts:?}"
+        );
+    }
+
     /// **A27-2 牙 `script_upgrade_broken_emits_sm_delitem`**：`UPGRADEITEMSEX` 破碎支
     /// （status=1、rate miss）⇒ 1 条 `SM_DELITEM(202)`，尾 = 破碎前的装备原件；槽 Index 清 0。
     ///

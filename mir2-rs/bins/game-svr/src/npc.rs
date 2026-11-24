@@ -2722,6 +2722,19 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             .and_then(Option::as_ref)
             .map_or(0, |it| i32::from(it.dura_max))
     }
+    /// `UseItems[i].Dura = v`（C# `UserItem.Dura` 是 `ushort` ⇒ `(ushort)` 取低 16 位）。
+    ///
+    /// **A31①**：此前未覆写 ⇒ trait 缺省 no-op ⇒ `REPAIRALLITEM` 只把 `DuraMax` 写进
+    /// `RM_DURACHANGE` 帧、快照 `Dura` 不变 ⇒ `write_back_player_use_items` 见
+    /// `prev == slot` 直接跳过 ⇒ 客户端显示已修、会话/DB 仍旧。
+    fn set_use_item_dura(&mut self, i: i32, v: i32) {
+        let Ok(idx) = usize::try_from(i) else {
+            return;
+        };
+        if let Some(Some(it)) = self.use_items.get_mut(idx) {
+            it.dura = u16::try_from(v & 0xFFFF).unwrap_or(0);
+        }
+    }
     /// `UseItems[i].DuraMax = v`（C# `ushort` 赋值 ⇒ 取低 16 位；引擎侧已钳 `u16::MAX`）。
     fn set_use_item_dura_max(&mut self, i: i32, v: i32) {
         let Ok(idx) = usize::try_from(i) else {
