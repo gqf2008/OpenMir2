@@ -29034,6 +29034,10 @@ fn zone_cmd_class(ident: u16, payload: Option<&str>) -> ZoneCmdClass {
         || attackwire::is_hit_ident(ident)
         || magicwire::is_spell_ident(ident)
         || QUERY_IDENTS.contains(&ident)
+        // **A34 裁决**：`CM_LEVELRANK`/`CM_LOGINNOTICEOK` **分类 Local 但区 k 无执行臂**
+        // （oracle 无对应派发面，不补）⇒ 事件仍落 `note_zone_cmd_unsupported` 计数；
+        // 守恒牙 `zone_k_unwired_families_still_count_unsupported` 保留这两条。
+        // **分类归属 ≠ 已接线**，两件事分开读。
         || ident == enter::CM_LEVELRANK
         || ident == mir2_protocol::messages::CM_LOGINNOTICEOK
         || magicwire::is_magic_key_ident(ident)
