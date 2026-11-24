@@ -16392,6 +16392,20 @@ fn save_human_rcd(
 /// 关服存档发出后最多等这么久，收齐应答即返回，绝不把在途请求截断在进程退出瞬间。
 const SHUTDOWN_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// **D6 P0-①**：关服存档收集时，**单个区状态锁**的最长等待。
+///
+/// 与 `SHUTDOWN_SAVE_TIMEOUT`（DB 应答等待）是两件事：这里是锁竞争。看门狗在关服前已
+/// `disarm`（存档期不得被 abort）⇒ 锁等待必须自带上限，超时**跳过该区**并计数 + WRN，
+/// 进程照常退出。取 2s：远大于正常 tick（200ms 预算），又不会让 N 个坏区把关服拖成长时间。
+const SHUTDOWN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(2000);
+
+/// **D6 P0-②**：启动期静态装载时，**单个区状态锁**的最长等待。
+///
+/// 启动期看门狗尚未 `arm`（首轮 barrier2 之后才 arm）⇒ 锁等待没有 abort 兜底；超时必须
+/// **fail-closed 退出**（拒绝以半装区上线），不得 hang。取 5s：区线程首 tick 是短路径，
+/// 5s 不可得只可能是死循环/外部停住。
+const STARTUP_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(5000);
+
 /// 主线程等待 sim 线程完成关服存档的**总**上限（存档上限 + 收尾余量）。
 /// sim 自己的等待有界 ⇒ 正常路径用不到它；它是"DB 怎么卡都不挂死"的最后一道闸。
 const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -16422,6 +16436,101 @@ struct ShutdownSaveSummary {
 /// 只是把在线角色的当前实时态写进库，随后进程退出。
 /// **A32**：关服存档的**收集面**（区 0 与各区 k 共用）。口径同关口函数：按名排序、
 /// 无登入记录底稿跳过并 WRN、**不重置** `save_rcd_tick`、**不查** `InSaveRcdList`。
+/// **D6 P0**：有界获取区状态锁（跨区、且落在看门狗豁免窗口内的路径专用）。
+///
+/// 毒化 ⇒ 与其它区锁站点同口径**回收**（`PoisonError::into_inner`）；争用 ⇒ 每 1ms 重试，
+/// 到 `deadline` 返回 `None`，由调用方计数 + 降级/退出。**只做获取**，不做别的副作用。
+fn try_lock_zone_state_until(
+    state: &std::sync::Arc<std::sync::Mutex<ZoneState>>,
+    deadline: std::time::Instant,
+) -> Option<std::sync::MutexGuard<'_, ZoneState>> {
+    loop {
+        match state.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+/// **D6 P0-②**：启动期获取区锁（有界）。成功返回守卫；超时 ⇒ 计数 + `Err(原因)`
+/// （调用方用 `exit(2)` 落 fail-closed；测试直接断言 `Err` 文本）。
+fn require_startup_zone_lock<'a>(
+    state: &'a std::sync::Arc<std::sync::Mutex<ZoneState>>,
+    zone_id: zone::ZoneId,
+    wait: std::time::Duration,
+) -> Result<std::sync::MutexGuard<'a, ZoneState>, String> {
+    let deadline = std::time::Instant::now() + wait;
+    try_lock_zone_state_until(state, deadline).ok_or_else(|| {
+        perf_counters::note_zone_startup_lock_timeout();
+        startup_lock_failure_message(zone_id, wait)
+    })
+}
+
+/// **D6 P0-②**：启动期取不到区锁时的失败原因（fail-closed 退出的文本；含区号，测试可断言）。
+fn startup_lock_failure_message(zone_id: zone::ZoneId, wait: std::time::Duration) -> String {
+    format!(
+        "区 {zone_id} 状态锁 {}ms 内不可得（启动期静态装载）⇒ 拒绝以不确定状态启动",
+        wait.as_millis()
+    )
+}
+
+/// **D6 P0-①**：关服存档跳过区的 WRN 文本（含区号列表，测试可断言）。
+fn shutdown_lock_skip_warn(skipped: &[u32], wait: std::time::Duration) -> String {
+    let zones = skipped
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "关服存档：{} 个区状态锁 {}ms 内不可得 ⇒ 跳过其会话存档（区 {zones}；进程继续退出）",
+        skipped.len(),
+        wait.as_millis()
+    )
+}
+
+/// **D6 P0-①**：关服存档收集的**有界版**——逐区 `try_lock` 到 `lock_wait`，超时跳过该区并计数。
+///
+/// 返回 `(请求, 在册会话数, 被跳过的区号)`；调用方负责把跳过列表打进限速之外的 WRN。
+/// 每个区独立 deadline ⇒ 最坏关服延迟 = N × `lock_wait`（有界）。
+#[allow(clippy::type_complexity)]
+fn collect_shutdown_zone_saves_bounded(
+    zone_states: &[Option<std::sync::Arc<std::sync::Mutex<ZoneState>>>],
+    lock_wait: std::time::Duration,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> (Vec<ZoneSaveRequest>, usize, Vec<u32>) {
+    let mut requests = Vec::new();
+    let mut registered = 0usize;
+    let mut skipped = Vec::new();
+    for (index, slot) in zone_states.iter().enumerate().skip(1) {
+        let Some(state) = slot.as_ref() else {
+            continue;
+        };
+        let deadline = std::time::Instant::now() + lock_wait;
+        let Some(mut st) = try_lock_zone_state_until(state, deadline) else {
+            perf_counters::note_zone_shutdown_lock_timeout();
+            skipped.push(u32::try_from(index).unwrap_or(u32::MAX));
+            continue;
+        };
+        let ZoneState {
+            host: zone_loop, ..
+        } = &mut *st;
+        registered += zone_loop.ground_sessions.len();
+        requests.extend(collect_shutdown_zone_saves(
+            &zone_loop.ground_sessions,
+            &zone_loop.saves,
+            &zone_loop.world,
+            registry,
+        ));
+    }
+    (requests, registered, skipped)
+}
+
 fn collect_shutdown_zone_saves(
     sessions: &std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
@@ -27322,7 +27431,7 @@ mod perf_counters {
         let mut f = std::fs::File::create(path)?;
         writeln!(
             f,
-            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_metrics"
+            "tick\tactor_indexed\tchr_indexed\tactor_linear\tchr_linear\trefmsg_calls\trefmsg_targets\tsay_calls\tsay_recipients\tkick_scans\tinbound_enqueued\tinbound_drained\tinbound_carry\tinbound_budget_hit\tinbound_wall_us\tdrained_command\tdrained_close\tdrained_control\tmax_single_event_us\tzone_router_overwrites\tzone_router_rejected_socket\tregion_barrier_us\tregion_barrier_total_us\tcross_recipient_refmsg\tcross_recipient_run_frames\tcross_recipient_npc_merchant\tcross_recipient_feature_changed\tcross_recipient_mountride\tcross_recipient_merchant_disappear\tcross_recipient_missing\tcross_recipient_depart_frames\tcross_recipient_seven_total\tcross_recipient_delivered\tcross_recipient_unroutable\tcross_frame_queue_overflow\tcross_frame_dup\tcross_frame_drop_closed\tcross_recipient_zone_unknown\tcross_enqueue_us\tcross_enqueue_events\tdepart_wrn_suppressed\tdepart_frames_mirror_suppressed\tzonek_inbound_drained\tzonek_inbound_carry\tzonek_inbound_budget_hit\tzonek_inbound_overflow_dropped\tzonek_inbound_pending_discarded\tzonek_inbound_unsupported\tzonek_control_defer_overflow\tzonek_control_wait_timeout\tzonek_control_mailbox_rejected\tzonek_control_shutdown_discarded\tzonek_control_zone_gone\tzonek_channel_enqueued\tzonek_channel_rejected\tzonek_channel_drained\tzonek_channel_recipients\tinbound_drained_all_zones\tinbound_budget_hit_all_zones\tinbound_overflow_dropped_all_zones\tinbound_pending_discarded_all_zones\tinbound_unsupported_all_zones\thandoff_offered\thandoff_accepted\thandoff_refused\thandoff_promoted\thandoff_inserted_fresh\tmirror_shadowed_by_local\tmirror_shadowed_static\tmirror_shadowed_handoff\thandoff_dup_dropped\tmirror_write_refused_cell\tmirror_write_refused_occupied\tzone_cmd_unsupported\thandoff_move_after_transfer_dropped\tmove_map_change_unsupported\tmirror_own_segment_ids\thandoff_fresh_own_segment\tscript_action_errors\tzone_selloff_sold_offline_seller\tzone_startup_lock_timeout\tzone_shutdown_lock_timeout\tzone_metrics"
         )?;
         *WRITER.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         *PATH.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
@@ -27489,6 +27598,10 @@ mod perf_counters {
             // **A34 片 5**：卖方缺席（离线/别区）时成交数（oracle Flag=1 延期结算形态；
             // 本 tick 增量；**在 `zone_metrics` 之前**，A36 的末列契约不动）。
             ZONE_SELLOFF_SOLD_OFFLINE_SELLER.swap(0, Ordering::Relaxed),
+            // **D6 P0**：跨区有界锁超时（本 tick 增量；**仍在 `zone_metrics` 之前**）。
+            // 启动列在正常启动下恒 0（超时即 fail-closed 退出，写不到 TSV；计数器供测试）。
+            ZONE_STARTUP_LOCK_TIMEOUT.swap(0, Ordering::Relaxed),
+            ZONE_SHUTDOWN_LOCK_TIMEOUT.swap(0, Ordering::Relaxed),
         ];
         // **A36**：末列 `zone_metrics`（单列紧凑 JSON；无 tab/换行 ⇒ 不破坏 TSV 字段数）。
         let zm = zone_metrics_json(host_enq, ib[0], ib[1], ib[2]);
@@ -27635,6 +27748,30 @@ mod perf_counters {
             ));
         }
         Ok(())
+    }
+
+    /// **D6 P0-②**：启动期静态装载「区状态锁有界获取超时」次数（该路径随后 fail-closed 退出；
+    /// 计数器供测试/证据，TSV 列在正常启动下恒 0）。
+    pub(crate) static ZONE_STARTUP_LOCK_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+    /// **D6 P0-①**：关服存档收集「区状态锁有界获取超时 ⇒ 跳过该区」次数（每 tick 增量进 TSV）。
+    pub(crate) static ZONE_SHUTDOWN_LOCK_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(test)]
+    pub(crate) fn zone_startup_lock_timeout() -> u64 {
+        ZONE_STARTUP_LOCK_TIMEOUT.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zone_shutdown_lock_timeout() -> u64 {
+        ZONE_SHUTDOWN_LOCK_TIMEOUT.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn note_zone_startup_lock_timeout() -> u64 {
+        ZONE_STARTUP_LOCK_TIMEOUT.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    pub(crate) fn note_zone_shutdown_lock_timeout() -> u64 {
+        ZONE_SHUTDOWN_LOCK_TIMEOUT.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// **L2-5 ③ 1b**：登录落区计数。
@@ -37730,9 +37867,16 @@ fn sim_loop(
                         glog!("WRN", "区 {zone_id} 无 ZoneState（切片关）⇒ 跳过静态装载");
                         continue;
                     };
-                    let mut st = state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    // **D6 P0-②**：启动期看门狗尚未 arm ⇒ 锁等待必须有界；超时 fail-closed
+                    // 退出（拒绝以半装区启动），绝不 hang。
+                    let mut st = match require_startup_zone_lock(state, zone_id, STARTUP_LOCK_WAIT)
+                    {
+                        Ok(guard) => guard,
+                        Err(msg) => {
+                            glog!("ERR", "{}", msg);
+                            std::process::exit(2);
+                        }
+                    };
                     let report = spawn_statics_for_zone(
                         zone_id,
                         layout,
@@ -38896,20 +39040,22 @@ impl HostLoop {
                 );
                 let mut shutdown_registered = ground_sessions.len();
                 if let Some(zh) = zone_host.as_ref() {
-                    for state in zh.zone_states.iter().flatten() {
-                        let mut st = state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let ZoneState {
-                            host: zone_loop, ..
-                        } = &mut *st;
-                        shutdown_registered += zone_loop.ground_sessions.len();
-                        shutdown_requests.extend(collect_shutdown_zone_saves(
-                            &zone_loop.ground_sessions,
-                            &zone_loop.saves,
-                            &zone_loop.world,
+                    // **D6 P0-①**：有界获取（看门狗已 disarm ⇒ 锁等待无 abort 兜底）。
+                    // 逐个区独立 deadline；超时跳过该区（计数 + WRN），进程照常退出。
+                    let (zone_requests, zone_registered, skipped) =
+                        collect_shutdown_zone_saves_bounded(
+                            &zh.zone_states,
+                            SHUTDOWN_LOCK_WAIT,
                             registry.as_ref(),
-                        ));
+                        );
+                    shutdown_requests.extend(zone_requests);
+                    shutdown_registered += zone_registered;
+                    if !skipped.is_empty() {
+                        glog!(
+                            "WRN",
+                            "{}",
+                            shutdown_lock_skip_warn(&skipped, SHUTDOWN_LOCK_WAIT)
+                        );
                     }
                 }
                 let summary = shutdown_save_requests(
@@ -61041,8 +61187,9 @@ break
     }
 
     /// **A32 静态牙**：生产接缝钉住（改回「只吃区 0」或删区 k 周期段 ⇒ 红）——
-    /// ① 区 k 驱动的 rest 调用必须是 `M1A_ZONE_REST`；② 关服 A32 块必须遍历
-    /// `zone_states.iter().flatten()` 并走 `collect_shutdown_zone_saves` + `shutdown_save_requests`；
+    /// ① 区 k 驱动的 rest 调用必须是 `M1A_ZONE_REST`；② 关服 A32 块必须走
+    /// `collect_shutdown_zone_saves_bounded`（**D6 P0-①**：有界获取）+
+    /// `shutdown_save_requests`，且该 helper 体内仍遍历全部区并调 `collect_shutdown_zone_saves`；
     /// ③ `drain_zone_saves` 必须合并 `host.zone_save_outbox`。
     #[test]
     fn a32_production_wiring_is_pinned() {
@@ -61059,12 +61206,21 @@ break
             .find("SHUTDOWN_SAVE_TIMEOUT,")
             .map_or(src.len(), |k| mark + k);
         let sb = &src[mark..mark_end];
-        assert!(sb.contains("collect_shutdown_zone_saves("));
-        assert!(
-            sb.contains("zone_states.iter().flatten()"),
-            "关服必须遍历全部区状态"
-        );
+        // **D6 P0-①**：关服收集改为有界获取（`collect_shutdown_zone_saves_bounded`）；
+        // 「遍历全部区 + 用 collect_shutdown_zone_saves」的接缝 pin 到该 helper 体内，
+        // 防「只吃区 0 / 跳过锁」的回归。
+        assert!(sb.contains("collect_shutdown_zone_saves_bounded("));
         assert!(sb.contains("shutdown_save_requests("));
+        let cb = src
+            .find("fn collect_shutdown_zone_saves_bounded(")
+            .expect("有界收集定义");
+        let cb_end = src[cb..].find("\n}\n").map_or(src.len(), |k| cb + k + 3);
+        let cb_body = &src[cb..cb_end];
+        assert!(
+            cb_body.contains("zone_states.iter().enumerate().skip(1)")
+                && cb_body.contains("collect_shutdown_zone_saves("),
+            "有界收集必须遍历全部区状态并调用 collect_shutdown_zone_saves"
+        );
         let dz = src
             .find("fn drain_zone_saves(")
             .expect("drain_zone_saves 定义");
@@ -143708,6 +143864,121 @@ mod l2_s3_cross_recipient_tests {
         assert_eq!(depart, 1, "第七面 1 次");
         assert_eq!(delivered(), 7, "六面 + 第七面各 1 次 ⇒ delivered=7");
         crate::cross_zone_frames::uninstall();
+    }
+}
+
+/// **D6 P0**：跨区有界锁获取（关服存档收集 / 启动期静态装载）。
+///
+/// 牙的形态：另起线程**故意持住**区状态锁，调用方必须在「自身 deadline + 测试兜底」内返回；
+/// 若把有界获取改回阻塞 `lock()`，`recv_timeout` 到期 ⇒ 用例红（不会真挂测试进程）。
+#[cfg(test)]
+mod d6_lock_wait_tests {
+
+    use super::*;
+
+    /// 占住 `state` 的锁，返回「放行」发送端；持有线程在收到消息后释放。
+    fn hold_lock(
+        state: &std::sync::Arc<std::sync::Mutex<ZoneState>>,
+    ) -> std::sync::mpsc::Sender<()> {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let held = std::sync::Arc::clone(state);
+        std::thread::spawn(move || {
+            let _guard = held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = ready_tx.send(());
+            let _ = release_rx.recv();
+        });
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("夹具：持锁线程必须在 2s 内就位");
+        release_tx
+    }
+
+    fn zone_state(z: u32) -> std::sync::Arc<std::sync::Mutex<ZoneState>> {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(1));
+        std::sync::Arc::new(std::sync::Mutex::new(ZoneState::new(
+            zone::ZoneId::new(z),
+            &[(20, 10)],
+            Some(0),
+            &counter,
+        )))
+    }
+
+    /// **P0-①**：关服存档收集——锁被占 ⇒ 有界返回、该区被跳过、计数器 +1、WRN 文本含区号。
+    #[test]
+    fn shutdown_save_collection_skips_locked_zone_with_bounded_wait() {
+        let state = zone_state(1);
+        let release = hold_lock(&state);
+        let states = vec![None, Some(std::sync::Arc::clone(&state))];
+        let n0 = perf_counters::zone_shutdown_lock_timeout();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = collect_shutdown_zone_saves_bounded(
+                &states,
+                std::time::Duration::from_millis(50),
+                None,
+            );
+            let _ = tx.send(out);
+        });
+        let (requests, registered, skipped) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("有界获取必须在超时后返回（改回阻塞 lock() ⇒ 本用例红而不是挂）");
+        assert!(requests.is_empty(), "被跳过区不得产出存档请求");
+        assert_eq!(registered, 0, "被跳过区的会话不计入在册数");
+        assert_eq!(skipped, vec![1], "必须点名跳过的区号");
+        assert_eq!(
+            perf_counters::zone_shutdown_lock_timeout(),
+            n0 + 1,
+            "每次跳过必须计数 +1"
+        );
+        let msg = shutdown_lock_skip_warn(&skipped, std::time::Duration::from_millis(50));
+        assert!(msg.contains("区 1"), "WRN 必须含被跳过的区号：{msg}");
+        drop(release);
+    }
+
+    /// **P0-②**：启动期静态装载——锁被占 ⇒ 有界返回 fail-closed 原因（含区号）、计数器 +1；
+    /// 无争用时同一入口必须成功（负例：失败不是无条件的）。
+    #[test]
+    fn startup_static_load_lock_fails_closed_with_bounded_wait() {
+        let state = zone_state(2);
+        let release = hold_lock(&state);
+        let n0 = perf_counters::zone_startup_lock_timeout();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_state = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || {
+            let r = require_startup_zone_lock(
+                &worker_state,
+                zone::ZoneId::new(2),
+                std::time::Duration::from_millis(50),
+            )
+            .map(|_guard| ());
+            let _ = tx.send(r.err());
+        });
+        let err = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("有界获取必须返回（改回阻塞 lock() ⇒ 本用例红而不是挂）")
+            .expect("锁被占用 ⇒ 必须 fail-closed");
+        assert!(err.contains("区 2"), "失败原因必须含区号：{err}");
+        assert!(
+            err.contains("拒绝以不确定状态启动"),
+            "失败原因必须写明 fail-closed：{err}"
+        );
+        assert_eq!(
+            perf_counters::zone_startup_lock_timeout(),
+            n0 + 1,
+            "启动期超时必须计数 +1"
+        );
+        drop(release);
+        // 负例：锁释放后同一入口必须成功（证明失败只在超时语义下发生）。
+        let ok = require_startup_zone_lock(
+            &state,
+            zone::ZoneId::new(2),
+            std::time::Duration::from_millis(50),
+        )
+        .map(|_guard| ());
+        assert!(ok.is_ok(), "无争用时启动期取锁必须成功");
     }
 }
 
