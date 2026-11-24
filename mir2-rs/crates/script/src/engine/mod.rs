@@ -153,9 +153,13 @@ pub trait ScriptPlayer {
     /// `UseItems`）——那个语义见 [`ScriptPlayer::use_item_name_count`]（`CHECKITEMW` 名字型）。
     fn item_count(&self, name: &str) -> i32;
     /// `playerActor.CheckItemCount(sItemName, ref nCount)`（`PlayObject.cs:5332`）：
-    /// **只扫佩戴位 `UseItems`**（13 槽）——逐槽按 `GetStdItemName(UseItems[i].Index)` 与 `name`
-    /// `OrdinalIgnoreCase` 比较计数；空槽/`Index == 0`/未知模板取空名（`GetStdItemName` 越界返回
-    /// `""`）⇒ 空名会命中空槽（oracle 同形，照抄）。
+    /// **只扫佩戴位 `UseItems`**（13 槽）——oracle 首行 `if (UseItems[i] == null) continue;`
+    /// ⇒ **空槽跳过、不参与比较**；非空槽按 `GetStdItemName(UseItems[i].Index)` 比较计数。
+    /// `GetStdItemName`（`GameItemSystem.cs:82`）对 `Index == 0`/越界返回 `""`
+    /// ⇒ **空槽跳过；非空但名解析为空（`Index 0`/未知模板）的槽会被空参数命中**（oracle 同形，照抄）。
+    ///
+    /// 比较口径：`eq_ignore_ascii_case` ≡ `OrdinalIgnoreCase` 的**前提**是物品名只含 ASCII/CJK
+    /// （CJK 无大小写折叠）；不是"任意文化的忽略大小写"。
     ///
     /// `CheckGotoLableItemW`（`ScriptEngine.cs:175`）的**名字型兜底**用它；槽位前缀
     /// （`[WEAPON]` 等）走各自分支、不计数。默认 0（flow 夹具无佩戴态）。

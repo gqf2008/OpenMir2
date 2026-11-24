@@ -53988,18 +53988,20 @@ break
     /// 部署脚本 37 处 `CheckItemW` 全是名字型（如 `CheckItemw 勋章45 1`），所以这条口径直接
     /// 决定勋章/真爱之吻等流程的判定。
     ///
-    /// 三形态：① 背包有件、佩戴位空 ⇒ 不满足；② 佩戴位有同名件 ⇒ 满足；③ 佩戴 1 件但
-    /// `nParam2 = 2` ⇒ 不满足（背包再多也不算）。
-    /// 变异：把兜底改回 `ScriptPlayer::item_count`（背包件数）⇒ ① ③ 红。
+    /// 五形态：① 背包有件、佩戴位空 ⇒ 不满足；② 佩戴位有同名件 ⇒ 满足；③ 佩戴 1 件但
+    /// `nParam2 = 2` ⇒ 不满足（背包再多也不算）；④ 空参数 + 全空槽 ⇒ 不满足（空槽不计数）；
+    /// ⑤ 空参数 + `Some(Index=0)` 槽 ⇒ 满足（非空但名解析为空 ⇒ 计 1）。
+    /// 变异：把兜底改回 `ScriptPlayer::item_count`（背包件数）⇒ ① ③ 红；把 `None` 分支改回
+    /// `use_item_std_name` 比空名 ⇒ ④ 红。
     #[test]
     fn checkitemw_name_counts_worn_not_bag() {
-        fn record(need: i32) -> mir2_script::SayingRecord {
+        fn record(name: &str, need: i32) -> mir2_script::SayingRecord {
             mir2_script::SayingRecord {
                 s_label: "@main".to_string(),
                 procedure_list: vec![mir2_script::SayingProcedure {
                     condition_list: vec![mir2_script::QuestConditionInfo {
                         cmd_code: 11, // `ConditionCode.CHECKITEMW`（`codes.rs:31`）
-                        s_param1: "木剑".to_string(),
+                        s_param1: name.to_string(),
                         n_param2: need,
                         ..Default::default()
                     }],
@@ -54032,8 +54034,8 @@ break
                 desc: [0; 14],
             }
         }
-        fn rig(need: i32) -> T142Rig {
-            let mut rig = T142Rig::new(vec![record(need)]);
+        fn rig(name: &str, need: i32) -> T142Rig {
+            let mut rig = T142Rig::new(vec![record(name, need)]);
             rig.catalog.insert(
                 1,
                 mir2_data::StdItem {
@@ -54048,7 +54050,7 @@ break
         }
 
         // ① 背包有 1 件、佩戴位空 ⇒ 不满足（oracle 只扫 `UseItems`）。
-        let mut r = rig(1);
+        let mut r = rig("木剑", 1);
         r.sessions
             .get_mut("hero")
             .expect("hero 会话")
@@ -54067,7 +54069,7 @@ break
         );
 
         // ② 佩戴位有同名件 ⇒ 满足。
-        let mut r = rig(1);
+        let mut r = rig("木剑", 1);
         {
             let sg = r.sessions.get_mut("hero").expect("hero 会话");
             sg.use_items[1] = Some(sword());
@@ -54080,7 +54082,7 @@ break
         );
 
         // ③ 佩戴 1 件、要求 2 件 ⇒ 不满足（背包再多也不算）。
-        let mut r = rig(2);
+        let mut r = rig("木剑", 2);
         {
             let sg = r.sessions.get_mut("hero").expect("hero 会话");
             sg.use_items[1] = Some(sword());
@@ -54092,6 +54094,34 @@ break
         assert!(
             got.iter().any(|s| s.ends_with("/未命中")),
             "佩戴 1 < 要求 2 ⇒ 不满足（背包件不得计数；实收 {got:?}）"
+        );
+
+        // ④ 空参数 + 全空槽 ⇒ 不满足（oracle `UseItems[i] == null ⇒ continue`：空槽不计数）。
+        let mut r = rig("", 1);
+        r.dlg_select("@main");
+        let got = drain_says(&mut r);
+        assert!(
+            got.iter().any(|s| s.ends_with("/未命中")),
+            "空参数 + 全空槽 ⇒ 必须不满足（空槽不得计为空名；实收 {got:?}）"
+        );
+
+        // ⑤ 空参数 + 一个 `Some(Index=0)` 槽 ⇒ 满足（非空但名解析为空 ⇒ oracle 计 1）。
+        let mut r = rig("", 1);
+        {
+            let sg = r.sessions.get_mut("hero").expect("hero 会话");
+            sg.use_items[1] = Some(game_svr::bag::BagItem {
+                make_index: 7002,
+                index: 0,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            });
+        }
+        r.dlg_select("@main");
+        let got = drain_says(&mut r);
+        assert!(
+            got.iter().any(|s| s.ends_with("/命中")),
+            "空参数 + Some(Index=0) ⇒ 必须满足（实收 {got:?}）"
         );
     }
 

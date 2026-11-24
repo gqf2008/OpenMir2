@@ -2606,13 +2606,24 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             .map(|(_, c)| *c)
             .sum()
     }
-    /// **A30**：`PlayObject.CheckItemCount`（`PlayObject.cs:5332`）——**只扫佩戴位 `UseItems`**；
-    /// 逐槽 `GetStdItemName(Index)`（空槽/`Index == 0`/未知模板取空名）与 `name`
-    /// `OrdinalIgnoreCase` 比较。`CHECKITEMW` 的名字型兜底用它，**不是**背包件数。
+    /// **A30**：`PlayObject.CheckItemCount`（`PlayObject.cs:5332`）——**只扫佩戴位 `UseItems`**：
+    /// oracle 首行 `if (UseItems[i] == null) continue;` ⇒ **空槽跳过、不参与比较**；非空槽按
+    /// `GetStdItemName(Index)`（`Index == 0`/未知模板 ⇒ `""`，`GameItemSystem.cs:82`）比较。
+    /// 比较用 `eq_ignore_ascii_case`（≡ `OrdinalIgnoreCase` 的前提：物品名只含 ASCII/CJK）。
     fn use_item_name_count(&self, name: &str) -> i32 {
         let mut n = 0;
-        for i in 0..self.use_items_len() {
-            if self.use_item_std_name(i).eq_ignore_ascii_case(name) {
+        for it in &self.use_items {
+            // oracle `CheckItemCount`：`UseItems[i] == null ⇒ continue`（**空槽不计数**）。
+            let Some(it) = it.as_ref() else {
+                continue;
+            };
+            // `GetStdItemName(Index)`：`Index == 0`/未知模板取空名 ⇒ 空参数只命中
+            // 「非空但名解析为空」的槽（oracle 同形）。
+            let slot_name = self
+                .catalog
+                .and_then(|c| c.name(it.index))
+                .map_or_else(String::new, str::to_string);
+            if slot_name.eq_ignore_ascii_case(name) {
                 n += 1;
             }
         }
@@ -2747,6 +2758,52 @@ mod tests {
             }],
             quest_count: 0,
         }
+    }
+
+    /// **A30 牙 `use_item_name_count_skips_empty_slots`**：`CheckItemCount`（`PlayObject.cs:5332`）
+    /// 首行 `UseItems[i] == null ⇒ continue`——**空槽不计数**；只有 `Some(Index=0)`（非空但
+    /// `GetStdItemName` 解析为空）才会被空参数命中。
+    ///
+    /// 变异：把 `None` 分支改回"用 `use_item_std_name`（空槽返回 `""`）比空名" ⇒ 本牙第 1/3 条红。
+    #[test]
+    fn use_item_name_count_skips_empty_slots() {
+        let mut catalog = crate::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.catalog = Some(&catalog);
+        let empty_named = |idx: i32, index: u16| crate::bag::BagItem {
+            make_index: idx,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+
+        // 空名 + 空槽 + 一个 `Some(Index=0)` ⇒ 恰好 1（空槽跳过；该槽名解析为 ""）。
+        p.use_items[1] = Some(empty_named(1, 0));
+        assert_eq!(
+            p.use_item_name_count(""),
+            1,
+            "空槽不得计数；只有 Some(Index=0) 计 1"
+        );
+
+        // 全空槽 + 空名 ⇒ 0（变异点：数了空槽就是 12）。
+        p.use_items.fill(None);
+        assert_eq!(p.use_item_name_count(""), 0, "空槽一律不计数");
+
+        // 非空槽（有名模板）+ 空名 ⇒ 0（名字非空、不命中）。
+        p.use_items[3] = Some(empty_named(3, 1));
+        assert_eq!(p.use_item_name_count(""), 0, "有名槽不命中空参数");
+
+        // 名字型按模板名计 1。
+        assert_eq!(p.use_item_name_count("木剑"), 1);
     }
 
     fn host_with(defs: Vec<NpcDef>) -> NpcHost {
