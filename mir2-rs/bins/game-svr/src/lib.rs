@@ -2336,7 +2336,11 @@ fn drain_zone_saves(
             let mut st = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut st.save_outbox)
+            // **A32**：断线存档（`save_outbox`）+ 区 k 周期存档（`host.zone_save_outbox`）同一条
+            // 发送路径；两者各自保序，合并序不影响落库结果（请求彼此独立）。
+            let mut reqs = std::mem::take(&mut st.save_outbox);
+            reqs.append(&mut st.host.zone_save_outbox);
+            reqs
         };
         for req in reqs {
             let Some(w) = db.as_mut() else {
@@ -3121,7 +3125,7 @@ fn spawn_minimal_zone(
                         host.tick_phase_rest(
                             &mut zone_shared,
                             &mut no_process,
-                            PhaseSet::M1A_PROD,
+                            PhaseSet::M1A_ZONE_REST,
                             &mut scratch,
                             next,
                             slot,
@@ -15843,14 +15847,35 @@ fn apply_save_reply(engine: &mut load::FrontEngine, chr_name: &str, ident: u16, 
 /// 支与 `CloseUser` 断线支都会走到），所以调用点必须在 `world.disconnect` **之前**；
 /// **周期存档**（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-703`）复用本函数
 /// （见 [`drain_periodic_save`]，卡 `openmir2-m3-periodic-save`）。
-fn save_human_rcd(
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
+/// 存档体的**唯一编码器**（周期/关服/断线/区 k 同一路径）：`build_save_record` +
+/// `encode_save_character_data`。调用方拿 [`ZoneSaveRequest`]，发送走 [`send_save_packet`]。
+///
+/// **A32**：区 k 只在**本区线程**调用本函数（读本区 World/会话，零 DB/零 `!Send`），
+/// 产出的请求进 `zone_save_outbox`，由区 0 的 [`drain_zone_saves`] 统一发送。
+fn encode_zone_save(
     saved: &SavedHuman,
     chr_name: &str,
     world: &mir2_world_bevy::World,
     sg: &SessionGround,
     registry: Option<&mir2_envir::MapRegistry>,
+) -> ZoneSaveRequest {
+    let rec = build_save_record(saved, chr_name, world, sg, registry);
+    let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
+    ZoneSaveRequest {
+        chr_name: chr_name.to_string(),
+        packet,
+    }
+}
+
+/// 发一条**已编码**的存档（qid / 连接门 / in-save / outstanding 记账）；成功返回 qid。
+///
+/// **A32**：从 [`save_human_rcd`] 拆出——区 k 只编码，发送仍由区 0 这一条路径完成
+/// （[`drain_zone_saves`] / [`shutdown_save_requests`]），不新开写库路。
+fn send_save_packet(
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    chr_name: &str,
+    packet: &[u8],
 ) -> Option<i32> {
     let w = db.as_mut()?;
     if !w.state.is_connected() {
@@ -15860,10 +15885,8 @@ fn save_human_rcd(
         );
         return None;
     }
-    let rec = build_save_record(saved, chr_name, world, sg, registry);
-    let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
     let qid = w.next_query_id();
-    let frame = dbclient::save_human_rcd_request(qid, &packet);
+    let frame = dbclient::save_human_rcd_request(qid, packet);
     match w.req_tx.send(frame) {
         Ok(()) => {
             // oracle `SaveHumanRcd` 先 `AddToSaveRcdList`（`WorldServer.cs:1091`）；进世界守卫读
@@ -15885,6 +15908,21 @@ fn save_human_rcd(
             None
         }
     }
+}
+
+fn save_human_rcd(
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saved: &SavedHuman,
+    chr_name: &str,
+    world: &mir2_world_bevy::World,
+    sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> Option<i32> {
+    // 保持原口径：DB 未装配 ⇒ 不编码、不记日志。
+    db.as_ref()?;
+    let req = encode_zone_save(saved, chr_name, world, sg, registry);
+    send_save_packet(db, engine, chr_name, &req.packet)
 }
 
 /// 关服存档的**有界等待**上限。
@@ -15923,22 +15961,17 @@ struct ShutdownSaveSummary {
 ///
 /// 与断线路径的差异（照 oracle）：关服**不**做 `DealCancelA`、不 `MakeGhost`、不关用户——
 /// 只是把在线角色的当前实时态写进库，随后进程退出。
-fn shutdown_save_all(
+/// **A32**：关服存档的**收集面**（区 0 与各区 k 共用）。口径同关口函数：按名排序、
+/// 无登入记录底稿跳过并 WRN、**不重置** `save_rcd_tick`、**不查** `InSaveRcdList`。
+fn collect_shutdown_zone_saves(
     sessions: &std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
     world: &mir2_world_bevy::World,
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
-    timeout: std::time::Duration,
-) -> ShutdownSaveSummary {
-    let started = std::time::Instant::now();
-    // 排序只为请求/日志顺序可复现（oracle 的 `PlayObjectList` 是插入序；各存档请求彼此独立，
-    // 落库结果与次序无关）。周期存档同样按名字排序。
+) -> Vec<ZoneSaveRequest> {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
-    let total = names.len();
-    let mut fired_qids = std::collections::HashSet::new();
+    let mut out = Vec::new();
     for name in names {
         let Some(sg) = sessions.get(&name) else {
             continue;
@@ -15951,9 +15984,27 @@ fn shutdown_save_all(
             );
             continue;
         };
-        if let Some(qid) = save_human_rcd(db, engine, saved, &name, world, sg, registry) {
+        out.push(encode_zone_save(saved, &name, world, sg, registry));
+    }
+    out
+}
+
+/// **A32**：关服存档的**发送 + 有界等待**（多区合并后的唯一发送点）。
+///
+/// `registered` = 参与本次关服的**在册会话总数**（含无底稿跳过者），只用于读数。
+fn shutdown_save_requests(
+    requests: Vec<ZoneSaveRequest>,
+    registered: usize,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    timeout: std::time::Duration,
+) -> ShutdownSaveSummary {
+    let started = std::time::Instant::now();
+    let mut fired_qids = std::collections::HashSet::new();
+    for req in &requests {
+        if let Some(qid) = send_save_packet(db, engine, &req.chr_name, &req.packet) {
             fired_qids.insert(qid);
-            glog!("INF", "关服存档触发 ChrName:{name} queryId={qid}");
+            glog!("INF", "关服存档触发 ChrName:{} queryId={qid}", req.chr_name);
         }
     }
     let fired = fired_qids.len();
@@ -15998,12 +16049,26 @@ fn shutdown_save_all(
         }
     }
     ShutdownSaveSummary {
-        sessions: total,
+        sessions: registered,
         fired,
         replied,
         timed_out,
         elapsed: started.elapsed(),
     }
+}
+
+#[cfg(test)]
+fn shutdown_save_all(
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world_bevy::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    timeout: std::time::Duration,
+) -> ShutdownSaveSummary {
+    let requests = collect_shutdown_zone_saves(sessions, saves, world, registry);
+    shutdown_save_requests(requests, sessions.len(), db, engine, timeout)
 }
 
 /// **卡 `openmir2-movefail-log-reason`**：`StepOutcome` → 日志里的 `reason=` 字面量。
@@ -25269,29 +25334,23 @@ fn drain_mag_healing_delivery(
 ///   交易层未移植，且 `MakeSaveRcd` 读的是 `WAbil.HP`（`WorldServer.cs:1247`）⇒ 对存档体无影响。
 /// - oracle 的 `SaveHumanRcd` 里 `IsRobot` 早返回：本宿主不建机器人会话（`RobotProcessor` 未移植）。
 ///
-/// 返回**本轮发起的请求数**（DB 未连接时计时仍已重置——照 oracle 先重置再调用；计数为 0）。
-#[allow(clippy::too_many_arguments)]
-fn drain_periodic_save(
+/// **A32**：周期存档的**收集面**（区 0 与区 k 共用）。语义逐条来自原
+/// [`drain_periodic_save`]：`!playObject.Ghost` 主干、`periodic_save_due` 先重置 tick、
+/// 无登入记录底稿跳过并 WRN。**不含** `engine.is_full()`（DB 侧门，区 k 无 `engine`）。
+fn collect_due_zone_saves(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
     world: &mir2_world_bevy::World,
-    db: &mut Option<DbWiring>,
-    engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
     save_time: i64,
     now: i64,
-) -> usize {
-    // oracle `:698` 的 `!FrontEngine.IsFull()`：`m_SaveRcdList.Count >= int.MaxValue`
-    // （`FrnEngn.cs:120-133`）⇒ 恒 false。查一次与逐角色查等价（本宿主每 tick 调用一次）。
-    if engine.is_full() {
-        return 0;
-    }
+) -> Vec<ZoneSaveRequest> {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     // **B4 #5**：`sort_unstable` 与 `sort` 对互异键逐项同序；本函数虽只每 10 分钟真正存档一次，
     // 但**每个 tick 都会被调用**并做一次键收集+排序（`periodic_save_due` 在循环内）⇒ 省掉每 tick
     // 一次排序临时缓冲分配（N > 20 时）。N 次克隆保留（循环体要 `get_mut`）。
     names.sort_unstable();
-    let mut fired = 0usize;
+    let mut out = Vec::new();
     for name in names {
         // **F2**：oracle `WorldServer.cs:698-703` 的逐角色周期存档**不查** `InSaveRcdList`
         // （那是 `TimedService.cs:234-237` 另一个全局触发器的门）。到点就「先重置 tick、
@@ -25322,15 +25381,42 @@ fn drain_periodic_save(
             );
             continue;
         };
-        if save_human_rcd(db, engine, saved, &name, world, sg, registry).is_some() {
+        out.push(encode_zone_save(saved, &name, world, sg, registry));
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_periodic_save(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world_bevy::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    save_time: i64,
+    now: i64,
+) -> usize {
+    // oracle `:698` 的 `!FrontEngine.IsFull()`：`m_SaveRcdList.Count >= int.MaxValue`
+    // （`FrnEngn.cs:120-133`）⇒ 恒 false。查一次与逐角色查等价（本宿主每 tick 调用一次）。
+    if engine.is_full() {
+        return 0;
+    }
+    let reqs = collect_due_zone_saves(sessions, saves, world, registry, save_time, now);
+    let mut fired = 0usize;
+    for req in reqs {
+        if send_save_packet(db, engine, &req.chr_name, &req.packet).is_some() {
             // oracle `CharacterDataProcessor.cs:85-88`：`SendRequest` 成功后 `RcdSaved = true`
             // ⇒ `WorldServer.cs:592` 的换服门（G11）。周期存档是唯一会保留会话的成功发送路径
             // （断线/小退/顶号随后即删会话）。
-            sg.switch_state.rcd_saved = true;
+            if let Some(sg) = sessions.get_mut(&req.chr_name) {
+                sg.switch_state.rcd_saved = true;
+            }
             fired += 1;
             glog!(
                 "INF",
-                "周期存档触发（SaveHumanRcdTime={save_time}ms）ChrName={name}"
+                "周期存档触发（SaveHumanRcdTime={save_time}ms）ChrName={}",
+                req.chr_name
             );
         }
     }
@@ -36990,6 +37076,7 @@ fn sim_loop(
         ground_sessions,
         pending_local: std::collections::BTreeMap::new(),
         saves,
+        zone_save_outbox: Vec::new(),
         login_tails,
         aoi_frames_total,
         shop_sessions,
@@ -37312,6 +37399,9 @@ struct HostLoop {
     /// `inbound_local_buffer` 按序号合并执行；N=1/区 0 恒空。
     pending_local: std::collections::BTreeMap<u64, PendingLocalCmd>,
     saves: std::collections::HashMap<String, SavedHuman>,
+    /// **A32**：区 k 的周期存档出队（`PERSIST_LOCAL` 段写；区 0 的
+    /// [`drain_zone_saves`] 取走送进程级 DB 链）。区 0 的实例恒空（`ALL` 不含该段）。
+    zone_save_outbox: Vec<ZoneSaveRequest>,
     login_tails: std::collections::HashMap<String, smframe::EnterWorldInputs>,
     aoi_frames_total: std::collections::HashMap<String, usize>,
     shop_sessions: std::collections::HashMap<String, ShopSession>,
@@ -37463,6 +37553,16 @@ impl PhaseSet {
     /// 牙：`m1b_zone_prod_owns_inbound_local_only_in_phase_a`。
     #[allow(dead_code)]
     const M1B_ZONE_PROD: PhaseSet = PhaseSet(Self::M1A_PROD.0 | Self::INBOUND_LOCAL);
+
+    /// **A32**：区 k 的**周期存档**段（只读本区 World/会话 + 编码，零 DB、零 `!Send`）——
+    /// 产出 [`ZoneSaveRequest`] 进 `HostLoop.zone_save_outbox`，由区 0 的
+    /// [`drain_zone_saves`] 统一发送（**不新开写库路**）。区 0（`ALL`）不含本段。
+    const PERSIST_LOCAL: u32 = 1 << 18;
+
+    /// **A32**：区 k 的 rest 段集 = `M1A_PROD | PERSIST_LOCAL`（`M1A_PROD` 的位值本身不变）。
+    /// 只给 [`HostLoop::tick_phase_rest`]；牙 `a32_production_wiring_is_pinned` 钉住驱动侧。
+    #[allow(dead_code)]
+    const M1A_ZONE_REST: PhaseSet = PhaseSet(Self::M1A_PROD.0 | Self::PERSIST_LOCAL);
     #[inline]
     fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
@@ -37627,6 +37727,7 @@ impl HostLoop {
             ground_sessions: std::collections::HashMap::new(),
             pending_local: std::collections::BTreeMap::new(),
             saves: std::collections::HashMap::new(),
+            zone_save_outbox: Vec::new(),
             login_tails: std::collections::HashMap::new(),
             aoi_frames_total: std::collections::HashMap::new(),
             shop_sessions: std::collections::HashMap::new(),
@@ -37883,13 +37984,38 @@ impl HostLoop {
                     host.watch.disarm();
                     host.stop.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
-                let summary = shutdown_save_all(
+                // **A32**：关服存档覆盖**全部区**（区 k 的会话在各自 `ZoneState.host` 里）。
+                // 区 k 的 World/会话由区 0 在**其状态锁内**只读编码（owner-thread 断言只管 tick，
+                // 只读安全）；编码后并入同一条发送 + 有界等待路径（不新开写库路）。
+                let mut shutdown_requests = collect_shutdown_zone_saves(
                     &ground_sessions,
                     &saves,
                     &world,
+                    registry.as_ref(),
+                );
+                let mut shutdown_registered = ground_sessions.len();
+                if let Some(zh) = zone_host.as_ref() {
+                    for state in zh.zone_states.iter().flatten() {
+                        let mut st = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let ZoneState {
+                            host: zone_loop, ..
+                        } = &mut *st;
+                        shutdown_registered += zone_loop.ground_sessions.len();
+                        shutdown_requests.extend(collect_shutdown_zone_saves(
+                            &zone_loop.ground_sessions,
+                            &zone_loop.saves,
+                            &zone_loop.world,
+                            registry.as_ref(),
+                        ));
+                    }
+                }
+                let summary = shutdown_save_requests(
+                    shutdown_requests,
+                    shutdown_registered,
                     &mut db,
                     &mut engine,
-                    registry.as_ref(),
                     SHUTDOWN_SAVE_TIMEOUT,
                 );
                 glog!(
@@ -41085,6 +41211,29 @@ impl HostLoop {
                 now_ms(),
             );
             host_prof.end("HostPersist", t);
+        }
+        // **A32**：区 k 周期存档（只编码、不碰 DB）。产出进 `zone_save_outbox`，由区 0 的
+        // [`drain_zone_saves`] 统一发送；`rcd_saved` 在入队时置位（发送下一 tick 才发生，
+        // 该旗标只服务 G11 换服门，生产 inert）。
+        if phases.has(PhaseSet::PERSIST_LOCAL) {
+            #[cfg(test)]
+            RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::PERSIST_LOCAL));
+            let t = host_prof.begin();
+            let reqs = collect_due_zone_saves(
+                &mut ground_sessions,
+                saves,
+                world,
+                registry.as_ref(),
+                enter_cfg.save_human_rcd_time,
+                now_ms(),
+            );
+            for req in &reqs {
+                if let Some(sg) = ground_sessions.get_mut(&req.chr_name) {
+                    sg.switch_state.rcd_saved = true;
+                }
+            }
+            self.zone_save_outbox.extend(reqs);
+            host_prof.end("HostPersistLocal", t);
         }
         if phases.has(PhaseSet::SWITCH) {
             let svc = proc_svc!(process, PhaseSet::SWITCH, "SWITCH");
@@ -58960,6 +59109,170 @@ break
         }
     }
 
+    /// **A32 牙 ①（区 k 周期存档）**：区 k 的 rest 段集 `M1A_ZONE_REST`（`M1A_PROD | PERSIST_LOCAL`）
+    /// 跑一个 tick ⇒ 到期的本区会话各产**一条** `ZoneSaveRequest` 进 `HostLoop.zone_save_outbox`
+    /// （chr 名正确、载荷可被 DBSvr 侧类型解回）；再跑一个 tick ⇒ **不重复**（tick 已重置）。
+    ///
+    /// 变异（实测）：把 `collect_due_zone_saves` 的 `periodic_save_due` 判定改恒 false（或把
+    /// `PERSIST_LOCAL` 从段集删掉）⇒ 首 tick outbox 0 条 ⇒ 红。
+    #[test]
+    fn zone_periodic_save_enqueues_due_sessions_on_zone_rest() {
+        use mir2_storage::MemPack;
+        let (world, sessions, saves) = two_player_world();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut host = HostLoop::for_zone(zone::ZoneId::new(3), &[(100, 100)], Some(0), &counter);
+        host.world = world;
+        host.ground_sessions = sessions;
+        host.saves = saves;
+        let mut shared = SharedServices::for_test();
+        shared.enter_cfg.save_human_rcd_time = 5_000;
+        let mut process = None;
+        // 只跑 `PERSIST_LOCAL` 段（+ `WORLD_HEAD` 满足 rest 的 rec 契约）。A/B 与其余 rest 段
+        // 不在本牙判据面内：夹具的会话没有真实登录时刻，跑 `AOI_DOWNLINK` 的体力补帧会按
+        // 「现在 − 会话起始」追帧（`two_player_world` 的 `stamina` 基线为 0），与本牙无关。
+        // 生产 phase 组合由静态牙 `a32_production_wiring_is_pinned` 钉住。
+        let phases = PhaseSet(PhaseSet::PERSIST_LOCAL | PhaseSet::WORLD_HEAD);
+        let mut scratch = TickScratch {
+            rec: Some(mir2_world_bevy::TickRecord::default()),
+            ..TickScratch::default()
+        };
+        let _ = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            phases,
+            &mut scratch,
+            std::time::Instant::now(),
+            None,
+        );
+        let mut names: Vec<String> = host
+            .zone_save_outbox
+            .iter()
+            .map(|r| r.chr_name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"], "到期会话各一条（chr 正确）");
+        for req in &host.zone_save_outbox {
+            let rec = mir2_storage::SaveCharacterData::from_bytes(&req.packet)
+                .expect("区 k 周期存档载荷必须可被 DBSvr 侧类型解回");
+            let d = rec
+                .character_data
+                .expect("character_data")
+                .data
+                .expect("data");
+            let want = if req.chr_name == "alpha" {
+                (11, 22, 649)
+            } else {
+                (33, 44, 1300)
+            };
+            assert_eq!(
+                (d.cur_x, d.cur_y, d.gold),
+                want,
+                "实时态 ChrName={}",
+                req.chr_name
+            );
+        }
+        // 第二轮：tick 已重置 ⇒ 不得重复入队。
+        let mut scratch = TickScratch {
+            rec: Some(mir2_world_bevy::TickRecord::default()),
+            ..TickScratch::default()
+        };
+        let _ = host.tick_phase_rest(
+            &mut shared,
+            &mut process,
+            phases,
+            &mut scratch,
+            std::time::Instant::now(),
+            None,
+        );
+        assert_eq!(host.zone_save_outbox.len(), 2, "未到期不得再入队");
+    }
+
+    /// **A32 牙 ②（关服覆盖全部区）**：区 0 会话（alpha/beta）+ 区 k `ZoneState` 里的一条会话
+    /// （gamma）⇒ `collect_shutdown_zone_saves` 各收集一次，`shutdown_save_requests` 对 **3 条**
+    /// 在册会话各发起一次 `DB_SAVEHUMANRCD`（chr 集合含全部三区来源）。
+    ///
+    /// 变异（实测）：生产关服分支只收集区 0（去掉 `zone_states` 循环）⇒ 静态牙
+    /// `a32_production_wiring_is_pinned` 红；本牙保留「多来源合并」的行为面。
+    #[test]
+    fn shutdown_save_requests_covers_zone_k_sessions() {
+        let (world, sessions, saves) = two_player_world();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut state = ZoneState::new(zone::ZoneId::new(3), &[(100, 100)], Some(0), &counter);
+        state
+            .host
+            .ground_sessions
+            .insert("gamma".to_string(), test_session_ground(999));
+        state.host.saves.insert(
+            "gamma".to_string(),
+            SavedHuman {
+                account: "acct-g".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        let (db, mut rx) = shutdown_db_for_test();
+        let mut db = Some(db);
+        let mut engine = load::FrontEngine::new();
+        let mut requests = collect_shutdown_zone_saves(&sessions, &saves, &world, None);
+        requests.extend(collect_shutdown_zone_saves(
+            &state.host.ground_sessions,
+            &state.host.saves,
+            &state.host.world,
+            None,
+        ));
+        let summary = shutdown_save_requests(
+            requests,
+            3,
+            &mut db,
+            &mut engine,
+            std::time::Duration::from_millis(30),
+        );
+        assert_eq!(summary.sessions, 3, "在册会话数含区 0 与区 k");
+        assert_eq!(summary.fired, 3, "每条在册会话各发起一次");
+        let mut chrs = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            chrs.push(save_record_of(&frame).0);
+        }
+        chrs.sort();
+        assert_eq!(chrs, vec!["alpha", "beta", "gamma"], "chr 集合覆盖全部区");
+    }
+
+    /// **A32 静态牙**：生产接缝钉住（改回「只吃区 0」或删区 k 周期段 ⇒ 红）——
+    /// ① 区 k 驱动的 rest 调用必须是 `M1A_ZONE_REST`；② 关服 A32 块必须遍历
+    /// `zone_states.iter().flatten()` 并走 `collect_shutdown_zone_saves` + `shutdown_save_requests`；
+    /// ③ `drain_zone_saves` 必须合并 `host.zone_save_outbox`。
+    #[test]
+    fn a32_production_wiring_is_pinned() {
+        let src = include_str!("lib.rs");
+        let drv = src.find("fn spawn_minimal_zone(").expect("区 k 驱动定义");
+        let drv_end = src[drv..].find("\n}\n").map_or(src.len(), |k| drv + k + 3);
+        let drv_body = &src[drv..drv_end];
+        assert!(
+            drv_body.contains("PhaseSet::M1A_ZONE_REST"),
+            "区 k 的 rest 段集必须含 PERSIST_LOCAL（M1A_ZONE_REST）"
+        );
+        let mark = src.find("// **A32**：关服存档覆盖").expect("关服 A32 标记");
+        let mark_end = src[mark..]
+            .find("SHUTDOWN_SAVE_TIMEOUT,")
+            .map_or(src.len(), |k| mark + k);
+        let sb = &src[mark..mark_end];
+        assert!(sb.contains("collect_shutdown_zone_saves("));
+        assert!(
+            sb.contains("zone_states.iter().flatten()"),
+            "关服必须遍历全部区状态"
+        );
+        assert!(sb.contains("shutdown_save_requests("));
+        let dz = src
+            .find("fn drain_zone_saves(")
+            .expect("drain_zone_saves 定义");
+        let dz_end = src[dz..].find("\n}\n").map_or(src.len(), |k| dz + k + 3);
+        assert!(
+            src[dz..dz_end].contains("zone_save_outbox"),
+            "区 0 排水必须取区 k 的周期存档出队"
+        );
+    }
+
     /// **B4 #1（`shutdown_save_all`）行为牙**：关服存档的**请求发出序**必须严格等于
     /// **名字升序**——这是现状可观测序（契约），与 `HashMap` 迭代序无关。
     ///
@@ -59164,15 +59477,16 @@ break
             .iter()
             .position(|l| l.trim() == "if shutdown.requested() {")
             .expect("sim 循环里的关服守卫行");
+        // **A32**：生产调用点改为多区合并后的唯一发送点 `shutdown_save_requests(`。
         let call = lines
             .iter()
-            .position(|l| l.trim() == "let summary = shutdown_save_all(")
+            .position(|l| l.trim() == "let summary = shutdown_save_requests(")
             .expect("关服存档调用行");
         assert!(
             call > guard,
             "关服存档调用必须在 `shutdown.requested()` 守卫支内"
         );
-        // 生产代码里 `shutdown_save_all(` 的**调用**（非定义/注释）只此一处；
+        // 生产代码里 `shutdown_save_requests(` 的**调用**（非定义/注释）只此一处；
         // 扫描范围截止 `mod tests {`（用例自身也调用它，不能计入生产面）。
         let tests_start = lines
             .iter()
@@ -59182,10 +59496,7 @@ break
             .iter()
             .enumerate()
             .filter(|(i, l)| {
-                *i < tests_start
-                    && (l.trim() == "let summary = shutdown_save_all("
-                        || (l.trim().starts_with("shutdown_save_all(")
-                            && !l.trim_start().starts_with("fn ")))
+                *i < tests_start && l.trim() == "let summary = shutdown_save_requests("
             })
             .map(|(i, _)| i)
             .collect::<Vec<_>>();
