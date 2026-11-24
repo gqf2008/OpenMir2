@@ -12,6 +12,24 @@
 
 ⇒「零假人」成立，但**实体不是 0**；本报告里的 O(实体数) 成本都要按 **~6.6k** 读，不能按「空世界应≈0」读。需要一个「真空世界」基线时，当前**没有** MonGen 关闭开关（读码确认无 env），只能改装置；这是后话。
 
+### 0.1 实体规模事实块（原始行 + 完整路径）
+
+**日志**：`E:/OPC/teststack/rust-root/logs/mir2-server/game-svr.out.log`（该 run 的窗口行；行号按当前文件）
+**perf TSV**：`E:/UserTemp/l25-slice/zone-slice-20261124-202609/perf_counters.tsv`
+**run 元数据**：`E:/UserTemp/l25-slice/zone-slice-20261124-202609/run_identity.json`、`per_zone.json`
+
+| 事实 | 原文行（精确引用） | 位置 |
+| --- | --- | --- |
+| 宿主实体数 6635 | `[INF] [TICKPROF] 窗口 50 tick：整 tick 均值 200.35 ms/tick（墙钟合计 10.02s，实体内 6635，门控 MIR2_TICK_PROFILE=1）` | 上列 log，`12:31:57.668` |
+| SimMonsterAi 扫描 6480 / 6 616 | `counts/tick：slot 6616，scanned 6480（inactive 6480），throttle-skip 4322，ran 2158（dead 0 / frozen 159 / no-target 2151 / idle-wander 2151 / walk-due 884 …` | 上列 log，`12:31:57.675` |
+| 区 1 MonGen 全过滤 | `[INF] 区 1 静态装载完成：MonGen 0/2827 条（过滤 2827）；商人 1（解析前过滤 130）；固定 NPC 0/3 条（挂图 0）；守卫 0/49 条（放置 0）` | 上列 log，`12:26:15.744` |
+| 镜像**已启用** | `[INF] L2-5 ② 镜像已启用（MIR2_ZONE_MIRROR=1）：barrier1 之后、AOI 之前用邻区本 tick 快照刷新镜像（每区 id 段 ⇒ 同一全局 ActorId）` | 上列 log，`12:26:15.187` |
+| 区 0 **不发起**跨界移动 | `[WRN] 区 0 多 span（或多段边界不明）⇒ 不设 handoff 边界（区 0 不发起跨界移动）` | 上列 log，`12:26:15.273` |
+| 镜像 / handoff 活动全 0 | perf TSV 首数据行（tick 0）列 `handoff_offered/accepted/refused/promoted/inserted_fresh/dup_dropped=0`、`mirror_shadowed_by_local/static/handoff=0`、`mirror_write_refused_cell/occupied=0`、`mirror_own_segment_ids=0`、`handoff_fresh_own_segment=0`；同列 `zone_metrics.handoff={"canceled_trades":0,"session_failed":0,"session_moved":0,"target_display_missing":0}` | 上列 TSV 第 1 数据行 |
+| 区 1 在等宿主 | `per_zone.json` 区 1 `barrier`：`p50=199929`（µs）、`mean=199976.9` | `E:/UserTemp/l25-slice/zone-slice-20261124-202609/per_zone.json` |
+
+**镜像数 / `handoff_pending` 数本身没有导出**（没有对应 TSV 列或日志行）：镜像只有「shadowed/refused」事件计数；handoff 只有 `offered/accepted/refused/promoted`。可用的**构造级**代理是：区 0 不设 handoff 边界 ⇒ 宿主 `handoff_pending ≡ 0`；区 1 无怪（MonGen 全过滤）⇒ 邻区快照里的实体只有极少数静态项，镜像集合必然很小。**真正的计数需要 §4 的仪表**（`mirror_count` / `handoff_pending_count`），这也是为什么结论是「先加仪表」。
+
 另：`per_zone.json` 区 1 `barrier p50 = 199929 µs`（≈200ms）——**区 1 在等宿主**，不是区 1 自己算 200ms；宿主是慢的一侧。
 
 ## 1. 段边界与调用序列（按代码顺序）
@@ -42,7 +60,7 @@
 7. `ops.after_phase2(beat)`（心跳 + barrier2 + `note_region_barrier_us_for_zone`）
 8. `handoff::HandoffRuntime::after_phase2(&mut world, tick)`（`handoff.rs`）
 
-## 2. 逐项：空载为什么仍耗时
+## 2. 逐项：这个实体规模下为什么仍耗时
 
 ### 2.1 三个「全实体扫描」（每 tick × 每区各一次）
 
@@ -60,7 +78,14 @@
 - `World.OutputAoi`：0.88 ms/tick（同样 6.6k 实体，但走 SlotTable + 单 archetype 视图）。
 - `World.SimMonsterAi`：4.98 ms/tick（6.6k inactive 怪的 collect+gate），属 tick 前半（`HostWorldHead`），不在本段。
 
-### 2.3 固定开销 / 分配
+### 2.3 单位实体口径（把 76.0 ms 换算成可比较的量）
+
+`76.001 ms / 6635 实体 ≈ 11.46 µs/实体/tick`。**这不是单次扫描成本**：它是本段对「每 tick 全部实体」
+做**多轮**扫描（S-a/S-b/S-c 至少三轮，另加各 World 段自己的 O(N) 遍历）的**合计**。换算用途只在于：
+改实体规模（如 10k 目标里玩家也是实体）时，这些扫描按 O(N)×轮数 近似放大——这正是本卡要盯「每 tick 固定成本」
+之外的真正风险：**它不是与负载无关的常数，而是随实体数线性膨胀的基数**。
+
+### 2.4 小项开销 / 分配（与实体数弱相关）
 
 - `snapshot_zone_border`：每 tick `HaloSnapshot` + `entities Vec` 新建；`exchange.publish` 再 `clone()` 一次（band 小时小）。
 - `apply_mirrors`：每 tick `HashSet` + `ordered: Vec<&HaloEntity>` + **`sort_by_key`**（邻居带实体数 k；空载 k≈1）。
@@ -68,7 +93,7 @@
 - `tick_tail_aoi`：`self.last_tick = record.clone()`（`aoi_order` ≈ 6.6k 个 id 的 Vec + 其它小向量；µs 级）。
 - `zone_mirror_diag::maybe_write_world`：env 未设 ⇒ **不**调 `mirror_ids()`（有牙），可忽略。
 
-### 2.4 对账缺口
+### 2.5 对账缺口
 
 窗口日志自带对账行：
 
@@ -76,7 +101,7 @@
 对账：HostWorldHead+HostWorldTail = 106.613 ms/tick；ΣWorld.* = 9.599 ms/tick；宿主附加（专用怪产仔/ref 等）= 97.015 ms/tick
 ```
 
-即 **97 ms 在 `HostWorldHead`/`HostWorldTail` 的宿主侧代码里、不在任何 World 段计时内**。本段内的宿主侧代码就是 §1 的 2/3/4/5/7/8 六个调用；其中 S-a/S-b/S-c 三次全表扫与 `apply_mirrors` 的排序/分配是唯一的 O(6.6k) 候选。**代码事实能把「为什么 O(实体)」说清，但无法仅凭读码把 67.6 ms 按调用拆开**——缺的正是 2/3/4/5/7/8 的段计时（§4）。
+即 **97 ms 在 `HostWorldHead`/`HostWorldTail` 的宿主侧代码里、不在任何 World 段计时内**（这是「约 6635 实体规模下的每 tick 成本」，不是「与负载无关的固定成本」）。本段内的宿主侧代码就是 §1 的 2/3/4/5/7/8 六个调用；其中 S-a/S-b/S-c 三次全表扫与 `apply_mirrors` 的排序/分配是唯一的 O(6.6k) 候选。**代码事实能把「为什么 O(实体)」说清，但无法仅凭读码把 67.6 ms 按调用拆开**——缺的正是 2/3/4/5/7/8 的段计时（§4）。
 
 ## 3. 可疑项排序（按「空载可避免的浪费」）
 
@@ -111,11 +136,19 @@ oracle 语义要求、不能动的：快照**内容/顺序**、镜像清扫**结
 
 ## 5. 结论
 
-**「需要先加仪表才能判断」**（三选一里的第三项）——不是「不建议动」，也不是现在就能承诺收益：
+**「需要先加仪表才能判断」**（三选一里的第三项），按**两段式**走：
 
-- 代码事实足以指出**三个每 tick 全实体扫描**（S-a/S-b/S-c，其中两个空载纯浪费）与已知的「完整 `EntityRef` 构造贵」先例（AOI 的 T10 Top2），并且 97ms 的宿主附加只能落在这些调用里；
-- 但读码**分不出** 67.6 ms 在 S-a/S-b/S-c 各占多少，也没有「真空世界」基线（本次 idle 有 ~6.6k 怪）。
-- **前两项候选（S-b/S-c）无论如何都值得做**：空载语义下不需要全表扫，修法不改变任何可观测结果；若仪表确认它们是主要项，预期能把空载 HostWorldTail 从 ~67ms 降到「S-a 一项 + 小项」的量级。
+1. **先加仪表定量**：由 `a7` 出 instrumented 版，在空闲窗口跑 360s，回答「S-a/S-b/S-c 三个全实体扫描
+   各占多少毫秒、各自扫了多少实体」。本报告 §4 已给出 7 个段 + 3 个计数的落点；在此之前，任何
+   「先删哪一段」的排序都只是代码推测，不是读数。
+2. **再按占比决定优化顺序**：`mirror_ids` 清理（S-b）与 `handoff` 扫描（S-c）即便占比不高也值得做——
+   空载/无镜像/无 pending 时它们是**纯浪费的全表扫**；但**必须先由仪表确认它们没有承担别的语义**
+   （例如 S-b 的清扫是否还承担了「邻区快照过期」的兜底、S-c 的扫描是否还承担了 pending 集合的公平性），
+   再按「语义零风险 → 需要两区对拍牙 → 大改」的顺序动手。
+
+补充：代码事实足以指出这三个扫描与「完整 `EntityRef` 构造贵」的先例（AOI 的 T10 Top2），也解释了
+为什么 97ms 只能落在宿主侧；但读码**分不出** 67.6 ms 在三者之间的分配，本次 idle 也没有「真空世界」
+基线（有 ~6.6k 实体）。所以结论是待仪表，而不是现在就承诺收益。
 
 ## 6. 边界
 
