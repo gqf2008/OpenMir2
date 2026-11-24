@@ -25,6 +25,13 @@
 // 合并进 lib 后，把 crate 自身绑成同名，使这些路径与 `crate::xxx` 等价。
 extern crate self as game_svr;
 
+/// **A43e**：全局分配器 = mimalloc（每线程堆，绕开 Windows 进程堆的跨线程临界区）。
+/// 依据（2026-11-25，8 区 / 1000 人）：区线程执行段 `cpu ≈ wall`（93.75 vs 96.7 ms）而
+/// 跨区总量恒定 ≈370 事件/tick ⇒ 单价随**线程数**上升 ⇒ 分配器跨线程争用是本次容量瓶颈。
+/// **只换分配器，不改任何业务语义**；放在 lib 而不是 `main.rs`，以保持 main 的薄包装门原样。
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// **L2-5 ⑤**：跨区收件人帧的邮箱与排水（详见模块头）。
 mod cross_zone_frames;
 /// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`；卡 `openmir2-visiblehumanlist-cache`）。
