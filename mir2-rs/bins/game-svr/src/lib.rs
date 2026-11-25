@@ -22971,7 +22971,7 @@ mod aoi_dl_probe {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     thread_local! {
-        static ACC: Cell<[u64; 6]> = const { Cell::new([0; 6]) };
+        static ACC: Cell<[u64; 12]> = const { Cell::new([0; 12]) };
     }
     static CALLS: AtomicU64 = AtomicU64::new(0);
 
@@ -23004,14 +23004,18 @@ mod aoi_dl_probe {
     }
 
     /// 行格式（纯函数；单测直接断言字段齐全、单位 µs）。
-    pub(super) fn line(n: u64, hides: u64, sent: u64, a: [u64; 6]) -> String {
+    pub(super) fn line(n: u64, hides: u64, sent: u64, a: [u64; 12]) -> String {
         format!(
-            "[AOI_DL] n={n} hides={hides} sent={sent} kind_us={} online_us={} route_us={} build_us={} send_us={}",
+            "[AOI_DL] n={n} hides={hides} sent={sent} kind_us={} online_us={} route_us={} build_us={} send_us={} disappear_wall_us={} disappear_cpu_us={} run_wall_us={} run_cpu_us={}",
             a[0] / 1000,
             a[1] / 1000,
             a[2] / 1000,
             a[3] / 1000,
-            a[4] / 1000
+            a[4] / 1000,
+            a[6] / 1000,
+            a[7] / 1000,
+            a[8] / 1000,
+            a[9] / 1000
         )
     }
 
@@ -23023,7 +23027,7 @@ mod aoi_dl_probe {
         }
         let a = ACC.with(|c| {
             let v = c.get();
-            c.set([0; 6]);
+            c.set([0; 12]);
             v
         });
         // 每 tick 一行（`n` = 第几次调用）；相位单位 ns → µs。
@@ -23039,6 +23043,14 @@ fn drain_aoi_disappear_with_counts(
 ) -> (usize, DisappearObserverCounts) {
     let mut sent = 0usize;
     let mut counts = DisappearObserverCounts::default();
+    // **A43n 续**：本段**墙钟 vs 线程 CPU**（`wall−cpu` = 等待/被抢占）。关闭态不取钟。
+    let seg_on = aoi_dl_probe::enabled();
+    let seg_w0 = seg_on.then(std::time::Instant::now);
+    let seg_c0 = if seg_on {
+        crate::thread_cpu::now_us()
+    } else {
+        None
+    };
     for (i, (observer_id, target_id)) in rec.hides.iter().enumerate() {
         // **离开差分的观察者类别解析**：`hide_observer_kinds` 与 `hides` **同序同长**
         // （产生点 `aoi.rs` 同一循环内成对 push）⇒ 按下标直取 O(1)（旧实现每 hide 线性扫 ⇒ O(H²)）。
@@ -23105,6 +23117,12 @@ fn drain_aoi_disappear_with_counts(
         tick_profile::probe_end(&mut prof, "HostAoiLeaveEnqueue", t_enq);
         sent += 1;
         counts.emitted += 1;
+    }
+    if let Some(w0) = seg_w0 {
+        aoi_dl_probe::add(6, u64::try_from(w0.elapsed().as_nanos()).unwrap_or(0));
+        if let (Some(c0), Some(c1)) = (seg_c0, crate::thread_cpu::now_us()) {
+            aoi_dl_probe::add(7, c1.saturating_sub(c0) * 1000);
+        }
     }
     if aoi_dl_probe::enabled() {
         aoi_dl_probe::flush(rec.hides.len() as u64, u64::try_from(sent).unwrap_or(0));
@@ -42949,6 +42967,14 @@ impl HostLoop {
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::AOI_DOWNLINK));
             let t = host_prof.begin();
+            // **A43n 续**：父段 `HostAoiDownlink` 的 wall/cpu 采样（只读诊断；关闭态不取钟）。
+            let run_on = aoi_dl_probe::enabled();
+            let run_w0 = run_on.then(std::time::Instant::now);
+            let run_c0 = if run_on {
+                crate::thread_cpu::now_us()
+            } else {
+                None
+            };
             // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
             // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
             // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
@@ -42978,6 +43004,12 @@ impl HostLoop {
             );
             for (chr, n) in aoi_frames_this_tick {
                 *aoi_frames_total.entry(chr).or_insert(0) += n;
+            }
+            if let Some(w0) = run_w0 {
+                aoi_dl_probe::add(8, u64::try_from(w0.elapsed().as_nanos()).unwrap_or(0));
+                if let (Some(c0), Some(c1)) = (run_c0, crate::thread_cpu::now_us()) {
+                    aoi_dl_probe::add(9, c1.saturating_sub(c0) * 1000);
+                }
             }
             host_prof.end("HostAoiDownlink", t);
         }
@@ -146432,7 +146464,14 @@ mod a43m_disappear_kind_lookup_tests {
 mod a43n_aoi_dl_probe_tests {
     #[test]
     fn aoi_dl_line_formats_all_phases_in_micros() {
-        let line = crate::aoi_dl_probe::line(7, 1550, 1498, [1_000, 2_000, 3_000, 4_000, 5_000, 0]);
+        let line = crate::aoi_dl_probe::line(
+            7,
+            1550,
+            1498,
+            [
+                1_000, 2_000, 3_000, 4_000, 5_000, 0, 6_000, 7_000, 8_000, 9_000, 0, 0,
+            ],
+        );
         assert!(line.starts_with("[AOI_DL] "), "{line}");
         assert!(line.contains("n=7"), "{line}");
         assert!(line.contains("hides=1550"), "{line}");
@@ -146442,6 +146481,10 @@ mod a43n_aoi_dl_probe_tests {
         assert!(line.contains("route_us=3"), "{line}");
         assert!(line.contains("build_us=4"), "{line}");
         assert!(line.contains("send_us=5"), "{line}");
+        assert!(line.contains("disappear_wall_us=6"), "{line}");
+        assert!(line.contains("disappear_cpu_us=7"), "{line}");
+        assert!(line.contains("run_wall_us=8"), "{line}");
+        assert!(line.contains("run_cpu_us=9"), "{line}");
         // 关闭态：默认 env 未设 ⇒ enabled() 为 false（本进程未设 MIR2_AOI_DL_PROBE）。
         if std::env::var("MIR2_AOI_DL_PROBE").is_err() {
             assert!(!crate::aoi_dl_probe::enabled(), "未设 env ⇒ 探针必须关闭");
