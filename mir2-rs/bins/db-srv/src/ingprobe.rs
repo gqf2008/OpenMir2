@@ -201,13 +201,16 @@ pub fn by_ident_line(
 /// 循环层摘要：`sum_service / wall` 与 idle。
 #[must_use]
 pub fn loop_line(sum_service_ms: u64, wall_ms: u64, idle_ms: u64, in_flight_max: u64) -> String {
-    let ratio = if wall_ms == 0 {
+    // 不变式：墙钟不可能短于累计服务时间（`Instant` 边界/取整会让它差几毫秒）；
+    // 这里把 `wall` 夹到 `sum` 之上，保证 `ratio_permille ∈ [0, 1000]`。
+    let wall = wall_ms.max(sum_service_ms);
+    let ratio = if wall == 0 {
         0
     } else {
-        sum_service_ms.saturating_mul(1000) / wall_ms
+        sum_service_ms.saturating_mul(1000) / wall
     };
     format!(
-        "[DBSEL_ING] loop sum_service_ms={sum_service_ms} wall_ms={wall_ms} ratio_permille={ratio} idle_ms={idle_ms} in_flight_max={in_flight_max}"
+        "[DBSEL_ING] loop sum_service_ms={sum_service_ms} wall_ms={wall} ratio_permille={ratio} idle_ms={idle_ms} in_flight_max={in_flight_max}"
     )
 }
 
@@ -255,7 +258,7 @@ fn emit_totals() {
     }
     log::info(&loop_line(
         SUM_SERVICE_MS.load(Ordering::Relaxed),
-        ms_since_start(*start()) as u64,
+        start().elapsed().as_millis() as u64,
         IDLE_MS.load(Ordering::Relaxed),
         IN_FLIGHT_MAX.load(Ordering::Relaxed),
     ));
@@ -523,6 +526,20 @@ mod tests {
         assert!(b.contains("p90_ms≈31"));
         let l = loop_line(1203, 2410, 1207, 1);
         assert!(l.contains("ratio_permille=499"), "{l}");
+        // 牙：`wall >= sum_service` 且 `ratio_permille ∈ [0,1000]`（含时钟边界导致的
+        // `sum > wall` 输入）。
+        for (sum, wall) in [(1203u64, 2410u64), (1203, 500), (0, 0), (5, 5)] {
+            let line = loop_line(sum, wall, 0, 1);
+            let get = |k: &str| -> u64 {
+                line.split_whitespace()
+                    .find_map(|f| f.strip_prefix(k).and_then(|v| v.parse().ok()))
+                    .unwrap_or(u64::MAX)
+            };
+            let w = get("wall_ms=");
+            let r = get("ratio_permille=");
+            assert!(w >= sum, "wall>=sum: {line}");
+            assert!(r <= 1000, "ratio<=1000: {line}");
+        }
         let t = totals_line(1, 4, 2, 0, 0, 0, 0);
         assert!(t.contains("accepted_total=1"));
         assert!(t.contains("dispatched_total=2"));
