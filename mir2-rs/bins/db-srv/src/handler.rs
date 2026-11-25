@@ -103,6 +103,86 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     Ok(())
 }
 
+/// 包一次 DB 调用并累加 `db_ms`（探针关闭态零开销直通）。
+async fn timed_db<T>(
+    probe: &mut Option<&mut crate::dbprobe::Acc>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    if probe.is_none() {
+        return fut.await;
+    }
+    let t = std::time::Instant::now();
+    let v = fut.await;
+    let ms = crate::dbprobe::ms_since(t);
+    if let Some(p) = probe.as_mut() {
+        p.db_ms = p.db_ms.saturating_add(ms);
+    }
+    v
+}
+
+/// `CM_SELCHR` 一支：会话校验 → `select_chr` →（探针开启时）打一行 `[DBSEL]`。
+async fn handle_selchr(
+    server: &Arc<Server>,
+    db: &Db,
+    remote_ip: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    u: &mut GateUser,
+    body: &[u8],
+) -> Result<()> {
+    if !u.chr_queryed {
+        log::warn(&format!(
+            "Double send SELCHR {}/{}",
+            String::from_utf8_lossy(&u.account),
+            String::from_utf8_lossy(&u.user_ip)
+        ));
+        return Ok(());
+    }
+    // `[DBSEL]` 探针（`MIR2_DBSEL_PROBE=1`；关闭态只多读一次 OnceLock）
+    let probe_on = crate::dbprobe::enabled();
+    let probe_t0 = probe_on.then(crate::dbprobe::start);
+    let lock_t = probe_on.then(crate::dbprobe::start);
+    let session_ok = !u.account.is_empty()
+        && server
+            .login
+            .lock()
+            .await
+            .check_session(&u.account, u.session_no);
+    let lock_ms = lock_t.map_or(0, crate::dbprobe::ms_since);
+    if !session_ok {
+        out_of_connect(tx, u);
+        return Ok(());
+    }
+    let mut acc = crate::dbprobe::Acc {
+        lock_ms,
+        ..crate::dbprobe::Acc::default()
+    };
+    if probe_on {
+        acc.wait_ms = probe_t0
+            .map_or(0, crate::dbprobe::ms_since)
+            .saturating_sub(lock_ms);
+        acc.pool_ms = db.probe_pool_ms().await;
+    }
+    let ok = select_chr(
+        server,
+        db,
+        remote_ip,
+        tx,
+        u,
+        body,
+        if probe_on { Some(&mut acc) } else { None },
+    )
+    .await?;
+    if ok {
+        u.chr_selected = true;
+    }
+    if let Some(t0) = probe_t0 {
+        acc.total_ms = crate::dbprobe::ms_since(t0);
+        let (_, name) = user::account_and_name(body);
+        crate::dbprobe::note(&acc, &decode(&name), ok);
+    }
+    Ok(())
+}
+
 /// `DeCodeUserMsg` 的四个命令（其余消息号 C# 侧也是 default 静默忽略）。
 pub(crate) async fn dispatch(
     server: &Arc<Server>,
@@ -178,27 +258,7 @@ pub(crate) async fn dispatch(
             }
         }
         x if x == CM_SELCHR => {
-            if u.chr_queryed {
-                if !u.account.is_empty()
-                    && server
-                        .login
-                        .lock()
-                        .await
-                        .check_session(&u.account, u.session_no)
-                {
-                    if select_chr(server, db, remote_ip, tx, u, &packet.body).await? {
-                        u.chr_selected = true;
-                    }
-                } else {
-                    out_of_connect(tx, u);
-                }
-            } else {
-                log::warn(&format!(
-                    "Double send SELCHR {}/{}",
-                    String::from_utf8_lossy(&u.account),
-                    String::from_utf8_lossy(&u.user_ip)
-                ));
-            }
+            handle_selchr(server, db, remote_ip, tx, u, &packet.body).await?;
         }
         _ => {}
     }
@@ -594,6 +654,7 @@ async fn select_chr(
     tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     u: &mut GateUser,
     body: &[u8],
+    mut probe: Option<&mut crate::dbprobe::Acc>,
 ) -> Result<bool> {
     let (account, name) = user::account_and_name(body);
     let name_text = decode(&name);
@@ -603,8 +664,9 @@ async fn select_chr(
         // oracle `bool result` 同理粘性：全部 `GetBy` 失败（Open 失败）时跳过、继续走
         // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
         let mut result = false;
-        for q in db.find_by_account(&account).await {
-            let rec = match db.record_get_by(q.index).await {
+        let quicks = timed_db(&mut probe, db.find_by_account(&account)).await;
+        for q in quicks {
+            let rec = match timed_db(&mut probe, db.record_get_by(q.index)).await {
                 Ok(rec) => {
                     if q.index <= 0 {
                         result = false;
@@ -631,7 +693,7 @@ async fn select_chr(
                 rec.selected = 1;
                 // C# `UpdateBy` → `UpdateRecord` 内部 catch：写失败被吞、继续回 STARTPLAY
                 // （LB-05 的真实差异格：索引 UPDATE 失败但 characters SELECT 正常）。
-                if let Err(e) = db.record_update_by(&rec).await {
+                if let Err(e) = timed_db(&mut probe, db.record_update_by(&rec)).await {
                     log::error(&format!(
                         "选择角色[{}]：写入 SelectID 失败（C# UpdateBy 吞异常、照常回 STARTPLAY）: {e:#}",
                         show(&name)
@@ -639,7 +701,7 @@ async fn select_chr(
                 }
             } else if rec.selected == 1 {
                 rec.selected = 0;
-                if let Err(e) = db.record_update_by(&rec).await {
+                if let Err(e) = timed_db(&mut probe, db.record_update_by(&rec)).await {
                     log::error(&format!(
                         "选择角色[{}]：清除 SelectID 失败（C# UpdateBy 吞异常）: {e:#}",
                         show(&name)
@@ -647,10 +709,11 @@ async fn select_chr(
                 }
             }
         }
-        if let Some(index) = db.data_index(&name_text).await {
+        let data_index = timed_db(&mut probe, db.data_index(&name_text)).await;
+        if let Some(index) = data_index {
             // C# `PlayDataStorage.Query` 对 `Open` 失败/读异常都返回 null ⇒ `chrRecord.ChrName`
             // NRE ⇒ 不回包（与 Rust Err 上抛/None 走 bail 同形；这里不降级）。
-            match db.query_name_and_map(index).await? {
+            match timed_db(&mut probe, db.query_name_and_map(index)).await? {
                 None => bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）"),
                 Some((chr_name, map)) => {
                     if !chr_name.is_empty() {
