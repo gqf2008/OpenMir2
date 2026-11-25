@@ -48,9 +48,7 @@ static CONNS: OnceLock<Mutex<HashMap<usize, Conn>>> = OnceLock::new();
 
 /// 探针是否打开（进程内只读一次 `MIR2_DBSEL_ING`）。
 pub fn enabled() -> bool {
-    *ENABLED.get_or_init(|| {
-        std::env::var("MIR2_DBSEL_ING").is_ok_and(|v| v == "1")
-    })
+    *ENABLED.get_or_init(|| std::env::var("MIR2_DBSEL_ING").is_ok_and(|v| v == "1"))
 }
 
 fn start() -> &'static Instant {
