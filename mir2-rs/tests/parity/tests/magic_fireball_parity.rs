@@ -4279,56 +4279,76 @@ fn real_rust_ledger_windtebo() {
     );
 }
 
-/// **MG-10 边界覆盖守卫（2026-11-25）**：`fireball.json` 的三支必须真的压在 AntiMagic 的**等号边界**上。
+/// AntiMagic 等号边界覆盖守卫的共用体（MG-10 / MG-11 各一份 golden）。
 ///
 /// oracle（`MagicManager.cs:180`）是 `AntiMagic <= Random(10)`，Rust `anti_magic_roll` 是
-/// `random_below(10) >= anti_magic` —— **等号通过**。本守卫钉住 golden 三支的首抽与阈值关系：
-/// - `miss`：`Rng[0] < anti_magic`（不过）且 HP 不变；
-/// - `edge`：`Rng[0] == anti_magic`（**等号**，过）且 HP 下降；
-/// - `hit`：`Rng[0] > anti_magic`（过）且 HP 下降。
+/// `random_below(10) >= anti_magic` —— **等号通过**。断言 golden 三支的首抽与阈值关系：
+/// `miss`：`Rng[0] < anti_magic` 且 HP 不变；`edge`：`Rng[0] == anti_magic`（等号）且 HP 下降；
+/// `hit`：`Rng[0] > anti_magic` 且 HP 下降。
 ///
-/// 为什么需要：等号边界是「`>=` 写成 `>`（或 `<=` 写成 `<`）」这类变异的唯一判据；
-/// golden 若在重出时丢了这个边界（三支全 `>`），产品侧把等号改坏的变异就不会再被任何用例咬住。
-#[test]
-fn fireball_golden_antimagic_boundary_is_covered() {
-    let g = golden();
-    let cases = as_array(&g, "cases").expect("cases");
+/// 为什么需要：等号边界是「`>=` 写成 `>`」这类变异的唯一判据；golden 重出时若丢了这个边界
+/// （三支全 `>`），产品侧把等号改坏的变异就再也咬不住。
+fn assert_antimagic_boundary(g: &Value, stem: &str) {
+    let cases = as_array(g, "cases").expect("cases");
     let mut checked = 0;
     for case in cases {
         let label = case.get("Label").and_then(Value::as_str).unwrap_or("?");
         let anti = case
             .pointer("/Fixture/anti_magic")
             .and_then(Value::as_i64)
-            .unwrap_or_else(|| panic!("[{label}] 缺 Fixture.anti_magic"));
+            .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 Fixture.anti_magic"));
         let draw = as_array(case, "Rng")
             .expect("Rng")
             .first()
             .and_then(Value::as_i64)
-            .unwrap_or_else(|| panic!("[{label}] Rng 空：首抽必须是 AntiMagic 骰"));
+            .unwrap_or_else(|| panic!("[{stem}/{label}] Rng 空：首抽必须是 AntiMagic 骰"));
         let before = case
             .get("TargetHpBefore")
             .and_then(Value::as_i64)
-            .unwrap_or_else(|| panic!("[{label}] 缺 TargetHpBefore"));
+            .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 TargetHpBefore"));
         let after = case
             .get("TargetHp")
             .and_then(Value::as_i64)
-            .unwrap_or_else(|| panic!("[{label}] 缺 TargetHp"));
+            .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 TargetHp"));
         match label {
             "miss" => {
-                assert!(draw < anti, "[miss] 首抽 {draw} 必须 < anti_magic {anti}");
-                assert_eq!(before, after, "[miss] HP 必须不变");
+                assert!(
+                    draw < anti,
+                    "[{stem}/{label}] 首抽 {draw} 必须 < anti_magic {anti}"
+                );
+                assert_eq!(before, after, "[{stem}/{label}] HP 必须不变");
             }
             "edge" => {
-                assert_eq!(draw, anti, "[edge] 首抽必须恰好等于 anti_magic（等号边界）");
-                assert!(after < before, "[edge] 过了等号边界必须掉血");
+                assert_eq!(
+                    draw, anti,
+                    "[{stem}/{label}] 首抽必须恰好等于 anti_magic（等号边界）"
+                );
+                assert!(after < before, "[{stem}/{label}] 过了等号边界必须掉血");
             }
             "hit" => {
-                assert!(draw > anti, "[hit] 首抽 {draw} 必须 > anti_magic {anti}");
-                assert!(after < before, "[hit] 必须掉血");
+                assert!(
+                    draw > anti,
+                    "[{stem}/{label}] 首抽 {draw} 必须 > anti_magic {anti}"
+                );
+                assert!(after < before, "[{stem}/{label}] 必须掉血");
             }
-            other => panic!("未知 case label {other:?}（本守卫只认 miss/edge/hit）"),
+            other => {
+                panic!("[{stem}/{label}] 未知 case label {other:?}（本守卫只认 miss/edge/hit）")
+            }
         }
         checked += 1;
     }
-    assert_eq!(checked, 3, "三支（miss/edge/hit）必须齐全");
+    assert_eq!(checked, 3, "[{stem}] 三支（miss/edge/hit）必须齐全");
+}
+
+/// **MG-10 边界覆盖守卫（2026-11-25）**：`fireball.json`（id=1）三支压在 AntiMagic 等号边界上。
+#[test]
+fn fireball_golden_antimagic_boundary_is_covered() {
+    assert_antimagic_boundary(&golden(), "fireball");
+}
+
+/// **MG-11 边界覆盖守卫（2026-11-25）**：`fireball-5.json`（id=5，与 id=1 共用实现臂）同口径。
+#[test]
+fn fireball5_golden_antimagic_boundary_is_covered() {
+    assert_antimagic_boundary(&golden_file("fireball-5.json"), "fireball-5");
 }
