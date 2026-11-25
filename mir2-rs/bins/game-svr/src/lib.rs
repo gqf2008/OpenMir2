@@ -22926,6 +22926,23 @@ fn skip_observer_dbg_lines(counts: &DisappearObserverCounts) -> Vec<String> {
 ///
 /// **缺标注 ⇒ 按 `Player` 处理**（fail-safe loud）：漏标/旧构造不得把玩家缺失静音成
 /// 「非玩家/克隆体预期噪声」。顺序不是契约，按二元组查而非下标对齐。
+/// **A43m**：按**下标**取离开类别（O(1)）；下标项与请求的 `(observer,target)` 不符时
+/// **回退**线性查找 [`hide_observer_kind`]（长度错位属产生侧缺陷，fail-safe 仍取到正确类别）。
+///
+/// 不变式：`hide_observer_kinds` 与 `hides` **同序同长**（产生点在 `aoi.rs` 同一循环内
+/// 成对 push）。旧实现每个 hide 线性扫一遍 ⇒ O(H²)/tick。
+fn disappear_kind_at(
+    rec: &mir2_world_bevy::TickRecord,
+    i: usize,
+    observer_id: i32,
+    target_id: i32,
+) -> mir2_world_bevy::HideObserverKind {
+    match rec.hide_observer_kinds.get(i) {
+        Some(&(o, t, kind)) if o == observer_id && t == target_id => kind,
+        _ => hide_observer_kind(rec, observer_id, target_id),
+    }
+}
+
 fn hide_observer_kind(
     rec: &mir2_world_bevy::TickRecord,
     observer_id: i32,
@@ -22952,12 +22969,15 @@ fn drain_aoi_disappear_with_counts(
 ) -> (usize, DisappearObserverCounts) {
     let mut sent = 0usize;
     let mut counts = DisappearObserverCounts::default();
-    for (observer_id, target_id) in &rec.hides {
-        // **离开差分的观察者类别解析**：`hide_observer_kind` 在 `rec.hide_observer_kinds`
-        // 上线性查找（与 `rec.hides` 同序，故第 i 条命中在第 i 位）——本探针用于量化
-        // 「每 hide 一次查找」的 O(H×H) 形态。
+    for (i, (observer_id, target_id)) in rec.hides.iter().enumerate() {
+        // **离开差分的观察者类别解析**：`hide_observer_kinds` 与 `hides` **同序同长**
+        // （产生点 `aoi.rs` 同一循环内成对 push）⇒ 按下标直取 O(1)。
+        // 旧实现是**每个 hide 线性扫一遍** `hide_observer_kinds`（O(H²)/tick，实测 W-B 下
+        // `HostAoiDisappear` 占总 tick 的 ~56%，其中绝大部份是这条查找）。
+        // **不变式守卫**：下标项必须与本条 `(observer, target)` 相等，否则回退线性查找
+        // （长度错位属产生侧缺陷，fail-safe 仍取到正确类别）。
         let t_kind = tick_profile::probe_begin(&prof);
-        let kind = hide_observer_kind(rec, *observer_id, *target_id);
+        let kind = disappear_kind_at(rec, i, *observer_id, *target_id);
         tick_profile::probe_end(&mut prof, "HostAoiLeaveKind", t_kind);
         match kind {
             mir2_world_bevy::HideObserverKind::NonPlayer => {
@@ -146272,5 +146292,50 @@ mod a43j_slow_event_log_tests {
         perf_counters::reset_slow_event_limiter();
         assert!(!perf_counters::maybe_log_slow_event(3030, "p", 0, 900, 999));
         perf_counters::set_slow_event_us(0);
+    }
+}
+
+/// **A43m 牙**：离开类别按**下标**直取（O(1)）必须与线性查找**逐条同值**；下标错位/越界时
+/// 回退线性查找（fail-safe）。旧实现每条 hide 都线性扫一遍 ⇒ O(H²)/tick。
+#[cfg(test)]
+mod a43m_disappear_kind_lookup_tests {
+    use super::*;
+    use mir2_world_bevy::HideObserverKind;
+
+    fn record(pairs: &[(i32, i32, HideObserverKind)]) -> mir2_world_bevy::TickRecord {
+        mir2_world_bevy::TickRecord {
+            hides: pairs.iter().map(|&(o, t, _)| (o, t)).collect(),
+            hide_observer_kinds: pairs.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn index_lookup_equals_linear_and_falls_back_on_mismatch() {
+        let rec = record(&[
+            (1, 10, HideObserverKind::NonPlayer),
+            (2, 20, HideObserverKind::Clone),
+            (3, 30, HideObserverKind::Player),
+        ]);
+        // ① 同序同长 ⇒ 按下标与线性查找逐条一致。
+        for (i, &(o, t)) in rec.hides.iter().enumerate() {
+            assert_eq!(
+                disappear_kind_at(&rec, i, o, t),
+                hide_observer_kind(&rec, o, t),
+                "第 {i} 条：下标直取必须与线性查找同值"
+            );
+        }
+        // ② 下标项与请求不符（这里把 i=0 拿去查 (2,20)）⇒ 回退线性查找，仍取到 Clone。
+        assert_eq!(
+            disappear_kind_at(&rec, 0, 2, 20),
+            HideObserverKind::Clone,
+            "下标错位必须回退线性查找"
+        );
+        // ③ 越界 ⇒ 回退；线性查找也无此对 ⇒ fail-safe 默认 Player。
+        assert_eq!(
+            disappear_kind_at(&rec, 99, 9, 99),
+            HideObserverKind::Player,
+            "越界且线性查找无命中 ⇒ 默认 Player（fail-safe loud）"
+        );
     }
 }
