@@ -49,7 +49,10 @@ static PICK_SEED: AtomicU64 = AtomicU64::new(0);
 pub async fn queue_loop(server: Arc<Server>, mut rx: UnboundedReceiver<Queued>, db: Arc<Db>) {
     while let Some(mut q) = rx.recv().await {
         q.queue_depth = rx.len();
-        if let Err(e) = process_data(&server, &db, q).await {
+        crate::ingprobe::begin_item();
+        let outcome = process_data(&server, &db, q).await;
+        crate::ingprobe::end_item();
+        if let Err(e) = outcome {
             // C# 在消息线程里 catch 并 `LogService.Error(e)`：该条命令**不回包**、不影响后续
             log::error(&format!("处理角色网关数据失败: {e:#}"));
         }
@@ -60,13 +63,15 @@ pub async fn queue_loop(server: Arc<Server>, mut rx: UnboundedReceiver<Queued>, 
 async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     // 取会话：C# 按 `SessionId == packet.SocketId` 在网关的用户表里找
     let (mut u, tx, remote_ip) = {
+        let t_lock = std::time::Instant::now();
         let gates = server.gates.lock().await;
+        crate::ingprobe::note_gates_lock(t_lock.elapsed().as_millis() as u64);
         let Some(Some(g)) = gates.get(q.slot) else {
             crate::ingprobe::on_drop(crate::ingprobe::Drop::NoGate);
             return Ok(());
         };
         let Some(u) = g.users.iter().find(|u| u.socket_id == q.msg.socket_id) else {
-            crate::ingprobe::on_drop(crate::ingprobe::Drop::NoUser);
+            crate::ingprobe::on_drop_no_user(&q.msg.data);
             return Ok(());
         };
         (u.clone(), g.tx.clone(), g.remote_ip.clone())
@@ -99,6 +104,7 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
                     return Err(anyhow::anyhow!("客户端消息头长度不足（{len}）"));
                 }
             };
+            crate::ingprobe::mark_ident(packet.head.ident);
             crate::ingprobe::on_frame(q.slot);
             if packet.head.ident == CM_SELCHR {
                 let queue_ms = q.enqueued_at.map_or(0, |t| t.elapsed().as_millis());
