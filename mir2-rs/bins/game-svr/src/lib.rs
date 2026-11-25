@@ -1802,6 +1802,20 @@ fn deliver_session_migrations(
         let (chr, id, line, socket) = match attached {
             Ok(v) => v,
             Err(m) => {
+                // **card/handoff-release-leak**：attach 被拒时，目标区在 `handoff_accept`
+                // 阶段已把该 id 变成**真实体**（`promote_mirror_to_real` / `Inserted`）。
+                // 会话留在源区 ⇒ 目标区没有任何会话/online 认领它；一个 race==PLAY 的
+                // 真实体会继续按 SearchTime 扫描，每条 hide 都落 `missing_online`（且永久）。
+                // 与 `handoff.rs:207` 源区 ack 的 `release_entity` 同语义：会话不在本区，
+                // 实体也不留。只在目标区仍活着时做（线程退出时 drop 一并回收）。
+                if let Some(state) = lookup(target) {
+                    let mut st = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if st.host.world.release_entity(m.id) {
+                        perf_counters::note_zone_handoff_target_entity_released();
+                    }
+                }
                 perf_counters::note_zone_handoff_session_failed();
                 mir2_world_bevy::mirror_metrics::note_handoff_refused();
                 glog!(
@@ -1824,7 +1838,13 @@ fn deliver_session_migrations(
                 let mut st = state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                st.host.take_session_for_migration(id, target, source)
+                let back = st.host.take_session_for_migration(id, target, source);
+                // **card/handoff-release-leak**：同上——会话已撤回源区，目标区的真实体
+                // 没有认领者；释放它，否则永久扫描并刷 `missing_online`。
+                if st.host.world.release_entity(id) {
+                    perf_counters::note_zone_handoff_target_entity_released();
+                }
+                back
             };
             perf_counters::note_zone_handoff_session_failed();
             mir2_world_bevy::mirror_metrics::note_handoff_refused();
@@ -28279,6 +28299,12 @@ mod perf_counters {
                 .load(Ordering::Relaxed)
                 .to_string(),
         );
+        out.push_str(",\"target_entity_released\":");
+        out.push_str(
+            &ZONE_HANDOFF_TARGET_ENTITY_RELEASED
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
         out.push_str("}}");
         out
     }
@@ -28419,6 +28445,9 @@ mod perf_counters {
     pub(crate) static ZONE_HANDOFF_CANCELED_TRADES: AtomicU64 = AtomicU64::new(0);
     /// **A35-b**：目标区**缺该玩家展示项**的次数（fail-loud；不重建，出现帧可能缺项）。
     pub(crate) static ZONE_HANDOFF_TARGET_DISPLAY_MISSING: AtomicU64 = AtomicU64::new(0);
+    /// **card/handoff-release-leak**：迁移失败回滚时，目标区**已提升为真实体**被释放的次数。
+    /// 会话留源区而实体留目标区 ⇒ 无会话 PLAY 实体永久扫描，每条 hide 落 `missing_online`。
+    pub(crate) static ZONE_HANDOFF_TARGET_ENTITY_RELEASED: AtomicU64 = AtomicU64::new(0);
 
     // ---- 卡 C27（openmir2-perfcounter-test-isolation）：`#[cfg(test)]` 线程级计数器实例 ----
     // 生产路径的 `note_zone_login_landed`/`note_zone_disconnect_dropped` 会从**其它并行用例**
@@ -28438,6 +28467,7 @@ mod perf_counters {
         handoff_session_failed: AtomicU64,
         handoff_canceled_trades: AtomicU64,
         handoff_target_display_missing: AtomicU64,
+        handoff_target_entity_released: AtomicU64,
     }
     #[cfg(test)]
     impl TestZoneCounters {
@@ -28455,6 +28485,7 @@ mod perf_counters {
                 handoff_session_failed: AtomicU64::new(0),
                 handoff_canceled_trades: AtomicU64::new(0),
                 handoff_target_display_missing: AtomicU64::new(0),
+                handoff_target_entity_released: AtomicU64::new(0),
             }
         }
     }
@@ -28688,6 +28719,28 @@ mod perf_counters {
         }
         ZONE_HANDOFF_TARGET_DISPLAY_MISSING.load(Ordering::Relaxed)
     }
+    /// **card/handoff-release-leak**：目标区已提升实体在回滚时被释放 +1。
+    pub(crate) fn note_zone_handoff_target_entity_released() {
+        #[cfg(test)]
+        if with_test_zone_counters(|t| {
+            t.handoff_target_entity_released
+                .fetch_add(1, Ordering::Relaxed)
+        })
+        .is_some()
+        {
+            return;
+        }
+        ZONE_HANDOFF_TARGET_ENTITY_RELEASED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn zone_handoff_target_entity_released() -> u64 {
+        if let Some(v) =
+            with_test_zone_counters(|t| t.handoff_target_entity_released.load(Ordering::Relaxed))
+        {
+            return v;
+        }
+        ZONE_HANDOFF_TARGET_ENTITY_RELEASED.load(Ordering::Relaxed)
+    }
     /// **A35-b**：把四个 handoff 计数清零（测试用；与 login 计数分开，避免互相干扰）。
     #[cfg(test)]
     pub(crate) fn reset_zone_handoff_counters_for_tests() {
@@ -28697,6 +28750,7 @@ mod perf_counters {
             t.handoff_session_failed.store(0, Ordering::Relaxed);
             t.handoff_canceled_trades.store(0, Ordering::Relaxed);
             t.handoff_target_display_missing.store(0, Ordering::Relaxed);
+            t.handoff_target_entity_released.store(0, Ordering::Relaxed);
         })
         .is_some()
         {
@@ -28706,6 +28760,7 @@ mod perf_counters {
         ZONE_HANDOFF_SESSION_FAILED.store(0, Ordering::Relaxed);
         ZONE_HANDOFF_CANCELED_TRADES.store(0, Ordering::Relaxed);
         ZONE_HANDOFF_TARGET_DISPLAY_MISSING.store(0, Ordering::Relaxed);
+        ZONE_HANDOFF_TARGET_ENTITY_RELEASED.store(0, Ordering::Relaxed);
     }
     #[cfg(test)]
     pub(crate) fn zone_disconnect_dropped() -> u64 {
@@ -140560,6 +140615,119 @@ mod l2_handoff_tests {
         let _ = std::fs::remove_file(&perf_path);
     }
 
+    /// **card/handoff-release-leak**：attach 被拒（目标区同 chr 冲突）时，目标区在
+    /// `handoff_accept` 阶段已提升为**真实体**的实体必须被释放——否则它无会话、无 online，
+    /// 永久按 SearchTime 扫描，每条 hide 都落 `missing_online`。
+    ///
+    /// 变异：删掉 `deliver_session_migrations` Err 分支里的 `release_entity` ⇒ 本用例红。
+    #[test]
+    fn handoff_attach_failure_releases_promoted_target_entity() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let chr = "leaker";
+        let mut src = two_zone_state(1, &counter);
+        let id = seed_full_session(&mut src, chr, 901);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        // 目标区：实体已由 handoff 提升为真身（`seed_target_world` 即 `handoff_accept`）。
+        seed_target_world(&mut dst, id, chr);
+        // 同 chr 冲突 ⇒ attach 拒收（会话留在源区）。
+        let own = seed_full_session(&mut dst, chr, 902);
+        assert_ne!(own, id, "前提：冲突源是目标区自己那份实体");
+        let dst = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let router = zone_router::ZoneRouter::new();
+        let released0 = perf_counters::zone_handoff_target_entity_released();
+        let lookup = std::sync::Arc::clone(&dst);
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(
+            perf_counters::zone_handoff_target_entity_released(),
+            released0 + 1,
+            "被提升的目标区实体必须释放并计数"
+        );
+        let dst = dst.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            dst.host.world.entities.get(id).is_none(),
+            "目标区不得留下无会话的 PLAY 实体（missing_online 的源头）"
+        );
+        assert!(
+            dst.host.world.entities.get(own).is_some(),
+            "目标区自己那份实体不得被误删"
+        );
+        assert!(
+            src.host.online.find_by_chr(chr).is_some(),
+            "源区仍持有会话（回滚）"
+        );
+    }
+
+    /// **card/handoff-release-leak**：`router.assign` 失败回滚时，目标区已提升的真实体
+    /// 同样必须释放（会话被 `take_session_for_migration` 撤回源区）。
+    ///
+    /// 变异：删掉 router 失败分支里的 `release_entity` ⇒ 本用例红。
+    #[test]
+    fn handoff_router_failure_releases_promoted_target_entity() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let chr = "leaker2";
+        let mut src = two_zone_state(1, &counter);
+        let id = seed_full_session(&mut src, chr, 901);
+        // socket=0 ⇒ `ZoneRouter::assign` 必返 `SocketRejected`。
+        let mut entry = src.host.online.find_by_chr(chr).cloned().expect("在线项在");
+        entry.socket = 0;
+        src.host.online.set(entry);
+        assert!(src.host.world.release_entity(id));
+        let m = src
+            .host
+            .take_session_for_migration(id, zone(1), zone(0))
+            .expect("应摘下");
+        let mut dst = two_zone_state(0, &counter);
+        seed_target_world(&mut dst, id, chr);
+        let dst = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let router = zone_router::ZoneRouter::new();
+        let released0 = perf_counters::zone_handoff_target_entity_released();
+        let lookup = std::sync::Arc::clone(&dst);
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(
+            perf_counters::zone_handoff_target_entity_released(),
+            released0 + 1,
+            "router 失败 ⇒ 目标区已提升实体也必须释放"
+        );
+        let dst = dst.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            dst.host.world.entities.get(id).is_none(),
+            "目标区不得留下无会话的 PLAY 实体"
+        );
+        assert!(
+            src.host.online.find_by_chr(chr).is_some(),
+            "源区仍持有会话（回滚）"
+        );
+    }
+
     /// **A35-b · D2（2026-11-24 裁决二）**：交易取消帧 `SM_DEALCANCEL` **先于**会话 detach
     /// （设计 §2.1「帧先发」）。用 `cfg(test)` 测试缝 `a35b_order` 记录两个真实调用点的相对序，
     /// 断言 `["cancel", "detach"]`，且 tick 返回时 `gates` 里已有恰一条 `SM_DEALCANCEL`。
@@ -141265,19 +141433,24 @@ mod l2_handoff_tests {
         }
     }
 
-    /// **A38 · 牙②**：attach 被拒（同 chr 冲突）⇒ 会话整包回源，但组关系**仍**落在目标区
-    /// 实体上、**恰一份**（实体在目标区，回退 = 抹掉 = 丢数据）。
+    /// **A38 · 牙②（card/handoff-release-leak 修订，2026-11-26 裁决 A）**：attach 被拒
+    /// （同 chr 冲突）⇒ 会话整包回源，**目标区已提升的真实体必须回收**（`release_entity`）。
     ///
-    /// 变异：冲突分支先抹/不写 `GroupState` ⇒ 目标区实体空组 ⇒ 红。
+    /// A38 原口径「组关系仍留在目标区实体上、恰一份」以实体保留为前提；b1 卡确认无会话的
+    /// 真实体会永久扫描并刷 `missing_online`，因此实体必须回收，**组关系随实体消失是已知
+    /// 代价**——由 `DEV-HANDOFF-GROUP` 追踪（源区实体的组关系是否还在、失败迁移是否静默
+    /// 退组），此处不表示"这样是对的"。
+    ///
+    /// 变异：删掉 `deliver_session_migrations` Err 分支的 `release_entity` ⇒ 本牙红。
     #[test]
-    fn refused_attach_keeps_group_exactly_once() {
+    fn refused_attach_releases_target_entity() {
         let _guard = super::l2_handoff_prod_tests::PROD_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _counters = perf_counters::test_zone_counters_scope();
         perf_counters::reset_zone_handoff_counters_for_tests();
         mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
-        let (mut src, m, expected) = committed_group_migration("leader", 9001, vec![9001, 9002]);
+        let (mut src, m, _expected) = committed_group_migration("leader", 9001, vec![9001, 9002]);
         let id = m.id;
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
         let mut dst = two_zone_state(0, &counter);
@@ -141301,10 +141474,9 @@ mod l2_handoff_tests {
         );
         assert_eq!(router.len(), 0, "失败路径不得 assign");
         let dst = dst_arc.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(
-            dst.host.world.entities.group(id),
-            Some(&expected),
-            "组关系必须留在目标区实体（恰一份；冲突分支抹掉 ⇒ 红）"
+        assert!(
+            dst.host.world.entities.get(id).is_none(),
+            "attach 被拒 ⇒ 目标区实体必须被回收（组关系随实体消失是已知代价，登记 DEV-HANDOFF-GROUP）"
         );
     }
 
