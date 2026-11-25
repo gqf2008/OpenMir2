@@ -64,8 +64,20 @@ async fn batch_records_get_by_matches_per_row() {
             .expect("行必须存在");
         let got = batch.get(id).expect("批量必须含该行");
         assert_eq!(
-            (got.id, &got.account_text, &got.name_text, got.selected, got.deleted),
-            (row.id, &row.account_text, &row.name_text, row.selected, row.deleted),
+            (
+                got.id,
+                &got.account_text,
+                &got.name_text,
+                got.selected,
+                got.deleted
+            ),
+            (
+                row.id,
+                &row.account_text,
+                &row.name_text,
+                row.selected,
+                row.deleted
+            ),
             "批量与逐条必须逐字段相等（id={id}）"
         );
     }
@@ -140,8 +152,7 @@ async fn select_chr_keeps_db_state_and_uses_four_round_trips() {
     let (head, route) = ts::decode_user_reply(&frames[0]);
     assert_eq!(head.ident, SM_STARTPLAY, "必须回 SM_STARTPLAY");
     assert_eq!(
-        route,
-        b"127.0.0.1/7200",
+        route, b"127.0.0.1/7200",
         "路由体必须与改动前逐字节相同（decode_user_reply 已解 EDCode）"
     );
     assert_eq!(selected_of(&db, "sb2").await, 1, "选中项置 1");

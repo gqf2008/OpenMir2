@@ -420,7 +420,12 @@ pub fn mark_ident(ident: u16) {
 
 /// 慢条目行（`service_ms ≥ SLOW_MS`）：把 service 拆成 gates 锁等待与到派发前的耗时。
 #[must_use]
-pub fn slow_line(ident: Option<u16>, service_ms: u64, gates_lock_ms: u64, pre_dispatch_ms: u64) -> String {
+pub fn slow_line(
+    ident: Option<u16>,
+    service_ms: u64,
+    gates_lock_ms: u64,
+    pre_dispatch_ms: u64,
+) -> String {
     let ident = ident.map_or_else(|| "other".to_string(), |i| i.to_string());
     format!(
         "[DBSEL_ING] slow ident={ident} service_ms={service_ms} gates_lock_ms={gates_lock_ms} pre_dispatch_ms={pre_dispatch_ms}"
