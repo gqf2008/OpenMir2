@@ -492,3 +492,351 @@ fn warr_34_matches_golden() {
 fn warr_38_matches_golden() {
     check_golden(38);
 }
+
+// ============ MG-07（2026-11-25）：27 的 3s 门（已实现未断言） + 真支登记偏差 ============
+
+/// MG-07 夹具：与 `warr-27.json` 的 `coordinate_dir` 同一输入态
+/// （caster (100,100)/dir=4/MP=100/L1，目标 (101,100)，魔表 `Spell=20` ⇒ 花费 10）。
+#[allow(clippy::type_complexity)]
+fn mg07_fixture() -> (
+    mir2_world_bevy::World,
+    OnlineRegistry,
+    std::collections::HashMap<String, SavedHuman>,
+    std::collections::HashMap<String, SessionGround>,
+    game_svr::ability::StdItemCatalog,
+    magics::MagicTable,
+    mir2_data::pet_slave::PetSlaveConfig,
+    game_svr::mongen::MonsterTable,
+    downlink::DisplayTable,
+    std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mpsc::UnboundedReceiver<SimToGate>,
+    i32,
+    i32,
+) {
+    let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+    let caster = spawn(&mut world, "caster", 100, 100);
+    let target = spawn(&mut world, "target", 101, 100);
+
+    let mut online: OnlineRegistry = OnlineRegistry::new();
+    for (i, (name, id)) in [("caster", caster), ("target", target)]
+        .into_iter()
+        .enumerate()
+    {
+        online.push(OnlineEntry {
+            account: name.to_string(),
+            chr_name: name.to_string(),
+            session_id: i as i32 + 1,
+            gate_idx: 0,
+            socket: 901 + i as i32,
+            actor_id: id,
+        });
+    }
+    let mut displays = downlink::DisplayTable::new();
+    displays.set(
+        caster,
+        downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"caster".to_vec()),
+    );
+
+    let mut sessions: std::collections::HashMap<String, SessionGround> =
+        std::collections::HashMap::new();
+    let mut sg = crate::tests::test_session_ground(caster);
+    sg.state.wabil.hp = 419;
+    sg.state.wabil.max_hp = 419;
+    sg.state.wabil.mp = 100;
+    sg.show_hp = false;
+    sessions.insert("caster".to_string(), sg);
+
+    let mut rec = record::PlayerRecord::default();
+    rec.data.magic = Some(vec![Some(record::MagicRcd {
+        mag_idx: 27,
+        level: 1,
+        magic_key: 0,
+        tran_point: 0,
+    })]);
+    let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+    saves.insert(
+        "caster".to_string(),
+        SavedHuman {
+            account: "uc".to_string(),
+            record: rec,
+            enter_map: "0".to_string(),
+            derived: None,
+        },
+    );
+
+    let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+    let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+        std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+        magic_id: 27,
+        spell: 20,
+        def_spell: 0,
+        ..Default::default()
+    }]);
+    (
+        world,
+        online,
+        saves,
+        sessions,
+        game_svr::ability::StdItemCatalog::new(),
+        magic_table,
+        mir2_data::pet_slave::PetSlaveConfig::default(),
+        game_svr::mongen::MonsterTable::new(Vec::new()),
+        displays,
+        gates,
+        rx0,
+        caster,
+        target,
+    )
+}
+
+/// 一次 `CM_SPELL 27` 的观测：施法者（socket=901）的 SM 帧 + `+GD` ack 计数。
+struct Mg07Obs {
+    frames: Frames,
+    acks: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mg07_cast(
+    world: &mut mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    catalog: &game_svr::ability::StdItemCatalog,
+    magic_table: &magics::MagicTable,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    table: &game_svr::mongen::MonsterTable,
+    displays: &mut downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+    target: i32,
+) -> Mg07Obs {
+    handle_spell_cmd_with_magic(
+        game_svr::feature::make_long(101, 100),
+        27,
+        (target & 0xFFFF) as u16,
+        ((target >> 16) & 0xFFFF) as u16,
+        "caster",
+        901,
+        online,
+        world,
+        saves,
+        sessions,
+        catalog,
+        magic_table,
+        pet_cfg,
+        8,
+        None,
+        table,
+        displays,
+        gates,
+        1,
+        1,
+        2,
+        None,
+        &MsgColors::default(),
+        &game_svr::strings::StringConf::defaults(),
+    );
+    let mut obs = Mg07Obs {
+        frames: Vec::new(),
+        acks: 0,
+    };
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            SimToGate::SendFrame { socket: 901, body } => {
+                let cm = CommandMessage::from_bytes(&body).expect("body >= 12B");
+                let tail = String::from_utf8_lossy(&body[12..]).to_string();
+                obs.frames
+                    .push((cm.ident, cm.param, cm.tag, cm.series, tail, body));
+            }
+            SimToGate::SendRaw { payload, .. } if payload.starts_with(b"+GD/") => obs.acks += 1,
+            _ => {}
+        }
+    }
+    obs
+}
+
+/// **MG-07 补验：27 的 3s 门**（oracle `PlayObject.Attack.cs:1189`
+/// `GetTickCount() - DoMotaeboTick > 3 * 1000`；Rust `warrskill.rs` `Arm::Moteebo`
+/// 的 `now - do_motaebo_tick <= 3 * 1000 ⇒ return true`）。
+///
+/// 三段连续调用（同一会话/同一世界）：
+/// A. 门内（`do_motaebo_tick = now-500`）⇒ **零 SM 帧**、MP 不变、戳不变，但 `+GD` ack 恰 1
+///    （oracle `result = true` 在门**外**就置位，gate 命中只跳过效果体）；
+/// B. 门外（回拨 `do_motaebo_tick = now-5000`）⇒ 退化支全帧：`SM_RUSHKUNG(7)` + `53` + 红字 `100`
+///    （100 = `SM_SYSMESSAGE`），MP 100→90，戳刷新；目标血不动（退化支不伤人）；
+/// C. 紧接再调 ⇒ 又进门：零帧、MP 仍 90、戳不变。
+///
+/// 变异：删 `warrskill.rs` 的 3s 早退 ⇒ A/C 出帧且 MP 掉，本用例红。
+#[test]
+fn warr_27_motaebo_three_second_gate() {
+    let (
+        mut world,
+        online,
+        mut saves,
+        mut sessions,
+        catalog,
+        magic_table,
+        pet_cfg,
+        table,
+        mut displays,
+        gates,
+        mut rx,
+        _caster,
+        target,
+    ) = mg07_fixture();
+    let mut cast = |world: &mut mir2_world_bevy::World,
+                    saves: &mut std::collections::HashMap<String, SavedHuman>,
+                    sessions: &mut std::collections::HashMap<String, SessionGround>,
+                    displays: &mut downlink::DisplayTable| {
+        mg07_cast(
+            world,
+            &online,
+            saves,
+            sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            &table,
+            displays,
+            &gates,
+            &mut rx,
+            target,
+        )
+    };
+
+    // A：门内。
+    let stale_tick = now_ms() - 500;
+    sessions.get_mut("caster").unwrap().magic.do_motaebo_tick = stale_tick;
+    let a = cast(&mut world, &mut saves, &mut sessions, &mut displays);
+    assert!(
+        a.frames.is_empty(),
+        "3s 门内必须零 SM 帧（oracle 只 return true）：{:?}",
+        a.frames.iter().map(|f| f.0).collect::<Vec<_>>()
+    );
+    assert_eq!(a.acks, 1, "门内 result=true ⇒ 调用方 +GD ack 恰 1");
+    assert_eq!(
+        sessions["caster"].state.wabil.mp, 100,
+        "门内不得扣 MP（DamageSpell 在门后）"
+    );
+    assert_eq!(
+        sessions["caster"].magic.do_motaebo_tick, stale_tick,
+        "门内不得刷新 DoMotaeboTick（oracle 在门后写戳）"
+    );
+
+    // B：门外（回拨 5s）。
+    let tick_before_b = now_ms() - 5_000;
+    sessions.get_mut("caster").unwrap().magic.do_motaebo_tick = tick_before_b;
+    let target_hp_before = world.entities.get(target).map_or(0, |e| e.hp);
+    let b = cast(&mut world, &mut saves, &mut sessions, &mut displays);
+    let ids: Vec<u16> = b.frames.iter().map(|f| f.0).collect();
+    for want in [
+        mir2_protocol::messages::SM_RUSHKUNG,
+        mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+        mir2_protocol::messages::SM_SYSMESSAGE,
+    ] {
+        assert!(ids.contains(&want), "门外退化支必发 {want}：{ids:?}");
+    }
+    assert_eq!(b.acks, 1, "门外同样 result=true ⇒ +GD 恰 1");
+    assert_eq!(
+        sessions["caster"].state.wabil.mp, 90,
+        "门外扣 GetSpellPoint=10（100 → 90）"
+    );
+    assert!(
+        sessions["caster"].magic.do_motaebo_tick >= tick_before_b + 3_000,
+        "门外必须刷新 DoMotaeboTick（{} → {}）",
+        tick_before_b,
+        sessions["caster"].magic.do_motaebo_tick
+    );
+    assert_eq!(
+        world.entities.get(target).map_or(0, |e| e.hp),
+        target_hp_before,
+        "退化支（无正前目标）不得伤目标"
+    );
+
+    // C：紧接再调 ⇒ 又进门。
+    let fresh_tick = sessions["caster"].magic.do_motaebo_tick;
+    let c = cast(&mut world, &mut saves, &mut sessions, &mut displays);
+    assert!(
+        c.frames.is_empty(),
+        "3s 内紧接再调必须零帧：{:?}",
+        c.frames.iter().map(|f| f.0).collect::<Vec<_>>()
+    );
+    assert_eq!(c.acks, 1, "门内 +GD 恰 1");
+    assert_eq!(sessions["caster"].state.wabil.mp, 90, "门内不得二次扣 MP");
+    assert_eq!(
+        sessions["caster"].magic.do_motaebo_tick, fresh_tick,
+        "门内不得刷新戳"
+    );
+}
+
+/// **MG-07 现状钉（登记偏差，不是行为验证）**：正前格另有对象时 oracle 走 `DoMotaebo` **真支**
+/// （推挤 `SM_RUSH(6)`/`SM_STRUCK(31)`/自伤/训练尾，`PlayObject.Base.cs:1390-1502`），
+/// **Rust 未建模**（`warrskill.rs` `Arm::Moteebo` 的 WRN 分支）⇒ 仍按退化支发
+/// `SM_RUSHKUNG(7)` + 红字、不移动、不伤人。
+///
+/// 本用例钉的是「仍为登记偏差」：不得悄悄出现 6/31 帧、不得移动、目标血不变。
+/// **真支的正确性验证需要先有实现卡**（manifest scope 已写明，不是这颗牙的判据）。
+#[test]
+fn warr_27_true_branch_is_registered_deviation() {
+    let (
+        mut world,
+        online,
+        mut saves,
+        mut sessions,
+        catalog,
+        magic_table,
+        pet_cfg,
+        table,
+        mut displays,
+        gates,
+        mut rx,
+        caster,
+        target,
+    ) = mg07_fixture();
+    // 施法者脚下放一个「另一个对象」：Rust 的真支 WRN 分支按同格扫描触发
+    // （oracle 用 GetPoseCreate；本仓未建模，这里只钉现状）。
+    let blocker = spawn(&mut world, "blocker", 100, 100);
+    let blocker_hp_before = world.entities.get(blocker).map_or(0, |e| e.hp);
+    sessions.get_mut("caster").unwrap().magic.do_motaebo_tick = now_ms() - 5_000;
+    let obs = mg07_cast(
+        &mut world,
+        &online,
+        &mut saves,
+        &mut sessions,
+        &catalog,
+        &magic_table,
+        &pet_cfg,
+        &table,
+        &mut displays,
+        &gates,
+        &mut rx,
+        target,
+    );
+    let ids: Vec<u16> = obs.frames.iter().map(|f| f.0).collect();
+    assert!(
+        ids.contains(&mir2_protocol::messages::SM_RUSHKUNG),
+        "现状：真支未建模 ⇒ 仍走退化支的 SM_RUSHKUNG：{ids:?}"
+    );
+    assert!(
+        !ids.contains(&mir2_protocol::messages::SM_RUSH),
+        "登记偏差：真支未建模时不得出现 SM_RUSH(6)：{ids:?}"
+    );
+    assert!(
+        !ids.contains(&mir2_protocol::messages::SM_STRUCK),
+        "登记偏差：真支未建模时不得出现 SM_STRUCK(31)：{ids:?}"
+    );
+    let (x, y) = world.entities.get(caster).map_or((0, 0), |e| (e.x, e.y));
+    assert_eq!((x, y), (100, 100), "真支未建模 ⇒ 施法者不得移动");
+    assert_eq!(
+        world.entities.get(blocker).map_or(0, |e| e.hp),
+        blocker_hp_before,
+        "真支未建模 ⇒ 正前对象不得掉血"
+    );
+    assert_eq!(
+        world.entities.get(target).map_or(0, |e| e.hp),
+        blocker_hp_before,
+        "旁观目标同样不得掉血"
+    );
+}
