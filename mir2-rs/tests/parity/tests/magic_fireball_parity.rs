@@ -4382,3 +4382,10 @@ fn frame_order_scope_marker_is_refused_outside_the_whitelist() {
     let err = check_frame_order_scope(&mk(10), "fire").expect_err("fire 的 magic_id 必须是 9");
     assert!(err.contains("magic_id 不一致"), "{err}");
 }
+
+/// **MG-27 边界覆盖守卫（2026-11-26）**：`firecharm.json`（魔号 13）三支压在 AntiMagic 等号边界上
+/// （oracle `MagicManager.cs:334` 与 1/5/11 同式 `Random(10) >= AntiMagic`）。
+#[test]
+fn firecharm_golden_antimagic_boundary_is_covered() {
+    assert_antimagic_boundary(&golden_file("firecharm.json"), "firecharm");
+}
