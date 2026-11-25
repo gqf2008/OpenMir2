@@ -2571,11 +2571,26 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                         e.ai.search_tick,
                         e.ai.search_time,
                         e.is_clone,
+                        e.mirror,
                         crate::monai::monster_self_scans(&e),
                     ),
                     None => continue,
                 };
-                let (death, race, ghost, search_tick, search_time, is_clone, self_scans) = snap;
+                let (death, race, ghost, search_tick, search_time, is_clone, mirror, self_scans) =
+                    snap;
+                // **card/aoi-skip-mirror**：镜像**不是** AOI 观察者。
+                //
+                // c2-A（`card/mirror-aoi-observer-fixture`）实测：不排除时镜像会扫描
+                // （`visible_actors` 非空）、会在出视野后产 `rec.hides`、且被分类成
+                // `HideObserverKind::Player`（分类只看 race/ghost/is_clone）⇒ 每条 hide 都
+                // 落 `drain_aoi_disappear_with_counts` 的 online-miss 分支（`missing_online`
+                // 洪泛）且帧被丢弃。镜像的出现/离世帧面本来就走 ⑤ 邮箱（appear 按
+                // `world.sessions` 迭代、depart 有镜像分支），镜像扫描对帧面无贡献。
+                // 只跳过扫描：仍在 `aoi_order` 里（其它系统按该列表取实体，语义不变）。
+                if mirror {
+                    out.aoi_order.push(*id);
+                    continue;
+                }
                 if death {
                     search_view_range_death(
                         map,

@@ -19608,19 +19608,32 @@ mod tests {
         );
     }
 
-    /// **missing_online 调查 · c2-A（opc-27 裁决的判定夹具）**：镜像是不是 AOI 观察者？
+    /// **card/aoi-skip-mirror（G）**：镜像不是 AOI 观察者——源头排除后，
+    /// ① 镜像 `visible_actors` 恒空；② `rec.hides` 中 observer=镜像 的条数恒 0；
+    /// ③ 同一夹具里的**真人**观察者可见集与修复前逐项相等（`p` 看见 `target`，出视野后
+    /// 产 `(p, target)` 的 hide）。
     ///
-    /// 判定标准（写死）：`upsert_mirror` 之后跑扫描拍，
-    /// ① 镜像是否出现在 `rec.hides` 的 observer 位（出现 ⇒ 镜像会扫描）；
-    /// ② 镜像自己的 `visible_actors` 是否非空；
-    /// ③ observer 为镜像的 hides 条数（逐拍打印）。
+    /// 本条取代 c2-A（`card/mirror-aoi-observer-fixture`）对“镜像会扫描”的现状钉住：
+    /// 那条是判定夹具（在修复前后分别成立），本条是修复后的行为牙。
     ///
-    /// 读码预期（本用例绿 ⇒ 成立）：`by_map` 不按 mirror 过滤（`aoi.rs` 分桶段）、
-    /// `search_time` 取玩家缺省 1000ms ⇒ 镜像**会扫描**、**会进 hides**，且分类不读 mirror
-    /// ⇒ 类别是 `Player`。若本用例红 ⇒ 推翻该结论，b4 的夹具条件才是对的（报告里对账）。
+    /// 变异：删掉 `output_aoi_system` 里的 `if mirror { continue; }` ⇒ ①镜像可见集非空、
+    /// ②observer=镜像 的 hides > 0 ⇒ 红。
     #[test]
-    fn mirror_observer_scans_and_appears_in_hides() {
+    fn mirror_is_not_an_aoi_observer() {
         let mut w = World::new(64, 64);
+        w.open_session("p");
+        let p = w
+            .enter_map(
+                "p",
+                {
+                    let mut e = crate::EntitySpawn::new(0, "p", 10, 10);
+                    e.view_range = 12;
+                    e.want_ref_msg = true;
+                    e
+                },
+                0,
+            )
+            .expect("p 进图");
         w.open_session("target");
         let target = w
             .enter_map("target", crate::EntitySpawn::new(0, "target", 12, 10), 0)
@@ -19648,48 +19661,40 @@ mod tests {
             master: None,
         };
         assert_eq!(w.upsert_mirror(spec), MirrorUpsert::Inserted);
-        assert!(w.is_mirror(mirror_id), "前提：镜像已插入");
 
-        // 让镜像完成首扫（玩家的 SearchTime=1000ms，按 tick 节拍多跑几拍）。
         for _ in 0..6 {
             w.tick();
         }
-        let visible_nonempty = w
+        // ③ 真人可见集：p 必须看见 target（修复前后逐项相等的那一半）。
+        let p_sees: Vec<i32> = w
+            .entities
+            .get(p)
+            .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
+            .unwrap_or_default();
+        assert!(
+            p_sees.contains(&target),
+            "真人观察者的可见集必须含 target（不得被 G 改变）: {p_sees:?}"
+        );
+        // ① 镜像可见集恒空。
+        let m_visible = w
             .entities
             .get(mirror_id)
-            .is_some_and(|e| !e.visible_actors.is_empty());
-        assert!(
-            visible_nonempty,
-            "① 镜像若扫描，visible_actors 必须非空（现码：会扫描）"
-        );
+            .map(|e| e.visible_actors.len())
+            .unwrap_or(0);
+        assert_eq!(m_visible, 0, "镜像不得扫描：visible_actors 恒空");
 
-        // target 出镜像视野 ⇒ 下一次扫描应把 (mirror, target) 记进 hides。
+        // target 出视野 ⇒ 真人应产 hide；镜像不得产任何 hide。
         assert!(w.try_step_now(target, 1, 0, 20), "target 应能向东走 20 格");
-        let mut per_tick: Vec<usize> = Vec::new();
-        let mut kinds: Vec<HideObserverKind> = Vec::new();
-        // 玩家的 SearchTime=1000ms、tick≈200ms ⇒ 出视野后要 ≥5 拍才会再扫一次；
-        // 这里跑 6 拍并逐拍打印（opc-27 要求的“两拍各一次”取前两拍读数）。
+        let mut hides_p = 0usize;
+        let mut hides_m = 0usize;
         for _ in 0..6 {
             let rec = w.tick();
-            per_tick.push(rec.hides.iter().filter(|(o, _)| *o == mirror_id).count());
-            kinds.extend(
-                rec.hide_observer_kinds
-                    .iter()
-                    .filter(|(o, _, _)| *o == mirror_id)
-                    .map(|(_, _, k)| *k),
-            );
+            hides_p += rec.hides.iter().filter(|(o, _)| *o == p).count();
+            hides_m += rec.hides.iter().filter(|(o, _)| *o == mirror_id).count();
         }
-        eprintln!(
-            "c2-A: mirror hides per tick={per_tick:?} visible_nonempty={visible_nonempty} kinds={kinds:?}"
-        );
-        assert!(
-            per_tick.iter().sum::<usize>() > 0,
-            "② 镜像必须作为观察者出现在 rec.hides（否则 b4 结论成立）: {per_tick:?}"
-        );
-        assert!(
-            kinds.iter().all(|k| *k == HideObserverKind::Player),
-            "③ 现码分类不读 mirror ⇒ observer 类别应全为 Player: {kinds:?}"
-        );
+        eprintln!("G: hides_p={hides_p} hides_mirror={hides_m} p_sees={p_sees:?}");
+        assert!(hides_p > 0, "真人观察者必须仍产 (p, target) 的 hide");
+        assert_eq!(hides_m, 0, "镜像不得出现在 rec.hides 的 observer 位");
     }
 
     /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：`TickRecord::hides` 的观察者
