@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use mir2_protocol::edcode;
 use mir2_protocol::frame::CommandMessage;
-use mir2_protocol::messages::{CM_SELCHR, SM_STARTPLAY};
+use mir2_protocol::messages::{CM_QUERYCHR, CM_SELCHR, SM_QUERYCHR, SM_STARTPLAY};
 use mir2_storage::LegacyDsn;
 
 use crate::db::Db;
@@ -64,8 +64,20 @@ async fn batch_records_get_by_matches_per_row() {
             .expect("行必须存在");
         let got = batch.get(id).expect("批量必须含该行");
         assert_eq!(
-            (got.id, &got.account_text, &got.name_text, got.selected, got.deleted),
-            (row.id, &row.account_text, &row.name_text, row.selected, row.deleted),
+            (
+                got.id,
+                &got.account_text,
+                &got.name_text,
+                got.selected,
+                got.deleted
+            ),
+            (
+                row.id,
+                &row.account_text,
+                &row.name_text,
+                row.selected,
+                row.deleted
+            ),
             "批量与逐条必须逐字段相等（id={id}）"
         );
     }
@@ -115,6 +127,7 @@ async fn select_chr_keeps_db_state_and_uses_four_round_trips() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let body = format!("{ACCOUNT}/sb2");
     let r0 = db.round_trips();
+    let a0 = db.acquires();
     crate::handler::dispatch(
         &server,
         &db,
@@ -130,9 +143,14 @@ async fn select_chr_keeps_db_state_and_uses_four_round_trips() {
     .await
     .expect("SELCHR 不得上抛");
     let rounds = db.round_trips() - r0;
+    let acquires = db.acquires() - a0;
     assert_eq!(
         rounds, 4,
-        "往返应为 4（1 批量 + 2 更新 + 1 地图）；改回逐条 = 6 ⇒ 红；实际 {rounds}"
+        "SQL 往返应为 4（1 批量 + 2 更新 + 1 地图）；改回逐条 = 6 ⇒ 红；实际 {rounds}"
+    );
+    assert_eq!(
+        acquires, 1,
+        "整条选角必须只 acquire 一次（复用一条连接）；旧实现=4 ⇒ 红；实际 {acquires}"
     );
 
     let frames = ts::take_frames(&mut rx);
@@ -140,8 +158,7 @@ async fn select_chr_keeps_db_state_and_uses_four_round_trips() {
     let (head, route) = ts::decode_user_reply(&frames[0]);
     assert_eq!(head.ident, SM_STARTPLAY, "必须回 SM_STARTPLAY");
     assert_eq!(
-        route,
-        b"127.0.0.1/7200",
+        route, b"127.0.0.1/7200",
         "路由体必须与改动前逐字节相同（decode_user_reply 已解 EDCode）"
     );
     assert_eq!(selected_of(&db, "sb2").await, 1, "选中项置 1");
@@ -165,8 +182,20 @@ async fn select_chr_falls_back_to_per_row_when_batch_query_fails() {
     let mut u = ts::gate_user("s1", ACCOUNT.as_bytes());
     u.session_no = SESSION;
     u.chr_queryed = true;
+    // 先把 sc1 置成「最近选择」，关闭池后断言它**没有被改动**（A 案的护栏牙：
+    // 池关闭 ⇒ 无回包 + SelectID 不变。此牙在新旧实现下都绿，不是等价性红证）。
+    {
+        let id = db.record_index("sc1").await.expect("索引");
+        let mut row = db
+            .record_get_by(id)
+            .await
+            .expect("GetBy")
+            .expect("行必须存在");
+        row.selected = 1;
+        db.record_update_by(&row).await.expect("置位写库失败");
+    }
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    // 关池：批量与逐条都会失败 ⇒ 走回退路径。
+    // 关池：唯一 acquire 失败 ⇒ 一条语句都不执行。
     db.pool.close().await;
     let body = format!("{ACCOUNT}/sc1");
     let err = crate::handler::dispatch(
@@ -183,10 +212,87 @@ async fn select_chr_falls_back_to_per_row_when_batch_query_fails() {
     )
     .await
     .expect_err("SQL 全失败时旧实现同样以 Err 终止（不回包）");
+    let text = format!("{err:#}");
     assert!(
-        format!("{err:#}").contains("characters"),
-        "错误必须来自 characters/索引查询：{err:#}"
+        text.contains("取数据库连接失败") || text.contains("characters"),
+        "错误必须来自取连接或 characters/索引查询：{text}"
     );
     assert!(ts::take_frames(&mut rx).is_empty(), "错误路径不得回帧");
+    // 原 pool 已关闭 ⇒ 用同一个库开一条新连接读后态（不是重新走业务路径）。
+    let db2 = crate::testsupport::open_db(&dsn).await;
+    assert_eq!(
+        selected_of(&db2, "sc1").await,
+        1,
+        "acquire 失败 ⇒ SelectID 不得被改动（A 案护栏牙；新旧实现都绿）"
+    );
+    ts::drop_db(&dsn).await;
+}
+
+/// **牙④（card/selectchr-roundtrip 增量）**：生产 `CM_QUERYCHR` 同样整条复用一条连接。
+///
+/// 旧实现每条 SQL 各取一次连接：3 个角色 ⇒ 3 次 `GetBy` + 至多 2 次 `GetQryChar` = 5 次
+/// acquire；复用后 `acquires == 1`，SQL 条数仍为 5（`round_trips` 不变）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "需要本机 MySQL；库名 mir2_test_selrt_q（自建自删）"]
+async fn query_chr_reuses_one_connection() {
+    let dsn = ts::setup_db("mir2_test_selrt_q").await;
+    let db = seed(&dsn, &["qa1", "qa2", "qa3"]).await;
+    let server = ts::test_server("selrtq", &dsn);
+    server
+        .login
+        .lock()
+        .await
+        .add_session(ACCOUNT.as_bytes().to_vec(), SESSION, Vec::new());
+    let mut u = ts::gate_user("s1", ACCOUNT.as_bytes());
+    u.session_no = SESSION;
+    u.chr_tick = 0;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // 前置：内存索引（characters_indexes）与 name_quick（characters）都能查到这三个名字。
+    for name in ["qa1", "qa2", "qa3"] {
+        let idx = db.record_index(name).await;
+        assert!(idx.is_some(), "前置：characters_indexes 应有 {name}");
+        let row = db.records_get_by(&[idx.unwrap()]).await.expect("批量查询");
+        assert!(
+            row.values().all(|r| !r.deleted),
+            "前置：{name} 不得是 deleted"
+        );
+        assert!(
+            db.data_index(name).await.is_some(),
+            "前置：characters 的 name_quick 应有 {name}"
+        );
+    }
+    // QUERYCHR 有 200ms 限频门：先触发一次 now_ms，避免 chr_tick=0 与 now≈0 误判。
+    let _ = crate::handler::now_ms();
+    let body = format!("{ACCOUNT}/{SESSION}");
+    let a0 = db.acquires();
+    let r0 = db.round_trips();
+    crate::handler::dispatch(
+        &server,
+        &db,
+        0,
+        &tx,
+        "127.0.0.1",
+        &mut u,
+        &crate::user::ClientPacket {
+            head: CommandMessage::make(i32::from(CM_QUERYCHR), 0, 0, 0, 0),
+            body: edcode::encode(body.as_bytes()),
+        },
+    )
+    .await
+    .expect("QUERYCHR 不得上抛");
+    let acquires = db.acquires() - a0;
+    let rounds = db.round_trips() - r0;
+    assert_eq!(
+        acquires, 1,
+        "整条 QUERYCHR 必须只 acquire 一次；旧实现=5 ⇒ 红；实际 {acquires}"
+    );
+    assert_eq!(
+        rounds, 5,
+        "3 个角色 + 至多 2 次 GetQryChar = 5 条 SQL；实际 {rounds}"
+    );
+    let frames = ts::take_frames(&mut rx);
+    assert_eq!(frames.len(), 1, "QUERYCHR 必须回一帧");
+    let (head, _body) = ts::decode_user_reply(&frames[0]);
+    assert_eq!(head.ident, SM_QUERYCHR, "必须回 SM_QUERYCHR");
     ts::drop_db(&dsn).await;
 }

@@ -28,6 +28,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use sqlx::mysql::MySqlConnection;
+use sqlx::pool::PoolConnection;
+
 use anyhow::{bail, Context, Result};
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{Column, ConnectOptions, MySql, Row, Transaction};
@@ -129,6 +132,8 @@ pub struct Db {
     /// **选角往返收敛（card/selectchr-roundtrip）**：真实 SQL 往返计数（内存索引不计）。
     /// 只作诊断/牙的读数，不参与任何行为分支。
     round_trips: AtomicU64,
+    /// **整条复用一条连接**：取连接次数（旧实现=每条 SQL 一次；复用后=每条请求一次）。
+    acquires: AtomicU64,
 }
 
 /// 建角闸门分片数（见 [`Db::create_gate`] 与 `tests/parity/whitelist.md` T-120）。
@@ -270,6 +275,7 @@ impl Db {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             round_trips: AtomicU64::new(0),
+            acquires: AtomicU64::new(0),
         })
     }
 
@@ -399,6 +405,26 @@ impl Db {
         self.round_trips.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// 取连接次数读数（诊断/牙用）。旧实现每条 SQL 内部各取一次 ⇒ = SQL 条数；
+    /// 复用一条连接后每条请求 1 次。
+    #[must_use]
+    pub fn acquires(&self) -> u64 {
+        self.acquires.load(Ordering::Relaxed)
+    }
+
+    fn note_acquire(&self) {
+        self.acquires.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// **card/selectchr-roundtrip**：为整条请求取一条连接（`select_chr`/`query_chr` 复用）。
+    /// 不开事务：调用方每条语句仍是自动提交。
+    ///
+    /// Errors: 池取连接失败/超时（acquire_timeout）时返回错误。
+    pub(crate) async fn acquire(&self) -> Result<PoolConnection<MySql>> {
+        self.note_acquire();
+        self.pool.acquire().await.context("取数据库连接失败")
+    }
+
     /// C# `PlayRecordStorage.GetBy` 的**批量版**：一条 `IN (...)` 取多个 Id
     /// （card/selectchr-roundtrip：把选角的 N+1 收敛成 1 次）。
     ///
@@ -407,6 +433,22 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn records_get_by(&self, ids: &[i64]) -> Result<HashMap<i64, IndexRow>> {
+        self.note_acquire();
+        self.records_get_by_on(
+            &mut *self.pool.acquire().await.context("取数据库连接失败")?,
+            ids,
+        )
+        .await
+    }
+
+    /// [`Self::records_get_by`] 的连接复用版：不取连接、只执行 SQL（counts round trip）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn records_get_by_on(
+        &self,
+        conn: &mut MySqlConnection,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, IndexRow>> {
         let ids: Vec<i64> = ids.iter().copied().filter(|id| *id > 0).collect();
         if ids.is_empty() {
             return Ok(HashMap::new());
@@ -419,7 +461,7 @@ impl Db {
             query = query.bind(*id);
         }
         let rows = query
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *conn)
             .await
             .context("批量查询 characters_indexes 失败")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -440,6 +482,19 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn record_get_by(&self, id: i64) -> Result<Option<IndexRow>> {
+        self.note_acquire();
+        let mut conn = self.pool.acquire().await.context("取数据库连接失败")?;
+        self.record_get_by_on(&mut conn, id).await
+    }
+
+    /// [`Self::record_get_by`] 的连接复用版（不取连接）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn record_get_by_on(
+        &self,
+        conn: &mut MySqlConnection,
+        id: i64,
+    ) -> Result<Option<IndexRow>> {
         if id <= 0 {
             return Ok(None);
         }
@@ -447,7 +502,7 @@ impl Db {
         let sql = format!("select {INDEX_COLS} from characters_indexes where Id=?");
         let Some(row) = sqlx::query(&sql)
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await
             .context("查询 characters_indexes 失败")?
         else {
@@ -573,8 +628,25 @@ impl Db {
         self.write_index_row(row).await
     }
 
+    /// [`Self::record_update_by`] 的连接复用版（不取连接）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn record_update_by_on(
+        &self,
+        conn: &mut MySqlConnection,
+        row: &IndexRow,
+    ) -> Result<()> {
+        self.write_index_row_on(conn, row).await
+    }
+
     /// `UPDATE characters_indexes`（C# `UpdateChrIndexes`，列与顺序一致）。
     async fn write_index_row(&self, row: &IndexRow) -> Result<()> {
+        self.note_acquire();
+        let mut conn = self.pool.acquire().await.context("取数据库连接失败")?;
+        self.write_index_row_on(&mut conn, row).await
+    }
+
+    async fn write_index_row_on(&self, conn: &mut MySqlConnection, row: &IndexRow) -> Result<()> {
         self.note_round_trip();
         sqlx::query(
             "UPDATE characters_indexes SET Account = ?, ChrName = ?, \
@@ -585,7 +657,7 @@ impl Db {
         .bind(i16::from(row.selected))
         .bind(i16::from(row.deleted))
         .bind(row.id)
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await
         .context("更新 characters_indexes 失败")?;
         Ok(())
@@ -624,13 +696,27 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn get_query_char(&self, id: i64) -> Result<Option<QryChar>> {
+        self.note_acquire();
+        let mut conn = self.pool.acquire().await.context("取数据库连接失败")?;
+        self.get_query_char_on(&mut conn, id).await
+    }
+
+    /// [`Self::get_query_char`] 的连接复用版（不取连接）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn get_query_char_on(
+        &self,
+        conn: &mut MySqlConnection,
+        id: i64,
+    ) -> Result<Option<QryChar>> {
         if id < 0 {
             return Ok(None);
         }
+        self.note_round_trip();
         let Some(row) =
             sqlx::query("SELECT ChrName, Job, Hair, Sex, Level FROM characters WHERE ID=?")
                 .bind(id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *conn)
                 .await
                 .context("查询 characters（选角字段）失败")?
         else {
@@ -647,11 +733,25 @@ impl Db {
     /// C# `PlayDataStorage.Query`：取 `ChrName` + `MapName`（选角决定进哪张图）。
     ///
     /// Errors: SQL 失败时返回错误。
+    #[allow(dead_code)] // 池版保留（选角已改走 _on；其它路径/测试仍可用同形 API）
     pub async fn query_name_and_map(&self, id: i64) -> Result<Option<(String, String)>> {
+        self.note_acquire();
+        let mut conn = self.pool.acquire().await.context("取数据库连接失败")?;
+        self.query_name_and_map_on(&mut conn, id).await
+    }
+
+    /// [`Self::query_name_and_map`] 的连接复用版（不取连接）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn query_name_and_map_on(
+        &self,
+        conn: &mut MySqlConnection,
+        id: i64,
+    ) -> Result<Option<(String, String)>> {
         self.note_round_trip();
         let Some(row) = sqlx::query("SELECT ChrName, MapName FROM characters WHERE ID=?")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await
             .context("查询 characters（地图）失败")?
         else {

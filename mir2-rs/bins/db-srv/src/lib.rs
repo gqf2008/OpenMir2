@@ -39,9 +39,9 @@ mod marketdata;
 mod playdata;
 #[cfg(test)]
 mod query_chain_tests;
+mod route;
 #[cfg(test)]
 mod select_roundtrip_tests;
-mod route;
 mod server;
 #[cfg(test)]
 mod testsupport;
