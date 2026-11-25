@@ -417,14 +417,15 @@
           "tests::amyounsul2_parity_s5",
           "tests::amyounsul2_parity_s13",
           "real_rust_ledger_amyounsul",
-          "real_rust_ledger_amyounsul2"
+          "real_rust_ledger_amyounsul2",
+          "magic_effect::tests::poison_dice_boundary_follows_anti_poison_plus_seven"
         ]
       },
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。 覆盖叶子 MG-13（case 主链；绿/红毒两支见 MG-14/MG-15）。",
       "basis": "semantic",
-      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。"
+      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。 **骰门边界补验（2026-11-25）**：新用例 `magic_effect::tests::poison_dice_boundary_follows_anti_poison_plus_seven`（`crates/world-bevy/src/magic_effect.rs`）钉住 oracle `MagicManager.cs:239` 的 `Random(AntiPoison + 7) <= 6`：anti=0 面 0..=6 全过、anti=1 面 6 过/面 7 不过、anti=3 面 6 过/7..=9 不过，且抽面口径必须是 `AntiPoison + 7`。变异实测（2026-11-25）：`<= 6`→`< 6` ⇒ 红 `anti=0：面 6（等号边界）必须过`；还原后绿。**仍未覆盖（分类）**：① **装置不可观测**——护身符 Shape 0 与 >2 的 fall-through（生成器 `amulet_shape` fail-closed 只许 1/2，已登记 `DEV-ORACLE-KNOBS`）；② **实现缺口（待开实现卡确认）**——Shape 0/>2 时 oracle 仍 `SetTargetCreat`/`boSpellFail=false`、`boTrain` 可置位，Rust 侧未见对应处理（需 `DEV-MG-13` 核实）；③ **装置不可观测**——`10139.p1` 的跨 buff 位号（夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-14",
