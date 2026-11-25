@@ -52,6 +52,8 @@ REGISTRY = [
     # 判等域复用 compare_runs 的规则语义（rules.json + global masks），不是 raw bytes；
     # 自测用仓库 npc_click run1 fixture（PASS m=1）、五类反例 + w1c 真实 FAIL，离线、<1s。
     ("rng_stream_shape", ["tools/conformance/rng_stream_shape.py", "selftest"], False),
+    # 卡批次二：合并后条目级抽查（parity-gap-magic 的 scope/evidence 是否单向丢失）；--selftest 用临时目录合成两份 manifest，离线。
+    ("manifest_merge_audit", ["tools/parity/manifest_merge_audit.py", "--selftest"], False),
     # 卡 `openmir2-charstatuschanged-gap`/IT-12 C1（opc-19 清点单第 7 条）：夹具声明的
     # `oracle_source_sha256` 按 **git blob（LF）** 复算——Windows 工作树 CRLF 与 blob 会算出两个值；
     # selftest 含顺序敏感 / 工作树 CRLF 不敏感 / 夹具 round-trip 三类断言。
