@@ -928,36 +928,24 @@ fn strip_empty_receivers(v: &mut Value) {
     }
 }
 
-fn real_ledger_verify_labels_opts(
-    stem: &str,
-    golden: &Value,
-    labels: &[&str],
-    drop_empty_receivers: bool,
-) {
-    let dir = ledger_dir();
-    let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
-    // **`frame_order_scope` 自检**：`multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）
-    // 与施毒 4 支（同根；可观测差异见 `docs/issues/openmir2-b4-multivictim-strike-order.md`）。
-    // 出现在别的 stem ⇒ 直接 panic，防止宽松口径静默扩散。
+/// `frame_order_scope` 白名单/静态一致性判定（从 `real_ledger_verify_labels_opts` 抽出，行为不变）：
+/// `multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）与施毒 4 支；出现在别的 stem ⇒ Err。
+/// 同 stem 的 `magic_id` 必须与定义一致（fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48）。
+fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
     let scope_marked = golden["cases"].as_array().is_some_and(|cs| {
         cs.iter()
             .any(|c| c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick"))
     });
-    assert!(
-        !scope_marked
-            || matches!(
-                stem,
-                "fire"
-                    | "skill10"
-                    | "amyounsul"
-                    | "amyounsul2"
-                    | "groupamyounsul"
-                    | "groupamyounsul2"
-            ),
-        "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18）与施毒 4 支；当前 stem={stem}"
-    );
-    // **stem ↔ magic_id 静态一致性**（防「给 fire 加护身符旋钮就静默降级成批次类」）：
-    // 施毒 due 语义只由 `magic_id ∈ {6,48}` 触发，白名单里每个 stem 的魔号必须与定义一致。
+    if scope_marked
+        && !matches!(
+            stem,
+            "fire" | "skill10" | "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+        )
+    {
+        return Err(format!(
+            "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18）与施毒 4 支；当前 stem={stem}"
+        ));
+    }
     if scope_marked {
         let mid = golden["magic_id"].as_i64().unwrap_or(-1);
         let ok = match stem {
@@ -967,11 +955,26 @@ fn real_ledger_verify_labels_opts(
             "groupamyounsul" | "groupamyounsul2" => mid == 48,
             _ => false,
         };
-        assert!(
-            ok,
-            "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48"
-        );
+        if !ok {
+            return Err(format!(
+                "[{stem}] 顺序放宽 marker 与 magic_id 不一致（magic_id={mid}）：fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48"
+            ));
+        }
     }
+    Ok(())
+}
+
+fn real_ledger_verify_labels_opts(
+    stem: &str,
+    golden: &Value,
+    labels: &[&str],
+    drop_empty_receivers: bool,
+) {
+    let dir = ledger_dir();
+    let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
+    // **`frame_order_scope` 自检**（判定抽成 `check_frame_order_scope`，行为不变；负例见
+    // `frame_order_scope_marker_is_refused_outside_the_whitelist`）。
+    check_frame_order_scope(golden, stem).unwrap_or_else(|m| panic!("{m}"));
     // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
     // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
     // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
@@ -4357,4 +4360,25 @@ fn fireball5_golden_antimagic_boundary_is_covered() {
 #[test]
 fn lightning11_golden_antimagic_boundary_is_covered() {
     assert_antimagic_boundary(&golden_file("lightning-11.json"), "lightning-11");
+}
+
+/// **MG-18 补验（2026-11-26）**：`frame_order_scope` 白名单负例——
+/// 标记落在别的 stem 必须被点名拒绝；允许的 stem+magic_id 组合放行；stem 对但 magic_id 错同样拒绝。
+#[test]
+fn frame_order_scope_marker_is_refused_outside_the_whitelist() {
+    let mk = |mid: i64| {
+        serde_json::json!({
+            "magic_id": mid,
+            "cases": [{ "Fixture": { "frame_order_scope": "multi_victim_same_tick" } }]
+        })
+    };
+    let err =
+        check_frame_order_scope(&mk(10), "fireball").expect_err("fireball 不在白名单 ⇒ 必须拒绝");
+    assert!(err.contains("只允许"), "{err}");
+    assert!(
+        check_frame_order_scope(&mk(10), "skill10").is_ok(),
+        "skill10+10 应放行"
+    );
+    let err = check_frame_order_scope(&mk(10), "fire").expect_err("fire 的 magic_id 必须是 9");
+    assert!(err.contains("magic_id 不一致"), "{err}");
 }
