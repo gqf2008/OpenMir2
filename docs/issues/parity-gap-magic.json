@@ -317,13 +317,14 @@
         "unit_tests": [
           "tests::fireball_parity_miss",
           "tests::fireball_parity_edge",
-          "tests::fireball_parity_hit"
+          "tests::fireball_parity_hit",
+          "fireball_golden_antimagic_boundary_is_covered"
         ]
       },
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红（golden=9/rust=15）与比较器级篡改，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒、不改 RNG 账本条目数）⇒ hit 支伤害 9→5：驱动 tests::fireball_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(219) right=Some(215)）；比较器 real_rust_ledger_parity 红（[hit] TargetHp 不等 golden=215 rust=219；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红（golden=9/rust=15）与比较器级篡改，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒、不改 RNG 账本条目数）⇒ hit 支伤害 9→5：驱动 tests::fireball_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(219) right=Some(215)）；比较器 real_rust_ledger_parity 红（[hit] TargetHp 不等 golden=215 rust=219；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。 **边界语义补验（2026-11-25）**：AntiMagic 门是等号通过（oracle `MagicManager.cs:180` 的 `AntiMagic <= Random(10)` = Rust `anti_magic_roll` 的 `>=`）。新增守卫 `fireball_golden_antimagic_boundary_is_covered`（`mir2-rs/tests/parity/tests/magic_fireball_parity.rs`）钉住 golden 三支首抽与阈值的关系：miss `<`、edge **`==`**、hit `>`，并核 HP 变化；这防的是重出 golden 时丢掉等号边界（三支全 `>`）令边界变异永远咬不住。变异实测（2026-11-25）：`anti_magic_roll` 的 `>=`→`>` ⇒ 驱动 `tests::fireball_parity_edge` 红，红原文 `[fireball/edge] 术后 HP 与金标准 TargetHp 不符 left: Some(224) right: Some(209)`（seed=18、首抽=1=anti_magic），还原后绿。剩余未覆盖：client 布局尾（已登记 wire 偏差 `openmir2-client-e2e-enter-gaps`）；`Race>=Animal` 只决定 `boTrain`、不参与伤害（见 `openmir2-magic-parity.md` §35 订正），训练面归 MG-11 的范围说明。"
     },
     {
       "id": "MG-11",
