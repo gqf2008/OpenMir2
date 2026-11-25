@@ -29,6 +29,7 @@ mod dbprobe;
 mod gate_accept_tests;
 mod gbk;
 mod handler;
+mod ingprobe;
 #[cfg(test)]
 mod lb08_tests;
 mod log;
