@@ -124,6 +124,22 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
 }
 
 /// 包一次 DB 调用并累加 `db_ms`（探针关闭态零开销直通）。
+/// 取连接的计时（只计入 `acq_ms`，不进 `db_ms`；探针关=直接 await）。
+async fn timed_acq<T>(
+    probe: &mut Option<&mut crate::dbprobe::Acc>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    match probe {
+        Some(p) => {
+            let t = crate::dbprobe::start();
+            let v = fut.await;
+            p.acq_ms = p.acq_ms.saturating_add(crate::dbprobe::ms_since(t));
+            v
+        }
+        None => fut.await,
+    }
+}
+
 async fn timed_db<T>(
     probe: &mut Option<&mut crate::dbprobe::Acc>,
     fut: impl std::future::Future<Output = T>,
@@ -358,6 +374,8 @@ async fn query_chr(
     if found {
         u.account.clone_from(&account);
         u.session_no = session;
+        // **card/selectchr-roundtrip**：整条查询复用一条连接（不开事务）。
+        let mut conn = db.acquire().await?;
         // oracle `QueryChr` 的 `bool result` 是**粘性**的（`GetRecord` 只在 `dr.Read()` 时置真、
         // 从不重置）：全部 `GetBy` 因 `Open` 失败返回 `default` 时它保持 false ⇒ 逐行跳过、
         // 照常回空列表；一旦某行成功过，后续失败/无行会让 `humRecord=null` ⇒
@@ -370,7 +388,7 @@ async fn query_chr(
                 q.name_text,
                 q.index
             ));
-            let rec = match db.record_get_by(q.index).await {
+            let rec = match db.record_get_by_on(&mut conn, q.index).await {
                 Ok(rec) => {
                     // C# `GetBy`：`nIndex <= 0` 显式 `success=false`；`dr.Read()` 才置真。
                     if q.index <= 0 {
@@ -416,7 +434,7 @@ async fn query_chr(
             if nchr >= 2 {
                 continue;
             }
-            let ch = match db.get_query_char(index).await {
+            let ch = match db.get_query_char_on(&mut conn, index).await {
                 Ok(Some(ch)) => ch,
                 // C# `GetQryChar` 读到行才赋值；无行仍返回 true ⇒ `chrRecord` 为 null ⇒ NRE
                 // （被上层吞掉、**不回包**）。
@@ -680,7 +698,12 @@ async fn select_chr(
     let name_text = decode(&name);
     let mut data_ok = false;
     let mut cur_map = String::new();
+    // **card/selectchr-roundtrip**：整条选角复用一条连接（一次 acquire，4 条 SQL 顺序执行；
+    // **不开事务**，每条语句仍是自动提交）。未匹配账号的分支不取连接（与旧实现同形）。
+    let acq0 = db.acquires();
+    let sql0 = db.round_trips();
     if u.account.eq_ignore_ascii_case(&account) {
+        let mut conn = timed_acq(&mut probe, db.acquire()).await?;
         // oracle `bool result` 同理粘性：全部 `GetBy` 失败（Open 失败）时跳过、继续走
         // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
         let mut result = false;
@@ -689,7 +712,7 @@ async fn select_chr(
         // `GetBy` = N+1）。批量失败 ⇒ **回退逐条**，逐行错误日志/粘性 `result` 语义与旧实现
         // 完全一致；批量成功时按 `quicks` 原序遍历，缺行仍按 None 处理。
         let ids: Vec<i64> = quicks.iter().map(|q| q.index).collect();
-        let mut batch = match timed_db(&mut probe, db.records_get_by(&ids)).await {
+        let mut batch = match timed_db(&mut probe, db.records_get_by_on(&mut conn, &ids)).await {
             Ok(rows) => Some(rows),
             Err(e) => {
                 log::error(&format!(
@@ -713,7 +736,7 @@ async fn select_chr(
                 }
                 rec
             } else {
-                match timed_db(&mut probe, db.record_get_by(q.index)).await {
+                match timed_db(&mut probe, db.record_get_by_on(&mut conn, q.index)).await {
                     Ok(rec) => {
                         if q.index <= 0 {
                             result = false;
@@ -741,7 +764,8 @@ async fn select_chr(
                 rec.selected = 1;
                 // C# `UpdateBy` → `UpdateRecord` 内部 catch：写失败被吞、继续回 STARTPLAY
                 // （LB-05 的真实差异格：索引 UPDATE 失败但 characters SELECT 正常）。
-                if let Err(e) = timed_db(&mut probe, db.record_update_by(&rec)).await {
+                if let Err(e) = timed_db(&mut probe, db.record_update_by_on(&mut conn, &rec)).await
+                {
                     log::error(&format!(
                         "选择角色[{}]：写入 SelectID 失败（C# UpdateBy 吞异常、照常回 STARTPLAY）: {e:#}",
                         show(&name)
@@ -749,7 +773,8 @@ async fn select_chr(
                 }
             } else if rec.selected == 1 {
                 rec.selected = 0;
-                if let Err(e) = timed_db(&mut probe, db.record_update_by(&rec)).await {
+                if let Err(e) = timed_db(&mut probe, db.record_update_by_on(&mut conn, &rec)).await
+                {
                     log::error(&format!(
                         "选择角色[{}]：清除 SelectID 失败（C# UpdateBy 吞异常）: {e:#}",
                         show(&name)
@@ -761,7 +786,7 @@ async fn select_chr(
         if let Some(index) = data_index {
             // C# `PlayDataStorage.Query` 对 `Open` 失败/读异常都返回 null ⇒ `chrRecord.ChrName`
             // NRE ⇒ 不回包（与 Rust Err 上抛/None 走 bail 同形；这里不降级）。
-            match timed_db(&mut probe, db.query_name_and_map(index)).await? {
+            match timed_db(&mut probe, db.query_name_and_map_on(&mut conn, index)).await? {
                 None => bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）"),
                 Some((chr_name, map)) => {
                     if !chr_name.is_empty() {
@@ -771,6 +796,10 @@ async fn select_chr(
                 }
             }
         }
+    }
+    if let Some(p) = probe.as_deref_mut() {
+        p.acq_n = db.acquires().saturating_sub(acq0);
+        p.sql_n = db.round_trips().saturating_sub(sql0);
     }
     if data_ok {
         // 地图编号：C# `DBShare.GetMapIndex(sCurMap)`（本部署 `[Setup] MapFile` 缺省为空 ⇒ 恒 0）

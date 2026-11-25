@@ -15,7 +15,13 @@
 //! `MIR2_DBSEL_PROBE_SLOW_MS`（缺省 1000）时必打。
 //!
 //! **口径提醒**：`pool_ms` 是**另取一次连接**的等待时间（独立采样，不改查询路径）——
-//! 它反映当时的池压力，不等于 `db_ms` 里那几次查询各自内部的取连接耗时。
+//! 它反映当时的池压力，不等于查询内部各自取连接的耗时。
+//!
+//! **口径变更日志（card/selectchr-roundtrip，2026-11-26）**：
+//! - 选角/查角改为**整条复用一条连接**（`Db::acquire()` 一次）⇒ 新增 `acq_ms`（取连接耗时）
+//!   与 `acq_n`（本次请求的 acquire 次数，期望 1）、`sql_n`（本次请求的 SQL 语句数）。
+//! - `db_ms` 定义收窄为**仅 SQL execute 之和**（不再含 acquire）；此前 `db_ms` 实际是
+//!   Σ(acquire + execute)。`rest_ms = total − wait − lock − acq − db`。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -55,7 +61,13 @@ pub struct Acc {
     pub lock_ms: u64,
     /// 独立采样的一次 `pool.acquire()` 等待（池压力读数）。
     pub pool_ms: u64,
-    /// `select_chr` 内 DB 层累计（含各自内部取连接）。
+    /// 本次请求取连接（`Db::acquire()`）的耗时。
+    pub acq_ms: u64,
+    /// 本次请求的 acquire 次数（复用一条连接后恒 1；旧实现=SQL 条数）。
+    pub acq_n: u64,
+    /// 本次请求的 SQL 语句数（`Db::round_trips()` 的差值）。
+    pub sql_n: u64,
+    /// 本次请求 DB 层累计：**仅 execute**（不含 acquire）。
     pub db_ms: u64,
     /// 入口 → 回包前。
     pub total_ms: u64,
@@ -68,6 +80,7 @@ impl Acc {
         self.total_ms
             .saturating_sub(self.wait_ms)
             .saturating_sub(self.lock_ms)
+            .saturating_sub(self.acq_ms)
             .saturating_sub(self.db_ms)
     }
 }
@@ -123,10 +136,13 @@ pub fn ms_since(t: Instant) -> u64 {
 #[must_use]
 pub fn line(n: u64, acc: &Acc, chr: &str, ok: bool) -> String {
     format!(
-        "[DBSEL] n={n} wait_ms={} lock_ms={} pool_ms={} db_ms={} rest_ms={} total_ms={} chr={chr} ok={}",
+        "[DBSEL] n={n} wait_ms={} lock_ms={} pool_ms={} acq_ms={} acq_n={} sql_n={} db_ms={} rest_ms={} total_ms={} chr={chr} ok={}",
         acc.wait_ms,
         acc.lock_ms,
         acc.pool_ms,
+        acc.acq_ms,
+        acc.acq_n,
+        acc.sql_n,
         acc.db_ms,
         acc.rest_ms(),
         acc.total_ms,
@@ -150,12 +166,17 @@ pub fn note(acc: &Acc, chr: &str, ok: bool) {
 mod tests {
     use super::*;
 
+    /// 两个用例共享进程级 `TEST_GATE`/`COUNT`：并行跑会互相插队（首跑红：
+    /// gate_off 读到 gate_on 的 +2）。用同一把锁串行化（测试专用，不改生产路径）。
+    static GATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn set_gate(v: u8) {
         TEST_GATE.store(v, Ordering::Relaxed);
     }
 
     #[test]
     fn gate_off_is_silent_and_does_not_count() {
+        let _guard = GATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_gate(2);
         let before = COUNT.load(Ordering::Relaxed);
         note(&Acc::default(), "hero", true);
@@ -165,6 +186,7 @@ mod tests {
 
     #[test]
     fn gate_on_counts_and_n_increments() {
+        let _guard = GATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_gate(1);
         let before = COUNT.load(Ordering::Relaxed);
         note(&Acc::default(), "hero", true);
@@ -180,6 +202,9 @@ mod tests {
             wait_ms: 7,
             lock_ms: 3,
             pool_ms: 11,
+            acq_ms: 2,
+            acq_n: 1,
+            sql_n: 4,
             db_ms: 19,
             total_ms: 100,
         };
@@ -189,8 +214,11 @@ mod tests {
             "wait_ms=7",
             "lock_ms=3",
             "pool_ms=11",
+            "acq_ms=2",
+            "acq_n=1",
+            "sql_n=4",
             "db_ms=19",
-            "rest_ms=71",
+            "rest_ms=69",
             "total_ms=100",
             "chr=hero",
             "ok=1",
@@ -203,6 +231,9 @@ mod tests {
             wait_ms: 50,
             lock_ms: 50,
             pool_ms: 1,
+            acq_ms: 50,
+            acq_n: 1,
+            sql_n: 4,
             db_ms: 50,
             total_ms: 100,
         };
