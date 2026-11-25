@@ -685,22 +685,50 @@ async fn select_chr(
         // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
         let mut result = false;
         let quicks = timed_db(&mut probe, db.find_by_account(&account)).await;
+        // **card/selectchr-roundtrip**：本账号的角色索引一次 `IN (...)` 取回（原实现逐条
+        // `GetBy` = N+1）。批量失败 ⇒ **回退逐条**，逐行错误日志/粘性 `result` 语义与旧实现
+        // 完全一致；批量成功时按 `quicks` 原序遍历，缺行仍按 None 处理。
+        let ids: Vec<i64> = quicks.iter().map(|q| q.index).collect();
+        let mut batch = match timed_db(&mut probe, db.records_get_by(&ids)).await {
+            Ok(rows) => Some(rows),
+            Err(e) => {
+                log::error(&format!(
+                    "选择角色[{}]：批量 GetBy 失败，回退逐条（行为与旧实现一致）: {e:#}",
+                    show(&name)
+                ));
+                None
+            }
+        };
         for q in quicks {
-            let rec = match timed_db(&mut probe, db.record_get_by(q.index)).await {
-                Ok(rec) => {
-                    if q.index <= 0 {
-                        result = false;
-                    } else if rec.is_some() {
-                        result = true;
-                    }
-                    rec
-                }
-                Err(e) => {
-                    log::error(&format!(
-                        "选择角色[{}]：GetBy 失败（C# Open 失败且 result={result}）: {e:#}",
-                        show(&name)
-                    ));
+            let rec = if let Some(rows) = batch.as_mut() {
+                let rec = if q.index <= 0 {
                     None
+                } else {
+                    rows.remove(&q.index)
+                };
+                if q.index <= 0 {
+                    result = false;
+                } else if rec.is_some() {
+                    result = true;
+                }
+                rec
+            } else {
+                match timed_db(&mut probe, db.record_get_by(q.index)).await {
+                    Ok(rec) => {
+                        if q.index <= 0 {
+                            result = false;
+                        } else if rec.is_some() {
+                            result = true;
+                        }
+                        rec
+                    }
+                    Err(e) => {
+                        log::error(&format!(
+                            "选择角色[{}]：GetBy 失败（C# Open 失败且 result={result}）: {e:#}",
+                            show(&name)
+                        ));
+                        None
+                    }
                 }
             };
             let Some(mut rec) = rec else {
