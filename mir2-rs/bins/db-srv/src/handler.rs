@@ -47,7 +47,8 @@ static PICK_SEED: AtomicU64 = AtomicU64::new(0);
 /// **仍是单消费者、逐条 await**：这是 5100 面全序的唯一来源（oracle 同）。
 /// 不得改成「每消息 `tokio::spawn`」——那会破坏同网关连接的回包顺序。
 pub async fn queue_loop(server: Arc<Server>, mut rx: UnboundedReceiver<Queued>, db: Arc<Db>) {
-    while let Some(q) = rx.recv().await {
+    while let Some(mut q) = rx.recv().await {
+        q.queue_depth = rx.len();
         if let Err(e) = process_data(&server, &db, q).await {
             // C# 在消息线程里 catch 并 `LogService.Error(e)`：该条命令**不回包**、不影响后续
             log::error(&format!("处理角色网关数据失败: {e:#}"));
@@ -61,9 +62,11 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     let (mut u, tx, remote_ip) = {
         let gates = server.gates.lock().await;
         let Some(Some(g)) = gates.get(q.slot) else {
+            crate::ingprobe::on_drop(crate::ingprobe::Drop::NoGate);
             return Ok(());
         };
         let Some(u) = g.users.iter().find(|u| u.socket_id == q.msg.socket_id) else {
+            crate::ingprobe::on_drop(crate::ingprobe::Drop::NoUser);
             return Ok(());
         };
         (u.clone(), g.tx.clone(), g.remote_ip.clone())
@@ -72,6 +75,7 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     // C# `HUtil32.GetString(packet.Data, 0, packet.DataLen)`：DataLen 是独立字段
     let Some(n) = user::data_len(q.msg.data_len, q.msg.data.len()) else {
         log::debug("Data 报文 DataLen 越界（C# 会抛异常 ⇒ 丢弃该条）");
+        crate::ingprobe::on_drop(crate::ingprobe::Drop::DataLen);
         return Ok(());
     };
     let text = q.msg.data[..n].to_vec();
@@ -88,8 +92,18 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
             u.text.clear();
         } else if frame.len() > user::DEF_BLOCK_SIZE {
             let payload = &frame[1..];
-            let packet = user::decode_client_packet(payload)
-                .map_err(|len| anyhow::anyhow!("客户端消息头长度不足（{len}）"))?;
+            let packet = match user::decode_client_packet(payload) {
+                Ok(p) => p,
+                Err(len) => {
+                    crate::ingprobe::on_drop(crate::ingprobe::Drop::Decode);
+                    return Err(anyhow::anyhow!("客户端消息头长度不足（{len}）"));
+                }
+            };
+            crate::ingprobe::on_frame(q.slot);
+            if packet.head.ident == CM_SELCHR {
+                let queue_ms = q.enqueued_at.map_or(0, |t| t.elapsed().as_millis());
+                crate::ingprobe::on_dispatch(q.slot, queue_ms, q.queue_depth, packet.head.ident);
+            }
             dispatch(server, db, q.slot, &tx, &remote_ip, &mut u, &packet).await?;
         }
     }

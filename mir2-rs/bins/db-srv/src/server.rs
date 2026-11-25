@@ -79,6 +79,10 @@ pub struct Queued {
     pub slot: usize,
     /// 原始内部帧。
     pub msg: ServerDataMessage,
+    /// **MIR2_DBSEL_ING**：入队时刻（探针关闭 = `None`，零开销）。
+    pub enqueued_at: Option<std::time::Instant>,
+    /// **MIR2_DBSEL_ING**：出队时队列余量（探针关闭 = 0）。
+    pub queue_depth: usize,
 }
 
 /// 进程级服务状态。
@@ -213,6 +217,7 @@ pub(crate) async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String
         });
     }
     log::info(&format!("角色网关[{id}]({peer})已打开..."));
+    crate::ingprobe::on_accept(slot, id);
     let (mut rd, mut wr) = sock.into_split();
     let writer = tokio::spawn(async move {
         while let Some(buf) = rx.recv().await {
@@ -270,7 +275,14 @@ pub(crate) async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String
                 close_user(&server, slot, &msg.socket_id).await;
             }
             ServerDataType::Data => {
-                let _ = server.queue_tx.send(Queued { slot, msg });
+                crate::ingprobe::on_data(slot, msg.data.len());
+                let enqueued_at = crate::ingprobe::enqueued();
+                let _ = server.queue_tx.send(Queued {
+                    slot,
+                    msg,
+                    enqueued_at,
+                    queue_depth: 0,
+                });
             }
         }
     }
@@ -282,6 +294,7 @@ pub(crate) async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String
         }
         gates[slot] = None;
     }
+    crate::ingprobe::on_close(slot);
     writer.abort();
     Ok(())
 }

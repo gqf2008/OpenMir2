@@ -63,6 +63,8 @@ fn queued(slot: usize, socket: &str, ident: u16, plain: &[u8]) -> Queued {
     Queued {
         slot,
         msg: ServerDataMessage::new(ServerDataType::Data, socket, client_frame(ident, plain)),
+        enqueued_at: None,
+        queue_depth: 0,
     }
 }
 
