@@ -374,6 +374,8 @@ async fn query_chr(
     if found {
         u.account.clone_from(&account);
         u.session_no = session;
+        // 先做内存索引查询（0 SQL），再取连接——峰值期不白占池槽。
+        let quicks = db.find_by_account(&account).await;
         // **card/selectchr-roundtrip**：整条查询复用一条连接（不开事务）。
         let mut conn = db.acquire().await?;
         // oracle `QueryChr` 的 `bool result` 是**粘性**的（`GetRecord` 只在 `dr.Read()` 时置真、
@@ -381,7 +383,7 @@ async fn query_chr(
         // 照常回空列表；一旦某行成功过，后续失败/无行会让 `humRecord=null` ⇒
         // `!humRecord.Deleted` NRE 冒到消息线程 catch ⇒ **不回包**（与 Rust Err 上抛同形）。
         let mut result = false;
-        for (i, q) in db.find_by_account(&account).await.into_iter().enumerate() {
+        for (i, q) in quicks.into_iter().enumerate() {
             log::info(&format!(
                 "[QueryChr] 候选 account={} i={i} name=[{}] quickIndex={}",
                 show(&account),
@@ -703,7 +705,6 @@ async fn select_chr(
     let acq0 = db.acquires();
     let sql0 = db.round_trips();
     if u.account.eq_ignore_ascii_case(&account) {
-        let mut conn = timed_acq(&mut probe, db.acquire()).await?;
         // oracle `bool result` 同理粘性：全部 `GetBy` 失败（Open 失败）时跳过、继续走
         // `_playDataStorage.Query`；一旦成功过再遇 null 行 ⇒ NRE、不回包。
         let mut result = false;
@@ -712,6 +713,9 @@ async fn select_chr(
         // `GetBy` = N+1）。批量失败 ⇒ **回退逐条**，逐行错误日志/粘性 `result` 语义与旧实现
         // 完全一致；批量成功时按 `quicks` 原序遍历，缺行仍按 None 处理。
         let ids: Vec<i64> = quicks.iter().map(|q| q.index).collect();
+        // **acquire 推迟到第一条真正需要 SQL 的语句之前**：`find_by_account` 是内存索引、
+        // 0 SQL，先取连接只会白白多占池槽一段（峰值期这正是稀缺资源）。
+        let mut conn = timed_acq(&mut probe, db.acquire()).await?;
         let mut batch = match timed_db(&mut probe, db.records_get_by_on(&mut conn, &ids)).await {
             Ok(rows) => Some(rows),
             Err(e) => {
