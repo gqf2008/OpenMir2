@@ -25,6 +25,7 @@
 //! **返回错误、启动失败**。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -125,6 +126,9 @@ pub struct Db {
     /// **没有** `UNIQUE(ChrName)` 兜底（`sql/mir2_db.sql`），同名保护完全依赖本闸门。
     /// 残余差异（不同名哈希到同一分片时仍会串行）登记见 whitelist T-120。
     pub(crate) create_gates: Box<[Mutex<()>]>,
+    /// **选角往返收敛（card/selectchr-roundtrip）**：真实 SQL 往返计数（内存索引不计）。
+    /// 只作诊断/牙的读数，不参与任何行为分支。
+    round_trips: AtomicU64,
 }
 
 /// 建角闸门分片数（见 [`Db::create_gate`] 与 `tests/parity/whitelist.md` T-120）。
@@ -265,6 +269,7 @@ impl Db {
                 .map(|_| Mutex::new(()))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            round_trips: AtomicU64::new(0),
         })
     }
 
@@ -384,6 +389,53 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// 选角路径的 SQL 往返读数（诊断/牙用；内存索引调用不计数）。
+    #[must_use]
+    pub fn round_trips(&self) -> u64 {
+        self.round_trips.load(Ordering::Relaxed)
+    }
+
+    fn note_round_trip(&self) {
+        self.round_trips.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// C# `PlayRecordStorage.GetBy` 的**批量版**：一条 `IN (...)` 取多个 Id
+    /// （card/selectchr-roundtrip：把选角的 N+1 收敛成 1 次）。
+    ///
+    /// 语义与逐条 [`Self::record_get_by`] 逐项相同：`id <= 0` 视为无行、缺行即不在 map 里；
+    /// SQL 失败返回 `Err`，调用方**回退逐条**（保持旧实现的逐行错误语义与日志）。
+    ///
+    /// Errors: SQL 失败时返回错误。
+    pub async fn records_get_by(&self, ids: &[i64]) -> Result<HashMap<i64, IndexRow>> {
+        let ids: Vec<i64> = ids.iter().copied().filter(|id| *id > 0).collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.note_round_trip();
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!("select {INDEX_COLS} from characters_indexes where Id in ({marks})");
+        let mut query = sqlx::query(&sql);
+        for id in &ids {
+            query = query.bind(*id);
+        }
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .context("批量查询 characters_indexes 失败")?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in &rows {
+            let rec = IndexRow {
+                id: int_col(row, "Id")?,
+                account_text: text_col(row, "Account")?,
+                name_text: text_col(row, "ChrName")?,
+                selected: u8::try_from(int_col(row, "SelectID")? & 0xFF).unwrap_or(0),
+                deleted: int_col(row, "IsDeleted")? != 0,
+            };
+            out.insert(rec.id, rec);
+        }
+        Ok(out)
+    }
+
     /// C# `PlayRecordStorage.GetBy`：`Id > 0` 才查库，取不到返回 `None`。
     ///
     /// Errors: SQL 失败时返回错误。
@@ -391,6 +443,7 @@ impl Db {
         if id <= 0 {
             return Ok(None);
         }
+        self.note_round_trip();
         let sql = format!("select {INDEX_COLS} from characters_indexes where Id=?");
         let Some(row) = sqlx::query(&sql)
             .bind(id)
@@ -522,6 +575,7 @@ impl Db {
 
     /// `UPDATE characters_indexes`（C# `UpdateChrIndexes`，列与顺序一致）。
     async fn write_index_row(&self, row: &IndexRow) -> Result<()> {
+        self.note_round_trip();
         sqlx::query(
             "UPDATE characters_indexes SET Account = ?, ChrName = ?, \
              SelectID = ?, IsDeleted = ?, ModifyDate = now() WHERE Id = ?",
@@ -594,6 +648,7 @@ impl Db {
     ///
     /// Errors: SQL 失败时返回错误。
     pub async fn query_name_and_map(&self, id: i64) -> Result<Option<(String, String)>> {
+        self.note_round_trip();
         let Some(row) = sqlx::query("SELECT ChrName, MapName FROM characters WHERE ID=?")
             .bind(id)
             .fetch_optional(&self.pool)
