@@ -381,13 +381,14 @@
         "unit_tests": [
           "tests::healing_parity_heal",
           "tests::healing_parity_full",
-          "tests::healing_parity_self"
+          "tests::healing_parity_self",
+          "recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate"
         ]
       },
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3"
+      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3 **加血面补验（2026-11-25）**：装置仍不观测 `TargetHp`（`RM_MAGHEALING` 只累计，golden 的 `TargetHp == TargetHpBefore` 不变），但**恢复期的多轮消费**补了牙：新用例 `recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate`（`bins/game-svr/src/recover.rs`）断言恢复门 `600 - min(level*10,400)` 未到不消费、每轮 +`PerHealing=5`、余额不足时全加并清零、清零后不再进场；依据 oracle `PlayObject.Message.cs:113-130`。变异实测（2026-11-25）：把 `n_hp += IncHealing` 项置零 ⇒ 红 `left: (110, 0) right: (112, 0)`；还原后绿。**仍未覆盖**：cast 的累计值到 `IncHealing` 的链路只在装置侧经 `RM 8034 p1` 观测（golden 已逐值对拍），装置内仍看不到 `TargetHp` 的变化；恢复节奏的墙钟相位（`IncHealthSpellTick` 推进公式 `now + inc_tick`）由本用例按门边界间接覆盖、无独立 golden。"
     },
     {
       "id": "MG-13",
