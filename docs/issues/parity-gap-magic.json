@@ -830,7 +830,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。14=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格，`MagDefenceUp` 无条件 AddBuff ⇒ target 52×49/100×49/657×98；golden 于 2026-11-20 按登录序（RecalcLevelAbilitys→RecalcAbilitys）重生成，只有 target SM 52 尾变化（见卡 §24）。",
-      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 **强度值变异补验（2026-11-26）**：产品侧逐臂变异 `World::mag_defence_up`（14 号专用）的 `BuffApplyEvent.seconds` +1 ⇒ 比较器 `real_rust_ledger_hangmajinbub` 红（`真实台账与金标准不等（147 条）`，例 `[s1/target] Sent[149].tail 不等：golden="…a`kWO=" rust="…aakWO="` —— GBK 秒数串差 1）；**不连带**：同变异下 `real_rust_ledger_dejiwonho`（15 号走 `defence_up`）保持绿（rc=0）——两臂函数独立。还原后两比较器均绿。"
     },
     {
       "id": "MG-29",
@@ -861,7 +861,7 @@
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级。15=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格；`DefenceUp` 已有 buff ⇒ TryUpdate 早退（BaseObject.cs:2137-2147）⇒ 只有首组 52/100/657×2；golden 同批重生成（见卡 §24）。",
-      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "scope": "partial：①657 `Series` **已点亮**（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人 7/0/7；target 因自身 recalc 归 0）；②DefenceUp 强度观测面是 **`SM 100` 的 `tail`**（GBK 文本含秒数；s5/s13 变体 ⇒ 250/151/154 两两不同），**不是 HP**。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 **强度值变异补验（2026-11-26）**：产品侧逐臂变异 `World::defence_up`（15 号专用）的 `BuffApplyEvent.seconds` +1 ⇒ 比较器 `real_rust_ledger_dejiwonho` 红（`真实台账与金标准不等（3 条）`，例 `[s1/target] Sent[5].tail 不等：golden="…bUk`WC[" rust="…bUkaWC["`）；**不连带**：同变异下 `real_rust_ledger_hangmajinbub`（14 号走 `mag_defence_up`）保持绿（rc=0）。还原后两比较器均绿。"
     },
     {
       "id": "MG-30",
