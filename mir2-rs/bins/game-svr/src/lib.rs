@@ -22926,6 +22926,23 @@ fn skip_observer_dbg_lines(counts: &DisappearObserverCounts) -> Vec<String> {
 ///
 /// **缺标注 ⇒ 按 `Player` 处理**（fail-safe loud）：漏标/旧构造不得把玩家缺失静音成
 /// 「非玩家/克隆体预期噪声」。顺序不是契约，按二元组查而非下标对齐。
+/// **A43m**：按**下标**取离开类别（O(1)）；下标项与请求的 `(observer,target)` 不符时
+/// **回退**线性查找 [`hide_observer_kind`]（长度错位属产生侧缺陷，fail-safe 仍取到正确类别）。
+///
+/// 不变式：`hide_observer_kinds` 与 `hides` **同序同长**（产生点在 `aoi.rs` 同一循环内
+/// 成对 push）。旧实现每个 hide 线性扫一遍 ⇒ O(H²)/tick。
+fn disappear_kind_at(
+    rec: &mir2_world_bevy::TickRecord,
+    i: usize,
+    observer_id: i32,
+    target_id: i32,
+) -> mir2_world_bevy::HideObserverKind {
+    match rec.hide_observer_kinds.get(i) {
+        Some(&(o, t, kind)) if o == observer_id && t == target_id => kind,
+        _ => hide_observer_kind(rec, observer_id, target_id),
+    }
+}
+
 fn hide_observer_kind(
     rec: &mir2_world_bevy::TickRecord,
     observer_id: i32,
@@ -22944,7 +22961,83 @@ fn hide_observer_kind(
 ///
 /// 离开者是否 `FixedHideMode`/`Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体
 /// （实体可能已被移除）。
+/// **A43n**：`drain_aoi_disappear` 的分步探针（`MIR2_AOI_DL_PROBE=1` 门控；关闭态零成本）。
+///
+/// 回答"每条 hide 的 ~190 µs 花在哪一步"：`kind`（类别取值）/ `online`（按 actor 找在线项）/
+/// `route`（`route_to_gate`，含墓碑表全局锁）/ `build`（12B 帧构造）/ `send`（mpsc 入队）。
+/// 每 `MIR2_AOI_DL_PROBE_TICKS`（缺省 50）次调用打一行，行首 `[AOI_DL]`。
+mod aoi_dl_probe {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    thread_local! {
+        static ACC: Cell<[u64; 12]> = const { Cell::new([0; 12]) };
+    }
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+
+    fn every() -> u64 {
+        static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *EVERY.get_or_init(|| {
+            std::env::var("MIR2_AOI_DL_PROBE_TICKS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(50)
+        })
+    }
+
+    pub(super) fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("MIR2_AOI_DL_PROBE")
+                .map(|v| v.trim() == "1")
+                .unwrap_or(false)
+        })
+    }
+
+    pub(super) fn add(slot: usize, ns: u64) {
+        ACC.with(|c| {
+            let mut a = c.get();
+            a[slot] = a[slot].saturating_add(ns);
+            c.set(a);
+        });
+    }
+
+    /// 行格式（纯函数；单测直接断言字段齐全、单位 µs）。
+    pub(super) fn line(n: u64, hides: u64, sent: u64, a: [u64; 12]) -> String {
+        format!(
+            "[AOI_DL] n={n} hides={hides} sent={sent} kind_us={} online_us={} route_us={} build_us={} send_us={} disappear_wall_us={} disappear_cpu_us={} run_wall_us={} run_cpu_us={}",
+            a[0] / 1000,
+            a[1] / 1000,
+            a[2] / 1000,
+            a[3] / 1000,
+            a[4] / 1000,
+            a[6] / 1000,
+            a[7] / 1000,
+            a[8] / 1000,
+            a[9] / 1000
+        )
+    }
+
+    /// 一次 `drain_aoi_disappear_with_counts` 调用的收尾：到点就打一行并清零。
+    pub(super) fn flush(hides: u64, sent: u64) {
+        let n = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+        if !n.is_multiple_of(every()) {
+            return;
+        }
+        let a = ACC.with(|c| {
+            let v = c.get();
+            c.set([0; 12]);
+            v
+        });
+        // 每 tick 一行（`n` = 第几次调用）；相位单位 ns → µs。
+        crate::glog!("INF", "{}", line(n, hides, sent, a));
+    }
+}
+
 fn drain_aoi_disappear_with_counts(
+    // **A43p**：产生本 tick 的区号（WRN 行与按区计数用；不参与任何帧/判定）。
+    zone: usize,
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -22952,12 +23045,22 @@ fn drain_aoi_disappear_with_counts(
 ) -> (usize, DisappearObserverCounts) {
     let mut sent = 0usize;
     let mut counts = DisappearObserverCounts::default();
-    for (observer_id, target_id) in &rec.hides {
-        // **离开差分的观察者类别解析**：`hide_observer_kind` 在 `rec.hide_observer_kinds`
-        // 上线性查找（与 `rec.hides` 同序，故第 i 条命中在第 i 位）——本探针用于量化
-        // 「每 hide 一次查找」的 O(H×H) 形态。
+    // **A43n 续**：本段**墙钟 vs 线程 CPU**（`wall−cpu` = 等待/被抢占）。关闭态不取钟。
+    let seg_on = aoi_dl_probe::enabled();
+    let seg_w0 = seg_on.then(std::time::Instant::now);
+    let seg_c0 = if seg_on {
+        crate::thread_cpu::now_us()
+    } else {
+        None
+    };
+    for (i, (observer_id, target_id)) in rec.hides.iter().enumerate() {
+        // **离开差分的观察者类别解析**：`hide_observer_kinds` 与 `hides` **同序同长**
+        // （产生点 `aoi.rs` 同一循环内成对 push）⇒ 按下标直取 O(1)（旧实现每 hide 线性扫 ⇒ O(H²)）。
+        // **不变式守卫**：下标项必须与本条 `(observer, target)` 相等，否则回退线性查找。
+        let dl_on = aoi_dl_probe::enabled();
+        let dl_t = dl_on.then(std::time::Instant::now);
         let t_kind = tick_profile::probe_begin(&prof);
-        let kind = hide_observer_kind(rec, *observer_id, *target_id);
+        let kind = disappear_kind_at(rec, i, *observer_id, *target_id);
         tick_profile::probe_end(&mut prof, "HostAoiLeaveKind", t_kind);
         match kind {
             mir2_world_bevy::HideObserverKind::NonPlayer => {
@@ -22976,21 +23079,45 @@ fn drain_aoi_disappear_with_counts(
                 counts.player_observer += 1;
             }
         }
+        if let Some(t0) = dl_t {
+            aoi_dl_probe::add(0, u64::try_from(t0.elapsed().as_nanos()).unwrap_or(0));
+        }
+        let dl_t2 = dl_on.then(std::time::Instant::now);
         let Some(observer) = online.find_by_actor(*observer_id) else {
             counts.missing_online += 1;
-            glog!(
-                "WRN",
-                "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（missing_online；非「非玩家自扫怪」/「PlayCloneObject」，是真丢帧风险）"
-            );
+            // **A43p**：按区计数 + **限流**（同 `DepartWarnLimiter`：≤1 条/分钟）。
+            // 实测窄带 8000 档曾达 ~5,000 行/s（stdout 全局锁 + 写盘，直接抬高 `HostAoiDisappear` 墙钟）。
+            let n = perf_counters::note_missing_online(zone);
+            {
+                static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+                    std::sync::Mutex::new(DepartWarnLimiter::new());
+                let mut limiter = LIMITER
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(suppressed) = limiter.should_log(now_ms()) {
+                    glog!(
+                        "WRN",
+                        "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（zone={zone} missing_online_by_zone={n}；非「非玩家自扫怪」/「PlayCloneObject」，是真丢帧风险；上一分钟抑制 {suppressed} 条）"
+                    );
+                }
+            }
             continue;
         };
         // **编码入队**：网关线号路由 + `SM_DISAPPEAR(30)` 帧构造（保持原次序：先路由、后构造）。
         // 帧构造是 `HostAoiLeaveEnqueue` 的嵌套子项（原实现里它就在 `tx.send` 实参内）。
+        if let Some(t0) = dl_t2 {
+            aoi_dl_probe::add(1, u64::try_from(t0.elapsed().as_nanos()).unwrap_or(0));
+        }
+        let dl_t3 = dl_on.then(std::time::Instant::now);
         let t_enq = tick_profile::probe_begin(&prof);
         let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "消失帧") else {
             tick_profile::probe_end(&mut prof, "HostAoiLeaveEnqueue", t_enq);
             continue;
         };
+        if let Some(t0) = dl_t3 {
+            aoi_dl_probe::add(2, u64::try_from(t0.elapsed().as_nanos()).unwrap_or(0));
+        }
+        let dl_t4 = dl_on.then(std::time::Instant::now);
         let t_build = tick_profile::probe_begin(&prof);
         let body = downlink::disappear_frame(*target_id);
         tick_profile::probe_end(&mut prof, "HostAoiLeaveBuild", t_build);
@@ -22998,9 +23125,21 @@ fn drain_aoi_disappear_with_counts(
             socket: observer.socket,
             body,
         });
+        if let Some(t0) = dl_t4 {
+            aoi_dl_probe::add(3, u64::try_from(t0.elapsed().as_nanos()).unwrap_or(0));
+        }
         tick_profile::probe_end(&mut prof, "HostAoiLeaveEnqueue", t_enq);
         sent += 1;
         counts.emitted += 1;
+    }
+    if let Some(w0) = seg_w0 {
+        aoi_dl_probe::add(6, u64::try_from(w0.elapsed().as_nanos()).unwrap_or(0));
+        if let (Some(c0), Some(c1)) = (seg_c0, crate::thread_cpu::now_us()) {
+            aoi_dl_probe::add(7, c1.saturating_sub(c0) * 1000);
+        }
+    }
+    if aoi_dl_probe::enabled() {
+        aoi_dl_probe::flush(rec.hides.len() as u64, u64::try_from(sent).unwrap_or(0));
     }
     // 汇总 DBG（不逐条刷屏）；带 observer id，与玩家缺失的 WRN 文案不同。
     for line in skip_observer_dbg_lines(&counts) {
@@ -23011,12 +23150,13 @@ fn drain_aoi_disappear_with_counts(
 
 /// 生产入口：保持原返回值（`usize` = 实发条数），内部分类型计数并分流日志。
 fn drain_aoi_disappear(
+    zone: usize,
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> usize {
-    let (sent, _counts) = drain_aoi_disappear_with_counts(rec, online, gates, prof);
+    let (sent, _counts) = drain_aoi_disappear_with_counts(zone, rec, online, gates, prof);
     sent
 }
 
@@ -25825,6 +25965,7 @@ fn drain_run_downlinks(
         client_layout,
         None,
         None,
+        0,
         None,
         None,
         None,
@@ -25852,6 +25993,8 @@ fn drain_run_downlinks_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
     mut prof: Option<&mut tick_profile::HostTickProfile>,
+    // **A43p**：产生本 tick 的区号（仅用于消失帧 WRN/按区计数）。
+    zone: usize,
     // **L2-4 段 6b**：透传给 [`drain_aoi_downlink`]；生产恒 `None`（L2-5 前置）。
     ledger: Option<&mut region_loop::AoIFrameLedger<'_>>,
     login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
@@ -25884,7 +26027,7 @@ fn drain_run_downlinks_with_magic(
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     tick_profile::probe_end(&mut prof, "HostAoiNpcTurn", t);
     let t = tick_profile::probe_begin(&prof);
-    let _disappeared = drain_aoi_disappear(rec, online, gates, prof.as_deref_mut());
+    let _disappeared = drain_aoi_disappear(zone, rec, online, gates, prof.as_deref_mut());
     tick_profile::probe_end(&mut prof, "HostAoiDisappear", t);
     let t = tick_profile::probe_begin(&prof);
     let aoi_frames = drain_aoi_downlink(
@@ -26818,6 +26961,19 @@ mod perf_counters {
     static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    /// **A43p**：消失帧 `missing_online` 的**按区**计数（区号 → 条数）。与 `zone_metrics` 无关，
+    /// 只供诊断行使用；每 tick 不清零（累计），窗口末在诊断行里报增量由调用方自行快照。
+    static MISSING_ONLINE_BY_ZONE: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
+
+    /// **A43p**：+1 并返回该区累计值（限流判定用同一返回值）。
+    pub(crate) fn note_missing_online(zone: usize) -> u64 {
+        if ENABLED.load(Ordering::Relaxed) {
+            if let Some(c) = MISSING_ONLINE_BY_ZONE.get(zone) {
+                return c.fetch_add(1, Ordering::Relaxed) + 1;
+            }
+        }
+        0
+    }
     /// **A43c**：本 tick **各跨区之和**——「**仅因 `execute_wall`** 被截断」的次数
     ///（每区每 tick ≤1 ⇒ 上限 = 区数）。与并集列 `zonek_inbound_budget_hit`
     ///（fill 命中 ∥ 墙 ∥ 条数上限 ∥ A6 整批推迟）分开，直接回答「执行段墙钟够不够」。
@@ -42842,6 +42998,14 @@ impl HostLoop {
             #[cfg(test)]
             RAN_SEGMENTS.with(|c| c.set(c.get() | PhaseSet::AOI_DOWNLINK));
             let t = host_prof.begin();
+            // **A43n 续**：父段 `HostAoiDownlink` 的 wall/cpu 采样（只读诊断；关闭态不取钟）。
+            let run_on = aoi_dl_probe::enabled();
+            let run_w0 = run_on.then(std::time::Instant::now);
+            let run_c0 = if run_on {
+                crate::thread_cpu::now_us()
+            } else {
+                None
+            };
             // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
             // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
             // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
@@ -42864,6 +43028,7 @@ impl HostLoop {
                     cfg: magic_cfg_of(&enter_cfg),
                 }),
                 Some(&mut host_prof),
+                self.zone.index(),
                 // **L2-4 段 6b**：生产不启账本（v1 只有一个 World）；ledger 生产启用 = L2-5 前置。
                 None,
                 Some(&mut login_tails),
@@ -42871,6 +43036,12 @@ impl HostLoop {
             );
             for (chr, n) in aoi_frames_this_tick {
                 *aoi_frames_total.entry(chr).or_insert(0) += n;
+            }
+            if let Some(w0) = run_w0 {
+                aoi_dl_probe::add(8, u64::try_from(w0.elapsed().as_nanos()).unwrap_or(0));
+                if let (Some(c0), Some(c1)) = (run_c0, crate::thread_cpu::now_us()) {
+                    aoi_dl_probe::add(9, c1.saturating_sub(c0) * 1000);
+                }
             }
             host_prof.end("HostAoiDownlink", t);
         }
@@ -51049,6 +51220,7 @@ mod tests {
             false,
             None,
             None,
+            0,
             None,
             None,
             None,
@@ -51122,6 +51294,7 @@ mod tests {
             false,
             None,
             None,
+            0,
             None,
             None,
             None,
@@ -53334,7 +53507,7 @@ mod tests {
             "首 tick 互相进入视野 ⇒ 无消失事件：{:?}",
             rec1.hides
         );
-        let _ = drain_aoi_disappear(&rec1, &online, &gates, None);
+        let _ = drain_aoi_disappear(0, &rec1, &online, &gates, None);
         assert!(rx0.try_recv().is_err(), "首 tick 不应有消失帧");
 
         // 让 `b` 走远出 `a` 的视野（世界侧同步移动格子登记；Chebyshev 20 > 12）。
@@ -53345,7 +53518,7 @@ mod tests {
             "`b` 离开 `a` 视野 ⇒ hides 记 (a,b)：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates, None);
+        drain_aoi_disappear(0, &rec2, &online, &gates, None);
 
         // 只发观察者：socket 901 收 `SM_DISAPPEAR(30)`，`Recog = b`，全 0 头 + 无尾。
         let mut to_a: Vec<Vec<u8>> = Vec::new();
@@ -53444,7 +53617,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(
             counts,
             DisappearObserverCounts {
@@ -53501,7 +53674,7 @@ mod tests {
             hide_observer_kinds: vec![(player, target, HideObserverKind::Player)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0, "玩家缺失不得发帧（不猜线）");
         assert_eq!(counts.player_observer, 1);
         assert_eq!(counts.missing_online, 1, "玩家缺失必须大声计数");
@@ -53514,7 +53687,7 @@ mod tests {
             hide_observer_kinds: vec![(guard, target, HideObserverKind::NonPlayer)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0);
         assert_eq!(counts.nonplayer_observer, 1);
         assert_eq!(counts.nonplayer_ids, vec![guard], "DBG 数据面保留 id");
@@ -53531,7 +53704,7 @@ mod tests {
             hide_observer_kinds: vec![(clone, target, HideObserverKind::Clone)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0, "克隆体不发帧");
         assert_eq!(counts.clone_observer, 1);
         assert_eq!(counts.clone_ids, vec![clone]);
@@ -53574,7 +53747,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(counts.clone_observer, 1, "Clone 单独计数");
         assert_eq!(counts.clone_ids, vec![clone]);
         assert_eq!(counts.player_observer, 1);
@@ -53767,7 +53940,7 @@ mod tests {
             "仅 `a` 观察 `b` 离开（单方向）：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates, None);
+        drain_aoi_disappear(0, &rec2, &online, &gates, None);
 
         let mut to_a: Vec<Vec<u8>> = Vec::new();
         let mut to_b: Vec<Vec<u8>> = Vec::new();
@@ -131235,6 +131408,7 @@ mod l2_multi_zone_ledger_tests {
                 false,
                 None,
                 None,
+                0,
                 None,
                 None,
                 None,
@@ -131314,6 +131488,7 @@ mod l2_multi_zone_ledger_tests {
                             false,
                             None,
                             None,
+                            0,
                             Some(&mut ledger),
                             None,
                             None,
@@ -131459,6 +131634,7 @@ mod l2_multi_zone_ledger_tests {
                 false,
                 None,
                 None,
+                0,
                 None,
                 None,
                 None,
@@ -146272,5 +146448,83 @@ mod a43j_slow_event_log_tests {
         perf_counters::reset_slow_event_limiter();
         assert!(!perf_counters::maybe_log_slow_event(3030, "p", 0, 900, 999));
         perf_counters::set_slow_event_us(0);
+    }
+}
+
+/// **A43m 牙**：离开类别按**下标**直取（O(1)）必须与线性查找**逐条同值**；下标错位/越界时
+/// 回退线性查找（fail-safe）。旧实现每条 hide 都线性扫一遍 ⇒ O(H²)/tick。
+#[cfg(test)]
+mod a43m_disappear_kind_lookup_tests {
+    use super::*;
+    use mir2_world_bevy::HideObserverKind;
+
+    fn record(pairs: &[(i32, i32, HideObserverKind)]) -> mir2_world_bevy::TickRecord {
+        mir2_world_bevy::TickRecord {
+            hides: pairs.iter().map(|&(o, t, _)| (o, t)).collect(),
+            hide_observer_kinds: pairs.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn index_lookup_equals_linear_and_falls_back_on_mismatch() {
+        let rec = record(&[
+            (1, 10, HideObserverKind::NonPlayer),
+            (2, 20, HideObserverKind::Clone),
+            (3, 30, HideObserverKind::Player),
+        ]);
+        // ① 同序同长 ⇒ 按下标与线性查找逐条一致。
+        for (i, &(o, t)) in rec.hides.iter().enumerate() {
+            assert_eq!(
+                disappear_kind_at(&rec, i, o, t),
+                hide_observer_kind(&rec, o, t),
+                "第 {i} 条：下标直取必须与线性查找同值"
+            );
+        }
+        // ② 下标项与请求不符（这里把 i=0 拿去查 (2,20)）⇒ 回退线性查找，仍取到 Clone。
+        assert_eq!(
+            disappear_kind_at(&rec, 0, 2, 20),
+            HideObserverKind::Clone,
+            "下标错位必须回退线性查找"
+        );
+        // ③ 越界 ⇒ 回退；线性查找也无此对 ⇒ fail-safe 默认 Player。
+        assert_eq!(
+            disappear_kind_at(&rec, 99, 9, 99),
+            HideObserverKind::Player,
+            "越界且线性查找无命中 ⇒ 默认 Player（fail-safe loud）"
+        );
+    }
+}
+
+/// **A43n 牙**：`[AOI_DL]` 行字段齐全、相位单位 ns→µs、且五个相位各自独立（互不串位）。
+#[cfg(test)]
+mod a43n_aoi_dl_probe_tests {
+    #[test]
+    fn aoi_dl_line_formats_all_phases_in_micros() {
+        let line = crate::aoi_dl_probe::line(
+            7,
+            1550,
+            1498,
+            [
+                1_000, 2_000, 3_000, 4_000, 5_000, 0, 6_000, 7_000, 8_000, 9_000, 0, 0,
+            ],
+        );
+        assert!(line.starts_with("[AOI_DL] "), "{line}");
+        assert!(line.contains("n=7"), "{line}");
+        assert!(line.contains("hides=1550"), "{line}");
+        assert!(line.contains("sent=1498"), "{line}");
+        assert!(line.contains("kind_us=1"), "{line}");
+        assert!(line.contains("online_us=2"), "{line}");
+        assert!(line.contains("route_us=3"), "{line}");
+        assert!(line.contains("build_us=4"), "{line}");
+        assert!(line.contains("send_us=5"), "{line}");
+        assert!(line.contains("disappear_wall_us=6"), "{line}");
+        assert!(line.contains("disappear_cpu_us=7"), "{line}");
+        assert!(line.contains("run_wall_us=8"), "{line}");
+        assert!(line.contains("run_cpu_us=9"), "{line}");
+        // 关闭态：默认 env 未设 ⇒ enabled() 为 false（本进程未设 MIR2_AOI_DL_PROBE）。
+        if std::env::var("MIR2_AOI_DL_PROBE").is_err() {
+            assert!(!crate::aoi_dl_probe::enabled(), "未设 env ⇒ 探针必须关闭");
+        }
     }
 }
