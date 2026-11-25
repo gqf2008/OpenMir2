@@ -963,6 +963,12 @@ struct AoiStatsState {
     same_map_count: u64,
     ns_hist: [u64; AOI_NS_BUCKETS],
     same_map_hist: [u64; AOI_HIST_BUCKETS],
+    /// **A43l**：本窗口的**回退计数**（与 `AoiIncremental::counters` 同口径，只为本行可读）；
+    /// 四类分别对应 `search_view_range_incremental` 的四条整扫兜底分支。
+    fb_first_search: u64,
+    fb_window_changed: u64,
+    fb_viewer_state_changed: u64,
+    fb_non_player: u64,
     /// **索引段**（tick 相：快照重建 + 状态指纹 + feed 派生 + 索引维护）样本数。
     idx_count: u64,
     /// 索引段样本总和（`idx_avg` 用）。
@@ -999,6 +1005,10 @@ impl AoiStatsState {
             same_map_count: 0,
             ns_hist: [0; AOI_NS_BUCKETS],
             same_map_hist: [0; AOI_HIST_BUCKETS],
+            fb_first_search: 0,
+            fb_window_changed: 0,
+            fb_viewer_state_changed: 0,
+            fb_non_player: 0,
             idx_count: 0,
             idx_sum: 0,
             idx_max: 0,
@@ -1060,7 +1070,7 @@ impl AoiStatsState {
         // 不得让读者把它读成「省了 97%」；`cand_per_search` 在增量下是复评数（touched）。
         let (mode, cells_sem, cand_sem) = aoi_mode_labels(aoi_search_mode());
         let line = format!(
-            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={} mode={} cells_sem={} cand_sem={}",
+            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={} mode={} cells_sem={} cand_sem={} fallback_first_search={} fallback_window_changed={} fallback_viewer_state_changed={} fallback_non_player={} fallback_total={}",
             self.window_seq,
             self.tick_seq,
             self.total_searches,
@@ -1081,6 +1091,14 @@ impl AoiStatsState {
             mode,
             cells_sem,
             cand_sem,
+            self.fb_first_search,
+            self.fb_window_changed,
+            self.fb_viewer_state_changed,
+            self.fb_non_player,
+            self.fb_first_search
+                .saturating_add(self.fb_window_changed)
+                .saturating_add(self.fb_viewer_state_changed)
+                .saturating_add(self.fb_non_player),
         );
         // `[AOI_IDX]` 与 `[AOI_STATS]` **同一窗口、同一 `clock_ms`**（opc-07 要求）：
         // 无样本时不追加，保持既有行格式逐字不变。
@@ -1298,6 +1316,35 @@ pub fn aoi_stats_final_line(clock_ms: i64) -> Option<String> {
         state.reset_window();
         Some(line)
     })
+}
+
+/// **A43l**：回退分类（纯观察；与 `AoiIncremental::counters` 的四支一一对应）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AoiFallbackKind {
+    FirstSearch,
+    WindowChanged,
+    ViewerStateChanged,
+    NonPlayer,
+}
+
+/// **A43l**：把一次回退记进**本窗口的行**（关闭态直接返回，不写线程局部）。
+fn aoi_stats_note_fallback(kind: AoiFallbackKind) {
+    if !aoi_stats_enabled() {
+        return;
+    }
+    AOI_STATS_STATE.with(|cell| {
+        note_fallback_on(&mut cell.borrow_mut(), kind);
+    });
+}
+
+/// **A43l**：把一次回退记进给定状态的纯函数（单测直接调，不依赖 env 开关）。
+fn note_fallback_on(state: &mut AoiStatsState, kind: AoiFallbackKind) {
+    match kind {
+        AoiFallbackKind::FirstSearch => state.fb_first_search += 1,
+        AoiFallbackKind::WindowChanged => state.fb_window_changed += 1,
+        AoiFallbackKind::ViewerStateChanged => state.fb_viewer_state_changed += 1,
+        AoiFallbackKind::NonPlayer => state.fb_non_player += 1,
+    }
 }
 
 /// 每个 `OutputAoi` tick 调用一次：累计分布；到窗口边界返回一行待打印文本并清零。
@@ -2096,6 +2143,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
         // 非玩家观察者：保留 legacy 的 60s 过期副作用 ⇒ 整条回退。
         // 该扫会在快照之后从格子里摘过期对象 ⇒ 本 tick 的玩家 gate 需回查格子成员。
         state.counters.fallback_non_player = state.counters.fallback_non_player.saturating_add(1);
+        aoi_stats_note_fallback(AoiFallbackKind::NonPlayer);
         state.unregister(viewer_id);
         state.pruned_after_snapshot = true;
         return search_view_range_with_updates(map, store, viewer_id, now_ms);
@@ -2104,6 +2152,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
         None => {
             state.counters.fallback_first_search =
                 state.counters.fallback_first_search.saturating_add(1);
+            aoi_stats_note_fallback(AoiFallbackKind::FirstSearch);
             let out = search_view_range_with_updates(map, store, viewer_id, now_ms);
             state.register(viewer_id, key);
             out
@@ -2135,6 +2184,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
                     .counters
                     .fallback_viewer_state_changed
                     .saturating_add(1);
+                aoi_stats_note_fallback(AoiFallbackKind::ViewerStateChanged);
                 let out = search_view_range_with_updates(map, store, viewer_id, now_ms);
                 state.register(viewer_id, key);
                 out
@@ -2142,6 +2192,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
                 // 窗口一次平移超过阈值（瞬移/回城/大跳）：整扫兜底（见常量注释）。
                 state.counters.fallback_window_changed =
                     state.counters.fallback_window_changed.saturating_add(1);
+                aoi_stats_note_fallback(AoiFallbackKind::WindowChanged);
                 let out = search_view_range_with_updates(map, store, viewer_id, now_ms);
                 state.register(viewer_id, key);
                 out
@@ -4750,5 +4801,36 @@ mod tests {
         assert!(!legacy.0.contains(&2), "过期对象必须已不可见");
         assert_eq!(legacy.1, vec![2], "离开集必须含 2");
         println!("[AOI_INC] EXPIRY_SAME_TICK_OK legacy={legacy:?} incremental={inc:?}");
+    }
+}
+
+/// **A43l 牙**：四类回退必须**进 `[AOI_STATS]` 行**（追加在既有字段之后、不重排），
+/// 且 `fallback_total` = 四者之和。关闭态（env 未开）`aoi_stats_note_fallback` 直接返回，
+/// 不写线程局部——本牙直接调纯函数 `note_fallback_on`，不依赖 env。
+#[cfg(test)]
+mod a43l_aoi_stats_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn aoi_stats_line_carries_fallback_counters_appended_last() {
+        let mut st = AoiStatsState::new();
+        note_fallback_on(&mut st, AoiFallbackKind::FirstSearch);
+        note_fallback_on(&mut st, AoiFallbackKind::FirstSearch);
+        note_fallback_on(&mut st, AoiFallbackKind::WindowChanged);
+        note_fallback_on(&mut st, AoiFallbackKind::ViewerStateChanged);
+        note_fallback_on(&mut st, AoiFallbackKind::NonPlayer);
+        let line = st.report_line(0, false);
+        assert!(line.starts_with("[AOI_STATS] "), "{line}");
+        assert!(line.contains("fallback_first_search=2"), "{line}");
+        assert!(line.contains("fallback_window_changed=1"), "{line}");
+        assert!(line.contains("fallback_viewer_state_changed=1"), "{line}");
+        assert!(line.contains("fallback_non_player=1"), "{line}");
+        assert!(line.contains("fallback_total=5"), "{line}");
+        // 既有字段顺序不变：`cand_sem=` 之后才出现 `fallback_*`。
+        let cand = line.find(" cand_sem=").expect("既有字段 cand_sem 必须在");
+        let fb = line
+            .find(" fallback_first_search=")
+            .expect("fallback_* 必须存在");
+        assert!(cand < fb, "fallback_* 必须追加在既有字段之后（不重排）");
     }
 }
