@@ -347,4 +347,39 @@ mod tests {
             "incHealthTick = _MIN(200, 10000-0-590)"
         );
     }
+
+    /// **MG-12 补验（2026-11-25）**：`IncHealing` 的**多轮消费**（oracle `PlayObject.Message.cs:113-130`）。
+    ///
+    /// 每轮最多加 `PerHealing=5`；余额不足时全加并清零；恢复门 `600 - min(level*10, 400)` 未到
+    /// 不消费。现有单测只覆盖单轮 `inc=3` 与满血清池——**多轮余额尾巴 + 门边界**是本条缺口
+    /// （装置看不见真正的加血 tick，见 manifest MG-12）。
+    #[test]
+    fn inc_healing_drains_across_ticks_with_the_delay_gate() {
+        let mut wabil = ability(30, 100, 0, 200, 0);
+        let mut rec = Recovery {
+            inc_healing: 12,
+            ..Recovery::new(0)
+        };
+        let gate = 600 - 30 * 10; // 600 - min(level*10, 400)，level=30 ⇒ 300ms
+        assert!(
+            !recovery_tick(&mut rec, &mut wabil, false, gate - 1),
+            "恢复门未到不得消费"
+        );
+        assert_eq!((wabil.hp, rec.inc_healing), (100, 12));
+        assert!(recovery_tick(&mut rec, &mut wabil, false, gate));
+        assert_eq!((wabil.hp, rec.inc_healing), (105, 7), "第一轮 +5");
+        assert!(recovery_tick(&mut rec, &mut wabil, false, gate + 1_000));
+        assert_eq!((wabil.hp, rec.inc_healing), (110, 2), "第二轮 +5");
+        assert!(recovery_tick(&mut rec, &mut wabil, false, gate + 2_000));
+        assert_eq!(
+            (wabil.hp, rec.inc_healing),
+            (112, 0),
+            "余额 2 < PerHealing ⇒ 全加并清零"
+        );
+        assert!(
+            !recovery_tick(&mut rec, &mut wabil, false, gate + 3_000),
+            "清零后不再进场"
+        );
+        assert_eq!(wabil.hp, 112);
+    }
 }

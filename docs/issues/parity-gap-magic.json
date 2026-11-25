@@ -317,13 +317,14 @@
         "unit_tests": [
           "tests::fireball_parity_miss",
           "tests::fireball_parity_edge",
-          "tests::fireball_parity_hit"
+          "tests::fireball_parity_hit",
+          "fireball_golden_antimagic_boundary_is_covered"
         ]
       },
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红（golden=9/rust=15）与比较器级篡改，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒、不改 RNG 账本条目数）⇒ hit 支伤害 9→5：驱动 tests::fireball_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(219) right=Some(215)）；比较器 real_rust_ledger_parity 红（[hit] TargetHp 不等 golden=215 rust=219；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红（golden=9/rust=15）与比较器级篡改，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒、不改 RNG 账本条目数）⇒ hit 支伤害 9→5：驱动 tests::fireball_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(219) right=Some(215)）；比较器 real_rust_ledger_parity 红（[hit] TargetHp 不等 golden=215 rust=219；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。 **边界语义补验（2026-11-25）**：AntiMagic 门是等号通过（oracle `MagicManager.cs:180` 的 `AntiMagic <= Random(10)` = Rust `anti_magic_roll` 的 `>=`）。新增守卫 `fireball_golden_antimagic_boundary_is_covered`（`mir2-rs/tests/parity/tests/magic_fireball_parity.rs`）钉住 golden 三支首抽与阈值的关系：miss `<`、edge **`==`**、hit `>`，并核 HP 变化；这防的是重出 golden 时丢掉等号边界（三支全 `>`）令边界变异永远咬不住。变异实测（2026-11-25）：`anti_magic_roll` 的 `>=`→`>` ⇒ 驱动 `tests::fireball_parity_edge` 红，红原文 `[fireball/edge] 术后 HP 与金标准 TargetHp 不符 left: Some(224) right: Some(209)`（seed=18、首抽=1=anti_magic），还原后绿。剩余未覆盖：client 布局尾（已登记 wire 偏差 `openmir2-client-e2e-enter-gaps`）；`Race>=Animal` 只决定 `boTrain`、不参与伤害（见 `openmir2-magic-parity.md` §35 订正），训练面归 MG-11 的范围说明。"
     },
     {
       "id": "MG-11",
@@ -348,13 +349,14 @@
         "unit_tests": [
           "tests::fireball5_parity_miss",
           "tests::fireball5_parity_edge",
-          "tests::fireball5_parity_hit"
+          "tests::fireball5_parity_hit",
+          "fireball5_golden_antimagic_boundary_is_covered"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红与三支绿跑，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒）⇒ hit 支伤害 9→5：驱动 tests::fireball5_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(95) right=Some(91)）；比较器 real_rust_ledger_fireball5 红（[hit] TargetHp 不等 golden=91 rust=95；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；`Race>=Animal` 只决定 boTrain（训练尾）、不参与伤害（`openmir2-magic-parity.md` §35 订正）；怪物 target 的 boTrain 面未验，需 TargetMonster 夹具（另卡）】",
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红与三支绿跑，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒）⇒ hit 支伤害 9→5：驱动 tests::fireball5_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(95) right=Some(91)）；比较器 real_rust_ledger_fireball5 红（[hit] TargetHp 不等 golden=91 rust=95；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。 **边界语义补验（2026-11-25）**：与 MG-10 共享 `anti_magic_roll`（`random_below(10) >= anti_magic`，oracle `MagicManager.cs:180` 的 `AntiMagic <= Random(10)` 等号通过）。新增守卫 `fireball5_golden_antimagic_boundary_is_covered` 对 `fireball-5.json` 断言 miss `<` / edge **`==`** / hit `>` 及 HP 变化（当前 0/1、1/1、3/1；HP 100→100 / 100→85 / 100→91）。变异实测（2026-11-25）：`anti_magic_roll` 的 `>=`→`>` ⇒ 驱动 `tests::fireball5_parity_edge` 红，红原文 `[fireball5/edge] 术后 HP 与金标准 TargetHp 不符 left: Some(100) right: Some(85)`；还原后绿。**范围订正**：`Race>=Animal` 只决定 `boTrain`（训练尾），**不参与伤害**（`openmir2-magic-parity.md` §35 订正）；怪物 target 的 boTrain 面仍未验——需给 golden 装置加 `TargetMonster` 夹具并重出，另卡，不并入本卡。"
     },
     {
       "id": "MG-12",
@@ -379,13 +381,14 @@
         "unit_tests": [
           "tests::healing_parity_heal",
           "tests::healing_parity_full",
-          "tests::healing_parity_self"
+          "tests::healing_parity_self",
+          "recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate"
         ]
       },
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级",
-      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3"
+      "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3 **加血面补验（2026-11-25）**：装置仍不观测 `TargetHp`（`RM_MAGHEALING` 只累计，golden 的 `TargetHp == TargetHpBefore` 不变），但**恢复期的多轮消费**补了牙：新用例 `recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate`（`bins/game-svr/src/recover.rs`）断言恢复门 `600 - min(level*10,400)` 未到不消费、每轮 +`PerHealing=5`、余额不足时全加并清零、清零后不再进场；依据 oracle `PlayObject.Message.cs:113-130`。变异实测（2026-11-25）：把 `n_hp += IncHealing` 项置零 ⇒ 红 `left: (110, 0) right: (112, 0)`；还原后绿。**仍未覆盖**：cast 的累计值到 `IncHealing` 的链路只在装置侧经 `RM 8034 p1` 观测（golden 已逐值对拍），装置内仍看不到 `TargetHp` 的变化；恢复节奏的墙钟相位（`IncHealthSpellTick` 推进公式 `now + inc_tick`）由本用例按门边界间接覆盖、无独立 golden。"
     },
     {
       "id": "MG-13",
@@ -414,14 +417,15 @@
           "tests::amyounsul2_parity_s5",
           "tests::amyounsul2_parity_s13",
           "real_rust_ledger_amyounsul",
-          "real_rust_ledger_amyounsul2"
+          "real_rust_ledger_amyounsul2",
+          "magic_effect::tests::poison_dice_boundary_follows_anti_poison_plus_seven"
         ]
       },
       "cost": "M",
       "deviation": null,
       "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。 覆盖叶子 MG-13（case 主链；绿/红毒两支见 MG-14/MG-15）。",
       "basis": "semantic",
-      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。"
+      "scope": "partial：`SKILL_AMYOUNSUL(6)` 主链（`CheckAmulet(1,2)` 门 → `Random(AntiPoison+7)` 骰 → `RM_POISON` 自延迟 1000ms）由 `amyounsul`/`amyounsul2` 两 stem × s1/s5/s13 覆盖（绿/红毒各一支；`rng_total_draws` 3/4/4 > 0；目标 `Rm` 的 `8037` 四字段 type/nPower/caster/point 逐值）。装置三旋钮 fail-closed（`amulet_shape ∈ {1,2}`、`target_anti_poison=0` 也显式写、`amy_ounsul_point` 取 golden=15）；帧面逐收件人，**次序放宽为多重集**（`frame_order_scope=multi_victim_same_tick`，只放宽次序、due 仍判；撤销条件=产品改为逐 actor 处理）。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：护身符 Shape>2/0 分支；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`，区分性夹具另卡）。 **骰门边界补验（2026-11-25）**：新用例 `magic_effect::tests::poison_dice_boundary_follows_anti_poison_plus_seven`（`crates/world-bevy/src/magic_effect.rs`）钉住 oracle `MagicManager.cs:239` 的 `Random(AntiPoison + 7) <= 6`：anti=0 面 0..=6 全过、anti=1 面 6 过/面 7 不过、anti=3 面 6 过/7..=9 不过，且抽面口径必须是 `AntiPoison + 7`。变异实测（2026-11-25）：`<= 6`→`< 6` ⇒ 红 `anti=0：面 6（等号边界）必须过`；还原后绿。**仍未覆盖（分类）**：① **装置不可观测**——护身符 Shape 0 与 >2 的 fall-through（生成器 `amulet_shape` fail-closed 只许 1/2，已登记 `DEV-ORACLE-KNOBS`）；② **实现缺口（待开实现卡确认）**——Shape 0/>2 时 oracle 仍 `SetTargetCreat`/`boSpellFail=false`、`boTrain` 可置位，Rust 侧未见对应处理（需 `DEV-MG-13` 核实）；③ **装置不可观测**——`10139.p1` 的跨 buff 位号（夹具恒 `int.MinValue`）。"
     },
     {
       "id": "MG-14",
@@ -453,7 +457,7 @@
       "deviation": null,
       "notes": "旧清单 cost=小时级。原 legacy_id `Shape=1` 是值标签不是位点（迁移生成器按值直译的产物），已改为位点写法 `Shape=1@DoSpell`，依据 :239（`DoSpell` 内联 switch，单目标 Amyounsul 支） 2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws>0`、目标 `Rm` 含 `RM_POISON(8037)`）+ 装置三旋钮 fail-closed（`amulet_shape`/`target_anti_poison`/`amy_ounsul_point` 均取 golden 且缺键即契约失败）；批 `card/poison-batch`，合并提交 1d7868313。",
       "basis": "semantic",
-      "scope": "partial：`Shape=1@DoSpell`（`src/M2Server/Magic/MagicManager.cs:239`）绿毒臂（`PoisonState.DECHEALTH`、`GetPower13(40)` 口径）由 `amyounsul.json`（Shape=1）× s1/s5/s13 覆盖：目标 `Rm` 的 `8037` 四字段 + `10139`/`11004` 状态帧逐值。**只验该 shape 臂本身；外层 `CheckAmulet(1,2)`/骰门/目标属性门由 MG-13 的 case 主链覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`）。"
+      "scope": "partial：`Shape=1@DoSpell`（`src/M2Server/Magic/MagicManager.cs:239`）绿毒臂（`PoisonState.DECHEALTH`、`GetPower13(40)` 口径）由 `amyounsul.json`（Shape=1）× s1/s5/s13 覆盖：目标 `Rm` 的 `8037` 四字段 + `10139`/`11004` 状态帧逐值。**只验该 shape 臂本身；外层 `CheckAmulet(1,2)`/骰门/目标属性门由 MG-13 的 case 主链覆盖。（`10139`/`11004` 是 **RM** 号，在 `Rm` 多重集里比较；对应 **SM** 号见 `Sent` 的 `657`/`100`）**未验**：其它护身符 Shape；`10139.p1` 的跨 buff 位号（本夹具恒 `int.MinValue`）。 **MG-14 收口尝试（2026-11-25）**：按 opc-27 裁决先核「Rust 是否有两处独立取数点」——结论是**没有**：`30/40` 由 `crates/world-bevy/src/world.rs:5467-5471` 的**同一个 match** 选 `n_int`（`1 => (40,0)`、`2 => (30,1)`），两臂共用 `magic::power_poison`。因此按裁决**不新增牙、不改实现**，登记实现缺口 **`DEV-MG-14`**（Shape 臂取数点分离/可测性）。尝试性变异（改 30↔40）因驱动用例名/台账通道未跑通（0 tests matched，输出 `test result: ok` 但无目标用例）**未取得有效红证**，不据此声称已验证。**仍未覆盖（分类）**：① **装置不可观测**——Shape 0/>2 fall-through（`DEV-ORACLE-KNOBS`）、`10139.p1` 跨 buff 位号（夹具恒 `int.MinValue`）；② **实现缺口**——Shape 0/>2 时 oracle 的 `SetTargetCreat`/`boTrain` 面，以及两臂取数点不可独立验证（`DEV-MG-14`）。"
     },
     {
       "id": "MG-15",

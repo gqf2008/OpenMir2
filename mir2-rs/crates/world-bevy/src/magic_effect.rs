@@ -964,4 +964,45 @@ mod tests {
         }
         panic!("找不到 outer 命中且 Random(2)==0 的 seed");
     }
+
+    /// **MG-13 补验（2026-11-25）**：施毒骰门边界（oracle `MagicManager.cs:239`
+    /// `Random(AntiPoison + 7) <= 6`）。`anti=0` ⇒ 面 0..=6 全过；`anti=1` ⇒ 面 7 不过、6 过；
+    /// `anti=3` ⇒ 面 7..=9 不过、6 过。装置侧看不到的面（Shape 0/>2 fall-through、`10139.p1`
+    /// 跨 buff 位号）见 manifest MG-13 scope，不属本牙。
+    #[test]
+    fn poison_dice_boundary_follows_anti_poison_plus_seven() {
+        struct Face {
+            face: i32,
+            want_n: i32,
+        }
+        impl RandomSource for Face {
+            fn random(&mut self) -> i32 {
+                unimplemented!("poison_dice 只走 random_below")
+            }
+            fn random_below(&mut self, value: i32) -> i32 {
+                assert_eq!(value, self.want_n, "骰面口径必须是 AntiPoison + 7");
+                self.face
+            }
+            fn random_range(&mut self, _min: i32, _max: i32) -> i32 {
+                unimplemented!("poison_dice 只走 random_below")
+            }
+            fn next_double(&mut self) -> f64 {
+                unimplemented!("poison_dice 只走 random_below")
+            }
+        }
+        let dice = |face: i32, anti: i32| {
+            let mut rng = Face {
+                face,
+                want_n: anti + 7,
+            };
+            poison_dice(&mut rng, anti)
+        };
+        assert!(dice(0, 0), "anti=0：面 0 必须过");
+        assert!(dice(6, 0), "anti=0：面 6（等号边界）必须过");
+        assert!(dice(6, 1), "anti=1：面 6 必须过");
+        assert!(!dice(7, 1), "anti=1：面 7 必须不过");
+        assert!(dice(6, 3), "anti=3：面 6 必须过");
+        assert!(!dice(7, 3), "anti=3：面 7 必须不过");
+        assert!(!dice(9, 3), "anti=3：面 9 必须不过");
+    }
 }
