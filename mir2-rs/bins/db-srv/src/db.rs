@@ -223,7 +223,12 @@ impl Db {
     ///
     /// Errors: 连接串非法、服务不可达、认证失败时返回错误。
     pub async fn connect(dsn: &LegacyDsn) -> Result<Self> {
-        Self::connect_with(dsn, 100, Duration::from_secs(15)).await
+        // **card/pool-headroom（2026-11-26，opc-27 批）**：峰值登录期 100 个池槽不够——
+        // A/B 里 B 臂慢条的 `acq_ms` mean 96 ms、独立 `pool_ms` 25→47 ms。这里只把上限
+        // 从 100 调到 200（`min_connections` 仍 0，连接超时仍 15 s）。这是**与 oracle
+        // `Maximum Pool Size=100` 缺省的有意偏离**（本机/本部署的登录潮实测需要），
+        // 可逆：改回 100 即恢复 oracle 口径。
+        Self::connect_with(dsn, 200, Duration::from_secs(15)).await
     }
 
     /// **诊断用**：独立取一次连接并立刻归还，返回等待毫秒（`[DBSEL]` 的 `pool_ms`）。
