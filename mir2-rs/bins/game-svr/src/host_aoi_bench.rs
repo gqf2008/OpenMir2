@@ -175,6 +175,7 @@ fn tick_once(
         false,
         None,
         prof.as_deref_mut(),
+        0,
         None,
         None,
         Some(&mut rig.seen),

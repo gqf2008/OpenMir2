@@ -22962,6 +22962,8 @@ fn hide_observer_kind(
 /// 离开者是否 `FixedHideMode`/`Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体
 /// （实体可能已被移除）。
 fn drain_aoi_disappear_with_counts(
+    // **A43p**：产生本 tick 的区号（WRN 行与按区计数用；不参与任何帧/判定）。
+    zone: usize,
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -22998,10 +23000,22 @@ fn drain_aoi_disappear_with_counts(
         }
         let Some(observer) = online.find_by_actor(*observer_id) else {
             counts.missing_online += 1;
-            glog!(
-                "WRN",
-                "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（missing_online；非「非玩家自扫怪」/「PlayCloneObject」，是真丢帧风险）"
-            );
+            // **A43p**：按区计数 + **限流**（同 `DepartWarnLimiter`：≤1 条/分钟）。
+            // 实测窄带 8000 档曾达 ~5,000 行/s（stdout 全局锁 + 写盘，直接抬高 `HostAoiDisappear` 墙钟）。
+            let n = perf_counters::note_missing_online(zone);
+            {
+                static LIMITER: std::sync::Mutex<DepartWarnLimiter> =
+                    std::sync::Mutex::new(DepartWarnLimiter::new());
+                let mut limiter = LIMITER
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(suppressed) = limiter.should_log(now_ms()) {
+                    glog!(
+                        "WRN",
+                        "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（zone={zone} missing_online_by_zone={n}；非「非玩家自扫怪」/「PlayCloneObject」，是真丢帧风险；上一分钟抑制 {suppressed} 条）"
+                    );
+                }
+            }
             continue;
         };
         // **编码入队**：网关线号路由 + `SM_DISAPPEAR(30)` 帧构造（保持原次序：先路由、后构造）。
@@ -23031,12 +23045,13 @@ fn drain_aoi_disappear_with_counts(
 
 /// 生产入口：保持原返回值（`usize` = 实发条数），内部分类型计数并分流日志。
 fn drain_aoi_disappear(
+    zone: usize,
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> usize {
-    let (sent, _counts) = drain_aoi_disappear_with_counts(rec, online, gates, prof);
+    let (sent, _counts) = drain_aoi_disappear_with_counts(zone, rec, online, gates, prof);
     sent
 }
 
@@ -25845,6 +25860,7 @@ fn drain_run_downlinks(
         client_layout,
         None,
         None,
+        0,
         None,
         None,
         None,
@@ -25872,6 +25888,8 @@ fn drain_run_downlinks_with_magic(
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
     mut prof: Option<&mut tick_profile::HostTickProfile>,
+    // **A43p**：产生本 tick 的区号（仅用于消失帧 WRN/按区计数）。
+    zone: usize,
     // **L2-4 段 6b**：透传给 [`drain_aoi_downlink`]；生产恒 `None`（L2-5 前置）。
     ledger: Option<&mut region_loop::AoIFrameLedger<'_>>,
     login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
@@ -25904,7 +25922,7 @@ fn drain_run_downlinks_with_magic(
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     tick_profile::probe_end(&mut prof, "HostAoiNpcTurn", t);
     let t = tick_profile::probe_begin(&prof);
-    let _disappeared = drain_aoi_disappear(rec, online, gates, prof.as_deref_mut());
+    let _disappeared = drain_aoi_disappear(zone, rec, online, gates, prof.as_deref_mut());
     tick_profile::probe_end(&mut prof, "HostAoiDisappear", t);
     let t = tick_profile::probe_begin(&prof);
     let aoi_frames = drain_aoi_downlink(
@@ -26838,6 +26856,19 @@ mod perf_counters {
     static ZONEK_INBOUND_OVERFLOW_DROPPED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_PENDING_DISCARDED: AtomicU64 = AtomicU64::new(0);
     static ZONEK_INBOUND_UNSUPPORTED: AtomicU64 = AtomicU64::new(0);
+    /// **A43p**：消失帧 `missing_online` 的**按区**计数（区号 → 条数）。与 `zone_metrics` 无关，
+    /// 只供诊断行使用；每 tick 不清零（累计），窗口末在诊断行里报增量由调用方自行快照。
+    static MISSING_ONLINE_BY_ZONE: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
+
+    /// **A43p**：+1 并返回该区累计值（限流判定用同一返回值）。
+    pub(crate) fn note_missing_online(zone: usize) -> u64 {
+        if ENABLED.load(Ordering::Relaxed) {
+            if let Some(c) = MISSING_ONLINE_BY_ZONE.get(zone) {
+                return c.fetch_add(1, Ordering::Relaxed) + 1;
+            }
+        }
+        0
+    }
     /// **A43c**：本 tick **各跨区之和**——「**仅因 `execute_wall`** 被截断」的次数
     ///（每区每 tick ≤1 ⇒ 上限 = 区数）。与并集列 `zonek_inbound_budget_hit`
     ///（fill 命中 ∥ 墙 ∥ 条数上限 ∥ A6 整批推迟）分开，直接回答「执行段墙钟够不够」。
@@ -42884,6 +42915,7 @@ impl HostLoop {
                     cfg: magic_cfg_of(&enter_cfg),
                 }),
                 Some(&mut host_prof),
+                self.zone.index(),
                 // **L2-4 段 6b**：生产不启账本（v1 只有一个 World）；ledger 生产启用 = L2-5 前置。
                 None,
                 Some(&mut login_tails),
@@ -51069,6 +51101,7 @@ mod tests {
             false,
             None,
             None,
+            0,
             None,
             None,
             None,
@@ -51142,6 +51175,7 @@ mod tests {
             false,
             None,
             None,
+            0,
             None,
             None,
             None,
@@ -53354,7 +53388,7 @@ mod tests {
             "首 tick 互相进入视野 ⇒ 无消失事件：{:?}",
             rec1.hides
         );
-        let _ = drain_aoi_disappear(&rec1, &online, &gates, None);
+        let _ = drain_aoi_disappear(0, &rec1, &online, &gates, None);
         assert!(rx0.try_recv().is_err(), "首 tick 不应有消失帧");
 
         // 让 `b` 走远出 `a` 的视野（世界侧同步移动格子登记；Chebyshev 20 > 12）。
@@ -53365,7 +53399,7 @@ mod tests {
             "`b` 离开 `a` 视野 ⇒ hides 记 (a,b)：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates, None);
+        drain_aoi_disappear(0, &rec2, &online, &gates, None);
 
         // 只发观察者：socket 901 收 `SM_DISAPPEAR(30)`，`Recog = b`，全 0 头 + 无尾。
         let mut to_a: Vec<Vec<u8>> = Vec::new();
@@ -53464,7 +53498,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(
             counts,
             DisappearObserverCounts {
@@ -53521,7 +53555,7 @@ mod tests {
             hide_observer_kinds: vec![(player, target, HideObserverKind::Player)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0, "玩家缺失不得发帧（不猜线）");
         assert_eq!(counts.player_observer, 1);
         assert_eq!(counts.missing_online, 1, "玩家缺失必须大声计数");
@@ -53534,7 +53568,7 @@ mod tests {
             hide_observer_kinds: vec![(guard, target, HideObserverKind::NonPlayer)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0);
         assert_eq!(counts.nonplayer_observer, 1);
         assert_eq!(counts.nonplayer_ids, vec![guard], "DBG 数据面保留 id");
@@ -53551,7 +53585,7 @@ mod tests {
             hide_observer_kinds: vec![(clone, target, HideObserverKind::Clone)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(sent, 0, "克隆体不发帧");
         assert_eq!(counts.clone_observer, 1);
         assert_eq!(counts.clone_ids, vec![clone]);
@@ -53594,7 +53628,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
+        let (sent, counts) = drain_aoi_disappear_with_counts(0, &rec, &online, &gates, None);
         assert_eq!(counts.clone_observer, 1, "Clone 单独计数");
         assert_eq!(counts.clone_ids, vec![clone]);
         assert_eq!(counts.player_observer, 1);
@@ -53787,7 +53821,7 @@ mod tests {
             "仅 `a` 观察 `b` 离开（单方向）：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates, None);
+        drain_aoi_disappear(0, &rec2, &online, &gates, None);
 
         let mut to_a: Vec<Vec<u8>> = Vec::new();
         let mut to_b: Vec<Vec<u8>> = Vec::new();
@@ -131255,6 +131289,7 @@ mod l2_multi_zone_ledger_tests {
                 false,
                 None,
                 None,
+                0,
                 None,
                 None,
                 None,
@@ -131334,6 +131369,7 @@ mod l2_multi_zone_ledger_tests {
                             false,
                             None,
                             None,
+                            0,
                             Some(&mut ledger),
                             None,
                             None,
@@ -131479,6 +131515,7 @@ mod l2_multi_zone_ledger_tests {
                 false,
                 None,
                 None,
+                0,
                 None,
                 None,
                 None,
