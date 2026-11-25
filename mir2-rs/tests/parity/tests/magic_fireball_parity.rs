@@ -4352,3 +4352,9 @@ fn fireball_golden_antimagic_boundary_is_covered() {
 fn fireball5_golden_antimagic_boundary_is_covered() {
     assert_antimagic_boundary(&golden_file("fireball-5.json"), "fireball-5");
 }
+
+/// **MG-19 边界覆盖守卫（2026-11-26）**：`lightning-11.json`（魔号 11）三支压在 AntiMagic 等号边界上。
+#[test]
+fn lightning11_golden_antimagic_boundary_is_covered() {
+    assert_antimagic_boundary(&golden_file("lightning-11.json"), "lightning-11");
+}
