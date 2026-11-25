@@ -19608,6 +19608,90 @@ mod tests {
         );
     }
 
+    /// **missing_online 调查 · c2-A（opc-27 裁决的判定夹具）**：镜像是不是 AOI 观察者？
+    ///
+    /// 判定标准（写死）：`upsert_mirror` 之后跑扫描拍，
+    /// ① 镜像是否出现在 `rec.hides` 的 observer 位（出现 ⇒ 镜像会扫描）；
+    /// ② 镜像自己的 `visible_actors` 是否非空；
+    /// ③ observer 为镜像的 hides 条数（逐拍打印）。
+    ///
+    /// 读码预期（本用例绿 ⇒ 成立）：`by_map` 不按 mirror 过滤（`aoi.rs` 分桶段）、
+    /// `search_time` 取玩家缺省 1000ms ⇒ 镜像**会扫描**、**会进 hides**，且分类不读 mirror
+    /// ⇒ 类别是 `Player`。若本用例红 ⇒ 推翻该结论，b4 的夹具条件才是对的（报告里对账）。
+    #[test]
+    fn mirror_observer_scans_and_appears_in_hides() {
+        let mut w = World::new(64, 64);
+        w.open_session("target");
+        let target = w
+            .enter_map("target", crate::EntitySpawn::new(0, "target", 12, 10), 0)
+            .expect("target 进图");
+        let mirror_id = 9001;
+        let spec = MirrorSpec {
+            id: mirror_id,
+            name: "m".into(),
+            map_id: 0,
+            x: 10,
+            y: 10,
+            view_range: 12,
+            race: crate::entity::ACTOR_RACE_PLAY,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            cell_type: crate::map::CellType::Play,
+            dir: 0,
+            death: false,
+            invisible: false,
+            ghost: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            master: None,
+        };
+        assert_eq!(w.upsert_mirror(spec), MirrorUpsert::Inserted);
+        assert!(w.is_mirror(mirror_id), "前提：镜像已插入");
+
+        // 让镜像完成首扫（玩家的 SearchTime=1000ms，按 tick 节拍多跑几拍）。
+        for _ in 0..6 {
+            w.tick();
+        }
+        let visible_nonempty = w
+            .entities
+            .get(mirror_id)
+            .is_some_and(|e| !e.visible_actors.is_empty());
+        assert!(
+            visible_nonempty,
+            "① 镜像若扫描，visible_actors 必须非空（现码：会扫描）"
+        );
+
+        // target 出镜像视野 ⇒ 下一次扫描应把 (mirror, target) 记进 hides。
+        assert!(w.try_step_now(target, 1, 0, 20), "target 应能向东走 20 格");
+        let mut per_tick: Vec<usize> = Vec::new();
+        let mut kinds: Vec<HideObserverKind> = Vec::new();
+        // 玩家的 SearchTime=1000ms、tick≈200ms ⇒ 出视野后要 ≥5 拍才会再扫一次；
+        // 这里跑 6 拍并逐拍打印（opc-27 要求的“两拍各一次”取前两拍读数）。
+        for _ in 0..6 {
+            let rec = w.tick();
+            per_tick.push(rec.hides.iter().filter(|(o, _)| *o == mirror_id).count());
+            kinds.extend(
+                rec.hide_observer_kinds
+                    .iter()
+                    .filter(|(o, _, _)| *o == mirror_id)
+                    .map(|(_, _, k)| *k),
+            );
+        }
+        eprintln!(
+            "c2-A: mirror hides per tick={per_tick:?} visible_nonempty={visible_nonempty} kinds={kinds:?}"
+        );
+        assert!(
+            per_tick.iter().sum::<usize>() > 0,
+            "② 镜像必须作为观察者出现在 rec.hides（否则 b4 结论成立）: {per_tick:?}"
+        );
+        assert!(
+            kinds.iter().all(|k| *k == HideObserverKind::Player),
+            "③ 现码分类不读 mirror ⇒ observer 类别应全为 Player: {kinds:?}"
+        );
+    }
+
     /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：`TickRecord::hides` 的观察者
     /// 分类标注——玩家观察者 ⇒ `Player`；自扫怪观察者（Guard/ArcherGuard/SlaveMonster/下属）⇒
     /// `NonPlayer`。`hides` 本体（`(observer, target)` 内容与顺序）不变。
