@@ -234,9 +234,9 @@
         "cases": [
           "coordinate_dir(seed=1)"
         ],
-        "unit_tests": []
+        "unit_tests": ["warrskill_parity_tests::warr_27_motaebo_three_second_gate", "warrskill_parity_tests::warr_27_true_branch_is_registered_deviation"]
       },
-      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。 **牙（2026-11-21 行为牙审计 A）**：产品侧 MP 阈值翻转 ⇒ `warr_27_matches_golden` 帧数 `0 vs 3`；env=0 全帧牙（`recog` +1）同红。**DoMotaebo 真支/3s 门仍无断言**（见上文未覆盖声明，不走这颗牙）。记录见 `openmir2-warrskill-entry.md` C5（描述式，无 file:line）。",
+      "scope": "ClientSpellXY 入口 golden 与 Rust 帧面逐收件人一致；**原**仅覆盖 RUSHKUNG/红字支（golden 夹具 Dir=(byte)nTargetX 非法），DoMotaebo 真支（推挤/RM_RUSH/SM_STRUCK/自伤/训练尾）与 3s 门当时未覆盖；53 的 16B 客户端布局尾同 MG-06 的限定。 **牙（2026-11-21 行为牙审计 A）**：产品侧 MP 阈值翻转 ⇒ `warr_27_matches_golden` 帧数 `0 vs 3`；env=0 全帧牙（`recog` +1）同红。 **3s 门已补验（2026-11-25）**：`warr_27_motaebo_three_second_gate` 三段连续调用——门内（戳 now-500）零 SM 帧/MP 不变/戳不变且 `+GD` ack 恰 1；门外（戳 now-5000）发 `SM_RUSHKUNG(7)`/`53`/`SM_SYSMESSAGE(100)`、MP 100→90、戳刷新、目标血不动；紧接再调又进门（零帧/MP 不变）。变异实测（2026-11-25）：删 `warrskill.rs` 的 3s 早退 ⇒ 红「3s 门内必须零 SM 帧（oracle 只 return true）：[53, 7, 100]」；删写戳行 ⇒ 同红。 **DoMotaebo 真支仍为未建模的登记偏差**（`warrskill.rs` `Arm::Moteebo` 的 WRN 分支）：推挤 `SM_RUSH(6)`/`SM_STRUCK(31)`/自伤/训练尾**当前无法验证**（无实现），`warr_27_true_branch_is_registered_deviation` 只钉「仍为偏差：无 6/31 帧、不移动、不伤人」；要验证真支正确性须先开实现卡（非测试缺口）。记录见 `openmir2-warrskill-entry.md` C5（描述式，无 file:line）。（实现缺口登记：`DEV-MG-07`）",
       "cost": "S",
       "deviation": null,
       "notes": "旧清单 cost=小时级；**禁止在补 `ClientSpellXY` 入口前声称已验证**：`DoSpell` 首句 `IsWarrSkill ⇒ return false`，直调会得空账本的假零行为（真实 639 由调用方出；见卡 `openmir2-warrskill-entry`）",
