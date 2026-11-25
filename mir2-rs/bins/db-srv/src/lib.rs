@@ -24,6 +24,7 @@ mod cache;
 mod config;
 mod data;
 mod db;
+mod dbprobe;
 #[cfg(test)]
 mod gate_accept_tests;
 mod gbk;

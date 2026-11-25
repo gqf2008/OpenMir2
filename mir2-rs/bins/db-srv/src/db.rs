@@ -217,6 +217,23 @@ impl Db {
         Self::connect_with(dsn, 100, Duration::from_secs(15)).await
     }
 
+    /// **诊断用**：独立取一次连接并立刻归还，返回等待毫秒（`[DBSEL]` 的 `pool_ms`）。
+    ///
+    /// 只作**池压力读数**：它不改任何查询路径，也不代表查询内部各自取连接的耗时；
+    /// 取连接失败时返回 `0`（不把诊断失败变成业务失败）。
+    pub async fn probe_pool_ms(&self) -> u64 {
+        let t = std::time::Instant::now();
+        match self.pool.acquire().await {
+            Ok(conn) => {
+                drop(conn);
+                #[allow(clippy::cast_possible_truncation)]
+                let ms = t.elapsed().as_millis() as u64;
+                ms
+            }
+            Err(_) => 0,
+        }
+    }
+
     /// 显式池参数版本（生产 [`Db::connect`] 用 oracle 缺省；测试用小池/短超时复现
     /// 「DB 不可达」并验证各连接独立失败）。
     ///
