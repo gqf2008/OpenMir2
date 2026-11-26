@@ -65,7 +65,9 @@ async fn process_data(server: &Arc<Server>, db: &Db, q: Queued) -> Result<()> {
     let (mut u, tx, remote_ip) = {
         let t_lock = std::time::Instant::now();
         let gates = server.gates.lock().await;
-        crate::ingprobe::note_gates_lock(t_lock.elapsed().as_millis() as u64);
+        crate::ingprobe::note_gates_lock(
+            u64::try_from(t_lock.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         let Some(Some(g)) = gates.get(q.slot) else {
             crate::ingprobe::on_drop(crate::ingprobe::Drop::NoGate);
             return Ok(());
@@ -352,6 +354,8 @@ fn show(b: &[u8]) -> String {
 }
 
 /// C# `QueryChr`：查角色列表（会话校验 → 逐角色读库 → `SM_QUERYCHR[_FAIL]`）。
+// 探针接入 + 逐行错误日志使函数略超 100 行；拆分属独立重构，先显式 allow。
+#[allow(clippy::too_many_lines)]
 async fn query_chr(
     server: &Arc<Server>,
     db: &Db,
@@ -687,6 +691,8 @@ async fn del_chr_sname_to_level(db: &Db, name: &str) -> Result<u16> {
 }
 
 /// C# `SelectChr`：写 `SelectID` 标记 → 取地图 → 回 `SM_STARTPLAY[_FAIL]`。
+// 批量+逐条回退两条路 + 探针计数使函数超 100 行；拆分属独立重构，先显式 allow。
+#[allow(clippy::too_many_lines)]
 async fn select_chr(
     server: &Arc<Server>,
     db: &Db,
@@ -801,7 +807,7 @@ async fn select_chr(
             }
         }
     }
-    if let Some(p) = probe.as_deref_mut() {
+    if let Some(p) = probe.as_mut() {
         p.acq_n = db.acquires().saturating_sub(acq0);
         p.sql_n = db.round_trips().saturating_sub(sql0);
     }
