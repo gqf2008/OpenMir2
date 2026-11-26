@@ -88362,6 +88362,8 @@ SendRefMsgRange=15
                 e.ai.dir = d;
             }
         }
+        // **MG-12/40**：恢复 tick 的绝对时刻 = `cast_clock + offset`（与装置同一虚拟钟口径）。
+        let cast_clock = rig.world.clock_ms;
         // **DEV-MG57-RM-PUSH-CACHE**（B30 撤销的前置）：武装推挤收件人只记录日志。
         crate::push_observe::arm();
         // **MG-57 P2**：`Fixture.push_cache_cold` ⇒ 受害者 `SendRefMsg` 缓存必须**冷**（首次推挤
@@ -88624,6 +88626,9 @@ SendRefMsgRange=15
                 red_b_color,
                 &you_poisoned_bytes,
             );
+            // **MG-12/40**：`RM_MAGHEALING` 的累计（生产 `drain_mag_healing_delivery`，同一 tick 序）；
+            // 旧件（无 `heal_ticks_ms`）只累计不排干 ⇒ 台账零变化。
+            drain_mag_healing_delivery(&rec, &rig.online, &mut rig.ground_sessions);
             // **P3-B3**：`RM_DOOPENHEALTH` 到点 ⇒ 1100、`RM_MAGIC_LVEXP` 到点 ⇒ 640、
             // `RM_TRANSPARENT` ⇒ 657。与 `sim_loop` 同序（B4 先、B3 后）。
             // **(ii) pilot**：turn-aware + rig pending（657 的 per-viewer 延迟）。
@@ -88658,6 +88663,111 @@ SendRefMsgRange=15
         let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
         // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
+        // **MG-12/40（2026-11-26）**：恢复 tick——与装置同一批**相对施法的绝对虚拟 ms**；对
+        // 被治疗者（29 的 `both` 支再加施法者）跑**生产** `recover::recovery_tick`，按 `sim_loop`
+        // 同序镜像实体并 `healthspell` 槽出 53；逐 tick 记录 `{ms,hp,inc_healing}`。
+        // 帧 `due` 记 0：装置的 `Run()` 路径不设 `CurrentDueMs`（同一 artifact，两侧一致）。
+        let mut heal_trace: Vec<serde_json::Value> = Vec::new();
+        if let Some(ticks) = golden_case_for(stem, label)["Fixture"]["heal_ticks_ms"].as_array() {
+            let case_g = golden_case_for(stem, label);
+            let base_off = case_g["Fixture"]["inc_health_spell_tick_base"]
+                .as_i64()
+                .unwrap_or_else(|| {
+                    panic!("[{stem}/{label}] 缺 Fixture.inc_health_spell_tick_base")
+                });
+            let lvl_t = u8::try_from(
+                case_g["Fixture"]["heal_level_target"]
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 Fixture.heal_level_target")),
+            )
+            .expect("heal_level_target 越界 u8");
+            let lvl_c = u8::try_from(
+                case_g["Fixture"]["heal_level_caster"]
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 Fixture.heal_level_caster")),
+            )
+            .expect("heal_level_caster 越界 u8");
+            let with_caster = case_g["Fixture"]["heal_ticks_both"] == serde_json::json!(true);
+            let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+            for (who, lvl) in [("target", lvl_t), ("caster", lvl_c)] {
+                if let Some(sg) = rig.ground_sessions.get_mut(who) {
+                    // **只对相位**：`IncHealthSpellTick = cast + base`；**不许**整包 `Recovery::new`
+                    // （那会把交付段累计的 `inc_healing` 清零——2026-11-26 实测踩过）。
+                    sg.recovery.inc_health_spell_tick = cast_clock + base_off;
+                    sg.state.wabil.level = lvl;
+                }
+            }
+            for t in ticks {
+                let off = t
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("[{stem}/{label}] heal_ticks_ms 必须是整数"));
+                let when = cast_clock + off;
+                rig.world.clock_ms = when;
+                let who_list: &[&str] = if with_caster {
+                    &["target", "caster"]
+                } else {
+                    &["target"]
+                };
+                for who in who_list {
+                    let death = rig
+                        .ground_sessions
+                        .get(*who)
+                        .and_then(|sg| rig.world.entities.get(sg.actor_id))
+                        .is_some_and(|e| e.death);
+                    let drained = {
+                        let sg = rig
+                            .ground_sessions
+                            .get_mut(*who)
+                            .unwrap_or_else(|| panic!("[{stem}/{label}] 缺 {who} 会话"));
+                        game_svr::recover::recovery_tick(
+                            &mut sg.recovery,
+                            &mut sg.state.wabil,
+                            death,
+                            when,
+                        )
+                    };
+                    if drained {
+                        let sg = rig.ground_sessions.get(*who).expect("会话存在");
+                        let (hp, mp) = (sg.state.wabil.hp, sg.state.wabil.mp);
+                        let show_hp = sg.show_hp;
+                        if let Some(e) = rig.world.entities.get_mut(sg.actor_id) {
+                            e.vitals.hp = hp;
+                            e.vitals.mp = mp;
+                        }
+                        slots.health_spell_changed(sg.actor_id, show_hp);
+                    }
+                }
+                flush_healthspell_slots(
+                    &mut slots,
+                    &rig.world,
+                    &rig.online,
+                    &rig.ground_sessions,
+                    &rig.gates,
+                    chat::send_ref_msg_range(),
+                );
+                let (heal_frames, _raws_heal) = rig.drain();
+                for f in heal_frames {
+                    deliver_frames.push((0, f));
+                }
+                let sg_t = rig.ground_sessions.get("target").expect("target 会话");
+                if with_caster {
+                    let sg_c = rig.ground_sessions.get("caster").expect("caster 会话");
+                    heal_trace.push(serde_json::json!({
+                        "ms": off,
+                        "hp": i64::from(sg_t.state.wabil.hp),
+                        "inc_healing": i64::from(sg_t.recovery.inc_healing),
+                        "hp_caster": i64::from(sg_c.state.wabil.hp),
+                        "inc_healing_caster": i64::from(sg_c.recovery.inc_healing),
+                    }));
+                } else {
+                    heal_trace.push(serde_json::json!({
+                        "ms": off,
+                        "hp": i64::from(sg_t.state.wabil.hp),
+                        "inc_healing": i64::from(sg_t.recovery.inc_healing),
+                    }));
+                }
+            }
+        }
         let push_targets = crate::push_observe::take();
         let push_events: Vec<(i32, u8, i32, i32)> = firewind_pushes
             .iter()
@@ -89549,6 +89659,10 @@ SendRefMsgRange=15
             // `Fixture.rng_total_draws` 比；trace 关闭时这是唯一的抽数证据）。
             "Draws": rig.world.rng.draws(),
         }]);
+        // **MG-12/40**：恢复 tick 轨迹（只有 `Fixture.heal_ticks_ms` 的支才落）。
+        if !heal_trace.is_empty() {
+            ledger[0]["HealTicks"] = serde_json::json!(heal_trace);
+        }
         // **MG-57 P2**：受害者术后 `Dir`（只有金标准记了 `TargetDirAfter` 的支才落/比；
         // 这是「`Dir` 用 `nDir` 而非 `nBackDir`」变异的唯一可见面）。
         if let Some(want) = golden_case_for(stem, label)["TargetDirAfter"].as_i64() {
@@ -90278,6 +90392,99 @@ SendRefMsgRange=15
 
     /// `2 治愈`（`MagicManager.cs:204-224`）真实台账驱动。三支 = `heal` / `full` / `self`
     /// （本支**无 AntiMagic 骰**；语义差异见卡面 §23）。金标准 `golden/magic/healing.json`。
+    /// **MG-12/40（2026-11-26）**：恢复 tick 的**独立期望表**——由 oracle `Run()` 的恢复公式
+    /// （`PlayObject.Message.cs:70-135`）与 fixture 输入（Level、`IncHealing`、`dw`、tick 相位）
+    /// **解析算出**，不读 golden、不读 Rust `recover.rs`。
+    /// 行 = `(ms, hp, inc_healing[, hp_caster, inc_healing_caster])`。
+    #[allow(clippy::type_complexity)]
+    fn heal_expected(label: &str) -> Option<Vec<(i64, i64, i64, Option<(i64, i64)>)>> {
+        let t = |ms: i64, hp: i64, inc: i64| (ms, hp, inc, None);
+        Some(match label {
+            // L20 ⇒ dw=400；排干 +5/次，inc 30→25→20→15；排在 1300/1900/2300
+            "tick_hp_3" => vec![
+                t(1300, 55, 25),
+                t(1600, 55, 25),
+                t(1900, 60, 20),
+                t(2000, 60, 20),
+                t(2300, 65, 15),
+            ],
+            // 222+15 ⇒ 首排干 +5 到 227 → 截断 224；`HP==MaxHP ⇒ IncHealing=0`（不是剩 10）
+            "tick_hp_clamp" => vec![t(1400, 224, 0)],
+            // 1300 排干（rearm 1500）⇒ 1899 不到期（399<400）、1900 到期
+            "tick_gate_edge_20" => vec![
+                t(1300, 55, 25),
+                t(1600, 55, 25),
+                t(1899, 55, 25),
+                t(1900, 60, 20),
+            ],
+            // L1 ⇒ dw=590：1300 排干（rearm 1500）⇒ 1899/1900 都不到期、2090（590）到期
+            "tick_gate_edge_1" => vec![
+                t(1300, 14, 25),
+                t(1899, 14, 25),
+                t(1900, 14, 25),
+                t(2090, 19, 0),
+            ],
+            // 第一次排干在 1300（extra=min(200,900)=200 ⇒ rearm 1500）⇒ 1600 不到期、1900 到期；
+            // 若 `min(200, …)` 写成无界 ⇒ rearm 2200 ⇒ 1900 不排干（HP 只 +5）
+            "tick_lag_rearm" => vec![t(1300, 55, 25), t(1600, 55, 25), t(1900, 60, 20)],
+            _ => return None,
+        })
+    }
+
+    /// 29 的两目标轨迹（caster `WAbil.Level=0` ⇒ `dw=600`：1300 排干、1900 不到期）。
+    #[allow(clippy::type_complexity)]
+    fn heal_expected_both(label: &str) -> Option<Vec<(i64, i64, i64, i64, i64)>> {
+        Some(match label {
+            "big_tick_two" => vec![(1300, 55, 25, 55, 25), (1900, 60, 20, 55, 25)],
+            _ => return None,
+        })
+    }
+
+    /// 按独立期望表核对台账 `HealTicks`（逐行、逐字段；不读 golden 数值）。
+    fn assert_heal_trace_matches_table(stem: &str, label: &str) {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let rows = v[0]["HealTicks"]
+            .as_array()
+            .unwrap_or_else(|| panic!("[{stem}/{label}] 台账缺 HealTicks"));
+        if let Some(expected) = heal_expected(label) {
+            let got: Vec<(i64, i64, i64)> = rows
+                .iter()
+                .map(|r| {
+                    (
+                        r["ms"].as_i64().unwrap(),
+                        r["hp"].as_i64().unwrap(),
+                        r["inc_healing"].as_i64().unwrap(),
+                    )
+                })
+                .collect();
+            let want: Vec<(i64, i64, i64)> =
+                expected.iter().map(|(a, b, c, _)| (*a, *b, *c)).collect();
+            assert_eq!(got, want, "[{stem}/{label}] 恢复 tick 轨迹与独立期望表不符");
+            return;
+        }
+        if let Some(expected) = heal_expected_both(label) {
+            let got: Vec<(i64, i64, i64, i64, i64)> = rows
+                .iter()
+                .map(|r| {
+                    (
+                        r["ms"].as_i64().unwrap(),
+                        r["hp"].as_i64().unwrap(),
+                        r["inc_healing"].as_i64().unwrap(),
+                        r["hp_caster"].as_i64().unwrap(),
+                        r["inc_healing_caster"].as_i64().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                got, expected,
+                "[{stem}/{label}] 两目标恢复轨迹与独立期望表不符"
+            );
+        }
+    }
+
     fn healing_parity_drive(
         label: &str,
         seed: i32,
@@ -95255,6 +95462,50 @@ SendRefMsgRange=15
             0,
             "[{stem}/{label}] obs_out 不得有帧"
         );
+    }
+
+    /// **MG-12/40（2026-11-26）**：恢复 tick 臂——判据 = `TargetHp`（真加血）+ 逐 tick 轨迹与
+    /// **独立期望表**相等。走通用 `fireball_parity_drive`（与 `RunMagicCase` 同源）。
+    fn heal_tick_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
+        fireball_case_assert(stem, label);
+        assert_heal_trace_matches_table(stem, label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_hp_3() {
+        heal_tick_assert("healing", 2, "tick_hp_3", 1, 6100);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_hp_clamp() {
+        heal_tick_assert("healing", 2, "tick_hp_clamp", 1, 6200);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_gate_edge_20() {
+        heal_tick_assert("healing", 2, "tick_gate_edge_20", 1, 6300);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_gate_edge_1() {
+        heal_tick_assert("healing", 2, "tick_gate_edge_1", 1, 6400);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_lag_rearm() {
+        heal_tick_assert("healing", 2, "tick_lag_rearm", 1, 6500);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn bighealing_parity_big_tick_two() {
+        heal_tick_assert("bighealing", 29, "big_tick_two", 13, 3100);
     }
 
     #[test]

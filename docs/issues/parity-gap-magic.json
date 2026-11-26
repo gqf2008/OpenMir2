@@ -381,18 +381,28 @@
         "cases": [
           "heal(seed=1)",
           "full(seed=5)",
-          "self(seed=13)"
+          "self(seed=13)",
+          "tick_hp_3",
+          "tick_hp_clamp",
+          "tick_gate_edge_20",
+          "tick_gate_edge_1",
+          "tick_lag_rearm"
         ],
         "unit_tests": [
           "tests::healing_parity_heal",
           "tests::healing_parity_full",
           "tests::healing_parity_self",
-          "recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate"
+          "recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate",
+          "tests::healing_parity_tick_hp_3",
+          "tests::healing_parity_tick_hp_clamp",
+          "tests::healing_parity_tick_gate_edge_20",
+          "tests::healing_parity_tick_gate_edge_1",
+          "tests::healing_parity_tick_lag_rearm"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级",
+      "notes": "旧清单 cost=小时级  **2026-11-26 恢复 tick 批（作者 openmir2-2a）**：`TargetHp` 现已可观测——装置在 fixture 给的**相对虚拟 ms 列表**上对目标调一次生产 `PlayObject.Run()`（不抽取/不改 oracle；`AssertRunInert` 逐条断言其余段静止），驱动在同一列表上跑生产 `recover::recovery_tick` 并镜像/出 53；逐 tick 轨迹与**独立硬写表**（oracle 恢复公式 + fixture 输入解析算出）相比。已验：`tick_hp_3`（+15，三次排干）、`tick_hp_clamp`（222→224，截断 + `HP==MaxHP ⇒ IncHealing=0`）、`tick_gate_edge_20/1`（Level 20/1 两个 `dw`）、`tick_lag_rearm`（`min(200, …)` 重挂）。红证（`recover.rs`，还原并核 sha 相等）：`n_hp += per_healing`→`+4`、门 `>=`→`>`、删 `HP==MaxHP ⇒ IncHealing=0` 各红一支。 **未验（cap 本体）**：`IncHealing=300` 封顶需要 >300 的累计（本批无多次施法旋钮），**本批不声明 cap 已验**；`tick_hp_clamp` 只覆盖到 `HP==MaxHP ⇒ IncHealing=0`。另：装置侧敏感度牙（C# ctor `PerHealing 5→4`）**未红**——首排干并未读该 ctor 值（`Run()` 路径另有重置），该牙前提需另核，本批不据此声明装置敏感度。",
       "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 补）：cast_healing_spell 治疗量 +1（最小幅度）⇒ 比较器 Rm 8034 p1 红（heal 15→16 / self 20→21）；驱动 3/3 绿，**比较器独守**；left/right 见 8e1c5e7f3 **加血面补验（2026-11-25）**：装置仍不观测 `TargetHp`（`RM_MAGHEALING` 只累计，golden 的 `TargetHp == TargetHpBefore` 不变），但**恢复期的多轮消费**补了牙：新用例 `recover::tests::inc_healing_drains_across_ticks_with_the_delay_gate`（`bins/game-svr/src/recover.rs`）断言恢复门 `600 - min(level*10,400)` 未到不消费、每轮 +`PerHealing=5`、余额不足时全加并清零、清零后不再进场；依据 oracle `PlayObject.Message.cs:113-130`。变异实测（2026-11-25）：把 `n_hp += IncHealing` 项置零 ⇒ 红 `left: (110, 0) right: (112, 0)`；还原后绿。**仍未覆盖**：cast 的累计值到 `IncHealing` 的链路只在装置侧经 `RM 8034 p1` 观测（golden 已逐值对拍），装置内仍看不到 `TargetHp` 的变化；恢复节奏的墙钟相位（`IncHealthSpellTick` 推进公式 `now + inc_tick`）由本用例按门边界间接覆盖、无独立 golden。"
     },
     {
@@ -1195,17 +1205,19 @@
         "cases": [
           "heal(seed=1)",
           "full(seed=5)",
-          "both(seed=13)"
+          "both(seed=13)",
+          "big_tick_two"
         ],
         "unit_tests": [
           "tests::big_healing_parity_heal",
           "tests::big_healing_parity_full",
-          "tests::big_healing_parity_both"
+          "tests::big_healing_parity_both",
+          "tests::bighealing_parity_big_tick_two"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。3×3 有序枚举、只治 `HP<MaxHP` 的 proper friend（夹具 N=2：caster+target；`both` 支两条 8034）；**窗口内不回血、不产 53**（到点只累计 IncHealing）；**`AbilSeeHealGauge`(1103) 未覆盖**（Level=1 恒 false，显式排除）。卡 §27。",
+      "notes": "旧清单 cost=小时级。3×3 有序枚举、只治 `HP<MaxHP` 的 proper friend（夹具 N=2：caster+target；`both` 支两条 8034）；**窗口内不回血、不产 53**（到点只累计 IncHealing）；**`AbilSeeHealGauge`(1103) 未覆盖**（Level=1 恒 false，显式排除）。卡 §27。  **2026-11-26 恢复 tick 批（作者 openmir2-2a）**：`TargetHp` 现已可观测——装置在 fixture 给的**相对虚拟 ms 列表**上对目标调一次生产 `PlayObject.Run()`（不抽取/不改 oracle；`AssertRunInert` 逐条断言其余段静止），驱动在同一列表上跑生产 `recover::recovery_tick` 并镜像/出 53；逐 tick 轨迹与**独立硬写表**（oracle 恢复公式 + fixture 输入解析算出）相比。已验：`tick_hp_3`（+15，三次排干）、`tick_hp_clamp`（222→224，截断 + `HP==MaxHP ⇒ IncHealing=0`）、`tick_gate_edge_20/1`（Level 20/1 两个 `dw`）、`tick_lag_rearm`（`min(200, …)` 重挂）。红证（`recover.rs`，还原并核 sha 相等）：`n_hp += per_healing`→`+4`、门 `>=`→`>`、删 `HP==MaxHP ⇒ IncHealing=0` 各红一支。 **MG-40 差异点**：`big_tick_two` 只加在 29 上——两目标（caster/target）各自累计/各自排干，两条 HP 轨迹；2 的 HP 轨迹来自 `tick_hp_*`，不来自这条。",
       "scope": "partial：治疗量经 **RM 8034 的 `p1`** 观测并随 seed 分叉（heal 15 / self 或 both 20）；**`TargetHp` 在本装置不可观测**——`RM_MAGHEALING` 只累计 `IncHealing`（上限 300），真正加血在后续周期 tick，本装置不跑该 tick。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
