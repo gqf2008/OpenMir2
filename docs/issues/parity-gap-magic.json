@@ -584,8 +584,7 @@
           "tests::skill10_parity_s1",
           "tests::skill10_parity_s5",
           "tests::skill10_parity_s13",
-          "real_rust_ledger_skill10"
-        ,
+          "real_rust_ledger_skill10",
           "frame_order_scope_marker_is_refused_outside_the_whitelist"
         ]
       },
@@ -1761,24 +1760,44 @@
       "evidence": {
         "test": "real_rust_ledger_energyrepulsor",
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
-        "fixture": "mir2-rs/tests/parity/golden/magic/energyrepulsor.json（`rng_total_draws` 3/3/3、与 firewind 逐值同源；目标 `Sent` 含 `SM_BACKSTEP(9)` 1/1/2 条；`DrainPasses=2`；`frame_order_scope=None`）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/energyrepulsor.json（`rng_total_draws` 3/3/3、与 firewind 逐值同源；目标 `Sent` 含 `SM_BACKSTEP(9)` 1/1/2 条；`DrainPasses=2`；`frame_order_scope=None`）；**MG-57 P2**：firewind.json 追加 13 支臂（8 向×1 格、对角 2 格、多目标、被挡两施法、收件人边界 2 组 4 档），均走真 `0.map`（`map_file_sha256/map_file_size` 钉）与生产 AOI；观察支落 `TargetDirAfter`/`Fixture.target_dir_before`",
         "cases": [
           "s1(seed 1)",
           "s5(seed 5)",
-          "s13(seed 13)"
+          "s13(seed 13)",
+          "dir_e/dir_w/dir_n/dir_s/dir_ne/dir_nw/dir_se/dir_sw(seed 1，各推 1 格)",
+          "diag_ne2(seed 13，对角推 2 格)",
+          "multi(seed 1，两 Play 受害者：obs_in 南推 1 格、target 东推 2 格)",
+          "blocked2(seed 1，0.map 墙 (101,103) ⇒ 两次施法都 CharPushed 零推进；UserMagicLevel=3 冻结 640)",
+          "bound_a/bound_b(seed 13，受害者东推 2 格；观察者 |Δ|=11/12/13 两档)"
         ],
         "unit_tests": [
           "tests::energyrepulsor_parity_s1",
           "tests::energyrepulsor_parity_s5",
           "tests::energyrepulsor_parity_s13",
-          "real_rust_ledger_energyrepulsor"
+          "real_rust_ledger_energyrepulsor",
+          "tests::firewind_parity_dir_e",
+          "tests::firewind_parity_dir_w",
+          "tests::firewind_parity_dir_n",
+          "tests::firewind_parity_dir_s",
+          "tests::firewind_parity_dir_ne",
+          "tests::firewind_parity_dir_nw",
+          "tests::firewind_parity_dir_se",
+          "tests::firewind_parity_dir_sw",
+          "tests::firewind_parity_diag_ne2",
+          "tests::firewind_parity_multi",
+          "tests::firewind_parity_blocked2",
+          "tests::firewind_parity_bound_a",
+          "tests::firewind_parity_bound_b",
+          "firewind_default_gate_s1/s5/s13",
+          "energyrepulsor_default_gate_s1/s5/s13（默认门，非 ignored）"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws=3/3/3`、目标 `Sent` 含 `SM_BACKSTEP(9)`）+ 退化守卫（`assert_effect_frames_non_degenerate(SM_BACKSTEP)` 两侧各 ≥1）+ 收件人集合逐名相等（`obs_out` 以**零帧**存在）+ 帧序按 oracle 收件人 `MsgQueue` 四叉堆（`(byte)RM ident`：17=24 → 638=136 → 9=156；比较面 `(ident,param,tag,series)` 严格逐收件人有序）+ `DrainPasses=2`。批 `card/magic-push-batch-impl`，合并提交 dd55ec554。驱动侧装置前提：全 `Walk` 网格 + `caster.visible_actors` 按 target→obs_in（→怪物）同序回填（离线装置不跑 AOI；`MagPushArround` 按该列表序遍历）。同批 21/MG-35 因换图簇缺 `SM_SERVERCONFIG(11029)` **未升格**（`docs/issues/openmir2-changemap-missing-serverconfig.md`）。**局部修边界**：帧序缓冲只覆盖 8/37/21 三魔号；全局 ref-msg 队列差异（oracle 全入队 vs Rust 直发混用）不在本卡范围，见 `docs/issues/openmir2-refmsg-queue-model.md`。",
+      "notes": "旧清单 cost=小时级；2026-11-21 升格（scope=partial）：非退化 golden（`rng_total_draws=3/3/3`、目标 `Sent` 含 `SM_BACKSTEP(9)`）+ 退化守卫（`assert_effect_frames_non_degenerate(SM_BACKSTEP)` 两侧各 ≥1）+ 收件人集合逐名相等（`obs_out` 以**零帧**存在）+ 帧序按 oracle 收件人 `MsgQueue` 四叉堆（`(byte)RM ident`：17=24 → 638=136 → 9=156；比较面 `(ident,param,tag,series)` 严格逐收件人有序）+ `DrainPasses=2`。批 `card/magic-push-batch-impl`，合并提交 dd55ec554。驱动侧装置前提：全 `Walk` 网格 + `caster.visible_actors` 按 target→obs_in（→怪物）同序回填（离线装置不跑 AOI；`MagPushArround` 按该列表序遍历）。同批 21/MG-35 因换图簇缺 `SM_SERVERCONFIG(11029)` **未升格**（`docs/issues/openmir2-changemap-missing-serverconfig.md`）。**局部修边界**：帧序缓冲只覆盖 8/37/21 三魔号；全局 ref-msg 队列差异（oracle 全入队 vs Rust 直发混用）不在本卡范围，见 `docs/issues/openmir2-refmsg-queue-model.md`。 **MG-57 P2（2026-11-26，作者 openmir2-2a）**：①方向/格数：8 向 ×1 格 + 对角 2 格；落点由**独立硬写表**（oracle 方向公式 + `0.map` 冻结 cell 标志，不读 golden 落点）逐收件人比多重集。变异红证（`crates/world-bevy`，均还原并核 sha 相等）：`front_position` 右分支 `nx+=1→nx-=1` ⇒ `firewind_parity_dir_e`/`s1` 红；`next_direction` 的 `flagx` 符号翻转 ⇒ `dir_w`/`dir_ne` 红；生效点的 `Dir` 收尾（`cast_firewind_spell` 的 `back_dir(n_dir)→n_dir`）⇒ `dir_e`/`dir_w` 红（`blocked2` 不动，符合预期）。**注**：`magic::char_pushed` 是探针/对拍向量用的副本，不在施法路径上，改它的 `Dir` 收尾**全绿**——红证必须打在 `cast_firewind_spell`（+ 其后的 `char_pushed_core` 被其覆盖）。②帧面严格序进**默认 `cargo test` 门**：新增 6 个非 ignored 用例（8/37 各 s1/s5/s13），判据四条齐全（收件人集合逐名 / 逐收件人 `(ident,param,tag,series)` 严格序 / `9` 非退化 / 台账 `Draws` == 金标准 `rng_total_draws`）；**RNG 逐值仍在 `#[ignore]` 的 parity 驱动**（`rng_trace` 进程级约束不变）。③视野：rig 改走**生产 `search_view_range`**（`OutputAoi` 段同一函数；新增 `World::search_view_range_now`，不做 `SearchTick` 节流）——**仅证明该函数路径**；tick 内节流、`SearchTick` 相位、AOI 增量下行仍不在本叶。④收件人边界：`bound_a/b` 在同一次两格推挤里同时覆盖「首扫 |Δ|≤12 含」「复用 |Δ|<11 不含」与 ±13 不含；入口由 `Fixture.push_cache_cold` + 驱动 `ref_msg_cache_tick(victim).is_none()` 断言缓存冷，两档的差别因此可解释。**B30 撤销**：台账 `8092` 收件人改用 `push_observe`（推挤帧发射点抄的同一份 `ref_msg_cache` 列表），并逐 case 断言「记录条数 == 推挤格数」。",
       "basis": "semantic",
-      "scope": "partial：SKILL_ENERGYREPULSOR(37)（`MagicManager.cs:601-606`，与 8 的函数体逐字相同：同 `MagPushArround`、同 `boTrain` 门、无 in-case 帧）的逐格 `RM_PUSH`→`SM_BACKSTEP(9)` 主链由 `energyrepulsor` × s1/s5/s13 覆盖：各收件人 `Sent` **严格有序**（target/obs_in `17→638→9`；caster `638→9…` 且**不含 17**，= oracle `MsgQueue` 四叉堆口径）、逐格 `9` 的 `param/tag`（落点）、`Rng` 3 抽逐值、收件人集合逐名相等；**未验**：①推挤方向/格数只覆盖本夹具摆位（caster (100,100) 朝东、目标 (101,100) 在 8 邻格；s1/s5 推 1 格、s13 推 2 格），其它方向/多目标/连续推挤未覆盖；②帧序语义**只由 `#[ignore]` 的 parity 驱动覆盖**（默认 `cargo test` 跑的是机制级用例：缓冲四叉堆序 + caster 零条 `SM_SPELL` 的行为断言，不比对 golden 严格序）；③视野回填由驱动按 oracle 装置同序注入，生产 AOI/视差集路径未覆盖；④观察者只有 1 个视野内 + 1 个视野外，`RM_PUSH` 的收件人范围边界（±`SendRefMsgRange`）未覆盖。**行为牙（2026-11-21 实跑）**：仅对 37 把 `nPushLevel` +1（8 不动）⇒ `SM_BACKSTEP(9)`/`RM_PUSH(8092)` 多出一步；驱动三支红（帧序列多 `(9,103,…)`），比较器 18 条红；最小幅度 = +1 level（1 step）；同变异下 `firewind_parity_s1` 仍绿 ⇒ 分条归属成立。记录见 `docs/issues/mg57-energyrepulsor-teeth-gap.md` §5。"
+      "scope": "partial：SKILL_ENERGYREPULSOR(37)（`MagicManager.cs:601-606`，与 8 的函数体逐字相同：同 `MagPushArround`、同 `boTrain` 门、无 in-case 帧）的逐格 `RM_PUSH`→`SM_BACKSTEP(9)` 主链由 `energyrepulsor` × s1/s5/s13 覆盖：各收件人 `Sent` **严格有序**（target/obs_in `17→638→9`；caster `638→9…` 且**不含 17**，= oracle `MsgQueue` 四叉堆口径）、逐格 `9` 的 `param/tag`（落点）、`Rng` 3 抽逐值、收件人集合逐名相等；**未验**：①推挤方向/格数只覆盖本夹具摆位（caster (100,100) 朝东、目标 (101,100) 在 8 邻格；s1/s5 推 1 格、s13 推 2 格），其它方向/多目标/连续推挤未覆盖；②帧序语义**只由 `#[ignore]` 的 parity 驱动覆盖**（默认 `cargo test` 跑的是机制级用例：缓冲四叉堆序 + caster 零条 `SM_SPELL` 的行为断言，不比对 golden 严格序）；③视野回填由驱动按 oracle 装置同序注入，生产 AOI/视差集路径未覆盖；④观察者只有 1 个视野内 + 1 个视野外，`RM_PUSH` 的收件人范围边界（±`SendRefMsgRange`）未覆盖。**行为牙（2026-11-21 实跑）**：仅对 37 把 `nPushLevel` +1（8 不动）⇒ `SM_BACKSTEP(9)`/`RM_PUSH(8092)` 多出一步；驱动三支红（帧序列多 `(9,103,…)`），比较器 18 条红；最小幅度 = +1 level（1 step）；同变异下 `firewind_parity_s1` 仍绿 ⇒ 分条归属成立。记录见 `docs/issues/mg57-energyrepulsor-teeth-gap.md` §5。 **2026-11-26 P2 升格**：①②③④ 四条未验面成臂并已验（8 向×1 格 + 对角 2 格 + 多目标 + 被挡两施法 + 收件人边界 4 档；落点独立硬写表 + 三处变异红证；默认门 strict-order 6 用例）。**边界措辞**：③ 只到「rig 走生产 `search_view_range`（`OutputAoi` 同一函数）」——不写成「生产 AOI 全路径已验」；② 的默认门只证明「帧面严格序 + 抽数」，RNG 逐值仍由 ignored 驱动覆盖。⑤ `DEV-MG57-RIG-MAP-BASELINE`（B29）仍登记：`real_map` 开关只在 8/37 的臂上打开，所有推挤类 stem 切真图并删开关前**不撤**。"
     },
     {
       "id": "MG-58",

@@ -322,7 +322,48 @@ public static class Program
                 };
                 return name == "lightflower-nonzero" ? BehaviorBatch(spec) : AntiMagicBatch(spec);
             }
-            if (name == "firewind") return BehaviorBatch(new MagicSpec { Key = "firewind", MagicId = 8, MagicName = "FireWind", MakeVisible = true });
+                        if (name == "firewind")
+            {
+                // **MG-57 P2（2026-11-26）**：MG-57 的未验面逐条成臂——
+                // ①8 向 ×1 格（每向一个受害者位）、②对角 2 格、③多目标、④被挡两施法（同目标连续两 tick）、
+                // ⑤`RM_PUSH` 收件人边界 4 档（首扫 ≤12 / 复用 <11）。
+                // 所有臂走**真 `0.map`**（`real_map`，逐 case）+ 生产 AOI（`production_aoi`，逐 case）
+                // + 缓存冷断言（`push_cache_cold`）；既有 s1/s5/s13 三项全缺省 ⇒ 逐字节不变。
+                // seed 1 = `Random(2)=0` ⇒ 推 1 格；seed 13 = 1 ⇒ 推 2 格（与既有 s1/s13 同口径）。
+                return BehaviorBatch(new MagicSpec
+                {
+                    Key = "firewind",
+                    MagicId = 8,
+                    MagicName = "FireWind",
+                    MakeVisible = true,
+                    ExtraCases = new[] {
+                        // ①8 向（受害者 = target，caster 恒 (100,100)；obs_in 缺省 (105,100) ⇒ Δ>1 不被推）
+                        new ExtraCaseSpec { Label = "dir_e", TargetXy = new[] { 101, 100 }, SeedOverride = 1, IdBase = 4100, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_w", TargetXy = new[] { 99, 100 }, SeedOverride = 1, IdBase = 4200, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_n", TargetXy = new[] { 100, 99 }, SeedOverride = 1, IdBase = 4300, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_s", TargetXy = new[] { 100, 101 }, SeedOverride = 1, IdBase = 4400, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_ne", TargetXy = new[] { 101, 99 }, SeedOverride = 1, IdBase = 4500, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_nw", TargetXy = new[] { 99, 99 }, SeedOverride = 1, IdBase = 4600, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_se", TargetXy = new[] { 101, 101 }, SeedOverride = 1, IdBase = 4700, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        new ExtraCaseSpec { Label = "dir_sw", TargetXy = new[] { 99, 101 }, SeedOverride = 1, IdBase = 4800, RealMap = true, ProductionAoi = true, PushCacheProbe = true, ObserveDirAfter = true },
+                        // ②对角 2 格（seed 13 ⇒ `Random(2)=1`）
+                        new ExtraCaseSpec { Label = "diag_ne2", TargetXy = new[] { 101, 99 }, SeedOverride = 13, IdBase = 4900, RealMap = true, ProductionAoi = true, PushCacheProbe = true },
+                        // ③多目标：target 在东、obs_in 挪到南邻格 ⇒ 同一施法推两个 Play 受害者
+                        new ExtraCaseSpec { Label = "multi", TargetXy = new[] { 101, 100 }, ObsInXy = new[] { 100, 101 }, SeedOverride = 1, IdBase = 5000, RealMap = true, ProductionAoi = true, PushCacheProbe = true },
+                        // ④被挡两施法：caster (99,103)/target (100,103)，东侧 (101,103) 是 `0.map` 的墙 ⇒
+                        // 两次施法都 `CharPushed` 失败（零 `9` 帧），但 `Random(20)`/`Random(2)` 照抽。
+                        new ExtraCaseSpec { Label = "blocked2", CasterXy = new[] { 99, 103 }, TargetXy = new[] { 100, 103 }, SeedOverride = 1, IdBase = 5100, RealMap = true, ProductionAoi = true, PushCacheProbe = true, SecondCastAtMs = 100, StepDrainMsOverride = 100, UserMagicLevelOverride = 3 /* 训练门关 ⇒ 两次 640 的 param 相同，等键序不进判据 */, ObserveDirAfter = true },
+                        // ⑤收件人边界（受害者东推两格 ⇒ 格1 (102,100) 首扫、格2 (103,100) 复用）：
+                        // 首扫 |Δ|≤12 含、复用 |Δ|<11 含；obs 距受害者格1/格2 分别为：
+                        // a: obs_in(113)→11/10（两次都含）、obs_out(114)→12/11（首扫含 / 复用不含——钉 `<11`）
+                        // b: obs_in(114)→12/11、obs_out(115)→13/12（13 两档都不含）
+                        // 观察者都放在 caster 的 Δ≥13 处（caster 的 `RM_SPELL` 首扫 ±12 之外）⇒ 它们只
+                        // 经受害者的 `RM_PUSH` 面，不和施法者自身的 `SendRefMsg` 缓存边界纠缠。
+                        new ExtraCaseSpec { Label = "bound_a", ObsInXy = new[] { 113, 100 }, ObsOutXy = new[] { 114, 100 }, SeedOverride = 13, IdBase = 5200, RealMap = true, ProductionAoi = true, PushCacheProbe = true },
+                        new ExtraCaseSpec { Label = "bound_b", ObsInXy = new[] { 114, 100 }, ObsOutXy = new[] { 115, 100 }, SeedOverride = 13, IdBase = 5300, RealMap = true, ProductionAoi = true, PushCacheProbe = true },
+                    },
+                });
+            }
             if (name == "energyrepulsor") return BehaviorBatch(new MagicSpec { Key = "energyrepulsor", MagicId = 37, MagicName = "EnergyRepulsor", MakeVisible = true });
             // **MG-35（21 瞬息移动）**：`MapRandomMove→SpaceMove` 走 `FindMap(HomeMap)` ⇒
             // `EnableMaps`（env.MapName/ServerIndex）+ `HomeMap="0"`。观测面是 `RM_SPACEMOVE_SHOW2(807)`
@@ -1662,6 +1703,21 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool ProductionAoi;
         /// <summary>
+        /// **MG-57 P2（2026-11-26）**：四个对象的坐标覆盖（`null` = 既有缺省 (100,100)/(101,100)/
+        /// (105,100)/(140,100)）。用于方向臂 / 多目标 / 收件人范围边界臂；装置据此建对象并**记录实际值**。
+        /// </summary>
+        public int[] CasterXy;
+        public int[] TargetXy;
+        public int[] ObsInXy;
+        public int[] ObsOutXy;
+        /// <summary>
+        /// **MG-57 P2**：断言受害者的 `SendRefMsg` 缓存**冷**（`VisibleHumanList` 空 ⇒ 首次推挤必走
+        /// 首扫路径），并落 `Fixture.push_cache_cold=true`；用于把"首扫 vs 复用"两条规则的入口钉死。
+        /// </summary>
+        public bool PushCacheProbe;
+        /// <summary>**MG-57 P2**：记录受害者术后 `Dir`（`TargetDirAfter`，仅该 case 落盘）。</summary>
+        public bool ObserveDirAfter;
+        /// <summary>
         /// **MG-44（2026-11-26）**：允许 `TargetMonster` 的 `SuperMan` 前置被**显式测试**（负路径）。
         /// 缺省 false ⇒ 既有圣言三条件门槛不变；置 true 只在"有意验证 `:830` 负路径"的 stem。
         /// </summary>
@@ -2356,6 +2412,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedSecondCastAtMs = spec.SecondCastAtMs;
             var savedRealMap = spec.RealMap;
             var savedProductionAoi = spec.ProductionAoi;
+            var savedCasterXy = spec.CasterXy;
+            var savedTargetXy = spec.TargetXy;
+            var savedObsInXy = spec.ObsInXy;
+            var savedObsOutXy = spec.ObsOutXy;
+            var savedPushCacheProbe = spec.PushCacheProbe;
+            var savedStepDrainMs = spec.StepDrainMs;
+            var savedUserMagicLevel = spec.UserMagicLevel;
+            var savedObserveDirAfter = spec.ObserveDirAfter;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2371,6 +2435,20 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.SecondCastAtMs = extra.SecondCastAtMs;
             spec.RealMap = extra.RealMap;
             spec.ProductionAoi = extra.ProductionAoi;
+            spec.CasterXy = extra.CasterXy;
+            spec.TargetXy = extra.TargetXy;
+            spec.ObsInXy = extra.ObsInXy;
+            spec.ObsOutXy = extra.ObsOutXy;
+            spec.PushCacheProbe = extra.PushCacheProbe;
+            spec.ObserveDirAfter = extra.ObserveDirAfter;
+            if (extra.StepDrainMsOverride.HasValue)
+            {
+                spec.StepDrainMs = extra.StepDrainMsOverride.Value;
+            }
+            if (extra.UserMagicLevelOverride.HasValue)
+            {
+                spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
+            }
             cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
@@ -2382,6 +2460,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.SecondCastAtMs = savedSecondCastAtMs;
             spec.RealMap = savedRealMap;
             spec.ProductionAoi = savedProductionAoi;
+            spec.CasterXy = savedCasterXy;
+            spec.TargetXy = savedTargetXy;
+            spec.ObsInXy = savedObsInXy;
+            spec.ObsOutXy = savedObsOutXy;
+            spec.PushCacheProbe = savedPushCacheProbe;
+            spec.StepDrainMs = savedStepDrainMs;
+            spec.UserMagicLevel = savedUserMagicLevel;
+            spec.ObserveDirAfter = savedObserveDirAfter;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2800,7 +2886,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null,
         int? magicPower = null, int? magicMaxPower = null, int? magicDefPower = null,
         int? magicDefMaxPower = null, int? secondCastAtMs = null, bool? realMap = null,
-        bool? productionAoi = null)
+        bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
+        int? targetDirBefore = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -2810,7 +2897,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && fastTrain == null && fireCrossSafeZone == null && preEventCells == null
             && magicPower == null && magicMaxPower == null && magicDefPower == null
             && magicDefMaxPower == null && secondCastAtMs == null && realMap == null
-            && productionAoi == null)
+            && productionAoi == null && pushCacheCold == null && observeDirAfter == null
+            && targetDirBefore == null)
         {
             return fixture;
         }
@@ -2845,6 +2933,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (secondCastAtMs.HasValue) node["second_cast_at_ms"] = secondCastAtMs.Value;
         if (realMap.HasValue) node["real_map"] = realMap.Value;
         if (productionAoi.HasValue) node["production_aoi"] = productionAoi.Value;
+        if (pushCacheCold.HasValue) node["push_cache_cold"] = pushCacheCold.Value;
+        if (observeDirAfter.HasValue) node["observe_dir_after"] = observeDirAfter.Value;
+        if (targetDirBefore.HasValue) node["target_dir_before"] = targetDirBefore.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3122,7 +3213,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             // ⇒ "两侧读的是同一张图"由**同一输入 + 同一校验**保证，不是巧合。
             // **MG-57 / B29**：`spec.RealMap` 的 stem 也要记图身份（rig 走真 0.map 时按 size/sha 钉）；
             // 只记 `map_file_sha256/map_file_size`，`map_dir/map_file/map_bright` 仍只属 21。
-            if (spec.Key == "spacemove" || spec.RealMap)
+            // **MG-57 P2**：`RealMap` 可能是**逐 case**（ExtraCaseSpec）给的 ⇒ 本块对这三个 stem 总是进，
+            // 内部按**该 case 的 Fixture.real_map** 决定是否写图身份；其它 stem 不进（既有件零变化）。
+            if (spec.Key == "spacemove" || spec.Key == "firewind" || spec.Key == "energyrepulsor")
             {
                 var mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
                 var mapPath = Path.Combine(mapDir, "0.map");
@@ -3137,8 +3230,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
                         c!["Fixture"]!["map_dir"] = mapDir;
                         c!["Fixture"]!["map_file"] = "0.map";
                     }
-                    c!["Fixture"]!["map_file_sha256"] = sha;
-                    c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
+                    bool caseRealMap = c!["Fixture"]!["real_map"]?.GetValue<bool>() == true;
+                    if (spec.Key == "spacemove" || caseRealMap)
+                    {
+                        c!["Fixture"]!["map_file_sha256"] = sha;
+                        c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
+                    }
                 }
                 // **`634.series` 的时刻输入（卡 magic-push-batch-impl）**：`SM_CHANGEMAP(634).Series`
                 // = `PlayObject.DayBright()`，其输入是 `M2Share.GameTime`（`PlayObject.Base.cs:244-269`：
@@ -3229,6 +3326,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             env.MapFileName = "0";
         }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **MG-57 P2**：坐标覆盖（缺省 null ⇒ 既有值；建对象后、`AddMapObject` 之前生效）。
+        if (spec.CasterXy != null) { caster.CurrX = (short)spec.CasterXy[0]; caster.CurrY = (short)spec.CasterXy[1]; }
         caster.Abil.Level = (byte)spec.CasterLevel;
         // **MG-55（46 分身）**：`Dir/Gender/Hair` 夹具输入（`-1` = 不设 ⇒ 既有件零变化）。
         if (spec.CasterDir >= 0) caster.Dir = (byte)spec.CasterDir;
@@ -3265,6 +3364,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             caster.WAbil.MaxHP = (ushort)spec.CasterMaxHp;
         }
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)spec.AntiMagic };
+        if (spec.TargetXy != null) { target.CurrX = (short)spec.TargetXy[0]; target.CurrY = (short)spec.TargetXy[1]; }
         target.Abil.Level = (byte)spec.TargetLevel;
         // **真实登录序**（`PlayObject.cs:1308-1309`：`RecalcLevelAbilitys(); RecalcAbilitys();`）：
         // 先按 Job+Level 把 `Abil` 的等级派生字段（MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC）写成
@@ -3319,6 +3419,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         CheckBranchThreshold("runmagic/" + spec.Key + "/" + label, inputAntiMagic, branchExpect);
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        if (spec.ObsInXy != null) { obsIn.CurrX = (short)spec.ObsInXy[0]; obsIn.CurrY = (short)spec.ObsInXy[1]; }
+        if (spec.ObsOutXy != null) { obsOut.CurrX = (short)spec.ObsOutXy[0]; obsOut.CurrY = (short)spec.ObsOutXy[1]; }
+        // **MG-57 P2**：夹具坐标 = **施法前**实际值（推挤会移动受害者 ⇒ 事后读 `CurrX/Y` 会失真）。
+        int fixtureCasterX = caster.CurrX, fixtureCasterY = caster.CurrY;
+        int fixtureTargetX = target.CurrX, fixtureTargetY = target.CurrY;
+        int fixtureObsInX = obsIn.CurrX, fixtureObsInY = obsIn.CurrY;
+        int fixtureObsOutX = obsOut.CurrX, fixtureObsOutY = obsOut.CurrY;
+        // **MG-57 P2**：受害者**施法前** `Dir`（`CharPushed` 的 `result==0` 会还原到它；
+        // oracle 的玩家 ctor 缺省 `Dir=4`，Rust 实体缺省 0 ⇒ 观察支必须把该输入也钉进 golden）。
+        int fixtureTargetDirBefore = target.Dir;
         // **观察者是真实玩家**：初始化 HP/MaxHP=100（与 Rust rig 的 `new_player_entity` 默认同源）。
         // 不初始化会让"旁观者自己受击/治疗"的帧（53/31）带 0/0，与实现侧不可比（MG-17 D1）。
         obsIn.WAbil.HP = 100; obsIn.WAbil.MaxHP = 100;
@@ -3483,11 +3593,27 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **只在 MakeVisible 的 spec 里做** ⇒ 其它 stem 零变化（收件人集合不变）。
         if (spec.MakeVisible)
         {
-            caster.UpdateVisibleGay(target);
-            caster.UpdateVisibleGay(obsIn);
+            // **MG-57 P2**：按**格扫描序**（x 升序、同 x 再 y 升序）逐个 `UpdateVisibleGay`——
+            // 生产 `SearchViewRange` 就是这样填 `VisibleActors` 的，`MagPushArround` 的遍历序
+            // 直接决定多目标的抽数/帧序。既有摆位（target x=101 在 obs_in x=105 之前）排序后不变
+            // ⇒ 既有 golden 逐字节不变。
+            var visibleOrder = new System.Collections.Generic.List<SystemModule.Actors.IActor>
+            {
+                target,
+                obsIn,
+            };
             foreach (var mo in monsters)
             {
-                caster.UpdateVisibleGay(mo);
+                visibleOrder.Add(mo);
+            }
+            visibleOrder.Sort((a, b) =>
+            {
+                int c = a.CurrX.CompareTo(b.CurrX);
+                return c != 0 ? c : a.CurrY.CompareTo(b.CurrY);
+            });
+            foreach (var obj in visibleOrder)
+            {
+                caster.UpdateVisibleGay(obj);
             }
         }
 
@@ -3594,6 +3720,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // `caster_sc_raw/lo/hi` 都取它；事后 `WAbil` 可能被 `RecalcAbilitys()` 重物化，不得当输入用。
         int casterInputMc = caster.WAbil.MC;
         int casterInputSc = caster.WAbil.SC;
+        // **MG-57 P2**：`PushCacheProbe` 把"首扫入口"钉死——受害者 `VisibleHumanList` 必须为空
+        // （缓存冷），否则第一次 `CharPushed` 会走"复用（<11）"路径，边界臂的首扫档无法解释。
+        if (spec.PushCacheProbe && spellTarget != null && spellTarget.VisibleHumanList.Count != 0)
+        {
+            throw new FixtureContractViolation(
+                $"[{spec.Key}/{label}] PushCacheProbe：受害者 SendRefMsg 缓存非冷（VisibleHumanList.Count={spellTarget.VisibleHumanList.Count}）");
+        }
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
@@ -4401,10 +4534,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 fire_boom_rage = SystemModule.SystemShare.Config.FireBoomRage,
                 elec_blizzard_range = SystemModule.SystemShare.Config.ElecBlizzardRange,
                 server_conf_sha256 = ServerConfSha256(),
-                caster_xy = new[] { 100, 100 },
-                target_xy = new[] { 101, 100 },
-                obs_in_xy = new[] { 105, 100 },
-                obs_out_xy = new[] { 140, 100 },
+                // **MG-57 P2**：坐标**实际值**（缺省臂 = 旧常量 ⇒ 既有 golden 逐字节不变）。
+                caster_xy = new[] { fixtureCasterX, fixtureCasterY },
+                target_xy = new[] { fixtureTargetX, fixtureTargetY },
+                obs_in_xy = new[] { fixtureObsInX, fixtureObsInY },
+                obs_out_xy = new[] { fixtureObsOutX, fixtureObsOutY },
                 hit_speed = spec.HitSpeed,
                 // **施毒 `SysMsg(YouPoisoned)` 载荷来源（MG-13/14/15/50/64/65）**：`BaseObject.MakePosion`
                 // 的 `SysMsg(..., MsgColor.Red, MsgType.Hint)` 以前/背景色 = `[Setup] RedMsgFColor/RedMsgBColor`
@@ -4472,6 +4606,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 secondCastAtMs: spec.SecondCastAtMs,
                 realMap: spec.RealMap ? (bool?)true : null,
                 productionAoi: spec.ProductionAoi ? (bool?)true : null,
+                pushCacheCold: spec.PushCacheProbe ? (bool?)true : null,
+                observeDirAfter: spec.ObserveDirAfter ? (bool?)true : null,
+                targetDirBefore: spec.ObserveDirAfter ? (int?)fixtureTargetDirBefore : null,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
@@ -4498,6 +4635,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Receivers = receivers,
             Rng = draws,
             TargetHp = hpAfter,
+            TargetDirAfter = spec.ObserveDirAfter ? (int?)((int)target.Dir) : null,
             TargetHpBefore = hpBefore,
             TargetMonsterHpBefore = monsterHpBefore,
             TargetMonsterHpAfter = monsterHpAfter,
@@ -4653,6 +4791,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool RealMap;
         public bool ProductionAoi;
+        /// <summary>
+        /// **MG-57 P2（2026-11-26）**：本 case 的四个对象坐标覆盖（见 `MagicSpec.CasterXy`）。
+        /// </summary>
+        public int[] CasterXy;
+        public int[] TargetXy;
+        public int[] ObsInXy;
+        public int[] ObsOutXy;
+        /// <summary>**MG-57 P2**：本 case 断言受害者 `SendRefMsg` 缓存冷（见 `MagicSpec.PushCacheProbe`）。</summary>
+        public bool PushCacheProbe;
+        /// <summary>**MG-57 P2**：本 case 记录受害者术后 `Dir`（见 `MagicSpec.ObserveDirAfter`）。</summary>
+        public bool ObserveDirAfter;
+        /// <summary>
+        /// **MG-57 P2**：本 case 的 `StepDrainMs` 覆盖（`null` = 用 stem 值）。第二次施法需要
+        /// "步"（非步进支没有 `elapsed` 推进）⇒ 只给该 case 打开步进，既有三支保持非步进。
+        /// </summary>
+        public int? StepDrainMsOverride;
         /// <summary>
         /// **MG-53（2026-11-26）**：本 case 的 `UserMagicLevel` 覆盖（`null` = 用 stem 值）。
         /// 用途：同一 stem 既有支是 `UserMagicLevel=3`（训练门关），要观测 `Race>=Animal ⇒ boTrain`
@@ -4950,6 +5104,13 @@ public sealed class FireballResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object Fixture { get; set; }
     public string Label { get; set; }
+    /// <summary>
+    /// **MG-57 P2**：受害者（玩家目标）**术后 `Dir`**（`CharPushed` 收尾：`result>0` ⇒ 回向、
+    /// `result==0` ⇒ 初值）。只有声明 `ObserveDirAfter` 的 case 落盘（旧件零变化）。
+    /// 用途：把「`Dir` 用 `nDir` 而非 `nBackDir`」这类变异变成可见红。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetDirAfter { get; set; }
     /// <summary>MG-44：`TargetMonster>0` 时目标怪物的术前/术后 HP（null ⇒ 不落盘，旧件零变化）。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? TargetMonsterHpBefore { get; set; }

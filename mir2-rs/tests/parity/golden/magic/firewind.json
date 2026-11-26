@@ -1027,6 +1027,4489 @@
       "TargetHpBefore": 100,
       "NotDue": [],
       "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4101,
+        "target_actor_id": 4102,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_e",
+      "TargetDirAfter": 6,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4102,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4102,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4102,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4201,
+        "target_actor_id": 4202,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          99,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_w",
+      "TargetDirAfter": 2,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553699,
+              "p3": 4202,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 2,
+              "p1": 98,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4201,
+              "param": 99,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nhhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4202,
+              "param": 98,
+              "tag": 100,
+              "series": 2,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553699,
+              "p3": 4202,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 2,
+              "p1": 98,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4201,
+              "param": 99,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4201,
+              "param": 99,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nhhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4202,
+              "param": 98,
+              "tag": 100,
+              "series": 2,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553699,
+              "p3": 4202,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 2,
+              "p1": 98,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4201,
+              "param": 99,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4201,
+              "param": 99,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "nhhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4202,
+              "param": 98,
+              "tag": 100,
+              "series": 2,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4301,
+        "target_actor_id": 4302,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          100,
+          99
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_n",
+      "TargetDirAfter": 4,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488164,
+              "p3": 4302,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4301,
+              "param": 100,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vhh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4302,
+              "param": 100,
+              "tag": 98,
+              "series": 4,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488164,
+              "p3": 4302,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4301,
+              "param": 100,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4301,
+              "param": 100,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vhh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4302,
+              "param": 100,
+              "tag": 98,
+              "series": 4,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488164,
+              "p3": 4302,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4301,
+              "param": 100,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4301,
+              "param": 100,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vhh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4302,
+              "param": 100,
+              "tag": 98,
+              "series": 4,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4401,
+        "target_actor_id": 4402,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          100,
+          101
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_s",
+      "TargetDirAfter": 0,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619236,
+              "p3": 4402,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4401,
+              "param": 100,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "bihkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4402,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619236,
+              "p3": 4402,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4401,
+              "param": 100,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4401,
+              "param": 100,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "bihkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4402,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619236,
+              "p3": 4402,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4401,
+              "param": 100,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4401,
+              "param": 100,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "bihkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4402,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4501,
+        "target_actor_id": 4502,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          99
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_ne",
+      "TargetDirAfter": 5,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4502,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4501,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jihgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4502,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4502,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4501,
+              "param": 101,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4501,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jihgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4502,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4502,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4501,
+              "param": 101,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4501,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Jihgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4502,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4601,
+        "target_actor_id": 4602,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          99,
+          99
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_nw",
+      "TargetDirAfter": 3,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488163,
+              "p3": 4602,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 3,
+              "p1": 98,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4601,
+              "param": 99,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rihcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4602,
+              "param": 98,
+              "tag": 98,
+              "series": 3,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488163,
+              "p3": 4602,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 3,
+              "p1": 98,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4601,
+              "param": 99,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4601,
+              "param": 99,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rihcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4602,
+              "param": 98,
+              "tag": 98,
+              "series": 3,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488163,
+              "p3": 4602,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 3,
+              "p1": 98,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4601,
+              "param": 99,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4601,
+              "param": 99,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Rihcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4602,
+              "param": 98,
+              "tag": 98,
+              "series": 3,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4701,
+        "target_actor_id": 4702,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          101
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_se",
+      "TargetDirAfter": 7,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619237,
+              "p3": 4702,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 7,
+              "p1": 102,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4701,
+              "param": 101,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "zjh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4702,
+              "param": 102,
+              "tag": 102,
+              "series": 7,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619237,
+              "p3": 4702,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 7,
+              "p1": 102,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4701,
+              "param": 101,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4701,
+              "param": 101,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "zjh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4702,
+              "param": 102,
+              "tag": 102,
+              "series": 7,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619237,
+              "p3": 4702,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 7,
+              "p1": 102,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4701,
+              "param": 101,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4701,
+              "param": 101,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "zjh_d?"
+            },
+            {
+              "ident": 9,
+              "recog": 4702,
+              "param": 102,
+              "tag": 102,
+              "series": 7,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4801,
+        "target_actor_id": 4802,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          99,
+          101
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "dir_sw",
+      "TargetDirAfter": 1,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619235,
+              "p3": 4802,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 1,
+              "p1": 98,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4801,
+              "param": 99,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vjhkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4802,
+              "param": 98,
+              "tag": 102,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619235,
+              "p3": 4802,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 1,
+              "p1": 98,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4801,
+              "param": 99,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4801,
+              "param": 99,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vjhkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4802,
+              "param": 98,
+              "tag": 102,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 99,
+              "p2": 101,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6619235,
+              "p3": 4802,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 1,
+              "p1": 98,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4801,
+              "param": 99,
+              "tag": 101,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4801,
+              "param": 99,
+              "tag": 101,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Vjhkd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4802,
+              "param": 98,
+              "tag": 102,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 4901,
+        "target_actor_id": 4902,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          99
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "diag_ne2",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 13,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4902,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 103,
+              "p2": 97,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 3,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4901,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "^khgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 103,
+              "tag": 97,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 3,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4902,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 103,
+              "p2": 97,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4901,
+              "param": 101,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4901,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "^khgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 103,
+              "tag": 97,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 99,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6488165,
+              "p3": 4902,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 103,
+              "p2": 97,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 5,
+              "p1": 102,
+              "p2": 98,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4901,
+              "param": 101,
+              "tag": 99,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 4901,
+              "param": 101,
+              "tag": 99,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "^khgd?"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 103,
+              "tag": 97,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 4902,
+              "param": 102,
+              "tag": 98,
+              "series": 5,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        10,
+        1,
+        2
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 5001,
+        "target_actor_id": 5002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 5,
+        "rng_recorded": 5,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          100,
+          101
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "multi",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Fkhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5003,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5001,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Fkhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5003,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5002,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 0,
+              "p1": 100,
+              "p2": 102,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5001,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5001,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Fkhcd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5002,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5003,
+              "param": 100,
+              "tag": 102,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        9,
+        1,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 3,
+        "caster_level": 30,
+        "caster_actor_id": 5101,
+        "target_actor_id": 5102,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 4,
+        "rng_recorded": 4,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          99,
+          103
+        ],
+        "target_xy": [
+          100,
+          103
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "second_cast_at_ms": 100,
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "observe_dir_after": true,
+        "target_dir_before": 4,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "blocked2",
+      "TargetDirAfter": 4,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Nkh_d?"
+            },
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 100,
+              "tail": "Nkh_d?"
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Nkh_d?"
+            },
+            {
+              "ident": 17,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 1,
+              "due_ms_rel": 100,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 100,
+              "tail": "Nkh_d?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 100,
+              "p2": 103,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6750308,
+              "p3": 5102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Nkh_d?"
+            },
+            {
+              "ident": 17,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 1,
+              "due_ms_rel": 100,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5101,
+              "param": 100,
+              "tag": 103,
+              "series": 257,
+              "due_ms_rel": 100,
+              "tail": "Nkh_d?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        4,
+        0,
+        9,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 5201,
+        "target_actor_id": 5202,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          113,
+          100
+        ],
+        "obs_out_xy": [
+          114,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "bound_a",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 13,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5202,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 3,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 5201,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "zhhjd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 3,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5202,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5201,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5201,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "zhhjd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 9,
+              "recog": 5202,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        }
+      ],
+      "Rng": [
+        10,
+        1,
+        2
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
+    },
+    {
+      "Fixture": {
+        "magic_id": 8,
+        "magic_name": "FireWind",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_actor_id": 5301,
+        "target_actor_id": 5302,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireWind"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 3,
+        "rng_recorded": 3,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          114,
+          100
+        ],
+        "obs_out_xy": [
+          115,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "real_map": true,
+        "production_aoi": true,
+        "push_cache_cold": true,
+        "soft_version_date_ex": 20240101,
+        "map_file_sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7",
+        "map_file_size": 5880052
+      },
+      "Label": "bound_b",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 13,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5302,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 8,
+              "p2": 1,
+              "p3": 3,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 5301,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Bhhfd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5302,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5302,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 640,
+              "recog": 8,
+              "param": 1,
+              "tag": 3,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 8,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 5302,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 103,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            },
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 5301,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "8"
+            },
+            {
+              "ident": 638,
+              "recog": 5301,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "Bhhfd?"
+            },
+            {
+              "ident": 9,
+              "recog": 5302,
+              "param": 103,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            },
+            {
+              "ident": 9,
+              "recog": 5302,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 8092,
+              "wParam": 6,
+              "p1": 102,
+              "p2": 100,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 156
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 9,
+              "recog": 5302,
+              "param": 102,
+              "tag": 100,
+              "series": 6,
+              "due_ms_rel": 0,
+              "tail": "ddhkddhkddK"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        10,
+        1,
+        2
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0
     }
   ]
 }

@@ -5,15 +5,19 @@
 //! `SM_BACKSTEP(9)`（走 `ref_msg_cache`：首扫 `|Δ|≤range`、同窗口复用 `|Δ|<11`）不同源。
 //! 本模块在**推挤帧发射点**把该次 `ref_msg_cache` 的收件人原样抄下来，供驱动在 P2 用它重建 `Rm`。
 //!
-//! **生产零影响**：缺省 `ARMED=false` ⇒ 每个推挤帧只多一次 `Relaxed` 原子读，不分配、不加锁、
-//! 不改任何帧/状态；只有 parity 驱动显式 [`arm`] 后才开始记录。日志是**进程级**的（与 `rng_trace`
-//! 同类的测试缝），驱动取用后清空（[`take`]）。
+//! **生产零影响**：缺省未武装 ⇒ 每个推挤帧只多一次 `thread_local` 读，不分配、不加锁、
+//! 不改任何帧/状态；只有 parity 驱动显式 [`arm`] 后才开始记录，驱动取用后清空（[`take`]）。
+//!
+//! **线程局部**：日志与武装标志都是 `thread_local`——世界 tick 必须同线程串行（见 `World::tick`
+//! 的断言），而默认门用例在同一个测试二进制里**并行**跑多个 case；进程级静态会让并行用例互相
+//! 污染（2026-11-26 实测：`记录条数 4 != 推挤格数 1`）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::cell::{Cell, RefCell};
 
-static ARMED: AtomicBool = AtomicBool::new(false);
-static LOG: Mutex<Vec<PushTargets>> = Mutex::new(Vec::new());
+thread_local! {
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+    static LOG: RefCell<Vec<PushTargets>> = const { RefCell::new(Vec::new()) };
+}
 
 /// 一条推挤帧的收件人记录（逐格一条，按发射序）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +33,7 @@ pub struct PushTargets {
 
 /// 是否已武装（调用方据此**只在武装时**克隆收件人列表，保证生产路径零分配）。
 pub(crate) fn armed() -> bool {
-    ARMED.load(Ordering::Relaxed)
+    ARMED.with(Cell::get)
 }
 
 /// 武装记录（parity 驱动在每个 case 开始前调用）。
@@ -38,29 +42,29 @@ pub(crate) fn armed() -> bool {
 /// 标明"生产不调用、测试驱动专用"，不是遗漏接线）。
 #[allow(dead_code)]
 pub fn arm() {
-    ARMED.store(true, Ordering::Relaxed);
+    ARMED.with(|a| a.set(true));
 }
 
 /// 取走本 case 的全部记录并解除武装（驱动在 case 结束后调用）。
 #[must_use]
 #[allow(dead_code)] // 同上：P2 的驱动才会调用。
 pub fn take() -> Vec<PushTargets> {
-    ARMED.store(false, Ordering::Relaxed);
-    let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *log)
+    ARMED.with(|a| a.set(false));
+    LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
 /// 推挤帧发射点调用：未武装 ⇒ 立即返回（零分配）。
 pub(crate) fn note(actor_id: i32, x: i32, y: i32, targets: &[i32]) {
-    if !ARMED.load(Ordering::Relaxed) {
+    if !armed() {
         return;
     }
-    let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
-    log.push(PushTargets {
-        actor_id,
-        x,
-        y,
-        targets: targets.to_vec(),
+    LOG.with(|l| {
+        l.borrow_mut().push(PushTargets {
+            actor_id,
+            x,
+            y,
+            targets: targets.to_vec(),
+        })
     });
 }
 
