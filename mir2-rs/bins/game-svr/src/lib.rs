@@ -92706,6 +92706,15 @@ SendRefMsgRange=15
             rig.world.clock_ms = cast_ms;
         }
         rig.cast(magic_id, (101, 100), target);
+        // **MG-36 ②（2026-11-26）**：`RunTick` 是 oracle `MapEvent` ctor 的常量 500（`MapEvent.cs:76`）；
+        // 行为面已由 `tick_boundaries` 的 `+500/+501` 整点钉住，这里再钉字段面：全部事件 `run_tick_ms == 500`。
+        assert!(
+            rig.world
+                .fire_burn_events
+                .iter()
+                .all(|e| e.run_tick_ms == 500),
+            "[firecross/{label}] 所有火墙事件 RunTick 必须 = 500（oracle ctor 常量）"
+        );
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
         let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
