@@ -16,5 +16,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\..\src\OpenMir2\OpenMir2.csproj" />
     <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+    <!-- **MG-36 ①（2026-11-26）**：`EventProcessor`（`ExecuteInternal` 驱动地图事件的唯一入口）在
+         `GameSrv.Word.Threads`，没有更细的工程可引 ⇒ 装置只能整体引 GameSrv（`dotnet build` 0 错误，~20s）。 -->
+    <ProjectReference Include="..\..\..\..\..\src\GameSrv\GameSrv.csproj" />
   </ItemGroup>
 </Project>
