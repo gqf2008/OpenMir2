@@ -483,6 +483,29 @@
           "Newtonsoft.Json": "13.0.3"
         }
       },
+      "commandsystem": {
+        "type": "Project",
+        "dependencies": {
+          "SystemModule": "[1.0.0, )"
+        }
+      },
+      "gamesrv": {
+        "type": "Project",
+        "dependencies": {
+          "Collections.Pooled": "[2.0.0-preview.27, )",
+          "CommandSystem": "[1.0.0, )",
+          "M2Server": "[1.0.0, )",
+          "McMaster.Extensions.CommandLineUtils": "[4.1.0, )",
+          "Microsoft.Extensions.Hosting": "[8.0.0, )",
+          "Microsoft.Extensions.Hosting.Abstractions": "[8.0.0, )",
+          "MySqlConnector": "[2.3.5, )",
+          "OpenMir2": "[1.0.0, )",
+          "PlanesSystem": "[1.0.0, )",
+          "ScriptSystem": "[1.0.0, )",
+          "Spectre.Console": "[0.48.1-preview.0.20, )",
+          "System.Text.Encoding.CodePages": "[8.0.0, )"
+        }
+      },
       "m2server": {
         "type": "Project",
         "dependencies": {
@@ -513,6 +536,13 @@
           "Serilog.Sinks.Console": "[5.0.1, )",
           "System.Text.Encoding.CodePages": "[8.0.0, )",
           "TouchSocket": "[2.0.0-beta.273, )"
+        }
+      },
+      "planessystem": {
+        "type": "Project",
+        "dependencies": {
+          "NLog": "[5.2.8, )",
+          "SystemModule": "[1.0.0, )"
         }
       },
       "scriptsystem": {

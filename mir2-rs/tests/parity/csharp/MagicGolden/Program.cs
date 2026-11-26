@@ -2270,7 +2270,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // `+2900` 差 2399 ⇒ 跑，距上次结算 2399 < 3000 ⇒ struck 0；
         // `+3501` 差 601 ⇒ 跑，距上次结算 **恰 3000**（不 > 3000）⇒ struck 0（**Fire 整点边界**）；
         // `+4002` 差 501 ⇒ 跑，距上次结算 3501 > 3000 ⇒ struck 1。⇒ 序列 = [0, 1, 0, 0, 1]。
-        // HP 恒 100：`RM_MAGSTRUCK_MINE` 只入队，目标 `Run()` 未跑 ⇒ 伤害不结算（本臂的判据是 struck 轨迹）。
+        // **MG-36 结算面（2026-11-27）**：`struck=1` 的 tick 会把目标 HP 真结算——
+        // `FireBurnEvent.Run` 发 `RM_MAGSTRUCK_MINE(nParam1=Damage)`（本 stem 实测 damage=6，
+        // `MagicManager.cs:413 GetAttackPower(...)`）；目标 `BaseObject.Operate:624`
+        // `GetMagStruckDamage(null, 6)`：防御 = `LoByte(MAC)+R(|Hi−Lo|+1)`，夹具目标 MAC=0
+        // ⇒ `R(1)≡0` ⇒ 防御恒 0 ⇒ 实伤 6/次；空装备 ⇒ `PlayObject.StruckDamage` 的
+        // `Random(10)` 抽值无人消费、无耐久磨损 ⇒ HP：100 → 94（+501）→ 88（+4002）。
+        // `FireTrace.target_hp_after_run` = [100, 94, 94, 94, 88]。
         spec.FireTickMs = new[] { 500, 501, 2900, 3501, 4002 };
         results[3] = RunMagicCase(spec, "tick_boundaries", 25, 4100, spec.TargetMaxHp, false);
         spec.FireTickMs = null;
@@ -4444,6 +4450,14 @@ private static FireballResult RunMagicCase(
         // **MG-36 ①（2026-11-26）**：tick 循环放在**排水之后**——放在 DoSpell 紧后会先把目标队列里的
         // 17/638 等正常 RM 一起取走（帧面少两帧、`target sm0/rm0`，实测 artifact）；排水后队列里
         // 只剩 tick 期间入队的 `RM_MAGSTRUCK_MINE`。
+        // **MG-36 结算面（2026-11-27）**：每次 `ExecuteOnce` 后让**目标**步进一次——消费到的
+        // `RM_MAGSTRUCK_MINE` 用生产 `Operate` 结算（`BaseObject.Base.cs:618-686`：
+        // `GetMagStruckDamage(null, nParam1)` → `StruckDamage`（HP 真掉）→ `HealthSpellChanged`/
+        // `SendRefMsg(RM_STRUCK_MAG)`）。机制与 `OperateStruckPerStep`（MG-44/48 怪物按步结算）同型
+        // （`DrainRaw` + `OperatePublic`）；不能直接复用：那里绑定怪物清单与步进排水作用域，
+        // 本支目标玩家、作用域在排水之后的 tick 循环 ⇒ 同法内联。其余 ident（结算的
+        // `RM_STRUCK_MAG`/`RM_HEALTHSPELLCHANGED` 自投递残留）维持本臂既有口径：消费不入账、
+        // 不结算 ⇒ RM/帧面零变化，判据面 = 轨迹（条数/时刻/HP），不是 RM 多重集。
         if (spec.FireTickMs is { Length: > 0 })
         {
             foreach (var delta in spec.FireTickMs)
@@ -4452,20 +4466,22 @@ private static FireballResult RunMagicCase(
                 ClockSeam.Set(ms);
                 evProcLate.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
                 int struck = 0;
-                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
-                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
+                // `target_hp` = 本 tick 结算前的 HP（列语义不变）；结算后值进新列 `target_hp_after_run`。
+                int hpBeforeRun = target.WAbil.HP;
                 foreach (var m in target.DrainRaw())
                 {
                     if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
                     {
                         struck++;
+                        target.OperatePublic(m.Msg);
                     }
                 }
                 fireTrace.Add(new Dictionary<string, object>
                 {
                     ["delta"] = delta,
                     ["ms"] = ms,
-                    ["target_hp"] = target.WAbil.HP,
+                    ["target_hp"] = hpBeforeRun,
+                    ["target_hp_after_run"] = target.WAbil.HP,
                     ["struck"] = struck
                 });
             }
