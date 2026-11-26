@@ -93889,6 +93889,92 @@ SendRefMsgRange=15
         turnundead_assert("lv45", 3000);
     }
 
+    /// **MG-44（2026-11-26，批 B）**：六臂的驱动——不走 `turnundead_assert`（那条要求目标怪
+    /// 有 RM，负路径臂恰是零抽零 RM）。改为：驱动 + `fireball_case_assert` + 目标怪 RM 条数
+    /// 与 golden 相等（负路径 = 0）；`ObserveState` 臂另比 `caster.TargetCret` 与
+    /// `mon*.RunAwayMode/RunAwayTime/HpBefore/HpAfter`（期望全取 golden）。
+    fn turnundead_arm_assert(label: &str, base: i32) {
+        let seed = golden_seed("turnundead", label);
+        fireball_parity_drive("turnundead", 32, 1, label, seed, base);
+        fireball_case_assert("turnundead", label);
+        let c = defence_case("turnundead", label);
+        let g = golden_case_for("turnundead", label);
+        let find = |v: &serde_json::Value, who: &str| -> Option<serde_json::Value> {
+            v["Receivers"]
+                .as_array()
+                .and_then(|rs| rs.iter().find(|r| r["Who"] == who))
+                .cloned()
+        };
+        // 玩家目标臂（`player_target`）没有怪物接收者 ⇒ 跳过 mon 面。
+        if let Some(g_mon) = find(&g, "mon0") {
+            let rm_len = |v: &serde_json::Value| v["Rm"].as_array().map_or(0, |a| a.len());
+            assert_eq!(
+                find(&c, "mon0").map(|m| rm_len(&m)),
+                Some(rm_len(&g_mon)),
+                "[turnundead/{label}] mon0 RM 条数须等于 golden"
+            );
+            for k in [
+                "TargetCret",
+                "RunAwayMode",
+                "RunAwayTime",
+                "HpBefore",
+                "HpAfter",
+            ] {
+                if g_mon.get(k).is_some() {
+                    assert_eq!(
+                        find(&c, "mon0").and_then(|m| m.get(k).cloned()),
+                        Some(g_mon[k].clone()),
+                        "[turnundead/{label}] mon0 {k} 须等于 golden"
+                    );
+                }
+            }
+        }
+        let g_cast = find(&g, "caster").expect("golden 必须有 caster");
+        if g_cast.get("TargetCret").is_some() {
+            assert_eq!(
+                find(&c, "caster").and_then(|r| r.get("TargetCret").cloned()),
+                Some(g_cast["TargetCret"].clone()),
+                "[turnundead/{label}] caster.TargetCret 须等于 golden（:841 SetTargetCreat）"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_miss_842() {
+        turnundead_arm_assert("miss_842", 4100);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_non_undead() {
+        turnundead_arm_assert("non_undead", 4200);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_super_man() {
+        turnundead_arm_assert("super_man", 4300);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_multi() {
+        turnundead_arm_assert("multi", 4400);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_player_target() {
+        turnundead_arm_assert("player_target", 4500);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn turnundead_parity_run_away() {
+        turnundead_arm_assert("run_away", 4600);
+    }
+
     /// **`MG-48`（50 魔爆）**：玩家目标（`Race == Play` 才有 STONE 中毒帧）。
     /// 配置面（`MabMabeHitRandRate/SucessRate/MinLvLimit`）由 `server_conf` 十键落 `b4_cfg`。
     fn mabmabe_assert(label: &str, base: i32) {

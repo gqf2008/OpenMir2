@@ -354,6 +354,15 @@ public static class Program
                     // F `run_away`（怪 `Master=caster` ⇒ `IsProperTarget(caster)=false` ⇒ Struck 不设
                     //   `TargetCret` ⇒ `:835-840` RunAway(10s)；seed 取 lv43 的即死 seed ⇒ HP 0 证明被 Struck）。
                     // 每项 `ObserveState=true` 的支落 `caster.TargetCret` 与 `mon.RunAwayMode/Time`。
+                    TargetMonsterAllowSuperMan = true,
+                    ExtraCases = new[] {
+                        new ExtraCaseSpec { Label = "miss_842", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1 } }, TargetMonster = 1, CasterLevelOverride = 20, SeedOverride = 1, IdBase = 4100 },
+                        new ExtraCaseSpec { Label = "non_undead", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 0 } }, TargetMonster = 1, TargetMonsterUndead = false, SeedOverride = 1, IdBase = 4200 },
+                        new ExtraCaseSpec { Label = "super_man", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1, SuperMan = true } }, TargetMonster = 1, SeedOverride = 1, IdBase = 4300 },
+                        new ExtraCaseSpec { Label = "multi", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 45, Hp = 300, LifeAttrib = 1 } }, TargetMonster = 1, SeedOverride = 1, ObserveState = true, IdBase = 4400 },
+                        new ExtraCaseSpec { Label = "player_target", Monsters = Array.Empty<MonsterSpec>(), TargetMonster = 0, SeedOverride = 1, IdBase = 4500 },
+                        new ExtraCaseSpec { Label = "run_away", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1, MasterCaster = true } }, TargetMonster = 1, SeedOverride = 2 /* = lv43 即死 seed（R100 命中 ⇒ HP 0，证明被 Struck） */, ObserveState = true, IdBase = 4600 },
+                    },
                     ServerConf = ServerConfFixture.LoadOrThrow(name),
                 });
             }

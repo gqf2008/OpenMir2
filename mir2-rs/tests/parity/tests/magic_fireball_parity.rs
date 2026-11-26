@@ -4620,11 +4620,19 @@ fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
 #[test]
 #[ignore = "需先跑 game-svr 驱动（tests::turnundead_parity_*）生成真实台账"]
 fn real_rust_ledger_turnundead() {
-    real_ledger_verify_labels(
-        "turnundead",
-        &golden_file("turnundead.json"),
-        &["lv43", "lv44", "lv45"],
-    );
+    // **标签从 golden 取**（MG-44 起含六臂；缺台账即防空转红）。
+    let golden = golden_file("turnundead.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[turnundead] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("turnundead", &golden, &refs);
 }
 
 /// **`MG-48`（50 魔爆）**：玩家目标（`Race == Play` ⇒ STONE 分支可达）。
