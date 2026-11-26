@@ -2521,7 +2521,8 @@ fn firecross_block_checks(g: &Value, r: &Value) -> Vec<String> {
 #[ignore = "需先跑 game-svr 驱动（tests::firecross_parity_*）生成真实台账"]
 fn real_rust_ledger_firecross() {
     let stem = "firecross";
-    let labels = ["base", "pre_center", "safe_zone"];
+    // **MG-36 ①（2026-11-26）**：`tick_boundaries`——地图事件两门整点臂（驱动侧解析硬写断言）。
+    let labels = ["base", "pre_center", "safe_zone", "tick_boundaries"];
     let golden = golden_file("firecross.json");
     for label in labels {
         check_golden_contract(&golden, label).unwrap_or_else(|m| panic!("{m}"));

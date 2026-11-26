@@ -2252,7 +2252,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var results = new FireballResult[3];
+        var results = new FireballResult[4];
         spec.PreEventCells = Array.Empty<(int, int)>();
         spec.FireCrossSafeZone = false;
         results[0] = RunMagicCase(spec, "base", 22, 1000, spec.TargetMaxHp, false);
@@ -2262,6 +2262,18 @@ private static int ReadInstanceInt(object obj, string fieldName)
         spec.FireCrossSafeZone = true;
         results[2] = RunMagicCase(spec, "safe_zone", 24, 3000, spec.TargetMaxHp, false);
         spec.FireCrossSafeZone = false;
+        // **MG-36 ①（2026-11-26）**：地图事件 tick 边界——四项 delta 钉两个门：
+        // `RunTick=500`（`>` 严格）与 `FireRunTick` 的 3000ms（`>` 严格）。
+        // 解析硬写期望（不读 golden/Rust；每次 `ExecuteInternal` 成功执行会刷新 `RunStart`）：
+        // `+500` 差 500 **不 > 500** ⇒ 不跑（若跑则 Fire 门必过 ⇒ 必出 1 条）⇒ struck 0；
+        // `+501` 差 1 ⇒ 跑，`FireRunTick=0` ⇒ 首跑即结算 ⇒ struck 1（`FireRunTick=+501`）；
+        // `+2900` 差 2399 ⇒ 跑，距上次结算 2399 < 3000 ⇒ struck 0；
+        // `+3501` 差 601 ⇒ 跑，距上次结算 **恰 3000**（不 > 3000）⇒ struck 0（**Fire 整点边界**）；
+        // `+4002` 差 501 ⇒ 跑，距上次结算 3501 > 3000 ⇒ struck 1。⇒ 序列 = [0, 1, 0, 0, 1]。
+        // HP 恒 100：`RM_MAGSTRUCK_MINE` 只入队，目标 `Run()` 未跑 ⇒ 伤害不结算（本臂的判据是 struck 轨迹）。
+        spec.FireTickMs = new[] { 500, 501, 2900, 3501, 4002 };
+        results[3] = RunMagicCase(spec, "tick_boundaries", 25, 4100, spec.TargetMaxHp, false);
+        spec.FireTickMs = null;
         foreach (var r in results)
         {
             if (r.DrainPassesHitCap)
@@ -3054,7 +3066,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3067,7 +3079,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
-            && amuletDura == null && preBuffs == null && preBuffStatus == null)
+            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null)
         {
             return fixture;
         }
@@ -3117,6 +3129,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
         if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
         if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
+        // **MG-36 ①（2026-11-26）**：条件键——tick 臂的**输入**（相对事件登记时刻的 delta 列表）。
+        if (fireTicksMs != null) node["fire_ticks_ms"] = JsonSerializer.SerializeToNode(fireTicksMs);
+        // **MG-36 ①**：事件登记时刻的**绝对**虚拟钟（C# `GetTickCount` 口径）——驱动的 `clock_ms` 必须对齐
+        // 这个基数才能复现 `fire_run_tick_ms=0` 的「首跑即结算」语义（Rust rig 的钟底不是 1000000）。
+        if (fireCastMs.HasValue) node["fire_cast_ms"] = fireCastMs.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3990,6 +4007,7 @@ private static FireballResult RunMagicCase(
         // `StartAsync`→`ExecuteAsync` 里跑 ⇒ 子类**必须** `ExecuteTask == null`（下面断言：谁把它 Start 起来，
         // 本装置立即 rc=2，而不是"悄悄多一个线程"）。
         List<object> fireTrace = null;
+        int? fireCastMsForFixture = null;
         if (spec.FireTickMs is { Length: > 0 })
         {
             SystemModule.SystemShare.EventMgr ??= new M2Server.Event.EventManager();
@@ -3999,28 +4017,11 @@ private static FireballResult RunMagicCase(
                 throw new FixtureContractViolation(
                     "[" + spec.Key + "/" + label + "] EventProcessor 子类已被启动（ExecuteTask 非 null）⇒ (c) 方案不干净");
             }
+            // **delta 语义**：列表项是「相对事件登记时刻（= `DoSpell` 返回时）」的毫秒偏移——
+            // 事件 ctor 用当刻 `GetTickCount()` 置 `RunStart`，绝对时刻会随排水步进漂移。
+            int fireCastMs = HUtil32.GetTickCount();
+            fireCastMsForFixture = fireCastMs;
             fireTrace = new List<object>();
-            foreach (var ms in spec.FireTickMs)
-            {
-                ClockSeam.Set(ms);
-                evProc.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
-                int struck = 0;
-                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
-                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
-                foreach (var m in target.DrainRaw())
-                {
-                    if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
-                    {
-                        struck++;
-                    }
-                }
-                fireTrace.Add(new Dictionary<string, object>
-                {
-                    ["ms"] = ms,
-                    ["target_hp"] = target.WAbil.HP,
-                    ["struck"] = struck
-                });
-            }
         }
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
@@ -4432,6 +4433,41 @@ private static FireballResult RunMagicCase(
                     };
                 }
                 healTicks.Add(row);
+            }
+        }
+        var evProcLate = new RecordingEventProcessor();
+        if (evProcLate.ExecuteTask != null)
+        {
+            throw new FixtureContractViolation(
+                "[" + spec.Key + "/" + label + "] EventProcessor 子类已被启动（ExecuteTask 非 null）⇒ (c) 方案不干净");
+        }
+        // **MG-36 ①（2026-11-26）**：tick 循环放在**排水之后**——放在 DoSpell 紧后会先把目标队列里的
+        // 17/638 等正常 RM 一起取走（帧面少两帧、`target sm0/rm0`，实测 artifact）；排水后队列里
+        // 只剩 tick 期间入队的 `RM_MAGSTRUCK_MINE`。
+        if (spec.FireTickMs is { Length: > 0 })
+        {
+            foreach (var delta in spec.FireTickMs)
+            {
+                int ms = fireCastMsForFixture!.Value + delta;
+                ClockSeam.Set(ms);
+                evProcLate.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
+                int struck = 0;
+                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
+                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
+                foreach (var m in target.DrainRaw())
+                {
+                    if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
+                    {
+                        struck++;
+                    }
+                }
+                fireTrace.Add(new Dictionary<string, object>
+                {
+                    ["delta"] = delta,
+                    ["ms"] = ms,
+                    ["target_hp"] = target.WAbil.HP,
+                    ["struck"] = struck
+                });
             }
         }
         int hpAfter = target.WAbil.HP;
@@ -4967,6 +5003,8 @@ private static FireballResult RunMagicCase(
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
                 preBuffs: preBuffsNode,
                 preBuffStatus: preBuffStatus,
+                fireTicksMs: spec.FireTickMs,
+                fireCastMs: fireCastMsForFixture,
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
@@ -5551,7 +5589,9 @@ public sealed class FireballResult
     public int TargetHpBefore { get; set; }
 
     /// <summary>**MG-36 ①（2026-11-26）**：地图事件 tick 轨迹（`FireTickMs` 非空时才有值）：
-    /// 每项 `{ms, target_hp, struck}`；`struck` = 该次 tick 目标收到的 `RM_MAGSTRUCK_MINE` 条数。</summary>
+    /// 每项 `{delta, ms, target_hp, struck}`；`struck` = 该次 tick 目标收到的 `RM_MAGSTRUCK_MINE` 条数。
+    /// `null` ⇒ **不落盘**（条件键 ⇒ 既有 golden 零变化）。</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public List<object> FireTrace { get; set; }
     public List<object> NotDue { get; set; }
     public int CasterMp { get; set; }
