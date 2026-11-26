@@ -2826,14 +2826,20 @@ fn real_rust_ledger_skeleton() {
     }
 }
 
+/// 41 精灵的台账抽样形态（精灵 race=100，与 17 骷髅同形的派生 ctor 路径）：5 ctor +
+/// 3 装置差（`draw_at_monster` 1500 / 朝向 8 / cool-eye 100）+ 1 训练尾。
+/// 形态变了（抽数或界变）⇒ 红：必须显式重声明，不许静默漂移。
+const ANGEL_RUST_BOUNDS: &[i64] = &[1500, 2000, 3000, 3000, 2000, 1500, 8, 100, 3];
+
 /// **`MG-42（41 SKILL_ANGEL）`**真实台账 → 判定面（两例 summon_ok / cap_hit）。
 ///
 /// **SCOPE（stub + 生产数据缺失）**：`Angel` block（`regen_calls` / `slave_count_before/after` /
 /// `pre_slave_count` / `new_slaves{name,level,hp,max_hp,master_is_caster}` / `stub_*`）+
-/// 造怪前帧 41/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。**不比** `Rng`：
-/// 造怪抽数已记录在 golden `Rng` 中且可复现（`[1500,2000,3000,3000,2000]` + `Random(3)`），
-/// 而本 stem 的驱动不做 RNG 记账（台账无 `Rng` 键）——不是「抽 0 次」；`640`/`10123-p3`
-/// 随造怪抽数不同。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
+/// 造怪前帧 41/638/642（按 socket 取多重集，§47 不跨 socket 断言序）。
+/// `Rng` **已纳入比较面（2026-11-26，与 17 骷髅 / 30 神兽共用 `verify_slave_family_rng`）**：
+/// `cap_hit` 两侧 0 抽逐值；`summon_ok` 比造怪 ctor 5 抽逐值，台账抽样形态由 `RngBounds`
+/// 按 `ANGEL_RUST_BOUNDS` 钉住；装置差抽（golden 离线替身不存在的派生 ctor/初始化抽）
+/// 不进值面，登记 `DEV-MG-24-RNGCOUNT`。`640`/`10123-p3` 随造怪抽数不同。`cap_hit` 另三断各自独立：实体数不增 / slave_list 不变 /
 /// spawn 0 次（`regen_calls=0`）。**656 未验（装置盲区，`docs/issues/golden-harness-blind-spots.md` B1）**。
 /// **本夹具证明「给定怪物之后的 adopt 行为」，不证明生产可召唤**（生产 `monsters` 无 `精灵`
 /// 行 ⇒ `MakeSlave` 恒 null；卡 `openmir2-angel-summon-monster-missing`）。
@@ -2972,6 +2978,15 @@ fn real_rust_ledger_angel() {
         assert_eq!(
             r640, g640,
             "[{label}] 640 (recog,param,series,due) 不一致：Rust {r640:?} vs golden {g640:?}"
+        );
+
+        // RNG：与 17 骷髅 / 30 神兽共用同一份判据（错位口径见 verify_slave_family_rng）。
+        let rng_errs = verify_slave_family_rng(label, gcase, rust, ANGEL_RUST_BOUNDS);
+        assert!(
+            rng_errs.is_empty(),
+            "[{label}] RNG 判据红（{} 条）：\n{}",
+            rng_errs.len(),
+            rng_errs.join("\n")
         );
 
         eprintln!("[angel {label}] PASS");

@@ -86125,6 +86125,16 @@ SendRefMsgRange=15
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
         let run_id = ledger_run_id();
         let seed = golden_seed(stem, label);
+        // Rng 实测（MG-42 验证面补洞，同 MG-24/41）：开启 rng_trace 记录造怪/尾段抽数。
+        // 进程级 OnceLock ⇒ 本驱动必须 `--exact --test-threads=1` 单独进程跑。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        let n0 = trace_line_count(&trace);
         let mut rig = angel_rig(id_base);
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let caster = rig.caster;
@@ -86167,6 +86177,8 @@ SendRefMsgRange=15
         };
         rig.cast_slave(41, (101, 100), target, vec![mon]);
         let (cast_frames, _raws) = rig.drain();
+        let n1 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
         // **本卡起 640 走自延迟**（`emit_magic_lvexp_delayed`：未升级 1000ms / 升级 800ms）⇒
         // 补交付回路：施法批 due=0；按 100ms 步进泵到 1000，交付帧记所在步的 `due_ms_rel`。
         let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
@@ -86253,6 +86265,10 @@ SendRefMsgRange=15
             "SpellReturn": true,
             "Receivers": receivers,
             "Angel": angel,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(q, _, _)| *q).collect::<Vec<_>>(),
+            "RngBounds": trace_bounds(&trace, n0, n1),
             "world_entities_before": entities_before,
             "world_entities_after": entities_after,
         }]);
