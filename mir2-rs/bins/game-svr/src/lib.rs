@@ -87858,6 +87858,15 @@ SendRefMsgRange=15
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
+        // **MG-32（2026-11-26）**：`target_cret = -1`（`MonsterSpec.TargetCretCaster`）⇒ 绑定施法者；
+        // `MagMakePrivateTransparent` 的 `Race>=Animal && TargetCret == baseObject` 分支据此生效。
+        for (i, id) in monster_ids.iter().enumerate() {
+            if monster_specs.get(i).is_some_and(|m| m[7] < 0) {
+                if let Some(e) = rig.world.entities.get_mut(*id) {
+                    e.ai.target_creature = Some(caster);
+                }
+            }
+        }
         // **MG-44（32 圣言术）**：可选怪物目标。`Fixture.target_monster` 是 **1 基**序号
         // （Null/缺键 = 0 = 既有的玩家目标 ⇒ 旧 stem 零变化）。存在但非整数/负/越界/不满足
         // 圣言三条件 ⇒ **契约 panic**（直接红在 golden 生成/驱动上，而不是退化成"帧数不等"）。
@@ -89033,6 +89042,20 @@ SendRefMsgRange=15
             });
             // **MG-38**：金标准该 mon 记了 `HpBefore/HpAfter`（`OperateStruck` 支）时台账同记；
             // 旧件无该键 ⇒ 不写（零变化）。比较器对怪物 HP 做「任一侧有即比」。
+            // **MG-32**：金标准该 mon 记了术后 `TargetCret` 时台账同记（0 = 已清空）。
+            if golden_case_for(stem, label)["Receivers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|r| r["Who"] == format!("mon{i}"))
+                .is_some_and(|r| r.get("TargetCret").is_some())
+            {
+                mon["TargetCret"] = serde_json::json!(rig
+                    .world
+                    .entities
+                    .get(*id)
+                    .map_or(0, |e| e.ai.target_creature.unwrap_or(0)));
+            }
             if golden_case_for(stem, label)["Receivers"]
                 .as_array()
                 .into_iter()
@@ -90760,7 +90783,9 @@ SendRefMsgRange=15
         world.tick();
         for (i, m) in monsters.iter().enumerate() {
             let bind = |idx: i64| -> Option<i32> {
-                if idx == 0 {
+                // **MG-32（2026-11-26）**：`-1` 是 `TargetCretCaster` 的 sentinel（绑定施法者，
+                // 由调用方在放置后完成；place_monsters 不持 caster id）⇒ 这里按"未绑定"处理。
+                if idx <= 0 {
                     None
                 } else {
                     Some(ids[usize::try_from(idx).expect("序号") - 1])
