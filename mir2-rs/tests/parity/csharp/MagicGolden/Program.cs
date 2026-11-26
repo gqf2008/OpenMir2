@@ -1720,6 +1720,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// <summary>**MG-12/40**：恢复 tick 的虚拟毫秒列表（见 `ExtraCaseSpec.HealTicksMs`）。</summary>
         public int[] HealTicksMs;
         /// <summary>
+        /// **MG-12/40**：恢复 tick 臂的**施法者 `WAbil.Level`**（`null` = 不动；生产登录后至少 1 级，
+        /// 装置离线对象 `WAbil.Level` 可能是未初始化的 0 ⇒ 逐 case 显式给）。
+        /// </summary>
+        public int? HealCasterWabilLevel;
+        /// <summary>
         /// **MG-12/40**：恢复 tick 也跑**施法者**（29 的 `both` 支：caster/target 各自累计/各自排干）；
         /// 轨迹同时记 `hp_caster/inc_healing_caster`。缺省 false ⇒ 只跑 target。
         /// </summary>
@@ -1852,6 +1857,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             CasterMaxHp = 100,
             HealTicksMs = new[] { 1300, 1900 },
             HealTicksBoth = true,
+            HealCasterWabilLevel = 1,
         };
         var tickBoth = RunMagicCase(tickSpec, "big_tick_two", 13, 3100, 50, false);
         return EmitGolden(spec, new[] { heal, full, both, tickBoth });
@@ -4188,8 +4194,19 @@ private static FireballResult RunMagicCase(
         int healTickBase = target.IncHealthSpellTickPublic;
         // **MG-12/40**：恢复门读的是 `WAbil.Level`（不是 `Abil.Level`）；逐支记录，驱动据此对齐
         // 会话 `wabil.level`（否则 `dw = 600 - min(400, Level*10)` 两侧不同）。
+        if (spec.HealTicksMs != null && spec.HealCasterWabilLevel.HasValue)
+        {
+            caster.WAbil.Level = (byte)spec.HealCasterWabilLevel.Value;
+        }
         int healLevelTarget = target.WAbil.Level;
         int healLevelCaster = caster.WAbil.Level;
+        if (spec.HealTicksMs != null && spec.HealCasterWabilLevel.HasValue
+            && healLevelCaster != spec.HealCasterWabilLevel.Value)
+        {
+            throw new FixtureContractViolation(
+                "[" + spec.Key + "/" + label + "] heal_level_caster=" + healLevelCaster
+                + " != 声明的 " + spec.HealCasterWabilLevel.Value + "（恢复门会读错 dw）");
+        }
         if (spec.HealTicksMs != null && spec.HealTicksMs.Length > 0)
         {
             healTicks = new List<object>();
