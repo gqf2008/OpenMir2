@@ -922,18 +922,24 @@
         "cases": [
           "s1(seed=1)",
           "s5(seed=5)",
-          "s13(seed=13)"
+          "s13(seed=13)",
+          "monster_clear(seed=1)",
+          "monster_keep(seed=3)",
+          "monster_far(seed=1)"
         ],
         "unit_tests": [
           "tests::cloak_parity_s1",
           "tests::cloak_parity_s5",
-          "tests::cloak_parity_s13"
+          "tests::cloak_parity_s13",
+          "tests::cloak_parity_monster_clear",
+          "tests::cloak_parity_monster_keep",
+          "tests::cloak_parity_monster_far"
         ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 仅玩家 target；MagMakePrivateTransparent 的 Race>=Animal&&TargetCret 分支 分支未覆盖（卡 §35）】 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
-      "scope": "verified（玩家 target 全覆盖）：s1/s5/s13 逐帧对拍（组门 `CheckAmulet(1,1)` + `MagMakePrivateTransparent`；657 `(param,tag,series)=(0,0,0)` 已点亮；护身符 642 与 638/640 同批出队）。golden 不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无布局限定。**未覆盖**：`MagMakePrivateTransparent` 的 `Race>=Animal && TargetCret` 怪分支——夹具无怪 ⇒ 怪循环零抽；需给夹具加怪（生成器旋钮），归装置不可构造。"
+      "notes": "旧清单 cost=天级。组门 `CheckAmulet(1,1)`+`MagMakePrivateTransparent`：`StatusChanged()` ⇒ 657（实测 `(param,tag,series)=(0,0,0)`——CharStatus 不含隐身位）；护身符 642 与 638/640 同批出队；夹具无怪 ⇒ 怪循环零抽、不开 buff tick（卡 §26）。【范围：verified 覆盖玩家 target 与 `MagMakePrivateTransparent` 的怪分支（`Race>=Animal && TargetCret==baseObject`，三臂，2026-11-26）】 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
+      "scope": "verified（玩家 target 全覆盖）：s1/s5/s13 逐帧对拍（组门 `CheckAmulet(1,1)` + `MagMakePrivateTransparent`；657 `(param,tag,series)=(0,0,0)` 已点亮；护身符 642 与 638/640 同批出队）。golden 不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无布局限定。**怪分支已覆盖（2026-11-26，批 B；§35）**：装置 `MonsterSpec.TargetCretCaster` 让怪的 `TargetCret` 指向施法者（golden `Fixture.monsters[].target_cret = -1` sentinel；Rust `place_monsters` 放置后绑定 caster），三臂：`monster_clear`（seed 1，邻格；`Random(2)` 第 2 抽 = 0 ⇒ 清空，术后 `TargetCret=0`）；`monster_keep`（seed 3，邻格；第 2 抽 = 1 ⇒ **保留**，术后 = caster ActorId）；`monster_far`（seed 1，(105,100) 距离 > 1 ⇒ **短路清空且不抽**：Rng 2 抽 vs 邻格 3 抽）。术后 `TargetCret` 作为**新观测列**进比较面（golden `Receivers[mon0].TargetCret` ↔ 台账同键；比较器怪物字段表已加 `TargetCret`）。驱动 `tests::cloak_parity_monster_clear/_keep/_far`（IdBase 4100/4200/4300，B28）；比较器标签从 golden 取（6 支，缺台账即红）。"
     },
     {
       "id": "MG-33",

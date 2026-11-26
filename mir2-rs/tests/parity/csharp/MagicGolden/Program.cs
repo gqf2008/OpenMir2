@@ -248,7 +248,11 @@ public static class Program
                     SkillTail = true,
                 });
             }
-            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
+            // **MG-32（2026-11-26，批 B）**：`MagMakePrivateTransparent` 的
+            // `Race>=Animal && TargetCret == baseObject` 分支——怪 `TargetCret` 指向施法者：
+            // `monster_clear`（邻格，`Random(2)==0` ⇒ 清空）/ `monster_keep`（邻格，抽 ≠0 ⇒ 保留）/
+            // `monster_far`（距离>1 ⇒ 短路清空、**不抽**）。术后 `TargetCret` 落盘进比较面。
+            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster_clear", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 1, IdBase = 4100 }, new ExtraCaseSpec { Label = "monster_keep", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 3, IdBase = 4200 }, new ExtraCaseSpec { Label = "monster_far", Monsters = new[] { new MonsterSpec { X = 105, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 1, IdBase = 4300 } } });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });

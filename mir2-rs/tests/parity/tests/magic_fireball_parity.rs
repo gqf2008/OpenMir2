@@ -3894,7 +3894,19 @@ fn real_rust_ledger_bighealing() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::cloak_parity_*）生成真实台账"]
 fn real_rust_ledger_cloak() {
-    real_ledger_verify_labels("cloak", &golden_file("cloak.json"), &["s1", "s5", "s13"]);
+    // **标签从 golden 取**（MG-32 起含 `monster_clear`/`monster_keep`/`monster_far`；缺台账即红）。
+    let golden = golden_file("cloak.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[cloak] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("cloak", &golden, &refs);
 }
 
 /// **`28 心灵启示`（`SKILL_SHOWHP`）**真实台账 → 判定面（标签 miss/edge/hit = `Random(6)` 门）。

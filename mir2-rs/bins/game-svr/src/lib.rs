@@ -94441,6 +94441,51 @@ SendRefMsgRange=15
         cloak_assert("cloak", "s13", 13, 3000);
     }
 
+    /// **MG-32（2026-11-26，批 B）**：`MagMakePrivateTransparent` 的
+    /// `Race>=Animal && TargetCret == baseObject` 分支三个臂——术后的 `mon0.TargetCret`
+    /// 必须等于 golden（`0` = 已清空；否则 = caster ActorId）。
+    fn cloak_monster_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("cloak", 18, 1, label, seed, base);
+        fireball_case_assert("cloak", label);
+        let c = defence_case("cloak", label);
+        let g = golden_case_for("cloak", label);
+        let find = |v: &serde_json::Value, who: &str| -> serde_json::Value {
+            v["Receivers"]
+                .as_array()
+                .expect("Receivers")
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap_or_else(|| panic!("缺接收者 {who}"))
+                .clone()
+        };
+        assert_eq!(
+            find(&c, "mon0")["TargetCret"].as_i64(),
+            find(&g, "mon0")["TargetCret"].as_i64(),
+            "[cloak/{label}] mon0 术后 TargetCret 须等于 golden"
+        );
+    }
+
+    /// `Random(2)==0` ⇒ 清空（seed 1，**第 2 抽 = 0**）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_monster_clear() {
+        cloak_monster_assert("monster_clear", 1, 4100);
+    }
+
+    /// `Random(2)!=0` ⇒ **保留**（seed 3，**第 2 抽 = 1**）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_monster_keep() {
+        cloak_monster_assert("monster_keep", 3, 4200);
+    }
+
+    /// 距离 > 1 ⇒ **短路清空且不抽**（本支 Rng 比邻格支少 1 抽）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_monster_far() {
+        cloak_monster_assert("monster_far", 1, 4300);
+    }
+
     /// **`28 心灵启示`**（`SKILL_SHOWHP`，`MagicManager.cs:431-442`）驱动。
     /// golden `golden/magic/showhp.json`；三支 = `Random(6) <= Level+3` 门（卡 §25，**非 AntiMagic**）：
     /// `miss` = 首抽 5（门不过）、`edge` = 4（==门）、`hit` = 3（<门）。
