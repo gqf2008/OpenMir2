@@ -1647,6 +1647,21 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool OperatePerStep;
         /// <summary>
+        /// **MG-57（2026-11-26）**：第二次同形施法在步进到该 ms 时发生（`null` = 只施法一次）。
+        /// 生产：客户端第二次 `CM_SPELL` 在后续 tick 的消息循环里被处理 ⇒ `DoSpell` 在**该步排水之前**
+        /// 再跑一次（同一 `UserMagic`/坐标/目标）。落 `Fixture.second_cast_at_ms`，驱动按同一步镜像。
+        /// </summary>
+        public int? SecondCastAtMs;
+        /// <summary>
+        /// **MG-57 / B29**：本 stem 的 rig 用真 `0.map`（`Fixture.real_map`）；C# 装置本来就载真图，
+        /// 本开关只影响 Rust rig 的地图基准。
+        /// </summary>
+        public bool RealMap;
+        /// <summary>
+        /// **MG-57 / ③**：本 stem 的 rig/装置用生产 AOI（`Fixture.production_aoi`）。
+        /// </summary>
+        public bool ProductionAoi;
+        /// <summary>
         /// **MG-44（2026-11-26）**：允许 `TargetMonster` 的 `SuperMan` 前置被**显式测试**（负路径）。
         /// 缺省 false ⇒ 既有圣言三条件门槛不变；置 true 只在"有意验证 `:830` 负路径"的 stem。
         /// </summary>
@@ -2338,6 +2353,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedObserveState = spec.ObserveState;
             var savedFaithfulPump = spec.FaithfulPump;
             var savedOperatePerStep = spec.OperatePerStep;
+            var savedSecondCastAtMs = spec.SecondCastAtMs;
+            var savedRealMap = spec.RealMap;
+            var savedProductionAoi = spec.ProductionAoi;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2350,6 +2368,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             // （既有三支零变化）。
             spec.FaithfulPump = extra.FaithfulPump;
             spec.OperatePerStep = extra.OperatePerStep;
+            spec.SecondCastAtMs = extra.SecondCastAtMs;
+            spec.RealMap = extra.RealMap;
+            spec.ProductionAoi = extra.ProductionAoi;
             cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
@@ -2358,6 +2379,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.ObserveState = savedObserveState;
             spec.FaithfulPump = savedFaithfulPump;
             spec.OperatePerStep = savedOperatePerStep;
+            spec.SecondCastAtMs = savedSecondCastAtMs;
+            spec.RealMap = savedRealMap;
+            spec.ProductionAoi = savedProductionAoi;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2775,7 +2799,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
         bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null,
         int? magicPower = null, int? magicMaxPower = null, int? magicDefPower = null,
-        int? magicDefMaxPower = null)
+        int? magicDefMaxPower = null, int? secondCastAtMs = null, bool? realMap = null,
+        bool? productionAoi = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -2784,7 +2809,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
             && fastTrain == null && fireCrossSafeZone == null && preEventCells == null
             && magicPower == null && magicMaxPower == null && magicDefPower == null
-            && magicDefMaxPower == null)
+            && magicDefMaxPower == null && secondCastAtMs == null && realMap == null
+            && productionAoi == null)
         {
             return fixture;
         }
@@ -2815,6 +2841,10 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **B17（2026-11-26）**：语义 = **该 case 以生产泵语义（含 t=0 泵）对齐**；
         // 只在 opt-in 的 case 落盘（true）；缺键 = false ⇒ 旧 golden 零变化。
         if (faithfulPump.HasValue) node["faithful_pump"] = faithfulPump.Value;
+        // **MG-57（2026-11-26）**：条件键（缺省不落盘 ⇒ 既有 golden 逐字节不变）。
+        if (secondCastAtMs.HasValue) node["second_cast_at_ms"] = secondCastAtMs.Value;
+        if (realMap.HasValue) node["real_map"] = realMap.Value;
+        if (productionAoi.HasValue) node["production_aoi"] = productionAoi.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3090,7 +3120,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             // 不记图身份的话，换一张尺寸不同的 `0.map` 就会得到不同 golden 而没人知道为什么。
             // 与 Rust 驱动**读同一个环境变量**（`MAGICGOLDEN_MAP_DIR`），并由驱动侧核 sha256/size
             // ⇒ "两侧读的是同一张图"由**同一输入 + 同一校验**保证，不是巧合。
-            if (spec.Key == "spacemove")
+            // **MG-57 / B29**：`spec.RealMap` 的 stem 也要记图身份（rig 走真 0.map 时按 size/sha 钉）；
+            // 只记 `map_file_sha256/map_file_size`，`map_dir/map_file/map_bright` 仍只属 21。
+            if (spec.Key == "spacemove" || spec.RealMap)
             {
                 var mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
                 var mapPath = Path.Combine(mapDir, "0.map");
@@ -3100,8 +3132,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytesMap)).ToLowerInvariant();
                 foreach (var c in node["cases"]!.AsArray())
                 {
-                    c!["Fixture"]!["map_dir"] = mapDir;
-                    c!["Fixture"]!["map_file"] = "0.map";
+                    if (spec.Key == "spacemove")
+                    {
+                        c!["Fixture"]!["map_dir"] = mapDir;
+                        c!["Fixture"]!["map_file"] = "0.map";
+                    }
                     c!["Fixture"]!["map_file_sha256"] = sha;
                     c!["Fixture"]!["map_file_size"] = bytesMap.LongLength;
                 }
@@ -3114,7 +3149,10 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 // `game_time_from_hour` 给 0/2 ⇒ `DayBright()` 会变成 0，与本 golden 的 2 不同
                 // （当天 09:xx 实测必红）。记录的是**实际用了的值**，不是重算的意图值。
                 var bright = (long)M2Server.M2Share.GameTime;
-                foreach (var c in node["cases"]!.AsArray())
+                var brightCases = spec.Key == "spacemove"
+                    ? node["cases"]!.AsArray()
+                    : new System.Text.Json.Nodes.JsonArray();
+                foreach (var c in brightCases)
                 {
                     // **键名语义**：`map_bright` 存的是 `M2Share.GameTime` 的**原值**（0..3），
                     // **不是** `DayBright()` 的返回值 —— 0 对应 `DayBright()==2`（1→0、3→1、其它→2）。
@@ -3591,6 +3629,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-38（2026-11-26）**：`MonsterSpec.OperateStruck` 的怪物早期操作结果（在 `if` 内填充）。
         Dictionary<int, List<(SystemModule.Data.SendMessage Msg, byte Prio)>> monOperated = null;
         Dictionary<int, int> monHpBeforeOperate = null;
+        if (spec.SecondCastAtMs.HasValue && spec.StepDrainMs <= 0)
+        {
+            throw new FixtureContractViolation(
+                $"[{spec.Key}/{label}] SecondCastAtMs 需要 StepDrainMs > 0（非步进支没有\"步\"可施第二次法，"
+                + "静默忽略会把'没有第二次施法'的 golden 当成功）");
+        }
         if (spec.StepDrainMs > 0)
         {
             // **步进排水**（见 `MagicSpec.StepDrainMs` 说明）：每步只处理**已到期**的消息，
@@ -3725,6 +3769,19 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 int step = Math.Min(spec.StepDrainMs, spec.WaitMs - elapsed);
                 ClockSeam.Advance(step);
                 elapsed += step;
+                // **MG-57**：第二次施法——生产里第二次 `CM_SPELL` 在该 tick 的消息循环内被处理 ⇒
+                // 在**本步排水之前**再跑一次 `DoSpell`；帧的 `CurrentDueMs` 取本步 `elapsed`
+                // （与 `DrainOnce` 的非延迟消息同口径），否则会落 0。
+                if (spec.SecondCastAtMs.HasValue && spec.SecondCastAtMs.Value == elapsed)
+                {
+                    // 第二次施法按**目标当前格**点击（真实客户端每次 `CM_SPELL` 带当时的坐标；
+                    // 复用首施法的 `doX/doY` 会让"已移动目标 + 陈旧坐标"这种非生产形态进 golden）。
+                    short scx = targetNull ? caster.CurrX : spellTarget.CurrX;
+                    short scy = targetNull ? caster.CurrY : spellTarget.CurrY;
+                    RecordingNetChannel.CurrentDueMs = elapsed;
+                    _ = M2Server.Magic.MagicManager.DoSpell(caster, um, scx, scy, targetNull ? null : spellTarget);
+                    RecordingNetChannel.CurrentDueMs = 0;
+                }
                 int stepPasses = 0;
                 for (int pass = 0; pass < MaxDrainPasses; pass++)
                 {
@@ -4412,6 +4469,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.ServerConf,
                 targetMonsterUndead: spec.TargetMonster > 0 && !spec.TargetMonsterUndead ? (bool?)false : null,
                 faithfulPump: spec.FaithfulPump ? (bool?)true : null,
+                secondCastAtMs: spec.SecondCastAtMs,
+                realMap: spec.RealMap ? (bool?)true : null,
+                productionAoi: spec.ProductionAoi ? (bool?)true : null,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
@@ -4584,6 +4644,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// `MagicSpec.OperatePerStep`）。缺省 false ⇒ 既有口径（窗口结束后统一结算）。
         /// </summary>
         public bool OperatePerStep;
+        /// <summary>
+        /// **MG-57（2026-11-26）**：本 case 的第二次施法时刻（见 `MagicSpec.SecondCastAtMs`）。
+        /// </summary>
+        public int? SecondCastAtMs;
+        /// <summary>
+        /// **MG-57**：本 case 的 rig 用真 `0.map` / 生产 AOI（见 `MagicSpec.RealMap` / `ProductionAoi`）。
+        /// </summary>
+        public bool RealMap;
+        public bool ProductionAoi;
         /// <summary>
         /// **MG-53（2026-11-26）**：本 case 的 `UserMagicLevel` 覆盖（`null` = 用 stem 值）。
         /// 用途：同一 stem 既有支是 `UserMagicLevel=3`（训练门关），要观测 `Race>=Animal ⇒ boTrain`

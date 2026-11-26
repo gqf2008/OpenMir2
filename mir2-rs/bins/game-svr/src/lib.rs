@@ -34,6 +34,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// **L2-5 ⑤**：跨区收件人帧的邮箱与排水（详见模块头）。
 mod cross_zone_frames;
+/// **DEV-MG57-RM-PUSH-CACHE**（B30）：推挤帧收件人的只记录日志（缺省不武装 ⇒ 零行为）。
+mod push_observe;
 /// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`；卡 `openmir2-visiblehumanlist-cache`）。
 mod ref_msg_cache;
 
@@ -17967,6 +17969,9 @@ impl SpellFrameBuf {
             at.2,
             chat::send_ref_msg_range(),
         );
+        // **DEV-MG57-RM-PUSH-CACHE**（B30）：只记录——把本次缓存过滤后的收件人原样抄给
+        // parity 台账（未武装时是一次原子读，零分配）。
+        push_observe::note(actor_id, at.1, at.2, &targets);
         self.deliver_broadcast_targets(online, actor_id, targets, include_self, priority, body);
     }
 
@@ -22324,7 +22329,7 @@ fn broadcast_ref_msg_with_self_at(
     at: (usize, i32, i32),
     bodies: &[Vec<u8>],
 ) {
-    broadcast_ref_msg_opt(
+    let recorded = broadcast_ref_msg_opt(
         world,
         online,
         gates,
@@ -22334,6 +22339,9 @@ fn broadcast_ref_msg_with_self_at(
         Some(at),
         perf_counters::CrossRecipientSurface::RefMsg,
     );
+    // **DEV-MG57-RM-PUSH-CACHE**（B30）：推挤帧（`SM_BACKSTEP`）的收件人只记录；
+    // 未武装时 `recorded` 为空且 `note` 立即返回。
+    push_observe::note(actor_id, at.1, at.2, &recorded);
 }
 
 /// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
@@ -22347,7 +22355,7 @@ fn broadcast_ref_msg_opt(
     include_self: bool,
     at: Option<(usize, i32, i32)>,
     surface: perf_counters::CrossRecipientSurface,
-) {
+) -> Vec<i32> {
     // **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（oracle `BaseObject.Message.cs:395-466`；
     // 偏差 `T-287`）。扫描面仍由 `chat::hear_targets*` 给（±range 闭区间），缓存两段由
     // `ref_msg_cache` 收口：≥500ms 刷新全量；否则复用快照 + `|Δ|<11` 严格小于。
@@ -22356,6 +22364,13 @@ fn broadcast_ref_msg_opt(
             ref_msg_cache::targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range())
         }
         None => ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()),
+    };
+    // **DEV-MG57-RM-PUSH-CACHE**（B30）：只有在**武装**且调用方给了显式坐标时才克隆一份
+    // 收件人返回给调用方（推挤帧发射口据此记账）；未武装 ⇒ 空 `Vec`、零分配、行为不变。
+    let recorded = if at.is_some() && push_observe::armed() {
+        targets.clone()
+    } else {
+        Vec::new()
     };
     send_ref_msg_to_targets(
         world,
@@ -22367,6 +22382,7 @@ fn broadcast_ref_msg_opt(
         include_self,
         surface,
     );
+    recorded
 }
 
 /// `SendRefMsg` 的**投递段**：收件人 id 已按升序算好（`chat::hear_targets*` 的返回契约），
@@ -85273,19 +85289,19 @@ SendRefMsgRange=15
     /// 帧面片的共用夹具：施法者 `caster`(10,10)/socket 911、若干观察者（名, x, y, Ghost, socket）、
     /// 存档里学会的魔号、魔法模板表（逐 `(魔号, Effect)`），以及 `ArmRingl` 槽里的护身符
     /// （`dura = 600` ⇒ `Round(600/100) = 6`，满足 `CheckAmulet` 三档需求 1/5/2）。
-    /// **MG-35（21 瞬息移动）驱动的 rig 输入**：真图（`MAGICGOLDEN_MAP_DIR`）+ 真 `MapRegistry`。
+    /// **MG-57 / B29（`DEV-MG57-RIG-MAP-BASELINE`）**：把真 `0.map` 载成 `MapGrid` 并做
+    /// size/sha/直方图三重断言（细节见 [`spacemove_rig_inputs`] 的说明）。8/37 推挤类支在
+    /// `Fixture.real_map=true` 时用它，使两侧 `CanWalk` 读**同一张冻结地图**。
     ///
-    /// **与旧先例的差异（勿复用）**：`cast_slave` 为 `name_of(map_id)` 写过 200×200 全 0 的临时图，
-    /// 那是"只给 name↔id"用的、可走性仍用 World 图。本支**不能**沿用那个口径：
-    /// `SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040`）是带 `CanWalk` 的**移位环**，
-    /// 不可走会继续抽 `Random(Width)`/`Random(Height)`（至多 201 轮，超限则整段换图不发生）。
-    /// 用全 `Walk` 合成图会让移位环**零轮** ⇒ 系统性少抽 RNG（"帧对、抽数错"的典型假对拍）。
-    ///
-    /// 三档具名 panic（不静默）：`MAP_DIR_MISSING` / `MAP_FILE_MISSING` / `MAP_SIZE_MISMATCH`。
-    fn spacemove_rig_inputs(
+    /// 返回 `(地图目录, 网格, 文件)`：`spacemove` 还要用目录+文件建 `MapRegistry`。
+    fn real_map_grid_and_file(
         stem: &str,
         label: &str,
-    ) -> (mir2_world_bevy::map::MapGrid, mir2_envir::MapRegistry) {
+    ) -> (
+        std::path::PathBuf,
+        mir2_world_bevy::map::MapGrid,
+        mir2_envir::MapFile,
+    ) {
         let dir = std::env::var("MAGICGOLDEN_MAP_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from(r"E:\MirServer\M2GameSvr\Map"));
@@ -85363,6 +85379,29 @@ SendRefMsgRange=15
             grid.low_wall_count(),
             mf.low_count()
         );
+        (dir, grid, mf)
+    }
+
+    /// [`real_map_grid_and_file`] 的网格版（8/37 的 rig 只需要图）。
+    fn real_map_grid_for(stem: &str, label: &str) -> mir2_world_bevy::map::MapGrid {
+        real_map_grid_and_file(stem, label).1
+    }
+
+    /// **MG-35（21 瞬息移动）驱动的 rig 输入**：真图（`MAGICGOLDEN_MAP_DIR`）+ 真 `MapRegistry`。
+    ///
+    /// **与旧先例的差异（勿复用）**：`cast_slave` 为 `name_of(map_id)` 写过 200×200 全 0 的临时图，
+    /// 那是"只给 name↔id"用的、可走性仍用 World 图。本支**不能**沿用那个口径：
+    /// `SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040`）是带 `CanWalk` 的**移位环**，
+    /// 不可走会继续抽 `Random(Width)`/`Random(Height)`（至多 201 轮，超限则整段换图不发生）。
+    /// 用全 `Walk` 合成图会让移位环**零轮** ⇒ 系统性少抽 RNG（"帧对、抽数错"的典型假对拍）。
+    ///
+    /// 三档具名 panic（不静默）：`MAP_DIR_MISSING` / `MAP_FILE_MISSING` / `MAP_SIZE_MISMATCH`。
+    fn spacemove_rig_inputs(
+        stem: &str,
+        label: &str,
+    ) -> (mir2_world_bevy::map::MapGrid, mir2_envir::MapRegistry) {
+        let (dir, grid, _mf) = real_map_grid_and_file(stem, label);
+        let g = golden_case_for(stem, label);
         let registry = mir2_envir::MapRegistry::from_entries(
             mir2_envir::MapLoader::new(&dir, "", ""),
             vec![mir2_envir::MapInfoEntry {
@@ -87660,6 +87699,35 @@ SendRefMsgRange=15
         seed: i32,
         id_base: i32,
     ) {
+        fireball_parity_drive_with_trace(
+            stem,
+            magic_id,
+            user_magic_level,
+            label,
+            seed,
+            id_base,
+            true,
+        );
+    }
+
+    /// [`fireball_parity_drive`] 的**可关 trace** 版（装置面能力，供默认门用例使用）。
+    ///
+    /// `trace_enabled=false` ⇒ **不打开** `rng_trace`（进程级全局状态），台账的
+    /// `Rng`/`DeliverRng` 为空、`RngTrace=false`。调用方此时**不得**用 [`fireball_case_assert`]
+    /// （它比对金标准 `Rng` 抽数）——应改用「收件人集合 + 逐收件人严格序 + 非退化守卫 +
+    /// `RandomNumber::draws()` 抽数 == 金标准 `rng_total_draws`」的判据。
+    ///
+    /// 缺省 `true` 的既有调用面**一字不变**：trace 打开时机、断言、台账字段与之前相同。
+    #[allow(clippy::too_many_arguments)]
+    fn fireball_parity_drive_with_trace(
+        stem: &str,
+        magic_id: u16,
+        user_magic_level: u8,
+        label: &str,
+        seed: i32,
+        id_base: i32,
+        trace_enabled: bool,
+    ) {
         // 金标准的 `Sent` 是 **oracle 布局**（`SM_STRUCK` 头 = (受击者, HP, MaxHP, 伤害)、尾
         // `Param1=GetFeature()`）。生产默认是冻结客户端 `HIGHHP` 布局（拆位 HP、尾 Param1=MaxHP）；
         // 本用例**显式**切到 oracle 布局做语义对拍——`HIGHHP` 布局由
@@ -87674,13 +87742,15 @@ SendRefMsgRange=15
             "rng_trace 已被本进程其它路径开启（MIR2_RNG_LOG 或先跑的用例）⇒ 流水不可信；\
              请以 --exact 单跑本用例、并清空 MIR2_RNG_LOG"
         );
-        let _ = std::fs::remove_file(&trace); // enable 前清残留（此刻尚无写入端，不违反「不截断」）。
-        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
-        assert_eq!(
-            trace_header_seed(&trace),
-            seed,
-            "trace 头部 seed 必须与本支一致"
-        );
+        if trace_enabled {
+            let _ = std::fs::remove_file(&trace); // enable 前清残留（此刻尚无写入端，不违反「不截断」）。
+            mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+            assert_eq!(
+                trace_header_seed(&trace),
+                seed,
+                "trace 头部 seed 必须与本支一致"
+            );
+        }
 
         // **输入一律从 golden 读**（缺键即红；硬编码 15 正是此前的假绿根源）。
         let mc = golden_fixture_required(stem, label, "caster_mc");
@@ -87723,7 +87793,11 @@ SendRefMsgRange=15
         }
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
-        let n0 = trace_line_count(&trace);
+        let n0 = if trace_enabled {
+            trace_line_count(&trace)
+        } else {
+            0
+        };
         let caster = rig.caster;
         // **MG-44（32）**：`fireball_rig` 硬编码施法者等级 30（= 既有全部 stem 的 golden 值）。
         // 等级门用例（43/44/45 对部署 44）需要更高等级让 `:842` 前置门恒真 ⇒ 按 golden 覆写。
@@ -88054,20 +88128,36 @@ SendRefMsgRange=15
             }
         }
         if matches!(magic_id, 8 | 37) {
-            rig.world
-                .maps
-                .push(mir2_world_bevy::map::MapGrid::new(200, 200));
-            let mut visible_ids = vec![target, fireball_actor(&rig, "obs_in")];
-            visible_ids.extend(monster_ids.iter().copied());
-            let visible = visible_ids
-                .into_iter()
-                .map(|t| mir2_world_bevy::entity::VisibleBaseObject {
-                    target: t,
-                    flag: mir2_world_bevy::entity::VisibleFlag::Show,
-                })
-                .collect();
-            if let Some(mb) = rig.world.entities.map_binding_mut(caster) {
-                mb.visible_actors = visible;
+            let case_g = golden_case_for(stem, label);
+            // **DEV-MG57-RIG-MAP-BASELINE**（B29）：`Fixture.real_map=true` ⇒ 真 `0.map`
+            // （与 C# 装置同源、size/sha/直方图三重钉）；缺省 false ⇒ 既有 200×200 合成全 Walk 图
+            // （零变化）。
+            if case_g["Fixture"]["real_map"] == serde_json::json!(true) {
+                rig.world.maps.push(real_map_grid_for(stem, label));
+            } else {
+                rig.world
+                    .maps
+                    .push(mir2_world_bevy::map::MapGrid::new(200, 200));
+            }
+            // **③ 生产 AOI**（`Fixture.production_aoi=true`）：不再手工回填 `visible_actors`，
+            // 改走生产 AOI 段（`World::tick` 的 `OutputAoi`，`BevyAoiStore` 不对外公开 ⇒
+            // rig 的唯一生产入口就是 tick）。缺省 false ⇒ 既有手工回填（零变化）。
+            if case_g["Fixture"]["production_aoi"] == serde_json::json!(true) {
+                // 生产 AOI 扫描（`OutputAoi` 同一函数；`tick()` 的节流/整 tick 副作用不要）。
+                rig.world.search_view_range_now(caster);
+            } else {
+                let mut visible_ids = vec![target, fireball_actor(&rig, "obs_in")];
+                visible_ids.extend(monster_ids.iter().copied());
+                let visible = visible_ids
+                    .into_iter()
+                    .map(|t| mir2_world_bevy::entity::VisibleBaseObject {
+                        target: t,
+                        flag: mir2_world_bevy::entity::VisibleFlag::Show,
+                    })
+                    .collect();
+                if let Some(mb) = rig.world.entities.map_binding_mut(caster) {
+                    mb.visible_actors = visible;
+                }
             }
         }
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
@@ -88243,7 +88333,11 @@ SendRefMsgRange=15
         if !monster_ids.is_empty() {
             monster_deliveries = rig.world.deliver_self_delay_msgs();
         }
-        let n1 = trace_line_count(&trace);
+        let n1 = if trace_enabled {
+            trace_line_count(&trace)
+        } else {
+            0
+        };
         let (cast_frames, _raws) = rig.drain();
 
         // **RM 列来源（弱比较面，卡 §11 映射表）**：`RM_DELAYMAGIC` 只在施法段入队，
@@ -88333,6 +88427,37 @@ SendRefMsgRange=15
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
             elapsed += 100;
+            // **MG-57**：`Fixture.second_cast_at_ms` ⇒ 本步按**生产入口**再施法一次（与装置同一步、
+            // 同在排水之前）；新帧记本步 `due`。缺键 ⇒ 零动作（既有件不变）。
+            if let serde_json::Value::Number(n) =
+                &golden_case_for(stem, label)["Fixture"]["second_cast_at_ms"]
+            {
+                let ms = n.as_i64().unwrap_or_else(|| {
+                    panic!("[{stem}/{label}] Fixture.second_cast_at_ms 必须是整数")
+                });
+                let ms = u64::try_from(ms).unwrap_or_else(|_| {
+                    panic!("[{stem}/{label}] Fixture.second_cast_at_ms 不能为负")
+                });
+                if ms == elapsed {
+                    // 第二次施法按**目标当前格**点击（与装置同口径；见 `SecondCastAtMs` 文档）。
+                    let second_click = if cast_target != 0 {
+                        rig.world
+                            .entities
+                            .get(cast_target)
+                            .map_or((0, 0), |e| (e.x, e.y))
+                    } else {
+                        rig.world
+                            .entities
+                            .get(caster)
+                            .map_or((0, 0), |e| (e.x, e.y))
+                    };
+                    rig.cast(magic_id, second_click, cast_target);
+                    let (extra_frames, _raws_second) = rig.drain();
+                    for f in extra_frames {
+                        deliver_frames.push((elapsed as i64, f));
+                    }
+                }
+            }
             // 先放行上一 tick 的延迟 657（本步可见 ⇒ due = elapsed）。
             if !pending_657.is_empty() {
                 let rec = mir2_world_bevy::TickRecord::default();
@@ -88431,7 +88556,11 @@ SendRefMsgRange=15
                     .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y))),
             )
             .collect();
-        let n2 = trace_line_count(&trace);
+        let n2 = if trace_enabled {
+            trace_line_count(&trace)
+        } else {
+            0
+        };
 
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let monster_hp_after = monster_hp_before.map(|_| {
@@ -88449,8 +88578,16 @@ SendRefMsgRange=15
         let damage = i32::from(hp_before) - i32::from(hp_after);
 
         // 账本 = 段①（金标准 `Rng` 的比较面）+ 段②（另存 `DeliverRng`，供审计）。
-        let cast_rng = trace_slice(&trace, n0, n1);
-        let deliver_rng = trace_slice(&trace, n1, n2);
+        let cast_rng = if trace_enabled {
+            trace_slice(&trace, n0, n1)
+        } else {
+            Vec::new()
+        };
+        let deliver_rng = if trace_enabled {
+            trace_slice(&trace, n1, n2)
+        } else {
+            Vec::new()
+        };
         for pair in cast_rng.windows(2).chain(deliver_rng.windows(2)) {
             assert_eq!(
                 pair[1].0,
@@ -89226,6 +89363,7 @@ SendRefMsgRange=15
             "Receivers": receivers,
             "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngTrace": trace_enabled,
             "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
             "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
