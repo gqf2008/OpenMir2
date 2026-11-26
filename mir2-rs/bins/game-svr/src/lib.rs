@@ -89587,6 +89587,43 @@ SendRefMsgRange=15
         b1_golden_drain_assert("lightning-11.json", "hit", 4);
     }
 
+    /// **MG-19（2026-11-26，批 B）**：`monster` 支——**非不死动物目标**。
+    ///
+    /// `cast_lightening_spell`（`MagicManager.cs:289-314`）：`Race>=Animal` ⇒ `boTrain`
+    /// （caster 收 `10123` + `SM 640`）；`LifeAttrib != LA_UNDEAD` ⇒ **不**乘 1.5。
+    /// 装置 `ExtraCases`（`TargetMonster=1`、`TargetMonsterUndead=false`、`UseHitSeed`）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_parity_monster() {
+        fireball_parity_drive(
+            "lightning11",
+            11,
+            1,
+            "monster",
+            golden_seed("lightning11", "monster"),
+            4100,
+        );
+        fireball_case_assert("lightning11", "monster");
+    }
+
+    /// **MG-19（2026-11-26，批 B）**：`monster_undead` 支——**不死动物目标**（1.5x 臂）。
+    ///
+    /// `if (target.LifeAttrib == LA_UNDEAD) nPower = Round(nPower * 1.5)`（`:296`）+
+    /// `Race>=Animal ⇒ boTrain`；与 `monster` 支构成「乘/不乘 1.5」的**正反两臂**（§50）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_parity_monster_undead() {
+        fireball_parity_drive(
+            "lightning11",
+            11,
+            1,
+            "monster_undead",
+            golden_seed("lightning11", "monster_undead"),
+            4200,
+        );
+        fireball_case_assert("lightning11", "monster_undead");
+    }
+
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_miss() {

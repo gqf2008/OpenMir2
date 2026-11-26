@@ -3966,7 +3966,19 @@ fn real_rust_ledger_parity() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::lightning11_parity_*）生成真实台账"]
 fn real_rust_ledger_lightning11() {
-    real_ledger_verify("lightning11", &golden_file("lightning-11.json"));
+    // **标签从 golden 取**（MG-19 起含 `monster` / `monster_undead`；缺台账即防空转红）。
+    let golden = golden_file("lightning-11.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[lightning11] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("lightning11", &golden, &refs);
 }
 
 #[test]
@@ -4632,14 +4644,17 @@ fn assert_antimagic_boundary(g: &Value, stem: &str) {
                 );
                 assert!(after < before, "[{stem}/{label}] 必须掉血");
             }
-            // **MG-11（2026-11-26）**：`monster` 是**非边界**额外支（怪目标、hit 种子）——
-            // 它不进 AntiMagic 等号边界守卫；本守卫仍只认 miss/edge/hit 三支。
-            "monster" => {}
+            // **MG-11 / 批 B（2026-11-26）**：非边界额外支的**显式白名单**——这两支不参与
+            // AntiMagic 等号边界判定；本守卫仍要求**恰 3 个**边界支（miss/edge/hit），
+            // 未知 label 仍 panic（将来加第 4 个边界支会被这里挡住）。
+            "monster" | "monster_undead" => {}
             other => {
-                panic!("[{stem}/{label}] 未知 case label {other:?}（本守卫只认 miss/edge/hit/monster）")
+                panic!(
+                    "[{stem}/{label}] 未知 case label {other:?}（本守卫只认 miss/edge/hit 与非边界白名单 monster/monster_undead）"
+                )
             }
         }
-        if label != "monster" {
+        if !matches!(label, "monster" | "monster_undead") {
             checked += 1;
         }
     }
