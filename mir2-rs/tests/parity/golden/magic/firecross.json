@@ -945,6 +945,318 @@
         "max_train_at_level": 1000,
         "train_level_at_level": 0
       }
+    },
+    {
+      "Fixture": {
+        "magic_id": 22,
+        "magic_name": "FireCross",
+        "caster_name": null,
+        "slave_colors": null,
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 4101,
+        "target_actor_id": 4102,
+        "caster_mc": 2565,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 10,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireCross"
+          ]
+        },
+        "scenario_note": "登录序（UserLogon→RecalcLevelAbilitys+RecalcAbilitys；target/caster 同标准，HP=公式 MaxHP）",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "中毒了!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "magic_train_lv": 3,
+        "magic_max_train0": 1000,
+        "firecross_safe_zone": false,
+        "pre_event_cells": []
+      },
+      "Label": "tick_boundaries",
+      "DrainPasses": 1,
+      "DrainPassesHitCap": false,
+      "Seed": 25,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 22,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 22,
+              "p2": 0,
+              "p3": 1,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            },
+            {
+              "ident": 640,
+              "recog": 22,
+              "param": 0,
+              "tag": 1,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 22,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "22"
+            },
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0,
+        1,
+        8,
+        0,
+        2,
+        0
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "FireTrace": [
+        {
+          "delta": 500,
+          "ms": 1000500,
+          "target_hp": 100,
+          "struck": 0
+        },
+        {
+          "delta": 501,
+          "ms": 1000501,
+          "target_hp": 100,
+          "struck": 1
+        },
+        {
+          "delta": 2900,
+          "ms": 1002900,
+          "target_hp": 100,
+          "struck": 0
+        },
+        {
+          "delta": 3501,
+          "ms": 1003501,
+          "target_hp": 100,
+          "struck": 0
+        },
+        {
+          "delta": 4002,
+          "ms": 1004002,
+          "target_hp": 100,
+          "struck": 1
+        }
+      ],
+      "NotDue": [],
+      "CasterMp": 0,
+      "FireCross": {
+        "events": [
+          {
+            "x": 100,
+            "y": 100,
+            "type": 5,
+            "damage": 6,
+            "continue_ms": 6000
+          },
+          {
+            "x": 101,
+            "y": 99,
+            "type": 5,
+            "damage": 6,
+            "continue_ms": 6000
+          },
+          {
+            "x": 101,
+            "y": 100,
+            "type": 5,
+            "damage": 6,
+            "continue_ms": 6000
+          },
+          {
+            "x": 101,
+            "y": 101,
+            "type": 5,
+            "damage": 6,
+            "continue_ms": 6000
+          },
+          {
+            "x": 102,
+            "y": 100,
+            "type": 5,
+            "damage": 6,
+            "continue_ms": 6000
+          }
+        ],
+        "pre_event_cells": [],
+        "safe_zone_flag": false,
+        "disable_in_safe_zone_fire_cross": false,
+        "in_safe_zone_at_cast": false,
+        "red_sysmsg": false,
+        "red_sysmsg_text": "",
+        "has_640": true
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 1,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
     }
   ]
 }
