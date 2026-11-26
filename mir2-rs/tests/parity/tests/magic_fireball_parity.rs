@@ -4620,6 +4620,15 @@ fn tooth_poison_marker_whitelist_rejects_foreign_stem() {
     );
 }
 
+/// **MG-12/40 `tick_cap`（2026-11-26）**：一次施法 >300 ⇒ `RM_MAGHEALING` 累计 else 支置 300。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::healing_nonzero_parity_cap）生成真实台账"]
+fn real_rust_ledger_healing_nonzero() {
+    let golden = golden_file("healing-nonzero.json");
+    let labels = golden_labels(&golden, "healing-nonzero");
+    real_ledger_verify_labels("healing-nonzero", &golden, &labels);
+}
+
 // ---------------------------------------------------------------------------
 // MG-44（32 圣言术）/ MG-48（50 魔爆）：ServerConf 十键批次
 // ---------------------------------------------------------------------------

@@ -188,6 +188,11 @@ public static class Program
             // （`StepDrainMs=100`）。否则「Sleep(WaitMs) 后一次排空」按 per-actor pass 序把 640
             // 排在 600ms 的 31/53/656 之前（MG-17 同类把伪影固化的失效模式）。
             if (name == "healing") return HealingBatch();
+            // **MG-12/40 `tick_cap`（2026-11-26）**：一次施法 `nParam1 > 300` ⇒ `RM_MAGHEALING`
+            // 累计走 **else 支**（置 300）。用 B16 Arm A 的五字段把 `nPower` 抬到 ~800
+            // （`MagicManager` 私有 `MPow`/`GetPower`：`GetPower = Round(MPow/(TrainLv+1)*(Level+1))`
+            // + DefPower + R(DefMaxPower-DefPower)`；本臂 Level=1 ⇒ ×2）。
+            if (name == "healing-nonzero") return NonzeroHealingBatch();
             // **MG-27（2026-11-26，批 B）**：`monster` 支——非不死动物目标。
             // 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**（`HUtil32.LoByte(WAbil.SC)` 起）；
             // `Race>=Animal ⇒ boTrain`（训练尾 640/10123）。无 LA_UNDEAD 分支 ⇒ 单额外 case。
@@ -2375,6 +2380,39 @@ private static int ReadInstanceInt(object obj, string fieldName)
     /// `heal`（目标受伤 ⇒ RM_MAGHELING）、`full`（目标满血 ⇒ 无 RM_MAGHELING）、
     /// `self`（targetObject=null ⇒ 自疗，坐标取施法者）。seed 固定 1/5/13。
     /// </summary>
+    /// **MG-12/40 `tick_cap`（2026-11-26）**：封顶本体的**单次施法**臂——`nPower≈801` ⇒
+    /// `(IncHealing + n) < 300` 为假 ⇒ else 支直接置 300。判据：轨迹首行 `inc_healing=300`
+    /// （未封顶会 ~801）、每 tick `TargetHp +5`（不是 +800）。三抽（生成期核对）：
+    /// `R(MaxPower-Power)=R(1)`、`R(DefMaxPower-DefPower)=R(1)`（`Random(0)` 照抽，§27）、
+    /// `GetAttackPower` 的 `R((Hi-Lo)*2+2)=R(2)`。
+    private static int NonzeroHealingBatch()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var spec = new MagicSpec
+        {
+            Key = "healing-nonzero",
+            MagicId = 2,
+            MagicName = "Healing",
+            NonzeroArm = true,
+            MagicPower = 400,
+            MagicMaxPower = 401,
+            MagicDefPower = 1,
+            MagicDefMaxPower = 2,
+            MagicTrainLv = 0,
+            UserMagicLevel = 1,
+            CasterSc = 0,
+            CasterMc = 0,
+            StepDrainMs = 100,
+            HealTicksMs = new[] { 1300, 1600, 1900, 2300 },
+        };
+        var cap = RunMagicCase(spec, "cap", 1, 1000, 50, false);
+        return EmitGolden(spec, new[] { cap });
+    }
+
     private static int HealingBatch()
     {
         if (!EnsureConfFiles(out _, out var missing))
