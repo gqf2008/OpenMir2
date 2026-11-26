@@ -87444,18 +87444,46 @@ SendRefMsgRange=15
         sc: u16,
         user_magic_level: u8,
     ) -> SpellFrameRig {
+        fireball_rig_at(
+            id_base,
+            magic_id,
+            mc,
+            sc,
+            user_magic_level,
+            (100, 100),
+            (101, 100),
+            (105, 100),
+            (140, 100),
+        )
+    }
+
+    /// **MG-57 P2（2026-11-26）**：[`fireball_rig`] 的**坐标可覆写**版——四个对象的落点由 golden
+    /// `Fixture.{caster,target,obs_in,obs_out}_xy` 给（方向臂/多目标/收件人范围边界臂用）。
+    /// 缺键 ⇒ 调用方传旧常量 ⇒ 既有件逐字节不变。
+    #[allow(clippy::too_many_arguments)]
+    fn fireball_rig_at(
+        id_base: i32,
+        magic_id: u16,
+        mc: u16,
+        sc: u16,
+        user_magic_level: u8,
+        caster_xy: (i32, i32),
+        target_xy: (i32, i32),
+        obs_in_xy: (i32, i32),
+        obs_out_xy: (i32, i32),
+    ) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
             id_base,
-            100,
-            100,
+            caster_xy.0,
+            caster_xy.1,
             magic_id,
             &[(magic_id, 1)],
             &[
-                ("target", 101, 100, false, 912),
-                ("obs_in", 105, 100, false, 913),
-                ("obs_out", 140, 100, false, 914),
+                ("target", target_xy.0, target_xy.1, false, 912),
+                ("obs_in", obs_in_xy.0, obs_in_xy.1, false, 913),
+                ("obs_out", obs_out_xy.0, obs_out_xy.1, false, 914),
             ],
         );
         // 魔表行 = C# `new MagicInfo { MagicId=<id>, MagicName="FireBall", Effect=1, EffectType=1 }`；
@@ -87707,6 +87735,7 @@ SendRefMsgRange=15
             seed,
             id_base,
             true,
+            true,
         );
     }
 
@@ -87727,12 +87756,23 @@ SendRefMsgRange=15
         seed: i32,
         id_base: i32,
         trace_enabled: bool,
+        oracle_ability_layout: bool,
     ) {
+        // **MG-57 P2**：`UserMagicLevel` 以 golden 的 `Fixture.user_magic_level` 为准（逐 case 可覆盖；
+        // 既有件该值等于调用方实参 ⇒ 零变化）。
+        let user_magic_level = golden_case_for(stem, label)["Fixture"]["user_magic_level"]
+            .as_u64()
+            .map_or(user_magic_level, |v| v as u8);
         // 金标准的 `Sent` 是 **oracle 布局**（`SM_STRUCK` 头 = (受击者, HP, MaxHP, 伤害)、尾
         // `Param1=GetFeature()`）。生产默认是冻结客户端 `HIGHHP` 布局（拆位 HP、尾 Param1=MaxHP）；
         // 本用例**显式**切到 oracle 布局做语义对拍——`HIGHHP` 布局由
         // `combat_downlink_sends_struck_and_nowdeath` 等既有用例钉住，不在本台账里重复。
-        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        // **MG-57 P2**：默认门用例（并行跑在同一个测试二进制里）**不**改进程级布局开关——
+        // 它会影响其它并发用例的 `52` 尾编码（实测三支因并行污染而红）。8/37 的比较面
+        // `(ident,param,tag,series)` 与布局无关。
+        if oracle_ability_layout {
+            std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        }
         let dir = magic_ledger_dir();
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
         let run_id = ledger_run_id();
@@ -87755,7 +87795,35 @@ SendRefMsgRange=15
         // **输入一律从 golden 读**（缺键即红；硬编码 15 正是此前的假绿根源）。
         let mc = golden_fixture_required(stem, label, "caster_mc");
         let sc = golden_fixture_required(stem, label, "caster_sc");
-        let mut rig = fireball_rig(id_base, magic_id, mc, sc, user_magic_level);
+        // **MG-57 P2**：四个对象的落点来自 golden `Fixture.*_xy`（缺键 ⇒ 旧常量 ⇒ 零变化）。
+        let xy_of = |key: &str, default: (i32, i32)| -> (i32, i32) {
+            match golden_case_for(stem, label)["Fixture"][key].as_array() {
+                Some(a) if a.len() == 2 => {
+                    let x = a[0]
+                        .as_i64()
+                        .unwrap_or_else(|| panic!("[{stem}/{label}] Fixture.{key}[0] 必须是整数"));
+                    let y = a[1]
+                        .as_i64()
+                        .unwrap_or_else(|| panic!("[{stem}/{label}] Fixture.{key}[1] 必须是整数"));
+                    (
+                        i32::try_from(x).expect("Fixture.*_xy 越界 i32"),
+                        i32::try_from(y).expect("Fixture.*_xy 越界 i32"),
+                    )
+                }
+                _ => default,
+            }
+        };
+        let mut rig = fireball_rig_at(
+            id_base,
+            magic_id,
+            mc,
+            sc,
+            user_magic_level,
+            xy_of("caster_xy", (100, 100)),
+            xy_of("target_xy", (101, 100)),
+            xy_of("obs_in_xy", (105, 100)),
+            xy_of("obs_out_xy", (140, 100)),
+        );
         // **B16 Arm A（非零值魔表对照臂）**：五字段从 golden 读。旧 stem 缺键=0（与 `fireball_rig`
         // 的缺省表逐字段相同 ⇒ 零变化）；`-nonzero` 支 fail-closed 必填（缺键/越界 ⇒ 红）。
         // 与 C# `BuildMagicInfo` 的五字段一一对应；`max_train` 不属 Arm A，两侧保持缺省 0。
@@ -88021,7 +88089,10 @@ SendRefMsgRange=15
             );
             (id, (e.x, e.y), Some(e.hp))
         } else {
-            (target, (101, 100), None)
+            // **MG-57 P2**：玩家目标的点击坐标 = **实体当前格**（装置 `doX/doY` 取自
+            // `spellTarget.CurrX/CurrY`；方向/边界臂会挪动目标 ⇒ 不能写死 (101,100)）。
+            let e = rig.world.entities.get(target).expect("玩家目标必须已存在");
+            (target, (e.x, e.y), None)
         };
         // **MG-44/48**：ServerConf 十键（golden `Fixture.server_conf` 存在才应用）。应用点在施法前——
         // `cast_turn_undead_spell` / `cast_mab_mabe_spell` 直读 `world` 里的这两份配置。
@@ -88133,7 +88204,28 @@ SendRefMsgRange=15
             // （与 C# 装置同源、size/sha/直方图三重钉）；缺省 false ⇒ 既有 200×200 合成全 Walk 图
             // （零变化）。
             if case_g["Fixture"]["real_map"] == serde_json::json!(true) {
-                rig.world.maps.push(real_map_grid_for(stem, label));
+                // **B29**：真 `0.map` 必须**替换实体所在的图**（追加一张图会让实体留在旧图上，
+                // `CanWalk`/AOI 仍读全 Walk 合成图 ⇒ 被挡臂假绿；2026-11-26 实测踩过）。
+                let grid = real_map_grid_for(stem, label);
+                let map_id = rig.world.entities.get(caster).map_or(0, |e| e.map_id);
+                rig.world.maps[map_id] = grid;
+                let now = rig.world.clock_ms;
+                for entry in rig.online.clone() {
+                    if let Some(ent) = rig.world.entities.get(entry.actor_id) {
+                        let (x, y) = (ent.x, ent.y);
+                        assert!(
+                            rig.world.maps[map_id].add_map_object(
+                                x,
+                                y,
+                                mir2_world_bevy::map::CellType::Play,
+                                entry.actor_id,
+                                now
+                            ),
+                            "[{stem}/{label}] 真图重登记失败 actor={} ({x},{y})（格子非法/不可走？）",
+                            entry.actor_id
+                        );
+                    }
+                }
             } else {
                 rig.world
                     .maps
@@ -88262,6 +88354,25 @@ SendRefMsgRange=15
         };
 
         // ---- 段①：生产入口施法 ----
+        // **MG-57 P2**：受害者施法前 `Dir`（golden `Fixture.target_dir_before`；观察支才有）。
+        // 只影响"被挡 ⇒ Dir 还原"这类判据的初值；缺键 ⇒ 零动作。
+        if let Some(d) = golden_case_for(stem, label)["Fixture"]["target_dir_before"].as_i64() {
+            let d = u8::try_from(d).expect("Fixture.target_dir_before 越界 u8");
+            if let Some(e) = rig.world.entities.get_mut(target) {
+                e.ai.dir = d;
+            }
+        }
+        // **DEV-MG57-RM-PUSH-CACHE**（B30 撤销的前置）：武装推挤收件人只记录日志。
+        crate::push_observe::arm();
+        // **MG-57 P2**：`Fixture.push_cache_cold` ⇒ 受害者 `SendRefMsg` 缓存必须**冷**（首次推挤
+        // 走首扫路径）——这是"首扫档 / 复用档"两条规则可解释的入口证据。
+        if golden_case_for(stem, label)["Fixture"]["push_cache_cold"] == serde_json::json!(true) {
+            assert!(
+                rig.world.ref_msg_cache_tick(cast_target).is_none(),
+                "[{stem}/{label}] push_cache_cold 声明缓存冷，但受害者缓存已有刷新时刻（{:?}）",
+                rig.world.ref_msg_cache_tick(cast_target)
+            );
+        }
         rig.cast(magic_id, cast_click, cast_target);
         // **8/37 的推挤决策观测**（卡 `magic-push-batch-impl`）：`RM_PUSH(8092)` 的台账来源取
         // 产品路径的真实 `PushEvent`（`cast_firewind_spell` → `push_now`），**不是**从我们发出的
@@ -88547,6 +88658,7 @@ SendRefMsgRange=15
         let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
         // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
+        let push_targets = crate::push_observe::take();
         let push_events: Vec<(i32, u8, i32, i32)> = firewind_pushes
             .iter()
             .copied()
@@ -88576,6 +88688,8 @@ SendRefMsgRange=15
             .map_or(0, |sg| i64::from(sg.state.wabil.mp));
         let target_max_hp = rig.world.entities.get(target).unwrap().max_hp;
         let damage = i32::from(hp_before) - i32::from(hp_after);
+        // **MG-57 P2**：受害者术后 `Dir`（`CharPushed` 收尾：推进 >0 ⇒ 回向、=0 ⇒ 初值）。
+        let target_dir_after = rig.world.entities.get(target).map_or(0, |e| e.dir());
 
         // 账本 = 段①（金标准 `Rng` 的比较面）+ 段②（另存 `DeliverRng`，供审计）。
         let cast_rng = if trace_enabled {
@@ -88657,11 +88771,13 @@ SendRefMsgRange=15
                 // oracle `MagicManager.cs:159` 在 **case 体之前**发 `RM_SPELL(…, nTargetX, nTargetY, …)`；
                 // 穿透 9/10 的 `nTargetX/Y` 是在 case 体内才被改写成终点的（`:269`）⇒ RM_SPELL 用点击点，
                 // 638 尾用终点。不能从 638 帧反推（本处曾直接取 `fire_x/fire_y` ⇒ 105）。
+                // **MG-57 P2**：`RM_SPELL` 的 p1/p2 = **点击坐标**（oracle 用 `nTargetX/nTargetY`），
+                // 不能写死 (101,100)——方向/边界臂会挪动目标。
                 v.push(fireball_rm(
                     10008,
                     1,
-                    101,
-                    100,
+                    i64::from(cast_click.0),
+                    i64::from(cast_click.1),
                     i64::from(magic_id),
                     24,
                     false,
@@ -88686,6 +88802,51 @@ SendRefMsgRange=15
                 }
             }
         }
+        // **MG-57 P2**：第二次施法的 `RM_SPELL(10008)`/`RM_MAGICFIRE(10120)`——oracle 每次 `DoSpell`
+        // 都发这对广播；用**该次** `SM_MAGICFIRE(638)` 的坐标/尾串重建第二对（只对显式声明
+        // `Fixture.second_cast_at_ms` 且非 21 的支；21 的点击/终点语义不同，保持既有单对）。
+        if golden_case_for(stem, label)["Fixture"]["second_cast_at_ms"].is_number()
+            && magic_id != 21
+        {
+            let fires: Vec<&(i32, Vec<u8>, i64)> = all_frames
+                .iter()
+                .filter(|(s, b, _)| {
+                    *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE
+                })
+                .collect();
+            assert_eq!(
+                fires.len(),
+                2,
+                "[{stem}/{label}] second_cast 支应有恰好两条 SM_MAGICFIRE（首施法 + 第二次）"
+            );
+            for (_, b, _) in fires.iter().skip(1) {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+                for id in rm_cast_targets {
+                    if let Some(who) = who_of(*id) {
+                        let v = rm_by_who.entry(who).or_default();
+                        v.push(fireball_rm(
+                            10008,
+                            1,
+                            i64::from(cm.param),
+                            i64::from(cm.tag),
+                            i64::from(magic_id),
+                            24,
+                            false,
+                        ));
+                        v.push(fireball_rm(
+                            10120,
+                            0,
+                            i64::from(cm.series),
+                            i64::from(game_svr::feature::make_long(cm.param, cm.tag)),
+                            i64::from(fireball_tail_i32(b)),
+                            136,
+                            false,
+                        ));
+                    }
+                }
+            }
+        }
+
         // **21 的换图簇 RM**（oracle `BaseObject.cs:1133/1134/1137`，落地后发）：
         // 8097/8098 是 `SendMsg`（只自己）；8099 是 `SendRefMsg(RM_SPACEMOVE_SHOW2, Dir, CurrX,
         // CurrY, 0, "")`——新图上没有其他玩家 ⇒ 收件人只有 caster。值取落地后的实体
@@ -89085,15 +89246,28 @@ SendRefMsgRange=15
         }
         // `RM_PUSH(8092)`：逐格、收件人 = 被推者**该格**的 `hear_targets`（含自）、prio=156、
         // late=false。来源是推挤决策（见上），不是 SM 帧。
-        for (actor, dir, x, y) in push_events {
-            let map_id = rig.world.entities.get(actor).map_or(0, |e| e.map_id);
-            for id in chat::hear_targets_at(&rig.world, actor, map_id, x, y, range) {
-                if let Some(who) = who_of(id) {
+        // **DEV-MG57-RM-PUSH-CACHE**（B30 撤销）：`8092` 的收件人改用**推挤帧发射口记录的同一份
+        // `ref_msg_cache` 列表**（与帧同源），不再用无缓存的 `hear_targets_at` 重建。
+        assert_eq!(
+            push_targets.len(),
+            push_events.len(),
+            "[{stem}/{label}] 推挤收件人记录条数 != 推挤格数（{} vs {}）⇒ 记录点混进了非推挤帧",
+            push_targets.len(),
+            push_events.len()
+        );
+        for ((actor, dir, x, y), rec) in push_events.iter().zip(&push_targets) {
+            assert_eq!(
+                (rec.actor_id, rec.x, rec.y),
+                (*actor, *x, *y),
+                "[{stem}/{label}] 推挤记录与推挤事件的（主体/格）不一致"
+            );
+            for id in &rec.targets {
+                if let Some(who) = who_of(*id) {
                     rm_by_who.entry(who).or_default().push(fireball_rm(
                         8092,
-                        i64::from(dir),
-                        i64::from(x),
-                        i64::from(y),
+                        i64::from(*dir),
+                        i64::from(*x),
+                        i64::from(*y),
                         0,
                         156,
                         false,
@@ -89371,7 +89545,20 @@ SendRefMsgRange=15
             "TargetHp": hp_after,
             "NotDue": [],
             "CasterMp": caster_mp,
+            // **MG-57 P2**：本 case 的世界 RNG 累计取数（默认门 strict-order 用例拿它与金标准
+            // `Fixture.rng_total_draws` 比；trace 关闭时这是唯一的抽数证据）。
+            "Draws": rig.world.rng.draws(),
         }]);
+        // **MG-57 P2**：受害者术后 `Dir`（只有金标准记了 `TargetDirAfter` 的支才落/比；
+        // 这是「`Dir` 用 `nDir` 而非 `nBackDir`」变异的唯一可见面）。
+        if let Some(want) = golden_case_for(stem, label)["TargetDirAfter"].as_i64() {
+            assert_eq!(
+                i64::from(target_dir_after),
+                want,
+                "[{stem}/{label}] 受害者术后 Dir 与金标准不符"
+            );
+            ledger[0]["TargetDirAfter"] = serde_json::json!(target_dir_after);
+        }
         // **MG-44**：怪物目标才落这两个键（玩家目标支零变化，与 golden 的 null-omit 同口径）。
         if let (Some(hb), Some(ha)) = (monster_hp_before, monster_hp_after) {
             ledger[0]["TargetMonsterHpBefore"] = serde_json::json!(hb);
@@ -89534,6 +89721,7 @@ SendRefMsgRange=15
                 ("TargetMonsterHpBefore", "TargetMonsterHpBefore"),
                 ("TargetMonsterHpAfter", "TargetMonsterHpAfter"),
                 ("Fixture.server_conf", "ServerConf"),
+                ("TargetDirAfter", "TargetDirAfter"),
             ],
         );
         if let Some(tm) = g["Fixture"]["target_monster"].as_i64() {
@@ -89690,17 +89878,23 @@ SendRefMsgRange=15
                 }
             }
         }
-        // 负向牙②：obs_out 全空。
+        // 负向牙②：obs_out 的帧数**以金标准为准**（缺省 golden 为 0 ⇒ 仍是"不得有帧"；
+        // MG-57 P2 的收件人边界臂按设计给 obs_out 若干帧）。
         let obs_out = case["Receivers"]
             .as_array()
             .unwrap()
             .iter()
             .find(|r| r["Who"] == "obs_out")
             .unwrap();
+        let want_obs_out = g["Receivers"]
+            .as_array()
+            .and_then(|rs| rs.iter().find(|r| r["Who"] == "obs_out"))
+            .and_then(|r| r["Sent"].as_array().map(Vec::len))
+            .unwrap_or(0);
         assert_eq!(
             obs_out["Sent"].as_array().unwrap().len(),
-            0,
-            "[{stem}/{label}] obs_out 不得有帧"
+            want_obs_out,
+            "[{stem}/{label}] obs_out 帧数与金标准不符"
         );
     }
 
@@ -93982,6 +94176,229 @@ SendRefMsgRange=15
         group_lightening_assert("s13", 13, 3000);
     }
 
+    /// **MG-57 P2（2026-11-26）**：推挤落点的**独立期望表**——由 oracle 方向公式（`GetNextDirection`
+    /// → `GetFrontPosition` 的单位向量、`GetBackDir`）与 `0.map` 的**冻结 cell 标志**推出，
+    /// **不读 golden 的落点**。值 = 每收件人期望的 `(x, y, nBackDir)` 多重集（空 = 无 `9` 帧）。
+    #[allow(clippy::type_complexity)]
+    fn push_expected(
+        stem: &str,
+        label: &str,
+    ) -> Option<[(&'static str, &'static [(i32, i32, u8)]); 4]> {
+        if stem != "firewind" {
+            return None;
+        }
+        // 方向单位向量（`GetFrontPosition`：Up=y-1 / Right=x+1 …）与回向（`GetBackDir`）：
+        // E→6、W→2、N→4、S→0、NE→5、NW→3、SE→7、SW→1。
+        const E1: &[(i32, i32, u8)] = &[(102, 100, 6)];
+        const W1: &[(i32, i32, u8)] = &[(98, 100, 2)];
+        const N1: &[(i32, i32, u8)] = &[(100, 98, 4)];
+        const S1: &[(i32, i32, u8)] = &[(100, 102, 0)];
+        const NE1: &[(i32, i32, u8)] = &[(102, 98, 5)];
+        const NW1: &[(i32, i32, u8)] = &[(98, 98, 3)];
+        const SE1: &[(i32, i32, u8)] = &[(102, 102, 7)];
+        const SW1: &[(i32, i32, u8)] = &[(98, 102, 1)];
+        const NE2: &[(i32, i32, u8)] = &[(102, 98, 5), (103, 97, 5)];
+        // 多目标：观测序 = 格扫描序（obs_in x=100 在前 ⇒ 抽到 R(2)=0 推 1 格；target x=101 在后
+        // ⇒ 抽到 R(2)=1 推 2 格）。期望由方向公式 + seed 抽值推出，不读 golden。
+        const MULTI_ALL: &[(i32, i32, u8)] = &[(100, 102, 0), (102, 100, 6), (103, 100, 6)];
+        // 边界：受害者东推两格 (102,100)→(103,100)；首扫 |Δ|≤12 含、复用 |Δ|<11 含。
+        const BOTH: &[(i32, i32, u8)] = &[(102, 100, 6), (103, 100, 6)];
+        const FRESH_ONLY: &[(i32, i32, u8)] = &[(102, 100, 6)];
+        const NONE: &[(i32, i32, u8)] = &[];
+        Some(match label {
+            "dir_e" => [
+                ("caster", E1),
+                ("target", E1),
+                ("obs_in", E1),
+                ("obs_out", NONE),
+            ],
+            "dir_w" => [
+                ("caster", W1),
+                ("target", W1),
+                ("obs_in", W1),
+                ("obs_out", NONE),
+            ],
+            "dir_n" => [
+                ("caster", N1),
+                ("target", N1),
+                ("obs_in", N1),
+                ("obs_out", NONE),
+            ],
+            "dir_s" => [
+                ("caster", S1),
+                ("target", S1),
+                ("obs_in", S1),
+                ("obs_out", NONE),
+            ],
+            "dir_ne" => [
+                ("caster", NE1),
+                ("target", NE1),
+                ("obs_in", NE1),
+                ("obs_out", NONE),
+            ],
+            "dir_nw" => [
+                ("caster", NW1),
+                ("target", NW1),
+                ("obs_in", NW1),
+                ("obs_out", NONE),
+            ],
+            "dir_se" => [
+                ("caster", SE1),
+                ("target", SE1),
+                ("obs_in", SE1),
+                ("obs_out", NONE),
+            ],
+            "dir_sw" => [
+                ("caster", SW1),
+                ("target", SW1),
+                ("obs_in", SW1),
+                ("obs_out", NONE),
+            ],
+            "diag_ne2" => [
+                ("caster", NE2),
+                ("target", NE2),
+                ("obs_in", NE2),
+                ("obs_out", NONE),
+            ],
+            "multi" => [
+                ("caster", MULTI_ALL),
+                ("target", MULTI_ALL),
+                ("obs_in", MULTI_ALL),
+                ("obs_out", NONE),
+            ],
+            "blocked2" => [
+                ("caster", NONE),
+                ("target", NONE),
+                ("obs_in", NONE),
+                ("obs_out", NONE),
+            ],
+            "bound_a" => [
+                ("caster", BOTH),
+                ("target", BOTH),
+                ("obs_in", BOTH),
+                ("obs_out", FRESH_ONLY),
+            ],
+            "bound_b" => [
+                ("caster", BOTH),
+                ("target", BOTH),
+                ("obs_in", FRESH_ONLY),
+                ("obs_out", NONE),
+            ],
+            "bound_c" => [
+                ("caster", BOTH),
+                ("target", BOTH),
+                ("obs_in", BOTH),
+                ("obs_out", BOTH),
+            ],
+            _ => return None,
+        })
+    }
+
+    /// **MG-57 P2**：台账 `Draws`（世界 RNG 累计取数）必须等于金标准 `Fixture.rng_total_draws`。
+    /// trace 关闭时这是唯一的抽数证据（默认门 strict-order 用例用）。
+    fn assert_ledger_draws_match_golden(stem: &str, label: &str) {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let got = v[0]["Draws"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[{stem}/{label}] 台账缺 Draws（驱动未写？）"));
+        let want = golden_case_for(stem, label)["Fixture"]["rng_total_draws"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[{stem}/{label}] golden 缺 Fixture.rng_total_draws"));
+        assert_eq!(
+            got, want,
+            "[{stem}/{label}] 抽数与金标准 rng_total_draws 不符"
+        );
+    }
+
+    /// **MG-57 P2**：被挡推挤臂（`CharPushed` 零推进）——`9` 必须**零条**（与金标准一致），
+    /// 但抽数必须与金标准相同（门与 `Random(2)` 照抽）⇒ 区分「没施法」与「推进被挡」。
+    fn push_blocked_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 1, label, seed, base);
+        assert_receiver_sets_match_golden(stem, label);
+        per_receiver_frame_seq_matches_golden(stem, label);
+        fireball_case_assert(stem, label);
+        b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
+        assert_push_path_matches_table(stem, label);
+        assert_ledger_draws_match_golden(stem, label);
+        let g = golden_case_for(stem, label);
+        let golden9: usize = g["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r["Sent"]
+                    .as_array()
+                    .map(|a| a.iter().filter(|f| f["ident"] == 9).count())
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert_eq!(
+            golden9, 0,
+            "[{stem}/{label}] 被挡臂的金标准自身必须零 `9`（夹具退化？）"
+        );
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json"))).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let ledger9: usize = v[0]["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r["Sent"]
+                    .as_array()
+                    .map(|a| a.iter().filter(|f| f["ident"] == 9).count())
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert_eq!(
+            ledger9, 0,
+            "[{stem}/{label}] 被挡臂必须零 `9` 帧（推进未被挡？）"
+        );
+    }
+
+    /// 按独立期望表核对台账里每个收件人的 `SM_BACKSTEP(9)` 落点多重集（`(param,tag,series)`）。
+    fn assert_push_path_matches_table(stem: &str, label: &str) {
+        let Some(expected) = push_expected(stem, label) else {
+            return;
+        };
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let case = &v[0];
+        for (who, cells) in expected {
+            let got: Vec<(i32, i32, u8)> = case["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap_or_else(|| panic!("[{stem}/{label}] 台账缺收件人 {who}"))["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| f["ident"] == mir2_protocol::messages::SM_BACKSTEP)
+                .map(|f| {
+                    (
+                        i32::try_from(f["param"].as_i64().unwrap()).unwrap(),
+                        i32::try_from(f["tag"].as_i64().unwrap()).unwrap(),
+                        u8::try_from(f["series"].as_i64().unwrap()).unwrap(),
+                    )
+                })
+                .collect();
+            let mut got_sorted = got.clone();
+            got_sorted.sort_unstable();
+            let mut want = cells.to_vec();
+            want.sort_unstable();
+            assert_eq!(
+                got_sorted, want,
+                "[{stem}/{label}] {who} 的推挤落点与**独立期望表**不一致（got={got:?}）"
+            );
+        }
+    }
+
     /// **`MG-16 / MG-57`（8 抗拒火环 / 37 气功波）**：两支 oracle 函数体逐字相同
     /// （`MagPushArround`，`src/M2Server/Magic/MagicManager.cs:24-52`；case 在 `:259-264` / `:601-607`）。
     ///
@@ -94000,6 +94417,8 @@ SendRefMsgRange=15
         assert_effect_frames_non_degenerate(stem, label, mir2_protocol::messages::SM_BACKSTEP);
         fireball_case_assert(stem, label);
         b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
+        // **MG-57 P2**：落点与**独立期望表**（方向公式 + `0.map` 冻结可走性）比对。
+        assert_push_path_matches_table(stem, label);
     }
 
     #[test]
@@ -94018,6 +94437,129 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn firewind_parity_s13() {
         push_assert("firewind", 8, "s13", 13, 3000);
+    }
+
+    // **MG-57 P2（2026-11-26）**：方向臂（8 向 ×1 格）/ 对角 2 格 / 多目标 / 被挡两施法 /
+    // 收件人边界 4 档——每支都跑独立落点表（`push_expected`）与严格序比较器。
+    /// **MG-57 P2 / ④②**：默认 `cargo test` 门内的 strict-order 用例——**不依赖** `rng_trace`
+    /// （进程级全局），判据四条齐全：①收件人集合逐名相等；②逐收件人 `(ident,param,tag,series)`
+    /// **严格序** == 金标准；③`9` 非退化（两侧各 ≥1）；④台账 `Draws` == 金标准 `rng_total_draws`。
+    /// RNG **逐值**仍由 `#[ignore]` 的 parity 驱动覆盖（trace 的进程级约束不变）。
+    fn push_default_gate(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        std::env::set_var("MIR2_LEDGER_RUN_ID", "default-gate");
+        fireball_parity_drive_with_trace(stem, magic_id, 1, label, seed, base, false, false);
+        assert_receiver_sets_match_golden(stem, label);
+        per_receiver_frame_seq_matches_golden(stem, label);
+        assert_effect_frames_non_degenerate(stem, label, mir2_protocol::messages::SM_BACKSTEP);
+        assert_ledger_draws_match_golden(stem, label);
+    }
+
+    #[test]
+    fn firewind_default_gate_s1() {
+        push_default_gate("firewind", 8, "s1", 1, 1000);
+    }
+
+    #[test]
+    fn firewind_default_gate_s5() {
+        push_default_gate("firewind", 8, "s5", 5, 2000);
+    }
+
+    #[test]
+    fn firewind_default_gate_s13() {
+        push_default_gate("firewind", 8, "s13", 13, 3000);
+    }
+
+    #[test]
+    fn energyrepulsor_default_gate_s1() {
+        push_default_gate("energyrepulsor", 37, "s1", 1, 1000);
+    }
+
+    #[test]
+    fn energyrepulsor_default_gate_s5() {
+        push_default_gate("energyrepulsor", 37, "s5", 5, 2000);
+    }
+
+    #[test]
+    fn energyrepulsor_default_gate_s13() {
+        push_default_gate("energyrepulsor", 37, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_e() {
+        push_assert("firewind", 8, "dir_e", 1, 4100);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_w() {
+        push_assert("firewind", 8, "dir_w", 1, 4200);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_n() {
+        push_assert("firewind", 8, "dir_n", 1, 4300);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_s() {
+        push_assert("firewind", 8, "dir_s", 1, 4400);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_ne() {
+        push_assert("firewind", 8, "dir_ne", 1, 4500);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_nw() {
+        push_assert("firewind", 8, "dir_nw", 1, 4600);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_se() {
+        push_assert("firewind", 8, "dir_se", 1, 4700);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_dir_sw() {
+        push_assert("firewind", 8, "dir_sw", 1, 4800);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_diag_ne2() {
+        push_assert("firewind", 8, "diag_ne2", 13, 4900);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_multi() {
+        push_assert("firewind", 8, "multi", 1, 5000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_blocked2() {
+        push_blocked_assert("firewind", 8, "blocked2", 1, 5100);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_bound_a() {
+        push_assert("firewind", 8, "bound_a", 13, 5200);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firewind_parity_bound_b() {
+        push_assert("firewind", 8, "bound_b", 13, 5300);
     }
 
     #[test]

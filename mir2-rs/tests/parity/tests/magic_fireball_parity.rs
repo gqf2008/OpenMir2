@@ -369,13 +369,15 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            // 2) 负向牙②：obs_out 的 RM 与 SM 均必须为空
+            // 2) 负向牙②：obs_out 的 RM/SM **条数必须与金标准一致**（缺省 golden 为 0 ⇒ 仍是
+            //    "不得有帧"；MG-57 P2 的收件人边界臂按设计给 obs_out 若干帧）。
             if who == "obs_out" {
                 for k in ["Rm", "Sent"] {
-                    let len = as_array(gr, k).map(|a| a.len()).unwrap_or(0);
-                    if len != 0 {
+                    let want = as_array(gr, k).map(|a| a.len()).unwrap_or(0);
+                    let got = as_array(rr, k).map(|a| a.len()).unwrap_or(0);
+                    if got != want {
                         errs.push(format!(
-                            "[{label}] 负向牙②：obs_out 的 {k} 有 {len} 条（应为 0）"
+                            "[{label}] 负向牙②：obs_out 的 {k} 有 {got} 条（金标准 {want} 条）"
                         ));
                     }
                 }
@@ -2709,11 +2711,10 @@ fn real_rust_ledger_groupamyounsul() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::firewind_parity_s*）生成真实台账"]
 fn real_rust_ledger_firewind() {
-    real_ledger_verify_labels(
-        "firewind",
-        &golden_file("firewind.json"),
-        &["s1", "s5", "s13"],
-    );
+    // **MG-57 P2**：标签从 golden 取（8 向 / 对角 2 格 / 多目标 / 被挡两施法 / 收件人边界 4 档）。
+    let golden = golden_file("firewind.json");
+    let labels = golden_labels(&golden, "firewind");
+    real_ledger_verify_labels("firewind", &golden, &labels);
 }
 
 /// **`MG-35` 瞬息移动(21)**：驱动侧 `spacemove_rig_inputs` 读真图（`MAGICGOLDEN_MAP_DIR`）并核
