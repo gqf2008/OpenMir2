@@ -87970,6 +87970,48 @@ SendRefMsgRange=15
                     "[{stem}/{label}] 护身符 Dura 设为 Fixture.amulet_dura 后读回不一致（施法前初始值语义）"
                 );
             }
+            // **MG-64/65（2026-11-26）**：预置 buff——`ActorBuffSystem.AddBuff` 只改状态、**不发帧/不入队**
+            // （`ActorBuffSystem.cs:100-159`）。两侧同判据：声明插入序 `i` ⇒ `get_buff_status` 的位
+            // == `0x80000000 >> i`（C# 装置侧在 golden 生成时已断过一次，这里断 Rust 侧）。
+            if let Some(list) = golden_case_for(stem, label)["Fixture"]["pre_buffs"].as_array() {
+                use mir2_world_bevy::buff::BuffType;
+                let mut expected: i32 = 0;
+                for (i, pb) in list.iter().enumerate() {
+                    assert_eq!(
+                        pb["who"].as_str(),
+                        Some("target"),
+                        "[{stem}/{label}] 驱动只支持 target 预置 buff"
+                    );
+                    let t = u8::try_from(pb["type"].as_u64().expect("pre_buffs.type")).unwrap();
+                    let bt = BuffType::from_index(t)
+                        .unwrap_or_else(|| panic!("[{stem}/{label}] 未知 BuffType={t}"));
+                    let dura = i32::try_from(pb["dura"].as_i64().expect("pre_buffs.dura")).unwrap();
+                    let sv = i32::try_from(pb["stateval"].as_i64().expect("pre_buffs.stateval"))
+                        .unwrap();
+                    assert_eq!(
+                        usize::try_from(pb["index"].as_u64().expect("pre_buffs.index")).unwrap(),
+                        i,
+                        "[{stem}/{label}] pre_buffs.index 必须等于声明序"
+                    );
+                    rig.world.buffs.add_buff(target, bt, dura, sv, 0);
+                    expected |= (0x8000_0000u32 >> i) as i32;
+                }
+                let want = i32::try_from(
+                    golden_case_for(stem, label)["Fixture"]["pre_buff_status"]
+                        .as_i64()
+                        .expect("pre_buff_status"),
+                )
+                .unwrap();
+                assert_eq!(
+                    expected, want,
+                    "[{stem}/{label}] 声明插入序推导的位与金标准记录不符"
+                );
+                let got = rig.world.buffs.get_buff_status(target);
+                assert_eq!(
+                    got, want,
+                    "[{stem}/{label}] Rust get_buff_status != 金标准（两侧同判据）"
+                );
+            }
             let aop = golden_fixture_required(stem, label, "amy_ounsul_point");
             let aop = i32::from(aop);
             assert!(
@@ -95475,6 +95517,31 @@ SendRefMsgRange=15
             .unwrap_or_else(|| panic!("[shape0/{label}] golden 缺 DrainPasses"))
             as i64;
         b1_golden_drain_assert("groupamyounsul-shape0.json", label, passes);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_prebuff_green() {
+        // **MG-64/65**：目标先挂 `Defense`(2) ⇒ 绿毒 buff 位号 1 ⇒ `CharStatus = 0xC0000000`
+        // （`0x80000000 | 0x40000000`）⇒ `10139.p1 = -1073741824`；657 帧 recog = target（6602）。
+        group_amyounsul_arm_assert("prebuff_green", 1, 6600, None, &|c, g| {
+            assert_eq!(
+                rm_params(g, "target", 10139),
+                vec![-1073741824],
+                "金标准：10139.p1 = 0xC0000000（预 buff 位 + 绿毒位 1）"
+            );
+            assert_eq!(
+                rm_params(c, "target", 10139),
+                vec![-1073741824],
+                "Rust：同一值（预 buff 经驱动施加，位号 1）"
+            );
+            assert_eq!(
+                sent_657_recogs(c, "caster"),
+                vec![6602],
+                "657 recog = 被毒目标（绿毒 StatusChanged）"
+            );
+            assert_eq!(sent_recogs(c, "caster", 642), vec![500], "护身符扣 100");
+        });
     }
 
     #[test]

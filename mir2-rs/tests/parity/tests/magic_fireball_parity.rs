@@ -1165,6 +1165,7 @@ fn apply_poison_arm_rm_policy(
             "multi_amulet_monster_first" => 6300,
             "multi_amulet_player_first" => 6400,
             "multi_amulet_three" => 6500,
+            "prebuff_green" => 6600,
             _ => 0,
         }
     };
