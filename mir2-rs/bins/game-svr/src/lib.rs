@@ -94284,12 +94284,6 @@ SendRefMsgRange=15
                 ("obs_in", FRESH_ONLY),
                 ("obs_out", NONE),
             ],
-            "bound_c" => [
-                ("caster", BOTH),
-                ("target", BOTH),
-                ("obs_in", BOTH),
-                ("obs_out", BOTH),
-            ],
             _ => return None,
         })
     }
