@@ -188,7 +188,10 @@ public static class Program
             // （`StepDrainMs=100`）。否则「Sleep(WaitMs) 后一次排空」按 per-actor pass 序把 640
             // 排在 600ms 的 31/53/656 之前（MG-17 同类把伪影固化的失效模式）。
             if (name == "healing") return HealingBatch();
-            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            // **MG-27（2026-11-26，批 B）**：`monster` 支——非不死动物目标。
+            // 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**（`HUtil32.LoByte(WAbil.SC)` 起）；
+            // `Race>=Animal ⇒ boTrain`（训练尾 640/10123）。无 LA_UNDEAD 分支 ⇒ 单额外 case。
+            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true, FaithfulPump = true } } });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
             // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
@@ -1575,6 +1578,17 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool TargetMonsterUndead = true;
         /// <summary>
+        /// **B17 的可控落点（2026-11-26）**：该 case **以生产泵语义（含 t=0 泵）对齐**——
+        /// 每 tick 只泵一次，`TryPeek` 队首；未到期 ⇒ `TryDequeue` + `Lowest` 重入队 +
+        /// **结束本 actor 本次泵**；施法当刻（t=0）也泵一次（投 due=0 的 cast 帧并旋转等键队列）。
+        /// 缺省 false ⇒ 既有 `DrainRaw`（先取全部、再逐条判到期）口径，**既有件零变化**。
+        /// 由 `ExtraCaseSpec.FaithfulPump` 逐 case 临时置位；推广到更多 stem 属 B17 全量处置（另一张卡）。
+        /// **根因口径（2026-11-26 实测更正）**：640 due 1000 vs 1100 不是"排水顺序"，而是**等键旋转次数**
+        /// （装置 t=0 泵一次、驱动从 t=100 开始 ⇒ 少转一次）；驱动读 `Fixture.faithful_pump` 补 t=0 泵后对齐。
+        /// 真实生产 tick ≈250–300ms 的 parity 属 B23。
+        /// </summary>
+        public bool FaithfulPump;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -2113,9 +2127,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedMonsters = spec.Monsters;
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
+            var savedFaithfulPump = spec.FaithfulPump;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
+            spec.FaithfulPump = extra.FaithfulPump;
             var extraSeed = extra.UseHitSeed ? seedHit : 1;
             var extraExpect = extra.UseHitSeed
                 ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
@@ -2124,6 +2140,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
+            spec.FaithfulPump = savedFaithfulPump;
         }
         return cases.ToArray();
     }
@@ -2604,7 +2621,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
-        bool? targetMonsterUndead = null,
+        bool? targetMonsterUndead = null, bool? faithfulPump = null,
         int? casterDir = null, int? casterGender = null, int? casterHair = null,
         bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
         bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null,
@@ -2613,7 +2630,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
-            && targetMonster == null && targetMonsterUndead == null && serverConf == null
+            && targetMonster == null && targetMonsterUndead == null && faithfulPump == null && serverConf == null
             && casterDir == null && casterGender == null && casterHair == null
             && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
             && fastTrain == null && fireCrossSafeZone == null && preEventCells == null
@@ -2646,6 +2663,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (targetMonster.HasValue) node["target_monster"] = targetMonster.Value;
         // **MG-38 后续批**：只在显式声明「非不死目标」时落盘（false）；缺键 = true ⇒ 旧 golden 零变化。
         if (targetMonsterUndead.HasValue) node["target_monster_undead"] = targetMonsterUndead.Value;
+        // **B17（2026-11-26）**：语义 = **该 case 以生产泵语义（含 t=0 泵）对齐**；
+        // 只在 opt-in 的 case 落盘（true）；缺键 = false ⇒ 旧 golden 零变化。
+        if (faithfulPump.HasValue) node["faithful_pump"] = faithfulPump.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3424,6 +3444,27 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 foreach (var (who, obj) in byWho)
                 {
+                    // **B17（2026-11-26）**：opt-in 的生产泵语义——`TryPeek` 队首，未到期
+                    // ⇒ `Lowest` 重入队 + 结束本 actor 本次泵（不越过未到期队首）。
+                    if (spec.FaithfulPump)
+                    {
+                        while (true)
+                        {
+                            var got = obj.FaithfulPumpOne(HUtil32.GetTickCount());
+                            if (got == null) break;
+                            var (m, prio) = got.Value;
+                            rmAcc[who].Add(new
+                            {
+                                ident = m.wIdent, wParam = m.wParam, p1 = m.nParam1, p2 = m.nParam2, p3 = m.nParam3,
+                                msg = m.Buff ?? "", late = m.LateDelivery, delivery = m.DeliveryTime, priority = prio,
+                            });
+                            RecordingNetChannel.CurrentDueMs = m.LateDelivery ? Math.Max(0, m.DeliveryTime - castTick) : stepMs;
+                            obj.OperatePublic(m);
+                            RecordingNetChannel.CurrentDueMs = 0;
+                            operatedAny[0] = true;
+                        }
+                        continue;
+                    }
                     var raw = obj.DrainRaw();
                     int now = HUtil32.GetTickCount();
                     int stopAt = raw.Count;
@@ -3473,6 +3514,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 var operatedAny = new[] { false };
                 DrainOnce(operatedAny, 0);
+                // **B17 FaithfulPump**：生产每 tick 只泵一次（泵内自己循环到「未到期队首」为止）；
+                // 再跑一轮只会**多旋转一次堆**、改变等键出队序（2026-11-26 实测：640 due 1000 vs 1100）。
+                if (spec.FaithfulPump) break;
                 if (!operatedAny[0]) break;
                 if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
             }
@@ -3488,6 +3532,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     var operatedAny = new[] { false };
                     DrainOnce(operatedAny, elapsed);
                     stepPasses = pass + 1;
+                    // **B17 FaithfulPump**：每 tick 只泵一次（理由同上，避免多余的堆旋转）。
+                    if (spec.FaithfulPump) break;
                     if (!operatedAny[0]) break;
                     if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
                 }
@@ -4136,6 +4182,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.TargetMonster > 0 ? (int?)spec.TargetMonster : null,
                 spec.ServerConf,
                 targetMonsterUndead: spec.TargetMonster > 0 && !spec.TargetMonsterUndead ? (bool?)false : null,
+                faithfulPump: spec.FaithfulPump ? (bool?)true : null,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
@@ -4296,6 +4343,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// false ⇒ 固定 1（`BehaviorBatch` 旧口径，`lightflower/undead` 即此）。
         /// </summary>
         public bool UseHitSeed;
+        /// <summary>
+        /// **B17**：本 case 是否**以生产泵语义（含 t=0 泵）对齐**（见 `MagicSpec.FaithfulPump`）——
+        /// 「遇未到期队首即停」+ 每 tick 只泵一次 + 施法当刻泵一次。典型场景：同一 caster 队列里
+        /// 同时有 640@1000 与 1200ms 的 `RM_DELAYMAGIC`（firecharm/monster）。
+        /// 落 `Fixture.faithful_pump=true`，驱动据此在 t=0 泵一次（否则等键旋转次数差 1、640 漂到 1100）。
+        /// </summary>
+        public bool FaithfulPump;
         /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
@@ -4466,6 +4520,33 @@ public sealed class RecordingPlayObject : M2Server.Player.PlayObject
         var list = new List<(SystemModule.Data.SendMessage, byte)>();
         while (MsgQueue.TryDequeue(out var m, out var prio)) list.Add((m, prio));
         return list;
+    }
+
+    /// <summary>
+    /// **B17（2026-11-26）**：生产 `BaseObject.GetMessage` 语义的单步泵——
+    /// `TryPeek` 队首；`DeliveryTime > 0 && now < DeliveryTime` ⇒ `TryDequeue` + 以
+    /// `MessagePriority.Lowest` 重入队并**结束本 actor 本次泵**（返回 null 表示"停"）；
+    /// 到期 ⇒ `TryDequeue` 返回该消息；队列空也返回 null。与 `DrainRaw`（一次取全部）不同。
+    /// </summary>
+    public (SystemModule.Data.SendMessage Msg, byte Prio)? FaithfulPumpOne(int now)
+    {
+        if (!MsgQueue.TryPeek(out var head, out _))
+        {
+            return null;
+        }
+        if (head.DeliveryTime > 0 && now < head.DeliveryTime)
+        {
+            if (MsgQueue.TryDequeue(out var notDue, out _))
+            {
+                MsgQueue.Enqueue(notDue, (byte)OpenMir2.Enums.MessagePriority.Lowest);
+            }
+            return null;
+        }
+        if (MsgQueue.TryDequeue(out var due, out var prio))
+        {
+            return (due, prio);
+        }
+        return null;
     }
 
     /// <summary>把**未到期**的消息按原优先级放回队列（步进排水用；`MsgQueue` 是 4 叉堆）。</summary>
