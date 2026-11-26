@@ -89669,6 +89669,36 @@ SendRefMsgRange=15
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
 
+    /// **MG-54（2026-11-26，批 B）**：`monster` 支——**非不死动物目标**（无 1.5x、boTrain）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning45_parity_monster() {
+        fireball_parity_drive(
+            "lightning45",
+            45,
+            1,
+            "monster",
+            golden_seed("lightning45", "monster"),
+            4100,
+        );
+        fireball_case_assert("lightning45", "monster");
+    }
+
+    /// **MG-54（2026-11-26，批 B）**：`monster_undead` 支——**不死动物目标**（1.5x 臂）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning45_parity_monster_undead() {
+        fireball_parity_drive(
+            "lightning45",
+            45,
+            1,
+            "monster_undead",
+            golden_seed("lightning45", "monster_undead"),
+            4200,
+        );
+        fireball_case_assert("lightning45", "monster_undead");
+    }
+
     /// `2 治愈` 的夹具（与火球同几何/ActorId 段；`MC/SC` 由 golden `Fixture` 传入、目标 HP 与施法者 HP 可配）。
     fn healing_rig(
         id_base: i32,

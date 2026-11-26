@@ -1634,18 +1634,22 @@
         "cases": [
           "miss(seed=14)",
           "edge(seed=18)",
-          "hit(seed=5)"
+          "hit(seed=5)",
+          "monster(seed=5)",
+          "monster_undead(seed=5)"
         ],
         "unit_tests": [
           "tests::lightning45_parity_miss",
           "tests::lightning45_parity_edge",
-          "tests::lightning45_parity_hit"
+          "tests::lightning45_parity_hit",
+          "tests::lightning45_parity_monster",
+          "tests::lightning45_parity_monster_undead"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；undead 与 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "notes": "旧清单 cost=小时级。【范围：verified 覆盖玩家 target 与两种怪目标（`monster` 非不死 / `monster_undead` 不死，2026-11-26 批 B）】",
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），**对象类型分支已覆盖（2026-11-26，批 B；§35 两臂；与 MG-19 同实现臂 `case 11|45`）**：`monster`（非不死 `race=50/life_attrib=0`）与 `monster_undead`（不死 `race=80/life_attrib=1`）两个额外 case，均 `TargetMonster=1`、`UseHitSeed`（seed=5；首抽 3 > 门槛 1）。实测 `8021.wParam` **15 vs 23**（`Round(15*1.5)`）、`8044.p1` **13 vs 19**；两臂都 `boTrain`（caster `10123 + SM 640`），玩家三支无 640。驱动 `tests::lightning45_parity_monster` / `_monster_undead`（IdBase 4100/4200）；比较器标签从 golden 取（5 支，缺台账即红）。属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-55",
