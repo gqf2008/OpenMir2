@@ -1777,6 +1777,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 缺键=0）；旧 stem 全 0 且 `NonzeroArm=false` ⇒ 生成器与 golden 逐字节不变。
         /// </summary>
         public bool NonzeroArm;
+        /// <summary>
+        /// **MG-50（2026-11-26）**：护身符 `Dura`（`null` = 既有 600）。`CheckAmulet` 消耗
+        /// `Round(Dura/100)` 次 ⇒ 该值决定"每目标独立扣一次"能持续到第几个目标（48 的多目标臂用）。
+        /// 落 `Fixture.amulet_dura`（实际值）并断言。
+        /// </summary>
+        public int? AmuletDura;
         public int MagicPower;
         public int MagicMaxPower;
         public int MagicDefPower;
@@ -2522,6 +2528,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedHealTicksMs = spec.HealTicksMs;
             var savedTargetLevel = spec.TargetLevel;
             var savedUserMagicLevel48 = spec.UserMagicLevel;
+            var savedAmuletDura = spec.AmuletDura;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2554,6 +2561,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
+            spec.AmuletDura = extra.AmuletDura;
             if (extra.StepDrainMsOverride.HasValue)
             {
                 spec.StepDrainMs = extra.StepDrainMsOverride.Value;
@@ -2584,6 +2592,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.HealTicksMs = savedHealTicksMs;
             spec.TargetLevel = savedTargetLevel;
             spec.UserMagicLevel = savedUserMagicLevel48;
+            spec.AmuletDura = savedAmuletDura;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2993,6 +3002,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
     /// 把扩展输入挂到 `Fixture`（`status_time_arr` / `monsters`）：只为显式给出这些输入的支出现，
     /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
     /// </summary>
+    /// <summary>**MG-50**：护身符 `Dura` 的实际值（只在声明 `AmuletDura` 时记录并断言）。</summary>
+    private static int? FixtureAmuletDura(MagicSpec spec, RecordingPlayObject caster)
+    {
+        if (!spec.AmuletDura.HasValue)
+        {
+            return null;
+        }
+        int dura = caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl].Dura;
+        if (dura != spec.AmuletDura.Value)
+        {
+            throw new FixtureContractViolation(
+                "[" + spec.Key + "] amulet_dura=" + dura + " != 声明的 " + spec.AmuletDura.Value);
+        }
+        return dura;
+    }
+
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
@@ -3004,7 +3029,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         int? magicDefMaxPower = null, int? secondCastAtMs = null, bool? realMap = null,
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
-        int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false)
+        int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
+        int? amuletDura = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3016,7 +3042,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && magicDefMaxPower == null && secondCastAtMs == null && realMap == null
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
-            && healLevelTarget == null && healLevelCaster == null && !specHealBoth)
+            && healLevelTarget == null && healLevelCaster == null && !specHealBoth
+            && amuletDura == null)
         {
             return fixture;
         }
@@ -3062,6 +3089,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (healLevelTarget.HasValue) node["heal_level_target"] = healLevelTarget.Value;
         if (healTicksMs != null && specHealBoth) node["heal_ticks_both"] = true;
         if (healLevelCaster.HasValue) node["heal_level_caster"] = healLevelCaster.Value;
+        if (amuletDura.HasValue) node["amulet_dura"] = amuletDura.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3604,7 +3632,7 @@ private static FireballResult RunMagicCase(
             {
                 MakeIndex = 1,
                 Index = 1,
-                Dura = 600,
+                Dura = (ushort)(spec.AmuletDura ?? 600),
                 DuraMax = 1000,
             };
         }
@@ -4820,6 +4848,7 @@ private static FireballResult RunMagicCase(
                 healTickBase: spec.HealTicksMs != null ? (int?)(healTickBase - (int)castTick) : null,
                 healLevelTarget: spec.HealTicksMs != null ? (int?)healLevelTarget : null,
                 healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
+                amuletDura: FixtureAmuletDura(spec, caster),
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
@@ -5025,6 +5054,8 @@ private static FireballResult RunMagicCase(
         public int? TargetLevelOverride;
         /// <summary>**MG-12/40**：本 case 的 target **初始 HP**（`null` = 用 stem 的 `TargetMaxHp`）。</summary>
         public int? TargetHp;
+        /// <summary>**MG-50**：本 case 的护身符 `Dura`（见 `MagicSpec.AmuletDura`）。</summary>
+        public int? AmuletDura;
         /// <summary>
         /// **MG-57 P2**：本 case 的 `StepDrainMs` 覆盖（`null` = 用 stem 值）。第二次施法需要
         /// "步"（非步进支没有 `elapsed` 推进）⇒ 只给该 case 打开步进，既有三支保持非步进。
