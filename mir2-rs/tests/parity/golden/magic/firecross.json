@@ -1042,7 +1042,7 @@
         "pre_event_cells": []
       },
       "Label": "tick_boundaries",
-      "DrainPasses": 1,
+      "DrainPasses": 2,
       "DrainPassesHitCap": false,
       "Seed": 25,
       "SpellReturn": true,
@@ -1107,8 +1107,50 @@
         },
         {
           "Who": "target",
-          "Rm": [],
-          "Sent": []
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 101,
+              "p2": 100,
+              "p3": 22,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553701,
+              "p3": 4102,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "22"
+            },
+            {
+              "ident": 638,
+              "recog": 4101,
+              "param": 101,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "fhhgd?"
+            }
+          ]
         },
         {
           "Who": "obs_in",

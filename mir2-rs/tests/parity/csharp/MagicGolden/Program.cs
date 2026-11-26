@@ -4022,29 +4022,6 @@ private static FireballResult RunMagicCase(
             int fireCastMs = HUtil32.GetTickCount();
             fireCastMsForFixture = fireCastMs;
             fireTrace = new List<object>();
-            foreach (var delta in spec.FireTickMs)
-            {
-                int ms = fireCastMs + delta;
-                ClockSeam.Set(ms);
-                evProc.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
-                int struck = 0;
-                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
-                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
-                foreach (var m in target.DrainRaw())
-                {
-                    if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
-                    {
-                        struck++;
-                    }
-                }
-                fireTrace.Add(new Dictionary<string, object>
-                {
-                    ["delta"] = delta,
-                    ["ms"] = ms,
-                    ["target_hp"] = target.WAbil.HP,
-                    ["struck"] = struck
-                });
-            }
         }
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
@@ -4456,6 +4433,41 @@ private static FireballResult RunMagicCase(
                     };
                 }
                 healTicks.Add(row);
+            }
+        }
+        var evProcLate = new RecordingEventProcessor();
+        if (evProcLate.ExecuteTask != null)
+        {
+            throw new FixtureContractViolation(
+                "[" + spec.Key + "/" + label + "] EventProcessor 子类已被启动（ExecuteTask 非 null）⇒ (c) 方案不干净");
+        }
+        // **MG-36 ①（2026-11-26）**：tick 循环放在**排水之后**——放在 DoSpell 紧后会先把目标队列里的
+        // 17/638 等正常 RM 一起取走（帧面少两帧、`target sm0/rm0`，实测 artifact）；排水后队列里
+        // 只剩 tick 期间入队的 `RM_MAGSTRUCK_MINE`。
+        if (spec.FireTickMs is { Length: > 0 })
+        {
+            foreach (var delta in spec.FireTickMs)
+            {
+                int ms = fireCastMsForFixture!.Value + delta;
+                ClockSeam.Set(ms);
+                evProcLate.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
+                int struck = 0;
+                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
+                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
+                foreach (var m in target.DrainRaw())
+                {
+                    if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
+                    {
+                        struck++;
+                    }
+                }
+                fireTrace.Add(new Dictionary<string, object>
+                {
+                    ["delta"] = delta,
+                    ["ms"] = ms,
+                    ["target_hp"] = target.WAbil.HP,
+                    ["struck"] = struck
+                });
             }
         }
         int hpAfter = target.WAbil.HP;
