@@ -1543,11 +1543,17 @@
       "evidence": {
         "test": "real_rust_ledger_groupamyounsul + real_rust_ledger_groupamyounsul2",
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs（比较器）；mir2-rs/bins/game-svr/src/lib.rs（驱动）",
-        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json + groupamyounsul2.json（Shape=1/2 两 stem；`rng_total_draws` 3/3/3；目标 `Rm` 含 `RM_POISON(8037)`；`DrainPasses=3`）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/groupamyounsul.json（本批**只追加** 5 段）+ groupamyounsul2.json + groupamyounsul-shape0.json（新件，生成器原样 CRLF）（Shape=1/2 两 stem；`rng_total_draws` 3/3/3；目标 `Rm` 含 `RM_POISON(8037)`；`DrainPasses=3`）",
         "cases": [
           "s1(seed 1)",
           "s5(seed 5)",
-          "s13(seed 13)"
+          "s13(seed 13)",
+          "lvl1(seed 1)",
+          "lvl4(seed 1)",
+          "multi_amulet_monster_first(seed 1)",
+          "multi_amulet_player_first(seed 1)",
+          "multi_amulet_three(seed 1)",
+          "groupamyounsul-shape0: s1/s5/s13（AmuletShape=0）"
         ],
         "unit_tests": [
           "tests::groupamyounsul_parity_s1",
@@ -1557,11 +1563,21 @@
           "tests::groupamyounsul2_parity_s5",
           "tests::groupamyounsul2_parity_s13",
           "real_rust_ledger_groupamyounsul",
-          "real_rust_ledger_groupamyounsul2"
+          "real_rust_ledger_groupamyounsul2",
+          "tests::group_amyounsul_parity_lvl1",
+          "tests::group_amyounsul_parity_lvl4",
+          "tests::group_amyounsul_parity_multi_amulet_monster_first",
+          "tests::group_amyounsul_parity_multi_amulet_player_first",
+          "tests::group_amyounsul_parity_multi_amulet_three",
+          "tests::group_amyounsul_shape0_parity_s1",
+          "tests::group_amyounsul_shape0_parity_s5",
+          "tests::group_amyounsul_shape0_parity_s13",
+          "real_rust_ledger_groupamyounsul_shape0"
         ]
       },
       "cost": "M",
       "deviation": null,
+      "batch_20261126": "**MG-50 批次（2026-11-26）**：①`groupamyounsul.json` 只追加，`git diff --numstat` = `1803 0` 后 `437 0`（删除列恒 0）；②装置重出与 committed **JSON 等值**，字节差只是 LF↔CRLF（1301 行 = 1301 字节，B31）；③`groupamyounsul2` 本批**不动**（无 dispatch 名、历史产物），其 scope 仍是旧文；④**怪物旁观帧面不在本叶**（B32）：`mon*` 收件人的 `Rm`（`8037`/`10125`）宿主不建 ⇒ 期望面只断言在 golden 侧；Rust 可观测面改用线面（`642.recog` 的 500/400/300 逐目标扣减、`TargetCret` 落点、`657.recog` 集合）。`657` 多出方向按 opc-27 裁决走**计数白名单**（每玩家收件人恰好多 `poisoned_monster_count` 条，`monster_first` 1、`three` 3；头字段 `param=0`/`tag=32768`/`series=7` 逐条核；其它 ident/字段/条数差异全红）；**shape0 臂当前红（缺口 G-1，已报 opc-27）**：oracle 在 `AmuletShape=0` 下仍扣护身符并发 `642.recog=500`、`640`（`UseAmulet`/`result` 在 `switch` 之外），Rust 早退 ⇒ 该臂按 oracle 契约保留为红证，不计入已验。",
       "notes": "旧清单 cost=天级；2026-11-21 升格（scope=partial）：**旧「golden 退化」（`rng_total_draws=0`/无 `RM_POISON`/四刀全不咬）已解除**——现由非退化 case `groupamyounsul`/`groupamyounsul2`（s1/s5/s13）覆盖（`rng_total_draws=3`、目标 `Rm` 含 `RM_POISON(8037)`、§2 毒伤表达式 `*2→*3` 一刀真红）；装置三旋钮 + `AmyOunsulPoint=15` 显式装载见 scope；批 `card/poison-batch`，合并提交 1d7868313。绿/红毒 shape 臂见 MG-64/MG-65。",
       "basis": "semantic",
       "scope": "partial：`SKILL_GROUPAMYOUNSUL(48)` 逐目标循环主链（`MagGroupAmyounsul`）由 `groupamyounsul`/`groupamyounsul2` × s1/s5/s13 覆盖：每目标 `RM_POISON` 四字段、`Rng` 逐值、`rng_total_draws` 3/3/3、`DrainPasses=3`；装置三旋钮 fail-closed 与顺序放宽（`multi_victim_same_tick`，只放宽次序、due 仍判）同 MG-13。**旧 golden 退化问题已解除**（原 `rng_total_draws=0`/无 `RM_POISON` 的退化件已被非退化件替换）。**未验**：`mag_level` 范围边界（目标全在范围内）、`GetMapBaseObjects` 的多目标上限、顺序放宽的撤销。"

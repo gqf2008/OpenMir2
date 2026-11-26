@@ -94269,8 +94269,94 @@ SendRefMsgRange=15
     /// 为什么放宽顺序：毒在**目标**的 `Run()` 才派生 656/657/100，oracle 逐 actor 处理、
     /// Rust 同 tick 批量 flush（登记见 `openmir2-b4-multivictim-strike-order.md`「同根第二实例」）。
     fn poison_per_receiver_frame_matches_golden(stem: &str, label: &str) {
-        let c = defence_case(stem, label);
+        poison_per_receiver_frame_matches_golden_impl(stem, label, None);
+    }
+
+    /// **计数白名单**（opc-27 裁决 2026-11-26）：允许 Rust 侧**多出** `ident==657`
+    /// （`SM_CHARSTATUSCHANGED`）且 `recog` 属本 case 怪物 id 的帧，**每个收件人恰好
+    /// `per_receiver` 条**（= 本 case 里拿到 `8037` 的怪物数：怪物先手 1、三目标 3）。
+    /// 超过即红、少于即红；`param/tag/series` 必须与 `SendUpdateMsg` 组包形状一致；
+    /// 金标准侧出现同类帧（= "缺少"方向）同样红。
+    fn poison_per_receiver_frame_matches_golden_allow_extra_657(
+        stem: &str,
+        label: &str,
+        base: i64,
+        per_receiver: usize,
+    ) {
+        poison_per_receiver_frame_matches_golden_impl(stem, label, Some((base, per_receiver)));
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn poison_per_receiver_frame_matches_golden_impl(
+        stem: &str,
+        label: &str,
+        extra_657: Option<(i64, usize)>,
+    ) {
+        let mut c = defence_case(stem, label);
         let g = golden_case_for(stem, label);
+        if let Some((base, expected)) = extra_657 {
+            // 盲区（`docs/issues/golden-harness-blind-spots.md` B32）：被毒的怪 HP 变化走
+            // `SendUpdateMsg` ⇒ 向 ±12 玩家广播 `SM_CHARSTATUSCHANGED(657)`；oracle 侧怪物发送队列
+            // 是**头-only 去重**（`oracle-charstatus-dedup-queue-state`），首条被队头同 id 帧吃掉 ⇒
+            // golden 零条；Rust 宿主未建模该队列态 ⇒ 每条多 1。白名单**只**接受这个已知语义差：
+            // `param=0`、`tag=32768`（0x8000）、`series=7`（C# 20 字节帧头偏移 10 的 `Series` 字段，
+            // `SendUpdateMsg` 组包时填充；此处只核与 golden 同形的前三个头字段，不解释语义）。
+            let lo = base + 10;
+            let hi = base + 30;
+            let is_mon657 = |m: &serde_json::Value| {
+                m["ident"].as_i64() == Some(657)
+                    && m["recog"].as_i64().is_some_and(|v| v >= lo && v < hi)
+            };
+            let mut with_extra = 0usize;
+            if let Some(rs) = c["Receivers"].as_array_mut() {
+                for r in rs.iter_mut() {
+                    let who = r["Who"].as_str().unwrap_or("?").to_string();
+                    let Some(sent) = r["Sent"].as_array_mut() else {
+                        continue;
+                    };
+                    for m in sent.iter() {
+                        if is_mon657(m) {
+                            assert_eq!(m["param"].as_i64(), Some(0), "657 头字段 param 形状不符");
+                            assert_eq!(m["tag"].as_i64(), Some(32768), "657 头字段 tag 形状不符");
+                            assert_eq!(m["series"].as_i64(), Some(7), "657 头字段 series 形状不符");
+                        }
+                    }
+                    let n = sent.iter().filter(|m| is_mon657(m)).count();
+                    assert!(
+                        n == 0 || n == expected,
+                        "[{stem}/{label}/{who}] 多出的怪物 657 条数必须恰为 {expected}（本 case 被投毒怪物数），实测 {n}"
+                    );
+                    if n > 0 {
+                        with_extra += 1;
+                        assert!(
+                            !who.starts_with("mon"),
+                            "多出的 657 只允许出现在玩家收件人（怪物收件人帧面照旧严格）"
+                        );
+                    }
+                    sent.retain(|m| !is_mon657(m));
+                }
+            }
+            assert!(
+                with_extra >= 1,
+                "[{stem}/{label}] 白名单未命中任何收件人（预期表与实际不符）"
+            );
+            if let Some(rs) = g["Receivers"].as_array() {
+                for r in rs {
+                    let n = r["Sent"]
+                        .as_array()
+                        .map_or(0, |a| a.iter().filter(|m| is_mon657(m)).count());
+                    assert_eq!(
+                        n,
+                        0,
+                        "[{stem}/{label}/{}] 金标准有怪物 657 而 Rust 无（缺少方向）⇒ 不接受",
+                        r["Who"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+            eprintln!(
+                "[{stem}/{label}] 657 计数白名单：{with_extra} 个玩家收件人各多 {expected} 条（已核头字段）"
+            );
+        }
         let due_class = |m: &serde_json::Value| -> i64 {
             if m["ident"].as_i64() == Some(640) {
                 0
@@ -95087,6 +95173,143 @@ SendRefMsgRange=15
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
+    /// **MG-50（2026-11-26）**：48 的新臂断言——逐臂 `DrainPasses` 取金标准自身值；
+    /// 另加**独立结构断言**（`8037` 条数按目标、`TargetCret` 落点、护身符 `10125` 扣减序列）。
+    fn group_amyounsul_arm_assert(
+        label: &str,
+        seed: i32,
+        base: i32,
+        extra_657: Option<usize>,
+        checks: &dyn Fn(&serde_json::Value, &serde_json::Value),
+    ) {
+        fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
+        // **结构断言先跑**（`8037` 条数 / `TargetCret` / `10125` 扣减序列 = 本卡交付判据），
+        // 再比帧面；这样致盲变异（去 `use_amulet`）在结构断言处就红，不会被白名单吞掉。
+        {
+            let v = read_ledger_case("groupamyounsul", label);
+            checks(&v[0], &golden_case_for("groupamyounsul", label));
+        }
+        let passes = golden_case_for("groupamyounsul", label)["DrainPasses"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[{label}] golden 缺 DrainPasses"))
+            as i64;
+        b1_golden_drain_assert("groupamyounsul.json", label, passes);
+        match extra_657 {
+            Some(expected) => poison_per_receiver_frame_matches_golden_allow_extra_657(
+                "groupamyounsul",
+                label,
+                i64::from(base),
+                expected,
+            ),
+            None => poison_per_receiver_frame_matches_golden("groupamyounsul", label),
+        }
+        fireball_case_assert("groupamyounsul", label);
+    }
+
+    fn read_ledger_case(stem: &str, label: &str) -> serde_json::Value {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .unwrap_or_else(|e| panic!("[{stem}/{label}] 台账必须已落盘：{e}"));
+        serde_json::from_str(&raw).expect("台账 JSON 解析失败")
+    }
+
+    /// 某收件人的 `8037` 条数。
+    fn rm_count(case: &serde_json::Value, who: &str, ident: i64) -> usize {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Rm"].as_array())
+            .map(|a| a.iter().filter(|m| m["ident"] == ident).count())
+            .unwrap_or(0)
+    }
+
+    fn caster_target_cret(case: &serde_json::Value) -> i64 {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .and_then(|r| r["TargetCret"].as_i64())
+            .unwrap_or_else(|| panic!("caster 缺 TargetCret 列（ObserveState）"))
+    }
+
+    /// 某收件人 `Sent` 里某 ident 的 `recog` 序列（部分帧把值放在 `recog`，如 `642` 的 DuraChange 后值）。
+    fn sent_recogs(case: &serde_json::Value, who: &str, ident: i64) -> Vec<i64> {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Sent"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| m["ident"] == ident)
+                    .map(|m| m["recog"].as_i64().unwrap_or(-1))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 某收件人 `Sent` 里某 ident 的条数。
+    fn sent_count(case: &serde_json::Value, who: &str, ident: i64) -> usize {
+        sent_params(case, who, ident).len()
+    }
+
+    /// 某收件人 `Sent` 里某 ident 的 `param` 序列（**线面**，Rust 台账与 golden 同口径）。
+    fn sent_params(case: &serde_json::Value, who: &str, ident: i64) -> Vec<i64> {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Sent"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| m["ident"] == ident)
+                    .map(|m| m["param"].as_i64().unwrap_or(-1))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 某收件人 `Rm` 里某 ident 的 `p1` 序列（oracle 侧的 RefMsg 观测面）。
+    fn rm_params(case: &serde_json::Value, who: &str, ident: i64) -> Vec<i64> {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Rm"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| m["ident"] == ident)
+                    .map(|m| m["p1"].as_i64().unwrap_or(-1))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 某收件人 `Sent` 里的 `657` 的 `recog` 集合（= 被 `SendUpdateMsg` 播报状态变化的 actor）。
+    fn sent_657_recogs(case: &serde_json::Value, who: &str) -> Vec<i64> {
+        let mut v: Vec<i64> = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .and_then(|r| r["Sent"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| m["ident"].as_i64() == Some(657))
+                    .filter_map(|m| m["recog"].as_i64())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort_unstable();
+        v
+    }
+
     fn group_amyounsul_assert(label: &str, seed: i32, base: i32) {
         fireball_parity_drive("groupamyounsul", 48, 1, label, seed, base);
         // **毒口径**（与比较器 `multi_victim_same_tick` 分支的施毒件同口径）：逐收件人**多重集**
@@ -95098,6 +95321,174 @@ SendRefMsgRange=15
         // 2026-11-21 非退化重出：护身符 `Shape=1`（`CheckAmulet(1,2)`）+ `AmyOunsulPoint` 显式装载
         // ⇒ 逐目标循环真的执行（`Rng` 3–4 抽、目标 `RM_POISON(8037)`），`DrainPasses` 2→3。
         b1_golden_drain_assert("groupamyounsul.json", label, 3);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_lvl1() {
+        group_amyounsul_arm_assert("lvl1", 1, 6100, None, &|_c, g| {
+            assert_eq!(
+                rm_count(g, "obs_in", 8037),
+                0,
+                "金标准：Lv1 方框不含 obs_in"
+            );
+            assert!(
+                rm_count(g, "target", 8037) >= 1,
+                "金标准：Lv1 方框含 target"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_lvl4() {
+        group_amyounsul_arm_assert("lvl4", 1, 6200, None, &|_c, g| {
+            assert!(
+                rm_count(g, "obs_in", 8037) >= 1,
+                "金标准：Lv4 方框含 obs_in"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_multi_amulet_monster_first() {
+        group_amyounsul_arm_assert("multi_amulet_monster_first", 1, 6300, Some(1), &|c, g| {
+            // 期望面（oracle RefMsg 观测）：只有 mon0 拿到 `8037`（护身符只够一次）。
+            assert_eq!(
+                rm_count(g, "mon0", 8037),
+                1,
+                "金标准：mon0 拿到唯一一次 8037"
+            );
+            assert_eq!(rm_count(g, "mon1", 8037), 0, "金标准：耗尽后 mon1 无 8037");
+            assert_eq!(rm_count(g, "mon2", 8037), 0, "金标准：耗尽后 mon2 无 8037");
+            // Rust 侧可观测面（宿主台账**不建怪物收件人**，B32 同族）：被投毒的怪由
+            // `SM_CHARSTATUSCHANGED(657)` 的 `recog` 暴露 ⇒ 恰为 {mon0}；多播一只即红。
+            assert_eq!(
+                sent_657_recogs(c, "caster"),
+                vec![6310],
+                "Rust：只有 mon0 被投毒（657 recog 集合）"
+            );
+            assert_eq!(
+                caster_target_cret(c),
+                6310,
+                "TargetCret 落 mon0，且未被后两只怪改写"
+            );
+            assert_eq!(
+                sent_count(c, "caster", 642),
+                0,
+                "Dura=100 ⇒ 护身符销毁，无 DuraChange(642) 帧"
+            );
+            assert!(
+                rm_params(g, "caster", 10125).is_empty(),
+                "金标准 likewise 无 10125"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_multi_amulet_player_first() {
+        group_amyounsul_arm_assert("multi_amulet_player_first", 1, 6400, None, &|c, g| {
+            assert!(rm_count(g, "target", 8037) >= 1, "金标准：玩家夺走 8037");
+            assert_eq!(rm_count(g, "mon0", 8037), 0);
+            assert_eq!(rm_count(g, "mon1", 8037), 0);
+            assert_eq!(rm_count(g, "mon2", 8037), 0);
+            assert_eq!(
+                sent_657_recogs(c, "caster"),
+                vec![6402],
+                "Rust：唯一状态变化的是玩家 target（657 recog=6402），无怪物 657"
+            );
+            assert_eq!(sent_count(c, "target", 657), 1, "被毒玩家收到自己的 657");
+            assert_eq!(caster_target_cret(c), 6402, "TargetCret 落玩家");
+        });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_multi_amulet_three() {
+        group_amyounsul_arm_assert("multi_amulet_three", 1, 6500, Some(3), &|c, g| {
+            // 每目标各扣 100：线面 `642` 的 `param` 序列 = {500,400,300}（最后一个目标看到的是
+            // 扣过两次的值），并与金标准 `Rm(10125)` 的 `p1` 逐值对账。
+            let mut wire = sent_recogs(c, "caster", 642);
+            wire.sort_unstable();
+            assert_eq!(
+                wire,
+                vec![300, 400, 500],
+                "Rust 线面 642.recog：每目标各扣 100"
+            );
+            let mut oracle = rm_params(g, "caster", 10125);
+            oracle.sort_unstable();
+            assert_eq!(oracle, wire, "金标准 Rm(10125) 的 p1 与 Rust 线面逐值相等");
+            assert_eq!(
+                sent_657_recogs(c, "caster"),
+                vec![6510, 6511, 6512],
+                "三只怪各被投毒一次"
+            );
+            assert_eq!(
+                caster_target_cret(c),
+                6512,
+                "TargetCret = 最后一个过 CheckAmulet 的怪（mon2）"
+            );
+        });
+    }
+
+    /// **`MG-50` shape0 臂**（`AmuletShape=0`）：`switch` 无 default ⇒ 不投毒（零 `8037`），
+    /// 但 `result` 在 `switch` **之外**赋值（`MagicManager.cs:929-932`）⇒ 骰过 + race 合格时
+    /// 施法者仍收 `640`（训练帧）。两个方向都断：有 `640`/`642`（防真空）且全收件人零 `8037`。
+    fn group_amyounsul_shape0_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("groupamyounsul-shape0", 48, 1, label, seed, base);
+        let case = read_ledger_case("groupamyounsul-shape0", label)[0].clone();
+        let total_8037: usize = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| rm_count(&case, r["Who"].as_str().unwrap(), 8037))
+            .sum();
+        assert_eq!(
+            total_8037, 0,
+            "Shape=0 ⇒ switch 无匹配分支，不投毒（零 8037）"
+        );
+        // **oracle 事实（golden s1/s5/s13 一致）**：`Shape=0` 只是让 `switch` 不投毒；
+        // `CheckAmulet`/`UseAmulet` 在 switch **之前** ⇒ 护身符照扣（`642.recog=500` 的 DuraChange）
+        // 且 `result` 在 switch 之外赋值 ⇒ 训练尾 `640` 仍发。
+        // **当前 Rust 红（已报 opc-27，缺口 G-1）**：Rust 侧 shape0 只发 `638`，无 `642`/`640`/`100`，
+        // 台账 `Rm` 亦无 `10125`/`10123` ⇒ 两条断言按 oracle 契约保留，作为该缺口的红证。
+        assert_eq!(
+            sent_recogs(&case, "caster", 642),
+            vec![500],
+            "Shape=0 仍扣护身符（642.recog = 扣后 Dura 500）"
+        );
+        assert_eq!(
+            sent_params(&case, "caster", 640),
+            vec![1],
+            "result 在 switch 之外赋值 ⇒ 训练尾 640 仍在"
+        );
+        poison_per_receiver_frame_matches_golden("groupamyounsul-shape0", label);
+        fireball_case_assert("groupamyounsul-shape0", label);
+        let passes = golden_case_for("groupamyounsul-shape0", label)["DrainPasses"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[shape0/{label}] golden 缺 DrainPasses"))
+            as i64;
+        b1_golden_drain_assert("groupamyounsul-shape0.json", label, passes);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape0_parity_s1() {
+        group_amyounsul_shape0_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape0_parity_s5() {
+        group_amyounsul_shape0_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape0_parity_s13() {
+        group_amyounsul_shape0_assert("s13", 13, 3000);
     }
 
     /// **施毒系（6/48）共用判定**：golden 一律从文件读（`amyounsul`/`amyounsul2` 为 6 的
