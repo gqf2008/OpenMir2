@@ -3066,7 +3066,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3079,7 +3079,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
-            && amuletDura == null && preBuffs == null && preBuffStatus == null)
+            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null)
         {
             return fixture;
         }
@@ -3129,6 +3129,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
         if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
         if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
+        // **MG-36 ①（2026-11-26）**：条件键——tick 臂的**输入**（相对事件登记时刻的 delta 列表）。
+        if (fireTicksMs != null) node["fire_ticks_ms"] = JsonSerializer.SerializeToNode(fireTicksMs);
+        // **MG-36 ①**：事件登记时刻的**绝对**虚拟钟（C# `GetTickCount` 口径）——驱动的 `clock_ms` 必须对齐
+        // 这个基数才能复现 `fire_run_tick_ms=0` 的「首跑即结算」语义（Rust rig 的钟底不是 1000000）。
+        if (fireCastMs.HasValue) node["fire_cast_ms"] = fireCastMs.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -4002,6 +4007,7 @@ private static FireballResult RunMagicCase(
         // `StartAsync`→`ExecuteAsync` 里跑 ⇒ 子类**必须** `ExecuteTask == null`（下面断言：谁把它 Start 起来，
         // 本装置立即 rc=2，而不是"悄悄多一个线程"）。
         List<object> fireTrace = null;
+        int? fireCastMsForFixture = null;
         if (spec.FireTickMs is { Length: > 0 })
         {
             SystemModule.SystemShare.EventMgr ??= new M2Server.Event.EventManager();
@@ -4014,6 +4020,7 @@ private static FireballResult RunMagicCase(
             // **delta 语义**：列表项是「相对事件登记时刻（= `DoSpell` 返回时）」的毫秒偏移——
             // 事件 ctor 用当刻 `GetTickCount()` 置 `RunStart`，绝对时刻会随排水步进漂移。
             int fireCastMs = HUtil32.GetTickCount();
+            fireCastMsForFixture = fireCastMs;
             fireTrace = new List<object>();
             foreach (var delta in spec.FireTickMs)
             {
@@ -4984,6 +4991,8 @@ private static FireballResult RunMagicCase(
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
                 preBuffs: preBuffsNode,
                 preBuffStatus: preBuffStatus,
+                fireTicksMs: spec.FireTickMs,
+                fireCastMs: fireCastMsForFixture,
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,

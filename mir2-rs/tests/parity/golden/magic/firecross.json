@@ -1028,6 +1028,14 @@
           913,
           914
         ],
+        "fire_ticks_ms": [
+          500,
+          501,
+          2900,
+          3501,
+          4002
+        ],
+        "fire_cast_ms": 1000000,
         "magic_train_lv": 3,
         "magic_max_train0": 1000,
         "firecross_safe_zone": false,
