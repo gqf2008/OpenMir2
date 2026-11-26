@@ -175,7 +175,11 @@ public static class Program
             if (name == "fireball-selftest") return FireballSelfTest();
             if (name == "warrskill") return ClientSpellXYEntry.Run();
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
-            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            // **MG-19（2026-11-26，批 B）**：`Race>=Animal` 与 `LifeAttrib==LA_UNDEAD` 两臂的
+            // 示范——`monster`（非不死动物目标：无 1.5x、boTrain=true）与 `monster_undead`
+            // （不死动物目标：`nPower=Round(nPower*1.5)`、boTrain=true）。怪物 `AntiMagic=1`
+            // 与门槛同值，hit 种子在怪身上仍是「命中」段。
+            if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true }, new ExtraCaseSpec { Label = "monster_undead", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1, AntiMagic = 1 } }, TargetMonster = 1, UseHitSeed = true, IdBase = 4200 } } });
             if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // 卡 openmir2-spell-tail-delay-audit：以下 10 支的 640 在 oracle 走共享尾
             // `MagicManager.cs:666 SendSelfDelayMsg(RM_MAGIC_LVEXP,…,1000)` ⇒ 必须**时间忠实排水**

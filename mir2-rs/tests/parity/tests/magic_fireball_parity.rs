@@ -3966,7 +3966,19 @@ fn real_rust_ledger_parity() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::lightning11_parity_*）生成真实台账"]
 fn real_rust_ledger_lightning11() {
-    real_ledger_verify("lightning11", &golden_file("lightning-11.json"));
+    // **标签从 golden 取**（MG-19 起含 `monster` / `monster_undead`；缺台账即防空转红）。
+    let golden = golden_file("lightning-11.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[lightning11] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("lightning11", &golden, &refs);
 }
 
 #[test]
