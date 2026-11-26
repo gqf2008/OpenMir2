@@ -79,3 +79,13 @@
 ⇒ 修复方向（按序，**先记账后比对**）：① 让 `skeleton`/`angel` 的驱动启用 RNG 记账（与 `sinsu`/
 `d8` 在 46 上的同款）；② 三支与 golden 的 5+1 抽逐值对表；③ 对齐后才把 `Rng` 纳入比较面。
 前置：确认 Rust 造怪抽数能按 oracle 的 ctor 次序重放（三段 `Random` 参数 = 1500/2000、3000/3000、2000）。
+
+**进展（2026-11-26，`skeleton` ①②已做、③按声明口径接入——不是「全对齐」）**：驱动 `skeleton_parity_drive` 开
+`rng_trace`，台账落 `Rng`/`RngSites`/`RngSeqs`/`RngBounds`；比较器 `real_rust_ledger_skeleton` 的
+⑤ 段按**声明口径**判——`cap_hit` 两侧 0 抽逐值；`summon_ok` 比造怪 ctor 5 抽逐值（Rust 侧即
+`draw_base_and_animal` 的 1500/2000/3000/3000 与 `draw_monster_object` 的 2000），台账 9 抽形态由
+`RngBounds` 钉住。两侧差异只剩**装置面**：golden 的离线替身只 `new MonsterObject`，而 Rust 按生产
+`MonsterTableSpawner` 走派生 ctor/初始化（多 `draw_at_monster` 的 1500、朝向 8、cool-eye 100 三抽）
+⇒ 这三抽不进值面，登记 `DEV-MG-24-RNGCOUNT`（撤销条件见 manifest MG-24 scope）。牙：ctor 首抽界
+`1500→1400` ⇒ 比较器红（含 `RNG[0] 不等`）；仅篡改台账 `Rng[0]` ⇒ 红 1 条。
+`sinsu` 仍有记账但比较器不比 `Rng`；`angel` 驱动仍无 `Rng` 键（两者待按同法收口）。

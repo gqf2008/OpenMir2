@@ -85897,6 +85897,16 @@ SendRefMsgRange=15
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
         let run_id = ledger_run_id();
         let seed = golden_seed(stem, label);
+        // Rng 实测（MG-24 验证面补洞）：开启 rng_trace 记录造怪/尾段抽数。
+        // 进程级 OnceLock ⇒ 本驱动必须 `--exact --test-threads=1` 单独进程跑。
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 请 --exact 单跑"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        let n0 = trace_line_count(&trace);
         let mut rig = skeleton_rig(id_base);
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let caster = rig.caster;
@@ -85939,6 +85949,8 @@ SendRefMsgRange=15
         };
         rig.cast_slave(17, (101, 100), target, vec![mon]);
         let (cast_frames, _raws) = rig.drain();
+        let n1 = trace_line_count(&trace);
+        let cast_rng = trace_slice(&trace, n0, n1);
         // **本卡起 640 走自延迟**（`emit_magic_lvexp_delayed`：未升级 1000ms / 升级 800ms）⇒
         // 补交付回路：施法批 due=0；按 100ms 步进泵到 1000，交付帧记所在步的 `due_ms_rel`。
         let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames
@@ -86025,6 +86037,10 @@ SendRefMsgRange=15
             "SpellReturn": true,
             "Receivers": receivers,
             "Skeleton": skel,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(q, _, _)| *q).collect::<Vec<_>>(),
+            "RngBounds": trace_bounds(&trace, n0, n1),
             "world_entities_before": entities_before,
             "world_entities_after": entities_after,
         }]);
@@ -86566,6 +86582,23 @@ SendRefMsgRange=15
             let seq: i64 = cols[0].parse().expect("seq 必须是 int");
             let result: i64 = cols[3].parse().expect("result 必须是 int");
             out.push((seq, result, cols[4].to_string()));
+        }
+        assert_eq!(out.len(), to - from, "账本行数必须与行号区间一致");
+        out
+    }
+
+    /// 读 rng_trace 的 `[from, to)` 行，只取每行的 **bound**（第 3 列 `arg`；`Next()` 记 0）。
+    ///
+    /// 用途（MG-24）：把「第 N 抽属于哪一次调用」变成断言，而不是按位置猜——造怪 ctor 5 抽的
+    /// bound `[1500,2000,3000,3000,2000]`（`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、
+    /// `MonsterObject.cs:65`）与训练尾 `Random(3)`（`MagicManager.cs:663`）。
+    fn trace_bounds(path: &std::path::Path, from: usize, to: usize) -> Vec<i64> {
+        let text = std::fs::read_to_string(path).expect("rng trace 文件必须存在");
+        let mut out = Vec::new();
+        for line in text.lines().skip(from).take(to - from) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            assert_eq!(cols.len(), 5, "rng trace 行不是 5 列数据行: {line}");
+            out.push(cols[2].parse().expect("bound(arg) 必须是 int"));
         }
         assert_eq!(out.len(), to - from, "账本行数必须与行号区间一致");
         out
