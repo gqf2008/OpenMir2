@@ -90378,6 +90378,62 @@ SendRefMsgRange=15
         }
     }
 
+    /// **MG-53（2026-11-26，批 B）对照支**：**玩家**目标 @ `UserMagicLevel=0`。
+    ///
+    /// 用于隔离"等级低 ⇒ 训练门开"本身的效果（与既有三支的差别只在等级轴）；
+    /// `monster_lv0` 与它逐项比，差值才是 `Race>=Animal` 的（boTrain/训练尾）效应。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hbfireball_parity_player_lv0() {
+        fireball_parity_drive(
+            "hbfireball",
+            44,
+            0, // 第三参 = `user_magic_level`：本支 golden 的 Fixture 也是 0
+            "player_lv0",
+            golden_seed("hbfireball", "player_lv0"),
+            4100,
+        );
+        fireball_case_assert("hbfireball", "player_lv0");
+        let c = hbfireball_case("player_lv0");
+        for who in ["caster", "target", "obs_in", "obs_out"] {
+            for (field, ident) in [("Rm", 8043), ("Rm", 8092), ("Sent", 9)] {
+                assert_eq!(
+                    healing_count(&c, who, field, ident),
+                    golden_msg_count("hbfireball", "player_lv0", who, field, ident),
+                    "player_lv0：{who} {field} {ident} 条数须与 golden 一致"
+                );
+            }
+        }
+    }
+
+    /// **MG-53（2026-11-26，批 B）处理支**：**怪**目标 @ `UserMagicLevel=0`。
+    ///
+    /// 与 `player_lv0` 逐项比，差值应只与 boTrain/训练尾（`10123`/`640`）相关；
+    /// 若对照支本身触发 push 分支，如实记录（§27 `Random(0)` 覆盖证据）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hbfireball_parity_monster_lv0() {
+        fireball_parity_drive(
+            "hbfireball",
+            44,
+            0,
+            "monster_lv0",
+            golden_seed("hbfireball", "monster_lv0"),
+            4200,
+        );
+        fireball_case_assert("hbfireball", "monster_lv0");
+        let c = hbfireball_case("monster_lv0");
+        for who in ["caster", "target", "obs_in", "obs_out"] {
+            for (field, ident) in [("Rm", 8043), ("Rm", 8092), ("Sent", 9)] {
+                assert_eq!(
+                    healing_count(&c, who, field, ident),
+                    golden_msg_count("hbfireball", "monster_lv0", who, field, ident),
+                    "monster_lv0：{who} {field} {ident} 条数须与 golden 一致"
+                );
+            }
+        }
+    }
+
     /// `31 魔法盾`（`SKILL_SHIELD`）真实台账驱动。金标准 `golden/magic/shield.json`；
     /// 三 seed（无 AntiMagic 骰，标签 `s1/s5/s13`）；夹具**显式** `enable_buff_tick`（A-5 前提）。
     fn shield_case(label: &str) -> serde_json::Value {

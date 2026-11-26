@@ -192,7 +192,12 @@ public static class Program
             // 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**（`HUtil32.LoByte(WAbil.SC)` 起）；
             // `Race>=Animal ⇒ boTrain`（训练尾 640/10123）。无 LA_UNDEAD 分支 ⇒ 单额外 case。
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true, FaithfulPump = true } } });
-            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            // **MG-53（2026-11-26，批 B）**：`Race>=Animal` 只影响 `boTrain`，而本 stem 的
+            // `UserMagicLevel=3` 把训练门关掉 ⇒ 需要**三支结构**：既有三支（玩家@lv3）不动；
+            // `player_lv0`（玩家@lv0，对照）与 `monster_lv0`（怪@lv0，处理）逐项比，
+            // 差值才是 `Race>=Animal` 的（boTrain/训练尾）效应。`Random(Level)` 在 lv0 下变
+            // `Random(0)`（§27 边界），两支持同等级 ⇒ 边界效应由"对照 vs 处理"分离。
+            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "player_lv0", Monsters = Array.Empty<MonsterSpec>(), TargetMonster = 0, UserMagicLevelOverride = 0, UseHitSeed = true }, new ExtraCaseSpec { Label = "monster_lv0", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UserMagicLevelOverride = 0, UseHitSeed = true, IdBase = 4200 } } });
             // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
             // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true } } });

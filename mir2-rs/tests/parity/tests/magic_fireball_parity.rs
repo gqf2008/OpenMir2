@@ -3932,7 +3932,19 @@ fn real_rust_ledger_shield() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::hbfireball_parity_*）生成真实台账"]
 fn real_rust_ledger_hbfireball() {
-    real_ledger_verify("hbfireball", &golden_file("hbfireball.json"));
+    // **标签从 golden 取**（MG-53 起含 `player_lv0`/`monster_lv0`；缺台账即防空转红）。
+    let golden = golden_file("hbfireball.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[hbfireball] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("hbfireball", &golden, &refs);
 }
 
 /// **`13 火符`**真实台账 → 判定面（金标准 `golden/magic/firecharm.json`）。
