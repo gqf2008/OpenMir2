@@ -325,7 +325,16 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             }
 
             // 卡 §39：怪物接收者的 HP 前/后与逐目标命中门抽值（任一侧有即比；两侧都无 ⇒ 跳过）。
-            for k in ["HpBefore", "HpAfter", "GateIndex", "GateDraw", "GateHit"] {
+            for k in [
+                "HpBefore",
+                "HpAfter",
+                "GateIndex",
+                "GateDraw",
+                "GateHit",
+                // **MG-32（2026-11-26）**：`TargetCret` 术后值（0 = 已被 `MagMakePrivateTransparent`
+                // 清空；否则 = 指向的 ActorId）。只有声明 `TargetCretCaster` 的 case 两侧都有该键。
+                "TargetCret",
+            ] {
                 match (gr.get(k), rr.get(k)) {
                     (None, None) => {}
                     (Some(_), Some(_)) => {
@@ -3885,7 +3894,19 @@ fn real_rust_ledger_bighealing() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::cloak_parity_*）生成真实台账"]
 fn real_rust_ledger_cloak() {
-    real_ledger_verify_labels("cloak", &golden_file("cloak.json"), &["s1", "s5", "s13"]);
+    // **标签从 golden 取**（MG-32 起含 `monster_clear`/`monster_keep`/`monster_far`；缺台账即红）。
+    let golden = golden_file("cloak.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[cloak] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("cloak", &golden, &refs);
 }
 
 /// **`28 心灵启示`（`SKILL_SHOWHP`）**真实台账 → 判定面（标签 miss/edge/hit = `Random(6)` 门）。

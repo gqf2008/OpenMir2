@@ -248,7 +248,11 @@ public static class Program
                     SkillTail = true,
                 });
             }
-            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7 });
+            // **MG-32（2026-11-26，批 B）**：`MagMakePrivateTransparent` 的
+            // `Race>=Animal && TargetCret == baseObject` 分支——怪 `TargetCret` 指向施法者：
+            // `monster_clear`（邻格，`Random(2)==0` ⇒ 清空）/ `monster_keep`（邻格，抽 ≠0 ⇒ 保留）/
+            // `monster_far`（距离>1 ⇒ 短路清空、**不抽**）。术后 `TargetCret` 落盘进比较面。
+            if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true , HitSpeed = 7, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster_clear", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 1, IdBase = 4100 }, new ExtraCaseSpec { Label = "monster_keep", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 3, IdBase = 4200 }, new ExtraCaseSpec { Label = "monster_far", Monsters = new[] { new MonsterSpec { X = 105, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, TargetCretCaster = true } }, SeedOverride = 1, IdBase = 4300 } } });
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing", CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 , HitSpeed = 7 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
@@ -2142,7 +2146,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
-            var extraSeed = extra.UseHitSeed ? seedHit : 1;
+            var extraSeed = extra.SeedOverride ?? (extra.UseHitSeed ? seedHit : 1);
             var extraExpect = extra.UseHitSeed
                 ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
                 : null;
@@ -2232,7 +2236,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
-            cases.Add(RunMagicCase(spec, extra.Label, 1, extra.IdBase, spec.TargetMaxHp, false));
+            cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
@@ -3252,6 +3256,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 }
                 monsters[i].TargetCret = monsters[ms.TargetCret - 1];
             }
+            else if (ms.TargetCretCaster)
+            {
+                // **MG-32**：`TargetCret == baseObject` 分支；golden 侧记 sentinel -1。
+                monsters[i].TargetCret = caster;
+            }
         }
 
         // **MG-44**：可选"怪物目标"（`TargetMonster` 1 基；0 = 玩家目标 ⇒ 既有件零变化）。
@@ -3843,11 +3852,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 gateIdxOut = gv.GateIdx; gateValOut = gv.GateVal; gateHitOut = gv.Hit;
             }
+            int? targetCretAfter = spec.Monsters[i].TargetCretCaster
+                ? (mo.TargetCret == null ? 0 : mo.TargetCret.ActorId)
+                : (int?)null;
             receivers.Add(new ReceiverResult
             {
                 Who = "mon" + i,
                 Rm = rm,
                 Sent = new List<object>(),
+                TargetCret = targetCretAfter,
                 HpBefore = spec.Key == "groupdeding" ? monHpBefore[i]
                     : operatedStruck ? monHpBeforeOperate[i] : (int?)null,
                 HpAfter = spec.Key == "groupdeding" ? monHpAfter[i]
@@ -4171,7 +4184,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     hp = m.Hp,
                     life_attrib = m.LifeAttrib,
                     master = m.Master,
-                    target_cret = m.TargetCret,
+                    target_cret = m.TargetCretCaster ? -1 : m.TargetCret,
                     speed_point = m.SpeedPoint,
                     death = m.Death,
                     ac = m.AC,
@@ -4369,6 +4382,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public int? UserMagicLevelOverride;
         /// <summary>
+        /// **MG-32（2026-11-26）**：本 case 的 seed 覆盖（`null` = 既有口径：AntiMagic 批看
+        /// `UseHitSeed`，BehaviorBatch 恒 1）。用于覆盖同一判据的两个分支（如 `Random(2)==0` 的 0/1）。
+        /// </summary>
+        public int? SeedOverride;
+        /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
         /// `SendRefMsg` 的格子扫描取到上一 case 的旧对象（2026-11-26 实测：`monster_undead`
@@ -4391,6 +4409,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         public int Master;
         /// <summary>`TargetCret` 指向本列表第几只（**1 基**；`0` = 无）。</summary>
         public int TargetCret;
+        /// <summary>
+        /// **MG-32（2026-11-26）**：`TargetCret` 指向**施法者**（`MagMakePrivateTransparent` 的
+        /// `Race>=Animal && TargetCret == baseObject` 分支）。现有 `TargetCret` 只能指本列表第几只怪；
+        /// 本开关把绑定改为 caster。golden 的 `target_cret` 落 **-1**（sentinel；Rust 识别后绑定 caster）。
+        /// 只在显式置位的 case 生效。
+        /// </summary>
+        public bool TargetCretCaster;
         /// <summary>`SpeedPoint`（命中门 `Random(SpeedPoint)`）；缺省 15 = `BaseObject` ctor 缺省。卡 §39。</summary>
         public int SpeedPoint = 15;
         /// <summary>死怪：`GetMapBaseObjects` 收集期即被过滤（不进 objectList）。卡 §39 `dead_excluded`。</summary>
@@ -4599,6 +4624,12 @@ public sealed class ReceiverResult
     public int? HpBefore { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? HpAfter { get; set; }
+    /// <summary>
+    /// **MG-32（2026-11-26）**：`MonsterSpec.TargetCretCaster` 支的**术后** `TargetCret`
+    /// （`0` = 已被清空；否则 = 指向的 ActorId）。只有声明该开关的 case 落盘（旧件零变化）。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetCret { get; set; }
     /// <summary>卡 §39：命中门 `Random(SpeedPoint)` 在 `Rng` 序列中的序号与抽值，及是否命中。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? GateIndex { get; set; }
