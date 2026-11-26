@@ -90427,6 +90427,14 @@ SendRefMsgRange=15
             // 第一次排干在 1300（extra=min(200,900)=200 ⇒ rearm 1500）⇒ 1600 不到期、1900 到期；
             // 若 `min(200, …)` 写成无界 ⇒ rearm 2200 ⇒ 1900 不排干（HP 只 +5）
             "tick_lag_rearm" => vec![t(1300, 55, 25), t(1600, 55, 25), t(1900, 60, 20)],
+            // `tick_cap`：一次施法 `nPower≈801` ⇒ else 支置 300（首行 inc=295 是"封顶后已排干一次"；
+            // 未封顶会是 ~796）；每 tick 只 +5。
+            "cap" => vec![
+                t(1300, 55, 295),
+                t(1600, 55, 295),
+                t(1900, 60, 290),
+                t(2300, 65, 285),
+            ],
             _ => return None,
         })
     }
@@ -95500,6 +95508,12 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn healing_parity_tick_lag_rearm() {
         heal_tick_assert("healing", 2, "tick_lag_rearm", 1, 6500);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_nonzero_parity_cap() {
+        heal_tick_assert("healing-nonzero", 2, "cap", 1, 1000);
     }
 
     #[test]
