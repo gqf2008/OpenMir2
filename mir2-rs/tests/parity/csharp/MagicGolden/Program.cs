@@ -1809,6 +1809,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public int? AmuletDura;
         /// <summary>**MG-64/65**：本 stem 的预置 buff（逐 case 覆盖见 `ExtraCaseSpec.PreBuffs`）。</summary>
+        /// **MG-36 ①**：本 stem 的地图事件虚拟时刻列表（逐 case 覆盖见 `ExtraCaseSpec.FireTickMs`）。
+        public int[] FireTickMs;
         public BuffSpec[] PreBuffs;
         /// <summary>
         /// **MG-64/65**：施毒点除数覆盖（`SystemShare.Config.AmyOunsulPoint`；缺省 `null` ⇒ 用部署配置）。
@@ -2562,6 +2564,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedUserMagicLevel48 = spec.UserMagicLevel;
             var savedAmuletDura = spec.AmuletDura;
             var savedPreBuffs = spec.PreBuffs;
+            var savedFireTickMs = spec.FireTickMs;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2596,6 +2599,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             }
             spec.AmuletDura = extra.AmuletDura;
             spec.PreBuffs = extra.PreBuffs;
+            spec.FireTickMs = extra.FireTickMs;
             if (extra.StepDrainMsOverride.HasValue)
             {
                 spec.StepDrainMs = extra.StepDrainMsOverride.Value;
@@ -2628,6 +2632,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.UserMagicLevel = savedUserMagicLevel48;
             spec.AmuletDura = savedAmuletDura;
             spec.PreBuffs = savedPreBuffs;
+            spec.FireTickMs = savedFireTickMs;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -3979,6 +3984,44 @@ private static FireballResult RunMagicCase(
         }
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
         SystemModule.SystemShare.Config.AmyOunsulPoint = savedAmyOunsulPoint;
+        // **MG-36 ①（2026-11-26）**：地图事件 tick——只走 `EventProcessor` **子类**的 `ExecuteOnce`
+        // （= 生产 `ExecuteInternal`），**不启动** `TimerScheduledService` 的后台循环：
+        // 其 ctor 只建 `PeriodicTimer`/`Stopwatch`（`src/OpenMir2/TimerScheduledService.cs`），循环只在
+        // `StartAsync`→`ExecuteAsync` 里跑 ⇒ 子类**必须** `ExecuteTask == null`（下面断言：谁把它 Start 起来，
+        // 本装置立即 rc=2，而不是"悄悄多一个线程"）。
+        List<object> fireTrace = null;
+        if (spec.FireTickMs is { Length: > 0 })
+        {
+            SystemModule.SystemShare.EventMgr ??= new M2Server.Event.EventManager();
+            var evProc = new RecordingEventProcessor();
+            if (evProc.ExecuteTask != null)
+            {
+                throw new FixtureContractViolation(
+                    "[" + spec.Key + "/" + label + "] EventProcessor 子类已被启动（ExecuteTask 非 null）⇒ (c) 方案不干净");
+            }
+            fireTrace = new List<object>();
+            foreach (var ms in spec.FireTickMs)
+            {
+                ClockSeam.Set(ms);
+                evProc.ExecuteOnce(CancellationToken.None).GetAwaiter().GetResult();
+                int struck = 0;
+                // 本装置**消费**目标队列里的 `RM_MAGSTRUCK_MINE`（计数入轨迹）——这些 RM 因此**不进**
+                // `Receivers[*].Rm`；tick 臂的判据是轨迹（条数/时刻/HP），不是 RM 多重集。
+                foreach (var m in target.DrainRaw())
+                {
+                    if (m.Msg.wIdent == OpenMir2.Messages.RM_MAGSTRUCK_MINE)
+                    {
+                        struck++;
+                    }
+                }
+                fireTrace.Add(new Dictionary<string, object>
+                {
+                    ["ms"] = ms,
+                    ["target_hp"] = target.WAbil.HP,
+                    ["struck"] = struck
+                });
+            }
+        }
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
             SystemModule.SystemShare.Config.DisableInSafeZoneFireCross = savedDisableSafeZone;
@@ -4954,6 +4997,7 @@ private static FireballResult RunMagicCase(
             TargetDirAfter = spec.ObserveDirAfter ? (int?)((int)target.Dir) : null,
             HealTicks = healTicks,
             TargetHpBefore = hpBefore,
+            FireTrace = fireTrace,
             TargetMonsterHpBefore = monsterHpBefore,
             TargetMonsterHpAfter = monsterHpAfter,
             NotDue = pending,
@@ -5183,6 +5227,13 @@ private static FireballResult RunMagicCase(
         public BuffSpec[] PreBuffs = Array.Empty<BuffSpec>();
 
         /// <summary>
+        /// <summary>
+        /// **MG-36 ①（2026-11-26）**：本 case 的地图事件虚拟时刻列表（绝对虚拟毫秒；`null` = 不跑 tick）。
+        /// 每项 `ClockSeam.Set(ms)` 后调一次 **`EventProcessor` 子类**的 `ExecuteOnce`（= 生产
+        /// `ExecuteInternal`，`GameSrv.Word.Threads`），记录 `{ms, target_hp, struck}` 轨迹。
+        /// </summary>
+        public int[] FireTickMs;
+
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
         /// `SendRefMsg` 的格子扫描取到上一 case 的旧对象（2026-11-26 实测：`monster_undead`
@@ -5339,6 +5390,15 @@ public sealed class RecordingMonster : M2Server.Monster.MonsterObject
     }
 }
 
+/// <summary>
+/// **MG-36 ①（2026-11-26）**：`EventProcessor`（`GameSrv.Word.Threads`）的子类——只把 `protected override
+/// Task ExecuteInternal(CancellationToken)` 暴露成 `ExecuteOnce`，**不 Start**。
+/// </summary>
+public sealed class RecordingEventProcessor : GameSrv.Word.Threads.EventProcessor
+{
+    public System.Threading.Tasks.Task ExecuteOnce(System.Threading.CancellationToken ct) => ExecuteInternal(ct);
+}
+
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
     /// <summary>**MG-12/40**：恢复门时钟的只读观测（`CharacterObject.IncHealthSpellTick`，protected）。</summary>
@@ -5489,6 +5549,10 @@ public sealed class FireballResult
     public List<long> Rng { get; set; }
     public int TargetHp { get; set; }
     public int TargetHpBefore { get; set; }
+
+    /// <summary>**MG-36 ①（2026-11-26）**：地图事件 tick 轨迹（`FireTickMs` 非空时才有值）：
+    /// 每项 `{ms, target_hp, struck}`；`struck` = 该次 tick 目标收到的 `RM_MAGSTRUCK_MINE` 条数。</summary>
+    public List<object> FireTrace { get; set; }
     public List<object> NotDue { get; set; }
     public int CasterMp { get; set; }
     /// <summary>卡 36：`AttPowerUp` 写入的 `ExtraAbil[0]`（= `nPower`）；仅 `uenhancer` 落盘。</summary>
