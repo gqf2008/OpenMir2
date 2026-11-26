@@ -2512,7 +2512,51 @@ fn firecross_block_checks(g: &Value, r: &Value) -> Vec<String> {
     errs
 }
 
-/// **MG-36（22 火墙）** 真实台账 → 判定面（三支 base/pre_center/safe_zone）。
+/// **MG-36 结算面（2026-11-27）**：`FireTrace` 逐行全字段比对（golden vs 台账，case 级块）。
+/// 两侧都缺键/null ⇒ 跳过（golden 非 tick 支不带该键；台账形状对齐）；
+/// 一侧非空一侧缺/null ⇒ 红（防「台账静默丢轨迹列」）；
+/// 行数不等 ⇒ 红；逐行比 `delta/ms/target_hp/target_hp_after_run/struck` 五字段。
+fn fire_trace_checks(g: &Value, r: &Value) -> Vec<String> {
+    let mut errs = Vec::new();
+    let g_cases = g["cases"].as_array().cloned().unwrap_or_default();
+    let r_cases = r["cases"].as_array().cloned().unwrap_or_default();
+    for (gc, rc) in g_cases.iter().zip(r_cases.iter()) {
+        let label = text(gc, "Label");
+        let g_absent = gc.get("FireTrace").is_none_or(Value::is_null);
+        let r_absent = rc.get("FireTrace").is_none_or(Value::is_null);
+        match (g_absent, r_absent) {
+            (true, true) => {}
+            (false, false) => {
+                let gr = gc["FireTrace"].as_array().cloned().unwrap_or_default();
+                let rr = rc["FireTrace"].as_array().cloned().unwrap_or_default();
+                if gr.len() != rr.len() {
+                    errs.push(format!(
+                        "[{label}] FireTrace 行数不等：golden={} rust={}",
+                        gr.len(),
+                        rr.len()
+                    ));
+                    continue;
+                }
+                for (i, (a, b)) in gr.iter().zip(rr.iter()).enumerate() {
+                    for k in ["delta", "ms", "target_hp", "target_hp_after_run", "struck"] {
+                        if num(a, k) != num(b, k) {
+                            errs.push(format!(
+                                "[{label}] FireTrace[{i}].{k} 不等：golden={} rust={}",
+                                num(a, k),
+                                num(b, k)
+                            ));
+                        }
+                    }
+                }
+            }
+            (false, true) => errs.push(format!("[{label}] 台账缺/null FireTrace（golden 有轨迹）")),
+            (true, false) => errs.push(format!("[{label}] golden 缺/null FireTrace（台账有值）")),
+        }
+    }
+    errs
+}
+
+/// **MG-36（22 火墙）** 真实台账 → 判定面（四支 base/pre_center/safe_zone/tick_boundaries）。
 ///
 /// 判据分层：驱动只记录 + 自带退化守卫（事件数/帧序/RNG 抽数）；本比较器做
 /// `verify` 的通用面 + `FireCross` 块逐字段 + 由输入推导的一致性（安全区支零事件/无 640、
@@ -2572,6 +2616,8 @@ fn real_rust_ledger_firecross() {
         "cases": cases,
     });
     let mut errs = firecross_block_checks(&g, &r);
+    // **MG-36 结算面（2026-11-27）**：`FireTrace`（含 `target_hp_after_run` HP 轨迹）逐行比对。
+    errs.append(&mut fire_trace_checks(&g, &r));
     if let Err(mut e) = verify(&g, &r) {
         errs.append(&mut e);
     }
