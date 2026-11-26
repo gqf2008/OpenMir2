@@ -12550,13 +12550,21 @@ impl World {
                 // :1409 `n28 = 0`（每轮进体即清，骰败 break 也在其后）
                 n28 = 0;
                 // DoMotaeboCanMotaebo（:1374-1388）：等级门（不骰）→ `Random(20)` → IsProperTarget
+                // 目标等级：正前格取到**自己**时用施法者等级（oracle `this.Abil.Level >
+                // this.Abil.Level` 恒假 ⇒ 红字支——`coordinate_dir` 退化机理）；
+                // rig 的玩家实体 level 不镜像会话 ⇒ 不能直读实体。
+                let tv_level = if pid == actor_id {
+                    caster_level
+                } else {
+                    access.get(pid).map_or(0, |tv| tv.level)
+                };
                 let Some(tv) = access.get(pid) else {
                     break;
                 };
-                if !(i32::from(caster_level) > i32::from(tv.level) && !tv.stick_mode) {
+                if !(i32::from(caster_level) > i32::from(tv_level) && !tv.stick_mode) {
                     break;
                 }
-                let nc = i32::from(caster_level) - i32::from(tv.level);
+                let nc = i32::from(caster_level) - i32::from(tv_level);
                 let bound = i32::from(magic_level) * 4 + 6 + nc;
                 if !(sim.rng.random_range(0, 20) < bound) {
                     break;

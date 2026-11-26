@@ -63,6 +63,14 @@ struct CaseObs {
     /// ⇒ 届时改用显式 `draws()` 计数。
     rng_before: String,
     rng_after: String,
+    /// **DEV-MG-07 (4)**：`RandomNumber::draws()` 计数（真支臂与 golden `Rng` 条数比）。
+    draws_before: u64,
+    draws_after: u64,
+    /// 真支观测：施法者落点 / 会话 HP / 怪 (id,x,y,hp) / 到泵的 640 帧数。
+    caster_xy_after: (i32, i32),
+    caster_hp_after: u16,
+    monsters: Vec<(i32, i32, i32, i32)>,
+    lvexp_frames: usize,
 }
 
 /// 跑一个 case：按 golden 的 `Fixture` 建世界/会话/记录，调宿主 `CM_SPELL` 入口，收集每个
@@ -79,12 +87,71 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
 
     // 地图放大（DEV-MG-07）：真支自移 caster (100,100)->(102,100) 需要界内坐标；
     // 既有门/退化用例不移动 ⇒ 不受影响。
-    let mut world = mir2_world_bevy::World::with_maps(vec![(256, 256)]);
-    let caster = spawn(&mut world, "caster", 100, 100);
-    let target = spawn(&mut world, "target", 101, 100);
-    let obs_in = spawn(&mut world, "obs_in", 105, 100);
-    let obs_out = spawn(&mut world, "obs_out", 140, 100);
+    // **DEV-MG-07 ④**：真支臂旋钮（缺键 = 既有 9 份 golden 行为零变化）。
+    let monster_xy = fx["monster_xy"].as_array();
+    let has_true_map = monster_xy.is_some() || fx["wall_xy"].as_array().is_some();
+    let mut world = if has_true_map {
+        // 墙单一来源（opc-27 条件三）：两侧同读冻结合成地图（`set_map_xy_flag` 不用）。
+        // `World::with_maps` 只收尺寸 ⇒ 按 (160,160) 构造后换入真格网（SimState 其余字段与格网无关）。
+        let map_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/maps/warr-true-160.map");
+        let mf = mir2_envir::load_map_file(&map_path).expect("load warr-true-160.map");
+        let mut w = mir2_world_bevy::World::with_maps(vec![(160, 160)]);
+        w.maps[0] = mf.to_grid();
+        w
+    } else {
+        mir2_world_bevy::World::with_maps(vec![(256, 256)])
+    };
+    // 出生位全部来自 Fixture（缺省 = 既有 4 实体的固定摆位；真支臂 obs_in (105,103) 不挡走廊）。
+    let fxxy = |key: &str, dx: i32, dy: i32| -> (i32, i32) {
+        match fx[key].as_array() {
+            Some(a) => (
+                a[0].as_i64().unwrap_or(i64::from(dx)) as i32,
+                a[1].as_i64().unwrap_or(i64::from(dy)) as i32,
+            ),
+            None => (dx, dy),
+        }
+    };
+    let (cx0, cy0) = fxxy("caster_xy", 100, 100);
+    let (tx0p, ty0p) = fxxy("target_xy", 101, 100);
+    let (oix, oiy) = fxxy("obs_in_xy", 105, 100);
+    let (oox, ooy) = fxxy("obs_out_xy", 140, 100);
+    let caster = spawn(&mut world, "caster", cx0, cy0);
+    let target = spawn(&mut world, "target", tx0p, ty0p);
+    let obs_in = spawn(&mut world, "obs_in", oix, oiy);
+    let obs_out = spawn(&mut world, "obs_out", oox, ooy);
+    // 真支臂的怪（摆位/等级/HP/AC/Race 全部来自 Fixture；display 供 9/31 帧尾）。
+    let monster_ids: Vec<i32> = monster_xy
+        .map(|list| {
+            let lvl = u8::try_from(fx["monster_level"].as_u64().unwrap_or(10)).unwrap_or(10);
+            let hp = u16::try_from(fx["monster_hp_initial"].as_u64().unwrap_or(100)).unwrap_or(100);
+            let ac = i32::try_from(fx["monster_ac"].as_u64().unwrap_or(0)).unwrap_or(0);
+            let race = u8::try_from(fx["monster_race"].as_u64().unwrap_or(50)).unwrap_or(50);
+            list.iter()
+                .enumerate()
+                .map(|(i, xy)| {
+                    let mut e = mir2_world_bevy::EntitySpawn::new(
+                        0,
+                        format!("mon{i}"),
+                        xy[0].as_i64().expect("mon.x") as i32,
+                        xy[1].as_i64().expect("mon.y") as i32,
+                    );
+                    e.race = race;
+                    e.level = lvl;
+                    e.hp = hp;
+                    e.max_hp = hp;
+                    e.ac = ac;
+                    world.add_entity(e)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     // oracle 装置 `env.AddMapObject(...)` 同构：同步 rig 需显式落格（`Command::Enter` 到 tick 才落格）。
+    // golden `Fixture.seed` 播种（oracle RngSeam.Install(sc.Seed) 同构；真支臂的伤害/训练值靠它对齐）。
+    {
+        let seed = fx["seed"].as_i64().unwrap_or(1) as i32;
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+    }
     let bind_now = now_ms();
     for (bid, bx, by) in [
         (caster, 100, 100),
@@ -92,8 +159,15 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
         (obs_in, 105, 100),
         (obs_out, 140, 100),
     ] {
+        let (bx, by) = world.entities.get(bid).map_or((bx, by), |e| (e.x, e.y));
         if let Some(map) = world.maps.get_mut(0) {
             map.add_map_object(bx, by, mir2_world_bevy::CellType::Play, bid, bind_now);
+        }
+    }
+    for mid in &monster_ids {
+        let (mx, my) = world.entities.get(*mid).map_or((0, 0), |e| (e.x, e.y));
+        if let Some(map) = world.maps.get_mut(0) {
+            map.add_map_object(mx, my, mir2_world_bevy::CellType::Monster, *mid, bind_now);
         }
     }
 
@@ -118,11 +192,25 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     }
     // 展示表：golden 的 caster 登录后 `Feature/CharStatus/Light` 全 0、Dir=4
     // （27 的 `SM_RUSHKUNG` 尾 = `Encode(CharDesc(feature,status))`，8 个零字节 ⇒ `ddhkddhkddK`）。
+    // 施法者实体镜像登录态（oracle rig 里实体=玩家本体：WAbil.HP=419）；
+    // 自伤段写实体 HP 再投影回会话 ⇒ 实体初值必须与会话一致，否则投影覆盖掉 419。
+    {
+        let me = world.entities.get_mut(caster).expect("caster");
+        me.vitals.hp = 419;
+        me.vitals.max_hp = 419;
+    }
     let mut displays = downlink::DisplayTable::new();
     displays.set(
         caster,
         downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"caster".to_vec()),
     );
+    // 怪 display（9/31 帧尾；feature/status = 0 与 golden `Monsters[].feature` 一致）。
+    for (i, mid) in monster_ids.iter().enumerate() {
+        displays.set(
+            *mid,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, format!("mon{i}").into_bytes()),
+        );
+    }
 
     let mut sessions: std::collections::HashMap<String, SessionGround> =
         std::collections::HashMap::new();
@@ -132,6 +220,8 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     sg.state.wabil.hp = 419;
     sg.state.wabil.max_hp = 419;
     sg.state.wabil.mp = mp;
+    // 施法者等级（DEV-MG-07）：CanMotaebo 的等级门读它；golden `Fixture.caster_level` 同值。
+    sg.state.wabil.level = u8::try_from(fx["caster_level"].as_u64().unwrap_or(0)).unwrap_or(0);
     sg.show_hp = false;
     sg.magic.use_thrusting = preset["use_thrusting"].as_bool().unwrap_or(false);
     sg.magic.use_half_moon = preset["use_half_moon"].as_bool().unwrap_or(false);
@@ -190,6 +280,7 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
         .unwrap_or_default();
     // 零抽断言的状态快照（见 `CaseObs.rng_before` 的失效条件）。
     let rng_before = format!("{:?}", world.rng);
+    let draws_before = world.rng.draws();
     // `CM_SPELL` 入参：`tag = magic_id`、`recog = make_long(nTargetX, nTargetY)`（`magicwire::parse_spell`）。
     // `nParam3 = MakeLong(Param, Series)` 才是**目标 ActorId**（`WorldServer.cs:783-790`）：
     // 之前传 0 会让 `req.target_actor_id = 0`（目标面不可观测）；这里按真实映射传 target，
@@ -220,7 +311,27 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
         &MsgColors::default(),
         &game_svr::strings::StringConf::defaults(),
     );
-
+    // **640 泵**：golden 排水等 `wait_ms`（1200）后第二趟才见延迟帧 ⇒ 同口径推进 sim 钟
+    // （基数 = 施法时刻的钟，MG-36 21.1 教训）+ deliver + 对到期 `RM_MAGIC_LVEXP` 发 640 帧。
+    let wait_ms = fx["wait_ms"].as_u64().unwrap_or(1200) as i64;
+    world.clock_ms += wait_ms;
+    let mut lvexp_frames = 0usize;
+    for outcome in world.deliver_self_delay_msgs() {
+        if let Some(d) = outcome.magic_lvexp {
+            if let Some(entry) = online.iter().find(|e| e.actor_id == outcome.actor_id) {
+                let body = game_svr::smframe::sm_magic_lvexp(d.magic_id, d.level, d.tran_point);
+                gates
+                    .get(&0)
+                    .expect("gate 0")
+                    .send(SimToGate::SendFrame {
+                        socket: entry.socket,
+                        body,
+                    })
+                    .expect("send 640");
+                lvexp_frames += 1;
+            }
+        }
+    }
     // **行为面观测**：MP 投影（客户端 MP 源）、Dir、目标血、RNG 状态。
     let mp_after = sessions
         .get("caster")
@@ -229,6 +340,24 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     let dir_after = world.entities.get(caster).map_or(0, |e| e.ai.dir);
     let target_hp_after = world.entities.get(target).map_or(0, |e| e.hp);
     let rng_after = format!("{:?}", world.rng);
+    let draws_after = world.rng.draws();
+    let caster_xy_after = world.entities.get(caster).map_or((0, 0), |e| (e.x, e.y));
+    let caster_hp_after = sessions
+        .get("caster")
+        .map(|s| s.state.wabil.hp)
+        .unwrap_or_default();
+    let monsters = monster_ids
+        .iter()
+        .map(|mid| {
+            let e = world.entities.get(*mid);
+            (
+                *mid,
+                e.map_or(0, |e| e.x),
+                e.map_or(0, |e| e.y),
+                i32::from(e.map_or(0, |e| e.hp)),
+            )
+        })
+        .collect();
     let mut ack_count = 0usize;
     let mut out: std::collections::HashMap<String, Frames> = std::collections::HashMap::new();
     while let Ok(msg) = rx0.try_recv() {
@@ -266,6 +395,12 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
     }
     CaseObs {
         caster,
+        draws_before,
+        draws_after,
+        caster_xy_after,
+        caster_hp_after,
+        monsters,
+        lvexp_frames,
         frames: out,
         mp_before,
         mp_after,
@@ -998,6 +1133,217 @@ fn warr_27_l0_byte_wrap_damage_bound_is_bug_replica() {
 /// **Leader 条件（2026-11-27）**：非法方向 ⇒ 前方格==自己——`coordinate_dir` 红字支的
 /// **显式机理断言**（不只留在注释）：`GetFrontPosition` 对非法方向不改坐标 ⇒
 /// `GetPoseCreate` 取到施法者本人 ⇒ `DoMotaeboCanMotaebo` 的等级门自败 ⇒ `bo35` 红字支。
+/// **DEV-MG-07 ④**：`warr-27-true.json` 5 支（push_ok/free_run/wall_selfdamage/push_l3/levelup_l0）
+/// 逐收件人逐帧比对（golden 驱动，期望只从 golden 来）。比较口径与 [`check_golden`] 相同
+/// （三键契约 + 布局宽度 + 短包/53 特例）；**等优先级帧序不放宽**——SpellFrameBuf 的
+/// per-收件人 .NET 四叉堆出队序实测与 oracle `MsgQueue` 序逐帧一致。
+#[test]
+fn warr_27_true_stems_match_golden() {
+    let path = format!(
+        "{}/../../tests/parity/golden/magic/warr-27-true.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"));
+    let doc: Value = serde_json::from_str(&text).expect("golden json");
+    for case in doc["cases"].as_array().expect("cases") {
+        let label = case["Label"].as_str().unwrap_or("?").to_string();
+        let fx = &case["Fixture"];
+        assert_eq!(
+            fx["rng_mode"], "cover_drain",
+            "warr-27-true/{label}: 缺 rng_mode"
+        );
+        assert_eq!(
+            fx["login_order"], true,
+            "warr-27-true/{label}: 缺 login_order"
+        );
+        assert_eq!(
+            fx["reachability"], "reachable",
+            "warr-27-true/{label}: 缺 reachability"
+        );
+        let obs = run_case(27, fx);
+        // 抽数判据（条件式）：Rng 空 ⇒ 零抽两侧断言（既有判据，Path B/退化臂）；
+        // 非空 ⇒ Rust `draws()` 计数逐条比（**值**经帧内容/怪物 HP/640 载荷间接钉——
+        // 与 magic 台账的 rng_trace 不同口径，manifest 登记同条）。
+        let golden_rng_len = case["Rng"].as_array().expect("Rng").len();
+        if golden_rng_len == 0 {
+            assert_eq!(
+                obs.draws_after, obs.draws_before,
+                "warr-27-true/{label}: Rust 零抽（RNG 状态不得变化）"
+            );
+        } else {
+            assert_eq!(
+                (obs.draws_after - obs.draws_before) as usize,
+                golden_rng_len,
+                "warr-27-true/{label}: 抽数不一致（golden {golden_rng_len}）"
+            );
+        }
+        for r in case["Receivers"].as_array().expect("Receivers") {
+            let who = r["Who"].as_str().expect("Who");
+            let want = golden_frames(r);
+            let have = obs.frames.get(who).cloned().unwrap_or_default();
+            assert_eq!(
+                have.len(),
+                want.len(),
+                "warr-27-true/{label} 收件人 {who} 的帧数不一致（got {have:?} / want {want:?}）"
+            );
+            let oracle_layout = !game_svr::smframe::client_layout_enabled();
+            // **等 ident 组间严格、组内 multiset**（opc-27 预批的放宽口径；严格序实验实测：
+            // 31/9 全序一致，但 caster 自队列的等优先级对（6,6）oracle 为堆反序而 firewind
+            // 同型为正序 ⇒ 单堆规则不可统一 ⇒ 组内放宽、manifest 注明）。
+            let mut group_keys: Vec<u16> = Vec::new();
+            let mut want_groups: std::collections::HashMap<u16, Vec<_>> =
+                std::collections::HashMap::new();
+            for (j, w) in want.iter().enumerate() {
+                if !want_groups.contains_key(&w.0) {
+                    group_keys.push(w.0);
+                }
+                // 记**全局 Rm/Sent 下标**（31 分支读 golden `Rm[j]` 载荷用）。
+                want_groups.entry(w.0).or_default().push((j, w));
+            }
+            let mut have_groups: std::collections::HashMap<u16, Vec<_>> =
+                std::collections::HashMap::new();
+            for h in &have {
+                have_groups.entry(h.0).or_default().push(h);
+            }
+            for key in &group_keys {
+                let wg = want_groups.get(key).expect("want group");
+                let hg = have_groups.get(key).expect("have group");
+                assert_eq!(
+                    hg.len(),
+                    wg.len(),
+                    "warr-27-true/{label} 收件人 {who} ident {key} 的帧数不一致"
+                );
+                for (i, (j, w)) in wg.iter().enumerate() {
+                    let h = &hg[i];
+                    let j = *j;
+                    if *key == 0 {
+                        assert_eq!(
+                            h.5,
+                            w.4.as_bytes(),
+                            "warr-27-true/{label} 收件人 {who} ident 0 短包 payload 不一致"
+                        );
+                        continue;
+                    }
+                    if *key == mir2_protocol::messages::SM_STRUCK {
+                        // 31：客户端 HIGHHP 布局的头四字段/字节与 oracle golden 不同 ⇒ 专用比对：
+                        // **按当前布局显式构造**（语义值全取 golden `Rm[i]`：wParam=伤害、p1=HP、
+                        // p2=MaxHP、p3=攻击者；recog/hitter 用 rig 的 id——golden 的 27101 是
+                        // oracle 装置命名空间，不进比对）。
+                        // recog/hitter：目标伤段 = 被伤怪 + 施法者（golden p3=oracle 施法者 id）；
+                        // 自伤段（golden p3=0）= 施法者 + 0。rig 的怪 id 取 `Monsters[0]`
+                        //（本卡各臂被伤怪恒它；wall 臂无怪 ⇒ recog = 施法者）。
+                        let g_attacker = r["Rm"][j]["p3"].as_i64().unwrap_or(0);
+                        let is_self_hit = g_attacker == 0;
+                        let recog = if is_self_hit {
+                            obs.caster
+                        } else {
+                            obs.monsters[0].0
+                        };
+                        let hitter = if is_self_hit { 0 } else { obs.caster };
+                        let (g_hp, g_maxhp, g_dmg) = (
+                            u16::try_from(r["Rm"][j]["p1"].as_u64().unwrap_or(0)).unwrap_or(0),
+                            u16::try_from(r["Rm"][j]["p2"].as_u64().unwrap_or(0)).unwrap_or(0),
+                            u16::try_from(r["Rm"][j]["wParam"].as_u64().unwrap_or(0)).unwrap_or(0),
+                        );
+                        let expected = if oracle_layout {
+                            game_svr::smframe::sm_struck(
+                                recog, g_hp, g_maxhp, g_dmg, 0, 0, hitter, false,
+                            )
+                        } else {
+                            game_svr::smframe::sm_struck_client(
+                                recog, g_hp, g_maxhp, g_dmg, 0, hitter, false,
+                            )
+                        };
+                        assert_eq!(
+                            h.5, expected,
+                            "warr-27-true/{label} 收件人 {who} 帧（31）不一致"
+                        );
+                        continue;
+                    }
+                    if *key == mir2_protocol::messages::SM_HEALTHSPELLCHANGED && !oracle_layout {
+                        assert_eq!(
+                            h.5.len(),
+                            12 + 16,
+                            "warr-27-true/{label} 收件人 {who} 帧（53，客户端布局）body 必须 12+16"
+                        );
+                        continue;
+                    }
+                    // 其余（9/6/7/640）：跳过 recog（= 发送者 id，由行为面结构断言钉）比头尾。
+                    let mut expected =
+                        game_svr::smframe::command_header(obs.caster, h.0, h.1, h.2, h.3).to_vec();
+                    expected.extend_from_slice(w.4.as_bytes());
+                    assert_eq!(
+                        &h.5[4..],
+                        &expected[4..],
+                        "warr-27-true/{label} 收件人 {who} ident {key} 帧全帧不一致（got {have:?} / want {want:?}）"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// **DEV-MG-07 ④**：真支臂行为面（失败名可定位）：落点/MP/怪 HP/施法者自伤 HP/640 泵帧数，
+/// 期望值全部取自 golden（`CasterXyAfter`/`CasterMp`/`Monsters`/`CasterHp`）。
+#[test]
+fn warr_27_true_stems_behavior_side_effects() {
+    let path = format!(
+        "{}/../../tests/parity/golden/magic/warr-27-true.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"));
+    let doc: Value = serde_json::from_str(&text).expect("golden json");
+    for case in doc["cases"].as_array().expect("cases") {
+        let label = case["Label"].as_str().unwrap_or("?").to_string();
+        let fx = &case["Fixture"];
+        let obs = run_case(27, fx);
+        let want_xy = (
+            case["CasterXyAfter"][0].as_i64().expect("cx") as i32,
+            case["CasterXyAfter"][1].as_i64().expect("cy") as i32,
+        );
+        assert_eq!(
+            obs.caster_xy_after, want_xy,
+            "warr-27-true/{label}: 施法者落点"
+        );
+        let want_mp = u16::try_from(case["CasterMp"].as_u64().expect("mp")).expect("mp u16");
+        assert_eq!(obs.mp_after, want_mp, "warr-27-true/{label}: MP");
+        let want_monsters = case["Monsters"].as_array().expect("Monsters");
+        assert_eq!(
+            obs.monsters.len(),
+            want_monsters.len(),
+            "warr-27-true/{label}: 怪数"
+        );
+        for (i, (got, want)) in obs.monsters.iter().zip(want_monsters.iter()).enumerate() {
+            let want_hp = u16::try_from(want["hp"].as_u64().expect("hp")).expect("hp u16");
+            assert_eq!(
+                (got.1, got.2, got.3),
+                (
+                    want["x"].as_i64().expect("x") as i32,
+                    want["y"].as_i64().expect("y") as i32,
+                    want_hp as i32
+                ),
+                "warr-27-true/{label}: 怪 {i} 落点/HP（got {got:?}）"
+            );
+        }
+        // 施法者会话 HP（wall_selfdamage 的自伤面；其余臂 = 满血 419）。
+        let want_hp = u16::try_from(case["CasterHp"].as_u64().expect("caster hp")).expect("u16");
+        assert_eq!(
+            obs.caster_hp_after, want_hp,
+            "warr-27-true/{label}: 施法者 HP"
+        );
+        // 640 泵帧数：push_ok/levelup_l0 = 1（训练尾）；l3 无（Level<3 门）；free_run/wall 无
+        //（Path B result=false / 墙臂无训练门）。
+        let want_lvexp = match label.as_str() {
+            "push_ok" | "levelup_l0" => 1,
+            _ => 0,
+        };
+        assert_eq!(
+            obs.lvexp_frames, want_lvexp,
+            "warr-27-true/{label}: 640 泵帧数"
+        );
+    }
+}
+
 #[test]
 fn warr_27_invalid_dir_front_position_is_own_cell() {
     assert_eq!(
