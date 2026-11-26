@@ -125554,6 +125554,37 @@ fn ",
             .iter()
             .find(|c| c["name"] == "eat_ok_shape12_six_buffs")
             .expect("six_buffs case");
+        // **IT-07 补验（2026-11-26）**：
+        // ① 吃路径**不产生** `RM_HEALTHSPELLCHANGED(10052)` / `SM_HEALTHSPELLCHANGED(53)`
+        //    （oracle `PlayObject.Base.cs:2047-2157` 的 `EatItems` 全程无 `HealthSpellChanged`；
+        //    该消息只在 `DoSpell`/受击/加血链）⇒ 夹具的 **absence 即判据**，钉住"若将来接入须同套"的前提。
+        // ② 夹具 `drain` 是 **oracle 装置侧**排水元数据（Rust 吃路径同步出帧、无对应泵趟数）
+        //    ⇒ 不作对拍判据，但做 fixture 自洽断言（`hit_cap=false`、`passes<=max_passes`），
+        //    防止装置侧静默截断被当成完整账本。
+        {
+            let mut idents: Vec<i64> = Vec::new();
+            for key in ["immediate_frames", "pumped", "notices"] {
+                if let Some(arr) = case["expect"][key].as_array() {
+                    idents.extend(arr.iter().filter_map(|f| f["ident"].as_i64()));
+                }
+            }
+            assert!(
+                !idents.contains(&10052) && !idents.contains(&53),
+                "吃路径不得产生 RM_HEALTHSPELLCHANGED(10052)/SM(53)（oracle EatItems 无 HealthSpellChanged）"
+            );
+            let drain = &case["expect"]["drain"];
+            assert_eq!(
+                drain["hit_cap"].as_bool(),
+                Some(false),
+                "夹具 drain.hit_cap 必须为 false（命中上限 ⇒ 账本可能不完整）"
+            );
+            let passes = drain["passes"].as_i64().unwrap_or(-1);
+            let max_passes = drain["max_passes"].as_i64().unwrap_or(-1);
+            assert!(
+                passes >= 0 && max_passes > 0 && passes <= max_passes,
+                "夹具 drain 自洽：passes={passes} max_passes={max_passes}"
+            );
+        }
         let fx_texts: Vec<String> = case["expect"]["notices"]
             .as_array()
             .unwrap()
