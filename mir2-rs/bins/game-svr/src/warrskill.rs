@@ -32,6 +32,12 @@ use crate::{OnlineRegistry, SessionGround, SimToGate};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// oracle `SendRefMsg` 的 `(byte)wIdent` 优先级（`MsgQueue` 出队序，低字节先）。
+const P_PUSH: u8 = (mir2_protocol::messages::RM_PUSH & 0xFF) as u8; // 156
+const P_RUSH: u8 = (mir2_protocol::messages::RM_RUSH & 0xFF) as u8; // 168
+const P_RUSHKUNG: u8 = (mir2_protocol::messages::RM_RUSHKUNG & 0xFF) as u8; // 169
+const P_STRUCK: u8 = (mir2_protocol::messages::RM_STRUCK & 0xFF) as u8; // 82
+
 pub(crate) enum Arm {
     /// 12 `SKILL_ERGUM`（`Attack.cs:1120-1135`）。
     Ergum,
@@ -173,10 +179,11 @@ fn spell_point(magic_table: &MagicTable, magic_id: u16, magic_level: u8) -> u16 
 pub(crate) fn run(
     arm: Arm,
     sg: &mut SessionGround,
+    saves: &mut HashMap<String, crate::SavedHuman>,
     world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    displays: &downlink::DisplayTable,
+    displays: &mut downlink::DisplayTable,
     colors: &crate::MsgColors,
     strings: &crate::strings::StringConf,
     magic_level: u8,
@@ -355,66 +362,196 @@ pub(crate) fn run(
                 );
             }
         }
-        // `case MagicConst.SKILL_MOOTEBO`（`:1187-1217`）：3s 门内只置 `result = true`（零帧）。
+        // `case MagicConst.SKILL_MOOTEBO`（`Attack.cs:1187-1217`）：3s 门内只置 `result = true`（零帧）；
+        // 门外：`Dir = (byte)nTargetX` + GetSpellPoint/DamageSpell/53 + `DoMotaebo(Dir, Level)`
+        // **真支**（`PlayObject.Base.cs:1390-1503` ⇒ world facade
+        // [`mir2_world_bevy::World::do_motaebo`]：推挤/自移/伤害/自伤，含 `n24`/`n28` byte
+        // 回绕 BUG-REPLICA）+ 调用点训练尾（`:1201-1214`，**严格 <** 门）。
+        // 帧序：按执行序入 `SpellFrameBuf`，flush 按 per-收件人 .NET 四叉堆出队序还原
+        // oracle `MsgQueue` 序（golden `warr-27-true.json` 的 `Sent` 逐帧一致）。
         Arm::Moteebo => {
             if now - sg.magic.do_motaebo_tick <= 3 * 1000 {
                 return true;
             }
             sg.magic.do_motaebo_tick = now;
-            // `Dir = (byte)nTargetX`（oracle 把目标 X 当方向）。
+            // `Dir = (byte)nTargetX`（oracle 把目标 X 当方向；非法方向 ⇒ 前格 = 自己脚下 ⇒ 红字支）。
             let dir = (target_x & 0xFF) as u8;
             let n = spell_point(magic_table, magic_id, magic_level);
             if sg.state.wabil.mp >= n {
                 if n > 0 {
                     damage_spell_and_53(sg, world, online, gates, chr_name, n);
                 }
-                // `DoMotaebo(Dir, Level)`：退化支 = `GetFrontPosition` 对非法方向不改坐标
-                // （`BaseObject.cs:977-982` 先写 `CurrX/CurrY` 再 switch）⇒ 前方格 = 自己脚下；
-                // `GetPoseCreate` 取到施法者本人 ⇒ `DoMotaeboCanMotaebo` 的
-                // `Abil.Level > 自己等级` 为假 ⇒ break（`n28 = 0`、`baseObject34 = null`），
-                // 但 `bo35` 仍真 ⇒ `RM_RUSHKUNG(Dir, CurrX, CurrY)` + 红字（`:1500-1505`）。
-                let (cur_x, cur_y) = world
-                    .entities
-                    .get(actor_id)
-                    .map_or((0i32, 0i32), |e| (e.x, e.y));
-                // **真支未建模（登记偏差）**：前方格若有别的对象且等级更低，oracle 会推挤/伤害/
-                // 训练（`DoMotaebo` 的 `result = true` 分支）；本宿主只支持退化支 ⇒ WRN。
-                let front_other = world
-                    .entities
-                    .iter_send_ref_targets()
-                    .any(|t| t.id != actor_id && t.x == cur_x && t.y == cur_y);
-                if front_other {
-                    crate::glog!(
-                        "WRN",
-                        "CM_SPELL 27：前方格另有对象 ⇒ DoMotaebo 真支（推挤/伤害/训练尾）未建模（卡 openmir2-warrskill-entry，登记偏差）；按退化支发 RUSHKUNG"
-                    );
+                let caster_abil_level = sg.state.wabil.level;
+                let outcome = world.do_motaebo(actor_id, dir, magic_level, caster_abil_level);
+                let mut buf = crate::SpellFrameBuf::new();
+                for ev in &outcome.events {
+                    match ev {
+                        mir2_world_bevy::world::MotaeboEvent::Push(pe) => {
+                            let Some(d) = displays.get(pe.actor_id) else {
+                                crate::glog!(
+                                    "WRN",
+                                    "27 推挤：actor={} 无展示表 ⇒ 跳过 SM_BACKSTEP（登记）",
+                                    pe.actor_id
+                                );
+                                continue;
+                            };
+                            if let Some(body) = downlink::backstep_frame(pe, d) {
+                                // oracle `CharPushed` 每推进一格立即 `SendRefMsg(RM_PUSH)`
+                                // ⇒ 收件人按**该步**坐标算（firewind 同款）。
+                                let map_id =
+                                    world.entities.get(pe.actor_id).map_or(0, |e| e.map_id);
+                                buf.push_broadcast_cached_at(
+                                    world,
+                                    online,
+                                    pe.actor_id,
+                                    true,
+                                    (map_id, pe.x, pe.y),
+                                    P_PUSH,
+                                    &body,
+                                );
+                            }
+                            // `CharPushed` 收尾把 `Dir` 置为 `nBackDir`（推进 > 0）⇒ 展示表同步。
+                            if let Some(e) = world.entities.get(pe.actor_id) {
+                                crate::set_display_dir(displays, pe.actor_id, e.dir());
+                            }
+                        }
+                        mir2_world_bevy::world::MotaeboEvent::Rush(re) => {
+                            let Some(d) = displays.get(re.actor_id) else {
+                                crate::glog!(
+                                    "WRN",
+                                    "27 自移：actor={} 无展示表 ⇒ 跳过 SM_RUSH/RUSHKUNG（登记）",
+                                    re.actor_id
+                                );
+                                continue;
+                            };
+                            if let Some(body) = downlink::rush_frame(re, d) {
+                                let prio =
+                                    if re.frame == mir2_world_bevy::action::RushFrame::RushKung {
+                                        P_RUSHKUNG
+                                    } else {
+                                        P_RUSH
+                                    };
+                                buf.push_broadcast_cached(
+                                    world,
+                                    online,
+                                    re.actor_id,
+                                    true,
+                                    prio,
+                                    &body,
+                                );
+                            }
+                            if let Some(e) = world.entities.get(re.actor_id) {
+                                crate::set_display_dir(displays, re.actor_id, e.dir());
+                            }
+                        }
+                    }
                 }
-                if let Some(d) = displays.get(actor_id) {
-                    let body = crate::smframe::sm_move(
-                        mir2_protocol::messages::SM_RUSHKUNG,
+                for s in &outcome.struck {
+                    // 31 帧：收件人 = 受击者视野内玩家（含受击者）；帧尾 = 受击者 CharDesc
+                    // （golden 怪尾 16B `EncodePacket(CharDesc)`）。
+                    let Some(d) = displays.get(s.target_id) else {
+                        crate::glog!(
+                            "WRN",
+                            "27 受击：actor={} 无展示表 ⇒ 跳过 SM_STRUCK（登记）",
+                            s.target_id
+                        );
+                        continue;
+                    };
+                    let body = crate::smframe::sm_struck_frame(
+                        s.target_id,
+                        s.hp,
+                        s.max_hp,
+                        s.damage,
+                        d.feature,
+                        d.status,
+                        s.attacker_id,
+                        false,
+                    );
+                    buf.push_broadcast_cached(world, online, s.target_id, true, P_STRUCK, &body);
+                    // 自伤会话镜像（HP 权威在实体；`drain_combat_downlink` 的受害者同步同口径）。
+                    if s.is_self {
+                        sg.state.wabil.hp = s.hp;
+                    }
+                }
+                buf.flush(online, gates);
+                // bo35 红字：`SM_SYSMESSAGE(100)` 只给施法者；优先级 252 恒末位 ⇒ 堆 flush 之后直发。
+                if outcome.bo35 {
+                    send_sys(
+                        online,
+                        gates,
+                        chr_name,
                         actor_id,
-                        cur_x as u16,
-                        cur_y as u16,
-                        dir,
-                        d.light,
-                        &downlink::char_desc(d.feature, d.status),
-                    );
-                    crate::broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
-                } else {
-                    crate::glog!(
-                        "WRN",
-                        "CM_SPELL 27：actor={actor_id} 无展示表 ⇒ SM_RUSHKUNG 无法编码（登记）"
+                        colors.red_f,
+                        colors.red_b,
+                        strings.mate_do_tooweak(),
                     );
                 }
-                send_sys(
-                    online,
-                    gates,
-                    chr_name,
-                    actor_id,
-                    colors.red_f,
-                    colors.red_b,
-                    strings.mate_do_tooweak(),
-                );
+                // 训练尾（调用点 `Attack.cs:1201-1214`）：`result && Level<3 &&
+                // TrainLevel[L] < Abil.Level`（**严格 <**——与 MagicManager 共享尾的 `<=`
+                // 不同源，勿改共享件、勿共享实现）。
+                if outcome.result && magic_level < 3 {
+                    if let Some(mi) = magic_table.get(magic_id) {
+                        if u32::from(mi.train_level[usize::from(magic_level)])
+                            < u32::from(caster_abil_level)
+                        {
+                            // `TrainSkill(UserMagic, Random(3) + 1)`（收敛件；FastTrain 未装载 ⇒ false）
+                            let pts =
+                                mir2_world_bevy::magic_effect::spell_train_points(&mut world.rng);
+                            let cur = saves
+                                .get(chr_name)
+                                .and_then(|sv| sv.record.data.magic.as_ref())
+                                .and_then(|list| {
+                                    list.iter().flatten().find(|m| m.mag_idx == magic_id)
+                                })
+                                .map_or(0, |m| m.tran_point);
+                            let mut train = mir2_world_bevy::magic::SkillTrainState {
+                                magic_id,
+                                level: magic_level,
+                                tran_point: cur,
+                                train_lv: mi.train_lv,
+                                train_level: mi.train_level,
+                                max_train: mi.max_train,
+                            };
+                            train.tran_point += mir2_world_bevy::magic::train_skill(false, pts);
+                            let up = mir2_world_bevy::magic::check_magic_level_up(&mut train);
+                            if up.result {
+                                // 升级：`CheckMagicLevelUp` 内部 `UpdateDelayMsg(…, 800)`
+                                // （`PlayObject.cs:5216`，先删同 `(ident, MagicId)` 待投递）。
+                                world.update_self_delay_msg_full(
+                                    actor_id,
+                                    mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                                    0,
+                                    i32::from(magic_id),
+                                    i32::from(train.level),
+                                    train.tran_point,
+                                    800,
+                                );
+                            } else {
+                                // 未升级：调用点 `SendSelfDelayMsg(…, 1000)`（`Attack.cs:1210`）。
+                                world.send_self_delay_msg_full(
+                                    actor_id,
+                                    mir2_world_bevy::slave::RM_MAGIC_LVEXP,
+                                    0,
+                                    i32::from(magic_id),
+                                    i32::from(train.level),
+                                    train.tran_point,
+                                    1000,
+                                );
+                            }
+                            // 熟练度回写存档记录（`finish_spell_tail` 同口径）。
+                            if let Some(rcd) = saves
+                                .get_mut(chr_name)
+                                .and_then(|sv| sv.record.data.magic.as_mut())
+                                .and_then(|list| {
+                                    list.iter_mut().flatten().find(|m| m.mag_idx == magic_id)
+                                })
+                            {
+                                rcd.level = train.level;
+                                rcd.tran_point = train.tran_point;
+                            }
+                        }
+                    }
+                }
             }
         }
         // `case MagicConst.SKILL_TWINBLADE`（`:1234-1252`）：`AllowTwinHitSkill()` 恒真

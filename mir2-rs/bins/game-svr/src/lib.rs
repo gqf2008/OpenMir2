@@ -17805,7 +17805,7 @@ fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
 /// **同 ident 多帧是常态**（卡 `openmir2-frame-drain-order-audit`）：一次施法多条 `RM_STRUCK_MAG`
 /// ⇒ 同一观察者收到多条 `SM_STRUCK(31)`（同优先级 167），多条命中怪 ⇒ 多条 `SM_CHANGENAMECOLOR(656)`
 /// （154）。稳定排序会给 `[0,1,2]`/`[0,1,2,3]`，oracle 的 4 叉堆给 `[0,2,1]`/`[0,3,2,1]`。
-struct SpellFrameBuf {
+pub(crate) struct SpellFrameBuf {
     /// `(socket, priority, body)`。
     frames: Vec<(i32, u8, Vec<u8>)>,
     /// **(ii) pilot**：当前 actor 回合的上下文（`begin_turn` 设置；未设 ⇒ 旧行为）。
@@ -17825,7 +17825,7 @@ struct TurnCtx {
 }
 
 impl SpellFrameBuf {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             frames: Vec::new(),
             current_turn: None,
@@ -17901,14 +17901,14 @@ impl SpellFrameBuf {
     }
 
     /// 按 oracle `RM_*` 的 `(byte)wIdent` 入队（ident 已由调用方映射成优先级）。
-    fn push_socket(&mut self, socket: i32, priority: u8, body: Vec<u8>) {
+    pub(crate) fn push_socket(&mut self, socket: i32, priority: u8, body: Vec<u8>) {
         self.frames.push((socket, priority, body));
     }
 
     /// **广播投递段（单一实现）**：收件人 id 已算好，逐收件人 `include_self` 过滤 +
     /// `push_socket`（共享 body）。唯一调用方是 [`Self::push_broadcast_cached`]
     /// （收件人 = `ref_msg_cache::targets`）。
-    fn deliver_broadcast_targets(
+    pub(crate) fn deliver_broadcast_targets(
         &mut self,
         online: &OnlineRegistry,
         actor_id: i32,
@@ -17932,7 +17932,7 @@ impl SpellFrameBuf {
     /// `ref_msg_cache::targets`（500ms `VisibleHumanList` + 命中时 `|Δ|<11`），投递交给
     /// [`Self::deliver_broadcast_targets`]。批 7c 完成后旧 `push_broadcast` 已删除
     /// （全仓 0 引用，见删除提交的 grep 证据）。
-    fn push_broadcast_cached(
+    pub(crate) fn push_broadcast_cached(
         &mut self,
         world: &mir2_world_bevy::World,
         online: &OnlineRegistry,
@@ -17951,7 +17951,7 @@ impl SpellFrameBuf {
     /// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
     /// 收件人按**该步**的 `CurrX/CurrY` 计算，不是整段推挤后的最终坐标。
     #[allow(clippy::too_many_arguments)]
-    fn push_broadcast_cached_at(
+    pub(crate) fn push_broadcast_cached_at(
         &mut self,
         world: &mir2_world_bevy::World,
         online: &OnlineRegistry,
@@ -17986,7 +17986,7 @@ impl SpellFrameBuf {
     ///
     /// 分组序 = 首次入队序（跨收件人的相对序本就不可观测：oracle 是每人一条队列）。
     /// 用 [`game_svr::msgqueue::NetPriorityQueue`]，不在这里手写堆。
-    fn flush(
+    pub(crate) fn flush(
         self,
         online: &OnlineRegistry,
         gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -18839,6 +18839,7 @@ fn handle_spell_cmd_with_magic(
             let _ = warrskill::run(
                 arm,
                 sg,
+                saves,
                 world,
                 online,
                 gates,
@@ -22566,7 +22567,7 @@ fn apply_login_record_scalars(
 ///
 /// **`openmir2-player-dir-supply`**：`Entity.ai.dir` 是唯一权威（oracle `BaseObject.Dir`），
 /// 展示表的 `dir` 只是它的**投影**——所有写入点先写实体，再调本函数把实体值抄进展示表。
-fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8) {
+pub(crate) fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8) {
     if let Some(mut d) = displays.get(actor_id).cloned() {
         d.dir = dir;
         displays.set(actor_id, d);
