@@ -1558,6 +1558,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public int TargetMonster;
         /// <summary>
+        /// **MG-38 后续批（2026-11-26）**：`TargetMonster` 的目标是否**不死**（缺省 true）。
+        /// true ⇒ 装置按圣言三条件（`Race>=Animal` / `LifeAttrib==LA_UNDEAD` / `!SuperMan`）校验；
+        /// false ⇒ **只放宽 `LifeAttrib==LA_UNDEAD`**（`Race>=Animal`、`!SuperMan` 仍是本支前置，
+        /// 因为非不死分支（5/11/13/44/45 的 `Race>=Animal` 伤害面）同样要求动物目标）。
+        /// 只在 `TargetMonster>0` 且为 false 时把 `Fixture.target_monster_undead=false` 落盘；
+        /// 缺键 = true（旧 golden 零变化）。
+        /// </summary>
+        public bool TargetMonsterUndead = true;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -2562,6 +2571,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
+        bool? targetMonsterUndead = null,
         int? casterDir = null, int? casterGender = null, int? casterHair = null,
         bool? preSpellFaceTarget = null, int? magicTrainLv = null, int? magicMaxTrain0 = null,
         bool? fastTrain = null, bool? fireCrossSafeZone = null, object preEventCells = null,
@@ -2570,7 +2580,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
-            && targetMonster == null && serverConf == null
+            && targetMonster == null && targetMonsterUndead == null && serverConf == null
             && casterDir == null && casterGender == null && casterHair == null
             && preSpellFaceTarget == null && magicTrainLv == null && magicMaxTrain0 == null
             && fastTrain == null && fireCrossSafeZone == null && preEventCells == null
@@ -2601,6 +2611,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         }
         if (casterCharStatusEx.HasValue) node["caster_char_status_ex"] = casterCharStatusEx.Value;
         if (targetMonster.HasValue) node["target_monster"] = targetMonster.Value;
+        // **MG-38 后续批**：只在显式声明「非不死目标」时落盘（false）；缺键 = true ⇒ 旧 golden 零变化。
+        if (targetMonsterUndead.HasValue) node["target_monster_undead"] = targetMonsterUndead.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3195,8 +3207,10 @@ private static int ReadInstanceInt(object obj, string fieldName)
             // `MagicManager.cs:395`）⇒ 20 跳过圣言三条件、且**不得**把 Animal 强置 true。
             if (spec.MagicId != 20)
             {
+                // `TargetMonsterUndead=false` 只放宽 `LifeAttrib == LA_UNDEAD` 一条；
+                // `Race >= Animal` 与 `!SuperMan` 仍是前置（非不死分支的伤害面同样要求动物目标）。
                 if (targetMonsterObj.Race < OpenMir2.Enums.ActorRace.Animal
-                    || targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD
+                    || (spec.TargetMonsterUndead && targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD)
                     || targetMonsterObj.SuperMan)
                 {
                     throw new FixtureContractViolation(
@@ -4088,6 +4102,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.CasterCharStatusEx != 0 ? (int?)spec.CasterCharStatusEx : null,
                 spec.TargetMonster > 0 ? (int?)spec.TargetMonster : null,
                 spec.ServerConf,
+                targetMonsterUndead: spec.TargetMonster > 0 && !spec.TargetMonsterUndead ? (bool?)false : null,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,

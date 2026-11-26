@@ -87894,11 +87894,31 @@ SendRefMsgRange=15
                 e.race,
                 mir2_world_bevy::ACTOR_RACE_ANIMAL
             );
-            assert_eq!(
-                e.life_attrib,
-                mir2_world_bevy::magic_effect::LA_UNDEAD,
-                "[{stem}/{label}] target_monster.life_attrib 必须 LA_UNDEAD"
-            );
+            // **MG-38 后续批（2026-11-26）**：金标准可显式声明 `target_monster_undead=false`
+            // （装置 `MagicSpec.TargetMonsterUndead=false`）⇒ 只放宽「必须 LA_UNDEAD」这一条，
+            // 用于 5/11/13/44/45 的 `Race>=Animal` 非不死目标分支；缺键 = true（旧 golden 零变化）。
+            // 声明与实物必须一致：false 时目标**不得**是 LA_UNDEAD（否则声明失效）。
+            let want_undead =
+                match golden_case_for(stem, label)["Fixture"].get("target_monster_undead") {
+                    None => true,
+                    Some(serde_json::Value::Bool(b)) => *b,
+                    Some(other) => panic!(
+                    "[{stem}/{label}] Fixture.target_monster_undead 必须是 bool（当前 {other}）"
+                ),
+                };
+            if want_undead {
+                assert_eq!(
+                    e.life_attrib,
+                    mir2_world_bevy::magic_effect::LA_UNDEAD,
+                    "[{stem}/{label}] target_monster.life_attrib 必须 LA_UNDEAD"
+                );
+            } else {
+                assert_ne!(
+                    e.life_attrib,
+                    mir2_world_bevy::magic_effect::LA_UNDEAD,
+                    "[{stem}/{label}] Fixture.target_monster_undead=false 但目标 life_attrib 是 LA_UNDEAD（声明与实物不符）"
+                );
+            }
             assert!(
                 !e.super_man,
                 "[{stem}/{label}] target_monster.super_man 必须为 false"
