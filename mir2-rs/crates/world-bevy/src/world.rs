@@ -4114,6 +4114,44 @@ pub(crate) fn entity_cell_type(e: &impl PvpView) -> CellType {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MotaeboStruck {
+    /// 受击者（目标伤段 = 被撞目标；自伤段 = 施法者自己）。
+    pub target_id: i32,
+    /// oracle `SendRefMsg(RM_STRUCK, …, ActorId, "")` 的末参：目标伤段 = 施法者、自伤段 = **0**。
+    pub attacker_id: i32,
+    /// `StruckDamage` 后的最终伤害（SM_STRUCK 的 series）。
+    pub damage: u16,
+    /// 受击者结算后 HP/MaxHP（SM_STRUCK 头两参）。
+    pub hp: u16,
+    pub max_hp: u16,
+    /// true = 自伤段（`n28 > 0` 支）。
+    pub is_self: bool,
+}
+
+/// `SendRefMsg` 的**执行序**事件（oracle 逐句发送 ⇒ 逐句入队；帧序由宿主按各自 MsgQueue
+/// 四叉堆出队序还原，见 `SpellFrameBuf::flush_frames`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotaeboEvent {
+    /// `CharPushed` 的逐格 `RM_PUSH`（含 L>=3 二格推）。
+    Push(crate::action::PushEvent),
+    /// 自移 `RM_RUSH` / 收尾 `RM_RUSHKUNG`（被挡正前格）。
+    Rush(crate::action::RushEvent),
+}
+
+/// [`World::do_motaebo`] 的返回：oracle `DoMotaebo` 的布尔面 + 全部出站事件/伤害记账。
+#[derive(Clone, Debug, Default)]
+pub struct MotaeboOutcome {
+    /// 返回值（训练门：真冲到位才 true；Path B 恒 false）。
+    pub result: bool,
+    /// `bo35`（红字支：RUSHKUNG + `MateDoTooweak`）。
+    pub bo35: bool,
+    /// 执行序事件（push/rush 交错如 oracle 发送序）。
+    pub events: Vec<MotaeboEvent>,
+    /// 尾段伤害（目标 0/1 条 + 自伤 0/1 条；oracle 执行序 = 先目标后自伤）。
+    pub struck: Vec<MotaeboStruck>,
+}
+
 impl World {
     /// 单地图世界（与 M2 上半程的 `World::new` 语义一致）。
     pub fn new(width: i32, height: i32) -> Self {
@@ -12354,6 +12392,345 @@ impl World {
                 dir: n_dir,
                 x: nx,
                 y: ny,
+            });
+        }
+        out
+    }
+
+    // ==========================================================================================
+    // **DEV-MG-07**：`PlayObject.DoMotaebo`（`src/M2Server/Player/PlayObject.Base.cs:1390-1503`）
+    // 的世界侧全身（Path A 正前目标支 + Path B 无正前目标支 + 尾段伤害），parity 与宿主共用。
+    //
+    // 复用件（不写新推挤/移动效果体，派工单约束）：[`crate::magic::front_position`]、
+    // [`Self::moving_object_at_impl`]（`GetMovingObject`）、[`Self::push_now_impl`]（`CharPushed`）、
+    // [`Self::try_step_impl`]（自移）、[`Self::can_walk_ignore_objects_impl`]（`CanWalk(x,y,true)`）、
+    // `combat::apply_struck_damage`（`GetHitStruckDamage` + `StruckDamage` + 玩家耐久磨损，
+    // 取数次序与 oracle 同源：伤害骰 → AC 1~2 抽 → 倍率 → 玩家 `Random(10)+5` + 逐格 `Random(8)`）。
+    //
+    // **BUG-REPLICA（三重钉之一：代码注释）**：oracle 的 `n24`/`n28` 是 **`byte`**
+    // （`Base.cs:1398-1399`）。L0 时 `n24 = 1`，Path A 推 2 格后 `n24 -= 1` 从 0 **回绕 255** ⇒
+    // 尾段伤害 `Random((255+1)*10) + (255+1)*10 = Random(2560) + 2560`（golden `levelup_l0`
+    // 实测抽 1195 ⇒ 3755 伤害）；oracle 的 `if (n24 < 0)` 钳制对 byte 是**死代码**。
+    // 本实现用 `u8` + `wrapping_sub` 逐字复刻——**副本随原件，修复需走 oracle 变更流程**，
+    // 不许"顺手"改成 i32（显式测试钉回绕轨迹，manifest 登记 BUG-REPLICA）。
+    // ==========================================================================================
+
+    /// oracle `Envirnoment.GetNextPosition`（`Envirnoment.cs:1097-1159`）的**全身**移植——
+    /// 含轴怪行为：**Down/Right 用 `Width`、DownLeft 的 x 用 `Width`、UpRight/DownRight 的 y 用
+    /// `Height`**（700x700 真图上不可分辨，逐字复刻勿"修正"）。返回 `None` = oracle 的 `false`
+    /// （坐标不动）。
+    fn next_position_n(
+        x: i32,
+        y: i32,
+        dir: u8,
+        n: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<(i32, i32)> {
+        let (mut nx, mut ny) = (x, y);
+        match dir {
+            crate::magic::DIR_UP => {
+                if ny > n - 1 {
+                    ny -= n;
+                }
+            }
+            crate::magic::DIR_DOWN => {
+                if ny < width - n {
+                    ny += n;
+                }
+            }
+            crate::magic::DIR_LEFT => {
+                if nx > n - 1 {
+                    nx -= n;
+                }
+            }
+            crate::magic::DIR_RIGHT => {
+                if nx < width - n {
+                    nx += n;
+                }
+            }
+            crate::magic::DIR_UP_LEFT => {
+                if nx > n - 1 && ny > n - 1 {
+                    nx -= n;
+                    ny -= n;
+                }
+            }
+            crate::magic::DIR_UP_RIGHT => {
+                if nx > n - 1 && ny < height - n {
+                    nx += n;
+                    ny -= n;
+                }
+            }
+            crate::magic::DIR_DOWN_LEFT => {
+                if nx < width - n && ny > n - 1 {
+                    nx -= n;
+                    ny += n;
+                }
+            }
+            crate::magic::DIR_DOWN_RIGHT if nx < width - n && ny < height - n => {
+                nx += n;
+                ny += n;
+            }
+            _ => {}
+        }
+        if nx == x && ny == y {
+            None
+        } else {
+            Some((nx, ny))
+        }
+    }
+
+    /// `DoMotaebo` 尾段的一条伤害记账（目标伤段 + 自伤段同型）。
+    /// **DEV-MG-07**：oracle `DoMotaebo(nDir, nMagicLevel)` 的全身（Path A/B + 尾段）。
+    ///
+    /// - `caster_level`：施法者 `Abil.Level`（宿主从会话传——oracle 读 `this.Abil.Level`；
+    ///   被撞/二格目标的等级取**世界实体** `level`）。
+    /// - 不含训练尾（oracle 在调用方 `Attack.cs:1201-1214`，宿主同位）与红字 SysMsg
+    ///   （宿主帧面）；含全部 RNG 取数（骰 1~2 抽/轮、伤害骰、AC、自伤链）。
+    pub fn do_motaebo(
+        &mut self,
+        actor_id: i32,
+        dir: u8,
+        magic_level: u8,
+        caster_level: u8,
+    ) -> MotaeboOutcome {
+        Self::do_motaebo_impl(
+            &mut self.entities,
+            &mut self.sim,
+            actor_id,
+            dir,
+            magic_level,
+            caster_level,
+        )
+    }
+
+    /// facade/段共用实现（[`EntityAccess`] + [`SimState`]）。
+    pub(crate) fn do_motaebo_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dir: u8,
+        magic_level: u8,
+        caster_level: u8,
+    ) -> MotaeboOutcome {
+        // :1396-1397 `result=false; bo35=true`——Path A 的任何失败分支都留红字支
+        //（Path B 入口改 false；被墙挡再置回 true）。
+        let mut out = MotaeboOutcome {
+            bo35: true,
+            ..Default::default()
+        };
+        let Some(e0) = access.get(actor_id) else {
+            return out;
+        };
+        let (mut cx, mut cy, map_id) = (e0.x, e0.y, e0.map_id);
+        let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return out;
+        };
+        // :1400 `Dir = nDir`
+        if let Some(me) = access.get_mut(actor_id) {
+            me.ai.dir = dir;
+        }
+        // :1398-1399 **byte**（BUG-REPLICA，见块头注释）
+        let mut n24: u8 = magic_level.wrapping_add(1);
+        let mut n28: u8 = n24;
+        let iterations = std::cmp::max(2, i32::from(magic_level) + 1);
+        let mut last_pose: Option<i32> = None;
+        // :1401 GetPoseCreate 判 Path A/B（非法方向 ⇒ 前格 = 自己脚下 ⇒ 取到自己）
+        let front0 = crate::magic::front_position(cx, cy, dir, w, h);
+        let pose0 = Self::moving_object_at_impl(access, sim, map_id, front0.0, front0.1, true);
+        if pose0.is_some() {
+            // ---- Path A（:1404-1441）----
+            for _ in 0..iterations {
+                let f = crate::magic::front_position(cx, cy, dir, w, h);
+                let Some(pid) = Self::moving_object_at_impl(access, sim, map_id, f.0, f.1, true)
+                else {
+                    // oracle：轮空（循环继续，零抽）
+                    continue;
+                };
+                // :1409 `n28 = 0`（每轮进体即清，骰败 break 也在其后）
+                n28 = 0;
+                // DoMotaeboCanMotaebo（:1374-1388）：等级门（不骰）→ `Random(20)` → IsProperTarget
+                let Some(tv) = access.get(pid) else {
+                    break;
+                };
+                if !(i32::from(caster_level) > i32::from(tv.level) && !tv.stick_mode) {
+                    break;
+                }
+                let nc = i32::from(caster_level) - i32::from(tv.level);
+                let bound = i32::from(magic_level) * 4 + 6 + nc;
+                if !(sim.rng.random_range(0, 20) < bound) {
+                    break;
+                }
+                let proper = match (access.spawn_cloned(actor_id), access.spawn_cloned(pid)) {
+                    (Some(a), Some(t)) => crate::combat::is_proper_target(&a, &t),
+                    _ => false,
+                };
+                if !proper {
+                    break;
+                }
+                // :1425 `baseObject34 = poseCreate`（先记后推 ⇒ 推失败也进伤害段）
+                last_pose = Some(pid);
+                // :1414-1424 L>=3 二格推（GetNextPosition(...,2,...) + 同套 CanMotaebo）
+                if magic_level >= 3 {
+                    if let Some((sx, sy)) = Self::next_position_n(cx, cy, dir, 2, w, h) {
+                        if let Some(b30) =
+                            Self::moving_object_at_impl(access, sim, map_id, sx, sy, true)
+                        {
+                            let b30_ok = access.get(b30).is_some_and(|bv| {
+                                i32::from(caster_level) > i32::from(bv.level)
+                                    && !bv.stick_mode
+                                    && sim.rng.random_range(0, 20) < bound
+                            });
+                            let b30_proper =
+                                match (access.spawn_cloned(actor_id), access.spawn_cloned(b30)) {
+                                    (Some(a), Some(t)) => crate::combat::is_proper_target(&a, &t),
+                                    _ => false,
+                                };
+                            if b30_ok && b30_proper {
+                                let evs = Self::push_now_impl(access, sim, b30, dir, 1);
+                                for ev in evs.into_iter() {
+                                    out.events.push(MotaeboEvent::Push(ev));
+                                }
+                            }
+                        }
+                    }
+                }
+                // :1426-1429 `CharPushed(Dir,1)`，!=1 ⇒ break
+                let pushed = Self::push_now_impl(access, sim, pid, dir, 1);
+                for ev in pushed.iter().cloned() {
+                    out.events.push(MotaeboEvent::Push(ev));
+                }
+                if pushed.len() != 1 {
+                    break;
+                }
+                // :1430-1438 自移入其旧格
+                let nf = crate::magic::front_position(cx, cy, dir, w, h);
+                if Self::try_step_impl(access, sim, actor_id, nf.0 - cx, nf.1 - cy) {
+                    cx = nf.0;
+                    cy = nf.1;
+                    out.events
+                        .push(MotaeboEvent::Rush(crate::action::RushEvent {
+                            actor_id,
+                            frame: crate::action::RushFrame::Rush,
+                            dir,
+                            x: cx,
+                            y: cy,
+                        }));
+                    out.bo35 = false;
+                    out.result = true;
+                }
+                // :1439 `n24 -= 1` —— **byte 回绕点**（BUG-REPLICA）
+                n24 = n24.wrapping_sub(1);
+            }
+        } else {
+            // ---- Path B（:1443-1468）----
+            out.bo35 = false;
+            for _ in 0..iterations {
+                let f = crate::magic::front_position(cx, cy, dir, w, h);
+                if Self::try_step_impl(access, sim, actor_id, f.0 - cx, f.1 - cy) {
+                    cx = f.0;
+                    cy = f.1;
+                    out.events
+                        .push(MotaeboEvent::Rush(crate::action::RushEvent {
+                            actor_id,
+                            frame: crate::action::RushFrame::Rush,
+                            dir,
+                            x: cx,
+                            y: cy,
+                        }));
+                    // :1454 `n28 -= 1`（byte）
+                    n28 = n28.wrapping_sub(1);
+                } else if Self::can_walk_ignore_objects_impl(sim, map_id, f.0, f.1) {
+                    // :1460 可走但被活体挡 ⇒ `n28 = 0` 继续
+                    n28 = 0;
+                } else {
+                    // :1463-1466 墙 ⇒ `bo35 = true; break`（n28 不清 ⇒ 自伤支）
+                    out.bo35 = true;
+                    break;
+                }
+            }
+        }
+        // ---- 尾段：目标伤害（:1470-1484）----
+        if let Some(tid) = last_pose {
+            // `if (n24 < 0) n24 = 0` 对 u8 死代码（BUG-REPLICA）
+            let raw =
+                sim.rng.random_range(0, (i32::from(n24) + 1) * 10) + (i32::from(n24) + 1) * 10;
+            let Some(mut target) = access.spawn_cloned(tid) else {
+                return out;
+            };
+            let Some(attacker) = access.spawn_cloned(actor_id) else {
+                return out;
+            };
+            let last_hitter = target.last_hiter.and_then(|id| access.get(id)).map(|h| {
+                crate::combat::LastHitter {
+                    race: h.race,
+                    job: h.job,
+                    has_master: h.master.is_some(),
+                }
+            });
+            let cfg = sim.combat_config;
+            let (damage, _killed) = crate::combat::apply_struck_damage(
+                &mut sim.rng,
+                &attacker,
+                &mut target,
+                raw,
+                last_hitter,
+                &cfg,
+            );
+            // 登记不在本卡（golden l0 用 HP=4000 避开）：HP 归 0 的死亡链属怪物 AI 面（B27 同族）。
+            if let Some(e) = access.get_mut(tid) {
+                e.vitals.hp = target.hp;
+                e.inventory.use_items = target.use_items;
+            }
+            out.struck.push(MotaeboStruck {
+                target_id: tid,
+                attacker_id: actor_id,
+                damage,
+                hp: target.hp,
+                max_hp: target.max_hp,
+                is_self: false,
+            });
+        }
+        // ---- bo35（:1485-1490）----
+        if out.bo35 {
+            let f = crate::magic::front_position(cx, cy, dir, w, h);
+            out.events
+                .push(MotaeboEvent::Rush(crate::action::RushEvent {
+                    actor_id,
+                    frame: crate::action::RushFrame::RushKung,
+                    dir,
+                    x: f.0,
+                    y: f.1,
+                }));
+        }
+        // ---- 自伤（:1491-1501）----
+        if n28 > 0 {
+            // n24>=1 时界 >= 10；`Random(n24*10)` 与 oracle 同式（n24=0 不可达：Path A 恒 n28=0）
+            let raw = sim.rng.random_range(0, i32::from(n24) * 10) + (i32::from(n24) + 1) * 3;
+            let Some(mut me) = access.spawn_cloned(actor_id) else {
+                return out;
+            };
+            let cfg = sim.combat_config;
+            let attacker_snap = me.clone();
+            let (damage, _killed) = crate::combat::apply_struck_damage(
+                &mut sim.rng,
+                &attacker_snap,
+                &mut me,
+                raw,
+                None,
+                &cfg,
+            );
+            if let Some(e) = access.get_mut(actor_id) {
+                e.vitals.hp = me.hp;
+                e.inventory.use_items = me.use_items;
+            }
+            out.struck.push(MotaeboStruck {
+                target_id: actor_id,
+                attacker_id: 0,
+                damage,
+                hp: me.hp,
+                max_hp: me.max_hp,
+                is_self: true,
             });
         }
         out

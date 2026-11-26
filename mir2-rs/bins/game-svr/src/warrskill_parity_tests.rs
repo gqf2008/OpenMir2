@@ -77,11 +77,25 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
         .expect("ty i32");
     let preset = &fx["preset"];
 
-    let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+    // 地图放大（DEV-MG-07）：真支自移 caster (100,100)->(102,100) 需要界内坐标；
+    // 既有门/退化用例不移动 ⇒ 不受影响。
+    let mut world = mir2_world_bevy::World::with_maps(vec![(256, 256)]);
     let caster = spawn(&mut world, "caster", 100, 100);
     let target = spawn(&mut world, "target", 101, 100);
     let obs_in = spawn(&mut world, "obs_in", 105, 100);
     let obs_out = spawn(&mut world, "obs_out", 140, 100);
+    // oracle 装置 `env.AddMapObject(...)` 同构：同步 rig 需显式落格（`Command::Enter` 到 tick 才落格）。
+    let bind_now = now_ms();
+    for (bid, bx, by) in [
+        (caster, 100, 100),
+        (target, 101, 100),
+        (obs_in, 105, 100),
+        (obs_out, 140, 100),
+    ] {
+        if let Some(map) = world.maps.get_mut(0) {
+            map.add_map_object(bx, by, mir2_world_bevy::CellType::Play, bid, bind_now);
+        }
+    }
 
     let mut online: OnlineRegistry = OnlineRegistry::new();
     for (i, (name, id)) in [
@@ -513,7 +527,9 @@ fn mg07_fixture() -> (
     i32,
     i32,
 ) {
-    let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+    // 地图放大（DEV-MG-07）：真支自移 caster (100,100)->(102,100) 需要界内坐标；
+    // 既有门/退化用例不移动 ⇒ 不受影响。
+    let mut world = mir2_world_bevy::World::with_maps(vec![(256, 256)]);
     let caster = spawn(&mut world, "caster", 100, 100);
     let target = spawn(&mut world, "target", 101, 100);
 
@@ -611,9 +627,21 @@ fn mg07_cast(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     rx: &mut mpsc::UnboundedReceiver<SimToGate>,
     target: i32,
+    spell_xy: (i32, i32),
 ) -> Mg07Obs {
+    // oracle 装置在夹具建立时逐实体 `env.AddMapObject(...)`；本 rig 同步调 spell 前手动落格
+    //（`add_entity` 的 `Command::Enter` 要到 tick 才落格 ⇒ 同步 spell rig 必须显式落格，
+    //  否则 `moving_object_at`（GetMovingObject 移植）看不到施法者/目标 ⇒ 真支/退化支都走错）。
+    let bind_now = now_ms();
+    let caster_id = sessions.get("caster").map_or(0, |s| s.actor_id);
+    for id in [caster_id, target] {
+        let (bx, by) = world.entities.get(id).map_or((0, 0), |e| (e.x, e.y));
+        if let Some(map) = world.maps.get_mut(0) {
+            map.add_map_object(bx, by, mir2_world_bevy::CellType::Play, id, bind_now);
+        }
+    }
     handle_spell_cmd_with_magic(
-        game_svr::feature::make_long(101, 100),
+        game_svr::feature::make_long(spell_xy.0 as u16, spell_xy.1 as u16),
         27,
         (target & 0xFFFF) as u16,
         ((target >> 16) & 0xFFFF) as u16,
@@ -703,6 +731,7 @@ fn warr_27_motaebo_three_second_gate() {
             &gates,
             &mut rx,
             target,
+            (101, 100),
         )
     };
 
@@ -771,15 +800,13 @@ fn warr_27_motaebo_three_second_gate() {
     );
 }
 
-/// **MG-07 现状钉（登记偏差，不是行为验证）**：正前格另有对象时 oracle 走 `DoMotaebo` **真支**
-/// （推挤 `SM_RUSH(6)`/`SM_STRUCK(31)`/自伤/训练尾，`PlayObject.Base.cs:1390-1502`），
-/// **Rust 未建模**（`warrskill.rs` `Arm::Moteebo` 的 WRN 分支）⇒ 仍按退化支发
-/// `SM_RUSHKUNG(7)` + 红字、不移动、不伤人。
-///
-/// 本用例钉的是「仍为登记偏差」：不得悄悄出现 6/31 帧、不得移动、目标血不变。
-/// **真支的正确性验证需要先有实现卡**（manifest scope 已写明，不是这颗牙的判据）。
+/// **DEV-MG-07（真支已实装，原登记偏差钉改正向）**：正前格另有**更低等级**对象 ⇒
+/// oracle 真支（`PlayObject.Base.cs:1390-1502` Path A）：推挤 `SM_BACKSTEP(9)`×2、
+/// 自移 `SM_RUSH(6)`×2、目标伤害 `SM_STRUCK(31)`、`bo35=false`（无 7/无红字 100）、
+/// 施法者进占其旧格 (102,100)、怪被推到 (103,100) 且掉血、MP 100→90。
+/// 训练尾 640（延迟 1000ms）与逐字节帧面在 golden 驱动面（`warr-27-true.json` 批④）。
 #[test]
-fn warr_27_true_branch_is_registered_deviation() {
+fn warr_27_true_branch_pushes_struck_trains() {
     let (
         mut world,
         online,
@@ -795,9 +822,34 @@ fn warr_27_true_branch_is_registered_deviation() {
         caster,
         target,
     ) = mg07_fixture();
-    // 施法者脚下放一个「另一个对象」：Rust 的真支 WRN 分支按同格扫描触发
-    // （oracle 用 GetPoseCreate；本仓未建模，这里只钉现状）。
-    let blocker = spawn(&mut world, "blocker", 100, 100);
+    // 玩家 target 挪出推挤走廊（golden 同款 (110,100)），正前格放低等级怪。
+    {
+        let t = world.entities.transform_mut(target).expect("target");
+        t.x = 110;
+        t.y = 100;
+    }
+    let mut blocker_e = mir2_world_bevy::EntitySpawn::new(0, "blocker".to_string(), 101, 100);
+    blocker_e.race = mir2_world_bevy::ACTOR_RACE_ANIMAL;
+    blocker_e.level = 10;
+    blocker_e.hp = 100;
+    blocker_e.max_hp = 100;
+    let blocker = world.add_entity(blocker_e);
+    if let Some(map) = world.maps.get_mut(0) {
+        map.add_map_object(
+            101,
+            100,
+            mir2_world_bevy::CellType::Monster,
+            blocker,
+            now_ms(),
+        );
+    }
+    // 施法者 L30（CanMotaebo 等级门 `我等级 > 目标等级`）；怪 L10。
+    sessions.get_mut("caster").unwrap().state.wabil.level = 30;
+    // 31/9 帧尾需要受击者/被推者 CharDesc（display）。
+    displays.set(
+        blocker,
+        downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"blocker".to_vec()),
+    );
     let blocker_hp_before = world.entities.get(blocker).map_or(0, |e| e.hp);
     sessions.get_mut("caster").unwrap().magic.do_motaebo_tick = now_ms() - 5_000;
     let obs = mg07_cast(
@@ -813,30 +865,149 @@ fn warr_27_true_branch_is_registered_deviation() {
         &gates,
         &mut rx,
         target,
+        (2, 100),
+    );
+    let ids: Vec<u16> = obs.frames.iter().map(|f| f.0).collect();
+    // 全序列（含 per-收件人四叉堆序）：53 直发最前（优先级 68 最低），
+    // buf 帧堆序 = 31(82) < 9(156) < 6(168)。
+    assert_eq!(
+        ids,
+        vec![
+            mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+            mir2_protocol::messages::SM_STRUCK,
+            mir2_protocol::messages::SM_BACKSTEP,
+            mir2_protocol::messages::SM_BACKSTEP,
+            mir2_protocol::messages::SM_RUSH,
+            mir2_protocol::messages::SM_RUSH,
+        ],
+        "真支帧面（53→31→9×2→6×2）：{ids:?}"
+    );
+    let (x, y) = world.entities.get(caster).map_or((0, 0), |e| (e.x, e.y));
+    assert_eq!((x, y), (102, 100), "真支 ⇒ 施法者进占两格");
+    let (bx, by) = world.entities.get(blocker).map_or((0, 0), |e| (e.x, e.y));
+    assert_eq!((bx, by), (103, 100), "怪被推两格");
+    let blocker_hp_after = world.entities.get(blocker).map_or(0, |e| e.hp);
+    assert!(
+        blocker_hp_after < blocker_hp_before,
+        "目标伤害段必须掉血（{blocker_hp_before} → {blocker_hp_after}）"
+    );
+    assert_eq!(obs.acks, 1, "result=true ⇒ +GD 恰 1");
+    assert_eq!(
+        sessions["caster"].state.wabil.mp, 90,
+        "门外扣 GetSpellPoint=10"
+    );
+    // `Dir = (byte)nTargetX = 2`
+    assert_eq!(
+        world.entities.get(caster).map_or(0, |e| e.ai.dir),
+        2,
+        "DoMotaebo 入口写施法者 Dir"
+    );
+}
+
+/// **BUG-REPLICA 显式钉（三重钉之二）**：`n24` 是 **byte**（`Base.cs:1398`）——L0 两轮推挤后
+/// `1 → 0 → 255` 回绕 ⇒ 尾段伤害 `Random(2560) + 2560` ∈ **[2560, 5119]**（oracle 实测 3755）。
+/// 实现若"顺手"改 i32（负值钳 0）⇒ 伤害 ∈ [10, 19] ⇒ 本测红。
+/// **副本随原件；修复需走 oracle 变更流程**（三重钉之三 = manifest BUG-REPLICA 登记）。
+#[test]
+fn warr_27_l0_byte_wrap_damage_bound_is_bug_replica() {
+    let (
+        mut world,
+        online,
+        mut saves,
+        mut sessions,
+        catalog,
+        magic_table,
+        pet_cfg,
+        table,
+        mut displays,
+        gates,
+        mut rx,
+        caster,
+        target,
+    ) = mg07_fixture();
+    // UserMagicLevel=0：SpellPoint = Round(20/4*(0+1)) = 5 ⇒ MP 100→95。
+    saves.get_mut("caster").unwrap().record.data.magic = Some(vec![Some(record::MagicRcd {
+        mag_idx: 27,
+        level: 0,
+        magic_key: 0,
+        tran_point: 0,
+    })]);
+    {
+        let t = world.entities.transform_mut(target).expect("target");
+        t.x = 110;
+        t.y = 100;
+    }
+    let mut blocker_e = mir2_world_bevy::EntitySpawn::new(0, "blocker".to_string(), 101, 100);
+    blocker_e.race = mir2_world_bevy::ACTOR_RACE_ANIMAL;
+    blocker_e.level = 10;
+    // HP=4000：活过 byte-wrap 一击（死亡面不属本测；golden `levelup_l0` 同口径）。
+    blocker_e.hp = 4000;
+    blocker_e.max_hp = 4000;
+    let blocker = world.add_entity(blocker_e);
+    if let Some(map) = world.maps.get_mut(0) {
+        map.add_map_object(
+            101,
+            100,
+            mir2_world_bevy::CellType::Monster,
+            blocker,
+            now_ms(),
+        );
+    }
+    sessions.get_mut("caster").unwrap().state.wabil.level = 30;
+    displays.set(
+        blocker,
+        downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"blocker".to_vec()),
+    );
+    sessions.get_mut("caster").unwrap().magic.do_motaebo_tick = now_ms() - 5_000;
+    let obs = mg07_cast(
+        &mut world,
+        &online,
+        &mut saves,
+        &mut sessions,
+        &catalog,
+        &magic_table,
+        &pet_cfg,
+        &table,
+        &mut displays,
+        &gates,
+        &mut rx,
+        target,
+        (2, 100),
+    );
+    let (x, y) = world.entities.get(caster).map_or((0, 0), |e| (e.x, e.y));
+    assert_eq!((x, y), (102, 100), "L0 两轮推挤 ⇒ 施法者进占两格");
+    let blocker_hp_after = world.entities.get(blocker).map_or(0, |e| e.hp);
+    assert!(blocker_hp_after > 0, "HP=4000 必须活过回绕一击");
+    let loss = 4000 - blocker_hp_after;
+    assert!(
+        (2560..=5119).contains(&loss),
+        "byte 回绕伤害界 [2560,5119]（oracle 实测 3755），got {loss} \
+         ——若落进 [10,19] 说明 n24 被改成 i32（BUG-REPLICA 勿修）"
+    );
+    assert_eq!(
+        sessions["caster"].state.wabil.mp, 95,
+        "L0 SpellPoint=Round(20/4*1)=5"
     );
     let ids: Vec<u16> = obs.frames.iter().map(|f| f.0).collect();
     assert!(
-        ids.contains(&mir2_protocol::messages::SM_RUSHKUNG),
-        "现状：真支未建模 ⇒ 仍走退化支的 SM_RUSHKUNG：{ids:?}"
+        ids.contains(&mir2_protocol::messages::SM_STRUCK),
+        "回绕巨伤必须落成 SM_STRUCK：{ids:?}"
     );
-    assert!(
-        !ids.contains(&mir2_protocol::messages::SM_RUSH),
-        "登记偏差：真支未建模时不得出现 SM_RUSH(6)：{ids:?}"
-    );
-    assert!(
-        !ids.contains(&mir2_protocol::messages::SM_STRUCK),
-        "登记偏差：真支未建模时不得出现 SM_STRUCK(31)：{ids:?}"
-    );
-    let (x, y) = world.entities.get(caster).map_or((0, 0), |e| (e.x, e.y));
-    assert_eq!((x, y), (100, 100), "真支未建模 ⇒ 施法者不得移动");
+}
+
+/// **Leader 条件（2026-11-27）**：非法方向 ⇒ 前方格==自己——`coordinate_dir` 红字支的
+/// **显式机理断言**（不只留在注释）：`GetFrontPosition` 对非法方向不改坐标 ⇒
+/// `GetPoseCreate` 取到施法者本人 ⇒ `DoMotaeboCanMotaebo` 的等级门自败 ⇒ `bo35` 红字支。
+#[test]
+fn warr_27_invalid_dir_front_position_is_own_cell() {
     assert_eq!(
-        world.entities.get(blocker).map_or(0, |e| e.hp),
-        blocker_hp_before,
-        "真支未建模 ⇒ 正前对象不得掉血"
+        mir2_world_bevy::magic::front_position(100, 100, 101, 256, 256),
+        (100, 100),
+        "非法方向 101 ⇒ 前格 = 脚下"
     );
+    // 合法方向对照：Right(2) ⇒ (101,100)。
     assert_eq!(
-        world.entities.get(target).map_or(0, |e| e.hp),
-        blocker_hp_before,
-        "旁观目标同样不得掉血"
+        mir2_world_bevy::magic::front_position(100, 100, 2, 256, 256),
+        (101, 100)
     );
 }

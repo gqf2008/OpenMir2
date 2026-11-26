@@ -10,8 +10,8 @@
   `magic_fireball_parity.rs`——**与 DEV-MG-07 写集无重叠**，从当前 tip 切更安全（生成器/驱动取最新态）。
 - 派工单锚全部复核成立：3s 门 `PlayObject.Attack.cs:1189`、调用点 `:1201 DoMotaebo(Dir, UserMagic.Level)`、
   实现 `PlayObject.Base.cs:1390 DoMotaebo` + `:1374 DoMotaeboCanMotaebo`、Rust 现状
-  `warrskill.rs:359 Arm::Moteebo`、偏差钉 `warrskill_parity_tests.rs:782`。
-- 清单错锚（`MagicManager.cs:93`）已在 `E:/OPC/docs/impl-gaps-for-owner-20261126.md` §1.3 更正
+  `warrskill.rs:359 Arm::Moteebo`、偏差钉 `warrskill_parity_tests.rs` `warr_27_true_branch_pushes_struck_trains`。
+- 清单错锚（`src/M2Server/Magic/MagicManager.cs:93`）已在 `E:/OPC/docs/impl-gaps-for-owner-20261126.md` §1.3 更正
   （E:/OPC 非 git 仓库，直接改文件；本报告随分支 docs 提交入库）。
 
 ## 1. oracle 行为面（逐条，DoMotaebo 全文已读）
@@ -33,14 +33,14 @@
 
 **Path A（正前有对象，:1402-1441）**：循环 `MAX(2, Level+1)` 次：
 - `GetPoseCreate()` = 正前格第一个活对象（`GetMovingObject(前格, true)`，跳 Ghost/Death，
-  `Envirnoment.cs:1203-1239` 按格 `ObjList` 插入序取第一个）。**非法方向 ⇒ 前格 = 脚下 ⇒ 取到自己**
-  （`GetFrontPosition` `Base.cs:977-1038` 对非法方向不改坐标）——这正是现退化支的机理。
+  `src/M2Server/Maps/Envirnoment.cs:1203-1239` 按格 `ObjList` 插入序取第一个）。**非法方向 ⇒ 前格 = 脚下 ⇒ 取到自己**
+  （`GetFrontPosition` `src/M2Server/Actor/BaseObject.cs:977-1038` 对非法方向不改坐标）——这正是现退化支的机理。
 - 每轮先 `n28 = 0`（自伤记账清零）；`DoMotaeboCanMotaebo`（:1374-1388）：`我等级 > 目标等级 且 !StickMode`
   ⇒ 骰 `Random(20) < L*4 + 6 + 等级差` ⇒ `IsProperTarget`。任一不过 ⇒ break
   （首轮即败 ⇒ `baseObject34` 保持 null ⇒ 无伤害段；`bo35` 保持 true ⇒ 红字）。
 - `Level >= 3`：先推 **2 格外**的第二目标 `CharPushed(Dir,1)`（同样过 CanMotaebo，:1414-1424）。
 - `baseObject34 = poseCreate`（**先记后推** ⇒ 推失败也进伤害段）；`poseCreate.CharPushed(Dir,1)`
-  （`Base.cs:854-894`：逐格 `CanWalk(false)` + `MoveToMovingObject` + `RM_PUSH(nBackDir,新x,新y)` +
+  （`src/M2Server/Actor/BaseObject.cs:854-894`：逐格 `CanWalk(false)` + `MoveToMovingObject` + `RM_PUSH(nBackDir,新x,新y)` +
   `Race>=Animal ⇒ WalkTick+=800`；成功置 `Dir=BackDir`，推进 0 格还原原方向）返回 ≠1 ⇒ break。
 - 推成功 ⇒ `GetFrontPosition` + `MoveToMovingObject` 自移入其旧格：`RM_RUSH(nDir,新x,新y)`、
   `bo35=false`、`result=true`；`n24 -= 1`（推预算，无论自移成败都减）。
@@ -72,7 +72,7 @@
 
 `Random(20)`（iter1 骰）→ `Random(20)`（iter2 骰）→ `Random((n24+1)*10)=Random(10)`（目标伤害）→
 `Random(3)`（训练）。wall 臂：仅 `Random(n24*10)=Random(20)` 一次（自伤）。
-（`GetHitStruckDamage` 内部是否含抽——实现时核 `Base.cs`；golden 钉真值，`combat.rs:869` 已是过验镜像。）
+（`GetHitStruckDamage` 内部是否含抽——实现时核 `Base.cs`；golden 钉真值，`combat.rs` `get_hit_struck_damage` 已是过验镜像。）
 
 ## 2. Rust 现状与差距
 
@@ -82,11 +82,11 @@
 **缺**：
 1. Path A 全部。现 WRN 分支用「同格扫描且**排除自己**」是登记偏差 hack；真实现 `GetPoseCreate`
    语义**必须包含自己**（非法方向 ⇒ 取到 ⇒ 等级门失败 ⇒ 红字，与 golden 一致）。
-2. Path B 的 world 侧 `rush_now_impl` 已存在（`world.rs:12312`，注释明锚 DoMotaebo :1443-1467，
+2. Path B 的 world 侧 `rush_now_impl` 已存在（`world.rs` `rush_now_impl`，注释明锚 DoMotaebo :1443-1467，
    含被挡 RushKung 事件语义）但 `#[allow(dead_code)]` 未接宿主。
 3. 伤害段：`combat::get_hit_struck_damage`（:869）/ `struck_damage_apply`（:1203）已有，宿主 SM_STRUCK
-   wire 路径已有（`lib.rs:25007` 区，实时 HP 口径）。
-4. 训练尾：`magic::do_spell_tail`（`magic.rs:662`，`bo_spell_fire=false` ⇒ 无 638）+
+   wire 路径已有（`lib.rs` `drain_combat_downlink` 区，实时 HP 口径）。
+4. 训练尾：`magic::do_spell_tail`（`magic.rs` `do_spell_tail`，`bo_spell_fire=false` ⇒ 无 638）+
    `world.send_self_delay_msg_full/update_self_delay_msg_full`（800/1000 双支）已有
    （`finish_spell_tail_with` P3-B3 同构；27 是调用点训练，独立调这两个原语）。
 5. **世界侧缺公有 facade**：`push_now` 是 `pub(crate)` 宿主不可直调 ⇒ 仿 `cast_firewind_spell` 模式
@@ -104,7 +104,7 @@
 **条件键/缺省不变**（零变化纪律按 mg50 B31 口径：JSON 等值 + 逐路径 diff）：
 
 - `SubCase` 增旋钮：`DirPreset:int?`（TargetX=方向值 0..7）、`FrontMonster:bool`（正前格放
-  RecordingMonster——`Program.cs:5416` 已有造法，复用 magic stems 的被推怪同族；玩家 target 挪
+  RecordingMonster——`mir2-rs/tests/parity/csharp/MagicGolden/Program.cs` `RecordingMonster` 已有造法，复用 magic stems 的被推怪同族；玩家 target 挪
   (110,100)）、`MonsterLevel/MonsterHp/MonsterAc`、`WallXy:int[]?`（生成器把该格 Attribute 改非 Walk；
   **两侧同判据**：Rust 侧 `MapGrid::set_map_xy_flag(x,y,false)` 同格；golden `Fixture.wall_xy` 记账）。
 - 新增 golden 条件键：`monster_xy / monster_level / monster_hp_before / monster_hp_after`
