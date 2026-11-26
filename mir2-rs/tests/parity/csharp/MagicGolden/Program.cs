@@ -2128,10 +2128,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
             var savedFaithfulPump = spec.FaithfulPump;
+            var savedUserMagicLevel = spec.UserMagicLevel;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
             spec.FaithfulPump = extra.FaithfulPump;
+            if (extra.UserMagicLevelOverride.HasValue)
+            {
+                spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
+            }
             var extraSeed = extra.UseHitSeed ? seedHit : 1;
             var extraExpect = extra.UseHitSeed
                 ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
@@ -2141,6 +2146,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
             spec.FaithfulPump = savedFaithfulPump;
+            spec.UserMagicLevel = savedUserMagicLevel;
         }
         return cases.ToArray();
     }
@@ -4350,6 +4356,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 落 `Fixture.faithful_pump=true`，驱动据此在 t=0 泵一次（否则等键旋转次数差 1、640 漂到 1100）。
         /// </summary>
         public bool FaithfulPump;
+        /// <summary>
+        /// **MG-53（2026-11-26）**：本 case 的 `UserMagicLevel` 覆盖（`null` = 用 stem 值）。
+        /// 用途：同一 stem 既有支是 `UserMagicLevel=3`（训练门关），要观测 `Race>=Animal ⇒ boTrain`
+        /// 就必须令训练门开（`< 3`）——但那样会同时改变等级轴，故必须配一个**同等级的玩家对照支**
+        /// （`player_lv0`）与怪目标支（`monster_lv0`）逐项比，差值才是 `Race>=Animal` 的效应。
+        /// </summary>
+        public int? UserMagicLevelOverride;
         /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
