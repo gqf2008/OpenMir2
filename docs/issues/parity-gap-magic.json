@@ -1315,12 +1315,24 @@
         "cases": [
           "lv43(seed 2)",
           "lv44(seed 5)",
-          "lv45(seed 13)"
+          "lv45(seed 13)",
+          "miss_842(seed 1)",
+          "non_undead(seed 1)",
+          "super_man(seed 1)",
+          "multi(seed 1)",
+          "player_target(seed 1)",
+          "run_away(seed 2)"
         ],
         "unit_tests": [
           "tests::turnundead_parity_lv43",
           "tests::turnundead_parity_lv44",
           "tests::turnundead_parity_lv45",
+          "tests::turnundead_parity_miss_842",
+          "tests::turnundead_parity_non_undead",
+          "tests::turnundead_parity_super_man",
+          "tests::turnundead_parity_multi",
+          "tests::turnundead_parity_player_target",
+          "tests::turnundead_parity_run_away",
           "real_rust_ledger_turnundead"
         ]
       },
@@ -1328,7 +1340,7 @@
       "deviation": null,
       "notes": "2026-11-21 升格（scope=partial）：非退化 golden + 驱动 fail-closed（`target_monster` 非整数/负/越界/圣言三条件不满足 ⇒ 具名 panic；`server_conf` 缺键/非整数/≤0 ⇒ 具名 panic，均不吃缺省）；批 `card/magic-serverconf-fixture`，合并提交 0e2eb1316；ServerConf 生成源 sha 钉死 `ce5e3ce9…`（= 部署 `E:/MirServer/M2GameSvr/Server.conf` 实测 sha256）。旧 golden 零变化（驱动侧；`TargetMonster=0`/无 `server_conf` 的既有 stem 不受影响）。四颗牙（`10` 复核原文）：`server_conf.mag_turn_undead_level 44→43` ⇒ lv43 怪物 HP 红；圣言等级门 `<`→`<=` ⇒ lv44 红；跳过 `caster_level` 覆写 ⇒ lv43 红；`animal=false` ⇒ lv43 红。`server_conf` 十键中 `mag_tamming_*` 四键只随快照返回、**不落 `World`**（消费者是 `PetSlaveConfig`；MG-34 收服批接线）——勿当漏接。",
       "basis": "semantic",
-      "scope": "partial：`SKILL_KILLUNDEAD(32)` 的 `MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）主链由 `turnundead` × lv43/lv44/lv45 覆盖：`Struck` 链与 `:842 Random(2)+(Level-1) > target.Level` 前置门（caster_level=60 ⇒ 两抽皆真）、`:844` **严格小于** `target.Level < MagTurnUndeadLevel`（golden 钉**部署值 44**，产品 `World` ctor 缺省 50 ⇒ 该门**有判别力**：吃缺省时 44/45 会过门、抽数/HP 全变）、`:847 Random(100)` 即死臂与训练尾 640（lv43 4 抽 vs lv44/45 各 2 抽本身即判据）、`TargetMonsterHp*` 300→0/300→300、DrainPasses 2/1/1；帧面逐收件人严格序（target/obs_in `[17,638]`、caster `[638,640]`/`[638]`）+ 收件人集合逐名相等（`obs_out`/`mon0` 零帧存在）。**判据层**：`Fixture.target_monster`/`Fixture.server_conf` 的**存在性对称**、十键**绝对值**=部署口径、`TargetMonster`/`TargetMonsterHpBefore/After` 与 `Sent`/`Rm`/`Rng` 的比对**均在驱动**（`lib.rs::fireball_case_assert`；收件人集合/严格序另见 `assert_receiver_sets_match_golden`/`per_receiver_frame_seq_matches_golden`）；**比较器 `magic_fireball_parity.rs` 不引用这些新字段**（`server_conf/ServerConf/TargetMonster` **代码引用为 0**，仅一处注释提及（`ServerConf 十键批次` 小节标题）；只比既有 `Sent`/`Rm`/`Rng` 面）——升格后勿误以为默认比较器管着这些判据。 **未验**：`:842` 前置门的 miss 臂（`Random(2)+(Level-1) ≤ target.Level`）；`SuperMan`/`LifeAttrib≠LA_UNDEAD`/非 AnimalObject 的负路径；多怪物与其他目标等级；`RunAway`/`SetTargetCreat` 无帧面观测。"
+      "scope": "partial：`SKILL_KILLUNDEAD(32)` 的 `MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）主链由 `turnundead` × lv43/lv44/lv45 覆盖：`Struck` 链与 `:842 Random(2)+(Level-1) > target.Level` 前置门（caster_level=60 ⇒ 两抽皆真）、`:844` **严格小于** `target.Level < MagTurnUndeadLevel`（golden 钉**部署值 44**，产品 `World` ctor 缺省 50 ⇒ 该门**有判别力**：吃缺省时 44/45 会过门、抽数/HP 全变）、`:847 Random(100)` 即死臂与训练尾 640（lv43 4 抽 vs lv44/45 各 2 抽本身即判据）、`TargetMonsterHp*` 300→0/300→300、DrainPasses 2/1/1；帧面逐收件人严格序（target/obs_in `[17,638]`、caster `[638,640]`/`[638]`）+ 收件人集合逐名相等（`obs_out`/`mon0` 零帧存在）。**判据层**：`Fixture.target_monster`/`Fixture.server_conf` 的**存在性对称**、十键**绝对值**=部署口径、`TargetMonster`/`TargetMonsterHpBefore/After` 与 `Sent`/`Rm`/`Rng` 的比对**均在驱动**（`lib.rs::fireball_case_assert`；收件人集合/严格序另见 `assert_receiver_sets_match_golden`/`per_receiver_frame_seq_matches_golden`）；**比较器 `magic_fireball_parity.rs` 不引用这些新字段**（`server_conf/ServerConf/TargetMonster` **代码引用为 0**，仅一处注释提及（`ServerConf 十键批次` 小节标题）；只比既有 `Sent`/`Rm`/`Rng` 面）——升格后勿误以为默认比较器管着这些判据。 **六臂已覆盖（2026-11-26，批 B；§35）**：①`miss_842`（caster 20 / 怪 43；抽序 `R(300)=74 → R(2)=0`，`R(2)+19=19 > 43` 假 ⇒ **无 `R(100)`**、无 640）；②`non_undead`（`LifeAttrib=0` ⇒ `:830` 零抽，`Rng=[]`）；③`super_man`（`SuperMan=true` ⇒ 零抽，`Rng=[]`）；④`multi`（两只不死怪：目标 43 + 旁观 45；旁观 `TargetCret/RunAway/Hp` 全默认，`Rng=[74,0,46]`）；⑤`player_target`（玩家目标 `LifeAttrib=0` 且非 AnimalObject ⇒ 零抽，`Rng=[]`——**与 ② 是两条不同的零抽路径**）；⑥`run_away`（怪 `Master=caster` ⇒ `IsProperTarget(caster)=false` ⇒ Struck **不设 `TargetCret`** ⇒ `:835-840` RunAway；seed 2 = lv43 即死 seed，抽序 `R(300)=231 → R(2)=0 → R(100)=16 → 训练尾 R(3)+1=2`，**HP 300→0 证明真的被 Struck**、`TargetCret` 术后 **0**、`RunAwayMode=true / RunAwayTime=10000`、`caster.TargetCret=mon id`）。观测列：`caster.TargetCret` 与 `mon*.RunAwayMode/RunAwayTime/HpBefore/HpAfter`（`ObserveState` 支）；比较器对 `TargetCret/RunAwayMode/RunAwayTime` 做「任一侧有即比」。驱动 `tests::turnundead_parity_{miss_842,non_undead,super_man,multi,player_target,run_away}`；比较器标签从 golden 取（9 支，缺台账即红）。"
     },
     {
       "id": "MG-45",
