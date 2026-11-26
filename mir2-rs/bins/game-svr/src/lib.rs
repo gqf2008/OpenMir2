@@ -88091,6 +88091,12 @@ SendRefMsgRange=15
         }
         let status_before = status_time_of(&rig.world, target);
         let hp_before = rig.world.entities.get(target).unwrap().hp;
+        // **MG-38（24 undead）**：怪物**术前** HP（只有金标准该 mon 记 `HpBefore` 时才写台账，
+        // 其它 stem 零变化——见下方怪物接收者构建）。
+        let monster_hp_before_vec: Vec<u16> = monster_ids
+            .iter()
+            .map(|id| rig.world.entities.get(*id).unwrap().hp)
+            .collect();
 
         // **21 的 RM 收件人必须取施法前**：oracle 的 `RM_SPELL(:159)` / `RM_MAGICFIRE(:406)` /
         // `RM_SPACEMOVE_FIRE2(:881)` 都在 `SpaceMove` **之前**入队，收件人按旧图/旧坐标算。
@@ -88600,7 +88606,22 @@ SendRefMsgRange=15
         // `World::struck_log`（**不由 SM 31 反推**，卡 §30）。收件人口径与既有 fireball 支同：
         // 8044/10052 只给受击者；8103 给 `hear_targets(target)`（含目标自己）；8090 给
         // `hear_targets(攻击方)`（`RefNameColor` 由攻击方广播）。
+        // **MG-38（24 undead）**：怪物受害者的**即时**受击（生产入口在施法段就结算了怪物——
+        // `handle_spell_cmd` → `drain_mag_struck_b2`；C# 装置在 `MonsterSpec.OperateStruck`
+        // 后同样结算）。此处只收集产品观测值（`World::struck_log`），台账侧重建
+        // `RM_MAGSTRUCK(8044)` + `RM_STRUCK(8018)`；只有金标准该 mon 有对应条目时才输出。
+        let mut monster_struck_cast: Vec<(i32, i32, i32, u16, u16, i32)> = Vec::new();
         for ev in &struck_cast {
+            if monster_ids.contains(&ev.target_id) {
+                monster_struck_cast.push((
+                    ev.target_id,
+                    ev.power,
+                    ev.damage,
+                    ev.hp_after,
+                    ev.max_hp,
+                    ev.caster_id,
+                ));
+            }
             if let Some(who) = who_of(ev.target_id) {
                 let v = rm_by_who.entry(who).or_default();
                 v.push(fireball_rm(8044, 0, i64::from(ev.power), 0, 0, 108, false));
@@ -88928,21 +88949,67 @@ SendRefMsgRange=15
         })
         .collect::<Vec<_>>();
         // MG-17/18：非玩家接收者（与 C# `RunMagicCase` 的 `mon{i}` 同序、同形）。
-        // 怪物不 `Operate` ⇒ `Sent` 恒空、`HpBefore/HpAfter` 不落（C# 侧 `WhenWritingNull`）。
+        // 怪物不 `Operate` ⇒ `Sent` 恒空；`HpBefore/HpAfter` 只在**金标准记了**的支落
+        // （`MonsterSpec.OperateStruck` 的 case；缺省 C# 侧 `WhenWritingNull`）。
         for (i, id) in monster_ids.iter().enumerate() {
-            let rm: Vec<serde_json::Value> = struck_rm
-                .iter()
-                .filter(|(tid, _)| tid == id)
-                // **延迟支**（`SendStruckDelayMsg`）的 8044：入队用 `Lowest`(255) + `LateDelivery=true`。
-                // 与 groupdeding 的**即时**支（108/false，那里走自己的驱动）不同；golden 实测
-                // `mon0/mon2 = 255/late=1`（fire s1/s5/s13 三支一致）。
-                .map(|(_, power)| fireball_rm(8044, 0, i64::from(*power), 0, 0, 255, true))
-                .collect();
-            receivers.push(serde_json::json!({
+            let mut rm: Vec<serde_json::Value> = Vec::new();
+            // 即时受击（施法段结算）：8044 + `RM_STRUCK(8018)`（`BaseObject.Base.cs:670-676`
+            // 的 `SendMsg(RM_STRUCK, nDamage, HP, MaxHP, caster)`）。值与后续帧同源 = `struck_log`。
+            for (tid, power, damage, hp_after, max_hp, caster_id) in &monster_struck_cast {
+                if tid != id {
+                    continue;
+                }
+                rm.push(fireball_rm(8044, 0, i64::from(*power), 0, 0, 108, false));
+                rm.push(fireball_rm(
+                    i64::from(mir2_protocol::messages::RM_STRUCK),
+                    i64::from(*damage),
+                    i64::from(*hp_after),
+                    i64::from(*max_hp),
+                    i64::from(*caster_id),
+                    82, // (byte)8018 = 82
+                    false,
+                ));
+            }
+            rm.extend(
+                struck_rm
+                    .iter()
+                    .filter(|(tid, _)| tid == id)
+                    // 8044 的投递样式**按 oracle 路径分族**（与上面玩家受害者的 `record_delayed_struck`
+                    // 同一维度，golden 证据）：
+                    // - 9/10 穿透走 `SendStruckDelayMsg` ⇒ `Lowest`(255) + `LateDelivery=true`
+                    //   （golden `fire` 实测 `mon0/mon2 = 255/late=1`，s1/s5/s13 三支一致）；
+                    // - 其余即时支（如 24 `MagElecBlizzard` 的 `target.SendMsg(RM_MAGSTRUCK,…)`）
+                    //   ⇒ 108/false（golden `lightflower/undead` 实测 `mon0 = 108/late=0`）。
+                    .map(|(_, power)| {
+                        fireball_rm(
+                            8044,
+                            0,
+                            i64::from(*power),
+                            0,
+                            0,
+                            if record_delayed_struck { 255 } else { 108 },
+                            record_delayed_struck,
+                        )
+                    }),
+            );
+            let mut mon = serde_json::json!({
                 "Who": format!("mon{i}"),
                 "Rm": rm,
                 "Sent": Vec::<serde_json::Value>::new(),
-            }));
+            });
+            // **MG-38**：金标准该 mon 记了 `HpBefore/HpAfter`（`OperateStruck` 支）时台账同记；
+            // 旧件无该键 ⇒ 不写（零变化）。比较器对怪物 HP 做「任一侧有即比」。
+            if golden_case_for(stem, label)["Receivers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|r| r["Who"] == format!("mon{i}"))
+                .is_some_and(|r| r.get("HpBefore").is_some())
+            {
+                mon["HpBefore"] = serde_json::json!(monster_hp_before_vec[i]);
+                mon["HpAfter"] = serde_json::json!(rig.world.entities.get(*id).map_or(0, |e| e.hp));
+            }
+            receivers.push(mon);
         }
 
         // **三态术后值由"门结果 + 术前值"独立推出**（与装置侧同一条规则；不拿实现输出自证）：
@@ -92887,6 +92954,67 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightflower_parity_s13() {
         fireboom_assert("lightflower", 24, "lightflower.json", "s13", 13, 3000);
+    }
+
+    /// **MG-38（24 光焰）`undead` 支**：`MagElecBlizzard` 的**不死目标**分支。
+    ///
+    /// 同一 `fireball_parity_drive` rig（不用 `fireboom_assert`，理由见函数内）：golden 该支 `Fixture.monsters` 放
+    /// `(101,100)/race=80/life_attrib=LA_UNDEAD(1)` 的 `mon0`（`place_monsters` 按 golden 落世界），
+    /// 于是它进 `mag_objects_in_range` 并收到一次 `RM_MAGSTRUCK(8044)`、0 条 SM。
+    /// oracle 判据 `MagicManager.cs:1128/1134`：`LifeAttrib != LA_UNDEAD ⇒ nPower/10`，
+    /// 不死 ⇒ `nPower` ⇒ golden 实测 `mon0.p1=15` vs 同支玩家 `target.p1=1`。
+    /// 台账 `Receivers` 由驱动按 `monster_ids` 追加 `mon0`（同 fire/skill10 口径）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightflower_parity_undead() {
+        // 不用 `fireboom_assert`：它的 `8103/8090/10123 == 1` 与帧序断言是**单受害者**口径；
+        // 本支有怪物链（怪物受击额外广播 8103/8090、旁观者多 31/656）⇒ 只跑通用断言 + 怪物面。
+        fireball_parity_drive("lightflower", 24, 1, "undead", 1, 4100);
+        fireball_case_assert("lightflower", "undead");
+        b1_golden_drain_assert("lightflower.json", "undead", 2);
+        // **MG-38**：怪物受害者面——期望只从 golden 来（§22/§54），逐字段比 `mon0` 的
+        // RM(`ident/wParam/p1/p2/p3`) 与 `HpBefore/HpAfter`。玩家接收者面由同 seed 的 `s1`
+        // 全量覆盖；怪物链在玩家侧的 8103/8090/31/656 属 `DEV-MONSTER-DISPLAY-FRAME`（本批不比）。
+        let c = defence_case("lightflower", "undead");
+        let g = golden_case_for("lightflower", "undead");
+        let find = |v: &serde_json::Value, who: &str| -> serde_json::Value {
+            v["Receivers"]
+                .as_array()
+                .expect("Receivers")
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap_or_else(|| panic!("缺接收者 {who}"))
+                .clone()
+        };
+        let rm_key = |m: &serde_json::Value| -> (i64, i64, i64, i64, i64) {
+            (
+                m["ident"].as_i64().expect("ident"),
+                m["wParam"].as_i64().expect("wParam"),
+                m["p1"].as_i64().expect("p1"),
+                m["p2"].as_i64().expect("p2"),
+                m["p3"].as_i64().expect("p3"),
+            )
+        };
+        let got: Vec<_> = find(&c, "mon0")["Rm"]
+            .as_array()
+            .expect("mon0.Rm")
+            .iter()
+            .map(rm_key)
+            .collect();
+        let want: Vec<_> = find(&g, "mon0")["Rm"]
+            .as_array()
+            .expect("mon0.Rm")
+            .iter()
+            .map(rm_key)
+            .collect();
+        assert_eq!(got, want, "[lightflower/undead] mon0 RM 序列须等于 golden");
+        for k in ["HpBefore", "HpAfter"] {
+            assert_eq!(
+                find(&c, "mon0")[k].as_i64(),
+                find(&g, "mon0")[k].as_i64(),
+                "[lightflower/undead] mon0 {k} 须等于 golden"
+            );
+        }
     }
 
     // ---------------------------------------------------------------------------------

@@ -1088,6 +1088,23 @@ fn strip_empty_receivers(v: &mut Value) {
     }
 }
 
+/// **MG-38（2026-11-26，卡 `DEV-MONSTER-DISPLAY-FRAME`）**：把某 case 的 `Receivers` 收窄到
+/// `mon*`（怪物侧）。用于 `lightflower/undead`——oracle 结算怪物受击后会在玩家接收者上多出
+/// 怪物链的 8103/8090/31/656，而 Rust 对无 display 的怪物跳过 31/656（rig 未建 display）⇒
+/// 该面如实登记为**当前不可比**，不在本支比较；玩家侧由同 seed 的 `s1` 支全量覆盖。
+/// **只按 (stem,label) 调用**，不改变 `verify` 本身的判据。
+fn project_monster_only_receivers(v: &mut Value, label: &str) {
+    let Some(cases) = v.get_mut("cases").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let Some(c) = cases.iter_mut().find(|c| c["Label"] == label) else {
+        return;
+    };
+    if let Some(rec) = c.get_mut("Receivers").and_then(Value::as_array_mut) {
+        rec.retain(|r| r["Who"].as_str().is_some_and(|w| w.starts_with("mon")));
+    }
+}
+
 /// `frame_order_scope` 白名单/静态一致性判定（从 `real_ledger_verify_labels_opts` 抽出，行为不变）：
 /// `multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）与施毒 4 支；出现在别的 stem ⇒ Err。
 /// 同 stem 的 `magic_id` 必须与定义一致（fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48）。
@@ -1224,6 +1241,17 @@ fn real_ledger_verify_labels_opts(
     if drop_empty_receivers {
         strip_empty_receivers(&mut g);
         strip_empty_receivers(&mut r);
+    }
+    // **MG-38（2026-11-26，卡 `DEV-MONSTER-DISPLAY-FRAME`）**：`lightflower/undead` 支的**声明式
+    // 比较面**收窄到怪物侧——只比 `mon*` 接收者的 RM/SM 与怪物 HP（顶层 RNG / 玩家 `TargetHp`
+    // 仍由 `verify` 比较）。理由：`MonsterSpec.OperateStruck` 让 oracle 像真怪一样结算受击，
+    // 于是 caster/target/obs_in 会多出**怪物链**的 8103/8090/31/656；而 Rust
+    // `drain_mag_struck_b2` 对**无 display 的怪物**早退（跳过 `SM_STRUCK(31)`/656），rig 也
+    // 尚未给怪物建 display ⇒ 该面当前**不可比**（撤销条件见卡）。
+    // **不放松其它支**：同 seed 的 `s1` 支仍逐接收者全量比较；此处只对这一个 (stem,label) 生效。
+    if stem == "lightflower" {
+        project_monster_only_receivers(&mut g, "undead");
+        project_monster_only_receivers(&mut r, "undead");
     }
     let result = if stem == "groupdeding" {
         sort_sm_ident(&mut g, 716);
@@ -3764,15 +3792,30 @@ fn real_rust_ledger_fireboom47() {
 }
 
 /// **`24`（`SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）**真实台账 →
-/// 判定面（标签 s1/s5/s13；金标准 `golden/magic/lightflower.json`，C# oracle 生成）。
+/// 判定面（金标准 `golden/magic/lightflower.json`，C# oracle 生成）。
+///
+/// **标签从 golden 取**（同 `verify_skill_tail_ledger` 口径）：`s1`/`s5`/`s13` + `undead` 自动进面；
+/// 金标准有而台账缺 ⇒ `real_ledger_verify_labels` 的防空转 panic 点名（不静默跳过）。
+///
+/// **MG-38（§35 对象类型分支，2026-11-26）**：`undead` 支在同场放 `(101,100)/race=80/
+/// life_attrib=LA_UNDEAD` 的 `mon0`（装置 `MonsterSpec.OperateStruck=true` 像真怪一样结算）。
+/// oracle `MagElecBlizzard`（`MagicManager.cs:1128/1134`）对非不死目标 `nPower/10`、对不死
+/// 目标 `nPower` ⇒ `mon0` 的 `RM_MAGSTRUCK(8044).p1 = 15`，而同支玩家 target = 1（golden 实测）。
 #[test]
-#[ignore = "需先跑 game-svr 三支驱动（tests::lightflower_parity_*）生成真实台账"]
+#[ignore = "需先跑 game-svr 四支驱动（tests::lightflower_parity_*）生成真实台账"]
 fn real_rust_ledger_lightflower() {
-    real_ledger_verify_labels(
-        "lightflower",
-        &golden_file("lightflower.json"),
-        &["s1", "s5", "s13"],
-    );
+    let golden = golden_file("lightflower.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[lightflower] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("lightflower", &golden, &refs);
 }
 
 /// **`40`（`SKILL_UNAMYOUNSUL`）**真实台账 → 判定面（四支分支矩阵，卡 §34）。
