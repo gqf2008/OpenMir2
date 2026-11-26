@@ -2521,6 +2521,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedObserveDirAfter = spec.ObserveDirAfter;
             var savedHealTicksMs = spec.HealTicksMs;
             var savedTargetLevel = spec.TargetLevel;
+            var savedUserMagicLevel48 = spec.UserMagicLevel;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2546,6 +2547,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
             if (extra.TargetLevelOverride.HasValue)
             {
                 spec.TargetLevel = extra.TargetLevelOverride.Value;
+            }
+            // **MG-50（2026-11-26）**：48 的范围门读 `userMagic.Level`（`MAX(1, Level)` 方框）
+            // ⇒ 逐 case 覆盖（`null` = stem 值；既有三支零变化）。
+            if (extra.UserMagicLevelOverride.HasValue)
+            {
+                spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
             if (extra.StepDrainMsOverride.HasValue)
             {
@@ -2576,6 +2583,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.ObserveDirAfter = savedObserveDirAfter;
             spec.HealTicksMs = savedHealTicksMs;
             spec.TargetLevel = savedTargetLevel;
+            spec.UserMagicLevel = savedUserMagicLevel48;
         }
         return EmitGolden(spec, cases.ToArray());
     }
