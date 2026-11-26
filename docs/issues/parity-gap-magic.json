@@ -1129,9 +1129,9 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】",
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。 **范围限定（2026-11-26，charter §28/§35 普查）**：verified 仅覆盖**玩家 target**；共享 helper `MagElecBlizzard` 对 `LifeAttrib != LA_UNDEAD` 的分支**未覆盖**（oracle 判据位置见 `docs/issues/openmir2-magic-parity.md` §35 表）；补例需 undead target 的 golden（另立）。"
     },
     {
       "id": "MG-39",
@@ -1280,7 +1280,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。",
+      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。 2026-11-20 世代切换后 657 `Series` 已点亮（7 世代夹具带 `hit_speed` 旋钮 ⇒ 逐收件人取值）；本条目 golden 的帧集合不含受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的 52/53/31/1100 ⇒ 无剩余限定，scope 为 full。 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
       "scope": ""
     },
     {
@@ -1342,7 +1342,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
+      "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
       "basis": "semantic",
       "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_big_explosion_spell` 组装的 `PendingMagStruck.power` → `power + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`84/85`、`93/94`、`89/90`）+ 比较器 `real_rust_ledger_snowwind` 33 条不等（`Sent[1].series` golden=15 rust=16）；还原 `hash-object` 相等、复跑绿；**最小可观测幅度 = +1**。**归属（2026-11-21，`a2` 退回后补）**：`power` 面是 23/33/47 **三叶共用路径**（`cast_big_explosion_spell` 入口统一算 power、写进每个 `PendingMagStruck`；宿主 `23 | 33 | 47 =>` 单臂），故 `power +1` 仅作**共用路径覆盖**证据；33 专属维度由 `if req.magic_id == 33 { snow_wind_range }` 的range 选支牙钉住（**+3**，半径 1→4）——33 驱动 3/3 + 比较器 21 条红，23(`fireboom`)/47(`fireboom47`) 驱动 6/6 + 比较器 2/2 **绿**；还原 hash 相等、复跑绿。"
     },
@@ -1374,8 +1374,9 @@
         ]
       },
       "cost": "M",
+      "scope": "partial：`SKILL_UNAMYOUNSUL(40)` 的 **DoSpell 时刻**四支矩阵已对拍——`gate_open_all`（三态 5/6/7 → 1/1/1）、`gate_closed_all`（门关不动）、`gate_open_zero`（0 保持 0）、`gate_open_mixed`（1/0/1，第四支是「无条件全置位 vs 仅非零项置位」的唯一区分证据）；初值 ≠ 期望值、门与术后值两侧独立推导；帧面与 `Rng` 逐值。**未验（登记 `DEV-MG-46-RUNDECAY`）**：计时器从 1 衰减到 0 的 **Run 时刻**行为——装置（驱动/golden）不跑该 tick，本叶断言只到 DoSpell 时刻（charter §26 规则 2 的范围限定）；撤销条件＝装置支持 Run tick（或可注入的世界时钟用例）后补「Run 后归 0」对拍。",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_UNAMYOUNSUL`：Random(7) 门 + 三态计时器非零项置 1；夹具契约扩展（PoisonStates 输入 / status_time_arr 前后输出，schema v2 向后兼容）；**断言只到 DoSpell 时刻**（清毒生效在 Run，另案）。卡 §34。",
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_UNAMYOUNSUL`：Random(7) 门 + 三态计时器非零项置 1；夹具契约扩展（PoisonStates 输入 / status_time_arr 前后输出，schema v2 向后兼容）；**断言只到 DoSpell 时刻**（清毒生效在 Run，另案）。卡 §34。 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
       "basis": "semantic"
     },
     {
@@ -1413,10 +1414,10 @@
         ]
       },
       "cost": "M",
-      "scope": "partial：**效果体语义对拍（35 生产不可达）**。golden `windtebo.json` s1/s5/s13（装置 `--case windtebo`：`EnableMaps` 设 `caster.Dir`(东) ⇒ 前格 (101,100) 的 target 被 `GetPoseCreate` 选中）；驱动 `windtebo_parity_*` + 比较器 `real_rust_ledger_windtebo`（Rng/帧/Rm/HP 全比）。**退化守卫**：每支 golden ≥1 条 `SM_BACKSTEP(9)`，零条即具名红（本轮红证：剥掉 9 帧 ⇒ `[windtebo/s1] golden 零条 SM_BACKSTEP(9) ⇒ 本 case 未产生任何推挤帧（效果体零次执行，具名红）`）。**牙（各贴红在哪）**：①系数 `L*6→L*3` ⇒ `windtebo_chance_uses_coefficient_six_not_three` 红（阈值 13 vs 10）；②格数 `+Random(2)` ⇒ 种子 A 帧红 `left:2 right:1`、种子 B 帧同、仅 RNG 红（`inext 2 vs 1`）；③选择面改遍历 `VisibleActors` ⇒ `windtebo_ignores_visible_actor_outside_front_cell` 红在**帧**（「前格为空 ⇒ 即使 VisibleActors 有邻格目标也不得推」），`windtebo_pushes_*` 亦红（`bo_train`）——**不红在抽数**；④删 `StickMode` 门 ⇒ A「StickMode ⇒ 不推、boTrain=false」、B「StickMode ⇒ 0 抽（即使骰本来会失败，也不得先抽）」（仅抽数红）；⑤前格空 = `windtebo_empty_front_cell_is_zero_draw` 基线（0 帧 0 抽）。**无牙项：无**。**门不覆盖的写死 N**：`cargo test -p game-svr --lib` = 2198 passed / 0 failed / 139 ignored / 0 filtered；`cargo test -p mir2-world-bevy --lib` = 909 passed / 0 failed；`parity-gate -Mode Both` Driver 131、Comparator 45，0 红、0 零匹配、`PARITY_GATE_OK`。**生产不可达**：冻结 `sql/magics` 无 `MagicId=35` 行 ⇒ 验的是**效果体语义**、非生产可达性；**名字陷阱：`灭天火` 是魔号 45，不是 35**。限制：`GetPoseCreate` 依赖 `Dir`，装置以 `EnableMaps` 的 `caster.Dir` 复刻（与生产同源）。",
+      "scope": "partial：**效果体语义对拍（35 生产不可达）**。golden `windtebo.json` s1/s5/s13（装置 `--case windtebo`：`EnableMaps` 设 `caster.Dir`(东) ⇒ 前格 (101,100) 的 target 被 `GetPoseCreate` 选中）；驱动 `windtebo_parity_*` + 比较器 `real_rust_ledger_windtebo`（Rng/帧/Rm/HP 全比）。**退化守卫**：每支 golden ≥1 条 `SM_BACKSTEP(9)`，零条即具名红（本轮红证：剥掉 9 帧 ⇒ `[windtebo/s1] golden 零条 SM_BACKSTEP(9) ⇒ 本 case 未产生任何推挤帧（效果体零次执行，具名红）`）。**牙（各贴红在哪）**：①系数 `L*6→L*3` ⇒ `windtebo_chance_uses_coefficient_six_not_three` 红（阈值 13 vs 10）；②格数 `+Random(2)` ⇒ 种子 A 帧红 `left:2 right:1`、种子 B 帧同、仅 RNG 红（`inext 2 vs 1`）；③选择面改遍历 `VisibleActors` ⇒ `windtebo_ignores_visible_actor_outside_front_cell` 红在**帧**（「前格为空 ⇒ 即使 VisibleActors 有邻格目标也不得推」），`windtebo_pushes_*` 亦红（`bo_train`）——**不红在抽数**；④删 `StickMode` 门 ⇒ A「StickMode ⇒ 不推、boTrain=false」、B「StickMode ⇒ 0 抽（即使骰本来会失败，也不得先抽）」（仅抽数红）；⑤前格空 = `windtebo_empty_front_cell_is_zero_draw` 基线（0 帧 0 抽）。**无牙项：无**。**门不覆盖的写死 N**：`cargo test -p game-svr --lib` = 2198 passed / 0 failed / 139 ignored / 0 filtered；`cargo test -p mir2-world-bevy --lib` = 909 passed / 0 failed；`parity-gate -Mode Both` Driver 131、Comparator 45，0 红、0 零匹配、`PARITY_GATE_OK`。**生产不可达**：冻结 `sql/magics` 无 `MagicId=35` 行 ⇒ 验的是**效果体语义**、非生产可达性；**名字陷阱：`灭天火` 是魔号 45，不是 35**。限制：`GetPoseCreate` 依赖 `Dir`，装置以 `EnableMaps` 的 `caster.Dir` 复刻（与生产同源）。 **生产不可达（2026-11-26 机检）**：冻结 `sql/mir2_data.sql` 的 `magics` 共 108 行，取每行 VALUES 后第一个整数：30..40 实为 30/31/32/33/34/36/37/38/39/40 ⇒ **无 35**。",
       "deviation": null,
       "basis": "semantic",
-      "notes": "MG-47 实现完成（2026-11-21，card/mg47-windtebo：S2 `2acce3eca` + S3/S4 `15e53ab18` + S5 测试 `09b0874d3`）：`cast_windtebo_spell` + `windtebo_chance` + host 臂（版本门后）+ golden/驱动/比较器；退化守卫与五颗牙红证见 scope。**生产不可达（冻结 sql 无魔号 35 行）**；名字陷阱：`灭天火`=45。T-285 已收口，deviation 置 null。"
+      "notes": "MG-47 实现完成（2026-11-21，card/mg47-windtebo：S2 `2acce3eca` + S3/S4 `15e53ab18` + S5 测试 `09b0874d3`）：`cast_windtebo_spell` + `windtebo_chance` + host 臂（版本门后）+ golden/驱动/比较器；退化守卫与五颗牙红证见 scope。**生产不可达（冻结 sql 无魔号 35 行）**；名字陷阱：`灭天火`=45。T-285 已收口，deviation 置 null。 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。"
     },
     {
       "id": "MG-48",
