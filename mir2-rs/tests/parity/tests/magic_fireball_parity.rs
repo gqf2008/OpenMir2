@@ -3526,7 +3526,18 @@ fn verify_skill_tail_ledger(stem: &str) {
             })
             .unwrap_or_default()
     };
-    for label in ["s1", "s5", "s13"] {
+    // 标签**从 golden 取**（不是写死三支）：新增 case（如 `s1_up`）自动进面；金标准有而台账缺 ⇒ 防空转红。
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[{stem}] 金标准无 case");
+    for label in &labels {
+        let label = label.as_str();
         // ---- golden 侧 ----
         let g_case = golden["cases"]
             .as_array()
@@ -3585,29 +3596,63 @@ fn verify_skill_tail_ledger(stem: &str) {
         }
         // ---- 训练面形态（前提与载荷；两侧相等已在上；这里钉语义）----
         assert_eq!(
-            num(g_train, "level_after"),
-            num(g_train, "level_before"),
-            "[{label}] 本批只做未升级支：Level 不得变化"
-        );
-        assert_eq!(
             num(g_train, "tran_point_before"),
             0,
             "[{label}] 夹具前提：初始 TranPoint 必须显式 0（否则「恰加 1..=3」不可钉）"
         );
-        let tp = num(g_train, "tran_point_after");
-        assert!(
-            (1..=3).contains(&tp),
-            "[{label}] TranPoint 应 = Random(3)+1 ∈ 1..=3，实得 {tp}"
-        );
-        assert!(
-            num(g_train, "max_train_at_level") > tp,
-            "[{label}] 前提：MaxTrain[n_level] 必须 > TranPoint（否则 640 走 800ms 升级支，本批 scope 外）"
-        );
-        assert_eq!(
-            num(g_train, "n_level"),
-            num(g_train, "level_after"),
-            "[{label}] `nLevel` 规则（Level<4 && TrainLv>=Level ⇒ nLevel=Level）不成立 ⇒ MaxTrain 断言核错了项"
-        );
+        let upgrade = num(g_train, "level_after") != num(g_train, "level_before");
+        let due640: i64 = if upgrade { 800 } else { 1000 };
+        if upgrade {
+            // 800ms 升级支（`PlayObject.cs:5210-5216`）：门成立 ⇒ `TranPoint -= MaxTrain`、`Level++`。
+            // 用 golden 自己的抽值（`Rng[0]` = `Random(3)`，点值 = 抽+1）独立复算 TranPoint 后值，
+            // 不拿实现输出自证门。
+            assert_eq!(
+                num(g_train, "level_after"),
+                num(g_train, "level_before") + 1,
+                "[{label}] 升级支：Level 应恰 +1"
+            );
+            assert_eq!(
+                num(g_train, "n_level"),
+                num(g_train, "level_before"),
+                "[{label}] 升级支：`nLevel` 必须由**升级前** Level 推导"
+            );
+            let points = g_case["Rng"][0].as_i64().unwrap_or(i64::MIN) + 1;
+            let mt = num(g_train, "max_train_at_level");
+            let tp_after = num(g_train, "tran_point_after");
+            assert!(
+                mt <= num(g_train, "tran_point_before") + points,
+                "[{label}] 升级支前提：MaxTrain={mt} 必须 ≤ 前值 TranPoint + 抽点 {points}"
+            );
+            assert_eq!(
+                tp_after,
+                num(g_train, "tran_point_before") + points - mt,
+                "[{label}] 升级支：TranPoint 后值必须 = 前值 + 抽点 − MaxTrain"
+            );
+            assert!(
+                tp_after >= 0,
+                "[{label}] 升级支：TranPoint 后值必须 ≥ 0，实得 {tp_after}"
+            );
+        } else {
+            assert_eq!(
+                num(g_train, "level_after"),
+                num(g_train, "level_before"),
+                "[{label}] 未升级支：Level 不得变化"
+            );
+            let tp = num(g_train, "tran_point_after");
+            assert!(
+                (1..=3).contains(&tp),
+                "[{label}] TranPoint 应 = Random(3)+1 ∈ 1..=3，实得 {tp}"
+            );
+            assert!(
+                num(g_train, "max_train_at_level") > tp,
+                "[{label}] 前提：MaxTrain[n_level] 必须 > TranPoint（否则 640 走 800ms 升级支）"
+            );
+            assert_eq!(
+                num(g_train, "n_level"),
+                num(g_train, "level_after"),
+                "[{label}] `nLevel` 规则（Level<4 && TrainLv>=Level ⇒ nLevel=Level）不成立 ⇒ MaxTrain 断言核错了项"
+            );
+        }
         // ---- 帧面（golden 与台账同判；负向面只对**产品侧**有意义，故台账侧单独钉）----
         for (case, side_name) in [(g_case, "golden"), (r_case, "台账")] {
             let caster = seq(case, "caster");
@@ -3618,8 +3663,8 @@ fn verify_skill_tail_ledger(stem: &str) {
             );
             assert_eq!(
                 caster,
-                vec![(638, 0), (640, 1000)],
-                "[{label}/{side_name}] caster 帧序应为 [638@0, 640@1000ms]"
+                vec![(638, 0), (640, due640)],
+                "[{label}/{side_name}] caster 帧序应为 [638@0, 640@{due640}ms]"
             );
             for who in ["target", "obs_in"] {
                 assert_eq!(
@@ -3635,7 +3680,9 @@ fn verify_skill_tail_ledger(stem: &str) {
         }
     }
     // 通用面：帧逐字段（含 recog/due_ms_rel/tail）+ `Rng == Rng ++ DeliverRng` + Rm 多重集 + HP。
-    real_ledger_verify_labels(stem, &golden, &["s1", "s5", "s13"]);
+    // 标签同上（从 golden 取）：golden 与台账的 case 集必须一一对应（多了/少了都红）。
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels(stem, &golden, &label_refs);
 }
 
 /// **`10 疾光电影`（`SKILL_SHOOTLIGHTEN`，MG-18）**真实台账 → 判定面（标签 s1/s5/s13）。

@@ -90351,6 +90351,18 @@ SendRefMsgRange=15
         u16::try_from(v).unwrap_or_else(|_| panic!("[{stem}/{label}] Fixture.{key}={v} 越界 u16"))
     }
 
+    /// 金标准该支 `Train` 块的整数字段（**训练面输入只从 golden 读**）。
+    ///
+    /// `train_lv` / `max_train0` 决定 640 走 1000ms 还是 800ms 支（`PlayObject.cs:5210-5216`）；
+    /// 写死会让「实际应用值」与「记录值」脱钩（charter §53 记录端）。
+    fn golden_train_required(stem: &str, label: &str, key: &str) -> i64 {
+        golden_case_for(stem, label)["Train"][key]
+            .as_i64()
+            .unwrap_or_else(|| {
+                panic!("[{stem}/{label}] 金标准 Train 缺 `{key}`（SkillTail 夹具必须落盘训练面）")
+            })
+    }
+
     fn golden_fixture_opt(stem: &str, label: &str, key: &str) -> Option<u64> {
         let file = golden_file_name(stem);
         golden_case(&file, label)["Fixture"][key].as_u64()
@@ -90520,6 +90532,11 @@ SendRefMsgRange=15
         caster_mc: u16,
         caster_sc: u16,
         anti_magic: u16,
+        /// `MagicInfo.train_lv`（金标准 `Train.train_lv`）：升级门 `TrainLv > Level`。
+        train_lv: i64,
+        /// `MagicInfo.max_train[0]`（金标准 `Train.max_train0`）：1000 ⇒ 1000ms 未升级支；
+        /// 1 ⇒ 升级支（640 走 800ms）。
+        max_train0: i64,
     }
 
     /// 共享尾 B 类（49/51/52/53/54）夹具 rig：`train_lv=3`（升级门 `TrainLv>Level` 非退化）、
@@ -90545,9 +90562,14 @@ SendRefMsgRange=15
             magic_id,
             effect: u8::try_from(inp.effect).expect("effect 越界"),
             effect_type: u8::try_from(inp.effect_type).expect("effect_type 越界"),
-            train_lv: 3,
+            train_lv: u8::try_from(inp.train_lv).expect("train_lv 越界"),
             train_level: [0; 4],
-            max_train: [1000, 0, 0, 0],
+            max_train: [
+                i32::try_from(inp.max_train0).expect("max_train0 越界"),
+                0,
+                0,
+                0,
+            ],
             ..mir2_data::MagicInfo::default()
         }]);
         // `UserMagicLevel=0`、`TranPoint=0`（`new_layout` 缺省是 level=1 ⇒ 这里显式落 0：
@@ -90638,6 +90660,10 @@ SendRefMsgRange=15
         // 一旦与夹具漂移，`recog` 会整体对不上而看不出原因。
         let caster_actor_id = golden_fixture_required(stem, label, "caster_actor_id");
         let id_base = i32::from(caster_actor_id) - 1;
+        // 训练面输入（`train_lv`/`max_train0`）**同样从 golden 读**：它们决定 640 走 1000ms 还是
+        // 800ms 支（`PlayObject.cs:5210-5216`），写死会让「实际应用值」与「记录值」脱钩。
+        let train_lv = golden_train_required(stem, label, "train_lv");
+        let max_train0 = golden_train_required(stem, label, "max_train0");
         let mut rig = skill_tail_rig(
             id_base,
             magic_id,
@@ -90648,6 +90674,8 @@ SendRefMsgRange=15
                 caster_mc,
                 caster_sc,
                 anti_magic,
+                train_lv,
+                max_train0,
             },
         );
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
@@ -90706,7 +90734,8 @@ SendRefMsgRange=15
         let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
         let mi = rig.magic_table.get(magic_id).expect("魔表必须有该魔号");
         // ---- 夹具前提（先于帧断言执行；前提坏了要在这里红，而不是让下游断言变永真）----
-        let n_level = skill_tail_n_level(level_after, mi.train_lv);
+        // `nLevel` 用**升级前** Level 推导（升级支执行后 Level 已 +1，用后值会核到没被用的那一项）。
+        let n_level = skill_tail_n_level(level_before, mi.train_lv);
         let mt_used = mi.max_train.get(n_level).copied().unwrap_or(0);
         // ---- RM 列（**装配**、弱比较面；映射见 P1 设计件 §5.2，不作为主判据）----
         // `10008 RM_SPELL`：wParam=Effect、p1/p2=点击坐标、p3=MagicId、prio=(byte)10008=24；
@@ -90799,19 +90828,47 @@ SendRefMsgRange=15
         write_run_sidecar(&out, &run_id, seed);
         // ---- 断言（**写在落盘之后**：红了也要留下本次台账，比较器才能给「语义红」而非「陈旧」）----
         // 顺序：前提 → 抽数 → 帧面。前提坏了要在这里红，而不是让下游断言变永真。
-        assert!(
-            i64::from(mt_used) > i64::from(tp_after),
-            "[{stem}/{label}] 前提：MaxTrain[nLevel={n_level}]={mt_used} 必须 > TranPoint={tp_after}"
-        );
-        assert!(
-            mi.train_lv > level_after,
-            "[{stem}/{label}] 前提：TrainLv={} 必须 > Level={level_after}",
-            mi.train_lv
-        );
-        assert_eq!(
-            level_after, level_before,
-            "[{stem}/{label}] 本批只做未升级支（Level 不得变化）"
-        );
+        let upgrade = level_after != level_before;
+        if upgrade {
+            // 升级支前提（`PlayObject.cs:5210-5216`）：门 `MaxTrain[nLevel] <= TranPoint(抽后)`
+            // 成立 ⇒ `TranPoint -= MaxTrain`、`Level++`。门成立 ⇔ `tp_after >= 0`；再用 golden 的
+            // 抽值独立复算一次（不拿实现输出自证门）。
+            let points = cast_rng[0].1 + 1;
+            assert_eq!(
+                level_after,
+                level_before + 1,
+                "[{stem}/{label}] 升级支前提：Level 应恰 +1"
+            );
+            assert!(
+                i64::from(mt_used) <= i64::from(tp_before) + points,
+                "[{stem}/{label}] 升级支前提：MaxTrain[nLevel={n_level}]={mt_used} 必须 ≤ TranPoint 前值 {} + 抽点 {points}",
+                tp_before
+            );
+            assert!(
+                i64::from(tp_after) >= 0,
+                "[{stem}/{label}] 升级支前提：升级后 TranPoint={tp_after} 必须 ≥ 0"
+            );
+            assert_eq!(
+                i64::from(tp_after),
+                i64::from(tp_before) + points - i64::from(mt_used),
+                "[{stem}/{label}] 升级支：TranPoint 后值必须 = 前值 + 抽点 − MaxTrain"
+            );
+            assert!(
+                mi.train_lv > level_before,
+                "[{stem}/{label}] 升级支前提：TrainLv={} 必须 > 升级前 Level={level_before}",
+                mi.train_lv
+            );
+        } else {
+            assert!(
+                i64::from(mt_used) > i64::from(tp_after),
+                "[{stem}/{label}] 前提：MaxTrain[nLevel={n_level}]={mt_used} 必须 > TranPoint={tp_after}"
+            );
+            assert!(
+                mi.train_lv > level_after,
+                "[{stem}/{label}] 前提：TrainLv={} 必须 > Level={level_after}",
+                mi.train_lv
+            );
+        }
         assert_eq!(
             cast_rng.len(),
             1,
@@ -90833,6 +90890,17 @@ SendRefMsgRange=15
                 mir2_protocol::messages::SM_MAGIC_LVEXP
             ],
             "[{stem}/{label}] caster 帧序应为 [638, 640]"
+        );
+        let due640 = all_frames
+            .iter()
+            .filter(|(sock, _, _)| *sock == 911)
+            .find(|(_, b, _)| sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+            .map(|(_, _, due)| *due);
+        let want_due = if upgrade { 800 } else { 1000 };
+        assert_eq!(
+            due640,
+            Some(want_due),
+            "[{stem}/{label}] 640 的 due 应为 {want_due}ms（升级 800 / 未升级 1000）"
         );
         assert!(
             !idents(911).contains(&mir2_protocol::messages::SM_SPELL),
@@ -90943,6 +91011,38 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn skill54_parity_s13() {
         skill_tail_parity_drive("skill54", 54, "s13", golden_seed("skill54", "s13"));
+    }
+
+    // ---- 800ms 升级变体（MG-58/60/61/62/63）：`s1_up`，MaxTrain[0]=1 ⇒ CheckMagicLevelUp 成功 ----
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill49_parity_s1_up() {
+        skill_tail_parity_drive("skill49", 49, "s1_up", golden_seed("skill49", "s1_up"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill51_parity_s1_up() {
+        skill_tail_parity_drive("skill51", 51, "s1_up", golden_seed("skill51", "s1_up"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill52_parity_s1_up() {
+        skill_tail_parity_drive("skill52", 52, "s1_up", golden_seed("skill52", "s1_up"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill53_parity_s1_up() {
+        skill_tail_parity_drive("skill53", 53, "s1_up", golden_seed("skill53", "s1_up"));
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn skill54_parity_s1_up() {
+        skill_tail_parity_drive("skill54", 54, "s1_up", golden_seed("skill54", "s1_up"));
     }
 
     /// **MG-55（46 分身术）**真实台账驱动：金标准 `golden/magic/clone46.json`（单支 `clone`）。
