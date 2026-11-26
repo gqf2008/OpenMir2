@@ -239,7 +239,7 @@ public static class Program
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
             if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
-            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100 });
+            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100, ExtraCaseLabel = "undead", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1 } } });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
@@ -1592,6 +1592,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// <summary>为 true ⇒ `EmitGolden` 的 case 里落 `Train` 块（本批专用；缺省零变化）。</summary>
         public bool SkillTail;
         /// <summary>
+        /// **额外 case 的标签**（`null` ⇒ 不追加，缺省零变化）。§35 对象类型分支批用：
+        /// 在既有 s1/s5/s13 之外再跑一支，带 `ExtraCaseMonsters` 作为同场怪物
+        /// （如 lightflower 的 undead 目标），跑完把 `spec.Monsters` 还原。
+        /// </summary>
+        public string ExtraCaseLabel;
+        /// <summary>`ExtraCaseLabel` 支的同场怪物（缺省空 ⇒ 与既有支同场）。</summary>
+        public MonsterSpec[] ExtraCaseMonsters = Array.Empty<MonsterSpec>();
+        /// <summary>
         /// true ⇒ 本支是**升级变体**（MG-58/60/61/62/63 的 800ms 支）：令 `MaxTrain[nLevel] &lt;=
         /// TrainSkill 后的 TranPoint` ⇒ `CheckMagicLevelUp` 成功、`Level++`、640 走 **800ms**
         /// （`PlayObject.cs:5210-5216`）。与未升级三支同 seed，便于逐帧对照。
@@ -2144,13 +2152,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var cases = new[]
+        var cases = new List<FireballResult>
         {
             RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, false),
             RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
             RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
         };
-        return EmitGolden(spec, cases);
+        if (spec.ExtraCaseLabel != null)
+        {
+            // §35 对象类型分支批：追加一支带同场怪物的 case（做完立即还原 `Monsters`，
+            // 其它支与 `fixture_spec` 零变化）。同 seed=1/ActorId 段尾 4100，便于与 s1 逐帧对照。
+            var saved = spec.Monsters;
+            spec.Monsters = spec.ExtraCaseMonsters;
+            cases.Add(RunMagicCase(spec, spec.ExtraCaseLabel, 1, 4100, spec.TargetMaxHp, false));
+            spec.Monsters = saved;
+        }
+        return EmitGolden(spec, cases.ToArray());
     }
 
     /// <summary>把实跑状态装进契约输入（平铺值取 target 的实时字段）。</summary>
