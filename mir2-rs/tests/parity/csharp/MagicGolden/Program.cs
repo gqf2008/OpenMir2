@@ -192,7 +192,12 @@ public static class Program
             // 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**（`HUtil32.LoByte(WAbil.SC)` 起）；
             // `Race>=Animal ⇒ boTrain`（训练尾 640/10123）。无 LA_UNDEAD 分支 ⇒ 单额外 case。
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true, FaithfulPump = true } } });
-            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            // **MG-53（2026-11-26，批 B）**：`Race>=Animal` 只影响 `boTrain`，而本 stem 的
+            // `UserMagicLevel=3` 把训练门关掉 ⇒ 需要**三支结构**：既有三支（玩家@lv3）不动；
+            // `player_lv0`（玩家@lv0，对照）与 `monster_lv0`（怪@lv0，处理）逐项比，
+            // 差值才是 `Race>=Animal` 的（boTrain/训练尾）效应。`Random(Level)` 在 lv0 下变
+            // `Random(0)`（§27 边界），两支持同等级 ⇒ 边界效应由"对照 vs 处理"分离。
+            if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "player_lv0", Monsters = Array.Empty<MonsterSpec>(), TargetMonster = 0, UserMagicLevelOverride = 0, UseHitSeed = true }, new ExtraCaseSpec { Label = "monster_lv0", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UserMagicLevelOverride = 0, UseHitSeed = true, IdBase = 4200 } } });
             // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
             // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true } } });
@@ -2128,10 +2133,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
             var savedFaithfulPump = spec.FaithfulPump;
+            var savedUserMagicLevel = spec.UserMagicLevel;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
             spec.FaithfulPump = extra.FaithfulPump;
+            if (extra.UserMagicLevelOverride.HasValue)
+            {
+                spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
+            }
             var extraSeed = extra.UseHitSeed ? seedHit : 1;
             var extraExpect = extra.UseHitSeed
                 ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
@@ -2141,6 +2151,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
             spec.FaithfulPump = savedFaithfulPump;
+            spec.UserMagicLevel = savedUserMagicLevel;
         }
         return cases.ToArray();
     }
@@ -4350,6 +4361,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 落 `Fixture.faithful_pump=true`，驱动据此在 t=0 泵一次（否则等键旋转次数差 1、640 漂到 1100）。
         /// </summary>
         public bool FaithfulPump;
+        /// <summary>
+        /// **MG-53（2026-11-26）**：本 case 的 `UserMagicLevel` 覆盖（`null` = 用 stem 值）。
+        /// 用途：同一 stem 既有支是 `UserMagicLevel=3`（训练门关），要观测 `Race>=Animal ⇒ boTrain`
+        /// 就必须令训练门开（`< 3`）——但那样会同时改变等级轴，故必须配一个**同等级的玩家对照支**
+        /// （`player_lv0`）与怪目标支（`monster_lv0`）逐项比，差值才是 `Race>=Animal` 的效应。
+        /// </summary>
+        public int? UserMagicLevelOverride;
         /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让

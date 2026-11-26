@@ -1604,18 +1604,22 @@
         "cases": [
           "miss(seed=14)",
           "edge(seed=18)",
-          "hit(seed=5)"
+          "hit(seed=5)",
+          "player_lv0(seed=5)",
+          "monster_lv0(seed=5)"
         ],
         "unit_tests": [
           "tests::hbfireball_parity_miss",
           "tests::hbfireball_parity_edge",
-          "tests::hbfireball_parity_hit"
+          "tests::hbfireball_parity_hit",
+          "tests::hbfireball_parity_player_lv0",
+          "tests::hbfireball_parity_monster_lv0"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。【范围：verified 仅玩家 target；MagHbFireBall 的 Race>=Animal 分支未覆盖（卡 §35）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
+      "notes": "旧清单 cost=小时级。【范围：verified 覆盖玩家 target（既有 lv3 三支）与 lv0 三支结构（`player_lv0` 对照 / `monster_lv0` 处理，2026-11-26）；`Race>=Animal` 的 boTrain 轴已可区分】",
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），**对象类型分支已覆盖（2026-11-26，批 B；§35）**：`Race>=Animal` 在 `MagHbFireBall`（`:1040`）**只影响 `boTrain`**，而本 stem 既有三支固定 `UserMagicLevel=3`（训练门关）⇒ 怪目标与玩家目标无可观测差异。故用**三支结构**：既有三支（玩家@lv3）不动；`player_lv0`（玩家@lv0，**对照**）；`monster_lv0`（怪@lv0，**处理**）。实测「对照 vs 处理」的逐项差只与 boTrain/训练尾相关——处理支 caster 多 `RM_MAGIC_LVEXP(10123)` + `SM_MAGIC_LVEXP(640, due=1000)`；受击链（8044/10052/8103/8090、SM 31/53/656）在对照支落在玩家、在处理支落在 `mon0`；两支都**未触发 push**（`Random(20)=18` ≥ 门）。**`Random(0)` 边界（§27）**：lv0 下 push 的 `Random(Level)` 变 `Random(0)`，两支抽值（`[3,0,0,0,4,18,0,0,5]` vs `[3,0,0,0,4,18,0,2,0]`）已被 golden 记录并进 RNG 逐值比较面。push **正臂**仍由既有 `edge` 覆盖（caster 8043/8092+SM 9，target/obs_in 8092+9）。驱动 `tests::hbfireball_parity_player_lv0`（id_base 4100）/ `_monster_lv0`（4200）；比较器标签从 golden 取（5 支，缺台账即红）。属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。"
     },
     {
       "id": "MG-54",
