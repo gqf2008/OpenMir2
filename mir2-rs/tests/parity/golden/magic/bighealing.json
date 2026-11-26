@@ -908,7 +908,7 @@
         "inc_health_spell_tick_base": 0,
         "heal_level_target": 20,
         "heal_ticks_both": true,
-        "heal_level_caster": 0
+        "heal_level_caster": 1
       },
       "Label": "big_tick_two",
       "DrainPasses": 2,
