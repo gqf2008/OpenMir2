@@ -9070,6 +9070,22 @@ impl World {
     ///   verify_players_map_time          base.Run:223-245（VerifyMapTime + HP/MP 钳制）
     ///   AOI 刷新
     /// ```
+    /// **MG-57 / ③**：对单个观察者跑一次**生产 AOI 扫描**——与 `OutputAoi` 段同一个
+    /// `aoi::search_view_range` + `AoiStore for EntityStore`，结果写回该实体的
+    /// `map_binding.visible_actors`（`MagPushArround` 遍历的就是这张表）。
+    ///
+    /// 供 parity rig 在「不跑整 tick」的夹具里取生产扫描路径；**不做 `SearchTick` 节流**
+    /// （只跑一次扫描，不推进任何计时器）。返回本趟**离开视野**的 id（与 `search_view_range` 同义）。
+    pub fn search_view_range_now(&mut self, viewer_id: i32) -> Vec<i32> {
+        let map_id = self.entities.get(viewer_id).map_or(0, |e| e.map_id);
+        let now = self.clock_ms;
+        let World { entities, sim, .. } = self;
+        let Some(map) = sim.maps.get_mut(map_id) else {
+            return Vec::new();
+        };
+        crate::aoi::search_view_range(map, entities, viewer_id, now)
+    }
+
     pub fn tick(&mut self) -> TickRecord {
         let mut record = self.tick_head();
         self.tick_tail(&mut record);
