@@ -1256,7 +1256,7 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 | MG-27 | 13 `SKILL_FIRECHARM` | `Race >= Animal` |
 | MG-54 | 45 `SKILL_45` | `LifeAttrib == LA_UNDEAD` 与 `Race >= Animal` |
 | MG-53 | 44 `SKILL_44` | 共享 helper `MagHbFireBall` 的 `Race >= Animal` |
-| MG-38 | 24 `SKILL_LIGHTFLOWER` | 共享 helper `MagElecBlizzard` 的 `LifeAttrib != LA_UNDEAD` |
+| MG-38 | 24 `SKILL_LIGHTFLOWER` | ~~共享 helper `MagElecBlizzard` 的 `LifeAttrib != LA_UNDEAD`~~ **已覆盖（2026-11-26）**：golden `undead` 支（`mon0` 8044 `p1=15` vs 玩家 `1`），装置 `MonsterSpec.OperateStruck`；旁观者 31/656 见 `DEV-MONSTER-DISPLAY-FRAME` |
 | MG-32 | 18 `SKILL_CLOAK` | 共享 helper `MagMakePrivateTransparent` 的 `Race >= Animal && TargetCret == baseObject` |
 
 **其余 10 条已升格条目（魔号 1、2、14、15、19、28、29、31、33、47）的对象门只有
