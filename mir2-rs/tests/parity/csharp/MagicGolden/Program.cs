@@ -186,7 +186,7 @@ public static class Program
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
             // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
-            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCaseLabel = "monster", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, ExtraCaseTargetMonster = 1, ExtraCaseTargetMonsterUndead = false });
+            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true } } });
             if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7, StepDrainMs = 100 });
@@ -241,7 +241,7 @@ public static class Program
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
             if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
-            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100, ExtraCaseLabel = "undead", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1, Animal = true, OperateStruck = true } } });
+            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "undead", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1, Animal = true, OperateStruck = true } } } } });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
@@ -1569,14 +1569,6 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool TargetMonsterUndead = true;
         /// <summary>
-        /// **MG-11（2026-11-26）**：`ExtraCaseLabel` 的额外 case 是否把 `TargetMonster` 指向怪物
-        /// （**1 基**；0 = 玩家目标，与既有 `BehaviorBatch` 的 extra case 同形）。
-        /// 只在 `ExtraCaseLabel != null` 时读取；缺省 0 ⇒ 既有 extra case 零变化。
-        /// </summary>
-        public int ExtraCaseTargetMonster;
-        /// <summary>**MG-11**：`ExtraCaseLabel` 的 `TargetMonsterUndead`（缺省 true，同主旋钮语义）。</summary>
-        public bool ExtraCaseTargetMonsterUndead = true;
-        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -1611,13 +1603,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// <summary>为 true ⇒ `EmitGolden` 的 case 里落 `Train` 块（本批专用；缺省零变化）。</summary>
         public bool SkillTail;
         /// <summary>
-        /// **额外 case 的标签**（`null` ⇒ 不追加，缺省零变化）。§35 对象类型分支批用：
-        /// 在既有 s1/s5/s13 之外再跑一支，带 `ExtraCaseMonsters` 作为同场怪物
-        /// （如 lightflower 的 undead 目标），跑完把 `spec.Monsters` 还原。
+        /// **额外 case 列表（2026-11-26 泛化）**：在既有三支之外继续跑；每项自带 label / 同场怪物 /
+        /// 目标怪物（1 基）/ 目标是否不死 / seed 口径。缺省空 ⇒ 既有件零变化。
+        /// `BehaviorBatch` 与 `AntiMagicBatch` 共用同一实现（不再各自一套单字段）。
         /// </summary>
-        public string ExtraCaseLabel;
-        /// <summary>`ExtraCaseLabel` 支的同场怪物（缺省空 ⇒ 与既有支同场）。</summary>
-        public MonsterSpec[] ExtraCaseMonsters = Array.Empty<MonsterSpec>();
+        public ExtraCaseSpec[] ExtraCases = Array.Empty<ExtraCaseSpec>();
         /// <summary>
         /// true ⇒ 本支是**升级变体**（MG-58/60/61/62/63 的 800ms 支）：令 `MaxTrain[nLevel] &lt;=
         /// TrainSkill 后的 TranPoint` ⇒ `CheckMagicLevelUp` 成功、`Level++`、640 走 **800ms**
@@ -2109,19 +2099,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
             RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "edge", Threshold = threshold }),
             RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }),
         };
-        // **MG-11（2026-11-26）**：可选额外「怪目标」case（同 `BehaviorBatch` 的 extra-case 风格；
-        // 缺省 null ⇒ 既有三支零变化）。seed = hit（首抽 > 门槛 ⇒ 走到伤害/训练尾面）；
-        // `ExtraCaseTargetMonster/Undead` 只在本 case 临时生效，做完立即还原。
-        if (spec.ExtraCaseLabel != null)
+        // **2026-11-26 泛化**：`ExtraCases` 每项追加一支（缺省空 ⇒ 既有三支零变化）。
+        // `UseHitSeed` ⇒ 用本批 hit 种子（首抽 > 门槛，走到伤害/训练尾面），否则 seed=1；
+        // 每项临时替换 `Monsters/TargetMonster/TargetMonsterUndead`，做完立即还原。
+        foreach (var extra in spec.ExtraCases)
         {
             var savedMonsters = spec.Monsters;
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
-            spec.Monsters = spec.ExtraCaseMonsters;
-            spec.TargetMonster = spec.ExtraCaseTargetMonster;
-            spec.TargetMonsterUndead = spec.ExtraCaseTargetMonsterUndead;
-            cases.Add(RunMagicCase(spec, spec.ExtraCaseLabel, seedHit, 4100, spec.TargetMaxHp, false,
-                new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }));
+            spec.Monsters = extra.Monsters;
+            spec.TargetMonster = extra.TargetMonster;
+            spec.TargetMonsterUndead = extra.TargetMonsterUndead;
+            var extraSeed = extra.UseHitSeed ? seedHit : 1;
+            var extraExpect = extra.UseHitSeed
+                ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
+                : null;
+            cases.Add(RunMagicCase(spec, extra.Label, extraSeed, extra.IdBase, spec.TargetMaxHp, false, extraExpect));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
@@ -2195,14 +2188,20 @@ private static int ReadInstanceInt(object obj, string fieldName)
             RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
             RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
         };
-        if (spec.ExtraCaseLabel != null)
+        // **2026-11-26 泛化**：`ExtraCases` 每项追加一支（缺省空 ⇒ 既有三支零变化）。
+        // 本批无 AntiMagic 骰 ⇒ seed 固定 1、ActorId 段尾 4100（便于与 s1 逐帧对照）。
+        foreach (var extra in spec.ExtraCases)
         {
-            // §35 对象类型分支批：追加一支带同场怪物的 case（做完立即还原 `Monsters`，
-            // 其它支与 `fixture_spec` 零变化）。同 seed=1/ActorId 段尾 4100，便于与 s1 逐帧对照。
-            var saved = spec.Monsters;
-            spec.Monsters = spec.ExtraCaseMonsters;
-            cases.Add(RunMagicCase(spec, spec.ExtraCaseLabel, 1, 4100, spec.TargetMaxHp, false));
-            spec.Monsters = saved;
+            var savedMonsters = spec.Monsters;
+            var savedTargetMonster = spec.TargetMonster;
+            var savedTargetMonsterUndead = spec.TargetMonsterUndead;
+            spec.Monsters = extra.Monsters;
+            spec.TargetMonster = extra.TargetMonster;
+            spec.TargetMonsterUndead = extra.TargetMonsterUndead;
+            cases.Add(RunMagicCase(spec, extra.Label, 1, extra.IdBase, spec.TargetMaxHp, false));
+            spec.Monsters = savedMonsters;
+            spec.TargetMonster = savedTargetMonster;
+            spec.TargetMonsterUndead = savedTargetMonsterUndead;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -4273,6 +4272,33 @@ private static int ReadInstanceInt(object obj, string fieldName)
     }
 
     /// <summary>非玩家对象（动物/怪物）夹具输入。</summary>
+    /// <summary>
+    /// **额外 case 描述（2026-11-26）**：`MagicSpec.ExtraCases` 的元素。
+    /// </summary>
+    private sealed class ExtraCaseSpec
+    {
+        /// <summary>额外 case 的标签（如 `undead` / `monster` / `monster_undead`）。</summary>
+        public string Label;
+        /// <summary>同场怪物（空 ⇒ 无）。只在本 case 生效，做完还原。</summary>
+        public MonsterSpec[] Monsters = Array.Empty<MonsterSpec>();
+        /// <summary>施法目标 = 本列表第几只怪（**1 基**；0 = 既有的玩家目标）。</summary>
+        public int TargetMonster;
+        /// <summary>`TargetMonster` 是否不死（缺省 true；只在 `TargetMonster>0` 时生效）。</summary>
+        public bool TargetMonsterUndead = true;
+        /// <summary>
+        /// seed 口径：true ⇒ 用本批的 **hit 种子**（`AntiMagicBatch`；首抽越过门槛），
+        /// false ⇒ 固定 1（`BehaviorBatch` 旧口径，`lightflower/undead` 即此）。
+        /// </summary>
+        public bool UseHitSeed;
+        /// <summary>
+        /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
+        /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
+        /// `SendRefMsg` 的格子扫描取到上一 case 的旧对象（2026-11-26 实测：`monster_undead`
+        /// 的 10008/10120/638 全丢，落到上一 case 的队列）。
+        /// </summary>
+        public int IdBase = 4100;
+    }
+
     private sealed class MonsterSpec
     {
         public int X;
