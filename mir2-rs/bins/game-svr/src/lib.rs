@@ -92700,6 +92700,11 @@ SendRefMsgRange=15
         let hp_before = i64::from(rig.world.entities.get(target).unwrap().hp);
         let (level_before, tp_before) = skill_tail_rcd(&rig, magic_id);
         let n0 = trace_line_count(&trace);
+        // **MG-36 ①（2026-11-26）**：tick 臂的绝对钟基数在**施法之前**落到 world——
+        // oracle 在 `ClockSeam.Begin(1000000)` 下建事件 ⇒ `RunStart = GetTickCount() = 1000000`。
+        if let Some(cast_ms) = fx["fire_cast_ms"].as_i64() {
+            rig.world.clock_ms = cast_ms;
+        }
         rig.cast(magic_id, (101, 100), target);
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
@@ -92850,6 +92855,31 @@ SendRefMsgRange=15
             "max_train_at_level": mt_used,
             "train_level_at_level": mi.train_level[n_level],
         });
+        // **MG-36 ①（2026-11-26）**：tick 臂在**帧/台账采集之后**跑（避免推进钟让延迟消息提前到期、
+        // 污染交付段抽数）。基数 = **事件登记时刻**（`Fixture.fire_cast_ms`，oracle `ClockSeam` 绝对值），
+        // **不是**此处的 `rig.world.clock_ms`——排水步进已把钟推到 `+1200`，拿它当基数会让 `+500`
+        // 的 `RunTick` 整点门整体错位（repro 原文见交接 §21.1）。
+        // 期望（解析硬写，不读 golden、不读 C#）：`RunTick=500` 的 `+500` 不跑、`+501` 跑；
+        // `FireRunTick` 的 `+3501` 距上次结算**恰 3000**（不 > 3000）不结算、`+4002` 结算
+        // ⇒ 累计 = [0, 1, 1, 1, 2]。
+        if let Some(deltas) = fx["fire_ticks_ms"].as_array() {
+            let t0 = fx["fire_cast_ms"]
+                .as_i64()
+                .unwrap_or_else(|| panic!("[{stem}/{label}] golden 必须记录 fire_cast_ms"));
+            let mut cum = Vec::new();
+            for d in deltas {
+                let delta = d.as_i64().expect("fire_ticks_ms 必须是整数");
+                rig.world.clock_ms = t0 + delta;
+                rig.world.run_map_events();
+                cum.push(i64::try_from(rig.world.pending_mag_struck.len()).unwrap());
+            }
+            assert_eq!(
+                cum,
+                vec![0, 1, 1, 1, 2],
+                "[firecross/{label}] tick 累计 struck 必须 = [0,1,1,1,2]（RunTick 500 / Fire 3000 两门整点）"
+            );
+        }
+
         let firecross_block = serde_json::json!({
             "events": events,
             "pre_event_cells": pre_cells
@@ -92968,6 +92998,12 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn firecross_parity_base() {
         firecross_parity_drive("base");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn firecross_parity_tick_boundaries() {
+        firecross_parity_drive("tick_boundaries");
     }
 
     #[test]
