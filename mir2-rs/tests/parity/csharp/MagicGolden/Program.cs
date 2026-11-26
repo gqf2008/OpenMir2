@@ -175,6 +175,9 @@ public static class Program
             if (name == "fireball-selftest") return FireballSelfTest();
             if (name == "warrskill") return ClientSpellXYEntry.Run();
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
+            // **DEV-MG-07（2026-11-27）**：27 真支臂（DoMotaebo Path A/B）——新 stem 新文件
+            // `warr-27-true.json`（opc-27 条件：不碰既有 `warr-27.json`）。
+            if (name == "warrskill-true") return ClientSpellXYEntry.RunTrue();
             // **MG-19（2026-11-26，批 B）**：`Race>=Animal` 与 `LifeAttrib==LA_UNDEAD` 两臂的
             // 示范——`monster`（非不死动物目标：无 1.5x、boTrain=true）与 `monster_undead`
             // （不死动物目标：`nPower=Round(nPower*1.5)`、boTrain=true）。怪物 `AntiMagic=1`
