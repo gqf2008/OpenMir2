@@ -1362,6 +1362,23 @@ mod tests {
         let mut gate_closed_checked = false;
         for c in cases {
             let name = c["name"].as_str().unwrap();
+            // **IT-16 补验（2026-11-26，第⑨项）**：`drained` 是 **oracle 装置侧**排水元数据；
+            // 做 fixture 自洽断言（`hit_cap=false`、`passes<=max_passes`），防止装置侧静默截断
+            // 被当完整账本。Rust 侧无对应泵趟数（彩票出帧同步）⇒ 不作对拍判据。
+            {
+                let drained = &c["drained"];
+                assert_eq!(
+                    drained["hit_cap"].as_bool(),
+                    Some(false),
+                    "{name}: drained.hit_cap 必须为 false（命中上限 ⇒ 账本可能不完整）"
+                );
+                let dp = drained["passes"].as_i64().unwrap_or(-1);
+                let dmax = drained["max_passes"].as_i64().unwrap_or(-1);
+                assert!(
+                    dp >= 0 && dmax > 0 && dp <= dmax,
+                    "{name}: drained 自洽：passes={dp} max_passes={dmax}"
+                );
+            }
             let rate = i32v(&c["config"]["applied"]["rate"]);
             let want = i32v(&c["rng"][0]["result"]);
             // 每个用例在 oracle 侧用**独立种子**（`seed + 序号`）重新播种 ⇒ Rust 同种子首抽必须逐值相同。
