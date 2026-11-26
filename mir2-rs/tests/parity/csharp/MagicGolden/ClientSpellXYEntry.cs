@@ -331,7 +331,7 @@ public static class ClientSpellXYEntry
     //
     // 臂（5 支，全部不依赖 seed 选边——L1/L0/L3 骰门 bound = L*4+6+等级差 ≥ 26 > Random(20) 上界）：
     //   push_ok         L1  Dir=2 怪(101,100)×1       ⇒ 两轮推挤 + RM_RUSH×2 + 目标伤害 + 训练尾 640@1000
-    //   free_run        L1  Dir=6 正前空               ⇒ Path B 两格 RM_RUSH，零抽零伤害零训练（result=false 负例）
+    //   free_run        L1  Dir=4 正前空               ⇒ Path B 两格 RM_RUSH，零抽零伤害零训练（result=false 负例；Dir=Left 被墙格占用故换轴）
     //   wall_selfdamage L1  Dir=6 墙(99,100)           ⇒ Path B 首格即挡：RUSHKUNG+红字+自伤 RM_STRUCK
     //   push_l3         L3  Dir=2 怪(101,100),(102,100)⇒ 4 轮推挤（含 L>=3 二格推）+ RM_RUSH×4 + 目标伤害
     //   levelup_l0      L0  Dir=2 怪(101,100)×1 HP4000⇒ SpellPoint=5 + 升级支 640@800；n24 byte 回绕 255 ⇒ 巨伤（bug-replica）
@@ -355,11 +355,17 @@ public static class ClientSpellXYEntry
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
-        string mapPath = Path.Combine(mapDir, "0.map");
+        // **墙单一来源（opc-27 2026-11-27 条件㈢）**：真支臂全部读**冻结的合成真格式地图**
+        // `golden/maps/warr-true-160.map`（160x160 全 Walk，仅 (99,100) = wFrImg bit15 ⇒ LowWall；
+        // 两侧同读同一文件，sha 记进 config。Rust 侧 `set_map_xy_flag` 不用——loader 直接表达该格属性）。
+        string mapPath = Environment.GetEnvironmentVariable("MAGICGOLDEN_TRUE_MAP");
+        if (string.IsNullOrWhiteSpace(mapPath))
+        {
+            mapPath = Path.GetFullPath("mir2-rs/tests/parity/golden/maps/warr-true-160.map");
+        }
         if (!File.Exists(mapPath))
         {
-            Console.Error.WriteLine("MAP_MISSING " + mapPath);
+            Console.Error.WriteLine("TRUE_MAP_MISSING " + mapPath);
             return 2;
         }
         var config = new
@@ -378,7 +384,8 @@ public static class ClientSpellXYEntry
             Cases = new[]
             {
                 new SubCase { Label = "push_ok", TargetX = OpenMir2.Enums.Direction.Right, MonsterCount = 1, TargetXyX = 110, TargetXyY = 100 },
-                new SubCase { Label = "free_run", TargetX = OpenMir2.Enums.Direction.Left },
+                // Dir=Down：Dir=Left 的走廊 (99,100) 被冻结墙占用（合成地图唯一墙格），换轴保持纯 Path B 两格
+                new SubCase { Label = "free_run", TargetX = OpenMir2.Enums.Direction.Down },
                 new SubCase { Label = "wall_selfdamage", TargetX = OpenMir2.Enums.Direction.Left, WallX = 99, WallY = 100 },
                 new SubCase { Label = "push_l3", TargetX = OpenMir2.Enums.Direction.Right, MonsterCount = 2, TargetXyX = 110, TargetXyY = 100, UserMagicLevelOverride = 3 },
                 // **byte 回绕 bug-replica**：`n24` 是 `byte`（`Base.cs:1398`），L0 两轮推挤后 `n24 -= 1` 从 0 回绕 255
@@ -684,7 +691,7 @@ public static class ClientSpellXYEntry
                 TrueAssert(Cnt(allIdents, RM_PUSH) == 0 && Cnt(allIdents, RM_STRUCK) == 0 && Cnt(allIdents, RM_RUSHKUNG) == 0, sc.Label, "free_run 不得有 PUSH/STRUCK/RUSHKUNG");
                 TrueAssert(draws.Count == 0, sc.Label, $"free_run 必须零抽（got {draws.Count}）");
                 TrueAssert(Cnt(rmIdents["caster"], RM_MAGIC_LVEXP) == 0, sc.Label, "Path B result=false ⇒ 永不训练（RM_MAGIC_LVEXP 不得出现）");
-                TrueAssert(casterXyAfter[0] == 98 && casterXyAfter[1] == 100, sc.Label, $"free_run 落点应为 (98,100)：{casterXyAfter[0]},{casterXyAfter[1]}");
+                TrueAssert(casterXyAfter[0] == 100 && casterXyAfter[1] == 102, sc.Label, $"free_run 落点应为 (100,102)（Dir=Down 两格）：{casterXyAfter[0]},{casterXyAfter[1]}");
                 TrueAssert(casterHpAfter == casterHpBefore, sc.Label, "free_run 无自伤（n28 减到 0）");
                 break;
             case "wall_selfdamage":

@@ -16,10 +16,10 @@
       "setting.conf": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "map": {
-      "path": "E:\\MirServer\\M2GameSvr\\Map\\0.map",
-      "sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7"
+      "path": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\mir2-rs\\tests\\parity\\golden\\maps\\warr-true-160.map",
+      "sha256": "040ab33653a11a3c56dd0e466c229deb0748b4b75726cb65cfac9aa190d7c2dc"
     },
-    "repo_head": "90650c9e00f28bd3db004a9a83d28431bd5ddca7"
+    "repo_head": "9e7ea8db09b1f878a94a23f4f5403f40a433ee30"
   },
   "fixture_spec": {
     "magic_name": "MoteBo",
@@ -496,7 +496,7 @@
         "entry_args": {
           "w_ident": 3017,
           "n_key": 27,
-          "n_target_x": 6,
+          "n_target_x": 4,
           "n_target_y": 100,
           "bo_late_delivery": false
         },
@@ -509,7 +509,7 @@
         },
         "entry_return": true,
         "delay_time": 0,
-        "dir": 6,
+        "dir": 4,
         "wait_ms": 1200,
         "caster_xy": [
           100,
@@ -556,9 +556,9 @@
             },
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 98,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 102,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -567,9 +567,9 @@
             },
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 99,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 101,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -587,16 +587,16 @@
             },
             {
               "ident": 6,
-              "param": 98,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 102,
+              "series": 4,
               "tail": "ddhkddhkddK"
             },
             {
               "ident": 6,
-              "param": 99,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 101,
+              "series": 4,
               "tail": "ddhkddhkddK"
             }
           ]
@@ -606,9 +606,9 @@
           "Rm": [
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 99,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 101,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -617,9 +617,9 @@
             },
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 98,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 102,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -630,16 +630,16 @@
           "Sent": [
             {
               "ident": 6,
-              "param": 99,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 101,
+              "series": 4,
               "tail": "ddhkddhkddK"
             },
             {
               "ident": 6,
-              "param": 98,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 102,
+              "series": 4,
               "tail": "ddhkddhkddK"
             }
           ]
@@ -649,9 +649,9 @@
           "Rm": [
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 99,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 101,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -660,9 +660,9 @@
             },
             {
               "ident": 8104,
-              "wParam": 6,
-              "p1": 98,
-              "p2": 100,
+              "wParam": 4,
+              "p1": 100,
+              "p2": 102,
               "p3": 0,
               "msg": "",
               "late": false,
@@ -673,16 +673,16 @@
           "Sent": [
             {
               "ident": 6,
-              "param": 99,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 101,
+              "series": 4,
               "tail": "ddhkddhkddK"
             },
             {
               "ident": 6,
-              "param": 98,
-              "tag": 100,
-              "series": 6,
+              "param": 100,
+              "tag": 102,
+              "series": 4,
               "tail": "ddhkddhkddK"
             }
           ]
@@ -701,8 +701,8 @@
       "CasterHp": 419,
       "CasterHpBefore": 419,
       "CasterXyAfter": [
-        98,
-        100
+        100,
+        102
       ],
       "Monsters": []
     },
