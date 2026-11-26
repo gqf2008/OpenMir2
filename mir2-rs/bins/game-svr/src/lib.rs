@@ -88280,6 +88280,12 @@ SendRefMsgRange=15
         // **(ii) pilot**：657 的 per-viewer 延迟（rig 级 pending；只对 657 生效）。
         let mut pending_657: Vec<(i32, u8, Vec<u8>)> = Vec::new();
         let mut elapsed: u64 = 0;
+        // **B17（2026-11-26）**：`Fixture.faithful_pump=true` 的支——装置在**施法当刻**就泵一次
+        // （投 due=0 帧并旋转等键队列）；驱动必须同样在 t=0 泵一次，否则等键旋转次数差 1，
+        // 640 的交付步会从 1000 漂到 1100（2026-11-26 firecharm/monster 实测）。缺键 = 不泵。
+        if golden_case_for(stem, label)["Fixture"]["faithful_pump"] == serde_json::json!(true) {
+            let _ = rig.world.deliver_self_delay_msgs();
+        }
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
             elapsed += 100;
