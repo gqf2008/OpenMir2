@@ -3984,7 +3984,19 @@ fn real_rust_ledger_lightning11() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::lightning45_parity_*）生成真实台账"]
 fn real_rust_ledger_lightning45() {
-    real_ledger_verify("lightning45", &golden_file("lightning-45.json"));
+    // **标签从 golden 取**（MG-54 起含 `monster` / `monster_undead`；缺台账即防空转红）。
+    let golden = golden_file("lightning-45.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[lightning45] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("lightning45", &golden, &refs);
 }
 
 /// **id=5（`SKILL_FIREBALL2`）真实台账 → 判定面**；金标准 `golden/magic/fireball-5.json`。
