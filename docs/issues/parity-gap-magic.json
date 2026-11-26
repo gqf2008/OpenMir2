@@ -347,19 +347,21 @@
         "cases": [
           "miss(seed=14)",
           "edge(seed=18)",
-          "hit(seed=5)"
+          "hit(seed=5)",
+          "monster(seed=5)"
         ],
         "unit_tests": [
           "tests::fireball5_parity_miss",
           "tests::fireball5_parity_edge",
           "tests::fireball5_parity_hit",
+          "tests::fireball5_parity_monster",
           "fireball5_golden_antimagic_boundary_is_covered"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；`Race>=Animal` 只决定 boTrain（训练尾）、不参与伤害（`openmir2-magic-parity.md` §35 订正）；怪物 target 的 boTrain 面未验，需 TargetMonster 夹具（另卡）】",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红与三支绿跑，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒）⇒ hit 支伤害 9→5：驱动 tests::fireball5_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(95) right=Some(91)）；比较器 real_rust_ledger_fireball5 红（[hit] TargetHp 不等 golden=91 rust=95；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。 **边界语义补验（2026-11-25）**：与 MG-10 共享 `anti_magic_roll`（`random_below(10) >= anti_magic`，oracle `MagicManager.cs:180` 的 `AntiMagic <= Random(10)` 等号通过）。新增守卫 `fireball5_golden_antimagic_boundary_is_covered` 对 `fireball-5.json` 断言 miss `<` / edge **`==`** / hit `>` 及 HP 变化（当前 0/1、1/1、3/1；HP 100→100 / 100→85 / 100→91）。变异实测（2026-11-25）：`anti_magic_roll` 的 `>=`→`>` ⇒ 驱动 `tests::fireball5_parity_edge` 红，红原文 `[fireball5/edge] 术后 HP 与金标准 TargetHp 不符 left: Some(100) right: Some(85)`；还原后绿。**范围订正**：`Race>=Animal` 只决定 `boTrain`（训练尾），**不参与伤害**（`openmir2-magic-parity.md` §35 订正）；怪物 target 的 boTrain 面仍未验——需给 golden 装置加 `TargetMonster` 夹具并重出，另卡，不并入本卡。"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。【范围：verified 仅玩家 target；`Race>=Animal` 只决定 boTrain（训练尾）、不参与伤害（`openmir2-magic-parity.md` §35 订正）；怪物 target 的 boTrain 面已覆盖（`monster` 支，2026-11-26）】",
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。 牙（2026-11-21 审计）：证据不足——伤害面只有消费端 series 红与三支绿跑，无 B①/B② 产品公式变异重放；补牙计划见 docs/teeth-audit-B.md §建议清单 牙（2026-11-21，e5）：产品侧变异 B① —— single_hit_power_mc 的 range→0（去掉整段 Random 项，抽数守恒）⇒ hit 支伤害 9→5：驱动 tests::fireball5_parity_hit 的 fireball_case_assert 红（术后 HP left=Some(95) right=Some(91)）；比较器 real_rust_ledger_fireball5 红（[hit] TargetHp 不等 golden=91 rust=95；[hit/caster] Sent[1].series 不等 golden=9 rust=5；[hit] RNG[3] 不等 golden=4 rust=0）。 **边界语义补验（2026-11-25）**：与 MG-10 共享 `anti_magic_roll`（`random_below(10) >= anti_magic`，oracle `MagicManager.cs:180` 的 `AntiMagic <= Random(10)` 等号通过）。新增守卫 `fireball5_golden_antimagic_boundary_is_covered` 对 `fireball-5.json` 断言 miss `<` / edge **`==`** / hit `>` 及 HP 变化（当前 0/1、1/1、3/1；HP 100→100 / 100→85 / 100→91）。变异实测（2026-11-25）：`anti_magic_roll` 的 `>=`→`>` ⇒ 驱动 `tests::fireball5_parity_edge` 红，红原文 `[fireball5/edge] 术后 HP 与金标准 TargetHp 不符 left: Some(100) right: Some(85)`；还原后绿。**对象类型分支已覆盖（2026-11-26，charter §28/§35）**：golden 第 4 支 `monster`（seed=5 = hit 种子，首抽 3 > 门槛 1；怪物 `race=50/hp=100/life_attrib=0/anti_magic=1`，`TargetMonster=1`、`TargetMonsterUndead=false`）覆盖**非不死动物目标**的 `boTrain` 面——oracle 实测**只有怪目标支出训练尾**：caster 收 `RM_MAGIC_LVEXP(10123)` + `SM_MAGIC_LVEXP(640)`（`due_ms_rel=1000`），而玩家 target 的三支**完全没有 640**（`boTrain = Race>=Animal`，玩家 `Race=Play`）；同时验证怪物收 `RM_MAGSTRUCK(8044).p1=13`、玩家 target `TargetHp 100→100` 且不收 8044/8103。驱动 `tests::fireball5_parity_monster`，比较器标签从 golden 取（4 支一起比，缺台账即红）；AntiMagic 等号边界守卫仍要求恰 3 个边界支（`monster` 是显式白名单、不参与边界判定）。`Race>=Animal` **不参与伤害**的订正不变。"
     },
     {
       "id": "MG-12",

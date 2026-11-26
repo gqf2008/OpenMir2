@@ -3977,9 +3977,22 @@ fn real_rust_ledger_lightning45() {
 
 /// **id=5（`SKILL_FIREBALL2`）真实台账 → 判定面**；金标准 `golden/magic/fireball-5.json`。
 #[test]
-#[ignore = "需先跑 game-svr 三支驱动（tests::fireball5_parity_*）生成真实台账"]
+#[ignore = "需先跑 game-svr 四支驱动（tests::fireball5_parity_*）生成真实台账"]
 fn real_rust_ledger_fireball5() {
-    real_ledger_verify("fireball5", &golden_file("fireball-5.json"));
+    // **标签从 golden 取**（MG-11 起新增 `monster` 支；同 `verify_skill_tail_ledger` 口径）：
+    // 金标准有而台账缺 ⇒ `real_ledger_verify_labels` 的防空转 panic 点名。
+    let golden = golden_file("fireball-5.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[fireball5] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("fireball5", &golden, &refs);
 }
 
 // ---------------------------------------------------------------------------
@@ -4619,11 +4632,16 @@ fn assert_antimagic_boundary(g: &Value, stem: &str) {
                 );
                 assert!(after < before, "[{stem}/{label}] 必须掉血");
             }
+            // **MG-11（2026-11-26）**：`monster` 是**非边界**额外支（怪目标、hit 种子）——
+            // 它不进 AntiMagic 等号边界守卫；本守卫仍只认 miss/edge/hit 三支。
+            "monster" => {}
             other => {
-                panic!("[{stem}/{label}] 未知 case label {other:?}（本守卫只认 miss/edge/hit）")
+                panic!("[{stem}/{label}] 未知 case label {other:?}（本守卫只认 miss/edge/hit/monster）")
             }
         }
-        checked += 1;
+        if label != "monster" {
+            checked += 1;
+        }
     }
     assert_eq!(checked, 3, "[{stem}] 三支（miss/edge/hit）必须齐全");
 }
