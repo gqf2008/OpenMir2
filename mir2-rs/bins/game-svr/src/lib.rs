@@ -90259,6 +90259,24 @@ SendRefMsgRange=15
         firecharm_order_assert("hit");
     }
 
+    /// **MG-27（2026-11-26，批 B）**：`monster` 支——非不死动物目标。
+    ///
+    /// 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**；`Race>=Animal ⇒ boTrain`
+    /// （caster 收 `10123 + SM 640`），玩家三支无 640。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firecharm_parity_monster() {
+        fireball_parity_drive(
+            "firecharm",
+            13,
+            1,
+            "monster",
+            golden_seed("firecharm", "monster"),
+            4100,
+        );
+        fireball_case_assert("firecharm", "monster");
+    }
+
     /// `44 灭天火`（`SKILL_44` → `MagHbFireBall`）真实台账驱动。
     /// 金标准 `golden/magic/hbfireball.json`；夹具 `user_magic_level=3`（推挤 `Random(Level)-1`
     /// 才可能 >0）。推挤断言只看**决策面**（`RM_DELAYPUSHED`/`RM_PUSH` 与 `SM_BACKSTEP` 条数），

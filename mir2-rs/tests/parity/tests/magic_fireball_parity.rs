@@ -3939,7 +3939,19 @@ fn real_rust_ledger_hbfireball() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::firecharm_parity_*）生成真实台账"]
 fn real_rust_ledger_firecharm() {
-    real_ledger_verify("firecharm", &golden_file("firecharm.json"));
+    // **标签从 golden 取**（MG-27 起含 `monster`；缺台账即防空转红）。
+    let golden = golden_file("firecharm.json");
+    let labels: Vec<String> = golden["cases"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c["Label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[firecharm] 金标准无 case（防空转）");
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    real_ledger_verify_labels("firecharm", &golden, &refs);
 }
 
 /// **`2 治愈`**真实台账 → 判定面（标签 = `heal` / `full` / `self`；本支无 AntiMagic 骰）；

@@ -191,7 +191,7 @@ public static class Program
             // **MG-27（2026-11-26，批 B）**：`monster` 支——非不死动物目标。
             // 13 的 `SendSelfDelayMsg` 是 **1200ms**、伤害走 **SC**（`HUtil32.LoByte(WAbil.SC)` 起）；
             // `Race>=Animal ⇒ boTrain`（训练尾 640/10123）。无 LA_UNDEAD 分支 ⇒ 单额外 case。
-            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true } } });
+            if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCases = new[] { new ExtraCaseSpec { Label = "monster", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, TargetMonster = 1, TargetMonsterUndead = false, UseHitSeed = true, FaithfulPump = true } } });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
             // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
