@@ -1129,8 +1129,155 @@ fn project_monster_only_receivers(v: &mut Value, label: &str) {
     }
 }
 
+/// **MG-50 新臂的 `Rm` 面政策**（opc-27 2026-11-26 裁决：A/B/C 三类分开，不许一起放宽）。
+///
+/// - **A. 怪物 `Rm` 结构性排除**：Rust 宿主**不建怪物收件人**（B32）⇒ 不比对 `mon*` 的 `Rm`，
+///   但**同时断言** Rust 台账里怪物收件人的 `Rm` 确为空——哪天宿主开始建，这条先红，
+///   提示"B32 已修复、删掉本排除"（不是 `continue` 了事）。
+/// - **B. `10139`（`RM_CHARSTATUSCHANGED`）多出**：与 `657` 同一机制（毒到点 `StatusChanged()`
+///   广播 vs oracle 怪物发送队列**头-only 去重**）⇒ 只允许 **Rust 多出**，每玩家收件人恰多
+///   `extra_10139` 条（= 本 case 被投毒的怪物数），少于或超过都红；其它 ident 不动。
+/// - **C. `10125`（`RM_DURACHANGE`）排除**：**B33**——台账侧 `10125` 是"从线面 642 反推"的，
+///   用 `find(...)` 只取**第一**条 `SM_DURACHANGE` 帧（`bins/game-svr/src/lib.rs` 的
+///   `RM_DURACHANGE(10125)`（护身符消耗，`UseAmulet`）` 区块）⇒ 多目标时只剩一条。
+///   线面 `642` 三条齐且驱动断言 `642.recog == [300,400,500]`（防"排除后把真少扣咽掉"）。
+fn apply_poison_arm_rm_policy(
+    g: &mut Value,
+    r: &mut Value,
+    extra_10139_of: &dyn Fn(&str) -> usize,
+) {
+    // A0：先断言 Rust 怪物收件人的 `Rm` 确为空（B32 撤销信号：宿主一旦建怪物收件人，本排除必须删）。
+    for case in r["cases"].as_array().into_iter().flatten() {
+        for rec in case["Receivers"].as_array().into_iter().flatten() {
+            if rec["Who"].as_str().is_some_and(|w| w.starts_with("mon")) {
+                assert!(
+                    rec["Rm"].as_array().is_some_and(|a| a.is_empty()),
+                    "B32 撤销信号：Rust 已建怪物收件人 Rm ⇒ 删除本排除"
+                );
+            }
+        }
+    }
+    // 臂定义表（与驱动 `group_amyounsul_arm_assert` 的 base 同源）：怪物 actor id = base+10..
+    let base_of = |label: &str| -> i64 {
+        match label {
+            "lvl1" => 6100,
+            "lvl4" => 6200,
+            "multi_amulet_monster_first" => 6300,
+            "multi_amulet_player_first" => 6400,
+            "multi_amulet_three" => 6500,
+            _ => 0,
+        }
+    };
+    let rc = r["cases"].as_array_mut().expect("rust cases");
+    let gc = g["cases"].as_array_mut().expect("golden cases");
+    for (gcc, rcc) in gc.iter_mut().zip(rc.iter_mut()) {
+        let label = rcc["Label"].as_str().unwrap_or("?").to_string();
+        let extra = extra_10139_of(&label);
+        let base = base_of(&label);
+        let is_mon657 = |m: &Value, base: i64| -> bool {
+            m["ident"].as_i64() == Some(657)
+                && m["recog"]
+                    .as_i64()
+                    .is_some_and(|v| v >= base + 10 && v < base + 30)
+        };
+        // A：怪物收件人的 Rm 两边都清空（不可比面）。
+        for case in [&mut *gcc, &mut *rcc] {
+            for rec in case["Receivers"].as_array_mut().into_iter().flatten() {
+                if rec["Who"].as_str().is_some_and(|w| w.starts_with("mon")) {
+                    rec["Rm"] = Value::Array(Vec::new());
+                }
+            }
+        }
+        // C：两边都剔除 10125（B33：台账只反推第一条线面 642；线面判据在驱动侧）。
+        for case in [&mut *gcc, &mut *rcc] {
+            for rec in case["Receivers"].as_array_mut().into_iter().flatten() {
+                if let Some(rm) = rec["Rm"].as_array_mut() {
+                    rm.retain(|m| m["ident"].as_i64() != Some(10125));
+                }
+            }
+        }
+        // B：10139 与 657 只允许 **Rust 多出**，逐收件人恰多 `extra` 条（射程外收件人为 0）。
+        // `extra == 0` 的臂（毒的是玩家）两边都照旧全严格——不去碰。
+        let mut hits = 0usize;
+        if extra == 0 {
+            continue;
+        }
+        let n_rec = rcc["Receivers"].as_array().map_or(0, Vec::len);
+        for idx in 0..n_rec {
+            let who = rcc["Receivers"][idx]["Who"]
+                .as_str()
+                .unwrap_or("?")
+                .to_string();
+            if who.starts_with("mon") {
+                continue;
+            }
+            // 金标准侧不许有（缺少方向不接受）。
+            for (g_rm, id) in [
+                (&gcc["Receivers"][idx]["Rm"], 10139i64),
+                (&gcc["Receivers"][idx]["Sent"], 657i64),
+            ] {
+                let n = g_rm
+                    .as_array()
+                    .map_or(0, |a| a.iter().filter(|m| m["ident"] == id).count());
+                assert_eq!(
+                    n, 0,
+                    "[{label}/{who}] golden 侧出现 {id}（缺少方向）⇒ 不接受"
+                );
+            }
+            let rec_ref = &rcc["Receivers"].as_array().expect("r recv")[idx];
+            let n39 = rec_ref["Rm"]
+                .as_array()
+                .map_or(0, |a| a.iter().filter(|m| m["ident"] == 10139).count());
+            let n657 = rec_ref["Sent"]
+                .as_array()
+                .map_or(0, |a| a.iter().filter(|m| is_mon657(m, base)).count());
+            for (n, id) in [(n39, 10139i64), (n657, 657i64)] {
+                assert!(
+                    n == 0 || n == extra,
+                    "[{label}/{who}] 多出的 {id} 条数必须为 0 或恰为 {extra}（本 case 被投毒怪物数），实测 {n}"
+                );
+                if n == extra && extra > 0 {
+                    hits += 1;
+                }
+            }
+            if n39 == extra && extra > 0 {
+                let mut left = extra;
+                let rm = rcc["Receivers"].as_array_mut().expect("r recv")[idx]["Rm"]
+                    .as_array_mut()
+                    .expect("Rm 数组");
+                rm.retain(|m| {
+                    if left > 0 && m["ident"] == 10139 {
+                        left -= 1;
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+            if n657 == extra && extra > 0 {
+                let mut left = extra;
+                let sent = rcc["Receivers"].as_array_mut().expect("r recv")[idx]["Sent"]
+                    .as_array_mut()
+                    .expect("Sent 数组");
+                sent.retain(|m| {
+                    if left > 0 && is_mon657(m, base) {
+                        left -= 1;
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
+        assert!(
+            extra == 0 || hits > 0,
+            "[{label}] 计数白名单空转：没有任何收件人恰多 {extra} 条"
+        );
+    }
+}
+
 /// `frame_order_scope` 白名单/静态一致性判定（从 `real_ledger_verify_labels_opts` 抽出，行为不变）：
-/// `multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）与施毒 4 支；出现在别的 stem ⇒ Err。
+/// `multi_victim_same_tick` 只允许 `fire`/`skill10`（MG-17/18 穿透）与施毒 5 支；出现在别的 stem ⇒ Err。
 /// 同 stem 的 `magic_id` 必须与定义一致（fire=9 / skill10=10 / amyounsul*=6 / groupamyounsul*=48）。
 fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
     let scope_marked = golden["cases"].as_array().is_some_and(|cs| {
@@ -1140,11 +1287,17 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
     if scope_marked
         && !matches!(
             stem,
-            "fire" | "skill10" | "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+            "fire"
+                | "skill10"
+                | "amyounsul"
+                | "amyounsul2"
+                | "groupamyounsul"
+                | "groupamyounsul2"
+                | "groupamyounsul-shape0"
         )
     {
         return Err(format!(
-            "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18）与施毒 4 支；当前 stem={stem}"
+            "`frame_order_scope=multi_victim_same_tick` 只允许 fire / skill10（MG-17/18）与施毒 5 支；当前 stem={stem}"
         ));
     }
     if scope_marked {
@@ -1153,7 +1306,7 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
             "fire" => mid == 9,
             "skill10" => mid == 10,
             "amyounsul" | "amyounsul2" => mid == 6,
-            "groupamyounsul" | "groupamyounsul2" => mid == 48,
+            "groupamyounsul" | "groupamyounsul2" | "groupamyounsul-shape0" => mid == 48,
             _ => false,
         };
         if !ok {
@@ -1276,6 +1429,15 @@ fn real_ledger_verify_labels_opts(
     if stem == "lightflower" {
         project_monster_only_receivers(&mut g, "undead");
         project_monster_only_receivers(&mut r, "undead");
+    }
+    // **MG-50**：新臂（lvl1/lvl4/multi_amulet_*）的 Rm 面按 A/B/C 三类政策处理
+    // （B32 怪物 Rm 结构性排除 + 10139 计数白名单 + B33 的 10125 记录口径排除）。
+    if stem == "groupamyounsul" {
+        apply_poison_arm_rm_policy(&mut g, &mut r, &|label| match label {
+            "multi_amulet_monster_first" => 1,
+            "multi_amulet_three" => 3,
+            _ => 0,
+        });
     }
     let result = if stem == "groupdeding" {
         sort_sm_ident(&mut g, 716);
