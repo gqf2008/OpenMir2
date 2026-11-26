@@ -1591,6 +1591,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
         public int MagicDefMaxPower;
         /// <summary>为 true ⇒ `EmitGolden` 的 case 里落 `Train` 块（本批专用；缺省零变化）。</summary>
         public bool SkillTail;
+        /// <summary>
+        /// true ⇒ 本支是**升级变体**（MG-58/60/61/62/63 的 800ms 支）：令 `MaxTrain[nLevel] &lt;=
+        /// TrainSkill 后的 TranPoint` ⇒ `CheckMagicLevelUp` 成功、`Level++`、640 走 **800ms**
+        /// （`PlayObject.cs:5210-5216`）。与未升级三支同 seed，便于逐帧对照。
+        /// </summary>
+        public bool TailUpgrade;
         /// <summary>`scenario_note`（`login_order=false` 必填）。</summary>
         public string ScenarioNote = "";
         /// <summary>`unreachable` 时的依据（门 4）。</summary>
@@ -2746,12 +2752,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var cases = new[]
+        var cases = new List<FireballResult>
         {
             RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, false),
             RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
             RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
         };
+        // **升级变体 s1_up**（MG-58/60/61/62/63 的 800ms 支）：`MaxTrain[0]=1 <= TranPoint(0)+(Random(3)+1)`
+        // ⇒ `CheckMagicLevelUp` 成功 ⇒ `TranPoint -= MaxTrain`、`Level 0→1`、`UpdateDelayMsg(…, 800)`
+        // （`PlayObject.cs:5210-5216`）。与 `s1` 同 seed=1/ActorId 段尾（4100）⇒ 抽数与帧可逐项对照。
+        // 输入记录在逐 case 的 `Train` 块（`max_train0`/`n_level`/`level_before/after`）；
+        // `EmitGolden` 的 fixture_spec 不落这两键，故跑完立即还原，避免影响其它支的语义。
+        spec.TailUpgrade = true;
+        spec.MagicMaxTrain0 = 1;
+        cases.Add(RunMagicCase(spec, "s1_up", 1, 4100, spec.TargetMaxHp, false));
+        spec.TailUpgrade = false;
+        spec.MagicMaxTrain0 = 1000;
         foreach (var c in cases)
         {
             if (c.Rng.Count != 1)
@@ -2760,7 +2776,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     $"[{spec.Key}/{c.Label}] 训练尾应恰 1 抽（Random(3)+1），实得 {c.Rng.Count}：{string.Join(",", c.Rng)}");
             }
         }
-        return EmitGolden(spec, cases);
+        return EmitGolden(spec, cases.ToArray());
     }
 
     /// <summary>
@@ -3468,29 +3484,54 @@ private static int ReadInstanceInt(object obj, string fieldName)
         }
         if (spec.SkillTail)
         {
-            // `CheckMagicLevelUp`（`PlayObject.cs:5200-5209`）用的下标是 `nLevel`（Level<4 且
-            // TrainLv>=Level 时 = Level，否则 0）——**不是恒 [0]**。前提必须按同一规则取项，
-            // 否则 `UserMagicLevel=1..3` 时断言会核到没用上的那一项（变成永真）。
-            int nLevel = (um.Level < 4 && um.Magic.TrainLv >= um.Level) ? (int)um.Level : 0;
+            // `CheckMagicLevelUp`（`PlayObject.cs:5200-5209`）用的下标是**升级前** Level 推出的 `nLevel`
+            // （Level<4 且 TrainLv>=Level 时 = Level，否则 0）——**不是恒 [0]**，也不该用升级后的 Level
+            // （升级支执行后 `um.Level` 已 +1 ⇒ 会核到没被用的那一项，断言变永真）。
+            int nLevel = (trainLevelBefore < 4 && um.Magic.TrainLv >= trainLevelBefore) ? trainLevelBefore : 0;
             int mtUsed = (um.Magic.MaxTrain != null && um.Magic.MaxTrain.Length > nLevel) ? um.Magic.MaxTrain[nLevel] : 0;
             trainNLevel = nLevel;
             trainMtUsed = mtUsed;
-            if (!(mtUsed > um.TranPoint))
+            if (spec.TailUpgrade)
             {
-                throw new FixtureContractViolation(
-                    $"[{spec.Key}/{label}] 夹具前提失败：MaxTrain[nLevel={nLevel}]={mtUsed} 必须 > TranPoint={um.TranPoint}"
-                    + "（否则 CheckMagicLevelUp 成功 ⇒ 640 走 800ms 升级支，不在本批 scope）");
+                // 800ms 升级支的前提（`PlayObject.cs:5210-5216`）：门 `MaxTrain[nLevel] <= TranPoint`
+                // 成立 ⇒ `TranPoint -= MaxTrain`、`Level++`。升级后 `TranPoint = 前值 + 抽点 − MaxTrain`，
+                // 故 `TranPoint >= 0` 是「门确实成立」的等价观测（不重算、不拿实现输出自证）。
+                if (!(um.Magic.TrainLv > trainLevelBefore))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 升级支前提失败：TrainLv={um.Magic.TrainLv} 必须 > 升级前 Level={trainLevelBefore}");
+                }
+                if (um.Level != trainLevelBefore + 1)
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 升级支前提失败：Level {trainLevelBefore} -> {um.Level}（应恰好 +1；"
+                        + $"否则 CheckMagicLevelUp 未走升级臂，max_train0={mtUsed}）");
+                }
+                if (um.TranPoint < 0)
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 升级支前提失败：升级后 TranPoint={um.TranPoint} < 0 ⇒ MaxTrain 超过门值");
+                }
             }
-            if (!(um.Magic.TrainLv > um.Level))
+            else
             {
-                throw new FixtureContractViolation(
-                    $"[{spec.Key}/{label}] 夹具前提失败：TrainLv={um.Magic.TrainLv} 必须 > Level={um.Level}"
-                    + "（否则升级门因 TrainLv 而恒假，前提断言会变成永真）");
-            }
-            if (um.Level != trainLevelBefore)
-            {
-                throw new FixtureContractViolation(
-                    $"[{spec.Key}/{label}] 意外升级：Level {trainLevelBefore} -> {um.Level}（本批只做未升级 1000ms 支）");
+                if (!(mtUsed > um.TranPoint))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 夹具前提失败：MaxTrain[nLevel={nLevel}]={mtUsed} 必须 > TranPoint={um.TranPoint}"
+                        + "（否则 CheckMagicLevelUp 成功 ⇒ 640 走 800ms 升级支，不在本批 scope）");
+                }
+                if (!(um.Magic.TrainLv > um.Level))
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 夹具前提失败：TrainLv={um.Magic.TrainLv} 必须 > Level={um.Level}"
+                        + "（否则升级门因 TrainLv 而恒假，前提断言会变成永真）");
+                }
+                if (um.Level != trainLevelBefore)
+                {
+                    throw new FixtureContractViolation(
+                        $"[{spec.Key}/{label}] 意外升级：Level {trainLevelBefore} -> {um.Level}（本支应为未升级 1000ms）");
+                }
             }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
