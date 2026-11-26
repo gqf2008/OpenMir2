@@ -4796,6 +4796,44 @@ fn frame_order_scope_marker_is_refused_outside_the_whitelist() {
     assert!(err.contains("magic_id 不一致"), "{err}");
 }
 
+/// **MG-18 P3（2026-11-26）**：仓内 **committed golden 全量扫**——`frame_order_scope =
+/// multi_victim_same_tick` 只许出现在白名单 stem 且 `magic_id` 对得上。
+///
+/// 与 `tooth_poison_marker_whitelist_rejects_foreign_stem`（合成输入 ⇒ 必须 panic）互补：
+/// 合成牙证明「塞错会红」；本扫把**仓里实际提交的 golden**放进同一判据，并在**默认门**跑
+/// （不是只有那个 stem 的 ignored 比较器才查）。防空转：必须扫到 ≥2 支带标记的 stem。
+#[test]
+fn committed_goldens_obey_frame_order_scope_whitelist() {
+    let dir = format!("{}/golden/magic", env!("CARGO_MANIFEST_DIR"));
+    let mut marked: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("golden 目录必须存在") {
+        let path = entry.expect("目录项可读").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("文件名必须是 UTF-8")
+            .to_string();
+        let text = std::fs::read_to_string(&path).expect("读 golden");
+        let g: Value = serde_json::from_str(&text).expect("golden 必须是合法 JSON");
+        let has_marker = g["cases"].as_array().is_some_and(|cs| {
+            cs.iter().any(|c| {
+                c["Fixture"]["frame_order_scope"].as_str() == Some("multi_victim_same_tick")
+            })
+        });
+        if has_marker {
+            check_frame_order_scope(&g, &stem).unwrap_or_else(|e| panic!("[{stem}] {e}"));
+            marked.push(stem);
+        }
+    }
+    assert!(
+        marked.len() >= 2,
+        "防空转：带 `multi_victim_same_tick` 的 golden 只扫到 {marked:?}（全量扫没扫到东西？）"
+    );
+}
+
 /// **MG-27 边界覆盖守卫（2026-11-26）**：`firecharm.json`（魔号 13）三支压在 AntiMagic 等号边界上
 /// （oracle `MagicManager.cs:334` 与 1/5/11 同式 `Random(10) >= AntiMagic`）。
 #[test]
