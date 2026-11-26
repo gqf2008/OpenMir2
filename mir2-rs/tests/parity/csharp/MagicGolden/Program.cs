@@ -531,10 +531,14 @@ public static class Program
                 // 反臂：玩家目标与 mon0 同格 (101,100) 且 `ObjList` 里先于怪 ⇒ 唯一一次护身符被玩家夺走 ⇒
                 // 三只怪零 `8037`、`TargetCret` 落在玩家目标。
                 new ExtraCaseSpec { Label = "multi_amulet_player_first", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6400 },
+                // **MG-64/65（2026-11-26）**：目标先挂一条非毒 buff（`Defense`=2，`StateTick=60000`）⇒
+                // 绿毒 buff 的位号 `i` 变 1 ⇒ `StatusChanged` 的 `CharStatus = 0x80000000 >> 1 = 0x40000000`
+                // ⇒ `10139.p1` 不再是 `int.MinValue`（MG-64 的非零位号 + MG-65 的红毒位路径）。
+                new ExtraCaseSpec { Label = "prebuff_green", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6600 },
             } });
             // **MG-50（2026-11-26）**：护身符 `Shape=0` 的 fall-through——`switch` 无 default ⇒ 不投毒
             // （无 `8037`），但骰过且 race 合格 ⇒ `result` **仍 true**（`:929-932` 在 switch 之外）⇒ 训练尾 640 在。
-            if (name == "groupamyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape0", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "groupamyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape0", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15 });
             if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             // **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 取**前格**实体 ⇒ 装置用 `EnableMaps`
             // 设 `caster.Dir`（朝点击方向 = 东）⇒ 前格 (101,100) 的 target 成为推挤目标。
@@ -1804,6 +1808,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 落 `Fixture.amulet_dura`（实际值）并断言。
         /// </summary>
         public int? AmuletDura;
+        /// <summary>**MG-64/65**：本 stem 的预置 buff（逐 case 覆盖见 `ExtraCaseSpec.PreBuffs`）。</summary>
+        public BuffSpec[] PreBuffs;
+        /// <summary>
+        /// **MG-64/65**：施毒点除数覆盖（`SystemShare.Config.AmyOunsulPoint`；缺省 `null` ⇒ 用部署配置）。
+        /// `groupamyounsul-shape0` 用它把生成器默认 10 对齐到部署值 15（该臂不投毒、输出面无变化）。
+        /// </summary>
+        public int? AmyOunsulPoint;
         public int MagicPower;
         public int MagicMaxPower;
         public int MagicDefPower;
@@ -2550,6 +2561,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetLevel = spec.TargetLevel;
             var savedUserMagicLevel48 = spec.UserMagicLevel;
             var savedAmuletDura = spec.AmuletDura;
+            var savedPreBuffs = spec.PreBuffs;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2583,6 +2595,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
             spec.AmuletDura = extra.AmuletDura;
+            spec.PreBuffs = extra.PreBuffs;
             if (extra.StepDrainMsOverride.HasValue)
             {
                 spec.StepDrainMs = extra.StepDrainMsOverride.Value;
@@ -2614,6 +2627,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetLevel = savedTargetLevel;
             spec.UserMagicLevel = savedUserMagicLevel48;
             spec.AmuletDura = savedAmuletDura;
+            spec.PreBuffs = savedPreBuffs;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -3035,7 +3049,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3048,7 +3062,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
-            && amuletDura == null)
+            && amuletDura == null && preBuffs == null && preBuffStatus == null)
         {
             return fixture;
         }
@@ -3095,6 +3109,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (healTicksMs != null && specHealBoth) node["heal_ticks_both"] = true;
         if (healLevelCaster.HasValue) node["heal_level_caster"] = healLevelCaster.Value;
         if (amuletDura.HasValue) node["amulet_dura"] = amuletDura.Value;
+        // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
+        if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
+        if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3896,6 +3913,43 @@ private static FireballResult RunMagicCase(
         {
             caster.SlaveList ??= new System.Collections.Generic.List<SystemModule.Actors.IMonsterActor>();
         }
+        // **MG-64/65（2026-11-26）**：预置 buff——`ActorBuffSystem.AddBuff` 只改状态、不发帧/不入队
+        // （`ActorBuffSystem.cs:100-159`）⇒ 帧面/RM 面零副作用。契约（C# 侧这次断言）：
+        // 声明插入序 `i` ⇒ `GetBuffStatus` 的位 == `0x80000000 >> i`（Rust 驱动侧另断一次，两侧同判据）。
+        object preBuffsNode = null;
+        int? preBuffStatus = null;
+        if (spec.PreBuffs is { Length: > 0 })
+        {
+            foreach (var pb in spec.PreBuffs)
+            {
+                if (pb.Who != "target")
+                {
+                    throw new FixtureContractViolation(
+                        "[" + spec.Key + "/" + label + "] PreBuffs.Who 只支持 target（fixture 只回写一份 pre_buff_status）");
+                }
+                M2Server.M2Share.ActorBuffSystem.AddBuff(target, (M2Server.BuffType)pb.Type, pb.Dura, pb.StateVal);
+            }
+            int expectedStatus = 0;
+            for (int i = 0; i < spec.PreBuffs.Length; i++)
+            {
+                expectedStatus |= unchecked((int)(0x80000000u >> i));
+            }
+            int gotStatus = M2Server.M2Share.ActorBuffSystem.GetBuffStatus(target);
+            if (gotStatus != expectedStatus)
+            {
+                throw new FixtureContractViolation(
+                    "[" + spec.Key + "/" + label + "] pre_buff_status 实测 " + gotStatus + " != 声明推导 " + expectedStatus);
+            }
+            preBuffStatus = gotStatus;
+            preBuffsNode = spec.PreBuffs.Select((pb, i) => new Dictionary<string, object>
+            {
+                ["who"] = pb.Who,
+                ["type"] = pb.Type,
+                ["dura"] = pb.Dura,
+                ["stateval"] = pb.StateVal,
+                ["index"] = i
+            }).ToArray();
+        }
         int trainTpBefore = um.TranPoint;
         int trainLevelBefore = um.Level;
         // `Train` 块要用的前提值（`CheckMagicLevelUp` 的实际下标），在 `SkillTail` 块里赋值。
@@ -3918,7 +3972,13 @@ private static FireballResult RunMagicCase(
             throw new FixtureContractViolation(
                 $"[{spec.Key}/{label}] PushCacheProbe：受害者 SendRefMsg 缓存非冷（VisibleHumanList.Count={spellTarget.VisibleHumanList.Count}）");
         }
+        int savedAmyOunsulPoint = SystemModule.SystemShare.Config.AmyOunsulPoint;
+        if (spec.AmyOunsulPoint.HasValue)
+        {
+            SystemModule.SystemShare.Config.AmyOunsulPoint = spec.AmyOunsulPoint.Value;
+        }
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
+        SystemModule.SystemShare.Config.AmyOunsulPoint = savedAmyOunsulPoint;
         if (spec.MagicId == 22 && spec.FireCrossSafeZone)
         {
             SystemModule.SystemShare.Config.DisableInSafeZoneFireCross = savedDisableSafeZone;
@@ -4744,7 +4804,7 @@ private static FireballResult RunMagicCase(
                 anti_magic = inputAntiMagic,
                 target_anti_poison = inputAntiPoison,
                 amulet_shape = spec.ArmRingAmulet ? spec.AmuletShape : 0,
-                amy_ounsul_point = SystemModule.SystemShare.Config.AmyOunsulPoint,
+                amy_ounsul_point = spec.AmyOunsulPoint ?? SystemModule.SystemShare.Config.AmyOunsulPoint,
                 derived = new
                 {
                     max_hp = contract.Derived.MaxHp,
@@ -4862,6 +4922,8 @@ private static FireballResult RunMagicCase(
                 healLevelTarget: spec.HealTicksMs != null ? (int?)healLevelTarget : null,
                 healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
+                preBuffs: preBuffsNode,
+                preBuffStatus: preBuffStatus,
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
@@ -5010,6 +5072,22 @@ private static FireballResult RunMagicCase(
     /// <summary>
     /// **额外 case 描述（2026-11-26）**：`MagicSpec.ExtraCases` 的元素。
     /// </summary>
+    /// <summary>
+    /// **MG-64/65（2026-11-26）**：预置 buff 的声明（`DoSpell` **之前**施加）。
+    /// `ActorBuffSystem.AddBuff` 自身**不发帧、不入队**（`ActorBuffSystem.cs:100-159` 只改状态）
+    /// ⇒ 对帧面/RM 面零副作用；`GetBuffStatus` 的位 = `0x80000000 >> i`，`i` = 该 actor 的 buff 插入序。
+    /// </summary>
+    private sealed class BuffSpec
+    {
+        /// <summary>施加对象：目前只允许 `target`（fixture 只回写一份 `pre_buff_status`）。</summary>
+        public string Who = "target";
+        /// <summary>`M2Server.BuffType`（绿毒 0 / 红毒 1 / Defense 2 / …）。</summary>
+        public int Type;
+        /// <summary>`StateTick`（>0 才置位）。</summary>
+        public int Dura = 60000;
+        public int StateVal;
+    }
+
     private sealed class ExtraCaseSpec
     {
         /// <summary>额外 case 的标签（如 `undead` / `monster` / `monster_undead`）。</summary>
@@ -5097,6 +5175,13 @@ private static FireballResult RunMagicCase(
         /// （`:835-840` 面）。缺省 false ⇒ 旧 golden 零变化。
         /// </summary>
         public bool ObserveState;
+        /// <summary>
+        /// **MG-64/65（2026-11-26）**：本 case 在 `DoSpell` 之前预置的 buff（缺省空数组 ⇒ 既有件零变化）。
+        /// 用途：让毒 buff 的位号 `i` 非 0 ⇒ `10139.p1` 不再是 `int.MinValue`（MG-64）且覆盖红毒位
+        /// `0x80000000 >> 1 = 0x40000000`（MG-65）。
+        /// </summary>
+        public BuffSpec[] PreBuffs = Array.Empty<BuffSpec>();
+
         /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让

@@ -37,7 +37,7 @@
         "anti_magic": 1,
         "target_anti_poison": 0,
         "amulet_shape": 0,
-        "amy_ounsul_point": 10,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -313,7 +313,7 @@
         "anti_magic": 1,
         "target_anti_poison": 0,
         "amulet_shape": 0,
-        "amy_ounsul_point": 10,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
@@ -589,7 +589,7 @@
         "anti_magic": 1,
         "target_anti_poison": 0,
         "amulet_shape": 0,
-        "amy_ounsul_point": 10,
+        "amy_ounsul_point": 15,
         "derived": {
           "max_hp": 224,
           "max_mp": 81,
