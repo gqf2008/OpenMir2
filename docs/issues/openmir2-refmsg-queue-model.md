@@ -221,6 +221,47 @@ PY
 
 验收口径（opc-19 定死）：`Sent` 严格序 + 全量回归。
 
+## MG-48 最小复现（2026-11-26，`card/mg38-undead-target`，作者 openmir2-2a）
+
+**现象（同一 caster 队列两条 600ms 延迟 RM）**：50 魔爆成功臂在 `DoSpell` 内发**两条**
+`SendSelfDelayMsg(RM_DELAYMAGIC, …, 600)`（`MagicManager.cs` 的 `MabMabe` 内：先 `nPower/3`、后 MSD 后的 `nPower`），另有 `RM_MAGIC_LVEXP@1000` 在同一 caster 队列、`RM_POISON(STONE)@650` 在目标队列。
+
+- **装置（`FaithfulPump` + 生产泵语义 + t=0 泵）**：两次投递 `due=700`（15）/ `due=800`（5）；
+- **Rust 宿主（生产泵语义、t=0 泵 + 每 100ms 一步一泵）**：`due=600`（5）/ `due=700`（15）；
+- **RNG 与内容**：两侧逐值全等（玩家臂 `[0,0,7,0,0,0]`；怪臂 `[0,476,0,239,0,635,0,124]`），
+  `TargetHp` 100→80、怪 HP 300→283、`Rm` 多重集（怪 `8044×2+8018×2`；玩家侧 `8103×2+8090×2`）全等
+  ⇒ **只差两条投递的先后与 due，不差伤害/骰门/入账内容**。
+
+**根因（本节要回答的缺口）**：oracle/装置的 `MsgQueue`（`PriorityQueue<SendMessage,byte>`，**只按
+priority**）在延迟消息入队**之前**已收进非延迟 RM（`RM_SPELL(10008)` / `RM_MAGICFIRE(10120)` 等，
+`SendRefMsg` 即入队），等键项的 4 叉堆布局与 `swap_remove` 历史因此与"裸队列"不同；Rust 宿主的
+`self_delay_msgs` **只装延迟消息**（非延迟 RM 直接出帧、不入队）⇒ 堆历史少一段 ⇒ 旋转次数/队首
+落点与 oracle 差一拍，两条同刻延迟消息的先后与 `due` 整体错位。**这不是装置墙钟（B19）也不是
+arity（四叉 vs 二叉在等优先级下同构，见上文）；是"非延迟 RM 是否占队列位"的建模差。**
+
+**复现配方（MG-48 工作树，装置 + 驱动同一 run_id）**：
+
+```text
+# 装置：在 mabmabe stem 的 ExtraCases 追加两支（工作树已验证过的形态）
+new ExtraCaseSpec { Label = "stone_time20", SeedOverride = 41, FaithfulPump = true, IdBase = 6200 }
+new ExtraCaseSpec { Label = "monster", Monsters = { MonsterSpec{ X=101, Y=100, Race=50, Level=20,
+    Hp=300, LifeAttrib=0, AntiMagic=1, Animal=true, OperateStruck=true } },
+    TargetMonster=1, TargetMonsterUndead=false, SeedOverride=41, FaithfulPump=true,
+    OperatePerStep=true, IdBase=6100 }
+# golden：MagicGolden.exe --case mabmabe --out <tmp>/mabmabe.json
+# 驱动：MIR2_LEDGER_RUN_ID=<id> game_svr --ignored --exact tests::mabmabe_parity_stone_time20 / _monster
+# 比较器：real_rust_ledger_mabmabe（标签从 golden 取，故两支会一起进判据面）
+```
+
+**撤销条件（本条转为已验的唯一路径）**：队列模型把**每个 actor 的完整 `MsgQueue`**（含非延迟 RM）
+纳入宿主模型（或等价的堆历史复刻）后，上述两支在**不放宽比较器**（不改 due 容差、不跳过帧/接收者）
+的前提下转绿；届时删掉本节、并把 `docs/issues/parity-gap-magic.json` 的 MG-48「未验」两条（`monster`
+成功臂、`stone_time20 vs stone_time10`）移入已验。**在那之前不得把这两臂计为已验**，也不得用
+"内容全等 + 帧序豁免"的口径升格。
+
+**旁证（不属本缺口）**：怪支在 Rust 台账里缺 `31/656` 帧，另有成因——`drain_mag_struck_b2` 需要怪的
+展示表项而 `place_monsters` 未登记 displays，归 `DEV-MONSTER-DISPLAY-FRAME`（B27），与本节的等键序无关。
+
 ## 关联
 
 - `docs/issues/openmir2-b4-multivictim-strike-order.md`（同源的多受害者同刻次序产品差异）

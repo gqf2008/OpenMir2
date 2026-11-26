@@ -5,7 +5,9 @@
 //!   * 本文件：**只读 golden** 的 `cases[Label==label].Fixture.server_conf`（十键），
 //!     **不读 `Server.conf`**——magic 驱动不依赖外部路径，golden 仍是可移植的冻结件。
 //!
-//! 语义：缺键 / 非整数 / ≤0 ⇒ **具名 panic**（绝不吃缺省）；通过后把五项落到 `&mut World`
+//! 语义：缺键 / 非整数 / ≤0 ⇒ **具名 panic**（绝不吃缺省；**唯一例外**是
+//! `mab_mabe_hit_rand_rate=0`——§27 的 `Random(0)` 边界，`Random(0)` 仍推进且恒返 0）；
+//! 通过后把五项落到 `&mut World`
 //! （`set_mag_turn_undead_level` + `set_b4_config`），并返回十键快照。
 //!
 //! **`mag_tamming_*` 四键只返回、不落 `World`**：它们由 `PetSlaveConfig`（`mir2_data`）的消费者使用，
@@ -52,7 +54,8 @@ pub struct ServerConfSnapshot {
 /// 因此只随快照返回——MG-34（收服批）落地时必须接到读 `PetSlaveConfig` 的那一侧。
 ///
 /// # Panics
-/// golden 缺 `Label` / `Fixture.server_conf` / 任一键，或值非整数、≤0、越界 `i32`。
+/// golden 缺 `Label` / `Fixture.server_conf` / 任一键，或值非整数、≤0（`mab_mabe_hit_rand_rate
+/// 的 0 除外，见模块注释）、越界 `i32`。
 #[must_use]
 pub fn apply_serverconf_fixture(
     golden: &Value,
@@ -84,7 +87,11 @@ pub fn apply_serverconf_fixture(
         let n = v
             .as_i64()
             .unwrap_or_else(|| panic!("[{stem}/{label}] server_conf.{key} 非整数：{v}"));
-        if n <= 0 {
+        // **MG-48（2026-11-26）**：`mab_mabe_hit_rand_rate=0` 是 §27 的合法边界
+        // （oracle `Random(0)` 仍推进、恒返 0），不是「缺失/错误」；**只放行这一个键**，
+        // 其余键（含 `mab_mabe_hit_sucess_rate`）仍严格 >0——`mab_mabe_hit_mabe_time_rate=0`
+        // 会让 `nPower / timeRate` 除零，同样不许。
+        if n < 0 || (n == 0 && key != "mab_mabe_hit_rand_rate") {
             panic!("[{stem}/{label}] server_conf.{key}={n} 必须 >0（配置缺失/错误不许吃缺省）");
         }
         i32::try_from(n)
@@ -202,6 +209,41 @@ mod tests {
         sc["amy_ounsul_point"] = json!(-5);
         let g = golden_with("s1", sc);
         let _ = apply_serverconf_fixture(&g, &mut world(), "turnundead", "s1");
+    }
+
+    /// **MG-48 牙⑤（放松面）**：`mab_mabe_hit_rand_rate=0` 必须**放行**并落到 `World`
+    /// （§27 边界：`Random(0)` 仍推进、恒返 0）。
+    #[test]
+    fn rand_rate_zero_allowed_and_applied() {
+        let mut sc = full_server_conf();
+        sc["mab_mabe_hit_rand_rate"] = json!(0);
+        let g = golden_with("s1", sc);
+        let mut w = world();
+        let s = apply_serverconf_fixture(&g, &mut w, "mabmabe-rand0", "s1");
+        assert_eq!(s.mab_mabe_hit_rand_rate, 0);
+        assert_eq!(w.b4_cfg.hit_rand_rate, 0);
+        // 其余键仍是部署值（只放行一个键，不是整体放松）。
+        assert_eq!(s.mab_mabe_hit_sucess_rate, 21);
+    }
+
+    /// **MG-48 牙⑥（放松面的负例）**：严格性只对 `mab_mabe_hit_rand_rate` 放松——
+    /// ①同键 -1 仍红；②`mab_mabe_hit_sucess_rate=0` 仍红（同为 `Random(rate)` 参数但**未**放行）。
+    #[test]
+    #[should_panic(expected = "必须 >0")]
+    fn rand_rate_negative_panics() {
+        let mut sc = full_server_conf();
+        sc["mab_mabe_hit_rand_rate"] = json!(-1);
+        let g = golden_with("s1", sc);
+        let _ = apply_serverconf_fixture(&g, &mut world(), "mabmabe-rand0", "s1");
+    }
+
+    #[test]
+    #[should_panic(expected = "mab_mabe_hit_sucess_rate=0")]
+    fn success_rate_zero_still_panics() {
+        let mut sc = full_server_conf();
+        sc["mab_mabe_hit_sucess_rate"] = json!(0);
+        let g = golden_with("s1", sc);
+        let _ = apply_serverconf_fixture(&g, &mut world(), "mabmabe", "s1");
     }
 
     /// 牙④：非整数 ⇒ panic（不能 `as_i64` 失败后当成 0/缺省）。

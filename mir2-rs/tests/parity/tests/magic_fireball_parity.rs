@@ -650,6 +650,16 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
 // ---------------------------------------------------------------------------
 
 /// 台账目录：与 game-svr 驱动同口径（`MIR2_MAGIC_LEDGER_DIR` 可覆盖；缺省 `<workspace>/target/magic-parity`）。
+/// **标签从 golden 取**（缺 case ⇒ 调用方 assert；防空转）。
+fn golden_labels<'a>(golden: &'a Value, stem: &str) -> Vec<&'a str> {
+    let labels: Vec<&str> = golden["cases"]
+        .as_array()
+        .map(|cs| cs.iter().filter_map(|c| c["Label"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(!labels.is_empty(), "[{stem}] 金标准无 case（防空转）");
+    labels
+}
+
 fn ledger_dir() -> std::path::PathBuf {
     if let Ok(d) = std::env::var("MIR2_MAGIC_LEDGER_DIR") {
         return std::path::PathBuf::from(d);
@@ -4640,11 +4650,28 @@ fn real_rust_ledger_turnundead() {
 #[test]
 #[ignore = "需先跑 game-svr 驱动（tests::mabmabe_parity_*）生成真实台账"]
 fn real_rust_ledger_mabmabe() {
-    real_ledger_verify_labels(
-        "mabmabe",
-        &golden_file("mabmabe.json"),
-        &["s1", "s5", "s13"],
-    );
+    let golden = golden_file("mabmabe.json");
+    let labels = golden_labels(&golden, "mabmabe");
+    real_ledger_verify_labels("mabmabe", &golden, &labels);
+}
+
+/// **MG-48 配置变体**（`rand0/rand1/time10`）：标签从各自 golden 取。
+fn ledger_variant_stem(stem: &str, file: &str) {
+    let golden = golden_file(file);
+    let labels = golden_labels(&golden, stem);
+    real_ledger_verify_labels(stem, &golden, &labels);
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::mabmabe_rand0_parity_*）生成真实台账"]
+fn real_rust_ledger_mabmabe_rand0() {
+    ledger_variant_stem("mabmabe-rand0", "mabmabe-rand0.json");
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::mabmabe_rand1_parity_*）生成真实台账"]
+fn real_rust_ledger_mabmabe_rand1() {
+    ledger_variant_stem("mabmabe-rand1", "mabmabe-rand1.json");
 }
 
 /// **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 前格 target 被推 ⇒ 逐格 `SM_BACKSTEP(9)`。

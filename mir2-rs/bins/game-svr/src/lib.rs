@@ -88140,6 +88140,28 @@ SendRefMsgRange=15
             .map(|id| rig.world.entities.get(*id).unwrap().hp)
             .collect();
 
+        // **MG-48（2026-11-26）**：金标准该 mon 记了 `HpBefore`（C# `MonsterSpec.OperateStruck`
+        // 支）⇒ 本 case 的怪**会** `Operate` 受击消息 ⇒ 驱动必须让它**结算**：HP、MSD/R(1000)/
+        // R(6)/R(300) 抽数、`8044/8018/8103/8090` 全在结算面。未记 `HpBefore` 的旧件按既有口径
+        // 只记 RM、不结算（`RecordingMonster` 不 `Operate`）——`golden_mon_operates` 为假的支零变化。
+        let golden_mon_operates: Vec<bool> = (0..monster_ids.len())
+            .map(|i| {
+                golden_case_for(stem, label)["Receivers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|r| r["Who"] == format!("mon{i}"))
+                    .is_some_and(|r| r.get("HpBefore").is_some())
+            })
+            .collect();
+        let mon_operates = |id: i32| -> bool {
+            monster_ids
+                .iter()
+                .position(|m| *m == id)
+                .and_then(|i| golden_mon_operates.get(i).copied())
+                .unwrap_or(false)
+        };
+
         // **21 的 RM 收件人必须取施法前**：oracle 的 `RM_SPELL(:159)` / `RM_MAGICFIRE(:406)` /
         // `RM_SPACEMOVE_FIRE2(:881)` 都在 `SpaceMove` **之前**入队，收件人按旧图/旧坐标算。
         // 施法后 caster 已换图 ⇒ `hear_targets` 只剩自己，target/obs_in 的 RM 会整段丢（实测）。
@@ -88331,12 +88353,14 @@ SendRefMsgRange=15
             let turns = rig.world.deliver_self_delay_msgs_turns();
             let outs = mir2_world_bevy::slave::flatten_self_delay_turns(turns.clone());
             // **玩家受击必须留给 `drain_b4_self_deliveries`**（`deliver_mag_struck` 做
-            // 31 帧 + R(1000)/MSD 抽数）；**怪物受击只记 RM、不结算**——C# 装置的
-            // `RecordingMonster` 明确「不 Operate」（`RunMagicCase` 注释），让它结算会多抽。
+            // 31 帧 + R(1000)/MSD 抽数）；**未结算的怪只记 RM**——C# 装置的
+            // `RecordingMonster` 对非 `OperateStruck` 的支不 `Operate`，让它结算会多抽。
             let pending = std::mem::take(&mut rig.world.pending_mag_struck);
             let mut for_b4 = Vec::new();
             for st in pending {
-                if monster_ids.contains(&st.target_id) {
+                // **MG-48**：`OperateStruck` 支的怪必须**结算**（走 `for_b4` → 产品
+                // `deliver_mag_struck`）；其余怪沿用「只记 RM、不结算」的旧口径。
+                if monster_ids.contains(&st.target_id) && !mon_operates(st.target_id) {
                     struck_rm.push((st.target_id, st.power));
                 } else {
                     // `SendStruckDelayMsg`(8 参) 的玩家受害者：用于台账的 8044/10052/8103 重建。
@@ -88748,6 +88772,46 @@ SendRefMsgRange=15
                 }
             }
         }
+        // **MG-48（2026-11-26）**：**结算怪**的延迟受击（`OperateStruck` 支）对玩家的两条广播：
+        //  - `RM_STRUCK_MAG(8103)`：`BaseObject.Base.cs:629` 的 `SendRefMsg` ⇒ 收件人 =
+        //    `hear_targets(怪)`（含附近玩家）；
+        //  - `RM_CHANGENAMECOLOR(8090)`：`BreakHolySeizeMode` → `RefNameColor()`
+        //    （`AnimalObject.cs:125` + `BaseObject.cs:730-733`），来源 = `StruckEvent.name_color`
+        //    （产品观测值，不由 656 反推）。
+        // 只有 `OperateStruck` 结算的怪有这两条；其余支 `mon_operates` 恒假 ⇒ 零变化。
+        for ev in &struck_delivered {
+            if !mon_operates(ev.target_id) {
+                continue;
+            }
+            if ev.damage > 0 {
+                let map_id = rig.world.entities.get(ev.target_id).map_or(0, |e| e.map_id);
+                let x = rig.world.entities.x(ev.target_id).unwrap_or(0);
+                let y = rig.world.entities.y(ev.target_id).unwrap_or(0);
+                for id in chat::hear_targets_at(&rig.world, ev.target_id, map_id, x, y, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            8103,
+                            i64::from(ev.damage),
+                            i64::from(ev.hp_after),
+                            i64::from(ev.max_hp),
+                            i64::from(ev.caster_id),
+                            167,
+                            false,
+                        ));
+                    }
+                }
+            }
+            if ev.name_color {
+                for id in chat::hear_targets(&rig.world, ev.target_id, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who
+                            .entry(who)
+                            .or_default()
+                            .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
+                    }
+                }
+            }
+        }
         // `RM_CHANGENAMECOLOR(8090)`（改名）：来源 = 内部事件 `hitter_name_color`
         // （受击玩家 `SetPkFlag` 命中 ⇒ 攻击方 `RefNameColor`），**不由 SM 656 帧反推**；
         // 收件人 = 攻击方 `hear_targets`（含攻击方自己）、prio=154。即时支取 `struck_cast`，
@@ -89065,6 +89129,27 @@ SendRefMsgRange=15
                         )
                     }),
             );
+            // **MG-48**：`OperateStruck` 结算支的交付段受击（产品 `deliver_mag_struck`）⇒
+            // 每命中一条 = `RM_MAGSTRUCK(8044)` + 怪自己的 `RM_STRUCK(8018)`
+            // （`AnimalObject.Operate` `:672-679` 的 `SendMsg(RM_STRUCK, nDamage, HP, MaxHP, caster)`）。
+            // 来源 = 产品观测面 `struck_log`（`struck_delivered`），不由 SM 帧反推。
+            if mon_operates(*id) {
+                for ev in &struck_delivered {
+                    if ev.target_id != *id {
+                        continue;
+                    }
+                    rm.push(fireball_rm(8044, 0, i64::from(ev.power), 0, 0, 108, false));
+                    rm.push(fireball_rm(
+                        i64::from(mir2_protocol::messages::RM_STRUCK),
+                        i64::from(ev.damage),
+                        i64::from(ev.hp_after),
+                        i64::from(ev.max_hp),
+                        i64::from(ev.caster_id),
+                        82,
+                        false,
+                    ));
+                }
+            }
             let mut mon = serde_json::json!({
                 "Who": format!("mon{i}"),
                 "Rm": rm,
@@ -89244,6 +89329,39 @@ SendRefMsgRange=15
         }
     }
 
+    /// **MG-48（2026-11-26）**：`ServerConf` 十键的**绝对值**期望 = 部署口径 + 配置变体的单键改写。
+    ///
+    /// 与 C# `ServerConfFixture.Variants`（`GoldenKey/Value/Sha256`）**各自独立维护**：
+    /// 生成器写进 golden 的值必须与这里逐值相等，任一侧改键/改值即红。
+    fn server_conf_expected(stem: &str) -> [(&'static str, i64); 10] {
+        let mut expected: [(&'static str, i64); 10] = [
+            ("mag_turn_undead_level", 44),
+            ("mab_mabe_hit_rand_rate", 100),
+            ("mab_mabe_hit_min_lv_limit", 10),
+            ("mab_mabe_hit_sucess_rate", 21),
+            ("mab_mabe_hit_mabe_time_rate", 20),
+            ("amy_ounsul_point", 15),
+            ("mag_tamming_level", 40),
+            ("mag_tamming_target_level", 1),
+            ("mag_tamming_hp_rate", 100),
+            ("mag_tamming_count", 5),
+        ];
+        let override_ = match stem {
+            "mabmabe-rand0" => Some(("mab_mabe_hit_rand_rate", 0)),
+            "mabmabe-rand1" => Some(("mab_mabe_hit_rand_rate", 1)),
+            "mabmabe-time10" => Some(("mab_mabe_hit_mabe_time_rate", 10)),
+            _ => None,
+        };
+        if let Some((key, value)) = override_ {
+            let slot = expected
+                .iter_mut()
+                .find(|(name, _)| *name == key)
+                .expect("键表必须自带该键");
+            slot.1 = value;
+        }
+        expected
+    }
+
     /// 火球类用例的共用断言（id=1 与 id=5 同构；只差 magic id 进 SM17 尾串与 RM_SPELL 的 p3）。
     fn fireball_case_assert(stem: &str, label: &str) {
         let dir = magic_ledger_dir();
@@ -89326,19 +89444,10 @@ SendRefMsgRange=15
                 "[{stem}/{label}] 台账 ServerConf 键集与 SERVER_CONF_KEYS 不一致"
             );
             // **绝对值 = 部署口径**（不是"两侧相等"：两侧同时吃缺省时相等也成立）。
-            const DEPLOY: [(&str, i64); 10] = [
-                ("mag_turn_undead_level", 44),
-                ("mab_mabe_hit_rand_rate", 100),
-                ("mab_mabe_hit_min_lv_limit", 10),
-                ("mab_mabe_hit_sucess_rate", 21),
-                ("mab_mabe_hit_mabe_time_rate", 20),
-                ("amy_ounsul_point", 15),
-                ("mag_tamming_level", 40),
-                ("mag_tamming_target_level", 1),
-                ("mag_tamming_hp_rate", 100),
-                ("mag_tamming_count", 5),
-            ];
-            for (k, want) in DEPLOY {
+            // **MG-48**：配置变体 stem 的单键改写量在 Rust 侧**独立硬写**
+            // （[`server_conf_expected`] 与 C# `ServerConfFixture.Variants` 是两份表——
+            // 任一侧漂移都会红；**不许从 golden 自己读期望**，否则自证）。
+            for (k, want) in server_conf_expected(stem) {
                 assert_eq!(
                     g["Fixture"]["server_conf"][k].as_i64(),
                     Some(want),
@@ -94011,6 +94120,53 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn mabmabe_parity_s13() {
         mabmabe_assert("s13", 3000);
+    }
+
+    /// **MG-48（2026-11-26，批 B）**：配置变体（`rand0/rand1`）的驱动。
+    /// 期望全部来自 golden（`server_conf` 绝对值已在驱动里 fail-closed 断言）。
+    /// 成功臂（`monster` / `stone_time20` vs `stone_time10`）受 B17/`refmsg-queue-model`
+    /// 等键帧序缺口阻塞，未落驱动；复现配方见 `docs/issues/openmir2-refmsg-queue-model.md`。
+    fn mabmabe_variant_assert(stem: &str, label: &str, base: i32) {
+        let seed = golden_seed(stem, label);
+        fireball_parity_drive(stem, 50, 1, label, seed, base);
+        fireball_case_assert(stem, label);
+        golden_drain_not_capped(stem, label);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand0_parity_s1() {
+        mabmabe_variant_assert("mabmabe-rand0", "s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand0_parity_s5() {
+        mabmabe_variant_assert("mabmabe-rand0", "s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand0_parity_s13() {
+        mabmabe_variant_assert("mabmabe-rand0", "s13", 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand1_parity_s1() {
+        mabmabe_variant_assert("mabmabe-rand1", "s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand1_parity_s5() {
+        mabmabe_variant_assert("mabmabe-rand1", "s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_rand1_parity_s13() {
+        mabmabe_variant_assert("mabmabe-rand1", "s13", 3000);
     }
 
     /// **`MG-50 groupamyounsul(48)`**（`MagGroupAmyounsul`，逐目标护身符 + 毒伤）：三 seed。
