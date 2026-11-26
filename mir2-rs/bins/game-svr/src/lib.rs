@@ -92561,10 +92561,12 @@ SendRefMsgRange=15
     }
 
     /// **MG-36（22 火墙 `MagMakeFireCross`）**真实台账驱动：金标准 `golden/magic/firecross.json`
-    /// （三支 `base` / `pre_center` / `safe_zone`）。
+    /// （四支 `base` / `pre_center` / `safe_zone` / `tick_boundaries`）。
     ///
     /// 观测面：事件表（`EventType/x/y/ContinueTime/Damage`；**不记 RunTick/时间戳**）+ 安全区门 +
-    /// 预占去重 + 帧面/RNG。逐 tick 的 3000ms 伤害不启动（事件进程不在 harness）。
+    /// 预占去重 + 帧面/RNG。**MG-36 结算面（2026-11-27）**：tick 臂逐 `ExecuteOnce` 后由
+    /// `deliver_mag_struck()` 让目标按步结算（宿主对 oracle 目标 `Run()` 处理 `RM_MAGSTRUCK_MINE`
+    /// 的建模）⇒ HP 真掉，`FireTrace` 逐时刻记录 `{delta,ms,target_hp,target_hp_after_run,struck}`。
     fn firecross_parity_drive(label: &str) {
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let stem = "firecross";
@@ -92759,7 +92761,8 @@ SendRefMsgRange=15
         let cast_rng = trace_slice(&trace, n0, n1);
         let deliver_rng = trace_slice(&trace, n1, n2);
         let (level_after, tp_after) = skill_tail_rcd(&rig, magic_id);
-        let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
+        // **MG-36 结算面（2026-11-27）**：`hp_after`（台账 `TargetHp`）移到 tick 臂**之后**读——
+        // tick 臂的结算会让 HP 真掉（golden `TargetHp`=88）；无 tick 臂的支此处无行为差（零变化）。
         // ---- 事件快照（只取本 case 新增的；排除预置）----
         let mut events: Vec<serde_json::Value> = rig
             .world
@@ -92870,24 +92873,76 @@ SendRefMsgRange=15
         // 的 `RunTick` 整点门整体错位（repro 原文见交接 §21.1）。
         // 期望（解析硬写，不读 golden、不读 C#）：`RunTick=500` 的 `+500` 不跑、`+501` 跑；
         // `FireRunTick` 的 `+3501` 距上次结算**恰 3000**（不 > 3000）不结算、`+4002` 结算
-        // ⇒ 累计 = [0, 1, 1, 1, 2]。
+        // ⇒ 每步 struck = [0, 1, 0, 0, 1]，累计 = [0, 1, 1, 1, 2]。
+        // **MG-36 结算面（2026-11-27）**：每次 `run_map_events()` 后让**目标**步进一次——
+        // `deliver_mag_struck()` 按建序交付 pending（宿主对 oracle 目标 `Run()` 处理
+        // `RM_MAGSTRUCK_MINE` 的建模，`BaseObject.Base.cs:618-686`：`GetMagStruckDamage` →
+        // `StruckDamage` → HP 真掉）。HP 期望（解析硬写）：实伤 = 事件 damage − 目标魔法防御；
+        // 夹具目标 MAC=0 ⇒ 防御 = `Lo(MAC)+R(|Hi−Lo|+1) = 0+R(1) ≡ 0`；实伤 = 6/次（= events[]
+        // `.damage`，该字段已由比较器逐事件 golden==rust 钉住）⇒ `target_hp_after_run` =
+        // [100, 94, 94, 94, 88]（结算前 `target_hp` = [100, 100, 94, 94, 94]）。
+        let mut fire_trace: Option<Vec<serde_json::Value>> =
+            fx["fire_ticks_ms"].as_array().map(|_| Vec::new());
         if let Some(deltas) = fx["fire_ticks_ms"].as_array() {
             let t0 = fx["fire_cast_ms"]
                 .as_i64()
                 .unwrap_or_else(|| panic!("[{stem}/{label}] golden 必须记录 fire_cast_ms"));
-            let mut cum = Vec::new();
+            let mut struck_rows: Vec<i64> = Vec::new();
+            let mut hp_pre_obs: Vec<i64> = Vec::new();
+            let mut hp_after_obs: Vec<i64> = Vec::new();
             for d in deltas {
                 let delta = d.as_i64().expect("fire_ticks_ms 必须是整数");
                 rig.world.clock_ms = t0 + delta;
                 rig.world.run_map_events();
-                cum.push(i64::try_from(rig.world.pending_mag_struck.len()).unwrap());
+                // pending 由 deliver 每步清空 ⇒ `pending_mag_struck.len()` = 本步新增（per-row）。
+                let struck_now = i64::try_from(rig.world.pending_mag_struck.len()).unwrap();
+                struck_rows.push(struck_now);
+                // 结算面：目标步进（oracle 目标 `Run()` 的 RM 处理 = 宿主 `deliver_mag_struck`）。
+                let hp_pre = i64::from(rig.world.entities.get(target).unwrap().hp);
+                let _outs = rig.world.deliver_mag_struck();
+                let hp_after_tick = i64::from(rig.world.entities.get(target).unwrap().hp);
+                hp_pre_obs.push(hp_pre);
+                hp_after_obs.push(hp_after_tick);
+                fire_trace
+                    .as_mut()
+                    .expect("fire_ticks_ms 非空 ⇒ fire_trace 必为 Some")
+                    .push(serde_json::json!({
+                        "delta": delta,
+                        "ms": t0 + delta,
+                        "target_hp": hp_pre,
+                        "target_hp_after_run": hp_after_tick,
+                        "struck": struck_now,
+                    }));
             }
+            assert_eq!(
+                struck_rows,
+                vec![0, 1, 0, 0, 1],
+                "[firecross/{label}] tick 每步 struck 必须 = [0,1,0,0,1]（RunTick 500 / Fire 3000 两门整点）"
+            );
+            let cum: Vec<i64> = struck_rows
+                .iter()
+                .scan(0i64, |acc, v| {
+                    *acc += v;
+                    Some(*acc)
+                })
+                .collect();
             assert_eq!(
                 cum,
                 vec![0, 1, 1, 1, 2],
-                "[firecross/{label}] tick 累计 struck 必须 = [0,1,1,1,2]（RunTick 500 / Fire 3000 两门整点）"
+                "[firecross/{label}] tick 累计 struck 必须 = [0,1,1,1,2]"
+            );
+            assert_eq!(
+                hp_pre_obs,
+                vec![100, 100, 94, 94, 94],
+                "[firecross/{label}] 结算前 HP 轨迹必须 = [100,100,94,94,94]（解析硬写）"
+            );
+            assert_eq!(
+                hp_after_obs,
+                vec![100, 94, 94, 94, 88],
+                "[firecross/{label}] 结算后 HP 轨迹必须 = [100,94,94,94,88]（damage 6 − MAC 防御 0，2 次结算）"
             );
         }
+        let hp_after = i64::from(rig.world.entities.get(target).unwrap().hp);
 
         let firecross_block = serde_json::json!({
             "events": events,
@@ -92902,7 +92957,7 @@ SendRefMsgRange=15
             "red_sysmsg_text": "",
             "has_640": has_640,
         });
-        let ledger = serde_json::json!([{
+        let mut case = serde_json::json!({
             "Label": label,
             "Seed": seed,
             "SpellReturn": true,
@@ -92917,7 +92972,15 @@ SendRefMsgRange=15
             "TargetHp": hp_after,
             "Train": train,
             "FireCross": firecross_block,
-        }]);
+        });
+        // **MG-36 结算面（2026-11-27）**：`FireTrace` 只在 tick 臂落键——golden 侧非 tick 支
+        // 不带该键（C# 序列化忽略 null）⇒ 台账形状对齐（缺键，不落 null）。
+        if let Some(ft) = fire_trace {
+            case.as_object_mut()
+                .expect("case 必须是对象")
+                .insert("FireTrace".into(), serde_json::Value::Array(ft));
+        }
+        let ledger = serde_json::json!([case]);
         let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
