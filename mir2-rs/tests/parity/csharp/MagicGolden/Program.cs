@@ -522,7 +522,12 @@ public static class Program
                 // `Dura=100` ⇒ 只 **1 次** `CheckAmulet` 通过 ⇒ 仅第一个合格目标有 `8037` **且**置
                 // `TargetCret`；其余既无 `8037`、也不置 `TargetCret`（`SetTargetCreat` 在
                 // `if (CheckAmulet)` 内、骰外）。
-                new ExtraCaseSpec { Label = "multi_amulet", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6300 },
+                // 正臂：玩家目标**移出方框**（(110,100)）⇒ 扫描首个合格目标是 mon0 ⇒ 拿到 `8037` 且 `TargetCret` 落它；
+                // mon1/mon2 无护身符 ⇒ 零 `8037`、且不置 `TargetCret`。
+                new ExtraCaseSpec { Label = "multi_amulet_monster_first", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, TargetXy = new[] { 110, 100 }, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6300 },
+                // 反臂：玩家目标与 mon0 同格 (101,100) 且 `ObjList` 里先于怪 ⇒ 唯一一次护身符被玩家夺走 ⇒
+                // 三只怪零 `8037`、`TargetCret` 落在玩家目标。
+                new ExtraCaseSpec { Label = "multi_amulet_player_first", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6400 },
             } });
             // **MG-50（2026-11-26）**：护身符 `Shape=0` 的 fall-through——`switch` 无 default ⇒ 不投毒
             // （无 `8037`），但骰过且 race 合格 ⇒ `result` **仍 true**（`:929-932` 在 switch 之外）⇒ 训练尾 640 在。
