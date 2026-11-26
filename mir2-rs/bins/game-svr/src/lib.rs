@@ -87921,9 +87921,12 @@ SendRefMsgRange=15
             let shape = u8::try_from(shape).unwrap_or_else(|_| {
                 panic!("[{stem}/{label}] Fixture.amulet_shape={shape} 越界 u8（FixtureContractViolation）")
             });
+            // **MG-50（2026-11-26）**：`groupamyounsul-shape0` 是**有意的 fall-through 臂**
+            // （switch 无 default ⇒ 不投毒、`result` 仍 true）；其余 stem 仍只许 1/2。
+            let shape0_arm = stem == "groupamyounsul-shape0";
             assert!(
-                matches!(shape, 1 | 2),
-                "[{stem}/{label}] Fixture.amulet_shape={shape} 必须是 1 或 2（`case 1`/`case 2` 两臂；0 会退化成不投毒）"
+                matches!(shape, 1 | 2) || (shape == 0 && shape0_arm),
+                "[{stem}/{label}] Fixture.amulet_shape={shape} 必须是 1 或 2（仅 shape0 臂允许 0；0 会退化成不投毒）"
             );
             rig.amulet_shape = shape;
 
@@ -87938,6 +87941,31 @@ SendRefMsgRange=15
                 },
             );
 
+            // **MG-50**：护身符 `Dura` 的**施法前初始值**（`UseAmulet` 会扣 100、Dura=100 那一次还会销毁
+            // ⇒ 只能在施法前设/读）。缺键 ⇒ 不动（既有件零变化）。
+            if let Some(dura) = golden_fixture_opt(stem, label, "amulet_dura") {
+                let dura = u16::try_from(dura).unwrap_or_else(|_| {
+                    panic!("[{stem}/{label}] Fixture.amulet_dura={dura} 越界 u16")
+                });
+                if let Some(sg) = rig.ground_sessions.get_mut("caster") {
+                    if let Some(item) = sg.use_items[game_svr::ability::SLOT_ARMRING_L].as_mut() {
+                        item.dura = dura;
+                    }
+                }
+                let got = rig
+                    .ground_sessions
+                    .get("caster")
+                    .and_then(|sg| {
+                        sg.use_items[game_svr::ability::SLOT_ARMRING_L]
+                            .as_ref()
+                            .map(|it| it.dura)
+                    })
+                    .unwrap_or(0);
+                assert_eq!(
+                    got, dura,
+                    "[{stem}/{label}] 护身符 Dura 设为 Fixture.amulet_dura 后读回不一致（施法前初始值语义）"
+                );
+            }
             let aop = golden_fixture_required(stem, label, "amy_ounsul_point");
             let aop = i32::from(aop);
             assert!(
