@@ -534,6 +534,9 @@ public static class Program
                 // 反臂：玩家目标与 mon0 同格 (101,100) 且 `ObjList` 里先于怪 ⇒ 唯一一次护身符被玩家夺走 ⇒
                 // 三只怪零 `8037`、`TargetCret` 落在玩家目标。
                 new ExtraCaseSpec { Label = "multi_amulet_player_first", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6400 },
+                // **MG-64 ②（2026-11-27）**：**两条**前置 buff ⇒ 绿毒位号 **2** ⇒ `CharStatus = 0xE0000000`
+                //（`0x80000000 | 0x40000000 | 0x20000000`）⇒ `10139.p1 = -536870912`（跨位号复验）。
+                new ExtraCaseSpec { Label = "prebuff_double", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 }, new BuffSpec { Type = 3, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6700 },
                 // **MG-64/65（2026-11-26）**：目标先挂一条非毒 buff（`Defense`=2，`StateTick=60000`）⇒
                 // 绿毒 buff 的位号 `i` 变 1 ⇒ `StatusChanged` 的 `CharStatus = 0x80000000 >> 1 = 0x40000000`
                 // ⇒ `10139.p1` 不再是 `int.MinValue`（MG-64 的非零位号 + MG-65 的红毒位路径）。
@@ -542,7 +545,7 @@ public static class Program
             // **MG-50（2026-11-26）**：护身符 `Shape=0` 的 fall-through——`switch` 无 default ⇒ 不投毒
             // （无 `8037`），但骰过且 race 合格 ⇒ `result` **仍 true**（`:929-932` 在 switch 之外）⇒ 训练尾 640 在。
             if (name == "groupamyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape0", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15 });
-            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15, ExtraCases = new[] { new ExtraCaseSpec { Label = "prebuff_red", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6800 } } });
             // **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 取**前格**实体 ⇒ 装置用 `EnableMaps`
             // 设 `caster.Dir`（朝点击方向 = 东）⇒ 前格 (101,100) 的 target 成为推挤目标。
             // 判据：golden 必须 ≥1 条 `SM_BACKSTEP(9)`（退化守卫；零条即具名红）。
