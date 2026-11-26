@@ -36,6 +36,7 @@
 | B23 | **对拍的时间节拍是假设值（100ms 未核实）**：装置 `MagicGolden/Program.cs::DrainOnce` 的步进 `StepDrainMs=100` 与 Rust 驱动都用 100ms；生产 actor `Run()` 由 `RunTime=250` 门 + 玩家 `UserProcessor` 50ms 周期 / 怪物 `ProcessMonsters` 每趟 `Thread.Sleep(20)` 驱动 ⇒ **≈250–300ms**，且 `BaseObject` ctor `RunTick = GetTickCount() + RandomNumber.Random(1500)` ⇒ **怪物首跑时刻按实例随机**（`PlayObject` ctor 覆盖为当前 tick） | 任何"延迟 N ms 后在第几步处理 / 谁先谁后"的判据：自延迟消息、`due_ms_rel`、延迟帧顺序、`DrainPasses` 计数 | 装置与 Rust 用**同一个** 100ms 假设 ⇒ 两栈互相一致、**共同偏离生产**；golden 与台账同错 ⇒ 断言恒绿 | actor 每 ≈250–300ms 才泵一次队列；到 t=800ms 玩家只发生 ≈2–3 次 `Run()`（不是 8 次）；"未到期根把已到点项压到下一步"的奇偶取决于真实拍数 | "第几步/第几次 Run"语义、跨步排序、`DrainPasses` 真实值；怪物首相位随机 ⇒ 顺序不可当确定量。**依据**：`docs/issues/production-tick-cadence.md`；B 型 2 支分歧（`bigcloak`/`groupdeding`）是第一个显形处，**不是唯一** |
 | B24 | **跨 actor 处理顺序被当作生产事实（实际是驱动契约）**：生产里同线程按容器插入序，玩家/怪物/NPC/机器人跨 OS 线程**无全局序**，怪物→线程分配用 `M2Share.RandomNumber.Random`（底层 `new Random()` 时间种子）⇒ 启动随机（见 `docs/issues/production-tick-cadence.md` §9）；装置 `MagicGolden` 固定按 `caster→target→obs_in→obs_out`（`byWho`），Rust 实为 `SelfDelayQueue` **首入队序**（bigcloak 恰好吻合）；契约改为**首入队序**（装置待改） | 任何"跨 actor 帧序 / 同一 tick 谁先谁后 / 消息落到谁的下一 tick"的判据 | 生产顺序不可复刻；装置把契约序当成生产序 ⇒ 比较器绿只证**契约一致**，不证生产一致 | 生产由线程调度 + 容器插入序决定，**没有确定答案** | 跨 actor 帧序、跨 actor 延迟消息落点、旁观者帧先后。**处置**：不追"生产的正确答案"，改为钉死驱动契约并让两侧都按契约（见下方 B24 操作要求） |
 | B25 | **AOI 可见集不是纯几何**：`BaseObject.Message.cs::SendRefMsg` 用 500ms `VisibleHumanList` 缓存；重扫 `SendRefMsgRange`（缺省 12）与复用过滤 `|dx|<11`/`|dy|<11` **不一致**（11–12 格：重扫进、复用丢），缓存期内新进入/移动者不更新 | 11–12 格边界、500ms 内移动/新进入、AOI 边界对拍 | 两侧沿用同一段 oracle 代码 ⇒ **同错**；对拍轴无感（两边一致），realism 轴有偏（真实生产可见集与几何直觉不同） | 真实生产的收件人由缓存 + 边界口径决定，不是纯距离 | AOI 集合/顺序的真实性。**处置**：若做 AOI 边界对拍，先钉"缓存 500ms + 重扫 ±12 / 复用 <11"口径；跨图可见性未覆盖（装置只加载一张图，见 **B6**） |
+| B26 | **RM 的 `priority`/`late` 维度产品不产出（2026-11-26，卡 `DEV-RM-PRIORITY-UNOBSERVED`）**：产品 `PendingMagStruck`（`crates/world-bevy/src/world.rs`）只有 `target_id/caster_id/power/mine/order`；台账的 `priority/late` 是驱动按 oracle 语义**重建的常量**（`fireball_rm(ident,wParam,p1,p2,p3,priority,late)`，如即时支 `(byte)ident=108/false`、`SendStruckDelayMsg` 支 `Lowest=255/true`） | 任何 RM 比较（`magic_fireball_parity::verify` 的 RM 多重集） | 2026-11-26 前 `priority/late` **参与判定** ⇒ 比的是驱动自己写的常量 vs golden，**循环自证**；两侧同常量恒绿、改常量恒红，均不证明产品 | 生产 oracle 的 RM 入队优先级由 `Enqueue(...,(byte)wIdent)` / `Lowest` 决定，但 Rust 宿主不发 RM 层（RM 列是重建） | RM 入队优先级/延迟标志（`priority`/`late`）。**处置**：已移出比较面、降为信息列（比较器只打印不判红），牙 `tooth_rm_late_changed_red` 随维度删除（提交信息留痕）；**撤销条件**＝产品路径真的产出并**使用** `priority/late`（不是为测试建模）后恢复字段与牙 |
 
 ### B22 · D=12 `due` 值表（golden 新值 vs Rust 台账，2026-11-22 全量门实测）
 
@@ -80,6 +81,14 @@
 
 **B 型 2 支**：契约固定后两侧应能对齐；**若仍对不齐，那才是真缺陷**（值得查）。重出解冻口径与 B23 相同（`opc-19` 宣布；顺序 `bigcloak` → `groupdeding` → 全量逐支点名、**不得翻转**）。
 
+### B26 · 操作要求（2026-11-26 裁定：RM `priority/late` 不进判定）
+
+**事实**：产品 `PendingMagStruck` 无 `priority/late` 字段；台账这两列由驱动常量重建（`fireball_rm(..., prio, late)`）。把它们放进 RM 多重集与 golden 比，等于"驱动常量 vs golden"，不证明产品（与 charter §4.2"期望不得取自被测对象"同源）。
+
+**裁定（总监，2026-11-26）**：①比较器 RM 面只比 `ident/wParam/p1/p2/p3`；`priority/late` 仅在不一致时打 INFO 行；②牙 `tooth_rm_late_changed_red` 随维度删除（**不是为让红变绿**：它咬的是驱动自己的常量）；③恢复条件＝产品路径真的产出并**使用**该维度（不是为测试建模），届时恢复比较字段并重建牙。
+
+**受影响条目**：所有走 `verify` 的 magic stem 的 RM 面；当前结论是"该维度**未验证**"，不得写成"已验证"。
+
 ## 2. 已知受影响的面（与具体 leaf 对号）
 
 - **656（`RM_CHANGENAMECOLOR`）**：17/30/41 的召唤怪改名色 —— 落在 **B1**；20 的诱惑（`MagTamming` 内对怪发 60005）与 54 族的 60005 下游 —— 落在 **B2**。
@@ -96,6 +105,7 @@
 - **对拍的时间节拍是假设值（100ms vs 生产 ≈250–300ms + 怪物随机首相位）** —— 落在 **B23**（见 `docs/issues/production-tick-cadence.md`）；B 型 2 支分歧是第一个显形处，不是唯一。
 - **跨 actor 顺序被当成生产事实** —— 落在 **B24**：生产无全局序（线程调度 + 容器插入序 + 怪物线程随机分配），装置/Rust 的**首入队序**（装置当前固定 byWho，待改）是**驱动契约**；跨 actor 帧序类结论必须带 `@首入队序 契约`。
 - **AOI 可见集不是纯几何（缓存 + ±12/<11 边界）** —— 落在 **B25**：两侧同码 ⇒ 同错（对拍轴无感、realism 轴有偏）；AOI 边界对拍前先钉口径；跨图未覆盖见 **B6**。
+- **RM 的 `priority`/`late` 不可由产品观测** —— 落在 **B26**（卡 `DEV-RM-PRIORITY-UNOBSERVED`）：该列自 2026-11-26 起**不进判定**（信息列）；恢复前不得把它写进任何"已验"结论。
 
 ## 3. 遇到疑似缺失帧时的排查顺序（**顺序很重要**）
 
