@@ -1717,6 +1717,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         public bool PushCacheProbe;
         /// <summary>**MG-57 P2**：记录受害者术后 `Dir`（`TargetDirAfter`，仅该 case 落盘）。</summary>
         public bool ObserveDirAfter;
+        /// <summary>**MG-12/40**：恢复 tick 的虚拟毫秒列表（见 `ExtraCaseSpec.HealTicksMs`）。</summary>
+        public int[] HealTicksMs;
+        /// <summary>
+        /// **MG-12/40**：恢复 tick 也跑**施法者**（29 的 `both` 支：caster/target 各自累计/各自排干）；
+        /// 轨迹同时记 `hp_caster/inc_healing_caster`。缺省 false ⇒ 只跑 target。
+        /// </summary>
+        public bool HealTicksBoth;
         /// <summary>
         /// **MG-44（2026-11-26）**：允许 `TargetMonster` 的 `SuperMan` 前置被**显式测试**（负路径）。
         /// 缺省 false ⇒ 既有圣言三条件门槛不变；置 true 只在"有意验证 `:830` 负路径"的 stem。
@@ -1822,7 +1829,32 @@ private static int ReadInstanceInt(object obj, string fieldName)
             CasterMaxHp = 100,
         };
         var both = RunMagicCase(bothSpec, "both", 13, 3000, 50, false);
-        return EmitGolden(spec, new[] { heal, full, both });
+        // **MG-12/40**：29 的差异点——两目标（caster/target）**各自累计、各自排干**；两条 HP 轨迹。
+        var tickSpec = new MagicSpec
+        {
+            Key = bothSpec.Key,
+            MagicId = bothSpec.MagicId,
+            MagicName = bothSpec.MagicName,
+            Effect = bothSpec.Effect,
+            EffectType = bothSpec.EffectType,
+            UserMagicLevel = bothSpec.UserMagicLevel,
+            CasterLevel = bothSpec.CasterLevel,
+            CasterMc = bothSpec.CasterMc,
+            CasterSc = bothSpec.CasterSc,
+            CasterScNoClamp = bothSpec.CasterScNoClamp,
+            TargetLevel = bothSpec.TargetLevel,
+            TargetMaxHp = bothSpec.TargetMaxHp,
+            AntiMagic = bothSpec.AntiMagic,
+            ArmRingAmulet = bothSpec.ArmRingAmulet,
+            WaitMs = bothSpec.WaitMs,
+            StepDrainMs = bothSpec.StepDrainMs,
+            CasterHp = 50,
+            CasterMaxHp = 100,
+            HealTicksMs = new[] { 1300, 1900 },
+            HealTicksBoth = true,
+        };
+        var tickBoth = RunMagicCase(tickSpec, "big_tick_two", 13, 3100, 50, false);
+        return EmitGolden(spec, new[] { heal, full, both, tickBoth });
     }
 
     /// <summary>
@@ -2349,7 +2381,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // 见 `MagicConst.SKILL_HEALLING` 支）：输入 HP 必须**由等级派生**，不能写字面量——改 `TargetLevel` 时
         // 字面量会让「满血」静默变成「未满血」，治疗分支又悄悄回来（12 号 2026-11-20 的回归）。
         int fullHp = FixtureContract.Recompute(spec.Job, (byte)spec.TargetLevel).MaxHp;
-        var cases = new[]
+        var cases = new List<FireballResult>
         {
             RunMagicCase(spec, "heal", 1, 1000, 50, false),
             RunMagicCase(spec, "full", 5, 2000, fullHp, false),
@@ -2358,7 +2390,30 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // 生成期自检（在 `EmitGolden` 之前 ⇒ 失败即 rc=2、不落盘）。门槛由 **spec 等级现算**，
         // 不复用上面的 `fullHp`——否则「传什么就比什么」，门恒真（负例证明见卡 §25）。
         EnsureFullHpBranch("healing/full", cases[1].Fixture, spec);
-        return EmitGolden(spec, cases);
+        // **MG-12/40（2026-11-26）**：恢复 tick 臂——判据 = `TargetHp`（真加血，每次排干 +`PerHealing=5`）。
+        // tick 列表是**相对施法的虚拟毫秒**（排水窗口 = `StepDrainMs` 到 `WaitMs`，故从 1300 起）；
+        // `tick_gate_edge_*` 用两个 Level 钉 `dw = 600 - min(400, Level*10)`；`tick_lag_rearm` 钉
+        // `IncHealthSpellTick = now + min(200, …)`。`tick_hp_clamp` 同时证明 `HP==MaxHP ⇒ IncHealing=0`
+        // （222+15 末位 tick 后 inc 必须为 0，不是剩 10）。
+        var tickCases = new List<FireballResult>();
+        void TickCase(string label, int seed, int idBase, int hp, int level, int[] ticks)
+        {
+            var savedTicks = spec.HealTicksMs;
+            var savedLevel = spec.TargetLevel;
+            spec.HealTicksMs = ticks;
+            spec.TargetLevel = level;
+            tickCases.Add(RunMagicCase(spec, label, seed, idBase, hp, false));
+            spec.HealTicksMs = savedTicks;
+            spec.TargetLevel = savedLevel;
+        }
+        int hp1 = FixtureContract.Recompute(spec.Job, 1).MaxHp - 10;
+        TickCase("tick_hp_3", 1, 6100, 50, 20, new[] { 1300, 1600, 1900, 2000, 2300 });
+        TickCase("tick_hp_clamp", 1, 6200, 222, 20, new[] { 1400 });
+        TickCase("tick_gate_edge_20", 1, 6300, 50, 20, new[] { 1300, 1600, 1899, 1900 });
+        TickCase("tick_gate_edge_1", 1, 6400, hp1, 1, new[] { 1300, 1899, 1900, 2090 });
+        TickCase("tick_lag_rearm", 1, 6500, 50, 20, new[] { 1300, 1600, 1900 });
+        cases.AddRange(tickCases);
+        return EmitGolden(spec, cases.ToArray());
     }
 
     /// <summary>
@@ -2420,6 +2475,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedStepDrainMs = spec.StepDrainMs;
             var savedUserMagicLevel = spec.UserMagicLevel;
             var savedObserveDirAfter = spec.ObserveDirAfter;
+            var savedHealTicksMs = spec.HealTicksMs;
+            var savedTargetLevel = spec.TargetLevel;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2441,6 +2498,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.ObsOutXy = extra.ObsOutXy;
             spec.PushCacheProbe = extra.PushCacheProbe;
             spec.ObserveDirAfter = extra.ObserveDirAfter;
+            spec.HealTicksMs = extra.HealTicksMs;
+            if (extra.TargetLevelOverride.HasValue)
+            {
+                spec.TargetLevel = extra.TargetLevelOverride.Value;
+            }
             if (extra.StepDrainMsOverride.HasValue)
             {
                 spec.StepDrainMs = extra.StepDrainMsOverride.Value;
@@ -2449,7 +2511,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
-            cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
+            cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, extra.TargetHp ?? spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
@@ -2468,6 +2530,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.StepDrainMs = savedStepDrainMs;
             spec.UserMagicLevel = savedUserMagicLevel;
             spec.ObserveDirAfter = savedObserveDirAfter;
+            spec.HealTicksMs = savedHealTicksMs;
+            spec.TargetLevel = savedTargetLevel;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2887,7 +2951,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         int? magicPower = null, int? magicMaxPower = null, int? magicDefPower = null,
         int? magicDefMaxPower = null, int? secondCastAtMs = null, bool? realMap = null,
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
-        int? targetDirBefore = null)
+        int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
+        int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -2898,7 +2963,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && magicPower == null && magicMaxPower == null && magicDefPower == null
             && magicDefMaxPower == null && secondCastAtMs == null && realMap == null
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
-            && targetDirBefore == null)
+            && targetDirBefore == null && healTicksMs == null && healTickBase == null
+            && healLevelTarget == null && healLevelCaster == null && !specHealBoth)
         {
             return fixture;
         }
@@ -2936,6 +3002,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (pushCacheCold.HasValue) node["push_cache_cold"] = pushCacheCold.Value;
         if (observeDirAfter.HasValue) node["observe_dir_after"] = observeDirAfter.Value;
         if (targetDirBefore.HasValue) node["target_dir_before"] = targetDirBefore.Value;
+        if (healTicksMs != null)
+        {
+            node["heal_ticks_ms"] = JsonSerializer.SerializeToNode(healTicksMs);
+        }
+        if (healTickBase.HasValue) node["inc_health_spell_tick_base"] = healTickBase.Value;
+        if (healLevelTarget.HasValue) node["heal_level_target"] = healLevelTarget.Value;
+        if (healTicksMs != null && specHealBoth) node["heal_ticks_both"] = true;
+        if (healLevelCaster.HasValue) node["heal_level_caster"] = healLevelCaster.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3300,7 +3374,31 @@ private static int ReadInstanceInt(object obj, string fieldName)
     }
 
     /// <summary>跑一支魔法（`DoSpell` 直调），返回账本。`targetNull=true` ⇒ 目标对象为 null（治愈 self 支）。</summary>
-    private static FireballResult RunMagicCase(
+        /// <summary>
+    /// **MG-12/40**：调 `PlayObject.Run()`（跑 oracle 恢复段）前的**惰性前提**——`Run()` 的其它段
+    /// 必须全部静止，否则本批就不是"只跑恢复段"（挡路先报 opc-27，**不许改 oracle**）。
+    /// </summary>
+    private static void AssertRunInert(RecordingPlayObject p, string where)
+    {
+        var problems = new List<string>();
+        if (p.Dealing) problems.Add("Dealing");
+        if (SystemModule.SystemShare.Config.PayMentMode == 3) problems.Add("PayMentMode==3");
+        if (p.FireHitSkill) problems.Add("FireHitSkill");
+        if (p.TwinHitSkill) problems.Add("TwinHitSkill");
+        if (p.IsTimeRecall) problems.Add("IsTimeRecall");
+        if (p.IncSpell != 0) problems.Add("IncSpell=" + p.IncSpell);
+        if (p.IncHealth != 0) problems.Add("IncHealth=" + p.IncHealth);
+        if (p.MsgQueueCount != 0) problems.Add("MsgQueue=" + p.MsgQueueCount);
+        if (p.Death) problems.Add("Death");
+        if (problems.Count > 0)
+        {
+            throw new FixtureContractViolation(
+                "[" + where + "] Run() 非惰性段活跃：" + string.Join(", ", problems)
+                + "（先报 opc-27，不许改 oracle）");
+        }
+    }
+
+private static FireballResult RunMagicCase(
         MagicSpec spec, string label, int seed, int idBase, int targetHp, bool targetNull,
         AntiMagicBranchExpect branchExpect = null)
     {
@@ -4084,6 +4182,51 @@ private static int ReadInstanceInt(object obj, string fieldName)
         string seedReasonText = branchExpect != null && draws.Count > 0
             ? BuildSeedReason(draws[0], seed, branchExpect)
             : null;
+        // **MG-12/40**：恢复 tick——把虚拟钟设到 fixture 给的绝对 ms，对**被治疗者**调一次生产
+        // `Run()`（oracle `:70-135`），逐 tick 记 `{ms, hp, inc_healing}`。无 wall-clock、无 Sleep。
+        List<object> healTicks = null;
+        int healTickBase = target.IncHealthSpellTickPublic;
+        // **MG-12/40**：恢复门读的是 `WAbil.Level`（不是 `Abil.Level`）；逐支记录，驱动据此对齐
+        // 会话 `wabil.level`（否则 `dw = 600 - min(400, Level*10)` 两侧不同）。
+        int healLevelTarget = target.WAbil.Level;
+        int healLevelCaster = caster.WAbil.Level;
+        if (spec.HealTicksMs != null && spec.HealTicksMs.Length > 0)
+        {
+            healTicks = new List<object>();
+            foreach (var offset in spec.HealTicksMs)
+            {
+                // `HealTicksMs` 是**相对施法时刻的偏移**（与 `due_ms_rel` 同口径）；绝对虚拟时刻 =
+                // `castTick + offset`（castTick 在 `DoSpell` 之前取，同一虚拟钟）。
+                long when = castTick + offset;
+                ClockSeam.Set((int)when);
+                AssertRunInert(target, spec.Key + "/" + label + "@" + offset);
+                target.Run();
+                object row;
+                if (spec.HealTicksBoth)
+                {
+                    AssertRunInert(caster, spec.Key + "/" + label + "/caster@" + offset);
+                    caster.Run();
+                    row = new
+                    {
+                        ms = offset,
+                        hp = (int)target.WAbil.HP,
+                        inc_healing = (int)target.IncHealing,
+                        hp_caster = (int)caster.WAbil.HP,
+                        inc_healing_caster = (int)caster.IncHealing,
+                    };
+                }
+                else
+                {
+                    row = new
+                    {
+                        ms = offset,
+                        hp = (int)target.WAbil.HP,
+                        inc_healing = (int)target.IncHealing,
+                    };
+                }
+                healTicks.Add(row);
+            }
+        }
         int hpAfter = target.WAbil.HP;
         if (targetMonsterObj != null) monsterHpAfter = targetMonsterObj.WAbil.HP;
         // 卡 36：`AttPowerUp` 同步写 `ExtraAbil[0]`（目标=self ⇒ 施法者）⇒ 直接观测，非自证。
@@ -4609,6 +4752,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 pushCacheCold: spec.PushCacheProbe ? (bool?)true : null,
                 observeDirAfter: spec.ObserveDirAfter ? (bool?)true : null,
                 targetDirBefore: spec.ObserveDirAfter ? (int?)fixtureTargetDirBefore : null,
+                healTicksMs: spec.HealTicksMs,
+                // 恢复门时钟的**初值**（相对 castTick 的偏移；驱动 `Recovery::new(cast + base)`）。
+                healTickBase: spec.HealTicksMs != null ? (int?)(healTickBase - (int)castTick) : null,
+                healLevelTarget: spec.HealTicksMs != null ? (int?)healLevelTarget : null,
+                healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
+                specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
                 casterGender: spec.MagicId == 46 ? spec.CasterGender : (int?)null,
@@ -4636,6 +4785,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             Rng = draws,
             TargetHp = hpAfter,
             TargetDirAfter = spec.ObserveDirAfter ? (int?)((int)target.Dir) : null,
+            HealTicks = healTicks,
             TargetHpBefore = hpBefore,
             TargetMonsterHpBefore = monsterHpBefore,
             TargetMonsterHpAfter = monsterHpAfter,
@@ -4802,6 +4952,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         public bool PushCacheProbe;
         /// <summary>**MG-57 P2**：本 case 记录受害者术后 `Dir`（见 `MagicSpec.ObserveDirAfter`）。</summary>
         public bool ObserveDirAfter;
+        /// <summary>
+        /// **MG-12/40（2026-11-26）**：恢复 tick 的**虚拟毫秒列表**（绝对虚拟时刻；null = 不跑 tick）。
+        /// 装置在每个时刻 `ClockSeam.Set(ms)` 后对**被治疗者**调一次生产 `PlayObject.Run()`
+        /// （oracle `:70-135` 恢复段），记录 `{ms, hp, inc_healing}` 轨迹。
+        /// </summary>
+        public int[] HealTicksMs;
+        /// <summary>**MG-12/40**：本 case 的**被治疗者**（target）等级覆盖（恢复门 `dw` 读它）。</summary>
+        public int? TargetLevelOverride;
+        /// <summary>**MG-12/40**：本 case 的 target **初始 HP**（`null` = 用 stem 的 `TargetMaxHp`）。</summary>
+        public int? TargetHp;
         /// <summary>
         /// **MG-57 P2**：本 case 的 `StepDrainMs` 覆盖（`null` = 用 stem 值）。第二次施法需要
         /// "步"（非步进支没有 `elapsed` 推进）⇒ 只给该 case 打开步进，既有三支保持非步进。
@@ -4989,6 +5149,11 @@ public sealed class RecordingMonster : M2Server.Monster.MonsterObject
 
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
+    /// <summary>**MG-12/40**：恢复门时钟的只读观测（`CharacterObject.IncHealthSpellTick`，protected）。</summary>
+    public int IncHealthSpellTickPublic => IncHealthSpellTick;
+
+    /// <summary>**MG-12/40**：消息队列只读计数（`Run()` 惰性前提：无待处理消息）。</summary>
+    public int MsgQueueCount => MsgQueue.Count;
     /// <summary>
     /// B21：本对象被 `RecalcAbilitys()` 的次数。装置用它**运行期**判定「本支 `DoSpell` 是否把
     /// 施法者重算过」（`WAbil = Abil.Clone()`），取代易漏登记的静态来源清单；调用方在 `DoSpell`
@@ -5099,6 +5264,12 @@ public sealed class ReceiverResult
 /// <summary>火球单支结果（三支由 `--case fireball` 输出一份 JSON）。</summary>
 public sealed class FireballResult
 {
+    /// <summary>
+    /// **MG-12/40**：恢复 tick 轨迹 `[{ms, hp, inc_healing}]`（只有 `HealTicksMs` 的 case 落盘）。
+    /// `hp` = 该 tick 后的 `WAbil.HP`（真加血），`inc_healing` 只作辅助列。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<object> HealTicks { get; set; }
     /// 该支的夹具输入（逐字段写进产物，Rust 侧直接读它复现，**禁止手抄**）。
     /// `null` 时**不落盘**（保持火球既有 golden 的 schema 不变）。
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

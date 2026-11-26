@@ -3897,11 +3897,10 @@ fn real_rust_ledger_bigcloak() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::big_healing_parity_*）生成真实台账"]
 fn real_rust_ledger_bighealing() {
-    real_ledger_verify_labels(
-        "bighealing",
-        &golden_file("bighealing.json"),
-        &["heal", "full", "both"],
-    );
+    // **MG-12/40**：标签从 golden 取（恢复 tick 臂一并进判据）。
+    let golden = golden_file("bighealing.json");
+    let labels = golden_labels(&golden, "bighealing");
+    real_ledger_verify_labels("bighealing", &golden, &labels);
 }
 
 /// **`18 隐身术`（`SKILL_CLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。
@@ -4006,11 +4005,10 @@ fn real_rust_ledger_firecharm() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::healing_parity_*）生成真实台账"]
 fn real_rust_ledger_healing() {
-    real_ledger_verify_labels(
-        "healing",
-        &golden_file("healing.json"),
-        &["heal", "full", "self"],
-    );
+    // **MG-12/40**：标签从 golden 取（恢复 tick 臂一并进判据）。
+    let golden = golden_file("healing.json");
+    let labels = golden_labels(&golden, "healing");
+    real_ledger_verify_labels("healing", &golden, &labels);
 }
 
 /// 火球 id=1（`SKILL_FIREBALL`）真实台账 → 判定面。
