@@ -346,6 +346,14 @@ public static class Program
                     Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 43, Hp = 300, LifeAttrib = 1 } },
                     // `Struck` 之后的训练尾 640 在 +1000ms ⇒ 时间忠实排水。
                     StepDrainMs = 100,
+                    // **MG-44（2026-11-26，批 B）**：六臂——
+                    // A `miss_842`（caster 20 vs 怪 43 ⇒ `R(2)+19 > 43` 假：抽 `[R300, R2]`、无 R100）；
+                    // B `non_undead`（`LifeAttrib=0` ⇒ `:830` 零抽）；C `super_man`（`SuperMan` ⇒ 零抽）；
+                    // D `multi`（两只不死怪：目标 43 + 旁观 45，旁观零影响）；
+                    // E `player_target`（玩家 `LifeAttrib=0` ⇒ 零抽，非 AnimalObject 面）；
+                    // F `run_away`（怪 `Master=caster` ⇒ `IsProperTarget(caster)=false` ⇒ Struck 不设
+                    //   `TargetCret` ⇒ `:835-840` RunAway(10s)；seed 取 lv43 的即死 seed ⇒ HP 0 证明被 Struck）。
+                    // 每项 `ObserveState=true` 的支落 `caster.TargetCret` 与 `mon.RunAwayMode/Time`。
                     ServerConf = ServerConfFixture.LoadOrThrow(name),
                 });
             }
@@ -1598,6 +1606,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool FaithfulPump;
         /// <summary>
+        /// **MG-44（2026-11-26）**：允许 `TargetMonster` 的 `SuperMan` 前置被**显式测试**（负路径）。
+        /// 缺省 false ⇒ 既有圣言三条件门槛不变；置 true 只在"有意验证 `:830` 负路径"的 stem。
+        /// </summary>
+        public bool TargetMonsterAllowSuperMan;
+        /// <summary>
+        /// **MG-44（2026-11-26）**：术后状态观测列（见 `ExtraCaseSpec.ObserveState`）。
+        /// 由 extra 循环临时置位；缺省 false ⇒ 既有件零变化。
+        /// </summary>
+        public bool ObserveState;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -1726,7 +1744,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             (Label: "lv44", Level: 44, Seed: 5, Base: 2000),
             (Label: "lv45", Level: 45, Seed: 13, Base: 3000),
         };
-        var results = new FireballResult[cases.Length];
+        var results = new List<FireballResult>();
         for (int i = 0; i < cases.Length; i++)
         {
             // 只换 `Level`（其余输入逐字段照抄首只）——三档之间只有等级门变量不同。
@@ -1746,9 +1764,34 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     AntiMagic = baseMonster.AntiMagic,
                 },
             };
-            results[i] = RunMagicCase(spec, cases[i].Label, cases[i].Seed, cases[i].Base, spec.TargetMaxHp, false);
+            results.Add(RunMagicCase(spec, cases[i].Label, cases[i].Seed, cases[i].Base, spec.TargetMaxHp, false));
         }
-        return EmitGolden(spec, results);
+        // **MG-44（2026-11-26）**：可选额外 case（`ExtraCases`）——miss 臂 / 两条负路径 / 多怪 /
+        // 玩家目标 / run_away。每项临时替换 `Monsters/TargetMonster/TargetMonsterUndead/
+        // CasterLevel/ObserveState`，做完立即还原；缺省空 ⇒ 既有三支零变化。
+        foreach (var extra in spec.ExtraCases)
+        {
+            var savedMonsters = spec.Monsters;
+            var savedTargetMonster = spec.TargetMonster;
+            var savedTargetMonsterUndead = spec.TargetMonsterUndead;
+            var savedCasterLevel = spec.CasterLevel;
+            var savedObserveState = spec.ObserveState;
+            spec.Monsters = extra.Monsters;
+            spec.TargetMonster = extra.TargetMonster;
+            spec.TargetMonsterUndead = extra.TargetMonsterUndead;
+            if (extra.CasterLevelOverride.HasValue)
+            {
+                spec.CasterLevel = extra.CasterLevelOverride.Value;
+            }
+            spec.ObserveState = extra.ObserveState;
+            results.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
+            spec.Monsters = savedMonsters;
+            spec.TargetMonster = savedTargetMonster;
+            spec.TargetMonsterUndead = savedTargetMonsterUndead;
+            spec.CasterLevel = savedCasterLevel;
+            spec.ObserveState = savedObserveState;
+        }
+        return EmitGolden(spec, results.ToArray());
     }
 
     /// <summary>
@@ -2138,6 +2181,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
             var savedFaithfulPump = spec.FaithfulPump;
             var savedUserMagicLevel = spec.UserMagicLevel;
+            var savedCasterLevel = spec.CasterLevel;
+            var savedObserveState = spec.ObserveState;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2146,6 +2191,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
             {
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
             }
+            if (extra.CasterLevelOverride.HasValue)
+            {
+                spec.CasterLevel = extra.CasterLevelOverride.Value;
+            }
+            spec.ObserveState = extra.ObserveState;
             var extraSeed = extra.SeedOverride ?? (extra.UseHitSeed ? seedHit : 1);
             var extraExpect = extra.UseHitSeed
                 ? new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }
@@ -2156,6 +2206,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
             spec.FaithfulPump = savedFaithfulPump;
             spec.UserMagicLevel = savedUserMagicLevel;
+            spec.CasterLevel = savedCasterLevel;
+            spec.ObserveState = savedObserveState;
         }
         return cases.ToArray();
     }
@@ -2233,13 +2285,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedMonsters = spec.Monsters;
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
+            var savedCasterLevel = spec.CasterLevel;
+            var savedObserveState = spec.ObserveState;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
+            if (extra.CasterLevelOverride.HasValue)
+            {
+                spec.CasterLevel = extra.CasterLevelOverride.Value;
+            }
+            spec.ObserveState = extra.ObserveState;
             cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
+            spec.CasterLevel = savedCasterLevel;
+            spec.ObserveState = savedObserveState;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -3211,6 +3272,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             mo.WAbil.HP = (ushort)ms.Hp;
             mo.WAbil.MaxHP = (ushort)ms.Hp;
             mo.LifeAttrib = (byte)ms.LifeAttrib;
+            mo.SuperMan = ms.SuperMan;
             // 卡 §39：命中门 `Random(SpeedPoint)` / 护甲 `WAbil.AC` / 收集期 `Death` 过滤。
             mo.SpeedPoint = (byte)ms.SpeedPoint;
             mo.WAbil.AC = (ushort)ms.AC;
@@ -3284,7 +3346,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 // `Race >= Animal` 与 `!SuperMan` 仍是前置（非不死分支的伤害面同样要求动物目标）。
                 if (targetMonsterObj.Race < OpenMir2.Enums.ActorRace.Animal
                     || (spec.TargetMonsterUndead && targetMonsterObj.LifeAttrib != Grobal2.LA_UNDEAD)
-                    || targetMonsterObj.SuperMan)
+                    || (targetMonsterObj.SuperMan && !spec.TargetMonsterAllowSuperMan))
                 {
                     throw new FixtureContractViolation(
                         $"[{spec.Key}] TargetMonster 不满足圣言条件：race={targetMonsterObj.Race} "
@@ -3757,7 +3819,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)
         {
-            receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
+            var rr = new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) };
+            // **MG-44（2026-11-26）**：`ObserveState` 时落 `caster.TargetCret`（`:841 SetTargetCreat` 面；
+            // `0` = 无目标）。缺省不落盘 ⇒ 旧 golden 零变化。
+            if (spec.ObserveState && who == "caster")
+            {
+                rr.TargetCret = caster.TargetCret == null ? 0 : caster.TargetCret.ActorId;
+            }
+            receivers.Add(rr);
         }
         // **§39 逐目标抽值**（仅 `groupdeding`）：按 objectList 收集序走查 `draws`，记录每只怪的
         // **命中门**抽值与序号（`Random(0)` 也占位）。死怪在收集期被过滤 ⇒ 无条目（`GateDraw=null`）。
@@ -3861,10 +3930,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 Rm = rm,
                 Sent = new List<object>(),
                 TargetCret = targetCretAfter,
+                // **MG-44（2026-11-26）**：`ObserveState` 时落 `RunAwayMode/RunAwayTime`
+                // （`:835-840` 的 10s 逃跑面）；缺省不落盘 ⇒ 旧 golden 零变化。
+                RunAwayMode = spec.ObserveState ? mo.RunAwayMode : (bool?)null,
+                RunAwayTime = spec.ObserveState ? mo.RunAwayTime : (int?)null,
                 HpBefore = spec.Key == "groupdeding" ? monHpBefore[i]
-                    : operatedStruck ? monHpBeforeOperate[i] : (int?)null,
+                    : operatedStruck ? monHpBeforeOperate[i]
+                    : spec.ObserveState ? monHpBefore[i] : (int?)null,
                 HpAfter = spec.Key == "groupdeding" ? monHpAfter[i]
-                    : operatedStruck ? (int)mo.WAbil.HP : (int?)null,
+                    : operatedStruck ? (int)mo.WAbil.HP
+                    : spec.ObserveState ? monHpAfter[i] : (int?)null,
                 GateIndex = gateIdxOut,
                 GateDraw = gateValOut,
                 GateHit = gateHitOut,
@@ -4173,30 +4248,40 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 },
                 spec.Monsters.Length == 0
                 ? null
-                : (object)spec.Monsters.Select(m => new
+                // **MG-44（2026-11-26）**：改为有序字典——`super_man` **只在 true 时出现**
+                // （条件键；旧的带怪 golden 不受影响，逐字节相等）。键序与原匿名对象一致。
+                : (object)spec.Monsters.Select(m =>
                 {
-                    // MG-34：名称是 `GetShowName`/`RM_USERNAME` 尾的输入（仅 20 记录）。
-                    name = spec.MagicId == 20 ? m.Name : null,
-                    x = m.X,
-                    y = m.Y,
-                    race = m.Race,
-                    level = m.Level,
-                    hp = m.Hp,
-                    life_attrib = m.LifeAttrib,
-                    master = m.Master,
-                    target_cret = m.TargetCretCaster ? -1 : m.TargetCret,
-                    speed_point = m.SpeedPoint,
-                    death = m.Death,
-                    ac = m.AC,
-                    anti_magic = m.AntiMagic,
-                    // **MG-34**：诱惑夹具字段（旧 stem 均为缺省值，零语义变化）。
-                    no_tame = m.NoTame,
-                    animal = m.Animal,
-                    mongen_active = m.MonGenActive,
-                    can_re_alive = m.CanReAlive,
-                    walk_speed = m.WalkSpeed,
-                    next_hit_time = m.NextHitTime,
-                    master_caster = m.MasterCaster,
+                    var d = new Dictionary<string, object>
+                    {
+                        // MG-34：名称是 `GetShowName`/`RM_USERNAME` 尾的输入（仅 20 记录）。
+                        ["name"] = spec.MagicId == 20 ? m.Name : null,
+                        ["x"] = m.X,
+                        ["y"] = m.Y,
+                        ["race"] = m.Race,
+                        ["level"] = m.Level,
+                        ["hp"] = m.Hp,
+                        ["life_attrib"] = m.LifeAttrib,
+                        ["master"] = m.Master,
+                        ["target_cret"] = m.TargetCretCaster ? -1 : m.TargetCret,
+                        ["speed_point"] = m.SpeedPoint,
+                        ["death"] = m.Death,
+                        ["ac"] = m.AC,
+                        ["anti_magic"] = m.AntiMagic,
+                        // **MG-34**：诱惑夹具字段（旧 stem 均为缺省值，零语义变化）。
+                        ["no_tame"] = m.NoTame,
+                        ["animal"] = m.Animal,
+                        ["mongen_active"] = m.MonGenActive,
+                        ["can_re_alive"] = m.CanReAlive,
+                        ["walk_speed"] = m.WalkSpeed,
+                        ["next_hit_time"] = m.NextHitTime,
+                        ["master_caster"] = m.MasterCaster,
+                    };
+                    if (m.SuperMan)
+                    {
+                        d["super_man"] = true;
+                    }
+                    return d;
                 }).ToArray(),
                 spec.CasterHitPoint >= 0 ? (int?)spec.CasterHitPoint : null,
                 spec.CasterDC >= 0 ? (int?)spec.CasterDC : null,
@@ -4387,6 +4472,17 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public int? SeedOverride;
         /// <summary>
+        /// **MG-44（2026-11-26）**：本 case 的 `CasterLevel` 覆盖（`null` = 用 stem 值）。
+        /// 用于 `:842 Random(2)+(casterLv-1) > targetLv` 的 **miss 臂**（低等级施法者）。
+        /// </summary>
+        public int? CasterLevelOverride;
+        /// <summary>
+        /// **MG-44（2026-11-26）**：本 case 是否落**术后状态观测列**（§26）：
+        /// `caster.TargetCret`（`:841 SetTargetCreat` 面）与 `mon*.RunAwayMode/RunAwayTime`
+        /// （`:835-840` 面）。缺省 false ⇒ 旧 golden 零变化。
+        /// </summary>
+        public bool ObserveState;
+        /// <summary>
         /// 该额外 case 的 **ActorId 段基**（缺省 4100，沿用旧口径）。**多个额外 case 必须互异**：
         /// `SystemShare.ActorMgr` 是**进程级静态**，同一 run 内两个 case 用同一段会让
         /// `SendRefMsg` 的格子扫描取到上一 case 的旧对象（2026-11-26 实测：`monster_undead`
@@ -4416,6 +4512,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 只在显式置位的 case 生效。
         /// </summary>
         public bool TargetCretCaster;
+        /// <summary>
+        /// **MG-44（2026-11-26）**：`SuperMan`（`MagTurnUndead :830` 的第一条负路径）。
+        /// 缺省 false；只在显式置位的 case 生效。
+        /// </summary>
+        public bool SuperMan;
         /// <summary>`SpeedPoint`（命中门 `Random(SpeedPoint)`）；缺省 15 = `BaseObject` ctor 缺省。卡 §39。</summary>
         public int SpeedPoint = 15;
         /// <summary>死怪：`GetMapBaseObjects` 收集期即被过滤（不进 objectList）。卡 §39 `dead_excluded`。</summary>
@@ -4630,6 +4731,14 @@ public sealed class ReceiverResult
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? TargetCret { get; set; }
+    /// <summary>
+    /// **MG-44（2026-11-26）**：`MagTurnUndead :835-840` 的逃跑面（`RunAwayMode`/`RunAwayTime`）。
+    /// 只有 `ObserveState` 的 case 落盘（旧件零变化）。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? RunAwayMode { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RunAwayTime { get; set; }
     /// <summary>卡 §39：命中门 `Random(SpeedPoint)` 在 `Rng` 序列中的序号与抽值，及是否命中。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? GateIndex { get; set; }

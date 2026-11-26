@@ -86737,7 +86737,7 @@ SendRefMsgRange=15
     /// `Random(SpeedPoint)`（1 抽）+ 命中则护甲（1–2 抽）；最后若有任一非死怪则共享尾
     /// 训练 `Random(3)+1`（1 抽）。走查必须恰好耗尽 `draws`（夹具假设被破坏即红）。
     fn gdd_gate_ledger(
-        specs: &[[i64; 12]],
+        specs: &[[i64; 14]],
         hit_point: i32,
         draws: &[i64],
         label: &str,
@@ -87858,6 +87858,15 @@ SendRefMsgRange=15
         // **非玩家对象（v1 被动）**：按 golden `Fixture.monsters` 放进世界；默认空 ⇒ 零动作。
         let monster_specs = golden_monsters(stem, label);
         let monster_ids = place_monsters(&mut rig.world, &monster_specs, id_base + 10);
+        // **MG-44（2026-11-26）**：`master_caster` 的怪——`place_monsters` 不持 caster id，
+        // 放置后绑定 `Master = caster`（`MasterCaster` 面；`:834 Struck` 的 `IsProperTarget` 据此为 false）。
+        for (i, id) in monster_ids.iter().enumerate() {
+            if monster_specs.get(i).is_some_and(|m| m[12] != 0) {
+                if let Some(e) = rig.world.entities.get_mut(*id) {
+                    e.slave.master = Some(caster);
+                }
+            }
+        }
         // **MG-32（2026-11-26）**：`target_cret = -1`（`MonsterSpec.TargetCretCaster`）⇒ 绑定施法者；
         // `MagMakePrivateTransparent` 的 `Race>=Animal && TargetCret == baseObject` 分支据此生效。
         for (i, id) in monster_ids.iter().enumerate() {
@@ -87928,9 +87937,13 @@ SendRefMsgRange=15
                     "[{stem}/{label}] Fixture.target_monster_undead=false 但目标 life_attrib 是 LA_UNDEAD（声明与实物不符）"
                 );
             }
-            assert!(
-                !e.super_man,
-                "[{stem}/{label}] target_monster.super_man 必须为 false"
+            // **MG-44（2026-11-26）**：`SuperMan` 是 `:830` 的第一条负路径——装置可显式声明
+            // （golden `monsters[].super_man=true`，仅 true 时落键）。校验改为**声明与实物一致**，
+            // 不再无条件禁止（负路径臂正是要造它）。
+            let want_super_man = monster_specs.get(idx - 1).is_some_and(|m| m[13] != 0);
+            assert_eq!(
+                e.super_man, want_super_man,
+                "[{stem}/{label}] target_monster.super_man 必须与 golden 声明一致（缺键 = false）"
             );
             (id, (e.x, e.y), Some(e.hp))
         } else {
@@ -88991,6 +89004,23 @@ SendRefMsgRange=15
             })
         })
         .collect::<Vec<_>>();
+        // **MG-44（2026-11-26）**：金标准 caster 记了术后 `TargetCret`（`ObserveState` 支，
+        // `:841 SetTargetCreat` 面）时台账同记；`0` = 无目标。
+        if golden_case_for(stem, label)["Receivers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|r| r["Who"] == "caster")
+            .is_some_and(|r| r.get("TargetCret").is_some())
+        {
+            if let Some(rc) = receivers.iter_mut().find(|r| r["Who"] == "caster") {
+                rc["TargetCret"] = serde_json::json!(rig
+                    .world
+                    .entities
+                    .get(caster)
+                    .map_or(0, |e| e.ai.target_creature.unwrap_or(0)));
+            }
+        }
         // MG-17/18：非玩家接收者（与 C# `RunMagicCase` 的 `mon{i}` 同序、同形）。
         // 怪物不 `Operate` ⇒ `Sent` 恒空；`HpBefore/HpAfter` 只在**金标准记了**的支落
         // （`MonsterSpec.OperateStruck` 的 case；缺省 C# 侧 `WhenWritingNull`）。
@@ -89042,6 +89072,20 @@ SendRefMsgRange=15
             });
             // **MG-38**：金标准该 mon 记了 `HpBefore/HpAfter`（`OperateStruck` 支）时台账同记；
             // 旧件无该键 ⇒ 不写（零变化）。比较器对怪物 HP 做「任一侧有即比」。
+            // **MG-44（2026-11-26）**：金标准该 mon 记了 `RunAwayMode/RunAwayTime`
+            // （`ObserveState` 支，`:835-840` 的 10s 逃跑面）时台账同记。
+            if golden_case_for(stem, label)["Receivers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|r| r["Who"] == format!("mon{i}"))
+                .is_some_and(|r| r.get("RunAwayMode").is_some())
+            {
+                if let Some(e) = rig.world.entities.get(*id) {
+                    mon["RunAwayMode"] = serde_json::json!(e.ai.run_away_mode);
+                    mon["RunAwayTime"] = serde_json::json!(e.ai.run_away_time);
+                }
+            }
             // **MG-32**：金标准该 mon 记了术后 `TargetCret` 时台账同记（0 = 已清空）。
             if golden_case_for(stem, label)["Receivers"]
                 .as_array()
@@ -90706,7 +90750,7 @@ SendRefMsgRange=15
     ///
     /// 字段序：`[x, y, race, level, hp, life_attrib, master, target_cret, speed_point, death, ac]`。
     /// 后三项（卡 §39）对旧 golden 缺省 `15/0/0`（= `BaseObject` ctor 缺省 / 无死 / 无护甲）⇒ 旧件零变化。
-    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 12]> {
+    fn golden_monsters(stem: &str, label: &str) -> Vec<[i64; 14]> {
         let v = golden_case_for(stem, label)["Fixture"]["monsters"].clone();
         let Some(arr) = v.as_array() else {
             return Vec::new();
@@ -90724,6 +90768,13 @@ SendRefMsgRange=15
                     serde_json::Value::Bool(b) => i64::from(*b),
                     other => other.as_i64().unwrap_or(0),
                 };
+                // **MG-44（2026-11-26）**：`master_caster`（怪的主人=施法者）与 `super_man`
+                // （`:830` 负路径）。两者在 golden 里都是 bool；缺键按 false（旧件零变化）。
+                let flag = |k: &str| match &m[k] {
+                    serde_json::Value::Bool(b) => i64::from(*b),
+                    serde_json::Value::Null => 0,
+                    other => other.as_i64().unwrap_or(0),
+                };
                 [
                     g("x"),
                     g("y"),
@@ -90738,6 +90789,8 @@ SendRefMsgRange=15
                     opt("ac", 0),
                     // MG-17/18：穿透骰门 `Random(10) >= AntiMagic`；旧件无该键 ⇒ 0（必中）。
                     opt("anti_magic", 0),
+                    flag("master_caster"),
+                    flag("super_man"),
                 ]
             })
             .collect()
@@ -90746,7 +90799,7 @@ SendRefMsgRange=15
     /// **世界放怪物（设施接缝，卡 §36）**：参数全部来自夹具，返回与列表同序的 actor id。
     fn place_monsters(
         world: &mut mir2_world_bevy::World,
-        monsters: &[[i64; 12]],
+        monsters: &[[i64; 14]],
         first_id: i32,
     ) -> Vec<i32> {
         let mut ids = Vec::with_capacity(monsters.len());
@@ -90771,6 +90824,8 @@ SendRefMsgRange=15
             e.ac = i32::try_from(m[10]).expect("ac 越界");
             // MG-17/18：穿透/骰门用 `AntiMagic`（`Random(10) >= AntiMagic`）。
             e.anti_magic = u16::try_from(m[11]).expect("anti_magic 越界");
+            // **MG-44**：`SuperMan`（`:830` 的第一条负路径）。
+            e.super_man = m[13] != 0;
             e.ai.animal = true;
             e.rush_mode = false;
             e.admin_mode = false;

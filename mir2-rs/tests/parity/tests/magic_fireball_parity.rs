@@ -334,6 +334,9 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                 // **MG-32（2026-11-26）**：`TargetCret` 术后值（0 = 已被 `MagMakePrivateTransparent`
                 // 清空；否则 = 指向的 ActorId）。只有声明 `TargetCretCaster` 的 case 两侧都有该键。
                 "TargetCret",
+                // **MG-44（2026-11-26）**：`ObserveState` 支的逃跑面（只有该支两侧都有这两个键）。
+                "RunAwayMode",
+                "RunAwayTime",
             ] {
                 match (gr.get(k), rr.get(k)) {
                     (None, None) => {}
