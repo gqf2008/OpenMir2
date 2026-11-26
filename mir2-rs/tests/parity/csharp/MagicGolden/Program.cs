@@ -513,7 +513,20 @@ public static class Program
             }
             if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
-            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", ExtraCases = new[] {
+                // **MG-50（2026-11-26）**：范围边界——obs_in 在 click (101,100) 的 Chebyshev 距离 4。
+                // `MAX(1, Lv)` 方框：Lv1 不含（无 8037）、Lv4 含（有 8037）。
+                new ExtraCaseSpec { Label = "lvl1", UserMagicLevelOverride = 1, SeedOverride = 1, IdBase = 6100 },
+                new ExtraCaseSpec { Label = "lvl4", UserMagicLevelOverride = 4, SeedOverride = 1, IdBase = 6200 },
+                // **MG-50**：多目标 + 护身符耗尽——3 只怪在方框内（x 升序扫描：m1→m2→m3），
+                // `Dura=100` ⇒ 只 **1 次** `CheckAmulet` 通过 ⇒ 仅第一个合格目标有 `8037` **且**置
+                // `TargetCret`；其余既无 `8037`、也不置 `TargetCret`（`SetTargetCreat` 在
+                // `if (CheckAmulet)` 内、骰外）。
+                new ExtraCaseSpec { Label = "multi_amulet", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 103, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, UserMagicLevelOverride = 3, AmuletDura = 100, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6300 },
+            } });
+            // **MG-50（2026-11-26）**：护身符 `Shape=0` 的 fall-through——`switch` 无 default ⇒ 不投毒
+            // （无 `8037`），但骰过且 race 合格 ⇒ `result` **仍 true**（`:929-932` 在 switch 之外）⇒ 训练尾 640 在。
+            if (name == "groupamyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape0", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             // **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 取**前格**实体 ⇒ 装置用 `EnableMaps`
             // 设 `caster.Dir`（朝点击方向 = 东）⇒ 前格 (101,100) 的 target 成为推挤目标。
@@ -3002,22 +3015,6 @@ private static int ReadInstanceInt(object obj, string fieldName)
     /// 把扩展输入挂到 `Fixture`（`status_time_arr` / `monsters`）：只为显式给出这些输入的支出现，
     /// 缺省 ⇒ 原样返回 ⇒ 既有件**零变化**。
     /// </summary>
-    /// <summary>**MG-50**：护身符 `Dura` 的实际值（只在声明 `AmuletDura` 时记录并断言）。</summary>
-    private static int? FixtureAmuletDura(MagicSpec spec, RecordingPlayObject caster)
-    {
-        if (!spec.AmuletDura.HasValue)
-        {
-            return null;
-        }
-        int dura = caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl].Dura;
-        if (dura != spec.AmuletDura.Value)
-        {
-            throw new FixtureContractViolation(
-                "[" + spec.Key + "] amulet_dura=" + dura + " != 声明的 " + spec.AmuletDura.Value);
-        }
-        return dura;
-    }
-
     private static object AttachStatusTimeArr(object fixture, object status, object monsters = null,
         int? casterHitPoint = null, int? casterDc = null, int? casterAttackMode = null, int? casterSc = null,
         int? casterCharStatusEx = null, int? targetMonster = null, ServerConfFixture.Snapshot serverConf = null,
@@ -3617,6 +3614,7 @@ private static FireballResult RunMagicCase(
             caster.WAbil.MaxHP = (ushort)spec.TargetMaxHp;
             caster.WAbil.HP = (ushort)targetHp;
         }
+        int amuletDuraInitial = -1;
         if (spec.ArmRingAmulet)
         {
             // `CheckAmulet`（`MagicBase.cs:47`）读 `SystemShare.ItemSystem` 的 StdMode/Shape：
@@ -3635,6 +3633,13 @@ private static FireballResult RunMagicCase(
                 Dura = (ushort)(spec.AmuletDura ?? 600),
                 DuraMax = 1000,
             };
+            // **MG-50**：护身符 `Dura` 的**初始**值（`UseAmulet` 会在施法里扣减/销毁，事后读不可用）。
+            amuletDuraInitial = caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl].Dura;
+            if (spec.AmuletDura.HasValue && amuletDuraInitial != spec.AmuletDura.Value)
+            {
+                throw new FixtureContractViolation(
+                    "[" + spec.Key + "] amulet_dura=" + amuletDuraInitial + " != 声明的 " + spec.AmuletDura.Value);
+            }
         }
         var recorder = new RecordingNetChannel();
         M2Server.M2Share.NetChannel = recorder;
@@ -4848,7 +4853,7 @@ private static FireballResult RunMagicCase(
                 healTickBase: spec.HealTicksMs != null ? (int?)(healTickBase - (int)castTick) : null,
                 healLevelTarget: spec.HealTicksMs != null ? (int?)healLevelTarget : null,
                 healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
-                amuletDura: FixtureAmuletDura(spec, caster),
+                amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
