@@ -410,6 +410,86 @@ mod tests {
             "soft_version_date=0 ⇒ 不得出现 11029：{ids:?}"
         );
     }
+    /// **MG-35 ②（T1，2026-11-27）**：`SendServerConfig` 在**发送时刻**读进程级单例的**当前值**
+    ///（oracle `PlayObject.Base.cs:966`）⇒ 同一进程先后两次 send，各自读到"当时的 conf"。
+    /// 纯函数面（conf 是参数，不经过线程本地/进程级静态）⇒ 并行安全、零残留。
+    #[test]
+    fn map_change_serverconfig_reads_current_conf_at_send_time() {
+        let ev = MapChange {
+            actor_id: 9,
+            map_id: 2,
+            x: 3,
+            y: 4,
+            space_move_show: Some(true),
+        };
+        let flag = mir2_envir::mapinfo::MapInfoFlag::default();
+        let visual = Some(MapVisual {
+            flag: &flag,
+            desc: "x",
+        });
+        let mk = |conf: &[u8]| {
+            map_change_frames(
+                &ev,
+                b"0",
+                0,
+                0,
+                0,
+                &[0u8; 8],
+                visual,
+                20_240_101,
+                Some(conf),
+            )
+            .into_iter()
+            .find(|x| u16_at(&x.body, 4) == messages::SM_SERVERCONFIG)
+            .expect("soft_version!=0 且 conf=Some ⇒ 必有 11029")
+        };
+        let a = mk(b"cfgA");
+        let want_a = mir2_protocol::edcode::encode(&mir2_protocol::edcode::encode(b"cfgA"));
+        assert_eq!(&a.body[12..], want_a.as_slice(), "第一发读到 A");
+        let b = mk(b"cfgB");
+        let want_b = mir2_protocol::edcode::encode(&mir2_protocol::edcode::encode(b"cfgB"));
+        assert_eq!(
+            &b.body[12..],
+            want_b.as_slice(),
+            "换装后第二发读到 B（发送时刻读当前值）"
+        );
+        assert_ne!(want_a, want_b, "两条尾必须互异（防空转）");
+    }
+
+    /// **MG-35 ②（T3，2026-11-27）**：`client_conf = None`（Server.conf 读不到）⇒ **不发** 11029
+    ///（oracle 该情形起不来；Rust 侧 fail-open 但方向登记，见 `map_change_frames` 文档）。
+    /// 本测试须与 T2（`client_conf_oncelock_first_install_wins_isolated`）**同隔离进程**跑：
+    /// T2 会 install 进程级 `CLIENT_CONF`，这里显式断言 `client_conf_bytes()` 语义不变。
+    #[test]
+    fn map_change_omits_serverconfig_when_client_conf_none() {
+        let ev = MapChange {
+            actor_id: 9,
+            map_id: 2,
+            x: 3,
+            y: 4,
+            space_move_show: Some(true),
+        };
+        let flag = mir2_envir::mapinfo::MapInfoFlag::default();
+        let f = map_change_frames(
+            &ev,
+            b"0",
+            0,
+            0,
+            0,
+            &[0u8; 8],
+            Some(MapVisual {
+                flag: &flag,
+                desc: "x",
+            }),
+            20_240_101,
+            None,
+        );
+        assert!(
+            f.iter()
+                .all(|x| u16_at(&x.body, 4) != messages::SM_SERVERCONFIG),
+            "conf=None ⇒ 不得出现 11029"
+        );
+    }
 
     /// **登记方向**：`soft_version_date != 0` 但 `client_conf = None`（Server.conf 读不到）⇒ 不发 11029。
     #[test]
