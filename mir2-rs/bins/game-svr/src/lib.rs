@@ -87916,6 +87916,7 @@ SendRefMsgRange=15
                 | "groupamyounsul"
                 | "groupamyounsul2"
                 | "groupamyounsul-shape0"
+                | "groupamyounsul-shape2"
         );
         if poison_stem {
             // **三旋钮 fail-closed（A）**：缺键 / 越界 / 非法值 ⇒ `FixtureContractViolation`
@@ -95588,6 +95589,99 @@ SendRefMsgRange=15
         });
     }
 
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_prebuff_double() {
+        // **MG-64（2026-11-27）**：**两条**前置 buff ⇒ 绿毒位号 **2** ⇒ `10139.p1 = -536870912
+        // (0xE0000000)`（0x80000000|0x40000000|0x20000000）——跨位号复验。
+        group_amyounsul_arm_assert("prebuff_double", 1, 6700, None, &|c, g| {
+            assert_eq!(
+                rm_params(g, "target", 10139),
+                vec![-536870912],
+                "金标准：10139.p1 = 0xE0000000（两条预 buff 位 + 绿毒位 2）"
+            );
+            assert_eq!(
+                rm_params(c, "target", 10139),
+                vec![-536870912],
+                "Rust：同一值（两条预 buff 经夹具块施加，位号 0/1，绿毒落 2）"
+            );
+            assert_eq!(
+                sent_657_recogs(c, "caster"),
+                vec![6702],
+                "657 recog = 被毒目标"
+            );
+            assert_eq!(sent_recogs(c, "caster", 642), vec![500], "护身符扣 100");
+        });
+    }
+
+    /// **`MG-65` shape2 臂**（`AmuletShape=2`，红毒）：与 shape0 同构的 stem 驱动；
+    /// `prebuff_red` 支 = 目标先挂一条 `Defense` ⇒ **红毒**位号 1 ⇒ `CharStatus = 0xC0000000`
+    //（含红毒推算位 `0x40000000`，MG-65 的红毒位号面）。
+    fn group_amyounsul_shape2_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("groupamyounsul-shape2", 48, 1, label, seed, base);
+        poison_per_receiver_frame_matches_golden("groupamyounsul-shape2", label);
+        fireball_case_assert("groupamyounsul-shape2", label);
+        let passes = golden_case_for("groupamyounsul-shape2", label)["DrainPasses"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("[shape2/{label}] golden 缺 DrainPasses"))
+            as i64;
+        b1_golden_drain_assert("groupamyounsul-shape2.json", label, passes);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape2_parity_s1() {
+        group_amyounsul_shape2_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape2_parity_s5() {
+        group_amyounsul_shape2_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape2_parity_s13() {
+        group_amyounsul_shape2_assert("s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape2_parity_prebuff_red() {
+        // **MG-65（2026-11-27）**：目标先挂 `Defense`(2) ⇒ **红毒**位号 1 ⇒ `CharStatus = 0xC0000000`
+        //（红毒推算位 `0x40000000` 在位）。位公式两侧各断一次：C# 生成时 + 驱动夹具块
+        //（`Fixture.pre_buffs` 分支：`get_buff_status == OR(0x80000000 >> i)` == `pre_buff_status`）。
+        // 本测试再钉**值面**：`10139.p1 = -1073741824 (0xC0000000)`。
+        fireball_parity_drive("groupamyounsul-shape2", 48, 1, "prebuff_red", 1, 6800);
+        let case = read_ledger_case("groupamyounsul-shape2", "prebuff_red")[0].clone();
+        let want = golden_case_for("groupamyounsul-shape2", "prebuff_red")["Fixture"]
+            ["pre_buff_status"]
+            .as_i64()
+            .expect("golden 缺 pre_buff_status");
+        // `pre_buff_status` 是**施毒前**的位（一条预 buff ⇒ 0x80000000）；结算后的
+        // `10139.p1` 才是 `预 buff 位 | 红毒位 = 0xC0000000`（-1073741824）。
+        assert_eq!(want, -2147483648, "金标准：一条预 buff ⇒ 0x80000000");
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                rm_params(&case, who, 10139),
+                vec![-1073741824],
+                "[shape2/prebuff_red/{who}] 10139.p1 必须 = 0xC0000000"
+            );
+        }
+        assert_eq!(
+            sent_657_recogs(&case, "caster"),
+            vec![6802],
+            "657 recog = 被毒目标"
+        );
+        poison_per_receiver_frame_matches_golden("groupamyounsul-shape2", "prebuff_red");
+        fireball_case_assert("groupamyounsul-shape2", "prebuff_red");
+        let passes = golden_case_for("groupamyounsul-shape2", "prebuff_red")["DrainPasses"]
+            .as_u64()
+            .expect("golden 缺 DrainPasses") as i64;
+        b1_golden_drain_assert("groupamyounsul-shape2.json", "prebuff_red", passes);
+    }
+
     /// **`MG-50` shape0 臂**（`AmuletShape=0`）：`switch` 无 default ⇒ 不投毒（零 `8037`），
     /// 但 `result` 在 `switch` **之外**赋值（`MagicManager.cs:929-932`）⇒ 骰过 + race 合格时
     /// 施法者仍收 `640`（训练帧）。两个方向都断：有 `640`/`642`（防真空）且全收件人零 `8037`。
@@ -95744,7 +95838,7 @@ SendRefMsgRange=15
             .join("../../tests/parity/golden/magic");
         // **点名集合**（不是魔法数字）：每份毒 golden 的 case 组必须**逐名相等**——
         // 少一支红、多一支也红；新增臂必须写进这张表（MG-50 追加 5 臂时漏改此处 ⇒ 默认门红）。
-        let specs: [(&str, &[&str], &[u64], i64); 5] = [
+        let specs: [(&str, &[&str], &[u64], i64); 6] = [
             ("amyounsul.json", &["s1", "s5", "s13"], &[1, 2], 15),
             ("amyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
             (
@@ -95758,6 +95852,7 @@ SendRefMsgRange=15
                     "multi_amulet_monster_first",
                     "multi_amulet_player_first",
                     "multi_amulet_three",
+                    "prebuff_double",
                     "prebuff_green",
                 ],
                 &[1, 2],
@@ -95767,6 +95862,14 @@ SendRefMsgRange=15
             // **shape0 臂**（`AmuletShape=0`）：`switch` 无匹配分支 ⇒ 不投毒；`amy_ounsul_point` 用不到，
             // 但生成器现在显式装载部署值 15（`MagicSpec.AmyOunsulPoint`，MG-64/65 批）⇒ 按 15 断言。
             ("groupamyounsul-shape0.json", &["s1", "s5", "s13"], &[0], 15),
+            // **MG-65（2026-11-27）**：Shape=2 stem（可重出：dispatch 名就是 `groupamyounsul-shape2`），
+            // `prebuff_red` = 红毒位号面（红毒落位 1 ⇒ `0xC0000000` 含推算位 `0x40000000`）。
+            (
+                "groupamyounsul-shape2.json",
+                &["s1", "s5", "s13", "prebuff_red"],
+                &[2],
+                15,
+            ),
         ];
         let mut seen = 0usize;
         for (file, labels, shapes, aop) in specs {
@@ -95811,7 +95914,7 @@ SendRefMsgRange=15
                 seen += 1;
             }
         }
-        assert_eq!(seen, 21, "必须逐支检查 21 支（3+3+9+3+3）");
+        assert_eq!(seen, 26, "必须逐支检查 26 支（3+3+10+3+3+4）");
     }
 
     #[test]
