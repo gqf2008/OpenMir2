@@ -2698,11 +2698,21 @@ fn real_rust_ledger_grouplightening() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::groupamyounsul_parity_s*）生成真实台账"]
 fn real_rust_ledger_groupamyounsul() {
-    real_ledger_verify_labels(
-        "groupamyounsul",
-        &golden_file("groupamyounsul.json"),
-        &["s1", "s5", "s13"],
-    );
+    // **MG-50**：标签从 golden 取（s1/s5/s13 + lvl1/lvl4 + 三个 multi_amulet 臂）；
+    // 缺台账即逐标签读盘失败 ⇒ 防空转。
+    let golden = golden_file("groupamyounsul.json");
+    let labels = golden_labels(&golden, "groupamyounsul");
+    real_ledger_verify_labels("groupamyounsul", &golden, &labels);
+}
+
+/// **`MG-50` shape0 臂**（`AmuletShape=0`）：`switch` 无匹配分支 ⇒ 不投毒（零 `8037`），
+/// 但 `CheckAmulet`/`UseAmulet` 与 `result` 在 `switch` **之外** ⇒ 护身符照扣、训练尾 `640` 仍在。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::group_amyounsul_shape0_parity_*）生成真实台账"]
+fn real_rust_ledger_groupamyounsul_shape0() {
+    let golden = golden_file("groupamyounsul-shape0.json");
+    let labels = golden_labels(&golden, "groupamyounsul-shape0");
+    real_ledger_verify_labels("groupamyounsul-shape0", &golden, &labels);
 }
 
 /// **`MG-16` 抗拒火环(8)** 真实台账 → 判定面。装置侧前提：驱动为 8/37 补了可走网格 +
