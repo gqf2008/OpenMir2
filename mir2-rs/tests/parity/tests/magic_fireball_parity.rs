@@ -8,7 +8,9 @@
 //! 断言（缺一条即不可标 `verified`）：
 //! 1. **防空转**：金标准缺文件 / 解析失败 / `cases` 为空 ⇒ 红；
 //! 2. **两颗负向牙**：每个 case 里 caster 的 `SM_SPELL(17)` 计数 == 0；`obs_out` 的 RM 与 SM 均为空；
-//! 3. **RM 多重集**：RM(`ident/wParam/p1/p2/p3/priority/late`) **排序后按多重集**相等
+//! 3. **RM 多重集**：RM(`ident/wParam/p1/p2/p3`) **排序后按多重集**相等；`priority/late`
+//!    **不进判定**（`DEV-RM-PRIORITY-UNOBSERVED`：产品 `PendingMagStruck` 不产出这两个维度，
+//!    台账里是驱动按 oracle 语义重建的常量 ⇒ 与 golden 比 = 循环自证；仅作信息列打印）。
 //!    （口径 B，opc-07 2026-11-19：RM 顺序是 C# `MsgQueue` 两趟排空 + `VisibleHumanList` 的产物，
 //!    不是可复现的行为语义）；**SM 严格**：`ident/param/tag/series/tail` 按序逐项相等
 //!    （玩家可见的真实发送顺序）；
@@ -373,8 +375,13 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
             // + `SendRefMsg` 的 `VisibleHumanList` 缓存共同决定的顺序（甚至同一趟 drain 里
             // 「oms 8090（prio 154）排在 8103（prio 167）之后」取决于谁在谁的 Operate 里入队），
             // Rust 宿主没有 RM 层、也不该为复制某次堆布局而引入行为。玩家可见的真实顺序由 SM 面比对。
-            // 比较面仍是**全部七个字段**，只对顺序免疫；缺/多条目逐条报出。
-            let rm_fields = ["ident", "wParam", "p1", "p2", "p3", "priority", "late"];
+            // 比较面 = **五个字段**（`ident/wParam/p1/p2/p3`），只对顺序免疫；缺/多条目逐条报出。
+            // **`priority/late` 移出判定**（`DEV-RM-PRIORITY-UNOBSERVED`，2026-11-26 裁定）：
+            // 产品 `PendingMagStruck`（`crates/world-bevy/src/world.rs`）没有这两个字段，台账的
+            // `priority/late` 是驱动按 oracle 语义**重建的常量**（`fireball_rm(..., prio, late)`），
+            // 拿常量与 golden 比 = 循环自证、不证明产品。仅当两侧不同时打信息行（不进 `errs`）。
+            // 要恢复判定：先让产品路径真的产出并**使用**这两个值（不是为测试建模），再改回六/七字段。
+            let rm_fields = ["ident", "wParam", "p1", "p2", "p3"];
             let rm_key = |v: &Value| -> Vec<i64> { rm_fields.iter().map(|f| num(v, f)).collect() };
             let g_rm = as_array(gr, "Rm").cloned().unwrap_or_default();
             let r_rm = as_array(rr, "Rm").cloned().unwrap_or_default();
@@ -396,8 +403,30 @@ pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
                     }
                 }
                 errs.push(format!(
-                    "[{label}/{who}] Rm 多重集不等（ident,wParam,p1,p2,p3,priority,late）：                     golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
+                    "[{label}/{who}] Rm 多重集不等（ident,wParam,p1,p2,p3）：golden 有 rust 无={missing:?} rust 有 golden 无={extra:?}"
                 ));
+            }
+
+            // 3a-info) `priority/late` 信息列（**不判定**，`DEV-RM-PRIORITY-UNOBSERVED`）：
+            // 只在两侧不同时打一行，便于人工看差异；两侧相同则静默。
+            {
+                let pl = |v: &Value| -> Vec<(i64, i64)> {
+                    let mut out: Vec<(i64, i64)> = as_array(v, "Rm")
+                        .map(|a| {
+                            a.iter()
+                                .map(|m| (num(m, "priority"), num(m, "late")))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    out.sort();
+                    out
+                };
+                let (gp, rp) = (pl(gr), pl(rr));
+                if gp != rp {
+                    eprintln!(
+                        "[{label}/{who}] INFO（不参与判定）RM priority/late 差异：golden={gp:?} rust={rp:?}（DEV-RM-PRIORITY-UNOBSERVED）"
+                    );
+                }
             }
 
             // 3b) SM：**严格顺序** + 逐字段 + 尾串（玩家可见的真实发送顺序）。
@@ -4087,28 +4116,13 @@ fn tooth_foreign_site_red() {
     );
 }
 
-/// `late` 列（RM 的 `LateDelivery`）必须真的进比较面：把一条 RM 的 `late` 翻转 ⇒ 红。
-#[test]
-fn tooth_rm_late_changed_red() {
-    let g = golden();
-    let mut r = ledger_from(&g);
-    let cases = r.get_mut("cases").and_then(Value::as_array_mut).unwrap();
-    let caster = cases[0]
-        .get_mut("Receivers")
-        .and_then(Value::as_array_mut)
-        .unwrap()
-        .iter_mut()
-        .find(|x| x.get("Who").and_then(Value::as_str) == Some("caster"))
-        .unwrap();
-    let rm = caster.get_mut("Rm").and_then(Value::as_array_mut).unwrap();
-    let old = rm[0].get("late").and_then(Value::as_bool).unwrap_or(false);
-    rm[0]["late"] = Value::Bool(!old);
-    let err = verify(&g, &r).unwrap_err();
-    assert!(
-        err.iter().any(|e| e.contains("Rm 多重集不等")),
-        "必须红在 RM 多重集（late 列）：{err:?}"
-    );
-}
+// **已删除：`tooth_rm_late_changed_red`（2026-11-26）**。
+// 为什么删：该牙咬的是 RM 的 `late`（以及同维的 `priority`）列，而这两个维度**不是产品产出**
+// ——`PendingMagStruck` 没有该字段，台账值是驱动按 oracle 语义重建的常量（卡
+// `DEV-RM-PRIORITY-UNOBSERVED`，见 `docs/issues/golden-harness-blind-spots.md` B26）。
+// 拿驱动常量与 golden 比 = 循环自证，不证明产品，故该维度移出比较面、牙随维度移除。
+// **这不是"为让红变绿而删牙"**：删除前它咬的是驱动自己的常量；恢复判定必须先让产品真的产出
+// 并使用 `priority/late`（不是为测试建模），届时按 `rm_fields` 注释恢复六/七字段并重建牙。
 
 /// 口径 B 的正向牙：**只调换 RM 顺序**必须仍绿（多重集语义；若哪天有人把 RM 改回按序比较，本用例红）。
 #[test]
