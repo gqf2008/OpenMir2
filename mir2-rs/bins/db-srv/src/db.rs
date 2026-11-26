@@ -437,6 +437,7 @@ impl Db {
     /// SQL 失败返回 `Err`，调用方**回退逐条**（保持旧实现的逐行错误语义与日志）。
     ///
     /// Errors: SQL 失败时返回错误。
+    #[allow(dead_code)] // 池版保留（选角/查角已改走 `_on`；测试与其它调用方仍可用同形 API）
     pub async fn records_get_by(&self, ids: &[i64]) -> Result<HashMap<i64, IndexRow>> {
         self.note_acquire();
         self.records_get_by_on(
@@ -629,6 +630,7 @@ impl Db {
     /// C# `PlayRecordStorage.UpdateBy`（**不带**守卫）：选角时写 `SelectID`。
     ///
     /// Errors: SQL 失败时返回错误。
+    #[allow(dead_code)] // 池版保留（同上；生产选角走 `record_update_by_on`）
     pub async fn record_update_by(&self, row: &IndexRow) -> Result<()> {
         self.write_index_row(row).await
     }

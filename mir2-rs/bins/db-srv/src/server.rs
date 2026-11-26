@@ -174,6 +174,9 @@ impl Server {
 }
 
 /// 单个角色网关连接：注册槽位 → 读内部帧 → 处理 Enter/Leave/KeepAlive、转发 Data。
+// 连接回调本体（Enter/Leave/KeepAlive/Data 四支）+ 三处探针钩子略超 100 行；
+// 拆分支会改动既有调用点顺序，先显式 allow。
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String) -> Result<()> {
     let ip = peer
         .rsplit_once(':')

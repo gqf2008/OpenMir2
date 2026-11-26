@@ -176,7 +176,9 @@ mod tests {
 
     #[test]
     fn gate_off_is_silent_and_does_not_count() {
-        let _guard = GATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = GATE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_gate(2);
         let before = COUNT.load(Ordering::Relaxed);
         note(&Acc::default(), "hero", true);
@@ -186,7 +188,9 @@ mod tests {
 
     #[test]
     fn gate_on_counts_and_n_increments() {
-        let _guard = GATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = GATE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_gate(1);
         let before = COUNT.load(Ordering::Relaxed);
         note(&Acc::default(), "hero", true);

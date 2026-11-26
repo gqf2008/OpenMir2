@@ -204,11 +204,10 @@ pub fn loop_line(sum_service_ms: u64, wall_ms: u64, idle_ms: u64, in_flight_max:
     // 不变式：墙钟不可能短于累计服务时间（`Instant` 边界/取整会让它差几毫秒）；
     // 这里把 `wall` 夹到 `sum` 之上，保证 `ratio_permille ∈ [0, 1000]`。
     let wall = wall_ms.max(sum_service_ms);
-    let ratio = if wall == 0 {
-        0
-    } else {
-        sum_service_ms.saturating_mul(1000) / wall
-    };
+    let ratio = sum_service_ms
+        .saturating_mul(1000)
+        .checked_div(wall)
+        .unwrap_or(0);
     format!(
         "[DBSEL_ING] loop sum_service_ms={sum_service_ms} wall_ms={wall} ratio_permille={ratio} idle_ms={idle_ms} in_flight_max={in_flight_max}"
     )
@@ -258,7 +257,7 @@ fn emit_totals() {
     }
     log::info(&loop_line(
         SUM_SERVICE_MS.load(Ordering::Relaxed),
-        start().elapsed().as_millis() as u64,
+        u64::try_from(start().elapsed().as_millis()).unwrap_or(u64::MAX),
         IDLE_MS.load(Ordering::Relaxed),
         IN_FLIGHT_MAX.load(Ordering::Relaxed),
     ));
@@ -377,7 +376,8 @@ pub fn begin_item() {
     let now = Instant::now();
     if let Ok(mut last) = LAST_END.lock() {
         if let Some(prev) = last.take() {
-            let idle = now.saturating_duration_since(prev).as_millis() as u64;
+            let idle =
+                u64::try_from(now.saturating_duration_since(prev).as_millis()).unwrap_or(u64::MAX);
             IDLE_MS.fetch_add(idle, Ordering::Relaxed);
         }
     }
@@ -413,7 +413,7 @@ pub fn mark_ident(ident: u16) {
     if let Ok(mut cur) = CURRENT.lock() {
         if let Some(c) = cur.as_mut() {
             c.ident = Some(ident);
-            c.pre_dispatch_ms = c.start.elapsed().as_millis() as u64;
+            c.pre_dispatch_ms = u64::try_from(c.start.elapsed().as_millis()).unwrap_or(u64::MAX);
         }
     }
 }
@@ -448,7 +448,7 @@ pub fn end_item() {
         return;
     };
     IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
-    let service = t0.elapsed().as_millis() as u64;
+    let service = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
     if u128::from(service) >= SLOW_MS {
         log::info(&slow_line(ident, service, gates_lock_ms, pre_dispatch_ms));
     }
@@ -492,7 +492,7 @@ pub fn on_drop_no_user(data: &[u8]) {
     if !enabled() {
         return;
     }
-    DROPPED_NO_USER.fetch_add(1, Ordering::Relaxed);
+    on_drop(Drop::NoUser);
     if let Some(ident) = hint_ident(data) {
         stats()[slot_of(ident)]
             .dropped_no_user
