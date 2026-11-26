@@ -86484,6 +86484,8 @@ SendRefMsgRange=15
             "SinSu": sinsu,
             "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             "RngSites": cast_rng.iter().map(|(_, _, st)| st.replace(std::path::MAIN_SEPARATOR, "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(q, _, _)| *q).collect::<Vec<_>>(),
+            "RngBounds": trace_bounds(&trace, n0, n1),
             "world_entities_before": entities_before,
             "world_entities_after": entities_after,
         }]);

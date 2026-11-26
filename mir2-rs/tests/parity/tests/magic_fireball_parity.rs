@@ -151,6 +151,102 @@ fn verify_rng_self(label: &str, rc: &Value) -> Vec<String> {
     errs
 }
 
+/// 造怪类 stem（17 骷髅 / 30 神兽 / 41 精灵）的 Rng 判据。
+///
+/// **两侧抽样结构不同，值面只比「同位置」的那一段**（依据：golden 离线替身的
+/// `RegenMonsterByName` 只 `new MonsterObject`；Rust 按生产 `MonsterTableSpawner` 走派生
+/// ctor/初始化）：
+/// - 造怪 ctor 5 抽两侧**同位置同界**：`BaseObject.cs:439/441`（`Random(1500)` /
+///   `Random(2000)`）、`AnimalObject.cs:76/77`（`Random(3000)` ×2）、
+///   `MonsterObject.cs:65`（`Random(2000)`）；Rust 侧即 `bins/game-svr/src/mongen.rs` 的
+///   `draw_base_and_animal` 与 `draw_monster_object`；
+/// - golden 第 6 抽 = 训练尾 `Random(3)`（`MagicManager.cs:663`）；
+/// - Rust 台账多出的「装置差」抽（朝向 `Random(8)`、cool-eye `Random(100)`，骷髅另多
+///   `draw_at_monster` 的 `Random(1500)`）**不进值面**，差额登记 `DEV-MG-24-RNGCOUNT`；
+/// - Rust 末抽是训练尾，但流位置与 golden 不同 ⇒ 值不可比（同 seed、不同位置）。
+///
+/// 抽数与调用形态由调用方声明的 `declared_bounds` 钉住（含 ctor 5 抽 + 装置差 + 训练尾）。
+/// `cap_hit`（门 `Rejected`）不造怪不训练 ⇒ 两侧都应 0 抽，**逐值比**（空==空）+ 非空即红。
+fn verify_slave_family_rng(
+    label: &str,
+    gcase: &Value,
+    rust: &Value,
+    declared_bounds: &[i64],
+) -> Vec<String> {
+    /// 造怪 ctor 块的抽数（两侧同位置，逐值可比）。
+    const SLAVE_CTOR_DRAWS: usize = 5;
+
+    let i64s = |v: &Value| -> Vec<i64> {
+        v.as_array()
+            .map(|a| a.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default()
+    };
+    let g_rng = i64s(&gcase["Rng"]);
+    let r_rng = i64s(&rust["Rng"]);
+    let r_bounds = i64s(&rust["RngBounds"]);
+    let mut errs = verify_rng_self(label, rust);
+    match label {
+        "cap_hit" => {
+            errs.extend(verify_rng_values(label, gcase, rust));
+            if !g_rng.is_empty() {
+                errs.push(format!(
+                    "[{label}] golden 在门 fail 支仍有造怪抽 {g_rng:?}（口径待复核）"
+                ));
+            }
+            if !r_rng.is_empty() {
+                errs.push(format!(
+                    "[{label}] 门 fail 后 Rust 仍抽了 {r_rng:?}（bounds {r_bounds:?}）——门与造怪顺序可能被改坏"
+                ));
+            }
+        }
+        "summon_ok" => {
+            if g_rng.len() != SLAVE_CTOR_DRAWS + 1 {
+                errs.push(format!(
+                    "[{label}] golden `Rng` 抽数 {} ≠ 声明形态（5 ctor + 1 训练尾）：{g_rng:?}",
+                    g_rng.len()
+                ));
+            }
+            if r_bounds.len() != r_rng.len() {
+                errs.push(format!(
+                    "[{label}] RngBounds 与 Rng 长度不等：{} vs {}",
+                    r_bounds.len(),
+                    r_rng.len()
+                ));
+            }
+            if r_bounds != declared_bounds {
+                errs.push(format!(
+                    "[{label}] Rust 抽样形态变了：bounds={r_bounds:?}，声明={declared_bounds:?}（抽数/调用序变化须显式重声明，见 DEV-MG-24-RNGCOUNT）"
+                ));
+            } else if r_bounds[..SLAVE_CTOR_DRAWS] != SLAVE_CTOR_BOUNDS {
+                errs.push(format!("[{label}] 前 5 抽不是造怪 ctor 块：{r_bounds:?}"));
+            }
+            for (i, g) in g_rng.iter().take(SLAVE_CTOR_DRAWS).enumerate() {
+                let r = r_rng.get(i);
+                if r != Some(g) {
+                    errs.push(format!(
+                        "[{label}] RNG[{i}] 不等（ctor 块）：golden={g} rust={r:?}"
+                    ));
+                }
+            }
+            eprintln!(
+                "[{label}] RNG：ctor {}/{} 抽逐值；台账 {} 抽（golden {} 抽），装置差 {} 抽（DEV-MG-24-RNGCOUNT）",
+                SLAVE_CTOR_DRAWS,
+                g_rng.len().min(SLAVE_CTOR_DRAWS),
+                r_rng.len(),
+                g_rng.len(),
+                r_rng.len().saturating_sub(g_rng.len())
+            );
+        }
+        other => errs.push(format!(
+            "[{label}] 未声明 RNG 口径的造怪支 `{other}`——新支必须显式给出判据（fail-closed）"
+        )),
+    }
+    errs
+}
+
+/// 造怪 ctor 块的上界（`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、`MonsterObject.cs:65`）。
+const SLAVE_CTOR_BOUNDS: [i64; 5] = [1500, 2000, 3000, 3000, 2000];
+
 /// 逐 case 判定。`golden` 与 `rust` 必须同构（见模块注释）。
 pub fn verify(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
     let mut errs = Vec::new();
@@ -2714,104 +2810,16 @@ fn real_rust_ledger_skeleton() {
             "[{label}] 640 (recog,param,series,due) 不一致：Rust {r640:?} vs golden {g640:?}"
         );
 
-        // ⑤ RNG（2026-11-26 补的验证面：此前本比较器**完全不比 `Rng`**——台账无 Rng 键时期
-        //    写下的「不比」在驱动补上记账后仍原样放行，等于记了不判）。
-        //
-        // **两侧抽样结构不同，值面只比「同位置」的那一段**（依据见 golden `fixture_spec` 的
-        // `scenario_note` 与 `docs/issues/openmir2-skeleton.md` §7）：
-        // - 造怪 ctor 5 抽两侧**同位置同界**：`BaseObject.cs:439/441`（`Random(1500)` /
-        //   `Random(2000)`）、`AnimalObject.cs:76/77`（`Random(3000)` ×2）、
-        //   `MonsterObject.cs:65`（`Random(2000)`）⇒ bound `[1500,2000,3000,3000,2000]`；
-        //   Rust 侧对应 `bins/game-svr/src/mongen.rs` 的 `draw_base_and_animal`（1500/2000/3000/3000）
-        //   与 `draw_monster_object`（2000）；
-        // - golden 第 6 抽 = 训练尾 `Random(3)`（`MagicManager.cs:663`）；
-        // - Rust 台账第 6..8 抽 = 生产派生 ctor/初始化抽（`draw_at_monster` 的 `Random(1500)`、
-        //   朝向 `Random(8)`、cool-eye `Random(100)`）——**C# 离线替身只 `new MonsterObject`，
-        //   这三抽不存在**；
-        // - Rust 第 9 抽 = 训练尾 `Random(3)`，但流位置与 golden 不同 ⇒ 值不可比（同 seed 不同位置）。
-        // ⇒ 值面比 ctor 5 抽逐值；抽数/调用形态由 `RngBounds` 钉住；差额计 `DEV-MG-24-RNGCOUNT`。
-        const SKELETON_CTOR_BOUNDS: [i64; 5] = [1500, 2000, 3000, 3000, 2000];
-        // 声明的台账形态：5 ctor + 3 装置差（AtMonster 1500 / dir 8 / cool-eye 100）+ 1 训练尾。
-        // 形态变了（抽数或界变）⇒ 红：必须显式重声明并在卡面记录，不许静默漂移。
+        // 声明的台账形态：5 ctor + 3 装置差（`draw_at_monster` 1500 / 朝向 8 / cool-eye 100）
+        // + 1 训练尾。形态变了（抽数或界变）⇒ 红：必须显式重声明，不许静默漂移。
         const SKELETON_RUST_BOUNDS: [i64; 9] = [1500, 2000, 3000, 3000, 2000, 1500, 8, 100, 3];
-
-        let i64s = |v: &Value| -> Vec<i64> {
-            v.as_array()
-                .map(|a| a.iter().filter_map(Value::as_i64).collect())
-                .unwrap_or_default()
-        };
-        let g_rng = i64s(&gcase["Rng"]);
-        let r_rng = i64s(&rust["Rng"]);
-        let r_bounds = i64s(&rust["RngBounds"]);
-        let mut rng_errs = verify_rng_self(label, rust);
-        match label {
-            "cap_hit" => {
-                // 门 `Rejected` ⇒ 不造怪、不训练 ⇒ 两侧都该 0 抽；逐值比（空==空）+ 非空即红。
-                rng_errs.extend(verify_rng_values(label, gcase, rust));
-                if !g_rng.is_empty() {
-                    rng_errs.push(format!(
-                        "[{label}] golden 在门 fail 支仍有造怪抽 {g_rng:?}（口径待复核）"
-                    ));
-                }
-                if !r_rng.is_empty() {
-                    rng_errs.push(format!(
-                        "[{label}] 门 fail 后 Rust 仍抽了 {r_rng:?}（bounds {r_bounds:?}）——门与造怪顺序可能被改坏"
-                    ));
-                }
-            }
-            "summon_ok" => {
-                // golden 形态：5 ctor + 1 训练尾（少于 5 ⇒ golden 换代，口径需重声明）。
-                if g_rng.len() != SKELETON_CTOR_BOUNDS.len() + 1 {
-                    rng_errs.push(format!(
-                        "[{label}] golden `Rng` 抽数 {} ≠ 声明形态（5 ctor + 1 训练尾）：{g_rng:?}",
-                        g_rng.len()
-                    ));
-                }
-                if r_bounds.len() != r_rng.len() {
-                    rng_errs.push(format!(
-                        "[{label}] RngBounds 与 Rng 长度不等：{} vs {}",
-                        r_bounds.len(),
-                        r_rng.len()
-                    ));
-                }
-                if r_bounds != SKELETON_RUST_BOUNDS {
-                    rng_errs.push(format!(
-                        "[{label}] Rust 抽样形态变了：bounds={r_bounds:?}，声明={SKELETON_RUST_BOUNDS:?}（抽数/调用序变化须显式重声明，见 DEV-MG-24-RNGCOUNT）"
-                    ));
-                } else if r_bounds[..SKELETON_CTOR_BOUNDS.len()] != SKELETON_CTOR_BOUNDS {
-                    rng_errs.push(format!("[{label}] 前 5 抽不是造怪 ctor 块：{r_bounds:?}"));
-                }
-                // 值面：ctor 5 抽逐值（同位置同界，同 seed ⇒ 必须相等）。
-                for (i, g) in g_rng.iter().take(SKELETON_CTOR_BOUNDS.len()).enumerate() {
-                    let r = r_rng.get(i);
-                    if r != Some(g) {
-                        rng_errs.push(format!(
-                            "[{label}] RNG[{i}] 不等（ctor 块）：golden={g} rust={r:?}"
-                        ));
-                    }
-                }
-                eprintln!(
-                    "[skeleton {label}] RNG：ctor {}/{} 抽逐值；台账 {} 抽（golden {} 抽），装置差 {} 抽（DEV-MG-24-RNGCOUNT）",
-                    SKELETON_CTOR_BOUNDS.len(),
-                    g_rng.len().min(SKELETON_CTOR_BOUNDS.len()),
-                    r_rng.len(),
-                    g_rng.len(),
-                    r_rng.len().saturating_sub(g_rng.len())
-                );
-            }
-            other => rng_errs.push(format!(
-                "[{label}] 未声明 RNG 口径的骨架支 `{other}`——新支必须显式给出判据（fail-closed）"
-            )),
-        }
+        // ⑤ RNG：与 MG-41（30 神兽）/ MG-42（41 精灵）共用同一份判据。
+        let rng_errs = verify_slave_family_rng(label, gcase, rust, &SKELETON_RUST_BOUNDS);
         assert!(
             rng_errs.is_empty(),
-            "[{label}] RNG 判据红（{} 条）：
-{}",
+            "[{label}] RNG 判据红（{} 条）：\n{}",
             rng_errs.len(),
-            rng_errs.join(
-                "
-"
-            )
+            rng_errs.join("\n")
         );
 
         eprintln!("[skeleton {label}] PASS");
@@ -3084,12 +3092,16 @@ fn frames_640_caster(case: &Value) -> Vec<(i64, i64, i64, i64)> {
     out
 }
 
+/// 30 神兽的台账抽样形态：5 ctor + 2 装置差（朝向 8 / cool-eye 100）+ 1 训练尾。
+/// 形态变了（抽数或界变）⇒ 红：必须显式重声明，不许静默漂移。
+const SINSU_RUST_BOUNDS: &[i64] = &[1500, 2000, 3000, 3000, 2000, 8, 100, 3];
+
 /// **`30 SINSU`（`SKILL_SINSU`，神兽）**真实台账 → 判定面（两例 `summon_ok` + `cap_hit`；卡 MG-41）。
 ///
 /// 断言集（按 opc-19 最小集）：`slave_count_before=0→after=1` + `regen_calls=1`（走过一次 RegenMonsterByName）；
 /// `new_slaves[0]` 逐字段 `name/level/hp/max_hp/master_is_caster`（hp=20/max=24 是 0.3 支特征值）；
 /// 帧：17/638=施法帧、642=`SM_DURACHANGE`(护身符耐久)、807=回召帧(未建模、cap_hit 显式登记)；本函数比 17/638/642 的 socket 多重集；`stub_monster_race=113`（输入记录）。
-/// `Rng` 不比——有凭据排除（2026-11-20 seed=1 实测）：golden `Rng`=`[373,221,1401,2314,1315,1]`（6 抽），Rust `Rng`=`[373,221,1401,2314,1315,3,35,2]`（8 抽）。**前 5 抽逐值相同**，随后 Rust 多 3 抽（站点 `bins/game-svr/src/mongen.rs:498/501` 的 `create_monster_oracle` + `crates/world-bevy/src/magic_effect.rs:64` 的尾训练）。长度 6≠8 ⇒ 不可逐值比。**根因是两侧的记账/消费序列不同**（golden 已记录确定的 5+1 抽），不是产品错；MG-41 scope 已按「前 5 抽同、第 6 抽起不同」登记。
+/// `Rng` **已纳入比较面（2026-11-26，与 17 骷髅 / 41 精灵共用 `verify_slave_family_rng`）**：`cap_hit` 两侧 0 抽逐值；`summon_ok` 比造怪 ctor 5 抽逐值，台账抽样形态 8 抽 = 5 ctor + 2 装置差（朝向 `Random(8)`、cool-eye `Random(100)`）+ 1 训练尾，由 `RngBounds=[1500,2000,3000,3000,2000,8,100,3]` 钉住；装置差 2 抽不进值面（`DEV-MG-24-RNGCOUNT`——神兽 race=113 不走 `draw_at_monster`，故比骷髅少那一抽）。
 ///
 /// `keep` 不含 640——有凭据、非窗口原因：640=`SM_MAGIC_LVEXP`（训练尾），其 `tag`（= 训练 `Random(3)+1`）实测 golden=`2` vs rust=`3`，因 Rust `create_monster_oracle` 在尾抽前多消耗造怪抽、与 C# 替身的记账/消费序列不同而错位。**640 不是 drain 窗口没到，是 RNG-payload 偏移（tag golden 2 vs rust 3），根因同 Rng（造怪抽数的记账/消费序列不同 ⇒ RNG 流错位）**。638/642/17 三帧 golden==rust 逐字段相等（本 case 实测），故 `keep={17,638,642}`。
 ///
@@ -3219,6 +3231,15 @@ fn real_rust_ledger_sinsu() {
         "[{label}] 640 due_ms_rel：Rust={} vs golden={}（golden 侧为 oracle 交付批）",
         r640[0].3, g640[0].3
     );
+    // RNG：与 17 骷髅 / 41 精灵共用同一份判据（错位口径见 verify_slave_family_rng）。
+    let rng_errs = verify_slave_family_rng(label, gcase, rust, SINSU_RUST_BOUNDS);
+    assert!(
+        rng_errs.is_empty(),
+        "[{label}] RNG 判据红（{} 条）：\n{}",
+        rng_errs.len(),
+        rng_errs.join("\n")
+    );
+
     eprintln!("[sinsu {label}] PASS");
 }
 
@@ -3383,6 +3404,15 @@ fn real_rust_ledger_sinsu_cap_hit() {
         0,
         "[{label}] Rust 不应有 640"
     );
+    // RNG：与 17 骷髅 / 41 精灵共用同一份判据（错位口径见 verify_slave_family_rng）。
+    let rng_errs = verify_slave_family_rng(label, gcase, rust, SINSU_RUST_BOUNDS);
+    assert!(
+        rng_errs.is_empty(),
+        "[{label}] RNG 判据红（{} 条）：\n{}",
+        rng_errs.len(),
+        rng_errs.join("\n")
+    );
+
     eprintln!("[sinsu {label}] PASS");
 }
 
