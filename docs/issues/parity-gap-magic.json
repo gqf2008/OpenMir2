@@ -1115,23 +1115,25 @@
       "evidence": {
         "test": "real_rust_ledger_lightflower",
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
-        "fixture": "mir2-rs/tests/parity/golden/magic/lightflower.json（C# oracle 生成；ElecBlizzardRange=2 来自部署 Server.conf）",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightflower.json（C# oracle 生成；ElecBlizzardRange=2 来自部署 Server.conf；undead 支含 mon0 (101,100)/race=80/LA_UNDEAD，Animal=true 且装置 MonsterSpec.OperateStruck 像真怪一样结算）",
         "cases": [
           "s1(seed=1)",
           "s5(seed=5)",
-          "s13(seed=13)"
+          "s13(seed=13)",
+          "undead(seed=1)"
         ],
         "unit_tests": [
           "tests::lightflower_parity_s1",
           "tests::lightflower_parity_s5",
-          "tests::lightflower_parity_s13"
+          "tests::lightflower_parity_s13",
+          "tests::lightflower_parity_undead"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 仅玩家 target；MagElecBlizzard 的 undead 分支 分支未覆盖（卡 §35）】 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
+      "notes": "旧清单 cost=天级。`case MagicConst.SKILL_LIGHTFLOWER` → MagElecBlizzard(ElecBlizzardRange)；golden Rng 7 抽、HP 100→99；24 并入两段出帧（与 23/33/47 同路径），卡 §33。【范围：verified 覆盖玩家 target 与 LA_UNDEAD 怪物 target（undead 支，2026-11-26）；怪物链在**旁观者**侧的 31/656 不进比较面（`DEV-MONSTER-DISPLAY-FRAME`）】 **2026-11-26 批次二复核**：驱动 + 比较器全绿（run_id `batch2-1795655008`；本批 16 驱动 + 5 比较器 rc=0），未发现新增缺口。",
       "basis": "semantic",
-      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。 **范围限定（2026-11-26，charter §28/§35 普查）**：verified 仅覆盖**玩家 target**；共享 helper `MagElecBlizzard` 对 `LifeAttrib != LA_UNDEAD` 的分支**未覆盖**（oracle 判据位置见 `docs/issues/openmir2-magic-parity.md` §35 表）；补例需 undead target 的 golden（另立）。"
+      "scope": "partial：**伤害面已点亮**（2026-11-20 世代切换）——夹具记录实际应用的 `caster_mc` 并重出 golden，`SM 31` 的 `series` 随 seed 分叉（edge 15 / hit 9），比较器逐帧比该字段。（lightflower：`MagElecBlizzard` 对活体目标取 `nPower/10`，10..15 会被压成 1，故变体取 `MakeWord(20,30)`；实测 s1=1 / s5=2 / s13=3，全 >0 且分叉，观测面是 `SM 31` 的 series。） 原“伤害面未点亮”结论由本次世代切换取代。布局：受 `MIR2_CLIENT_ABILITY_LAYOUT` 影响的帧（52/53/31/1100）以 **env=0（server/oracle 布局）**对拍；生产默认 client 布局下这些帧带记录尾（52=58B、53=16B、31/1100 同族），属 `openmir2-client-e2e-enter-gaps` 已登记 wire 偏差。**牙（2026-11-21，QA 补）**：产品侧 `cast_elec_blizzard_spell` 的 `power_point` `power / 10` → `power / 10 + 1` ⇒ 驱动 s1/s5/s13 3/3 红（`left Some(98) / right Some(99)`）+ 比较器 `real_rust_ledger_lightflower` 33 条不等（`TargetHp` golden=99 rust=98、`Sent[1].series` 1/2、Rm 8103·8044 多重集）；还原 `hash-object` 相等（449022ae）、复跑绿；**最小可观测幅度 = +1**。 **对象类型分支已覆盖（2026-11-26，charter §28/§35；装置换代）**：`undead` 支（golden `cases[3]`，seed=1）在同一 case 放入 `(101,100)/race=80/LifeAttrib=LA_UNDEAD(1)` 的 `mon0`，并**像真怪一样结算它收到的 `RM_MAGSTRUCK`**（装置 `MonsterSpec.OperateStruck`，缺省 false）。oracle `MagElecBlizzard`（`MagicManager.cs:1128/1134`）对非不死 `nPower/10`、对不死 `nPower`；golden 实测 `mon0` 的 `RM_MAGSTRUCK(8044).p1=15` vs 同支玩家 `p1=1`，且怪物 `HP 100→85`、`RM_STRUCK(8018)`（wParam=15/p1=85/p2=100/p3=caster）。驱动 `tests::lightflower_parity_undead`（台账 `mon0` 的 8044+8018、`HpBefore/HpAfter` 逐字段等于 golden），比较器标签从 golden 取（4 支一起比，缺台账即红）。**牙（product 侧）**：`cast_elec_blizzard_spell` 的 `if t.life_attrib != LA_UNDEAD { power/10 } else { power }` 改成恒 `power/10` ⇒ 驱动 `mon0 RM 序列须等于 golden` 红（`left [(8044,0,1,0,0),(8018,1,99,100,4101)] / right [(8044,0,15,0,0),(8018,15,85,100,4101)]`），比较器 `[undead/mon0] HpAfter 85≠99` + RM 多重集 2 条不等；**同变异下 s1/s5/s13 三驱动仍 rc=0、比较器无其条目错误**（非不死玩家分支不受影响）。**比较面限定（`DEV-MONSTER-DISPLAY-FRAME`）**：怪物链在**旁观者**侧新增的 `8103/8090` RM 与 `31/656` SM 帧，因 rig 未给怪物建 display、Rust `drain_mag_struck_b2` 对无 display 怪物早退而**本支不比**；该支比较面 = RNG + `mon0`（RM/HP）+ 玩家 `TargetHp`，玩家侧帧面由同 seed 的 `s1` 支全量覆盖。"
     },
     {
       "id": "MG-39",
