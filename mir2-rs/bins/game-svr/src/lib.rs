@@ -95575,7 +95575,27 @@ SendRefMsgRange=15
             let cases = v["cases"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{file} 必须有 cases"));
-            assert_eq!(cases.len(), 3, "{file} 必须恰 3 支");
+            // **MG-50（2026-11-26）**：按 label 全集断言（不是只比条数）——`groupamyounsul.json`
+            // 本批按裁决**只追加** 5 支（`lvl1`/`lvl4`/三条 `multi_amulet_*`），其余三份仍是 3 支。
+            // 改这张表必须同时在提交说明里写清新增臂，避免"悄悄少一支/多一支"。
+            let expected: &[&str] = match file {
+                "groupamyounsul.json" => &[
+                    "s1",
+                    "s5",
+                    "s13",
+                    "lvl1",
+                    "lvl4",
+                    "multi_amulet_monster_first",
+                    "multi_amulet_player_first",
+                    "multi_amulet_three",
+                ],
+                _ => &["s1", "s5", "s13"],
+            };
+            let labels: Vec<&str> = cases
+                .iter()
+                .map(|c| c["Label"].as_str().unwrap_or("?"))
+                .collect();
+            assert_eq!(labels, expected, "{file} 的 case 集合变了");
             for c in cases {
                 let label = c["Label"].as_str().unwrap_or("?");
                 let fx = &c["Fixture"];
