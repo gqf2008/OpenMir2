@@ -1166,6 +1166,7 @@ fn apply_poison_arm_rm_policy(
             "multi_amulet_player_first" => 6400,
             "multi_amulet_three" => 6500,
             "prebuff_green" => 6600,
+            "prebuff_double" => 6700,
             _ => 0,
         }
     };
@@ -1295,6 +1296,7 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
                 | "groupamyounsul"
                 | "groupamyounsul2"
                 | "groupamyounsul-shape0"
+                | "groupamyounsul-shape2"
         )
     {
         return Err(format!(
@@ -1307,7 +1309,10 @@ fn check_frame_order_scope(golden: &Value, stem: &str) -> Result<(), String> {
             "fire" => mid == 9,
             "skill10" => mid == 10,
             "amyounsul" | "amyounsul2" => mid == 6,
-            "groupamyounsul" | "groupamyounsul2" | "groupamyounsul-shape0" => mid == 48,
+            "groupamyounsul"
+            | "groupamyounsul2"
+            | "groupamyounsul-shape0"
+            | "groupamyounsul-shape2" => mid == 48,
             _ => false,
         };
         if !ok {
@@ -2923,6 +2928,15 @@ fn real_rust_ledger_groupamyounsul_shape0() {
     let golden = golden_file("groupamyounsul-shape0.json");
     let labels = golden_labels(&golden, "groupamyounsul-shape0");
     real_ledger_verify_labels("groupamyounsul-shape0", &golden, &labels);
+}
+/// **`MG-65`（2026-11-27）**：Shape=2 stem 的比较器（含 `prebuff_red` 红毒位号臂）；
+/// 目标是玩家 ⇒ `10139`/`10125` 两侧同形，无需 A/B/C 政策。
+#[test]
+#[ignore = "需先跑 game-svr 驱动（tests::group_amyounsul_shape2_parity_*）生成真实台账"]
+fn real_rust_ledger_groupamyounsul_shape2() {
+    let golden = golden_file("groupamyounsul-shape2.json");
+    let labels = golden_labels(&golden, "groupamyounsul-shape2");
+    real_ledger_verify_labels("groupamyounsul-shape2", &golden, &labels);
 }
 
 /// **`MG-16` 抗拒火环(8)** 真实台账 → 判定面。装置侧前提：驱动为 8/37 补了可走网格 +
