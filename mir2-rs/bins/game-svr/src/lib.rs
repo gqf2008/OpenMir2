@@ -95582,14 +95582,15 @@ SendRefMsgRange=15
                     "multi_amulet_monster_first",
                     "multi_amulet_player_first",
                     "multi_amulet_three",
+                    "prebuff_green",
                 ],
                 &[1, 2],
                 15,
             ),
             ("groupamyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
-            // **shape0 臂**（`AmuletShape=0`）：`switch` 无匹配分支 ⇒ 不投毒；`amy_ounsul_point`
-            // 用不到（生成器默认 10），故按文件写 10 而不是部署值 15。
-            ("groupamyounsul-shape0.json", &["s1", "s5", "s13"], &[0], 10),
+            // **shape0 臂**（`AmuletShape=0`）：`switch` 无匹配分支 ⇒ 不投毒；`amy_ounsul_point` 用不到，
+            // 但生成器现在显式装载部署值 15（`MagicSpec.AmyOunsulPoint`，MG-64/65 批）⇒ 按 15 断言。
+            ("groupamyounsul-shape0.json", &["s1", "s5", "s13"], &[0], 15),
         ];
         let mut seen = 0usize;
         for (file, labels, shapes, aop) in specs {
@@ -95634,7 +95635,7 @@ SendRefMsgRange=15
                 seen += 1;
             }
         }
-        assert_eq!(seen, 20, "必须逐支检查 20 支（3+3+8+3+3）");
+        assert_eq!(seen, 21, "必须逐支检查 21 支（3+3+9+3+3）");
     }
 
     #[test]
