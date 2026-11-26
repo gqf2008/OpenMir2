@@ -87910,7 +87910,11 @@ SendRefMsgRange=15
         // **施毒族判定**（4 支 golden 的 stem；下方三旋钮/三键/毒口径都以此为准）。
         let poison_stem = matches!(
             stem,
-            "amyounsul" | "amyounsul2" | "groupamyounsul" | "groupamyounsul2"
+            "amyounsul"
+                | "amyounsul2"
+                | "groupamyounsul"
+                | "groupamyounsul2"
+                | "groupamyounsul-shape0"
         );
         if poison_stem {
             // **三旋钮 fail-closed（A）**：缺键 / 越界 / 非法值 ⇒ `FixtureContractViolation`
@@ -95562,24 +95566,14 @@ SendRefMsgRange=15
     fn poison_goldens_carry_three_knobs() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/parity/golden/magic");
-        let mut seen = 0usize;
-        for file in [
-            "amyounsul.json",
-            "amyounsul2.json",
-            "groupamyounsul.json",
-            "groupamyounsul2.json",
-        ] {
-            let raw = std::fs::read_to_string(dir.join(file))
-                .unwrap_or_else(|e| panic!("金标准必须存在 {file}（{e}）"));
-            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            let cases = v["cases"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{file} 必须有 cases"));
-            // **MG-50（2026-11-26）**：按 label 全集断言（不是只比条数）——`groupamyounsul.json`
-            // 本批按裁决**只追加** 5 支（`lvl1`/`lvl4`/三条 `multi_amulet_*`），其余三份仍是 3 支。
-            // 改这张表必须同时在提交说明里写清新增臂，避免"悄悄少一支/多一支"。
-            let expected: &[&str] = match file {
-                "groupamyounsul.json" => &[
+        // **点名集合**（不是魔法数字）：每份毒 golden 的 case 组必须**逐名相等**——
+        // 少一支红、多一支也红；新增臂必须写进这张表（MG-50 追加 5 臂时漏改此处 ⇒ 默认门红）。
+        let specs: [(&str, &[&str], &[u64], i64); 5] = [
+            ("amyounsul.json", &["s1", "s5", "s13"], &[1, 2], 15),
+            ("amyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
+            (
+                "groupamyounsul.json",
+                &[
                     "s1",
                     "s5",
                     "s13",
@@ -95589,15 +95583,33 @@ SendRefMsgRange=15
                     "multi_amulet_player_first",
                     "multi_amulet_three",
                 ],
-                _ => &["s1", "s5", "s13"],
-            };
-            let labels: Vec<&str> = cases
+                &[1, 2],
+                15,
+            ),
+            ("groupamyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
+            // **shape0 臂**（`AmuletShape=0`）：`switch` 无匹配分支 ⇒ 不投毒；`amy_ounsul_point`
+            // 用不到（生成器默认 10），故按文件写 10 而不是部署值 15。
+            ("groupamyounsul-shape0.json", &["s1", "s5", "s13"], &[0], 10),
+        ];
+        let mut seen = 0usize;
+        for (file, labels, shapes, aop) in specs {
+            let raw = std::fs::read_to_string(dir.join(file))
+                .unwrap_or_else(|e| panic!("金标准必须存在 {file}（{e}）"));
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let cases = v["cases"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{file} 必须有 cases"));
+            let got: Vec<&str> = cases
                 .iter()
                 .map(|c| c["Label"].as_str().unwrap_or("?"))
                 .collect();
-            assert_eq!(labels, expected, "{file} 的 case 集合变了");
-            for c in cases {
+            assert_eq!(
+                got, labels,
+                "{file} 的 case 组必须与点名表逐名相等（新增/删除臂先改这张表）"
+            );
+            for (c, want_label) in cases.iter().zip(labels) {
                 let label = c["Label"].as_str().unwrap_or("?");
+                assert_eq!(label, *want_label);
                 let fx = &c["Fixture"];
                 for k in ["target_anti_poison", "amulet_shape", "amy_ounsul_point"] {
                     assert!(
@@ -95607,8 +95619,8 @@ SendRefMsgRange=15
                 }
                 let shape = fx["amulet_shape"].as_u64().expect("amulet_shape 整数");
                 assert!(
-                    shape == 1 || shape == 2,
-                    "[{file}/{label}] amulet_shape={shape} 必须是 1 或 2"
+                    shapes.contains(&shape),
+                    "[{file}/{label}] amulet_shape={shape} 必须是 {shapes:?} 之一"
                 );
                 assert!(
                     fx["target_anti_poison"].is_i64(),
@@ -95616,13 +95628,13 @@ SendRefMsgRange=15
                 );
                 assert_eq!(
                     fx["amy_ounsul_point"].as_i64(),
-                    Some(15),
-                    "[{file}/{label}] amy_ounsul_point 必须 = 部署值 15"
+                    Some(aop),
+                    "[{file}/{label}] amy_ounsul_point 必须 = {aop}（该文件的装置口径）"
                 );
                 seen += 1;
             }
         }
-        assert_eq!(seen, 12, "必须逐支检查 12 支");
+        assert_eq!(seen, 20, "必须逐支检查 20 支（3+3+8+3+3）");
     }
 
     #[test]

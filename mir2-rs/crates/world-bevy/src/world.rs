@@ -5468,11 +5468,21 @@ impl World {
         if !crate::magic_effect::poison_dice(&mut self.rng, anti_poison) {
             return out;
         }
-        // `:237/:917 switch (stdItem.Shape)`——只有 1/2 两支可达（合同 §2.5）。
-        let (n_int, poison_type) = match shape {
-            1 => (40, 0u8), // DECHEALTH
-            2 => (30, 1u8), // DAMAGEARMOR
-            _ => return out,
+        // `:237/:917 switch (stdItem.Shape)`——只有 1/2 两支有效果；其它 Shape（含 0）**不是失效臂**：
+        // oracle 的 `switch` 无 default（`:918-926`），骰过之后照常落到 `:928` 的 `boTrain`，
+        // 而 `result` 的赋值在 `switch` 之外（`:929-932`）⇒ 训练帧/返回值仍按命中处理。
+        // **G-1（MG-50，2026-11-26）**：旧实现 `_ => return out` 把 `boTrain` 一起吞掉，
+        // 与 oracle 不等（shape0 臂此前红即此因）。
+        let hit = match shape {
+            1 => Some((40, 0u8)), // DECHEALTH
+            2 => Some((30, 1u8)), // DAMAGEARMOR
+            _ => None,
+        };
+        let Some((n_int, poison_type)) = hit else {
+            // `:928 if (Race == Play || Race >= Animal) boTrain = true;`（switch 之外）。
+            out.bo_train = target.race == crate::entity::ACTOR_RACE_PLAY
+                || target.race >= crate::entity::ACTOR_RACE_ANIMAL;
+            return out;
         };
         let power = crate::magic::power_poison(&mut self.rng, magic, level, sc, n_int);
         let point = crate::magic_effect::poison_point(level, power, cfg.amy_ounsul_point);
