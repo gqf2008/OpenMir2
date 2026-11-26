@@ -81,6 +81,10 @@ function Get-N1GameTimeBucket {
 # 纯函数（自测直接覆盖；判据本体）
 # ---------------------------------------------------------------------------
 
+# 管道 pid 掩码开关：**只供自测做变异**（见 -Selftest ⑦d），生产路径恒为 $true。
+# 关掉它 ⇒ 只差 pid 的两条原始行归一化后必须**不相等**，用来证明那条牙对掩码敏感。
+$script:N1MaskPipePid = $true
+
 # 剥开头的 12 位墙钟时间戳 `HH:MM:SS.mmm` 与其后的 1 个空格（`glog!` = println! + 该前缀）。
 function ConvertTo-N1Line {
   param([string]$Line)
@@ -89,7 +93,11 @@ function ConvertTo-N1Line {
     $Line = $Line.Substring(13)
   }
   # 关服命名管道行带进程 pid（`...shutdown-<pid>`）：每次运行必然不同，不是产品差异 ⇒ 归一化。
-  $Line = [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
+  # 缺陷 #30（2026-11-26）：pid 位数不同（5 位 46028 / 4 位 7060）会让**原始 stdout 差 1 字节**，
+  # 归一化后相等；掩码由 $script:N1MaskPipePid 控制以便自测变异。
+  if ($script:N1MaskPipePid) {
+    $Line = [regex]::Replace($Line, 'openmir2-gamesvr-shutdown-\d+', 'openmir2-gamesvr-shutdown-<pid>')
+  }
   # `世界时钟变化：Bright=<n>`：昼夜由**墙钟日期**派生 ⇒ 跨时段两次运行必然不同（1 vs 2），
   # 不是产品差异 ⇒ 归一化为 `Bright=<n>`（字面取值与总监代修一致，两边 sha 可对账）。
   $Line = [regex]::Replace($Line, 'Bright=\d+', 'Bright=<n>')
@@ -331,6 +339,24 @@ function Invoke-Selftest {
   # ⑦ 关服管道 pid 归一化（每次运行必然不同，不是产品差异）
   Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] x openmir2-gamesvr-shutdown-12345') -ceq `
       '[INF] x openmir2-gamesvr-shutdown-<pid>') 'shutdown pipe pid normalized'
+
+  # ⑦d 管道 pid 牙（2026-11-26，缺陷 #30）：只差 pid 位数的两条原始行 ⇒ 归一化后**逐字节相等**；
+  #     变异（关掉掩码）⇒ 必须不等。没有这一条，"掩码被删掉"只会退化成一张偶然的 RED。
+  $pidA = '00:00:00.000 [INF] 关服命名管道已就绪：\.\pipe\openmir2-gamesvr-shutdown-46028'
+  $pidB = '00:00:00.000 [INF] 关服命名管道已就绪：\.\pipe\openmir2-gamesvr-shutdown-7060'
+  $nA = ConvertTo-N1Line $pidA
+  $nB = ConvertTo-N1Line $pidB
+  Assert-True ($nA -ceq $nB) 'pipe pid: two runs (5-digit vs 4-digit pid) normalize equal'
+  Assert-True ($nA.Length -eq $nB.Length) 'pipe pid: normalized byte lengths equal'
+  Assert-True ($nA -match 'shutdown-<pid>$') 'pipe pid: placeholder at line end'
+  Assert-True ($nA -notmatch 'shutdown-\d') 'pipe pid: no digits survive'
+  $origMask = $script:N1MaskPipePid
+  $script:N1MaskPipePid = $false
+  $mA = ConvertTo-N1Line $pidA
+  $mB = ConvertTo-N1Line $pidB
+  $script:N1MaskPipePid = $origMask
+  Assert-True ($mA -cne $mB) 'pipe pid MUTATION: mask removed -> lines differ (tooth is sensitive)'
+  Assert-True ((ConvertTo-N1Line $pidA) -ceq $nB) 'pipe pid: mask restored -> equal again'
 
   # ⑦b 昼夜值归一化（`Bright=<n>` 由墙钟日期派生，跨时段会变）
   Assert-True ((ConvertTo-N1Line '00:00:00.000 [INF] 世界时钟变化：Bright=1 ⇒ 向 0 个在线玩家各发一条 SM_DAYCHANGING(46)') -ceq `
