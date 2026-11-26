@@ -184,7 +184,9 @@ public static class Program
             if (name == "healing") return HealingBatch();
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true , CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
-            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
+            // **MG-11（2026-11-26）**：额外 `monster` 支——非不死动物目标（`Race>=Animal` ⇒ `boTrain`，
+            // 训练尾 640/10123 面）；怪物 `AntiMagic=1` 让 hit 种子仍落在「命中」段。
+            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, ExtraCaseLabel = "monster", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Hp = 100, LifeAttrib = 0, AntiMagic = 1 } }, ExtraCaseTargetMonster = 1, ExtraCaseTargetMonsterUndead = false });
             if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true , HitSpeed = 7, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" , HitSpeed = 7, StepDrainMs = 100 });
@@ -1567,6 +1569,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool TargetMonsterUndead = true;
         /// <summary>
+        /// **MG-11（2026-11-26）**：`ExtraCaseLabel` 的额外 case 是否把 `TargetMonster` 指向怪物
+        /// （**1 基**；0 = 玩家目标，与既有 `BehaviorBatch` 的 extra case 同形）。
+        /// 只在 `ExtraCaseLabel != null` 时读取；缺省 0 ⇒ 既有 extra case 零变化。
+        /// </summary>
+        public int ExtraCaseTargetMonster;
+        /// <summary>**MG-11**：`ExtraCaseLabel` 的 `TargetMonsterUndead`（缺省 true，同主旋钮语义）。</summary>
+        public bool ExtraCaseTargetMonsterUndead = true;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -2093,12 +2103,30 @@ private static int ReadInstanceInt(object obj, string fieldName)
         {
             return null;
         }
-        return new[]
+        var cases = new List<FireballResult>
         {
             RunMagicCase(spec, "miss", seedMiss, 1000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "miss", Threshold = threshold }),
             RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "edge", Threshold = threshold }),
             RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }),
         };
+        // **MG-11（2026-11-26）**：可选额外「怪目标」case（同 `BehaviorBatch` 的 extra-case 风格；
+        // 缺省 null ⇒ 既有三支零变化）。seed = hit（首抽 > 门槛 ⇒ 走到伤害/训练尾面）；
+        // `ExtraCaseTargetMonster/Undead` 只在本 case 临时生效，做完立即还原。
+        if (spec.ExtraCaseLabel != null)
+        {
+            var savedMonsters = spec.Monsters;
+            var savedTargetMonster = spec.TargetMonster;
+            var savedTargetMonsterUndead = spec.TargetMonsterUndead;
+            spec.Monsters = spec.ExtraCaseMonsters;
+            spec.TargetMonster = spec.ExtraCaseTargetMonster;
+            spec.TargetMonsterUndead = spec.ExtraCaseTargetMonsterUndead;
+            cases.Add(RunMagicCase(spec, spec.ExtraCaseLabel, seedHit, 4100, spec.TargetMaxHp, false,
+                new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }));
+            spec.Monsters = savedMonsters;
+            spec.TargetMonster = savedTargetMonster;
+            spec.TargetMonsterUndead = savedTargetMonsterUndead;
+        }
+        return cases.ToArray();
     }
 
     /// <summary>

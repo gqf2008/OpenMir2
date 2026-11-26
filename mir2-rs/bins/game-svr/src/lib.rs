@@ -89476,6 +89476,26 @@ SendRefMsgRange=15
         fireball_case_assert("fireball5", "hit");
     }
 
+    /// **MG-11（2026-11-26）**：`monster` 支——**非不死动物目标**（`Race>=Animal` ⇒ `boTrain`）。
+    ///
+    /// 装置 `fireball5` 的 `ExtraCaseTargetMonster=1` / `ExtraCaseTargetMonsterUndead=false`；
+    /// 怪物 `AntiMagic=1` 与门槛同值，seed 用 hit 种子（首抽 > 门槛，**未改 seed 凑**）。
+    /// 该支覆盖 `boTrain` 面：caster 收 `RM_MAGIC_LVEXP(10123)` + `SM_MAGIC_LVEXP(640)`
+    /// （玩家 target 的两支没有 640——`Race=Play < Animal`）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_monster() {
+        fireball_parity_drive(
+            "fireball5",
+            5,
+            1,
+            "monster",
+            golden_seed("fireball5", "monster"),
+            4100,
+        );
+        fireball_case_assert("fireball5", "monster");
+    }
+
     /// **金标准侧**的排水量断言：`DrainPasses` 与期望一致、**`DrainPassesHitCap` 必须为 false**
     /// （上界命中 = 金标准账本可能不完整，必须红，见卡 §22b）。
     ///
