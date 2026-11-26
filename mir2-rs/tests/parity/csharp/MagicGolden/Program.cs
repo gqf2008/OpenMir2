@@ -367,20 +367,20 @@ public static class Program
                 });
             }
             if (name == "mabmabe")
+        {
+            return BehaviorBatch(new MagicSpec
             {
-                return BehaviorBatch(new MagicSpec
-                {
-                    Key = "mabmabe",
-                    MagicId = 50,
-                    MagicName = "MabMabe",
-                    // 伤害区间非退化（`GetAttackPower(Lo(MC), Hi(MC)-Lo(MC)+1)` 抽 `Random(6)`）。
-                    CasterMcNoClamp = HUtil32.MakeWord(5, 10),
-                    // RM_DELAYMAGIC 600ms + 训练尾 1000ms ⇒ 步进排水。
-                    StepDrainMs = 100,
-                    ServerConf = ServerConfFixture.LoadOrThrow(name),
-                });
-            }
-            // **MG-48 非缺省对照臂**（卡 `magic-serverconf-nondefault-arm-plan`）：独立冻结夹具
+                Key = "mabmabe",
+                MagicId = 50,
+                MagicName = "MabMabe",
+                // 伤害区间非退化（`GetAttackPower(Lo(MC), Hi(MC)-Lo(MC)+1)` 抽 `Random(6)`）。
+                CasterMcNoClamp = HUtil32.MakeWord(5, 10),
+                // RM_DELAYMAGIC 600ms + 训练尾 1000ms ⇒ 步进排水。
+                StepDrainMs = 100,
+                ServerConf = ServerConfFixture.LoadOrThrow(name),
+            });
+        }
+        // **MG-48 非缺省对照臂**（卡 `magic-serverconf-nondefault-arm-plan`）：独立冻结夹具
             // `tests/parity/fixtures/serverconf/nondefault/Server.conf`（四键 50/40/90/7，均 ≠ 部署值
             // 100/10/21/20 且 ≠ ctor 缺省），让「读配置」与「吃缺省」在**行为面**可区分。
             if (name == "mabmabe-nondefault")
@@ -417,6 +417,31 @@ public static class Program
                     StepDrainMs = 100,
                     ServerConf = ServerConfFixture.LoadOrThrow(name, nonDefault: !isControl),
                 }, expectNonDefault: !isControl);
+            }
+            // **MG-48 配置变体（2026-11-26）**：完整 `Server.conf` 副本（其余九键=部署），逐变体钉 sha。
+            // `rand0/rand1`：`MabMabeHitRandRate` 的 §27 边界（`Random(0)` 是否推进由 golden 记录）；
+            // `time10`：`MabMabeHitMabeTimeRate=10` 的 STONE 时长面。
+            if (name is "mabmabe-rand0" or "mabmabe-rand1" or "mabmabe-time10")
+            {
+                string vDir = FindConfVariantDir(name.Substring("mabmabe-".Length));
+                EnsureConfFilesFrom(vDir, AppContext.BaseDirectory, out var vCopied, out var vMissing);
+                if (vMissing.Count > 0)
+                {
+                    throw new FixtureContractViolation($"配置变体 {name} 缺文件：" + string.Join(",", vMissing));
+                }
+                Console.Error.WriteLine("VARIANT_CONF_COPIED " + name + " " + string.Join(",", vCopied));
+                return BehaviorBatch(new MagicSpec
+                {
+                    Key = name,
+                    MagicId = 50,
+                    MagicName = "MabMabe",
+                    CasterMcNoClamp = HUtil32.MakeWord(5, 10),
+                    StepDrainMs = 100,
+                    ServerConf = ServerConfFixture.LoadVariantOrThrow(name),
+                    // **MG-48**：`time10` 变体的**成功臂**（与部署 `time_rate=20` 对照看 STONE 时长）
+                    // 暂不落：受 B17/`openmir2-refmsg-queue-model` 的等键帧序缺口阻塞，
+                    // 见 `docs/issues/openmir2-refmsg-queue-model.md`「MG-48 最小复现」节。
+                });
             }
             // **施毒系（MG-13/14/15/50/64/65）**：护身符 `Shape<=2`（`CheckAmulet(1,2)`）+ 目标
             // `AntiPoison` + `AmyOunsulPoint` 三旋钮。`AmyOunsulPoint` **必须显式装载**：不装载会落
@@ -1615,10 +1640,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool FaithfulPump;
         /// <summary>
+        /// **MG-48（2026-11-26）**：`OperateStruck` 怪物**按步结算**（而不是整个排水窗口结束后
+        /// 一次性结算）。生产里怪物自己的 `Run()` 每 tick 泵自己的队列 ⇒ 延迟受击（`RM_MAGSTRUCK`
+        /// 600ms）到点的**那一步**就结算、随即向玩家广播 `RM_STRUCK_MAG/CHANGENAMECOLOR`。
+        /// 缺省 false ⇒ 既有「窗口结束后统一结算」口径，旧件零变化。
+        /// </summary>
+        public bool OperatePerStep;
+        /// <summary>
         /// **MG-44（2026-11-26）**：允许 `TargetMonster` 的 `SuperMan` 前置被**显式测试**（负路径）。
         /// 缺省 false ⇒ 既有圣言三条件门槛不变；置 true 只在"有意验证 `:830` 负路径"的 stem。
         /// </summary>
         public bool TargetMonsterAllowSuperMan;
+        /// <summary>
+        /// **MG-48（2026-11-26）**：允许怪的 `Rm` 出现**同 ident 多条**（成功臂的两条
+        /// `RM_DELAYMAGIC(8021)`：nPower/3 与 MSD）。缺省 false ⇒ 既有「同种 RM 恰 1 条」守卫不变。
+        /// </summary>
+        public bool AllowDuplicateMonsterRm;
         /// <summary>
         /// **MG-44（2026-11-26）**：术后状态观测列（见 `ExtraCaseSpec.ObserveState`）。
         /// 由 extra 循环临时置位；缺省 false ⇒ 既有件零变化。
@@ -2189,6 +2226,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetMonster = spec.TargetMonster;
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
             var savedFaithfulPump = spec.FaithfulPump;
+            var savedOperatePerStep = spec.OperatePerStep;
             var savedUserMagicLevel = spec.UserMagicLevel;
             var savedCasterLevel = spec.CasterLevel;
             var savedObserveState = spec.ObserveState;
@@ -2196,6 +2234,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
             spec.FaithfulPump = extra.FaithfulPump;
+            spec.OperatePerStep = extra.OperatePerStep;
             if (extra.UserMagicLevelOverride.HasValue)
             {
                 spec.UserMagicLevel = extra.UserMagicLevelOverride.Value;
@@ -2214,6 +2253,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
             spec.FaithfulPump = savedFaithfulPump;
+            spec.OperatePerStep = savedOperatePerStep;
             spec.UserMagicLevel = savedUserMagicLevel;
             spec.CasterLevel = savedCasterLevel;
             spec.ObserveState = savedObserveState;
@@ -2296,6 +2336,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             var savedTargetMonsterUndead = spec.TargetMonsterUndead;
             var savedCasterLevel = spec.CasterLevel;
             var savedObserveState = spec.ObserveState;
+            var savedFaithfulPump = spec.FaithfulPump;
+            var savedOperatePerStep = spec.OperatePerStep;
             spec.Monsters = extra.Monsters;
             spec.TargetMonster = extra.TargetMonster;
             spec.TargetMonsterUndead = extra.TargetMonsterUndead;
@@ -2304,12 +2346,18 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 spec.CasterLevel = extra.CasterLevelOverride.Value;
             }
             spec.ObserveState = extra.ObserveState;
+            // **MG-48（2026-11-26）**：B17 生产泵语义与「怪按步结算」必须逐 case 可选
+            // （既有三支零变化）。
+            spec.FaithfulPump = extra.FaithfulPump;
+            spec.OperatePerStep = extra.OperatePerStep;
             cases.Add(RunMagicCase(spec, extra.Label, extra.SeedOverride ?? 1, extra.IdBase, spec.TargetMaxHp, false));
             spec.Monsters = savedMonsters;
             spec.TargetMonster = savedTargetMonster;
             spec.TargetMonsterUndead = savedTargetMonsterUndead;
             spec.CasterLevel = savedCasterLevel;
             spec.ObserveState = savedObserveState;
+            spec.FaithfulPump = savedFaithfulPump;
+            spec.OperatePerStep = savedOperatePerStep;
         }
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2367,6 +2415,22 @@ private static int ReadInstanceInt(object obj, string fieldName)
             dir = dir.Parent;
         }
         throw new FixtureContractViolation("找不到非缺省夹具目录 tests/parity/fixtures/serverconf/nondefault");
+    }
+
+    /// <summary>**MG-48**：按变体名找 `tests/parity/fixtures/serverconf/&lt;name&gt;` 目录。</summary>
+    private static string FindConfVariantDir(string name)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var cand = Path.Combine(dir.FullName, "mir2-rs", "tests", "parity", "fixtures", "serverconf", name);
+            if (Directory.Exists(cand))
+            {
+                return cand;
+            }
+            dir = dir.Parent;
+        }
+        throw new FixtureContractViolation($"找不到配置变体目录 tests/parity/fixtures/serverconf/{name}");
     }
 
     /// <summary>按 oracle 实际取数序取"吃缺省实现"的两道门抽（门①=100、门②=21）。</summary>
@@ -3611,6 +3675,50 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 if (!operatedAny[0]) break;
                 if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
             }
+            // **MG-48（2026-11-26）**：`OperatePerStep` 支——`OperateStruck` 怪在**每步**结算
+            // 自己的队列（生产：怪物 `Run()` 每 tick 泵一次；延迟受击 `RM_MAGSTRUCK` 到点的
+            // 那一步就结算、随即 `SendRefMsg(RM_STRUCK_MAG)`/`RefNameColor` 向玩家出帧）。
+            // 与缺省路径（窗口结束后一次性结算、due=0）**互斥**；帧的 `CurrentDueMs` 取本步
+            // `elapsed`，与同一步玩家帧同口径。缺省支零变化。
+            void OperateStruckPerStep(long stepMs)
+            {
+                if (monsters.Count == 0) return;
+                monOperated ??= new Dictionary<int, List<(SystemModule.Data.SendMessage Msg, byte Prio)>>();
+                monHpBeforeOperate ??= new Dictionary<int, int>();
+                for (int mi = 0; mi < monsters.Count; mi++)
+                {
+                    if (!spec.Monsters[mi].OperateStruck) continue;
+                    if (!monHpBeforeOperate.ContainsKey(mi))
+                    {
+                        monHpBeforeOperate[mi] = monsters[mi].WAbil.HP;
+                    }
+                    if (!monOperated.TryGetValue(mi, out var mlist))
+                    {
+                        mlist = new List<(SystemModule.Data.SendMessage Msg, byte Prio)>();
+                        monOperated[mi] = mlist;
+                    }
+                    for (int pass = 0; pass < MaxDrainPasses; pass++)
+                    {
+                        var raw = monsters[mi].DrainRaw();
+                        if (raw.Count == 0) break;
+                        foreach (var (m, prio) in raw)
+                        {
+                            mlist.Add((m, prio));
+                            RecordingNetChannel.CurrentDueMs =
+                                m.LateDelivery ? Math.Max(0, m.DeliveryTime - castTick) : stepMs;
+                            monsters[mi].OperatePublic(m);
+                            RecordingNetChannel.CurrentDueMs = 0;
+                        }
+                    }
+                }
+                // 玩家侧再排到空（怪物 RefMsg 的收件人）。
+                for (int pass = 0; pass < MaxDrainPasses; pass++)
+                {
+                    var operatedAny = new[] { false };
+                    DrainOnce(operatedAny, stepMs);
+                    if (!operatedAny[0]) break;
+                }
+            }
             int elapsed = 0;
             while (elapsed < spec.WaitMs)
             {
@@ -3629,13 +3737,14 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
                 }
                 drainPasses = Math.Max(drainPasses, stepPasses);
+                if (spec.OperatePerStep) OperateStruckPerStep(elapsed);
             }
             // **MG-38（2026-11-26）**：`OperateStruck` 的怪物在**玩家步进排水之后、RNG 快照之前**
             // 按生产泵语义结算自己收到的 RM（`BaseObject.Base.cs:618-686`：`R(1000)`/MSD/
             // `StruckDamage`/`SendRefMsg(RM_STRUCK_MAG)`/`SendMsg(RM_STRUCK)`）。随后把玩家侧
             // 再排一轮——怪物的 `SendRefMsg`（每格重扫）与 `BreakHolySeizeMode→RefNameColor`
             // 会把 8103/656 投给旁观者。**只有 opt-in 的 case 走这里**；其余 stem 零变化。
-            if (monsters.Count > 0 && spec.Monsters.Any(m => m.OperateStruck))
+            if (!spec.OperatePerStep && monsters.Count > 0 && spec.Monsters.Any(m => m.OperateStruck))
             {
                 monOperated = new Dictionary<int, List<(SystemModule.Data.SendMessage Msg, byte Prio)>>();
                 monHpBeforeOperate = new Dictionary<int, int>();
@@ -3920,7 +4029,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 }).ToList();
             // **不重复投递**：同一只怪同一种 RM 恰好 1 条（口径见卡 §36；v1 判据 = 收件人集合）。
             var idents = rm.Select(o => o.GetType().GetProperty("ident").GetValue(o)).ToList();
-            if (idents.Count != idents.Distinct().Count())
+            // **MG-48**：成功臂的怪会有**两条** `RM_DELAYMAGIC(8021)`（nPower/3 与 MSD）——
+            // `AllowDuplicateMonsterRm` 显式置位的 stem 才允许；其余 stem 的「恰 1 条」守卫不变。
+            if (!spec.AllowDuplicateMonsterRm && idents.Count != idents.Distinct().Count())
             {
                 throw new FixtureContractViolation(
                     $"[{spec.Key}/{label}] mon{i} 收到重复 RM：{string.Join(",", idents)}（同种 RM 必须恰 1 条）");
@@ -4468,6 +4579,11 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// 落 `Fixture.faithful_pump=true`，驱动据此在 t=0 泵一次（否则等键旋转次数差 1、640 漂到 1100）。
         /// </summary>
         public bool FaithfulPump;
+        /// <summary>
+        /// **MG-48（2026-11-26）**：本 case 的 `OperateStruck` 怪按**每步**结算（见
+        /// `MagicSpec.OperatePerStep`）。缺省 false ⇒ 既有口径（窗口结束后统一结算）。
+        /// </summary>
+        public bool OperatePerStep;
         /// <summary>
         /// **MG-53（2026-11-26）**：本 case 的 `UserMagicLevel` 覆盖（`null` = 用 stem 值）。
         /// 用途：同一 stem 既有支是 `UserMagicLevel=3`（训练门关），要观测 `Race>=Animal ⇒ boTrain`

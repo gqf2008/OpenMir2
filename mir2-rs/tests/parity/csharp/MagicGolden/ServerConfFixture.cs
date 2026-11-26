@@ -100,6 +100,55 @@ public static class ServerConfFixture
     }
 
     /// <summary>
+    /// **MG-48（2026-11-26）**：配置变体表——每个变体是**完整 `Server.conf` 副本**（其余九键=部署值），
+    /// 逐变体钉 sha256；`LoadVariantOrThrow` 断言 sha + 十键（被改的那一键 = 变体值）。
+    /// 变体存在的唯一理由：`MabMabeHitRandRate` 的 **0/1**（§27 `Random(0)` 边界）与
+    /// `MabMabeHitMabeTimeRate` 的时长面。
+    /// </summary>
+    public static readonly Dictionary<string, (string GoldenKey, int Value, string Sha256)> Variants = new()
+    {
+        ["mabmabe-rand0"] = ("mab_mabe_hit_rand_rate", 0, "0871d6482a02df6c385e834693080c7d9be27ce36e5d3f9f07fc0fd82b40915f"),
+        ["mabmabe-rand1"] = ("mab_mabe_hit_rand_rate", 1, "787da312423edfec048b09fc73cfa7c07b9fad895288d8ddc3e4c02cce822578"),
+        ["mabmabe-time10"] = ("mab_mabe_hit_mabe_time_rate", 10, "7421123b28a0f9cd742b02ca9d8b67938727eda1c5d060a74c80f9895885579f"),
+    };
+
+    /// <summary>装载变体 `Server.conf`（sha 钉死 + 十键断言；被改键 = 变体值）。</summary>
+    public static Snapshot LoadVariantOrThrow(string caseName)
+    {
+        if (!Variants.TryGetValue(caseName, out var v))
+        {
+            throw new FixtureContractViolation($"[{caseName}] 不是已登记的配置变体");
+        }
+        string path = Path.Combine(AppContext.BaseDirectory, "Server.conf");
+        if (!File.Exists(path))
+        {
+            throw new FixtureContractViolation($"[{caseName}] 缺 Server.conf：{path}");
+        }
+        string sha = FileSha256(path);
+        if (!string.Equals(sha, v.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new FixtureContractViolation(
+                $"[{caseName}] 变体 Server.conf sha256 与钉住值不符：got={sha} want={v.Sha256}");
+        }
+        new SystemModule.Conf.ServerConf(path).LoadConfig();
+        var cfg = SystemModule.SystemShare.Config;
+        var values = new Dictionary<string, int>(Keys.Length);
+        foreach (var (goldenKey, iniKey, _) in Keys)
+        {
+            values[goldenKey] = ReadValue(cfg, iniKey);
+        }
+        foreach (var (goldenKey, _, expected) in Keys)
+        {
+            int want = goldenKey == v.GoldenKey ? v.Value : expected;
+            if (values[goldenKey] != want)
+            {
+                throw new FixtureContractViolation($"[{caseName}] {goldenKey} 期望 {want}，实得 {values[goldenKey]}");
+            }
+        }
+        return new Snapshot(values);
+    }
+
+    /// <summary>
     /// 装载 `&lt;BaseDirectory&gt;/Server.conf` 并断言十键 == 部署期望值。
     /// 任何违约抛 <see cref="FixtureContractViolation"/>（`caseName` 只用于错误定位）。
     /// </summary>

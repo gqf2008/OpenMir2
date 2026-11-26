@@ -701,6 +701,11 @@ pub struct StruckEvent {
     /// 受击玩家对攻击方 `SetPkFlag` 命中时的 `RefNameColor` 观察值（`RM_CHANGENAMECOLOR(8090)`
     /// 的来源；`None` = 未命中）。**只记录**，帧面仍由宿主 `flush_hitter_name_colors` 出。
     pub hitter_name_color: Option<crate::slave::NameColorDelivery>,
+    /// **MG-48（2026-11-26）**：怪物受击后 `BreakHolySeizeMode` → `RefNameColor`
+    /// （`:125`/`BaseObject.cs:730-733`）的观察值——**受害怪自己**的 `RM_CHANGENAMECOLOR`
+    /// 广播面（收件人 = `hear_targets(怪)`）。`CloneMonster.Operate` 恒 false ⇒ 克隆恒 `false`。
+    /// **只记录**，帧面仍由宿主出 656；台账 `8090` 重建用。
+    pub name_color: bool,
 }
 
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
@@ -6256,6 +6261,8 @@ impl World {
                     hp_after,
                     max_hp,
                     hitter_name_color: None,
+                    // `CloneMonster.Operate` 恒 `return false` ⇒ 不跑 `BreakHolySeizeMode`。
+                    name_color: false,
                 });
                 out.push(MagStruckOutcome {
                     target_id: clone_id,
@@ -6371,6 +6378,7 @@ impl World {
                 hp_after,
                 max_hp,
                 hitter_name_color,
+                name_color,
             });
             out.push(MagStruckOutcome {
                 target_id: msg.target_id,
