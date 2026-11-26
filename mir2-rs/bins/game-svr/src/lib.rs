@@ -95589,6 +95589,29 @@ SendRefMsgRange=15
         });
     }
 
+    /// **MG-35 ②（T2，2026-11-27，隔离进程专用）**：`CLIENT_CONF` 是进程级 `OnceLock` ⇒ 本测试
+    /// 会真的 **install**，污染整个测试进程的该静态。**禁止移出 `--ignored --exact` 隔离**
+    /// （opc-27 2026-11-27 批准的结构性隔离）：并行 `--lib` 下会污染其它依赖
+    /// "未安装 ⇒ 不发 11029" 的测试（DEV-29 同类进程级夹具风险）。
+    #[test]
+    #[ignore = "隔离进程专用：会 install 进程级 CLIENT_CONF（OnceLock），禁止移出隔离（MG-35 ②）"]
+    fn client_conf_oncelock_first_install_wins_isolated() {
+        // 结构性守卫：本进程必须**还没人装过**（`--exact` 单跑 ⇒ 本测试是唯一装填者）。
+        assert!(
+            CLIENT_CONF.get().is_none(),
+            "CLIENT_CONF 已被装填 ⇒ 本测试必须隔离进程首跑（--ignored --exact）"
+        );
+        install_client_conf(None);
+        assert_eq!(CLIENT_CONF.get(), Some(&None), "首次 install(None) 生效");
+        assert!(client_conf_bytes().is_none(), "None ⇒ 11029 缺省面（不发）");
+        // 二次/三次装填被 OnceLock 忽略（oracle：配置启动装载一次，运行期无改写）。
+        install_client_conf(Some(b"cfgX".to_vec()));
+        assert_eq!(CLIENT_CONF.get(), Some(&None), "第二次 install 必须被忽略");
+        install_client_conf(None);
+        assert_eq!(CLIENT_CONF.get(), Some(&None), "第三次 install 仍被忽略");
+        assert!(client_conf_bytes().is_none());
+    }
+
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn group_amyounsul_parity_prebuff_double() {
