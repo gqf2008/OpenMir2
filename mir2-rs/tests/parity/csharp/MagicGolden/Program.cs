@@ -239,7 +239,7 @@ public static class Program
             // `SKILL_47`（MagicManager.cs `case MagicConst.SKILL_47`）：与 23 同 helper（FireBoomRage），只有魔号不同。
             if (name == "fireboom47") return BehaviorBatch(new MagicSpec { Key = "fireboom47", MagicId = 47, MagicName = "FireBoom47" , CasterMcNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100 });
             // `SKILL_LIGHTFLOWER(24)`（`case MagicConst.SKILL_LIGHTFLOWER` → `MagElecBlizzard(ElecBlizzardRange)`）。
-            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100, ExtraCaseLabel = "undead", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1 } } });
+            if (name == "lightflower") return BehaviorBatch(new MagicSpec { Key = "lightflower", MagicId = 24, MagicName = "LightFlower" , CasterMcNoClamp = HUtil32.MakeWord(20, 30), StepDrainMs = 100, ExtraCaseLabel = "undead", ExtraCaseMonsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 80, Hp = 100, LifeAttrib = 1, Animal = true, OperateStruck = true } } });
             // `SKILL_UNAMYOUNSUL(40)`（部署行「十方斩」；`case MagicConst.SKILL_UNAMYOUNSUL` 清三态计时器）。
             if (name == "unamyounsul") return UnamyounsulBatch(new MagicSpec { Key = "unamyounsul", MagicId = 40, MagicName = "UnAmYoUnSul" });
             // `SKILL_HOLYSHIELD(16)`（`case MagicConst.SKILL_HOLYSHIELD` → `MagMakeHolyCurtain`）：
@@ -3366,6 +3366,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // 帧 `due_ms_rel` 的基准 = **DoSpell 之前**捕获的 `castTick`（见上方 t0 注释）。
         int drainPasses = 0;
         bool drainPassesHitCap = false;
+        // **MG-38（2026-11-26）**：`MonsterSpec.OperateStruck` 的怪物早期操作结果（在 `if` 内填充）。
+        Dictionary<int, List<(SystemModule.Data.SendMessage Msg, byte Prio)>> monOperated = null;
+        Dictionary<int, int> monHpBeforeOperate = null;
         if (spec.StepDrainMs > 0)
         {
             // **步进排水**（见 `MagicSpec.StepDrainMs` 说明）：每步只处理**已到期**的消息，
@@ -3442,6 +3445,40 @@ private static int ReadInstanceInt(object obj, string fieldName)
                     if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
                 }
                 drainPasses = Math.Max(drainPasses, stepPasses);
+            }
+            // **MG-38（2026-11-26）**：`OperateStruck` 的怪物在**玩家步进排水之后、RNG 快照之前**
+            // 按生产泵语义结算自己收到的 RM（`BaseObject.Base.cs:618-686`：`R(1000)`/MSD/
+            // `StruckDamage`/`SendRefMsg(RM_STRUCK_MAG)`/`SendMsg(RM_STRUCK)`）。随后把玩家侧
+            // 再排一轮——怪物的 `SendRefMsg`（每格重扫）与 `BreakHolySeizeMode→RefNameColor`
+            // 会把 8103/656 投给旁观者。**只有 opt-in 的 case 走这里**；其余 stem 零变化。
+            if (monsters.Count > 0 && spec.Monsters.Any(m => m.OperateStruck))
+            {
+                monOperated = new Dictionary<int, List<(SystemModule.Data.SendMessage Msg, byte Prio)>>();
+                monHpBeforeOperate = new Dictionary<int, int>();
+                for (int mi = 0; mi < monsters.Count; mi++)
+                {
+                    if (!spec.Monsters[mi].OperateStruck) continue;
+                    monHpBeforeOperate[mi] = monsters[mi].WAbil.HP;
+                    var mlist = new List<(SystemModule.Data.SendMessage Msg, byte Prio)>();
+                    for (int pass = 0; pass < MaxDrainPasses; pass++)
+                    {
+                        var raw = monsters[mi].DrainRaw();
+                        if (raw.Count == 0) break;
+                        foreach (var (m, prio) in raw)
+                        {
+                            mlist.Add((m, prio));
+                            monsters[mi].OperatePublic(m);
+                        }
+                    }
+                    monOperated[mi] = mlist;
+                }
+                // 玩家侧再排到空（怪物 RefMsg 的收件人）。
+                for (int pass = 0; pass < MaxDrainPasses; pass++)
+                {
+                    var operatedAny = new[] { false };
+                    DrainOnce(operatedAny, 0);
+                    if (!operatedAny[0]) break;
+                }
             }
             // 兜底：窗口结束时仍未到期的消息记入 `NotDue`（不执行、不再入队）——正常情况下为空。
             foreach (var (who, obj) in byWho)
@@ -3656,20 +3693,40 @@ private static int ReadInstanceInt(object obj, string fieldName)
             }
         }
         // **v1 被动怪物**：只把它收到的 RM 记进台账（对象选择面）；不 Operate ⇒ `Sent` 恒空。
+        // **MG-38（2026-11-26）**：`MonsterSpec.OperateStruck=true` 的 case 改为**像真怪一样**
+        // 逐条 `Operate`（生产泵语义；上界同 `MaxDrainPasses`），并把**本次操作过的每条 RM**
+        // 与操作产生的新 RM 一并记进 `Rm`（顺序 = 出队/产生序）。
         foreach (var (mo, i) in monsters.Select((v, i) => (v, i)))
         {
-            var rm = mo.DrainRaw().Select(m => (object)new
-            {
-                ident = m.Msg.wIdent,
-                wParam = m.Msg.wParam,
-                p1 = m.Msg.nParam1,
-                p2 = m.Msg.nParam2,
-                p3 = m.Msg.nParam3,
-                msg = m.Msg.Buff ?? "",
-                late = m.Msg.LateDelivery,
-                delivery = m.Msg.DeliveryTime,
-                priority = m.Prio,
-            }).ToList();
+            // `OperateStruck` 的怪：RM 列 = **早期已操作过的消息序列**（含操作产生的新 RM）；
+            // 其余只记队列里收到的 RM（v1 被动壳）。
+            List<(SystemModule.Data.SendMessage Msg, byte Prio)> operatedList = null;
+            bool operatedStruck = monOperated != null && monOperated.TryGetValue(i, out operatedList);
+            var rm = operatedStruck
+                ? operatedList.Select(m => (object)new
+                {
+                    ident = m.Msg.wIdent,
+                    wParam = m.Msg.wParam,
+                    p1 = m.Msg.nParam1,
+                    p2 = m.Msg.nParam2,
+                    p3 = m.Msg.nParam3,
+                    msg = m.Msg.Buff ?? "",
+                    late = m.Msg.LateDelivery,
+                    delivery = m.Msg.DeliveryTime,
+                    priority = m.Prio,
+                }).ToList()
+                : mo.DrainRaw().Select(m => (object)new
+                {
+                    ident = m.Msg.wIdent,
+                    wParam = m.Msg.wParam,
+                    p1 = m.Msg.nParam1,
+                    p2 = m.Msg.nParam2,
+                    p3 = m.Msg.nParam3,
+                    msg = m.Msg.Buff ?? "",
+                    late = m.Msg.LateDelivery,
+                    delivery = m.Msg.DeliveryTime,
+                    priority = m.Prio,
+                }).ToList();
             // **不重复投递**：同一只怪同一种 RM 恰好 1 条（口径见卡 §36；v1 判据 = 收件人集合）。
             var idents = rm.Select(o => o.GetType().GetProperty("ident").GetValue(o)).ToList();
             if (idents.Count != idents.Distinct().Count())
@@ -3687,8 +3744,10 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 Who = "mon" + i,
                 Rm = rm,
                 Sent = new List<object>(),
-                HpBefore = spec.Key == "groupdeding" ? monHpBefore[i] : (int?)null,
-                HpAfter = spec.Key == "groupdeding" ? monHpAfter[i] : (int?)null,
+                HpBefore = spec.Key == "groupdeding" ? monHpBefore[i]
+                    : operatedStruck ? monHpBeforeOperate[i] : (int?)null,
+                HpAfter = spec.Key == "groupdeding" ? monHpAfter[i]
+                    : operatedStruck ? (int)mo.WAbil.HP : (int?)null,
                 GateIndex = gateIdxOut,
                 GateDraw = gateValOut,
                 GateHit = gateHitOut,
@@ -4201,6 +4260,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
         public bool NoTame;
         /// <summary>**MG-34**：`Animal`（`MagicManager.cs:395` 的 `!targetObject.Animal` 门）。</summary>
         public bool Animal;
+        /// <summary>
+        /// **MG-38（2026-11-26）**：让这只怪在装置里**像真怪一样结算**它收到的 `RM_MAGSTRUCK`
+        /// （`BaseObject.Base.cs:618-686`：`R(1000)` walk / `GetMagStruckDamage` / `StruckDamage` /
+        /// `SendRefMsg(RM_STRUCK_MAG)` / `SendMsg(RM_STRUCK)` / `AnimalObject.Struck` 的 `R(300)`）。
+        /// **缺省 false ＝ 既有的 v1 被动壳**（只记 RM、不 Operate，B2 盲区）⇒ 其它 stem 零变化。
+        /// 只给「本支要验怪物受击效果面」的 case 打开（当前仅 `lightflower/undead`）。
+        /// 打开时必须同时 `Animal = true`（生产形态；Rust `place_monsters` 恒置 animal=true）。
+        /// </summary>
+        public bool OperateStruck;
         /// <summary>**MG-34**：`MonGen.ActiveCount`（`-1` = `MonGen=null`；`>=0` = 建 `MonGenInfo{ActiveCount=v}`）。</summary>
         public int MonGenActive = -1;
         /// <summary>**MG-34**：`CanReAlive`（`MagicManager.cs:745` 的收服支前置）。缺省 false = ctor 缺省。</summary>
@@ -4269,6 +4337,27 @@ public sealed class RecordingNetChannel : M2Server.Net.INetChannel
 /// </summary>
 public sealed class RecordingMonster : M2Server.Monster.MonsterObject
 {
+    /// <summary>
+    /// **MG-38（2026-11-26，`MonsterSpec.OperateStruck`）**：用生产 `Operate` 处理一条 RM
+    /// （`BaseObject.Base.cs` 的消息处理器；与 `RecordingPlayObject.OperatePublic` 同法）。
+    /// 只在 `OperateStruck=true` 的 case 里调用；缺省路径不碰（v1 被动壳零变化）。
+    /// </summary>
+    public void OperatePublic(SystemModule.Data.SendMessage m)
+    {
+        var msg = new OpenMir2.Data.ProcessMessage
+        {
+            ActorId = m.ActorId,
+            wIdent = m.wIdent,
+            wParam = m.wParam,
+            nParam1 = m.nParam1,
+            nParam2 = m.nParam2,
+            nParam3 = m.nParam3,
+            LateDelivery = m.LateDelivery,
+            Msg = m.Buff ?? "",
+        };
+        Operate(msg);
+    }
+
     public List<(SystemModule.Data.SendMessage Msg, byte Prio)> DrainRaw()
     {
         var list = new List<(SystemModule.Data.SendMessage, byte)>();
