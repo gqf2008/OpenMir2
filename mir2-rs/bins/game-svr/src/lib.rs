@@ -88535,26 +88535,34 @@ SendRefMsgRange=15
                         true,
                     ));
                 }
-                if let Some(who) = who_of(target) {
-                    let v = rm_by_who.entry(who).or_default();
-                    // `RM_MAGSTRUCK`：p1 = 施法者算出的 nPower。
-                    v.push(fireball_rm(8044, 0, i64::from(w), 0, 0, 108, false));
-                    if damage > 0 {
-                        // `RM_HEALTHSPELLCHANGED`（目标 `Operate` 里的 `HealthSpellChanged`）。
-                        v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+                // **受害者身份 = `RM_DELAYMAGIC.nParam3`**（`SendSelfDelayMsg(..., target.ActorId)`），
+                // **不是**无条件取夹具里的玩家 `target`（2026-11-26 MG-11 小样本实证：`TargetMonster`
+                // 支的受害者是怪，旧写法给玩家凭空记了 8044/10052/8103，且 8103 载荷用的是玩家 HP）。
+                // **只有玩家受害者**才在这里重建（8044/10052/8103 都是目标 `Operate` 的产物；
+                // 怪物在 golden 里是被动壳 ⇒ 无对应条目，其 8044 由交付段 `struck_rm` 单独记）。
+                // 本驱动当前玩家受害者恒为夹具 `target`（`hp_before/damage/target_max_hp` 即它的值）。
+                if n3 == target {
+                    if let Some(who) = who_of(target) {
+                        let v = rm_by_who.entry(who).or_default();
+                        // `RM_MAGSTRUCK`：p1 = 施法者算出的 nPower。
+                        v.push(fireball_rm(8044, 0, i64::from(w), 0, 0, 108, false));
+                        if damage > 0 {
+                            // `RM_HEALTHSPELLCHANGED`（目标 `Operate` 里的 `HealthSpellChanged`）。
+                            v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+                        }
                     }
-                }
-                for id in &in_range_target {
-                    if let Some(who) = who_of(*id) {
-                        rm_by_who.entry(who).or_default().push(fireball_rm(
-                            8103,
-                            i64::from(damage),
-                            i64::from(hp_after),
-                            i64::from(target_max_hp),
-                            i64::from(caster),
-                            167,
-                            false,
-                        ));
+                    for id in &in_range_target {
+                        if let Some(who) = who_of(*id) {
+                            rm_by_who.entry(who).or_default().push(fireball_rm(
+                                8103,
+                                i64::from(damage),
+                                i64::from(hp_after),
+                                i64::from(target_max_hp),
+                                i64::from(caster),
+                                167,
+                                false,
+                            ));
+                        }
                     }
                 }
             }
