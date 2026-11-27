@@ -3083,7 +3083,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3096,7 +3096,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
-            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null)
+            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null && casterBright == null)
         {
             return fixture;
         }
@@ -3151,6 +3151,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-36 ①**：事件登记时刻的**绝对**虚拟钟（C# `GetTickCount` 口径）——驱动的 `clock_ms` 必须对齐
         // 这个基数才能复现 `fire_run_tick_ms=0` 的「首跑即结算」语义（Rust rig 的钟底不是 1000000）。
         if (fireCastMs.HasValue) node["fire_cast_ms"] = fireCastMs.Value;
+        // **IT-09..13（2026-11-27）**：`DayBright()` 的 `Bright` 输入（条件键，tick/换图臂才出现）。
+        if (casterBright.HasValue) node["caster_bright"] = casterBright.Value;
         if (serverConf != null)
         {
             // 十键快照（`Dictionary` 插入序 = `Keys` 表序 = Rust `SERVER_CONF_KEYS`）。
@@ -3563,6 +3565,15 @@ private static FireballResult RunMagicCase(
             // 装置原先不设 ⇒ 尾恒空串，与生产（"0" ⇒ EDCode ``?`）不忠实；Rust 侧按注册表
             // 给 `map_file_name_of` ⇒ 两侧恒不等。这里按生产口径补齐。
             env.MapFileName = "0";
+            if (spec.Key == "spacemove")
+            {
+                // **IT-09/10/11/13 强度缺口点亮（2026-11-27，两侧同步批）**：766/54 的输入从占位→真值
+                //（`RefUserState`/`SendMapDescription` 读 `Envir.Flag`/`Envir.MapDesc`）。
+                env.Flag.FightZone = true;
+                env.Flag.Music = true;
+                env.Flag.MusicId = 7;
+                env.MapDesc = "0";
+            }
         }
         var caster = new RecordingPlayObject { ChrName = "golden-caster", ActorId = idBase + 1, CurrX = 100, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         // **MG-57 P2**：坐标覆盖（缺省 null ⇒ 既有值；建对象后、`AddMapObject` 之前生效）。
@@ -3704,6 +3715,14 @@ private static FireballResult RunMagicCase(
                 throw new FixtureContractViolation(
                     "[" + spec.Key + "] amulet_dura=" + amuletDuraInitial + " != 声明的 " + spec.AmuletDura.Value);
             }
+        }
+        if (spec.Key == "spacemove")
+        {
+            // **IT-09/10/11/13**：801/807 的 `series=MakeWord(Dir, Light)` 与 634 的 `DayBright()` 输入
+            // 从占位→真值（`Light`/`Bright` 均为可写属性：BaseObject.cs:149 / PlayObject.cs:602）。
+            caster.Light = 5;
+            caster.Dir = 3;
+            caster.Bright = 3;
         }
         var recorder = new RecordingNetChannel();
         M2Server.M2Share.NetChannel = recorder;
@@ -5032,6 +5051,7 @@ private static FireballResult RunMagicCase(
                 preBuffStatus: preBuffStatus,
                 fireTicksMs: spec.FireTickMs,
                 fireCastMs: fireCastMsForFixture,
+                casterBright: spec.Key == "spacemove" ? (int?)caster.Bright : null,
                 specHealBoth: spec.HealTicksBoth,
                 // **MG-55（46 分身）**：夹具输入快照（其它 stem 恒 null ⇒ 键不落盘）。
                 casterDir: spec.MagicId == 46 ? spec.CasterDir : (int?)null,
