@@ -23,6 +23,13 @@
 //! **17a 的范围**：`RecalcAbilitys` 的**技能被动**（`HitPoint/SpeedPoint/DC` 与 `WAbil` 重算）
 //! 未建模（IT-17b）。本模块按 oracle 的**同值**发 `RM_CHARSTATUSCHANGED`（`GetCharStatus()`
 //! 与当前 `HitSpeed`）——对**无被动技能**与 oracle 逐字节相同；有被动技能时 `17b` 才补齐。
+//! **IT-17 输入注入批**：657 上线三字段的 oracle 语义（转换点 `PlayObject.Message.cs:1845-1848`）
+//! 是 `param=LoWord(CharStatus)`、`tag=HiWord(CharStatus)`、`series=泵时实时 `HitSpeed` 字段`
+//! （发射点 `:2876` 的 wParam 是 `:2024` 重置后的旧值 0，转换点**不读它**）——本模块的
+//! `sm_charstatuschanged(actor, world.get_char_status(actor), sg.hit_speed)` 与之逐字节同构；
+//! `sg.hit_speed` 由 `recalc_session_ability` 按 oracle `:2899` 写入，buff 位由 `world.buffs`
+//! 的 `GetBuffStatus` 等价实现（`OR(0x80000000>>i)`）给出——向量批以探针真值对拍（golden
+//! `expect.hit_speed/char_status` 全 8 例非零）。
 //!
 //! # 帧序（线上）
 //!
@@ -355,15 +362,20 @@ mod tests {
     /// **IT-17a 宿主级对拍**：驱动 `handle_eat_cmd`，比
     /// ① 线上帧**逐字节**（`payload` hex：SM 帧的 12B 头 + 尾；`+LNG`/`+WID` 原始串帧同面）
     /// ② `MagicList` 终态（mag_idx/level/key/tran_point，保序）③ 两战士技开关 ④ 背包/Weight
-    /// ⑤ 失败四门（各自只落 636、物品保留、MagicList 不变）。
+    /// ⑤ 失败四门（各自只落 636、物品保留、MagicList 不变）⑥ **IT-17 批点亮的两个状态字段**
+    /// `hit_speed`/`char_status`（8 例交叉相等：成功例 = case 内 Recalc 后值，失败例 = 预 Recalc 保持值）。
     ///
     /// **17a 边界**：`RecalcAbilitys` 的技能被动（HitPoint/SpeedPoint/DC/WAbil）未建模（IT-17b）；
-    /// 本批选无被动技能，657 的 `CharStatus/HitSpeed` 与 oracle 同值（探针记 0/0）。
+    /// 本批选无被动技能。**IT-17 输入注入批**：按 `ctx.prebuffs`/`ctx.weapon` 装配同款会话输入
+    /// （`world.buffs.add_buff` + `use_items[SLOT_WEAPON]`），并**先跑一次建模 Recalc**（登录态，
+    /// oracle 探针预 Recalc 的等价物）——657 的 `tag=HiWord(位公式)`、`series=hit_speed`、
+    /// `param=LoWord(…)=0`（转换点 `PlayObject.Message.cs:1845-1848`）。
     ///
-    /// 红检（四门+两尾）：删「已学」判 ⇒ 已学例变成功；`job` 判恒真 ⇒ 职业不符例成功；
+    /// 红检（四门+两尾+两字段）：删「已学」判 ⇒ 已学例变成功；`job` 判恒真 ⇒ 职业不符例成功；
     /// （首试不咬留痕：把「玩家 job」改 99 **不咬**——谓词是 `magic.job == 99 || magic.job == (byte)Job`；
     ///  把 `can_read_book` 的 job 实参换成 `magic.job` 才咬住。）
-    /// 删 MagicList append ⇒ 成功例的帧/状态红；210 传 `sm_addmagic`（Level=1）⇒ 尾字节红。
+    /// 删 MagicList append ⇒ 成功例的帧/状态红；210 传 `sm_addmagic`（Level=1）⇒ 尾字节红；
+    /// 掉 `use_items[SLOT_WEAPON]` 装配 ⇒ `hit_speed` 0⇒657 series 字节红+⑥红；掉 `add_buff` ⇒ tag 红+⑥红。
     fn run_readbook_parity(only: Option<&str>) {
         let doc = fixture();
         let magics: Vec<mir2_data::MagicInfo> = doc["magic_table"]
@@ -383,6 +395,8 @@ mod tests {
                     shape: t["shape"].as_u64().unwrap() as u8,
                     weight: t["weight"].as_u64().unwrap() as u8,
                     dura_max: 20,
+                    // IT-17 批新增键：RealAttackSpeed 的源字节（武器 MAC 高字节；书类恒 0）。
+                    mac: t["mac"].as_u64().unwrap() as u16,
                     ..Default::default()
                 },
             );
@@ -438,6 +452,35 @@ mod tests {
                 table: Some(std::sync::Arc::new(magic_table.clone())),
                 ..MagicState::default()
             };
+            // **IT-17 输入注入批**：按 ctx 新键装配与 oracle 探针同款的会话输入，并**先跑一次
+            // 建模 Recalc**（登录态）——oracle 侧预 Recalc 的等价物。此后 `sg.hit_speed`/`wabil`
+            // 与 world buff 位就是 case 起点的会话历史；失败例不再 Recalc ⇒ 两字段保持该值
+            // （oracle 同构：探针失败例的字段也停留在预 Recalc 值）。
+            if let Some(w) = ctx["weapon"].as_object() {
+                sg.use_items[crate::ability::SLOT_WEAPON] = Some(BagItem {
+                    make_index: w["make_index"].as_i64().unwrap() as i32,
+                    index: w["index"].as_u64().unwrap() as u16,
+                    dura: w["dura"].as_u64().unwrap() as u16,
+                    dura_max: 20,
+                    desc: [0; 14],
+                });
+            }
+            for pb in ctx["prebuffs"].as_array().unwrap() {
+                let code = pb["type"].as_u64().unwrap() as u8;
+                let bt = match code {
+                    2 => mir2_world_bevy::BuffType::Defense,
+                    3 => mir2_world_bevy::BuffType::CanNotRun,
+                    c => panic!("夹具 buff 类型未建模: {c}"),
+                };
+                world.buffs.add_buff(
+                    actor_id,
+                    bt,
+                    pb["dura"].as_i64().unwrap() as i32,
+                    pb["state_val"].as_i64().unwrap() as i32,
+                    0,
+                );
+            }
+            let _ = crate::recalc_session_ability(&mut sg, &catalog, None, None, None);
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
             sessions.insert("hero".into(), sg);
             let mut online: OnlineRegistry = OnlineRegistry::new();
@@ -613,6 +656,22 @@ mod tests {
                 i64::from(sg.state.wabil.weight),
                 expect["weight"].as_i64().unwrap(),
                 "{}: Weight",
+                c["name"]
+            );
+
+            // ⑥ **IT-17 批点亮的两字段状态面**（8 例交叉相等）：`hit_speed` 是 657 `series` 的源
+            // 字段（`PlayObject.cs:2899`），`char_status` 是 657 `param/tag` 的源（`:2874`
+            // `GetCharStatus()` = buff 位公式 | CharStatusEx 低 16 位；两侧同公式）。
+            assert_eq!(
+                i64::from(sg.hit_speed),
+                expect["hit_speed"].as_i64().unwrap(),
+                "{}: HitSpeed 字段（657 series 源）",
+                c["name"]
+            );
+            assert_eq!(
+                world.get_char_status(actor_id),
+                expect["char_status"].as_i64().unwrap() as i32,
+                "{}: CharStatus（buff 位公式 | CharStatusEx）",
                 c["name"]
             );
         }

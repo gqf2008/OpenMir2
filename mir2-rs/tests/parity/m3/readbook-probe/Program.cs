@@ -202,6 +202,10 @@ internal static class Program
         public int[] Known = Array.Empty<int>();
         public string Note;
         public int Seed = 20261120;
+        /// <summary>**IT-17 输入注入批**：会话预挂 buff（`ActorBuffSystem.AddBuff`，list 序 = 位序）。</summary>
+        public (int type, int dura, int stateval)[] PreBuffs = Array.Empty<(int, int, int)>();
+        /// <summary>**IT-17 输入注入批**：会话预挂武器（`UseItems[Weapon]`；MAC 高字节 = RealAttackSpeed 源）。</summary>
+        public (ushort index, ushort dura)? Weapon;
     }
 
     private static UserItem ToUser(ushort index)
@@ -265,6 +269,31 @@ internal static class Program
     }
 
     private const int MaxDrainPasses = 8;
+
+    /// <summary>把排空的原始 RM 消息逐条泵进 `Operate`（出帧走 NetChannel 捕获）；返回 pump 序的 `wIdent`。</summary>
+    private static List<int> PumpRaw(object po, MethodInfo operate, List<object> raw)
+    {
+        var idents = new List<int>();
+        foreach (var m in raw)
+        {
+            var mt = m.GetType();
+            int wid = (int)mt.GetField("wIdent").GetValue(m);
+            idents.Add(wid);
+            var pm = new ProcessMessage
+            {
+                wIdent = wid,
+                wParam = (int)mt.GetField("wParam").GetValue(m),
+                nParam1 = (int)mt.GetField("nParam1").GetValue(m),
+                nParam2 = (int)mt.GetField("nParam2").GetValue(m),
+                nParam3 = (int)mt.GetField("nParam3").GetValue(m),
+                ActorId = (int)mt.GetField("ActorId").GetValue(m),
+                LateDelivery = (bool)mt.GetField("LateDelivery").GetValue(m),
+                Msg = (string)mt.GetField("Buff").GetValue(m),
+            };
+            operate.Invoke(po, new object[] { pm });
+        }
+        return idents;
+    }
 
     private static (List<object> messages, List<object> raw, int passes, bool hitCap) Drain(object pq)
     {
@@ -339,14 +368,47 @@ internal static class Program
         po.Abil = new Ability { Level = (byte)c.Level };
         po.WAbil = new Ability { Level = (byte)c.Level };
 
-        net.Frames.Clear();
+        // **IT-17 输入注入批（会话输入 = 登录态）**：
+        //   ① 武器：`UseItems[Weapon]`（StdMode 5，MAC 高字节经 `GetUpgradeStdItem` Desc=0 同值回环后
+        //      喂 `RealAttackSpeed` ⇒ `AddAbil.HitSpeed`，`PlayObject.cs:4419`）；Recalc 后
+        //      `HitSpeed = AddAbil.HitSpeed`（`:2899`）。
+        //   ② buff：`ActorBuffSystem.AddBuff` **只改状态不发帧不入队**（`ActorBuffSystem.cs:100-159`）；
+        //      list 序 = 位序（`GetBuffStatus` `:282-296`，`OR(0x80000000>>i)`）。
+        if (c.Weapon is { } wp)
+        {
+            po.UseItems = new UserItem[13];
+            po.UseItems[ItemLocation.Weapon] = new UserItem
+            {
+                MakeIndex = 2,
+                Index = wp.index,
+                Dura = wp.dura,
+                DuraMax = 20,
+            };
+        }
+        foreach (var pb in c.PreBuffs)
+        {
+            M2Share.ActorBuffSystem.AddBuff(po, (BuffType)pb.type, pb.dura, pb.stateval);
+        }
+        // **会话预 Recalc（登录态）**：oracle 的 `CharStatus`/`HitSpeed` 字段既有值由此产生（失败例
+        // 不再跑 Recalc ⇒ 两字段保持预 Recalc 值）。产生的 RM 逐条排空并泵出帧后**丢弃**（净捕获
+        // 只从本 case 的 `ClientUseItems` 起）。权重三字段 base 每轮清零（`BaseObject.Abil.cs:27-30`）
+        // ⇒ 两次 Recalc 不累积，case 内 Recalc 与单轮语义同值。
+        po.RecalcAbilitys();
+        var operate = typeof(PlayObject).GetMethod("Operate", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException("PlayObject.Operate");
+        var (preNotices, preRaw, _, _) = Drain(GetMsgQueue(po));
+        _ = preNotices;
+        _ = PumpRaw(po, operate, preRaw);
+        net.Frames.Clear(); // 预帧丢弃点：本 case 的帧面从这里起。
+
         var wabilBefore = new Ability
         {
             Weight = po.WAbil.Weight,
             WearWeight = po.WAbil.WearWeight,
             HandWeight = po.WAbil.HandWeight,
         };
-        // **建对象之后**才注入种子（`new PlayObject()` 自身 5 抽不进账本）。
+        // **建对象之后**才注入种子（`new PlayObject()` 自身 5 抽不进账本）；预 Recalc 在注入**之前**
+        // 跑 ⇒ 记录器的 0 抽自证严格是 case 范围（`ClientUseItems` 起算）。
         RandomNumber.GetInstance();
         typeof(RandomNumber)
             .GetField("random", BindingFlags.NonPublic | BindingFlags.Static)
@@ -360,27 +422,7 @@ internal static class Program
         var (messages, rawMessages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
         var immediate = net.Frames.ToList();
 
-        var operate = typeof(PlayObject).GetMethod("Operate", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException("PlayObject.Operate");
-        var pumpIdents = new List<int>();
-        foreach (var m in rawMessages)
-        {
-            var mt = m.GetType();
-            int wid = (int)mt.GetField("wIdent").GetValue(m);
-            pumpIdents.Add(wid);
-            var pm = new ProcessMessage
-            {
-                wIdent = wid,
-                wParam = (int)mt.GetField("wParam").GetValue(m),
-                nParam1 = (int)mt.GetField("nParam1").GetValue(m),
-                nParam2 = (int)mt.GetField("nParam2").GetValue(m),
-                nParam3 = (int)mt.GetField("nParam3").GetValue(m),
-                ActorId = (int)mt.GetField("ActorId").GetValue(m),
-                LateDelivery = (bool)mt.GetField("LateDelivery").GetValue(m),
-                Msg = (string)mt.GetField("Buff").GetValue(m),
-            };
-            operate.Invoke(po, new object[] { pm });
-        }
+        var pumpIdents = PumpRaw(po, operate, rawMessages);
         var pumped = net.Frames.Skip(immediate.Count).ToList();
 
         object FrameDto(CapFrame f) => new
@@ -406,6 +448,12 @@ internal static class Program
                 known = c.Known,
                 note = c.Note,
                 seed = c.Seed,
+                // **IT-17 输入注入批**：会话输入键（Rust 侧按同键装配同状态：world.buffs.add_buff +
+                // use_items[SLOT_WEAPON] + recalc_session_ability）。
+                prebuffs = c.PreBuffs.Select(pb => new { type = pb.type, dura = pb.dura, state_val = pb.stateval }).ToArray(),
+                weapon = c.Weapon is { } w2
+                    ? new { index = (int)w2.index, dura = (int)w2.dura, make_index = 2 }
+                    : null,
                 wabil_before = new
                 {
                     weight = (int)wabilBefore.Weight,
@@ -530,6 +578,10 @@ internal static class Program
         {
             templates[idx] = new StdItem { Name = name, StdMode = 4, Shape = 0, Weight = 5 };
         }
+        // **IT-17 输入注入批**：武器模板（挂 `UseItems[Weapon]`）。`MAC` 高字节 12 ⇒
+        // `RealAttackSpeed(12)=+2`（`GetUpgradeStdItem` Desc 全 0 时同值回环）；`Weight=7` 进 622 的
+        // `HandWeight`；`Dura=10>0` 走 `ApplyItemParameters` 臂（`:2107` 的 Dura==0 臂只加重量不加速度）。
+        templates[5001] = new StdItem { Name = "铁剑", StdMode = 5, Shape = 0, Weight = 7, MAC = 0x0C00, DuraMax = 20 };
         var table = new GameItemSystem();
         ushort maxId = templates.Keys.Max();
         for (ushort id = 1; id <= maxId; id++)
@@ -538,6 +590,13 @@ internal static class Program
         }
         SystemShare.ItemSystem = table;
 
+        // **IT-17 输入注入批**：全 8 例同会话输入（预挂铁剑 5001 + Defense buff），先 RecalcAbilitys
+        // 一次（登录态）再跑 case ⇒ 状态面（hit_speed/char_status 字段）8 例全对齐；banwol 例两条
+        // buff（Defense+CanNotRun ⇒ 位 31|30）钉 `>>i` 位移公式。
+        var preBuffs = new (int, int, int)[] { (2, 60000, 1) };
+        var preBuffsDouble = new (int, int, int)[] { (2, 60000, 1), (3, 60000, 1) };
+        var weapon = ((ushort)5001, (ushort)10);
+
         var cases = new List<object>
         {
             RunCase(table, net, "eat_ok_book_ergum_learns_and_thrusting", new Ctx
@@ -545,6 +604,8 @@ internal static class Program
                 Name = "eat_ok_book_ergum_learns_and_thrusting",
                 Index = 3001,
                 Level = 20,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "刺杀剑术(id12, Job0, TrainLevel[0]=10)：学习成功 ⇒ SM_ADDMAGIC + `+LNG` 原始串帧 + 635",
             }),
             RunCase(table, net, "eat_ok_book_banwol_learns_and_halfmoon", new Ctx
@@ -552,13 +613,17 @@ internal static class Program
                 Name = "eat_ok_book_banwol_learns_and_halfmoon",
                 Index = 3002,
                 Level = 20,
-                Note = "半月弯刀(id25, Job0, TL[0]=15)：成功 ⇒ SM_ADDMAGIC + `+WID` + 635",
+                PreBuffs = preBuffsDouble,
+                Weapon = weapon,
+                Note = "半月弯刀(id25, Job0, TL[0]=15)：成功 ⇒ SM_ADDMAGIC + `+WID` + 635；双 buff ⇒ 657 tag=0xC000（位 31|30）",
             }),
             RunCase(table, net, "eat_fail_book_magic_not_in_table", new Ctx
             {
                 Name = "eat_fail_book_magic_not_in_table",
                 Index = 3003,
                 Level = 20,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "门①：魔法表里没有该物品名 ⇒ 636、物品保留",
             }),
             RunCase(table, net, "eat_fail_book_already_learned", new Ctx
@@ -567,6 +632,8 @@ internal static class Program
                 Index = 3001,
                 Level = 20,
                 Known = new[] { 12 },
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "门②：MagicList 已有 MagIdx=12（`IsTrainingSkill`）⇒ 636",
             }),
             RunCase(table, net, "eat_fail_book_job_mismatch", new Ctx
@@ -575,6 +642,8 @@ internal static class Program
                 Index = 3004,
                 Level = 20,
                 Job = 0,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "门③：火球术 Job=1（法师），玩家战士 ⇒ 636",
             }),
             RunCase(table, net, "eat_fail_book_level_too_low", new Ctx
@@ -582,6 +651,8 @@ internal static class Program
                 Name = "eat_fail_book_level_too_low",
                 Index = 3005,
                 Level = 20,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "门④：烈火剑法 TL[0]=40 > 等级 20 ⇒ 636",
             }),
             RunCase(table, net, "eat_ok_book_level_boundary_equal", new Ctx
@@ -589,6 +660,8 @@ internal static class Program
                 Name = "eat_ok_book_level_boundary_equal",
                 Index = 3007,
                 Level = 20,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "等级门边界：Abil.Level == TrainLevel[0] == 20 ⇒ 可学（`>=`，不是 `>`）",
             }),
             RunCase(table, net, "eat_fail_book_already_learned_and_level_low", new Ctx
@@ -597,6 +670,8 @@ internal static class Program
                 Index = 3006,
                 Level = 20,
                 Known = new[] { 46 },
+                PreBuffs = preBuffs,
+                Weapon = weapon,
                 Note = "门②③④ 同时不满足：已学(46) 且 TL[0]=30>20 ⇒ 636；两条失败路径帧相同 ⇒ 顺序不可观测（只证各自可达）",
             }),
         };
@@ -631,6 +706,9 @@ internal static class Program
             "src/M2Server/Player/PlayObject.cs",
             "src/M2Server/Player/PlayObject.Message.cs",
             "src/M2Server/Actor/BaseObject.Message.cs",
+            // IT-17 输入注入批：buff 状态源 + base Recalc（AddAbil/权重重置、HitSpeed 减半位置）。
+            "src/M2Server/ActorBuffSystem.cs",
+            "src/M2Server/Actor/BaseObject.Abil.cs",
         };
         var doc = new
         {
@@ -646,12 +724,21 @@ internal static class Program
                 "src/M2Server/Player/PlayObject.cs:3681-3684 (RecalcAbilitys 用 MagicList 填 MagicArr)",
                 "src/M2Server/Player/PlayObject.cs:~2874 (CharStatus/StatusChanged/SendUpdateMsg RM_CHARSTATUSCHANGED)",
                 "src/M2Server/Player/PlayObject.Socket.cs:48-71 (SendSocket(string): ServerMessage 头 + 明文, PackLength 取负)",
+                // IT-17 输入注入批锚点：
+                "src/M2Server/Player/PlayObject.Message.cs:1845-1848 (RM→SM_CHARSTATUSCHANGED: param=LoWord(CharStatus), tag=HiWord(CharStatus), series=this.HitSpeed 泵时实时字段)",
+                "src/M2Server/Player/PlayObject.cs:4419 (武器 StdMode 5/6: AddAbil.HitSpeed += RealAttackSpeed(HiByte(MAC))) / :2899 (HitSpeed = AddAbil.HitSpeed)",
+                "src/M2Server/ActorBuffSystem.cs:100-159 (AddBuff 只改状态不发帧) / :282-296 (GetBuffStatus 位公式 OR(0x80000000>>i), StateTick>0 置位)",
+                "src/M2Server/Actor/BaseObject.Abil.cs:15-63 (base.RecalcAbilitys: AddAbil 重置 + 权重三字段清零 + HitSpeed 减半 clamp15 在物品循环前)",
             },
             notes = new[]
             {
                 "帧面 payload = gate buffer 去掉 20B ServerMessage 头后的完整 hex；普通 SM 帧的 12B command 头也在其中，`+LNG`/`+WID` 是明文原始串帧（ident 解析为 -1）。",
                 "MagicInfo 逐字段记在 ctx.magic（ClientMagic.Def 的来源）；Rust 侧必须用同一组值。",
                 "RecalcAbilitys 的**技能被动**（HitPoint/SpeedPoint/DC）不在本卡范围（IT-17b）；本批选无被动的技能，CharStatus/HitSpeed 记在 expect 但不作为 17a 的主判据。",
+                // IT-17 输入注入批：
+                "IT-17 批：全 8 例会话预挂铁剑 5001（MAC_hi=12 ⇒ HitSpeed=+2，Weight=7）+ Defense buff（banwol 例两条 ⇒ CharStatus=0xC0000000）并**先 RecalcAbilitys 一次**（登录态）；预帧排空泵出后丢弃，帧面只含 case。",
+                "657 三字段语义（PlayObject.Message.cs:1845-1848）：param=LoWord(CharStatus)、tag=HiWord(CharStatus)、series=this.HitSpeed（泵时实时字段，非 RM wParam——发射点 :2876 的 wParam 是重置后旧值 0，转换点不读它）。两侧同判据：tag==HiWord(OR(0x80000000>>i))、series==hit_speed、param==LoWord(…)=0。",
+                "wabil_before 是预 Recalc 后、case 前的快照：weight=RecalcBagWeight（书仍在包，=5）、hand=武器 Weight=7；权重三字段 base 每轮清零（BaseObject.Abil.cs:27-30）⇒ case 内 Recalc 与单轮语义同值，622 的 tag=HandWeight、recog=Weight（WeightChanged 在移书后重算 ⇒ 泵时 weight=0）。",
             },
             magic_table = magics.Values.Select(MagicDto).ToArray(),
             templates = templates.OrderBy(kv => kv.Key).Select(kv => new
@@ -661,6 +748,8 @@ internal static class Program
                 std_mode = (int)kv.Value.StdMode,
                 shape = (int)kv.Value.Shape,
                 weight = (int)kv.Value.Weight,
+                // IT-17 批新增键：RealAttackSpeed 的源字节在 MAC 高字节（`PlayObject.cs:4419`）；书类恒 0。
+                mac = (int)kv.Value.MAC,
             }).ToArray(),
             cases,
         };

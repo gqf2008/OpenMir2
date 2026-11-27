@@ -1,13 +1,15 @@
 {
   "generator": "mir2-rs/tests/parity/m3/readbook-probe",
-  "oracle_source_sha256": "6c08a1bf982a4fc34290655f5c2d4a7047637ef7c4aa092ea4a49c49b7cd8576",
+  "oracle_source_sha256": "4f410c13000e8c7df7759475a3257e6d9712cb8fb7ec88daa614afa07756fe9b",
   "oracle_source_sha256_files": [
     "src/M2Server/Player/PlayObject.Operate.cs",
     "src/M2Server/Player/PlayObject.Base.cs",
     "src/M2Server/Player/PlayObject.Attack.cs",
     "src/M2Server/Player/PlayObject.cs",
     "src/M2Server/Player/PlayObject.Message.cs",
-    "src/M2Server/Actor/BaseObject.Message.cs"
+    "src/M2Server/Actor/BaseObject.Message.cs",
+    "src/M2Server/ActorBuffSystem.cs",
+    "src/M2Server/Actor/BaseObject.Abil.cs"
   ],
   "oracle_source": [
     "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems) / :632-654 (case 4 \u4E66)",
@@ -16,12 +18,19 @@
     "src/M2Server/Player/PlayObject.Base.cs:2205-2216 (SendAddMagic: SM_ADDMAGIC 0/0/0/1 \u002B EDCode(ClientMagic))",
     "src/M2Server/Player/PlayObject.cs:3681-3684 (RecalcAbilitys \u7528 MagicList \u586B MagicArr)",
     "src/M2Server/Player/PlayObject.cs:~2874 (CharStatus/StatusChanged/SendUpdateMsg RM_CHARSTATUSCHANGED)",
-    "src/M2Server/Player/PlayObject.Socket.cs:48-71 (SendSocket(string): ServerMessage \u5934 \u002B \u660E\u6587, PackLength \u53D6\u8D1F)"
+    "src/M2Server/Player/PlayObject.Socket.cs:48-71 (SendSocket(string): ServerMessage \u5934 \u002B \u660E\u6587, PackLength \u53D6\u8D1F)",
+    "src/M2Server/Player/PlayObject.Message.cs:1845-1848 (RM\u2192SM_CHARSTATUSCHANGED: param=LoWord(CharStatus), tag=HiWord(CharStatus), series=this.HitSpeed \u6CF5\u65F6\u5B9E\u65F6\u5B57\u6BB5)",
+    "src/M2Server/Player/PlayObject.cs:4419 (\u6B66\u5668 StdMode 5/6: AddAbil.HitSpeed \u002B= RealAttackSpeed(HiByte(MAC))) / :2899 (HitSpeed = AddAbil.HitSpeed)",
+    "src/M2Server/ActorBuffSystem.cs:100-159 (AddBuff \u53EA\u6539\u72B6\u6001\u4E0D\u53D1\u5E27) / :282-296 (GetBuffStatus \u4F4D\u516C\u5F0F OR(0x80000000\u003E\u003Ei), StateTick\u003E0 \u7F6E\u4F4D)",
+    "src/M2Server/Actor/BaseObject.Abil.cs:15-63 (base.RecalcAbilitys: AddAbil \u91CD\u7F6E \u002B \u6743\u91CD\u4E09\u5B57\u6BB5\u6E05\u96F6 \u002B HitSpeed \u51CF\u534A clamp15 \u5728\u7269\u54C1\u5FAA\u73AF\u524D)"
   ],
   "notes": [
     "\u5E27\u9762 payload = gate buffer \u53BB\u6389 20B ServerMessage \u5934\u540E\u7684\u5B8C\u6574 hex\uFF1B\u666E\u901A SM \u5E27\u7684 12B command \u5934\u4E5F\u5728\u5176\u4E2D\uFF0C\u0060\u002BLNG\u0060/\u0060\u002BWID\u0060 \u662F\u660E\u6587\u539F\u59CB\u4E32\u5E27\uFF08ident \u89E3\u6790\u4E3A -1\uFF09\u3002",
     "MagicInfo \u9010\u5B57\u6BB5\u8BB0\u5728 ctx.magic\uFF08ClientMagic.Def \u7684\u6765\u6E90\uFF09\uFF1BRust \u4FA7\u5FC5\u987B\u7528\u540C\u4E00\u7EC4\u503C\u3002",
-    "RecalcAbilitys \u7684**\u6280\u80FD\u88AB\u52A8**\uFF08HitPoint/SpeedPoint/DC\uFF09\u4E0D\u5728\u672C\u5361\u8303\u56F4\uFF08IT-17b\uFF09\uFF1B\u672C\u6279\u9009\u65E0\u88AB\u52A8\u7684\u6280\u80FD\uFF0CCharStatus/HitSpeed \u8BB0\u5728 expect \u4F46\u4E0D\u4F5C\u4E3A 17a \u7684\u4E3B\u5224\u636E\u3002"
+    "RecalcAbilitys \u7684**\u6280\u80FD\u88AB\u52A8**\uFF08HitPoint/SpeedPoint/DC\uFF09\u4E0D\u5728\u672C\u5361\u8303\u56F4\uFF08IT-17b\uFF09\uFF1B\u672C\u6279\u9009\u65E0\u88AB\u52A8\u7684\u6280\u80FD\uFF0CCharStatus/HitSpeed \u8BB0\u5728 expect \u4F46\u4E0D\u4F5C\u4E3A 17a \u7684\u4E3B\u5224\u636E\u3002",
+    "IT-17 \u6279\uFF1A\u5168 8 \u4F8B\u4F1A\u8BDD\u9884\u6302\u94C1\u5251 5001\uFF08MAC_hi=12 \u21D2 HitSpeed=\u002B2\uFF0CWeight=7\uFF09\u002B Defense buff\uFF08banwol \u4F8B\u4E24\u6761 \u21D2 CharStatus=0xC0000000\uFF09\u5E76**\u5148 RecalcAbilitys \u4E00\u6B21**\uFF08\u767B\u5F55\u6001\uFF09\uFF1B\u9884\u5E27\u6392\u7A7A\u6CF5\u51FA\u540E\u4E22\u5F03\uFF0C\u5E27\u9762\u53EA\u542B case\u3002",
+    "657 \u4E09\u5B57\u6BB5\u8BED\u4E49\uFF08PlayObject.Message.cs:1845-1848\uFF09\uFF1Aparam=LoWord(CharStatus)\u3001tag=HiWord(CharStatus)\u3001series=this.HitSpeed\uFF08\u6CF5\u65F6\u5B9E\u65F6\u5B57\u6BB5\uFF0C\u975E RM wParam\u2014\u2014\u53D1\u5C04\u70B9 :2876 \u7684 wParam \u662F\u91CD\u7F6E\u540E\u65E7\u503C 0\uFF0C\u8F6C\u6362\u70B9\u4E0D\u8BFB\u5B83\uFF09\u3002\u4E24\u4FA7\u540C\u5224\u636E\uFF1Atag==HiWord(OR(0x80000000\u003E\u003Ei))\u3001series==hit_speed\u3001param==LoWord(\u2026)=0\u3002",
+    "wabil_before \u662F\u9884 Recalc \u540E\u3001case \u524D\u7684\u5FEB\u7167\uFF1Aweight=RecalcBagWeight\uFF08\u4E66\u4ECD\u5728\u5305\uFF0C=5\uFF09\u3001hand=\u6B66\u5668 Weight=7\uFF1B\u6743\u91CD\u4E09\u5B57\u6BB5 base \u6BCF\u8F6E\u6E05\u96F6\uFF08BaseObject.Abil.cs:27-30\uFF09\u21D2 case \u5185 Recalc \u4E0E\u5355\u8F6E\u8BED\u4E49\u540C\u503C\uFF0C622 \u7684 tag=HandWeight\u3001recog=Weight\uFF08WeightChanged \u5728\u79FB\u4E66\u540E\u91CD\u7B97 \u21D2 \u6CF5\u65F6 weight=0\uFF09\u3002"
   ],
   "magic_table": [
     {
@@ -199,49 +208,64 @@
       "name": "\u523A\u6740\u5251\u672F",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3002,
       "name": "\u534A\u6708\u5F2F\u5200",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3003,
       "name": "\u4E0D\u5B58\u5728\u6280\u80FD",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3004,
       "name": "\u706B\u7403\u672F",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3005,
       "name": "\u70C8\u706B\u5251\u6CD5",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3006,
       "name": "\u9AD8\u7EA7\u523A\u6740",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
     },
     {
       "index": 3007,
       "name": "\u8FB9\u754C\u6280\u80FD",
       "std_mode": 4,
       "shape": 0,
-      "weight": 5
+      "weight": 5,
+      "mac": 0
+    },
+    {
+      "index": 5001,
+      "name": "\u94C1\u5251",
+      "std_mode": 5,
+      "shape": 0,
+      "weight": 7,
+      "mac": 3072
     }
   ],
   "cases": [
@@ -255,10 +279,22 @@
         "known": [],
         "note": "\u523A\u6740\u5251\u672F(id12, Job0, TrainLevel[0]=10)\uFF1A\u5B66\u4E60\u6210\u529F \u21D2 SM_ADDMAGIC \u002B \u0060\u002BLNG\u0060 \u539F\u59CB\u4E32\u5E27 \u002B 635",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 12,
@@ -338,7 +374,7 @@
           {
             "ident": 10139,
             "w_param": 0,
-            "n_param1": 0,
+            "n_param1": -2147483648,
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
@@ -359,18 +395,18 @@
             "ident": 622,
             "recog": 0,
             "param": 0,
-            "tag": 0,
-            "series": 36683,
-            "payload": "000000006e02000000004b8f",
+            "tag": 7,
+            "series": 36684,
+            "payload": "000000006e02000007004c8f",
             "len": 32
           },
           {
             "ident": 657,
             "recog": 943001,
             "param": 0,
-            "tag": 0,
-            "series": 0,
-            "payload": "99630e009102000000000000",
+            "tag": 32768,
+            "series": 2,
+            "payload": "99630e009102000000800200",
             "len": 32
           },
           {
@@ -406,8 +442,8 @@
         ],
         "use_thrusting": true,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [],
         "weight": 0,
@@ -428,12 +464,29 @@
         "level": 20,
         "job": 0,
         "known": [],
-        "note": "\u534A\u6708\u5F2F\u5200(id25, Job0, TL[0]=15)\uFF1A\u6210\u529F \u21D2 SM_ADDMAGIC \u002B \u0060\u002BWID\u0060 \u002B 635",
+        "note": "\u534A\u6708\u5F2F\u5200(id25, Job0, TL[0]=15)\uFF1A\u6210\u529F \u21D2 SM_ADDMAGIC \u002B \u0060\u002BWID\u0060 \u002B 635\uFF1B\u53CC buff \u21D2 657 tag=0xC000\uFF08\u4F4D 31|30\uFF09",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          },
+          {
+            "type": 3,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 25,
@@ -513,7 +566,7 @@
           {
             "ident": 10139,
             "w_param": 0,
-            "n_param1": 0,
+            "n_param1": -1073741824,
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
@@ -534,18 +587,18 @@
             "ident": 622,
             "recog": 0,
             "param": 0,
-            "tag": 0,
-            "series": 36683,
-            "payload": "000000006e02000000004b8f",
+            "tag": 7,
+            "series": 36684,
+            "payload": "000000006e02000007004c8f",
             "len": 32
           },
           {
             "ident": 657,
             "recog": 943002,
             "param": 0,
-            "tag": 0,
-            "series": 0,
-            "payload": "9a630e009102000000000000",
+            "tag": 49152,
+            "series": 2,
+            "payload": "9a630e009102000000c00200",
             "len": 32
           },
           {
@@ -581,8 +634,8 @@
         ],
         "use_thrusting": false,
         "use_half_moon": true,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -1073741824,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [],
         "weight": 0,
@@ -605,10 +658,22 @@
         "known": [],
         "note": "\u95E8\u2460\uFF1A\u9B54\u6CD5\u8868\u91CC\u6CA1\u6709\u8BE5\u7269\u54C1\u540D \u21D2 636\u3001\u7269\u54C1\u4FDD\u7559",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": null,
         "templates": [
@@ -639,8 +704,8 @@
         "magic_arr": [],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [
           {
@@ -650,7 +715,7 @@
             "dura_max": 20
           }
         ],
-        "weight": 0,
+        "weight": 5,
         "rng_draw_count": 0,
         "rng": [],
         "drain": {
@@ -672,10 +737,22 @@
         ],
         "note": "\u95E8\u2461\uFF1AMagicList \u5DF2\u6709 MagIdx=12\uFF08\u0060IsTrainingSkill\u0060\uFF09\u21D2 636",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 12,
@@ -730,7 +807,9 @@
         "magic_list_before": [
           12
         ],
-        "magic_arr_before": [],
+        "magic_arr_before": [
+          12
+        ],
         "magic_list": [
           {
             "mag_idx": 12,
@@ -739,11 +818,16 @@
             "train_point": 0
           }
         ],
-        "magic_arr": [],
+        "magic_arr": [
+          {
+            "id": 12,
+            "level": 0
+          }
+        ],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [
           {
@@ -753,7 +837,7 @@
             "dura_max": 20
           }
         ],
-        "weight": 0,
+        "weight": 5,
         "rng_draw_count": 0,
         "rng": [],
         "drain": {
@@ -773,10 +857,22 @@
         "known": [],
         "note": "\u95E8\u2462\uFF1A\u706B\u7403\u672F Job=1\uFF08\u6CD5\u5E08\uFF09\uFF0C\u73A9\u5BB6\u6218\u58EB \u21D2 636",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 1,
@@ -834,8 +930,8 @@
         "magic_arr": [],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [
           {
@@ -845,7 +941,7 @@
             "dura_max": 20
           }
         ],
-        "weight": 0,
+        "weight": 5,
         "rng_draw_count": 0,
         "rng": [],
         "drain": {
@@ -865,10 +961,22 @@
         "known": [],
         "note": "\u95E8\u2463\uFF1A\u70C8\u706B\u5251\u6CD5 TL[0]=40 \u003E \u7B49\u7EA7 20 \u21D2 636",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 26,
@@ -926,8 +1034,8 @@
         "magic_arr": [],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [
           {
@@ -937,7 +1045,7 @@
             "dura_max": 20
           }
         ],
-        "weight": 0,
+        "weight": 5,
         "rng_draw_count": 0,
         "rng": [],
         "drain": {
@@ -957,10 +1065,22 @@
         "known": [],
         "note": "\u7B49\u7EA7\u95E8\u8FB9\u754C\uFF1AAbil.Level == TrainLevel[0] == 20 \u21D2 \u53EF\u5B66\uFF08\u0060\u003E=\u0060\uFF0C\u4E0D\u662F \u0060\u003E\u0060\uFF09",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 49,
@@ -1031,7 +1151,7 @@
           {
             "ident": 10139,
             "w_param": 0,
-            "n_param1": 0,
+            "n_param1": -2147483648,
             "n_param2": 0,
             "n_param3": 0,
             "priority": 155,
@@ -1043,18 +1163,18 @@
             "ident": 622,
             "recog": 0,
             "param": 0,
-            "tag": 0,
-            "series": 36683,
-            "payload": "000000006e02000000004b8f",
+            "tag": 7,
+            "series": 36684,
+            "payload": "000000006e02000007004c8f",
             "len": 32
           },
           {
             "ident": 657,
             "recog": 943007,
             "param": 0,
-            "tag": 0,
-            "series": 0,
-            "payload": "9f630e009102000000000000",
+            "tag": 32768,
+            "series": 2,
+            "payload": "9f630e009102000000800200",
             "len": 32
           }
         ],
@@ -1080,8 +1200,8 @@
         ],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [],
         "weight": 0,
@@ -1106,10 +1226,22 @@
         ],
         "note": "\u95E8\u2461\u2462\u2463 \u540C\u65F6\u4E0D\u6EE1\u8DB3\uFF1A\u5DF2\u5B66(46) \u4E14 TL[0]=30\u003E20 \u21D2 636\uFF1B\u4E24\u6761\u5931\u8D25\u8DEF\u5F84\u5E27\u76F8\u540C \u21D2 \u987A\u5E8F\u4E0D\u53EF\u89C2\u6D4B\uFF08\u53EA\u8BC1\u5404\u81EA\u53EF\u8FBE\uFF09",
         "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
         "wabil_before": {
-          "weight": 0,
+          "weight": 5,
           "wear_weight": 0,
-          "hand_weight": 0
+          "hand_weight": 7
         },
         "magic": {
           "magic_id": 46,
@@ -1164,7 +1296,9 @@
         "magic_list_before": [
           46
         ],
-        "magic_arr_before": [],
+        "magic_arr_before": [
+          46
+        ],
         "magic_list": [
           {
             "mag_idx": 46,
@@ -1173,11 +1307,16 @@
             "train_point": 0
           }
         ],
-        "magic_arr": [],
+        "magic_arr": [
+          {
+            "id": 46,
+            "level": 0
+          }
+        ],
         "use_thrusting": false,
         "use_half_moon": false,
-        "char_status": 0,
-        "hit_speed": 0,
+        "char_status": -2147483648,
+        "hit_speed": 2,
         "abil_level": 20,
         "item_list": [
           {
@@ -1187,7 +1326,7 @@
             "dura_max": 20
           }
         ],
-        "weight": 0,
+        "weight": 5,
         "rng_draw_count": 0,
         "rng": [],
         "drain": {
