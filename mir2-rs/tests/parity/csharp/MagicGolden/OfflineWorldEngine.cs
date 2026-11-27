@@ -34,12 +34,20 @@ namespace MagicGolden
         {
             RegenCalls++;
 
-            var mon = new M2Server.Monster.MonsterObject
+            // **MG-24（撤 DEV-MG-24-RNGCOUNT 登记）**：按 race 构造 **oracle 真子类**——ctor 链
+            // 自然执行生产抽（WhiteSkeleton → AtMonster 的 `SearchTime = Random(1500)+1500`，
+            // `AtMonster.cs:10`），与 oracle 生产 CreateMonster 同构；构造链零 World/表副作用
+            // （仅字段写入 + GetTickCount/RandomNumber，探针已核）。
+            var __raceEnv = System.Environment.GetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE");
+            var __race = (!string.IsNullOrWhiteSpace(__raceEnv) && byte.TryParse(__raceEnv, out var __rr)) ? __rr : (byte)100;
+            M2Server.Monster.MonsterObject mon = __race switch
             {
-                ChrName = sMonName,
-                CurrX = nX,
-                CurrY = nY,
+                100 => new M2Server.Monster.Monsters.WhiteSkeleton(),
+                _ => new M2Server.Monster.MonsterObject(),
             };
+            mon.ChrName = sMonName;
+            mon.CurrX = nX;
+            mon.CurrY = nY;
             // **与生产 `MonsterTableSpawner::spawn_monster` 同源语义**：生产按 `MonsterInfo.hp` 同时写
             // `hp` 与 `max_hp`（⇒ `hp == max_hp`），`MakeSlave` 的半补因此是 no-op。
             // 离线 harness 没有怪物表，HP 由 `MAGICGOLDEN_STUB_MONSTER_HP`（缺省 17）给定，
@@ -52,10 +60,8 @@ namespace MagicGolden
             }
             // **Race = 100（WhiteSkeleton，真身）**：`apply_slave_level_abilitys` 的 White/Elf 分支
             // 会先抬高 `max_hp`（`chp = hp + round(hp*0.4)*slaveExpLevel`）再走半补 ⇒ 真实面是 hp≠max_hp。
-            // Race 默认（ActorRace.Animal=50）会落到非 White 分支，验的是替身而不是真身。
-            // Race 由 `MAGICGOLDEN_STUB_MONSTER_RACE`（缺省 100=WhiteSkeleton）给定；SINSU 神兽传 113。
-            var __raceEnv = System.Environment.GetEnvironmentVariable("MAGICGOLDEN_STUB_MONSTER_RACE");
-            mon.Race = (!string.IsNullOrWhiteSpace(__raceEnv) && byte.TryParse(__raceEnv, out var __rr)) ? __rr : (byte)100;
+            // SINSU 神兽传 113（ElfMonster 族 ctor 无额外抽）。
+            mon.Race = __race;
             // **Abil 来自"怪物信息"**：生产里 `MonsterInfo.hp` 写进 `Abil`，`RecalcAbilitys` 再克隆到 `WAbil`。
             // 替身必须**显式设 `Abil.MaxHP`**（否则取 `MonsterObject` ctor 缺省 15，与真怪无关）——
             // `ApplySlaveLevelAbilitys` 的 `chp` 基数读的正是 `Abil.MaxHP`。
@@ -63,6 +69,15 @@ namespace MagicGolden
             mon.Abil.HP = stubHp;
             mon.WAbil.HP = stubHp;
             mon.WAbil.MaxHP = stubHp;
+            // **MG-24**：生产 CreateMonster 的两处 spawner 点抽（`WorldServer.MonGen.cs:740/:745`）
+            // —— `cert.Dir = RandomByte(8)`（无条件）与 `Random(100) < CoolEyeCode`（**抽无条件、
+            // 比对条件**：CoolEyeCode=0 也照抽、恒不置位）。只对齐 RNG 流，不在替身落 Dir/CoolEye
+            // 状态（帧面不涉）。
+            mon.Dir = M2Server.M2Share.RandomNumber.RandomByte(8);
+            if (M2Server.M2Share.RandomNumber.Random(100) < mon.CoolEyeCode)
+            {
+                mon.CoolEye = true;
+            }
             return mon;
         }
 
