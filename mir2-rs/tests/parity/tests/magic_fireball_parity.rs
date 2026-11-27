@@ -2701,7 +2701,11 @@ fn tamming_block_checks(g: &Value, r: &Value) -> Vec<String> {
                 }
             }
         }
-        // monsters_after：只比**已建模**字段（CanReAlive 后效 / MonGen 不建模）。
+        // monsters_after：逐字段（**DEV-MG-34 撤豁免**——原「CanReAlive 后效 / MonGen 不建模」
+        // 随 `Tamming.monsters_after` 二字段进台账而撤；golden 侧为 oracle 真 `MagTamming`
+        // 对真 `MonsterObject` 执行的产物。该白名单只服务 tamming 本 stem；16（holyshield）的
+        // 比较器（`real_ledger_verify_labels_opts`）只比帧/收件人、无怪物状态面 ⇒ 无「16 侧
+        // 同步」面，留痕）。
         let ga = gb["monsters_after"].as_array().cloned().unwrap_or_default();
         let ra = rb["monsters_after"].as_array().cloned().unwrap_or_default();
         if ga.len() != ra.len() {
@@ -2724,6 +2728,8 @@ fn tamming_block_checks(g: &Value, r: &Value) -> Vec<String> {
                 for k in [
                     "hp",
                     "max_hp",
+                    "can_re_alive",
+                    "mongen_active",
                     "walk_speed",
                     "next_hit_time",
                     "slave_make_level",
@@ -2792,7 +2798,9 @@ fn tamming_block_checks(g: &Value, r: &Value) -> Vec<String> {
 /// 判据分层：驱动只记录（输入全从 golden 读、配置四键构造 `PetSlaveConfig`）；比较器做
 /// `verify` 通用面 + `Tamming` 块逐字段（建模面）+ 推导面（60005 公式 `(L*5+10)*1000`、
 /// 受奴后 `Master=caster`/`SlaveList`/WalkSpeed/NextHitTime 钳制、`Result=false ⇒ 无 640`）。
-/// **不比较**：`CanReAlive` 清除后效 / `MonGen.ActiveCount--`（Rust 未建模；golden 记录留锚）。
+/// **DEV-MG-34 撤豁免**：原「不比较 CanReAlive/MonGen」随台账 `monsters_after` 二字段
+/// （`can_re_alive`/`mongen_active`）与 golden `adopt_zero` 臂而撤；golden 侧为 oracle 真
+/// `MagTamming` 对真 `MonsterObject` 执行的产物（RecordingMonster 继承），非手工期望。
 #[test]
 #[ignore = "需先跑 game-svr 驱动（tests::tamming_parity_*）生成真实台账"]
 fn real_rust_ledger_tamming() {
@@ -2805,6 +2813,7 @@ fn real_rust_ledger_tamming() {
         "outer_fail_true",
         "outer_fail_false",
         "crazy",
+        "adopt_zero",
     ];
     let golden = golden_file("tamming.json");
     for label in labels {

@@ -1920,6 +1920,7 @@ fn handle_zone_command_with_tail_and_shared(
         saves,
         trade_sessions,
         shop_sessions,
+        mon_gen_host,
         ..
     } = host;
     let env = ZoneCmdEnv {
@@ -1945,6 +1946,7 @@ fn handle_zone_command_with_tail_and_shared(
         cmd,
         tail,
         &env,
+        mon_gen_host.as_mut(),
     )
 }
 
@@ -2110,6 +2112,8 @@ fn handle_zone_command_on(
     cmd: &CommandMessage,
     tail: Option<&str>,
     env: &ZoneCmdEnv<'_>,
+    // **DEV-MG-34**：区施法里 20 受奴的 `MonGen` 表侧宿主（本区自己的；测试/无表 ⇒ None）。
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
 ) -> ZoneCmdOutcome {
     if movewire::is_move_command(cmd.ident) {
         if online
@@ -2175,6 +2179,7 @@ fn handle_zone_command_on(
             env.enter_cfg.fire_boom_rage,
             env.enter_cfg.snow_wind_range,
             env.enter_cfg.elec_blizzard_range,
+            mon_gen_host,
             Some(magic_cfg_of(env.enter_cfg)),
             env.colors,
             &env.enter_cfg.string_conf,
@@ -18747,6 +18752,9 @@ fn handle_spell_cmd(
         fire_boom_rage,
         snow_wind_range,
         elec_blizzard_range,
+        // `None` = `mon_gen_host`：wrapper 只服务单测（无表零动作）；live 一律走
+        // `handle_spell_cmd_with_magic`（区 0 主循环/区 k 线程各传本区宿主）。
+        None,
         None,
         &MsgColors::default(),
         &game_svr::strings::StringConf::defaults(),
@@ -18779,7 +18787,10 @@ fn handle_spell_cmd_with_magic(
     fire_boom_rage: i32,
     snow_wind_range: i32,
     elec_blizzard_range: i32,
-    // **Lane B**：`AttPowerUp` 的 `RecalcAbilitys()`（`:5328`）也要跑 210/212 尾段；
+    // **DEV-MG-34**：20 受奴进 `MonGen != null` 支 ⇒ 宿主落表（递减/断链）；
+    // 单测/无表路径 ⇒ `None` 零动作（GM 命令路径同款 Option 穿线）。
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    // 卡 `openmir2-warrskill-entry`：6 个战士技 case 的 `SysMsg` 色词与 `[String]` 文案。
     // `None` ⇒ 不审计（单测/未载入配置路径）。
     magic_cfg: Option<MagicCfg<'_>>,
     // 卡 `openmir2-warrskill-entry`：6 个战士技 case 的 `SysMsg` 色词与 `[String]` 文案。
@@ -20133,6 +20144,16 @@ fn handle_spell_cmd_with_magic(
                     magic,
                 };
                 let outcome = game_svr::slave::cast_tamming_spell(world, &input, &mut train);
+                // **DEV-MG-34（④ 表侧）**：受奴进 `MonGen != null` 支 ⇒ 宿主落表（`ActiveCount--`
+                // 或断链）；`None`（无表/门未过/`MonGen == null`）⇔ oracle 同形零动作。
+                if let (Some(host), Some(tid)) = (mon_gen_host, target_id) {
+                    game_svr::slave::apply_tame_mongen_tail(
+                        &mut host.state,
+                        world,
+                        tid,
+                        outcome.mongen_branch,
+                    );
+                }
                 // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
                 if let Some(rcd) = saves
                     .get_mut(chr_name)
@@ -39968,6 +39989,7 @@ impl HostLoop {
                                     cmd,
                                     tail.as_deref(),
                                     &env,
+                                    mon_gen_host.as_mut(),
                                 );
                             }
                         };
@@ -40699,6 +40721,7 @@ impl HostLoop {
                                     enter_cfg.fire_boom_rage,
                                     enter_cfg.snow_wind_range,
                                     enter_cfg.elec_blizzard_range,
+                                    mon_gen_host.as_mut(),
                                     // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
                                     Some(magic_cfg_of(&enter_cfg)),
                                     &colors,
@@ -93134,6 +93157,10 @@ SendRefMsgRange=15
             u8::try_from(mon["life_attrib"].as_u64().expect("life_attrib")).expect("life u8");
         let mon_walk = mon["walk_speed"].as_i64().expect("walk_speed");
         let mon_next_hit = mon["next_hit_time"].as_i64().expect("next_hit_time");
+        // **DEV-MG-34（④ 装置）**：夹具两字段（golden 恒记录；C# `RecordingMonster` 继承真
+        // `MonsterObject` ⇒ 这两个输入喂给真 `MagTamming` 的 `:743-754` 落尾块）。
+        let mon_can_re_alive = mon["can_re_alive"].as_bool().expect("can_re_alive");
+        let mon_mongen_active = mon["mongen_active"].as_i64().expect("mongen_active");
         let master_caster = mon["master_caster"].as_bool().expect("master_caster");
         let mon_name = mon["name"].as_str().expect("monster.name").to_string();
         let caster_name = fx["caster_name"]
@@ -93222,6 +93249,31 @@ SendRefMsgRange=15
             sg.state.wabil.mc = caster_mc;
             sg.state.wabil.sc = caster_sc;
         }
+        // **DEV-MG-34（④ 装置）**：合成 mongen 条目——`MonGenActive >= 0` ⇒ 建
+        // `active_count = v` 表目并回链 `mon_gen = Some(0)`（oracle `MonGen != null`）；
+        // `-1` ⇒ 不建（= oracle `MonGen == null`）。合成条目**不在 regen 游标面**：
+        // `threads` 空（step 轮询零访）、`cert_list` 空（bind 零触）——由
+        // `tame_mongen_synthetic_entry_is_isolated` 显式测试钉死。
+        let mut mongen_state = mir2_world_bevy::mongen::MonGenState::default();
+        if mon_mongen_active >= 0 {
+            mongen_state
+                .entries
+                .push(mir2_world_bevy::mongen::MonGenEntry {
+                    map_name: "0".to_string(),
+                    x: i16::try_from(mon_x).expect("mon_x i16"),
+                    y: i16::try_from(mon_y).expect("mon_y i16"),
+                    mon_name: mon_name.clone(),
+                    range: 1,
+                    count: 1,
+                    active_count: u16::try_from(mon_mongen_active).expect("mongen_active u16"),
+                    zen_time: 0,
+                    mission_gen_rate: 0,
+                    race: i16::from(mon_race),
+                    start_tick: 0,
+                    cert_list: Vec::new(),
+                    thread_id: 0,
+                });
+        }
         // 怪物实体：id = id_base+10（与 C# 装置 `idBase+10` 同段）。
         let mon_id = {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, mon_name.clone(), mon_x, mon_y);
@@ -93231,6 +93283,10 @@ SendRefMsgRange=15
             e.hp = mon_hp;
             e.max_hp = mon_hp;
             e.life_attrib = mon_life;
+            e.can_re_alive = mon_can_re_alive;
+            if mon_mongen_active >= 0 {
+                e.mon_gen = Some(0);
+            }
             let id = rig.world.add_entity(e);
             {
                 let m = rig.world.entities.get_mut(id).unwrap();
@@ -93250,6 +93306,27 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         rig.cast(magic_id, (mon_x, mon_y), mon_id);
         let n1 = trace_line_count(&trace);
+        // **DEV-MG-34（④ 表侧）**：`tame_adopt` 实体侧清了 `can_re_alive`（术前 true 才可能清）
+        // = 进了 `MonGen != null` 支 ⇒ 宿主落表（合成条目下标恒 0；`-1`/门未过 ⇒ None 零动作）。
+        // 本 tail 不消费随机数 ⇒ trace/rng 账本零影响。
+        let mongen_branch = if mon_mongen_active >= 0
+            && !rig
+                .world
+                .entities
+                .get(mon_id)
+                .map(|e| e.can_re_alive)
+                .unwrap_or(true)
+        {
+            Some(0usize)
+        } else {
+            None
+        };
+        game_svr::slave::apply_tame_mongen_tail(
+            &mut mongen_state,
+            &mut rig.world,
+            mon_id,
+            mongen_branch,
+        );
         let (cast_frames, _raws) = rig.drain();
         let mut all_frames: Vec<(i32, Vec<u8>, i64)> =
             cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
@@ -93393,6 +93470,13 @@ SendRefMsgRange=15
                 "Sent": fireball_sent_with_due(&all_frames, socket),
             }));
         }
+        let (mon_can_re_alive_after, mon_mongen_active_after) = {
+            let e = rig.world.entities.get(mon_id).unwrap();
+            let ma = e
+                .mon_gen
+                .map(|idx| i64::from(mongen_state.entries[idx].active_count));
+            (e.can_re_alive, ma)
+        };
         let (master, walk_speed, next_hit_time, slave_make_level, crazy_mode, crazy_interval) = {
             let e = rig.world.entities.get(mon_id).unwrap();
             let master = match e.master {
@@ -93450,6 +93534,12 @@ SendRefMsgRange=15
                 "master": master,
                 "hp": mon_hp_after,
                 "max_hp": i64::from(mon_hp),
+                // **DEV-MG-34**：受奴落尾后效（golden 同名键；C# 侧为 oracle 真
+                // `MagTamming` 对真 `MonsterObject` 执行的产物，非手工期望）。
+                "can_re_alive": mon_can_re_alive_after,
+                "mongen_active": mon_mongen_active_after
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
                 "walk_speed": walk_speed,
                 "next_hit_time": next_hit_time,
                 "slave_make_level": i64::from(slave_make_level),
@@ -93534,6 +93624,13 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
     fn tamming_parity_crazy() {
         tamming_parity_drive("crazy");
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程"]
+    fn tamming_parity_adopt_zero() {
+        // **DEV-MG-34（④）**：`MonGenActive=0` ⇒ else 断链子支（`MonGen = null`）。
+        tamming_parity_drive("adopt_zero");
     }
 
     /// 按驱动 stem 取金标准该支 case（stem→golden 文件名的映射与 `golden_fixture_opt` 同源）。
@@ -137430,6 +137527,7 @@ mod zone_command_tests {
                                 cmd,
                                 tail.as_deref(),
                                 &env,
+                                None,
                             );
                         }
                     };

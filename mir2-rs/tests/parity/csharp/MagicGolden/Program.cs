@@ -2209,7 +2209,10 @@ private static int ReadInstanceInt(object obj, string fieldName)
                 cfgTargetLevel, cfgLevel, cfgCount, hpRate, noTame: false, undead, slaveCount: 0);
         }
 
-        var results = new FireballResult[7];
+        // **DEV-MG-34（④）**：第 8 支 `adopt_zero`——与 adopt_ok 同分支同 seed、
+        // `MonGenActive=0` ⇒ oracle `ActiveCount > 0` 假 ⇒ `MonGen = null`（:766-768 else 子支，
+        // `monsters_after.mongen_active` 记 null）。钉死断链子支（前 7 支只覆盖递减子支）。
+        var results = new FireballResult[8];
         spec.ServerConf = serverConf;
         spec.TargetMonster = 1;
         spec.CasterLevel = casterLevel;
@@ -2233,6 +2236,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         results[5] = RunMagicCase(spec, "outer_fail_false", SeedFor(TammingBranch.OuterFalse, 20, false, false), 6000, spec.TargetMaxHp, false);
         SetMonster(20, false, false, -1, false);
         results[6] = RunMagicCase(spec, "crazy", SeedFor(TammingBranch.Crazy, 20, false, false), 7000, spec.TargetMaxHp, false);
+        SetMonster(20, false, true, 0, false);
+        results[7] = RunMagicCase(spec, "adopt_zero", SeedFor(TammingBranch.AdoptOk, 20, false, false), 8000, spec.TargetMaxHp, false);
         foreach (var r in results)
         {
             if (r.DrainPassesHitCap)

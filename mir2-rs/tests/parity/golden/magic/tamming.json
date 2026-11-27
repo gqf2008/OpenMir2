@@ -2679,6 +2679,484 @@
         "max_train_at_level": 1000,
         "train_level_at_level": 0
       }
+    },
+    {
+      "Fixture": {
+        "magic_id": 20,
+        "magic_name": "Tamming",
+        "caster_name": "golden-caster",
+        "slave_colors": [
+          254,
+          147,
+          154,
+          229,
+          168,
+          180,
+          252,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250,
+          250
+        ],
+        "effect": 1,
+        "effect_type": 1,
+        "user_magic_level": 0,
+        "caster_level": 30,
+        "caster_actor_id": 8001,
+        "target_actor_id": 8002,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "target_anti_poison": 0,
+        "amulet_shape": 0,
+        "amy_ounsul_point": 15,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "Tamming"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": null,
+        "rng_total_draws": 7,
+        "rng_recorded": 7,
+        "target_null": false,
+        "arm_ring_amulet": false,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ],
+        "hit_speed": 0,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56,
+        "you_poisoned": "\u4E2D\u6BD2\u4E86!!!",
+        "frame_order_scope": null,
+        "sockets": [
+          911,
+          912,
+          913,
+          914
+        ],
+        "monsters": [
+          {
+            "name": "golden-mon0",
+            "x": 102,
+            "y": 100,
+            "race": 50,
+            "level": 20,
+            "hp": 600,
+            "life_attrib": 0,
+            "master": 0,
+            "target_cret": 0,
+            "speed_point": 10,
+            "death": false,
+            "ac": 0,
+            "anti_magic": 3,
+            "no_tame": false,
+            "animal": false,
+            "mongen_active": 0,
+            "can_re_alive": true,
+            "walk_speed": 2000,
+            "next_hit_time": 3000,
+            "master_caster": false
+          }
+        ],
+        "target_monster": 1,
+        "server_conf": {
+          "mag_turn_undead_level": 44,
+          "mab_mabe_hit_rand_rate": 100,
+          "mab_mabe_hit_min_lv_limit": 10,
+          "mab_mabe_hit_sucess_rate": 21,
+          "mab_mabe_hit_mabe_time_rate": 20,
+          "amy_ounsul_point": 15,
+          "mag_tamming_level": 40,
+          "mag_tamming_target_level": 1,
+          "mag_tamming_hp_rate": 100,
+          "mag_tamming_count": 5
+        }
+      },
+      "Label": "adopt_zero",
+      "TargetMonsterHpBefore": 600,
+      "TargetMonsterHpAfter": 600,
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 952,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 8010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            },
+            {
+              "ident": 10123,
+              "wParam": 0,
+              "p1": 20,
+              "p2": 0,
+              "p3": 2,
+              "msg": "",
+              "late": true,
+              "delivery": 1001000,
+              "priority": 255
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 638,
+              "recog": 8001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "vkh\u0060d?"
+            },
+            {
+              "ident": 656,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            },
+            {
+              "ident": 640,
+              "recog": 20,
+              "param": 0,
+              "tag": 2,
+              "series": 0,
+              "due_ms_rel": 1000,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 8010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 8001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 8001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "vkh\u0060d?"
+            },
+            {
+              "ident": 656,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            }
+          ]
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [
+            {
+              "ident": 10008,
+              "wParam": 1,
+              "p1": 102,
+              "p2": 100,
+              "p3": 20,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 24
+            },
+            {
+              "ident": 10120,
+              "wParam": 0,
+              "p1": 257,
+              "p2": 6553702,
+              "p3": 8010,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 136
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
+            },
+            {
+              "ident": 8101,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "golden(golden-caster)",
+              "late": false,
+              "delivery": 0,
+              "priority": 165
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 17,
+              "recog": 8001,
+              "param": 102,
+              "tag": 100,
+              "series": 1,
+              "due_ms_rel": 0,
+              "tail": "20"
+            },
+            {
+              "ident": 638,
+              "recog": 8001,
+              "param": 102,
+              "tag": 100,
+              "series": 257,
+              "due_ms_rel": 0,
+              "tail": "vkh\u0060d?"
+            },
+            {
+              "ident": 656,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": ""
+            },
+            {
+              "ident": 42,
+              "recog": 8010,
+              "param": 254,
+              "tag": 0,
+              "series": 0,
+              "due_ms_rel": 0,
+              "tail": "oo\u003Ctlm\u003Ev\\o?rllEnn]KlmsT{mrAg"
+            }
+          ]
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "mon0",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [
+        0,
+        0,
+        0,
+        37,
+        0,
+        30,
+        1
+      ],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 0,
+      "Tamming": {
+        "spell_return": true,
+        "has_640": true,
+        "rm_makeholyseize": [],
+        "slave_list_rel": [
+          0
+        ],
+        "slave_count_after": 1,
+        "monsters_after": [
+          {
+            "name": "golden-mon0",
+            "master": "caster",
+            "hp": 600,
+            "max_hp": 600,
+            "walk_speed": 1500,
+            "next_hit_time": 2000,
+            "can_re_alive": false,
+            "no_tame": false,
+            "animal": false,
+            "slave_make_level": 0,
+            "mongen_active": null,
+            "crazy_mode": false,
+            "crazy_interval_ms": 0
+          }
+        ]
+      },
+      "Train": {
+        "level_before": 0,
+        "level_after": 0,
+        "tran_point_before": 0,
+        "tran_point_after": 2,
+        "train_lv": 3,
+        "max_train0": 1000,
+        "n_level": 0,
+        "max_train_at_level": 1000,
+        "train_level_at_level": 0
+      }
     }
   ]
 }

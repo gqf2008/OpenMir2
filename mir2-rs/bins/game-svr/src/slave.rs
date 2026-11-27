@@ -367,6 +367,10 @@ pub struct TammingCastOutcome {
     pub crazy_mode: bool,
     /// 随 `crazy_mode` 的 `Random(20)+10` 秒数（非狂暴支为 0）。
     pub crazy_interval: i32,
+    /// `MagicManager.cs:749-754` 的**表侧入口**（`Some(表下标)` = 进了 `MonGen != null` 支）。
+    /// `MonGenState` 持于宿主 ⇒ 递减/断链由表持有方按 [`apply_tame_mongen_tail`] 落；
+    /// live 派发侧 MongenHost 未接线 ⇒ 忽略（登记）。
+    pub mongen_branch: Option<usize>,
     /// 熟练度尾结算（[`SkillTrainState`] 已就地更新）。
     pub train: magic::SkillProficiencyOutcome,
 }
@@ -448,6 +452,7 @@ pub fn cast_tamming_spell(
     let mut target_hp = None;
     let mut crazy_mode = false;
     let mut crazy_interval = 0;
+    let mut adopt_mongen_branch = None;
     // oracle `if (IsProperTarget(targetObject) && !targetObject.Animal) { if (MagTamming(...)) boTrain = true; }`
     // —— 门不过 ⇒ 连 `MagTamming` 都不进（`boTrain=false`、不抽数），但尾仍跑（`boSpellFire=true`）。
     if let Some(tin) = tamming_input(world, input) {
@@ -470,12 +475,13 @@ pub fn cast_tamming_spell(
             // `MagicManager.cs:738` `BreakCrazyMode()` **先于** adopt 字段（`:753-775`）——
             // 顺序决定 8090 帧序（BreakCrazy 的 RefNameColor 在前）。
             mir2_world_bevy::monai::break_crazy_mode(world, target_id);
-            world.tame_adopt(
+            let adopt_tail = world.tame_adopt(
                 input.caster_id,
                 target_id,
                 input.magic_level,
                 out.royalty_draw,
             );
+            adopt_mongen_branch = adopt_tail.mongen_branch;
         } else if out.target_hp != tin.target_hp {
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
@@ -523,7 +529,29 @@ pub fn cast_tamming_spell(
         target_hp,
         crazy_mode,
         crazy_interval,
+        mongen_branch: adopt_mongen_branch,
         train: tail.train,
+    }
+}
+
+/// `MagTamming` 受奴的 **`MonGen` 表侧半段**（`MagicManager.cs:749-754`）。
+///
+/// [`World::tame_adopt`] 已落实体侧（`CanReAlive = false`）并把分支入口交回
+/// （[`TammingCastOutcome::mongen_branch`]，`Some(表下标)`）；本函数由**表持有方**在 cast 后
+/// 调用：`ActiveCount > 0` ⇒ 递减（刷怪槽回落）；否则 ⇒ 断链（`entity.mon_gen = None` =
+/// oracle `MonGen = null`）。live 派发侧 MongenHost 未接线 ⇒ 目前唯一调用方是 parity 装置
+/// （rig 合成条目）；实接时由 CM_SPELL 派发处补调（登记）。
+pub fn apply_tame_mongen_tail(
+    state: &mut mir2_world_bevy::mongen::MonGenState,
+    world: &mut World,
+    target_id: i32,
+    branch: Option<usize>,
+) {
+    let Some(idx) = branch else { return };
+    if state.entries[idx].active_count > 0 {
+        state.entries[idx].active_count -= 1;
+    } else if let Some(e) = world.entities.get_mut(target_id) {
+        e.spawn.mon_gen = None;
     }
 }
 
@@ -858,7 +886,7 @@ mod tests {
     fn tame_adopt_emits_namecolor_then_username() {
         let (mut w, caster, target) = tamming_world(1, 50, 600, 20);
         w.tick(); // 入图（否则格扫无收件人，SendRefMsg 等于不发）
-        assert!(w.tame_adopt(caster, target, 0, 0));
+        assert!(w.tame_adopt(caster, target, 0, 0).adopted);
         let msgs = w.take_monster_ref_msgs();
         let idents: Vec<u16> = msgs.iter().map(|m| m.ident).collect();
         assert_eq!(
@@ -885,6 +913,127 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].ident, mir2_world_bevy::monai::RM_CHANGENAMECOLOR);
         assert_eq!(msgs[0].actor_id, target);
+    }
+
+    /// **DEV-MG-34（④ 落尾）**：表侧半段两分支——`ActiveCount > 0` ⇒ 递减；`== 0` ⇒ 断链
+    /// （`entity.mon_gen = None`，oracle `MonGen = null`）；分支未进（`None`）⇒ 零动作。
+    #[test]
+    fn tame_mongen_tail_decrements_then_nulls() {
+        let mut state = mir2_world_bevy::mongen::MonGenState::default();
+        state.entries.push(mir2_world_bevy::mongen::MonGenEntry {
+            map_name: "0".to_string(),
+            x: 100,
+            y: 100,
+            mon_name: "鸡".to_string(),
+            range: 1,
+            count: 1,
+            active_count: 1,
+            zen_time: 60000,
+            mission_gen_rate: 0,
+            race: 50,
+            start_tick: 0,
+            cert_list: Vec::new(),
+            thread_id: 0,
+        });
+        let mut w = World::new(32, 32);
+        let target = {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "骷髅".to_string(), 11, 10);
+            e.race = mir2_world_bevy::entity::ACTOR_RACE_MONSTER;
+            e.mon_gen = Some(0);
+            e.can_re_alive = true;
+            w.add_entity(e)
+        };
+        // 第一轮：`1 > 0` ⇒ 递减，不断链
+        apply_tame_mongen_tail(&mut state, &mut w, target, Some(0));
+        assert_eq!(state.entries[0].active_count, 0);
+        assert_eq!(w.entities.get(target).unwrap().mon_gen, Some(0));
+        // 第二轮：`0` ⇒ 断链（oracle `MonGen = null`）
+        apply_tame_mongen_tail(&mut state, &mut w, target, Some(0));
+        assert_eq!(w.entities.get(target).unwrap().mon_gen, None);
+        // 分支未进（None）⇒ 零动作
+        apply_tame_mongen_tail(&mut state, &mut w, target, None);
+        assert_eq!(state.entries[0].active_count, 0);
+    }
+
+    /// **DEV-MG-34（④ 隔离牙，opc-27 裁决 3a）**：tamming 装置的合成 mongen 条目必须在
+    /// regen **游标面**之外——`threads` 空 ⇒ `step_threads` 轮询零访（按 threads 升序遍历）、
+    /// `cert_list` 空 ⇒ `bind_new_certificates` 零触；实跑一轮 `MonGenHost::step` ⇒ 零刷怪
+    /// （sink 恒不触）。死亡路径读的 `zen_time` 是条目**数据**（oracle 同读 `MonGen.ZenTime`），
+    /// 非游标面——本测试只钉游标隔离。
+    #[test]
+    fn tame_mongen_synthetic_entry_is_isolated() {
+        // `tamming_parity_drive` 同款合成条目（`mongen_active >= 0` 形态）。
+        let mut host = crate::mongen::MonGenHost {
+            state: mir2_world_bevy::mongen::MonGenState::default(),
+            config: mir2_world_bevy::mongen::MonGenConfig::default(),
+            init: mir2_world_bevy::mongen::InitializeMonsterRecord::default(),
+        };
+        host.state
+            .entries
+            .push(mir2_world_bevy::mongen::MonGenEntry {
+                map_name: "0".to_string(),
+                x: 100,
+                y: 100,
+                mon_name: "golden-mon0".to_string(),
+                range: 1,
+                count: 1,
+                active_count: 1,
+                zen_time: 0,
+                mission_gen_rate: 0,
+                race: 50,
+                start_tick: 0,
+                cert_list: Vec::new(),
+                thread_id: 0,
+            });
+        assert!(
+            host.state.threads.is_empty(),
+            "无线程注册 ⇒ regen 轮询零访合成条目"
+        );
+        assert!(
+            host.state.entries[0].cert_list.is_empty(),
+            "cert_list 空 ⇒ bind_new_certificates 零触合成条目"
+        );
+        struct PanickingSink;
+        impl crate::mongen::MonsterSink for PanickingSink {
+            fn map_size(&self, _: &str) -> Option<(i32, i32)> {
+                panic!("regen 触到合成条目面（map_size）⇒ 隔离破")
+            }
+            fn cell_walkable_ignore_actors(&self, _: &str, _: i32, _: i32) -> bool {
+                panic!("regen 触到合成条目面（cell_walkable）⇒ 隔离破")
+            }
+            fn can_walk(&self, _: &str, _: i32, _: i32) -> bool {
+                panic!("regen 触到合成条目面（can_walk）⇒ 隔离破")
+            }
+            fn budget_drops(
+                &mut self,
+                _: &mut mir2_shared::rng::RandomNumber,
+                _: &str,
+            ) -> (i32, Vec<mir2_world_bevy::combat::DropItem>) {
+                panic!("regen 触到合成条目面（budget_drops）⇒ 隔离破")
+            }
+            fn spawn_monster(&mut self, _: &crate::mongen::MonsterSpawnRequest) -> Option<i32> {
+                panic!("regen 触到合成条目面（spawn_monster）⇒ 隔离破")
+            }
+        }
+        let mut sink = PanickingSink;
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut clock = || 1_000_i32;
+        let mut can_create = |_: &str| true;
+        let table = MonsterTable::new(Vec::new());
+        let decisions = host.step(
+            1_000,
+            0,
+            &mut rng,
+            &mut clock,
+            &mut can_create,
+            &mut sink,
+            &table,
+        );
+        assert!(
+            decisions.is_empty(),
+            "合成条目零轮询 ⇒ 一轮 step 零决策（实得 {:?}）",
+            decisions
+        );
     }
 
     /// **MG-34 帧面接线 C**：`BreakCrazyMode` 的 `RefNameColor` **只在** CrazyMode 为真时发。
