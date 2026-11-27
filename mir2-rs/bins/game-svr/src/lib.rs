@@ -95955,8 +95955,10 @@ SendRefMsgRange=15
         // **oracle 事实（golden s1/s5/s13 一致）**：`Shape=0` 只是让 `switch` 不投毒；
         // `CheckAmulet`/`UseAmulet` 在 switch **之前** ⇒ 护身符照扣（`642.recog=500` 的 DuraChange）
         // 且 `result` 在 switch 之外赋值 ⇒ 训练尾 `640` 仍发。
-        // **当前 Rust 红（已报 opc-27，缺口 G-1）**：Rust 侧 shape0 只发 `638`，无 `642`/`640`/`100`，
-        // 台账 `Rm` 亦无 `10125`/`10123` ⇒ 两条断言按 oracle 契约保留，作为该缺口的红证。
+        // **G-1 已修（2026-11-26，shape→`Option`）**：shape0 三支全绿——以下断言为 oracle
+        // 契约的常驻钉：642.recog=500（护身符照扣）、640=1（训练尾仍在）、8037=0（switch
+        // 无匹配不投毒）；657/100 帧面由 `poison_per_receiver_frame_matches_golden` 与
+        // golden 逐字节比（含 `10139.p1` 位号）。
         assert_eq!(
             sent_recogs(&case, "caster", 642),
             vec![500],
