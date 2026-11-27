@@ -955,6 +955,87 @@ mod tests {
         assert_eq!(state.entries[0].active_count, 0);
     }
 
+    /// **DEV-MG-34（④ 隔离牙，opc-27 裁决 3a）**：tamming 装置的合成 mongen 条目必须在
+    /// regen **游标面**之外——`threads` 空 ⇒ `step_threads` 轮询零访（按 threads 升序遍历）、
+    /// `cert_list` 空 ⇒ `bind_new_certificates` 零触；实跑一轮 `MonGenHost::step` ⇒ 零刷怪
+    /// （sink 恒不触）。死亡路径读的 `zen_time` 是条目**数据**（oracle 同读 `MonGen.ZenTime`），
+    /// 非游标面——本测试只钉游标隔离。
+    #[test]
+    fn tame_mongen_synthetic_entry_is_isolated() {
+        // `tamming_parity_drive` 同款合成条目（`mongen_active >= 0` 形态）。
+        let mut host = crate::mongen::MonGenHost {
+            state: mir2_world_bevy::mongen::MonGenState::default(),
+            config: mir2_world_bevy::mongen::MonGenConfig::default(),
+            init: mir2_world_bevy::mongen::InitializeMonsterRecord::default(),
+        };
+        host.state
+            .entries
+            .push(mir2_world_bevy::mongen::MonGenEntry {
+                map_name: "0".to_string(),
+                x: 100,
+                y: 100,
+                mon_name: "golden-mon0".to_string(),
+                range: 1,
+                count: 1,
+                active_count: 1,
+                zen_time: 0,
+                mission_gen_rate: 0,
+                race: 50,
+                start_tick: 0,
+                cert_list: Vec::new(),
+                thread_id: 0,
+            });
+        assert!(
+            host.state.threads.is_empty(),
+            "无线程注册 ⇒ regen 轮询零访合成条目"
+        );
+        assert!(
+            host.state.entries[0].cert_list.is_empty(),
+            "cert_list 空 ⇒ bind_new_certificates 零触合成条目"
+        );
+        struct PanickingSink;
+        impl crate::mongen::MonsterSink for PanickingSink {
+            fn map_size(&self, _: &str) -> Option<(i32, i32)> {
+                panic!("regen 触到合成条目面（map_size）⇒ 隔离破")
+            }
+            fn cell_walkable_ignore_actors(&self, _: &str, _: i32, _: i32) -> bool {
+                panic!("regen 触到合成条目面（cell_walkable）⇒ 隔离破")
+            }
+            fn can_walk(&self, _: &str, _: i32, _: i32) -> bool {
+                panic!("regen 触到合成条目面（can_walk）⇒ 隔离破")
+            }
+            fn budget_drops(
+                &mut self,
+                _: &mut mir2_shared::rng::RandomNumber,
+                _: &str,
+            ) -> (i32, Vec<mir2_world_bevy::combat::DropItem>) {
+                panic!("regen 触到合成条目面（budget_drops）⇒ 隔离破")
+            }
+            fn spawn_monster(&mut self, _: &crate::mongen::MonsterSpawnRequest) -> Option<i32> {
+                panic!("regen 触到合成条目面（spawn_monster）⇒ 隔离破")
+            }
+        }
+        let mut sink = PanickingSink;
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut clock = || 1_000_i32;
+        let mut can_create = |_: &str| true;
+        let table = MonsterTable::new(Vec::new());
+        let decisions = host.step(
+            1_000,
+            0,
+            &mut rng,
+            &mut clock,
+            &mut can_create,
+            &mut sink,
+            &table,
+        );
+        assert!(
+            decisions.is_empty(),
+            "合成条目零轮询 ⇒ 一轮 step 零决策（实得 {:?}）",
+            decisions
+        );
+    }
+
     /// **MG-34 帧面接线 C**：`BreakCrazyMode` 的 `RefNameColor` **只在** CrazyMode 为真时发。
     #[test]
     fn break_crazy_mode_emits_namecolor_only_when_crazy() {
