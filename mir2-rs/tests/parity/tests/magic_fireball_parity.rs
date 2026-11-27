@@ -202,10 +202,15 @@ fn verify_slave_family_rng(
             }
         }
         "summon_ok" => {
-            if g_rng.len() != SLAVE_CTOR_DRAWS + 1 {
+            // **MG-24 撤 DEV-MG-24-RNGCOUNT（2026-11-27）**：C# 替身升级为 oracle 真子类构造
+            // （WhiteSkeleton→AtMonster / ElfMonster 族）后两侧 9/8 抽全同形 ⇒ 值面全开。
+            // **位数硬断言（opc-27 要求）**：golden 长度必须恰等于调用方声明的
+            // `declared_bounds.len()`（skeleton/angel=9、sinsu=8）——错位即红，非「取最大」。
+            if g_rng.len() != declared_bounds.len() {
                 errs.push(format!(
-                    "[{label}] golden `Rng` 抽数 {} ≠ 声明形态（5 ctor + 1 训练尾）：{g_rng:?}",
-                    g_rng.len()
+                    "[{label}] golden `Rng` 抽数 {} ≠ 声明形态 {}（ctor 5 + 生产差 + 1 训练尾）：{g_rng:?}",
+                    g_rng.len(),
+                    declared_bounds.len()
                 ));
             }
             if r_bounds.len() != r_rng.len() {
@@ -219,25 +224,12 @@ fn verify_slave_family_rng(
                 errs.push(format!(
                     "[{label}] Rust 抽样形态变了：bounds={r_bounds:?}，声明={declared_bounds:?}（抽数/调用序变化须显式重声明，见 DEV-MG-24-RNGCOUNT）"
                 ));
-            } else if r_bounds[..SLAVE_CTOR_DRAWS] != SLAVE_CTOR_BOUNDS {
+            }
+            if r_bounds.len() >= SLAVE_CTOR_DRAWS && r_bounds[..SLAVE_CTOR_DRAWS] != SLAVE_CTOR_BOUNDS {
                 errs.push(format!("[{label}] 前 5 抽不是造怪 ctor 块：{r_bounds:?}"));
             }
-            for (i, g) in g_rng.iter().take(SLAVE_CTOR_DRAWS).enumerate() {
-                let r = r_rng.get(i);
-                if r != Some(g) {
-                    errs.push(format!(
-                        "[{label}] RNG[{i}] 不等（ctor 块）：golden={g} rust={r:?}"
-                    ));
-                }
-            }
-            eprintln!(
-                "[{label}] RNG：ctor {}/{} 抽逐值；台账 {} 抽（golden {} 抽），装置差 {} 抽（DEV-MG-24-RNGCOUNT）",
-                SLAVE_CTOR_DRAWS,
-                g_rng.len().min(SLAVE_CTOR_DRAWS),
-                r_rng.len(),
-                g_rng.len(),
-                r_rng.len().saturating_sub(g_rng.len())
-            );
+            // 值面全开：逐位（ctor 5 + 生产差 + 尾）两侧逐值——训练尾值面自本批解锁。
+            errs.extend(verify_rng_values(label, gcase, rust));
         }
         other => errs.push(format!(
             "[{label}] 未声明 RNG 口径的造怪支 `{other}`——新支必须显式给出判据（fail-closed）"
