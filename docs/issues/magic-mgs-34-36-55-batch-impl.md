@@ -91,7 +91,7 @@
 - **驱动**：读输入（`UserMagicLevel`、`CasterMcNoClamp`、安全区开关、预占格）→ 执行 → ledger 读 `world.fire_burn_events`；
   比较面按 `registered` 过滤或在界内保证全 registered（越界格事件仍进表 = **BUG-REPLICA 3，
   同构复刻已证 + 守卫牙钉住（2026-11-27）**：world-bevy 守卫断言
-  `fire_wall_oob_cell_event_still_registered_replica`——oracle 活行为（`Envirnoment.cs:1344`
+  `fire_wall_oob_cell_event_still_registered_replica`——oracle 活行为（`src/M2Server/Maps/Envirnoment.cs:1344`
   GetCellInfo OOB ⇒ success=false ⇒ GetEvent ⇒ null ⇒ 判空门过 ⇒ AddEvent）+ Rust 同构
   （add_fire_burn_event_impl 无界检查）+ 部署不可达（0.map 700×700 实测边框 2796 格全
   HighWall、可走边框格=0 ⇒ 真图施法者无法站边角）；三段论证详见守卫断言注释）。

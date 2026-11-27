@@ -13139,7 +13139,7 @@ mod tests {
     // **MG-36③ 守卫牙（BUG-REPLICA 3 保真钉）**：越界格火墙事件**仍入表**——
     // 三段定性：① oracle 活行为（`Envirnoment.GetCellInfo` OOB/Invalid ⇒ `success=false`
     // ⇒ `Envir.GetEvent` 返回 null ⇒ `MagMakeFireCross` 判空门过 ⇒ `AddEvent`，
-    // `Envirnoment.cs:1344/1352-1364` + `MagicManager.cs:1069-1102`——代码无注释停用，
+    // `src/M2Server/Maps/Envirnoment.cs:1344/1352-1364` + `src/M2Server/Magic/MagicManager.cs:1069-1102`——代码无注释停用，
     // 与 31 盾「写点已注释」不同源）；② Rust 同构（`add_fire_burn_event_impl` 无界检查、
     // `FireBurnEvent{x: i32}` 直存 = faithful 复刻，本断言即证）；③ 部署不可达（0.map
     // 实测 700×700 边框 2796 格全 HighWall、可走边框格=0，`Valid == (Attribute == Walk)`
