@@ -92382,6 +92382,26 @@ SendRefMsgRange=15
             rig.world.entities.get(clone_id).is_some(),
             "克隆体必须已落库"
         );
+        // **MG-55（面① AOI/隐藏）**：克隆体出生后跑生产 `search_view_range`——oracle 克隆体
+        // `FixedHideMode=true`（PlayObject ctor `:993`；克隆体 ctor 直 `AddMapObject` 绕过清除
+        // ⇒ 保持）⇒ 旁观者视野**不含克隆体**。修复前（实体未置位）⇒ 扫描含克隆体 ⇒ 本断言红
+        // =「缺口真实存在」的现状证明。
+        for (who, oid) in [
+            ("obs_in", fireball_actor(&rig, "obs_in")),
+            ("obs_out", fireball_actor(&rig, "obs_out")),
+        ] {
+            rig.world.search_view_range_now(oid);
+            let sees_clone = rig
+                .world
+                .entities
+                .get(oid)
+                .map(|e| e.visible_actors.iter().any(|v| v.target == clone_id))
+                .unwrap_or(false);
+            assert!(
+                !sees_clone,
+                "[{stem}/{label}] {who} 的生产视野不得含克隆体（oracle FixedHideMode=true ⇒ AOI 门剔除；实得含 ⇒ 缺口在）"
+            );
+        }
         let clone_dir = rig.world.entities.get(clone_id).unwrap().ai.dir;
         let clone_display = rig.displays.get(clone_id).expect("克隆体展示必须登记");
         let cf = u32::try_from(clone_display.feature).expect("feature 必须非负");
