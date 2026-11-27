@@ -13136,6 +13136,34 @@ pub struct FloorItemView {
 
 #[cfg(test)]
 mod tests {
+    // **MG-36③ 守卫牙（BUG-REPLICA 3 保真钉）**：越界格火墙事件**仍入表**——
+    // 三段定性：① oracle 活行为（`Envirnoment.GetCellInfo` OOB/Invalid ⇒ `success=false`
+    // ⇒ `Envir.GetEvent` 返回 null ⇒ `MagMakeFireCross` 判空门过 ⇒ `AddEvent`，
+    // `Envirnoment.cs:1344/1352-1364` + `MagicManager.cs:1069-1102`——代码无注释停用，
+    // 与 31 盾「写点已注释」不同源）；② Rust 同构（`add_fire_burn_event_impl` 无界检查、
+    // `FireBurnEvent{x: i32}` 直存 = faithful 复刻，本断言即证）；③ 部署不可达（0.map
+    // 实测 700×700 边框 2796 格全 HighWall、可走边框格=0，`Valid == (Attribute == Walk)`
+    // 规则 mapfile.rs:9-10/20 ⇒ 真图施法者无法站边角 ⇒ 面不可达）。**防未来有人给
+    // 登记加界检查当 bug 修——那会偏离 oracle。**
+    #[test]
+    fn fire_wall_oob_cell_event_still_registered_replica() {
+        let mut world = crate::World::new(32, 32);
+        world.clock_ms = 1_000;
+        // OOB 坐标 (-1, 5)：oracle `GetEvent(-1, 5)` ⇒ null ⇒ 判空门过 ⇒ 入表。
+        world.add_fire_burn_event(1, 0, -1, 5, 6, 3_000);
+        world.add_fire_burn_event(1, 0, -1, 5, 6, 3_000);
+        assert_eq!(
+            world
+                .sim
+                .fire_burn_events
+                .iter()
+                .filter(|e| e.x == -1 && e.y == 5)
+                .count(),
+            2,
+            "越界格事件必须仍入表且不去重（BUG-REPLICA 3 保真：oracle Envir.GetEvent OOB ⇒ null ⇒ 判空门过 ⇒ AddEvent，Envirnoment.cs:1344；存储表 = fire_burn_events、查表门 event_at 是 Envir.GetEvent 镜像本就应查不到 OOB；登记加界检查/去重 = 偏离 oracle）"
+        );
+    }
+
     use super::*;
     use crate::entity::{EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 

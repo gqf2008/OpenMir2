@@ -89,7 +89,12 @@
   否则 rc=2（把"格不可用"从"去重支"里摘出来）。预占用 `ET_FIRE` + `ContinueTime=1`。记录
   **只** `EventType/nX/nY/ContinueTime/Damage`（不记 `RunTick`/时间戳，`GetTickCount` 派生）。
 - **驱动**：读输入（`UserMagicLevel`、`CasterMcNoClamp`、安全区开关、预占格）→ 执行 → ledger 读 `world.fire_burn_events`；
-  比较面按 `registered` 过滤或在界内保证全 registered（Rust 有"越界格事件仍进表"的 BUG-REPLICA 3）。
+  比较面按 `registered` 过滤或在界内保证全 registered（越界格事件仍进表 = **BUG-REPLICA 3，
+  同构复刻已证 + 守卫牙钉住（2026-11-27）**：world-bevy 守卫断言
+  `fire_wall_oob_cell_event_still_registered_replica`——oracle 活行为（`Envirnoment.cs:1344`
+  GetCellInfo OOB ⇒ success=false ⇒ GetEvent ⇒ null ⇒ 判空门过 ⇒ AddEvent）+ Rust 同构
+  （add_fire_burn_event_impl 无界检查）+ 部署不可达（0.map 700×700 实测边框 2796 格全
+  HighWall、可走边框格=0 ⇒ 真图施法者无法站边角）；三段论证详见守卫断言注释）。
 - **比较器**：按 `(x,y)` 排序后逐格比；`continue_ms == time*1000`（由输入推导）；`safe_zone_reject` + `red_sysmsg`；`drain_hit_cap==false`。
 
 ### 2.4 止损线
