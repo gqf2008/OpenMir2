@@ -16914,6 +16914,8 @@ fn handle_move_cmd(
             }
             if route == mir2_world_bevy::RouteCheck::Switched {
                 // 帧序：换图簇（633/634）必须先于 SM_TURN（oracle `Walk` 尾段才发移动/转身帧）。
+                // **IT-09..13（2026-11-27）**：`game_time` 经测试缝（cfg(test) 线程本地）；
+                // 生产行为不变（未设缝 ⇒ `game_time_now()`，与旧 `drain_map_change` 等价）。
                 drain_map_change(world, online, gates, displays, registry);
             }
             // 换图后坐标取新值（oracle 用改后的 `CurrX/CurrY` 发 `RM_TURN`）。
@@ -85453,9 +85455,16 @@ SendRefMsgRange=15
                 // ③ 实测 golden 的 `54`/`766` 两条 `tail` 都是 `''` ⇒ 与"装置没读 MapInfo"一致。
                 // ⇒ 这里填 `""` 是**与 golden 同源**，不是"漏读配置"；将来若装置开始读 MapInfo，
                 //    本处要同步改成同一个来源，否则 54 的尾串会与 golden 比不过。
-                desc: String::new(),
+                // **IT-09/10/11/13 强度缺口点亮（2026-11-27，两侧同步批）**：占位→真值
+                //（C# 装置同批设 `env.Flag`/`env.MapDesc`，见 golden 重出批）。
+                desc: "0".to_string(),
                 server_index: 0,
-                flag: mir2_envir::mapinfo::MapInfoFlag::default(),
+                flag: mir2_envir::mapinfo::MapInfoFlag {
+                    fight_zone: true,
+                    music: true,
+                    music_id: 7,
+                    ..mir2_envir::mapinfo::MapInfoFlag::default()
+                },
             }],
         );
         // **注册表自检**：`HomeMap="0"` 靠 `registry.id_of("0")` 解析；查不到就会静默"不移动"
@@ -88285,6 +88294,19 @@ SendRefMsgRange=15
                     );
                 }
             }
+            // **IT-09..13（2026-11-27）**：807 的 `series=MakeWord(Dir, Light)` 输入从占位→真值
+            //（golden：caster 实际 `Dir=2`（GetNextDirection 实算）、`Light=5`；dir 走实体活值、
+            // light 走展示表快照 ⇒ 两者都要落）。634 的 DayBright 桶钉 3（golden `Bright=3`）。
+            {
+                if let Some(e) = rig.world.entities.get_mut(rig.caster) {
+                    e.ai.dir = 2;
+                }
+                if let Some(d) = rig.displays.get(rig.caster).cloned() {
+                    let mut d2 = d;
+                    d2.light = 5;
+                    rig.displays.set(rig.caster, d2);
+                }
+            }
             rig.registry = Some(registry);
             // **21 支特有的装置前提**（与 `TeleportRig` 同路）：`SpaceMove → switch_map_space →
             // sessions.get(chr_name)` 要求 caster 在 `world.sessions` 里 `InWorld`、已绑 `actor_id`、
@@ -88526,7 +88548,16 @@ SendRefMsgRange=15
                 &rig.gates,
                 &rig.displays,
                 rig.registry.as_ref(),
-                u8::try_from(bright).expect("map_bright 必须落在 0..=3"),
+                // **IT-09..13（2026-11-27）**：`DayBright()` 的输入 = 施法者 `Bright`（fixture
+                // `caster_bright`，C# 装置同批设 3）；`map_bright`（世界钟静态 0）不再喂这一帧。
+                u8::try_from(
+                    golden_case_for(stem, label)["Fixture"]["caster_bright"]
+                        .as_u64()
+                        .unwrap_or_else(|| {
+                            panic!("[{stem}/{label}] golden 缺 Fixture.caster_bright")
+                        }),
+                )
+                .expect("caster_bright 必须落在 0..=3"),
             );
         }
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
