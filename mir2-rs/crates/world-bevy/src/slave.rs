@@ -2693,6 +2693,14 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     e.map_binding.add_to_mapped = out.created;
     // `PlayCloneObject.cs:12` `Dir = GetBackDir(playObject.Dir)` 写的是**实体** `BaseObject.Dir`
     // ⇒ `Entity.ai.dir`（AOI 出现帧/后续 `Turn`/存档都读它）；展示表只是投影。
+    // **MG-55（面① AOI/隐藏）**：`FixedHideMode = true`（oracle `PlayObject.cs:993` ctor 置位；
+    // 链：BaseObject ctor `:402` false → PlayObject ctor `:993` true → 真玩家经进图序列清除
+    // （`BaseObject.cs:2474` 等）→ **克隆体 ctor 直 `AddMapObject` 绕过清除 ⇒ 保持 true**）。
+    // 生产 AOI 门（`aoi.rs:337/357/556/2286` = oracle `:3127`/:3214 同构）据此把克隆体从
+    // 旁观者视野剔除；出生 RM_TURN 自投递零帧是同一机制（golden 负向牙已有）。
+    e.fixed_hide_mode = true;
+    // `PlayCloneObject.cs:12` `Dir = GetBackDir(playObject.Dir)` 写的是**实体** `BaseObject.Dir`
+    // ⇒ `Entity.ai.dir`（AOI 出现帧/后续 `Turn`/存档都读它）；展示表只是投影。
     e.ai.dir = out.dir;
     world.entities.insert(e);
     Some(CloneSpawn {
