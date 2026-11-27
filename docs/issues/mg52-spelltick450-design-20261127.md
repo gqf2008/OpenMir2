@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | ① MP 数值 | 已覆盖 | oracle `case SKILL_43`（`src/M2Server/Player/PlayObject.Attack.cs:1263-1279`）不调 `GetSpellPoint`/`DamageSpell` ⇒ toggle 构造性恒不扣 MP；golden `warr-43.json` `Fixture.caster_mp=100` 已进比对面；Rust `warr_43_behavior_side_effects` 断言 `mp_after == mp_before == caster_mp`。清单「MP 数值未比对」实为已比对，oracle 值即「不扣」。 |
 | ② 限速门 | 同构缺省（oracle 死代码） | `CloseSpeedHackCheck` 构造默认 `true`（`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1920`）；`GameSvrConf` 仅构造实例化、无文件加载（`src/Modules/SystemModule/SystemShare.cs:191` `Config = new GameSvrConf()`）；字段全仓无配置读点 ⇒ 门条件 `!CloseSpeedHackCheck` 恒假。`CheckActionStatus`（`src/M2Server/Player/PlayObject.Base.cs:2662-2760`）、`MagicAttackTick`/`MagicAttackInterval`/`MagicAttackCount`/`OverSpeed` 踢线/`SendSelfDelayMsg` 延迟重投全部只被死门读写 ⇒ **不可达**。43 ∉ `IsWarrSkill`{3,4,7,12,25,26,27,34,38}（`src/Modules/SystemModule/Const/MagicConst.cs:16-166`）——若门活着会适用 43，但门在本 fork 不可达。窗口里生效的超速踢来自 GameGate 进程自己的 `SessionSpeedRule`（另一二进制、另一机制）。 |
-| ② `SpellTick -= 450` | **未覆盖，需接线** | `src/M2Server/Player/PlayObject.Attack.cs:1109-1110`，在死门块之外、守卫（`:1057-1070`）之后、`switch` 之前**无条件执行**；语义 = 施法把回蓝 accumulator（`BaseObject.SpellTick`）倒拨 450（`max(0,…)`），可观测面 = 回蓝阈值（`SpellFillTime` 默认 800，`GameSvrConf.cs:1324`）穿越推后。Rust `stamina.rs` 已有 attack(`-100/-30`)/walk(`-10`)/run(`-60/-10`)/struck(清零) 全套变体与 50ms 重放模型，唯独无 spell 变体、无调用点。 |
+| ② `SpellTick -= 450` | **未覆盖，需接线** | `src/M2Server/Player/PlayObject.Attack.cs:1109-1110`，在死门块之外、守卫（`:1057-1070`）之后、`switch` 之前**无条件执行**；语义 = 施法把回蓝 accumulator（`BaseObject.SpellTick`）倒拨 450（`max(0,…)`），可观测面 = 回蓝阈值（`SpellFillTime` 默认 800，`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1324`）穿越推后。Rust `stamina.rs` 已有 attack(`-100/-30`)/walk(`-10`)/run(`-60/-10`)/struck(清零) 全套变体与 50ms 重放模型，唯独无 spell 变体、无调用点。 |
 | ③ MBo43Kill 消费 | 已覆盖（同构缺省） | oracle 全仓读点仅 2 处：toggle 判定（`PlayObject.Attack.cs:1256`）+ 开关文案（`PlayObject.Base.cs:643`）；攻击结算零读点（大小写变体已扫）。Rust 写点在 `warrskill` 43 臂、无消费者 = 同构；`MagicState::mbo43_kill` 字段注释已登记「同样无消费者」。 |
 
 handoff 风险三条的归宿：#1（限速面 golden 不可达）坐实且升级——生成器
@@ -39,10 +39,10 @@ handoff 风险三条的归宿：#1（限速面 golden 不可达）坐实且升�
    与 8 条独立 case 臂**同价**：每次通过守卫的 CM_SPELL 恰扣一次，与臂内成败无关
    （26 蓝不足 639、default 臂失败，-450 都已发生）。
 3. `DoSpell` 侧无第二处写点：全仓 `SpellTick` 写点枚举（grep 全量）——
-   回复循环 `BaseObject.Base.cs:42/57/78/80`；挖矿 `Attack.cs:899`(-50)；
+   回复循环 `BaseObject.Base.cs:42/57/78/80`；挖矿 `src/M2Server/Player/PlayObject.Attack.cs:899`(-50)；
    攻击 `:956`(-100)；骑跑 `:1042`(-10)；**施法 `:1109`(-450)**；跑步 `:1353`(-10)；
    饥饿 `PlayObject.Message.cs:616`(-10)；受击清零 `:1588`；
-   buff 清零 `ActorBuffSystem.cs:254`；怪物 AI 计时 `FireballMonster.cs`（异义复用）。
+   buff 清零 `src/M2Server/ActorBuffSystem.cs:254`；怪物 AI 计时 `FireballMonster.cs`（异义复用）。
    **`MagicManager.cs` 与 `PlayObject.Base.cs`（`PlayObject.DoSpell` 包装层
    `:1505-1531`）零出现**。
 4. Rust 侧人口一致：`magicwire::is_spell_ident` 仅 `CM_SPELL`（`CM_MAGICKEYCHANGE`
