@@ -15,10 +15,13 @@
 //!   `ClientHorseRunXY`（`:970-1040`）。
 //! - `M2Share.GetNextDirection`（`src/M2Server/M2Share.cs:299-378`）：由 `(sx,sy) → (dx,dy)` 求 8 向。
 //!
-//! **本片未接（登记，别按常识补）**：限速/超速（`CheckActionStatus` + `MoveTick`/`WalkIntervalTime`/
-//! `RunIntervalTime` + `MoveCount`/`OverSpeedCount`/`BoEmergencyClose`）、失败支的
+//! **本片未接（登记，别按常识补）**：失败支的
 //! `SendRefMsg(RM_MOVEFAIL)`（需 `sm_movement_fail` 编码器）、`IsCanWalk`/`IsCanRun` 的状态位面、
 //! `SpaceMoved`（地图路由换图）。
+//! 其中**限速/超速**（`CheckActionStatus` + `MoveTick`/`WalkIntervalTime`/`RunIntervalTime` +
+//! `MoveCount`/`OverSpeedCount`/`BoEmergencyClose`）= **oracle 死代码**（MG-52 对账定案
+//! 2026-11-27：`CloseSpeedHackCheck` 缺省 `true` 且无配置读点 ⇒ 门恒假，见 `magicwire`
+//! 模块头）⇒ Rust 同构缺省不接。
 //!
 //! **已接（卡 `openmir2-m3-scoped-diff-ability`）**：成功支的体力/魔力点消耗——
 //! `ClientWalkXY` 的 `HealthTick -= 10`（`PlayObject.Attack.cs:1424`）由 `handle_move_cmd` 调

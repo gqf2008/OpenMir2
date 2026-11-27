@@ -142,6 +142,22 @@ impl Stamina {
         self.spell_tick = (self.spell_tick - 10).max(0);
     }
 
+    /// 施法包装层（`src/M2Server/Player/PlayObject.Attack.cs:1109-1110`）：
+    /// `SpellTick -= 450`、`SpellTick = max(0, SpellTick)`。
+    ///
+    /// 作用域 = **全部 CM_SPELL 施法**：`ClientSpellXY` 全仓唯一调用点是 `CM_SPELL`
+    /// 处理器（`PlayObject.Message.cs:1340`），该减量位于守卫（`:1057-1070`）之后、
+    /// `switch` 之前 ⇒ 8 条独立 case 臂与 `default` 支（`MagicManager.DoSpell` 法术）
+    /// 同价、每次施法恰一次、与臂内成败无关（26 蓝不足 639 / default 臂失败都已扣；
+    /// 全仓 `SpellTick` 写点枚举里 `MagicManager.cs` 与 `PlayObject.Base.cs:1505-1531`
+    /// 零出现 ⇒ 无第二处减量）。只动 `spell_tick`，不触 `health_tick`。
+    /// 限速门家族（`CheckActionStatus` + `MagicAttackTick`）为 oracle 死代码：
+    /// `CloseSpeedHackCheck` 缺省 `true` 且无配置读点 ⇒ 门恒假，同构缺省不接
+    /// （MG-52 对账定案，设计 `docs/issues/mg52-spelltick450-design-20261127.md`）。
+    pub fn on_spell_cast(&mut self) {
+        self.spell_tick = (self.spell_tick - 450).max(0);
+    }
+
     /// 受击（`PlayObject.Message.cs:1587-1588`）：`HealthTick = 0; SpellTick = 0`。
     pub fn on_struck(&mut self) {
         self.health_tick = 0;

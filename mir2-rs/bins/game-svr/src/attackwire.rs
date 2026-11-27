@@ -24,10 +24,11 @@
 //!
 //! # 登记（未接，不静默）
 //!
-//! - **限速/超速**（`CheckActionStatus` + `AttackTick`/`HitIntervalTime`/`HitSpeed` +
-//!   `AttackCount`/`OverSpeedCount`/`BoEmergencyClose`）与 `!boLateDelivery` 支：本片把
-//!   `CloseSpeedHackCheck` 视作**生效时的直通**（等价于 `boLateDelivery`），**不实现限速**。
-//!   影响面：oracle 在限速不命中时会改发 `RM_MOVEFAIL` 或延时重投，本片恒回 `+GD`（登记）。
+//! - **限速/超速（MG-52 对账定案 2026-11-27）**：`CheckActionStatus` + `AttackTick`/
+//!   `HitIntervalTime`/`HitSpeed` + `AttackCount`/`OverSpeedCount`/`BoEmergencyClose` =
+//!   **oracle 死代码**（`CloseSpeedHackCheck` 缺省 `true` 且无配置读点 ⇒ 门恒假，
+//!   `GameSvrConf.cs:1920`/`SystemShare.cs:191`，见 `magicwire` 模块头）⇒ Rust 同构
+//!   缺省不接。影响面不变：本片恒回 `+GD`，与部署 oracle（门不可达）行为一致。
 //! - **技能/装备态**（`GetHitMode` 的 `PowerHit`/`FireHitSkill`/`MagicArr[SKILL_ERGUM|BANWOL|
 //!   CROSSMOON]` 条件）：技能层（`UserMagic`/`MagicArr`）未移植 ⇒ 这些条件恒假，模式 3/4/5/7/8
 //!   一律回落 `RM_HIT`（与「无技能角色」的 oracle 结果一致）。

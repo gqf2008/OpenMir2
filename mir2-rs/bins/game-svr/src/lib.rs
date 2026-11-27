@@ -18703,7 +18703,9 @@ const B5_ATT_POWER_UP_SECOND: &[u8] = b"\xc3\xeb\x20";
 /// `SKILL_TAMMING` 支（`MagicManager.cs:394-397`）的 `IsProperTarget && !Animal` 门 →
 /// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
 /// `game_svr::slave` 模块头；46 分身已接（[`game_svr::slave::cast_clone_spell`] + 下方 46 支）。
-/// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
+/// 效果体限速 = oracle 死代码定性（`CloseSpeedHackCheck` 缺省 true 且无配置读点 ⇒
+/// 门恒假，见 `magicwire` 模块头登记）；`SpellTick -= 450` 已接（MG-52，守卫后接线）；
+/// MP 消耗已接（`PlayObject.DoSpell` 包装层片）。
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
@@ -18839,6 +18841,16 @@ fn handle_spell_cmd_with_magic(
             req.magic_id
         );
         return;
+    }
+    // oracle `ClientSpellXY`（`PlayObject.Attack.cs:1109-1110`）：守卫后、（限速门块
+    // `:1071-1107`，oracle 死代码，见 `magicwire` 模块头登记）之后、`switch` 之前
+    // **无条件**执行 `SpellTick -= 450; SpellTick = _MAX(0, SpellTick)`。作用域 =
+    // 全部 CM_SPELL 施法：8 条 case 臂与 `default` 支（DoSpell 法术）同价、每次施法
+    // 恰一次、与臂内成败无关；`ClientSpellXY` 唯一调用点是 CM_SPELL 处理器
+    // （`PlayObject.Message.cs:1340`）⇒ 本接线点人口与 oracle 一致（MG-52，设计
+    // `docs/issues/mg52-spelltick450-design-20261127.md` §2）。
+    if let Some(sg) = ground_sessions.get_mut(chr_name) {
+        sg.stamina.on_spell_cast();
     }
     // 卡 `openmir2-warrskill-entry` 要求 4：`ClientSpellXY` 的 **6 个战士技独立 `case`**
     // （`PlayObject.Attack.cs:1120/1136/1168/1187/1218/1234`）——它们**不进 `default`、不调
