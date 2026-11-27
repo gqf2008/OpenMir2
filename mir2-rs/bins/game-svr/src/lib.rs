@@ -86567,13 +86567,6 @@ SendRefMsgRange=15
             .into_iter()
             .map(|(s, b)| (s, b, 0_i64))
             .collect();
-        // **MG-41**：回召 807（`RM_SPACEMOVE_SHOW2`）宿主编码——golden due 0 ⇒ 施法批。
-        let ref_snapshot: Vec<(u16, Vec<i32>)> = rig
-            .world
-            .pending_monster_ref_msgs
-            .iter()
-            .map(|m| (m.ident, m.recipients.clone()))
-            .collect();
         // pet_cfg 仅喂 656 色面（807 臂不读）⇒ 缺省即可（sinsu 本叶无色面判据）。
         drain_monster_ref_msgs(
             &mut rig.world,
