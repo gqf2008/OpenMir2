@@ -5083,7 +5083,9 @@ impl World {
     /// `nSec = GetPower(GetRPow(MC) + 15)`（取数顺序：`GetRPow(MC)` → `GetPower`，见
     /// [`crate::magic::power_shield`]）；随后 `AddBuff(MagicShield, nSec, nSec)` + 置 `MagicShield`。
     /// 返回 `nSec`（供 `boTrain`/测试）。`MagBubbleDefenceUp` 的 `StatusTimeArr[BubbleDefenceUP] != 0`
-    /// 早退门读的是**旧机制**（本骨架未建模 ⇒ 恒 0 ⇒ 不早退，登记）。
+    /// 早退门读的是**旧机制**——且 oracle 自身已把该计时器写点注释停用
+    /// （`CharacterObject.cs:104-105`）⇒ oracle 侧恒 0 ⇒ 恒不早退；本骨架「恒 0」与
+    /// oracle 现状逐字同构（非缺口；`DamageBubbleDefence` 随之恒 no-op，登记）。
     pub fn cast_shield_spell(
         &mut self,
         actor_id: i32,

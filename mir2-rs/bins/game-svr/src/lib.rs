@@ -18361,8 +18361,11 @@ fn flush_hitter_name_colors(
 /// - `bo_spell_fire = true`：三个 case 都不置 false；
 /// - `bo_train`：14/15 = `MagMakeDefenceArea(...) > 0`（case 内实际命中数）；
 ///   31 = **true**——`CharacterObject.cs:96-114` 的 `MagBubbleDefenceUp` 在
-///   `StatusTimeArr[BubbleDefenceUP] == 0` 时恒返回 `true`，而本骨架未建模该状态（恒 0）。
-///   用 `cast_shield_spell` 的 `n_sec` 当 `bo_train` 会在 `n_sec == 0` 时漏掉训练抽；
+///   `StatusTimeArr[BubbleDefenceUP] == 0` 时恒返回 `true`。**该计时器恒 0 是 oracle
+///   现状而非缺口**：oracle 的写点已注释停用（`CharacterObject.cs:104-105`，旧机制），
+///   时长只走 `AddBuff(MagicShield, nSec, nSec)` ⇒ 全仓无有效写点（`DamageBubbleDefence`
+///   `BaseObject.cs:2044-2058` 的 :126/:141 调用随之恒 no-op）⇒ 本骨架「恒 0」与 oracle
+///   逐字同构。用 `cast_shield_spell` 的 `n_sec` 当 `bo_train` 会在 `n_sec == 0` 时漏掉训练抽；
 /// - 目标 ActorId 读 `:160-163` **死亡归一**后的值；坐标为 snap 后的 `tx/ty`；
 /// - `FastTrain` 未装载 ⇒ `false`（与既有四处同口径登记）。
 ///
