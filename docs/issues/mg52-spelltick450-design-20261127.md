@@ -108,7 +108,7 @@ if let Some(sg) = ground_sessions.get_mut(chr_name) {
    且 `health_tick` 全程不变。
 3. **回蓝推后对照**（可观测面）：`SpellFillTime=800`、预置 `spell_tick=796`；
    A 支不施法 → `stamina_tick` 推进 +100ms（2 个 Run，+4 ⇒ 800 ≥ 800）MP 恢复；
-   B 支先 `on_spell_cast`（796→0）→ 同样 +100ms MP 不动。断言两侧分叉。
+   B 支先 `on_spell_cast`（796-450=346）→ 同样 +100ms MP 不动（350 < 800）。断言两侧分叉。
 4. **互斥面**：`on_spell_cast` 后再 `on_struck` ⇒ 清零照旧（与既有变体共存）。
 
 ### 4.2 集成牙（`warrskill_parity_tests` rig，走全派发）

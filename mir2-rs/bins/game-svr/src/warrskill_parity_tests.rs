@@ -1359,3 +1359,107 @@ fn warr_27_invalid_dir_front_position_is_own_cell() {
         (101, 100)
     );
 }
+
+/// MG-52 集成牙（钉**接线点本体**，非臂内行为）：oracle `ClientSpellXY` 在守卫后、
+/// `switch` 前无条件 `SpellTick -= 450`（`PlayObject.Attack.cs:1109-1110`）——预置
+/// `stamina.spell_tick = 800`，经 `handle_spell_cmd_with_magic` cast 43，断言 350。
+/// 删接线调用 ⇒ 本用例红（800 != 350）。同断言 43 toggle 的 MP 不变式不破
+/// （oracle case 不调 `GetSpellPoint`，恒不扣蓝）。
+#[test]
+fn spell_cmd_wrapper_decrements_stamina_spell_tick_by_450() {
+    let mut world = mir2_world_bevy::World::with_maps(vec![(256, 256)]);
+    let caster = spawn(&mut world, "caster", 100, 100);
+    let bind_now = now_ms();
+    let (bx, by) = world
+        .entities
+        .get(caster)
+        .map_or((100, 100), |e| (e.x, e.y));
+    if let Some(map) = world.maps.get_mut(0) {
+        map.add_map_object(bx, by, mir2_world_bevy::CellType::Play, caster, bind_now);
+    }
+    let mut online: OnlineRegistry = OnlineRegistry::new();
+    online.push(OnlineEntry {
+        account: "caster".to_string(),
+        chr_name: "caster".to_string(),
+        session_id: 1,
+        gate_idx: 0,
+        socket: 901,
+        actor_id: caster,
+    });
+    let mut sessions: std::collections::HashMap<String, SessionGround> =
+        std::collections::HashMap::new();
+    let mut sg = crate::tests::test_session_ground(caster);
+    sg.state.wabil.mp = 100;
+    sg.stamina.spell_tick = 800;
+    sessions.insert("caster".to_string(), sg);
+
+    let mut rec = record::PlayerRecord::default();
+    rec.data.magic = Some(vec![Some(record::MagicRcd {
+        mag_idx: 43,
+        level: 1,
+        magic_key: 0,
+        tran_point: 0,
+    })]);
+    let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+    saves.insert(
+        "caster".to_string(),
+        SavedHuman {
+            account: "uc".to_string(),
+            record: rec,
+            enter_map: "0".to_string(),
+            derived: None,
+        },
+    );
+    let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+    let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+        std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+        magic_id: 43,
+        spell: 20,
+        def_spell: 0,
+        ..Default::default()
+    }]);
+    let catalog = game_svr::ability::StdItemCatalog::new();
+    let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+    let table = game_svr::mongen::MonsterTable::new(Vec::new());
+    let mut displays = downlink::DisplayTable::new();
+
+    handle_spell_cmd_with_magic(
+        game_svr::feature::make_long(101u16, 100u16),
+        43,
+        0,
+        0,
+        "caster",
+        901,
+        &online,
+        &mut world,
+        &mut saves,
+        &mut sessions,
+        &catalog,
+        &magic_table,
+        &pet_cfg,
+        8,
+        None,
+        &table,
+        &mut displays,
+        &gates,
+        1,
+        1,
+        2,
+        None,
+        None,
+        &MsgColors::default(),
+        &game_svr::strings::StringConf::defaults(),
+    );
+
+    let sg = sessions.get("caster").expect("caster session");
+    assert_eq!(
+        sg.stamina.spell_tick, 350,
+        "CM_SPELL 守卫后 ⇒ stamina.SpellTick 800-450=350（oracle Attack.cs:1109-1110）"
+    );
+    assert_eq!(
+        sg.state.wabil.mp, 100,
+        "43 toggle 不扣 MP（oracle case 不调 GetSpellPoint）——接线不得破坏既有不变式"
+    );
+}

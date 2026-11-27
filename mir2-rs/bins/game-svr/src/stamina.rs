@@ -497,4 +497,68 @@ mod tests {
     fn run_interval_is_fifty_ms() {
         assert_eq!(RUN_INTERVAL_MS, 50);
     }
+
+    /// 施法减量·空输入/退化形态（MG-52）：0 减 450 钳 0，不产生负值
+    /// （oracle `SpellTick = _MAX(0, SpellTick)` 原样，`Attack.cs:1110`）。
+    /// 牙（改坏必红）：去掉 `.max(0)` ⇒ 本用例因 i32 下溢 panic 红（debug）。
+    #[test]
+    fn spell_cast_clamps_at_zero_on_empty_accumulator() {
+        let mut st = Stamina::new(0);
+        st.on_spell_cast();
+        assert_eq!(st.spell_tick, 0, "0-450 ⇒ max(0)=0");
+    }
+
+    /// 施法减量·精确值与边界两侧（MG-52）：450/449 两侧都钉；只动 `spell_tick`，
+    /// `health_tick` 不受扰（oracle 只动 SpellTick）。
+    /// 牙（改坏必红）：450→0 ⇒ 全部断言红；450→400 ⇒ 800/500 两支红。
+    #[test]
+    fn spell_cast_subtracts_exactly_450_and_never_touches_health_tick() {
+        for (before, after) in [(800, 350), (500, 50), (450, 0), (449, 0)] {
+            let mut st = Stamina::new(0);
+            st.spell_tick = before;
+            st.health_tick = 77;
+            st.on_spell_cast();
+            assert_eq!(st.spell_tick, after, "spell_tick {before}-450");
+            assert_eq!(st.health_tick, 77, "施法只动 SpellTick，不触 HealthTick");
+        }
+    }
+
+    /// 施法减量·可观测面（MG-52）：施法把回蓝阈值（`SpellFillTime=800`）穿越推后。
+    /// A 支不施法：预置 796，+100ms（2 个 Run，+4）⇒ 800 ≥ 800，MP 恢复 +51（900/18+1）；
+    /// B 支施法：796-450=346，同样 +100ms ⇒ 350 < 800，MP 不动。
+    /// 牙（改坏必红）：删接线调用（`handle_spell_cmd_with_magic` 守卫后）或 450→0
+    /// ⇒ B 支变 A 支，本用例红。
+    #[test]
+    fn spell_cast_delays_mp_recovery_threshold_crossing() {
+        let mut a_w = wabil(100, 800);
+        a_w.max_hp = 100;
+        let mut a = Stamina::new(0);
+        a.replay_cursor = 0;
+        a.spell_tick = 796;
+        let mut changes = Vec::new();
+        let _ = stamina_tick(&mut a, &mut a_w, false, 100, 300, 800, &mut changes);
+        assert_eq!(a_w.mp, 851, "A：796+4=800 ≥ 800 ⇒ 恢复 +51（900/18+1）");
+
+        let mut b_w = wabil(100, 800);
+        b_w.max_hp = 100;
+        let mut b = Stamina::new(0);
+        b.replay_cursor = 0;
+        b.spell_tick = 796;
+        b.on_spell_cast();
+        assert_eq!(b.spell_tick, 346, "796-450=346（未到钳制界，不减到 0）");
+        let mut changes2 = Vec::new();
+        let _ = stamina_tick(&mut b, &mut b_w, false, 100, 300, 800, &mut changes2);
+        assert_eq!(b_w.mp, 800, "B：346+4=350 < 800 ⇒ 不恢复（回蓝推后）");
+    }
+
+    /// 与既有变体共存（MG-52）：施法后再受击 ⇒ 清零照旧（`on_struck` 语义不受影响）。
+    #[test]
+    fn spell_cast_then_struck_resets_to_zero() {
+        let mut st = Stamina::new(0);
+        st.spell_tick = 800;
+        st.on_spell_cast();
+        assert_eq!(st.spell_tick, 350);
+        st.on_struck();
+        assert_eq!((st.health_tick, st.spell_tick), (0, 0));
+    }
 }
