@@ -48,9 +48,17 @@
 //! 逐条核对后的**残留**（不要按常识补）：
 //! - **27 真支**：推挤移动 / `SM_RUSH` / `SM_STRUCK` / 自伤 / 训练尾 `Random(3)+1` 未建模
 //!   （见 `warrskill.rs` 文件头「已登记偏差（本模块）」）。
-//! - **8 支共用的包装层**：动作限速（`CheckActionStatus` + `MagicAttackTick`/`MagicAttackInterval`/
-//!   `MagicAttackCount`/`OverSpeedCount`/`BoEmergencyClose`）与 `SpellTick -= 450` 未接
-//!   （与 `attackwire`/`movewire` 同源登记）。
+//! - **包装层限速（MG-52 对账定案 2026-11-27）**：动作限速（`CheckActionStatus` +
+//!   `MagicAttackTick`/`MagicAttackInterval`/`MagicAttackCount`/`OverSpeedCount`/
+//!   `BoEmergencyClose`/`SendSelfDelayMsg` 延迟重投）= **oracle 死代码**——
+//!   `CloseSpeedHackCheck` 构造缺省 `true`（`GameSvrConf.cs:1920`）且 `GameSvrConf`
+//!   仅构造实例化、无文件加载（`SystemShare.cs:191`）、字段无配置读点 ⇒ 门恒假，
+//!   `ActionTick`/`MagicAttackTick`/`StruckTick` 全族只被死门读写 ⇒ Rust 同构缺省
+//!   不接（实现死代码才是偏离部署 oracle；窗口生效的超速踢是 GameGate
+//!   `SessionSpeedRule`，另一机制）。
+//! - **`SpellTick -= 450`**（`PlayObject.Attack.cs:1109-1110`，守卫后、`switch` 前无条件、
+//!   对 case 臂与 `default` 支同价）**已接**（MG-52）：`stamina::on_spell_cast`，
+//!   接线点在 `handle_spell_cmd_with_magic` 守卫后、臂派发前。
 //! - **`default` 支**（8 支之外）：`Dir = GetNextDirection` + `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）
 //!   已接（片 `openmir2-default-arm-spell-surface`）：`DoSpell` 开头的 `IsWarrSkill`/`MagicAttackRage` 门与
 //!   `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）后**无条件**广播一帧
@@ -63,9 +71,9 @@
 //!   **14/15 已建模**（2026-10-17，`openmir2-spell-shared-tail-p2`：`CheckAmulet(1,1)`/`UseAmulet(1,1)` + 共享尾）。
 //!   技能效果面的向量与用例在 `openmir2-m3-combat-skills-align`（m3cs）的离线片。
 //!
-//! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时
-//! `!boLateDelivery` 限速支**应生效**，本片按**直通**（等价 `boLateDelivery`）并登记（与
-//! `attackwire`/`movewire` 同源登记）。
+//! **`LateDelivery`**：Rust 的入帧路径没有延时重投（`command` 直投）⇒ 恒按 `false` 处理。
+//! MG-52 对账后本条**无行为后果**：oracle `!boLateDelivery` 所守的限速块被
+//! `CloseSpeedHackCheck` 恒 `true` 关死（见上），`boLateDelivery` 取值不改变任何可观测行为。
 //!
 //! **`IsCanSpell`**：oracle 默认 `true`（`PlayObject.cs:960` 初值；`Config.LockSpellAction` 与
 //! `ClientUseItems` 的置位面未移植）⇒ 本片恒 `true`（登记）。
