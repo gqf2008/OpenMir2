@@ -3686,38 +3686,48 @@ fn real_rust_ledger_sinsu_cap_hit() {
         "[{label}] Rng 与 golden 不等（cap_hit 两侧同源 0 抽，逐值比）"
     );
 
-    // 807 = SM_SPACEMOVE_SHOW2 回召帧（**未建模，显式登记不对称断言，不入 keep 多重集**）。
-    // 缺口登记：crates/world-bevy/src/space_move.rs:89「SHOW2 出帧未建模」/ 卡 openmir2-golden-harness-mapmgr。
-    let g807 = frames_by_ident(gcase, 807);
-    let r807 = frames_by_ident(rust, 807);
-    assert_eq!(
-        g807.len(),
-        3,
-        "[{label}] golden 807 应恰 3 条（SM_SPACEMOVE_SHOW2 回召帧）"
-    );
-    for awho in ["caster", "target", "obs_in"] {
-        assert_eq!(
-            g807.iter().filter(|(w, ..)| w == awho).count(),
-            1,
-            "[{label}] golden 807 应在 {awho} 恰 1 条（防 N 条同收件人假绿）"
-        );
-    }
-    for (who, recog, param, tag, series) in &g807 {
-        assert_eq!(
-            (*recog, *param, *tag, *series),
-            (2050, 101, 100, 4),
-            "[{label}] golden 807 ({who}) 字段应为 (recog=2050,param=101,tag=100,series=4)"
-        );
-    }
-    assert_eq!(
-        r807.len(),
-        0,
-        "[{label}] Rust 807 应 0 条（未建模缺口；一旦建模此断言红，须改正常比较并更新口径）"
-    );
+    // **MG-41**：807 = SM_SPACEMOVE_SHOW2 回召帧（已建模，对称逐帧比——807 入 keep 集合）。
+    // oracle 锚：`BaseObject.cs:1137`（`SpaceMove` `nInt==1` ⇒ `SendRefMsg(RM_SPACEMOVE_SHOW2,
+    // Dir, CurrX, CurrY)`；Dir=奴隶自 Dir=`BaseObject.cs:378` ctor 出生缺省 4）；收件人 =
+    // ±SendRefMsgRange（caster/target/obs_in 各 1、obs_out 零=ref 距离语义）。
     // 坐标断言方向：本 case 施法方向 = DIR_RIGHT（cast click=(101,100) → GetNextDirection=东 ⇒ 落点 (cx+1,cy)）；
     // 若 fixture 的 click 改变方向，`(cx+1, cy)` 须改为由 click 派生（勿静默错）。
-    // 帧 17/638/642（含 recog/due_ms_rel）。
-    let keep: &[i64] = &[17, 638, 642];
+    // 帧 17/638/642/807（含 recog/due_ms_rel）。
+    let keep: &[i64] = &[17, 638, 642, 807];
+    // **obs_out 恒零显式断言**（ref 距离语义钉住——不是"恰好没收到"）。
+    for (side, case) in [("golden", gcase), ("rust", rust)] {
+        assert_eq!(
+            frames_by_ident(case, 807)
+                .iter()
+                .filter(|(w, ..)| w == "obs_out")
+                .count(),
+            0,
+            "[{side}/{label}] obs_out 不得收到 807（ref 距离语义）"
+        );
+    }
+    // 807 对称逐帧：两侧各恰 3（caster/target/obs_in 各 1）且五元组逐项相等。
+    for (side, case) in [("golden", gcase), ("rust", rust)] {
+        let f807 = frames_by_ident(case, 807);
+        assert_eq!(
+            f807.len(),
+            3,
+            "[{side}/{label}] 807 应恰 3 条（SM_SPACEMOVE_SHOW2 回召帧）"
+        );
+        for awho in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                f807.iter().filter(|(w, ..)| w == awho).count(),
+                1,
+                "[{side}/{label}] 807 应在 {awho} 恰 1 条（防 N 条同收件人假绿）"
+            );
+        }
+        for (who, recog, param, tag, series) in &f807 {
+            assert_eq!(
+                (*recog, *param, *tag, *series),
+                (2050, 101, 100, 4),
+                "[{side}/{label}] 807 ({who}) 字段应为 (recog=2050,param=101,tag=100,series=4)"
+            );
+        }
+    }
     for who in ["caster", "target", "obs_in", "obs_out"] {
         assert_eq!(
             sent_filter_sinsu(gcase, who, keep),

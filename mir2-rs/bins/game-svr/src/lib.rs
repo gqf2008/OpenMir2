@@ -33131,6 +33131,39 @@ fn drain_monster_ref_msgs(
             }
             continue;
         }
+        // **MG-41**：神兽回召 `SpaceMove(nInt=1)` 的 `RM_SPACEMOVE_SHOW2`（`BaseObject.cs:1137`）。
+        // 收件人支 = `PlayObject.Message.cs:1968-1985`：`SM_SPACEMOVE_SHOW2(807)`，
+        // `MakeMessage(807, ActorId, nParam1=x, nParam2=y, MakeWord(wParam=Dir, Light))` +
+        // 尾 `EncodePacket(CharDesc{Feature=GetFeature(收件人), Status})`（`sMsg` 空 ⇒ 无名尾）。
+        if m.ident == mir2_world_bevy::slave::RM_SPACEMOVE_SHOW2 {
+            let Some(d) = displays.get(m.actor_id) else {
+                continue;
+            };
+            let body = smframe::sm_spacemove_show(
+                mir2_protocol::messages::SM_SPACEMOVE_SHOW2,
+                m.actor_id,
+                u16::try_from(m.n_param1).unwrap_or(0),
+                u16::try_from(m.n_param2).unwrap_or(0),
+                u8::try_from(m.w_param).unwrap_or(0),
+                d.light,
+                &downlink::char_desc(d.feature, d.status),
+                &[],
+            );
+            for target_id in &m.recipients {
+                let Some(t) = online.find_by_actor(*target_id) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "MG-41 回召 807 下行")
+                else {
+                    continue;
+                };
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: t.socket,
+                    body: body.clone(),
+                });
+            }
+            continue;
+        }
         // **T-135**：`StatusChanged()`（`BaseObject.cs:1514` 的
         // `SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")`）⇒
         // `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`）：
@@ -86462,6 +86495,9 @@ SendRefMsgRange=15
         if label == "cap_hit" {
             let mut e = mir2_world_bevy::EntitySpawn::new(0, "神兽".to_string(), 0, 0);
             e.id = preslave_id;
+            // **MG-41**：`ai.dir = 4` = oracle `BaseObject.cs:378` ctor 出生缺省 `Dir = 4`
+            // （RecordingMonster 未覆写 ⇒ 夹具奴隶 Dir=4；回召 807 的 series=MakeWord(Dir,Light) 由此来）。
+            e.ai.dir = 4;
             e.race = 113;
             e.level = 1;
             e.hp = 17;
@@ -86479,6 +86515,26 @@ SendRefMsgRange=15
                 .slave
                 .slave_list
                 .push(sid);
+            // **MG-41**：预置奴隶的展示登记——回召 807 的 body 尾 = 该奴隶的 CharDesc
+            // （`EncodePacket(CharDesc{Feature, Status})`，`PlayObject.Message.cs:1981-1984`）
+            // ⇒ 展示表必须有它的条目（克隆体批同款前置）。夹具怪无装备 ⇒ Status=0；
+            // Feature 先取 0，与 golden 尾解码对表后有差再对齐 oracle 夹具外观源。
+            {
+                let e = rig.world.entities.get(sid).unwrap();
+                rig.displays.set(
+                    sid,
+                    downlink::ActorDisplay {
+                        dir: e.ai.dir,
+                        light: 0,
+                        feature: 0,
+                        feature_ex: 0,
+                        status: 0,
+                        name_color: 0,
+                        show_name: Vec::new(),
+                        mount_id: 0,
+                    },
+                );
+            }
             // 朝向不在此强制：实际由 `handle_spell_cmd` 的 default 支 `Dir=GetNextDirection(cur→click)=DIR_RIGHT`
             // 决定（本 case click=(101,100) ⇒ 回召落点 (101,100)）；此处 ai.dir=4 是死赋值（default 支覆盖），已删。
         }
@@ -86502,6 +86558,25 @@ SendRefMsgRange=15
             .into_iter()
             .map(|(s, b)| (s, b, 0_i64))
             .collect();
+        // **MG-41**：回召 807（`RM_SPACEMOVE_SHOW2`）宿主编码——golden due 0 ⇒ 施法批。
+        let ref_snapshot: Vec<(u16, Vec<i32>)> = rig
+            .world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|m| (m.ident, m.recipients.clone()))
+            .collect();
+        // pet_cfg 仅喂 656 色面（807 臂不读）⇒ 缺省即可（sinsu 本叶无色面判据）。
+        drain_monster_ref_msgs(
+            &mut rig.world,
+            &rig.displays,
+            &rig.online,
+            &rig.gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
+        let (mut ref_frames, _raws_ref) = rig.drain();
+        for f in ref_frames.drain(..) {
+            all_frames.push((f.0, f.1, 0_i64));
+        }
         let mut elapsed = 0i64;
         while elapsed < 1000 {
             elapsed += 100;

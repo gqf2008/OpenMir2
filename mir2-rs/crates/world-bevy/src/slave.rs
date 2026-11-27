@@ -97,6 +97,8 @@ pub const RM_TRANSPARENT: u16 = 8045;
 pub const RM_MAGIC_LVEXP: u16 = 10123;
 /// `Messages.RM_MAKEHOLYSEIZEMODE`（`crates/protocol/src/messages.rs:581`；16 的目标自有队列）。
 pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
+/// `Messages.RM_SPACEMOVE_SHOW2`（`crates/protocol/src/messages.rs:542`；回召 SpaceMove `nInt==1`）。
+pub const RM_SPACEMOVE_SHOW2: u16 = 8099;
 /// **P3-B4** `Messages.RM_DELAYMAGIC`（`crates/protocol/src/messages.rs:510`；8021）。
 /// 施法者自有延时消息：`BaseObject.Base.cs:711-729`。载荷
 /// `wParam = nPower, nParam1 = MakeLong(tx,ty), nParam2 = rage, nParam3 = target.ActorId`。
@@ -927,6 +929,16 @@ impl World {
             e.y = ny;
             e.map_id = map_id;
         }
+        // **MG-41**：`BaseObject.cs:1137`（`SpaceMove` `nInt==1` 回召支）——
+        // `SendRefMsg(RM_SPACEMOVE_SHOW2, Dir, CurrX, CurrY, 0, "")`；`Dir` = 奴隶自 Dir
+        // （迁移不改向）。收件人 = ±SendRefMsgRange（golden cap_hit：caster/target/obs_in 各 1、
+        // obs_out 零）。
+        let slave_dir = self
+            .entities
+            .get(target)
+            .map(|e| i32::from(e.ai.dir))
+            .unwrap_or(0);
+        crate::monai::send_ref_msg(self, target, RM_SPACEMOVE_SHOW2, slave_dir, nx, ny, 0);
         Some(target)
     }
 }
