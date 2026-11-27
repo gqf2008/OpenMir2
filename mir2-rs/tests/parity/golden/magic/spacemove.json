@@ -96,6 +96,7 @@
           913,
           914
         ],
+        "caster_bright": 3,
         "soft_version_date_ex": 20240101,
         "map_dir": "E:\\MirServer\\M2GameSvr\\Map",
         "map_file": "0.map",
@@ -224,13 +225,13 @@
               "recog": 1001,
               "param": 121,
               "tag": 353,
-              "series": 2,
+              "series": 1,
               "due_ms_rel": 0,
               "tail": "\u0060?"
             },
             {
               "ident": 766,
-              "recog": 0,
+              "recog": 1,
               "param": 0,
               "tag": 0,
               "series": 0,
@@ -239,12 +240,12 @@
             },
             {
               "ident": 54,
-              "recog": -1,
+              "recog": 7,
               "param": 0,
               "tag": 0,
               "series": 0,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 11029,
@@ -260,7 +261,7 @@
               "recog": 1001,
               "param": 121,
               "tag": 353,
-              "series": 2,
+              "series": 1282,
               "due_ms_rel": 0,
               "tail": "ddhkddhkddK"
             },
@@ -508,6 +509,7 @@
           913,
           914
         ],
+        "caster_bright": 3,
         "soft_version_date_ex": 20240101,
         "map_dir": "E:\\MirServer\\M2GameSvr\\Map",
         "map_file": "0.map",
@@ -636,13 +638,13 @@
               "recog": 2001,
               "param": 234,
               "tag": 220,
-              "series": 2,
+              "series": 1,
               "due_ms_rel": 0,
               "tail": "\u0060?"
             },
             {
               "ident": 766,
-              "recog": 0,
+              "recog": 1,
               "param": 0,
               "tag": 0,
               "series": 0,
@@ -651,12 +653,12 @@
             },
             {
               "ident": 54,
-              "recog": -1,
+              "recog": 7,
               "param": 0,
               "tag": 0,
               "series": 0,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 11029,
@@ -672,7 +674,7 @@
               "recog": 2001,
               "param": 234,
               "tag": 220,
-              "series": 2,
+              "series": 1282,
               "due_ms_rel": 0,
               "tail": "ddhkddhkddK"
             },
@@ -920,6 +922,7 @@
           913,
           914
         ],
+        "caster_bright": 3,
         "soft_version_date_ex": 20240101,
         "map_dir": "E:\\MirServer\\M2GameSvr\\Map",
         "map_file": "0.map",
@@ -1048,13 +1051,13 @@
               "recog": 3001,
               "param": 460,
               "tag": 604,
-              "series": 2,
+              "series": 1,
               "due_ms_rel": 0,
               "tail": "\u0060?"
             },
             {
               "ident": 766,
-              "recog": 0,
+              "recog": 1,
               "param": 0,
               "tag": 0,
               "series": 0,
@@ -1063,12 +1066,12 @@
             },
             {
               "ident": 54,
-              "recog": -1,
+              "recog": 7,
               "param": 0,
               "tag": 0,
               "series": 0,
               "due_ms_rel": 0,
-              "tail": ""
+              "tail": "\u0060?"
             },
             {
               "ident": 11029,
@@ -1084,7 +1087,7 @@
               "recog": 3001,
               "param": 460,
               "tag": 604,
-              "series": 2,
+              "series": 1282,
               "due_ms_rel": 0,
               "tail": "ddhkddhkddK"
             },
