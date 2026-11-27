@@ -225,7 +225,9 @@ fn verify_slave_family_rng(
                     "[{label}] Rust 抽样形态变了：bounds={r_bounds:?}，声明={declared_bounds:?}（抽数/调用序变化须显式重声明，见 DEV-MG-24-RNGCOUNT）"
                 ));
             }
-            if r_bounds.len() >= SLAVE_CTOR_DRAWS && r_bounds[..SLAVE_CTOR_DRAWS] != SLAVE_CTOR_BOUNDS {
+            if r_bounds.len() >= SLAVE_CTOR_DRAWS
+                && r_bounds[..SLAVE_CTOR_DRAWS] != SLAVE_CTOR_BOUNDS
+            {
                 errs.push(format!("[{label}] 前 5 抽不是造怪 ctor 块：{r_bounds:?}"));
             }
             // 值面全开：逐位（ctor 5 + 生产差 + 尾）两侧逐值——训练尾值面自本批解锁。
