@@ -269,6 +269,27 @@ pub fn summon_slave<S: SlaveSpawner>(
     }
 }
 
+/// [`World::tame_adopt`] 的返回读数（oracle `MagicManager.cs:743-770` 受奴落尾）。
+///
+/// `mongen_branch = Some(表下标)` ⇒ oracle `:749-754` 进了 `if (MonGen != null)` 支：表持有方须
+/// `ActiveCount > 0 ⇒ --`、否则 `MonGen = null`（断链写在**实体**上，`game-svr
+/// slave::apply_tame_mongen_tail` 一并落）。`None` = 门未过，或门过了但 `MonGen == null`
+/// （oracle 此形态同样零动作）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TameAdoptTail {
+    pub adopted: bool,
+    pub mongen_branch: Option<usize>,
+}
+
+impl TameAdoptTail {
+    fn refused() -> Self {
+        Self {
+            adopted: false,
+            mongen_branch: None,
+        }
+    }
+}
+
 /// `MagicManager.MagMakeSlave` / `MagMakeSinSuSlave` / `MagMakeAngelSlave` 选出的召唤计划。
 ///
 /// 字段名对应 oracle：`sMonName` / `nExpLevel` / `nCount`（+ 统一传 `userMagic.Level` 的 `nMakeLevel`）。
@@ -1014,30 +1035,38 @@ impl World {
     /// 逐条对应 oracle：`Master = playObject` → `MasterRoyaltyTick` → `SlaveMakeLevel = magicLevel` →
     /// `if (MasterTick == 0) MasterTick = now` → `BreakHolySeizeMode()` → `WalkSpeed/NextHitTime` 封顶
     /// → `RefShowName()`（帧，不在此层）→ `playObject.SlaveList.Add(targetObject)`。
-    /// `CanReAlive`/`MonGen.ActiveCount`/`BreakCrazyMode` 未建模（登记）。
+    /// `BreakCrazyMode`（`:738`）由调用方在进本函数前落（顺序决定 8090 帧序，见
+    /// `cast_tamming_spell`）；`CanReAlive`/`MonGen` 落尾见下方签名处注释（`:743-754` 拆实体/表两侧）。
     pub fn tame_adopt(
         &mut self,
         caster_id: i32,
         target_id: i32,
         magic_level: u8,
         royalty_draw: i32,
-    ) -> bool {
+    ) -> TameAdoptTail {
         let now = self.clock_ms;
         let Some(caster) = self.entities.get(caster_id) else {
-            return false;
+            return TameAdoptTail::refused();
         };
         if caster.race != ACTOR_RACE_PLAY {
-            return false;
+            return TameAdoptTail::refused();
         }
         let caster_level = i32::from(caster.level);
         let Some(t) = self.entities.get(target_id) else {
-            return false;
+            return TameAdoptTail::refused();
         };
         // `if (targetObject.Master != null) HP = HP / 10;`（`:756-759`）。
         let mut hp = t.hp;
         if t.master.is_some() {
             hp /= 10;
         }
+        // `:743-754` 门读**术前**态：`CanReAlive && Master == null`（再收服不触发）。
+        // 实体侧 `CanReAlive = false` 在下方写段落；**表侧半段**（`ActiveCount > 0 ⇒ --，
+        // 否则 ⇒ MonGen = null`）不在此落——`MonGenState` 持于宿主、`World` 不持表 ⇒ 分支入口
+        // （`MonGen != null` 的表下标）随 [`TameAdoptTail`] 交回表持有方
+        // （`game-svr slave::apply_tame_mongen_tail`；live 派发侧 MongenHost 未接线 ⇒ 恒 `None`，登记）。
+        let mongen_gate = t.can_re_alive && t.master.is_none();
+        let mongen_branch = if mongen_gate { t.mon_gen } else { None };
         // `if (1500 - magicLevel * 200 < WalkSpeed) WalkSpeed = ...`（`:765-772`）。
         let walk_speed = t.ai.walk_speed.min(1500 - i64::from(magic_level) * 200);
         let next_hit_time = t.ai.next_hit_time.min(2000 - i64::from(magic_level) * 200);
@@ -1056,6 +1085,10 @@ impl World {
             t.slave.master_tick = master_tick;
             t.ai.walk_speed = walk_speed;
             t.ai.next_hit_time = next_hit_time;
+            if mongen_gate {
+                // `:744` `CanReAlive = false`（实体侧；表侧动作见 `mongen_branch`）。
+                t.life_cycle.can_re_alive = false;
+            }
         }
         // `MagicManager.cs:765` `BreakHolySeizeMode()`（= `RefNameColor()` ⇒ RM_CHANGENAMECOLOR），
         // 与 `:774` `RefShowName()`（⇒ RM_USERNAME）；**顺序固定**：先 8090 后 8101。
@@ -1067,7 +1100,10 @@ impl World {
             .slave
             .slave_list
             .push(target_id);
-        true
+        TameAdoptTail {
+            adopted: true,
+            mongen_branch,
+        }
     }
 }
 
@@ -4273,13 +4309,19 @@ mod tests {
             let mut e = crate::EntitySpawn::new(0, "鸡".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.hp = 100;
+            e.can_re_alive = true; // 野刷怪态（`MonGen` 刷出的怪 oracle 恒 true）
             e.ai.walk_speed = 2000;
             e.ai.next_hit_time = 3000;
             e.ai.holy_seize = true;
             w.add_entity(e)
         };
         w.clock_ms = 1_000;
-        assert!(w.tame_adopt(caster, target, 2, 5));
+        let tail = w.tame_adopt(caster, target, 2, 5);
+        assert!(tail.adopted);
+        assert_eq!(
+            tail.mongen_branch, None,
+            "无 `MonGen` ⇒ 分支入口 None（oracle `MonGen == null` 零动作）"
+        );
         let t = w.entities.get(target).unwrap();
         assert_eq!(t.master, Some(caster));
         assert_eq!(t.hp, 100, "原本无主 ⇒ 不 /10");
@@ -4290,7 +4332,43 @@ mod tests {
         assert_eq!(t.ai.walk_speed, 1100, "min(2000, 1500-400)");
         assert_eq!(t.ai.next_hit_time, 1600, "min(3000, 2000-400)");
         assert!(!t.ai.holy_seize, "BreakHolySeizeMode");
+        assert!(
+            !t.can_re_alive,
+            "`:744` 门过（术前无主+CanReAlive）⇒ 实体侧清除"
+        );
         assert_eq!(w.entities.get(caster).unwrap().slave_list, &vec![target]);
+    }
+
+    /// 门过且 `MonGen` 非空 ⇒ 分支入口（表下标）随返回值交回宿主（表侧动作归
+    /// `game-svr slave::apply_tame_mongen_tail`，此处只验入口与实体侧清除）。
+    #[test]
+    fn tame_adopt_surfaces_mongen_branch() {
+        let mut w = World::new(32, 32);
+        let caster = {
+            let mut e = crate::EntitySpawn::new(0, "道士".to_string(), 10, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.level = 10;
+            w.add_entity(e)
+        };
+        let target = {
+            let mut e = crate::EntitySpawn::new(0, "骷髅".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.can_re_alive = true;
+            e.mon_gen = Some(0);
+            w.add_entity(e)
+        };
+        w.clock_ms = 1_000;
+        let tail = w.tame_adopt(caster, target, 2, 5);
+        assert!(tail.adopted);
+        assert_eq!(
+            tail.mongen_branch,
+            Some(0),
+            "`MonGen != null` 支入口交回宿主"
+        );
+        let t = w.entities.get(target).unwrap();
+        assert!(!t.can_re_alive);
+        assert_eq!(t.master, Some(caster));
     }
 
     /// 诱惑受奴：目标已有别的 `Master` ⇒ 先 `HP/10`；`MasterTick` 已非 0 ⇒ 不覆盖。
@@ -4305,12 +4383,16 @@ mod tests {
             e.master = Some(other);
             e.hp = 100;
             e.master_tick = 555;
+            e.can_re_alive = true; // 术前有主 ⇒ 门（`:743`）不过 ⇒ 不得清除（负例卫队）
             w.add_entity(e)
         };
-        assert!(w.tame_adopt(caster, target, 3, 0));
+        let tail = w.tame_adopt(caster, target, 3, 0);
+        assert!(tail.adopted);
         let t = w.entities.get(target).unwrap();
         assert_eq!(t.hp, 10);
         assert_eq!(t.master_tick, 555);
+        assert!(t.can_re_alive, "术前有主 ⇒ 门不过 ⇒ 不清除（`:743` 负例）");
+        assert_eq!(tail.mongen_branch, None);
     }
 
     /// `MasterRoyaltyTick` 公式（`MagicManager.cs:759`）。

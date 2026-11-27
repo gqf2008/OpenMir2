@@ -308,6 +308,7 @@ fn run_case(magic_id: u16, fx: &Value) -> CaseObs {
         1,
         2,
         None,
+        None,
         &MsgColors::default(),
         &game_svr::strings::StringConf::defaults(),
     );
@@ -797,6 +798,7 @@ fn mg07_cast(
         1,
         1,
         2,
+        None,
         None,
         &MsgColors::default(),
         &game_svr::strings::StringConf::defaults(),

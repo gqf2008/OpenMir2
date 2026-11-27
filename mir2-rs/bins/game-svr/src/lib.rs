@@ -1920,6 +1920,7 @@ fn handle_zone_command_with_tail_and_shared(
         saves,
         trade_sessions,
         shop_sessions,
+        mon_gen_host,
         ..
     } = host;
     let env = ZoneCmdEnv {
@@ -1945,6 +1946,7 @@ fn handle_zone_command_with_tail_and_shared(
         cmd,
         tail,
         &env,
+        mon_gen_host.as_mut(),
     )
 }
 
@@ -2110,6 +2112,8 @@ fn handle_zone_command_on(
     cmd: &CommandMessage,
     tail: Option<&str>,
     env: &ZoneCmdEnv<'_>,
+    // **DEV-MG-34**：区施法里 20 受奴的 `MonGen` 表侧宿主（本区自己的；测试/无表 ⇒ None）。
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
 ) -> ZoneCmdOutcome {
     if movewire::is_move_command(cmd.ident) {
         if online
@@ -2175,6 +2179,7 @@ fn handle_zone_command_on(
             env.enter_cfg.fire_boom_rage,
             env.enter_cfg.snow_wind_range,
             env.enter_cfg.elec_blizzard_range,
+            mon_gen_host,
             Some(magic_cfg_of(env.enter_cfg)),
             env.colors,
             &env.enter_cfg.string_conf,
@@ -18747,6 +18752,9 @@ fn handle_spell_cmd(
         fire_boom_rage,
         snow_wind_range,
         elec_blizzard_range,
+        // `None` = `mon_gen_host`：wrapper 只服务单测（无表零动作）；live 一律走
+        // `handle_spell_cmd_with_magic`（区 0 主循环/区 k 线程各传本区宿主）。
+        None,
         None,
         &MsgColors::default(),
         &game_svr::strings::StringConf::defaults(),
@@ -18779,7 +18787,10 @@ fn handle_spell_cmd_with_magic(
     fire_boom_rage: i32,
     snow_wind_range: i32,
     elec_blizzard_range: i32,
-    // **Lane B**：`AttPowerUp` 的 `RecalcAbilitys()`（`:5328`）也要跑 210/212 尾段；
+    // **DEV-MG-34**：20 受奴进 `MonGen != null` 支 ⇒ 宿主落表（递减/断链）；
+    // 单测/无表路径 ⇒ `None` 零动作（GM 命令路径同款 Option 穿线）。
+    mut mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    // 卡 `openmir2-warrskill-entry`：6 个战士技 case 的 `SysMsg` 色词与 `[String]` 文案。
     // `None` ⇒ 不审计（单测/未载入配置路径）。
     magic_cfg: Option<MagicCfg<'_>>,
     // 卡 `openmir2-warrskill-entry`：6 个战士技 case 的 `SysMsg` 色词与 `[String]` 文案。
@@ -20133,6 +20144,16 @@ fn handle_spell_cmd_with_magic(
                     magic,
                 };
                 let outcome = game_svr::slave::cast_tamming_spell(world, &input, &mut train);
+                // **DEV-MG-34（④ 表侧）**：受奴进 `MonGen != null` 支 ⇒ 宿主落表（`ActiveCount--`
+                // 或断链）；`None`（无表/门未过/`MonGen == null`）⇔ oracle 同形零动作。
+                if let (Some(host), Some(tid)) = (mon_gen_host.as_deref_mut(), target_id) {
+                    game_svr::slave::apply_tame_mongen_tail(
+                        &mut host.state,
+                        world,
+                        tid,
+                        outcome.mongen_branch,
+                    );
+                }
                 // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
                 if let Some(rcd) = saves
                     .get_mut(chr_name)
@@ -39968,6 +39989,7 @@ impl HostLoop {
                                     cmd,
                                     tail.as_deref(),
                                     &env,
+                                    mon_gen_host.as_mut(),
                                 );
                             }
                         };
@@ -40699,6 +40721,7 @@ impl HostLoop {
                                     enter_cfg.fire_boom_rage,
                                     enter_cfg.snow_wind_range,
                                     enter_cfg.elec_blizzard_range,
+                                    mon_gen_host.as_mut(),
                                     // **Lane B**：36 的 `AttPowerUp` 重算也跑 210/212 尾段。
                                     Some(magic_cfg_of(&enter_cfg)),
                                     &colors,
@@ -137430,6 +137453,7 @@ mod zone_command_tests {
                                 cmd,
                                 tail.as_deref(),
                                 &env,
+                                None,
                             );
                         }
                     };
