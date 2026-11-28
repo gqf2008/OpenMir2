@@ -109,6 +109,10 @@ pub const DEFAULT_NOW_IS_FREE_PLAY_MODE: &str = "当前服务器运行于测试�
 pub const DEFAULT_ONLINE_USER_FULL: &str = "可允许的玩家数量已满";
 /// **G1/G3**：`[String] ForceDisConnect`（强制断开收尾；缺键回落 `MessageSettings.cs:33`）。
 pub const DEFAULT_FORCE_DISCONNECT: &str = "连接被强行中断!!!";
+/// **G1**：`[String] ClientSoftVersionError`（版本门第 1 条；缺键回落 `MessageSettings.cs:31`）。
+pub const DEFAULT_CLIENT_SOFT_VERSION_ERROR: &str = "游戏版本错误!!!";
+/// **G1**：`[String] DownLoadNewClientSoft`（版本门第 2 条；缺键回落 `MessageSettings.cs:32`）。
+pub const DEFAULT_DOWNLOAD_NEW_CLIENT_SOFT: &str = "请到网站上下载最新版本游戏客户端软件。";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
@@ -228,6 +232,10 @@ pub struct StringConf {
     // （`StringConf.cs:48/51` 读键，键名与 `MessageSettings` 静态字段同源）。
     online_user_full: Option<String>,
     force_disconnect: Option<String>,
+    // **G1（`PlayObject.cs:1325-1327`）**：版本门的前两条红字
+    // （`StringConf.cs:46/47` 读键；第 3 条 ForceDisConnect 复用上面已备键）。
+    client_soft_version_error: Option<String>,
+    download_new_client_soft: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -637,6 +645,22 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_FORCE_DISCONNECT)
     }
+
+    /// `[String] ClientSoftVersionError`（G1 第 1 条；缺键回落 `MessageSettings.cs:31`）。
+    #[must_use]
+    pub fn client_soft_version_error(&self) -> &str {
+        self.client_soft_version_error
+            .as_deref()
+            .unwrap_or(DEFAULT_CLIENT_SOFT_VERSION_ERROR)
+    }
+
+    /// `[String] DownLoadNewClientSoft`（G1 第 2 条；缺键回落 `MessageSettings.cs:32`）。
+    #[must_use]
+    pub fn download_new_client_soft(&self) -> &str {
+        self.download_new_client_soft
+            .as_deref()
+            .unwrap_or(DEFAULT_DOWNLOAD_NEW_CLIENT_SOFT)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -772,6 +796,8 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "NOWISFREEPLAYMODE") => &mut conf.now_is_free_play_mode,
             (Section::String, "ONLINEUSERFULL") => &mut conf.online_user_full,
             (Section::String, "FORCEDISCONNECT") => &mut conf.force_disconnect,
+            (Section::String, "CLIENTSOFTVERSIONERROR") => &mut conf.client_soft_version_error,
+            (Section::String, "DOWNLOADNEWCLIENTSOFT") => &mut conf.download_new_client_soft,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg
@@ -1080,5 +1106,36 @@ Other=1
         let d = parse(b"[String]".to_vec().as_slice());
         assert_eq!(d.online_user_full(), "可允许的玩家数量已满");
         assert_eq!(d.force_disconnect(), "连接被强行中断!!!");
+    }
+
+    /// **G1 文本键牙**：`[String] ClientSoftVersionError/DownLoadNewClientSoft` 逐键解析
+    /// + 逐键回落（`StringConf.cs:46/47` 读键；缺键回落 `MessageSettings.cs:31/32`）。
+    ///
+    /// 红检：删 parse 任一对应臂 ⇒ 该键断言红；两臂接反 ⇒ 两断言同红。
+    #[test]
+    fn parses_g1_version_keys_and_falls_back_per_key() {
+        // cp936 实编码（独立来源生成，同 `parses_sysmsg_text_keys…` 的口径）。
+        let err_gbk: &[u8] = b"\xd3\xce\xcf\xb7\xb0\xe6\xb1\xbe\xb4\xed\xce\xf3\x21\x21\x21";
+        let dl_gbk: &[u8] = b"\xc7\xeb\xb5\xbd\xcd\xf8\xd5\xbe\xc9\xcf\xcf\xc2\xd4\xd8\xd7\xee\xd0\xc2\xb0\xe6\xb1\xbe\xd3\xce\xcf\xb7\xbf\xcd\xbb\xa7\xb6\xcb\xc8\xed\xbc\xfe\xa1\xa3";
+        let mut bytes = b"[String]".to_vec();
+        bytes.extend_from_slice(b"\nClientSoftVersionError=");
+        bytes.extend_from_slice(err_gbk);
+        bytes.extend_from_slice(b"\nDownLoadNewClientSoft=");
+        bytes.extend_from_slice(dl_gbk);
+        bytes.push(b'\n');
+        let c = parse(&bytes);
+        assert_eq!(c.client_soft_version_error(), "游戏版本错误!!!");
+        assert_eq!(
+            c.download_new_client_soft(),
+            "请到网站上下载最新版本游戏客户端软件。"
+        );
+        assert_eq!(crate::downlink::gbk(c.client_soft_version_error()), err_gbk);
+        assert_eq!(crate::downlink::gbk(c.download_new_client_soft()), dl_gbk);
+        let d = parse(b"[String]".to_vec().as_slice());
+        assert_eq!(d.client_soft_version_error(), "游戏版本错误!!!");
+        assert_eq!(
+            d.download_new_client_soft(),
+            "请到网站上下载最新版本游戏客户端软件。"
+        );
     }
 }

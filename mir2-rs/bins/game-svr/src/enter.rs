@@ -44,7 +44,7 @@ use crate::record::{Ability, MagicRcd, NakedAbility, ServerUserItem};
 use crate::strings::StringConf;
 use game_svr::ability::{self, ItemCatalog, ItemInstance, RecalcInputs};
 use game_svr::feature::{feature_ex, human_feature, make_long, make_word};
-use game_svr::smframe::EnterWorldInputs;
+use game_svr::smframe::{EnterWorldInputs, VersionGateHit};
 
 /// 装配入图帧额外输入所需的世界/配置层数据（`None` = 该层未就绪，对应帧**跳过并登记**）。
 #[derive(Clone, Copy, Default)]
@@ -981,19 +981,40 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
         wx.pay_ment
     };
     base.pay_ment_three = pay_ment == 3;
+    // **G1（版本比对踢人，`PlayObject.cs:1322-1331`）**：客户端 `SoftVersionDate`
+    // < Config.SoftVersionDate ⇒ 三条红（槽 6/7/8）+ `BoEmergencyClose` + **`return`
+    // 截断**（`:1328`）——之后的登录序（攻击模式/CTRL-H/欢迎/G3/六条优先帧等）oracle
+    // 根本不入队。置位无条件（F1 同口径：不依赖 String.conf 装载）；正文随槽 0-3 缺省约定。
+    let version_truncated = match wx.conf {
+        Some(conf) if wx.soft_version_date < conf.soft_version_date => {
+            base.version_gate = VersionGateHit::SoftVersionKick;
+            base.emergency_close = true;
+            if let Some(strings) = wx.strings {
+                base.login_sys_msgs.client_soft_version_error =
+                    Some(gbk(strings.client_soft_version_error()));
+                base.login_sys_msgs.download_new_client_soft =
+                    Some(gbk(strings.download_new_client_soft()));
+                base.login_sys_msgs.force_disconnect = Some(gbk(strings.force_disconnect()));
+            }
+            true
+        }
+        _ => false,
+    };
     base.login_sys_msgs.green = wx.green_msg;
     // **G3**：红字色词（`MsgColor.Red` ⇒ 槽 4/5 的 `SM_SYSMESSAGE.Param`）。
     base.login_sys_msgs.red = wx.red_msg;
-    if let Some(strings) = wx.strings {
-        base.login_sys_msgs.change_help = Some(gbk(strings.start_change_attack_mode_help()));
-        if wx.test_server {
-            base.login_sys_msgs.notice = Some(gbk(strings.start_notice_msg()));
-        }
-        if pay_ment == 3 {
-            base.login_sys_msgs.free_play = Some(gbk(strings.now_is_free_play_mode()));
-        }
-        if let Some(l) = wx.logon {
-            base.login_sys_msgs.attack_mode = strings.attack_mode_msg(l.attack_mode).map(gbk);
+    if !version_truncated {
+        if let Some(strings) = wx.strings {
+            base.login_sys_msgs.change_help = Some(gbk(strings.start_change_attack_mode_help()));
+            if wx.test_server {
+                base.login_sys_msgs.notice = Some(gbk(strings.start_notice_msg()));
+            }
+            if pay_ment == 3 {
+                base.login_sys_msgs.free_play = Some(gbk(strings.now_is_free_play_mode()));
+            }
+            if let Some(l) = wx.logon {
+                base.login_sys_msgs.attack_mode = strings.attack_mode_msg(l.attack_mode).map(gbk);
+            }
         }
     }
 
@@ -1004,7 +1025,10 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             // `PlayObject.cs:909`）⇒ 门无条件生效。谓词 = `PlayObjectCount > TestUserLimit`
             // **且** `Permission < 2` ⇒ 两条红 `SysMsg`（槽 4/5）+ `BoEmergencyClose`
             // （**无 `return`**，登录序照走完；oracle 泵尾 `MakeGhost`，宿主侧延迟断连）。
-            if wx.play_object_count > conf.test_user_limit && i32::from(wx.permission) < 2 {
+            if !version_truncated
+                && wx.play_object_count > conf.test_user_limit
+                && i32::from(wx.permission) < 2
+            {
                 // **F1（reviewer 2026-11-28）**：`BoEmergencyClose = true` **无条件置位**
                 // （oracle PlayObject.cs:1381-1382 不依赖 String.conf 是否装载成功）；
                 // 两条正文随既有槽 0-3 的文件缺省约定——strings 缺 ⇒ 正文 None ⇒ 不产帧，
@@ -1216,6 +1240,10 @@ mod tests {
         let conf = GameSvrConf {
             game_gold_name: "元宝".to_string(),
             game_point_name: "游戏点".to_string(),
+            // **G1**：门槛 0 = 「无版本要求」部署（`wx < 0` 恒假 ⇒ 版本门静默）——本测的
+            // 主角是 `SoftVersionDateEx == 0` 的 11029/5008 关门面；门槛缺省 20020522 时
+            // version-0 客户端会先被 G1 踢出（截断），本测前提不可达。
+            soft_version_date: 0,
             ..GameSvrConf::from_bytes(b"[Server]\nGatePort=5000\n")
         };
         let rec_bonus = rec_naked();
@@ -3308,7 +3336,7 @@ mod tests {
             map_desc: None,
             conf: Some(&conf),
             bonus_abil: None,
-            soft_version_date: 0,
+            soft_version_date: 120020522,
             game_gold: 0,
             game_point: 0,
             job: 0,
@@ -3371,7 +3399,7 @@ mod tests {
             map_desc: None,
             conf: Some(&conf),
             bonus_abil: None,
-            soft_version_date: 0,
+            soft_version_date: 120020522,
             game_gold: 0,
             game_point: 0,
             job: 0,
@@ -3416,7 +3444,7 @@ mod tests {
             map_desc: None,
             conf: Some(&conf),
             bonus_abil: None,
-            soft_version_date: 0,
+            soft_version_date: 120020522,
             game_gold: 0,
             game_point: 0,
             job: 0,
@@ -3451,7 +3479,7 @@ mod tests {
             map_desc: None,
             conf: None,
             bonus_abil: None,
-            soft_version_date: 0,
+            soft_version_date: 120020522,
             game_gold: 0,
             game_point: 0,
             job: 0,
@@ -3496,7 +3524,7 @@ mod tests {
             map_desc: None,
             conf: Some(&conf),
             bonus_abil: None,
-            soft_version_date: 0,
+            soft_version_date: 120020522,
             game_gold: 0,
             game_point: 0,
             job: 0,
@@ -3518,5 +3546,193 @@ mod tests {
         assert!(base.emergency_close, "谓词命中 ⇒ 踢人不依赖 String.conf");
         assert_eq!(base.login_sys_msgs.text(4), None);
         assert_eq!(base.login_sys_msgs.text(5), None);
+    }
+
+    // ===== G1 版本比对踢人（`PlayObject.cs:1322-1331`；卡 `openmir2-userlogon-login-gates`）=====
+
+    /// G1 夹具：`[Setup] SoftVersionDate=20020522`（部署件缺省）；`pay_ment=3`（free_play 作
+    /// 「截断与否」的下游证人）、`ability Some`（52 = opc-66 指定证人）、`logon Some`
+    /// （51/213 = **门前**证人——oracle 的 RM_LOGON 在版本门之前已发出，踢人不回撤）。
+    #[allow(clippy::too_many_arguments)]
+    fn g1_wx_inputs<'a>(
+        conf: &'a GameSvrConf,
+        strings: &'a crate::strings::StringConf,
+        catalog: &'a game_svr::ability::StdItemCatalog,
+        abil: &'a Ability,
+        bonus: &'a NakedAbility,
+        soft_version_date: i32,
+    ) -> WorldFrameInputs<'a> {
+        let a = AbilityInputs {
+            catalog,
+            abil,
+            bonus_abil: bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: None,
+            bag_items: None,
+            magics: None,
+            magic_table: None,
+            gold: 0,
+            client_ability_layout: false,
+        };
+        WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: Some(conf),
+            bonus_abil: None,
+            soft_version_date,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: Some(strings),
+            show_name: None,
+            logon: Some(LogonInputs {
+                feature: FeatureInputs {
+                    dress_shape: Some(1),
+                    weapon_shape: Some(0),
+                    gender: 0,
+                    hair: 0,
+                    on_horse: false,
+                    horse_type: 0,
+                    dress_eff_type: 0,
+                },
+                char_status: 0,
+                allow_group: false,
+                attack_mode: 0,
+            }),
+            ability: Some(a),
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 3,
+            play_object_count: 0,
+            permission: 0,
+            red_msg: (0xFF, 0x38),
+        }
+    }
+
+    /// **G1 踢人截断牙**：`20020521 < 20020522` ⇒ 三条红（槽 6/7/8，字节精确）+
+    /// `emergency_close` + **截断**——52 **不在产出里**（opc-66 指定面）、free_play/攻击模式
+    /// 文本槽被守卫（text(3)/text(0) None）、而**门前**的 658/51/213 照发（RM_LOGON 先于门）。
+    /// 红检（实测）：删 smframe 截断 `return` ⇒ 本牙必红（help/free_play 帧重现）。
+    #[test]
+    fn g1_kick_truncates_rest_of_logon() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs {
+            actor_id: 9,
+            ..EnterWorldInputs::default()
+        };
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020521);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::SoftVersionKick);
+        assert!(base.emergency_close, "G1 命中 ⇒ BoEmergencyClose");
+        let t6 = gbk("游戏版本错误!!!");
+        let t7 = gbk("请到网站上下载最新版本游戏客户端软件。");
+        let t8 = gbk("连接被强行中断!!!");
+        assert_eq!(base.login_sys_msgs.text(6), Some(t6.as_slice()));
+        assert_eq!(base.login_sys_msgs.text(7), Some(t7.as_slice()));
+        assert_eq!(base.login_sys_msgs.text(8), Some(t8.as_slice()));
+        assert_eq!(
+            base.login_sys_msgs.text(9),
+            None,
+            "G1 命中 ⇒ G2 不判定（互斥）"
+        );
+        assert_eq!(
+            base.login_sys_msgs.text(3),
+            None,
+            "截断 ⇒ free_play 文本不填"
+        );
+        assert_eq!(
+            base.login_sys_msgs.attack_mode, None,
+            "截断 ⇒ 攻击模式文本不填"
+        );
+        let (before, after) = base.frames_split();
+        let bi = idents(&before);
+        assert!(bi.contains(&658), "门前：658 照发");
+        assert!(bi.contains(&50), "门前：SM_LOGON(50) 照发");
+        assert!(bi.contains(&213), "门前：SM_ATTACKMODE 照发");
+        assert!(
+            !idents(&base.frames()).contains(&52),
+            "opc-66 指定面：截断 ⇒ 52 不在（全）产出里"
+        );
+        let e6 = crate::smframe::sm_sysmessage(9, 0xFF, 0x38, &t6);
+        let e7 = crate::smframe::sm_sysmessage(9, 0xFF, 0x38, &t7);
+        let e8 = crate::smframe::sm_sysmessage(9, 0xFF, 0x38, &t8);
+        let pos = |v: &[Vec<u8>], pat: &[u8]| v.iter().position(|f| f.as_slice() == pat);
+        let (p6, p7, p8) = (pos(&after, &e6), pos(&after, &e7), pos(&after, &e8));
+        assert!(
+            p6.is_some() && p7.is_some() && p8.is_some(),
+            "三条红逐字节在尾段"
+        );
+        assert_eq!(p6.unwrap().abs_diff(p7.unwrap()), 1);
+        assert_eq!(p7.unwrap().abs_diff(p8.unwrap()), 1, "三红紧邻（堆序）");
+        let help = gbk(crate::strings::DEFAULT_START_CHANGE_ATTACK_MODE_HELP);
+        let e_help = crate::smframe::sm_sysmessage(9, 0xDB, 0xFF, &help);
+        assert!(
+            pos(&after, &e_help).is_none(),
+            "截断 ⇒ 无条件的 CTRL-H 槽不入队（help 帧不得重现）"
+        );
+        let fp = gbk(crate::strings::DEFAULT_NOW_IS_FREE_PLAY_MODE);
+        let e_fp = crate::smframe::sm_sysmessage(9, 0xDB, 0xFF, &fp);
+        assert!(pos(&after, &e_fp).is_none(), "截断 ⇒ free_play 帧不产");
+    }
+
+    /// **G1 负例（现网真客户端）**：`120020522 ≥ 20020522` ⇒ 门静默、不截断——52 在产出里
+    /// （与踢人牙互为反例组）、free_play/help 槽照产。
+    #[test]
+    fn g1_negative_current_client_not_kicked() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs {
+            actor_id: 9,
+            ..EnterWorldInputs::default()
+        };
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120020522);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::None);
+        assert!(!base.emergency_close);
+        assert_eq!(base.login_sys_msgs.text(6), None);
+        assert_eq!(
+            base.login_sys_msgs.text(3),
+            Some(gbk(crate::strings::DEFAULT_NOW_IS_FREE_PLAY_MODE).as_slice())
+        );
+        assert!(
+            idents(&base.frames()).contains(&52),
+            "不截断 ⇒ 52 在产出里（踢人牙的反例组）"
+        );
+        let help = gbk(crate::strings::DEFAULT_START_CHANGE_ATTACK_MODE_HELP);
+        let e_help = crate::smframe::sm_sysmessage(9, 0xDB, 0xFF, &help);
+        assert!(
+            base.frames()
+                .iter()
+                .any(|f| f.as_slice() == e_help.as_slice()),
+            "不截断 ⇒ 无条件 CTRL-H 槽照产"
+        );
+    }
+
+    /// **G1 边界负例**：`SoftVersionDate == Config.SoftVersionDate` ⇒ 严格 `<` **不**触发
+    /// （把 `<` 变异成 `<=` ⇒ 本牙必红）。
+    #[test]
+    fn g1_boundary_equal_version_not_kicked() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=20020522\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 20020522);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::None);
+        assert!(!base.emergency_close);
+        assert_eq!(base.login_sys_msgs.text(6), None);
     }
 }

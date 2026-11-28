@@ -1295,6 +1295,29 @@ pub type TurnFrame = (i32, u16, u16, u8, u8, Vec<u8>, Vec<u8>);
 /// 入图帧序的输入集合（`PlayObject.Message.cs:1680-1692` 的 `RM_LOGON` 支 + 紧随的
 /// `UserLogon`/`RefMyStatus` 首轮）。每个字段 `Some` 时才产出对应帧；缺输入即**跳过并登记**，
 /// 绝不猜尾字节。
+/// **版本门命中形态**（G1/G2，`PlayObject.cs:1322-1341`）。oracle 两门**互斥**
+/// （G1 命中即 `return`，G2 只在 G1 未命中时判定）；`apply` 求值一次、堆装配读同一份。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VersionGateHit {
+    /// 未命中（现网真客户端 120020522 ⇒ 恒此值）。
+    #[default]
+    None,
+    /// **G1**：客户端 `SoftVersionDate < Config.SoftVersionDate` ⇒ 三条红（槽 6/7/8）+
+    /// `BoEmergencyClose` + **`return` 截断**（PlayObject.cs:1328）。
+    SoftVersionKick,
+}
+
+impl VersionGateHit {
+    /// oracle `return` 截断（G1 与后续 G2 的 CanOldClientLogon=false 支）。
+    #[must_use]
+    pub fn kick_truncated(self) -> bool {
+        matches!(self, Self::SoftVersionKick)
+    }
+}
+
+/// 入图帧序的输入集合（`PlayObject.Message.cs:1680-1692` 的 `RM_LOGON` 支 + 紧随的
+/// `UserLogon`/`RefMyStatus` 首轮）。每个字段 `Some` 时才产出对应帧；缺输入即**跳过并登记**，
+/// 绝不猜尾字节。
 #[derive(Debug, Clone, Default)]
 pub struct EnterWorldInputs {
     /// 本会话的 `ActorId`（oracle `ActorMgr.GetNextIdentity()`，随机正数）。
@@ -1369,6 +1392,8 @@ pub struct EnterWorldInputs {
     /// （oracle **无 `return`**，登录序照走完；宿主在登录尾段补发完后断连，
     /// 见 `drain_login_emergency_close`）。`false` = 未命中。
     pub emergency_close: bool,
+    /// **G1/G2**：版本门命中形态（堆装配与 `apply` 读同一份；`None` ⇒ 门静默）。
+    pub version_gate: VersionGateHit,
     /// **`openmir2-login-charstatus-657`**：`RecalcAbilitys()` 收尾两条 `RM_CHARSTATUSCHANGED`
     /// 的载荷 `(CharStatus, PlayObject.HitSpeed)`。
     ///
@@ -1419,6 +1444,10 @@ pub struct LoginSysMsgs {
     /// `MsgColor.Red` 的 `(RedMsgFColor, RedMsgBColor)`（缺省 0xFF/0x38，
     /// `GameSvrConf.cs:1536-1537`）：槽 4/5 的 `SM_SYSMESSAGE.Param = make_word(f, b)`。
     pub red: (u8, u8),
+    /// **G1** 槽 6（= 槽 11 共用）：`MessageSettings.ClientSoftVersionError`（红）。
+    pub client_soft_version_error: Option<Vec<u8>>,
+    /// **G1** 槽 7（= 槽 12 共用）：`MessageSettings.DownLoadNewClientSoft`（红）。
+    pub download_new_client_soft: Option<Vec<u8>>,
     /// `MsgColor.Green` 的 `(GreenMsgFColor, GreenMsgBColor)`（`BaseObject.cs:1645-1652`；
     /// 落在 `SM_SYSMESSAGE.Param = make_word(f, b)`，`PlayObject.Message.cs:1715`）。
     pub green: (u8, u8),
@@ -1435,6 +1464,10 @@ impl LoginSysMsgs {
             3 => self.free_play.as_deref(),
             4 => self.online_user_full.as_deref(),
             5 => self.force_disconnect.as_deref(),
+            // **G1/G2**：槽 6=11、7=12、8=13 共用同一正文字段（同一门内只会命中一组）。
+            6 | 11 => self.client_soft_version_error.as_deref(),
+            7 | 12 => self.download_new_client_soft.as_deref(),
+            8 | 13 => self.force_disconnect.as_deref(),
             _ => None,
         }
     }
@@ -1445,7 +1478,8 @@ impl LoginSysMsgs {
     #[must_use]
     pub fn color(&self, slot: u8) -> (u8, u8) {
         match slot {
-            4..=5 => self.red,
+            // G3 槽 4/5、G1 槽 6/7/8（G2 踢支 11..=13 与蓝 9 随 G2 批接入）。
+            4..=8 => self.red,
             _ => self.green,
         }
     }
@@ -1677,10 +1711,23 @@ impl EnterWorldInputs {
                 (messages::RM_CHANGELIGHT & 0xFF) as u8,
             );
         }
+        let prio_sysmsg = (messages::RM_SYSMESSAGE & 0xFF) as u8;
+        // ②c **G1 版本门**（`PlayObject.cs:1322-1331`）：三条红（槽 6/7/8）在攻击模式文案
+        //     **之前**（源码序 :1325 < :1342）。正文缺失仍占堆、出队不产帧（同槽 1 口径）。
+        if self.version_gate == VersionGateHit::SoftVersionKick {
+            queue.enqueue(LoginQueued::SysMsg(6), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(7), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(8), prio_sysmsg);
+        }
+        // **`return` 截断**（oracle `:1328`；G2 的 `:1341` 同）：命中 ⇒ 之后的登录序——
+        // 攻击模式文案/CTRL-H/欢迎/G3/六条 SendPriorityMsg/行会段等——**一律不入队**
+        // （不是「占堆不产帧」，是堆里根本没有；与 G3 的「无 return 走完」相反）。
+        if self.version_gate.kick_truncated() {
+            return;
+        }
         // ③ 登录 SysMsg（`PlayObject.cs:1342-1383`）：`switch (AttatckMode)` 的攻击模式文案
         //    （仅枚举 0..=6 时入队；`switch` 无 `default` ⇒ 枚举外一条都不发、不占槽）
         //    + `StartChangeAttackModeHelp`（恒发）+ `TestServer` 的 `StartNoticeMsg`。
-        let prio_sysmsg = (messages::RM_SYSMESSAGE & 0xFF) as u8;
         if self.attack_mode.is_some_and(|m| m <= 6) {
             queue.enqueue(LoginQueued::SysMsg(0), prio_sysmsg);
         }
@@ -2810,6 +2857,7 @@ mod tests {
             // 旧注释「抓包截到 10、不含 657」与文件事实相反（已订正）。
             char_status: Some((0, 0)),
             emergency_close: false,
+            version_gate: VersionGateHit::None,
         }
     }
 
@@ -3000,6 +3048,7 @@ mod tests {
             // `RecalcAbilitys` 的两条 657 载荷（`CharStatus=0`、`HitSpeed=0`：金标准/真机同值）。
             char_status: Some((0, 0)),
             emergency_close: false,
+            version_gate: VersionGateHit::None,
         };
         let got: Vec<u16> = inputs
             .frames()
@@ -3061,6 +3110,7 @@ mod tests {
             // ⇒ `(CharStatus=0, HitSpeed=0)`。
             char_status: Some((0, 0)),
             emergency_close: false,
+            version_gate: VersionGateHit::None,
         }
     }
 
