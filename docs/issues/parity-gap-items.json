@@ -5,7 +5,7 @@
   "counting_moment": {
     "head": "f9271087fa143d3c3a2d2e2e1fde041e37ade4c1",
     "time": "2026-11-20T16:35:42+0800",
-    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。；M-IT09101113 = 换图簇升格（IT-09/10/11/13，物品 verified 17/19，2026-11-20）。；M-IT17 = IT-17 升格（物品 verified 18/19，2026-11-20）。；M-SCOPEFULL-09101113 = 2026-11-28 IT-09/10/11/13 换图簇字段点亮升满（删 scope 键；落地图笔 189226ca0 + opc-66 独立复验）——全板 scope≠full 计数 55→51（总监口径落账）。"
+    "note": "2026-11-20 **b3 合入后重测**（card/items-it13 rebase 到 c8e48dbde）：verified=12、implemented_unverified=7（IT-09/10/11/13/14/15/16/17 之实际集合见条目）、missing=0；分母 19 不动。**两个重测点并列**：① b3 重测（head 1285b0d94）：旧 9/4/6 → 12/6/1；② IT-13 重测（b3 合入后）：12/6/1 → 12/7/0（IT-13 由 missing 转 implemented_unverified）。旧 head 时代值（8b738d987）：verified=9 / implemented_unverified=4 / missing=6。；M-IT16 = f5a7999c3（IT-16 升格，物品 verified 13/19，2026-11-20；scope=partial，未覆盖 9 项见 scope 字段）。；M-IT09101113 = 换图簇升格（IT-09/10/11/13，物品 verified 17/19，2026-11-20）。；M-IT17 = IT-17 升格（物品 verified 18/19，2026-11-20）。；M-SCOPEFULL-09101113 = 2026-11-28 IT-09/10/11/13 换图簇字段点亮升满（删 scope 键；落地图笔 189226ca0 + opc-66 独立复验）——全板 scope≠full 计数 55→51（总监口径落账）。；M-B3-LEDGER-010304 = 2026-11-28 IT-01/03/04 台账过期订正 + 升满（B3 六例 2026-11-20 已并入夹具、manifest 漏更；三组变异自证有牙，IT-01/03 单侧例为首红、IT-04 定向失效态首红 ac_only）——全板 scope≠full 计数 51→48（总监口径落账）。"
   },
   "status_enum": [
     "verified",
@@ -85,20 +85,21 @@
         "line_end": null
       },
       "status": "verified",
-      "scope": "single_side_clamp_uncovered；①档落地排队：单侧封顶两例（夹具数值边界）；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
         "cases": [
           "eat_ok_shape1_fixed",
-          "eat_ok_shape1_clamp"
+          "eat_ok_shape1_clamp",
+          "eat_ok_shape1_clamp_hp_only",
+          "eat_ok_shape1_clamp_mp_only"
         ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：原两例两侧同时到顶/同时不顶，只 HP 封顶而 MP 不封顶及其反向未覆盖（B3）。",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：原两例两侧同时到顶/同时不顶，只 HP 封顶而 MP 不封顶及其反向未覆盖（B3）。；【台账过期订正 + scope 升满 2026-11-28，card/items-scope-triage】B3 六个单侧例已于 92a7af77e（2026-11-20）并入 eat_vectors（37 例全量进 matches_oracle_eat_fixture 逐字段比较、一直绿），但本条 manifest 漏更（evidence.cases 未引、scope 仍标 uncovered）——分诊 ① 表对本条的处方（加夹具数值边界）实际已满足。本笔三组变异自证单侧面有牙（实测红→还原，全部在本车道 worktree 复现，恢复后 matches_oracle_eat_fixture 1 passed）：M-IT01 recover::inc_health_spell HP 截顶臂连带顶满 MP（跨侧污染；fixed 不截顶例/旧双侧顶例均不受扰）⇒ 首红且唯一红=eat_ok_shape1_clamp_hp_only（WAbil.mp left=18 vs oracle 12）；另验：MP 侧封顶整体删除 ⇒ eat_ok_shape1_clamp 红（mp 202≠18，比较器按序先炸同面早例）。）⇒ scope=full（coverage 口径：删 scope 键）。原 scope 文本：single_side_clamp_uncovered；①档落地排队：单侧封顶两例（夹具数值边界）；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "basis": "semantic"
     },
     {
@@ -133,13 +134,14 @@
         "line_end": null
       },
       "status": "verified",
-      "scope": "single_side_clamp_uncovered；①档落地排队：百分比单侧截断边界；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
         "cases": [
-          "eat_ok_shape3_percent"
+          "eat_ok_shape3_percent",
+          "eat_ok_shape3_percent_clamp_hp_only",
+          "eat_ok_shape3_percent_clamp_mp_only"
         ],
         "unit_tests": [
           "useitem::tests::shape3_percent_rounds_away_from_zero"
@@ -147,7 +149,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：单例，百分比下只一侧截断/另一侧不截断的边界未覆盖（B3）。",
+      "notes": "未覆盖子空间（scope=single_side_clamp_uncovered）：单例，百分比下只一侧截断/另一侧不截断的边界未覆盖（B3）。；【台账过期订正 + scope 升满 2026-11-28，card/items-scope-triage】B3 六个单侧例已于 92a7af77e（2026-11-20）并入 eat_vectors（37 例全量进 matches_oracle_eat_fixture 逐字段比较、一直绿），但本条 manifest 漏更（evidence.cases 未引、scope 仍标 uncovered）——分诊 ① 表对本条的处方（加夹具数值边界）实际已满足。本笔三组变异自证单侧面有牙（实测红→还原，全部在本车道 worktree 复现，恢复后 matches_oracle_eat_fixture 1 passed）：M-IT03 useitem Shape3 百分比臂 HP 截顶时连带顶满 MP（Shape3 专属；percent 例两侧均不截顶不受扰）⇒ 首红且唯一红=eat_ok_shape3_percent_clamp_hp_only（WAbil.mp left=25 vs oracle 13）。）⇒ scope=full（coverage 口径：删 scope 键）。原 scope 文本：single_side_clamp_uncovered；①档落地排队：百分比单侧截断边界；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "basis": "semantic"
     },
     {
@@ -159,20 +161,21 @@
         "line_end": null
       },
       "status": "verified",
-      "scope": "single_ac_or_mac_uncovered；①档落地排队：AC>0/MAC>0 单侧分支两例；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
         "cases": [
           "eat_ok_shape0_inc_pool",
-          "eat_ok_shape0_inc_zero"
+          "eat_ok_shape0_inc_zero",
+          "eat_ok_shape0_ac_only",
+          "eat_ok_shape0_mac_only"
         ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "ushort 回绕 未覆盖子空间（scope=single_ac_or_mac_uncovered）：原两例 AC>0 且 MAC>0、两侧 0；`if(AC>0)`/`if(MAC>0)` 单侧分支未覆盖（B3）。",
+      "notes": "ushort 回绕 未覆盖子空间（scope=single_ac_or_mac_uncovered）：原两例 AC>0 且 MAC>0、两侧 0；`if(AC>0)`/`if(MAC>0)` 单侧分支未覆盖（B3）。；【台账过期订正 + scope 升满 2026-11-28，card/items-scope-triage】B3 六个单侧例已于 92a7af77e（2026-11-20）并入 eat_vectors（37 例全量进 matches_oracle_eat_fixture 逐字段比较、一直绿），但本条 manifest 漏更（evidence.cases 未引、scope 仍标 uncovered）——分诊 ① 表对本条的处方（加夹具数值边界）实际已满足。本笔三组变异自证单侧面有牙（实测红→还原，全部在本车道 worktree 复现，恢复后 matches_oracle_eat_fixture 1 passed）：M-IT04 default 池臂 AC/MAC 互换 ⇒ 首红=eat_ok_shape0_inc_pool（IncHealth left=10 vs 18；同面早例先炸，ac_only/mac_only 在同路径下游）+ 定向失效态（MAC==0 走错臂加 AC）⇒ 首红且唯一红=eat_ok_shape0_ac_only（IncSpell left=19 vs oracle 4）。）⇒ scope=full（coverage 口径：删 scope 键）。原 scope 文本：single_ac_or_mac_uncovered；①档落地排队：AC>0/MAC>0 单侧分支两例；见分诊 items-scope-full-audit-triage-20261128.md ①表",
       "basis": "semantic"
     },
     {

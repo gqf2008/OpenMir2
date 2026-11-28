@@ -135,3 +135,12 @@ rig 同值；四组变异红→还原留痕（M1 尾/M2 DARK 臂/M3 Dir 活值/M
 全板 scope≠full 计数：分诊时 60 → 五条升满批（dddbb9609，MG-55/60/61/62/63）后 55 → 本笔 51。
 ① 档余量：IT-01/03/04/17、MG-13/14/15/23/46/48、MG-59（U-1/U-2）、MG-64/65 共 12 条（MG-12/59-U-3 归 ②）。
 
+**IT-01/03/04 落地记录（2026-11-28，card/items-scope-triage，openmir2-10）**：动手前机检发现
+三条的处方（夹具数值边界）**已于 B3 批满足**——92a7af77e（2026-11-20）把六个单侧例
+（Shape1 只 HP/只 MP 顶、Shape3 百分比两向单侧、default 仅 AC/仅 MAC）并入了 eat_vectors
+（37 例全量进 `matches_oracle_eat_fixture` 比较、一直绿），但三条 manifest 漏更（evidence.cases
+未引、scope 仍标 uncovered）⇒ 属 ③-D 类「残差已被后续批闭合、台账过期」。本笔=台账订正 +
+变异自证：M-IT01（HP 截顶臂连带顶满 MP）首红=clamp_hp_only、M-IT03（Shape3 同型污染）首红=
+percent_clamp_hp_only、M-IT04（池臂 AC/MAC 互换+MAC==0 错臂定向失效态）首红=inc_pool/ac_only；
+三条 scope=full（evidence.cases 补引六例），全板计数 51→48。
+
