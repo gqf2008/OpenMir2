@@ -951,10 +951,10 @@ public static class Program
         for (int i = 0; i < cases.Length; i++)
         {
             var fx = cases[i].Fixture;
-            int anti = (int)fx.GetType().GetProperty("anti_magic").GetValue(fx);
-            string reason = (string)fx.GetType().GetProperty("seed_reason").GetValue(fx);
-            long total = Convert.ToInt64(fx.GetType().GetProperty("rng_total_draws").GetValue(fx));
-            long recorded = Convert.ToInt64(fx.GetType().GetProperty("rng_recorded").GetValue(fx));
+            int anti = FixtureProp<int>(fx, "anti_magic");
+            string reason = FixtureProp<string>(fx, "seed_reason");
+            long total = FixtureProp<long>(fx, "rng_total_draws");
+            long recorded = FixtureProp<long>(fx, "rng_recorded");
             Check("effective-anti#" + cases[i].Label, anti == LoginOrderAntiMagic, "fixture.anti_magic=" + anti);
             Check("seed-reason#" + cases[i].Label, !string.IsNullOrEmpty(reason) && reason.Contains("门槛 anti_magic=1"), "reason=" + reason);
             Check("cover-accounting#" + cases[i].Label, total == recorded, "total=" + total + " recorded=" + recorded);
@@ -2563,6 +2563,17 @@ private static int ReadInstanceInt(object obj, string fieldName)
         TickCase("tick_gate_edge_20", 1, 6300, 50, 20, new[] { 1300, 1600, 1899, 1900 });
         TickCase("tick_gate_edge_1", 1, 6400, hp1, 1, new[] { 1300, 1899, 1900, 2090 });
         TickCase("tick_lag_rearm", 1, 6500, 50, 20, new[] { 1300, 1600, 1900 });
+        // **MG-12（2026-11-29，② 档卡 openmir2-mg12-wallclock-phase，总监三点裁定 ①）**：
+        // 真实宿主 tick 网格（P=200ms）×施法相位 {0, +1ms, 半格=+100ms} 扫描——列表值=网格
+        // 采样点（非手挑时刻），判据=同 schedule 精确比（两侧状态机同源）。相位 0（边界对齐）
+        // ⇒ 火恰落 deadline（400/…/2400）、cadence 400ms、药池恰尽（inc_healing=0 收尾）；
+        // 相位 +1/半格 ⇒ 首火后每火过冲 ≥1 计入重挂（now+min(200, 过冲)）⇒ **持续 cap-200
+        // ⇒ cadence 600ms**（cap 过冲面——旧 golden 从未覆盖；门沿/cap 常数变异 ⇒ 本组红）。
+        // oracle SystemProcessor 生产节拍 50ms 与 rust tick 200ms 的跨网格差异=登记偏差不比
+        // （总监裁定 ③：50ms 循环离线不可复现=结构性不可观测，G5 判型同族）。
+        TickCase("tick_grid_phase0", 1, 6600, 50, 20, new[] { 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400 });
+        TickCase("tick_grid_phase1", 1, 6700, 50, 20, new[] { 1, 201, 401, 601, 801, 1001, 1201, 1401, 1601, 1801, 2001, 2201, 2401, 2601, 2801 });
+        TickCase("tick_grid_phase100", 1, 6800, 50, 20, new[] { 100, 300, 500, 700, 900, 1100, 1300, 1500, 1700, 1900, 2100, 2300, 2500, 2700, 2900 });
         cases.AddRange(tickCases);
         return EmitGolden(spec, cases.ToArray());
     }
@@ -2573,11 +2584,27 @@ private static int ReadInstanceInt(object obj, string fieldName)
     /// `EmitGolden` 之前 ⇒ 不落盘。防的失效模式：改了 `TargetLevel` 或手改 HP，让「满血」静默变成
     /// 「未满血」、治疗分支悄悄回来（12 号 2026-11-20 的回归）。
     /// </summary>
+    /// **MG-12（2026-11-29）**：Fixture **双形态读取**——无键 stem（healing 等）经
+    /// `AttachStatusTimeArr` 全空早退返回**匿名对象**；有键 stem 被转成 **JsonNode**。
+    /// （U-2 批起 `amulet_off` 以 false 占位传参 ⇒ 无键 stem 的 Fixture 也节点化。）
+    /// 反射读法对节点返回 null ⇒ NRE（healing regen 首次暴露）。装置内一律走此口。
+    private static T FixtureProp<T>(object fixture, string prop)
+    {
+        if (fixture is System.Text.Json.Nodes.JsonNode node)
+        {
+            var v = node[prop] ?? throw new InvalidOperationException($"Fixture 缺 {prop}");
+            return v.GetValue<T>();
+        }
+        var p = fixture.GetType().GetProperty(prop)
+            ?? throw new InvalidOperationException($"Fixture 缺 {prop}");
+        return (T)p.GetValue(fixture)!;
+    }
+
     private static void EnsureFullHpBranch(string where, object fixture, MagicSpec spec)
     {
         int derivedMaxHp = FixtureContract.Recompute(spec.Job, (byte)spec.TargetLevel).MaxHp;
-        int hp = (int)fixture.GetType().GetProperty("target_hp").GetValue(fixture);
-        int maxHp = (int)fixture.GetType().GetProperty("target_max_hp").GetValue(fixture);
+        int hp = FixtureProp<int>(fixture, "target_hp");
+        int maxHp = FixtureProp<int>(fixture, "target_max_hp");
         if (hp != derivedMaxHp)
         {
             throw new FixtureContractViolation(
