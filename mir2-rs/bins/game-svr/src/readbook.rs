@@ -422,13 +422,27 @@ mod tests {
             let mut sg = crate::tests::test_session_ground(actor_id);
             sg.equip.job = ctx["job"].as_u64().unwrap() as u8;
             sg.equip.abil.level = ctx["level"].as_u64().unwrap() as u8;
-            sg.state.item_list = vec![BagItem {
-                make_index: 1,
-                index,
-                dura: 10,
-                dura_max: 20,
-                desc: [0; 14],
-            }];
+            // **IT-17 weight 点亮（① 档，2026-11-28）**：背包从夹具 `ctx.bag` 同形建袋
+            // （条件键：仅 ExtraBag 例出现；无键走既有单件路径 ⇒ 既有例零变化）。
+            sg.state.item_list = if let Some(bag) = ctx["bag"].as_array() {
+                bag.iter()
+                    .map(|it| BagItem {
+                        make_index: it["make_index"].as_i64().unwrap() as i32,
+                        index: it["index"].as_u64().unwrap() as u16,
+                        dura: 10,
+                        dura_max: 20,
+                        desc: [0; 14],
+                    })
+                    .collect()
+            } else {
+                vec![BagItem {
+                    make_index: 1,
+                    index,
+                    dura: 10,
+                    dura_max: 20,
+                    desc: [0; 14],
+                }]
+            };
             // `SM_WEIGHTCHANGED(622)` 的三字段前值（`WeightChanged` 只改 Weight）。
             sg.state.wabil.weight = ctx["wabil_before"]["weight"].as_u64().unwrap() as u16;
             sg.state.wabil.wear_weight = ctx["wabil_before"]["wear_weight"].as_u64().unwrap() as u8;
@@ -687,6 +701,37 @@ mod tests {
     #[test]
     fn it17a_success_ergum_raw_socket() {
         run_readbook_parity(Some("eat_ok_book_ergum_learns_and_thrusting"));
+    }
+
+    /// **IT-17 weight 点亮（① 档，2026-11-28）**：包内第二本书读后保留 ⇒ `WeightChanged`
+    /// 重算 `Weight=5≠0` ⇒ 622 的 `Recog=5`、校验和覆盖非零和（书5+手7=12）；学习面与
+    /// ergum 例同支。变异自证见送审报告（622 Recog 源钉死 0 ⇒ 本例红、既有例绿）。
+    #[test]
+    fn it17a_success_second_book_keeps_weight() {
+        run_readbook_parity(Some("eat_ok_book_ergum_second_book_keeps_weight"));
+        let doc = fixture();
+        let c = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_book_ergum_second_book_keeps_weight")
+            .expect("夹具必须含 second_book 例");
+        let got = c["expect"]["pumped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["ident"] == 622)
+            .expect("必须有 622");
+        assert_eq!(
+            got["recog"].as_i64(),
+            Some(5),
+            "622 Recog = 重算后 Weight（非零：第二本书留在包）"
+        );
+        assert_eq!(
+            got["series"].as_i64(),
+            Some(36679),
+            "622 Series = ((5+0+7)^0x3A5F)^0x1F35^0xaa21（非零和校验）"
+        );
     }
 
     /// **门②已学**：`MagicList` 已有 ⇒ 636、物品保留。

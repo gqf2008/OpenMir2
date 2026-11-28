@@ -177,3 +177,12 @@ MG-13 主链位号面共用该例）。装置 target-prebuff 复用（零新装�
 还原后同 id（mg15-final）11 驱动 + 三比较器全绿。MG-13/14/15 三条 residual 均只剩
 Shape>2 ③-C（生产不可达）⇒ 可一并升满（46→43，待总监复验本笔后落账）。
 
+**IT-17 weight 面落地 + 升满（2026-11-28，card/items-scope-triage，openmir2-10）**：
+readbook-probe 新例 `eat_ok_book_ergum_second_book_keeps_weight`（包内第二本书读后保留 ⇒
+WeightChanged 重算 Weight=5≠0 ⇒ 622 Recog=5、校验和覆盖 12；probe Ctx.ExtraBag +
+ctx.bag 条件键——既有 8 例仅加 "bag": null 键、内容零变化；rig 背包从 ctx.bag 同形建袋）。
+变异自证：readbook WeightChanged Recog 钉死 0 ⇒ 新例帧逐字节红（Cmd(0,622,0,7,36684) vs
+golden Cmd(5,622,0,7,36679)）而仅旧例的 ergum 单例测试保持绿（判别面）。IT-17 scope=full
+（删键；657 已由 m3 批点亮、item_list ③-B 归另卡）——**物品域 scope 键清零（0/19）**。
+全板 partial 计数待总监按 coverage-report 实际输出落账（IT-17 一条：预计 43 或按主档 42）。
+

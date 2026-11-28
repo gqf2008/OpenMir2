@@ -206,6 +206,9 @@ internal static class Program
         public (int type, int dura, int stateval)[] PreBuffs = Array.Empty<(int, int, int)>();
         /// <summary>**IT-17 输入注入批**：会话预挂武器（`UseItems[Weapon]`；MAC 高字节 = RealAttackSpeed 源）。</summary>
         public (ushort index, ushort dura)? Weapon;
+        /// <summary>**IT-17 weight 点亮（① 档，2026-11-28）**：额外背包件（读掉主书后仍在包）⇒
+        /// `WeightChanged` 重算 `Weight>0` ⇒ 622 的 Recog/校验和覆盖非零和（IT-16 同源字段复用）。</summary>
+        public ushort[] ExtraBag = Array.Empty<ushort>();
     }
 
     private static UserItem ToUser(ushort index)
@@ -364,6 +367,12 @@ internal static class Program
             po.MagicList.Add(new UserMagic { Magic = def, MagIdx = (ushort)id, Key = (char)0, Level = 0, TranPoint = 0 });
         }
         po.ItemList.Add(ToUser(c.Index));
+        // **IT-17 weight 点亮（① 档，2026-11-28）**：额外背包件（读掉主书后仍在包）⇒
+        // `WeightChanged` 重算 `Weight>0` ⇒ 622 的 Recog/校验和覆盖非零和。
+        foreach (var extraIdx in c.ExtraBag)
+        {
+            po.ItemList.Add(new UserItem { MakeIndex = 2, Index = extraIdx, Dura = 10, DuraMax = 20 });
+        }
         // RecalcAbilitys 会按等级重算基础字段（真身）；Abil 先置等级即可。
         po.Abil = new Ability { Level = (byte)c.Level };
         po.WAbil = new Ability { Level = (byte)c.Level };
@@ -401,6 +410,8 @@ internal static class Program
         _ = PumpRaw(po, operate, preRaw);
         net.Frames.Clear(); // 预帧丢弃点：本 case 的帧面从这里起。
 
+        // **IT-17 weight 点亮**：case 起点背包快照（Rust rig 按本键建同形背包）。
+        var bagBefore = po.ItemList.Select(u => new { make_index = (int)u.MakeIndex, index = (int)u.Index }).ToArray();
         var wabilBefore = new Ability
         {
             Weight = po.WAbil.Weight,
@@ -460,6 +471,9 @@ internal static class Program
                     wear_weight = (int)wabilBefore.WearWeight,
                     hand_weight = (int)wabilBefore.HandWeight,
                 },
+                // case 起点背包（**条件键**：只在 ExtraBag 例出现 ⇒ 既有例零变化；Rust rig
+                // 有键按袋建、无键走既有单件路径）。
+                bag = c.ExtraBag.Length > 0 ? bagBefore : null,
                 // 这本书名对应的**魔法表条目**（尾 = ClientMagic.Def 的来源，逐字段钉住）。
                 magic = magic.TryGetValue(BookName(table, c.Index), out var bookDef) ? MagicDto(bookDef) : null,
                 templates = new[] { new { index = (int)c.Index, name = BookName(table, c.Index) } },
@@ -607,6 +621,16 @@ internal static class Program
                 PreBuffs = preBuffs,
                 Weapon = weapon,
                 Note = "刺杀剑术(id12, Job0, TrainLevel[0]=10)：学习成功 ⇒ SM_ADDMAGIC + `+LNG` 原始串帧 + 635",
+            }),
+            RunCase(table, net, "eat_ok_book_ergum_second_book_keeps_weight", new Ctx
+            {
+                Name = "eat_ok_book_ergum_second_book_keeps_weight",
+                Index = 3001,
+                Level = 20,
+                PreBuffs = preBuffs,
+                Weapon = weapon,
+                ExtraBag = new ushort[] { 3002 },
+                Note = "IT-17 weight 点亮：包内第二本书（半月弯刀 3002）读后保留 ⇒ WeightChanged 重算 Weight=5≠0 ⇒ 622 Recog=5、校验和覆盖 12（书5+手7）；学习面与 ergum 例同支",
             }),
             RunCase(table, net, "eat_ok_book_banwol_learns_and_halfmoon", new Ctx
             {

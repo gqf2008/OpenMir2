@@ -564,7 +564,8 @@
           "eat_fail_book_already_learned",
           "eat_fail_book_job_mismatch",
           "eat_fail_book_level_too_low",
-          "eat_fail_book_already_learned_and_level_low"
+          "eat_fail_book_already_learned_and_level_low",
+          "eat_ok_book_ergum_second_book_keeps_weight"
         ],
         "unit_tests": [
           "readbook::tests::it17a_success_ergum_raw_socket",
@@ -577,9 +578,8 @@
       },
       "cost": "S-M",
       "deviation": null,
-      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：17a 学习面全绿；能力层 **IT-17b 已合入 master**（`card/items-skillpassive-17b`：RecalcAbilitys 技能被动结构 + `HitSkillState` 由会话 `MagicArr` 派生 + 正反两条攻击帧用例；merge `9ab1e4eec`，QA PASS @ `d3ab106e3`），**17b-3b 攻杀 RNG 也已合入**（`RandomByte(7-L)` 抽数接线：`Option` 签名 + `world.rng` + 三用例；merge `cdedad03c`，QA PASS @ `a95e25c5a`）；但 17b 的证据不并入 IT-17 的 evidence 面 ⇒ 本域仍不计 verified。657 本卡按同值发。 【IT-17b 结构层偏差】MagIdx>=50 时 oracle MagicArr 越界抛 IndexOutOfRangeException，本仓选择跳过并 WRN（不把内容数据错误升级成崩溃）；用例 magic_arr_ignores_id_out_of_range 钉住。17a 批 0 抽是结构性（无 rng 形参、不含攻杀）；攻杀 RNG 已由 17b-3b 接线（见上）。；2026-11-20 升格 verified(partial)：QA ae 第二方复核 @ bb160e2ad；旁证：成功例每例恰 1 条 657，与 89 的队列空⇒净1 判定吻合\n\n【未验面收口（2026-11-27）：m3 探针输入注入批已落地（master f825d271a），657 两字段真值对拍全 8 例绿——本小节撤销条件达成，原文见 git 历史】",
-      "basis": "semantic",
-      "scope": "verified, scope=partial：读书四门(书表/已学/职业/等级) + 成功支 MagicList 终态&保序 + 帧逐字节 + 读路径 0 抽(记录器自证) 已对拍；未覆盖：①expect.item_list 只比件数、元素字段(make_index/index/dura/dura_max)记录而不比（另卡 openmir2-itemlist-element-compare.md）②657 的 HitSpeed/CharStatus 夹具恒 0（oracle 是真实变量 PlayObject.cs:2876/:4419）——该两字段未点亮，仅以 0/0 对拍；另 622 校验和本夹具仅 weight=0（字段在 IT-16 已点亮）；分档：622 weight=①档落地排队（复用 IT-16 已点亮同源）；item_list 元素比较=定性关账③-B（另卡 openmir2-itemlist-element-compare.md）；657 HitSpeed/CharStatus 残余已被 m3 批点亮消除（备注过期）；见分诊 items-scope-full-audit-triage-20261128.md"
+      "notes": "宿主拦截（readbook::maybe_read_book，零改 useitem.rs）：按物品名 FindMagic → 三门复用 world-bevy::magic::can_read_book → MagicList.Add(Level=0) → SM_ADDMAGIC(Level=0) + +LNG/+WID 原始串帧 + 635 → 622/657/100；书不落 boNODRUG。MagicList 快照写点=登录+学成，build_save_record 回写记录。仍 implemented_unverified：17a 学习面全绿；能力层 **IT-17b 已合入 master**（`card/items-skillpassive-17b`：RecalcAbilitys 技能被动结构 + `HitSkillState` 由会话 `MagicArr` 派生 + 正反两条攻击帧用例；merge `9ab1e4eec`，QA PASS @ `d3ab106e3`），**17b-3b 攻杀 RNG 也已合入**（`RandomByte(7-L)` 抽数接线：`Option` 签名 + `world.rng` + 三用例；merge `cdedad03c`，QA PASS @ `a95e25c5a`）；但 17b 的证据不并入 IT-17 的 evidence 面 ⇒ 本域仍不计 verified。657 本卡按同值发。 【IT-17b 结构层偏差】MagIdx>=50 时 oracle MagicArr 越界抛 IndexOutOfRangeException，本仓选择跳过并 WRN（不把内容数据错误升级成崩溃）；用例 magic_arr_ignores_id_out_of_range 钉住。17a 批 0 抽是结构性（无 rng 形参、不含攻杀）；攻杀 RNG 已由 17b-3b 接线（见上）。；2026-11-20 升格 verified(partial)：QA ae 第二方复核 @ bb160e2ad；旁证：成功例每例恰 1 条 657，与 89 的队列空⇒净1 判定吻合\n\n【未验面收口（2026-11-27）：m3 探针输入注入批已落地（master f825d271a），657 两字段真值对拍全 8 例绿——本小节撤销条件达成，原文见 git 历史】；【weight 点亮 + scope 升满 2026-11-28，card/items-scope-triage】622 校验和夹具 weight=0 的位号面已点亮：readbook-probe 新例 `eat_ok_book_ergum_second_book_keeps_weight`（包内第二本书读后保留 ⇒ `WeightChanged` 重算 Weight=5≠0 ⇒ 622 Recog=5、校验和覆盖 12=书5+手7；probe Ctx.ExtraBag + ctx.bag 条件键，既有 8 例仅加 \"bag\": null 键、内容零变化；rig 背包从 ctx.bag 同形建袋）。变异自证（实测红→还原）：readbook WeightChanged Recog 钉死 0 ⇒ 新例帧逐字节红（Cmd(0,622,0,7,36684) vs golden Cmd(5,622,0,7,36679)）而仅旧例的 ergum 单例测试保持绿（判别面）；还原后 it17a 7/7 绿 + workspace --lib 4232/0/274。coverage 口径（full=无 scope 键，1abe1f9cb 先例）——面已点亮/牙已证/残留均为归属他卡或已点亮 ⇒ 升满。657 HitSpeed/CharStatus 已由 m3 批点亮（前记）；item_list 元素比较=③-B（另卡 openmir2-itemlist-element-compare.md，残留归属不变）。原 scope 文本：verified, scope=partial：读书四门(书表/已学/职业/等级) + 成功支 MagicList 终态&保序 + 帧逐字节 + 读路径 0 抽(记录器自证) 已对拍；未覆盖：①expect.item_list 只比件数、元素字段(make_index/index/dura/dura_max)记录而不比（另卡 openmir2-itemlist-element-compare.md）②657 的 HitSpeed/CharStatus 夹具恒 0（oracle 是真实变量 PlayObject.cs:2876/:4419）——该两字段未点亮，仅以 0/0 对拍；另 622 校验和本夹具仅 weight=0（字段在 IT-16 已点亮）；分档：622 weight=①档落地排队（复用 IT-16 已点亮同源）；item_list 元素比较=定性关账③-B（另卡 openmir2-itemlist-element-compare.md）；657 HitSpeed/CharStatus 残余已被 m3 批点亮消除（备注过期）；见分诊 items-scope-full-audit-triage-20261128.md",
+      "basis": "semantic"
     },
     {
       "id": "IT-18",

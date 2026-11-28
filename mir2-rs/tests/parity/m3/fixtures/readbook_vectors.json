@@ -1,6 +1,6 @@
 {
   "generator": "mir2-rs/tests/parity/m3/readbook-probe",
-  "oracle_source_sha256": "4f410c13000e8c7df7759475a3257e6d9712cb8fb7ec88daa614afa07756fe9b",
+  "oracle_source_sha256": "a0b07deef4422d53d18ec122388ca6090b41e3cb576036c3bd7ff7eb575aad73",
   "oracle_source_sha256_files": [
     "src/M2Server/Player/PlayObject.Operate.cs",
     "src/M2Server/Player/PlayObject.Base.cs",
@@ -296,6 +296,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 12,
           "name": "\u523A\u6740\u5251\u672F",
@@ -457,6 +458,210 @@
       }
     },
     {
+      "name": "eat_ok_book_ergum_second_book_keeps_weight",
+      "ctx": {
+        "index": 3001,
+        "actor_id": 943001,
+        "level": 20,
+        "job": 0,
+        "known": [],
+        "note": "IT-17 weight \u70B9\u4EAE\uFF1A\u5305\u5185\u7B2C\u4E8C\u672C\u4E66\uFF08\u534A\u6708\u5F2F\u5200 3002\uFF09\u8BFB\u540E\u4FDD\u7559 \u21D2 WeightChanged \u91CD\u7B97 Weight=5\u22600 \u21D2 622 Recog=5\u3001\u6821\u9A8C\u548C\u8986\u76D6 12\uFF08\u4E665\u002B\u624B7\uFF09\uFF1B\u5B66\u4E60\u9762\u4E0E ergum \u4F8B\u540C\u652F",
+        "seed": 20261120,
+        "prebuffs": [
+          {
+            "type": 2,
+            "dura": 60000,
+            "state_val": 1
+          }
+        ],
+        "weapon": {
+          "index": 5001,
+          "dura": 10,
+          "make_index": 2
+        },
+        "wabil_before": {
+          "weight": 10,
+          "wear_weight": 0,
+          "hand_weight": 7
+        },
+        "bag": [
+          {
+            "make_index": 1,
+            "index": 3001
+          },
+          {
+            "make_index": 2,
+            "index": 3002
+          }
+        ],
+        "magic": {
+          "magic_id": 12,
+          "name": "\u523A\u6740\u5251\u672F",
+          "effect_type": 1,
+          "effect": 8,
+          "spell": 10,
+          "power": 10,
+          "max_power": 10,
+          "train_level": [
+            10,
+            11,
+            12,
+            0
+          ],
+          "max_train": [
+            100,
+            200,
+            300,
+            0
+          ],
+          "train_lv": 3,
+          "job": 0,
+          "delay_time": 0,
+          "def_spell": 0,
+          "def_power": 0,
+          "def_max_power": 0,
+          "desc": ""
+        },
+        "templates": [
+          {
+            "index": 3001,
+            "name": "\u523A\u6740\u5251\u672F"
+          }
+        ]
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 210,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 1,
+            "payload": "00000000d2000000000001006464686b6464686b64645c6b646454495455593d413f624f516468676464686b6465606b6466686966646263676468606c6468676454686964643c6b6564686b6464686b6467686b6464686b6464686b6464626b6464686b6464686b6464686b6464686b6464686b6464686b6464686b",
+            "len": 144
+          },
+          {
+            "ident": -1,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "2b4c4e47",
+            "len": 24
+          },
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0,
+            "payload": "000000007b02000000000000",
+            "len": 32
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": -2147483648,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          },
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 219,
+            "n_param2": 255,
+            "n_param3": 0,
+            "priority": 252,
+            "late": 0
+          }
+        ],
+        "pumped": [
+          {
+            "ident": 622,
+            "recog": 5,
+            "param": 0,
+            "tag": 7,
+            "series": 36679,
+            "payload": "050000006e0200000700478f",
+            "len": 32
+          },
+          {
+            "ident": 657,
+            "recog": 943001,
+            "param": 0,
+            "tag": 32768,
+            "series": 2,
+            "payload": "99630e009102000000800200",
+            "len": 32
+          },
+          {
+            "ident": 100,
+            "recog": 943001,
+            "param": 65499,
+            "tag": 0,
+            "series": 1,
+            "payload": "99630e006400dbff0000010056507b5657405c5a55414d433f43404a",
+            "len": 48
+          }
+        ],
+        "pump_idents": [
+          10115,
+          10139,
+          11004
+        ],
+        "magic_list_before": [],
+        "magic_arr_before": [],
+        "magic_list": [
+          {
+            "mag_idx": 12,
+            "level": 0,
+            "key": 0,
+            "train_point": 0
+          }
+        ],
+        "magic_arr": [
+          {
+            "id": 12,
+            "level": 0
+          }
+        ],
+        "use_thrusting": true,
+        "use_half_moon": false,
+        "char_status": -2147483648,
+        "hit_speed": 2,
+        "abil_level": 20,
+        "item_list": [
+          {
+            "make_index": 2,
+            "index": 3002,
+            "dura": 10,
+            "dura_max": 20
+          }
+        ],
+        "weight": 5,
+        "rng_draw_count": 0,
+        "rng": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
       "name": "eat_ok_book_banwol_learns_and_halfmoon",
       "ctx": {
         "index": 3002,
@@ -488,6 +693,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 25,
           "name": "\u534A\u6708\u5F2F\u5200",
@@ -675,6 +881,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": null,
         "templates": [
           {
@@ -754,6 +961,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 12,
           "name": "\u523A\u6740\u5251\u672F",
@@ -874,6 +1082,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 1,
           "name": "\u706B\u7403\u672F",
@@ -978,6 +1187,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 26,
           "name": "\u70C8\u706B\u5251\u6CD5",
@@ -1082,6 +1292,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 49,
           "name": "\u8FB9\u754C\u6280\u80FD",
@@ -1243,6 +1454,7 @@
           "wear_weight": 0,
           "hand_weight": 7
         },
+        "bag": null,
         "magic": {
           "magic_id": 46,
           "name": "\u9AD8\u7EA7\u523A\u6740",
