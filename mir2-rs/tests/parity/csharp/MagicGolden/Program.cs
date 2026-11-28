@@ -1809,6 +1809,16 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool AmuletOff;
         /// <summary>
+        /// **MG-59 U-3（2026-11-29，② 档卡 openmir2-mg59-u3-buff-timeout）**：排水后把虚拟钟拨到
+        /// `castTick + offset`，对**受惠者**（自施=caster）直调生产 `Run()` 跑 oracle ExtraAbil
+        /// 到期块（`PlayObject.Message.cs:168-227`）。语义：null=关（既有件零变化）；
+        /// **-1**=哨兵「到期后 500ms」（offset=`ExtraAbilTimes[0]-castTick+500`）；
+        /// **-2**=哨兵「恰在到期边界 `now==times`」（钉严格 `>` 的 ±1 牙：oracle 预期=只出
+        /// 10 秒预告 SysMsg、buff 仍在——`now > times` 严格不成立 ⇒ 不到期，走预告臂）；
+        /// 正值=固定偏移毫秒。int 安全：ClockSeam 虚拟基数 1_000_000，times≈1.23M ≪ int.MaxValue。
+        /// </summary>
+        public int? RunAfterMs;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -3122,7 +3132,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null, object preBuffStatusByObject = null, bool? amuletOff = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null, object preBuffStatusByObject = null, bool? amuletOff = null,
+        int? runAfterMs = null, int? u3NTime = null, int? extraAbil0AfterRun = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3136,7 +3147,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
             && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null && casterBright == null
-            && preBuffStatusByObject == null && amuletOff == null)
+            && preBuffStatusByObject == null && amuletOff == null
+            && runAfterMs == null && u3NTime == null && extraAbil0AfterRun == null)
         {
             return fixture;
         }
@@ -3186,6 +3198,13 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-59 U-2（2026-11-28）**：真值键（true 才落盘 ⇒ 既有件零变化）——Rust rig 据此
         // 不装配 ArmRingl 护身符。
         if (amuletOff.HasValue && amuletOff.Value) node["amulet_off"] = true;
+        // **MG-59 U-3（2026-11-29）**：条件键（只在声明了 RunAfterMs 的 case 落盘 ⇒ 既有件零变化）。
+        // `run_after_ms` = 旋钮原值（含 -1/-2 哨兵，Rust 驱动按同语义自行解偏移）；
+        // `u3_n_time` = oracle 实测 `ExtraAbilTimes[0]-castTick`（毫秒）；
+        // `extra_abil0_after_run` = Run 后 `ExtraAbil[0]`（after=0、before/at=buff 值）。
+        if (runAfterMs.HasValue) node["run_after_ms"] = runAfterMs.Value;
+        if (u3NTime.HasValue) node["u3_n_time"] = u3NTime.Value;
+        if (extraAbil0AfterRun.HasValue) node["extra_abil0_after_run"] = extraAbil0AfterRun.Value;
         // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
         if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
         if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
@@ -3345,7 +3364,23 @@ private static int ReadInstanceInt(object obj, string fieldName)
         spec.AmuletOff = true;
         var amuletOffFail = RunMagicCase(spec, "amulet_off_fail", 1, 4200, spec.TargetMaxHp, true);
         spec.AmuletOff = false;
-        return EmitGolden(spec, new[] { cases[0], cases[1], cases[2], friendTarget, amuletOffFail });
+        // **MG-59 U-3（2026-11-29，② 档卡 openmir2-mg59-u3-buff-timeout）**：buff 超时生命期面。
+        // 三支全 targetNull=true 自施（受惠者=caster，Run 打在施法者上）：
+        // - `u3_run_before_expiry`（RunAfterMs=1000，IdBase 4600）：Run 落在到期前 1000ms
+        //   （>times-10000 不成立 ⇒ 预告臂也不响）⇒ 预期 Run 静默、buff 仍在、640 照常；
+        // - `u3_run_after_expiry`（RunAfterMs=-1 哨兵 ⇒ offset=nTime+500）：到期臂命中 ⇒
+        //   预期 53 先于 SysMsg("攻击力恢复正常。")出帧、ExtraAbil[0] 归 0；
+        // - `u3_run_at_expiry`（RunAfterMs=-2 哨兵 ⇒ offset=nTime，恰在边界）：oracle
+        //   `now > times` 严格 `>` 不成立 ⇒ **不到期**、走预告臂 ⇒ 预期只有
+        //   SysMsg("攻击力10秒后恢复正常。")、buff 仍在——这是 ±1 变异（`>` 改 `>=`）的咬中面。
+        spec.RunAfterMs = 1000;
+        var u3Before = RunMagicCase(spec, "u3_run_before_expiry", 1, 4600, spec.TargetMaxHp, true);
+        spec.RunAfterMs = -1;
+        var u3After = RunMagicCase(spec, "u3_run_after_expiry", 1, 4700, spec.TargetMaxHp, true);
+        spec.RunAfterMs = -2;
+        var u3At = RunMagicCase(spec, "u3_run_at_expiry", 1, 4800, spec.TargetMaxHp, true);
+        spec.RunAfterMs = null;
+        return EmitGolden(spec, new[] { cases[0], cases[1], cases[2], friendTarget, amuletOffFail, u3Before, u3After, u3At });
     }
 
     /// <summary>`--case skeleton`：17 两支（正常召唤 / 数量上限），MasterRoyaltyTick 墙钟不记不比（§36）。</summary>
@@ -4641,6 +4676,44 @@ private static FireballResult RunMagicCase(
         if (targetMonsterObj != null) monsterHpAfter = targetMonsterObj.WAbil.HP;
         // 卡 36：`AttPowerUp` 同步写 `ExtraAbil[0]`（目标=self ⇒ 施法者）⇒ 直接观测，非自证。
         int? casterExtra0 = spec.CasterLoginOrderAbil ? (int)caster.ExtraAbil[0] : (int?)null;
+        // **MG-59 U-3（2026-11-29，② 档卡 openmir2-mg59-u3-buff-timeout）**：buff 超时生命期面。
+        // 排水完、`casterExtra0` 捕获**之后**插本支（保住 `CasterExtraAbil0` 恒比键的「施法后、
+        // 到期前」语义；Run 后值走 `ExtraAbil0AfterRun` 新键）：虚拟钟拨到 `castTick + offset`，
+        // 对受惠者（自施=caster）直调生产 `Run()`——oracle 到期块在 Run 内逐槽检查
+        // `now > ExtraAbilTimes[i]`（**严格 `>`**）⇒ 清零 + flag=0 + `HealthSpellChanged()`
+        // （53 优先级 68 先于 SysMsg 252 出帧，`BaseObject.Message.cs:94`）；预告臂
+        // `flag==0 && now > times-10000` ⇒ 10 秒 SysMsg。Run 产的 SM 帧经 RecordingNetChannel
+        // 记 due=`offset`（heal-ticks 同口径）。before 例 Run 应静默 ⇒ AssertRunInert 照
+        // heal-ticks 口径挡其它段；after/at 例不加——到期/预告帧是预期产物。
+        int? u3RunAfterMs = null;
+        int? u3NTime = null;
+        int? u3ExtraAbil0AfterRun = null;
+        if (spec.RunAfterMs.HasValue)
+        {
+            if (!(caster.ExtraAbil[0] > 0))
+            {
+                throw new FixtureContractViolation(
+                    $"[{spec.Key}/{label}] U-3 前提失败：施法后 caster.ExtraAbil[0]={caster.ExtraAbil[0]}"
+                    + " 必须 >0（AttPowerUp 未落施法者？本批应 targetNull=true 自施）");
+            }
+            u3NTime = caster.ExtraAbilTimes[0] - (int)castTick;
+            int offset = spec.RunAfterMs.Value switch
+            {
+                -1 => u3NTime.Value + 500,
+                -2 => u3NTime.Value,
+                _ => spec.RunAfterMs.Value,
+            };
+            u3RunAfterMs = spec.RunAfterMs.Value;
+            ClockSeam.Set((int)castTick + offset);
+            if (spec.RunAfterMs.Value >= 0)
+            {
+                AssertRunInert(caster, spec.Key + "/" + label + "@u3run" + offset);
+            }
+            RecordingNetChannel.CurrentDueMs = offset;
+            caster.Run();
+            RecordingNetChannel.CurrentDueMs = 0;
+            u3ExtraAbil0AfterRun = (int)caster.ExtraAbil[0];
+        }
         // **B21 语义门（fail-closed ⇒ rc=2、不落 golden）**：`CasterLoginOrderAbil` stem 若在 `DoSpell`
         // 内对施法者触发过 `RecalcAbilitys()`（**运行期计数**，不靠静态清单 ⇒ 新增来源自动覆盖；
         // 当前唯一来源：`SKILL_UENHANCER`(36) 的 `AttPowerUp`，`MagicManager.cs:625`，target=None
@@ -5169,6 +5242,9 @@ private static FireballResult RunMagicCase(
                 healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
                 amuletOff: spec.AmuletOff,
+                runAfterMs: u3RunAfterMs,
+                u3NTime: u3NTime,
+                extraAbil0AfterRun: u3ExtraAbil0AfterRun,
                 preBuffs: preBuffsNode,
                 preBuffStatus: preBuffStatus,
                 preBuffStatusByObject: preBuffStatusByObject,
@@ -5211,6 +5287,8 @@ private static FireballResult RunMagicCase(
             NotDue = pending,
             CasterMp = caster.WAbil.MP,
             CasterExtraAbil0 = casterExtra0,
+            ExtraAbil0AfterRun = u3ExtraAbil0AfterRun,
+            U3NTime = u3NTime,
             Train = !spec.SkillTail
                 ? null
                 : (object)new
@@ -5750,6 +5828,17 @@ public sealed class FireballResult
     public int? TargetMonsterHpBefore { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? TargetMonsterHpAfter { get; set; }
+    /// <summary>
+    /// **MG-59 U-3（2026-11-29）**：直调生产 `Run()`（oracle ExtraAbil 到期块）后的
+    /// `ExtraAbil[0]`。只有 `RunAfterMs` 例落盘：after 例应=0（到期清零）、before/at 例=buff 值
+    /// （at 例 `now==times` 严格 `>` 不成立 ⇒ 不到期）。null ⇒ 不落盘，既有件零变化。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ExtraAbil0AfterRun { get; set; }
+    /// <summary>**MG-59 U-3**：`ExtraAbilTimes[0] - castTick`（毫秒）。nTime 公式的**两侧独立实测值**
+    /// （oracle 装置 vs Rust 驱动各从自身实体读），比较器恒比 ⇒ 公式本身有牙。只有 U-3 例落盘。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? U3NTime { get; set; }
     /// 实际排水趟数（`DrainRaw` 到空为止；正常 ≤4）。
     public int DrainPasses { get; set; }
     /// 上界 `MaxDrainPasses` 命中（= 可能仍有未排干消息；不得当作完整账本）。
