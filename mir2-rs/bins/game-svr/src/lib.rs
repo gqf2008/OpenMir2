@@ -4526,6 +4526,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
         kill_by_human_drop_use_item: cfg.kill_by_human_drop_use_item,
         kill_by_monst_drop_use_item: cfg.kill_by_monst_drop_use_item,
         red_msg_f_color: cfg.red_msg_f_color,
+        blue_msg_f_color: cfg.blue_msg_f_color,
+        blue_msg_b_color: cfg.blue_msg_b_color,
         red_msg_b_color: cfg.red_msg_b_color,
         green_msg_f_color: cfg.green_msg_f_color,
         green_msg_b_color: cfg.green_msg_b_color,
@@ -32741,6 +32743,10 @@ struct EnterConfig {
     /// P3-B5 的 22 安全区提示用同一对）。
     red_msg_f_color: u8,
     red_msg_b_color: u8,
+    /// `[Setup] BlueMsgFColor`/`BlueMsgBColor`（**G2** 蓝字色词；`GameSvrConf.cs:1538-1539`
+    /// 缺省 0xFF/0xFC）。
+    blue_msg_f_color: u8,
+    blue_msg_b_color: u8,
     /// `[Setup] GreenMsgFColor`/`GreenMsgBColor`（P3-B5 的 36 `AttPowerUp` 提示）。
     green_msg_f_color: u8,
     green_msg_b_color: u8,
@@ -32865,6 +32871,9 @@ impl EnterConfig {
         Self {
             game_conf: None,
             repair_item_dec_dura: 90,
+            // **G2**：蓝字色词（缺省 = oracle `GameSvrConf.cs:1538-1539`）。
+            blue_msg_f_color: 0xFF,
+            blue_msg_b_color: 0xFC,
             win_lottery: crate::config::WinLotteryCfg::default(),
             weapon_make_luck: crate::config::WeaponMakeLuckCfg::default(),
             castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
@@ -36448,6 +36457,11 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     permission: gmcmd::startup_permission(),
                                     // **G3**：两条红字的 `MsgColor.Red` 色词对。
                                     red_msg: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                    // **G2**：蓝字色词（槽 9 的 `MsgColor.Blue`）。
+                                    blue_msg: (
+                                        enter_cfg.blue_msg_f_color,
+                                        enter_cfg.blue_msg_b_color,
+                                    ),
                                 };
                                 for w in enter::apply(&mut inputs, &wx) {
                                     glog!("WRN", "入图帧输入：{w}");

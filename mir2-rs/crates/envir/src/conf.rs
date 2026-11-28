@@ -137,6 +137,15 @@ pub struct GameSvrConf {
     /// `SoftVersionDate`（会话层，Rust `wx.soft_version_date`）**小于**它 ⇒ 三条红字 +
     /// `BoEmergencyClose` + **`return` 截断**（PlayObject.cs:1328）。
     pub soft_version_date: i32,
+    /// `[Setup] OldClientShowHiLevel`（`ServerConf.cs:524`；`GameSvrConf.cs:864/1746`
+    /// 缺省 true）—— **G2 老客户端分支**（`PlayObject.cs:1332-1341`）的入队门：
+    /// 客户端 `SoftVersionDateEx == 0` 时蓝字+红字两条；`CanOldClientLogon=false`
+    /// 再追加踢人三条 + `return` 截断。
+    pub old_client_show_hi_level: bool,
+    /// `[Setup] CanOldClientLogon`（`ServerConf.cs:585`；`GameSvrConf.cs:338/1438`
+    /// 缺省 true）—— G2 的踢人支开关：false ⇒ 追加三条红 + **`return` 截断**（:1341）；
+    /// true（缺省部署）⇒ 只发两条、**不截断、不断连**。
+    pub can_old_client_logon: bool,
 }
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24`（17 个 `bool`，声明序即序列化序）。
@@ -327,6 +336,9 @@ impl GameSvrConf {
             // `ServerConf.cs:584`：`ReadWriteInteger("Setup", "SoftVersionDate", …)`；
             // 缺省 20020522（`GameSvrConf.cs:1437`）；缺键不算错。
             soft_version_date: ini.read_integer("Setup", "SoftVersionDate", 20020522),
+            // `ServerConf.cs:524/585`：`ReadWriteBool`；缺省都 true（`GameSvrConf.cs:1746/1438`）。
+            old_client_show_hi_level: ini.read_bool("Setup", "OldClientShowHiLevel", true),
+            can_old_client_logon: ini.read_bool("Setup", "CanOldClientLogon", true),
         }
     }
 
@@ -640,6 +652,9 @@ GatePort=5000
         assert_eq!(c.test_user_limit, 1000);
         // **G1**：`[Setup] SoftVersionDate` 缺键 ⇒ 20020522（`GameSvrConf.cs:1437`）。
         assert_eq!(c.soft_version_date, 20020522);
+        // **G2**：两开关缺键 ⇒ 都 true（缺省部署 = 老客户端只提示不踢）。
+        assert!(c.old_client_show_hi_level);
+        assert!(c.can_old_client_logon);
     }
 
     /// **判据 CF-2（出生点/安全区 11 键，文件值覆盖初值）**。
@@ -660,10 +675,11 @@ RedDieHomeX=7
 RedDieHomeY=8
 SafeZoneSize=3
 SoftVersionDate=20030704
+OldClientShowHiLevel=FALSE
+CanOldClientLogon=FALSE
 StartPointSize=5
 [Server]
 TestServerUserLimit=6000
-SoftVersionDate=20030704
 ",
         );
         assert_eq!(c.home_map, "3");
@@ -681,6 +697,9 @@ SoftVersionDate=20030704
         assert_eq!(c.test_user_limit, 6000);
         // **G1**：部署口径可调高门槛（20030704 ⇒ 真 120020522 客户端仍不触发）。
         assert_eq!(c.soft_version_date, 20030704);
+        // **G2**：`FALSE` ⇒ false（部署可用两开关关闭提示/放行老客户端登录）。
+        assert!(!c.old_client_show_hi_level);
+        assert!(!c.can_old_client_logon);
         // 空值 ⇒ 初值（`ReadWrite*` 的 `string.IsNullOrEmpty` 分支）。
         let d = GameSvrConf::from_bytes(
             b"[Setup]

@@ -113,6 +113,12 @@ pub const DEFAULT_FORCE_DISCONNECT: &str = "连接被强行中断!!!";
 pub const DEFAULT_CLIENT_SOFT_VERSION_ERROR: &str = "游戏版本错误!!!";
 /// **G1**：`[String] DownLoadNewClientSoft`（版本门第 2 条；缺键回落 `MessageSettings.cs:32`）。
 pub const DEFAULT_DOWNLOAD_NEW_CLIENT_SOFT: &str = "请到网站上下载最新版本游戏客户端软件。";
+/// **G2**：`[String] ClientSoftVersionTooOld`（蓝字；缺键回落 `MessageSettings.cs:34`）。
+pub const DEFAULT_CLIENT_SOFT_VERSION_TOO_OLD: &str =
+    "您现在使用的客户端软件版本太老了，大量的游戏效果新将无法使用。";
+/// **G2**：`[String] DownLoadAndUseNewClient`（红字；缺键回落 `MessageSettings.cs:35`）。
+pub const DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT: &str =
+    "为了更好的进行游戏，请下载最新的客户端软件!!!";
 
 /// oracle `MessageSettings.RevivalRecoverMsg`（`MessageSettings.cs:226`）——P32 复活成功的
 /// `SysMsg(..., Green, Hint)` 文本（`PlayObject.Message.cs:759`）。缺键回落源码默认。
@@ -236,6 +242,10 @@ pub struct StringConf {
     // （`StringConf.cs:46/47` 读键；第 3 条 ForceDisConnect 复用上面已备键）。
     client_soft_version_error: Option<String>,
     download_new_client_soft: Option<String>,
+    // **G2（`PlayObject.cs:1334-1336`）**：老客户端分支的蓝+红两条
+    // （`StringConf.cs:49/50` 读键；踢支三条复用 G1 已备键）。
+    client_soft_version_too_old: Option<String>,
+    download_and_use_new_client: Option<String>,
     // `[String]` 喊话三键（`StringConf.cs:257-259`）。
     you_need_level_msg: Option<String>,
     this_map_disable_send_cycy_msg: Option<String>,
@@ -661,6 +671,22 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_DOWNLOAD_NEW_CLIENT_SOFT)
     }
+
+    /// `[String] ClientSoftVersionTooOld`（G2 蓝字；缺键回落 `MessageSettings.cs:34`）。
+    #[must_use]
+    pub fn client_soft_version_too_old(&self) -> &str {
+        self.client_soft_version_too_old
+            .as_deref()
+            .unwrap_or(DEFAULT_CLIENT_SOFT_VERSION_TOO_OLD)
+    }
+
+    /// `[String] DownLoadAndUseNewClient`（G2 红字；缺键回落 `MessageSettings.cs:35`）。
+    #[must_use]
+    pub fn download_and_use_new_client(&self) -> &str {
+        self.download_and_use_new_client
+            .as_deref()
+            .unwrap_or(DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -798,6 +824,8 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             (Section::String, "FORCEDISCONNECT") => &mut conf.force_disconnect,
             (Section::String, "CLIENTSOFTVERSIONERROR") => &mut conf.client_soft_version_error,
             (Section::String, "DOWNLOADNEWCLIENTSOFT") => &mut conf.download_new_client_soft,
+            (Section::String, "CLIENTSOFTVERSIONTOOOLD") => &mut conf.client_soft_version_too_old,
+            (Section::String, "DOWNLOADANDUSENEWCLIENT") => &mut conf.download_and_use_new_client,
             (Section::String, "YOUNEEDLEVELSENDMSG") => &mut conf.you_need_level_msg,
             (Section::String, "THISMAPDISABLESENDCYCYMSG") => {
                 &mut conf.this_map_disable_send_cycy_msg
@@ -1136,6 +1164,47 @@ Other=1
         assert_eq!(
             d.download_new_client_soft(),
             "请到网站上下载最新版本游戏客户端软件。"
+        );
+    }
+    /// **G2 文本键牙**：`[String] ClientSoftVersionTooOld/DownLoadAndUseNewClient` 逐键解析
+    /// + 逐键回落（`StringConf.cs:49/50` 读键；缺键回落 `MessageSettings.cs:34/35`）。
+    ///
+    /// 红检：删 parse 任一臂 ⇒ 该键断言红。
+    #[test]
+    fn parses_g2_old_client_keys_and_falls_back_per_key() {
+        let too_gbk: &[u8] = b"\xc4\xfa\xcf\xd6\xd4\xda\xca\xb9\xd3\xc3\xb5\xc4\xbf\xcd\xbb\xa7\xb6\xcb\xc8\xed\xbc\xfe\xb0\xe6\xb1\xbe\xcc\xab\xc0\xcf\xc1\xcb\xa3\xac\xb4\xf3\xc1\xbf\xb5\xc4\xd3\xce\xcf\xb7\xd0\xa7\xb9\xfb\xd0\xc2\xbd\xab\xce\xde\xb7\xa8\xca\xb9\xd3\xc3\xa1\xa3";
+        let dl_gbk: &[u8] = b"\xce\xaa\xc1\xcb\xb8\xfc\xba\xc3\xb5\xc4\xbd\xf8\xd0\xd0\xd3\xce\xcf\xb7\xa3\xac\xc7\xeb\xcf\xc2\xd4\xd8\xd7\xee\xd0\xc2\xb5\xc4\xbf\xcd\xbb\xa7\xb6\xcb\xc8\xed\xbc\xfe\x21\x21\x21";
+        let mut bytes = b"[String]".to_vec();
+        bytes.extend_from_slice(b"\nClientSoftVersionTooOld=");
+        bytes.extend_from_slice(too_gbk);
+        bytes.extend_from_slice(b"\nDownLoadAndUseNewClient=");
+        bytes.extend_from_slice(dl_gbk);
+        bytes.push(b'\n');
+        let c = parse(&bytes);
+        assert_eq!(
+            c.client_soft_version_too_old(),
+            "您现在使用的客户端软件版本太老了，大量的游戏效果新将无法使用。"
+        );
+        assert_eq!(
+            c.download_and_use_new_client(),
+            "为了更好的进行游戏，请下载最新的客户端软件!!!"
+        );
+        assert_eq!(
+            crate::downlink::gbk(c.client_soft_version_too_old()),
+            too_gbk
+        );
+        assert_eq!(
+            crate::downlink::gbk(c.download_and_use_new_client()),
+            dl_gbk
+        );
+        let d = parse(b"[String]".to_vec().as_slice());
+        assert_eq!(
+            d.client_soft_version_too_old(),
+            crate::strings::DEFAULT_CLIENT_SOFT_VERSION_TOO_OLD
+        );
+        assert_eq!(
+            d.download_and_use_new_client(),
+            crate::strings::DEFAULT_DOWNLOAD_AND_USE_NEW_CLIENT
         );
     }
 }

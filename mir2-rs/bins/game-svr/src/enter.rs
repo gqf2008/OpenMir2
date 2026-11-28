@@ -98,6 +98,9 @@ pub struct WorldFrameInputs<'a> {
     pub permission: u8,
     /// **G3**：`MsgColor.Red` 的色词对（`[Setup] RedMsgFColor/RedMsgBColor`，缺省 0xFF/0x38）。
     pub red_msg: (u8, u8),
+    /// **G2**：`MsgColor.Blue` 的色词对（`[Setup] BlueMsgFColor/BlueMsgBColor`，
+    /// 缺省 0xFF/0xFC）——槽 9 的 `SM_SYSMESSAGE.Param`。
+    pub blue_msg: (u8, u8),
 }
 
 /// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
@@ -998,9 +1001,39 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             }
             true
         }
+        // **G2（老客户端分支，`PlayObject.cs:1332-1341`）**：`SoftVersionDateEx == 0` 且
+        // OldClientShowHiLevel ⇒ 蓝 9 + 红 10；`CanOldClientLogon=false` ⇒ 追加踢人三条
+        // 11/12/13 + `BoEmergencyClose` + **`return` 截断**（:1341）；true（缺省部署）⇒
+        // 只两条、**不截断、不断连**。前置：G1 未命中（oracle 互斥，G1 命中即 return）。
+        Some(conf) if wx.soft_version_date == 0 && conf.old_client_show_hi_level => {
+            if let Some(strings) = wx.strings {
+                base.login_sys_msgs.client_soft_version_too_old =
+                    Some(gbk(strings.client_soft_version_too_old()));
+                base.login_sys_msgs.download_and_use_new_client =
+                    Some(gbk(strings.download_and_use_new_client()));
+            }
+            if conf.can_old_client_logon {
+                base.version_gate = VersionGateHit::OldClientPass;
+                false
+            } else {
+                // 置位无条件（F1 同口径）；踢支三条复用 G1 已备正文字段（槽 11/12/13）。
+                if let Some(strings) = wx.strings {
+                    base.login_sys_msgs.client_soft_version_error =
+                        Some(gbk(strings.client_soft_version_error()));
+                    base.login_sys_msgs.download_new_client_soft =
+                        Some(gbk(strings.download_new_client_soft()));
+                    base.login_sys_msgs.force_disconnect = Some(gbk(strings.force_disconnect()));
+                }
+                base.version_gate = VersionGateHit::OldClientKick;
+                base.emergency_close = true;
+                true
+            }
+        }
         _ => false,
     };
     base.login_sys_msgs.green = wx.green_msg;
+    // **G2**：蓝字色词（`MsgColor.Blue` ⇒ 槽 9 的 `SM_SYSMESSAGE.Param`）。
+    base.login_sys_msgs.blue = wx.blue_msg;
     // **G3**：红字色词（`MsgColor.Red` ⇒ 槽 4/5 的 `SM_SYSMESSAGE.Param`）。
     base.login_sys_msgs.red = wx.red_msg;
     if !version_truncated {
@@ -3353,6 +3386,7 @@ mod tests {
             play_object_count: 3,
             permission: 0,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         };
         let _warns = apply(&mut base, &wx);
         assert!(base.emergency_close, "门命中 ⇒ BoEmergencyClose");
@@ -3416,6 +3450,7 @@ mod tests {
             play_object_count: 2,
             permission: 0,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "恰等界不触发");
@@ -3461,6 +3496,7 @@ mod tests {
             play_object_count: 3,
             permission: 2,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         };
         let _ = apply(&mut base, &wx);
         assert!(!base.emergency_close, "权限 ≥ 2 豁免");
@@ -3496,6 +3532,7 @@ mod tests {
             play_object_count: 999_999,
             permission: 0,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         };
         let warns = apply(&mut base, &wx);
         assert!(!base.emergency_close, "conf 缺失 ⇒ 门不置位");
@@ -3541,6 +3578,7 @@ mod tests {
             play_object_count: 3,
             permission: 0,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         };
         let _ = apply(&mut base, &wx);
         assert!(base.emergency_close, "谓词命中 ⇒ 踢人不依赖 String.conf");
@@ -3610,6 +3648,7 @@ mod tests {
             play_object_count: 0,
             permission: 0,
             red_msg: (0xFF, 0x38),
+            blue_msg: (0xFF, 0xFC),
         }
     }
 
@@ -3734,5 +3773,131 @@ mod tests {
         assert_eq!(base.version_gate, VersionGateHit::None);
         assert!(!base.emergency_close);
         assert_eq!(base.login_sys_msgs.text(6), None);
+    }
+
+    // ===== G2 老客户端分支（`PlayObject.cs:1332-1341`；卡 `openmir2-userlogon-login-gates`）=====
+
+    /// **G2 通过支牙（缺省部署）**：门槛 0（「无版本要求」部署 ⇒ G1 静默、G2 可达——门槛
+    /// 20020522 下 version-0 客户端先被 G1 踢出）+ 版本 0 + 两开关 true ⇒ 蓝 9 + 红 10（蓝字
+    /// Param = make_word(0xFF, 0xFC)），**不截断、不断连**——52 在产出里、emergency=false。
+    /// 红检（实测）：`can_old_client_logon` 取反/蓝色词改红 ⇒ 本牙必红。
+    #[test]
+    fn g2_pass_emits_blue_and_red_without_truncation() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=0\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs {
+            actor_id: 11,
+            ..EnterWorldInputs::default()
+        };
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::OldClientPass);
+        assert!(!base.emergency_close, "通过支不置 BoEmergencyClose");
+        let t9 = gbk("您现在使用的客户端软件版本太老了，大量的游戏效果新将无法使用。");
+        let t10 = gbk("为了更好的进行游戏，请下载最新的客户端软件!!!");
+        assert_eq!(base.login_sys_msgs.text(9), Some(t9.as_slice()));
+        assert_eq!(base.login_sys_msgs.text(10), Some(t10.as_slice()));
+        for slot in [11u8, 12, 13] {
+            assert_eq!(base.login_sys_msgs.text(slot), None, "通过支无踢人三条");
+        }
+        let after = base.frames();
+        assert!(idents(&after).contains(&52), "通过支不截断 ⇒ 52 在产出里");
+        let e9 = crate::smframe::sm_sysmessage(11, 0xFF, 0xFC, &t9);
+        assert!(
+            after.iter().any(|f| f.as_slice() == e9.as_slice()),
+            "蓝字 Param = make_word(0xFF, 0xFC)（槽 9）"
+        );
+        let e10 = crate::smframe::sm_sysmessage(11, 0xFF, 0x38, &t10);
+        let pos = |v: &[Vec<u8>], pat: &[u8]| v.iter().position(|f| f.as_slice() == pat);
+        let (p9, p10) = (pos(&after, &e9), pos(&after, &e10));
+        assert!(p9.is_some() && p10.is_some(), "两条逐字节在产出里");
+        assert_eq!(
+            p9.unwrap().abs_diff(p10.unwrap()),
+            1,
+            "蓝紧邻红（oracle :1334→:1335）"
+        );
+    }
+
+    /// **G2 踢人支牙**：`CanOldClientLogon=FALSE` ⇒ 五条（9..=13）+ emergency + **截断**
+    /// ——52 不在产出里、help/free_play 帧不重现、攻击模式文本不填。红检：`!can_old_client_logon`
+    /// 取反 ⇒ 本牙必红（变通过支）。
+    #[test]
+    fn g2_kick_truncates_rest_of_logon() {
+        let conf =
+            GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=0\nCanOldClientLogon=FALSE\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs {
+            actor_id: 11,
+            ..EnterWorldInputs::default()
+        };
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::OldClientKick);
+        assert!(base.emergency_close, "踢人支 ⇒ BoEmergencyClose");
+        for slot in [9u8, 10, 11, 12, 13] {
+            assert!(base.login_sys_msgs.text(slot).is_some(), "槽 {slot} 有正文");
+        }
+        assert_eq!(base.login_sys_msgs.text(3), None, "截断 ⇒ free_play 不填");
+        assert_eq!(
+            base.login_sys_msgs.attack_mode, None,
+            "截断 ⇒ 攻击模式文本不填"
+        );
+        assert!(
+            !idents(&base.frames()).contains(&52),
+            "截断 ⇒ 52 不在产出里"
+        );
+        let help = gbk(crate::strings::DEFAULT_START_CHANGE_ATTACK_MODE_HELP);
+        let e_help = crate::smframe::sm_sysmessage(11, 0xDB, 0xFF, &help);
+        assert!(
+            !base
+                .frames()
+                .iter()
+                .any(|f| f.as_slice() == e_help.as_slice()),
+            "截断 ⇒ help 帧不重现"
+        );
+    }
+
+    /// **G2 静默牙**：`OldClientShowHiLevel=FALSE` ⇒ 门整支跳过（无 9/10、不截断、不断连）。
+    /// 红检：丢 `conf.old_client_show_hi_level` 守卫 ⇒ 本牙必红。
+    #[test]
+    fn g2_silent_when_show_hi_level_off() {
+        let conf =
+            GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=0\nOldClientShowHiLevel=FALSE\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 0);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::None);
+        assert!(!base.emergency_close);
+        assert_eq!(base.login_sys_msgs.text(9), None);
+        assert_eq!(base.login_sys_msgs.text(10), None);
+        assert!(idents(&base.frames()).contains(&52), "门静默 ⇒ 不截断");
+    }
+
+    /// **G2 非零版本负例**：`SoftVersionDate != 0`（现网真客户端 120020522）⇒ `== 0` 门不命中
+    /// （把 `== 0` 变异成 `>= 0` ⇒ 本牙必红）。
+    #[test]
+    fn g2_negative_nonzero_version_not_old_client() {
+        let conf = GameSvrConf::from_bytes(b"[Setup]\nSoftVersionDate=0\n");
+        let strings = crate::strings::StringConf::defaults();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let abil = Ability::default();
+        let bonus = rec_naked();
+        let mut base = EnterWorldInputs::default();
+        let wx = g1_wx_inputs(&conf, &strings, &catalog, &abil, &bonus, 120_020_522);
+        let _ = apply(&mut base, &wx);
+        assert_eq!(base.version_gate, VersionGateHit::None);
+        assert!(!base.emergency_close);
+        assert_eq!(base.login_sys_msgs.text(9), None);
+        assert_eq!(base.login_sys_msgs.text(13), None);
     }
 }

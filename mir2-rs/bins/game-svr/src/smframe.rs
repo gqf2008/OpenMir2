@@ -1305,13 +1305,20 @@ pub enum VersionGateHit {
     /// **G1**：客户端 `SoftVersionDate < Config.SoftVersionDate` ⇒ 三条红（槽 6/7/8）+
     /// `BoEmergencyClose` + **`return` 截断**（PlayObject.cs:1328）。
     SoftVersionKick,
+    /// **G2 通过支**（缺省部署）：`SoftVersionDateEx == 0` 且 OldClientShowHiLevel ⇒
+    /// 蓝+红两条（槽 9/10），**不截断、不断连**（PlayObject.cs:1334-1336，
+    /// CanOldClientLogon=true）。
+    OldClientPass,
+    /// **G2 踢人支**：同上且 CanOldClientLogon=false ⇒ 再追加三条红（槽 11/12/13）+
+    /// `BoEmergencyClose` + **`return` 截断**（PlayObject.cs:1338-1341）。
+    OldClientKick,
 }
 
 impl VersionGateHit {
     /// oracle `return` 截断（G1 与后续 G2 的 CanOldClientLogon=false 支）。
     #[must_use]
     pub fn kick_truncated(self) -> bool {
-        matches!(self, Self::SoftVersionKick)
+        matches!(self, Self::SoftVersionKick | Self::OldClientKick)
     }
 }
 
@@ -1448,6 +1455,14 @@ pub struct LoginSysMsgs {
     pub client_soft_version_error: Option<Vec<u8>>,
     /// **G1** 槽 7（= 槽 12 共用）：`MessageSettings.DownLoadNewClientSoft`（红）。
     pub download_new_client_soft: Option<Vec<u8>>,
+    /// **G2** 槽 9：`MessageSettings.ClientSoftVersionTooOld`（**蓝**字，
+    /// `MsgColor.Blue` ⇒ `[Setup] BlueMsgFColor/BlueMsgBColor` 色词）。
+    pub client_soft_version_too_old: Option<Vec<u8>>,
+    /// **G2** 槽 10：`MessageSettings.DownLoadAndUseNewClient`（红字）。
+    pub download_and_use_new_client: Option<Vec<u8>>,
+    /// `MsgColor.Blue` 的 `(BlueMsgFColor, BlueMsgBColor)`（缺省 0xFF/0xFC，
+    /// `GameSvrConf.cs:1538-1539`）：槽 9 的 `SM_SYSMESSAGE.Param`。
+    pub blue: (u8, u8),
     /// `MsgColor.Green` 的 `(GreenMsgFColor, GreenMsgBColor)`（`BaseObject.cs:1645-1652`；
     /// 落在 `SM_SYSMESSAGE.Param = make_word(f, b)`，`PlayObject.Message.cs:1715`）。
     pub green: (u8, u8),
@@ -1468,6 +1483,9 @@ impl LoginSysMsgs {
             6 | 11 => self.client_soft_version_error.as_deref(),
             7 | 12 => self.download_new_client_soft.as_deref(),
             8 | 13 => self.force_disconnect.as_deref(),
+            // **G2**：槽 9 蓝、10 红；踢支 11/12/13 已在上面与 G1 共字段映射。
+            9 => self.client_soft_version_too_old.as_deref(),
+            10 => self.download_and_use_new_client.as_deref(),
             _ => None,
         }
     }
@@ -1478,8 +1496,9 @@ impl LoginSysMsgs {
     #[must_use]
     pub fn color(&self, slot: u8) -> (u8, u8) {
         match slot {
-            // G3 槽 4/5、G1 槽 6/7/8（G2 踢支 11..=13 与蓝 9 随 G2 批接入）。
-            4..=8 => self.red,
+            // G3 槽 4/5、G1 槽 6/7/8、G2 踢支 11/12/13 与 10 = 红；G2 槽 9 = **蓝**。
+            9 => self.blue,
+            4..=8 | 10..=13 => self.red,
             _ => self.green,
         }
     }
@@ -1718,6 +1737,20 @@ impl EnterWorldInputs {
             queue.enqueue(LoginQueued::SysMsg(6), prio_sysmsg);
             queue.enqueue(LoginQueued::SysMsg(7), prio_sysmsg);
             queue.enqueue(LoginQueued::SysMsg(8), prio_sysmsg);
+        }
+        // **G2 老客户端分支**（`PlayObject.cs:1332-1341`）：蓝 9 + 红 10；CanOldClientLogon=false
+        // ⇒ 追加踢人三条 11/12/13（源码序 :1334 < :1335 < :1338）。同一门内 G1/G2 互斥
+        // （G1 命中即 return，走不到这里）⇒ 两臂互斥入队。
+        if self.version_gate == VersionGateHit::OldClientPass {
+            queue.enqueue(LoginQueued::SysMsg(9), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(10), prio_sysmsg);
+        }
+        if self.version_gate == VersionGateHit::OldClientKick {
+            queue.enqueue(LoginQueued::SysMsg(9), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(10), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(11), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(12), prio_sysmsg);
+            queue.enqueue(LoginQueued::SysMsg(13), prio_sysmsg);
         }
         // **`return` 截断**（oracle `:1328`；G2 的 `:1341` 同）：命中 ⇒ 之后的登录序——
         // 攻击模式文案/CTRL-H/欢迎/G3/六条 SendPriorityMsg/行会段等——**一律不入队**
