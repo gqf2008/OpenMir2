@@ -369,11 +369,18 @@ impl World {
         if sim.sessions.get(chr_name).is_none() {
             return Err(SessionError::NoSession);
         }
-        if sim
-            .sessions
-            .get(chr_name)
-            .is_some_and(|s| s.stage == WorldStage::InWorld)
-        {
+        // **DEV-HANDOFF-LIMBO（路线②，总监授权 2026-11-29）**：`AlreadyInWorld` 判据带
+        // 实体在场——`InWorld` 但实体缺席（limbo，失败跨区迁移回滚的既成事实；oracle 无此态）
+        // ⇒ 放行重建，下方 F1 移除门收走死 `actor_id` 引用。实体在场的真 InWorld 仍拒
+        // （oracle 同形：防重复进图把实体登记两次）。与宿主 `finish_login` 预检同口径
+        // （行为牙 `limbo_session_does_not_lock_out_relogin` ②段；隔离牙
+        // `enter_map_allows_rebuild_over_limbo_session`）。
+        let entities_ref = &*entities;
+        if sim.sessions.get(chr_name).is_some_and(|s| {
+            s.stage == WorldStage::InWorld
+                && s.actor_id
+                    .is_some_and(|aid| entities_ref.get(aid).is_some())
+        }) {
             return Err(SessionError::AlreadyInWorld);
         }
         if map_id >= sim.maps.len() {
@@ -632,6 +639,23 @@ impl World {
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let map_id = sess.map_id;
+        // **DEV-HANDOFF-LIMBO（路线①，总监授权 2026-11-29）**：limbo 支——会话声称在世界
+        // 但实体缺席（失败跨区迁移回滚的既成事实；oracle 无此态、纯自研机制无 parity 约束）。
+        // 硬断线（`disconnect`）按移除门收口：无离世广播（无实体可格扫）、无格摘除，
+        // `stage=Left` + `actor_id=None`；`soft_close` 不走此支（ghost 语义需要实体，
+        // 维持 `NotInWorld`）。修前行为：下方取坐标 `Err(NotInWorld)` ⇒ stage 永不复位 ⇒
+        // 重登被拒循环（行为牙 `limbo_session_does_not_lock_out_relogin` ①段红）。
+        let Some(live) = self.entities.get(actor_id) else {
+            if soft {
+                return Err(SessionError::NotInWorld);
+            }
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.actor_id = None;
+            sess.stage = WorldStage::Left;
+            return Ok(());
+        };
+        let (actor_x, actor_y) = (live.x, live.y);
+        let self_only = live.ob_mode || live.fixed_hide_mode;
         // **orphan 接线第二批**（oracle `BaseObject.DisappearA`，`BaseObject.cs:1519-1524`）：
         // 掉线/小退/顶号 ⇒ `PlayObject.MakeGhost`（`BaseObject.Base.cs:484-497`，玩家 `CanReAlive=false`
         // ⇒ `Ghost=true`）⇒ `DisappearA()` ⇒ `SendRefMsg(RM_DISAPPEAR, 0,0,0,0,"")`（`:1519-1524`）
@@ -648,16 +672,8 @@ impl World {
         //
         // `ObMode || FixedHideMode` 的离开者 oracle 只发自己（`:389-392`）⇒ 无广播。
         // **必须在 `entities.remove` / `remove_from_map` 之前采集**：格扫要读离开者所在格
-        // （含同格其它对象）与其实体坐标。
-        let (actor_x, actor_y) = self
-            .entities
-            .get(actor_id)
-            .map(|e| (e.x, e.y))
-            .ok_or(SessionError::NotInWorld)?;
-        let self_only = self
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
+        // （含同格其它对象）与其实体坐标。（DEV-HANDOFF-LIMBO：坐标与 self_only 改从上面
+        // 的 `live` 取——limbo 支在实体缺席时已提前收口，走到这里实体必在。）
         if !self_only {
             let observers = send_ref_msg_targets_at(
                 self,
