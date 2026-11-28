@@ -97458,6 +97458,29 @@ SendRefMsgRange=15
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_grid_phase0() {
+        // **MG-12（2026-11-29，裁定 ①）**：P=200 网格×相位 0（边界对齐）——火恰落 deadline
+        // （400/…/2400），cadence 400ms，药池恰尽（inc_healing=0 收尾）。
+        heal_tick_assert("healing", 2, "tick_grid_phase0", 1, 6600);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_grid_phase1() {
+        // **MG-12**：相位 +1ms——首火后每火过冲 ≥1 计入重挂 ⇒ 持续 cap-200 ⇒ cadence 600ms
+        //（火 401/1001/1601/2201/2801）。cap 常数变异（min(200,…)）⇒ 本组红。
+        heal_tick_assert("healing", 2, "tick_grid_phase1", 1, 6700);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_tick_grid_phase100() {
+        // **MG-12**：相位半格（+100ms）——同 cap 路径：火 500/1100/1700/2300/2900（600ms）。
+        heal_tick_assert("healing", 2, "tick_grid_phase100", 1, 6800);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn healing_nonzero_parity_cap() {
         heal_tick_assert("healing-nonzero", 2, "cap", 1, 1000);
     }
@@ -145703,6 +145726,190 @@ mod l2_handoff_tests {
             sess.stage = mir2_world_bevy::WorldStage::InWorld;
         }
         id
+    }
+
+    // ------------------------------------------------------------------
+    // 3.5：MG-12 端到端——恢复段经**生产调用点**在 tick 网格上起火
+    // ------------------------------------------------------------------
+    /// **MG-12（2026-11-29，② 档卡 openmir2-mg12-wallclock-phase，总监裁定 ②）**：
+    /// `drain_recovery` 的**行为接线面**。离线装置直调 `recovery_tick` 不覆盖本面；本用例按
+    /// 生产 `HostLoop` 同签名同序驱动（`tick_phase_a` → `tick_phase_rest`），恢复段走
+    /// `tick_phase_rest` RECOVERY 块的**生产 `drain_recovery(` 调用点**（源级牙另钉该行）：
+    /// - 火落「第一个 ≥ deadline 的 tick」——网格相位定义（P=200ms，L20 dw=400，deadline=t0）；
+    /// - 53 经生产 `flush_healthspell_slots` 出帧到 gates；
+    /// - 重挂写点 = `now + min(200, 过冲)`（经生产路径实测，相位≈0 ⇒ ≈火时刻）；
+    /// - hp 离散 +5（镜像进实体，P21 同源投影）。
+    ///
+    /// 时钟：`MIR2_CLOCK_MS` 进程级注入（**rng_trace 同纪律 ⇒ 必须 --exact 单独进程**）；
+    /// 注入失效即红（`injected_origin` 前置断言——不许拿真墙钟混过网格断言）。
+    /// 时钟按 tick 网格步进消费（非逐帧）：每拍起点自持 ~200ms（tick_phase_rest 的
+    /// `next` 节拍），断言逐拍间距。
+    /// 变异：摘 RECOVERY 块的生产 `drain_recovery(` 调用 ⇒ 无火 ⇒ 红。
+    #[test]
+    #[ignore = "MG-12 端到端：MIR2_CLOCK_MS 全进程注入 + 真实节拍 ~2.8s ⇒ 需 --exact 单独进程"]
+    fn mg12_recovery_fires_on_production_tick_grid() {
+        std::env::set_var(clock::CLOCK_ENV, "1000000000");
+        assert_eq!(
+            clock::injected_origin(),
+            Some(1_000_000_000),
+            "时钟注入必须生效（OnceLock 已被同进程先期初始化 ⇒ 请 --exact 单跑本用例）"
+        );
+        let t0 = clock::now_ms();
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut host = HostLoop::for_zone(zone(1), &[(20, 10)], Some(0), &counter);
+        let mut shared = SharedServices::for_test();
+        let mut process = None;
+        let id = seed_full_session_for_host(&mut host, "healer", 901);
+        // 恢复初态：与离线装置同口径——药池 30、PerHealing=5、deadline=t0、L20 ⇒ dw=400。
+        {
+            let sg = host.ground_sessions.get_mut("healer").expect("会话在");
+            sg.recovery.inc_healing = 30;
+            sg.recovery.per_healing = 5;
+            sg.recovery.inc_health_spell_tick = t0;
+            sg.state.wabil.level = 20;
+            sg.state.wabil.hp = 50;
+            sg.state.wabil.max_hp = 224;
+        }
+        if let Some(e) = host.world.entities.get_mut(id) {
+            e.vitals.hp = 50;
+        }
+        let (g_tx, mut g_rx) = mpsc::unbounded_channel::<SimToGate>();
+        host.gates.insert(0, g_tx);
+        // M0_MIN（世界头/尾，含 scratch.rec 置位与收尾）+ RECOVERY（生产调用点）+ SLEEP
+        //（tick 尾节拍——M0_MIN 特意不含它；本用例要真实 200ms 网格 ⇒ 必须带上，
+        // 否则 tick_phase_rest 不睡、恢复段被逐帧消费，网格断言红）。
+        let phases = PhaseSet(PhaseSet::M0_MIN.0 | PhaseSet::RECOVERY | PhaseSet::SLEEP);
+        let (_tx, ev_rx) = std::sync::mpsc::channel();
+        let (_ctx, ev_ctl_rx) = std::sync::mpsc::channel();
+        let mut io = TickIo {
+            ev_rx,
+            ev_ctl_rx,
+            shutdown: ShutdownSignal::Flag(std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            )),
+            inbound_local_buffer: std::collections::VecDeque::new(),
+            inbound_local_carry_prefix: 0,
+            inbound_local_filled: 0,
+            inbound_local_fill_hit: false,
+            inbound_outstanding: None,
+            control_inbox: None,
+        };
+        let mut tick_starts: Vec<i64> = Vec::new();
+        let mut fire_ticks: Vec<usize> = Vec::new();
+        let mut fire_times: Vec<i64> = Vec::new();
+        let mut rearm_after_fire: Vec<i64> = Vec::new();
+        let mut hp_seq: Vec<i64> = Vec::new();
+        for k in 1..=14usize {
+            tick_starts.push(clock::now_ms() - t0);
+            let slot = host.host_prof.begin();
+            let next = std::time::Instant::now() + host.tick;
+            let mut scratch = TickScratch::default();
+            let outcome = host.tick_phase_a(
+                &mut shared,
+                &mut process,
+                &mut io,
+                phases,
+                &mut scratch,
+                &mut None,
+            );
+            assert_eq!(outcome, TickOutcome::Continue);
+            host.tick_phase_rest(&mut shared, &mut process, phases, &mut scratch, next, slot);
+            let after = clock::now_ms() - t0;
+            let mut new53 = 0u32;
+            while let Ok(SimToGate::SendFrame { body, .. }) = g_rx.try_recv() {
+                if CommandMessage::from_bytes(&body).is_some_and(|cm| {
+                    cm.ident == mir2_protocol::messages::SM_HEALTHSPELLCHANGED && cm.recog == id
+                }) {
+                    new53 += 1;
+                }
+            }
+            if new53 > 0 {
+                fire_ticks.push(k);
+                fire_times.push(after);
+                rearm_after_fire.push(
+                    host.ground_sessions["healer"]
+                        .recovery
+                        .inc_health_spell_tick
+                        - t0,
+                );
+            }
+            hp_seq.push(
+                host.world
+                    .entities
+                    .get(id)
+                    .map(|e| i64::from(e.hp))
+                    .unwrap_or(-1),
+            );
+        }
+        // (b) 时钟按 tick 网格步进消费（非逐帧）：每拍起点间距 ~200ms。
+        for w in tick_starts.windows(2) {
+            let d = w[1] - w[0];
+            assert!(
+                (180..=300).contains(&d),
+                "tick 节拍必须 ~200ms（observed {d}ms）：恢复段必须按 tick 网格消费，不是逐帧"
+            );
+        }
+        // 火序结构断言：对**观测钟序**（tick_starts = 每拍 drain 所见的 now−t0）跑同一递推
+        // （dw=400、d0=0、h0=30、p0=5），期望火拍必须与生产实测逐拍一致。
+        // 首火的过冲 = 节拍抖动 ε（毫秒级）——相位 ∈ {400ms cadence（ε 恰跨后沿对齐），
+        // 600ms cadence（ε>0 计入 cap）}由抖动决定 ⇒ **固定火序（[3,5,7,…]）不是有效断言**；
+        // 「观测 = 递推(观测钟)」才是相位鲁棒的结构牙（这正是 MG-12 相位面的机制本身）。
+        let mut d = 0i64;
+        let (mut h, mut p) = (30i64, 5i64);
+        let mut expected_fires: Vec<usize> = Vec::new();
+        let mut expected_rearm: Vec<i64> = Vec::new();
+        for (idx, &now) in tick_starts.iter().enumerate() {
+            if h > 0 && now - d >= 400 {
+                d = now + (now - d - 400).min(200);
+                let n = if h < p { h } else { p };
+                h -= n;
+                p = 5;
+                expected_fires.push(idx + 1);
+                expected_rearm.push(d);
+            }
+        }
+        assert!(
+            expected_fires.len() >= 3,
+            "持续药池（30/5）在 14 拍内至少 3 火（观测钟序递推得 {}）",
+            expected_fires.len()
+        );
+        assert_eq!(
+            fire_ticks, expected_fires,
+            "火拍必须 = 递推(观测钟序)（observed {fire_ticks:?} vs expected {expected_fires:?}）"
+        );
+        // 重挂写点：递推基准 = 拍**前**取的钟（tick_starts），而 drain_recovery 实读晚 δ
+        //（A 段/世界尾耗时，毫秒级）⇒ 生产写点 = 递推值 + δ；断言 |差| ≤ 30ms。
+        // 写点公式本身的逐字等式由 tick_lag_rearm 金标 + 单元牙钉（本面只钉"写点发生在
+        // 火拍、量级正确"）。
+        for (i, pair) in rearm_after_fire
+            .iter()
+            .zip(expected_rearm.iter())
+            .enumerate()
+        {
+            let drift = pair.0 - pair.1;
+            assert!(
+                (0..=30).contains(&drift),
+                "重挂写点必须 = 递推值 + δ(≤30ms)（火 #{i}: observed {} vs expected {}）",
+                pair.0,
+                pair.1
+            );
+        }
+        // hp 离散 +5（生产路径镜像进实体）：恰 fires.len() 步，终值 50 + 5×火数。
+        let ups = hp_seq.windows(2).filter(|w| w[1] > w[0]).count();
+        assert_eq!(
+            ups,
+            expected_fires.len(),
+            "hp 步数必须 = 火数（{hp_seq:?}）"
+        );
+        assert_eq!(
+            hp_seq.last().copied().unwrap_or(-1),
+            50 + 5 * expected_fires.len() as i64,
+            "终值 = 50 + 5×火数（{hp_seq:?}）"
+        );
     }
 
     // ------------------------------------------------------------------
