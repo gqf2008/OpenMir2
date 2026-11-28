@@ -1005,9 +1005,13 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             // **且** `Permission < 2` ⇒ 两条红 `SysMsg`（槽 4/5）+ `BoEmergencyClose`
             // （**无 `return`**，登录序照走完；oracle 泵尾 `MakeGhost`，宿主侧延迟断连）。
             if wx.play_object_count > conf.test_user_limit && i32::from(wx.permission) < 2 {
+                // **F1（reviewer 2026-11-28）**：`BoEmergencyClose = true` **无条件置位**
+                // （oracle PlayObject.cs:1381-1382 不依赖 String.conf 是否装载成功）；
+                // 两条正文随既有槽 0-3 的文件缺省约定——strings 缺 ⇒ 正文 None ⇒ 不产帧，
+                // 槽位照占堆（不回到 if let 里，否则「conf 在 / String.conf 缺」不踢人）。
+                base.emergency_close = true;
                 if let Some(strings) = wx.strings {
-                    base.emergency_close = true;
-                base.login_sys_msgs.online_user_full = Some(gbk(strings.online_user_full()));
+                    base.login_sys_msgs.online_user_full = Some(gbk(strings.online_user_full()));
                     base.login_sys_msgs.force_disconnect = Some(gbk(strings.force_disconnect()));
                 }
             }
@@ -3472,5 +3476,47 @@ mod tests {
             warns.iter().any(|w| w.contains("G3 在线人数门同跳过")),
             "conf-None 登记必须提及 G3：{warns:?}"
         );
+    }
+
+    /// **F1 回归牙（reviewer 2026-11-28）**：谓词命中且 `String.conf` 缺（strings=None）⇒
+    /// `emergency_close` **仍置位**（oracle PlayObject.cs:1381-1382 无条件）、两条正文 None
+    /// （槽位照占堆、不产帧——既有槽 0-3 缺省约定）。conf=None 走既有 conf-None 登记支，与本牙无关。
+    ///
+    /// 红检（实测）：把 `base.emergency_close = true;` 挪回 `if let Some(strings)` 里 ⇒ 本牙必红
+    /// （那正是被驳回的 F1 缺陷形态：「conf 在 / String.conf 缺」不踢人）。
+    #[test]
+    fn g3_flag_set_even_when_strings_missing() {
+        let conf = GameSvrConf::from_bytes(b"[Server]\nTestServerUserLimit=2\n");
+        let mut base = EnterWorldInputs {
+            actor_id: 9,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: Some(&conf),
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
+            ability: None,
+            green_msg: (0xDB, 0xFF),
+            test_server: false,
+            service_mode: false,
+            pay_ment: 0,
+            play_object_count: 3,
+            permission: 0,
+            red_msg: (0xFF, 0x38),
+        };
+        let _ = apply(&mut base, &wx);
+        assert!(base.emergency_close, "谓词命中 ⇒ 踢人不依赖 String.conf");
+        assert_eq!(base.login_sys_msgs.text(4), None);
+        assert_eq!(base.login_sys_msgs.text(5), None);
     }
 }
