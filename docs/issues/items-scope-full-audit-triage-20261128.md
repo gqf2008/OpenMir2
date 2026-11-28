@@ -144,3 +144,12 @@ rig 同值；四组变异红→还原留痕（M1 尾/M2 DARK 臂/M3 Dir 活值/M
 percent_clamp_hp_only、M-IT04（池臂 AC/MAC 互换+MAC==0 错臂定向失效态）首红=inc_pool/ac_only；
 三条 scope=full（evidence.cases 补引六例），全板计数 51→48。
 
+**MG-64/65 非 target 扩展落地（2026-11-28，card/items-scope-triage，openmir2-10）**：装置
+`PreBuffs.Who` 放开 `mon<k>`（位判据改对象分组组内序，既有件零变化；golden 增
+`pre_buff_status_by_object` 逐对象实测位）；绿/红毒 stem 各加一支双怪例（`prebuff_mon` /
+`prebuff_mon_red`——非目标怪预挂 Defense，群体臂逐对象投毒 8037，Rust 侧 10139.p1 按对象
+取值 + 657 recog→tag 逐怪身份钉）。变异（预 buff 错挂 mon0）红→还原；还原后同 id
+16 驱动 + 双比较器全绿（mgs64-mon-final）。残余定性：被毒怪自身 Operate 的 10139/657
+发射面 oracle 不可观测（装置 v1 怪物只记录不 Operate，撤销=装置 v2）；Shape>=3 ③-C 不变。
+MG-13/14 位号面（target-prebuff 复用）与 MG-15 随后。
+

@@ -1161,6 +1161,8 @@ fn apply_poison_arm_rm_policy(
             "multi_amulet_three" => 6500,
             "prebuff_green" => 6600,
             "prebuff_double" => 6700,
+            "prebuff_mon" => 6900,
+            "prebuff_mon_red" => 7000,
             _ => 0,
         }
     };
@@ -1432,10 +1434,14 @@ fn real_ledger_verify_labels_opts(
     }
     // **MG-50**：新臂（lvl1/lvl4/multi_amulet_*）的 Rm 面按 A/B/C 三类政策处理
     // （B32 怪物 Rm 结构性排除 + 10139 计数白名单 + B33 的 10125 记录口径排除）。
-    if stem == "groupamyounsul" {
+    // **MG-64/65 非 target 扩展（2026-11-28）**：`prebuff_mon`/`prebuff_mon_red` 同族
+    // （两怪中毒 ⇒ 每收件人恰多 2 条）；shape2 stem 也进政策（其 `prebuff_mon_red`）。
+    if stem == "groupamyounsul" || stem == "groupamyounsul-shape2" {
         apply_poison_arm_rm_policy(&mut g, &mut r, &|label| match label {
             "multi_amulet_monster_first" => 1,
             "multi_amulet_three" => 3,
+            "prebuff_mon" => 2,
+            "prebuff_mon_red" => 2,
             _ => 0,
         });
     }

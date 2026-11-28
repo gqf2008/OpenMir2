@@ -537,6 +537,12 @@ public static class Program
                 // **MG-64 ②（2026-11-27）**：**两条**前置 buff ⇒ 绿毒位号 **2** ⇒ `CharStatus = 0xE0000000`
                 //（`0x80000000 | 0x40000000 | 0x20000000`）⇒ `10139.p1 = -536870912`（跨位号复验）。
                 new ExtraCaseSpec { Label = "prebuff_double", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 }, new BuffSpec { Type = 3, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6700 },
+                // **MG-64/65 非 target 扩展（2026-11-28）**：群体施毒多对象——点击目标=mon0（101,100）、
+                // 非目标怪 mon1（102,100）在 ±1 方框内；`Who="mon2"` 给 mon1 预挂 `Defense`。
+                // 玩家目标挪出方框（110,100）；`AmuletDura=600` ⇒ 两对象各扣一次都过。
+                // 判据：两个被毒对象的 `10139.p1` **不同**——mon0（无预 buff）绿毒落位 0 = 0x80000000、
+                // mon1（预 buff 占位 0）绿毒落位 1 = 0xC0000000 ⇒ 证明群体臂逐对象读 CharStatus。
+                new ExtraCaseSpec { Label = "prebuff_mon", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, TargetXy = new[] { 110, 100 }, UserMagicLevelOverride = 1, AmuletDura = 600, PreBuffs = new[] { new BuffSpec { Who = "mon2", Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 6900 },
                 // **MG-64/65（2026-11-26）**：目标先挂一条非毒 buff（`Defense`=2，`StateTick=60000`）⇒
                 // 绿毒 buff 的位号 `i` 变 1 ⇒ `StatusChanged` 的 `CharStatus = 0x80000000 >> 1 = 0x40000000`
                 // ⇒ `10139.p1` 不再是 `int.MinValue`（MG-64 的非零位号 + MG-65 的红毒位路径）。
@@ -545,7 +551,7 @@ public static class Program
             // **MG-50（2026-11-26）**：护身符 `Shape=0` 的 fall-through——`switch` 无 default ⇒ 不投毒
             // （无 `8037`），但骰过且 race 合格 ⇒ `result` **仍 true**（`:929-932` 在 switch 之外）⇒ 训练尾 640 在。
             if (name == "groupamyounsul-shape0") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape0", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 0, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15 });
-            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15, ExtraCases = new[] { new ExtraCaseSpec { Label = "prebuff_red", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6800 } } });
+            if (name == "groupamyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul-shape2", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", AmyOunsulPoint = 15, ExtraCases = new[] { new ExtraCaseSpec { Label = "prebuff_red", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 6800 }, new ExtraCaseSpec { Label = "prebuff_mon_red", Monsters = new[] { new MonsterSpec { X = 101, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 }, new MonsterSpec { X = 102, Y = 100, Race = 50, Level = 10, Hp = 100, LifeAttrib = 0, AntiMagic = 0 } }, TargetMonster = 1, TargetXy = new[] { 110, 100 }, UserMagicLevelOverride = 1, AmuletDura = 600, PreBuffs = new[] { new BuffSpec { Who = "mon2", Type = 2, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, TargetMonsterUndead = false, IdBase = 7000 } } });
             // **MG-47（35 `SKILL_WINDTEBO`）**：`GetPoseCreate` 取**前格**实体 ⇒ 装置用 `EnableMaps`
             // 设 `caster.Dir`（朝点击方向 = 东）⇒ 前格 (101,100) 的 target 成为推挤目标。
             // 判据：golden 必须 ≥1 条 `SM_BACKSTEP(9)`（退化守卫；零条即具名红）。
@@ -3083,7 +3089,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null, object preBuffStatusByObject = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3096,7 +3102,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && productionAoi == null && pushCacheCold == null && observeDirAfter == null
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
-            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null && casterBright == null)
+            && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null && casterBright == null
+            && preBuffStatusByObject == null)
         {
             return fixture;
         }
@@ -3146,6 +3153,8 @@ private static int ReadInstanceInt(object obj, string fieldName)
         // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
         if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
         if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
+        // **MG-64/65 非 target 扩展（2026-11-28）**：逐对象实测位（只在存在非 target 组时落盘）。
+        if (preBuffStatusByObject != null) node["pre_buff_status_by_object"] = JsonSerializer.SerializeToNode(preBuffStatusByObject);
         // **MG-36 ①（2026-11-26）**：条件键——tick 臂的**输入**（相对事件登记时刻的 delta 列表）。
         if (fireTicksMs != null) node["fire_ticks_ms"] = JsonSerializer.SerializeToNode(fireTicksMs);
         // **MG-36 ①**：事件登记时刻的**绝对**虚拟钟（C# `GetTickCount` 口径）——驱动的 `clock_ms` 必须对齐
@@ -3974,31 +3983,81 @@ private static FireballResult RunMagicCase(
         // **MG-64/65（2026-11-26）**：预置 buff——`ActorBuffSystem.AddBuff` 只改状态、不发帧/不入队
         // （`ActorBuffSystem.cs:100-159`）⇒ 帧面/RM 面零副作用。契约（C# 侧这次断言）：
         // 声明插入序 `i` ⇒ `GetBuffStatus` 的位 == `0x80000000 >> i`（Rust 驱动侧另断一次，两侧同判据）。
+        // **MG-64/65 非 target 扩展（2026-11-28）**：`Who` 支持 `target` 与 `mon<k>`（1 基，解析进
+        // `spec.Monsters` 生成的怪列表）——位判据按**对象分组后的组内声明序**（单对象组与旧全 target
+        // 口径同值 ⇒ 既有件零变化）；出现非 target 时 golden 增记 `pre_buff_status_by_object`
+        // （逐对象实测位），`pre_buff_status` 仍只在有 target 组时写（旧件零变化）。
         object preBuffsNode = null;
         int? preBuffStatus = null;
+        object preBuffStatusByObject = null;
         if (spec.PreBuffs is { Length: > 0 })
         {
             foreach (var pb in spec.PreBuffs)
             {
-                if (pb.Who != "target")
+                if (pb.Who == "target")
+                {
+                    M2Server.M2Share.ActorBuffSystem.AddBuff(target, (M2Server.BuffType)pb.Type, pb.Dura, pb.StateVal);
+                }
+                else if (pb.Who != null && pb.Who.StartsWith("mon", StringComparison.Ordinal)
+                    && int.TryParse(pb.Who.AsSpan(3), out int mk))
+                {
+                    if (mk < 1 || mk > monsters.Count)
+                    {
+                        throw new FixtureContractViolation(
+                            "[" + spec.Key + "/" + label + "] PreBuffs.Who=mon" + mk + " 越界（monsters=" + monsters.Count + "）");
+                    }
+                    M2Server.M2Share.ActorBuffSystem.AddBuff(monsters[mk - 1], (M2Server.BuffType)pb.Type, pb.Dura, pb.StateVal);
+                }
+                else
                 {
                     throw new FixtureContractViolation(
-                        "[" + spec.Key + "/" + label + "] PreBuffs.Who 只支持 target（fixture 只回写一份 pre_buff_status）");
+                        "[" + spec.Key + "/" + label + "] PreBuffs.Who 只支持 target / mon<k>（got " + (pb.Who ?? "null") + "）");
                 }
-                M2Server.M2Share.ActorBuffSystem.AddBuff(target, (M2Server.BuffType)pb.Type, pb.Dura, pb.StateVal);
             }
-            int expectedStatus = 0;
-            for (int i = 0; i < spec.PreBuffs.Length; i++)
+            // 按对象分组（保首现序）重算期望位并逐对象实测断言。
+            var buffGroups = new List<(string Who, SystemModule.Actors.IActor Obj, int Status)>();
+            var groupOrder = new List<string>();
+            foreach (var pb in spec.PreBuffs)
             {
-                expectedStatus |= unchecked((int)(0x80000000u >> i));
+                if (!groupOrder.Contains(pb.Who))
+                {
+                    groupOrder.Add(pb.Who);
+                }
             }
-            int gotStatus = M2Server.M2Share.ActorBuffSystem.GetBuffStatus(target);
-            if (gotStatus != expectedStatus)
+            foreach (var who in groupOrder)
             {
-                throw new FixtureContractViolation(
-                    "[" + spec.Key + "/" + label + "] pre_buff_status 实测 " + gotStatus + " != 声明推导 " + expectedStatus);
+                SystemModule.Actors.IActor obj = who == "target" ? target : monsters[int.Parse(who.AsSpan(3)) - 1];
+                int seq = 0;
+                int expected = 0;
+                foreach (var pb in spec.PreBuffs)
+                {
+                    if (pb.Who == who)
+                    {
+                        expected |= unchecked((int)(0x80000000u >> seq));
+                        seq++;
+                    }
+                }
+                int got = M2Server.M2Share.ActorBuffSystem.GetBuffStatus(obj);
+                if (got != expected)
+                {
+                    throw new FixtureContractViolation(
+                        "[" + spec.Key + "/" + label + "] pre_buff_status(" + who + ") 实测 " + got + " != 声明推导 " + expected);
+                }
+                buffGroups.Add((who, obj, got));
             }
-            preBuffStatus = gotStatus;
+            var targetGroup = buffGroups.FirstOrDefault(kv => kv.Who == "target");
+            if (targetGroup.Who != null)
+            {
+                preBuffStatus = targetGroup.Status;
+            }
+            if (buffGroups.Any(kv => kv.Who != "target"))
+            {
+                preBuffStatusByObject = buffGroups.Select(kv => new Dictionary<string, object>
+                {
+                    ["who"] = kv.Who,
+                    ["status"] = kv.Status
+                }).ToArray();
+            }
             preBuffsNode = spec.PreBuffs.Select((pb, i) => new Dictionary<string, object>
             {
                 ["who"] = pb.Who,
@@ -5049,6 +5108,7 @@ private static FireballResult RunMagicCase(
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
                 preBuffs: preBuffsNode,
                 preBuffStatus: preBuffStatus,
+                preBuffStatusByObject: preBuffStatusByObject,
                 fireTicksMs: spec.FireTickMs,
                 fireCastMs: fireCastMsForFixture,
                 casterBright: spec.Key == "spacemove" ? (int?)caster.Bright : null,
@@ -5208,7 +5268,10 @@ private static FireballResult RunMagicCase(
     /// </summary>
     private sealed class BuffSpec
     {
-        /// <summary>施加对象：目前只允许 `target`（fixture 只回写一份 `pre_buff_status`）。</summary>
+        /// <summary>施加对象：`target`（玩家目标）或 `mon&lt;k&gt;`（1 基，解析进 `spec.Monsters`
+        /// 生成的怪列表——**MG-64/65 非 target 扩展（2026-11-28）**：群体施毒的每个受害对象各自读
+        /// CharStatus ⇒ 位判据按对象分组后的组内声明序；非 target 出现时 golden 增记
+        /// `pre_buff_status_by_object`（逐对象实测位），旧全 target 件零变化。</summary>
         public string Who = "target";
         /// <summary>`M2Server.BuffType`（绿毒 0 / 红毒 1 / Defense 2 / …）。</summary>
         public int Type;

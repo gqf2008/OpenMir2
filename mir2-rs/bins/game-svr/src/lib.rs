@@ -88399,44 +88399,58 @@ SendRefMsgRange=15
             // **MG-64/65（2026-11-26）**：预置 buff——`ActorBuffSystem.AddBuff` 只改状态、**不发帧/不入队**
             // （`ActorBuffSystem.cs:100-159`）。两侧同判据：声明插入序 `i` ⇒ `get_buff_status` 的位
             // == `0x80000000 >> i`（C# 装置侧在 golden 生成时已断过一次，这里断 Rust 侧）。
+            // **MG-64/65 非 target 扩展（2026-11-28）**：`who` 支持 `target` 与 `mon<k>`——本块只施加
+            // **target** 组（组内序推位 + 对 `pre_buff_status` 断言）；`mon<k>` 条目由放怪后的
+            // `pre_buff_status_by_object` 块施加与断言（怪 id 在 `place_monsters` 之后才存在）。
             if let Some(list) = golden_case_for(stem, label)["Fixture"]["pre_buffs"].as_array() {
                 use mir2_world_bevy::buff::BuffType;
                 let mut expected: i32 = 0;
+                let mut target_seq: usize = 0;
+                let mut has_target = false;
                 for (i, pb) in list.iter().enumerate() {
                     assert_eq!(
-                        pb["who"].as_str(),
-                        Some("target"),
-                        "[{stem}/{label}] 驱动只支持 target 预置 buff"
+                        usize::try_from(pb["index"].as_u64().expect("pre_buffs.index")).unwrap(),
+                        i,
+                        "[{stem}/{label}] pre_buffs.index 必须等于声明序"
                     );
+                    let who = pb["who"].as_str().unwrap_or("").to_string();
                     let t = u8::try_from(pb["type"].as_u64().expect("pre_buffs.type")).unwrap();
                     let bt = BuffType::from_index(t)
                         .unwrap_or_else(|| panic!("[{stem}/{label}] 未知 BuffType={t}"));
                     let dura = i32::try_from(pb["dura"].as_i64().expect("pre_buffs.dura")).unwrap();
                     let sv = i32::try_from(pb["stateval"].as_i64().expect("pre_buffs.stateval"))
                         .unwrap();
-                    assert_eq!(
-                        usize::try_from(pb["index"].as_u64().expect("pre_buffs.index")).unwrap(),
-                        i,
-                        "[{stem}/{label}] pre_buffs.index 必须等于声明序"
-                    );
-                    rig.world.buffs.add_buff(target, bt, dura, sv, 0);
-                    expected |= (0x8000_0000u32 >> i) as i32;
+                    if who == "target" {
+                        rig.world.buffs.add_buff(target, bt, dura, sv, 0);
+                        expected |= (0x8000_0000u32 >> target_seq) as i32;
+                        target_seq += 1;
+                        has_target = true;
+                    } else if !(who.len() > 3
+                        && who.starts_with("mon")
+                        && who[3..].parse::<usize>().is_ok())
+                    {
+                        panic!(
+                            "[{stem}/{label}] pre_buffs.who 非法：{who}（只支持 target/mon<k>）"
+                        );
+                    }
                 }
-                let want = i32::try_from(
-                    golden_case_for(stem, label)["Fixture"]["pre_buff_status"]
-                        .as_i64()
-                        .expect("pre_buff_status"),
-                )
-                .unwrap();
-                assert_eq!(
-                    expected, want,
-                    "[{stem}/{label}] 声明插入序推导的位与金标准记录不符"
-                );
-                let got = rig.world.buffs.get_buff_status(target);
-                assert_eq!(
-                    got, want,
-                    "[{stem}/{label}] Rust get_buff_status != 金标准（两侧同判据）"
-                );
+                if has_target {
+                    let want = i32::try_from(
+                        golden_case_for(stem, label)["Fixture"]["pre_buff_status"]
+                            .as_i64()
+                            .expect("pre_buff_status"),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        expected, want,
+                        "[{stem}/{label}] 声明插入序推导的位与金标准记录不符"
+                    );
+                    let got = rig.world.buffs.get_buff_status(target);
+                    assert_eq!(
+                        got, want,
+                        "[{stem}/{label}] Rust get_buff_status != 金标准（两侧同判据）"
+                    );
+                }
             }
             let aop = golden_fixture_required(stem, label, "amy_ounsul_point");
             let aop = i32::from(aop);
@@ -88516,6 +88530,67 @@ SendRefMsgRange=15
                 if let Some(e) = rig.world.entities.get_mut(*id) {
                     e.ai.target_creature = Some(caster);
                 }
+            }
+        }
+        // **MG-64/65 非 target 扩展（2026-11-28）**：`pre_buff_status_by_object` 存在 ⇒ golden
+        // 声明了落在**非目标对象**（`mon<k>`，1 基）上的预置 buff——群体施毒的每个受害对象各自
+        // 带状态进施法。两侧同判据（同 target 组）：对象分组后的组内声明序 i ⇒ 位 ==
+        // `0x80000000 >> i`；golden 节逐对象记录装置实测位，这里施加并断 Rust 侧相同。
+        // target 组不进本块（上面 pre_buffs 块已施加并断 `pre_buff_status`）。
+        if let Some(by_obj) =
+            golden_case_for(stem, label)["Fixture"]["pre_buff_status_by_object"].as_array()
+        {
+            use mir2_world_bevy::buff::BuffType;
+            let fix = golden_case_for(stem, label)["Fixture"].clone();
+            let list = fix["pre_buffs"]
+                .as_array()
+                .expect("pre_buff_status_by_object ⇒ 必须有 pre_buffs");
+            for entry in by_obj {
+                let who = entry["who"].as_str().expect("by_object.who").to_string();
+                let want =
+                    i32::try_from(entry["status"].as_i64().expect("by_object.status")).unwrap();
+                if who == "target" {
+                    continue;
+                }
+                let k: usize = who[3..]
+                    .parse()
+                    .unwrap_or_else(|_| panic!("[{stem}/{label}] by_object.who 非法：{who}"));
+                assert!(
+                    k >= 1 && k <= monster_ids.len(),
+                    "[{stem}/{label}] by_object {who} 越界（怪物数 {}）",
+                    monster_ids.len()
+                );
+                let idx = monster_ids[k - 1];
+                let mut expected: i32 = 0;
+                let mut seq: usize = 0;
+                for pb in list.iter() {
+                    if pb["who"].as_str() == Some(who.as_str()) {
+                        let t = u8::try_from(pb["type"].as_u64().expect("pre_buffs.type")).unwrap();
+                        let bt = BuffType::from_index(t)
+                            .unwrap_or_else(|| panic!("[{stem}/{label}] 未知 BuffType={t}"));
+                        let dura =
+                            i32::try_from(pb["dura"].as_i64().expect("pre_buffs.dura")).unwrap();
+                        let sv =
+                            i32::try_from(pb["stateval"].as_i64().expect("pre_buffs.stateval"))
+                                .unwrap();
+                        rig.world.buffs.add_buff(idx, bt, dura, sv, 0);
+                        expected |= (0x8000_0000u32 >> seq) as i32;
+                        seq += 1;
+                    }
+                }
+                assert!(
+                    seq > 0,
+                    "[{stem}/{label}] by_object {who} 无对应 pre_buffs 条目（声明失效）"
+                );
+                assert_eq!(
+                    expected, want,
+                    "[{stem}/{label}] 声明推导位 != golden by_object 记录（{who}）"
+                );
+                let got = rig.world.buffs.get_buff_status(idx);
+                assert_eq!(
+                    got, want,
+                    "[{stem}/{label}] Rust get_buff_status != golden（{who}，两侧同判据）"
+                );
             }
         }
         // **MG-44（32 圣言术）**：可选怪物目标。`Fixture.target_monster` 是 **1 基**序号
@@ -95013,7 +95088,15 @@ SendRefMsgRange=15
                     for m in sent.iter() {
                         if is_mon657(m) {
                             assert_eq!(m["param"].as_i64(), Some(0), "657 头字段 param 形状不符");
-                            assert_eq!(m["tag"].as_i64(), Some(32768), "657 头字段 tag 形状不符");
+                            // **MG-64/65 非 target 扩展（2026-11-28）**：tag = CharStatus 头字段，
+                            // 原单怪无预 buff 时恒 0x8000（毒位 0）；怪带预 buff 时毒位后移
+                            // （0xC000 = 毒位 1 | 预 buff 位 0）⇒ 判据放宽为「毒高位在位」
+                            // （0x8000 位必置），其余位由驱动测试的 10139.p1 值面钉住。
+                            assert!(
+                                m["tag"].as_i64().is_some_and(|v| v & 0x8000 != 0),
+                                "657 头字段 tag 形状不符（毒高位必须在位）：{:?}",
+                                m["tag"]
+                            );
                             assert_eq!(m["series"].as_i64(), Some(7), "657 头字段 series 形状不符");
                         }
                     }
@@ -95953,6 +96036,30 @@ SendRefMsgRange=15
         sent_params(case, who, ident).len()
     }
 
+    /// 某收件人 `Sent` 里某 ident 的 `(recog, tag)` 对（按 recog 升序）——**MG-64/65 非 target
+    /// 扩展（2026-11-28）**的逐怪身份钉：657 的 `tag` = 被毒对象 CharStatus 头字段，按 `recog`
+    /// 对象各自取值（多重集分不清哪只怪带预 buff 位，本对按身份钉）。
+    fn sent_recog_tags(case: &serde_json::Value, who: &str, ident: i64) -> Vec<(i64, i64)> {
+        let mut v: Vec<(i64, i64)> = case["Receivers"]
+            .as_array()
+            .and_then(|rs| rs.iter().find(|r| r["Who"] == who))
+            .and_then(|r| r["Sent"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| m["ident"] == ident)
+                    .map(|m| {
+                        (
+                            m["recog"].as_i64().unwrap_or(-1),
+                            m["tag"].as_i64().unwrap_or(-1),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort_unstable();
+        v
+    }
+
     /// 某收件人 `Sent` 里某 ident 的 `param` 序列（**线面**，Rust 台账与 golden 同口径）。
     fn sent_params(case: &serde_json::Value, who: &str, ident: i64) -> Vec<i64> {
         case["Receivers"]
@@ -96098,6 +96205,91 @@ SendRefMsgRange=15
             assert_eq!(sent_count(c, "target", 657), 1, "被毒玩家收到自己的 657");
             assert_eq!(caster_target_cret(c), 6402, "TargetCret 落玩家");
         });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_parity_prebuff_mon() {
+        // **MG-64/65 非 target 扩展（2026-11-28）**：群体施毒的**非目标对象**预置 buff——
+        // 点击目标 = mon0（无预 buff）、非目标怪 mon1 预挂 `Defense`（`Who="mon2"`）。
+        // 装置侧判据（golden `pre_buff_status_by_object`）已断 mon1 施法前位 = 0x80000000；
+        // 本测试钉：① mon0/mon1 **各**拿到一条 8037（群体臂逐对象投毒）；② Rust 台账侧
+        // 两怪的 10139.p1 **不同**（mon0 绿毒落位 0 = 0x80000000、mon1 预 buff 占位 0 ⇒
+        // 绿毒落位 1 = 0xC0000000）——位号随对象预状态走，不随施法常量化。
+        group_amyounsul_arm_assert("prebuff_mon", 1, 6900, Some(2), &|c, g| {
+            assert_eq!(
+                rm_count(g, "mon0", 8037),
+                1,
+                "金标准：mon0（点击目标）中绿毒"
+            );
+            assert_eq!(
+                rm_count(g, "mon1", 8037),
+                1,
+                "金标准：mon1（非目标怪）中绿毒"
+            );
+            let g0 = rm_params(g, "mon0", 8037);
+            let g1 = rm_params(g, "mon1", 8037);
+            assert_eq!(g0, g1, "两怪的 8037 力度字段同施法输入（prebuff 不改毒力）");
+            let mut p1s = rm_params(c, "caster", 10139);
+            p1s.sort_unstable();
+            assert_eq!(
+                p1s,
+                vec![-2147483648, -1073741824],
+                "Rust：两怪 10139.p1 = 0x80000000（mon0 无预 buff）与 0xC0000000（mon1 预 buff 位 0 + 绿毒位 1）"
+            );
+            let mut r657 = sent_657_recogs(c, "caster");
+            r657.sort_unstable();
+            assert_eq!(r657, vec![6910, 6911], "Rust：两怪各发一次 657");
+            // 逐怪身份钉：657 的 tag 按对象各自取值（预 buff 位在 mon1=6911，不在 mon0=6910）。
+            assert_eq!(
+                sent_recog_tags(c, "caster", 657),
+                vec![(6910, 0x8000), (6911, 0xC000)],
+                "Rust：657 tag 按 recog 对象取值——预 buff 位必须落在 mon1"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn group_amyounsul_shape2_parity_prebuff_mon_red() {
+        // **MG-65 非 target 扩展（2026-11-28）**：红毒臂的同构 face——mon1 预挂 `Defense`
+        // ⇒ 红毒落位 1 = 0xC0000000、mon0 红毒落位 0 = 0x80000000。
+        group_amyounsul_shape2_assert_prebuff_mon();
+    }
+
+    /// [`group_amyounsul_shape2_parity_prebuff_mon_red`] 的驱动体（shape2 stem 同构断言栈）。
+    fn group_amyounsul_shape2_assert_prebuff_mon() {
+        fireball_parity_drive("groupamyounsul-shape2", 48, 1, "prebuff_mon_red", 1, 7000);
+        let c = read_ledger_case("groupamyounsul-shape2", "prebuff_mon_red")[0].clone();
+        let g = golden_case_for("groupamyounsul-shape2", "prebuff_mon_red");
+        assert_eq!(rm_count(&g, "mon0", 8037), 1, "金标准：mon0 中红毒");
+        assert_eq!(rm_count(&g, "mon1", 8037), 1, "金标准：mon1 中红毒");
+        let mut p1s = rm_params(&c, "caster", 10139);
+        p1s.sort_unstable();
+        assert_eq!(
+            p1s,
+            vec![-2147483648, -1073741824],
+            "Rust：两怪 10139.p1 = 0x80000000（mon0 红毒位 0）与 0xC0000000（mon1 预 buff 位 0 + 红毒位 1）"
+        );
+        let mut r657 = sent_657_recogs(&c, "caster");
+        r657.sort_unstable();
+        assert_eq!(r657, vec![7010, 7011], "Rust：两怪各发一次 657");
+        assert_eq!(
+            sent_recog_tags(&c, "caster", 657),
+            vec![(7010, 0x8000), (7011, 0xC000)],
+            "Rust：657 tag 按 recog 对象取值——预 buff 位必须落在 mon1"
+        );
+        poison_per_receiver_frame_matches_golden_allow_extra_657(
+            "groupamyounsul-shape2",
+            "prebuff_mon_red",
+            7000,
+            2,
+        );
+        fireball_case_assert("groupamyounsul-shape2", "prebuff_mon_red");
+        let passes = golden_case_for("groupamyounsul-shape2", "prebuff_mon_red")["DrainPasses"]
+            .as_u64()
+            .expect("golden 缺 DrainPasses") as i64;
+        b1_golden_drain_assert("groupamyounsul-shape2.json", "prebuff_mon_red", passes);
     }
 
     #[test]
@@ -96419,6 +96611,9 @@ SendRefMsgRange=15
                     "multi_amulet_three",
                     "prebuff_double",
                     "prebuff_green",
+                    // **MG-64/65 非 target 扩展（2026-11-28）**：非目标怪预置 buff 臂（双怪，
+                    // `Who="mon2"` ⇒ 位判据对象分组组内序；golden 增 pre_buff_status_by_object）。
+                    "prebuff_mon",
                 ],
                 &[1, 2],
                 15,
@@ -96431,7 +96626,14 @@ SendRefMsgRange=15
             // `prebuff_red` = 红毒位号面（红毒落位 1 ⇒ `0xC0000000` 含推算位 `0x40000000`）。
             (
                 "groupamyounsul-shape2.json",
-                &["s1", "s5", "s13", "prebuff_red"],
+                &[
+                    "s1",
+                    "s5",
+                    "s13",
+                    "prebuff_red",
+                    // **MG-65 非 target 扩展（2026-11-28）**：红毒臂同构 face。
+                    "prebuff_mon_red",
+                ],
                 &[2],
                 15,
             ),
@@ -96479,7 +96681,10 @@ SendRefMsgRange=15
                 seen += 1;
             }
         }
-        assert_eq!(seen, 26, "必须逐支检查 26 支（3+3+10+3+3+4）");
+        assert_eq!(
+            seen, 28,
+            "必须逐支检查 28 支（3+3+11+3+3+5；MG-64/65 非 target 扩展 +2）"
+        );
     }
 
     #[test]
