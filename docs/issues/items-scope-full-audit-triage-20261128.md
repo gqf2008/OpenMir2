@@ -129,3 +129,9 @@ DARK 4 处 ⇒ 生产可达）+ Dir（实体旋钮 5 替代 ctor 常量 4）三�
 rig 同值；四组变异红→还原留痕（M1 尾/M2 DARK 臂/M3 Dir 活值/M4 逐图绑定，详见 manifest
 四条 scope）。801 series 高字节 Light=0（ctor 值，生产由装备派生）未点亮，manifest 已登记如需另立。
 
+**升满落账（2026-11-28，opc-66 验收并 master 189226ca0）**：IT-09/10/11/13 四条 scope=full
+（删 scope 键、原文+验收引文入 notes——coverage 口径 full=无 scope 键，1abe1f9cb 先例）。
+复验：四条簇测试 18 用例全绿 rc=0 + M2 变异抽验红→还原绿 + workspace --lib 4231/0 + schema GREEN。
+全板 scope≠full 计数：分诊时 60 → 五条升满批（dddbb9609，MG-55/60/61/62/63）后 55 → 本笔 51。
+① 档余量：IT-01/03/04/17、MG-13/14/15/23/46/48、MG-59（U-1/U-2）、MG-64/65 共 12 条（MG-12/59-U-3 归 ②）。
+
