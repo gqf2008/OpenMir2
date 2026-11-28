@@ -145063,6 +145063,193 @@ mod l2_handoff_tests {
         );
     }
 
+    /// **DEV-HANDOFF-GROUP 核查（总监工作令 2026-11-28）**：失败迁移是否静默丢组关系。
+    ///
+    /// 卡 `docs/issues/dev-handoff-group-loss-20261126.md` 的两区夹具判定：源区（区 1）
+    /// leader+member 组队 → leader 发起跨区 handoff → 目标区收下晋升 → ack.ok ⇒ 源区
+    /// `release_entity` → attach 被拒（目标区同 chr 会话冲突）⇒ b1 回收目标区实体 →
+    /// 会话整包回滚源区。逐项断言源区侧组关系三字段的下落。
+    ///
+    /// 本牙钉住的是**现状**（按卡上判据「`group(id)==None` ⇒ 确认静默退组」）；修复路线
+    /// （镜像补带组状态 vs 重建时从会话恢复）由总监裁定后另行落码，届时本牙的 ③④⑤
+    /// 断言按裁定结论改写并作为修复的红检。
+    #[test]
+    fn failed_migration_drops_group_state_silently() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+
+        // ---- 夹具：源区（区 1）leader+member 组队（字段落点与 party_join_group_em 一致）----
+        let layout = std::sync::Arc::new(layout());
+        let boxes = crate::handoff::new_mailboxes(2);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut src = two_zone_state(1, &counter);
+        let leader = seed_full_session(&mut src, "leader", 901);
+        let member = seed_full_session(&mut src, "member", 903);
+        {
+            let e = src
+                .host
+                .world
+                .entities
+                .get_mut(leader)
+                .expect("leader 实体在");
+            e.flags.handoff_pending = true;
+            e.group.allow_group = true;
+            // 组长自指（party_join_group_em(actor, actor)）；名单唯一载体在组长实体上。
+            e.group.group_owner = leader;
+            e.group.group_members = vec![leader, member];
+        }
+        {
+            let e = src
+                .host
+                .world
+                .entities
+                .get_mut(member)
+                .expect("member 实体在");
+            e.group.allow_group = true;
+            // 成员侧只有 owner 指针（party.rs:496）；自己的 group_members 恒空。
+            e.group.group_owner = leader;
+        }
+        let group_before = src
+            .host
+            .world
+            .entities
+            .group(leader)
+            .cloned()
+            .expect("迁移前组关系在");
+
+        // ---- leader 跨区 handoff：offer → 目标区收下 → ack.ok ⇒ 源区 release+detach ----
+        let mut rt = crate::handoff::HandoffRuntime::new(
+            zone(1),
+            std::sync::Arc::clone(&layout),
+            boxes.clone(),
+        );
+        rt.after_phase2(&mut src.host.world, 0);
+        {
+            let mut m = boxes[1].lock().unwrap_or_else(|e| e.into_inner());
+            m.1.push(crate::handoff::HandoffAck {
+                to: zone(1),
+                from: zone(0),
+                id: leader,
+                ok: true,
+            });
+        }
+        let committed = rt.tick_top(&mut src.host.world, 1);
+        assert_eq!(committed.len(), 1, "前置：恰一条已提交");
+        assert_eq!(
+            committed[0].group, group_before,
+            "前置：捕获=迁移前组关系（A38 捕获点语义）"
+        );
+        let m = detach_session_for_migration(
+            &mut src.host.world,
+            &mut src.host.displays,
+            &mut src.host.online,
+            &mut src.host.ground_sessions,
+            &mut src.host.saves,
+            &mut src.host.login_tails,
+            &mut src.host.aoi_frames_total,
+            &mut src.host.shop_sessions,
+            &mut src.host.pending_local,
+            zone(1),
+            zone(0),
+            leader,
+            committed.into_iter().next().expect("一条").group,
+        )
+        .expect("前置：detach");
+
+        // ---- 注入 attach 被拒：目标区已有同 chr 会话（冲突源）+ 实体已晋升 ----
+        let mut dst = two_zone_state(0, &counter);
+        let _ = seed_full_session(&mut dst, "leader", 902);
+        seed_target_world(&mut dst, leader, "leader");
+        let dst_arc = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let lookup = std::sync::Arc::clone(&dst_arc);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+
+        // ---- 判定（逐项） ----
+        // ① 回滚成功前提：会话七表整包回源、online 在（卡步骤 3 第一项）。
+        assert!(
+            src.host.ground_sessions.contains_key("leader"),
+            "回滚成功前提：ground 回源"
+        );
+        assert!(
+            src.host.online.find_by_chr("leader").is_some(),
+            "回滚成功前提：online 回源"
+        );
+        // ② b1：目标区实体已回收——组关系的唯一幸存副本（attach_session 写入的那份）随之消失。
+        {
+            let dst = dst_arc.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                dst.host.world.entities.get(leader).is_none(),
+                "b1：目标区实体已回收"
+            );
+        }
+        // ③ 核心：源区实体既未保留（ack 时已 `release_entity`，handoff.rs:207）也未重建
+        //    （restore_session 只写七表 + World 会话）⇒ World 会话指向死实体（limbo），
+        //    组关系三字段无处可查。router 失败路径共用同一 restore_session 丢包点。
+        let sess = src
+            .host
+            .world
+            .sessions
+            .get("leader")
+            .expect("World 会话已回源");
+        assert_eq!(
+            sess.stage,
+            mir2_world_bevy::WorldStage::InWorld,
+            "会话 stage=InWorld（卡面口径）"
+        );
+        assert_eq!(sess.actor_id, Some(leader), "actor_id 指回原 id");
+        assert!(
+            src.host.world.entities.get(leader).is_none(),
+            "会话指向的实体已不存在（limbo）：源区未保留也未重建"
+        );
+        // 卡判据原句：`world.entities.group(id)` 是否仍等于迁移前的 `GroupState`；
+        // 为 None ⇒ 确认「失败迁移静默退组」。
+        assert!(
+            src.host.world.entities.group(leader).is_none(),
+            "group(id)==None ⇒ 失败迁移静默丢组关系（判「丢」，报总监裁定修复路线）"
+        );
+        // ④ 重建语义：实体唯一的重建路径=再登录（`new_player_entity` ⇒ `EntitySpawn::new`），
+        //    组四字段全缺省 ⇒ 即使重建也不恢复；`m.group` 随 restore_session 丢弃（有意，
+        //    A38 注释）。修复若走「重建时恢复」必须改这里。
+        let rebuilt = new_player_entity("leader".into(), 5, 5);
+        assert!(
+            !rebuilt.allow_group && rebuilt.group_owner == 0 && rebuilt.group_members.is_empty(),
+            "重建实体（登录构造器）组四字段全缺省 ⇒ 重建不恢复组关系"
+        );
+        // ⑤ member 侧残影（玩家可感知面）：member 实体仍在源区、仍记 owner=leader；
+        //    而名单唯一载体（leader 实体）已消失 ⇒ 成员列表不可解析；失败路径只写表、
+        //    不产生任何组帧（deliver/restore 无 PartyEvent）⇒ 「静默」。
+        let me = src
+            .host
+            .world
+            .entities
+            .get(member)
+            .expect("member 实体仍在源区");
+        assert_eq!(me.group_owner, leader, "member 仍记 owner=leader（残影）");
+        let members_via_owner = src
+            .host
+            .world
+            .entities
+            .get(me.group_owner)
+            .map(|e| e.group_members.clone());
+        assert_eq!(
+            members_via_owner, None,
+            "名单唯一载体（leader 实体）已消失 ⇒ party_members_of 解析为空 ⇒ 散组规则提前触发候选"
+        );
+        assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
+        assert_eq!(mirror_world_refused(), 1);
+        assert_eq!(router.len(), 0, "失败路径不得 assign");
+    }
+
     /// **A35-b · 静态牙（接线提示，非行为证据）**：两个驱动点必须夹在「A 段之后、barrier1
     /// 之前」——区 0：`tick_phase_a(` < `A35-b 驱动点（区 0）` < `await_neighbors(self.ticks)`；
     /// 区 k：`tick_phase_a(` < `A35-b 驱动点（区 k）` < `await_neighbors(tick)`。
