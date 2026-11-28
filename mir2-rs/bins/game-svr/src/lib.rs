@@ -35981,10 +35981,19 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
             // `ProcessHumansIsLogined` 的检查在 `ProcessHumansMakeNewHuman`
             // (`:518`) **之前** ⇒ 重复登录**不构造 PlayObject、不抽数**。
             let in_save = engine.in_save_rcd_list(&head.chr_name);
+            // **DEV-HANDOFF-LIMBO（路线②，总监授权 2026-11-29）**：`InWorld` 但实体缺席
+            // （limbo，失败跨区迁移回滚的既成事实）按「未登录」放行重建——oracle 无此态
+            // （实体在世界 ⇔ 在 PlayObjectList），纯自研机制无 parity 约束。修前：limbo ⇒
+            // `in_world=true` ⇒ 关新+踢旧，而踢旧因 online 已摘 no-op ⇒ 重登死锁（行为牙
+            // `limbo_session_does_not_lock_out_relogin`）。实体在场的真 InWorld 仍按已登录
+            // 处理（oracle 同形：关新+踢旧）。
             let in_world = matches!(
                 world.session(&head.chr_name).map(|s| s.stage),
                 Some(mir2_world_bevy::WorldStage::InWorld)
-            );
+            ) && world
+                .session(&head.chr_name)
+                .and_then(|s| s.actor_id)
+                .is_some_and(|aid| world.entities.get(aid).is_some());
             // **oracle `WorldServer.cs:234` 的 `new PlayObject()`（5 抽）**
             // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
             // ① HomeMap 出生点抽数（`:254-259`）②落点改写抽数
@@ -36196,6 +36205,12 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                         ent.die_in_fight3_zone = die_in_fight3_zone;
                         match world.enter_map_at(&head.chr_name, ent, map_id, login_ctor_tick) {
                             Ok(id) => {
+                                // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
+                                // （**必须保持本臂前 800 字节内的锚点位**：
+                                // `entry_telemetry_wiring::ok_counter_sits_in_enter_map_ok_arm`。）
+                                if let Some(line) = telemetry::record_ok(world.clock_ms) {
+                                    glog!("INF", "{}", line);
+                                }
                                 // **DEV-HANDOFF-GROUP（路线②）**：重建实体后消费会话暂存的
                                 // 组关系（失败跨区迁移回滚的唯一恢复点；恰一次；常态登录
                                 // `None` 不动实体）。要在新 id 上做组长自引用重映射，
@@ -36205,10 +36220,6 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                     id,
                                     &head.chr_name,
                                 );
-                                // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
-                                if let Some(line) = telemetry::record_ok(world.clock_ms) {
-                                    glog!("INF", "{}", line);
-                                }
                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
                                 // 会话/actor 重置——同名角色重新登录时清掉上一会话
                                 // 的累计值，避免 `af` 跨登录继承造成假绿。
@@ -145465,6 +145476,155 @@ mod l2_handoff_tests {
         assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
         assert_eq!(mirror_world_refused(), 1);
         assert_eq!(router.len(), 0, "失败路径不得 assign");
+    }
+
+    /// **DEV-HANDOFF-LIMBO 行为牙（总监授权修复，2026-11-29；路线①+②）**：失败迁移回滚后的
+    /// limbo 会话不再锁死重登。
+    ///
+    /// 锁死循环本体（卡 `docs/issues/dev-handoff-limbo-relogin-lockout-20261129.md`）：
+    /// 失败迁移回滚 ⇒ 会话 `stage=InWorld`、`actor_id` 指死实体（两区实体均不存在）⇒
+    /// 玩家断线（区 k Closed 臂）`world.disconnect` 因取不到实体坐标 `Err(NotInWorld)`、
+    /// stage 不复位 ⇒ 重登预检 `in_world=true` ⇒ 关新+踢旧（`drain_kicks` 因 online 已摘
+    /// no-op）⇒ 每次登录撞同一循环 ⇒ **永久登录被拒**。
+    ///
+    /// 本牙钉循环的两处断点（**修前红 / 修后绿**）：
+    /// - ① 断线段（路线①，world-bevy `leave_world_inner`）：limbo 支硬断线按移除门收口
+    ///   （stage=Left + actor_id=None）——经**真的区 k 处理臂** [`handle_zone_closed`] 驱动；
+    ///   修前 stage 停 InWorld ⇒ ① 红。
+    /// - ② 重登段（路线②，`finish_login` 预检 + `enter_map_at` 守卫）：「InWorld 但实体缺席」
+    ///   按「未在世界」放行重建——重登走**真的进图口** [`World::enter_map_at`]（预检放行后
+    ///   必经此处，守卫与预检同口径）；修前 `Err(AlreadyInWorld)` ⇒ ② 红。
+    ///   预检半在 `finish_login` 内联（夹具不可调），用源码锚点钉住 `in_world` 必须带实体
+    ///   在场判据（源码文本牙的「可绕过」告诫见 `session_migration_drivers_sit_between_phase_a_and_barrier1`）。
+    #[test]
+    fn limbo_session_does_not_lock_out_relogin() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _counters = perf_counters::test_zone_counters_scope();
+        perf_counters::reset_zone_handoff_counters_for_tests();
+        mir2_world_bevy::mirror_metrics::reset_handoff_refused_for_tests();
+
+        // ---- 失败迁移 → 回滚（与组牙同一夹具链；member 与本牙无关，不种）----
+        let (mut src, m, _expected) = committed_group_migration("leader", 9001, Vec::new());
+        let leader = m.id;
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        let _ = seed_full_session(&mut dst, "leader", 902);
+        seed_target_world(&mut dst, leader, "leader");
+        let dst_arc = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let lookup = std::sync::Arc::clone(&dst_arc);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert!(
+            src.host.ground_sessions.contains_key("leader"),
+            "前置：会话已回滚源区（limbo：stage=InWorld、实体缺席）"
+        );
+        assert!(
+            src.host.world.entities.get(leader).is_none(),
+            "前置：实体缺席（limbo 本体）"
+        );
+
+        // ---- ① 断线（真的区 k Closed 臂）----
+        let map_names = vec!["0".to_string()];
+        assert!(
+            handle_zone_closed(&mut src, "leader", 0, 901, &map_names),
+            "前置：Closed 臂认领（online/ground 有匹配）"
+        );
+        assert!(
+            !src.host.ground_sessions.contains_key("leader"),
+            "宿主四容器照常清理（既有语义不变）"
+        );
+        {
+            let sess = src.host.world.sessions.get("leader").expect("会话在");
+            assert_eq!(
+                sess.stage,
+                mir2_world_bevy::WorldStage::Left,
+                "路线①：limbo 支硬断线复位 stage（修前停 InWorld ⇒ 本断言红）"
+            );
+            assert_eq!(sess.actor_id, None, "移除门收口 actor_id");
+        }
+
+        // ---- ② 重登（真的进图口；预检放行后必经此处）----
+        let ent = new_player_entity("leader".into(), 5, 5);
+        let new_id = src
+            .host
+            .world
+            .enter_map_at("leader", ent, 0, 1_000)
+            .expect("重登放行（修前 Err(AlreadyInWorld) ⇒ 本行红）");
+        {
+            let sess = src.host.world.sessions.get("leader").expect("会话在");
+            assert_eq!(sess.stage, mir2_world_bevy::WorldStage::InWorld);
+            assert_eq!(sess.actor_id, Some(new_id));
+        }
+
+        // ---- 路线②预检半的源码锚点（finish_login 内联，夹具不可调）----
+        let src_text = include_str!("lib.rs");
+        let iw = src_text
+            .find("let in_world = matches!(")
+            .expect("`in_world` 预检定义必须在源码里");
+        let stmt_end = iw + src_text[iw..].find(';').expect("let 语句结束");
+        let seg = &src_text[iw..stmt_end];
+        assert!(
+            seg.contains("entities.get(") && seg.contains("is_some"),
+            "路线②：`in_world` 必须带实体在场判据（InWorld 但实体缺席 = 未登录放行）"
+        );
+    }
+
+    /// **DEV-HANDOFF-LIMBO · 路线②守卫半（隔离牙）**：对 limbo 会话（`stage=InWorld`、
+    /// `actor_id` 指死实体）直接重进必须放行——`enter_map_at` 的 `AlreadyInWorld` 判据
+    /// 带实体在场；F1 移除门收走死引用后正常落图。
+    ///
+    /// 与 [`limbo_session_does_not_lock_out_relogin`] 的分工：那支钉「断线→重登」全循环
+    /// （路线①+预检锚点），本支钉守卫半本身——在线 limbo 期间的重复登录（online 仍在、
+    /// 无 Closed）经预检放行后走的就是这里。修前：`Err(AlreadyInWorld)` ⇒ 本牙红。
+    ///
+    /// 变异：把 `enter_map_at` 守卫改回「只看 stage」⇒ 本牙红（守卫半被删即暴露）。
+    #[test]
+    fn enter_map_allows_rebuild_over_limbo_session() {
+        let _guard = super::l2_handoff_prod_tests::PROD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (mut src, m, _expected) = committed_group_migration("leader", 9001, Vec::new());
+        let leader = m.id;
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let mut dst = two_zone_state(0, &counter);
+        let _ = seed_full_session(&mut dst, "leader", 902);
+        seed_target_world(&mut dst, leader, "leader");
+        let dst_arc = std::sync::Arc::new(std::sync::Mutex::new(dst));
+        let lookup = std::sync::Arc::clone(&dst_arc);
+        let router = zone_router::ZoneRouter::new();
+        deliver_session_migrations(
+            |z| (z == zone(0)).then(|| std::sync::Arc::clone(&lookup)),
+            Some(&router),
+            vec![m],
+            |m| src.host.restore_session(m),
+        );
+        assert!(
+            src.host.world.entities.get(leader).is_none(),
+            "前置：limbo（stage=InWorld、实体缺席）"
+        );
+        let ent = new_player_entity("leader".into(), 5, 5);
+        let new_id = src
+            .host
+            .world
+            .enter_map_at("leader", ent, 0, 1_000)
+            .expect("守卫放行 limbo 重建（修前 Err(AlreadyInWorld) ⇒ 本行红）");
+        assert_eq!(
+            src.host
+                .world
+                .sessions
+                .get("leader")
+                .expect("会话在")
+                .actor_id,
+            Some(new_id),
+            "F1 移除门收走死引用、新实体接管会话"
+        );
     }
 
     /// **A35-b · 静态牙（接线提示，非行为证据）**：两个驱动点必须夹在「A 段之后、barrier1
