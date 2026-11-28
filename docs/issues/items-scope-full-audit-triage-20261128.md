@@ -159,3 +159,11 @@ scope 键、原文+验收引文入 notes）。复验：全量默认门 Both 模�
 不变量核过。657 白名单放宽（恒 0x8000→毒高位在位）随笔确认入 notes。全板 scope≠full
 计数 48→46（按 coverage-report 实际输出为准）。
 
+**MG-13/14 位号面落地（2026-11-28，card/items-scope-triage，openmir2-10）**：amyounsul
+（绿，Shape=1）新支 `prebuff_bit2`——目标预挂两条非毒 buff（位 0/1）⇒ 绿毒落位 2 ⇒
+`10139.p1=0xE0000000`（既有三支恒 int.MinValue 的位号面就此点亮；MG-14 Shape=1 面与
+MG-13 主链位号面共用该例）。装置 target-prebuff 复用（零新装置面）、金标纯插入、点名表
+29、变异（驱动跳过第二条 buff）红→还原、同 id 7 驱动+双比较器全绿。两卡 residual 余：
+护身符 Shape>2（③-C 生产不可达）与 Shape 0（归 MG-15 旋钮批）。MG-15 随后
+（amulet_shape 旋钮 + 红臂 0x40000000 例）。
+

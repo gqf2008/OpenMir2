@@ -514,7 +514,13 @@ public static class Program
                     throw new FixtureContractViolation($"[{name}] [String] YouPoisoned 未装载（空）");
                 }
             }
-            if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
+            if (name == "amyounsul") return BehaviorBatch(new MagicSpec { Key = "amyounsul", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", ExtraCases = new[] {
+                // **MG-13/14 位号面（2026-11-28，① 档）**：目标预挂**两条**非毒 buff（Defense=2 占位 0、
+                // CanNotRun=3 占位 1）⇒ 绿毒落位 2 ⇒ `10139.p1 = 0xE0000000`（-536870912；既有三支恒
+                // int.MinValue）——单目标臂的跨 buff 位号（target-prebuff 机制复用，与 groupamyounsul
+                // `prebuff_double` 同构）。IdBase 7100。
+                new ExtraCaseSpec { Label = "prebuff_bit2", PreBuffs = new[] { new BuffSpec { Type = 2, Dura = 60000, StateVal = 1 }, new BuffSpec { Type = 3, Dura = 60000, StateVal = 1 } }, SeedOverride = 1, ObserveState = true, IdBase = 7100 }
+            } });
             if (name == "amyounsul-shape2") return BehaviorBatch(new MagicSpec { Key = "amyounsul-shape2", MagicId = 6, MagicName = "AmYoUnSul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 2, CasterScNoClamp = HUtil32.MakeWord(5, 10), StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick" });
             if (name == "groupamyounsul") return BehaviorBatch(new MagicSpec { Key = "groupamyounsul", MagicId = 48, MagicName = "GroupAmyounsul", ArmRingAmulet = true, HitSpeed = 7, AmuletShape = 1, StepDrainMs = 100, FrameOrderScope = "multi_victim_same_tick", ExtraCases = new[] {
                 // **MG-50（2026-11-26）**：范围边界——obs_in 在 click (101,100) 的 Chebyshev 距离 4。

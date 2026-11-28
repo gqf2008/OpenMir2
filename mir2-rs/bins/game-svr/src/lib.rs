@@ -96533,6 +96533,23 @@ SendRefMsgRange=15
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn amyounsul_parity_prebuff_bit2() {
+        // **MG-13/14 位号面（2026-11-28，① 档）**：单目标臂跨 buff 位号——目标预挂两条非毒
+        // buff（位 0/1）⇒ 绿毒落位 2 ⇒ `10139.p1 = 0xE0000000`（既有三支恒 int.MinValue）；
+        // `pre_buff_status = 0xC0000000` 两侧同判据（驱动 pre_buffs 夹具块）。
+        amyounsul_assert("amyounsul", 6, "prebuff_bit2", 1, 7100);
+        let c = read_ledger_case("amyounsul", "prebuff_bit2")[0].clone();
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                rm_params(&c, who, 10139),
+                vec![-536870912],
+                "[{who}] 10139.p1 = 0xE0000000（两条预 buff 位 0/1 + 绿毒位 2）"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn amyounsul_parity_s1() {
         amyounsul_assert("amyounsul", 6, "s1", 1, 1000);
     }
@@ -96596,7 +96613,14 @@ SendRefMsgRange=15
         // **点名集合**（不是魔法数字）：每份毒 golden 的 case 组必须**逐名相等**——
         // 少一支红、多一支也红；新增臂必须写进这张表（MG-50 追加 5 臂时漏改此处 ⇒ 默认门红）。
         let specs: [(&str, &[&str], &[u64], i64); 6] = [
-            ("amyounsul.json", &["s1", "s5", "s13"], &[1, 2], 15),
+            // **MG-13/14 位号面（2026-11-28）**：`prebuff_bit2` = 单目标臂跨 buff 位号
+            // （两条预 buff ⇒ 绿毒落位 2 ⇒ 0xE0000000）。
+            (
+                "amyounsul.json",
+                &["s1", "s5", "s13", "prebuff_bit2"],
+                &[1, 2],
+                15,
+            ),
             ("amyounsul2.json", &["s1", "s5", "s13"], &[1, 2], 15),
             (
                 "groupamyounsul.json",
@@ -96682,8 +96706,8 @@ SendRefMsgRange=15
             }
         }
         assert_eq!(
-            seen, 28,
-            "必须逐支检查 28 支（3+3+11+3+3+5；MG-64/65 非 target 扩展 +2）"
+            seen, 29,
+            "必须逐支检查 29 支（4+3+11+3+3+5；MG-64/65 非 target 扩展 +2、MG-13/14 位号面 +1）"
         );
     }
 

@@ -4581,10 +4581,11 @@ fn tooth_missing_rng_line_red() {
 #[test]
 #[ignore = "需先跑 game-svr 驱动（amyounsul_parity_*）生成真实台账"]
 fn real_rust_ledger_amyounsul() {
+    // **MG-13/14 位号面（2026-11-28）**：`prebuff_bit2` = 单目标臂跨 buff 位号。
     real_ledger_verify_labels(
         "amyounsul",
         &golden_file("amyounsul.json"),
-        &["s1", "s5", "s13"],
+        &["s1", "s5", "s13", "prebuff_bit2"],
     );
 }
 
