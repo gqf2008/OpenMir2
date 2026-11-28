@@ -4143,7 +4143,6 @@ mod tests {
     // ===== G5 deny-logon lists (Base.cs:3387-3405) =====
 
     /// **G5 dead-structure tooth (BUG-REPLICA reverse)**: populated lists + exact
-
     /// matches => check_deny_logon still None (oracle compare bodies commented out).
 
     #[test]
@@ -4179,9 +4178,7 @@ mod tests {
     }
 
     /// **G5 hit-wiring tooth**: wx.deny_logon_hit = Some(Account) (test-injected; production
-
     /// always None) => slot 18 one red + emergency + frames still complete (G5 at :1434,
-
     /// all login frames already enqueued => 52 present) + slots 17/19 None (else-if).
 
     #[test]
@@ -4233,7 +4230,6 @@ mod tests {
     }
 
     /// **G5 production-silent tooth**: lists always empty => check None => no 17/18/19,
-
     /// no emergency, no truncation; 52 present (counterpart of the hit tooth).
 
     #[test]

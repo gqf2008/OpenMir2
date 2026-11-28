@@ -36801,7 +36801,17 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                                 // 脚本取数走**同一条** `world.rng`（临时移出后归位，
                                 // 与 `step_mon_gen` 同法）。
                                 if let Some(host) = npc_host.as_ref() {
-                                    if host.has_manage_npc() {
+                                    // **G5**：命中 ⇒ oracle `:1435` 的 `return` 跳过 `@Login`
+                                    // （ManageNPC.GotoLable 在 CheckDenyLogon 之后；生产恒 None ⇒
+                                    // 守卫恒放行——BUG-REPLICA 死结构；重复现算同一纯函数，免跨作用域）。
+                                    let g5_deny_clear = enter::check_deny_logon(
+                                        &enter::load_deny_logon_lists("Envir"),
+                                        "",
+                                        &account,
+                                        &head.chr_name,
+                                    )
+                                    .is_none();
+                                    if g5_deny_clear && host.has_manage_npc() {
                                         let mut rng = std::mem::replace(
                                             &mut world.rng,
                                             mir2_shared::rng::RandomNumber::with_seed(0),
@@ -48871,6 +48881,15 @@ mod tests {
         assert!(
             src.contains("let other_gold_max ="),
             "交易 other 面读会话值（借用前取读）"
+        );
+        // **G5 接线**：登录点现算禁登命中 + @Login 守卫（命中 ⇒ 跳过脚本）。
+        assert!(
+            src.contains(concat!("deny_logon_hit: enter::check_deny_", "logon(")),
+            "登录点必须现算禁登命中"
+        );
+        assert!(
+            src.contains(concat!("if g5_deny_clear && host.has_manage_", "npc()")),
+            "@Login 脚本必须有 G5 守卫"
         );
     }
 
