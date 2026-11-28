@@ -87920,6 +87920,9 @@ SendRefMsgRange=15
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
         let hp_before = rig.world.entities.get(target).unwrap().hp;
+        // **MG-59 U-3**：施法时刻的钟底（run_after 偏移以 `extra_abil_times[0] - c0` 解，
+        // oracle RunMagicCase 同源 `ExtraAbilTimes[0]-castTick`；due_ms_rel 相对化，钟底不必对齐）。
+        let c0 = rig.world.clock_ms;
 
         // ---- 段①：施法（target 不传 ⇒ oracle 归一为 self；**MG-59 U-1**：golden
         // `target_null=false` ⇒ cast 带**玩家目标** ⇒ `AttPowerUp` 落 target）----
@@ -87969,6 +87972,12 @@ SendRefMsgRange=15
             cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let extra0 = i64::from(rig.world.entities.get(caster).unwrap().extra_abil[0]);
+        // **MG-59 U-3**：RM 广播面快照前置到交付段之前——oracle rmAcc 记于施法窗口排水期
+        // （先于到期 Run）；U-3 的 tick 分支会推进世界钟，`hear_targets` 必须在 tick 前
+        // 取（实测 tick 后为空 ⇒ 10008/10120/10139 缺失）。非 U-3 支此处取值与原位置
+        // （RM 组装处）等价（交付期无 tick、无可见性变化）。
+        let range = chat::send_ref_msg_range();
+        let in_range = chat::hear_targets(&rig.world, caster, range);
         // **MG-59 U-1**：受惠者（`AttPowerUp` 落点；自施=caster）——10139/10051/11004 的主体。
         let buff_id = if target_null { caster } else { target };
         let buff_who = rig
@@ -87983,11 +87992,28 @@ SendRefMsgRange=15
 
         // ---- 段②：交付（训练尾 640 @1000ms）----
         let wait_ms = golden_wait_ms(stem, label);
+        // **MG-59 U-3（2026-11-29，② 档卡 openmir2-mg59-u3-buff-timeout）**：golden
+        // `run_after_ms`（条件键；缺省无键 ⇒ 既有五支零变化）。**负值哨兵必须走 as_i64**
+        // （as_u64 对 -1/-2 返回 None ⇒ 会静默当成"无键"跳过 tick 分支）：-1=到期后 500ms、
+        // -2=恰在到期边界（oracle 预期：严格 `>` 不成立 ⇒ 只出 10 秒预告、buff 仍在——
+        // world.rs 到期判定 `>` 改 `>=` 的 ±1 变异咬中面）。
+        let run_after_knob = golden_case_for(stem, label)["Fixture"]["run_after_ms"].as_i64();
+        let u3_n_time = run_after_knob
+            .map(|_| rig.world.entities.get(caster).unwrap().extra_abil_times[0] - c0);
+        let run_after = run_after_knob.map(|k| match k {
+            -1 => u3_n_time.unwrap() + 500,
+            -2 => u3_n_time.unwrap(),
+            v if v >= 0 => v,
+            other => panic!("[{stem}/{label}] run_after_ms 哨兵未知: {other}"),
+        });
         // **MG-59（2026-11-28）**：交付帧带 `due_ms_rel`（步进 elapsed；新 golden 逐帧带 due、
-        // 进比较面）。
+        // 进比较面）。**U-3**：步进上界 = min(wait_ms, run_after)——640 的 due=1000 仍由本循环
+        // 按 elapsed 记 due（与既有支同一路径、零重排；oracle cover_drain 延迟帧按自身
+        // DeliveryTime−castTick 记 due，同值）；tick 分支的 SimSelfDeliver 因此恒空。
         let mut deliver_frames: Vec<(i32, Vec<u8>, i64)> = Vec::new();
         let mut elapsed = 0u64;
-        while elapsed < wait_ms {
+        let bound = run_after.map_or(wait_ms, |r| (r as u64).min(wait_ms));
+        while elapsed < bound {
             rig.world.clock_ms += 100;
             elapsed += 100;
             let outs = rig.world.deliver_self_delay_msgs();
@@ -88013,6 +88039,56 @@ SendRefMsgRange=15
                     .collect::<Vec<_>>(),
             );
         }
+        // **MG-59 U-3**：tick 分支——钟跳到 run_after，`world.tick()` 跑生产段：
+        // SimSelfDeliver 空（640 已由上方循环交付，队列已空）；SimExtraAbil 到期块产
+        // `rec.extra_abil_expiries` ⇒ `drain_extra_abil_expiries`（SysMsg 100 绿字）+
+        // `flush_healthspell_slots`（53 优先级 68 先于 SysMsg 252 出帧——生产 RECOVERY
+        // 同形状，oracle `Run` 内队序）。P1 恢复段跳过：caster/target 全血（500/500、
+        // 100/100）无待恢复者，oracle `Run` 同为 no-op（before 例 oracle 侧 AssertRunInert
+        // 会咬 IncHealth≠0，两侧前提同源）。帧 due=run_after（oracle：Run 全程
+        // CurrentDueMs=offset）。
+        let mut extra0_after_run: Option<i64> = None;
+        if let Some(run_after) = run_after {
+            // **tick_head 的 Clock 段自推进 +200ms**（`world.rs` tick_head 文档：「本方法会推进
+            // 时钟（+200ms）」）⇒ 先拨到 `run_after - 200`，让 tick 内各段恰落在
+            // `now == run_after`：at 例（-2 哨兵）= `now == ExtraAbilTimes[0]`，oracle 严格 `>`
+            // 不成立 ⇒ 不到期只出预告——这正是 ±1 牙要求的落点；after 例落 `times+500` 照常到期。
+            rig.world.clock_ms += run_after - elapsed as i64 - 200;
+            let rec = rig.world.tick();
+            if !rec.slave_self_deliveries.is_empty() {
+                drain_b3_self_deliveries(
+                    &rec,
+                    &rig.world,
+                    &rig.online,
+                    &mut rig.ground_sessions,
+                    &rig.gates,
+                );
+            }
+            let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+            let extra_frames = drain_extra_abil_expiries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &rig.ground_sessions,
+                &mut slots,
+            );
+            flush_healthspell_slots(
+                &mut slots,
+                &rig.world,
+                &rig.online,
+                &rig.ground_sessions,
+                &rig.gates,
+                chat::send_ref_msg_range(),
+            );
+            extra_frames.flush(&rig.online, &rig.gates);
+            let (sf, _r2) = rig.drain();
+            deliver_frames.extend(sf.into_iter().map(|(s, b)| (s, b, run_after)));
+            // 到期后 `ExtraAbil[0]`（after=0、before/at=buff 值）——与 oracle
+            // `extra_abil0_after_run` 同点观测。
+            extra0_after_run = Some(i64::from(
+                rig.world.entities.get(caster).unwrap().extra_abil[0],
+            ));
+        }
         let n2 = trace_line_count(&trace);
         let cast_rng = trace_slice(&trace, n0, n1);
         let deliver_rng = trace_slice(&trace, n1, n2);
@@ -88020,9 +88096,7 @@ SendRefMsgRange=15
         let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames;
         all_frames.extend(deliver_frames);
 
-        // ---- RM 组装（来源=实现态）----
-        let range = chat::send_ref_msg_range();
-        let in_range = chat::hear_targets(&rig.world, caster, range);
+        // ---- RM 组装（来源=实现态；`range`/`in_range` 于施法段前置快照，见段① 尾）----
         // **MG-59 U-2**：`SpellReturn=false`（CheckAmulet 失败 ⇒ DoSpell 早退）⇒ RM 面**只有**
         // caller 失败广播的 `RM_MAGICFIREFAIL(10121)`（成功帧 10008/10120/10139/… 全无——
         // oracle 的 RM_SPELL 广播块在 `boSpellFail` 早退之后）。
@@ -88141,7 +88215,7 @@ SendRefMsgRange=15
             }));
         }
 
-        let ledger = serde_json::json!([{
+        let mut ledger = serde_json::json!([{
             "Label": label,
             "Seed": seed,
             "SpellReturn": true,
@@ -88157,6 +88231,14 @@ SendRefMsgRange=15
             "CasterMp": 0,
             "CasterExtraAbil0": extra0,
         }]);
+        // **MG-59 U-3**：条件键（只在 U-3 例落盘；verify 的 num() 对双缺回落 i64::MIN ⇒
+        // 既有支恒等）。`ExtraAbil0AfterRun`/`U3NTime` 与 golden 同名 case 键恒比。
+        if let Some(v) = extra0_after_run {
+            ledger[0]["ExtraAbil0AfterRun"] = serde_json::json!(v);
+        }
+        if let Some(n) = u3_n_time {
+            ledger[0]["U3NTime"] = serde_json::json!(n);
+        }
         let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
@@ -88199,6 +88281,31 @@ SendRefMsgRange=15
         // **MG-59 U-2（2026-11-28，① 档）**：`amulet_off=true` ⇒ `CheckAmulet(1,1)` 失败 ⇒
         // `boSpellFail` ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（Rng=0、SpellReturn=false）。
         uenhancer_parity_drive("amulet_off_fail", 4200);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_u3_run_before_expiry() {
+        // **MG-59 U-3（2026-11-29，② 档）**：buff 超时生命期 before 面——Run 落到期前 1000ms
+        // ⇒ 静默（无帧）、buff 仍在（extra_abil0_after_run=buff 值）、640 照常。
+        uenhancer_parity_drive("u3_run_before_expiry", 4600);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_u3_run_after_expiry() {
+        // **MG-59 U-3**：after 面——Run 落到期后 500ms ⇒ 53 先于 SysMsg("攻击力恢复正常。")
+        // 出帧（优先级 68<252）、ExtraAbil[0] 归 0（extra_abil0_after_run=0）。
+        uenhancer_parity_drive("u3_run_after_expiry", 4700);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_u3_run_at_expiry() {
+        // **MG-59 U-3**：at 边界面——Run 恰落在 `now==ExtraAbilTimes[0]` ⇒ oracle 严格 `>`
+        // 不成立 ⇒ **不到期**、走预告臂（只出 10 秒预告 SysMsg、buff 仍在）。这是
+        // world.rs 到期判定 `>` 改 `>=` 的 ±1 变异咬中面。
+        uenhancer_parity_drive("u3_run_at_expiry", 4800);
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
