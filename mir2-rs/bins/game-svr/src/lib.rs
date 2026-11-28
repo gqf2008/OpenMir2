@@ -75388,6 +75388,46 @@ SendRefMsgRange=15
         );
     }
 
+    /// **DEV-HANDOFF-GROUP 残差机检衍生的载侧缺口牙（卡 `docs/issues/login-allowgroup-load-gap-20261129.md`）**：
+    /// 登录**不**恢复 `AllowGroup` 开关（oracle 恢复）——本牙钉住缺口现状，修复时第二段改写为绿。
+    ///
+    /// 两个机检事实（2026-11-29，答总监「member 重登组关系是否从 DB 恢复」）：
+    /// 1. **组关系本体（owner/members）结构性不在 DB**：`record::CharacterData` 无
+    ///    `group_owner`/`group_members` 字段 ⇒ 谁也不可能从存档恢复成员关系；
+    ///    member 重登无组 = oracle 一致（离线即退组，`PlayObject.Message.cs:2138-2142`
+    ///    `MakeGhost` 里 `groupOwnerPlay.DelMember(this)`；重邀即回，非缺陷）。
+    /// 2. **`allow_group` 开关载侧缺口**：oracle 登录恢复（`WorldServer.cs:1146`
+    ///    `playObject.AllowGroup = humData.AllowGroup > 0;`；存侧 T-272 已修 a46d3e3c3），
+    ///    Rust 载入器 [`apply_login_record_scalars`] 只装 `Dir`/`AttatckMode`/`AllowGroupReCall`
+    ///    ⇒ 重登后 `allow_group=false` ⇒ 组长重邀被 -4 拒（target 未开允许组队），
+    ///    member 必须手动重开 `CM_GROUPMODE` 才能被邀。
+    ///
+    /// 红检（将来修复）：`apply_login_record_scalars` 增加
+    /// `allow_group` 装载（`d.allow_group > 0`）⇒ 本牙第二段红（改名翻断言）。
+    #[test]
+    fn login_does_not_load_allow_group_switch_from_record() {
+        let mut ent = new_player_entity("member".to_string(), 10, 10);
+        let rec = record::CharacterData {
+            allow_group: 1,
+            allow_group_re_call: true,
+            ..record::CharacterData::default()
+        };
+        apply_login_record_scalars(&mut ent, Some(&rec));
+        // 对照面：装载器确实跑了（re_call 按列装载）⇒ 下面的缺口不是夹具错。
+        assert!(ent.allow_group_re_call, "对照：re_call 装载正常");
+        // 缺口本体：记录 `allow_group=1`，登录后仍 false（oracle 在此为 true）。
+        assert!(
+            !ent.allow_group,
+            "载侧缺口（现状）：oracle 恢复 AllowGroup，Rust 不装 ⇒ 重邀被 -4 拒"
+        );
+        // 组关系本体：结构性不恢复（schema 无 owner/members；oracle 同为离线即退组）。
+        assert_eq!(
+            ent.group_owner, 0,
+            "成员关系不在 DB（oracle 离线即退组一致）"
+        );
+        assert!(ent.group_members.is_empty(), "同上");
+    }
+
     // ---------------------------------------------------------------------
     // 进图/死亡改写（`rewrite_enter_position`）的**生产路径**判据
     // ---------------------------------------------------------------------
