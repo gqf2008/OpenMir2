@@ -36196,6 +36196,15 @@ fn finish_login(ctx: &mut LoginCtx<'_>) {
                         ent.die_in_fight3_zone = die_in_fight3_zone;
                         match world.enter_map_at(&head.chr_name, ent, map_id, login_ctor_tick) {
                             Ok(id) => {
+                                // **DEV-HANDOFF-GROUP（路线②）**：重建实体后消费会话暂存的
+                                // 组关系（失败跨区迁移回滚的唯一恢复点；恰一次；常态登录
+                                // `None` 不动实体）。要在新 id 上做组长自引用重映射，
+                                // 故必须在 `enter_map_at` 成功、拿到 `id` 之后。
+                                HostLoop::apply_pending_group_restore_for(
+                                    world,
+                                    id,
+                                    &head.chr_name,
+                                );
                                 // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
                                 if let Some(line) = telemetry::record_ok(world.clock_ms) {
                                     glog!("INF", "{}", line);
@@ -39765,6 +39774,9 @@ impl HostLoop {
         // **A38**：组关系跟**实体**走——实体在提交时已落在本区（`promote_mirror_to_real`）。
         // 先于会话冲突检查写入：即使会话被拒（回滚），组关系也必须留在本区实体上（恰一次；
         // 抹掉 = 人为制造丢失）。`clone` 是为了让下面的 `Err(m)` 仍能整包退回。
+        // **DEV-HANDOFF-GROUP 路线②注**：attach 被拒时本区实体随后由 b1 释放——彼时组关系
+        // 的存活载体是回滚路径的会话暂存（`restore_session` 的 `pending_group_restore`）；
+        // router 失败路径的 `take_session_for_migration` 仍从本区实体重取（本写入是它的数据源）。
         if let Some(g) = self.world.entities.group_mut(m.id) {
             *g = m.group.clone();
         }
@@ -39831,9 +39843,17 @@ impl HostLoop {
     /// **A35-b（源区锁内）**：把搬迁包原样塞回本区（回滚；attach 失败 / router 失败）。
     ///
     /// 正常路径下本区已无同 chr 项（detach 已摘空）；若仍有 ⇒ WRN + 覆盖（不丢包优先）。
+    ///
+    /// **DEV-HANDOFF-GROUP（路线②，总监裁定 2026-11-29；原 A38「有意丢弃」口径废止）**：
+    /// 组关系不再随包丢弃。原口径「组关系属于目标区实体，回退只会从唯一活着的实体上抹掉」
+    /// 以**实体保留在目标区**为前提；b1（`card/handoff-release-leak`）让 attach 被拒时回收
+    /// 目标区实体，该前提失效——实体在两区都已不存在，随包丢弃 = 组关系永久丢失
+    /// （核查牙 `failed_migration_drops_group_state_silently` 判「丢」，报告为缺陷）。
+    /// 现把捕获的组关系暂存到 World 会话（`pending_group_restore`，七表外、会话侧——
+    /// 会话对象从不删除，暂存跨重登存活）；源区重建实体（再登录）时由
+    /// [`Self::apply_pending_group_restore_for`] 恰一次取走恢复。两次失败覆盖写：后捕获
+    /// 更新（可达态里旧暂存必已被消费，见该函数注释）。
     fn restore_session(&mut self, m: PendingSessionMigration) {
-        // **A38（显式）**：组关系**不在这里回写**——它属于目标区实体（提交时实体已过去），
-        // 回退只会从唯一活着的实体上抹掉关系；`m.group` 随包丢弃是有意的。
         if self.ground_sessions.contains_key(&m.chr_name) {
             glog!(
                 "WRN",
@@ -39843,6 +39863,15 @@ impl HostLoop {
             );
         }
         self.adopt_world_session(&m);
+        // **DEV-HANDOFF-GROUP 路线②**：组关系暂存（原 A38 注释「m.group 随包丢弃是有意的」
+        // 以实体保留为前提，b1 后前提失效，口径废止——见上）。旧 actor id 随包记录：
+        // 重建实体必拿新 id（id 单调不复用），组长自引用重映射要用。
+        if let Some(sess) = self.world.sessions.get_mut(&m.chr_name) {
+            sess.pending_group_restore = Some(mir2_world_bevy::PendingGroupRestore {
+                old_actor_id: m.id,
+                group: m.group,
+            });
+        }
         let _ = self.ground_sessions.insert(m.chr_name.clone(), m.ground);
         // **A40①**：回滚把「表里没有该会话」一并关掉（源区条目在迁移前已按“跨区=离开范围”
         // 取消并删除；回滚不是恢复旧交易，而是恢复 oracle ctor 的默认空态）。
@@ -39864,6 +39893,60 @@ impl HostLoop {
         for p in m.pending_cmds {
             self.pending_local.insert(p.seq, p);
         }
+    }
+
+    /// **DEV-HANDOFF-GROUP（路线②，总监裁定 2026-11-29）**：登录重建实体后从会话暂存
+    /// 恢复组三字段（`allow_group` / `group_owner` / `group_members`），并把组长自引用
+    /// 从旧 actor id 重映射到新 id。
+    ///
+    /// 生产调用点 = [`finish_login`] 的 `enter_map_at` **成功臂**（区 0 与区 k 共用该函数）；
+    /// 实体已插入（拿到新 id）⇒ 直接写新实体的 `GroupState` 组件。此处把
+    /// [`Session::pending_group_restore`] **恰一次**取走（`take`）。`None`（常态登录）⇒
+    /// 不动实体——组缺省（无组）保持 oracle 登录语义。
+    ///
+    /// **自引用重映射（为什么必须有）**：actor id 单调不复用是成文不变量 ⇒ 重建实体拿到
+    /// **新** id；暂存里的 `group_owner == 旧自id`、名单含旧自id 若原样落在新实体上，
+    /// owner 判定（`party_group_owner_of(actor) != actor`）失败 ⇒ 重建后的组长无法管理
+    /// 本组（加人/踢人全被 -1 拒）。规则：`old_actor_id` → 新 id（owner 与名单内各一处）；
+    /// **他人 id 不动**（组长的新 id 无从写入他人实体/他区——member 侧旧指针的清理走
+    /// member 自己的断线退组路径（区 0 已接线）或重新组队，属已知残差，见交付说明）。
+    ///
+    /// `allow_group_re_call` **不在此恢复**：oracle 口径来自存档记录
+    /// （`apply_login_record_scalars`，`WorldServer.cs:1159` 的 `AllowGroupReCall`），
+    /// 已在实体插入前写入，且本函数只写组组件的三个字段、不碰 re_call。
+    ///
+    /// 红检（变异）：删 `restore_session` 的暂存行 ⇒ 牙 `failed_migration_…` 的暂存断言红；
+    /// 删本函数的组件写 ⇒ 重建断言红（新实体缺省空组）；删重映射（原样落旧自id）⇒
+    /// owner 断言红（owner 停在旧 id ≠ 新 id）。
+    fn apply_pending_group_restore_for(
+        world: &mut mir2_world_bevy::World,
+        new_id: i32,
+        chr_name: &str,
+    ) {
+        let Some(sess) = world.sessions.get_mut(chr_name) else {
+            return;
+        };
+        let Some(mir2_world_bevy::PendingGroupRestore {
+            old_actor_id,
+            group,
+        }) = sess.pending_group_restore.take()
+        else {
+            return;
+        };
+        let Some(g) = world.entities.group_mut(new_id) else {
+            return;
+        };
+        g.allow_group = group.allow_group;
+        g.group_owner = if group.group_owner == old_actor_id {
+            new_id
+        } else {
+            group.group_owner
+        };
+        g.group_members = group
+            .group_members
+            .iter()
+            .map(|&m| if m == old_actor_id { new_id } else { m })
+            .collect();
     }
 
     /// **A35-b（Q1）**：World 会话写回（attach 与回滚共用）。
@@ -145063,18 +145146,24 @@ mod l2_handoff_tests {
         );
     }
 
-    /// **DEV-HANDOFF-GROUP 核查（总监工作令 2026-11-28）**：失败迁移是否静默丢组关系。
+    /// **DEV-HANDOFF-GROUP 行为牙（路线②，总监裁定 2026-11-29）**：失败迁移不丢组关系——
+    /// 回滚时暂存到会话、重建实体时恢复三字段、member 侧残影随重建自愈。
     ///
-    /// 卡 `docs/issues/dev-handoff-group-loss-20261126.md` 的两区夹具判定：源区（区 1）
+    /// 卡 `docs/issues/dev-handoff-group-loss-20261126.md` 的两区夹具：源区（区 1）
     /// leader+member 组队 → leader 发起跨区 handoff → 目标区收下晋升 → ack.ok ⇒ 源区
     /// `release_entity` → attach 被拒（目标区同 chr 会话冲突）⇒ b1 回收目标区实体 →
-    /// 会话整包回滚源区。逐项断言源区侧组关系三字段的下落。
+    /// 会话整包回滚源区。**修前判「丢」**（核查史：`failed_migration_drops_group_state_silently`
+    /// @ `f1b5019a9`，绿=缺陷确认）；本牙按裁定路线②改写，钉住修复后的语义——
+    /// **变异自证（删任一修复件必红）**：
+    /// - 删 `restore_session` 的暂存行 ⇒ ③ 暂存断言红（`pending_group_restore == None`）；
+    /// - 删/弱化 `apply_pending_group_restore_for` 的组件写 ⇒ ④ 重建断言红（缺省空组）；
+    /// - 删自引用重映射（原样落旧自 id）⇒ ④ 红（owner 停在旧 id ≠ 新 id）。
     ///
-    /// 本牙钉住的是**现状**（按卡上判据「`group(id)==None` ⇒ 确认静默退组」）；修复路线
-    /// （镜像补带组状态 vs 重建时从会话恢复）由总监裁定后另行落码，届时本牙的 ③④⑤
-    /// 断言按裁定结论改写并作为修复的红检。
+    /// member 侧旧指针**不在恢复面**（id 单调不复用、跨实体/跨区写超出路线②边界）——
+    /// ⑤ 如实断言残差并注明清理路径；这是对裁定要求②「member 侧残影随 leader 重建自愈」
+    /// 前提的显式修正（重建必拿新 id，指针级自愈不成立），已在交付报告里单独报总监。
     #[test]
-    fn failed_migration_drops_group_state_silently() {
+    fn failed_migration_stashes_group_and_restores_on_rebuild() {
         let _guard = super::l2_handoff_prod_tests::PROD_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -145192,9 +145281,9 @@ mod l2_handoff_tests {
                 "b1：目标区实体已回收"
             );
         }
-        // ③ 核心：源区实体既未保留（ack 时已 `release_entity`，handoff.rs:207）也未重建
-        //    （restore_session 只写七表 + World 会话）⇒ World 会话指向死实体（limbo），
-        //    组关系三字段无处可查。router 失败路径共用同一 restore_session 丢包点。
+        // ③ 路线②：restore_session 不再丢 m.group——暂存到 World 会话（会话侧、七表外）。
+        //    会话 stage=InWorld + actor_id 指死实体的 limbo 态**不在本笔范围**（另卡登记）；
+        //    实体未重建（暂存待登录恢复），组关系随包暂存而非丢弃。
         let sess = src
             .host
             .world
@@ -145204,46 +145293,67 @@ mod l2_handoff_tests {
         assert_eq!(
             sess.stage,
             mir2_world_bevy::WorldStage::InWorld,
-            "会话 stage=InWorld（卡面口径）"
+            "会话 stage=InWorld（卡面口径；limbo 另卡）"
         );
         assert_eq!(sess.actor_id, Some(leader), "actor_id 指回原 id");
         assert!(
             src.host.world.entities.get(leader).is_none(),
-            "会话指向的实体已不存在（limbo）：源区未保留也未重建"
+            "实体未重建（回滚不重建；暂存待登录消费）"
         );
-        // 卡判据原句：`world.entities.group(id)` 是否仍等于迁移前的 `GroupState`；
-        // 为 None ⇒ 确认「失败迁移静默退组」。
+        assert_eq!(
+            sess.pending_group_restore.as_ref(),
+            Some(&mir2_world_bevy::PendingGroupRestore {
+                old_actor_id: leader,
+                group: group_before.clone(),
+            }),
+            "组关系+旧 actor id 暂存在会话（路线②；删 restore_session 暂存行 ⇒ 本断言红）"
+        );
+        // ④ 行为牙核心：源区重建实体（再登录语义 = 插入新实体 + `apply_pending_group_restore_for`
+        //    恰一次消费；登录生产调用点在 `finish_login` 的 `enter_map_at` 成功臂）⇒ 组三字段在，
+        //    且组长自引用重映射到新 id（id 单调不复用 ⇒ 重建必拿新 id；不重映射则 owner 判定
+        //    `!= actor` 失败、组长无法管理本组）。这里不走 `enter_map_at`：limbo 会话
+        //    stage=InWorld 会被 `AlreadyInWorld` 拒（limbo 缺口另卡），两步各自钉住即可。
+        //    变异：删暂存 ⇒ ③ 红；删组件写 ⇒ 本断言红（新实体缺省空组）；删重映射 ⇒ owner 断言红。
+        let ent2 = new_player_entity("leader".into(), 5, 5);
+        let new_id = src.host.world.add_entity(ent2);
+        HostLoop::apply_pending_group_restore_for(&mut src.host.world, new_id, "leader");
+        let mut expected_restored = group_before.clone();
+        expected_restored.group_owner = new_id;
+        expected_restored.group_members = vec![new_id, member];
+        assert_eq!(
+            src.host.world.entities.group(new_id),
+            Some(&expected_restored),
+            "重建实体组三字段在、自引用已重映射到新 id（删/弱化恢复或重映射 ⇒ 本断言红）"
+        );
         assert!(
-            src.host.world.entities.group(leader).is_none(),
-            "group(id)==None ⇒ 失败迁移静默丢组关系（判「丢」，报总监裁定修复路线）"
+            src.host
+                .world
+                .sessions
+                .get("leader")
+                .expect("会话在")
+                .pending_group_restore
+                .is_none(),
+            "暂存恰消费一次（take）"
         );
-        // ④ 重建语义：实体唯一的重建路径=再登录（`new_player_entity` ⇒ `EntitySpawn::new`），
-        //    组四字段全缺省 ⇒ 即使重建也不恢复；`m.group` 随 restore_session 丢弃（有意，
-        //    A38 注释）。修复若走「重建时恢复」必须改这里。
-        let rebuilt = new_player_entity("leader".into(), 5, 5);
-        assert!(
-            !rebuilt.allow_group && rebuilt.group_owner == 0 && rebuilt.group_members.is_empty(),
-            "重建实体（登录构造器）组四字段全缺省 ⇒ 重建不恢复组关系"
-        );
-        // ⑤ member 侧残影（玩家可感知面）：member 实体仍在源区、仍记 owner=leader；
-        //    而名单唯一载体（leader 实体）已消失 ⇒ 成员列表不可解析；失败路径只写表、
-        //    不产生任何组帧（deliver/restore 无 PartyEvent）⇒ 「静默」。
+        // ⑤ member 侧：owner 指针（= leader 旧 id）**不在本笔恢复面**——id 单调不复用，
+        //    组长新 id 无从写进 member 实体（跨实体/跨区写超出路线②边界）。**已知残差，如实
+        //    断言**。清理路径：组长（重建后）断线触发整组散（区 0 已接线的 Disappear 语义：
+        //    读 leader 的 group_owner → party_del_member 逐成员清指针）或重新组队；
+        //    **member 自己断线不清**（party_del_member 需 owner 实体的名单可读，owner 指
+        //    旧死 id 时整支 no-op）。修前连组长侧名单都解析不出；修后组长侧自洽（见④）。
         let me = src
             .host
             .world
             .entities
             .get(member)
             .expect("member 实体仍在源区");
-        assert_eq!(me.group_owner, leader, "member 仍记 owner=leader（残影）");
-        let members_via_owner = src
-            .host
-            .world
-            .entities
-            .get(me.group_owner)
-            .map(|e| e.group_members.clone());
         assert_eq!(
-            members_via_owner, None,
-            "名单唯一载体（leader 实体）已消失 ⇒ party_members_of 解析为空 ⇒ 散组规则提前触发候选"
+            me.group_owner, leader,
+            "member 的 owner 指针仍是 leader 旧 id（残差，见上）"
+        );
+        assert!(
+            src.host.world.entities.get(me.group_owner).is_none(),
+            "旧 id 已死且不复用 ⇒ member 指针暂不可解析（残差；组长侧已在新 id 上自洽，见④）"
         );
         assert_eq!(perf_counters::zone_handoff_session_failed(), 1);
         assert_eq!(mirror_world_refused(), 1);
