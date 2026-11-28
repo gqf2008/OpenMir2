@@ -198,10 +198,27 @@ DamageBubbleDefence（事件驱动、只 BubbleDefenceUP）⇒ 毒计时器从�
 
 **MG-48 sr30 批落地（2026-11-28，card/items-scope-triage，openmir2-10）**：follow-up
 「非缺省配置值点亮行为面」落第一支——新变体 `mabmabe-sr30`（`MabMabeHitSucessRate=30`
-vs 部署 21；完整 Server.conf 副本 + sha 钉，C# Variants/Rust server_conf_expected 两份
-表互钉）× s1/s5/s13，命中骰模数由配置来。变异（驱动 conf 应用处吃回缺省 21）⇒ 绝对值
-合同红；还原后同 id 9 驱动 + 三比较器全绿。四键进度：RandRate ✓（rand0/rand1）、
-SucessRate ✓（本批）、MinLvLimit/MabeTimeRate 未点亮（time10 成功臂仍受
+vs 部署 21；完整 Server.conf 副本 + sha 钉 bef26b0d…，C# Variants/Rust
+server_conf_expected 两份表互钉）× s1/s5/s13，命中骰模数由配置来。变异（驱动 conf 应用
+处吃回缺省 21）⇒ 绝对值合同红；还原后同 id 9 驱动 + 三比较器全绿。四键进度：RandRate ✓
+（rand0/rand1）、SucessRate ✓（本批）、MinLvLimit/MabeTimeRate 未点亮（time10 成功臂仍受
 refmsg-queue-model 卡阻塞）。**MG-48 保持 scope 键**——残留（怪物目标、其它值域、
 time10）按总监新纪律升满先报裁定。
+
+**MG-59 U-1/U-2 落地（2026-11-28，card/items-scope-triage，openmir2-10）**：
+- **U-1**（非自身 proper-friend 目标）：装置 `friend_target` 支（targetNull=false ⇒ AttPowerUp
+  落玩家 target——target Sent=[17,52,638,657,657,100]、CasterExtraAbil0=0）；rig 前提=实体落格
+  （CretInNearXy snap 扫格）+ 点击坐标=目标格。
+- **U-2**（CheckAmulet 失败→639）：装置新旋钮 `AmuletOff`（不装配 ArmRingl）+ RunMagicCase 补
+  caller 失败分支（Attack.cs:1278-1281 RM_MAGICFIREFAIL ⇒ 639×3 收件人）；Rust rig 据 golden
+  `amulet_off`/`target_null` bool 键装配，Sent 补 `due_ms_rel`（施法批 0/交付批 elapsed）。
+- 变异红→还原：M-U1 错传 self（比较器红：buff 帧/ExtraAbil 归 caster）；M-U2 照装护身符
+  （比较器红：amulet_off_fail 639 缺、成功帧 7 条出现——首版两变异叠加的台账互相污染，
+  分开后各自咬中）。还原后同 id（mg59-deliver）5 驱动 + 比较器全绿。
+- MG-59 **保持 scope 键**（U-3=②档卡 openmir2-mg59-u3-buff-timeout.md 未落地）——升满待
+  U-3 卡落地或总监裁定。
+
+**① 档"可落地项"至此清零**：本表 16 条中 15 条落地/改判（IT-09/10/11/13、IT-01/03/04、
+IT-17、MG-64/65、MG-13/14、MG-15、MG-48、MG-59 U-1/U-2）+ MG-46 改判 ③-C；MG-23 收尾
+待做。余量=IT-17/MG-48 的他卡阻塞升满 + ② 档 2 卡 + 三张真未覆面归他卡项。
 

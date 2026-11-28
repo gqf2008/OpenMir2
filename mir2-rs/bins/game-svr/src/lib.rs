@@ -87689,17 +87689,71 @@ SendRefMsgRange=15
         let target = fireball_actor(&rig, "target");
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
-        // ---- 段①：施法（target 不传 ⇒ oracle 归一为 self）----
-        rig.cast(36, (100, 100), 0);
+        // ---- 段①：施法（target 不传 ⇒ oracle 归一为 self；**MG-59 U-1**：golden
+        // `target_null=false` ⇒ cast 带**玩家目标** ⇒ `AttPowerUp` 落 target）----
+        // `target_null`/`amulet_off` 是 **bool** 键（as_u64 会 None ⇒ 必须走 as_bool）。
+        let target_null = golden_case_for(stem, label)["Fixture"]["target_null"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("[{stem}/{label}] Fixture.target_null 缺失或非 bool"));
+        let cast_target = if target_null { 0 } else { target };
+        // **MG-59 U-2**：golden `amulet_off=true` ⇒ 清 ArmRingl 槽（rig 默认装配）⇒
+        // `CheckAmulet` 失败 ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`。
+        let amulet_off = golden_case_for(stem, label)["Fixture"]["amulet_off"]
+            .as_bool()
+            .unwrap_or(false);
+
+        if amulet_off {
+            if let Some(sg) = rig.ground_sessions.get_mut("caster") {
+                sg.use_items[game_svr::ability::SLOT_ARMRING_L] = None;
+            }
+        }
+        if !target_null {
+            // **MG-59 U-1**：oracle caller 的 `CretInNearXy` snap 扫**地图格子** ⇒ rig 实体需
+            // 在格内（`SpellFrameRig::new_layout` 只 `add_entity` 不落格；同 21 支真图重登记
+            // 先例手工落格）。点击坐标 = 目标所在格（oracle caller：客户端点目标 ⇒
+            // `nTargetX/Y` = 目标格 ⇒ snap 命中 ⇒ `spellObject = target`）。
+            let now = rig.world.clock_ms;
+            for (who, ct) in [
+                ("caster", mir2_world_bevy::map::CellType::Play),
+                ("target", mir2_world_bevy::map::CellType::Play),
+                ("obs_in", mir2_world_bevy::map::CellType::Play),
+            ] {
+                let id = fireball_actor(&rig, who);
+                let ent = rig.world.entities.get(id).unwrap();
+                let (x, y, map_id) = (ent.x, ent.y, ent.map_id);
+                assert!(
+                    rig.world.maps[map_id].add_map_object(x, y, ct, id, now),
+                    "[{stem}/{label}] 落格失败 {who}={id} ({x},{y})"
+                );
+            }
+            let tent = rig.world.entities.get(target).unwrap();
+            rig.cast(36, (tent.x, tent.y), cast_target);
+        } else {
+            rig.cast(36, (100, 100), cast_target);
+        }
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
+        let cast_frames: Vec<(i32, Vec<u8>, i64)> =
+            cast_frames.into_iter().map(|(s, b)| (s, b, 0i64)).collect();
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let extra0 = i64::from(rig.world.entities.get(caster).unwrap().extra_abil[0]);
-        let char_status = i64::from(rig.world.get_char_status(caster)); // ④ 同源 GetCharStatus（非陈旧 entity.char_status）
+        // **MG-59 U-1**：受惠者（`AttPowerUp` 落点；自施=caster）——10139/10051/11004 的主体。
+        let buff_id = if target_null { caster } else { target };
+        let buff_who = rig
+            .online
+            .iter()
+            .find(|e| e.actor_id == buff_id)
+            .map(|e| e.chr_name.clone())
+            .unwrap_or_else(|| "caster".to_string());
+        // ④ 同源 GetCharStatus（非陈旧 entity.char_status）；**MG-59 U-1**：`StatusChanged`
+        // 广播的是**受惠者**的 CharStatus（golden friend_target=0（target 无 ex）；自施=caster=2）。
+        let char_status = i64::from(rig.world.get_char_status(buff_id));
 
         // ---- 段②：交付（训练尾 640 @1000ms）----
         let wait_ms = golden_wait_ms(stem, label);
-        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        // **MG-59（2026-11-28）**：交付帧带 `due_ms_rel`（步进 elapsed；新 golden 逐帧带 due、
+        // 进比较面）。
+        let mut deliver_frames: Vec<(i32, Vec<u8>, i64)> = Vec::new();
         let mut elapsed = 0u64;
         while elapsed < wait_ms {
             rig.world.clock_ms += 100;
@@ -87719,89 +87773,127 @@ SendRefMsgRange=15
                 &mut rig.ground_sessions,
                 &rig.gates,
             );
-            let (mut sf, _r2) = rig.drain();
-            deliver_frames.append(&mut sf);
+            let (sf, _r2) = rig.drain();
+            deliver_frames.append(
+                &mut sf
+                    .into_iter()
+                    .map(|(s, b)| (s, b, elapsed as i64))
+                    .collect::<Vec<_>>(),
+            );
         }
         let n2 = trace_line_count(&trace);
         let cast_rng = trace_slice(&trace, n0, n1);
         let deliver_rng = trace_slice(&trace, n1, n2);
-        let mut all_frames = cast_frames;
+        // 施法批 due=0（`cast_frames` 已带；新 golden `Sent[].due_ms_rel` 进比较面）。
+        let mut all_frames: Vec<(i32, Vec<u8>, i64)> = cast_frames;
         all_frames.extend(deliver_frames);
 
         // ---- RM 组装（来源=实现态）----
         let range = chat::send_ref_msg_range();
         let in_range = chat::hear_targets(&rig.world, caster, range);
+        // **MG-59 U-2**：`SpellReturn=false`（CheckAmulet 失败 ⇒ DoSpell 早退）⇒ RM 面**只有**
+        // caller 失败广播的 `RM_MAGICFIREFAIL(10121)`（成功帧 10008/10120/10139/… 全无——
+        // oracle 的 RM_SPELL 广播块在 `boSpellFail` 早退之后）。
         let who_of = |id: i32| {
             rig.online
                 .iter()
                 .find(|e| e.actor_id == id)
                 .map(|e| e.chr_name.clone())
         };
-        let (tx, ty) = (100i32, 100i32);
-        let magicfire_p2 = game_svr::feature::make_long(tx as u16, ty as u16);
-        let amulet = rig
-            .ground_sessions
-            .get("caster")
-            .and_then(|sg| sg.use_items.get(game_svr::ability::SLOT_ARMRING_L))
-            .and_then(|x| x.as_ref())
-            .map(|it| (it.dura, it.dura_max));
-        let tran = rig
-            .saves
-            .get("caster")
-            .and_then(|s| s.record.data.magic.as_ref())
-            .and_then(|m| m.first())
-            .and_then(|x| x.as_ref())
-            .map_or(0, |r| r.tran_point);
-        let gf = i64::from(rig.world.b5_cfg.green_msg_f_color);
-        let gb = i64::from(rig.world.b5_cfg.green_msg_b_color);
-
         let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
             std::collections::HashMap::new();
-        for id in &in_range {
-            let Some(who) = who_of(*id) else { continue };
-            let v = rm_by_who.entry(who).or_default();
-            // `:159 RM_SPELL(Effect, tx, ty, MagicId)`。
-            v.push(fireball_rm(
-                10008,
-                1,
-                i64::from(tx),
-                i64::from(ty),
-                36,
-                24,
-                false,
-            ));
-            // `:648-658 RM_MAGICFIRE`：p3 = 归一后的 targetActorId（self=caster）。
-            v.push(fireball_rm(
-                10120,
-                0,
-                257,
-                i64::from(magicfire_p2),
-                i64::from(caster),
-                136,
-                false,
-            ));
-            // `StatusChanged()` 广播（p1 = 施法者 CharStatus）。
-            v.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
-        }
-        let cv = rm_by_who.entry("caster".into()).or_default();
-        // 自更新第二条 10139 + `SendMsg(RM_ABILITY)`(10051) + SysMsg(11004)。
-        cv.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
-        cv.push(fireball_rm(10051, 0, 0, 0, 0, 67, false));
-        // `UseAmulet` 的 RM_DURACHANGE(10125)：wParam=槽位(ArmRingl=5)、p1=新耐久、p2=DuraMax。
-        if let Some((dura, dura_max)) = amulet {
-            cv.push(fireball_rm(
-                10125,
-                i64::from(game_svr::ability::SLOT_ARMRING_L as u16),
-                i64::from(dura),
-                i64::from(dura_max),
-                0,
-                141,
-                false,
-            ));
-        }
-        cv.push(fireball_rm(11004, 0, gf, gb, 0, 252, false));
-        // 训练尾 RM_MAGIC_LVEXP(10123)：p1=MagicId、p2=Level、p3=TranPoint。
-        cv.push(fireball_rm(10123, 0, 36, 1, i64::from(tran), 255, true));
+        // **MG-59 U-2**：`SpellReturn=false`（CheckAmulet 失败 ⇒ DoSpell 早退）⇒ RM 面**只有**
+        // caller 失败广播的 `RM_MAGICFIREFAIL(10121)`（成功帧 10008/10120/10139/… 全无——
+        // oracle 的 RM_SPELL 广播块在 `boSpellFail` 早退之后）。
+        if golden_case_for(stem, label)["SpellReturn"].as_bool() == Some(false) {
+            // 头 `RM_SPELL(10008)`（无坐标 snap：广播用原始 click (100,100)，与成功支同源）
+            // + caller 失败广播 `RM_MAGICFIREFAIL(10121)`。
+            for id in &in_range {
+                let Some(who) = who_of(*id) else { continue };
+                let v = rm_by_who.entry(who).or_default();
+                v.push(fireball_rm(10008, 1, 100, 100, 36, 24, false));
+                v.push(fireball_rm(10121, 0, 0, 0, 0, 137, false));
+            }
+        } else {
+            // **MG-59 U-1**：施法点 = 受惠者所在格（自施 = caster 格 (100,100)）。
+            let buff_ent = rig.world.entities.get(buff_id).unwrap();
+            let (tx, ty) = if target_null {
+                (100i32, 100i32)
+            } else {
+                (buff_ent.x, buff_ent.y)
+            };
+            let magicfire_p2 = game_svr::feature::make_long(tx as u16, ty as u16);
+            let amulet = rig
+                .ground_sessions
+                .get("caster")
+                .and_then(|sg| sg.use_items.get(game_svr::ability::SLOT_ARMRING_L))
+                .and_then(|x| x.as_ref())
+                .map(|it| (it.dura, it.dura_max));
+            let tran = rig
+                .saves
+                .get("caster")
+                .and_then(|s| s.record.data.magic.as_ref())
+                .and_then(|m| m.first())
+                .and_then(|x| x.as_ref())
+                .map_or(0, |r| r.tran_point);
+            let gf = i64::from(rig.world.b5_cfg.green_msg_f_color);
+            let gb = i64::from(rig.world.b5_cfg.green_msg_b_color);
+
+            for id in &in_range {
+                let Some(who) = who_of(*id) else { continue };
+                let v = rm_by_who.entry(who).or_default();
+                // `:159 RM_SPELL(Effect, tx, ty, MagicId)`。
+                v.push(fireball_rm(
+                    10008,
+                    1,
+                    i64::from(tx),
+                    i64::from(ty),
+                    36,
+                    24,
+                    false,
+                ));
+                // `:648-658 RM_MAGICFIRE`：p3 = 归一后的 targetActorId（**受惠者**；自施=caster）。
+                v.push(fireball_rm(
+                    10120,
+                    0,
+                    257,
+                    i64::from(magicfire_p2),
+                    i64::from(buff_id),
+                    136,
+                    false,
+                ));
+                // `StatusChanged()` 广播（p1 = 施法者 CharStatus）。
+                v.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+            }
+            // 自更新第二条 10139 + `SendMsg(RM_ABILITY)`(10051) + SysMsg(11004)——
+            // **MG-59 U-1**：这三条落**受惠者**（golden friend_target：target Rm 有
+            // 10139×2/10051/11004；10125/10123 仍在施法者——护身符与训练都在施法者侧）。
+            // 受惠者条目先借先还（自施时 buff_who=="caster" ⇒ 与下方 caster 条目同一键，
+            // 不能同时可变借）。
+            {
+                let bv = rm_by_who.entry(buff_who).or_default();
+                bv.push(fireball_rm(10139, 0, char_status, 0, 0, 155, false));
+                bv.push(fireball_rm(10051, 0, 0, 0, 0, 67, false));
+                bv.push(fireball_rm(11004, 0, gf, gb, 0, 252, false));
+            }
+            {
+                let cv = rm_by_who.entry("caster".into()).or_default();
+                // `UseAmulet` 的 RM_DURACHANGE(10125)：wParam=槽位(ArmRingl=5)、p1=新耐久、p2=DuraMax。
+                if let Some((dura, dura_max)) = amulet {
+                    cv.push(fireball_rm(
+                        10125,
+                        i64::from(game_svr::ability::SLOT_ARMRING_L as u16),
+                        i64::from(dura),
+                        i64::from(dura_max),
+                        0,
+                        141,
+                        false,
+                    ));
+                }
+                // 训练尾 RM_MAGIC_LVEXP(10123)：p1=MagicId、p2=Level、p3=TranPoint（施法者侧）。
+                cv.push(fireball_rm(10123, 0, 36, 1, i64::from(tran), 255, true));
+            }
+        } // end spell_ok else（MG-59 U-2 失败面只出 10121）
 
         let mut receivers: Vec<serde_json::Value> = Vec::new();
         for (who, socket) in [
@@ -87813,7 +87905,7 @@ SendRefMsgRange=15
             receivers.push(serde_json::json!({
                 "Who": who,
                 "Rm": rm_by_who.get(who).cloned().unwrap_or_default(),
-                "Sent": fireball_sent(&all_frames, socket),
+                "Sent": fireball_sent_with_due(&all_frames, socket),
             }));
         }
 
@@ -87837,7 +87929,7 @@ SendRefMsgRange=15
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         write_run_sidecar(&out, &run_id, seed);
         eprintln!(
-            "[uenhancer {label}] seed={seed} cast_rng={:?} deliver_rng={:?} extra0={extra0} char_status={char_status} tran={tran} amulet={amulet:?}",
+            "[uenhancer {label}] seed={seed} cast_rng={:?} deliver_rng={:?} extra0={extra0} char_status={char_status}",
             cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
             deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
         );
@@ -87859,6 +87951,22 @@ SendRefMsgRange=15
     #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
     fn uenhancer_parity_s13() {
         uenhancer_parity_drive("s13", 3000);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_friend_target() {
+        // **MG-59 U-1（2026-11-28，① 档）**：非自身 proper-friend 目标——`target_null=false`
+        // ⇒ cast 带玩家目标 ⇒ `AttPowerUp` 落 target（target 的 17/52/657 帧 + ExtraAbil）。
+        uenhancer_parity_drive("friend_target", 4100);
+    }
+
+    #[test]
+    #[ignore = "真实台账驱动：需 --exact --test-threads=1 单独进程（rng_trace 进程级）"]
+    fn uenhancer_parity_amulet_off_fail() {
+        // **MG-59 U-2（2026-11-28，① 档）**：`amulet_off=true` ⇒ `CheckAmulet(1,1)` 失败 ⇒
+        // `boSpellFail` ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（Rng=0、SpellReturn=false）。
+        uenhancer_parity_drive("amulet_off_fail", 4200);
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。

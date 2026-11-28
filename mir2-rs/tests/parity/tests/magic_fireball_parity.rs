@@ -2879,10 +2879,11 @@ fn real_rust_ledger_tamming() {
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::uenhancer_parity_*）生成真实台账"]
 fn real_rust_ledger_uenhancer() {
+    // **MG-59（2026-11-28，① 档）**：`friend_target`（U-1）/`amulet_off_fail`（U-2 639 失败面）。
     real_ledger_verify_labels(
         "uenhancer",
         &golden_file("uenhancer.json"),
-        &["s1", "s5", "s13"],
+        &["s1", "s5", "s13", "friend_target", "amulet_off_fail"],
     );
 }
 

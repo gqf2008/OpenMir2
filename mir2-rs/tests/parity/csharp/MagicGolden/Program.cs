@@ -1803,6 +1803,12 @@ private static int ReadInstanceInt(object obj, string fieldName)
         /// </summary>
         public bool ObserveState;
         /// <summary>
+        /// **MG-59 U-2（2026-11-28，① 档）**：跳过 ArmRingl 护身符装配 ⇒ `CheckAmulet(1,1)` 失败
+        /// ⇒ `boSpellFail` ⇒ `DoSpell false` ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`。
+        /// 批内逐 case 置位/复位（同 `SkeletonBatch.PreSlaveCount` 口径）。
+        /// </summary>
+        public bool AmuletOff;
+        /// <summary>
         /// **MG-44/48**：本支装载的 ServerConf 十键快照（`ServerConfFixture.LoadOrThrow`）。
         /// 非 null ⇒ golden `Fixture.server_conf` 落盘；缺省 null ⇒ 既有 stem 字节不变。
         /// 键序与 `ServerConfFixture.Keys` 一致（Rust `SERVER_CONF_KEYS` 同序）。
@@ -3105,7 +3111,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
         bool? productionAoi = null, bool? pushCacheCold = null, bool? observeDirAfter = null,
         int? targetDirBefore = null, int[] healTicksMs = null, int? healTickBase = null,
         int? healLevelTarget = null, int? healLevelCaster = null, bool specHealBoth = false,
-        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null, object preBuffStatusByObject = null)
+        int? amuletDura = null, object preBuffs = null, int? preBuffStatus = null, int[] fireTicksMs = null, int? fireCastMs = null, int? casterBright = null, object preBuffStatusByObject = null, bool? amuletOff = null)
     {
         if (status == null && monsters == null && casterHitPoint == null && casterDc == null
             && casterAttackMode == null && casterSc == null && casterCharStatusEx == null
@@ -3119,7 +3125,7 @@ private static int ReadInstanceInt(object obj, string fieldName)
             && targetDirBefore == null && healTicksMs == null && healTickBase == null
             && healLevelTarget == null && healLevelCaster == null && !specHealBoth
             && amuletDura == null && preBuffs == null && preBuffStatus == null && fireTicksMs == null && fireCastMs == null && casterBright == null
-            && preBuffStatusByObject == null)
+            && preBuffStatusByObject == null && amuletOff == null)
         {
             return fixture;
         }
@@ -3166,6 +3172,9 @@ private static int ReadInstanceInt(object obj, string fieldName)
         if (healTicksMs != null && specHealBoth) node["heal_ticks_both"] = true;
         if (healLevelCaster.HasValue) node["heal_level_caster"] = healLevelCaster.Value;
         if (amuletDura.HasValue) node["amulet_dura"] = amuletDura.Value;
+        // **MG-59 U-2（2026-11-28）**：真值键（true 才落盘 ⇒ 既有件零变化）——Rust rig 据此
+        // 不装配 ArmRingl 护身符。
+        if (amuletOff.HasValue && amuletOff.Value) node["amulet_off"] = true;
         // **MG-64/65（2026-11-26）**：条件键——只在声明了预置 buff 的 case 出现（既有件零变化）。
         if (preBuffs != null) node["pre_buffs"] = JsonSerializer.SerializeToNode(preBuffs);
         if (preBuffStatus.HasValue) node["pre_buff_status"] = preBuffStatus.Value;
@@ -3317,7 +3326,15 @@ private static int ReadInstanceInt(object obj, string fieldName)
             RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, true),
             RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, true),
         };
-        return EmitGolden(spec, cases);
+        // **MG-59 U-1（2026-11-28，① 档）**：非自身 proper-friend 目标——`targetNull=false`
+        // ⇒ `spellTarget = 玩家目标` ⇒ `AttPowerUp` 落**目标**（target 的 `ExtraAbil[0]`）。
+        var friendTarget = RunMagicCase(spec, "friend_target", 1, 4100, spec.TargetMaxHp, false);
+        // **MG-59 U-2（2026-11-28，① 档）**：`CheckAmulet(1,1)` 失败 ⇒ `boSpellFail` ⇒
+        // `DoSpell false` ⇒ `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)`（无 buff 帧）。
+        spec.AmuletOff = true;
+        var amuletOffFail = RunMagicCase(spec, "amulet_off_fail", 1, 4200, spec.TargetMaxHp, true);
+        spec.AmuletOff = false;
+        return EmitGolden(spec, new[] { cases[0], cases[1], cases[2], friendTarget, amuletOffFail });
     }
 
     /// <summary>`--case skeleton`：17 两支（正常召唤 / 数量上限），MasterRoyaltyTick 墙钟不记不比（§36）。</summary>
@@ -3726,15 +3743,25 @@ private static FireballResult RunMagicCase(
                 StdMode = 25,
                 Shape = (byte)spec.AmuletShape,
             });
-            caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl] = new OpenMir2.Packets.ClientPackets.UserItem
+            // **MG-59 U-2（2026-11-28）**：`AmuletOff` ⇒ **不装配** UseItems[ArmRingl]（物品表照建、
+            // 槽位为空 ⇒ `CheckAmulet` 直接失败 ⇒ 639 失败面）。
+            if (!spec.AmuletOff)
             {
-                MakeIndex = 1,
-                Index = 1,
-                Dura = (ushort)(spec.AmuletDura ?? 600),
-                DuraMax = 1000,
-            };
+                caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl] = new OpenMir2.Packets.ClientPackets.UserItem
+                {
+                    MakeIndex = 1,
+                    Index = 1,
+                    Dura = (ushort)(spec.AmuletDura ?? 600),
+                    DuraMax = 1000,
+                };
+            }
             // **MG-50**：护身符 `Dura` 的**初始**值（`UseAmulet` 会在施法里扣减/销毁，事后读不可用）。
-            amuletDuraInitial = caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl].Dura;
+            // **MG-59 U-2**：`AmuletOff` ⇒ 槽位为空 ⇒ 不读（amulet_dura 键本就不落盘）。
+            var equipped = caster.UseItems[OpenMir2.Enums.ItemLocation.ArmRingl];
+            if (equipped != null)
+            {
+                amuletDuraInitial = equipped.Dura;
+            }
             if (spec.AmuletDura.HasValue && amuletDuraInitial != spec.AmuletDura.Value)
             {
                 throw new FixtureContractViolation(
@@ -4112,6 +4139,14 @@ private static FireballResult RunMagicCase(
         }
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : spellTarget);
         SystemModule.SystemShare.Config.AmyOunsulPoint = savedAmyOunsulPoint;
+        if (!ok)
+        {
+            // **MG-59 U-2（2026-11-28）**：caller 失败分支的忠实模拟（`PlayObject.Attack.cs:1278-1281`）：
+            // `DoSpell false ⇒ SendRefMsg(RM_MAGICFIREFAIL)` ⇒ 收件人 `SM_MAGICFIRE_FAIL(639)`。
+            // 装置直调 `MagicManager.DoSpell`（不经过 caller wrapper）⇒ 该分支在此补；
+            // 既有金标零 `SpellReturn=false` 例 ⇒ 仅 U-2 支携带。
+            caster.SendRefMsg(OpenMir2.Messages.RM_MAGICFIREFAIL, 0, 0, 0, 0, "");
+        }
         // **MG-36 ①（2026-11-26）**：地图事件 tick——只走 `EventProcessor` **子类**的 `ExecuteOnce`
         // （= 生产 `ExecuteInternal`），**不启动** `TimerScheduledService` 的后台循环：
         // 其 ctor 只建 `PeriodicTimer`/`Stopwatch`（`src/OpenMir2/TimerScheduledService.cs`），循环只在
@@ -5122,6 +5157,7 @@ private static FireballResult RunMagicCase(
                 healLevelTarget: spec.HealTicksMs != null ? (int?)healLevelTarget : null,
                 healLevelCaster: spec.HealTicksMs != null ? (int?)healLevelCaster : null,
                 amuletDura: spec.AmuletDura.HasValue ? (int?)amuletDuraInitial : null,
+                amuletOff: spec.AmuletOff,
                 preBuffs: preBuffsNode,
                 preBuffStatus: preBuffStatus,
                 preBuffStatusByObject: preBuffStatusByObject,
