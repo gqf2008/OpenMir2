@@ -26,7 +26,7 @@
     "MapRandomMove \u7684\u4E24\u62BD\u53C2\u6570\u6309**\u76EE\u6807\u56FE**\u5BBD\u9AD8\uFF08nEgdey\uFF1AH\u003C150 \u4E14 \u003E=30 \u21D2 20 \u21D2 Random(60-20-1)=Next(39)\uFF09\u3002",
     "\u843D\u70B9\u53EF\u8D70 \u21D2 SpaceMoveGetRandXY 0 \u62BD\uFF1B\u672C\u6279\u5939\u5177\u5168\u53EF\u8D70\uFF0860x60 \u5168\u96F6\u683C\uFF09\u3002"
   ],
-  "scenario_note": "\u5939\u5177\u5951\u7EA6\uFF1A\u4E09\u56FE 60x60 \u5168\u53EF\u8D70\uFF1BMapName == MapFileName \u4E3B\u5E72\uFF08\u65E0 [\u540D|\u6587\u4EF6] \u8986\u76D6\uFF09\uFF1B\u5730\u56FE Flag.DayLight=true\uFF08DayBright=0\uFF09\uFF1B\u5B9E\u4F53 Dir=4 / Light=0 / Feature=0 / Status=0\u3002\u6539\u52A8\u4EFB\u4E00\u524D\u63D0\u90FD\u8981\u540C\u65F6\u6539 golden \u7684 ctx\uFF08presentation/map_file_name/map_sizes\uFF09\u3002",
+  "scenario_note": "\u5939\u5177\u5951\u7EA6\uFF1A\u4E09\u56FE 60x60 \u5168\u53EF\u8D70\uFF1BMapName == MapFileName \u4E3B\u5E72\uFF08\u65E0 [\u540D|\u6587\u4EF6] \u8986\u76D6\uFF09\uFF1B\u5730\u56FE Flag.boDarkness=true\uFF08DayBright=1\uFF0CDARK \u81C2\uFF09\uFF1B\u9010\u56FE\u975E\u7A7A MapDesc\uFF0854 \u5C3E\uFF0C\u89C1 ctx.map_desc\uFF09\uFF1B\u5B9E\u4F53 Dir=5 / Light=0 / Feature=0 / Status=0\u3002\u6539\u52A8\u4EFB\u4E00\u524D\u63D0\u90FD\u8981\u540C\u65F6\u6539 golden \u7684 ctx\uFF08presentation/map_desc/map_file_name/map_sizes\uFF09\u3002",
   "map_geometry": {
     "width": 60,
     "height": 60,
@@ -98,11 +98,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -156,7 +162,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 47,
             "n_param2": 44,
             "n_param3": 0,
@@ -194,7 +200,7 @@
             "recog": 933001,
             "param": 47,
             "tag": 44,
-            "series": 0,
+            "series": 1,
             "tail": "6c6f3d706d7b3d746d704b"
           },
           {
@@ -211,14 +217,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "414d4c415a5a3e4a55403c"
           },
           {
             "ident": 801,
             "recog": 933001,
             "param": 47,
             "tag": 44,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -306,11 +312,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -364,7 +376,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 28,
             "n_param2": 56,
             "n_param3": 0,
@@ -402,7 +414,7 @@
             "recog": 933001,
             "param": 28,
             "tag": 56,
-            "series": 0,
+            "series": 1,
             "tail": "6d6f566c6d7b3d746d704b"
           },
           {
@@ -419,14 +431,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "5a56564a3f5a3e3e55403c"
           },
           {
             "ident": 801,
             "recog": 933001,
             "param": 28,
             "tag": 56,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -514,11 +526,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -572,7 +590,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 49,
             "n_param2": 28,
             "n_param3": 0,
@@ -610,7 +628,7 @@
             "recog": 933002,
             "param": 49,
             "tag": 28,
-            "series": 0,
+            "series": 1,
             "tail": "6d6f566c6d7b3d746d704b"
           },
           {
@@ -627,14 +645,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "5a56564a3f5a3e3e55403c"
           },
           {
             "ident": 801,
             "recog": 933002,
             "param": 49,
             "tag": 28,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -722,11 +740,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -829,11 +853,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -887,7 +917,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 5,
             "n_param2": 6,
             "n_param3": 0,
@@ -925,7 +955,7 @@
             "recog": 933003,
             "param": 5,
             "tag": 6,
-            "series": 0,
+            "series": 1,
             "tail": "6c6f3d706d7b3d746d704b"
           },
           {
@@ -942,14 +972,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "414d4c415a5a3e4a55403c"
           },
           {
             "ident": 801,
             "recog": 933003,
             "param": 5,
             "tag": 6,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -1022,11 +1052,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -1080,7 +1116,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 20,
             "n_param2": 30,
             "n_param3": 0,
@@ -1118,7 +1154,7 @@
             "recog": 933003,
             "param": 20,
             "tag": 30,
-            "series": 0,
+            "series": 1,
             "tail": "726d447a7b6d496c703f"
           },
           {
@@ -1135,14 +1171,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "424c6b50535a3e4255403c"
           },
           {
             "ident": 801,
             "recog": 933003,
             "param": 20,
             "tag": 30,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -1215,11 +1251,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -1273,7 +1315,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 25,
             "n_param2": 35,
             "n_param3": 0,
@@ -1311,7 +1353,7 @@
             "recog": 933003,
             "param": 25,
             "tag": 35,
-            "series": 0,
+            "series": 1,
             "tail": "726d447a7b6d496c703f"
           },
           {
@@ -1328,14 +1370,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "424c6b50535a3e4255403c"
           },
           {
             "ident": 801,
             "recog": 933003,
             "param": 25,
             "tag": 35,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -1408,11 +1450,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -1466,7 +1514,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 54,
             "n_param2": 58,
             "n_param3": 0,
@@ -1504,7 +1552,7 @@
             "recog": 933003,
             "param": 54,
             "tag": 58,
-            "series": 0,
+            "series": 1,
             "tail": "6c6f3d706d7b3d746d704b"
           },
           {
@@ -1521,14 +1569,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "414d4c415a5a3e4a55403c"
           },
           {
             "ident": 801,
             "recog": 933003,
             "param": 54,
             "tag": 58,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],
@@ -1616,11 +1664,17 @@
             60
           ]
         },
-        "map_day_light": true,
+        "map_day_light": false,
+        "map_darkness": true,
+        "map_desc": {
+          "move_map": "\u79FB\u52A8\u4E4B\u56FE",
+          "home_map": "\u5F52\u5BB6\u4E4B\u56FE",
+          "red_map": "\u7EA2\u540D\u4E4B\u56FE"
+        },
         "presentation": {
-          "dir": 4,
+          "dir": 5,
           "light": 0,
-          "day_light": true
+          "day_light": false
         },
         "map_file_name": "move_map"
       },
@@ -1674,7 +1728,7 @@
           },
           {
             "ident": 8100,
-            "w_param": 4,
+            "w_param": 5,
             "n_param1": 52,
             "n_param2": 35,
             "n_param3": 0,
@@ -1712,7 +1766,7 @@
             "recog": 933003,
             "param": 52,
             "tag": 35,
-            "series": 0,
+            "series": 1,
             "tail": "6c6f3d706d7b3d746d704b"
           },
           {
@@ -1729,14 +1783,14 @@
             "param": 0,
             "tag": 0,
             "series": 0,
-            "tail": ""
+            "tail": "414d4c415a5a3e4a55403c"
           },
           {
             "ident": 801,
             "recog": 933003,
             "param": 52,
             "tag": 35,
-            "series": 4,
+            "series": 5,
             "tail": "6464686b6464686b64644b"
           }
         ],

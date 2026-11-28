@@ -428,13 +428,26 @@ internal static class Program
         var envirCur = NewMap(Path.Combine(tmpDir, mapFileMove), c.CurMap, Path.GetFileNameWithoutExtension(mapFileMove));
         var envirHome = NewMap(Path.Combine(tmpDir, mapFileHome), "home_map", Path.GetFileNameWithoutExtension(mapFileHome));
         var envirRed = NewMap(Path.Combine(tmpDir, mapFileRed), c.RedMap, Path.GetFileNameWithoutExtension(mapFileRed));
-        // 夹具地图固定 `DayLight=true` ⇒ `DayBright()=0`（两侧确定值；不依赖探针墙钟/日相）。
-        envirCur.Flag.DayLight = true;
-        envirHome.Flag.DayLight = true;
-        envirRed.Flag.DayLight = true;
         var envirCastle = NewMap(Path.Combine(tmpDir, mapFileCastle), c.CastleHomeMap,
             Path.GetFileNameWithoutExtension(mapFileCastle));
-        envirCastle.Flag.DayLight = true;
+        // 夹具字段点亮（① 档 IT-13 同簇，2026-11-28）：`Envir.MapDesc` 非空且**逐图不同**——
+        // 54 尾 = EDCode(GBK(落地目标图的 MapDesc))（`PlayObject.Base.cs:887-895`），逐图不同才能
+        // 证明尾取自**目标图** Envir 而非常量；4 字与冻结样例（`[jiaren|0150 家人回归]`）同长，纯合成文案。
+        envirCur.MapDesc = "移动之图";
+        envirHome.MapDesc = "归家之图";
+        envirRed.MapDesc = "红名之图";
+        envirCastle.MapDesc = "城堡之家";
+        // 夹具字段点亮：`DARK`（boDarkness=true）⇒ `DayBright()=1`（`PlayObject.Base.cs:250-253`，
+        // DARK 臂在 Bright/墙钟之前 ⇒ 两侧确定值、不依赖探针墙钟/日相；冻结 MapInfo.txt 有
+        // 4 张 DARK 图 ⇒ 生产可达，非 MUSIC 式不可观测）。
+        envirCur.Flag.DayLight = false;
+        envirCur.Flag.boDarkness = true;
+        envirHome.Flag.DayLight = false;
+        envirHome.Flag.boDarkness = true;
+        envirRed.Flag.DayLight = false;
+        envirRed.Flag.boDarkness = true;
+        envirCastle.Flag.DayLight = false;
+        envirCastle.Flag.boDarkness = true;
         var mapSys = new ProbeMapSystem();
         mapSys.Register(envirCur);
         mapSys.Register(envirHome);
@@ -472,6 +485,9 @@ internal static class Program
             HomeX = c.HomeX,
             HomeY = c.HomeY,
             PkPoint = c.PkPoint,
+            // 801 `Series` 低字节旋钮（`BaseObject.cs:378` ctor `Dir=4` ⇒ 旋钮改 5）：oracle
+            // `SpaceMove` SendRefMsg(RM_SPACEMOVE_SHOW, Dir, …) 取**实体活值**，非 ctor 常量。
+            Dir = 5,
             CellType = CellType.Play,
             ItemList = new List<UserItem>(),
             MagicList = new List<UserMagic>(),
@@ -572,11 +588,14 @@ internal static class Program
                 seed = c.Seed,
                 // 离线夹具的地图几何（两侧必须同尺寸/同可走格；本批全可走）。
                 map_sizes = new { move_map = new[] { 60, 60 }, home_map = new[] { 60, 60 }, red_map = new[] { 60, 60 } },
-                // 夹具地图 Flag：DayLight=true（⇒ DayBright=0，两侧确定）；norandom 见 `norandom` 字段。
-                map_day_light = true,
-                // 801 `Series = MakeWord(Dir,Light)` 的成立前提（oracle `BaseObject.cs:378` ctor `Dir=4`；
-                // `BaseObject` ctor `Light=0`；夹具地图 `DayLight=true` ⇒ 634 `Series`/`DayBright()=0`）。
-                presentation = new { dir = 4, light = 0, day_light = true },
+                // 夹具地图 Flag：DARK（boDarkness=true ⇒ DayBright=1，两侧确定）；norandom 见 `norandom` 字段。
+                map_day_light = false,
+                map_darkness = true,
+                // 逐图非空 MapDesc（54 尾的来源；Rust rig 从本键读同值建 registry）。
+                map_desc = new { move_map = "移动之图", home_map = "归家之图", red_map = "红名之图", castle_home = "城堡之家" },
+                // 801 `Series = MakeWord(Dir,Light)` 的成立前提（实体 `Dir=5` 旋钮、ctor 常量 4 已弃；
+                // `Light=0` 为 ctor 值；夹具地图 `boDarkness=true` ⇒ 634 `Series`/`DayBright()=1`）。
+                presentation = new { dir = 5, light = 0, day_light = false },
                 // 634 尾 = `EDCode(Envir.MapFileName)`；夹具 `MapFileName` = 取图文件主干（= 逻辑名）。
                 map_file_name = c.CurMap,
             },
@@ -857,9 +876,10 @@ internal static class Program
                 "MapRandomMove 的两抽参数按**目标图**宽高（nEgdey：H<150 且 >=30 ⇒ 20 ⇒ Random(60-20-1)=Next(39)）。",
                 "落点可走 ⇒ SpaceMoveGetRandXY 0 抽；本批夹具全可走（60x60 全零格）。",
             },
-            scenario_note = "夹具契约：三图 60x60 全可走；MapName == MapFileName 主干（无 [名|文件] 覆盖）；"
-                + "地图 Flag.DayLight=true（DayBright=0）；实体 Dir=4 / Light=0 / Feature=0 / Status=0。"
-                + "改动任一前提都要同时改 golden 的 ctx（presentation/map_file_name/map_sizes）。",
+            scenario_note = "夹具契约：四图 60x60 全可走；MapName == MapFileName 主干（无 [名|文件] 覆盖）；"
+                + "地图 Flag.boDarkness=true（DayBright=1，DARK 臂）；逐图非空 MapDesc（54 尾，见 ctx.map_desc）；"
+                + "实体 Dir=5 / Light=0 / Feature=0 / Status=0。"
+                + "改动任一前提都要同时改 golden 的 ctx（presentation/map_desc/map_file_name/map_sizes）。",
             map_geometry = new { width = 60, height = 60, walkable = "all" },
             templates = templates.ToDictionary(
                 kv => kv.Key.ToString(CultureInfo.InvariantCulture),

@@ -123,3 +123,9 @@ IT-09/10/11/13 同簇拆分判：**MUSIC 面（54 recog=nMusicid 非缺省支 + 
  即可，不触内容红线；夹具地图集绑定点定位中，若在装置内嵌数据则回报再裁）。
 DayBright(634)/Dir(801) 维持 ①（运行期旋钮）。原 ① 表中该四条的行按此拆分执行。
 
+**落地记录（2026-11-28，card/items-scope-triage，openmir2-10）**：该四条按本补记拆分执行完毕——
+MapDesc 尾（ctx.map_desc 逐图非空、落地目标图绑定）+ DayBright（DARK 臂=1，冻结 MapInfo.txt
+DARK 4 处 ⇒ 生产可达）+ Dir（实体旋钮 5 替代 ctor 常量 4）三面点亮，探针两侧重出 golden，
+rig 同值；四组变异红→还原留痕（M1 尾/M2 DARK 臂/M3 Dir 活值/M4 逐图绑定，详见 manifest
+四条 scope）。801 series 高字节 Light=0（ctor 值，生产由装备派生）未点亮，manifest 已登记如需另立。
+

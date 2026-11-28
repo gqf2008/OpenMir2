@@ -381,22 +381,26 @@ mod tests {
             .collect()
     }
 
-    fn registry_from(dir: &Path, maps: &[(&str, bool)]) -> mir2_envir::MapRegistry {
-        for (name, _) in maps {
+    fn registry_from(dir: &Path, maps: &[(&str, bool, &str)]) -> mir2_envir::MapRegistry {
+        for (name, _, _) in maps {
             write_walkable_map(dir, name, 60, 60);
         }
         let entries = maps
             .iter()
-            .map(|(name, norandom)| mir2_envir::mapinfo::MapInfoEntry {
+            .map(|(name, norandom, desc)| mir2_envir::mapinfo::MapInfoEntry {
                 map_name: (*name).to_string(),
                 map_file_name: (*name).to_string(),
-                desc: String::new(),
+                // 夹具字段点亮（① 档 IT-09/10/11/13，2026-11-28）：逐图非空 `MapDesc`（与探针同值，
+                // 见 golden `ctx.map_desc`）——54 尾 = EDCode(GBK(目标图 MapDesc))，逐图不同才能证明
+                // 尾取自目标图 Envir 而非常量。
+                desc: (*desc).to_string(),
                 server_index: 0,
                 flag: mir2_envir::mapinfo::MapInfoFlag {
                     bo_norandommove: *norandom,
-                    // 与探针夹具一致：`DayLight=true` ⇒ `DayBright()=0`（634 的 Series 与真实小时解耦；
-                    // 时间三桶的覆盖见 `map_change_634_day_bright_buckets`，章程 §36）。
-                    day_light: true,
+                    // 夹具字段点亮：`DARK`（boDarkness）⇒ `DayBright()=1`（`enter::day_bright` 的
+                    // DARK 臂在 game_time 之前 ⇒ 与墙钟解耦、两侧确定值；时间三桶的覆盖见
+                    // `map_change_634_day_bright_buckets`，章程 §36）。
+                    bo_darkness: true,
                     ..Default::default()
                 },
             })
@@ -609,12 +613,19 @@ mod tests {
             let ctx = case_ctx(c);
             let norandom = ctx["norandom"].as_bool().unwrap_or(false);
             // 注册表顺序 = map_id：move_map=0 / home_map=1 / red_map=2；`boNORANDOMMOVE` 逐例（IT-10 两支）。
+            // 逐图 `MapDesc` 从夹具 ctx 读（与探针同源）。
+            let map_desc = |n: &str| -> String {
+                ctx["map_desc"][n]
+                    .as_str()
+                    .expect("ctx.map_desc 缺键")
+                    .to_string()
+            };
             let reg = registry_from(
                 &dir,
                 &[
-                    ("move_map", norandom),
-                    ("home_map", false),
-                    ("red_map", false),
+                    ("move_map", norandom, map_desc("move_map").as_str()),
+                    ("home_map", false, map_desc("home_map").as_str()),
+                    ("red_map", false, map_desc("red_map").as_str()),
                 ],
             );
             assert_eq!(reg.map_names().len(), 3);
@@ -636,9 +647,14 @@ mod tests {
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.pk_point = ctx["pvp_level"].as_i64().unwrap() as i32 * 100;
             let actor_id = world.enter_map("hero", e, cur_map_id).expect("进图");
-            // `BaseObject.cs:378` ctor `Dir = 4`（801 的 Series 低字节）。
+            // 801 的 Series 低字节 = 实体 `Dir` **活值**（旋钮值来自夹具 `ctx.presentation.dir`=5，
+            // 非 `BaseObject.cs:378` ctor 常量 4）；展示表 dir 保留 ctor 值 4 作陈旧投影，
+            // `drain_map_change_at_time` 必须取实体值 ⇒ 若产品误取展示表投影则对拍红。
+            let dir_knob = ctx["presentation"]["dir"]
+                .as_u64()
+                .expect("ctx.presentation.dir") as u8;
             if let Some(ai) = world.entities.ai_mut(actor_id) {
-                ai.dir = 4;
+                ai.dir = dir_knob;
             } else {
                 panic!("实体缺 ai 组件");
             }
@@ -735,6 +751,8 @@ mod tests {
             // ① 生产换图簇：与 world tick 同一条路径（`drain_map_change`），展示表给 Light=0/Feature=0/
             //    Status=0（只影响 801 的 Series 高字节与尾，见函数头字段边界）。
             let mut displays = crate::downlink::DisplayTable::new();
+            // 展示表 dir 留 ctor 值 4（陈旧投影）：产品 `drain_map_change_at_time` 的 801 Series
+            // 低字节必须取**实体** `ai.dir`（夹具旋钮 5）⇒ 误取展示表投影则 4≠5，对拍红。
             displays.set(
                 actor_id,
                 crate::downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"hero".to_vec()),
@@ -999,13 +1017,20 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("tempdir");
         for c in cases {
             let ctx = &c["ctx"];
+            // 逐图 `MapDesc` 从夹具 ctx 读（与探针同源；IT-13 同簇点亮笔）。
+            let map_desc = |n: &str| -> String {
+                ctx["map_desc"][n]
+                    .as_str()
+                    .expect("ctx.map_desc 缺键")
+                    .to_string()
+            };
             let reg = registry_from(
                 &dir,
                 &[
-                    ("move_map", false),
-                    ("home_map", false),
-                    ("red_map", false),
-                    ("castle_home", false),
+                    ("move_map", false, map_desc("move_map").as_str()),
+                    ("home_map", false, map_desc("home_map").as_str()),
+                    ("red_map", false, map_desc("red_map").as_str()),
+                    ("castle_home", false, map_desc("castle_home").as_str()),
                 ],
             );
             assert_eq!(reg.map_names().len(), 4);
@@ -1027,8 +1052,13 @@ mod tests {
             e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.pk_point = ctx["pvp_level"].as_i64().unwrap_or(0) as i32 * 100;
             let actor_id = world.enter_map("hero", e, cur_map_id).expect("进图");
+            // 801 的 Series 低字节 = 实体 `Dir` **活值**（旋钮值来自夹具 `ctx.presentation.dir`=5，
+            // 非 ctor 常量 4；展示表 dir 留 4 作陈旧投影 ⇒ 产品误取展示表则对拍红）。
+            let dir_knob = ctx["presentation"]["dir"]
+                .as_u64()
+                .expect("ctx.presentation.dir") as u8;
             if let Some(ai) = world.entities.ai_mut(actor_id) {
-                ai.dir = 4;
+                ai.dir = dir_knob;
             } else {
                 panic!("实体缺 ai 组件");
             }
@@ -1142,6 +1172,8 @@ mod tests {
             );
 
             let mut displays = crate::downlink::DisplayTable::new();
+            // 展示表 dir 留 ctor 值 4（陈旧投影）：产品 `drain_map_change_at_time` 的 801 Series
+            // 低字节必须取**实体** `ai.dir`（夹具旋钮 5）⇒ 误取展示表投影则 4≠5，对拍红。
             displays.set(
                 actor_id,
                 crate::downlink::ActorDisplay::new(4, 0, 0, 0, 0, 255, b"hero".to_vec()),
