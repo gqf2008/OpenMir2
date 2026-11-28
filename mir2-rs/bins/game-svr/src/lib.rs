@@ -90387,6 +90387,9 @@ SendRefMsgRange=15
             "mabmabe-rand0" => Some(("mab_mabe_hit_rand_rate", 0)),
             "mabmabe-rand1" => Some(("mab_mabe_hit_rand_rate", 1)),
             "mabmabe-time10" => Some(("mab_mabe_hit_mabe_time_rate", 10)),
+            // **MG-48 follow-up（2026-11-28，① 档）**：`MabMabeHitSucessRate` 非缺省副本
+            // （30 vs 部署 21）——行为面点亮（与 C# `ServerConfFixture.Variants` 两份表互钉）。
+            "mabmabe-sr30" => Some(("mab_mabe_hit_sucess_rate", 30)),
             _ => None,
         };
         if let Some((key, value)) = override_ {
@@ -95932,6 +95935,24 @@ SendRefMsgRange=15
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn mabmabe_rand0_parity_s13() {
         mabmabe_variant_assert("mabmabe-rand0", "s13", 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_sr30_parity_s1() {
+        mabmabe_variant_assert("mabmabe-sr30", "s1", 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_sr30_parity_s5() {
+        mabmabe_variant_assert("mabmabe-sr30", "s5", 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn mabmabe_sr30_parity_s13() {
+        mabmabe_variant_assert("mabmabe-sr30", "s13", 3000);
     }
 
     #[test]

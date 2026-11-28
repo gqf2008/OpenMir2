@@ -4945,6 +4945,14 @@ fn real_rust_ledger_mabmabe_rand0() {
 }
 
 #[test]
+#[ignore = "需先跑 game-svr 驱动（tests::mabmabe_sr30_parity_*）生成真实台账"]
+fn real_rust_ledger_mabmabe_sr30() {
+    // **MG-48 follow-up（2026-11-28，① 档）**：`MabMabeHitSucessRate=30` 非缺省副本——
+    // 行为面点亮（命中骰模数由配置来）。
+    ledger_variant_stem("mabmabe-sr30", "mabmabe-sr30.json");
+}
+
+#[test]
 #[ignore = "需先跑 game-svr 驱动（tests::mabmabe_rand1_parity_*）生成真实台账"]
 fn real_rust_ledger_mabmabe_rand1() {
     ledger_variant_stem("mabmabe-rand1", "mabmabe-rand1.json");

@@ -470,7 +470,7 @@ public static class Program
             // **MG-48 配置变体（2026-11-26）**：完整 `Server.conf` 副本（其余九键=部署），逐变体钉 sha。
             // `rand0/rand1`：`MabMabeHitRandRate` 的 §27 边界（`Random(0)` 是否推进由 golden 记录）；
             // `time10`：`MabMabeHitMabeTimeRate=10` 的 STONE 时长面。
-            if (name is "mabmabe-rand0" or "mabmabe-rand1" or "mabmabe-time10")
+            if (name is "mabmabe-rand0" or "mabmabe-rand1" or "mabmabe-time10" or "mabmabe-sr30")
             {
                 string vDir = FindConfVariantDir(name.Substring("mabmabe-".Length));
                 EnsureConfFilesFrom(vDir, AppContext.BaseDirectory, out var vCopied, out var vMissing);

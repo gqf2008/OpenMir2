@@ -196,3 +196,12 @@ DamageBubbleDefence（事件驱动、只 BubbleDefenceUP）⇒ 毒计时器从�
 处方条目变为实际落地条目：本行移出 ①**。全板 partial 46→45（按 coverage-report 实际
 输出为准）。
 
+**MG-48 sr30 批落地（2026-11-28，card/items-scope-triage，openmir2-10）**：follow-up
+「非缺省配置值点亮行为面」落第一支——新变体 `mabmabe-sr30`（`MabMabeHitSucessRate=30`
+vs 部署 21；完整 Server.conf 副本 + sha 钉，C# Variants/Rust server_conf_expected 两份
+表互钉）× s1/s5/s13，命中骰模数由配置来。变异（驱动 conf 应用处吃回缺省 21）⇒ 绝对值
+合同红；还原后同 id 9 驱动 + 三比较器全绿。四键进度：RandRate ✓（rand0/rand1）、
+SucessRate ✓（本批）、MinLvLimit/MabeTimeRate 未点亮（time10 成功臂仍受
+refmsg-queue-model 卡阻塞）。**MG-48 保持 scope 键**——残留（怪物目标、其它值域、
+time10）按总监新纪律升满先报裁定。
+

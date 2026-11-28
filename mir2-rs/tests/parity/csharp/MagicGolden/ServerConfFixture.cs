@@ -110,6 +110,9 @@ public static class ServerConfFixture
         ["mabmabe-rand0"] = ("mab_mabe_hit_rand_rate", 0, "0871d6482a02df6c385e834693080c7d9be27ce36e5d3f9f07fc0fd82b40915f"),
         ["mabmabe-rand1"] = ("mab_mabe_hit_rand_rate", 1, "787da312423edfec048b09fc73cfa7c07b9fad895288d8ddc3e4c02cce822578"),
         ["mabmabe-time10"] = ("mab_mabe_hit_mabe_time_rate", 10, "7421123b28a0f9cd742b02ca9d8b67938727eda1c5d060a74c80f9895885579f"),
+        // **MG-48 follow-up（2026-11-28，① 档）**：`MabMabeHitSucessRate` 非缺省副本（30 vs 部署 21）
+        // ——行为面点亮：命中骰 `Random(rate)` 的模数由配置来（同 seed 下 Rng 流可证）。
+        ["mabmabe-sr30"] = ("mab_mabe_hit_sucess_rate", 30, "bef26b0d36782b7728a99b62d6307b9ded2f3c871a420275308ab9570aef06ea"),
     };
 
     /// <summary>装载变体 `Server.conf`（sha 钉死 + 十键断言；被改键 = 变体值）。</summary>
